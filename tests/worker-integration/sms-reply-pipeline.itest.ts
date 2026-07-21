@@ -320,6 +320,36 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
     // before the next scenario runs.)
   });
 
+  it("a 'speak to a representative' turn escalates even when the model says handoff:false (Truly 2026-07-20)", async () => {
+    // The live incident, replayed byte-for-byte: Truly's tester asked for a
+    // representative six times; every turn came back intent=
+    // request_human_agent with handoff:false (the model believed offering to
+    // schedule a broker call handled it), so no tag, no owner page — six
+    // identical replies. The worker must escalate on the INTENT, not the
+    // model's handoff judgment.
+    const { biz } = await seedLeadWithContext("IT rep-request escalation");
+    rowboat.scriptReply(
+      "I can help with that. Would you like to schedule a call with one of our licensed brokers?\n" +
+        `${REASONING_MARKER}{"intent":"request_human_agent","why":"The user wants to speak to a representative, so I am offering to schedule a call with a broker.","handoff":false}`
+    );
+    await enqueueSmsJob(db, biz, LEAD, "I would like to speak to a representative");
+    await tickSmsWorker();
+
+    // The decision record stores the EFFECTIVE escalation, not the model's flag.
+    const rows = await reasoningRows(biz);
+    expect(rows).toHaveLength(1);
+    expect(rows[0].intent).toBe("request_human_agent");
+    expect(rows[0].escalated).toBe(true);
+
+    // The needs-human pipeline fired: open-state tag + owner page.
+    expect(await getContactTags(db, biz, LEAD)).toContain(NEEDS_HUMAN_TAG);
+    const pages = await notificationRows(biz);
+    const dashboard = pages.find((n) => n.delivery_channel === "dashboard");
+    expect(dashboard?.status).toBe("sent");
+    expect(dashboard?.payload.taskType).toBe("sms_needs_human");
+    expect(dashboard?.payload.contactE164).toBe(LEAD);
+  });
+
   it("a handoff turn escalates through the REAL notifications function, once per open state", async () => {
     const { biz } = await seedLeadWithContext("IT sms escalation");
     const trailer =

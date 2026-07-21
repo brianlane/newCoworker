@@ -66,6 +66,16 @@ function trailerCutIndex(line: string): number {
 /**
  * Appended to the model's per-turn instructions. Kept terse: the trailer is
  * machine-read, and a long spec would crowd the actual conversation prompt.
+ *
+ * DO NOT reword the handoff spec to fix classification misses. Live probes
+ * (2026-07-20, temperature 0) showed the wording is chaotically coupled to
+ * the REPLY itself — inserting even a short parenthetical made the model
+ * re-ask an already-answered intake question in the Juhu replay scenario
+ * (tests/e2e/sms-duplicate-replies.e2e.test.ts) — while the handoff flag on
+ * a "speak to a representative" turn stayed false under every variant
+ * probed. Deterministic misclassification fixes belong in
+ * `isHumanRequestIntent` below, which the worker consults independently of
+ * the model's flag.
  */
 export const REASONING_PROMPT_INSTRUCTION =
   `\n\nAfter your reply, on its own final line, append exactly: ` +
@@ -81,6 +91,52 @@ export type ReplyReasoning = {
   rationale: string;
   escalated: boolean;
 };
+
+/**
+ * Deterministic backstop for the handoff flag (Truly Insurance 2026-07-20):
+ * their tester asked to "speak to a representative" six times and every turn
+ * came back intent=request_human_agent with handoff:false — the model judged
+ * its schedule-a-call offer to have HANDLED the person-request, so the
+ * needs-human escalation (PR #534) never fired. When the intent itself NAMES
+ * a human, the worker must not depend on the model's handoff judgment.
+ *
+ * Matching is token-based over the snake_case intent so substrings never
+ * false-positive ("rep" must not match "repair_estimate_request", "person"
+ * must not match "personal_insurance_question"):
+ *
+ *  - an unambiguous human noun (human / representative / rep / operator)
+ *    escalates on its own IF a contact verb accompanies it — "representative
+ *    _office_hours_question" is about a person, not a request FOR one;
+ *  - the ambiguous nouns (agent / person / someone / somebody) additionally
+ *    require the contact verb and exclude the "in_person" meeting-mode bigram
+ *    ("in_person_meeting_request" is a booking, not a staffing request).
+ *
+ * In practice the observed live intents (request_human_agent,
+ * speak_to_representative, …) always carry a verb; a verbless noun-only
+ * intent falls through to the model's own handoff flag.
+ */
+const HUMAN_NOUN_RE = /(^|_)(human|representative|rep|operator|agent|person|someone|somebody)(_|$)/;
+const CONTACT_VERB_RE =
+  /(^|_)(speak|talk|call|contact|connect|reach|request|want|wants|need|needs|ask|asked|get)(_|$)/;
+const IN_PERSON_BIGRAM_RE = /(^|_)in_person(_|$)/g;
+
+export function isHumanRequestIntent(intent: string): boolean {
+  const normalized = intent
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(IN_PERSON_BIGRAM_RE, "$1");
+  return HUMAN_NOUN_RE.test(normalized) && CONTACT_VERB_RE.test(normalized);
+}
+
+/**
+ * The worker's single escalation decision: the model's own handoff flag OR
+ * the deterministic human-request intent. Callers store and act on THIS,
+ * never on `escalated` alone.
+ */
+export function shouldEscalateToHuman(reasoning: ReplyReasoning): boolean {
+  return reasoning.escalated || isHumanRequestIntent(reasoning.intent);
+}
 
 export type SplitReplyResult = {
   /** Customer-facing text with every trailer line removed. */

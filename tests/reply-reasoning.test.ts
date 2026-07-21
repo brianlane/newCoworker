@@ -2,6 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   REASONING_MARKER,
   REASONING_PROMPT_INSTRUCTION,
+  isHumanRequestIntent,
+  shouldEscalateToHuman,
   splitReplyReasoning
 } from "../supabase/functions/_shared/reply_reasoning";
 
@@ -382,5 +384,81 @@ describe("splitReplyReasoning", () => {
     );
     expect(res.reply).toBe("");
     expect(res.reasoning?.intent).toBe("a");
+  });
+});
+
+describe("isHumanRequestIntent (Truly 2026-07-20: rep requests classified handoff:false)", () => {
+  // The live incident: six "speak to a representative" turns, every one
+  // intent=request_human_agent with handoff:false — the model believed its
+  // schedule-a-call offer fully handled the request, so escalateToHuman
+  // never fired. The intent NAMES a human; the worker must not depend on
+  // the model's handoff judgment for that case.
+  it.each([
+    "request_human_agent", // the live Truly intent, verbatim
+    "speak_to_representative",
+    "wants_to_talk_to_rep",
+    "request_representative",
+    "speak_with_human",
+    "talk_to_a_person",
+    "wants_someone_to_call",
+    "connect_to_operator",
+    "asked_for_live_agent",
+    "needs_real_person",
+    "REQUEST_HUMAN_AGENT" // model casing drift
+  ])("escalates: %s", (intent) => {
+    expect(isHumanRequestIntent(intent)).toBe(true);
+  });
+
+  it.each([
+    "request_phone_call", // wants A call, not necessarily a person (turn 1 of the live test)
+    "wants_quote",
+    "policy_renewal_date",
+    "booking_confirmation",
+    "in_person_meeting_request", // meeting MODE, not a staffing request
+    "wants_in_person_quote",
+    "personal_insurance_question", // "person" must match as a whole token only
+    "representative_office_hours_question", // human noun with no contact verb
+    "agent_commission_question",
+    "repair_estimate_request", // "rep" must not match inside "repair"
+    "_default",
+    ""
+  ])("does not escalate: %s", (intent) => {
+    expect(isHumanRequestIntent(intent)).toBe(false);
+  });
+});
+
+describe("shouldEscalateToHuman (the worker's escalation decision)", () => {
+  const reasoning = (intent: string, escalated: boolean) => ({
+    intent,
+    rationale: "r",
+    escalated
+  });
+
+  it("model handoff:true escalates regardless of intent", () => {
+    expect(shouldEscalateToHuman(reasoning("wants_quote", true))).toBe(true);
+  });
+
+  it("a human-request intent escalates even when the model said handoff:false", () => {
+    expect(shouldEscalateToHuman(reasoning("request_human_agent", false))).toBe(true);
+  });
+
+  it("no handoff and no human-request intent does not escalate", () => {
+    expect(shouldEscalateToHuman(reasoning("wants_quote", false))).toBe(false);
+  });
+});
+
+describe("REASONING_PROMPT_INSTRUCTION handoff wording (Truly 2026-07-20)", () => {
+  it("keeps the original handoff spec byte-stable — misses are fixed in code, not wording", () => {
+    // Live probes showed rewording the handoff spec does NOT flip the flag
+    // on "speak to a representative" turns but DOES perturb the reply
+    // itself (the Juhu re-ask regression). The spec is pinned verbatim so a
+    // well-meaning "clarification" can't silently change live replies; the
+    // deterministic isHumanRequestIntent backstop owns the person-request
+    // case. See the module doc on REASONING_PROMPT_INSTRUCTION.
+    expect(REASONING_PROMPT_INSTRUCTION).toContain(
+      '"handoff":<true ONLY when a human must take this conversation over or follow up — ' +
+        "they asked for a person, you could not answer or do what they needed, or the topic " +
+        "is outside what you know. A booking or question you fully handled is NOT a handoff. Else false>"
+    );
   });
 });
