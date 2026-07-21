@@ -201,7 +201,7 @@ export function DocumentsManager({
   async function upload() {
     const file = fileRef.current?.files?.[0];
     if (!file) {
-      setError("Pick a file first (PDF, text, markdown, CSV, or .vtt).");
+      setError("Pick a file first (PDF, Word .docx, text, markdown, CSV, or .vtt).");
       return;
     }
     setError(null);
@@ -688,12 +688,12 @@ export function DocumentsManager({
           <div className="grid gap-3 sm:grid-cols-2">
             <div className="sm:col-span-2">
               <label className={labelClass}>
-                File (PDF, text, markdown, CSV, or a meeting transcript .vtt — max 10 MB)
+                File (PDF, Word .docx, text, markdown, CSV, or a meeting transcript .vtt — max 10 MB)
               </label>
               <input
                 ref={fileRef}
                 type="file"
-                accept=".pdf,.txt,.md,.csv,.vtt,application/pdf,text/plain,text/markdown,text/csv,text/vtt"
+                accept=".pdf,.docx,.txt,.md,.csv,.vtt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown,text/csv,text/vtt"
                 className="block w-full text-sm text-parchment/70 file:mr-3 file:rounded-md file:border-0 file:bg-signal-teal/20 file:px-3 file:py-1.5 file:text-sm file:text-signal-teal"
               />
             </div>

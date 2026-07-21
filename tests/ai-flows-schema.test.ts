@@ -1416,7 +1416,7 @@ describe("engine-provided vars + send_email fromConnectionId", () => {
     expect(validateDefinitionSemantics(def)).toEqual([]);
   });
 
-  it("accepts fromConnectionId and rejects combining it with attachScreenshot", () => {
+  it("accepts fromConnectionId and rejects combining it with attachments", () => {
     const mk = (extra: Record<string, unknown>) =>
       aiFlowDefinitionSchema.parse({
         version: 1,
@@ -1437,6 +1437,50 @@ describe("engine-provided vars + send_email fromConnectionId", () => {
     expect(
       validateDefinitionSemantics(mk({ attachScreenshot: true })).some((i) =>
         i.includes("attachments are only supported when sending from your AI coworker's email")
+      )
+    ).toBe(true);
+    expect(
+      validateDefinitionSemantics(
+        mk({ attachDocumentTemplate: "business-docs:33333333-3333-4333-8333-333333333333" })
+      ).some((i) =>
+        i.includes("attachments are only supported when sending from your AI coworker's email")
+      )
+    ).toBe(true);
+  });
+
+  it("scope-checks {{vars.x}} inside attachDocumentTemplate", () => {
+    const mk = (attachDocumentTemplate: string, extraSteps: unknown[] = []) =>
+      aiFlowDefinitionSchema.parse({
+        version: 1,
+        trigger: { channel: "tenant_email", conditions: [] },
+        steps: [
+          ...extraSteps,
+          {
+            id: "e",
+            type: "send_email",
+            to: "a@b.com",
+            subject: "s",
+            body: "b",
+            attachDocumentTemplate
+          }
+        ]
+      });
+    // A ref built from an earlier run_agent filing var: valid.
+    const withAgent = mk("business-docs:{{vars.summary_document_id}}", [
+      {
+        id: "agent",
+        type: "run_agent",
+        agentId: "44444444-4444-4444-8444-444444444444",
+        documentTemplate: "{{trigger.document}}",
+        saveDocument: { titleTemplate: "Summary" },
+        saveAs: "summary"
+      }
+    ]);
+    expect(validateDefinitionSemantics(withAgent)).toEqual([]);
+    // A var no earlier step produces: flagged.
+    expect(
+      validateDefinitionSemantics(mk("business-docs:{{vars.ghost_document}}")).some((i) =>
+        i.includes("{{vars.ghost_document}}")
       )
     ).toBe(true);
   });

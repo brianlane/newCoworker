@@ -3785,6 +3785,17 @@ function StepFields({
           />
           Attach the screenshot from an earlier browse step (AI coworker email only)
         </label>
+        <Field
+          label="Attach a document (optional)"
+          value={step.attachDocumentTemplate ?? ""}
+          onChange={(v) => patchStep(index, { attachDocumentTemplate: v.trim() ? v : undefined })}
+          help={
+            'A document ref like business-docs:{{vars.summary_document_id}} (from a "Run an agent" ' +
+            "step that saves its result as a document), or business-docs:<document id> for a fixed " +
+            "library document. AI coworker email only — if the ref comes up empty the email still " +
+            "sends, just without the attachment."
+          }
+        />
       </div>
     );
   }

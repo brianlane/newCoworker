@@ -43,9 +43,10 @@ export const maxDuration = 120;
 const MAX_INPUT_BYTES = 10 * 1024 * 1024;
 
 const RUN_ERROR_MESSAGES: Record<string, string> = {
-  unsupported_type: "Only PDF, plain text, markdown, or CSV attachments are supported",
+  unsupported_type: "Only PDF, Word (.docx), plain text, markdown, or CSV attachments are supported",
   empty_content: "An attachment has no readable content",
   too_many_files: `A run can carry at most ${AGENT_RUN_MAX_FILES} files`,
+  output_too_large: "The re-typeset result was too large — try a shorter source document",
   model_unavailable: "The AI service is not configured — try again later",
   model_failed: "The AI call failed — try again"
 };
@@ -101,7 +102,7 @@ export async function POST(request: Request, context: RouteContext) {
         if (!isSupportedDocumentMime(mimeType)) {
           return errorResponse(
             "VALIDATION_ERROR",
-            "Only PDF, plain text, markdown, CSV, or VTT transcript attachments are supported"
+            "Only PDF, Word (.docx), plain text, markdown, CSV, or VTT transcript attachments are supported"
           );
         }
         if (file.size === 0 || file.size > MAX_INPUT_BYTES) {
@@ -158,7 +159,7 @@ export async function POST(request: Request, context: RouteContext) {
         if (!isSupportedDocumentMime(document.mime_type.trim().toLowerCase())) {
           return errorResponse(
             "VALIDATION_ERROR",
-            "Only PDF, plain text, markdown, or CSV documents are supported"
+            "Only PDF, Word (.docx), plain text, markdown, or CSV documents are supported"
           );
         }
         const { data: blob, error: downloadError } = await db.storage

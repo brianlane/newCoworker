@@ -1,12 +1,13 @@
 /**
  * Business Documents — upload ingestion (extract + condense).
  *
- * Text formats (txt / markdown / csv) are decoded directly; PDFs go to
- * Gemini as inlineData (native PDF understanding — no local parser
- * dependency). Either way one Gemini pass condenses the material into the
- * agent-facing `content_md` plus a 1–2 sentence retrieval `summary`,
- * mirroring the website-ingest pipeline (metered into the shared AI budget
- * via meterGeminiSpendForBusiness).
+ * Text formats (txt / markdown / csv) are decoded directly; Word documents
+ * (.docx) are decoded locally via mammoth; PDFs go to Gemini as inlineData
+ * (native PDF understanding — no local parser dependency). Either way one
+ * Gemini pass condenses the material into the agent-facing `content_md`
+ * plus a 1–2 sentence retrieval `summary`, mirroring the website-ingest
+ * pipeline (metered into the shared AI budget via
+ * meterGeminiSpendForBusiness).
  */
 
 import {
@@ -19,6 +20,7 @@ import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 import { logger } from "@/lib/logger";
 import { DOCUMENT_CONTENT_MD_MAX_CHARS, DOCUMENT_SUMMARY_MAX_CHARS } from "./core";
 import { VTT_MIME_TYPE, isVttUpload, vttToPlainText } from "@/lib/transcripts/vtt";
+import { DOCX_MIME_TYPE, decodeDocxToText, isDocxUpload } from "./docx";
 
 /** Raw text fed to the condenser is clipped to keep the prompt bounded. */
 export const DOCUMENT_INGEST_MAX_TEXT_CHARS = 40_000;
@@ -32,9 +34,11 @@ export const DOCUMENT_TEXT_MIME_TYPES = [
   VTT_MIME_TYPE
 ] as const;
 export const DOCUMENT_PDF_MIME_TYPE = "application/pdf";
+export const DOCUMENT_DOCX_MIME_TYPE = DOCX_MIME_TYPE;
 export const DOCUMENT_ALLOWED_MIME_TYPES = [
   ...DOCUMENT_TEXT_MIME_TYPES,
-  DOCUMENT_PDF_MIME_TYPE
+  DOCUMENT_PDF_MIME_TYPE,
+  DOCUMENT_DOCX_MIME_TYPE
 ] as const;
 
 export function isSupportedDocumentMime(mime: string): boolean {
@@ -44,12 +48,15 @@ export function isSupportedDocumentMime(mime: string): boolean {
 /**
  * Canonical mime for an upload: maps VTT transcripts (reported as text/vtt,
  * blank, or octet-stream with a .vtt name — browsers do all three) onto
- * VTT_MIME_TYPE so the upload routes accept them and ingestion knows to
- * convert. Every other upload keeps its reported type.
+ * VTT_MIME_TYPE, and Word uploads (canonical mime, or blank/octet-stream
+ * with a .docx name) onto DOCX_MIME_TYPE, so the upload routes accept them
+ * and ingestion knows to convert. Every other upload keeps its reported type.
  */
 export function normalizeUploadMime(mime: string, filename: string): string {
   const trimmed = mime.trim().toLowerCase();
-  return isVttUpload(trimmed, filename) ? VTT_MIME_TYPE : trimmed;
+  if (isVttUpload(trimmed, filename)) return VTT_MIME_TYPE;
+  if (isDocxUpload(trimmed, filename)) return DOCX_MIME_TYPE;
+  return trimmed;
 }
 
 // gemini-3.5-flash-lite (GA Jul 21 2026): cheaper AND stronger than the old
@@ -199,12 +206,19 @@ export async function ingestDocument(
   /* c8 ignore next -- production default; tests inject generate */
   const generate = deps.generate ?? geminiGenerateTextDetailed;
 
-  if ((DOCUMENT_TEXT_MIME_TYPES as readonly string[]).includes(input.mimeType)) {
-    const decoded = input.data.toString("utf8").replace(/\u0000/g, "");
+  const isDocx = input.mimeType === DOCX_MIME_TYPE;
+  if (isDocx || (DOCUMENT_TEXT_MIME_TYPES as readonly string[]).includes(input.mimeType)) {
     // VTT transcripts become "Speaker: sentence" lines so the condenser
-    // reads a meeting, not subtitle cue soup.
+    // reads a meeting, not subtitle cue soup; Word documents are decoded
+    // locally (Gemini has no native DOCX understanding).
     const isVtt = input.mimeType === VTT_MIME_TYPE;
-    const asText = isVtt ? vttToPlainText(decoded) : decoded;
+    let asText: string;
+    if (isDocx) {
+      asText = (await decodeDocxToText(input.data)) ?? "";
+    } else {
+      const decoded = input.data.toString("utf8").replace(/\u0000/g, "");
+      asText = isVtt ? vttToPlainText(decoded) : decoded;
+    }
     const rawText = asText.trim().slice(0, DOCUMENT_INGEST_MAX_TEXT_CHARS);
     if (rawText.length < 20) return { ok: false, error: "empty_content" };
     const prompt = buildCondensePrompt({

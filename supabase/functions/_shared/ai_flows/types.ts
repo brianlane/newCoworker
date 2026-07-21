@@ -626,6 +626,15 @@ export type FlowStep =
        */
       attachScreenshot?: boolean;
       /**
+       * Template resolving to a `business-docs:<documentId>` ref to attach —
+       * a picked library document or a run_agent-generated one via
+       * `business-docs:{{vars.<saveAs>_document_id}}`. A blank-rendered ref
+       * sends without the attachment; a non-blank ref that can't resolve
+       * fails the step loudly. Platform (Resend) sends only, like
+       * attachScreenshot.
+       */
+      attachDocumentTemplate?: string;
+      /**
        * Send from the owner's connected mailbox (workspace_oauth_connections.id,
        * via Nango Gmail/Outlook) instead of the platform Resend sender. The
        * worker calls back into the app's /api/aiflows/send-owner-email, which
