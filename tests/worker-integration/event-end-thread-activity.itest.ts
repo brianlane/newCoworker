@@ -61,7 +61,7 @@ async function enqueueNoShowRun(
   flowId: string,
   businessId: string,
   lead: string,
-  event: { startsAt: string; endsAt: string }
+  event: { startsAt?: string; endsAt: string }
 ): Promise<string> {
   return enqueueRun(
     db,
@@ -70,14 +70,14 @@ async function enqueueNoShowRun(
     {
       channel: "calendar",
       windowText:
-        `title: ${EVENT_TITLE}\nstarts: ${event.startsAt}\nends: ${event.endsAt}\n` +
+        `title: ${EVENT_TITLE}\nends: ${event.endsAt}\n` +
         `invitee name: Tim Tsai\ninvitee no-show: yes`,
       url: null,
       from: "",
       event_id: `EV-${flowId.slice(0, 8)}`,
       event_title: EVENT_TITLE,
       calendar: "primary",
-      starts_at: event.startsAt,
+      ...(event.startsAt ? { starts_at: event.startsAt } : {}),
       ends_at: event.endsAt
     },
     { invitee_phone: lead, invitee_first_name: "Tim" }
@@ -156,6 +156,26 @@ describe("event_end thread-activity guard (Tim Tsai's timeline)", () => {
       .eq("business_id", biz)
       .eq("run_id", runId);
     expect(outbound ?? []).toHaveLength(0);
+  });
+
+  it("a trigger with no starts_at still suppresses a mid-appointment text (end-minus-margin fallback)", async () => {
+    const biz = await seedBusiness(db, "IT event-end no-start anchor");
+    const lead = "+17805550205";
+    await seedContact(db, biz, lead, { display_name: "Tim Tsai" });
+    const flowId = await createFlow(db, biz, noShowDefinition());
+    // Event end known, start missing: Tim's text 22 minutes before the end
+    // (mid-appointment) must still count as thread activity (Bugbot Medium
+    // on PR #795 — the old ends_at anchor missed exactly this window).
+    await seedInboundActivity(db, biz, lead, minutesAgo(142));
+    const runId = await enqueueNoShowRun(db, flowId, biz, lead, { endsAt: minutesAgo(120) });
+
+    await tickWorker();
+
+    const run = await getRun(db, runId);
+    expect(run.status).toBe("done");
+    const recovery = (await getSteps(db, runId)).find((s) => s.step_index === 0);
+    expect(recovery?.status).toBe("skipped");
+    expect((recovery?.result as { skipped?: string })?.skipped).toBe("event_end_thread_active");
   });
 
   it("owner/manual outbound after the event also suppresses the recovery text", async () => {

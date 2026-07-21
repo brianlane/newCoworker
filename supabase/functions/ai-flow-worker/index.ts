@@ -840,12 +840,9 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       // A step whose `when` guard is unmet skips inside runStep anyway.
       (!step.when || evaluateStepCondition(step.when, scope))
     ) {
-      const sinceIso =
-        typeof scope.trigger.starts_at === "string" && scope.trigger.starts_at
-          ? scope.trigger.starts_at
-          : typeof scope.trigger.ends_at === "string"
-            ? scope.trigger.ends_at
-            : "";
+      // Anchored at the event's START (fallback: end minus a margin) so a
+      // mid-appointment text still suppresses — see eventEndActivityAnchorIso.
+      const sinceIso = eventEndActivityAnchorIso(scope.trigger);
       const target = renderTemplate(step.to ?? "", scope).trim();
       // Only a concrete lead number is gated — teammate/group/agent sends
       // are internal notifications with their own semantics.
@@ -1372,6 +1369,30 @@ const EVENT_END_THREAD_VAR = "__event_end_thread_check";
 
 /** Skip reason recorded on steps suppressed by the thread-activity gate. */
 const EVENT_END_THREAD_SKIP = "event_end_thread_active";
+
+/**
+ * Anchor fallback when the trigger carries no starts_at: assume the
+ * appointment ran at most this long before its end, so mid-appointment
+ * texts ("running late", "have to rebook" — the incident's exact shape)
+ * still count as thread activity. Erring early only widens suppression to
+ * a conversation active shortly BEFORE the appointment, which is equally a
+ * live thread the canned follow-up must not talk over.
+ */
+const EVENT_END_ANCHOR_FALLBACK_MS = 2 * 60 * 60_000;
+
+/**
+ * The thread-activity anchor for an event_end run: the event's start when
+ * known, else its end minus the fallback margin. Empty string when the
+ * trigger carries no usable timestamp (gate skipped).
+ */
+function eventEndActivityAnchorIso(trigger: Record<string, unknown>): string {
+  const startsAt = typeof trigger.starts_at === "string" ? trigger.starts_at : "";
+  if (startsAt) return startsAt;
+  const endsAt = typeof trigger.ends_at === "string" ? trigger.ends_at : "";
+  const endMs = Date.parse(endsAt);
+  if (!Number.isFinite(endMs)) return "";
+  return new Date(endMs - EVENT_END_ANCHOR_FALLBACK_MS).toISOString();
+}
 
 /** Whether any of the flow's triggers is a calendar event_end trigger. */
 function flowHasEventEndTrigger(def: AiFlowDefinition): boolean {
