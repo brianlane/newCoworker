@@ -7,12 +7,14 @@
  * carrying a leadgen_id for the contact's numbers/email), and uploads the
  * stage event to the connection's dataset. Terminal states:
  *   - sent:    Meta accepted the event;
- *   - skipped: no CAPI-ready connection, or the lead isn't a Meta lead
- *              (no submission with identifiers) — a non-event, not an error;
+ *   - skipped: the lead isn't a Meta lead (no submission with identifiers)
+ *              — a non-event, not an error;
  *   - expired: older than Meta's 7-day acceptance window;
- *   - failed:  exhausted retries.
- * Transient upload errors stay `pending` (attempts+1) and retry next tick
- * until they expire.
+ *   - failed:  exhausted upload retries.
+ * Everything transient stays `pending` and retries next tick until it
+ * expires: upload errors bump `attempts` (capped), and a not-CAPI-ready
+ * connection (missing, paused, mid-reconnect, lookup failure) just waits —
+ * a tenant who re-enables the connection within the window loses nothing.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getMetaConnection, type MetaConnectionRow } from "@/lib/db/meta-connections";
@@ -174,11 +176,12 @@ export async function drainMetaCapiEvents(
       connection.status !== "active" ||
       !connection.pageToken
     ) {
-      await markRow(db, row.id, {
-        status: "skipped",
-        last_error: "no capi-ready meta connection"
-      });
-      summary.skipped += 1;
+      // Often temporary (paused connection, mid-reconnect, lookup error):
+      // leave the row pending — it retries every tick until the connection
+      // comes back or the 7-day window expires it. attempts is reserved
+      // for real upload tries, so waiting here never burns the cap.
+      await markRow(db, row.id, { last_error: "no capi-ready meta connection" });
+      summary.deferred += 1;
       continue;
     }
 

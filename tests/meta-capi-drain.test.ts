@@ -182,7 +182,7 @@ describe("drainMetaCapiEvents", () => {
     expect(buildConversionLeadBody).not.toHaveBeenCalled();
   });
 
-  it("skips every not-CAPI-ready connection shape (and lookup failures)", async () => {
+  it("defers (stays pending, attempts untouched) on every not-CAPI-ready connection shape", async () => {
     const badConnections = [
       null,
       { ...READY_CONNECTION, dataset_id: null },
@@ -197,24 +197,30 @@ describe("drainMetaCapiEvents", () => {
         meta_capi_events: [{ data: [outboxRow()], error: null }]
       });
       const summary = await drainMetaCapiEvents(db as never);
-      expect(summary.skipped, JSON.stringify(connection)).toBe(1);
-      expect(updates[0].fields.status).toBe("skipped");
+      // Paused/mid-reconnect states are often temporary: the row must stay
+      // pending (no terminal status, no attempt burned) so a re-enabled
+      // connection inside the 7-day window still gets the event.
+      expect(summary.deferred, JSON.stringify(connection)).toBe(1);
+      expect(summary.skipped, JSON.stringify(connection)).toBe(0);
+      expect(updates[0].fields).toEqual({
+        last_error: "no capi-ready meta connection"
+      });
     }
 
-    // A throwing connection lookup degrades to the same skip — Error and
-    // non-Error rejections both.
+    // A throwing connection lookup degrades to the same deferral — Error
+    // and non-Error rejections both.
     getMetaConnection.mockReset().mockRejectedValue(new Error("conn down"));
     const { db } = makeDb({
       meta_capi_events: [{ data: [outboxRow()], error: null }]
     });
-    expect((await drainMetaCapiEvents(db as never)).skipped).toBe(1);
+    expect((await drainMetaCapiEvents(db as never)).deferred).toBe(1);
     expect(warnSpy).toHaveBeenCalled();
 
     getMetaConnection.mockReset().mockRejectedValue("conn string boom");
     const stringy = makeDb({
       meta_capi_events: [{ data: [outboxRow()], error: null }]
     });
-    expect((await drainMetaCapiEvents(stringy.db as never)).skipped).toBe(1);
+    expect((await drainMetaCapiEvents(stringy.db as never)).deferred).toBe(1);
   });
 
   it("defers with a stringified error when the payload builder throws a non-Error", async () => {
