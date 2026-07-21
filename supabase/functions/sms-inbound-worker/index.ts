@@ -754,14 +754,15 @@ serve(async (req: Request) => {
     // bare "1" replies alert too. Runs AFTER the kill-switch/Safe-Mode gate
     // (a Safe-Mode forward already put the text on the owner's phone
     // verbatim). Gated on notification_preferences.customer_reply_alerts
-    // (default false), per-contact coalesced, forward_owner contacts skipped
-    // inside the helper. Best-effort: never touches the reply pipeline.
+    // (default false), deduped per job across retry claims, per-contact
+    // coalesced, forward_owner contacts skipped inside the helper.
+    // Best-effort: never touches the reply pipeline.
     if (!job.staff_kind) {
       await sendCustomerReplyAlert(supabase, {
         businessId: job.business_id,
         contactE164: fromE164,
         inboundPreview: userText.slice(0, 200),
-        attempt: job.attempt_count,
+        jobId: job.id,
         notifyUrl: `${supabaseUrl}/functions/v1/notifications`,
         bearer: serviceKey
       });

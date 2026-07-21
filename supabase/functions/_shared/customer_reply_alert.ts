@@ -12,14 +12,18 @@
  * produced the Jul 16 notify_team misfire).
  *
  * Guard rails, in order:
- *   1. retry claims never re-page (the first claim already did);
- *   2. the toggle READS FAIL CLOSED: `customer_reply_alerts` is opt-in
+ *   1. the toggle READS FAIL CLOSED: `customer_reply_alerts` is opt-in
  *      (default false) — a DB blip or missing prefs row means no alert;
- *   3. forward_owner contacts are skipped — the owner already receives
+ *   2. forward_owner contacts are skipped — the owner already receives
  *      those texts verbatim through the relay;
- *   4. per-contact coalescing against the notifications history
- *      (payload->>contactE164, DELIVERED rows only), so a multi-part text
- *      or a rapid back-and-forth is ONE page, not a storm.
+ *   3. per-JOB dedupe against the notifications history (payload->>jobId,
+ *      DELIVERED rows only): a retried job whose first claim already paged
+ *      never re-pages, while a retry whose first claim FAILED to page
+ *      (notify POST down, worker crash) still alerts — an attempt-count
+ *      gate here would silently drop those (Bugbot Medium on PR #802);
+ *   4. per-contact coalescing (payload->>contactE164, DELIVERED rows only),
+ *      so a multi-part text or a rapid back-and-forth is ONE page, not a
+ *      storm.
  *
  * Best-effort throughout: an alert failure must never break the reply turn
  * that discovered it. Dependency-injected (client + fetch) so this is
@@ -42,8 +46,8 @@ export type CustomerReplyAlertInput = {
   contactE164: string;
   /** The inbound message (clipped here). */
   inboundPreview: string;
-  /** The job's claim attempt — retries (attempt > 1) never re-page. */
-  attempt: number;
+  /** The sms_inbound_jobs id — the per-job dedupe key across retry claims. */
+  jobId: string;
   /** `${SUPABASE_URL}/functions/v1/notifications` */
   notifyUrl: string;
   /** Service-role key or NOTIFICATIONS_WEBHOOK_TOKEN. */
@@ -53,7 +57,7 @@ export type CustomerReplyAlertInput = {
 
 export type CustomerReplyAlertResult =
   | "sent"
-  | "retry_attempt"
+  | "already_alerted"
   | "opted_out"
   | "forward_owner"
   | "coalesced"
@@ -68,8 +72,6 @@ export async function sendCustomerReplyAlert(
   input: CustomerReplyAlertInput
 ): Promise<CustomerReplyAlertResult> {
   try {
-    if (input.attempt > 1) return "retry_attempt";
-
     // Opt-in gate — FAILS CLOSED. Default-false column; a read error or a
     // business that never opened the notifications page means no alert.
     const { data: prefs, error: prefsErr } = await supabase
@@ -103,6 +105,26 @@ export async function sendCustomerReplyAlert(
     } | null;
     if (contact?.sms_reply_mode === "forward_owner") return "forward_owner";
     const label = contact?.display_name?.trim() || input.contactE164;
+
+    // Per-JOB dedupe: a DELIVERED page for this exact inbound means a retry
+    // claim must not re-page — but a retry whose FIRST claim never managed
+    // to page (notify POST down, worker crash) still alerts. An
+    // attempt-count gate would silently drop those (Bugbot Medium, PR #802).
+    // A lookup error logs and still alerts — the coalesce below still
+    // bounds any duplicate to one per window.
+    const { data: priorForJob, error: priorErr } = await supabase
+      .from("notifications")
+      .select("id")
+      .eq("business_id", input.businessId)
+      .eq("status", "sent")
+      .eq("payload->>taskType", CUSTOMER_REPLY_TASK_TYPE)
+      .eq("payload->>jobId", input.jobId)
+      .limit(1);
+    if (priorErr) {
+      console.error("customer_reply_alert: job dedupe lookup", priorErr);
+    } else if (((priorForJob ?? []) as unknown[]).length > 0) {
+      return "already_alerted";
+    }
 
     // Coalesce: a DELIVERED page for this contact inside the window means
     // this burst already alerted (skipped/failed channel rows must not
@@ -144,7 +166,8 @@ export async function sendCustomerReplyAlert(
           log_payload: {
             contact_e164: input.contactE164,
             contact_label: label,
-            inbound_preview: input.inboundPreview.slice(0, 200)
+            inbound_preview: input.inboundPreview.slice(0, 200),
+            job_id: input.jobId
           },
           created_at: new Date().toISOString()
         }

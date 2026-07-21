@@ -331,6 +331,12 @@ serve(async (req: Request) => {
     // _shared/aiflow_failure_alert.ts.
     ...(record.task_type === "aiflow_run_failed" && record.log_payload?.run_id
       ? { runId: String(record.log_payload.run_id) }
+      : {}),
+    // Customer reply alerts stamp the inbound job so a RETRY claim of the
+    // same job never re-pages (payload->>jobId) — see
+    // _shared/customer_reply_alert.ts.
+    ...(record.task_type === "sms_customer_reply" && record.log_payload?.job_id
+      ? { jobId: String(record.log_payload.job_id) }
       : {})
   };
   const errors: string[] = [];
