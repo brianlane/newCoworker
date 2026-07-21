@@ -22,7 +22,7 @@ describe("renderAgentArtifactBytes", () => {
       artifactText: "# Markdown",
       mimeType: "text/markdown"
     });
-    expect(result).toEqual({ ok: true, bytes: null });
+    expect(result).toEqual({ ok: true, bytes: null, mimeType: "text/markdown" });
     expect(renderHtmlToPdf).not.toHaveBeenCalled();
   });
 
@@ -33,6 +33,7 @@ describe("renderAgentArtifactBytes", () => {
       mimeType: "application/pdf"
     });
     expect(pdf.ok && pdf.bytes!.subarray(0, 5).toString("ascii")).toBe("%PDF-");
+    expect(pdf.ok && pdf.mimeType).toBe("application/pdf");
 
     const docx = await renderAgentArtifactBytes({
       businessId: BIZ,
@@ -40,19 +41,33 @@ describe("renderAgentArtifactBytes", () => {
       mimeType: DOCX_MIME
     });
     expect(docx.ok && docx.bytes!.subarray(0, 2).toString("ascii")).toBe("PK");
+    expect(docx.ok && docx.mimeType).toBe(DOCX_MIME);
     expect(renderHtmlToPdf).not.toHaveBeenCalled();
   });
 
-  it("routes re-typeset HTML artifacts to the render sidecar", async () => {
+  it("routes re-typeset artifacts (text/html mime) to the render sidecar as PDFs", async () => {
     const pdfBytes = Buffer.from("%PDF-1.7 sidecar");
     vi.mocked(renderHtmlToPdf).mockResolvedValue({ ok: true, pdf: pdfBytes });
     const result = await renderAgentArtifactBytes({
       businessId: BIZ,
       artifactText: HTML_DOC,
+      mimeType: "text/html"
+    });
+    expect(result).toEqual({ ok: true, bytes: pdfBytes, mimeType: "application/pdf" });
+    expect(renderHtmlToPdf).toHaveBeenCalledWith(BIZ, HTML_DOC);
+  });
+
+  it("never routes a pdf/docx-target artifact to the sidecar, even when it looks like HTML", async () => {
+    // The MIME is the explicit discriminator: a pdf-format agent whose model
+    // reply happens to be a full HTML document still typesets pure-JS (works
+    // on Starter, no sidecar dependency).
+    const result = await renderAgentArtifactBytes({
+      businessId: BIZ,
+      artifactText: HTML_DOC,
       mimeType: "application/pdf"
     });
-    expect(result).toEqual({ ok: true, bytes: pdfBytes });
-    expect(renderHtmlToPdf).toHaveBeenCalledWith(BIZ, HTML_DOC);
+    expect(result.ok && result.bytes!.subarray(0, 5).toString("ascii")).toBe("%PDF-");
+    expect(renderHtmlToPdf).not.toHaveBeenCalled();
   });
 
   it("surfaces sidecar failures instead of degrading", async () => {
@@ -60,7 +75,7 @@ describe("renderAgentArtifactBytes", () => {
     const unconfigured = await renderAgentArtifactBytes({
       businessId: BIZ,
       artifactText: HTML_DOC,
-      mimeType: "application/pdf"
+      mimeType: "text/html"
     });
     expect(unconfigured).toEqual({
       ok: false,
@@ -75,7 +90,7 @@ describe("renderAgentArtifactBytes", () => {
     const failed = await renderAgentArtifactBytes({
       businessId: BIZ,
       artifactText: HTML_DOC,
-      mimeType: "application/pdf"
+      mimeType: "text/html"
     });
     expect(failed).toEqual({ ok: false, detail: "PDF rendering failed: sidecar http 502" });
 
@@ -83,19 +98,8 @@ describe("renderAgentArtifactBytes", () => {
     const noDetail = await renderAgentArtifactBytes({
       businessId: BIZ,
       artifactText: HTML_DOC,
-      mimeType: "application/pdf"
+      mimeType: "text/html"
     });
     expect(noDetail).toEqual({ ok: false, detail: "PDF rendering failed: sidecar unavailable" });
-  });
-
-  it("never routes an HTML artifact with a DOCX target to the sidecar", async () => {
-    const result = await renderAgentArtifactBytes({
-      businessId: BIZ,
-      artifactText: HTML_DOC,
-      mimeType: DOCX_MIME
-    });
-    // Degenerate combination (retypeset is PDF-only); it typesets as text.
-    expect(result.ok && result.bytes!.subarray(0, 2).toString("ascii")).toBe("PK");
-    expect(renderHtmlToPdf).not.toHaveBeenCalled();
   });
 });

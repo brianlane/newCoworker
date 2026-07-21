@@ -3,20 +3,27 @@
  *
  * One decision point shared by save-artifact and the run download route:
  * text targets pass through as-is (bytes: null → caller stores the artifact
- * text); binary targets render. Two PDF producers exist — the pure-JS
- * markdown typesetter (`pdf`/`docx` formats) and the VPS render sidecar
- * (`pdf_retypeset`, whose artifact is a self-contained HTML document) — and
- * the artifact's own shape picks between them: re-typeset artifacts are
- * always full HTML documents (ensureHtmlDocument in the run executor), and
- * markdown artifacts never are.
+ * text); binary targets render. The run row's `output_mime_type` is the
+ * EXPLICIT renderer discriminator — `text/html` (RETYPESET_ARTIFACT_MIME)
+ * is written only by pdf_retypeset runs and routes to the VPS render
+ * sidecar, while `application/pdf`/DOCX artifacts are always markdown and
+ * typeset with the pure-JS renderer. A markdown artifact that merely LOOKS
+ * like HTML can therefore never be misrouted to the sidecar (and a Starter
+ * tenant's pdf/docx agents never depend on one).
  */
 
-import { typesetArtifact, typesetTargetKind } from "@/lib/documents/typeset";
+import { PDF_MIME_TYPE, typesetArtifact, typesetTargetKind } from "@/lib/documents/typeset";
 import { renderHtmlToPdf } from "@/lib/documents/render-pdf";
-import { isHtmlDocumentArtifact } from "./retypeset";
+import { RETYPESET_ARTIFACT_MIME } from "./core";
 
 export type ArtifactBytesResult =
-  | { ok: true; bytes: Buffer | null }
+  | {
+      ok: true;
+      /** Rendered bytes, or null for text targets (store the artifact text). */
+      bytes: Buffer | null;
+      /** The representation's mime (retypeset html artifacts become PDFs). */
+      mimeType: string;
+    }
   | { ok: false; detail: string };
 
 /**
@@ -30,9 +37,8 @@ export async function renderAgentArtifactBytes(args: {
   artifactText: string;
   mimeType: string;
 }): Promise<ArtifactBytesResult> {
-  const kind = typesetTargetKind(args.mimeType);
-  if (!kind) return { ok: true, bytes: null };
-  if (kind === "pdf" && isHtmlDocumentArtifact(args.artifactText)) {
+  const mime = args.mimeType.trim().toLowerCase();
+  if (mime === RETYPESET_ARTIFACT_MIME) {
     const rendered = await renderHtmlToPdf(args.businessId, args.artifactText);
     if (!rendered.ok) {
       return {
@@ -43,7 +49,13 @@ export async function renderAgentArtifactBytes(args: {
             : `PDF rendering failed: ${rendered.detail ?? "sidecar unavailable"}`
       };
     }
-    return { ok: true, bytes: rendered.pdf };
+    return { ok: true, bytes: rendered.pdf, mimeType: PDF_MIME_TYPE };
   }
-  return { ok: true, bytes: await typesetArtifact(args.artifactText, args.mimeType) };
+  const kind = typesetTargetKind(mime);
+  if (!kind) return { ok: true, bytes: null, mimeType: args.mimeType };
+  return {
+    ok: true,
+    bytes: await typesetArtifact(args.artifactText, mime),
+    mimeType: args.mimeType
+  };
 }

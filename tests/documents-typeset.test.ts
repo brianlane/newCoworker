@@ -209,6 +209,15 @@ describe("renderMarkdownToPdf", () => {
     const doc = await PDFDocument.load(await renderMarkdownToPdf(md));
     expect(doc.getPageCount()).toBe(1);
   });
+
+  it("survives a list item that wraps across a page break (prefix stays with line one)", async () => {
+    const longItem = Array.from({ length: 200 }, (_, i) => `clause ${i}`).join(" ");
+    const filler = Array.from({ length: 30 }, (_, i) => `Paragraph ${i}.`).join("\n\n");
+    const doc = await PDFDocument.load(
+      await renderMarkdownToPdf(`${filler}\n\n- ${longItem}\n- short trailing item`)
+    );
+    expect(doc.getPageCount()).toBeGreaterThan(1);
+  });
 });
 
 describe("renderMarkdownToDocx", () => {

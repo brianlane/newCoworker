@@ -102,18 +102,21 @@ export async function saveAgentRunArtifact(
     .slice(0, 120);
   const storagePath = `${businessId}/${documentId}/${safeName}`;
   // PDF/DOCX targets render from the artifact (typeset markdown, or the
-  // sidecar-printed re-typeset HTML); text targets store the artifact text
-  // byte-for-byte. A required renderer failing (unreachable sidecar) is a
-  // clean refusal, not a silently different document.
-  const mimeType = run.output_mime_type || "text/markdown";
+  // sidecar-printed re-typeset HTML — whose stored representation mime is
+  // the PDF, not the html artifact mime); text targets store the artifact
+  // text byte-for-byte. A required renderer failing (unreachable sidecar)
+  // is a clean refusal, not a silently different document.
   const rendered = await renderAgentArtifactBytes({
     businessId,
     artifactText: run.output_md,
-    mimeType
+    mimeType: run.output_mime_type || "text/markdown"
   });
   if (!rendered.ok) {
     return { ok: false, error: "storage_failed", detail: rendered.detail };
   }
+  // Always non-empty: the renderer echoes the (defaulted) artifact mime or
+  // maps the retypeset artifact to application/pdf.
+  const mimeType = rendered.mimeType;
   const bytes = rendered.bytes ?? Buffer.from(run.output_md, "utf8");
   const { error: uploadError } = await db.storage
     .from(BUSINESS_DOCS_BUCKET)

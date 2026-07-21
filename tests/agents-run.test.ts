@@ -223,7 +223,9 @@ describe("executeAgentRun (pdf_retypeset)", () => {
     expect(res).toMatchObject({
       ok: true,
       outputFilename: "policy.pdf",
-      outputMime: "application/pdf"
+      // The artifact mime (renderer discriminator) — the downloaded/filed
+      // representation becomes application/pdf via renderAgentArtifactBytes.
+      outputMime: "text/html"
     });
     if (res.ok) {
       expect(res.outputMd.startsWith("<!DOCTYPE html>")).toBe(true);

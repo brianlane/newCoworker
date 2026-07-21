@@ -168,7 +168,7 @@ describe("saveAgentRunArtifact", () => {
       output_md:
         "<!DOCTYPE html><html><body><h1>Policy</h1><p>Premium: $999</p></body></html>",
       output_filename: "policy.pdf",
-      output_mime_type: "application/pdf",
+      output_mime_type: "text/html",
       input_filename: "policy.pdf"
     };
     const result = await saveAgentRunArtifact(
@@ -177,7 +177,10 @@ describe("saveAgentRunArtifact", () => {
     );
     expect(result.ok).toBe(true);
     expect(uploads[0].bytes.toString("ascii")).toBe("%PDF-1.7 sidecar");
+    // Filed as the printed PDF, not the html artifact mime.
+    expect(uploads[0].contentType).toBe("application/pdf");
     const inserted = vi.mocked(insertBusinessDocument).mock.calls[0][0];
+    expect(inserted.mime_type).toBe("application/pdf");
     // Knowledge lookup reads text, so the filed content_md is the visible
     // text of the HTML, not the markup.
     expect(inserted.content_md).toContain("Premium: $999");
@@ -193,7 +196,7 @@ describe("saveAgentRunArtifact", () => {
         run: {
           output_md: "<!DOCTYPE html><html><body>x</body></html>",
           output_filename: "policy.pdf",
-          output_mime_type: "application/pdf",
+          output_mime_type: "text/html",
           input_filename: "policy.pdf"
         },
         agentName: "Re-typesetter",

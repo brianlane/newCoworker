@@ -87,7 +87,12 @@ const DOCX_TARGET: AgentOutputTarget = {
  * Re-typeset mode: the model reads the source document natively and replies
  * with styled HTML mirroring its design; the VPS render sidecar prints it to
  * PDF. formatWord slots into the run prompt's "Produce the result as …"
- * line, so it carries the whole HTML contract.
+ * line, so it carries the whole HTML contract. The target mime is
+ * `text/html` — the ARTIFACT's own type, stored on the run row as the
+ * explicit renderer discriminator (renderAgentArtifactBytes maps it to a
+ * PDF download; a markdown artifact that merely looks like HTML can never
+ * be misrouted to the sidecar). The extension stays `pdf` because the
+ * download/filed representation is the printed PDF.
  */
 const RETYPESET_FORMAT_WORD =
   "one complete, self-contained HTML document that visually mirrors the attached document's " +
@@ -97,8 +102,10 @@ const RETYPESET_FORMAT_WORD =
   "may be inline data: URIs. Start the reply with <!DOCTYPE html> and reply with ONLY the " +
   "HTML document";
 
+export const RETYPESET_ARTIFACT_MIME = "text/html";
+
 const PDF_RETYPESET_TARGET: AgentOutputTarget = {
-  mime: "application/pdf",
+  mime: RETYPESET_ARTIFACT_MIME,
   extension: "pdf",
   formatWord: RETYPESET_FORMAT_WORD
 };

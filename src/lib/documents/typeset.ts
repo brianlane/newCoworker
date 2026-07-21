@@ -465,7 +465,11 @@ export async function renderMarkdownToPdf(markdown: string): Promise<Buffer> {
         block.items.forEach((item, index) => {
           const prefix = block.ordered ? `${index + 1}.` : "•";
           ensureRoom(cursor, BODY_SIZE * 1.4);
+          // Pin the PAGE along with the y: ensureRoom guaranteed the first
+          // line fits here, but a long item can wrap onto later pages and
+          // move cursor.page — the prefix must stay beside line one.
           const itemTop = cursor.y;
+          const itemPage = cursor.page;
           drawRunsBlock(cursor, fonts, item, {
             x: MARGIN + 18,
             width: USABLE_WIDTH - 18,
@@ -473,7 +477,7 @@ export async function renderMarkdownToPdf(markdown: string): Promise<Buffer> {
           });
           // The prefix sits on the item's first line (drawn after so the
           // wrap can't push it).
-          cursor.page.drawText(prefix, {
+          itemPage.drawText(prefix, {
             x: MARGIN + 2,
             y: itemTop - BODY_SIZE * 1.4,
             size: BODY_SIZE,

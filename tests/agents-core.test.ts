@@ -84,9 +84,11 @@ describe("resolveOutputTarget", () => {
     expect(resolveOutputTarget("docx", "text/plain").formatWord).toBe("markdown");
   });
 
-  it("maps pdf_retypeset onto a PDF target whose format word is the HTML contract", () => {
+  it("maps pdf_retypeset onto an html-artifact target whose format word is the HTML contract", () => {
     const target = resolveOutputTarget("pdf_retypeset", "application/pdf");
-    expect(target.mime).toBe("application/pdf");
+    // text/html is the ARTIFACT mime — the explicit renderer discriminator;
+    // the download/filed representation becomes application/pdf.
+    expect(target.mime).toBe("text/html");
     expect(target.extension).toBe("pdf");
     expect(target.formatWord).toContain("self-contained HTML document");
     expect(target.formatWord).toContain("No <script> tags");
