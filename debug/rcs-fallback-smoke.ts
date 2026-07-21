@@ -23,6 +23,15 @@ async function main(): Promise<void> {
   );
   const config = await getTelnyxMessagingForBusiness(BUSINESS_ID, undefined, { resolveRcs: true });
   console.log(`resolved rcsAgentId=${config.rcsAgentId ?? "(none)"} from=${config.fromE164}`);
+  // Without a resolved RCS agent (or sender), sendTelnyxSms never enters the
+  // RCS-first branch — a plain-SMS send would "pass" while proving nothing
+  // about the fallback. Fail fast instead of false-passing.
+  if (!config.rcsAgentId || !config.fromE164) {
+    throw new Error(
+      "HQ resolved no rcsAgentId/fromE164 — the RCS-first branch would be skipped entirely, " +
+        "so this smoke cannot prove the fallback. Aborting."
+    );
+  }
   const result = await sendTelnyxSms(config, PHONE, MESSAGE, {
     meterBusinessId: BUSINESS_ID,
     idempotencyKey: crypto.randomUUID()
