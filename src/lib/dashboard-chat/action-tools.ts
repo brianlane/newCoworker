@@ -36,7 +36,11 @@ import {
   rescheduleCalendarAppointment
 } from "@/lib/calendar-tools/reschedule";
 import { listAiFlows, enqueueAiFlowRun } from "@/lib/ai-flows/db";
-import { manualTriggerScope } from "@/lib/ai-flows/trigger-eval";
+import {
+  listAiFlowsTool,
+  runAiFlowTool,
+  runAiflowToolArgsSchema
+} from "@/lib/ai-flows/manual-run-tool";
 import { generateImageForDashboard, normalizeAspectRatio } from "@/lib/image-tools/handlers";
 import type { GeminiFunctionDeclaration } from "@/lib/gemini-chat";
 import { logger } from "@/lib/logger";
@@ -318,11 +322,9 @@ const cancelAppointmentArgsSchema = z.object({
   attendeePhone: z.string().max(32).optional()
 });
 
-const runAiflowArgsSchema = z.object({
-  flow: z.string().min(1).max(200),
-  // Same bound as the dashboard "Run now" endpoint.
-  input: z.string().max(4000).optional()
-});
+// Flow-run arg schema lives with the shared cores (manual-run-tool.ts) so
+// the inline path and the Rowboat dispatcher accept identical shapes.
+const runAiflowArgsSchema = runAiflowToolArgsSchema;
 
 // Same caps as the Rowboat dispatch's dashboardGenerateImageArgsSchema.
 const generateImageArgsSchema = z.object({
@@ -398,18 +400,6 @@ export type ActionToolDeps = {
   enqueueFlowRun?: typeof enqueueAiFlowRun;
   generateImage?: typeof generateImageForDashboard;
 };
-
-/** Cap on flows returned to the model (a business rarely has more). */
-const LIST_AIFLOWS_MAX = 50;
-
-/** One-line human summary of what starts a flow, for the model's listing. */
-function flowTriggerSummary(definition: { trigger?: { channel?: string; on?: string } }): string {
-  const trigger = definition?.trigger;
-  if (!trigger?.channel) return "unknown trigger";
-  if (trigger.channel === "manual") return "manual (run on demand)";
-  if (trigger.channel === "calendar") return `calendar (${trigger.on ?? "event"})`;
-  return trigger.channel;
-}
 
 /**
  * Execute one inline action tool call; the returned payload becomes the
@@ -615,82 +605,16 @@ export async function executeActionTool(
         return canceled;
       }
       case "list_aiflows": {
-        const flows = await listFlows(businessId);
-        return {
-          ok: true,
-          flows: flows.slice(0, LIST_AIFLOWS_MAX).map((f) => ({
-            id: f.id,
-            name: f.name,
-            enabled: f.enabled,
-            trigger: flowTriggerSummary(f.definition)
-          })),
-          note:
-            "When one of these matches what the owner asked for, offer it as an option next to doing the action directly and let the owner choose. Disabled flows can be mentioned but not run — the owner reviews/enables them at /dashboard/aiflows."
-        };
+        // Shared core with the Rowboat dispatcher's dashboard_list_aiflows.
+        return await listAiFlowsTool(businessId, { listFlows });
       }
       case "run_aiflow": {
         const parsed = runAiflowArgsSchema.safeParse(call.args);
         if (!parsed.success) {
           return { ok: false, message: `invalid_args:${parsed.error.issues[0]?.message}` };
         }
-        const flows = await listFlows(businessId);
-        const ref = parsed.data.flow.trim();
-        const refLc = ref.toLowerCase();
-        // Resolve: exact id → exact name → unique substring. An ambiguous
-        // or missing ref fails honestly with the candidates.
-        let matches = flows.filter((f) => f.id === ref);
-        if (matches.length === 0) matches = flows.filter((f) => f.name.toLowerCase() === refLc);
-        if (matches.length === 0) {
-          matches = flows.filter((f) => f.name.toLowerCase().includes(refLc));
-        }
-        if (matches.length === 0) {
-          return {
-            ok: false,
-            message: `No AiFlow matches "${ref}". Call list_aiflows and use one of the real names or ids.`
-          };
-        }
-        if (matches.length > 1) {
-          return {
-            ok: false,
-            message: `"${ref}" matches ${matches.length} flows (${matches
-              .slice(0, 5)
-              .map((f) => f.name)
-              .join("; ")}). Ask the owner which one and use its exact name or id.`
-          };
-        }
-        const flow = matches[0];
-        if (!flow.enabled) {
-          return {
-            ok: false,
-            message: `"${flow.name}" is DISABLED, so it cannot be run. Tell the owner it's awaiting their review — they can enable it at /dashboard/aiflows, then ask again.`
-          };
-        }
-        // Voice flows run on the real-time call path, not the async worker —
-        // same refusal as the dashboard "Run now" endpoint (an enqueued run
-        // would only fail while the model tells the owner it started).
-        if ((flow.definition as { trigger?: { channel?: string } })?.trigger?.channel === "voice") {
-          return {
-            ok: false,
-            message: `"${flow.name}" is a voice flow — it runs when a call comes in and cannot be started manually. Tell the owner to place a call from the trigger number to test it.`
-          };
-        }
-        const run = await enqueueFlowRun({
-          businessId,
-          flowId: flow.id,
-          trigger: manualTriggerScope(parsed.data.input ?? "", "assistant"),
-          // Every model-initiated run is its own run; dedupe only guards
-          // automatic enqueues (mirror of the dashboard "Run now" endpoint).
-          dedupeKey: `manual:${crypto.randomUUID()}`
-        });
-        if (!run) {
-          return { ok: false, message: "The run could not be enqueued — tell the owner to try again." };
-        }
-        return {
-          ok: true,
-          runId: run.id,
-          flowName: flow.name,
-          note: `Run enqueued — it starts within about a minute. Tell the owner "${flow.name}" is running and they can watch it at /dashboard/aiflows.`
-        };
+        // Shared core with the Rowboat dispatcher's dashboard_run_aiflow.
+        return await runAiFlowTool(businessId, parsed.data, { listFlows, enqueueFlowRun });
       }
       case "generate_image": {
         const parsed = generateImageArgsSchema.safeParse(call.args);
