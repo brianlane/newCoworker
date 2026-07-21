@@ -236,6 +236,37 @@ describe("event_end thread-activity guard (Tim Tsai's timeline)", () => {
     expect(run.last_error).toContain("Telnyx messaging is not configured");
   });
 
+  it("an AI reply delivered after the anchor suppresses, even when the inbound predates it", async () => {
+    const biz = await seedBusiness(db, "IT event-end delayed reply");
+    const lead = "+17805550208";
+    await seedContact(db, biz, lead, { display_name: "Tim Tsai" });
+    const flowId = await createFlow(db, biz, noShowDefinition());
+    // The lead texted BEFORE the appointment started, but the AI worker's
+    // reply (stamped on the job row, not in sms_outbound_log) was delivered
+    // DURING it — the conversation is live (Bugbot Medium on PR #795).
+    const { error } = await db.from("sms_inbound_jobs").insert({
+      business_id: biz,
+      status: "done",
+      customer_e164: lead,
+      created_at: minutesAgo(200),
+      updated_at: minutesAgo(140),
+      assistant_reply_text: "No problem, you can rebook any time!",
+      payload: { data: { payload: { from: { phone_number: lead }, text: "can we move it?" } } }
+    });
+    if (error) throw new Error(error.message);
+    const runId = await enqueueNoShowRun(db, flowId, biz, lead, {
+      startsAt: minutesAgo(150),
+      endsAt: minutesAgo(120)
+    });
+
+    await tickWorker();
+
+    const run = await getRun(db, runId);
+    expect(run.status).toBe("done");
+    const recovery = (await getSteps(db, runId)).find((s) => s.step_index === 0);
+    expect((recovery?.result as { skipped?: string })?.skipped).toBe("event_end_thread_active");
+  });
+
   it("a run with no dedupe key on a pure event_end flow still suppresses (definition fallback)", async () => {
     const biz = await seedBusiness(db, "IT event-end no-dedupe fallback");
     const lead = "+17805550206";

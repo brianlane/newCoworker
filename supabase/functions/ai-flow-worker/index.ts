@@ -1446,10 +1446,12 @@ async function runFiredByEventEnd(
 
 /**
  * Whether the contact's SMS thread has activity SINCE `sinceIso` — an inbound
- * text from them (sms_inbound_jobs) or any outbound to them (sms_outbound_log,
- * which carries owner/dashboard/MCP/flow sends; AI auto-replies always have a
- * matching inbound job, so the inbound side covers them). Fails OPEN (false)
- * on lookup trouble: a DB hiccup must never mute a follow-up that should send.
+ * text from them (sms_inbound_jobs), an AI auto-reply delivered to them (the
+ * reply lives on the inbound job row, NOT in sms_outbound_log — a text from
+ * before the anchor whose reply landed after it still counts), or any other
+ * outbound to them (sms_outbound_log: owner/dashboard/MCP/flow sends). Fails
+ * OPEN (false) on lookup trouble: a DB hiccup must never mute a follow-up
+ * that should send.
  */
 async function threadActiveSince(
   supabase: Supabase,
@@ -1463,7 +1465,13 @@ async function threadActiveSince(
       .select("id")
       .eq("business_id", businessId)
       .eq("customer_e164", contactE164)
-      .gt("created_at", sinceIso)
+      // Inbound after the anchor, OR a job whose delivered AI reply
+      // (assistant_reply_text is stamped at delivery, moving updated_at)
+      // landed after it. updated_at moves on other transitions too, which
+      // only errs toward suppressing a canned text over a live-ish thread.
+      .or(
+        `created_at.gt.${sinceIso},and(updated_at.gt.${sinceIso},assistant_reply_text.not.is.null)`
+      )
       .limit(1);
     if (inErr) throw new Error(`inbound lookup: ${inErr.message}`);
     if (((inbound ?? []) as unknown[]).length > 0) return true;
