@@ -1540,6 +1540,31 @@
     },
     "trackedLinks": {
       "previewFetch": "preview fetch"
+    },
+    "tasksData": {
+      "viewBoard": "Board",
+      "viewList": "List",
+      "viewData": "Data",
+      "loading": "Loading leads…",
+      "loadFailed": "Couldn't load the leads",
+      "scopeMine": "My leads",
+      "scopeAll": "All leads",
+      "refresh": "Refresh",
+      "exportCsv": "Export CSV",
+      "dismiss": "Dismiss",
+      "empty": "No leads yet. Leads from your connected sources (Meta Lead Ads, Zapier, imports) and tagged contacts appear here.",
+      "noLinkedEmployee": "Your login isn't linked to a team-roster member yet, so there are no \"my\" leads to show. Ask a manager to link your login to your roster profile (Settings → Team access), or switch to All leads.",
+      "colName": "Name",
+      "colPhone": "Phone",
+      "colEmail": "Email",
+      "colStage": "Stage",
+      "colSource": "Source",
+      "colOwner": "Owner",
+      "colAdded": "Added",
+      "stageNone": "— Off board —",
+      "stageNoContact": "No contact yet",
+      "tagCap": "{name} is at the 25-tag limit, so the stage tag couldn't be added.",
+      "moveFailed": "Couldn't move the lead — try again."
     }
   },
   "admin": {

@@ -97,6 +97,8 @@ function connection(overrides: Partial<MetaConnectionRow> = {}): MetaConnectionR
     account_name: "Owner",
     instagram_account_id: "ig-1",
     instagram_username: "trulyinsurance",
+    dataset_id: null,
+    capi_enabled: true,
     is_active: true,
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",

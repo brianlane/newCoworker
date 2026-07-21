@@ -1540,6 +1540,31 @@
     },
     "trackedLinks": {
       "previewFetch": "vista previa automática"
+    },
+    "tasksData": {
+      "viewBoard": "Tablero",
+      "viewList": "Lista",
+      "viewData": "Datos",
+      "loading": "Cargando leads…",
+      "loadFailed": "No se pudieron cargar los leads",
+      "scopeMine": "Mis leads",
+      "scopeAll": "Todos los leads",
+      "refresh": "Actualizar",
+      "exportCsv": "Exportar CSV",
+      "dismiss": "Descartar",
+      "empty": "Aún no hay leads. Los leads de tus fuentes conectadas (Meta Lead Ads, Zapier, importaciones) y los contactos etiquetados aparecen aquí.",
+      "noLinkedEmployee": "Tu inicio de sesión aún no está vinculado a un miembro del equipo, así que no hay leads \"míos\" que mostrar. Pide a un gerente que vincule tu acceso a tu perfil del equipo (Configuración → Acceso del equipo), o cambia a Todos los leads.",
+      "colName": "Nombre",
+      "colPhone": "Teléfono",
+      "colEmail": "Correo",
+      "colStage": "Etapa",
+      "colSource": "Origen",
+      "colOwner": "Responsable",
+      "colAdded": "Añadido",
+      "stageNone": "— Fuera del tablero —",
+      "stageNoContact": "Sin contacto aún",
+      "tagCap": "{name} alcanzó el límite de 25 etiquetas, así que no se pudo añadir la etiqueta de etapa.",
+      "moveFailed": "No se pudo mover el lead; inténtalo de nuevo."
     }
   },
   "admin": {

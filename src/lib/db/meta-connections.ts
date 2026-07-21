@@ -35,6 +35,10 @@ type StoredMetaConnectionRow = {
   /** IG professional account linked to the Page (null when none). */
   instagram_account_id: string | null;
   instagram_username: string | null;
+  /** Conversions API dataset (pixel) id — null until discoverable. */
+  dataset_id: string | null;
+  /** Per-tenant kill switch for the Conversion Leads feedback loop. */
+  capi_enabled: boolean;
   is_active: boolean;
   created_at: string;
   updated_at: string;
@@ -60,7 +64,7 @@ export type PublicMetaConnectionRow = Omit<
 const ALL_COLUMNS =
   "id,business_id,status,user_token_encrypted,page_id,page_name," +
   "page_token_encrypted,account_name,instagram_account_id,instagram_username," +
-  "is_active,created_at,updated_at";
+  "dataset_id,capi_enabled,is_active,created_at,updated_at";
 
 function toDecryptedRow(row: StoredMetaConnectionRow): MetaConnectionRow {
   const {
@@ -217,6 +221,7 @@ export async function savePendingMetaConnection(
     account_name: input.accountName,
     instagram_account_id: null,
     instagram_username: null,
+    dataset_id: null,
     is_active: true
   };
 
@@ -257,6 +262,8 @@ export async function activateMetaConnection(
     /** Linked IG professional account, when the Page has one. */
     instagramAccountId?: string | null;
     instagramUsername?: string | null;
+    /** Conversions API dataset id, when discoverable (post-App-Review). */
+    datasetId?: string | null;
   },
   client?: SupabaseClient
 ): Promise<PublicMetaConnectionRow> {
@@ -276,6 +283,7 @@ export async function activateMetaConnection(
       page_token_encrypted: encryptIntegrationSecret(token),
       instagram_account_id: input.instagramAccountId ?? null,
       instagram_username: input.instagramUsername ?? null,
+      dataset_id: input.datasetId ?? null,
       is_active: true,
       updated_at: new Date().toISOString()
     })

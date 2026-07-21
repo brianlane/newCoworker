@@ -15,6 +15,11 @@ vi.mock("@/lib/db/system-logs", () => ({
   recordSystemLog: (...a: unknown[]) => recordSystemLog(...a)
 }));
 
+const recordLeadSubmission = vi.fn();
+vi.mock("@/lib/leads/submissions", () => ({
+  recordLeadSubmission: (...a: unknown[]) => recordLeadSubmission(...a)
+}));
+
 import {
   countEnabledWebhookFlows,
   processWebhookFlowEvent,
@@ -47,6 +52,7 @@ beforeEach(() => {
   defaultClientSpy.mockReset();
   enqueueAiFlowRun.mockReset();
   recordSystemLog.mockReset();
+  recordLeadSubmission.mockReset();
 });
 
 describe("webhookEventKey", () => {
@@ -94,6 +100,14 @@ describe("processWebhookFlowEvent", () => {
           url: "https://fb.me/lead/1"
         })
       }),
+      db
+    );
+    // The durable Data-view record is written once per delivery, before any
+    // flow evaluation, keyed by the bare event key.
+    expect(recordLeadSubmission).toHaveBeenCalledTimes(1);
+    expect(recordLeadSubmission).toHaveBeenCalledWith(
+      "biz-1",
+      { source: EVENT.source, data: EVENT.data, eventKey: "lead-123" },
       db
     );
     // One per enqueued run + the always-on delivery log.

@@ -328,7 +328,8 @@ describe("activateMetaConnection", () => {
         pageName: "Truly Insurance",
         pageToken: " page-token ",
         instagramAccountId: "ig-9",
-        instagramUsername: "trulyinsurance"
+        instagramUsername: "trulyinsurance",
+        datasetId: "ds-9"
       },
       makeDb(c)
     );
@@ -341,6 +342,7 @@ describe("activateMetaConnection", () => {
     expect(patch.page_token_encrypted).toBe("enc(page-token)");
     expect(patch.instagram_account_id).toBe("ig-9");
     expect(patch.instagram_username).toBe("trulyinsurance");
+    expect(patch.dataset_id).toBe("ds-9");
     expect(patch.is_active).toBe(true);
     // Concurrency guard: only a still-pending row can be activated.
     expect(c.eq).toHaveBeenCalledWith("status", "pending");
@@ -356,6 +358,8 @@ describe("activateMetaConnection", () => {
     const patch = c.update.mock.calls[0][0] as Record<string, unknown>;
     expect(patch.instagram_account_id).toBeNull();
     expect(patch.instagram_username).toBeNull();
+    // No dataset discovered (pre-App-Review scopes) → column stays null.
+    expect(patch.dataset_id).toBeNull();
   });
 
   it("surfaces an update error", async () => {

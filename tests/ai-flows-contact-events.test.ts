@@ -1,4 +1,14 @@
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+// The Meta CAPI hook runs first on every added-tag event and makes its own
+// DB reads; mocking it keeps these scripted result sequences unshifted (the
+// hook has its own suite: tests/meta-capi-stage-hook.test.ts).
+const recordStageChangeForMeta = vi.fn(async () => false);
+vi.mock("../supabase/functions/_shared/ai_flows/meta_capi.ts", () => ({
+  recordStageChangeForMeta: (...a: unknown[]) =>
+    recordStageChangeForMeta(...(a as []))
+}));
+
 import {
   contactEventText,
   contactEventTriggerMatches,
@@ -168,6 +178,51 @@ const flowRow = (id: string, trigger: Record<string, unknown>, extra?: Record<st
 });
 
 describe("enqueueContactEventRuns", () => {
+  beforeEach(() => {
+    recordStageChangeForMeta.mockClear();
+  });
+
+  it("hands ADDED tag events to the Meta CAPI hook (and only those)", async () => {
+    const { db } = makeDb([{ data: [], error: null }]);
+    await enqueueContactEventRuns(db, BIZ, input());
+    expect(recordStageChangeForMeta).toHaveBeenCalledWith(db, BIZ, {
+      contactE164: "+16025550111",
+      tag: "Engaged",
+      dedupeKey: "ce:test:1"
+    });
+
+    recordStageChangeForMeta.mockClear();
+    // change omitted defaults to "added" — still hooked.
+    await enqueueContactEventRuns(makeDb([{ data: [], error: null }]).db, BIZ, input({ change: undefined }));
+    expect(recordStageChangeForMeta).toHaveBeenCalledTimes(1);
+
+    recordStageChangeForMeta.mockClear();
+    // A tagless tag_changed event hands the hook an empty tag (it skips it).
+    await enqueueContactEventRuns(
+      makeDb([{ data: [], error: null }]).db,
+      BIZ,
+      input({ tag: undefined })
+    );
+    expect(recordStageChangeForMeta).toHaveBeenCalledWith(
+      expect.anything(),
+      BIZ,
+      expect.objectContaining({ tag: "" })
+    );
+
+    recordStageChangeForMeta.mockClear();
+    await enqueueContactEventRuns(
+      makeDb([{ data: [], error: null }]).db,
+      BIZ,
+      input({ change: "removed" })
+    );
+    await enqueueContactEventRuns(
+      makeDb([{ data: [], error: null }]).db,
+      BIZ,
+      input({ kind: "contact_created", tag: undefined, change: undefined })
+    );
+    expect(recordStageChangeForMeta).not.toHaveBeenCalled();
+  });
+
   it("enqueues a run for a matching flow with the event scope + dedupe key", async () => {
     const { db, calls } = makeDb([
       { data: [flowRow("f1", { channel: "tag_changed", tag: "Engaged", conditions: [] })], error: null },
