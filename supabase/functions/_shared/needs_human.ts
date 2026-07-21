@@ -232,6 +232,7 @@ export async function escalateToHuman(
     // Untaggable contacts (no row, tag cap) never consult the toggle: the
     // tag is the open/closed state the whole feature hangs off.
     let stateAttempted = false;
+    let teamFirstTagWritten = false;
     if (canCarryTag && contact?.id && (await teamFirstEnabled(supabase, input.businessId))) {
       stateAttempted = true;
       const opened = await openNeedsHumanState(
@@ -240,6 +241,7 @@ export async function escalateToHuman(
         contact as EscalationContactRow & { id: string },
         existingTags
       );
+      teamFirstTagWritten = opened.tagOk;
       if (opened.tagOk && opened.enqueued > 0) return "team_offered";
       // Fall through to the direct page. A failed tag write is NOT retried
       // here: the page below is the alert that matters, and the next
@@ -325,7 +327,22 @@ export async function escalateToHuman(
         await new Promise((r) => setTimeout(r, 300 * attempt));
       }
     }
-    if (!delivered) return "notify_failed";
+    if (!delivered) {
+      // Team-first wrote the tag BEFORE this page (the flow was supposed to
+      // own notification, but no run enqueued). A failed page must not leave
+      // the tag behind — the next escalated turn would hit `already_open`
+      // and the owner would NEVER hear about it (Bugbot, PR #801). Roll the
+      // tag back, best-effort, so the retry semantics match the legacy
+      // page-first ordering: a failed page leaves NO state.
+      if (teamFirstTagWritten && contact?.id) {
+        const { error: revertErr } = await supabase
+          .from("contacts")
+          .update({ tags: existingTags, updated_at: new Date().toISOString() })
+          .eq("id", contact.id);
+        if (revertErr) console.error("needs_human: team-first tag rollback", revertErr);
+      }
+      return "notify_failed";
+    }
 
     // 2) Open the needs-human state (contacts with tag headroom only —
     // untaggable contacts were deduped against the history above; a

@@ -14,11 +14,7 @@ import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
-import { setNeedsHumanTeamFirst } from "@/lib/db/businesses";
-import {
-  ensureNeedsHumanTeamFlow,
-  setNeedsHumanTeamFlowEnabled
-} from "@/lib/ai-flows/needs-human-flow";
+import { applyNeedsHumanTeamFirstSetting } from "@/lib/ai-flows/needs-human-flow";
 import { recordSystemLog } from "@/lib/db/system-logs";
 
 const bodySchema = z.object({
@@ -38,15 +34,10 @@ export async function POST(request: Request) {
     const body = bodySchema.parse(await request.json());
     if (!user.isAdmin) await requireBusinessRole(body.businessId, "manage_settings");
 
-    // Flow first, column second: if the flow can't be armed the toggle save
-    // fails loudly and the column stays OFF (escalations keep paging the
-    // owner) — never a toggle that silently does nothing.
-    if (body.teamFirst) {
-      await ensureNeedsHumanTeamFlow(body.businessId);
-    } else {
-      await setNeedsHumanTeamFlowEnabled(body.businessId, false);
-    }
-    await setNeedsHumanTeamFirst(body.businessId, body.teamFirst);
+    // Flow armed before the column flips, with a disarm rollback on a failed
+    // column write — see applyNeedsHumanTeamFirstSetting for the ordering
+    // rationale (a half-applied save must never double-notify or no-op).
+    await applyNeedsHumanTeamFirstSetting(body.businessId, body.teamFirst);
     // Audit-worthy: flipping this changes who hears about a customer asking
     // for a human (team broadcast vs the owner directly).
     void recordSystemLog({

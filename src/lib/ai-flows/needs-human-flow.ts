@@ -18,6 +18,7 @@
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { parseAiFlowDefinition } from "@/lib/ai-flows/schema";
+import { setNeedsHumanTeamFirst } from "@/lib/db/businesses";
 
 /** Seeded name — the toggle's lookup key. */
 export const NEEDS_HUMAN_TEAM_FLOW_NAME = "Human handoff — offer to team first";
@@ -121,4 +122,38 @@ export async function setNeedsHumanTeamFlowEnabled(
     .eq("business_id", businessId)
     .eq("name", NEEDS_HUMAN_TEAM_FLOW_NAME);
   if (error) throw new Error(`setNeedsHumanTeamFlowEnabled: ${error.message}`);
+}
+
+/**
+ * Apply the toggle atomically-in-spirit (the settings route's single entry
+ * point). ON: arm the flow FIRST, then flip the column — and if the column
+ * write fails, best-effort DISARM the flow again before rethrowing, so a
+ * half-applied save never leaves an enabled flow beside an OFF column
+ * (which would broadcast AND page on every escalation — Bugbot, PR #801).
+ * OFF: disable the flow, then clear the column; a failed column write there
+ * leaves flow-disabled + column-ON, which degrades safely (zero enqueued
+ * runs → escalations fall through to the direct owner page).
+ */
+export async function applyNeedsHumanTeamFirstSetting(
+  businessId: string,
+  teamFirst: boolean,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = await resolveDb(client);
+  if (teamFirst) {
+    await ensureNeedsHumanTeamFlow(businessId, db);
+    try {
+      await setNeedsHumanTeamFirst(businessId, true, db);
+    } catch (e) {
+      try {
+        await setNeedsHumanTeamFlowEnabled(businessId, false, db);
+      } catch (revertErr) {
+        console.error("applyNeedsHumanTeamFirstSetting: disarm rollback", revertErr);
+      }
+      throw e;
+    }
+    return;
+  }
+  await setNeedsHumanTeamFlowEnabled(businessId, false, db);
+  await setNeedsHumanTeamFirst(businessId, false, db);
 }

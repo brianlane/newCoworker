@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from "vitest";
 import { parseAiFlowDefinition } from "@/lib/ai-flows/schema";
 import {
   NEEDS_HUMAN_TEAM_FLOW_NAME,
+  applyNeedsHumanTeamFirstSetting,
   ensureNeedsHumanTeamFlow,
   needsHumanTeamFlowDefinition,
   setNeedsHumanTeamFlowEnabled
@@ -160,5 +161,66 @@ describe("setNeedsHumanTeamFlowEnabled", () => {
     await setNeedsHumanTeamFlowEnabled(BIZ, true);
     const update = calls.find((c) => c.name === "update");
     expect(update?.args[0]).toEqual({ enabled: true });
+  });
+});
+
+describe("applyNeedsHumanTeamFirstSetting", () => {
+  it("ON: arms the flow, then flips the column", async () => {
+    const { db, calls } = fakeDb([
+      { data: { id: "flow-1", enabled: true } }, // flow lookup (already armed)
+      { data: null } // businesses column update
+    ]);
+    await applyNeedsHumanTeamFirstSetting(BIZ, true, db as never);
+    const tables = calls.filter((c) => c.name === "from").map((c) => c.args[0]);
+    expect(tables).toEqual(["ai_flows", "businesses"]);
+    const updates = calls.filter((c) => c.name === "update");
+    expect(updates[updates.length - 1]?.args[0]).toEqual({ needs_human_team_first: true });
+  });
+
+  it("ON with a failed column write: the flow is DISARMED again before rethrowing", async () => {
+    // Without the rollback an enabled flow beside an OFF column would
+    // broadcast AND page on every escalation (Bugbot, PR #801).
+    const { db, calls } = fakeDb([
+      { data: null }, // flow lookup: absent
+      { data: { id: "flow-9" } }, // insert (armed)
+      { data: null, error: { message: "boom" } }, // column write fails
+      { data: null } // disarm update (rollback)
+    ]);
+    await expect(applyNeedsHumanTeamFirstSetting(BIZ, true, db as never)).rejects.toThrow(
+      "setNeedsHumanTeamFirst"
+    );
+    const updates = calls.filter((c) => c.name === "update");
+    expect(updates[updates.length - 1]?.args[0]).toEqual({ enabled: false });
+  });
+
+  it("ON with a failed column write AND a failed disarm: logs, still rethrows the column error", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { db } = fakeDb([
+      { data: { id: "flow-1", enabled: true } },
+      { data: null, error: { message: "boom" } }, // column write fails
+      { data: null, error: { message: "also boom" } } // disarm fails too
+    ]);
+    await expect(applyNeedsHumanTeamFirstSetting(BIZ, true, db as never)).rejects.toThrow(
+      "setNeedsHumanTeamFirst"
+    );
+    expect(err).toHaveBeenCalled();
+    err.mockRestore();
+  });
+
+  it("OFF: disables the flow, then clears the column", async () => {
+    const { db, calls } = fakeDb([
+      { data: null }, // flow disable
+      { data: null } // column clear
+    ]);
+    await applyNeedsHumanTeamFirstSetting(BIZ, false, db as never);
+    const updates = calls.filter((c) => c.name === "update");
+    expect(updates[0]?.args[0]).toEqual({ enabled: false });
+    expect(updates[1]?.args[0]).toEqual({ needs_human_team_first: false });
+  });
+
+  it("resolves the service client when none is injected", async () => {
+    const { db } = fakeDb([{ data: null }, { data: null }]);
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    await expect(applyNeedsHumanTeamFirstSetting(BIZ, false)).resolves.toBeUndefined();
   });
 });

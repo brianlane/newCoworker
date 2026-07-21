@@ -443,6 +443,44 @@ describe("escalateToHuman", () => {
       expect(calls.filter((c) => c.table === "contacts" && c.name === "update")).toHaveLength(1);
     });
 
+    it("toggle ON, no flow run, AND a failed page: the team-first tag is ROLLED BACK", async () => {
+      // Without the rollback the contact stays tagged after a failed page,
+      // every later escalation returns already_open, and the owner never
+      // hears about it (Bugbot, PR #801). A failed page must leave NO state.
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      const failingFetch = vi.fn(async () => new Response("bad", { status: 400 })) as unknown as typeof fetch;
+      const { db, calls } = makeDb([
+        { data: contactRow() },
+        toggleOn,
+        { data: null }, // tag update (ok)
+        { data: [] }, // goal runs
+        { data: [] }, // flows page → 0 runs
+        { data: null } // rollback update (ok)
+      ]);
+      expect(await escalateToHuman(db, input(failingFetch))).toBe("notify_failed");
+      const updates = calls.filter((c) => c.table === "contacts" && c.name === "update");
+      expect(updates).toHaveLength(2);
+      // First write appended the tag; the rollback restored the original set.
+      expect((updates[0].args[0] as { tags: string[] }).tags).toContain(NEEDS_HUMAN_TAG);
+      expect((updates[1].args[0] as { tags: string[] }).tags).toEqual(["Privyr", "Engaged"]);
+      err.mockRestore();
+    });
+
+    it("a failed tag rollback is logged, never thrown", async () => {
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      const failingFetch = vi.fn(async () => new Response("bad", { status: 400 })) as unknown as typeof fetch;
+      const { db } = makeDb([
+        { data: contactRow() },
+        toggleOn,
+        { data: null }, // tag update (ok)
+        { data: [] }, // goal runs
+        { data: [] }, // flows page → 0 runs
+        { data: null, error: { message: "boom" } } // rollback fails
+      ]);
+      expect(await escalateToHuman(db, input(failingFetch))).toBe("notify_failed");
+      err.mockRestore();
+    });
+
     it("an untaggable contact (no row) never consults the toggle — legacy path", async () => {
       const fetchFn = okFetch();
       const { db, calls } = makeDb([
