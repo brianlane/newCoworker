@@ -119,6 +119,12 @@ export function buildLeadDataRows(input: {
   contacts: LeadContactRow[];
   contactNames: Map<string, { name: string }>;
   employeeNameById: Map<string, string>;
+  /**
+   * "My leads" scope: keep only rows OWNED by this roster member. Applied
+   * BEFORE the row cap, so an owned lead can never be pushed out of the
+   * response by other people's newer leads (Board/List scope the same way).
+   */
+  scopeOwnerEmployeeId?: string | null;
 }): LeadDataRow[] {
   const { submissions, contacts, contactNames, employeeNameById } = input;
 
@@ -240,6 +246,10 @@ export function buildLeadDataRows(input: {
     });
   }
 
-  rows.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
-  return rows.slice(0, MAX_LEAD_DATA_ROWS);
+  const scoped =
+    input.scopeOwnerEmployeeId != null
+      ? rows.filter((r) => r.ownerEmployeeId === input.scopeOwnerEmployeeId)
+      : rows;
+  scoped.sort((a, b) => (a.createdAt < b.createdAt ? 1 : a.createdAt > b.createdAt ? -1 : 0));
+  return scoped.slice(0, MAX_LEAD_DATA_ROWS);
 }

@@ -330,6 +330,45 @@ describe("buildLeadDataRows", () => {
     expect(rows[0].tags).toEqual([]);
   });
 
+  it("applies the mine scope BEFORE the cap so owned leads can't be crowded out", () => {
+    // 1 old owned lead + MAX newer unowned leads: scoping after the cap
+    // would drop the owned one entirely.
+    const contacts = [
+      contact({
+        customer_e164: "+15055550001",
+        owner_employee_id: "emp-1",
+        tags: ["Booked"],
+        created_at: "2026-01-01T00:00:00.000Z",
+        updated_at: "2026-01-01T00:00:00.000Z"
+      }),
+      ...Array.from({ length: MAX_LEAD_DATA_ROWS + 5 }, (_, i) =>
+        contact({
+          customer_e164: `+1602555${String(i).padStart(4, "0")}`,
+          owner_employee_id: null,
+          tags: ["New Lead"],
+          created_at: `2026-06-0${(i % 9) + 1}T00:00:00.000Z`
+        })
+      )
+    ];
+    const mine = buildLeadDataRows({
+      submissions: [],
+      contacts,
+      ...EMPTY_MAPS,
+      scopeOwnerEmployeeId: "emp-1"
+    });
+    expect(mine).toHaveLength(1);
+    expect(mine[0].e164).toBe("+15055550001");
+
+    // Unscoped (null) still returns the capped full set.
+    const all = buildLeadDataRows({
+      submissions: [],
+      contacts,
+      ...EMPTY_MAPS,
+      scopeOwnerEmployeeId: null
+    });
+    expect(all).toHaveLength(MAX_LEAD_DATA_ROWS);
+  });
+
   it("sorts newest first and caps the row count", () => {
     const submissions = Array.from({ length: MAX_LEAD_DATA_ROWS + 10 }, (_, i) =>
       sub({

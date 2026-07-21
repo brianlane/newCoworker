@@ -79,26 +79,35 @@ async function findMetaSubmission(
   businessId: string,
   contactE164: string
 ): Promise<{ leadgen_id: string; email: string | null } | null> {
-  // Contact row for merge aliases + email (best-effort — the contact may
-  // have been deleted since enqueue; phones alone still resolve).
-  let aliases: string[] = [];
+  // Contact row for merge aliases + email, ALIAS-AWARE: the outbox stores
+  // whatever number the tag writer saw, which for worker-driven moves can
+  // be a merged-away alias — the surviving profile is keyed on a different
+  // primary. Best-effort — a deleted contact still resolves by phone.
+  // E.164 values are strictly `+digits`, so they are safe in the filter.
+  let phones: string[] = [contactE164];
   let contactEmail: string | null = null;
   const { data: contact } = await db
     .from("contacts")
-    .select("alias_e164s, email")
+    .select("customer_e164, alias_e164s, email")
     .eq("business_id", businessId)
-    .eq("customer_e164", contactE164)
+    .or(`customer_e164.eq.${contactE164},alias_e164s.cs.{${contactE164}}`)
+    .limit(1)
     .maybeSingle();
   if (contact) {
-    aliases = (contact as { alias_e164s: string[] | null }).alias_e164s ?? [];
-    contactEmail = (contact as { email: string | null }).email ?? null;
+    const row = contact as {
+      customer_e164: string;
+      alias_e164s: string[] | null;
+      email: string | null;
+    };
+    phones = [...new Set([contactE164, row.customer_e164, ...(row.alias_e164s ?? [])])];
+    contactEmail = row.email ?? null;
   }
 
   const { data: byPhone, error: phoneErr } = await db
     .from("lead_submissions")
     .select("leadgen_id, email")
     .eq("business_id", businessId)
-    .in("phone_e164", [contactE164, ...aliases])
+    .in("phone_e164", phones)
     .not("leadgen_id", "is", null)
     .order("created_at", { ascending: false })
     .limit(1)

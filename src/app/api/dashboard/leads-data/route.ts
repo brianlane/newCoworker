@@ -129,11 +129,18 @@ export async function GET(request: Request) {
       }
     }
     {
-      const { data, error } = await db
+      // scope=mine narrows the DB window itself: without this, an owned
+      // lead older than the newest-N business-wide tagged contacts could
+      // never reach the mine view at all.
+      let query = db
         .from("contacts")
         .select(CONTACT_COLUMNS)
         .eq("business_id", businessId)
-        .neq("tags", "{}")
+        .neq("tags", "{}");
+      if (scope === "mine" && myEmployeeId) {
+        query = query.eq("owner_employee_id", myEmployeeId);
+      }
+      const { data, error } = await query
         .order("updated_at", { ascending: false })
         .limit(MAX_LEAD_DATA_ROWS);
       if (error) throw new Error(`leads-data: tagged contacts: ${error.message}`);
@@ -204,18 +211,17 @@ export async function GET(request: Request) {
       db
     ).catch(() => new Map<string, ContactName>());
 
-    const allRows = buildLeadDataRows({
+    // Scope BEFORE the row cap (inside the builder), matching Board/List:
+    // "mine" with no linked roster member is empty by design — the client
+    // explains the linkage instead of showing everyone's leads.
+    const rows = buildLeadDataRows({
       submissions,
       contacts,
       contactNames,
-      employeeNameById
+      employeeNameById,
+      scopeOwnerEmployeeId:
+        scope === "mine" ? (myEmployeeId ?? "__no-linked-roster-member__") : null
     });
-    const rows =
-      scope === "mine"
-        ? allRows.filter(
-            (r) => myEmployeeId !== null && r.ownerEmployeeId === myEmployeeId
-          )
-        : allRows;
 
     return successResponse({
       rows,

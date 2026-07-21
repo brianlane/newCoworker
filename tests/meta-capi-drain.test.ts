@@ -74,11 +74,15 @@ function makeDb(queues: Record<string, Scripted[]>) {
     const i = (idx[table] = (idx[table] ?? 0) + 1) - 1;
     return queue[i] ?? { data: null, error: null };
   };
+  const calls: Array<{ table: string; name: string; args: unknown[] }> = [];
   const from = (table: string) => {
     let pendingUpdate: Record<string, unknown> | null = null;
     const builder: Record<string, unknown> = {};
-    for (const m of ["select", "in", "not", "lt", "order", "limit"]) {
-      builder[m] = () => builder;
+    for (const m of ["select", "in", "not", "lt", "or", "order", "limit"]) {
+      builder[m] = (...args: unknown[]) => {
+        calls.push({ table, name: m, args });
+        return builder;
+      };
     }
     builder["update"] = (fields: Record<string, unknown>) => {
       pendingUpdate = fields;
@@ -100,7 +104,7 @@ function makeDb(queues: Record<string, Scripted[]>) {
     };
     return builder;
   };
-  return { db: { from }, updates };
+  return { db: { from }, updates, calls };
 }
 
 /**
@@ -313,6 +317,43 @@ describe("drainMetaCapiEvents", () => {
     expect(summary.skipped).toBe(1);
     expect(updates[0].fields.status).toBe("skipped");
     expect(buildConversionLeadBody).not.toHaveBeenCalled();
+  });
+
+  it("resolves an ALIAS-stored contact number onto the surviving profile's phones", async () => {
+    // The outbox holds a merged-away alias; the contact row is keyed on a
+    // different primary. The submission join must search primary + aliases.
+    const { db, calls } = makeDb({
+      ...outboxQueues([outboxRow({ contact_e164: "+16025550000" })]),
+      contacts: [
+        {
+          data: {
+            customer_e164: "+16025551234",
+            alias_e164s: ["+16025550000"],
+            email: null
+          },
+          error: null
+        }
+      ],
+      lead_submissions: [
+        { data: { leadgen_id: "1993202861289031", email: null }, error: null }
+      ]
+    });
+    getMetaConnection.mockResolvedValue(READY_CONNECTION);
+    buildConversionLeadBody.mockReturnValue("{}");
+    sendConversionLeadBody.mockResolvedValue({ eventsReceived: 1 });
+    expect((await drainMetaCapiEvents(db as never)).sent).toBe(1);
+    // Alias-aware contact lookup + the widened phone IN() list.
+    const orCall = calls.find((c) => c.table === "contacts" && c.name === "or")!;
+    expect(orCall.args[0]).toBe(
+      "customer_e164.eq.+16025550000,alias_e164s.cs.{+16025550000}"
+    );
+    const inCall = calls.find(
+      (c) => c.table === "lead_submissions" && c.name === "in"
+    )!;
+    expect(inCall.args).toEqual([
+      "phone_e164",
+      ["+16025550000", "+16025551234"]
+    ]);
   });
 
   it("resolves through the email fallback and skips when the contact has no email", async () => {
