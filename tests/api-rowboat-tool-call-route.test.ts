@@ -88,6 +88,16 @@ vi.mock("@/lib/ai-flows/manual-run-tool", async (importOriginal) => {
   };
 });
 
+// Same pattern for the texting coworker's flow-enrollment core (behavior
+// pinned in tests/ai-flows-agent-start-flow.test.ts).
+vi.mock("@/lib/ai-flows/agent-start-flow", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/ai-flows/agent-start-flow")>();
+  return {
+    startAiflowForContactArgsSchema: actual.startAiflowForContactArgsSchema,
+    startAiFlowForContactTool: vi.fn()
+  };
+});
+
 import { POST } from "@/app/api/rowboat/tool-call/route";
 import { checkSmsOptOut } from "@/lib/sms/opt-outs";
 import { verifyRowboatWebhookJwt } from "@/lib/rowboat/webhook-jwt";
@@ -105,6 +115,7 @@ import { findCalendarSlots, bookCalendarAppointment } from "@/lib/calendar-tools
 import { insertCoworkerLog } from "@/lib/db/logs";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { listAiFlowsTool, runAiFlowTool } from "@/lib/ai-flows/manual-run-tool";
+import { startAiFlowForContactTool } from "@/lib/ai-flows/agent-start-flow";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -949,5 +960,77 @@ describe("POST /api/rowboat/tool-call run-automations tools", () => {
       const res = await POST(makeRequest(content));
       expect(await res.json(), name).toEqual({ ok: false, detail: "unknown_tool" });
     }
+  });
+});
+
+describe("POST /api/rowboat/tool-call start_aiflow_for_contact (texting coworker)", () => {
+  it("gated on its own sms toggle and dispatched to the core with the parsed args", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    vi.mocked(startAiFlowForContactTool).mockResolvedValue({
+      ok: true,
+      runId: "run-9",
+      flowName: "Rebook follow-up",
+      note: "running"
+    });
+    const content = makeContent("start_aiflow_for_contact", {
+      flow: "Rebook follow-up",
+      phone: "+17808039935",
+      reason: "asked to rebook"
+    });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    const body = await res.json();
+    expect(body).toMatchObject({ ok: true, runId: "run-9", flowName: "Rebook follow-up" });
+    expect(vi.mocked(isAgentToolEnabled)).toHaveBeenLastCalledWith(
+      BIZ,
+      "sms",
+      "start_aiflow_for_contact"
+    );
+    expect(vi.mocked(startAiFlowForContactTool)).toHaveBeenCalledWith(BIZ, {
+      flow: "Rebook follow-up",
+      phone: "+17808039935",
+      reason: "asked to rebook"
+    });
+  });
+
+  it("rejects a non-E.164 phone before touching the core", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    const content = makeContent("start_aiflow_for_contact", {
+      flow: "Rebook follow-up",
+      phone: "780-803-9935"
+    });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect((await res.json()).detail).toMatch(/^invalid_args:/);
+    expect(vi.mocked(startAiFlowForContactTool)).not.toHaveBeenCalled();
+  });
+
+  it("the owner's Settings toggle switches it off", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(false);
+    const content = makeContent("start_aiflow_for_contact", {
+      flow: "Rebook follow-up",
+      phone: "+17808039935"
+    });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect((await res.json()).detail).toBe("tool_disabled");
+    expect(vi.mocked(startAiFlowForContactTool)).not.toHaveBeenCalled();
+  });
+
+  it("honest refusals from the core pass through to the model", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    vi.mocked(startAiFlowForContactTool).mockResolvedValue({
+      ok: false,
+      message: 'This customer is already in "Rebook follow-up" — do not enroll them again.'
+    });
+    const content = makeContent("start_aiflow_for_contact", {
+      flow: "Rebook follow-up",
+      phone: "+17808039935"
+    });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.message).toMatch(/already in/);
   });
 });

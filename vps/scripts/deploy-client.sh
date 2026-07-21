@@ -714,7 +714,8 @@ WORKFLOW_JSON=$(jq -nc \
         "send_email",
         "notify_team",
         "generate_image",
-        "document_share"
+        "document_share",
+        "start_aiflow_for_contact"
       ]
     },
     {
@@ -747,7 +748,8 @@ WORKFLOW_JSON=$(jq -nc \
         "send_email",
         "notify_team",
         "generate_image",
-        "document_share"
+        "document_share",
+        "start_aiflow_for_contact"
       ]
     },
     {
@@ -1044,6 +1046,29 @@ WORKFLOW_JSON=$(jq -nc \
           }
         },
         required: ["message"]
+      }
+    },
+    {
+      name: "start_aiflow_for_contact",
+      description: "Enroll the customer you are texting with into one of the automations listed in your context under Automations you may start — ONLY when their request clearly matches what that automation does (e.g. they want to rebook and a rebook follow-up automation is listed). Use the exact automation name from that list; never invent one, never mention automation names to the customer, and never call this when no such list is in your context. The automation follows up on its own — after a success, do NOT repeat or promise what it will send, just answer their message naturally.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          flow: {
+            type: "string",
+            description: "The exact automation name (or id) from the Automations you may start list in your context."
+          },
+          phone: {
+            type: "string",
+            description: "The current texter phone in E.164, exactly as given in your context (Current texter phone). Never any other number."
+          },
+          reason: {
+            type: "string",
+            description: "One short sentence on why the conversation calls for this automation, at most 1000 characters."
+          }
+        },
+        required: ["flow", "phone"]
       }
     },
     {
