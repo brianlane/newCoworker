@@ -28,10 +28,8 @@ export type StageChangeInput = {
   dedupeKey: string;
 };
 
-/** Escape LIKE/ILIKE pattern metacharacters in a user-supplied tag. */
-export function escapeLikePattern(value: string): string {
-  return value.replace(/([\\%_])/g, "\\$1");
-}
+/** Caps are 10 pipelines x 15 stages; one page always covers a business. */
+const STAGE_PAGE = 200;
 
 /**
  * Record one stage change for the CAPI drain when it qualifies. Returns
@@ -64,19 +62,22 @@ export async function recordStageChangeForMeta(
     if (!connection) return false;
 
     // Stage tags only: a "VIP" tag is not a funnel transition. Stage names
-    // match tags case-insensitively everywhere; mirror that here.
-    const { data: stage, error: stageErr } = await supabase
+    // match tags case-insensitively everywhere; compare in JS rather than
+    // ILIKE, whose %/_ wildcards would misread stage names containing them.
+    const { data: stageRows, error: stageErr } = await supabase
       .from("pipeline_stages")
-      .select("id")
+      .select("name")
       .eq("business_id", businessId)
-      .ilike("name", escapeLikePattern(tag))
-      .limit(1)
-      .maybeSingle();
+      .limit(STAGE_PAGE);
     if (stageErr) {
       console.error("meta_capi: stage lookup", stageErr);
       return false;
     }
-    if (!stage) return false;
+    const tagKey = tag.toLowerCase();
+    const isStage = ((stageRows ?? []) as Array<{ name?: unknown }>).some(
+      (row) => typeof row.name === "string" && row.name.trim().toLowerCase() === tagKey
+    );
+    if (!isStage) return false;
 
     const { error: insertErr } = await supabase.from("meta_capi_events").insert({
       business_id: businessId,

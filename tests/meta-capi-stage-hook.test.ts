@@ -4,17 +4,14 @@
  * stage-tag matching, dedupe, and the never-throws contract.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import {
-  escapeLikePattern,
-  recordStageChangeForMeta
-} from "../supabase/functions/_shared/ai_flows/meta_capi";
+import { recordStageChangeForMeta } from "../supabase/functions/_shared/ai_flows/meta_capi";
 
 const BIZ = "00000000-0000-0000-0000-000000000001";
 
 type Scripted = { data?: unknown; error?: unknown };
 
 /**
- * Scripted db: each terminal (maybeSingle / awaited insert) consumes the
+ * Scripted db: each terminal (maybeSingle / awaited builder) consumes the
  * next result. Records calls per table for assertions.
  */
 function makeDb(results: Scripted[]) {
@@ -23,7 +20,7 @@ function makeDb(results: Scripted[]) {
   const next = () => results[idx++] ?? { data: null, error: null };
   const from = (table: string) => {
     const builder: Record<string, unknown> = {};
-    for (const m of ["select", "insert", "eq", "not", "ilike", "limit"]) {
+    for (const m of ["select", "insert", "eq", "not", "limit"]) {
       builder[m] = (...args: unknown[]) => {
         calls.push({ table, name: m, args });
         return builder;
@@ -46,24 +43,19 @@ const INPUT = {
   dedupeKey: "ce:tag:+16025551234:booked:added:123"
 };
 
+const STAGES = { data: [{ name: "New Lead" }, { name: " booked " }], error: null };
+
 let errSpy: ReturnType<typeof vi.spyOn>;
 beforeEach(() => {
   errSpy?.mockRestore();
   errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
 });
 
-describe("escapeLikePattern", () => {
-  it("escapes LIKE metacharacters in user tags", () => {
-    expect(escapeLikePattern("100% Done_\\x")).toBe("100\\% Done\\_\\\\x");
-    expect(escapeLikePattern("Booked")).toBe("Booked");
-  });
-});
-
 describe("recordStageChangeForMeta", () => {
   it("inserts one outbox row when the connection is CAPI-ready and the tag is a stage", async () => {
     const { db, calls } = makeDb([
       { data: { id: "conn-1" }, error: null }, // meta_connections
-      { data: { id: "stage-1" }, error: null }, // pipeline_stages
+      STAGES, // pipeline_stages listing (case/whitespace-insensitive match)
       { data: null, error: null } // insert
     ]);
     expect(await recordStageChangeForMeta(db, BIZ, INPUT)).toBe(true);
@@ -74,9 +66,18 @@ describe("recordStageChangeForMeta", () => {
       event_name: "Booked",
       dedupe_key: INPUT.dedupeKey
     });
-    // Stage match is case-insensitive with pattern chars escaped.
-    const ilike = calls.find((c) => c.name === "ilike")!;
-    expect(ilike.args).toEqual(["name", "Booked"]);
+  });
+
+  it("matches stage names containing LIKE metacharacters literally", async () => {
+    const { db, calls } = makeDb([
+      { data: { id: "conn-1" }, error: null },
+      { data: [{ name: "100%_Closed" }], error: null },
+      { data: null, error: null }
+    ]);
+    expect(
+      await recordStageChangeForMeta(db, BIZ, { ...INPUT, tag: "100%_closed" })
+    ).toBe(true);
+    expect(calls.some((c) => c.name === "insert")).toBe(true);
   });
 
   it("skips (false) without touching stages when no CAPI-ready connection exists", async () => {
@@ -89,10 +90,24 @@ describe("recordStageChangeForMeta", () => {
   it("skips non-stage tags (a 'VIP' tag is not a funnel transition)", async () => {
     const { db, calls } = makeDb([
       { data: { id: "conn-1" }, error: null },
-      { data: null, error: null } // no stage row
+      STAGES
     ]);
     expect(await recordStageChangeForMeta(db, BIZ, { ...INPUT, tag: "VIP" })).toBe(false);
     expect(calls.some((c) => c.name === "insert")).toBe(false);
+  });
+
+  it("tolerates null stage listings and malformed stage rows", async () => {
+    const nullRows = makeDb([
+      { data: { id: "conn-1" }, error: null },
+      { data: null, error: null }
+    ]);
+    expect(await recordStageChangeForMeta(nullRows.db, BIZ, INPUT)).toBe(false);
+
+    const malformed = makeDb([
+      { data: { id: "conn-1" }, error: null },
+      { data: [{ name: 7 }, {}], error: null }
+    ]);
+    expect(await recordStageChangeForMeta(malformed.db, BIZ, INPUT)).toBe(false);
   });
 
   it("skips blank tags and missing contact without any db call", async () => {
@@ -107,7 +122,7 @@ describe("recordStageChangeForMeta", () => {
   it("treats a 23505 duplicate insert as already-recorded (no error log)", async () => {
     const { db } = makeDb([
       { data: { id: "conn-1" }, error: null },
-      { data: { id: "stage-1" }, error: null },
+      STAGES,
       { data: null, error: { code: "23505", message: "dup" } }
     ]);
     expect(await recordStageChangeForMeta(db, BIZ, INPUT)).toBe(false);
@@ -126,7 +141,7 @@ describe("recordStageChangeForMeta", () => {
 
     const insertErr = makeDb([
       { data: { id: "conn-1" }, error: null },
-      { data: { id: "stage-1" }, error: null },
+      STAGES,
       { data: null, error: { message: "insert down" } }
     ]);
     expect(await recordStageChangeForMeta(insertErr.db, BIZ, INPUT)).toBe(false);
@@ -143,7 +158,7 @@ describe("recordStageChangeForMeta", () => {
   it("bounds the stored dedupe key", async () => {
     const { db, calls } = makeDb([
       { data: { id: "conn-1" }, error: null },
-      { data: { id: "stage-1" }, error: null },
+      STAGES,
       { data: null, error: null }
     ]);
     await recordStageChangeForMeta(db, BIZ, { ...INPUT, dedupeKey: "k".repeat(300) });
