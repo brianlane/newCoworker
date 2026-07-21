@@ -70,12 +70,12 @@ const definition = {
         {
           value: "billing",
           description:
-            "Invoices, receipts we must pay, payment or subscription issues directed at the business"
+            "Billing that needs a human: an invoice we must pay, a failed or declined payment, a dispute or chargeback, or a subscription problem. NOT routine receipts or confirmations of successful payments."
         },
         {
           value: "automated_notice",
           description:
-            "Automated notifications, our own platform's alert/contact-form copies, calendar invites, newsletters, or marketing blasts"
+            "Automated notifications, our own platform's alert/contact-form copies, calendar invites, newsletters, or marketing blasts — including receipts and payment confirmations for successful charges"
         }
       ],
       saveAs: "email_kind"
