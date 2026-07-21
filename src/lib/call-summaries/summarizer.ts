@@ -39,8 +39,12 @@ import { logger } from "@/lib/logger";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
-/** Default model; override with GEMINI_CALL_SUMMARY_MODEL. */
-export const CALL_SUMMARY_DEFAULT_MODEL = "gemini-3-flash-preview";
+/**
+ * Default model; override with GEMINI_CALL_SUMMARY_MODEL.
+ * gemini-3.5-flash-lite (GA Jul 21 2026): cheaper and stronger than the old
+ * gemini-3-flash-preview default.
+ */
+export const CALL_SUMMARY_DEFAULT_MODEL = "gemini-3.5-flash-lite";
 
 /** Hard cap on persisted summary text. */
 export const CALL_SUMMARY_MAX_CHARS = 600;

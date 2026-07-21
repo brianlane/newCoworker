@@ -69,7 +69,11 @@ export function classifyGeminiError(err: unknown): string {
   return "gemini_error";
 }
 
-const GEMINI_LOOKUP_DEFAULT_MODEL = "gemini-3-flash-preview";
+// gemini-3.5-flash-lite (GA Jul 21 2026): cheaper than the old
+// gemini-3-flash-preview default ($0.30/$2.50 vs $0.50/$3.00 per 1M),
+// stronger on this task class, 350 tok/s (matters under the 3s voice
+// deadline), and a GA id — the 404 fallback should not sit on a preview.
+const GEMINI_LOOKUP_DEFAULT_MODEL = "gemini-3.5-flash-lite";
 
 type AskGeminiResult = {
   answer: string;

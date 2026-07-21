@@ -52,7 +52,10 @@ export function normalizeUploadMime(mime: string, filename: string): string {
   return isVttUpload(trimmed, filename) ? VTT_MIME_TYPE : trimmed;
 }
 
-const DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview";
+// gemini-3.5-flash-lite (GA Jul 21 2026): cheaper AND stronger than the old
+// gemini-3-flash-preview default, and built for high-throughput document
+// processing.
+const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite";
 
 function resolveModel(): string {
   const configured = (process.env.GEMINI_SUMMARY_MODEL ?? "").trim();

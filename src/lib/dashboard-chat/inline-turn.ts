@@ -161,16 +161,20 @@ const KNOWLEDGE_TOOL: GeminiFunctionDeclaration = {
 /** Bound on model↔tool round-trips per turn. */
 const MAX_TOOL_STEPS = 4;
 
-const DEFAULT_INLINE_MODEL = "gemini-3.5-flash";
+// gemini-3.6-flash (GA Jul 21 2026): beats 3.5-flash on agentic/tool-loop
+// work with $7.50/1M output (vs 9.00) and ~17% fewer output tokens.
+const DEFAULT_INLINE_MODEL = "gemini-3.6-flash";
 /**
  * Same 404 safety net as knowledge-tools/handlers.ts: a configured (or
  * newly defaulted) model id that Google has retired/renamed must degrade to
  * a known-live id instead of killing the whole inline path — a dead inline
  * path silently demotes text turns to the worker and hard-fails attachment
  * turns (exactly what shipped when the default was `gemini-3.1-flash`, an
- * id that does not exist on the Gemini API).
+ * id that does not exist on the Gemini API). The fallback deliberately sits
+ * on a GA id from a DIFFERENT family than the primary (a "-preview" id can
+ * itself be retired).
  */
-const INLINE_FALLBACK_MODEL = "gemini-3-flash-preview";
+const INLINE_FALLBACK_MODEL = "gemini-3.5-flash-lite";
 
 function resolveModel(): string {
   const configured = (process.env.DASHBOARD_CHAT_MODEL ?? "").trim();
