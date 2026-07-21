@@ -197,7 +197,18 @@ export const TRIGGER_SCOPE_KEYS = [
   // count — what document-receipt confirmations name back to the sender.
   // "" / absent on every other channel.
   "attachments",
-  "attachment_count"
+  "attachment_count",
+  // Contact-event channels (contact_created / tag_changed / owner_assigned;
+  // see contactEventTriggerScope): the contact's identity, the changed tag,
+  // the owner's name, and a free-text `note` the event source may attach
+  // (the needs-human escalation passes the customer's last message). "" on
+  // every other channel.
+  "contact_name",
+  "contact_email",
+  "tag",
+  "change",
+  "owner_name",
+  "note"
 ] as const;
 
 /**
@@ -1033,6 +1044,13 @@ const nonBranchStepMembers = [
     // falls back to the owner. Mutually exclusive with agentName/agentRef
     // (validateDefinitionSemantics); duplicates rejected there too.
     agentNames: z.array(z.string().min(1).max(120)).min(2).max(10).optional(),
+    // BROADCAST-ALL mode: offer EVERY active, available roster member at
+    // once — the roster is resolved at EXECUTION time so the offer set never
+    // desyncs as employees change (the worker caps the fan-out at the same
+    // 10 recipients agentNames allows, rotation order). Mutually exclusive
+    // with agentName/agentRef/agentNames (validateDefinitionSemantics).
+    // Only the literal `true` is accepted: absence IS the off state.
+    broadcastAll: z.literal(true).optional(),
     offerWindow: routeOfferWindowSchema.optional(),
     attachScreenshot: z.boolean().optional(),
     // Offer reply digits are universal, not per-flow options: "1" claims (live
@@ -2256,6 +2274,14 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       if (step.agentNames && (step.agentName || step.agentRef)) {
         issues.push(
           `Step "${step.id}" sets agentNames alongside agentName/agentRef; broadcast and single-agent pinning are mutually exclusive.`
+        );
+      }
+      // broadcastAll resolves its own offer set (the whole active roster) at
+      // execution time — any pinned recipient option alongside it would
+      // leave the worker with two contradictory offer sets.
+      if (step.broadcastAll && (step.agentName || step.agentRef || step.agentNames)) {
+        issues.push(
+          `Step "${step.id}" sets broadcastAll alongside agentName/agentRef/agentNames; broadcastAll offers the whole active roster and is mutually exclusive with pinned recipients.`
         );
       }
       // Duplicate names in one broadcast would double-text a teammate and

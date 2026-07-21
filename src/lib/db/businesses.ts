@@ -713,6 +713,26 @@ export async function setLeadAutoAssign(
 }
 
 /**
+ * Toggle team-first human handoff (Employees page): when ON, a needs-human
+ * escalation broadcasts a claim offer to the whole active roster first and
+ * pages the owner only when nobody claims within the offer window. Default
+ * OFF = page the owner immediately. See migration
+ * 20260817120000_needs_human_team_first.
+ */
+export async function setNeedsHumanTeamFirst(
+  id: string,
+  enabled: boolean,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("businesses")
+    .update({ needs_human_team_first: enabled })
+    .eq("id", id);
+  if (error) throw new Error(`setNeedsHumanTeamFirst: ${error.message}`);
+}
+
+/**
  * Light single-column read for the calendar tools' timezone default.
  * Returns null when unset or on any read error (degrade to UTC, never
  * fail the tool call over a timezone lookup).

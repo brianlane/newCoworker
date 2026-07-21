@@ -73,7 +73,37 @@ export type EscalationInput = {
 export type EscalationResult =
   | "escalated"
   | "already_open"
-  | "notify_failed";
+  | "notify_failed"
+  /**
+   * Team-first handoff (businesses.needs_human_team_first): the tag + hooks
+   * enqueued a team-offer flow run, which now OWNS notification — the
+   * broadcast offer goes to the roster and the owner is paged only by the
+   * flow's timeout fallback. No direct page was sent.
+   */
+  | "team_offered";
+
+/**
+ * businesses.needs_human_team_first, read fail-safe: any error (or a missing
+ * row) counts as OFF so the escalation degrades to the page-the-owner path —
+ * a toggle-read hiccup must never silence an alert.
+ */
+async function teamFirstEnabled(supabase: AnyClient, businessId: string): Promise<boolean> {
+  try {
+    const { data, error } = await supabase
+      .from("businesses")
+      .select("needs_human_team_first")
+      .eq("id", businessId)
+      .maybeSingle();
+    if (error) {
+      console.error("needs_human: team-first toggle read", error);
+      return false;
+    }
+    return (data as { needs_human_team_first?: boolean } | null)?.needs_human_team_first === true;
+  } catch (e) {
+    console.error("needs_human: team-first toggle read", e);
+    return false;
+  }
+}
 
 /**
  * Fallback re-page window for escalations that cannot carry the tag (no
@@ -83,11 +113,79 @@ export type EscalationResult =
  */
 export const NEEDS_HUMAN_REPAGE_HOURS = 24;
 
+type EscalationContactRow = {
+  id?: string;
+  customer_e164?: string | null;
+  alias_e164s?: string[] | null;
+  display_name?: string | null;
+  tags?: string[] | null;
+};
+
+/**
+ * Open the needs-human state: write the tag, then fire the SAME hooks as
+ * every other tag write path — goal events on every linked number, and the
+ * tag_changed contact-event trigger (which is what starts a team-offer
+ * flow). Returns whether the tag landed and how many flow runs the event
+ * enqueued, so the caller can decide whether a direct owner page is still
+ * needed. The event carries the customer's message as the trigger note.
+ */
+async function openNeedsHumanState(
+  supabase: AnyClient,
+  input: EscalationInput,
+  contact: EscalationContactRow & { id: string },
+  existingTags: string[]
+): Promise<{ tagOk: boolean; enqueued: number }> {
+  const nextTags = [...existingTags, NEEDS_HUMAN_TAG];
+  const { error: tagErr } = await supabase
+    .from("contacts")
+    .update({ tags: nextTags, updated_at: new Date().toISOString() })
+    .eq("id", contact.id);
+  if (tagErr) {
+    // Safe direction: the caller pages (or already paged) the owner; a
+    // failed tag write means the NEXT escalated turn may page again
+    // (duplicate), never silence.
+    console.error("needs_human: tag write", tagErr);
+    return { tagOk: false, enqueued: 0 };
+  }
+  const numbers = [
+    ...new Set(
+      [contact.customer_e164 ?? "", ...(contact.alias_e164s ?? []), input.contactE164].filter(
+        Boolean
+      )
+    )
+  ];
+  for (const number of numbers) {
+    await applyGoalEvent(supabase, input.businessId, number, {
+      kind: "tag_added",
+      tag: NEEDS_HUMAN_TAG
+    });
+  }
+  const enqueued = await enqueueContactEventRuns(supabase, input.businessId, {
+    kind: "tag_changed",
+    tag: NEEDS_HUMAN_TAG,
+    change: "added",
+    contact: {
+      e164: contact.customer_e164 || input.contactE164,
+      name: contact.display_name ?? undefined,
+      tags: nextTags
+    },
+    note: `They said: "${input.inboundPreview.slice(0, 300)}"`,
+    dedupeKey: `needs-human:${input.contactE164}:${Date.now()}`
+  });
+  return { tagOk: true, enqueued };
+}
+
 /**
  * Flip the contact into the needs-human state and page the owner. Never
  * throws. Ordering is deliberate (Bugbot findings on the first draft):
  *
  *   dedupe checks → page the owner → THEN write the tag + hooks.
+ *
+ * TEAM-FIRST exception (businesses.needs_human_team_first): the tag + hooks
+ * go FIRST because the tag_changed hook is what starts the team-offer flow;
+ * the direct page is skipped only when a flow run actually enqueued (the
+ * flow's timeout fallback then owns the owner alert). Every other outcome
+ * falls back to the page-first ordering below.
  *
  * The page comes before the tag so a failed notification never strands a
  * tagged-but-never-paged contact behind the `already_open` dedupe — a
@@ -113,13 +211,7 @@ export async function escalateToHuman(
       .or(`customer_e164.eq.${input.contactE164},alias_e164s.cs.{${input.contactE164}}`)
       .maybeSingle();
     if (error) console.error("needs_human: contact lookup", error);
-    const contact = data as {
-      id?: string;
-      customer_e164?: string | null;
-      alias_e164s?: string[] | null;
-      display_name?: string | null;
-      tags?: string[] | null;
-    } | null;
+    const contact = data as EscalationContactRow | null;
 
     // Dedupe 1: the tag is the open/closed state. For contacts that can
     // carry it, it is the ONLY dedupe — when the owner clears the tag they
@@ -130,6 +222,30 @@ export async function escalateToHuman(
       (t): t is string => typeof t === "string" && t.trim().length > 0
     );
     const canCarryTag = Boolean(contact?.id) && existingTags.length < MAX_TAGS;
+
+    // TEAM-FIRST: with businesses.needs_human_team_first ON, the tag + hooks
+    // go FIRST — the tag_changed hook enqueues the team-offer flow, whose
+    // broadcast owns notification (owner paged only by its timeout fallback).
+    // The direct owner page is skipped ONLY when a run really enqueued; a
+    // deleted/disabled flow, a deduped enqueue, or a failed tag write all
+    // fall through to the page below — silence is never the end state.
+    // Untaggable contacts (no row, tag cap) never consult the toggle: the
+    // tag is the open/closed state the whole feature hangs off.
+    let stateAttempted = false;
+    if (canCarryTag && contact?.id && (await teamFirstEnabled(supabase, input.businessId))) {
+      stateAttempted = true;
+      const opened = await openNeedsHumanState(
+        supabase,
+        input,
+        contact as EscalationContactRow & { id: string },
+        existingTags
+      );
+      if (opened.tagOk && opened.enqueued > 0) return "team_offered";
+      // Fall through to the direct page. A failed tag write is NOT retried
+      // here: the page below is the alert that matters, and the next
+      // escalated turn re-attempts the tag (same semantics as the legacy
+      // failed-write path).
+    }
 
     // Dedupe 2 (ONLY for contacts that cannot carry the tag — no CRM row, or
     // a row at the tag cap): recent-page fallback against the notifications
@@ -212,45 +328,15 @@ export async function escalateToHuman(
     if (!delivered) return "notify_failed";
 
     // 2) Open the needs-human state (contacts with tag headroom only —
-    // untaggable contacts were deduped against the history above).
-    if (canCarryTag && contact?.id) {
-      const nextTags = [...existingTags, NEEDS_HUMAN_TAG];
-      const { error: tagErr } = await supabase
-        .from("contacts")
-        .update({ tags: nextTags, updated_at: new Date().toISOString() })
-        .eq("id", contact.id);
-      if (tagErr) {
-        // Safe direction: the page already landed; a failed tag write means
-        // the NEXT escalated turn may page again (duplicate), never silence.
-        console.error("needs_human: tag write", tagErr);
-      } else {
-        // 3) Same hooks as every other tag write path: goal events on every
-        // linked number, and the tag_changed contact-event trigger.
-        const numbers = [
-          ...new Set(
-            [contact.customer_e164 ?? "", ...(contact.alias_e164s ?? []), input.contactE164].filter(
-              Boolean
-            )
-          )
-        ];
-        for (const number of numbers) {
-          await applyGoalEvent(supabase, input.businessId, number, {
-            kind: "tag_added",
-            tag: NEEDS_HUMAN_TAG
-          });
-        }
-        await enqueueContactEventRuns(supabase, input.businessId, {
-          kind: "tag_changed",
-          tag: NEEDS_HUMAN_TAG,
-          change: "added",
-          contact: {
-            e164: contact.customer_e164 || input.contactE164,
-            name: contact.display_name ?? undefined,
-            tags: nextTags
-          },
-          dedupeKey: `needs-human:${input.contactE164}:${Date.now()}`
-        });
-      }
+    // untaggable contacts were deduped against the history above; a
+    // team-first attempt above already tried, successfully or not).
+    if (canCarryTag && contact?.id && !stateAttempted) {
+      await openNeedsHumanState(
+        supabase,
+        input,
+        contact as EscalationContactRow & { id: string },
+        existingTags
+      );
     }
     return "escalated";
   } catch (e) {

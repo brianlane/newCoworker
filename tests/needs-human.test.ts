@@ -77,13 +77,15 @@ describe("hasNeedsHumanTag", () => {
 describe("escalateToHuman", () => {
   it("pages the owner, tags the contact, and fires the tag hooks", async () => {
     const fetchFn = okFetch();
-    // Scripted terminal awaits, in call order: contact lookup, (notify POST
-    // — fetch, not db), tag update, goal-event run lookup (empty → no
-    // jumps), contact-event flow page (empty). No history-dedupe lookup for
-    // a taggable contact: the tag alone is the open/closed state, so an
-    // owner clearing it re-arms paging IMMEDIATELY (Bugbot finding).
+    // Scripted terminal awaits, in call order: contact lookup, team-first
+    // toggle read (OFF), (notify POST — fetch, not db), tag update,
+    // goal-event run lookup (empty → no jumps), contact-event flow page
+    // (empty). No history-dedupe lookup for a taggable contact: the tag
+    // alone is the open/closed state, so an owner clearing it re-arms
+    // paging IMMEDIATELY (Bugbot finding).
     const { db, calls } = makeDb([
       { data: contactRow() },
+      { data: { needs_human_team_first: false } }, // team-first toggle
       { data: null }, // tags update
       { data: [] }, // applyGoalEvent: candidate runs (none)
       { data: [] } // enqueueContactEventRuns: enabled flows page (none)
@@ -205,6 +207,7 @@ describe("escalateToHuman", () => {
     const fetchFn = okFetch();
     const { db, calls } = makeDb([
       { data: contactRow() },
+      { data: { needs_human_team_first: false } }, // team-first toggle
       { data: null, error: { message: "boom" } } // tags update fails
     ]);
     expect(await escalateToHuman(db, input(fetchFn))).toBe("escalated");
@@ -227,6 +230,7 @@ describe("escalateToHuman", () => {
     const fetchFn = okFetch();
     const { db, calls } = makeDb([
       { data: contactRow({ customer_e164: "+16025550000", alias_e164s: [LEAD] }) },
+      { data: { needs_human_team_first: false } }, // team-first toggle
       { data: null }, // tag update
       { data: [] }, // goal lookup for +16025550000
       { data: [] }, // goal lookup for +14168775223 (texter/alias)
@@ -250,6 +254,7 @@ describe("escalateToHuman", () => {
           tags: null
         })
       },
+      { data: { needs_human_team_first: false } }, // team-first toggle
       { data: null }, // tag update
       { data: [] }, // goal lookup (texter number only)
       { data: [] } // contact-event flows page
@@ -269,6 +274,7 @@ describe("escalateToHuman", () => {
     const fetchFn = okFetch();
     const { db, calls } = makeDb([
       { data: contactRow({ tags: ["Engaged", 7, "  ", null] as unknown as string[] }) },
+      { data: { needs_human_team_first: false } }, // team-first toggle
       { data: null },
       { data: [] },
       { data: [] }
@@ -315,6 +321,138 @@ describe("escalateToHuman", () => {
     expect(await escalateToHuman(db, input(okFetch()))).toBe("notify_failed");
     expect(err).toHaveBeenCalled();
     err.mockRestore();
+  });
+
+  describe("team-first handoff (businesses.needs_human_team_first)", () => {
+    const toggleOn = { data: { needs_human_team_first: true } };
+    const toggleOff = { data: { needs_human_team_first: false } };
+    /** An enabled flow whose trigger matches the Needs Human tag event. */
+    const handoffFlowRow = {
+      id: "flow-1",
+      definition: {
+        version: 1,
+        trigger: { channel: "tag_changed", tag: NEEDS_HUMAN_TAG, change: "added", conditions: [] },
+        steps: []
+      }
+    };
+
+    it("toggle ON + a matching flow: tag + hooks fire, a run enqueues, the owner page is SKIPPED", async () => {
+      const fetchFn = okFetch();
+      const { db, calls } = makeDb([
+        { data: contactRow() }, // contact lookup
+        toggleOn, // businesses.needs_human_team_first
+        { data: null }, // tag update (ok)
+        { data: [] }, // applyGoalEvent candidate runs
+        { data: [handoffFlowRow] }, // enqueueContactEventRuns: enabled flows page
+        { data: null } // run insert (ok)
+      ]);
+      const result = await escalateToHuman(db, input(fetchFn));
+      expect(result).toBe("team_offered");
+      // The team offer OWNS notification now — no direct owner page.
+      expect(fetchFn).not.toHaveBeenCalled();
+      // Tag written exactly once (the open/closed state is unchanged).
+      const updates = calls.filter((c) => c.table === "contacts" && c.name === "update");
+      expect(updates).toHaveLength(1);
+      expect((updates[0].args[0] as { tags: string[] }).tags).toContain(NEEDS_HUMAN_TAG);
+      // The enqueued run carries the customer's message as the trigger note,
+      // so the broadcast offer SMS can show what they need.
+      const insert = calls.find((c) => c.table === "ai_flow_runs" && c.name === "insert");
+      const ctx = (insert?.args[0] as { context: { trigger: Record<string, unknown> } }).context;
+      expect(String(ctx.trigger.note)).toContain("I'm tired of insurance");
+      expect(String(ctx.trigger.windowText)).toContain("note:");
+    });
+
+    it("toggle ON but NO matching flow enqueued: falls through to the owner page (never silent)", async () => {
+      const fetchFn = okFetch();
+      const { db, calls } = makeDb([
+        { data: contactRow() },
+        toggleOn,
+        { data: null }, // tag update (ok)
+        { data: [] }, // goal-event runs
+        { data: [] } // flows page: nothing enabled matches → 0 runs
+      ]);
+      expect(await escalateToHuman(db, input(fetchFn))).toBe("escalated");
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      // The tag was already written in the team-first attempt — no re-write.
+      expect(calls.filter((c) => c.table === "contacts" && c.name === "update")).toHaveLength(1);
+    });
+
+    it("toggle ON but the tag write fails: pages the owner immediately (fail-safe)", async () => {
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      const fetchFn = okFetch();
+      const { db, calls } = makeDb([
+        { data: contactRow() },
+        toggleOn,
+        { data: null, error: { message: "boom" } } // tag update fails
+      ]);
+      expect(await escalateToHuman(db, input(fetchFn))).toBe("escalated");
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      // No hooks after a failed write (nothing to react to).
+      expect(calls.filter((c) => c.table === "ai_flow_runs")).toHaveLength(0);
+      err.mockRestore();
+    });
+
+    it("a THROWING toggle read degrades to the legacy page-first path", async () => {
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      const fetchFn = okFetch();
+      const inner = makeDb([
+        { data: contactRow() },
+        { data: null }, // tag update
+        { data: [] }, // goal runs
+        { data: [] } // flows page
+      ]);
+      // businesses.* blows up synchronously; everything else is scripted.
+      const db = {
+        from: (table: string) => {
+          if (table === "businesses") throw new Error("boom");
+          return inner.db.from(table);
+        }
+      };
+      expect(await escalateToHuman(db, input(fetchFn))).toBe("escalated");
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      err.mockRestore();
+    });
+
+    it("a toggle read error degrades to the legacy page-first path", async () => {
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
+      const fetchFn = okFetch();
+      const { db, calls } = makeDb([
+        { data: contactRow() },
+        { data: null, error: { message: "boom" } }, // toggle read fails → OFF
+        { data: null }, // tag update
+        { data: [] }, // goal runs
+        { data: [] } // flows page
+      ]);
+      expect(await escalateToHuman(db, input(fetchFn))).toBe("escalated");
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(calls.filter((c) => c.table === "contacts" && c.name === "update")).toHaveLength(1);
+      err.mockRestore();
+    });
+
+    it("toggle OFF keeps today's page-first ordering byte-for-byte", async () => {
+      const fetchFn = okFetch();
+      const { db, calls } = makeDb([
+        { data: contactRow() },
+        toggleOff,
+        { data: null }, // tag update
+        { data: [] }, // goal runs
+        { data: [] } // flows page
+      ]);
+      expect(await escalateToHuman(db, input(fetchFn))).toBe("escalated");
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(calls.filter((c) => c.table === "contacts" && c.name === "update")).toHaveLength(1);
+    });
+
+    it("an untaggable contact (no row) never consults the toggle — legacy path", async () => {
+      const fetchFn = okFetch();
+      const { db, calls } = makeDb([
+        { data: null }, // no contact row
+        { data: [] } // recent-page dedupe lookup
+      ]);
+      expect(await escalateToHuman(db, input(fetchFn))).toBe("escalated");
+      expect(fetchFn).toHaveBeenCalledTimes(1);
+      expect(calls.filter((c) => c.table === "businesses")).toHaveLength(0);
+    });
   });
 
   it("clips oversized intent/reason/preview to the payload bounds", async () => {

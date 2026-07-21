@@ -1247,6 +1247,13 @@
       "lastUsed": "Claude usó este conector por última vez",
       "firstConnected": "conectado por primera vez"
     },
+    "humanHandoff": {
+      "title": "Traspaso a humano",
+      "toggleLabel": "Ofrecer primero al equipo cuando un cliente pida hablar con una persona",
+      "toggleHelp": "Al activarlo, en cuanto tu coworker de IA detecte que un cliente necesita a una persona, todos los empleados disponibles reciben un mensaje a la vez: quien primero responda \"1\" toma la conversación, y solo se te avisa si nadie la reclama en 10 minutos. Desactivado (por defecto), se te avisa de inmediato. Activarlo añade una automatización editable \"Human handoff — offer to team first\" a tu página de AiFlows.",
+      "saved": "Guardado.",
+      "saveFailed": "No se pudo guardar"
+    },
     "home": {
       "title": "Tu Coworker de IA",
       "subtitle": "Monitorea y administra a tu empleado digital",
