@@ -535,8 +535,19 @@ export async function runInlineChatTurn(
         maxOutputTokens: 4000,
         signal: controller.signal
       };
+      // Gemini 3 dynamic thinking bills as output and counts against the
+      // 4000-token cap — "low" keeps tool-choice reasoning while protecting
+      // the cap and owner-facing latency (same posture as the messenger
+      // engine; the heavyweight reasoning lives in the compile pipeline at
+      // thinking HIGH, not in this loop). Computed per model because the
+      // 404 fallback can swap families mid-turn; Gemini 2.5 rejects it.
+      const stepFor = (m: string) => ({
+        ...stepParams,
+        model: m,
+        ...(/^gemini-3/i.test(m) ? { thinkingLevel: "low" as const } : {})
+      });
       try {
-        result = await chatStep({ ...stepParams, model });
+        result = await chatStep(stepFor(model));
       } catch (err) {
         // Retired/renamed model id: degrade to the known-live fallback for
         // the REST of the turn instead of failing the whole inline path
@@ -552,7 +563,7 @@ export async function runInlineChatTurn(
           to: INLINE_FALLBACK_MODEL
         });
         model = INLINE_FALLBACK_MODEL;
-        result = await chatStep({ ...stepParams, model });
+        result = await chatStep(stepFor(model));
       }
     } catch (err) {
       const detail = err instanceof Error ? err.message : String(err);

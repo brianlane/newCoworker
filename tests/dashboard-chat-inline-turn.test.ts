@@ -138,6 +138,17 @@ describe("runInlineChatTurn — plain turns", () => {
     const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("ok"));
     await runInlineChatTurn(baseArgs(), { chatStep });
     expect(chatStep.mock.calls[0][0].model).toBe("gemini-3.6-flash");
+    // Gemini 3: thinking constrained to "low" so dynamic reasoning can't
+    // eat the 4000-token cap on tool-loop turns.
+    expect(chatStep.mock.calls[0][0].thinkingLevel).toBe("low");
+  });
+
+  it("omits thinkingLevel for a non-Gemini-3 model override (2.5 rejects it)", async () => {
+    process.env.DASHBOARD_CHAT_MODEL = "gemini-2.5-flash";
+    const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("ok"));
+    await runInlineChatTurn(baseArgs(), { chatStep });
+    expect(chatStep.mock.calls[0][0].model).toBe("gemini-2.5-flash");
+    expect(chatStep.mock.calls[0][0].thinkingLevel).toBeUndefined();
   });
 
   it("declares the knowledge tool by default and omits it when the toggle is off", async () => {
