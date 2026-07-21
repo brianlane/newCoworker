@@ -6314,15 +6314,16 @@ async function routeToTeamStep(
   }
   delete routing.pass_reason;
 
-  // BROADCAST mode (agentNames): its own park/resume state machine — one
-  // shared deadline, first "1" wins, a "2" retires just the passer, and
-  // timeout/all-passed falls back to the owner. Claims and unclaims never
-  // reach here (the shared blocks above consumed them — the webhook stamps
-  // the claimer into routing.offered); rejects, timeouts, and the first
-  // entry do. Broadcast never enters the rotation loop below and
-  // deliberately ignores lead_auto_assign: the flow explicitly names who to
-  // offer, and a hard assignment would defeat "whoever answers first".
-  if (action.agentNames && action.agentNames.length >= 2) {
+  // BROADCAST mode (agentNames, or broadcastAll = the whole active roster):
+  // its own park/resume state machine — one shared deadline, first "1" wins,
+  // a "2" retires just the passer, and timeout/all-passed falls back to the
+  // owner. Claims and unclaims never reach here (the shared blocks above
+  // consumed them — the webhook stamps the claimer into routing.offered);
+  // rejects, timeouts, and the first entry do. Broadcast never enters the
+  // rotation loop below and deliberately ignores lead_auto_assign: the flow
+  // explicitly says who to offer, and a hard assignment would defeat
+  // "whoever answers first".
+  if ((action.agentNames && action.agentNames.length >= 2) || action.broadcastAll === true) {
     return routeBroadcastStep(supabase, run, scope, action, routing, tried);
   }
 
@@ -6709,8 +6710,14 @@ async function routeBroadcastStep(
   if (ownerDirect) return ownerDirect;
 
   // Resolve the recipients; a member who texted STOP is skipped like the
-  // rotation path skips them.
-  const resolved = await resolveBroadcastAgents(supabase, run, scope, action.agentNames ?? []);
+  // rotation path skips them. broadcastAll resolves the WHOLE active,
+  // available roster at execution time instead of a pinned name list.
+  const resolved = await resolveBroadcastAgents(
+    supabase,
+    run,
+    scope,
+    action.broadcastAll === true ? "all" : (action.agentNames ?? [])
+  );
   const sendable: RoutedAgent[] = [];
   for (const agent of resolved) {
     if (await isRecipientOptedOut(supabase, run.business_id, agent.phone)) continue;
@@ -6726,7 +6733,12 @@ async function routeBroadcastStep(
       event: "ai_flow_pinned_agent_missing",
       message:
         "route_to_team: no broadcast recipient is on the active, available roster; falling back to the owner",
-      payload: { run_id: run.id, flow_id: run.flow_id, agent_names: action.agentNames ?? [] }
+      payload: {
+        run_id: run.id,
+        flow_id: run.flow_id,
+        agent_names: action.agentNames ?? [],
+        broadcast_all: action.broadcastAll === true
+      }
     });
     return await ownerFallbackOutcome(supabase, run, scope, action, routing, tried);
   }
@@ -6783,12 +6795,23 @@ async function routeBroadcastStep(
 }
 
 /**
+ * Cap on a broadcastAll fan-out — parity with the agentNames schema bound
+ * (max 10): each recipient costs an offer SMS plus a courtesy SMS on claim,
+ * and every simultaneous offer a teammate holds adds bare-digit reply
+ * ambiguity. Members beyond the cap are covered by the owner fallback.
+ */
+const BROADCAST_ALL_MAX_RECIPIENTS = 10;
+
+/**
  * Resolve a broadcast recipient list against the ACTIVE roster. Names match
  * trimmed/case-insensitively (the same rule as the agentName pin); a member
  * on time off or outside their weekly schedule today is skipped (same hard
  * skip pickNextAgent applies); an unknown name is logged and skipped — the
  * roster is authoritative, never guess. The lead's own number is never
  * offered, and duplicate phones collapse. Preserves the flow's listed order.
+ * `"all"` (broadcastAll) takes the ENTIRE available roster instead, in
+ * rotation order (least-recently-offered first, pickNextAgent's ordering),
+ * clamped to BROADCAST_ALL_MAX_RECIPIENTS with a logged warning.
  * THROWS on a roster/time-off query error so the run retries rather than
  * silently under-offering.
  */
@@ -6796,13 +6819,18 @@ async function resolveBroadcastAgents(
   supabase: Supabase,
   run: RunRow,
   scope: Scope,
-  names: string[]
+  names: string[] | "all"
 ): Promise<RoutedAgent[]> {
   const { data: rosterRows, error: rosterErr } = await supabase
     .from("ai_flow_team_members")
     .select("id, name, phone_e164, weekly_schedule, preferred_windows")
     .eq("business_id", run.business_id)
-    .eq("active", true);
+    .eq("active", true)
+    // Rotation order (matters for the broadcastAll clamp): least recently
+    // offered first, ties by seniority — the same ordering pickNextAgent
+    // uses, so a clamped broadcast rotates fairly across big rosters.
+    .order("last_offered_at", { ascending: true, nullsFirst: true })
+    .order("created_at", { ascending: true });
   if (rosterErr) {
     throw new Error(`route_to_team: roster query failed: ${rosterErr.message}`);
   }
@@ -6835,27 +6863,58 @@ async function resolveBroadcastAgents(
   const out: RoutedAgent[] = [];
   const pickedIds: string[] = [];
   const seenPhones = new Set<string>();
-  for (const name of names) {
-    const want = name.trim().toLowerCase();
-    const row = available.find((r) => r.name.trim().toLowerCase() === want);
-    if (!row) {
-      console.error(`route_to_team: broadcast recipient "${name}" not on the available roster`);
-      await systemLog(supabase, {
-        businessId: run.business_id,
-        source: "aiflow",
-        level: "warn",
-        event: "ai_flow_pinned_agent_missing",
-        message: `route_to_team: broadcast recipient "${name}" is not on the active, available roster; skipped`,
-        payload: { run_id: run.id, flow_id: run.flow_id, agent_name: name }
-      });
-      continue;
+  if (names === "all") {
+    // broadcastAll: the available roster IS the offer set (rotation order),
+    // clamped so a big roster never triggers a mega-blast.
+    for (const row of available) {
+      if (out.length >= BROADCAST_ALL_MAX_RECIPIENTS) {
+        await systemLog(supabase, {
+          businessId: run.business_id,
+          source: "aiflow",
+          level: "warn",
+          event: "ai_flow_broadcast_all_clamped",
+          message:
+            `route_to_team: broadcastAll clamped to ${BROADCAST_ALL_MAX_RECIPIENTS} of ` +
+            `${available.length} available members (rotation order; the rest are covered by the owner fallback)`,
+          payload: {
+            run_id: run.id,
+            flow_id: run.flow_id,
+            available: available.length,
+            offered: out.length
+          }
+        });
+        break;
+      }
+      // Never offer the lead their own number, and never text one phone twice.
+      if (leadPhone && row.phone_e164 === leadPhone) continue;
+      if (seenPhones.has(row.phone_e164)) continue;
+      seenPhones.add(row.phone_e164);
+      pickedIds.push(row.id);
+      out.push({ name: row.name, phone: row.phone_e164 });
     }
-    // Never offer the lead their own number, and never text one phone twice.
-    if (leadPhone && row.phone_e164 === leadPhone) continue;
-    if (seenPhones.has(row.phone_e164)) continue;
-    seenPhones.add(row.phone_e164);
-    pickedIds.push(row.id);
-    out.push({ name: row.name, phone: row.phone_e164 });
+  } else {
+    for (const name of names) {
+      const want = name.trim().toLowerCase();
+      const row = available.find((r) => r.name.trim().toLowerCase() === want);
+      if (!row) {
+        console.error(`route_to_team: broadcast recipient "${name}" not on the available roster`);
+        await systemLog(supabase, {
+          businessId: run.business_id,
+          source: "aiflow",
+          level: "warn",
+          event: "ai_flow_pinned_agent_missing",
+          message: `route_to_team: broadcast recipient "${name}" is not on the active, available roster; skipped`,
+          payload: { run_id: run.id, flow_id: run.flow_id, agent_name: name }
+        });
+        continue;
+      }
+      // Never offer the lead their own number, and never text one phone twice.
+      if (leadPhone && row.phone_e164 === leadPhone) continue;
+      if (seenPhones.has(row.phone_e164)) continue;
+      seenPhones.add(row.phone_e164);
+      pickedIds.push(row.id);
+      out.push({ name: row.name, phone: row.phone_e164 });
+    }
   }
   // Stamp the rotation cursor for every recipient so round-robin flows stay
   // fair alongside broadcasts. Best-effort, like pickNextAgent's stamp.

@@ -406,6 +406,9 @@ export type StepAction =
       /** BROADCAST: offer all of these roster members at once (first "1" wins).
        * Always >= 2 entries when present; exclusive with agentName/agentRef. */
       agentNames?: string[];
+      /** BROADCAST-ALL: offer the entire active roster at once, resolved at
+       * execution time (worker caps at 10). Exclusive with every pin. */
+      broadcastAll?: boolean;
       /** After-hours claim-deadline extension. */
       offerWindow?: RouteOfferWindow;
       /** Attach the stored browse screenshot to each agent offer as MMS. */
@@ -1147,6 +1150,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           ...(agentName ? { agentName } : {}),
           ...(step.agentRef ? { agentRef: step.agentRef } : {}),
           ...(agentNames.length >= 2 ? { agentNames } : {}),
+          ...(step.broadcastAll === true ? { broadcastAll: true } : {}),
           ...(step.offerWindow ? { offerWindow: step.offerWindow } : {}),
           attachScreenshot: step.attachScreenshot === true,
           // Only an explicit opt-out is carried; undefined means ON.

@@ -1247,6 +1247,13 @@
       "lastUsed": "Claude last used this connector",
       "firstConnected": "first connected"
     },
+    "humanHandoff": {
+      "title": "Human handoff",
+      "toggleLabel": "Offer the team first when a customer asks for a person",
+      "toggleHelp": "When on, the moment your AI coworker flags that a customer needs a human, every available employee is texted at once — the first to reply \"1\" takes the conversation, and you are alerted only if nobody claims it within 10 minutes. When off (default), you are alerted immediately. Turning this on adds an editable \"Human handoff — offer to team first\" automation to your AiFlows page.",
+      "saved": "Saved.",
+      "saveFailed": "Save failed"
+    },
     "home": {
       "title": "Your AI Coworker",
       "subtitle": "Monitor and manage your digital employee",

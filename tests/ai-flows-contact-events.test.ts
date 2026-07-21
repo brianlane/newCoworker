@@ -68,6 +68,23 @@ describe("contactEventText / contactEventTriggerScope", () => {
     expect(contactEventTriggerScope(noChange).change).toBe("added");
   });
 
+  it("a note rides into the text and the trigger scope (needs-human handoff context)", () => {
+    // escalateToHuman passes the customer's last message so the team-offer
+    // SMS can show WHAT the person needs, not just who they are.
+    const noted = input({ note: 'They said: "I would like to speak to a representative"' });
+    expect(contactEventText(noted)).toContain(
+      'note: They said: "I would like to speak to a representative"'
+    );
+    expect(contactEventTriggerScope(noted).note).toBe(
+      'They said: "I would like to speak to a representative"'
+    );
+  });
+
+  it("no note → no note line and an empty scope value", () => {
+    expect(contactEventText(input())).not.toContain("note:");
+    expect(contactEventTriggerScope(input()).note).toBe("");
+  });
+
   it("defaults absent optional fields to empty strings in the scope", () => {
     const sparse = contactEventTriggerScope(
       input({ tag: undefined, change: undefined, contact: { e164: "+16025550111" } })

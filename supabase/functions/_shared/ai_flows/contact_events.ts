@@ -49,6 +49,13 @@ export type ContactEventInput = {
   change?: "added" | "removed";
   /** owner_assigned: the roster member's display name. */
   ownerName?: string;
+  /**
+   * Free-text context for the event, rendered as a `note: …` line in the
+   * windowText and exposed to templates as `{{trigger.note}}`. The
+   * needs-human escalation passes the customer's last message here so a
+   * team-offer flow can show WHAT the person needs, not just who they are.
+   */
+  note?: string;
   /** Loop guard: the flow whose own step caused this write, if any. */
   sourceFlowId?: string;
   /**
@@ -77,7 +84,8 @@ export function contactEventText(input: ContactEventInput): string {
     tags.length > 0 ? `tags: ${tags.join(", ")}` : "",
     input.kind === "tag_changed" ? `tag: ${input.tag ?? ""}` : "",
     input.kind === "tag_changed" ? `change: ${input.change ?? "added"}` : "",
-    input.kind === "owner_assigned" && input.ownerName ? `owner: ${input.ownerName}` : ""
+    input.kind === "owner_assigned" && input.ownerName ? `owner: ${input.ownerName}` : "",
+    input.note ? `note: ${input.note}` : ""
   ];
   return lines.filter((l) => l.length > 0).join("\n");
 }
@@ -91,6 +99,7 @@ export function contactEventTriggerScope(input: ContactEventInput): Record<strin
     from: input.contact.e164,
     contact_name: input.contact.name ?? "",
     contact_email: input.contact.email ?? "",
+    note: input.note ?? "",
     ...(input.kind === "tag_changed"
       ? { tag: input.tag ?? "", change: input.change ?? "added" }
       : {}),

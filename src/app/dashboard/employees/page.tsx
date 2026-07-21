@@ -22,6 +22,7 @@ import {
 import { sharedCalendarStatus } from "@/lib/calendar-tools/shared-calendar";
 import { EmployeesManager } from "@/components/dashboard/EmployeesManager";
 import { LeadAssignmentSettings } from "@/components/dashboard/LeadAssignmentSettings";
+import { HumanHandoffSettings } from "@/components/dashboard/HumanHandoffSettings";
 
 export const dynamic = "force-dynamic";
 
@@ -37,13 +38,14 @@ export default async function DashboardEmployeesPage() {
   const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_settings");
   const { data: businesses } = await db
     .from("businesses")
-    .select("id, name, lead_auto_assign")
+    .select("id, name, lead_auto_assign, needs_human_team_first")
     .in("id", activeBusinessId ? [activeBusinessId] : [])
     .order("created_at", { ascending: false });
 
   const business =
-    (businesses?.[0] as { id: string; name: string; lead_auto_assign?: boolean } | undefined) ??
-    null;
+    (businesses?.[0] as
+      | { id: string; name: string; lead_auto_assign?: boolean; needs_human_team_first?: boolean }
+      | undefined) ?? null;
 
   if (!business) {
     return (
@@ -86,6 +88,11 @@ export default async function DashboardEmployeesPage() {
       <LeadAssignmentSettings
         businessId={business.id}
         initialLeadAutoAssign={business.lead_auto_assign === true}
+      />
+
+      <HumanHandoffSettings
+        businessId={business.id}
+        initialTeamFirst={business.needs_human_team_first === true}
       />
 
       <EmployeesManager

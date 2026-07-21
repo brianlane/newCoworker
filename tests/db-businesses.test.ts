@@ -23,6 +23,7 @@ import {
   updateEnterpriseModels,
   setAiflowStaffProtection,
   setLeadAutoAssign,
+  setNeedsHumanTeamFirst,
   updateBusinessVpsSize,
   updateBusinessWebsiteUrl,
   updateEnterpriseLimits
@@ -822,6 +823,22 @@ describe("db/businesses", () => {
     const failing = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "fail" } }) };
     await expect(setLeadAutoAssign("uuid-biz-1", true, failing as never)).rejects.toThrow(
       "setLeadAutoAssign"
+    );
+  });
+
+  it("setNeedsHumanTeamFirst writes the toggle both ways and throws on error", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await setNeedsHumanTeamFirst("uuid-biz-1", true);
+    expect(db.update).toHaveBeenCalledWith({ needs_human_team_first: true });
+
+    await setNeedsHumanTeamFirst("uuid-biz-1", false, db as never);
+    expect(db.update).toHaveBeenCalledWith({ needs_human_team_first: false });
+
+    const failing = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "fail" } }) };
+    await expect(setNeedsHumanTeamFirst("uuid-biz-1", true, failing as never)).rejects.toThrow(
+      "setNeedsHumanTeamFirst"
     );
   });
 

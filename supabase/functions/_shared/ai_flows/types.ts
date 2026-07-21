@@ -745,6 +745,15 @@ export type FlowStep =
        * escalates into rotation. Mutually exclusive with agentName/agentRef.
        */
       agentNames?: string[];
+      /**
+       * BROADCAST-ALL mode: offer EVERY active, available roster member at
+       * once — resolved at EXECUTION time (never desyncs as the roster
+       * changes), capped by the worker at the same 10 recipients agentNames
+       * allows (rotation order; members beyond the cap are covered by the
+       * owner fallback). Same claim semantics as agentNames. Mutually
+       * exclusive with agentName/agentRef/agentNames.
+       */
+      broadcastAll?: boolean;
       /** After-hours claim-deadline extension; see RouteOfferWindow. */
       offerWindow?: RouteOfferWindow;
       /**
