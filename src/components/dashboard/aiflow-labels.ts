@@ -26,7 +26,7 @@ export const STEP_TYPE_LABELS: Record<StepType, string> = {
   browse_extract: "Read details from a web page",
   extract_text: "Read details from the message text",
   email_extract: "Read details from an email",
-  doc_extract: "Read details from a document (PDF)",
+  doc_extract: "Read details from a document (PDF or Word)",
   send_sms: "Send a text",
   send_whatsapp: "Send a WhatsApp message",
   send_email: "Send an email",
@@ -69,7 +69,8 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
   send_sms: "Sends a text message. You can reuse details earlier steps found.",
   send_whatsapp:
     "Sends a WhatsApp message from your connected WhatsApp Business number. If the person hasn't messaged you in the last 24 hours, an approved template carries the message (Meta bills per template message).",
-  send_email: "Sends an email. You can reuse details earlier steps found.",
+  send_email:
+    "Sends an email. You can reuse details earlier steps found, and attach a business document - including a PDF a \"Run an agent\" step just generated.",
   approval_gate: "Pauses and texts you to approve before continuing.",
   notify_owner: "Sends you a quick update without pausing the workflow.",
   notify_lead_owner:

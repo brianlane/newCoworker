@@ -33,6 +33,8 @@ import {
   type AgentPromptTextSection
 } from "./core";
 import { VTT_MIME_TYPE, vttToPlainText } from "@/lib/transcripts/vtt";
+import { DOCX_MIME_TYPE, decodeDocxToText } from "@/lib/documents/docx";
+import { ensureHtmlDocument, sanitizeRetypesetHtml } from "./retypeset";
 
 /** Text formats decoded locally; PDFs go to Gemini as inlineData. */
 export const AGENT_TEXT_MIME_TYPES = [
@@ -44,6 +46,8 @@ export const AGENT_TEXT_MIME_TYPES = [
   VTT_MIME_TYPE
 ] as const;
 export const AGENT_PDF_MIME_TYPE = "application/pdf";
+/** Word documents are decoded locally too (no native Gemini DOCX support). */
+export const AGENT_DOCX_MIME_TYPE = DOCX_MIME_TYPE;
 
 const DEFAULT_AGENT_MODEL = "gemini-3.5-flash";
 
@@ -123,6 +127,28 @@ export async function executeAgentRun(
     return { ok: false, error: "too_many_files", detail: `${files.length} files` };
   }
 
+  // Re-typeset mode reconstructs ONE source document's design, so it takes
+  // exactly one PDF/Word input (Word decodes to text, so fidelity is
+  // reduced — the model rebuilds layout from styling cues).
+  const isRetypeset = input.agent.output_format === "pdf_retypeset";
+  if (isRetypeset) {
+    if (files.length > 1) {
+      return {
+        ok: false,
+        error: "too_many_files",
+        detail: "re-typesetting works on one source document"
+      };
+    }
+    const primaryMime = input.inputMime.trim().toLowerCase();
+    if (primaryMime !== AGENT_PDF_MIME_TYPE && primaryMime !== AGENT_DOCX_MIME_TYPE) {
+      return {
+        ok: false,
+        error: "unsupported_type",
+        detail: "re-typesetting needs a PDF or Word source document"
+      };
+    }
+  }
+
   // Classify + decode every attachment before any model work: one bad file
   // fails the run up front (predictable — same contract as single-file).
   const textSections: AgentPromptTextSection[] = [];
@@ -135,7 +161,8 @@ export async function executeAgentRun(
     const mime = file.mime.trim().toLowerCase();
     const isText = (AGENT_TEXT_MIME_TYPES as readonly string[]).includes(mime);
     const isPdf = mime === AGENT_PDF_MIME_TYPE;
-    if (!isText && !isPdf) {
+    const isDocx = mime === AGENT_DOCX_MIME_TYPE;
+    if (!isText && !isPdf && !isDocx) {
       return { ok: false, error: "unsupported_type", detail: file.filename };
     }
     if (isPdf) {
@@ -146,8 +173,14 @@ export async function executeAgentRun(
       pdfNames.push(file.filename);
       continue;
     }
-    const decoded = file.data.toString("utf8").replace(/\u0000/g, "");
-    const asText = mime === VTT_MIME_TYPE ? vttToPlainText(decoded) : decoded;
+    let asText: string;
+    if (isDocx) {
+      // Locally decoded — an unreadable/blank Word file is an input problem.
+      asText = (await decodeDocxToText(file.data)) ?? "";
+    } else {
+      const decoded = file.data.toString("utf8").replace(/\u0000/g, "");
+      asText = mime === VTT_MIME_TYPE ? vttToPlainText(decoded) : decoded;
+    }
     const rawText = asText.trim();
     if (rawText.length === 0) {
       return { ok: false, error: "empty_content", detail: file.filename };
@@ -202,8 +235,14 @@ export async function executeAgentRun(
       inputChars,
       outputChars: text.length
     });
-    const outputMd = normalizeAgentOutput(text);
-    if (!outputMd) return { ok: false, error: "empty_content" };
+    const normalized = normalizeAgentOutput(text);
+    if (!normalized) return { ok: false, error: "empty_content" };
+    // Re-typeset artifacts are sanitized (scripts/external refs stripped —
+    // the sidecar also disables JS and denies network) and guaranteed to be
+    // a full HTML document so the byte renderers can sniff them.
+    const outputMd = isRetypeset
+      ? ensureHtmlDocument(sanitizeRetypesetHtml(normalized))
+      : normalized;
     return {
       ok: true,
       outputMd,

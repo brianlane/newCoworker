@@ -24,7 +24,9 @@ import {
 import {
   AGENT_INSTRUCTIONS_MAX_CHARS,
   AGENT_NAME_MAX_CHARS,
-  agentLimitForTier
+  AGENT_OUTPUT_FORMATS,
+  agentLimitForTier,
+  retypesetAvailableForTier
 } from "@/lib/agents/core";
 
 export const dynamic = "force-dynamic";
@@ -35,7 +37,7 @@ const createSchema = z.object({
   // as an empty string.
   name: z.string().trim().min(1).max(AGENT_NAME_MAX_CHARS),
   instructions: z.string().trim().min(1).max(AGENT_INSTRUCTIONS_MAX_CHARS),
-  outputFormat: z.enum(["markdown", "same_as_input"]).default("markdown")
+  outputFormat: z.enum(AGENT_OUTPUT_FORMATS).default("markdown")
 });
 
 export async function GET(request: Request) {
@@ -71,6 +73,14 @@ export async function POST(request: Request) {
 
     const business = await getBusiness(body.data.businessId);
     if (!business) return errorResponse("NOT_FOUND", "Business not found", 404);
+    // Re-typeset renders on the tenant's VPS render sidecar — a
+    // Standard/Enterprise entitlement (Starter boxes have no sidecar).
+    if (body.data.outputFormat === "pdf_retypeset" && !retypesetAvailableForTier(business.tier)) {
+      return errorResponse(
+        "VALIDATION_ERROR",
+        "PDF re-typesetting is available on the Standard plan and above."
+      );
+    }
     const limit = agentLimitForTier(business.tier);
     const existing = await countBusinessAgents(body.data.businessId);
     if (existing >= limit) {

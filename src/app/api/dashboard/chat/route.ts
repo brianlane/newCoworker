@@ -127,6 +127,7 @@ import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
 import { getBusinessDocument } from "@/lib/documents/db";
 import { BUSINESS_DOCS_BUCKET } from "@/lib/documents/core";
 import { isSupportedDocumentMime, normalizeUploadMime } from "@/lib/documents/ingest";
+import { decodeDocxAttachment } from "@/lib/documents/docx";
 import { logger } from "@/lib/logger";
 import { currentDateTimeLine } from "../../../../../supabase/functions/_shared/datetime_line";
 import { loadBusinessFlowActivity } from "../../../../../supabase/functions/_shared/ai_flows/run_context";
@@ -537,7 +538,7 @@ export async function POST(request: Request) {
         if (!isSupportedDocumentMime(mimeType)) {
           return errorResponse(
             "VALIDATION_ERROR",
-            "Only PDF, plain text, markdown, CSV, or VTT transcript attachments are supported"
+            "Only PDF, Word (.docx), plain text, markdown, CSV, or VTT transcript attachments are supported"
           );
         }
         if (file.size === 0 || file.size > MAX_ATTACHMENT_BYTES) {
@@ -592,7 +593,7 @@ export async function POST(request: Request) {
       if (!isSupportedDocumentMime(document.mime_type.trim().toLowerCase())) {
         return errorResponse(
           "VALIDATION_ERROR",
-          "Only PDF, plain text, markdown, or CSV documents are supported"
+          "Only PDF, Word (.docx), plain text, markdown, or CSV documents are supported"
         );
       }
       const db = await createSupabaseServiceClient();
@@ -612,6 +613,20 @@ export async function POST(request: Request) {
         mimeType: document.mime_type,
         data: Buffer.from(await blob.arrayBuffer())
       };
+    }
+
+    // Word attachments are decoded to text at the boundary — the inline
+    // prompt builder only understands text formats and PDF inlineData, and
+    // Gemini has no native DOCX part type.
+    if (attachment) {
+      const decoded = await decodeDocxAttachment(attachment);
+      if (!decoded) {
+        return errorResponse(
+          "VALIDATION_ERROR",
+          "That Word document has no readable text — export it as PDF and try again"
+        );
+      }
+      attachment = decoded;
     }
 
     // Activity update fires BEFORE the turn runs so the VPS keep-warm timer

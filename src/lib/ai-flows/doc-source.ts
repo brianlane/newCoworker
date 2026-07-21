@@ -22,6 +22,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getBusinessDocument } from "@/lib/documents/db";
 import { BUSINESS_DOCS_BUCKET } from "@/lib/documents/core";
 import { isSupportedDocumentMime } from "@/lib/documents/ingest";
+import { DOCX_MIME_TYPE } from "@/lib/documents/docx";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -54,6 +55,7 @@ const TEXT_EXTENSIONS: Record<string, string> = {
 export function documentMimeForPath(path: string): string {
   const ext = (/\.([a-z0-9]+)$/i.exec(path)?.[1] ?? "").toLowerCase();
   if (ext === "pdf") return "application/pdf";
+  if (ext === "docx") return DOCX_MIME_TYPE;
   return TEXT_EXTENSIONS[ext] ?? "";
 }
 
@@ -115,7 +117,11 @@ export async function resolveFlowDocumentSource(
     }
     const mimeType = document.mime_type.trim().toLowerCase();
     if (!isSupportedDocumentMime(mimeType)) {
-      return { ok: false, error: "unsupported_type", detail: "only pdf/txt/md/csv/vtt documents" };
+      return {
+        ok: false,
+        error: "unsupported_type",
+        detail: "only pdf/docx/txt/md/csv/vtt documents"
+      };
     }
     const { data: blob, error: downloadError } = await db.storage
       .from(BUSINESS_DOCS_BUCKET)
@@ -149,7 +155,7 @@ export async function resolveFlowDocumentSource(
   }
   const mimeType = documentMimeForPath(attachmentRef.path);
   if (!mimeType) {
-    return { ok: false, error: "unsupported_type", detail: "only pdf/txt/md/csv documents" };
+    return { ok: false, error: "unsupported_type", detail: "only pdf/docx/txt/md/csv documents" };
   }
 
   // Ownership gate (same shape as doc-extract): fails CLOSED on "no such

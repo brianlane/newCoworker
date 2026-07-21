@@ -3,14 +3,16 @@
  *
  *   GET /api/dashboard/agents/runs/:runId/download?businessId=…
  *
- * Streams the run's produced artifact as a file attachment (markdown, or
- * the same text format as the input for same_as_input agents).
+ * Streams the run's produced artifact as a file attachment: markdown (or
+ * the same text format as the input for same_as_input agents) as-is, and
+ * PDF/DOCX targets typeset on the fly from the stored markdown.
  */
 
 import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError } from "@/lib/api-response";
 import { getAgentRun } from "@/lib/agents/db";
+import { renderAgentArtifactBytes } from "@/lib/agents/artifact-bytes";
 
 export const dynamic = "force-dynamic";
 
@@ -41,10 +43,23 @@ export async function GET(request: Request, context: RouteContext) {
     // ASCII fallback for the quoted filename; RFC 5987 encoding carries the
     // real name for non-ASCII originals.
     const asciiName = filename.replace(/[^\x20-\x7e]/g, "_").replace(/"/g, "'");
-    return new Response(run.output_md, {
+    const mimeType = run.output_mime_type || "text/markdown";
+    // Binary targets are rendered from the stored artifact (typeset
+    // markdown, or the sidecar-printed re-typeset HTML); text targets
+    // stream the artifact text directly.
+    const rendered = await renderAgentArtifactBytes({
+      businessId: businessId.data,
+      artifactText: run.output_md,
+      mimeType
+    });
+    if (!rendered.ok) {
+      return errorResponse("INTERNAL_SERVER_ERROR", rendered.detail);
+    }
+    const body: BodyInit = rendered.bytes ? new Uint8Array(rendered.bytes) : run.output_md;
+    return new Response(body, {
       status: 200,
       headers: {
-        "content-type": `${run.output_mime_type || "text/markdown"}; charset=utf-8`,
+        "content-type": rendered.bytes ? mimeType : `${mimeType}; charset=utf-8`,
         "content-disposition": `attachment; filename="${asciiName}"; filename*=UTF-8''${encodeURIComponent(filename)}`,
         "cache-control": "no-store"
       }

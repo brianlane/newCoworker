@@ -829,6 +829,15 @@ const nonBranchStepMembers = [
     subject: z.string().min(1).max(300),
     body: z.string().min(1).max(8000),
     attachScreenshot: z.boolean().optional(),
+    /**
+     * Template resolving to a `business-docs:<documentId>` ref to attach to
+     * the send — a picked library document, or a run_agent-generated one via
+     * `business-docs:{{vars.<saveAs>_document_id}}`. A blank rendered ref
+     * sends without an attachment (mirrors document-less run_agent skips);
+     * a ref that resolves to a missing/oversized document fails the step
+     * loudly. Resend-path only, like attachScreenshot.
+     */
+    attachDocumentTemplate: z.string().min(1).max(300).optional(),
     fromConnectionId: z.string().uuid().optional(),
     when: whenSchema.optional()
   }),
@@ -1474,7 +1483,14 @@ function templateStringsForStep(step: FlowStep): string[] {
     case "send_whatsapp":
       return [step.to ?? "", step.body];
     case "send_email":
-      return [step.to, ...(step.cc ?? []), ...(step.bcc ?? []), step.subject, step.body];
+      return [
+        step.to,
+        ...(step.cc ?? []),
+        ...(step.bcc ?? []),
+        step.subject,
+        step.body,
+        step.attachDocumentTemplate ?? ""
+      ];
     // The {{share_url}} placement token is substituted by the worker after
     // rendering (it is not a scope reference), so strip it before the
     // scope check; everything else in the message is a normal template.
@@ -2129,11 +2145,16 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       }
     }
 
-    // The owner-mailbox send path is plain text (Nango Gmail/Outlook); the
-    // screenshot attachment only exists on the AI coworker's own Resend path.
-    if (step.type === "send_email" && step.attachScreenshot && step.fromConnectionId) {
+    // The owner-mailbox send path is plain text (Nango Gmail/Outlook);
+    // attachments (screenshot or document) only exist on the AI coworker's
+    // own Resend path.
+    if (
+      step.type === "send_email" &&
+      (step.attachScreenshot || step.attachDocumentTemplate) &&
+      step.fromConnectionId
+    ) {
       issues.push(
-        `Step "${step.id}" attaches a screenshot but sends from a connected mailbox; attachments are only supported when sending from your AI coworker's email.`
+        `Step "${step.id}" attaches a file but sends from a connected mailbox; attachments are only supported when sending from your AI coworker's email.`
       );
     }
 

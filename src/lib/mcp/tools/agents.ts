@@ -16,7 +16,9 @@ import { defineMcpTool } from "@/lib/mcp/tooling";
 import {
   AGENT_INSTRUCTIONS_MAX_CHARS,
   AGENT_NAME_MAX_CHARS,
-  agentLimitForTier
+  AGENT_OUTPUT_FORMATS,
+  agentLimitForTier,
+  retypesetAvailableForTier
 } from "@/lib/agents/core";
 
 const businessIdField = z
@@ -56,7 +58,7 @@ export const createAgentTool = defineMcpTool({
     business_id: businessIdField,
     name: z.string().trim().min(1).max(AGENT_NAME_MAX_CHARS),
     instructions: z.string().trim().min(1).max(AGENT_INSTRUCTIONS_MAX_CHARS),
-    output_format: z.enum(["markdown", "same_as_input"]).optional()
+    output_format: z.enum(AGENT_OUTPUT_FORMATS).optional()
   },
   handler: async (args, auth) => {
     const businessId = await resolveMcpBusinessId(auth, args.business_id);
@@ -65,6 +67,9 @@ export const createAgentTool = defineMcpTool({
     const { getBusiness } = await import("@/lib/db/businesses");
     const { countBusinessAgents, insertBusinessAgent } = await import("@/lib/agents/db");
     const business = await getBusiness(businessId);
+    if (args.output_format === "pdf_retypeset" && !retypesetAvailableForTier(business?.tier)) {
+      throw new McpToolError("PDF re-typesetting is available on the Standard plan and above.");
+    }
     const limit = agentLimitForTier(business?.tier);
     const count = await countBusinessAgents(businessId);
     if (count >= limit) {
@@ -91,7 +96,7 @@ export const updateAgentTool = defineMcpTool({
     agent_id: z.string().uuid(),
     name: z.string().trim().min(1).max(AGENT_NAME_MAX_CHARS).optional(),
     instructions: z.string().trim().min(1).max(AGENT_INSTRUCTIONS_MAX_CHARS).optional(),
-    output_format: z.enum(["markdown", "same_as_input"]).optional(),
+    output_format: z.enum(AGENT_OUTPUT_FORMATS).optional(),
     enabled: z.boolean().optional()
   },
   handler: async (args, auth) => {
@@ -110,6 +115,13 @@ export const updateAgentTool = defineMcpTool({
     const { getBusinessAgent, patchBusinessAgent } = await import("@/lib/agents/db");
     const existing = await getBusinessAgent(businessId, args.agent_id);
     if (!existing) throw new McpToolError("Agent not found.");
+    if (args.output_format === "pdf_retypeset") {
+      const { getBusiness } = await import("@/lib/db/businesses");
+      const business = await getBusiness(businessId);
+      if (!retypesetAvailableForTier(business?.tier)) {
+        throw new McpToolError("PDF re-typesetting is available on the Standard plan and above.");
+      }
+    }
     await patchBusinessAgent(businessId, args.agent_id, {
       ...(args.name !== undefined ? { name: args.name } : {}),
       ...(args.instructions !== undefined ? { instructions: args.instructions } : {}),

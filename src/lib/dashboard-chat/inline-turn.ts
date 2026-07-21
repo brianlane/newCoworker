@@ -48,6 +48,7 @@ import type { AiFlowDefinition } from "@/lib/ai-flows/schema";
 import {
   AGENT_INSTRUCTIONS_MAX_CHARS,
   AGENT_NAME_MAX_CHARS,
+  AGENT_OUTPUT_FORMATS,
   type AgentOutputFormat
 } from "@/lib/agents/core";
 import { lookupBusinessKnowledge } from "@/lib/knowledge-tools/handlers";
@@ -127,9 +128,9 @@ const CREATION_TOOLS: GeminiFunctionDeclaration[] = [
         },
         output_format: {
           type: "string",
-          enum: ["markdown", "same_as_input"],
+          enum: ["markdown", "same_as_input", "pdf", "docx"],
           description:
-            "markdown (default, works for everything) or same_as_input (CSV in → CSV out)."
+            "markdown (default, works for everything), same_as_input (CSV in → CSV out), pdf (typeset PDF file), or docx (typeset Word file)."
         }
       },
       required: ["name", "instructions"]
@@ -385,8 +386,11 @@ async function executeToolCall(
     const name = typeof call.args.name === "string" ? call.args.name.trim() : "";
     const instructions =
       typeof call.args.instructions === "string" ? call.args.instructions.trim() : "";
-    const outputFormat: AgentOutputFormat =
-      call.args.output_format === "same_as_input" ? "same_as_input" : "markdown";
+    const outputFormat: AgentOutputFormat = (
+      AGENT_OUTPUT_FORMATS as readonly string[]
+    ).includes(call.args.output_format as string)
+      ? (call.args.output_format as AgentOutputFormat)
+      : "markdown";
     if (!name || !instructions) {
       return { ok: false, message: "name and instructions are required" };
     }

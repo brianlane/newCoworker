@@ -356,6 +356,10 @@ describe("runInlineChatTurn — creation tools", () => {
             name: "create_agent",
             args: { name: "Summarizer", instructions: "Summarize.", output_format: "same_as_input" }
           },
+          {
+            name: "create_agent",
+            args: { name: "Typesetter", instructions: "Make a PDF.", output_format: "pdf" }
+          },
           { name: "create_agent", args: { name: "", instructions: "x" } },
           { name: "mystery_tool", args: {} }
         ],
@@ -373,14 +377,20 @@ describe("runInlineChatTurn — creation tools", () => {
           name: "Summarizer",
           instructions: "Summarize.",
           outputFormat: "same_as_input"
+        },
+        {
+          kind: "agent",
+          name: "Typesetter",
+          instructions: "Make a PDF.",
+          outputFormat: "pdf"
         }
       ]
     });
     const responses = chatStep.mock.calls[1][0].contents[2].parts as Array<{
       functionResponse: { name: string; response: { result: { ok: boolean; message?: string } } };
     }>;
-    expect(responses[1].functionResponse.response.result.ok).toBe(false);
-    expect(responses[2].functionResponse.response.result).toMatchObject({
+    expect(responses[2].functionResponse.response.result.ok).toBe(false);
+    expect(responses[3].functionResponse.response.result).toMatchObject({
       ok: false,
       message: "unknown tool: mystery_tool"
     });

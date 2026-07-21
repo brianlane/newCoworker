@@ -23,7 +23,25 @@ export const AGENT_RUN_MAX_FILES = 5;
 /** Combined byte ceiling across a run's attachments (Gemini request headroom). */
 export const AGENT_RUN_MAX_TOTAL_BYTES = 25 * 1024 * 1024;
 
-export type AgentOutputFormat = "markdown" | "same_as_input";
+export type AgentOutputFormat = "markdown" | "same_as_input" | "pdf" | "docx" | "pdf_retypeset";
+
+/** Every persistable output format (routes/tools validate against this). */
+export const AGENT_OUTPUT_FORMATS = [
+  "markdown",
+  "same_as_input",
+  "pdf",
+  "docx",
+  "pdf_retypeset"
+] as const;
+
+/**
+ * `pdf_retypeset` renders on the tenant's VPS render sidecar, which is a
+ * Standard/Enterprise entitlement (mirrors the provisioning `renderEnabled`
+ * gate — Starter boxes have no sidecar or render-* hostname).
+ */
+export function retypesetAvailableForTier(tier: string | null | undefined): boolean {
+  return tier === "standard" || tier === "enterprise";
+}
 
 /** Per-tier agent-count caps (creates are refused past the cap). */
 export const AGENT_TIER_LIMITS: Record<string, number> = {
@@ -51,22 +69,63 @@ const MARKDOWN_TARGET: AgentOutputTarget = {
   formatWord: "markdown"
 };
 
+// The model always writes markdown for typeset targets (formatWord) — the
+// PDF/DOCX bytes are rendered from that markdown by documents/typeset.ts at
+// persistence/download time, never by the model.
+const PDF_TARGET: AgentOutputTarget = {
+  mime: "application/pdf",
+  extension: "pdf",
+  formatWord: "markdown"
+};
+const DOCX_TARGET: AgentOutputTarget = {
+  mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  extension: "docx",
+  formatWord: "markdown"
+};
+
 /**
- * What the run should produce for a given input MIME. `same_as_input`
- * echoes text formats (csv/plain text) back in kind; markdown inputs and
- * PDFs always produce markdown (v1 never regenerates a PDF — the artifact
- * is the extracted/edited content, not a re-typeset file).
+ * Re-typeset mode: the model reads the source document natively and replies
+ * with styled HTML mirroring its design; the VPS render sidecar prints it to
+ * PDF. formatWord slots into the run prompt's "Produce the result as …"
+ * line, so it carries the whole HTML contract.
+ */
+const RETYPESET_FORMAT_WORD =
+  "one complete, self-contained HTML document that visually mirrors the attached document's " +
+  "original design — colors, headings, tables, spacing, and layout — with the instructions " +
+  "applied. Use inline CSS only (a <style> block in <head> is fine). No <script> tags, no " +
+  "event handlers, and no external resources (images, fonts, or stylesheets); small images " +
+  "may be inline data: URIs. Start the reply with <!DOCTYPE html> and reply with ONLY the " +
+  "HTML document";
+
+const PDF_RETYPESET_TARGET: AgentOutputTarget = {
+  mime: "application/pdf",
+  extension: "pdf",
+  formatWord: RETYPESET_FORMAT_WORD
+};
+
+/**
+ * What the run should produce for a given input MIME. `pdf` / `docx` always
+ * typeset the markdown artifact into that format. `same_as_input` echoes
+ * the primary input's format back — text formats in kind, and PDF/DOCX
+ * inputs as re-typeset PDF/DOCX (the layout comes from the markdown
+ * artifact, not the source file's design); markdown/VTT inputs produce
+ * markdown.
  */
 export function resolveOutputTarget(
   outputFormat: AgentOutputFormat,
   inputMime: string
 ): AgentOutputTarget {
+  if (outputFormat === "pdf") return PDF_TARGET;
+  if (outputFormat === "docx") return DOCX_TARGET;
+  if (outputFormat === "pdf_retypeset") return PDF_RETYPESET_TARGET;
   if (outputFormat !== "same_as_input") return MARKDOWN_TARGET;
   const mime = inputMime.trim().toLowerCase();
   if (mime === "text/csv") return { mime: "text/csv", extension: "csv", formatWord: "CSV" };
   if (mime === "text/plain") {
     return { mime: "text/plain", extension: "txt", formatWord: "plain text" };
   }
+  if (mime === PDF_TARGET.mime) return PDF_TARGET;
+  if (mime === DOCX_TARGET.mime) return DOCX_TARGET;
   return MARKDOWN_TARGET;
 }
 

@@ -17,7 +17,13 @@ import {
   patchBusinessAgent,
   type BusinessAgentPatch
 } from "@/lib/agents/db";
-import { AGENT_INSTRUCTIONS_MAX_CHARS, AGENT_NAME_MAX_CHARS } from "@/lib/agents/core";
+import {
+  AGENT_INSTRUCTIONS_MAX_CHARS,
+  AGENT_NAME_MAX_CHARS,
+  AGENT_OUTPUT_FORMATS,
+  retypesetAvailableForTier
+} from "@/lib/agents/core";
+import { getBusiness } from "@/lib/db/businesses";
 import { BUSINESS_DOCS_BUCKET } from "@/lib/documents/core";
 import { logger } from "@/lib/logger";
 
@@ -29,7 +35,7 @@ const patchSchema = z.object({
   // as an empty string.
   name: z.string().trim().min(1).max(AGENT_NAME_MAX_CHARS).optional(),
   instructions: z.string().trim().min(1).max(AGENT_INSTRUCTIONS_MAX_CHARS).optional(),
-  outputFormat: z.enum(["markdown", "same_as_input"]).optional(),
+  outputFormat: z.enum(AGENT_OUTPUT_FORMATS).optional(),
   enabled: z.boolean().optional()
 });
 
@@ -54,6 +60,18 @@ export async function PATCH(request: Request, context: RouteContext) {
 
     const existing = await getBusinessAgent(body.data.businessId, agentId);
     if (!existing) return errorResponse("NOT_FOUND", "Agent not found", 404);
+
+    // Re-typeset renders on the tenant's VPS render sidecar — a
+    // Standard/Enterprise entitlement (Starter boxes have no sidecar).
+    if (body.data.outputFormat === "pdf_retypeset") {
+      const business = await getBusiness(body.data.businessId);
+      if (!retypesetAvailableForTier(business?.tier)) {
+        return errorResponse(
+          "VALIDATION_ERROR",
+          "PDF re-typesetting is available on the Standard plan and above."
+        );
+      }
+    }
 
     const patch: BusinessAgentPatch = {};
     if (body.data.name !== undefined) patch.name = body.data.name;

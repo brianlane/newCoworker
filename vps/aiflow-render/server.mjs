@@ -12,6 +12,9 @@
  * Contract (matches supabase/functions/_shared/ai_flows/browse.ts):
  *   POST /render { url }                              -> { finalUrl, text, html }
  *   POST /render { url, businessId, auth }            -> { finalUrl, text, html }
+ *   POST /pdf    { html }                             -> { pdfBase64 } (print a
+ *                                                        self-contained HTML doc;
+ *                                                        no JS, all network denied)
  *   ... + { screenshot: true }                        -> adds screenshotBase64 (JPEG)
  *   ... + { debugScreenshots: true }                  -> before/after/failure shots
  *                                                        + paired pageSource /
@@ -922,6 +925,46 @@ async function respondWithActions(
     ...(screenshotBase64 ? { screenshotBase64 } : {})
   });
 }
+
+/**
+ * POST /pdf { html } -> { pdfBase64 }
+ *
+ * Print a SELF-CONTAINED HTML document (the platform's re-typeset agent
+ * artifact) to PDF. Same bearer auth and rate limit as /render. The page is
+ * hermetic by construction: content arrives via setContent (no navigation),
+ * JavaScript is disabled at the context level, and EVERY network request is
+ * aborted — tenant-influenced HTML can't probe the box's loopback services
+ * or fetch external resources (inline data: URIs still render). Failures
+ * return HTTP 200 with { error, detail } like /render (Cloudflare replaces
+ * origin 5xx bodies — see the module doc).
+ */
+const PDF_HTML_MAX_CHARS = Number(process.env.AIFLOW_PDF_HTML_MAX_CHARS ?? 200_000);
+app.post("/pdf", async (req, res) => {
+  const html = typeof req.body?.html === "string" ? req.body.html : "";
+  if (!html.trim()) return res.status(400).json({ error: "missing_html" });
+  if (html.length > PDF_HTML_MAX_CHARS) return res.status(400).json({ error: "html_too_large" });
+  let context = null;
+  try {
+    const browser = await getBrowser();
+    context = await browser.newContext({ javaScriptEnabled: false });
+    await context.route("**/*", (route) => route.abort());
+    const page = await context.newPage();
+    await page.setContent(html, { waitUntil: "load", timeout: NAV_TIMEOUT_MS });
+    const pdf = await page.pdf({
+      format: "Letter",
+      printBackground: true,
+      margin: { top: "0.5in", bottom: "0.5in", left: "0.5in", right: "0.5in" }
+    });
+    res.json({ pdfBase64: pdf.toString("base64") });
+  } catch (err) {
+    res.json({
+      error: "render_failed",
+      detail: String(err?.message ?? err).slice(0, 300)
+    });
+  } finally {
+    if (context) context.close().catch(() => {});
+  }
+});
 
 app.post("/render", async (req, res) => {
   const safe = safeUrl(String(req.body?.url ?? ""));

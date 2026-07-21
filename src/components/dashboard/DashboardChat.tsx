@@ -49,7 +49,7 @@ type ChatDraft =
       kind: "agent";
       name: string;
       instructions: string;
-      outputFormat: "markdown" | "same_as_input";
+      outputFormat: "markdown" | "same_as_input" | "pdf" | "docx" | "pdf_retypeset";
     };
 
 type ChatPostResponse = {
@@ -1312,7 +1312,7 @@ export function DashboardChat({ businessId, businessName }: Props) {
                 <input
                   ref={attachmentInputRef}
                   type="file"
-                  accept=".pdf,.txt,.md,.csv,application/pdf,text/plain,text/markdown,text/csv"
+                  accept=".pdf,.docx,.txt,.md,.csv,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown,text/csv"
                   className="hidden"
                   data-testid="chat-file-input"
                   onChange={(e) => {
