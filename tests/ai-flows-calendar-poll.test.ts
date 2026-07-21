@@ -14,6 +14,9 @@ vi.mock("@/lib/notifications/dispatch", () => ({ dispatchUrgentNotification: vi.
 vi.mock("@/lib/ai-flows/calendly-poll", () => ({
   fetchCalendlyCandidateEvents: vi.fn()
 }));
+vi.mock("@/lib/ai-flows/vagaro-poll", () => ({
+  fetchVagaroCandidateEvents: vi.fn()
+}));
 
 import {
   CALENDAR_CREATED_LOOKBACK_MINUTES,
@@ -27,12 +30,14 @@ import {
   eventCreatedDue,
   eventEndDue,
   eventStartDue,
+  fireCalendarTriggersForPushedEvent,
   graphTimeIso,
   normalizeGoogleEvent,
   normalizeGraphEvent,
   pollCalendarTriggers,
   shouldRunCalendarPoll,
-  stampCalendarPollTick
+  stampCalendarPollTick,
+  tryEnqueueCalendarRun
 } from "@/lib/ai-flows/calendar-poll";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
@@ -42,6 +47,7 @@ import { enqueueAiFlowRun } from "@/lib/ai-flows/db";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { fetchCalendlyCandidateEvents } from "@/lib/ai-flows/calendly-poll";
+import { fetchVagaroCandidateEvents } from "@/lib/ai-flows/vagaro-poll";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -475,22 +481,142 @@ describe("pollCalendarTriggers", () => {
     );
   });
 
-  it("treats a Vagaro connection as not pollable (no provider queries)", async () => {
+  it("treats a CalDAV connection as not pollable (no provider queries)", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValueOnce({
-      provider: "vagaro",
-      providerConfigKey: "vagaro",
-      connectionId: "cx-vagaro"
+      provider: "caldav",
+      providerConfigKey: "caldav",
+      connectionId: "cx-caldav"
     } as never);
     const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
     expect(res).toEqual({ flows: 1, businesses: 1, events: 0, enqueued: 0 });
     expect(nangoProxyForBusiness).not.toHaveBeenCalled();
     expect(fetchCalendlyCandidateEvents).not.toHaveBeenCalled();
+    expect(fetchVagaroCandidateEvents).not.toHaveBeenCalled();
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "ai_flow_calendar_poll_failed",
         message: expect.stringContaining("calendar_not_connected")
       })
     );
+  });
+
+  it("polls Vagaro connections through the dedicated fetcher and enqueues due events", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "vagaro",
+      providerConfigKey: "vagaro",
+      connectionId: "cx-vagaro"
+    } as never);
+    vi.mocked(fetchVagaroCandidateEvents).mockResolvedValue({
+      events: [
+        {
+          id: "APPT1",
+          title: "Gel Manicure",
+          startIso: isoIn(60),
+          endIso: isoIn(90),
+          attendees: ["Dana <d@x.co>"],
+          description: "customer phone: +16025550000",
+          calendar: "primary" as const
+        }
+      ],
+      overflowed: false
+    });
+    const res = await pollCalendarTriggers(dbWith([flowRow("f-start", startTrigger(120))]));
+    expect(res).toMatchObject({ flows: 1, businesses: 1, events: 1, enqueued: 1 });
+    expect(nangoProxyForBusiness).not.toHaveBeenCalled();
+    expect(fetchCalendlyCandidateEvents).not.toHaveBeenCalled();
+
+    // Windows derive from the flow group; the due filter is the poller's own.
+    const args = vi.mocked(fetchVagaroCandidateEvents).mock.calls[0][0];
+    expect(args.windows).toEqual({
+      createdScan: false,
+      startHorizonMinutes: 120 + CALENDAR_START_HORIZON_BUFFER_MINUTES,
+      endBackMinutes: null,
+      canceledScan: false
+    });
+    expect(
+      args.dueFilter({ id: "x", title: "t", startIso: isoIn(60), calendar: "primary" })
+    ).toBe(true);
+    expect(
+      args.dueFilter({ id: "x", title: "t", startIso: isoIn(600), calendar: "primary" })
+    ).toBe(false);
+
+    // The enqueued run carries the customer context in its window text.
+    const enq = vi.mocked(enqueueAiFlowRun).mock.calls[0][0];
+    expect(enq).toMatchObject({
+      flowId: "f-start",
+      dedupeKey: expect.stringContaining("cal:APPT1:")
+    });
+    expect((enq.trigger as { windowText: string }).windowText).toContain(
+      "customer phone: +16025550000"
+    );
+  });
+
+  it("logs a Vagaro poll overflow and skips shared-only flow groups", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "vagaro",
+      providerConfigKey: "vagaro",
+      connectionId: "cx-vagaro"
+    } as never);
+    vi.mocked(fetchVagaroCandidateEvents).mockResolvedValue({ events: [], overflowed: true });
+    const res = await pollCalendarTriggers(
+      dbWith([
+        flowRow("f-created", createdTrigger()),
+        flowRow("f-end", endTrigger(30)),
+        flowRow("f-canceled", { channel: "calendar", on: "event_canceled", conditions: [] }),
+        flowRow("f-shared", { ...createdTrigger(), calendar: "shared" })
+      ])
+    );
+    expect(res).toMatchObject({ events: 0, enqueued: 0 });
+    // One fetch for the primary-watching flows; the shared-only flow adds none.
+    expect(fetchVagaroCandidateEvents).toHaveBeenCalledTimes(1);
+    expect(vi.mocked(fetchVagaroCandidateEvents).mock.calls[0][0].windows).toEqual({
+      createdScan: true,
+      startHorizonMinutes: null,
+      endBackMinutes: 30 + CALENDAR_END_LOOKBACK_MINUTES,
+      canceledScan: true
+    });
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ai_flow_calendar_poll_overflow",
+        message: expect.stringContaining("Vagaro poll hit a listing cap")
+      })
+    );
+  });
+
+  it("skips the Vagaro fetch entirely when only shared-calendar flows exist", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "vagaro",
+      providerConfigKey: "vagaro",
+      connectionId: "cx-vagaro"
+    } as never);
+    const res = await pollCalendarTriggers(
+      dbWith([flowRow("f-shared", { ...createdTrigger(), calendar: "shared" })])
+    );
+    expect(res).toMatchObject({ events: 0, enqueued: 0 });
+    expect(fetchVagaroCandidateEvents).not.toHaveBeenCalled();
+  });
+
+  it("skips a pushed-event enqueue when the event's calendar is not watched", async () => {
+    const flow = {
+      key: "f1:0",
+      id: "f1",
+      business_id: BIZ,
+      sources: ["primary" as const],
+      on: "event_created" as const,
+      leadMinutes: 0,
+      followMinutes: 0,
+      conditions: []
+    };
+    const ok = await tryEnqueueCalendarRun(
+      dbWith([]),
+      BIZ,
+      flow,
+      { id: "EV1", title: "t", createdIso: isoIn(-1), calendar: "shared" },
+      Date.now(),
+      undefined
+    );
+    expect(ok).toBe(false);
+    expect(enqueueAiFlowRun).not.toHaveBeenCalled();
   });
 
   it("polls Calendly connections through the dedicated fetcher and enqueues due events", async () => {
@@ -1583,5 +1709,197 @@ describe("shouldRunCalendarPoll / stampCalendarPollTick", () => {
       }),
       expect.anything()
     );
+  });
+});
+
+describe("fireCalendarTriggersForPushedEvent", () => {
+  /**
+   * Fake service client for the pushed-event path: the business-scoped,
+   * PAGED ai_flows listing (.select().eq().eq().or().order().range()
+   * awaited; each call consumes the next queued page). Any other table read
+   * (the from_matches ref resolution) throws off the incomplete chain,
+   * exercising the fail-closed ref arm.
+   */
+  function pushedPagesDb(
+    pages: Array<{ data: unknown[] | null; error?: { message: string } | null }>
+  ) {
+    let call = 0;
+    const range = vi.fn(() => {
+      const r = pages[Math.min(call, pages.length - 1)] ?? { data: [], error: null };
+      call += 1;
+      return Promise.resolve({ data: r.data, error: r.error ?? null });
+    });
+    const order = vi.fn(() => ({ range }));
+    const or = vi.fn(() => ({ order }));
+    const eq2 = vi.fn(() => ({ or }));
+    const eq1 = vi.fn(() => ({ eq: eq2 }));
+    const select = vi.fn(() => ({ eq: eq1 }));
+    return { from: vi.fn(() => ({ select })) } as never;
+  }
+
+  /** Single-page convenience (fewer rows than one page ends the loop). */
+  function pushedDb(rows: unknown[] | null, error: { message: string } | null = null) {
+    return pushedPagesDb([{ data: rows, error }]);
+  }
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(enqueueAiFlowRun).mockResolvedValue({ id: "run-1" } as never);
+  });
+
+  it("fires event_created flows for a pushed created event (canceled flows skipped)", async () => {
+    const db = pushedDb([
+      flowRow("f-created", createdTrigger()),
+      flowRow("f-canceled", { channel: "calendar", on: "event_canceled", conditions: [] }),
+      flowRow("f-sms", { channel: "sms", conditions: [] })
+    ]);
+    const enqueued = await fireCalendarTriggersForPushedEvent(
+      db,
+      BIZ,
+      {
+        id: "APPT1",
+        title: "Gel Manicure",
+        description: "customer phone: +16025550000",
+        startIso: isoIn(120),
+        createdIso: isoIn(-1),
+        cancelled: false,
+        calendar: "primary"
+      },
+      Date.now()
+    );
+    expect(enqueued).toBe(1);
+    expect(enqueueAiFlowRun).toHaveBeenCalledTimes(1);
+    const enq = vi.mocked(enqueueAiFlowRun).mock.calls[0][0];
+    expect(enq).toMatchObject({ flowId: "f-created", dedupeKey: "cal:APPT1" });
+    expect((enq.trigger as { windowText: string }).windowText).toContain(
+      "customer phone: +16025550000"
+    );
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ai_flow_run_enqueued_calendar",
+        message: expect.stringContaining("New calendar event")
+      })
+    );
+  });
+
+  it("fires event_canceled flows for a pushed cancellation with the cancelled dedupe key", async () => {
+    const db = pushedDb([
+      flowRow("f-created", createdTrigger()),
+      flowRow("f-canceled", { channel: "calendar", on: "event_canceled", conditions: [] })
+    ]);
+    const enqueued = await fireCalendarTriggersForPushedEvent(
+      db,
+      BIZ,
+      {
+        id: "APPT1",
+        title: "Gel Manicure",
+        startIso: isoIn(120),
+        updatedIso: isoIn(-1),
+        cancelled: true,
+        calendar: "primary"
+      },
+      Date.now()
+    );
+    expect(enqueued).toBe(1);
+    expect(vi.mocked(enqueueAiFlowRun).mock.calls[0][0]).toMatchObject({
+      flowId: "f-canceled",
+      dedupeKey: "cal:APPT1:cancelled"
+    });
+  });
+
+  it("returns 0 when the dedupe key was already claimed by an earlier observation", async () => {
+    vi.mocked(enqueueAiFlowRun).mockResolvedValue(null as never);
+    const db = pushedDb([flowRow("f-created", createdTrigger())]);
+    const enqueued = await fireCalendarTriggersForPushedEvent(
+      db,
+      BIZ,
+      { id: "APPT1", title: "t", createdIso: isoIn(-1), cancelled: false, calendar: "primary" },
+      Date.now()
+    );
+    expect(enqueued).toBe(0);
+    expect(recordSystemLog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_run_enqueued_calendar" })
+    );
+  });
+
+  it("fails CLOSED for a flow whose from_matches ref cannot be resolved", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const db = pushedDb([
+      flowRow("f-ref", {
+        channel: "calendar",
+        on: "event_created",
+        conditions: [
+          { type: "from_matches", ref: { source: "employee", id: "emp-1" } }
+        ]
+      })
+    ]);
+    const enqueued = await fireCalendarTriggersForPushedEvent(
+      db,
+      BIZ,
+      { id: "APPT1", title: "t", createdIso: isoIn(-1), cancelled: false, calendar: "primary" },
+      Date.now()
+    );
+    expect(enqueued).toBe(0);
+    expect(errSpy).toHaveBeenCalledWith(
+      "pushed calendar from_matches ref resolution",
+      expect.anything()
+    );
+    expect(enqueueAiFlowRun).not.toHaveBeenCalled();
+    errSpy.mockRestore();
+  });
+
+  it("propagates a flow-listing failure to the caller (webhook half logs it)", async () => {
+    await expect(
+      fireCalendarTriggersForPushedEvent(
+        pushedDb(null, { message: "listing down" }),
+        BIZ,
+        { id: "APPT1", title: "t", createdIso: isoIn(-1), cancelled: false, calendar: "primary" },
+        Date.now()
+      )
+    ).rejects.toThrow("fireCalendarTriggersForPushedEvent: listing down");
+  });
+
+  it("treats a null flow listing (no error) as zero matching flows", async () => {
+    const enqueued = await fireCalendarTriggersForPushedEvent(
+      pushedDb(null),
+      BIZ,
+      { id: "APPT1", title: "t", createdIso: isoIn(-1), cancelled: false, calendar: "primary" },
+      Date.now()
+    );
+    expect(enqueued).toBe(0);
+    expect(enqueueAiFlowRun).not.toHaveBeenCalled();
+  });
+
+  it("pages the flow listing so a 100+-flow tenant loses nothing", async () => {
+    const page1 = Array.from({ length: 100 }, (_, i) =>
+      flowRow(`f-${String(i).padStart(3, "0")}`, createdTrigger())
+    );
+    const page2 = [flowRow("f-100", createdTrigger())];
+    const enqueued = await fireCalendarTriggersForPushedEvent(
+      pushedPagesDb([{ data: page1 }, { data: page2 }]),
+      BIZ,
+      { id: "APPT1", title: "t", createdIso: isoIn(-1), cancelled: false, calendar: "primary" },
+      Date.now()
+    );
+    expect(enqueued).toBe(101);
+  });
+
+  it("keeps the flows already listed when a LATER page fails", async () => {
+    const errSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const page1 = Array.from({ length: 100 }, (_, i) =>
+      flowRow(`f-${String(i).padStart(3, "0")}`, createdTrigger())
+    );
+    const enqueued = await fireCalendarTriggersForPushedEvent(
+      pushedPagesDb([{ data: page1 }, { data: null, error: { message: "later page" } }]),
+      BIZ,
+      { id: "APPT1", title: "t", createdIso: isoIn(-1), cancelled: false, calendar: "primary" },
+      Date.now()
+    );
+    expect(enqueued).toBe(100);
+    expect(errSpy).toHaveBeenCalledWith(
+      "fireCalendarTriggersForPushedEvent flow listing page",
+      "later page"
+    );
+    errSpy.mockRestore();
   });
 });

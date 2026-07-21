@@ -9,21 +9,44 @@
  *   1. start every enabled `webhook`-channel AiFlow whose conditions match
  *      (same engine path as the Zapier "Send Lead to Coworker" action, with
  *      `source: "vagaro"` so flows can filter on it), idempotent per Vagaro
- *      event id; and
+ *      event id;
  *   2. sync `customer` created/updated events into the coworker's contacts
- *      (create-if-missing, fill-only on name/email — never clobber).
+ *      (create-if-missing, fill-only on name/email — never clobber); and
+ *   3. treat `appointment` events as booking intelligence (Calendly-stack
+ *      parity, Jul 2026): a created appointment fires the
+ *      `appointment_booked` goal machinery (nurture flows stop nudging a
+ *      customer who booked on Vagaro's own page) and the real-time
+ *      event_created calendar trigger; a deleted/canceled one fires
+ *      event_canceled; and every appointment event keeps the booking
+ *      ledger in sync (record/move/drop claims) so the AI's
+ *      reschedule/cancel tools can locate off-platform bookings.
  *
- * Both halves are best-effort relative to each other: a contact-sync failure
- * must not lose the flow event, and vice versa.
+ * All halves are best-effort relative to each other: a contact-sync or
+ * appointment-intelligence failure must not lose the flow event, and vice
+ * versa.
  */
 import { timingSafeEqual } from "node:crypto";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { processWebhookFlowEvent } from "@/lib/ai-flows/webhook-events";
+import {
+  fireBookingGoalsForIdentities,
+  type BookingGoalFireResult
+} from "@/lib/ai-flows/booking-goal-fire";
+import { fireCalendarTriggersForPushedEvent } from "@/lib/ai-flows/calendar-poll";
+import { vagaroAppointmentToCalendarEvent } from "@/lib/ai-flows/vagaro-poll";
+import { normalizeVagaroAppointment, type VagaroAppointmentItem } from "@/lib/vagaro/client";
+import {
+  bookingAttendeeKey,
+  deleteBookingClaimsByEvent,
+  recordExternalBookingClaim
+} from "@/lib/calendar-tools/booking-dedupe";
 import {
   createCustomerMemory,
   CustomerExistsError,
   getCustomerMemory,
   updateCustomerOwnerFields
 } from "@/lib/customer-memory/db";
+import { recordSystemLog } from "@/lib/db/system-logs";
 import { logger } from "@/lib/logger";
 
 /** Serialized payload ceiling — mirrors /api/public/v1/flow-events. */
@@ -157,25 +180,230 @@ export async function syncVagaroCustomer(
   await updateCustomerOwnerFields(businessId, existing.customer_e164, patch);
 }
 
+/** Actions that mean an appointment is no longer standing. */
+const APPOINTMENT_GONE_ACTIONS = new Set(["deleted", "canceled", "cancelled"]);
+
+/**
+ * The appointment object out of an `appointment` event payload — nested
+ * under `payload.appointment` or the payload itself (shape tolerance, same
+ * posture as extractVagaroCustomer). Null when it has no id + parseable
+ * start (the listing normalizer's contract).
+ */
+export function extractVagaroAppointment(
+  payload: Record<string, unknown>
+): VagaroAppointmentItem | null {
+  const nested = asRecord(payload.appointment);
+  return normalizeVagaroAppointment(Object.keys(nested).length > 0 ? nested : payload);
+}
+
+/** Appointment id alone — deletion events may carry nothing else usable. */
+export function extractVagaroAppointmentId(payload: Record<string, unknown>): string | null {
+  const nested = asRecord(payload.appointment);
+  const source = Object.keys(nested).length > 0 ? nested : payload;
+  return asString(source.id) ?? asString(source.appointmentId);
+}
+
+export type VagaroAppointmentIntelligence = {
+  /** appointment_booked goal firings (unique numbers). */
+  goalsFired: number;
+  /** Runs fast-forwarded to their goal step. */
+  jumpedRuns: number;
+  /** Calendar-trigger runs enqueued in real time (created/canceled). */
+  triggerRunsEnqueued: number;
+  /** Whether a booking-ledger write/delete was applied. */
+  ledgerSynced: boolean;
+};
+
+export type VagaroAppointmentDeps = {
+  /** Injectable service client (tests). */
+  getDb?: typeof createSupabaseServiceClient;
+  /** Injectable goal-firing helper (tests). */
+  fireGoals?: typeof fireBookingGoalsForIdentities;
+  /** Injectable pushed-trigger helper (tests). */
+  fireTriggers?: typeof fireCalendarTriggersForPushedEvent;
+  /** Injectable ledger writes (tests). */
+  recordClaim?: typeof recordExternalBookingClaim;
+  deleteClaims?: typeof deleteBookingClaimsByEvent;
+  /** Injectable clock (tests). */
+  nowMs?: number;
+};
+
+const NO_APPOINTMENT_INTELLIGENCE: VagaroAppointmentIntelligence = {
+  goalsFired: 0,
+  jumpedRuns: 0,
+  triggerRunsEnqueued: 0,
+  ledgerSynced: false
+};
+
+/**
+ * Booking intelligence for one `appointment` webhook event (Calendly-stack
+ * parity). Three independent, each-best-effort effects:
+ *
+ *   - GOALS (action created, appointment standing): the customer's phone +
+ *     email fire the shared `appointment_booked` machinery — parked nurture
+ *     runs fast-forward past their remaining nudges, exactly as if the
+ *     booking had been made through the platform tools.
+ *   - CALENDAR TRIGGERS: created → event_created flows, deleted/canceled
+ *     (or a payload whose status marks it canceled) → event_canceled flows,
+ *     in real time through the poller's own enqueue core (shared dedupe
+ *     keys make poll/webhook double-observation a no-op). A payload without
+ *     the relevant timestamp gets the delivery moment — the event is
+ *     happening NOW, that is what "real time" means here.
+ *   - LEDGER: created → record an external booking claim; updated → move it
+ *     (drop + re-record at the new start); deleted/canceled → drop every
+ *     claim for the appointment. This is what lets the reschedule/cancel
+ *     tools locate an off-platform booking (ledger-only resolution).
+ *
+ * Never throws: each effect degrades to a logged warning, because losing
+ * the webhook-flow event or the contact sync over booking intelligence
+ * would be strictly worse than missing one observation (the poll sweep
+ * and precheck remain the safety nets).
+ */
+export async function processVagaroAppointmentEvent(
+  businessId: string,
+  event: VagaroWebhookEvent,
+  deps: VagaroAppointmentDeps = {}
+): Promise<VagaroAppointmentIntelligence> {
+  if (event.type !== "appointment") return NO_APPOINTMENT_INTELLIGENCE;
+  const getDb = deps.getDb ?? createSupabaseServiceClient;
+  const fireGoals = deps.fireGoals ?? fireBookingGoalsForIdentities;
+  const fireTriggers = deps.fireTriggers ?? fireCalendarTriggersForPushedEvent;
+  const recordClaim = deps.recordClaim ?? recordExternalBookingClaim;
+  const deleteClaims = deps.deleteClaims ?? deleteBookingClaimsByEvent;
+  const nowMs = deps.nowMs ?? Date.now();
+
+  const result: VagaroAppointmentIntelligence = { ...NO_APPOINTMENT_INTELLIGENCE };
+  const action = (event.action ?? "").toLowerCase();
+  const appt = extractVagaroAppointment(event.payload);
+  const appointmentId = appt?.id ?? extractVagaroAppointmentId(event.payload);
+  if (!appointmentId) return result;
+  const gone = APPOINTMENT_GONE_ACTIONS.has(action) || appt?.cancelled === true;
+
+  // GOALS — a created, still-standing appointment means "this person
+  // booked"; stop nurturing them.
+  if (action === "created" && !gone && appt) {
+    const customer = extractVagaroCustomer(event.payload);
+    const identities = [
+      {
+        phone: appt.customerPhone ?? customer.phone,
+        email: appt.customerEmail ?? customer.email
+      }
+    ];
+    if (identities[0].phone || identities[0].email) {
+      try {
+        const db = await getDb();
+        const fired: BookingGoalFireResult = await fireGoals(db, businessId, identities);
+        result.goalsFired = fired.goalsFired;
+        result.jumpedRuns = fired.jumpedRuns;
+        if (fired.jumpedRuns > 0) {
+          await recordSystemLog({
+            businessId,
+            source: "aiflow",
+            level: "info",
+            event: "ai_flow_goal_jumped_booking",
+            message: `A new Vagaro booking moved ${fired.jumpedRuns} flow run(s) past their remaining follow-ups`,
+            payload: { appointment_id: appointmentId, jumped_runs: fired.jumpedRuns }
+          });
+        }
+      } catch (err) {
+        logger.warn("vagaro webhook: booking goal firing failed", {
+          businessId,
+          appointmentId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    }
+  }
+
+  // CALENDAR TRIGGERS — real-time created/canceled firings through the
+  // poller's enqueue core (shared dedupe keys).
+  if (appt && (action === "created" || gone)) {
+    try {
+      const ev = vagaroAppointmentToCalendarEvent(appt);
+      if (gone) {
+        ev.cancelled = true;
+        // eventCanceledDue gates on the modification moment; a payload
+        // without one is being delivered about a cancellation happening now.
+        if (!ev.updatedIso) ev.updatedIso = new Date(nowMs).toISOString();
+      } else if (!ev.createdIso) {
+        // Same reasoning for eventCreatedDue on a fresh booking.
+        ev.createdIso = new Date(nowMs).toISOString();
+      }
+      const db = await getDb();
+      result.triggerRunsEnqueued = await fireTriggers(db, businessId, ev, nowMs);
+    } catch (err) {
+      logger.warn("vagaro webhook: calendar trigger firing failed", {
+        businessId,
+        appointmentId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+
+  // LEDGER — keep reschedule/cancel resolution working for off-platform
+  // bookings. The ledger primitives are individually best-effort already;
+  // the try/catch guards the composition.
+  try {
+    if (gone) {
+      await deleteClaims(businessId, appointmentId);
+      result.ledgerSynced = true;
+    } else if (appt && (action === "created" || action === "updated")) {
+      const customer = extractVagaroCustomer(event.payload);
+      const attendeeKey = bookingAttendeeKey(
+        appt.customerPhone ?? customer.phone,
+        appt.customerEmail ?? customer.email,
+        appt.customerName ?? customer.name
+      );
+      if (action === "updated") {
+        // A moved appointment: drop the stale-slot claim(s) and re-record at
+        // the new start (Vagaro bookings carry no Zoom meeting to preserve).
+        await deleteClaims(businessId, appointmentId);
+      }
+      await recordClaim(businessId, attendeeKey, appt.startIso, appointmentId);
+      result.ledgerSynced = true;
+    }
+  } catch (err) {
+    logger.warn("vagaro webhook: booking ledger sync failed", {
+      businessId,
+      appointmentId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+
+  return result;
+}
+
 export type VagaroWebhookResult = {
   enqueued: number;
   flowsEvaluated: number;
   flowsMatched: number;
   contactSynced: boolean;
+  /** appointment_booked goal firings from an appointment-created event. */
+  goalsFired: number;
+  /** Flow runs the goal machinery fast-forwarded. */
+  jumpedRuns: number;
+  /** Calendar-trigger runs enqueued in real time (created/canceled). */
+  triggerRunsEnqueued: number;
+  /** Whether the booking ledger was updated for this event. */
+  ledgerSynced: boolean;
 };
 
 /**
- * The route's core: flow events + contact sync, isolated from each other.
+ * The route's core: flow events + contact sync + appointment intelligence,
+ * isolated from each other.
  *
- * A contact-sync failure only logs (the flow result still returns). A
- * flow-processing failure runs the contact sync FIRST, then rethrows so the
- * route answers non-2xx and Vagaro redelivers — the retried flow event is
- * deduped by event id, and the already-applied contact sync is idempotent
- * (create-if-missing + fill-only).
+ * A contact-sync failure only logs (the flow result still returns), and the
+ * appointment-intelligence half never throws by contract. A flow-processing
+ * failure runs the other halves FIRST, then rethrows so the route answers
+ * non-2xx and Vagaro redelivers — the retried flow event is deduped by
+ * event id, and the already-applied side effects are idempotent
+ * (create-if-missing + fill-only contacts; goal jumps and calendar dedupe
+ * keys no-op on re-observation; ledger writes are conflict-ignored).
  */
 export async function processVagaroWebhookEvent(
   businessId: string,
-  event: VagaroWebhookEvent
+  event: VagaroWebhookEvent,
+  apptDeps: VagaroAppointmentDeps = {}
 ): Promise<VagaroWebhookResult> {
   let flowResult: Awaited<ReturnType<typeof processWebhookFlowEvent>> | null = null;
   let flowError: unknown = null;
@@ -201,8 +429,10 @@ export async function processVagaroWebhookEvent(
     });
   }
 
+  const intelligence = await processVagaroAppointmentEvent(businessId, event, apptDeps);
+
   if (flowResult === null) {
-    // Only reachable via the catch above; rethrow after the sync ran.
+    // Only reachable via the catch above; rethrow after the other halves ran.
     throw flowError;
   }
 
@@ -210,6 +440,7 @@ export async function processVagaroWebhookEvent(
     enqueued: flowResult.enqueued,
     flowsEvaluated: flowResult.flowsEvaluated,
     flowsMatched: flowResult.flowsMatched,
-    contactSynced
+    contactSynced,
+    ...intelligence
   };
 }

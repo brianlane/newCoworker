@@ -28,6 +28,8 @@ vi.mock("@/lib/calendly/webhook-subscriptions", () => ({
 }));
 vi.mock("@/lib/ai-flows/db", () => ({ enqueueAiFlowRun: vi.fn() }));
 vi.mock("@/lib/calendar-tools/shared-calendar", () => ({ getSharedCalendar: vi.fn() }));
+vi.mock("@/lib/db/vagaro-connections", () => ({ getActiveVagaroConnection: vi.fn() }));
+vi.mock("@/lib/vagaro/client", () => ({ listVagaroAppointments: vi.fn() }));
 
 import {
   BOOKING_CONTEXT_INVITEE_FETCH_CAP,
@@ -35,6 +37,7 @@ import {
   contactBookingContextForPhone,
   contactIdentifiers,
   inviteeMatchesContact,
+  vagaroAppointmentMatchesContact,
   type ContactBookingContextDeps
 } from "@/lib/ai-flows/contact-booking-context";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
@@ -451,5 +454,180 @@ describe("contactBookingContextForPhone", () => {
       "contact booking context: lookup failed (answering none)",
       expect.objectContaining({ error: "nango string" })
     );
+  });
+});
+
+describe("contactBookingContextForPhone — Vagaro arm", () => {
+  const VAGARO_CONN = {
+    provider: "vagaro" as const,
+    providerConfigKey: "vagaro",
+    connectionId: "vg-1"
+  };
+  const VG_ROW = { id: "vg-1", business_id: BIZ } as never;
+
+  function vgAppt(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "appt-1",
+      startIso: FUTURE,
+      endIso: null,
+      createdIso: null,
+      updatedIso: null,
+      status: "confirmed",
+      cancelled: false,
+      serviceId: null,
+      serviceName: "Gel Manicure",
+      customerName: null,
+      customerPhone: PHONE,
+      customerEmail: null,
+      ...overrides
+    };
+  }
+
+  function vagaroDeps(overrides: Partial<ContactBookingContextDeps> = {}) {
+    return deps({
+      resolveConnection: vi.fn().mockResolvedValue(VAGARO_CONN),
+      getVagaroConnection: vi.fn().mockResolvedValue(VG_ROW),
+      listAppointments: vi.fn().mockResolvedValue([]),
+      ...overrides
+    });
+  }
+
+  it("reports the soonest upcoming matching appointment as booked", async () => {
+    const sooner = new Date(Date.now() + 2 * 60 * 60_000).toISOString();
+    const later = new Date(Date.now() + 26 * 60 * 60_000).toISOString();
+    const d = vagaroDeps({
+      listAppointments: vi.fn().mockResolvedValue([
+        vgAppt({ id: "later", startIso: later, serviceName: "Color" }),
+        vgAppt({ id: "sooner", startIso: sooner }),
+        // Non-matching, canceled, past, and junk-start rows are all skipped.
+        vgAppt({ id: "other", customerPhone: "+15550009999" }),
+        vgAppt({ id: "gone", cancelled: true }),
+        vgAppt({ id: "past", startIso: PAST }),
+        vgAppt({ id: "junk", startIso: "junk" })
+      ])
+    });
+    const out = await contactBookingContextForPhone(
+      BIZ,
+      PHONE,
+      d,
+      fakeDb([CONTACT_ROW]),
+      "America/Phoenix"
+    );
+    expect(out.status).toBe("booked");
+    expect(out.line).toContain('"Gel Manicure"');
+    expect(out.line).toContain("upcoming booking");
+    // Only the upcoming listing ran — a booked hit skips the canceled scan.
+    expect(d.listAppointments).toHaveBeenCalledTimes(1);
+  });
+
+  it("matches by contact email and falls back to 'Appointment' without a service name", async () => {
+    const d = vagaroDeps({
+      listAppointments: vi.fn().mockResolvedValue([
+        vgAppt({
+          customerPhone: null,
+          customerEmail: "tim@trustyourtalent.ca",
+          serviceName: null
+        })
+      ])
+    });
+    const out = await contactBookingContextForPhone(BIZ, PHONE, d, fakeDb([CONTACT_ROW]));
+    expect(out.status).toBe("booked");
+    expect(out.line).toContain('"Appointment"');
+  });
+
+  it("reports a recent canceled appointment when nothing upcoming matches", async () => {
+    const recentCancel = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+    const olderCancel = new Date(Date.now() - 30 * 60 * 60_000).toISOString();
+    const listAppointments = vi
+      .fn()
+      // Upcoming scan: nothing.
+      .mockResolvedValueOnce([])
+      // Canceled scan: most recent start wins; un-cancelled rows (an API
+      // that ignored the status filter) are never misreported.
+      .mockResolvedValueOnce([
+        vgAppt({ id: "old", startIso: olderCancel, cancelled: true, status: "cancelled" }),
+        vgAppt({
+          id: "recent",
+          startIso: recentCancel,
+          cancelled: true,
+          status: "cancelled",
+          serviceName: null
+        }),
+        vgAppt({ id: "not-actually-canceled", startIso: recentCancel })
+      ]);
+    const d = vagaroDeps({ listAppointments });
+    const out = await contactBookingContextForPhone(BIZ, PHONE, d, fakeDb([CONTACT_ROW]));
+    expect(out.status).toBe("canceled");
+    expect(out.line).toContain("CANCELED");
+    expect(out.line).toContain('"Appointment"');
+    // The canceled scan asked Vagaro for cancelled appointments explicitly.
+    expect(listAppointments.mock.calls[1][1]).toMatchObject({ status: "cancelled" });
+  });
+
+  it("answers none when neither scan matches and when the connection row is gone", async () => {
+    const d = vagaroDeps();
+    expect(await contactBookingContextForPhone(BIZ, PHONE, d, fakeDb([CONTACT_ROW]))).toEqual({
+      status: "none",
+      line: null
+    });
+    const gone = vagaroDeps({ getVagaroConnection: vi.fn().mockResolvedValue(null) });
+    expect(
+      await contactBookingContextForPhone(BIZ, PHONE, gone, fakeDb([CONTACT_ROW]))
+    ).toEqual({ status: "none", line: null });
+  });
+
+  it("fails open to none when the Vagaro listing throws", async () => {
+    const d = vagaroDeps({
+      listAppointments: vi.fn().mockRejectedValue(new Error("vagaro down"))
+    });
+    expect(await contactBookingContextForPhone(BIZ, PHONE, d, fakeDb([CONTACT_ROW]))).toEqual({
+      status: "none",
+      line: null
+    });
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+      "contact booking context: lookup failed (answering none)",
+      expect.objectContaining({ businessId: BIZ, error: "vagaro down" })
+    );
+  });
+
+  it("uses the module-level lookups when none are injected (mocked: no row → none)", async () => {
+    const d = deps({ resolveConnection: vi.fn().mockResolvedValue(VAGARO_CONN) });
+    expect(await contactBookingContextForPhone(BIZ, PHONE, d, fakeDb([CONTACT_ROW]))).toEqual({
+      status: "none",
+      line: null
+    });
+  });
+});
+
+describe("vagaroAppointmentMatchesContact", () => {
+  const item = (overrides: Record<string, unknown> = {}) =>
+    ({
+      id: "a",
+      startIso: FUTURE,
+      endIso: null,
+      createdIso: null,
+      updatedIso: null,
+      status: "",
+      cancelled: false,
+      serviceId: null,
+      serviceName: null,
+      customerName: null,
+      customerPhone: null,
+      customerEmail: null,
+      ...overrides
+    }) as never;
+
+  it("matches on email or country-code-tolerant phone, else not", () => {
+    const ids = { phoneDigits: ["17808039935"], email: "tim@trustyourtalent.ca" };
+    expect(
+      vagaroAppointmentMatchesContact(item({ customerEmail: "tim@trustyourtalent.ca" }), ids)
+    ).toBe(true);
+    expect(vagaroAppointmentMatchesContact(item({ customerPhone: "780-803-9935" }), ids)).toBe(
+      true
+    );
+    expect(vagaroAppointmentMatchesContact(item({ customerPhone: "+15550001111" }), ids)).toBe(
+      false
+    );
+    expect(vagaroAppointmentMatchesContact(item(), ids)).toBe(false);
   });
 });

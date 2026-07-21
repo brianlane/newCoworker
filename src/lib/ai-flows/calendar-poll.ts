@@ -10,7 +10,10 @@
  * per match. Google/Microsoft calendars poll through the Nango fetchers
  * below; Calendly connections poll through the dedicated fetcher in
  * calendly-poll.ts (scheduled events + invitee enrichment — Calendly-only
- * tenants like KYP Ads previously had NO working calendar triggers).
+ * tenants like KYP Ads previously had NO working calendar triggers), and
+ * Vagaro connections through vagaro-poll.ts (appointments listing; the
+ * Vagaro webhook receiver also fires created/canceled in real time with
+ * the same dedupe keys, so poll/webhook double-observation is a no-op).
  *
  * Three firing modes per flow:
  *   - event_created: an event whose `created` timestamp falls inside the poll
@@ -42,6 +45,7 @@ import {
 import { getSharedCalendar } from "@/lib/calendar-tools/shared-calendar";
 import { enqueueAiFlowRun } from "@/lib/ai-flows/db";
 import { fetchCalendlyCandidateEvents } from "@/lib/ai-flows/calendly-poll";
+import { fetchVagaroCandidateEvents } from "@/lib/ai-flows/vagaro-poll";
 import {
   calendarTriggerScope,
   evaluateTriggerConditions,
@@ -151,7 +155,7 @@ export const CALENDAR_POLL_FAILURE_ESCALATION_MS =
 
 type CalendarSource = "primary" | "shared";
 
-type CalendarFlow = {
+export type CalendarFlow = {
   /** Unique per (flow, trigger index) — one flow can carry several calendar triggers. */
   key: string;
   id: string;
@@ -539,7 +543,7 @@ async function fetchOverlapping(
 
 // ── Flow listing ────────────────────────────────────────────────────────────
 
-function calendarFlowsFrom(
+export function calendarFlowsFrom(
   rows: Array<{ id: string; business_id: string; definition: unknown }>
 ): CalendarFlow[] {
   type RawTrigger = {
@@ -716,6 +720,127 @@ async function alertOwnerCalendarBroken(db: SupabaseClient, businessId: string):
   }
 }
 
+// ── Shared enqueue core (poll + pushed webhook events) ─────────────────────
+
+/**
+ * Due-check + source + conditions + enqueue for one (flow, event). Returns
+ * true when a NEW run was enqueued (false on not-due, source mismatch,
+ * unmatched conditions, or the dedupe key already claimed by an earlier
+ * observation — the poll and the Vagaro webhook share these keys, so
+ * double-observation is a benign no-op).
+ */
+export async function tryEnqueueCalendarRun(
+  db: SupabaseClient,
+  businessId: string,
+  flow: CalendarFlow,
+  ev: CalendarEventInput,
+  nowMs: number,
+  refValues: Map<string, string[]> | undefined
+): Promise<boolean> {
+  if (!flow.sources.includes(ev.calendar)) return false;
+  if (!flowDueForEvent(flow, ev, nowMs)) return false;
+  const scope = calendarTriggerScope(ev);
+  if (!evaluateTriggerConditions(flow.conditions, scope.windowText, scope.from, refValues)) {
+    return false;
+  }
+  const run = await enqueueAiFlowRun(
+    {
+      businessId,
+      flowId: flow.id,
+      trigger: scope,
+      dedupeKey: calendarDedupeKey(flow.on, ev)
+    },
+    db
+  );
+  if (!run) return false; // already enqueued by an earlier observation
+  await recordSystemLog({
+    businessId,
+    source: "aiflow",
+    level: "info",
+    event: "ai_flow_run_enqueued_calendar",
+    message:
+      flow.on === "event_start"
+        ? `Upcoming calendar event "${ev.title}" triggered a run`
+        : flow.on === "event_end"
+          ? `Completed calendar event "${ev.title}" triggered a run`
+          : flow.on === "event_canceled"
+            ? `Canceled calendar event "${ev.title}" triggered a run`
+            : `New calendar event "${ev.title}" triggered a run`,
+    payload: {
+      flow_id: flow.id,
+      event_id: ev.id,
+      calendar: ev.calendar,
+      starts_at: ev.startIso ?? null,
+      ends_at: ev.endIso ?? null
+    }
+  });
+  return true;
+}
+
+/**
+ * Fire one business's event_created / event_canceled calendar flows for an
+ * event PUSHED by a provider webhook (the Vagaro receiver), in real time —
+ * the push-side twin of the poll loop, sharing due-checks, condition
+ * evaluation, and dedupe keys, so whichever observer sees the event first
+ * wins and the other no-ops. event_start / event_end stay poll-only (they
+ * are time-driven, not event-driven). Returns the number of runs enqueued.
+ */
+export async function fireCalendarTriggersForPushedEvent(
+  db: SupabaseClient,
+  businessId: string,
+  ev: CalendarEventInput,
+  nowMs: number
+): Promise<number> {
+  // Paged like pollCalendarTriggers' listing so a business with more than
+  // one page of calendar-capable flows never silently loses the tail
+  // (Bugbot on PR #810). A LATER page failing keeps the flows already in
+  // hand — the minute poll re-observes with the same dedupe keys.
+  const flowRows: Array<{ id: string; business_id: string; definition: unknown }> = [];
+  for (let offset = 0; ; offset += CALENDAR_POLL_FLOW_PAGE) {
+    const { data, error } = await db
+      .from("ai_flows")
+      .select("id, business_id, definition")
+      .eq("business_id", businessId)
+      .eq("enabled", true)
+      .or("definition->trigger->>channel.eq.calendar,definition->triggers.not.is.null")
+      .order("id", { ascending: true })
+      .range(offset, offset + CALENDAR_POLL_FLOW_PAGE - 1);
+    if (error) {
+      if (flowRows.length === 0) {
+        throw new Error(`fireCalendarTriggersForPushedEvent: ${error.message}`);
+      }
+      console.error("fireCalendarTriggersForPushedEvent flow listing page", error.message);
+      break;
+    }
+    const batch = (data ?? []) as typeof flowRows;
+    flowRows.push(...batch);
+    if (batch.length < CALENDAR_POLL_FLOW_PAGE) break;
+  }
+  const mode = ev.cancelled ? "event_canceled" : "event_created";
+  const flows = calendarFlowsFrom(flowRows).filter((f) => f.on === mode);
+
+  let enqueued = 0;
+  for (const flow of flows) {
+    // Same per-flow saved-contact ref resolution as the poll (fails CLOSED
+    // for that flow only).
+    let refValues: Map<string, string[]> | undefined;
+    try {
+      refValues = await resolveFromMatchesRefValues(
+        db as unknown as ContactRefSupabase,
+        businessId,
+        flow.conditions
+      );
+    } catch (e) {
+      console.error("pushed calendar from_matches ref resolution", e);
+      refValues = undefined;
+    }
+    if (await tryEnqueueCalendarRun(db, businessId, flow, ev, nowMs, refValues)) {
+      enqueued += 1;
+    }
+  }
+  return enqueued;
+}
+
 // ── Poll cadence gate ───────────────────────────────────────────────────────
 
 /**
@@ -822,10 +947,15 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
     result.businesses += 1;
     try {
       const conn = await resolveCalendarConnection(businessId);
-      // Vagaro/CalDAV connections have no pollable calendar — not connected
-      // for triggers. Calendly IS pollable (dedicated fetcher below);
-      // Google/Microsoft use the Nango fetchers.
-      if (!conn || (conn.provider !== "calendly" && !isWorkspaceCalendarProvider(conn.provider))) {
+      // CalDAV connections have no pollable calendar — not connected for
+      // triggers. Calendly and Vagaro ARE pollable (dedicated fetchers
+      // below); Google/Microsoft use the Nango fetchers.
+      if (
+        !conn ||
+        (conn.provider !== "calendly" &&
+          conn.provider !== "vagaro" &&
+          !isWorkspaceCalendarProvider(conn.provider))
+      ) {
         throw new Error("calendar_not_connected");
       }
 
@@ -870,6 +1000,49 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
               event: "ai_flow_calendar_poll_overflow",
               message:
                 "Calendly poll hit a listing/enrichment cap this tick; remainder deferred to later polls",
+              payload: { calendar: "primary", events_read: fetched.events.length }
+            });
+          }
+          eventsBySource.set("primary", fetched.events);
+          result.events += fetched.events.length;
+        }
+      } else if (conn.provider === "vagaro") {
+        // Vagaro branch: one "primary" source (no shared-calendar concept,
+        // Calendly parity). Windows mirror the Calendly path; the due filter
+        // keeps only events that can actually fire this tick.
+        const primaryFlows = group.filter((f) => f.sources.includes("primary"));
+        if (primaryFlows.length > 0) {
+          const leads = primaryFlows
+            .filter((f) => f.on === "event_start")
+            .map((f) => f.leadMinutes);
+          const follows = primaryFlows
+            .filter((f) => f.on === "event_end")
+            .map((f) => f.followMinutes);
+          const fetched = await fetchVagaroCandidateEvents({
+            businessId,
+            nowMs,
+            windows: {
+              createdScan: primaryFlows.some((f) => f.on === "event_created"),
+              startHorizonMinutes:
+                leads.length > 0
+                  ? Math.max(...leads) + CALENDAR_START_HORIZON_BUFFER_MINUTES
+                  : null,
+              endBackMinutes:
+                follows.length > 0
+                  ? Math.max(...follows) + CALENDAR_END_LOOKBACK_MINUTES
+                  : null,
+              canceledScan: primaryFlows.some((f) => f.on === "event_canceled")
+            },
+            dueFilter: (ev) => primaryFlows.some((f) => flowDueForEvent(f, ev, nowMs))
+          });
+          if (fetched.overflowed) {
+            await recordSystemLog({
+              businessId,
+              source: "aiflow",
+              level: "warn",
+              event: "ai_flow_calendar_poll_overflow",
+              message:
+                "Vagaro poll hit a listing cap this tick; remainder deferred to later polls",
               payload: { calendar: "primary", events_read: fetched.events.length }
             });
           }
@@ -1032,49 +1205,15 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
       for (const flow of group) {
         for (const source of flow.sources) {
           for (const ev of eventsBySource.get(source) ?? []) {
-            if (!flowDueForEvent(flow, ev, nowMs)) continue;
-            const scope = calendarTriggerScope(ev);
-            if (
-              !evaluateTriggerConditions(
-                flow.conditions,
-                scope.windowText,
-                scope.from,
-                refValuesByFlow.get(flow.key)
-              )
-            )
-              continue;
-            const run = await enqueueAiFlowRun(
-              {
-                businessId,
-                flowId: flow.id,
-                trigger: scope,
-                dedupeKey: calendarDedupeKey(flow.on, ev)
-              },
-              db
-            );
-            if (!run) continue; // already enqueued by an earlier tick
-            result.enqueued += 1;
-            await recordSystemLog({
+            const enqueued = await tryEnqueueCalendarRun(
+              db,
               businessId,
-              source: "aiflow",
-              level: "info",
-              event: "ai_flow_run_enqueued_calendar",
-              message:
-                flow.on === "event_start"
-                  ? `Upcoming calendar event "${ev.title}" triggered a run`
-                  : flow.on === "event_end"
-                    ? `Completed calendar event "${ev.title}" triggered a run`
-                    : flow.on === "event_canceled"
-                      ? `Canceled calendar event "${ev.title}" triggered a run`
-                      : `New calendar event "${ev.title}" triggered a run`,
-              payload: {
-                flow_id: flow.id,
-                event_id: ev.id,
-                calendar: ev.calendar,
-                starts_at: ev.startIso ?? null,
-                ends_at: ev.endIso ?? null
-              }
-            });
+              flow,
+              ev,
+              nowMs,
+              refValuesByFlow.get(flow.key)
+            );
+            if (enqueued) result.enqueued += 1;
           }
         }
       }

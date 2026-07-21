@@ -1,8 +1,8 @@
 /**
- * Pre-send Calendly booking check for AiFlow runs.
+ * Pre-send booking check for AiFlow runs (Calendly + Vagaro).
  *
  * A lead who ALREADY booked must get zero flow texts — greeting included.
- * The 1/min booking-goal sweep and the invitee.created webhook only observe
+ * The 1/min booking-goal sweep and the provider webhooks only observe
  * bookings made while a run exists; a booking that predates the run (or the
  * observers themselves — Tim Tsai, Jul 18 2026) is invisible to both until
  * the young-run widening catches it ~1 min later, which can lose the race
@@ -11,15 +11,17 @@
  * FIRST communication step; this module is that route's core.
  *
  * Given a business + run, it answers "does this run's lead have an active
- * Calendly booking with a future start?" and, on a hit, fires the standard
- * `appointment_booked` goal machinery for the lead (jumping any OTHER parked
- * runs; the claimed run itself is `running` and is jumped in-process by the
- * worker when this returns booked).
+ * booking with a future start on the connected provider?" and, on a hit,
+ * fires the standard `appointment_booked` goal machinery for the lead
+ * (jumping any OTHER parked runs; the claimed run itself is `running` and
+ * is jumped in-process by the worker when this returns booked).
  *
- * Lookup order (bounded, cheapest first):
+ * Calendly lookup order (bounded, cheapest first):
  *   1. `invitee_email`-filtered events listing — one call per lead email.
  *   2. Phone match: scan upcoming events (capped) and match each event's
  *      invitees' SMS-reminder numbers country-code-tolerantly.
+ * Vagaro: one upcoming-appointments listing, matched on the customer's
+ * phone (country-code-tolerant) or email.
  *
  * Everything here FAILS OPEN by returning booked:false with a reason — the
  * worker sends as normal and the young-run sweep remains the safety net.
@@ -41,6 +43,8 @@ import {
   fireBookingGoalsForInvitees,
   inviteePhoneE164
 } from "@/lib/ai-flows/calendly-booking-goals";
+import { getActiveVagaroConnection } from "@/lib/db/vagaro-connections";
+import { listVagaroAppointments } from "@/lib/vagaro/client";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { logger } from "@/lib/logger";
 
@@ -54,7 +58,7 @@ export const PRECHECK_INVITEE_FETCH_CAP = 10;
 export const PRECHECK_HORIZON_DAYS = 90;
 
 export type BookingPrecheckResult = {
-  /** An active future-start Calendly booking exists for this run's lead. */
+  /** An active future-start booking exists for this run's lead. */
   booked: boolean;
   /** Parked runs the goal machinery fast-forwarded on a hit. */
   jumpedRuns: number;
@@ -64,9 +68,10 @@ export type BookingPrecheckResult = {
     | "no_booking_found"
     | "run_not_found"
     | "flow_without_booking_goal"
-    | "not_calendly"
+    | "provider_unsupported"
     | "no_lead_identifiers"
-    | "calendly_refused";
+    | "calendly_refused"
+    | "vagaro_refused";
 };
 
 export type BookingPrecheckDeps = {
@@ -83,6 +88,10 @@ export type BookingPrecheckDeps = {
   /** Injectable user-URI cache reads/writes (tests). */
   getCachedUserUri?: (businessId: string) => Promise<string | null>;
   persistUserUri?: (businessId: string, userUri: string) => Promise<void>;
+  /** Injectable Vagaro connection lookup (tests). */
+  getVagaroConnection?: typeof getActiveVagaroConnection;
+  /** Injectable Vagaro appointments listing (tests). */
+  listAppointments?: typeof listVagaroAppointments;
 };
 
 type RunRow = {
@@ -152,10 +161,52 @@ export async function resolveCalendlyUserUri(
 }
 
 /**
- * Does this run's lead hold an active future-start Calendly booking? Fires
- * the `appointment_booked` goal machinery on a hit. Never throws for
- * "expected" trouble — a refused transport or missing rows degrade to
- * booked:false so the caller sends as normal.
+ * Does this run's lead hold an active future-start Vagaro appointment?
+ * One bounded upcoming-appointments listing, matched on the customer's
+ * phone (country-code-tolerant digits) or email. `"refused"` on any
+ * transport/connection trouble — the caller fails open.
+ */
+async function vagaroLeadHasUpcomingBooking(
+  businessId: string,
+  phones: string[],
+  emails: string[],
+  deps: BookingPrecheckDeps
+): Promise<boolean | "refused"> {
+  const getVagaroConnection = deps.getVagaroConnection ?? getActiveVagaroConnection;
+  const listAppointments = deps.listAppointments ?? listVagaroAppointments;
+  try {
+    const conn = await getVagaroConnection(businessId);
+    if (!conn) return "refused";
+    const nowMs = Date.now();
+    const items = await listAppointments(conn, {
+      startIso: new Date(nowMs).toISOString(),
+      endIso: new Date(nowMs + PRECHECK_HORIZON_DAYS * 24 * 60 * 60_000).toISOString()
+    });
+    const phoneDigits = phones.map((p) => digitsOf(p)).filter((d) => d.length > 0);
+    const emailSet = new Set(emails);
+    return items.some((item) => {
+      if (item.cancelled) return false;
+      const startMs = Date.parse(item.startIso);
+      if (!Number.isFinite(startMs) || startMs <= nowMs) return false;
+      if (item.customerEmail && emailSet.has(item.customerEmail)) return true;
+      const itemDigits = item.customerPhone ? digitsOf(item.customerPhone) : "";
+      return itemDigits.length > 0 && phoneDigits.some((d) => phoneDigitsMatch(itemDigits, d));
+    });
+  } catch (err) {
+    logger.warn("booking precheck: vagaro lookup refused (failing open)", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return "refused";
+  }
+}
+
+/**
+ * Does this run's lead hold an active future-start booking on the connected
+ * provider (Calendly or Vagaro)? Fires the `appointment_booked` goal
+ * machinery on a hit. Never throws for "expected" trouble — a refused
+ * transport or missing rows degrade to booked:false so the caller sends as
+ * normal.
  */
 export async function bookingPrecheckForRun(
   businessId: string,
@@ -198,81 +249,90 @@ export async function bookingPrecheckForRun(
   }
 
   const conn = await resolveConnection(businessId);
-  if (!conn || conn.provider !== "calendly") return none("not_calendly");
+  if (!conn || (conn.provider !== "calendly" && conn.provider !== "vagaro")) {
+    return none("provider_unsupported");
+  }
 
   const { phones, emails } = leadIdentifiersFromContext(run.context);
   if (phones.length === 0 && emails.length === 0) return none("no_lead_identifiers");
 
-  const userUri = await resolveCalendlyUserUri(
-    businessId,
-    conn,
-    request,
-    getCachedUserUri,
-    persistUserUri
-  );
-  if (!userUri) return none("calendly_refused");
-
-  const nowMs = Date.now();
-  const listParams = {
-    user: userUri,
-    status: "active",
-    sort: "start_time:asc",
-    min_start_time: new Date(nowMs).toISOString(),
-    max_start_time: new Date(nowMs + PRECHECK_HORIZON_DAYS * 24 * 60 * 60_000).toISOString()
-  };
-
   let booked = false;
 
-  // 1) Email path: one `invitee_email`-filtered listing (a run carries at
-  //    most one lead email).
-  if (emails[0]) {
-    const res = await request(businessId, conn, {
-      endpoint: "/scheduled_events",
-      method: "GET",
-      params: { ...listParams, invitee_email: emails[0], count: "1" }
-    });
-    if (!res) return none("calendly_refused");
-    const listed = (res.data as { collection?: unknown[] })?.collection ?? [];
-    if (listed.length > 0) booked = true;
-  }
+  if (conn.provider === "vagaro") {
+    const found = await vagaroLeadHasUpcomingBooking(businessId, phones, emails, deps);
+    if (found === "refused") return none("vagaro_refused");
+    booked = found;
+  } else {
+    const userUri = await resolveCalendlyUserUri(
+      businessId,
+      conn,
+      request,
+      getCachedUserUri,
+      persistUserUri
+    );
+    if (!userUri) return none("calendly_refused");
 
-  // 2) Phone path: scan upcoming events and match invitee SMS numbers
-  //    country-code-tolerantly (Calendly may store national format).
-  if (!booked && phones.length > 0) {
-    const phoneDigits = phones.map((p) => digitsOf(p)).filter((d) => d.length > 0);
-    const res = await request(businessId, conn, {
-      endpoint: "/scheduled_events",
-      method: "GET",
-      params: { ...listParams, count: String(PRECHECK_EVENT_SCAN) }
-    });
-    if (!res) return none("calendly_refused");
-    const events = ((res.data as { collection?: Array<{ uri?: string }> })?.collection ?? [])
-      .filter((e): e is { uri: string } => typeof e?.uri === "string" && e.uri.length > 0);
-    let fetched = 0;
-    for (const event of events) {
-      if (booked || fetched >= PRECHECK_INVITEE_FETCH_CAP) break;
-      fetched += 1;
-      const uuid = event.uri.slice(event.uri.lastIndexOf("/") + 1);
-      const invRes = await request(businessId, conn, {
-        endpoint: `/scheduled_events/${encodeURIComponent(uuid)}/invitees`,
+    const nowMs = Date.now();
+    const listParams = {
+      user: userUri,
+      status: "active",
+      sort: "start_time:asc",
+      min_start_time: new Date(nowMs).toISOString(),
+      max_start_time: new Date(nowMs + PRECHECK_HORIZON_DAYS * 24 * 60 * 60_000).toISOString()
+    };
+
+    // 1) Email path: one `invitee_email`-filtered listing (a run carries at
+    //    most one lead email).
+    if (emails[0]) {
+      const res = await request(businessId, conn, {
+        endpoint: "/scheduled_events",
         method: "GET",
-        params: { count: "10" }
+        params: { ...listParams, invitee_email: emails[0], count: "1" }
       });
-      // A refused invitee fetch mid-scan degrades to "not found so far";
-      // the remaining sweep/webhook observers still cover the lead.
-      if (!invRes) continue;
-      const invitees =
-        (invRes.data as { collection?: Array<{ status?: string; text_reminder_number?: string }> })
-          ?.collection ?? [];
-      booked = invitees.some((i) => {
-        if (i?.status === "canceled") return false;
-        const inviteeDigits =
-          typeof i.text_reminder_number === "string" ? digitsOf(i.text_reminder_number) : "";
-        return (
-          inviteeDigits.length > 0 &&
-          phoneDigits.some((d) => phoneDigitsMatch(inviteeDigits, d))
-        );
+      if (!res) return none("calendly_refused");
+      const listed = (res.data as { collection?: unknown[] })?.collection ?? [];
+      if (listed.length > 0) booked = true;
+    }
+
+    // 2) Phone path: scan upcoming events and match invitee SMS numbers
+    //    country-code-tolerantly (Calendly may store national format).
+    if (!booked && phones.length > 0) {
+      const phoneDigits = phones.map((p) => digitsOf(p)).filter((d) => d.length > 0);
+      const res = await request(businessId, conn, {
+        endpoint: "/scheduled_events",
+        method: "GET",
+        params: { ...listParams, count: String(PRECHECK_EVENT_SCAN) }
       });
+      if (!res) return none("calendly_refused");
+      const events = ((res.data as { collection?: Array<{ uri?: string }> })?.collection ?? [])
+        .filter((e): e is { uri: string } => typeof e?.uri === "string" && e.uri.length > 0);
+      let fetched = 0;
+      for (const event of events) {
+        if (booked || fetched >= PRECHECK_INVITEE_FETCH_CAP) break;
+        fetched += 1;
+        const uuid = event.uri.slice(event.uri.lastIndexOf("/") + 1);
+        const invRes = await request(businessId, conn, {
+          endpoint: `/scheduled_events/${encodeURIComponent(uuid)}/invitees`,
+          method: "GET",
+          params: { count: "10" }
+        });
+        // A refused invitee fetch mid-scan degrades to "not found so far";
+        // the remaining sweep/webhook observers still cover the lead.
+        if (!invRes) continue;
+        const invitees =
+          (invRes.data as {
+            collection?: Array<{ status?: string; text_reminder_number?: string }>;
+          })?.collection ?? [];
+        booked = invitees.some((i) => {
+          if (i?.status === "canceled") return false;
+          const inviteeDigits =
+            typeof i.text_reminder_number === "string" ? digitsOf(i.text_reminder_number) : "";
+          return (
+            inviteeDigits.length > 0 &&
+            phoneDigits.some((d) => phoneDigitsMatch(inviteeDigits, d))
+          );
+        });
+      }
     }
   }
 
@@ -303,7 +363,8 @@ export async function bookingPrecheckForRun(
     level: "info",
     event: "ai_flow_booking_precheck_hit",
     message:
-      "A lead already had an upcoming Calendly booking when their flow reached its first message; follow-ups were skipped",
+      `A lead already had an upcoming ${conn.provider === "vagaro" ? "Vagaro" : "Calendly"} ` +
+      "booking when their flow reached its first message; follow-ups were skipped",
     payload: { run_id: runId, jumped_runs: fired.jumpedRuns }
   });
 
