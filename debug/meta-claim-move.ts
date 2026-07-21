@@ -95,7 +95,7 @@ try {
   } else {
     const { error } = await db
       .from("meta_connections")
-      .insert({ business_id: toBiz, user_token_encrypted: null, ...moved });
+      .insert({ business_id: toBiz, ...moved });
     if (error) throw new Error(error.message);
   }
 } catch (err) {
