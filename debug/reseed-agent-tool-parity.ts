@@ -199,6 +199,46 @@ type WorkflowReport = {
   changed: boolean;
 } | null;
 
+/**
+ * Print one workflow's diff (live or draft — both are patched, so BOTH count
+ * toward clean; a draft-only drift would otherwise go live on the tenant's
+ * next workflow publish while the summary claimed full parity — Bugbot,
+ * PR #793). Returns whether this workflow had any diff.
+ */
+function summarizeWorkflow(project: string, which: "live" | "draft", wf: WorkflowReport): boolean {
+  if (!wf) {
+    console.log(`  project ${project}: NO ${which}Workflow — needs a full redeploy`);
+    return true;
+  }
+  const agentIssues = Object.entries(wf.agents);
+  if (wf.missingAgents.length === 0 && wf.missingTools.length === 0 && agentIssues.length === 0) {
+    return false;
+  }
+  if (wf.missingAgents.length > 0) {
+    console.log(
+      `  project ${project} [${which}]: MISSING AGENTS ${wf.missingAgents.join(", ")} — run scripts/redeploy-deploy-client.ts for this business`
+    );
+  }
+  if (wf.missingTools.length > 0) {
+    console.log(
+      `  project ${project} [${which}]: workflow tool declarations ${APPLY ? "added/converged" : "missing/drifted"}: ${wf.missingTools.join(", ")}`
+    );
+  }
+  for (const [agent, diff] of agentIssues) {
+    if (diff.missing.length > 0) {
+      console.log(
+        `  project ${project} [${which}]: ${agent} ${APPLY ? "gained" : "is missing"}: ${diff.missing.join(", ")}`
+      );
+    }
+    if (diff.extra.length > 0) {
+      console.log(
+        `  project ${project} [${which}]: ${agent} has EXTRA (not in seed, left untouched): ${diff.extra.join(", ")}`
+      );
+    }
+  }
+  return true;
+}
+
 function summarize(businessId: string, output: string): { clean: boolean } {
   let clean = true;
   for (const line of output.split("\n")) {
@@ -210,39 +250,12 @@ function summarize(businessId: string, output: string): { clean: boolean } {
       live: WorkflowReport;
       draft: WorkflowReport;
     };
-    const wf = rec.live;
-    if (!wf) {
-      console.log(`  project ${rec.project}: NO liveWorkflow — needs a full redeploy`);
+    const liveDirty = summarizeWorkflow(rec.project, "live", rec.live);
+    const draftDirty = summarizeWorkflow(rec.project, "draft", rec.draft);
+    if (!liveDirty && !draftDirty) {
+      console.log(`  project ${rec.project}: OK (full parity, live + draft)`);
+    } else {
       clean = false;
-      continue;
-    }
-    const agentIssues = Object.entries(wf.agents);
-    if (wf.missingAgents.length === 0 && wf.missingTools.length === 0 && agentIssues.length === 0) {
-      console.log(`  project ${rec.project}: OK (full parity)`);
-      continue;
-    }
-    clean = false;
-    if (wf.missingAgents.length > 0) {
-      console.log(
-        `  project ${rec.project}: MISSING AGENTS ${wf.missingAgents.join(", ")} — run scripts/redeploy-deploy-client.ts for this business`
-      );
-    }
-    if (wf.missingTools.length > 0) {
-      console.log(
-        `  project ${rec.project}: workflow tool declarations ${APPLY ? "added/converged" : "missing/drifted"}: ${wf.missingTools.join(", ")}`
-      );
-    }
-    for (const [agent, diff] of agentIssues) {
-      if (diff.missing.length > 0) {
-        console.log(
-          `  project ${rec.project}: ${agent} ${APPLY ? "gained" : "is missing"}: ${diff.missing.join(", ")}`
-        );
-      }
-      if (diff.extra.length > 0) {
-        console.log(
-          `  project ${rec.project}: ${agent} has EXTRA (not in seed, left untouched): ${diff.extra.join(", ")}`
-        );
-      }
     }
     if (rec.applied) console.log(`  project ${rec.project}: patch APPLIED`);
   }
