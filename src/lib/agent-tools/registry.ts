@@ -100,6 +100,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         configurable: true
       },
       {
+        toolKey: "edit_aiflow",
+        label: "Edit automations",
+        description:
+          "Change an existing AiFlow from chat (or by texting your coworker) — small tweaks or full edits, applied in place after you confirm the exact changes. Every edit is validated before it's saved.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
         toolKey: "calendar_find_slots",
         label: "Find calendar openings",
         description: "Look up free slots on your connected calendar from chat.",

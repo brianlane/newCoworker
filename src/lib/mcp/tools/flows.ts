@@ -138,7 +138,7 @@ export const getFlowSchemaTool = defineMcpTool({
       trigger_channels: TRIGGER_CHANNELS,
       voice_only_step_types: VOICE_STEP_TYPES,
       notes:
-        "A definition is { version: 1, trigger, steps: [...] }. Voice-channel triggers may only use the voice-only step types, and vice versa. create_flow/update_flow validate the definition and return precise issues when it is invalid. options.agentInvocable: true lets the TEXTING coworker enroll the customer it is currently texting with into this flow (owner opt-in per flow; default off).",
+        "A definition is { version: 1, trigger, steps: [...] }. Voice-channel triggers may only use the voice-only step types, and vice versa. create_flow/update_flow validate the definition and return precise issues when it is invalid. options.agentInvocable: true lets the TEXTING coworker enroll the customer it is currently texting with into this flow (owner opt-in per flow; default off). Templates render {{vars.<field>}} / {{trigger.<field>}}, and any string value holding a full name can be split in place: {{vars.lead_name.first}} is the first word, {{vars.lead_name.last}} is the rest (empty for single-word values).",
       json_schema: jsonSchema
     };
   }

@@ -69,6 +69,7 @@ const ALL_GATES: ActionToolGates = {
   calendar_cancel_appointment: true,
   list_aiflows: true,
   run_aiflow: true,
+  edit_aiflow: true,
   // Owner-over-SMS surface: the dashboard image tool has nowhere to render
   // (same reason the production route pins it false).
   generate_image: false,

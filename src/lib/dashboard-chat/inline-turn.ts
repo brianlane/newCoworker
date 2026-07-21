@@ -235,6 +235,9 @@ const SIDE_EFFECT_TOOLS: ReadonlySet<string> = new Set([
   // A run_aiflow enqueue is committed the moment it lands in the queue —
   // a fallback rerun would enqueue the same automation twice.
   "run_aiflow",
+  // An edit_aiflow update is persisted to the live flow the moment the
+  // core returns ok — a fallback rerun would re-apply (or double-apply) it.
+  "edit_aiflow",
   // A generated image is stored, metered against the AI budget, and burns
   // one of the 3 per-conversation slots the moment the core returns ok —
   // a worker-fallback rerun would bill and consume a slot all over again.
@@ -285,6 +288,10 @@ function sideEffectNote(name: ActionToolName, result: unknown): string {
   if (name === "run_aiflow") {
     const flowName = (r as { flowName?: unknown }).flowName;
     return `Automation run started${typeof flowName === "string" ? ` ("${flowName}")` : ""} — it can be watched at /dashboard/aiflows.`;
+  }
+  if (name === "edit_aiflow") {
+    const flowName = (r as { flowName?: unknown }).flowName;
+    return `Automation${typeof flowName === "string" ? ` "${flowName}"` : ""} was updated as requested — it can be reviewed at /dashboard/aiflows.`;
   }
   if (name === "generate_image") {
     // The markdown IS the deliverable: without it a degraded wrap-up

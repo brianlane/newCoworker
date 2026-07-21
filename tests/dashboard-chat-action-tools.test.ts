@@ -31,6 +31,7 @@ const ALL_ON: ActionToolGates = {
   calendar_cancel_appointment: true,
   list_aiflows: true,
   run_aiflow: true,
+  edit_aiflow: true,
   generate_image: true,
   update_notification_preferences: true
 };
@@ -211,6 +212,7 @@ describe("declarations & naming", () => {
       calendar_cancel_appointment: false,
       list_aiflows: false,
       run_aiflow: false,
+      edit_aiflow: false,
       generate_image: false,
       update_notification_preferences: false
     });
@@ -840,6 +842,88 @@ describe("list_aiflows / run_aiflow", () => {
     expect(
       await executeActionTool(BIZ, { name: "run_aiflow", args: { flow: "Proposal" } }, nullEnqueue)
     ).toMatchObject({ ok: false, message: expect.stringContaining("could not be enqueued") });
+  });
+});
+
+describe("edit_aiflow", () => {
+  const FLOW = {
+    id: "11111111-aaaa-4aaa-8aaa-111111111111",
+    name: "Lead follow-up",
+    enabled: true,
+    definition: {
+      version: 1,
+      trigger: { channel: "manual" },
+      steps: [{ id: "s1", type: "notify_owner", message: "original" }]
+    }
+  };
+  const EDITED = {
+    version: 1,
+    trigger: { channel: "manual" },
+    steps: [{ id: "s1", type: "notify_owner", message: "updated" }]
+  };
+
+  it("delegates to the shared core: compile against the current definition, then persist in place", async () => {
+    const compileFlowEdit = vi.fn(async () => ({
+      ok: true as const,
+      definition: EDITED as never,
+      warnings: []
+    }));
+    const persistFlowUpdate = vi.fn(async () => ({ ...FLOW, definition: EDITED }));
+    const deps = happyDeps({
+      listFlows: vi.fn(async () => [FLOW]) as never,
+      compileFlowEdit: compileFlowEdit as never,
+      persistFlowUpdate: persistFlowUpdate as never
+    });
+    const res = await executeActionTool(
+      BIZ,
+      {
+        name: "edit_aiflow",
+        args: { flow: "Lead follow-up", instructions: "say 'updated' instead" }
+      },
+      deps
+    );
+    expect(res).toMatchObject({ ok: true, flowId: FLOW.id, flowName: "Lead follow-up" });
+    expect(compileFlowEdit).toHaveBeenCalledWith({
+      businessId: BIZ,
+      flowName: "Lead follow-up",
+      currentDefinition: FLOW.definition,
+      instructions: "say 'updated' instead"
+    });
+    expect(persistFlowUpdate).toHaveBeenCalledWith({
+      businessId: BIZ,
+      id: FLOW.id,
+      definition: EDITED
+    });
+  });
+
+  it("rejects invalid args before touching the core, and passes compile refusals through", async () => {
+    const compileFlowEdit = vi.fn();
+    const deps = happyDeps({
+      listFlows: vi.fn(async () => [FLOW]) as never,
+      compileFlowEdit: compileFlowEdit as never
+    });
+    expect(
+      await executeActionTool(BIZ, { name: "edit_aiflow", args: { flow: "Lead follow-up" } }, deps)
+    ).toMatchObject({ ok: false, message: expect.stringContaining("invalid_args") });
+    expect(compileFlowEdit).not.toHaveBeenCalled();
+
+    const refusing = happyDeps({
+      listFlows: vi.fn(async () => [FLOW]) as never,
+      compileFlowEdit: vi.fn(async () => ({
+        ok: false as const,
+        error: "invalid" as const,
+        message: "…the automation was NOT changed…",
+        issues: ["bad"]
+      })) as never,
+      persistFlowUpdate: vi.fn() as never
+    });
+    const res = await executeActionTool(
+      BIZ,
+      { name: "edit_aiflow", args: { flow: "Lead follow-up", instructions: "break it" } },
+      refusing
+    );
+    expect(res).toMatchObject({ ok: false, message: expect.stringContaining("NOT changed") });
+    expect(refusing.persistFlowUpdate).not.toHaveBeenCalled();
   });
 });
 

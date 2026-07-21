@@ -4,6 +4,7 @@ import {
   buildAvailableDocumentsBlock,
   buildFlowAdaptUserText,
   buildFlowCompileUserText,
+  buildFlowEditUserText,
   buildFlowRepairUserText,
   extractFlowJson,
   humanizeCompileIssues
@@ -132,6 +133,41 @@ describe("buildFlowAdaptUserText", () => {
   it("treats whitespace-only instructions as empty", () => {
     const text = buildFlowAdaptUserText({ sourceDefinition: {}, instructions: "   " });
     expect(text).not.toContain("Additional instructions:");
+  });
+});
+
+describe("buildFlowEditUserText", () => {
+  it("carries the current name/definition, the change request, and the verbatim-copy contract", () => {
+    const text = buildFlowEditUserText({
+      currentName: "Lead follow-up",
+      currentDefinitionJson: '{"version":1}',
+      instructions: "  use their first name in the greeting  ",
+      documents: [{ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", title: "Price sheet", summary: "Prices." }],
+      agents: [{ id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", name: "Summarizer", instructionsSummary: "Sum." }]
+    });
+    expect(text).toContain('named "Lead follow-up"');
+    expect(text).toContain('{"version":1}');
+    expect(text).toContain("Requested changes:\nuse their first name in the greeting");
+    expect(text).toContain("VERBATIM");
+    expect(text).toContain("aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+    expect(text).toContain("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
+  });
+
+  it("renders the none-on-file sentinels when no documents/agents are supplied", () => {
+    const text = buildFlowEditUserText({
+      currentName: "F",
+      currentDefinitionJson: "{}",
+      instructions: "x"
+    });
+    expect(text).toContain("AVAILABLE DOCUMENTS: (none on file");
+    expect(text).toContain("AVAILABLE AGENTS: (none saved");
+  });
+});
+
+describe("FLOW_COMPILE_SYSTEM_PROMPT — name parts", () => {
+  it("documents the .first/.last suffix vocabulary", () => {
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("{{vars.lead_name.first}}");
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("{{vars.lead_name.last}}");
   });
 });
 

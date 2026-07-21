@@ -43,6 +43,10 @@ const DASHBOARD_NAME_MAP: Record<string, string[] | null> = {
   // Worker-intercepted memory capture rides its own Rowboat tool name.
   memory_capture: ["owner_append_business_memory"],
   run_aiflow: ["dashboard_list_aiflows", "dashboard_run_aiflow"],
+  // Inline-only by design (same posture as create_aiflow, which the seed
+  // never carries): edits run the platform compile pipeline, which the
+  // Rowboat worker fallback cannot host.
+  edit_aiflow: null,
   // INLINE-ONLY by design: the dashboard settings-mutation tool is declared
   // only where the authed caller's manage_settings role is verified per turn
   // (the inline Gemini path). The Rowboat OwnerCoworker fallback carries no

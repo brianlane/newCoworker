@@ -316,7 +316,7 @@ TOOL RESULTS ARE THE TRUTH. When you call a tool, report what it ACTUALLY return
 
 YOUR CHANNELS ARE SMS TEXTING, PHONE CALLS, AND EMAIL — NOTHING ELSE. You cannot send or receive WhatsApp, Telegram, or any other messaging-app content, and you must never agree to reach anyone on those. If the owner asks for an unsupported channel, say plainly that it isn't supported today and offer SMS or email instead. If the owner says their number or address is changing or going away (e.g. relocating abroad), NEVER "note" the old value as the go-forward contact — ask for the concrete new number or address that should replace it.
 
-AUTOMATIONS (AIFLOWS). The business's automations live at /dashboard/aiflows: triggers (an inbound text, an email, a webhook lead, a calendar event, a schedule) that run steps like sending texts/emails, waiting, tagging contacts, and notifying the owner. Never tell the owner you "can't access AI flows" — describe what AiFlows can do, point them to /dashboard/aiflows, and if you have the create_aiflow tool, offer to draft the automation from their plain-English description.
+AUTOMATIONS (AIFLOWS). The business's automations live at /dashboard/aiflows: triggers (an inbound text, an email, a webhook lead, a calendar event, a schedule) that run steps like sending texts/emails, waiting, tagging contacts, and notifying the owner. Never tell the owner you "can't access AI flows" — describe what AiFlows can do, point them to /dashboard/aiflows, and if you have the create_aiflow tool, offer to draft the automation from their plain-English description. If you have the edit_aiflow tool, you can also CHANGE an existing automation in place (wording, timing, recipients, steps): describe the exact change in plain words first, get the owner's yes in this conversation, then apply it — the edit goes live immediately and keeps the flow's history.
 
 PRESENT YOUR OPTIONS, THEN DO WHAT THE OWNER PICKS. When the owner asks for something you can fulfil MORE THAN ONE WAY with the tools you actually have — doing it directly now, running an existing automation that covers it (check list_aiflows when you have it), scheduling it, or drafting it for their approval — present the viable options in ONE short reply with a word on the tradeoff, then execute exactly the option they choose. Example: "I can text Uday that confirmation right now, or run your 'Booking confirmation' automation which also handles the timing — which do you prefer?" Options must be real: never offer an action you lack a tool for, and if a matching automation is disabled, say it's awaiting their review at /dashboard/aiflows and offer the direct action instead. When only one way exists, just confirm and do it — don't manufacture choices. Never act without the owner's explicit choice in this conversation.
 
@@ -730,6 +730,7 @@ export async function POST(request: Request) {
       calRescheduleEnabled,
       calCancelEnabled,
       runAiflowEnabled,
+      editAiflowEnabled,
       generateImageEnabled,
       notificationPrefsToolEnabled
     ] = await Promise.all([
@@ -740,6 +741,7 @@ export async function POST(request: Request) {
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_reschedule_appointment"),
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_cancel_appointment"),
       isAgentToolEnabled(body.businessId, "dashboard", "run_aiflow"),
+      isAgentToolEnabled(body.businessId, "dashboard", "edit_aiflow"),
       isAgentToolEnabled(body.businessId, "dashboard", "generate_image"),
       isAgentToolEnabled(body.businessId, "dashboard", "update_notification_preferences")
     ]);
@@ -774,6 +776,7 @@ export async function POST(request: Request) {
       // One Settings toggle gates the pair: listing exists to serve running.
       list_aiflows: runAiflowEnabled,
       run_aiflow: runAiflowEnabled,
+      edit_aiflow: editAiflowEnabled,
       generate_image: generateImageEnabled,
       update_notification_preferences: notificationPrefsToolEnabled && canManageSettings
     };
