@@ -39,6 +39,7 @@ import {
 import { buildCustomerPreambleForEdge, type EdgeCustomerMemoryRow } from "../_shared/customer_memory_preamble.ts";
 import {
   REASONING_PROMPT_INSTRUCTION,
+  shouldEscalateToHuman,
   splitReplyReasoning
 } from "../_shared/reply_reasoning.ts";
 import {
@@ -1403,6 +1404,12 @@ serve(async (req: Request) => {
         // Persist the decision record best-effort: a failure here (or a model
         // that ignored the trailer instruction) never touches the reply path.
         if (!isStaff && split.reasoning) {
+          // The EFFECTIVE decision: the model's handoff flag OR the
+          // deterministic human-request intent (Truly 2026-07-20: six
+          // "speak to a representative" turns all came back handoff:false —
+          // the model judged its schedule-a-call offer to have handled the
+          // request, and the escalation never fired).
+          const escalate = shouldEscalateToHuman(split.reasoning);
           const { error: reasoningErr } = await supabase.from("ai_reply_reasoning").insert({
             business_id: job.business_id,
             contact_e164: fromE164,
@@ -1411,17 +1418,17 @@ serve(async (req: Request) => {
             reply_preview: reply.slice(0, 300),
             intent: split.reasoning.intent,
             rationale: split.reasoning.rationale,
-            escalated: split.reasoning.escalated,
+            escalated: escalate,
             model: turnPlan.stateless ? "local" : "gemini"
           });
           if (reasoningErr) console.error("ai_reply_reasoning insert", reasoningErr);
-          // Needs-human escalation: the model flagged that a person must take
-          // this over (handoff semantics exclude routine bookings). Tags the
-          // contact "Needs Human", fires the tag hooks, and pages the owner —
+          // Needs-human escalation: a person must take this over (handoff
+          // semantics exclude routine bookings). Tags the contact
+          // "Needs Human", fires the tag hooks, and pages the owner —
           // once per open escalation (the tag is the open/closed state).
           // Best-effort: never touches the reply that already carries the
           // model's own "someone will follow up" text.
-          if (split.reasoning.escalated) {
+          if (escalate) {
             await escalateToHuman(supabase, {
               businessId: job.business_id,
               contactE164: fromE164,
