@@ -12,6 +12,7 @@ import {
   Gauge,
   Activity,
   MessageSquare,
+  Newspaper,
   Sparkles
 } from "lucide-react";
 
@@ -19,6 +20,7 @@ const adminNavItems = [
   { labelKey: "dashboard", href: "/admin/dashboard", icon: LayoutDashboard },
   { labelKey: "allClients", href: "/admin/clients", icon: Users },
   { labelKey: "webchat", href: "/admin/webchat", icon: MessageSquare },
+  { labelKey: "blog", href: "/admin/blog", icon: Newspaper },
   { labelKey: "revenue", href: "/admin/revenue", icon: DollarSign },
   { labelKey: "costs", href: "/admin/costs", icon: Receipt },
   { labelKey: "usage", href: "/admin/usage", icon: Gauge },

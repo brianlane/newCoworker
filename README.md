@@ -602,6 +602,50 @@ through the same permission matrix as the dashboard** (`src/lib/authz/policy.ts`
 - Owner-facing setup lives on `/dashboard/integrations` → "Claude connector"
   (paste `https://<app>/api/mcp` into Claude → Settings → Connectors).
 
+## Platform blog (newcoworker.com/blog)
+
+DB-backed marketing blog: public `/blog` + `/es/blog` (category filters,
+JSON-LD Article schema, RSS at `/blog/feed.xml`, sitemap inclusion, hreflang
+when a post carries a Spanish translation), admin CMS at `/admin/blog`
+(markdown editor with preview, featured-image upload to the public
+`blog-images` bucket, AI assist: draft-from-topic / translate-to-Spanish /
+generate-16:9-image via the platform Gemini key), scheduled publishing, and
+subscriber email. Tables `blog_posts` / `blog_settings` / `blog_subscribers`
+are RLS-on/no-policies (service-role only); core logic lives in
+[src/lib/blog/](src/lib/blog/) under the coverage gate.
+
+- **Publish pipeline** (`blog-publish-sweep` Edge fn, pg_cron every 5 min →
+  `/api/internal/blog-publish-sweep`): due `scheduled` posts flip to
+  `published` (guarded transition), then fan out — every active
+  `blog_subscribers` row gets a locale-aware Resend email with an RFC 8058
+  one-click unsubscribe (`/api/blog/unsubscribe?token=…`), and the post
+  cross-posts to Instagram through the existing Marketing composer
+  (`social_posts`) of the business designated in `blog_settings.
+  instagram_business_id` (normally the HQ tenant; empty = off). **The
+  Instagram caption is the post's excerpt** — no link appended (links aren't
+  clickable in IG captions); the excerpt field in the editor is labeled
+  accordingly. `instagram_publish_immediately` off (default) = the
+  cross-post lands as a composer DRAFT for human review; on = it schedules
+  immediately and the social-post-sweep publishes it.
+- **Weekly PR digest** (`blog-weekly-digest` Edge fn, pg_cron Mondays 15:00
+  UTC → `/api/internal/blog-weekly-digest`): when MORE THAN 10 PRs merged
+  into main over the trailing 7 days, Gemini writes a plain-English,
+  under-700-word feature roundup (12-year-old reading level, enforced in
+  code with one retry then a section-boundary truncation) and creates the
+  post `scheduled` for the same morning (category `platform-updates`,
+  idempotent per ISO week via `digest_week`). **Features only, never bug
+  fixes**: label PRs at review time — `blog: feature` includes, `blog: skip`
+  excludes; Dependabot / docs / test / chore / bump / one-shot titles are
+  dropped outright, and the unlabeled remainder is classified by Gemini
+  (classifier failure conservatively drops them). Admin toggles on
+  `/admin/blog`: digest on/off, create-as-draft instead of scheduling, and
+  include/skip the AI featured image.
+- **Env**: `GITHUB_DIGEST_REPO` (`owner/name`) + `GITHUB_DIGEST_TOKEN`
+  (repo-read PAT) for the digest's PR listing; `BLOG_DIGEST_TEXT_MODEL` /
+  `BLOG_DIGEST_IMAGE_MODEL` override the Gemini models (defaults
+  `gemini-3.5-flash` / `gemini-3.1-flash-lite-image`); `RESEND_API_KEY`
+  gates subscriber email (unset = publish still works, email skipped).
+
 ## AiFlow webhook trigger (Meta Lead Ads etc.)
 
 AiFlows can start from an inbound webhook: `POST /api/public/v1/flow-events`
@@ -859,6 +903,12 @@ English URLs and metadata stay canonical. Metadata is translated via
 ## All work and code modifications must follow this flow
 
 For any changes use a worktree and never stop to ask for permission to continue always continue with your work by using this flow: Branch -> PR -> babysit CI + Bugbot to green -> merge (per PR merge policy). Then after the successful merge do the post-merge steps below, return back to main -> **clean up the worktree** (mandatory, see below).
+
+**Label every PR for the weekly blog digest** while babysitting it:
+`blog: feature` if customers should read about it in the weekly "what
+shipped" post, `blog: skip` for bug fixes / internal / ops work (see
+[Platform blog](#platform-blog-newcoworkercomblog) — unlabeled PRs fall back
+to an AI classifier, but the label is authoritative).
 
 ### Post-merge: what CI does vs what you still do
 
