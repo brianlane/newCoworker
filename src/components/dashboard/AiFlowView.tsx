@@ -950,6 +950,12 @@ export function AiFlowView({
           Each contact goes through this flow at most once (re-entry is off).
         </p>
       )}
+      {definition.options?.agentInvocable && (
+        <p className="text-xs text-parchment/50">
+          Your texting coworker may enroll the customer it&apos;s texting with into this
+          flow when the conversation calls for it.
+        </p>
+      )}
     </div>
   );
 }

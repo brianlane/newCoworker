@@ -372,6 +372,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
           "Text a customer an expiring link to a client-facing document (price sheet, policy, contract) when they ask for it.",
         defaultEnabled: true,
         configurable: true
+      },
+      {
+        toolKey: "start_aiflow_for_contact",
+        label: "Start automations for a texter",
+        description:
+          "Enroll the customer it's texting with into an AiFlow you've marked \"texting coworker may enroll customers\" (per-flow checkbox; nothing else is visible to it). Never re-enrolls someone already in the flow.",
+        defaultEnabled: true,
+        configurable: true
       }
     ]
   },

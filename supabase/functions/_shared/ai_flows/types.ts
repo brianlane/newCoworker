@@ -1269,6 +1269,15 @@ export type AiFlowOptions = {
    * errors. Default off.
    */
   dedupeLeadRuns?: boolean;
+  /**
+   * When true, the TEXTING coworker may enroll the customer it is currently
+   * texting with into this flow (the start_aiflow_for_contact tool). This is
+   * the per-flow owner opt-in behind that tool's gate — the customer-facing
+   * model can never see or start a flow without it. Default off: nothing
+   * changes for existing flows, and the SMS surface stays barred from every
+   * other automation.
+   */
+  agentInvocable?: boolean;
 };
 
 /**

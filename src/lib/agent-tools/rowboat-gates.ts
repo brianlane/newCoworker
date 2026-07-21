@@ -125,10 +125,17 @@ export const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }>
   // Run-automations parity with the inline dashboard path (both names share
   // the single `run_aiflow` Settings toggle, mirroring the inline gating).
   // Dashboard-only by design: customers must never enumerate or start the
-  // owner's automations, so no sms/webchat twins exist and the bare names
+  // owner's automations, so no webchat twins exist and the bare names
   // fail closed.
   dashboard_list_aiflows: { agentKey: "dashboard", toolKey: "run_aiflow" },
   dashboard_run_aiflow: { agentKey: "dashboard", toolKey: "run_aiflow" },
+  // The ONE narrow exception to the rule above, double-gated: the texting
+  // coworker may enroll the CURRENT texter into a flow the owner explicitly
+  // flagged `options.agentInvocable` (per-flow opt-in, default off) — it can
+  // never enumerate, start, or even see any other automation, and a live
+  // enrollment is never restarted (loop guard in the core). Deliberately NO
+  // webchat twin: the anonymous surface must not start automations at all.
+  start_aiflow_for_contact: { agentKey: "sms", toolKey: "start_aiflow_for_contact" },
   ...Object.fromEntries(
     Object.entries(CUSTOMER_TOOL_SURFACES).map(([name, surface]) => [
       name,

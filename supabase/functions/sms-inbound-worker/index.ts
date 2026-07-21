@@ -234,6 +234,52 @@ async function fetchContactBookingLine(
   }
 }
 
+// --- Agent-invocable AiFlows (the start_aiflow_for_contact discovery block) --
+// The customer-facing model may enroll the CURRENT texter into flows the
+// owner explicitly flagged `options.agentInvocable` — and it can only target
+// what it can see, so this block IS the visibility gate's other half: tenants
+// with no flagged flows get a byte-identical preamble and the tool is never
+// mentioned. Cap keeps a flag-happy tenant from bloating every prompt.
+const AGENT_INVOCABLE_FLOWS_MAX = 10;
+
+/** "Automations you may start" preamble block, or null when none are flagged. */
+async function agentInvocableFlowsBlock(
+  supabase: SupabaseClient,
+  businessId: string
+): Promise<string | null> {
+  try {
+    const { data, error } = await supabase
+      .from("ai_flows")
+      .select("name, definition")
+      .eq("business_id", businessId)
+      .eq("enabled", true)
+      .filter("definition->options->>agentInvocable", "eq", "true")
+      .limit(AGENT_INVOCABLE_FLOWS_MAX);
+    if (error) throw new Error(error.message);
+    const rows = (data ?? []) as Array<{ name?: string; definition?: unknown }>;
+    const lines = rows
+      .map((r) => (typeof r.name === "string" ? r.name.trim() : ""))
+      .filter((n) => n.length > 0)
+      .map((n) => `- "${n}"`);
+    if (lines.length === 0) return null;
+    return [
+      "Automations you may start: when THIS texter's request clearly matches one of " +
+        "the automations below, call the start_aiflow_for_contact tool with the EXACT " +
+        "name listed and the current texter phone — it enrolls them in the owner's " +
+        "follow-up sequence so nobody has to remember to chase them. Rules: only these " +
+        "automations exist for you (never invent names); never mention automation or " +
+        "tool names to the texter; if the tool refuses (e.g. they are already " +
+        "enrolled), just answer their message normally.",
+      ...lines
+    ].join("\n");
+  } catch (e) {
+    // Discovery is best-effort: a lookup hiccup means no block this turn —
+    // the reply itself must never wait on or fail from it.
+    console.error("agent-invocable flows lookup failed", e);
+    return null;
+  }
+}
+
 // --- SMS chat spend cap (shared fuse with owner-dashboard chat) -------------
 // Inbound SMS now runs on Gemini (the `Coworker` agent was repointed off local
 // Qwen). Gemini bills per token, so SMS shares the SAME monthly fuse as owner
@@ -1202,10 +1248,18 @@ serve(async (req: Request) => {
       // Skipped entirely on cached re-sends (Telnyx retries) — no Rowboat
       // turn runs there, so the preamble is never used and the platform
       // round-trip would be pure added latency.
-      const bookingLine = (job.rowboat_reply_cached ?? "").trim()
+      const cachedResend = (job.rowboat_reply_cached ?? "").trim().length > 0;
+      const bookingLine = cachedResend
         ? null
         : await fetchContactBookingLine(job.business_id, fromE164);
       const bookingStatus = bookingLine ? `Booking status: ${bookingLine}` : null;
+      // Agent-invocable flows discovery ("Automations you may start") — the
+      // visibility half of the start_aiflow_for_contact gate. Null (and a
+      // byte-identical preamble) for every tenant with no flagged flows;
+      // skipped on cached re-sends for the same reason as the booking line.
+      const agentFlowsBlock = cachedResend
+        ? null
+        : await agentInvocableFlowsBlock(supabase, job.business_id);
       // AiFlow context bridge: when an automation recently handled this
       // texter (asked them a question, collected their details), the model
       // must continue THAT conversation, not restart intake. Production
@@ -1257,7 +1311,7 @@ serve(async (req: Request) => {
       const dateAndPhoneLines = [identityLine, groundedActionsLine, conversationQualityLine, dateLine, phoneLine, languageLine]
         .filter(Boolean)
         .join("\n\n");
-      customerPreamble = [dateAndPhoneLines, memoryPreamble, bookingStatus, contactTimeline, flowContext]
+      customerPreamble = [dateAndPhoneLines, memoryPreamble, bookingStatus, agentFlowsBlock, contactTimeline, flowContext]
         .filter((part): part is string => Boolean(part))
         .join("\n\n");
       // Decision-engine capture (PRD Ch. 6): ask the model to end its reply

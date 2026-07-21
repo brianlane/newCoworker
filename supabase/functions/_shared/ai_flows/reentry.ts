@@ -169,6 +169,67 @@ export async function hasPriorRunForLead(
   }
 }
 
+/**
+ * Run statuses that count as a LIVE enrollment (mirror of the Node side's
+ * CANCELABLE_RUN_STATUSES): the person is currently inside the flow.
+ */
+const ACTIVE_RUN_STATUSES = [
+  "queued",
+  "running",
+  "awaiting_approval",
+  "awaiting_agent",
+  "awaiting_reply",
+  "awaiting_call"
+] as const;
+
+/**
+ * Does this person currently have a LIVE (non-terminal, non-test) run of
+ * this flow, under any of the given identity keys (contact-expanded)?
+ * Unlike hasPriorRunForLead — which counts finished runs too and backs the
+ * allowReentry option — this is the loop guard for AGENT-initiated
+ * enrollments (start_aiflow_for_contact): a flow-sent text must never lead
+ * the model to re-enroll the same contact mid-flow, while a contact whose
+ * earlier run FINISHED may legitimately be enrolled again. Fails OPEN
+ * (false) on a lookup error, same rationale as the other gates here.
+ */
+export async function hasActiveRunForLead(
+  supabase: AnyClient,
+  businessId: string,
+  flowId: string,
+  leadKeys: string | Array<string | null | undefined>
+): Promise<boolean> {
+  const keys = normalizeKeys(leadKeys);
+  if (keys.length === 0) return false;
+  try {
+    const allKeys = await expandIdentityKeys(supabase, businessId, keys);
+    const identityFilter = allKeys
+      .flatMap((key) => IDENTITY_PATHS.map((path) => `${path}.eq.${key}`))
+      .join(",");
+    const { data, error } = await supabase
+      .from("ai_flow_runs")
+      .select("id, status, context")
+      .eq("flow_id", flowId)
+      .in("status", [...ACTIVE_RUN_STATUSES])
+      .or(identityFilter)
+      // Chained .or groups AND together (same trick as hasPriorRunForLead):
+      // (identity match) AND (not a test run).
+      .or("context->trigger->>test_mode.is.null,context->trigger->>test_mode.neq.true")
+      .limit(PRIOR_RUN_SCAN);
+    if (error) {
+      console.error("reentry: active-run lookup", error);
+      return false;
+    }
+    const rows = (data ?? []) as Array<{ context?: Record<string, unknown> | null }>;
+    // Defense in depth: the query already excluded test runs.
+    return rows.some(
+      (r) => !isTestModeTrigger(r.context?.trigger as Record<string, unknown> | undefined)
+    );
+  } catch (e) {
+    console.error("hasActiveRunForLead", e);
+    return false;
+  }
+}
+
 /** True when this definition opts in to post-extraction lead dedupe. */
 export function flowDedupesLeadRuns(def: unknown): boolean {
   const options = (def as { options?: { dedupeLeadRuns?: unknown } } | null | undefined)?.options;

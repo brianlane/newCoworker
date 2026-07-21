@@ -40,6 +40,10 @@ import {
   runAiflowToolArgsSchema
 } from "@/lib/ai-flows/manual-run-tool";
 import {
+  startAiFlowForContactTool,
+  startAiflowForContactArgsSchema
+} from "@/lib/ai-flows/agent-start-flow";
+import {
   cancelCalendarAppointment,
   rescheduleCalendarAppointment
 } from "@/lib/calendar-tools/reschedule";
@@ -352,6 +356,16 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
         return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
       }
       return await runAiFlowTool(businessId, parsed.data);
+    }
+    // The texting coworker's ONLY automation tool (bare sms name — see the
+    // TOOL_GATES comment): enrolls the CURRENT texter into a flow the owner
+    // flagged options.agentInvocable. The core refuses everything else.
+    case "start_aiflow_for_contact": {
+      const parsed = startAiflowForContactArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      return await startAiFlowForContactTool(businessId, parsed.data);
     }
     case "document_share": {
       const parsed = documentShareArgsSchema.safeParse(args);
