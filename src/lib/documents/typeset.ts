@@ -28,6 +28,7 @@ import {
   TextRun,
   WidthType
 } from "docx";
+import sanitizeHtmlLib from "sanitize-html";
 import { DOCX_MIME_TYPE } from "./docx";
 
 export const PDF_MIME_TYPE = "application/pdf";
@@ -44,9 +45,13 @@ export type TypesetBlock =
   | { kind: "code"; text: string }
   | { kind: "hr" };
 
-/** Strip tags from an inline/block HTML fragment — keep the visible text. */
+/**
+ * Strip tags from an inline/block HTML fragment — keep the visible text.
+ * Parsed with sanitize-html (never regex) so malformed markup can't leak
+ * tag fragments into the typeset text.
+ */
 function htmlToText(html: string): string {
-  return html.replace(/<[^>]*>/g, "").trim();
+  return sanitizeHtmlLib(html, { allowedTags: [], allowedAttributes: {} }).trim();
 }
 
 /** Flatten marked inline tokens into styled runs. */
