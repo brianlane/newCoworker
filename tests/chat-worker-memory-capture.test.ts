@@ -243,6 +243,13 @@ describe("buildExtractionRequestBodyOpenAI", () => {
     expect(body.messages[1].content).toContain("Saved Dave to memory.");
     expect(body.messages[1].content).toContain("Never discuss budget");
   });
+
+  it("constrains Gemini 3 thinking via reasoning_effort; 2.5/local bodies stay byte-identical", () => {
+    const g3 = buildExtractionRequestBodyOpenAI("gemini-3.5-flash-lite", "never discuss budget");
+    expect(g3.reasoning_effort).toBe("low");
+    const g25 = buildExtractionRequestBodyOpenAI("gemini-2.5-flash-lite", "never discuss budget");
+    expect("reasoning_effort" in g25).toBe(false);
+  });
 });
 
 describe("fitBulletsToPayload", () => {

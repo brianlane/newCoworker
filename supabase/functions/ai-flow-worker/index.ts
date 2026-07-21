@@ -3929,7 +3929,17 @@ async function geminiJsonForPrompt(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0, responseMimeType: "application/json" }
+      generationConfig: {
+        temperature: 0,
+        responseMimeType: "application/json",
+        // Structured extraction/classify needs no chain-of-thought, and
+        // Gemini 3 thinking tokens BILL as output — "minimal" keeps the
+        // spend on the answer (same posture as knowledge lookups). Gated on
+        // the family: Gemini 2.5 rejects thinkingLevel.
+        ...(/^gemini-3/i.test(GEMINI_MODEL)
+          ? { thinkingConfig: { thinkingLevel: "minimal" } }
+          : {})
+      }
     })
   });
   if (!res.ok) throw new Error(`gemini ${res.status}`);

@@ -455,6 +455,12 @@ export async function runMessengerGeminiTurn(
         // instead of requesting a call nobody will execute.
         tools: isFinalRound ? [] : WEBCHAT_TOOL_DECLARATIONS,
         temperature: 0.3,
+        // Gemini 3 defaults to dynamic thinking that bills as output AND
+        // counts against the (default 1500) output cap — unconstrained it
+        // can eat the whole budget and surface as messenger_engine_no_reply.
+        // "low" keeps a little reasoning for tool choice at DM latency.
+        // Gated on the family: Gemini 2.5 rejects thinkingLevel.
+        ...(/^gemini-3/i.test(model) ? { thinkingLevel: "low" as const } : {}),
         signal: abort.signal
       });
       if (step.usage) {
