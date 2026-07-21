@@ -59,6 +59,9 @@ export const VOICE_FLOW_CONTEXT_MAX_CHARS = 900;
  */
 export const VOICE_RECENT_INTERACTIONS_MAX_CHARS = 1400;
 
+/** Cap on the booking-status line — a single sentence from the platform. */
+export const VOICE_BOOKING_STATUS_MAX_CHARS = 400;
+
 export function systemInstructionForBusiness(
   businessName: string,
   hasTransfer: boolean,
@@ -69,7 +72,8 @@ export function systemInstructionForBusiness(
   callerIdentity?: CallerIdentity,
   hasEndCall = false,
   flowContextNote?: string,
-  recentInteractionsNote?: string
+  recentInteractionsNote?: string,
+  bookingStatusNote?: string
 ): string {
   // Identity: present as a member of the team, never as software. The owner
   // wants callers to hear "the assistant", not "the AI assistant". Shared by
@@ -236,6 +240,22 @@ export function systemInstructionForBusiness(
       const clipped =
         trimmed.length > VOICE_RECENT_INTERACTIONS_MAX_CHARS
           ? trimmed.slice(0, VOICE_RECENT_INTERACTIONS_MAX_CHARS - 1) + "…"
+          : trimmed;
+      base.push("\n" + clipped);
+    }
+  }
+
+  // Booking-status line (booking-context.ts, voice twin of the SMS worker's
+  // preamble line): the caller's live Calendly state — upcoming booking,
+  // reschedule, or a recent cancel — so "did my reschedule go through?"
+  // gets an informed answer instead of a confident denial. After the
+  // timeline: it is the single freshest fact. Customer persona only.
+  if (!isStaff && bookingStatusNote) {
+    const trimmed = bookingStatusNote.trim();
+    if (trimmed.length > 0) {
+      const clipped =
+        trimmed.length > VOICE_BOOKING_STATUS_MAX_CHARS
+          ? trimmed.slice(0, VOICE_BOOKING_STATUS_MAX_CHARS - 1) + "…"
           : trimmed;
       base.push("\n" + clipped);
     }

@@ -50,6 +50,10 @@ import {
 } from "@/lib/webchat/engine-tools";
 import { captureMessengerLead } from "@/lib/messenger/lead-capture";
 import {
+  contactBookingContextForPhone,
+  type ContactBookingContext
+} from "@/lib/ai-flows/contact-booking-context";
+import {
   setMessengerConversationLanguage,
   type MessengerConversationRow,
   type MessengerMessageRow
@@ -99,6 +103,31 @@ const PLATFORM_LABELS: Record<MessengerConversationRow["platform"], string> = {
   instagram: "Instagram Direct Messages",
   whatsapp: "WhatsApp"
 };
+
+/** Booking-context lookup budget — a Calendly hiccup must not stall a DM. */
+export const MESSENGER_BOOKING_CONTEXT_TIMEOUT_MS = 5_000;
+
+/**
+ * The phone the booking-status lookup may trust for this conversation:
+ * WhatsApp's `psid` IS the Meta-verified `wa_id` (digits of the sender's
+ * real number — stronger than anything self-asserted, so it wins even when
+ * a contact_phone was captured); Messenger/Instagram fall back to the
+ * lead-captured contact_phone. Null = no usable identity, no lookup.
+ */
+export function messengerBookingPhone(
+  conversation: Pick<MessengerConversationRow, "platform" | "psid" | "contact_phone">
+): string | null {
+  if (conversation.platform === "whatsapp") {
+    const digits = conversation.psid.replace(/\D/g, "");
+    // wa_ids are full international numbers (country code included).
+    if (digits.length >= 7 && digits.length <= 15 && digits === conversation.psid.trim()) {
+      return `+${digits}`;
+    }
+    return null;
+  }
+  const captured = (conversation.contact_phone ?? "").trim();
+  return captured.length > 0 ? captured : null;
+}
 
 /**
  * The per-turn system block: channel context + the conversation ref the
@@ -189,6 +218,13 @@ export type MessengerGeminiTurnDeps = {
     businessId: string,
     customerE164: string
   ) => Promise<ContactLanguageRow>;
+  /** Injectable booking-context lookup (tests). */
+  fetchBookingContext?: (
+    businessId: string,
+    phoneE164: string
+  ) => Promise<ContactBookingContext>;
+  /** Booking lookup budget override (tests). */
+  bookingContextTimeoutMs?: number;
 };
 
 export type MessengerGeminiTurnResult = {
@@ -240,6 +276,9 @@ export async function runMessengerGeminiTurn(
   const persistConversationLanguage =
     deps.persistConversationLanguage ?? setMessengerConversationLanguage;
   const fetchContactLanguage = deps.fetchContactLanguage ?? getContactLanguage;
+  const fetchBookingContext = deps.fetchBookingContext ?? contactBookingContextForPhone;
+  const bookingTimeoutMs =
+    deps.bookingContextTimeoutMs ?? MESSENGER_BOOKING_CONTEXT_TIMEOUT_MS;
   /* c8 ignore stop */
 
   const apiKey = env.GOOGLE_API_KEY ?? env.GEMINI_API_KEY ?? "";
@@ -325,10 +364,33 @@ export async function runMessengerGeminiTurn(
     };
   }
 
+  // Booking-status line (parity with the SMS worker's preamble): the
+  // customer's Calendly state so "was my reschedule received?" gets an
+  // informed answer instead of a confident denial. VERIFIED phone only —
+  // WhatsApp's wa_id, or the captured contact_phone on Messenger/IG
+  // (messengerBookingPhone). Bounded and fail-open: a hung or failing
+  // Calendly lookup answers null and the reply proceeds without the line.
+  const bookingPhone = messengerBookingPhone(args.conversation);
+  const bookingStatusPromise: Promise<string | null> = bookingPhone
+    ? Promise.race([
+        fetchBookingContext(args.businessId, bookingPhone).then((ctx) => {
+          const line = ctx.line?.trim();
+          return line ? `Booking status: ${line}` : null;
+        }),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), bookingTimeoutMs))
+      ]).catch((err) => {
+        logger.warn("messenger engine: booking context failed; continuing without", {
+          businessId: args.businessId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+        return null;
+      })
+    : Promise.resolve(null);
+
   // Grounding: agent instructions exactly as the vault sync seeds them,
   // then the channel preamble. Documents are best-effort (webchat
   // rationale: a digest failure must not kill the turn).
-  const [config, documents] = await Promise.all([
+  const [config, documents, bookingStatus] = await Promise.all([
     fetchConfig(args.businessId),
     fetchDocuments(args.businessId).catch((err) => {
       logger.warn("messenger engine: document digest failed; continuing without", {
@@ -336,7 +398,8 @@ export async function runMessengerGeminiTurn(
         error: err instanceof Error ? err.message : String(err)
       });
       return [] as BusinessDocumentRow[];
-    })
+    }),
+    bookingStatusPromise
   ]);
   const documentsMd = buildDocumentsDigestMd(documents, now());
   const instructions = buildAgentInstructions(
@@ -357,7 +420,8 @@ export async function runMessengerGeminiTurn(
       defaultLang: customerLanguages.defaultLanguage,
       supported: customerLanguages.supported
     }),
-    buildMessengerPreamble(args.conversation, now())
+    buildMessengerPreamble(args.conversation, now()),
+    bookingStatus
   ]
     .filter(Boolean)
     .join("\n\n");
