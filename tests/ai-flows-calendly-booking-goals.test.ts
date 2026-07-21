@@ -715,16 +715,16 @@ describe("sweepCalendlyBookingGoals", () => {
     // All seeds still fired despite the union lookups failing.
     expect(result.goalsFired).toBe(3);
     expect(logger.warn).toHaveBeenCalledWith(
-      "booking goal sweep: contact number union failed",
+      "booking goal fire: contact number union failed",
       expect.objectContaining({ businessId: BIZ, error: "contacts down" })
     );
     expect(logger.warn).toHaveBeenCalledWith(
-      "booking goal sweep: contact number union threw",
+      "booking goal fire: contact number union threw",
       expect.objectContaining({ businessId: BIZ, error: "network sad" })
     );
     // A non-Error throw is stringified, never rethrown.
     expect(logger.warn).toHaveBeenCalledWith(
-      "booking goal sweep: contact number union threw",
+      "booking goal fire: contact number union threw",
       expect.objectContaining({ businessId: BIZ, error: "string sad" })
     );
   });
@@ -775,5 +775,27 @@ describe("fireBookingGoalsForInvitees (direct, production defaults)", () => {
       { status: "active", text_reminder_number: "+17808039935" }
     ]);
     expect(out).toEqual({ goalsFired: 1, jumpedRuns: 0 });
+  });
+
+  it("drops null entries from raw API JSON alongside canceled invitees", async () => {
+    const { db } = fakeDb({});
+    const out = await fireBookingGoalsForInvitees(db as never, BIZ, [
+      null as never,
+      { status: "canceled", text_reminder_number: "+17808039935" }
+    ]);
+    expect(out).toEqual({ goalsFired: 0, jumpedRuns: 0 });
+  });
+
+  it("maps an email-only invitee to a phone-less identity (email path only)", async () => {
+    const { db } = fakeDb({});
+    const findByEmails = vi.fn().mockResolvedValue(new Map());
+    const out = await fireBookingGoalsForInvitees(
+      db as never,
+      BIZ,
+      [{ status: "active", email: "no-phone@example.com" }],
+      { findByEmails }
+    );
+    expect(out).toEqual({ goalsFired: 0, jumpedRuns: 0 });
+    expect(findByEmails).toHaveBeenCalledWith(BIZ, ["no-phone@example.com"], db);
   });
 });

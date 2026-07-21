@@ -1535,9 +1535,10 @@ function findBookingGoalAhead(
 
 /**
  * Ask the platform whether this run's lead already holds an active
- * future-start Calendly booking (POST /api/internal/aiflow-booking-precheck).
- * Fails OPEN (false) on missing config, timeout, non-2xx, or malformed
- * payload — the young-run booking-goal sweep remains the safety net.
+ * future-start booking on the connected provider — Calendly or Vagaro —
+ * (POST /api/internal/aiflow-booking-precheck). Fails OPEN (false) on
+ * missing config, timeout, non-2xx, or malformed payload — the young-run
+ * booking-goal sweep remains the safety net.
  */
 async function bookingPrecheckBooked(run: RunRow): Promise<boolean> {
   const base = (
