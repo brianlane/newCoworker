@@ -42,7 +42,12 @@ const DASHBOARD_NAME_MAP: Record<string, string[] | null> = {
   send_whatsapp: ["send_whatsapp"],
   // Worker-intercepted memory capture rides its own Rowboat tool name.
   memory_capture: ["owner_append_business_memory"],
-  run_aiflow: ["dashboard_list_aiflows", "dashboard_run_aiflow"]
+  run_aiflow: ["dashboard_list_aiflows", "dashboard_run_aiflow"],
+  // INLINE-ONLY by design: the dashboard settings-mutation tool is declared
+  // only where the authed caller's manage_settings role is verified per turn
+  // (the inline Gemini path). The Rowboat OwnerCoworker fallback carries no
+  // caller role, so it deliberately gets no dashboard_ twin.
+  update_notification_preferences: null
 };
 
 const WEBCHAT_CANONICAL = [

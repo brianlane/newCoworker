@@ -94,6 +94,12 @@ vi.mock("@/lib/voice-tools/connections", () => ({
   resolveEmailConnection: vi.fn(async () => null)
 }));
 
+vi.mock("@/lib/db/business-members", () => ({
+  // Default: the chatting user is the owner, so role-gated tool declarations
+  // (update_notification_preferences) stay available in existing tests.
+  getBusinessRoleForEmail: vi.fn(async () => "owner")
+}));
+
 import { POST, renderTailTranscript } from "@/app/api/dashboard/chat/route";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
@@ -115,6 +121,7 @@ import {
   resolveCalendarConnection,
   resolveEmailConnection
 } from "@/lib/voice-tools/connections";
+import { getBusinessRoleForEmail } from "@/lib/db/business-members";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const OTHER_BIZ = "22222222-2222-4222-8222-222222222222";
@@ -812,6 +819,32 @@ describe("POST /api/dashboard/chat — inline (central Gemini) primary path", ()
     await POST(jsonRequest({ businessId: BIZ, message: "create an image" }));
     const disabledArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
     expect(disabledArgs.actionToolGates).toMatchObject({ generate_image: false });
+  });
+
+  it("gates update_notification_preferences on the caller's manage_settings role, not just the toggle", async () => {
+    // A staff-role teammate uses chat freely but must never be handed a
+    // settings-mutation tool — manage_settings is manager+ in the policy
+    // matrix, matching the notifications settings page.
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+
+    vi.mocked(getBusinessRoleForEmail).mockResolvedValueOnce("staff" as never);
+    await POST(jsonRequest({ businessId: BIZ, message: "turn on client reply alerts" }));
+    const staffArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
+    expect(staffArgs.actionToolGates).toMatchObject({ update_notification_preferences: false });
+
+    vi.mocked(runInlineChatTurn).mockClear();
+    vi.mocked(getBusinessRoleForEmail).mockResolvedValueOnce("manager" as never);
+    await POST(jsonRequest({ businessId: BIZ, message: "turn on client reply alerts" }));
+    const managerArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
+    expect(managerArgs.actionToolGates).toMatchObject({ update_notification_preferences: true });
+
+    // A role lookup failure fails CLOSED (no settings tool), never the turn.
+    vi.mocked(runInlineChatTurn).mockClear();
+    vi.mocked(getBusinessRoleForEmail).mockRejectedValueOnce(new Error("db down"));
+    const res = await POST(jsonRequest({ businessId: BIZ, message: "hello" }));
+    expect(res.status).toBe(200);
+    const failArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
+    expect(failArgs.actionToolGates).toMatchObject({ update_notification_preferences: false });
   });
 
   it("returns creation drafts from the inline turn to the client", async () => {

@@ -106,6 +106,7 @@ export async function POST(request: Request) {
       calRescheduleEnabled,
       calCancelEnabled,
       runAiflowEnabled,
+      notificationPrefsToolEnabled,
       integrationsLine,
       businessContextBlock
     ] = await Promise.all([
@@ -117,6 +118,7 @@ export async function POST(request: Request) {
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_reschedule_appointment"),
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_cancel_appointment"),
       isAgentToolEnabled(body.businessId, "dashboard", "run_aiflow"),
+      isAgentToolEnabled(body.businessId, "dashboard", "update_notification_preferences"),
       buildIntegrationsStatusLine(body.businessId),
       buildBusinessContextBlock(body.businessId)
     ]);
@@ -198,7 +200,12 @@ export async function POST(request: Request) {
         // The dashboard image tool returns an inline /api/dashboard/images
         // URL + markdown — there is nowhere to render that over SMS (the
         // texting coworker's MMS path is a different tool). Off by design.
-        generate_image: false
+        generate_image: false,
+        // FULL toggle control: the texter is the verified OWNER (identity
+        // established server-side from their number before this route is
+        // called), and owners always pass manage_settings — "let me know
+        // when clients text back" flips the toggle right from this thread.
+        update_notification_preferences: notificationPrefsToolEnabled
       }
     });
 

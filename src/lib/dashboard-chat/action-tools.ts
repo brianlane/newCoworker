@@ -43,6 +43,10 @@ import {
 } from "@/lib/ai-flows/manual-run-tool";
 import { generateImageForDashboard, normalizeAspectRatio } from "@/lib/image-tools/handlers";
 import { recordInteractionAndIncrement } from "@/lib/customer-memory/db";
+import {
+  applyNotificationPreferenceToggles,
+  NOTIFICATION_TOGGLE_KEYS
+} from "@/lib/notifications/preferences-tool";
 import type { GeminiFunctionDeclaration } from "@/lib/gemini-chat";
 import { logger } from "@/lib/logger";
 
@@ -56,7 +60,8 @@ export const ACTION_TOOL_NAMES = [
   "calendar_cancel_appointment",
   "list_aiflows",
   "run_aiflow",
-  "generate_image"
+  "generate_image",
+  "update_notification_preferences"
 ] as const;
 
 export type ActionToolName = (typeof ACTION_TOOL_NAMES)[number];
@@ -90,6 +95,13 @@ export type ActionToolGates = {
    * generate. Same parity gap this module exists to close for send_sms.
    */
   generate_image: boolean;
+  /**
+   * Settings toggle AND the caller's manage_settings role (manager+),
+   * computed per turn by the chat route — a staff-role teammate never even
+   * sees this tool declared. INLINE-ONLY by design: the Rowboat fallback
+   * carries no caller role, so it gets no dashboard_ twin.
+   */
+  update_notification_preferences: boolean;
 };
 
 // Every clock time in an outbound body carries a named timezone (KYP/Ayanna
@@ -274,6 +286,27 @@ const GENERATE_IMAGE_DECLARATION: GeminiFunctionDeclaration = {
   }
 };
 
+// Boolean toggle parameters, one per whitelisted key — self-documenting for
+// the model and structurally incapable of carrying recipients (the core
+// re-validates regardless).
+const NOTIFICATION_TOGGLE_PARAMS = Object.fromEntries(
+  NOTIFICATION_TOGGLE_KEYS.map((key) => [
+    key,
+    { type: "boolean", description: `Set the ${key.replace(/_/g, " ")} toggle.` }
+  ])
+) as Record<string, { type: string; description: string }>;
+
+const UPDATE_NOTIFICATION_PREFERENCES_DECLARATION: GeminiFunctionDeclaration = {
+  name: "update_notification_preferences",
+  description:
+    "Turn the owner's notification/alert toggles on or off (e.g. customer_reply_alerts to be texted the moment a client texts the business). Use ONLY when the owner explicitly asks, in this conversation, to change how or when they are alerted. Pass only the toggles they asked about. It cannot change the alert phone number or email — that is done from Settings → Notifications. After the tool returns, tell the owner exactly which alerts were changed and their new state.",
+  parameters: {
+    type: "object",
+    properties: NOTIFICATION_TOGGLE_PARAMS,
+    required: []
+  }
+};
+
 const DECLARATIONS: Record<ActionToolName, GeminiFunctionDeclaration> = {
   send_sms: SEND_SMS_DECLARATION,
   send_whatsapp: SEND_WHATSAPP_DECLARATION,
@@ -283,7 +316,8 @@ const DECLARATIONS: Record<ActionToolName, GeminiFunctionDeclaration> = {
   calendar_cancel_appointment: CANCEL_DECLARATION,
   list_aiflows: LIST_AIFLOWS_DECLARATION,
   run_aiflow: RUN_AIFLOW_DECLARATION,
-  generate_image: GENERATE_IMAGE_DECLARATION
+  generate_image: GENERATE_IMAGE_DECLARATION,
+  update_notification_preferences: UPDATE_NOTIFICATION_PREFERENCES_DECLARATION
 };
 
 /** The declarations for every gate that is ON, in stable order. */
@@ -307,6 +341,19 @@ const sendWhatsAppArgsSchema = z.object({
   body: z.string().min(1).max(1600),
   contactName: z.string().max(120).optional()
 });
+
+// Booleans per whitelisted toggle. PASSTHROUGH (not strict/strip): unknown
+// keys must reach the core, whose refusal names the real toggle list —
+// stripping them would misreport "no_toggles", and a schema error is less
+// actionable for the model. The core owns unknown-key + enable-only
+// refusals for every surface (shared with /api/rowboat/tool-call).
+export const updateNotificationPreferencesArgsSchema = z
+  .object(
+    Object.fromEntries(
+      NOTIFICATION_TOGGLE_KEYS.map((key) => [key, z.boolean().optional()])
+    ) as Record<string, z.ZodOptional<z.ZodBoolean>>
+  )
+  .passthrough();
 
 const findSlotsArgsSchema = z.object({
   purpose: z.string().max(200).optional(),
@@ -422,6 +469,7 @@ export type ActionToolDeps = {
   enqueueFlowRun?: typeof enqueueAiFlowRun;
   generateImage?: typeof generateImageForDashboard;
   recordContactInteraction?: typeof recordInteractionAndIncrement;
+  applyNotificationToggles?: typeof applyNotificationPreferenceToggles;
 };
 
 /**
@@ -447,6 +495,8 @@ export async function executeActionTool(
   const enqueueFlowRun = deps.enqueueFlowRun ?? enqueueAiFlowRun;
   const generateImage = deps.generateImage ?? generateImageForDashboard;
   const recordContactInteraction = deps.recordContactInteraction ?? recordInteractionAndIncrement;
+  const applyNotificationToggles =
+    deps.applyNotificationToggles ?? applyNotificationPreferenceToggles;
   /* c8 ignore stop */
 
   // Outbound-first recipients must exist as contacts (KYP/Ayanna, Jul 20
@@ -683,6 +733,22 @@ export async function executeActionTool(
           aspectRatio: normalizeAspectRatio(parsed.data.aspectRatio),
           ...(parsed.data.inputImageUrl ? { inputImageRef: parsed.data.inputImageUrl } : {})
         });
+      }
+      case "update_notification_preferences": {
+        const parsed = updateNotificationPreferencesArgsSchema.safeParse(call.args);
+        if (!parsed.success) {
+          return { ok: false, message: `invalid_args:${parsed.error.issues[0]?.message}` };
+        }
+        // FULL boolean control on this surface: the chat route only declares
+        // the tool when the authed caller passed manage_settings this turn
+        // (see ActionToolGates.update_notification_preferences).
+        const result = await applyNotificationToggles(businessId, parsed.data);
+        if (!result.ok) return result;
+        return {
+          ok: true,
+          ...result.data,
+          note: "Tell the owner exactly which alerts were changed and their new state."
+        };
       }
     }
   } catch (err) {

@@ -9,6 +9,7 @@ import {
   tickSmsWorker
 } from "./harness";
 import { startFakeRowboat, type FakeRowboat } from "./fake-rowboat";
+import { SMS_STAFF_NOTIFICATION_SETTINGS_LINE } from "../../supabase/functions/_shared/sms_prompt_lines";
 
 /**
  * Opt-in "client replied" owner alerts, end to end against the REAL
@@ -166,9 +167,16 @@ describe("customer reply alerts (opt-in, real worker + real notifications functi
     });
     if (error) throw new Error(error.message);
     rowboat.scriptReply("Checking now, James!");
+    const callsBefore = rowboat.calls.length;
     await tickSmsWorker();
 
     expect(await alertRows(biz)).toHaveLength(0);
+
+    // The staff preamble steers alert requests at the settings tool instead
+    // of the old empty promise ("I'll text you immediately…", Jul 20 2026).
+    expect(rowboat.calls.length).toBe(callsBefore + 1);
+    const system = rowboat.calls[callsBefore].body.messages.find((m) => m.role === "system");
+    expect(system?.content).toContain(SMS_STAFF_NOTIFICATION_SETTINGS_LINE);
   });
 
   it("default (no prefs row) and explicit false: silent", async () => {

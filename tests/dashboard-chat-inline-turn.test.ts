@@ -527,7 +527,8 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
     calendar_cancel_appointment: true,
     list_aiflows: true,
     run_aiflow: true,
-    generate_image: true
+    generate_image: true,
+    update_notification_preferences: true
   };
 
   it("declares gated action tools alongside the creation tools", async () => {
@@ -545,7 +546,8 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
       "calendar_cancel_appointment",
       "list_aiflows",
       "run_aiflow",
-      "generate_image"
+      "generate_image",
+      "update_notification_preferences"
     ]);
   });
 
