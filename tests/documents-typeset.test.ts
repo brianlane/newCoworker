@@ -210,6 +210,16 @@ describe("renderMarkdownToPdf", () => {
     expect(doc.getPageCount()).toBe(1);
   });
 
+  it("clamps a table cell taller than one page (row always fits a single page)", async () => {
+    const hugeCell = Array.from({ length: 900 }, (_, i) => `word${i}`).join(" ");
+    const md = `| A | B |\n|---|---|\n| ${hugeCell} | short |`;
+    const doc = await PDFDocument.load(await renderMarkdownToPdf(md));
+    // The oversized cell truncates with an ellipsis instead of spilling
+    // into a mid-row page break that would strand its sibling cells: the
+    // clamped row takes at most one full page after the header's page.
+    expect(doc.getPageCount()).toBe(2);
+  });
+
   it("survives a list item that wraps across a page break (prefix stays with line one)", async () => {
     const longItem = Array.from({ length: 200 }, (_, i) => `clause ${i}`).join(" ");
     const filler = Array.from({ length: 30 }, (_, i) => `Paragraph ${i}.`).join("\n\n");

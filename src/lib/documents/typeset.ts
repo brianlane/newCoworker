@@ -374,11 +374,31 @@ function drawTable(cursor: PdfCursor, fonts: PdfFonts, rows: InlineRun[][][]): v
   const cellPad = 4;
   const cellTextWidth = colWidth - cellPad * 2;
   const lineHeight = TABLE_SIZE * 1.35;
+  // A row is placed with ONE ensureRoom, so it must always fit a single
+  // page: clamp each cell's line count (ellipsis on truncation) — a
+  // mid-cell page break would strand sibling cells on the previous page.
+  const maxRowLines = Math.floor((PAGE_HEIGHT - MARGIN * 2 - cellPad * 2) / lineHeight);
   rows.forEach((row, rowIndex) => {
     const headerRow = rowIndex === 0;
-    const cellLines = row.map((cell) =>
-      wrapWords(measureWords(cell, fonts, TABLE_SIZE, cellTextWidth, headerRow), TABLE_SIZE, cellTextWidth)
-    );
+    const cellLines = row.map((cell) => {
+      const lines = wrapWords(
+        measureWords(cell, fonts, TABLE_SIZE, cellTextWidth, headerRow),
+        TABLE_SIZE,
+        cellTextWidth
+      );
+      if (lines.length <= maxRowLines) return lines;
+      const ellipsis = "…";
+      return [
+        ...lines.slice(0, maxRowLines - 1),
+        [
+          {
+            text: ellipsis,
+            font: fonts.regular,
+            width: fonts.regular.widthOfTextAtSize(ellipsis, TABLE_SIZE)
+          }
+        ]
+      ];
+    });
     const rowLines = Math.max(1, ...cellLines.map((lines) => lines.length));
     const rowHeight = rowLines * lineHeight + cellPad * 2;
     ensureRoom(cursor, rowHeight + 2);
