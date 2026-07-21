@@ -21,10 +21,38 @@ export type OfferRouting = {
    * Set: worker when it texts an offer; webhook swaps it to the claimer on a
    * late claim / yank. Cleared: worker when retiring an agent (reject/timeout)
    * and when finalizing a claim.
+   * NEVER set while a BROADCAST offer is live (offered_all below) — the two
+   * modes are mutually exclusive so single-offer code paths stay inert on a
+   * broadcast run. The webhook DOES stamp `offered` = the claimer when it
+   * consumes a broadcast claim, which is what hands the run to the worker's
+   * existing claim finalization.
    */
   offered?: string;
   /** Roster name for `offered`. Same lifecycle as `offered`. */
   offered_name?: string;
+  /**
+   * BROADCAST mode (route_to_team `agentNames`): E.164s of EVERY teammate the
+   * offer is currently live with, all sharing one deadline — first "1" wins.
+   * Set: worker on fan-out. Shrinks: webhook removes a passing teammate on
+   * their "2". Cleared: WORKER when finalizing a claim (it reads the losing
+   * offerees off this list to text them a courtesy notice first) and on
+   * timeout/all-passed owner fallback.
+   */
+  offered_all?: string[];
+  /**
+   * Roster names for `offered_all`, keyed by E.164. Set alongside offered_all
+   * and kept through the claim (the worker reads the claimer's + losers'
+   * names from it while finalizing). Cleared with offered_all when the worker
+   * finalizes a claim/timeout; harmless to persist otherwise.
+   */
+  offered_names?: Record<string, string>;
+  /**
+   * The broadcast offer's shared claim deadline (epoch ms). Set: worker on
+   * fan-out. Read: worker to re-park with the REMAINING time after a "2"
+   * retired one offeree (the webhook nulls respond_by_at on every resume).
+   * Cleared: worker when finalizing a claim/timeout/all-passed fallback.
+   */
+  offer_deadline_ms?: number;
   /**
    * E.164s that were actually TEXTED an offer for this lead, in order.
    * Set: worker appends on every offer send (and backfills the retiring agent
@@ -146,7 +174,7 @@ export type OfferRouting = {
   late_digit?: string;
 };
 
-const STRING_ARRAY_FIELDS = ["offered_log", "tried", "pass_reasons"] as const;
+const STRING_ARRAY_FIELDS = ["offered_log", "tried", "pass_reasons", "offered_all"] as const;
 const STRING_FIELDS = [
   "offered",
   "offered_name",
@@ -157,7 +185,12 @@ const STRING_FIELDS = [
   "pass_reason",
   "route_step_id"
 ] as const;
-const NUMBER_FIELDS = ["step_index", "route_step_index", "owner_nudges"] as const;
+const NUMBER_FIELDS = [
+  "step_index",
+  "route_step_index",
+  "owner_nudges",
+  "offer_deadline_ms"
+] as const;
 const LAST_EVENTS: readonly string[] = ["claim", "reject", "timeout", "unclaim"];
 
 /**
@@ -189,6 +222,18 @@ export function parseRouting(raw: unknown): OfferRouting {
     const v = out[key];
     if (Array.isArray(v)) out[key] = v.filter((x): x is string => typeof x === "string");
     else delete out[key];
+  }
+  if ("offered_names" in out) {
+    const v = out.offered_names;
+    if (v && typeof v === "object" && !Array.isArray(v)) {
+      const clean: Record<string, string> = {};
+      for (const [k, name] of Object.entries(v as Record<string, unknown>)) {
+        if (typeof name === "string") clean[k] = name;
+      }
+      out.offered_names = clean;
+    } else {
+      delete out.offered_names;
+    }
   }
   if ("last_event" in out && !LAST_EVENTS.includes(out.last_event as string)) {
     delete out.last_event;

@@ -71,9 +71,18 @@ export function classifyStaleOfferReply(args: {
     if (nowMs - Date.parse(row.updated_at) > windowMs) continue;
 
     const offered = routing.offered ?? "";
+    // Broadcast fan-out (route_to_team agentNames): the live offerees are in
+    // offered_all (routing.offered stays unset until a claim is consumed);
+    // offered_log keeps a broadcast passer recognized after their removal.
+    const offeredAll = routing.offered_all ?? [];
+    const offeredLogAll = routing.offered_log ?? [];
     const tried = routing.tried ?? [];
     const everOffered =
-      offered === from || row.awaiting_agent_e164 === from || tried.includes(from);
+      offered === from ||
+      row.awaiting_agent_e164 === from ||
+      tried.includes(from) ||
+      offeredAll.includes(from) ||
+      offeredLogAll.includes(from);
     if (!everOffered) continue;
 
     // Only digits that plausibly reference an offer are consumed: "1" (claim)
@@ -85,7 +94,8 @@ export function classifyStaleOfferReply(args: {
     // that path didn't consume the digit, don't tell the sender the window
     // passed (it hasn't).
     const liveToSender =
-      offered === from && (row.status === "awaiting_agent" || row.status === "queued");
+      (offered === from || offeredAll.includes(from)) &&
+      (row.status === "awaiting_agent" || row.status === "queued");
     if (liveToSender) return null;
 
     const claimedBy = routing.claimed_by ?? "";
@@ -108,9 +118,12 @@ export function classifyStaleOfferReply(args: {
     // teammate the worker merely skipped is never taught a yank that
     // tryLateClaim would then refuse.
     const offeredLog = routing.offered_log ?? [];
+    // "Live with someone else": a single offer with another teammate, OR a
+    // broadcast whose remaining offerees no longer include the sender (they
+    // passed earlier and were retired from offered_all).
     const liveWithOther =
-      offered !== "" &&
-      offered !== from &&
+      ((offered !== "" && offered !== from) ||
+        (offeredAll.length > 0 && !offeredAll.includes(from))) &&
       (row.status === "awaiting_agent" || row.status === "queued");
     if (
       liveWithOther &&

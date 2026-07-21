@@ -1027,6 +1027,12 @@ const nonBranchStepMembers = [
     // Pin the offer to a saved roster member by reference (employee source only;
     // mutually exclusive with agentName; enforced in validateDefinitionSemantics).
     agentRef: contactRefSchema.optional(),
+    // BROADCAST mode: offer the lead to ALL of these roster members at once,
+    // sharing one claim deadline — first "1" wins, a "2" retires just that
+    // teammate, and when everyone passed (or the deadline lapsed) the lead
+    // falls back to the owner. Mutually exclusive with agentName/agentRef
+    // (validateDefinitionSemantics); duplicates rejected there too.
+    agentNames: z.array(z.string().min(1).max(120)).min(2).max(10).optional(),
     offerWindow: routeOfferWindowSchema.optional(),
     attachScreenshot: z.boolean().optional(),
     // Offer reply digits are universal, not per-flow options: "1" claims (live
@@ -2244,6 +2250,28 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
         issues.push(
           `Step "${step.id}" routes to a contact, but route_to_team can only pin a team member; use an employee reference.`
         );
+      }
+      // Broadcast mode is exclusive with the single-agent pins: mixing them
+      // would leave the worker with two contradictory offer sets.
+      if (step.agentNames && (step.agentName || step.agentRef)) {
+        issues.push(
+          `Step "${step.id}" sets agentNames alongside agentName/agentRef; broadcast and single-agent pinning are mutually exclusive.`
+        );
+      }
+      // Duplicate names in one broadcast would double-text a teammate and
+      // corrupt the per-recipient offer state.
+      if (step.agentNames) {
+        const seen = new Set<string>();
+        for (const name of step.agentNames) {
+          const key = name.trim().toLowerCase();
+          if (seen.has(key)) {
+            issues.push(
+              `Step "${step.id}" lists "${name}" more than once in agentNames.`
+            );
+            break;
+          }
+          seen.add(key);
+        }
       }
       // The keep-for-owner rule is a pair: a condition without the owner SMS
       // (or vice versa) would silently do nothing, so reject half a rule.

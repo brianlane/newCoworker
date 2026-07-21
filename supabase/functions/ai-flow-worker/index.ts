@@ -998,6 +998,70 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       });
       return;
     }
+    if (outcome.kind === "pause_agent_broadcast") {
+      await recordStep(supabase, run, index, step, "pending");
+      // Same rewind stamps as the single-offer park: a late claim / "86"
+      // re-opens the run at THIS route step.
+      routing.step_index = index;
+      routing.route_step_index = index;
+      // Park BEFORE any offer goes out (state before side effect) so an
+      // inbound 1/2 from any recipient always matches the run. No single
+      // awaiting_agent_e164 fits a broadcast — the webhook matches replies
+      // against routing.offered_all instead.
+      stampResumeMarker(index);
+      const parked = await updateRun(supabase, run.id, {
+        status: "awaiting_agent",
+        current_step: index,
+        context: buildContext(scope, approval, routing),
+        awaiting_agent_e164: null,
+        respond_by_at: new Date(Date.now() + outcome.respondByMs).toISOString(),
+        claimed_at: null
+      });
+      if (!parked) {
+        // The owner stopped the run while this step executed — no offers may
+        // go out either.
+        await stoppedMidExecutionLog(supabase, run, index);
+        return;
+      }
+      // Per-recipient send failures are logged and skipped, not unwound: the
+      // parked state is durable and the deadline sweep rescues the lead (owner
+      // fallback) even if EVERY send failed.
+      for (const r of outcome.recipients) {
+        try {
+          await sendOfferSms(supabase, run, r.e164, r.offerText, r.idempotencyKey, r.mediaUrls);
+        } catch (e) {
+          console.error("route_to_team broadcast offer send failed after park", e);
+          await systemLog(supabase, {
+            businessId: run.business_id,
+            source: "aiflow",
+            level: "warn",
+            event: "ai_flow_offer_sms_failed",
+            message: `route_to_team broadcast offer send failed after park: ${e instanceof Error ? e.message : String(e)}`,
+            payload: { run_id: run.id, flow_id: run.flow_id, step_index: index, agent: r.e164 }
+          });
+        }
+      }
+      // A re-park after a "2" (empty recipients) is bookkeeping, not a new
+      // offer — don't re-announce it.
+      if (outcome.recipients.length > 0) {
+        const agents = outcome.recipients.map((r) => r.e164);
+        await telemetryRecord(supabase, "ai_flow_run_awaiting_agent", {
+          run_id: run.id,
+          business_id: run.business_id,
+          step_index: index,
+          agents
+        });
+        await systemLog(supabase, {
+          businessId: run.business_id,
+          source: "aiflow",
+          level: "info",
+          event: "ai_flow_run_awaiting_agent",
+          message: `Run parked: lead offered to ${agents.length} team agents simultaneously`,
+          payload: { run_id: run.id, flow_id: run.flow_id, step_index: index, agents }
+        });
+      }
+      return;
+    }
     if (outcome.kind === "pause_reply") {
       const respondByIso = new Date(Date.now() + outcome.respondByMs).toISOString();
       await recordStep(supabase, run, index, step, "pending", {
@@ -1362,6 +1426,22 @@ type StepOutcome =
       // through the operational owner-SMS path (metered, never refused)
       // instead of the customer-facing offer path.
       operational?: boolean;
+    }
+  // BROADCAST offer (route_to_team.agentNames): every recipient is texted the
+  // offer at once and shares ONE deadline — first "1" wins. Parked exactly
+  // like pause_agent (state before side effect) but with awaiting_agent_e164
+  // NULL: the inbound webhook matches replies via routing.offered_all instead.
+  // An empty recipients list re-parks WITHOUT re-texting anyone (used after a
+  // "2" retired one offeree while others are still live).
+  | {
+      kind: "pause_agent_broadcast";
+      recipients: {
+        e164: string;
+        offerText: string;
+        idempotencyKey: string;
+        mediaUrls?: string[];
+      }[];
+      respondByMs: number;
     }
   // Quiet hours: this step (and the rest of the run) must wait until
   // resumeAtMs. executeRun re-queues the run with earliest_claim_at so the
@@ -5837,6 +5917,9 @@ async function routeToTeamStep(
     delete routing.reply_from;
     delete routing.offered;
     delete routing.offered_name;
+    delete routing.offered_all;
+    delete routing.offered_names;
+    delete routing.offer_deadline_ms;
     delete routing.claimed_by;
     delete routing.claimed_name;
     delete routing.late_claimed;
@@ -5872,7 +5955,19 @@ async function routeToTeamStep(
         : typeof routing.offered === "string"
           ? routing.offered
           : "";
-    const claimedName = typeof routing.offered_name === "string" ? routing.offered_name : "";
+    // Name resolution: offered_name (stamped by the worker on a single offer,
+    // or by the webhook when it consumed the claim), else the broadcast
+    // fan-out's name map.
+    const claimedName =
+      (typeof routing.offered_name === "string" && routing.offered_name) ||
+      routing.offered_names?.[claimedBy] ||
+      "";
+    // BROADCAST: the OTHER live offerees lost the race — captured here (before
+    // the routing cleanup below) so they can be texted a courtesy notice.
+    const broadcastLosers = Array.isArray(routing.offered_all)
+      ? routing.offered_all.filter((p) => p && p !== claimedBy)
+      : [];
+    const broadcastNames = routing.offered_names ?? {};
     // Optional ETA the teammate stated when claiming ("4, 20 min" → "20 min"),
     // stamped on routing by the inbound webhook. Surfaced to the owner (claim
     // notice + actions_taken/notify_owner) so they know WHEN the lead is contacted.
@@ -5893,6 +5988,9 @@ async function routeToTeamStep(
     delete routing.reply_from;
     delete routing.offered;
     delete routing.offered_name;
+    delete routing.offered_all;
+    delete routing.offered_names;
+    delete routing.offer_deadline_ms;
     delete routing.late_claim;
     delete routing.step_index;
     delete routing.claim_timeframe;
@@ -5914,6 +6012,43 @@ async function routeToTeamStep(
       // earlier owner-fallback/claim notice on the same run.
       const notifyKey = lateClaim ? `aiflow-late-claimed:${run.id}` : `aiflow-claimed:${run.id}`;
       await sendOwnerSms(supabase, run, body, notifyKey);
+    }
+    // BROADCAST losers: tell each still-live offeree the lead is taken so they
+    // stop watching for it. The owner's forward number is skipped — the
+    // claimedNotifyTemplate owner notice above already covers the owner, and a
+    // duplicate "X claimed it" would read like noise. Best-effort per
+    // recipient: the claim is already durable; a Telnyx hiccup must not fail
+    // the run or replay the finalization.
+    if (broadcastLosers.length > 0) {
+      const ownerForward = await ownerForwardE164(supabase, run.business_id);
+      const claimerLabel = claimedName || "A teammate";
+      for (const loser of broadcastLosers) {
+        if (ownerForward && loser === ownerForward) continue;
+        try {
+          await sendOfferSms(
+            supabase,
+            run,
+            loser,
+            `${claimerLabel} claimed this lead — you're all set, no action needed.`,
+            `aiflow-broadcast-lost:${run.id}:${loser}`
+          );
+        } catch (e) {
+          console.error("route_to_team broadcast lost-notify send failed", e);
+          await systemLog(supabase, {
+            businessId: run.business_id,
+            source: "aiflow",
+            level: "warn",
+            event: "ai_flow_offer_sms_failed",
+            message: `broadcast lost-notify send failed: ${e instanceof Error ? e.message : String(e)}`,
+            payload: {
+              run_id: run.id,
+              flow_id: run.flow_id,
+              agent: loser,
+              recipient_name: broadcastNames[loser] ?? ""
+            }
+          });
+        }
+      }
     }
     appendActionTaken(
       scope,
@@ -5949,9 +6084,13 @@ async function routeToTeamStep(
   const passReason =
     typeof routing.pass_reason === "string" ? routing.pass_reason.trim() : "";
   if (routing.last_event === "reject" && passReason) {
+    const passerPhone = typeof routing.reply_from === "string" ? routing.reply_from : "";
     const passerName =
       (typeof routing.offered_name === "string" && routing.offered_name) ||
-      (typeof routing.reply_from === "string" && routing.reply_from) ||
+      // Broadcast passes carry no offered_name — resolve via the fan-out's
+      // name map so the owner reads "Dave passed", not a bare phone number.
+      (passerPhone && routing.offered_names?.[passerPhone]) ||
+      passerPhone ||
       "a teammate";
     const reasons = Array.isArray(routing.pass_reasons)
       ? (routing.pass_reasons as unknown[]).filter((x): x is string => typeof x === "string")
@@ -5961,6 +6100,18 @@ async function routeToTeamStep(
     appendActionTaken(scope, `${passerName} passed (${passReason})`);
   }
   delete routing.pass_reason;
+
+  // BROADCAST mode (agentNames): its own park/resume state machine — one
+  // shared deadline, first "1" wins, a "2" retires just the passer, and
+  // timeout/all-passed falls back to the owner. Claims and unclaims never
+  // reach here (the shared blocks above consumed them — the webhook stamps
+  // the claimer into routing.offered); rejects, timeouts, and the first
+  // entry do. Broadcast never enters the rotation loop below and
+  // deliberately ignores lead_auto_assign: the flow explicitly names who to
+  // offer, and a hard assignment would defeat "whoever answers first".
+  if (action.agentNames && action.agentNames.length >= 2) {
+    return routeBroadcastStep(supabase, run, scope, action, routing, tried);
+  }
 
   // First entry, reject ('2'), or timeout: retire the agent we last offered, then
   // ask Rowboat for the next one.
@@ -5982,59 +6133,11 @@ async function routeToTeamStep(
   delete routing.last_event;
   delete routing.reply_from;
 
-  // Keep-for-owner rule (e.g. the $1M+ price band): when the configured
-  // condition matches on FIRST entry — before anyone was ever offered — the
-  // lead is never offered to the team. The owner gets the ownerDirect SMS
-  // with the details, and claimed_agent="none" makes every claim-gated later
-  // step skip (the flow's unclaimed/outcome notify still fires and its
-  // actions_taken line says why). Checked only when offered_log is empty so
-  // a resumed run mid-escalation can never re-branch here.
-  const everOffered = Array.isArray(routing.offered_log) && routing.offered_log.length > 0;
-  if (
-    action.ownerDirectWhen &&
-    action.ownerDirectTemplate &&
-    !everOffered &&
-    tried.length === 0 &&
-    evaluateStepCondition(action.ownerDirectWhen, scope)
-  ) {
-    scope.vars.claimed_agent = "none";
-    scope.vars.claimed_agent_phone = "none";
-    scope.vars.claimed_agent_eta_minutes = "0";
-    const body = renderTemplate(action.ownerDirectTemplate, scope);
-    appendActionTaken(
-      scope,
-      `kept for the owner (${action.ownerDirectWhen.var} matched the keep-for-owner rule) — not offered to the team`
-    );
-    await telemetryRecord(supabase, "ai_flow_route_owner_direct", {
-      run_id: run.id,
-      business_id: run.business_id,
-      var: action.ownerDirectWhen.var,
-      value: String(scope.vars[action.ownerDirectWhen.var] ?? "")
-    });
-    // Nudge mode (ownerDirectNudges): park on the OWNER's forward number so
-    // the alert can be re-sent as ALL-CAPS reminders at 10 and 30 minutes
-    // unless the owner replies "1" (an ack, never a claim — see
-    // ownerDirectResume). Falls back to today's fire-and-forget alert when
-    // no forward number is configured (nothing to park on).
-    if (action.ownerDirectNudges) {
-      const forward = await ownerForwardE164(supabase, run.business_id);
-      if (forward) {
-        routing.owner_direct = true;
-        routing.owner_nudges = 0;
-        routing.offered = forward;
-        routing.offered_name = "owner";
-        return {
-          kind: "pause_agent",
-          e164: forward,
-          respondByMs: OWNER_DIRECT_NUDGE_1_MINUTES * 60_000,
-          offerText: body,
-          idempotencyKey: `aiflow-owner-direct:${run.id}`,
-          operational: true
-        };
-      }
-    }
-    await sendOwnerSms(supabase, run, body, `aiflow-owner-direct:${run.id}`);
-    return { kind: "ok", result: { routed: "owner_direct" } };
+  // Keep-for-owner rule (e.g. the $1M+ price band) — shared with the
+  // broadcast path; see maybeOwnerDirect.
+  {
+    const ownerDirect = await maybeOwnerDirect(supabase, run, scope, action, routing, tried);
+    if (ownerDirect) return ownerDirect;
   }
 
   const leadPhone = leadPhoneE164(scope);
@@ -6206,9 +6309,94 @@ async function routeToTeamStep(
     };
   }
 
-  // Roster exhausted: hand the lead to the owner so it is never dropped. Mark
-  // claimed_agent="none" so claim-gated LATER steps (e.g. the lead marketing
-  // text/email) are skipped — only ungated steps like notify_owner still run.
+  // Roster exhausted: hand the lead to the owner so it is never dropped.
+  return await ownerFallbackOutcome(supabase, run, scope, action, routing, tried);
+}
+
+/**
+ * Keep-for-owner rule (e.g. the $1M+ price band): when the configured
+ * condition matches on FIRST entry — before anyone was ever offered — the
+ * lead is never offered to the team. The owner gets the ownerDirect SMS with
+ * the details, and claimed_agent="none" makes every claim-gated later step
+ * skip (the flow's unclaimed/outcome notify still fires and its actions_taken
+ * line says why). Checked only when offered_log is empty so a resumed run
+ * mid-escalation can never re-branch here. Returns null when the rule doesn't
+ * apply (the caller continues into its offer machinery). Shared by the
+ * single-offer rotation and the broadcast fan-out.
+ */
+async function maybeOwnerDirect(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "route_to_team" }>,
+  routing: OfferRouting,
+  tried: string[]
+): Promise<StepOutcome | null> {
+  const everOffered = Array.isArray(routing.offered_log) && routing.offered_log.length > 0;
+  if (
+    !action.ownerDirectWhen ||
+    !action.ownerDirectTemplate ||
+    everOffered ||
+    tried.length > 0 ||
+    !evaluateStepCondition(action.ownerDirectWhen, scope)
+  ) {
+    return null;
+  }
+  scope.vars.claimed_agent = "none";
+  scope.vars.claimed_agent_phone = "none";
+  scope.vars.claimed_agent_eta_minutes = "0";
+  const body = renderTemplate(action.ownerDirectTemplate, scope);
+  appendActionTaken(
+    scope,
+    `kept for the owner (${action.ownerDirectWhen.var} matched the keep-for-owner rule) — not offered to the team`
+  );
+  await telemetryRecord(supabase, "ai_flow_route_owner_direct", {
+    run_id: run.id,
+    business_id: run.business_id,
+    var: action.ownerDirectWhen.var,
+    value: String(scope.vars[action.ownerDirectWhen.var] ?? "")
+  });
+  // Nudge mode (ownerDirectNudges): park on the OWNER's forward number so
+  // the alert can be re-sent as ALL-CAPS reminders at 10 and 30 minutes
+  // unless the owner replies "1" (an ack, never a claim — see
+  // ownerDirectResume). Falls back to today's fire-and-forget alert when
+  // no forward number is configured (nothing to park on).
+  if (action.ownerDirectNudges) {
+    const forward = await ownerForwardE164(supabase, run.business_id);
+    if (forward) {
+      routing.owner_direct = true;
+      routing.owner_nudges = 0;
+      routing.offered = forward;
+      routing.offered_name = "owner";
+      return {
+        kind: "pause_agent",
+        e164: forward,
+        respondByMs: OWNER_DIRECT_NUDGE_1_MINUTES * 60_000,
+        offerText: body,
+        idempotencyKey: `aiflow-owner-direct:${run.id}`,
+        operational: true
+      };
+    }
+  }
+  await sendOwnerSms(supabase, run, body, `aiflow-owner-direct:${run.id}`);
+  return { kind: "ok", result: { routed: "owner_direct" } };
+}
+
+/**
+ * Owner fallback: nobody claimed the lead (roster/broadcast exhausted, every
+ * offeree passed, or the deadline lapsed) — hand it to the owner so it is
+ * never dropped. Marks claimed_agent="none" so claim-gated LATER steps (e.g.
+ * the lead marketing text/email) are skipped — only ungated steps like
+ * notify_owner still run.
+ */
+async function ownerFallbackOutcome(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "route_to_team" }>,
+  routing: OfferRouting,
+  tried: string[]
+): Promise<StepOutcome> {
   scope.vars.claimed_agent = "none";
   scope.vars.claimed_agent_phone = "none";
   scope.vars.claimed_agent_eta_minutes = "0";
@@ -6222,6 +6410,237 @@ async function routeToTeamStep(
   await sendOwnerSms(supabase, run, body, `aiflow-owner-fallback:${run.id}`);
   appendActionTaken(scope, "no agent claimed the lead; handed back to the owner");
   return { kind: "ok", result: { routed: "owner_fallback", tried: tried.length } };
+}
+
+/**
+ * BROADCAST offers (route_to_team.agentNames): every listed roster member is
+ * texted the offer at once and shares ONE claim deadline — first "1" wins
+ * (the webhook's revision-gated write settles races), a "2" retires just the
+ * passer, and the lead falls back to the owner when everyone passed or the
+ * deadline lapsed. The list IS the offer set: broadcast never escalates into
+ * the round-robin rotation. Claims/unclaims never reach here — the webhook
+ * stamps the claimer into routing.offered, so routeToTeamStep's shared
+ * claim/unclaim blocks (which also notify the losing offerees) consume those
+ * events first. This function handles first entry (fan-out), rejects, and
+ * timeouts.
+ */
+async function routeBroadcastStep(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "route_to_team" }>,
+  routing: OfferRouting,
+  tried: string[]
+): Promise<StepOutcome> {
+  const event = routing.last_event;
+  const replyFrom = typeof routing.reply_from === "string" ? routing.reply_from : "";
+  delete routing.last_event;
+  delete routing.reply_from;
+  const live = Array.isArray(routing.offered_all) ? [...routing.offered_all] : [];
+
+  if (event === "reject") {
+    // The webhook already removed the passer from offered_all; retire them
+    // into tried here too (and defensively drop them from the live list in
+    // case this snapshot raced the webhook's).
+    if (replyFrom) {
+      if (!tried.includes(replyFrom)) tried.push(replyFrom);
+      const idx = live.indexOf(replyFrom);
+      if (idx >= 0) live.splice(idx, 1);
+    }
+    routing.offered_all = live;
+    if (live.length > 0) {
+      // Someone can still claim: re-park for the REMAINING shared deadline.
+      // Empty recipients — nobody is re-texted.
+      const deadlineMs =
+        typeof routing.offer_deadline_ms === "number" ? routing.offer_deadline_ms : 0;
+      return {
+        kind: "pause_agent_broadcast",
+        recipients: [],
+        respondByMs: Math.max(60_000, deadlineMs - Date.now())
+      };
+    }
+    // Everyone passed → owner fallback.
+    delete routing.offered_all;
+    delete routing.offered_names;
+    delete routing.offer_deadline_ms;
+    return await ownerFallbackOutcome(supabase, run, scope, action, routing, tried);
+  }
+
+  if (event === "timeout") {
+    // The shared deadline lapsed with no claim: retire every remaining
+    // offeree and hand the lead to the owner.
+    for (const p of live) if (!tried.includes(p)) tried.push(p);
+    delete routing.offered_all;
+    delete routing.offered_names;
+    delete routing.offer_deadline_ms;
+    return await ownerFallbackOutcome(supabase, run, scope, action, routing, tried);
+  }
+
+  // First entry: the keep-for-owner rule short-circuits before any offer.
+  const ownerDirect = await maybeOwnerDirect(supabase, run, scope, action, routing, tried);
+  if (ownerDirect) return ownerDirect;
+
+  // Resolve the recipients; a member who texted STOP is skipped like the
+  // rotation path skips them.
+  const resolved = await resolveBroadcastAgents(supabase, run, scope, action.agentNames ?? []);
+  const sendable: RoutedAgent[] = [];
+  for (const agent of resolved) {
+    if (await isRecipientOptedOut(supabase, run.business_id, agent.phone)) continue;
+    sendable.push(agent);
+  }
+  if (sendable.length === 0) {
+    // Nobody resolvable (renamed/deactivated/opted out/on time off): the
+    // offer falls through to the owner, never silently to someone else.
+    await systemLog(supabase, {
+      businessId: run.business_id,
+      source: "aiflow",
+      level: "warn",
+      event: "ai_flow_pinned_agent_missing",
+      message:
+        "route_to_team: no broadcast recipient is on the active, available roster; falling back to the owner",
+      payload: { run_id: run.id, flow_id: run.flow_id, agent_names: action.agentNames ?? [] }
+    });
+    return await ownerFallbackOutcome(supabase, run, scope, action, routing, tried);
+  }
+
+  const nowMs = Date.now();
+  const deadlineMs = offerRespondByMs(nowMs, action.responseMinutes, action.offerWindow);
+  const deadlineText = formatInTimeZone(deadlineMs, action.offerWindow?.timezone ?? "UTC");
+  // One signed MMS URL shared by every recipient (same run, same screenshot).
+  const mmsUrl = action.attachScreenshot ? await screenshotMmsUrl(supabase, run, scope) : null;
+
+  routing.offered_all = sendable.map((a) => a.phone);
+  routing.offered_names = Object.fromEntries(sendable.map((a) => [a.phone, a.name]));
+  routing.offer_deadline_ms = deadlineMs;
+  // Everyone texted an offer joins offered_log — that's the late-claim/yank
+  // eligibility list, same as the single-offer path.
+  const offeredLog = Array.isArray(routing.offered_log)
+    ? routing.offered_log.filter((x): x is string => typeof x === "string")
+    : [];
+  for (const a of sendable) if (!offeredLog.includes(a.phone)) offeredLog.push(a.phone);
+  routing.offered_log = offeredLog;
+  // Legacy per-flow digit stamps are gone; scrub like the single path.
+  delete routing.tf_digit;
+  delete routing.late_digit;
+  // First to claim is ON by default; only an explicit opt-out is stamped.
+  if (action.firstToClaim === false) routing.first_to_claim = false;
+  else delete routing.first_to_claim;
+
+  const recipients: { e164: string; offerText: string; idempotencyKey: string; mediaUrls?: string[] }[] = [];
+  for (const agent of sendable) {
+    let offerText = renderTemplate(action.offerTemplate, agentScope(scope, agent, deadlineText));
+    // Same multi-offer heads-up as the single path, per recipient.
+    const alreadyPending = await countOtherLiveOffers(supabase, run, agent.phone);
+    if (alreadyPending > 0) {
+      offerText = `${multiOfferHeadsUpLine(alreadyPending + 1)}\n${offerText}`;
+    }
+    recipients.push({
+      e164: agent.phone,
+      offerText,
+      // Keyed by recipient (not tried.length): all broadcast offers go out in
+      // one park, and the run only ever fans out once.
+      idempotencyKey: `aiflow-offer:${run.id}:${agent.phone}`,
+      ...(mmsUrl ? { mediaUrls: [mmsUrl] } : {})
+    });
+  }
+  appendActionTaken(
+    scope,
+    `offered simultaneously to ${sendable.map((a) => a.name || a.phone).join(", ")} — first to claim`
+  );
+  return {
+    kind: "pause_agent_broadcast",
+    recipients,
+    respondByMs: Math.max(60_000, deadlineMs - nowMs)
+  };
+}
+
+/**
+ * Resolve a broadcast recipient list against the ACTIVE roster. Names match
+ * trimmed/case-insensitively (the same rule as the agentName pin); a member
+ * on time off or outside their weekly schedule today is skipped (same hard
+ * skip pickNextAgent applies); an unknown name is logged and skipped — the
+ * roster is authoritative, never guess. The lead's own number is never
+ * offered, and duplicate phones collapse. Preserves the flow's listed order.
+ * THROWS on a roster/time-off query error so the run retries rather than
+ * silently under-offering.
+ */
+async function resolveBroadcastAgents(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  names: string[]
+): Promise<RoutedAgent[]> {
+  const { data: rosterRows, error: rosterErr } = await supabase
+    .from("ai_flow_team_members")
+    .select("id, name, phone_e164, weekly_schedule, preferred_windows")
+    .eq("business_id", run.business_id)
+    .eq("active", true);
+  if (rosterErr) {
+    throw new Error(`route_to_team: roster query failed: ${rosterErr.message}`);
+  }
+  const roster = (rosterRows ?? []) as {
+    id: string;
+    name: string;
+    phone_e164: string;
+    weekly_schedule?: unknown;
+    preferred_windows?: unknown;
+  }[];
+  const [tzRes, offRes] = await Promise.all([
+    supabase.from("businesses").select("timezone").eq("id", run.business_id).maybeSingle(),
+    supabase
+      .from("employee_time_off")
+      .select("member_id, starts_on, ends_on")
+      .eq("business_id", run.business_id)
+  ]);
+  if (offRes.error) {
+    throw new Error(`route_to_team: time-off query failed: ${offRes.error.message}`);
+  }
+  const tz = (tzRes.data as { timezone?: string | null } | null)?.timezone ?? null;
+  const clock = localClock(new Date(), tz);
+  const offIds = new Set(
+    ((offRes.data ?? []) as { member_id: string; starts_on: string; ends_on: string }[])
+      .filter((t) => t.starts_on <= clock.isoDate && t.ends_on >= clock.isoDate)
+      .map((t) => t.member_id)
+  );
+  const available = filterRosterByAvailability(roster, offIds, clock);
+  const leadPhone = leadPhoneE164(scope);
+  const out: RoutedAgent[] = [];
+  const pickedIds: string[] = [];
+  const seenPhones = new Set<string>();
+  for (const name of names) {
+    const want = name.trim().toLowerCase();
+    const row = available.find((r) => r.name.trim().toLowerCase() === want);
+    if (!row) {
+      console.error(`route_to_team: broadcast recipient "${name}" not on the available roster`);
+      await systemLog(supabase, {
+        businessId: run.business_id,
+        source: "aiflow",
+        level: "warn",
+        event: "ai_flow_pinned_agent_missing",
+        message: `route_to_team: broadcast recipient "${name}" is not on the active, available roster; skipped`,
+        payload: { run_id: run.id, flow_id: run.flow_id, agent_name: name }
+      });
+      continue;
+    }
+    // Never offer the lead their own number, and never text one phone twice.
+    if (leadPhone && row.phone_e164 === leadPhone) continue;
+    if (seenPhones.has(row.phone_e164)) continue;
+    seenPhones.add(row.phone_e164);
+    pickedIds.push(row.id);
+    out.push({ name: row.name, phone: row.phone_e164 });
+  }
+  // Stamp the rotation cursor for every recipient so round-robin flows stay
+  // fair alongside broadcasts. Best-effort, like pickNextAgent's stamp.
+  if (pickedIds.length > 0) {
+    const { error: stampErr } = await supabase
+      .from("ai_flow_team_members")
+      .update({ last_offered_at: new Date().toISOString() })
+      .in("id", pickedIds);
+    if (stampErr) {
+      console.error(`route_to_team: broadcast rotation stamp failed: ${stampErr.message}`);
+    }
+  }
+  return out;
 }
 
 /**
@@ -6247,7 +6666,21 @@ async function countOtherLiveOffers(
     console.error("countOtherLiveOffers", error);
     return 0;
   }
-  return count ?? 0;
+  // Broadcast offers park with routing.offered UNSET — the live offerees are
+  // in routing.offered_all instead, so count those separately (JSONB
+  // containment). Same best-effort posture.
+  const { count: broadcastCount, error: broadcastErr } = await supabase
+    .from("ai_flow_runs")
+    .select("id", { count: "exact", head: true })
+    .eq("business_id", run.business_id)
+    .in("status", ["awaiting_agent", "queued"])
+    .filter("context->routing->offered_all", "cs", JSON.stringify([agentPhone]))
+    .neq("id", run.id);
+  if (broadcastErr) {
+    console.error("countOtherLiveOffers (broadcast)", broadcastErr);
+    return count ?? 0;
+  }
+  return (count ?? 0) + (broadcastCount ?? 0);
 }
 
 /**

@@ -403,6 +403,9 @@ export type StepAction =
       /** Pin offers to a saved roster member by reference (worker resolves the
        * current name, then routes exactly like agentName). Employee source only. */
       agentRef?: ContactRef;
+      /** BROADCAST: offer all of these roster members at once (first "1" wins).
+       * Always >= 2 entries when present; exclusive with agentName/agentRef. */
+      agentNames?: string[];
       /** After-hours claim-deadline extension. */
       offerWindow?: RouteOfferWindow;
       /** Attach the stored browse screenshot to each agent offer as MMS. */
@@ -1124,6 +1127,11 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       const responseMinutes = Math.max(1, Math.round(step.responseMinutes ?? 10));
       const claimed = step.claimedNotifyTemplate?.trim();
       const agentName = step.agentName?.trim();
+      // Broadcast list: trimmed, empties dropped. The schema guarantees >= 2
+      // names and exclusivity with agentName/agentRef at author time.
+      const agentNames = (step.agentNames ?? [])
+        .map((n) => n.trim())
+        .filter((n) => n.length > 0);
       // Keep-for-owner rule: carried only as a complete pair (the schema
       // enforces both-or-neither; a half-configured rule is dropped, not
       // half-applied). Template stays unrendered like the other route copy.
@@ -1138,6 +1146,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           claimedNotifyTemplate: claimed ? claimed : undefined,
           ...(agentName ? { agentName } : {}),
           ...(step.agentRef ? { agentRef: step.agentRef } : {}),
+          ...(agentNames.length >= 2 ? { agentNames } : {}),
           ...(step.offerWindow ? { offerWindow: step.offerWindow } : {}),
           attachScreenshot: step.attachScreenshot === true,
           // Only an explicit opt-out is carried; undefined means ON.
