@@ -6683,10 +6683,13 @@ async function countOtherLiveOffers(
   }
   // Broadcast offers park with routing.offered UNSET — the live offerees are
   // in routing.offered_all instead, so count those separately (JSONB
-  // containment). Same best-effort posture.
-  const { count: broadcastCount, error: broadcastErr } = await supabase
+  // containment). A run in the claim-consumed window (the webhook stamped
+  // routing.offered = this agent while offered_all is still intact) already
+  // matched the single-offer count above, so drop it here rather than
+  // double-count. Same best-effort posture.
+  const { data: broadcastRows, error: broadcastErr } = await supabase
     .from("ai_flow_runs")
-    .select("id", { count: "exact", head: true })
+    .select("id, offered:context->routing->>offered")
     .eq("business_id", run.business_id)
     .in("status", ["awaiting_agent", "queued"])
     .filter("context->routing->offered_all", "cs", JSON.stringify([agentPhone]))
@@ -6695,7 +6698,10 @@ async function countOtherLiveOffers(
     console.error("countOtherLiveOffers (broadcast)", broadcastErr);
     return count ?? 0;
   }
-  return (count ?? 0) + (broadcastCount ?? 0);
+  const broadcastCount = ((broadcastRows ?? []) as { id: string; offered: string | null }[]).filter(
+    (r) => r.offered !== agentPhone
+  ).length;
+  return (count ?? 0) + broadcastCount;
 }
 
 /**
