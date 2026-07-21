@@ -52,14 +52,20 @@ if (dst?.page_id && dst.page_id !== src.page_id) {
 }
 
 const moved = {
-  status: "active" as const,
+  // Carry the source's status/is_active rather than forcing active: moving a
+  // soft-disabled connection must not silently re-enable webhook routing on
+  // the destination (getActiveMetaConnectionByPageId keys on is_active).
+  status: src.status,
   page_id: src.page_id,
   page_name: src.page_name,
   page_token_encrypted: src.page_token_encrypted,
   account_name: src.account_name,
   instagram_account_id: src.instagram_account_id,
   instagram_username: src.instagram_username,
-  is_active: true,
+  is_active: src.is_active,
+  // Mirror activateMetaConnection: an activated row holds only the page
+  // token — a pending destination's leftover OAuth user token is cleared.
+  user_token_encrypted: null,
   updated_at: new Date().toISOString()
 };
 
