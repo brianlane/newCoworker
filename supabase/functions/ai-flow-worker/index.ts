@@ -6456,18 +6456,25 @@ async function routeBroadcastStep(
     delete routing.offered;
     delete routing.offered_name;
     routing.offered_all = live;
-    if (live.length > 0) {
-      // Someone can still claim: re-park for the REMAINING shared deadline.
+    // Re-park ONLY while the shared deadline is still in the future — a pass
+    // must never extend it (the webhook nulled respond_by_at, so re-parking
+    // past the deadline would also push the timeout sweep out). A pass that
+    // raced the lapsed deadline falls through to the timeout handling below.
+    const deadlineMs =
+      typeof routing.offer_deadline_ms === "number" ? routing.offer_deadline_ms : 0;
+    const remainingMs = deadlineMs - Date.now();
+    if (live.length > 0 && remainingMs > 0) {
+      // Someone can still claim: re-park for exactly the remaining window.
       // Empty recipients — nobody is re-texted.
-      const deadlineMs =
-        typeof routing.offer_deadline_ms === "number" ? routing.offer_deadline_ms : 0;
       return {
         kind: "pause_agent_broadcast",
         recipients: [],
-        respondByMs: Math.max(60_000, deadlineMs - Date.now())
+        respondByMs: remainingMs
       };
     }
-    // Everyone passed → owner fallback.
+    // Everyone passed (or the deadline lapsed mid-pass): retire the rest and
+    // hand the lead to the owner.
+    for (const p of live) if (!tried.includes(p)) tried.push(p);
     delete routing.offered_all;
     delete routing.offered_names;
     delete routing.offer_deadline_ms;

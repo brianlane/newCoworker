@@ -289,6 +289,37 @@ describe("broadcast route_to_team offers (real worker)", () => {
     expect(routing.tried).toEqual([AMY]);
   });
 
+  it("a pass that raced the lapsed deadline never extends the offer — owner fallback instead", async () => {
+    const { runId } = await seedBroadcastRun("IT broadcast pass-after-deadline");
+    await tickWorker();
+
+    // Rewind the SHARED deadline into the past (the sweep hasn't fired yet),
+    // then let Dave's pass arrive: the reject handler must not re-park Amy
+    // on a fresh window past the advertised deadline.
+    {
+      const run = await getRun(db, runId);
+      const routing = routingOf(run);
+      routing.offer_deadline_ms = Date.now() - 60_000;
+      const { error } = await db
+        .from("ai_flow_runs")
+        .update({ context: { ...run.context, routing } })
+        .eq("id", runId);
+      if (error) throw new Error(`deadline rewind: ${error.message}`);
+    }
+    await broadcastPassLikeWebhook(runId, DAVE);
+    await tickWorker();
+
+    const run = await getRun(db, runId);
+    expect(run.status).toBe("done");
+    expect(run.context.vars?.claimed_agent).toBe("none");
+    const routing = routingOf(run);
+    expect(routing.offered_all).toBeUndefined();
+    expect(routing.tried).toEqual(expect.arrayContaining([DAVE, AMY]));
+    const steps = await getSteps(db, runId);
+    const route = steps.find((s) => s.step_type === "route_to_team");
+    expect((route?.result as { routed?: string }).routed).toBe("owner_fallback");
+  });
+
   it("a lapsed shared deadline retires every remaining offeree and falls back to the owner", async () => {
     const { runId } = await seedBroadcastRun("IT broadcast timeout");
     await tickWorker();
