@@ -119,6 +119,26 @@ report_posture() {
     add_check public_listeners false "unexpected listeners: ${listeners}"
   fi
 
+  # Ollama must be reachable THROUGH the docker bridge — the path the
+  # dockerised llm-router actually uses (host.docker.internal → host
+  # gateway). A loopback-only Ollama passes every host-side probe while the
+  # local-model fallback 502s: exactly the July 2026 adopted-box drift
+  # (config refreshed, service never restarted). Skipped on boxes that ship
+  # no local model (no ollama unit, e.g. KVM1).
+  if systemctl cat ollama.service > /dev/null 2>&1; then
+    if docker ps --format '{{.Names}}' 2>/dev/null | grep -qx 'llm-router'; then
+      if docker exec llm-router sh -c \
+          "wget -qO- -T 5 http://host.docker.internal:11434/api/tags > /dev/null 2>&1"; then
+        add_check ollama_bridge_reachable true "llm-router reaches host ollama"
+      else
+        add_check ollama_bridge_reachable false \
+          "llm-router cannot reach host ollama via the docker bridge (stale loopback bind? restart ollama)"
+      fi
+    else
+      add_check ollama_bridge_reachable false "llm-router container not running"
+    fi
+  fi
+
   local joined payload
   joined="$(IFS=,; echo "${checks[*]}")"
   payload="{\"businessId\":\"${BUSINESS_ID}\",\"checks\":[${joined}]}"
