@@ -30,6 +30,10 @@ import {
   parseAiFlowDefinition,
   salvageFlowDefinition
 } from "@/lib/ai-flows/schema";
+import {
+  FLOW_COMPILE_THINKING_LEVEL,
+  flowCompileModel
+} from "@/lib/ai-flows/compile-service";
 import { getAiFlowLibraryEntry } from "@/lib/ai-flows/library";
 
 export const runtime = "nodejs";
@@ -74,7 +78,7 @@ export async function POST(request: Request) {
         .limit(10)
     ]);
 
-    const model = process.env.AIFLOW_COMPILE_MODEL ?? "gemini-3.5-flash";
+    const model = flowCompileModel();
     const userText = buildFlowAdaptUserText({
       sourceDefinition: entry.scrubbed_definition,
       ownerPhone: (business?.phone as string | null | undefined) ?? null,
@@ -93,7 +97,8 @@ export async function POST(request: Request) {
         userText,
         temperature: 0,
         maxOutputTokens: 32000,
-        responseMimeType: "application/json"
+        responseMimeType: "application/json",
+        thinkingLevel: FLOW_COMPILE_THINKING_LEVEL
       }));
     } catch (err) {
       if (err instanceof GeminiEmptyError) {

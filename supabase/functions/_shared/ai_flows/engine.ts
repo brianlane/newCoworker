@@ -154,9 +154,44 @@ export function resolvePath(scope: Record<string, unknown>, path: string): unkno
   return cur;
 }
 
+/**
+ * Name-part suffixes: any string value in scope can be addressed as
+ * `{{vars.lead_name.first}}` (the first whitespace-separated word) or
+ * `{{vars.lead_name.last}}` (everything AFTER the first word — remainder,
+ * not last word, so compound surnames like "de la Cruz" survive). A
+ * single-word value has an empty `.last`, which collapseEmpty rendering
+ * already tidies. Backward-compatible: these dotted paths previously
+ * resolved undefined (a string has no properties under resolvePath) and
+ * rendered "".
+ */
+const NAME_PART_SUFFIXES = new Set(["first", "last"]);
+
+/**
+ * Resolve a placeholder path with name-part support: the plain path first,
+ * then — when it missed and the path ends in `.first`/`.last` — the parent
+ * path's string value split into its parts.
+ */
+export function resolvePlaceholder(scope: Record<string, unknown>, path: string): unknown {
+  const direct = resolvePath(scope, path);
+  if (direct !== undefined) return direct;
+  const lastDot = path.lastIndexOf(".");
+  if (lastDot <= 0) return direct;
+  const suffix = path.slice(lastDot + 1);
+  if (!NAME_PART_SUFFIXES.has(suffix)) return direct;
+  const parent = resolvePath(scope, path.slice(0, lastDot));
+  if (typeof parent !== "string") return direct;
+  const trimmed = parent.trim();
+  if (trimmed === "") return "";
+  const spaceIdx = trimmed.search(/\s/);
+  if (suffix === "first") {
+    return spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx);
+  }
+  return spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1).trim();
+}
+
 /** A placeholder's scalar string value, or "" for missing/object/null. */
 function placeholderValue(scope: Record<string, unknown>, path: string): string {
-  const v = resolvePath(scope, path);
+  const v = resolvePlaceholder(scope, path);
   if (v === null || v === undefined) return "";
   if (typeof v === "string") return v;
   if (typeof v === "number" || typeof v === "boolean") return String(v);
@@ -236,7 +271,9 @@ export function hasUnresolvedPlaceholders(template: string, scope: Record<string
   PLACEHOLDER_RE.lastIndex = 0;
   let m: RegExpExecArray | null;
   while ((m = PLACEHOLDER_RE.exec(template)) !== null) {
-    const v = resolvePath(scope, m[1]);
+    // Same suffix-aware resolution as rendering, so {{vars.x.first}} is
+    // "resolved" exactly when its render would be non-empty.
+    const v = resolvePlaceholder(scope, m[1]);
     if (v === null || v === undefined || v === "") return true;
   }
   return false;
