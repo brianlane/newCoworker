@@ -16,6 +16,7 @@ const Type = {
   OBJECT: "OBJECT",
   STRING: "STRING",
   NUMBER: "NUMBER",
+  BOOLEAN: "BOOLEAN",
   ARRAY: "ARRAY"
 } as const;
 
@@ -72,7 +73,7 @@ export function buildVoiceToolDeclarations(): VoiceToolDeclaration[] {
     {
       name: "calendar_book_appointment",
       description:
-        "Book an appointment on the business calendar. Only call AFTER `calendar_find_slots` confirmed a slot AND the caller has said yes to that ONE specific time out loud — never book while they are still choosing between options, and never book more than one slot per caller. On success, mention a calendar invite ONLY if the result's `inviteEmail` is set; when it is null the caller gets NO invite — do not promise one (offer a text confirmation via `send_follow_up_sms` instead). If the result has detail `booking_link_created` with a `bookingLink` (Calendly accounts), the appointment is NOT booked yet — text the link to the caller with `send_follow_up_sms` and tell them to complete the booking there; never describe it as confirmed.",
+        "Book an appointment on the business calendar. Only call AFTER `calendar_find_slots` confirmed a slot AND the caller has said yes to that ONE specific time out loud — never book while they are still choosing between options, and never book more than one slot per caller. On success, confirm the day and time by reading the result's `startLocal` back to the caller — never work out the day yourself. Mention a calendar invite ONLY if the result's `inviteEmail` is set; when it is null the caller gets NO invite — do not promise one (offer a text confirmation via `send_follow_up_sms` instead). If the result has detail `attendee_already_booked`, this caller ALREADY has an upcoming appointment — tell them its `existingStartLocal` time and follow the result's message (keep it, move it with `calendar_reschedule_appointment`, or cancel it); only retry with `allowAdditional` true after they explicitly confirm they want a separate additional appointment. If the result has detail `booking_link_created` with a `bookingLink` (Calendly accounts), the appointment is NOT booked yet — text the link to the caller with `send_follow_up_sms` and tell them to complete the booking there; never describe it as confirmed.",
       parameters: {
         type: Type.OBJECT,
         properties: {
@@ -88,6 +89,11 @@ export function buildVoiceToolDeclarations(): VoiceToolDeclaration[] {
           notes: {
             type: Type.STRING,
             description: "Any extra context the owner should know before the meeting."
+          },
+          allowAdditional: {
+            type: Type.BOOLEAN,
+            description:
+              "True ONLY after the caller explicitly confirmed they want an ADDITIONAL appointment on top of their existing upcoming one."
           }
         },
         required: ["startIso", "endIso", "attendeeName", "summary"]

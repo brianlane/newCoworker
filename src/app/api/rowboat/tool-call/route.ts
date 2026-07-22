@@ -174,7 +174,10 @@ const bookAppointmentArgsSchema = z.object({
   notes: z.string().max(2000).optional(),
   timezone: z.string().optional(),
   // Vagaro connections only: explicit service to book.
-  serviceId: z.string().max(120).optional()
+  serviceId: z.string().max(120).optional(),
+  // Explicit escape hatch for the attendee duplicate guard: the customer has
+  // confirmed they want an ADDITIONAL appointment on top of an existing one.
+  allowAdditional: z.boolean().optional()
 });
 const rescheduleAppointmentArgsSchema = z.object({
   newStartIso: z.string().datetime({ offset: true }),

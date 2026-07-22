@@ -103,7 +103,7 @@ export const WEBCHAT_TOOL_DECLARATIONS: GeminiFunctionDeclaration[] = [
   {
     name: "webchat_calendar_book_appointment",
     description:
-      "Book an appointment on the owner connected calendar for a website visitor. This tool is the ONLY way an appointment gets created — never tell the visitor an appointment is booked unless this call returned success. Confirm the time with the visitor before booking. Times must be ISO 8601 with timezone offset.",
+      "Book an appointment on the owner connected calendar for a website visitor. This tool is the ONLY way an appointment gets created — never tell the visitor an appointment is booked unless this call returned success. Confirm the time with the visitor before booking. Times must be ISO 8601 with timezone offset. Confirm the booked day and time by quoting the result startLocal field verbatim. If it fails with detail attendee_already_booked, the visitor ALREADY has an upcoming appointment — tell them its existingStartLocal time and that the team can move or cancel it; do NOT book another one.",
     parameters: {
       type: "object",
       properties: {

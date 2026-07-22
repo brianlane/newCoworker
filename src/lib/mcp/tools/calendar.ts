@@ -78,7 +78,7 @@ export const calendarFindSlotsTool = defineMcpTool({
 export const calendarBookAppointmentTool = defineMcpTool({
   name: "calendar_book_appointment",
   description:
-    "Book an appointment on the business's connected calendar. Use calendar_find_slots first and book one of the returned slots. Note: with Calendly, this returns a single-use scheduling link to send the customer instead of a confirmed booking.",
+    "Book an appointment on the business's connected calendar. Use calendar_find_slots first and book one of the returned slots. Confirm the booked day/time from the result's startLocal field verbatim. If it fails because the person already has an upcoming appointment (attendee_already_booked), offer to keep, reschedule, or cancel the existing one instead of booking again. Note: with Calendly, this returns a single-use scheduling link to send the customer instead of a confirmed booking.",
   schema: {
     business_id: businessIdField,
     startIso: z.string().describe("Appointment start — ISO 8601 with timezone offset."),
@@ -93,7 +93,13 @@ export const calendarBookAppointmentTool = defineMcpTool({
       .string()
       .max(120)
       .optional()
-      .describe("Vagaro only: explicit service to book.")
+      .describe("Vagaro only: explicit service to book."),
+    allowAdditional: z
+      .boolean()
+      .optional()
+      .describe(
+        "Set true ONLY after the customer explicitly confirmed they want an additional appointment on top of an existing upcoming one (bypasses the attendee_already_booked guard)."
+      )
   },
   handler: async (args, auth) => {
     const businessId = await resolveMcpBusinessId(auth, args.business_id);
@@ -108,9 +114,14 @@ export const calendarBookAppointmentTool = defineMcpTool({
       attendeePhone: args.attendeePhone,
       notes: args.notes,
       timezone: args.timezone,
-      serviceId: args.serviceId
+      serviceId: args.serviceId,
+      allowAdditional: args.allowAdditional
     });
-    if (!result.ok) throw new McpToolError(calendarFailureMessage(result.detail));
+    if (!result.ok) {
+      // The duplicate guard's result carries its own precise guidance
+      // (existing time + keep/move/cancel options) — surface it verbatim.
+      throw new McpToolError(result.message ?? calendarFailureMessage(result.detail));
+    }
     return result.data;
   }
 });

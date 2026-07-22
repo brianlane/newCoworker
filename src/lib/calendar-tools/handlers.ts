@@ -11,6 +11,7 @@ import {
   confirmBookingDedupe,
   releaseBookingDedupe
 } from "@/lib/calendar-tools/booking-dedupe";
+import { findUpcomingBookingsForAttendee } from "@/lib/calendar-tools/attendee-bookings";
 import { getCustomerMemory } from "@/lib/customer-memory/db";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 import {
@@ -51,6 +52,9 @@ export type CalendarToolResult = {
   ok: boolean;
   detail?: string;
   data?: unknown;
+  /** Model-facing steering/recovery guidance riding with the result (the
+   * voice bridge and every chat surface forward it to the model). */
+  message?: string;
 };
 
 const DEFAULT_SEARCH_WINDOW_MS = 7 * 24 * 60 * 60 * 1000; // 7 days
@@ -76,6 +80,15 @@ export type BookAppointmentArgs = {
   timezone?: string;
   /** Vagaro only: explicit service to book (defaults to the owner's pick). */
   serviceId?: string;
+  /**
+   * Skip the attendee duplicate guard: the customer has EXPLICITLY confirmed
+   * they want an additional appointment on top of an existing upcoming one.
+   * Without it, booking an attendee who already holds a different upcoming
+   * slot refuses with `attendee_already_booked` (Truly, Jul 21 2026: the
+   * model disowned a valid booking it had just made and created a second
+   * one — the broker ended up double-booked).
+   */
+  allowAdditional?: boolean;
 };
 
 type Slot = { startIso: string; endIso: string };
@@ -109,6 +122,32 @@ export async function resolveToolTimezone(
     return isValidTimeZone(biz) ? biz : "UTC";
   } catch {
     return "UTC";
+  }
+}
+
+/**
+ * A booking start rendered for HUMANS (and the model to read back
+ * verbatim): "Wednesday, July 22, 2026, 9:00 AM EDT". The Truly incident of
+ * Jul 21 2026 was the model booking the right instant but narrating the
+ * wrong DAY ("today") and then disowning its own valid booking — so
+ * successful bookings and the duplicate guard both carry this string, and
+ * the prompts tell the model to quote it instead of deriving the day
+ * itself. Falls back to the raw ISO rather than ever throwing.
+ */
+export function formatBookingStartLocal(startIso: string, timeZone: string): string {
+  try {
+    return new Intl.DateTimeFormat("en-US", {
+      timeZone,
+      weekday: "long",
+      month: "long",
+      day: "numeric",
+      year: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+      timeZoneName: "short"
+    }).format(new Date(startIso));
+  } catch {
+    return startIso;
   }
 }
 
@@ -466,6 +505,86 @@ export async function bookCalendarAppointment(
     ...(!rawArgs.attendeeEmail?.trim() && stored.email ? { attendeeEmail: stored.email } : {})
   };
 
+  /** Stamp booked results with the human-readable local start (+ zone) so
+   * the model reads the tool's day/time back verbatim instead of deriving
+   * "today"/"tomorrow" itself (the Truly Jul 21 mislabeled-day incident). */
+  const withStartLocal = async (result: CalendarToolResult): Promise<CalendarToolResult> => {
+    const d = (result.data ?? {}) as Record<string, unknown>;
+    const booked =
+      result.ok &&
+      ((typeof d.eventId === "string" && d.eventId.length > 0) ||
+        result.detail === "already_booked");
+    if (!booked) return result;
+    const tz = await resolveToolTimezone(businessId, args.timezone);
+    return {
+      ...result,
+      data: { ...d, startLocal: formatBookingStartLocal(args.startIso, tz) }
+    };
+  };
+
+  // Attendee duplicate guard (Truly, Jul 21 2026): prompts alone failed
+  // three times in one week — the model books a SECOND slot to "fix" or
+  // "move" an existing one, and the owner's calendar ends up double-booked.
+  // The shared attendee-bookings lookup sees every platform booking (any
+  // provider, via the dedupe ledger) plus the connected provider's
+  // off-platform bookings (Calendly/Vagaro adapters), so a request for an
+  // attendee who already holds a DIFFERENT upcoming slot refuses with
+  // reschedule/cancel guidance. The exact same slot falls through to the
+  // idempotency ledger below (a timeout retry must keep answering
+  // `already_booked`), and `allowAdditional` is the explicit escape hatch
+  // for a genuinely additional appointment. Fail-open by module contract:
+  // a lookup hiccup books as before.
+  if (!args.allowAdditional) {
+    const existing = await findUpcomingBookingsForAttendee(
+      businessId,
+      {
+        phones: attendeePhone ? [attendeePhone] : [],
+        email: args.attendeeEmail?.trim().toLowerCase() || null,
+        name: args.attendeeName
+      },
+      {},
+      { mode: "detail" }
+    );
+    const requestedStartMs = new Date(args.startIso).getTime();
+    const nowMs = Date.now();
+    // A request that repeats one of the attendee's EXISTING slot times is a
+    // retry, not a duplicate: skip the guard entirely so it falls through to
+    // the idempotency ledger's `already_booked` answer — even when the
+    // attendee holds OTHER upcoming slots too (e.g. booked two via
+    // allowAdditional; Bugbot Medium on PR #824).
+    const repeatsExistingSlot = existing.some((b) => {
+      const ms = Date.parse(b.startIso);
+      return Number.isFinite(ms) && ms === requestedStartMs;
+    });
+    const conflict = repeatsExistingSlot
+      ? undefined
+      : existing.find((b) => {
+          const ms = Date.parse(b.startIso);
+          return Number.isFinite(ms) && ms > nowMs;
+        });
+    if (conflict) {
+      const tz = await resolveToolTimezone(businessId, args.timezone);
+      const existingStartLocal = formatBookingStartLocal(conflict.startIso, tz);
+      return {
+        ok: false,
+        detail: "attendee_already_booked",
+        data: {
+          existingEventId: conflict.eventId,
+          existingStartIso: conflict.startIso,
+          existingStartLocal,
+          existingProvider: conflict.provider
+        },
+        message:
+          `This person already has an upcoming appointment: ${existingStartLocal}. Do NOT ` +
+          "book another one. Tell them about that existing time and ask what they want: " +
+          "keep it (book nothing), move it (calendar_reschedule_appointment — never book a " +
+          "second slot to move one), or cancel it (calendar_cancel_appointment). Only if " +
+          "they explicitly confirm they want an ADDITIONAL separate appointment, call " +
+          "calendar_book_appointment again with allowAdditional set to true."
+      };
+    }
+  }
+
   // Idempotency guard (2026-07-13 incident): a worker-retried model turn
   // re-runs its tool calls, and provider create APIs are not idempotent —
   // one customer confirmation produced FOUR identical Outlook events. Claim
@@ -480,7 +599,7 @@ export async function bookCalendarAppointment(
     new Date(args.startIso).toISOString()
   );
   if (claim?.kind === "duplicate") {
-    return {
+    return withStartLocal({
       ok: true,
       detail: "already_booked",
       data: {
@@ -491,7 +610,7 @@ export async function bookCalendarAppointment(
         // on the same args, so the merged email IS what rode the event.
         inviteEmail: args.attendeeEmail?.trim() || null
       }
-    };
+    });
   }
   if (claim?.kind === "in_flight") {
     // Another attempt is booking this exact slot right now. Refuse without
@@ -519,7 +638,7 @@ export async function bookCalendarAppointment(
       await releaseBookingDedupe(claim.id);
     }
   }
-  return result;
+  return withStartLocal(result);
 }
 
 async function bookOnProvider(

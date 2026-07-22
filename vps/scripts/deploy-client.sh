@@ -1203,7 +1203,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "calendar_book_appointment",
-      description: "Book an appointment on the owner connected calendar. This tool is the ONLY way an appointment gets created — never tell the customer an appointment is booked or confirmed unless this call returned success. Confirm the time with the customer before booking. Times must be ISO 8601 with timezone offset.",
+      description: "Book an appointment on the owner connected calendar. This tool is the ONLY way an appointment gets created — never tell the customer an appointment is booked or confirmed unless this call returned success. Confirm the time with the customer before booking. Times must be ISO 8601 with timezone offset. Confirm the booked day and time by quoting the result startLocal field verbatim — never derive the day yourself. If it fails with detail attendee_already_booked, the customer ALREADY has an upcoming appointment: tell them its existingStartLocal time and follow the result message (keep it, move it with calendar_reschedule_appointment, or cancel it); only retry with allowAdditional true after they explicitly confirm they want a separate additional appointment.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1215,7 +1215,8 @@ WORKFLOW_JSON=$(jq -nc \
           attendeeEmail: { type: "string", description: "Customer email, if provided." },
           attendeePhone: { type: "string", description: "Customer phone, if known." },
           notes: { type: "string", description: "Extra context for the event description." },
-          timezone: { type: "string", description: "IANA timezone for the event times." }
+          timezone: { type: "string", description: "IANA timezone for the event times." },
+          allowAdditional: { type: "boolean", description: "True ONLY after the customer explicitly confirmed an ADDITIONAL appointment on top of their existing upcoming one." }
         },
         required: ["startIso", "endIso", "summary", "attendeeName"]
       }
@@ -1309,7 +1310,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "dashboard_calendar_book_appointment",
-      description: "Book an appointment on the owner connected calendar when the owner asks for it in dashboard chat. Times must be ISO 8601 with timezone offset.",
+      description: "Book an appointment on the owner connected calendar when the owner asks for it in dashboard chat. Times must be ISO 8601 with timezone offset. Confirm the booked day and time by quoting the result startLocal field verbatim. If it fails with detail attendee_already_booked, the attendee ALREADY has an upcoming appointment — follow the result message (keep, reschedule, or cancel it) and only retry with allowAdditional true after the owner explicitly confirms an additional appointment.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1321,7 +1322,8 @@ WORKFLOW_JSON=$(jq -nc \
           attendeeEmail: { type: "string", description: "Attendee email, if provided." },
           attendeePhone: { type: "string", description: "Attendee phone, if known." },
           notes: { type: "string", description: "Extra context for the event description." },
-          timezone: { type: "string", description: "IANA timezone for the event times." }
+          timezone: { type: "string", description: "IANA timezone for the event times." },
+          allowAdditional: { type: "boolean", description: "True ONLY after the owner explicitly confirmed an ADDITIONAL appointment on top of the attendee existing upcoming one." }
         },
         required: ["startIso", "endIso", "summary", "attendeeName"]
       }
@@ -1631,7 +1633,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "webchat_calendar_book_appointment",
-      description: "Book an appointment on the owner connected calendar for a website visitor. This tool is the ONLY way an appointment gets created — never tell the visitor an appointment is booked unless this call returned success. Confirm the time with the visitor before booking. Times must be ISO 8601 with timezone offset.",
+      description: "Book an appointment on the owner connected calendar for a website visitor. This tool is the ONLY way an appointment gets created — never tell the visitor an appointment is booked unless this call returned success. Confirm the time with the visitor before booking. Times must be ISO 8601 with timezone offset. Confirm the booked day and time by quoting the result startLocal field verbatim. If it fails with detail attendee_already_booked, the visitor ALREADY has an upcoming appointment — tell them its existingStartLocal time and that the team can move or cancel it; do NOT book another one.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",

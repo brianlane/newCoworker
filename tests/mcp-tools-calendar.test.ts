@@ -101,4 +101,25 @@ describe("calendar_book_appointment", () => {
       /re-check with calendar_find_slots/
     );
   });
+
+  it("surfaces the core's own message verbatim when it carries one (attendee duplicate guard)", async () => {
+    vi.mocked(bookCalendarAppointment).mockResolvedValue({
+      ok: false,
+      detail: "attendee_already_booked",
+      message:
+        "This person already has an upcoming appointment: Wednesday, July 22, 2026 at 12:00 PM EDT. Do NOT book another one."
+    });
+    await expect(calendarBookAppointmentTool.handler(ARGS, AUTH)).rejects.toThrow(
+      /already has an upcoming appointment: Wednesday, July 22/
+    );
+  });
+
+  it("passes allowAdditional through to the core", async () => {
+    vi.mocked(bookCalendarAppointment).mockResolvedValue({ ok: true, data: { eventId: "e" } });
+    await calendarBookAppointmentTool.handler({ ...ARGS, allowAdditional: true }, AUTH);
+    expect(bookCalendarAppointment).toHaveBeenCalledWith(
+      "biz-1",
+      expect.objectContaining({ allowAdditional: true })
+    );
+  });
 });
