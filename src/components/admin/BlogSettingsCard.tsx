@@ -63,11 +63,30 @@ export function BlogSettingsCard({ initialSettings }: { initialSettings: BlogSet
     <div className="rounded-xl border border-parchment/10 bg-parchment/[0.02] p-6">
       <h2 className="mb-4 text-lg font-semibold text-parchment">{t("settingsTitle")}</h2>
       <div className="space-y-4">
+        <p className="text-xs text-parchment/45">{t("rotationHelp")}</p>
         <Toggle
           checked={settings.digest_enabled}
           onChange={(v) => set("digest_enabled", v)}
           label={t("digestEnabled")}
           help={t("digestEnabledHelp")}
+        />
+        <Toggle
+          checked={settings.auto_tutorial_enabled}
+          onChange={(v) => set("auto_tutorial_enabled", v)}
+          label={t("autoTutorial")}
+          help={t("autoTutorialHelp")}
+        />
+        <Toggle
+          checked={settings.auto_business_tips_enabled}
+          onChange={(v) => set("auto_business_tips_enabled", v)}
+          label={t("autoBusinessTips")}
+          help={t("autoBusinessTipsHelp")}
+        />
+        <Toggle
+          checked={settings.auto_feature_enabled}
+          onChange={(v) => set("auto_feature_enabled", v)}
+          label={t("autoFeature")}
+          help={t("autoFeatureHelp")}
         />
         <Toggle
           checked={settings.digest_as_draft}

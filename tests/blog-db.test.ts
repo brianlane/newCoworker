@@ -22,6 +22,7 @@ import {
   getBlogSettings,
   getLatestWeeklyDigestPost,
   getPostByDigestWeek,
+  listRecentTitlesByCategory,
   getPublishedPostBySlug,
   insertBlogPost,
   listActiveBlogSubscribers,
@@ -297,6 +298,8 @@ describe("publish sweep helpers", () => {
     found.maybeSingle.mockResolvedValue({ data: { id: POST }, error: null });
     expect(await getLatestWeeklyDigestPost(makeDb(found))).toEqual({ id: POST });
     expect(found.eq).toHaveBeenCalledWith("source", "weekly_digest");
+    // Rotation topic posts share the source; only true digests anchor.
+    expect(found.eq).toHaveBeenCalledWith("category", "platform-updates");
 
     const missing = chain();
     missing.maybeSingle.mockResolvedValue({ data: null, error: null });
@@ -306,6 +309,21 @@ describe("publish sweep helpers", () => {
     bad.maybeSingle.mockResolvedValue({ data: null, error: { message: "boom" } });
     await expect(getLatestWeeklyDigestPost(makeDb(bad))).rejects.toThrow(
       "getLatestWeeklyDigestPost: boom"
+    );
+  });
+
+  it("lists recent titles by category (rows, empty, error)", async () => {
+    const c = chain({ data: [{ title: "A" }, { title: "B" }], error: null });
+    expect(await listRecentTitlesByCategory("business-tips", 10, makeDb(c))).toEqual(["A", "B"]);
+    expect(c.eq).toHaveBeenCalledWith("category", "business-tips");
+    expect(c.limit).toHaveBeenCalledWith(10);
+
+    const empty = chain({ data: null, error: null });
+    expect(await listRecentTitlesByCategory("tutorial", 5, makeDb(empty))).toEqual([]);
+
+    const bad = chain({ data: null, error: { message: "boom" } });
+    await expect(listRecentTitlesByCategory("feature", 5, makeDb(bad))).rejects.toThrow(
+      "listRecentTitlesByCategory: boom"
     );
   });
 
@@ -338,6 +356,9 @@ describe("settings", () => {
         digest_enabled: false,
         digest_as_draft: true,
         digest_include_image: false,
+        auto_tutorial_enabled: false,
+        auto_business_tips_enabled: false,
+        auto_feature_enabled: false,
         instagram_business_id: "biz-1",
         instagram_publish_immediately: true,
         extra_column: "ignored"
@@ -348,9 +369,29 @@ describe("settings", () => {
       digest_enabled: false,
       digest_as_draft: true,
       digest_include_image: false,
+      auto_tutorial_enabled: false,
+      auto_business_tips_enabled: false,
+      auto_feature_enabled: false,
       instagram_business_id: "biz-1",
       instagram_publish_immediately: true
     });
+
+    // Pre-migration rows (rotation columns absent) map to the defaults.
+    const legacy = chain();
+    legacy.maybeSingle.mockResolvedValue({
+      data: {
+        digest_enabled: true,
+        digest_as_draft: false,
+        digest_include_image: true,
+        instagram_business_id: null,
+        instagram_publish_immediately: false
+      },
+      error: null
+    });
+    const mapped = await getBlogSettings(makeDb(legacy));
+    expect(mapped.auto_tutorial_enabled).toBe(true);
+    expect(mapped.auto_business_tips_enabled).toBe(true);
+    expect(mapped.auto_feature_enabled).toBe(true);
 
     const bad = chain();
     bad.maybeSingle.mockResolvedValue({ data: null, error: { message: "boom" } });

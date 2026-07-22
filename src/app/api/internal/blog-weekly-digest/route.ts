@@ -4,15 +4,16 @@
  * Call chain: pg_cron (Mondays) → Edge `blog-weekly-digest` → this route.
  * Bearer: `Authorization: Bearer <INTERNAL_CRON_SECRET>`.
  *
- * Summarizes the prior week's merged feature PRs into a scheduled blog
- * post — see src/lib/blog/weekly-digest.ts for the volume bar, the
- * features-only filter, and the word cap.
+ * One auto post per week on a rotating category — PR digest, Tutorial,
+ * Business Tips, Feature deep-dive — see src/lib/blog/weekly-topics.ts
+ * (rotation + fallbacks) and src/lib/blog/weekly-digest.ts (the digest's
+ * volume bar, features-only filter, and word cap).
  */
 
 import { assertCronAuth } from "@/lib/cron-auth";
 import { errorResponse, successResponse } from "@/lib/api-response";
 import { logger } from "@/lib/logger";
-import { runWeeklyDigest } from "@/lib/blog/weekly-digest";
+import { runWeeklyAuto } from "@/lib/blog/weekly-topics";
 
 export const maxDuration = 300;
 export const runtime = "nodejs";
@@ -24,7 +25,7 @@ export async function POST(request: Request): Promise<Response> {
 
   const startedAt = Date.now();
   try {
-    const result = await runWeeklyDigest();
+    const result = await runWeeklyAuto();
     logger.info("blog-weekly-digest: summary", { ...result, durationMs: Date.now() - startedAt });
     return successResponse(result);
   } catch (err) {
