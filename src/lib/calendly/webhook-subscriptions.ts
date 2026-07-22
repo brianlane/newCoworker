@@ -72,15 +72,13 @@ function resourceUuid(uri: string): string {
 }
 
 /**
- * HTTP status from either transport's failure shape: CalendlyApiError
- * (direct PAT) carries `.status`; the Nango proxy throws axios-style errors
- * with `.response.status`.
+ * HTTP status from the direct transport's failure shape: CalendlyApiError
+ * carries `.status`. (The axios-style `.response.status` arm went with the
+ * Nango proxy transport in the 2026-07 dead-code sweep.)
  */
 export function httpStatusOf(err: unknown): number | undefined {
-  const anyErr = err as { status?: unknown; response?: { status?: unknown } } | null;
-  if (typeof anyErr?.status === "number") return anyErr.status;
-  if (typeof anyErr?.response?.status === "number") return anyErr.response.status;
-  return undefined;
+  const anyErr = err as { status?: unknown } | null;
+  return typeof anyErr?.status === "number" ? anyErr.status : undefined;
 }
 
 export type CalendlyWebhookEnsureDeps = {
@@ -168,7 +166,7 @@ export async function ensureCalendlyWebhookSubscription(
     // account behind it.
     if (row?.status === "active") {
       if (row.user_uri === userUri && row.subscription_uri && row.signingKey) {
-        // Same Calendly account, new connection (e.g. Nango reconnect) —
+        // Same Calendly account, new connection (e.g. a re-pasted PAT) —
         // the subscription is still right; just re-stamp the key.
         return await record("active", row.subscription_uri, row.signingKey, userUri);
       }
@@ -220,10 +218,10 @@ export async function ensureCalendlyWebhookSubscription(
       } catch (err) {
         const status = httpStatusOf(err);
         if (status === 409) return "conflict";
-        // Plan gating: Calendly refuses webhook creation with 402/403 on
-        // plans without the feature (the direct transport maps 403 to null,
-        // handled below; the Nango proxy surfaces it as a thrown 403).
-        if (status === 402 || status === 403) return record("unsupported");
+        // Plan gating: Calendly refuses webhook creation with 402 on plans
+        // without the feature. (The direct transport maps 403 to null —
+        // handled below; the thrown-403 arm went with the Nango proxy.)
+        if (status === 402) return record("unsupported");
         logger.warn("calendly webhook subscribe failed", {
           businessId,
           status: status ?? null,

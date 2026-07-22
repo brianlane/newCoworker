@@ -130,28 +130,19 @@ describe("resolveVoiceConnection", () => {
     expect(res?.providerConfigKey).toBe("outlook-calendar");
   });
 
-  it("resolveCalendarConnection maps calendly to the calendly provider", async () => {
+  it("ignores a legacy Nango calendly row entirely (the fallback key was removed)", async () => {
+    // A stray legacy row alone resolves nothing…
     vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([fakeRow("calendly")]);
-    const res = await resolveCalendarConnection(businessId);
-    expect(res?.provider).toBe("calendly");
-    expect(res?.providerConfigKey).toBe("calendly");
-  });
+    expect(await resolveCalendarConnection(businessId)).toBeNull();
 
-  it("resolveCalendarConnection prefers a native calendar over calendly, and calendly over broad workspace connections", async () => {
+    // …and never shadows the broad workspace fallbacks.
     vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
       fakeRow("calendly"),
-      fakeRow("google-calendar")
+      fakeRow("google")
     ]);
-    const native = await resolveCalendarConnection(businessId);
-    expect(native?.providerConfigKey).toBe("google-calendar");
-
-    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
-      fakeRow("google"),
-      fakeRow("calendly")
-    ]);
-    const calendly = await resolveCalendarConnection(businessId);
-    expect(calendly?.providerConfigKey).toBe("calendly");
-    expect(calendly?.provider).toBe("calendly");
+    const g = await resolveCalendarConnection(businessId);
+    expect(g?.providerConfigKey).toBe("google");
+    expect(g?.provider).toBe("google");
   });
 
   it("resolveCalendarConnection puts an active Vagaro connection ahead of everything", async () => {
@@ -202,16 +193,13 @@ describe("resolveVoiceConnection", () => {
     });
   });
 
-  it("direct Calendly loses to native calendars but beats the Nango calendly key and broad fallbacks", async () => {
+  it("direct Calendly loses to native calendars but beats the broad fallbacks", async () => {
     vi.mocked(getActiveCalendlyConnectionId).mockResolvedValue("calendly-row-1");
     vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([fakeRow("google-calendar")]);
     const native = await resolveCalendarConnection(businessId);
     expect(native?.providerConfigKey).toBe("google-calendar");
 
-    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
-      fakeRow("calendly"),
-      fakeRow("google")
-    ]);
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([fakeRow("google")]);
     const direct = await resolveCalendarConnection(businessId);
     expect(direct?.providerConfigKey).toBe(CALENDLY_DIRECT_KEY);
     expect(direct?.provider).toBe("calendly");

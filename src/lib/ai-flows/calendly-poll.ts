@@ -298,8 +298,9 @@ export async function fetchCalendlyCandidateEvents(
   const persistUserUri = deps.persistUserUri ?? setCalendlyConnectionUserUri;
   const { businessId, conn, nowMs, windows } = args;
 
-  // The cache only exists for the dashboard-PAT row; Nango-OAuth Calendly
-  // connections have no calendly_connections row to cache on.
+  // The cache lives on the dashboard-PAT row (calendly_connections); a conn
+  // carrying any other key — only possible via injected deps now that the
+  // direct PAT is the sole Calendly transport — has no row to cache on.
   const cacheable = conn.providerConfigKey === CALENDLY_DIRECT_KEY;
   let userUri: string | null = null;
   if (cacheable) {

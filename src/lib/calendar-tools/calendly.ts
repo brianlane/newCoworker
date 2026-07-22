@@ -15,16 +15,14 @@
  * Both pick the owner's active event type whose duration is closest to the
  * requested duration (ties go to the earlier listing).
  *
- * Two transports, chosen by the resolved connection's providerConfigKey:
- *   - "calendly" (Nango OAuth) → the Nango proxy, which re-verifies the
- *     connection belongs to the business;
- *   - CALENDLY_DIRECT_KEY (dashboard-pasted Personal Access Token) → direct
- *     calls to api.calendly.com via src/lib/calendly/client.ts.
- * Both return the same `{ data } | null` shape, so everything below is
- * transport-agnostic.
+ * One transport: CALENDLY_DIRECT_KEY (dashboard-pasted Personal Access
+ * Token) → direct calls to api.calendly.com via src/lib/calendly/client.ts.
+ * The legacy Nango OAuth transport was removed in the 2026-07 dead-code
+ * sweep (production never had live Nango Calendly connections); a conn
+ * carrying any other key maps to null = "not usable", the same semantics a
+ * stale link always had.
  */
 
-import { nangoProxyForBusiness } from "@/lib/nango/workspace";
 import { calendlyDirectRequest } from "@/lib/calendly/client";
 import { getActiveCalendlyConnection } from "@/lib/db/calendly-connections";
 import {
@@ -66,12 +64,6 @@ export type CalendlyBookingLinkArgs = {
   endIso: string;
 };
 
-type ProxyLink = { connectionId: string; providerConfigKey: string };
-
-function proxyLink(conn: ResolvedVoiceConnection): ProxyLink {
-  return { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey };
-}
-
 export type CalendlyRequestConfig = {
   endpoint: string;
   method: "GET" | "POST" | "DELETE";
@@ -80,30 +72,28 @@ export type CalendlyRequestConfig = {
 };
 
 /**
- * Transport-agnostic request: direct PAT for dashboard-connected accounts,
- * the Nango proxy otherwise. Null means "not usable" for BOTH transports
- * (missing/inactive direct row or revoked PAT; stale/foreign Nango link),
- * which callers map to `calendar_not_connected`. Exported for the AiFlow
- * calendar-trigger poller (src/lib/ai-flows/calendly-poll.ts), which speaks
- * the same two transports.
+ * Direct-PAT request. Null means "not usable" (missing/inactive direct row,
+ * revoked PAT, or a conn that isn't the direct key at all — legacy Nango
+ * conns land here since the proxy transport was removed), which callers map
+ * to `calendar_not_connected`. Exported for the AiFlow calendar-trigger
+ * poller (src/lib/ai-flows/calendly-poll.ts) and the webhook-subscription
+ * lifecycle, which share the transport.
  */
 export async function calendlyRequest(
   businessId: string,
   conn: ResolvedVoiceConnection,
   config: CalendlyRequestConfig
 ): Promise<{ data: unknown } | null> {
-  if (conn.providerConfigKey === CALENDLY_DIRECT_KEY) {
-    const row = await getActiveCalendlyConnection(businessId);
-    if (!row) return null;
-    return calendlyDirectRequest(row.accessToken, config);
-  }
-  return nangoProxyForBusiness(businessId, proxyLink(conn), config);
+  if (conn.providerConfigKey !== CALENDLY_DIRECT_KEY) return null;
+  const row = await getActiveCalendlyConnection(businessId);
+  if (!row) return null;
+  return calendlyDirectRequest(row.accessToken, config);
 }
 
 /**
  * The connected account's user URI — the required `user` filter for the
- * event-types listing. Null when the Nango link is stale/foreign (the proxy
- * returns null for unverified links).
+ * event-types listing. Null when the connection is unusable (revoked PAT /
+ * missing row).
  */
 async function resolveUserUri(
   businessId: string,

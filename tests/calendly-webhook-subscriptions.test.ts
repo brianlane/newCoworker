@@ -93,9 +93,9 @@ describe("calendlyWebhookCallbackUrl", () => {
 });
 
 describe("httpStatusOf", () => {
-  it("reads CalendlyApiError-style .status and axios-style .response.status", () => {
+  it("reads CalendlyApiError-style .status only (the axios arm went with the Nango proxy)", () => {
     expect(httpStatusOf({ status: 403 })).toBe(403);
-    expect(httpStatusOf({ response: { status: 409 } })).toBe(409);
+    expect(httpStatusOf({ response: { status: 409 } })).toBeUndefined();
     expect(httpStatusOf({ status: "403" })).toBeUndefined();
     expect(httpStatusOf(new Error("plain"))).toBeUndefined();
     expect(httpStatusOf(null)).toBeUndefined();
@@ -338,15 +338,12 @@ describe("ensureCalendlyWebhookSubscription", () => {
     }
   });
 
-  it("records unsupported when the create is refused (null) or plan-gated (402/403)", async () => {
+  it("records unsupported when the create is refused (null) or plan-gated (thrown 402)", async () => {
     vi.mocked(getCalendlyWebhookSubscription).mockResolvedValue(null);
     for (const failure of [
       async () => null, // direct transport maps 403 → null
       async () => {
         throw { status: 402 };
-      },
-      async () => {
-        throw { response: { status: 403 } };
       }
     ]) {
       vi.mocked(upsertCalendlyWebhookSubscription).mockClear();
@@ -354,6 +351,18 @@ describe("ensureCalendlyWebhookSubscription", () => {
       const out = await ensureCalendlyWebhookSubscription(BIZ, CONN, { request, nowMs: NOW }, db);
       expect(out).toEqual({ status: "unsupported", attempted: true });
     }
+  });
+
+  it("a thrown 403 records error, not unsupported (the Nango thrown-403 arm was removed)", async () => {
+    vi.mocked(getCalendlyWebhookSubscription).mockResolvedValue(null);
+    const request = vi
+      .fn()
+      .mockResolvedValueOnce(USER_RES)
+      .mockImplementationOnce(async () => {
+        throw { status: 403 };
+      });
+    const out = await ensureCalendlyWebhookSubscription(BIZ, CONN, { request, nowMs: NOW }, db);
+    expect(out).toEqual({ status: "error", attempted: true });
   });
 
   it("records error (with a warn) on unexpected create failures", async () => {
