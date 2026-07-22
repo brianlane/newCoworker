@@ -122,6 +122,98 @@ describe("renderMarkdown", () => {
   });
 });
 
+describe("renderMarkdown — strikethrough, autolink, tables", () => {
+  it("renders strikethrough", () => {
+    expect(renderMarkdown("~~gone~~ still here")).toBe("<p><del>gone</del> still here</p>");
+  });
+
+  it("autolinks bare URLs at line start and mid-sentence, keeping trailing punctuation outside", () => {
+    expect(renderMarkdown("https://a.dev")).toBe(
+      '<p><a href="https://a.dev" target="_blank" rel="noopener noreferrer">https://a.dev</a></p>'
+    );
+    expect(renderMarkdown("see https://a.dev/x, then move on")).toBe(
+      '<p>see <a href="https://a.dev/x" target="_blank" rel="noopener noreferrer">https://a.dev/x</a>, then move on</p>'
+    );
+  });
+
+  it("keeps a balanced closing parenthesis inside the URL, peels an unbalanced one", () => {
+    // Wikipedia-style path: '(' inside the URL balances the trailing ')'.
+    expect(renderMarkdown("read https://en.wikipedia.org/wiki/Foo_(bar) now")).toContain(
+      'href="https://en.wikipedia.org/wiki/Foo_(bar)"'
+    );
+    // Parenthesized sentence: the ')' belongs to the prose, not the URL.
+    const html = renderMarkdown("(see https://a.dev/x)");
+    expect(html).toContain('href="https://a.dev/x"');
+    expect(html).toContain("</a>)");
+    // Punctuation after a balanced ')' still peels.
+    expect(renderMarkdown("https://a.dev/f_(x).")).toContain('href="https://a.dev/f_(x)"');
+  });
+
+  it("does not double-link URLs inside markdown links or code spans", () => {
+    const linked = renderMarkdown("[docs](https://a.dev)");
+    expect(linked).toBe(
+      '<a href="https://a.dev" target="_blank" rel="noopener noreferrer">docs</a>'
+        .replace(/^/, "<p>")
+        .concat("</p>")
+    );
+    expect(renderMarkdown("`https://a.dev`")).toBe("<p><code>https://a.dev</code></p>");
+  });
+
+  it("never autolinks inside emitted link text or image alt attributes", () => {
+    // A bare URL in link text stays plain — no nested anchor.
+    const inLinkText = renderMarkdown("[go to https://a.dev now](https://b.dev)");
+    expect(inLinkText).toBe(
+      '<p><a href="https://b.dev" target="_blank" rel="noopener noreferrer">go to https://a.dev now</a></p>'
+    );
+    // A bare URL in an alt attribute stays plain — the img tag survives.
+    const inAlt = renderMarkdown("![see https://a.dev here](https://b.dev/i.png)");
+    expect(inAlt).toBe(
+      '<p><img src="https://b.dev/i.png" alt="see https://a.dev here" loading="lazy" /></p>'
+    );
+  });
+
+  it("still renders emphasis inside link text", () => {
+    expect(renderMarkdown("[**bold** and *soft*](https://a.dev)")).toContain(
+      "><strong>bold</strong> and <em>soft</em></a>"
+    );
+  });
+
+  it("renders a GFM table with header and body", () => {
+    const html = renderMarkdown(
+      "| Plan | Price |\n| --- | :---: |\n| Starter | $9.99 |\n| Standard | **$99** |"
+    );
+    expect(html).toBe(
+      "<table><thead><tr><th>Plan</th><th>Price</th></tr></thead>" +
+        "<tbody><tr><td>Starter</td><td>$9.99</td></tr>" +
+        "<tr><td>Standard</td><td><strong>$99</strong></td></tr></tbody></table>"
+    );
+  });
+
+  it("renders a header-only table without a tbody", () => {
+    expect(renderMarkdown("| A | B |\n| --- | --- |")).toBe(
+      "<table><thead><tr><th>A</th><th>B</th></tr></thead></table>"
+    );
+  });
+
+  it("falls back to a paragraph when the separator row is missing or malformed", () => {
+    expect(renderMarkdown("| just | one |")).toBe("<p>| just | one |</p>");
+    expect(renderMarkdown("| a | b |\n| -- | nope |")).toBe("<p>| a | b | | -- | nope |</p>");
+  });
+
+  it("flushes an open paragraph before a table and closes the table at the next block", () => {
+    const html = renderMarkdown("intro text\n| A |\n| --- |\n| 1 |\nafter text");
+    expect(html).toBe(
+      "<p>intro text</p>\n" +
+        "<table><thead><tr><th>A</th></tr></thead><tbody><tr><td>1</td></tr></tbody></table>\n" +
+        "<p>after text</p>"
+    );
+  });
+
+  it("flushes a table at end of input", () => {
+    expect(renderMarkdown("| A |\n| --- |")).toContain("<table>");
+  });
+});
+
 describe("markdownToPlainText", () => {
   it("strips code blocks, links, images, and markup", () => {
     const text = markdownToPlainText(
@@ -132,5 +224,11 @@ describe("markdownToPlainText", () => {
 
   it("collapses whitespace", () => {
     expect(markdownToPlainText("a\n\n\nb   c")).toBe("a b c");
+  });
+
+  it("strips table pipes, separator rows, and strikethrough markers", () => {
+    expect(markdownToPlainText("| Plan | Price |\n| --- | --- |\n| Starter | ~~$20~~ $9.99 |")).toBe(
+      "Plan Price Starter $20 $9.99"
+    );
   });
 });

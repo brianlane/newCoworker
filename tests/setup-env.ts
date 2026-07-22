@@ -35,6 +35,10 @@ const LIVE_CREDENTIAL_ENV_VARS = [
   // Google / Gemini
   "GOOGLE_API_KEY",
   "GEMINI_API_KEY",
+  "JINA_API_KEY",
+  // GitHub (weekly blog digest)
+  "GITHUB_DIGEST_REPO",
+  "GITHUB_DIGEST_TOKEN",
   // VPS providers
   "HOSTINGER_API_TOKEN",
   "OVH_APP_KEY",
@@ -52,6 +56,8 @@ const LIVE_CREDENTIAL_ENV_VARS = [
   "AIFLOW_RENDER_TOKEN",
   "STREAM_URL_SIGNING_SECRET",
   "INTEGRATIONS_ENCRYPTION_KEY",
+  // App-layer secret envelope (flips encrypt-vs-plaintext code paths)
+  "SECRETS_ENCRYPTION_KEY",
   // Workspace OAuth / third-party apps
   "NANGO_SECRET_KEY",
   "MICROSOFT_CLIENT_SECRET",
@@ -59,7 +65,12 @@ const LIVE_CREDENTIAL_ENV_VARS = [
   "ZOOM_CLIENT_ID",
   "ZOOM_CLIENT_SECRET",
   // Admin
-  "ADMIN_PASSWORD"
+  "ADMIN_PASSWORD",
+  // Not credentials, but sourced-.env values that flip env-dependent
+  // branches (`?? default` arms) and make a local run diverge from CI.
+  "NEXT_PUBLIC_APP_URL",
+  "GEMINI_SUMMARY_MODEL",
+  "GEMINI_ROWBOAT_MODEL"
 ] as const;
 
 for (const name of LIVE_CREDENTIAL_ENV_VARS) {
