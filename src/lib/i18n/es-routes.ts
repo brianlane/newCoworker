@@ -9,6 +9,7 @@ const ES_PREFIX = "/es";
 /** Marketing paths that get a public /es/... mirror. */
 const SPANISH_MARKETING_PREFIXES = [
   "/",
+  "/blog",
   "/features",
   "/pricing",
   "/integrations",

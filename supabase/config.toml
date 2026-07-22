@@ -172,3 +172,15 @@ verify_jwt = false
 # JWT check must stay OFF — same rationale as the cron workers above.
 [functions.provisioning-watchdog]
 verify_jwt = false
+
+# Blog publish sweep bridge (pg_cron every 5 min). Auth is the plain-hex
+# INTERNAL_CRON_SECRET bearer (assertCronAuth), so the gateway JWT check
+# must stay OFF — same rationale as the cron workers above.
+[functions.blog-publish-sweep]
+verify_jwt = false
+
+# Weekly PR-digest blog post bridge (pg_cron Mondays). Auth is the
+# plain-hex INTERNAL_CRON_SECRET bearer (assertCronAuth), so the gateway
+# JWT check must stay OFF — same rationale as the cron workers above.
+[functions.blog-weekly-digest]
+verify_jwt = false
