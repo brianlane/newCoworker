@@ -141,7 +141,12 @@ async function cancelGhost(): Promise<void> {
     method: "GET",
     endpoint: `${eventPath}?$select=subject,start,end,attendees,isCancelled`,
     providerConfigKey: String(conn.provider_config_key),
-    connectionId: String(conn.connection_id)
+    connectionId: String(conn.connection_id),
+    // Graph otherwise reports start.dateTime as naive local time in the
+    // event's own (named) timezone, which cannot be compared to the ledger
+    // instant without a zone conversion — force UTC so the start guard
+    // below ALWAYS runs (Bugbot Medium on PR #814).
+    headers: { Prefer: 'outlook.timezone="UTC"' }
   });
   const ev = got.data as {
     subject?: string;
@@ -157,15 +162,21 @@ async function cancelGhost(): Promise<void> {
   console.log(`  cancelled ${ev.isCancelled === true}`);
 
   // Guard: the provider event's start must equal the ledger start we
-  // targeted — a moved event means the ledger drifted; stop and look.
-  const providerStart = ev.start?.dateTime
-    ? new Date(
-        ev.start.dateTime.endsWith("Z") || /[+-]\d\d:\d\d$/.test(ev.start.dateTime)
-          ? ev.start.dateTime
-          : `${ev.start.dateTime}Z`
-      ).toISOString()
-    : null;
-  if ((ev.start?.timeZone ?? "UTC") === "UTC" && providerStart && providerStart !== startIso) {
+  // targeted — a moved event means the ledger drifted; stop and look. The
+  // Prefer header above pins the response to UTC; if Graph still answers in
+  // another zone (or with no start at all) the start CANNOT be verified, so
+  // refuse rather than guess (fail closed — Bugbot Medium on PR #814).
+  if ((ev.start?.timeZone ?? "") !== "UTC" || !ev.start?.dateTime) {
+    throw new Error(
+      `Provider start not verifiable (timeZone=${ev.start?.timeZone ?? "?"}) — refusing`
+    );
+  }
+  const providerStart = new Date(
+    ev.start.dateTime.endsWith("Z") || /[+-]\d\d:\d\d$/.test(ev.start.dateTime)
+      ? ev.start.dateTime
+      : `${ev.start.dateTime}Z`
+  ).toISOString();
+  if (providerStart !== startIso) {
     throw new Error(`Provider start ${providerStart} != ledger start ${startIso} — refusing`);
   }
 
