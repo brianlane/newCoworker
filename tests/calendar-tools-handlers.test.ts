@@ -30,6 +30,9 @@ vi.mock("@/lib/calendar-tools/booking-dedupe", () => ({
   confirmBookingDedupe: vi.fn(),
   releaseBookingDedupe: vi.fn()
 }));
+vi.mock("@/lib/calendar-tools/attendee-bookings", () => ({
+  findUpcomingBookingsForAttendee: vi.fn()
+}));
 vi.mock("@/lib/customer-memory/db", () => ({ getCustomerMemory: vi.fn() }));
 vi.mock("@/lib/ai-flows/goal-hooks", () => ({ fireGoalEvent: vi.fn() }));
 vi.mock("@/lib/zoom/meetings", () => ({
@@ -41,6 +44,7 @@ import {
   bookCalendarAppointment,
   computeFreeSlots,
   findCalendarSlots,
+  formatBookingStartLocal,
   wallClockInZone
 } from "@/lib/calendar-tools/handlers";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
@@ -59,6 +63,7 @@ import {
   confirmBookingDedupe,
   releaseBookingDedupe
 } from "@/lib/calendar-tools/booking-dedupe";
+import { findUpcomingBookingsForAttendee } from "@/lib/calendar-tools/attendee-bookings";
 import { getCustomerMemory } from "@/lib/customer-memory/db";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 import {
@@ -104,6 +109,10 @@ beforeEach(() => {
   // as before the idempotency guard, which is what the pre-guard tests pin.
   vi.mocked(bookingAttendeeKey).mockReturnValue("key-under-test");
   vi.mocked(claimBookingDedupe).mockResolvedValue(null);
+  // Default: the attendee holds no other upcoming booking — the duplicate
+  // guard passes through and bookings behave exactly as the pre-guard
+  // tests pin.
+  vi.mocked(findUpcomingBookingsForAttendee).mockResolvedValue([]);
   // Default: no stored contact — the model-supplied attendeeName is used, as
   // pre-preferred-name tests pin.
   vi.mocked(getCustomerMemory).mockResolvedValue(null);
@@ -217,6 +226,18 @@ describe("computeFreeSlots", () => {
   it("degrades to UTC minute classification on an invalid timezone", () => {
     const slots = computeFreeSlots(at(10, 7), at(12, 0), [], 30 * 60_000, 1, "not/a-zone");
     expect(slots[0]?.startIso).toBe(at(10, 30).toISOString());
+  });
+});
+
+describe("formatBookingStartLocal", () => {
+  it("renders the weekday, date, time, and a named timezone", () => {
+    expect(formatBookingStartLocal("2026-07-22T16:00:00.000Z", "America/New_York")).toBe(
+      "Wednesday, July 22, 2026 at 12:00 PM EDT"
+    );
+  });
+
+  it("falls back to the raw string rather than throwing on junk input", () => {
+    expect(formatBookingStartLocal("not-a-date", "America/New_York")).toBe("not-a-date");
   });
 });
 
@@ -628,6 +649,96 @@ describe("findCalendarSlots", () => {
   });
 });
 
+describe("bookCalendarAppointment — attendee duplicate guard (Truly double-booking, Jul 21 2026)", () => {
+  const ARGS = {
+    startIso: "2026-06-12T17:00:00.000Z",
+    endIso: "2026-06-12T17:30:00.000Z",
+    summary: "Estimate",
+    attendeeName: "Joe Plumber"
+  };
+  const FUTURE_OTHER = new Date(Date.now() + 24 * 60 * 60_000).toISOString();
+  const otherBooking = (over: Record<string, unknown> = {}) => ({
+    provider: "ledger" as const,
+    source: "platform" as const,
+    eventId: "evt-existing",
+    startIso: FUTURE_OTHER,
+    name: null,
+    rescheduled: false,
+    ...over
+  });
+
+  it("refuses with attendee_already_booked when the attendee holds a DIFFERENT upcoming slot", async () => {
+    vi.mocked(findUpcomingBookingsForAttendee).mockResolvedValue([otherBooking()]);
+    const result = await bookCalendarAppointment(
+      BIZ,
+      { ...ARGS, attendeeEmail: "Joe@Acme.com" },
+      "+16136067906"
+    );
+    expect(result.ok).toBe(false);
+    expect(result.detail).toBe("attendee_already_booked");
+    expect(result.data).toMatchObject({
+      existingEventId: "evt-existing",
+      existingStartIso: FUTURE_OTHER,
+      existingProvider: "ledger"
+    });
+    // The model-facing guidance carries the existing slot's human-readable
+    // time and the keep/move/cancel + allowAdditional recovery.
+    expect(result.message).toContain("already has an upcoming appointment");
+    expect(result.message).toContain("calendar_reschedule_appointment");
+    expect(result.message).toContain("allowAdditional");
+    expect((result.data as { existingStartLocal: string }).existingStartLocal).toMatch(/\d{4} at \d{1,2}:\d{2} (AM|PM)/);
+    // Refused BEFORE the ledger claim or any provider call.
+    expect(vi.mocked(claimBookingDedupe)).not.toHaveBeenCalled();
+    expect(vi.mocked(resolveCalendarConnection)).not.toHaveBeenCalled();
+    // The lookup used the caller phone fallback + normalized email identity.
+    expect(vi.mocked(findUpcomingBookingsForAttendee)).toHaveBeenCalledWith(
+      BIZ,
+      { phones: ["+16136067906"], email: "joe@acme.com", name: "Joe Plumber" },
+      {},
+      { mode: "detail" }
+    );
+  });
+
+  it("allowAdditional bypasses the guard entirely", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(null as never);
+    const result = await bookCalendarAppointment(BIZ, { ...ARGS, allowAdditional: true });
+    expect(vi.mocked(findUpcomingBookingsForAttendee)).not.toHaveBeenCalled();
+    expect(result).toEqual({ ok: false, detail: "calendar_not_connected" });
+  });
+
+  it("the exact same slot falls through to the idempotency ledger (timeout retries stay already_booked)", async () => {
+    vi.mocked(findUpcomingBookingsForAttendee).mockResolvedValue([
+      otherBooking({ startIso: ARGS.startIso, eventId: "evt-same" })
+    ]);
+    vi.mocked(claimBookingDedupe).mockResolvedValue({ kind: "duplicate", eventId: "evt-same" });
+    const result = await bookCalendarAppointment(BIZ, ARGS);
+    expect(result.ok).toBe(true);
+    expect(result.detail).toBe("already_booked");
+  });
+
+  it("ignores past-start and unparseable-start lookup rows (no phantom refusals)", async () => {
+    vi.mocked(findUpcomingBookingsForAttendee).mockResolvedValue([
+      otherBooking({ startIso: new Date(Date.now() - 60_000).toISOString() }),
+      otherBooking({ startIso: "" })
+    ]);
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(null as never);
+    const result = await bookCalendarAppointment(BIZ, ARGS);
+    expect(result).toEqual({ ok: false, detail: "calendar_not_connected" });
+  });
+
+  it("a phoneless, emailless booking still consults the guard with the name key", async () => {
+    vi.mocked(findUpcomingBookingsForAttendee).mockResolvedValue([]);
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(null as never);
+    await bookCalendarAppointment(BIZ, ARGS);
+    expect(vi.mocked(findUpcomingBookingsForAttendee)).toHaveBeenCalledWith(
+      BIZ,
+      { phones: [], email: null, name: "Joe Plumber" },
+      {},
+      { mode: "detail" }
+    );
+  });
+});
+
 describe("bookCalendarAppointment", () => {
   const ARGS = {
     startIso: "2026-06-12T17:00:00.000Z",
@@ -662,10 +773,17 @@ describe("bookCalendarAppointment", () => {
     );
     // Deep equality, not identity: the success path re-wraps the result so a
     // Zoom join link can be merged into the data when one exists. CalDAV
-    // events email nobody, so inviteEmail is pinned null.
+    // events email nobody, so inviteEmail is pinned null. Every confirmed
+    // booking carries startLocal — the human-readable start the model must
+    // read back verbatim (Truly mislabeled-day incident, Jul 21 2026).
     expect(result).toStrictEqual({
       ok: true,
-      data: { eventId: "newcoworker-1", provider: "caldav", inviteEmail: null }
+      data: {
+        eventId: "newcoworker-1",
+        provider: "caldav",
+        inviteEmail: null,
+        startLocal: "Friday, June 12, 2026 at 5:00 PM UTC"
+      }
     });
     expect(vi.mocked(bookCaldavAppointment)).toHaveBeenCalledWith(BIZ, {
       startIso: ARGS.startIso,
@@ -713,7 +831,14 @@ describe("bookCalendarAppointment", () => {
     const delegated = { ok: true, data: { eventId: "appt-1", provider: "vagaro" } };
     vi.mocked(bookVagaroAppointment).mockResolvedValue(delegated as never);
     const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
-    expect(result).toBe(delegated);
+    expect(result).toEqual({
+      ok: true,
+      data: {
+        eventId: "appt-1",
+        provider: "vagaro",
+        startLocal: "Friday, June 12, 2026 at 5:00 PM UTC"
+      }
+    });
     expect(vi.mocked(bookVagaroAppointment)).toHaveBeenCalledWith(BIZ, ARGS, "+15551230000");
     expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
     expect(vi.mocked(ensureSharedCalendar)).not.toHaveBeenCalled();
@@ -781,7 +906,8 @@ describe("bookCalendarAppointment", () => {
         htmlLink: "https://cal/ev-1",
         provider: "google",
         calendar: "primary",
-        inviteEmail: "joe@example.com"
+        inviteEmail: "joe@example.com",
+        startLocal: "Friday, June 12, 2026 at 10:00 AM MST"
       }
     });
     const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
@@ -906,7 +1032,8 @@ describe("bookCalendarAppointment", () => {
         htmlLink: "https://outlook/ms-1",
         provider: "microsoft",
         calendar: "primary",
-        inviteEmail: "joe@example.com"
+        inviteEmail: "joe@example.com",
+        startLocal: "Friday, June 12, 2026 at 5:00 PM UTC"
       }
     });
     const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
@@ -966,7 +1093,14 @@ describe("bookCalendarAppointment", () => {
     const result = await bookCalendarAppointment(BIZ, ARGS);
     expect(result).toEqual({
       ok: true,
-      data: { eventId: "ev-s", htmlLink: null, provider: "google", calendar: "shared", inviteEmail: null }
+      data: {
+        eventId: "ev-s",
+        htmlLink: null,
+        provider: "google",
+        calendar: "shared",
+        inviteEmail: null,
+        startLocal: "Friday, June 12, 2026 at 5:00 PM UTC"
+      }
     });
     const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as { endpoint: string };
     expect(payload.endpoint).toBe("/calendar/v3/calendars/shared-cal/events");
@@ -982,7 +1116,14 @@ describe("bookCalendarAppointment", () => {
     const result = await bookCalendarAppointment(BIZ, ARGS);
     expect(result).toEqual({
       ok: true,
-      data: { eventId: "ms-s", htmlLink: null, provider: "microsoft", calendar: "shared", inviteEmail: null }
+      data: {
+        eventId: "ms-s",
+        htmlLink: null,
+        provider: "microsoft",
+        calendar: "shared",
+        inviteEmail: null,
+        startLocal: "Friday, June 12, 2026 at 5:00 PM UTC"
+      }
     });
     const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as { endpoint: string };
     expect(payload.endpoint).toBe("/v1.0/me/calendars/shared-ms/events");
@@ -1034,7 +1175,12 @@ describe("bookCalendarAppointment — retry idempotency guard (2026-07-13 quadru
     expect(result).toEqual({
       ok: true,
       detail: "already_booked",
-      data: { eventId: "evt-prior", deduplicated: true, inviteEmail: null }
+      data: {
+        eventId: "evt-prior",
+        deduplicated: true,
+        inviteEmail: null,
+        startLocal: "Friday, June 12, 2026 at 5:00 PM UTC"
+      }
     });
     expect(vi.mocked(resolveCalendarConnection)).not.toHaveBeenCalled();
     expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();

@@ -64,7 +64,18 @@ export const SMS_GROUNDED_ACTIONS_LINE =
   "want an invite, ask for their email before booking; otherwise don't " +
   "mention invites. Never invent or guess email addresses, phone " +
   "numbers, times, or confirmation details — if you need one, ask for " +
-  "it. If a booking fails, tell the texter that time is no longer " +
+  "it. When a booking succeeds, confirm the appointment day and time by " +
+  "quoting the result's startLocal field VERBATIM — never work out the " +
+  "day yourself, and never say today or tomorrow unless the current-date " +
+  "line proves it. A booking you made stays real even if you mislabeled " +
+  "its day in an earlier message — never abandon it or book a replacement; " +
+  "fix any mistake with calendar_reschedule_appointment. If " +
+  "calendar_book_appointment fails with detail attendee_already_booked, " +
+  "this person ALREADY has an upcoming appointment: tell them its " +
+  "existingStartLocal time and follow the result's message (keep it, move " +
+  "it, or cancel it) — only retry with allowAdditional true after they " +
+  "explicitly confirm they want a separate additional appointment. " +
+  "If a booking fails, tell the texter that time is no longer " +
   "available (never blame a technical error), re-check with " +
   "calendar_find_slots before offering another option, and if a second " +
   "booking also fails, stop offering times — call notify_team with " +

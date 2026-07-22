@@ -195,7 +195,7 @@ const FIND_SLOTS_DECLARATION: GeminiFunctionDeclaration = {
 const BOOK_DECLARATION: GeminiFunctionDeclaration = {
   name: "calendar_book_appointment",
   description:
-    "Book an appointment on the owner's connected calendar. Use ONLY when the owner explicitly asks to book, with a confirmed start/end time. Times MUST be ISO 8601 with a timezone offset.",
+    "Book an appointment on the owner's connected calendar. Use ONLY when the owner explicitly asks to book, with a confirmed start/end time. Times MUST be ISO 8601 with a timezone offset. Confirm the booked day/time by reading the result's startLocal verbatim. If it fails with attendee_already_booked, the attendee already has an upcoming appointment — follow the result's guidance (keep / reschedule / cancel) and only pass allowAdditional true after the owner explicitly confirms an additional appointment.",
   parameters: {
     type: "object",
     properties: {
@@ -206,7 +206,12 @@ const BOOK_DECLARATION: GeminiFunctionDeclaration = {
       attendeeEmail: { type: "string", description: "Attendee's email (optional)." },
       attendeePhone: { type: "string", description: "Attendee's phone (optional)." },
       notes: { type: "string", description: "Notes for the event body (optional)." },
-      timezone: { type: "string", description: "IANA timezone (optional)." }
+      timezone: { type: "string", description: "IANA timezone (optional)." },
+      allowAdditional: {
+        type: "boolean",
+        description:
+          "True ONLY after the owner explicitly confirmed an ADDITIONAL appointment on top of the attendee's existing upcoming one."
+      }
     },
     required: ["startIso", "endIso", "summary", "attendeeName"]
   }
@@ -405,7 +410,9 @@ const bookAppointmentArgsSchema = z.object({
   attendeePhone: z.string().max(32).optional(),
   notes: z.string().max(2000).optional(),
   timezone: z.string().optional(),
-  serviceId: z.string().max(120).optional()
+  serviceId: z.string().max(120).optional(),
+  // Explicit escape hatch for the attendee duplicate guard.
+  allowAdditional: z.boolean().optional()
 });
 
 const rescheduleAppointmentArgsSchema = z.object({
