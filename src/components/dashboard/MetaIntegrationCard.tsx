@@ -258,10 +258,16 @@ export function MetaIntegrationCard({ businessId, initialConnection }: Props) {
           </div>
           <p className="text-[11px] text-parchment/40">
             Ads feedback:{" "}
-            {connection.dataset_id && connection.capi_enabled ? (
+            {connection.dataset_id && connection.capi_enabled && connection.is_active ? (
               <span className="text-claw-green">
                 on — booked and stage changes are reported back to Meta so your ads
                 optimize for lead quality
+              </span>
+            ) : connection.dataset_id && connection.capi_enabled ? (
+              // Paused connections defer uploads; they resume on re-enable.
+              <span>
+                paused with the connection — stage changes are held and report to
+                Meta once the connection is re-enabled.
               </span>
             ) : (
               <span>
