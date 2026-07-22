@@ -17,7 +17,9 @@ export function escapeAttr(url: string): string {
 
 export type BrandedBodyBlock =
   | { kind: "text"; text: string }
-  | { kind: "html"; html: string };
+  | { kind: "html"; html: string }
+  /** Block-level markup emitted unwrapped; trusted, pre-escaped input only. */
+  | { kind: "raw"; html: string };
 
 export type BrandedEmailHtmlInput = {
   siteUrl: string;
@@ -46,6 +48,9 @@ function renderBodyBlocks(blocks: BrandedBodyBlock[]): string {
         const t = escapeHtml(b.text);
         // pre-line keeps intentional \n (digest stats, bullet lists); HTML collapses them otherwise.
         return `<p style="margin:0 0 16px;font-size:16px;line-height:1.6;color:#F5F0E8;white-space:pre-line;">${t}</p>`;
+      }
+      if (b.kind === "raw") {
+        return b.html;
       }
       return `<p style="margin:0 0 16px;font-size:16px;line-height:1.6;color:#F5F0E8;">${b.html}</p>`;
     })

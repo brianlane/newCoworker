@@ -61,13 +61,21 @@ function appBaseUrl(): string {
  * translated fields when the post carries them, English otherwise.
  */
 export function postCopyForLocale(
-  post: Pick<BlogPostRow, "title" | "excerpt" | "title_es" | "excerpt_es">,
+  post: Pick<
+    BlogPostRow,
+    "title" | "excerpt" | "content" | "title_es" | "excerpt_es" | "content_es"
+  >,
   locale: "en" | "es"
-): { title: string; excerpt: string; locale: "en" | "es" } {
+): { title: string; excerpt: string; content: string; locale: "en" | "es" } {
   if (locale === "es" && post.title_es) {
-    return { title: post.title_es, excerpt: post.excerpt_es ?? post.excerpt, locale: "es" };
+    return {
+      title: post.title_es,
+      excerpt: post.excerpt_es ?? post.excerpt,
+      content: post.content_es ?? post.content,
+      locale: "es"
+    };
   }
-  return { title: post.title, excerpt: post.excerpt, locale: "en" };
+  return { title: post.title, excerpt: post.excerpt, content: post.content, locale: "en" };
 }
 
 /**
@@ -110,20 +118,22 @@ export async function runBlogPublishSideEffects(
     for (const subscriber of subscribers) {
       try {
         const copy = postCopyForLocale(post, subscriber.locale);
-        const email = buildBlogNewPostEmail({
-          title: copy.title,
-          excerpt: copy.excerpt,
-          slug: post.slug,
-          recipientEmail: subscriber.email,
-          siteUrl,
-          locale: copy.locale
-        });
         // Carry the subscriber's locale so the unsubscribe result page can
         // land on the /es mirror for Spanish readers.
         const unsubscribeUrl =
           `${siteUrl}/api/blog/unsubscribe?token=${encodeURIComponent(
             subscriber.unsubscribe_token
           )}` + (copy.locale === "es" ? "&locale=es" : "");
+        const email = buildBlogNewPostEmail({
+          title: copy.title,
+          excerpt: copy.excerpt,
+          content: copy.content,
+          slug: post.slug,
+          recipientEmail: subscriber.email,
+          siteUrl,
+          locale: copy.locale,
+          unsubscribeUrl
+        });
         await sendEmail(resendKey, subscriber.email, email.subject, {
           text: email.text,
           html: email.html,
