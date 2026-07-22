@@ -196,4 +196,28 @@ describe("db/logs", () => {
     await getRecentLogsAll(5, db as never, { excludeBusinessIds: [] });
     expect(not).not.toHaveBeenCalled();
   });
+
+  it("getRecentLogsAll excludes requested statuses", async () => {
+    const not = vi.fn().mockReturnThis();
+    const db = {
+      ...mockDb(),
+      not,
+      limit: vi.fn().mockResolvedValue({ data: [MOCK_LOG], error: null })
+    };
+
+    await getRecentLogsAll(5, db as never, { excludeStatuses: ["urgent_alert", "error"] });
+    expect(not).toHaveBeenCalledWith("status", "in", "(urgent_alert,error)");
+  });
+
+  it("getRecentLogsAll skips the status clause for an empty list", async () => {
+    const not = vi.fn().mockReturnThis();
+    const db = {
+      ...mockDb(),
+      not,
+      limit: vi.fn().mockResolvedValue({ data: [MOCK_LOG], error: null })
+    };
+
+    await getRecentLogsAll(5, db as never, { excludeStatuses: [] });
+    expect(not).not.toHaveBeenCalled();
+  });
 });

@@ -11,10 +11,13 @@ import { getFleetCurrentAiSpendMicros } from "@/lib/db/chat-usage";
 import { computeDayCurrentMrr, estimateMonthlyPlatformCost } from "@/lib/admin/mrr";
 import { stampRefundExposureFromDb } from "@/lib/admin/mrr-exposure";
 import {
+  adminAlertSummary,
   formatAdminLabel,
+  formatAlertStatusLabel,
   getLogBadgeVariant,
   getMonthLabel,
-  getVpsInventoryBadgeVariant
+  getVpsInventoryBadgeVariant,
+  summarizeAlertCounts
 } from "@/lib/admin/dashboard";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -47,7 +50,12 @@ export default async function AdminDashboardPage() {
     await Promise.all([
       listBusinesses(),
       getRecentAlertsAll(10, undefined, { excludeBusinessIds: muted.alerts }),
-      getRecentLogsAll(8, undefined, { excludeBusinessIds: muted.activity }),
+      // Alerting rows live in the Recent Alerts card; excluding them here
+      // keeps the two bottom cards complementary instead of duplicates.
+      getRecentLogsAll(8, undefined, {
+        excludeBusinessIds: muted.activity,
+        excludeStatuses: ["urgent_alert", "error"]
+      }),
       listSystemLogErrorsAll(15, undefined, { excludeBusinessIds: muted.errors }),
       listVpsInventory(),
       listActiveEnterpriseDeals(),
@@ -66,6 +74,11 @@ export default async function AdminDashboardPage() {
 
   const subscriptionMap = await listSubscriptionsByBusinessIds(businesses.map((b) => b.id));
   const subscriptions = Array.from(subscriptionMap.values());
+
+  // Business names for the alert/activity feeds — the list is already
+  // fetched above, so the cards can say "Scar Fairy" instead of "856034a7…".
+  const businessNames = new Map(businesses.map((b) => [b.id, b.name]));
+  const alertCounts = summarizeAlertCounts(alerts);
 
   // ── KPIs ──────────────────────────────────────────────────────────────────
   const totalClients = businesses.length;
@@ -358,32 +371,48 @@ export default async function AdminDashboardPage() {
             <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider">
               Recent Alerts
             </h2>
-            {alerts.length > 0 && (
-              <Badge variant="error">{alerts.length}</Badge>
-            )}
+            <div className="flex items-center gap-2">
+              {alertCounts.errors > 0 && (
+                <Badge variant="error">
+                  {alertCounts.errors} error{alertCounts.errors === 1 ? "" : "s"}
+                </Badge>
+              )}
+              {alertCounts.last24h > 0 && (
+                <Badge variant="neutral">{alertCounts.last24h} in 24h</Badge>
+              )}
+            </div>
           </div>
           {alerts.length === 0 ? (
             <p className="text-sm text-parchment/40 text-center py-4">No alerts; all clear.</p>
           ) : (
             <ul className="divide-y divide-parchment/8">
               {alerts.map((log) => (
-                <li key={log.id} className="py-2.5 flex items-start justify-between gap-3">
-                  <div className="min-w-0">
+                <li key={log.id} className="py-2.5 space-y-1">
+                  <div className="flex items-start justify-between gap-3">
                     <a
                       href={`/admin/${log.business_id}`}
-                      className="text-xs text-parchment capitalize hover:text-signal-teal truncate block"
+                      className="text-xs text-parchment hover:text-signal-teal min-w-0"
                     >
-                      {formatAdminLabel(log.task_type)}
+                      {adminAlertSummary(log)}
                     </a>
-                    <p className="text-xs text-parchment/30 font-mono truncate">
-                      {log.business_id.slice(0, 8)}…
-                    </p>
+                    <span className="text-xs text-parchment/30 shrink-0">
+                      {timeAgo(log.created_at)}
+                    </span>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <Badge variant={getLogBadgeVariant(log.status)}>
-                      {formatAdminLabel(log.status)}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <a
+                      href={`/admin/${log.business_id}`}
+                      className="text-xs text-parchment/50 hover:text-signal-teal truncate"
+                      title={log.business_id}
+                    >
+                      {businessNames.get(log.business_id) ?? `${log.business_id.slice(0, 8)}…`}
+                    </a>
+                    <Badge variant="neutral" className="text-[10px]">
+                      {formatAdminLabel(log.task_type)}
                     </Badge>
-                    <span className="text-xs text-parchment/30">{timeAgo(log.created_at)}</span>
+                    <Badge variant={getLogBadgeVariant(log.status)} className="text-[10px]">
+                      {formatAlertStatusLabel(log.status)}
+                    </Badge>
                   </div>
                 </li>
               ))}
@@ -411,9 +440,13 @@ export default async function AdminDashboardPage() {
                     >
                       {formatAdminLabel(log.task_type)}
                     </a>
-                    <p className="text-xs text-parchment/30 font-mono truncate">
-                      {log.business_id.slice(0, 8)}…
-                    </p>
+                    <a
+                      href={`/admin/${log.business_id}`}
+                      className="text-xs text-parchment/40 hover:text-signal-teal truncate block"
+                      title={log.business_id}
+                    >
+                      {businessNames.get(log.business_id) ?? `${log.business_id.slice(0, 8)}…`}
+                    </a>
                   </div>
                   <div className="flex items-center gap-2 shrink-0">
                     <Badge variant={getLogBadgeVariant(log.status)}>
