@@ -801,3 +801,137 @@ describe("editAiFlowDefinition — self-repair, NO salvage", () => {
     expect(generate.mock.calls[1][0].userText).toContain("FAILED validation");
   });
 });
+
+// Mailbox bindings (send_email.fromConnectionId) are validated against the
+// business's connected mailboxes — the KYP Jul 22 2026 incident: a flow saved
+// with a stale connection id failed at SEND time (connection_not_found) and
+// paged the owner; these pin the save/compile-time guard.
+describe("mailbox bindings (fromConnectionId)", () => {
+  const CONN_ID = "55555555-5555-4555-8555-555555555555";
+  const outlookConn = {
+    id: CONN_ID,
+    business_id: BIZ,
+    provider_config_key: "outlook",
+    connection_id: "nango-outlook-1",
+    metadata: {},
+    created_at: "2026-07-01T00:00:00Z",
+    updated_at: "2026-07-01T00:00:00Z"
+  };
+  const withMailbox = (connectionId: string) =>
+    JSON.stringify({
+      version: 1,
+      trigger: { channel: "manual" },
+      steps: [
+        {
+          id: "s1",
+          type: "send_email",
+          to: "lead@example.com",
+          subject: "hello",
+          body: "hi",
+          fromConnectionId: connectionId
+        }
+      ]
+    });
+
+  it("compiles when the binding resolves to a connected mailbox", async () => {
+    const fetchConnections = vi.fn(async () => [outlookConn]);
+    const res = await compileAiFlowFromDescription(
+      { businessId: BIZ, description: "email new leads from my inbox" },
+      { generate: generateSeq(withMailbox(CONN_ID)), fetchDocuments: noDocs, fetchConnections }
+    );
+    expect(res).toMatchObject({ ok: true, warnings: [] });
+    expect(fetchConnections).toHaveBeenCalledWith(BIZ);
+  });
+
+  it("feeds a stale mailbox binding into the repair round (compile path)", async () => {
+    const generate = generateSeq(
+      withMailbox("99999999-9999-4999-8999-999999999999"),
+      VALID_DEFINITION_JSON
+    );
+    const res = await compileAiFlowFromDescription(
+      { businessId: BIZ, description: "email new leads from my inbox" },
+      { generate, fetchDocuments: noDocs, fetchConnections: vi.fn(async () => [outlookConn]) }
+    );
+    expect(res.ok).toBe(true);
+    expect(generate.mock.calls[1][0].userText).toContain("FAILED validation");
+    expect(generate.mock.calls[1][0].userText).toContain("no longer connected");
+  });
+
+  it("feeds a stale mailbox binding into the repair round (edit path)", async () => {
+    const generate = generateSeq(
+      withMailbox("99999999-9999-4999-8999-999999999999"),
+      VALID_DEFINITION_JSON
+    );
+    const res = await editAiFlowDefinition(editArgs(), {
+      generate,
+      fetchDocuments: noDocs,
+      fetchConnections: vi.fn(async () => [outlookConn])
+    });
+    expect(res.ok).toBe(true);
+    expect(generate.mock.calls[1][0].userText).toContain("no longer connected");
+  });
+
+  it("salvage surfaces a stale mailbox binding as a warning", async () => {
+    // Junk step forces schema failure → repair garbage → salvage keeps the
+    // (schema-valid) send_email step; the mailbox check runs on the salvage.
+    const withMailboxAndJunk = JSON.stringify({
+      version: 1,
+      trigger: { channel: "manual" },
+      steps: [
+        {
+          id: "s1",
+          type: "send_email",
+          to: "lead@example.com",
+          subject: "hello",
+          body: "hi",
+          fromConnectionId: "99999999-9999-4999-8999-999999999999"
+        },
+        { id: "s2", type: "made_up_step" }
+      ]
+    });
+    const generate = generateSeq(withMailboxAndJunk, "garbage");
+    const res = await compileAiFlowFromDescription(
+      { businessId: BIZ, description: "email new leads" },
+      { generate, fetchDocuments: noDocs, fetchConnections: vi.fn(async () => []) }
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.definition.steps.some((s) => s.type === "send_email")).toBe(true);
+      expect(res.warnings.some((w) => w.includes("no longer connected"))).toBe(true);
+    }
+  });
+
+  it("a mailbox-validation failure during salvage degrades to no extra warnings", async () => {
+    const withMailboxAndJunk = JSON.stringify({
+      version: 1,
+      trigger: { channel: "manual" },
+      steps: [
+        {
+          id: "s1",
+          type: "send_email",
+          to: "lead@example.com",
+          subject: "hello",
+          body: "hi",
+          fromConnectionId: CONN_ID
+        },
+        { id: "s2", type: "made_up_step" }
+      ]
+    });
+    const generate = generateSeq(withMailboxAndJunk, "garbage");
+    const res = await compileAiFlowFromDescription(
+      { businessId: BIZ, description: "email new leads" },
+      {
+        generate,
+        fetchDocuments: noDocs,
+        fetchConnections: vi.fn(async () => {
+          throw new Error("connections db down mid-salvage");
+        })
+      }
+    );
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.definition.steps.some((s) => s.type === "send_email")).toBe(true);
+      expect(res.warnings.some((w) => w.includes("db down"))).toBe(false);
+    }
+  });
+});

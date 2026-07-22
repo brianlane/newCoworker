@@ -12,6 +12,7 @@ import { createAiFlow, listAiFlows } from "@/lib/ai-flows/db";
 import { AiFlowValidationError, parseAiFlowDefinition } from "@/lib/ai-flows/schema";
 import { validateShareDocumentSteps } from "@/lib/ai-flows/document-steps";
 import { validateRunAgentSteps } from "@/lib/ai-flows/agent-steps";
+import { validateMailboxConnectionSteps } from "@/lib/ai-flows/mailbox-steps";
 
 const businessIdSchema = z.string().uuid();
 
@@ -45,12 +46,14 @@ export async function POST(request: Request) {
     const body = createSchema.parse(await request.json());
     if (!user.isAdmin) await requireBusinessRole(body.businessId, "manage_aiflows");
     // share_document steps must reference a real, ready, client-audience,
-    // non-expired document, and run_agent steps a real, enabled agent
-    // (shape validation alone can't know either).
+    // non-expired document, run_agent steps a real, enabled agent, and
+    // mailbox bindings a connected email mailbox (shape validation alone
+    // can't know any of these).
     const parsedDefinition = parseAiFlowDefinition(body.definition);
     const documentIssues = await validateShareDocumentSteps(body.businessId, parsedDefinition);
     const agentIssues = await validateRunAgentSteps(body.businessId, parsedDefinition);
-    const bindingIssues = [...documentIssues, ...agentIssues];
+    const mailboxIssues = await validateMailboxConnectionSteps(body.businessId, parsedDefinition);
+    const bindingIssues = [...documentIssues, ...agentIssues, ...mailboxIssues];
     if (bindingIssues.length > 0) {
       return errorResponse("VALIDATION_ERROR", bindingIssues.join("; "));
     }

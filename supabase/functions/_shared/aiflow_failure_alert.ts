@@ -60,16 +60,27 @@ export type AiflowFailureAlertResult =
   | "already_alerted"
   | "post_failed";
 
-/** Human label for the lead this run was handling, when extraction got far enough. */
+/**
+ * Human label for the lead this run was handling, when extraction got far
+ * enough. Falls back through the booking-flow var names (invitee_*) and the
+ * lead's email, so a failed booking-confirmation run says who it was for
+ * instead of "an unidentified lead" (the Jul 22 2026 KYP alerts named nobody
+ * even though invitee_name was extracted). Extractors write the literal
+ * string "none" for absent fields — treated as empty here.
+ */
 export function describeLead(vars: Record<string, unknown> | null | undefined): string {
-  const read = (key: string): string => {
-    const v = vars?.[key];
-    return typeof v === "string" ? v.trim() : "";
+  const read = (...keys: string[]): string => {
+    for (const key of keys) {
+      const v = vars?.[key];
+      const s = typeof v === "string" ? v.trim() : "";
+      if (s && s.toLowerCase() !== "none") return s;
+    }
+    return "";
   };
-  const name = read("lead_name");
-  const phone = read("lead_phone");
-  if (name && phone) return `${name} (${phone})`;
-  return name || phone || "an unidentified lead";
+  const name = read("lead_name", "invitee_name");
+  const contact = read("lead_phone", "invitee_phone") || read("lead_email", "invitee_email");
+  if (name && contact) return `${name} (${contact})`;
+  return name || contact || "an unidentified lead";
 }
 
 /**
