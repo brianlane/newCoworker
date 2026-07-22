@@ -9,6 +9,12 @@ updates:
     groups:
       minor-and-patch:
         update-types: ["minor", "patch"]
+    ignore:
+      # mcp-handler (latest: 1.1.0) peer-pins @modelcontextprotocol/sdk to
+      # EXACTLY 1.26.0, so any SDK bump breaks `npm ci` with ERESOLVE (see
+      # PR #820). Unignore once mcp-handler ships a release accepting a
+      # newer SDK.
+      - dependency-name: "@modelcontextprotocol/sdk"
 
   - package-ecosystem: npm
     directory: "/cloudflare/email-worker"
