@@ -763,8 +763,12 @@ describe("executeLifecyclePlan refund handling", () => {
     expect(hostinger.disableBillingAutoRenewal).toHaveBeenCalledWith("hbs_1");
     expect(updateBusinessStatusMock).toHaveBeenCalledWith("biz_1", "wiped");
     // The wipe keeps the business row, so this is the only hook that ever
-    // revokes the tenant's Nango workspace connections.
+    // revokes the tenant's Nango workspace connections — and it runs AFTER
+    // the stamp commits, so a failed stamp leaves integrations untouched.
     expect(revokeNangoConnectionsForBusinessMock).toHaveBeenCalledWith("biz_1");
+    expect(revokeNangoConnectionsForBusinessMock.mock.invocationCallOrder[0]).toBeGreaterThan(
+      updateBusinessStatusMock.mock.invocationCallOrder[0]
+    );
     expect(deleteBusinessBackupMock).toHaveBeenCalledWith("biz_1");
     expect(sendOwnerEmailMock).toHaveBeenCalledWith(
       "resend_test",

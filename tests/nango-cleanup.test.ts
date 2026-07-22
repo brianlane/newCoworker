@@ -20,7 +20,11 @@ vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
 
-import { revokeNangoConnectionsForBusiness } from "@/lib/nango/cleanup";
+import {
+  revokeNangoConnectionRows,
+  revokeNangoConnectionsForBusiness,
+  snapshotNangoConnectionLinks
+} from "@/lib/nango/cleanup";
 import { logger } from "@/lib/logger";
 
 const OLD_ENV = process.env;
@@ -51,7 +55,76 @@ afterEach(() => {
   process.env = OLD_ENV;
 });
 
-describe("revokeNangoConnectionsForBusiness", () => {
+describe("snapshotNangoConnectionLinks", () => {
+  it("returns the business's rows (default client)", async () => {
+    mockCreateClient.mockResolvedValue(mockDb());
+    mockListConnections.mockResolvedValue(ROWS);
+    await expect(snapshotNangoConnectionLinks("biz-1")).resolves.toEqual(ROWS);
+  });
+
+  it("returns [] on a read failure instead of blocking the deletion", async () => {
+    const db = mockDb();
+    mockListConnections.mockRejectedValue(new Error("db offline"));
+    await expect(snapshotNangoConnectionLinks("biz-1", db as never)).resolves.toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "nango cleanup: snapshot failed (revocation will be skipped)",
+      { businessId: "biz-1", error: "db offline" }
+    );
+
+    mockListConnections.mockRejectedValue("weird");
+    await expect(snapshotNangoConnectionLinks("biz-1", db as never)).resolves.toEqual([]);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "nango cleanup: snapshot failed (revocation will be skipped)",
+      { businessId: "biz-1", error: "weird" }
+    );
+  });
+});
+
+describe("revokeNangoConnectionRows", () => {
+  it("revokes every snapshot row on Nango", async () => {
+    mockDeleteConnection.mockResolvedValue(undefined);
+    await expect(revokeNangoConnectionRows("biz-1", ROWS)).resolves.toBe(2);
+    expect(mockDeleteConnection).toHaveBeenCalledWith("google-mail", "c1");
+    expect(mockDeleteConnection).toHaveBeenCalledWith("outlook", "c2");
+    expect(logger.info).toHaveBeenCalledWith("nango cleanup: connections revoked", {
+      businessId: "biz-1",
+      rows: 2,
+      revoked: 2
+    });
+  });
+
+  it("returns 0 fast on an empty snapshot", async () => {
+    await expect(revokeNangoConnectionRows("biz-1", [])).resolves.toBe(0);
+    expect(mockDeleteConnection).not.toHaveBeenCalled();
+  });
+
+  it("skips revocation without NANGO_SECRET_KEY", async () => {
+    delete process.env.NANGO_SECRET_KEY;
+    await expect(revokeNangoConnectionRows("biz-1", ROWS)).resolves.toBe(0);
+    expect(mockDeleteConnection).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      "nango cleanup: NANGO_SECRET_KEY missing; skipping provider-side revocation",
+      { businessId: "biz-1", rows: 2 }
+    );
+  });
+
+  it("continues past per-connection failures (Error and non-Error)", async () => {
+    mockDeleteConnection
+      .mockRejectedValueOnce(new Error("nango down"))
+      .mockRejectedValueOnce("plain refusal");
+    await expect(revokeNangoConnectionRows("biz-1", ROWS)).resolves.toBe(0);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "nango cleanup: deleteConnection failed (leaks account quota)",
+      expect.objectContaining({ connectionId: "c1", error: "nango down" })
+    );
+    expect(logger.warn).toHaveBeenCalledWith(
+      "nango cleanup: deleteConnection failed (leaks account quota)",
+      expect.objectContaining({ connectionId: "c2", error: "plain refusal" })
+    );
+  });
+});
+
+describe("revokeNangoConnectionsForBusiness (wipe path)", () => {
   it("revokes every connection on Nango then deletes the rows", async () => {
     const db = mockDb();
     mockCreateClient.mockResolvedValue(db);
@@ -75,7 +148,7 @@ describe("revokeNangoConnectionsForBusiness", () => {
     expect(db.delete).not.toHaveBeenCalled();
   });
 
-  it("continues past a per-connection Nango failure (partial revoke)", async () => {
+  it("still deletes the rows after a partial Nango failure", async () => {
     const db = mockDb();
     mockListConnections.mockResolvedValue(ROWS);
     mockDeleteConnection
@@ -84,38 +157,6 @@ describe("revokeNangoConnectionsForBusiness", () => {
 
     const revoked = await revokeNangoConnectionsForBusiness("biz-1", db as never);
     expect(revoked).toBe(1);
-    expect(logger.warn).toHaveBeenCalledWith(
-      "nango cleanup: deleteConnection failed (leaks account quota)",
-      expect.objectContaining({ businessId: "biz-1", connectionId: "c1", error: "nango down" })
-    );
-    // Rows are still deleted so the terminal path finishes.
-    expect(db.delete).toHaveBeenCalled();
-  });
-
-  it("logs a non-Error rejection as a string", async () => {
-    const db = mockDb();
-    mockListConnections.mockResolvedValue([ROWS[0]]);
-    mockDeleteConnection.mockRejectedValueOnce("plain refusal");
-
-    await revokeNangoConnectionsForBusiness("biz-1", db as never);
-    expect(logger.warn).toHaveBeenCalledWith(
-      "nango cleanup: deleteConnection failed (leaks account quota)",
-      expect.objectContaining({ error: "plain refusal" })
-    );
-  });
-
-  it("skips provider-side revocation without NANGO_SECRET_KEY but still deletes rows", async () => {
-    delete process.env.NANGO_SECRET_KEY;
-    const db = mockDb();
-    mockListConnections.mockResolvedValue(ROWS);
-
-    const revoked = await revokeNangoConnectionsForBusiness("biz-1", db as never);
-    expect(revoked).toBe(0);
-    expect(mockDeleteConnection).not.toHaveBeenCalled();
-    expect(logger.warn).toHaveBeenCalledWith(
-      "nango cleanup: NANGO_SECRET_KEY missing; skipping provider-side revocation",
-      { businessId: "biz-1", rows: 2 }
-    );
     expect(db.delete).toHaveBeenCalled();
   });
 
@@ -132,21 +173,17 @@ describe("revokeNangoConnectionsForBusiness", () => {
     });
   });
 
-  it("never throws — a listing failure returns 0", async () => {
+  it("never throws — a listing failure returns 0 (Error and non-Error)", async () => {
     const db = mockDb();
     mockListConnections.mockRejectedValue(new Error("db offline"));
-    const revoked = await revokeNangoConnectionsForBusiness("biz-1", db as never);
-    expect(revoked).toBe(0);
+    await expect(revokeNangoConnectionsForBusiness("biz-1", db as never)).resolves.toBe(0);
     expect(logger.warn).toHaveBeenCalledWith("nango cleanup failed", {
       businessId: "biz-1",
       error: "db offline"
     });
-  });
 
-  it("stringifies a non-Error outer failure", async () => {
-    const db = mockDb();
     mockListConnections.mockRejectedValue("weird");
-    await revokeNangoConnectionsForBusiness("biz-1", db as never);
+    await expect(revokeNangoConnectionsForBusiness("biz-1", db as never)).resolves.toBe(0);
     expect(logger.warn).toHaveBeenCalledWith("nango cleanup failed", {
       businessId: "biz-1",
       error: "weird"

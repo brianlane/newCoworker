@@ -569,13 +569,15 @@ async function runDbOp(
       return;
     }
     case "mark_business_wiped":
-      // Tear down the tenant's Nango workspace connections first: the wipe
-      // KEEPS the business row, so no cascade ever removes them, and each
-      // leaked connection consumes account-wide Nango quota forever. The
-      // helper is best-effort by contract — a Nango blip never blocks the
-      // wipe stamp.
-      await revokeNangoConnectionsForBusiness(op.businessId);
       await updateBusinessStatus(op.businessId, "wiped");
+      // Tear down the tenant's Nango workspace connections AFTER the stamp
+      // commits (a failed stamp must leave the tenant intact, and the sweep
+      // retries the whole op). The wipe KEEPS the business row, so no
+      // cascade ever removes these — without this hook each leaked
+      // connection consumes account-wide Nango quota forever. Best-effort
+      // by contract: a Nango blip never fails the wipe (the audit script
+      // reclaims orphans).
+      await revokeNangoConnectionsForBusiness(op.businessId);
       return;
     case "delete_auth_user": {
       const db = await createSupabaseServiceClient();

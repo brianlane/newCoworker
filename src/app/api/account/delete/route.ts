@@ -27,7 +27,10 @@ import { errorResponse, handleRouteError, successResponse } from "@/lib/api-resp
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { readSupabaseEnv } from "@/lib/supabase/env";
 import { deleteBusiness, getBusiness } from "@/lib/db/businesses";
-import { revokeNangoConnectionsForBusiness } from "@/lib/nango/cleanup";
+import {
+  revokeNangoConnectionRows,
+  snapshotNangoConnectionLinks
+} from "@/lib/nango/cleanup";
 import {
   DELETE_CONFIRM_PHRASE,
   resolveAccountDeletionEligibilityForRows,
@@ -187,10 +190,12 @@ export async function DELETE(request: Request) {
       (b) => b.businessId !== businessId
     );
 
-    // Revoke Nango workspace connections BEFORE the row delete: the cascade
-    // removes our rows but Nango's side would live on, burning account-wide
-    // quota forever. Best-effort — never blocks the delete.
-    await revokeNangoConnectionsForBusiness(businessId, db);
+    // Snapshot the Nango connections BEFORE the row delete (the cascade
+    // removes the rows) but revoke them AFTER it commits — a failed delete
+    // must leave the tenant fully intact, never active with dead
+    // integrations. Nango's side would otherwise outlive the tenant and
+    // burn account-wide quota forever.
+    const nangoSnapshot = await snapshotNangoConnectionLinks(businessId, db);
 
     // Delete the business row FIRST, then the auth user. If the auth delete
     // fails afterwards, the leftover login is harmless (it owns nothing and
@@ -198,6 +203,7 @@ export async function DELETE(request: Request) {
     // would lock the owner out while their data still exists, with no way
     // to sign in and retry.
     await deleteBusiness(businessId, db);
+    await revokeNangoConnectionRows(businessId, nangoSnapshot);
 
     let authUserDeleted = false;
     if (otherAccessible.length === 0) {
