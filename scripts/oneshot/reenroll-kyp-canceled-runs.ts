@@ -223,9 +223,9 @@ for (const run of canceled) {
     skips.push({ runId: run.id, leadName, reason: `live-run read failed: ${liveErr.message}` });
     continue;
   }
-  const liveForLead = ((liveRows ?? []) as RunRow[]).some(
-    (r) => (r.context.vars?.lead_phone ?? "") === leadPhone
-  );
+  const liveForLead = (
+    (liveRows ?? []) as Array<{ context: { vars?: Record<string, string> } }>
+  ).some((r) => (r.context.vars?.lead_phone ?? "") === leadPhone);
   if (liveForLead) {
     skips.push({ runId: run.id, leadName, reason: "another live run already covers this lead" });
     continue;
