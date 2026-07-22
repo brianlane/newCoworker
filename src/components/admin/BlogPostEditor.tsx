@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
@@ -11,6 +11,7 @@ import {
   type BlogPostRow
 } from "@/lib/blog/shared";
 import { renderMarkdown } from "@/lib/blog/markdown";
+import { BlogMarkdownToolbar } from "@/components/admin/BlogMarkdownToolbar";
 
 type Fields = {
   title: string;
@@ -88,19 +89,17 @@ export function BlogPostEditor({ initialPost }: { initialPost: BlogPostRow | nul
   const [scheduleAt, setScheduleAt] = useState(() =>
     initialPost?.scheduled_for ? toLocalDatetimeInput(initialPost.scheduled_for) : ""
   );
-  const [preview, setPreview] = useState(false);
   const [aiTopic, setAiTopic] = useState("");
   const [busy, setBusy] = useState<string | null>(null);
   const [notice, setNotice] = useState<{ kind: "ok" | "error"; text: string } | null>(null);
+  const contentRef = useRef<HTMLTextAreaElement | null>(null);
 
   const set = <K extends keyof Fields>(key: K, value: Fields[K]) =>
     setFields((f) => ({ ...f, [key]: value }));
 
   const imageUrl = blogImagePublicUrl(fields.featured_image_path);
-  const previewHtml = useMemo(
-    () => (preview ? renderMarkdown(fields.content) : ""),
-    [preview, fields.content]
-  );
+  // Live preview: exactly what the published page renders.
+  const previewHtml = useMemo(() => renderMarkdown(fields.content), [fields.content]);
 
   const api = async (path: string, init: RequestInit): Promise<Record<string, unknown> | null> => {
     const response = await fetch(path, {
@@ -222,25 +221,6 @@ export function BlogPostEditor({ initialPost }: { initialPost: BlogPostRow | nul
         category: BlogCategory;
       };
       setFields((f) => ({ ...f, ...draft }));
-    });
-
-  const aiTranslate = () =>
-    run("aiTranslate", async () => {
-      const data = await api("/api/admin/blog/ai", {
-        method: "POST",
-        body: JSON.stringify({
-          action: "translate",
-          title: fields.title,
-          excerpt: fields.excerpt,
-          content: fields.content
-        })
-      });
-      const translation = data?.translation as {
-        title_es: string;
-        excerpt_es: string;
-        content_es: string;
-      };
-      setFields((f) => ({ ...f, ...translation }));
     });
 
   const aiImage = () =>
@@ -366,24 +346,47 @@ export function BlogPostEditor({ initialPost }: { initialPost: BlogPostRow | nul
       </div>
 
       <div>
-        <div className="mb-2 flex items-center justify-between">
-          <label className="block text-sm font-medium text-parchment">{t("fieldContent")}</label>
-          <button type="button" onClick={() => setPreview((p) => !p)} className={buttonClass}>
-            {preview ? t("editMarkdown") : t("preview")}
-          </button>
-        </div>
-        {preview ? (
-          <div
-            className="min-h-64 rounded-lg border border-parchment/15 p-4 text-sm leading-relaxed text-parchment/75 [&_a]:text-signal-teal [&_blockquote]:border-l-4 [&_blockquote]:border-claw-green/50 [&_blockquote]:pl-3 [&_code]:rounded [&_code]:bg-black/40 [&_code]:px-1 [&_h1]:text-2xl [&_h1]:font-bold [&_h2]:mt-4 [&_h2]:text-xl [&_h2]:font-semibold [&_h3]:mt-3 [&_h3]:font-semibold [&_li]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-black/40 [&_pre]:p-3 [&_ul]:list-disc [&_ul]:pl-5"
-            dangerouslySetInnerHTML={{ __html: previewHtml }}
-          />
-        ) : (
-          <textarea
-            value={fields.content}
-            onChange={(e) => set("content", e.target.value)}
-            rows={18}
-            className={`${inputClass} font-mono`}
-          />
+        <label className="mb-2 block text-sm font-medium text-parchment">
+          {t("fieldContent")}
+        </label>
+        <BlogMarkdownToolbar
+          textareaRef={contentRef}
+          value={fields.content}
+          onChange={(next) => set("content", next)}
+          labels={{
+            bold: t("toolbar.bold"),
+            italic: t("toolbar.italic"),
+            strikethrough: t("toolbar.strikethrough"),
+            code: t("toolbar.code"),
+            h1: t("toolbar.h1"),
+            h2: t("toolbar.h2"),
+            h3: t("toolbar.h3"),
+            link: t("toolbar.link"),
+            image: t("toolbar.image"),
+            quote: t("toolbar.quote"),
+            bulletList: t("toolbar.bulletList"),
+            numberedList: t("toolbar.numberedList"),
+            table: t("toolbar.table")
+          }}
+        />
+        <textarea
+          ref={contentRef}
+          value={fields.content}
+          onChange={(e) => set("content", e.target.value)}
+          rows={16}
+          className={`${inputClass} rounded-t-none font-mono`}
+        />
+        {/* Live preview — the same renderer the published page uses. */}
+        {fields.content.trim().length > 0 && (
+          <div className="mt-3">
+            <p className="mb-1 text-xs font-semibold uppercase tracking-wide text-parchment/40">
+              {t("preview")}
+            </p>
+            <div
+              className="min-h-16 rounded-lg border border-parchment/15 bg-parchment/[0.02] p-4 text-sm leading-relaxed text-parchment/75 [&_a]:text-signal-teal [&_blockquote]:border-l-4 [&_blockquote]:border-claw-green/50 [&_blockquote]:pl-3 [&_code]:rounded [&_code]:bg-black/40 [&_code]:px-1 [&_del]:text-parchment/45 [&_h1]:text-2xl [&_h1]:font-bold [&_h2]:mt-4 [&_h2]:text-xl [&_h2]:font-semibold [&_h3]:mt-3 [&_h3]:font-semibold [&_li]:my-1 [&_ol]:list-decimal [&_ol]:pl-5 [&_p]:my-2 [&_pre]:overflow-x-auto [&_pre]:rounded [&_pre]:bg-black/40 [&_pre]:p-3 [&_table]:my-3 [&_table]:w-full [&_table]:border-collapse [&_td]:border [&_td]:border-parchment/15 [&_td]:px-3 [&_td]:py-1.5 [&_th]:border [&_th]:border-parchment/15 [&_th]:bg-parchment/5 [&_th]:px-3 [&_th]:py-1.5 [&_th]:text-left [&_ul]:list-disc [&_ul]:pl-5"
+              dangerouslySetInnerHTML={{ __html: previewHtml }}
+            />
+          </div>
         )}
       </div>
 
@@ -439,94 +442,31 @@ export function BlogPostEditor({ initialPost }: { initialPost: BlogPostRow | nul
         </div>
       </div>
 
-      {/* Spanish translation */}
-      <details className="rounded-xl border border-parchment/10 bg-parchment/[0.02] p-4">
-        <summary className="cursor-pointer text-sm font-medium text-parchment">
-          {t("spanishSection")}
-        </summary>
-        <div className="mt-4 space-y-4">
-          <button
-            type="button"
-            onClick={aiTranslate}
-            disabled={busy !== null || !fields.title || !fields.content}
-            className={buttonClass}
-          >
-            {busy === "aiTranslate" ? t("aiWorking") : t("aiTranslate")}
-          </button>
-          <div>
-            <label className="mb-1 block text-sm font-medium text-parchment">
-              {t("fieldTitleEs")}
+      {/* Lifecycle actions */}
+      <div className="space-y-4 border-t border-parchment/10 pt-6">
+        {status !== "published" && (
+          <div className="flex flex-wrap items-center gap-x-4 gap-y-3 rounded-xl border border-parchment/10 bg-parchment/[0.02] p-4">
+            <label
+              htmlFor="scheduleAt"
+              className="whitespace-nowrap text-sm font-medium text-parchment"
+            >
+              {t("scheduleFor")}
             </label>
             <input
-              type="text"
-              value={fields.title_es}
-              onChange={(e) => set("title_es", e.target.value)}
-              className={inputClass}
+              id="scheduleAt"
+              type="datetime-local"
+              value={scheduleAt}
+              onChange={(e) => setScheduleAt(e.target.value)}
+              className={`${inputClass} w-56 min-w-48`}
             />
-          </div>
-          <div>
-            <label className="mb-1 block text-sm font-medium text-parchment">
-              {t("fieldExcerptEs")}
-            </label>
-            <textarea
-              value={fields.excerpt_es}
-              onChange={(e) => set("excerpt_es", e.target.value)}
-              rows={3}
-              maxLength={2200}
-              className={inputClass}
-            />
-          </div>
-          <div>
-            <label className="mb-1 block text-sm font-medium text-parchment">
-              {t("fieldContentEs")}
-            </label>
-            <textarea
-              value={fields.content_es}
-              onChange={(e) => set("content_es", e.target.value)}
-              rows={12}
-              className={`${inputClass} font-mono`}
-            />
-          </div>
-        </div>
-      </details>
-
-      {/* Lifecycle actions */}
-      <div className="flex flex-wrap items-center gap-3 border-t border-parchment/10 pt-6">
-        <button
-          type="button"
-          onClick={saveDraft}
-          disabled={busy !== null || !fields.title}
-          className={buttonClass}
-        >
-          {busy === "save" ? t("aiWorking") : t("saveDraft")}
-        </button>
-        {status !== "published" && (
-          <>
             <button
               type="button"
-              onClick={publishNow}
-              disabled={busy !== null || !fields.title}
-              className={primaryButtonClass}
+              onClick={schedule}
+              disabled={busy !== null || !fields.title || !scheduleAt}
+              className={buttonClass}
             >
-              {busy === "publish" ? t("aiWorking") : t("publishNow")}
+              {busy === "schedule" ? t("aiWorking") : t("schedule")}
             </button>
-            <div className="flex items-center gap-2">
-              <label className="text-sm text-parchment/60">{t("scheduleFor")}</label>
-              <input
-                type="datetime-local"
-                value={scheduleAt}
-                onChange={(e) => setScheduleAt(e.target.value)}
-                className={`${inputClass} w-auto`}
-              />
-              <button
-                type="button"
-                onClick={schedule}
-                disabled={busy !== null || !fields.title || !scheduleAt}
-                className={buttonClass}
-              >
-                {busy === "schedule" ? t("aiWorking") : t("schedule")}
-              </button>
-            </div>
             {status === "scheduled" && (
               <button
                 type="button"
@@ -537,33 +477,55 @@ export function BlogPostEditor({ initialPost }: { initialPost: BlogPostRow | nul
                 {t("unschedule")}
               </button>
             )}
-          </>
+          </div>
         )}
-        {postId && (
-          <>
+        <div className="flex flex-wrap items-center gap-3">
+          <button
+            type="button"
+            onClick={saveDraft}
+            disabled={busy !== null || !fields.title}
+            className={buttonClass}
+          >
+            {busy === "save" ? t("aiWorking") : t("saveDraft")}
+          </button>
+          {status !== "published" && (
             <button
               type="button"
-              onClick={duplicate}
-              disabled={busy !== null}
-              className={buttonClass}
+              onClick={publishNow}
+              disabled={busy !== null || !fields.title}
+              className={primaryButtonClass}
             >
-              {busy === "duplicate" ? t("aiWorking") : t("duplicate")}
+              {busy === "publish" ? t("aiWorking") : t("publishNow")}
             </button>
-            <button
-              type="button"
-              onClick={remove}
-              disabled={busy !== null}
-              className={`${buttonClass} text-red-400`}
+          )}
+          {postId && (
+            <>
+              <button
+                type="button"
+                onClick={duplicate}
+                disabled={busy !== null}
+                className={buttonClass}
+              >
+                {busy === "duplicate" ? t("aiWorking") : t("duplicate")}
+              </button>
+              <button
+                type="button"
+                onClick={remove}
+                disabled={busy !== null}
+                className={`${buttonClass} text-red-400`}
+              >
+                {t("delete")}
+              </button>
+            </>
+          )}
+          {notice && (
+            <span
+              className={notice.kind === "ok" ? "text-sm text-claw-green" : "text-sm text-red-400"}
             >
-              {t("delete")}
-            </button>
-          </>
-        )}
-        {notice && (
-          <span className={notice.kind === "ok" ? "text-sm text-claw-green" : "text-sm text-red-400"}>
-            {notice.text}
-          </span>
-        )}
+              {notice.text}
+            </span>
+          )}
+        </div>
       </div>
     </div>
   );
