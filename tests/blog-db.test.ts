@@ -20,6 +20,7 @@ import {
   deleteBlogPost,
   getBlogPost,
   getBlogSettings,
+  getLatestWeeklyDigestPost,
   getPostByDigestWeek,
   getPublishedPostBySlug,
   insertBlogPost,
@@ -289,6 +290,23 @@ describe("publish sweep helpers", () => {
     await expect(
       transitionBlogPost(POST, "scheduled", { status: "published" }, makeDb(bad))
     ).rejects.toThrow("transitionBlogPost: boom");
+  });
+
+  it("finds the latest weekly-digest post (found, missing, error)", async () => {
+    const found = chain();
+    found.maybeSingle.mockResolvedValue({ data: { id: POST }, error: null });
+    expect(await getLatestWeeklyDigestPost(makeDb(found))).toEqual({ id: POST });
+    expect(found.eq).toHaveBeenCalledWith("source", "weekly_digest");
+
+    const missing = chain();
+    missing.maybeSingle.mockResolvedValue({ data: null, error: null });
+    expect(await getLatestWeeklyDigestPost(makeDb(missing))).toBeNull();
+
+    const bad = chain();
+    bad.maybeSingle.mockResolvedValue({ data: null, error: { message: "boom" } });
+    await expect(getLatestWeeklyDigestPost(makeDb(bad))).rejects.toThrow(
+      "getLatestWeeklyDigestPost: boom"
+    );
   });
 
   it("finds a digest post by week (found, missing, error)", async () => {

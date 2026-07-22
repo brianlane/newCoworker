@@ -629,11 +629,15 @@ are RLS-on/no-policies (service-role only); core logic lives in
   immediately and the social-post-sweep publishes it.
 - **Weekly PR digest** (`blog-weekly-digest` Edge fn, pg_cron Mondays 15:00
   UTC → `/api/internal/blog-weekly-digest`): when MORE THAN 10 PRs merged
-  into main over the trailing 7 days, Gemini writes a plain-English,
-  under-700-word feature roundup (12-year-old reading level, enforced in
-  code with one retry then a section-boundary truncation) and creates the
-  post `scheduled` for the same morning (category `platform-updates`,
-  idempotent per ISO week via `digest_week`). **Features only, never bug
+  into main over the window, Gemini writes a plain-English, under-700-word
+  feature roundup (12-year-old reading level, enforced in code with one
+  retry then a section-boundary truncation) and creates the post
+  `scheduled` for the same morning (category `platform-updates`,
+  idempotent per ISO week via `digest_week`). **Skipped weeks roll
+  forward**: each run's PR window starts at the LAST weekly-digest post
+  (capped at 28 days; first run = trailing 7 days), and a composed digest
+  under **150 words** is skipped as too thin — its features simply land in
+  the next week's post, same as quiet (≤10 PR) or feature-less weeks. **Features only, never bug
   fixes**: label PRs at review time — `blog: feature` includes, `blog: skip`
   excludes; Dependabot / docs / test / chore / bump / one-shot titles are
   dropped outright, and the unlabeled remainder is classified by Gemini

@@ -35,6 +35,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
   BLOG_IMAGES_BUCKET,
   getBlogSettings,
+  getLatestWeeklyDigestPost,
   getPostByDigestWeek,
   insertBlogPost,
   type BlogPostRow
@@ -47,6 +48,19 @@ export const DIGEST_MIN_MERGED_PRS = 10;
 
 /** Hard ceiling on the digest body, enforced after generation. */
 export const DIGEST_MAX_WORDS = 700;
+
+/**
+ * A composed digest under this many words is too thin to publish — the run
+ * skips, and because every run's PR window starts at the LAST digest post,
+ * the skipped week's features roll into the next week's post.
+ */
+export const DIGEST_MIN_WORDS = 150;
+
+/**
+ * Ceiling on the rollover window: a long gap (digest disabled for a month,
+ * repeated quiet weeks) never balloons into a mega-post covering months.
+ */
+export const DIGEST_MAX_WINDOW_DAYS = 28;
 
 export const DEFAULT_DIGEST_TEXT_MODEL = "gemini-3.5-flash";
 export const DEFAULT_DIGEST_IMAGE_MODEL = "gemini-3.1-flash-lite-image";
@@ -359,6 +373,7 @@ export type WeeklyDigestDeps = {
   client?: SupabaseClient;
   loadSettings?: typeof getBlogSettings;
   findExisting?: typeof getPostByDigestWeek;
+  findLatestDigest?: typeof getLatestWeeklyDigestPost;
   insertPost?: typeof insertBlogPost;
   fetchMergedPrs?: FetchMergedPrs;
   classify?: ClassifyPrs;
@@ -373,7 +388,9 @@ export type WeeklyDigestResult = {
     | "disabled"
     | "already_exists"
     | "below_threshold"
-    | "no_features";
+    | "no_features"
+    /** Composed under DIGEST_MIN_WORDS — skipped; rolls into next week. */
+    | "too_thin";
   weekKey: string;
   mergedCount: number;
   featureCount: number;
@@ -385,6 +402,7 @@ export async function runWeeklyDigest(deps: WeeklyDigestDeps = {}): Promise<Week
   const db = deps.client ?? (await createSupabaseServiceClient());
   const loadSettings = deps.loadSettings ?? getBlogSettings;
   const findExisting = deps.findExisting ?? getPostByDigestWeek;
+  const findLatestDigest = deps.findLatestDigest ?? getLatestWeeklyDigestPost;
   const insertPost = deps.insertPost ?? insertBlogPost;
   const fetchMergedPrs =
     deps.fetchMergedPrs ?? ((since, until) => fetchMergedPrsFromGithub(since, until));
@@ -416,8 +434,23 @@ export async function runWeeklyDigest(deps: WeeklyDigestDeps = {}): Promise<Week
     return { ...base, outcome: "already_exists" };
   }
 
+  // The window starts where the LAST digest post left off (its creation
+  // instant), so a skipped week — quiet, feature-less, or too thin — rolls
+  // its findings into the next post instead of being lost. Capped at
+  // DIGEST_MAX_WINDOW_DAYS so a long gap can't balloon into a mega-post;
+  // first-ever run falls back to the plain trailing week.
   const untilIso = nowDate.toISOString();
-  const sinceIso = new Date(nowDate.getTime() - 7 * 24 * 60 * 60 * 1000).toISOString();
+  const weekAgoMs = nowDate.getTime() - 7 * 24 * 60 * 60 * 1000;
+  const windowFloorMs = nowDate.getTime() - DIGEST_MAX_WINDOW_DAYS * 24 * 60 * 60 * 1000;
+  const lastDigest = await findLatestDigest(db);
+  // The anchor is the previous run's window END (`scheduled_for` — recorded
+  // on every digest row, draft mode included, precisely for this). Falling
+  // back to `created_at` (older rows / admin-cleared schedules) can miss
+  // merges that landed during that run's compose window — acceptable
+  // seconds-scale residual on a rare path.
+  const anchorIso = lastDigest ? (lastDigest.scheduled_for ?? lastDigest.created_at) : null;
+  const sinceMs = anchorIso ? Math.max(windowFloorMs, Date.parse(anchorIso)) : weekAgoMs;
+  const sinceIso = new Date(sinceMs).toISOString();
   const merged = await fetchMergedPrs(sinceIso, untilIso);
   if (merged.length <= DIGEST_MIN_MERGED_PRS) {
     return { ...base, mergedCount: merged.length, outcome: "below_threshold" };
@@ -429,6 +462,21 @@ export async function runWeeklyDigest(deps: WeeklyDigestDeps = {}): Promise<Week
   }
 
   const draft = await compose(features, weekKey);
+  // A thin week isn't worth a post — skip BEFORE spending on the image;
+  // the anchored window above carries these features into next week.
+  if (countWords(draft.content) < DIGEST_MIN_WORDS) {
+    logger.info("weekly-digest: composed digest too thin — rolling into next week", {
+      weekKey,
+      words: countWords(draft.content),
+      featureCount: features.length
+    });
+    return {
+      ...base,
+      mergedCount: merged.length,
+      featureCount: features.length,
+      outcome: "too_thin"
+    };
+  }
   const imagePath = settings.digest_include_image
     ? await generateImage(draft, weekKey)
     : null;
@@ -446,9 +494,13 @@ export async function runWeeklyDigest(deps: WeeklyDigestDeps = {}): Promise<Week
         digest_week: weekKey,
         featured_image_path: imagePath,
         featured_image_alt: imagePath ? draft.title : null,
-        ...(settings.digest_as_draft
-          ? { status: "draft" as const }
-          : { status: "scheduled" as const, scheduled_for: nowDate.toISOString() })
+        // `scheduled_for` doubles as the covered window's END (= untilIso):
+        // the next run anchors on it, so merges landing DURING this run's
+        // compose/image/insert are never skipped. Draft-mode rows carry it
+        // too — the publish sweep only picks status "scheduled", so it is
+        // inert there beyond prefilling the admin schedule picker.
+        status: settings.digest_as_draft ? ("draft" as const) : ("scheduled" as const),
+        scheduled_for: untilIso
       },
       db
     );
