@@ -16,46 +16,40 @@
  * (jumping any OTHER parked runs; the claimed run itself is `running` and
  * is jumped in-process by the worker when this returns booked).
  *
- * Calendly lookup order (bounded, cheapest first):
- *   1. `invitee_email`-filtered events listing — one call per lead email.
- *   2. Phone match: scan upcoming events (capped) and match each event's
- *      invitees' SMS-reminder numbers country-code-tolerantly.
- * Vagaro: one upcoming-appointments listing, matched on the customer's
- * phone (country-code-tolerant) or email.
+ * The provider lookup itself lives in the shared attendee-bookings module
+ * (`lookupProviderBookingsForAttendee`, existence mode — one adapter per
+ * provider, same call pattern this module used before the extraction); this
+ * module keeps the run/flow gating, the goal firing, and the fail-open
+ * reason mapping.
  *
  * Everything here FAILS OPEN by returning booked:false with a reason — the
  * worker sends as normal and the young-run sweep remains the safety net.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import {
-  resolveCalendarConnection,
-  CALENDLY_DIRECT_KEY,
-  type ResolvedVoiceConnection
-} from "@/lib/voice-tools/connections";
-import { calendlyRequest, type CalendlyRequestConfig } from "@/lib/calendar-tools/calendly";
-import {
-  getActiveCalendlyConnectionUserUri,
-  setCalendlyConnectionUserUri
-} from "@/lib/db/calendly-connections";
-import { digitsOf, phoneDigitsMatch } from "@/lib/calendar-tools/phone-match";
+  lookupProviderBookingsForAttendee,
+  ATTENDEE_BOOKING_EVENT_SCAN,
+  ATTENDEE_BOOKING_INVITEE_FETCH_CAP,
+  ATTENDEE_BOOKING_HORIZON_DAYS,
+  type AttendeeBookingDeps
+} from "@/lib/calendar-tools/attendee-bookings";
 import {
   definitionWatchesBookingGoal,
   fireBookingGoalsForInvitees,
   inviteePhoneE164
 } from "@/lib/ai-flows/calendly-booking-goals";
-import { getActiveVagaroConnection } from "@/lib/db/vagaro-connections";
-import { listVagaroAppointments } from "@/lib/vagaro/client";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { logger } from "@/lib/logger";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 /** Upcoming events scanned by the phone-match fallback. */
-export const PRECHECK_EVENT_SCAN = 25;
+export const PRECHECK_EVENT_SCAN = ATTENDEE_BOOKING_EVENT_SCAN;
 /** Per-check cap on invitee fetches in the phone-match fallback. */
-export const PRECHECK_INVITEE_FETCH_CAP = 10;
+export const PRECHECK_INVITEE_FETCH_CAP = ATTENDEE_BOOKING_INVITEE_FETCH_CAP;
 /** How far ahead a booking's start may be and still count. */
-export const PRECHECK_HORIZON_DAYS = 90;
+export const PRECHECK_HORIZON_DAYS = ATTENDEE_BOOKING_HORIZON_DAYS;
 
 export type BookingPrecheckResult = {
   /** An active future-start booking exists for this run's lead. */
@@ -74,24 +68,9 @@ export type BookingPrecheckResult = {
     | "vagaro_refused";
 };
 
-export type BookingPrecheckDeps = {
-  /** Injectable transport (tests). */
-  request?: (
-    businessId: string,
-    conn: ResolvedVoiceConnection,
-    config: CalendlyRequestConfig
-  ) => Promise<{ data: unknown } | null>;
-  /** Injectable connection resolver (tests). */
-  resolveConnection?: (businessId: string) => Promise<ResolvedVoiceConnection | null>;
+export type BookingPrecheckDeps = AttendeeBookingDeps & {
   /** Injectable goal-firing helper (tests). */
   fireGoals?: typeof fireBookingGoalsForInvitees;
-  /** Injectable user-URI cache reads/writes (tests). */
-  getCachedUserUri?: (businessId: string) => Promise<string | null>;
-  persistUserUri?: (businessId: string, userUri: string) => Promise<void>;
-  /** Injectable Vagaro connection lookup (tests). */
-  getVagaroConnection?: typeof getActiveVagaroConnection;
-  /** Injectable Vagaro appointments listing (tests). */
-  listAppointments?: typeof listVagaroAppointments;
 };
 
 type RunRow = {
@@ -120,88 +99,6 @@ export function leadIdentifiersFromContext(context: Record<string, unknown> | nu
 }
 
 /**
- * Resolve the connected account's user URI, preferring the cached value on
- * the direct-PAT connection row (poller parity — saves the /users/me probe).
- * Null when the transport refuses. Exported for the contact-booking-context
- * lookup (same transport, same cache).
- */
-export async function resolveCalendlyUserUri(
-  businessId: string,
-  conn: ResolvedVoiceConnection,
-  request: NonNullable<BookingPrecheckDeps["request"]>,
-  getCachedUserUri: NonNullable<BookingPrecheckDeps["getCachedUserUri"]>,
-  persistUserUri: NonNullable<BookingPrecheckDeps["persistUserUri"]>
-): Promise<string | null> {
-  const cacheable = conn.providerConfigKey === CALENDLY_DIRECT_KEY;
-  if (cacheable) {
-    try {
-      const cached = await getCachedUserUri(businessId);
-      if (cached) return cached;
-    } catch (err) {
-      logger.warn("booking precheck: user-uri cache read failed", {
-        businessId,
-        error: err instanceof Error ? err.message : String(err)
-      });
-    }
-  }
-  const res = await request(businessId, conn, { endpoint: "/users/me", method: "GET" });
-  const uri = (res?.data as { resource?: { uri?: string } } | undefined)?.resource?.uri;
-  if (typeof uri !== "string" || uri.length === 0) return null;
-  if (cacheable) {
-    try {
-      await persistUserUri(businessId, uri);
-    } catch (err) {
-      logger.warn("booking precheck: user-uri cache write failed", {
-        businessId,
-        error: err instanceof Error ? err.message : String(err)
-      });
-    }
-  }
-  return uri;
-}
-
-/**
- * Does this run's lead hold an active future-start Vagaro appointment?
- * One bounded upcoming-appointments listing, matched on the customer's
- * phone (country-code-tolerant digits) or email. `"refused"` on any
- * transport/connection trouble — the caller fails open.
- */
-async function vagaroLeadHasUpcomingBooking(
-  businessId: string,
-  phones: string[],
-  emails: string[],
-  deps: BookingPrecheckDeps
-): Promise<boolean | "refused"> {
-  const getVagaroConnection = deps.getVagaroConnection ?? getActiveVagaroConnection;
-  const listAppointments = deps.listAppointments ?? listVagaroAppointments;
-  try {
-    const conn = await getVagaroConnection(businessId);
-    if (!conn) return "refused";
-    const nowMs = Date.now();
-    const items = await listAppointments(conn, {
-      startIso: new Date(nowMs).toISOString(),
-      endIso: new Date(nowMs + PRECHECK_HORIZON_DAYS * 24 * 60 * 60_000).toISOString()
-    });
-    const phoneDigits = phones.map((p) => digitsOf(p)).filter((d) => d.length > 0);
-    const emailSet = new Set(emails);
-    return items.some((item) => {
-      if (item.cancelled) return false;
-      const startMs = Date.parse(item.startIso);
-      if (!Number.isFinite(startMs) || startMs <= nowMs) return false;
-      if (item.customerEmail && emailSet.has(item.customerEmail)) return true;
-      const itemDigits = item.customerPhone ? digitsOf(item.customerPhone) : "";
-      return itemDigits.length > 0 && phoneDigits.some((d) => phoneDigitsMatch(itemDigits, d));
-    });
-  } catch (err) {
-    logger.warn("booking precheck: vagaro lookup refused (failing open)", {
-      businessId,
-      error: err instanceof Error ? err.message : String(err)
-    });
-    return "refused";
-  }
-}
-
-/**
  * Does this run's lead hold an active future-start booking on the connected
  * provider (Calendly or Vagaro)? Fires the `appointment_booked` goal
  * machinery on a hit. Never throws for "expected" trouble — a refused
@@ -214,11 +111,8 @@ export async function bookingPrecheckForRun(
   deps: BookingPrecheckDeps = {},
   client?: SupabaseClient
 ): Promise<BookingPrecheckResult> {
-  const request = deps.request ?? calendlyRequest;
   const resolveConnection = deps.resolveConnection ?? resolveCalendarConnection;
   const fireGoals = deps.fireGoals ?? fireBookingGoalsForInvitees;
-  const getCachedUserUri = deps.getCachedUserUri ?? getActiveCalendlyConnectionUserUri;
-  const persistUserUri = deps.persistUserUri ?? setCalendlyConnectionUserUri;
   const db = client ?? (await createSupabaseServiceClient());
 
   const none = (reason: BookingPrecheckResult["reason"]): BookingPrecheckResult => ({
@@ -252,88 +146,34 @@ export async function bookingPrecheckForRun(
   if (!conn || (conn.provider !== "calendly" && conn.provider !== "vagaro")) {
     return none("provider_unsupported");
   }
+  const refusedReason = conn.provider === "vagaro" ? "vagaro_refused" : "calendly_refused";
 
   const { phones, emails } = leadIdentifiersFromContext(run.context);
   if (phones.length === 0 && emails.length === 0) return none("no_lead_identifiers");
 
   let booked = false;
-
-  if (conn.provider === "vagaro") {
-    const found = await vagaroLeadHasUpcomingBooking(businessId, phones, emails, deps);
-    if (found === "refused") return none("vagaro_refused");
-    booked = found;
-  } else {
-    const userUri = await resolveCalendlyUserUri(
+  try {
+    const res = await lookupProviderBookingsForAttendee(
       businessId,
       conn,
-      request,
-      getCachedUserUri,
-      persistUserUri
+      { phones, email: emails[0] ?? null },
+      deps,
+      { mode: "existence" }
     );
-    if (!userUri) return none("calendly_refused");
-
-    const nowMs = Date.now();
-    const listParams = {
-      user: userUri,
-      status: "active",
-      sort: "start_time:asc",
-      min_start_time: new Date(nowMs).toISOString(),
-      max_start_time: new Date(nowMs + PRECHECK_HORIZON_DAYS * 24 * 60 * 60_000).toISOString()
-    };
-
-    // 1) Email path: one `invitee_email`-filtered listing (a run carries at
-    //    most one lead email).
-    if (emails[0]) {
-      const res = await request(businessId, conn, {
-        endpoint: "/scheduled_events",
-        method: "GET",
-        params: { ...listParams, invitee_email: emails[0], count: "1" }
-      });
-      if (!res) return none("calendly_refused");
-      const listed = (res.data as { collection?: unknown[] })?.collection ?? [];
-      if (listed.length > 0) booked = true;
-    }
-
-    // 2) Phone path: scan upcoming events and match invitee SMS numbers
-    //    country-code-tolerantly (Calendly may store national format).
-    if (!booked && phones.length > 0) {
-      const phoneDigits = phones.map((p) => digitsOf(p)).filter((d) => d.length > 0);
-      const res = await request(businessId, conn, {
-        endpoint: "/scheduled_events",
-        method: "GET",
-        params: { ...listParams, count: String(PRECHECK_EVENT_SCAN) }
-      });
-      if (!res) return none("calendly_refused");
-      const events = ((res.data as { collection?: Array<{ uri?: string }> })?.collection ?? [])
-        .filter((e): e is { uri: string } => typeof e?.uri === "string" && e.uri.length > 0);
-      let fetched = 0;
-      for (const event of events) {
-        if (booked || fetched >= PRECHECK_INVITEE_FETCH_CAP) break;
-        fetched += 1;
-        const uuid = event.uri.slice(event.uri.lastIndexOf("/") + 1);
-        const invRes = await request(businessId, conn, {
-          endpoint: `/scheduled_events/${encodeURIComponent(uuid)}/invitees`,
-          method: "GET",
-          params: { count: "10" }
-        });
-        // A refused invitee fetch mid-scan degrades to "not found so far";
-        // the remaining sweep/webhook observers still cover the lead.
-        if (!invRes) continue;
-        const invitees =
-          (invRes.data as {
-            collection?: Array<{ status?: string; text_reminder_number?: string }>;
-          })?.collection ?? [];
-        booked = invitees.some((i) => {
-          if (i?.status === "canceled") return false;
-          const inviteeDigits =
-            typeof i.text_reminder_number === "string" ? digitsOf(i.text_reminder_number) : "";
-          return (
-            inviteeDigits.length > 0 &&
-            phoneDigits.some((d) => phoneDigitsMatch(inviteeDigits, d))
-          );
-        });
-      }
-    }
+    if (!res.ok) return none(refusedReason);
+    booked = res.bookings.length > 0;
+  } catch (err) {
+    // Vagaro transport trouble surfaces as a throw (see the shared module's
+    // failure contract); fail open exactly as before the extraction. A
+    // throwing CALENDLY transport propagates, also as before — its
+    // production transport signals trouble by returning null, so a throw is
+    // an unexpected bug the route's error handling should surface.
+    if (conn.provider !== "vagaro") throw err;
+    logger.warn("booking precheck: vagaro lookup refused (failing open)", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return none(refusedReason);
   }
 
   if (!booked) return none("no_booking_found");
