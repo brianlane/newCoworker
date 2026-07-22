@@ -156,18 +156,36 @@ describe("api/integrations/nango/complete", () => {
     expect(maybeSendNangoQuotaAlert).toHaveBeenCalled();
   });
 
-  it("refuses a NEW over-cap connection and deletes it from Nango (quota reclaim)", async () => {
+  it("refuses a NEW over-cap connection, evicting the tentative row + Nango grant", async () => {
     vi.mocked(resolveWorkspaceConnectionCapState).mockResolvedValue({
       used: 3,
       max: 3,
       atCap: true
     });
+    // First read: the existing-row check (null = new). Second read: the
+    // tentative-row lookup on the eviction path.
+    vi.mocked(getWorkspaceOAuthConnectionByNangoIds)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: "row-tentative",
+        business_id: businessId,
+        provider_config_key: "google-mail",
+        connection_id: "conn-1",
+        metadata: {},
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z"
+      });
     const res = await POST(makeRequest());
     expect(res.status).toBe(403);
     const body = (await res.json()) as { error: { message: string } };
     expect(body.error.message).toContain("Your plan includes 3 workspace connections");
+    // The row lands tentatively (the continuity check needs it to exist),
+    // then is evicted along with the Nango grant when nothing consolidated.
+    expect(upsertWorkspaceOAuthConnection).toHaveBeenCalled();
+    expect(deleteWorkspaceOAuthConnection).toHaveBeenCalledWith(businessId, "row-tentative");
     expect(mockDeleteConnection).toHaveBeenCalledWith("google-mail", "conn-1");
-    expect(upsertWorkspaceOAuthConnection).not.toHaveBeenCalled();
+    // The over-cap settle is deferred to the eviction path, never run.
+    expect(settleWorkspaceConnectionInsert).not.toHaveBeenCalled();
     expect(maybeSendNangoQuotaAlert).not.toHaveBeenCalled();
   });
 
@@ -177,10 +195,33 @@ describe("api/integrations/nango/complete", () => {
       max: 1,
       atCap: true
     });
+    // Tentative row already raced away — the eviction path tolerates it.
     mockDeleteConnection.mockRejectedValue(new Error("nango down"));
     const res = await POST(makeRequest());
     expect(res.status).toBe(403);
-    expect(upsertWorkspaceOAuthConnection).not.toHaveBeenCalled();
+    expect(deleteWorkspaceOAuthConnection).not.toHaveBeenCalled();
+  });
+
+  it("allows an AT-CAP reconnect of the same account (consolidation nets zero seats)", async () => {
+    vi.mocked(resolveWorkspaceConnectionCapState).mockResolvedValue({
+      used: 3,
+      max: 3,
+      atCap: true
+    });
+    vi.mocked(fetchProviderAccountIdentity).mockResolvedValue({
+      email: "sam@example.com",
+      displayName: "Sam"
+    });
+    vi.mocked(consolidateReconnectedWorkspaceConnection).mockResolvedValue({
+      consolidated: true,
+      keptRowId: "row-old",
+      supersededNangoConnectionId: "conn-old"
+    });
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+    // No eviction, no cap refusal, and no quota alert (net-zero reconnect).
+    expect(deleteWorkspaceOAuthConnection).not.toHaveBeenCalled();
+    expect(maybeSendNangoQuotaAlert).not.toHaveBeenCalled();
   });
 
   it("evicts its own row when a RACED insert landed past the cap (post-insert settle)", async () => {

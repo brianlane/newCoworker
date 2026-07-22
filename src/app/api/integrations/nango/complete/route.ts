@@ -70,21 +70,23 @@ export async function POST(request: Request) {
     // Defensive tier-cap re-check for NEW connections only (the session
     // route is the primary gate, but a Connect UI opened before the cap was
     // reached could complete after it). Re-completing an EXISTING row must
-    // stay allowed — that's the reconnect path. The OAuth grant already
-    // created the connection on Nango's side, so a refusal deletes it there
-    // too or it would silently burn account-wide quota.
+    // stay allowed — that's the reconnect path.
+    //
+    // At the cap the request is NOT refused yet: a reconnect of an
+    // already-connected account nets ZERO rows (the continuity consolidation
+    // below replaces the old row), and the identity probe that proves it
+    // needs the row to exist first. The row lands tentatively; a genuinely
+    // NEW account is evicted (row + Nango grant) and refused right after the
+    // probe. Refusing here instead used to wedge at-cap owners whose flows
+    // reference the mailbox: the disconnect guard blocks freeing a seat, and
+    // the cap blocked refreshing the grant.
+    let overCapAwaitingConsolidation = false;
+    let atCapState: Awaited<ReturnType<typeof resolveWorkspaceConnectionCapState>> | null = null;
     if (!existing) {
       const capState = await resolveWorkspaceConnectionCapState(parsed.businessId);
       if (capState.atCap) {
-        try {
-          await nango.deleteConnection(parsed.providerConfigKey, parsed.connectionId);
-        } catch (delErr) {
-          console.error(
-            "nango/complete: over-cap connection delete failed (leaks account quota)",
-            delErr instanceof Error ? delErr.message : delErr
-          );
-        }
-        return errorResponse("FORBIDDEN", workspaceConnectionCapMessage(capState), 403);
+        overCapAwaitingConsolidation = true;
+        atCapState = capState;
       }
     }
 
@@ -104,7 +106,9 @@ export async function POST(request: Request) {
     // that the row exists, re-read in deterministic order — if this row
     // landed past the cap, evict it (row + Nango side) and refuse. Seats
     // belong to the earliest rows, so racers can never end above the cap.
-    if (!existing) {
+    // (The at-cap tentative path settles AFTER consolidation instead — its
+    // row is EXPECTED to be past the cap until the old row is replaced.)
+    if (!existing && !overCapAwaitingConsolidation) {
       const settlement = await settleWorkspaceConnectionInsert(parsed.businessId, {
         providerConfigKey: parsed.providerConfigKey,
         connectionId: parsed.connectionId
@@ -183,8 +187,10 @@ export async function POST(request: Request) {
     // account an OLDER row already represents, keep the old row's id (the id
     // AiFlow mailbox bindings and email triggers reference) and re-point it
     // at this fresh grant — deleting the duplicate row and the superseded
-    // Nango connection. Best-effort: a failure leaves two working rows, the
-    // pre-continuity behavior.
+    // Nango connection. Best-effort below the cap (a failure leaves two
+    // working rows, the pre-continuity behavior); at the cap the tentative
+    // row is only allowed to STAY if consolidation nets it out.
+    let consolidated = false;
     if (!existing && identity.email) {
       try {
         const consolidation = await consolidateReconnectedWorkspaceConnection({
@@ -194,6 +200,7 @@ export async function POST(request: Request) {
           accountEmail: identity.email,
           deleteNangoConnection: (pck, connId) => nango.deleteConnection(pck, connId)
         });
+        consolidated = consolidation.consolidated;
         if (consolidation.consolidated) {
           console.log(
             `nango/complete: reconnect consolidated onto row ${consolidation.keptRowId} (superseded ${consolidation.supersededNangoConnectionId})`
@@ -207,9 +214,34 @@ export async function POST(request: Request) {
       }
     }
 
+    // At-cap tentative row: a consolidation replaced an old row (net zero
+    // seats) — allowed. Anything else at the cap is a genuinely NEW account
+    // (or an unprovable reconnect): evict the row + the Nango grant and
+    // refuse, the same outcome the pre-insert refusal used to produce.
+    if (!existing && overCapAwaitingConsolidation && !consolidated && atCapState) {
+      const tentative = await getWorkspaceOAuthConnectionByNangoIds(
+        parsed.businessId,
+        parsed.providerConfigKey,
+        parsed.connectionId
+      );
+      if (tentative) {
+        await deleteWorkspaceOAuthConnection(parsed.businessId, tentative.id);
+      }
+      try {
+        await nango.deleteConnection(parsed.providerConfigKey, parsed.connectionId);
+      } catch (delErr) {
+        console.error(
+          "nango/complete: over-cap connection delete failed (leaks account quota)",
+          delErr instanceof Error ? delErr.message : delErr
+        );
+      }
+      return errorResponse("FORBIDDEN", workspaceConnectionCapMessage(atCapState), 403);
+    }
+
     // A NEW connection consumed account-wide Nango quota — check platform
     // headroom and alert ops when it's nearly gone (deduped, best-effort).
-    if (!existing) {
+    // A consolidated reconnect nets zero (the superseded grant was deleted).
+    if (!existing && !consolidated) {
       await maybeSendNangoQuotaAlert();
     }
 
