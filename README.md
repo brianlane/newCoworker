@@ -943,9 +943,17 @@ cores and draining the laptop battery. After returning to main:
    especially. Check with `ps aux | grep newCoworker-wt-` (or
    `lsof +D /Users/brianlane/newCoworker-wt-<name>`) and kill any PIDs found
    (`kill`, then `kill -9` if they don't die).
-2. **Remove the worktree** from the main repo:
+2. **Re-anchor every shell OUT of the worktree BEFORE removing it** —
+   `cd /Users/brianlane/newCoworker` in the session shell (agents: run the
+   next command with an explicit `working_directory` on the main checkout).
+   A persistent shell left cd'd inside a deleted worktree fails every
+   subsequent command — silently no-status, or `spawn /bin/bash ENOENT` —
+   which presents as "Execution backend unavailable" and has repeatedly
+   (Jul 17, Jul 22 2026) looked like a dead terminal backend that needed a
+   Cursor restart. It's not the backend; it's the stale cwd.
+3. **Remove the worktree** from the main repo:
    `git worktree remove /Users/brianlane/newCoworker-wt-<name>` then
    `git worktree prune`. Worktrees live at `/Users/brianlane/newCoworker-wt-*`.
-3. **Delete the merged local branch**: `git branch -d <branch>`.
-4. **Verify**: `git worktree list` shows only the main checkout, and
+4. **Delete the merged local branch**: `git branch -d <branch>`.
+5. **Verify**: `git worktree list` shows only the main checkout, and
    `ps aux | grep newCoworker-wt-` finds nothing.
