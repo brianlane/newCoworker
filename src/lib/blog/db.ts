@@ -261,9 +261,11 @@ export async function transitionBlogPost(
 }
 
 /**
- * Newest weekly-digest post (any status — a draft digest still covers its
- * window). Anchors the next digest's PR window so skipped thin/quiet weeks
- * roll into the following post instead of being lost.
+ * Newest weekly PR-DIGEST post (any status — a draft digest still covers
+ * its window). Anchors the next digest's PR window so skipped thin/quiet
+ * weeks roll into the following post instead of being lost. Filtered to
+ * platform-updates: the rotation's tutorial/tips/deep-dive weeks are also
+ * source=weekly_digest but must not shrink the digest's window.
  */
 export async function getLatestWeeklyDigestPost(
   client?: SupabaseClient
@@ -273,11 +275,32 @@ export async function getLatestWeeklyDigestPost(
     .from("blog_posts")
     .select()
     .eq("source", "weekly_digest")
+    .eq("category", "platform-updates")
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();
   if (error) throw new Error(`getLatestWeeklyDigestPost: ${error.message}`);
   return (data as BlogPostRow | null) ?? null;
+}
+
+/**
+ * Recent post titles in one category, newest first (topic dedupe for the
+ * rotation's composers — "don't write this again").
+ */
+export async function listRecentTitlesByCategory(
+  category: BlogCategory,
+  limit: number,
+  client?: SupabaseClient
+): Promise<string[]> {
+  const db = await resolveClient(client);
+  const { data, error } = await db
+    .from("blog_posts")
+    .select("title")
+    .eq("category", category)
+    .order("created_at", { ascending: false })
+    .limit(limit);
+  if (error) throw new Error(`listRecentTitlesByCategory: ${error.message}`);
+  return ((data ?? []) as Array<{ title: string }>).map((r) => r.title);
 }
 
 /** Weekly-digest idempotency probe. */
@@ -303,6 +326,9 @@ export const DEFAULT_BLOG_SETTINGS: BlogSettingsRow = {
   digest_enabled: true,
   digest_as_draft: false,
   digest_include_image: true,
+  auto_tutorial_enabled: true,
+  auto_business_tips_enabled: true,
+  auto_feature_enabled: true,
   instagram_business_id: null,
   instagram_publish_immediately: false
 };
@@ -317,6 +343,10 @@ export async function getBlogSettings(client?: SupabaseClient): Promise<BlogSett
     digest_enabled: row.digest_enabled,
     digest_as_draft: row.digest_as_draft,
     digest_include_image: row.digest_include_image,
+    // `?? true` keeps pre-migration rows (columns absent) on the defaults.
+    auto_tutorial_enabled: row.auto_tutorial_enabled ?? true,
+    auto_business_tips_enabled: row.auto_business_tips_enabled ?? true,
+    auto_feature_enabled: row.auto_feature_enabled ?? true,
     instagram_business_id: row.instagram_business_id,
     instagram_publish_immediately: row.instagram_publish_immediately
   };

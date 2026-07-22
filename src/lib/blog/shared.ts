@@ -45,6 +45,12 @@ export type BlogSettingsRow = {
   digest_enabled: boolean;
   digest_as_draft: boolean;
   digest_include_image: boolean;
+  /** Weekly rotation: tutorial week enabled (falls back to the digest when off). */
+  auto_tutorial_enabled: boolean;
+  /** Weekly rotation: business-tips week enabled. */
+  auto_business_tips_enabled: boolean;
+  /** Weekly rotation: feature deep-dive week enabled. */
+  auto_feature_enabled: boolean;
   instagram_business_id: string | null;
   instagram_publish_immediately: boolean;
 };

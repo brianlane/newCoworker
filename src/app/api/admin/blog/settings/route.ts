@@ -12,6 +12,9 @@ const putSchema = z.object({
   digest_enabled: z.boolean().optional(),
   digest_as_draft: z.boolean().optional(),
   digest_include_image: z.boolean().optional(),
+  auto_tutorial_enabled: z.boolean().optional(),
+  auto_business_tips_enabled: z.boolean().optional(),
+  auto_feature_enabled: z.boolean().optional(),
   instagram_business_id: z.string().uuid().nullable().optional(),
   instagram_publish_immediately: z.boolean().optional()
 });

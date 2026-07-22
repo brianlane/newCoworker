@@ -627,17 +627,27 @@ are RLS-on/no-policies (service-role only); core logic lives in
   accordingly. `instagram_publish_immediately` off (default) = the
   cross-post lands as a composer DRAFT for human review; on = it schedules
   immediately and the social-post-sweep publishes it.
-- **Weekly PR digest** (`blog-weekly-digest` Edge fn, pg_cron Mondays 15:00
-  UTC → `/api/internal/blog-weekly-digest`): when MORE THAN 10 PRs merged
-  into main over the window, Gemini writes a plain-English, under-700-word
-  feature roundup (12-year-old reading level, enforced in code with one
-  retry then a section-boundary truncation) and creates the post
-  `scheduled` for the same morning (category `platform-updates`,
-  idempotent per ISO week via `digest_week`). **Skipped weeks roll
-  forward**: each run's PR window starts at the LAST weekly-digest post
-  (capped at 28 days; first run = trailing 7 days), and a composed digest
-  under **150 words** is skipped as too thin — its features simply land in
-  the next week's post, same as quiet (≤10 PR) or feature-less weeks. **Features only, never bug
+- **Weekly auto post — 4-week category rotation** (`blog-weekly-digest`
+  Edge fn, pg_cron Mondays 15:00 UTC → `/api/internal/blog-weekly-digest`,
+  core `src/lib/blog/weekly-topics.ts`): ONE post per week, category keyed
+  statelessly off the ISO week number (`week % 4`) — **PR digest**
+  (`platform-updates`) → **Tutorial** (a how-to about one recently shipped
+  feature, grounded in its PR material) → **Business Tips** (brand-voice
+  advice; recent tips titles are fed to the prompt so topics never repeat)
+  → **Feature deep-dive** (one impactful feature in depth). Idempotent per
+  ISO week via the shared `digest_week` key. A topic week that is disabled
+  (per-category `blog_settings` toggles), ungrounded (no feature PRs), or
+  composes under **150 words** falls back to the PR digest —
+  `digest_enabled` is the master off-switch, and `digest_as_draft` /
+  `digest_include_image` apply to every auto post.
+- **The PR digest itself** (`src/lib/blog/weekly-digest.ts`): fires only
+  when MORE THAN 10 PRs merged over its window; Gemini writes a
+  plain-English, under-700-word feature roundup (12-year-old reading
+  level, enforced in code with one retry then a section-boundary
+  truncation) scheduled for the same morning. **Skipped weeks roll
+  forward**: the digest window starts at the LAST platform-updates auto
+  post (capped at 28 days; first run = trailing 7 days), so features from
+  thin/quiet/rotation weeks land in the next digest. **Features only, never bug
   fixes**: label PRs at review time — `blog: feature` includes, `blog: skip`
   excludes; Dependabot / docs / test / chore / bump / one-shot titles are
   dropped outright, and the unlabeled remainder is classified by Gemini
