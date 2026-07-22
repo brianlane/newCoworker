@@ -290,11 +290,16 @@ export function LeadDataGrid({
         </Card>
       )}
 
-      {!error && rows && rows.length === 0 && !loading && (
-        <Card>
-          <p className="py-6 text-center text-sm text-parchment/50">{t("empty")}</p>
-        </Card>
-      )}
+      {/* The unlinked-roster notice above already explains an empty "mine". */}
+      {!error &&
+        rows &&
+        rows.length === 0 &&
+        !loading &&
+        !(scope === "mine" && !hasLinkedEmployee) && (
+          <Card>
+            <p className="py-6 text-center text-sm text-parchment/50">{t("empty")}</p>
+          </Card>
+        )}
 
       {!error && rows && rows.length > 0 && (
         <div className="overflow-x-auto rounded-lg border border-parchment/10">
