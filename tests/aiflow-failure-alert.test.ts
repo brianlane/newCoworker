@@ -66,6 +66,33 @@ describe("describeLead", () => {
     expect(describeLead({ lead_name: "  ", lead_phone: 42 })).toBe("an unidentified lead");
     expect(describeLead(null)).toBe("an unidentified lead");
   });
+
+  it("falls back to booking-flow invitee vars and email contact (KYP Jul 22 alerts)", () => {
+    // The failed booking-confirmation runs carried invitee_* vars only — the
+    // alert must name the person, not say "an unidentified lead".
+    expect(
+      describeLead({
+        invitee_name: "James Test Six",
+        invitee_phone: "none",
+        invitee_email: "james@example.com"
+      })
+    ).toBe("James Test Six (james@example.com)");
+    expect(describeLead({ invitee_name: "James Test Six" })).toBe("James Test Six");
+    expect(describeLead({ invitee_email: "james@example.com" })).toBe("james@example.com");
+    // lead_* vars still win over invitee_*; phone still wins over email.
+    expect(
+      describeLead({
+        lead_name: "Ada",
+        invitee_name: "Bob",
+        lead_phone: "+15551234567",
+        invitee_email: "bob@example.com"
+      })
+    ).toBe("Ada (+15551234567)");
+    // The extractor's literal "none"/"NONE" placeholders never surface.
+    expect(describeLead({ lead_name: "NONE", invitee_phone: "none" })).toBe(
+      "an unidentified lead"
+    );
+  });
 });
 
 describe("sendAiflowFailureAlert", () => {

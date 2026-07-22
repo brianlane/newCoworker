@@ -24,6 +24,7 @@ vi.mock("@/lib/ai-flows/schema", async (importOriginal) => {
 });
 vi.mock("@/lib/ai-flows/document-steps", () => ({ validateShareDocumentSteps: vi.fn() }));
 vi.mock("@/lib/ai-flows/agent-steps", () => ({ validateRunAgentSteps: vi.fn() }));
+vi.mock("@/lib/ai-flows/mailbox-steps", () => ({ validateMailboxConnectionSteps: vi.fn() }));
 vi.mock("@/lib/ai-flows/db", () => ({
   listAiFlows: vi.fn(),
   getAiFlow: vi.fn(),
@@ -52,6 +53,7 @@ import {
 } from "@/lib/ai-flows/schema";
 import { validateShareDocumentSteps } from "@/lib/ai-flows/document-steps";
 import { validateRunAgentSteps } from "@/lib/ai-flows/agent-steps";
+import { validateMailboxConnectionSteps } from "@/lib/ai-flows/mailbox-steps";
 import { createAiFlow, getAiFlow, listAiFlows, updateAiFlow } from "@/lib/ai-flows/db";
 import { processWebhookFlowEvent } from "@/lib/ai-flows/webhook-events";
 import { rateLimit } from "@/lib/rate-limit";
@@ -82,14 +84,16 @@ beforeEach(() => {
   vi.mocked(parseAiFlowDefinition).mockReturnValue(DEFINITION as never);
   vi.mocked(validateShareDocumentSteps).mockResolvedValue([]);
   vi.mocked(validateRunAgentSteps).mockResolvedValue([]);
+  vi.mocked(validateMailboxConnectionSteps).mockResolvedValue([]);
   vi.mocked(rateLimit).mockReturnValue({ success: true, limit: 1, remaining: 1, reset: 0 });
 });
 
 describe("validateFlowDefinition", () => {
-  it("passes a valid definition through both validation layers", async () => {
+  it("passes a valid definition through every validation layer", async () => {
     await expect(validateFlowDefinition("biz-1", DEFINITION)).resolves.toBeUndefined();
     expect(validateShareDocumentSteps).toHaveBeenCalledWith("biz-1", DEFINITION);
     expect(validateRunAgentSteps).toHaveBeenCalledWith("biz-1", DEFINITION);
+    expect(validateMailboxConnectionSteps).toHaveBeenCalledWith("biz-1", DEFINITION);
   });
 
   it("converts shape errors into tool errors pointing at get_flow_schema", async () => {
@@ -108,11 +112,12 @@ describe("validateFlowDefinition", () => {
     await expect(validateFlowDefinition("biz-1", {})).rejects.toThrow("db down");
   });
 
-  it("refuses definitions with document/agent binding issues", async () => {
+  it("refuses definitions with document/agent/mailbox binding issues", async () => {
     vi.mocked(validateShareDocumentSteps).mockResolvedValue(["doc missing"]);
     vi.mocked(validateRunAgentSteps).mockResolvedValue(["agent disabled"]);
+    vi.mocked(validateMailboxConnectionSteps).mockResolvedValue(["mailbox gone"]);
     await expect(validateFlowDefinition("biz-1", DEFINITION)).rejects.toThrow(
-      /doc missing; agent disabled/
+      /doc missing; agent disabled; mailbox gone/
     );
   });
 });

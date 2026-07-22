@@ -50,6 +50,11 @@ import {
   type AiFlowDefinition
 } from "@/lib/ai-flows/schema";
 import { validateShareDocumentSteps } from "@/lib/ai-flows/document-steps";
+import { validateMailboxConnectionSteps } from "@/lib/ai-flows/mailbox-steps";
+import {
+  listWorkspaceOAuthConnections,
+  type WorkspaceOAuthConnectionRow
+} from "@/lib/db/workspace-oauth-connections";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { logger } from "@/lib/logger";
 
@@ -62,6 +67,8 @@ export type CompileFlowDeps = {
   fetchDocuments?: (businessId: string) => Promise<BusinessDocumentRow[]>;
   /** Injectable agents lookup (tests). */
   fetchAgents?: (businessId: string) => Promise<BusinessAgentRow[]>;
+  /** Injectable workspace-connections lookup (tests). */
+  fetchConnections?: (businessId: string) => Promise<WorkspaceOAuthConnectionRow[]>;
 };
 
 export type CompileFlowResult =
@@ -172,6 +179,7 @@ export async function compileAiFlowFromDescription(
   const generate = deps.generate ?? geminiGenerateTextDetailed;
   const fetchDocuments = deps.fetchDocuments ?? listBusinessDocuments;
   const fetchAgents = deps.fetchAgents ?? listBusinessAgents;
+  const fetchConnections = deps.fetchConnections ?? listWorkspaceOAuthConnections;
   /* c8 ignore stop */
 
   // Same key resolution as every other Gemini surface (document ingest, the
@@ -259,16 +267,19 @@ export async function compileAiFlowFromDescription(
   }
 
   // Same layering as the CRUD routes: shape+semantics via
-  // parseAiFlowDefinition, then the DB-backed share_document check — so an
-  // invalid document binding feeds the self-repair loop instead of
-  // surfacing later as a save failure.
+  // parseAiFlowDefinition, then the DB-backed share_document / run_agent /
+  // mailbox-binding checks — so an invalid binding feeds the self-repair
+  // loop instead of surfacing later as a save failure.
   const parseAndValidate = async (input: unknown): Promise<AiFlowDefinition> => {
     const definition = parseAiFlowDefinition(input);
     const documentIssues = await validateShareDocumentSteps(args.businessId, definition, {
       fetchDocuments
     });
     const agentIssues = await validateRunAgentSteps(args.businessId, definition, { fetchAgents });
-    const bindingIssues = [...documentIssues, ...agentIssues];
+    const mailboxIssues = await validateMailboxConnectionSteps(args.businessId, definition, {
+      fetchConnections
+    });
+    const bindingIssues = [...documentIssues, ...agentIssues, ...mailboxIssues];
     if (bindingIssues.length > 0) {
       throw new AiFlowValidationError("Invalid AiFlow definition", bindingIssues);
     }
@@ -369,7 +380,17 @@ export async function compileAiFlowFromDescription(
       const salvageAgentIssues = await validateRunAgentSteps(args.businessId, salvaged.definition, {
         fetchAgents
       }).catch(() => [] as string[]);
-      const warnings = [...salvaged.warnings, ...salvageDocumentIssues, ...salvageAgentIssues];
+      const salvageMailboxIssues = await validateMailboxConnectionSteps(
+        args.businessId,
+        salvaged.definition,
+        { fetchConnections }
+      ).catch(() => [] as string[]);
+      const warnings = [
+        ...salvaged.warnings,
+        ...salvageDocumentIssues,
+        ...salvageAgentIssues,
+        ...salvageMailboxIssues
+      ];
       void recordSystemLog({
         businessId: args.businessId,
         source: "app",
@@ -424,6 +445,7 @@ export async function editAiFlowDefinition(
   const generate = deps.generate ?? geminiGenerateTextDetailed;
   const fetchDocuments = deps.fetchDocuments ?? listBusinessDocuments;
   const fetchAgents = deps.fetchAgents ?? listBusinessAgents;
+  const fetchConnections = deps.fetchConnections ?? listWorkspaceOAuthConnections;
   /* c8 ignore stop */
 
   const apiKey = process.env.GOOGLE_API_KEY ?? process.env.GEMINI_API_KEY ?? "";
@@ -507,14 +529,17 @@ export async function editAiFlowDefinition(
   }
 
   // Same validation layering as compile: shape+semantics, then the
-  // DB-backed document/agent binding checks.
+  // DB-backed document/agent/mailbox binding checks.
   const parseAndValidate = async (input: unknown): Promise<AiFlowDefinition> => {
     const definition = parseAiFlowDefinition(input);
     const documentIssues = await validateShareDocumentSteps(args.businessId, definition, {
       fetchDocuments
     });
     const agentIssues = await validateRunAgentSteps(args.businessId, definition, { fetchAgents });
-    const bindingIssues = [...documentIssues, ...agentIssues];
+    const mailboxIssues = await validateMailboxConnectionSteps(args.businessId, definition, {
+      fetchConnections
+    });
+    const bindingIssues = [...documentIssues, ...agentIssues, ...mailboxIssues];
     if (bindingIssues.length > 0) {
       throw new AiFlowValidationError("Invalid AiFlow definition", bindingIssues);
     }
