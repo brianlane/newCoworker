@@ -13,19 +13,22 @@ import { getActiveCaldavConnectionId } from "@/lib/db/caldav-connections";
 // Dedicated calendar connections first; the broad full-scope "google" /
 // "outlook" workspace connections (which include calendar read/write) act as
 // fallbacks so owners who connected the all-in-one integration get calendar
-// tools without reconnecting. Calendly (Nango OAuth or the dashboard PAT —
-// see CALENDLY_DIRECT_KEY) sits after the native calendars (it can only
-// hand out booking links, not create events) but before the broad workspace
+// tools without reconnecting. Calendly (dashboard PAT — see
+// CALENDLY_DIRECT_KEY) sits after the native calendars (it can only hand
+// out booking links, not create events) but before the broad workspace
 // fallbacks (a deliberate Calendly connect should win over an incidental
 // all-in-one Google connect).
 const NATIVE_CALENDAR_KEYS = ["google-calendar", "outlook-calendar"] as const;
-const FALLBACK_CALENDAR_KEYS = ["calendly", "google", "outlook"] as const;
+const FALLBACK_CALENDAR_KEYS = ["google", "outlook"] as const;
 
 /**
  * Synthetic providerConfigKey marking a DIRECT Calendly connection (owner
  * pasted a Personal Access Token on the dashboard, stored in
- * `calendly_connections`) as opposed to the Nango OAuth key "calendly".
- * The calendar-tools Calendly cores pick their HTTP transport off this.
+ * `calendly_connections`). This is the ONLY Calendly key: the legacy Nango
+ * OAuth key "calendly" was removed from the resolver in the 2026-07 dead-
+ * code sweep (production never had live Nango Calendly connections), so a
+ * stray legacy `workspace_oauth_connections` row can no longer resolve as
+ * a calendar connection.
  */
 export const CALENDLY_DIRECT_KEY = "calendly-direct";
 
@@ -67,16 +70,6 @@ export function isWorkspaceCalendarProvider(
   return provider === "google" || provider === "microsoft";
 }
 
-/**
- * Calendar-aware provider mapping. `providerFromKey` stays binary (it is the
- * email-path helper and its callers' types depend on that); calendar
- * resolution needs the third arm so handlers can fork on Calendly.
- */
-function calendarProviderFromKey(key: string): ResolvedVoiceConnection["provider"] {
-  if (key === "calendly") return "calendly";
-  return providerFromKey(key);
-}
-
 /** True when a stored provider_config_key is a sendable email mailbox. */
 export function isEmailProviderConfigKey(key: string): boolean {
   return (EMAIL_PROVIDER_CONFIG_KEYS as readonly string[]).includes(key);
@@ -105,7 +98,9 @@ function firstMatch(
     const match = rows.find((r) => r.provider_config_key === key);
     if (match) {
       return {
-        provider: calendarProviderFromKey(match.provider_config_key),
+        // Every workspace-row key is Google or Microsoft: Calendly resolves
+        // only through the direct-PAT branch below (CALENDLY_DIRECT_KEY).
+        provider: providerFromKey(match.provider_config_key),
         providerConfigKey: match.provider_config_key,
         connectionId: match.connection_id
       };
@@ -141,10 +136,10 @@ export async function resolveCalendarConnection(
     };
   }
 
-  // Direct (PAT) Calendly occupies the same priority slot as the Nango
-  // "calendly" key: after the dedicated Google/Outlook calendars, before
-  // the broad workspace fallbacks. When both exist the direct connection
-  // wins — pasting a PAT is the more deliberate act.
+  // Direct (PAT) Calendly: after the dedicated Google/Outlook calendars,
+  // before the broad workspace fallbacks. The only Calendly path — the
+  // legacy Nango "calendly" fallback key was removed (dead code; production
+  // never had live Nango Calendly connections).
   const directCalendlyId = await getActiveCalendlyConnectionId(businessId);
   if (directCalendlyId) {
     return {
@@ -165,7 +160,7 @@ export type ResolvedEmailConnection = ResolvedVoiceConnection & {
 export async function resolveEmailConnection(
   businessId: string
 ): Promise<ResolvedEmailConnection | null> {
-  // Safe narrow: EMAIL_KEYS contains no "calendly" entry, so
-  // calendarProviderFromKey can only have produced google/microsoft here.
+  // Safe narrow: workspace-row resolution only ever produces
+  // google/microsoft providers (see firstMatch).
   return (await resolveVoiceConnection(businessId, EMAIL_KEYS)) as ResolvedEmailConnection | null;
 }

@@ -1,13 +1,10 @@
 /**
- * Direct Calendly API client (Personal Access Token transport).
- *
- * The zero-setup sibling of the Nango OAuth path: requests go straight to
- * api.calendly.com with the tenant's PAT as the bearer. The response shape
- * (`{ data }` or null) deliberately matches what the Nango proxy returns to
- * the calendar-tools Calendly cores, so both transports are interchangeable
- * there:
- *   - 401/403 → null (revoked/wrong token — same "not connected" semantics
- *     as a stale Nango link);
+ * Direct Calendly API client (Personal Access Token transport) — the ONLY
+ * Calendly transport since the Nango OAuth path was removed in the 2026-07
+ * dead-code sweep. Requests go straight to api.calendly.com with the
+ * tenant's PAT as the bearer, returning the `{ data } | null` contract the
+ * calendar-tools Calendly cores expect:
+ *   - 401/403 → null (revoked/wrong token — "not connected" semantics);
  *   - other non-2xx → throw (mapped by handlers.ts to calendar_lookup_failed
  *     / calendar_book_failed);
  *   - timeouts/network failures → throw with a typed code.
@@ -38,8 +35,8 @@ export type CalendlyDirectRequest = {
 };
 
 /**
- * Authenticated JSON call with the Nango-proxy-compatible contract
- * described in the module doc.
+ * Authenticated JSON call with the `{ data } | null` contract described in
+ * the module doc.
  */
 export async function calendlyDirectRequest(
   accessToken: string,
@@ -75,7 +72,7 @@ export async function calendlyDirectRequest(
   }
 
   if (res.status === 401 || res.status === 403) {
-    // Revoked / wrong PAT: same semantics as a stale Nango link.
+    // Revoked / wrong PAT: "not connected" semantics.
     return null;
   }
   if (!res.ok) {

@@ -100,7 +100,7 @@ export async function handleCalendlyWebhookEvent(
   const event = (body as { event?: unknown } | null)?.event;
   if (event !== "invitee.created") return { handled: false, reason: "ignored_event" };
 
-  // A subscription can outlive a disconnect (e.g. the Nango link was
+  // A subscription can outlive a disconnect (e.g. the PAT connection was
   // removed elsewhere): verify the business still resolves to Calendly
   // before acting on the delivery.
   const conn = await resolveConnection(businessId);
