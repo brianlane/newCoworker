@@ -22,7 +22,8 @@ vi.mock("@/lib/nango/server", () => ({
 
 vi.mock("@/lib/db/workspace-oauth-connections", () => ({
   getWorkspaceOAuthConnectionByNangoIds: vi.fn(),
-  upsertWorkspaceOAuthConnection: vi.fn()
+  upsertWorkspaceOAuthConnection: vi.fn(),
+  deleteWorkspaceOAuthConnection: vi.fn()
 }));
 
 vi.mock("@/lib/nango/account-identity", () => ({
@@ -35,7 +36,8 @@ vi.mock("@/lib/nango/connection-cap", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/nango/connection-cap")>();
   return {
     ...actual,
-    resolveWorkspaceConnectionCapState: vi.fn()
+    resolveWorkspaceConnectionCapState: vi.fn(),
+    settleWorkspaceConnectionInsert: vi.fn()
   };
 });
 
@@ -47,10 +49,14 @@ import { POST } from "@/app/api/integrations/nango/complete/route";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { readConnectionEndUserId } from "@/lib/nango/server";
 import {
+  deleteWorkspaceOAuthConnection,
   getWorkspaceOAuthConnectionByNangoIds,
   upsertWorkspaceOAuthConnection
 } from "@/lib/db/workspace-oauth-connections";
-import { resolveWorkspaceConnectionCapState } from "@/lib/nango/connection-cap";
+import {
+  resolveWorkspaceConnectionCapState,
+  settleWorkspaceConnectionInsert
+} from "@/lib/nango/connection-cap";
 import { maybeSendNangoQuotaAlert } from "@/lib/nango/account-usage";
 
 const businessId = "11111111-1111-4111-8111-111111111111";
@@ -92,6 +98,10 @@ describe("api/integrations/nango/complete", () => {
       max: 3,
       atCap: false
     });
+    vi.mocked(settleWorkspaceConnectionInsert).mockResolvedValue({
+      state: { used: 1, max: 3, atCap: false },
+      evictRowId: null
+    });
     mockDeleteConnection.mockResolvedValue(undefined);
   });
 
@@ -124,6 +134,10 @@ describe("api/integrations/nango/complete", () => {
         connectionId: "conn-1"
       })
     );
+    expect(settleWorkspaceConnectionInsert).toHaveBeenCalledWith(businessId, {
+      providerConfigKey: "google-mail",
+      connectionId: "conn-1"
+    });
     expect(maybeSendNangoQuotaAlert).toHaveBeenCalled();
   });
 
@@ -154,6 +168,32 @@ describe("api/integrations/nango/complete", () => {
     expect(upsertWorkspaceOAuthConnection).not.toHaveBeenCalled();
   });
 
+  it("evicts its own row when a RACED insert landed past the cap (post-insert settle)", async () => {
+    vi.mocked(settleWorkspaceConnectionInsert).mockResolvedValue({
+      state: { used: 4, max: 3, atCap: true },
+      evictRowId: "row-evict"
+    });
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(403);
+    // The row was inserted first (both racers passed the pre-check), so the
+    // upsert DID happen — the settle then rolled this one back.
+    expect(upsertWorkspaceOAuthConnection).toHaveBeenCalled();
+    expect(deleteWorkspaceOAuthConnection).toHaveBeenCalledWith(businessId, "row-evict");
+    expect(mockDeleteConnection).toHaveBeenCalledWith("google-mail", "conn-1");
+    expect(maybeSendNangoQuotaAlert).not.toHaveBeenCalled();
+  });
+
+  it("raced eviction still refuses when the Nango-side delete fails", async () => {
+    vi.mocked(settleWorkspaceConnectionInsert).mockResolvedValue({
+      state: { used: 2, max: 1, atCap: true },
+      evictRowId: "row-evict"
+    });
+    mockDeleteConnection.mockRejectedValue(new Error("nango down"));
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(403);
+    expect(deleteWorkspaceOAuthConnection).toHaveBeenCalledWith(businessId, "row-evict");
+  });
+
   it("always allows re-completing an EXISTING connection, even at the cap (reconnect path)", async () => {
     vi.mocked(getWorkspaceOAuthConnectionByNangoIds).mockResolvedValue({
       id: "row-1",
@@ -168,6 +208,7 @@ describe("api/integrations/nango/complete", () => {
     expect(res.status).toBe(200);
     // The cap is never consulted for a reconnect, and no quota was consumed.
     expect(resolveWorkspaceConnectionCapState).not.toHaveBeenCalled();
+    expect(settleWorkspaceConnectionInsert).not.toHaveBeenCalled();
     expect(maybeSendNangoQuotaAlert).not.toHaveBeenCalled();
     // App-owned metadata (shared calendar id) survives the reconnect merge.
     expect(upsertWorkspaceOAuthConnection).toHaveBeenCalledWith(

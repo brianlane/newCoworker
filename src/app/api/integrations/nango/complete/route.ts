@@ -1,6 +1,7 @@
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import {
+  deleteWorkspaceOAuthConnection,
   getWorkspaceOAuthConnectionByNangoIds,
   upsertWorkspaceOAuthConnection
 } from "@/lib/db/workspace-oauth-connections";
@@ -16,6 +17,7 @@ import {
 } from "@/lib/nango/account-identity";
 import {
   resolveWorkspaceConnectionCapState,
+  settleWorkspaceConnectionInsert,
   workspaceConnectionCapMessage
 } from "@/lib/nango/connection-cap";
 import { maybeSendNangoQuotaAlert } from "@/lib/nango/account-usage";
@@ -95,6 +97,30 @@ export async function POST(request: Request) {
       connectionId: parsed.connectionId,
       metadata: mergedMetadata
     });
+
+    // Post-insert settle: the pre-insert cap check is a read followed by an
+    // upsert with no transaction, so PARALLEL connects can all pass it. Now
+    // that the row exists, re-read in deterministic order — if this row
+    // landed past the cap, evict it (row + Nango side) and refuse. Seats
+    // belong to the earliest rows, so racers can never end above the cap.
+    if (!existing) {
+      const settlement = await settleWorkspaceConnectionInsert(parsed.businessId, {
+        providerConfigKey: parsed.providerConfigKey,
+        connectionId: parsed.connectionId
+      });
+      if (settlement.evictRowId) {
+        await deleteWorkspaceOAuthConnection(parsed.businessId, settlement.evictRowId);
+        try {
+          await nango.deleteConnection(parsed.providerConfigKey, parsed.connectionId);
+        } catch (delErr) {
+          console.error(
+            "nango/complete: raced over-cap connection delete failed (leaks account quota)",
+            delErr instanceof Error ? delErr.message : delErr
+          );
+        }
+        return errorResponse("FORBIDDEN", workspaceConnectionCapMessage(settlement.state), 403);
+      }
+    }
 
     // Nango's end_user is whoever was logged into OUR dashboard — not the
     // account picked on the provider's consent screen. Ask the provider for
