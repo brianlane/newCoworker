@@ -10,8 +10,8 @@
     "dev": "tsx watch src/index.ts"
   },
   "dependencies": {
-    "@google/genai": "^2.11.0",
-    "@supabase/supabase-js": "^2.110.5",
+    "@google/genai": "^2.13.0",
+    "@supabase/supabase-js": "^2.110.8",
     "dotenv": "^17.4.2",
     "ws": "^8.21.1"
   },
