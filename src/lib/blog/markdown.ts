@@ -26,6 +26,10 @@ function isSafeUrl(url: string): boolean {
   return /^https?:\/\//i.test(url);
 }
 
+function countChar(text: string, char: string): number {
+  return text.split(char).length - 1;
+}
+
 /** Inline markup on an ALREADY-ESCAPED line. */
 function renderInline(escaped: string): string {
   let out = escaped;
@@ -46,13 +50,29 @@ function renderInline(escaped: string): string {
       : match
   );
   // Autolink bare URLs. Only when preceded by start-of-line or whitespace,
-  // so URLs already emitted inside href="…" / link text are left alone;
-  // trailing punctuation stays outside the anchor.
-  out = out.replace(
-    /(^|\s)(https?:\/\/[^\s<]*[^\s<.,;:!?)])([.,;:!?)]*)(?=\s|$)/g,
-    (_match, pre: string, url: string, trail: string) =>
-      `${pre}<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>${trail}`
-  );
+  // so URLs already emitted inside href="…" / link text are left alone.
+  // Trailing punctuation stays outside the anchor — except a closing ')'
+  // that balances an opening one inside the URL (GFM's rule, so
+  // Wikipedia-style /Foo_(bar) paths keep their full href).
+  out = out.replace(/(^|\s)(https?:\/\/[^\s<]+)/g, (_match, pre: string, raw: string) => {
+    let url = raw;
+    let trail = "";
+    for (;;) {
+      const last = url[url.length - 1];
+      if (".,;:!?".includes(last)) {
+        trail = last + trail;
+        url = url.slice(0, -1);
+        continue;
+      }
+      if (last === ")" && countChar(url, ")") > countChar(url, "(")) {
+        trail = last + trail;
+        url = url.slice(0, -1);
+        continue;
+      }
+      break;
+    }
+    return `${pre}<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>${trail}`;
+  });
   out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
   out = out.replace(/\*([^*]+)\*/g, "<em>$1</em>");
   out = out.replace(/~~([^~]+)~~/g, "<del>$1</del>");

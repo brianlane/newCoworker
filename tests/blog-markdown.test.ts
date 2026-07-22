@@ -136,6 +136,19 @@ describe("renderMarkdown — strikethrough, autolink, tables", () => {
     );
   });
 
+  it("keeps a balanced closing parenthesis inside the URL, peels an unbalanced one", () => {
+    // Wikipedia-style path: '(' inside the URL balances the trailing ')'.
+    expect(renderMarkdown("read https://en.wikipedia.org/wiki/Foo_(bar) now")).toContain(
+      'href="https://en.wikipedia.org/wiki/Foo_(bar)"'
+    );
+    // Parenthesized sentence: the ')' belongs to the prose, not the URL.
+    const html = renderMarkdown("(see https://a.dev/x)");
+    expect(html).toContain('href="https://a.dev/x"');
+    expect(html).toContain("</a>)");
+    // Punctuation after a balanced ')' still peels.
+    expect(renderMarkdown("https://a.dev/f_(x).")).toContain('href="https://a.dev/f_(x)"');
+  });
+
   it("does not double-link URLs inside markdown links or code spans", () => {
     const linked = renderMarkdown("[docs](https://a.dev)");
     expect(linked).toBe(
