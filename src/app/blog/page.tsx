@@ -59,12 +59,15 @@ export default async function BlogIndexPage({
   ]);
   const totalPages = Math.max(1, Math.ceil(total / BLOG_PAGE_SIZE));
 
+  // Spanish visitors stay on the /es mirror when filtering and paging —
+  // an unprefixed link would bounce them back to the English URLs.
+  const basePath = locale === "es" ? "/es/blog" : "/blog";
   const pageHref = (p: number) => {
     const query = new URLSearchParams();
     if (category) query.set("category", category);
     if (p > 1) query.set("page", String(p));
     const qs = query.toString();
-    return qs ? `/blog?${qs}` : "/blog";
+    return qs ? `${basePath}?${qs}` : basePath;
   };
 
   return (
@@ -80,7 +83,7 @@ export default async function BlogIndexPage({
       {categories.length > 0 && (
         <div className="mx-auto flex max-w-6xl flex-wrap justify-center gap-2 px-6 pb-10">
           <Link
-            href="/blog"
+            href={basePath}
             className={`rounded-full px-4 py-1.5 text-sm transition-colors ${
               !category
                 ? "bg-claw-green text-deep-ink"
@@ -92,7 +95,7 @@ export default async function BlogIndexPage({
           {categories.map((c) => (
             <Link
               key={c}
-              href={`/blog?category=${c}`}
+              href={`${basePath}?category=${c}`}
               className={`rounded-full px-4 py-1.5 text-sm transition-colors ${
                 category === c
                   ? "bg-claw-green text-deep-ink"
