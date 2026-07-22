@@ -30,31 +30,49 @@ function countChar(text: string, char: string): number {
   return text.split(char).length - 1;
 }
 
+/** Bold / italic / strikethrough on an escaped, HTML-free string. */
+function renderEmphasis(text: string): string {
+  return text
+    .replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>")
+    .replace(/\*([^*]+)\*/g, "<em>$1</em>")
+    .replace(/~~([^~]+)~~/g, "<del>$1</del>");
+}
+
 /** Inline markup on an ALREADY-ESCAPED line. */
 function renderInline(escaped: string): string {
   let out = escaped;
   // Pull code spans out first so `**x**` inside backticks stays literal;
-  // they are restored verbatim after emphasis runs.
+  // they are restored verbatim at the end.
   const codeSpans: string[] = [];
   out = out.replace(/`([^`]+)`/g, (_match, code: string) => {
     codeSpans.push(code);
     return `\u0001${codeSpans.length - 1}\u0001`;
   });
+  // Every emitted HTML chunk is stashed behind a placeholder so later
+  // passes (autolink, emphasis) can never rewrite inside a tag — a bare
+  // URL in link text or an image alt stays plain text instead of nesting
+  // an anchor or corrupting the attribute.
+  const htmlChunks: string[] = [];
+  const stash = (chunk: string): string => {
+    htmlChunks.push(chunk);
+    return `\u0002${htmlChunks.length - 1}\u0002`;
+  };
   // Images before links (shared bracket syntax).
   out = out.replace(/!\[([^\]]*)\]\(([^)\s]+)\)/g, (match, alt: string, url: string) =>
-    isSafeUrl(url) ? `<img src="${url}" alt="${alt}" loading="lazy" />` : match
+    isSafeUrl(url) ? stash(`<img src="${url}" alt="${alt}" loading="lazy" />`) : match
   );
   out = out.replace(/\[([^\]]+)\]\(([^)\s]+)\)/g, (match, text: string, url: string) =>
     isSafeUrl(url)
-      ? `<a href="${url}" target="_blank" rel="noopener noreferrer">${text}</a>`
+      ? stash(
+          `<a href="${url}" target="_blank" rel="noopener noreferrer">${renderEmphasis(text)}</a>`
+        )
       : match
   );
-  // Autolink bare URLs. Only when preceded by start-of-line or whitespace,
-  // so URLs already emitted inside href="…" / link text are left alone.
+  // Autolink bare URLs. Only when preceded by start-of-line or whitespace.
   // Trailing punctuation stays outside the anchor — except a closing ')'
   // that balances an opening one inside the URL (GFM's rule, so
   // Wikipedia-style /Foo_(bar) paths keep their full href).
-  out = out.replace(/(^|\s)(https?:\/\/[^\s<]+)/g, (_match, pre: string, raw: string) => {
+  out = out.replace(/(^|\s)(https?:\/\/[^\s<\u0001\u0002]+)/g, (_match, pre: string, raw: string) => {
     let url = raw;
     let trail = "";
     for (;;) {
@@ -71,11 +89,14 @@ function renderInline(escaped: string): string {
       }
       break;
     }
-    return `${pre}<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>${trail}`;
+    return (
+      pre +
+      stash(`<a href="${url}" target="_blank" rel="noopener noreferrer">${url}</a>`) +
+      trail
+    );
   });
-  out = out.replace(/\*\*([^*]+)\*\*/g, "<strong>$1</strong>");
-  out = out.replace(/\*([^*]+)\*/g, "<em>$1</em>");
-  out = out.replace(/~~([^~]+)~~/g, "<del>$1</del>");
+  out = renderEmphasis(out);
+  out = out.replace(/\u0002(\d+)\u0002/g, (_match, index: string) => htmlChunks[Number(index)]);
   out = out.replace(/\u0001(\d+)\u0001/g, (_match, index: string) =>
     `<code>${codeSpans[Number(index)]}</code>`
   );

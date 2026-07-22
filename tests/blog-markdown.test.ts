@@ -159,6 +159,25 @@ describe("renderMarkdown — strikethrough, autolink, tables", () => {
     expect(renderMarkdown("`https://a.dev`")).toBe("<p><code>https://a.dev</code></p>");
   });
 
+  it("never autolinks inside emitted link text or image alt attributes", () => {
+    // A bare URL in link text stays plain — no nested anchor.
+    const inLinkText = renderMarkdown("[go to https://a.dev now](https://b.dev)");
+    expect(inLinkText).toBe(
+      '<p><a href="https://b.dev" target="_blank" rel="noopener noreferrer">go to https://a.dev now</a></p>'
+    );
+    // A bare URL in an alt attribute stays plain — the img tag survives.
+    const inAlt = renderMarkdown("![see https://a.dev here](https://b.dev/i.png)");
+    expect(inAlt).toBe(
+      '<p><img src="https://b.dev/i.png" alt="see https://a.dev here" loading="lazy" /></p>'
+    );
+  });
+
+  it("still renders emphasis inside link text", () => {
+    expect(renderMarkdown("[**bold** and *soft*](https://a.dev)")).toContain(
+      "><strong>bold</strong> and <em>soft</em></a>"
+    );
+  });
+
   it("renders a GFM table with header and body", () => {
     const html = renderMarkdown(
       "| Plan | Price |\n| --- | :---: |\n| Starter | $9.99 |\n| Standard | **$99** |"
