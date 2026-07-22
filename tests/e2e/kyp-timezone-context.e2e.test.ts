@@ -49,9 +49,10 @@ const LEAD = "+17805550142";
 const TURN_AT = new Date("2026-07-20T15:04:07.000Z");
 const QUESTION = "What time zone is that?";
 
-/** Fleet SMS chat model (deploy-client.sh SMS_CHAT_MODEL default — same
- * pin, and the same reason, as the Truly renewal-context replay). */
-const KYP_SMS_CHAT_MODEL = "gemini-2.5-flash";
+/** Fleet SMS chat model (deploy-client.sh SMS_CHAT_MODEL default after the
+ * PR #809 migration — same pin, and the same reason, as the Truly
+ * renewal-context replay). */
+const KYP_SMS_CHAT_MODEL = "gemini-3.5-flash-lite";
 
 const BOOKING_LINK = "calendly.example.com/kyp-strategy";
 

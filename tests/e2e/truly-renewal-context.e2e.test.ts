@@ -55,10 +55,10 @@ const RENEWAL_ANSWER = "July 23, 2026";
 
 /** What the tenant's SMS Coworker agent runs (deploy-client.sh
  * SMS_CHAT_MODEL default; upgraded off 2.5-flash-lite after this incident —
- * the old model ignored the system preamble on the incident turn. 3.x
- * models are blocked by the Rowboat AI-SDK thought_signature gap, see
- * deploy-client.sh). */
-const TRULY_SMS_CHAT_MODEL = "gemini-2.5-flash";
+ * the old model ignored the system preamble on the incident turn — then to
+ * 3.5-flash-lite with the PR #809 fleet migration, 3.x being viable on the
+ * Rowboat path since the llm-router thought_signature shim, PR #683). */
+const TRULY_SMS_CHAT_MODEL = "gemini-3.5-flash-lite";
 
 
 /**
