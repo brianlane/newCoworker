@@ -1738,7 +1738,7 @@
       "openDashboard": "Open dashboard",
       "goToDashboard": "Go to dashboard",
       "visitDashboard": "Visit your dashboard:",
-      "teamSignoff": "— The New Coworker Team",
+      "teamSignoff": "— The New Coworker Team\nnewcoworker.com | 602.313.1823 (our AI coworker answers)",
       "urgentSubject": "Urgent: {summary}",
       "urgentBody": "Your AI Coworker flagged an urgent event: {summary}"
     },
@@ -1746,7 +1746,7 @@
       "subject": "Your AI Coworker is live!",
       "body": "Your New Coworker is set up and ready."
     },
-    "ncSignoff": "— The NewCoworker Team",
+    "ncSignoff": "— The NewCoworker Team\nnewcoworker.com | 602.313.1823 (our AI coworker answers)",
     "questionsReply": "Questions? Just reply to this email.",
     "openBilling": "Open billing",
     "openDashboardCta": "Open dashboard",
