@@ -1,14 +1,17 @@
 /**
- * Pre-send Calendly booking check (src/lib/ai-flows/booking-precheck.ts):
+ * Pre-send booking check (src/lib/ai-flows/booking-precheck.ts):
  * run/flow/connection gating, lead-identifier extraction, user-URI caching,
- * the email fast path, the phone-match fallback (country-code tolerant,
- * capped), goal firing on a hit, and the fail-open reasons.
+ * the Calendly email fast path, the phone-match fallback (country-code
+ * tolerant, capped), the Vagaro upcoming-appointments arm, goal firing on a
+ * hit, and the fail-open reasons.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
+vi.mock("@/lib/db/vagaro-connections", () => ({ getActiveVagaroConnection: vi.fn() }));
+vi.mock("@/lib/vagaro/client", () => ({ listVagaroAppointments: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }));
 vi.mock("@/lib/nango/workspace", () => ({ nangoProxyForBusiness: vi.fn() }));
 vi.mock("@/lib/voice-tools/connections", () => ({
@@ -177,7 +180,7 @@ describe("bookingPrecheckForRun gating", () => {
     expect(d.resolveConnection).not.toHaveBeenCalled();
   });
 
-  it("not_calendly when the connection is missing or another provider", async () => {
+  it("provider_unsupported when the connection is missing or an unsupported provider", async () => {
     expect(
       await bookingPrecheckForRun(
         BIZ,
@@ -185,7 +188,7 @@ describe("bookingPrecheckForRun gating", () => {
         deps({ resolveConnection: vi.fn().mockResolvedValue(null) }),
         stdDb()
       )
-    ).toMatchObject({ reason: "not_calendly" });
+    ).toMatchObject({ reason: "provider_unsupported" });
     expect(
       await bookingPrecheckForRun(
         BIZ,
@@ -197,7 +200,7 @@ describe("bookingPrecheckForRun gating", () => {
         }),
         stdDb()
       )
-    ).toMatchObject({ reason: "not_calendly" });
+    ).toMatchObject({ reason: "provider_unsupported" });
   });
 
   it("no_lead_identifiers when the context carries neither phone nor email", async () => {
@@ -501,5 +504,136 @@ describe("bookingPrecheckForRun phone path", () => {
     expect(d.fireGoals).toHaveBeenCalledWith(expect.anything(), BIZ, [
       { status: "active", email: "tim@trustyourtalent.ca" }
     ]);
+  });
+});
+
+describe("bookingPrecheckForRun Vagaro arm", () => {
+  const VAGARO_CONN = { provider: "vagaro" as const, providerConfigKey: "vagaro", connectionId: "vg-1" };
+  const VG_ROW = { id: "vg-1", business_id: BIZ } as never;
+
+  function upcomingAppt(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "appt-1",
+      startIso: new Date(Date.now() + 60 * 60_000).toISOString(),
+      endIso: null,
+      createdIso: null,
+      updatedIso: null,
+      status: "confirmed",
+      cancelled: false,
+      serviceId: null,
+      serviceName: null,
+      customerName: null,
+      customerPhone: null,
+      customerEmail: null,
+      ...overrides
+    };
+  }
+
+  function vagaroDeps(overrides: Partial<BookingPrecheckDeps> = {}): BookingPrecheckDeps {
+    return deps({
+      resolveConnection: vi.fn().mockResolvedValue(VAGARO_CONN),
+      getVagaroConnection: vi.fn().mockResolvedValue(VG_ROW),
+      listAppointments: vi.fn().mockResolvedValue([]),
+      ...overrides
+    });
+  }
+
+  it("books on a country-code-tolerant customer phone match and logs the Vagaro hit", async () => {
+    const d = vagaroDeps({
+      listAppointments: vi
+        .fn()
+        .mockResolvedValue([upcomingAppt({ customerPhone: "780-803-9935" })])
+    });
+    const result = await bookingPrecheckForRun(BIZ, RUN, d, stdDb());
+    expect(result).toEqual({ booked: true, jumpedRuns: 1, reason: "booked" });
+    expect(d.fireGoals).toHaveBeenCalledWith(expect.anything(), BIZ, [
+      {
+        status: "active",
+        email: "tim@trustyourtalent.ca",
+        text_reminder_number: "+17808039935"
+      }
+    ]);
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ai_flow_booking_precheck_hit",
+        message: expect.stringContaining("Vagaro")
+      })
+    );
+    // The listing window is [now, now + horizon].
+    const args = vi.mocked(d.listAppointments!).mock.calls[0][1];
+    expect(Date.parse(args.startIso)).toBeLessThanOrEqual(Date.now());
+    expect(Date.parse(args.endIso)).toBeGreaterThan(Date.now());
+  });
+
+  it("books on an exact customer email match", async () => {
+    const d = vagaroDeps({
+      listAppointments: vi
+        .fn()
+        .mockResolvedValue([upcomingAppt({ customerEmail: "tim@trustyourtalent.ca" })])
+    });
+    expect((await bookingPrecheckForRun(BIZ, RUN, d, stdDb())).booked).toBe(true);
+  });
+
+  it("ignores canceled, past-start, unparseable, and non-matching appointments", async () => {
+    const d = vagaroDeps({
+      listAppointments: vi.fn().mockResolvedValue([
+        upcomingAppt({ customerPhone: "+17808039935", cancelled: true }),
+        upcomingAppt({
+          customerPhone: "+17808039935",
+          startIso: new Date(Date.now() - 60_000).toISOString()
+        }),
+        upcomingAppt({ customerPhone: "+17808039935", startIso: "junk" }),
+        upcomingAppt({ customerPhone: "+15550001111" }),
+        upcomingAppt({ customerEmail: "someone@else.com" }),
+        upcomingAppt() // no identity at all
+      ])
+    });
+    expect(await bookingPrecheckForRun(BIZ, RUN, d, stdDb())).toEqual({
+      booked: false,
+      jumpedRuns: 0,
+      reason: "no_booking_found"
+    });
+    expect(d.fireGoals).not.toHaveBeenCalled();
+  });
+
+  it("vagaro_refused when the connection row is gone or the listing throws", async () => {
+    expect(
+      await bookingPrecheckForRun(
+        BIZ,
+        RUN,
+        vagaroDeps({ getVagaroConnection: vi.fn().mockResolvedValue(null) }),
+        stdDb()
+      )
+    ).toMatchObject({ reason: "vagaro_refused" });
+
+    // Default (module-level) lookups: the mocked module answers undefined,
+    // which reads as "no connection row" and fails open the same way.
+    expect(
+      await bookingPrecheckForRun(
+        BIZ,
+        RUN,
+        deps({ resolveConnection: vi.fn().mockResolvedValue(VAGARO_CONN) }),
+        stdDb()
+      )
+    ).toMatchObject({ reason: "vagaro_refused" });
+
+    const d = vagaroDeps({
+      listAppointments: vi.fn().mockRejectedValue(new Error("vagaro down"))
+    });
+    expect(await bookingPrecheckForRun(BIZ, RUN, d, stdDb())).toMatchObject({
+      reason: "vagaro_refused"
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      "booking precheck: vagaro lookup refused (failing open)",
+      expect.objectContaining({ businessId: BIZ, error: "vagaro down" })
+    );
+
+    // Non-Error failures are stringified.
+    const d2 = vagaroDeps({ listAppointments: vi.fn().mockRejectedValue("string sad") });
+    await bookingPrecheckForRun(BIZ, RUN, d2, stdDb());
+    expect(logger.warn).toHaveBeenCalledWith(
+      "booking precheck: vagaro lookup refused (failing open)",
+      expect.objectContaining({ error: "string sad" })
+    );
   });
 });

@@ -289,6 +289,111 @@ export async function deleteVagaroAppointment(
   });
 }
 
+export type VagaroAppointmentItem = {
+  /** Vagaro's appointment id. */
+  id: string;
+  startIso: string;
+  /** Null when the listing omits an end time. */
+  endIso: string | null;
+  /** Appointment creation moment; null when the listing omits it. */
+  createdIso: string | null;
+  /** Last-modified moment; null when the listing omits it. */
+  updatedIso: string | null;
+  /** Raw status string, lowercased ("" when omitted). */
+  status: string;
+  /** Whether the status marks the appointment canceled/deleted. */
+  cancelled: boolean;
+  serviceId: string | null;
+  serviceName: string | null;
+  customerName: string | null;
+  customerPhone: string | null;
+  customerEmail: string | null;
+};
+
+/** Status strings Vagaro uses for a no-longer-standing appointment. */
+const VAGARO_CANCELLED_STATUSES = new Set(["canceled", "cancelled", "deleted", "noshow", "no-show"]);
+
+function firstIso(...candidates: unknown[]): string | null {
+  for (const c of candidates) {
+    const s = str(c);
+    if (s && !Number.isNaN(Date.parse(s))) return new Date(s).toISOString();
+  }
+  return null;
+}
+
+/** One listing item → the normalized appointment shape (null = unusable). */
+export function normalizeVagaroAppointment(
+  item: Record<string, unknown>
+): VagaroAppointmentItem | null {
+  const id = str(item.id) ?? str(item.appointmentId);
+  const startIso = firstIso(item.startTime, item.start, item.startDate);
+  if (!id || !startIso) return null;
+  const customer =
+    item.customer !== null && typeof item.customer === "object" && !Array.isArray(item.customer)
+      ? (item.customer as Record<string, unknown>)
+      : item;
+  const status = (str(item.status) ?? str(item.appointmentStatus) ?? "").toLowerCase();
+  return {
+    id,
+    startIso,
+    endIso: firstIso(item.endTime, item.end, item.endDate),
+    createdIso: firstIso(item.createdAt, item.created, item.createdDate, item.createdDateTime),
+    updatedIso: firstIso(
+      item.updatedAt,
+      item.updated,
+      item.modifiedAt,
+      item.lastModified,
+      item.lastModifiedDateTime
+    ),
+    status,
+    cancelled: VAGARO_CANCELLED_STATUSES.has(status),
+    serviceId: str(item.serviceId) ?? str((item.service as Record<string, unknown>)?.id) ?? null,
+    serviceName:
+      str(item.serviceName) ?? str((item.service as Record<string, unknown>)?.name) ?? null,
+    customerName:
+      str(customer.customerName) ??
+      str(customer.name) ??
+      str(customer.fullName) ??
+      (str(customer.firstName) || str(customer.lastName)
+        ? [str(customer.firstName), str(customer.lastName)].filter(Boolean).join(" ")
+        : null),
+    customerPhone:
+      str(customer.customerPhone) ??
+      str(customer.phone) ??
+      str(customer.phoneNumber) ??
+      str(customer.mobilePhone) ??
+      str(customer.cellPhone),
+    customerEmail: (str(customer.customerEmail) ?? str(customer.email))?.toLowerCase() ?? null
+  };
+}
+
+/**
+ * Appointments on the merchant's book whose START falls inside
+ * [startIso, endIso]. Items missing an id or a parseable start are dropped;
+ * everything else is parsed defensively (the exact v3 response shape is
+ * confirmed at the first live merchant, like the rest of this client).
+ */
+export async function listVagaroAppointments(
+  conn: VagaroConnectionRow,
+  args: { startIso: string; endIso: string; status?: string }
+): Promise<VagaroAppointmentItem[]> {
+  const payload = await vagaroFetch(conn, {
+    method: "GET",
+    path: VAGARO_APPOINTMENTS_PATH,
+    query: {
+      startDate: args.startIso,
+      endDate: args.endIso,
+      ...(args.status ? { status: args.status } : {})
+    }
+  });
+  const out: VagaroAppointmentItem[] = [];
+  for (const item of itemsOf(payload)) {
+    const normalized = normalizeVagaroAppointment(item);
+    if (normalized) out.push(normalized);
+  }
+  return out;
+}
+
 export type VagaroService = {
   id: string;
   name: string;

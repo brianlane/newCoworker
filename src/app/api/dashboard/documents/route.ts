@@ -84,7 +84,7 @@ export async function POST(request: Request) {
     if (!isSupportedDocumentMime(mimeType)) {
       return errorResponse(
         "VALIDATION_ERROR",
-        "Only PDF, plain text, markdown, CSV, or VTT transcript documents are supported"
+        "Only PDF, Word (.docx), plain text, markdown, CSV, or VTT transcript documents are supported"
       );
     }
     if (file.size === 0 || file.size > MAX_DOCUMENT_BYTES) {

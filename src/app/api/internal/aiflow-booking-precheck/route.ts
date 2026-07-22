@@ -1,17 +1,19 @@
 /**
- * Internal endpoint: pre-send Calendly booking check for one AiFlow run.
+ * Internal endpoint: pre-send booking check for one AiFlow run (Calendly +
+ * Vagaro).
  *
  * The ai-flow-worker Edge Function POSTs { businessId, runId } here
  * synchronously before a run's FIRST communication step (only for flows
  * watching the `appointment_booked` goal). The core
  * (src/lib/ai-flows/booking-precheck.ts) answers whether the run's lead
- * already holds an active future-start Calendly booking, and on a hit fires
- * the standard goal machinery for the lead's OTHER parked runs; the worker
- * jumps its own claimed run in-process when `booked` comes back true.
+ * already holds an active future-start booking on the connected provider,
+ * and on a hit fires the standard goal machinery for the lead's OTHER
+ * parked runs; the worker jumps its own claimed run in-process when
+ * `booked` comes back true.
  *
  * Auth: `Authorization: Bearer <INTERNAL_CRON_SECRET>` — same shape as the
  * other /api/internal/* endpoints. Everything inside fails open (booked:
- * false) so a Calendly hiccup can never block a lead's greeting; the
+ * false) so a provider hiccup can never block a lead's greeting; the
  * young-run booking-goal sweep remains the ~1-min safety net.
  */
 import { z } from "zod";

@@ -31,7 +31,9 @@ const ALL_ON: ActionToolGates = {
   calendar_cancel_appointment: true,
   list_aiflows: true,
   run_aiflow: true,
-  generate_image: true
+  edit_aiflow: true,
+  generate_image: true,
+  update_notification_preferences: true
 };
 
 function insertResult(result: { error: { message: string } | null }) {
@@ -210,7 +212,9 @@ describe("declarations & naming", () => {
       calendar_cancel_appointment: false,
       list_aiflows: false,
       run_aiflow: false,
-      generate_image: false
+      edit_aiflow: false,
+      generate_image: false,
+      update_notification_preferences: false
     });
     expect(some.map((d) => d.name)).toEqual([
       "calendar_find_slots",
@@ -222,8 +226,77 @@ describe("declarations & naming", () => {
   it("isActionToolName distinguishes action tools from everything else", () => {
     expect(isActionToolName("send_sms")).toBe(true);
     expect(isActionToolName("calendar_book_appointment")).toBe(true);
+    expect(isActionToolName("update_notification_preferences")).toBe(true);
     expect(isActionToolName("create_aiflow")).toBe(false);
     expect(isActionToolName("")).toBe(false);
+  });
+});
+
+describe("update_notification_preferences", () => {
+  it("is declared with owner-consent guidance and gated off cleanly", () => {
+    const decls = actionToolDeclarations(ALL_ON);
+    const decl = decls.find((d) => d.name === "update_notification_preferences");
+    expect(decl?.description).toMatch(/explicitly asks/i);
+    expect(decl?.description).toMatch(/notification|alert/i);
+    // Recipients are NOT parameters — booleans only.
+    const props = Object.keys(
+      (decl?.parameters as { properties: Record<string, unknown> }).properties
+    );
+    expect(props).toContain("customer_reply_alerts");
+    expect(props).not.toContain("phone_number");
+    expect(props).not.toContain("alert_email");
+
+    const gatedOff = actionToolDeclarations({ ...ALL_ON, update_notification_preferences: false });
+    expect(gatedOff.map((d) => d.name)).not.toContain("update_notification_preferences");
+  });
+
+  it("applies toggles through the shared core (full control on the dashboard surface)", async () => {
+    const applyNotificationToggles = vi.fn(async () => ({
+      ok: true as const,
+      data: {
+        updated: { customer_reply_alerts: true },
+        settings: { customer_reply_alerts: true }
+      }
+    }));
+    const res = (await executeActionTool(
+      BIZ,
+      {
+        name: "update_notification_preferences",
+        args: { customer_reply_alerts: true, email_digest: false }
+      },
+      { applyNotificationToggles: applyNotificationToggles as never }
+    )) as { ok: boolean; note?: string };
+    expect(applyNotificationToggles).toHaveBeenCalledWith(BIZ, {
+      customer_reply_alerts: true,
+      email_digest: false
+    });
+    expect(res.ok).toBe(true);
+    expect(res.note).toMatch(/tell the owner/i);
+  });
+
+  it("passes core refusals through and rejects invalid args without touching the core", async () => {
+    const applyNotificationToggles = vi.fn(async () => ({
+      ok: false as const,
+      detail: "unknown_toggle:phone_number",
+      message: "Only these toggles exist: …"
+    }));
+    const refused = (await executeActionTool(
+      BIZ,
+      { name: "update_notification_preferences", args: { phone_number: "+1555" } },
+      { applyNotificationToggles: applyNotificationToggles as never }
+    )) as { ok: boolean; detail?: string };
+    expect(refused.ok).toBe(false);
+    expect(refused.detail).toBe("unknown_toggle:phone_number");
+
+    const untouched = vi.fn();
+    const invalid = (await executeActionTool(
+      BIZ,
+      { name: "update_notification_preferences", args: { customer_reply_alerts: "yes" } },
+      { applyNotificationToggles: untouched as never }
+    )) as { ok: boolean; message?: string };
+    expect(invalid.ok).toBe(false);
+    expect(invalid.message).toContain("invalid_args");
+    expect(untouched).not.toHaveBeenCalled();
   });
 });
 
@@ -769,6 +842,88 @@ describe("list_aiflows / run_aiflow", () => {
     expect(
       await executeActionTool(BIZ, { name: "run_aiflow", args: { flow: "Proposal" } }, nullEnqueue)
     ).toMatchObject({ ok: false, message: expect.stringContaining("could not be enqueued") });
+  });
+});
+
+describe("edit_aiflow", () => {
+  const FLOW = {
+    id: "11111111-aaaa-4aaa-8aaa-111111111111",
+    name: "Lead follow-up",
+    enabled: true,
+    definition: {
+      version: 1,
+      trigger: { channel: "manual" },
+      steps: [{ id: "s1", type: "notify_owner", message: "original" }]
+    }
+  };
+  const EDITED = {
+    version: 1,
+    trigger: { channel: "manual" },
+    steps: [{ id: "s1", type: "notify_owner", message: "updated" }]
+  };
+
+  it("delegates to the shared core: compile against the current definition, then persist in place", async () => {
+    const compileFlowEdit = vi.fn(async () => ({
+      ok: true as const,
+      definition: EDITED as never,
+      warnings: []
+    }));
+    const persistFlowUpdate = vi.fn(async () => ({ ...FLOW, definition: EDITED }));
+    const deps = happyDeps({
+      listFlows: vi.fn(async () => [FLOW]) as never,
+      compileFlowEdit: compileFlowEdit as never,
+      persistFlowUpdate: persistFlowUpdate as never
+    });
+    const res = await executeActionTool(
+      BIZ,
+      {
+        name: "edit_aiflow",
+        args: { flow: "Lead follow-up", instructions: "say 'updated' instead" }
+      },
+      deps
+    );
+    expect(res).toMatchObject({ ok: true, flowId: FLOW.id, flowName: "Lead follow-up" });
+    expect(compileFlowEdit).toHaveBeenCalledWith({
+      businessId: BIZ,
+      flowName: "Lead follow-up",
+      currentDefinition: FLOW.definition,
+      instructions: "say 'updated' instead"
+    });
+    expect(persistFlowUpdate).toHaveBeenCalledWith({
+      businessId: BIZ,
+      id: FLOW.id,
+      definition: EDITED
+    });
+  });
+
+  it("rejects invalid args before touching the core, and passes compile refusals through", async () => {
+    const compileFlowEdit = vi.fn();
+    const deps = happyDeps({
+      listFlows: vi.fn(async () => [FLOW]) as never,
+      compileFlowEdit: compileFlowEdit as never
+    });
+    expect(
+      await executeActionTool(BIZ, { name: "edit_aiflow", args: { flow: "Lead follow-up" } }, deps)
+    ).toMatchObject({ ok: false, message: expect.stringContaining("invalid_args") });
+    expect(compileFlowEdit).not.toHaveBeenCalled();
+
+    const refusing = happyDeps({
+      listFlows: vi.fn(async () => [FLOW]) as never,
+      compileFlowEdit: vi.fn(async () => ({
+        ok: false as const,
+        error: "invalid" as const,
+        message: "…the automation was NOT changed…",
+        issues: ["bad"]
+      })) as never,
+      persistFlowUpdate: vi.fn() as never
+    });
+    const res = await executeActionTool(
+      BIZ,
+      { name: "edit_aiflow", args: { flow: "Lead follow-up", instructions: "break it" } },
+      refusing
+    );
+    expect(res).toMatchObject({ ok: false, message: expect.stringContaining("NOT changed") });
+    expect(refusing.persistFlowUpdate).not.toHaveBeenCalled();
   });
 });
 

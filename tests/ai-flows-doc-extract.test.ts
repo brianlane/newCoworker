@@ -8,6 +8,12 @@ import {
   parseDocExtractionReply
 } from "@/lib/ai-flows/doc-extract";
 import { GeminiEmptyError } from "@/lib/gemini-generate-content";
+import {
+  Document as DocxDocument,
+  Packer as DocxPacker,
+  Paragraph as DocxParagraph,
+  TextRun as DocxTextRun
+} from "docx";
 
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
@@ -156,6 +162,9 @@ describe("parseDocumentRef", () => {
 describe("documentMimeForPath", () => {
   it("maps supported extensions and rejects everything else", () => {
     expect(documentMimeForPath("a/b/renewal.PDF")).toBe("application/pdf");
+    expect(documentMimeForPath("quote.docx")).toBe(
+      "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+    );
     expect(documentMimeForPath("notes.txt")).toBe("text/plain");
     expect(documentMimeForPath("readme.md")).toBe("text/markdown");
     expect(documentMimeForPath("rows.csv")).toBe("text/csv");
@@ -230,6 +239,43 @@ describe("docExtract", () => {
     const call = okGenerate.mock.calls[0][0] as Record<string, unknown>;
     expect(call.inlineParts).toBeUndefined();
     expect(call.userText).toContain("premium: $99");
+  });
+
+  it("Word documents decode locally and ride in the prompt body", async () => {
+    const doc = new DocxDocument({
+      sections: [
+        {
+          children: [
+            new DocxParagraph({ children: [new DocxTextRun({ text: "premium: $150" })] })
+          ]
+        }
+      ]
+    });
+    const bytes = await DocxPacker.toBuffer(doc);
+    const { db } = makeDb({ download: { data: new Blob([new Uint8Array(bytes)]), error: null } });
+    await docExtract(
+      { ...input, sourceRef: "email-attachments:inbound/m/0-renewal.docx" },
+      { client: db as never, generate: okGenerate as never }
+    );
+    const call = okGenerate.mock.calls[0][0] as Record<string, unknown>;
+    expect(call.inlineParts).toBeUndefined();
+    expect(call.userText).toContain("premium: $150");
+  });
+
+  it("an unreadable Word document is a permanent empty_document failure", async () => {
+    const { db } = makeDb({
+      download: { data: new Blob([Buffer.from("not a zip")]), error: null }
+    });
+    const result = await docExtract(
+      { ...input, sourceRef: "email-attachments:inbound/m/0-broken.docx" },
+      { client: db as never, generate: okGenerate as never }
+    );
+    expect(result).toEqual({
+      ok: false,
+      error: "empty_document",
+      detail: "unreadable Word document"
+    });
+    expect(okGenerate).not.toHaveBeenCalled();
   });
 
   it("permanent input problems: bad ref / type / missing / empty / oversized", async () => {

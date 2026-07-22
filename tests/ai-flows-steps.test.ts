@@ -1310,6 +1310,30 @@ describe("planStep: send_email", () => {
     expect(r.ok && r.action.kind === "send_email" && "cc" in r.action).toBe(false);
     expect(r.ok && r.action.kind === "send_email" && "bcc" in r.action).toBe(false);
   });
+  it("renders attachDocumentTemplate into attachDocumentRef", () => {
+    const r = planStep(
+      { ...step, attachDocumentTemplate: "business-docs:{{vars.quote_document_id}}" },
+      { vars: { lead_name: "Jane", quote_document_id: "44444444-4444-4444-8444-444444444444" } }
+    );
+    expect(r.ok && r.action.kind === "send_email" && r.action.attachDocumentRef).toBe(
+      "business-docs:44444444-4444-4444-8444-444444444444"
+    );
+  });
+  it("a blank-rendered attachment ref plans the send without an attachment", () => {
+    const r = planStep(
+      { ...step, attachDocumentTemplate: "{{vars.missing_document}}" },
+      { vars: { lead_name: "Jane" } }
+    );
+    expect(r.ok && r.action.kind === "send_email" && "attachDocumentRef" in r.action).toBe(false);
+    // A bare prefix (the id var collapsed empty) counts as blank too.
+    const bare = planStep(
+      { ...step, attachDocumentTemplate: "business-docs:{{vars.missing_document}}" },
+      { vars: { lead_name: "Jane" } }
+    );
+    expect(bare.ok && bare.action.kind === "send_email" && "attachDocumentRef" in bare.action).toBe(
+      false
+    );
+  });
 });
 
 describe("planStep: notify_owner", () => {

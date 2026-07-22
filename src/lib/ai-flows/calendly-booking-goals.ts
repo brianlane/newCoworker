@@ -64,14 +64,21 @@ import { findContactsByEmails } from "@/lib/db/contact-emails";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { logger } from "@/lib/logger";
 import {
+  bookingPhoneE164,
+  fireBookingGoalsForIdentities,
+  type BookingGoalFireDeps,
+  type BookingGoalFireResult
+} from "@/lib/ai-flows/booking-goal-fire";
+import {
   applyGoalEvent,
   goalStepMatches
 } from "../../../supabase/functions/_shared/ai_flows/goal_events";
-import {
-  isE164,
-  normalizeNanpToE164
-} from "../../../supabase/functions/_shared/ai_flows/engine";
 import type { FlowStep } from "../../../supabase/functions/_shared/ai_flows/types";
+
+// Provider-neutral pieces moved to booking-goal-fire.ts; re-exported so the
+// existing call sites (precheck, webhook receiver, one-shots) are unchanged.
+export { contactNumbersFor } from "@/lib/ai-flows/booking-goal-fire";
+export type { BookingGoalFireDeps, BookingGoalFireResult };
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -95,6 +102,60 @@ export const BOOKING_GOAL_INVITEE_FETCH_CAP = 100;
  * extra no-op Calendly call, never a wrong jump).
  */
 export const BOOKING_GOAL_RUN_STATUSES = ["queued", "awaiting_reply", "awaiting_call"] as const;
+
+/**
+ * Blip-vs-outage escalation lookback for sweep failures (the sweep-scoped
+ * twin of the calendar poller's logCalendarPollFailure): exactly wide
+ * enough to hold the two previous ~1/min sweep ticks plus cron-jitter
+ * slack, so "a prior failure inside the window" genuinely means "the last
+ * tick(s) failed too". A healthy tick between failures writes no row and
+ * pushes the older failure out of the window.
+ */
+export const BOOKING_SWEEP_FAILURE_ESCALATION_MS = 2 * 60_000 + 90_000;
+
+/**
+ * Record one per-business sweep failure with blip-vs-outage escalation:
+ * the FIRST failure inside the window logs `warn` (a one-off upstream blip
+ * — e.g. a single 2 AM "Calendly API timed out" — stays out of the admin
+ * System Errors feed, which is error-only); a repeat inside the window
+ * logs `error`. A failed/thrown lookback fails TOWARD `error` so a real
+ * outage is never misfiled as a blip. No owner-alert arm: the calendar
+ * poller polls the SAME Calendly connection every minute and already owns
+ * the "reconnect your calendar" escalation for persistent connection
+ * failures.
+ */
+async function logBookingSweepFailure(
+  db: SupabaseClient,
+  businessId: string,
+  message: string
+): Promise<void> {
+  // Failure-path-only lookback: healthy ticks never pay this query.
+  let priorFailures = 0;
+  let lookbackFailed = false;
+  try {
+    const sinceIso = new Date(Date.now() - BOOKING_SWEEP_FAILURE_ESCALATION_MS).toISOString();
+    const { data, error } = await db
+      .from("system_logs")
+      .select("id")
+      .eq("business_id", businessId)
+      .eq("event", "ai_flow_booking_goal_sweep_failed")
+      .gte("created_at", sinceIso)
+      .limit(1);
+    if (error) throw new Error(error.message);
+    priorFailures = (data ?? []).length;
+  } catch (err) {
+    lookbackFailed = true;
+    console.error("booking goal sweep: failure lookback", err);
+  }
+  await recordSystemLog({
+    businessId,
+    source: "aiflow",
+    level: lookbackFailed || priorFailures >= 1 ? "error" : "warn",
+    event: "ai_flow_booking_goal_sweep_failed",
+    message,
+    payload: {}
+  });
+}
 
 type GoalStep = Extract<FlowStep, { type: "goal" }>;
 
@@ -159,15 +220,10 @@ export function runIsYoung(createdIso: string | undefined, nowMs: number): boole
 }
 
 /**
- * Calendly's SMS-reminder phone → E.164 (already-E.164 kept as-is, loose
- * NANP normalized, anything else null) — the same tolerance as
- * fireGoalEvent's phone handling.
+ * Calendly's SMS-reminder phone → E.164 — the provider-neutral normalizer
+ * under its historical Calendly-facing name (precheck + one-shot imports).
  */
-export function inviteePhoneE164(raw: string | undefined): string | null {
-  const trimmed = (raw ?? "").trim();
-  if (!trimmed) return null;
-  return isE164(trimmed) ? trimmed : normalizeNanpToE164(trimmed);
-}
+export const inviteePhoneE164 = bookingPhoneE164;
 
 /**
  * Invitee identity as Calendly reports it — the invitees listing item and
@@ -217,66 +273,15 @@ export type BookingGoalSweepDeps = {
 };
 
 /**
- * The contact row's full number set for one seed number (primary + merged
- * aliases + the seed itself), for the exact-match fan-out. Best-effort: a
- * lookup failure degrades to just the seed number. Exported for the
- * backfill one-shot's dry-run preview (scripts/oneshot).
- */
-export async function contactNumbersFor(
-  db: SupabaseClient,
-  businessId: string,
-  seedE164: string
-): Promise<string[]> {
-  try {
-    const { data, error } = await db
-      .from("contacts")
-      .select("customer_e164, alias_e164s")
-      .eq("business_id", businessId)
-      .or(`customer_e164.eq.${seedE164},alias_e164s.cs.{${seedE164}}`)
-      .maybeSingle();
-    if (error) {
-      logger.warn("booking goal sweep: contact number union failed", {
-        businessId,
-        error: error.message
-      });
-      return [seedE164];
-    }
-    const row = data as { customer_e164?: string | null; alias_e164s?: string[] | null } | null;
-    return [
-      ...new Set(
-        [seedE164, row?.customer_e164 ?? "", ...(row?.alias_e164s ?? [])].filter(Boolean)
-      )
-    ];
-  } catch (err) {
-    logger.warn("booking goal sweep: contact number union threw", {
-      businessId,
-      error: err instanceof Error ? err.message : String(err)
-    });
-    return [seedE164];
-  }
-}
-
-export type BookingGoalFireDeps = {
-  /** Injectable goal applier (tests). */
-  applyGoal?: typeof applyGoalEvent;
-  /** Injectable email→contact resolver (tests). */
-  findByEmails?: typeof findContactsByEmails;
-};
-
-export type BookingGoalFireResult = {
-  /** applyGoalEvent invocations (unique numbers fired). */
-  goalsFired: number;
-  /** Runs fast-forwarded to their goal step. */
-  jumpedRuns: number;
-};
-
-/**
  * Booked invitees → appointment_booked goal events. Shared by the polling
  * sweep and the real-time webhook receiver (src/lib/calendly/webhook-inbound.ts):
  * canceled invitees are skipped; the SMS-reminder phone (normalized to
  * E.164) and the invitee email (resolved through the business's contacts)
  * both seed the firing set, fanned out over each matched contact row's
  * primary + merged aliases — `applyGoalEvent` matches runs by exact E.164.
+ * The fan-out itself lives in the provider-neutral
+ * `fireBookingGoalsForIdentities` (booking-goal-fire.ts), shared with the
+ * Vagaro observers.
  */
 export async function fireBookingGoalsForInvitees(
   db: SupabaseClient,
@@ -284,39 +289,14 @@ export async function fireBookingGoalsForInvitees(
   invitees: CalendlyBookingInvitee[],
   deps: BookingGoalFireDeps = {}
 ): Promise<BookingGoalFireResult> {
-  const applyGoal = deps.applyGoal ?? applyGoalEvent;
-  const findByEmails = deps.findByEmails ?? findContactsByEmails;
-
-  const seedNumbers = new Set<string>();
-  const seedEmails = new Set<string>();
-  for (const invitee of invitees) {
-    if (invitee?.status === "canceled") continue;
-    const phone = inviteePhoneE164(invitee?.text_reminder_number);
-    if (phone) seedNumbers.add(phone);
-    const email = (invitee?.email ?? "").trim().toLowerCase();
-    if (email) seedEmails.add(email);
-  }
-
-  // Email → contact primary number (one contacts scan per call).
-  if (seedEmails.size > 0) {
-    const linked = await findByEmails(businessId, [...seedEmails], db);
-    for (const link of linked.values()) seedNumbers.add(link.customerE164);
-  }
-
-  // Fan out over the matched contact rows' full number sets, then fire.
-  const fireNumbers = new Set<string>();
-  for (const seed of seedNumbers) {
-    for (const n of await contactNumbersFor(db, businessId, seed)) fireNumbers.add(n);
-  }
-  const result: BookingGoalFireResult = { goalsFired: 0, jumpedRuns: 0 };
-  for (const number of fireNumbers) {
-    result.goalsFired += 1;
-    const { jumpedRuns } = await applyGoal(db, businessId, number, {
-      kind: "appointment_booked"
-    });
-    result.jumpedRuns += jumpedRuns;
-  }
-  return result;
+  // Raw API JSON may hold null entries; drop them with the canceled ones.
+  const identities = invitees
+    .filter((invitee) => invitee != null && invitee.status !== "canceled")
+    .map((invitee) => ({
+      phone: invitee.text_reminder_number ?? null,
+      email: invitee.email ?? null
+    }));
+  return fireBookingGoalsForIdentities(db, businessId, identities, deps);
 }
 
 /**
@@ -523,14 +503,11 @@ export async function sweepCalendlyBookingGoals(
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      await recordSystemLog({
+      await logBookingSweepFailure(
+        db,
         businessId,
-        source: "aiflow",
-        level: "error",
-        event: "ai_flow_booking_goal_sweep_failed",
-        message: `Calendly booking-goal sweep failed: ${message}`,
-        payload: {}
-      });
+        `Calendly booking-goal sweep failed: ${message}`
+      );
     }
   }
   return result;

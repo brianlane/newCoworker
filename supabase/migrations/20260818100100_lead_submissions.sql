@@ -1,9 +1,9 @@
 -- ---------------------------------------------------------------------------
 -- Version stamp note: the production ledger is ahead of real time (legacy
--- invented stamps run through 20260818000000), and `supabase db push`
+-- invented stamps run through 20260818100000), and `supabase db push`
 -- refuses local files that sort before the remote max — so a real
 -- `date -u` stamp (2026-07-21) cannot deploy. This continues the ledger's
--- sequence (…000000, …000100, …000200), same as the pipelines migration.
+-- sequence (…100000, …100100, …), same as the pipelines migration.
 -- ---------------------------------------------------------------------------
 -- Durable per-lead submission records for the Tasks "Data" grid and the
 -- Meta Conversions API (Conversion Leads) feedback loop.

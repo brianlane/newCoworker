@@ -14,7 +14,9 @@ import {
   createVagaroAppointment,
   deleteVagaroAppointment,
   getVagaroAccessToken,
+  listVagaroAppointments,
   listVagaroServices,
+  normalizeVagaroAppointment,
   searchVagaroAvailability,
   updateVagaroAppointmentTime,
   vagaroFetch,
@@ -448,6 +450,170 @@ describe("listVagaroServices", () => {
       { id: "svc-2", name: "Color", durationMinutes: null },
       { id: "svc-3", name: "Service", durationMinutes: null }
     ]);
+  });
+});
+
+describe("normalizeVagaroAppointment", () => {
+  it("normalizes across field aliases with a nested customer object", () => {
+    expect(
+      normalizeVagaroAppointment({
+        id: "appt-1",
+        startTime: "2026-06-12T15:00:00Z",
+        endTime: "2026-06-12T15:30:00Z",
+        createdAt: "2026-06-10T09:00:00Z",
+        updatedAt: "2026-06-11T09:00:00Z",
+        status: "Confirmed",
+        serviceId: "svc-1",
+        serviceName: "Gel Manicure",
+        customer: {
+          name: "Dana Doe",
+          phone: "+16025550000",
+          email: "Dana@Example.com"
+        }
+      })
+    ).toEqual({
+      id: "appt-1",
+      startIso: "2026-06-12T15:00:00.000Z",
+      endIso: "2026-06-12T15:30:00.000Z",
+      createdIso: "2026-06-10T09:00:00.000Z",
+      updatedIso: "2026-06-11T09:00:00.000Z",
+      status: "confirmed",
+      cancelled: false,
+      serviceId: "svc-1",
+      serviceName: "Gel Manicure",
+      customerName: "Dana Doe",
+      customerPhone: "+16025550000",
+      customerEmail: "dana@example.com"
+    });
+  });
+
+  it("reads flat customer fields, alias timestamps, and service objects", () => {
+    expect(
+      normalizeVagaroAppointment({
+        appointmentId: "appt-2",
+        start: "2026-06-12T16:00:00Z",
+        end: "junk",
+        created: "2026-06-10T10:00:00Z",
+        modifiedAt: "2026-06-11T10:00:00Z",
+        appointmentStatus: "cancelled",
+        service: { id: "svc-2", name: "Color" },
+        firstName: "Joe",
+        lastName: "Ray",
+        mobilePhone: "6025551212"
+      })
+    ).toEqual({
+      id: "appt-2",
+      startIso: "2026-06-12T16:00:00.000Z",
+      endIso: null,
+      createdIso: "2026-06-10T10:00:00.000Z",
+      updatedIso: "2026-06-11T10:00:00.000Z",
+      status: "cancelled",
+      cancelled: true,
+      serviceId: "svc-2",
+      serviceName: "Color",
+      customerName: "Joe Ray",
+      customerPhone: "6025551212",
+      customerEmail: null
+    });
+  });
+
+  it("tolerates remaining alias shapes and minimal rows", () => {
+    expect(
+      normalizeVagaroAppointment({
+        id: "appt-3",
+        startDate: "2026-06-12T17:00:00Z",
+        endDate: "2026-06-12T17:45:00Z",
+        createdDate: "2026-06-10T11:00:00Z",
+        lastModified: "2026-06-11T11:00:00Z",
+        status: "deleted",
+        fullName: "Solo Name",
+        phoneNumber: "555",
+        customerEmail: "x@y.co"
+      })
+    ).toMatchObject({
+      id: "appt-3",
+      endIso: "2026-06-12T17:45:00.000Z",
+      createdIso: "2026-06-10T11:00:00.000Z",
+      updatedIso: "2026-06-11T11:00:00.000Z",
+      cancelled: true,
+      customerName: "Solo Name",
+      customerPhone: "555",
+      customerEmail: "x@y.co"
+    });
+    expect(
+      normalizeVagaroAppointment({
+        id: "appt-4",
+        startTime: "2026-06-12T18:00:00Z",
+        createdDateTime: "2026-06-10T12:00:00Z",
+        lastModifiedDateTime: "2026-06-11T12:00:00Z",
+        customerName: "Named Field",
+        customerPhone: "+15550001111",
+        cellPhone: "ignored-when-customerPhone-set"
+      })
+    ).toMatchObject({
+      id: "appt-4",
+      createdIso: "2026-06-10T12:00:00.000Z",
+      updatedIso: "2026-06-11T12:00:00.000Z",
+      status: "",
+      cancelled: false,
+      serviceId: null,
+      serviceName: null,
+      customerName: "Named Field",
+      customerPhone: "+15550001111",
+      customerEmail: null
+    });
+    // cellPhone is the last phone alias tried.
+    expect(
+      normalizeVagaroAppointment({
+        id: "appt-5",
+        startTime: "2026-06-12T18:00:00Z",
+        cellPhone: "6021112222",
+        firstName: "OnlyFirst"
+      })
+    ).toMatchObject({ customerPhone: "6021112222", customerName: "OnlyFirst" });
+  });
+
+  it("returns null without an id or a parseable start", () => {
+    expect(normalizeVagaroAppointment({ startTime: "2026-06-12T15:00:00Z" })).toBeNull();
+    expect(normalizeVagaroAppointment({ id: "appt-1" })).toBeNull();
+    expect(normalizeVagaroAppointment({ id: "appt-1", startTime: "junk" })).toBeNull();
+  });
+});
+
+describe("listVagaroAppointments", () => {
+  it("lists with the date window, drops unusable rows, and omits status by default", async () => {
+    fetchMock.mockResolvedValueOnce(tokenResponse()).mockResolvedValueOnce(
+      jsonResponse(200, {
+        data: [
+          { id: "appt-1", startTime: "2026-06-12T15:00:00Z" },
+          { noId: true },
+          { id: "appt-bad", startTime: "junk" }
+        ]
+      })
+    );
+    const items = await listVagaroAppointments(CONN, {
+      startIso: "2026-06-12T00:00:00.000Z",
+      endIso: "2026-06-13T00:00:00.000Z"
+    });
+    expect(items).toHaveLength(1);
+    expect(items[0]).toMatchObject({ id: "appt-1", startIso: "2026-06-12T15:00:00.000Z" });
+    const url = String(fetchMock.mock.calls[1][0]);
+    expect(url).toContain("/api/v3/appointments");
+    expect(url).toContain("startDate=2026-06-12T00%3A00%3A00.000Z");
+    expect(url).toContain("endDate=2026-06-13T00%3A00%3A00.000Z");
+    expect(url).not.toContain("status=");
+  });
+
+  it("passes the status filter through when given", async () => {
+    fetchMock
+      .mockResolvedValueOnce(tokenResponse())
+      .mockResolvedValueOnce(jsonResponse(200, []));
+    await listVagaroAppointments(CONN, {
+      startIso: "a",
+      endIso: "b",
+      status: "cancelled"
+    });
+    expect(String(fetchMock.mock.calls[1][0])).toContain("status=cancelled");
   });
 });
 

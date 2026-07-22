@@ -303,6 +303,41 @@ describe("processInboundTenantEmail", () => {
     );
   });
 
+  it("exposes a Word attachment as trigger.document", async () => {
+    resolveBusinessByAddress.mockResolvedValue("biz-1");
+    const db = flowsDb({
+      data: [{ id: "flow-doc", definition: { trigger: { channel: "tenant_email" } } }],
+      error: null
+    });
+    enqueueAiFlowRun.mockResolvedValueOnce({ id: "run-docx" });
+
+    await processInboundTenantEmail(
+      {
+        ...PAYLOAD,
+        attachments: [
+          {
+            filename: "renewal.docx",
+            mimeType:
+              "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            size: 10,
+            path: "inbound/_msg-1_example.com_/0-renewal.docx"
+          }
+        ]
+      },
+      db as never
+    );
+
+    expect(enqueueAiFlowRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: expect.objectContaining({
+          document: "email-attachments:inbound/_msg-1_example.com_/0-renewal.docx",
+          document_name: "renewal.docx"
+        })
+      }),
+      db
+    );
+  });
+
   it("leaves the trigger document-less for an extensionless attachment (even with a document MIME)", async () => {
     resolveBusinessByAddress.mockResolvedValue("biz-1");
     const db = flowsDb({

@@ -12,7 +12,8 @@ import {
   buildAgentRunPrompt,
   buildOutputFilename,
   normalizeAgentOutput,
-  resolveOutputTarget
+  resolveOutputTarget,
+  retypesetAvailableForTier
 } from "@/lib/agents/core";
 
 describe("agentLimitForTier", () => {
@@ -49,9 +50,58 @@ describe("resolveOutputTarget", () => {
     });
   });
 
-  it("maps markdown and PDF inputs to markdown even for same_as_input", () => {
+  it("maps markdown and VTT inputs to markdown for same_as_input", () => {
     expect(resolveOutputTarget("same_as_input", "text/markdown").mime).toBe("text/markdown");
-    expect(resolveOutputTarget("same_as_input", "application/pdf").mime).toBe("text/markdown");
+    expect(resolveOutputTarget("same_as_input", "text/vtt").mime).toBe("text/markdown");
+  });
+
+  it("echoes PDF and DOCX inputs back as typeset targets for same_as_input", () => {
+    expect(resolveOutputTarget("same_as_input", "application/pdf")).toEqual({
+      mime: "application/pdf",
+      extension: "pdf",
+      formatWord: "markdown"
+    });
+    expect(
+      resolveOutputTarget(
+        "same_as_input",
+        "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+      )
+    ).toEqual({
+      mime: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+      extension: "docx",
+      formatWord: "markdown"
+    });
+  });
+
+  it("always typesets for the explicit pdf and docx formats", () => {
+    for (const mime of ["text/csv", "application/pdf", "text/markdown"]) {
+      expect(resolveOutputTarget("pdf", mime).mime).toBe("application/pdf");
+      expect(resolveOutputTarget("pdf", mime).extension).toBe("pdf");
+      expect(resolveOutputTarget("docx", mime).extension).toBe("docx");
+    }
+    // The model still writes markdown; the typesetter renders the bytes.
+    expect(resolveOutputTarget("pdf", "text/plain").formatWord).toBe("markdown");
+    expect(resolveOutputTarget("docx", "text/plain").formatWord).toBe("markdown");
+  });
+
+  it("maps pdf_retypeset onto an html-artifact target whose format word is the HTML contract", () => {
+    const target = resolveOutputTarget("pdf_retypeset", "application/pdf");
+    // text/html is the ARTIFACT mime — the explicit renderer discriminator;
+    // the download/filed representation becomes application/pdf.
+    expect(target.mime).toBe("text/html");
+    expect(target.extension).toBe("pdf");
+    expect(target.formatWord).toContain("self-contained HTML document");
+    expect(target.formatWord).toContain("No <script> tags");
+  });
+});
+
+describe("retypesetAvailableForTier", () => {
+  it("is a Standard/Enterprise entitlement (Starter boxes run no render sidecar)", () => {
+    expect(retypesetAvailableForTier("standard")).toBe(true);
+    expect(retypesetAvailableForTier("enterprise")).toBe(true);
+    expect(retypesetAvailableForTier("starter")).toBe(false);
+    expect(retypesetAvailableForTier(null)).toBe(false);
+    expect(retypesetAvailableForTier(undefined)).toBe(false);
   });
 });
 

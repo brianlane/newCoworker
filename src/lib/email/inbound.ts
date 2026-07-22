@@ -143,7 +143,7 @@ export async function processInboundTenantEmail(
   const firstImage = ownAttachments.find((a) =>
     ["image/jpeg", "image/png", "image/webp"].includes(a.mimeType.trim().toLowerCase())
   );
-  // First DOCUMENT attachment (pdf/text) → {{trigger.document}} — the
+  // First DOCUMENT attachment (pdf/docx/text) → {{trigger.document}} — the
   // doc_extract step's default source. Gated on the STORED PATH's extension
   // (which the email worker derives from the filename), because that suffix
   // is exactly what docExtract classifies the type from — a MIME-only match
@@ -151,7 +151,7 @@ export async function processInboundTenantEmail(
   // fail on. Covers octet-stream PDFs (extension present) by construction;
   // an extensionless attachment simply leaves the trigger document-less and
   // the step skips gracefully.
-  const firstDocument = ownAttachments.find((a) => /\.(pdf|txt|md|csv)$/i.test(a.path));
+  const firstDocument = ownAttachments.find((a) => /\.(pdf|docx|txt|md|csv)$/i.test(a.path));
 
   // Record the inbound mail on the Emails page BEFORE enqueueing any run:
   // doc_extract's tenant-ownership gate reads this row's attachment paths,

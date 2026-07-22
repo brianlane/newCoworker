@@ -533,7 +533,8 @@ function handleModels(_req, res) {
     data: [
       { id: "llama3.2:3b", object: "model", owned_by: "ollama" },
       { id: "qwen3:4b-instruct", object: "model", owned_by: "ollama" },
-      { id: "gemini-3.5-flash", object: "model", owned_by: "google" }
+      { id: "gemini-3.6-flash", object: "model", owned_by: "google" },
+      { id: "gemini-3.5-flash-lite", object: "model", owned_by: "google" }
     ]
   });
 }

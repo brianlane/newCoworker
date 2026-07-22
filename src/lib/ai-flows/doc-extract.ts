@@ -39,6 +39,7 @@ import { countBusinessDocuments, insertBusinessDocument, patchBusinessDocument }
 import { ingestDocument } from "@/lib/documents/ingest";
 import { normalizeContactNumber } from "@/lib/telnyx/format";
 import { logger } from "@/lib/logger";
+import { DOCX_MIME_TYPE, decodeDocxToText } from "@/lib/documents/docx";
 import { resolveFlowDocumentSource } from "./doc-source";
 
 // The ref-parsing primitives moved to doc-source (the shared resolver);
@@ -53,7 +54,9 @@ export {
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 type GeminiCall = (params: GeminiGenerateTextParams) => Promise<GeminiGenerateTextResult>;
 
-const DEFAULT_GEMINI_MODEL = "gemini-3-flash-preview";
+// gemini-3.5-flash-lite (GA Jul 21 2026): cheaper AND stronger than the old
+// gemini-3-flash-preview default for structured document extraction.
+const DEFAULT_GEMINI_MODEL = "gemini-3.5-flash-lite";
 
 export type DocExtractField = { name: string; description?: string };
 
@@ -189,9 +192,23 @@ export async function docExtract(
 
   const isPdf = mimeType === "application/pdf";
   const prompt = buildDocExtractionPrompt(input.fields);
+  let docText = "";
+  if (!isPdf) {
+    // Word documents decode locally (Gemini reads PDFs natively, not DOCX);
+    // an unreadable .docx is a permanent input problem, same as empty bytes.
+    if (mimeType === DOCX_MIME_TYPE) {
+      const decoded = await decodeDocxToText(bytes);
+      if (decoded === null) {
+        return { ok: false, error: "empty_document", detail: "unreadable Word document" };
+      }
+      docText = decoded;
+    } else {
+      docText = bytes.toString("utf8");
+    }
+  }
   const userText = isPdf
     ? prompt
-    : `${prompt}\n\nDocument text:\n---\n${bytes.toString("utf8").slice(0, 40_000)}\n---`;
+    : `${prompt}\n\nDocument text:\n---\n${docText.slice(0, 40_000)}\n---`;
   const systemInstruction =
     "You extract precise facts from business documents (policies, renewal notices, invoices, statements). You reply with exactly the JSON object requested and never invent values.";
 

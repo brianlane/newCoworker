@@ -1,6 +1,6 @@
 -- ---------------------------------------------------------------------------
 -- Version stamp note: continues the ahead-of-real-time ledger sequence
--- (see 20260818000100_lead_submissions.sql).
+-- (see 20260818100100_lead_submissions.sql).
 -- ---------------------------------------------------------------------------
 -- Schedule the Meta Conversion Leads outbox drain.
 --

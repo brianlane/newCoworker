@@ -14,7 +14,7 @@
  */
 
 import { z } from "zod";
-import { listAiFlows, enqueueAiFlowRun } from "@/lib/ai-flows/db";
+import { listAiFlows, enqueueAiFlowRun, type AiFlowRow } from "@/lib/ai-flows/db";
 import { manualTriggerScope } from "@/lib/ai-flows/trigger-eval";
 
 export const runAiflowToolArgsSchema = z.object({
@@ -48,6 +48,40 @@ export type ListAiFlowsToolResult = {
   flows: { id: string; name: string; enabled: boolean; trigger: string }[];
   note: string;
 };
+
+/**
+ * Resolve a model-supplied flow reference against the business's flows:
+ * exact id → exact name → unique substring. Ambiguity and misses refuse
+ * honestly with model-facing steering (shared by run_aiflow / edit_aiflow).
+ */
+export function resolveAiFlowByRef(
+  flows: AiFlowRow[],
+  ref: string
+): { ok: true; flow: AiFlowRow } | { ok: false; message: string } {
+  const trimmed = ref.trim();
+  const refLc = trimmed.toLowerCase();
+  let matches = flows.filter((f) => f.id === trimmed);
+  if (matches.length === 0) matches = flows.filter((f) => f.name.toLowerCase() === refLc);
+  if (matches.length === 0) {
+    matches = flows.filter((f) => f.name.toLowerCase().includes(refLc));
+  }
+  if (matches.length === 0) {
+    return {
+      ok: false,
+      message: `No AiFlow matches "${trimmed}". Call list_aiflows and use one of the real names or ids.`
+    };
+  }
+  if (matches.length > 1) {
+    return {
+      ok: false,
+      message: `"${trimmed}" matches ${matches.length} flows (${matches
+        .slice(0, 5)
+        .map((f) => f.name)
+        .join("; ")}). Ask the owner which one and use its exact name or id.`
+    };
+  }
+  return { ok: true, flow: matches[0] };
+}
 
 export type RunAiFlowToolResult =
   | { ok: true; runId: string; flowName: string; note: string }
@@ -89,31 +123,9 @@ export async function runAiFlowTool(
   const enqueueFlowRun = deps.enqueueFlowRun ?? enqueueAiFlowRun;
   /* c8 ignore stop */
   const flows = await listFlows(businessId);
-  const ref = args.flow.trim();
-  const refLc = ref.toLowerCase();
-  // Resolve: exact id → exact name → unique substring. An ambiguous
-  // or missing ref fails honestly with the candidates.
-  let matches = flows.filter((f) => f.id === ref);
-  if (matches.length === 0) matches = flows.filter((f) => f.name.toLowerCase() === refLc);
-  if (matches.length === 0) {
-    matches = flows.filter((f) => f.name.toLowerCase().includes(refLc));
-  }
-  if (matches.length === 0) {
-    return {
-      ok: false,
-      message: `No AiFlow matches "${ref}". Call list_aiflows and use one of the real names or ids.`
-    };
-  }
-  if (matches.length > 1) {
-    return {
-      ok: false,
-      message: `"${ref}" matches ${matches.length} flows (${matches
-        .slice(0, 5)
-        .map((f) => f.name)
-        .join("; ")}). Ask the owner which one and use its exact name or id.`
-    };
-  }
-  const flow = matches[0];
+  const resolved = resolveAiFlowByRef(flows, args.flow);
+  if (!resolved.ok) return resolved;
+  const flow = resolved.flow;
   if (!flow.enabled) {
     return {
       ok: false,

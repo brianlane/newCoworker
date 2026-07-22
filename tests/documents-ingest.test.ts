@@ -18,8 +18,10 @@ import {
   rewriteDocumentContent
 } from "@/lib/documents/ingest";
 import { DOCUMENT_CONTENT_MD_MAX_CHARS, DOCUMENT_SUMMARY_MAX_CHARS } from "@/lib/documents/core";
+import { DOCX_MIME_TYPE } from "@/lib/documents/docx";
 import { GeminiEmptyError } from "@/lib/gemini-generate-content";
 import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
+import { Document, Packer, Paragraph, TextRun } from "docx";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const meter = vi.mocked(meterGeminiSpendForBusiness);
@@ -69,10 +71,57 @@ describe("normalizeUploadMime", () => {
     expect(normalizeUploadMime("application/octet-stream", "Meeting.VTT")).toBe("text/vtt");
   });
 
+  it("canonicalizes Word uploads however the browser reported them", () => {
+    expect(normalizeUploadMime(DOCX_MIME_TYPE, "quote.bin")).toBe(DOCX_MIME_TYPE);
+    expect(normalizeUploadMime("", "quote.docx")).toBe(DOCX_MIME_TYPE);
+    expect(normalizeUploadMime("application/octet-stream", "Quote.DOCX")).toBe(DOCX_MIME_TYPE);
+  });
+
   it("keeps every other reported type verbatim (lowercased)", () => {
     expect(normalizeUploadMime(" TEXT/PLAIN ", "notes.vtt")).toBe("text/plain");
     expect(normalizeUploadMime("application/pdf", "doc.pdf")).toBe("application/pdf");
     expect(normalizeUploadMime("", "doc.pdf")).toBe("");
+  });
+});
+
+describe("ingestDocument (docx)", () => {
+  it("decodes Word bytes locally before condensing", async () => {
+    const doc = new Document({
+      sections: [
+        {
+          children: [
+            new Paragraph({
+              children: [new TextRun({ text: "Haircut $40. Beard trim $20. Open Mon-Fri." })]
+            })
+          ]
+        }
+      ]
+    });
+    const bytes = await Packer.toBuffer(doc);
+    const generate = generateOk(GOOD_REPLY);
+    const res = await ingestDocument(
+      { businessId: BIZ, title: "Word price sheet", mimeType: DOCX_MIME_TYPE, data: bytes },
+      { generate }
+    );
+    expect(res.ok).toBe(true);
+    const call = generate.mock.calls[0][0];
+    expect(call.userText).toContain("Haircut $40. Beard trim $20.");
+    expect(call.inlineParts).toBeUndefined();
+  });
+
+  it("treats unreadable Word bytes as empty content", async () => {
+    const generate = generateOk(GOOD_REPLY);
+    const res = await ingestDocument(
+      {
+        businessId: BIZ,
+        title: "Broken",
+        mimeType: DOCX_MIME_TYPE,
+        data: Buffer.from("not a zip at all")
+      },
+      { generate }
+    );
+    expect(res).toEqual({ ok: false, error: "empty_content" });
+    expect(generate).not.toHaveBeenCalled();
   });
 });
 

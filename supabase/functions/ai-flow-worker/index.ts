@@ -276,7 +276,11 @@ class StepDiagnosticError extends Error {
     if (result && Object.keys(result).length > 0) this.result = result;
   }
 }
-const GEMINI_MODEL = Deno.env.get("AIFLOW_EXTRACT_MODEL") ?? "gemini-2.5-flash-lite";
+// gemini-3.5-flash-lite (GA Jul 21 2026): extraction results feed live sends
+// (lead names/phones templated into texts), so the quality jump over
+// 2.5-flash-lite is worth the higher list price on this low-volume,
+// per-run surface ($0.30/$2.50 vs $0.10/$0.40 per 1M).
+const GEMINI_MODEL = Deno.env.get("AIFLOW_EXTRACT_MODEL") ?? "gemini-3.5-flash-lite";
 
 // AiFlow Gemini/Rowboat usage meters into the SAME owner_chat_model_spend pool
 // (and the same cap env var) as dashboard chat + SMS, so one fuse covers every
@@ -1535,9 +1539,10 @@ function findBookingGoalAhead(
 
 /**
  * Ask the platform whether this run's lead already holds an active
- * future-start Calendly booking (POST /api/internal/aiflow-booking-precheck).
- * Fails OPEN (false) on missing config, timeout, non-2xx, or malformed
- * payload — the young-run booking-goal sweep remains the safety net.
+ * future-start booking on the connected provider — Calendly or Vagaro —
+ * (POST /api/internal/aiflow-booking-precheck). Fails OPEN (false) on
+ * missing config, timeout, non-2xx, or malformed payload — the young-run
+ * booking-goal sweep remains the safety net.
  */
 async function bookingPrecheckBooked(run: RunRow): Promise<boolean> {
   const base = (
@@ -3925,7 +3930,17 @@ async function geminiJsonForPrompt(
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       contents: [{ role: "user", parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0, responseMimeType: "application/json" }
+      generationConfig: {
+        temperature: 0,
+        responseMimeType: "application/json",
+        // Structured extraction/classify needs no chain-of-thought, and
+        // Gemini 3 thinking tokens BILL as output — "minimal" keeps the
+        // spend on the answer (same posture as knowledge lookups). Gated on
+        // the family: Gemini 2.5 rejects thinkingLevel.
+        ...(/^gemini-3/i.test(GEMINI_MODEL)
+          ? { thinkingConfig: { thinkingLevel: "minimal" } }
+          : {})
+      }
     })
   });
   if (!res.ok) throw new Error(`gemini ${res.status}`);
@@ -5166,8 +5181,19 @@ type FlowEmailArgs = {
   subject: string;
   body: string;
   attachScreenshot: boolean;
+  /** Rendered `business-docs:<documentId>` ref to attach (Resend path only). */
+  attachDocumentRef?: string;
   fromConnectionId?: string;
 };
+
+/** Bucket business documents (including filed agent artifacts) live in. */
+const BUSINESS_DOCS_BUCKET = "business-docs";
+/**
+ * Attachment byte ceiling. Resend caps the whole payload at 40 MB; base64
+ * inflates by ~4/3, so 15 MB of raw bytes leaves comfortable headroom for
+ * the body + a screenshot riding along.
+ */
+const EMAIL_ATTACH_DOC_MAX_BYTES = 15 * 1024 * 1024;
 
 /** The platform email domain tenant mailboxes live under. */
 function tenantEmailDomain(): string {
@@ -5271,13 +5297,17 @@ async function deliverFlowEmail(
   if (!apiKey) return { kind: "fail", error: "send_email: RESEND_API_KEY is not configured" };
 
   const SCREENSHOT_FILENAME = "lead-screenshot.jpg";
-  let attachment: { filename: string; content: string } | null = null;
-  // Metadata logged onto email_log.attachments so the dashboard reading pane can
-  // show + sign the screenshot. References the bytes in the screenshots bucket in
-  // place (no copy) — see StoredAttachment.bucket.
-  let attachmentMeta:
-    | { filename: string; mime_type: string; size_bytes: number; storage_path: string; bucket: string }
-    | null = null;
+  const attachments: { filename: string; content: string }[] = [];
+  // Metadata logged onto email_log.attachments so the dashboard reading pane
+  // can show + sign each attachment. References the bytes in their source
+  // bucket in place (no copy) — see StoredAttachment.bucket.
+  const attachmentMetas: {
+    filename: string;
+    mime_type: string;
+    size_bytes: number;
+    storage_path: string;
+    bucket: string;
+  }[] = [];
   if (action.attachScreenshot) {
     // Tenant guard: only a path under THIS run's business prefix is
     // downloadable (see screenshot_guard.ts) — the var shares scope.vars
@@ -5289,20 +5319,78 @@ async function deliverFlowEmail(
         throw new Error(`send_email: screenshot download failed: ${error?.message ?? "no data"}`);
       }
       const bytes = new Uint8Array(await data.arrayBuffer());
-      attachment = {
+      attachments.push({
         filename: SCREENSHOT_FILENAME,
         content: bytesToBase64(bytes)
-      };
-      attachmentMeta = {
+      });
+      attachmentMetas.push({
         filename: SCREENSHOT_FILENAME,
         mime_type: "image/jpeg",
         size_bytes: bytes.byteLength,
         storage_path: path,
         bucket: SCREENSHOT_BUCKET
-      };
+      });
     }
     // No screenshot in scope (static-fetch fallback or capture failure): send
     // without the attachment rather than stranding the lead email.
+  }
+  if (action.attachDocumentRef) {
+    // Tenant gate: the ref must resolve to a READY document row keyed on THIS
+    // run's own business id — another tenant's document id reads as missing.
+    // Unlike a blank-rendered template (planned without the ref), a non-blank
+    // ref that can't resolve is a permanent input problem: fail loudly rather
+    // than quietly sending without the file the owner promised.
+    const docMatch = /^business-docs:([0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12})$/i.exec(
+      action.attachDocumentRef.trim()
+    );
+    if (!docMatch) {
+      return {
+        kind: "fail",
+        error: `send_email: unrecognized attachment ref "${action.attachDocumentRef.slice(0, 120)}"`
+      };
+    }
+    const { data: doc, error: docErr } = await supabase
+      .from("business_documents")
+      .select("id, title, status, mime_type, storage_path")
+      .eq("business_id", run.business_id)
+      .eq("id", docMatch[1])
+      .maybeSingle();
+    // A lookup fault is transient — throw so the run retries; failing open
+    // here could only manifest as a false "document not found".
+    if (docErr) throw new Error(`send_email: attachment lookup failed: ${docErr.message}`);
+    const row = doc as {
+      status?: string;
+      mime_type?: string;
+      storage_path?: string;
+      title?: string;
+    } | null;
+    if (!row || row.status !== "ready") {
+      return {
+        kind: "fail",
+        error: "send_email: attachment document not found in this business's Documents (or not ready)"
+      };
+    }
+    const storagePath = row.storage_path ?? "";
+    const { data, error } = await supabase.storage.from(BUSINESS_DOCS_BUCKET).download(storagePath);
+    if (error || !data) {
+      throw new Error(`send_email: attachment download failed: ${error?.message ?? "no data"}`);
+    }
+    const bytes = new Uint8Array(await data.arrayBuffer());
+    if (bytes.byteLength === 0 || bytes.byteLength > EMAIL_ATTACH_DOC_MAX_BYTES) {
+      return {
+        kind: "fail",
+        error: `send_email: attachment document is empty or over ${EMAIL_ATTACH_DOC_MAX_BYTES} bytes`
+      };
+    }
+    const filename = storagePath.split("/").pop() || row.title || "document";
+    attachments.push({ filename, content: bytesToBase64(bytes) });
+    attachmentMetas.push({
+      filename,
+      mime_type: row.mime_type ?? "application/octet-stream",
+      size_bytes: bytes.byteLength,
+      storage_path: storagePath,
+      bucket: BUSINESS_DOCS_BUCKET
+    });
   }
 
   // Always send AS the tenant's own AI mailbox (creating it if missing) so the
@@ -5328,7 +5416,7 @@ async function deliverFlowEmail(
       reply_to: replyTo,
       subject: action.subject,
       text: action.body,
-      ...(attachment ? { attachments: [attachment] } : {})
+      ...(attachments.length > 0 ? { attachments } : {})
     })
   });
   if (!res.ok) {
@@ -5350,11 +5438,11 @@ async function deliverFlowEmail(
     body: action.body,
     source: "tenant_mailbox_outbound",
     providerMessageId: emailId,
-    attachments: attachmentMeta ? [attachmentMeta] : []
+    attachments: attachmentMetas
   });
   return {
     kind: "ok",
-    result: { to: action.to, emailId, attached: attachment !== null }
+    result: { to: action.to, emailId, attached: attachments.length > 0 }
   };
 }
 
