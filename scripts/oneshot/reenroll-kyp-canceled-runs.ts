@@ -91,6 +91,12 @@ function nudgeIndexFor(replyVar: string): number {
     (s) => s.type === "send_sms" && s.when?.var === replyVar && s.when?.equals === "no_reply"
   );
 }
+/** Index of the wait_for_reply step that records the given reply var. */
+function waitIndexFor(saveVar: string): number {
+  return steps.findIndex(
+    (s) => s.type === "wait_for_reply" && (s as { saveAs?: string }).saveAs === saveVar
+  );
+}
 const wrapUpIndex = steps.findIndex(
   (s) => s.type === "notify_owner" && s.when?.var === "reply_final" && s.when?.equals === "no_reply"
 );
@@ -165,8 +171,27 @@ for (const run of canceled) {
     continue;
   }
 
-  // Position: reply_final recorded → wrap-up only. Otherwise the first
-  // wait whose reply var is UNRECORDED marks the next unsent nudge.
+  // The old run's REAL send count to this lead — both the position
+  // disambiguator and the repeat guard below.
+  const { count: sendCount, error: sendErr } = await db
+    .from("sms_outbound_log")
+    .select("id", { count: "exact", head: true })
+    .eq("business_id", BUSINESS_ID)
+    .eq("run_id", run.id)
+    .eq("to_e164", leadPhone);
+  if (sendErr) {
+    skips.push({ runId: run.id, leadName, reason: `send-count read failed: ${sendErr.message}` });
+    continue;
+  }
+  const actualPriorSends = sendCount ?? 0;
+
+  // Position: reply_final recorded → wrap-up only. Otherwise the recorded
+  // no_reply waits say how far the cadence got, and the REAL send count
+  // disambiguates the two states a cancel can catch: woke from wait N with
+  // nudge N still unsent (sends == recorded: greeting + nudges 1..N-1), vs
+  // nudge N already sent and parked on wait N+1 (sends == recorded + 1) —
+  // that second state resumes AT the next wait (fresh timeout), so the lead
+  // still gets the wrap-up path instead of being skipped.
   let resumeIndex: number;
   let nextAction: string;
   let expectedPriorSends: number; // greeting + nudges already sent
@@ -180,29 +205,44 @@ for (const run of canceled) {
       skips.push({ runId: run.id, leadName, reason: "no reply vars recorded — position unclear" });
       continue;
     }
-    // recorded no_reply waits 1..N → nudge N is the next unsent text.
-    const nudgeVar = REPLY_VARS[recorded - 1];
-    resumeIndex = nudgeIndexFor(nudgeVar);
-    if (resumeIndex === -1) {
-      skips.push({ runId: run.id, leadName, reason: `no nudge gated on ${nudgeVar} in current def` });
+    if (actualPriorSends === recorded) {
+      // Greeting + nudges 1..N-1 sent → nudge N is the next unsent text.
+      const nudgeVar = REPLY_VARS[recorded - 1];
+      resumeIndex = nudgeIndexFor(nudgeVar);
+      if (resumeIndex === -1) {
+        skips.push({
+          runId: run.id,
+          leadName,
+          reason: `no nudge gated on ${nudgeVar} in current def`
+        });
+        continue;
+      }
+      nextAction = `send the next cadence text (nudge gated on ${nudgeVar}), then keep waiting`;
+    } else if (actualPriorSends === recorded + 1) {
+      // Nudge N already went out; the run was parked on the NEXT wait.
+      const waitVar = REPLY_VARS[recorded];
+      resumeIndex = waitIndexFor(waitVar);
+      if (resumeIndex === -1) {
+        skips.push({
+          runId: run.id,
+          leadName,
+          reason: `no wait recording ${waitVar} in current def`
+        });
+        continue;
+      }
+      nextAction = `wait for a reply (recorded as ${waitVar}; no immediate text to the lead)`;
+    } else {
+      skips.push({
+        runId: run.id,
+        leadName,
+        reason: `send-count mismatch (${recorded} no-reply wait(s) recorded but ${actualPriorSends} text(s) sent) — resolve by hand`
+      });
       continue;
     }
-    nextAction = `send the next cadence text (nudge gated on ${nudgeVar}), then keep waiting`;
-    expectedPriorSends = 1 + (recorded - 1); // greeting + nudges before this one
+    expectedPriorSends = actualPriorSends;
   }
 
-  // Repeat guard 1: the old run's REAL send count must match the position.
-  const { count: sendCount, error: sendErr } = await db
-    .from("sms_outbound_log")
-    .select("id", { count: "exact", head: true })
-    .eq("business_id", BUSINESS_ID)
-    .eq("run_id", run.id)
-    .eq("to_e164", leadPhone);
-  if (sendErr) {
-    skips.push({ runId: run.id, leadName, reason: `send-count read failed: ${sendErr.message}` });
-    continue;
-  }
-  const actualPriorSends = sendCount ?? 0;
+  // Repeat guard 1: the wrap-up position implies the full cadence went out.
   if (actualPriorSends !== expectedPriorSends) {
     skips.push({
       runId: run.id,
