@@ -455,6 +455,8 @@
       "unsubscribeBody": "You won't receive blog emails anymore. You can re-subscribe from any post page.",
       "unsubscribeInvalidTitle": "Link not recognized",
       "unsubscribeInvalidBody": "This unsubscribe link is invalid or was already used.",
+      "unsubscribeRetryTitle": "Please try again",
+      "unsubscribeRetryBody": "We couldn't process the unsubscribe just now — open the link again in a moment.",
       "categories": {
         "feature": "Feature Announcements",
         "tutorial": "Tutorials",

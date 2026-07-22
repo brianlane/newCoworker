@@ -42,6 +42,19 @@ function fieldsFromPost(post: BlogPostRow | null): Fields {
   };
 }
 
+/**
+ * Stored UTC ISO → the local-time string `datetime-local` expects. The
+ * control has local semantics, so slicing the ISO string directly would
+ * show UTC digits as if they were local time.
+ */
+function toLocalDatetimeInput(iso: string): string {
+  const d = new Date(iso);
+  const pad = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(
+    d.getHours()
+  )}:${pad(d.getMinutes())}`;
+}
+
 function payloadFromFields(fields: Fields) {
   return {
     title: fields.title,
@@ -73,7 +86,7 @@ export function BlogPostEditor({ initialPost }: { initialPost: BlogPostRow | nul
   const [status, setStatus] = useState(initialPost?.status ?? "draft");
   const [fields, setFields] = useState<Fields>(() => fieldsFromPost(initialPost));
   const [scheduleAt, setScheduleAt] = useState(() =>
-    initialPost?.scheduled_for ? initialPost.scheduled_for.slice(0, 16) : ""
+    initialPost?.scheduled_for ? toLocalDatetimeInput(initialPost.scheduled_for) : ""
   );
   const [preview, setPreview] = useState(false);
   const [aiTopic, setAiTopic] = useState("");

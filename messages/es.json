@@ -455,6 +455,8 @@
       "unsubscribeBody": "Ya no recibirás correos del blog. Puedes volver a suscribirte desde cualquier entrada.",
       "unsubscribeInvalidTitle": "Enlace no reconocido",
       "unsubscribeInvalidBody": "Este enlace para cancelar la suscripción no es válido o ya se usó.",
+      "unsubscribeRetryTitle": "Inténtalo de nuevo",
+      "unsubscribeRetryBody": "No pudimos procesar la cancelación en este momento — abre el enlace otra vez en un momento.",
       "categories": {
         "feature": "Anuncios de funciones",
         "tutorial": "Tutoriales",

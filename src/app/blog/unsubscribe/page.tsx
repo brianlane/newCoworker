@@ -17,18 +17,26 @@ export default async function BlogUnsubscribePage({
 }) {
   const t = await getTranslations("marketing.blogPage");
   const { ok } = await searchParams;
-  const matched = ok === "1";
+  const state = ok === "1" ? "done" : ok === "retry" ? "retry" : "invalid";
+  const title =
+    state === "done"
+      ? t("unsubscribeTitle")
+      : state === "retry"
+        ? t("unsubscribeRetryTitle")
+        : t("unsubscribeInvalidTitle");
+  const body =
+    state === "done"
+      ? t("unsubscribeBody")
+      : state === "retry"
+        ? t("unsubscribeRetryBody")
+        : t("unsubscribeInvalidBody");
 
   return (
     <div className="min-h-screen bg-deep-ink text-parchment">
       <MarketingNav />
       <section className="mx-auto max-w-xl px-6 py-24 text-center">
-        <h1 className="text-3xl font-bold text-parchment">
-          {matched ? t("unsubscribeTitle") : t("unsubscribeInvalidTitle")}
-        </h1>
-        <p className="mt-4 text-parchment/60">
-          {matched ? t("unsubscribeBody") : t("unsubscribeInvalidBody")}
-        </p>
+        <h1 className="text-3xl font-bold text-parchment">{title}</h1>
+        <p className="mt-4 text-parchment/60">{body}</p>
         <Link href="/blog" className="mt-8 inline-block text-signal-teal hover:underline">
           ← {t("backToBlog")}
         </Link>

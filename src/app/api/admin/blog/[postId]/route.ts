@@ -72,8 +72,13 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Re
     if (body.status !== undefined && post.status === "published") {
       return errorResponse("CONFLICT", "Published posts cannot go back to draft or scheduled");
     }
-    // Scheduling requires a time; un-scheduling clears it.
-    if (body.status === "scheduled" && !body.scheduled_for && !post.scheduled_for) {
+    // A scheduled post must always carry a publish time — whether this
+    // patch sets the status, clears the time, or both. Otherwise the row
+    // never becomes due for the publish sweep.
+    const effectiveStatus = body.status ?? post.status;
+    const effectiveTime =
+      body.scheduled_for === undefined ? post.scheduled_for : body.scheduled_for;
+    if (effectiveStatus === "scheduled" && !effectiveTime) {
       return errorResponse("VALIDATION_ERROR", "A scheduled post needs a publish time");
     }
     if (body.status === "draft") {
