@@ -54,28 +54,33 @@ async function main() {
   // phone-first (alias-aware) contact lookup, then email, then the toggle
   // (Bugbot Medium on PR #829 — the preview must never disagree with the
   // core's verdict).
-  const { data: byPhone } = await db
+  const { data: byPhone, error: phoneErr } = await db
     .from("contacts")
     .select("owner_employee_id, display_name")
     .eq("business_id", businessId!)
     .or(`customer_e164.eq.${phone},alias_e164s.cs.{${phone}}`)
     .maybeSingle();
+  // The core THROWS on lookup errors and answers `failed` without sending —
+  // the preview must mirror that instead of guessing (Bugbot on PR #829).
+  if (phoneErr) throw new Error(`contact lookup (phone) failed — --apply would not send: ${phoneErr.message}`);
   let contact = byPhone as { owner_employee_id: string | null } | null;
   if (!contact && email) {
-    const { data: byEmail } = await db
+    const { data: byEmail, error: emailErr } = await db
       .from("contacts")
       .select("owner_employee_id, display_name")
       .eq("business_id", businessId!)
       .eq("email", email.trim().toLowerCase())
       .limit(1)
       .maybeSingle();
+    if (emailErr) throw new Error(`contact lookup (email) failed — --apply would not send: ${emailErr.message}`);
     contact = byEmail as { owner_employee_id: string | null } | null;
   }
-  const { data: prefs } = await db
+  const { data: prefs, error: prefsErr } = await db
     .from("notification_preferences")
     .select("unassigned_booking_alerts, phone_number, alert_email, sms_urgent, email_urgent, dashboard_alerts")
     .eq("business_id", businessId!)
     .maybeSingle();
+  if (prefsErr) throw new Error(`preferences read failed: ${prefsErr.message}`);
   console.log("contact:", contact ?? "(none — unowned by definition)");
   console.log("prefs:", prefs ?? "(no row — defaults, alert enabled)");
 
