@@ -25,6 +25,31 @@
 
 import type { CustomerMemoryRow } from "./types";
 
+/**
+ * The name the assistant should ADDRESS someone by: the first
+ * whitespace-separated word of their stored name, politely cased.
+ *
+ * Why (Truly, Jul 21 2026): lead forms deliver raw full names like
+ * "shabir gulamhussein lukmanji", and the assistant parroted the entire
+ * lowercase string in 9 of 12 replies. Casing is only corrected when the
+ * token carries none of its own — all-lowercase, or all-UPPERCASE beyond
+ * initials length — so "McKenna", "DeSouza", and initials like "JD"
+ * survive untouched.
+ *
+ * Duplicated in supabase/functions/_shared/customer_memory_preamble.ts
+ * (the Deno twin cannot import src/) — the parity test pins both.
+ */
+export function politeFirstName(displayName: string): string {
+  const trimmed = displayName.trim();
+  const space = trimmed.search(/\s/);
+  const first = space === -1 ? trimmed : trimmed.slice(0, space);
+  if (first.length === 0) return first;
+  if (first === first.toLowerCase() || (first === first.toUpperCase() && first.length >= 4)) {
+    return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
+  }
+  return first;
+}
+
 export type CustomerPreambleInput = {
   memory: Pick<
     CustomerMemoryRow,
@@ -64,8 +89,10 @@ export function buildCustomerPreamble(input: CustomerPreambleInput): string | nu
     ""
   ];
   if (name) {
+    const addressAs = politeFirstName(name);
+    const stored = addressAs === name ? "" : ` (their stored full name is "${name}")`;
     lines.push(
-      `Address this person as "${name}" — this is their stored preferred name and takes precedence over any different or longer name that appears in lead forms, automation context, earlier messages, or the pinned notes and rolling summary below (unless they explicitly ask you to use another name).`
+      `Address this person as "${addressAs}"${stored} — use that name SPARINGLY (most replies need no name at all) and never recite their full name in normal conversation. The stored name takes precedence over any different or longer name that appears in lead forms, automation context, earlier messages, or the pinned notes and rolling summary below (unless they explicitly ask you to use another name).`
     );
     lines.push("");
   }

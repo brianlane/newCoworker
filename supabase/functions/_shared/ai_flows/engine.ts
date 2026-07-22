@@ -184,7 +184,17 @@ export function resolvePlaceholder(scope: Record<string, unknown>, path: string)
   if (trimmed === "") return "";
   const spaceIdx = trimmed.search(/\s/);
   if (suffix === "first") {
-    return spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx);
+    // Politely cased: lead forms deliver raw lowercase names ("shabir"),
+    // and a greeting should read "Hi Shabir!" (Truly, Jul 21 2026). Casing
+    // is corrected only when the token carries none of its own — all-lower,
+    // or all-UPPER beyond initials length — so "McKenna" and "JD" survive.
+    // `.last` stays verbatim (compound surnames like "de la Cruz" must not
+    // be re-cased).
+    const first = spaceIdx === -1 ? trimmed : trimmed.slice(0, spaceIdx);
+    if (first === first.toLowerCase() || (first === first.toUpperCase() && first.length >= 4)) {
+      return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
+    }
+    return first;
   }
   return spaceIdx === -1 ? "" : trimmed.slice(spaceIdx + 1).trim();
 }
