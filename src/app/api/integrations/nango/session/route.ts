@@ -1,6 +1,10 @@
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { getNangoClient } from "@/lib/nango/server";
+import {
+  WorkspaceConnectionCapError,
+  assertWorkspaceConnectionAllowed
+} from "@/lib/nango/connection-cap";
 import { z } from "zod";
 
 const bodySchema = z.object({
@@ -30,6 +34,10 @@ export async function POST(request: Request) {
     const { businessId } = bodySchema.parse(await request.json());
     await requireBusinessRole(businessId, "manage_settings");
 
+    // Tier cap — refuse BEFORE a connect session is even minted, so the
+    // owner never walks an OAuth flow whose result would be rejected.
+    await assertWorkspaceConnectionAllowed(businessId);
+
     const nango = getNangoClient();
 
     const sessionBody = {
@@ -49,6 +57,9 @@ export async function POST(request: Request) {
 
     return successResponse({ token });
   } catch (err) {
+    if (err instanceof WorkspaceConnectionCapError) {
+      return errorResponse("FORBIDDEN", err.message, 403);
+    }
     return handleRouteError(err);
   }
 }

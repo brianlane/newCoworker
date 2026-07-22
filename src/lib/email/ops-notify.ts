@@ -40,6 +40,10 @@ import {
   buildOpsNewSignupEmail,
   type OpsNewSignupInput
 } from "@/lib/email/templates/ops-new-signup";
+import {
+  buildOpsNangoQuotaEmail,
+  type OpsNangoQuotaInput
+} from "@/lib/email/templates/ops-nango-quota";
 
 /**
  * Prefix ops subjects for ENTERPRISE tenants so SLA-bound incidents jump
@@ -286,6 +290,43 @@ export async function sendOpsNewSignupEmail(
   } catch (err) {
     logger.warn("ops new-signup email failed", {
       businessId: input.businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return false;
+  }
+}
+
+/**
+ * Fire-and-forget "Nango account nearing its connection limit" ops alert;
+ * never throws. Not tier-tagged: the quota is platform-wide. Returns true
+ * when sent (the caller owns dedupe — see maybeSendNangoQuotaAlert).
+ */
+export async function sendOpsNangoQuotaEmail(
+  input: Omit<OpsNangoQuotaInput, "siteUrl">
+): Promise<boolean> {
+  try {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      logger.warn("ops Nango quota email skipped: RESEND_API_KEY missing", {
+        used: input.used,
+        limit: input.limit
+      });
+      return false;
+    }
+    const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+    const toEmail = opsNotificationEmail();
+    const { subject, text, html } = buildOpsNangoQuotaEmail({ ...input, siteUrl });
+    await sendOwnerEmail(apiKey, toEmail, subject, { text, html });
+    logger.info("ops Nango quota alert emailed", {
+      used: input.used,
+      limit: input.limit,
+      toEmail
+    });
+    return true;
+  } catch (err) {
+    logger.warn("ops Nango quota email failed", {
+      used: input.used,
+      limit: input.limit,
       error: err instanceof Error ? err.message : String(err)
     });
     return false;

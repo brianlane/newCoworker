@@ -57,4 +57,17 @@ describe("enterprise limits overrides", () => {
     const merged = applyEnterpriseLimitsPatch(base, { smsPerMonth: 50_000 });
     expect(merged.smsPerMonth).toBe(50_000);
   });
+
+  it("applies a per-deal workspaceConnectionsMax cap over the unlimited enterprise default", () => {
+    const base = TIER_LIMITS.enterprise;
+    const merged = applyEnterpriseLimitsPatch(base, { workspaceConnectionsMax: 5 });
+    expect(merged.workspaceConnectionsMax).toBe(5);
+    expect(applyEnterpriseLimitsPatch(base, {}).workspaceConnectionsMax).toBe(Infinity);
+  });
+
+  it("rejects non-integer / out-of-range workspaceConnectionsMax", () => {
+    expect(parseEnterpriseLimitsOverride({ workspaceConnectionsMax: 2.5 })).toBe(null);
+    expect(parseEnterpriseLimitsOverride({ workspaceConnectionsMax: -1 })).toBe(null);
+    expect(parseEnterpriseLimitsOverride({ workspaceConnectionsMax: 1001 })).toBe(null);
+  });
 });

@@ -27,6 +27,7 @@ import { z } from "zod";
 import { requireAdmin, findAuthUserIdByEmail, authUserExistsByEmail } from "@/lib/auth";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { deleteBusiness, listBusinesses } from "@/lib/db/businesses";
+import { revokeNangoConnectionsForBusiness } from "@/lib/nango/cleanup";
 import { listBusinessIdsWithStripeLinkedSubscription } from "@/lib/db/subscriptions";
 import { deleteBusinessMembersByEmail } from "@/lib/db/business-members";
 import { logAdminAction } from "@/lib/admin/audit";
@@ -130,6 +131,10 @@ export async function DELETE(request: Request) {
     // still exists and re-running this same DELETE finishes the job. The
     // opposite order would strand a half-deleted account behind a dead login.
     for (const businessId of businessIds) {
+      // Revoke Nango workspace connections BEFORE the row delete: the
+      // cascade removes our rows but Nango's side would live on, burning
+      // account-wide quota forever. Best-effort — never blocks the delete.
+      await revokeNangoConnectionsForBusiness(businessId);
       await deleteBusiness(businessId);
     }
     const membershipsRemoved = await deleteBusinessMembersByEmail(email);

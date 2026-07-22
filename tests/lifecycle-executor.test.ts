@@ -21,7 +21,8 @@ const {
   releaseVpsToPoolMock,
   deleteTelnyxVoiceRouteMock,
   upsertBusinessTelnyxSettingsMock,
-  sendOpsDidReleaseFailedEmailMock
+  sendOpsDidReleaseFailedEmailMock,
+  revokeNangoConnectionsForBusinessMock
 } = vi.hoisted(() => ({
   updateSubscriptionMock: vi.fn(),
   markRefundUsedMock: vi.fn(),
@@ -34,7 +35,8 @@ const {
   releaseVpsToPoolMock: vi.fn(),
   deleteTelnyxVoiceRouteMock: vi.fn(),
   upsertBusinessTelnyxSettingsMock: vi.fn(),
-  sendOpsDidReleaseFailedEmailMock: vi.fn()
+  sendOpsDidReleaseFailedEmailMock: vi.fn(),
+  revokeNangoConnectionsForBusinessMock: vi.fn()
 }));
 
 vi.mock("@/lib/email/ops-notify", () => ({
@@ -60,6 +62,10 @@ vi.mock("@/lib/db/subscription-refunds", () => ({
 
 vi.mock("@/lib/db/businesses", () => ({
   updateBusinessStatus: updateBusinessStatusMock
+}));
+
+vi.mock("@/lib/nango/cleanup", () => ({
+  revokeNangoConnectionsForBusiness: revokeNangoConnectionsForBusinessMock
 }));
 
 vi.mock("@/lib/db/vps-inventory", () => ({
@@ -756,6 +762,9 @@ describe("executeLifecyclePlan refund handling", () => {
     expect(hostinger.stopVirtualMachine).toHaveBeenCalledWith(1);
     expect(hostinger.disableBillingAutoRenewal).toHaveBeenCalledWith("hbs_1");
     expect(updateBusinessStatusMock).toHaveBeenCalledWith("biz_1", "wiped");
+    // The wipe keeps the business row, so this is the only hook that ever
+    // revokes the tenant's Nango workspace connections.
+    expect(revokeNangoConnectionsForBusinessMock).toHaveBeenCalledWith("biz_1");
     expect(deleteBusinessBackupMock).toHaveBeenCalledWith("biz_1");
     expect(sendOwnerEmailMock).toHaveBeenCalledWith(
       "resend_test",

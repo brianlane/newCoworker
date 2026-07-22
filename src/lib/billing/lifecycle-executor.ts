@@ -58,6 +58,7 @@ import { updateSubscription } from "@/lib/db/subscriptions";
 import { markRefundUsed } from "@/lib/db/customer-profiles";
 import { recordSubscriptionRefund } from "@/lib/db/subscription-refunds";
 import { updateBusinessStatus } from "@/lib/db/businesses";
+import { revokeNangoConnectionsForBusiness } from "@/lib/nango/cleanup";
 import { releaseVpsToPool } from "@/lib/db/vps-inventory";
 import type { VpsSize } from "@/lib/vps/size";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -568,6 +569,12 @@ async function runDbOp(
       return;
     }
     case "mark_business_wiped":
+      // Tear down the tenant's Nango workspace connections first: the wipe
+      // KEEPS the business row, so no cascade ever removes them, and each
+      // leaked connection consumes account-wide Nango quota forever. The
+      // helper is best-effort by contract — a Nango blip never blocks the
+      // wipe stamp.
+      await revokeNangoConnectionsForBusiness(op.businessId);
       await updateBusinessStatus(op.businessId, "wiped");
       return;
     case "delete_auth_user": {

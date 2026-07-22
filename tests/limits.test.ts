@@ -188,6 +188,23 @@ describe("tier limits", () => {
     });
   });
 
+  describe("workspaceConnectionsMax (Nango workspace connection cap)", () => {
+    it("starter is capped at 1 workspace connection", () => {
+      expect(TIER_LIMITS.starter.workspaceConnectionsMax).toBe(1);
+    });
+
+    it("standard is capped at 3 workspace connections", () => {
+      expect(TIER_LIMITS.standard.workspaceConnectionsMax).toBe(3);
+    });
+
+    it("enterprise is unlimited by default and per-deal overridable", () => {
+      expect(TIER_LIMITS.enterprise.workspaceConnectionsMax).toBe(Infinity);
+      expect(
+        getTierLimits("enterprise", { workspaceConnectionsMax: 8 }).workspaceConnectionsMax
+      ).toBe(8);
+    });
+  });
+
   describe("all tiers have lossless memory", () => {
     it("all three tiers use lossless memory", () => {
       expect(TIER_LIMITS.starter.memoryType).toBe("lossless");

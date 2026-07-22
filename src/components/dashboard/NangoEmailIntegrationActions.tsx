@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import Nango from "@nangohq/frontend";
 import { Button } from "@/components/ui/Button";
 
@@ -12,9 +13,17 @@ export type WorkspaceConnectionClient = {
   metadata: Record<string, unknown>;
 };
 
+export type WorkspaceConnectionCapClient = {
+  used: number;
+  /** null = unlimited (enterprise). */
+  max: number | null;
+};
+
 type Props = {
   businessId: string;
   connections: WorkspaceConnectionClient[];
+  /** Tier cap state; the server routes enforce it, this only explains it. */
+  cap: WorkspaceConnectionCapClient;
 };
 
 const defaultApiHost = "https://api.nango.dev";
@@ -69,10 +78,12 @@ function connectionPrimaryLabel(
   return label;
 }
 
-export function NangoEmailIntegrationActions({ businessId, connections }: Props) {
+export function NangoEmailIntegrationActions({ businessId, connections, cap }: Props) {
+  const t = useTranslations("dashboard.integrationsWorkspace");
   const [loadingConnect, setLoadingConnect] = useState(false);
   const [disconnectingId, setDisconnectingId] = useState<string | null>(null);
   const [banner, setBanner] = useState<string | null>(null);
+  const atCap = cap.max !== null && cap.used >= cap.max;
 
   const countsByProvider = useMemo(() => {
     const m = new Map<string, number>();
@@ -103,6 +114,7 @@ export function NangoEmailIntegrationActions({ businessId, connections }: Props)
   }
 
   async function connect() {
+    if (atCap) return;
     setBanner(null);
     setLoadingConnect(true);
     try {
@@ -197,7 +209,24 @@ export function NangoEmailIntegrationActions({ businessId, connections }: Props)
         </ul>
       ) : null}
 
-      <Button type="button" variant="secondary" size="sm" onClick={connect} loading={loadingConnect}>
+      {cap.max !== null && connections.length > 0 ? (
+        <p className="text-xs text-parchment/40">
+          {t("capUsage", { used: cap.used, max: cap.max })}
+        </p>
+      ) : null}
+
+      {atCap ? (
+        <p className="text-xs text-parchment/60">{t("capReached", { max: cap.max ?? 0 })}</p>
+      ) : null}
+
+      <Button
+        type="button"
+        variant="secondary"
+        size="sm"
+        onClick={connect}
+        loading={loadingConnect}
+        disabled={atCap}
+      >
         {connections.length > 0 ? "Connect another account" : "Connect workspace"}
       </Button>
     </div>

@@ -29,6 +29,7 @@ import {
   executeLifecyclePlanSlowPhase
 } from "@/lib/billing/lifecycle-executor";
 import { deleteBusiness, getBusiness } from "@/lib/db/businesses";
+import { revokeNangoConnectionsForBusiness } from "@/lib/nango/cleanup";
 import { logAdminAction } from "@/lib/admin/audit";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
@@ -183,6 +184,10 @@ export async function DELETE(request: Request) {
             500
           );
         }
+        // Revoke Nango workspace connections BEFORE the row delete: the
+        // cascade removes our rows but Nango's side would live on, burning
+        // account-wide quota forever. Best-effort — never blocks the delete.
+        await revokeNangoConnectionsForBusiness(body.businessId);
         await deleteBusiness(body.businessId);
         logger.info("admin.delete-client: deleted subscription-less business", {
           adminEmail: admin.email,

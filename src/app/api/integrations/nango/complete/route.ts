@@ -14,6 +14,11 @@ import {
   nangoIdentityPatchBody,
   providerAccountMetadata
 } from "@/lib/nango/account-identity";
+import {
+  resolveWorkspaceConnectionCapState,
+  workspaceConnectionCapMessage
+} from "@/lib/nango/connection-cap";
+import { maybeSendNangoQuotaAlert } from "@/lib/nango/account-usage";
 import { z } from "zod";
 
 const bodySchema = z.object({
@@ -58,6 +63,28 @@ export async function POST(request: Request) {
       parsed.providerConfigKey,
       parsed.connectionId
     );
+
+    // Defensive tier-cap re-check for NEW connections only (the session
+    // route is the primary gate, but a Connect UI opened before the cap was
+    // reached could complete after it). Re-completing an EXISTING row must
+    // stay allowed — that's the reconnect path. The OAuth grant already
+    // created the connection on Nango's side, so a refusal deletes it there
+    // too or it would silently burn account-wide quota.
+    if (!existing) {
+      const capState = await resolveWorkspaceConnectionCapState(parsed.businessId);
+      if (capState.atCap) {
+        try {
+          await nango.deleteConnection(parsed.providerConfigKey, parsed.connectionId);
+        } catch (delErr) {
+          console.error(
+            "nango/complete: over-cap connection delete failed (leaks account quota)",
+            delErr instanceof Error ? delErr.message : delErr
+          );
+        }
+        return errorResponse("FORBIDDEN", workspaceConnectionCapMessage(capState), 403);
+      }
+    }
+
     const mergedMetadata = {
       ...(existing?.metadata ?? {}),
       ...workspaceConnectionMetadataFromNangoConnection(connection)
@@ -123,6 +150,12 @@ export async function POST(request: Request) {
           );
         }
       }
+    }
+
+    // A NEW connection consumed account-wide Nango quota — check platform
+    // headroom and alert ops when it's nearly gone (deduped, best-effort).
+    if (!existing) {
+      await maybeSendNangoQuotaAlert();
     }
 
     return successResponse({ connected: true });

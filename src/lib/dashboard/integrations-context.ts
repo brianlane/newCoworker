@@ -14,6 +14,10 @@ import { can } from "@/lib/authz/policy";
 import { resolveActiveBusinessContext } from "@/lib/dashboard/active-business";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
+import {
+  workspaceConnectionCapState,
+  type WorkspaceConnectionCapState
+} from "@/lib/nango/connection-cap";
 import { listCustomIntegrations } from "@/lib/db/custom-integrations";
 import { getPublicVagaroConnection } from "@/lib/db/vagaro-connections";
 import { getPublicCalendlyConnection } from "@/lib/db/calendly-connections";
@@ -34,6 +38,8 @@ export type IntegrationsContext = {
   /** API keys are a manage_billing (owner) capability. */
   canManageApiKeys: boolean;
   workspaceConnections: Awaited<ReturnType<typeof listWorkspaceOAuthConnections>>;
+  /** Tier cap on Nango workspace connections (max null = unlimited). */
+  workspaceConnectionCap: WorkspaceConnectionCapState;
   customIntegrations: Awaited<ReturnType<typeof listCustomIntegrations>>;
   vagaroConnection: Awaited<ReturnType<typeof getPublicVagaroConnection>>;
   calendlyConnection: Awaited<ReturnType<typeof getPublicCalendlyConnection>>;
@@ -71,16 +77,30 @@ export async function loadIntegrationsContext(
   const canManageApiKeys = !!ctx.role && can(ctx.role, "manage_billing");
   const { data: businesses } = await db
     .from("businesses")
-    .select("id")
+    .select("id, tier, enterprise_limits")
     .in("id", activeBusinessId ? [activeBusinessId] : [])
     .limit(1);
 
-  const businessId = businesses?.[0]?.id ?? null;
+  const businessRow = (businesses?.[0] ?? null) as {
+    id: string;
+    tier?: string | null;
+    enterprise_limits?: unknown;
+  } | null;
+  const businessId = businessRow?.id ?? null;
+
+  const workspaceConnections = businessId
+    ? await listWorkspaceOAuthConnections(businessId)
+    : [];
 
   return {
     businessId,
     canManageApiKeys,
-    workspaceConnections: businessId ? await listWorkspaceOAuthConnections(businessId) : [],
+    workspaceConnections,
+    workspaceConnectionCap: workspaceConnectionCapState(
+      businessRow?.tier,
+      workspaceConnections.length,
+      businessRow?.enterprise_limits ?? undefined
+    ),
     customIntegrations: businessId ? await listCustomIntegrations(businessId) : [],
     vagaroConnection: businessId ? await getPublicVagaroConnection(businessId) : null,
     calendlyConnection: businessId ? await getPublicCalendlyConnection(businessId) : null,
