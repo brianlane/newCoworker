@@ -22,6 +22,7 @@ const patchSchema = z.object({
   image_limit_alerts: z.boolean().optional(),
   aiflow_failure_alerts: z.boolean().optional(),
   customer_reply_alerts: z.boolean().optional(),
+  unassigned_booking_alerts: z.boolean().optional(),
   category_leads: z.boolean().optional(),
   category_team: z.boolean().optional(),
   category_system: z.boolean().optional(),

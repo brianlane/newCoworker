@@ -12,6 +12,7 @@ import {
   releaseBookingDedupe
 } from "@/lib/calendar-tools/booking-dedupe";
 import { findUpcomingBookingsForAttendee } from "@/lib/calendar-tools/attendee-bookings";
+import { maybeAlertUnassignedBooking } from "@/lib/calendar-tools/unassigned-booking-alert";
 import { getCustomerMemory } from "@/lib/customer-memory/db";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 import {
@@ -476,10 +477,23 @@ async function storedAttendeeContact(
   }
 }
 
+export type BookAppointmentOptions = {
+  /**
+   * Which customer-facing AI surface is booking. When set, a CONFIRMED
+   * fresh booking for a contact no teammate owns fans out the
+   * unassigned-booking owner alert (toggle `unassigned_booking_alerts`,
+   * on by default). Owner-initiated surfaces (dashboard inline, dashboard_
+   * Rowboat twin, MCP) leave it unset — the owner already knows what they
+   * booked. `already_booked` dedupe retries never re-alert.
+   */
+  alertSurface?: "voice" | "sms" | "webchat";
+};
+
 export async function bookCalendarAppointment(
   businessId: string,
   rawArgs: BookAppointmentArgs,
-  fallbackPhone?: string | null
+  fallbackPhone?: string | null,
+  opts: BookAppointmentOptions = {}
 ): Promise<CalendarToolResult> {
   if (new Date(rawArgs.endIso).getTime() <= new Date(rawArgs.startIso).getTime()) {
     return { ok: false, detail: "invalid_window" };
@@ -638,7 +652,31 @@ export async function bookCalendarAppointment(
       await releaseBookingDedupe(claim.id);
     }
   }
-  return withStartLocal(result);
+  const finalResult = await withStartLocal(result);
+
+  // Unassigned-booking owner alert (Truly, Jul 21 2026): a customer-facing
+  // AI surface just confirmed a REAL appointment — if no teammate owns this
+  // contact, tell the owner NOW, or nobody shows up. Fresh confirmed creates
+  // only (link-mode and failures carry no event; dedupe retries returned
+  // above). Best-effort inside the core: never affects the booking result.
+  if (opts.alertSurface && finalResult.ok) {
+    const d = (finalResult.data ?? {}) as Record<string, unknown>;
+    if (typeof d.eventId === "string" && d.eventId.length > 0) {
+      await maybeAlertUnassignedBooking(businessId, {
+        attendeeName: args.attendeeName,
+        attendeePhone: attendeePhone || null,
+        attendeeEmail: args.attendeeEmail?.trim() || null,
+        startIso: new Date(args.startIso).toISOString(),
+        // Guaranteed present: withStartLocal stamps every confirmed create,
+        // and this block only runs behind the same ok+eventId condition.
+        startLocal: d.startLocal as string,
+        summary: args.summary,
+        eventId: d.eventId,
+        surface: opts.alertSurface
+      });
+    }
+  }
+  return finalResult;
 }
 
 async function bookOnProvider(

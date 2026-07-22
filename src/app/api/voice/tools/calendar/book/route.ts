@@ -63,7 +63,10 @@ export async function POST(request: Request) {
   const result = await bookCalendarAppointment(
     envelope.businessId,
     parsed.data,
-    envelope.callerE164
+    envelope.callerE164,
+    // Customer-facing surface: a confirmed booking for an unowned contact
+    // pages the owner (unassigned_booking_alerts, on by default).
+    { alertSurface: "voice" }
   );
   // Model-facing guidance on failure (twin of the Rowboat webhook's
   // bookFailureGuidance): frame it as availability, re-check, and escalate

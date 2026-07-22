@@ -474,7 +474,16 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
       // failure and a missing calendar. Other failures (invalid_window,
       // Calendly link modes, ...) are not slot conflicts — telling the model
       // "the time was taken" would send it retry-looping the same mistake.
-      const booked = await bookCalendarAppointment(businessId, parsed.data, null);
+      // The unassigned-booking owner alert fires only from CUSTOMER-facing
+      // surfaces (texting/webchat twins) — a dashboard_ booking is the
+      // owner's own action.
+      const bookSurface = toolSurface(name);
+      const booked = await bookCalendarAppointment(
+        businessId,
+        parsed.data,
+        null,
+        bookSurface === "dashboard" ? {} : { alertSurface: bookSurface }
+      );
       if (
         !booked.ok &&
         (booked.detail === "calendar_book_failed" || booked.detail === "calendar_not_connected")

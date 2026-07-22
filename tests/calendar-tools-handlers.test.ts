@@ -33,6 +33,9 @@ vi.mock("@/lib/calendar-tools/booking-dedupe", () => ({
 vi.mock("@/lib/calendar-tools/attendee-bookings", () => ({
   findUpcomingBookingsForAttendee: vi.fn()
 }));
+vi.mock("@/lib/calendar-tools/unassigned-booking-alert", () => ({
+  maybeAlertUnassignedBooking: vi.fn()
+}));
 vi.mock("@/lib/customer-memory/db", () => ({ getCustomerMemory: vi.fn() }));
 vi.mock("@/lib/ai-flows/goal-hooks", () => ({ fireGoalEvent: vi.fn() }));
 vi.mock("@/lib/zoom/meetings", () => ({
@@ -64,6 +67,7 @@ import {
   releaseBookingDedupe
 } from "@/lib/calendar-tools/booking-dedupe";
 import { findUpcomingBookingsForAttendee } from "@/lib/calendar-tools/attendee-bookings";
+import { maybeAlertUnassignedBooking } from "@/lib/calendar-tools/unassigned-booking-alert";
 import { getCustomerMemory } from "@/lib/customer-memory/db";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 import {
@@ -113,6 +117,7 @@ beforeEach(() => {
   // guard passes through and bookings behave exactly as the pre-guard
   // tests pin.
   vi.mocked(findUpcomingBookingsForAttendee).mockResolvedValue([]);
+  vi.mocked(maybeAlertUnassignedBooking).mockResolvedValue("sent");
   // Default: no stored contact — the model-supplied attendeeName is used, as
   // pre-preferred-name tests pin.
   vi.mocked(getCustomerMemory).mockResolvedValue(null);
@@ -646,6 +651,102 @@ describe("findCalendarSlots", () => {
       .mockResolvedValueOnce(null as never);
     const result = await findCalendarSlots(BIZ, { durationMinutes: 30 });
     expect(result.ok).toBe(true);
+  });
+});
+
+describe("bookCalendarAppointment — unassigned-booking owner alert (Truly, Jul 21 2026)", () => {
+  const ARGS = {
+    startIso: "2026-06-12T17:00:00.000Z",
+    endIso: "2026-06-12T17:30:00.000Z",
+    summary: "Estimate",
+    attendeeName: "Joe Plumber"
+  };
+
+  function confirmGoogleCreate() {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({
+      data: { id: "ev-1", htmlLink: "https://cal/ev-1" }
+    } as never);
+  }
+
+  it("a confirmed create on a customer surface fires the alert with the booked details", async () => {
+    confirmGoogleCreate();
+    await bookCalendarAppointment(
+      BIZ,
+      { ...ARGS, attendeeEmail: "joe@example.com" },
+      "+16136067906",
+      { alertSurface: "sms" }
+    );
+    expect(maybeAlertUnassignedBooking).toHaveBeenCalledWith(BIZ, {
+      attendeeName: "Joe Plumber",
+      attendeePhone: "+16136067906",
+      attendeeEmail: "joe@example.com",
+      startIso: "2026-06-12T17:00:00.000Z",
+      startLocal: "Friday, June 12, 2026 at 5:00 PM UTC",
+      summary: "Estimate",
+      eventId: "ev-1",
+      surface: "sms"
+    });
+  });
+
+  it("no alertSurface (owner-initiated surfaces) fires nothing", async () => {
+    confirmGoogleCreate();
+    await bookCalendarAppointment(BIZ, ARGS, "+16136067906");
+    expect(maybeAlertUnassignedBooking).not.toHaveBeenCalled();
+  });
+
+  it("an already_booked dedupe retry never re-alerts", async () => {
+    vi.mocked(claimBookingDedupe).mockResolvedValue({ kind: "duplicate", eventId: "evt-prior" });
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+16136067906", {
+      alertSurface: "voice"
+    });
+    expect(result.detail).toBe("already_booked");
+    expect(maybeAlertUnassignedBooking).not.toHaveBeenCalled();
+  });
+
+  it("failures and no-event results fire nothing", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(null as never);
+    await bookCalendarAppointment(BIZ, ARGS, null, { alertSurface: "webchat" });
+    expect(maybeAlertUnassignedBooking).not.toHaveBeenCalled();
+  });
+
+  it("a Calendly booking-link result (ok, no event) fires nothing", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALENDLY_CONN);
+    vi.mocked(createCalendlyBookingLink).mockResolvedValue({
+      ok: true,
+      detail: "booking_link_created",
+      data: { bookingLink: "https://calendly.com/x/abc" }
+    } as never);
+    const result = await bookCalendarAppointment(BIZ, ARGS, null, { alertSurface: "sms" });
+    expect(result.ok).toBe(true);
+    expect(maybeAlertUnassignedBooking).not.toHaveBeenCalled();
+  });
+
+  it("a phoneless, emailless confirmed create alerts with null identities", async () => {
+    confirmGoogleCreate();
+    await bookCalendarAppointment(BIZ, ARGS, null, { alertSurface: "voice" });
+    expect(maybeAlertUnassignedBooking).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ attendeePhone: null, attendeeEmail: null, surface: "voice" })
+    );
+  });
+
+  it("a whitespace-only attendeeEmail alerts with a null email identity", async () => {
+    confirmGoogleCreate();
+    await bookCalendarAppointment(BIZ, { ...ARGS, attendeeEmail: "  " }, null, {
+      alertSurface: "sms"
+    });
+    expect(maybeAlertUnassignedBooking).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ attendeeEmail: null })
+    );
+  });
+
+  it("a dataless ok result fires nothing (defensive shape)", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(bookVagaroAppointment).mockResolvedValue({ ok: true } as never);
+    await bookCalendarAppointment(BIZ, ARGS, null, { alertSurface: "sms" });
+    expect(maybeAlertUnassignedBooking).not.toHaveBeenCalled();
   });
 });
 

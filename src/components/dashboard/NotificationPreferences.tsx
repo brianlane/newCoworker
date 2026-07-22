@@ -55,6 +55,9 @@ export function NotificationPreferences({ businessId, initial }: Props) {
   const [customerReplyAlerts, setCustomerReplyAlerts] = useState(
     initial.customer_reply_alerts ?? false
   );
+  const [unassignedBookingAlerts, setUnassignedBookingAlerts] = useState(
+    initial.unassigned_booking_alerts ?? true
+  );
   const [categoryLeads, setCategoryLeads] = useState(initial.category_leads ?? true);
   const [categoryTeam, setCategoryTeam] = useState(initial.category_team ?? true);
   const [categorySystem, setCategorySystem] = useState(initial.category_system ?? true);
@@ -79,6 +82,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
     setImageLimitAlerts(initial.image_limit_alerts);
     setAiflowFailureAlerts(initial.aiflow_failure_alerts ?? false);
     setCustomerReplyAlerts(initial.customer_reply_alerts ?? false);
+    setUnassignedBookingAlerts(initial.unassigned_booking_alerts ?? true);
     setCategoryLeads(initial.category_leads ?? true);
     setCategoryTeam(initial.category_team ?? true);
     setCategorySystem(initial.category_system ?? true);
@@ -100,6 +104,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
     setImageLimitAlerts(prefs.image_limit_alerts);
     setAiflowFailureAlerts(prefs.aiflow_failure_alerts ?? false);
     setCustomerReplyAlerts(prefs.customer_reply_alerts ?? false);
+    setUnassignedBookingAlerts(prefs.unassigned_booking_alerts ?? true);
     setCategoryLeads(prefs.category_leads ?? true);
     setCategoryTeam(prefs.category_team ?? true);
     setCategorySystem(prefs.category_system ?? true);
@@ -129,6 +134,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           image_limit_alerts: imageLimitAlerts,
           aiflow_failure_alerts: aiflowFailureAlerts,
           customer_reply_alerts: customerReplyAlerts,
+          unassigned_booking_alerts: unassignedBookingAlerts,
           category_leads: categoryLeads,
           category_team: categoryTeam,
           category_system: categorySystem,
@@ -172,6 +178,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           image_limit_alerts: false,
           aiflow_failure_alerts: false,
           customer_reply_alerts: false,
+          unassigned_booking_alerts: false,
           unsubscribed_at: "now"
         })
       });
@@ -272,6 +279,13 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           description="Alert you the moment a client texts your business number, with a preview of what they said. At most one alert per client every few minutes. Off unless you opt in."
           checked={customerReplyAlerts}
           onChange={setCustomerReplyAlerts}
+          disabled={loading || unsubscribing}
+        />
+        <ToggleRow
+          label="Unassigned booking alerts"
+          description="Alert you when your AI coworker books an appointment for a lead no teammate owns yet, so someone always shows up. On by default."
+          checked={unassignedBookingAlerts}
+          onChange={setUnassignedBookingAlerts}
           disabled={loading || unsubscribing}
         />
       </div>

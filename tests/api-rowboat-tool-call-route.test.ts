@@ -577,7 +577,9 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
     expect(vi.mocked(bookCalendarAppointment)).toHaveBeenCalledWith(
       BIZ,
       expect.objectContaining(args),
-      null
+      null,
+      // Texting surface: unowned-contact bookings page the owner.
+      { alertSurface: "sms" }
     );
   });
 
@@ -752,7 +754,9 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
     expect(vi.mocked(bookCalendarAppointment)).toHaveBeenCalledWith(
       BIZ,
       expect.objectContaining(args),
-      null
+      null,
+      // Texting surface: unowned-contact bookings page the owner.
+      { alertSurface: "sms" }
     );
   });
 
