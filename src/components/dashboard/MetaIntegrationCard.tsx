@@ -30,6 +30,8 @@ type MetaConnection = {
   page_id: string | null;
   page_name: string | null;
   account_name: string | null;
+  dataset_id: string | null;
+  capi_enabled: boolean;
   is_active: boolean;
   has_page_token: boolean;
   created_at: string;
@@ -254,6 +256,27 @@ export function MetaIntegrationCard({ businessId, initialConnection }: Props) {
               <span className="text-spark-orange"> · paused</span>
             ) : null}
           </div>
+          <p className="text-[11px] text-parchment/40">
+            Ads feedback:{" "}
+            {connection.dataset_id && connection.capi_enabled && connection.is_active ? (
+              <span className="text-claw-green">
+                on — booked and stage changes are reported back to Meta so your ads
+                optimize for lead quality
+              </span>
+            ) : connection.dataset_id && connection.capi_enabled ? (
+              // Paused connections defer uploads; they resume on re-enable.
+              <span>
+                paused with the connection — stage changes are held and report to
+                Meta once the connection is re-enabled.
+              </span>
+            ) : (
+              <span>
+                not active yet. Once our Meta app finishes its review, reconnecting
+                enables it automatically — moving a lead to Booked (or any pipeline
+                stage) then trains your ads on lead quality.
+              </span>
+            )}
+          </p>
           <div className="flex gap-2">
             <Button
               type="button"

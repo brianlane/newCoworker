@@ -1,0 +1,511 @@
+/**
+ * Meta Conversion Leads outbox drain (src/lib/meta/capi-drain.ts):
+ * batch claim, per-business connection gating, identifier resolution
+ * through lead_submissions, terminal-state bookkeeping, and retry/expiry.
+ */
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const defaultClientSpy = vi.fn();
+vi.mock("@/lib/supabase/server", () => ({
+  createSupabaseServiceClient: (...a: unknown[]) => defaultClientSpy(...a)
+}));
+
+const infoSpy = vi.fn();
+const warnSpy = vi.fn();
+vi.mock("@/lib/logger", () => ({
+  logger: {
+    info: (...a: unknown[]) => infoSpy(...a),
+    warn: (...a: unknown[]) => warnSpy(...a)
+  }
+}));
+
+const getMetaConnection = vi.fn();
+vi.mock("@/lib/db/meta-connections", () => ({
+  getMetaConnection: (...a: unknown[]) => getMetaConnection(...a)
+}));
+
+const buildConversionLeadBody = vi.fn();
+const sendConversionLeadBody = vi.fn();
+vi.mock("@/lib/meta/capi", () => ({
+  CAPI_EVENT_MAX_AGE_MS: 7 * 24 * 60 * 60 * 1000,
+  buildConversionLeadBody: (...a: unknown[]) => buildConversionLeadBody(...a),
+  sendConversionLeadBody: (...a: unknown[]) => sendConversionLeadBody(...a)
+}));
+
+import {
+  CAPI_MAX_ATTEMPTS,
+  drainMetaCapiEvents
+} from "@/lib/meta/capi-drain";
+
+const BIZ = "00000000-0000-0000-0000-000000000001";
+
+const READY_CONNECTION = {
+  status: "active",
+  is_active: true,
+  capi_enabled: true,
+  dataset_id: "ds-1",
+  pageToken: "page-tok"
+};
+
+function outboxRow(over: Record<string, unknown> = {}) {
+  return {
+    id: "evt-1",
+    business_id: BIZ,
+    contact_e164: "+16025551234",
+    event_name: "Booked",
+    event_time: new Date().toISOString(),
+    dedupe_key: "ce:1",
+    attempts: 0,
+    ...over
+  };
+}
+
+type Scripted = { data?: unknown; error?: unknown };
+
+/**
+ * Scripted db keyed by TABLE: each terminal consumes the next result from
+ * that table's queue. Updates are recorded (table meta_capi_events).
+ */
+function makeDb(queues: Record<string, Scripted[]>) {
+  const updates: Array<{ id: unknown; fields: Record<string, unknown> }> = [];
+  const idx: Record<string, number> = {};
+  const next = (table: string): Scripted => {
+    const queue = queues[table] ?? [];
+    const i = (idx[table] = (idx[table] ?? 0) + 1) - 1;
+    return queue[i] ?? { data: null, error: null };
+  };
+  const calls: Array<{ table: string; name: string; args: unknown[] }> = [];
+  const from = (table: string) => {
+    let pendingUpdate: Record<string, unknown> | null = null;
+    const builder: Record<string, unknown> = {};
+    for (const m of ["select", "in", "not", "lt", "or", "order", "limit"]) {
+      builder[m] = (...args: unknown[]) => {
+        calls.push({ table, name: m, args });
+        return builder;
+      };
+    }
+    builder["update"] = (fields: Record<string, unknown>) => {
+      pendingUpdate = fields;
+      return builder;
+    };
+    builder["eq"] = (column: string, value: unknown) => {
+      if (pendingUpdate && column === "id") {
+        updates.push({ id: value, fields: pendingUpdate });
+      }
+      return builder;
+    };
+    builder["maybeSingle"] = async () => next(table);
+    builder["then"] = (resolve: (v: unknown) => unknown) => {
+      // An awaited update resolves its own scripted result stream.
+      if (pendingUpdate) {
+        return Promise.resolve(next(`${table}:update`)).then(resolve);
+      }
+      return Promise.resolve(next(table)).then(resolve);
+    };
+    return builder;
+  };
+  return { db: { from }, updates, calls };
+}
+
+/**
+ * The standard outbox scripts for one drain tick over `rows`: the id read,
+ * then the update stream — stale reclaim, atomic claim (returns the rows),
+ * and any extra scripted markRow results.
+ */
+function outboxQueues(rows: Array<Record<string, unknown>>, markRowResults: Scripted[] = []) {
+  return {
+    meta_capi_events: [
+      { data: rows.map((r) => ({ id: r.id })), error: null }
+    ],
+    "meta_capi_events:update": [
+      { data: null, error: null }, // stale-claim reclaim
+      { data: rows, error: null }, // atomic claim returns the won rows
+      ...markRowResults
+    ]
+  };
+}
+
+beforeEach(() => {
+  defaultClientSpy.mockReset();
+  infoSpy.mockReset();
+  warnSpy.mockReset();
+  getMetaConnection.mockReset();
+  buildConversionLeadBody.mockReset();
+  sendConversionLeadBody.mockReset();
+});
+
+describe("drainMetaCapiEvents", () => {
+  it("sends a resolvable row and marks it sent", async () => {
+    const { db, updates } = makeDb({
+      ...outboxQueues([outboxRow()]),
+      contacts: [
+        { data: { alias_e164s: ["+16025550000"], email: "jane@x.co" }, error: null }
+      ],
+      lead_submissions: [
+        { data: { leadgen_id: "1993202861289031", email: "jane@x.co" }, error: null }
+      ]
+    });
+    getMetaConnection.mockResolvedValue(READY_CONNECTION);
+    buildConversionLeadBody.mockReturnValue('{"data":[…]}');
+    sendConversionLeadBody.mockResolvedValue({ eventsReceived: 1 });
+
+    const summary = await drainMetaCapiEvents(db as never);
+    expect(summary).toMatchObject({ claimed: 1, sent: 1, skipped: 0, failed: 0 });
+    expect(buildConversionLeadBody).toHaveBeenCalledWith(
+      expect.objectContaining({
+        eventName: "Booked",
+        eventId: "ce:1",
+        leadgenId: "1993202861289031",
+        email: "jane@x.co",
+        phoneE164: "+16025551234"
+      })
+    );
+    expect(sendConversionLeadBody).toHaveBeenCalledWith("ds-1", "page-tok", '{"data":[…]}');
+    expect(updates).toEqual([
+      {
+        id: "evt-1",
+        fields: expect.objectContaining({ status: "sent", last_error: null })
+      }
+    ]);
+    // sent > 0 → summary log.
+    expect(infoSpy).toHaveBeenCalled();
+  });
+
+  it("returns an empty summary on batch-read error or zero rows", async () => {
+    const err = makeDb({ meta_capi_events: [{ data: null, error: { message: "down" } }] });
+    expect(await drainMetaCapiEvents(err.db as never)).toMatchObject({
+      claimed: 0,
+      sent: 0
+    });
+    expect(warnSpy).toHaveBeenCalled();
+
+    const empty = makeDb({ meta_capi_events: [{ data: [], error: null }] });
+    expect(await drainMetaCapiEvents(empty.db as never)).toMatchObject({ claimed: 0 });
+
+    const nullData = makeDb({ meta_capi_events: [{ data: null, error: null }] });
+    expect(await drainMetaCapiEvents(nullData.db as never)).toMatchObject({ claimed: 0 });
+  });
+
+  it("claims atomically: rows lost to a concurrent drain are not processed", async () => {
+    const { db } = makeDb({
+      meta_capi_events: [{ data: [{ id: "evt-1" }], error: null }],
+      "meta_capi_events:update": [
+        { data: null, error: null }, // reclaim
+        { data: [], error: null } // claim: another invocation won the row
+      ]
+    });
+    getMetaConnection.mockResolvedValue(READY_CONNECTION);
+    const summary = await drainMetaCapiEvents(db as never);
+    expect(summary).toMatchObject({ claimed: 0, sent: 0 });
+    expect(getMetaConnection).not.toHaveBeenCalled();
+
+    // A null claim payload reads as zero rows too.
+    const nullClaim = makeDb({
+      meta_capi_events: [{ data: [{ id: "evt-1" }], error: null }],
+      "meta_capi_events:update": [
+        { data: null, error: null },
+        { data: null, error: null }
+      ]
+    });
+    expect(await drainMetaCapiEvents(nullClaim.db as never)).toMatchObject({
+      claimed: 0
+    });
+  });
+
+  it("survives reclaim and claim errors (warn + empty summary)", async () => {
+    const claimErr = makeDb({
+      meta_capi_events: [{ data: [{ id: "evt-1" }], error: null }],
+      "meta_capi_events:update": [
+        { data: null, error: { message: "reclaim down" } }, // reclaim: warn only
+        { data: null, error: { message: "claim down" } } // claim: abort tick
+      ]
+    });
+    expect(await drainMetaCapiEvents(claimErr.db as never)).toMatchObject({
+      claimed: 0
+    });
+    expect(warnSpy).toHaveBeenCalledWith(
+      "meta capi drain: stale-claim reclaim failed",
+      expect.objectContaining({ error: "reclaim down" })
+    );
+    expect(warnSpy).toHaveBeenCalledWith(
+      "meta capi drain: claim failed",
+      expect.objectContaining({ error: "claim down" })
+    );
+  });
+
+  it("expires rows older than the 7-day window before any lookup", async () => {
+    const { db, updates } = makeDb(
+      outboxQueues([
+        outboxRow({ event_time: new Date(Date.now() - 8 * 24 * 3600e3).toISOString() })
+      ])
+    );
+    getMetaConnection.mockResolvedValue(READY_CONNECTION);
+    const summary = await drainMetaCapiEvents(db as never);
+    expect(summary.expired).toBe(1);
+    expect(updates[0].fields.status).toBe("expired");
+    expect(buildConversionLeadBody).not.toHaveBeenCalled();
+  });
+
+  it("defers (stays pending, attempts untouched) on every not-CAPI-ready connection shape", async () => {
+    const badConnections = [
+      null,
+      { ...READY_CONNECTION, dataset_id: null },
+      { ...READY_CONNECTION, capi_enabled: false },
+      { ...READY_CONNECTION, is_active: false },
+      { ...READY_CONNECTION, status: "pending" },
+      { ...READY_CONNECTION, pageToken: null }
+    ];
+    for (const connection of badConnections) {
+      getMetaConnection.mockReset().mockResolvedValue(connection);
+      const { db, updates } = makeDb({
+        ...outboxQueues([outboxRow()])
+      });
+      const summary = await drainMetaCapiEvents(db as never);
+      // Paused/mid-reconnect states are often temporary: the row must stay
+      // pending (no terminal status, no attempt burned) so a re-enabled
+      // connection inside the 7-day window still gets the event.
+      expect(summary.deferred, JSON.stringify(connection)).toBe(1);
+      expect(summary.skipped, JSON.stringify(connection)).toBe(0);
+      expect(updates[0].fields).toEqual({
+        status: "pending",
+        claimed_at: null,
+        last_error: "no capi-ready meta connection"
+      });
+    }
+
+    // A throwing connection lookup degrades to the same deferral — Error
+    // and non-Error rejections both.
+    getMetaConnection.mockReset().mockRejectedValue(new Error("conn down"));
+    const { db } = makeDb({
+      ...outboxQueues([outboxRow()])
+    });
+    expect((await drainMetaCapiEvents(db as never)).deferred).toBe(1);
+    expect(warnSpy).toHaveBeenCalled();
+
+    getMetaConnection.mockReset().mockRejectedValue("conn string boom");
+    const stringy = makeDb({
+      ...outboxQueues([outboxRow()])
+    });
+    expect((await drainMetaCapiEvents(stringy.db as never)).deferred).toBe(1);
+  });
+
+  it("defers with a stringified error when the payload builder throws a non-Error", async () => {
+    getMetaConnection.mockResolvedValue(READY_CONNECTION);
+    buildConversionLeadBody.mockImplementation(() => {
+      throw "build boom";
+    });
+    const { db, updates } = makeDb({
+      ...outboxQueues([outboxRow()]),
+      contacts: [{ data: null, error: null }],
+      lead_submissions: [{ data: { leadgen_id: "1993202861289031", email: null }, error: null }]
+    });
+    expect((await drainMetaCapiEvents(db as never)).deferred).toBe(1);
+    expect(updates[0].fields).toEqual({
+      status: "pending",
+      claimed_at: null,
+      last_error: "build boom"
+    });
+  });
+
+  it("skips leads with no Meta-identified submission (phone AND email misses)", async () => {
+    const { db, updates } = makeDb({
+      ...outboxQueues([outboxRow()]),
+      contacts: [{ data: { alias_e164s: null, email: "jane@x.co" }, error: null }],
+      lead_submissions: [
+        { data: null, error: null }, // by phone: none
+        { data: null, error: null } // by email: none
+      ]
+    });
+    getMetaConnection.mockResolvedValue(READY_CONNECTION);
+    const summary = await drainMetaCapiEvents(db as never);
+    expect(summary.skipped).toBe(1);
+    expect(updates[0].fields.status).toBe("skipped");
+    expect(buildConversionLeadBody).not.toHaveBeenCalled();
+  });
+
+  it("resolves an ALIAS-stored contact number onto the surviving profile's phones", async () => {
+    // The outbox holds a merged-away alias; the contact row is keyed on a
+    // different primary. The submission join must search primary + aliases.
+    const { db, calls } = makeDb({
+      ...outboxQueues([outboxRow({ contact_e164: "+16025550000" })]),
+      contacts: [
+        {
+          data: {
+            customer_e164: "+16025551234",
+            alias_e164s: ["+16025550000"],
+            email: null
+          },
+          error: null
+        }
+      ],
+      lead_submissions: [
+        { data: { leadgen_id: "1993202861289031", email: null }, error: null }
+      ]
+    });
+    getMetaConnection.mockResolvedValue(READY_CONNECTION);
+    buildConversionLeadBody.mockReturnValue("{}");
+    sendConversionLeadBody.mockResolvedValue({ eventsReceived: 1 });
+    expect((await drainMetaCapiEvents(db as never)).sent).toBe(1);
+    // Alias-aware contact lookup + the widened phone IN() list.
+    const orCall = calls.find((c) => c.table === "contacts" && c.name === "or")!;
+    expect(orCall.args[0]).toBe(
+      "customer_e164.eq.+16025550000,alias_e164s.cs.{+16025550000}"
+    );
+    const inCall = calls.find(
+      (c) => c.table === "lead_submissions" && c.name === "in"
+    )!;
+    expect(inCall.args).toEqual([
+      "phone_e164",
+      ["+16025550000", "+16025551234"]
+    ]);
+  });
+
+  it("resolves through the email fallback and skips when the contact has no email", async () => {
+    // Email fallback hit.
+    const viaEmail = makeDb({
+      ...outboxQueues([outboxRow()]),
+      contacts: [{ data: { alias_e164s: null, email: "Jane@X.co" }, error: null }],
+      lead_submissions: [
+        { data: null, error: null }, // by phone: none
+        { data: { leadgen_id: "1993202861289031", email: null }, error: null }
+      ]
+    });
+    getMetaConnection.mockResolvedValue(READY_CONNECTION);
+    buildConversionLeadBody.mockReturnValue("{}");
+    sendConversionLeadBody.mockResolvedValue({ eventsReceived: 1 });
+    expect((await drainMetaCapiEvents(viaEmail.db as never)).sent).toBe(1);
+
+    // Contact row missing entirely → no aliases, no email → phone miss ends it.
+    buildConversionLeadBody.mockReset();
+    const noContact = makeDb({
+      ...outboxQueues([outboxRow()]),
+      contacts: [{ data: null, error: null }],
+      lead_submissions: [{ data: null, error: null }]
+    });
+    expect((await drainMetaCapiEvents(noContact.db as never)).skipped).toBe(1);
+
+    // Contact present but emailless → the email fallback is skipped too.
+    const noEmail = makeDb({
+      ...outboxQueues([outboxRow()]),
+      contacts: [{ data: { alias_e164s: null, email: null }, error: null }],
+      lead_submissions: [{ data: null, error: null }]
+    });
+    expect((await drainMetaCapiEvents(noEmail.db as never)).skipped).toBe(1);
+  });
+
+  it("skips when the builder finds no usable identifier in the submission", async () => {
+    const { db, updates } = makeDb({
+      ...outboxQueues([outboxRow()]),
+      contacts: [{ data: null, error: null }],
+      lead_submissions: [{ data: { leadgen_id: "bad", email: null }, error: null }]
+    });
+    getMetaConnection.mockResolvedValue(READY_CONNECTION);
+    buildConversionLeadBody.mockReturnValue(null);
+    const summary = await drainMetaCapiEvents(db as never);
+    expect(summary.skipped).toBe(1);
+    expect(updates[0].fields.status).toBe("skipped");
+  });
+
+  it("defers on identifier-resolution read errors (transient), keeping the row pending", async () => {
+    for (const scripts of [
+      // by-phone query error
+      { contacts: [{ data: null, error: null }], lead_submissions: [{ data: null, error: { message: "phone read down" } }] },
+      // by-email query error
+      {
+        contacts: [{ data: { alias_e164s: null, email: "j@x.co" }, error: null }],
+        lead_submissions: [
+          { data: null, error: null },
+          { data: null, error: { message: "email read down" } }
+        ]
+      }
+    ]) {
+      getMetaConnection.mockReset().mockResolvedValue(READY_CONNECTION);
+      const { db, updates } = makeDb({
+        ...outboxQueues([outboxRow()]),
+        ...scripts
+      });
+      const summary = await drainMetaCapiEvents(db as never);
+      expect(summary.deferred).toBe(1);
+      // The claim is released (back to pending) WITHOUT burning an upload
+      // attempt — flaky reads must never eat the Graph retry budget.
+      expect(updates[0].fields).toEqual({
+        status: "pending",
+        claimed_at: null,
+        last_error: expect.stringContaining("read down")
+      });
+    }
+  });
+
+  it("retries transient send failures, then marks failed at the attempt cap", async () => {
+    getMetaConnection.mockResolvedValue(READY_CONNECTION);
+    buildConversionLeadBody.mockReturnValue("{}");
+    sendConversionLeadBody.mockRejectedValue(new Error("graph 500"));
+
+    const retried = makeDb({
+      ...outboxQueues([outboxRow({ attempts: 0 })]),
+      contacts: [{ data: null, error: null }],
+      lead_submissions: [{ data: { leadgen_id: "1993202861289031", email: null }, error: null }]
+    });
+    const first = await drainMetaCapiEvents(retried.db as never);
+    expect(first.deferred).toBe(1);
+    expect(retried.updates[0].fields).toMatchObject({
+      status: "pending",
+      claimed_at: null,
+      attempts: 1,
+      last_error: "graph 500"
+    });
+
+    const capped = makeDb({
+      ...outboxQueues([outboxRow({ attempts: CAPI_MAX_ATTEMPTS - 1 })]),
+      contacts: [{ data: null, error: null }],
+      lead_submissions: [{ data: { leadgen_id: "1993202861289031", email: null }, error: null }]
+    });
+    const last = await drainMetaCapiEvents(capped.db as never);
+    expect(last.failed).toBe(1);
+    expect(capped.updates[0].fields).toMatchObject({
+      status: "failed",
+      attempts: CAPI_MAX_ATTEMPTS
+    });
+    expect(infoSpy).toHaveBeenCalled(); // failed > 0 also logs the summary
+  });
+
+  it("substitutes now for an unparseable event_time and logs failed row updates", async () => {
+    getMetaConnection.mockResolvedValue(READY_CONNECTION);
+    buildConversionLeadBody.mockReturnValue("{}");
+    sendConversionLeadBody.mockResolvedValue({ eventsReceived: 1 });
+    const before = Date.now();
+    const { db } = makeDb({
+      // markRow's awaited update result (after reclaim + claim): an error
+      // → warn branch; the row stays `sending` until the stale reclaim.
+      ...outboxQueues(
+        [outboxRow({ event_time: "not-a-date" })],
+        [{ data: null, error: { message: "update down" } }]
+      ),
+      contacts: [{ data: null, error: null }],
+      lead_submissions: [{ data: { leadgen_id: "1993202861289031", email: null }, error: null }]
+    });
+    const summary = await drainMetaCapiEvents(db as never);
+    expect(summary.sent).toBe(1);
+    const input = buildConversionLeadBody.mock.calls[0][0] as { eventTimeMs: number };
+    expect(input.eventTimeMs).toBeGreaterThanOrEqual(before);
+    expect(warnSpy).toHaveBeenCalledWith(
+      "meta capi drain: row update failed",
+      expect.objectContaining({ id: "evt-1" })
+    );
+  });
+
+  it("stringifies non-Error failures and uses the default client when none is injected", async () => {
+    getMetaConnection.mockResolvedValue(READY_CONNECTION);
+    buildConversionLeadBody.mockReturnValue("{}");
+    sendConversionLeadBody.mockRejectedValue("string boom");
+    const { db, updates } = makeDb({
+      ...outboxQueues([outboxRow()]),
+      contacts: [{ data: null, error: null }],
+      lead_submissions: [{ data: { leadgen_id: "1993202861289031", email: null }, error: null }]
+    });
+    defaultClientSpy.mockResolvedValue(db);
+    const summary = await drainMetaCapiEvents();
+    expect(summary.deferred).toBe(1);
+    expect(updates[0].fields.last_error).toBe("string boom");
+  });
+});

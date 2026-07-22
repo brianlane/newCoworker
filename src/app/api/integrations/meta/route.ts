@@ -25,6 +25,7 @@ import {
 } from "@/lib/db/meta-connections";
 import {
   getLinkedInstagramAccount,
+  getOrCreatePageDataset,
   listManagedPages,
   subscribePageToLeadgen,
   unsubscribePage
@@ -121,6 +122,16 @@ export async function POST(request: Request) {
     // tokens missing the instagram scopes, simply skip Instagram DMs).
     const instagram = await getLinkedInstagramAccount(page.accessToken, page.id);
 
+    // Conversions API dataset (best-effort — tokens missing the
+    // post-App-Review ads scopes return null and the Conversion Leads
+    // feedback loop stays dark until a reconnect discovers one). A
+    // discovery hiccup on a reconnect that re-picks the SAME Page falls
+    // back to the stored dataset (the pending row keeps it), so a tenant
+    // with a working feedback loop can never lose it to one failed call.
+    const datasetId =
+      (await getOrCreatePageDataset(page.id, page.accessToken)) ??
+      (connection.page_id === page.id ? connection.dataset_id : null);
+
     let row;
     try {
       row = await activateMetaConnection({
@@ -129,7 +140,8 @@ export async function POST(request: Request) {
         pageName: page.name,
         pageToken: page.accessToken,
         instagramAccountId: instagram?.id ?? null,
-        instagramUsername: instagram?.username ?? null
+        instagramUsername: instagram?.username ?? null,
+        datasetId
       });
     } catch (err) {
       // Roll the Meta side back (best-effort) so a failed activation never

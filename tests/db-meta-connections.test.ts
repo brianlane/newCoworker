@@ -253,7 +253,11 @@ describe("savePendingMetaConnection", () => {
     const inserted = c.insert.mock.calls[0][0] as Record<string, unknown>;
     expect(inserted.user_token_encrypted).toBe("enc(user-token)");
     expect(inserted.status).toBe("pending");
-    expect(inserted.page_id).toBeNull();
+    // page_id / page_name / dataset_id are deliberately untouched by the
+    // pending reset (a fresh insert simply has none) — the page token is
+    // always cleared so a pending row can never send.
+    expect(inserted).not.toHaveProperty("page_id");
+    expect(inserted).not.toHaveProperty("dataset_id");
     expect(inserted.page_token_encrypted).toBeNull();
     expect(inserted.account_name).toBe("Brian Lane");
     expect(inserted.is_active).toBe(true);
@@ -282,8 +286,11 @@ describe("savePendingMetaConnection", () => {
     const patch = c.update.mock.calls[0][0] as Record<string, unknown>;
     expect(patch.status).toBe("pending");
     expect(patch.user_token_encrypted).toBe("enc(fresh)");
-    expect(patch.page_id).toBeNull();
-    expect(patch.page_name).toBeNull();
+    // Last-known Page identity + dataset survive the reconnect reset so a
+    // same-Page re-pick can reuse the dataset if discovery hiccups.
+    expect(patch).not.toHaveProperty("page_id");
+    expect(patch).not.toHaveProperty("page_name");
+    expect(patch).not.toHaveProperty("dataset_id");
     expect(patch.page_token_encrypted).toBeNull();
     expect(patch.account_name).toBeNull();
     expect(patch.updated_at).toBeTruthy();
@@ -328,7 +335,8 @@ describe("activateMetaConnection", () => {
         pageName: "Truly Insurance",
         pageToken: " page-token ",
         instagramAccountId: "ig-9",
-        instagramUsername: "trulyinsurance"
+        instagramUsername: "trulyinsurance",
+        datasetId: "ds-9"
       },
       makeDb(c)
     );
@@ -341,6 +349,7 @@ describe("activateMetaConnection", () => {
     expect(patch.page_token_encrypted).toBe("enc(page-token)");
     expect(patch.instagram_account_id).toBe("ig-9");
     expect(patch.instagram_username).toBe("trulyinsurance");
+    expect(patch.dataset_id).toBe("ds-9");
     expect(patch.is_active).toBe(true);
     // Concurrency guard: only a still-pending row can be activated.
     expect(c.eq).toHaveBeenCalledWith("status", "pending");
@@ -356,6 +365,8 @@ describe("activateMetaConnection", () => {
     const patch = c.update.mock.calls[0][0] as Record<string, unknown>;
     expect(patch.instagram_account_id).toBeNull();
     expect(patch.instagram_username).toBeNull();
+    // No dataset discovered (pre-App-Review scopes) → column stays null.
+    expect(patch.dataset_id).toBeNull();
   });
 
   it("surfaces an update error", async () => {

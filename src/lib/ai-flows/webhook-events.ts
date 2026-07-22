@@ -20,6 +20,7 @@ import {
   type WebhookEventInput
 } from "@/lib/ai-flows/trigger-eval";
 import { enqueueAiFlowRun } from "@/lib/ai-flows/db";
+import { recordLeadSubmission } from "@/lib/leads/submissions";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import type { TriggerCondition } from "@/lib/ai-flows/schema";
 import {
@@ -127,7 +128,15 @@ export async function processWebhookFlowEvent(
   const db = client ?? (await createSupabaseServiceClient());
 
   const scope = webhookTriggerScope(event);
-  const dedupeKey = `webhook:${webhookEventKey(event)}`;
+  const eventKey = webhookEventKey(event);
+  const dedupeKey = `webhook:${eventKey}`;
+  // Durable per-lead record for the Tasks Data view + Meta CAPI feedback.
+  // Best-effort (never throws) and idempotent per event key.
+  await recordLeadSubmission(businessId, {
+    source: event.source,
+    data: event.data,
+    eventKey
+  }, db);
   const flows = await loadWebhookFlows(db, businessId);
 
   let enqueued = 0;

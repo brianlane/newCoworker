@@ -97,6 +97,9 @@ verify_jwt = false
 [functions.messenger-jobs-sweep]
 verify_jwt = false
 
+[functions.meta-capi-drain]
+verify_jwt = false
+
 [functions.document-expiration-sweep]
 verify_jwt = false
 

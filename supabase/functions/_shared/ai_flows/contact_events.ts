@@ -28,6 +28,7 @@ import {
   resolveFromMatchesRefValues,
   type ContactRefSupabase
 } from "./contact_ref.ts";
+import { recordStageChangeForMeta } from "./meta_capi.ts";
 import { reentryBlocked } from "./reentry.ts";
 import type { TriggerCondition } from "./types.ts";
 
@@ -140,6 +141,17 @@ export async function enqueueContactEventRuns(
   input: ContactEventInput
 ): Promise<number> {
   try {
+    // Meta Conversion Leads feedback: an ADDED pipeline-stage tag is a CRM
+    // funnel transition worth reporting back to Meta. This chokepoint sees
+    // every stage-tag writer (board moves, tag editor, MCP, worker
+    // update_contact), so one hook covers them all. Best-effort inside.
+    if (input.kind === "tag_changed" && (input.change ?? "added") === "added") {
+      await recordStageChangeForMeta(supabase, businessId, {
+        contactE164: input.contact.e164,
+        tag: input.tag ?? "",
+        dedupeKey: input.dedupeKey
+      });
+    }
     // Paged listing (like the calendar poller's) so a tenant with many
     // enabled flows never has a matching automation silently dropped. A
     // later page failing keeps the flows already in hand.

@@ -1,4 +1,12 @@
 import { describe, expect, it, vi } from "vitest";
+
+// The Meta CAPI stage hook (first thing tag_changed contact events do)
+// makes its own DB reads; mocking it keeps this suite's scripted result
+// sequences unshifted (the hook has its own suite).
+vi.mock("../supabase/functions/_shared/ai_flows/meta_capi.ts", () => ({
+  recordStageChangeForMeta: vi.fn(async () => false)
+}));
+
 import {
   NEEDS_HUMAN_TAG,
   NEEDS_HUMAN_TASK_TYPE,

@@ -26,8 +26,10 @@ export const META_OAUTH_DIALOG_URL = `https://www.facebook.com/${META_GRAPH_VERS
  * Instagram content publishing (the Marketing page's scheduled posts):
  * read leads, list/choose the Page, manage its webhook subscription,
  * read/send messages on the Page and its linked IG professional account,
- * and publish media to that account. Existing connections must reconnect
- * once to grant the newer scopes.
+ * and publish media to that account. `ads_management` +
+ * `business_management` power the Conversions API (Conversion Leads)
+ * feedback loop — dataset discovery and stage-event uploads. Existing
+ * connections must reconnect once to grant the newer scopes.
  */
 export const META_LOGIN_SCOPES = [
   "leads_retrieval",
@@ -38,7 +40,9 @@ export const META_LOGIN_SCOPES = [
   "pages_messaging",
   "instagram_basic",
   "instagram_manage_messages",
-  "instagram_content_publish"
+  "instagram_content_publish",
+  "ads_management",
+  "business_management"
 ] as const;
 
 /** Outbound budget per Graph call — fail fast on a stuck upstream. */
@@ -395,6 +399,36 @@ export async function getInstagramMediaPermalink(
     const permalink = (payload as { permalink?: unknown } | null)?.permalink;
     return typeof permalink === "string" && permalink.startsWith("https://") ? permalink : null;
   } catch {
+    return null;
+  }
+}
+
+/**
+ * The Page's Conversions API dataset (pixel) id — created on first call,
+ * returned on later ones (`POST /{page_id}/dataset` is get-or-create).
+ * This is the upload target for Conversion Leads stage events. Best-effort
+ * null: a token missing the post-App-Review scopes (ads_management /
+ * business_management) simply can't discover a dataset yet, and the
+ * feedback loop stays dark for that connection.
+ */
+export async function getOrCreatePageDataset(
+  pageId: string,
+  pageToken: string
+): Promise<string | null> {
+  try {
+    const payload = await graphRequest(
+      `/${pageId}/dataset`,
+      { access_token: pageToken },
+      { method: "POST" }
+    );
+    const id = (payload as { id?: unknown } | null)?.id;
+    return typeof id === "string" && id.length > 0 ? id : null;
+  } catch (err) {
+    // graphRequest only ever throws MetaApiError.
+    logger.warn("meta dataset discovery failed (ignored)", {
+      pageId,
+      error: (err as Error).message
+    });
     return null;
   }
 }
