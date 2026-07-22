@@ -40,6 +40,12 @@ export type FleetFeedOptions = {
    * can't consume the row limit.
    */
   excludeBusinessIds?: string[];
+  /**
+   * Statuses hidden from the feed. The admin dashboard's Recent Activity
+   * card excludes `urgent_alert`/`error` so it complements the Recent
+   * Alerts card instead of duplicating it row for row.
+   */
+  excludeStatuses?: string[];
 };
 
 export async function getRecentAlertsAll(
@@ -74,6 +80,10 @@ export async function getRecentLogsAll(
   const excluded = options?.excludeBusinessIds ?? [];
   if (excluded.length > 0) {
     q = q.not("business_id", "in", `(${excluded.join(",")})`);
+  }
+  const excludedStatuses = options?.excludeStatuses ?? [];
+  if (excludedStatuses.length > 0) {
+    q = q.not("status", "in", `(${excludedStatuses.join(",")})`);
   }
   const { data, error } = await q
     .order("created_at", { ascending: false })
