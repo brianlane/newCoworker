@@ -149,6 +149,20 @@ describe("branded-html", () => {
     expect(html).toContain('width="56"');
   });
 
+  it("omits the platform signature when platformSignature is false (tenant-identity mail)", () => {
+    const html = buildBrandedEmailHtml({
+      siteUrl: "https://app.test",
+      documentTitle: "T",
+      heading: "H",
+      bodyBlocks: [{ kind: "text", text: "Hi" }],
+      recipientEmail: "u@x.y",
+      platformSignature: false
+    });
+    expect(html).not.toContain("The New Coworker Team");
+    expect(html).not.toContain("Brian Lane");
+    expect(html).not.toContain("602.313.1823");
+  });
+
   it("omits unsubscribe when url is empty string", () => {
     const html = buildBrandedEmailHtml({
       siteUrl: "https://app.test",
@@ -232,6 +246,14 @@ describe("branded_email_html (Edge parity)", () => {
       warningLine: "Watch out!",
       cta: { label: "Go", href: "https://app.test/w" },
       recipientEmail: "u@x.y"
+    },
+    {
+      siteUrl: "https://app.test",
+      documentTitle: "T",
+      heading: "H",
+      bodyBlocks: [{ kind: "text", text: "Tenant campaign" }],
+      recipientEmail: "u@x.y",
+      platformSignature: false
     }
   ];
 

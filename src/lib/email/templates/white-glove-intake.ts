@@ -40,10 +40,11 @@ export function buildWhiteGloveIntakeEmail(
     c.line2,
     fmtEmail(c.fillOut, { intakeUrl: input.intakeUrl }),
     c.line4,
-    copy.questionsReply,
-    copy.ncSignoff
+    copy.questionsReply
   ];
-  const text = textLines.join("\n\n");
+  // Signoff rides only the plain-text body — the HTML shell renders the full
+  // platform signature block, so repeating it there would double the contact info.
+  const text = [...textLines, copy.ncSignoff].join("\n\n");
   const normalizedSite = input.siteUrl.replace(/\/$/, "");
   const html = buildBrandedEmailHtml({
     siteUrl: normalizedSite,
