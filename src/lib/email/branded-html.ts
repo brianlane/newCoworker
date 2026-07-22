@@ -25,7 +25,13 @@ export function escapeAttr(url: string): string {
 export type BrandedBodyBlock =
   | { kind: "text"; text: string }
   /** Fixed markup only — never pass untrusted strings. */
-  | { kind: "html"; html: string };
+  | { kind: "html"; html: string }
+  /**
+   * Block-level markup emitted UNWRAPPED (the `html` kind wraps in a <p>,
+   * which is invalid around h2/ul/table). Pass only markup that was built
+   * from escaped input — e.g. the blog renderer's output.
+   */
+  | { kind: "raw"; html: string };
 
 export type BrandedEmailHtmlInput = {
   /** Origin only, no trailing slash (e.g. https://www.newcoworker.com). Used for logo + <title> asset URL. */
@@ -58,6 +64,9 @@ function renderBodyBlocks(blocks: BrandedBodyBlock[]): string {
         const t = escapeHtml(b.text);
         // pre-line keeps intentional \n (digest stats, bullet lists); HTML collapses them otherwise.
         return `<p style="margin:0 0 16px;font-size:16px;line-height:1.6;color:#F5F0E8;white-space:pre-line;">${t}</p>`;
+      }
+      if (b.kind === "raw") {
+        return b.html;
       }
       return `<p style="margin:0 0 16px;font-size:16px;line-height:1.6;color:#F5F0E8;">${b.html}</p>`;
     })

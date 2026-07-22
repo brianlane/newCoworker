@@ -90,22 +90,25 @@ afterEach(() => {
 describe("postCopyForLocale", () => {
   const base = post({
     title_es: "Gran función",
-    excerpt_es: "Tu coworker hace algo nuevo."
+    excerpt_es: "Tu coworker hace algo nuevo.",
+    content_es: "## Cuerpo"
   });
 
   it("returns Spanish copy when translated", () => {
     expect(postCopyForLocale(base, "es")).toEqual({
       title: "Gran función",
       excerpt: "Tu coworker hace algo nuevo.",
+      content: "## Cuerpo",
       locale: "es"
     });
   });
 
-  it("falls back to the English excerpt when only the title is translated", () => {
+  it("falls back to the English excerpt/content when only the title is translated", () => {
     const copy = postCopyForLocale(post({ title_es: "Gran función" }), "es");
     expect(copy).toEqual({
       title: "Gran función",
       excerpt: "Your coworker does a new thing.",
+      content: "## Body",
       locale: "es"
     });
   });

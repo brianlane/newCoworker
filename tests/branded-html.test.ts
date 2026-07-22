@@ -102,6 +102,19 @@ describe("branded-html", () => {
     expect(html).toContain("If this was not you");
   });
 
+  it("renders raw-kind body blocks unwrapped (block markup keeps its own tags)", () => {
+    const html = buildBrandedEmailHtml({
+      siteUrl: "https://app.test",
+      documentTitle: "T",
+      heading: "H",
+      bodyBlocks: [{ kind: "raw", html: '<h2 style="color:#F5F0E8">Section</h2>' }],
+      recipientEmail: "u@x.y"
+    });
+    expect(html).toContain('<h2 style="color:#F5F0E8">Section</h2>');
+    // Unwrapped: the h2 must not be nested inside the text-block <p> shell.
+    expect(html).not.toContain('white-space:pre-line;"><h2');
+  });
+
   it("omits the body row when there are no blocks and no warning line", () => {
     const html = buildBrandedEmailHtml({
       siteUrl: "https://app.test",
@@ -210,6 +223,13 @@ describe("branded_email_html (Edge parity)", () => {
       heading: "H",
       bodyBlocks: [{ kind: "html", html: "<strong style=\"color:#1BD96A\">X</strong>" }],
       securityNote: "If this was not you, ignore.",
+      recipientEmail: "u@x.y"
+    },
+    {
+      siteUrl: "https://app.test",
+      documentTitle: "T",
+      heading: "H",
+      bodyBlocks: [{ kind: "raw", html: '<h2 style="color:#F5F0E8">Section</h2>' }],
       recipientEmail: "u@x.y"
     },
     {
