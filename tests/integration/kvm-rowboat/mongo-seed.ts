@@ -19,6 +19,11 @@ function buildRowboatWorkflow(ollamaModelTag: string) {
           "When a buyer asks if a listing is still available after the seller accepted another offer, explain the home may be under contract and backup offers may be considered.\n" +
           "When someone asks to schedule a showing, acknowledge and ask for preferred times.\n" +
           "Fair Housing Act: never steer or filter by protected classes; use objective property criteria only; offer equal professional service.",
+        // REQUIRED: Rowboat's createAgent does `openai(config.model)` with no
+        // fallback — a seeded agent without `model` crashes every turn with
+        // "Cannot read properties of undefined (reading 'startsWith')".
+        // Production seeds (deploy-client.sh) always set model; mirror that.
+        model: ollamaModelTag,
         outputVisibility: "user_facing",
         controlType: "retain",
         ragK: 3,

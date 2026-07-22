@@ -51,7 +51,7 @@ services:
     build:
       # Mirrors the bootstrap.sh fork pin; same SHA as
       # vps/integration/real/rowboat-git-ref.
-      context: https://github.com/brianlane/rowboat.git#bb32686be324e11d3dff2bf2d079f77a85a6b957:apps/rowboat
+      context: https://github.com/brianlane/rowboat.git#f422019ed5d316e402487423fda717d9e9ae091b:apps/rowboat
       dockerfile: Dockerfile
     image: rowboat-integration:local
     restart: "no"
