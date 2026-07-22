@@ -118,12 +118,16 @@ export async function runBlogPublishSideEffects(
           siteUrl,
           locale: copy.locale
         });
+        // Carry the subscriber's locale so the unsubscribe result page can
+        // land on the /es mirror for Spanish readers.
+        const unsubscribeUrl =
+          `${siteUrl}/api/blog/unsubscribe?token=${encodeURIComponent(
+            subscriber.unsubscribe_token
+          )}` + (copy.locale === "es" ? "&locale=es" : "");
         await sendEmail(resendKey, subscriber.email, email.subject, {
           text: email.text,
           html: email.html,
-          unsubscribeUrl: `${siteUrl}/api/blog/unsubscribe?token=${encodeURIComponent(
-            subscriber.unsubscribe_token
-          )}`
+          unsubscribeUrl
         });
         result.emailed += 1;
       } catch (err) {

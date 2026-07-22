@@ -158,11 +158,17 @@ describe("runBlogPublishSideEffects", () => {
     expect(result.emailed).toBe(1);
     expect(result.emailErrors).toBe(2);
 
-    // Spanish subscriber got Spanish copy + a tokenized one-click unsubscribe.
+    // Spanish subscriber got Spanish copy + a tokenized one-click
+    // unsubscribe that carries the locale for the /es result page.
     const [, to, subject, opts] = sendEmail.mock.calls[0];
     expect(to).toBe("reader@example.com");
     expect(subject).toContain("Nuevo en el blog");
     expect((opts as { unsubscribeUrl: string }).unsubscribeUrl).toBe(
+      "https://www.newcoworker.com/api/blog/unsubscribe?token=tok%2F1&locale=es"
+    );
+    // English subscribers get the unprefixed link.
+    const enOpts = sendEmail.mock.calls[1][3] as { unsubscribeUrl: string };
+    expect(enOpts.unsubscribeUrl).toBe(
       "https://www.newcoworker.com/api/blog/unsubscribe?token=tok%2F1"
     );
   });

@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { getTranslations } from "next-intl/server";
+import { getLocale, getTranslations } from "next-intl/server";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 
@@ -16,6 +16,7 @@ export default async function BlogUnsubscribePage({
   searchParams: Promise<{ ok?: string }>;
 }) {
   const t = await getTranslations("marketing.blogPage");
+  const blogHref = (await getLocale()) === "es" ? "/es/blog" : "/blog";
   const { ok } = await searchParams;
   const state = ok === "1" ? "done" : ok === "retry" ? "retry" : "invalid";
   const title =
@@ -37,7 +38,7 @@ export default async function BlogUnsubscribePage({
       <section className="mx-auto max-w-xl px-6 py-24 text-center">
         <h1 className="text-3xl font-bold text-parchment">{title}</h1>
         <p className="mt-4 text-parchment/60">{body}</p>
-        <Link href="/blog" className="mt-8 inline-block text-signal-teal hover:underline">
+        <Link href={blogHref} className="mt-8 inline-block text-signal-teal hover:underline">
           ← {t("backToBlog")}
         </Link>
       </section>

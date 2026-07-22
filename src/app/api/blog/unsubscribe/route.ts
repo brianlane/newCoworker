@@ -46,7 +46,10 @@ async function unsubscribe(request: Request): Promise<UnsubscribeOutcome> {
 export async function GET(request: Request): Promise<Response> {
   const outcome = await unsubscribe(request);
   const ok = outcome === "ok" ? "1" : outcome === "retry" ? "retry" : "0";
-  const target = new URL(`/blog/unsubscribe?ok=${ok}`, request.url);
+  // Spanish subscribers (locale=es carried on the email link) land on the
+  // /es mirror, which also pins the locale cookie for the result copy.
+  const esPrefix = new URL(request.url).searchParams.get("locale") === "es" ? "/es" : "";
+  const target = new URL(`${esPrefix}/blog/unsubscribe?ok=${ok}`, request.url);
   return NextResponse.redirect(target, 303);
 }
 
