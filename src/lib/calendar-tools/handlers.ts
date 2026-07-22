@@ -547,10 +547,21 @@ export async function bookCalendarAppointment(
     );
     const requestedStartMs = new Date(args.startIso).getTime();
     const nowMs = Date.now();
-    const conflict = existing.find((b) => {
+    // A request that repeats one of the attendee's EXISTING slot times is a
+    // retry, not a duplicate: skip the guard entirely so it falls through to
+    // the idempotency ledger's `already_booked` answer — even when the
+    // attendee holds OTHER upcoming slots too (e.g. booked two via
+    // allowAdditional; Bugbot Medium on PR #824).
+    const repeatsExistingSlot = existing.some((b) => {
       const ms = Date.parse(b.startIso);
-      return Number.isFinite(ms) && ms > nowMs && ms !== requestedStartMs;
+      return Number.isFinite(ms) && ms === requestedStartMs;
     });
+    const conflict = repeatsExistingSlot
+      ? undefined
+      : existing.find((b) => {
+          const ms = Date.parse(b.startIso);
+          return Number.isFinite(ms) && ms > nowMs;
+        });
     if (conflict) {
       const tz = await resolveToolTimezone(businessId, args.timezone);
       const existingStartLocal = formatBookingStartLocal(conflict.startIso, tz);

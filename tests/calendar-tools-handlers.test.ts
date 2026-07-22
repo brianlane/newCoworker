@@ -716,6 +716,20 @@ describe("bookCalendarAppointment — attendee duplicate guard (Truly double-boo
     expect(result.detail).toBe("already_booked");
   });
 
+  it("a retry of ONE of multiple held slots is still a retry — other slots never trip the guard (Bugbot on PR #824)", async () => {
+    // The attendee legitimately holds TWO upcoming slots (allowAdditional);
+    // a timeout retry repeats one of them exactly. The other slot must not
+    // convert the retry into attendee_already_booked.
+    vi.mocked(findUpcomingBookingsForAttendee).mockResolvedValue([
+      otherBooking({ startIso: FUTURE_OTHER, eventId: "evt-other" }),
+      otherBooking({ startIso: ARGS.startIso, eventId: "evt-same" })
+    ]);
+    vi.mocked(claimBookingDedupe).mockResolvedValue({ kind: "duplicate", eventId: "evt-same" });
+    const result = await bookCalendarAppointment(BIZ, ARGS);
+    expect(result.ok).toBe(true);
+    expect(result.detail).toBe("already_booked");
+  });
+
   it("ignores past-start and unparseable-start lookup rows (no phantom refusals)", async () => {
     vi.mocked(findUpcomingBookingsForAttendee).mockResolvedValue([
       otherBooking({ startIso: new Date(Date.now() - 60_000).toISOString() }),
