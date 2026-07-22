@@ -146,7 +146,7 @@ if ! grep -q click_text_while_present "$DEST/server.mjs"; then
 fi
 echo "click_text_while_present present"
 echo "== confirm render token (redacted; len=0 means the auth gate is OFF) =="
-awk -F= '/^AIFLOW_RENDER_TOKEN=/{print "AIFLOW_RENDER_TOKEN len=" length($2)}' "$DEST/.env" || true
+awk -F= '/^AIFLOW_RENDER_TOKEN=/{print "AIFLOW_RENDER_TOKEN len=" length($2); found=1} END{if(!found) print "WARN: AIFLOW_RENDER_TOKEN line missing in .env — auth gate OFF"}' "$DEST/.env" || true
 echo "== rebuild aiflow-render container only =="
 cd "$DEST" && docker compose up -d --build --force-recreate
 sleep 4
