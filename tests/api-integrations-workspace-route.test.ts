@@ -15,7 +15,13 @@ vi.mock("@/lib/nango/server", () => ({
   getNangoClient: vi.fn()
 }));
 
+vi.mock("@/lib/ai-flows/mailbox-steps", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/ai-flows/mailbox-steps")>()),
+  flowsReferencingWorkspaceConnection: vi.fn()
+}));
+
 import { DELETE, GET } from "@/app/api/integrations/workspace/route";
+import { flowsReferencingWorkspaceConnection } from "@/lib/ai-flows/mailbox-steps";
 import {
   deleteWorkspaceOAuthConnection,
   getWorkspaceOAuthConnection,
@@ -43,6 +49,7 @@ describe("api/integrations/workspace", () => {
       isAdmin: false
     } as never);
     vi.mocked(requireBusinessRole).mockResolvedValue(undefined as never);
+    vi.mocked(flowsReferencingWorkspaceConnection).mockResolvedValue([]);
     vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
       {
         id: connectionRowId,
@@ -98,6 +105,37 @@ describe("api/integrations/workspace", () => {
     );
     expect(res.status).toBe(200);
     expect(mockDeleteNango).toHaveBeenCalledWith("gmail", "c1");
+  });
+
+  it("DELETE refuses (409) while flows still reference the connection", async () => {
+    vi.mocked(getWorkspaceOAuthConnection).mockResolvedValue({
+      id: connectionRowId,
+      business_id: businessId,
+      provider_config_key: "gmail",
+      connection_id: "c1",
+      metadata: {},
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z"
+    });
+    vi.mocked(flowsReferencingWorkspaceConnection).mockResolvedValue([
+      { id: "f1", name: "Booking confirmation", enabled: true },
+      { id: "f2", name: "Old outreach", enabled: false }
+    ]);
+
+    const res = await DELETE(
+      new Request("http://localhost/api/integrations/workspace", {
+        method: "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId, id: connectionRowId })
+      })
+    );
+    expect(res.status).toBe(409);
+    const json = await res.json();
+    expect(json.error.message).toContain('"Booking confirmation"');
+    expect(json.error.message).toContain('"Old outreach" (disabled)');
+    // Fail closed BEFORE any provider revoke or row delete.
+    expect(getNangoClient).not.toHaveBeenCalled();
+    expect(deleteWorkspaceOAuthConnection).not.toHaveBeenCalled();
   });
 
   it("DELETE returns 404 when connection missing", async () => {

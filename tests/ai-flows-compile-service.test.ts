@@ -901,6 +901,87 @@ describe("mailbox bindings (fromConnectionId)", () => {
     }
   });
 
+  it("offers connected mailboxes to the compile prompt (email providers only, labeled)", async () => {
+    const fetchConnections = vi.fn(async () => [
+      {
+        id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc",
+        business_id: BIZ,
+        provider_config_key: "outlook",
+        connection_id: "n1",
+        metadata: { provider_account_email: "sam@example.com" },
+        created_at: "2026-07-01T00:00:00Z",
+        updated_at: "2026-07-01T00:00:00Z"
+      },
+      {
+        id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+        business_id: BIZ,
+        provider_config_key: "gmail",
+        connection_id: "n2",
+        metadata: {},
+        created_at: "2026-07-02T00:00:00Z",
+        updated_at: "2026-07-02T00:00:00Z"
+      },
+      {
+        id: "eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee",
+        business_id: BIZ,
+        provider_config_key: "zoom",
+        connection_id: "n3",
+        metadata: {},
+        created_at: "2026-07-03T00:00:00Z",
+        updated_at: "2026-07-03T00:00:00Z"
+      }
+    ]);
+    const generate = generateSeq(VALID_DEFINITION_JSON);
+    const res = await compileAiFlowFromDescription(
+      { businessId: BIZ, description: "email new leads from my inbox" },
+      { generate, fetchDocuments: noDocs, fetchConnections }
+    );
+    expect(res.ok).toBe(true);
+    const userText = generate.mock.calls[0][0].userText;
+    expect(userText).toContain(
+      "- connectionId: cccccccc-cccc-4ccc-8ccc-cccccccccccc — sam@example.com (outlook)"
+    );
+    // Legacy row without identity metadata falls back to the provider key.
+    expect(userText).toContain("- connectionId: dddddddd-dddd-4ddd-8ddd-dddddddddddd — gmail");
+    // Non-email connections never reach the mailbox block.
+    expect(userText).not.toContain("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee");
+  });
+
+  it("compiles without mailboxes when the connections read fails (edit path shows the sentinel)", async () => {
+    const failing = vi.fn(async () => {
+      throw new Error("connections db down");
+    });
+    const generate = generateSeq(VALID_DEFINITION_JSON);
+    const res = await compileAiFlowFromDescription(
+      { businessId: BIZ, description: "notify me" },
+      { generate, fetchDocuments: noDocs, fetchConnections: failing }
+    );
+    expect(res.ok).toBe(true);
+    expect(generate.mock.calls[0][0].userText).toContain("AVAILABLE MAILBOXES: (none connected");
+
+    const generate2 = generateSeq(VALID_DEFINITION_JSON);
+    const res2 = await editAiFlowDefinition(editArgs(), {
+      generate: generate2,
+      fetchDocuments: noDocs,
+      fetchConnections: failing
+    });
+    expect(res2.ok).toBe(true);
+    expect(generate2.mock.calls[0][0].userText).toContain("AVAILABLE MAILBOXES: (none connected");
+
+    // Non-Error throws degrade identically.
+    const res3 = await compileAiFlowFromDescription(
+      { businessId: BIZ, description: "notify me" },
+      {
+        generate: generateSeq(VALID_DEFINITION_JSON),
+        fetchDocuments: noDocs,
+        fetchConnections: vi.fn(async () => {
+          throw "string failure";
+        })
+      }
+    );
+    expect(res3.ok).toBe(true);
+  });
+
   it("a mailbox-validation failure during salvage degrades to no extra warnings", async () => {
     const withMailboxAndJunk = JSON.stringify({
       version: 1,

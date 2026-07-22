@@ -27,7 +27,7 @@ vi.mock("@/lib/db/workspace-oauth-connections", () => ({
 }));
 
 vi.mock("@/lib/nango/account-identity", () => ({
-  fetchProviderAccountIdentity: vi.fn().mockResolvedValue(null),
+  fetchProviderAccountIdentity: vi.fn(),
   nangoIdentityPatchBody: vi.fn().mockReturnValue(null),
   providerAccountMetadata: vi.fn().mockReturnValue({})
 }));
@@ -45,7 +45,13 @@ vi.mock("@/lib/nango/account-usage", () => ({
   maybeSendNangoQuotaAlert: vi.fn()
 }));
 
+vi.mock("@/lib/nango/connection-continuity", () => ({
+  consolidateReconnectedWorkspaceConnection: vi.fn()
+}));
+
 import { POST } from "@/app/api/integrations/nango/complete/route";
+import { consolidateReconnectedWorkspaceConnection } from "@/lib/nango/connection-continuity";
+import { fetchProviderAccountIdentity } from "@/lib/nango/account-identity";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { readConnectionEndUserId } from "@/lib/nango/server";
 import {
@@ -103,6 +109,15 @@ describe("api/integrations/nango/complete", () => {
       evictRowId: null
     });
     mockDeleteConnection.mockResolvedValue(undefined);
+    // Real contract: the probe never resolves null — a failed probe is
+    // { email: null, displayName: null }.
+    vi.mocked(fetchProviderAccountIdentity).mockResolvedValue({
+      email: null,
+      displayName: null
+    });
+    vi.mocked(consolidateReconnectedWorkspaceConnection).mockResolvedValue({
+      consolidated: false
+    });
   });
 
   it("returns 401 when unauthenticated", async () => {
@@ -141,18 +156,36 @@ describe("api/integrations/nango/complete", () => {
     expect(maybeSendNangoQuotaAlert).toHaveBeenCalled();
   });
 
-  it("refuses a NEW over-cap connection and deletes it from Nango (quota reclaim)", async () => {
+  it("refuses a NEW over-cap connection, evicting the tentative row + Nango grant", async () => {
     vi.mocked(resolveWorkspaceConnectionCapState).mockResolvedValue({
       used: 3,
       max: 3,
       atCap: true
     });
+    // First read: the existing-row check (null = new). Second read: the
+    // tentative-row lookup on the eviction path.
+    vi.mocked(getWorkspaceOAuthConnectionByNangoIds)
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({
+        id: "row-tentative",
+        business_id: businessId,
+        provider_config_key: "google-mail",
+        connection_id: "conn-1",
+        metadata: {},
+        created_at: "2026-01-01T00:00:00Z",
+        updated_at: "2026-01-01T00:00:00Z"
+      });
     const res = await POST(makeRequest());
     expect(res.status).toBe(403);
     const body = (await res.json()) as { error: { message: string } };
     expect(body.error.message).toContain("Your plan includes 3 workspace connections");
+    // The row lands tentatively (the continuity check needs it to exist),
+    // then is evicted along with the Nango grant when nothing consolidated.
+    expect(upsertWorkspaceOAuthConnection).toHaveBeenCalled();
+    expect(deleteWorkspaceOAuthConnection).toHaveBeenCalledWith(businessId, "row-tentative");
     expect(mockDeleteConnection).toHaveBeenCalledWith("google-mail", "conn-1");
-    expect(upsertWorkspaceOAuthConnection).not.toHaveBeenCalled();
+    // The over-cap settle is deferred to the eviction path, never run.
+    expect(settleWorkspaceConnectionInsert).not.toHaveBeenCalled();
     expect(maybeSendNangoQuotaAlert).not.toHaveBeenCalled();
   });
 
@@ -162,10 +195,33 @@ describe("api/integrations/nango/complete", () => {
       max: 1,
       atCap: true
     });
+    // Tentative row already raced away — the eviction path tolerates it.
     mockDeleteConnection.mockRejectedValue(new Error("nango down"));
     const res = await POST(makeRequest());
     expect(res.status).toBe(403);
-    expect(upsertWorkspaceOAuthConnection).not.toHaveBeenCalled();
+    expect(deleteWorkspaceOAuthConnection).not.toHaveBeenCalled();
+  });
+
+  it("allows an AT-CAP reconnect of the same account (consolidation nets zero seats)", async () => {
+    vi.mocked(resolveWorkspaceConnectionCapState).mockResolvedValue({
+      used: 3,
+      max: 3,
+      atCap: true
+    });
+    vi.mocked(fetchProviderAccountIdentity).mockResolvedValue({
+      email: "sam@example.com",
+      displayName: "Sam"
+    });
+    vi.mocked(consolidateReconnectedWorkspaceConnection).mockResolvedValue({
+      consolidated: true,
+      keptRowId: "row-old",
+      supersededNangoConnectionId: "conn-old"
+    });
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+    // No eviction, no cap refusal, and no quota alert (net-zero reconnect).
+    expect(deleteWorkspaceOAuthConnection).not.toHaveBeenCalled();
+    expect(maybeSendNangoQuotaAlert).not.toHaveBeenCalled();
   });
 
   it("evicts its own row when a RACED insert landed past the cap (post-insert settle)", async () => {
@@ -216,5 +272,68 @@ describe("api/integrations/nango/complete", () => {
         metadata: expect.objectContaining({ shared_calendar_id: "cal-1" })
       })
     );
+  });
+
+  it("consolidates a NEW connection onto the older row for the same account email", async () => {
+    vi.mocked(fetchProviderAccountIdentity).mockResolvedValue({
+      email: "sam@example.com",
+      displayName: "Sam"
+    });
+    vi.mocked(consolidateReconnectedWorkspaceConnection).mockResolvedValue({
+      consolidated: true,
+      keptRowId: "row-old",
+      supersededNangoConnectionId: "conn-old"
+    });
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+    expect(consolidateReconnectedWorkspaceConnection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId,
+        providerConfigKey: "google-mail",
+        newConnectionId: "conn-1",
+        accountEmail: "sam@example.com"
+      })
+    );
+    // The injected Nango delete is the route's own client method.
+    const call = vi.mocked(consolidateReconnectedWorkspaceConnection).mock.calls[0][0];
+    await call.deleteNangoConnection("google-mail", "conn-old");
+    expect(mockDeleteConnection).toHaveBeenCalledWith("google-mail", "conn-old");
+  });
+
+  it("skips consolidation when the identity probe resolved no email", async () => {
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+    expect(consolidateReconnectedWorkspaceConnection).not.toHaveBeenCalled();
+  });
+
+  it("skips consolidation on a re-complete of an EXISTING connection", async () => {
+    vi.mocked(fetchProviderAccountIdentity).mockResolvedValue({
+      email: "sam@example.com",
+      displayName: "Sam"
+    });
+    vi.mocked(getWorkspaceOAuthConnectionByNangoIds).mockResolvedValue({
+      id: "row-1",
+      business_id: businessId,
+      provider_config_key: "google-mail",
+      connection_id: "conn-1",
+      metadata: {},
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z"
+    });
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+    expect(consolidateReconnectedWorkspaceConnection).not.toHaveBeenCalled();
+  });
+
+  it("a consolidation failure is non-fatal (two working rows remain)", async () => {
+    vi.mocked(fetchProviderAccountIdentity).mockResolvedValue({
+      email: "sam@example.com",
+      displayName: "Sam"
+    });
+    vi.mocked(consolidateReconnectedWorkspaceConnection).mockRejectedValue(
+      new Error("db hiccup")
+    );
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
   });
 });

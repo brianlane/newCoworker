@@ -19,6 +19,7 @@ import {
   type WorkspaceOAuthConnectionRow
 } from "@/lib/db/workspace-oauth-connections";
 import { isEmailProviderConfigKey } from "@/lib/voice-tools/connections";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 export type MailboxConnectionRef = {
   stepId: string;
@@ -87,4 +88,101 @@ export async function validateMailboxConnectionSteps(
     }
   }
   return issues;
+}
+
+// ---------------------------------------------------------------------------
+// Disconnect-time usage check: which flows reference a workspace connection?
+// ---------------------------------------------------------------------------
+
+/**
+ * Every workspace-connection reference in a RAW (untyped) definition:
+ * send_email `fromConnectionId`, send_sms quiet-hours `emailFromConnectionId`,
+ * `email_extract` `connectionId`, and email-trigger `connectionId` (primary
+ * trigger + the additional `triggers` array), recursing into branch arms.
+ *
+ * Deliberately schema-tolerant: stored definitions can predate the current
+ * schema, and a disconnect guard that throws on a legacy flow would block the
+ * owner from disconnecting anything. Unknown shapes contribute nothing.
+ */
+export function collectRawWorkspaceConnectionRefs(definition: unknown): string[] {
+  const out = new Set<string>();
+  const def = (definition ?? {}) as {
+    trigger?: { channel?: unknown; connectionId?: unknown };
+    triggers?: Array<{ channel?: unknown; connectionId?: unknown }>;
+    steps?: unknown[];
+  };
+  for (const trig of [def.trigger, ...(Array.isArray(def.triggers) ? def.triggers : [])]) {
+    if (trig?.channel === "email" && typeof trig.connectionId === "string" && trig.connectionId) {
+      out.add(trig.connectionId);
+    }
+  }
+  const walk = (steps: unknown[]): void => {
+    for (const raw of steps) {
+      if (!raw || typeof raw !== "object") continue;
+      const step = raw as {
+        type?: unknown;
+        fromConnectionId?: unknown;
+        connectionId?: unknown;
+        quietHours?: { emailFromConnectionId?: unknown };
+        branches?: Array<{ steps?: unknown[] }>;
+        else?: unknown[];
+      };
+      if (step.type === "send_email" && typeof step.fromConnectionId === "string" && step.fromConnectionId) {
+        out.add(step.fromConnectionId);
+      } else if (step.type === "send_sms") {
+        const qh = step.quietHours;
+        if (qh && typeof qh.emailFromConnectionId === "string" && qh.emailFromConnectionId) {
+          out.add(qh.emailFromConnectionId);
+        }
+      } else if (step.type === "email_extract" && typeof step.connectionId === "string" && step.connectionId) {
+        out.add(step.connectionId);
+      } else if (step.type === "branch") {
+        for (const arm of Array.isArray(step.branches) ? step.branches : []) {
+          if (Array.isArray(arm?.steps)) walk(arm.steps);
+        }
+        if (Array.isArray(step.else)) walk(step.else);
+      }
+    }
+  };
+  if (Array.isArray(def.steps)) walk(def.steps);
+  return [...out];
+}
+
+export type FlowConnectionUsage = { id: string; name: string; enabled: boolean };
+
+/**
+ * The business's flows that reference the given workspace connection row id
+ * anywhere (sender bindings, email triggers, email_extract). Disabled flows
+ * count too — re-enabling one later would break just as silently.
+ */
+export async function flowsReferencingWorkspaceConnection(
+  businessId: string,
+  connectionRowId: string,
+  client?: Awaited<ReturnType<typeof createSupabaseServiceClient>>
+): Promise<FlowConnectionUsage[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("ai_flows")
+    .select("id, name, enabled, definition")
+    .eq("business_id", businessId);
+  if (error) throw new Error(`flowsReferencingWorkspaceConnection: ${error.message}`);
+  const rows = (data ?? []) as Array<{
+    id: string;
+    name: string;
+    enabled: boolean;
+    definition: unknown;
+  }>;
+  return rows
+    .filter((row) => collectRawWorkspaceConnectionRefs(row.definition).includes(connectionRowId))
+    .map((row) => ({ id: row.id, name: row.name, enabled: row.enabled }));
+}
+
+/** Owner-facing refusal copy for disconnecting a mailbox flows still use. */
+export function connectionInUseMessage(flows: FlowConnectionUsage[]): string {
+  const names = flows.map((f) => `"${f.name}"${f.enabled ? "" : " (disabled)"}`).join(", ");
+  const plural = flows.length === 1 ? "automation still uses" : "automations still use";
+  return (
+    `${flows.length} ${plural} this mailbox: ${names}. ` +
+    "Update those automations first (change the email step's From mailbox, or the email trigger), then disconnect."
+  );
 }

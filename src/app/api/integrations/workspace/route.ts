@@ -5,6 +5,10 @@ import {
   listWorkspaceOAuthConnections
 } from "@/lib/db/workspace-oauth-connections";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
+import {
+  connectionInUseMessage,
+  flowsReferencingWorkspaceConnection
+} from "@/lib/ai-flows/mailbox-steps";
 import { getNangoClient } from "@/lib/nango/server";
 import { z } from "zod";
 
@@ -61,6 +65,15 @@ export async function DELETE(request: Request) {
     const row = await getWorkspaceOAuthConnection(body.businessId, body.id);
     if (!row) {
       return errorResponse("NOT_FOUND", "Connection not found");
+    }
+
+    // Fail closed: a connection some flow still sends from (or triggers on)
+    // must not be silently orphaned — every later run would die at send time
+    // with connection_not_found (the KYP Jul 22 2026 incident class). The
+    // owner re-points or removes those flows first.
+    const referencingFlows = await flowsReferencingWorkspaceConnection(body.businessId, body.id);
+    if (referencingFlows.length > 0) {
+      return errorResponse("CONFLICT", connectionInUseMessage(referencingFlows), 409);
     }
 
     if (process.env.NANGO_SECRET_KEY) {

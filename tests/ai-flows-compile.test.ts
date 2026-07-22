@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   FLOW_COMPILE_SYSTEM_PROMPT,
   buildAvailableDocumentsBlock,
+  buildAvailableMailboxesBlock,
   buildFlowAdaptUserText,
   buildFlowCompileUserText,
   buildFlowEditUserText,
@@ -153,7 +154,7 @@ describe("buildFlowEditUserText", () => {
     expect(text).toContain("bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb");
   });
 
-  it("renders the none-on-file sentinels when no documents/agents are supplied", () => {
+  it("renders the none-on-file sentinels when no documents/agents/mailboxes are supplied", () => {
     const text = buildFlowEditUserText({
       currentName: "F",
       currentDefinitionJson: "{}",
@@ -161,6 +162,37 @@ describe("buildFlowEditUserText", () => {
     });
     expect(text).toContain("AVAILABLE DOCUMENTS: (none on file");
     expect(text).toContain("AVAILABLE AGENTS: (none saved");
+    expect(text).toContain("AVAILABLE MAILBOXES: (none connected");
+  });
+
+  it("lists connected mailboxes with their exact row ids", () => {
+    const text = buildFlowEditUserText({
+      currentName: "F",
+      currentDefinitionJson: "{}",
+      instructions: "send booking emails from my own inbox",
+      mailboxes: [{ id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", label: "sam@example.com (outlook)" }]
+    });
+    expect(text).toContain("AVAILABLE MAILBOXES (for send_email fromConnectionId");
+    expect(text).toContain("- connectionId: cccccccc-cccc-4ccc-8ccc-cccccccccccc — sam@example.com (outlook)");
+  });
+});
+
+describe("buildAvailableMailboxesBlock", () => {
+  it("tells the model to omit mailbox bindings when none are connected", () => {
+    const block = buildAvailableMailboxesBlock([]);
+    expect(block).toContain("AVAILABLE MAILBOXES: (none connected");
+    expect(block).toContain("do not emit send_email fromConnectionId");
+    expect(block).toContain("AI coworker's own mailbox is the default sender");
+  });
+
+  it("appears in the compile user text alongside documents/agents", () => {
+    const text = buildFlowCompileUserText(
+      "email new leads from my inbox",
+      [],
+      [],
+      [{ id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", label: "sam@example.com (outlook)" }]
+    );
+    expect(text).toContain("- connectionId: cccccccc-cccc-4ccc-8ccc-cccccccccccc — sam@example.com (outlook)");
   });
 });
 
@@ -194,6 +226,16 @@ describe("buildFlowRepairUserText", () => {
       documents: [{ id: "aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa", title: "Price sheet", summary: "" }]
     });
     expect(text).toContain("documentId: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa");
+  });
+
+  it("carries the mailboxes list so a repaired draft can re-bind fromConnectionId", () => {
+    const text = buildFlowRepairUserText({
+      description: "email from my inbox",
+      candidateJson: "{}",
+      issues: ["bad"],
+      mailboxes: [{ id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", label: "sam@example.com (outlook)" }]
+    });
+    expect(text).toContain("connectionId: cccccccc-cccc-4ccc-8ccc-cccccccccccc");
   });
 });
 

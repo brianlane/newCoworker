@@ -279,15 +279,49 @@ export function buildAvailableAgentsBlock(agents: CompileAgentOption[]): string 
   return ["AVAILABLE AGENTS (for run_agent steps; copy agentId exactly):", ...lines].join("\n");
 }
 
+/** One connected mailbox the compiler may bind email sends/triggers to. */
+export type CompileMailboxOption = {
+  /** The workspace_oauth_connections ROW id (what the runtime resolves). */
+  id: string;
+  /** Owner-recognizable label, e.g. "sam@example.com (outlook)". */
+  label: string;
+};
+
+/**
+ * Render the AVAILABLE MAILBOXES block for the compile/repair/edit user
+ * text. Only email-provider connections belong here (the caller filters);
+ * an explicit "(none connected)" line tells the model to omit
+ * `fromConnectionId` / email triggers / email_extract rather than invent a
+ * uuid — the same NEVER-invent contract as documents and agents. The AI
+ * coworker's own mailbox is always the no-id default sender.
+ */
+export function buildAvailableMailboxesBlock(mailboxes: CompileMailboxOption[]): string {
+  if (mailboxes.length === 0) {
+    return (
+      "AVAILABLE MAILBOXES: (none connected — do not emit send_email fromConnectionId, " +
+      "email-channel triggers, or email_extract steps; the AI coworker's own mailbox is the " +
+      "default sender and needs no id)"
+    );
+  }
+  const lines = mailboxes.map((m) => `- connectionId: ${m.id} — ${m.label}`);
+  return [
+    "AVAILABLE MAILBOXES (for send_email fromConnectionId, email-channel triggers, and email_extract connectionId; copy the uuid exactly):",
+    ...lines
+  ].join("\n");
+}
+
 export function buildFlowCompileUserText(
   description: string,
   documents: CompileDocumentOption[] = [],
-  agents: CompileAgentOption[] = []
+  agents: CompileAgentOption[] = [],
+  mailboxes: CompileMailboxOption[] = []
 ): string {
   return [
     buildAvailableDocumentsBlock(documents),
     "",
     buildAvailableAgentsBlock(agents),
+    "",
+    buildAvailableMailboxesBlock(mailboxes),
     "",
     `Automation description:\n${description.trim()}`
   ].join("\n");
@@ -305,6 +339,7 @@ export function buildFlowRepairUserText(input: {
   issues: string[];
   documents?: CompileDocumentOption[];
   agents?: CompileAgentOption[];
+  mailboxes?: CompileMailboxOption[];
 }): string {
   return [
     "Your previous automation definition FAILED validation. Fix ONLY the",
@@ -320,6 +355,8 @@ export function buildFlowRepairUserText(input: {
     buildAvailableDocumentsBlock(input.documents ?? []),
     "",
     buildAvailableAgentsBlock(input.agents ?? []),
+    "",
+    buildAvailableMailboxesBlock(input.mailboxes ?? []),
     "",
     "Original automation description:",
     input.description.trim()
@@ -408,6 +445,7 @@ export function buildFlowEditUserText(input: {
   instructions: string;
   documents?: CompileDocumentOption[];
   agents?: CompileAgentOption[];
+  mailboxes?: CompileMailboxOption[];
 }): string {
   return [
     `Edit the business's EXISTING AiFlow automation named "${input.currentName}".`,
@@ -424,6 +462,8 @@ export function buildFlowEditUserText(input: {
     buildAvailableDocumentsBlock(input.documents ?? []),
     "",
     buildAvailableAgentsBlock(input.agents ?? []),
+    "",
+    buildAvailableMailboxesBlock(input.mailboxes ?? []),
     "",
     "Requested changes:",
     input.instructions.trim()
