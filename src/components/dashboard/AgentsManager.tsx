@@ -21,7 +21,7 @@ type AgentItem = {
   id: string;
   name: string;
   instructions: string;
-  output_format: "markdown" | "same_as_input";
+  output_format: "markdown" | "same_as_input" | "pdf" | "docx" | "pdf_retypeset";
   enabled: boolean;
   created_at: string;
 };
@@ -51,17 +51,28 @@ const labelClass = "block text-xs font-medium text-parchment/60 mb-1";
 
 const FORMAT_LABELS: Record<AgentItem["output_format"], string> = {
   markdown: "Markdown",
-  same_as_input: "Same as input"
+  same_as_input: "Same as input",
+  pdf: "PDF",
+  docx: "Word (.docx)",
+  pdf_retypeset: "PDF (re-typeset)"
 };
 
 export function AgentsManager({
   businessId,
-  initialDraft
+  initialDraft,
+  tier
 }: {
   businessId: string;
   /** When true (`?draft=1`), load the chat-created draft stashed in sessionStorage. */
   initialDraft?: boolean;
+  /**
+   * Business plan tier — gates the re-typeset output option (it renders on
+   * the tenant's VPS render sidecar, which Starter boxes don't run). The
+   * server enforces the same gate; this only hides the option.
+   */
+  tier?: string | null;
 }) {
+  const retypesetAvailable = tier === "standard" || tier === "enterprise";
   const [agents, setAgents] = useState<AgentItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -110,13 +121,20 @@ export function AgentsManager({
         sessionStorage.removeItem("agent_create_draft");
         setCreateName(draft.name.slice(0, 120));
         setCreateInstructions(draft.instructions.slice(0, 8000));
-        setCreateFormat(draft.outputFormat === "same_as_input" ? "same_as_input" : "markdown");
+        setCreateFormat(
+          draft.outputFormat === "same_as_input" ||
+            draft.outputFormat === "pdf" ||
+            draft.outputFormat === "docx" ||
+            (draft.outputFormat === "pdf_retypeset" && retypesetAvailable)
+            ? draft.outputFormat
+            : "markdown"
+        );
         setShowCreate(true);
       }
     } catch {
       /* malformed/absent draft — fall back to the normal list view */
     }
-  }, [initialDraft]);
+  }, [initialDraft, retypesetAvailable]);
 
   const refresh = useCallback(async () => {
     try {
@@ -448,8 +466,19 @@ export function AgentsManager({
                 onChange={(e) => setCreateFormat(e.target.value as AgentItem["output_format"])}
               >
                 <option value="markdown">Markdown (works for everything)</option>
-                <option value="same_as_input">Same as input (CSV in → CSV out)</option>
+                <option value="same_as_input">Same as input (CSV in → CSV out, PDF in → PDF out)</option>
+                <option value="pdf">PDF (typeset from the result)</option>
+                <option value="docx">Word document (.docx)</option>
+                {retypesetAvailable && (
+                  <option value="pdf_retypeset">PDF re-typeset (keeps the original design)</option>
+                )}
               </select>
+              {!retypesetAvailable && (
+                <p className="mt-1 text-[11px] text-parchment/40">
+                  PDF re-typesetting (rebuild a PDF in its original design) is available on the
+                  Standard plan and above.
+                </p>
+              )}
             </div>
             <Button size="sm" onClick={createAgent} disabled={creating}>
               {creating ? "Creating…" : "Create agent"}
@@ -523,7 +552,7 @@ export function AgentsManager({
                       ref={runFileRef}
                       type="file"
                       multiple
-                      accept=".pdf,.txt,.md,.csv,.vtt,application/pdf,text/plain,text/markdown,text/csv,text/vtt"
+                      accept=".pdf,.docx,.txt,.md,.csv,.vtt,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain,text/markdown,text/csv,text/vtt"
                       className="text-xs text-parchment/60 file:mr-3 file:rounded-md file:border-0 file:bg-parchment/10 file:px-3 file:py-1.5 file:text-xs file:text-parchment"
                       onChange={() => setRunDocumentIds([])}
                     />
@@ -579,7 +608,7 @@ export function AgentsManager({
                     </div>
                   )}
                   <p className="text-[11px] text-parchment/40">
-                    PDF, text, markdown, or CSV — up to {AGENT_RUN_MAX_FILES} files, 10 MB each.
+                    PDF, Word (.docx), text, markdown, or CSV — up to {AGENT_RUN_MAX_FILES} files, 10 MB each.
                     Attach several to work across them in one run (e.g. compare quotes). Runs use
                     your plan&rsquo;s shared AI budget.
                   </p>
@@ -701,7 +730,14 @@ export function AgentsManager({
                       onChange={(e) => setDraftFormat(e.target.value as AgentItem["output_format"])}
                     >
                       <option value="markdown">Markdown (works for everything)</option>
-                      <option value="same_as_input">Same as input (CSV in → CSV out)</option>
+                      <option value="same_as_input">Same as input (CSV in → CSV out, PDF in → PDF out)</option>
+                      <option value="pdf">PDF (typeset from the result)</option>
+                      <option value="docx">Word document (.docx)</option>
+                      {(retypesetAvailable || agent.output_format === "pdf_retypeset") && (
+                        <option value="pdf_retypeset">
+                          PDF re-typeset (keeps the original design)
+                        </option>
+                      )}
                     </select>
                   </div>
                   <div className="flex flex-wrap gap-2">

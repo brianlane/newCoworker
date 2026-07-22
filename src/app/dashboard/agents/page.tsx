@@ -21,7 +21,7 @@ export default async function AgentsPage({ searchParams }: Props) {
   const activeBusinessId = await resolveActiveBusinessId(user);
   const { data: businesses } = await db
     .from("businesses")
-    .select("id, name")
+    .select("id, name, tier")
     .in("id", activeBusinessId ? [activeBusinessId] : [])
     .limit(1);
 
@@ -47,7 +47,7 @@ export default async function AgentsPage({ searchParams }: Props) {
           </div>
         </Card>
       ) : (
-        <AgentsManager businessId={business.id} initialDraft={draft === "1"} />
+        <AgentsManager businessId={business.id} initialDraft={draft === "1"} tier={business.tier} />
       )}
     </div>
   );

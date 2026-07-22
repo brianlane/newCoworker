@@ -19,12 +19,17 @@
  *                  it");
  *   - none:        nothing found / not a Calendly tenant / lookup refused.
  *
- * Calendly only: the other providers' bookings are platform-created and
- * already reachable through the calendar tools; Calendly is the provider
- * whose self-serve booking changes were invisible. Everything here FAILS
- * OPEN to `none` — a Calendly hiccup must never delay or block a reply.
- * Consumed by POST /api/internal/contact-booking-context (cron-bearer),
- * which the sms-inbound-worker calls best-effort per customer turn.
+ * Calendly and Vagaro: both providers take bookings OUTSIDE the platform
+ * (Calendly on calendly.com, Vagaro on the merchant's own booking page /
+ * front desk), so both are invisible to the agent without this lookup; the
+ * workspace providers' bookings are platform-created and already reachable
+ * through the calendar tools. Vagaro reports `booked` and `canceled` only —
+ * its API carries no reschedule lineage (no `old_invitee` equivalent), so a
+ * moved appointment reads as `booked` at its new time. Everything here
+ * FAILS OPEN to `none` — a provider hiccup must never delay or block a
+ * reply. Consumed by POST /api/internal/contact-booking-context
+ * (cron-bearer), which the sms-inbound-worker calls best-effort per
+ * customer turn.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
@@ -39,6 +44,9 @@ import {
 import { digitsOf, phoneDigitsMatch } from "@/lib/calendar-tools/phone-match";
 import { resolveCalendlyUserUri, type BookingPrecheckDeps } from "@/lib/ai-flows/booking-precheck";
 import { calendlyEventUuid } from "@/lib/ai-flows/calendly-poll";
+import { getActiveVagaroConnection } from "@/lib/db/vagaro-connections";
+import { listVagaroAppointments, type VagaroAppointmentItem } from "@/lib/vagaro/client";
+import { VAGARO_CANCELED_LIST_STATUS } from "@/lib/ai-flows/vagaro-poll";
 import { logger } from "@/lib/logger";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -65,7 +73,12 @@ export type ContactBookingContext = {
 export type ContactBookingContextDeps = Pick<
   BookingPrecheckDeps,
   "request" | "resolveConnection" | "getCachedUserUri" | "persistUserUri"
->;
+> & {
+  /** Injectable Vagaro connection lookup (tests). */
+  getVagaroConnection?: typeof getActiveVagaroConnection;
+  /** Injectable Vagaro appointments listing (tests). */
+  listAppointments?: typeof listVagaroAppointments;
+};
 
 const NONE: ContactBookingContext = { status: "none", line: null };
 
@@ -128,6 +141,20 @@ export function inviteeMatchesContact(
     typeof invitee.text_reminder_number === "string" ? digitsOf(invitee.text_reminder_number) : "";
   return (
     inviteeDigits.length > 0 && ids.phoneDigits.some((d) => phoneDigitsMatch(inviteeDigits, d))
+  );
+}
+
+/** Whether a Vagaro appointment belongs to this contact (same tolerance). */
+export function vagaroAppointmentMatchesContact(
+  item: VagaroAppointmentItem,
+  ids: { phoneDigits: string[]; email: string | null }
+): boolean {
+  return inviteeMatchesContact(
+    {
+      email: item.customerEmail ?? undefined,
+      text_reminder_number: item.customerPhone ?? undefined
+    },
+    ids
   );
 }
 
@@ -246,8 +273,85 @@ async function scanForMatch(args: {
 }
 
 /**
- * The texter's Calendly booking state, as one preamble-ready line. Never
- * throws; every failure mode answers `none`.
+ * The texter's Vagaro booking state: one upcoming-appointments listing for
+ * `booked`, then a canceled-status listing for a recent cancel. No
+ * reschedule lineage exists on Vagaro, so a moved appointment reads as
+ * `booked` at its new time; a canceled listing the merchant's API doesn't
+ * support simply throws into the caller's fail-open catch. Exported for the
+ * route tests.
+ */
+export async function vagaroBookingContextForContact(
+  businessId: string,
+  ids: { phoneDigits: string[]; email: string | null },
+  deps: ContactBookingContextDeps,
+  timezone: string | null
+): Promise<ContactBookingContext> {
+  const getVagaroConnection = deps.getVagaroConnection ?? getActiveVagaroConnection;
+  const listAppointments = deps.listAppointments ?? listVagaroAppointments;
+  const conn = await getVagaroConnection(businessId);
+  if (!conn) return NONE;
+
+  const nowMs = Date.now();
+  const dayMs = 24 * 60 * 60_000;
+  const iso = (ms: number) => new Date(ms).toISOString();
+
+  // Upcoming active booking first — the strongest, most actionable state.
+  // Soonest-first so the reported slot is the contact's next appointment.
+  const upcoming = await listAppointments(conn, {
+    startIso: iso(nowMs),
+    endIso: iso(nowMs + BOOKING_CONTEXT_HORIZON_DAYS * dayMs)
+  });
+  const active = upcoming
+    .filter(
+      (i) =>
+        !i.cancelled &&
+        Number.isFinite(Date.parse(i.startIso)) &&
+        Date.parse(i.startIso) > nowMs &&
+        vagaroAppointmentMatchesContact(i, ids)
+    )
+    .sort((a, b) => Date.parse(a.startIso) - Date.parse(b.startIso))[0];
+  if (active) {
+    return {
+      status: "booked",
+      line: bookingContextLine(
+        "booked",
+        { name: active.serviceName ?? "Appointment", startIso: active.startIso },
+        { timezone }
+      )
+    };
+  }
+
+  // No upcoming booking: a recent canceled one is worth telling the agent
+  // about. Most-recent-start first (the cancellation the preamble should
+  // describe). Items whose status does not actually mark them canceled are
+  // ignored — if the API ignored the status filter, misreporting a past
+  // visit as "canceled" would be worse than answering none.
+  const canceled = (
+    await listAppointments(conn, {
+      startIso: iso(nowMs - BOOKING_CONTEXT_BACK_DAYS * dayMs),
+      endIso: iso(nowMs + BOOKING_CONTEXT_HORIZON_DAYS * dayMs),
+      status: VAGARO_CANCELED_LIST_STATUS
+    })
+  )
+    .filter((i) => i.cancelled && vagaroAppointmentMatchesContact(i, ids))
+    .sort((a, b) => Date.parse(b.startIso) - Date.parse(a.startIso))[0];
+  if (canceled) {
+    return {
+      status: "canceled",
+      line: bookingContextLine(
+        "canceled",
+        { name: canceled.serviceName ?? "Appointment", startIso: canceled.startIso },
+        { rescheduledAway: false, timezone }
+      )
+    };
+  }
+  return NONE;
+}
+
+/**
+ * The texter's booking state on the connected provider (Calendly or
+ * Vagaro), as one preamble-ready line. Never throws; every failure mode
+ * answers `none`.
  */
 export async function contactBookingContextForPhone(
   businessId: string,
@@ -264,10 +368,14 @@ export async function contactBookingContextForPhone(
 
   try {
     const conn = await resolveConnection(businessId);
-    if (!conn || conn.provider !== "calendly") return NONE;
+    if (!conn || (conn.provider !== "calendly" && conn.provider !== "vagaro")) return NONE;
     const db = client ?? (await createSupabaseServiceClient());
     const ids = await contactIdentifiers(db, businessId, phoneE164);
     if (ids.phoneDigits.length === 0 && !ids.email) return NONE;
+
+    if (conn.provider === "vagaro") {
+      return await vagaroBookingContextForContact(businessId, ids, deps, timezone ?? null);
+    }
 
     const userUri = await resolveCalendlyUserUri(
       businessId,

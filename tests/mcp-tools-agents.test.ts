@@ -111,6 +111,28 @@ describe("create_agent", () => {
     ).rejects.toThrow(/Agent limit reached \(5/);
     expect(insertBusinessAgent).not.toHaveBeenCalled();
   });
+
+  it("gates pdf_retypeset on the tier (render sidecar is Standard+)", async () => {
+    vi.mocked(getBusiness).mockResolvedValue({ tier: "starter" } as never);
+    vi.mocked(countBusinessAgents).mockResolvedValue(0);
+    await expect(
+      createAgentTool.handler(
+        { name: "n", instructions: "i", output_format: "pdf_retypeset" },
+        AUTH
+      )
+    ).rejects.toThrow(/Standard plan and above/);
+    expect(insertBusinessAgent).not.toHaveBeenCalled();
+
+    vi.mocked(getBusiness).mockResolvedValue({ tier: "enterprise" } as never);
+    vi.mocked(insertBusinessAgent).mockResolvedValue(AGENT as never);
+    await createAgentTool.handler(
+      { name: "n", instructions: "i", output_format: "pdf_retypeset" },
+      AUTH
+    );
+    expect(insertBusinessAgent).toHaveBeenCalledWith(
+      expect.objectContaining({ output_format: "pdf_retypeset" })
+    );
+  });
 });
 
 describe("update_agent", () => {
@@ -147,6 +169,21 @@ describe("update_agent", () => {
       name: "Renamed",
       instructions: "New",
       output_format: "markdown"
+    });
+  });
+
+  it("gates a pdf_retypeset patch on the tier (render sidecar is Standard+)", async () => {
+    vi.mocked(getBusinessAgent).mockResolvedValue(AGENT as never);
+    vi.mocked(getBusiness).mockResolvedValue({ tier: "starter" } as never);
+    await expect(
+      updateAgentTool.handler({ agent_id: AGENT_ID, output_format: "pdf_retypeset" }, AUTH)
+    ).rejects.toThrow(/Standard plan and above/);
+    expect(patchBusinessAgent).not.toHaveBeenCalled();
+
+    vi.mocked(getBusiness).mockResolvedValue({ tier: "standard" } as never);
+    await updateAgentTool.handler({ agent_id: AGENT_ID, output_format: "pdf_retypeset" }, AUTH);
+    expect(patchBusinessAgent).toHaveBeenLastCalledWith("biz-1", AGENT_ID, {
+      output_format: "pdf_retypeset"
     });
   });
 });

@@ -127,6 +127,7 @@ import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
 import { getBusinessDocument } from "@/lib/documents/db";
 import { BUSINESS_DOCS_BUCKET } from "@/lib/documents/core";
 import { isSupportedDocumentMime, normalizeUploadMime } from "@/lib/documents/ingest";
+import { decodeDocxAttachment } from "@/lib/documents/docx";
 import { logger } from "@/lib/logger";
 import { currentDateTimeLine } from "../../../../../supabase/functions/_shared/datetime_line";
 import { loadBusinessFlowActivity } from "../../../../../supabase/functions/_shared/ai_flows/run_context";
@@ -316,7 +317,7 @@ TOOL RESULTS ARE THE TRUTH. When you call a tool, report what it ACTUALLY return
 
 YOUR CHANNELS ARE SMS TEXTING, PHONE CALLS, AND EMAIL — NOTHING ELSE. You cannot send or receive WhatsApp, Telegram, or any other messaging-app content, and you must never agree to reach anyone on those. If the owner asks for an unsupported channel, say plainly that it isn't supported today and offer SMS or email instead. If the owner says their number or address is changing or going away (e.g. relocating abroad), NEVER "note" the old value as the go-forward contact — ask for the concrete new number or address that should replace it.
 
-AUTOMATIONS (AIFLOWS). The business's automations live at /dashboard/aiflows: triggers (an inbound text, an email, a webhook lead, a calendar event, a schedule) that run steps like sending texts/emails, waiting, tagging contacts, and notifying the owner. Never tell the owner you "can't access AI flows" — describe what AiFlows can do, point them to /dashboard/aiflows, and if you have the create_aiflow tool, offer to draft the automation from their plain-English description.
+AUTOMATIONS (AIFLOWS). The business's automations live at /dashboard/aiflows: triggers (an inbound text, an email, a webhook lead, a calendar event, a schedule) that run steps like sending texts/emails, waiting, tagging contacts, and notifying the owner. Never tell the owner you "can't access AI flows" — describe what AiFlows can do, point them to /dashboard/aiflows, and if you have the create_aiflow tool, offer to draft the automation from their plain-English description. If you have the edit_aiflow tool, you can also CHANGE an existing automation in place (wording, timing, recipients, steps): describe the exact change in plain words first, get the owner's yes in this conversation, then apply it — the edit goes live immediately and keeps the flow's history.
 
 PRESENT YOUR OPTIONS, THEN DO WHAT THE OWNER PICKS. When the owner asks for something you can fulfil MORE THAN ONE WAY with the tools you actually have — doing it directly now, running an existing automation that covers it (check list_aiflows when you have it), scheduling it, or drafting it for their approval — present the viable options in ONE short reply with a word on the tradeoff, then execute exactly the option they choose. Example: "I can text Uday that confirmation right now, or run your 'Booking confirmation' automation which also handles the timing — which do you prefer?" Options must be real: never offer an action you lack a tool for, and if a matching automation is disabled, say it's awaiting their review at /dashboard/aiflows and offer the direct action instead. When only one way exists, just confirm and do it — don't manufacture choices. Never act without the owner's explicit choice in this conversation.
 
@@ -537,7 +538,7 @@ export async function POST(request: Request) {
         if (!isSupportedDocumentMime(mimeType)) {
           return errorResponse(
             "VALIDATION_ERROR",
-            "Only PDF, plain text, markdown, CSV, or VTT transcript attachments are supported"
+            "Only PDF, Word (.docx), plain text, markdown, CSV, or VTT transcript attachments are supported"
           );
         }
         if (file.size === 0 || file.size > MAX_ATTACHMENT_BYTES) {
@@ -592,7 +593,7 @@ export async function POST(request: Request) {
       if (!isSupportedDocumentMime(document.mime_type.trim().toLowerCase())) {
         return errorResponse(
           "VALIDATION_ERROR",
-          "Only PDF, plain text, markdown, or CSV documents are supported"
+          "Only PDF, Word (.docx), plain text, markdown, or CSV documents are supported"
         );
       }
       const db = await createSupabaseServiceClient();
@@ -612,6 +613,20 @@ export async function POST(request: Request) {
         mimeType: document.mime_type,
         data: Buffer.from(await blob.arrayBuffer())
       };
+    }
+
+    // Word attachments are decoded to text at the boundary — the inline
+    // prompt builder only understands text formats and PDF inlineData, and
+    // Gemini has no native DOCX part type.
+    if (attachment) {
+      const decoded = await decodeDocxAttachment(attachment);
+      if (!decoded) {
+        return errorResponse(
+          "VALIDATION_ERROR",
+          "That Word document has no readable text — export it as PDF and try again"
+        );
+      }
+      attachment = decoded;
     }
 
     // Activity update fires BEFORE the turn runs so the VPS keep-warm timer
@@ -730,7 +745,9 @@ export async function POST(request: Request) {
       calRescheduleEnabled,
       calCancelEnabled,
       runAiflowEnabled,
-      generateImageEnabled
+      editAiflowEnabled,
+      generateImageEnabled,
+      notificationPrefsToolEnabled
     ] = await Promise.all([
       isAgentToolEnabled(body.businessId, "dashboard", "send_sms"),
       isAgentToolEnabled(body.businessId, "dashboard", "send_whatsapp"),
@@ -739,8 +756,26 @@ export async function POST(request: Request) {
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_reschedule_appointment"),
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_cancel_appointment"),
       isAgentToolEnabled(body.businessId, "dashboard", "run_aiflow"),
-      isAgentToolEnabled(body.businessId, "dashboard", "generate_image")
+      isAgentToolEnabled(body.businessId, "dashboard", "edit_aiflow"),
+      isAgentToolEnabled(body.businessId, "dashboard", "generate_image"),
+      isAgentToolEnabled(body.businessId, "dashboard", "update_notification_preferences")
     ]);
+    // Settings mutation needs more than chat access: the tool is declared
+    // only when THIS caller passes manage_settings (manager+, the same
+    // matrix as the notifications settings page). Chat itself only requires
+    // operate_messages, which staff hold — a staff teammate must never be
+    // handed a settings-mutation tool. FAILS CLOSED on any lookup error.
+    const canManageSettings = user.isAdmin
+      ? true
+      : await (async () => {
+          if (!user.email) return false;
+          const [{ getBusinessRoleForEmail }, { can }] = await Promise.all([
+            import("@/lib/db/business-members"),
+            import("@/lib/authz/policy")
+          ]);
+          const role = await getBusinessRoleForEmail(body.businessId, user.email);
+          return role != null && can(role, "manage_settings");
+        })().catch(() => false);
     const actionToolGates = {
       send_sms: smsToolEnabled,
       // Declared only when a WhatsApp integration is actually connected —
@@ -756,7 +791,9 @@ export async function POST(request: Request) {
       // One Settings toggle gates the pair: listing exists to serve running.
       list_aiflows: runAiflowEnabled,
       run_aiflow: runAiflowEnabled,
-      generate_image: generateImageEnabled
+      edit_aiflow: editAiflowEnabled,
+      generate_image: generateImageEnabled,
+      update_notification_preferences: notificationPrefsToolEnabled && canManageSettings
     };
 
     // Two message arrays:

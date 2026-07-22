@@ -10,8 +10,10 @@ vi.mock("@/lib/billing/ai-spend-meter", () => ({ meterGeminiSpendForBusiness: vi
 import type { GeminiGenerateTextParams } from "@/lib/gemini-generate-content";
 import { GeminiEmptyError } from "@/lib/gemini-generate-content";
 import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
-import { AGENT_INPUT_MAX_TEXT_CHARS } from "@/lib/agents/core";
+import { AGENT_INPUT_MAX_TEXT_CHARS, AGENT_OUTPUT_MAX_CHARS } from "@/lib/agents/core";
+import { DOCX_MIME_TYPE } from "@/lib/documents/docx";
 import { executeAgentRun, type AgentRunInput } from "@/lib/agents/run";
+import { Document, Packer, Paragraph, TextRun } from "docx";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const meter = vi.mocked(meterGeminiSpendForBusiness);
@@ -139,6 +141,144 @@ describe("executeAgentRun (text)", () => {
 
   it("maps a blank model reply to empty_content", async () => {
     const res = await executeAgentRun(textInput(), { generate: generateOk("   ") });
+    expect(res).toEqual({ ok: false, error: "empty_content" });
+  });
+});
+
+describe("executeAgentRun (docx)", () => {
+  async function docxBytes(text: string): Promise<Buffer> {
+    const doc = new Document({
+      sections: [{ children: [new Paragraph({ children: [new TextRun({ text })] })] }]
+    });
+    return Packer.toBuffer(doc);
+  }
+
+  it("decodes a Word attachment locally and prompts with its text", async () => {
+    const generate = generateOk("# Summary");
+    const res = await executeAgentRun(
+      textInput({
+        inputFilename: "intake.docx",
+        inputMime: DOCX_MIME_TYPE,
+        data: await docxBytes("Name: Pat. Service: haircut.")
+      }),
+      { generate }
+    );
+    expect(res).toMatchObject({ ok: true, outputFilename: "intake.md", outputMime: "text/markdown" });
+    const call = generate.mock.calls[0][0];
+    expect(call.userText).toContain("Name: Pat. Service: haircut.");
+    expect(call.inlineParts).toBeUndefined();
+  });
+
+  it("echoes DOCX in kind for same_as_input agents (typeset target)", async () => {
+    const generate = generateOk("# Rewritten");
+    const res = await executeAgentRun(
+      textInput({
+        agent: { instructions: "Rewrite it.", output_format: "same_as_input" },
+        inputFilename: "quote.docx",
+        inputMime: DOCX_MIME_TYPE,
+        data: await docxBytes("Premium: $1,200")
+      }),
+      { generate }
+    );
+    expect(res).toMatchObject({
+      ok: true,
+      outputFilename: "quote.docx",
+      outputMime: DOCX_MIME_TYPE
+    });
+    // The model still writes markdown — the typesetter renders the bytes.
+    expect(generate.mock.calls[0][0].userText).toContain("Produce the result as markdown.");
+  });
+
+  it("rejects unreadable Word bytes as empty_content with the filename", async () => {
+    const generate = generateOk("x");
+    const res = await executeAgentRun(
+      textInput({
+        inputFilename: "broken.docx",
+        inputMime: DOCX_MIME_TYPE,
+        data: Buffer.from("not a word file")
+      }),
+      { generate }
+    );
+    expect(res).toEqual({ ok: false, error: "empty_content", detail: "broken.docx" });
+    expect(generate).not.toHaveBeenCalled();
+  });
+});
+
+describe("executeAgentRun (pdf_retypeset)", () => {
+  const retypesetInput = (overrides: Partial<AgentRunInput> = {}): AgentRunInput =>
+    textInput({
+      agent: { instructions: "Update the premium to $999.", output_format: "pdf_retypeset" },
+      inputFilename: "policy.pdf",
+      inputMime: "application/pdf",
+      data: Buffer.from("%PDF-1.4 fake"),
+      ...overrides
+    });
+
+  it("prompts for a self-contained HTML document and sanitizes the reply", async () => {
+    const generate = generateOk(
+      "```html\n<!DOCTYPE html><html><head><script>x()</script></head>" +
+        '<body onload="y()"><h1>Policy</h1></body></html>\n```'
+    );
+    const res = await executeAgentRun(retypesetInput(), { generate });
+    expect(res).toMatchObject({
+      ok: true,
+      outputFilename: "policy.pdf",
+      // The artifact mime (renderer discriminator) — the downloaded/filed
+      // representation becomes application/pdf via renderAgentArtifactBytes.
+      outputMime: "text/html"
+    });
+    if (res.ok) {
+      expect(res.outputMd.startsWith("<!DOCTYPE html>")).toBe(true);
+      expect(res.outputMd).not.toMatch(/<script/i);
+      expect(res.outputMd).not.toMatch(/onload=/i);
+      expect(res.outputMd).toContain("<h1>Policy</h1>");
+    }
+    const call = generate.mock.calls[0][0];
+    expect(call.userText).toContain("self-contained HTML document");
+  });
+
+  it("wraps a fragment reply into a full HTML document", async () => {
+    const generate = generateOk("<h1>Policy</h1>");
+    const res = await executeAgentRun(retypesetInput(), { generate });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.outputMd.startsWith("<!DOCTYPE html>")).toBe(true);
+  });
+
+  it("rejects multi-file runs (one source document defines the design)", async () => {
+    const res = await executeAgentRun(
+      retypesetInput({
+        extraFiles: [{ filename: "b.pdf", mime: "application/pdf", data: Buffer.from("%PDF") }]
+      }),
+      { generate: generateOk("x") }
+    );
+    expect(res).toEqual({
+      ok: false,
+      error: "too_many_files",
+      detail: "re-typesetting works on one source document"
+    });
+  });
+
+  it("rejects non-PDF/Word sources", async () => {
+    const res = await executeAgentRun(
+      retypesetInput({ inputFilename: "notes.txt", inputMime: "text/plain" }),
+      { generate: generateOk("x") }
+    );
+    expect(res).toEqual({
+      ok: false,
+      error: "unsupported_type",
+      detail: "re-typesetting needs a PDF or Word source document"
+    });
+  });
+
+  it("refuses an over-cap HTML reply instead of clipping it mid-markup", async () => {
+    const huge = `<!DOCTYPE html><html><body>${"x".repeat(AGENT_OUTPUT_MAX_CHARS)}</body></html>`;
+    const res = await executeAgentRun(retypesetInput(), { generate: generateOk(huge) });
+    expect(res).toMatchObject({ ok: false, error: "output_too_large" });
+    if (!res.ok) expect(res.detail).toContain(`max ${AGENT_OUTPUT_MAX_CHARS}`);
+  });
+
+  it("maps a blank re-typeset reply to empty_content", async () => {
+    const res = await executeAgentRun(retypesetInput(), { generate: generateOk("   ") });
     expect(res).toEqual({ ok: false, error: "empty_content" });
   });
 });

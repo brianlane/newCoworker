@@ -154,6 +154,24 @@ describe("resolveFlowDocumentSource — email-attachments refs", () => {
     expect(downloads).toEqual(["email-attachments/inbound/msg1/0-quotes.pdf"]);
   });
 
+  it("resolves a Word attachment with the DOCX mime", async () => {
+    const { db, downloads } = makeDb();
+    const result = await resolveFlowDocumentSource(
+      BIZ,
+      "email-attachments:inbound/msg1/1-Quote.DOCX",
+      { client: db as unknown as Client }
+    );
+    expect(result.ok).toBe(true);
+    if (result.ok) {
+      expect(result.source).toMatchObject({
+        mimeType: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        filename: "Quote.DOCX",
+        documentId: null
+      });
+    }
+    expect(downloads).toEqual(["email-attachments/inbound/msg1/1-Quote.DOCX"]);
+  });
+
   it("rejects unrecognized refs and unsupported extensions", async () => {
     const { db } = makeDb();
     expect(

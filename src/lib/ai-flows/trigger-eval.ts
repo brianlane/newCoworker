@@ -189,7 +189,7 @@ export function tenantEmailTriggerScope(
      */
     imageRef?: string;
     /**
-     * First DOCUMENT attachment (pdf/txt/md/csv) on the mail, as an
+     * First DOCUMENT attachment (pdf/docx/txt/md/csv) on the mail, as an
      * `email-attachments:<path>` ref. Exposed as {{trigger.document}} — the
      * doc_extract step's default source. `documentName` is its display
      * filename ({{trigger.document_name}}).

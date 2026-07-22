@@ -4,10 +4,12 @@
  * Shared by the dashboard "Save as document" action and the run_agent
  * AiFlow step's saveDocument option, so both paths get identical cap
  * enforcement, storage/DB compensation, and audience semantics. The
- * artifact becomes a regular business document: the text is stored as the
- * original file in the business-docs bucket AND as the agent-facing
- * content_md (clipped to the documents cap) — no second Gemini ingest pass
- * is needed because the artifact is already clean text.
+ * artifact becomes a regular business document: text targets store the
+ * markdown/text as the original file; PDF/DOCX targets typeset the markdown
+ * into real bytes (documents/typeset.ts). Either way the agent-facing
+ * content_md is the artifact text (clipped to the documents cap) — no
+ * second Gemini ingest pass is needed because the artifact is already
+ * clean text.
  */
 
 import { randomUUID } from "node:crypto";
@@ -26,6 +28,8 @@ import {
   documentLimitForTier
 } from "@/lib/documents/core";
 import { logger } from "@/lib/logger";
+import { renderAgentArtifactBytes } from "./artifact-bytes";
+import { htmlArtifactToText, isHtmlDocumentArtifact } from "./retypeset";
 import type { AgentRunRow } from "./db";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -97,10 +101,26 @@ export async function saveAgentRunArtifact(
     .replace(/[^A-Za-z0-9._-]/g, "_")
     .slice(0, 120);
   const storagePath = `${businessId}/${documentId}/${safeName}`;
-  const bytes = Buffer.from(run.output_md, "utf8");
+  // PDF/DOCX targets render from the artifact (typeset markdown, or the
+  // sidecar-printed re-typeset HTML — whose stored representation mime is
+  // the PDF, not the html artifact mime); text targets store the artifact
+  // text byte-for-byte. A required renderer failing (unreachable sidecar)
+  // is a clean refusal, not a silently different document.
+  const rendered = await renderAgentArtifactBytes({
+    businessId,
+    artifactText: run.output_md,
+    mimeType: run.output_mime_type || "text/markdown"
+  });
+  if (!rendered.ok) {
+    return { ok: false, error: "storage_failed", detail: rendered.detail };
+  }
+  // Always non-empty: the renderer echoes the (defaulted) artifact mime or
+  // maps the retypeset artifact to application/pdf.
+  const mimeType = rendered.mimeType;
+  const bytes = rendered.bytes ?? Buffer.from(run.output_md, "utf8");
   const { error: uploadError } = await db.storage
     .from(BUSINESS_DOCS_BUCKET)
-    .upload(storagePath, bytes, { contentType: run.output_mime_type || "text/markdown" });
+    .upload(storagePath, bytes, { contentType: mimeType });
   if (uploadError) {
     logger.warn("agents/save-artifact: storage upload failed", {
       businessId,
@@ -113,6 +133,12 @@ export async function saveAgentRunArtifact(
     run.input_filename ? ` from ${run.input_filename}` : ""
   }.`.slice(0, DOCUMENT_SUMMARY_MAX_CHARS);
 
+  // content_md is what knowledge lookup reads — re-typeset HTML artifacts
+  // file their visible text, everything else files the artifact verbatim.
+  const contentMd = isHtmlDocumentArtifact(run.output_md)
+    ? htmlArtifactToText(run.output_md)
+    : run.output_md;
+
   let document: BusinessDocumentRow;
   try {
     document = await insertBusinessDocument({
@@ -122,9 +148,9 @@ export async function saveAgentRunArtifact(
       category: "generated",
       audience: input.audience,
       storage_path: storagePath,
-      mime_type: run.output_mime_type || "text/markdown",
+      mime_type: mimeType,
       byte_size: bytes.byteLength,
-      content_md: run.output_md.slice(0, DOCUMENT_CONTENT_MD_MAX_CHARS),
+      content_md: contentMd.slice(0, DOCUMENT_CONTENT_MD_MAX_CHARS),
       summary,
       status: "ready"
     });

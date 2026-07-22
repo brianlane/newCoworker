@@ -100,6 +100,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         configurable: true
       },
       {
+        toolKey: "edit_aiflow",
+        label: "Edit automations",
+        description:
+          "Change an existing AiFlow from chat (or by texting your coworker) — small tweaks or full edits, applied in place after you confirm the exact changes. Every edit is validated before it's saved.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
         toolKey: "calendar_find_slots",
         label: "Find calendar openings",
         description: "Look up free slots on your connected calendar from chat.",
@@ -186,6 +194,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         label: "Request signatures",
         description:
           "Send a document for a legal e-signature when you ask: the signer gets a link, types their name to sign, and you're notified with a full audit record. Dashboard only — sending contracts is always your call.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "update_notification_preferences",
+        label: "Change notification settings",
+        description:
+          "Turn your alert toggles on or off when you ask in chat (e.g. client reply alerts). Managers and owners only; it can never change your alert phone or email.",
         defaultEnabled: true,
         configurable: true
       }
@@ -378,6 +394,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         label: "Start automations for a texter",
         description:
           "Enroll the customer it's texting with into an AiFlow you've marked \"texting coworker may enroll customers\" (per-flow checkbox; nothing else is visible to it). Never re-enrolls someone already in the flow.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "update_notification_preferences",
+        label: "Turn alerts on by text",
+        description:
+          "When you (or a teammate) text the assistant asking to be alerted about something, it can turn the matching alert toggle ON. Enable-only over text — turning alerts off or changing your alert phone/email is done from the dashboard.",
         defaultEnabled: true,
         configurable: true
       }

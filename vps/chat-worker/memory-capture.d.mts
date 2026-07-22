@@ -72,6 +72,8 @@ export function buildExtractionRequestBodyOpenAI(
   model: string;
   stream: boolean;
   temperature: number;
+  /** Present only for Gemini 3 models (thinking constrained to "low"). */
+  reasoning_effort?: string;
   response_format: { type: "json_schema"; json_schema: typeof MEMORY_EXTRACTION_JSON_SCHEMA };
   messages: Array<{ role: string; content: string }>;
 };

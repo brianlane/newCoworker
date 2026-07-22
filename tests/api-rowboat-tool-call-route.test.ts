@@ -98,6 +98,13 @@ vi.mock("@/lib/ai-flows/agent-start-flow", async (importOriginal) => {
   };
 });
 
+// Notification-toggle core (behavior pinned in
+// tests/notifications-preferences-tool.test.ts).
+vi.mock("@/lib/notifications/preferences-tool", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/notifications/preferences-tool")>();
+  return { ...actual, applyNotificationPreferenceToggles: vi.fn() };
+});
+
 import { POST } from "@/app/api/rowboat/tool-call/route";
 import { checkSmsOptOut } from "@/lib/sms/opt-outs";
 import { verifyRowboatWebhookJwt } from "@/lib/rowboat/webhook-jwt";
@@ -116,6 +123,7 @@ import { insertCoworkerLog } from "@/lib/db/logs";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { listAiFlowsTool, runAiFlowTool } from "@/lib/ai-flows/manual-run-tool";
 import { startAiFlowForContactTool } from "@/lib/ai-flows/agent-start-flow";
+import { applyNotificationPreferenceToggles } from "@/lib/notifications/preferences-tool";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -1032,5 +1040,62 @@ describe("POST /api/rowboat/tool-call start_aiflow_for_contact (texting coworker
     const body = await res.json();
     expect(body.ok).toBe(false);
     expect(body.message).toMatch(/already in/);
+  });
+});
+
+describe("POST /api/rowboat/tool-call update_notification_preferences (texting coworker, enable-only)", () => {
+  it("dispatches to the shared core with enableOnly — the SMS surface can never silence alerts", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    vi.mocked(applyNotificationPreferenceToggles).mockResolvedValue({
+      ok: true,
+      data: {
+        updated: { customer_reply_alerts: true },
+        settings: { customer_reply_alerts: true } as never
+      }
+    });
+    const content = makeContent("update_notification_preferences", {
+      customer_reply_alerts: true
+    });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    const body = await res.json();
+    expect(body.ok).toBe(true);
+    expect(vi.mocked(isAgentToolEnabled)).toHaveBeenLastCalledWith(
+      BIZ,
+      "sms",
+      "update_notification_preferences"
+    );
+    expect(vi.mocked(applyNotificationPreferenceToggles)).toHaveBeenCalledWith(
+      BIZ,
+      { customer_reply_alerts: true },
+      { enableOnly: true }
+    );
+  });
+
+  it("core refusals (enable-only, unknown toggles) pass through to the model", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    vi.mocked(applyNotificationPreferenceToggles).mockResolvedValue({
+      ok: false,
+      detail: "enable_only_surface",
+      message: "Turning alerts off is done from the dashboard."
+    });
+    const content = makeContent("update_notification_preferences", { sms_urgent: false });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    const body = await res.json();
+    expect(body.ok).toBe(false);
+    expect(body.detail).toBe("enable_only_surface");
+    expect(body.message).toMatch(/dashboard/i);
+  });
+
+  it("the owner's Settings toggle switches it off", async () => {
+    vi.mocked(isAgentToolEnabled).mockResolvedValue(false);
+    const content = makeContent("update_notification_preferences", {
+      customer_reply_alerts: true
+    });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect((await res.json()).detail).toBe("tool_disabled");
+    expect(vi.mocked(applyNotificationPreferenceToggles)).not.toHaveBeenCalled();
   });
 });

@@ -61,7 +61,7 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   '  {"id":"s2d","type":"doc_extract","fields":[{"name":"renewal_date","description":"..."},{"name":"premium","description":"..."},{"name":"customer_phone","description":"..."}],"fileAs":{"titleTemplate":"Renewal — {{trigger.document_name}}","audience":"staff","contactPhoneVar":"customer_phone","recordFieldsFromExtraction":true,"renewalDateField":"renewal_date"}}   // read fields out of the DOCUMENT attached to the triggering email (PDFs included; {{trigger.document}} is the default source; a business-docs:<id> ref also works; skipped when no document). fileAs is OPTIONAL: it files the document into the business\'s Documents; its record sinks are each OPTIONAL too — "contactPhoneVar" links the filed copy to that contact as a RECORD (an earlier step\'s var or one of THIS step\'s field names), "recordFieldsFromExtraction":true stamps the extracted fields onto the record, and "renewalDateField" (one of the step\'s field names) sets the record\'s renewal date so the business\'s renewal reminders fire. Use with a tenant_email trigger for document intake ("when the renewal notice arrives, file it on the customer\'s record with the premium and renewal date")',
   '  {"id":"s3","type":"send_sms","to":"{{vars.seller_phone}}","body":"...{{trigger.from}}"}',
   '  {"id":"s3w","type":"send_whatsapp","to":"{{vars.seller_phone}}","body":"..."}   // WhatsApp message from the business\'s connected WhatsApp number — ONLY include when the user explicitly asks for WhatsApp (texting is the default). Recipient rules match send_sms ("to" OR "toAgentName" OR "toRef", exactly one; no replyToGroup/mediaUrlVar). Outside the recipient\'s 24h WhatsApp window it goes out via an approved template; if WhatsApp isn\'t connected the step skips with a note',
-  '  {"id":"s3b","type":"send_email","to":"owner@example.com","cc":["manager@example.com"],"bcc":["archive@example.com"],"subject":"{{vars.lead_name}} lead","body":"...","attachScreenshot":true}',
+  '  {"id":"s3b","type":"send_email","to":"owner@example.com","cc":["manager@example.com"],"bcc":["archive@example.com"],"subject":"{{vars.lead_name}} lead","body":"...","attachScreenshot":true}   // add "attachDocumentTemplate":"business-docs:{{vars.<saveAs>_document_id}}" to attach a business document to the email — typically the document a preceding run_agent step filed via saveDocument (its id lands in that var), or a fixed "business-docs:<document uuid>". AI-coworker email only (not combinable with fromConnectionId); a ref that renders empty sends without the attachment',
   '  {"id":"s4","type":"approval_gate","prompt":"..."}',
   '  {"id":"s5","type":"notify_owner","message":"..."}',
   '  {"id":"s5b","type":"notify_lead_owner","phoneVar":"lead_phone","nameVar":"lead_name","message":"..."}   // text whoever the lead BELONGS to: the teammate who owns the contact (e.g. because they claimed it via route_to_team), else the business owner. phoneVar/nameVar are OPTIONAL var NAMES that locate the contact (phone preferred; name needs a unique match) — use for forwarding a lead\'s reply to the right person',
@@ -132,6 +132,11 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   "email, and {{trigger.event_title}} / {{trigger.starts_at}} /",
   "{{trigger.ends_at}} are also available). {{vars.actions_taken}}",
   "is engine-provided (a running summary of sends/routing) and always available.",
+  "Any string variable holding a full name can be addressed by its parts:",
+  "{{vars.lead_name.first}} is the first word and {{vars.lead_name.last}} is the",
+  'rest ("" when the value is a single word) — same for trigger fields, e.g.',
+  "{{trigger.full_name.first}}. Use .first for greetings when the user asks to",
+  "address people by first name.",
   "{{vars.group_lead_phone}} is engine-provided on group-text triggers: the lead's",
   "number — the one thread participant besides the sender and the business's own",
   "numbers. Only filled when a from_matches condition pins the sender (a known",
@@ -387,6 +392,42 @@ export function buildFlowAdaptUserText(input: {
     lines.push("", `Additional instructions: ${input.instructions.trim()}`);
   }
   return lines.join("\n");
+}
+
+/**
+ * User text for editing an EXISTING flow in place (the chat `edit_aiflow`
+ * tool). Unlike adapt — which rewrites a library template for a new business
+ * — an edit must be surgical: the model gets the current definition plus the
+ * owner's requested change and must return the full updated definition,
+ * copying everything the owner did not ask to change verbatim (ids included)
+ * so an applied edit never churns untouched steps.
+ */
+export function buildFlowEditUserText(input: {
+  currentName: string;
+  currentDefinitionJson: string;
+  instructions: string;
+  documents?: CompileDocumentOption[];
+  agents?: CompileAgentOption[];
+}): string {
+  return [
+    `Edit the business's EXISTING AiFlow automation named "${input.currentName}".`,
+    "Apply ONLY the requested changes below and return the FULL updated JSON",
+    "definition (same schema contract; output only the JSON object). Copy every",
+    'part the request does not mention VERBATIM — same step "id" values, same',
+    "wording, same order. Never drop, rewrite, or renumber untouched steps, and",
+    "never invent connection/document/agent uuids that are not in the current",
+    "definition or the lists below.",
+    "",
+    "Current definition:",
+    input.currentDefinitionJson,
+    "",
+    buildAvailableDocumentsBlock(input.documents ?? []),
+    "",
+    buildAvailableAgentsBlock(input.agents ?? []),
+    "",
+    "Requested changes:",
+    input.instructions.trim()
+  ].join("\n");
 }
 
 /**

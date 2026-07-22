@@ -339,6 +339,12 @@ export type StepAction =
       subject: string;
       body: string;
       attachScreenshot: boolean;
+      /**
+       * Rendered `business-docs:<documentId>` ref to attach (Resend path
+       * only). Absent when the template rendered blank — the send goes out
+       * without an attachment.
+       */
+      attachDocumentRef?: string;
       /** Send via the owner's connected mailbox instead of platform Resend. */
       fromConnectionId?: string;
     }
@@ -1063,6 +1069,16 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       // all carry the exact addresses that get delivered.
       const cc = normalizeFlowRecipients(step.cc, scope);
       const bcc = normalizeFlowRecipients(step.bcc, scope);
+      // A templated document ref that rendered blank (e.g. the run_agent
+      // step above it skipped, so {{vars.x_document_id}} never filled)
+      // sends WITHOUT the attachment rather than failing the step; the
+      // worker fails loudly only on a non-blank ref it cannot resolve. A
+      // bare "business-docs:" prefix (the id var collapsed empty) counts
+      // as blank for the same reason.
+      const renderedAttachRef = step.attachDocumentTemplate
+        ? renderTemplate(step.attachDocumentTemplate, scope, { collapseEmpty: true }).trim()
+        : "";
+      const attachDocumentRef = renderedAttachRef === "business-docs:" ? "" : renderedAttachRef;
       return {
         ok: true,
         action: {
@@ -1073,6 +1089,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           subject,
           body,
           attachScreenshot: step.attachScreenshot === true,
+          ...(attachDocumentRef ? { attachDocumentRef } : {}),
           ...(step.fromConnectionId ? { fromConnectionId: step.fromConnectionId } : {})
         }
       };

@@ -72,16 +72,18 @@ export function messengerOverCapRefusal(language?: "en" | "es" | null): string {
 }
 
 /**
- * Default bumped 2.5-flash-lite → 2.5-flash (2026-07-16): the lite tier is
- * the model class behind the Truly SMS incident (Jul 14, ignored a system
- * preamble containing the answer) and the KYP Ads dashboard-chat session
- * (Jul 15, context-blind non-sequiturs and invented policy). Messenger is a
- * conversational lead-qualification surface — same stakes as SMS, which
- * runs 2.5-flash for the same reason ($0.30/$2.50 per 1M, priced in
- * _shared/chat_spend_cap.ts + src/lib/billing/ai-spend-meter.ts). Webchat
- * deliberately stays on lite (anonymous, unmetered public traffic).
+ * Default history: 2.5-flash-lite → 2.5-flash (2026-07-16) after the Truly
+ * SMS incident (Jul 14, ignored a system preamble containing the answer)
+ * and the KYP Ads dashboard-chat session (Jul 15, context-blind
+ * non-sequiturs and invented policy) — Messenger is a conversational
+ * lead-qualification surface, same stakes as SMS. Bumped again 2.5-flash →
+ * gemini-3.5-flash-lite (GA 2026-07-21): SAME list price ($0.30/$2.50 per
+ * 1M, priced in _shared/chat_spend_cap.ts + src/lib/billing/ai-spend-meter.ts),
+ * far stronger context-following, 350 tok/s — matching the SMS/owner chat
+ * default bump. Webchat deliberately stays on 2.5-flash-lite (anonymous
+ * public traffic; 3.5-flash-lite is 3-6x its price).
  */
-export const MESSENGER_ENGINE_DEFAULT_MODEL = "gemini-2.5-flash";
+export const MESSENGER_ENGINE_DEFAULT_MODEL = "gemini-3.5-flash-lite";
 
 export function messengerEngineModel(
   env: Record<string, string | undefined> = process.env
@@ -453,6 +455,12 @@ export async function runMessengerGeminiTurn(
         // instead of requesting a call nobody will execute.
         tools: isFinalRound ? [] : WEBCHAT_TOOL_DECLARATIONS,
         temperature: 0.3,
+        // Gemini 3 defaults to dynamic thinking that bills as output AND
+        // counts against the (default 1500) output cap — unconstrained it
+        // can eat the whole budget and surface as messenger_engine_no_reply.
+        // "low" keeps a little reasoning for tool choice at DM latency.
+        // Gated on the family: Gemini 2.5 rejects thinkingLevel.
+        ...(/^gemini-3/i.test(model) ? { thinkingLevel: "low" as const } : {}),
         signal: abort.signal
       });
       if (step.usage) {
