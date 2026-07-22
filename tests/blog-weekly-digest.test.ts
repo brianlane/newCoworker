@@ -414,16 +414,19 @@ describe("runWeeklyDigest", () => {
   // A Monday-morning run: the digest keys the week that just ended (W29).
   const NOW = new Date("2026-07-20T15:00:00.000Z");
   const manyPrs = Array.from({ length: 11 }, (_, i) => pr({ number: i + 1 }));
+  // Comfortably past the 150-word thin bar.
+  const RICH_CONTENT = `## Section\n${"word ".repeat(200).trim()}`;
 
   function deps(overrides: Partial<Parameters<typeof runWeeklyDigest>[0]> = {}) {
     return {
       client: DB,
       loadSettings: async () => settings(),
       findExisting: vi.fn(async () => null),
+      findLatestDigest: vi.fn(async () => null),
       insertPost: vi.fn(async (row: Record<string, unknown>) => ({ id: "post-1", ...row })),
       fetchMergedPrs: vi.fn(async () => manyPrs),
       classify: vi.fn(async () => new Set(manyPrs.map((p) => p.number))),
-      compose: vi.fn(async () => ({ title: "Week", excerpt: "E", content: "C" })),
+      compose: vi.fn(async () => ({ title: "Week", excerpt: "E", content: RICH_CONTENT })),
       generateImage: vi.fn(async () => "digest-2026-w29.png"),
       now: () => NOW,
       ...overrides
@@ -488,6 +491,46 @@ describe("runWeeklyDigest", () => {
     const [sinceIso, untilIso] = fetchMergedPrs.mock.calls[0] ?? [];
     expect(untilIso).toBe(NOW.toISOString());
     expect(sinceIso).toBe("2026-07-13T15:00:00.000Z");
+  });
+
+  it("anchors the PR window at the last digest post so skipped weeks roll forward", async () => {
+    // Last digest posted 12 days ago (the run in between was skipped).
+    const twelveDaysAgo = new Date(NOW.getTime() - 12 * 24 * 60 * 60 * 1000).toISOString();
+    const fetchMergedPrs = vi.fn(async (_s: string, _u: string) => manyPrs);
+    const d = deps({
+      findLatestDigest: vi.fn(async () => ({ created_at: twelveDaysAgo }) as never),
+      fetchMergedPrs
+    });
+    await runWeeklyDigest(d as never);
+    expect(fetchMergedPrs.mock.calls[0]?.[0]).toBe(twelveDaysAgo);
+  });
+
+  it("caps the rollover window at DIGEST_MAX_WINDOW_DAYS", async () => {
+    const fortyDaysAgo = new Date(NOW.getTime() - 40 * 24 * 60 * 60 * 1000).toISOString();
+    const fetchMergedPrs = vi.fn(async (_s: string, _u: string) => manyPrs);
+    const d = deps({
+      findLatestDigest: vi.fn(async () => ({ created_at: fortyDaysAgo }) as never),
+      fetchMergedPrs
+    });
+    await runWeeklyDigest(d as never);
+    const cap = new Date(NOW.getTime() - 28 * 24 * 60 * 60 * 1000).toISOString();
+    expect(fetchMergedPrs.mock.calls[0]?.[0]).toBe(cap);
+  });
+
+  it("skips a composed digest under 150 words (too_thin) without image or insert", async () => {
+    const thin = `## Tiny\n${"word ".repeat(100).trim()}`;
+    const generateImage = vi.fn(async () => "unused.png");
+    const insertPost = vi.fn();
+    const d = deps({
+      compose: vi.fn(async () => ({ title: "Week", excerpt: "E", content: thin })),
+      generateImage,
+      insertPost: insertPost as never
+    });
+    const result = await runWeeklyDigest(d as never);
+    expect(result.outcome).toBe("too_thin");
+    expect(result.featureCount).toBe(11);
+    expect(generateImage).not.toHaveBeenCalled();
+    expect(insertPost).not.toHaveBeenCalled();
   });
 
   it("treats an insert lost to a concurrent run as already_exists", async () => {

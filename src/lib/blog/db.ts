@@ -260,6 +260,26 @@ export async function transitionBlogPost(
   return Array.isArray(data) && data.length > 0;
 }
 
+/**
+ * Newest weekly-digest post (any status — a draft digest still covers its
+ * window). Anchors the next digest's PR window so skipped thin/quiet weeks
+ * roll into the following post instead of being lost.
+ */
+export async function getLatestWeeklyDigestPost(
+  client?: SupabaseClient
+): Promise<BlogPostRow | null> {
+  const db = await resolveClient(client);
+  const { data, error } = await db
+    .from("blog_posts")
+    .select()
+    .eq("source", "weekly_digest")
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`getLatestWeeklyDigestPost: ${error.message}`);
+  return (data as BlogPostRow | null) ?? null;
+}
+
 /** Weekly-digest idempotency probe. */
 export async function getPostByDigestWeek(
   digestWeek: string,
