@@ -71,11 +71,7 @@ export const SMS_GROUNDED_ACTIONS_LINE =
   "their preferred day/time and say a team member will confirm. If any " +
   "other tool is unavailable, turned off, or fails, say plainly that " +
   "you couldn't complete that step and that someone from the team will " +
-  "follow up — never pretend it worked. When confirming a booked " +
-  "appointment, state its day and time by quoting the booking result's " +
-  "startLocal exactly — never work out the day yourself — and if a " +
-  "booking fails with attendee_already_booked, follow that result's " +
-  "message instead of booking again.";
+  "follow up — never pretend it worked.";
 
 /**
  * Times carry timezones, always (KYP, Jul 20 2026): a "3:00 PM"
