@@ -31,6 +31,11 @@ vi.mock("@/lib/db/businesses", () => ({
   getBusiness: vi.fn()
 }));
 
+vi.mock("@/lib/nango/cleanup", () => ({
+  snapshotNangoConnectionLinks: vi.fn().mockResolvedValue([]),
+  revokeNangoConnectionRows: vi.fn()
+}));
+
 vi.mock("@/lib/billing/lifecycle-loader", () => ({
   loadLifecycleContextForBusiness: vi.fn()
 }));
@@ -58,6 +63,10 @@ vi.mock("@/lib/logger", () => ({
 import { DELETE } from "@/app/api/admin/delete-client/route";
 import { requireAdmin, findAuthUserIdByEmail } from "@/lib/auth";
 import { deleteBusiness, getBusiness } from "@/lib/db/businesses";
+import {
+  revokeNangoConnectionRows,
+  snapshotNangoConnectionLinks
+} from "@/lib/nango/cleanup";
 import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader";
 import { planLifecycleAction } from "@/lib/billing/lifecycle";
 import {
@@ -172,6 +181,17 @@ describe("api/admin/delete-client route (adminForceCancel)", () => {
       data: { deleted: true }
     });
     expect(deleteBusiness).toHaveBeenCalledWith(BUSINESS_ID);
+    // Snapshot BEFORE the row delete (the cascade removes the rows), Nango
+    // revocation AFTER it commits (a failed delete leaves the tenant
+    // intact, integrations untouched).
+    expect(snapshotNangoConnectionLinks).toHaveBeenCalledWith(BUSINESS_ID);
+    expect(
+      vi.mocked(snapshotNangoConnectionLinks).mock.invocationCallOrder[0]
+    ).toBeLessThan(vi.mocked(deleteBusiness).mock.invocationCallOrder[0]);
+    expect(revokeNangoConnectionRows).toHaveBeenCalledWith(BUSINESS_ID, []);
+    expect(
+      vi.mocked(revokeNangoConnectionRows).mock.invocationCallOrder[0]
+    ).toBeGreaterThan(vi.mocked(deleteBusiness).mock.invocationCallOrder[0]);
     expect(mockDeleteAuthUser).toHaveBeenCalledWith("auth-owner-1");
     expect(planLifecycleAction).not.toHaveBeenCalled();
   });

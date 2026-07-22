@@ -26,7 +26,9 @@ export const enterpriseLimitsOverrideSchema = z.preprocess(
       voiceIncludedSecondsPerStripePeriod: z.number().int().min(60).max(100_000_000),
       smsPerMonth: z.number().positive().finite(),
       maxConcurrentCalls: z.number().int().min(1).max(1000),
-      smsThrottled: z.boolean()
+      smsThrottled: z.boolean(),
+      /** Per-deal cap on Nango workspace connections (default: unlimited on enterprise). */
+      workspaceConnectionsMax: z.number().int().min(0).max(1000)
     })
     .partial()
 );

@@ -52,7 +52,7 @@ import { getMcpConnectorStatus } from "@/lib/mcp/connector-status";
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const USER = { userId: "u1", email: "o@o.com", isAdmin: false };
 
-function mockDb(rows: Array<{ id: string }>) {
+function mockDb(rows: Array<{ id: string; tier?: string; enterprise_limits?: unknown }>) {
   const db = {
     from: vi.fn(),
     select: vi.fn(),
@@ -109,6 +109,8 @@ describe("loadIntegrationsContext", () => {
     const ctx = await loadIntegrationsContext("/dashboard/integrations");
     expect(ctx.businessId).toBe(BIZ);
     expect(ctx.canManageApiKeys).toBe(true);
+    // No tier on the row → conservative starter cap (1).
+    expect(ctx.workspaceConnectionCap).toEqual({ used: 0, max: 1, atCap: false });
     expect(listWorkspaceOAuthConnections).toHaveBeenCalledWith(BIZ);
     expect(listCustomIntegrations).toHaveBeenCalledWith(BIZ);
     expect(getPublicVagaroConnection).toHaveBeenCalledWith(BIZ);
@@ -133,6 +135,28 @@ describe("loadIntegrationsContext", () => {
     vi.mocked(getMcpConnectorStatus).mockRejectedValue(new Error("status down"));
     const degraded = await loadIntegrationsContext("/dashboard/integrations");
     expect(degraded.mcpConnectorStatus).toBeNull();
+  });
+
+  it("computes the workspace connection cap from tier, count, and enterprise override", async () => {
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(
+      mockDb([{ id: BIZ, tier: "standard" }]) as never
+    );
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      { id: "a" },
+      { id: "b" },
+      { id: "c" }
+    ] as never);
+    const ctx = await loadIntegrationsContext("/dashboard/integrations");
+    expect(ctx.workspaceConnectionCap).toEqual({ used: 3, max: 3, atCap: true });
+
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(
+      mockDb([
+        { id: BIZ, tier: "enterprise", enterprise_limits: { workspaceConnectionsMax: 2 } }
+      ]) as never
+    );
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([{ id: "a" }] as never);
+    const ent = await loadIntegrationsContext("/dashboard/integrations");
+    expect(ent.workspaceConnectionCap).toEqual({ used: 1, max: 2, atCap: false });
   });
 
   it("never loads API key metadata for a manager (no manage_billing)", async () => {

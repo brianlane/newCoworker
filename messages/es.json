@@ -1288,6 +1288,10 @@
       "lastUsed": "Claude usó este conector por última vez",
       "firstConnected": "conectado por primera vez"
     },
+    "integrationsWorkspace": {
+      "capUsage": "{used} de {max} conexiones de espacio de trabajo en uso",
+      "capReached": "Tu plan incluye {max, plural, one {# conexión de espacio de trabajo} other {# conexiones de espacio de trabajo}}. Elimina una o mejora tu plan para conectar otra."
+    },
     "humanHandoff": {
       "title": "Traspaso a humano",
       "toggleLabel": "Ofrecer primero al equipo cuando un cliente pida hablar con una persona",

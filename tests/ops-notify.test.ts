@@ -31,7 +31,8 @@ import {
   sendOpsTermAlignmentEmail,
   sendOpsBillingPostureEmail,
   sendOpsMarginAlertEmail,
-  sendOpsNewSignupEmail
+  sendOpsNewSignupEmail,
+  sendOpsNangoQuotaEmail
 } from "@/lib/email/ops-notify";
 import { getBusiness } from "@/lib/db/businesses";
 
@@ -681,6 +682,73 @@ describe("sendOpsNewSignupEmail", () => {
       expect.objectContaining({
         html: expect.stringContaining("http://localhost:3000")
       })
+    );
+  });
+});
+
+describe("sendOpsNangoQuotaEmail", () => {
+  const quotaInput = { used: 8, limit: 10 };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.RESEND_API_KEY = "resend_test";
+    process.env.NEXT_PUBLIC_APP_URL = "https://www.example.com";
+    delete process.env.OPS_NOTIFICATION_EMAIL;
+    sendOwnerEmailMock.mockResolvedValue(undefined);
+  });
+
+  it("sends the near-limit alert to the ops inbox (no tier tag: platform-wide)", async () => {
+    await expect(sendOpsNangoQuotaEmail(quotaInput)).resolves.toBe(true);
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "team@newcoworker.com",
+      "[ops] Nango connections at 8/10",
+      expect.objectContaining({
+        text: expect.stringContaining("debug/nango-audit.ts"),
+        html: expect.stringContaining("/admin/system")
+      })
+    );
+    expect(getBusiness).not.toHaveBeenCalled();
+    expect(loggerInfoMock).toHaveBeenCalledWith(
+      "ops Nango quota alert emailed",
+      expect.objectContaining({ used: 8, limit: 10, toEmail: "team@newcoworker.com" })
+    );
+  });
+
+  it("skips with a warning when RESEND_API_KEY is missing", async () => {
+    delete process.env.RESEND_API_KEY;
+    await expect(sendOpsNangoQuotaEmail(quotaInput)).resolves.toBe(false);
+    expect(sendOwnerEmailMock).not.toHaveBeenCalled();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops Nango quota email skipped: RESEND_API_KEY missing",
+      { used: 8, limit: 10 }
+    );
+  });
+
+  it("falls back to localhost site URL when NEXT_PUBLIC_APP_URL is unset", async () => {
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    await expect(sendOpsNangoQuotaEmail(quotaInput)).resolves.toBe(true);
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "team@newcoworker.com",
+      expect.any(String),
+      expect.objectContaining({ html: expect.stringContaining("http://localhost:3000") })
+    );
+  });
+
+  it("never throws when the send fails (Error and non-Error rejections)", async () => {
+    sendOwnerEmailMock.mockRejectedValueOnce(new Error("smtp down"));
+    await expect(sendOpsNangoQuotaEmail(quotaInput)).resolves.toBe(false);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops Nango quota email failed",
+      expect.objectContaining({ error: "smtp down" })
+    );
+
+    sendOwnerEmailMock.mockRejectedValueOnce("smtp string failure");
+    await expect(sendOpsNangoQuotaEmail(quotaInput)).resolves.toBe(false);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops Nango quota email failed",
+      expect.objectContaining({ error: "smtp string failure" })
     );
   });
 });

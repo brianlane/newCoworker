@@ -1,6 +1,7 @@
 import { listBusinesses } from "@/lib/db/businesses";
 import { getTranslations } from "next-intl/server";
 import { checkEnv, getEnvDisplayValue } from "@/lib/admin/system";
+import { getNangoAccountUsage } from "@/lib/nango/account-usage";
 import { getAdminPlatformSetting } from "@/lib/admin/platform-settings";
 import {
   SPEND_VELOCITY_SETTINGS_KEY,
@@ -101,6 +102,9 @@ export default async function SystemPage() {
   const spendVelocityConfig = parseSpendVelocityConfig(
     await getAdminPlatformSetting(SPEND_VELOCITY_SETTINGS_KEY).catch(() => null)
   );
+  // Account-wide Nango connection count (all tenants share one Nango
+  // account); null = count unavailable (missing key / API error).
+  const nangoUsage = await getNangoAccountUsage();
 
   const totalConfigured = ENV_GROUPS.flatMap((g) => g.vars).filter((v) => checkEnv(v.key)).length;
   const totalVars = ENV_GROUPS.flatMap((g) => g.vars).length;
@@ -140,6 +144,37 @@ export default async function SystemPage() {
           windowMinutes: spendVelocityConfig.windowMinutes
         }}
       />
+
+      {/* Nango account headroom — every tenant workspace connect draws from
+          this one shared pool, so nearing the limit is a platform incident
+          (new connects start failing), not a per-tenant one. */}
+      <Card>
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="text-sm font-semibold text-parchment">Nango connections (account-wide)</h2>
+          {nangoUsage ? (
+            <Badge variant={nangoUsage.nearLimit ? "error" : "success"}>
+              {nangoUsage.nearLimit ? "near limit" : "headroom"}
+            </Badge>
+          ) : (
+            <Badge variant="pending">unavailable</Badge>
+          )}
+        </div>
+        {nangoUsage ? (
+          <p className="text-3xl font-bold text-parchment">
+            {nangoUsage.used}
+            <span className="text-sm text-parchment/40 font-normal">/{nangoUsage.limit}</span>
+          </p>
+        ) : (
+          <p className="text-sm text-parchment/50">
+            Could not read the connection count from Nango.
+          </p>
+        )}
+        <p className="text-xs text-parchment/40 mt-2">
+          All tenant workspace connections (Gmail, Outlook, calendars) share one Nango account.
+          Near the limit: upgrade the Nango plan or reclaim orphans with debug/nango-audit.ts.
+          Override the plan limit via NANGO_ACCOUNT_CONNECTION_LIMIT.
+        </p>
+      </Card>
 
       {/* Environment variables */}
       <div className="space-y-4">

@@ -51,6 +51,10 @@ function IntegrationBody({
               createdAt: r.created_at,
               metadata: r.metadata
             }))}
+            cap={{
+              used: ctx.workspaceConnectionCap.used,
+              max: ctx.workspaceConnectionCap.max
+            }}
           />
         </IntegrationCard>
       );

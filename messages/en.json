@@ -1288,6 +1288,10 @@
       "lastUsed": "Claude last used this connector",
       "firstConnected": "first connected"
     },
+    "integrationsWorkspace": {
+      "capUsage": "{used} of {max} workspace connections used",
+      "capReached": "Your plan includes {max, plural, one {# workspace connection} other {# workspace connections}}. Remove one or upgrade your plan to connect another."
+    },
     "humanHandoff": {
       "title": "Human handoff",
       "toggleLabel": "Offer the team first when a customer asks for a person",

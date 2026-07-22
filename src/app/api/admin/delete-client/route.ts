@@ -29,6 +29,10 @@ import {
   executeLifecyclePlanSlowPhase
 } from "@/lib/billing/lifecycle-executor";
 import { deleteBusiness, getBusiness } from "@/lib/db/businesses";
+import {
+  revokeNangoConnectionRows,
+  snapshotNangoConnectionLinks
+} from "@/lib/nango/cleanup";
 import { logAdminAction } from "@/lib/admin/audit";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
@@ -183,7 +187,14 @@ export async function DELETE(request: Request) {
             500
           );
         }
+        // Snapshot the Nango connections BEFORE the row delete (the cascade
+        // removes the rows) but revoke them AFTER it commits — a failed
+        // delete must leave the tenant fully intact, never active with dead
+        // integrations. Nango's side would otherwise outlive the tenant and
+        // burn account-wide quota forever.
+        const nangoSnapshot = await snapshotNangoConnectionLinks(body.businessId);
         await deleteBusiness(body.businessId);
+        await revokeNangoConnectionRows(body.businessId, nangoSnapshot);
         logger.info("admin.delete-client: deleted subscription-less business", {
           adminEmail: admin.email,
           businessId: body.businessId,

@@ -19,6 +19,13 @@ export type TierLimits = {
   memoryType: "lossless";
   /** Hard cap on AI image generations per conversation (dashboard thread / texter). */
   imageGenerationsPerSession: number;
+  /**
+   * Max simultaneous Nango workspace connections (Gmail / Outlook / etc. on
+   * /dashboard/integrations/workspace). Every connection consumes the
+   * platform's ACCOUNT-WIDE Nango quota, so per-tenant caps keep one tenant
+   * from exhausting the shared pool. Infinity = unlimited (enterprise).
+   */
+  workspaceConnectionsMax: number;
 };
 
 export const TIER_LIMITS: Record<PlanTier, TierLimits> = {
@@ -30,7 +37,8 @@ export const TIER_LIMITS: Record<PlanTier, TierLimits> = {
     maxConcurrentCalls: VOICE_RES_LIMITS.starter.maxConcurrentCalls,
     smsThrottled: true,
     memoryType: "lossless",
-    imageGenerationsPerSession: 3
+    imageGenerationsPerSession: 3,
+    workspaceConnectionsMax: 1
   },
   standard: {
     voiceMinutesPerDay: Infinity,
@@ -39,7 +47,8 @@ export const TIER_LIMITS: Record<PlanTier, TierLimits> = {
     maxConcurrentCalls: VOICE_RES_LIMITS.standard.maxConcurrentCalls,
     smsThrottled: false,
     memoryType: "lossless",
-    imageGenerationsPerSession: 10
+    imageGenerationsPerSession: 10,
+    workspaceConnectionsMax: 3
   },
   enterprise: {
     voiceMinutesPerDay: Infinity,
@@ -48,7 +57,8 @@ export const TIER_LIMITS: Record<PlanTier, TierLimits> = {
     maxConcurrentCalls: VOICE_RES_LIMITS.enterprise.maxConcurrentCalls,
     smsThrottled: false,
     memoryType: "lossless",
-    imageGenerationsPerSession: 10
+    imageGenerationsPerSession: 10,
+    workspaceConnectionsMax: Infinity
   }
 };
 
