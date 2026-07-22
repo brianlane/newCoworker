@@ -443,9 +443,13 @@ export async function runWeeklyDigest(deps: WeeklyDigestDeps = {}): Promise<Week
   const weekAgoMs = nowDate.getTime() - 7 * 24 * 60 * 60 * 1000;
   const windowFloorMs = nowDate.getTime() - DIGEST_MAX_WINDOW_DAYS * 24 * 60 * 60 * 1000;
   const lastDigest = await findLatestDigest(db);
-  const sinceMs = lastDigest
-    ? Math.max(windowFloorMs, Date.parse(lastDigest.created_at))
-    : weekAgoMs;
+  // The anchor is the previous run's window END (`scheduled_for` — recorded
+  // on every digest row, draft mode included, precisely for this). Falling
+  // back to `created_at` (older rows / admin-cleared schedules) can miss
+  // merges that landed during that run's compose window — acceptable
+  // seconds-scale residual on a rare path.
+  const anchorIso = lastDigest ? (lastDigest.scheduled_for ?? lastDigest.created_at) : null;
+  const sinceMs = anchorIso ? Math.max(windowFloorMs, Date.parse(anchorIso)) : weekAgoMs;
   const sinceIso = new Date(sinceMs).toISOString();
   const merged = await fetchMergedPrs(sinceIso, untilIso);
   if (merged.length <= DIGEST_MIN_MERGED_PRS) {
@@ -490,9 +494,13 @@ export async function runWeeklyDigest(deps: WeeklyDigestDeps = {}): Promise<Week
         digest_week: weekKey,
         featured_image_path: imagePath,
         featured_image_alt: imagePath ? draft.title : null,
-        ...(settings.digest_as_draft
-          ? { status: "draft" as const }
-          : { status: "scheduled" as const, scheduled_for: nowDate.toISOString() })
+        // `scheduled_for` doubles as the covered window's END (= untilIso):
+        // the next run anchors on it, so merges landing DURING this run's
+        // compose/image/insert are never skipped. Draft-mode rows carry it
+        // too — the publish sweep only picks status "scheduled", so it is
+        // inert there beyond prefilling the admin schedule picker.
+        status: settings.digest_as_draft ? ("draft" as const) : ("scheduled" as const),
+        scheduled_for: untilIso
       },
       db
     );

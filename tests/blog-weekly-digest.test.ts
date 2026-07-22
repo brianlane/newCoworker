@@ -493,23 +493,45 @@ describe("runWeeklyDigest", () => {
     expect(sinceIso).toBe("2026-07-13T15:00:00.000Z");
   });
 
-  it("anchors the PR window at the last digest post so skipped weeks roll forward", async () => {
-    // Last digest posted 12 days ago (the run in between was skipped).
+  it("anchors the PR window at the last digest's covered-window end (scheduled_for)", async () => {
+    // Last digest ran 12 days ago (the run in between was skipped); its
+    // scheduled_for records exactly where its PR window ended.
     const twelveDaysAgo = new Date(NOW.getTime() - 12 * 24 * 60 * 60 * 1000).toISOString();
     const fetchMergedPrs = vi.fn(async (_s: string, _u: string) => manyPrs);
     const d = deps({
-      findLatestDigest: vi.fn(async () => ({ created_at: twelveDaysAgo }) as never),
+      findLatestDigest: vi.fn(
+        async () =>
+          ({
+            scheduled_for: twelveDaysAgo,
+            created_at: new Date(NOW.getTime() - 13 * 24 * 60 * 60 * 1000).toISOString()
+          }) as never
+      ),
       fetchMergedPrs
     });
     await runWeeklyDigest(d as never);
     expect(fetchMergedPrs.mock.calls[0]?.[0]).toBe(twelveDaysAgo);
   });
 
+  it("falls back to created_at when the last digest carries no scheduled_for", async () => {
+    const tenDaysAgo = new Date(NOW.getTime() - 10 * 24 * 60 * 60 * 1000).toISOString();
+    const fetchMergedPrs = vi.fn(async (_s: string, _u: string) => manyPrs);
+    const d = deps({
+      findLatestDigest: vi.fn(
+        async () => ({ scheduled_for: null, created_at: tenDaysAgo }) as never
+      ),
+      fetchMergedPrs
+    });
+    await runWeeklyDigest(d as never);
+    expect(fetchMergedPrs.mock.calls[0]?.[0]).toBe(tenDaysAgo);
+  });
+
   it("caps the rollover window at DIGEST_MAX_WINDOW_DAYS", async () => {
     const fortyDaysAgo = new Date(NOW.getTime() - 40 * 24 * 60 * 60 * 1000).toISOString();
     const fetchMergedPrs = vi.fn(async (_s: string, _u: string) => manyPrs);
     const d = deps({
-      findLatestDigest: vi.fn(async () => ({ created_at: fortyDaysAgo }) as never),
+      findLatestDigest: vi.fn(
+        async () => ({ scheduled_for: fortyDaysAgo, created_at: fortyDaysAgo }) as never
+      ),
       fetchMergedPrs
     });
     await runWeeklyDigest(d as never);
@@ -576,7 +598,9 @@ describe("runWeeklyDigest", () => {
       }),
       DB
     );
+    // Draft rows still record the covered-window end so the next run's
+    // anchor is exact (the sweep ignores drafts, so it stays inert).
     const inserted = (insertPost.mock.calls[0]?.[0] ?? {}) as Record<string, unknown>;
-    expect(inserted.scheduled_for).toBeUndefined();
+    expect(inserted.scheduled_for).toBe(NOW.toISOString());
   });
 });
