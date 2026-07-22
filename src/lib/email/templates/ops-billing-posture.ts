@@ -50,6 +50,8 @@ export function buildOpsBillingPostureEmail(
   const text = textLines.join("\n\n");
 
   const html = buildBrandedEmailHtml({
+    // Internal ops inbox — omit the owner-facing platform signature block.
+    platformSignature: false,
     siteUrl: input.siteUrl,
     documentTitle: subject,
     heading: "VPS billing posture findings",

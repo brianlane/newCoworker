@@ -33,6 +33,8 @@ export function buildOpsNangoQuotaEmail(input: OpsNangoQuotaInput): OpsNangoQuot
   const text = textLines.join("\n\n");
 
   const html = buildBrandedEmailHtml({
+    // Internal ops inbox — omit the owner-facing platform signature block.
+    platformSignature: false,
     siteUrl: input.siteUrl,
     documentTitle: subject,
     heading: "Nango account nearing its connection limit",

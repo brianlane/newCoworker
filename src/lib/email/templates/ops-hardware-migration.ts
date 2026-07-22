@@ -57,6 +57,8 @@ export function buildOpsHardwareMigrationEmail(
   const text = textLines.join("\n\n");
 
   const html = buildBrandedEmailHtml({
+    // Internal ops inbox — omit the owner-facing platform signature block.
+    platformSignature: false,
     siteUrl: input.siteUrl,
     documentTitle: subject,
     heading: `Hardware migration ${PHASE_LABEL[input.phase]}`,
