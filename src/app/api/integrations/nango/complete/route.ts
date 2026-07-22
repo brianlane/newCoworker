@@ -20,6 +20,7 @@ import {
   settleWorkspaceConnectionInsert,
   workspaceConnectionCapMessage
 } from "@/lib/nango/connection-cap";
+import { consolidateReconnectedWorkspaceConnection } from "@/lib/nango/connection-continuity";
 import { maybeSendNangoQuotaAlert } from "@/lib/nango/account-usage";
 import { z } from "zod";
 
@@ -175,6 +176,34 @@ export async function POST(request: Request) {
             patchErr instanceof Error ? patchErr.message : patchErr
           );
         }
+      }
+    }
+
+    // Reconnect continuity: if this NEW connection is the same provider
+    // account an OLDER row already represents, keep the old row's id (the id
+    // AiFlow mailbox bindings and email triggers reference) and re-point it
+    // at this fresh grant — deleting the duplicate row and the superseded
+    // Nango connection. Best-effort: a failure leaves two working rows, the
+    // pre-continuity behavior.
+    if (!existing && identity.email) {
+      try {
+        const consolidation = await consolidateReconnectedWorkspaceConnection({
+          businessId: parsed.businessId,
+          providerConfigKey: parsed.providerConfigKey,
+          newConnectionId: parsed.connectionId,
+          accountEmail: identity.email,
+          deleteNangoConnection: (pck, connId) => nango.deleteConnection(pck, connId)
+        });
+        if (consolidation.consolidated) {
+          console.log(
+            `nango/complete: reconnect consolidated onto row ${consolidation.keptRowId} (superseded ${consolidation.supersededNangoConnectionId})`
+          );
+        }
+      } catch (contErr) {
+        console.error(
+          "nango/complete: reconnect consolidation failed (two rows remain)",
+          contErr instanceof Error ? contErr.message : contErr
+        );
       }
     }
 

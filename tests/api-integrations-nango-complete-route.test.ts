@@ -27,7 +27,7 @@ vi.mock("@/lib/db/workspace-oauth-connections", () => ({
 }));
 
 vi.mock("@/lib/nango/account-identity", () => ({
-  fetchProviderAccountIdentity: vi.fn().mockResolvedValue(null),
+  fetchProviderAccountIdentity: vi.fn(),
   nangoIdentityPatchBody: vi.fn().mockReturnValue(null),
   providerAccountMetadata: vi.fn().mockReturnValue({})
 }));
@@ -45,7 +45,13 @@ vi.mock("@/lib/nango/account-usage", () => ({
   maybeSendNangoQuotaAlert: vi.fn()
 }));
 
+vi.mock("@/lib/nango/connection-continuity", () => ({
+  consolidateReconnectedWorkspaceConnection: vi.fn()
+}));
+
 import { POST } from "@/app/api/integrations/nango/complete/route";
+import { consolidateReconnectedWorkspaceConnection } from "@/lib/nango/connection-continuity";
+import { fetchProviderAccountIdentity } from "@/lib/nango/account-identity";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { readConnectionEndUserId } from "@/lib/nango/server";
 import {
@@ -103,6 +109,15 @@ describe("api/integrations/nango/complete", () => {
       evictRowId: null
     });
     mockDeleteConnection.mockResolvedValue(undefined);
+    // Real contract: the probe never resolves null — a failed probe is
+    // { email: null, displayName: null }.
+    vi.mocked(fetchProviderAccountIdentity).mockResolvedValue({
+      email: null,
+      displayName: null
+    });
+    vi.mocked(consolidateReconnectedWorkspaceConnection).mockResolvedValue({
+      consolidated: false
+    });
   });
 
   it("returns 401 when unauthenticated", async () => {
@@ -216,5 +231,68 @@ describe("api/integrations/nango/complete", () => {
         metadata: expect.objectContaining({ shared_calendar_id: "cal-1" })
       })
     );
+  });
+
+  it("consolidates a NEW connection onto the older row for the same account email", async () => {
+    vi.mocked(fetchProviderAccountIdentity).mockResolvedValue({
+      email: "sam@example.com",
+      displayName: "Sam"
+    });
+    vi.mocked(consolidateReconnectedWorkspaceConnection).mockResolvedValue({
+      consolidated: true,
+      keptRowId: "row-old",
+      supersededNangoConnectionId: "conn-old"
+    });
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+    expect(consolidateReconnectedWorkspaceConnection).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId,
+        providerConfigKey: "google-mail",
+        newConnectionId: "conn-1",
+        accountEmail: "sam@example.com"
+      })
+    );
+    // The injected Nango delete is the route's own client method.
+    const call = vi.mocked(consolidateReconnectedWorkspaceConnection).mock.calls[0][0];
+    await call.deleteNangoConnection("google-mail", "conn-old");
+    expect(mockDeleteConnection).toHaveBeenCalledWith("google-mail", "conn-old");
+  });
+
+  it("skips consolidation when the identity probe resolved no email", async () => {
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+    expect(consolidateReconnectedWorkspaceConnection).not.toHaveBeenCalled();
+  });
+
+  it("skips consolidation on a re-complete of an EXISTING connection", async () => {
+    vi.mocked(fetchProviderAccountIdentity).mockResolvedValue({
+      email: "sam@example.com",
+      displayName: "Sam"
+    });
+    vi.mocked(getWorkspaceOAuthConnectionByNangoIds).mockResolvedValue({
+      id: "row-1",
+      business_id: businessId,
+      provider_config_key: "google-mail",
+      connection_id: "conn-1",
+      metadata: {},
+      created_at: "2026-01-01T00:00:00Z",
+      updated_at: "2026-01-01T00:00:00Z"
+    });
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+    expect(consolidateReconnectedWorkspaceConnection).not.toHaveBeenCalled();
+  });
+
+  it("a consolidation failure is non-fatal (two working rows remain)", async () => {
+    vi.mocked(fetchProviderAccountIdentity).mockResolvedValue({
+      email: "sam@example.com",
+      displayName: "Sam"
+    });
+    vi.mocked(consolidateReconnectedWorkspaceConnection).mockRejectedValue(
+      new Error("db hiccup")
+    );
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
   });
 });

@@ -37,11 +37,14 @@ import {
   extractFlowJson,
   humanizeCompileIssues,
   type CompileAgentOption,
-  type CompileDocumentOption
+  type CompileDocumentOption,
+  type CompileMailboxOption
 } from "@/lib/ai-flows/compile";
 import { listBusinessDocuments, type BusinessDocumentRow } from "@/lib/documents/db";
 import { documentEligibleFor } from "@/lib/documents/core";
 import { listBusinessAgents, type BusinessAgentRow } from "@/lib/agents/db";
+import { connectionEmail } from "@/lib/email/mailbox-options";
+import { isEmailProviderConfigKey } from "@/lib/voice-tools/connections";
 import { validateRunAgentSteps } from "@/lib/ai-flows/agent-steps";
 import {
   AiFlowValidationError,
@@ -168,6 +171,38 @@ async function loadCompileAgents(
 }
 
 /**
+ * Connected mailboxes the model may bind send_email `fromConnectionId` /
+ * email triggers / email_extract to — so "send it from my sam@ mailbox"
+ * binds the REAL connection uuid instead of relying on the never-invent
+ * contract alone. Email providers only; labels via the same metadata
+ * resolution as the composer's send-from picker. Same degrade posture as
+ * documents/agents: a read failure compiles with "(none connected)".
+ */
+async function loadCompileMailboxes(
+  businessId: string,
+  fetchConnections: NonNullable<CompileFlowDeps["fetchConnections"]>
+): Promise<CompileMailboxOption[]> {
+  try {
+    const conns = await fetchConnections(businessId);
+    return conns
+      .filter((c) => isEmailProviderConfigKey(c.provider_config_key))
+      .map((c) => {
+        const email = connectionEmail(c.metadata);
+        return {
+          id: c.id,
+          label: email ? `${email} (${c.provider_config_key})` : c.provider_config_key
+        };
+      });
+  } catch (connErr) {
+    logger.warn("aiflow compile: mailbox list failed; compiling without mailboxes", {
+      businessId,
+      error: connErr instanceof Error ? connErr.message : String(connErr)
+    });
+    return [];
+  }
+}
+
+/**
  * Compile one description into a validated definition (with self-repair +
  * salvage). See module doc for the contract.
  */
@@ -198,8 +233,14 @@ export async function compileAiFlowFromDescription(
 
   const compileDocuments = await loadCompileDocuments(args.businessId, fetchDocuments);
   const compileAgents = await loadCompileAgents(args.businessId, fetchAgents);
+  const compileMailboxes = await loadCompileMailboxes(args.businessId, fetchConnections);
 
-  const userText = buildFlowCompileUserText(args.description, compileDocuments, compileAgents);
+  const userText = buildFlowCompileUserText(
+    args.description,
+    compileDocuments,
+    compileAgents,
+    compileMailboxes
+  );
   let raw: string;
   let usage: GeminiUsage | null;
   try {
@@ -317,7 +358,8 @@ export async function compileAiFlowFromDescription(
         candidateJson: JSON.stringify(candidate),
         issues: err.issues,
         documents: compileDocuments,
-        agents: compileAgents
+        agents: compileAgents,
+        mailboxes: compileMailboxes
       });
       const { text: repairedRaw, usage: repairUsage } = await generate({
         apiKey,
@@ -461,13 +503,15 @@ export async function editAiFlowDefinition(
   const model = flowCompileModel();
   const compileDocuments = await loadCompileDocuments(args.businessId, fetchDocuments);
   const compileAgents = await loadCompileAgents(args.businessId, fetchAgents);
+  const compileMailboxes = await loadCompileMailboxes(args.businessId, fetchConnections);
 
   const userText = buildFlowEditUserText({
     currentName: args.flowName,
     currentDefinitionJson: JSON.stringify(args.currentDefinition),
     instructions: args.instructions,
     documents: compileDocuments,
-    agents: compileAgents
+    agents: compileAgents,
+    mailboxes: compileMailboxes
   });
   let raw: string;
   let usage: GeminiUsage | null;
@@ -571,7 +615,8 @@ export async function editAiFlowDefinition(
         candidateJson: JSON.stringify(candidate),
         issues: err.issues,
         documents: compileDocuments,
-        agents: compileAgents
+        agents: compileAgents,
+        mailboxes: compileMailboxes
       });
       const { text: repairedRaw, usage: repairUsage } = await generate({
         apiKey,

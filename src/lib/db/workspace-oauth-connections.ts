@@ -95,6 +95,39 @@ export async function upsertWorkspaceOAuthConnection(
   return data as WorkspaceOAuthConnectionRow;
 }
 
+/**
+ * Re-point an existing connection row at a NEW Nango connection id
+ * (reconnect continuity): the row id — which AiFlow mailbox bindings and
+ * email triggers reference — stays stable while the underlying OAuth grant
+ * is replaced. Metadata is written wholesale; callers merge app-owned keys
+ * (e.g. the shared-calendar id) before calling.
+ */
+export async function updateWorkspaceOAuthConnectionLink(
+  args: {
+    businessId: string;
+    id: string;
+    connectionId: string;
+    metadata: Record<string, unknown>;
+  },
+  client?: SupabaseClient
+): Promise<WorkspaceOAuthConnectionRow> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("workspace_oauth_connections")
+    .update({
+      connection_id: args.connectionId,
+      metadata: args.metadata,
+      updated_at: new Date().toISOString()
+    })
+    .eq("business_id", args.businessId)
+    .eq("id", args.id)
+    .select()
+    .single();
+
+  if (error) throw new Error(`updateWorkspaceOAuthConnectionLink: ${error.message}`);
+  return data as WorkspaceOAuthConnectionRow;
+}
+
 export async function deleteWorkspaceOAuthConnection(
   businessId: string,
   id: string,

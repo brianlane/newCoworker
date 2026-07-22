@@ -4,6 +4,7 @@ import {
   getWorkspaceOAuthConnection,
   getWorkspaceOAuthConnectionByNangoIds,
   listWorkspaceOAuthConnections,
+  updateWorkspaceOAuthConnectionLink,
   upsertWorkspaceOAuthConnection
 } from "@/lib/db/workspace-oauth-connections";
 
@@ -173,6 +174,54 @@ describe("db/workspace-oauth-connections", () => {
         connectionId: "conn-1"
       })
     ).rejects.toThrow("upsertWorkspaceOAuthConnection");
+  });
+
+  it("updateWorkspaceOAuthConnectionLink re-points a row at a new Nango id", async () => {
+    const single = vi.fn().mockResolvedValue({
+      data: { ...MOCK, connection_id: "conn-2" },
+      error: null
+    });
+    const select = vi.fn().mockReturnValue({ single });
+    const eqId = vi.fn().mockReturnValue({ select });
+    const eqBiz = vi.fn().mockReturnValue({ eq: eqId });
+    const update = vi.fn().mockReturnValue({ eq: eqBiz });
+    const finalDb = { from: vi.fn().mockReturnValue({ update }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(finalDb as never);
+
+    const row = await updateWorkspaceOAuthConnectionLink({
+      businessId: "biz-1",
+      id: "woc-1",
+      connectionId: "conn-2",
+      metadata: { provider_account_email: "sam@example.com" }
+    });
+    expect(row.connection_id).toBe("conn-2");
+    expect(update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        connection_id: "conn-2",
+        metadata: { provider_account_email: "sam@example.com" }
+      })
+    );
+    expect(eqBiz).toHaveBeenCalledWith("business_id", "biz-1");
+    expect(eqId).toHaveBeenCalledWith("id", "woc-1");
+  });
+
+  it("updateWorkspaceOAuthConnectionLink throws on error", async () => {
+    const single = vi.fn().mockResolvedValue({ data: null, error: { message: "nope" } });
+    const select = vi.fn().mockReturnValue({ single });
+    const eqId = vi.fn().mockReturnValue({ select });
+    const eqBiz = vi.fn().mockReturnValue({ eq: eqId });
+    const update = vi.fn().mockReturnValue({ eq: eqBiz });
+    const finalDb = { from: vi.fn().mockReturnValue({ update }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(finalDb as never);
+
+    await expect(
+      updateWorkspaceOAuthConnectionLink({
+        businessId: "biz-1",
+        id: "woc-1",
+        connectionId: "conn-2",
+        metadata: {}
+      })
+    ).rejects.toThrow("updateWorkspaceOAuthConnectionLink");
   });
 
   it("deleteWorkspaceOAuthConnection deletes and returns row", async () => {

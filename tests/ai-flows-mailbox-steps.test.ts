@@ -1,10 +1,17 @@
 import { describe, expect, it, vi } from "vitest";
+
+vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }));
+
 import {
   collectMailboxConnectionRefs,
+  collectRawWorkspaceConnectionRefs,
+  connectionInUseMessage,
+  flowsReferencingWorkspaceConnection,
   validateMailboxConnectionSteps
 } from "../src/lib/ai-flows/mailbox-steps";
 import { parseAiFlowDefinition } from "../src/lib/ai-flows/schema";
 import type { WorkspaceOAuthConnectionRow } from "../src/lib/db/workspace-oauth-connections";
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 /**
  * Write-time validation for mailbox bindings (send_email.fromConnectionId and
@@ -166,5 +173,140 @@ describe("validateMailboxConnectionSteps", () => {
       { fetchConnections }
     );
     expect(issues).toHaveLength(2);
+  });
+});
+
+describe("collectRawWorkspaceConnectionRefs", () => {
+  it("collects every reference shape: triggers, senders, quiet-hours, email_extract, branches", () => {
+    const refs = collectRawWorkspaceConnectionRefs({
+      trigger: { channel: "email", connectionId: "trig-1", conditions: [] },
+      triggers: [
+        { channel: "email", connectionId: "trig-2" },
+        { channel: "webhook" } // no connection — ignored
+      ],
+      steps: [
+        { id: "a", type: "send_email", fromConnectionId: "send-1" },
+        { id: "b", type: "send_sms", quietHours: { emailFromConnectionId: "quiet-1" } },
+        { id: "c", type: "email_extract", connectionId: "extract-1" },
+        {
+          id: "d",
+          type: "branch",
+          branches: [{ steps: [{ id: "e", type: "send_email", fromConnectionId: "arm-1" }] }],
+          else: [{ id: "f", type: "email_extract", connectionId: "else-1" }]
+        }
+      ]
+    });
+    expect(refs.sort()).toEqual(
+      ["trig-1", "trig-2", "send-1", "quiet-1", "extract-1", "arm-1", "else-1"].sort()
+    );
+  });
+
+  it("de-duplicates repeated references", () => {
+    const refs = collectRawWorkspaceConnectionRefs({
+      trigger: { channel: "email", connectionId: "same-1" },
+      steps: [{ id: "a", type: "send_email", fromConnectionId: "same-1" }]
+    });
+    expect(refs).toEqual(["same-1"]);
+  });
+
+  it("tolerates legacy/junk shapes without throwing", () => {
+    expect(collectRawWorkspaceConnectionRefs(null)).toEqual([]);
+    expect(collectRawWorkspaceConnectionRefs("not an object")).toEqual([]);
+    expect(
+      collectRawWorkspaceConnectionRefs({
+        trigger: { channel: "sms" },
+        steps: [
+          null,
+          42,
+          { id: "a", type: "send_email" }, // no binding
+          { id: "b", type: "send_sms", quietHours: { emailFromConnectionId: 7 } },
+          { id: "c", type: "email_extract", connectionId: "" },
+          { id: "d", type: "branch", branches: [{}, null, { steps: "junk" }], else: "junk" },
+          { id: "e", type: "unknown_step" },
+          { id: "g", type: "branch" } // no branches array, no else
+        ]
+      })
+    ).toEqual([]);
+  });
+});
+
+describe("flowsReferencingWorkspaceConnection", () => {
+  const flowRows = [
+    {
+      id: "f1",
+      name: "Booking confirmation",
+      enabled: true,
+      definition: { steps: [{ id: "s", type: "send_email", fromConnectionId: "conn-a" }] }
+    },
+    {
+      id: "f2",
+      name: "Unrelated",
+      enabled: true,
+      definition: { steps: [{ id: "s", type: "notify_owner", message: "hi" }] }
+    },
+    {
+      id: "f3",
+      name: "Old outreach",
+      enabled: false,
+      definition: { trigger: { channel: "email", connectionId: "conn-a" } }
+    }
+  ];
+  const stubDb = (data: unknown, error: { message: string } | null = null) => ({
+    from: vi.fn().mockReturnValue({
+      select: vi.fn().mockReturnValue({
+        eq: vi.fn().mockResolvedValue({ data, error })
+      })
+    })
+  });
+
+  it("returns every flow (enabled or not) referencing the connection", async () => {
+    const db = stubDb(flowRows);
+    const flows = await flowsReferencingWorkspaceConnection(BIZ, "conn-a", db as never);
+    expect(flows).toEqual([
+      { id: "f1", name: "Booking confirmation", enabled: true },
+      { id: "f3", name: "Old outreach", enabled: false }
+    ]);
+  });
+
+  it("returns empty when nothing references it (and when the business has no flows)", async () => {
+    const db = stubDb(flowRows);
+    await expect(flowsReferencingWorkspaceConnection(BIZ, "conn-x", db as never)).resolves.toEqual(
+      []
+    );
+    const empty = stubDb(null);
+    await expect(flowsReferencingWorkspaceConnection(BIZ, "conn-a", empty as never)).resolves.toEqual(
+      []
+    );
+  });
+
+  it("throws on a read error", async () => {
+    const db = stubDb(null, { message: "boom" });
+    await expect(flowsReferencingWorkspaceConnection(BIZ, "conn-a", db as never)).rejects.toThrow(
+      "flowsReferencingWorkspaceConnection"
+    );
+  });
+
+  it("falls back to the service client when none is injected", async () => {
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(stubDb([]) as never);
+    await expect(flowsReferencingWorkspaceConnection(BIZ, "conn-a")).resolves.toEqual([]);
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
+  });
+});
+
+describe("connectionInUseMessage", () => {
+  it("names a single automation with singular copy", () => {
+    const msg = connectionInUseMessage([{ id: "f1", name: "Booking confirmation", enabled: true }]);
+    expect(msg).toContain("1 automation still uses this mailbox");
+    expect(msg).toContain('"Booking confirmation"');
+    expect(msg).not.toContain("(disabled)");
+  });
+
+  it("lists several automations, marking disabled ones", () => {
+    const msg = connectionInUseMessage([
+      { id: "f1", name: "Booking confirmation", enabled: true },
+      { id: "f3", name: "Old outreach", enabled: false }
+    ]);
+    expect(msg).toContain("2 automations still use this mailbox");
+    expect(msg).toContain('"Old outreach" (disabled)');
   });
 });
