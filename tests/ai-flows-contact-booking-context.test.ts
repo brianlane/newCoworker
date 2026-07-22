@@ -369,6 +369,43 @@ describe("contactBookingContextForPhone", () => {
     expect(out.line).toContain('"Kept Call"');
   });
 
+  it("canceled scan for a phone-only contact: skips a refused invitee fetch, matches by phone", async () => {
+    // No contact row → no email → the canceled listing is NOT
+    // invitee_email-narrowed, and matching rides the SMS-reminder number.
+    const request = calendlyFake(
+      { active: [], canceled: [event("EC1", PAST, "Refused"), event("EC2", PAST, "Dropped Call")] },
+      { EC1: undefined, EC2: [{ status: "canceled", text_reminder_number: "780-803-9935" }] }
+    );
+    const out = await contactBookingContextForPhone(
+      BIZ,
+      PHONE,
+      deps({ request }),
+      fakeDb([{ data: null }])
+    );
+    expect(out.status).toBe("canceled");
+    expect(out.line).toContain('"Dropped Call"');
+    const cancelCall = request.mock.calls.find(
+      (c) => (c[2] as Cfg).endpoint === "/scheduled_events" && (c[2] as Cfg).params?.status === "canceled"
+    );
+    expect((cancelCall?.[2] as Cfg).params?.invitee_email).toBeUndefined();
+  });
+
+  it("tolerates a canceled listing without a collection", async () => {
+    const request = vi.fn(async (_b: string, _c: unknown, config: Cfg) => {
+      if (config.endpoint === "/scheduled_events") {
+        return config.params?.status === "active" ? { data: { collection: [] } } : { data: {} };
+      }
+      throw new Error(`unexpected endpoint ${config.endpoint}`);
+    });
+    const out = await contactBookingContextForPhone(
+      BIZ,
+      PHONE,
+      deps({ request }),
+      fakeDb([CONTACT_ROW])
+    );
+    expect(out.status).toBe("none");
+  });
+
   it("a refused events listing answers none (fail open)", async () => {
     const request = vi.fn().mockResolvedValue(null);
     const out = await contactBookingContextForPhone(

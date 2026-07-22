@@ -507,6 +507,18 @@ describe("bookingPrecheckForRun phone path", () => {
   });
 });
 
+describe("bookingPrecheckForRun Calendly transport throw", () => {
+  it("propagates a THROWING Calendly transport (unexpected bug — not a refusal)", async () => {
+    // The production Calendly transport signals trouble by returning null;
+    // a throw is a bug that must surface through the route's error
+    // handling, exactly as before the shared-module extraction.
+    const d = deps({ request: vi.fn().mockRejectedValue(new Error("calendly transport bug")) });
+    await expect(bookingPrecheckForRun(BIZ, RUN, d, stdDb())).rejects.toThrow(
+      "calendly transport bug"
+    );
+  });
+});
+
 describe("bookingPrecheckForRun Vagaro arm", () => {
   const VAGARO_CONN = { provider: "vagaro" as const, providerConfigKey: "vagaro", connectionId: "vg-1" };
   const VG_ROW = { id: "vg-1", business_id: BIZ } as never;
