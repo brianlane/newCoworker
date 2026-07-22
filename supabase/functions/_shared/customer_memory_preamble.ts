@@ -26,6 +26,23 @@ export type EdgeCustomerMemoryRow = {
   last_interaction_at: string | null;
 };
 
+/**
+ * Twin of src/lib/customer-memory/preamble.ts `politeFirstName` — the
+ * addressing name: first word of the stored name, politely cased (see the
+ * canonical copy for the Truly Jul 21 rationale). Keep in sync; the parity
+ * test pins both.
+ */
+export function politeFirstNameForEdge(displayName: string): string {
+  const trimmed = displayName.trim();
+  const space = trimmed.search(/\s/);
+  const first = space === -1 ? trimmed : trimmed.slice(0, space);
+  if (first.length === 0) return first;
+  if (first === first.toLowerCase() || (first === first.toUpperCase() && first.length >= 4)) {
+    return first.charAt(0).toUpperCase() + first.slice(1).toLowerCase();
+  }
+  return first;
+}
+
 export function buildCustomerPreambleForEdge(memory: EdgeCustomerMemoryRow): string | null {
   const summary = memory.summary_md?.trim();
   const pinned = memory.pinned_md?.trim();
@@ -51,8 +68,11 @@ export function buildCustomerPreambleForEdge(memory: EdgeCustomerMemoryRow): str
     ""
   ];
   if (name) {
+    const addressAs = politeFirstNameForEdge(name);
+    // Multi-word stored names only — see the canonical twin (Bugbot Low, PR #823).
+    const stored = /\s/.test(name) ? ` (their stored full name is "${name}")` : "";
     lines.push(
-      `Address this person as "${name}" — this is their stored preferred name and takes precedence over any different or longer name that appears in lead forms, automation context, earlier messages, or the pinned notes and rolling summary below (unless they explicitly ask you to use another name).`
+      `Address this person as "${addressAs}"${stored} — use that name SPARINGLY (most replies need no name at all) and never recite their full name in normal conversation. The stored name takes precedence over any different or longer name that appears in lead forms, automation context, earlier messages, or the pinned notes and rolling summary below (unless they explicitly ask you to use another name).`
     );
     lines.push("");
   }

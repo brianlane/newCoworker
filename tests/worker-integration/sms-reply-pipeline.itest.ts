@@ -173,7 +173,11 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
     // ...cross-channel memory, including the preferred-name addressing rule
     // (Truly Issue 6: the stored display name must outrank lead-form names)...
     expect(system?.content).toContain("Known-customer profile");
-    expect(system?.content).toContain('Address this person as "Dwight Colclough"');
+    // First-name addressing (Truly, Jul 21 2026): the model is told to use
+    // the politely-cased first name, with the stored full name as context.
+    expect(system?.content).toContain(
+      'Address this person as "Dwight" (their stored full name is "Dwight Colclough")'
+    );
     expect(system?.content).toContain("no-fault accident dispute");
     // ...the AiFlow context bridge (the post-incident feature, verified on
     // the REAL wire for the first time)...

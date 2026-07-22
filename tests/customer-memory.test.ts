@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { buildCustomerPreamble } from "../src/lib/customer-memory/preamble";
+import { buildCustomerPreamble, politeFirstName } from "../src/lib/customer-memory/preamble";
 import {
   shouldSummarize,
   summarizeCustomerMemory,
@@ -89,12 +89,65 @@ describe("buildCustomerPreamble", () => {
       }
     });
     expect(out).toContain('Address this person as "Juhu"');
+    // Single-word stored name IS the addressing name — no full-name aside.
+    expect(out).not.toContain("their stored full name");
     expect(out).toContain("takes precedence over any different or longer name");
     // The precedence must explicitly extend to the pinned notes and rolling
     // summary below the header — that's where a stale pre-rename name lives.
     expect(out).toContain("the pinned notes and rolling summary below");
     expect(out).not.toContain("Rolling summary");
     expect(out).not.toContain("Pinned notes");
+  });
+
+  it("addresses multi-word stored names by the politely-cased FIRST name (Truly, Jul 21 2026)", () => {
+    // The SMS assistant parroted "shabir gulamhussein lukmanji" verbatim in
+    // 9 of 12 replies — the preamble now instructs the first name, cased,
+    // with the stored full name kept as ground truth.
+    const out = buildCustomerPreamble({
+      memory: {
+        customer_e164: CUSTOMER,
+        display_name: "shabir gulamhussein lukmanji",
+        summary_md: null,
+        pinned_md: null,
+        total_interaction_count: 1,
+        last_channel: "sms",
+        last_interaction_at: null
+      }
+    });
+    expect(out).toContain(
+      'Address this person as "Shabir" (their stored full name is "shabir gulamhussein lukmanji")'
+    );
+    expect(out).toContain("use that name SPARINGLY");
+    expect(out).toContain('name: shabir gulamhussein lukmanji');
+  });
+
+  it("a single-word lowercase name is re-cased WITHOUT the full-name aside (Bugbot on PR #823)", () => {
+    const out = buildCustomerPreamble({
+      memory: {
+        customer_e164: CUSTOMER,
+        display_name: "john",
+        summary_md: null,
+        pinned_md: null,
+        total_interaction_count: 1,
+        last_channel: "sms",
+        last_interaction_at: null
+      }
+    });
+    expect(out).toContain('Address this person as "John"');
+    expect(out).not.toContain("their stored full name");
+  });
+
+  describe("politeFirstName", () => {
+    it("politely cases caseless tokens and preserves deliberate casing", () => {
+      expect(politeFirstName("shabir gulamhussein lukmanji")).toBe("Shabir");
+      expect(politeFirstName("SHABIR LUKMANJI")).toBe("Shabir");
+      expect(politeFirstName("Juhu")).toBe("Juhu");
+      // Initials-length all-caps and mixed-case names survive untouched.
+      expect(politeFirstName("JD Salinger")).toBe("JD");
+      expect(politeFirstName("McKenna Reyes")).toBe("McKenna");
+      expect(politeFirstName("  ana cruz ")).toBe("Ana");
+      expect(politeFirstName("   ")).toBe("");
+    });
   });
 
   it("includes summary content when summary_md is set", () => {

@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { buildCustomerPreamble } from "../src/lib/customer-memory/preamble";
-import { buildCustomerPreambleForEdge } from "../supabase/functions/_shared/customer_memory_preamble";
+import { buildCustomerPreamble, politeFirstName } from "../src/lib/customer-memory/preamble";
+import {
+  buildCustomerPreambleForEdge,
+  politeFirstNameForEdge
+} from "../supabase/functions/_shared/customer_memory_preamble";
 
 /**
  * Pins the Next.js preamble builder (src/lib/customer-memory/) and
@@ -10,6 +13,25 @@ import { buildCustomerPreambleForEdge } from "../supabase/functions/_shared/cust
  * lockstep. A one-sided edit would mean SMS and dashboard chat see
  * different per-customer context for the same row.
  */
+describe("politeFirstName parity (Next.js ↔ edge)", () => {
+  it("both helpers agree on every casing shape (Truly, Jul 21 2026)", () => {
+    const inputs = [
+      "shabir gulamhussein lukmanji", // raw lowercase lead-form name
+      "SHABIR LUKMANJI", // all-caps beyond initials length
+      "JD Salinger", // initials survive
+      "McKenna Reyes", // deliberate mixed case survives
+      "Juhu", // single word, already cased
+      "  ana cruz ", // padded
+      "   " // whitespace-only → empty
+    ];
+    for (const input of inputs) {
+      expect(politeFirstNameForEdge(input), input).toBe(politeFirstName(input));
+    }
+    expect(politeFirstName("shabir gulamhussein lukmanji")).toBe("Shabir");
+    expect(politeFirstName("   ")).toBe("");
+  });
+});
+
 describe("customer memory preamble parity (Next.js ↔ edge)", () => {
   const cases = [
     {
@@ -46,6 +68,18 @@ describe("customer memory preamble parity (Next.js ↔ edge)", () => {
         total_interaction_count: 0,
         last_channel: null,
         last_interaction_at: null
+      }
+    },
+    {
+      label: "raw multi-word lead-form name (first-name addressing, Truly Jul 21)",
+      memory: {
+        customer_e164: "+16136067906",
+        display_name: "shabir gulamhussein lukmanji",
+        summary_md: null,
+        pinned_md: null,
+        total_interaction_count: 17,
+        last_channel: "sms" as const,
+        last_interaction_at: "2026-07-22T00:17:45Z"
       }
     },
     {

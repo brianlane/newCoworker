@@ -259,6 +259,23 @@ describe("resolvePlaceholder — .first/.last name parts", () => {
     expect(resolvePlaceholder(scope, "vars.solo.first")).toBe("Cher");
     expect(resolvePlaceholder(scope, "vars.solo.last")).toBe("");
   });
+  it(".first politely cases caseless tokens; cased names and initials survive (Truly Jul 21 2026)", () => {
+    const s = {
+      vars: {
+        lower: "shabir gulamhussein lukmanji",
+        upper: "SHABIR LUKMANJI",
+        initials: "JD Salinger",
+        mixed: "McKenna Reyes"
+      }
+    };
+    // Raw lead-form lowercase: greeting-ready first name, .last untouched
+    // (compound surnames must never be re-cased).
+    expect(resolvePlaceholder(s, "vars.lower.first")).toBe("Shabir");
+    expect(resolvePlaceholder(s, "vars.lower.last")).toBe("gulamhussein lukmanji");
+    expect(resolvePlaceholder(s, "vars.upper.first")).toBe("Shabir");
+    expect(resolvePlaceholder(s, "vars.initials.first")).toBe("JD");
+    expect(resolvePlaceholder(s, "vars.mixed.first")).toBe("McKenna");
+  });
   it("an empty/whitespace value yields empty parts", () => {
     expect(resolvePlaceholder({ vars: { blank: "  " } }, "vars.blank.first")).toBe("");
   });

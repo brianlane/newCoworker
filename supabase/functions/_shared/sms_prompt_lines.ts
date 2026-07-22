@@ -117,6 +117,9 @@ export const SMS_CONVERSATION_QUALITY_LINE =
   "Conversation quality: never ask for information you already have " +
   "from this conversation or the customer profile (their name, phone, " +
   "email, or details they've shared) — reuse it, including when booking " +
-  "an appointment. Vary your acknowledgements instead of repeating the " +
-  "same phrase, and make each reply reflect what the texter just said " +
-  "rather than restating your previous message.";
+  "an appointment. When you do use their name, use their FIRST name " +
+  "only, capitalized normally even if it was stored lowercase — never " +
+  "their full name — and use it SPARINGLY: most replies need no name at " +
+  "all. Vary your acknowledgements instead of repeating the same phrase, " +
+  "and make each reply reflect what the texter just said rather than " +
+  "restating your previous message.";
