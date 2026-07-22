@@ -50,13 +50,27 @@ async function main() {
   if (!url || !key) throw new Error("Missing Supabase env");
   const db = createClient(url, key, { auth: { persistSession: false } });
 
-  // Read-only preview of the two gates the core will apply.
-  const { data: contact } = await db
+  // Read-only preview of the SAME gates the core applies on --apply:
+  // phone-first (alias-aware) contact lookup, then email, then the toggle
+  // (Bugbot Medium on PR #829 — the preview must never disagree with the
+  // core's verdict).
+  const { data: byPhone } = await db
     .from("contacts")
     .select("owner_employee_id, display_name")
     .eq("business_id", businessId!)
     .or(`customer_e164.eq.${phone},alias_e164s.cs.{${phone}}`)
     .maybeSingle();
+  let contact = byPhone as { owner_employee_id: string | null } | null;
+  if (!contact && email) {
+    const { data: byEmail } = await db
+      .from("contacts")
+      .select("owner_employee_id, display_name")
+      .eq("business_id", businessId!)
+      .eq("email", email.trim().toLowerCase())
+      .limit(1)
+      .maybeSingle();
+    contact = byEmail as { owner_employee_id: string | null } | null;
+  }
   const { data: prefs } = await db
     .from("notification_preferences")
     .select("unassigned_booking_alerts, phone_number, alert_email, sms_urgent, email_urgent, dashboard_alerts")
@@ -65,11 +79,25 @@ async function main() {
   console.log("contact:", contact ?? "(none — unowned by definition)");
   console.log("prefs:", prefs ?? "(no row — defaults, alert enabled)");
 
+  const wouldSkip = contact?.owner_employee_id
+    ? "skipped_owned (contact has an owning teammate)"
+    : (prefs as { unassigned_booking_alerts?: boolean } | null)?.unassigned_booking_alerts === false
+      ? "skipped_disabled (unassigned_booking_alerts is off)"
+      : null;
+
   if (!APPLY) {
-    console.log(`\nDry-run. Would page the owner:\n  Unassigned booking: ${name} (${phone}) — ${startLocal}`);
+    if (wouldSkip) {
+      console.log(`\nDry-run. Would NOT page: ${wouldSkip}`);
+    } else {
+      console.log(
+        `\nDry-run. Would page the owner:\n  Unassigned booking: ${name} (${phone}) — ${startLocal}`
+      );
+    }
     console.log("Re-run with --apply to send.");
     return;
   }
+
+  const startedAt = new Date().toISOString();
 
   const { maybeAlertUnassignedBooking } = await import(
     "../src/lib/calendar-tools/unassigned-booking-alert.ts"
@@ -86,14 +114,17 @@ async function main() {
   });
   console.log(`\noutcome: ${outcome}`);
 
+  // Only rows THIS run wrote (Bugbot Low on PR #829: an unscoped tail could
+  // show prior alerts as if they came from this run).
   const { data: rows } = await db
     .from("notifications")
     .select("delivery_channel, status, summary, created_at")
     .eq("business_id", businessId!)
     .eq("kind", "unassigned_booking")
+    .gte("created_at", startedAt)
     .order("created_at", { ascending: false })
     .limit(6);
-  console.log("notification rows:");
+  console.log("notification rows (this run):");
   for (const r of rows ?? []) {
     console.log(
       `  ${(r as { delivery_channel: string }).delivery_channel}: ${(r as { status: string }).status} — ${(r as { summary: string }).summary}`
