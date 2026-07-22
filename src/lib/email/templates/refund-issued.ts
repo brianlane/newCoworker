@@ -42,10 +42,11 @@ export function buildRefundIssuedEmail(input: RefundIssuedInput): RefundIssuedEm
     fmtEmail(copy.refundIssued.line1, { amount }),
     copy.refundIssued.line2,
     copy.refundIssued.line3,
-    copy.refundIssued.line4,
-    copy.ncSignoff
+    copy.refundIssued.line4
   ];
-  const text = textLines.join("\n\n");
+  // Signoff rides only the plain-text body — the HTML shell renders the full
+  // platform signature block, so repeating it there would double the contact info.
+  const text = [...textLines, copy.ncSignoff].join("\n\n");
   const normalizedSite = input.siteUrl.replace(/\/$/, "");
   const billingUrl = `${normalizedSite}/dashboard/billing`;
   const html = buildBrandedEmailHtml({

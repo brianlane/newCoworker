@@ -45,12 +45,15 @@ export type CancelConfirmationEmail = {
 function envelope(
   subject: string,
   textLines: string[],
+  signoff: string,
   siteUrl: string,
   recipientEmail: string,
   cta: { label: string; href: string } | undefined
 ): CancelConfirmationEmail {
   const normalizedSite = siteUrl.replace(/\/$/, "");
-  const text = textLines.join("\n\n");
+  // Signoff rides only the plain-text body — the HTML shell renders the full
+  // platform signature block, so repeating it there would double the contact info.
+  const text = [...textLines, signoff].join("\n\n");
   const html = buildBrandedEmailHtml({
     siteUrl: normalizedSite,
     documentTitle: subject,
@@ -83,9 +86,9 @@ export function buildCancelConfirmationEmail(
         c.periodEnd1,
         fmtEmail(c.periodEnd2, { date: effective }),
         c.periodEnd3,
-        c.periodEnd4,
-        copy.ncSignoff
+        c.periodEnd4
       ],
+      copy.ncSignoff,
       input.siteUrl,
       input.recipientEmail,
       billingCta
@@ -98,9 +101,9 @@ export function buildCancelConfirmationEmail(
       [
         c.payment1,
         fmtEmail(c.payment2, { date: graceEnds ?? c.thirtyDays }),
-        c.payment3,
-        copy.ncSignoff
+        c.payment3
       ],
+      copy.ncSignoff,
       input.siteUrl,
       input.recipientEmail,
       billingCta
@@ -110,7 +113,8 @@ export function buildCancelConfirmationEmail(
   if (input.reason === "upgrade_switch") {
     return envelope(
       c.upgradeSubject,
-      [c.upgrade1, c.upgrade2, c.upgrade3, copy.ncSignoff],
+      [c.upgrade1, c.upgrade2, c.upgrade3],
+      copy.ncSignoff,
       input.siteUrl,
       input.recipientEmail,
       { label: copy.openDashboardCta, href: dashboardUrl }
@@ -121,7 +125,8 @@ export function buildCancelConfirmationEmail(
   if (input.reason === "admin_force") {
     return envelope(
       c.adminSubject,
-      [leadIn, c.admin2, c.admin3, copy.ncSignoff],
+      [leadIn, c.admin2, c.admin3],
+      copy.ncSignoff,
       input.siteUrl,
       input.recipientEmail,
       undefined
@@ -133,9 +138,9 @@ export function buildCancelConfirmationEmail(
     [
       leadIn,
       fmtEmail(c.default2, { date: graceEnds ?? c.thirtyDays }),
-      c.default3,
-      copy.ncSignoff
+      c.default3
     ],
+    copy.ncSignoff,
     input.siteUrl,
     input.recipientEmail,
     billingCta

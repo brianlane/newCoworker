@@ -31,6 +31,12 @@ export type BrandedEmailHtmlInput = {
   securityNote?: string;
   recipientEmail: string;
   unsubscribeUrl?: string | null;
+  /**
+   * When false, omit the platform team signature block. Set false for mail
+   * sent under a TENANT identity — the platform's name/phone must not appear
+   * under a business's From header. Defaults to true (platform-sent mail).
+   */
+  platformSignature?: boolean;
 };
 
 function renderBodyBlocks(blocks: BrandedBodyBlock[]): string {
@@ -98,6 +104,28 @@ export function buildBrandedEmailHtml(input: BrandedEmailHtmlInput): string {
 </td></tr>`
       : "";
 
+  // Platform signature (Truly-style: logo left, stacked details right). The
+  // phone line is the HQ number — answered by our own AI coworker (the demo).
+  // Deliberately no physical address. Mirrors docs/email-signatures.html.
+  const signatureBlock =
+    input.platformSignature === false
+      ? ""
+      : `<tr><td style="padding:0 40px 32px;">
+  <table role="presentation" cellpadding="0" cellspacing="0" border="0" style="border-collapse:collapse;">
+    <tr>
+      <td style="vertical-align:middle;padding:0 16px 0 0;">
+        <img src="${escapeAttr(logoSrc)}" alt="New Coworker" width="56" height="56" style="display:block;width:56px;height:56px;border-radius:10px;">
+      </td>
+      <td style="vertical-align:middle;border-left:2px solid #2EC4B6;padding:2px 0 2px 16px;font-size:13px;line-height:1.55;color:#F5F0E8;">
+        <span style="font-weight:700;">The New Coworker Team</span><br>
+        <span style="font-style:italic;color:#8a9bb0;">Brian Lane, Founder</span><br>
+        Call: <a href="tel:+16023131823" style="color:#F5F0E8;text-decoration:none;">602.313.1823</a> <span style="color:#8a9bb0;">(our AI coworker answers)</span><br>
+        Web: <a href="https://www.newcoworker.com" target="_blank" style="color:#2EC4B6;text-decoration:underline;">newcoworker.com</a>
+      </td>
+    </tr>
+  </table>
+</td></tr>`;
+
   const bodyInner = renderBodyBlocks(input.bodyBlocks);
   const bodyCellInner = [bodyInner, warningBlock].filter(Boolean).join("\n  ");
   const bodyRow = bodyCellInner
@@ -131,6 +159,7 @@ ${bodyRow}
 ${ctaBlock}
 ${fallbackBlock}
 ${securityBlock}
+${signatureBlock}
 
 <tr><td style="padding:0 40px;">
   <div style="border-top:1px solid #1e3a52;"></div>

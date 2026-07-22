@@ -1738,7 +1738,7 @@
       "openDashboard": "Abrir panel",
       "goToDashboard": "Ir al panel",
       "visitDashboard": "Visita tu panel:",
-      "teamSignoff": "— El equipo de New Coworker",
+      "teamSignoff": "— El equipo de New Coworker\nnewcoworker.com | 602.313.1823 (contesta nuestro coworker de IA)",
       "urgentSubject": "Urgente: {summary}",
       "urgentBody": "Tu Coworker de IA marcó un evento urgente: {summary}"
     },
@@ -1746,7 +1746,7 @@
       "subject": "¡Tu Coworker de IA está en vivo!",
       "body": "Tu New Coworker está configurado y listo."
     },
-    "ncSignoff": "— El equipo de NewCoworker",
+    "ncSignoff": "— El equipo de NewCoworker\nnewcoworker.com | 602.313.1823 (contesta nuestro coworker de IA)",
     "questionsReply": "¿Preguntas? Solo responde a este correo.",
     "openBilling": "Abrir facturación",
     "openDashboardCta": "Abrir panel",

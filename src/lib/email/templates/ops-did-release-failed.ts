@@ -45,6 +45,8 @@ export function buildOpsDidReleaseFailedEmail(
   const text = textLines.join("\n\n");
 
   const html = buildBrandedEmailHtml({
+    // Internal ops inbox — omit the owner-facing platform signature block.
+    platformSignature: false,
     siteUrl: input.siteUrl,
     documentTitle: subject,
     heading: "DID release failed — manual action required",

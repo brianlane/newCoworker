@@ -322,7 +322,10 @@ export async function processCampaignSweep(
             heading: campaign.subject,
             bodyBlocks: bodyParagraphs.map((t) => ({ kind: "text" as const, text: t })),
             unsubscribeUrl,
-            recipientEmail: recipient.email
+            recipientEmail: recipient.email,
+            // Campaign mail goes out under the TENANT's identity (coworker
+            // mailbox From) — never show the platform team signature here.
+            platformSignature: false
           });
           await sendEmail(apiKey, recipient.email, campaign.subject, {
             text: campaign.body_md,

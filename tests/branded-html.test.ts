@@ -131,6 +131,38 @@ describe("branded-html", () => {
     expect(html).toContain("This link expires in 1 hour.");
   });
 
+  it("always renders the platform signature block (team, founder, HQ line, website — no address)", () => {
+    const html = buildBrandedEmailHtml({
+      siteUrl: "https://app.test",
+      documentTitle: "T",
+      heading: "H",
+      bodyBlocks: [{ kind: "text", text: "Hi" }],
+      recipientEmail: "u@x.y"
+    });
+    expect(html).toContain("The New Coworker Team");
+    expect(html).toContain("Brian Lane, Founder");
+    expect(html).toContain('href="tel:+16023131823"');
+    expect(html).toContain("602.313.1823");
+    expect(html).toContain("(our AI coworker answers)");
+    expect(html).toContain('href="https://www.newcoworker.com"');
+    // The signature reuses the site logo at signature size.
+    expect(html).toContain('width="56"');
+  });
+
+  it("omits the platform signature when platformSignature is false (tenant-identity mail)", () => {
+    const html = buildBrandedEmailHtml({
+      siteUrl: "https://app.test",
+      documentTitle: "T",
+      heading: "H",
+      bodyBlocks: [{ kind: "text", text: "Hi" }],
+      recipientEmail: "u@x.y",
+      platformSignature: false
+    });
+    expect(html).not.toContain("The New Coworker Team");
+    expect(html).not.toContain("Brian Lane");
+    expect(html).not.toContain("602.313.1823");
+  });
+
   it("omits unsubscribe when url is empty string", () => {
     const html = buildBrandedEmailHtml({
       siteUrl: "https://app.test",
@@ -214,6 +246,14 @@ describe("branded_email_html (Edge parity)", () => {
       warningLine: "Watch out!",
       cta: { label: "Go", href: "https://app.test/w" },
       recipientEmail: "u@x.y"
+    },
+    {
+      siteUrl: "https://app.test",
+      documentTitle: "T",
+      heading: "H",
+      bodyBlocks: [{ kind: "text", text: "Tenant campaign" }],
+      recipientEmail: "u@x.y",
+      platformSignature: false
     }
   ];
 
