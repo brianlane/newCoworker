@@ -43,6 +43,7 @@ describe("applyNotificationPreferenceToggles", () => {
       [
         "customer_reply_alerts",
         "aiflow_failure_alerts",
+        "unassigned_booking_alerts",
         "sms_urgent",
         "whatsapp_urgent",
         "email_urgent",

@@ -131,7 +131,10 @@ describe("executeWebchatEngineTool", () => {
     };
     const res = await executeWebchatEngineTool(BIZ, "webchat_calendar_book_appointment", args, d);
     expect(res.ok).toBe(true);
-    expect(d.bookAppointment).toHaveBeenCalledWith(BIZ, expect.objectContaining(args), null);
+    expect(d.bookAppointment).toHaveBeenCalledWith(BIZ, expect.objectContaining(args), null, {
+      // Webchat/Messenger surface: unowned-contact bookings page the owner.
+      alertSurface: "webchat"
+    });
   });
 
   it("rejects a bare no-offset datetime on booking", async () => {

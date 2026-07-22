@@ -65,7 +65,9 @@ describe("POST /api/voice/tools/calendar/book — outcome guidance", () => {
     expect(bookCalendarAppointment).toHaveBeenCalledWith(
       BIZ,
       expect.objectContaining({ summary: ARGS.summary }),
-      "+16138540807"
+      "+16138540807",
+      // Voice surface: unowned-contact bookings page the owner.
+      { alertSurface: "voice" }
     );
   });
 

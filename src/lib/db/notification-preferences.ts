@@ -31,6 +31,13 @@ export type NotificationPreferencesRow = {
    * KYP feedback, Jul 20 2026 — "let me know when clients text back".
    */
   customer_reply_alerts: boolean;
+  /**
+   * ON by default: alert the owner when the AI confirms a booking for a
+   * contact NO teammate owns (Truly, Jul 21 2026 — a real broker call was
+   * booked after hours and no human was ever told it existed). Optional on
+   * the type for rows read before 20260819100000.
+   */
+  unassigned_booking_alerts?: boolean;
   /** Category filter: new-lead captures (see lib/notifications/categories.ts). */
   category_leads: boolean;
   /** Category filter: team-notify pings. */
@@ -133,6 +140,7 @@ export type NotificationPreferencesUpdate = Partial<
     | "image_limit_alerts"
     | "aiflow_failure_alerts"
     | "customer_reply_alerts"
+    | "unassigned_booking_alerts"
     | "category_leads"
     | "category_team"
     | "category_system"
@@ -155,6 +163,7 @@ const defaults: Omit<NotificationPreferencesRow, "business_id" | "updated_at"> =
   image_limit_alerts: true,
   aiflow_failure_alerts: false,
   customer_reply_alerts: false,
+  unassigned_booking_alerts: true,
   category_leads: true,
   category_team: true,
   category_system: true,
@@ -258,6 +267,7 @@ export async function updateNotificationPreferences(
     "image_limit_alerts",
     "aiflow_failure_alerts",
     "customer_reply_alerts",
+    "unassigned_booking_alerts",
     "category_leads",
     "category_team",
     "category_system",
@@ -290,7 +300,8 @@ export async function updateNotificationPreferences(
       patch.sms_warm_transfer === true ||
       patch.image_limit_alerts === true ||
       patch.aiflow_failure_alerts === true ||
-      patch.customer_reply_alerts === true);
+      patch.customer_reply_alerts === true ||
+      patch.unassigned_booking_alerts === true);
   if (reSubscribed) {
     update.unsubscribed_at = null;
   }

@@ -279,7 +279,12 @@ export async function executeWebchatEngineTool(
       if (!parsed.success) {
         return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
       }
-      const booked = await bookAppointment(businessId, parsed.data, null);
+      // Customer-facing surface (webchat + Messenger engine): a confirmed
+      // booking for an unowned contact pages the owner
+      // (unassigned_booking_alerts, on by default).
+      const booked = await bookAppointment(businessId, parsed.data, null, {
+        alertSurface: "webchat"
+      });
       if (
         !booked.ok &&
         (booked.detail === "calendar_book_failed" || booked.detail === "calendar_not_connected")

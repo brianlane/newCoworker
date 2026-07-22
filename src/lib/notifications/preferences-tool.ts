@@ -37,6 +37,7 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 export const NOTIFICATION_TOGGLE_KEYS = [
   "customer_reply_alerts",
   "aiflow_failure_alerts",
+  "unassigned_booking_alerts",
   "sms_urgent",
   "whatsapp_urgent",
   "email_urgent",
