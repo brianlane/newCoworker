@@ -263,6 +263,72 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
     expect((contact as { total_interaction_count: number }).total_interaction_count).toBe(1);
   });
 
+  /** A completed prior turn whose reply the ack gate will judge. */
+  async function seedPriorAssistantReply(biz: string, replyText: string): Promise<void> {
+    const { error } = await db.from("sms_inbound_jobs").insert({
+      business_id: biz,
+      status: "done",
+      customer_e164: LEAD,
+      assistant_reply_text: replyText,
+      payload: { data: { payload: { from: { phone_number: LEAD }, text: "earlier turn" } } }
+    });
+    if (error) throw new Error(`seedPriorAssistantReply: ${error.message}`);
+  }
+
+  it("a bare 'Ok' after a statement gets NO AI reply — logged and counted, never answered (Truly Jul 21)", async () => {
+    const { biz } = await seedLeadWithContext("IT ack suppress");
+    await seedPriorAssistantReply(
+      biz,
+      "We're all set for your call with the broker tomorrow at 12:00 PM Eastern."
+    );
+    // NO scripted Rowboat reply: the suppression must fire before any model
+    // call, so an unexpected /chat would fail loudly on the empty script.
+    const jobId = await enqueueSmsJob(db, biz, LEAD, "Okay 👍");
+    const callsBefore = rowboat.calls.length;
+    await tickSmsWorker();
+
+    expect(rowboat.calls.length).toBe(callsBefore);
+    const job = await getSmsJob(db, jobId);
+    expect(job.status).toBe("done");
+    expect(job.last_error).toBe("suppressed_ack");
+    expect(job.rowboat_reply_cached).toBeNull();
+    expect(job.customer_e164).toBe(LEAD);
+
+    // Still a real interaction: the contact's counters were bumped.
+    const { data: contact } = await db
+      .from("contacts")
+      .select("total_interaction_count")
+      .eq("business_id", biz)
+      .eq("customer_e164", LEAD)
+      .single();
+    expect((contact as { total_interaction_count: number }).total_interaction_count).toBe(1);
+  });
+
+  it("a bare 'Ok' ANSWERING a question still gets its confirmation turn", async () => {
+    const { biz } = await seedLeadWithContext("IT ack answers question");
+    await seedPriorAssistantReply(biz, "Do either of those times work for you?");
+    rowboat.scriptReply("Wonderful! You're booked for noon.");
+    const jobId = await enqueueSmsJob(db, biz, LEAD, "Ok");
+    await tickSmsWorker();
+
+    // The reply pipeline ran (parks at the missing-Telnyx-env check like
+    // every harness send) — NOT the suppressed_ack short-circuit.
+    const job = await getSmsJob(db, jobId);
+    expect(job.last_error).not.toBe("suppressed_ack");
+    expect(job.last_error).toBe("missing_telnyx_messaging_env");
+  });
+
+  it("a first-contact 'Ok' (no prior assistant message) replies as before", async () => {
+    const { biz } = await seedLeadWithContext("IT ack first contact");
+    rowboat.scriptReply("Hi! How can we help today?");
+    const jobId = await enqueueSmsJob(db, biz, LEAD, "Ok");
+    await tickSmsWorker();
+
+    const job = await getSmsJob(db, jobId);
+    expect(job.last_error).not.toBe("suppressed_ack");
+    expect(job.last_error).toBe("missing_telnyx_messaging_env");
+  });
+
   it("a dead-lettered customer message pages the owner (silence is never the end state)", async () => {
     const { biz } = await seedLeadWithContext("IT dead-letter page");
     // Seeded one claim away from the attempt ceiling (claim increments to

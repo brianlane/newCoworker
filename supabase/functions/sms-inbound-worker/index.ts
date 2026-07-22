@@ -64,6 +64,10 @@ import {
 } from "../_shared/customer_language.ts";
 import { inboundSmsBody, telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
 import { isTapbackText } from "../_shared/sms_tapback.ts";
+import {
+  assistantMessageInvitesReply,
+  isBareAcknowledgmentText
+} from "../_shared/sms_ack.ts";
 // Tracked short links for AI replies — the same rewrite AiFlow sends get, so
 // one customer thread never mixes raw booking URLs with /s/<code> links
 // (KYP Jul 20 2026) and AI-reply link clicks land in the same analytics.
@@ -408,6 +412,60 @@ async function storeInboundImageForEditing(
   } catch (e) {
     console.warn("inbound MMS media capture failed", e instanceof Error ? e.message : e);
     return null;
+  }
+}
+
+/**
+ * Whether the assistant's LATEST message to this customer stands on its own
+ * (exists, and does not end in a question) — the gate for suppressing a
+ * bare-acknowledgment reply. Looks at the newest completed job reply and
+ * the newest outbound-log row (composer sends, flow texts) and judges the
+ * later of the two. No prior assistant message, or any read error, answers
+ * false — the worker replies as it always did (fail open to replying).
+ */
+async function lastAssistantMessageStandsWithoutReply(
+  supabase: SupabaseClient<any, any, any>,
+  businessId: string,
+  customerE164: string
+): Promise<boolean> {
+  try {
+    const [jobRes, outRes] = await Promise.all([
+      supabase
+        .from("sms_inbound_jobs")
+        .select("assistant_reply_text, updated_at")
+        .eq("business_id", businessId)
+        .eq("customer_e164", customerE164)
+        .eq("status", "done")
+        .not("assistant_reply_text", "is", null)
+        .is("deleted_at", null)
+        .order("updated_at", { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+      supabase
+        .from("sms_outbound_log")
+        .select("body, created_at")
+        .eq("business_id", businessId)
+        .eq("to_e164", customerE164)
+        .is("deleted_at", null)
+        .order("created_at", { ascending: false })
+        .limit(1)
+        .maybeSingle()
+    ]);
+    if (jobRes.error || outRes.error) return false;
+    const jobRow = jobRes.data as { assistant_reply_text?: string | null; updated_at?: string } | null;
+    const outRow = outRes.data as { body?: string | null; created_at?: string } | null;
+    const candidates = [
+      jobRow?.assistant_reply_text
+        ? { text: jobRow.assistant_reply_text, atMs: Date.parse(jobRow.updated_at ?? "") }
+        : null,
+      outRow?.body ? { text: outRow.body, atMs: Date.parse(outRow.created_at ?? "") } : null
+    ].filter((c): c is { text: string; atMs: number } => c !== null);
+    if (candidates.length === 0) return false;
+    candidates.sort((a, b) => (Number.isFinite(b.atMs) ? b.atMs : 0) - (Number.isFinite(a.atMs) ? a.atMs : 0));
+    return !assistantMessageInvitesReply(candidates[0].text);
+  } catch (err) {
+    console.error("ack last-assistant lookup failed (replying as normal)", err);
+    return false;
   }
 }
 
@@ -923,6 +981,54 @@ serve(async (req: Request) => {
         console.error("record_customer_interaction (tapback sms)", memErr);
       }
       await telemetryRecord(supabase, "sms_worker_suppressed_tapback", {
+        job_id: job.id,
+        business_id: job.business_id
+      });
+      processed += 1;
+      continue;
+    }
+
+    // Bare acknowledgments ("Ok", "Okay 👍", "Thanks") get NO generated
+    // reply — answering every closing filler reads as bot noise and burns a
+    // metered SMS per turn (Truly, Jul 21 2026: four consecutive "Ok"s each
+    // drew a fresh "Acknowledged!"). ONLY when the assistant's latest
+    // message did not end in a question — an "Ok" answering "Does noon
+    // work?" is an answer and still gets its confirmation turn — and only
+    // when a prior assistant message EXISTS (a first-contact "Ok" is
+    // ambiguous; reply as before). Lookup errors fail open to replying.
+    // Same guards and bookkeeping as the tapback branch above.
+    if (
+      !job.staff_kind &&
+      inboundImages.length === 0 &&
+      isBareAcknowledgmentText(userText) &&
+      (await lastAssistantMessageStandsWithoutReply(supabase, job.business_id, fromE164))
+    ) {
+      await supabase.rpc("complete_sms_inbound_job", {
+        p_job_id: job.id,
+        p_status: "done",
+        p_telnyx_outbound_message_id: null,
+        p_rowboat_conversation_id: null,
+        p_last_error: "suppressed_ack"
+      });
+      await clearJobReplyCache(supabase, job.id);
+      const { error: stampErr } = await supabase
+        .from("sms_inbound_jobs")
+        .update({ customer_e164: fromE164 })
+        .eq("id", job.id)
+        .is("customer_e164", null);
+      if (stampErr) {
+        console.error("ack customer_e164 stamp", stampErr);
+      }
+      const { error: memErr } = await supabase.rpc("record_customer_interaction", {
+        p_business_id: job.business_id,
+        p_customer_e164: fromE164,
+        p_channel: "sms",
+        p_display_name: null
+      });
+      if (memErr) {
+        console.error("record_customer_interaction (ack sms)", memErr);
+      }
+      await telemetryRecord(supabase, "sms_worker_suppressed_ack", {
         job_id: job.id,
         business_id: job.business_id
       });
