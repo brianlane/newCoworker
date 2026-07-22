@@ -90,7 +90,11 @@ export function buildCustomerPreamble(input: CustomerPreambleInput): string | nu
   ];
   if (name) {
     const addressAs = politeFirstName(name);
-    const stored = addressAs === name ? "" : ` (their stored full name is "${name}")`;
+    // The full-name aside exists for MULTI-WORD stored names (the first name
+    // alone loses information); a single-word name that was merely re-cased
+    // ("john" → "John") is not a "full name" and gets no aside (Bugbot Low
+    // on PR #823).
+    const stored = /\s/.test(name) ? ` (their stored full name is "${name}")` : "";
     lines.push(
       `Address this person as "${addressAs}"${stored} — use that name SPARINGLY (most replies need no name at all) and never recite their full name in normal conversation. The stored name takes precedence over any different or longer name that appears in lead forms, automation context, earlier messages, or the pinned notes and rolling summary below (unless they explicitly ask you to use another name).`
     );

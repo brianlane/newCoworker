@@ -121,6 +121,22 @@ describe("buildCustomerPreamble", () => {
     expect(out).toContain('name: shabir gulamhussein lukmanji');
   });
 
+  it("a single-word lowercase name is re-cased WITHOUT the full-name aside (Bugbot on PR #823)", () => {
+    const out = buildCustomerPreamble({
+      memory: {
+        customer_e164: CUSTOMER,
+        display_name: "john",
+        summary_md: null,
+        pinned_md: null,
+        total_interaction_count: 1,
+        last_channel: "sms",
+        last_interaction_at: null
+      }
+    });
+    expect(out).toContain('Address this person as "John"');
+    expect(out).not.toContain("their stored full name");
+  });
+
   describe("politeFirstName", () => {
     it("politely cases caseless tokens and preserves deliberate casing", () => {
       expect(politeFirstName("shabir gulamhussein lukmanji")).toBe("Shabir");
