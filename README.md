@@ -940,7 +940,11 @@ come from the tracked `supabase/config.toml` — a new function MUST get a
 Vercel production. PRs get the same drift detection early via the
 `Supabase Drift Check` job, so drift is caught at review time. **Watch the
 main run to green after merging** — a failed migration blocks the app deploy
-by design.
+by design. A failed push-to-main run is no longer silent
+(`main-failure-watch.yml`, added after the 2026-07-23 transient
+Supabase-CLI failure sat unnoticed): the failed jobs are re-run once
+automatically, and a second consecutive failure emails
+team@newcoworker.com — production has not updated until that run is green.
 
 **Still manual after merge (when the change calls for it):**
 - VPS fleet redeploys when `vps/` changed (`tsx debug/update-all-vps.ts`,
