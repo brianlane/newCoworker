@@ -68,3 +68,86 @@ export function scrubSelfPhones(
   }
   return { values: out, cleared };
 }
+
+/**
+ * Self-NAME guard (Jul 22 2026 "Hi Amy" regression): the Clever group intro
+ * mentions the tenant's own agent four times and the seller twice, and the
+ * extractor answered "Amy" (our agent) for "the seller's first name" — the
+ * canned greeting then addressed the seller by our own agent's name. Unlike
+ * a self PHONE (never legitimate), a lead CAN genuinely share a name with
+ * the owner or a roster member, so a match here doesn't clear the value —
+ * it triggers ONE extraction retry with an explicit "that is our own
+ * agent" hint (see the worker's extract_text step), and the retry's answer
+ * wins only when it names someone else.
+ */
+
+/**
+ * Is this extraction field asking for a PERSON's name (a lead, seller,
+ * customer)? Fields that ask about OUR side (agent/owner/team) or about an
+ * organization are excluded — retry-hinting those with "never our agent"
+ * would push the model away from the correct answer.
+ */
+export function isPersonNameField(fieldName: string): boolean {
+  const n = fieldName.toLowerCase();
+  if (!/name/.test(n)) return false;
+  return !/(agent|owner|team|employee|staff|business|company|office)/.test(n);
+}
+
+/**
+ * Does `value` read as one of the business's own people? Matches the full
+ * self name or its first name (case-insensitive, whitespace-collapsed) —
+ * "Amy" and "Amy Laidlaw" both match self name "Amy Laidlaw"; "Amy Smith"
+ * (a different person) does not.
+ */
+export function isSelfNameValue(value: string, selfNames: readonly string[]): boolean {
+  const v = value.trim().replace(/\s+/g, " ").toLowerCase();
+  if (!v) return false;
+  for (const self of selfNames) {
+    const full = self.trim().replace(/\s+/g, " ").toLowerCase();
+    if (!full) continue;
+    const first = full.split(" ")[0];
+    if (v === full || v === first) return true;
+  }
+  return false;
+}
+
+/**
+ * Should the retry's answer REPLACE the first-pass answer for a suspect
+ * field? Only when it actually names someone else: non-empty, different from
+ * the first answer, and not ITSELF one of our own names (a retry that
+ * "corrects" "Amy" to "Amy Laidlaw" — or to another roster member — is
+ * still the wrong party, so the first answer is kept and the telemetry
+ * records the field as confirmed rather than corrected).
+ */
+export function acceptSelfNameRetryValue(
+  first: string,
+  second: string,
+  selfNames: readonly string[]
+): boolean {
+  const s = second.trim();
+  return s !== "" && s !== first.trim() && !isSelfNameValue(s, selfNames);
+}
+
+/**
+ * Rebuild an extraction field list with the self-name retry hint appended to
+ * the SUSPECT fields' descriptions (the ones whose first-pass answer matched
+ * a self name). Other fields pass through untouched. Pure, so the exact
+ * retry-prompt shape stays under unit test.
+ */
+export function withSelfNameRetryHint<F extends { name: string; description?: string }>(
+  fields: readonly F[],
+  suspectFieldNames: readonly string[],
+  selfNames: readonly string[]
+): F[] {
+  const suspects = new Set(suspectFieldNames);
+  const hint =
+    `IMPORTANT: ${selfNames.join(", ")} is our own agent/business owner, ` +
+    "NOT the subject of this field. Only answer with that name if the text " +
+    "clearly shows the subject genuinely has the same name; otherwise " +
+    "answer the actual subject's name.";
+  return fields.map((f) =>
+    suspects.has(f.name)
+      ? { ...f, description: f.description ? `${f.description}. ${hint}` : hint }
+      : f
+  );
+}
