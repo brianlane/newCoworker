@@ -64,6 +64,8 @@ export type FleetSmsReplyRow = {
 export type FleetSmsOutboundRow = {
   business_id: string;
   to_e164: string | null;
+  /** `sms_outbound_log.source` — `ai_flow` tags the row as a flow send. */
+  source?: string | null;
   created_at: string;
 };
 
@@ -163,14 +165,15 @@ export function buildFleetActivityFeed(input: FleetActivityInput): FleetActivity
     });
   });
 
+  // Reply rows ARE the AI answering an inbound text — tag them as such.
   input.smsReplies.forEach((r, i) => {
     const cp = customerE164FromPayload(r.payload);
     if (!cp) return;
     items.push({
       id: `sms_reply:${i}:${r.updated_at}`,
-      badge: "Text out",
+      badge: "Reply",
       variant: "neutral",
-      label: `Text to ${named(r.business_id, cp)}`,
+      label: `Reply to ${named(r.business_id, cp)}`,
       businessId: r.business_id,
       at: r.updated_at
     });
@@ -178,10 +181,13 @@ export function buildFleetActivityFeed(input: FleetActivityInput): FleetActivity
 
   input.smsOutbound.forEach((r, i) => {
     if (!r.to_e164) return;
+    // Flow-driven sends get the AiFlow tag so an automation text is
+    // distinguishable from a manual/assistant one at a glance.
+    const fromFlow = r.source === "ai_flow";
     items.push({
       id: `sms_out:${i}:${r.created_at}`,
-      badge: "Text out",
-      variant: "neutral",
+      badge: fromFlow ? "AiFlow text" : "Text out",
+      variant: fromFlow ? "success" : "neutral",
       label: `Text to ${named(r.business_id, r.to_e164)}`,
       businessId: r.business_id,
       at: r.created_at
@@ -325,7 +331,7 @@ export async function getFleetRecentActivity(
       notMuted(
         db
           .from("sms_outbound_log")
-          .select("business_id, to_e164, created_at")
+          .select("business_id, to_e164, source, created_at")
           .is("deleted_at", null)
           .gte("created_at", since)
       )
