@@ -355,11 +355,46 @@ describe("composeDigestWithGemini", () => {
     expect(result.content).not.toContain("## C");
   });
 
-  it("throws when the draft is missing fields", async () => {
+  it("throws when the draft is missing fields (including dash-only fields)", async () => {
     const generate = vi.fn().mockResolvedValue(JSON.stringify({ title: "only" }));
     await expect(
       composeDigestWithGemini([pr()], "2026-W29", generate as never)
     ).rejects.toThrow("Gemini digest draft missing fields");
+
+    // A title made only of em dashes strips to empty = missing.
+    const dashOnly = vi
+      .fn()
+      .mockResolvedValue(JSON.stringify({ title: "\u2014", excerpt: "E", content: "C" }));
+    await expect(
+      composeDigestWithGemini([pr()], "2026-W29", dashOnly as never)
+    ).rejects.toThrow("Gemini digest draft missing fields");
+
+    // Dash-only content and an absent title fail the same way.
+    const dashContent = vi
+      .fn()
+      .mockResolvedValue(JSON.stringify({ title: "T", excerpt: "E", content: "\u2014" }));
+    await expect(
+      composeDigestWithGemini([pr()], "2026-W29", dashContent as never)
+    ).rejects.toThrow("Gemini digest draft missing fields");
+    const noTitle = vi
+      .fn()
+      .mockResolvedValue(JSON.stringify({ excerpt: "E", content: "C" }));
+    await expect(
+      composeDigestWithGemini([pr()], "2026-W29", noTitle as never)
+    ).rejects.toThrow("Gemini digest draft missing fields");
+  });
+
+  it("strips em dashes from composed copy", async () => {
+    const generate = vi.fn().mockResolvedValue(
+      JSON.stringify({
+        title: "Fast \u2014 really fast",
+        excerpt: "E",
+        content: "New \u2014 improved"
+      })
+    );
+    const result = await composeDigestWithGemini([pr()], "2026-W29", generate as never);
+    expect(result.title).toBe("Fast, really fast");
+    expect(result.content).toBe("New, improved");
   });
 });
 

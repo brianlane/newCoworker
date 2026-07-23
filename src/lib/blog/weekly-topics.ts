@@ -16,6 +16,7 @@
 import { logger } from "@/lib/logger";
 import { geminiGenerateText } from "@/lib/gemini-generate-content";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { stripEmDashesFromDraft } from "./copy";
 import {
   classifyFeaturePrsWithGemini,
   countWords,
@@ -59,7 +60,8 @@ const BRAND_CONTEXT =
 const SHARED_RULES =
   `The content body MUST be under ${DIGEST_MAX_WORDS} words, structured with '## ' ` +
   "section headings. The excerpt is 1-2 friendly sentences (it doubles as an " +
-  "Instagram caption, so no links and no markdown). " +
+  "Instagram caption, so no links and no markdown). Never use em dashes; use " +
+  "commas or periods instead. " +
   'Respond with JSON: {"title": string, "excerpt": string, "content": string} ' +
   "where content is markdown.";
 
@@ -136,10 +138,18 @@ export async function composeTopicWithGemini(
       maxOutputTokens: 4096
     });
     const parsed = JSON.parse(raw) as Partial<DigestDraft>;
-    if (!parsed.title || !parsed.excerpt || !parsed.content) {
+    // House rule: no em dashes in blog copy, ever — enforced (not just
+    // prompted), and BEFORE the emptiness check so a dash-only field
+    // counts as missing.
+    const cleaned = stripEmDashesFromDraft({
+      title: parsed.title ?? "",
+      excerpt: parsed.excerpt ?? "",
+      content: parsed.content ?? ""
+    });
+    if (!cleaned.title.trim() || !cleaned.excerpt.trim() || !cleaned.content.trim()) {
       throw new Error(`weekly-topics: ${category} draft missing fields`);
     }
-    return { title: parsed.title, excerpt: parsed.excerpt, content: parsed.content };
+    return cleaned;
   };
 
   let draft = await generateOnce("");

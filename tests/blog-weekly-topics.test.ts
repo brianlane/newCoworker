@@ -100,11 +100,37 @@ describe("composeTopicWithGemini", () => {
     expect(generate.mock.calls[1][0].userText).toContain("first business-tips post");
   });
 
-  it("throws when the draft is missing fields", async () => {
+  it("throws when the draft is missing fields (including dash-only fields)", async () => {
     const generate = vi.fn().mockResolvedValue(JSON.stringify({ title: "only" }));
     await expect(
       composeTopicWithGemini("tutorial", [pr()], [], generate as never)
     ).rejects.toThrow("weekly-topics: tutorial draft missing fields");
+
+    const dashOnly = vi
+      .fn()
+      .mockResolvedValue(JSON.stringify({ title: "\u2014", excerpt: "E", content: "C" }));
+    await expect(
+      composeTopicWithGemini("tutorial", [pr()], [], dashOnly as never)
+    ).rejects.toThrow("weekly-topics: tutorial draft missing fields");
+
+    const dashContent = vi
+      .fn()
+      .mockResolvedValue(JSON.stringify({ title: "T", excerpt: "E", content: "\u2014" }));
+    await expect(
+      composeTopicWithGemini("tutorial", [pr()], [], dashContent as never)
+    ).rejects.toThrow("weekly-topics: tutorial draft missing fields");
+    const noTitle = vi.fn().mockResolvedValue(JSON.stringify({ excerpt: "E", content: "C" }));
+    await expect(
+      composeTopicWithGemini("tutorial", [pr()], [], noTitle as never)
+    ).rejects.toThrow("weekly-topics: tutorial draft missing fields");
+  });
+
+  it("strips em dashes from composed copy", async () => {
+    const generate = vi.fn().mockResolvedValue(
+      JSON.stringify({ title: "A \u2014 B", excerpt: "C\u2014D", content: "E \u2014 F" })
+    );
+    const result = await composeTopicWithGemini("feature", [pr()], [], generate as never);
+    expect(result).toEqual({ title: "A, B", excerpt: "C, D", content: "E, F" });
   });
 
   it("retries once over the word cap, then truncates at a section boundary", async () => {

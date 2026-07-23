@@ -604,6 +604,11 @@ through the same permission matrix as the dashboard** (`src/lib/authz/policy.ts`
 
 ## Platform blog (newcoworker.com/blog)
 
+**Copy rule: NO EM DASHES in blog posts, ever.** Enforced in code
+(`src/lib/blog/copy.ts` — `stripEmDashes` runs on every AI composer output
+and on admin editor saves), plus a prompt instruction in every composer.
+Use commas or periods instead.
+
 DB-backed marketing blog: public `/blog` + `/es/blog` (category filters,
 JSON-LD Article schema, RSS at `/blog/feed.xml`, sitemap inclusion, hreflang
 when a post carries a Spanish translation), admin CMS at `/admin/blog`

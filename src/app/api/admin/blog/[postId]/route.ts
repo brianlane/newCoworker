@@ -16,6 +16,8 @@ import {
   getBlogPost,
   patchBlogPost
 } from "@/lib/blog/db";
+// House rule: no em dashes in blog copy, ever — normalized on save too.
+import { sanitizeBlogCopyFields } from "@/lib/blog/copy";
 import { slugifyBlogTitle } from "@/lib/blog/slug";
 
 const patchSchema = z.object({
@@ -52,7 +54,11 @@ export async function PATCH(request: Request, context: RouteContext): Promise<Re
   try {
     await requireAdmin();
     const { postId } = await context.params;
-    const body = patchSchema.parse(await request.json());
+    const body = sanitizeBlogCopyFields(patchSchema.parse(await request.json()));
+    // Post-sanitize check: a dash-only title strips to empty.
+    if (body.title !== undefined && !body.title.trim()) {
+      return errorResponse("VALIDATION_ERROR", "Title cannot be empty");
+    }
 
     const post = await getBlogPost(postId);
     if (!post) return errorResponse("NOT_FOUND", "Post not found");

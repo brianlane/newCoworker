@@ -53,11 +53,48 @@ describe("draftBlogPostWithAi", () => {
     expect(generate.mock.calls[0][0].apiKey).toBe("alt-key");
   });
 
-  it("throws when fields are missing", async () => {
+  it("throws when fields are missing (including dash-only fields)", async () => {
     const generate = vi.fn().mockResolvedValue(JSON.stringify({ title: "only" }));
     await expect(draftBlogPostWithAi("topic", generate as never)).rejects.toThrow(
       "blog-ai: draft response missing fields"
     );
+
+    const dashOnly = vi
+      .fn()
+      .mockResolvedValue(
+        JSON.stringify({ title: "\u2014", excerpt: "E", content: "C", category: "tutorial" })
+      );
+    await expect(draftBlogPostWithAi("topic", dashOnly as never)).rejects.toThrow(
+      "blog-ai: draft response missing fields"
+    );
+
+    const dashContent = vi
+      .fn()
+      .mockResolvedValue(
+        JSON.stringify({ title: "T", excerpt: "E", content: "\u2014", category: "tutorial" })
+      );
+    await expect(draftBlogPostWithAi("topic", dashContent as never)).rejects.toThrow(
+      "blog-ai: draft response missing fields"
+    );
+    const noTitle = vi
+      .fn()
+      .mockResolvedValue(JSON.stringify({ excerpt: "E", content: "C", category: "tutorial" }));
+    await expect(draftBlogPostWithAi("topic", noTitle as never)).rejects.toThrow(
+      "blog-ai: draft response missing fields"
+    );
+  });
+
+  it("strips em dashes from drafted copy", async () => {
+    const generate = vi.fn().mockResolvedValue(
+      JSON.stringify({
+        title: "Fast \u2014 really fast",
+        excerpt: "E",
+        content: "C",
+        category: "tutorial"
+      })
+    );
+    const draft = await draftBlogPostWithAi("topic", generate as never);
+    expect(draft.title).toBe("Fast, really fast");
   });
 });
 
@@ -75,11 +112,38 @@ describe("translateBlogPostWithAi", () => {
     });
   });
 
-  it("throws when fields are missing", async () => {
+  it("throws when fields are missing (including dash-only fields)", async () => {
     const generate = vi.fn().mockResolvedValue(JSON.stringify({ title_es: "only" }));
     await expect(translateBlogPostWithAi(post, generate as never)).rejects.toThrow(
       "blog-ai: translation response missing fields"
     );
+
+    const dashOnly = vi.fn().mockResolvedValue(
+      JSON.stringify({ title_es: "\u2014", excerpt_es: "E", content_es: "C" })
+    );
+    await expect(translateBlogPostWithAi(post, dashOnly as never)).rejects.toThrow(
+      "blog-ai: translation response missing fields"
+    );
+
+    const dashContent = vi.fn().mockResolvedValue(
+      JSON.stringify({ title_es: "T", excerpt_es: "E", content_es: "\u2014" })
+    );
+    await expect(translateBlogPostWithAi(post, dashContent as never)).rejects.toThrow(
+      "blog-ai: translation response missing fields"
+    );
+    const noTitle = vi
+      .fn()
+      .mockResolvedValue(JSON.stringify({ excerpt_es: "E", content_es: "C" }));
+    await expect(translateBlogPostWithAi(post, noTitle as never)).rejects.toThrow(
+      "blog-ai: translation response missing fields"
+    );
+  });
+
+  it("strips em dashes from translated copy", async () => {
+    const generate = vi.fn().mockResolvedValue(
+      JSON.stringify({ title_es: "A \u2014 B", excerpt_es: "C", content_es: "D" })
+    );
+    expect((await translateBlogPostWithAi(post, generate as never)).title_es).toBe("A, B");
   });
 });
 

@@ -8,6 +8,7 @@ import { geminiGenerateText } from "@/lib/gemini-generate-content";
 import { geminiGenerateImage } from "@/lib/gemini-generate-image";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { BLOG_CATEGORIES, BLOG_IMAGES_BUCKET, type BlogCategory } from "./db";
+import { stripEmDashes } from "./copy";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -47,7 +48,8 @@ export async function draftBlogPostWithAi(
       `You write posts for the New Coworker blog. ${BRAND_CONTEXT} ` +
       "Structure the body with '## ' section headings and keep it focused " +
       "(500-900 words). Markdown pipe tables are supported — use one when " +
-      "comparing options or listing structured facts. The excerpt is 1-2 " +
+      "comparing options or listing structured facts. Never use em dashes; " +
+      "use commas or periods instead. The excerpt is 1-2 " +
       "friendly sentences (it doubles as " +
       "an Instagram caption, so no links and no markdown). Pick the best " +
       `category from: ${BLOG_CATEGORIES.join(", ")}. ` +
@@ -59,13 +61,18 @@ export async function draftBlogPostWithAi(
     maxOutputTokens: 8192
   });
   const parsed = JSON.parse(raw) as Partial<BlogAiDraft>;
-  if (!parsed.title || !parsed.excerpt || !parsed.content) {
+  // House rule: no em dashes in blog copy, ever — stripped BEFORE the
+  // emptiness check so a dash-only field counts as missing.
+  const title = stripEmDashes(parsed.title ?? "");
+  const excerpt = stripEmDashes(parsed.excerpt ?? "");
+  const content = stripEmDashes(parsed.content ?? "");
+  if (!title.trim() || !excerpt.trim() || !content.trim()) {
     throw new Error("blog-ai: draft response missing fields");
   }
   const category = BLOG_CATEGORIES.includes(parsed.category as BlogCategory)
     ? (parsed.category as BlogCategory)
     : "announcement";
-  return { title: parsed.title, excerpt: parsed.excerpt, content: parsed.content, category };
+  return { title, excerpt, content, category };
 }
 
 export type BlogAiTranslation = {
@@ -94,14 +101,13 @@ export async function translateBlogPostWithAi(
     maxOutputTokens: 8192
   });
   const parsed = JSON.parse(raw) as Partial<BlogAiTranslation>;
-  if (!parsed.title_es || !parsed.excerpt_es || !parsed.content_es) {
+  const title_es = stripEmDashes(parsed.title_es ?? "");
+  const excerpt_es = stripEmDashes(parsed.excerpt_es ?? "");
+  const content_es = stripEmDashes(parsed.content_es ?? "");
+  if (!title_es.trim() || !excerpt_es.trim() || !content_es.trim()) {
     throw new Error("blog-ai: translation response missing fields");
   }
-  return {
-    title_es: parsed.title_es,
-    excerpt_es: parsed.excerpt_es,
-    content_es: parsed.content_es
-  };
+  return { title_es, excerpt_es, content_es };
 }
 
 /**
