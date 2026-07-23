@@ -109,9 +109,37 @@ function freshDeps(overrides: Partial<VaultSyncDeps> = {}): Required<VaultSyncDe
     resolveIp: vi.fn(async () => "203.0.113.1"),
     exec: vi.fn(async () => ({ exitCode: 0, signal: null, stdout: "vault_synced=ok\n", stderr: "" })),
     now: () => new Date("2026-05-03T12:00:00Z"),
+    fetchGraph: vi.fn(async () => ({ entities: [], facts: [] })),
     ...overrides
   } as Required<VaultSyncDeps>;
 }
+
+const GRAPH_ENTITY = {
+  id: "aaaaaaaa-0000-4000-8000-000000000001",
+  business_id: BIZ,
+  kind: "person",
+  canonical_name: "Amy Laidlaw",
+  aliases: ["Amy"],
+  phones: ["602-695-1142"],
+  emails: [],
+  customer_e164: null,
+  created_at: "2026-07-01T00:00:00Z",
+  updated_at: "2026-07-20T00:00:00Z"
+};
+
+const GRAPH_FACT = {
+  id: "ffffffff-0000-4000-8000-000000000001",
+  business_id: BIZ,
+  subject_entity_id: GRAPH_ENTITY.id,
+  predicate: "phone",
+  object_entity_id: null,
+  object_value: "602-695-1142",
+  source_text: "- bullet",
+  stated_at: "2026-07-10T00:00:00Z",
+  active: true,
+  superseded_by: null,
+  created_at: "2026-07-10T00:00:00Z"
+};
 
 const originalEnv = { ...process.env };
 
@@ -306,6 +334,29 @@ describe("buildSyncVaultCommand", () => {
     expect(cmd.trim().endsWith('echo "vault_synced=ok"')).toBe(true);
   });
 
+  it("omits every graph-projection line by default (non-graph tenants stay byte-identical)", () => {
+    const cmd = buildSyncVaultCommand(FULL_CONFIG, BIZ, "INST", NOW);
+    expect(cmd).not.toContain("graph_projection");
+    expect(cmd).not.toContain("/opt/rowboat/memory");
+    expect(cmd).not.toContain("tar -xf");
+  });
+
+  it("unpacks a supplied graph-projection tar into /opt/rowboat/memory (wipe managed folders, chown for the worker)", () => {
+    const tarB64 = Buffer.from("fake-tar-bytes").toString("base64");
+    const cmd = buildSyncVaultCommand(FULL_CONFIG, BIZ, "INST", NOW, "", tarB64);
+    expect(cmd).toContain(
+      "mkdir -p /opt/rowboat/memory/People /opt/rowboat/memory/Organizations /opt/rowboat/memory/Topics /opt/rowboat/memory/Projects"
+    );
+    // Managed note folders are wipe-and-rewrite (they were dead scaffolding
+    // before the projection); Projects is deliberately untouched.
+    expect(cmd).toContain("rm -f /opt/rowboat/memory/People/*.md");
+    expect(cmd).not.toContain("rm -f /opt/rowboat/memory/Projects");
+    expect(cmd).toContain(`printf %s '${tarB64}' | base64 -d | tar -xf - -C /opt/rowboat/memory`);
+    // The chat-worker container (uid 1000) must be able to write graph.db.
+    expect(cmd).toContain("chown -R 1000:1000 /opt/rowboat/memory");
+    expect(cmd).toContain('echo "graph_projection=ok"');
+  });
+
   it("starts with `set -euo pipefail` so a failure in any pipeline step (base64 decode, docker cp, mongosh) propagates as a non-zero exit code", () => {
     const cmd = buildSyncVaultCommand(FULL_CONFIG, BIZ, "INST", NOW);
     expect(cmd.startsWith("set -euo pipefail")).toBe(true);
@@ -491,6 +542,69 @@ describe("syncVaultToVps — success path", () => {
     expect(r1.ok).toBe(true);
     const strDeps = freshDeps({
       fetchDocuments: vi.fn(async () => {
+        throw "string failure";
+      })
+    });
+    const r2 = await syncVaultToVps(BIZ, strDeps);
+    expect(r2.ok).toBe(true);
+  });
+
+  it("ships the graph projection tar for shadow/active tenants (decodable, wipe+chown lines present)", async () => {
+    const deps = freshDeps({
+      fetchConfig: vi.fn(async () => ({ ...FULL_CONFIG, memory_graph_mode: "shadow" as const })),
+      fetchGraph: vi.fn(async () => ({ entities: [GRAPH_ENTITY], facts: [GRAPH_FACT] }))
+    });
+    const r = await syncVaultToVps(BIZ, deps);
+    expect(r.ok).toBe(true);
+    expect(deps.fetchGraph).toHaveBeenCalledWith(BIZ);
+    const call = (deps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0];
+    expect(call.command).toContain('echo "graph_projection=ok"');
+    expect(call.command).toContain("tar -xf - -C /opt/rowboat/memory");
+    // The shipped tar really contains the entity note + graph.jsonl.
+    const m = /printf %s '([A-Za-z0-9+/=]+)' \| base64 -d \| tar -xf/.exec(call.command);
+    expect(m).toBeTruthy();
+    const tar = Buffer.from(m![1], "base64").toString("utf8");
+    expect(tar).toContain("People/Amy Laidlaw.md");
+    expect(tar).toContain("graph.jsonl");
+    expect(tar).toContain("602-695-1142");
+  });
+
+  it("skips the projection for off-mode tenants (fetchGraph never called) and for an empty graph", async () => {
+    const offDeps = freshDeps();
+    await syncVaultToVps(BIZ, offDeps);
+    expect(offDeps.fetchGraph).not.toHaveBeenCalled();
+    expect((offDeps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0].command).not.toContain(
+      "graph_projection"
+    );
+
+    const emptyDeps = freshDeps({
+      fetchConfig: vi.fn(async () => ({ ...FULL_CONFIG, memory_graph_mode: "active" as const }))
+    });
+    const r = await syncVaultToVps(BIZ, emptyDeps);
+    expect(r.ok).toBe(true);
+    expect(emptyDeps.fetchGraph).toHaveBeenCalled();
+    expect((emptyDeps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0].command).not.toContain(
+      "graph_projection"
+    );
+  });
+
+  it("syncs without the projection when the graph read fails (Error and non-Error)", async () => {
+    const errDeps = freshDeps({
+      fetchConfig: vi.fn(async () => ({ ...FULL_CONFIG, memory_graph_mode: "shadow" as const })),
+      fetchGraph: vi.fn(async () => {
+        throw new Error("graph tables missing");
+      })
+    });
+    const r1 = await syncVaultToVps(BIZ, errDeps);
+    expect(r1.ok).toBe(true);
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+      "syncVaultToVps: graph projection failed; syncing without it",
+      expect.objectContaining({ businessId: BIZ, error: "graph tables missing" })
+    );
+
+    const strDeps = freshDeps({
+      fetchConfig: vi.fn(async () => ({ ...FULL_CONFIG, memory_graph_mode: "shadow" as const })),
+      fetchGraph: vi.fn(async () => {
         throw "string failure";
       })
     });

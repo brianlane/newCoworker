@@ -43,6 +43,14 @@ import { getBusinessConfig, type ConfigRow } from "@/lib/db/configs";
 import { getBusiness, type BusinessRow } from "@/lib/db/businesses";
 import { listBusinessDocuments, type BusinessDocumentRow } from "@/lib/documents/db";
 import { buildDocumentsDigestMd } from "@/lib/documents/core";
+import {
+  listActiveFactsForBusiness,
+  listMemoryEntities,
+  type MemoryEntityRow,
+  type MemoryFactRow
+} from "@/lib/memory/graph-db";
+import { buildGraphProjectionFiles } from "@/lib/memory/graph-projection";
+import { packTar } from "@/lib/tar/pack";
 import { HostingerClient, DEFAULT_HOSTINGER_BASE_URL } from "@/lib/hostinger/client";
 import { logger } from "@/lib/logger";
 
@@ -94,6 +102,10 @@ export type VaultSyncDeps = {
   exec?: typeof sshExec;
   /** Override the wallclock for the `lastUpdatedAt` field (tests). */
   now?: () => Date;
+  /** Override the graph reads for the on-box projection (tests). */
+  fetchGraph?: (
+    businessId: string
+  ) => Promise<{ entities: MemoryEntityRow[]; facts: MemoryFactRow[] }>;
 };
 
 /**
@@ -249,7 +261,14 @@ export function buildSyncVaultCommand(
   projectId: string,
   instructions: string,
   now: Date,
-  documentsMd: string = ""
+  documentsMd: string = "",
+  /**
+   * Base64 ustar bundle of the knowledge-graph projection (entity notes +
+   * graph.jsonl) for `/opt/rowboat/memory/`. Empty string = tenant not on
+   * the graph (memory_graph_mode off) — the command stays byte-identical
+   * to the pre-projection behavior and the memory folders are untouched.
+   */
+  graphProjectionTarB64: string = ""
 ): string {
   // The `?? ""` fallbacks here and in `enc` are defense-in-depth nets for
   // a misshapen ConfigRow; ConfigRow's `text` columns are NON-NULL at the
@@ -273,9 +292,26 @@ export function buildSyncVaultCommand(
   const projectIdJson = JSON.stringify(projectId);
   const nowIso = now.toISOString();
 
+  // Knowledge-graph projection: wipe-and-rewrite the managed note folders
+  // (they were dead scaffolding before the projection — nothing else writes
+  // them), unpack the tar bundle, and hand the dir to uid 1000 so the
+  // chat-worker container (runs as `node`) can compile graph.jsonl into
+  // graph.db next to the notes.
+  const graphLines =
+    graphProjectionTarB64.length > 0
+      ? [
+          "mkdir -p /opt/rowboat/memory/People /opt/rowboat/memory/Organizations /opt/rowboat/memory/Topics /opt/rowboat/memory/Projects",
+          "rm -f /opt/rowboat/memory/People/*.md /opt/rowboat/memory/Organizations/*.md /opt/rowboat/memory/Topics/*.md 2>/dev/null || true",
+          `printf %s '${graphProjectionTarB64}' | base64 -d | tar -xf - -C /opt/rowboat/memory`,
+          "chown -R 1000:1000 /opt/rowboat/memory || true",
+          'echo "graph_projection=ok"'
+        ]
+      : [];
+
   return [
     "set -euo pipefail",
     "mkdir -p /opt/rowboat/vault",
+    ...graphLines,
     `printf %s '${soulB64}'    | base64 -d > /opt/rowboat/vault/soul.md`,
     `printf %s '${identityB64}' | base64 -d > /opt/rowboat/vault/identity.md`,
     `printf %s '${memoryB64}'  | base64 -d > /opt/rowboat/vault/memory.md`,
@@ -351,6 +387,12 @@ export async function syncVaultToVps(
   const resolveIp = deps.resolveIp ?? defaultResolveIp;
   const exec = deps.exec ?? sshExec;
   const now = (deps.now ?? (() => new Date()))();
+  const fetchGraph =
+    deps.fetchGraph ??
+    (async (bid: string) => ({
+      entities: await listMemoryEntities(bid),
+      facts: await listActiveFactsForBusiness(bid)
+    }));
   /* c8 ignore stop */
 
   const [biz, config, key, documents] = await Promise.all([
@@ -386,12 +428,40 @@ export async function syncVaultToVps(
 
   const documentsMd = buildDocumentsDigestMd(documents, now);
   const instructions = buildAgentInstructions(config, documentsMd);
+
+  // On-box knowledge-graph projection (graph tenants only — mode off keeps
+  // the command byte-identical). A graph read failure must never block the
+  // vault sync: the projection just skips this round and lands on the next.
+  let graphProjectionTarB64 = "";
+  const graphMode = config.memory_graph_mode ?? "off";
+  if (graphMode === "shadow" || graphMode === "active") {
+    try {
+      const graph = await fetchGraph(businessId);
+      const files = buildGraphProjectionFiles(graph.entities, graph.facts);
+      if (files.length > 0) {
+        graphProjectionTarB64 = packTar(files).toString("base64");
+      }
+    } catch (err) {
+      logger.warn("syncVaultToVps: graph projection failed; syncing without it", {
+        businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+
   // Single resolution point: the value we report in `result.projectId`
   // (used as the drift signal in `syncVaultToVpsAndLog`'s log) is the
   // EXACT same string we ask mongosh to update. See the doc on
   // `buildSyncVaultCommand` for the Bugbot Low motivation.
   const projectId = resolveSyncProjectId(businessId, config);
-  const command = buildSyncVaultCommand(config, projectId, instructions, now, documentsMd);
+  const command = buildSyncVaultCommand(
+    config,
+    projectId,
+    instructions,
+    now,
+    documentsMd,
+    graphProjectionTarB64
+  );
 
   let result: SshExecResult;
   try {

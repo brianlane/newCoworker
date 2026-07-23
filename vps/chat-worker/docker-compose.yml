@@ -23,6 +23,12 @@ services:
     # the docker bridge gateway so the container can reach it.
     extra_hosts:
       - "host.docker.internal:host-gateway"
+    # Knowledge-graph projection: the platform's vault sync unpacks entity
+    # notes + graph.jsonl into /opt/rowboat/memory (graph-mode tenants);
+    # the worker compiles graph.jsonl into graph.db (node:sqlite) in place.
+    # The sync chowns the dir to uid 1000 (`node`) so this write works.
+    volumes:
+      - /opt/rowboat/memory:/opt/rowboat/memory
     # Keep logs bounded — structured JSON, ~150 bytes/line, but a busy
     # tenant could otherwise fill disk inside a year.
     logging:
