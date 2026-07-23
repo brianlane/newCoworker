@@ -406,6 +406,10 @@ export type StepAction =
       claimedNotifyTemplate?: string;
       /** Pin offers to the single roster member with this name. */
       agentName?: string;
+      /** DYNAMIC pin: var name whose VALUE the worker resolves against the
+       * active roster at execution (empty/"none" = un-pinned; unresolved
+       * non-empty = owner fallback). Exclusive with the other pin modes. */
+      agentNameVar?: string;
       /** Pin offers to a saved roster member by reference (worker resolves the
        * current name, then routes exactly like agentName). Employee source only. */
       agentRef?: ContactRef;
@@ -1165,6 +1169,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           ownerFallbackTemplate,
           claimedNotifyTemplate: claimed ? claimed : undefined,
           ...(agentName ? { agentName } : {}),
+          ...(step.agentNameVar ? { agentNameVar: step.agentNameVar } : {}),
           ...(step.agentRef ? { agentRef: step.agentRef } : {}),
           ...(agentNames.length >= 2 ? { agentNames } : {}),
           ...(step.broadcastAll === true ? { broadcastAll: true } : {}),

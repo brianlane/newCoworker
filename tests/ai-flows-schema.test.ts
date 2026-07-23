@@ -2412,6 +2412,53 @@ describe("Dynamic contact refs: route_to_team agentRef", () => {
     );
   });
 
+  it("accepts agentNameVar as the sole pin when an earlier step produces the var", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "sms", conditions: [{ type: "has_url" }] },
+      steps: [
+        {
+          id: "x",
+          type: "extract_text",
+          fields: [{ name: "assigned_agent", description: "teammate named, else none" }]
+        },
+        {
+          id: "r",
+          type: "route_to_team",
+          agentNameVar: "assigned_agent",
+          offerTemplate: "Offer to {{agent.name}}",
+          ownerFallbackTemplate: "No one took it"
+        }
+      ]
+    });
+    const step = def.steps[1];
+    expect(step.type === "route_to_team" && step.agentNameVar).toBe("assigned_agent");
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("rejects agentNameVar alongside any static pin or broadcast", () => {
+    for (const extra of [
+      { agentName: "Dave" },
+      { agentRef: employeeRef },
+      { agentNames: ["Dave", "Gabby"] },
+      { broadcastAll: true }
+    ]) {
+      const def = aiFlowDefinitionSchema.parse(
+        routedWith({ agentNameVar: "assigned_agent", ...extra })
+      );
+      expect(validateDefinitionSemantics(def)).toContain(
+        'Step "r" sets agentNameVar alongside another pin/broadcast option; the dynamic pin is mutually exclusive with agentName/agentRef/agentNames/broadcastAll.'
+      );
+    }
+  });
+
+  it("rejects an agentNameVar no earlier step produces", () => {
+    const def = aiFlowDefinitionSchema.parse(routedWith({ agentNameVar: "assigned_agent" }));
+    expect(validateDefinitionSemantics(def)).toContain(
+      'Step "r" pins via {{vars.assigned_agent}} which no earlier step produces.'
+    );
+  });
+
   it("rejects a contact-sourced agentRef (not on the roster)", () => {
     const def = aiFlowDefinitionSchema.parse(
       routedWith({

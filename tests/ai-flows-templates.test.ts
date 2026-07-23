@@ -7,6 +7,7 @@ import {
   INSTAGRAM_SCRAPER_SOURCE,
   META_LEAD_ADS_SOURCE,
   metaLeadFollowUpTemplate,
+  newLeadIntakeTemplate,
   priceSheetShareTemplate,
   reviewRequestTemplate,
   REVIEW_LINK_MAX_LENGTH
@@ -245,5 +246,56 @@ describe("priceSheetShareTemplate", () => {
       expect(share.to).toBe("{{trigger.from}}");
       expect(share.messageTemplate).toContain("{{share_url}}");
     }
+  });
+});
+
+describe("newLeadIntakeTemplate", () => {
+  it("is a valid definition the install route can persist as-is", () => {
+    const tpl = newLeadIntakeTemplate();
+    const def = parseAiFlowDefinition(tpl.definition);
+    expect(def.trigger.channel).toBe("manual");
+    expect(tpl.key).toBe("new_lead_intake");
+    expect(tpl.name).toBe("New Lead Intake");
+  });
+
+  it("parses, files, intro-texts (referral-forked), routes, and briefs the owner", () => {
+    const def = newLeadIntakeTemplate().definition;
+    expect(def.steps.map((s) => s.type)).toEqual([
+      "extract_text",
+      "upsert_customer",
+      "branch",
+      "route_to_team",
+      "notify_owner",
+      "notify_owner"
+    ]);
+    expect(summarizeDefinition(def)).toContain("On demand");
+  });
+
+  it("pins DYNAMICALLY to the teammate the owner named (agentNameVar, no static roster)", () => {
+    const def = newLeadIntakeTemplate().definition;
+    const route = def.steps.find((s) => s.type === "route_to_team");
+    expect(route && route.type === "route_to_team" && route.agentNameVar).toBe(
+      "assigned_agent"
+    );
+    // No static pin anywhere: a new hire is pinnable the day they join.
+    expect(route && route.type === "route_to_team" && route.agentName).toBeUndefined();
+    // The extraction produces the var the pin reads.
+    const parse = def.steps[0];
+    if (parse.type === "extract_text") {
+      expect(parse.fields.map((f) => f.name)).toContain("assigned_agent");
+      expect(parse.fields.map((f) => f.name)).toContain("referred_by");
+      expect(parse.fields.map((f) => f.name)).toContain("referral_gate");
+    }
+  });
+
+  it("the referral fork fails CLOSED (equals-matched gate; referrer only in the referral arm)", () => {
+    const def = newLeadIntakeTemplate().definition;
+    const intro = def.steps.find((s) => s.type === "branch");
+    if (!intro || intro.type !== "branch") throw new Error("intro branch missing");
+    expect(intro.branches[0].condition).toEqual({ var: "referral_gate", equals: "referral" });
+    const armJson = JSON.stringify(intro.branches[0].steps);
+    expect(armJson).toContain("{{vars.referred_by}}");
+    const elseJson = JSON.stringify(intro.else ?? []);
+    expect(elseJson).not.toContain("{{vars.referred_by}}");
   });
 });
