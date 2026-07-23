@@ -13,5 +13,5 @@
   "SMS_START_REPLY": "Está suscrito a SMS de New Coworker para este número. Responda STOP para cancelar. Pueden aplicarse tarifas de msg&datos.",
   "SMS_STOP_REPLY": "Ha cancelado los SMS de marketing de New Coworker para este número. Aún puede recibir mensajes transaccionales.",
   "SMS_STOP_SUFFIX": "Responda STOP para cancelar.",
-  "MESSENGER_OVER_CAP": "Lo sentimos — nuestro asistente de chat no está disponible temporalmente. Inténtelo más tarde o contáctenos directamente."
+  "MESSENGER_OVER_CAP": "Lo sentimos, nuestro asistente de chat no está disponible temporalmente. Inténtelo más tarde o contáctenos directamente."
 }

@@ -22,10 +22,17 @@
  *   - approval_gate (not yet approved) → awaiting_approval, run paused.
  */
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
-import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.45.0";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
-import { isSelfPhone, scrubSelfPhones } from "../_shared/ai_flows/extracted_contact.ts";
+import {
+  acceptSelfNameRetryValue,
+  isPersonNameField,
+  isSelfNameValue,
+  isSelfPhone,
+  scrubSelfPhones,
+  withSelfNameRetryHint
+} from "../_shared/ai_flows/extracted_contact.ts";
 import { systemLog } from "../_shared/system_log.ts";
 import { telnyxSendSms, telnyxSendGroupMms } from "../_shared/telnyx_sms_compliance.ts";
 import { sendOperationalSms } from "../_shared/sms_operational_meter.ts";
@@ -736,7 +743,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       if (isDuplicate) {
         appendActionTaken(
           scope,
-          "skipped — duplicate of an earlier run for this lead (nothing sent)"
+          "skipped, duplicate of an earlier run for this lead (nothing sent)"
         );
         // Record this and every remaining step as skipped so the dashboard
         // run view shows exactly what the dedupe saved the lead/team from.
@@ -867,7 +874,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         ) {
           appendActionTaken(
             scope,
-            "skipped the follow-up text — the conversation was already active after the appointment (nothing sent)"
+            "skipped the follow-up text, the conversation was already active after the appointment (nothing sent)"
           );
           // Record this and every remaining step as skipped so the run view
           // shows exactly what the live thread saved the lead from.
@@ -1730,7 +1737,7 @@ async function runStep(
     return {
       kind: "fail",
       error:
-        `unknown step type "${step.type}" — this ai-flow-worker deploy is older than the flow definition; redeploy the worker from main`
+        `unknown step type "${step.type}", this ai-flow-worker deploy is older than the flow definition; redeploy the worker from main`
     };
   }
   // Test run: side-effecting actions are simulated (their rendered output IS
@@ -2265,7 +2272,7 @@ async function upsertCustomerStep(
   if (isBackfillSkipExistingTrigger(scope.trigger) && (existedBefore || precheckFailed)) {
     appendActionTaken(
       scope,
-      `backfill: ${action.e164} already exists as a contact — no outreach sent`
+      `backfill: ${action.e164} already exists as a contact, no outreach sent`
     );
     return {
       kind: "ok",
@@ -2297,14 +2304,14 @@ async function upsertCustomerStep(
     const label = action.name ? `${action.name} (${action.e164})` : action.e164;
     appendActionTaken(
       scope,
-      `duplicate lead submission for ${action.e164} — contact updated, no new outreach (prior run ${duplicateOfRunId})`
+      `duplicate lead submission for ${action.e164}, contact updated, no new outreach (prior run ${duplicateOfRunId})`
     );
     // Tell the owner once so the repeat isn't silent — someone may have
     // re-submitted the form on purpose and expects a human to look.
     await sendOwnerSms(
       supabase,
       run,
-      `Heads up: ${label} submitted the lead form again. I updated their contact details but did NOT send another intro — their existing conversation continues. Review them on your dashboard if follow-up is needed.`,
+      `Heads up: ${label} submitted the lead form again. I updated their contact details but did NOT send another intro, their existing conversation continues. Review them on your dashboard if follow-up is needed.`,
       `aiflow-duplicate-lead:${run.id}`
     );
     await telemetryRecord(supabase, "ai_flow_duplicate_lead_suppressed", {
@@ -2536,7 +2543,7 @@ async function updateContactStep(
     const tag = t.trim().slice(0, 40);
     const key = tag.toLowerCase();
     if (!tag || removeSet.has(key)) continue;
-    if (seen.has(key)) continue; // already on the contact — nothing to write
+    if (seen.has(key)) continue; // already on the contact, nothing to write
     if (next.length >= 25) {
       droppedAtCap.push(tag);
       continue;
@@ -2586,7 +2593,7 @@ async function updateContactStep(
       (added.length > 0 ? ` (+${added.join(", +")})` : "") +
       (removed.length > 0 ? ` (-${removed.join(", -")})` : "") +
       (droppedAtCap.length > 0
-        ? ` — ${droppedAtCap.length} tag(s) not added (25-tag limit): ${droppedAtCap.join(", ")}`
+        ? `, ${droppedAtCap.length} tag(s) not added (25-tag limit): ${droppedAtCap.join(", ")}`
         : "")
   );
   return {
@@ -2655,7 +2662,7 @@ async function scrubExtractedSelfPhones(
   if (scrub.cleared.length > 0) {
     appendActionTaken(
       scope,
-      `discarded extracted ${scrub.cleared.join(", ")} from ${stepLabel} — it matched the business's own number, not the lead's`
+      `discarded extracted ${scrub.cleared.join(", ")} from ${stepLabel}, it matched the business's own number, not the lead's`
     );
     await telemetryRecord(supabase, "ai_flow_extraction_scrubbed", {
       business_id: run.business_id,
@@ -2675,6 +2682,113 @@ async function scrubExtractedSelfPhones(
     ].join(",");
   }
   return scrub.values;
+}
+
+/**
+ * The business's OWN people names (owner + active roster) — the names an
+ * extracted "the seller's/lead's name" answer is SUSPECT of confusing with
+ * the actual subject (the Jul 22 2026 "Hi Amy" Clever greeting). Best-effort
+ * like businessSelfNumbers: a lookup error returns what was found.
+ */
+async function businessSelfNames(supabase: Supabase, businessId: string): Promise<string[]> {
+  const out: string[] = [];
+  const { data: biz } = await supabase
+    .from("businesses")
+    .select("owner_name")
+    .eq("id", businessId)
+    .maybeSingle();
+  const ownerName = (biz as { owner_name?: string | null } | null)?.owner_name;
+  if (ownerName?.trim()) out.push(ownerName.trim());
+  const { data: roster } = await supabase
+    .from("ai_flow_team_members")
+    .select("name")
+    .eq("business_id", businessId)
+    .eq("active", true);
+  for (const row of (roster ?? []) as Array<{ name?: string | null }>) {
+    if (row.name?.trim()) out.push(row.name.trim());
+  }
+  return [...new Set(out)];
+}
+
+/**
+ * Self-NAME guard for extract_text (Jul 22 2026 "Hi Amy" regression): when a
+ * person-name field's answer matches the owner's or a roster member's name,
+ * re-run the extraction ONCE with an explicit "that is our own agent" hint
+ * appended to the suspect fields. The retry's answer wins only when it names
+ * someone else and is non-empty — a model that INSISTS on the same name is
+ * trusted (a lead can genuinely share the owner's name), and an empty retry
+ * keeps the first answer rather than degrading "Hi Amy" into "Hi .". Fails
+ * open on any retry error: the primary extraction already succeeded, so the
+ * guard never turns a working run into a dead-lettered one.
+ */
+async function retrySelfNameSuspects(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  fields: ExtractField[],
+  text: string,
+  extracted: Record<string, string>
+): Promise<Record<string, string>> {
+  const nameFields = fields.filter((f) => isPersonNameField(f.name));
+  if (nameFields.length === 0) return extracted;
+  const selfNames = await businessSelfNames(supabase, run.business_id);
+  if (selfNames.length === 0) return extracted;
+  const suspects = nameFields.filter((f) =>
+    isSelfNameValue(extracted[f.name] ?? "", selfNames)
+  );
+  if (suspects.length === 0) return extracted;
+
+  const suspectNames = suspects.map((f) => f.name);
+  let retry: Record<string, string>;
+  try {
+    retry = await extractFields(
+      supabase,
+      run,
+      withSelfNameRetryHint(fields, suspectNames, selfNames),
+      text
+    );
+  } catch (e) {
+    console.error("self-name retry extraction failed", e);
+    await telemetryRecord(supabase, "ai_flow_self_name_retry", {
+      business_id: run.business_id,
+      run_id: run.id,
+      fields: suspectNames,
+      outcome: "retry_error"
+    });
+    return extracted;
+  }
+
+  const out = { ...extracted };
+  const corrected: string[] = [];
+  const confirmed: string[] = [];
+  for (const f of suspects) {
+    const first = (extracted[f.name] ?? "").trim();
+    const second = (retry[f.name] ?? "").trim();
+    // Accept the retry only when it names someone ELSE: a retry that answers
+    // another of our own names ("Amy" → "Amy Laidlaw", or a different roster
+    // member) is still the wrong party, so the first answer is kept.
+    if (acceptSelfNameRetryValue(first, second, selfNames)) {
+      out[f.name] = second;
+      corrected.push(`${f.name} ("${first}" → "${second}")`);
+    } else {
+      confirmed.push(f.name);
+    }
+  }
+  if (corrected.length > 0) {
+    appendActionTaken(
+      scope,
+      `re-checked extracted ${corrected.join(", ")}, the first answer matched the business's own name, not the lead's`
+    );
+  }
+  await telemetryRecord(supabase, "ai_flow_self_name_retry", {
+    business_id: run.business_id,
+    run_id: run.id,
+    fields: suspectNames,
+    outcome: corrected.length > 0 ? "corrected" : "confirmed",
+    corrected,
+    confirmed
+  });
+  return out;
 }
 
 /** Persisted-vars marker: comma-joined var names the self-scrub cleared. */
@@ -2876,6 +2990,16 @@ async function extractTextStep(
     if (e instanceof SpendCapError) return { kind: "fail", error: `extract_text: ${e.message}` };
     throw e;
   }
+  // Self-name guard: a person-name answer matching the owner/roster gets one
+  // hinted re-extraction (the Jul 22 2026 "Hi Amy" Clever greeting).
+  extracted = await retrySelfNameSuspects(
+    supabase,
+    run,
+    scope,
+    action.fields,
+    action.text,
+    extracted
+  );
 
   const raw: Record<string, string> = {};
   for (const f of action.fields) {
@@ -4411,7 +4535,7 @@ async function shareDocumentStep(
   if (action.skipReason) {
     appendActionTaken(
       scope,
-      "skipped sharing the document — no valid recipient was extracted"
+      "skipped sharing the document, no valid recipient was extracted"
     );
     return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
   }
@@ -4566,7 +4690,7 @@ async function sendWhatsAppStep(
   if (action.skipReason) {
     appendActionTaken(
       scope,
-      "skipped the WhatsApp message — no valid phone number was extracted"
+      "skipped the WhatsApp message, no valid phone number was extracted"
     );
     return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
   }
@@ -4612,7 +4736,7 @@ async function sendWhatsAppStep(
     return {
       kind: "fail",
       error:
-        "send_whatsapp: the recipient is the business's own number — an earlier step " +
+        "send_whatsapp: the recipient is the business's own number, an earlier step " +
         "extracted the business's contact info instead of the lead's"
     };
   }
@@ -4668,14 +4792,14 @@ async function sendWhatsAppStep(
     if (reason === "not_connected") {
       appendActionTaken(
         scope,
-        "skipped the WhatsApp message — WhatsApp is not connected under Integrations"
+        "skipped the WhatsApp message, WhatsApp is not connected under Integrations"
       );
       return { kind: "ok", skipped: true, result: { skipped: reason } };
     }
     if (reason === "template_not_approved") {
       appendActionTaken(
         scope,
-        `skipped the WhatsApp message to ${toE164} — the recipient hasn't messaged recently ` +
+        `skipped the WhatsApp message to ${toE164}, the recipient hasn't messaged recently ` +
           "and the message template is still in Meta review"
       );
       return { kind: "ok", skipped: true, result: { skipped: reason } };
@@ -4696,7 +4820,7 @@ async function sendWhatsAppStep(
   appendActionTaken(
     scope,
     `sent a WhatsApp message to ${action.toAgentName || action.toRef?.label || toE164}` +
-      (result.via === "template" ? " (via approved template — outside the 24h window)" : "")
+      (result.via === "template" ? " (via approved template, outside the 24h window)" : "")
   );
   return { kind: "ok", result: { to: toE164, via: result.via ?? "text" } };
 }
@@ -4714,7 +4838,7 @@ async function sendSmsStep(
   if (action.skipReason) {
     appendActionTaken(
       scope,
-      "skipped texting the lead — no valid phone number was extracted"
+      "skipped texting the lead, no valid phone number was extracted"
     );
     return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
   }
@@ -4832,7 +4956,7 @@ async function sendSmsStep(
     return {
       kind: "fail",
       error:
-        `send_sms: destination ${toE164} is this business's own number — refusing to ` +
+        `send_sms: destination ${toE164} is this business's own number, refusing to ` +
         "text ourselves. The extracted lead phone is wrong (the extraction likely " +
         "picked up the business's contact info instead of the lead's)."
     };
@@ -4926,7 +5050,7 @@ async function sendSmsStep(
         return {
           kind: "fail",
           error:
-            `send_sms: the carrier rejected the text to ${toE164} and a retry can't fix it — ` +
+            `send_sms: the carrier rejected the text to ${toE164} and a retry can't fix it, ` +
             `usually the number isn't a real dialable line. (${detail})`
         };
       }
@@ -5089,7 +5213,7 @@ async function sendGroupSmsStep(
         return {
           kind: "fail",
           error:
-            `send_sms: the carrier rejected the group text and a retry can't fix it — ` +
+            `send_sms: the carrier rejected the group text and a retry can't fix it, ` +
             `check the recipient numbers. (${detail})`
         };
       }
@@ -5762,7 +5886,7 @@ async function notifyLeadOwnerStep(
     }
     appendActionTaken(
       scope,
-      `forwarded the message to ${member.name || member.phone} — they own this lead`
+      `forwarded the message to ${member.name || member.phone}, they own this lead`
     );
     return {
       kind: "ok",
@@ -5784,8 +5908,8 @@ async function notifyLeadOwnerStep(
   appendActionTaken(
     scope,
     contactId
-      ? "forwarded the message to the owner — no teammate owns this lead"
-      : "forwarded the message to the owner — the lead's contact could not be resolved"
+      ? "forwarded the message to the owner, no teammate owns this lead"
+      : "forwarded the message to the owner, the lead's contact could not be resolved"
   );
   const base = outcome.kind === "ok" ? (outcome.result ?? {}) : {};
   return outcome.kind === "ok"
@@ -6232,7 +6356,7 @@ async function routeToTeamStep(
     // copy (their "back to you" wording) with a leading line naming who let it
     // go, so the owner knows it was claimed-then-released (not never claimed).
     const fallbackBody = renderTemplate(action.ownerFallbackTemplate, scope);
-    const body = `${who} released this lead — it's back with you.\n${fallbackBody}`;
+    const body = `${who} released this lead, it's back with you.\n${fallbackBody}`;
     await sendOwnerSms(supabase, run, body, `aiflow-unclaimed:${run.id}`);
     appendActionTaken(scope, `lead unclaimed by ${who}; returned to the owner`);
     return {
@@ -6330,7 +6454,7 @@ async function routeToTeamStep(
             supabase,
             run,
             loser,
-            `${claimerLabel} claimed this lead — you're all set, no action needed.`,
+            `${claimerLabel} claimed this lead, you're all set, no action needed.`,
             `aiflow-broadcast-lost:${run.id}:${loser}`
           );
         } catch (e) {
@@ -6504,7 +6628,7 @@ async function routeToTeamStep(
       scope.vars.claimed_agent_eta_minutes = "0";
       const fyiMms = action.attachScreenshot ? await screenshotMmsUrl(supabase, run, scope) : null;
       const fyiBody =
-        "New lead assigned to you (auto-assign is on — it's yours, no reply " +
+        "New lead assigned to you (auto-assign is on, it's yours, no reply " +
         'needed; reply "86" to hand it back):\n' +
         renderTemplate(action.offerTemplate, agentScope(scope, agent));
       // FYI delivery is best-effort: the assignment is the durable fact; a
@@ -6598,7 +6722,7 @@ async function routeToTeamStep(
     if (preferredThisPass && agent.phone === preferredThisPass.phone) {
       appendActionTaken(
         scope,
-        `offered ${agent.name || agent.phone} first — they own this contact`
+        `offered ${agent.name || agent.phone} first, they own this contact`
       );
     }
     return {
@@ -6650,7 +6774,7 @@ async function maybeOwnerDirect(
   const body = renderTemplate(action.ownerDirectTemplate, scope);
   appendActionTaken(
     scope,
-    `kept for the owner (${action.ownerDirectWhen.var} matched the keep-for-owner rule) — not offered to the team`
+    `kept for the owner (${action.ownerDirectWhen.var} matched the keep-for-owner rule), not offered to the team`
   );
   await telemetryRecord(supabase, "ai_flow_route_owner_direct", {
     run_id: run.id,
@@ -6873,7 +6997,7 @@ async function routeBroadcastStep(
   }
   appendActionTaken(
     scope,
-    `offered simultaneously to ${sendable.map((a) => a.name || a.phone).join(", ")} — first to claim`
+    `offered simultaneously to ${sendable.map((a) => a.name || a.phone).join(", ")}, first to claim`
   );
   return {
     kind: "pause_agent_broadcast",
@@ -7580,8 +7704,8 @@ async function ownerForwardE164(supabase: Supabase, businessId: string): Promise
  */
 function ownerDirectNudgeText(alertBody: string, minutes: number, final: boolean): string {
   const head = final
-    ? `FINAL REMINDER — ${minutes} MINUTES: HIGH-VALUE LEAD IS STILL WAITING FOR YOU.`
-    : `REMINDER — ${minutes} MINUTES: HIGH-VALUE LEAD IS STILL WAITING FOR YOU.`;
+    ? `FINAL REMINDER (${minutes} MINUTES): HIGH-VALUE LEAD IS STILL WAITING FOR YOU.`
+    : `REMINDER (${minutes} MINUTES): HIGH-VALUE LEAD IS STILL WAITING FOR YOU.`;
   return `${head}\n${alertBody}\nREPLY "1" TO STOP THESE REMINDERS.`;
 }
 
@@ -7622,7 +7746,7 @@ async function ownerDirectResume(
 
   if (event === "claim" || event === "reject") {
     finalize();
-    appendActionTaken(scope, "owner acknowledged the high-value alert — reminders stopped");
+    appendActionTaken(scope, "owner acknowledged the high-value alert, reminders stopped");
     await telemetryRecord(supabase, "ai_flow_owner_direct_ack", {
       run_id: run.id,
       business_id: run.business_id,

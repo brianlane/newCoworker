@@ -2,7 +2,7 @@
  * Transactional email: a CUSTOM white-glove offer's payment invitation.
  *
  * Sent by the admin "Create offer" action (POST /api/admin/white-glove-offers)
- * to the offer's recipient — a prospect with no account yet, or an existing
+ * to the offer's recipient, a prospect with no account yet, or an existing
  * owner. Carries the deal name, the admin-written description, the price,
  * and the durable /offer/<pay_token> payment link (which mints a fresh
  * Stripe Checkout session per visit, so the link never expires).
@@ -54,7 +54,7 @@ export function buildWhiteGloveOfferEmail(
     c.afterPay,
     copy.questionsReply
   ];
-  // Signoff rides only the plain-text body — the HTML shell renders the full
+  // Signoff rides only the plain-text body, the HTML shell renders the full
   // platform signature block, so repeating it there would double the contact info.
   const text = [...textLines, copy.ncSignoff].join("\n\n");
   const normalizedSite = input.siteUrl.replace(/\/$/, "");

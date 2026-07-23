@@ -13,6 +13,12 @@
 #   files=all | space-separated tests/e2e/*.e2e.test.ts paths
 #
 # Decision rules, in order of trust:
+#   0. Admin cost toggle first: when Admin → Gemini has the CI e2e mode set
+#      to "nightly-only" (read live from /api/public/ci-e2e-mode), every
+#      per-change run skips the paid calls — the nightly cron is the only
+#      live coverage and it emails the admin on failure. Any error reading
+#      the mode falls through to per-change (rules below), never the other
+#      way around.
 #   1. Fail open. Any error listing files, any file that doesn't match a
 #      mapping, an oversized diff, a force-push — anything surprising runs
 #      the FULL suite. A mapping mistake can only waste a run, never lose
@@ -125,6 +131,25 @@ emit() { # emit <skip> <files> <message...>
 }
 
 emit_full() { emit false all "$*"; }
+
+# ---------------------------------------------------------------------------
+# Admin cost toggle (Admin → Gemini → "CI live e2e"): when the platform's
+# stored mode is "nightly-only", every per-change run skips the paid model
+# calls entirely — live coverage comes from the nightly cron, which emails
+# the admin on failure. Read from the production app so a flip needs no
+# deploy; ANY error (endpoint down, non-JSON, timeout) falls through to the
+# normal per-change scoping below, so an outage can never silently drop
+# merge-time coverage. Overridable for tests via CI_E2E_MODE_URL.
+# ---------------------------------------------------------------------------
+# Canonical www host: the apex 307-redirects to www, and without -L the
+# first deploy of this check read "Redirecting..." instead of JSON — which
+# fail-opened to per-change and would have silently ignored the toggle
+# forever. -L stays as belt-and-suspenders against future edge rules.
+MODE_URL="${CI_E2E_MODE_URL:-https://www.newcoworker.com/api/public/ci-e2e-mode}"
+admin_mode=$(curl -fsSL --max-time 10 "$MODE_URL" 2>/dev/null | jq -r '.mode // empty' 2>/dev/null) || admin_mode=""
+if [ "${admin_mode:-}" = "nightly-only" ]; then
+  emit true "" "CI e2e mode is nightly-only (admin toggle) — paid live calls run on the nightly cron instead."
+fi
 
 # scope_file <path> — accumulate the e2e files <path> can affect, or flip
 # FULL for anything unmapped/self-referential. Ordering matters: overrides

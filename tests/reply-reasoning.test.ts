@@ -11,7 +11,7 @@ import {
  * The reply-reasoning trailer: the model appends one marked line with its
  * decision record; the worker strips it before the customer sees anything
  * and stores the parsed record. Malformed/missing trailers are best-effort
- * nulls — never an error, never a leaked marker.
+ * nulls, never an error, never a leaked marker.
  */
 
 const TRAILER = (json: string) => `${REASONING_MARKER}${json}`;
@@ -122,7 +122,7 @@ describe("splitReplyReasoning", () => {
 
   describe("markerless trailer JSON (caught live by the e2e suite, 2026-07-11)", () => {
     // The model sometimes replaces the marker word with free-form reasoning
-    // text — `[[<summary>]] {"intent":...}` — which no marker matcher can
+    // text, `[[<summary>]] {"intent":...}`, which no marker matcher can
     // see. The trailer JSON itself is the second net: no customer-facing
     // reply legitimately contains `{"intent":"`.
     it("strips the exact live-caught shape: bracket blob + bare trailer JSON", () => {
@@ -166,7 +166,7 @@ describe("splitReplyReasoning", () => {
     });
   });
 
-  describe("multi-line trailers (pretty-printed / fenced) — the e2e-proven leak class", () => {
+  describe("multi-line trailers (pretty-printed / fenced), the e2e-proven leak class", () => {
     const PRETTY_JSON = [
       "{",
       '  "intent": "gave_renewal_info",',
@@ -178,7 +178,7 @@ describe("splitReplyReasoning", () => {
     it("strips a marker line followed by pretty-printed JSON, capturing the record", () => {
       // The instruction says "on its own final line", but models pretty-print:
       // line-based stripping used to remove ONLY the marker line and text the
-      // entire reasoning JSON to the customer — and lose handoff:true, so the
+      // entire reasoning JSON to the customer, and lose handoff:true, so the
       // needs-human escalation silently never fired.
       const raw = `Thanks for letting me know!\n${REASONING_MARKER}\n${PRETTY_JSON}`;
       const res = splitReplyReasoning(raw);
@@ -267,7 +267,7 @@ describe("splitReplyReasoning", () => {
         Array.from({ length: 15 }, (_, i) => `{ "line${i}":`).join("\n");
       const res = splitReplyReasoning(raw);
       // The unbalanced blob is NOT swallowed as a trailer (reply text after a
-      // stray marker must never disappear) — but every `{`-bearing line here
+      // stray marker must never disappear), but every `{`-bearing line here
       // still trips the bare-object/JSON nets independently or stays. The
       // first line survives untouched.
       expect(res.reply.startsWith("Real reply.")).toBe(true);
@@ -292,7 +292,7 @@ describe("splitReplyReasoning", () => {
 
     it("an opening brace glued to a sentence with the JSON below is a KNOWN unhandled shape (reply passes through)", () => {
       // Documented limitation: the bare-object net requires the `{` on its
-      // own line — a `... {` sentence tail followed by pretty JSON has no
+      // own line, a `... {` sentence tail followed by pretty JSON has no
       // strippable line, so the text passes through untouched (the raw-level
       // gate matched, but nothing line-level did).
       const raw = 'Sounds good {\n"intent": "note"';
@@ -321,7 +321,7 @@ describe("splitReplyReasoning", () => {
       expect(res.reply).toBe("Okay, I'm available now to chat. What would you like to discuss?");
     });
 
-    it("a NESTED [[a [[b]] c]] blob is removed in full — no tail debris", () => {
+    it("a NESTED [[a [[b]] c]] blob is removed in full, no tail debris", () => {
       const raw =
         "Sounds good!\n[[Outer note [[inner aside]] more private text]]\nSee you at 2pm.";
       const res = splitReplyReasoning(raw);
@@ -333,14 +333,14 @@ describe("splitReplyReasoning", () => {
     });
 
     it("an unbalanced nested blob scrubs the closed spans and keeps the legit tail", () => {
-      const raw = "Note: [[wrapper [[closed]] dangling — but your slot is 2pm.";
+      const raw = "Note: [[wrapper [[closed]] dangling, but your slot is 2pm.";
       const res = splitReplyReasoning(raw);
       expect(res.reply).toContain("your slot is 2pm");
       expect(res.reply).not.toContain("closed]]");
     });
 
     it("an unclosed [[ with no closing ]] passes through untouched", () => {
-      const raw = "Our suite code is [[LOBBY — text when you arrive.";
+      const raw = "Our suite code is [[LOBBY, text when you arrive.";
       expect(splitReplyReasoning(raw)).toEqual({ reply: raw, reasoning: null });
     });
 
@@ -389,7 +389,7 @@ describe("splitReplyReasoning", () => {
 
 describe("isHumanRequestIntent (Truly 2026-07-20: rep requests classified handoff:false)", () => {
   // The live incident: six "speak to a representative" turns, every one
-  // intent=request_human_agent with handoff:false — the model believed its
+  // intent=request_human_agent with handoff:false, the model believed its
   // schedule-a-call offer fully handled the request, so escalateToHuman
   // never fired. The intent NAMES a human; the worker must not depend on
   // the model's handoff judgment for that case.
@@ -448,7 +448,7 @@ describe("shouldEscalateToHuman (the worker's escalation decision)", () => {
 });
 
 describe("REASONING_PROMPT_INSTRUCTION handoff wording (Truly 2026-07-20)", () => {
-  it("keeps the original handoff spec byte-stable — misses are fixed in code, not wording", () => {
+  it("keeps the original handoff spec byte-stable, misses are fixed in code, not wording", () => {
     // Live probes showed rewording the handoff spec does NOT flip the flag
     // on "speak to a representative" turns but DOES perturb the reply
     // itself (the Juhu re-ask regression). The spec is pinned verbatim so a
@@ -456,7 +456,7 @@ describe("REASONING_PROMPT_INSTRUCTION handoff wording (Truly 2026-07-20)", () =
     // deterministic isHumanRequestIntent backstop owns the person-request
     // case. See the module doc on REASONING_PROMPT_INSTRUCTION.
     expect(REASONING_PROMPT_INSTRUCTION).toContain(
-      '"handoff":<true ONLY when a human must take this conversation over or follow up — ' +
+      '"handoff":<true ONLY when a human must take this conversation over or follow up, ' +
         "they asked for a person, you could not answer or do what they needed, or the topic " +
         "is outside what you know. A booking or question you fully handled is NOT a handoff. Else false>"
     );

@@ -4,7 +4,7 @@
  *
  * Hostinger term SKUs are ~40-65% cheaper per month than monthly renewal,
  * and the public API cannot change an existing subscription's billing cycle
- * — so when a customer commits to a longer contract the change-plan
+ * so when a customer commits to a longer contract the change-plan
  * orchestrator migrates them onto a freshly term-bought box automatically.
  * This email is the operator's confirmation (or the flag that the
  * automation had to leave the box alone and hPanel needs a manual look).
@@ -21,10 +21,10 @@ export type OpsTermAlignmentInput = {
   oldBillingPeriod: string | null;
   newBillingPeriod: string;
   /**
-   * aligned      — box migrated onto a term-priced purchase.
-   * not_needed   — box's Hostinger cycle already covers the target term
+   * aligned:      box migrated onto a term-priced purchase.
+   * not_needed:   box's Hostinger cycle already covers the target term
    *                (or the new contract is month-to-month).
-   * skipped      — a longer term was wanted but the automation couldn't
+   * skipped:      a longer term was wanted but the automation couldn't
    *                verify/act; `detail` says why and hPanel needs a look.
    */
   outcome: "aligned" | "not_needed" | "skipped";
@@ -57,7 +57,7 @@ export function buildOpsTermAlignmentEmail(
   input: OpsTermAlignmentInput
 ): OpsTermAlignmentEmail {
   const who = input.ownerName?.trim() ? input.ownerName.trim() : input.ownerEmail;
-  const subject = `[ops] Contract switch — ${who}: ${input.oldBillingPeriod ?? "unknown"} → ${input.newBillingPeriod} (${OUTCOME_LABEL[input.outcome]})`;
+  const subject = `[ops] Contract switch, ${who}: ${input.oldBillingPeriod ?? "unknown"} → ${input.newBillingPeriod} (${OUTCOME_LABEL[input.outcome]})`;
 
   const cycleLine =
     `Hostinger cycle: ${input.currentCycleMonths !== null ? `${input.currentCycleMonths}mo` : "unknown"}` +
@@ -85,7 +85,7 @@ export function buildOpsTermAlignmentEmail(
   const text = textLines.join("\n\n");
 
   const html = buildBrandedEmailHtml({
-    // Internal ops inbox — omit the owner-facing platform signature block.
+    // Internal ops inbox, omit the owner-facing platform signature block.
     platformSignature: false,
     siteUrl: input.siteUrl,
     documentTitle: subject,

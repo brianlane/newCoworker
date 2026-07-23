@@ -4,12 +4,28 @@ import {
   getFleetRecentActivity,
   type FleetActivityInput
 } from "@/lib/db/fleet-activity";
+import type { ContactName } from "@/lib/db/contact-names";
 
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
 }));
+vi.mock("@/lib/db/contact-names", () => ({
+  resolveContactNames: vi.fn()
+}));
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { resolveContactNames } from "@/lib/db/contact-names";
+
+/** businessId → e164 → name map in the input's nested shape. */
+function namesFor(
+  businessId: string,
+  entries: Record<string, string>
+): Map<string, Map<string, ContactName>> {
+  const inner = new Map<string, ContactName>(
+    Object.entries(entries).map(([e164, name]) => [e164, { name, kind: "customer" as const }])
+  );
+  return new Map([[businessId, inner]]);
+}
 
 const smsPayload = (phone: string) => ({ data: { payload: { from: { phone_number: phone } } } });
 
@@ -59,7 +75,7 @@ describe("buildFleetActivityFeed", () => {
     });
   });
 
-  it("labels coworker replies and skips rows without a parseable phone", () => {
+  it("labels coworker replies as tagged replies, skipping unparseable rows", () => {
     const items = buildFleetActivityFeed({
       ...emptyInput(),
       smsReplies: [
@@ -69,11 +85,23 @@ describe("buildFleetActivityFeed", () => {
     });
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
-      badge: "Text out",
+      badge: "Reply",
       variant: "neutral",
-      label: "Text to +14805550111",
+      label: "Reply to +14805550111",
       businessId: "b2"
     });
+  });
+
+  it("tags flow-driven outbound texts with the AiFlow badge", () => {
+    const items = buildFleetActivityFeed({
+      ...emptyInput(),
+      smsOutbound: [
+        { business_id: "b1", to_e164: "+16025550122", source: "ai_flow", created_at: "2026-07-23T10:00:00Z" },
+        { business_id: "b1", to_e164: "+16025550123", source: "owner_manual", created_at: "2026-07-23T09:00:00Z" }
+      ]
+    });
+    expect(items[0]).toMatchObject({ badge: "AiFlow text", variant: "success" });
+    expect(items[1]).toMatchObject({ badge: "Text out", variant: "neutral" });
   });
 
   it("labels outbound texts and skips rows without a recipient", () => {
@@ -203,6 +231,63 @@ describe("buildFleetActivityFeed", () => {
     expect(items.map((i) => i.at)).toEqual(["2026-07-23T10:00:00Z", "2026-07-23T09:00:00Z"]);
   });
 
+  it("shows resolved contact names instead of raw numbers", () => {
+    const contactNames = namesFor("b1", {
+      "+16025550100": "Jane Doe",
+      "+14805550111": "Tim Tsai",
+      "+16025550122": "Mike Haas"
+    });
+    const items = buildFleetActivityFeed({
+      ...emptyInput(),
+      contactNames,
+      calls: [
+        { business_id: "b1", caller_e164: "+16025550100", status: "completed", started_at: "2026-07-23T10:00:00Z" }
+      ],
+      smsInbound: [
+        { business_id: "b1", payload: smsPayload("+14805550111"), created_at: "2026-07-23T09:00:00Z" }
+      ],
+      smsReplies: [
+        { business_id: "b1", payload: smsPayload("+14805550111"), updated_at: "2026-07-23T08:00:00Z" }
+      ],
+      smsOutbound: [
+        { business_id: "b1", to_e164: "+16025550122", created_at: "2026-07-23T07:00:00Z" },
+        // Unknown number falls back to the raw E.164.
+        { business_id: "b1", to_e164: "+19995550000", created_at: "2026-07-23T06:00:00Z" }
+      ]
+    });
+    expect(items.map((i) => i.label)).toEqual([
+      "Call: Jane Doe (completed)",
+      "Text from Tim Tsai",
+      "Reply to Tim Tsai",
+      "Text to Mike Haas",
+      "Text to +19995550000"
+    ]);
+  });
+
+  it("scopes names to the owning business", () => {
+    // The same number resolves for b1 only — b2's row keeps the raw E.164.
+    const items = buildFleetActivityFeed({
+      ...emptyInput(),
+      contactNames: namesFor("b1", { "+16025550122": "Jane Doe" }),
+      smsOutbound: [
+        { business_id: "b1", to_e164: "+16025550122", created_at: "2026-07-23T10:00:00Z" },
+        { business_id: "b2", to_e164: "+16025550122", created_at: "2026-07-23T09:00:00Z" }
+      ]
+    });
+    expect(items.map((i) => i.label)).toEqual(["Text to Jane Doe", "Text to +16025550122"]);
+  });
+
+  it("prefers a resolver name over the customer row's own display_name", () => {
+    const items = buildFleetActivityFeed({
+      ...emptyInput(),
+      contactNames: namesFor("b1", { "+16025550133": "Jane D. (VIP)" }),
+      customers: [
+        { business_id: "b1", display_name: "jane", customer_e164: "+16025550133", created_at: "2026-07-23T10:00:00Z" }
+      ]
+    });
+    expect(items[0]!.label).toBe("New customer: Jane D. (VIP) (+16025550133)");
+  });
+
   it("keeps equal timestamps stable", () => {
     const at = "2026-07-23T10:00:00Z";
     const items = buildFleetActivityFeed({
@@ -217,7 +302,11 @@ describe("buildFleetActivityFeed", () => {
 });
 
 describe("getFleetRecentActivity", () => {
-  beforeEach(() => vi.clearAllMocks());
+  beforeEach(() => {
+    vi.clearAllMocks();
+    // Default: resolver finds no names (labels fall back to raw numbers).
+    vi.mocked(resolveContactNames).mockResolvedValue(new Map());
+  });
 
   // Every source row carries every field any source reads, so one shared
   // mock response exercises the full fetch → shape pipeline.
@@ -298,5 +387,44 @@ describe("getFleetRecentActivity", () => {
 
     await expect(getFleetRecentActivity(undefined, undefined, db as never)).resolves.toEqual([]);
     expect(db.limit).toHaveBeenCalledWith(10);
+  });
+
+  it("resolves contact names once per business and applies them", async () => {
+    const { db } = mockDb({ data: [SHARED_ROW], error: null });
+    vi.mocked(resolveContactNames).mockResolvedValue(
+      new Map([["+16025550122", { name: "Mike Haas", kind: "customer" as const }]])
+    );
+
+    const items = await getFleetRecentActivity(20, undefined, db as never);
+    // One resolver call for b1, with the union of every phone the feed shows.
+    expect(resolveContactNames).toHaveBeenCalledTimes(1);
+    const [businessId, nums] = vi.mocked(resolveContactNames).mock.calls[0]!;
+    expect(businessId).toBe("b1");
+    expect([...nums].sort()).toEqual([
+      "+14805550111",
+      "+16025550100",
+      "+16025550122",
+      "+16025550133"
+    ]);
+    expect(items.map((i) => i.label)).toContain("Text to Mike Haas");
+  });
+
+  it("skips phone-less rows when collecting numbers for the resolver", async () => {
+    // caller_e164 null exercises the collector's early return; the row still
+    // renders as "unknown caller".
+    const { db } = mockDb({ data: [{ ...SHARED_ROW, caller_e164: null }], error: null });
+
+    const items = await getFleetRecentActivity(20, undefined, db as never);
+    const [, nums] = vi.mocked(resolveContactNames).mock.calls[0]!;
+    expect(nums).not.toContain(null);
+    expect(items.map((i) => i.label)).toContain("Call: unknown caller (success)");
+  });
+
+  it("degrades to raw numbers when the resolver fails", async () => {
+    const { db } = mockDb({ data: [SHARED_ROW], error: null });
+    vi.mocked(resolveContactNames).mockRejectedValue(new Error("boom"));
+
+    const items = await getFleetRecentActivity(20, undefined, db as never);
+    expect(items.map((i) => i.label)).toContain("Text to +16025550122");
   });
 });

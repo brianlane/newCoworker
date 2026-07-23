@@ -59,14 +59,14 @@ describe("findMarginBreaches", () => {
   it("returns paying tenants below the floor, worst first, with name fallbacks", () => {
     const breaches = findMarginBreaches({
       economics: [
-        economics(), // healthy — excluded
+        economics(), // healthy, excluded
         economics({ businessId: "biz-loss", marginCents: -500, costCents: 19_400 }),
         economics({
           businessId: "00000000-dead-beef-0000-000000000000",
           revenueSource: "enterprise_deal",
           marginCents: -2_000
         }),
-        // Non-paying at a loss — excluded by design (pool/pilot burn).
+        // Non-paying at a loss, excluded by design (pool/pilot burn).
         economics({ businessId: "biz-pilot", revenueSource: "none", marginCents: -9_999 })
       ],
       businessNames: names,
@@ -165,7 +165,7 @@ describe("buildOpsMarginAlertEmail", () => {
     });
     expect(subject).toBe("[ops] Margin alert: 1 paying tenant(s) below $0.00/mo");
     expect(text).toContain(
-      "Loss Leader LLC (biz-loss): margin -$5.00/mo — revenue $189.00, cost $194.00"
+      "Loss Leader LLC (biz-loss): margin -$5.00/mo : revenue $189.00, cost $194.00"
     );
     expect(html).toContain("https://www.example.com/admin/costs");
   });

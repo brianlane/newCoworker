@@ -91,7 +91,7 @@ describe("buildAttachmentParts", () => {
     expect(inlinePart).toBeNull();
   });
 
-  it("converts VTT transcripts to speaker lines inline — NEVER as a PDF part", () => {
+  it("converts VTT transcripts to speaker lines inline, NEVER as a PDF part", () => {
     const att: InlineTurnAttachment = {
       filename: "meeting.vtt",
       mimeType: "text/vtt",
@@ -119,7 +119,7 @@ describe("buildAttachmentParts", () => {
   });
 });
 
-describe("runInlineChatTurn — plain turns", () => {
+describe("runInlineChatTurn, plain turns", () => {
   it("returns the model text and meters the step", async () => {
     const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("Hello owner"));
     const res = await runInlineChatTurn(baseArgs(), { chatStep });
@@ -133,7 +133,7 @@ describe("runInlineChatTurn — plain turns", () => {
 
   it("defaults to a model that exists on the Gemini API (gemini-3.6-flash)", async () => {
     // Regression pin: the launch default was gemini-3.1-flash, an id that
-    // does not exist on the API — every inline turn 404'd, silently
+    // does not exist on the API, every inline turn 404'd, silently
     // demoting text turns to the worker and hard-failing attachment turns.
     const chatStep = vi.fn(async (_p: GeminiChatStepParams) => textStep("ok"));
     await runInlineChatTurn(baseArgs(), { chatStep });
@@ -176,7 +176,7 @@ describe("runInlineChatTurn — plain turns", () => {
     expect(chatStep.mock.calls.map((c) => c[0].model)).toEqual([
       "gemini-9.9-retired",
       "gemini-3.5-flash-lite",
-      // Later steps of the SAME turn keep the fallback — no re-404 per step.
+      // Later steps of the SAME turn keep the fallback, no re-404 per step.
       "gemini-3.5-flash-lite"
     ]);
     // Metering reflects the model that actually answered.
@@ -262,7 +262,7 @@ describe("runInlineChatTurn — plain turns", () => {
   });
 });
 
-describe("runInlineChatTurn — creation tools", () => {
+describe("runInlineChatTurn, creation tools", () => {
   it("create_aiflow: compiles, collects the draft, and hands the wrap-up text back", async () => {
     const compileFlow = vi.fn(async () => ({
       ok: true as const,
@@ -452,7 +452,7 @@ describe("runInlineChatTurn — creation tools", () => {
   });
 });
 
-describe("runInlineChatTurn — business_knowledge_lookup", () => {
+describe("runInlineChatTurn, business_knowledge_lookup", () => {
   function knowledgeResponseOf(chatStep: ReturnType<typeof vi.fn>): unknown {
     const fr = chatStep.mock.calls[1][0].contents[2].parts[0] as {
       functionResponse: { name: string; response: { result: unknown } };
@@ -538,7 +538,7 @@ describe("runInlineChatTurn — business_knowledge_lookup", () => {
   });
 });
 
-describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
+describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
   const ALL_ON = {
     send_sms: true,
     send_whatsapp: false,
@@ -618,7 +618,7 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
     expect(fr.functionResponse.response.result.messageId).toBe("msg-9");
   });
 
-  it("never bounces to the worker after a side-effecting tool ran — wrap-up FAILURE degrades to an honest line", async () => {
+  it("never bounces to the worker after a side-effecting tool ran, wrap-up FAILURE degrades to an honest line", async () => {
     // Bugbot High (PR #668): an inline failure after send_sms already ran
     // would re-enqueue the turn on the worker, which re-answers the same
     // owner message and could text/book AGAIN.
@@ -639,13 +639,13 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
     expect(res.ok).toBe(true);
     if (res.ok) {
       // The degraded line carries the FACTS the lost wrap-up would have
-      // relayed — recipient and exact body.
+      // relayed, recipient and exact body.
       expect(res.content).toContain("hit a hiccup writing my summary");
-      expect(res.content).toContain('Text sent to +15145188192 — "This is a test message."');
+      expect(res.content).toContain('Text sent to +15145188192, "This is a test message."');
     }
   });
 
-  it("never bounces to the worker after a side-effecting tool ran — an EMPTY wrap-up degrades too", async () => {
+  it("never bounces to the worker after a side-effecting tool ran, an EMPTY wrap-up degrades too", async () => {
     const runActionTool = vi.fn(async () => ({ ok: true }));
     const chatStep = vi
       .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
@@ -666,7 +666,7 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
 
   it("preserves a Calendly reschedule/booking LINK in the degraded wrap-up", async () => {
     // Bugbot Medium (3rd round): reschedule_link_created succeeded but the
-    // wrap-up died — the stored reply must still hand the owner the link.
+    // wrap-up died, the stored reply must still hand the owner the link.
     for (const [tool, resultData, needle] of [
       [
         "calendar_reschedule_appointment",
@@ -731,7 +731,7 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
       expect(res.drafts).toHaveLength(1);
       expect(res.content).toContain("prepared a draft");
       expect(res.content).toContain("Also completed");
-      expect(res.content).toContain('Text sent to +15145188192 — "hi"');
+      expect(res.content).toContain('Text sent to +15145188192, "hi"');
     }
   });
 
@@ -775,13 +775,13 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
     );
     expect(res.ok).toBe(true);
     if (res.ok) {
-      expect(res.content).toContain('WhatsApp message sent to +15145188192 — "hola"');
+      expect(res.content).toContain('WhatsApp message sent to +15145188192, "hola"');
     }
   });
 
-  it("a successful generate_image is side-effect pinned — the degraded wrap-up keeps the markdown", async () => {
+  it("a successful generate_image is side-effect pinned, the degraded wrap-up keeps the markdown", async () => {
     // The image is stored, metered, and burned a per-conversation slot the
-    // moment the core returned ok — a worker rerun would bill again, and a
+    // moment the core returned ok, a worker rerun would bill again, and a
     // wrap-up without the markdown charges the owner for an invisible image.
     const runActionTool = vi.fn(async () => ({
       ok: true,
@@ -815,7 +815,7 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
     });
     expect(res2.ok).toBe(true);
     if (res2.ok) {
-      expect(res2.content).toContain("The image was generated — it's saved with this conversation.");
+      expect(res2.content).toContain("The image was generated, it's saved with this conversation.");
     }
   });
 
@@ -829,7 +829,7 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
       chatStep,
       runActionTool
     });
-    // Nothing irreversible happened — the worker fallback stays available.
+    // Nothing irreversible happened, the worker fallback stays available.
     expect(res).toEqual({
       ok: false,
       error: "model_failed",
@@ -837,7 +837,7 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
     });
   });
 
-  it("a successful run_aiflow is side-effect pinned — wrap-up failure keeps ok:true with the flow note", async () => {
+  it("a successful run_aiflow is side-effect pinned, wrap-up failure keeps ok:true with the flow note", async () => {
     // Bugbot High (PR #687): an enqueued automation run is committed; a
     // fallback rerun would enqueue the same flow twice.
     const runActionTool = vi.fn(async () => ({
@@ -869,10 +869,10 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
       runActionTool: namelessTool
     });
     expect(res2.ok).toBe(true);
-    if (res2.ok) expect(res2.content).toContain("Automation run started — it can be watched");
+    if (res2.ok) expect(res2.content).toContain("Automation run started, it can be watched");
   });
 
-  it("a successful edit_aiflow is side-effect pinned — wrap-up failure keeps ok:true with the update note", async () => {
+  it("a successful edit_aiflow is side-effect pinned, wrap-up failure keeps ok:true with the update note", async () => {
     // The update is persisted to the live flow the moment the core returns
     // ok; a worker-fallback rerun would re-apply it.
     const runActionTool = vi.fn(async () => ({
@@ -911,10 +911,10 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
     if (res2.ok) expect(res2.content).toContain("Automation was updated as requested");
   });
 
-  it("a successful update_notification_preferences is side-effect pinned — wrap-up failure keeps ok:true with the changes", async () => {
+  it("a successful update_notification_preferences is side-effect pinned, wrap-up failure keeps ok:true with the changes", async () => {
     // Bugbot Medium (PR #805): the toggle write persists the moment the core
     // returns ok, and the worker fallback deliberately does NOT declare this
-    // tool — a post-write bounce would answer "I can't change settings"
+    // tool, a post-write bounce would answer "I can't change settings"
     // about a change that already happened.
     const runActionTool = vi.fn(async () => ({
       ok: true,
@@ -957,7 +957,7 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
     if (res2.ok) expect(res2.content).toContain("Notification settings were changed.");
   });
 
-  it("stops starting new steps once budgetMs is exhausted — fails fast when nothing committed", async () => {
+  it("stops starting new steps once budgetMs is exhausted, fails fast when nothing committed", async () => {
     // Bugbot High (PR #687): a slow turn must not keep committing tools
     // after the SMS worker's own timeout already fell back to Rowboat.
     const runActionTool = vi.fn(async () => ({ ok: true, data: { slots: [] } }));
@@ -1004,7 +1004,7 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
 
   it("a FAILED side-effect tool (ok:false) does NOT suppress the worker fallback either", async () => {
     // Bugbot Medium (2nd round): a cleanly-refused send (opt-out, quota,
-    // validation) committed nothing — pinning the turn would suppress a
+    // validation) committed nothing, pinning the turn would suppress a
     // legitimate fallback AND let the degraded copy imply a send happened.
     const runActionTool = vi.fn(async () => ({ ok: false, message: "recipient_opted_out" }));
     const chatStep = vi
@@ -1028,7 +1028,7 @@ describe("runInlineChatTurn — action tools (send_sms + calendar)", () => {
       .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
       .mockResolvedValueOnce(toolStep("send_sms", { toE164: "+15145188192", body: "hi" }))
       .mockResolvedValueOnce(textStep("I can't send texts right now."));
-    // Gates present but send_sms OFF — a hallucinated call must not execute.
+    // Gates present but send_sms OFF, a hallucinated call must not execute.
     const res = await runInlineChatTurn(
       baseArgs({ actionToolGates: { ...ALL_ON, send_sms: false } }),
       { chatStep, runActionTool }

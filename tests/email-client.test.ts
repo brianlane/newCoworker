@@ -125,7 +125,7 @@ describe("email client", () => {
     });
     expect(payload.text).toContain("Body content");
     expect(payload.text).toContain(
-      "Unsubscribe with one click: https://app.example.com/api/notifications/unsubscribe?token=t"
+      "Unsubscribe: https://app.example.com/api/notifications/unsubscribe?token=t"
     );
   });
 

@@ -2,7 +2,7 @@
  * Telnyx call hangup / end → record telnyx_ended_at for §9.1 settlement (signal1 of 2).
  */
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
-import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.45.0";
 import { header, verifyTelnyxWebhook } from "../_shared/telnyx_webhook.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 import {
