@@ -49,7 +49,11 @@ export async function POST(request: Request) {
   }
 
   try {
-    const result = await lookupBusinessKnowledge(envelope.businessId, parsed.data.question);
+    // callerE164 scopes graph retrieval (memory_graph_mode tenants) to the
+    // caller's own entity when their number is a known contact point.
+    const result = await lookupBusinessKnowledge(envelope.businessId, parsed.data.question, {
+      ...(envelope.callerE164 ? { callerE164: envelope.callerE164 } : {})
+    });
     return voiceToolResponse(result);
   } catch (err) {
     logger.warn("voice-tools/knowledge: unexpected error", {

@@ -81,6 +81,21 @@ export async function updateMemoryEntity(
   if (error) throw new Error(`updateMemoryEntity: ${error.message}`);
 }
 
+/** Every active fact for a business — the retrieval working set. */
+export async function listActiveFactsForBusiness(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<MemoryFactRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("memory_facts")
+    .select()
+    .eq("business_id", businessId)
+    .eq("active", true);
+  if (error) throw new Error(`listActiveFactsForBusiness: ${error.message}`);
+  return (data ?? []) as MemoryFactRow[];
+}
+
 /** Active facts for one subject+predicate — the supersedence lookup. */
 export async function listActiveFacts(
   businessId: string,
