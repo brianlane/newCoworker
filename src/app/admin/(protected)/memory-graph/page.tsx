@@ -20,12 +20,13 @@ import { getAdminPlatformSetting } from "@/lib/admin/platform-settings";
 import {
   MEMORY_GRAPH_DEFAULT_MODE_KEY,
   MEMORY_GRAPH_FALLBACK_DEFAULT,
-  resolveMemoryGraphMode
+  effectiveMemoryGraphMode
 } from "@/lib/memory/graph-db";
 import {
   KG_VERDICT_LABELS,
   aggregateKgStats,
   classifyKgVerdict,
+  countKgRetrievalEvents,
   groupKgStatsByBusiness,
   kgVerdictHeadline,
   listKgRetrievalEvents,
@@ -109,32 +110,41 @@ export default async function MemoryGraphAdminPage({
   const since = sinceIso(window);
   const selectedBusinessId = params.business ?? null;
 
+  const FLEET_STATS_LIMIT = 5000;
+  const EVENTS_LIMIT = 500;
+
   const [businesses, defaultSettingRaw, statsRows] = await Promise.all([
     listBusinesses(),
     getAdminPlatformSetting(MEMORY_GRAPH_DEFAULT_MODE_KEY).catch(() => null),
-    listKgRetrievalStatsRows(since).catch(() => [])
+    listKgRetrievalStatsRows(since, FLEET_STATS_LIMIT).catch(() => [])
   ]);
   const fleetDefault =
     defaultSettingRaw === "off" || defaultSettingRaw === "shadow" || defaultSettingRaw === "active"
       ? defaultSettingRaw
       : MEMORY_GRAPH_FALLBACK_DEFAULT;
+  const fleetStatsTruncated = statsRows.length >= FLEET_STATS_LIMIT;
   const statsByBusiness = groupKgStatsByBusiness(statsRows);
   const businessNames = new Map(businesses.map((b) => [b.id, b.name]));
 
-  // Effective mode per tenant (config reads are cheap; the fleet is small).
+  // Effective mode per tenant, resolved against the SAME freshly-read
+  // default the toggle shows — never the resolver's ~60s cache, so one page
+  // render can't mix values (Bugbot #860).
   const modeRows = await Promise.all(
     businesses.map(async (b) => {
       const config = await getBusinessConfig(b.id).catch(() => null);
       const setting = config?.memory_graph_mode ?? "inherit";
-      const effective = await resolveMemoryGraphMode(setting);
-      return { id: b.id, name: b.name, setting, effective };
+      return { id: b.id, name: b.name, setting, effective: effectiveMemoryGraphMode(setting, fleetDefault) };
     })
   );
 
-  // Per-tenant drill-down.
+  // Per-tenant drill-down: stats over the newest EVENTS_LIMIT events, with
+  // the true window count so truncation is labeled, never silent.
   const selected = selectedBusinessId
-    ? await listKgRetrievalEvents(selectedBusinessId, since, 100).catch(() => [])
+    ? await listKgRetrievalEvents(selectedBusinessId, since, EVENTS_LIMIT).catch(() => [])
     : [];
+  const selectedTotal = selectedBusinessId
+    ? await countKgRetrievalEvents(selectedBusinessId, since).catch(() => selected.length)
+    : 0;
   const selectedStats = aggregateKgStats(selected);
 
   const windowLink = (w: WindowKey) =>
@@ -177,6 +187,13 @@ export default async function MemoryGraphAdminPage({
         <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
           Tenants ({window})
         </h2>
+        {fleetStatsTruncated && (
+          <p className="mb-3 text-xs text-amber-200/80">
+            High volume: stats below cover the newest {statsRows.length.toLocaleString()} events
+            fleet-wide in this window, not every lookup — open a tenant&apos;s comparison for its
+            true counts.
+          </p>
+        )}
         <table className="w-full text-sm">
           <thead>
             <tr className="text-left text-xs text-parchment/40">
@@ -222,7 +239,13 @@ export default async function MemoryGraphAdminPage({
           <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-1">
             Comparison — {businessNames.get(selectedBusinessId) ?? selectedBusinessId} ({window})
           </h2>
-          <p className="text-sm text-parchment mb-4">{kgVerdictHeadline(selectedStats)}</p>
+          <p className="text-sm text-parchment mb-1">{kgVerdictHeadline(selectedStats)}</p>
+          {selectedTotal > selected.length && (
+            <p className="text-xs text-amber-200/80 mb-3">
+              Stats cover the newest {selected.length.toLocaleString()} of{" "}
+              {selectedTotal.toLocaleString()} lookups in this window.
+            </p>
+          )}
 
           <VerdictBar stats={selectedStats} />
 

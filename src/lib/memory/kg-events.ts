@@ -67,6 +67,22 @@ export async function listKgRetrievalEvents(
   return (data ?? []) as KgRetrievalEventRow[];
 }
 
+/** Exact event count for one business in a window (truncation labels). */
+export async function countKgRetrievalEvents(
+  businessId: string,
+  sinceIso: string,
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { count, error } = await db
+    .from("kg_retrieval_events")
+    .select("id", { count: "exact", head: true })
+    .eq("business_id", businessId)
+    .gte("created_at", sinceIso);
+  if (error) throw new Error(`countKgRetrievalEvents: ${error.message}`);
+  return count ?? 0;
+}
+
 /**
  * Compact rows for fleet-wide aggregation (no context/question text —
  * stats only), bounded so one hot tenant can't blow the admin page.

@@ -15,6 +15,7 @@ vi.mock("@/lib/admin/platform-settings", () => ({
 }));
 
 import {
+  effectiveMemoryGraphMode,
   getMemoryGraphDefaultMode,
   getMemoryGraphMode,
   insertMemoryEntity,
@@ -259,6 +260,18 @@ describe("supersedeMemoryFacts", () => {
     defaultClientSpy.mockReturnValue(ok);
     await supersedeMemoryFacts(["f1"], "f2");
     expect(defaultClientSpy).toHaveBeenCalled();
+  });
+});
+
+describe("effectiveMemoryGraphMode (pure — admin views with a fresh default)", () => {
+  it("passes explicit modes through and resolves everything else to the supplied default", () => {
+    expect(effectiveMemoryGraphMode("off", "active")).toBe("off");
+    expect(effectiveMemoryGraphMode("shadow", "active")).toBe("shadow");
+    expect(effectiveMemoryGraphMode("active", "off")).toBe("active");
+    expect(effectiveMemoryGraphMode("inherit", "active")).toBe("active");
+    expect(effectiveMemoryGraphMode(null, "shadow")).toBe("shadow");
+    expect(effectiveMemoryGraphMode(undefined, "off")).toBe("off");
+    expect(effectiveMemoryGraphMode("banana", "shadow")).toBe("shadow");
   });
 });
 
