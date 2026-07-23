@@ -8,6 +8,8 @@ import {
 } from "@/lib/documents/core";
 import { MEMORY_CONTEXT_MAX_CHARS, selectMemoryForQuestion } from "@/lib/memory/retrieval";
 import { GRAPH_CONTEXT_MAX_CHARS, retrieveGraphContext } from "@/lib/memory/graph-retrieval";
+import { resolveMemoryGraphMode } from "@/lib/memory/graph-db";
+import { recordKgRetrievalEvent } from "@/lib/memory/kg-events";
 import {
   GeminiEmptyError,
   geminiGenerateTextDetailed,
@@ -176,7 +178,7 @@ export async function lookupBusinessKnowledge(
     })
   ]);
 
-  const graphMode = config?.memory_graph_mode ?? "off";
+  const graphMode = await resolveMemoryGraphMode(config?.memory_graph_mode);
 
   const parts: string[] = [];
   if (business?.name) parts.push(`Business name: ${business.name}`);
@@ -281,6 +283,37 @@ export async function lookupBusinessKnowledge(
       inputChars: result.inputChars,
       outputChars: result.answer.length
     });
+
+    // Durable comparison ledger (powers /admin/memory-graph). Recorded for
+    // shadow AND active tenants — the comparison must keep accumulating
+    // after a flip. Never fatal: a ledger write failure can't break a
+    // lookup the caller is waiting on.
+    if (graphMode === "shadow" || graphMode === "active") {
+      try {
+        await recordKgRetrievalEvent({
+          business_id: businessId,
+          mode: graphMode,
+          question,
+          answer: result.answer,
+          graph_context: graphRetrieval.context,
+          memory_context: memorySelection.context,
+          graph_matched_entities: graphRetrieval.matchedEntities,
+          graph_facts: graphRetrieval.facts,
+          graph_context_chars: graphRetrieval.context.length,
+          memory_context_chars: memorySelection.context.length,
+          memory_selected: memorySelection.selected,
+          memory_from_archive: memorySelection.fromArchive,
+          memory_fallback: memorySelection.fallback,
+          caller_provided: Boolean(options.callerE164)
+        });
+      } catch (ledgerErr) {
+        logger.warn("knowledge-tools: kg ledger write failed; answer unaffected", {
+          businessId,
+          error: ledgerErr instanceof Error ? ledgerErr.message : String(ledgerErr)
+        });
+      }
+    }
+
     return { ok: true, data: { answer: result.answer } };
   } catch (err) {
     logger.warn("knowledge-tools: gemini failed", {

@@ -46,6 +46,7 @@ import { buildDocumentsDigestMd } from "@/lib/documents/core";
 import {
   listActiveFactsForBusiness,
   listMemoryEntities,
+  resolveMemoryGraphMode,
   type MemoryEntityRow,
   type MemoryFactRow
 } from "@/lib/memory/graph-db";
@@ -106,6 +107,8 @@ export type VaultSyncDeps = {
   fetchGraph?: (
     businessId: string
   ) => Promise<{ entities: MemoryEntityRow[]; facts: MemoryFactRow[] }>;
+  /** Override the graph-mode inheritance resolution (tests). */
+  resolveGraphMode?: typeof resolveMemoryGraphMode;
 };
 
 /**
@@ -421,6 +424,7 @@ export async function syncVaultToVps(
       entities: await listMemoryEntities(bid),
       facts: await listActiveFactsForBusiness(bid)
     }));
+  const resolveGraphMode = deps.resolveGraphMode ?? resolveMemoryGraphMode;
   /* c8 ignore stop */
 
   const [biz, config, key, documents] = await Promise.all([
@@ -462,12 +466,16 @@ export async function syncVaultToVps(
   // vault sync — the projection skips this round (stale is better than a
   // blind wipe on a transient read error) and lands on the next sync. An
   // EMPTY graph on a graph tenant ships a wipe so the box never serves
-  // stale deleted data.
+  // stale deleted data — and an OFF-mode tenant ships a wipe too, so an
+  // admin turn-off actually REMOVES previously shipped projection files
+  // from the box instead of leaving them behind (Bugbot #860). Wiping on
+  // every off-tenant sync is idempotent and cheap (three rm/find lines).
   let graphProjection: { mode: "off" } | { mode: "wipe" } | { mode: "ship"; tarB64: string } = {
-    mode: "off"
+    mode: "wipe"
   };
-  const graphMode = config.memory_graph_mode ?? "off";
+  const graphMode = await resolveGraphMode(config.memory_graph_mode);
   if (graphMode === "shadow" || graphMode === "active") {
+    graphProjection = { mode: "off" };
     try {
       const graph = await fetchGraph(businessId);
       const files = buildGraphProjectionFiles(graph.entities, graph.facts);

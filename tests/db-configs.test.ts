@@ -262,6 +262,21 @@ describe("db/configs", () => {
     expect(payload.memory_md).toBe("# m");
     expect(payload.memory_archive_md).toBe("# archived");
     expect(payload.website_md).toBe("# w");
+    // memory_graph_mode was not in the patch → not in the payload.
+    expect(payload.memory_graph_mode).toBeUndefined();
+  });
+
+  it("patchBusinessConfig forwards memory_graph_mode when present (admin KG toggle path)", async () => {
+    const { db, updateChain } = raceSafeDb();
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await patchBusinessConfig("biz-uuid-1", { memory_graph_mode: "active" });
+
+    const payload = updateChain.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(payload.memory_graph_mode).toBe("active");
+    // Never clobbers the vault fields.
+    expect(payload.memory_md).toBeUndefined();
+    expect(payload.soul_md).toBeUndefined();
   });
 
   it("patchBusinessConfig forwards profile_md when present (Business-profile save path)", async () => {

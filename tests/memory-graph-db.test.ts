@@ -10,21 +10,30 @@ const defaultClientSpy = vi.fn();
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn(async () => defaultClientSpy())
 }));
+vi.mock("@/lib/admin/platform-settings", () => ({
+  getAdminPlatformSetting: vi.fn(async () => null)
+}));
 
 import {
+  effectiveMemoryGraphMode,
+  getMemoryGraphDefaultMode,
   getMemoryGraphMode,
   insertMemoryEntity,
   insertMemoryFact,
   listActiveFacts,
   listMemoryEntities,
+  resetMemoryGraphDefaultCache,
+  resolveMemoryGraphMode,
   supersedeMemoryFacts,
   updateMemoryEntity
 } from "@/lib/memory/graph-db";
+import { getAdminPlatformSetting } from "@/lib/admin/platform-settings";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
 beforeEach(() => {
   vi.clearAllMocks();
+  resetMemoryGraphDefaultCache();
 });
 
 type Chain = Record<string, ReturnType<typeof vi.fn>>;
@@ -254,16 +263,87 @@ describe("supersedeMemoryFacts", () => {
   });
 });
 
+describe("effectiveMemoryGraphMode (pure — admin views with a fresh default)", () => {
+  it("passes explicit modes through and resolves everything else to the supplied default", () => {
+    expect(effectiveMemoryGraphMode("off", "active")).toBe("off");
+    expect(effectiveMemoryGraphMode("shadow", "active")).toBe("shadow");
+    expect(effectiveMemoryGraphMode("active", "off")).toBe("active");
+    expect(effectiveMemoryGraphMode("inherit", "active")).toBe("active");
+    expect(effectiveMemoryGraphMode(null, "shadow")).toBe("shadow");
+    expect(effectiveMemoryGraphMode(undefined, "off")).toBe("off");
+    expect(effectiveMemoryGraphMode("banana", "shadow")).toBe("shadow");
+  });
+});
+
+describe("resolveMemoryGraphMode / getMemoryGraphDefaultMode", () => {
+  beforeEach(() => {
+    resetMemoryGraphDefaultCache();
+  });
+
+  it("passes explicit modes through without touching the settings read", async () => {
+    const getSetting = vi.fn(async () => "active");
+    expect(await resolveMemoryGraphMode("off", { getSetting })).toBe("off");
+    expect(await resolveMemoryGraphMode("shadow", { getSetting })).toBe("shadow");
+    expect(await resolveMemoryGraphMode("active", { getSetting })).toBe("active");
+    expect(getSetting).not.toHaveBeenCalled();
+  });
+
+  it("resolves inherit/absent/unknown through the fleet default", async () => {
+    const getSetting = vi.fn(async () => "active");
+    expect(await resolveMemoryGraphMode("inherit", { getSetting })).toBe("active");
+    resetMemoryGraphDefaultCache();
+    expect(await resolveMemoryGraphMode(null, { getSetting })).toBe("active");
+    resetMemoryGraphDefaultCache();
+    expect(await resolveMemoryGraphMode("banana", { getSetting })).toBe("active");
+  });
+
+  it("caches the fleet default for ~60s and re-reads after the TTL", async () => {
+    const getSetting = vi.fn(async () => "off");
+    let clock = 1_000_000;
+    const now = () => clock;
+    expect(await getMemoryGraphDefaultMode({ getSetting, now })).toBe("off");
+    expect(await getMemoryGraphDefaultMode({ getSetting, now })).toBe("off");
+    expect(getSetting).toHaveBeenCalledTimes(1);
+    clock += 61_000;
+    expect(await getMemoryGraphDefaultMode({ getSetting, now })).toBe("off");
+    expect(getSetting).toHaveBeenCalledTimes(2);
+  });
+
+  it("falls back to shadow on a missing, malformed, or failing setting", async () => {
+    expect(await getMemoryGraphDefaultMode({ getSetting: vi.fn(async () => null) })).toBe("shadow");
+    resetMemoryGraphDefaultCache();
+    expect(await getMemoryGraphDefaultMode({ getSetting: vi.fn(async () => "banana") })).toBe(
+      "shadow"
+    );
+    resetMemoryGraphDefaultCache();
+    expect(
+      await getMemoryGraphDefaultMode({
+        getSetting: vi.fn(async () => {
+          throw new Error("settings table down");
+        })
+      })
+    ).toBe("shadow");
+  });
+});
+
 describe("getMemoryGraphMode", () => {
-  it("returns shadow/active when set and off otherwise (row missing, null, unknown value)", async () => {
+  beforeEach(() => {
+    resetMemoryGraphDefaultCache();
+  });
+
+  it("returns explicit shadow/active; inherit and missing rows follow the fleet default", async () => {
     const shadow = chain({ data: { memory_graph_mode: "shadow" }, error: null }, "maybeSingle");
     expect(await getMemoryGraphMode(BIZ, shadow as never)).toBe("shadow");
     const active = chain({ data: { memory_graph_mode: "active" }, error: null }, "maybeSingle");
     expect(await getMemoryGraphMode(BIZ, active as never)).toBe("active");
+    // 'inherit' + missing rows consult the fleet default; the mocked
+    // platform-settings read reports 'off' here.
+    vi.mocked(getAdminPlatformSetting).mockResolvedValue("off");
+    const inherit = chain({ data: { memory_graph_mode: "inherit" }, error: null }, "maybeSingle");
+    expect(await getMemoryGraphMode(BIZ, inherit as never)).toBe("off");
+    resetMemoryGraphDefaultCache();
     const missing = chain({ data: null, error: null }, "maybeSingle");
     expect(await getMemoryGraphMode(BIZ, missing as never)).toBe("off");
-    const weird = chain({ data: { memory_graph_mode: "banana" }, error: null }, "maybeSingle");
-    expect(await getMemoryGraphMode(BIZ, weird as never)).toBe("off");
   });
 
   it("throws on error and supports the default client", async () => {

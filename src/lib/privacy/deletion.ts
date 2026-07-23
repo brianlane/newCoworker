@@ -548,6 +548,31 @@ export async function deleteEndUserData(
     results.push({ table: "sms_links", central: count(data), box: null });
   }
 
+  // ── kg_retrieval_events (KG comparison ledger; central-only) ───────────
+  // Free-text question/answer/context columns can carry the person's phone
+  // or email verbatim (a caller stating their number, an answer echoing an
+  // email). Substring-ILIKE across the text columns on every identifier
+  // axis — deliberately broad: over-deleting comparison telemetry is always
+  // preferable to retaining an erased person's data.
+  {
+    let central = 0;
+    const patterns = [...linkedNumbers].map((n) => `%${escapeLikeLiteral(n)}%`);
+    if (emailPattern) patterns.push(`%${emailPattern}%`);
+    for (const pattern of patterns) {
+      for (const column of ["question", "answer", "graph_context", "memory_context"]) {
+        const { data, error } = await db
+          .from("kg_retrieval_events")
+          .delete()
+          .eq("business_id", businessId)
+          .ilike(column, pattern)
+          .select("id");
+        if (error) throw new EndUserDeletionError(`kg_retrieval_events: ${error.message}`);
+        central += count(data);
+      }
+    }
+    results.push({ table: "kg_retrieval_events", central, box: null });
+  }
+
   const identifierFingerprint = fingerprintIdentifier(e164, email);
   const totalCentral = results.reduce((s, r) => s + r.central, 0);
   const totalBox = results.reduce((s, r) => s + (r.box ?? 0), 0);

@@ -110,6 +110,11 @@ function freshDeps(overrides: Partial<VaultSyncDeps> = {}): Required<VaultSyncDe
     exec: vi.fn(async () => ({ exitCode: 0, signal: null, stdout: "vault_synced=ok\n", stderr: "" })),
     now: () => new Date("2026-05-03T12:00:00Z"),
     fetchGraph: vi.fn(async () => ({ entities: [], facts: [] })),
+    // Deterministic inheritance: explicit values pass through, anything
+    // else resolves to off (the real matrix is tests/memory-graph-db).
+    resolveGraphMode: vi.fn(async (value: string | null | undefined) =>
+      value === "shadow" || value === "active" || value === "off" ? value : "off"
+    ),
     ...overrides
   } as Required<VaultSyncDeps>;
 }
@@ -591,13 +596,15 @@ describe("syncVaultToVps — success path", () => {
     expect(tar).toContain("602-695-1142");
   });
 
-  it("skips the projection for off-mode tenants; ships a WIPE for a graph tenant with an empty graph", async () => {
+  it("ships a WIPE for off-mode tenants (an admin turn-off removes shipped projections) and for an empty graph", async () => {
+    // Off-mode: no graph fetch, but the wipe lines ride along so a flip to
+    // off actually clears previously shipped files (Bugbot #860).
     const offDeps = freshDeps();
     await syncVaultToVps(BIZ, offDeps);
     expect(offDeps.fetchGraph).not.toHaveBeenCalled();
-    expect((offDeps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0].command).not.toContain(
-      "graph_projection"
-    );
+    const offCmd = (offDeps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0].command;
+    expect(offCmd).toContain('echo "graph_projection=wiped"');
+    expect(offCmd).not.toContain("tar -xf");
 
     const emptyDeps = freshDeps({
       fetchConfig: vi.fn(async () => ({ ...FULL_CONFIG, memory_graph_mode: "active" as const }))
@@ -609,6 +616,20 @@ describe("syncVaultToVps — success path", () => {
     const emptyCmd = (emptyDeps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0].command;
     expect(emptyCmd).toContain('echo "graph_projection=wiped"');
     expect(emptyCmd).not.toContain("tar -xf");
+  });
+
+  it("resolves the graph mode through the inheritance resolver (inherit ships when the fleet default says shadow)", async () => {
+    const deps = freshDeps({
+      fetchConfig: vi.fn(async () => ({ ...FULL_CONFIG, memory_graph_mode: "inherit" as const })),
+      fetchGraph: vi.fn(async () => ({ entities: [GRAPH_ENTITY], facts: [GRAPH_FACT] })),
+      resolveGraphMode: vi.fn(async () => "shadow" as const)
+    });
+    const r = await syncVaultToVps(BIZ, deps);
+    expect(r.ok).toBe(true);
+    expect(deps.resolveGraphMode).toHaveBeenCalledWith("inherit");
+    expect((deps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0].command).toContain(
+      'echo "graph_projection=ok"'
+    );
   });
 
   it("syncs without the projection when the graph read fails (Error and non-Error)", async () => {

@@ -16,6 +16,7 @@ import { errorResponse, successResponse } from "@/lib/api-response";
 import { logger } from "@/lib/logger";
 import { listBusinessesWithRetention } from "@/lib/db/businesses";
 import { pruneExpiredContent } from "@/lib/privacy/retention";
+import { pruneKgRetrievalEvents } from "@/lib/memory/kg-events";
 
 // A fleet-wide sweep does many small deletes (and box round-trips for
 // residency tenants); pin the Vercel ceiling like the other sweeps.
@@ -60,12 +61,25 @@ export async function POST(request: Request): Promise<Response> {
     }
   }
 
+  // Fixed 90-day platform prune of the KG comparison ledger — independent
+  // of tenant retention settings (kg_retrieval_events is an ops artifact,
+  // not tenant-configurable history). A failure logs and retries tomorrow.
+  let kgEventsPruned = 0;
+  try {
+    kgEventsPruned = await pruneKgRetrievalEvents();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    errors.push({ businessId: "platform:kg_retrieval_events", message });
+    logger.error("data-retention-sweep: kg_retrieval_events prune failed", { error: message });
+  }
+
   const durationMs = Date.now() - startedAt;
   logger.info("data-retention-sweep: summary", {
     targets: targets.length,
     pruned,
     centralRows,
     boxRows,
+    kgEventsPruned,
     errors: errors.length,
     durationMs
   });
@@ -75,6 +89,7 @@ export async function POST(request: Request): Promise<Response> {
     pruned,
     centralRows,
     boxRows,
+    kgEventsPruned,
     errors,
     durationMs
   });

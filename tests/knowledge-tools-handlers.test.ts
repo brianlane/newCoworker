@@ -21,9 +21,24 @@ vi.mock("@/lib/memory/graph-retrieval", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/memory/graph-retrieval")>()),
   retrieveGraphContext: vi.fn()
 }));
+vi.mock("@/lib/memory/graph-db", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/memory/graph-db")>()),
+  // Deterministic inheritance for these tests: explicit values pass
+  // through, anything else (inherit/absent) resolves to off. The real
+  // inheritance matrix is pinned in tests/memory-graph-db.test.ts.
+  resolveMemoryGraphMode: vi.fn(async (value: unknown) =>
+    value === "shadow" || value === "active" || value === "off" ? value : "off"
+  )
+}));
+vi.mock("@/lib/memory/kg-events", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/memory/kg-events")>()),
+  recordKgRetrievalEvent: vi.fn(async () => undefined)
+}));
 
 import { lookupBusinessKnowledge } from "@/lib/knowledge-tools/handlers";
 import { retrieveGraphContext } from "@/lib/memory/graph-retrieval";
+import { resolveMemoryGraphMode } from "@/lib/memory/graph-db";
+import { recordKgRetrievalEvent } from "@/lib/memory/kg-events";
 import { getBusinessConfig } from "@/lib/db/configs";
 import { getBusiness } from "@/lib/db/businesses";
 import { listBusinessDocuments, type BusinessDocumentRow } from "@/lib/documents/db";
@@ -158,10 +173,14 @@ describe("lookupBusinessKnowledge", () => {
     expect(call.userText).toContain("# memory.md (saved notes most relevant to the question)\nmemory");
   });
 
-  it("never touches the graph when memory_graph_mode is off/absent", async () => {
+  it("never touches the graph (or the ledger) when the resolved mode is off", async () => {
     gemini.mockResolvedValue(geminiOk("answer", null));
     await lookupBusinessKnowledge(BIZ, "hours?");
     expect(retrieveGraphContext).not.toHaveBeenCalled();
+    expect(recordKgRetrievalEvent).not.toHaveBeenCalled();
+    // The mode is resolved through the inheritance resolver, never read raw
+    // (the default mock config carries no memory_graph_mode).
+    expect(resolveMemoryGraphMode).toHaveBeenCalledWith(undefined);
   });
 
   it("shadow mode: computes the graph but the prompt stays on the ranked-markdown path", async () => {
@@ -215,6 +234,67 @@ describe("lookupBusinessKnowledge", () => {
     // question — both sections ride the prompt (Bugbot High on #847).
     expect(call.userText).toContain("# memory.md (saved notes most relevant to the question)");
     expect(call.userText).toContain("text before calling");
+  });
+
+  it("records a ledger event for shadow lookups (comparison payload + answer)", async () => {
+    vi.mocked(getBusinessConfig).mockResolvedValue({
+      identity_md: "identity",
+      soul_md: "soul",
+      website_md: "website",
+      memory_md: "---\n\n### Owner chat (2026-07-01)\n\n- We are closed on Sundays",
+      memory_graph_mode: "shadow"
+    } as never);
+    vi.mocked(retrieveGraphContext).mockResolvedValue({
+      context: "- Amy Laidlaw (person)",
+      matchedEntities: 1,
+      facts: 2
+    });
+    gemini.mockResolvedValue(geminiOk("Closed Sundays.", null));
+    const result = await lookupBusinessKnowledge(BIZ, "are you open sundays?", {
+      callerE164: "+16025551234"
+    });
+    expect(result.ok).toBe(true);
+    expect(recordKgRetrievalEvent).toHaveBeenCalledWith(
+      expect.objectContaining({
+        business_id: BIZ,
+        mode: "shadow",
+        question: "are you open sundays?",
+        answer: "Closed Sundays.",
+        graph_context: "- Amy Laidlaw (person)",
+        graph_matched_entities: 1,
+        graph_facts: 2,
+        graph_context_chars: "- Amy Laidlaw (person)".length,
+        memory_fallback: false,
+        caller_provided: true
+      })
+    );
+  });
+
+  it("records for active lookups too, and a ledger failure never breaks the answer", async () => {
+    vi.mocked(getBusinessConfig).mockResolvedValue({
+      identity_md: "identity",
+      soul_md: "soul",
+      website_md: "website",
+      memory_md: "---\n\n### Owner chat (2026-07-01)\n\n- We are closed on Sundays",
+      memory_graph_mode: "active"
+    } as never);
+    vi.mocked(retrieveGraphContext).mockResolvedValue({
+      context: "- fact",
+      matchedEntities: 1,
+      facts: 1
+    });
+    vi.mocked(recordKgRetrievalEvent).mockRejectedValueOnce(new Error("ledger down"));
+    gemini.mockResolvedValue(geminiOk("answer", null));
+    const result = await lookupBusinessKnowledge(BIZ, "sundays?");
+    expect(result).toEqual({ ok: true, data: { answer: "answer" } });
+    expect(recordKgRetrievalEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ mode: "active", caller_provided: false })
+    );
+
+    // Non-Error throw values are tolerated too.
+    vi.mocked(recordKgRetrievalEvent).mockRejectedValueOnce("string failure");
+    const result2 = await lookupBusinessKnowledge(BIZ, "sundays?");
+    expect(result2.ok).toBe(true);
   });
 
   it("active mode still carries ranked memory when the graph has nothing", async () => {
