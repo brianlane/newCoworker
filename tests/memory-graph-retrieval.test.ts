@@ -72,6 +72,18 @@ describe("matchGraphEntities", () => {
     expect(matchGraphEntities([entity()], "zzz", "+15550001111")).toEqual([]);
     expect(matchGraphEntities([entity()], "zzz", undefined)).toEqual([]);
   });
+
+  it("never seeds on substrings of name words (the ⊄ Theresa, are ⊄ Warehouse)", () => {
+    const theresa = entity({
+      id: "aaaaaaaa-0000-4000-8000-000000000010",
+      canonical_name: "Theresa Warehouse",
+      aliases: [],
+      phones: [],
+      emails: []
+    });
+    expect(matchGraphEntities([theresa], "what are the hours?", undefined)).toEqual([]);
+    expect(matchGraphEntities([theresa], "who is theresa?", undefined)).toHaveLength(1);
+  });
 });
 
 describe("retrieveGraphContext", () => {

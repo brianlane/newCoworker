@@ -36,8 +36,12 @@ function questionTerms(question: string): string[] {
 }
 
 /**
- * Entities the question (or caller identity) points at: a term hit on the
- * canonical name or an alias, or a normalized-phone match on callerE164.
+ * Entities the question (or caller identity) points at: a question term
+ * equal to a whole WORD of the canonical name or an alias, or a
+ * normalized-phone match on callerE164. Whole-word (not substring)
+ * matching, because everyday three-letter terms live inside unrelated
+ * names — "the" ⊂ "Theresa", "are" ⊂ "Warehouse" — and a false seed drags
+ * its entire 1-hop neighborhood into the prompt.
  */
 export function matchGraphEntities(
   entities: MemoryEntityRow[],
@@ -48,8 +52,10 @@ export function matchGraphEntities(
   const callerDigits = callerE164 ? normalizePhone(callerE164) : null;
   const matched: MemoryEntityRow[] = [];
   for (const entity of entities) {
-    const names = [entity.canonical_name, ...entity.aliases].map((n) => n.toLowerCase());
-    const termHit = terms.some((term) => names.some((name) => name.includes(term)));
+    const nameWords = new Set(
+      [entity.canonical_name, ...entity.aliases].flatMap((n) => questionTerms(n))
+    );
+    const termHit = terms.some((term) => nameWords.has(term));
     const phoneHit =
       callerDigits !== null &&
       entity.phones.some((p) => normalizePhone(p) === callerDigits);
