@@ -156,7 +156,8 @@ describe("branded-html", () => {
     expect(html).toContain("Brian Lane, Founder");
     expect(html).toContain('href="tel:+16023131823"');
     expect(html).toContain("602.313.1823");
-    expect(html).toContain("(our AI coworker answers)");
+    // Copy rule (Jul 2026): no AI-answers note on the Call line.
+    expect(html).not.toContain("(our AI coworker answers)");
     expect(html).toContain('href="https://www.newcoworker.com"');
     // The signature reuses the site logo at signature size.
     expect(html).toContain('width="56"');
