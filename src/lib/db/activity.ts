@@ -49,6 +49,13 @@ export type ActivityItem = {
    * lets contact-scoped consumers group items by person.
    */
   contactE164?: string;
+  /**
+   * Set when an outbound message was sent BY an AiFlow (`source = 'ai_flow'`
+   * on `sms_outbound_log` / `email_log`). Render sites add the green AiFlow
+   * chip next to the kind badge so automation traffic is recognizable at a
+   * glance on any message type.
+   */
+  origin?: "aiflow";
 };
 
 export type ActivityCallRow = {
@@ -94,6 +101,8 @@ export type ActivityEmailRow = {
   to_email: string | null;
   from_email: string | null;
   subject: string | null;
+  /** `email_log.source` — `ai_flow` tags the row as a flow send. */
+  source?: string | null;
   created_at: string;
 };
 
@@ -272,16 +281,16 @@ export function collectActivityItems(input: ActivityFeedInput): ActivityItem[] {
 
   input.smsOutbound.forEach((r, i) => {
     if (!r.to_e164) return;
-    // Tag flow-driven sends so the owner can tell an automation text from a
-    // manual/assistant one at a glance (sms_outbound_log.source = 'ai_flow').
-    const origin = r.source === "ai_flow" ? " (AiFlow)" : "";
     items.push({
       id: `sms_out:${i}:${r.created_at}`,
       kind: "sms_outbound",
-      label: `Text to ${named(r.to_e164)}${origin}`,
+      label: `Text to ${named(r.to_e164)}`,
       href: `/dashboard/messages/${encodeURIComponent(r.to_e164)}`,
       at: r.created_at,
-      contactE164: r.to_e164
+      contactE164: r.to_e164,
+      // Flow-driven sends carry the AiFlow origin so render sites add the
+      // green chip — automation traffic is recognizable at a glance.
+      ...(r.source === "ai_flow" ? { origin: "aiflow" as const } : {})
     });
   });
 
@@ -294,7 +303,10 @@ export function collectActivityItems(input: ActivityFeedInput): ActivityItem[] {
       kind: inbound ? "email_inbound" : "email_outbound",
       label: `${inbound ? "Email from" : "Email to"} ${who}${subject}`,
       href: "/dashboard/emails",
-      at: r.created_at
+      at: r.created_at,
+      // Same AiFlow origin tag as texts — the badge applies to any message
+      // type a flow can send (outbound only; 'ai_flow' is a send source).
+      ...(!inbound && r.source === "ai_flow" ? { origin: "aiflow" as const } : {})
     });
   });
 
@@ -610,14 +622,14 @@ async function fetchActivityFeedInput(
             emailDirection
               ? db
                   .from("email_log")
-                  .select("direction, to_email, from_email, subject, created_at")
+                  .select("direction, to_email, from_email, subject, source, created_at")
                   .eq("business_id", businessId)
                   .eq("direction", emailDirection)
                   .is("deleted_at", null)
                   .gte("created_at", since)
               : db
                   .from("email_log")
-                  .select("direction, to_email, from_email, subject, created_at")
+                  .select("direction, to_email, from_email, subject, source, created_at")
                   .eq("business_id", businessId)
                   .is("deleted_at", null)
                   .gte("created_at", since),
@@ -882,7 +894,7 @@ export async function getContactActivity(
       ? none
       : db
           .from("email_log")
-          .select("direction, to_email, from_email, subject, created_at")
+          .select("direction, to_email, from_email, subject, source, created_at")
           .eq("business_id", businessId)
           .is("deleted_at", null)
           .or(`to_email.eq.${email},from_email.eq.${email}`)

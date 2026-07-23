@@ -92,6 +92,34 @@ describe("buildFleetActivityFeed", () => {
     });
   });
 
+  it("tags flow-sent emails with the AiFlow email badge (outbound only)", () => {
+    const items = buildFleetActivityFeed({
+      ...emptyInput(),
+      emails: [
+        {
+          business_id: "b1",
+          direction: "outbound",
+          to_email: "lead@example.com",
+          from_email: null,
+          subject: null,
+          source: "ai_flow",
+          created_at: "2026-07-23T10:00:00Z"
+        },
+        {
+          business_id: "b1",
+          direction: "inbound",
+          to_email: null,
+          from_email: "lead@example.com",
+          subject: null,
+          source: "ai_flow",
+          created_at: "2026-07-23T09:00:00Z"
+        }
+      ]
+    });
+    expect(items[0]).toMatchObject({ badge: "AiFlow email", variant: "success" });
+    expect(items[1]).toMatchObject({ badge: "Email in", variant: "pending" });
+  });
+
   it("tags flow-driven outbound texts with the AiFlow badge", () => {
     const items = buildFleetActivityFeed({
       ...emptyInput(),

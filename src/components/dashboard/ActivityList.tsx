@@ -127,6 +127,13 @@ export function ActivityList({
                         </a>
                       </>
                     )}
+                    {/* Flow-sent messages carry the green AiFlow origin chip
+                        next to their kind badge. */}
+                    {item.origin === "aiflow" && (
+                      <Badge variant={ACTIVITY_BADGE.aiflow.variant}>
+                        {tBadge(ACTIVITY_BADGE.aiflow.labelKey)}
+                      </Badge>
+                    )}
                     <Badge variant={ACTIVITY_BADGE[item.kind].variant}>
                       {tBadge(ACTIVITY_BADGE[item.kind].labelKey)}
                     </Badge>

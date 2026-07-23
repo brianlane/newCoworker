@@ -75,6 +75,8 @@ export type FleetEmailRow = {
   to_email: string | null;
   from_email: string | null;
   subject: string | null;
+  /** `email_log.source` — `ai_flow` tags the row as a flow send. */
+  source?: string | null;
   created_at: string;
 };
 
@@ -198,10 +200,13 @@ export function buildFleetActivityFeed(input: FleetActivityInput): FleetActivity
     const inbound = r.direction === "inbound";
     const who = (inbound ? r.from_email : r.to_email) ?? "unknown address";
     const subject = r.subject?.trim() ? `: “${r.subject.trim()}”` : "";
+    // Flow-sent emails get the same green AiFlow tag as flow-sent texts —
+    // the origin badge applies to any message type a flow can send.
+    const fromFlow = !inbound && r.source === "ai_flow";
     items.push({
       id: `email:${i}:${r.created_at}`,
-      badge: inbound ? "Email in" : "Email out",
-      variant: inbound ? "pending" : "neutral",
+      badge: fromFlow ? "AiFlow email" : inbound ? "Email in" : "Email out",
+      variant: fromFlow ? "success" : inbound ? "pending" : "neutral",
       label: `${inbound ? "Email from" : "Email to"} ${who}${subject}`,
       businessId: r.business_id,
       at: r.created_at
@@ -340,7 +345,7 @@ export async function getFleetRecentActivity(
       notMuted(
         db
           .from("email_log")
-          .select("business_id, direction, to_email, from_email, subject, created_at")
+          .select("business_id, direction, to_email, from_email, subject, source, created_at")
           .is("deleted_at", null)
           .gte("created_at", since)
       )

@@ -115,7 +115,7 @@ describe("buildActivityFeed", () => {
     });
   });
 
-  it("tags flow-driven outbound texts with (AiFlow)", () => {
+  it("tags flow-driven outbound texts with the aiflow origin", () => {
     const items = buildActivityFeed(
       emptyInput({
         smsOutbound: [
@@ -124,10 +124,47 @@ describe("buildActivityFeed", () => {
         ]
       })
     );
+    // The origin renders as the green AiFlow chip; labels stay clean.
     expect(items.map((i) => i.label)).toEqual([
-      "Text to +15550003333 (AiFlow)",
+      "Text to +15550003333",
       "Text to +15550004444"
     ]);
+    expect(items[0]!.origin).toBe("aiflow");
+    expect(items[1]!.origin).toBeUndefined();
+  });
+
+  it("tags flow-sent emails with the aiflow origin (outbound only)", () => {
+    const items = buildActivityFeed(
+      emptyInput({
+        emails: [
+          {
+            direction: "outbound",
+            to_email: "lead@example.com",
+            from_email: null,
+            subject: "Following up",
+            source: "ai_flow",
+            created_at: "2026-01-02T10:00:00Z"
+          },
+          {
+            direction: "outbound",
+            to_email: "lead@example.com",
+            from_email: null,
+            subject: null,
+            source: "owner_mailbox",
+            created_at: "2026-01-02T09:00:00Z"
+          },
+          {
+            direction: "inbound",
+            to_email: null,
+            from_email: "lead@example.com",
+            subject: null,
+            source: "ai_flow",
+            created_at: "2026-01-02T08:00:00Z"
+          }
+        ]
+      })
+    );
+    expect(items.map((i) => i.origin)).toEqual(["aiflow", undefined, undefined]);
   });
 
   it("maps outbound SMS and skips rows without to_e164", () => {
