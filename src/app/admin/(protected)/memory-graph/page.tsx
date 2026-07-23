@@ -138,13 +138,22 @@ export default async function MemoryGraphAdminPage({
   );
 
   // Per-tenant drill-down: stats over the newest EVENTS_LIMIT events, with
-  // the true window count so truncation is labeled, never silent.
-  const selected = selectedBusinessId
-    ? await listKgRetrievalEvents(selectedBusinessId, since, EVENTS_LIMIT).catch(() => [])
-    : [];
-  const selectedTotal = selectedBusinessId
-    ? await countKgRetrievalEvents(selectedBusinessId, since).catch(() => selected.length)
-    : 0;
+  // the true window count so truncation is labeled, never silent. The two
+  // reads degrade TOGETHER: a failed list zeroes the total too, so a read
+  // blip can never render "0 lookups" beside a banner claiming thousands.
+  let selected: Awaited<ReturnType<typeof listKgRetrievalEvents>> = [];
+  let selectedTotal = 0;
+  if (selectedBusinessId) {
+    try {
+      selected = await listKgRetrievalEvents(selectedBusinessId, since, EVENTS_LIMIT);
+      selectedTotal = await countKgRetrievalEvents(selectedBusinessId, since).catch(
+        () => selected.length
+      );
+    } catch {
+      selected = [];
+      selectedTotal = 0;
+    }
+  }
   const selectedStats = aggregateKgStats(selected);
 
   const windowLink = (w: WindowKey) =>
