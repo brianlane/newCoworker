@@ -7,10 +7,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import {
   bookingExtraction,
+  capturedLeadExtraction,
   contactExtraction,
   docRecordExtraction,
   ingestBooking,
   ingestBusinessProfile,
+  ingestCapturedLead,
   ingestContact,
   ingestDeterministic,
   ingestDocRecordFields,
@@ -233,6 +235,74 @@ describe("builders", () => {
     expect(
       docRecordExtraction({ title: "T", fields: { a: "b" }, contactName: "Bob" }).entities[0]
     ).toMatchObject({ name: "Bob", phones: [] });
+  });
+});
+
+describe("capturedLeadExtraction / ingestCapturedLead (DM lead-capture boundary)", () => {
+  it("builds person + interested_in/note facts; nameless captures build nothing", () => {
+    const x = capturedLeadExtraction({
+      name: " Vera Visitor ",
+      phone: "+15550002222",
+      email: "v@x.co",
+      interest: "kitchen remodel",
+      notes: "prefers evenings"
+    });
+    expect(x.entities[0]).toMatchObject({
+      name: "Vera Visitor",
+      phones: ["+15550002222"],
+      emails: ["v@x.co"]
+    });
+    expect(x.facts).toEqual([
+      expect.objectContaining({ predicate: "interested_in", objectValue: "kitchen remodel" }),
+      expect.objectContaining({ predicate: "note", objectValue: "prefers evenings" })
+    ]);
+    // No interest/notes → entity only; no phone/email → empty contact points.
+    const bare = capturedLeadExtraction({ name: "V" });
+    expect(bare.facts).toEqual([]);
+    expect(bare.entities[0]).toMatchObject({ phones: [], emails: [] });
+    expect(capturedLeadExtraction({ phone: "+1555" })).toEqual({ entities: [], facts: [] });
+  });
+
+  it("maps channels to registry sources with each channel's trust", async () => {
+    const cases: Array<{ channel: "messenger" | "instagram" | "whatsapp" | "webchat"; source: string; trust: number }> = [
+      { channel: "messenger", source: "messenger", trust: 1 },
+      { channel: "instagram", source: "messenger", trust: 1 },
+      { channel: "whatsapp", source: "whatsapp", trust: 1 },
+      { channel: "webchat", source: "webchat", trust: 0 }
+    ];
+    for (const c of cases) {
+      const d = deps("active");
+      await ingestCapturedLead(BIZ, c.channel, { name: "V", phone: "+1555" }, d);
+      expect(d.apply).toHaveBeenCalledWith(
+        BIZ,
+        expect.anything(),
+        expect.anything(),
+        {},
+        expect.objectContaining({ source: c.source, trust: c.trust, attributedTo: "+1555" })
+      );
+    }
+  });
+
+  it("attribution falls back phone → email → channel", async () => {
+    const emailOnly = deps("active");
+    await ingestCapturedLead(BIZ, "webchat", { name: "V", email: "v@x.co" }, emailOnly);
+    expect(emailOnly.apply).toHaveBeenCalledWith(
+      BIZ,
+      expect.anything(),
+      expect.anything(),
+      {},
+      expect.objectContaining({ attributedTo: "v@x.co" })
+    );
+
+    const bare = deps("active");
+    await ingestCapturedLead(BIZ, "webchat", { name: "V" }, bare);
+    expect(bare.apply).toHaveBeenCalledWith(
+      BIZ,
+      expect.anything(),
+      expect.anything(),
+      {},
+      expect.objectContaining({ attributedTo: "webchat" })
+    );
   });
 });
 

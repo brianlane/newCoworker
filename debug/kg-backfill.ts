@@ -5,6 +5,14 @@
  *   npx tsx debug/kg-backfill.ts                      # HQ tenant, DRY RUN
  *   npx tsx debug/kg-backfill.ts --business <uuid>    # dry run for a tenant
  *   npx tsx debug/kg-backfill.ts --business <uuid> --apply
+ *   npx tsx debug/kg-backfill.ts --business <uuid> --sources voice,sms,email \
+ *     [--limit-customers 20] [--apply]                # conversational replay
+ *
+ * --sources replays HISTORICAL conversation windows (voice transcripts, SMS
+ * threads, linked-contact email) through the CUSTOMER-source extraction
+ * prompt — per identified customer, trust 1, attributed to the customer —
+ * exactly what the live summarizer hook does, so the widened graph is fully
+ * inspectable offline before any tenant's live traffic feeds it.
  *
  * Dry run prints exactly what WOULD be created/merged; --apply lands it
  * through the same resolution/supersedence write path live capture uses
@@ -30,8 +38,151 @@ const APPLY = args.includes("--apply");
 const bizFlag = args.indexOf("--business");
 const HQ_TENANT = "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d";
 const BUSINESS_ID = bizFlag >= 0 ? args[bizFlag + 1] : HQ_TENANT;
+const sourcesFlag = args.indexOf("--sources");
+const SOURCES = new Set(
+  sourcesFlag >= 0 ? (args[sourcesFlag + 1] ?? "").split(",").map((s) => s.trim()) : []
+);
+const limitFlag = args.indexOf("--limit-customers");
+const rawLimit = limitFlag >= 0 ? Number.parseInt(args[limitFlag + 1] ?? "", 10) : NaN;
+const LIMIT_CUSTOMERS = Number.isFinite(rawLimit) && rawLimit > 0 ? rawLimit : 20;
 
 const BATCH_SIZE = 15;
+
+/** Replay historical conversation windows through the customer prompt. */
+async function backfillConversations(businessId: string, apiKey: string): Promise<void> {
+  const { createSupabaseServiceClient } = await import("../src/lib/supabase/server.ts");
+  const { geminiGenerateTextDetailed } = await import("../src/lib/gemini-generate-content.ts");
+  const {
+    CUSTOMER_GRAPH_EXTRACTION_SYSTEM_PROMPT,
+    composeConversationExtractionInput,
+    parseGraphExtraction
+  } = await import("../src/lib/memory/graph-extract.ts");
+  const { applyGraphExtraction } = await import("../src/lib/memory/graph-write.ts");
+  const { listMemoryEntities } = await import("../src/lib/memory/graph-db.ts");
+  const { listVoiceTurnsForCustomer } = await import("../src/lib/db/voice-transcripts.ts");
+  const { listSmsHistoryForCustomer } = await import("../src/lib/customer-memory/db.ts");
+  const { listEmailLogForAddress } = await import("../src/lib/db/email-log.ts");
+  const { dominantConversationSource } = await import("../src/lib/memory/graph-conversational.ts");
+
+  const db = await createSupabaseServiceClient();
+  const { data, error } = await db
+    .from("contacts")
+    .select("customer_e164, display_name, email, interaction_count")
+    .eq("business_id", businessId)
+    .gt("interaction_count", 0)
+    .order("interaction_count", { ascending: false })
+    .limit(LIMIT_CUSTOMERS);
+  if (error) throw new Error(`contacts read: ${error.message}`);
+  const contacts = (data ?? []) as Array<{
+    customer_e164: string;
+    display_name: string | null;
+    email: string | null;
+  }>;
+  console.log(
+    `[kg-backfill] conversational replay: ${contacts.length} customers ` +
+      `(sources=${[...SOURCES].join(",")}, apply=${APPLY})`
+  );
+  const model = (process.env.MEMORY_GRAPH_EXTRACT_MODEL ?? "").trim() || "gemini-3.5-flash-lite";
+
+  for (const contact of contacts) {
+    const sections: string[] = [];
+    let voiceTurns = 0;
+    let smsTurns = 0;
+    let emails = 0;
+    if (SOURCES.has("voice")) {
+      const turns = await listVoiceTurnsForCustomer(businessId, contact.customer_e164, {
+        maxCalls: 5
+      });
+      voiceTurns = turns.length;
+      if (turns.length > 0) {
+        sections.push(
+          "VOICE CALLS (oldest first):",
+          turns.map((t) => `${t.role}: ${t.content}`).join("\n"),
+          ""
+        );
+      }
+    }
+    if (SOURCES.has("sms")) {
+      const history = await listSmsHistoryForCustomer(businessId, contact.customer_e164, {
+        limit: 40
+      });
+      smsTurns = history.length;
+      if (history.length > 0) {
+        sections.push(
+          "SMS EXCHANGES (oldest first):",
+          history
+            .map((h) => `customer: ${h.inboundText}\nassistant: ${h.assistantReply ?? ""}`)
+            .join("\n"),
+          ""
+        );
+      }
+    }
+    if (SOURCES.has("email") && contact.email) {
+      const mail = await listEmailLogForAddress(businessId, contact.email, { limit: 10 });
+      emails = mail.length;
+      if (mail.length > 0) {
+        sections.push(
+          "EMAILS (oldest first):",
+          mail
+            .slice()
+            .reverse()
+            .map(
+              (m) => `${m.direction}: ${m.subject ?? ""} — ${(m.body_preview ?? "").slice(0, 500)}`
+            )
+            .join("\n")
+        );
+      }
+    }
+    const transcript = sections.join("\n").trim();
+    if (!transcript) continue;
+
+    const indexRows = APPLY ? await listMemoryEntities(businessId) : [];
+    const entityIndex = indexRows.map((row) => ({
+      id: row.id,
+      kind: row.kind,
+      name: row.canonical_name,
+      aliases: row.aliases,
+      phones: row.phones,
+      emails: row.emails
+    }));
+    const { text } = await geminiGenerateTextDetailed({
+      apiKey,
+      model,
+      systemInstruction: CUSTOMER_GRAPH_EXTRACTION_SYSTEM_PROMPT,
+      userText: composeConversationExtractionInput(transcript.slice(-24_000), entityIndex),
+      temperature: 0,
+      maxOutputTokens: 2000,
+      responseMimeType: "application/json"
+    });
+    const extraction = parseGraphExtraction(text, 1);
+    const source = dominantConversationSource({ voiceTurns, smsTurns, emails });
+    console.log(
+      `[kg-backfill] ${contact.customer_e164} (${contact.display_name ?? "unnamed"}) ` +
+        `source=${source}: ${extraction.entities.length} entities, ${extraction.facts.length} facts`
+    );
+    if (!APPLY) {
+      for (const e of extraction.entities) console.log(`  entity ${e.kind}: ${e.name}`);
+      for (const f of extraction.facts) {
+        console.log(
+          `  fact: ${f.subjectRef} ${f.predicate} ${f.objectRef ?? JSON.stringify(f.objectValue)}`
+        );
+      }
+      continue;
+    }
+    if (extraction.entities.length === 0) continue;
+    const result = await applyGraphExtraction(businessId, extraction, [transcript], {}, {
+      source,
+      trust: 1,
+      attributedTo: contact.customer_e164
+    });
+    console.log(`  applied: ${JSON.stringify(result)}`);
+  }
+  console.log(
+    APPLY
+      ? "[kg-backfill] conversational replay DONE"
+      : "[kg-backfill] conversational dry run complete — re-run with --apply to write"
+  );
+}
 
 async function main(): Promise<void> {
   if (!BUSINESS_ID || !/^[0-9a-f-]{36}$/i.test(BUSINESS_ID)) {
@@ -39,6 +190,11 @@ async function main(): Promise<void> {
   }
   const apiKey = process.env.GOOGLE_API_KEY ?? "";
   if (!apiKey) throw new Error("GOOGLE_API_KEY missing from .env (internal-ci-debug key)");
+
+  if (SOURCES.size > 0) {
+    await backfillConversations(BUSINESS_ID, apiKey);
+    return;
+  }
 
   const { getBusinessConfig } = await import("../src/lib/db/configs.ts");
   const { extractExistingBullets } = await import("../src/lib/dashboard-chat/memory-capture.ts");

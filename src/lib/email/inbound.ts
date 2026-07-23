@@ -21,6 +21,7 @@ import {
 import { enqueueAiFlowRun } from "@/lib/ai-flows/db";
 import { linkTenantMailboxInboundRun, recordTenantMailboxInbound } from "@/lib/db/email-log";
 import { recordSystemLog } from "@/lib/db/system-logs";
+import { extractConversationGraph } from "@/lib/memory/graph-conversational";
 import {
   findCustomerByEmail,
   recordInteractionAndIncrement
@@ -272,9 +273,11 @@ export async function processInboundTenantEmail(
   // ("last via email") and the profile counts mail alongside SMS/voice. The
   // mail already shows on the profile via address match; this just keeps the
   // unified counters honest. Best-effort — never block on it.
+  let linkedCustomer = false;
   try {
     const customer = await findCustomerByEmail(businessId, fromEmail, db);
     if (customer) {
+      linkedCustomer = true;
       await recordInteractionAndIncrement(
         businessId,
         customer.customerE164,
@@ -299,6 +302,21 @@ export async function processInboundTenantEmail(
     } catch {
       // best-effort: never let logging the rollup miss break the inbound path
     }
+  }
+
+  // Knowledge graph (kg-source: email_unanswered): cold inbound mail from a
+  // sender with NO linked contact extracts at ANONYMOUS trust (0) — the
+  // upstream email reply-gate as attribution, not exclusion: everything is
+  // captured, but a cold email can never masquerade as a relationship.
+  // Linked senders are skipped here — their mail extracts at trust 1
+  // through the customer-memory summarizer window (the interaction rollup
+  // above is exactly what schedules it). Never-throws + daily-capped inside.
+  if (!linkedCustomer) {
+    await extractConversationGraph(businessId, {
+      transcript: `CUSTOMER EMAIL from ${fromEmail}\nSubject: ${payload.subject}\n\n${payload.text}`,
+      source: "email_unanswered",
+      attributedTo: fromEmail
+    });
   }
 
   return { matched: true, businessId, enqueued };
