@@ -22,8 +22,9 @@ import { describe, expect, it } from "vitest";
  *   - serial:    a `grant usage ... on sequence ... to service_role`
  *                (identity columns need no sequence grant; prefer identity)
  *   - functions: grant execute on function X to service_role
- *                (trigger / event-trigger functions are exempt: they run as
- *                owner and are never called through PostgREST)
+ *                (one grant per overload signature; trigger / event-trigger
+ *                functions are exempt: they run as owner and are never
+ *                called through PostgREST)
  *
  * Deliberately unexposed object (e.g. a pg_cron-only helper that must never
  * be a PostgREST RPC): add a marker comment naming the object,
@@ -77,11 +78,37 @@ function hasTableGrant(sql: string, name: string): boolean {
   ).test(sql);
 }
 
-function hasFunctionGrant(sql: string, name: string): boolean {
-  return new RegExp(
+function functionGrantCount(sql: string, name: string): number {
+  const re = new RegExp(
     String.raw`\bgrant\s+execute\s+on\s+function\s+(?:"?public"?\.)?"?${name}"?\b[^;]*\bto\b[^;]*\bservice_role\b`,
-    "is"
-  ).test(sql);
+    "gis"
+  );
+  return [...sql.matchAll(re)].length;
+}
+
+/**
+ * The normalized parameter list following a create-function name, scanned
+ * with balanced parens (type modifiers and defaults may nest). Overloads of
+ * one name need one execute grant EACH (Postgres grants per signature).
+ */
+function functionSignature(sql: string, nameEndIndex: number): string {
+  const open = sql.indexOf("(", nameEndIndex);
+  if (open === -1) return "";
+  let depth = 0;
+  for (let i = open; i < sql.length; i++) {
+    if (sql[i] === "(") depth++;
+    else if (sql[i] === ")") {
+      depth--;
+      if (depth === 0) {
+        return sql
+          .slice(open + 1, i)
+          .toLowerCase()
+          .replace(/\s+/g, " ")
+          .trim();
+      }
+    }
+  }
+  return "";
 }
 
 /**
@@ -150,13 +177,24 @@ describe("migration Data API grants (post default-revoke convention)", () => {
         }
       }
 
+      const fnSignatures = new Map<string, Set<string>>();
       for (const m of sql.matchAll(CREATE_FUNCTION_RE)) {
         const name = m[1].toLowerCase();
         if (exempt.has(name)) continue;
         if (returnsTrigger(sql, m.index ?? 0)) continue;
-        if (!hasFunctionGrant(sql, name)) {
+        const sig = functionSignature(sql, (m.index ?? 0) + m[0].length);
+        if (!fnSignatures.has(name)) fnSignatures.set(name, new Set());
+        fnSignatures.get(name)!.add(sig);
+      }
+      for (const [name, sigs] of fnSignatures) {
+        const grants = functionGrantCount(sql, name);
+        if (grants === 0) {
           violations.push(
             `${file}: function "${name}" has no "grant execute ... to service_role" (or "-- grants: none (${name}): reason" marker)`
+          );
+        } else if (grants < sigs.size) {
+          violations.push(
+            `${file}: function "${name}" has ${sigs.size} overload signatures but only ${grants} service_role execute grant(s); Postgres grants per signature, so grant each overload`
           );
         }
       }
