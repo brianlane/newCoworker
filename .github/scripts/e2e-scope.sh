@@ -229,13 +229,18 @@ elif [ "$MODE" = "push" ]; then
   fi
   compare=$(gh api "repos/$REPO/compare/$BEFORE...$SHA" 2>/dev/null) ||
     emit_full "Could not compare $BEFORE...$SHA — running the full live suite (fail-open)."
-  count=$(jq '.files | length' <<<"$compare")
+  # Fail-open on ANY unusable compare payload: `.files // []` absorbs a
+  # missing/null array, and a jq parse error (non-JSON body) falls to
+  # emit_full instead of dying under set -e.
+  count=$(jq '(.files // []) | length' <<<"$compare" 2>/dev/null) ||
+    emit_full "Could not parse the compare response — running the full live suite (fail-open)."
   # The compare API caps .files at 300 — a bigger diff is only partially
   # visible, so scope decisions on it would be unsound.
   if [ "$count" -ge 300 ]; then
     emit_full "Push diff has ${count}+ files (compare API cap) — running the full live suite (fail-open)."
   fi
-  files=$(jq -r '.files[].filename' <<<"$compare")
+  files=$(jq -r '(.files // [])[].filename' <<<"$compare" 2>/dev/null) ||
+    emit_full "Could not parse the compare response — running the full live suite (fail-open)."
 
 else
   emit_full "Unknown mode '$MODE' — running the full live suite (fail-open)."
