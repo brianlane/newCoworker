@@ -517,7 +517,7 @@ serve(async (req: Request) => {
     textLines.push(`Open the dashboard: ${dashboardUrl}`);
     textLines.push("");
     textLines.push("---");
-    textLines.push(`Don't want these emails? Unsubscribe with one click: ${unsubscribeUrl}`);
+    textLines.push(`Don't want these emails? Unsubscribe: ${unsubscribeUrl}`);
     const text = textLines.join("\n");
 
     const html = buildBrandedEmailHtml({

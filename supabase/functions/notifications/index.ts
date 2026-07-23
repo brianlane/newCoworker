@@ -539,7 +539,7 @@ serve(async (req: Request) => {
       };
       const subject = `Urgent: ${summary}`;
       const baseText = `Your AI Coworker flagged an urgent event.\n\nSummary: ${summary}\nBusiness ID: ${record.business_id}\n\nView details: ${dashboardUrl}`;
-      const text = `${baseText}\n\n---\nDon't want these alerts? Unsubscribe with one click: ${unsubscribeUrl}`;
+      const text = `${baseText}\n\n---\nDon't want these alerts? Unsubscribe: ${unsubscribeUrl}`;
       const html = buildBrandedEmailHtml({
         siteUrl: appUrl,
         documentTitle: subject,

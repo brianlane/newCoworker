@@ -36,7 +36,7 @@ function resolveFrom(opts: SendOwnerEmailOptions): string {
 }
 
 function appendUnsubscribeFooter(text: string, url: string): string {
-  return `${text}\n\n---\nDon't want these alerts? Unsubscribe with one click: ${url}`;
+  return `${text}\n\n---\nDon't want these alerts? Unsubscribe: ${url}`;
 }
 
 /**
