@@ -397,6 +397,17 @@ describe("getFleetRecentActivity", () => {
     expect(items.map((i) => i.label)).toContain("Text to Mike Haas");
   });
 
+  it("skips phone-less rows when collecting numbers for the resolver", async () => {
+    // caller_e164 null exercises the collector's early return; the row still
+    // renders as "unknown caller".
+    const { db } = mockDb({ data: [{ ...SHARED_ROW, caller_e164: null }], error: null });
+
+    const items = await getFleetRecentActivity(20, undefined, db as never);
+    const [, nums] = vi.mocked(resolveContactNames).mock.calls[0]!;
+    expect(nums).not.toContain(null);
+    expect(items.map((i) => i.label)).toContain("Call: unknown caller (success)");
+  });
+
   it("degrades to raw numbers when the resolver fails", async () => {
     const { db } = mockDb({ data: [SHARED_ROW], error: null });
     vi.mocked(resolveContactNames).mockRejectedValue(new Error("boom"));
