@@ -527,9 +527,41 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   // --update: the flow exists and its definition is replaced in place with
-  // the current builder output (validated above). Enabled state is kept;
-  // flow-edit safety is engine-guaranteed (runs resume by step id).
+  // the current builder output (validated above). Enabled state is kept.
+  //
+  // Guard (Bugbot #870): runs resume BY STEP ID after a flow edit, and this
+  // update moves the intro send steps INSIDE a branch arm. A run parked on
+  // one of those ids (e.g. a quiet-hours deferral) would resume inside a
+  // branch it never evaluated and could skip the lead's intro entirely. So
+  // the update refuses while ANY non-terminal run exists for this flow;
+  // re-run once they drain (or cancel them from /dashboard/aiflows).
   if (existing && args.update) {
+    const ACTIVE_RUN_STATUSES = [
+      "queued",
+      "running",
+      "awaiting_reply",
+      "awaiting_agent",
+      "awaiting_approval"
+    ];
+    const { count: activeRuns, error: runsErr } = await db
+      .from("ai_flow_runs")
+      .select("id", { count: "exact", head: true })
+      .eq("flow_id", existing.id)
+      .in("status", ACTIVE_RUN_STATUSES);
+    if (runsErr) {
+      console.error(`Active-run check failed: ${runsErr.message}`);
+      process.exit(1);
+    }
+    if ((activeRuns ?? 0) > 0) {
+      console.error(
+        `Refusing to update: ${activeRuns} active run(s) exist for this flow ` +
+          `(statuses ${ACTIVE_RUN_STATUSES.join("/")}). A parked run resumes by step ` +
+          "id and the update moves the intro sends into a branch arm, so it could " +
+          "skip the lead's intro. Wait for them to finish (or cancel them from " +
+          "/dashboard/aiflows), then re-run."
+      );
+      process.exit(2);
+    }
     if (!args.apply) {
       console.log(
         `\n[dry-run] Would UPDATE flow "${name}" (id=${existing.id}, ` +
