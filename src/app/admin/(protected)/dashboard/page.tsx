@@ -40,7 +40,9 @@ export default async function AdminDashboardPage() {
   const [businesses, alerts, recentActivity, systemErrors, vpsInventory, enterpriseDeals, monthUsage, aiSpendMicros] =
     await Promise.all([
       listBusinesses(),
-      getRecentAlertsAll(10, undefined, { excludeBusinessIds: muted.alerts }),
+      // 15 rows, matching the activity card: both lists render inside the
+      // same fixed-height scroll region, so extra rows scroll in place.
+      getRecentAlertsAll(15, undefined, { excludeBusinessIds: muted.alerts }),
       // Fleet-wide activity across the REAL activity tables (calls, texts,
       // emails, AiFlow runs, new customers, completed coworker work) — not
       // just coworker_logs, which sits stale between provisions. Alerting
@@ -355,7 +357,12 @@ export default async function AdminDashboardPage() {
         )}
       </Card>
 
-      {/* ── Bottom row: alerts + recent activity ── */}
+      {/* ── Bottom row: alerts + recent activity ──
+          Both cards pin their list to the SAME fixed-height scroll region, so
+          the two components always end at the same edge regardless of how
+          tall each feed's rows render (alert rows wrap to two lines, activity
+          rows don't) — longer feeds scroll in place instead of stretching the
+          row, shorter ones can't leave one card with a stub of dead space. */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         {/* Alerts */}
         <Card>
@@ -380,19 +387,21 @@ export default async function AdminDashboardPage() {
               </Link>
             </div>
           </div>
-          {alerts.length === 0 ? (
-            <p className="text-sm text-parchment/40 text-center py-4">No alerts; all clear.</p>
-          ) : (
-            <ul className="divide-y divide-parchment/8">
-              {alerts.map((log) => (
-                <AdminAlertRow
-                  key={log.id}
-                  log={log}
-                  businessName={businessNames.get(log.business_id)}
-                />
-              ))}
-            </ul>
-          )}
+          <div className="h-[28rem] overflow-y-auto pr-1">
+            {alerts.length === 0 ? (
+              <p className="text-sm text-parchment/40 text-center py-4">No alerts; all clear.</p>
+            ) : (
+              <ul className="divide-y divide-parchment/8">
+                {alerts.map((log) => (
+                  <AdminAlertRow
+                    key={log.id}
+                    log={log}
+                    businessName={businessNames.get(log.business_id)}
+                  />
+                ))}
+              </ul>
+            )}
+          </div>
         </Card>
 
         {/* Recent activity */}
@@ -408,19 +417,21 @@ export default async function AdminDashboardPage() {
               {t("seeAll")}
             </Link>
           </div>
-          {recentActivity.length === 0 ? (
-            <p className="text-sm text-parchment/40 text-center py-4">No activity yet.</p>
-          ) : (
-            <ul className="divide-y divide-parchment/8">
-              {recentActivity.map((item) => (
-                <AdminActivityRow
-                  key={item.id}
-                  item={item}
-                  businessName={businessNames.get(item.businessId)}
-                />
-              ))}
-            </ul>
-          )}
+          <div className="h-[28rem] overflow-y-auto pr-1">
+            {recentActivity.length === 0 ? (
+              <p className="text-sm text-parchment/40 text-center py-4">No activity yet.</p>
+            ) : (
+              <ul className="divide-y divide-parchment/8">
+                {recentActivity.map((item) => (
+                  <AdminActivityRow
+                    key={item.id}
+                    item={item}
+                    businessName={businessNames.get(item.businessId)}
+                  />
+                ))}
+              </ul>
+            )}
+          </div>
         </Card>
       </div>
 
