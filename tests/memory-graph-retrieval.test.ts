@@ -115,21 +115,23 @@ describe("retrieveGraphContext", () => {
     expect(result.context).toContain("- HomeSmart escalation_target Amy Laidlaw");
   });
 
-  it("returns empty for no entities, no matches, and a zero-fitting budget", async () => {
+  it("returns empty for no entities and no matches", async () => {
     const none = await retrieveGraphContext(BIZ, "amy?", { ...deps([], []) });
     expect(none).toEqual({ context: "", matchedEntities: 0, facts: 0 });
 
     const noMatch = await retrieveGraphContext(BIZ, "zzz", { ...deps([entity()], [fact()]) });
     expect(noMatch).toEqual({ context: "", matchedEntities: 0, facts: 0 });
+  });
 
+  it("reports real match counts even when the budget fits nothing (no-match vs no-room)", async () => {
     const noFit = await retrieveGraphContext(BIZ, "amy?", {
       ...deps([entity()], [fact()]),
       charBudget: 3
     });
-    expect(noFit).toEqual({ context: "", matchedEntities: 0, facts: 0 });
+    expect(noFit).toEqual({ context: "", matchedEntities: 1, facts: 0 });
   });
 
-  it("packs within the budget, skipping lines that do not fit", async () => {
+  it("packs within the budget and reports only the RENDERED fact count", async () => {
     const facts = Array.from({ length: 30 }, (_, i) =>
       fact({
         id: `ffffffff-0000-4000-8000-${String(i).padStart(12, "0")}`,
@@ -142,8 +144,12 @@ describe("retrieveGraphContext", () => {
       charBudget: 500
     });
     expect(result.context.length).toBeLessThanOrEqual(500);
-    expect(result.facts).toBe(30);
-    expect(result.context.split("\n").length).toBeGreaterThan(1);
+    // 30 facts matched but only what fit was rendered — the count must say
+    // what the prompt actually carried.
+    expect(result.facts).toBeGreaterThan(0);
+    expect(result.facts).toBeLessThan(30);
+    const factLines = result.context.split("\n").filter((l) => /note_\d+/.test(l));
+    expect(factLines).toHaveLength(result.facts);
   });
 
   it("renders a bare identity line when the entity has no contact details or facts", async () => {

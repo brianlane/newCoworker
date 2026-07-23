@@ -3,6 +3,7 @@ import { systemInstructionForBusiness } from "../../vps/voice-bridge/src/system-
 import { buildVoiceToolDeclarations } from "../../vps/voice-bridge/src/tool-declarations";
 import { requireGeminiKey, transientBackoffMs } from "./gemini";
 import { judgeReply, type JudgeVerdict } from "./judge";
+import { recordRawUsage, type RawUsageMetadata } from "./usage-log";
 
 /**
  * Voice TOOL-CALLING against the live model — the grounded-booking layer
@@ -26,10 +27,11 @@ import { judgeReply, type JudgeVerdict } from "./judge";
  *
  * Temperature 0 for CI stability; the model is the text-generation sibling
  * of the fleet's conversational tier (the Live audio model itself has no
- * text-only mode).
+ * text-only mode) — gemini-3.5-flash-lite since the PR #809 fleet
+ * migration.
  */
 
-const VOICE_TOOLS_MODEL = "gemini-2.5-flash";
+const VOICE_TOOLS_MODEL = "gemini-3.5-flash-lite";
 
 /** The REAL bridge instruction: customer persona, tools on, no transfer. */
 const SYSTEM = systemInstructionForBusiness(
@@ -93,7 +95,18 @@ async function voiceStep(contents: Content[]): Promise<{
           systemInstruction: { parts: [{ text: SYSTEM }] },
           contents,
           tools: [{ functionDeclarations: DECLARATIONS }],
-          generationConfig: { temperature: 0, maxOutputTokens: 1500 }
+          generationConfig: {
+            temperature: 0,
+            maxOutputTokens: 1500,
+            // Gemini 3 thinking bills as output AND counts against the 1500
+            // cap — "low" keeps some reasoning for tool choice (the same
+            // posture as the production Messenger tool loop) without letting
+            // hidden thinking truncate the visible reply. Gated on the
+            // family: Gemini 2.5 rejects thinkingLevel.
+            ...(/^gemini-3/i.test(VOICE_TOOLS_MODEL)
+              ? { thinkingConfig: { thinkingLevel: "low" } }
+              : {})
+          }
         })
       });
       const transient = res.status === 429 || res.status >= 500;
@@ -104,11 +117,13 @@ async function voiceStep(contents: Content[]): Promise<{
       }
       const body = (await res.json()) as {
         candidates?: Array<{ content?: { parts?: Array<Record<string, unknown>> } }>;
+        usageMetadata?: RawUsageMetadata;
         error?: { message?: string };
       };
       if (!res.ok) {
         throw new Error(`gemini ${res.status}: ${body.error?.message ?? "unknown error"}`);
       }
+      recordRawUsage(VOICE_TOOLS_MODEL, body.usageMetadata);
       const parts = body.candidates?.[0]?.content?.parts ?? [];
       const text = parts
         .map((p) => (typeof p.text === "string" ? p.text : ""))
