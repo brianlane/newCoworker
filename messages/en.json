@@ -1739,7 +1739,12 @@
       "webchatTitle": "Web chat",
       "webchatSubtitle": "Visitor conversations from the chat widget on newcoworker.com",
       "tenantWebchatTitle": "Web chat conversations",
-      "tenantWebchatSubtitle": "Visitor sessions from the chat widget on this business's website"
+      "tenantWebchatSubtitle": "Visitor sessions from the chat widget on this business's website",
+      "alertsTitle": "Alerts",
+      "alertsSubtitle": "Every fleet alert, newest first — owner alerts and platform errors.",
+      "activityTitle": "Activity",
+      "activitySubtitle": "Fleet-wide activity across every tenant — calls, texts, emails, AiFlow runs, and new contacts.",
+      "seeAll": "See all →"
     }
   },
   "emails": {

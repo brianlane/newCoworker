@@ -12,33 +12,23 @@ import { getFleetCurrentAiSpendMicros } from "@/lib/db/chat-usage";
 import { computeDayCurrentMrr, estimateMonthlyPlatformCost } from "@/lib/admin/mrr";
 import { stampRefundExposureFromDb } from "@/lib/admin/mrr-exposure";
 import {
-  adminAlertSummary,
   formatAdminLabel,
-  formatAlertStatusLabel,
-  getLogBadgeVariant,
   getMonthLabel,
   getVpsInventoryBadgeVariant,
   summarizeAlertCounts
 } from "@/lib/admin/dashboard";
+import { AdminAlertRow, AdminActivityRow } from "@/components/admin/feed-rows";
+import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { StatusDot } from "@/components/ui/StatusDot";
+import { timeAgo } from "@/components/admin/feed-rows";
 
 export const dynamic = "force-dynamic";
 
 function formatMoney(cents: number): string {
   if (cents >= 100_000) return `$${(cents / 100_000).toFixed(1)}k`;
   return `$${(cents / 100).toFixed(0)}`;
-}
-
-function timeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
 }
 
 export default async function AdminDashboardPage() {
@@ -54,8 +44,10 @@ export default async function AdminDashboardPage() {
       // Fleet-wide activity across the REAL activity tables (calls, texts,
       // emails, AiFlow runs, new customers, completed coworker work) — not
       // just coworker_logs, which sits stale between provisions. Alerting
-      // rows stay in the Recent Alerts card.
-      getFleetRecentActivity(10, { excludeBusinessIds: muted.activity }),
+      // rows stay in the Recent Alerts card. 15 (vs the alerts card's 10)
+      // because activity rows are single-line — this keeps the two bottom
+      // columns visually balanced.
+      getFleetRecentActivity(15, { excludeBusinessIds: muted.activity }),
       listSystemLogErrorsAll(15, undefined, { excludeBusinessIds: muted.errors }),
       listVpsInventory(),
       listActiveEnterpriseDeals(),
@@ -380,6 +372,12 @@ export default async function AdminDashboardPage() {
               {alertCounts.last24h > 0 && (
                 <Badge variant="neutral">{alertCounts.last24h} in 24h</Badge>
               )}
+              <Link
+                href="/admin/alerts"
+                className="text-xs font-medium text-signal-teal hover:underline"
+              >
+                {t("seeAll")}
+              </Link>
             </div>
           </div>
           {alerts.length === 0 ? (
@@ -387,34 +385,11 @@ export default async function AdminDashboardPage() {
           ) : (
             <ul className="divide-y divide-parchment/8">
               {alerts.map((log) => (
-                <li key={log.id} className="py-2.5 space-y-1">
-                  <div className="flex items-start justify-between gap-3">
-                    <a
-                      href={`/admin/${log.business_id}`}
-                      className="text-xs text-parchment hover:text-signal-teal min-w-0"
-                    >
-                      {adminAlertSummary(log)}
-                    </a>
-                    <span className="text-xs text-parchment/30 shrink-0">
-                      {timeAgo(log.created_at)}
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <a
-                      href={`/admin/${log.business_id}`}
-                      className="text-xs text-parchment/50 hover:text-signal-teal truncate"
-                      title={log.business_id}
-                    >
-                      {businessNames.get(log.business_id) ?? `${log.business_id.slice(0, 8)}…`}
-                    </a>
-                    <Badge variant="neutral" className="text-[10px]">
-                      {formatAdminLabel(log.task_type)}
-                    </Badge>
-                    <Badge variant={getLogBadgeVariant(log.status)} className="text-[10px]">
-                      {formatAlertStatusLabel(log.status)}
-                    </Badge>
-                  </div>
-                </li>
+                <AdminAlertRow
+                  key={log.id}
+                  log={log}
+                  businessName={businessNames.get(log.business_id)}
+                />
               ))}
             </ul>
           )}
@@ -426,37 +401,23 @@ export default async function AdminDashboardPage() {
             <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider">
               Recent Activity
             </h2>
+            <Link
+              href="/admin/activity"
+              className="text-xs font-medium text-signal-teal hover:underline"
+            >
+              {t("seeAll")}
+            </Link>
           </div>
           {recentActivity.length === 0 ? (
             <p className="text-sm text-parchment/40 text-center py-4">No activity yet.</p>
           ) : (
             <ul className="divide-y divide-parchment/8">
               {recentActivity.map((item) => (
-                <li key={item.id} className="py-2.5 space-y-1">
-                  <div className="flex items-start justify-between gap-3">
-                    <a
-                      href={`/admin/${item.businessId}`}
-                      className="text-xs text-parchment hover:text-signal-teal min-w-0"
-                    >
-                      {item.label}
-                    </a>
-                    <span className="text-xs text-parchment/30 shrink-0">
-                      {timeAgo(item.at)}
-                    </span>
-                  </div>
-                  <div className="flex flex-wrap items-center gap-2">
-                    <a
-                      href={`/admin/${item.businessId}`}
-                      className="text-xs text-parchment/50 hover:text-signal-teal truncate"
-                      title={item.businessId}
-                    >
-                      {businessNames.get(item.businessId) ?? `${item.businessId.slice(0, 8)}…`}
-                    </a>
-                    <Badge variant={item.variant} className="text-[10px]">
-                      {item.badge}
-                    </Badge>
-                  </div>
-                </li>
+                <AdminActivityRow
+                  key={item.id}
+                  item={item}
+                  businessName={businessNames.get(item.businessId)}
+                />
               ))}
             </ul>
           )}
