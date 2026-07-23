@@ -1,7 +1,8 @@
 import { listBusinesses } from "@/lib/db/businesses";
 import { getTranslations } from "next-intl/server";
 import { listSubscriptionsByBusinessIds } from "@/lib/db/subscriptions";
-import { getRecentAlertsAll, getRecentLogsAll } from "@/lib/db/logs";
+import { getRecentAlertsAll } from "@/lib/db/logs";
+import { getFleetRecentActivity } from "@/lib/db/fleet-activity";
 import { listSystemLogErrorsAll } from "@/lib/db/system-logs";
 import { getAdminMutedBusinessIds } from "@/lib/db/admin-mutes";
 import { listVpsInventory } from "@/lib/db/vps-inventory";
@@ -46,20 +47,15 @@ export default async function AdminDashboardPage() {
   // the fleet-wide feeds below — fetched first so a muted tenant can't eat
   // the feed row limits.
   const muted = await getAdminMutedBusinessIds();
-  const [businesses, alerts, recentLogs, systemErrors, vpsInventory, enterpriseDeals, monthUsage, aiSpendMicros] =
+  const [businesses, alerts, recentActivity, systemErrors, vpsInventory, enterpriseDeals, monthUsage, aiSpendMicros] =
     await Promise.all([
       listBusinesses(),
       getRecentAlertsAll(10, undefined, { excludeBusinessIds: muted.alerts }),
-      // Alerting rows live in the Recent Alerts card; excluding them here
-      // keeps the two bottom cards complementary instead of duplicates.
-      // `thinking` is excluded too: provisioning writes a progress row per
-      // phase tick, so one onboarding otherwise floods the card with stale
-      // "thinking" scaffolding — only completed events count as activity
-      // (the provisioning success row still shows the deploy finished).
-      getRecentLogsAll(8, undefined, {
-        excludeBusinessIds: muted.activity,
-        excludeStatuses: ["urgent_alert", "error", "thinking"]
-      }),
+      // Fleet-wide activity across the REAL activity tables (calls, texts,
+      // emails, AiFlow runs, new customers, completed coworker work) — not
+      // just coworker_logs, which sits stale between provisions. Alerting
+      // rows stay in the Recent Alerts card.
+      getFleetRecentActivity(10, { excludeBusinessIds: muted.activity }),
       listSystemLogErrorsAll(15, undefined, { excludeBusinessIds: muted.errors }),
       listVpsInventory(),
       listActiveEnterpriseDeals(),
@@ -431,32 +427,34 @@ export default async function AdminDashboardPage() {
               Recent Activity
             </h2>
           </div>
-          {recentLogs.length === 0 ? (
+          {recentActivity.length === 0 ? (
             <p className="text-sm text-parchment/40 text-center py-4">No activity yet.</p>
           ) : (
             <ul className="divide-y divide-parchment/8">
-              {recentLogs.map((log) => (
-                <li key={log.id} className="py-2.5 flex items-start justify-between gap-3">
-                  <div className="min-w-0">
+              {recentActivity.map((item) => (
+                <li key={item.id} className="py-2.5 space-y-1">
+                  <div className="flex items-start justify-between gap-3">
                     <a
-                      href={`/admin/${log.business_id}`}
-                      className="text-xs text-parchment capitalize hover:text-signal-teal truncate block"
+                      href={`/admin/${item.businessId}`}
+                      className="text-xs text-parchment hover:text-signal-teal min-w-0"
                     >
-                      {formatAdminLabel(log.task_type)}
+                      {item.label}
                     </a>
-                    <a
-                      href={`/admin/${log.business_id}`}
-                      className="text-xs text-parchment/40 hover:text-signal-teal truncate block"
-                      title={log.business_id}
-                    >
-                      {businessNames.get(log.business_id) ?? `${log.business_id.slice(0, 8)}…`}
-                    </a>
+                    <span className="text-xs text-parchment/30 shrink-0">
+                      {timeAgo(item.at)}
+                    </span>
                   </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <Badge variant={getLogBadgeVariant(log.status)}>
-                      {formatAdminLabel(log.status)}
+                  <div className="flex flex-wrap items-center gap-2">
+                    <a
+                      href={`/admin/${item.businessId}`}
+                      className="text-xs text-parchment/50 hover:text-signal-teal truncate"
+                      title={item.businessId}
+                    >
+                      {businessNames.get(item.businessId) ?? `${item.businessId.slice(0, 8)}…`}
+                    </a>
+                    <Badge variant={item.variant} className="text-[10px]">
+                      {item.badge}
                     </Badge>
-                    <span className="text-xs text-parchment/30">{timeAgo(log.created_at)}</span>
                   </div>
                 </li>
               ))}

@@ -136,6 +136,11 @@ describe("adminAlertSummary", () => {
     expect(adminAlertSummary(log("provisioning", "thinking", {}))).toBe(
       "Provisioning update"
     );
+    expect(
+      adminAlertSummary(
+        log("provisioning", "success", { phase: "finalize", message: "Deploy complete" })
+      )
+    ).toBe("Provisioning completed at finalize: Deploy complete");
   });
 
   it("uses the first useful payload string for generic rows", () => {
