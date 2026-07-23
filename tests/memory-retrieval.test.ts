@@ -135,7 +135,7 @@ describe("selectMemoryForQuestion", () => {
     expect(sel.context).not.toContain("Sundays");
   });
 
-  it("returns empty for zero budget, empty memory, and a fallback that fits nothing", () => {
+  it("returns empty for zero budget and empty memory", () => {
     expect(selectMemoryForQuestion(active, archive, "hours?", 0)).toEqual({
       context: "",
       selected: 0,
@@ -148,11 +148,31 @@ describe("selectMemoryForQuestion", () => {
       fromArchive: 0,
       fallback: false
     });
-    // A single giant bullet line (no headings): one unsplittable block.
-    const giantOnly = `- x${"y".repeat(2_500)}`;
-    const none = selectMemoryForQuestion(giantOnly, "", "zzz", 100);
-    expect(none.context).toBe("");
-    expect(none.fallback).toBe(true);
+  });
+
+  it("tail-slices the newest active memory when no whole block fits", () => {
+    // A single giant bullet line (no headings): one unsplittable block that
+    // matches the question but exceeds the budget.
+    const giant = `- important hours detail ${"y".repeat(2_500)}TAIL-END`;
+    const sel = selectMemoryForQuestion(giant, "", "hours?", 100);
+    expect(sel.fallback).toBe(true);
+    expect(sel.selected).toBe(1);
+    expect(sel.context.endsWith("TAIL-END")).toBe(true);
+    expect(sel.context.length).toBeLessThanOrEqual(100);
+  });
+
+  it("returns empty when only the ARCHIVE holds an oversized match and active is empty", () => {
+    const giantArchive = `- archived hours wall ${"y".repeat(2_500)}`;
+    const sel = selectMemoryForQuestion("", giantArchive, "hours?", 100);
+    expect(sel.context).toBe("");
+    expect(sel.fallback).toBe(false);
+  });
+
+  it("includes a lone block that exactly fills the budget (no phantom joiner cost)", () => {
+    const only = section("2026-07-01", ["hours: 9-5 weekdays"]);
+    const sel = selectMemoryForQuestion(only, "", "what are your hours?", only.length);
+    expect(sel.selected).toBe(1);
+    expect(sel.context).toBe(only);
   });
 
   it("uses the default budget constant when none is passed", () => {
