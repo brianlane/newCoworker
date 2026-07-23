@@ -16,11 +16,13 @@ import {
 const EM = "\u2014";
 
 describe("stripEmDashesFromCopy", () => {
-  it("replaces interior separators with commas per the README policy", () => {
+  it("replaces interior separators with commas regardless of spacing (Bugbot #865)", () => {
     expect(stripEmDashesFromCopy(`kept for you ${EM} not offered`)).toBe(
       "kept for you, not offered"
     );
     expect(stripEmDashesFromCopy(`a${EM}b`)).toBe("a, b");
+    expect(stripEmDashesFromCopy(`word ${EM}next`)).toBe("word, next");
+    expect(stripEmDashesFromCopy(`word${EM} next`)).toBe("word, next");
   });
 
   it("never strands a comma at a line edge (Bugbot #865)", () => {
@@ -99,15 +101,24 @@ describe("patchCopyFields", () => {
     expect(patchCopyFields(def)).toHaveLength(0);
   });
 
-  it("copy-key set covers the send/offer/notify templates", () => {
+  it("copy-key set covers every prose field in the step schema", () => {
     for (const key of [
       "body",
+      "bodyTemplate",
       "message",
+      "messageTemplate",
       "subject",
       "offerTemplate",
       "ownerFallbackTemplate",
       "claimedNotifyTemplate",
-      "ownerDirectTemplate"
+      "ownerDirectTemplate",
+      // approval_gate's owner-facing prompt + share_document's send body
+      // + voice persona/context prose (Bugbot #865 round 2).
+      "prompt",
+      "personaTemplate",
+      "contextTemplate",
+      "preSmsTemplate",
+      "titleTemplate"
     ]) {
       expect(COPY_KEYS.has(key)).toBe(true);
     }

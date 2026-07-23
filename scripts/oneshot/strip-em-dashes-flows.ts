@@ -62,7 +62,9 @@ const EM_DASH = "\u2014";
  */
 export const COPY_KEYS = new Set([
   "body",
+  "bodyTemplate",
   "message",
+  "messageTemplate",
   "subject",
   "emailSubject",
   "offerTemplate",
@@ -70,6 +72,11 @@ export const COPY_KEYS = new Set([
   "claimedNotifyTemplate",
   "ownerDirectTemplate",
   "promptTemplate",
+  "personaTemplate",
+  "contextTemplate",
+  "preSmsTemplate",
+  "titleTemplate",
+  "prompt",
   "question",
   "label",
   "description",
@@ -94,11 +101,9 @@ export function stripEmDashesFromCopy(value: string): string {
         .replace(new RegExp(`^(\\s*)${EM_DASH}\\s*`), "$1- ")
         // Trailing dash carries no content: drop it.
         .replace(new RegExp(`\\s*${EM_DASH}\\s*$`), "")
-        // Interior separators become commas.
-        .replace(new RegExp(` ${EM_DASH} `, "g"), ", ")
-        .replace(new RegExp(`${EM_DASH} `, "g"), ", ")
-        .replace(new RegExp(` ${EM_DASH}`, "g"), ",")
-        .replace(new RegExp(EM_DASH, "g"), ", ")
+        // Interior separators become ", " regardless of surrounding
+        // spacing ("a — b", "a —b", "a— b", "a—b" all read "a, b").
+        .replace(new RegExp(`\\s*${EM_DASH}\\s*`, "g"), ", ")
     )
     .join("\n");
 }
