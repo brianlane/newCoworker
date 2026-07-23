@@ -84,8 +84,40 @@ describe("loadVaultForPrompt", () => {
     const big = "x".repeat(10_000);
     const dir = await vault({ "memory.md": big });
     const snap = await loadVaultForPrompt({ vaultPath: dir, maxPerFileChars: 500 });
-    expect(snap.memory.length).toBeLessThanOrEqual(500 + 50);
+    expect(snap.memory.length).toBeLessThanOrEqual(500 + 60);
     expect(snap.memory).toMatch(/truncated for prompt size/);
+  });
+
+  it("memory keeps its TAIL on truncation (newest rules append last)", async () => {
+    const memory = `- oldest rule\n${"x".repeat(2_000)}\n- NEWEST RULE`;
+    const dir = await vault({ "memory.md": memory });
+    const snap = await loadVaultForPrompt({ vaultPath: dir, maxPerFileChars: 500 });
+    expect(snap.memory).toContain("- NEWEST RULE");
+    expect(snap.memory).not.toContain("- oldest rule");
+    expect(snap.memory.startsWith("[... older content truncated")).toBe(true);
+  });
+
+  it("soul keeps its HEAD on truncation (operating rules lead)", async () => {
+    const soul = `- LEAD RULE\n${"y".repeat(2_000)}\n- trailing note`;
+    const dir = await vault({ "soul.md": soul });
+    const snap = await loadVaultForPrompt({ vaultPath: dir, maxPerFileChars: 500 });
+    expect(snap.soul).toContain("- LEAD RULE");
+    expect(snap.soul).not.toContain("- trailing note");
+    expect(snap.soul.endsWith("[... truncated for prompt size ...]")).toBe(true);
+  });
+
+  it("the global cap also keeps memory's tail when shrinking it", async () => {
+    const memory = `${"m".repeat(3_000)}\n- NEWEST RULE`;
+    const dir = await vault({
+      "soul.md": "a".repeat(3_000),
+      "memory.md": memory
+    });
+    const snap = await loadVaultForPrompt({
+      vaultPath: dir,
+      maxPerFileChars: 4_000,
+      maxTotalChars: 4_000
+    });
+    expect(snap.memory).toContain("- NEWEST RULE");
   });
 
   it("applies a global size cap across all files", async () => {

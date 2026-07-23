@@ -1460,6 +1460,8 @@
       "marketingSubtitle": "Campañas de correo a tus contactos — cada envío lo revisas y programas tú, y cada correo lleva una baja de un clic.",
       "memoryTitle": "Memoria del coworker",
       "memorySubtitle": "Revisa y administra lo que tu coworker de IA sabe de tu negocio",
+      "memoryArchiveSummary": "Memoria archivada ({chars} caracteres)",
+      "memoryArchiveHint": "Las entradas más antiguas se mueven aquí automáticamente cuando la memoria activa se llena. Nada se borra — tu coworker aún puede consultarlas al responder preguntas.",
       "documentsTitle": "Documentos",
       "documentsSubtitle": "Listas de precios, pólizas, contratos, minutas de reuniones y procedimientos de los que responde tu coworker — organizados por categoría",
       "smsThreadTitle": "Hilo de SMS",
