@@ -121,7 +121,7 @@ export function buildBrandedEmailHtml(input: BrandedEmailHtmlInput): string {
       ? `<tr><td style="padding:0 40px 24px;">
   <p style="margin:0;font-size:12px;line-height:1.5;color:#5a7186;">Don't want these emails? <a href="${escapeAttr(
     input.unsubscribeUrl
-  )}" style="color:#2EC4B6;text-decoration:underline;">Unsubscribe</a> with one click.</p>
+  )}" style="color:#2EC4B6;text-decoration:underline;">Unsubscribe</a></p>
 </td></tr>`
       : "";
 
@@ -140,7 +140,7 @@ export function buildBrandedEmailHtml(input: BrandedEmailHtmlInput): string {
       <td style="vertical-align:middle;border-left:2px solid #2EC4B6;padding:2px 0 2px 16px;font-size:13px;line-height:1.55;color:#F5F0E8;">
         <span style="font-weight:700;">The New Coworker Team</span><br>
         <span style="font-style:italic;color:#8a9bb0;">Brian Lane, Founder</span><br>
-        Call: <a href="tel:+16023131823" style="color:#F5F0E8;text-decoration:none;">602.313.1823</a> <span style="color:#8a9bb0;">(our AI coworker answers)</span><br>
+        Call: <a href="tel:+16023131823" style="color:#F5F0E8;text-decoration:none;">602.313.1823</a><br>
         Web: <a href="https://www.newcoworker.com" target="_blank" style="color:#2EC4B6;text-decoration:underline;">newcoworker.com</a>
       </td>
     </tr>
