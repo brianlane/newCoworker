@@ -7,7 +7,7 @@ import {
   type DocumentAudienceView
 } from "@/lib/documents/core";
 import { MEMORY_CONTEXT_MAX_CHARS, selectMemoryForQuestion } from "@/lib/memory/retrieval";
-import { retrieveGraphContext } from "@/lib/memory/graph-retrieval";
+import { GRAPH_CONTEXT_MAX_CHARS, retrieveGraphContext } from "@/lib/memory/graph-retrieval";
 import {
   GeminiEmptyError,
   geminiGenerateTextDetailed,
@@ -176,18 +176,7 @@ export async function lookupBusinessKnowledge(
     })
   ]);
 
-  // Memory knowledge graph (per-tenant rollout via memory_graph_mode):
-  //   shadow — compute + log the graph context; the live answer path stays
-  //            byte-identical (the comparison feeds the Amy-first rollout).
-  //   active — the graph context REPLACES the ranked-markdown memory
-  //            section; ranked memory remains the fallback when the graph
-  //            has nothing relevant to this question/caller.
-  // retrieveGraphContext never throws — a graph failure degrades to "".
   const graphMode = config?.memory_graph_mode ?? "off";
-  const graphRetrieval =
-    graphMode === "shadow" || graphMode === "active"
-      ? await retrieveGraphContext(businessId, question, { callerE164: options.callerE164 })
-      : { context: "", matchedEntities: 0, facts: 0 };
 
   const parts: string[] = [];
   if (business?.name) parts.push(`Business name: ${business.name}`);
@@ -198,12 +187,40 @@ export async function lookupBusinessKnowledge(
   if (config?.soul_md) parts.push(`# soul.md\n${config.soul_md}`);
   if (config?.website_md) parts.push(`# website.md\n${config.website_md}`);
 
+  // Memory knowledge graph (per-tenant rollout via memory_graph_mode):
+  //   shadow — compute + log the graph context; the live answer path stays
+  //            byte-identical (the comparison feeds the Amy-first rollout).
+  //   active — the graph context SUPPLEMENTS the ranked-markdown memory
+  //            section (entity/relationship facts alongside the owner's
+  //            saved notes — the graph's identity lines alone must never
+  //            crowd out the note that actually answers the question).
+  // Both graph and memory sections are budgeted against the remaining
+  // prompt space (header + joiner reserved) so neither can push the
+  // assembled context past the cap and silently truncate documents.
+  // retrieveGraphContext never throws — a graph failure degrades to "".
+  const graphHeader = "# memory graph (facts most relevant to the question)\n";
+  let graphRetrieval = { context: "", matchedEntities: 0, facts: 0 };
+  if (graphMode === "shadow" || graphMode === "active") {
+    const graphBudget = Math.max(
+      0,
+      Math.min(
+        GRAPH_CONTEXT_MAX_CHARS,
+        PROMPT_MAX_CONTEXT_CHARS - parts.join("\n\n").length - (graphHeader.length + 2)
+      )
+    );
+    graphRetrieval = await retrieveGraphContext(businessId, question, {
+      callerE164: options.callerE164,
+      charBudget: graphBudget
+    });
+  }
+  if (graphMode === "active" && graphRetrieval.context.length > 0) {
+    parts.push(`${graphHeader}${graphRetrieval.context}`);
+  }
+
   // Ranked memory retrieval (same treatment documents get): score active +
   // archived memory sections against the question and pack only the most
   // relevant into a bounded share of the prompt. Archived facts — evicted
-  // from the active 14KB window — stay answerable here. The budget reserves
-  // room for the section header + joiner so the memory section can never
-  // push the assembled context past the prompt cap.
+  // from the active 14KB window — stay answerable here.
   const memoryHeader = "# memory.md (saved notes most relevant to the question)\n";
   const memoryBudget = Math.max(
     0,
@@ -218,10 +235,7 @@ export async function lookupBusinessKnowledge(
     question,
     memoryBudget
   );
-  const useGraphContext = graphMode === "active" && graphRetrieval.context.length > 0;
-  if (useGraphContext) {
-    parts.push(`# memory graph (facts most relevant to the question)\n${graphRetrieval.context}`);
-  } else if (memorySelection.context) {
+  if (memorySelection.context) {
     parts.push(`${memoryHeader}${memorySelection.context}`);
   }
 

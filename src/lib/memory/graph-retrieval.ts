@@ -59,11 +59,14 @@ export function matchGraphEntities(
 }
 
 export type GraphRetrieval = {
-  /** Rendered fact lines — "" when nothing matched. */
+  /** Rendered fact lines — "" when nothing matched (or nothing fit). */
   context: string;
-  /** Matched (seed) entities. */
+  /**
+   * Matched (seed) entities — real match count even when the budget fit
+   * nothing, so shadow telemetry can tell "no match" from "no room".
+   */
   matchedEntities: number;
-  /** Facts rendered into the context. */
+  /** Fact lines actually RENDERED into the context (not the neighborhood size). */
   facts: number;
 };
 
@@ -124,12 +127,12 @@ export async function retrieveGraphContext(
       if (f.object_entity_id) mentioned.add(f.object_entity_id);
     }
 
-    const lines: string[] = [];
+    const lines: Array<{ text: string; isFact: boolean }> = [];
     for (const id of mentioned) {
       const entity = byId.get(id);
       /* c8 ignore next -- FK integrity guarantees mentioned ids exist */
       if (!entity) continue;
-      lines.push(entityLine(entity));
+      lines.push({ text: entityLine(entity), isFact: false });
     }
     for (const f of neighborhood) {
       const subject = byId.get(f.subject_entity_id);
@@ -139,27 +142,33 @@ export async function retrieveGraphContext(
         const object = byId.get(f.object_entity_id);
         /* c8 ignore next -- FK integrity guarantees the object exists */
         if (!object) continue;
-        lines.push(`- ${subject.canonical_name} ${f.predicate} ${object.canonical_name}`);
+        lines.push({
+          text: `- ${subject.canonical_name} ${f.predicate} ${object.canonical_name}`,
+          isFact: true
+        });
       } else {
-        lines.push(`- ${subject.canonical_name} ${f.predicate}: ${f.object_value ?? ""}`);
+        lines.push({
+          text: `- ${subject.canonical_name} ${f.predicate}: ${f.object_value ?? ""}`,
+          isFact: true
+        });
       }
     }
 
     // Pack lines in order (identity first, then facts) into the budget.
-    const kept: string[] = [];
+    const kept: Array<{ text: string; isFact: boolean }> = [];
     let remaining = charBudget;
     for (const line of lines) {
-      const cost = line.length + (kept.length === 0 ? 0 : 1); // "\n" joiner
+      const cost = line.text.length + (kept.length === 0 ? 0 : 1); // "\n" joiner
       if (cost > remaining) continue;
       kept.push(line);
       remaining -= cost;
     }
-    if (kept.length === 0) return empty;
-
+    // Even when nothing fits, report the real match counts so shadow
+    // telemetry can tell "no match" from "matched but no room".
     return {
-      context: kept.join("\n"),
+      context: kept.map((l) => l.text).join("\n"),
       matchedEntities: matched.length,
-      facts: neighborhood.length
+      facts: kept.filter((l) => l.isFact).length
     };
   } catch (err) {
     logger.warn("memory-graph retrieval failed; degrading to no graph context", {

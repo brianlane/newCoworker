@@ -326,7 +326,15 @@ async function main(): Promise<void> {
   let chatTurnsReplayed = 0;
   if (REPLAY_CHAT) {
     // Owner turns, oldest first, through the same capture classifier the
-    // live paths run — only rules it deems durable reach the graph.
+    // live paths run — matching production as closely as a replay can:
+    // the CAPTURE model env (MEMORY_CAPTURE_MODEL, not the graph model),
+    // the following assistant reply as reference-resolution context, and
+    // existing memory bullets as the anti-duplication hint. One honest
+    // divergence remains: existingBullets reflects memory as of TODAY, not
+    // as of each historical turn (the per-turn state is unrecoverable).
+    const captureModel =
+      (process.env.MEMORY_CAPTURE_MODEL ?? "").trim() || "gemini-3.5-flash-lite";
+    const existingBullets = extractExistingBullets(memoryMd);
     const { data: threads } = await db
       .from("dashboard_chat_threads")
       .select("id")
@@ -335,19 +343,32 @@ async function main(): Promise<void> {
     if (threadIds.length > 0) {
       const { data: messages } = await db
         .from("dashboard_chat_messages")
-        .select("content, created_at, thread_id")
+        .select("content, created_at, thread_id, role")
         .in("thread_id", threadIds)
-        .eq("role", "user")
         .order("created_at", { ascending: true })
-        .limit(MAX_TURNS);
-      for (const message of messages ?? []) {
-        const ownerMessage = String(message.content ?? "").trim();
+        .limit(MAX_TURNS * 4);
+      const rows = (messages ?? []) as Array<{
+        content: string;
+        thread_id: string;
+        role: string;
+      }>;
+      for (let i = 0; i < rows.length && chatTurnsReplayed < MAX_TURNS; i += 1) {
+        if (rows[i].role !== "user") continue;
+        const ownerMessage = String(rows[i].content ?? "").trim();
         if (!ownerMessage) continue;
+        // The assistant reply to THIS turn: the next assistant row in the
+        // same thread (exactly what the live capture is handed).
+        const reply = rows
+          .slice(i + 1)
+          .find((r) => r.thread_id === rows[i].thread_id && r.role === "assistant");
         const { text } = await geminiGenerateTextDetailed({
           apiKey,
-          model,
+          model: captureModel,
           systemInstruction: OWNER_MEMORY_SYSTEM_PROMPT,
-          userText: composeExtractionInput(ownerMessage, {}),
+          userText: composeExtractionInput(ownerMessage, {
+            assistantReply: reply ? String(reply.content ?? "") : undefined,
+            existingBullets
+          }),
           temperature: 0,
           maxOutputTokens: 1000,
           responseMimeType: "application/json"

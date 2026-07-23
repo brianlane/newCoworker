@@ -17,7 +17,8 @@ vi.mock("@/lib/gemini-generate-content", async (importOriginal) => ({
   geminiGenerateTextDetailed: vi.fn()
 }));
 vi.mock("@/lib/billing/ai-spend-meter", () => ({ meterGeminiSpendForBusiness: vi.fn() }));
-vi.mock("@/lib/memory/graph-retrieval", () => ({
+vi.mock("@/lib/memory/graph-retrieval", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/lib/memory/graph-retrieval")>()),
   retrieveGraphContext: vi.fn()
 }));
 
@@ -182,7 +183,8 @@ describe("lookupBusinessKnowledge", () => {
     });
     expect(result.ok).toBe(true);
     expect(retrieveGraphContext).toHaveBeenCalledWith(BIZ, "are you open sundays?", {
-      callerE164: "+16025551234"
+      callerE164: "+16025551234",
+      charBudget: expect.any(Number)
     });
     const call = gemini.mock.calls[0][0];
     // Live answer path is byte-identical: ranked memory in, graph out.
@@ -191,12 +193,12 @@ describe("lookupBusinessKnowledge", () => {
     expect(call.userText).not.toContain("# memory graph");
   });
 
-  it("active mode: the graph context replaces the ranked memory section", async () => {
+  it("active mode: the graph context SUPPLEMENTS the ranked memory section (both ride the prompt)", async () => {
     vi.mocked(getBusinessConfig).mockResolvedValue({
       identity_md: "identity",
       soul_md: "soul",
       website_md: "website",
-      memory_md: "---\n\n### Owner chat (2026-07-01)\n\n- We are closed on Sundays",
+      memory_md: "---\n\n### Owner chat (2026-07-01)\n\n- Amy's number policy: text before calling",
       memory_graph_mode: "active"
     } as never);
     vi.mocked(retrieveGraphContext).mockResolvedValue({
@@ -209,10 +211,13 @@ describe("lookupBusinessKnowledge", () => {
     const call = gemini.mock.calls[0][0];
     expect(call.userText).toContain("# memory graph (facts most relevant to the question)");
     expect(call.userText).toContain("602-695-1142");
-    expect(call.userText).not.toContain("# memory.md");
+    // The graph never crowds out the owner's saved note that answers the
+    // question — both sections ride the prompt (Bugbot High on #847).
+    expect(call.userText).toContain("# memory.md (saved notes most relevant to the question)");
+    expect(call.userText).toContain("text before calling");
   });
 
-  it("active mode falls back to ranked memory when the graph has nothing", async () => {
+  it("active mode still carries ranked memory when the graph has nothing", async () => {
     vi.mocked(getBusinessConfig).mockResolvedValue({
       identity_md: "identity",
       soul_md: "soul",
