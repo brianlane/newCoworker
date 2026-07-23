@@ -20,6 +20,7 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { customerE164FromPayload } from "@/lib/db/sms-history";
 import { adminAlertSummary } from "@/lib/admin/dashboard";
+import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -108,6 +109,14 @@ export type FleetActivityInput = {
   flows: FleetFlowRow[];
   customers: FleetCustomerRow[];
   logs: FleetLogRow[];
+  /**
+   * businessId → (E.164 → known contact name), from the shared
+   * {@link resolveContactNames} resolver — nested because the fleet feed
+   * spans tenants and the same number can name different people in
+   * different businesses. Numbers absent from the map fall back to the raw
+   * E.164. Defaults to empty when callers omit it.
+   */
+  contactNames?: Map<string, Map<string, ContactName>>;
   limit: number;
 };
 
@@ -123,13 +132,19 @@ function flowName(join: FleetFlowRow["ai_flows"]): string {
  */
 export function buildFleetActivityFeed(input: FleetActivityInput): FleetActivityItem[] {
   const items: FleetActivityItem[] = [];
+  // Show a known contact's name instead of the raw E.164 wherever the
+  // caller resolved one (same convention as the owner feed's `named`).
+  const named = (businessId: string, e164: string): string =>
+    input.contactNames?.get(businessId)?.get(e164)?.name ?? e164;
 
   input.calls.forEach((c, i) => {
     items.push({
       id: `call:${i}:${c.started_at}`,
       badge: "Call",
       variant: "online",
-      label: `Call: ${c.caller_e164 ?? "unknown caller"} (${c.status})`,
+      label: `Call: ${
+        c.caller_e164 ? named(c.business_id, c.caller_e164) : "unknown caller"
+      } (${c.status})`,
       businessId: c.business_id,
       at: c.started_at
     });
@@ -142,7 +157,7 @@ export function buildFleetActivityFeed(input: FleetActivityInput): FleetActivity
       id: `sms_in:${i}:${r.created_at}`,
       badge: "Text in",
       variant: "pending",
-      label: `Text from ${cp}`,
+      label: `Text from ${named(r.business_id, cp)}`,
       businessId: r.business_id,
       at: r.created_at
     });
@@ -155,7 +170,7 @@ export function buildFleetActivityFeed(input: FleetActivityInput): FleetActivity
       id: `sms_reply:${i}:${r.updated_at}`,
       badge: "Text out",
       variant: "neutral",
-      label: `Text to ${cp}`,
+      label: `Text to ${named(r.business_id, cp)}`,
       businessId: r.business_id,
       at: r.updated_at
     });
@@ -167,7 +182,7 @@ export function buildFleetActivityFeed(input: FleetActivityInput): FleetActivity
       id: `sms_out:${i}:${r.created_at}`,
       badge: "Text out",
       variant: "neutral",
-      label: `Text to ${r.to_e164}`,
+      label: `Text to ${named(r.business_id, r.to_e164)}`,
       businessId: r.business_id,
       at: r.created_at
     });
@@ -199,9 +214,11 @@ export function buildFleetActivityFeed(input: FleetActivityInput): FleetActivity
   });
 
   input.customers.forEach((r, i) => {
-    const who = r.display_name?.trim()
-      ? `${r.display_name.trim()} (${r.customer_e164})`
-      : r.customer_e164;
+    // Prefer a resolver name (owner/employee/override) over the row's own
+    // display_name — same precedence as the owner feed.
+    const resolved = input.contactNames?.get(r.business_id)?.get(r.customer_e164)?.name;
+    const name = resolved ?? r.display_name?.trim();
+    const who = name ? `${name} (${r.customer_e164})` : r.customer_e164;
     items.push({
       id: `customer:${i}:${r.created_at}`,
       badge: "New contact",
@@ -356,15 +373,51 @@ export async function getFleetRecentActivity(
         .limit(limit)
     ]);
 
+  const calls = rowsOf<FleetCallRow>(callsRes);
+  const smsInbound = rowsOf<FleetSmsInboundRow>(smsInRes);
+  const smsReplies = rowsOf<FleetSmsReplyRow>(smsReplyRes);
+  const smsOutbound = rowsOf<FleetSmsOutboundRow>(smsOutRes);
+  const customers = rowsOf<FleetCustomerRow>(custRes);
+
+  // Resolve every phone number the feed will show to a known contact name
+  // (owner/employee/customer/override) via the shared resolver, per business
+  // — "Text to Jane Doe" instead of a bare +1602… number. One resolver call
+  // per distinct tenant in the window (bounded by the per-source row caps).
+  // A resolver failure degrades that tenant to raw numbers, never blanks
+  // the feed.
+  const numbersByBusiness = new Map<string, Set<string>>();
+  const want = (businessId: string, e164: string | null): void => {
+    if (!e164) return;
+    const set = numbersByBusiness.get(businessId) ?? new Set<string>();
+    set.add(e164);
+    numbersByBusiness.set(businessId, set);
+  };
+  for (const c of calls) want(c.business_id, c.caller_e164);
+  for (const r of smsInbound) want(r.business_id, customerE164FromPayload(r.payload));
+  for (const r of smsReplies) want(r.business_id, customerE164FromPayload(r.payload));
+  for (const r of smsOutbound) want(r.business_id, r.to_e164);
+  for (const r of customers) want(r.business_id, r.customer_e164);
+
+  const contactNames = new Map<string, Map<string, ContactName>>();
+  await Promise.all(
+    [...numbersByBusiness.entries()].map(async ([businessId, nums]) => {
+      const names = await resolveContactNames(businessId, [...nums], db).catch(
+        () => new Map<string, ContactName>()
+      );
+      contactNames.set(businessId, names);
+    })
+  );
+
   return buildFleetActivityFeed({
-    calls: rowsOf<FleetCallRow>(callsRes),
-    smsInbound: rowsOf<FleetSmsInboundRow>(smsInRes),
-    smsReplies: rowsOf<FleetSmsReplyRow>(smsReplyRes),
-    smsOutbound: rowsOf<FleetSmsOutboundRow>(smsOutRes),
+    calls,
+    smsInbound,
+    smsReplies,
+    smsOutbound,
     emails: rowsOf<FleetEmailRow>(emailRes),
     flows: rowsOf<FleetFlowRow>(flowsRes),
-    customers: rowsOf<FleetCustomerRow>(custRes),
+    customers,
     logs: rowsOf<FleetLogRow>(logsRes),
+    contactNames,
     limit
   });
 }
