@@ -40,6 +40,12 @@ export function AdminFeedFilters({
   businessId: string | undefined;
   /** Current look-back in days; undefined = the feed's full window. */
   days: number | undefined;
+  /**
+   * The feed's hard look-back cap, when it has one (the activity feed always
+   * bounds to its fleet window; alerts are unbounded). Renders the empty
+   * time option as "Last N days (all)" instead of a misleading "All".
+   */
+  windowDays?: number;
 }) {
   const t = useTranslations("admin.feedFilters");
   const router = useRouter();
@@ -125,6 +131,12 @@ export function AdminFeedFilters({
                 {b.name}
               </option>
             ))}
+            {/* A URL-carried id outside the fleet list still renders selected
+                — the query is scoped to it (showing nothing), and the select
+                must say so instead of pretending "All businesses". */}
+            {businessId !== undefined && !businesses.some((b) => b.id === businessId) && (
+              <option value={businessId}>{t("unknownBusiness")}</option>
+            )}
           </select>
         </div>
 
@@ -147,9 +159,15 @@ export function AdminFeedFilters({
               </option>
             ))}
             {extraDays !== null && (
-              <option value={extraDays}>{t("lastDays", { days: extraDays })}</option>
+              <option value={extraDays}>
+                {t("lastDays", {
+                  days: windowDays ? Math.min(extraDays, windowDays) : extraDays
+                })}
+              </option>
             )}
-            <option value="">{t("allTime")}</option>
+            <option value="">
+              {windowDays ? t("lastDaysAll", { days: windowDays }) : t("allTime")}
+            </option>
           </select>
         </div>
       </div>

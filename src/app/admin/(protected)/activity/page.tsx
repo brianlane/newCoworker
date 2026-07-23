@@ -1,6 +1,7 @@
 import { getTranslations } from "next-intl/server";
 import { listBusinesses } from "@/lib/db/businesses";
 import {
+  FLEET_ACTIVITY_WINDOW_DAYS,
   getFleetRecentActivity,
   parseFleetActivityKindsParam
 } from "@/lib/db/fleet-activity";
@@ -33,15 +34,17 @@ export default async function AdminActivityPage(props: {
   const t = await getTranslations("admin.pages");
   const params = (await props.searchParams) ?? {};
   const kinds = parseFleetActivityKindsParam(params.types);
-  const days = parseActivityDaysParam(params.days);
+  // Clamp BEFORE display, not just in the query: the time select must state
+  // what the list actually shows (the feed hard-caps at the fleet window).
+  const rawDays = parseActivityDaysParam(params.days);
+  const days = rawDays ? Math.min(rawDays, FLEET_ACTIVITY_WINDOW_DAYS) : undefined;
 
   const muted = await getAdminMutedBusinessIds();
   const businesses = await listBusinesses();
-  // Only a real fleet business id reaches the query — a crafted param that
-  // matches nothing simply shows the empty state.
-  const businessId = businesses.some((b) => b.id === params.business)
-    ? params.business
-    : undefined;
+  // An unknown business id still SCOPES the query (an honest empty list, and
+  // the select shows "Unknown business") rather than silently widening a
+  // shared link back to the whole fleet.
+  const businessId = params.business || undefined;
 
   const items = await getFleetRecentActivity(ACTIVITY_PAGE_LIMIT, {
     excludeBusinessIds: muted.activity,
@@ -65,6 +68,7 @@ export default async function AdminActivityPage(props: {
         businesses={businesses.map((b) => ({ id: b.id, name: b.name }))}
         businessId={businessId}
         days={days}
+        windowDays={FLEET_ACTIVITY_WINDOW_DAYS}
       />
 
       <Card>

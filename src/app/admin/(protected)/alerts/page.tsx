@@ -35,11 +35,10 @@ export default async function AdminAlertsPage(props: {
 
   const muted = await getAdminMutedBusinessIds();
   const businesses = await listBusinesses();
-  // Only a real fleet business id reaches the query — a crafted param that
-  // matches nothing simply shows the empty state.
-  const businessId = businesses.some((b) => b.id === params.business)
-    ? params.business
-    : undefined;
+  // An unknown business id still SCOPES the query (an honest empty list, and
+  // the select shows "Unknown business") rather than silently widening a
+  // shared link back to the whole fleet.
+  const businessId = params.business || undefined;
 
   const alerts = await getRecentAlertsAll(ALERTS_PAGE_LIMIT, undefined, {
     excludeBusinessIds: muted.alerts,

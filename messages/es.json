@@ -1755,7 +1755,9 @@
       "time": "Tiempo",
       "today": "Hoy",
       "lastDays": "Últimos {days} días",
-      "allTime": "Todo"
+      "lastDaysAll": "Últimos {days} días (todo)",
+      "allTime": "Todo",
+      "unknownBusiness": "Negocio desconocido"
     }
   },
   "emails": {
