@@ -26,6 +26,7 @@ import {
 } from "./graph-extract";
 import { applyGraphExtraction, type GraphWriteResult } from "./graph-write";
 import { getMemoryGraphMode, listMemoryEntities } from "./graph-db";
+import { kgSourceTrust } from "./kg-sources";
 
 // Same tier as owner-rule capture: extracted structure becomes durable
 // knowledge the coworker acts on for months, so quality beats pennies on
@@ -127,7 +128,14 @@ export async function ingestBulletsIntoGraph(
     const extraction = parseGraphExtraction(text, cleaned.length);
     if (extraction.entities.length === 0) return { ran: true, result: undefined };
 
-    const result = await apply(businessId, extraction, cleaned);
+    // kg-source: owner_chat — owner-stated rules from the capture chokepoint
+    // (dashboard chat + owner SMS both funnel through it). Trust tier from
+    // the registry; owner statements carry no attribution.
+    const result = await apply(businessId, extraction, cleaned, {}, {
+      source: "owner_chat",
+      trust: kgSourceTrust("owner_chat"),
+      attributedTo: null
+    });
     logger.info("memory-graph ingest: applied", { businessId, ...result });
     return { ran: true, result };
   } catch (err) {

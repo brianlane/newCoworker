@@ -19,6 +19,12 @@ export type MemoryEntityRow = {
   phones: string[];
   emails: string[];
   customer_e164: string | null;
+  /** Content surface that created the node (kg-sources registry key). */
+  source: string;
+  /** Highest trust tier seen for this node (0-3; see kg-sources.ts). */
+  trust: number;
+  /** Who introduced it (caller E.164, email, platform id); null = owner-canonical. */
+  attributed_to: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -34,6 +40,12 @@ export type MemoryFactRow = {
   stated_at: string;
   active: boolean;
   superseded_by: string | null;
+  /** Content surface that stated it (kg-sources registry key). */
+  source: string;
+  /** Trust tier of the statement (0-3; see kg-sources.ts). */
+  trust: number;
+  /** Who stated it; null = owner-canonical. */
+  attributed_to: string | null;
   created_at: string;
 };
 
@@ -59,6 +71,9 @@ export async function insertMemoryEntity(
     phones: string[];
     emails: string[];
     customer_e164?: string | null;
+    source?: string;
+    trust?: number;
+    attributed_to?: string | null;
   },
   client?: SupabaseClient
 ): Promise<MemoryEntityRow> {
@@ -70,7 +85,13 @@ export async function insertMemoryEntity(
 
 export async function updateMemoryEntity(
   id: string,
-  patch: { aliases?: string[]; phones?: string[]; emails?: string[]; customer_e164?: string | null },
+  patch: {
+    aliases?: string[];
+    phones?: string[];
+    emails?: string[];
+    customer_e164?: string | null;
+    trust?: number;
+  },
   client?: SupabaseClient
 ): Promise<void> {
   const db = client ?? (await createSupabaseServiceClient());
@@ -123,6 +144,9 @@ export async function insertMemoryFact(
     object_entity_id?: string | null;
     object_value?: string | null;
     source_text: string;
+    source?: string;
+    trust?: number;
+    attributed_to?: string | null;
   },
   client?: SupabaseClient
 ): Promise<MemoryFactRow> {

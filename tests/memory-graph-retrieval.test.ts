@@ -24,6 +24,9 @@ function entity(overrides: Partial<MemoryEntityRow> = {}): MemoryEntityRow {
     phones: ["602-695-1142"],
     emails: ["amy@example.com"],
     customer_e164: null,
+    source: "owner_chat",
+    trust: 3,
+    attributed_to: null,
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",
     ...overrides
@@ -42,6 +45,9 @@ function fact(overrides: Partial<MemoryFactRow> = {}): MemoryFactRow {
     stated_at: "2026-07-01T00:00:00Z",
     active: true,
     superseded_by: null,
+    source: "owner_chat",
+    trust: 3,
+    attributed_to: null,
     created_at: "2026-07-01T00:00:00Z",
     ...overrides
   };
@@ -169,6 +175,42 @@ describe("retrieveGraphContext", () => {
     const result = await retrieveGraphContext(BIZ, "amy?", { ...deps([bare], []) });
     expect(result.context).toBe("- Amy Laidlaw (person)");
     expect(result.facts).toBe(0);
+  });
+
+  it("renders trust ≤ 1 facts as attributed unverified claims, packed after higher-trust facts", async () => {
+    const ownerFact = fact({ id: "ffffffff-0000-4000-8000-000000000011", predicate: "phone" });
+    const claim = fact({
+      id: "ffffffff-0000-4000-8000-000000000012",
+      predicate: "roof_status",
+      object_value: "replaced in 2019",
+      trust: 1,
+      attributed_to: "+14805551234"
+    });
+    const anonClaim = fact({
+      id: "ffffffff-0000-4000-8000-000000000013",
+      predicate: "budget",
+      object_value: "about 500k",
+      trust: 0,
+      attributed_to: null,
+      source: "webchat"
+    });
+    const result = await retrieveGraphContext(BIZ, "amy?", {
+      ...deps([entity()], [claim, ownerFact, anonClaim])
+    });
+    // Owner fact reads plain; claims carry attribution + (unverified).
+    expect(result.context).toContain("- Amy Laidlaw phone: 602-695-1142");
+    expect(result.context).not.toContain("phone: 602-695-1142 — claimed");
+    expect(result.context).toContain(
+      "- Amy Laidlaw roof_status: replaced in 2019 — claimed by +14805551234 (unverified)"
+    );
+    // No attributed_to → the source stands in.
+    expect(result.context).toContain(
+      "- Amy Laidlaw budget: about 500k — claimed by webchat (unverified)"
+    );
+    // Higher trust packs first even though the claim was listed first.
+    expect(result.context.indexOf("phone: 602-695-1142")).toBeLessThan(
+      result.context.indexOf("roof_status")
+    );
   });
 
   it("renders an empty literal object as an empty value (null object_value)", async () => {

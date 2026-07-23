@@ -28,6 +28,9 @@ function entityRow(overrides: Partial<MemoryEntityRow> = {}): MemoryEntityRow {
     phones: ["602-695-1142"],
     emails: ["amy@example.com"],
     customer_e164: null,
+    source: "owner_chat",
+    trust: 3,
+    attributed_to: null,
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",
     ...overrides
@@ -46,6 +49,9 @@ function factRow(overrides: Partial<MemoryFactRow> = {}): MemoryFactRow {
     stated_at: "2026-07-01T00:00:00Z",
     active: true,
     superseded_by: null,
+    source: "owner_chat",
+    trust: 3,
+    attributed_to: null,
     created_at: "2026-07-01T00:00:00Z",
     ...overrides
   };
@@ -488,6 +494,144 @@ describe("applyGraphExtraction", () => {
     );
     expect(result.factsInserted).toBe(0);
     expect(deps.insertFactSpy).not.toHaveBeenCalled();
+  });
+
+  it("stamps provenance on created entities and facts (defaults to owner)", async () => {
+    const deps = makeDeps();
+    await applyGraphExtraction(
+      BIZ,
+      {
+        entities: [{ ref: "e1", kind: "person", name: "Visitor", aliases: [], phones: [], emails: [] }],
+        facts: [{ subjectRef: "e1", predicate: "note", objectValue: "v", sourceIndex: 0 }]
+      },
+      ["bullet"],
+      deps,
+      { source: "webchat", trust: 0, attributedTo: "visitor-123" }
+    );
+    expect(deps.insertEntitySpy.mock.calls[0][0]).toMatchObject({
+      source: "webchat",
+      trust: 0,
+      attributed_to: "visitor-123"
+    });
+    expect(deps.insertFactSpy.mock.calls[0][0]).toMatchObject({
+      source: "webchat",
+      trust: 0,
+      attributed_to: "visitor-123"
+    });
+
+    // Default provenance is owner-canonical.
+    const ownerDeps = makeDeps();
+    await applyGraphExtraction(
+      BIZ,
+      {
+        entities: [{ ref: "e1", kind: "person", name: "Solo", aliases: [], phones: [], emails: [] }],
+        facts: []
+      },
+      ["bullet"],
+      ownerDeps
+    );
+    expect(ownerDeps.insertEntitySpy.mock.calls[0][0]).toMatchObject({
+      source: "owner_chat",
+      trust: 3,
+      attributed_to: null
+    });
+  });
+
+  it("supersedence respects trust: a lower-trust fact never retires a higher-trust one", async () => {
+    const index = [entityRow()];
+    const ownerFact = factRow({
+      id: "ffffffff-0000-4000-8000-00000000000a",
+      subject_entity_id: index[0].id,
+      object_value: "owner-stated number",
+      trust: 3
+    });
+    const customerClaim = factRow({
+      id: "ffffffff-0000-4000-8000-00000000000b",
+      subject_entity_id: index[0].id,
+      object_value: "old customer claim",
+      trust: 1
+    });
+    const deps = makeDeps(index, [ownerFact, customerClaim]);
+    const result = await applyGraphExtraction(
+      BIZ,
+      {
+        entities: [{ ref: "e1", kind: "person", name: "Amy", aliases: [], phones: [], emails: [] }],
+        facts: [{ subjectRef: "e1", predicate: "phone", objectValue: "new customer claim", sourceIndex: 0 }]
+      },
+      ["caller said the number changed"],
+      deps,
+      { source: "voice_call", trust: 1, attributedTo: "+14805551234" }
+    );
+    expect(result.factsInserted).toBe(1);
+    // Only the SAME-OR-LOWER trust fact retired; the owner's stays active.
+    expect(result.factsSuperseded).toBe(1);
+    const newFactId = (await deps.insertFactSpy.mock.results[0].value).id;
+    expect(deps.supersedeFacts).toHaveBeenCalledWith([customerClaim.id], newFactId);
+  });
+
+  it("a higher-trust fact retires lower-trust claims (owner corrects hearsay)", async () => {
+    const index = [entityRow()];
+    const claim = factRow({
+      id: "ffffffff-0000-4000-8000-00000000000c",
+      subject_entity_id: index[0].id,
+      object_value: "hearsay value",
+      trust: 0
+    });
+    const deps = makeDeps(index, [claim]);
+    const result = await applyGraphExtraction(
+      BIZ,
+      {
+        entities: [{ ref: "e1", kind: "person", name: "Amy", aliases: [], phones: [], emails: [] }],
+        facts: [{ subjectRef: "e1", predicate: "phone", objectValue: "owner value", sourceIndex: 0 }]
+      },
+      ["bullet"],
+      deps
+    );
+    expect(result.factsSuperseded).toBe(1);
+    expect(deps.supersedeFacts).toHaveBeenCalledWith([claim.id], expect.any(String));
+  });
+
+  it("trust ≤ 1 sources never merge contact points onto canonical entities (trust bump only)", async () => {
+    const row = entityRow({ trust: 1 });
+    const lowTrustPatch = mergePatch(
+      {
+        ref: "e1",
+        kind: "person",
+        name: "Amy",
+        aliases: ["Ames"],
+        phones: ["480-111-2222"],
+        emails: ["new@example.com"]
+      },
+      row,
+      1
+    );
+    // No aliases/phones/emails merge at trust 1 — claims live as facts.
+    expect(lowTrustPatch).toEqual({});
+
+    // A higher-trust touch bumps the recorded trust (and may merge).
+    const bumped = mergePatch(
+      { ref: "e1", kind: "person", name: "Amy", aliases: [], phones: [], emails: [] },
+      row,
+      3
+    );
+    expect(bumped).toEqual({ trust: 3 });
+  });
+
+  it("bumps a low-trust entity's recorded trust when a higher-trust source touches it", async () => {
+    const row = entityRow({ trust: 0, source: "webchat" });
+    const deps = makeDeps([row]);
+    const result = await applyGraphExtraction(
+      BIZ,
+      {
+        entities: [{ ref: "e1", kind: "person", name: "Amy Laidlaw", aliases: [], phones: [], emails: [] }],
+        facts: []
+      },
+      ["bullet"],
+      deps
+    );
+    expect(result.entitiesMerged).toBe(1);
+    expect(deps.updateEntity).toHaveBeenCalledWith(row.id, { trust: 3 });
+    expect(row.trust).toBe(3); // in-memory index reflects the bump
   });
 
   it("falls back to empty source text when the source index is out of range", async () => {

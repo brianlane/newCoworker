@@ -96,6 +96,9 @@ export async function maybeBuildGraphDb({ memoryDir = DEFAULT_MEMORY_DIR, log = 
           aliases text not null default '[]',
           phones text not null default '[]',
           emails text not null default '[]',
+          source text,
+          trust integer,
+          attributed_to text,
           updated_at text
         );
         create table facts (
@@ -105,16 +108,19 @@ export async function maybeBuildGraphDb({ memoryDir = DEFAULT_MEMORY_DIR, log = 
           object_id text,
           object_value text,
           source_text text,
+          source text,
+          trust integer,
+          attributed_to text,
           stated_at text
         );
         create index idx_facts_subject on facts (subject_id);
         create index idx_facts_object on facts (object_id);
       `);
       const insertEntity = db.prepare(
-        "insert or replace into entities (id, kind, name, aliases, phones, emails, updated_at) values (?, ?, ?, ?, ?, ?, ?)"
+        "insert or replace into entities (id, kind, name, aliases, phones, emails, source, trust, attributed_to, updated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
       );
       const insertFact = db.prepare(
-        "insert or replace into facts (id, subject_id, predicate, object_id, object_value, source_text, stated_at) values (?, ?, ?, ?, ?, ?, ?)"
+        "insert or replace into facts (id, subject_id, predicate, object_id, object_value, source_text, source, trust, attributed_to, stated_at) values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
       );
       for (const line of lines) {
         let row;
@@ -131,6 +137,9 @@ export async function maybeBuildGraphDb({ memoryDir = DEFAULT_MEMORY_DIR, log = 
             JSON.stringify(row.aliases ?? []),
             JSON.stringify(row.phones ?? []),
             JSON.stringify(row.emails ?? []),
+            row.source ? String(row.source) : null,
+            typeof row.trust === "number" ? row.trust : null,
+            row.attributed_to ? String(row.attributed_to) : null,
             row.updated_at ? String(row.updated_at) : null
           );
           entities += 1;
@@ -144,6 +153,9 @@ export async function maybeBuildGraphDb({ memoryDir = DEFAULT_MEMORY_DIR, log = 
               ? null
               : String(row.object_value),
             row.source_text ? String(row.source_text) : null,
+            row.source ? String(row.source) : null,
+            typeof row.trust === "number" ? row.trust : null,
+            row.attributed_to ? String(row.attributed_to) : null,
             row.stated_at ? String(row.stated_at) : null
           );
           facts += 1;

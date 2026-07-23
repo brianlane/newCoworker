@@ -76,6 +76,9 @@ class LocalGraphStore {
         phones text not null default '[]',
         emails text not null default '[]',
         customer_e164 text,
+        source text not null default 'owner_chat',
+        trust integer not null default 3,
+        attributed_to text,
         created_at text not null,
         updated_at text not null
       );
@@ -90,6 +93,9 @@ class LocalGraphStore {
         stated_at text not null,
         active integer not null default 1,
         superseded_by text,
+        source text not null default 'owner_chat',
+        trust integer not null default 3,
+        attributed_to text,
         created_at text not null
       );
     `);
@@ -113,6 +119,9 @@ class LocalGraphStore {
       phones: JSON.parse(String(r.phones)) as string[],
       emails: JSON.parse(String(r.emails)) as string[],
       customer_e164: r.customer_e164 === null ? null : String(r.customer_e164),
+      source: String(r.source),
+      trust: Number(r.trust),
+      attributed_to: r.attributed_to === null ? null : String(r.attributed_to),
       created_at: String(r.created_at),
       updated_at: String(r.updated_at)
     }));
@@ -125,13 +134,19 @@ class LocalGraphStore {
     aliases: string[];
     phones: string[];
     emails: string[];
+    source?: string;
+    trust?: number;
+    attributed_to?: string | null;
   }) => {
     const id = this.mintId("e");
     const now = new Date().toISOString();
+    const source = entity.source ?? "owner_chat";
+    const trust = entity.trust ?? 3;
+    const attributedTo = entity.attributed_to ?? null;
     this.db
       .prepare(
-        `insert into memory_entities (id, business_id, kind, canonical_name, aliases, phones, emails, created_at, updated_at)
-         values (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+        `insert into memory_entities (id, business_id, kind, canonical_name, aliases, phones, emails, source, trust, attributed_to, created_at, updated_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
       )
       .run(
         id,
@@ -141,6 +156,9 @@ class LocalGraphStore {
         JSON.stringify(entity.aliases),
         JSON.stringify(entity.phones),
         JSON.stringify(entity.emails),
+        source,
+        trust,
+        attributedTo,
         now,
         now
       );
@@ -153,6 +171,9 @@ class LocalGraphStore {
       phones: entity.phones,
       emails: entity.emails,
       customer_e164: null,
+      source,
+      trust,
+      attributed_to: attributedTo,
       created_at: now,
       updated_at: now
     };
@@ -160,8 +181,11 @@ class LocalGraphStore {
 
   updateEntity = async (
     id: string,
-    patch: { aliases?: string[]; phones?: string[]; emails?: string[] }
+    patch: { aliases?: string[]; phones?: string[]; emails?: string[]; trust?: number }
   ) => {
+    if (patch.trust !== undefined) {
+      this.db.prepare("update memory_entities set trust = ? where id = ?").run(patch.trust, id);
+    }
     if (patch.aliases) {
       this.db
         .prepare("update memory_entities set aliases = ? where id = ?")
@@ -191,6 +215,9 @@ class LocalGraphStore {
       stated_at: String(r.stated_at),
       active: Number(r.active) === 1,
       superseded_by: r.superseded_by === null ? null : String(r.superseded_by),
+      source: String(r.source),
+      trust: Number(r.trust),
+      attributed_to: r.attributed_to === null ? null : String(r.attributed_to),
       created_at: String(r.created_at)
     };
   }
@@ -218,13 +245,16 @@ class LocalGraphStore {
     object_entity_id?: string | null;
     object_value?: string | null;
     source_text: string;
+    source?: string;
+    trust?: number;
+    attributed_to?: string | null;
   }) => {
     const id = this.mintId("f");
     const now = new Date().toISOString();
     this.db
       .prepare(
-        `insert into memory_facts (id, business_id, subject_entity_id, predicate, object_entity_id, object_value, source_text, stated_at, active, superseded_by, created_at)
-         values (?, ?, ?, ?, ?, ?, ?, ?, 1, null, ?)`
+        `insert into memory_facts (id, business_id, subject_entity_id, predicate, object_entity_id, object_value, source_text, source, trust, attributed_to, stated_at, active, superseded_by, created_at)
+         values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 1, null, ?)`
       )
       .run(
         id,
@@ -234,6 +264,9 @@ class LocalGraphStore {
         fact.object_entity_id ?? null,
         fact.object_value ?? null,
         fact.source_text,
+        fact.source ?? "owner_chat",
+        fact.trust ?? 3,
+        fact.attributed_to ?? null,
         now,
         now
       );

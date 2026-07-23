@@ -128,6 +128,9 @@ const GRAPH_ENTITY = {
   phones: ["602-695-1142"],
   emails: [],
   customer_e164: null,
+  source: "owner_chat",
+  trust: 3,
+  attributed_to: null,
   created_at: "2026-07-01T00:00:00Z",
   updated_at: "2026-07-20T00:00:00Z"
 };
@@ -143,6 +146,9 @@ const GRAPH_FACT = {
   stated_at: "2026-07-10T00:00:00Z",
   active: true,
   superseded_by: null,
+  source: "owner_chat",
+  trust: 3,
+  attributed_to: null,
   created_at: "2026-07-10T00:00:00Z"
 };
 

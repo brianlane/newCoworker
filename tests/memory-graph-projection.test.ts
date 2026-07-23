@@ -33,6 +33,9 @@ function entity(overrides: Partial<MemoryEntityRow> = {}): MemoryEntityRow {
     phones: ["602-695-1142"],
     emails: ["amy@example.com"],
     customer_e164: null,
+    source: "owner_chat",
+    trust: 3,
+    attributed_to: null,
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-20T00:00:00Z",
     ...overrides
@@ -60,6 +63,9 @@ function fact(overrides: Partial<MemoryFactRow> = {}): MemoryFactRow {
     stated_at: "2026-07-10T00:00:00Z",
     active: true,
     superseded_by: null,
+    source: "owner_chat",
+    trust: 3,
+    attributed_to: null,
     created_at: "2026-07-10T00:00:00Z",
     ...overrides
   };
@@ -109,6 +115,30 @@ describe("renderEntityNote", () => {
     expect(orgNote).not.toContain("## Key facts");
     // No contact frontmatter lines when the entity has none.
     expect(orgNote).not.toContain("aliases:");
+  });
+
+  it("marks trust ≤ 1 facts as unverified claims in the notes (attribution or source)", () => {
+    const byId = new Map([[entity().id, entity()]]);
+    const claim = fact({
+      predicate: "roof_status",
+      object_value: "replaced 2019",
+      trust: 1,
+      attributed_to: "+14805551234"
+    });
+    const anon = fact({
+      id: "ffffffff-0000-4000-8000-000000000009",
+      predicate: "budget",
+      object_value: "500k",
+      trust: 0,
+      attributed_to: null,
+      source: "webchat"
+    });
+    const note = renderEntityNote(entity(), [claim, anon], byId);
+    expect(note).toContain(
+      "- roof_status: replaced 2019 *(claimed by +14805551234 2026-07-10, unverified)*"
+    );
+    expect(note).toContain("- budget: 500k *(claimed by webchat 2026-07-10, unverified)*");
+    expect(note).not.toContain("*(stated 2026-07-10)*");
   });
 
   it("renders an unresolvable edge target as the raw id and null literals as empty", () => {

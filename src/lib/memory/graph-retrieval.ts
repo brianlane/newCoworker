@@ -133,13 +133,21 @@ export async function retrieveGraphContext(
       if (f.object_entity_id) mentioned.add(f.object_entity_id);
     }
 
-    const lines: Array<{ text: string; isFact: boolean }> = [];
+    // TRUST-AWARE RENDERING: owner/employee facts (trust ≥ 2) read as plain
+    // statements; customer/anonymous facts (trust ≤ 1) are explicit CLAIMS
+    // with their attribution, so the answering model always knows gospel
+    // from hearsay. Facts pack higher-trust-first when the budget is tight.
+    const claimSuffix = (f: { trust: number; attributed_to: string | null; source: string }) =>
+      f.trust <= 1 ? ` — claimed by ${f.attributed_to ?? f.source} (unverified)` : "";
+
+    const lines: Array<{ text: string; isFact: boolean; trust: number }> = [];
     for (const id of mentioned) {
       const entity = byId.get(id);
       /* c8 ignore next -- FK integrity guarantees mentioned ids exist */
       if (!entity) continue;
-      lines.push({ text: entityLine(entity), isFact: false });
+      lines.push({ text: entityLine(entity), isFact: false, trust: entity.trust });
     }
+    const factLines: Array<{ text: string; isFact: boolean; trust: number }> = [];
     for (const f of neighborhood) {
       const subject = byId.get(f.subject_entity_id);
       /* c8 ignore next -- FK integrity guarantees the subject exists */
@@ -148,17 +156,21 @@ export async function retrieveGraphContext(
         const object = byId.get(f.object_entity_id);
         /* c8 ignore next -- FK integrity guarantees the object exists */
         if (!object) continue;
-        lines.push({
-          text: `- ${subject.canonical_name} ${f.predicate} ${object.canonical_name}`,
-          isFact: true
+        factLines.push({
+          text: `- ${subject.canonical_name} ${f.predicate} ${object.canonical_name}${claimSuffix(f)}`,
+          isFact: true,
+          trust: f.trust
         });
       } else {
-        lines.push({
-          text: `- ${subject.canonical_name} ${f.predicate}: ${f.object_value ?? ""}`,
-          isFact: true
+        factLines.push({
+          text: `- ${subject.canonical_name} ${f.predicate}: ${f.object_value ?? ""}${claimSuffix(f)}`,
+          isFact: true,
+          trust: f.trust
         });
       }
     }
+    factLines.sort((a, b) => b.trust - a.trust);
+    lines.push(...factLines);
 
     // Pack lines in order (identity first, then facts) into the budget.
     const kept: Array<{ text: string; isFact: boolean }> = [];
