@@ -49,9 +49,14 @@ import {
   variablesPaletteGroups,
   type VariablePaletteEntry
 } from "@/lib/ai-flows/variables-palette";
-import { documentReceiptTemplate, reviewRequestTemplate } from "@/lib/ai-flows/templates";
+import {
+  documentReceiptTemplate,
+  newLeadIntakeTemplate,
+  reviewRequestTemplate
+} from "@/lib/ai-flows/templates";
 import { ReviewRequestCard } from "@/components/dashboard/ReviewRequestCard";
 import { DocumentReceiptCard } from "@/components/dashboard/DocumentReceiptCard";
+import { NewLeadIntakeCard } from "@/components/dashboard/NewLeadIntakeCard";
 import {
   ContactRefPicker,
   type PickerPerson,
@@ -132,6 +137,8 @@ const EDITOR_MODE_STORAGE_KEY = "aiflow-editor-mode";
 const REVIEW_STARTER_NAME = reviewRequestTemplate("https://example.invalid").name;
 /** The document-receipt starter's flow name. */
 const DOC_RECEIPT_STARTER_NAME = documentReceiptTemplate().name;
+/** The New Lead Intake starter's flow name. */
+const NEW_LEAD_INTAKE_STARTER_NAME = newLeadIntakeTemplate().name;
 /** Inbound voice flows route a live caller; outbound flows place one call. */
 const INBOUND_VOICE_STEP_TYPES = VOICE_STEP_TYPES.filter((t) => t !== "outbound_call");
 const OUTBOUND_VOICE_STEP_TYPES = ["outbound_call"] as const;
@@ -2703,6 +2710,23 @@ export function AiFlowsManager({
         businessId={businessId}
         installedFlow={(() => {
           const row = flows.find((f) => f.name === DOC_RECEIPT_STARTER_NAME);
+          return row ? { id: row.id, enabled: row.enabled } : null;
+        })()}
+        onInstalled={reload}
+        onEdit={(flowId) => {
+          const row = flows.find((f) => f.id === flowId);
+          if (!row) return;
+          setAiWarnings([]);
+          const opened = editorFromRow(row);
+          setEditor(opened);
+          setEditorBaseline(JSON.stringify(opened));
+        }}
+      />
+      {/* New Lead Intake starter installer, same live-list wiring. */}
+      <NewLeadIntakeCard
+        businessId={businessId}
+        installedFlow={(() => {
+          const row = flows.find((f) => f.name === NEW_LEAD_INTAKE_STARTER_NAME);
           return row ? { id: row.id, enabled: row.enabled } : null;
         })()}
         onInstalled={reload}

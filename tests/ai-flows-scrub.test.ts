@@ -56,7 +56,11 @@ const piiDefinition = {
   version: 1 as const,
   trigger: { channel: "email" as const, connectionId: "11111111-1111-1111-1111-111111111111", conditions: [] },
   steps: [
-    { id: "s1", type: "extract_text" as const, fields: [{ name: "lead_phone" }] },
+    {
+      id: "s1",
+      type: "extract_text" as const,
+      fields: [{ name: "lead_phone" }, { name: "assigned_agent" }]
+    },
     {
       id: "s2",
       type: "send_sms" as const,
@@ -94,7 +98,9 @@ const piiDefinition = {
       type: "route_to_team" as const,
       offerTemplate: "claim {{offer.deadline}}",
       ownerFallbackTemplate: "back to you",
-      agentName: "Amy"
+      agentName: "Amy",
+      // Structural dynamic pin (a var NAME, not a person): must survive.
+      agentNameVar: "assigned_agent"
     },
     {
       id: "s5",
@@ -158,6 +164,9 @@ describe("scrubDefinition", () => {
     expect(steps[4].to).toBe("{{vars.lead_phone}}");
     expect(steps[5].fromConnectionId).toBeUndefined();
     expect(steps[6].agentName).toBeUndefined();
+    // The DYNAMIC pin is structure (a var name), not tenant PII: it survives
+    // scrubbing so a duplicated library flow keeps its named-teammate routing.
+    expect(steps[6].agentNameVar).toBe("assigned_agent");
   });
 
   it("drops http_call endpoint path and bodyTemplate (tenant secrets) and blanks the label", () => {

@@ -1518,6 +1518,16 @@ describe("planStep: route_to_team", () => {
       false
     );
   });
+  it("carries the dynamic pin (agentNameVar) through when set, omits it otherwise", () => {
+    const r = planStep({ ...base, agentNameVar: "assigned_agent" }, {});
+    expect(r.ok && r.action.kind === "route_to_team" && r.action.agentNameVar).toBe(
+      "assigned_agent"
+    );
+    const without = planStep({ ...base }, {});
+    expect(
+      without.ok && without.action.kind === "route_to_team" && "agentNameVar" in without.action
+    ).toBe(false);
+  });
   it("carries firstToClaim only as an explicit opt-out (undefined/true mean ON)", () => {
     const off = planStep({ ...base, firstToClaim: false }, {});
     expect(off.ok && off.action.kind === "route_to_team" && off.action.firstToClaim).toBe(false);
