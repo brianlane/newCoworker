@@ -447,6 +447,12 @@ jobs:
   # "skipped" check, which the merge policy treats as blocking). The
   # nightly full run (e2e-nightly.yml) catches live-model drift that no
   # diff triggers.
+  #
+  # Admin cost toggle (Admin → Gemini → "CI live e2e"): when the stored
+  # mode is "nightly-only", the scope script skips the paid calls on EVERY
+  # per-change run — the nightly cron becomes the only live coverage and
+  # emails the admin on failure. Read live from
+  # /api/public/ci-e2e-mode with fail-open to per-change.
   e2e:
     name: E2E (live AI + AiFlows)
     runs-on: ubuntu-latest

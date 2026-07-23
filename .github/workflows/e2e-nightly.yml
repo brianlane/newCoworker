@@ -11,6 +11,11 @@ name: E2E Nightly
 #
 # Not part of any merge gate: a red nightly is an investigate-now signal
 # (model drift or a flaky contract), not a blocked PR.
+#
+# When the Admin → Gemini "CI live e2e" toggle is set to nightly-only,
+# this run is the ONLY live-AI coverage, so a failure emails the admin
+# (team@newcoworker.com via Resend — the RESEND_API_KEY repo secret).
+# Success stays silent by design.
 
 on:
   schedule:
@@ -45,7 +50,13 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: Run full live e2e suite
+      # One built-in re-run before the job goes red: a single live-model
+      # wobble (temperature-0 draws still vary run to run) must not page the
+      # admin at 2:30am. A REAL regression fails both passes — the email
+      # only fires when the failure reproduces back-to-back. Doubles the
+      # paid calls only on failing nights, which is exactly when the spend
+      # is worth it.
+      - name: Run full live e2e suite (one retry before alerting)
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
         run: |
@@ -53,8 +64,36 @@ jobs:
             echo "::error::GOOGLE_API_KEY secret is not available to this run — the e2e suite cannot call Gemini."
             exit 1
           fi
+          if npm run test:e2e; then exit 0; fi
+          echo "::warning::First pass failed — re-running once to separate a model wobble from real drift."
           npm run test:e2e
 
       - name: Report Gemini token usage
         if: always()
         run: bash .github/scripts/e2e-usage-summary.sh
+
+      # Failure-only admin notification: with the per-change suite toggled
+      # off, nobody is watching PR checks for AI regressions — this email is
+      # the alerting path. A missing secret degrades to a loud log line (the
+      # job is already red; never mask WHY it is red with a notify error).
+      - name: Email the admin on failure
+        if: failure()
+        env:
+          RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          if [ -z "$RESEND_API_KEY" ]; then
+            echo "::warning::RESEND_API_KEY secret is not set — cannot email the admin about this failure. Set it (gh secret set RESEND_API_KEY) or watch the Actions tab."
+            exit 0
+          fi
+          BODY=$(jq -n --arg url "$RUN_URL" '{
+            from: "New Coworker <contact@newcoworker.com>",
+            to: ["team@newcoworker.com"],
+            subject: "Nightly live e2e FAILED — AI behavior may have drifted",
+            text: ("The nightly full live-AI e2e suite failed.\n\nRun: " + $url + "\n\nThis suite is the daily live-model drift check (and, when the admin CI e2e toggle is nightly-only, the ONLY live coverage). Read the failed job log — the failing test names the contract that broke. If it is a one-off model wobble, re-run the workflow; if it repeats, treat it as a live regression.\n\n— CI (e2e-nightly.yml)")
+          }')
+          curl -fsS https://api.resend.com/emails \
+            -H "Authorization: Bearer $RESEND_API_KEY" \
+            -H "Content-Type: application/json" \
+            -d "$BODY" > /dev/null && echo "Failure email sent to team@newcoworker.com" || \
+            echo "::warning::Failure email could not be sent (Resend API error) — check the Actions tab."
