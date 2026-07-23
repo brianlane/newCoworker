@@ -96,6 +96,15 @@ describe("splitMemorySections", () => {
     expect(sections).toEqual(["## Hours\n- closed Sundays", "## Team\n- Amy"]);
   });
 
+  it("keeps a document-LEADING --- separator attached to its heading", () => {
+    const md = [section("2026-06-01", ["june rule"]), section("2026-07-01", ["july rule"])].join("\n");
+    const sections = splitMemorySections(md);
+    expect(sections).toHaveLength(2);
+    expect(sections[0]).toContain("- june rule");
+    expect(sections[1]).toContain("- july rule");
+    expect(sections.join("\n")).toBe(md);
+  });
+
   it("returns [] for whitespace-only input", () => {
     expect(splitMemorySections("   \n \n")).toEqual([]);
   });

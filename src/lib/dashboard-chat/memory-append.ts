@@ -95,7 +95,10 @@ export function splitMemorySections(md: string): string[] {
       sawContent = !/^---\s*$/.test(line.trim());
     } else {
       current.push(line);
-      if (line.trim().length > 0) sawContent = true;
+      // A bare `---` is a separator, not content — without this exception a
+      // document-LEADING separator would count as content and split away
+      // from its own following heading.
+      if (line.trim().length > 0 && !/^---\s*$/.test(line.trim())) sawContent = true;
     }
   }
   if (current.length > 0 && current.join("\n").trim().length > 0) {
