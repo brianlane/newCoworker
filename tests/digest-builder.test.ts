@@ -80,7 +80,7 @@ describe("digest_builder routingSummary", () => {
 
 describe("digest_builder buildAiFlowRecapLine", () => {
   it("renders flow name and status alone for an empty context", () => {
-    expect(buildAiFlowRecapLine(makeRun())).toBe("Lead intake — done");
+    expect(buildAiFlowRecapLine(makeRun())).toBe("Lead intake, done");
   });
 
   it("includes routing, lead fields, and actions_taken", () => {
@@ -98,7 +98,7 @@ describe("digest_builder buildAiFlowRecapLine", () => {
       })
     );
     expect(line).toBe(
-      "Lead intake — done · offered to 1 agent · claimed by Gabrielle · " +
+      "Lead intake, done · offered to 1 agent · claimed by Gabrielle · " +
         "lead: Sam Seller, +15558675309, sam@example.com · " +
         "Sent intro SMS; booked walkthrough"
     );
@@ -114,7 +114,7 @@ describe("digest_builder buildAiFlowRecapLine", () => {
     );
     // lead_name blank -> falls to name alias; lead_phone non-string -> phone
     // alias absent; lead_email absent -> email alias.
-    expect(line).toBe("Lead intake — done · lead: Alias Name, e@x.com");
+    expect(line).toBe("Lead intake, done · lead: Alias Name, e@x.com");
   });
 
   it("truncates an over-long actions_taken log", () => {
@@ -128,10 +128,10 @@ describe("digest_builder buildAiFlowRecapLine", () => {
   it("ignores empty or non-string actions_taken", () => {
     expect(
       buildAiFlowRecapLine(makeRun({ context: { vars: { actions_taken: "   " } } }))
-    ).toBe("Lead intake — done");
+    ).toBe("Lead intake, done");
     expect(
       buildAiFlowRecapLine(makeRun({ context: { vars: { actions_taken: 42 } } }))
-    ).toBe("Lead intake — done");
+    ).toBe("Lead intake, done");
   });
 });
 
@@ -188,7 +188,7 @@ describe("digest_builder buildDigestEmailModel", () => {
       activity
     });
 
-    expect(model.subject).toBe("Daily summary — Acme Plumbing (11 events)");
+    expect(model.subject).toBe("Daily summary, Acme Plumbing (11 events)");
     expect(model.intro).toContain("the last 24 hours");
     expect(model.sections.map((s) => s.heading)).toEqual([
       "Conversations",
@@ -200,10 +200,10 @@ describe("digest_builder buildDigestEmailModel", () => {
     const convo = model.sections[0];
     expect(convo.lines).toEqual(["Dashboard chat: 1 turn", "Texts: 2 received, 3 sent"]);
     expect(model.sections[1].lines).toEqual([
-      "+15550001111 — completed",
-      "unknown caller — errored"
+      "+15550001111, completed",
+      "unknown caller, errored"
     ]);
-    expect(model.sections[2].lines).toEqual(["Lead intake — done"]);
+    expect(model.sections[2].lines).toEqual(["Lead intake, done"]);
     expect(model.sections[3].lines).toEqual(["Pat (+15552220000)", "+15553330000"]);
     expect(model.sections[4].lines).toEqual([
       "Urgent alerts: 1",
@@ -218,7 +218,7 @@ describe("digest_builder buildDigestEmailModel", () => {
       businessName: "Acme",
       activity: { ...emptyActivity(), chatTurns: 2 }
     });
-    expect(model.subject).toBe("Weekly summary — Acme (2 events)");
+    expect(model.subject).toBe("Weekly summary, Acme (2 events)");
     expect(model.sections.map((s) => s.heading)).toEqual(["Conversations", "Status"]);
     expect(model.sections[0].lines).toEqual(["Dashboard chat: 2 turns"]);
     expect(model.activitySummary).toBe("2 events");

@@ -46,11 +46,11 @@ export function vpsHostname(virtualMachineId: number | null): string | null {
 
 export function buildOpsVpsDeletionEmail(input: OpsVpsDeletionInput): OpsVpsDeletionEmail {
   const hostname = vpsHostname(input.virtualMachineId);
-  const target = hostname ?? "(no VM id recorded — check the billing subscription below)";
+  const target = hostname ?? "(no VM id recorded, check the billing subscription below)";
   const who = input.ownerName?.trim() ? input.ownerName.trim() : input.ownerEmail;
   const signup = input.signupDate.slice(0, 10);
 
-  const subject = `[ops] Delete ${hostname ?? "VPS"} in hPanel — ${who} (${input.tier})`;
+  const subject = `[ops] Delete ${hostname ?? "VPS"} in hPanel, ${who} (${input.tier})`;
   const textLines = [
     `Please delete ${target} at ${HOSTINGER_INVOICES_URL} for user ${who}, ${input.tier} tier.`,
     [
@@ -67,7 +67,7 @@ export function buildOpsVpsDeletionEmail(input: OpsVpsDeletionInput): OpsVpsDele
   const text = textLines.join("\n\n");
 
   const html = buildBrandedEmailHtml({
-    // Internal ops inbox — omit the owner-facing platform signature block.
+    // Internal ops inbox, omit the owner-facing platform signature block.
     platformSignature: false,
     siteUrl: input.siteUrl,
     documentTitle: subject,

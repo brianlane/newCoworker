@@ -152,7 +152,7 @@ export function buildOutputFilename(inputFilename: string, target: AgentOutputTa
 }
 
 export const AGENT_RUN_SYSTEM_PROMPT =
-  "You are a small business's document assistant. Apply the owner's saved instructions to the attached material exactly. Preserve every concrete fact — prices, names, dates, contact info — unless the instructions say to change it. Never invent facts. Reply with ONLY the finished result: no preamble, no commentary, no code fences around the whole reply.";
+  "You are a small business's document assistant. Apply the owner's saved instructions to the attached material exactly. Preserve every concrete fact (prices, names, dates, contact info) unless the instructions say to change it. Never invent facts. Reply with ONLY the finished result: no preamble, no commentary, no code fences around the whole reply. Never use an em dash in anything you write; use a comma, a period, or a colon instead.";
 
 /** One decoded text attachment for the run prompt. */
 export type AgentPromptTextSection = { filename: string; text: string };

@@ -74,6 +74,12 @@ export type ActivitySmsReplyRow = {
 
 export type ActivitySmsOutboundRow = {
   to_e164: string | null;
+  /**
+   * `sms_outbound_log.source` — tags the send's origin in the feed:
+   * `ai_flow` renders as "(AiFlow)". Optional so contact-scoped callers
+   * that predate the tag keep compiling.
+   */
+  source?: string | null;
   created_at: string;
 };
 
@@ -249,14 +255,15 @@ export function collectActivityItems(input: ActivityFeedInput): ActivityItem[] {
 
   // Coworker replies live on the inbound job (assistant_reply_text); they're
   // queried on their own updated_at window so a recent reply to an older text
-  // still surfaces as outbound activity.
+  // still surfaces as outbound activity. "Reply to" (not "Text to") tags the
+  // send's origin: the AI answered an inbound text.
   input.smsReplies.forEach((r, i) => {
     const cp = customerE164FromPayload(r.payload);
     if (!cp) return;
     items.push({
       id: `sms_reply:${i}:${r.updated_at}`,
       kind: "sms_outbound",
-      label: `Text to ${named(cp)}`,
+      label: `Reply to ${named(cp)}`,
       href: `/dashboard/messages/${encodeURIComponent(cp)}`,
       at: r.updated_at,
       contactE164: cp
@@ -265,10 +272,13 @@ export function collectActivityItems(input: ActivityFeedInput): ActivityItem[] {
 
   input.smsOutbound.forEach((r, i) => {
     if (!r.to_e164) return;
+    // Tag flow-driven sends so the owner can tell an automation text from a
+    // manual/assistant one at a glance (sms_outbound_log.source = 'ai_flow').
+    const origin = r.source === "ai_flow" ? " (AiFlow)" : "";
     items.push({
       id: `sms_out:${i}:${r.created_at}`,
       kind: "sms_outbound",
-      label: `Text to ${named(r.to_e164)}`,
+      label: `Text to ${named(r.to_e164)}${origin}`,
       href: `/dashboard/messages/${encodeURIComponent(r.to_e164)}`,
       at: r.created_at,
       contactE164: r.to_e164
@@ -584,7 +594,7 @@ async function fetchActivityFeedInput(
         : beforeLt(
             db
               .from("sms_outbound_log")
-              .select("to_e164, created_at")
+              .select("to_e164, source, created_at")
               .eq("business_id", businessId)
               .is("deleted_at", null)
               .gte("created_at", since),
@@ -859,7 +869,7 @@ export async function getContactActivity(
       ? none
       : db
           .from("sms_outbound_log")
-          .select("to_e164, created_at")
+          .select("to_e164, source, created_at")
           .eq("business_id", businessId)
           .in("to_e164", numbers)
           .is("deleted_at", null)
@@ -981,7 +991,7 @@ export async function getActivityForContacts(
       .limit(scanLimit),
     db
       .from("sms_outbound_log")
-      .select("to_e164, created_at")
+      .select("to_e164, source, created_at")
       .eq("business_id", businessId)
       .in("to_e164", numbers)
       .is("deleted_at", null)

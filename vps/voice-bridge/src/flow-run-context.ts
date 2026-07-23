@@ -135,7 +135,7 @@ export function formatVoiceFlowContext(
   for (const run of shown) {
     const when = run.updatedAt ? `, last update ${run.updatedAt}` : "";
     lines.push("");
-    lines.push(`Workflow "${run.flowName}" — ${statusPhrase(run.status)}${when}:`);
+    lines.push(`Workflow "${run.flowName}", ${statusPhrase(run.status)}${when}:`);
     const vars = presentableVars(run.vars);
     if (vars.length === 0) {
       lines.push("- (no collected details)");

@@ -8,7 +8,7 @@
  * subscribed through POST /api/public/v1/hooks.
  */
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { createClient } from "npm:@supabase/supabase-js@2.45.0";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { runWebhookDispatchTick, type SupabaseLike } from "../_shared/webhook_dispatch.ts";
 

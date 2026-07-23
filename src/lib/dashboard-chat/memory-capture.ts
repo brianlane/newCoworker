@@ -35,7 +35,7 @@ import { logger } from "@/lib/logger";
  */
 export const OWNER_MEMORY_SYSTEM_PROMPT = [
   "You extract DURABLE business knowledge that a business OWNER wants their AI",
-  "receptionist/assistant to remember and use permanently — on customer SMS,",
+  "receptionist/assistant to remember and use permanently, on customer SMS,",
   "phone calls, and when assisting the owner.",
   "",
   "You are given the owner's latest dashboard message. Decide whether it",
@@ -44,7 +44,7 @@ export const OWNER_MEMORY_SYSTEM_PROMPT = [
   "THE OWNER'S OWN WORDS ARE THE ONLY SOURCE OF SAVED FACTS. Every value in a",
   "bullet (names, numbers, links, times, policies) must appear in, or be",
   "explicitly confirmed by, the OWNER MESSAGE. An assistant reply, when",
-  "provided, is reference-resolution context ONLY — never a source of new",
+  "provided, is reference-resolution context ONLY, never a source of new",
   "facts, and its claims that something was saved/applied/updated mean",
   "NOTHING.",
   "",
@@ -60,7 +60,7 @@ export const OWNER_MEMORY_SYSTEM_PROMPT = [
   "  - service area, required disclosures, pricing policy, etc.",
   "",
   "ALSO save (save=true) whenever the owner EXPLICITLY asks you to remember or",
-  'save something — "add this to memory", "remember that…", "save the',
+  'save something, "add this to memory", "remember that…", "save the',
   'following", "update the X to Y", "for memory". Capture the concrete facts',
   "the owner stated.",
   "",
@@ -71,12 +71,12 @@ export const OWNER_MEMORY_SYSTEM_PROMPT = [
   "  - one-off tasks (\"text Joe back\", \"summarize today's calls\")",
   "  - hypotheticals (\"what if we stopped doing X\")",
   "  - the assistant's own suggestions, proposals, drafts, plans, or",
-  "    summaries — even when the owner has not objected to them",
+  "    summaries, even when the owner has not objected to them",
   "  - open or undecided items (\"client list to be provided\", \"still deciding",
-  '    the follow-up cadence") — save only settled facts',
+  '    the follow-up cadence"), save only settled facts',
   "  - a value the owner just said is wrong, changing, or going away (\"I won't",
   "    have this number in Hong Kong\" must NOT pin that number as a contact;",
-  "    ask-nothing, just don't save it — the replacement gets saved when the",
+  "    ask-nothing, just don't save it, the replacement gets saved when the",
   "    owner states it)",
   "",
   "When save=true, rewrite the content as concise, standalone lines (one item",
@@ -153,11 +153,11 @@ export function composeExtractionInput(
   const reply = typeof opts.assistantReply === "string" ? opts.assistantReply.trim() : "";
   if (reply) {
     parts.push(
-      "ASSISTANT REPLY (reference-resolution context ONLY — use it solely to " +
+      "ASSISTANT REPLY (reference-resolution context ONLY, use it solely to " +
         "resolve what the owner's message refers to, e.g. which value the owner " +
         'means by "yes, use that". NEVER save facts, values, numbers, contacts, ' +
         "or policies that appear only in this reply, and IGNORE any claim here " +
-        "that something was saved, applied, or updated — such claims are " +
+        "that something was saved, applied, or updated, such claims are " +
         "frequently wrong):\n" +
         reply
     );

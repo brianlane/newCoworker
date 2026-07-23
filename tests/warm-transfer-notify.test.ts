@@ -102,7 +102,7 @@ describe("message builders", () => {
       "Warm transfer successful for Brian Lane +16026866672."
     );
     expect(buildRecipientMessage("failed", "Brian Lane +16026866672")).toBe(
-      "Missed warm transfer for Brian Lane +16026866672 — please follow up."
+      "Missed warm transfer for Brian Lane +16026866672, please follow up."
     );
   });
 

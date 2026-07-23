@@ -47,7 +47,7 @@ export function formatSmsTranscript(exchanges: SmsExchange[]): string | null {
   if (lines.length === 0) return null;
   return [
     "Recent SMS conversation with this texter (oldest first). This has " +
-      "ALREADY been said — continue from it. Do not greet or introduce " +
+      "ALREADY been said, continue from it. Do not greet or introduce " +
       "yourself again, do not re-ask anything already asked or answered " +
       "below, and never repeat a line you already sent.",
     ...lines

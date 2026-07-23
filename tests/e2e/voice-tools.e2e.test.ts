@@ -338,14 +338,33 @@ describe("voice booking failure (live model, real bridge declarations)", () => {
           ]
         }
       ];
+      // STATEFUL find-slots stub: the confirmed slot disappears from
+      // availability only AFTER a booking attempt has failed. The previous
+      // always-slice(1) stub assumed the model books first — but some
+      // temperature-0 draws (observed on the #842 main run and on 2 of 5
+      // full-suite hammer runs, gemini-3.5-flash-lite) VERIFY availability
+      // before booking; with slot 0 already missing they correctly refuse
+      // to book it, and the harness misread that correct behavior as a
+      // violation. Pre-failure the stub now shows the slot as available,
+      // so a verify-first draw proceeds to the booking attempt and the
+      // incident contract (post-failure re-check drops the failed slot)
+      // is exercised either way.
+      let bookAttempted = false;
       const fail = await voiceTurn(
         prior,
         `${slotClock(SLOTS[0])} works, please book it.`,
         baseRouter({
-          calendar_book_appointment: () => BOOK_FAILED,
+          calendar_book_appointment: () => {
+            bookAttempted = true;
+            return BOOK_FAILED;
+          },
           calendar_find_slots: () => ({
             ok: true,
-            data: { slots: SLOTS.slice(1), timezone: "UTC", purpose: "gel manicure" }
+            data: {
+              slots: bookAttempted ? SLOTS.slice(1) : SLOTS,
+              timezone: "UTC",
+              purpose: "gel manicure"
+            }
           }),
           notify_team: () => ({ ok: true, data: { notified: true } })
         })

@@ -9,7 +9,9 @@
  * bundles with the real Deno toolchain).
  *
  * Keep the URL declarations in sync with the import pins used by the
- * functions (std@0.208.0, supabase-js@2.45.0).
+ * functions (std@0.208.0, supabase-js@2.45.0). supabase-js rides an `npm:`
+ * specifier (not esm.sh) since the Jul 2026 CDN 522 deploy failures — the
+ * declare below must match that exact specifier string.
  */
 
 declare module "https://deno.land/std@0.208.0/http/server.ts" {
@@ -26,7 +28,7 @@ declare module "https://deno.land/std@0.208.0/http/server.ts" {
   export function serve(handler: Handler, options?: ServeInit): Promise<void>;
 }
 
-declare module "https://esm.sh/@supabase/supabase-js@2.45.0" {
+declare module "npm:@supabase/supabase-js@2.45.0" {
   // Deliberately loose: this code was written against supabase-js 2.45's
   // permissive generics, while node_modules carries 2.100 whose schema-typed
   // client rejects untyped table/RPC access wholesale. Each module narrows the
