@@ -18,6 +18,7 @@ import type {
   SmsReplyMode
 } from "./types";
 import { normalizeContactTags } from "./types";
+import { ingestContact, ingestPinnedNote } from "@/lib/memory/graph-deterministic";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -101,6 +102,21 @@ export async function createCustomerMemory(
       throw new CustomerExistsError(input.customerE164);
     }
     throw new Error(`createCustomerMemory: ${error.message}`);
+  }
+  // Knowledge graph (kg-source: contacts / kg-source: customer_pinned_notes):
+  // named contacts become person nodes; a pinned note is an owner-authored
+  // fact. Never-throws, mode-gated inside.
+  await ingestContact(businessId, {
+    displayName: trimmedName,
+    e164: input.customerE164,
+    email: input.email?.trim() || null
+  });
+  if (input.pinnedMd?.trim()) {
+    await ingestPinnedNote(businessId, {
+      displayName: trimmedName,
+      e164: input.customerE164,
+      note: input.pinnedMd
+    });
   }
   return data as unknown as CustomerMemoryRow;
 }
@@ -445,6 +461,24 @@ export async function updateCustomerOwnerFields(
     .eq("business_id", businessId)
     .eq("customer_e164", customerE164);
   if (error) throw new Error(`updateCustomerOwnerFields: ${error.message}`);
+
+  // Knowledge graph: only identity-bearing edits touch it (this helper also
+  // carries high-frequency knobs like tags/reply-mode that say nothing
+  // entity-shaped). Never-throws, mode-gated inside.
+  if ("displayName" in edit || "email" in edit) {
+    await ingestContact(businessId, {
+      displayName: edit.displayName ?? null,
+      e164: customerE164,
+      email: edit.email ?? null
+    });
+  }
+  if ("pinnedMd" in edit && edit.pinnedMd?.trim()) {
+    await ingestPinnedNote(businessId, {
+      displayName: "displayName" in edit ? edit.displayName ?? null : null,
+      e164: customerE164,
+      note: edit.pinnedMd
+    });
+  }
 }
 
 /**

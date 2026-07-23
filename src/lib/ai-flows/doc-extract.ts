@@ -38,6 +38,7 @@ import {
 import { countBusinessDocuments, insertBusinessDocument, patchBusinessDocument } from "@/lib/documents/db";
 import { ingestDocument } from "@/lib/documents/ingest";
 import { normalizeContactNumber } from "@/lib/telnyx/format";
+import { ingestDocRecordFields } from "@/lib/memory/graph-deterministic";
 import { logger } from "@/lib/logger";
 import { DOCX_MIME_TYPE, decodeDocxToText } from "@/lib/documents/docx";
 import { resolveFlowDocumentSource } from "./doc-source";
@@ -275,6 +276,7 @@ export async function docExtract(
     // reports a note — the extraction the flow branches on already
     // succeeded, and an unlinked filed copy beats no copy.
     let contactId: string | null = null;
+    let contactE164: string | null = null;
     const phoneRaw = (
       input.fileAs.contactPhoneField
         ? vars[input.fileAs.contactPhoneField] ?? ""
@@ -301,6 +303,7 @@ export async function docExtract(
             fileNotes.push(`contact link skipped: no contact with number ${normalized.value}`);
           } else {
             contactId = (contact as { id: string }).id;
+            contactE164 = normalized.value;
           }
         }
       }
@@ -401,6 +404,19 @@ export async function docExtract(
         });
       }
       throw insertErr;
+    }
+
+    // Knowledge graph (kg-source: doc_extract_fields): the typed
+    // quote/contract fields become facts on the linked contact's node.
+    // Never-throws, mode-gated inside; skipped without a linked contact
+    // (no subject to attach facts to).
+    if (recordFields && contactE164) {
+      await ingestDocRecordFields(input.businessId, {
+        title,
+        fields: recordFields,
+        contactName: null,
+        contactE164
+      });
     }
 
     // Same condense pipeline as dashboard uploads, so the filed copy answers

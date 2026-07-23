@@ -19,6 +19,7 @@
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { findContactsByEmails } from "@/lib/db/contact-emails";
+import { ingestBooking } from "@/lib/memory/graph-deterministic";
 import { logger } from "@/lib/logger";
 import { applyGoalEvent } from "../../../supabase/functions/_shared/ai_flows/goal_events";
 import {
@@ -94,6 +95,8 @@ export type BookingGoalFireDeps = {
   applyGoal?: typeof applyGoalEvent;
   /** Injectable email→contact resolver (tests). */
   findByEmails?: typeof findContactsByEmails;
+  /** Injectable knowledge-graph booking ingest (tests). */
+  ingestBookingEvent?: typeof ingestBooking;
 };
 
 export type BookingGoalFireResult = {
@@ -147,5 +150,26 @@ export async function fireBookingGoalsForIdentities(
     });
     result.jumpedRuns += jumpedRuns;
   }
+
+  // Knowledge graph (kg-source: booking): the calendar system is
+  // authoritative that this person booked. One ingest per ORIGINAL identity
+  // (not the alias fan-out — dedupe happens in resolution anyway); a
+  // phone-only identity creates/resolves a phone-named node that later
+  // contact ingests enrich. Never-throws, mode-gated inside.
+  /* c8 ignore next -- production default; tests inject */
+  const ingest = deps.ingestBookingEvent ?? ingestBooking;
+  const bookedOn = new Date().toISOString().slice(0, 10);
+  for (const identity of identities) {
+    const phone = bookingPhoneE164(identity.phone ?? undefined);
+    const email = (identity.email ?? "").trim().toLowerCase();
+    if (!phone && !email) continue;
+    await ingest(businessId, {
+      name: null,
+      phoneE164: phone,
+      email: email || null,
+      detail: `appointment booked (${bookedOn})`
+    });
+  }
+
   return result;
 }

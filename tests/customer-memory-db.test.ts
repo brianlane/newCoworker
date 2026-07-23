@@ -5,6 +5,10 @@ const defaultClientSpy = vi.fn();
 // the third `client` arg exercise the `client ?? (await
 // createSupabaseServiceClient())` fallback. Mirrors the pattern used
 // in tests/db-voice-transcripts.test.ts.
+vi.mock("@/lib/memory/graph-deterministic", () => ({
+  ingestContact: vi.fn(async () => ({ ran: false })),
+  ingestPinnedNote: vi.fn(async () => ({ ran: false }))
+}));
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn(async () => defaultClientSpy())
 }));
@@ -50,6 +54,7 @@ import {
 } from "../src/lib/customer-memory/db";
 import { createSupabaseServiceClient } from "../src/lib/supabase/server";
 import { normalizeContactTags, type CustomerMemoryRow } from "../src/lib/customer-memory/types";
+import { ingestContact, ingestPinnedNote } from "@/lib/memory/graph-deterministic";
 
 const BIZ = "00000000-0000-0000-0000-000000000001";
 const CUSTOMER = "+15555550123";
@@ -572,6 +577,30 @@ describe("createCustomerMemory", () => {
     expect(insert.pinned_md).toBeNull();
   });
 
+  it("feeds the knowledge graph: contact node always, pinned-note fact when present", async () => {
+    const { client } = makeClient({ fromTerminator: { data: memory(), error: null } });
+    await createCustomerMemory(
+      BIZ,
+      { customerE164: CUSTOMER, displayName: "Joe", email: "joe@x.com", pinnedMd: "VIP" },
+      client
+    );
+    expect(ingestContact).toHaveBeenCalledWith(BIZ, {
+      displayName: "Joe",
+      e164: CUSTOMER,
+      email: "joe@x.com"
+    });
+    expect(ingestPinnedNote).toHaveBeenCalledWith(BIZ, {
+      displayName: "Joe",
+      e164: CUSTOMER,
+      note: "VIP"
+    });
+
+    vi.mocked(ingestPinnedNote).mockClear();
+    const { client: bare } = makeClient({ fromTerminator: { data: memory(), error: null } });
+    await createCustomerMemory(BIZ, { customerE164: CUSTOMER }, bare);
+    expect(ingestPinnedNote).not.toHaveBeenCalled();
+  });
+
   it("throws CustomerExistsError on the unique-violation SQLSTATE so the API can 409", async () => {
     const { client } = makeClient({
       fromTerminator: { data: null, error: { code: "23505", message: "duplicate key" } }
@@ -812,6 +841,70 @@ describe("updateCustomerOwnerFields", () => {
       unknown
     >;
     expect(skipPatch).not.toHaveProperty("email");
+  });
+
+  it("feeds the graph only on identity-bearing edits (name/email/pinned; never tags/type)", async () => {
+    const identity = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(
+      BIZ,
+      CUSTOMER,
+      { displayName: "Joe Plumber", pinnedMd: "VIP" },
+      identity.client
+    );
+    expect(ingestContact).toHaveBeenCalledWith(BIZ, {
+      displayName: "Joe Plumber",
+      e164: CUSTOMER,
+      email: null
+    });
+    expect(ingestPinnedNote).toHaveBeenCalledWith(BIZ, {
+      displayName: "Joe Plumber",
+      e164: CUSTOMER,
+      note: "VIP"
+    });
+
+    vi.mocked(ingestContact).mockClear();
+    vi.mocked(ingestPinnedNote).mockClear();
+
+    // Pinned-only edit: note fact without a display name (falls back to the
+    // number inside the builder); a null displayName clears no node.
+    const pinnedOnly = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(BIZ, CUSTOMER, { pinnedMd: "gate code 4321" }, pinnedOnly.client);
+    expect(ingestContact).not.toHaveBeenCalled();
+    expect(ingestPinnedNote).toHaveBeenCalledWith(BIZ, {
+      displayName: null,
+      e164: CUSTOMER,
+      note: "gate code 4321"
+    });
+
+    vi.mocked(ingestPinnedNote).mockClear();
+
+    // Explicit name clear + note: the note still lands, nameless.
+    const cleared = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(
+      BIZ,
+      CUSTOMER,
+      { displayName: null, pinnedMd: "still useful" },
+      cleared.client
+    );
+    expect(ingestPinnedNote).toHaveBeenCalledWith(BIZ, {
+      displayName: null,
+      e164: CUSTOMER,
+      note: "still useful"
+    });
+
+    vi.mocked(ingestContact).mockClear();
+    vi.mocked(ingestPinnedNote).mockClear();
+
+    // High-frequency knobs never touch the graph; clearing pinned doesn't either.
+    const knobs = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(
+      BIZ,
+      CUSTOMER,
+      { tags: ["vip"], type: "company", pinnedMd: null },
+      knobs.client
+    );
+    expect(ingestContact).not.toHaveBeenCalled();
+    expect(ingestPinnedNote).not.toHaveBeenCalled();
   });
 
   it("writes normalized tags (trim, case-insensitive de-dup, drop empties)", async () => {

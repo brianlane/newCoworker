@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 const defaultClientSpy = vi.fn();
+vi.mock("@/lib/memory/graph-deterministic", () => ({
+  ingestRosterMember: vi.fn(async () => ({ ran: false }))
+}));
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn(async () => defaultClientSpy())
 }));
@@ -31,6 +34,7 @@ import {
   type TimeOffRow
 } from "../src/lib/db/employees";
 import { createSupabaseServiceClient } from "../src/lib/supabase/server";
+import { ingestRosterMember } from "@/lib/memory/graph-deterministic";
 
 const BIZ = "00000000-0000-0000-0000-000000000001";
 const MEMBER_ID = "00000000-0000-0000-0000-0000000000aa";
@@ -203,6 +207,18 @@ describe("createTeamMember", () => {
     await expect(createTeamMember(BIZ, { name: "G", phoneE164: PHONE }, client)).rejects.toThrow(
       /createTeamMember: duplicate key/
     );
+    expect(ingestRosterMember).not.toHaveBeenCalled();
+  });
+
+  it("feeds the knowledge graph with the created member (kg-source: team_roster)", async () => {
+    const created = memberRow();
+    const { client } = makeClient({ data: created, error: null });
+    await createTeamMember(BIZ, { name: "Gabby", phoneE164: PHONE }, client);
+    expect(ingestRosterMember).toHaveBeenCalledWith(BIZ, {
+      name: created.name,
+      phoneE164: created.phone_e164,
+      email: created.email
+    });
   });
 });
 
@@ -238,6 +254,22 @@ describe("updateTeamMember", () => {
       weekly_schedule: null,
       preferred_windows: { tue: [["10:00", "12:00"]] }
     });
+  });
+
+  it("refreshes the graph node only when roster IDENTITY changed (name/phone/email)", async () => {
+    const updated = memberRow({ name: "Gabrielle" });
+    const { client } = makeClient({ data: updated, error: null });
+    await updateTeamMember(BIZ, MEMBER_ID, { name: "Gabrielle" }, client);
+    expect(ingestRosterMember).toHaveBeenCalledWith(BIZ, {
+      name: updated.name,
+      phoneE164: updated.phone_e164,
+      email: updated.email
+    });
+
+    vi.mocked(ingestRosterMember).mockClear();
+    const { client: scheduleClient } = makeClient({ data: memberRow(), error: null });
+    await updateTeamMember(BIZ, MEMBER_ID, { active: false }, scheduleClient);
+    expect(ingestRosterMember).not.toHaveBeenCalled();
   });
 
   it("writes a non-null weekly schedule and clears preferred windows in one patch", async () => {

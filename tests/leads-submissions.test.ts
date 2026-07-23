@@ -1,6 +1,9 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 const defaultClientSpy = vi.fn();
+vi.mock("@/lib/memory/graph-deterministic", () => ({
+  ingestLeadSubmission: vi.fn(async () => ({ ran: false }))
+}));
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: (...a: unknown[]) => defaultClientSpy(...a)
 }));
@@ -10,6 +13,7 @@ vi.mock("@/lib/logger", () => ({
   logger: { warn: (...a: unknown[]) => warnSpy(...a) }
 }));
 
+import { ingestLeadSubmission } from "@/lib/memory/graph-deterministic";
 import {
   MAX_SUBMISSION_FIELDS,
   MAX_SUBMISSION_KEY_LENGTH,
@@ -171,6 +175,17 @@ describe("recordLeadSubmission", () => {
       { onConflict: "business_id,event_key", ignoreDuplicates: true }
     );
     expect(warnSpy).not.toHaveBeenCalled();
+    // The lead rides into the knowledge graph (kg-source: aiflow_lead).
+    expect(ingestLeadSubmission).toHaveBeenCalledWith("biz-1", {
+      source: "facebook_lead_ads",
+      fields: {
+        full_name: "Jane Lead",
+        phone_number: "+16025551234",
+        email: "Jane@Example.com"
+      },
+      phoneE164: "+16025551234",
+      email: "jane@example.com"
+    });
   });
 
   it("bounds source and event_key lengths", async () => {

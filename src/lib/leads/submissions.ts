@@ -15,6 +15,7 @@
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
+import { ingestLeadSubmission } from "@/lib/memory/graph-deterministic";
 import {
   isE164,
   isPhoneFieldName,
@@ -176,6 +177,16 @@ export async function recordLeadSubmission(
       { onConflict: "business_id,event_key", ignoreDuplicates: true }
     );
     if (error) throw new Error(error.message);
+    // Knowledge graph (kg-source: aiflow_lead): the lead becomes a person
+    // node with lead_source/campaign facts at anonymous trust. Never-throws,
+    // mode-gated inside. Redeliveries are no-ops downstream (same-object
+    // facts skip; resolution collapses onto the existing node).
+    await ingestLeadSubmission(businessId, {
+      source: input.source,
+      fields,
+      phoneE164,
+      email
+    });
   } catch (err) {
     logger.warn("lead submission record failed (ignored)", {
       businessId,

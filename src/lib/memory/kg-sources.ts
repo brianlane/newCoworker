@@ -39,14 +39,14 @@ export const KG_SOURCES = {
   /** Historical memory_md replays (debug/kg-backfill.ts). */
   backfill: { status: "extracted", trust: 3 },
 
-  // ── deterministic sources (PR 3) ───────────────────────────────────────
-  team_roster: { status: "planned", trust: 3, plannedIn: "PR 3" },
-  contacts: { status: "planned", trust: 3, plannedIn: "PR 3" },
-  customer_pinned_notes: { status: "planned", trust: 3, plannedIn: "PR 3" },
-  business_profile: { status: "planned", trust: 3, plannedIn: "PR 3" },
-  aiflow_lead: { status: "planned", trust: 0, plannedIn: "PR 3" },
-  booking: { status: "planned", trust: 2, plannedIn: "PR 3" },
-  doc_extract_fields: { status: "planned", trust: 2, plannedIn: "PR 3" },
+  // ── deterministic sources (live — hooks in graph-deterministic.ts) ──────
+  team_roster: { status: "deterministic", trust: 3 },
+  contacts: { status: "deterministic", trust: 3 },
+  customer_pinned_notes: { status: "deterministic", trust: 3 },
+  business_profile: { status: "deterministic", trust: 3 },
+  aiflow_lead: { status: "deterministic", trust: 0 },
+  booking: { status: "deterministic", trust: 2 },
+  doc_extract_fields: { status: "deterministic", trust: 2 },
 
   // ── conversational extraction (PR 4) ───────────────────────────────────
   voice_call: { status: "planned", trust: 1, plannedIn: "PR 4" },

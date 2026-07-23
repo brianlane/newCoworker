@@ -13,6 +13,7 @@ import { getBusiness } from "@/lib/db/businesses";
 import { patchBusinessConfig } from "@/lib/db/configs";
 import { listBusinessServices } from "@/lib/services/db";
 import { parseBusinessHours, renderBusinessProfileMd } from "@/lib/business-profile/profile";
+import { ingestBusinessProfile } from "@/lib/memory/graph-deterministic";
 import { logger } from "@/lib/logger";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -53,6 +54,18 @@ export async function refreshBusinessProfileMd(
       }))
   });
   await patchBusinessConfig(businessId, { profile_md: md }, db);
+
+  // Knowledge graph (kg-source: business_profile): the business's own
+  // organization node with its structured facts. Hours deliberately stay
+  // out of the graph — profile_md is the canonical hours answer source in
+  // every prompt already; duplicating a JSON-ish hours blob as a fact adds
+  // noise, not signal. Never-throws, mode-gated inside.
+  await ingestBusinessProfile(businessId, {
+    businessName: business.name,
+    address: business.address ?? null,
+    phoneE164: business.phone ?? null
+  });
+
   return md;
 }
 
