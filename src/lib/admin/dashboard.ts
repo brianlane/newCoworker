@@ -149,6 +149,19 @@ export function adminAlertSummary(log: AlertLogLike): string {
   return line.length > ALERT_SUMMARY_MAX ? `${line.slice(0, ALERT_SUMMARY_MAX - 1)}…` : line;
 }
 
+/** The two alert statuses the fleet feed carries, in filter-bar order. */
+export const ALERT_FILTER_STATUSES = ["urgent_alert", "error"] as const;
+
+/**
+ * Parse the `status` URL param (comma-separated) into valid alert statuses,
+ * dropping anything else and de-duplicating. Empty result = no filter.
+ */
+export function parseAlertStatusesParam(raw: string | undefined): string[] {
+  if (!raw) return [];
+  const valid = new Set<string>(ALERT_FILTER_STATUSES);
+  return [...new Set(raw.split(","))].filter((s) => valid.has(s));
+}
+
 export type AlertCounts = {
   /** Admin-actionable `error` rows in the fetched window. */
   errors: number;

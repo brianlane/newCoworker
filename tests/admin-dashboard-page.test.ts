@@ -7,6 +7,7 @@ import {
   getLogBadgeVariant,
   getMonthLabel,
   getVpsInventoryBadgeVariant,
+  parseAlertStatusesParam,
   summarizeAlertCounts
 } from "@/lib/admin/dashboard";
 
@@ -209,6 +210,20 @@ describe("adminAlertSummary", () => {
     );
     expect(result.length).toBe(160);
     expect(result.endsWith("…")).toBe(true);
+  });
+});
+
+describe("parseAlertStatusesParam", () => {
+  it("keeps valid statuses, drops junk, and de-duplicates", () => {
+    expect(parseAlertStatusesParam("error,urgent_alert,error,bogus")).toEqual([
+      "error",
+      "urgent_alert"
+    ]);
+  });
+
+  it("returns empty (= all) for missing input", () => {
+    expect(parseAlertStatusesParam(undefined)).toEqual([]);
+    expect(parseAlertStatusesParam("")).toEqual([]);
   });
 });
 
