@@ -302,11 +302,19 @@ export function buildSyncVaultCommand(
 
   // Knowledge-graph projection. The managed note folders were dead
   // scaffolding before the projection — nothing else writes them. Shipping
-  // stages the unpack into a temp dir FIRST (a failed decode/extract aborts
-  // under `set -e` BEFORE the wipe, so the box never loses its notes to a
-  // truncated bundle), then wipes and swaps. The final chown hands the dir
-  // to uid 1000 so the chat-worker container (runs as `node`) can compile
-  // graph.jsonl into graph.db next to the notes.
+  // is staged so no failure can leave the box worse than stale:
+  //   1. decode + extract into a temp dir (a truncated bundle aborts under
+  //      `set -e` before anything live is touched),
+  //   2. move each managed folder to `<dir>.new` NEXT TO the live one (the
+  //      cross-filesystem copy risk lands here, live data still intact),
+  //   3. same-filesystem rename over the live folder — the only "destroy"
+  //      step is an rm immediately followed by a rename(2) of an
+  //      already-materialized sibling.
+  // The bind-mounted /opt/rowboat/memory dir itself is never replaced
+  // (that would detach the chat-worker's mount); only its children swap.
+  // The final chown hands the tree to uid 1000 so the worker (runs as
+  // `node`) can compile graph.jsonl into graph.db — chown failure is LOUD
+  // (fails the sync) because a root-owned tree silently breaks that build.
   const wipeLines = [
     "mkdir -p /opt/rowboat/memory/People /opt/rowboat/memory/Organizations /opt/rowboat/memory/Topics /opt/rowboat/memory/Projects",
     "rm -f /opt/rowboat/memory/People/*.md /opt/rowboat/memory/Organizations/*.md /opt/rowboat/memory/Topics/*.md /opt/rowboat/memory/graph.jsonl /opt/rowboat/memory/graph.db /opt/rowboat/memory/graph.db.tmp 2>/dev/null || true"
@@ -316,14 +324,16 @@ export function buildSyncVaultCommand(
       ? [
           `GRAPH_STAGE=$(mktemp -d)`,
           `printf %s '${graphProjection.tarB64}' | base64 -d | tar -xf - -C "$GRAPH_STAGE"`,
-          ...wipeLines,
-          `cp -R "$GRAPH_STAGE"/. /opt/rowboat/memory/`,
+          `mkdir -p "$GRAPH_STAGE/People" "$GRAPH_STAGE/Organizations" "$GRAPH_STAGE/Topics"`,
+          "mkdir -p /opt/rowboat/memory/Projects",
+          `for d in People Organizations Topics; do rm -rf "/opt/rowboat/memory/$d.new"; mv "$GRAPH_STAGE/$d" "/opt/rowboat/memory/$d.new"; rm -rf "/opt/rowboat/memory/$d"; mv "/opt/rowboat/memory/$d.new" "/opt/rowboat/memory/$d"; done`,
+          `if [ -f "$GRAPH_STAGE/graph.jsonl" ]; then mv "$GRAPH_STAGE/graph.jsonl" /opt/rowboat/memory/graph.jsonl.new; mv -f /opt/rowboat/memory/graph.jsonl.new /opt/rowboat/memory/graph.jsonl; fi`,
           `rm -rf "$GRAPH_STAGE"`,
-          "chown -R 1000:1000 /opt/rowboat/memory || true",
+          "chown -R 1000:1000 /opt/rowboat/memory",
           'echo "graph_projection=ok"'
         ]
       : graphProjection.mode === "wipe"
-        ? [...wipeLines, "chown -R 1000:1000 /opt/rowboat/memory || true", 'echo "graph_projection=wiped"']
+        ? [...wipeLines, "chown -R 1000:1000 /opt/rowboat/memory", 'echo "graph_projection=wiped"']
         : [];
 
   return [

@@ -341,27 +341,33 @@ describe("buildSyncVaultCommand", () => {
     expect(cmd).not.toContain("tar -xf");
   });
 
-  it("ships a projection tar via stage-then-swap (a failed extract aborts BEFORE the wipe)", () => {
+  it("ships a projection tar via stage + per-folder rename swap (no failure leaves the box worse than stale)", () => {
     const tarB64 = Buffer.from("fake-tar-bytes").toString("base64");
     const cmd = buildSyncVaultCommand(FULL_CONFIG, BIZ, "INST", NOW, "", {
       mode: "ship",
       tarB64
     });
     // Unpack into a temp dir FIRST — under `set -e` a truncated bundle
-    // aborts here, never after the notes were deleted.
+    // aborts here, never after anything live was touched.
     expect(cmd).toContain(`printf %s '${tarB64}' | base64 -d | tar -xf - -C "$GRAPH_STAGE"`);
     const extractAt = cmd.indexOf('tar -xf - -C "$GRAPH_STAGE"');
-    const wipeAt = cmd.indexOf("rm -f /opt/rowboat/memory/People/*.md");
+    const swapAt = cmd.indexOf('rm -rf "/opt/rowboat/memory/$d"');
     expect(extractAt).toBeGreaterThanOrEqual(0);
-    expect(wipeAt).toBeGreaterThan(extractAt);
-    expect(cmd).toContain(
-      "mkdir -p /opt/rowboat/memory/People /opt/rowboat/memory/Organizations /opt/rowboat/memory/Topics /opt/rowboat/memory/Projects"
-    );
-    // Projects is deliberately untouched by the wipe.
-    expect(cmd).not.toContain("rm -f /opt/rowboat/memory/Projects");
-    expect(cmd).toContain('cp -R "$GRAPH_STAGE"/. /opt/rowboat/memory/');
-    // The chat-worker container (uid 1000) must be able to write graph.db.
+    expect(swapAt).toBeGreaterThan(extractAt);
+    // The cross-filesystem copy risk lands in "$d.new" BEFORE the live
+    // folder is removed; the destroy step is rm + same-fs rename only.
+    expect(cmd).toContain('mv "$GRAPH_STAGE/$d" "/opt/rowboat/memory/$d.new"');
+    expect(cmd).toContain('mv "/opt/rowboat/memory/$d.new" "/opt/rowboat/memory/$d"');
+    // graph.jsonl gets the same tmp+rename treatment.
+    expect(cmd).toContain("mv -f /opt/rowboat/memory/graph.jsonl.new /opt/rowboat/memory/graph.jsonl");
+    // The memory dir itself is never replaced (bind mount) and Projects is
+    // deliberately untouched.
+    expect(cmd).not.toContain('mv "/opt/rowboat/memory"');
+    expect(cmd).not.toContain("Projects.new");
+    // The chat-worker container (uid 1000) must be able to write graph.db —
+    // a chown failure fails the sync LOUDLY instead of reporting ok.
     expect(cmd).toContain("chown -R 1000:1000 /opt/rowboat/memory");
+    expect(cmd).not.toContain("chown -R 1000:1000 /opt/rowboat/memory || true");
     expect(cmd).toContain('echo "graph_projection=ok"');
   });
 
