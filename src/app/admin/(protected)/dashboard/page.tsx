@@ -18,25 +18,17 @@ import {
   summarizeAlertCounts
 } from "@/lib/admin/dashboard";
 import { AdminAlertRow, AdminActivityRow } from "@/components/admin/feed-rows";
+import Link from "next/link";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { StatusDot } from "@/components/ui/StatusDot";
+import { timeAgo } from "@/components/admin/feed-rows";
 
 export const dynamic = "force-dynamic";
 
 function formatMoney(cents: number): string {
   if (cents >= 100_000) return `$${(cents / 100_000).toFixed(1)}k`;
   return `$${(cents / 100).toFixed(0)}`;
-}
-
-function timeAgo(dateStr: string): string {
-  const diff = Date.now() - new Date(dateStr).getTime();
-  const mins = Math.floor(diff / 60_000);
-  if (mins < 1) return "just now";
-  if (mins < 60) return `${mins}m ago`;
-  const hours = Math.floor(mins / 60);
-  if (hours < 24) return `${hours}h ago`;
-  return `${Math.floor(hours / 24)}d ago`;
 }
 
 export default async function AdminDashboardPage() {
@@ -380,12 +372,12 @@ export default async function AdminDashboardPage() {
               {alertCounts.last24h > 0 && (
                 <Badge variant="neutral">{alertCounts.last24h} in 24h</Badge>
               )}
-              <a
+              <Link
                 href="/admin/alerts"
                 className="text-xs font-medium text-signal-teal hover:underline"
               >
                 {t("seeAll")}
-              </a>
+              </Link>
             </div>
           </div>
           {alerts.length === 0 ? (
@@ -409,12 +401,12 @@ export default async function AdminDashboardPage() {
             <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider">
               Recent Activity
             </h2>
-            <a
+            <Link
               href="/admin/activity"
               className="text-xs font-medium text-signal-teal hover:underline"
             >
               {t("seeAll")}
-            </a>
+            </Link>
           </div>
           {recentActivity.length === 0 ? (
             <p className="text-sm text-parchment/40 text-center py-4">No activity yet.</p>
