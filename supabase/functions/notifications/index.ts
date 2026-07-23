@@ -27,7 +27,7 @@
 // function.
 
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
-import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.45.0";
 import { buildBrandedEmailHtml } from "../_shared/branded_email_html.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import {
@@ -288,9 +288,9 @@ serve(async (req: Request) => {
         : record.task_type === "missed_call_spike"
           ? `${missedToday || "Several"} callers were turned away today (line busy or out of voice minutes). Check Analytics on your dashboard; a plan upgrade or minutes top-up stops the misses.`
           : record.task_type === "sms_needs_human"
-            ? `Your texting coworker needs you to take over with ${needsHumanLabel}${needsHumanReason ? ` — ${needsHumanReason}` : ""}. Reply from Messages on your dashboard.`.slice(0, 320)
+            ? `Your texting coworker needs you to take over with ${needsHumanLabel}${needsHumanReason ? `, ${needsHumanReason}` : ""}. Reply from Messages on your dashboard.`.slice(0, 320)
             : record.task_type === "aiflow_run_failed"
-              ? `An AiFlow stopped while handling ${aiflowLeadLabel}${aiflowReason ? ` — ${aiflowReason}` : ""}. Follow up with them yourself and check the flow's run history on your dashboard.`.slice(0, 320)
+              ? `An AiFlow stopped while handling ${aiflowLeadLabel}${aiflowReason ? `, ${aiflowReason}` : ""}. Follow up with them yourself and check the flow's run history on your dashboard.`.slice(0, 320)
               : record.task_type === "sms_customer_reply"
                 ? `${replyLabel} texted back${replyPreview ? `: "${replyPreview}"` : ""}. Reply from Messages on your dashboard.`.slice(0, 320)
                 : `URGENT ${record.task_type}`;
@@ -539,7 +539,7 @@ serve(async (req: Request) => {
       };
       const subject = `Urgent: ${summary}`;
       const baseText = `Your AI Coworker flagged an urgent event.\n\nSummary: ${summary}\nBusiness ID: ${record.business_id}\n\nView details: ${dashboardUrl}`;
-      const text = `${baseText}\n\n---\nDon't want these alerts? Unsubscribe with one click: ${unsubscribeUrl}`;
+      const text = `${baseText}\n\n---\nDon't want these alerts? Unsubscribe: ${unsubscribeUrl}`;
       const html = buildBrandedEmailHtml({
         siteUrl: appUrl,
         documentTitle: subject,

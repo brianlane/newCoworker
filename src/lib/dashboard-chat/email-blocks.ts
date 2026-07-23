@@ -168,15 +168,15 @@ export function describeEmailOutcome(result: EmailSendOutcome): string {
   }
   switch (result.detail) {
     case "tool_disabled":
-      return `${target}: NOT sent — the Send email tool is turned off (enable it under Settings → Coworker tools).`;
+      return `${target}: NOT sent, the Send email tool is turned off (enable it under Settings → Coworker tools).`;
     case "email_not_connected":
-      return `${target}: NOT sent — no email account is connected (connect one under Integrations).`;
+      return `${target}: NOT sent, no email account is connected (connect one under Integrations).`;
     case "too_many_emails":
-      return `${target}: NOT sent — at most ${MAX_EMAILS_PER_TURN} emails per reply; please ask again separately.`;
+      return `${target}: NOT sent, at most ${MAX_EMAILS_PER_TURN} emails per reply; please ask again separately.`;
     case "invalid_block":
-      return `${target}: NOT sent — the email request was malformed; please rephrase and try again.`;
+      return `${target}: NOT sent, the email request was malformed; please rephrase and try again.`;
     default:
-      return `${target}: NOT sent — sending failed (${result.detail || "unknown error"}). Please try again.`;
+      return `${target}: NOT sent, sending failed (${result.detail || "unknown error"}). Please try again.`;
   }
 }
 

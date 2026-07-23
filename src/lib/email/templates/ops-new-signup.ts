@@ -31,7 +31,7 @@ export function buildOpsNewSignupEmail(input: OpsNewSignupInput): OpsNewSignupEm
     input.ownerEmail?.trim() ||
     input.businessName.trim() ||
     input.businessId;
-  const subject = `[ops] New signup live — ${input.businessName.trim() || input.businessId}`;
+  const subject = `[ops] New signup live, ${input.businessName.trim() || input.businessId}`;
   const textLines = [
     `${who} finished onboarding and their coworker is online.`,
     [
@@ -47,7 +47,7 @@ export function buildOpsNewSignupEmail(input: OpsNewSignupInput): OpsNewSignupEm
   const text = textLines.join("\n\n");
 
   const html = buildBrandedEmailHtml({
-    // Internal ops inbox — omit the owner-facing platform signature block.
+    // Internal ops inbox, omit the owner-facing platform signature block.
     platformSignature: false,
     siteUrl: input.siteUrl,
     documentTitle: subject,

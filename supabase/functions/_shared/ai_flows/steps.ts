@@ -1404,7 +1404,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         return {
           ok: false,
           error:
-            `upsert_customer: the lead's phone ({{vars.${step.phoneVar}}}) is missing or unusable — ` +
+            `upsert_customer: the lead's phone ({{vars.${step.phoneVar}}}) is missing or unusable, ` +
             `it may not have been in the source at all, or it matched the business's own number ` +
             `and was discarded (see this run's notes). The flow can't contact this lead by text.`
         };

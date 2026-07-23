@@ -125,13 +125,13 @@ const OUTBOUND_TIMEZONE_RULE =
 const CONTACT_NAME_PARAM = {
   type: "string",
   description:
-    "The recipient's name, when the owner mentioned one — files them as a contact so the send is never to an invisible number. An existing contact's name is never overwritten."
+    "The recipient's name, when the owner mentioned one, files them as a contact so the send is never to an invisible number. An existing contact's name is never overwritten."
 } as const;
 
 const SEND_SMS_DECLARATION: GeminiFunctionDeclaration = {
   name: "send_sms",
   description:
-    "Send a text message from the business number to any phone number. Use ONLY when the owner explicitly asks, in this conversation, for a text to be sent. Never invent recipients or bodies — send exactly what the owner asked for, and when re-sending after a delivery complaint, send the SAME intended message again (never your own previous chat reply). After the tool returns, tell the owner the exact body that was sent." +
+    "Send a text message from the business number to any phone number. Use ONLY when the owner explicitly asks, in this conversation, for a text to be sent. Never invent recipients or bodies, send exactly what the owner asked for, and when re-sending after a delivery complaint, send the SAME intended message again (never your own previous chat reply). After the tool returns, tell the owner the exact body that was sent." +
     OUTBOUND_TIMEZONE_RULE,
   parameters: {
     type: "object",
@@ -195,7 +195,7 @@ const FIND_SLOTS_DECLARATION: GeminiFunctionDeclaration = {
 const BOOK_DECLARATION: GeminiFunctionDeclaration = {
   name: "calendar_book_appointment",
   description:
-    "Book an appointment on the owner's connected calendar. Use ONLY when the owner explicitly asks to book, with a confirmed start/end time. Times MUST be ISO 8601 with a timezone offset. Confirm the booked day/time by reading the result's startLocal verbatim. If it fails with attendee_already_booked, the attendee already has an upcoming appointment — follow the result's guidance (keep / reschedule / cancel) and only pass allowAdditional true after the owner explicitly confirms an additional appointment.",
+    "Book an appointment on the owner's connected calendar. Use ONLY when the owner explicitly asks to book, with a confirmed start/end time. Times MUST be ISO 8601 with a timezone offset. Confirm the booked day/time by reading the result's startLocal verbatim. If it fails with attendee_already_booked, the attendee already has an upcoming appointment, follow the result's guidance (keep / reschedule / cancel) and only pass allowAdditional true after the owner explicitly confirms an additional appointment.",
   parameters: {
     type: "object",
     properties: {
@@ -220,7 +220,7 @@ const BOOK_DECLARATION: GeminiFunctionDeclaration = {
 const RESCHEDULE_DECLARATION: GeminiFunctionDeclaration = {
   name: "calendar_reschedule_appointment",
   description:
-    "Move an EXISTING appointment to a new time — the invitation is updated in place, never duplicated. Identify the appointment by the attendee's phone or email. Times MUST be ISO 8601 with a timezone offset.",
+    "Move an EXISTING appointment to a new time, the invitation is updated in place, never duplicated. Identify the appointment by the attendee's phone or email. Times MUST be ISO 8601 with a timezone offset.",
   parameters: {
     type: "object",
     properties: {
@@ -238,7 +238,7 @@ const RESCHEDULE_DECLARATION: GeminiFunctionDeclaration = {
 const CANCEL_DECLARATION: GeminiFunctionDeclaration = {
   name: "calendar_cancel_appointment",
   description:
-    "Cancel an EXISTING appointment — the attendee gets a single cancellation notice. Identify the appointment by the attendee's phone or email. Use ONLY when the owner explicitly asks to cancel.",
+    "Cancel an EXISTING appointment, the attendee gets a single cancellation notice. Identify the appointment by the attendee's phone or email. Use ONLY when the owner explicitly asks to cancel.",
   parameters: {
     type: "object",
     properties: {
@@ -253,14 +253,14 @@ const CANCEL_DECLARATION: GeminiFunctionDeclaration = {
 const LIST_AIFLOWS_DECLARATION: GeminiFunctionDeclaration = {
   name: "list_aiflows",
   description:
-    "List this business's AiFlow automations (id, name, enabled, what starts them). Use it to check whether an automation already exists for what the owner is asking — when one matches, OFFER it as an option alongside doing the action directly, and let the owner choose.",
+    "List this business's AiFlow automations (id, name, enabled, what starts them). Use it to check whether an automation already exists for what the owner is asking, when one matches, OFFER it as an option alongside doing the action directly, and let the owner choose.",
   parameters: { type: "object", properties: {}, required: [] }
 };
 
 const RUN_AIFLOW_DECLARATION: GeminiFunctionDeclaration = {
   name: "run_aiflow",
   description:
-    "Run one of the business's ENABLED AiFlow automations now (a manual run). Use ONLY after the owner explicitly chooses to run it in this conversation. `flow` is the flow's id or its exact-enough name; `input` is the context text handed to the flow (contact details, notes — whatever the owner supplied). Disabled flows cannot be run — tell the owner to review and enable them at /dashboard/aiflows first.",
+    "Run one of the business's ENABLED AiFlow automations now (a manual run). Use ONLY after the owner explicitly chooses to run it in this conversation. `flow` is the flow's id or its exact-enough name; `input` is the context text handed to the flow (contact details, notes, whatever the owner supplied). Disabled flows cannot be run, tell the owner to review and enable them at /dashboard/aiflows first.",
   parameters: {
     type: "object",
     properties: {
@@ -277,7 +277,7 @@ const RUN_AIFLOW_DECLARATION: GeminiFunctionDeclaration = {
 const EDIT_AIFLOW_DECLARATION: GeminiFunctionDeclaration = {
   name: "edit_aiflow",
   description:
-    "Edit one of the business's EXISTING AiFlow automations in place — small tweaks (change a message's wording, a wait time, a recipient) or larger restructuring — keeping its id, run history, and enabled state. Use ONLY after the owner explicitly confirmed the exact changes in this conversation: first describe what you will change in plain words and wait for their yes. The change takes effect IMMEDIATELY on the live automation (there is no review step), so never call this speculatively. `flow` is the flow's id or its exact-enough name; `instructions` is the complete, specific change description, including any exact wording the owner gave. The platform validates the edited automation and refuses anything unsafe — when it refuses, the flow is unchanged; relay the reason honestly.",
+    "Edit one of the business's EXISTING AiFlow automations in place, small tweaks (change a message's wording, a wait time, a recipient) or larger restructuring, keeping its id, run history, and enabled state. Use ONLY after the owner explicitly confirmed the exact changes in this conversation: first describe what you will change in plain words and wait for their yes. The change takes effect IMMEDIATELY on the live automation (there is no review step), so never call this speculatively. `flow` is the flow's id or its exact-enough name; `instructions` is the complete, specific change description, including any exact wording the owner gave. The platform validates the edited automation and refuses anything unsafe, when it refuses, the flow is unchanged; relay the reason honestly.",
   parameters: {
     type: "object",
     properties: {
@@ -289,7 +289,7 @@ const EDIT_AIFLOW_DECLARATION: GeminiFunctionDeclaration = {
       },
       newName: {
         type: "string",
-        description: "A new name for the automation — ONLY when the owner asked to rename it."
+        description: "A new name for the automation, ONLY when the owner asked to rename it."
       }
     },
     required: ["flow", "instructions"]
@@ -299,7 +299,7 @@ const EDIT_AIFLOW_DECLARATION: GeminiFunctionDeclaration = {
 const GENERATE_IMAGE_DECLARATION: GeminiFunctionDeclaration = {
   name: "generate_image",
   description:
-    "Create an AI-generated image for the owner and return a URL plus ready-to-use markdown. Can also EDIT an image: when the owner attached an image to their message (an /api/dashboard/images/... URL) or refers to an image you generated earlier in this conversation, pass that URL as inputImageUrl and describe the change in the prompt. ONLY use this when the owner explicitly asks you to create, generate, edit, or make an image — never call it proactively or as decoration. Embed the returned markdown in your reply so the image renders inline. Expensive: limited per conversation (Standard allows more); when the tool refuses with image_limit_reached, tell the owner plainly.",
+    "Create an AI-generated image for the owner and return a URL plus ready-to-use markdown. Can also EDIT an image: when the owner attached an image to their message (an /api/dashboard/images/... URL) or refers to an image you generated earlier in this conversation, pass that URL as inputImageUrl and describe the change in the prompt. ONLY use this when the owner explicitly asks you to create, generate, edit, or make an image, never call it proactively or as decoration. Embed the returned markdown in your reply so the image renders inline. Expensive: limited per conversation (Standard allows more); when the tool refuses with image_limit_reached, tell the owner plainly.",
   parameters: {
     type: "object",
     properties: {
@@ -335,7 +335,7 @@ const NOTIFICATION_TOGGLE_PARAMS = Object.fromEntries(
 const UPDATE_NOTIFICATION_PREFERENCES_DECLARATION: GeminiFunctionDeclaration = {
   name: "update_notification_preferences",
   description:
-    "Turn the owner's notification/alert toggles on or off (e.g. customer_reply_alerts to be texted the moment a client texts the business). Use ONLY when the owner explicitly asks, in this conversation, to change how or when they are alerted. Pass only the toggles they asked about. It cannot change the alert phone number or email — that is done from Settings → Notifications. After the tool returns, tell the owner exactly which alerts were changed and their new state.",
+    "Turn the owner's notification/alert toggles on or off (e.g. customer_reply_alerts to be texted the moment a client texts the business). Use ONLY when the owner explicitly asks, in this conversation, to change how or when they are alerted. Pass only the toggles they asked about. It cannot change the alert phone number or email, that is done from Settings → Notifications. After the tool returns, tell the owner exactly which alerts were changed and their new state.",
   parameters: {
     type: "object",
     properties: NOTIFICATION_TOGGLE_PARAMS,
@@ -456,7 +456,7 @@ function bookFailureGuidance(detail: string): string {
     );
   }
   return (
-    "The booking did not go through — treat that time as no longer available and never " +
+    "The booking did not go through, treat that time as no longer available and never " +
     "blame a technical error. Re-check availability with calendar_find_slots and offer a " +
     "fresh option, or tell the owner the booking could not be completed."
   );
@@ -478,7 +478,7 @@ function lifecycleFailureGuidance(detail: string, verb: "reschedule" | "cancel")
   }
   if (detail === "calendar_reschedule_failed" || detail === "calendar_cancel_failed") {
     return (
-      `The ${verb} did not go through — never blame a technical error and never book a ` +
+      `The ${verb} did not go through, never blame a technical error and never book a ` +
       "second appointment as a workaround. Tell the owner it could not be completed."
     );
   }
@@ -487,7 +487,7 @@ function lifecycleFailureGuidance(detail: string, verb: "reschedule" | "cancel")
 
 const RESCHEDULE_LINK_STEERING =
   "The appointment has NOT been moved yet. Give the owner the rescheduleLink so the " +
-  "attendee picks the new time themselves — the SAME appointment gets updated when they " +
+  "attendee picks the new time themselves, the SAME appointment gets updated when they " +
   "finish. Never state the reschedule is done or confirm a new time.";
 
 // ---------------------------------------------------------------------
@@ -598,7 +598,7 @@ export async function executeActionTool(
           return {
             ok: false,
             message:
-              "recipient_opted_out — this number texted STOP and cannot be messaged. Tell the owner."
+              "recipient_opted_out, this number texted STOP and cannot be messaged. Tell the owner."
           };
         }
         const config = await getMessagingConfig(businessId, undefined, { resolveRcs: true });
@@ -617,8 +617,8 @@ export async function executeActionTool(
           return {
             ok: false,
             message: isQuota
-              ? "sms_quota_blocked — the monthly SMS limit is used up. Tell the owner; do not retry."
-              : "sms_send_failed — the text did NOT go out. Tell the owner honestly."
+              ? "sms_quota_blocked, the monthly SMS limit is used up. Tell the owner; do not retry."
+              : "sms_send_failed, the text did NOT go out. Tell the owner honestly."
           };
         }
         // Best-effort durable log so the text renders in the dashboard Text
@@ -673,19 +673,19 @@ export async function executeActionTool(
             return {
               ok: false,
               message:
-                "whatsapp_not_connected — WhatsApp isn't connected. Point the owner to /dashboard/integrations/whatsapp."
+                "whatsapp_not_connected, WhatsApp isn't connected. Point the owner to /dashboard/integrations/whatsapp."
             };
           }
           if (delivered.reason === "template_not_approved") {
             return {
               ok: false,
               message:
-                "whatsapp_window_closed — the recipient hasn't messaged on WhatsApp in 24 hours and the message template is still in Meta review. Suggest texting them with send_sms instead."
+                "whatsapp_window_closed, the recipient hasn't messaged on WhatsApp in 24 hours and the message template is still in Meta review. Suggest texting them with send_sms instead."
             };
           }
           return {
             ok: false,
-            message: "whatsapp_send_failed — the message did NOT go out. Tell the owner honestly."
+            message: "whatsapp_send_failed, the message did NOT go out. Tell the owner honestly."
           };
         }
         await upsertRecipientContact(normalized.value, "whatsapp", parsed.data.contactName);
@@ -819,7 +819,7 @@ export async function executeActionTool(
     });
     return {
       ok: false,
-      message: "The tool failed unexpectedly. Tell the owner it did not complete — never pretend it did."
+      message: "The tool failed unexpectedly. Tell the owner it did not complete, never pretend it did."
     };
   }
 }

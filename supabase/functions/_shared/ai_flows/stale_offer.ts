@@ -146,7 +146,7 @@ export function classifyStaleOfferReply(args: {
 export function staleOfferAckText(outcome: StaleOfferOutcome): string {
   switch (outcome.kind) {
     case "claimed_by_sender":
-      return "You've already got this lead — it's yours. Reply 86 if you need to release it.";
+      return "You've already got this lead, it's yours. Reply 86 if you need to release it.";
     case "live_with_other":
       return (
         "That lead is with another teammate right now. If you can take it " +
@@ -154,12 +154,12 @@ export function staleOfferAckText(outcome: StaleOfferOutcome): string {
       );
     case "claimed_by_other":
       return (
-        `Thanks — that lead's claim window has passed and ` +
+        `Thanks, that lead's claim window has passed and ` +
         `${outcome.claimedName || "another teammate"} picked it up. You'll get the next one.`
       );
     case "moved_on":
       return (
-        "Thanks — that lead's claim window has passed, so it moved on to the next step. " +
+        "Thanks, that lead's claim window has passed, so it moved on to the next step. " +
         "You'll get the next one."
       );
   }

@@ -24,10 +24,10 @@ export type ChatTurnRoute =
 
 export const ATTACHMENT_OVER_BUDGET_MESSAGE =
   "Your coworker's monthly AI budget is used up, and reading attachments needs the cloud model. " +
-  "Attachment replies resume when your billing period resets — or add a Gemini credit pack from the Billing page.";
+  "Attachment replies resume when your billing period resets, or add a Gemini credit pack from the Billing page.";
 
 export const ATTACHMENT_NOT_CONFIGURED_MESSAGE =
-  "Attachment understanding isn't available right now — send the message without the attachment, or try again later.";
+  "Attachment understanding isn't available right now, send the message without the attachment, or try again later.";
 
 export function resolveChatTurnRoute(args: {
   hasAttachment: boolean;

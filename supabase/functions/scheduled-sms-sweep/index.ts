@@ -6,7 +6,7 @@
  * _shared/scheduled_sms.ts (unit-tested under the vitest coverage gate).
  */
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { createClient } from "npm:@supabase/supabase-js@2.45.0";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { processDueScheduledSms } from "../_shared/scheduled_sms.ts";
 

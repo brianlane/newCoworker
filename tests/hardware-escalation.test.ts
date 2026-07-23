@@ -122,7 +122,7 @@ describe("evaluateEscalationSignals", () => {
       interval("2026-07-01", 0, 10),
       interval("2026-07-02", 0, 10),
       interval("2026-07-03", 0, 10),
-      interval("2026-07-03", 20, 30) // disjoint — still peak 1 that day
+      interval("2026-07-03", 20, 30) // disjoint, still peak 1 that day
     ];
     const advice = evaluateEscalationSignals(evaluateInput({ callIntervals: intervals }));
     expect(advice).not.toBeNull();
@@ -201,7 +201,7 @@ describe("evaluateEscalationSignals", () => {
 
   it("does not mistake a small window total for a sustained pace", () => {
     // 4 settled minutes across the FIXED 7-day window projects ~17
-    // min/month (< 80% of 25) — no flag.
+    // min/month (< 80% of 25), no flag.
     const advice = evaluateEscalationSignals(evaluateInput({ windowVoiceSeconds: 4 * 60 }));
     expect(advice).toBeNull();
   });
@@ -305,7 +305,7 @@ describe("buildEscalationAdviceEmail", () => {
 
   it("names the tenant in a single-candidate subject and describes every signal", () => {
     const { subject, text } = buildEscalationAdviceEmail([base], "https://app.example.com");
-    expect(subject).toBe("[ops] Hardware escalation candidate — Amy's Plumbing (kvm2)");
+    expect(subject).toBe("[ops] Hardware escalation candidate, Amy's Plumbing (kvm2)");
     expect(text).toContain("hit the 1-concurrent-call cap on 3 of the last 7 days");
     expect(text).toContain("on pace for ~40 voice min/month (25 included)");
     expect(text).toContain("90 SMS month-to-date (cap 100)");

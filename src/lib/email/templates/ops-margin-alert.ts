@@ -1,7 +1,7 @@
 /**
  * Operator email: the daily margin alert found paying tenants whose actual
  * monthly margin (vendor actuals where synced) fell below the configured
- * floor. Digest form — one email per sync run while breaches persist.
+ * floor. Digest form, one email per sync run while breaches persist.
  */
 
 import { buildBrandedEmailHtml } from "@/lib/email/branded-html";
@@ -29,7 +29,7 @@ function money(cents: number): string {
 function breachLine(breach: MarginAlertBreach): string {
   return (
     `${breach.businessName} (${breach.businessId}): margin ${money(breach.marginCents)}/mo ` +
-    `— revenue ${money(breach.revenueCents)}, cost ${money(breach.costCents)}`
+    `: revenue ${money(breach.revenueCents)}, cost ${money(breach.costCents)}`
   );
 }
 
@@ -44,7 +44,7 @@ export function buildOpsMarginAlertEmail(input: OpsMarginAlertInput): OpsMarginA
   const text = textLines.join("\n\n");
 
   const html = buildBrandedEmailHtml({
-    // Internal ops inbox — omit the owner-facing platform signature block.
+    // Internal ops inbox, omit the owner-facing platform signature block.
     platformSignature: false,
     siteUrl: input.siteUrl,
     documentTitle: subject,

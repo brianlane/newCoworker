@@ -320,7 +320,7 @@ export async function escalateToHuman(
         }
         const transient = res.status === 429 || res.status >= 500;
         console.error("needs_human: notify post failed", res.status);
-        if (!transient) break; // a 4xx is permanent — retrying can't help
+        if (!transient) break; // a 4xx is permanent, retrying can't help
       } catch (postErr) {
         console.error("needs_human: notify post threw", postErr);
       }
