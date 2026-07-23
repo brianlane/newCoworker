@@ -464,10 +464,23 @@ export async function updateCustomerOwnerFields(
 
   // Knowledge graph: only identity-bearing edits touch it (this helper also
   // carries high-frequency knobs like tags/reply-mode that say nothing
-  // entity-shaped). Never-throws, mode-gated inside.
+  // entity-shaped). An edit that carries no display name (email-only save,
+  // or an explicit name clear) still needs the node's canonical name for
+  // resolution — read it back off the just-updated row; a failed read
+  // degrades to nameless (the builder then no-ops). Never-throws.
   if ("displayName" in edit || "email" in edit) {
+    let displayName = "displayName" in edit ? (edit.displayName ?? null) : null;
+    if (!displayName) {
+      const { data } = await db
+        .from("contacts")
+        .select("display_name")
+        .eq("business_id", businessId)
+        .eq("customer_e164", customerE164)
+        .maybeSingle();
+      displayName = (data as { display_name?: string | null } | null)?.display_name ?? null;
+    }
     await ingestContact(businessId, {
-      displayName: edit.displayName ?? null,
+      displayName,
       e164: customerE164,
       email: edit.email ?? null
     });

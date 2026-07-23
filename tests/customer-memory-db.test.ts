@@ -865,6 +865,33 @@ describe("updateCustomerOwnerFields", () => {
     vi.mocked(ingestContact).mockClear();
     vi.mocked(ingestPinnedNote).mockClear();
 
+    // Email-only edit: the graph still needs the node's canonical name, so
+    // the hook reads it back off the row (Bugbot #874).
+    const emailOnly = makeClient({
+      fromTerminator: { data: { display_name: "Joe Existing" }, error: null }
+    });
+    await updateCustomerOwnerFields(BIZ, CUSTOMER, { email: "joe@x.com" }, emailOnly.client);
+    expect(ingestContact).toHaveBeenCalledWith(BIZ, {
+      displayName: "Joe Existing",
+      e164: CUSTOMER,
+      email: "joe@x.com"
+    });
+
+    vi.mocked(ingestContact).mockClear();
+
+    // Email-only edit on a NAMELESS contact: the read returns nothing and
+    // the ingest degrades to nameless (builder no-ops downstream).
+    const emailNameless = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(BIZ, CUSTOMER, { email: "x@y.co" }, emailNameless.client);
+    expect(ingestContact).toHaveBeenCalledWith(BIZ, {
+      displayName: null,
+      e164: CUSTOMER,
+      email: "x@y.co"
+    });
+
+    vi.mocked(ingestContact).mockClear();
+    vi.mocked(ingestPinnedNote).mockClear();
+
     // Pinned-only edit: note fact without a display name (falls back to the
     // number inside the builder); a null displayName clears no node.
     const pinnedOnly = makeClient({ fromTerminator: { data: null, error: null } });
