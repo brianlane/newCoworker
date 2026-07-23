@@ -23,7 +23,7 @@ export type ConfigRow = {
    * 14KB window land here (append path in
    * src/lib/dashboard-chat/memory-append.ts) instead of being destroyed.
    * Never injected into static prompts; ranked retrieval reads it. Optional
-   * on the type: rows read before the 20260723002628_memory_archive
+   * on the type: rows read before the 20260820100000_memory_archive
    * migration ran won't have it.
    */
   memory_archive_md?: string;

@@ -11,6 +11,11 @@
 -- static prompt; ranked retrieval (business_knowledge_lookup) reads it so
 -- archived facts stay answerable. App-side cap ~200KB (MEMORY_ARCHIVE_MD_MAX_CHARS).
 --
+-- Version stamp note: production's migration ledger is already at
+-- 20260820000000 (legacy future-dated stamps), and `supabase db push`
+-- refuses out-of-order versions — so this continues the sequence after the
+-- ledger head rather than using today's real date.
+--
 -- No RLS change needed: business_configs already carries the table's
 -- deny-by-default posture; this is just a new column on the existing row.
 alter table public.business_configs
