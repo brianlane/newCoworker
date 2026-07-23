@@ -78,13 +78,29 @@ export const COPY_KEYS = new Set([
   "persona"
 ]);
 
-/** The README replacement policy: comma (or nothing) instead of an em dash. */
+/**
+ * The README replacement policy: comma (or a hyphen/nothing at line edges)
+ * instead of an em dash. A dash OPENING a line is a signature/list dash
+ * ("— The Team" becomes "- The Team", never ", The Team"), and a dash
+ * CLOSING a line is dropped, so the rewrite can never strand a comma at
+ * either edge of a line.
+ */
 export function stripEmDashesFromCopy(value: string): string {
   return value
-    .replace(new RegExp(` ${EM_DASH} `, "g"), ", ")
-    .replace(new RegExp(`${EM_DASH} `, "g"), ", ")
-    .replace(new RegExp(` ${EM_DASH}`, "g"), ",")
-    .replace(new RegExp(EM_DASH, "g"), ", ");
+    .split("\n")
+    .map((line) =>
+      line
+        // Leading signature/list dash.
+        .replace(new RegExp(`^(\\s*)${EM_DASH}\\s*`), "$1- ")
+        // Trailing dash carries no content: drop it.
+        .replace(new RegExp(`\\s*${EM_DASH}\\s*$`), "")
+        // Interior separators become commas.
+        .replace(new RegExp(` ${EM_DASH} `, "g"), ", ")
+        .replace(new RegExp(`${EM_DASH} `, "g"), ", ")
+        .replace(new RegExp(` ${EM_DASH}`, "g"), ",")
+        .replace(new RegExp(EM_DASH, "g"), ", ")
+    )
+    .join("\n");
 }
 
 export type PatchedField = { path: string; before: string; after: string };
@@ -156,13 +172,21 @@ async function main(): Promise<void> {
   console.log(`Business : ${businessId}`);
   console.log(`Flows    : ${flows.length}`);
 
-  const patchedFlows: { id: string; name: string; fields: number }[] = [];
+  // Phase 1: compute and VALIDATE every patch before any write, so a flow
+  // that would become invalid aborts the whole run with zero flows touched
+  // (never a mixed half-patched tenant).
+  const pending: {
+    id: string;
+    name: string;
+    def: unknown;
+    patched: PatchedField[];
+  }[] = [];
   for (const flow of flows) {
     const def = JSON.parse(JSON.stringify(flow.definition)) as unknown;
     const patched = patchCopyFields(def);
     if (patched.length === 0) continue;
 
-    // Re-validate exactly like the dashboard/CRUD path before any write.
+    // Re-validate exactly like the dashboard/CRUD path.
     try {
       parseAiFlowDefinition(def);
     } catch (err) {
@@ -178,36 +202,49 @@ async function main(): Promise<void> {
       console.log(`    BEFORE: ${f.before.replace(/\n/g, "\\n").slice(0, 200)}`);
       console.log(`    AFTER : ${f.after.replace(/\n/g, "\\n").slice(0, 200)}`);
     }
-
-    if (args.apply) {
-      const { error: upErr } = await db
-        .from("ai_flows")
-        .update({ definition: def })
-        .eq("id", flow.id);
-      if (upErr) {
-        console.error(`Update failed for ${flow.id}: ${upErr.message}`);
-        process.exit(1);
-      }
-      console.log("  -> updated.");
-    }
-    patchedFlows.push({ id: flow.id, name: flow.name, fields: patched.length });
+    pending.push({ id: flow.id, name: flow.name, def, patched });
   }
 
-  if (patchedFlows.length === 0) {
+  if (pending.length === 0) {
     console.log("\nNo em dashes in any flow's copy fields. Nothing to do.");
     return;
   }
   if (!args.apply) {
     console.log(
-      `\n[dry-run] ${patchedFlows.length} flow(s) would be patched. Re-run with --apply to write.`
+      `\n[dry-run] ${pending.length} flow(s) would be patched. Re-run with --apply to write.`
     );
     return;
   }
-  console.log(`\nPatched ${patchedFlows.length} flow(s).`);
+
+  // Phase 2: every patch validated, write them all. A write failure records
+  // what DID land in the ledger before exiting, so a partial apply is
+  // visible instead of silent.
+  const written: { id: string; name: string; fields: number }[] = [];
+  for (const p of pending) {
+    const { error: upErr } = await db
+      .from("ai_flows")
+      .update({ definition: p.def })
+      .eq("id", p.id);
+    if (upErr) {
+      console.error(`Update failed for ${p.id} ("${p.name}"): ${upErr.message}`);
+      console.error(
+        `${written.length} of ${pending.length} flow(s) were already updated; recording the partial apply in the ledger. Re-run to finish (idempotent).`
+      );
+      await recordOneshotApplied(db, {
+        scriptPath: process.argv[1] ?? "strip-em-dashes-flows.ts",
+        businessId,
+        details: { flows: written, partial: true, failed_flow_id: p.id }
+      });
+      process.exit(1);
+    }
+    console.log(`updated ${p.name} (${p.id})`);
+    written.push({ id: p.id, name: p.name, fields: p.patched.length });
+  }
+  console.log(`\nPatched ${written.length} flow(s).`);
   await recordOneshotApplied(db, {
     scriptPath: process.argv[1] ?? "strip-em-dashes-flows.ts",
     businessId,
-    details: { flows: patchedFlows }
+    details: { flows: written }
   });
 }
 

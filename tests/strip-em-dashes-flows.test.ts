@@ -16,16 +16,26 @@ import {
 const EM = "\u2014";
 
 describe("stripEmDashesFromCopy", () => {
-  it("replaces separators with commas per the README policy", () => {
+  it("replaces interior separators with commas per the README policy", () => {
     expect(stripEmDashesFromCopy(`kept for you ${EM} not offered`)).toBe(
       "kept for you, not offered"
     );
-    expect(stripEmDashesFromCopy(`${EM} The Team`)).toBe(", The Team");
     expect(stripEmDashesFromCopy(`a${EM}b`)).toBe("a, b");
   });
 
+  it("never strands a comma at a line edge (Bugbot #865)", () => {
+    // Leading signature/list dash becomes a hyphen, never ", The Team".
+    expect(stripEmDashesFromCopy(`${EM} The Team`)).toBe("- The Team");
+    expect(stripEmDashesFromCopy(`Thanks!\n${EM} Amy`)).toBe("Thanks!\n- Amy");
+    // Trailing dash carries no content: dropped, no dangling separator.
+    expect(stripEmDashesFromCopy(`Call me ${EM}`)).toBe("Call me");
+    expect(stripEmDashesFromCopy(`Call me ${EM}\nSecond line`)).toBe(
+      "Call me\nSecond line"
+    );
+  });
+
   it("is idempotent on clean copy", () => {
-    const clean = "No dashes here, just commas.";
+    const clean = "No dashes here, just commas.\n- The Team";
     expect(stripEmDashesFromCopy(clean)).toBe(clean);
   });
 });
