@@ -285,9 +285,18 @@ export default async function DashboardPage() {
                           <LocalDateTime iso={item.at} />
                         </p>
                       </div>
-                      <Badge variant={ACTIVITY_BADGE[item.kind].variant}>
-                        {tBadge(ACTIVITY_BADGE[item.kind].labelKey)}
-                      </Badge>
+                      <span className="flex shrink-0 items-center gap-2">
+                        {/* Flow-sent messages carry the green AiFlow origin
+                            chip next to their kind badge. */}
+                        {item.origin === "aiflow" && (
+                          <Badge variant={ACTIVITY_BADGE.aiflow.variant}>
+                            {tBadge(ACTIVITY_BADGE.aiflow.labelKey)}
+                          </Badge>
+                        )}
+                        <Badge variant={ACTIVITY_BADGE[item.kind].variant}>
+                          {tBadge(ACTIVITY_BADGE[item.kind].labelKey)}
+                        </Badge>
+                      </span>
                     </a>
                   </li>
                 ))}

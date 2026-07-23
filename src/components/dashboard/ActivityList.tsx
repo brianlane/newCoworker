@@ -49,7 +49,14 @@ export function ActivityList({
   const filtered = useMemo(
     () =>
       items.filter((item) =>
-        matchesQuery(query, [item.label, tBadge(ACTIVITY_BADGE[item.kind].labelKey)])
+        matchesQuery(query, [
+          item.label,
+          tBadge(ACTIVITY_BADGE[item.kind].labelKey),
+          // The AiFlow origin chip is searchable text too — "aiflow" must
+          // keep matching flow-sent messages now that the tag lives in the
+          // chip instead of the label.
+          ...(item.origin === "aiflow" ? [tBadge(ACTIVITY_BADGE.aiflow.labelKey)] : [])
+        ])
       ),
     [items, query, tBadge]
   );
@@ -126,6 +133,13 @@ export function ActivityList({
                           Board
                         </a>
                       </>
+                    )}
+                    {/* Flow-sent messages carry the green AiFlow origin chip
+                        next to their kind badge. */}
+                    {item.origin === "aiflow" && (
+                      <Badge variant={ACTIVITY_BADGE.aiflow.variant}>
+                        {tBadge(ACTIVITY_BADGE.aiflow.labelKey)}
+                      </Badge>
                     )}
                     <Badge variant={ACTIVITY_BADGE[item.kind].variant}>
                       {tBadge(ACTIVITY_BADGE[item.kind].labelKey)}

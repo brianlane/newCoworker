@@ -49,6 +49,13 @@ export type ActivityItem = {
    * lets contact-scoped consumers group items by person.
    */
   contactE164?: string;
+  /**
+   * Set when an outbound message was sent BY an AiFlow (`source = 'ai_flow'`
+   * on `sms_outbound_log` / `email_log`). Render sites add the green AiFlow
+   * chip next to the kind badge so automation traffic is recognizable at a
+   * glance on any message type.
+   */
+  origin?: "aiflow";
 };
 
 export type ActivityCallRow = {
@@ -75,11 +82,16 @@ export type ActivitySmsReplyRow = {
 export type ActivitySmsOutboundRow = {
   to_e164: string | null;
   /**
-   * `sms_outbound_log.source` — tags the send's origin in the feed:
-   * `ai_flow` renders as "(AiFlow)". Optional so contact-scoped callers
-   * that predate the tag keep compiling.
+   * `sms_outbound_log.source` — one origin signal for the AiFlow tag.
+   * Optional so contact-scoped callers that predate the tag keep compiling.
    */
   source?: string | null;
+  /**
+   * `sms_outbound_log.flow_id` — the AUTHORITATIVE flow-origin signal: the
+   * flow worker stamps it on every send it makes, including ones whose
+   * `source` reflects the transport (e.g. group/agent-offer texts).
+   */
+  flow_id?: string | null;
   created_at: string;
 };
 
@@ -94,6 +106,15 @@ export type ActivityEmailRow = {
   to_email: string | null;
   from_email: string | null;
   subject: string | null;
+  /** `email_log.source` — one origin signal for the AiFlow tag. */
+  source?: string | null;
+  /**
+   * `email_log.flow_id` — the AUTHORITATIVE flow-origin signal: the flow
+   * worker stamps it on every send, while `source` can be `owner_mailbox` /
+   * `tenant_mailbox_outbound` when the flow sends through the tenant's
+   * connected mailbox.
+   */
+  flow_id?: string | null;
   created_at: string;
 };
 
@@ -272,16 +293,17 @@ export function collectActivityItems(input: ActivityFeedInput): ActivityItem[] {
 
   input.smsOutbound.forEach((r, i) => {
     if (!r.to_e164) return;
-    // Tag flow-driven sends so the owner can tell an automation text from a
-    // manual/assistant one at a glance (sms_outbound_log.source = 'ai_flow').
-    const origin = r.source === "ai_flow" ? " (AiFlow)" : "";
     items.push({
       id: `sms_out:${i}:${r.created_at}`,
       kind: "sms_outbound",
-      label: `Text to ${named(r.to_e164)}${origin}`,
+      label: `Text to ${named(r.to_e164)}`,
       href: `/dashboard/messages/${encodeURIComponent(r.to_e164)}`,
       at: r.created_at,
-      contactE164: r.to_e164
+      contactE164: r.to_e164,
+      // Flow-driven sends carry the AiFlow origin so render sites add the
+      // green chip. flow_id is the authoritative signal (stamped on every
+      // flow send regardless of transport source); source covers legacy rows.
+      ...(r.flow_id != null || r.source === "ai_flow" ? { origin: "aiflow" as const } : {})
     });
   });
 
@@ -294,7 +316,14 @@ export function collectActivityItems(input: ActivityFeedInput): ActivityItem[] {
       kind: inbound ? "email_inbound" : "email_outbound",
       label: `${inbound ? "Email from" : "Email to"} ${who}${subject}`,
       href: "/dashboard/emails",
-      at: r.created_at
+      at: r.created_at,
+      // Same AiFlow origin tag as texts — the badge applies to any message
+      // type a flow can send (outbound only). flow_id is authoritative: the
+      // flow worker stamps it even when it sends through the tenant mailbox
+      // (source 'owner_mailbox' / 'tenant_mailbox_outbound').
+      ...(!inbound && (r.flow_id != null || r.source === "ai_flow")
+        ? { origin: "aiflow" as const }
+        : {})
     });
   });
 
@@ -594,7 +623,7 @@ async function fetchActivityFeedInput(
         : beforeLt(
             db
               .from("sms_outbound_log")
-              .select("to_e164, source, created_at")
+              .select("to_e164, source, flow_id, created_at")
               .eq("business_id", businessId)
               .is("deleted_at", null)
               .gte("created_at", since),
@@ -610,14 +639,14 @@ async function fetchActivityFeedInput(
             emailDirection
               ? db
                   .from("email_log")
-                  .select("direction, to_email, from_email, subject, created_at")
+                  .select("direction, to_email, from_email, subject, source, flow_id, created_at")
                   .eq("business_id", businessId)
                   .eq("direction", emailDirection)
                   .is("deleted_at", null)
                   .gte("created_at", since)
               : db
                   .from("email_log")
-                  .select("direction, to_email, from_email, subject, created_at")
+                  .select("direction, to_email, from_email, subject, source, flow_id, created_at")
                   .eq("business_id", businessId)
                   .is("deleted_at", null)
                   .gte("created_at", since),
@@ -869,7 +898,7 @@ export async function getContactActivity(
       ? none
       : db
           .from("sms_outbound_log")
-          .select("to_e164, source, created_at")
+          .select("to_e164, source, flow_id, created_at")
           .eq("business_id", businessId)
           .in("to_e164", numbers)
           .is("deleted_at", null)
@@ -882,7 +911,7 @@ export async function getContactActivity(
       ? none
       : db
           .from("email_log")
-          .select("direction, to_email, from_email, subject, created_at")
+          .select("direction, to_email, from_email, subject, source, flow_id, created_at")
           .eq("business_id", businessId)
           .is("deleted_at", null)
           .or(`to_email.eq.${email},from_email.eq.${email}`)
@@ -991,7 +1020,7 @@ export async function getActivityForContacts(
       .limit(scanLimit),
     db
       .from("sms_outbound_log")
-      .select("to_e164, source, created_at")
+      .select("to_e164, source, flow_id, created_at")
       .eq("business_id", businessId)
       .in("to_e164", numbers)
       .is("deleted_at", null)
