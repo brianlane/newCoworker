@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   SMS_CONVERSATION_QUALITY_LINE,
   SMS_GROUNDED_ACTIONS_LINE,
@@ -99,11 +99,11 @@ const THREAD: ContactTimelineEvent[] = [
   }
 ];
 
-let reply = "";
-let reasoningPresent = false;
-let verdict: JudgeVerdict;
-
-beforeAll(async () => {
+async function runTimezoneTurn(): Promise<{
+  reply: string;
+  reasoningPresent: boolean;
+  verdict: JudgeVerdict;
+}> {
   // The worker's fresh-thread customer preamble, piece for piece
   // (sms-inbound-worker/index.ts, non-staff path; this contact has no
   // sms_rowboat_threads row, so the timeline block IS injected).
@@ -138,9 +138,9 @@ beforeAll(async () => {
     KYP_SMS_CHAT_MODEL
   );
   const split = splitReplyReasoning(raw);
-  reply = split.reply;
-  reasoningPresent = split.reasoning !== null;
-  verdict = await judgeReply(
+  const reply = split.reply;
+  const reasoningPresent = split.reasoning !== null;
+  const verdict = await judgeReply(
     "the business (located in Toronto, Eastern Time) texted the customer " +
       "'just confirming our call today at 1:00 PM' without naming a time zone, " +
       "after earlier promising '11am your time on Monday'; the customer's phone " +
@@ -172,32 +172,38 @@ beforeAll(async () => {
         "introducing themselves by name), rather than continuing mid-thread?"
     }
   );
-}, 120_000);
+  return { reply, reasoningPresent, verdict };
+}
 
 describe("KYP timezone turn — 'What time zone is that?' (fresh thread, live model)", () => {
-  it("answers substantively", () => {
-    expect(reply.trim().length).toBeGreaterThan(0);
-  });
+  // One retried test instead of beforeAll + four tests (the suite-standard
+  // de-flake shape, same restructure as the voice-booking and kyp-operator
+  // suites): a single marginal draw — the 2026-07-23 hammer run drew one
+  // reply the judge scored as not resolving the zone — must re-roll the
+  // WHOLE turn, and vitest retry cannot re-run a beforeAll.
+  it(
+    "resolves the zone mid-thread, no wrong equivalence, no re-ask, with trailer",
+    { retry: 1, timeout: 120_000 },
+    async () => {
+      const { reply, reasoningPresent, verdict } = await runTimezoneTurn();
 
-  it("resolves the time zone from the thread it can see", () => {
-    if (!verdict.answers.resolves_time_zone || verdict.answers.states_wrong_time) {
-      console.error("live reply:", reply);
-      console.error("judge verdict:", JSON.stringify(verdict));
+      expect(reply.trim().length).toBeGreaterThan(0);
+
+      if (
+        !verdict.answers.resolves_time_zone ||
+        verdict.answers.states_wrong_time ||
+        verdict.answers.asks_which_call ||
+        verdict.answers.restarts_conversation
+      ) {
+        console.error("live reply:", reply);
+        console.error("judge verdict:", JSON.stringify(verdict));
+      }
+      expect(verdict.answers.resolves_time_zone).toBe(true);
+      expect(verdict.answers.states_wrong_time).toBe(false);
+      expect(verdict.answers.asks_which_call).toBe(false);
+      expect(verdict.answers.restarts_conversation).toBe(false);
+
+      expect(reasoningPresent).toBe(true);
     }
-    expect(verdict.answers.resolves_time_zone).toBe(true);
-    expect(verdict.answers.states_wrong_time).toBe(false);
-  });
-
-  it("does not ask which call is meant or restart the conversation", () => {
-    if (verdict.answers.asks_which_call || verdict.answers.restarts_conversation) {
-      console.error("live reply:", reply);
-      console.error("judge verdict:", JSON.stringify(verdict));
-    }
-    expect(verdict.answers.asks_which_call).toBe(false);
-    expect(verdict.answers.restarts_conversation).toBe(false);
-  });
-
-  it("emits the reasoning trailer", () => {
-    expect(reasoningPresent).toBe(true);
-  });
+  );
 });

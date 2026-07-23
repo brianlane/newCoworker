@@ -43,6 +43,14 @@ The live e2e suite was ~99% of the `internal-ci-debug` key's request volume
 (8.29K requests on Jul 21 vs 0.06K tenant), because every PR push AND every
 push to main ran the full ~111-test suite. Three controls now bound it:
 
+**Admin kill switch first**: Admin → Gemini → "CI live e2e" toggles between
+`per-change` (the controls below) and `nightly-only` (PRs/pushes skip ALL
+paid calls — the e2e check still gates merges — and the nightly cron is the
+only live coverage, emailing team@newcoworker.com on failure after one
+built-in re-run filters model wobble). Stored in `admin_platform_settings`
+(`ci_e2e_mode`), served to GitHub Actions by `GET /api/public/ci-e2e-mode`,
+fail-open to per-change on any read error.
+
 - **Scoped runs** — `.github/scripts/e2e-scope.sh` maps the diff to the
   e2e files it can affect (import-audited groups: flows, SMS prompts,
   operator, messenger, voice); unmapped paths fail open to the full suite.
