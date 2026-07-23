@@ -59,11 +59,26 @@ jobs:
             echo "::warning::RESEND_API_KEY secret is not set — cannot email the admin. Set it (gh secret set RESEND_API_KEY) or watch the Actions tab."
             exit 0
           fi
-          BODY=$(jq -n --arg url "$RUN_URL" --arg title "$RUN_TITLE" '{
+          # The wording must match what ACTUALLY failed (Bugbot on PR #864):
+          # the e2e job runs AFTER Vercel Deploy on push runs, so a run can
+          # fail with production fully updated. Only claim a blocked deploy
+          # when the Vercel Deploy job itself is among the failures; any
+          # error listing jobs falls back to the blocked-deploy wording (the
+          # scarier reading is the safe default for a human to verify).
+          failed_jobs=$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?filter=latest" --paginate \
+            -q '.jobs[] | select(.conclusion == "failure") | .name' 2>/dev/null | sort -u) || failed_jobs=""
+          if [ -z "$failed_jobs" ] || printf '%s\n' "$failed_jobs" | grep -qx "Vercel Deploy"; then
+            SUBJECT="Main deploy FAILED twice — production did not update: $RUN_TITLE"
+            DETAIL="Until this run is green, production has NOT received this merge: pending migrations, edge functions, and the Vercel app deploy are all blocked (they ride the Vercel Deploy job)."
+          else
+            SUBJECT="Main CI FAILED twice after deploy: $RUN_TITLE"
+            DETAIL="The Vercel Deploy job succeeded — production IS updated — but a post-deploy job failed twice: $(printf '%s' "$failed_jobs" | tr '\n' ',' | sed 's/,$//; s/,/, /g'). Treat a failed live e2e here as a possible AI regression that just shipped."
+          fi
+          BODY=$(jq -n --arg url "$RUN_URL" --arg subject "$SUBJECT" --arg detail "$DETAIL" '{
             from: "New Coworker <contact@newcoworker.com>",
             to: ["team@newcoworker.com"],
-            subject: ("Main deploy FAILED twice — production did not update: " + $title),
-            text: ("The push-to-main CI run failed, was automatically re-run once, and failed again — this is a real failure, not a runner blip.\n\nRun: " + $url + "\n\nUntil this run is green, production has NOT received this merge: pending migrations, edge functions, and the Vercel app deploy are all blocked (they ride the Vercel Deploy job). Read the failed job log, fix or revert, and re-run.\n\n— CI (main-failure-watch.yml)")
+            subject: $subject,
+            text: ("The push-to-main CI run failed, was automatically re-run once, and failed again — this is a real failure, not a runner blip.\n\nRun: " + $url + "\n\n" + $detail + " Read the failed job log, fix or revert, and re-run.\n\n— CI (main-failure-watch.yml)")
           }')
           curl -fsS https://api.resend.com/emails \
             -H "Authorization: Bearer $RESEND_API_KEY" \
