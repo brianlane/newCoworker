@@ -3,6 +3,7 @@ import { parseAiFlowDefinition } from "@/lib/ai-flows/schema";
 import {
   buildDefinition,
   DEFAULT_FLOW_NAME,
+  DEFAULT_PINNABLE_TEAMMATES,
   REFERRAL_TOUCH_LINE
 } from "../scripts/oneshot/seed-amy-new-lead-intake";
 
@@ -93,13 +94,22 @@ describe("seed-amy-new-lead-intake definition", () => {
       "phone_lead_type",
       "email_intro_type",
       "referred_by",
-      "referral_gate"
+      "referral_gate",
+      "route_variant"
     ]) {
       expect(names).toContain(required);
     }
     // The referral fact rides lead_details into the team offer / notify.
     const details = parse.fields.find((f) => f.name === "lead_details");
     expect(details?.description).toContain("who referred them");
+    // The routing token teaches the model every pinnable teammate AND the
+    // lead-type fallback, and answers none without a phone.
+    const variant = parse.fields.find((f) => f.name === "route_variant");
+    for (const t of DEFAULT_PINNABLE_TEAMMATES) {
+      expect(variant?.description).toContain(t.token);
+    }
+    expect(variant?.description).toContain("buyer, seller, or both");
+    expect(variant?.description).toContain("answer exactly: none");
   });
 
   it("gates the contact upsert on a parsed phone (upsert fails hard on 'none')", () => {
@@ -167,12 +177,12 @@ describe("seed-amy-new-lead-intake definition", () => {
     }
   });
 
-  it("routes gate on a parsed phone; buyer is un-pinned, seller/both pin the agent", () => {
+  it("default routes gate on the route_variant lead-type tokens; buyer un-pinned, seller/both pin the agent", () => {
     const def = buildDefinition({ agentName: "Dave Lane" });
     for (const type of LEAD_TYPES) {
       const route = step(def, `route_${type}`);
       expect(route.type).toBe("route_to_team");
-      expect(route.when).toEqual({ var: "phone_lead_type", equals: type });
+      expect(route.when).toEqual({ var: "route_variant", equals: type });
       if (type === "buyer") {
         expect(route.agentName).toBeUndefined();
         expect(route.agentNames).toBeUndefined();
@@ -180,6 +190,33 @@ describe("seed-amy-new-lead-intake definition", () => {
         expect(route.agentName).toBe("Dave Lane");
       }
     }
+  });
+
+  it("an explicitly named teammate gets a pinned route (no $1M override, honest fallback)", () => {
+    const def = buildDefinition();
+    for (const t of DEFAULT_PINNABLE_TEAMMATES) {
+      const route = step(def, `route_pin_${t.token}`);
+      expect(route.type).toBe("route_to_team");
+      // Exactly one route can fire: the same token gates pin vs lead type.
+      expect(route.when).toEqual({ var: "route_variant", equals: t.token });
+      // Literal roster name: agentName is never template-rendered.
+      expect(route.agentName).toBe(t.name);
+      expect(String(route.agentName)).not.toContain("{{");
+      // Amy naming a person IS the decision: no keep-for-owner override.
+      expect(route.ownerDirectWhen).toBeUndefined();
+      expect(route.ownerDirectTemplate).toBeUndefined();
+      // The teammate is told this was a personal hand-off.
+      expect(String(route.offerTemplate)).toContain("Amy asked for this lead to go to YOU");
+      // Fallback names the broken promise, back to Amy, never someone else.
+      expect(String(route.ownerFallbackTemplate)).toContain(t.name);
+      expect(String(route.ownerFallbackTemplate)).toContain("you asked for them to take it");
+    }
+    // Roster names must match Amy's live ai_flow_team_members rows exactly.
+    expect(DEFAULT_PINNABLE_TEAMMATES.map((t) => t.name)).toEqual([
+      "Dave Lane",
+      "Gabrielle Mota",
+      "Jason Lane"
+    ]);
   });
 
   it("keeps $1M+ leads for Amy on every route variant", () => {
@@ -204,7 +241,14 @@ describe("seed-amy-new-lead-intake definition", () => {
         s.when?.var === "phone_lead_type" &&
         LEAD_TYPES.includes(s.when.equals as (typeof LEAD_TYPES)[number])
     );
-    expect(typeGated).toHaveLength(9); // 3 SMS per intro arm x 2 arms + 3 routes
+    expect(typeGated).toHaveLength(6); // 3 SMS per intro arm x 2 arms
+    // Routes gate on route_variant, which also answers "none" without a
+    // phone, so no route (pinned or default) can fire either.
+    const routeGated = allSteps(def).filter((s) => s.when?.var === "route_variant");
+    expect(routeGated).toHaveLength(3 + DEFAULT_PINNABLE_TEAMMATES.length);
+    for (const r of routeGated) {
+      expect(r.when?.equals).not.toBe("none");
+    }
     // …and the honest notify names what did NOT happen.
     const noPhone = step(def, "notify_no_phone");
     expect(noPhone.type).toBe("notify_owner");
