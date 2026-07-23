@@ -31,6 +31,7 @@
 import { logger } from "@/lib/logger";
 import { geminiGenerateText } from "@/lib/gemini-generate-content";
 import { geminiGenerateImage } from "@/lib/gemini-generate-image";
+import { stripEmDashesFromDraft } from "./copy";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
   BLOG_IMAGES_BUCKET,
@@ -276,7 +277,8 @@ const DIGEST_SYSTEM_INSTRUCTION =
   "Cover ONLY the features provided; never mention bug fixes, internal work, or PR numbers. " +
   `The content body MUST be under ${DIGEST_MAX_WORDS} words. Group related features under ` +
   "'## ' section headings. The excerpt is 1-2 friendly sentences (it doubles as an " +
-  "Instagram caption, so no links and no markdown). " +
+  "Instagram caption, so no links and no markdown). Never use em dashes; use commas " +
+  "or periods instead. " +
   'Respond with JSON: {"title": string, "excerpt": string, "content": string} ' +
   "where content is markdown.";
 
@@ -305,7 +307,12 @@ export async function composeDigestWithGemini(
     if (!parsed.title || !parsed.excerpt || !parsed.content) {
       throw new Error("weekly-digest: Gemini digest draft missing fields");
     }
-    return { title: parsed.title, excerpt: parsed.excerpt, content: parsed.content };
+    // House rule: no em dashes in blog copy, ever — enforced, not just prompted.
+    return stripEmDashesFromDraft({
+      title: parsed.title,
+      excerpt: parsed.excerpt,
+      content: parsed.content
+    });
   };
 
   let draft = await generateOnce("");
