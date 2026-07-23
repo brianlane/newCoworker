@@ -41,6 +41,16 @@ describe("memoryBlocks", () => {
   it("returns [] when both documents are empty", () => {
     expect(memoryBlocks("", "")).toEqual([]);
   });
+
+  it("drops an all-blank chunk from an oversized run of whitespace lines", () => {
+    // A section padded with thousands of space-only lines chunks into an
+    // entirely-blank middle block — it must not become a scoreable block.
+    const md = `### H\n${"   \n".repeat(1_500)}- tail rule`;
+    const blocks = memoryBlocks(md, "");
+    expect(blocks.length).toBeGreaterThan(1);
+    for (const b of blocks) expect(b.text.trim().length).toBeGreaterThan(0);
+    expect(blocks.some((b) => b.text.includes("- tail rule"))).toBe(true);
+  });
 });
 
 describe("scoreMemoryBlock", () => {
