@@ -26,7 +26,8 @@ export function AdminFeedFilters({
   selected,
   businesses,
   businessId,
-  days
+  days,
+  windowDays
 }: {
   /** The page the params navigate to, e.g. "/admin/activity". */
   basePath: string;
