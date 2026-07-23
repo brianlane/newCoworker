@@ -46,6 +46,7 @@ import { buildDocumentsDigestMd } from "@/lib/documents/core";
 import {
   listActiveFactsForBusiness,
   listMemoryEntities,
+  resolveMemoryGraphMode,
   type MemoryEntityRow,
   type MemoryFactRow
 } from "@/lib/memory/graph-db";
@@ -106,6 +107,8 @@ export type VaultSyncDeps = {
   fetchGraph?: (
     businessId: string
   ) => Promise<{ entities: MemoryEntityRow[]; facts: MemoryFactRow[] }>;
+  /** Override the graph-mode inheritance resolution (tests). */
+  resolveGraphMode?: typeof resolveMemoryGraphMode;
 };
 
 /**
@@ -421,6 +424,7 @@ export async function syncVaultToVps(
       entities: await listMemoryEntities(bid),
       facts: await listActiveFactsForBusiness(bid)
     }));
+  const resolveGraphMode = deps.resolveGraphMode ?? resolveMemoryGraphMode;
   /* c8 ignore stop */
 
   const [biz, config, key, documents] = await Promise.all([
@@ -466,7 +470,7 @@ export async function syncVaultToVps(
   let graphProjection: { mode: "off" } | { mode: "wipe" } | { mode: "ship"; tarB64: string } = {
     mode: "off"
   };
-  const graphMode = config.memory_graph_mode ?? "off";
+  const graphMode = await resolveGraphMode(config.memory_graph_mode);
   if (graphMode === "shadow" || graphMode === "active") {
     try {
       const graph = await fetchGraph(businessId);

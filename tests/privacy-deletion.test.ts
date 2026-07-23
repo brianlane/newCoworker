@@ -120,6 +120,32 @@ describe("deleteEndUserData — central-only tenants", () => {
     expect(res.identifierFingerprint).toBe(fingerprintIdentifier(E164, null));
   });
 
+  it("scrubs the KG comparison ledger on every identifier axis (phone patterns × text columns)", async () => {
+    const db = makeCentralDb({
+      // 1 linked number × 4 text columns = 4 delete calls; give each a row.
+      "kg_retrieval_events#1": { data: [{ id: "k1" }], error: null },
+      "kg_retrieval_events#2": { data: [{ id: "k2" }], error: null },
+      "kg_retrieval_events#3": { data: [], error: null },
+      "kg_retrieval_events#4": { data: [{ id: "k3" }], error: null }
+    });
+    const res = await deleteEndUserData(BIZ, { e164: E164 }, { client: db as never });
+    const byTable = Object.fromEntries(res.tables.map((t) => [t.table, t]));
+    expect(byTable.kg_retrieval_events).toEqual({
+      table: "kg_retrieval_events",
+      central: 3,
+      box: null
+    });
+  });
+
+  it("fails loudly when the KG ledger scrub errors", async () => {
+    const db = makeCentralDb({
+      kg_retrieval_events: { data: null, error: { message: "denied" } }
+    });
+    await expect(
+      deleteEndUserData(BIZ, { e164: E164 }, { client: db as never })
+    ).rejects.toThrow(/kg_retrieval_events: denied/);
+  });
+
   it("deletes email-keyed rows (to + from) for an email-only request", async () => {
     const db = makeCentralDb({
       "email_log#1": { data: [{ id: "e1" }], error: null },
@@ -152,7 +178,8 @@ describe("deleteEndUserData — central-only tenants", () => {
       "business_document_shares",
       "document_signature_requests",
       "ai_reply_reasoning",
-      "sms_links"
+      "sms_links",
+      "kg_retrieval_events"
     ]);
   });
 

@@ -28,11 +28,13 @@ export type ConfigRow = {
    */
   memory_archive_md?: string;
   /**
-   * Memory knowledge-graph rollout mode: 'off' (default) | 'shadow' |
-   * 'active'. Optional on the type: rows read before the
+   * Memory knowledge-graph rollout mode: 'inherit' (default — follow the
+   * fleet-wide admin_platform_settings default) | 'off' | 'shadow' |
+   * 'active'. Resolve with resolveMemoryGraphMode — never read raw for
+   * behavior decisions. Optional on the type: rows read before the
    * 20260820100100_memory_graph migration ran won't have it.
    */
-  memory_graph_mode?: "off" | "shadow" | "active";
+  memory_graph_mode?: "inherit" | "off" | "shadow" | "active";
   website_md: string;
   /**
    * Canonical rendered "Business profile" markdown (hours/address/contact),
@@ -87,6 +89,7 @@ export async function patchBusinessConfig(
     identity_md?: string;
     memory_md?: string;
     memory_archive_md?: string;
+    memory_graph_mode?: "inherit" | "off" | "shadow" | "active";
     website_md?: string;
     profile_md?: string;
     website_crawl_report?: WebsiteCrawlReport;
@@ -118,6 +121,9 @@ export async function patchBusinessConfig(
   if (patch.memory_md !== undefined) updatePayload.memory_md = patch.memory_md;
   if (patch.memory_archive_md !== undefined) {
     updatePayload.memory_archive_md = patch.memory_archive_md;
+  }
+  if (patch.memory_graph_mode !== undefined) {
+    updatePayload.memory_graph_mode = patch.memory_graph_mode;
   }
   if (patch.website_md !== undefined) updatePayload.website_md = patch.website_md;
   if (patch.profile_md !== undefined) updatePayload.profile_md = patch.profile_md;

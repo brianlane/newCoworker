@@ -63,6 +63,9 @@ import { getLatestVpsPostureReport } from "@/lib/db/vps-posture";
 import { loadFleetMargins } from "@/lib/admin/margin-data";
 import { WebchatEnginePanel } from "@/components/admin/WebchatEnginePanel";
 import { getWidgetSettingsForBusiness, webchatReplyEngine } from "@/lib/webchat/db";
+import { MemoryGraphPanel } from "@/components/admin/MemoryGraphPanel";
+import { resolveMemoryGraphMode } from "@/lib/memory/graph-db";
+import { getKgAdminSummary } from "@/lib/memory/kg-events";
 
 export const dynamic = "force-dynamic";
 
@@ -115,6 +118,16 @@ export default async function BusinessDetailPage({
   const contactFormSinkBusinessId = await getContactFormSinkBusinessId().catch(
     () => null
   );
+  // Knowledge-graph card data. Best-effort — the page must render even if
+  // the graph tables are unreadable (card shows zeros).
+  const kgEffectiveMode = await resolveMemoryGraphMode(config?.memory_graph_mode).catch(
+    () => "off" as const
+  );
+  const kgSummary = await getKgAdminSummary(businessId).catch(() => ({
+    entityCount: 0,
+    factCount: 0,
+    lastEventAt: null
+  }));
 
   if (!business) notFound();
 
@@ -393,6 +406,23 @@ export default async function BusinessDetailPage({
           />
         </Card>
       )}
+
+      {/* Memory knowledge graph (all tiers — the graph runs fleet-wide) */}
+      <Card>
+        <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
+          Memory knowledge graph
+        </h2>
+        <MemoryGraphPanel
+          // Remount on tenant OR mode change so useState re-seeds.
+          key={`${businessId}:${config?.memory_graph_mode ?? "inherit"}`}
+          businessId={businessId}
+          initialMode={config?.memory_graph_mode ?? "inherit"}
+          effectiveMode={kgEffectiveMode}
+          entityCount={kgSummary.entityCount}
+          factCount={kgSummary.factCount}
+          lastEventAt={kgSummary.lastEventAt}
+        />
+      </Card>
 
       {/* Privacy / data lifecycle (all tiers — retention + erasure are
           compliance levers, not enterprise features) */}

@@ -9,6 +9,9 @@ vi.mock("@/lib/db/businesses", () => ({
 vi.mock("@/lib/privacy/retention", () => ({
   pruneExpiredContent: vi.fn()
 }));
+vi.mock("@/lib/memory/kg-events", () => ({
+  pruneKgRetrievalEvents: vi.fn(async () => 0)
+}));
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
@@ -17,6 +20,7 @@ import { POST } from "@/app/api/internal/data-retention-sweep/route";
 import { assertCronAuth } from "@/lib/cron-auth";
 import { listBusinessesWithRetention } from "@/lib/db/businesses";
 import { pruneExpiredContent } from "@/lib/privacy/retention";
+import { pruneKgRetrievalEvents } from "@/lib/memory/kg-events";
 
 function makeRequest(): Request {
   return new Request("http://localhost/api/internal/data-retention-sweep", {
@@ -82,6 +86,32 @@ describe("api/internal/data-retention-sweep route", () => {
     const json = await res.json();
     expect(json.data.pruned).toBe(1);
     expect(json.data.errors).toEqual([{ businessId: "biz-1", message: "box down" }]);
+  });
+
+  it("prunes the KG comparison ledger on its fixed window and reports the count", async () => {
+    vi.mocked(listBusinessesWithRetention).mockResolvedValue([]);
+    vi.mocked(pruneKgRetrievalEvents).mockResolvedValue(42);
+    const res = await POST(makeRequest());
+    const json = await res.json();
+    expect(json.data.kgEventsPruned).toBe(42);
+    expect(pruneKgRetrievalEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it("captures a KG-ledger prune failure without failing the sweep (non-Error too)", async () => {
+    vi.mocked(listBusinessesWithRetention).mockResolvedValue([]);
+    vi.mocked(pruneKgRetrievalEvents).mockRejectedValueOnce(new Error("locked"));
+    const res = await POST(makeRequest());
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    expect(json.data.kgEventsPruned).toBe(0);
+    expect(json.data.errors).toEqual([
+      { businessId: "platform:kg_retrieval_events", message: "locked" }
+    ]);
+
+    vi.mocked(pruneKgRetrievalEvents).mockRejectedValueOnce("string failure");
+    const res2 = await POST(makeRequest());
+    const json2 = await res2.json();
+    expect(json2.data.errors[0].message).toBe("string failure");
   });
 
   it("500s when the target list itself cannot be read", async () => {

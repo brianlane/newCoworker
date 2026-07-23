@@ -147,11 +147,89 @@ export async function supersedeMemoryFacts(
   if (error) throw new Error(`supersedeMemoryFacts: ${error.message}`);
 }
 
-/** The tenant's graph rollout mode: off (default) | shadow | active. */
+/** An EFFECTIVE graph mode (post-inheritance). */
+export type MemoryGraphMode = "off" | "shadow" | "active";
+
+/** What a business_configs row may hold ('inherit' follows the fleet default). */
+export type MemoryGraphModeSetting = MemoryGraphMode | "inherit";
+
+/** admin_platform_settings key holding the fleet-wide default mode. */
+export const MEMORY_GRAPH_DEFAULT_MODE_KEY = "memory_graph_default_mode";
+
+/** Fleet default when the settings key was never written. */
+export const MEMORY_GRAPH_FALLBACK_DEFAULT: MemoryGraphMode = "shadow";
+
+/**
+ * ~60s module cache for the fleet default: the resolver sits on the voice
+ * knowledge lookup's 3s deadline, so the settings row must not cost a DB
+ * round-trip per call.
+ */
+const DEFAULT_MODE_CACHE_TTL_MS = 60_000;
+let defaultModeCache: { value: MemoryGraphMode; at: number } | null = null;
+
+/** Tests only: drop the fleet-default cache between cases. */
+export function resetMemoryGraphDefaultCache(): void {
+  defaultModeCache = null;
+}
+
+function asMode(value: unknown): MemoryGraphMode | null {
+  return value === "off" || value === "shadow" || value === "active" ? value : null;
+}
+
+export type ResolveModeDeps = {
+  /** Injectable settings read (tests). */
+  getSetting?: (key: string) => Promise<unknown | null>;
+  now?: () => number;
+};
+
+/**
+ * The fleet-wide default graph mode (admin-set on /admin/memory-graph),
+ * cached ~60s. A missing or malformed setting falls back to 'shadow'.
+ */
+export async function getMemoryGraphDefaultMode(
+  deps: ResolveModeDeps = {}
+): Promise<MemoryGraphMode> {
+  /* c8 ignore start -- production defaults; tests inject */
+  const getSetting =
+    deps.getSetting ??
+    (async (key: string) => {
+      const { getAdminPlatformSetting } = await import("@/lib/admin/platform-settings");
+      return getAdminPlatformSetting(key);
+    });
+  /* c8 ignore stop */
+  const now = (deps.now ?? Date.now)();
+  if (defaultModeCache && now - defaultModeCache.at < DEFAULT_MODE_CACHE_TTL_MS) {
+    return defaultModeCache.value;
+  }
+  let value: MemoryGraphMode = MEMORY_GRAPH_FALLBACK_DEFAULT;
+  try {
+    value = asMode(await getSetting(MEMORY_GRAPH_DEFAULT_MODE_KEY)) ?? MEMORY_GRAPH_FALLBACK_DEFAULT;
+  } catch {
+    // Settings-table blip: serve the fallback and retry after the TTL.
+  }
+  defaultModeCache = { value, at: now };
+  return value;
+}
+
+/**
+ * Resolve a business_configs.memory_graph_mode value to the EFFECTIVE mode:
+ * explicit off/shadow/active as-is; 'inherit' (or absent/unknown — rows
+ * predating the migration) follows the fleet default.
+ */
+export async function resolveMemoryGraphMode(
+  configValue: string | null | undefined,
+  deps: ResolveModeDeps = {}
+): Promise<MemoryGraphMode> {
+  const explicit = asMode(configValue);
+  if (explicit) return explicit;
+  return getMemoryGraphDefaultMode(deps);
+}
+
+/** The tenant's EFFECTIVE graph rollout mode (inheritance resolved). */
 export async function getMemoryGraphMode(
   businessId: string,
   client?: SupabaseClient
-): Promise<"off" | "shadow" | "active"> {
+): Promise<MemoryGraphMode> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("business_configs")
@@ -159,6 +237,6 @@ export async function getMemoryGraphMode(
     .eq("business_id", businessId)
     .maybeSingle();
   if (error) throw new Error(`getMemoryGraphMode: ${error.message}`);
-  const mode = (data as { memory_graph_mode?: string } | null)?.memory_graph_mode;
-  return mode === "shadow" || mode === "active" ? mode : "off";
+  const raw = (data as { memory_graph_mode?: string } | null)?.memory_graph_mode;
+  return resolveMemoryGraphMode(raw);
 }
