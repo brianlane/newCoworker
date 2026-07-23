@@ -59,20 +59,25 @@ jobs:
             echo "::warning::RESEND_API_KEY secret is not set — cannot email the admin. Set it (gh secret set RESEND_API_KEY) or watch the Actions tab."
             exit 0
           fi
-          # The wording must match what ACTUALLY failed (Bugbot on PR #864):
-          # the e2e job runs AFTER Vercel Deploy on push runs, so a run can
-          # fail with production fully updated. Only claim a blocked deploy
-          # when the Vercel Deploy job itself is among the failures; any
-          # error listing jobs falls back to the blocked-deploy wording (the
-          # scarier reading is the safe default for a human to verify).
-          failed_jobs=$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?filter=latest" --paginate \
-            -q '.jobs[] | select(.conclusion == "failure") | .name' 2>/dev/null | sort -u) || failed_jobs=""
-          if [ -z "$failed_jobs" ] || printf '%s\n' "$failed_jobs" | grep -qx "Vercel Deploy"; then
-            SUBJECT="Main deploy FAILED twice — production did not update: $RUN_TITLE"
-            DETAIL="Until this run is green, production has NOT received this merge: pending migrations, edge functions, and the Vercel app deploy are all blocked (they ride the Vercel Deploy job)."
-          else
+          # The wording must match what ACTUALLY happened (Bugbot on PR
+          # #864, twice): the e2e job runs AFTER Vercel Deploy on push
+          # runs, so a run can fail with production fully updated — but a
+          # run can ALSO fail upstream, leaving Vercel Deploy SKIPPED (not
+          # failed), in which case production did NOT update either. The
+          # only state that earns the calmer wording is the Vercel Deploy
+          # job concluding literally "success"; every other shape —
+          # failure, skipped, cancelled, missing, or an error listing the
+          # jobs — reads as a blocked deploy (the scarier reading is the
+          # safe default for a human to verify).
+          jobs_json=$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?filter=latest" --paginate 2>/dev/null) || jobs_json=""
+          deploy_conclusion=$(jq -rs '[.[].jobs[] | select(.name == "Vercel Deploy")] | last | .conclusion // "unknown"' <<<"$jobs_json" 2>/dev/null) || deploy_conclusion="unknown"
+          failed_jobs=$(jq -rs '[.[].jobs[] | select(.conclusion == "failure") | .name] | unique | join(", ")' <<<"$jobs_json" 2>/dev/null) || failed_jobs=""
+          if [ "$deploy_conclusion" = "success" ]; then
             SUBJECT="Main CI FAILED twice after deploy: $RUN_TITLE"
-            DETAIL="The Vercel Deploy job succeeded — production IS updated — but a post-deploy job failed twice: $(printf '%s' "$failed_jobs" | tr '\n' ',' | sed 's/,$//; s/,/, /g'). Treat a failed live e2e here as a possible AI regression that just shipped."
+            DETAIL="The Vercel Deploy job succeeded — production IS updated — but a post-deploy job failed twice: ${failed_jobs:-unknown}. Treat a failed live e2e here as a possible AI regression that just shipped."
+          else
+            SUBJECT="Main deploy FAILED twice — production did not update: $RUN_TITLE"
+            DETAIL="Until this run is green, production has NOT received this merge: pending migrations, edge functions, and the Vercel app deploy are all blocked (they ride the Vercel Deploy job, whose conclusion on this run is: ${deploy_conclusion}). Failed jobs: ${failed_jobs:-unknown}."
           fi
           BODY=$(jq -n --arg url "$RUN_URL" --arg subject "$SUBJECT" --arg detail "$DETAIL" '{
             from: "New Coworker <contact@newcoworker.com>",
