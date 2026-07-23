@@ -116,7 +116,7 @@ import {
   EMAIL_SEND_CLOSE as EMAIL_BLOCK_CLOSE,
   fulfillEmailBlocks
 } from "@/lib/dashboard-chat/email-blocks";
-import { captureOwnerRuleInline } from "@/lib/dashboard-chat/memory-capture";
+import { scheduleCaptureOwnerRuleInline } from "@/lib/dashboard-chat/schedule-memory-capture";
 import {
   buildBusinessContextBlock,
   buildIntegrationsStatusLine
@@ -1075,10 +1075,13 @@ async function finishInlineTurn(args: {
     }
   })();
 
-  // Fire-and-forget owner-rule capture (silent, best-effort — worker
-  // parity; see src/lib/dashboard-chat/memory-capture.ts).
+  // Owner-rule capture (silent, best-effort — worker parity; see
+  // src/lib/dashboard-chat/memory-capture.ts). Deferred via after() so the
+  // capture — and the graph ingest it chains into — reliably completes on
+  // Vercel; a bare fire-and-forget promise is frozen when the response
+  // flushes (same rationale as scheduleVaultSync).
   if (args.ownerMessageForCapture) {
-    void captureOwnerRuleInline({
+    scheduleCaptureOwnerRuleInline({
       businessId: args.businessId,
       ownerMessage: args.ownerMessageForCapture,
       assistantReply: args.content

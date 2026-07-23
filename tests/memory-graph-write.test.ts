@@ -147,6 +147,28 @@ describe("resolveEntity", () => {
     expect(resolveEntity(byAlias, [messyRow])?.id).toBe(messyRow.id);
   });
 
+  it("refuses an ambiguous bare-name match (two same-kind entities share the alias)", () => {
+    const amy1 = entityRow();
+    const amy2 = entityRow({
+      id: "aaaaaaaa-0000-4000-8000-000000000099",
+      canonical_name: "Amy Smith",
+      aliases: ["Amy"],
+      phones: [],
+      emails: []
+    });
+    const bareAmy = {
+      ref: "e1",
+      kind: "person" as const,
+      name: "Amy",
+      aliases: [],
+      phones: [],
+      emails: []
+    };
+    // Two candidates → no merge; a unique candidate still resolves.
+    expect(resolveEntity(bareAmy, [amy1, amy2])).toBeNull();
+    expect(resolveEntity(bareAmy, [amy1])?.id).toBe(amy1.id);
+  });
+
   it("returns null without identity evidence (similar words are not a match)", () => {
     const extracted = {
       ref: "e1",
