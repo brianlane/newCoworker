@@ -856,6 +856,11 @@ function sanitizeStepForSave(step: FlowStep): FlowStep {
   if (step.type === "route_to_team" && step.agentNames && step.agentNames.length >= 2) {
     return { ...step, agentName: undefined, agentRef: undefined, agentNameVar: undefined };
   }
+  // A lone broadcast name can exist mid-typing (the schema requires 2-10):
+  // drop it at save so the form's transient state never blocks a save.
+  if (step.type === "route_to_team" && step.agentNames && step.agentNames.length < 2) {
+    return { ...step, agentNames: undefined };
+  }
   if (step.type === "route_to_team" && step.agentNameVar) {
     return { ...step, agentName: undefined, agentRef: undefined };
   }
@@ -3890,11 +3895,19 @@ function StepFields({
           onChangeText={(v) =>
             patchStep(index, {
               agentName: v.trim() ? v : undefined,
-              ...(v.trim() ? { agentNameVar: undefined } : {})
+              ...(v.trim()
+                ? { agentNameVar: undefined, agentNames: undefined, broadcastAll: undefined }
+                : {})
             })
           }
           onChangeRef={(ref) =>
-            patchStep(index, { agentRef: ref, agentName: undefined, agentNameVar: undefined })
+            patchStep(index, {
+              agentRef: ref,
+              agentName: undefined,
+              agentNameVar: undefined,
+              agentNames: undefined,
+              broadcastAll: undefined
+            })
           }
           help="Picked employees resolve to their current number at send time."
         />
@@ -3956,7 +3969,7 @@ function StepFields({
                     : {})
                 });
               }}
-              help="Everyone listed is texted the offer at the same time and shares one deadline; the lead falls back to you when everyone passes or time runs out."
+              help="Enter at least two names. Everyone listed is texted the offer at the same time and shares one deadline; the lead falls back to you when everyone passes or time runs out. A single name saves as no broadcast (use the pin above for one person)."
             />
           )}
         </div>
