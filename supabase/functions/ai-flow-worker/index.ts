@@ -22,7 +22,7 @@
  *   - approval_gate (not yet approved) → awaiting_approval, run paused.
  */
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
-import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.45.0";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 import { isSelfPhone, scrubSelfPhones } from "../_shared/ai_flows/extracted_contact.ts";
