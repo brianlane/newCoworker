@@ -26,6 +26,7 @@ import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supa
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 import {
+  acceptSelfNameRetryValue,
   isPersonNameField,
   isSelfNameValue,
   isSelfPhone,
@@ -2763,7 +2764,10 @@ async function retrySelfNameSuspects(
   for (const f of suspects) {
     const first = (extracted[f.name] ?? "").trim();
     const second = (retry[f.name] ?? "").trim();
-    if (second && second !== first) {
+    // Accept the retry only when it names someone ELSE: a retry that answers
+    // another of our own names ("Amy" → "Amy Laidlaw", or a different roster
+    // member) is still the wrong party, so the first answer is kept.
+    if (acceptSelfNameRetryValue(first, second, selfNames)) {
       out[f.name] = second;
       corrected.push(`${f.name} ("${first}" → "${second}")`);
     } else {

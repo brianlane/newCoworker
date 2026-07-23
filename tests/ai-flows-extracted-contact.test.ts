@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  acceptSelfNameRetryValue,
   isPersonNameField,
   isSelfNameValue,
   isSelfPhone,
@@ -101,6 +102,28 @@ describe("isSelfNameValue", () => {
     expect(isSelfNameValue("none", SELF)).toBe(false);
     expect(isSelfNameValue("Amy", [])).toBe(false);
     expect(isSelfNameValue("Amy", ["", "   "])).toBe(false);
+  });
+});
+
+describe("acceptSelfNameRetryValue", () => {
+  const SELF = ["Amy Laidlaw", "Dave Lane"];
+
+  it("accepts a retry that names someone else", () => {
+    expect(acceptSelfNameRetryValue("Amy", "Pamela", SELF)).toBe(true);
+    // A different person who shares the first name is a legitimate answer.
+    expect(acceptSelfNameRetryValue("Amy", "Amy Smith", SELF)).toBe(true);
+  });
+
+  it("rejects a retry that is ANOTHER self name (Bugbot: Amy → Amy Laidlaw)", () => {
+    expect(acceptSelfNameRetryValue("Amy", "Amy Laidlaw", SELF)).toBe(false);
+    expect(acceptSelfNameRetryValue("Amy", "Dave Lane", SELF)).toBe(false);
+    expect(acceptSelfNameRetryValue("Amy", "dave", SELF)).toBe(false);
+  });
+
+  it("rejects an empty or unchanged retry (keep the first answer)", () => {
+    expect(acceptSelfNameRetryValue("Amy", "", SELF)).toBe(false);
+    expect(acceptSelfNameRetryValue("Amy", "Amy", SELF)).toBe(false);
+    expect(acceptSelfNameRetryValue("Amy", "  Amy  ", SELF)).toBe(false);
   });
 });
 

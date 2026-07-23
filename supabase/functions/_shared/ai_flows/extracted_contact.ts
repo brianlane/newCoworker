@@ -112,6 +112,23 @@ export function isSelfNameValue(value: string, selfNames: readonly string[]): bo
 }
 
 /**
+ * Should the retry's answer REPLACE the first-pass answer for a suspect
+ * field? Only when it actually names someone else: non-empty, different from
+ * the first answer, and not ITSELF one of our own names (a retry that
+ * "corrects" "Amy" to "Amy Laidlaw" — or to another roster member — is
+ * still the wrong party, so the first answer is kept and the telemetry
+ * records the field as confirmed rather than corrected).
+ */
+export function acceptSelfNameRetryValue(
+  first: string,
+  second: string,
+  selfNames: readonly string[]
+): boolean {
+  const s = second.trim();
+  return s !== "" && s !== first.trim() && !isSelfNameValue(s, selfNames);
+}
+
+/**
  * Rebuild an extraction field list with the self-name retry hint appended to
  * the SUSPECT fields' descriptions (the ones whose first-pass answer matched
  * a self name). Other fields pass through untouched. Pure, so the exact
