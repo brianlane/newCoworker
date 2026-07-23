@@ -97,7 +97,7 @@ describe("buildActivityFeed", () => {
     });
   });
 
-  it("emits coworker replies as 'Text out' items and skips unparseable ones", () => {
+  it("emits coworker replies as tagged 'Reply to' items and skips unparseable ones", () => {
     const items = buildActivityFeed(
       emptyInput({
         smsReplies: [
@@ -109,10 +109,25 @@ describe("buildActivityFeed", () => {
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
       kind: "sms_outbound",
-      label: "Text to +15550002222",
+      label: "Reply to +15550002222",
       href: "/dashboard/messages/%2B15550002222",
       at: "2026-01-02T10:05:00Z"
     });
+  });
+
+  it("tags flow-driven outbound texts with (AiFlow)", () => {
+    const items = buildActivityFeed(
+      emptyInput({
+        smsOutbound: [
+          { to_e164: "+15550003333", source: "ai_flow", created_at: "2026-01-02T10:00:00Z" },
+          { to_e164: "+15550004444", source: "owner_manual", created_at: "2026-01-02T09:00:00Z" }
+        ]
+      })
+    );
+    expect(items.map((i) => i.label)).toEqual([
+      "Text to +15550003333 (AiFlow)",
+      "Text to +15550004444"
+    ]);
   });
 
   it("maps outbound SMS and skips rows without to_e164", () => {
@@ -154,7 +169,7 @@ describe("buildActivityFeed", () => {
       "Call: Mike Haas (completed)",
       "Call: +19998887777 (missed)",
       "Text from Pat (employee)",
-      "Text to Mike Haas",
+      "Reply to Mike Haas",
       "Text to Pat (employee)"
     ]);
   });

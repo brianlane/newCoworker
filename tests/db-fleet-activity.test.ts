@@ -75,7 +75,7 @@ describe("buildFleetActivityFeed", () => {
     });
   });
 
-  it("labels coworker replies and skips rows without a parseable phone", () => {
+  it("labels coworker replies as tagged replies, skipping unparseable rows", () => {
     const items = buildFleetActivityFeed({
       ...emptyInput(),
       smsReplies: [
@@ -85,11 +85,23 @@ describe("buildFleetActivityFeed", () => {
     });
     expect(items).toHaveLength(1);
     expect(items[0]).toMatchObject({
-      badge: "Text out",
+      badge: "Reply",
       variant: "neutral",
-      label: "Text to +14805550111",
+      label: "Reply to +14805550111",
       businessId: "b2"
     });
+  });
+
+  it("tags flow-driven outbound texts with the AiFlow badge", () => {
+    const items = buildFleetActivityFeed({
+      ...emptyInput(),
+      smsOutbound: [
+        { business_id: "b1", to_e164: "+16025550122", source: "ai_flow", created_at: "2026-07-23T10:00:00Z" },
+        { business_id: "b1", to_e164: "+16025550123", source: "owner_manual", created_at: "2026-07-23T09:00:00Z" }
+      ]
+    });
+    expect(items[0]).toMatchObject({ badge: "AiFlow text", variant: "success" });
+    expect(items[1]).toMatchObject({ badge: "Text out", variant: "neutral" });
   });
 
   it("labels outbound texts and skips rows without a recipient", () => {
@@ -246,7 +258,7 @@ describe("buildFleetActivityFeed", () => {
     expect(items.map((i) => i.label)).toEqual([
       "Call: Jane Doe (completed)",
       "Text from Tim Tsai",
-      "Text to Tim Tsai",
+      "Reply to Tim Tsai",
       "Text to Mike Haas",
       "Text to +19995550000"
     ]);
