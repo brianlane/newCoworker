@@ -464,25 +464,23 @@ export async function updateCustomerOwnerFields(
 
   // Knowledge graph: only identity-bearing edits touch it (this helper also
   // carries high-frequency knobs like tags/reply-mode that say nothing
-  // entity-shaped). An edit that carries no display name (email-only save,
-  // or an explicit name clear) still needs the node's canonical name for
-  // resolution — read it back off the just-updated row; a failed read
-  // degrades to nameless (the builder then no-ops). Never-throws.
+  // entity-shaped). The graph gets the row's FULL post-update identity —
+  // read back after the write — never just the edited fields: an email-only
+  // save must still carry the stored name (the builder no-ops nameless),
+  // and a name-only save must still carry the stored email (Bugbot #874,
+  // both directions). A failed read degrades to a no-op ingest.
   if ("displayName" in edit || "email" in edit) {
-    let displayName = "displayName" in edit ? (edit.displayName ?? null) : null;
-    if (!displayName) {
-      const { data } = await db
-        .from("contacts")
-        .select("display_name")
-        .eq("business_id", businessId)
-        .eq("customer_e164", customerE164)
-        .maybeSingle();
-      displayName = (data as { display_name?: string | null } | null)?.display_name ?? null;
-    }
+    const { data } = await db
+      .from("contacts")
+      .select("display_name, email")
+      .eq("business_id", businessId)
+      .eq("customer_e164", customerE164)
+      .maybeSingle();
+    const row = data as { display_name?: string | null; email?: string | null } | null;
     await ingestContact(businessId, {
-      displayName,
+      displayName: row?.display_name ?? null,
       e164: customerE164,
-      email: edit.email ?? null
+      email: row?.email ?? null
     });
   }
   if ("pinnedMd" in edit && edit.pinnedMd?.trim()) {
