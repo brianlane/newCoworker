@@ -86,8 +86,14 @@ export function resolveEntity(
   extracted: ExtractedEntity,
   index: MemoryEntityRow[]
 ): MemoryEntityRow | null {
+  // Every evidence class is KIND-SCOPED: a person and an organization can
+  // legitimately share a main-line phone number or inbox, and the model's
+  // existing_id claim can misfire — cross-kind merges attach facts to the
+  // wrong node forever.
   if (extracted.existingId) {
-    const claimed = index.find((row) => row.id === extracted.existingId);
+    const claimed = index.find(
+      (row) => row.id === extracted.existingId && row.kind === extracted.kind
+    );
     if (claimed) return claimed;
   }
 
@@ -98,6 +104,7 @@ export function resolveEntity(
     extracted.emails.map(normalizeEmail).filter((e): e is string => e !== null)
   );
   for (const row of index) {
+    if (row.kind !== extracted.kind) continue;
     if (phones.size > 0) {
       const rowPhones = entityPhones(row);
       for (const p of phones) if (rowPhones.has(p)) return row;
