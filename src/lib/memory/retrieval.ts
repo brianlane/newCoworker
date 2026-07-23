@@ -128,7 +128,10 @@ export function selectMemoryForQuestion(
   const included: MemoryBlock[] = [];
   let remaining = charBudget;
   for (const { block } of ranked) {
-    const cost = block.text.length + 2; // "\n\n" joiner
+    // Joiner accounting is exact: total = Σ lengths + 2·(n−1), so only
+    // blocks after the first pay for a "\n\n". Charging the first block +2
+    // would skip a lone block that exactly fills the budget (Bugbot #844).
+    const cost = block.text.length + (included.length === 0 ? 0 : 2);
     if (cost > remaining) continue;
     included.push(block);
     remaining -= cost;

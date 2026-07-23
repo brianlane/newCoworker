@@ -155,6 +155,13 @@ describe("selectMemoryForQuestion", () => {
     expect(none.fallback).toBe(true);
   });
 
+  it("includes a lone block that exactly fills the budget (no phantom joiner cost)", () => {
+    const only = section("2026-07-01", ["hours: 9-5 weekdays"]);
+    const sel = selectMemoryForQuestion(only, "", "what are your hours?", only.length);
+    expect(sel.selected).toBe(1);
+    expect(sel.context).toBe(only);
+  });
+
   it("uses the default budget constant when none is passed", () => {
     const sel = selectMemoryForQuestion(active, "", "sundays?");
     expect(sel.context.length).toBeLessThanOrEqual(MEMORY_CONTEXT_MAX_CHARS);
