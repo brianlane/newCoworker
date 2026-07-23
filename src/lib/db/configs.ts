@@ -27,6 +27,12 @@ export type ConfigRow = {
    * migration ran won't have it.
    */
   memory_archive_md?: string;
+  /**
+   * Memory knowledge-graph rollout mode: 'off' (default) | 'shadow' |
+   * 'active'. Optional on the type: rows read before the
+   * 20260820100100_memory_graph migration ran won't have it.
+   */
+  memory_graph_mode?: "off" | "shadow" | "active";
   website_md: string;
   /**
    * Canonical rendered "Business profile" markdown (hours/address/contact),

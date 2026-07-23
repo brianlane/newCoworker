@@ -9,6 +9,10 @@ vi.mock("@/lib/vps/schedule-vault-sync", () => ({
   scheduleVaultSync: vi.fn()
 }));
 
+vi.mock("@/lib/memory/schedule-graph-ingest", () => ({
+  scheduleGraphIngest: vi.fn()
+}));
+
 vi.mock("@/lib/rowboat/gateway-token", () => ({
   verifyRowboatGatewayToken: vi.fn().mockReturnValue(true),
   verifyGatewayTokenForBusiness: vi.fn().mockResolvedValue(true)
@@ -21,6 +25,7 @@ vi.mock("@/lib/db/agent-tool-settings", () => ({
 import { POST } from "@/app/api/voice/tools/owner-append-business-memory/route";
 import { getBusinessConfig, patchBusinessConfig } from "@/lib/db/configs";
 import { scheduleVaultSync } from "@/lib/vps/schedule-vault-sync";
+import { scheduleGraphIngest } from "@/lib/memory/schedule-graph-ingest";
 import { verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 
@@ -120,6 +125,11 @@ describe("POST /api/voice/tools/owner-append-business-memory", () => {
     expect(written).toContain("- Never discuss budget.");
     expect(written).not.toContain("- - ");
     expect(scheduleVaultSync).toHaveBeenCalledWith(BIZ);
+    // Saved bullets are handed to the (mode-gated) knowledge-graph ingest.
+    expect(scheduleGraphIngest).toHaveBeenCalledWith(BIZ, [
+      "Never discuss budget.",
+      "Always mention brokerage name."
+    ]);
   });
 
   it("strips indented markdown bullets without double-prefixing", async () => {
@@ -214,6 +224,7 @@ describe("POST /api/voice/tools/owner-append-business-memory", () => {
     expect(json.data.skippedDuplicates).toBe(1);
     expect(patchBusinessConfig).not.toHaveBeenCalled();
     expect(scheduleVaultSync).not.toHaveBeenCalled();
+    expect(scheduleGraphIngest).not.toHaveBeenCalled();
   });
 
   it("rescues a restated rule whose only copy would be truncated from the head", async () => {

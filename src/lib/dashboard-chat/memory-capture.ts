@@ -24,6 +24,7 @@ import {
 import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import { getBusinessConfig } from "@/lib/db/configs";
+import { ingestBulletsIntoGraph } from "@/lib/memory/graph-ingest";
 import { appendOwnerMemoryBullets, BULLETS_MAX_CHARS } from "./memory-append";
 import { logger } from "@/lib/logger";
 
@@ -215,6 +216,8 @@ export type InlineMemoryCaptureDeps = {
   fetchConfig?: typeof getBusinessConfig;
   /** Injectable append (tests). */
   append?: typeof appendOwnerMemoryBullets;
+  /** Injectable graph ingest (tests). */
+  ingestGraph?: typeof ingestBulletsIntoGraph;
 };
 
 /**
@@ -235,6 +238,7 @@ export async function captureOwnerRuleInline(
   const isToolEnabled = deps.isToolEnabled ?? isAgentToolEnabled;
   const fetchConfig = deps.fetchConfig ?? getBusinessConfig;
   const append = deps.append ?? appendOwnerMemoryBullets;
+  const ingestGraph = deps.ingestGraph ?? ingestBulletsIntoGraph;
   /* c8 ignore stop */
 
   const noop = { saved: [] as string[] };
@@ -308,6 +312,10 @@ export async function captureOwnerRuleInline(
         businessId: args.businessId,
         count: result.savedBullets.length
       });
+      // Knowledge-graph ingestion (mode-gated, off by default). This whole
+      // capture already runs fire-and-forget after the chat turn, and
+      // ingestBulletsIntoGraph never throws.
+      await ingestGraph(args.businessId, result.savedBullets);
     }
     return { saved: result.savedBullets };
   } catch (err) {

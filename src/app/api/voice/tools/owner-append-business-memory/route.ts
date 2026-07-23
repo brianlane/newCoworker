@@ -29,6 +29,7 @@ import {
   appendOwnerMemoryBullets,
   normalizeBulletLines
 } from "@/lib/dashboard-chat/memory-append";
+import { scheduleGraphIngest } from "@/lib/memory/schedule-graph-ingest";
 import { logger } from "@/lib/logger";
 
 // The vault re-seed (scheduleVaultSync → after()) runs post-response and SSHes
@@ -82,6 +83,13 @@ export async function POST(request: Request) {
 
   try {
     const result = await appendOwnerMemoryBullets(envelope.businessId, parsed.data.bullets);
+
+    // Knowledge-graph ingestion (mode-gated, off by default) runs after the
+    // response like the vault sync — a graph failure can never break or slow
+    // the capture, and the ingest never throws.
+    if (result.savedBullets.length > 0) {
+      scheduleGraphIngest(envelope.businessId, result.savedBullets);
+    }
 
     logger.info(
       result.appended
