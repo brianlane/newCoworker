@@ -187,10 +187,16 @@ export async function lookupBusinessKnowledge(
   // Ranked memory retrieval (same treatment documents get): score active +
   // archived memory sections against the question and pack only the most
   // relevant into a bounded share of the prompt. Archived facts — evicted
-  // from the active 14KB window — stay answerable here.
+  // from the active 14KB window — stay answerable here. The budget reserves
+  // room for the section header + joiner so the memory section can never
+  // push the assembled context past the prompt cap.
+  const memoryHeader = "# memory.md (saved notes most relevant to the question)\n";
   const memoryBudget = Math.max(
     0,
-    Math.min(MEMORY_CONTEXT_MAX_CHARS, PROMPT_MAX_CONTEXT_CHARS - parts.join("\n\n").length)
+    Math.min(
+      MEMORY_CONTEXT_MAX_CHARS,
+      PROMPT_MAX_CONTEXT_CHARS - parts.join("\n\n").length - (memoryHeader.length + 2)
+    )
   );
   const memorySelection = selectMemoryForQuestion(
     config?.memory_md ?? "",
@@ -199,7 +205,7 @@ export async function lookupBusinessKnowledge(
     memoryBudget
   );
   if (memorySelection.context) {
-    parts.push(`# memory.md (saved notes most relevant to the question)\n${memorySelection.context}`);
+    parts.push(`${memoryHeader}${memorySelection.context}`);
   }
 
   // Two-stage document retrieval: pack the most relevant eligible docs'

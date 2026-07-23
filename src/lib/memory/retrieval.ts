@@ -136,7 +136,15 @@ export function selectMemoryForQuestion(
     included.push(block);
     remaining -= cost;
   }
-  if (included.length === 0) return { ...empty, fallback };
+  if (included.length === 0) {
+    // Nothing fit — even a question-relevant block can be a single
+    // oversized line. Last resort: carry the newest end of ACTIVE memory
+    // (the old inject-the-blob behavior never silently dropped memory
+    // while some existed).
+    const tailContext = activeMd.trim().slice(-charBudget).trim();
+    if (!tailContext) return { ...empty, fallback };
+    return { context: tailContext, selected: 1, fromArchive: 0, fallback: true };
+  }
 
   included.sort((a, b) => a.order - b.order);
   return {
