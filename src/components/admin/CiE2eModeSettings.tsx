@@ -46,19 +46,32 @@ export function CiE2eModeSettings({ initialMode }: { initialMode: CiE2eMode }) {
     }
   };
 
+  const perChange = mode === "per-change";
   return (
     <Card>
       <div className="flex items-center justify-between mb-2">
         <h2 className="text-sm font-semibold text-parchment">CI live e2e (paid Gemini calls)</h2>
-        <label className="flex items-center gap-2 text-xs text-parchment/70">
-          <input
-            type="checkbox"
-            checked={mode === "per-change"}
+        <div className="flex items-center gap-2">
+          <span className="text-xs text-parchment/70">Run on every change</span>
+          {/* Same slider-switch pattern as the Margin Alert card. */}
+          <button
+            type="button"
+            role="switch"
+            aria-checked={perChange}
+            aria-label="Run the live e2e suite on every change"
             disabled={busy}
-            onChange={(ev) => void save(ev.target.checked ? "per-change" : "nightly-only")}
-          />
-          Run on every change
-        </label>
+            onClick={() => void save(perChange ? "nightly-only" : "per-change")}
+            className={`relative inline-flex h-5 w-9 items-center rounded-full transition-colors disabled:opacity-50 ${
+              perChange ? "bg-signal-teal" : "bg-parchment/20"
+            }`}
+          >
+            <span
+              className={`inline-block h-3.5 w-3.5 transform rounded-full bg-deep-ink transition-transform ${
+                perChange ? "translate-x-5" : "translate-x-1"
+              }`}
+            />
+          </button>
+        </div>
       </div>
       <p className="text-xs text-parchment/40">
         {mode === "per-change" ? (
