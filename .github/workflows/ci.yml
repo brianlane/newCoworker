@@ -122,8 +122,15 @@ jobs:
       # that boot-crashed ai-flow-worker in prod. `deno check` on each entrypoint
       # transitively type-checks the function and its _shared deps the same way
       # the Supabase CLI bundles them at deploy.
+      #
+      # --node-modules-dir=none: the functions import supabase-js via an npm:
+      # specifier (esm.sh's 522s failed two main deploys, Jul 22-23 2026), and
+      # the repo-root package.json would otherwise flip Deno into byonm mode
+      # and demand the package in node_modules — this job never npm-installs.
+      # "none" resolves npm: from Deno's global cache, matching the deploy
+      # container (which sees no package.json at all).
       - name: Type-check Supabase Edge functions
-        run: deno check supabase/functions/*/index.ts
+        run: deno check --node-modules-dir=none supabase/functions/*/index.ts
 
   security:
     name: Security Audit
