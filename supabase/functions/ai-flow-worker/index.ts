@@ -25,7 +25,13 @@ import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient, type SupabaseClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
-import { isSelfPhone, scrubSelfPhones } from "../_shared/ai_flows/extracted_contact.ts";
+import {
+  isPersonNameField,
+  isSelfNameValue,
+  isSelfPhone,
+  scrubSelfPhones,
+  withSelfNameRetryHint
+} from "../_shared/ai_flows/extracted_contact.ts";
 import { systemLog } from "../_shared/system_log.ts";
 import { telnyxSendSms, telnyxSendGroupMms } from "../_shared/telnyx_sms_compliance.ts";
 import { sendOperationalSms } from "../_shared/sms_operational_meter.ts";
@@ -2677,6 +2683,110 @@ async function scrubExtractedSelfPhones(
   return scrub.values;
 }
 
+/**
+ * The business's OWN people names (owner + active roster) — the names an
+ * extracted "the seller's/lead's name" answer is SUSPECT of confusing with
+ * the actual subject (the Jul 22 2026 "Hi Amy" Clever greeting). Best-effort
+ * like businessSelfNumbers: a lookup error returns what was found.
+ */
+async function businessSelfNames(supabase: Supabase, businessId: string): Promise<string[]> {
+  const out: string[] = [];
+  const { data: biz } = await supabase
+    .from("businesses")
+    .select("owner_name")
+    .eq("id", businessId)
+    .maybeSingle();
+  const ownerName = (biz as { owner_name?: string | null } | null)?.owner_name;
+  if (ownerName?.trim()) out.push(ownerName.trim());
+  const { data: roster } = await supabase
+    .from("ai_flow_team_members")
+    .select("name")
+    .eq("business_id", businessId)
+    .eq("active", true);
+  for (const row of (roster ?? []) as Array<{ name?: string | null }>) {
+    if (row.name?.trim()) out.push(row.name.trim());
+  }
+  return [...new Set(out)];
+}
+
+/**
+ * Self-NAME guard for extract_text (Jul 22 2026 "Hi Amy" regression): when a
+ * person-name field's answer matches the owner's or a roster member's name,
+ * re-run the extraction ONCE with an explicit "that is our own agent" hint
+ * appended to the suspect fields. The retry's answer wins only when it names
+ * someone else and is non-empty — a model that INSISTS on the same name is
+ * trusted (a lead can genuinely share the owner's name), and an empty retry
+ * keeps the first answer rather than degrading "Hi Amy" into "Hi .". Fails
+ * open on any retry error: the primary extraction already succeeded, so the
+ * guard never turns a working run into a dead-lettered one.
+ */
+async function retrySelfNameSuspects(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  fields: ExtractField[],
+  text: string,
+  extracted: Record<string, string>
+): Promise<Record<string, string>> {
+  const nameFields = fields.filter((f) => isPersonNameField(f.name));
+  if (nameFields.length === 0) return extracted;
+  const selfNames = await businessSelfNames(supabase, run.business_id);
+  if (selfNames.length === 0) return extracted;
+  const suspects = nameFields.filter((f) =>
+    isSelfNameValue(extracted[f.name] ?? "", selfNames)
+  );
+  if (suspects.length === 0) return extracted;
+
+  const suspectNames = suspects.map((f) => f.name);
+  let retry: Record<string, string>;
+  try {
+    retry = await extractFields(
+      supabase,
+      run,
+      withSelfNameRetryHint(fields, suspectNames, selfNames),
+      text
+    );
+  } catch (e) {
+    console.error("self-name retry extraction failed", e);
+    await telemetryRecord(supabase, "ai_flow_self_name_retry", {
+      business_id: run.business_id,
+      run_id: run.id,
+      fields: suspectNames,
+      outcome: "retry_error"
+    });
+    return extracted;
+  }
+
+  const out = { ...extracted };
+  const corrected: string[] = [];
+  const confirmed: string[] = [];
+  for (const f of suspects) {
+    const first = (extracted[f.name] ?? "").trim();
+    const second = (retry[f.name] ?? "").trim();
+    if (second && second !== first) {
+      out[f.name] = second;
+      corrected.push(`${f.name} ("${first}" → "${second}")`);
+    } else {
+      confirmed.push(f.name);
+    }
+  }
+  if (corrected.length > 0) {
+    appendActionTaken(
+      scope,
+      `re-checked extracted ${corrected.join(", ")} — the first answer matched the business's own name, not the lead's`
+    );
+  }
+  await telemetryRecord(supabase, "ai_flow_self_name_retry", {
+    business_id: run.business_id,
+    run_id: run.id,
+    fields: suspectNames,
+    outcome: corrected.length > 0 ? "corrected" : "confirmed",
+    corrected,
+    confirmed
+  });
+  return out;
+}
+
 /** Persisted-vars marker: comma-joined var names the self-scrub cleared. */
 const SELF_PHONE_SCRUBBED_VAR = "__self_phone_scrubbed";
 
@@ -2876,6 +2986,16 @@ async function extractTextStep(
     if (e instanceof SpendCapError) return { kind: "fail", error: `extract_text: ${e.message}` };
     throw e;
   }
+  // Self-name guard: a person-name answer matching the owner/roster gets one
+  // hinted re-extraction (the Jul 22 2026 "Hi Amy" Clever greeting).
+  extracted = await retrySelfNameSuspects(
+    supabase,
+    run,
+    scope,
+    action.fields,
+    action.text,
+    extracted
+  );
 
   const raw: Record<string, string> = {};
   for (const f of action.fields) {
