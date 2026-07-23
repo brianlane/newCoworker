@@ -108,14 +108,22 @@ export function resolveEntity(
     }
   }
 
+  // Name/alias evidence is weaker than a shared phone/email: a bare name
+  // resolves ONLY when exactly one same-kind entity carries it (upstream
+  // rule — same name is not the same entity). Two "Amy"s → no match, a new
+  // node is created rather than merging two people.
   const names = new Set([normalizedName(extracted.name), ...extracted.aliases.map(normalizedName)]);
+  const nameMatches: MemoryEntityRow[] = [];
   for (const row of index) {
     if (row.kind !== extracted.kind) continue;
     const rowNames = entityNames(row);
+    let hit = false;
     for (const n of names) {
-      if (n && rowNames.has(n)) return row;
+      if (n && rowNames.has(n)) hit = true;
     }
+    if (hit) nameMatches.push(row);
   }
+  if (nameMatches.length === 1) return nameMatches[0];
 
   return null;
 }

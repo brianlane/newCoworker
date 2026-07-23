@@ -78,8 +78,8 @@ vi.mock("@/lib/dashboard-chat/inline-turn", async () => {
   return { ...actual, runInlineChatTurn: vi.fn() };
 });
 
-vi.mock("@/lib/dashboard-chat/memory-capture", () => ({
-  captureOwnerRuleInline: vi.fn(async () => ({ saved: [] }))
+vi.mock("@/lib/dashboard-chat/schedule-memory-capture", () => ({
+  scheduleCaptureOwnerRuleInline: vi.fn()
 }));
 
 vi.mock("@/lib/dashboard-chat/summarizer", () => ({
@@ -116,7 +116,7 @@ import { insertChatJob } from "@/lib/db/dashboard-chat-jobs";
 import { listCustomerMemories } from "@/lib/customer-memory/db";
 import { getChatSpendSnapshotForBusiness } from "@/lib/db/chat-usage";
 import { runInlineChatTurn } from "@/lib/dashboard-chat/inline-turn";
-import { captureOwnerRuleInline } from "@/lib/dashboard-chat/memory-capture";
+import { scheduleCaptureOwnerRuleInline } from "@/lib/dashboard-chat/schedule-memory-capture";
 import {
   resolveCalendarConnection,
   resolveEmailConnection
@@ -955,7 +955,7 @@ describe("POST /api/dashboard/chat — inline (central Gemini) primary path", ()
     await POST(jsonRequest({ businessId: BIZ, message: "we are closed Sundays" }));
     // Give the void promise a tick to start.
     await new Promise((r) => setTimeout(r, 0));
-    expect(captureOwnerRuleInline).toHaveBeenCalledWith(
+    expect(scheduleCaptureOwnerRuleInline).toHaveBeenCalledWith(
       expect.objectContaining({
         businessId: BIZ,
         ownerMessage: "we are closed Sundays",
@@ -978,7 +978,7 @@ describe("POST /api/dashboard/chat — inline (central Gemini) primary path", ()
     form.set("file", new File(["text"], "notes.txt", { type: "text/plain" }));
     await POST(new Request("http://localhost/api/dashboard/chat", { method: "POST", body: form }));
     await new Promise((r) => setTimeout(r, 0));
-    expect(captureOwnerRuleInline).not.toHaveBeenCalled();
+    expect(scheduleCaptureOwnerRuleInline).not.toHaveBeenCalled();
   });
 });
 

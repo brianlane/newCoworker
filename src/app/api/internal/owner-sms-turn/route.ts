@@ -37,7 +37,7 @@ import {
   buildBusinessContextBlock,
   buildIntegrationsStatusLine
 } from "@/lib/dashboard-chat/context-blocks";
-import { captureOwnerRuleInline } from "@/lib/dashboard-chat/memory-capture";
+import { scheduleCaptureOwnerRuleInline } from "@/lib/dashboard-chat/schedule-memory-capture";
 import { listMessagesForCustomer } from "@/lib/db/sms-history";
 import { OWNER_PREAMBLE } from "@/app/api/dashboard/chat/route";
 import { logger } from "@/lib/logger";
@@ -224,8 +224,10 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, detail: inline.detail ?? inline.error });
     }
 
-    // Same silent durable-rule capture as dashboard turns.
-    void captureOwnerRuleInline({
+    // Same silent durable-rule capture as dashboard turns — deferred via
+    // after() so the capture (and its graph ingest) reliably completes on
+    // Vercel instead of being frozen when the response flushes.
+    scheduleCaptureOwnerRuleInline({
       businessId: body.businessId,
       ownerMessage: body.text,
       assistantReply: inline.content
