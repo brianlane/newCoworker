@@ -64,8 +64,10 @@ export type FleetSmsReplyRow = {
 export type FleetSmsOutboundRow = {
   business_id: string;
   to_e164: string | null;
-  /** `sms_outbound_log.source` — `ai_flow` tags the row as a flow send. */
+  /** `sms_outbound_log.source` — one origin signal for the AiFlow tag. */
   source?: string | null;
+  /** `sms_outbound_log.flow_id` — the authoritative flow-origin signal. */
+  flow_id?: string | null;
   created_at: string;
 };
 
@@ -75,6 +77,14 @@ export type FleetEmailRow = {
   to_email: string | null;
   from_email: string | null;
   subject: string | null;
+  /** `email_log.source` — one origin signal for the AiFlow tag. */
+  source?: string | null;
+  /**
+   * `email_log.flow_id` — the authoritative flow-origin signal: stamped on
+   * every flow send, while `source` can reflect the transport
+   * (`owner_mailbox` / `tenant_mailbox_outbound`).
+   */
+  flow_id?: string | null;
   created_at: string;
 };
 
@@ -182,8 +192,10 @@ export function buildFleetActivityFeed(input: FleetActivityInput): FleetActivity
   input.smsOutbound.forEach((r, i) => {
     if (!r.to_e164) return;
     // Flow-driven sends get the AiFlow tag so an automation text is
-    // distinguishable from a manual/assistant one at a glance.
-    const fromFlow = r.source === "ai_flow";
+    // distinguishable from a manual/assistant one at a glance. flow_id is
+    // the authoritative signal (stamped on every flow send regardless of
+    // transport source); source covers legacy rows.
+    const fromFlow = r.flow_id != null || r.source === "ai_flow";
     items.push({
       id: `sms_out:${i}:${r.created_at}`,
       badge: fromFlow ? "AiFlow text" : "Text out",
@@ -198,10 +210,15 @@ export function buildFleetActivityFeed(input: FleetActivityInput): FleetActivity
     const inbound = r.direction === "inbound";
     const who = (inbound ? r.from_email : r.to_email) ?? "unknown address";
     const subject = r.subject?.trim() ? `: “${r.subject.trim()}”` : "";
+    // Flow-sent emails get the same green AiFlow tag as flow-sent texts —
+    // the origin badge applies to any message type a flow can send. flow_id
+    // is authoritative: the flow worker stamps it even when sending through
+    // the tenant mailbox (source 'owner_mailbox' / 'tenant_mailbox_outbound').
+    const fromFlow = !inbound && (r.flow_id != null || r.source === "ai_flow");
     items.push({
       id: `email:${i}:${r.created_at}`,
-      badge: inbound ? "Email in" : "Email out",
-      variant: inbound ? "pending" : "neutral",
+      badge: fromFlow ? "AiFlow email" : inbound ? "Email in" : "Email out",
+      variant: fromFlow ? "success" : inbound ? "pending" : "neutral",
       label: `${inbound ? "Email from" : "Email to"} ${who}${subject}`,
       businessId: r.business_id,
       at: r.created_at
@@ -331,7 +348,7 @@ export async function getFleetRecentActivity(
       notMuted(
         db
           .from("sms_outbound_log")
-          .select("business_id, to_e164, source, created_at")
+          .select("business_id, to_e164, source, flow_id, created_at")
           .is("deleted_at", null)
           .gte("created_at", since)
       )
@@ -340,7 +357,7 @@ export async function getFleetRecentActivity(
       notMuted(
         db
           .from("email_log")
-          .select("business_id, direction, to_email, from_email, subject, created_at")
+          .select("business_id, direction, to_email, from_email, subject, source, flow_id, created_at")
           .is("deleted_at", null)
           .gte("created_at", since)
       )
