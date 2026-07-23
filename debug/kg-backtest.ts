@@ -37,15 +37,22 @@ import { loadEnv } from "./_shared.ts";
 loadEnv();
 
 const args = process.argv.slice(2);
+// A flag's value is the next token ONLY when it isn't itself a flag —
+// `--max-turns --replay-chat` must not read "--replay-chat" as the value.
 const flag = (name: string): string | undefined => {
   const i = args.indexOf(`--${name}`);
-  return i >= 0 ? args[i + 1] : undefined;
+  const value = i >= 0 ? args[i + 1] : undefined;
+  return value !== undefined && !value.startsWith("--") ? value : undefined;
+};
+const intFlag = (name: string, fallback: number): number => {
+  const parsed = Number(flag(name));
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 };
 const HQ_TENANT = "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d";
 const BUSINESS_ID = flag("business") ?? HQ_TENANT;
 const REPLAY_CHAT = args.includes("--replay-chat");
-const MAX_TURNS = Number(flag("max-turns") ?? 30);
-const MAX_QUESTIONS = Number(flag("max-questions") ?? 25);
+const MAX_TURNS = intFlag("max-turns", 30);
+const MAX_QUESTIONS = intFlag("max-questions", 25);
 const BATCH_SIZE = 15;
 
 /**
