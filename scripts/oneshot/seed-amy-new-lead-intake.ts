@@ -15,24 +15,32 @@
  *
  *   parse (extract_text over the owner's message)
  *     -> save_contact (upsert_customer, only when a phone was parsed)
- *     -> intro SMS to the lead (buyer/seller/both variants, Amy's RE copy
- *        with the source-site references neutralized; RE quiet hours with
- *        email fallback)
- *     -> intro EMAIL to the lead (only when NO phone but an email was given)
+ *     -> intro branch: when the message names a referrer ("it's a referral
+ *        from Donald"), the intro opens with a personal referral touch
+ *        crediting them by name; otherwise the standard copy. Both arms are
+ *        buyer/seller/both SMS variants of Amy's RE copy (source-site
+ *        references neutralized; RE quiet hours with email fallback) plus
+ *        the no-phone intro EMAIL variants.
  *     -> route_to_team (buyer = un-pinned roster cascade; seller/both pinned
  *        to Dave Lane; $1M+ kept for Amy via ownerDirectWhen price_band)
  *     -> notify_owner outcome (plus an honest no-phone variant)
+ *
+ * The referral gate is equals-matched, so a missed extraction fails CLOSED
+ * into the standard copy; the referral fact also rides lead_details into the
+ * team offer and owner notify.
  *
  * Deliberately out of v1: the bad-phone report loop (bp_wait/classify), the
  * lead came from Amy herself.
  *
  * Validated through the SAME parseAiFlowDefinition the dashboard + CRUD API
- * use. Dry-run by default; idempotent by flow name unless --force.
+ * use. Dry-run by default; idempotent by flow name unless --force, and
+ * --update refreshes an existing flow's definition in place.
  *
  * Usage:
  *   set -a && source .env && set +a
  *   npx tsx scripts/oneshot/seed-amy-new-lead-intake.ts            # dry run
  *   npx tsx scripts/oneshot/seed-amy-new-lead-intake.ts --apply --enable
+ *   npx tsx scripts/oneshot/seed-amy-new-lead-intake.ts --update --apply
  *
  * Required env: NEXT_PUBLIC_SUPABASE_URL (or SUPABASE_URL), SUPABASE_SERVICE_ROLE_KEY.
  * Business id: AIFLOW_SEED_BUSINESS_ID or --business-id <uuid> (defaults to Amy's).
@@ -53,15 +61,28 @@ import {
 } from "@/lib/ai-flows/schema";
 import { recordOneshotApplied } from "./_ledger";
 
-type Args = { apply: boolean; enable: boolean; force: boolean; businessId: string | null };
+type Args = {
+  apply: boolean;
+  enable: boolean;
+  force: boolean;
+  update: boolean;
+  businessId: string | null;
+};
 
 function parseArgs(argv: readonly string[]): Args {
-  const args: Args = { apply: false, enable: false, force: false, businessId: null };
+  const args: Args = {
+    apply: false,
+    enable: false,
+    force: false,
+    update: false,
+    businessId: null
+  };
   for (let i = 2; i < argv.length; i++) {
     const a = argv[i];
     if (a === "--apply") args.apply = true;
     else if (a === "--enable") args.enable = true;
     else if (a === "--force") args.force = true;
+    else if (a === "--update") args.update = true;
     else if (a === "--business-id") args.businessId = argv[++i] ?? null;
     else {
       console.error(`Unknown argument: ${a}`);
@@ -84,6 +105,20 @@ const DEFAULT_AGENT_NAME = "Dave Lane";
 const DEFAULT_MAILBOX_CONNECTION_ID = "9ddd5344-14f2-46df-a89d-dddc2d50e944";
 
 const PHOENIX_TZ = "America/Phoenix";
+
+/**
+ * The referral personal touch: when Amy's message says who referred the
+ * lead ("it's a referral from Donald"), the intro opens by crediting them
+ * by name. Inserted right after the greeting paragraph, ONLY on the
+ * referral branch (gated on referral_gate, so the template can never
+ * render a "none" sentinel or an empty name to the lead).
+ */
+export const REFERRAL_TOUCH_LINE =
+  "{{vars.referred_by}} shared your info with me and thought I could help. " +
+  "I'm so glad they connected us!";
+
+/** The greeting paragraph every intro variant opens with (insertion anchor). */
+const GREETING_PARAGRAPH = "Hi {{vars.lead_name}}.\n\n";
 
 /**
  * Amy's ReferralExchange intro copy, verbatim except the source-site
@@ -187,28 +222,59 @@ function introQuietHours(mailboxConnectionId: string, leadType: "buyer" | "selle
   };
 }
 
-function introSmsStep(mailboxConnectionId: string, leadType: "buyer" | "seller" | "both") {
+/**
+ * The intro body for a lead type, with the referral personal touch inserted
+ * after the greeting on the referral branch. Both branch arms are generated
+ * from the same base copy, so they can never drift.
+ */
+function introBody(leadType: "buyer" | "seller" | "both", referral: boolean): string {
+  const base = INTRO_BODIES[leadType];
+  if (!referral) return base;
+  return base.replace(
+    GREETING_PARAGRAPH,
+    `${GREETING_PARAGRAPH}${REFERRAL_TOUCH_LINE}\n\n`
+  );
+}
+
+function introSmsStep(
+  mailboxConnectionId: string,
+  leadType: "buyer" | "seller" | "both",
+  referral: boolean
+) {
   return {
-    id: `send_${leadType}`,
+    id: referral ? `send_${leadType}_ref` : `send_${leadType}`,
     type: "send_sms",
     to: "{{vars.lead_phone}}",
-    body: INTRO_BODIES[leadType],
+    body: introBody(leadType, referral),
     when: { var: "phone_lead_type", equals: leadType } satisfies When,
     quietHours: introQuietHours(mailboxConnectionId, leadType)
   };
 }
 
 /** No-phone intro email (only when the owner gave an email but no number). */
-function introEmailStep(mailboxConnectionId: string, leadType: "buyer" | "seller" | "both") {
+function introEmailStep(
+  mailboxConnectionId: string,
+  leadType: "buyer" | "seller" | "both",
+  referral: boolean
+) {
   return {
-    id: `email_lead_${leadType}`,
+    id: referral ? `email_lead_${leadType}_ref` : `email_lead_${leadType}`,
     type: "send_email",
     to: "{{vars.lead_email}}",
     subject: INTRO_SUBJECTS[leadType],
-    body: INTRO_BODIES[leadType],
+    body: introBody(leadType, referral),
     when: { var: "email_intro_type", equals: leadType } satisfies When,
     fromConnectionId: mailboxConnectionId
   };
+}
+
+/** All six intro steps (3 SMS + 3 email) for one branch arm. */
+function introSteps(mailboxConnectionId: string, referral: boolean) {
+  const types = ["buyer", "seller", "both"] as const;
+  return [
+    ...types.map((t) => introSmsStep(mailboxConnectionId, t, referral)),
+    ...types.map((t) => introEmailStep(mailboxConnectionId, t, referral))
+  ];
 }
 
 function routeStep(
@@ -297,7 +363,8 @@ export function buildDefinition(opts?: {
             name: "lead_details",
             description:
               "What the lead is looking for, in the message's own words (e.g. 4bd/2ba, area, " +
-              "timeline, must-haves). If nothing is given, answer exactly: none"
+              "timeline, must-haves), including who referred them when the message says so " +
+              "(e.g. 'referral from Donald'). If nothing is given, answer exactly: none"
           },
           {
             name: "location",
@@ -328,6 +395,20 @@ export function buildDefinition(opts?: {
               "If the message gives NO phone number for the lead but DOES give an email address, " +
               "answer with the lead type as exactly one lowercase word: buyer, seller, or both. " +
               "Otherwise answer exactly: none"
+          },
+          {
+            name: "referred_by",
+            description:
+              "The name of the person who referred this lead, when the message says it is a " +
+              "referral (e.g. 'it's a referral from Donald' answers: Donald). Politely cased, " +
+              "first name is enough. If it is not a referral or no referrer is named, " +
+              "answer exactly: none"
+          },
+          {
+            name: "referral_gate",
+            description:
+              "If the message says this lead was referred by a NAMED person, answer exactly " +
+              "one lowercase word: referral. Otherwise answer exactly: none"
           }
         ]
       },
@@ -341,14 +422,25 @@ export function buildDefinition(opts?: {
         nameVar: "lead_name",
         emailVar: "lead_email"
       },
-      // Intro text from the AI worker (RE copy, quiet hours + email fallback).
-      introSmsStep(mailbox, "buyer"),
-      introSmsStep(mailbox, "seller"),
-      introSmsStep(mailbox, "both"),
-      // No phone at all: intro email instead (when an email was given).
-      introEmailStep(mailbox, "buyer"),
-      introEmailStep(mailbox, "seller"),
-      introEmailStep(mailbox, "both"),
+      // Intro from the AI worker (RE copy, quiet hours + email fallback),
+      // forked on the referral personal touch. The gate is equals-matched
+      // ("referral"), so a missing/failed extraction fails CLOSED into the
+      // standard copy: the referral opening (and its {{vars.referred_by}})
+      // can only ever render when a named referrer was actually parsed.
+      {
+        id: "intro",
+        type: "branch",
+        question: "Was this lead referred by a named person?",
+        branches: [
+          {
+            id: "intro_referral",
+            label: "Referral with a named referrer",
+            condition: { var: "referral_gate", equals: "referral" } satisfies When,
+            steps: introSteps(mailbox, true)
+          }
+        ],
+        else: introSteps(mailbox, false)
+      },
       // Route to the team (RE shape): buyer un-pinned, seller/both to Dave,
       // $1M+ kept for Amy.
       routeStep("buyer", agentName),
@@ -434,10 +526,40 @@ async function main(): Promise<void> {
     console.error(`Read failed: ${readErr.message}`);
     process.exit(1);
   }
+  // --update: the flow exists and its definition is replaced in place with
+  // the current builder output (validated above). Enabled state is kept;
+  // flow-edit safety is engine-guaranteed (runs resume by step id).
+  if (existing && args.update) {
+    if (!args.apply) {
+      console.log(
+        `\n[dry-run] Would UPDATE flow "${name}" (id=${existing.id}, ` +
+          `enabled=${existing.enabled}) in place. Re-run with --update --apply to write.`
+      );
+      return;
+    }
+    const { error: upErr } = await db
+      .from("ai_flows")
+      .update({ definition })
+      .eq("id", existing.id);
+    if (upErr) {
+      console.error(`Update failed: ${upErr.message}`);
+      process.exit(1);
+    }
+    console.log(
+      `\nUpdated AiFlow id=${existing.id} in place (enabled=${existing.enabled}).`
+    );
+    await recordOneshotApplied(db, {
+      scriptPath: process.argv[1] ?? "seed-amy-new-lead-intake.ts",
+      businessId,
+      details: { flow_id: existing.id, flow_name: name, updated: true }
+    });
+    return;
+  }
   if (existing && !args.force) {
     console.log(
       `\nFlow "${name}" already exists (id=${existing.id}, enabled=${existing.enabled}). ` +
-        "Nothing to do. Pass --force to create a duplicate."
+        "Nothing to do. Pass --update to refresh its definition in place, or --force " +
+        "to create a duplicate."
     );
     return;
   }
