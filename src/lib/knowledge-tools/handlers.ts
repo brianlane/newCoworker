@@ -6,6 +6,7 @@ import {
   selectDocumentsForQuestion,
   type DocumentAudienceView
 } from "@/lib/documents/core";
+import { MEMORY_CONTEXT_MAX_CHARS, selectMemoryForQuestion } from "@/lib/memory/retrieval";
 import {
   GeminiEmptyError,
   geminiGenerateTextDetailed,
@@ -182,7 +183,24 @@ export async function lookupBusinessKnowledge(
   if (config?.profile_md) parts.push(`# profile.md\n${config.profile_md}`);
   if (config?.soul_md) parts.push(`# soul.md\n${config.soul_md}`);
   if (config?.website_md) parts.push(`# website.md\n${config.website_md}`);
-  if (config?.memory_md) parts.push(`# memory.md\n${config.memory_md}`);
+
+  // Ranked memory retrieval (same treatment documents get): score active +
+  // archived memory sections against the question and pack only the most
+  // relevant into a bounded share of the prompt. Archived facts — evicted
+  // from the active 14KB window — stay answerable here.
+  const memoryBudget = Math.max(
+    0,
+    Math.min(MEMORY_CONTEXT_MAX_CHARS, PROMPT_MAX_CONTEXT_CHARS - parts.join("\n\n").length)
+  );
+  const memorySelection = selectMemoryForQuestion(
+    config?.memory_md ?? "",
+    config?.memory_archive_md ?? "",
+    question,
+    memoryBudget
+  );
+  if (memorySelection.context) {
+    parts.push(`# memory.md (saved notes most relevant to the question)\n${memorySelection.context}`);
+  }
 
   // Two-stage document retrieval: pack the most relevant eligible docs'
   // full contents into whatever budget the vault left over; mention the
