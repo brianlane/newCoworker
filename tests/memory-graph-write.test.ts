@@ -67,7 +67,7 @@ describe("normalizePhone / normalizeEmail", () => {
 describe("resolveEntity", () => {
   const index = [entityRow()];
 
-  it("honors a verified existing_id claim and ignores a bogus one", () => {
+  it("honors a verified existing_id claim; ignores bogus and cross-kind claims", () => {
     const extracted = {
       ref: "e1",
       kind: "person" as const,
@@ -81,6 +81,23 @@ describe("resolveEntity", () => {
     expect(
       resolveEntity({ ...extracted, existingId: "not-a-real-id" }, index)
     ).toBeNull();
+    // A claim pointing at a different-kind node is a misclaim, not a merge.
+    expect(
+      resolveEntity({ ...extracted, kind: "organization" as const }, index)
+    ).toBeNull();
+  });
+
+  it("never merges across kinds on a shared phone or email (shared main line/inbox)", () => {
+    const orgWithSharedContact = {
+      ref: "e1",
+      kind: "organization" as const,
+      name: "Laidlaw Realty",
+      aliases: [],
+      phones: ["602-695-1142"],
+      emails: ["amy@example.com"]
+    };
+    // The person row shares both the phone and the email — still no match.
+    expect(resolveEntity(orgWithSharedContact, index)).toBeNull();
   });
 
   it("matches on a shared normalized phone number across formatting", () => {
