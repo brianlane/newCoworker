@@ -1,7 +1,7 @@
 /**
  * Subscriber newsletter: a new post went live on the New Coworker blog.
  *
- * The email IS the newsletter — the full post body (markdown → the blog's
+ * The email IS the newsletter, the full post body (markdown → the blog's
  * own escape-first renderer) is embedded in the branded shell with inline,
  * email-client-safe styles, followed by a "Read on the blog" CTA. Sent by
  * the blog publish pipeline (src/lib/blog/publish.ts) to every active
@@ -18,7 +18,7 @@ import { emailMessagesForLocale, fmtEmail } from "@/lib/i18n/email-copy";
 export type BlogNewPostInput = {
   title: string;
   excerpt: string;
-  /** Full post body, markdown — rendered into the email. */
+  /** Full post body, markdown, rendered into the email. */
   content: string;
   slug: string;
   recipientEmail: string;

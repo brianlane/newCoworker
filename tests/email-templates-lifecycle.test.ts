@@ -198,7 +198,7 @@ describe("ops-vps-deletion email", () => {
 
   it("renders the srv hostname, panel link, owner, tier, and signup date", () => {
     const { subject, text, html } = buildOpsVpsDeletionEmail(baseInput);
-    expect(subject).toBe("[ops] Delete srv1800985.hstgr.cloud in hPanel — Jane Doe (standard)");
+    expect(subject).toBe("[ops] Delete srv1800985.hstgr.cloud in hPanel, Jane Doe (standard)");
     expect(text).toContain(
       "Please delete srv1800985.hstgr.cloud at https://hpanel.hostinger.com/paid-invoices for user Jane Doe, standard tier."
     );
@@ -232,7 +232,7 @@ describe("ops-vps-deletion email", () => {
   it("handles a missing VM id by pointing ops at the billing subscription", () => {
     const { subject, text } = buildOpsVpsDeletionEmail({ ...baseInput, virtualMachineId: null });
     expect(subject).toContain("[ops] Delete VPS in hPanel");
-    expect(text).toContain("(no VM id recorded — check the billing subscription below)");
+    expect(text).toContain("(no VM id recorded, check the billing subscription below)");
   });
 
   it("vpsHostname maps ids to srv hostnames and null to null", () => {
@@ -268,7 +268,7 @@ describe("ops-plan-change (hardware escalation started) email", () => {
   it("renders the tier + hardware transition, old box, and admin link", () => {
     const { subject, text, html } = buildOpsPlanChangeEmail(baseInput);
     expect(subject).toBe(
-      "[ops] Hardware escalation started — Jane Doe: starter/kvm2 → standard/kvm8"
+      "[ops] Hardware escalation started, Jane Doe: starter/kvm2 → standard/kvm8"
     );
     expect(text).toContain("Tier: starter → standard (monthly)");
     expect(text).toContain("Hardware: kvm2 → kvm8");
@@ -313,7 +313,7 @@ describe("ops-term-alignment (contract switch summary) email", () => {
   it("renders the aligned outcome with the box swap and cycle transition", () => {
     const { subject, text, html } = buildOpsTermAlignmentEmail(baseInput);
     expect(subject).toBe(
-      "[ops] Contract switch — Jane Doe: monthly → biennial (Hostinger term aligned)"
+      "[ops] Contract switch, Jane Doe: monthly → biennial (Hostinger term aligned)"
     );
     expect(text).toContain("Contract: monthly → biennial");
     expect(text).toContain("Hostinger cycle: 1mo → target 24mo");
@@ -378,14 +378,14 @@ describe("ops-did-release-failed email", () => {
       siteUrl: "https://www.newcoworker.com"
     });
     expect(subject).toBe(
-      "[ops] ACTION REQUIRED: release DID +16023131823 manually — automated release failed"
+      "[ops] ACTION REQUIRED: release DID +16023131823 manually, automated release failed"
     );
     expect(text).toContain("Number: +16023131823");
     expect(text).toContain("Business id: biz-1");
     expect(text).toContain("Failure: Telnyx 500: server error");
     expect(text).toContain("NOTHING will retry this automatically");
     expect(text).toContain("Telnyx portal → Numbers → My Numbers");
-    expect(html).toContain("DID release failed — manual action required");
+    expect(html).toContain("DID release failed, manual action required");
     expect(html).toContain("https://portal.telnyx.com/#/numbers/my-numbers");
   });
 });

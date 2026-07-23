@@ -84,7 +84,7 @@ export const SUMMARY_MAX_CHARS = 2000;
  * is fire-and-forget and the local model may be cold or context-stuffed. */
 export const SUMMARY_TIMEOUT_MS = 60_000;
 
-const SUMMARIZER_SYSTEM_INSTRUCTION = `SUMMARIZER MODE — DO NOT respond as the persona, agent, or assistant.
+const SUMMARIZER_SYSTEM_INSTRUCTION = `SUMMARIZER MODE: DO NOT respond as the persona, agent, or assistant.
 
 You will receive an excerpt of a long-running conversation between a business owner and their AI coworker. Produce a concise factual digest the agent can use to maintain continuity in future turns.
 

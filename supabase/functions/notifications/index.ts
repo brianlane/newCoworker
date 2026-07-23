@@ -288,9 +288,9 @@ serve(async (req: Request) => {
         : record.task_type === "missed_call_spike"
           ? `${missedToday || "Several"} callers were turned away today (line busy or out of voice minutes). Check Analytics on your dashboard; a plan upgrade or minutes top-up stops the misses.`
           : record.task_type === "sms_needs_human"
-            ? `Your texting coworker needs you to take over with ${needsHumanLabel}${needsHumanReason ? ` — ${needsHumanReason}` : ""}. Reply from Messages on your dashboard.`.slice(0, 320)
+            ? `Your texting coworker needs you to take over with ${needsHumanLabel}${needsHumanReason ? `, ${needsHumanReason}` : ""}. Reply from Messages on your dashboard.`.slice(0, 320)
             : record.task_type === "aiflow_run_failed"
-              ? `An AiFlow stopped while handling ${aiflowLeadLabel}${aiflowReason ? ` — ${aiflowReason}` : ""}. Follow up with them yourself and check the flow's run history on your dashboard.`.slice(0, 320)
+              ? `An AiFlow stopped while handling ${aiflowLeadLabel}${aiflowReason ? `, ${aiflowReason}` : ""}. Follow up with them yourself and check the flow's run history on your dashboard.`.slice(0, 320)
               : record.task_type === "sms_customer_reply"
                 ? `${replyLabel} texted back${replyPreview ? `: "${replyPreview}"` : ""}. Reply from Messages on your dashboard.`.slice(0, 320)
                 : `URGENT ${record.task_type}`;

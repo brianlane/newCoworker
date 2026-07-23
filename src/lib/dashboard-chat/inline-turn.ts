@@ -102,7 +102,7 @@ const CREATION_TOOLS: GeminiFunctionDeclaration[] = [
   {
     name: "create_aiflow",
     description:
-      "Draft a new AiFlow automation from a plain-English description. Use ONLY when the owner asks to create/build an automation, workflow, or AiFlow. Write a complete, specific description including: what starts it (a text, an email, a webhook, a schedule), every step in order, and any exact message wording the owner gave. The platform compiles and validates it into a draft the owner reviews in the AiFlows builder — it is NOT activated automatically.",
+      "Draft a new AiFlow automation from a plain-English description. Use ONLY when the owner asks to create/build an automation, workflow, or AiFlow. Write a complete, specific description including: what starts it (a text, an email, a webhook, a schedule), every step in order, and any exact message wording the owner gave. The platform compiles and validates it into a draft the owner reviews in the AiFlows builder, it is NOT activated automatically.",
     parameters: {
       type: "object",
       properties: {
@@ -117,7 +117,7 @@ const CREATION_TOOLS: GeminiFunctionDeclaration[] = [
   {
     name: "create_agent",
     description:
-      "Draft a new reusable Agent: a saved instruction set the owner runs repeatedly against attachments (PDF/text/markdown/CSV) to get the same kind of output every time — e.g. 'turn an intake form into a clean client summary'. Use ONLY when the owner asks to create a reusable document task/agent. The draft opens pre-filled in the Agents editor for the owner to review and save — it is NOT saved automatically.",
+      "Draft a new reusable Agent: a saved instruction set the owner runs repeatedly against attachments (PDF/text/markdown/CSV) to get the same kind of output every time, e.g. 'turn an intake form into a clean client summary'. Use ONLY when the owner asks to create a reusable document task/agent. The draft opens pre-filled in the Agents editor for the owner to review and save, it is NOT saved automatically.",
     parameters: {
       type: "object",
       properties: {
@@ -146,7 +146,7 @@ const CREATION_TOOLS: GeminiFunctionDeclaration[] = [
 const KNOWLEDGE_TOOL: GeminiFunctionDeclaration = {
   name: "business_knowledge_lookup",
   description:
-    "Answer a question about THIS business from its approved knowledge base: uploaded business documents, the crawled website summary, and the business's identity/memory. Use whenever the owner asks an operational or business-specific question (processes, policies, required documents, services, hours, what the website says). Returns a grounded answer, or an honest not-found — never invent an answer instead of calling this.",
+    "Answer a question about THIS business from its approved knowledge base: uploaded business documents, the crawled website summary, and the business's identity/memory. Use whenever the owner asks an operational or business-specific question (processes, policies, required documents, services, hours, what the website says). Returns a grounded answer, or an honest not-found, never invent an answer instead of calling this.",
   parameters: {
     type: "object",
     properties: {
@@ -272,12 +272,12 @@ function sideEffectNote(name: ActionToolName, result: unknown): string {
   };
   if (name === "send_sms") {
     const to = typeof r.toE164 === "string" ? r.toE164 : "the recipient";
-    const body = typeof r.sentBody === "string" ? ` — "${r.sentBody}"` : "";
+    const body = typeof r.sentBody === "string" ? `, "${r.sentBody}"` : "";
     return `Text sent to ${to}${body}.`;
   }
   if (name === "send_whatsapp") {
     const to = typeof r.toE164 === "string" ? r.toE164 : "the recipient";
-    const body = typeof r.sentBody === "string" ? ` — "${r.sentBody}"` : "";
+    const body = typeof r.sentBody === "string" ? `, "${r.sentBody}"` : "";
     return `WhatsApp message sent to ${to}${body}.`;
   }
   if (name === "calendar_book_appointment") {
@@ -292,18 +292,18 @@ function sideEffectNote(name: ActionToolName, result: unknown): string {
   }
   if (name === "run_aiflow") {
     const flowName = (r as { flowName?: unknown }).flowName;
-    return `Automation run started${typeof flowName === "string" ? ` ("${flowName}")` : ""} — it can be watched at /dashboard/aiflows.`;
+    return `Automation run started${typeof flowName === "string" ? ` ("${flowName}")` : ""}, it can be watched at /dashboard/aiflows.`;
   }
   if (name === "edit_aiflow") {
     const flowName = (r as { flowName?: unknown }).flowName;
-    return `Automation${typeof flowName === "string" ? ` "${flowName}"` : ""} was updated as requested — it can be reviewed at /dashboard/aiflows.`;
+    return `Automation${typeof flowName === "string" ? ` "${flowName}"` : ""} was updated as requested, it can be reviewed at /dashboard/aiflows.`;
   }
   if (name === "generate_image") {
     // The markdown IS the deliverable: without it a degraded wrap-up
     // would charge the owner for an image nobody can see.
     return typeof r.data?.markdown === "string"
       ? `The image was generated:\n\n${r.data.markdown}`
-      : "The image was generated — it's saved with this conversation.";
+      : "The image was generated, it's saved with this conversation.";
   }
   if (name === "update_notification_preferences") {
     const updated = (r as { updated?: unknown }).updated;
@@ -367,7 +367,7 @@ async function executeToolCall(
         return {
           ok: false,
           message:
-            "The knowledge base couldn't answer right now. Tell the owner you couldn't check the knowledge base — do NOT invent an answer."
+            "The knowledge base couldn't answer right now. Tell the owner you couldn't check the knowledge base, do NOT invent an answer."
         };
       }
       return { ok: true, answer: result.data.answer };
@@ -379,7 +379,7 @@ async function executeToolCall(
       return {
         ok: false,
         message:
-          "The knowledge base couldn't answer right now. Tell the owner you couldn't check the knowledge base — do NOT invent an answer."
+          "The knowledge base couldn't answer right now. Tell the owner you couldn't check the knowledge base, do NOT invent an answer."
       };
     }
   }
@@ -399,14 +399,14 @@ async function executeToolCall(
         stepCount: result.definition.steps.length,
         triggerChannel: result.definition.trigger.channel,
         warnings: result.warnings,
-        note: "Draft created and validated. The owner will see an 'Open in AiFlows builder' card under your reply — tell them to review and save it there. Do NOT repeat the JSON definition in your reply."
+        note: "Draft created and validated. The owner will see an 'Open in AiFlows builder' card under your reply, tell them to review and save it there. Do NOT repeat the JSON definition in your reply."
       };
     } catch (err) {
       logger.warn("dashboard-chat create_aiflow tool failed", {
         businessId,
         error: err instanceof Error ? err.message : String(err)
       });
-      return { ok: false, message: "The automation drafting service failed — try again later." };
+      return { ok: false, message: "The automation drafting service failed, try again later." };
     }
   }
   if (call.name === "create_agent") {
@@ -429,7 +429,7 @@ async function executeToolCall(
     });
     return {
       ok: true,
-      note: "Agent draft created. The owner will see an 'Open in Agents' card under your reply — tell them to review and save it there."
+      note: "Agent draft created. The owner will see an 'Open in Agents' card under your reply, tell them to review and save it there."
     };
   }
   return { ok: false, message: `unknown tool: ${call.name}` };
@@ -658,12 +658,12 @@ export async function runInlineChatTurn(
     const parts: string[] = [];
     if (drafts.length > 0) {
       parts.push(
-        "Done — I've prepared a draft for you. Open it from the card below to review and save."
+        "Done, I've prepared a draft for you. Open it from the card below to review and save."
       );
     }
     if (sideEffects.happened) {
       parts.push(
-        `${parts.length > 0 ? "Also completed" : "Done — the requested action went through"}, though I hit a hiccup writing my summary. What happened:\n${sideEffects.notes.map((n) => `- ${n}`).join("\n")}`
+        `${parts.length > 0 ? "Also completed" : "Done, the requested action went through"}, though I hit a hiccup writing my summary. What happened:\n${sideEffects.notes.map((n) => `- ${n}`).join("\n")}`
       );
     }
     fallback = parts.join("\n\n");

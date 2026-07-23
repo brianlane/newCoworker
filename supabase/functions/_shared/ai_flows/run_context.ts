@@ -123,13 +123,13 @@ export function formatFlowRunContext(
 
   const lines: string[] = [
     "Automation context: this business's automated workflows recently handled this contact. " +
-      "Facts the automation already collected are listed below — treat them as KNOWN. " +
+      "Facts the automation already collected are listed below, treat them as KNOWN. " +
       "Do NOT ask for or re-confirm any of them (including their phone number: you are texting it)."
   ];
   for (const run of shown) {
     const when = run.updatedAt ? `, last update ${run.updatedAt}` : "";
     lines.push("");
-    lines.push(`Workflow "${run.flowName}" — ${statusPhrase(run.status)}${when}:`);
+    lines.push(`Workflow "${run.flowName}", ${statusPhrase(run.status)}${when}:`);
     const vars = presentableVars(run.vars);
     if (vars.length === 0) {
       lines.push("- (no collected details)");
@@ -144,9 +144,9 @@ export function formatFlowRunContext(
       lines.push(`${i + 1}. "${truncate(m, MAX_LAST_MESSAGE_CHARS)}"`);
     });
     lines.push(
-      "These were already delivered — NEVER send them again, never repeat or paraphrase " +
+      "These were already delivered, NEVER send them again, never repeat or paraphrase " +
         "them, and never re-ask a question they contain. If this contact's message reads " +
-        "like an answer to one of them, continue THAT thread naturally — acknowledge the " +
+        "like an answer to one of them, continue THAT thread naturally, acknowledge the " +
         "answer and move forward. Never restart the conversation, re-introduce yourself, " +
         "or re-run an intake script."
     );
@@ -178,9 +178,9 @@ export function formatFlowAnswerNote(lastFlowMessage: string): string | null {
   if (!trimmed) return null;
   return (
     `(Note: the last automated message to this texter was: ` +
-    `"${truncate(trimmed, MAX_LAST_MESSAGE_CHARS)}" — read their message below ` +
+    `"${truncate(trimmed, MAX_LAST_MESSAGE_CHARS)}", read their message below ` +
     `as a likely answer to it, and ACT on that answer in this reply. If they ` +
-    `are agreeing or saying they are available now, help them right now — ` +
+    `are agreeing or saying they are available now, help them right now, ` +
     `continue the conversation immediately or arrange a prompt human ` +
     `follow-up; do NOT ask them to schedule for later, offer to find times, ` +
     // The bare-answer clause (Jul 2026): on gemini-3.5-flash-lite the
@@ -191,7 +191,7 @@ export function formatFlowAnswerNote(lastFlowMessage: string): string | null {
     // (surfaced by tests/e2e/truly-renewal-context.e2e.test.ts after the
     // suite realigned to the fleet's actual model).
     `or re-ask the question they just answered. Their message is the text ` +
-    `after "[SMS]" below — even when it is only a bare date, time, or ` +
+    `after "[SMS]" below, even when it is only a bare date, time, or ` +
     `single word, that IS their message and their answer; never treat it ` +
     `as blank.)`
   );
@@ -207,7 +207,7 @@ export function formatBusinessFlowActivity(
   const shown = runs.slice(0, MAX_RUNS_PER_BUSINESS);
   if (shown.length === 0) return null;
   const lines: string[] = [
-    "Recent automation (AiFlow) activity — cite these when the owner asks what the automations did:"
+    "Recent automation (AiFlow) activity, cite these when the owner asks what the automations did:"
   ];
   for (const run of shown) {
     const who = run.leadLabel ? ` for ${run.leadLabel}` : "";

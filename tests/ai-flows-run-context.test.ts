@@ -66,7 +66,7 @@ describe("formatFlowRunContext", () => {
 
   it("lists each run's workflow, status phrase, and collected vars", () => {
     const text = formatFlowRunContext([snapshot()], []);
-    expect(text).toContain('Workflow "Lead intake & follow-up" — finished, last update 2026-07-11T12:39:05Z:');
+    expect(text).toContain('Workflow "Lead intake & follow-up", finished, last update 2026-07-11T12:39:05Z:');
     expect(text).toContain("- lead_name: Dwight Colclough");
     expect(text).toContain("- product: auto_insurance");
     expect(text).toContain("treat them as KNOWN");
@@ -86,7 +86,7 @@ describe("formatFlowRunContext", () => {
       ["failed", "stopped with an error"],
       ["paused_by_call", "paused_by_call"]
     ] as const) {
-      expect(formatFlowRunContext([snapshot({ status })], [])).toContain(`— ${phrase}`);
+      expect(formatFlowRunContext([snapshot({ status })], [])).toContain(`, ${phrase}`);
     }
   });
 
@@ -95,7 +95,7 @@ describe("formatFlowRunContext", () => {
       [snapshot({ updatedAt: null, vars: { __goal_g1: "replied" } })],
       []
     );
-    expect(text).toContain('Workflow "Lead intake & follow-up" — finished:');
+    expect(text).toContain('Workflow "Lead intake & follow-up", finished:');
     expect(text).toContain("- (no collected details)");
   });
 
@@ -219,7 +219,7 @@ describe("loadFlowRunContext", () => {
       { data: [{ body: "Approximately when does your current policy renew?" }] }
     ]);
     const text = await loadFlowRunContext(db, BIZ, LEAD);
-    expect(text).toContain('Workflow "Lead intake & follow-up (Privyr)" — finished');
+    expect(text).toContain('Workflow "Lead intake & follow-up (Privyr)", finished');
     expect(text).toContain("- lead_name: Dwight Colclough");
     expect(text).not.toContain("__branch_x");
     expect(text).toContain("when does your current policy renew?");
@@ -382,7 +382,7 @@ describe("formatFlowAnswerNote", () => {
     const note = formatFlowAnswerNote("Approximately when does your current policy renew?");
     expect(note).toContain(
       '(Note: the last automated message to this texter was: ' +
-        '"Approximately when does your current policy renew?" — read their ' +
+        '"Approximately when does your current policy renew?", read their ' +
         "message below as a likely answer to it, and ACT on that answer in this reply."
     );
     // The Bryan clause (Amy 2026-07-14): an "available now" answer must be
@@ -402,9 +402,9 @@ describe("formatFlowAnswerNote", () => {
     expect(note).toContain("…");
     // The quoted flow message itself stays capped at MAX_LAST_MESSAGE_CHARS
     // regardless of the surrounding instruction text. (Matched up to the
-    // "— read their message" boundary: the bare-answer clause added a
+    // ", read their message" boundary: the bare-answer clause added a
     // second quoted token, "[SMS]", later in the note.)
-    const quoted = /"([^"]*)" — read their message/.exec(note!)?.[1] ?? "";
+    const quoted = /"([^"]*)", read their message/.exec(note!)?.[1] ?? "";
     expect(quoted.length).toBeGreaterThan(0);
     expect(quoted.length).toBeLessThanOrEqual(300);
     expect(formatFlowAnswerNote("   ")).toBeNull();

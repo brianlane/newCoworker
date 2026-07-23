@@ -4,7 +4,7 @@
  *
  * The admin migrate-size endpoint answers 202 and runs the migration
  * unattended in the background, so these emails are the operator's only
- * progress signal — mirroring the change-plan "hardware escalation
+ * progress signal, mirroring the change-plan "hardware escalation
  * started" pattern, plus terminal completed/failed phases because there is
  * no customer-facing flow (deletion-request email etc.) wrapping this one.
  */
@@ -42,7 +42,7 @@ export function buildOpsHardwareMigrationEmail(
   input: OpsHardwareMigrationInput
 ): OpsHardwareMigrationEmail {
   const subject =
-    `[ops] Hardware migration ${PHASE_LABEL[input.phase]} — ` +
+    `[ops] Hardware migration ${PHASE_LABEL[input.phase]}, ` +
     `${input.businessName}: ${input.fromSize} → ${input.toSize}`;
 
   const textLines = [
@@ -57,7 +57,7 @@ export function buildOpsHardwareMigrationEmail(
   const text = textLines.join("\n\n");
 
   const html = buildBrandedEmailHtml({
-    // Internal ops inbox — omit the owner-facing platform signature block.
+    // Internal ops inbox, omit the owner-facing platform signature block.
     platformSignature: false,
     siteUrl: input.siteUrl,
     documentTitle: subject,

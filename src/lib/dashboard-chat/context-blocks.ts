@@ -36,7 +36,7 @@ const CALENDAR_PROVIDER_LABELS: Record<string, string> = {
   microsoft: "Outlook Calendar",
   caldav: "CalDAV (e.g. iCloud)",
   calendly:
-    "Calendly (slot search + scheduling links — booking hands the person a single-use link, it cannot book on their behalf)"
+    "Calendly (slot search + scheduling links, booking hands the person a single-use link, it cannot book on their behalf)"
 };
 
 export type ContextBlockDeps = {
@@ -68,7 +68,7 @@ export async function buildIntegrationsStatusLine(
         : "Microsoft mailbox connected"
       : "not connected";
     return (
-      "CONNECTED INTEGRATIONS (ground truth for THIS turn — answer connection questions from this line, never guess or ask the owner for API details):\n" +
+      "CONNECTED INTEGRATIONS (ground truth for THIS turn, answer connection questions from this line, never guess or ask the owner for API details):\n" +
       `- Calendar: ${calendarLabel}\n` +
       `- Email mailbox: ${emailLabel}\n` +
       "- Texting: the business's own SMS number (always available on this platform)."
@@ -112,7 +112,7 @@ export async function buildBusinessContextBlock(
     const memory = (config.memory_md ?? "").trim();
     if (!identity && !memory) return null;
     const parts = [
-      "YOUR BUSINESS CONFIGURATION (identity + memory — the owner's own data; quote from it freely):"
+      "YOUR BUSINESS CONFIGURATION (identity + memory, the owner's own data; quote from it freely):"
     ];
     if (identity) parts.push(`# identity.md\n${clipHead(identity)}`);
     if (memory) parts.push(`# memory.md\n${clipTail(memory)}`);

@@ -28,7 +28,7 @@ function findingLine(finding: BillingPostureFinding): string {
   const who = finding.businessName
     ? `${finding.businessName} (${finding.businessId})`
     : "pool";
-  const expires = finding.expiresAt ? ` — period ends ${finding.expiresAt}` : "";
+  const expires = finding.expiresAt ? `, period ends ${finding.expiresAt}` : "";
   const healed = finding.autoHealed ? " [AUTO-HEALED]" : " [ACTION REQUIRED]";
   return `VM ${finding.vmId} / ${who}: ${finding.detail}${expires}${healed}`;
 }
@@ -39,7 +39,7 @@ export function buildOpsBillingPostureEmail(
   const actionCount = input.findings.filter((f) => !f.autoHealed).length;
   const subject =
     actionCount > 0
-      ? `[ops] ACTION REQUIRED: ${actionCount} VPS billing posture finding(s) — live boxes at risk of lapsing`
+      ? `[ops] ACTION REQUIRED: ${actionCount} VPS billing posture finding(s), live boxes at risk of lapsing`
       : `[ops] VPS billing posture: ${input.findings.length} finding(s) auto-healed`;
 
   const textLines = [
@@ -50,7 +50,7 @@ export function buildOpsBillingPostureEmail(
   const text = textLines.join("\n\n");
 
   const html = buildBrandedEmailHtml({
-    // Internal ops inbox — omit the owner-facing platform signature block.
+    // Internal ops inbox, omit the owner-facing platform signature block.
     platformSignature: false,
     siteUrl: input.siteUrl,
     documentTitle: subject,

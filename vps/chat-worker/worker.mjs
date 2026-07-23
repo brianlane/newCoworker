@@ -324,7 +324,7 @@ function shipSystemLog(level, event, data = {}) {
   const dbLevel =
     level === "fatal" ? "error" : ["debug", "info", "warn", "error"].includes(level) ? level : "info";
   const { error: errMsg, reason, ...rest } = data;
-  const message = [errMsg, reason].filter(Boolean).join(" — ");
+  const message = [errMsg, reason].filter(Boolean).join(", ");
   sb.from("system_logs")
     .insert({
       business_id: BUSINESS_ID,
@@ -1004,7 +1004,7 @@ async function processJob(job) {
       log("warn", "owner_turn_refused_over_cap", { jobId: job.id });
       const refusal =
         "Your coworker's monthly AI budget is used up, so replies are paused. " +
-        "They resume automatically when your billing period resets — or add a " +
+        "They resume automatically when your billing period resets, or add a " +
         "Gemini credit pack from the Billing page to keep chatting now.";
       const { data: refusalMsg, error: refusalInsertErr } = await sb
         .from("dashboard_chat_messages")
@@ -1321,12 +1321,12 @@ async function processLoop() {
 // ===========================================================================
 
 const WEBCHAT_OVER_CAP_REFUSAL =
-  "Sorry — our chat assistant is temporarily unavailable. Please try again a bit later, or contact us directly and we'll be happy to help.";
+  "Sorry, our chat assistant is temporarily unavailable. Please try again a bit later, or contact us directly and we'll be happy to help.";
 
 // Deterministic fallback when stripping sentinel blocks leaves an empty
 // reply (the whole generation was a hallucinated tool block).
 const WEBCHAT_EMPTY_AFTER_STRIP_REPLY =
-  "Sorry, I can't do that from this chat — but I'm happy to answer questions or take your contact details so the team can follow up.";
+  "Sorry, I can't do that from this chat, but I'm happy to answer questions or take your contact details so the team can follow up.";
 
 async function claimNextWebchatJob() {
   const { data, error } = await sb.rpc("claim_webchat_job", {

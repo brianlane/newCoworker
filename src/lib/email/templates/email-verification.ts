@@ -8,7 +8,7 @@
  * The `verificationUrl` is the only varying input; it's a fully-qualified
  * https://newcoworker.com/verify-email?token=... pointing at the route
  * that flips `customer_profiles.email_verified_at`. Don't dynamic-import
- * the token utility here — building the URL is the caller's job, so this
+ * the token utility here, building the URL is the caller's job, so this
  * stays free of env dependencies and stays unit-testable without
  * supabase/Resend mocks.
  */
