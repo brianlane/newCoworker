@@ -178,6 +178,18 @@ describe("builders", () => {
       expect.objectContaining({ predicate: "campaign", objectValue: "Spring Promo" }),
       expect.objectContaining({ predicate: "interested_in", objectValue: "selling" })
     ]);
+    // Nameless but identified: the identifier names the node (booking
+    // convention) so lead facts still land; identity-less builds nothing.
+    const phoneNamed = leadExtraction({
+      source: "s",
+      fields: { city: "PHX" },
+      phoneE164: "+15550001111"
+    });
+    expect(phoneNamed.entities[0].name).toBe("+15550001111");
+    expect(phoneNamed.facts[0]).toMatchObject({ predicate: "lead_source" });
+    expect(
+      leadExtraction({ source: "s", fields: { city: "PHX" }, email: "a@b.co" }).entities[0].name
+    ).toBe("a@b.co");
     expect(
       leadExtraction({ source: "s", fields: { city: "PHX" } })
     ).toEqual({ entities: [], facts: [] });
