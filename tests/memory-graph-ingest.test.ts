@@ -46,6 +46,9 @@ function entityRow(): MemoryEntityRow {
     phones: ["602-695-1142"],
     emails: [],
     customer_e164: null,
+    source: "owner_chat",
+    trust: 3,
+    attributed_to: null,
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z"
   };
@@ -91,7 +94,10 @@ describe("ingestBulletsIntoGraph", () => {
     expect(deps.apply).toHaveBeenCalledWith(
       BIZ,
       expect.objectContaining({ entities: [expect.objectContaining({ name: "Dave Lane" })] }),
-      ["Dave Lane is an agent"]
+      ["Dave Lane is an agent"],
+      {},
+      // Owner-capture provenance from the kg-sources registry.
+      { source: "owner_chat", trust: 3, attributedTo: null }
     );
   });
 

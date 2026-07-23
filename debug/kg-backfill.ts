@@ -123,7 +123,12 @@ async function main(): Promise<void> {
       continue;
     }
 
-    const result = await applyGraphExtraction(BUSINESS_ID, extraction, batch);
+    // kg-source: backfill — historical memory_md replays at owner trust.
+    const result = await applyGraphExtraction(BUSINESS_ID, extraction, batch, {}, {
+      source: "backfill",
+      trust: 3,
+      attributedTo: null
+    });
     totals.entitiesCreated += result.entitiesCreated;
     totals.entitiesMerged += result.entitiesMerged;
     totals.factsInserted += result.factsInserted;

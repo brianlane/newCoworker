@@ -21,6 +21,7 @@
  */
 
 import type { ExtractedEntity, GraphExtraction } from "./graph-extract";
+import type { KgSource, KgTrust } from "./kg-sources";
 import {
   insertMemoryEntity,
   insertMemoryFact,
@@ -135,12 +136,26 @@ export function resolveEntity(
   return null;
 }
 
-/** New aliases/phones/emails the extraction adds to an existing node. */
+/**
+ * New aliases/phones/emails the extraction adds to an existing node — plus
+ * a trust bump when a higher-trust source touches it.
+ *
+ * TRUST GATE: contact points and aliases merge onto the CANONICAL node only
+ * from trust ≥ 2 sources. A customer or anonymous visitor (trust ≤ 1)
+ * stating "my other number is …" must not rewrite who the entity IS — their
+ * statements land as attributed facts instead, and resolution keeps working
+ * off owner-established identity evidence.
+ */
 export function mergePatch(
   extracted: ExtractedEntity,
-  row: MemoryEntityRow
-): { aliases?: string[]; phones?: string[]; emails?: string[] } {
-  const patch: { aliases?: string[]; phones?: string[]; emails?: string[] } = {};
+  row: MemoryEntityRow,
+  sourceTrust: KgTrust = 3
+): { aliases?: string[]; phones?: string[]; emails?: string[]; trust?: number } {
+  const patch: { aliases?: string[]; phones?: string[]; emails?: string[]; trust?: number } = {};
+
+  if (sourceTrust > row.trust) patch.trust = sourceTrust;
+
+  if (sourceTrust <= 1) return patch;
 
   const knownNames = entityNames(row);
   const newAliases = [extracted.name, ...extracted.aliases].filter(
@@ -182,15 +197,36 @@ export type GraphWriteResult = {
   factsSkipped: number;
 };
 
+/** Where an extraction came from and how much to trust it. */
+export type GraphProvenance = {
+  source: KgSource;
+  trust: KgTrust;
+  /** Who stated it (caller E.164, email, platform id); null = owner-canonical. */
+  attributedTo?: string | null;
+};
+
+export const OWNER_PROVENANCE: GraphProvenance = {
+  source: "owner_chat",
+  trust: 3,
+  attributedTo: null
+};
+
 /**
  * Land one extraction in the graph. Sequential by design — captures are
  * rare (owner chat) and ordering keeps supersedence deterministic.
+ *
+ * TRUST-AWARE SUPERSEDENCE: a new fact deactivates only same-or-LOWER-trust
+ * active facts for its (subject, predicate). A customer claim never
+ * supersedes an owner statement — it lands as an additional attributed
+ * fact while the owner's stays active (the KYP lesson as a model, not a
+ * wall).
  */
 export async function applyGraphExtraction(
   businessId: string,
   extraction: GraphExtraction,
   bullets: string[],
-  deps: GraphWriteDeps = {}
+  deps: GraphWriteDeps = {},
+  provenance: GraphProvenance = OWNER_PROVENANCE
 ): Promise<GraphWriteResult> {
   /* c8 ignore start -- production defaults; tests inject */
   const listEntities = deps.listEntities ?? listMemoryEntities;
@@ -217,14 +253,15 @@ export async function applyGraphExtraction(
     const resolved = resolveEntity(extracted, index);
     if (resolved) {
       refToId.set(extracted.ref, resolved.id);
-      const patch = mergePatch(extracted, resolved);
+      const patch = mergePatch(extracted, resolved, provenance.trust);
       if (Object.keys(patch).length > 0) {
         await updateEntity(resolved.id, patch);
         // Keep the in-memory index current so later refs in this batch see
-        // the merged aliases/phones/emails.
+        // the merged aliases/phones/emails and the bumped trust.
         if (patch.aliases) resolved.aliases = patch.aliases;
         if (patch.phones) resolved.phones = patch.phones;
         if (patch.emails) resolved.emails = patch.emails;
+        if (patch.trust !== undefined) resolved.trust = patch.trust;
         result.entitiesMerged += 1;
       }
       continue;
@@ -235,7 +272,10 @@ export async function applyGraphExtraction(
       canonical_name: extracted.name,
       aliases: extracted.aliases,
       phones: extracted.phones,
-      emails: extracted.emails
+      emails: extracted.emails,
+      source: provenance.source,
+      trust: provenance.trust,
+      attributed_to: provenance.attributedTo ?? null
     });
     index.push(inserted);
     refToId.set(extracted.ref, inserted.id);
@@ -271,11 +311,17 @@ export async function applyGraphExtraction(
       predicate: fact.predicate,
       object_entity_id: objectId,
       object_value: objectId ? null : objectValue,
-      source_text: sourceText
+      source_text: sourceText,
+      source: provenance.source,
+      trust: provenance.trust,
+      attributed_to: provenance.attributedTo ?? null
     });
     result.factsInserted += 1;
 
-    const stale = existing.map((row) => row.id);
+    // Supersedence respects trust: only same-or-lower-trust facts retire.
+    // Higher-trust facts stay active; the new lower-trust fact coexists as
+    // an attributed claim retrieval renders as such.
+    const stale = existing.filter((row) => row.trust <= provenance.trust).map((row) => row.id);
     if (stale.length > 0) {
       await supersedeFacts(stale, inserted.id);
       result.factsSuperseded += stale.length;

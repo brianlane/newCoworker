@@ -45,12 +45,18 @@ export function noteFileName(name: string, fallback: string): string {
 
 function factLine(fact: MemoryFactRow, byId: Map<string, MemoryEntityRow>): string {
   const stated = fact.stated_at.slice(0, 10);
+  // Trust ≤ 1 facts are CLAIMS in the notes too — same rendering contract
+  // as retrieval, so the human-inspectable copy never launders hearsay.
+  const marker =
+    fact.trust <= 1
+      ? ` *(claimed by ${fact.attributed_to ?? fact.source} ${stated}, unverified)*`
+      : ` *(stated ${stated})*`;
   if (fact.object_entity_id) {
     const object = byId.get(fact.object_entity_id);
     const target = object ? `[[${object.canonical_name}]]` : fact.object_entity_id;
-    return `- ${fact.predicate} ${target} *(stated ${stated})*`;
+    return `- ${fact.predicate} ${target}${marker}`;
   }
-  return `- ${fact.predicate}: ${fact.object_value ?? ""} *(stated ${stated})*`;
+  return `- ${fact.predicate}: ${fact.object_value ?? ""}${marker}`;
 }
 
 /**
@@ -108,6 +114,9 @@ export function buildGraphJsonl(entities: MemoryEntityRow[], facts: MemoryFactRo
         aliases: e.aliases,
         phones: e.phones,
         emails: e.emails,
+        source: e.source,
+        trust: e.trust,
+        attributed_to: e.attributed_to,
         updated_at: e.updated_at
       })
     );
@@ -122,6 +131,9 @@ export function buildGraphJsonl(entities: MemoryEntityRow[], facts: MemoryFactRo
         object_id: f.object_entity_id,
         object_value: f.object_value,
         source_text: f.source_text,
+        source: f.source,
+        trust: f.trust,
+        attributed_to: f.attributed_to,
         stated_at: f.stated_at
       })
     );
