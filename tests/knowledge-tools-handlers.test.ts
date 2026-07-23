@@ -119,6 +119,35 @@ describe("lookupBusinessKnowledge", () => {
     expect(meter.mock.calls[0][0].inputChars).toBeGreaterThan(0);
   });
 
+  it("ranks memory sections against the question and includes archived matches", async () => {
+    vi.mocked(getBusinessConfig).mockResolvedValue({
+      identity_md: "identity",
+      soul_md: "soul",
+      website_md: "website",
+      memory_md:
+        "---\n\n### Owner chat (2026-07-01)\n\n- Always mention free estimates",
+      memory_archive_md:
+        "---\n\n### Owner chat (2026-01-01)\n\n- Escalate urgent plumbing issues to Amy Laidlaw"
+    } as never);
+    gemini.mockResolvedValue(geminiOk("Amy handles urgent plumbing.", null));
+    const result = await lookupBusinessKnowledge(BIZ, "who handles urgent plumbing issues?");
+    expect(result.ok).toBe(true);
+    const call = gemini.mock.calls[0][0];
+    expect(call.userText).toContain("# memory.md (saved notes most relevant to the question)");
+    // The archived fact — evicted from active memory — is answerable.
+    expect(call.userText).toContain("Escalate urgent plumbing issues to Amy Laidlaw");
+    // The irrelevant active section stays out of the prompt.
+    expect(call.userText).not.toContain("free estimates");
+  });
+
+  it("keeps the newest active memory in the prompt when nothing matches the question", async () => {
+    gemini.mockResolvedValue(geminiOk("answer", null));
+    await lookupBusinessKnowledge(BIZ, "zzzqqq?");
+    const call = gemini.mock.calls[0][0];
+    // Default mock memory_md is "memory" — carried via the fallback path.
+    expect(call.userText).toContain("# memory.md (saved notes most relevant to the question)\nmemory");
+  });
+
   it("includes the rendered Business-profile block in the context when profile_md is set", async () => {
     vi.mocked(getBusinessConfig).mockResolvedValue({
       identity_md: "identity",
