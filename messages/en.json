@@ -1746,6 +1746,16 @@
       "activityTitle": "Activity",
       "activitySubtitle": "Fleet-wide activity across every tenant, calls, texts, emails, AiFlow runs, and new contacts.",
       "seeAll": "See all →"
+    },
+    "feedFilters": {
+      "filterByType": "Filter by type",
+      "clear": "Clear",
+      "business": "Business",
+      "allBusinesses": "All businesses",
+      "time": "Time",
+      "today": "Today",
+      "lastDays": "Last {days} days",
+      "allTime": "All"
     }
   },
   "emails": {

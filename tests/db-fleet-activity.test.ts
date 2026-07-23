@@ -2,6 +2,7 @@ import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
   buildFleetActivityFeed,
   getFleetRecentActivity,
+  parseFleetActivityKindsParam,
   type FleetActivityInput
 } from "@/lib/db/fleet-activity";
 import type { ContactName } from "@/lib/db/contact-names";
@@ -483,5 +484,61 @@ describe("getFleetRecentActivity", () => {
 
     const items = await getFleetRecentActivity(20, undefined, db as never);
     expect(items.map((i) => i.label)).toContain("Text to +16025550122");
+  });
+
+  it("skips every unselected source when a kind filter is set", async () => {
+    const { db } = mockDb({ data: [SHARED_ROW], error: null });
+
+    const items = await getFleetRecentActivity(20, { kinds: ["call"] }, db as never);
+    // Only the calls source is queried…
+    expect(db.from).toHaveBeenCalledTimes(1);
+    expect(db.from).toHaveBeenCalledWith("voice_call_transcripts");
+    // …and only call items come back.
+    expect(items).toHaveLength(1);
+    expect(items[0]!.badge).toBe("Call");
+  });
+
+  it("queries both text sources for the sms_outbound kind", async () => {
+    const { db } = mockDb({ data: [], error: null });
+
+    await getFleetRecentActivity(20, { kinds: ["sms_outbound"] }, db as never);
+    const tables = db.from.mock.calls.map((c) => c[0]);
+    expect(tables.sort()).toEqual(["sms_inbound_jobs", "sms_outbound_log"]);
+  });
+
+  it("scopes every source to the requested business", async () => {
+    const { db } = mockDb({ data: [], error: null });
+
+    await getFleetRecentActivity(20, { businessId: "biz-1" }, db as never);
+    const scopedCalls = db.eq.mock.calls.filter(
+      (c) => c[0] === "business_id" && c[1] === "biz-1"
+    );
+    expect(scopedCalls).toHaveLength(8);
+  });
+
+  it("tightens but never widens the look-back window", async () => {
+    const { db } = mockDb({ data: [], error: null });
+    const dayMs = 24 * 60 * 60 * 1000;
+
+    await getFleetRecentActivity(20, { sinceDays: 7 }, db as never);
+    const sevenDayIso = db.gte.mock.calls[0]![1] as string;
+    expect(Date.now() - Date.parse(sevenDayIso)).toBeLessThan(8 * dayMs);
+
+    db.gte.mockClear();
+    // 999 days clamps to the 30-day fleet window.
+    await getFleetRecentActivity(20, { sinceDays: 999 }, db as never);
+    const clampedIso = db.gte.mock.calls[0]![1] as string;
+    expect(Date.now() - Date.parse(clampedIso)).toBeLessThan(31 * dayMs);
+  });
+});
+
+describe("parseFleetActivityKindsParam", () => {
+  it("keeps valid kinds, drops junk, and de-duplicates", () => {
+    expect(parseFleetActivityKindsParam("call,email,call,bogus")).toEqual(["call", "email"]);
+  });
+
+  it("returns empty (= all) for missing input", () => {
+    expect(parseFleetActivityKindsParam(undefined)).toEqual([]);
+    expect(parseFleetActivityKindsParam("")).toEqual([]);
   });
 });

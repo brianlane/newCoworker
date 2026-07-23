@@ -140,6 +140,43 @@ describe("db/logs", () => {
     expect(not).toHaveBeenCalledWith("business_id", "in", "(biz-a,biz-b)");
   });
 
+  it("getRecentAlertsAll filters statuses, business, and look-back when asked", async () => {
+    const inFn = vi.fn().mockReturnThis();
+    const eq = vi.fn().mockReturnThis();
+    const gte = vi.fn().mockReturnThis();
+    const db = {
+      ...mockDb(),
+      in: inFn,
+      eq,
+      gte,
+      limit: vi.fn().mockResolvedValue({ data: [MOCK_LOG], error: null })
+    };
+
+    await getRecentAlertsAll(5, db as never, {
+      statuses: ["error"],
+      businessId: "biz-1",
+      sinceDays: 7
+    });
+    expect(inFn).toHaveBeenCalledWith("status", ["error"]);
+    expect(eq).toHaveBeenCalledWith("business_id", "biz-1");
+    expect(gte).toHaveBeenCalledWith("created_at", expect.any(String));
+  });
+
+  it("getRecentAlertsAll defaults to both alert statuses for an empty filter", async () => {
+    const inFn = vi.fn().mockReturnThis();
+    const gte = vi.fn().mockReturnThis();
+    const db = {
+      ...mockDb(),
+      in: inFn,
+      gte,
+      limit: vi.fn().mockResolvedValue({ data: [MOCK_LOG], error: null })
+    };
+
+    await getRecentAlertsAll(5, db as never, { statuses: [] });
+    expect(inFn).toHaveBeenCalledWith("status", ["urgent_alert", "error"]);
+    expect(gte).not.toHaveBeenCalled();
+  });
+
   it("getRecentAlertsAll skips the exclusion clause for an empty list", async () => {
     const not = vi.fn().mockReturnThis();
     const db = {

@@ -282,9 +282,55 @@ function rowsOf<T>(res: { data: unknown; error: unknown }): T[] {
  */
 export const FLEET_ACTIVITY_WINDOW_DAYS = 30;
 
+/**
+ * Filterable source groups for the see-all view, in the order the filter bar
+ * shows them. `sms_outbound` covers both the outbound log and coworker
+ * replies; `log` is the completed coworker_logs source (provisioning
+ * finishes, tool captures).
+ */
+export const FLEET_ACTIVITY_FILTER_KINDS = [
+  "call",
+  "sms_inbound",
+  "sms_outbound",
+  "email",
+  "aiflow",
+  "customer",
+  "log"
+] as const;
+
+export type FleetActivityFilterKind = (typeof FLEET_ACTIVITY_FILTER_KINDS)[number];
+
+/**
+ * Parse the `kinds` URL param (comma-separated) into valid filter kinds,
+ * dropping anything outside the union and de-duplicating. Empty result = no
+ * filter (same convention as the owner feed's parseActivityKindsParam).
+ */
+export function parseFleetActivityKindsParam(
+  raw: string | undefined
+): FleetActivityFilterKind[] {
+  if (!raw) return [];
+  const valid = new Set<string>(FLEET_ACTIVITY_FILTER_KINDS);
+  return [...new Set(raw.split(","))].filter((k): k is FleetActivityFilterKind =>
+    valid.has(k)
+  );
+}
+
 export type FleetActivityOptions = {
   /** Businesses muted from the admin activity feed (see db/admin-mutes.ts). */
   excludeBusinessIds?: string[];
+  /**
+   * Source groups to include (see-all filter chips). Undefined or empty =
+   * everything. Applied at the FETCH layer so a filtered view gets each
+   * source's full row budget instead of post-filtering a merged chunk.
+   */
+  kinds?: FleetActivityFilterKind[];
+  /** Narrow the feed to one tenant (see-all business filter). */
+  businessId?: string;
+  /**
+   * Look-back in days; tightens — never widens — the
+   * {@link FLEET_ACTIVITY_WINDOW_DAYS} window.
+   */
+  sinceDays?: number;
 };
 
 /**
@@ -299,101 +345,130 @@ export async function getFleetRecentActivity(
   client?: SupabaseClient
 ): Promise<FleetActivityItem[]> {
   const db = client ?? (await createSupabaseServiceClient());
-  const since = new Date(
-    Date.now() - FLEET_ACTIVITY_WINDOW_DAYS * 24 * 60 * 60 * 1000
-  ).toISOString();
+  // sinceDays tightens — never widens — the fleet window.
+  const effectiveDays =
+    options?.sinceDays && options.sinceDays > 0
+      ? Math.min(options.sinceDays, FLEET_ACTIVITY_WINDOW_DAYS)
+      : FLEET_ACTIVITY_WINDOW_DAYS;
+  const since = new Date(Date.now() - effectiveDays * 24 * 60 * 60 * 1000).toISOString();
   const excluded = options?.excludeBusinessIds ?? [];
-  // Applied per source so a muted tenant can't eat any source's row budget.
-  // `q` is the PostgREST builder mid-chain; `not`'s return is typed `any`
-  // because a recursive structural constraint (not(): T) sends tsc into
-  // TS2589 against the real builder generics (same trade-off as the owner
-  // feed's beforeLt in src/lib/db/activity.ts) — only the chain shape
-  // matters here.
-  const notMuted = <T extends { not(column: string, op: string, value: string): any }>(
-    q: T
-  ) => (excluded.length > 0 ? q.not("business_id", "in", `(${excluded.join(",")})`) : q);
+  const kinds = options?.kinds ?? [];
+  // Empty selection means "everything" — the filter bar treats no chips as all.
+  const wants = (k: FleetActivityFilterKind): boolean =>
+    kinds.length === 0 || kinds.includes(k);
+  // A skipped source resolves to the same shape rowsOf() reads off a query.
+  const none = Promise.resolve({ data: [], error: null });
+  // Tenant restrictions, applied per source: mutes (so a muted tenant can't
+  // eat any source's row budget) and the see-all business filter. `q` is the
+  // PostgREST builder mid-chain, typed `any` because even a structural
+  // constraint sends tsc into TS2589 against the real builder generics when
+  // the helpers nest (same trade-off as the owner feed's beforeLt in
+  // src/lib/db/activity.ts) — only the chain shape matters here.
+  const restrict = (q: any): any => {
+    const unmuted =
+      excluded.length > 0 ? q.not("business_id", "in", `(${excluded.join(",")})`) : q;
+    return options?.businessId ? unmuted.eq("business_id", options.businessId) : unmuted;
+  };
 
   const [callsRes, smsInRes, smsReplyRes, smsOutRes, emailRes, flowsRes, custRes, logsRes] =
     await Promise.all([
-      notMuted(
-        db
-          .from("voice_call_transcripts")
-          .select("business_id, caller_e164, status, started_at")
-          .is("deleted_at", null)
-          .gte("started_at", since)
-      )
-        .order("started_at", { ascending: false })
-        .limit(limit),
-      notMuted(
-        db
-          .from("sms_inbound_jobs")
-          .select("business_id, payload, created_at")
-          .is("deleted_at", null)
-          .gte("created_at", since)
-      )
-        .order("created_at", { ascending: false })
-        .limit(limit),
+      !wants("call")
+        ? none
+        : restrict(
+              db
+                .from("voice_call_transcripts")
+                .select("business_id, caller_e164, status, started_at")
+                .is("deleted_at", null)
+                .gte("started_at", since)
+            )
+            .order("started_at", { ascending: false })
+            .limit(limit),
+      !wants("sms_inbound")
+        ? none
+        : restrict(
+              db
+                .from("sms_inbound_jobs")
+                .select("business_id, payload, created_at")
+                .is("deleted_at", null)
+                .gte("created_at", since)
+            )
+            .order("created_at", { ascending: false })
+            .limit(limit),
       // Replies windowed on updated_at (send time) so a recent reply to an
       // older inbound text still appears as outbound activity.
-      notMuted(
-        db
-          .from("sms_inbound_jobs")
-          .select("business_id, payload, updated_at")
-          .is("deleted_at", null)
-          .not("assistant_reply_text", "is", null)
-          .gte("updated_at", since)
-      )
-        .order("updated_at", { ascending: false })
-        .limit(limit),
-      notMuted(
-        db
-          .from("sms_outbound_log")
-          .select("business_id, to_e164, source, flow_id, created_at")
-          .is("deleted_at", null)
-          .gte("created_at", since)
-      )
-        .order("created_at", { ascending: false })
-        .limit(limit),
-      notMuted(
-        db
-          .from("email_log")
-          .select("business_id, direction, to_email, from_email, subject, source, flow_id, created_at")
-          .is("deleted_at", null)
-          .gte("created_at", since)
-      )
-        .order("created_at", { ascending: false })
-        .limit(limit),
-      notMuted(
-        db
-          .from("ai_flow_runs")
-          .select("business_id, status, created_at, ai_flows(name)")
-          .gte("created_at", since)
-      )
-        .order("created_at", { ascending: false })
-        .limit(limit),
-      notMuted(
-        db
-          .from("contacts")
-          // Only real customer profiles count — folded manual contacts
-          // (vendors, testers) are not interactions (same rule as the
-          // owner feed).
-          .select("business_id, display_name, customer_e164, created_at")
-          .eq("type", "customer")
-          .gte("created_at", since)
-      )
-        .order("created_at", { ascending: false })
-        .limit(limit),
+      !wants("sms_outbound")
+        ? none
+        : restrict(
+              db
+                .from("sms_inbound_jobs")
+                .select("business_id, payload, updated_at")
+                .is("deleted_at", null)
+                .not("assistant_reply_text", "is", null)
+                .gte("updated_at", since)
+            )
+            .order("updated_at", { ascending: false })
+            .limit(limit),
+      !wants("sms_outbound")
+        ? none
+        : restrict(
+              db
+                .from("sms_outbound_log")
+                .select("business_id, to_e164, source, flow_id, created_at")
+                .is("deleted_at", null)
+                .gte("created_at", since)
+            )
+            .order("created_at", { ascending: false })
+            .limit(limit),
+      !wants("email")
+        ? none
+        : restrict(
+              db
+                .from("email_log")
+                .select(
+                  "business_id, direction, to_email, from_email, subject, source, flow_id, created_at"
+                )
+                .is("deleted_at", null)
+                .gte("created_at", since)
+            )
+            .order("created_at", { ascending: false })
+            .limit(limit),
+      !wants("aiflow")
+        ? none
+        : restrict(
+              db
+                .from("ai_flow_runs")
+                .select("business_id, status, created_at, ai_flows(name)")
+                .gte("created_at", since)
+            )
+            .order("created_at", { ascending: false })
+            .limit(limit),
+      !wants("customer")
+        ? none
+        : restrict(
+              db
+                .from("contacts")
+                // Only real customer profiles count — folded manual contacts
+                // (vendors, testers) are not interactions (same rule as the
+                // owner feed).
+                .select("business_id, display_name, customer_e164, created_at")
+                .eq("type", "customer")
+                .gte("created_at", since)
+            )
+            .order("created_at", { ascending: false })
+            .limit(limit),
       // Completed work only: alert-shaped rows (urgent_alert/error) live in
       // Recent Alerts, and `thinking` progress ticks are scaffolding.
-      notMuted(
-        db
-          .from("coworker_logs")
-          .select("id, business_id, task_type, status, log_payload, created_at")
-          .eq("status", "success")
-          .gte("created_at", since)
-      )
-        .order("created_at", { ascending: false })
-        .limit(limit)
+      !wants("log")
+        ? none
+        : restrict(
+              db
+                .from("coworker_logs")
+                .select("id, business_id, task_type, status, log_payload, created_at")
+                .eq("status", "success")
+                .gte("created_at", since)
+            )
+            .order("created_at", { ascending: false })
+            .limit(limit)
     ]);
 
   const calls = rowsOf<FleetCallRow>(callsRes);
