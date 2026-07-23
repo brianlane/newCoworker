@@ -116,6 +116,44 @@ describe("updateMemoryEntity", () => {
   });
 });
 
+describe("listActiveFactsForBusiness", () => {
+  it("filters business + active and returns rows", async () => {
+    const c = chain({ data: [{ id: "f1" }], error: null }, "noop");
+    let eqCount = 0;
+    c.eq = vi.fn(() => {
+      eqCount += 1;
+      return eqCount === 2 ? Promise.resolve({ data: [{ id: "f1" }], error: null }) : c;
+    });
+    const { listActiveFactsForBusiness } = await import("@/lib/memory/graph-db");
+    const rows = await listActiveFactsForBusiness(BIZ, c as never);
+    expect(rows).toEqual([{ id: "f1" }]);
+    expect(c.from).toHaveBeenCalledWith("memory_facts");
+  });
+
+  it("maps null data to [], throws on error, supports the default client", async () => {
+    const { listActiveFactsForBusiness } = await import("@/lib/memory/graph-db");
+    const failing = chain({ data: null, error: null }, "noop");
+    let n = 0;
+    failing.eq = vi.fn(() => {
+      n += 1;
+      return n === 2 ? Promise.resolve({ data: null, error: { message: "bad" } }) : failing;
+    });
+    await expect(listActiveFactsForBusiness(BIZ, failing as never)).rejects.toThrow(
+      "listActiveFactsForBusiness: bad"
+    );
+
+    const empty = chain({ data: null, error: null }, "noop");
+    let m = 0;
+    empty.eq = vi.fn(() => {
+      m += 1;
+      return m === 2 ? Promise.resolve({ data: null, error: null }) : empty;
+    });
+    defaultClientSpy.mockReturnValue(empty);
+    expect(await listActiveFactsForBusiness(BIZ)).toEqual([]);
+    expect(defaultClientSpy).toHaveBeenCalled();
+  });
+});
+
 describe("listActiveFacts", () => {
   it("filters business + subject + predicate + active", async () => {
     const calls: unknown[][] = [];

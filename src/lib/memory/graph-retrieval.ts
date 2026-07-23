@@ -1,0 +1,171 @@
+/**
+ * Memory-graph retrieval: question (+ optional caller identity) → matched
+ * entities → 1-hop fact neighborhood → compact fact lines for the
+ * knowledge-lookup prompt.
+ *
+ * Deterministic and cheap (no model round-trip — the voice adapter runs
+ * under a 3s deadline): entities match on term overlap with the question
+ * (name/alias hits) or on the caller's phone number; the context carries
+ * every ACTIVE fact touching a matched entity, plus the identity line of
+ * each entity pulled in through an edge (the 1-hop neighborhood).
+ *
+ * Used two ways by lookupBusinessKnowledge (memory_graph_mode):
+ *   shadow — computed and logged alongside the live answer path, which
+ *            stays byte-identical;
+ *   active — replaces the ranked-markdown memory context (which remains
+ *            the fallback when the graph has nothing relevant).
+ */
+
+import { logger } from "@/lib/logger";
+import {
+  listActiveFactsForBusiness,
+  listMemoryEntities,
+  type MemoryEntityRow
+} from "./graph-db";
+import { normalizePhone } from "./graph-write";
+
+/** Graph share of the lookup prompt — same ballpark as ranked memory. */
+export const GRAPH_CONTEXT_MAX_CHARS = 2_500;
+
+/** Tokenize into lowercase word stems for the overlap match (doc parity). */
+function questionTerms(question: string): string[] {
+  return question
+    .toLowerCase()
+    .split(/[^a-z0-9]+/)
+    .filter((t) => t.length >= 3);
+}
+
+/**
+ * Entities the question (or caller identity) points at: a term hit on the
+ * canonical name or an alias, or a normalized-phone match on callerE164.
+ */
+export function matchGraphEntities(
+  entities: MemoryEntityRow[],
+  question: string,
+  callerE164?: string
+): MemoryEntityRow[] {
+  const terms = questionTerms(question);
+  const callerDigits = callerE164 ? normalizePhone(callerE164) : null;
+  const matched: MemoryEntityRow[] = [];
+  for (const entity of entities) {
+    const names = [entity.canonical_name, ...entity.aliases].map((n) => n.toLowerCase());
+    const termHit = terms.some((term) => names.some((name) => name.includes(term)));
+    const phoneHit =
+      callerDigits !== null &&
+      entity.phones.some((p) => normalizePhone(p) === callerDigits);
+    if (termHit || phoneHit) matched.push(entity);
+  }
+  return matched;
+}
+
+export type GraphRetrieval = {
+  /** Rendered fact lines — "" when nothing matched. */
+  context: string;
+  /** Matched (seed) entities. */
+  matchedEntities: number;
+  /** Facts rendered into the context. */
+  facts: number;
+};
+
+/** One identity line per entity: name, kind, and stated contact points. */
+function entityLine(entity: MemoryEntityRow): string {
+  const bits: string[] = [];
+  if (entity.aliases.length > 0) bits.push(`aka ${entity.aliases.join(", ")}`);
+  if (entity.phones.length > 0) bits.push(`phone ${entity.phones.join(", ")}`);
+  if (entity.emails.length > 0) bits.push(`email ${entity.emails.join(", ")}`);
+  const detail = bits.length > 0 ? ` — ${bits.join("; ")}` : "";
+  return `- ${entity.canonical_name} (${entity.kind})${detail}`;
+}
+
+/**
+ * Retrieve the graph context for one question. Returns an empty context
+ * (never throws upward — errors log and degrade) so callers can treat "no
+ * graph" and "graph empty" identically.
+ */
+export async function retrieveGraphContext(
+  businessId: string,
+  question: string,
+  options: {
+    callerE164?: string;
+    charBudget?: number;
+    /** Injectable IO (tests). */
+    listEntities?: typeof listMemoryEntities;
+    listFacts?: typeof listActiveFactsForBusiness;
+  } = {}
+): Promise<GraphRetrieval> {
+  const empty: GraphRetrieval = { context: "", matchedEntities: 0, facts: 0 };
+  /* c8 ignore start -- production defaults; tests inject */
+  const listEntities = options.listEntities ?? listMemoryEntities;
+  const listFacts = options.listFacts ?? listActiveFactsForBusiness;
+  /* c8 ignore stop */
+  const charBudget = options.charBudget ?? GRAPH_CONTEXT_MAX_CHARS;
+
+  try {
+    const entities = await listEntities(businessId);
+    if (entities.length === 0) return empty;
+    const matched = matchGraphEntities(entities, question, options.callerE164);
+    if (matched.length === 0) return empty;
+
+    const byId = new Map(entities.map((e) => [e.id, e]));
+    const matchedIds = new Set(matched.map((e) => e.id));
+
+    const allFacts = await listFacts(businessId);
+    const neighborhood = allFacts.filter(
+      (f) =>
+        matchedIds.has(f.subject_entity_id) ||
+        (f.object_entity_id !== null && matchedIds.has(f.object_entity_id))
+    );
+
+    // Every entity the neighborhood touches gets an identity line, so an
+    // edge like "Amy escalation_target Dave" always names both ends.
+    const mentioned = new Set<string>(matchedIds);
+    for (const f of neighborhood) {
+      mentioned.add(f.subject_entity_id);
+      if (f.object_entity_id) mentioned.add(f.object_entity_id);
+    }
+
+    const lines: string[] = [];
+    for (const id of mentioned) {
+      const entity = byId.get(id);
+      /* c8 ignore next -- FK integrity guarantees mentioned ids exist */
+      if (!entity) continue;
+      lines.push(entityLine(entity));
+    }
+    for (const f of neighborhood) {
+      const subject = byId.get(f.subject_entity_id);
+      /* c8 ignore next -- FK integrity guarantees the subject exists */
+      if (!subject) continue;
+      if (f.object_entity_id) {
+        const object = byId.get(f.object_entity_id);
+        /* c8 ignore next -- FK integrity guarantees the object exists */
+        if (!object) continue;
+        lines.push(`- ${subject.canonical_name} ${f.predicate} ${object.canonical_name}`);
+      } else {
+        lines.push(`- ${subject.canonical_name} ${f.predicate}: ${f.object_value ?? ""}`);
+      }
+    }
+
+    // Pack lines in order (identity first, then facts) into the budget.
+    const kept: string[] = [];
+    let remaining = charBudget;
+    for (const line of lines) {
+      const cost = line.length + (kept.length === 0 ? 0 : 1); // "\n" joiner
+      if (cost > remaining) continue;
+      kept.push(line);
+      remaining -= cost;
+    }
+    if (kept.length === 0) return empty;
+
+    return {
+      context: kept.join("\n"),
+      matchedEntities: matched.length,
+      facts: neighborhood.length
+    };
+  } catch (err) {
+    logger.warn("memory-graph retrieval failed; degrading to no graph context", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return empty;
+  }
+}

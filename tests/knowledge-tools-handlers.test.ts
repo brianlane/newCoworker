@@ -17,8 +17,12 @@ vi.mock("@/lib/gemini-generate-content", async (importOriginal) => ({
   geminiGenerateTextDetailed: vi.fn()
 }));
 vi.mock("@/lib/billing/ai-spend-meter", () => ({ meterGeminiSpendForBusiness: vi.fn() }));
+vi.mock("@/lib/memory/graph-retrieval", () => ({
+  retrieveGraphContext: vi.fn()
+}));
 
 import { lookupBusinessKnowledge } from "@/lib/knowledge-tools/handlers";
+import { retrieveGraphContext } from "@/lib/memory/graph-retrieval";
 import { getBusinessConfig } from "@/lib/db/configs";
 import { getBusiness } from "@/lib/db/businesses";
 import { listBusinessDocuments, type BusinessDocumentRow } from "@/lib/documents/db";
@@ -75,6 +79,11 @@ beforeEach(() => {
   delete process.env.GEMINI_API_KEY;
   delete process.env.GEMINI_ROWBOAT_MODEL;
   meter.mockResolvedValue(undefined);
+  vi.mocked(retrieveGraphContext).mockResolvedValue({
+    context: "",
+    matchedEntities: 0,
+    facts: 0
+  });
   vi.mocked(getBusiness).mockResolvedValue({ name: "Amy Laidlaw Team" } as never);
   vi.mocked(listBusinessDocuments).mockResolvedValue([]);
   vi.mocked(getBusinessConfig).mockResolvedValue({
@@ -146,6 +155,76 @@ describe("lookupBusinessKnowledge", () => {
     const call = gemini.mock.calls[0][0];
     // Default mock memory_md is "memory" — carried via the fallback path.
     expect(call.userText).toContain("# memory.md (saved notes most relevant to the question)\nmemory");
+  });
+
+  it("never touches the graph when memory_graph_mode is off/absent", async () => {
+    gemini.mockResolvedValue(geminiOk("answer", null));
+    await lookupBusinessKnowledge(BIZ, "hours?");
+    expect(retrieveGraphContext).not.toHaveBeenCalled();
+  });
+
+  it("shadow mode: computes the graph but the prompt stays on the ranked-markdown path", async () => {
+    vi.mocked(getBusinessConfig).mockResolvedValue({
+      identity_md: "identity",
+      soul_md: "soul",
+      website_md: "website",
+      memory_md: "---\n\n### Owner chat (2026-07-01)\n\n- We are closed on Sundays",
+      memory_graph_mode: "shadow"
+    } as never);
+    vi.mocked(retrieveGraphContext).mockResolvedValue({
+      context: "- Amy Laidlaw (person)",
+      matchedEntities: 1,
+      facts: 2
+    });
+    gemini.mockResolvedValue(geminiOk("answer", null));
+    const result = await lookupBusinessKnowledge(BIZ, "are you open sundays?", {
+      callerE164: "+16025551234"
+    });
+    expect(result.ok).toBe(true);
+    expect(retrieveGraphContext).toHaveBeenCalledWith(BIZ, "are you open sundays?", {
+      callerE164: "+16025551234"
+    });
+    const call = gemini.mock.calls[0][0];
+    // Live answer path is byte-identical: ranked memory in, graph out.
+    expect(call.userText).toContain("# memory.md (saved notes most relevant to the question)");
+    expect(call.userText).toContain("closed on Sundays");
+    expect(call.userText).not.toContain("# memory graph");
+  });
+
+  it("active mode: the graph context replaces the ranked memory section", async () => {
+    vi.mocked(getBusinessConfig).mockResolvedValue({
+      identity_md: "identity",
+      soul_md: "soul",
+      website_md: "website",
+      memory_md: "---\n\n### Owner chat (2026-07-01)\n\n- We are closed on Sundays",
+      memory_graph_mode: "active"
+    } as never);
+    vi.mocked(retrieveGraphContext).mockResolvedValue({
+      context: "- Amy Laidlaw (person) — phone 602-695-1142",
+      matchedEntities: 1,
+      facts: 1
+    });
+    gemini.mockResolvedValue(geminiOk("answer", null));
+    await lookupBusinessKnowledge(BIZ, "what is amy's number?");
+    const call = gemini.mock.calls[0][0];
+    expect(call.userText).toContain("# memory graph (facts most relevant to the question)");
+    expect(call.userText).toContain("602-695-1142");
+    expect(call.userText).not.toContain("# memory.md");
+  });
+
+  it("active mode falls back to ranked memory when the graph has nothing", async () => {
+    vi.mocked(getBusinessConfig).mockResolvedValue({
+      identity_md: "identity",
+      soul_md: "soul",
+      website_md: "website",
+      memory_md: "---\n\n### Owner chat (2026-07-01)\n\n- We are closed on Sundays",
+      memory_graph_mode: "active"
+    } as never);
+    gemini.mockResolvedValue(geminiOk("answer", null));
+    await lookupBusinessKnowledge(BIZ, "are you open sundays?");
+    const call = gemini.mock.calls[0][0];
+    expect(call.userText).toContain("# memory.md (saved notes most relevant to the question)");
+    expect(call.userText).not.toContain("# memory graph");
   });
 
   it("includes the rendered Business-profile block in the context when profile_md is set", async () => {

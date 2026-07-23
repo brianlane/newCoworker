@@ -7,6 +7,7 @@ import {
   type DocumentAudienceView
 } from "@/lib/documents/core";
 import { MEMORY_CONTEXT_MAX_CHARS, selectMemoryForQuestion } from "@/lib/memory/retrieval";
+import { retrieveGraphContext } from "@/lib/memory/graph-retrieval";
 import {
   GeminiEmptyError,
   geminiGenerateTextDetailed,
@@ -158,7 +159,7 @@ async function askGemini(
 export async function lookupBusinessKnowledge(
   businessId: string,
   question: string,
-  options: { audience?: DocumentAudienceView } = {}
+  options: { audience?: DocumentAudienceView; callerE164?: string } = {}
 ): Promise<KnowledgeToolResult> {
   const audience = options.audience ?? "clients";
   const [config, business, documents] = await Promise.all([
@@ -174,6 +175,19 @@ export async function lookupBusinessKnowledge(
       return [];
     })
   ]);
+
+  // Memory knowledge graph (per-tenant rollout via memory_graph_mode):
+  //   shadow — compute + log the graph context; the live answer path stays
+  //            byte-identical (the comparison feeds the Amy-first rollout).
+  //   active — the graph context REPLACES the ranked-markdown memory
+  //            section; ranked memory remains the fallback when the graph
+  //            has nothing relevant to this question/caller.
+  // retrieveGraphContext never throws — a graph failure degrades to "".
+  const graphMode = config?.memory_graph_mode ?? "off";
+  const graphRetrieval =
+    graphMode === "shadow" || graphMode === "active"
+      ? await retrieveGraphContext(businessId, question, { callerE164: options.callerE164 })
+      : { context: "", matchedEntities: 0, facts: 0 };
 
   const parts: string[] = [];
   if (business?.name) parts.push(`Business name: ${business.name}`);
@@ -204,8 +218,26 @@ export async function lookupBusinessKnowledge(
     question,
     memoryBudget
   );
-  if (memorySelection.context) {
+  const useGraphContext = graphMode === "active" && graphRetrieval.context.length > 0;
+  if (useGraphContext) {
+    parts.push(`# memory graph (facts most relevant to the question)\n${graphRetrieval.context}`);
+  } else if (memorySelection.context) {
     parts.push(`${memoryHeader}${memorySelection.context}`);
+  }
+
+  if (graphMode === "shadow") {
+    // Shadow telemetry: what the graph WOULD have contributed vs what the
+    // ranked-markdown path carried. Log-only — zero behavior change.
+    logger.info("kg_shadow_retrieval", {
+      businessId,
+      questionChars: question.length,
+      graphMatchedEntities: graphRetrieval.matchedEntities,
+      graphFacts: graphRetrieval.facts,
+      graphContextChars: graphRetrieval.context.length,
+      memoryContextChars: memorySelection.context.length,
+      memoryFallback: memorySelection.fallback,
+      callerProvided: Boolean(options.callerE164)
+    });
   }
 
   // Two-stage document retrieval: pack the most relevant eligible docs'
