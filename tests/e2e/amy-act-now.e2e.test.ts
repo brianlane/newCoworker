@@ -38,8 +38,8 @@ import { judgeReply, type JudgeVerdict } from "./judge";
 const LEAD = "+17572390150";
 const BRYAN_REPLY = "Now is a good time";
 
-/** The fleet SMS_CHAT_MODEL default (deploy-client.sh). */
-const SMS_MODEL = "gemini-2.5-flash";
+/** The fleet SMS_CHAT_MODEL default (deploy-client.sh, PR #809 migration). */
+const SMS_MODEL = "gemini-3.5-flash-lite";
 
 /** The Clever flow's outreach text, verbatim from Amy's outbound log. */
 const CLEVER_MESSAGE =

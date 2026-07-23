@@ -55,10 +55,10 @@ const RENEWAL_ANSWER = "July 23, 2026";
 
 /** What the tenant's SMS Coworker agent runs (deploy-client.sh
  * SMS_CHAT_MODEL default; upgraded off 2.5-flash-lite after this incident —
- * the old model ignored the system preamble on the incident turn. 3.x
- * models are blocked by the Rowboat AI-SDK thought_signature gap, see
- * deploy-client.sh). */
-const TRULY_SMS_CHAT_MODEL = "gemini-2.5-flash";
+ * the old model ignored the system preamble on the incident turn — then to
+ * 3.5-flash-lite with the PR #809 fleet migration, 3.x being viable on the
+ * Rowboat path since the llm-router thought_signature shim, PR #683). */
+const TRULY_SMS_CHAT_MODEL = "gemini-3.5-flash-lite";
 
 
 /**
@@ -171,8 +171,18 @@ describe("generic-path fallback turn — the incident turn's exact prompt", () =
           status: "awaiting_agent",
           updatedAt: "2026-07-14T17:10:06.54938+00:00",
           vars: {
-            intent: String(walk.vars.intent ?? "gave_info"),
-            product: String(walk.vars.product ?? "Auto"),
+            // The incident run's RECORDED values, pinned literally — this
+            // block used to read intent/product from the live walk above,
+            // which made the prompt vary run-to-run with the walk's
+            // extraction phrasing. Some of those variants put
+            // 3.5-flash-lite into a STICKY trailer-only mode (three
+            // temperature-varied re-rolls all returned bare
+            // "[[reasoning]]{…}" with no customer text — observed on the
+            // #842 main run and reproduced locally), so the suite flaked
+            // on prompt drift that has nothing to do with this test's
+            // contract. Pinning restores the incident turn byte-for-byte.
+            intent: "gave_info",
+            product: "Auto",
             lead_name: "Alex",
             lead_phone: LEAD,
             reply_text: "I am looking for auto insurance",
@@ -197,12 +207,38 @@ describe("generic-path fallback turn — the incident turn's exact prompt", () =
     // same fact when it lived only in the system preamble.
     const note = formatFlowAnswerNote(flowMessages[flowMessages.length - 1] ?? "");
     const userTurn = note ? `${note}\n\n[SMS] ${RENEWAL_ANSWER}` : `[SMS] ${RENEWAL_ANSWER}`;
-    const raw = await geminiChatReply(
-      system,
-      [{ role: "user", text: userTurn }],
-      TRULY_SMS_CHAT_MODEL
-    );
-    const split = splitReplyReasoning(raw);
+    // Whole-turn retry, mirroring production: a trailer-only draw (reply
+    // empty after the reasoning strip) makes the worker THROW
+    // (rowboat_empty_assistant_after_reasoning_strip) and the job retries
+    // the model call — a customer never receives that draw, so asserting on
+    // it would fail the suite on a shape production explicitly re-rolls. A
+    // parsed-but-trailerless draw is also re-rolled here, the suite's
+    // standard { retry: 1 }-style flake treatment (the trailer contract
+    // itself is asserted below on the final draw).
+    //
+    // Re-rolls run at production's temperature (0.3), NOT the suite's 0:
+    // observed live (main run post-#842 + a local repro), 3.5-flash-lite's
+    // trailer-only mode is STICKY at temperature 0 — three identical
+    // re-rolls all produced bare "[[reasoning]]{…}" with no customer text.
+    // Production escapes the mode through its own temperature variance;
+    // re-rolling the same prompt at 0 just burns the attempts.
+    let split: ReturnType<typeof splitReplyReasoning> = { reply: "", reasoning: null };
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const raw = await geminiChatReply(
+        system,
+        [{ role: "user", text: userTurn }],
+        TRULY_SMS_CHAT_MODEL,
+        attempt === 1 ? {} : { temperature: 0.3 }
+      );
+      split = splitReplyReasoning(raw);
+      if (split.reply.trim() !== "" && split.reasoning !== null) break;
+      // A re-rolled draw is undebuggable from the final assertion alone —
+      // log the RAW shape (trailer-only? bracket-blob-swallowed? truly
+      // empty?) so a repeat CI failure names the class.
+      console.error(
+        `truly-renewal turn: re-rolling draw ${attempt} — raw=${JSON.stringify(raw)}`
+      );
+    }
     reply = split.reply;
     reasoningPresent = split.reasoning !== null;
     verdict = await judgeReply(

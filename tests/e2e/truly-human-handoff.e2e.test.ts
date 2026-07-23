@@ -90,11 +90,21 @@ describe("Truly human-handoff: person-requests must produce an escalation decisi
   const results = new Map<string, ReplyReasoning | null>();
 
   beforeAll(async () => {
-    // Serial: one live call at a time (rate-limit footprint).
+    // Serial: one live call at a time (rate-limit footprint). A draw with
+    // no parseable trailer is re-rolled bounded — the suite's standard
+    // flake treatment (a test-level { retry } cannot re-run this beforeAll,
+    // so the retry lives on the call itself). The escalation CONTRACT is
+    // still asserted on the final draw; only the trailer-omitted shape
+    // (which production surfaces as reasoning:null and separately alerts
+    // on) is retried, never a parsed handoff:false.
     for (const scenario of SCENARIOS) {
-      const raw = await geminiChatReply(SYSTEM_PROMPT, scenario.turns);
-      expect(raw.trim(), `${scenario.name}: model returned an empty reply`).not.toBe("");
-      results.set(scenario.name, splitReplyReasoning(raw).reasoning);
+      let reasoning: ReplyReasoning | null = null;
+      for (let attempt = 1; attempt <= 3 && reasoning === null; attempt++) {
+        const raw = await geminiChatReply(SYSTEM_PROMPT, scenario.turns);
+        expect(raw.trim(), `${scenario.name}: model returned an empty reply`).not.toBe("");
+        reasoning = splitReplyReasoning(raw).reasoning;
+      }
+      results.set(scenario.name, reasoning);
     }
   }, 600_000);
 

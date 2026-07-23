@@ -16,6 +16,7 @@ import {
 import { currentDateTimeLine } from "../../supabase/functions/_shared/datetime_line";
 import { requireGeminiKey, transientBackoffMs } from "./gemini";
 import { judgeReply, type JudgeVerdict } from "./judge";
+import { recordGeminiUsage } from "./usage-log";
 
 /**
  * The James Lee (KYP Ads) owner-SMS replay, 2026-07-16.
@@ -50,8 +51,9 @@ import { judgeReply, type JudgeVerdict } from "./judge";
  * does with the production prompts and tools.
  */
 
-/** The inline engine's production default (DASHBOARD_CHAT_MODEL). */
-const OPERATOR_MODEL = "gemini-3.5-flash";
+/** The inline engine's production default (DASHBOARD_CHAT_MODEL —
+ * gemini-3.6-flash since the PR #809 fleet migration). */
+const OPERATOR_MODEL = "gemini-3.6-flash";
 
 const JAMES_E164 = "+15145188192";
 const UDAY_E164 = "+17326190286";
@@ -158,19 +160,26 @@ async function stepWithRetry(
   let lastErr: unknown;
   for (let attempt = 1; attempt <= MAX_STEP_ATTEMPTS; attempt++) {
     try {
-      return await geminiChatStep({
+      const result = await geminiChatStep({
         apiKey,
         model: OPERATOR_MODEL,
         systemInstruction: SYSTEM,
         contents,
         tools: TOOLS,
         temperature: 0,
-        // 3.5-flash's thinking tokens count against maxOutputTokens: the old
+        // Gemini 3 thinking tokens count against maxOutputTokens: the old
         // 1500 cap truncated a correctly-shaped reply mid-question ("…send
         // this text to +1732…, or") on PR #766's CI run, failing the /\?/
         // assertion. Same fix as the messenger-engine e2e harness.
-        maxOutputTokens: 6000
+        maxOutputTokens: 6000,
+        // Matches the production inline engine exactly (inline-turn.ts pins
+        // "low" on gemini-3 models): fidelity, and it stops the suite's
+        // priciest model from burning unbounded default thinking, which
+        // bills at the output rate.
+        thinkingLevel: "low"
       });
+      recordGeminiUsage(OPERATOR_MODEL, result.usage);
+      return result;
     } catch (e) {
       lastErr = e;
       const msg = e instanceof Error ? e.message : String(e);

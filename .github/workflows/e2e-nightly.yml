@@ -1,0 +1,60 @@
+name: E2E Nightly
+
+# The full live-AI suite, unconditionally, once a day on main. This is the
+# safety net for the CI spend guard (ci.yml e2e job + e2e-scope.sh): PR and
+# push runs now scope or skip the paid Gemini calls based on the diff, which
+# means LIVE-MODEL DRIFT with no code change (a model update mangling the
+# reply-reasoning markers, a judge-model behavior shift) would otherwise go
+# unnoticed until some PR happened to touch an AI path. One scheduled full
+# run bounds that exposure to a day — at the cost of ONE suite execution
+# instead of the ~35/day the unconditional runs used to burn.
+#
+# Not part of any merge gate: a red nightly is an investigate-now signal
+# (model drift or a flaky contract), not a blocked PR.
+
+on:
+  schedule:
+    # 09:30 UTC ≈ 2:30am Pacific — quiet hours for both CI load and the
+    # Gemini rate-limit footprint.
+    - cron: "30 9 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  NODE_VERSION: "24"
+  NEXT_TELEMETRY_DISABLED: "1"
+  CI: "true"
+
+jobs:
+  e2e-full:
+    name: E2E full suite (nightly)
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Run full live e2e suite
+        env:
+          GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+        run: |
+          if [ -z "$GOOGLE_API_KEY" ]; then
+            echo "::error::GOOGLE_API_KEY secret is not available to this run — the e2e suite cannot call Gemini."
+            exit 1
+          fi
+          npm run test:e2e
+
+      - name: Report Gemini token usage
+        if: always()
+        run: bash .github/scripts/e2e-usage-summary.sh

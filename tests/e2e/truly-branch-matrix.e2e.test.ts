@@ -231,7 +231,14 @@ describe("silent + late-reply arms (the Dawnia incident family)", () => {
     expect(w.vars.reply2).toBe(NO_REPLY_SENTINEL);
     expect(w.vars.reply3).toBe("Sorry for the delay - yes I'm still interested");
     expect(stepOf(w, "late_engaged_2").status).toBe("done");
-    expect(w.vars.reply3_intent).toBe("gave_info");
+    // The contract is the ARM, not the label: reply3_fork routes both
+    // gave_info and unclear through the same else arm (re-engage + route),
+    // and only wants_a_call / not_interested change behavior. "yes I'm
+    // still interested" answers no question and shares no detail, so the
+    // model legitimately reads it as unclear (gemini-3.5-flash-lite pins
+    // unclear; 2.5-flash-lite already wobbled between the two) — asserting
+    // gave_info made the test flaky about a distinction the flow ignores.
+    expect(["gave_info", "unclear"]).toContain(w.vars.reply3_intent);
     expect(stepOf(w, "reply3_continue").status).toBe("done");
     expect(stepOf(w, "offer_team_reply3").status).toBe("done");
     expect(stepOf(w, "final_touch").status).toBe("skipped");

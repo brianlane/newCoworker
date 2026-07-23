@@ -433,13 +433,20 @@ jobs:
   # "skipped" check that blocks the strict auto-merge evaluation. The live
   # suite still covers dependency bumps on the push-to-main run post-merge.
   #
-  # Spend guard (Jul 2026): PRs whose ENTIRE diff sits on a safe-path
-  # allowlist (docs, admin-only UI, marketing pages, app-UI i18n catalogs,
-  # operator scripts, non-e2e tests, repo meta) skip the paid model calls —
-  # every step after the decision no-ops and the job reports SUCCESS (never
-  # a "skipped" check, which the merge policy treats as blocking). One file
-  # off the list, any doubt, or any error listing files → the full suite
-  # runs. Push-to-main runs always execute. See .github/scripts/e2e-safe-paths.sh.
+  # Spend guard (Jul 2026, scoped): the paid model calls are sized to the
+  # change. .github/scripts/e2e-scope.sh maps the diff to the e2e files it
+  # can affect — an all-safe diff (docs, admin-only UI, marketing pages,
+  # app-UI i18n catalogs, operator scripts, non-e2e tests, repo meta) skips
+  # the calls entirely, a single-surface diff runs only that surface's
+  # suites, and anything unmapped or erroring runs the FULL suite (fail
+  # open). Push-to-main additionally dedupes: when the merge commit's tree
+  # is identical to the merged PR head whose e2e check already passed, the
+  # paid calls are skipped (dependabot merges excluded — their PR-side e2e
+  # is a secretless no-op, so the push run is their real coverage). In
+  # every skip/narrow case the job still reports SUCCESS (never a
+  # "skipped" check, which the merge policy treats as blocking). The
+  # nightly full run (e2e-nightly.yml) catches live-model drift that no
+  # diff triggers.
   e2e:
     name: E2E (live AI + AiFlows)
     runs-on: ubuntu-latest
@@ -459,18 +466,25 @@ jobs:
         if: github.event.pull_request.user.login != 'dependabot[bot]'
         uses: actions/checkout@v7
 
-      # Spend guard: sets skip=true ONLY when every changed file is on the
-      # safe-path allowlist. Fails open (skip=false) on any listing error.
-      # Push events never run this step, so its output is empty there and
-      # the `!= 'true'` conditions below keep every step running.
-      - name: Decide whether the diff can affect AI behavior
-        id: aiskip
-        if: >-
-          github.event_name == 'pull_request' &&
-          github.event.pull_request.user.login != 'dependabot[bot]'
+      # Spend guard: emits `skip` (true = zero paid calls) and `files`
+      # ("all" or the scoped tests/e2e list this diff can affect). Fails
+      # open (skip=false, files=all) on any listing error. Runs on BOTH
+      # events: PRs scope their diff; pushes to main first try the
+      # identical-tree dedupe against the merged PR's already-passed e2e,
+      # then scope the push diff.
+      - name: Decide the e2e scope for this change
+        id: aiscope
+        if: github.event.pull_request.user.login != 'dependabot[bot]'
         env:
           GH_TOKEN: ${{ github.token }}
-        run: bash .github/scripts/e2e-safe-paths.sh "${{ github.repository }}" "${{ github.event.pull_request.number }}"
+        run: |
+          if [ "${{ github.event_name }}" = "push" ]; then
+            bash .github/scripts/e2e-scope.sh push "${{ github.repository }}" \
+              "${{ github.sha }}" "${{ github.event.before }}"
+          else
+            bash .github/scripts/e2e-scope.sh pr "${{ github.repository }}" \
+              "${{ github.event.pull_request.number }}"
+          fi
 
       # Push events (post-merge main) skip the PR-shaped gate: Bugbot/Vercel/
       # threads exist on the PR, which already enforced all of this pre-merge.
@@ -494,7 +508,7 @@ jobs:
       - name: Setup Node.js
         if: >-
           github.event.pull_request.user.login != 'dependabot[bot]' &&
-          steps.aiskip.outputs.skip != 'true'
+          steps.aiscope.outputs.skip != 'true'
         uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
@@ -503,18 +517,36 @@ jobs:
       - name: Install dependencies
         if: >-
           github.event.pull_request.user.login != 'dependabot[bot]' &&
-          steps.aiskip.outputs.skip != 'true'
+          steps.aiscope.outputs.skip != 'true'
         run: npm ci
 
+      # `files=all` (or an unexpectedly empty list — fail open) runs the
+      # whole suite; a scoped list is passed to vitest as file filters
+      # against the same e2e config.
       - name: Run live e2e suite
         if: >-
           github.event.pull_request.user.login != 'dependabot[bot]' &&
-          steps.aiskip.outputs.skip != 'true'
+          steps.aiscope.outputs.skip != 'true'
         env:
           GOOGLE_API_KEY: ${{ secrets.GOOGLE_API_KEY }}
+          E2E_FILES: ${{ steps.aiscope.outputs.files }}
         run: |
           if [ -z "$GOOGLE_API_KEY" ]; then
             echo "::error::GOOGLE_API_KEY secret is not available to this run — the e2e suite cannot call Gemini."
             exit 1
           fi
-          npm run test:e2e
+          if [ "$E2E_FILES" = "all" ] || [ -z "$E2E_FILES" ]; then
+            npm run test:e2e
+          else
+            npx vitest run --config vitest.e2e.config.ts $E2E_FILES
+          fi
+
+      # Billed-token accounting for the paid calls above, so per-run spend
+      # is visible in the job summary and reconcilable against AI Studio's
+      # per-key view + /admin/gemini (docs/GEMINI-SPEND.md).
+      - name: Report Gemini token usage
+        if: >-
+          always() &&
+          github.event.pull_request.user.login != 'dependabot[bot]' &&
+          steps.aiscope.outputs.skip != 'true'
+        run: bash .github/scripts/e2e-usage-summary.sh

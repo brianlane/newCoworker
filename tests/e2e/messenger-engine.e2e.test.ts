@@ -14,6 +14,7 @@ import type {
 import type { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 import { requireGeminiKey, transientBackoffMs } from "./gemini";
 import { judgeReply, type JudgeVerdict } from "./judge";
+import { recordGeminiUsage } from "./usage-log";
 
 /**
  * The Messenger/Instagram/WhatsApp customer engine against the LIVE model,
@@ -171,10 +172,13 @@ async function engineTurnOnce(
       for (let attempt = 1; attempt <= 5; attempt++) {
         try {
           // temperature 0 for CI stability (production runs 0.3); the raised
-          // output cap keeps 2.5-flash's thinking budget from swallowing the
+          // output cap keeps the model's thinking budget from swallowing the
           // whole allowance and yielding an empty (no-text, no-call) step —
           // the geminiChatStep default is 1500 and thinking counts against it.
-          return await geminiChatStep({ ...params, temperature: 0, maxOutputTokens: 6000 });
+          // (The engine's own params carry its production thinkingLevel.)
+          const result = await geminiChatStep({ ...params, temperature: 0, maxOutputTokens: 6000 });
+          recordGeminiUsage(params.model, result.usage);
+          return result;
         } catch (e) {
           lastErr = e;
           const msg = e instanceof Error ? e.message : String(e);

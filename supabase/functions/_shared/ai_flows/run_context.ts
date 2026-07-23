@@ -183,7 +183,17 @@ export function formatFlowAnswerNote(lastFlowMessage: string): string | null {
     `are agreeing or saying they are available now, help them right now — ` +
     `continue the conversation immediately or arrange a prompt human ` +
     `follow-up; do NOT ask them to schedule for later, offer to find times, ` +
-    `or re-ask the question they just answered.)`
+    // The bare-answer clause (Jul 2026): on gemini-3.5-flash-lite the
+    // fleet's incident-turn prompt read a bare-date SMS ("July 23, 2026")
+    // as a BLANK message on ~half of temperature-0 draws — the Truly
+    // 2026-07-14 class resurfacing on the migrated model. Naming the [SMS]
+    // line as the message pinned it: 8/8 clean draws on the live probe
+    // (surfaced by tests/e2e/truly-renewal-context.e2e.test.ts after the
+    // suite realigned to the fleet's actual model).
+    `or re-ask the question they just answered. Their message is the text ` +
+    `after "[SMS]" below — even when it is only a bare date, time, or ` +
+    `single word, that IS their message and their answer; never treat it ` +
+    `as blank.)`
   );
 }
 
