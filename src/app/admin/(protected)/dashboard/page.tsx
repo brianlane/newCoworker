@@ -52,9 +52,13 @@ export default async function AdminDashboardPage() {
       getRecentAlertsAll(10, undefined, { excludeBusinessIds: muted.alerts }),
       // Alerting rows live in the Recent Alerts card; excluding them here
       // keeps the two bottom cards complementary instead of duplicates.
+      // `thinking` is excluded too: provisioning writes a progress row per
+      // phase tick, so one onboarding otherwise floods the card with stale
+      // "thinking" scaffolding — only completed events count as activity
+      // (the provisioning success row still shows the deploy finished).
       getRecentLogsAll(8, undefined, {
         excludeBusinessIds: muted.activity,
-        excludeStatuses: ["urgent_alert", "error"]
+        excludeStatuses: ["urgent_alert", "error", "thinking"]
       }),
       listSystemLogErrorsAll(15, undefined, { excludeBusinessIds: muted.errors }),
       listVpsInventory(),
