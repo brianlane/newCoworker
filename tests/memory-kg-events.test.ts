@@ -15,6 +15,7 @@ import {
   KG_EVENTS_RETENTION_DAYS,
   aggregateKgStats,
   classifyKgVerdict,
+  countKgRetrievalEvents,
   getKgAdminSummary,
   groupKgStatsByBusiness,
   kgVerdictHeadline,
@@ -119,6 +120,25 @@ describe("listKgRetrievalEvents / listKgRetrievalStatsRows", () => {
     const empty = chain({ data: null, error: null }, "limit");
     defaultClientSpy.mockReturnValue(empty);
     expect(await listKgRetrievalStatsRows("2026-07-01T00:00:00Z")).toEqual([]);
+  });
+});
+
+describe("countKgRetrievalEvents", () => {
+  it("head-counts a business window; null count → 0; error throws; default client works", async () => {
+    const c = chain({ count: 7, error: null }, "gte");
+    expect(await countKgRetrievalEvents(BIZ, "2026-07-01T00:00:00Z", c as never)).toBe(7);
+    expect(c.select).toHaveBeenCalledWith("id", { count: "exact", head: true });
+
+    const nullCount = chain({ count: null, error: null }, "gte");
+    expect(await countKgRetrievalEvents(BIZ, "2026-07-01T00:00:00Z", nullCount as never)).toBe(0);
+
+    const failing = chain({ count: null, error: { message: "bad" } }, "gte");
+    await expect(countKgRetrievalEvents(BIZ, "2026-07-01T00:00:00Z", failing as never)).rejects.toThrow(
+      "countKgRetrievalEvents: bad"
+    );
+
+    defaultClientSpy.mockReturnValue(chain({ count: 1, error: null }, "gte"));
+    expect(await countKgRetrievalEvents(BIZ, "2026-07-01T00:00:00Z")).toBe(1);
   });
 });
 

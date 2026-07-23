@@ -212,9 +212,22 @@ export async function getMemoryGraphDefaultMode(
 }
 
 /**
+ * Pure inheritance step: explicit off/shadow/active as-is; 'inherit' (or
+ * absent/unknown — rows predating the migration) follows the supplied
+ * fleet default. Admin views use this with a FRESHLY-READ default so a
+ * single page render can never mix cached and fresh values.
+ */
+export function effectiveMemoryGraphMode(
+  configValue: string | null | undefined,
+  fleetDefault: MemoryGraphMode
+): MemoryGraphMode {
+  return asMode(configValue) ?? fleetDefault;
+}
+
+/**
  * Resolve a business_configs.memory_graph_mode value to the EFFECTIVE mode:
  * explicit off/shadow/active as-is; 'inherit' (or absent/unknown — rows
- * predating the migration) follows the fleet default.
+ * predating the migration) follows the fleet default (cached ~60s).
  */
 export async function resolveMemoryGraphMode(
   configValue: string | null | undefined,

@@ -64,7 +64,12 @@ import { loadFleetMargins } from "@/lib/admin/margin-data";
 import { WebchatEnginePanel } from "@/components/admin/WebchatEnginePanel";
 import { getWidgetSettingsForBusiness, webchatReplyEngine } from "@/lib/webchat/db";
 import { MemoryGraphPanel } from "@/components/admin/MemoryGraphPanel";
-import { resolveMemoryGraphMode } from "@/lib/memory/graph-db";
+import {
+  MEMORY_GRAPH_DEFAULT_MODE_KEY,
+  MEMORY_GRAPH_FALLBACK_DEFAULT,
+  effectiveMemoryGraphMode
+} from "@/lib/memory/graph-db";
+import { getAdminPlatformSetting } from "@/lib/admin/platform-settings";
 import { getKgAdminSummary } from "@/lib/memory/kg-events";
 
 export const dynamic = "force-dynamic";
@@ -119,10 +124,17 @@ export default async function BusinessDetailPage({
     () => null
   );
   // Knowledge-graph card data. Best-effort — the page must render even if
-  // the graph tables are unreadable (card shows zeros).
-  const kgEffectiveMode = await resolveMemoryGraphMode(config?.memory_graph_mode).catch(
-    () => "off" as const
+  // the graph tables are unreadable (card shows zeros). The fleet default
+  // is read FRESH (not through the resolver's ~60s cache) so the card can
+  // never disagree with /admin/memory-graph within one browsing session.
+  const kgDefaultRaw = await getAdminPlatformSetting(MEMORY_GRAPH_DEFAULT_MODE_KEY).catch(
+    () => null
   );
+  const kgFleetDefault =
+    kgDefaultRaw === "off" || kgDefaultRaw === "shadow" || kgDefaultRaw === "active"
+      ? kgDefaultRaw
+      : MEMORY_GRAPH_FALLBACK_DEFAULT;
+  const kgEffectiveMode = effectiveMemoryGraphMode(config?.memory_graph_mode, kgFleetDefault);
   const kgSummary = await getKgAdminSummary(businessId).catch(() => ({
     entityCount: 0,
     factCount: 0,
