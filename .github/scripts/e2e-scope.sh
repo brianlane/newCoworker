@@ -141,8 +141,12 @@ emit_full() { emit false all "$*"; }
 # normal per-change scoping below, so an outage can never silently drop
 # merge-time coverage. Overridable for tests via CI_E2E_MODE_URL.
 # ---------------------------------------------------------------------------
-MODE_URL="${CI_E2E_MODE_URL:-https://newcoworker.com/api/public/ci-e2e-mode}"
-admin_mode=$(curl -fsS --max-time 10 "$MODE_URL" 2>/dev/null | jq -r '.mode // empty' 2>/dev/null) || admin_mode=""
+# Canonical www host: the apex 307-redirects to www, and without -L the
+# first deploy of this check read "Redirecting..." instead of JSON — which
+# fail-opened to per-change and would have silently ignored the toggle
+# forever. -L stays as belt-and-suspenders against future edge rules.
+MODE_URL="${CI_E2E_MODE_URL:-https://www.newcoworker.com/api/public/ci-e2e-mode}"
+admin_mode=$(curl -fsSL --max-time 10 "$MODE_URL" 2>/dev/null | jq -r '.mode // empty' 2>/dev/null) || admin_mode=""
 if [ "${admin_mode:-}" = "nightly-only" ]; then
   emit true "" "CI e2e mode is nightly-only (admin toggle) — paid live calls run on the nightly cron instead."
 fi
