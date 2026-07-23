@@ -61,19 +61,18 @@ export async function draftBlogPostWithAi(
     maxOutputTokens: 8192
   });
   const parsed = JSON.parse(raw) as Partial<BlogAiDraft>;
-  if (!parsed.title || !parsed.excerpt || !parsed.content) {
+  // House rule: no em dashes in blog copy, ever — stripped BEFORE the
+  // emptiness check so a dash-only field counts as missing.
+  const title = stripEmDashes(parsed.title ?? "");
+  const excerpt = stripEmDashes(parsed.excerpt ?? "");
+  const content = stripEmDashes(parsed.content ?? "");
+  if (!title.trim() || !excerpt.trim() || !content.trim()) {
     throw new Error("blog-ai: draft response missing fields");
   }
   const category = BLOG_CATEGORIES.includes(parsed.category as BlogCategory)
     ? (parsed.category as BlogCategory)
     : "announcement";
-  // House rule: no em dashes in blog copy, ever.
-  return {
-    title: stripEmDashes(parsed.title),
-    excerpt: stripEmDashes(parsed.excerpt),
-    content: stripEmDashes(parsed.content),
-    category
-  };
+  return { title, excerpt, content, category };
 }
 
 export type BlogAiTranslation = {
@@ -102,14 +101,13 @@ export async function translateBlogPostWithAi(
     maxOutputTokens: 8192
   });
   const parsed = JSON.parse(raw) as Partial<BlogAiTranslation>;
-  if (!parsed.title_es || !parsed.excerpt_es || !parsed.content_es) {
+  const title_es = stripEmDashes(parsed.title_es ?? "");
+  const excerpt_es = stripEmDashes(parsed.excerpt_es ?? "");
+  const content_es = stripEmDashes(parsed.content_es ?? "");
+  if (!title_es.trim() || !excerpt_es.trim() || !content_es.trim()) {
     throw new Error("blog-ai: translation response missing fields");
   }
-  return {
-    title_es: stripEmDashes(parsed.title_es),
-    excerpt_es: stripEmDashes(parsed.excerpt_es),
-    content_es: stripEmDashes(parsed.content_es)
-  };
+  return { title_es, excerpt_es, content_es };
 }
 
 /**

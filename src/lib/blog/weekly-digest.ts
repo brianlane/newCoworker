@@ -304,15 +304,18 @@ export async function composeDigestWithGemini(
       maxOutputTokens: 4096
     });
     const parsed = JSON.parse(raw) as Partial<DigestDraft>;
-    if (!parsed.title || !parsed.excerpt || !parsed.content) {
+    // House rule: no em dashes in blog copy, ever — enforced (not just
+    // prompted), and BEFORE the emptiness check so a dash-only field
+    // counts as missing.
+    const cleaned = stripEmDashesFromDraft({
+      title: parsed.title ?? "",
+      excerpt: parsed.excerpt ?? "",
+      content: parsed.content ?? ""
+    });
+    if (!cleaned.title.trim() || !cleaned.excerpt.trim() || !cleaned.content.trim()) {
       throw new Error("weekly-digest: Gemini digest draft missing fields");
     }
-    // House rule: no em dashes in blog copy, ever — enforced, not just prompted.
-    return stripEmDashesFromDraft({
-      title: parsed.title,
-      excerpt: parsed.excerpt,
-      content: parsed.content
-    });
+    return cleaned;
   };
 
   let draft = await generateOnce("");

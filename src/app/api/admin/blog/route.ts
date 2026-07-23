@@ -43,6 +43,10 @@ export async function POST(request: Request): Promise<Response> {
   try {
     await requireAdmin();
     const body = sanitizeBlogCopyFields(createSchema.parse(await request.json()));
+    // Post-sanitize check: a dash-only title strips to empty.
+    if (!body.title.trim()) {
+      return errorResponse("VALIDATION_ERROR", "Title cannot be empty");
+    }
 
     const requestedSlug = body.slug ? slugifyBlogTitle(body.slug) : "";
     const slug = requestedSlug
