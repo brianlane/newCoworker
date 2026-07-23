@@ -160,6 +160,23 @@ describe("buildGraphProjectionFiles", () => {
     expect(paths[1]).toContain("(aaaaaaaa)");
   });
 
+  it("keeps every note distinct even when colliding entities share the id prefix", () => {
+    const twins = ["01", "02", "03"].map((n) =>
+      entity({
+        id: `aaaaaaaa-0000-4000-8000-0000000000${n}`,
+        canonical_name: "Amy Laidlaw",
+        aliases: [],
+        phones: [],
+        emails: []
+      })
+    );
+    const files = buildGraphProjectionFiles(twins, []);
+    const paths = files.map((f) => f.path).filter((p) => p.startsWith("People/"));
+    expect(paths).toHaveLength(3);
+    expect(new Set(paths).size).toBe(3);
+    expect(paths[2]).toContain("(aaaaaaaa-2)");
+  });
+
   it("returns no files for an empty graph", () => {
     expect(buildGraphProjectionFiles([], [])).toEqual([]);
   });

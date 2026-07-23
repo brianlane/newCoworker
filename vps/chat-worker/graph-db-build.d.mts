@@ -8,7 +8,7 @@ export const DEFAULT_MEMORY_DIR: string;
 
 export type GraphDbBuildResult =
   | { built: true; entities: number; facts: number }
-  | { built: false; reason: "no_jsonl" | "up_to_date" | "sqlite_unavailable" | "error" };
+  | { built: false; reason: "no_jsonl" | "up_to_date" | "sqlite_unavailable" | "busy" | "error" };
 
 export function maybeBuildGraphDb(options?: {
   memoryDir?: string;

@@ -12,34 +12,41 @@
  * Wrapped defensively: any failure logs and skips; the worker's chat
  * duties are never affected.
  */
+import crypto from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 
 /** Where the vault sync unpacks the projection (compose mounts it in). */
 export const DEFAULT_MEMORY_DIR = "/opt/rowboat/memory";
 
+// Single-flight guard: startup + interval callers never overlap on the
+// same graph.db.tmp (a slow build racing another corrupts the rename).
+let building = false;
+
 /**
  * Build (or refresh) graph.db from graph.jsonl.
+ *
+ * Freshness is CONTENT-HASH based, not mtime based: the tar the vault sync
+ * unpacks carries epoch mtimes, so "db newer than jsonl" would be true
+ * forever after the first compile and later syncs would never rebuild. The
+ * source sha256 is stored in a `meta` table inside graph.db and compared
+ * against the current file.
+ *
  * Returns { built, reason } for logging/tests; never throws.
  */
 export async function maybeBuildGraphDb({ memoryDir = DEFAULT_MEMORY_DIR, log = () => {} } = {}) {
-  const jsonlPath = path.join(memoryDir, "graph.jsonl");
-  const dbPath = path.join(memoryDir, "graph.db");
+  if (building) return { built: false, reason: "busy" };
+  building = true;
   try {
-    let jsonlStat;
+    const jsonlPath = path.join(memoryDir, "graph.jsonl");
+    const dbPath = path.join(memoryDir, "graph.db");
+    let raw;
     try {
-      jsonlStat = fs.statSync(jsonlPath);
+      raw = fs.readFileSync(jsonlPath, "utf8");
     } catch {
       return { built: false, reason: "no_jsonl" };
     }
-    try {
-      const dbStat = fs.statSync(dbPath);
-      if (dbStat.mtimeMs >= jsonlStat.mtimeMs) {
-        return { built: false, reason: "up_to_date" };
-      }
-    } catch {
-      // No db yet — build it.
-    }
+    const sourceSha = crypto.createHash("sha256").update(raw).digest("hex");
 
     let DatabaseSync;
     try {
@@ -48,8 +55,25 @@ export async function maybeBuildGraphDb({ memoryDir = DEFAULT_MEMORY_DIR, log = 
       return { built: false, reason: "sqlite_unavailable" };
     }
 
-    const lines = fs
-      .readFileSync(jsonlPath, "utf8")
+    if (fs.existsSync(dbPath)) {
+      try {
+        const existing = new DatabaseSync(dbPath, { readOnly: true });
+        try {
+          const row = existing
+            .prepare("select value from meta where key = 'source_sha256'")
+            .get();
+          if (row && row.value === sourceSha) {
+            return { built: false, reason: "up_to_date" };
+          }
+        } finally {
+          existing.close();
+        }
+      } catch {
+        // Unreadable/corrupt/pre-meta db — rebuild it.
+      }
+    }
+
+    const lines = raw
       .split("\n")
       .map((l) => l.trim())
       .filter(Boolean);
@@ -61,6 +85,10 @@ export async function maybeBuildGraphDb({ memoryDir = DEFAULT_MEMORY_DIR, log = 
     let facts = 0;
     try {
       db.exec(`
+        create table meta (
+          key text primary key,
+          value text not null
+        );
         create table entities (
           id text primary key,
           kind text not null,
@@ -121,6 +149,7 @@ export async function maybeBuildGraphDb({ memoryDir = DEFAULT_MEMORY_DIR, log = 
           facts += 1;
         }
       }
+      db.prepare("insert into meta (key, value) values ('source_sha256', ?)").run(sourceSha);
     } finally {
       db.close();
     }
@@ -130,5 +159,7 @@ export async function maybeBuildGraphDb({ memoryDir = DEFAULT_MEMORY_DIR, log = 
   } catch (err) {
     log("warn", "graph_db_build_failed", { error: err?.message || String(err) });
     return { built: false, reason: "error" };
+  } finally {
+    building = false;
   }
 }

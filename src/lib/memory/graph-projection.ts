@@ -145,13 +145,18 @@ export function buildGraphProjectionFiles(
   const taken = new Set<string>();
   for (const entity of entities) {
     const folder = entityFolder(entity.kind);
-    let name = noteFileName(entity.canonical_name, entity.id);
-    if (taken.has(`${folder}/${name}`)) {
-      name = name.replace(/\.md$/, ` (${entity.id.slice(0, 8)}).md`);
+    const base = noteFileName(entity.canonical_name, entity.id).replace(/\.md$/, "");
+    // Collision handling must terminate on a UNIQUE path: base name, then
+    // an id-prefixed suffix, then a numbered suffix — two colliding
+    // entities whose ids share the 8-char prefix still get distinct notes.
+    let path = `${folder}/${base}.md`;
+    for (let n = 1; taken.has(path); n += 1) {
+      const suffix = n === 1 ? entity.id.slice(0, 8) : `${entity.id.slice(0, 8)}-${n}`;
+      path = `${folder}/${base} (${suffix}).md`;
     }
-    taken.add(`${folder}/${name}`);
+    taken.add(path);
     files.push({
-      path: `${folder}/${name}`,
+      path,
       content: renderEntityNote(entity, facts, byId)
     });
   }

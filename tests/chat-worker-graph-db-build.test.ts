@@ -5,7 +5,7 @@
  */
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { DatabaseSync } from "node:sqlite";
-import { mkdtempSync, rmSync, statSync, utimesSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, utimesSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import { join } from "node:path";
 
@@ -106,14 +106,39 @@ describe("maybeBuildGraphDb", () => {
     });
   });
 
-  it("rebuilds when graph.jsonl is newer than graph.db", async () => {
+  it("rebuilds when graph.jsonl CONTENT changes — even with an older mtime (tar ships epoch mtimes)", async () => {
     const dir = tmpDir();
     writeFileSync(join(dir, "graph.jsonl"), JSONL);
     expect((await maybeBuildGraphDb({ memoryDir: dir })).built).toBe(true);
-    // Bump the jsonl mtime past the db's.
-    const future = new Date(statSync(join(dir, "graph.db")).mtimeMs + 5_000);
-    utimesSync(join(dir, "graph.jsonl"), future, future);
-    expect((await maybeBuildGraphDb({ memoryDir: dir })).built).toBe(true);
+    // New content, mtime pinned to the EPOCH — the exact shape a tar unpack
+    // produces. An mtime-based check would skip this forever.
+    writeFileSync(
+      join(dir, "graph.jsonl"),
+      JSON.stringify({ type: "entity", id: "e9", kind: "person", name: "New Person" })
+    );
+    utimesSync(join(dir, "graph.jsonl"), new Date(0), new Date(0));
+    const result = await maybeBuildGraphDb({ memoryDir: dir });
+    expect(result).toEqual({ built: true, entities: 1, facts: 0 });
+  });
+
+  it("single-flights concurrent invocations (second reports busy)", async () => {
+    const dir = tmpDir();
+    writeFileSync(join(dir, "graph.jsonl"), JSONL);
+    const [first, second] = await Promise.all([
+      maybeBuildGraphDb({ memoryDir: dir }),
+      maybeBuildGraphDb({ memoryDir: dir })
+    ]);
+    const outcomes = [first, second];
+    expect(outcomes.filter((o) => o.built)).toHaveLength(1);
+    expect(outcomes.filter((o) => !o.built && o.reason === "busy")).toHaveLength(1);
+  });
+
+  it("rebuilds over a corrupt/pre-meta graph.db instead of trusting it", async () => {
+    const dir = tmpDir();
+    writeFileSync(join(dir, "graph.jsonl"), JSONL);
+    writeFileSync(join(dir, "graph.db"), "not a sqlite file");
+    const result = await maybeBuildGraphDb({ memoryDir: dir });
+    expect(result.built).toBe(true);
   });
 
   it("never throws — a failure logs and reports error (default log no-ops)", async () => {

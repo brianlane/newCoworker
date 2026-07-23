@@ -341,20 +341,36 @@ describe("buildSyncVaultCommand", () => {
     expect(cmd).not.toContain("tar -xf");
   });
 
-  it("unpacks a supplied graph-projection tar into /opt/rowboat/memory (wipe managed folders, chown for the worker)", () => {
+  it("ships a projection tar via stage-then-swap (a failed extract aborts BEFORE the wipe)", () => {
     const tarB64 = Buffer.from("fake-tar-bytes").toString("base64");
-    const cmd = buildSyncVaultCommand(FULL_CONFIG, BIZ, "INST", NOW, "", tarB64);
+    const cmd = buildSyncVaultCommand(FULL_CONFIG, BIZ, "INST", NOW, "", {
+      mode: "ship",
+      tarB64
+    });
+    // Unpack into a temp dir FIRST — under `set -e` a truncated bundle
+    // aborts here, never after the notes were deleted.
+    expect(cmd).toContain(`printf %s '${tarB64}' | base64 -d | tar -xf - -C "$GRAPH_STAGE"`);
+    const extractAt = cmd.indexOf('tar -xf - -C "$GRAPH_STAGE"');
+    const wipeAt = cmd.indexOf("rm -f /opt/rowboat/memory/People/*.md");
+    expect(extractAt).toBeGreaterThanOrEqual(0);
+    expect(wipeAt).toBeGreaterThan(extractAt);
     expect(cmd).toContain(
       "mkdir -p /opt/rowboat/memory/People /opt/rowboat/memory/Organizations /opt/rowboat/memory/Topics /opt/rowboat/memory/Projects"
     );
-    // Managed note folders are wipe-and-rewrite (they were dead scaffolding
-    // before the projection); Projects is deliberately untouched.
-    expect(cmd).toContain("rm -f /opt/rowboat/memory/People/*.md");
+    // Projects is deliberately untouched by the wipe.
     expect(cmd).not.toContain("rm -f /opt/rowboat/memory/Projects");
-    expect(cmd).toContain(`printf %s '${tarB64}' | base64 -d | tar -xf - -C /opt/rowboat/memory`);
+    expect(cmd).toContain('cp -R "$GRAPH_STAGE"/. /opt/rowboat/memory/');
     // The chat-worker container (uid 1000) must be able to write graph.db.
     expect(cmd).toContain("chown -R 1000:1000 /opt/rowboat/memory");
     expect(cmd).toContain('echo "graph_projection=ok"');
+  });
+
+  it("wipes the projection (notes + graph.jsonl + graph.db) for a graph tenant whose graph emptied", () => {
+    const cmd = buildSyncVaultCommand(FULL_CONFIG, BIZ, "INST", NOW, "", { mode: "wipe" });
+    expect(cmd).toContain("rm -f /opt/rowboat/memory/People/*.md");
+    expect(cmd).toContain("/opt/rowboat/memory/graph.jsonl /opt/rowboat/memory/graph.db");
+    expect(cmd).not.toContain("tar -xf");
+    expect(cmd).toContain('echo "graph_projection=wiped"');
   });
 
   it("starts with `set -euo pipefail` so a failure in any pipeline step (base64 decode, docker cp, mongosh) propagates as a non-zero exit code", () => {
@@ -559,7 +575,7 @@ describe("syncVaultToVps — success path", () => {
     expect(deps.fetchGraph).toHaveBeenCalledWith(BIZ);
     const call = (deps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0];
     expect(call.command).toContain('echo "graph_projection=ok"');
-    expect(call.command).toContain("tar -xf - -C /opt/rowboat/memory");
+    expect(call.command).toContain('tar -xf - -C "$GRAPH_STAGE"');
     // The shipped tar really contains the entity note + graph.jsonl.
     const m = /printf %s '([A-Za-z0-9+/=]+)' \| base64 -d \| tar -xf/.exec(call.command);
     expect(m).toBeTruthy();
@@ -569,7 +585,7 @@ describe("syncVaultToVps — success path", () => {
     expect(tar).toContain("602-695-1142");
   });
 
-  it("skips the projection for off-mode tenants (fetchGraph never called) and for an empty graph", async () => {
+  it("skips the projection for off-mode tenants; ships a WIPE for a graph tenant with an empty graph", async () => {
     const offDeps = freshDeps();
     await syncVaultToVps(BIZ, offDeps);
     expect(offDeps.fetchGraph).not.toHaveBeenCalled();
@@ -583,9 +599,10 @@ describe("syncVaultToVps — success path", () => {
     const r = await syncVaultToVps(BIZ, emptyDeps);
     expect(r.ok).toBe(true);
     expect(emptyDeps.fetchGraph).toHaveBeenCalled();
-    expect((emptyDeps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0].command).not.toContain(
-      "graph_projection"
-    );
+    // An emptied graph must not leave stale notes/graph.db on the box.
+    const emptyCmd = (emptyDeps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0].command;
+    expect(emptyCmd).toContain('echo "graph_projection=wiped"');
+    expect(emptyCmd).not.toContain("tar -xf");
   });
 
   it("syncs without the projection when the graph read fails (Error and non-Error)", async () => {
