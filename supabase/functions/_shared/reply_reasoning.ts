@@ -67,6 +67,16 @@ function trailerCutIndex(line: string): number {
  * Appended to the model's per-turn instructions. Kept terse: the trailer is
  * machine-read, and a long spec would crowd the actual conversation prompt.
  *
+ * The opening clause ("first write the message… it is required and must
+ * never be empty") is load-bearing, not styling. On gemini-3.5-flash-lite
+ * (the fleet SMS default since PR #809), the previous "After your reply,
+ * append…" phrasing produced TRAILER-ONLY completions — no customer text at
+ * all — on 7/12 temperature-0 draws of the Truly renewal replay prompt
+ * (two flow messages of context; live probe 2026-07-22). Production
+ * surfaces that draw as rowboat_empty_assistant_after_reasoning_strip and
+ * burns a whole job retry on it. With this phrasing the same probe drew
+ * 12/12 non-empty replies with 12/12 parseable trailers.
+ *
  * DO NOT reword the handoff spec to fix classification misses. Live probes
  * (2026-07-20, temperature 0) showed the wording is chaotically coupled to
  * the REPLY itself — inserting even a short parenthetical made the model
@@ -75,10 +85,14 @@ function trailerCutIndex(line: string): number {
  * a "speak to a representative" turn stayed false under every variant
  * probed. Deterministic misclassification fixes belong in
  * `isHumanRequestIntent` below, which the worker consults independently of
- * the model's flag.
+ * the model's flag. (The 2026-07-22 rewording above touched only the
+ * reply-first framing, and the full live e2e suite — including the Juhu
+ * replay — gated it.)
  */
 export const REASONING_PROMPT_INSTRUCTION =
-  `\n\nAfter your reply, on its own final line, append exactly: ` +
+  `\n\nEvery turn: first write the message to send the texter — it is required ` +
+  `and must never be empty, even when you are only acknowledging or handing off. ` +
+  `Then, on its own final line, append exactly: ` +
   `${REASONING_MARKER}{"intent":"<the texter's goal, snake_case, max 5 words>",` +
   `"why":"<one short sentence: why you replied this way>",` +
   `"handoff":<true ONLY when a human must take this conversation over or follow up — ` +
