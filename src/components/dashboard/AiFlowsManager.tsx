@@ -3993,7 +3993,13 @@ function StepFields({
                           step.ownerDirectTemplate ??
                           "HIGH-VALUE lead kept for you — not offered to the team."
                       }
-                    : { ownerDirectWhen: undefined, ownerDirectTemplate: undefined }
+                    : {
+                        ownerDirectWhen: undefined,
+                        ownerDirectTemplate: undefined,
+                        // Nudges are only valid alongside the keep-for-owner
+                        // pair; an orphaned flag would fail validation on save.
+                        ownerDirectNudges: undefined
+                      }
                 )
               }
             />
