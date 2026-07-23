@@ -122,13 +122,17 @@ export function adminAlertSummary(log: AlertLogLike): string {
     text = `Texter follow-up: ${who ?? "a texter"}${message ? ` — ${message}` : ""}`;
   } else if (source === "voice_tool_capture") {
     const why = payloadString(payload, "reason") ?? payloadString(payload, "notes");
-    text = `Urgent caller: ${who ?? "unknown caller"}${why ? ` — ${why}` : ""}`;
+    // Only high-urgency captures land as urgent_alert; routine caller-detail
+    // captures are `success` rows (they reach the fleet ACTIVITY feed) and
+    // must not be dressed up as urgent.
+    const lead = log.status === "urgent_alert" ? "Urgent caller" : "Caller captured";
+    text = `${lead}: ${who ?? "unknown caller"}${why ? ` — ${why}` : ""}`;
   } else if (log.task_type === "provisioning") {
     const phase = payloadString(payload, "phase");
     const message = payloadString(payload, "message");
-    text = `Provisioning ${log.status === "error" ? "failed" : "update"}${
-      phase ? ` at ${phase}` : ""
-    }${message ? `: ${message}` : ""}`;
+    const verb =
+      log.status === "error" ? "failed" : log.status === "success" ? "completed" : "update";
+    text = `Provisioning ${verb}${phase ? ` at ${phase}` : ""}${message ? `: ${message}` : ""}`;
   } else {
     // Generic claw-gateway rows: surface the first useful payload string,
     // attributed to the person when the row carries one.
