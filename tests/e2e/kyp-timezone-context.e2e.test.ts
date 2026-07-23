@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   SMS_CONVERSATION_QUALITY_LINE,
   SMS_GROUNDED_ACTIONS_LINE,
-  SMS_IDENTITY_LINE
+  SMS_IDENTITY_LINE,
+  SMS_TIMEZONE_LINE
 } from "../../supabase/functions/_shared/sms_prompt_lines";
 import {
   REASONING_PROMPT_INSTRUCTION,
@@ -123,9 +124,17 @@ async function runTimezoneTurn(): Promise<{
     last_interaction_at: "2026-07-20T14:14:58.000Z"
   });
   const contactTimeline = formatContactTimeline(THREAD)!;
+  // SMS_TIMEZONE_LINE rides between the quality line and the date line,
+  // exactly like the worker's customer preamble (sms-inbound-worker
+  // dateAndPhoneLines). It was MISSING here until Jul 23 2026 — the line
+  // shipped from this very incident (KYP/Ayanna, Jul 20) after this replay
+  // was written, and without it the fleet model failed the zone contract
+  // on a meaningful share of draws (PR #853's CI run drew "All of our
+  // times are set in Mountain Time!"). With the production rule present
+  // the test measures what production actually does.
   const system =
     [
-      `${SMS_IDENTITY_LINE}\n\n${SMS_GROUNDED_ACTIONS_LINE}\n\n${SMS_CONVERSATION_QUALITY_LINE}\n\n${dateLine}\n\n${phoneLine}`,
+      `${SMS_IDENTITY_LINE}\n\n${SMS_GROUNDED_ACTIONS_LINE}\n\n${SMS_CONVERSATION_QUALITY_LINE}\n\n${SMS_TIMEZONE_LINE}\n\n${dateLine}\n\n${phoneLine}`,
       memoryPreamble,
       contactTimeline
     ]
