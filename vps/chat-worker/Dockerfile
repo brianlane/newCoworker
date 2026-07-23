@@ -2,12 +2,13 @@
 # `node worker.mjs` against a small ESM script. Image size ~70 MB on
 # disk, ~30 MB compressed — fine to pull on every VPS deploy.
 #
-# Node 22 (not 20): @supabase/supabase-js >= 2.108 bundles a realtime-js that
-# hard-throws at createClient() on Node < 22 ("Node.js 20 detected without
-# native WebSocket support"). Node 22 ships a global WebSocket, so the worker —
-# which constructs a Supabase client even though it never opens a realtime
-# channel — starts cleanly. Keep this >= the engines floor in package.json.
-FROM node:22-alpine
+# Node 24 (was 22, was 20): @supabase/supabase-js >= 2.108 bundles a
+# realtime-js that hard-throws at createClient() on Node < 22 ("Node.js 20
+# detected without native WebSocket support"), and the knowledge-graph
+# compile (graph-db-build.mjs) uses node:sqlite, which is stable on 24.
+# Matches the repo-wide Node 24 runtime (CI + Vercel, PR #830). Keep this
+# >= the engines floor in package.json.
+FROM node:24-alpine
 
 WORKDIR /app
 
@@ -22,7 +23,7 @@ WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev --no-audit --no-fund
 
-COPY worker.mjs memory-capture.mjs email-tool.mjs ./
+COPY worker.mjs memory-capture.mjs email-tool.mjs graph-db-build.mjs ./
 
 # Run as the unprivileged `node` user that comes with the base image.
 # The container talks only to: localhost (Rowboat over the rowboat_default

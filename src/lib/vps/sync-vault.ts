@@ -43,6 +43,14 @@ import { getBusinessConfig, type ConfigRow } from "@/lib/db/configs";
 import { getBusiness, type BusinessRow } from "@/lib/db/businesses";
 import { listBusinessDocuments, type BusinessDocumentRow } from "@/lib/documents/db";
 import { buildDocumentsDigestMd } from "@/lib/documents/core";
+import {
+  listActiveFactsForBusiness,
+  listMemoryEntities,
+  type MemoryEntityRow,
+  type MemoryFactRow
+} from "@/lib/memory/graph-db";
+import { buildGraphProjectionFiles } from "@/lib/memory/graph-projection";
+import { packTar } from "@/lib/tar/pack";
 import { HostingerClient, DEFAULT_HOSTINGER_BASE_URL } from "@/lib/hostinger/client";
 import { logger } from "@/lib/logger";
 
@@ -94,6 +102,10 @@ export type VaultSyncDeps = {
   exec?: typeof sshExec;
   /** Override the wallclock for the `lastUpdatedAt` field (tests). */
   now?: () => Date;
+  /** Override the graph reads for the on-box projection (tests). */
+  fetchGraph?: (
+    businessId: string
+  ) => Promise<{ entities: MemoryEntityRow[]; facts: MemoryFactRow[] }>;
 };
 
 /**
@@ -249,7 +261,22 @@ export function buildSyncVaultCommand(
   projectId: string,
   instructions: string,
   now: Date,
-  documentsMd: string = ""
+  documentsMd: string = "",
+  /**
+   * Knowledge-graph projection for `/opt/rowboat/memory/`:
+   *   { mode: "off" }               — tenant not on the graph (or the graph
+   *     read failed): command stays byte-identical to pre-projection
+   *     behavior, memory folders untouched.
+   *   { mode: "ship", tarB64 }      — stage-unpack the ustar bundle (entity
+   *     notes + graph.jsonl) into a temp dir FIRST, then wipe-and-swap, so
+   *     a failed decode/extract aborts before anything is deleted.
+   *   { mode: "wipe" }              — graph tenant whose graph is now
+   *     EMPTY: clear the managed notes + graph.jsonl/graph.db so the box
+   *     never serves stale deleted data.
+   */
+  graphProjection: { mode: "off" } | { mode: "wipe" } | { mode: "ship"; tarB64: string } = {
+    mode: "off"
+  }
 ): string {
   // The `?? ""` fallbacks here and in `enc` are defense-in-depth nets for
   // a misshapen ConfigRow; ConfigRow's `text` columns are NON-NULL at the
@@ -273,9 +300,46 @@ export function buildSyncVaultCommand(
   const projectIdJson = JSON.stringify(projectId);
   const nowIso = now.toISOString();
 
+  // Knowledge-graph projection. The managed note folders were dead
+  // scaffolding before the projection — nothing else writes them. Shipping
+  // is staged so no failure can leave the box worse than stale:
+  //   1. decode + extract into a temp dir (a truncated bundle aborts under
+  //      `set -e` before anything live is touched),
+  //   2. move each managed folder to `<dir>.new` NEXT TO the live one (the
+  //      cross-filesystem copy risk lands here, live data still intact),
+  //   3. same-filesystem rename over the live folder — the only "destroy"
+  //      step is an rm immediately followed by a rename(2) of an
+  //      already-materialized sibling.
+  // The bind-mounted /opt/rowboat/memory dir itself is never replaced
+  // (that would detach the chat-worker's mount); only its children swap.
+  // The final chown hands the tree to uid 1000 so the worker (runs as
+  // `node`) can compile graph.jsonl into graph.db — chown failure is LOUD
+  // (fails the sync) because a root-owned tree silently breaks that build.
+  const wipeLines = [
+    "mkdir -p /opt/rowboat/memory/People /opt/rowboat/memory/Organizations /opt/rowboat/memory/Topics /opt/rowboat/memory/Projects",
+    "rm -f /opt/rowboat/memory/People/*.md /opt/rowboat/memory/Organizations/*.md /opt/rowboat/memory/Topics/*.md /opt/rowboat/memory/graph.jsonl /opt/rowboat/memory/graph.db /opt/rowboat/memory/graph.db.tmp 2>/dev/null || true"
+  ];
+  const graphLines =
+    graphProjection.mode === "ship"
+      ? [
+          `GRAPH_STAGE=$(mktemp -d)`,
+          `printf %s '${graphProjection.tarB64}' | base64 -d | tar -xf - -C "$GRAPH_STAGE"`,
+          `mkdir -p "$GRAPH_STAGE/People" "$GRAPH_STAGE/Organizations" "$GRAPH_STAGE/Topics"`,
+          "mkdir -p /opt/rowboat/memory/Projects",
+          `for d in People Organizations Topics; do rm -rf "/opt/rowboat/memory/$d.new"; mv "$GRAPH_STAGE/$d" "/opt/rowboat/memory/$d.new"; rm -rf "/opt/rowboat/memory/$d"; mv "/opt/rowboat/memory/$d.new" "/opt/rowboat/memory/$d"; done`,
+          `if [ -f "$GRAPH_STAGE/graph.jsonl" ]; then mv "$GRAPH_STAGE/graph.jsonl" /opt/rowboat/memory/graph.jsonl.new; mv -f /opt/rowboat/memory/graph.jsonl.new /opt/rowboat/memory/graph.jsonl; fi`,
+          `rm -rf "$GRAPH_STAGE"`,
+          "chown -R 1000:1000 /opt/rowboat/memory",
+          'echo "graph_projection=ok"'
+        ]
+      : graphProjection.mode === "wipe"
+        ? [...wipeLines, "chown -R 1000:1000 /opt/rowboat/memory", 'echo "graph_projection=wiped"']
+        : [];
+
   return [
     "set -euo pipefail",
     "mkdir -p /opt/rowboat/vault",
+    ...graphLines,
     `printf %s '${soulB64}'    | base64 -d > /opt/rowboat/vault/soul.md`,
     `printf %s '${identityB64}' | base64 -d > /opt/rowboat/vault/identity.md`,
     `printf %s '${memoryB64}'  | base64 -d > /opt/rowboat/vault/memory.md`,
@@ -351,6 +415,12 @@ export async function syncVaultToVps(
   const resolveIp = deps.resolveIp ?? defaultResolveIp;
   const exec = deps.exec ?? sshExec;
   const now = (deps.now ?? (() => new Date()))();
+  const fetchGraph =
+    deps.fetchGraph ??
+    (async (bid: string) => ({
+      entities: await listMemoryEntities(bid),
+      facts: await listActiveFactsForBusiness(bid)
+    }));
   /* c8 ignore stop */
 
   const [biz, config, key, documents] = await Promise.all([
@@ -386,12 +456,46 @@ export async function syncVaultToVps(
 
   const documentsMd = buildDocumentsDigestMd(documents, now);
   const instructions = buildAgentInstructions(config, documentsMd);
+
+  // On-box knowledge-graph projection (graph tenants only — mode off keeps
+  // the command byte-identical). A graph read failure must never block the
+  // vault sync — the projection skips this round (stale is better than a
+  // blind wipe on a transient read error) and lands on the next sync. An
+  // EMPTY graph on a graph tenant ships a wipe so the box never serves
+  // stale deleted data.
+  let graphProjection: { mode: "off" } | { mode: "wipe" } | { mode: "ship"; tarB64: string } = {
+    mode: "off"
+  };
+  const graphMode = config.memory_graph_mode ?? "off";
+  if (graphMode === "shadow" || graphMode === "active") {
+    try {
+      const graph = await fetchGraph(businessId);
+      const files = buildGraphProjectionFiles(graph.entities, graph.facts);
+      graphProjection =
+        files.length > 0
+          ? { mode: "ship", tarB64: packTar(files).toString("base64") }
+          : { mode: "wipe" };
+    } catch (err) {
+      logger.warn("syncVaultToVps: graph projection failed; syncing without it", {
+        businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+
   // Single resolution point: the value we report in `result.projectId`
   // (used as the drift signal in `syncVaultToVpsAndLog`'s log) is the
   // EXACT same string we ask mongosh to update. See the doc on
   // `buildSyncVaultCommand` for the Bugbot Low motivation.
   const projectId = resolveSyncProjectId(businessId, config);
-  const command = buildSyncVaultCommand(config, projectId, instructions, now, documentsMd);
+  const command = buildSyncVaultCommand(
+    config,
+    projectId,
+    instructions,
+    now,
+    documentsMd,
+    graphProjection
+  );
 
   let result: SshExecResult;
   try {

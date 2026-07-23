@@ -93,6 +93,7 @@ import {
   fitBulletsToPayload
 } from "./memory-capture.mjs";
 import { extractEmailSendRequests, fulfillEmailSends } from "./email-tool.mjs";
+import { maybeBuildGraphDb } from "./graph-db-build.mjs";
 
 const SUPABASE_URL = required("SUPABASE_URL");
 const SUPABASE_SERVICE_ROLE_KEY = required("SUPABASE_SERVICE_ROLE_KEY");
@@ -1672,6 +1673,14 @@ async function main() {
     });
 
   setInterval(drain, SWEEP_INTERVAL_MS).unref();
+
+  // Knowledge-graph projection → local SQLite (graph.db). The vault sync
+  // ships graph.jsonl for graph-mode tenants; this compiles it whenever it
+  // changes. No-op (no_jsonl) on boxes whose tenant is not on the graph.
+  // Never throws; never touches chat duties.
+  const buildGraph = () => maybeBuildGraphDb({ log });
+  buildGraph();
+  setInterval(buildGraph, 5 * 60 * 1000).unref();
 
   const shutdown = (signal) => {
     log("info", "worker_stop", { signal });
