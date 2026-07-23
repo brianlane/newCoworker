@@ -123,6 +123,18 @@ describe("adminAlertSummary", () => {
     ).toBe("Urgent caller: unknown caller");
   });
 
+  it("does not dress routine (success) captures up as urgent", () => {
+    expect(
+      adminAlertSummary(
+        log("call", "success", {
+          source: "voice_tool_capture",
+          callerName: "Jane",
+          reason: "wants a quote"
+        })
+      )
+    ).toBe("Caller captured: Jane — wants a quote");
+  });
+
   it("summarizes provisioning rows with phase and message", () => {
     expect(
       adminAlertSummary(
