@@ -18,6 +18,15 @@ export type ConfigRow = {
   soul_md: string;
   identity_md: string;
   memory_md: string;
+  /**
+   * Overflow archive for memory_md: whole sections evicted from the active
+   * 14KB window land here (append path in
+   * src/lib/dashboard-chat/memory-append.ts) instead of being destroyed.
+   * Never injected into static prompts; ranked retrieval reads it. Optional
+   * on the type: rows read before the 20260820100000_memory_archive
+   * migration ran won't have it.
+   */
+  memory_archive_md?: string;
   website_md: string;
   /**
    * Canonical rendered "Business profile" markdown (hours/address/contact),
@@ -71,6 +80,7 @@ export async function patchBusinessConfig(
     soul_md?: string;
     identity_md?: string;
     memory_md?: string;
+    memory_archive_md?: string;
     website_md?: string;
     profile_md?: string;
     website_crawl_report?: WebsiteCrawlReport;
@@ -100,6 +110,9 @@ export async function patchBusinessConfig(
   if (patch.soul_md !== undefined) updatePayload.soul_md = patch.soul_md;
   if (patch.identity_md !== undefined) updatePayload.identity_md = patch.identity_md;
   if (patch.memory_md !== undefined) updatePayload.memory_md = patch.memory_md;
+  if (patch.memory_archive_md !== undefined) {
+    updatePayload.memory_archive_md = patch.memory_archive_md;
+  }
   if (patch.website_md !== undefined) updatePayload.website_md = patch.website_md;
   if (patch.profile_md !== undefined) updatePayload.profile_md = patch.profile_md;
   if (patch.website_crawl_report !== undefined) {

@@ -254,11 +254,13 @@ describe("db/configs", () => {
       soul_md: "# s",
       identity_md: "# i",
       memory_md: "# m",
+      memory_archive_md: "# archived",
       website_md: "# w"
     });
 
     const payload = updateChain.update.mock.calls[0][0] as Record<string, unknown>;
     expect(payload.memory_md).toBe("# m");
+    expect(payload.memory_archive_md).toBe("# archived");
     expect(payload.website_md).toBe("# w");
   });
 

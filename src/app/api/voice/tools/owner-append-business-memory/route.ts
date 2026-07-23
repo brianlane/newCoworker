@@ -92,7 +92,8 @@ export async function POST(request: Request) {
         bulletCount: result.savedBullets.length,
         skippedDuplicates: result.skippedDuplicates,
         memoryChars: result.memoryChars,
-        truncated: result.truncated
+        truncated: result.truncated,
+        archivedChars: result.archivedChars
       }
     );
 
@@ -104,7 +105,8 @@ export async function POST(request: Request) {
         savedBullets: result.savedBullets,
         skippedDuplicates: result.skippedDuplicates,
         memoryChars: result.memoryChars,
-        truncated: result.truncated
+        truncated: result.truncated,
+        archivedChars: result.archivedChars
       }
     });
   } catch (err) {

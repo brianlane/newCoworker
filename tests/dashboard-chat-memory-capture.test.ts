@@ -143,7 +143,8 @@ describe("captureOwnerRuleInline", () => {
         savedBullets: ["Closed Sundays"],
         skippedDuplicates: 0,
         memoryChars: 100,
-        truncated: false
+        truncated: false,
+        archivedChars: 0
       }))
     };
     // Object.assign keeps the base's Mock types visible (an object-spread of
@@ -257,7 +258,8 @@ describe("captureOwnerRuleInline", () => {
         savedBullets: [],
         skippedDuplicates: 1,
         memoryChars: 10,
-        truncated: false
+        truncated: false,
+        archivedChars: 0
       }))
     });
     const res = await captureOwnerRuleInline({ businessId: BIZ, ownerMessage: "rule" }, deps);

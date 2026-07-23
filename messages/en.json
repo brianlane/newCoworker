@@ -1460,6 +1460,8 @@
       "marketingSubtitle": "Email campaigns to your contacts — every send is reviewed and scheduled by you, and every mail carries a one-click unsubscribe.",
       "memoryTitle": "Coworker Memory",
       "memorySubtitle": "Review and manage what your AI coworker knows about your business",
+      "memoryArchiveSummary": "Archived memory ({chars} characters)",
+      "memoryArchiveHint": "Older entries moved here automatically when active memory filled up. Nothing is deleted — your coworker can still look these up when answering questions.",
       "documentsTitle": "Documents",
       "documentsSubtitle": "Price sheets, policies, contracts, meeting minutes, and SOPs your coworker answers from — organized by category",
       "smsThreadTitle": "SMS thread",

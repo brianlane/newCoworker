@@ -1,0 +1,22 @@
+-- Memory archive: stop silently destroying owner memory at the 14KB cap.
+--
+-- `business_configs.memory_md` is hard-capped (14,000 chars — keeps Rowboat
+-- prefill and the voice-bridge prompt bounded). Before this migration, the
+-- append path TAIL-TRUNCATED on overflow: the oldest rules were sliced off
+-- the head of the document and destroyed. Long-running tenants silently lost
+-- their earliest standing instructions.
+--
+-- `memory_archive_md` receives whole evicted sections instead (append path:
+-- src/lib/dashboard-chat/memory-append.ts). It is not injected into any
+-- static prompt; ranked retrieval (business_knowledge_lookup) reads it so
+-- archived facts stay answerable. App-side cap ~200KB (MEMORY_ARCHIVE_MD_MAX_CHARS).
+--
+-- Version stamp note: production's migration ledger is already at
+-- 20260820000000 (legacy future-dated stamps), and `supabase db push`
+-- refuses out-of-order versions — so this continues the sequence after the
+-- ledger head rather than using today's real date.
+--
+-- No RLS change needed: business_configs already carries the table's
+-- deny-by-default posture; this is just a new column on the existing row.
+alter table public.business_configs
+  add column if not exists memory_archive_md text not null default '';

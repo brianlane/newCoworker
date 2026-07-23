@@ -45,18 +45,27 @@ export type VaultLoaderOptions = {
 const DEFAULT_MAX_PER_FILE_CHARS = 4_000;
 const DEFAULT_MAX_TOTAL_CHARS = 12_000;
 
+// `keep` picks which end survives truncation. Memory keeps its TAIL: the
+// capture path appends new rules newest-LAST, so head-keeping truncation
+// (the pre-Jul-2026 behavior) silently dropped the newest rules from every
+// call the moment memory.md outgrew the per-file cap.
 const FILES = [
-  { key: "soul", name: "soul.md" },
-  { key: "identity", name: "identity.md" },
-  { key: "memory", name: "memory.md" },
-  { key: "website", name: "website.md" },
-  { key: "profile", name: "profile.md" },
-  { key: "documents", name: "documents.md" }
+  { key: "soul", name: "soul.md", keep: "head" },
+  { key: "identity", name: "identity.md", keep: "head" },
+  { key: "memory", name: "memory.md", keep: "tail" },
+  { key: "website", name: "website.md", keep: "head" },
+  { key: "profile", name: "profile.md", keep: "head" },
+  { key: "documents", name: "documents.md", keep: "head" }
 ] as const;
 
-function truncate(text: string, maxChars: number): string {
+type KeepEnd = (typeof FILES)[number]["keep"];
+
+function truncate(text: string, maxChars: number, keep: KeepEnd = "head"): string {
   const trimmed = text.trim();
   if (trimmed.length <= maxChars) return trimmed;
+  if (keep === "tail") {
+    return `[... older content truncated for prompt size ...]\n\n${trimmed.slice(-maxChars)}`;
+  }
   return `${trimmed.slice(0, maxChars)}\n\n[... truncated for prompt size ...]`;
 }
 
@@ -81,7 +90,7 @@ export async function loadVaultForPrompt(
   for (const file of FILES) {
     try {
       const raw = await fs.readFile(join(vaultPath, file.name), "utf8");
-      const truncated = truncate(raw, maxPerFile);
+      const truncated = truncate(raw, maxPerFile, file.keep);
       if (truncated.length > 0) {
         snapshot[file.key] = truncated;
         snapshot.totalChars += truncated.length;
@@ -95,7 +104,7 @@ export async function loadVaultForPrompt(
 
   // Global cap across all sections — trim longest first if we overshoot.
   if (snapshot.totalChars > maxTotal) {
-    const entries = FILES.map((f) => ({ key: f.key, length: snapshot[f.key].length }));
+    const entries = FILES.map((f) => ({ key: f.key, keep: f.keep, length: snapshot[f.key].length }));
     entries.sort((a, b) => b.length - a.length);
     let remaining = snapshot.totalChars - maxTotal;
     for (const entry of entries) {
@@ -103,7 +112,7 @@ export async function loadVaultForPrompt(
       const current = snapshot[entry.key];
       if (!current) continue;
       const shrinkTo = Math.max(500, current.length - remaining);
-      const next = truncate(current, shrinkTo);
+      const next = truncate(current, shrinkTo, entry.keep);
       snapshot[entry.key] = next;
       remaining -= current.length - next.length;
     }
