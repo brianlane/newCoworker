@@ -389,6 +389,11 @@ describe("formatFlowAnswerNote", () => {
     // acted on, never bounced into a schedule-for-later negotiation.
     expect(note).toContain("saying they are available now, help them right now");
     expect(note).toContain("do NOT ask them to schedule for later");
+    // The bare-answer clause (Jul 2026): gemini-3.5-flash-lite read a
+    // bare-date SMS as a blank message on ~half of draws until the note
+    // named the [SMS] line as the message itself.
+    expect(note).toContain("even when it is only a bare date, time, or single word");
+    expect(note).toContain("never treat it as blank");
     expect(note!.endsWith(")")).toBe(true);
   });
 
@@ -396,8 +401,11 @@ describe("formatFlowAnswerNote", () => {
     const note = formatFlowAnswerNote(`${"x".repeat(400)}`);
     expect(note).toContain("…");
     // The quoted flow message itself stays capped at MAX_LAST_MESSAGE_CHARS
-    // regardless of the surrounding instruction text.
-    const quoted = note!.slice(note!.indexOf('"') + 1, note!.lastIndexOf('"'));
+    // regardless of the surrounding instruction text. (Matched up to the
+    // "— read their message" boundary: the bare-answer clause added a
+    // second quoted token, "[SMS]", later in the note.)
+    const quoted = /"([^"]*)" — read their message/.exec(note!)?.[1] ?? "";
+    expect(quoted.length).toBeGreaterThan(0);
     expect(quoted.length).toBeLessThanOrEqual(300);
     expect(formatFlowAnswerNote("   ")).toBeNull();
     expect(formatFlowAnswerNote("")).toBeNull();

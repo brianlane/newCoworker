@@ -55,10 +55,10 @@ const RENEWAL_ANSWER = "July 23, 2026";
 
 /** What the tenant's SMS Coworker agent runs (deploy-client.sh
  * SMS_CHAT_MODEL default; upgraded off 2.5-flash-lite after this incident —
- * the old model ignored the system preamble on the incident turn. 3.x
- * models are blocked by the Rowboat AI-SDK thought_signature gap, see
- * deploy-client.sh). */
-const TRULY_SMS_CHAT_MODEL = "gemini-2.5-flash";
+ * the old model ignored the system preamble on the incident turn — then to
+ * 3.5-flash-lite with the PR #809 fleet migration, 3.x being viable on the
+ * Rowboat path since the llm-router thought_signature shim, PR #683). */
+const TRULY_SMS_CHAT_MODEL = "gemini-3.5-flash-lite";
 
 
 /**
@@ -197,12 +197,24 @@ describe("generic-path fallback turn — the incident turn's exact prompt", () =
     // same fact when it lived only in the system preamble.
     const note = formatFlowAnswerNote(flowMessages[flowMessages.length - 1] ?? "");
     const userTurn = note ? `${note}\n\n[SMS] ${RENEWAL_ANSWER}` : `[SMS] ${RENEWAL_ANSWER}`;
-    const raw = await geminiChatReply(
-      system,
-      [{ role: "user", text: userTurn }],
-      TRULY_SMS_CHAT_MODEL
-    );
-    const split = splitReplyReasoning(raw);
+    // Whole-turn retry, mirroring production: a trailer-only draw (reply
+    // empty after the reasoning strip) makes the worker THROW
+    // (rowboat_empty_assistant_after_reasoning_strip) and the job retries
+    // the model call — a customer never receives that draw, so asserting on
+    // it would fail the suite on a shape production explicitly re-rolls. A
+    // parsed-but-trailerless draw is also re-rolled here, the suite's
+    // standard { retry: 1 }-style flake treatment (the trailer contract
+    // itself is asserted below on the final draw).
+    let split: ReturnType<typeof splitReplyReasoning> = { reply: "", reasoning: null };
+    for (let attempt = 1; attempt <= 3; attempt++) {
+      const raw = await geminiChatReply(
+        system,
+        [{ role: "user", text: userTurn }],
+        TRULY_SMS_CHAT_MODEL
+      );
+      split = splitReplyReasoning(raw);
+      if (split.reply.trim() !== "" && split.reasoning !== null) break;
+    }
     reply = split.reply;
     reasoningPresent = split.reasoning !== null;
     verdict = await judgeReply(

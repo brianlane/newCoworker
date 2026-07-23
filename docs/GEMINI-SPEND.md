@@ -37,6 +37,26 @@ Events are pruned past ~200 days (rides the daily platform-cost sync).
 The ledger collects from the day it shipped — older spend exists only in
 the period fuse totals and cannot be backfilled.
 
+## CI e2e spend controls (Jul 2026)
+
+The live e2e suite was ~99% of the `internal-ci-debug` key's request volume
+(8.29K requests on Jul 21 vs 0.06K tenant), because every PR push AND every
+push to main ran the full ~111-test suite. Three controls now bound it:
+
+- **Scoped runs** — `.github/scripts/e2e-scope.sh` maps the diff to the
+  e2e files it can affect (import-audited groups: flows, SMS prompts,
+  operator, messenger, voice); unmapped paths fail open to the full suite.
+- **Main-push dedupe** — a merge commit with a tree identical to the merged
+  PR head whose e2e check passed skips the paid calls (dependabot excluded:
+  its PR-side e2e is a secretless no-op, so main is its real coverage).
+- **Nightly full run** — `.github/workflows/e2e-nightly.yml` executes the
+  complete suite daily on main, bounding live-model-drift exposure to a day.
+
+Each run appends billed tokens to `test-results/e2e-gemini-usage.jsonl`
+(`tests/e2e/usage-log.ts`) and reports a per-model table in the job summary
+(`.github/scripts/e2e-usage-summary.sh`) — reconcile against AI Studio →
+Spend for the `internal-ci-debug` key.
+
 ## One-time setup A: separate API key for CI + debug traffic (DONE Jul 2026)
 
 The CI live e2e suite and the `debug/` bench scripts call Gemini with real
