@@ -148,13 +148,14 @@ export type ChatTurn = { role: "user" | "model"; text: string };
 export async function geminiChatReply(
   systemInstruction: string,
   turns: ChatTurn[],
-  model?: string
+  model?: string,
+  opts: { temperature?: number } = {}
 ): Promise<string> {
   return generateContent(
     {
       systemInstruction: { parts: [{ text: systemInstruction }] },
       contents: turns.map((t) => ({ role: t.role, parts: [{ text: t.text }] })),
-      generationConfig: { temperature: 0 }
+      generationConfig: { temperature: opts.temperature ?? 0 }
     },
     model,
     { retryEmptyOnce: true }
