@@ -145,7 +145,8 @@ describe("captureOwnerRuleInline", () => {
         memoryChars: 100,
         truncated: false,
         archivedChars: 0
-      }))
+      })),
+      ingestGraph: vi.fn(async () => ({ ran: false }))
     };
     // Object.assign keeps the base's Mock types visible (an object-spread of
     // the Partial would widen them to the plain function unions).
@@ -164,6 +165,8 @@ describe("captureOwnerRuleInline", () => {
     expect(call.userText).toContain("We are closed Sundays");
     expect(call.userText).toContain("- Existing rule");
     expect(meter).toHaveBeenCalledWith(expect.objectContaining({ surface: "memory_capture" }));
+    // Saved bullets flow into the (mode-gated) knowledge-graph ingest.
+    expect(deps.ingestGraph).toHaveBeenCalledWith(BIZ, ["Closed Sundays"]);
   });
 
   it("no-ops on an empty message, a missing key, or a disabled toggle", async () => {
@@ -251,7 +254,7 @@ describe("captureOwnerRuleInline", () => {
     expect(noSave.append).not.toHaveBeenCalled();
   });
 
-  it("reports duplicate-only appends without a saved log line", async () => {
+  it("reports duplicate-only appends without a saved log line (no graph ingest)", async () => {
     const deps = makeDeps({
       append: vi.fn(async () => ({
         appended: false,
@@ -264,6 +267,7 @@ describe("captureOwnerRuleInline", () => {
     });
     const res = await captureOwnerRuleInline({ businessId: BIZ, ownerMessage: "rule" }, deps);
     expect(res.saved).toEqual([]);
+    expect(deps.ingestGraph).not.toHaveBeenCalled();
   });
 
   it("never throws — an append failure resolves to a no-op", async () => {
