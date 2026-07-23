@@ -258,13 +258,13 @@ export function buildEscalationAdviceEmail(
 ): { subject: string; text: string } {
   const subject =
     advices.length === 1
-      ? `[ops] Hardware escalation candidate — ${advices[0].businessName} (${advices[0].currentSize})`
+      ? `[ops] Hardware escalation candidate, ${advices[0].businessName} (${advices[0].currentSize})`
       : `[ops] ${advices.length} hardware escalation candidates`;
 
   const blocks = advices.map((a) => {
     const rec = a.recommendedSize
       ? `Recommended: escalate ${a.currentSize} → ${a.recommendedSize} from the admin panel.`
-      : `Already on the largest box (${a.currentSize}) — consider a plan/entitlement conversation instead.`;
+      : `Already on the largest box (${a.currentSize}), consider a plan/entitlement conversation instead.`;
     return [
       `${a.businessName} (${a.tier}/${a.currentSize})`,
       ...a.signals.map((s) => `  - ${describeSignal(s)}`),

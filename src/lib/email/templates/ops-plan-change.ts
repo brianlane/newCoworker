@@ -2,7 +2,7 @@
  * Operator email: a hardware escalation (tier change) has STARTED.
  *
  * Tier changes are tenant-initiated (Stripe change-plan checkout) and run
- * minutes of unattended migration — snapshot, backup, new-VM purchase,
+ * minutes of unattended migration, snapshot, backup, new-VM purchase,
  * restore, old-box teardown. The operator previously only heard about the
  * END of the process (the VPS deletion-request email); this one fires at
  * initiation so an in-flight migration is visible the moment money has been
@@ -42,7 +42,7 @@ export function buildOpsPlanChangeEmail(input: OpsPlanChangeInput): OpsPlanChang
       ? "no VM recorded"
       : `srv${input.oldVirtualMachineId}.hstgr.cloud`;
 
-  const subject = `[ops] Hardware escalation started — ${who}: ${input.fromTier}/${input.fromHardware} → ${input.toTier}/${input.toHardware}`;
+  const subject = `[ops] Hardware escalation started, ${who}: ${input.fromTier}/${input.fromHardware} → ${input.toTier}/${input.toHardware}`;
   const textLines = [
     `${who} paid for a plan change and the automated hardware migration just started.`,
     [
@@ -57,7 +57,7 @@ export function buildOpsPlanChangeEmail(input: OpsPlanChangeInput): OpsPlanChang
   const text = textLines.join("\n\n");
 
   const html = buildBrandedEmailHtml({
-    // Internal ops inbox — omit the owner-facing platform signature block.
+    // Internal ops inbox, omit the owner-facing platform signature block.
     platformSignature: false,
     siteUrl: input.siteUrl,
     documentTitle: subject,

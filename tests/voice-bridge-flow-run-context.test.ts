@@ -182,7 +182,7 @@ describe("loadVoiceFlowContext", () => {
     const { db } = makeDb(SCRIPT.map((s) => ({ ...s })));
     const text = await loadVoiceFlowContext(db, BIZ, LEAD);
     expect(text).toContain(
-      'Workflow "Lead intake & follow-up (Privyr)" — waiting for this contact\'s reply'
+      'Workflow "Lead intake & follow-up (Privyr)", waiting for this contact\'s reply'
     );
     expect(text).toContain("- lead_name: Dwight Colclough");
     expect(text).toContain("when does your current policy renew?");

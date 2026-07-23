@@ -90,6 +90,15 @@ export function systemInstructionForBusiness(
   const groundedActionsLine =
     "You can only take real actions through your tools — saying you did something does not do it. Never tell the caller you booked, scheduled, sent, canceled, or updated anything unless the matching tool call succeeded on this call; an appointment exists ONLY if `calendar_book_appointment` returned success (a `booking_link_created` result is NOT a booking — the caller must finish it via the link you text them). Only book a time AFTER the caller has explicitly said yes to that ONE specific time — never book while they are still deciding, and never book two slots for the same caller. When a booking succeeds, confirm the day and time by reading the result's `startLocal` back VERBATIM — never work out the day yourself, and never say today or tomorrow unless the current date line proves it. A booking you made stays real even if you misspoke its day — never abandon it or book a replacement; fix mistakes with `calendar_reschedule_appointment`. If a booking fails with `attendee_already_booked`, the caller ALREADY has an upcoming appointment: tell them its `existingStartLocal` time and follow the result's message (keep it, move it, or cancel it) — only retry with `allowAdditional` true after they explicitly confirm they want a separate additional appointment. If a booking fails (but NOT on a `timeout` or `booking_in_progress` result — follow that result's own recovery instructions instead), tell the caller that time is no longer available (never blame a technical error), re-check with `calendar_find_slots` before offering another option, and if a second booking also fails, stop offering times — call `notify_team` with their preferred day and time and say a team member will confirm. A follow-up email is a plain email, not a calendar invite — never call it one. A calendar invite goes out ONLY when the successful booking result shows an `inviteEmail`; when it is null the caller receives NO invite — never promise one, and offer a text confirmation instead. Never invent or guess email addresses, phone numbers, times, or confirmation details — ask instead. If you can't complete something, say so plainly and offer to have the team follow up — never pretend it worked.";
 
+  // Punctuation: lockstep copy of NO_EM_DASH_PROMPT_LINE
+  // (supabase/functions/_shared/sms_prompt_lines.ts, README "Writing rule:
+  // NO EM DASHES"), keep in sync. Voice replies are spoken, but this persona
+  // also composes send_follow_up_sms / send_follow_up_email bodies the
+  // customer READS, so the rule rides every voice prompt too.
+  const noEmDashLine =
+    "Punctuation: never use an em dash in anything you write. Use a comma, " +
+    "a period, or a colon instead.";
+
   // Owner/team callers are NOT customers (mirrors the SMS worker's gate): drop
   // the lead-intake/qualification script and talk to them as internal staff.
   const isStaff = callerIdentity != null && callerIdentity.kind !== "customer";
@@ -108,6 +117,7 @@ export function systemInstructionForBusiness(
       "Act as their internal assistant: answer questions about the business from your briefing below, help look things up, take a message for someone on the team, or help them schedule. Keep replies concise, natural, and spoken (not bulleted).",
       identityLine,
       groundedActionsLine,
+      noEmDashLine,
       currentDateTimeLine(new Date(), businessTimezone)
     );
   } else {
@@ -122,6 +132,7 @@ export function systemInstructionForBusiness(
       // conversationQualityLine — keep in sync): reuse what is known, vary
       // the phrasing, respond to what the caller actually said.
       "Never ask for information you already have from this call or the caller's profile (their name, number, email, or details they've shared) — reuse it, including when booking an appointment. Address the caller by their FIRST name only, and use it sparingly — most replies need no name at all; never say their full name in normal conversation. Vary your acknowledgements instead of repeating the same phrase, and make each reply respond to what the caller just said rather than restating yourself.",
+      noEmDashLine,
       currentDateTimeLine(new Date(), businessTimezone)
     );
   }

@@ -29,7 +29,7 @@ export const DEFAULT_SPEND_VELOCITY_CONFIG: SpendVelocityConfig = {
 
 export const MIN_WINDOW_MINUTES = 10;
 export const MAX_WINDOW_MINUTES = 24 * 60;
-export const MIN_THRESHOLD_MICROS = 100_000; // $0.10 — below this it's all noise
+export const MIN_THRESHOLD_MICROS = 100_000; // $0.10, below this it's all noise
 
 /**
  * Parse a stored settings jsonb defensively. Missing row / legacy shape ⇒
@@ -194,7 +194,7 @@ export function formatSpendVelocityEmail(args: {
   const subject = `AI spend velocity alert: ${name} burned ${microsToUsd(args.breach.deltaMicros)} in ${args.config.windowMinutes} min`;
   const text = [
     `Business "${name}" (${args.breach.businessId}) spent ${microsToUsd(args.breach.deltaMicros)} of shared Gemini budget`,
-    `within the last ${args.config.windowMinutes} minutes — over the configured ${microsToUsd(args.config.thresholdMicros)} alert threshold.`,
+    `within the last ${args.config.windowMinutes} minutes, over the configured ${microsToUsd(args.config.thresholdMicros)} alert threshold.`,
     "",
     `Period spend is now ${microsToUsd(args.breach.baselineMicros + args.breach.deltaMicros)} (was ${microsToUsd(args.breach.baselineMicros)} at the start of the window).`,
     "",

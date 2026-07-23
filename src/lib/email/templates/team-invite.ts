@@ -3,7 +3,7 @@
  *
  * Sent by POST /api/dashboard/team when the invitee ALREADY has a NewCoworker
  * login (Supabase's auth.admin.inviteUserByEmail only covers brand-new
- * users — it errors on existing ones, and those people just need to know
+ * users, it errors on existing ones, and those people just need to know
  * access was granted).
  */
 
@@ -44,7 +44,7 @@ export function buildTeamInviteEmail(input: TeamInviteEmailInput): {
     fmtEmail(c.signIn, { loginUrl }),
     copy.questionsReply
   ];
-  // Signoff rides only the plain-text body — the HTML shell renders the full
+  // Signoff rides only the plain-text body, the HTML shell renders the full
   // platform signature block, so repeating it there would double the contact info.
   const text = [...textLines, copy.ncSignoff].join("\n\n");
   const html = buildBrandedEmailHtml({

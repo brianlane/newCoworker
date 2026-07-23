@@ -51,6 +51,7 @@ import { loadRecentSmsTranscript } from "../_shared/sms_transcript.ts";
 import { escalateToHuman } from "../_shared/needs_human.ts";
 import { sendCustomerReplyAlert } from "../_shared/customer_reply_alert.ts";
 import {
+  NO_EM_DASH_PROMPT_LINE,
   SMS_CONVERSATION_QUALITY_LINE,
   SMS_GROUNDED_ACTIONS_LINE,
   SMS_IDENTITY_LINE,
@@ -273,7 +274,7 @@ async function agentInvocableFlowsBlock(
     return [
       "Automations you may start: when THIS texter's request clearly matches one of " +
         "the automations below, call the start_aiflow_for_contact tool with the EXACT " +
-        "name listed and the current texter phone — it enrolls them in the owner's " +
+        "name listed and the current texter phone, it enrolls them in the owner's " +
         "follow-up sequence so nobody has to remember to chase them. Rules: only these " +
         "automations exist for you (never invent names); never mention automation or " +
         "tool names to the texter; if the tool refuses (e.g. they are already " +
@@ -1295,7 +1296,7 @@ serve(async (req: Request) => {
       const role =
         job.staff_kind === "owner" ? "the business owner" : "a member of the team";
       const staffLines = [
-        `You are texting with ${staffName ? `${staffName}, ` : ""}${role} — this person is NOT a customer or a lead.`,
+        `You are texting with ${staffName ? `${staffName}, ` : ""}${role}. This person is NOT a customer or a lead.`,
         "Talk to them like a trusted colleague. Do NOT run the customer intake script: never ask them for their name, contact info, address, timeline, or budget, and never try to qualify them. If you know their name, use it.",
         "Help them as their internal assistant: answer questions about the business from what you know, help look something up, take a message for someone on the team, or help them schedule. Keep replies concise and natural for text.",
         // Staff are not customers — do not create or edit a customer profile
@@ -1310,6 +1311,7 @@ serve(async (req: Request) => {
         // "Let me know when clients text back" flips the toggle instead of
         // becoming an empty promise (KYP, Jul 20 2026).
         SMS_STAFF_NOTIFICATION_SETTINGS_LINE,
+        NO_EM_DASH_PROMPT_LINE,
         dateLine
       ];
       customerPreamble = staffLines.join("\n\n");
@@ -1466,7 +1468,7 @@ serve(async (req: Request) => {
         `(customer_lookup_by_phone, customer_set_display_name, ` +
         `customer_append_pinned_note), pass this exact value as the phone ` +
         `argument unless the texter explicitly refers to a different number.`;
-      const dateAndPhoneLines = [identityLine, groundedActionsLine, conversationQualityLine, SMS_TIMEZONE_LINE, dateLine, phoneLine, languageLine]
+      const dateAndPhoneLines = [identityLine, groundedActionsLine, conversationQualityLine, SMS_TIMEZONE_LINE, NO_EM_DASH_PROMPT_LINE, dateLine, phoneLine, languageLine]
         .filter(Boolean)
         .join("\n\n");
       customerPreamble = [dateAndPhoneLines, memoryPreamble, bookingStatus, agentFlowsBlock, contactTimeline, flowContext]
@@ -1498,7 +1500,7 @@ serve(async (req: Request) => {
           `string itself to the texter.`
         : `\n\nThe texter attached a photo to this message, but it could not be ` +
           `processed. If they ask you to edit it or do anything with it, do NOT call ` +
-          `generate_image — apologize and ask them to send the photo again.`;
+          `generate_image, apologize and ask them to send the photo again.`;
     }
 
     let convId: string | undefined;
@@ -1560,7 +1562,7 @@ serve(async (req: Request) => {
               level: "error",
               event: "sms_owner_operator_cache_failed",
               message:
-                "Owner-operator turn completed (tools may have committed) but the reply cache write failed — job dead-lettered instead of retrying, so committed actions are never re-run. The owner got no reply this turn.",
+                "Owner-operator turn completed (tools may have committed) but the reply cache write failed, job dead-lettered instead of retrying, so committed actions are never re-run. The owner got no reply this turn.",
               payload: { job_id: job.id }
             });
             processed += 1;
@@ -1772,7 +1774,7 @@ serve(async (req: Request) => {
             level: "warn",
             event: "sms_reply_reasoning_missing",
             message:
-              "AI reply arrived without the reasoning trailer — the model likely " +
+              "AI reply arrived without the reasoning trailer, the model likely " +
               "ignored the system preamble this turn (context-blind reply risk)",
             payload: { job_id: job.id, reply_preview: reply.slice(0, 200) }
           });
@@ -1974,7 +1976,7 @@ serve(async (req: Request) => {
           businessId: job.business_id,
           contactE164: fromE164,
           reason:
-            "Their text never got a reply — the AI reply failed repeatedly and gave up. Reply to them yourself.",
+            "Their text never got a reply, the AI reply failed repeatedly and gave up. Reply to them yourself.",
           intent: "no_reply_sent",
           inboundPreview: userText.slice(0, 300),
           notifyUrl: `${supabaseUrl}/functions/v1/notifications`,
@@ -2313,7 +2315,7 @@ serve(async (req: Request) => {
           businessId: job.business_id,
           contactE164: fromE164,
           reason:
-            "Their text never got a reply — the answer was written but could not be delivered after repeated attempts. Reply to them yourself.",
+            "Their text never got a reply, the answer was written but could not be delivered after repeated attempts. Reply to them yourself.",
           intent: "no_reply_sent",
           inboundPreview: userText.slice(0, 300),
           notifyUrl: `${supabaseUrl}/functions/v1/notifications`,

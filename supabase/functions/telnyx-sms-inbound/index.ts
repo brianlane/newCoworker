@@ -806,7 +806,7 @@ async function consumeRacedOfferReply(
     const ackFrom =
       (biz?.telnyx_sms_from_e164 && biz.telnyx_sms_from_e164.trim()) || ackTo || smsFromE164;
     if (telnyxApiKey && ackProfile && from) {
-      const text = "Thanks — looks like this lead's already been handled.";
+      const text = "Thanks, looks like this lead's already been handled.";
       const send = await sendOperationalSms(supabase, businessId, {
         apiKey: telnyxApiKey,
         messagingProfileId: ackProfile,
@@ -995,7 +995,7 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     // now also consumes a repeat bare "1", which the stale-offer ack used to
     // answer). Idempotent — nothing is re-opened.
     await ack(
-      "You've already got this lead — it's yours. Reply 86 if you need to release it.",
+      "You've already got this lead, it's yours. Reply 86 if you need to release it.",
       "late-claim-mine"
     );
     await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
@@ -1090,7 +1090,7 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     // Lost the race — a concurrent "86" or the worker mutated the row first.
     // Consume the message (it's still a teammate reply, never a customer text)
     // but don't claim a second time.
-    await ack("Thanks — looks like this lead's already been handled.", "late-claim-race");
+    await ack("Thanks, looks like this lead's already been handled.", "late-claim-race");
     await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
       business_id: businessId,
       run_id: match.id,
@@ -1393,7 +1393,7 @@ async function tryUnclaim(args: UnclaimArgs): Promise<Response | null> {
     });
   }
   if (!reopened || (reopened as unknown[]).length === 0) {
-    await ack("Thanks — looks like this lead was already updated.", "unclaim-race");
+    await ack("Thanks, looks like this lead was already updated.", "unclaim-race");
     await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
       business_id: businessId,
       run_id: match.id,
@@ -1406,7 +1406,7 @@ async function tryUnclaim(args: UnclaimArgs): Promise<Response | null> {
     });
   }
 
-  await ack("Got it — you've released this lead. It's back with the owner.", "unclaim-ack");
+  await ack("Got it, you've released this lead. It's back with the owner.", "unclaim-ack");
   await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
     business_id: businessId,
     run_id: match.id,
@@ -2172,14 +2172,14 @@ serve(async (req: Request) => {
               // regardless of whether the guarded update raced the dashboard.
               const applied = (updatedRows ?? []).length > 0;
               const ack = !applied
-                ? "That request was already handled — no change made."
+                ? "That request was already handled, no change made."
                 : decision === "approve"
-                  ? "Approved — sending it now."
+                  ? "Approved, sending it now."
                   : decision === "bypass_quiet_hours"
-                    ? "Approved — sending now, and I'll skip quiet hours for the rest of this workflow."
+                    ? "Approved, sending now, and I'll skip quiet hours for the rest of this workflow."
                     : decision === "skip"
-                      ? "Skipped — I won't send that, but the rest of the workflow continues."
-                      : "Canceled — I stopped the whole workflow.";
+                      ? "Skipped, I won't send that, but the rest of the workflow continues."
+                      : "Canceled, I stopped the whole workflow.";
               let ackSent: string | null = null;
               if (canAck) {
                 const send = await sendOperationalSms(supabase, businessId, {
@@ -2584,7 +2584,7 @@ serve(async (req: Request) => {
           messagingProfileId: relayProfile,
           fromE164: relayFrom,
           toE164: from,
-          text: `Couldn't send your reply to ${customerLabel} — monthly SMS limit reached.`,
+          text: `Couldn't send your reply to ${customerLabel}, monthly SMS limit reached.`,
           idempotencyKey: `${eventId}:owner-relay-cap`
         });
         await persistOfferReplyJob({
@@ -2595,7 +2595,7 @@ serve(async (req: Request) => {
           from,
           staffKind: "owner",
           staffName: teamMember?.name ?? null,
-          ackSent: `Couldn't send your reply to ${customerLabel} — monthly SMS limit reached.`
+          ackSent: `Couldn't send your reply to ${customerLabel}, monthly SMS limit reached.`
         });
         await telemetryRecord(supabase, "sms_owner_reply_relay", {
           business_id: businessId,
@@ -2893,7 +2893,7 @@ serve(async (req: Request) => {
         //   3. if still not forwardable, the worker dead-letters the job with
         //      `safe_mode_missing_telnyx_env` instead of pretending success.
         console.warn(
-          "telnyx-sms-inbound: safe mode forward deferred to worker — missing send config"
+          "telnyx-sms-inbound: safe mode forward deferred to worker, missing send config"
         );
         await telemetryRecord(supabase, "sms_inbound_safe_mode_forward_deferred", {
           business_id: businessId,

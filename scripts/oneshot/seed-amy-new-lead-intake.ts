@@ -5,12 +5,12 @@
  * Why: when Amy texts lead info to her own coworker line ("I got a new lead,
  * please deal with it. <name> <number> <details>"), the owner-operator SMS
  * surface (/api/internal/owner-sms-turn) can only offer `run_aiflow` on flows
- * she actually has — and every enabled flow is lead-source-specific (Clever /
+ * she actually has, and every enabled flow is lead-source-specific (Clever /
  * HomeLight / Realtor.com / ReferralExchange). This manual-channel flow is the
  * generic answer the operator can offer by name and run with her raw text as
  * the trigger window text ({{trigger.windowText}}).
  *
- * Shape (per Amy's direction: mirror the ReferralExchange flow — the AI
+ * Shape (per Amy's direction: mirror the ReferralExchange flow, the AI
  * worker texts the lead AND routes to the team):
  *
  *   parse (extract_text over the owner's message)
@@ -23,7 +23,7 @@
  *        to Dave Lane; $1M+ kept for Amy via ownerDirectWhen price_band)
  *     -> notify_owner outcome (plus an honest no-phone variant)
  *
- * Deliberately out of v1: the bad-phone report loop (bp_wait/classify) — the
+ * Deliberately out of v1: the bad-phone report loop (bp_wait/classify), the
  * lead came from Amy herself.
  *
  * Validated through the SAME parseAiFlowDefinition the dashboard + CRUD API
@@ -38,8 +38,8 @@
  * Business id: AIFLOW_SEED_BUSINESS_ID or --business-id <uuid> (defaults to Amy's).
  * Optional overrides:
  *   AIFLOW_NEW_LEAD_FLOW_NAME       (default "New Lead Intake")
- *   AIFLOW_NEW_LEAD_AGENT_NAME     (default "Dave Lane" — seller/both routes)
- *   AIFLOW_NEW_LEAD_MAILBOX_ID     (default Amy's connected mailbox — email
+ *   AIFLOW_NEW_LEAD_AGENT_NAME     (default "Dave Lane", seller/both routes)
+ *   AIFLOW_NEW_LEAD_MAILBOX_ID     (default Amy's connected mailbox, email
  *                                   fallback + no-phone intro email sender)
  *
  * Exit codes: 0 seeded/no-op/dry-run · 1 Supabase error · 2 bad env/arg or invalid definition.
@@ -78,7 +78,7 @@ export const DEFAULT_FLOW_NAME = "New Lead Intake";
 const DEFAULT_AGENT_NAME = "Dave Lane";
 /**
  * Amy's connected mailbox (the same connection her ReferralExchange flow
- * sends from) — used for the quiet-hours email fallback and the no-phone
+ * sends from), used for the quiet-hours email fallback and the no-phone
  * intro email.
  */
 const DEFAULT_MAILBOX_CONNECTION_ID = "9ddd5344-14f2-46df-a89d-dddc2d50e944";
@@ -87,7 +87,7 @@ const PHOENIX_TZ = "America/Phoenix";
 
 /**
  * Amy's ReferralExchange intro copy, verbatim except the source-site
- * references ("Your recent inquiry on RealEstateAgents.com") — an owner-handed
+ * references ("Your recent inquiry on RealEstateAgents.com"), an owner-handed
  * lead never made a portal inquiry, so those lines are neutralized.
  */
 const BUYER_INTRO_BODY =
@@ -165,7 +165,7 @@ const PASS_REASON_LINE =
 
 const OWNER_DIRECT_TEMPLATE =
   "****************\n" +
-  "HIGH-VALUE {{vars.lead_type}} lead ($1M+) kept for you \u2014 not offered to the team.\n" +
+  "HIGH-VALUE {{vars.lead_type}} lead ($1M+) kept for you, not offered to the team.\n" +
   `${LEAD_SUMMARY_LINE}\n${LEAD_SOURCE_LINE}\n` +
   "****************";
 
@@ -250,7 +250,7 @@ function routeStep(
 }
 
 /**
- * The full definition. Pure — exported for the unit test, which pins it
+ * The full definition. Pure, exported for the unit test, which pins it
  * through the real parseAiFlowDefinition.
  */
 export function buildDefinition(opts?: {
@@ -262,7 +262,7 @@ export function buildDefinition(opts?: {
   return {
     version: 1,
     // Manual-only: started from the Run-now button or the coworker's
-    // run_aiflow tool — the owner's message text becomes {{trigger.windowText}}.
+    // run_aiflow tool, the owner's message text becomes {{trigger.windowText}}.
     trigger: { channel: "manual" },
     steps: [
       {
@@ -279,7 +279,7 @@ export function buildDefinition(opts?: {
             name: "lead_phone",
             description:
               "The NEW lead's phone number in E.164 (+1...). This is the number included in the " +
-              "message for the lead — never the business's own number and never 602-695-1142. " +
+              "message for the lead, never the business's own number and never 602-695-1142. " +
               "If no phone number is given, answer exactly: none"
           },
           {
@@ -331,7 +331,7 @@ export function buildDefinition(opts?: {
           }
         ]
       },
-      // File the lead as a contact BEFORE any outreach — gated on a parsed
+      // File the lead as a contact BEFORE any outreach, gated on a parsed
       // phone (upsert_customer fails hard on an unusable phoneVar).
       {
         id: "save_contact",
@@ -372,7 +372,7 @@ export function buildDefinition(opts?: {
           "no one was offered the lead.\n" +
           "Lead: {{vars.lead_name}} (email: {{vars.lead_email}}) in {{vars.location}}, " +
           "around {{vars.price}}. Looking for: {{vars.lead_details}}.\n" +
-          "If an email was on file, an intro email was sent instead \u2014 the outcome line " +
+          "If an email was on file, an intro email was sent instead; the outcome line " +
           "shows exactly what went out.\n" +
           "Outcome: {{vars.actions_taken}}."
       }

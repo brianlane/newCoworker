@@ -3,7 +3,7 @@
  * teardown, and there is no automated retry behind it.
  *
  * Terminal teardown stamps the business `wiped`, which removes it from the
- * grace-sweep's queries — so a swallowed release failure would otherwise be
+ * grace-sweep's queries, so a swallowed release failure would otherwise be
  * invisible while Telnyx keeps billing ~$1.10/mo for the number forever
  * (Bugbot on PR #363: "Wipe stamp blocks DID retry"). This email turns that
  * silent leak into a one-click manual action: release the number in the
@@ -32,9 +32,9 @@ export type OpsDidReleaseFailedEmail = {
 export function buildOpsDidReleaseFailedEmail(
   input: OpsDidReleaseFailedInput
 ): OpsDidReleaseFailedEmail {
-  const subject = `[ops] ACTION REQUIRED: release DID ${input.e164} manually — automated release failed`;
+  const subject = `[ops] ACTION REQUIRED: release DID ${input.e164} manually, automated release failed`;
   const textLines = [
-    `A terminal account teardown could not release its Telnyx phone number. The business is being wiped, so NOTHING will retry this automatically — until someone releases the number in the Telnyx portal it keeps renting (~$1.10/mo).`,
+    `A terminal account teardown could not release its Telnyx phone number. The business is being wiped, so NOTHING will retry this automatically, until someone releases the number in the Telnyx portal it keeps renting (~$1.10/mo).`,
     [
       `Number: ${input.e164}`,
       `Business id: ${input.businessId}`,
@@ -45,11 +45,11 @@ export function buildOpsDidReleaseFailedEmail(
   const text = textLines.join("\n\n");
 
   const html = buildBrandedEmailHtml({
-    // Internal ops inbox — omit the owner-facing platform signature block.
+    // Internal ops inbox, omit the owner-facing platform signature block.
     platformSignature: false,
     siteUrl: input.siteUrl,
     documentTitle: subject,
-    heading: "DID release failed — manual action required",
+    heading: "DID release failed, manual action required",
     bodyBlocks: textLines.map((t) => ({ kind: "text" as const, text: t })),
     cta: {
       label: "Open Telnyx portal",

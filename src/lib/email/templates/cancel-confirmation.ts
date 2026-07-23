@@ -51,7 +51,7 @@ function envelope(
   cta: { label: string; href: string } | undefined
 ): CancelConfirmationEmail {
   const normalizedSite = siteUrl.replace(/\/$/, "");
-  // Signoff rides only the plain-text body — the HTML shell renders the full
+  // Signoff rides only the plain-text body, the HTML shell renders the full
   // platform signature block, so repeating it there would double the contact info.
   const text = [...textLines, signoff].join("\n\n");
   const html = buildBrandedEmailHtml({

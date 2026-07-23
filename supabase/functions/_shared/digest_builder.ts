@@ -186,7 +186,7 @@ function extractLeadSummary(vars: Record<string, unknown>): string | null {
  */
 export function buildAiFlowRecapLine(run: DigestAiFlowRun): string {
   const vars = (run.context.vars ?? {}) as Record<string, unknown>;
-  const segments: string[] = [`${run.flowName} — ${run.status}`];
+  const segments: string[] = [`${run.flowName}, ${run.status}`];
 
   const routing = routingSummary(run.context);
   if (routing) segments.push(routing);
@@ -361,7 +361,7 @@ export function buildDigestEmailModel(opts: {
   if (activity.calls.length > 0) {
     const lines = activity.calls.slice(0, 10).map((c) => {
       const who = c.caller_e164 ?? "unknown caller";
-      return `${who} — ${c.status}`;
+      return `${who}, ${c.status}`;
     });
     if (activity.calls.length > 10) {
       lines.push(`…and ${activity.calls.length - 10} more`);
@@ -403,8 +403,8 @@ export function buildDigestEmailModel(opts: {
   ];
   sections.push({ heading: "Status", lines: statusLines });
 
-  const subject = `${title} — ${businessName} (${total} event${total === 1 ? "" : "s"})`;
-  const intro = `Hi — here's what your AI Coworker handled over ${span}.`;
+  const subject = `${title}, ${businessName} (${total} event${total === 1 ? "" : "s"})`;
+  const intro = `Hi, here's what your AI Coworker handled over ${span}.`;
   const parts = [
     `${total} events`,
     activity.calls.length > 0 ? `${activity.calls.length} calls` : null,
