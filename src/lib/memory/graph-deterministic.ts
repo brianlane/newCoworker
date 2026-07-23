@@ -237,7 +237,11 @@ export function leadExtraction(lead: {
   phoneE164?: string | null;
   email?: string | null;
 }): GraphExtraction {
-  const name = leadName(lead.fields);
+  // A nameless lead with a phone/email still creates an identifier-named
+  // node (same convention as bookings) — later contact/conversation ingests
+  // resolve onto it via phone/email match and enrich the name. Only a lead
+  // with NO identity at all builds nothing.
+  const name = leadName(lead.fields) || clean(lead.phoneE164) || clean(lead.email);
   if (!name) return { entities: [], facts: [] };
   const facts: GraphExtraction["facts"] = [
     { subjectRef: "e1", predicate: "lead_source", objectValue: clean(lead.source), sourceIndex: 0 }
