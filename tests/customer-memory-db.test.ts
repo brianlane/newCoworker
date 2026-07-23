@@ -844,7 +844,13 @@ describe("updateCustomerOwnerFields", () => {
   });
 
   it("feeds the graph only on identity-bearing edits (name/email/pinned; never tags/type)", async () => {
-    const identity = makeClient({ fromTerminator: { data: null, error: null } });
+    // Identity edits feed the graph the row's FULL post-update identity
+    // (read back after the write): a name-only save still carries the
+    // stored email and an email-only save still carries the stored name
+    // (Bugbot #874, both directions).
+    const identity = makeClient({
+      fromTerminator: { data: { display_name: "Joe Plumber", email: "stored@x.co" }, error: null }
+    });
     await updateCustomerOwnerFields(
       BIZ,
       CUSTOMER,
@@ -854,7 +860,7 @@ describe("updateCustomerOwnerFields", () => {
     expect(ingestContact).toHaveBeenCalledWith(BIZ, {
       displayName: "Joe Plumber",
       e164: CUSTOMER,
-      email: null
+      email: "stored@x.co"
     });
     expect(ingestPinnedNote).toHaveBeenCalledWith(BIZ, {
       displayName: "Joe Plumber",
@@ -865,10 +871,9 @@ describe("updateCustomerOwnerFields", () => {
     vi.mocked(ingestContact).mockClear();
     vi.mocked(ingestPinnedNote).mockClear();
 
-    // Email-only edit: the graph still needs the node's canonical name, so
-    // the hook reads it back off the row (Bugbot #874).
+    // Email-only edit: the stored name rides along.
     const emailOnly = makeClient({
-      fromTerminator: { data: { display_name: "Joe Existing" }, error: null }
+      fromTerminator: { data: { display_name: "Joe Existing", email: "joe@x.com" }, error: null }
     });
     await updateCustomerOwnerFields(BIZ, CUSTOMER, { email: "joe@x.com" }, emailOnly.client);
     expect(ingestContact).toHaveBeenCalledWith(BIZ, {
@@ -879,14 +884,14 @@ describe("updateCustomerOwnerFields", () => {
 
     vi.mocked(ingestContact).mockClear();
 
-    // Email-only edit on a NAMELESS contact: the read returns nothing and
-    // the ingest degrades to nameless (builder no-ops downstream).
+    // Identity edit on a NAMELESS contact (read returns nothing): the
+    // ingest degrades to nameless and the builder no-ops downstream.
     const emailNameless = makeClient({ fromTerminator: { data: null, error: null } });
     await updateCustomerOwnerFields(BIZ, CUSTOMER, { email: "x@y.co" }, emailNameless.client);
     expect(ingestContact).toHaveBeenCalledWith(BIZ, {
       displayName: null,
       e164: CUSTOMER,
-      email: "x@y.co"
+      email: null
     });
 
     vi.mocked(ingestContact).mockClear();
