@@ -120,6 +120,35 @@ describe("buildFleetActivityFeed", () => {
     expect(items[1]).toMatchObject({ badge: "Email in", variant: "pending" });
   });
 
+  it("treats a stamped flow_id as flow origin regardless of source", () => {
+    const items = buildFleetActivityFeed({
+      ...emptyInput(),
+      smsOutbound: [
+        {
+          business_id: "b1",
+          to_e164: "+16025550122",
+          source: "agent_offer",
+          flow_id: "flow-1",
+          created_at: "2026-07-23T10:00:00Z"
+        }
+      ],
+      emails: [
+        {
+          business_id: "b1",
+          direction: "outbound",
+          to_email: "lead@example.com",
+          from_email: null,
+          subject: null,
+          source: "tenant_mailbox_outbound",
+          flow_id: "flow-1",
+          created_at: "2026-07-23T09:00:00Z"
+        }
+      ]
+    });
+    expect(items[0]).toMatchObject({ badge: "AiFlow text", variant: "success" });
+    expect(items[1]).toMatchObject({ badge: "AiFlow email", variant: "success" });
+  });
+
   it("tags flow-driven outbound texts with the AiFlow badge", () => {
     const items = buildFleetActivityFeed({
       ...emptyInput(),

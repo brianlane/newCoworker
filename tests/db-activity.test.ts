@@ -133,6 +133,24 @@ describe("buildActivityFeed", () => {
     expect(items[1]!.origin).toBeUndefined();
   });
 
+  it("treats a stamped flow_id as flow origin regardless of source", () => {
+    // Group/agent-offer texts carry a transport source but a flow_id — the
+    // flow_id is the authoritative origin signal.
+    const items = buildActivityFeed(
+      emptyInput({
+        smsOutbound: [
+          {
+            to_e164: "+15550003333",
+            source: "agent_offer",
+            flow_id: "flow-1",
+            created_at: "2026-01-02T10:00:00Z"
+          }
+        ]
+      })
+    );
+    expect(items[0]!.origin).toBe("aiflow");
+  });
+
   it("tags flow-sent emails with the aiflow origin (outbound only)", () => {
     const items = buildActivityFeed(
       emptyInput({
@@ -153,6 +171,17 @@ describe("buildActivityFeed", () => {
             source: "owner_mailbox",
             created_at: "2026-01-02T09:00:00Z"
           },
+          // A flow sending through the tenant mailbox: source reflects the
+          // transport but flow_id marks the origin.
+          {
+            direction: "outbound",
+            to_email: "lead@example.com",
+            from_email: null,
+            subject: null,
+            source: "tenant_mailbox_outbound",
+            flow_id: "flow-1",
+            created_at: "2026-01-02T08:30:00Z"
+          },
           {
             direction: "inbound",
             to_email: null,
@@ -164,7 +193,7 @@ describe("buildActivityFeed", () => {
         ]
       })
     );
-    expect(items.map((i) => i.origin)).toEqual(["aiflow", undefined, undefined]);
+    expect(items.map((i) => i.origin)).toEqual(["aiflow", undefined, "aiflow", undefined]);
   });
 
   it("maps outbound SMS and skips rows without to_e164", () => {
