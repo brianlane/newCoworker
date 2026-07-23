@@ -84,10 +84,19 @@ function hasFunctionGrant(sql: string, name: string): boolean {
   ).test(sql);
 }
 
-function hasSequenceGrant(sql: string): boolean {
-  return /\bgrant\b[^;]*\busage\b[^;]*\bon\s+(?:all\s+sequences|sequence)\b[^;]*\bservice_role\b/is.test(
-    sql
+/**
+ * A serial column mints a sequence named `<table>_<column>_seq`; require a
+ * usage grant on THAT table's sequence (or a schema-wide sequences grant),
+ * not just any sequence grant elsewhere in the file.
+ */
+function hasSequenceGrant(sql: string, table: string): boolean {
+  const perTable = new RegExp(
+    String.raw`\bgrant\b[^;]*\busage\b[^;]*\bon\s+sequence\s+(?:"?public"?\.)?"?${table}_[a-z0-9_]*seq"?\b[^;]*\bto\b[^;]*\bservice_role\b`,
+    "is"
   );
+  const allInSchema =
+    /\bgrant\b[^;]*\busage\b[^;]*\bon\s+all\s+sequences\s+in\s+schema\s+"?public"?[^;]*\bto\b[^;]*\bservice_role\b/is;
+  return perTable.test(sql) || allInSchema.test(sql);
 }
 
 /** Trigger and event-trigger functions run as owner; PostgREST never calls them. */
@@ -124,9 +133,9 @@ describe("migration Data API grants (post default-revoke convention)", () => {
         // A serial column mints a sequence that also needs a grant before
         // service_role can INSERT through PostgREST. Identity columns do not.
         const tail = sql.slice(m.index ?? 0, sql.indexOf(";", m.index ?? 0) + 1);
-        if (/\b(?:big|small)?serial\b/i.test(tail) && !hasSequenceGrant(sql)) {
+        if (/\b(?:big|small)?serial\b/i.test(tail) && !hasSequenceGrant(sql, name)) {
           violations.push(
-            `${file}: table "${name}" uses a serial column but the file grants no sequence usage to service_role (grant usage, select on sequence ...; or use an identity column)`
+            `${file}: table "${name}" uses a serial column but its sequence has no service_role usage grant (grant usage, select on sequence public.${name}_<column>_seq to service_role; or use an identity column)`
           );
         }
       }
