@@ -602,13 +602,15 @@ describe("syncVaultToVps — success path", () => {
     expect(tar).toContain("602-695-1142");
   });
 
-  it("skips the projection for off-mode tenants; ships a WIPE for a graph tenant with an empty graph", async () => {
+  it("ships a WIPE for off-mode tenants (an admin turn-off removes shipped projections) and for an empty graph", async () => {
+    // Off-mode: no graph fetch, but the wipe lines ride along so a flip to
+    // off actually clears previously shipped files (Bugbot #860).
     const offDeps = freshDeps();
     await syncVaultToVps(BIZ, offDeps);
     expect(offDeps.fetchGraph).not.toHaveBeenCalled();
-    expect((offDeps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0].command).not.toContain(
-      "graph_projection"
-    );
+    const offCmd = (offDeps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0].command;
+    expect(offCmd).toContain('echo "graph_projection=wiped"');
+    expect(offCmd).not.toContain("tar -xf");
 
     const emptyDeps = freshDeps({
       fetchConfig: vi.fn(async () => ({ ...FULL_CONFIG, memory_graph_mode: "active" as const }))
