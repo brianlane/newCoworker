@@ -24,11 +24,15 @@ vi.mock("@/lib/website-ingest", () => ({
 }));
 vi.mock("@/lib/auth", () => ({ getAuthUser: vi.fn() }));
 vi.mock("@/lib/logger", () => ({ logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() } }));
+vi.mock("@/lib/memory/schedule-longform-extract", () => ({
+  scheduleLongFormGraphExtract: vi.fn()
+}));
 vi.mock("@/lib/vps/schedule-vault-sync", () => ({
   scheduleVaultSync: vi.fn()
 }));
 
 import { POST } from "@/app/api/onboard/website-ingest/route";
+import { scheduleLongFormGraphExtract } from "@/lib/memory/schedule-longform-extract";
 import { getOnboardingDraft } from "@/lib/db/onboarding-drafts";
 import { getBusiness, updateBusinessWebsiteUrl } from "@/lib/db/businesses";
 import { setBusinessWebsiteCrawlReport, setBusinessWebsiteMd } from "@/lib/db/configs";
@@ -89,6 +93,13 @@ describe("api/onboard/website-ingest route", () => {
     // targeted update internally, so there's no separate `upsertBusinessConfig`
     // call to assert against anymore.
     expect(setBusinessWebsiteMd).toHaveBeenCalledWith(BIZ, INGEST_OK.websiteMd);
+    // Knowledge graph rides the crawl (kg-source: website), attributed to
+    // the normalized URL.
+    expect(scheduleLongFormGraphExtract).toHaveBeenCalledWith(BIZ, {
+      text: INGEST_OK.websiteMd,
+      source: "website",
+      attributedTo: "https://example.com/"
+    });
   });
 
   it("rejects when draftToken does not match the persisted draft and no user session exists", async () => {

@@ -7,6 +7,7 @@ import {
 } from "@/lib/compliance/module";
 import { updateBusinessWebsiteUrl } from "@/lib/db/businesses";
 import { patchBusinessConfig } from "@/lib/db/configs";
+import { scheduleLongFormGraphExtract } from "@/lib/memory/schedule-longform-extract";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { verifyOnboardingToken, createPendingOwnerEmail } from "@/lib/onboarding/token";
 import { normalizeWebsiteUrl } from "@/lib/website-ingest";
@@ -207,6 +208,17 @@ export async function POST(request: Request) {
     if (body.websiteMd !== undefined) patch.website_md = body.websiteMd;
 
     await patchBusinessConfig(body.businessId, patch);
+
+    // Knowledge graph (kg-source: identity): the identity write-up is
+    // owner-authored during onboarding — trust 3, no attribution. Deferred
+    // via after(); mode-gated + daily-capped inside; never blocks the save.
+    if (body.identityMd.trim()) {
+      scheduleLongFormGraphExtract(body.businessId, {
+        text: body.identityMd,
+        source: "identity",
+        attributedTo: null
+      });
+    }
 
     // Re-seed the live VPS vault + MongoDB agent prompt from the freshly
     // patched `business_configs`. Without this, owner edits in the dashboard
