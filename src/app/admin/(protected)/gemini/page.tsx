@@ -2,6 +2,7 @@ import { getTranslations } from "next-intl/server";
 import { listBusinesses } from "@/lib/db/businesses";
 import { listGeminiBilledDaily, listGeminiSpendDaily } from "@/lib/db/gemini-spend";
 import { getAdminPlatformSetting } from "@/lib/admin/platform-settings";
+import { getCiE2eMode } from "@/lib/admin/ci-e2e-mode";
 import {
   GEMINI_BILLED_SYNC_STATUS_KEY,
   parseGeminiBilledSyncStatus
@@ -16,6 +17,7 @@ import {
 } from "@/lib/admin/gemini-usage-view";
 import { logger } from "@/lib/logger";
 import { Card } from "@/components/ui/Card";
+import { CiE2eModeSettings } from "@/components/admin/CiE2eModeSettings";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 
 export const dynamic = "force-dynamic";
@@ -59,7 +61,7 @@ export default async function AdminGeminiPage({
   // One fetch covers every selectable range (90d is the widest).
   const fetchSinceYmd = geminiRangeWindow("90d", now).startYmd;
 
-  const [businesses, spendRows, billedRows, billedStatusRaw] = await Promise.all([
+  const [businesses, spendRows, billedRows, billedStatusRaw, ciE2eMode] = await Promise.all([
     listBusinesses().catch(() => []),
     listGeminiSpendDaily(fetchSinceYmd).catch((err: unknown) => {
       logger.error("admin gemini: spend ledger read failed", {
@@ -73,7 +75,10 @@ export default async function AdminGeminiPage({
       });
       return [];
     }),
-    getAdminPlatformSetting(GEMINI_BILLED_SYNC_STATUS_KEY).catch(() => null)
+    getAdminPlatformSetting(GEMINI_BILLED_SYNC_STATUS_KEY).catch(() => null),
+    // Fail closed to the DEFAULT (per-change) for display purposes only —
+    // the toggle's PUT re-reads the true value.
+    getCiE2eMode().catch(() => "per-change" as const)
   ]);
 
   const billedStatus = parseGeminiBilledSyncStatus(billedStatusRaw);
@@ -136,6 +141,9 @@ export default async function AdminGeminiPage({
           ))}
         </div>
       </div>
+
+      {/* CI e2e cost toggle: per-change vs nightly-only live suite */}
+      <CiE2eModeSettings initialMode={ciE2eMode} />
 
       {/* KPI row */}
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4">

@@ -12,7 +12,7 @@
  * Some paths after answer may return **5xx**; use logs/telemetry to distinguish.
  */
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
-import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
+import { createClient } from "npm:@supabase/supabase-js@2.45.0";
 import { header, verifyTelnyxWebhook } from "../_shared/telnyx_webhook.ts";
 import { signStreamUrlMac, type StreamPayloadV2 } from "../_shared/stream_url.ts";
 import { checkVoiceBudgetAvailable, reserveVoiceBudget } from "../_shared/voice_reserve.ts";

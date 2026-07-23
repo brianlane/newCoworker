@@ -102,7 +102,7 @@ export function recipientIsOwner(
 export function buildRecipientMessage(outcome: WtOutcome, callerLabel: string): string {
   return outcome === "success"
     ? `Warm transfer successful for ${callerLabel}.`
-    : `Missed warm transfer for ${callerLabel} — please follow up.`;
+    : `Missed warm transfer for ${callerLabel}, please follow up.`;
 }
 
 export function buildOwnerMessage(

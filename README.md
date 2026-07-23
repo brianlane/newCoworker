@@ -602,12 +602,35 @@ through the same permission matrix as the dashboard** (`src/lib/authz/policy.ts`
 - Owner-facing setup lives on `/dashboard/integrations` → "Claude connector"
   (paste `https://<app>/api/mcp` into Claude → Settings → Connectors).
 
+## Writing rule: NO EM DASHES, ever, in any context
+
+**Never use an em dash. Anywhere.** Not in user-facing copy, SMS/email
+templates, AI prompts, i18n catalogs, code comments, docs, PR titles/bodies,
+commit messages, or blog posts. Use a comma, a period, or a colon instead.
+Three layers hold this in place:
+
+- **Every AI worker/model prompt carries a no-em-dash instruction** so
+  generated text never contains one: the shared `NO_EM_DASH_PROMPT_LINE`
+  (`supabase/functions/_shared/sms_prompt_lines.ts`) is injected on the
+  texting-coworker, dashboard/owner-chat, messenger/WhatsApp/webchat, and
+  voice surfaces (the voice bridge and blog composers carry lockstep copies).
+  Blog output is additionally scrubbed in code (`src/lib/blog/copy.ts`
+  `stripEmDashes`, which also runs on admin editor saves).
+- **CI guard**: `tests/no-em-dashes.test.ts` fails when an em dash appears in
+  the guarded user-facing surfaces (message catalogs, email templates,
+  prompt-line modules, notification copy, one-shot flow templates). Widen its
+  file set as more areas are cleaned; never shrink it.
+- **Legacy instances** in comments/docs (thousands, pre-rule) are cleaned
+  opportunistically: never add a new one, and sweep a file you are already
+  editing when cheap. Live tenant flow copy was scrubbed via
+  `scripts/oneshot/strip-em-dashes-flows.ts`.
+
 ## Platform blog (newcoworker.com/blog)
 
-**Copy rule: NO EM DASHES in blog posts, ever.** Enforced in code
-(`src/lib/blog/copy.ts` — `stripEmDashes` runs on every AI composer output
-and on admin editor saves), plus a prompt instruction in every composer.
-Use commas or periods instead.
+**Copy rule: no em dashes in blog posts** (now part of the repo-wide writing
+rule above). Enforced in code (`src/lib/blog/copy.ts` `stripEmDashes` runs
+on every AI composer output and on admin editor saves), plus a prompt
+instruction in every composer. Use commas or periods instead.
 
 DB-backed marketing blog: public `/blog` + `/es/blog` (category filters,
 JSON-LD Article schema, RSS at `/blog/feed.xml`, sitemap inclusion, hreflang
@@ -940,7 +963,11 @@ come from the tracked `supabase/config.toml` — a new function MUST get a
 Vercel production. PRs get the same drift detection early via the
 `Supabase Drift Check` job, so drift is caught at review time. **Watch the
 main run to green after merging** — a failed migration blocks the app deploy
-by design.
+by design. A failed push-to-main run is no longer silent
+(`main-failure-watch.yml`, added after the 2026-07-23 transient
+Supabase-CLI failure sat unnoticed): the failed jobs are re-run once
+automatically, and a second consecutive failure emails
+team@newcoworker.com — production has not updated until that run is green.
 
 **Still manual after merge (when the change calls for it):**
 - VPS fleet redeploys when `vps/` changed (`tsx debug/update-all-vps.ts`,

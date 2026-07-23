@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, it } from "vitest";
+import { describe, expect, it } from "vitest";
 import {
   SMS_CONVERSATION_QUALITY_LINE,
   SMS_GROUNDED_ACTIONS_LINE,
@@ -82,47 +82,51 @@ const INTAKE_QUESTIONS = {
     "Does the message ask the customer to provide or confirm their own name, phone number, or email (in any phrasing)?"
 };
 
+// Both scenarios below run as ONE retried test each instead of beforeAll +
+// N tests (the suite-standard de-flake shape, same restructure as the
+// voice-booking / kyp suites): a single marginal draw must re-roll the
+// whole turn — judge included — and vitest retry cannot re-run a beforeAll.
+// (The 2026-07-23 hammer runs drew one stateless-reset reply the judge
+// scored as not engaging the booking.)
+
 describe("no re-sent automation messages (Juhu replay, real flow-context block)", () => {
   const SYSTEM = [...BASE_LINES, FLOW_CONTEXT].join("\n\n") + REASONING_PROMPT_INSTRUCTION;
-  let reply = "";
-  let verdict: JudgeVerdict;
 
-  beforeAll(async () => {
-    // The exact turn that produced the verbatim duplicate in production:
-    // "I'm looking for auto" arrived right after the flow had already asked
-    // both intake questions.
-    const raw = await geminiChatReply(SYSTEM, [
-      { role: "user", text: "[SMS] I'm looking for auto" }
-    ]);
-    reply = splitReplyReasoning(raw).reply;
-    verdict = await judgeReply(
-      "the customer already told an automated intake they need auto insurance, and the automation already collected their name, phone, and email",
-      reply,
-      INTAKE_QUESTIONS
-    );
-  }, 120_000);
+  it(
+    "continues the thread: no verbatim resend, no re-asked opener or identity",
+    { retry: 1, timeout: 120_000 },
+    async () => {
+      // The exact turn that produced the verbatim duplicate in production:
+      // "I'm looking for auto" arrived right after the flow had already
+      // asked both intake questions.
+      const raw = await geminiChatReply(SYSTEM, [
+        { role: "user", text: "[SMS] I'm looking for auto" }
+      ]);
+      const reply = splitReplyReasoning(raw).reply;
+      const verdict: JudgeVerdict = await judgeReply(
+        "the customer already told an automated intake they need auto insurance, and the automation already collected their name, phone, and email",
+        reply,
+        INTAKE_QUESTIONS
+      );
 
-  it("answers substantively", () => {
-    expect(reply.trim().length).toBeGreaterThan(0);
-  });
+      expect(reply.trim().length).toBeGreaterThan(0);
 
-  it("never repeats an already-sent automated message verbatim (the production duplicate)", () => {
-    // Verbatim/prefix equality is exact by nature — deliberately NOT
-    // delegated to the judge (see judge.ts header).
-    for (const sent of FLOW_MESSAGES) {
-      expect(reply.trim()).not.toBe(sent);
-      // Prefix match catches near-verbatim resends with a trailing tweak.
-      expect(reply).not.toContain("I've made a note for your broker. Approximately when does");
+      // Verbatim/prefix equality is exact by nature — deliberately NOT
+      // delegated to the judge (see judge.ts header).
+      for (const sent of FLOW_MESSAGES) {
+        expect(reply.trim()).not.toBe(sent);
+        // Prefix match catches near-verbatim resends with a trailing tweak.
+        expect(reply).not.toContain("I've made a note for your broker. Approximately when does");
+      }
+
+      if (verdict.answers.asks_shopping_reason || verdict.answers.asks_known_identity) {
+        console.error("live reply:", reply);
+        console.error("judge verdict:", JSON.stringify(verdict));
+      }
+      expect(verdict.answers.asks_shopping_reason).toBe(false);
+      expect(verdict.answers.asks_known_identity).toBe(false);
     }
-  });
-
-  it("never re-asks the flow's opener — it was asked AND answered", () => {
-    expect(verdict.answers.asks_shopping_reason).toBe(false);
-  });
-
-  it("never re-asks for identity the automation already collected", () => {
-    expect(verdict.answers.asks_known_identity).toBe(false);
-  });
+  );
 });
 
 describe("stateless reset continues the thread (transcript block, real formatter)", () => {
@@ -140,51 +144,54 @@ describe("stateless reset continues the thread (transcript block, real formatter
     }
   ])!;
   const SYSTEM = [...BASE_LINES, FLOW_CONTEXT, TRANSCRIPT].join("\n\n") + REASONING_PROMPT_INSTRUCTION;
-  let reply = "";
-  let verdict: JudgeVerdict;
 
-  beforeAll(async () => {
-    // Production failure shape: the stateless retry saw ONLY this line and
-    // restarted intake ("Thanks for reaching out… what prompted you…").
-    const raw = await geminiChatReply(SYSTEM, [
-      { role: "user", text: "[SMS] Please book July 13 4pm" }
-    ]);
-    reply = splitReplyReasoning(raw).reply;
-    verdict = await judgeReply(
-      "mid-conversation: the customer already went through intake (including answering when their policy renews) and just picked one of the offered appointment slots",
-      reply,
-      {
-        ...INTAKE_QUESTIONS,
-        // In THIS scenario the renewal question was already asked and
-        // answered during intake, so re-asking it here is a restart — the
-        // incident's exact repeat. (In the first-contact scenario above it
-        // is legitimate progress, hence a scenario-specific question rather
-        // than a change to the shared INTAKE_QUESTIONS calibration.)
-        asks_policy_renewal:
-          "Does the message ask when the customer's current policy renews or expires (in any phrasing)?",
-        restarts_conversation:
-          "Does the message greet or introduce the sender as if the conversation were just starting (a fresh 'thanks for reaching out' opener, introducing themselves by name), rather than continuing mid-thread?",
-        engages_booking:
-          "Does the message engage with the customer's appointment/booking request (confirming, working on, or discussing the requested time)?"
+  it(
+    "continues the booking thread after the reset: no intake restart, no re-intro",
+    { retry: 1, timeout: 120_000 },
+    async () => {
+      // Production failure shape: the stateless retry saw ONLY this line
+      // and restarted intake ("Thanks for reaching out… what prompted
+      // you…").
+      const raw = await geminiChatReply(SYSTEM, [
+        { role: "user", text: "[SMS] Please book July 13 4pm" }
+      ]);
+      const reply = splitReplyReasoning(raw).reply;
+      const verdict: JudgeVerdict = await judgeReply(
+        "mid-conversation: the customer already went through intake (including answering when their policy renews) and just picked one of the offered appointment slots",
+        reply,
+        {
+          ...INTAKE_QUESTIONS,
+          // In THIS scenario the renewal question was already asked and
+          // answered during intake, so re-asking it here is a restart — the
+          // incident's exact repeat. (In the first-contact scenario above it
+          // is legitimate progress, hence a scenario-specific question rather
+          // than a change to the shared INTAKE_QUESTIONS calibration.)
+          asks_policy_renewal:
+            "Does the message ask when the customer's current policy renews or expires (in any phrasing)?",
+          restarts_conversation:
+            "Does the message greet or introduce the sender as if the conversation were just starting (a fresh 'thanks for reaching out' opener, introducing themselves by name), rather than continuing mid-thread?",
+          engages_booking:
+            "Does the message engage with the customer's appointment/booking request (confirming, working on, or discussing the requested time)?"
+        }
+      );
+
+      expect(reply.trim().length).toBeGreaterThan(0);
+
+      if (
+        verdict.answers.asks_shopping_reason ||
+        verdict.answers.asks_known_identity ||
+        verdict.answers.asks_policy_renewal ||
+        verdict.answers.restarts_conversation ||
+        !verdict.answers.engages_booking
+      ) {
+        console.error("live reply:", reply);
+        console.error("judge verdict:", JSON.stringify(verdict));
       }
-    );
-  }, 120_000);
-
-  it("answers substantively", () => {
-    expect(reply.trim().length).toBeGreaterThan(0);
-  });
-
-  it("does not restart intake after the reset (the incident's third 'what prompted you')", () => {
-    expect(verdict.answers.asks_shopping_reason).toBe(false);
-    expect(verdict.answers.asks_known_identity).toBe(false);
-    expect(verdict.answers.asks_policy_renewal).toBe(false);
-  });
-
-  it("does not re-introduce itself — the conversation is mid-thread", () => {
-    expect(verdict.answers.restarts_conversation).toBe(false);
-  });
-
-  it("stays on the booking thread it can see in the transcript", () => {
-    expect(verdict.answers.engages_booking).toBe(true);
-  });
+      expect(verdict.answers.asks_shopping_reason).toBe(false);
+      expect(verdict.answers.asks_known_identity).toBe(false);
+      expect(verdict.answers.asks_policy_renewal).toBe(false);
+      expect(verdict.answers.restarts_conversation).toBe(false);
+      expect(verdict.answers.engages_booking).toBe(true);
+    }
+  );
 });

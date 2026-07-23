@@ -90,15 +90,15 @@ function trailerCutIndex(line: string): number {
  * replay — gated it.)
  */
 export const REASONING_PROMPT_INSTRUCTION =
-  `\n\nEvery turn: first write the message to send the texter — it is required ` +
+  `\n\nEvery turn: first write the message to send the texter, it is required ` +
   `and must never be empty, even when you are only acknowledging or handing off. ` +
   `Then, on its own final line, append exactly: ` +
   `${REASONING_MARKER}{"intent":"<the texter's goal, snake_case, max 5 words>",` +
   `"why":"<one short sentence: why you replied this way>",` +
-  `"handoff":<true ONLY when a human must take this conversation over or follow up — ` +
+  `"handoff":<true ONLY when a human must take this conversation over or follow up, ` +
   `they asked for a person, you could not answer or do what they needed, or the topic ` +
   `is outside what you know. A booking or question you fully handled is NOT a handoff. Else false>}` +
-  ` — this line is stripped before the texter sees your message; never mention it.`;
+  `, this line is stripped before the texter sees your message; never mention it.`;
 
 export type ReplyReasoning = {
   intent: string;

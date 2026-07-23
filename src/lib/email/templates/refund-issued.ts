@@ -44,7 +44,7 @@ export function buildRefundIssuedEmail(input: RefundIssuedInput): RefundIssuedEm
     copy.refundIssued.line3,
     copy.refundIssued.line4
   ];
-  // Signoff rides only the plain-text body — the HTML shell renders the full
+  // Signoff rides only the plain-text body, the HTML shell renders the full
   // platform signature block, so repeating it there would double the contact info.
   const text = [...textLines, copy.ncSignoff].join("\n\n");
   const normalizedSite = input.siteUrl.replace(/\/$/, "");

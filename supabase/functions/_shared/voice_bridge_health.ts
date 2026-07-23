@@ -43,8 +43,8 @@ export type StuckSettlement = {
  * Defaults chosen to minimize false-positives while still catching real
  * outages inside 5–10 minutes. Overridable via the `VOICE_HEALTH_*` Edge env.
  */
-export const DEFAULT_BRIDGE_STALE_SECONDS = 300; // 5 min — 10 × heartbeat interval
-export const DEFAULT_SETTLEMENT_STUCK_SECONDS = 1800; // 30 min — 6 × sweep cadence
+export const DEFAULT_BRIDGE_STALE_SECONDS = 300; // 5 min, 10 × heartbeat interval
+export const DEFAULT_SETTLEMENT_STUCK_SECONDS = 1800; // 30 min, 6 × sweep cadence
 
 export function parsePositiveInt(raw: string | undefined, fallback: number): number {
   if (raw === undefined || raw === null || raw === "") return fallback;
@@ -190,7 +190,7 @@ export async function postWebhook(
                 .slice(0, 10)
                 .map(
                   (b) =>
-                    `• ${b.business_id} — ${b.age_seconds < 0 ? "never" : `${b.age_seconds}s`}`
+                    `• ${b.business_id}, ${b.age_seconds < 0 ? "never" : `${b.age_seconds}s`}`
                 )
                 .join("\n") || "none",
               short: false
