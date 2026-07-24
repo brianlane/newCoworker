@@ -107,10 +107,13 @@ export default function GoogleReviewTestPlanPage() {
 
           <Step n={4} title="gmail.modify: read, reply from the owner's address, mark handled">
             <p>
-              From your second (&quot;customer&quot;) account, send an email to the connected
-              Gmail address; use the subject and body given in the verification reply so the
-              sandbox&apos;s email-triggered flow matches it. Within about a minute the flow picks
-              it up.
+              Open <b>Dashboard → AiFlows</b> and enable the pre-seeded email demo flow, choosing
+              the mailbox you connected in Step 2 as its watched mailbox (one dropdown in the
+              trigger; flows are bound to a specific connection, and yours did not exist until
+              Step 2). Then, from your second (&quot;customer&quot;) account, send an email to the
+              connected Gmail address using the subject given in the flow&apos;s trigger
+              condition (also stated in the verification reply). Within about a minute the flow
+              picks it up.
             </p>
             <p>
               Expected: the inbound email appears on <b>Dashboard → Emails</b> as the trigger of a
