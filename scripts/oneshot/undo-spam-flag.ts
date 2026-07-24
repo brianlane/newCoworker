@@ -17,8 +17,12 @@
  * Only tool-/owner-written suppression is reversible here.
  *
  * What --apply does:
- *   1. sms_clear_opt_out RPC — removes the suppression row.
- *   2. Contact: remove the "spam" tag, delete pinned-note lines carrying the
+ *   1. sms_clear_opt_out RPC for every identity number — removes the
+ *      suppression rows.
+ *   2. On suppress intent, cancel the lead's pending automation runs (shared
+ *      cancelPendingRunsForLead core) — the cleared opt-outs were the only
+ *      thing holding back runs the original flag's sweep missed.
+ *   3. Contact: remove the "spam" tag, delete pinned-note lines carrying the
  *      spam-declaration marker, and set sms_reply_mode (default: suppress,
  *      honoring the owner's actual "stop texting them" request; pass
  *      --reply-mode auto to fully restore the coworker).
@@ -62,6 +66,7 @@ const { recordOneshotApplied } = await import("./_ledger.ts");
 const { isStopKeyword, inboundSmsBody } = await import(
   "../../supabase/functions/_shared/telnyx_sms_compliance.ts"
 );
+const { cancelPendingRunsForLead } = await import("@/lib/customer-tools/cancel-lead-runs");
 
 const db = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL ?? "",
@@ -133,7 +138,10 @@ const PAGE = 1000;
 const stopTexts: string[] = [];
 let scanned = 0;
 {
-  let cursor: string | null = null;
+  // Compound keyset cursor (created_at, id): rows sharing a timestamp across
+  // a page boundary are still fetched — a strict created_at-only cursor
+  // could skip them.
+  let cursor: { createdAt: string; id: string } | null = null;
   for (;;) {
     let query = db
       .from("sms_inbound_jobs")
@@ -142,13 +150,18 @@ let scanned = 0;
       .order("created_at", { ascending: true })
       .order("id", { ascending: true })
       .limit(PAGE);
-    if (cursor) query = query.gt("created_at", cursor);
+    if (cursor) {
+      query = query.or(
+        `created_at.gt.${cursor.createdAt},and(created_at.eq.${cursor.createdAt},id.gt.${cursor.id})`
+      );
+    }
     const { data: inboundRows, error: inErr } = await query;
     if (inErr) {
       console.error("[oneshot] inbound history read failed:", inErr.message);
       process.exit(1);
     }
     const rows = (inboundRows ?? []) as Array<{
+      id: string;
       created_at: string;
       customer_e164: unknown;
       payload: unknown;
@@ -168,9 +181,8 @@ let scanned = 0;
       }
     }
     if (rows.length < PAGE) break;
-    // Microsecond-precision timestamps make a same-created_at page boundary
-    // effectively impossible; the strict-gt cursor is safe here.
-    cursor = rows[rows.length - 1].created_at;
+    const last = rows[rows.length - 1];
+    cursor = { createdAt: last.created_at, id: last.id };
   }
 }
 if (stopTexts.length > 0) {
@@ -217,7 +229,26 @@ if (optRows.length > 0) {
 }
 
 // ---------------------------------------------------------------------------
-// 2. Contact: drop the spam tag + spam-declaration note lines; set reply mode.
+// 2. On suppress intent, stop any pending automation runs for the lead — the
+//    opt-outs just cleared were the only thing holding back runs the original
+//    spam-flag sweep missed (or runs enrolled since). Same shared core the
+//    set_contact_reply_mode suppress path uses.
+// ---------------------------------------------------------------------------
+if (REPLY_MODE === "suppress") {
+  const cancelResult = await cancelPendingRunsForLead(
+    db as never,
+    BUSINESS_ID,
+    identitySet,
+    "owner_stopped_texting"
+  );
+  console.log(
+    `[oneshot] pending runs: ${cancelResult.canceledRuns} canceled` +
+      (cancelResult.sweepComplete ? "" : " (sweep INCOMPLETE — re-run to re-check)")
+  );
+}
+
+// ---------------------------------------------------------------------------
+// 3. Contact: drop the spam tag + spam-declaration note lines; set reply mode.
 // ---------------------------------------------------------------------------
 if (contact) {
   const tags: string[] = Array.isArray(contact.tags) ? (contact.tags as string[]) : [];
