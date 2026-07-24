@@ -29,6 +29,7 @@ import {
   claimZoomTranscriptImport,
   finalizeZoomTranscriptImport,
   getZoomTranscriptImport,
+  reclaimCompletedZoomTranscriptImport,
   releaseZoomTranscriptImport
 } from "@/lib/db/zoom-transcript-imports";
 import { importZoomTranscriptDocument } from "@/lib/zoom/import-core";
@@ -76,15 +77,21 @@ export async function POST(request: Request) {
       holdsClaim = await claimZoomTranscriptImport(businessId, meetingUuid);
       if (!holdsClaim) {
         const existing = await getZoomTranscriptImport(businessId, meetingUuid);
-        if (existing && existing.document_id === null) {
-          // An auto-import holds a fresh claim right now; a second copy
-          // would just be a duplicate document.
+        if (existing && existing.document_id !== null) {
+          // Completed before: a deliberate RE-import (the owner may have
+          // deleted the document). Atomically flip the row back to
+          // in-flight so concurrent re-imports serialize; the loser falls
+          // through to the in-flight refusal below.
+          holdsClaim = await reclaimCompletedZoomTranscriptImport(businessId, meetingUuid);
+        }
+        if (!holdsClaim) {
+          // An import holds a fresh claim right now; a second copy would
+          // just be a duplicate document.
           return errorResponse(
             "VALIDATION_ERROR",
             "Your coworker is already importing this meeting's minutes automatically. Check Documents in a minute or two."
           );
         }
-        // Completed before: deliberate re-import, proceed without the claim.
       }
     }
     const releaseHeldClaim = async (): Promise<void> => {
@@ -125,9 +132,12 @@ export async function POST(request: Request) {
       }
 
       // Stamp the produced document onto the ledger row (also repoints it on
-      // a deliberate re-import) so webhook deliveries stay no-ops.
+      // a deliberate re-import) so webhook deliveries stay no-ops. Retry the
+      // stamp once; a persistent failure only means the next import attempt
+      // for this meeting waits out the claim lease.
       if (meetingUuid) {
-        await finalizeZoomTranscriptImport(businessId, meetingUuid, imported.document.id);
+        (await finalizeZoomTranscriptImport(businessId, meetingUuid, imported.document.id)) ||
+          (await finalizeZoomTranscriptImport(businessId, meetingUuid, imported.document.id));
       }
 
       return successResponse({

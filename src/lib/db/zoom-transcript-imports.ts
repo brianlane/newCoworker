@@ -130,15 +130,20 @@ export async function releaseZoomTranscriptImport(
   }
 }
 
-/** Stamp the produced document onto the claim (ops trail). Best-effort. */
+/**
+ * Stamp the produced document onto the claim. Returns whether the stamp
+ * landed: a claim left at document_id null after a SUCCESSFUL import is a
+ * duplicate hazard (the lease steal would re-import the meeting), so
+ * callers retry and escalate on a false return. Never throws.
+ */
 export async function finalizeZoomTranscriptImport(
   businessId: string,
   meetingUuid: string,
   documentId: string,
   client?: SupabaseClient
-): Promise<void> {
+): Promise<boolean> {
   const db = await ledgerClientOrNull(client, "finalize");
-  if (!db) return;
+  if (!db) return false;
   const { error } = await db
     .from("zoom_transcript_imports")
     .update({ document_id: documentId })
@@ -148,5 +153,33 @@ export async function finalizeZoomTranscriptImport(
       businessId,
       error: error.message
     });
+    return false;
   }
+  return true;
+}
+
+/**
+ * Serialize a deliberate manual RE-import of an already-completed meeting:
+ * atomically flip the completed row back to in-flight (document_id null,
+ * fresh lease), so exactly one concurrent re-import wins the claim and the
+ * others see an in-flight row. Throws on query errors (the manual route's
+ * error handling owns them).
+ */
+export async function reclaimCompletedZoomTranscriptImport(
+  businessId: string,
+  meetingUuid: string,
+  client?: SupabaseClient,
+  now: () => number = Date.now
+): Promise<boolean> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("zoom_transcript_imports")
+    .update({ document_id: null, created_at: new Date(now()).toISOString() })
+    .match({ business_id: businessId, meeting_uuid: meetingUuid })
+    .not("document_id", "is", null)
+    .select("id");
+  if (error) {
+    throw new Error(`reclaimCompletedZoomTranscriptImport: ${error.message}`);
+  }
+  return ((data as { id: string }[] | null)?.length ?? 0) > 0;
 }

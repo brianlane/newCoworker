@@ -307,7 +307,7 @@ function makeDeps(overrides: Partial<Record<keyof ZoomWebhookDeps, unknown>> = {
     getBusinessFn: vi.fn().mockResolvedValue({ name: "Acme Spa", tier: "standard" }),
     claimImport: vi.fn().mockResolvedValue(true),
     releaseImport: vi.fn().mockResolvedValue(undefined),
-    finalizeImport: vi.fn().mockResolvedValue(undefined),
+    finalizeImport: vi.fn().mockResolvedValue(true),
     fetchWebhookVtt: vi.fn().mockResolvedValue(VTT),
     fetchConnectionTranscript: vi.fn().mockResolvedValue({ ok: true, vtt: VTT }),
     importCore: vi.fn().mockResolvedValue({
@@ -612,6 +612,27 @@ describe("processZoomWebhookEvent", () => {
       businessId: BIZ
     });
     expect(deps.releaseImport).toHaveBeenCalledWith(BIZ, UUID);
+  });
+
+  it("escalates loudly when the ledger stamp fails twice (claim kept)", async () => {
+    const deps = makeDeps({ finalizeImport: vi.fn().mockResolvedValue(false) });
+    const result = await processZoomWebhookEvent(transcriptBody(), deps);
+    expect(result).toEqual({ kind: "transcript", outcome: "imported", businessId: BIZ });
+    expect(deps.finalizeImport).toHaveBeenCalledTimes(2);
+    expect(deps.releaseImport).not.toHaveBeenCalled();
+    expect(deps.logSystem).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "zoom_ledger_finalize_failed", level: "error" })
+    );
+  });
+
+  it("retries the ledger stamp once and succeeds silently", async () => {
+    const deps = makeDeps({
+      finalizeImport: vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true)
+    });
+    const result = await processZoomWebhookEvent(transcriptBody(), deps);
+    expect(result).toEqual({ kind: "transcript", outcome: "imported", businessId: BIZ });
+    expect(deps.finalizeImport).toHaveBeenCalledTimes(2);
+    expect(deps.logSystem).not.toHaveBeenCalled();
   });
 
   it("handles non-Error throws from the import path", async () => {

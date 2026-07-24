@@ -376,7 +376,24 @@ export async function processZoomWebhookEvent(
           return { outcome: "import_failed", businessId };
         }
 
-        await finalizeImport(businessId, extracted.meetingUuid, imported.document.id);
+        // The import succeeded; a claim left at document_id null would let
+        // the lease steal re-import a duplicate, so retry the stamp once
+        // and escalate loudly if it still fails (row is repairable by ops;
+        // the claim is deliberately KEPT so redeliveries stay no-ops).
+        const finalized =
+          (await finalizeImport(businessId, extracted.meetingUuid, imported.document.id)) ||
+          (await finalizeImport(businessId, extracted.meetingUuid, imported.document.id));
+        if (!finalized) {
+          await logSystem({
+            businessId,
+            source: "zoom-webhook",
+            event: "zoom_ledger_finalize_failed",
+            level: "error",
+            message:
+              "Zoom auto-import succeeded but the ledger stamp failed twice; repair zoom_transcript_imports.document_id to prevent a lease-steal duplicate",
+            payload: { meetingUuid: extracted.meetingUuid, documentId: imported.document.id }
+          });
+        }
         return { outcome: "imported", businessId };
       } catch (err) {
         await releaseImport(businessId, extracted.meetingUuid);

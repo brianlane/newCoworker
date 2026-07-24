@@ -19,6 +19,7 @@ import {
   claimZoomTranscriptImport,
   finalizeZoomTranscriptImport,
   getZoomTranscriptImport,
+  reclaimCompletedZoomTranscriptImport,
   releaseZoomTranscriptImport,
   ZOOM_IMPORT_CLAIM_LEASE_MS
 } from "@/lib/db/zoom-transcript-imports";
@@ -35,6 +36,7 @@ type Chain = {
   select: ReturnType<typeof vi.fn>;
   match: ReturnType<typeof vi.fn>;
   is: ReturnType<typeof vi.fn>;
+  not: ReturnType<typeof vi.fn>;
   lt: ReturnType<typeof vi.fn>;
   maybeSingle: ReturnType<typeof vi.fn>;
 };
@@ -47,6 +49,7 @@ function chain(terminal: unknown): Chain & PromiseLike<unknown> {
     select: vi.fn(() => c),
     match: vi.fn(() => c),
     is: vi.fn(() => c),
+    not: vi.fn(() => c),
     lt: vi.fn(() => c),
     maybeSingle: vi.fn(),
     then: (resolve: (v: unknown) => unknown) => Promise.resolve(terminal).then(resolve)
@@ -203,17 +206,17 @@ describe("releaseZoomTranscriptImport", () => {
 });
 
 describe("finalizeZoomTranscriptImport", () => {
-  it("stamps the produced document onto the claim", async () => {
+  it("stamps the produced document onto the claim and reports success", async () => {
     const c = chain({ error: null });
-    await finalizeZoomTranscriptImport(BIZ, UUID, DOC, makeDb(c));
+    expect(await finalizeZoomTranscriptImport(BIZ, UUID, DOC, makeDb(c))).toBe(true);
     expect(c.update).toHaveBeenCalledWith({ document_id: DOC });
     expect(c.match).toHaveBeenCalledWith({ business_id: BIZ, meeting_uuid: UUID });
     expect(logger.warn).not.toHaveBeenCalled();
   });
 
-  it("logs a query error instead of throwing", async () => {
+  it("logs a query error and reports failure instead of throwing", async () => {
     const c = chain({ error: { message: "update denied" } });
-    await finalizeZoomTranscriptImport(BIZ, UUID, DOC, makeDb(c));
+    expect(await finalizeZoomTranscriptImport(BIZ, UUID, DOC, makeDb(c))).toBe(false);
     expect(logger.warn).toHaveBeenCalledWith(
       "zoom transcript ledger: finalize failed",
       expect.objectContaining({ error: "update denied" })
@@ -224,10 +227,47 @@ describe("finalizeZoomTranscriptImport", () => {
     defaultClientSpy.mockImplementation(() => {
       throw new Error("db down");
     });
-    await expect(finalizeZoomTranscriptImport(BIZ, UUID, DOC)).resolves.toBeUndefined();
+    expect(await finalizeZoomTranscriptImport(BIZ, UUID, DOC)).toBe(false);
     expect(logger.warn).toHaveBeenCalledWith(
       "zoom transcript ledger: finalize client unavailable",
       expect.objectContaining({ error: "db down" })
     );
+  });
+});
+
+describe("reclaimCompletedZoomTranscriptImport", () => {
+  it("flips a completed row back to in-flight and reports the win", async () => {
+    const c = chain({ data: [{ id: "row-1" }], error: null });
+    expect(
+      await reclaimCompletedZoomTranscriptImport(BIZ, UUID, makeDb(c), () => NOW)
+    ).toBe(true);
+    expect(c.update).toHaveBeenCalledWith({
+      document_id: null,
+      created_at: new Date(NOW).toISOString()
+    });
+    expect(c.not).toHaveBeenCalledWith("document_id", "is", null);
+    expect(c.match).toHaveBeenCalledWith({ business_id: BIZ, meeting_uuid: UUID });
+  });
+
+  it("reports a lost race (row already in-flight or gone)", async () => {
+    const c = chain({ data: [], error: null });
+    expect(await reclaimCompletedZoomTranscriptImport(BIZ, UUID, makeDb(c))).toBe(false);
+
+    const c2 = chain({ data: null, error: null });
+    expect(await reclaimCompletedZoomTranscriptImport(BIZ, UUID, makeDb(c2))).toBe(false);
+  });
+
+  it("throws on a query error", async () => {
+    const c = chain({ data: null, error: { message: "reclaim denied" } });
+    await expect(
+      reclaimCompletedZoomTranscriptImport(BIZ, UUID, makeDb(c))
+    ).rejects.toThrow(/reclaim denied/);
+  });
+
+  it("uses the default service client when none is provided", async () => {
+    const c = chain({ data: [], error: null });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    expect(await reclaimCompletedZoomTranscriptImport(BIZ, UUID)).toBe(false);
+    expect(defaultClientSpy).toHaveBeenCalled();
   });
 });
