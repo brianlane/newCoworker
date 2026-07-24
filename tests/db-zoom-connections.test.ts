@@ -25,9 +25,10 @@ import {
   deleteZoomConnection,
   getActiveZoomConnection,
   getActiveZoomConnectionId,
-  getActiveZoomConnectionSummaryByZoomUserId,
+  getActiveZoomConnectionSummariesByZoomUserId,
   getPublicZoomConnection,
   getZoomConnection,
+  getZoomConnectionBusinessIdsByZoomUserId,
   markZoomConnectionDeauthorized,
   setZoomConnectionActive,
   setZoomConnectionAutoImport,
@@ -394,38 +395,69 @@ describe("setZoomConnectionActive", () => {
   });
 });
 
-describe("getActiveZoomConnectionSummaryByZoomUserId", () => {
-  it("returns the routing summary for an active connection", async () => {
-    const c = chain();
-    c.maybeSingle.mockResolvedValue({
-      data: { business_id: BIZ, auto_import_transcripts: true },
-      error: null
-    });
-    const summary = await getActiveZoomConnectionSummaryByZoomUserId("zu-1", makeDb(c));
-    expect(summary).toEqual({ business_id: BIZ, auto_import_transcripts: true });
+describe("getActiveZoomConnectionSummariesByZoomUserId", () => {
+  it("returns every active routing summary (shared Zoom account)", async () => {
+    const rows = [
+      { business_id: BIZ, auto_import_transcripts: true },
+      { business_id: "other-biz", auto_import_transcripts: false }
+    ];
+    const c = chain({ data: rows, error: null });
+    const summaries = await getActiveZoomConnectionSummariesByZoomUserId("zu-1", makeDb(c));
+    expect(summaries).toEqual(rows);
     expect(c.eq).toHaveBeenCalledWith("zoom_user_id", "zu-1");
     expect(c.eq).toHaveBeenCalledWith("is_active", true);
   });
 
-  it("returns null when no active connection matches", async () => {
-    const c = chain();
-    c.maybeSingle.mockResolvedValue({ data: null, error: null });
-    expect(await getActiveZoomConnectionSummaryByZoomUserId("zu-x", makeDb(c))).toBeNull();
+  it("returns an empty list when no active connection matches", async () => {
+    const c = chain({ data: null, error: null });
+    expect(await getActiveZoomConnectionSummariesByZoomUserId("zu-x", makeDb(c))).toEqual([]);
   });
 
   it("throws on a query error", async () => {
-    const c = chain();
-    c.maybeSingle.mockResolvedValue({ data: null, error: { message: "lookup boom" } });
+    const c = chain({ data: null, error: { message: "lookup boom" } });
     await expect(
-      getActiveZoomConnectionSummaryByZoomUserId("zu-1", makeDb(c))
+      getActiveZoomConnectionSummariesByZoomUserId("zu-1", makeDb(c))
     ).rejects.toThrow(/lookup boom/);
   });
 
   it("uses the default service client when none is provided", async () => {
-    const c = chain();
-    c.maybeSingle.mockResolvedValue({ data: null, error: null });
+    const c = chain({ data: [], error: null });
     defaultClientSpy.mockReturnValue(makeDb(c));
-    expect(await getActiveZoomConnectionSummaryByZoomUserId("zu-1")).toBeNull();
+    expect(await getActiveZoomConnectionSummariesByZoomUserId("zu-1")).toEqual([]);
+    expect(defaultClientSpy).toHaveBeenCalled();
+  });
+});
+
+describe("getZoomConnectionBusinessIdsByZoomUserId", () => {
+  it("returns every business for the user, active or not (deauth reach)", async () => {
+    const c = chain({
+      data: [{ business_id: BIZ }, { business_id: "other-biz" }],
+      error: null
+    });
+    expect(await getZoomConnectionBusinessIdsByZoomUserId("zu-1", makeDb(c))).toEqual([
+      BIZ,
+      "other-biz"
+    ]);
+    expect(c.eq).toHaveBeenCalledWith("zoom_user_id", "zu-1");
+    expect(c.eq).not.toHaveBeenCalledWith("is_active", true);
+  });
+
+  it("returns an empty list when nothing matches", async () => {
+    const c = chain({ data: null, error: null });
+    expect(await getZoomConnectionBusinessIdsByZoomUserId("zu-x", makeDb(c))).toEqual([]);
+  });
+
+  it("throws on a query error", async () => {
+    const c = chain({ data: null, error: { message: "ids boom" } });
+    await expect(
+      getZoomConnectionBusinessIdsByZoomUserId("zu-1", makeDb(c))
+    ).rejects.toThrow(/ids boom/);
+  });
+
+  it("uses the default service client when none is provided", async () => {
+    const c = chain({ data: [], error: null });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    expect(await getZoomConnectionBusinessIdsByZoomUserId("zu-1")).toEqual([]);
     expect(defaultClientSpy).toHaveBeenCalled();
   });
 });

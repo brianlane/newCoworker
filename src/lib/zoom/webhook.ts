@@ -18,8 +18,10 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { getBusiness } from "@/lib/db/businesses";
 import {
-  getActiveZoomConnectionSummaryByZoomUserId,
-  markZoomConnectionDeauthorized
+  getActiveZoomConnectionSummariesByZoomUserId,
+  getZoomConnectionBusinessIdsByZoomUserId,
+  markZoomConnectionDeauthorized,
+  type ZoomConnectionSummary
 } from "@/lib/db/zoom-connections";
 import {
   claimZoomTranscriptImport,
@@ -155,6 +157,21 @@ export function extractTranscriptCompleted(
 }
 
 /**
+ * The webhook payload's download URL is attacker-controllable in principle
+ * (a forged-but-signed body cannot exist, but defense in depth is cheap):
+ * only https URLs on Zoom-owned hosts are ever fetched, so the endpoint
+ * can't be steered into internal networks (SSRF).
+ */
+export function isTrustedZoomDownloadUrl(raw: string): boolean {
+  try {
+    const url = new URL(raw);
+    return url.protocol === "https:" && /(^|\.)zoom\.(us|com)$/i.test(url.hostname);
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Fetch the VTT via the webhook's own download URL + token (no OAuth
  * round-trip). Null on any failure, the caller falls back to the tenant's
  * connection token.
@@ -164,6 +181,7 @@ export async function fetchWebhookTranscriptVtt(
   downloadToken: string,
   fetchImpl: typeof fetch = fetch
 ): Promise<string | null> {
+  if (!isTrustedZoomDownloadUrl(downloadUrl)) return null;
   const ac = new AbortController();
   const timeout = setTimeout(() => ac.abort(), ZOOM_WEBHOOK_DOWNLOAD_TIMEOUT_MS);
   try {
@@ -200,12 +218,13 @@ export type ZoomTranscriptWebhookOutcome =
 
 export type ZoomWebhookResult =
   | { kind: "url_validation"; response: { plainToken: string; encryptedToken: string } | null }
-  | { kind: "deauthorized"; businessId: string | null }
+  | { kind: "deauthorized"; businessIds: string[] }
   | { kind: "transcript"; outcome: ZoomTranscriptWebhookOutcome; businessId: string | null }
   | { kind: "ignored"; event: string };
 
 export type ZoomWebhookDeps = {
-  connectionByZoomUserId?: typeof getActiveZoomConnectionSummaryByZoomUserId;
+  connectionsByZoomUserId?: typeof getActiveZoomConnectionSummariesByZoomUserId;
+  deauthBusinessIdsByZoomUserId?: typeof getZoomConnectionBusinessIdsByZoomUserId;
   getBusinessFn?: typeof getBusiness;
   claimImport?: typeof claimZoomTranscriptImport;
   releaseImport?: typeof releaseZoomTranscriptImport;
@@ -215,6 +234,17 @@ export type ZoomWebhookDeps = {
   importCore?: typeof importZoomTranscriptDocument;
   deauthorize?: typeof markZoomConnectionDeauthorized;
   logSystem?: typeof recordSystemLog;
+};
+
+/** Cross-business aggregation: the loudest outcome wins the route status. */
+const TRANSCRIPT_OUTCOME_RANK: Record<ZoomTranscriptWebhookOutcome, number> = {
+  import_failed: 6,
+  imported: 5,
+  skipped_cap: 4,
+  duplicate: 3,
+  disabled: 2,
+  no_connection: 1,
+  unusable: 0
 };
 
 /**
@@ -227,8 +257,10 @@ export async function processZoomWebhookEvent(
   deps: ZoomWebhookDeps = {}
 ): Promise<ZoomWebhookResult> {
   /* c8 ignore start -- production defaults; tests inject */
-  const connectionByZoomUserId =
-    deps.connectionByZoomUserId ?? getActiveZoomConnectionSummaryByZoomUserId;
+  const connectionsByZoomUserId =
+    deps.connectionsByZoomUserId ?? getActiveZoomConnectionSummariesByZoomUserId;
+  const deauthBusinessIdsByZoomUserId =
+    deps.deauthBusinessIdsByZoomUserId ?? getZoomConnectionBusinessIdsByZoomUserId;
   const getBusinessFn = deps.getBusinessFn ?? getBusiness;
   const claimImport = deps.claimImport ?? claimZoomTranscriptImport;
   const releaseImport = deps.releaseImport ?? releaseZoomTranscriptImport;
@@ -251,90 +283,116 @@ export async function processZoomWebhookEvent(
 
   if (event.event === "app_deauthorized") {
     const userId = asString(event.payload.user_id);
-    const conn = userId ? await connectionByZoomUserId(userId) : null;
-    if (!conn) return { kind: "deauthorized", businessId: null };
-    await deauthorize(conn.business_id);
-    await logSystem({
-      businessId: conn.business_id,
-      source: "zoom-webhook",
-      event: "zoom_deauthorized",
-      level: "info",
-      message: "Zoom connection deauthorized from the Zoom side (app uninstalled)"
-    });
-    return { kind: "deauthorized", businessId: conn.business_id };
+    // ALL rows for the user, active or not: a soft-disabled connection's
+    // ciphertext must not survive a Zoom-side uninstall.
+    const businessIds = userId ? await deauthBusinessIdsByZoomUserId(userId) : [];
+    for (const businessId of businessIds) {
+      await deauthorize(businessId);
+      await logSystem({
+        businessId,
+        source: "zoom-webhook",
+        event: "zoom_deauthorized",
+        level: "info",
+        message: "Zoom connection deauthorized from the Zoom side (app uninstalled)"
+      });
+    }
+    return { kind: "deauthorized", businessIds };
   }
 
   if (event.event === "recording.transcript_completed") {
     const extracted = extractTranscriptCompleted(event, body);
     if (!extracted) return { kind: "transcript", outcome: "unusable", businessId: null };
 
-    const conn = await connectionByZoomUserId(extracted.hostId);
-    if (!conn) return { kind: "transcript", outcome: "no_connection", businessId: null };
-    const businessId = conn.business_id;
-    if (!conn.auto_import_transcripts) {
-      return { kind: "transcript", outcome: "disabled", businessId };
+    const conns = await connectionsByZoomUserId(extracted.hostId);
+    if (conns.length === 0) {
+      return { kind: "transcript", outcome: "no_connection", businessId: null };
     }
 
-    const claimed = await claimImport(businessId, extracted.meetingUuid);
-    if (!claimed) return { kind: "transcript", outcome: "duplicate", businessId };
+    const importForBusiness = async (
+      conn: ZoomConnectionSummary
+    ): Promise<{ outcome: ZoomTranscriptWebhookOutcome; businessId: string }> => {
+      const businessId = conn.business_id;
+      if (!conn.auto_import_transcripts) return { outcome: "disabled", businessId };
 
-    try {
-      let vtt: string | null = null;
-      if (extracted.downloadUrl && extracted.downloadToken) {
-        vtt = await fetchWebhookVtt(extracted.downloadUrl, extracted.downloadToken);
-      }
-      if (!vtt) {
-        const fetched = await fetchConnectionTranscript(businessId, extracted.meetingUuid);
-        vtt = fetched.ok ? fetched.vtt : null;
-      }
-      if (!vtt) {
-        await releaseImport(businessId, extracted.meetingUuid);
-        return { kind: "transcript", outcome: "import_failed", businessId };
-      }
+      const claimed = await claimImport(businessId, extracted.meetingUuid);
+      if (!claimed) return { outcome: "duplicate", businessId };
 
-      const business = await getBusinessFn(businessId);
-      if (!business) {
-        await releaseImport(businessId, extracted.meetingUuid);
-        return { kind: "transcript", outcome: "import_failed", businessId };
-      }
-
-      const label = extracted.topic ?? `Zoom meeting ${extracted.meetingId ?? "recording"}`;
-      const imported = await importCore({
-        businessId,
-        business: { name: business.name, tier: business.tier },
-        vtt,
-        title: `${label} (transcript)`,
-        refLabel: extracted.meetingId ?? "recording"
-      });
-
-      if (!imported.ok) {
-        await releaseImport(businessId, extracted.meetingUuid);
-        if (imported.error === "limit_reached") {
-          // The meeting already happened; a cap is not an error worth
-          // retry-hammering. Log for the owner-facing activity trail.
-          await logSystem({
-            businessId,
-            source: "zoom-webhook",
-            event: "zoom_auto_import_skipped_cap",
-            level: "warn",
-            message: "Zoom auto-import skipped: document limit reached",
-            payload: { meetingUuid: extracted.meetingUuid }
-          });
-          return { kind: "transcript", outcome: "skipped_cap", businessId };
+      try {
+        let vtt: string | null = null;
+        if (extracted.downloadUrl && extracted.downloadToken) {
+          vtt = await fetchWebhookVtt(extracted.downloadUrl, extracted.downloadToken);
         }
-        return { kind: "transcript", outcome: "import_failed", businessId };
-      }
+        if (!vtt) {
+          const fetched = await fetchConnectionTranscript(businessId, extracted.meetingUuid);
+          vtt = fetched.ok ? fetched.vtt : null;
+        }
+        if (!vtt) {
+          await releaseImport(businessId, extracted.meetingUuid);
+          return { outcome: "import_failed", businessId };
+        }
 
-      await finalizeImport(businessId, extracted.meetingUuid, imported.document.id);
-      return { kind: "transcript", outcome: "imported", businessId };
-    } catch (err) {
-      await releaseImport(businessId, extracted.meetingUuid);
-      logger.warn("zoom webhook: transcript auto-import failed", {
-        businessId,
-        error: err instanceof Error ? err.message : String(err)
-      });
-      return { kind: "transcript", outcome: "import_failed", businessId };
+        const business = await getBusinessFn(businessId);
+        if (!business) {
+          await releaseImport(businessId, extracted.meetingUuid);
+          return { outcome: "import_failed", businessId };
+        }
+
+        const label = extracted.topic ?? `Zoom meeting ${extracted.meetingId ?? "recording"}`;
+        const imported = await importCore({
+          businessId,
+          business: { name: business.name, tier: business.tier },
+          vtt,
+          title: `${label} (transcript)`,
+          refLabel: extracted.meetingId ?? "recording"
+        });
+
+        if (!imported.ok) {
+          await releaseImport(businessId, extracted.meetingUuid);
+          if (imported.error === "limit_reached") {
+            // The meeting already happened; a cap is not an error worth
+            // retry-hammering. Log for the owner-facing activity trail.
+            await logSystem({
+              businessId,
+              source: "zoom-webhook",
+              event: "zoom_auto_import_skipped_cap",
+              level: "warn",
+              message: "Zoom auto-import skipped: document limit reached",
+              payload: { meetingUuid: extracted.meetingUuid }
+            });
+            return { outcome: "skipped_cap", businessId };
+          }
+          return { outcome: "import_failed", businessId };
+        }
+
+        await finalizeImport(businessId, extracted.meetingUuid, imported.document.id);
+        return { outcome: "imported", businessId };
+      } catch (err) {
+        await releaseImport(businessId, extracted.meetingUuid);
+        logger.warn("zoom webhook: transcript auto-import failed", {
+          businessId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+        return { outcome: "import_failed", businessId };
+      }
+    };
+
+    // One Zoom account can back multiple businesses: import for each. The
+    // loudest outcome drives the route status; an import_failed answer makes
+    // Zoom redeliver, and the per-business ledger claims no-op the ones that
+    // already succeeded.
+    let loudest: { outcome: ZoomTranscriptWebhookOutcome; businessId: string } | null = null;
+    for (const conn of conns) {
+      const result = await importForBusiness(conn);
+      if (
+        !loudest ||
+        TRANSCRIPT_OUTCOME_RANK[result.outcome] > TRANSCRIPT_OUTCOME_RANK[loudest.outcome]
+      ) {
+        loudest = result;
+      }
     }
+    /* c8 ignore next -- conns is non-empty, the loop always sets loudest */
+    if (!loudest) return { kind: "transcript", outcome: "no_connection", businessId: null };
+    return { kind: "transcript", outcome: loudest.outcome, businessId: loudest.businessId };
   }
 
   return { kind: "ignored", event: event.event };

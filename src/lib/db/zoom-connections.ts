@@ -276,24 +276,46 @@ export type ZoomConnectionSummary = {
 };
 
 /**
- * Resolve the tenant behind a webhook event's host/user id. Active rows
- * only, a deauthorized or soft-disabled connection routes nothing.
+ * Resolve the tenant(s) behind a webhook event's host/user id. One Zoom
+ * account can be connected to multiple businesses (an owner with two
+ * tenants), so this returns every ACTIVE match; a deauthorized or
+ * soft-disabled connection routes nothing.
  */
-export async function getActiveZoomConnectionSummaryByZoomUserId(
+export async function getActiveZoomConnectionSummariesByZoomUserId(
   zoomUserId: string,
   client?: SupabaseClient
-): Promise<ZoomConnectionSummary | null> {
+): Promise<ZoomConnectionSummary[]> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("zoom_connections")
     .select("business_id,auto_import_transcripts")
     .eq("zoom_user_id", zoomUserId)
-    .eq("is_active", true)
-    .maybeSingle();
+    .eq("is_active", true);
   if (error) {
-    throw new Error(`getActiveZoomConnectionSummaryByZoomUserId: ${error.message}`);
+    throw new Error(`getActiveZoomConnectionSummariesByZoomUserId: ${error.message}`);
   }
-  return (data as ZoomConnectionSummary | null) ?? null;
+  return (data ?? []) as ZoomConnectionSummary[];
+}
+
+/**
+ * Every business holding a connection for this Zoom user, ACTIVE OR NOT.
+ * The app_deauthorized wipe must reach rows that were already soft-disabled
+ * (e.g. after an invalid_grant refresh), or their dead ciphertext would
+ * survive the Zoom-side uninstall.
+ */
+export async function getZoomConnectionBusinessIdsByZoomUserId(
+  zoomUserId: string,
+  client?: SupabaseClient
+): Promise<string[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("zoom_connections")
+    .select("business_id")
+    .eq("zoom_user_id", zoomUserId);
+  if (error) {
+    throw new Error(`getZoomConnectionBusinessIdsByZoomUserId: ${error.message}`);
+  }
+  return ((data ?? []) as Array<{ business_id: string }>).map((row) => row.business_id);
 }
 
 /** Owner toggle for the recording.transcript_completed auto-import path. */

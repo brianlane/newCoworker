@@ -14,7 +14,8 @@ vi.mock("@/lib/logger", () => ({
 // stays hermetic (no supabase module init at test load).
 vi.mock("@/lib/db/businesses", () => ({ getBusiness: vi.fn() }));
 vi.mock("@/lib/db/zoom-connections", () => ({
-  getActiveZoomConnectionSummaryByZoomUserId: vi.fn(),
+  getActiveZoomConnectionSummariesByZoomUserId: vi.fn(),
+  getZoomConnectionBusinessIdsByZoomUserId: vi.fn(),
   markZoomConnectionDeauthorized: vi.fn()
 }));
 vi.mock("@/lib/db/zoom-transcript-imports", () => ({
@@ -30,6 +31,7 @@ import {
   buildUrlValidationResponse,
   extractTranscriptCompleted,
   fetchWebhookTranscriptVtt,
+  isTrustedZoomDownloadUrl,
   parseZoomWebhookBody,
   processZoomWebhookEvent,
   verifyZoomWebhookSignature,
@@ -223,31 +225,57 @@ describe("extractTranscriptCompleted", () => {
   });
 });
 
+describe("isTrustedZoomDownloadUrl", () => {
+  it("accepts https URLs on Zoom-owned hosts only", () => {
+    expect(isTrustedZoomDownloadUrl("https://zoom.us/rec/download/abc")).toBe(true);
+    expect(isTrustedZoomDownloadUrl("https://us06web.zoom.us/rec/abc")).toBe(true);
+    expect(isTrustedZoomDownloadUrl("https://cdn.zoom.com/rec/abc")).toBe(true);
+  });
+
+  it("rejects non-https, non-zoom hosts, lookalikes, and junk", () => {
+    expect(isTrustedZoomDownloadUrl("http://zoom.us/rec/abc")).toBe(false);
+    expect(isTrustedZoomDownloadUrl("https://evil.example.com/rec")).toBe(false);
+    expect(isTrustedZoomDownloadUrl("https://notzoom.us.evil.com/rec")).toBe(false);
+    expect(isTrustedZoomDownloadUrl("https://169.254.169.254/latest")).toBe(false);
+    expect(isTrustedZoomDownloadUrl("not a url")).toBe(false);
+  });
+});
+
+const ZOOM_DL = "https://zoom.us/rec/transcript";
+
 describe("fetchWebhookTranscriptVtt", () => {
   it("downloads and returns a VTT body (BOM tolerated)", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response(`\uFEFF${VTT}`));
-    expect(await fetchWebhookTranscriptVtt("https://u", "t", fetchImpl as never)).toContain(
+    expect(await fetchWebhookTranscriptVtt(ZOOM_DL, "t", fetchImpl as never)).toContain(
       "WEBVTT"
     );
     expect(fetchImpl).toHaveBeenCalledWith(
-      "https://u",
+      ZOOM_DL,
       expect.objectContaining({ headers: { Authorization: "Bearer t" } })
     );
   });
 
+  it("refuses to fetch an untrusted URL at all (SSRF guard)", async () => {
+    const fetchImpl = vi.fn();
+    expect(
+      await fetchWebhookTranscriptVtt("https://evil.example.com/x", "t", fetchImpl as never)
+    ).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("returns null on a non-2xx response", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response("nope", { status: 401 }));
-    expect(await fetchWebhookTranscriptVtt("https://u", "t", fetchImpl as never)).toBeNull();
+    expect(await fetchWebhookTranscriptVtt(ZOOM_DL, "t", fetchImpl as never)).toBeNull();
   });
 
   it("returns null when the body is not a VTT transcript", async () => {
     const fetchImpl = vi.fn().mockResolvedValue(new Response("<html>login</html>"));
-    expect(await fetchWebhookTranscriptVtt("https://u", "t", fetchImpl as never)).toBeNull();
+    expect(await fetchWebhookTranscriptVtt(ZOOM_DL, "t", fetchImpl as never)).toBeNull();
   });
 
   it("returns null when the download throws", async () => {
     const fetchImpl = vi.fn().mockRejectedValue(new Error("net down"));
-    expect(await fetchWebhookTranscriptVtt("https://u", "t", fetchImpl as never)).toBeNull();
+    expect(await fetchWebhookTranscriptVtt(ZOOM_DL, "t", fetchImpl as never)).toBeNull();
   });
 
   it("aborts a hung download at the timeout budget", async () => {
@@ -261,7 +289,7 @@ describe("fetchWebhookTranscriptVtt", () => {
             );
           })
       ) as unknown as typeof fetch;
-      const pending = fetchWebhookTranscriptVtt("https://u", "t", fetchImpl);
+      const pending = fetchWebhookTranscriptVtt(ZOOM_DL, "t", fetchImpl);
       await vi.advanceTimersByTimeAsync(21_000);
       expect(await pending).toBeNull();
     } finally {
@@ -272,9 +300,10 @@ describe("fetchWebhookTranscriptVtt", () => {
 
 function makeDeps(overrides: Partial<Record<keyof ZoomWebhookDeps, unknown>> = {}) {
   const deps = {
-    connectionByZoomUserId: vi
+    connectionsByZoomUserId: vi
       .fn()
-      .mockResolvedValue({ business_id: BIZ, auto_import_transcripts: true }),
+      .mockResolvedValue([{ business_id: BIZ, auto_import_transcripts: true }]),
+    deauthBusinessIdsByZoomUserId: vi.fn().mockResolvedValue([BIZ]),
     getBusinessFn: vi.fn().mockResolvedValue({ name: "Acme Spa", tier: "standard" }),
     claimImport: vi.fn().mockResolvedValue(true),
     releaseImport: vi.fn().mockResolvedValue(undefined),
@@ -328,14 +357,18 @@ describe("processZoomWebhookEvent", () => {
     }
   });
 
-  it("deauthorizes the matched tenant and records the system log", async () => {
-    const deps = makeDeps();
+  it("deauthorizes every business behind the Zoom user, active or not", async () => {
+    const OTHER = "33333333-3333-4333-8333-333333333333";
+    const deps = makeDeps({
+      deauthBusinessIdsByZoomUserId: vi.fn().mockResolvedValue([BIZ, OTHER])
+    });
     const result = await processZoomWebhookEvent(
       { event: "app_deauthorized", payload: { user_id: HOST } },
       deps
     );
-    expect(result).toEqual({ kind: "deauthorized", businessId: BIZ });
+    expect(result).toEqual({ kind: "deauthorized", businessIds: [BIZ, OTHER] });
     expect(deps.deauthorize).toHaveBeenCalledWith(BIZ);
+    expect(deps.deauthorize).toHaveBeenCalledWith(OTHER);
     expect(deps.logSystem).toHaveBeenCalledWith(
       expect.objectContaining({ event: "zoom_deauthorized", businessId: BIZ })
     );
@@ -345,16 +378,18 @@ describe("processZoomWebhookEvent", () => {
     const deps = makeDeps();
     expect(
       await processZoomWebhookEvent({ event: "app_deauthorized", payload: {} }, deps)
-    ).toEqual({ kind: "deauthorized", businessId: null });
-    expect(deps.connectionByZoomUserId).not.toHaveBeenCalled();
+    ).toEqual({ kind: "deauthorized", businessIds: [] });
+    expect(deps.deauthBusinessIdsByZoomUserId).not.toHaveBeenCalled();
 
-    const unknown = makeDeps({ connectionByZoomUserId: vi.fn().mockResolvedValue(null) });
+    const unknown = makeDeps({
+      deauthBusinessIdsByZoomUserId: vi.fn().mockResolvedValue([])
+    });
     expect(
       await processZoomWebhookEvent(
         { event: "app_deauthorized", payload: { user_id: "zu-x" } },
         unknown
       )
-    ).toEqual({ kind: "deauthorized", businessId: null });
+    ).toEqual({ kind: "deauthorized", businessIds: [] });
     expect(unknown.deauthorize).not.toHaveBeenCalled();
   });
 
@@ -369,7 +404,7 @@ describe("processZoomWebhookEvent", () => {
   });
 
   it("skips hosts with no active connection", async () => {
-    const deps = makeDeps({ connectionByZoomUserId: vi.fn().mockResolvedValue(null) });
+    const deps = makeDeps({ connectionsByZoomUserId: vi.fn().mockResolvedValue([]) });
     const result = await processZoomWebhookEvent(transcriptBody(), deps);
     expect(result).toEqual({
       kind: "transcript",
@@ -380,13 +415,57 @@ describe("processZoomWebhookEvent", () => {
 
   it("honors the tenant's auto-import switch", async () => {
     const deps = makeDeps({
-      connectionByZoomUserId: vi
+      connectionsByZoomUserId: vi
         .fn()
-        .mockResolvedValue({ business_id: BIZ, auto_import_transcripts: false })
+        .mockResolvedValue([{ business_id: BIZ, auto_import_transcripts: false }])
     });
     const result = await processZoomWebhookEvent(transcriptBody(), deps);
     expect(result).toEqual({ kind: "transcript", outcome: "disabled", businessId: BIZ });
     expect(deps.claimImport).not.toHaveBeenCalled();
+  });
+
+  it("imports for every business behind a shared Zoom account", async () => {
+    const OTHER = "33333333-3333-4333-8333-333333333333";
+    const deps = makeDeps({
+      connectionsByZoomUserId: vi.fn().mockResolvedValue([
+        { business_id: BIZ, auto_import_transcripts: true },
+        { business_id: OTHER, auto_import_transcripts: true }
+      ])
+    });
+    const result = await processZoomWebhookEvent(transcriptBody(), deps);
+    expect(result).toEqual({ kind: "transcript", outcome: "imported", businessId: BIZ });
+    expect(deps.claimImport).toHaveBeenCalledWith(BIZ, UUID);
+    expect(deps.claimImport).toHaveBeenCalledWith(OTHER, UUID);
+    expect(deps.importCore).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports the loudest outcome across businesses (one failure wins)", async () => {
+    const OTHER = "33333333-3333-4333-8333-333333333333";
+    const deps = makeDeps({
+      connectionsByZoomUserId: vi.fn().mockResolvedValue([
+        { business_id: BIZ, auto_import_transcripts: true },
+        { business_id: OTHER, auto_import_transcripts: true }
+      ]),
+      importCore: vi
+        .fn()
+        .mockResolvedValueOnce({
+          ok: true,
+          document: { id: DOC_ID },
+          status: "ready",
+          errorDetail: null,
+          summary: "Recap"
+        })
+        .mockRejectedValueOnce(new Error("second business boom"))
+    });
+    const result = await processZoomWebhookEvent(transcriptBody(), deps);
+    expect(result).toEqual({
+      kind: "transcript",
+      outcome: "import_failed",
+      businessId: OTHER
+    });
+    // The succeeded business keeps its claim; only the failed one releases.
+    expect(deps.releaseImport).toHaveBeenCalledTimes(1);
+    expect(deps.releaseImport).toHaveBeenCalledWith(OTHER, UUID);
   });
 
   it("collapses redeliveries through the ledger claim", async () => {
