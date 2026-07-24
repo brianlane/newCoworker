@@ -15,6 +15,7 @@ vi.mock("@/lib/db/employees", () => ({ listTeamMembers: vi.fn(), listTimeOff: vi
 vi.mock("@/lib/db/zoom-connections", () => ({ getActiveZoomConnectionId: vi.fn() }));
 vi.mock("@/lib/customer-memory/capture-contact", () => ({ ensureCapturedContact: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }));
+vi.mock("@/lib/rate-limit", () => ({ rateLimitDurable: vi.fn() }));
 vi.mock("@/lib/logger", () => ({
   logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() }
 }));
@@ -37,6 +38,7 @@ import { listTeamMembers, listTimeOff } from "@/lib/db/employees";
 import { getActiveZoomConnectionId } from "@/lib/db/zoom-connections";
 import { ensureCapturedContact } from "@/lib/customer-memory/capture-contact";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { rateLimitDurable } from "@/lib/rate-limit";
 import { logger } from "@/lib/logger";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -80,6 +82,7 @@ const mockCapture = vi.mocked(ensureCapturedContact);
 const mockMembers = vi.mocked(listTeamMembers);
 const mockTimeOff = vi.mocked(listTimeOff);
 const mockClientFactory = vi.mocked(createSupabaseServiceClient);
+const mockSlotClaim = vi.mocked(rateLimitDurable);
 
 function ledgerDb(result: { data?: unknown; error?: { message: string } | null }) {
   const b: Record<string, unknown> = {};
@@ -101,6 +104,7 @@ beforeEach(() => {
   mockBusy.mockResolvedValue([]);
   mockClientFactory.mockResolvedValue(ledgerDb({ data: [], error: null }));
   mockCapture.mockResolvedValue({ created: true });
+  mockSlotClaim.mockResolvedValue({ success: true } as never);
 });
 
 afterEach(() => {
@@ -330,6 +334,19 @@ describe("submitPublicBooking", () => {
     expect(mockBook).not.toHaveBeenCalled();
   });
 
+  it("loses the durable slot claim to a racing visitor: slot_taken, no write", async () => {
+    mockSlotClaim.mockResolvedValueOnce({ success: false } as never);
+    expect(await submitPublicBooking(TOKEN, VALID)).toEqual({
+      ok: false,
+      detail: "slot_taken"
+    });
+    expect(mockSlotClaim).toHaveBeenCalledWith(
+      `booking-slot:${BIZ}:2026-01-05T16:00:00.000Z`,
+      { interval: 60 * 1000, maxRequests: 1 }
+    );
+    expect(mockBook).not.toHaveBeenCalled();
+  });
+
   it("books through the shared calendar core and files the contact", async () => {
     const out = await submitPublicBooking(TOKEN, VALID);
     expect(out).toEqual({
@@ -351,7 +368,7 @@ describe("submitPublicBooking", () => {
         notes: expect.stringContaining("Note: Referred by James")
       }),
       "+14805550100",
-      { alertSurface: "webchat" }
+      { alertSurface: "webchat", trustProvidedName: true }
     );
     expect(mockCapture).toHaveBeenCalledWith(BIZ, {
       e164: "+14805550100",

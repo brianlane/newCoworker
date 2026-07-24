@@ -29,6 +29,7 @@ import { parseBusinessHours } from "@/lib/business-profile/profile";
 import { normalizeContactNumber } from "@/lib/telnyx/format";
 import { ensureCapturedContact } from "@/lib/customer-memory/capture-contact";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { rateLimitDurable } from "@/lib/rate-limit";
 import { logger } from "@/lib/logger";
 
 export const BOOKING_PAGE_SOURCE_TAG = "Booking Page";
@@ -248,15 +249,26 @@ export async function submitPublicBooking(
   }
   const phone = phoneResult.value;
 
-  // Re-verify the requested start is still an offered slot: closes most of
-  // the visitor-vs-visitor race window (the dedupe ledger and attendee
-  // guard inside the booking core make the write itself idempotent).
+  // Re-verify the requested start is still an offered slot against live
+  // free/busy (a booking made anywhere since page load withdraws the slot).
   const listed = await listPublicSlots(rawToken, input.durationMinutes);
   if (!listed.ok) return listed;
   const stillOpen = listed.slots.some(
     (s) => new Date(s.startIso).getTime() === start.getTime()
   );
   if (!stillOpen) return { ok: false, detail: "slot_taken" };
+
+  // Two DIFFERENT visitors can both pass the re-verify while provider
+  // free/busy is stale (the dedupe ledger only guards the SAME attendee),
+  // so take a fleet-wide durable claim on (business, start) before the
+  // write: the first caller proceeds, the loser is told to re-pick. The
+  // claim self-expires, so a failed booking only parks the slot briefly;
+  // after a successful one, free/busy itself withdraws the slot.
+  const slotClaim = await rateLimitDurable(
+    `booking-slot:${context.businessId}:${start.toISOString()}`,
+    { interval: 60 * 1000, maxRequests: 1 }
+  );
+  if (!slotClaim.success) return { ok: false, detail: "slot_taken" };
 
   const endIso = new Date(start.getTime() + input.durationMinutes * 60_000).toISOString();
   const noteLines = [
@@ -279,8 +291,10 @@ export async function submitPublicBooking(
     },
     phone,
     // Customer-initiated surface: a booking for a lead nobody owns should
-    // page the owner exactly like an AI-made webchat booking would.
-    { alertSurface: "webchat" }
+    // page the owner exactly like an AI-made webchat booking would. The
+    // visitor typed their own name seconds ago, so it wins over any stale
+    // stored display name (trustProvidedName).
+    { alertSurface: "webchat", trustProvidedName: true }
   );
 
   if (!booked.ok) {

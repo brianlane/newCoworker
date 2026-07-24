@@ -512,6 +512,15 @@ export type BookAppointmentOptions = {
    * booked. `already_booked` dedupe retries never re-alert.
    */
   alertSurface?: "voice" | "sms" | "webchat";
+  /**
+   * Keep the caller-supplied attendeeName even when a stored contact
+   * display name exists. The preferred-name rule (stored name wins) exists
+   * for MODEL-carried names that drift mid-conversation; the public
+   * booking page passes a name the visitor typed seconds ago, which must
+   * not be overridden by a stale CRM entry. Stored-email backfill is
+   * unaffected.
+   */
+  trustProvidedName?: boolean;
 };
 
 export async function bookCalendarAppointment(
@@ -540,7 +549,7 @@ export async function bookCalendarAppointment(
     : { name: null, email: null };
   const args: BookAppointmentArgs = {
     ...rawArgs,
-    ...(stored.name ? { attendeeName: stored.name } : {}),
+    ...(stored.name && !opts.trustProvidedName ? { attendeeName: stored.name } : {}),
     ...(!rawArgs.attendeeEmail?.trim() && stored.email ? { attendeeEmail: stored.email } : {})
   };
 

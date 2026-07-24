@@ -1664,6 +1664,34 @@ describe("bookCalendarAppointment — stored contact EMAIL backfill (Truly, Jul 
   });
 });
 
+describe("bookCalendarAppointment trustProvidedName (public booking page)", () => {
+  const ARGS = {
+    startIso: "2026-01-05T16:00:00Z",
+    endIso: "2026-01-05T16:30:00Z",
+    summary: "Meeting",
+    attendeeName: "Fresh Form Name"
+  };
+
+  it("keeps the caller-supplied name over the stored display name", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(getCustomerMemory).mockResolvedValue({
+      display_name: "Stale CRM Name",
+      email: null
+    } as never);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
+
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+16138540807", {
+      trustProvidedName: true
+    });
+    expect(result.ok).toBe(true);
+    const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
+      data: { summary: string; description?: string };
+    };
+    expect(JSON.stringify(payload.data)).toContain("Fresh Form Name");
+    expect(JSON.stringify(payload.data)).not.toContain("Stale CRM Name");
+  });
+});
+
 describe("getWorkspaceBusyBlocks (direct — the booking page's busy fetch)", () => {
   const WINDOW_START = new Date("2026-01-05T00:00:00Z");
   const WINDOW_END = new Date("2026-01-06T00:00:00Z");
