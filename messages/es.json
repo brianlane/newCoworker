@@ -947,6 +947,7 @@
       "heroTitle": "Reuniones de Zoom, reservadas por tu",
       "heroHighlight": "coworker de IA",
       "heroSubtitle": "Conecta Zoom una vez y cada cita de video que tu coworker reserve incluirá una reunión de Zoom y un enlace que el cliente recibe automáticamente, sincronizado a través de reagendamientos y cancelaciones.",
+      "marketplaceBadge": "Disponible en el Zoom App Marketplace",
       "overviewEyebrow": "Resumen",
       "overviewTitle": "Qué hace la integración",
       "card1Title": "Reuniones creadas con las reservas",
@@ -1287,6 +1288,9 @@
       "connectedBadge": "Conectado",
       "lastUsed": "Claude usó este conector por última vez",
       "firstConnected": "conectado por primera vez"
+    },
+    "integrationsZoom": {
+      "marketplaceLink": "Ver nuestra app en el Zoom App Marketplace"
     },
     "integrationsWorkspace": {
       "capUsage": "{used} de {max} conexiones de espacio de trabajo en uso",

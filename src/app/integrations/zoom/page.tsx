@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import type { ReactNode } from "react";
 import Link from "next/link";
 import {
+  BadgeCheck,
   CalendarCheck,
   FileText,
   Link2,
@@ -38,6 +39,10 @@ export async function generateMetadata(): Promise<Metadata> {
     }
   };
 }
+
+/** Public listing for the approved "New Coworker OAuth" Marketplace app. */
+const ZOOM_MARKETPLACE_LISTING_URL =
+  "https://marketplace.zoom.us/apps/il8znyqrQ1y7GdkFnZ11dg";
 
 /** Scope identifiers are literal API values; only the use column localizes. */
 const SCOPE_IDS = [
@@ -92,6 +97,19 @@ export default async function ZoomIntegrationDocsPage() {
         }
         subtitle={t("heroSubtitle")}
       />
+
+      {/* Marketplace listing badge */}
+      <div className="mx-auto flex max-w-6xl justify-center px-6 pb-16">
+        <a
+          href={ZOOM_MARKETPLACE_LISTING_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="inline-flex items-center gap-2 rounded-full border border-claw-green/30 bg-claw-green/[0.08] px-5 py-2 text-sm font-medium text-claw-green transition-colors hover:bg-claw-green/[0.15]"
+        >
+          <BadgeCheck className="h-4 w-4" />
+          {t("marketplaceBadge")}
+        </a>
+      </div>
 
       {/* What it does */}
       <section className="mx-auto max-w-6xl px-6 pb-20">
