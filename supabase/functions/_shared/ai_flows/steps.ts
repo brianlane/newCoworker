@@ -404,6 +404,8 @@ export type StepAction =
       responseMinutes: number;
       ownerFallbackTemplate: string;
       claimedNotifyTemplate?: string;
+      /** Rendered + validated claim-outcome email recipient (see FlowStep). */
+      claimedNotifyEmail?: string;
       /** Pin offers to the single roster member with this name. */
       agentName?: string;
       /** DYNAMIC pin: var name whose VALUE the worker resolves against the
@@ -1150,6 +1152,13 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       }
       const responseMinutes = Math.max(1, Math.round(step.responseMinutes ?? 10));
       const claimed = step.claimedNotifyTemplate?.trim();
+      // Claim-outcome email recipient: rendered NOW (it never references
+      // {{agent.*}}/{{offer.*}}) and dropped when it doesn't resolve to a
+      // deliverable address — a bad template degrades to SMS-only, never
+      // fails the route step after a successful claim.
+      const claimedEmail = step.claimedNotifyEmail
+        ? renderTemplate(step.claimedNotifyEmail, scope).trim().toLowerCase()
+        : "";
       const agentName = step.agentName?.trim();
       // Broadcast list: trimmed, empties dropped. The schema guarantees >= 2
       // names and exclusivity with agentName/agentRef at author time.
@@ -1168,6 +1177,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           responseMinutes,
           ownerFallbackTemplate,
           claimedNotifyTemplate: claimed ? claimed : undefined,
+          ...(EMAIL_RE.test(claimedEmail) ? { claimedNotifyEmail: claimedEmail } : {}),
           ...(agentName ? { agentName } : {}),
           ...(step.agentNameVar ? { agentNameVar: step.agentNameVar } : {}),
           ...(step.agentRef ? { agentRef: step.agentRef } : {}),

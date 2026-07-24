@@ -3994,6 +3994,15 @@ function StepFields({
           }
           textarea
         />
+        <Field
+          label="Also email the claim outcome to (optional)"
+          value={step.claimedNotifyEmail ?? ""}
+          onChange={(v) =>
+            // Optional like claimedNotifyTemplate: empty round-trips as undefined.
+            patchStep(index, { claimedNotifyEmail: v.trim() ? v.trim() : undefined })
+          }
+          help="Emails this address whenever the lead is claimed, released (86), or claimed LATE (a teammate replies 1 up to 24 hours after the window closed, after the no-claim notice already went out). Use your team inbox to keep an email record of who owns each lead."
+        />
         <div className="rounded-md border border-parchment/10 bg-deep-ink/30 px-3 py-2 space-y-2">
           <label className="flex items-center gap-2 text-xs text-parchment/70">
             <input

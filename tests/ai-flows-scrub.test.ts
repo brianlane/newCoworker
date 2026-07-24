@@ -100,7 +100,9 @@ const piiDefinition = {
       ownerFallbackTemplate: "back to you",
       agentName: "Amy",
       // Structural dynamic pin (a var NAME, not a person): must survive.
-      agentNameVar: "assigned_agent"
+      agentNameVar: "assigned_agent",
+      // A real tenant inbox: must be dropped like the agentName pin.
+      claimedNotifyEmail: "team@amylaidlaw.com"
     },
     {
       id: "s5",
@@ -164,6 +166,9 @@ describe("scrubDefinition", () => {
     expect(steps[4].to).toBe("{{vars.lead_phone}}");
     expect(steps[5].fromConnectionId).toBeUndefined();
     expect(steps[6].agentName).toBeUndefined();
+    // The claim-outcome inbox is tenant data: never reaches the library.
+    expect(steps[6].claimedNotifyEmail).toBeUndefined();
+    expect(json).not.toContain("team@amylaidlaw.com");
     // The DYNAMIC pin is structure (a var name), not tenant PII: it survives
     // scrubbing so a duplicated library flow keeps its named-teammate routing.
     expect(steps[6].agentNameVar).toBe("assigned_agent");

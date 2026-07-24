@@ -733,6 +733,15 @@ export type FlowStep =
       /** Optional SMS sent to the owner once an agent claims the lead. */
       claimedNotifyTemplate?: string;
       /**
+       * Optional EMAIL copy of the claim outcome (templated address, e.g. the
+       * team inbox). Unlike a post-route send_email step, this fires at CLAIM
+       * FINALIZATION, so it covers late claims (a "1" up to 24h after the
+       * offer lapsed, which never replays post-route steps) and "86" releases.
+       * Subject marks late claims explicitly; body reuses
+       * claimedNotifyTemplate when present, else a plain claim line.
+       */
+      claimedNotifyEmail?: string;
+      /**
        * Pin the offer to the single roster member with this name (e.g. all
        * seller leads go straight to one agent). Falls back to the owner when
        * that member is missing/opted out — never silently to someone else.

@@ -496,6 +496,12 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           {step.claimedNotifyTemplate && (
             <Row label="Owner notice when claimed" value={step.claimedNotifyTemplate} />
           )}
+          {step.claimedNotifyEmail && (
+            <Row
+              label="Claim outcome emailed to"
+              value={`${step.claimedNotifyEmail} (also on late claims and releases)`}
+            />
+          )}
           {step.ownerDirectWhen && step.ownerDirectTemplate && (
             <div className="rounded-md border border-parchment/10 bg-deep-ink/30 p-3 space-y-2">
               <div className="text-xs font-semibold text-parchment/60">

@@ -1043,6 +1043,14 @@ const nonBranchStepMembers = [
     responseMinutes: z.number().int().min(1).max(1440).optional(),
     ownerFallbackTemplate: z.string().min(1).max(1600),
     claimedNotifyTemplate: z.string().min(1).max(1600).optional(),
+    // Email copy of the claim outcome, sent at CLAIM FINALIZATION (worker),
+    // so it also covers LATE claims ("1" up to 24h after the window lapsed)
+    // and "86" releases, which never replay post-route steps and therefore
+    // can never be reported by a flow-authored send_email step. Bounded like
+    // send_email.to (not strict .email()) so it can carry a {{vars.x}}
+    // template; the planner validates the rendered address and degrades to
+    // SMS-only when it is undeliverable.
+    claimedNotifyEmail: z.string().min(3).max(320).optional(),
     agentName: z.string().min(1).max(120).optional(),
     // DYNAMIC pin: the name of an earlier-produced var whose VALUE (e.g. an
     // extracted "I want Gabby to have this" answer) is resolved against the
@@ -1520,6 +1528,7 @@ function templateStringsForStep(step: FlowStep): string[] {
         step.offerTemplate,
         step.ownerFallbackTemplate,
         step.claimedNotifyTemplate ?? "",
+        step.claimedNotifyEmail ?? "",
         step.ownerDirectTemplate ?? ""
       ];
     case "browse_action":
