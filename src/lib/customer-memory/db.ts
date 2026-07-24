@@ -477,10 +477,13 @@ export async function updateCustomerOwnerFields(
       .eq("customer_e164", customerE164)
       .maybeSingle();
     const row = data as { display_name?: string | null; email?: string | null } | null;
+    // A failed/rowless read-back falls back to the values just WRITTEN —
+    // an edit the DB accepted must never be dropped from the graph because
+    // a follow-up read blipped.
     await ingestContact(businessId, {
-      displayName: row?.display_name ?? null,
+      displayName: row?.display_name ?? ("displayName" in edit ? (edit.displayName ?? null) : null),
       e164: customerE164,
-      email: row?.email ?? null
+      email: row?.email ?? ("email" in edit ? (edit.email ?? null) : null)
     });
   }
   if ("pinnedMd" in edit && edit.pinnedMd?.trim()) {
