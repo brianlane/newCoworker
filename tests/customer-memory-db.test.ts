@@ -884,12 +884,21 @@ describe("updateCustomerOwnerFields", () => {
 
     vi.mocked(ingestContact).mockClear();
 
-    // Identity edit on a NAMELESS contact (read returns nothing): the
-    // ingest degrades to nameless and the builder no-ops downstream.
+    // Read-back returns no row (replica blip): the just-WRITTEN values
+    // still reach the graph — never dropped because a follow-up read failed.
     const emailNameless = makeClient({ fromTerminator: { data: null, error: null } });
     await updateCustomerOwnerFields(BIZ, CUSTOMER, { email: "x@y.co" }, emailNameless.client);
     expect(ingestContact).toHaveBeenCalledWith(BIZ, {
       displayName: null,
+      e164: CUSTOMER,
+      email: "x@y.co"
+    });
+
+    vi.mocked(ingestContact).mockClear();
+    const nameFallback = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(BIZ, CUSTOMER, { displayName: "Fresh Name" }, nameFallback.client);
+    expect(ingestContact).toHaveBeenCalledWith(BIZ, {
+      displayName: "Fresh Name",
       e164: CUSTOMER,
       email: null
     });
