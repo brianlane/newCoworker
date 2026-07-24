@@ -166,7 +166,11 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
           </h2>
           <p className="mt-2 text-sm text-parchment/60">{t("calendarUnreadableBody")}</p>
           <Link
-            href="/dashboard/integrations/workspace"
+            href={
+              state.calendarProvider === "caldav"
+                ? "/dashboard/integrations/caldav"
+                : "/dashboard/integrations/workspace"
+            }
             className="mt-3 inline-block text-sm text-claw-green hover:underline"
           >
             {t("calendarUnreadableAction")}
