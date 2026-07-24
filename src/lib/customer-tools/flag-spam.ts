@@ -42,6 +42,7 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { setSmsOptOut } from "@/lib/sms/opt-outs";
 import { normalizeDialableNumber } from "@/lib/telnyx/format";
+import { cancelPendingRunsForLead } from "./cancel-lead-runs";
 import { logger } from "@/lib/logger";
 
 /** Tag written to the contact row (also what segments/filters key on). */
@@ -60,25 +61,6 @@ const CONTACT_TAGS_CAP = 25;
  * could claim a record that was never written (Bugbot Low on PR #884).
  */
 const SPAM_NOTE_MARKER = "declared this contact SPAM";
-
-/**
- * Every non-terminal run state — human-parked AND `running` included (spam
- * stops everything). Matches the dashboard owner-stop's
- * CANCELABLE_RUN_STATUSES: a `running` run cancels cooperatively, the
- * worker re-reads status at each step boundary and quits when it sees
- * canceled.
- */
-export const SPAM_STOPPABLE_STATUSES = [
-  "queued",
-  "running",
-  "awaiting_reply",
-  "awaiting_call",
-  "awaiting_approval",
-  "awaiting_agent"
-] as const;
-
-/** Most runs one flag will cancel (same bound as the goal jumps). */
-const MAX_RUNS_PER_FLAG = 25;
 
 export type FlagContactSpamArgs = {
   /** The number to suppress, as the owner gave it (forgiving formats). */
@@ -114,13 +96,8 @@ export type FlagContactSpamDeps = {
   createDb?: typeof createSupabaseServiceClient;
   /** Injectable opt-out write (tests). */
   setOptOut?: typeof setSmsOptOut;
-};
-
-type PendingRun = {
-  id: string;
-  status: string;
-  context: Record<string, unknown> | null;
-  revision: number;
+  /** Injectable run-cancel core (tests). */
+  cancelRuns?: typeof cancelPendingRunsForLead;
 };
 
 type ContactRow = {
@@ -143,6 +120,7 @@ export async function flagContactSpam(
   /* c8 ignore start -- production defaults; tests inject */
   const createDb = deps.createDb ?? createSupabaseServiceClient;
   const setOptOut = deps.setOptOut ?? setSmsOptOut;
+  const cancelRuns = deps.cancelRuns ?? cancelPendingRunsForLead;
   /* c8 ignore stop */
 
   const normalized = normalizeDialableNumber(args.phone);
@@ -226,67 +204,11 @@ export async function flagContactSpam(
     }
 
     // 2. Cancel pending runs across the identity set (best-effort — the
-    // opt-outs above already block sends). Same lead-identity keys the
-    // goal jumps / stop-on-response use.
-    const runMatchOr = identitySet
-      .flatMap((n) => [
-        `context->trigger->>from.eq.${n}`,
-        `context->vars->>lead_phone.eq.${n}`,
-        `context->waiting_reply->>from.eq.${n}`,
-        `context->waiting_call->>to.eq.${n}`
-      ])
-      .join(",");
-    const { data: runRows, error: runsErr } = await db
-      .from("ai_flow_runs")
-      .select("id, status, context, revision")
-      .eq("business_id", businessId)
-      .in("status", [...SPAM_STOPPABLE_STATUSES])
-      .or(runMatchOr)
-      .limit(MAX_RUNS_PER_FLAG);
-    if (runsErr) {
-      logger.error("flag_contact_spam: pending-run lookup failed", {
-        businessId,
-        error: runsErr.message
-      });
-      runsSweepComplete = false;
-    } else {
-      for (const run of (runRows ?? []) as PendingRun[]) {
-        const nextContext = {
-          ...(run.context ?? {}),
-          canceled: {
-            by: SPAM_CANCELED_BY,
-            at: new Date().toISOString(),
-            from_status: run.status
-          }
-        };
-        // Optimistic concurrency, same shape as stop-on-response: gate on the
-        // revision we read so a concurrent claim/resume wins cleanly (the
-        // opt-out still blocks whatever that run tries to send).
-        const { data: updated, error: updErr } = await db
-          .from("ai_flow_runs")
-          .update({
-            status: "canceled",
-            context: nextContext,
-            claimed_at: null,
-            respond_by_at: null,
-            updated_at: new Date().toISOString()
-          })
-          .eq("id", run.id)
-          .eq("revision", run.revision)
-          .in("status", [...SPAM_STOPPABLE_STATUSES])
-          .select("id");
-        if (updErr) {
-          logger.error("flag_contact_spam: run cancel failed", {
-            businessId,
-            runId: run.id,
-            error: updErr.message
-          });
-          runsSweepComplete = false;
-          continue;
-        }
-        if (((updated ?? []) as unknown[]).length > 0) canceledRuns += 1;
-      }
-    }
+    // opt-outs above already block sends). Shared core with the
+    // set_contact_reply_mode suppress path.
+    const cancelResult = await cancelRuns(db, businessId, identitySet, SPAM_CANCELED_BY);
+    canceledRuns = cancelResult.canceledRuns;
+    runsSweepComplete = cancelResult.sweepComplete;
 
     // 3. Contact tag + pinned note (best-effort; direct writes, no hooks).
     contactOutcome = await tagContactSpam(db, businessId, phoneE164, contact, args.reason);

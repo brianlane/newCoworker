@@ -109,6 +109,7 @@ export async function POST(request: Request) {
       editAiflowEnabled,
       notificationPrefsToolEnabled,
       flagSpamToolEnabled,
+      replyModeToolEnabled,
       integrationsLine,
       businessContextBlock
     ] = await Promise.all([
@@ -123,6 +124,7 @@ export async function POST(request: Request) {
       isAgentToolEnabled(body.businessId, "dashboard", "edit_aiflow"),
       isAgentToolEnabled(body.businessId, "dashboard", "update_notification_preferences"),
       isAgentToolEnabled(body.businessId, "dashboard", "flag_contact_spam"),
+      isAgentToolEnabled(body.businessId, "dashboard", "set_contact_reply_mode"),
       buildIntegrationsStatusLine(body.businessId),
       buildBusinessContextBlock(body.businessId)
     ]);
@@ -217,7 +219,10 @@ export async function POST(request: Request) {
         // The texter is the verified OWNER — exactly the caller a spam
         // declaration comes from ("hes spam", KYP Jul 23 2026, was THIS
         // surface promising an action it had no tool for).
-        flag_contact_spam: flagSpamToolEnabled
+        flag_contact_spam: flagSpamToolEnabled,
+        // "stop texting chris please" (KYP Jul 24 2026) belongs HERE, not
+        // on the spam block — the reversible sibling.
+        set_contact_reply_mode: replyModeToolEnabled
       }
     });
 

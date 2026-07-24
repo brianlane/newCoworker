@@ -80,7 +80,9 @@ const ALL_GATES: ActionToolGates = {
   update_notification_preferences: true,
   // Declared on the owner-over-SMS surface in production ("hes spam" is
   // exactly this surface's request shape).
-  flag_contact_spam: true
+  flag_contact_spam: true,
+  // Also production-declared here ("stop texting chris please", Jul 24).
+  set_contact_reply_mode: true
 };
 const TOOLS = actionToolDeclarations(ALL_GATES);
 
