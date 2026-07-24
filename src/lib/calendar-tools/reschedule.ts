@@ -38,6 +38,7 @@ import {
   cancelWaitlistForAttendee,
   resolveWaitlistAfterBooking
 } from "@/lib/calendar-tools/waitlist-resolve";
+import { graphTimeIso } from "@/lib/ai-flows/calendar-poll";
 import { logger } from "@/lib/logger";
 
 /**
@@ -96,9 +97,9 @@ type LocatedEvent = {
    */
   zoomMeetingId: string | null;
   /**
-   * The event's start from the ledger claim (null for provider-search
-   * hits, which never learn the time): this is the slot the waitlist is
-   * told about when a cancel/reschedule frees it.
+   * The event's start, from the ledger claim or the provider search's
+   * listing (null when neither carried one): this is the slot the
+   * waitlist is told about when a cancel/reschedule frees it.
    */
   startAt: string | null;
 };
@@ -112,6 +113,13 @@ function proxyTarget(conn: ResolvedVoiceConnection): ProxyTarget {
   return { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey };
 }
 
+type SearchedEvent = {
+  eventId: string;
+  /** The event's current start when the listing carried one (the slot a
+   * cancel/reschedule frees for the waitlist); null otherwise. */
+  startIso: string | null;
+};
+
 /**
  * Provider-side fallback search for the attendee's next upcoming event.
  * Matches on the phone/email marker embedded in every booked event's
@@ -121,7 +129,7 @@ async function searchProviderEvent(
   businessId: string,
   conn: ResolvedVoiceConnection,
   marker: string
-): Promise<string | null> {
+): Promise<SearchedEvent | null> {
   if (!marker) return null;
   // Bounded, case-insensitive matching (Bugbot on PR #577):
   //  - case-insensitive because the caller may hold a lowercased email (the
@@ -162,7 +170,11 @@ async function searchProviderEvent(
         });
         const items =
           ((res?.data ?? null) as {
-            items?: Array<{ id?: string; description?: string }>;
+            items?: Array<{
+              id?: string;
+              description?: string;
+              start?: { dateTime?: string };
+            }>;
           } | null)?.items ?? [];
         // `q` is a loose full-text match — verify the marker actually sits in
         // the event description before mutating anything, mirroring the
@@ -172,7 +184,13 @@ async function searchProviderEvent(
           (e) =>
             typeof e.id === "string" && e.id.length > 0 && containsMarker(e.description ?? "")
         );
-        if (hit?.id) return hit.id;
+        if (hit?.id) {
+          const startMs = Date.parse(hit.start?.dateTime ?? "");
+          return {
+            eventId: hit.id,
+            startIso: Number.isFinite(startMs) ? new Date(startMs).toISOString() : null
+          };
+        }
       } catch (err) {
         logger.warn("calendar-tools/search: google lookup failed", {
           businessId,
@@ -220,6 +238,7 @@ async function searchProviderEvent(
             id?: string;
             bodyPreview?: string;
             body?: { content?: string };
+            start?: { dateTime?: string; timeZone?: string };
           }>;
         } | null)?.value ?? [];
       const hit = items.find(
@@ -228,7 +247,13 @@ async function searchProviderEvent(
           e.id.length > 0 &&
           containsMarker(`${e.body?.content ?? ""}\n${e.bodyPreview ?? ""}`)
       );
-      if (hit?.id) return hit.id;
+      if (hit?.id) {
+        const startMs = Date.parse(graphTimeIso(hit.start) ?? "");
+        return {
+          eventId: hit.id,
+          startIso: Number.isFinite(startMs) ? new Date(startMs).toISOString() : null
+        };
+      }
     } catch (err) {
       logger.warn("calendar-tools/search: microsoft lookup failed", {
         businessId,
@@ -255,14 +280,19 @@ async function locateUpcomingAppointment(
       startAt: claim.startAt
     };
   }
-  const eventId = await searchProviderEvent(businessId, conn, marker);
-  if (!eventId) return null;
+  const searched = await searchProviderEvent(businessId, conn, marker);
+  if (!searched) return null;
   // The event may still hold a ledger row under a DIFFERENT attendee key
   // (booked by phone, rescheduled by email) carrying the booking's Zoom
   // meeting — capture it NOW, before the callers' by-event ledger cleanup
   // deletes that row, so the meeting still moves/dies with the event.
-  const zoomMeetingId = await findZoomMeetingIdByEvent(businessId, eventId);
-  return { eventId, claimId: null, zoomMeetingId, startAt: null };
+  const zoomMeetingId = await findZoomMeetingIdByEvent(businessId, searched.eventId);
+  return {
+    eventId: searched.eventId,
+    claimId: null,
+    zoomMeetingId,
+    startAt: searched.startIso
+  };
 }
 
 /**
@@ -376,15 +406,14 @@ export async function rescheduleCalendarAppointment(
             endIso: args.newEndIso
           });
         }
-        // Waitlist (both best-effort by module contract): the OLD slot just
-        // freed, offer it to whoever is waiting, and the attendee's own
-        // live entries resolve against the new start.
-        await offerFreedSlot(businessId, claim.startAt);
-        await resolveWaitlistAfterBooking(
-          businessId,
-          { phones: phone ? [phone] : [], email: args.attendeeEmail ?? null },
-          args.newStartIso
-        );
+        // Waitlist (both best-effort by module contract): the attendee's
+        // own live entries resolve against the new start FIRST, then the
+        // vacated OLD slot is offered to whoever is waiting, with the
+        // mover excluded so they are never texted the slot they just gave
+        // up (Bugbot Medium on PR #903).
+        const attendee = { phones: phone ? [phone] : [], email: args.attendeeEmail ?? null };
+        await resolveWaitlistAfterBooking(businessId, attendee, args.newStartIso);
+        await offerFreedSlot(businessId, claim.startAt, {}, attendee);
       } else if (moved.detail === "booking_not_found") {
         // The provider event is gone (deleted upstream) but the ledger row
         // survived — drop it so the stale claim can't shadow the slot or
@@ -456,17 +485,18 @@ export async function rescheduleCalendarAppointment(
       });
     }
 
-    // Waitlist (best-effort by module contract): the OLD slot just freed
-    // (known only for ledger-resolved events), and the attendee's own live
-    // entries resolve against the new start.
+    // Waitlist (best-effort by module contract): the attendee's own live
+    // entries resolve against the new start first, then the vacated OLD
+    // slot (when the ledger or the search listing carried it) is offered
+    // with the mover excluded.
+    const waitlistAttendee = {
+      phones: phone ? [phone] : [],
+      email: args.attendeeEmail ?? null
+    };
+    await resolveWaitlistAfterBooking(businessId, waitlistAttendee, args.newStartIso);
     if (located.startAt) {
-      await offerFreedSlot(businessId, located.startAt);
+      await offerFreedSlot(businessId, located.startAt, {}, waitlistAttendee);
     }
-    await resolveWaitlistAfterBooking(
-      businessId,
-      { phones: phone ? [phone] : [], email: args.attendeeEmail ?? null },
-      args.newStartIso
-    );
 
     return {
       ok: true,
@@ -539,14 +569,14 @@ export async function cancelCalendarAppointment(
         if (claim.zoomMeetingId) {
           await deleteZoomMeetingForBooking(businessId, claim.zoomMeetingId);
         }
-        // Waitlist (best-effort by module contract): the canceled slot is
-        // exactly what someone may be waiting for; the canceler's own
-        // entries are moot.
-        await offerFreedSlot(businessId, claim.startAt);
-        await cancelWaitlistForAttendee(businessId, {
-          phones: phone ? [phone] : [],
-          email: args.attendeeEmail ?? null
-        });
+        // Waitlist (best-effort by module contract): the canceler's own
+        // entries are moot and drop FIRST, then the canceled slot is
+        // offered to whoever is waiting, with the canceler excluded so a
+        // race can never text them the slot they just walked away from
+        // (Bugbot Medium on PR #903).
+        const attendee = { phones: phone ? [phone] : [], email: args.attendeeEmail ?? null };
+        await cancelWaitlistForAttendee(businessId, attendee);
+        await offerFreedSlot(businessId, claim.startAt, {}, attendee);
       }
       return canceled;
     }
@@ -582,16 +612,17 @@ export async function cancelCalendarAppointment(
       await deleteZoomMeetingForBooking(businessId, located.zoomMeetingId);
     }
 
-    // Waitlist (best-effort by module contract): offer the freed slot
-    // (known only for ledger-resolved events) and drop the canceler's own
-    // entries.
-    if (located.startAt) {
-      await offerFreedSlot(businessId, located.startAt);
-    }
-    await cancelWaitlistForAttendee(businessId, {
+    // Waitlist (best-effort by module contract): the canceler's own
+    // entries drop first, then the freed slot (when the ledger or the
+    // search listing carried it) is offered with the canceler excluded.
+    const waitlistAttendee = {
       phones: phone ? [phone] : [],
       email: args.attendeeEmail ?? null
-    });
+    };
+    await cancelWaitlistForAttendee(businessId, waitlistAttendee);
+    if (located.startAt) {
+      await offerFreedSlot(businessId, located.startAt, {}, waitlistAttendee);
+    }
 
     return {
       ok: true,

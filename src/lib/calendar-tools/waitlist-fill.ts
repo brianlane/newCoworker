@@ -40,6 +40,7 @@ import {
 } from "@/lib/calendar-tools/handlers";
 import { getCaldavBusyBlocks } from "@/lib/calendar-tools/caldav";
 import { findVagaroSlots } from "@/lib/calendar-tools/vagaro";
+import { digitsOf, phoneDigitsMatch } from "@/lib/calendar-tools/phone-match";
 import {
   findLiveWaitlistEntriesForAttendee,
   getWaitlistSettings,
@@ -248,13 +249,38 @@ async function sendOfferSms(
   }
 }
 
+/** The attendee whose action freed the slot (never offered their own slot). */
+export type WaitlistOfferExclusion = {
+  phones: string[];
+  email?: string | null;
+};
+
+function matchesExclusion(entry: BookingWaitlistRow, exclude: WaitlistOfferExclusion): boolean {
+  const entryDigits = digitsOf(entry.phone);
+  if (
+    entryDigits.length > 0 &&
+    exclude.phones.some((p) => {
+      const d = digitsOf(p);
+      return d.length > 0 && phoneDigitsMatch(entryDigits, d);
+    })
+  ) {
+    return true;
+  }
+  const excludeEmail = exclude.email?.trim().toLowerCase() || null;
+  return excludeEmail !== null && (entry.email ?? "") === excludeEmail;
+}
+
 /** Waiting entries eligible for a slot starting at `startMs`, oldest first. */
 export function eligibleWaitlistCandidates(
   entries: BookingWaitlistRow[],
-  startMs: number
+  startMs: number,
+  exclude?: WaitlistOfferExclusion
 ): BookingWaitlistRow[] {
   return entries.filter((e) => {
     if (e.status !== "waiting") return false;
+    // The person who just canceled/moved this very slot must never be
+    // texted an offer for it (Bugbot Medium on PR #903).
+    if (exclude && matchesExclusion(e, exclude)) return false;
     if (Date.parse(e.earliest_at) > startMs) return false;
     if (e.latest_at !== null && Date.parse(e.latest_at) < startMs) return false;
     if (
@@ -278,7 +304,8 @@ export function eligibleWaitlistCandidates(
 export async function offerFreedSlot(
   businessId: string,
   freedStartIso: string,
-  deps: WaitlistFillDeps = {}
+  deps: WaitlistFillDeps = {},
+  exclude?: WaitlistOfferExclusion
 ): Promise<OfferFreedSlotOutcome> {
   try {
     const now = deps.now?.() ?? new Date();
@@ -302,7 +329,7 @@ export async function offerFreedSlot(
     );
     if (held) return "slot_already_offered";
 
-    const candidates = eligibleWaitlistCandidates(entries, startMs);
+    const candidates = eligibleWaitlistCandidates(entries, startMs, exclude);
     if (candidates.length === 0) return "no_candidates";
 
     const conn = await (deps.resolveConnection ?? resolveCalendarConnection)(businessId);

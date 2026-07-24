@@ -990,7 +990,12 @@ describe("waitlist hooks", () => {
       data: { eventId: "evt-1" }
     } as never);
     await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS);
-    expect(vi.mocked(offerFreedSlot)).toHaveBeenCalledWith(BIZ, CLAIM.startAt);
+    expect(vi.mocked(offerFreedSlot)).toHaveBeenCalledWith(
+      BIZ,
+      CLAIM.startAt,
+      {},
+      { phones: [PHONE], email: null }
+    );
     expect(vi.mocked(resolveWaitlistAfterBooking)).toHaveBeenCalledWith(
       BIZ,
       { phones: [PHONE], email: null },
@@ -998,12 +1003,17 @@ describe("waitlist hooks", () => {
     );
   });
 
-  it("Google ledger reschedule frees the claim's old start; a provider-search hit has no start to free", async () => {
+  it("Google ledger reschedule frees the claim's old start; a start-less search hit has nothing to free", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
     vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
     await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS);
-    expect(vi.mocked(offerFreedSlot)).toHaveBeenCalledWith(BIZ, CLAIM.startAt);
+    expect(vi.mocked(offerFreedSlot)).toHaveBeenCalledWith(
+      BIZ,
+      CLAIM.startAt,
+      {},
+      { phones: [PHONE], email: null }
+    );
 
     vi.mocked(offerFreedSlot).mockClear();
     vi.mocked(resolveWaitlistAfterBooking).mockClear();
@@ -1019,16 +1029,74 @@ describe("waitlist hooks", () => {
     expect(vi.mocked(resolveWaitlistAfterBooking)).toHaveBeenCalled();
   });
 
+  it("a searched event WITH a listed start frees that slot too (Google reschedule, Graph cancel)", async () => {
+    // Google search listing carries the event's start.
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({
+        data: {
+          items: [
+            {
+              id: "evt-search",
+              description: `Phone: ${PHONE}`,
+              start: { dateTime: "2026-07-13T20:00:00Z" }
+            }
+          ]
+        }
+      } as never)
+      .mockResolvedValueOnce({ data: {} } as never);
+    await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS);
+    expect(vi.mocked(offerFreedSlot)).toHaveBeenCalledWith(
+      BIZ,
+      "2026-07-13T20:00:00.000Z",
+      {},
+      { phones: [PHONE], email: null }
+    );
+
+    // Graph search listing: zone-less dateTime reads as UTC (graphTimeIso).
+    vi.mocked(offerFreedSlot).mockClear();
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
+    vi.mocked(nangoProxyForBusiness).mockReset();
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({
+        data: {
+          value: [
+            {
+              id: "evt-search",
+              bodyPreview: `Phone: ${PHONE}`,
+              start: { dateTime: "2026-07-13T20:00:00.0000000" }
+            }
+          ]
+        }
+      } as never)
+      .mockResolvedValueOnce({ data: {} } as never);
+    await cancelCalendarAppointment(BIZ, { attendeePhone: PHONE });
+    expect(vi.mocked(offerFreedSlot)).toHaveBeenCalledWith(
+      BIZ,
+      "2026-07-13T20:00:00.000Z",
+      {},
+      { phones: [PHONE], email: null }
+    );
+  });
+
   it("cancel frees the slot and drops the canceler's own entries (ledger path); Calendly drops entries only", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
     vi.mocked(cancelVagaroAppointment).mockResolvedValue({ ok: true, data: {} } as never);
     await cancelCalendarAppointment(BIZ, CANCEL_ARGS);
-    expect(vi.mocked(offerFreedSlot)).toHaveBeenCalledWith(BIZ, CLAIM.startAt);
+    // The canceler's own entries drop BEFORE the slot is offered, and the
+    // offer excludes them so they never get texted their own slot.
+    expect(vi.mocked(offerFreedSlot)).toHaveBeenCalledWith(BIZ, CLAIM.startAt, {}, {
+      phones: [PHONE],
+      email: null
+    });
     expect(vi.mocked(cancelWaitlistForAttendee)).toHaveBeenCalledWith(BIZ, {
       phones: [PHONE],
       email: null
     });
+    const cancelOrder = vi.mocked(cancelWaitlistForAttendee).mock.invocationCallOrder[0];
+    const offerOrder = vi.mocked(offerFreedSlot).mock.invocationCallOrder[0];
+    expect(cancelOrder).toBeLessThan(offerOrder);
 
     vi.mocked(offerFreedSlot).mockClear();
     vi.mocked(cancelWaitlistForAttendee).mockClear();

@@ -204,6 +204,47 @@ describe("eligibleWaitlistCandidates", () => {
     );
     expect(kept.map((e) => e.id)).toEqual(["wl-1"]);
   });
+
+  it("excludes the acting attendee (digit-tolerant phone or email), never anyone else", () => {
+    const canceler = entry({ id: "canceler", current_booking_start_at: null });
+    const byEmail = entry({
+      id: "by-email",
+      phone: "+15005550000",
+      email: "joe@acme.com",
+      current_booking_start_at: null
+    });
+    const bystander = entry({
+      id: "bystander",
+      phone: "+15005559999",
+      email: null,
+      current_booking_start_at: null
+    });
+    // A digit-less stored phone can never phone-match; email decides.
+    const digitless = entry({
+      id: "digitless",
+      phone: "---",
+      email: null,
+      current_booking_start_at: null
+    });
+    const kept = eligibleWaitlistCandidates(
+      [canceler, byEmail, bystander, digitless],
+      SLOT_MS,
+      {
+        // National formatting still matches the stored E.164; empty phone
+        // strings are ignored.
+        phones: ["", "(548) 577-3546"],
+        email: "Joe@Acme.Com"
+      }
+    );
+    expect(kept.map((e) => e.id)).toEqual(["bystander", "digitless"]);
+
+    // No email in the exclusion: only the phone match applies.
+    const keptNoEmail = eligibleWaitlistCandidates([canceler, byEmail, bystander], SLOT_MS, {
+      phones: ["+15485773546"],
+      email: null
+    });
+    expect(keptNoEmail.map((e) => e.id)).toEqual(["by-email", "bystander"]);
+  });
 });
 
 describe("verifyFreedSlotOpen", () => {
@@ -295,6 +336,13 @@ describe("offerFreedSlot", () => {
 
     mockList.mockResolvedValue([entry({ last_offered_start_at: SLOT })]);
     expect(await offerFreedSlot(BIZ, SLOT)).toBe("no_candidates");
+
+    // The only candidate is the excluded actor (the canceler/mover).
+    mockList.mockResolvedValue([entry({ current_booking_start_at: null })]);
+    expect(
+      await offerFreedSlot(BIZ, SLOT, {}, { phones: ["+15485773546"], email: null })
+    ).toBe("no_candidates");
+    expect(mockSend).not.toHaveBeenCalled();
   });
 
   it("holds one pending offer per slot (slot_already_offered)", async () => {
