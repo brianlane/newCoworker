@@ -947,6 +947,7 @@
       "heroTitle": "Zoom meetings, booked by your",
       "heroHighlight": "AI coworker",
       "heroSubtitle": "Connect Zoom once and every video appointment your coworker books comes with a Zoom meeting and a join link the customer receives automatically, kept in sync through reschedules and cancellations.",
+      "marketplaceBadge": "Available on the Zoom App Marketplace",
       "overviewEyebrow": "Overview",
       "overviewTitle": "What the integration does",
       "card1Title": "Meetings created with bookings",
@@ -1287,6 +1288,9 @@
       "connectedBadge": "Connected",
       "lastUsed": "Claude last used this connector",
       "firstConnected": "first connected"
+    },
+    "integrationsZoom": {
+      "marketplaceLink": "View our listing on the Zoom App Marketplace"
     },
     "integrationsWorkspace": {
       "capUsage": "{used} of {max} workspace connections used",

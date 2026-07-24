@@ -25,6 +25,7 @@
  */
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
@@ -47,7 +48,12 @@ type Props = {
   initialConnection: ZoomConnection | null;
 };
 
+/** Public listing for the approved "New Coworker OAuth" Marketplace app. */
+const ZOOM_MARKETPLACE_LISTING_URL =
+  "https://marketplace.zoom.us/apps/il8znyqrQ1y7GdkFnZ11dg";
+
 export function ZoomIntegrationCard({ businessId, initialConnection }: Props) {
+  const t = useTranslations("dashboard.integrationsZoom");
   const [connection, setConnection] = useState<ZoomConnection | null>(initialConnection);
   const [banner, setBanner] = useState<string | null>(null);
   const [removing, setRemoving] = useState(false);
@@ -255,6 +261,17 @@ export function ZoomIntegrationCard({ businessId, initialConnection }: Props) {
           </p>
         </div>
       )}
+
+      <p className="mt-4 text-[11px] text-parchment/40">
+        <a
+          href={ZOOM_MARKETPLACE_LISTING_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline hover:text-parchment"
+        >
+          {t("marketplaceLink")}
+        </a>
+      </p>
     </Card>
   );
 }
