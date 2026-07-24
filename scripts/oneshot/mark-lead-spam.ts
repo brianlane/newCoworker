@@ -62,9 +62,15 @@ const db = createClient(
 );
 
 const SPAM_TAG = "spam";
-/** Statuses a spam declaration cancels — every pending state, human-parked included. */
+/**
+ * Statuses a spam declaration cancels — every non-terminal state, matching
+ * the dashboard owner-stop's CANCELABLE_RUN_STATUSES (src/lib/ai-flows/db.ts).
+ * `running` cancels cooperatively: the worker re-reads status at each step
+ * boundary and quits when it sees canceled.
+ */
 const PENDING_STATUSES = [
   "queued",
+  "running",
   "awaiting_reply",
   "awaiting_call",
   "awaiting_approval",
@@ -74,16 +80,20 @@ const PENDING_STATUSES = [
 // ---------------------------------------------------------------------------
 // Current state: contact row, opt-out status, pending runs for this lead.
 // ---------------------------------------------------------------------------
-const { data: contact, error: contactErr } = await db
+// Match the primary number OR a merged alias (alias_e164s) — the same
+// resolution the interaction writes use, so a merged contact still gets
+// tagged.
+const { data: contactRows, error: contactErr } = await db
   .from("contacts")
   .select("id, display_name, customer_e164, tags, pinned_md")
   .eq("business_id", BUSINESS_ID)
-  .eq("customer_e164", PHONE)
-  .maybeSingle();
+  .or(`customer_e164.eq.${PHONE},alias_e164s.cs.{${PHONE}}`)
+  .limit(1);
 if (contactErr) {
   console.error("[oneshot] contact read failed:", contactErr.message);
   process.exit(1);
 }
+const contact = (contactRows ?? [])[0] ?? null;
 
 const { data: optedOut, error: optErr } = await db.rpc("sms_is_opted_out", {
   p_business_id: BUSINESS_ID,
