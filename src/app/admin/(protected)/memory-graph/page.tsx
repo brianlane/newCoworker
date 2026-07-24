@@ -75,7 +75,12 @@ function sinceIso(window: WindowKey): string {
   return new Date(Date.now() - WINDOWS[window] * 24 * 60 * 60 * 1000).toISOString();
 }
 
-/** YYYY-MM-DD (UTC) for the spend roll-up, matching the events window. */
+/**
+ * YYYY-MM-DD (UTC) for the spend roll-up. gemini_spend_daily is UTC-DAY
+ * grained, so cost covers whole calendar days from the day containing the
+ * window start — a superset of the rolling event window. The UI labels
+ * cost as "UTC days" so the two never read as the same cutoff.
+ */
 function sinceDay(window: WindowKey): string {
   return sinceIso(window).slice(0, 10);
 }
@@ -313,10 +318,11 @@ export default async function MemoryGraphAdminPage({
             Tenants ({window})
           </h2>
           <p className="text-xs text-parchment/50">
-            Extraction spend this window:{" "}
+            Extraction spend since {sinceDay(window)} (UTC days):{" "}
             <span className="text-parchment">{microsToMoney(fleetSpend.costMicros)}</span> across{" "}
-            <span className="text-parchment">{fleetSpend.calls}</span> Gemini calls (surface{" "}
-            <code>memory_graph</code>, same ledger as /admin/gemini)
+            <span className="text-parchment">{fleetSpend.calls}</span> Gemini calls — surface{" "}
+            <code>memory_graph</code>, same ledger as /admin/gemini; the spend roll-up is
+            day-grained, so cost covers whole UTC days while lookup stats use the rolling window
           </p>
         </div>
         {fleetStatsTruncated && (
@@ -412,7 +418,7 @@ export default async function MemoryGraphAdminPage({
               }
             />
             <StatTile
-              label="Extraction cost (window)"
+              label="Extraction cost (UTC days)"
               value={
                 selectedBusinessId && extractionSpend.get(selectedBusinessId)
                   ? microsToMoney(extractionSpend.get(selectedBusinessId)!.costMicros)
@@ -420,7 +426,7 @@ export default async function MemoryGraphAdminPage({
               }
             />
             <StatTile
-              label="Extraction calls (window)"
+              label="Extraction calls (UTC days)"
               value={String(
                 (selectedBusinessId && extractionSpend.get(selectedBusinessId)?.calls) || 0
               )}

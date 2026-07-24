@@ -133,30 +133,41 @@ export type KgExtractionSpend = { calls: number; costMicros: number };
  * Per-business graph-extraction spend since `sinceDay` (YYYY-MM-DD, UTC),
  * read from the same roll-up the admin Gemini page bills against — the
  * dashboard's cost tiles and the daily fuse can never disagree with the
- * bill.
+ * bill. NOTE: the roll-up is UTC-DAY grained, so callers comparing against
+ * a rolling event window must label the cost as covering whole UTC
+ * calendar days. Paged in 1000-row chunks — PostgREST silently caps a
+ * single request at 1000 rows (same trap listGeminiSpendDaily guards).
  */
 export async function listKgExtractionSpend(
   sinceDay: string,
   client?: SupabaseClient
 ): Promise<Map<string, KgExtractionSpend>> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { data, error } = await db
-    .from("gemini_spend_daily")
-    .select("business_id, call_count, cost_micros")
-    .eq("surface", "memory_graph")
-    .gte("day", sinceDay);
-  if (error) throw new Error(`listKgExtractionSpend: ${error.message}`);
+  const pageSize = 1000;
   const out = new Map<string, KgExtractionSpend>();
-  for (const row of (data ?? []) as Array<{
-    business_id: string;
-    call_count: number;
-    cost_micros: number;
-  }>) {
-    const prior = out.get(row.business_id) ?? { calls: 0, costMicros: 0 };
-    out.set(row.business_id, {
-      calls: prior.calls + row.call_count,
-      costMicros: prior.costMicros + row.cost_micros
-    });
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await db
+      .from("gemini_spend_daily")
+      .select("business_id, call_count, cost_micros")
+      .eq("surface", "memory_graph")
+      .gte("day", sinceDay)
+      .order("day", { ascending: true })
+      .order("business_id", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) throw new Error(`listKgExtractionSpend: ${error.message}`);
+    const rows = (data ?? []) as Array<{
+      business_id: string;
+      call_count: number;
+      cost_micros: number;
+    }>;
+    for (const row of rows) {
+      const prior = out.get(row.business_id) ?? { calls: 0, costMicros: 0 };
+      out.set(row.business_id, {
+        calls: prior.calls + row.call_count,
+        costMicros: prior.costMicros + row.cost_micros
+      });
+    }
+    if (rows.length < pageSize) break;
   }
   return out;
 }

@@ -326,36 +326,57 @@ describe("kgKeepVerdict", () => {
 });
 
 describe("listKgExtractionSpend", () => {
-  function chain(result: { data?: unknown; error?: unknown }) {
+  /** Chain resolving one page per .range() call (PostgREST paging). */
+  function chain(pages: Array<{ data?: unknown; error?: unknown }>) {
+    let page = 0;
     const c: Record<string, ReturnType<typeof vi.fn>> = {};
-    for (const m of ["from", "select", "eq"]) c[m] = vi.fn(() => c);
-    c.gte = vi.fn(() => Promise.resolve(result));
+    for (const m of ["from", "select", "eq", "gte", "order"]) c[m] = vi.fn(() => c);
+    c.range = vi.fn(() => Promise.resolve(pages[Math.min(page++, pages.length - 1)]));
     return c;
   }
 
   it("sums call_count/cost_micros per business across days and models", async () => {
-    const c = chain({
-      data: [
-        { business_id: "b1", call_count: 2, cost_micros: 100 },
-        { business_id: "b1", call_count: 3, cost_micros: 250 },
-        { business_id: "b2", call_count: 1, cost_micros: 40 }
-      ],
-      error: null
-    });
+    const c = chain([
+      {
+        data: [
+          { business_id: "b1", call_count: 2, cost_micros: 100 },
+          { business_id: "b1", call_count: 3, cost_micros: 250 },
+          { business_id: "b2", call_count: 1, cost_micros: 40 }
+        ],
+        error: null
+      }
+    ]);
     const spend = await listKgExtractionSpend("2026-07-17", c as never);
     expect(spend.get("b1")).toEqual({ calls: 5, costMicros: 350 });
     expect(spend.get("b2")).toEqual({ calls: 1, costMicros: 40 });
     expect(c.from).toHaveBeenCalledWith("gemini_spend_daily");
     expect(c.eq).toHaveBeenCalledWith("surface", "memory_graph");
     expect(c.gte).toHaveBeenCalledWith("day", "2026-07-17");
+    expect(c.range).toHaveBeenCalledWith(0, 999);
+  });
+
+  it("pages past PostgREST's silent 1000-row cap", async () => {
+    const fullPage = Array.from({ length: 1000 }, () => ({
+      business_id: "b1",
+      call_count: 1,
+      cost_micros: 10
+    }));
+    const c = chain([
+      { data: fullPage, error: null },
+      { data: [{ business_id: "b2", call_count: 2, cost_micros: 20 }], error: null }
+    ]);
+    const spend = await listKgExtractionSpend("2026-07-17", c as never);
+    expect(spend.get("b1")).toEqual({ calls: 1000, costMicros: 10_000 });
+    expect(spend.get("b2")).toEqual({ calls: 2, costMicros: 20 });
+    expect(c.range).toHaveBeenCalledWith(1000, 1999);
   });
 
   it("null data → empty map; errors throw; default client works", async () => {
-    const empty = chain({ data: null, error: null });
+    const empty = chain([{ data: null, error: null }]);
     defaultClientSpy.mockReturnValue(empty);
     expect((await listKgExtractionSpend("2026-07-17")).size).toBe(0);
 
-    const failing = chain({ data: null, error: { message: "denied" } });
+    const failing = chain([{ data: null, error: { message: "denied" } }]);
     await expect(listKgExtractionSpend("2026-07-17", failing as never)).rejects.toThrow(
       "listKgExtractionSpend: denied"
     );
@@ -400,7 +421,6 @@ describe("aggregateKgStats / groupKgStatsByBusiness / kgVerdictHeadline", () => 
   it("averages latency over MEASURED rows only (pre-migration rows are null-tolerant)", () => {
     const stats = aggregateKgStats([
       {
-        business_id: "b1",
         graph_context_chars: 10,
         memory_context_chars: 10,
         memory_fallback: false,
@@ -409,7 +429,6 @@ describe("aggregateKgStats / groupKgStatsByBusiness / kgVerdictHeadline", () => 
         graph_retrieval_ms: 30
       },
       {
-        business_id: "b1",
         graph_context_chars: 0,
         memory_context_chars: 10,
         memory_fallback: false,
@@ -419,7 +438,6 @@ describe("aggregateKgStats / groupKgStatsByBusiness / kgVerdictHeadline", () => 
       },
       // Pre-migration row: no measurements at all.
       {
-        business_id: "b1",
         graph_context_chars: 0,
         memory_context_chars: 0,
         memory_fallback: false,
@@ -432,7 +450,6 @@ describe("aggregateKgStats / groupKgStatsByBusiness / kgVerdictHeadline", () => 
 
   it("computes claimReliance from persisted counts, falling back to context text; null when the graph never contributed", () => {
     const base = {
-      business_id: "b1",
       memory_context_chars: 10,
       memory_fallback: false,
       caller_provided: false
