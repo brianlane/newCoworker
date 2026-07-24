@@ -502,6 +502,8 @@ export type StepAction =
       e164: string;
       name: string;
       email: string;
+      /** Set when the phone var was missing/unusable — skip, never fail. */
+      skipReason?: string;
     }
   | {
       /**
@@ -1416,12 +1418,21 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       // "missing input" (skip-able), not a thrown error.
       const e164 = phone ? (isE164(phone) ? phone : normalizeNanpToE164(phone)) : null;
       if (!e164) {
+        // Skip (with a note), never fail — mirroring update_contact and the
+        // send steps. A "none"/empty/scrubbed phone slips past a
+        // `notEquals: "none"` when-guard as the empty string, and filing is
+        // auxiliary bookkeeping: a phoneless lead must not kill a run whose
+        // send steps would have skipped gracefully for the same value
+        // (Bugbot on the Kav calendar-filing PR, Jul 24 2026).
         return {
-          ok: false,
-          error:
-            `upsert_customer: the lead's phone ({{vars.${step.phoneVar}}}) is missing or unusable, ` +
-            `it may not have been in the source at all, or it matched the business's own number ` +
-            `and was discarded (see this run's notes). The flow can't contact this lead by text.`
+          ok: true,
+          action: {
+            kind: "upsert_customer",
+            e164: "",
+            name: "",
+            email: "",
+            skipReason: "no_contact_phone"
+          }
         };
       }
       const readVar = (name?: string): string => {

@@ -195,6 +195,11 @@ export function simulateTestAction(
       scope.vars[action.saveAs] = "";
       return { simulated: "generate_image", prompt: action.prompt };
     case "upsert_customer":
+      // Same skip semantics as send_sms: a live run files nothing for a
+      // missing phone, so the test run must not report a saved contact.
+      if (action.skipReason) {
+        return { simulated: "upsert_customer", skipped: action.skipReason };
+      }
       return { simulated: "upsert_customer", customer_e164: action.e164, name: action.name };
     case "update_contact":
       return {

@@ -2057,22 +2057,31 @@ describe("planStep: upsert_customer", () => {
       action: { kind: "upsert_customer", e164: "+14804929641", name: "", email: "" }
     });
   });
-  it("fails with a human-readable explanation when the phone var is missing", () => {
+  it("SKIPS (never fails) when the phone var is missing — filing is bookkeeping", () => {
+    // A "none"/empty/scrubbed phone slips past a notEquals-"none" when-guard
+    // as the empty string; the send steps skip gracefully for that value, so
+    // the filing step must too (Bugbot on the Kav calendar-filing PR).
     const r = planStep(base, { vars: {} });
-    expect(r.ok).toBe(false);
-    if (!r.ok) {
-      // Owner-facing wording: names the var, explains the two likely causes
-      // (absent from the source / discarded by the self-number scrub), and
-      // states the consequence — never a bare technical failure.
-      expect(r.error).toContain("{{vars.lead_phone}}");
-      expect(r.error).toContain("missing or unusable");
-      expect(r.error).toContain("matched the business's own number");
-    }
+    expect(r).toEqual({
+      ok: true,
+      action: {
+        kind: "upsert_customer",
+        e164: "",
+        name: "",
+        email: "",
+        skipReason: "no_contact_phone"
+      }
+    });
   });
-  it("fails when the phone var is not a usable number", () => {
+  it("SKIPS when the phone var is not a usable number", () => {
     const r = planStep(base, { vars: { lead_phone: "call me", lead_name: "X" } });
-    expect(r.ok).toBe(false);
-    if (!r.ok) expect(r.error).toContain("missing or unusable");
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.action).toMatchObject({
+        kind: "upsert_customer",
+        skipReason: "no_contact_phone"
+      });
+    }
   });
 });
 

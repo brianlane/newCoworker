@@ -2247,6 +2247,12 @@ async function upsertCustomerStep(
   scope: Scope,
   action: Extract<StepAction, { kind: "upsert_customer" }>
 ): Promise<StepOutcome> {
+  if (action.skipReason) {
+    // Mirror the update_contact skip path: filing is bookkeeping, and a
+    // phoneless lead must not fail a run whose sends skip for the same value.
+    appendActionTaken(scope, "skipped saving the contact (no usable phone)");
+    return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
+  }
   // Existence pre-check (alias-aware) so the contact_created trigger below
   // fires only for genuinely NEW contacts, never enrichments. Best-effort: a
   // read failure just means no trigger fires this pass — except on backfill
