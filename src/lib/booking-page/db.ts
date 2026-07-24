@@ -215,6 +215,37 @@ export async function rotateBookingPageToken(
   return data as unknown as BookingPageRow;
 }
 
+export type UpcomingBookingRow = {
+  /** `phone:+1480...` or `email:x@y` — the ledger's attendee identity. */
+  attendee_key: string;
+  start_at: string;
+  event_id: string | null;
+  zoom_meeting_id: string | null;
+};
+
+/**
+ * Upcoming bookings from the dedupe ledger (soonest first) — the Bookings
+ * dashboard list. Ledger-backed on purpose: it covers platform bookings on
+ * every provider plus synced external Vagaro/Calendly claims, without a
+ * provider API fan-out on page load.
+ */
+export async function listUpcomingBookings(
+  businessId: string,
+  limit = 25,
+  client?: SupabaseClient
+): Promise<UpcomingBookingRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("calendar_booking_dedupe")
+    .select("attendee_key,start_at,event_id,zoom_meeting_id")
+    .eq("business_id", businessId)
+    .gte("start_at", new Date().toISOString())
+    .order("start_at", { ascending: true })
+    .limit(limit);
+  if (error) throw new Error(`listUpcomingBookings: ${error.message}`);
+  return (data ?? []) as UpcomingBookingRow[];
+}
+
 /**
  * Booking start instants from the dedupe ledger inside a UTC window — the
  * daily-cap input (covers platform bookings on every provider plus synced

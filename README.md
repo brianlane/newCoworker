@@ -699,6 +699,42 @@ through the same permission matrix as the dashboard** (`src/lib/authz/policy.ts`
 - Owner-facing setup lives on `/dashboard/integrations` → "Claude connector"
   (paste `https://<app>/api/mcp` into Claude → Settings → Connectors).
 
+## Public self-serve booking page (Bookings)
+
+Every business can hand out ONE public booking link, `/book/<ncb_token>`
+(capability token, plaintext by design like the webchat site key; no login,
+no account). Visitors pick a duration and a slot on a Calendly-style
+two-panel page (EN/ES, visitor-timezone rendering) and book; the write rides
+`bookCalendarAppointment`, so Zoom decoration, the `calendar_booking_dedupe`
+ledger, `appointment_booked` goal fan-out, the unassigned-booking owner
+alert, and contact filing (tag `Booking Page`, fires `contact_created` so
+round-robin lead assignment picks an on-shift employee) behave exactly like
+AI-made bookings. Owner management lives on the **Bookings** sidebar page
+(`/dashboard/bookings`, below Employees): enable, copy/rotate the link,
+durations (15/30/60), minimum notice, max advance, buffer, daily cap, an
+optional "only when an employee is on shift" gate (reuses the AiFlow
+engine's roster evaluators), and the upcoming-bookings list.
+
+- Availability = live provider free/busy (Google/Microsoft via
+  `getWorkspaceBusyBlocks`, CalDAV) intersected with
+  `businesses.business_hours` (no hours set = weekdays 9-5; a partially
+  specified schedule treats missing days as closed) on a 30-minute
+  business-local grid, capped at 14 days by default. Slot responses carry
+  only coarse starts, never event data; both public endpoints
+  (`/api/book/slots`, `/api/book/submit`) are durably rate-limited and
+  CSRF-exempt with the `/api/widget/*` rationale. Slot ends are ALWAYS
+  start plus elapsed duration (DST-pinned in `tests/booking-page-slots`,
+  the BizBlasts DST lesson).
+- Submission re-verifies the slot against live availability before the
+  write; the dedupe ledger + attendee guard make the write idempotent, so a
+  visitor race re-offers slots instead of double-booking.
+- Vagaro/Calendly-resolved tenants deliberately do NOT get the page (Vagaro
+  has its own booking site; link-mode Calendly cannot book on the invitee's
+  behalf); the Bookings page explains this and calendar resolution order is
+  untouched. Deliberate v1 exclusions: round robin / pick-a-person,
+  routing forms, custom questions, payments, invitee self-reschedule,
+  embeds.
+
 ## Writing rule: NO EM DASHES, ever, in any context
 
 **Never use an em dash. Anywhere.** Not in user-facing copy, SMS/email

@@ -41,6 +41,7 @@ export const SIDEBAR_ITEMS: SidebarItemDef[] = [
   { key: "emails", labelKey: "emails", href: "/dashboard/emails" },
   { key: "customers", labelKey: "customers", href: "/dashboard/customers" },
   { key: "employees", labelKey: "employees", href: "/dashboard/employees" },
+  { key: "bookings", labelKey: "bookings", href: "/dashboard/bookings" },
   { key: "memory", labelKey: "memory", href: "/dashboard/memory" },
   { key: "documents", labelKey: "documents", href: "/dashboard/documents" },
   { key: "marketing", labelKey: "marketing", href: "/dashboard/marketing" },

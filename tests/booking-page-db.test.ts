@@ -8,6 +8,7 @@ import {
   getBookingPageForBusiness,
   getEnabledBookingPageByToken,
   listBookingStartsBetween,
+  listUpcomingBookings,
   rotateBookingPageToken,
   upsertBookingPage
 } from "@/lib/booking-page/db";
@@ -232,6 +233,64 @@ describe("rotateBookingPageToken", () => {
     const { client } = fakeDb([{ data: null, error: { message: "rotate boom" } }]);
     await expect(rotateBookingPageToken(BIZ, client)).rejects.toThrow(
       "rotateBookingPageToken: rotate boom"
+    );
+  });
+});
+
+describe("listBookingStartsBetween", () => {
+  it("maps ledger rows to Date instants, defaulting an empty payload", async () => {
+    const { client } = fakeDb([
+      { data: [{ start_at: "2026-07-25T17:00:00Z" }], error: null },
+      { data: null, error: null }
+    ]);
+    mockClientFactory.mockResolvedValue(client);
+    const out = await listBookingStartsBetween(
+      BIZ,
+      "2026-07-25T00:00:00Z",
+      "2026-07-26T00:00:00Z"
+    );
+    expect(out).toEqual([new Date("2026-07-25T17:00:00Z")]);
+    expect(
+      await listBookingStartsBetween(BIZ, "2026-07-25T00:00:00Z", "2026-07-26T00:00:00Z", client)
+    ).toEqual([]);
+  });
+
+  it("throws on read errors", async () => {
+    const { client } = fakeDb([{ data: null, error: { message: "starts boom" } }]);
+    await expect(
+      listBookingStartsBetween(BIZ, "2026-07-25T00:00:00Z", "2026-07-26T00:00:00Z", client)
+    ).rejects.toThrow("listBookingStartsBetween: starts boom");
+  });
+});
+
+describe("listUpcomingBookings", () => {
+  const LEDGER = [
+    {
+      attendee_key: "phone:+14805550100",
+      start_at: "2026-07-25T17:00:00Z",
+      event_id: "evt-1",
+      zoom_meeting_id: "123"
+    }
+  ];
+
+  it("lists soonest-first upcoming rows, defaulting an empty payload", async () => {
+    const { client, calls } = fakeDb([
+      { data: LEDGER, error: null },
+      { data: null, error: null }
+    ]);
+    mockClientFactory.mockResolvedValue(client);
+    expect(await listUpcomingBookings(BIZ)).toEqual(LEDGER);
+    const order = calls.find((c) => c.method === "order");
+    expect(order?.args).toEqual(["start_at", { ascending: true }]);
+    const limit = calls.find((c) => c.method === "limit");
+    expect(limit?.args).toEqual([25]);
+    expect(await listUpcomingBookings(BIZ, 5, client)).toEqual([]);
+  });
+
+  it("throws on read errors", async () => {
+    const { client } = fakeDb([{ data: null, error: { message: "list boom" } }]);
+    await expect(listUpcomingBookings(BIZ, 25, client)).rejects.toThrow(
+      "listUpcomingBookings: list boom"
     );
   });
 });
