@@ -272,6 +272,7 @@ describe("applyGraphExtraction", () => {
       listFacts: vi.fn(async () => existingFacts),
       insertFact: insertFact as never,
       supersedeFacts: vi.fn(async () => undefined),
+      touchFact: vi.fn(async () => undefined),
       insertEntitySpy: insertEntity,
       insertFactSpy: insertFact
     };
@@ -406,6 +407,9 @@ describe("applyGraphExtraction", () => {
     expect(result.factsInserted).toBe(0);
     expect(deps.insertFactSpy).not.toHaveBeenCalled();
     expect(deps.supersedeFacts).not.toHaveBeenCalled();
+    // Re-stated, not new: recency bumps on the existing row (repeat
+    // bookings / owners repeating rules keep stated_at fresh).
+    expect(deps.touchFact).toHaveBeenCalledWith(existing.id);
   });
 
   it("skips an entity-edge fact already recorded (same object entity)", async () => {

@@ -470,9 +470,9 @@ export async function updateCustomerOwnerFields(
   // carries high-frequency knobs like tags/reply-mode that say nothing
   // entity-shaped). The graph gets the row's FULL post-update identity —
   // read back after the write — never just the edited fields: an email-only
-  // save must still carry the stored name (the builder no-ops nameless),
-  // and a name-only save must still carry the stored email (Bugbot #874,
-  // both directions). A failed read degrades to a no-op ingest.
+  // save must still carry the stored name, and a name-only save must still
+  // carry the stored email (Bugbot #874, both directions). A nameless
+  // contact ingests as a number-named node (booking/lead convention).
   if ("displayName" in edit || "email" in edit) {
     const { data } = await db
       .from("contacts")

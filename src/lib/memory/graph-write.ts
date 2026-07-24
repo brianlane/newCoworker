@@ -28,6 +28,7 @@ import {
   listActiveFacts,
   listMemoryEntities,
   supersedeMemoryFacts,
+  touchMemoryFactStatedAt,
   updateMemoryEntity,
   type MemoryEntityRow
 } from "./graph-db";
@@ -187,6 +188,7 @@ export type GraphWriteDeps = {
   listFacts?: typeof listActiveFacts;
   insertFact?: typeof insertMemoryFact;
   supersedeFacts?: typeof supersedeMemoryFacts;
+  touchFact?: typeof touchMemoryFactStatedAt;
 };
 
 export type GraphWriteResult = {
@@ -235,6 +237,7 @@ export async function applyGraphExtraction(
   const listFacts = deps.listFacts ?? listActiveFacts;
   const insertFact = deps.insertFact ?? insertMemoryFact;
   const supersedeFacts = deps.supersedeFacts ?? supersedeMemoryFacts;
+  const touchFact = deps.touchFact ?? touchMemoryFactStatedAt;
   /* c8 ignore stop */
 
   const result: GraphWriteResult = {
@@ -301,6 +304,10 @@ export async function applyGraphExtraction(
         : (row.object_value ?? "").trim().toLowerCase() === objectValue.trim().toLowerCase()
     );
     if (sameObject) {
+      // Re-stated, not new: bump stated_at so recency reflects the latest
+      // re-confirmation (repeat bookings, owners repeating rules) — the
+      // projection notes and any recency-aware packing read it.
+      await touchFact(sameObject.id);
       result.factsSkipped += 1;
       continue;
     }
