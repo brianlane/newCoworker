@@ -171,29 +171,40 @@ export async function upsertLiveWaitlistEntry(
   }
 }
 
-/** Every live (waiting/offered) entry for the business, oldest first. */
+/**
+ * Every live (waiting/offered) entry for the business, oldest first, paged
+ * through in full: both the freed-slot fill and the attendee lookup must
+ * see the WHOLE queue, or customers past one page silently never resolve
+ * or never get offers (Bugbot on PR #903).
+ */
 export async function listLiveWaitlistEntries(
   businessId: string,
   client?: SupabaseClient
 ): Promise<BookingWaitlistRow[]> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { data, error } = await db
-    .from("booking_waitlist")
-    .select(ALL_COLUMNS)
-    .eq("business_id", businessId)
-    .in("status", ["waiting", "offered"])
-    .order("created_at", { ascending: true })
-    .limit(WAITLIST_SWEEP_PAGE);
-  if (error) throw new Error(`listLiveWaitlistEntries: ${error.message}`);
-  return (data ?? []) as unknown as BookingWaitlistRow[];
+  const rows: BookingWaitlistRow[] = [];
+  for (let offset = 0; ; offset += WAITLIST_SWEEP_PAGE) {
+    const { data, error } = await db
+      .from("booking_waitlist")
+      .select(ALL_COLUMNS)
+      .eq("business_id", businessId)
+      .in("status", ["waiting", "offered"])
+      .order("created_at", { ascending: true })
+      .range(offset, offset + WAITLIST_SWEEP_PAGE - 1);
+    if (error) throw new Error(`listLiveWaitlistEntries: ${error.message}`);
+    const batch = (data ?? []) as unknown as BookingWaitlistRow[];
+    rows.push(...batch);
+    if (batch.length < WAITLIST_SWEEP_PAGE) break;
+  }
+  return rows;
 }
 
 /**
  * Live entries belonging to an attendee, matched digit-tolerantly on phone
- * (E.164 vs national shapes agree) or exactly on lower-cased email. Paged
- * through EVERY live row (the tolerant digit match cannot be pushed into
- * SQL), so a customer past the first page still resolves (Bugbot Medium on
- * PR #903). Empty on any error, lifecycle hooks fail soft.
+ * (E.164 vs national shapes agree) or exactly on lower-cased email. Reads
+ * EVERY live row (the tolerant digit match cannot be pushed into SQL), so
+ * a customer past the first page still resolves (Bugbot Medium on PR
+ * #903). Empty on any error, lifecycle hooks fail soft.
  */
 export async function findLiveWaitlistEntriesForAttendee(
   businessId: string,
@@ -201,21 +212,7 @@ export async function findLiveWaitlistEntriesForAttendee(
   client?: SupabaseClient
 ): Promise<BookingWaitlistRow[]> {
   try {
-    const db = client ?? (await createSupabaseServiceClient());
-    const rows: BookingWaitlistRow[] = [];
-    for (let offset = 0; ; offset += WAITLIST_SWEEP_PAGE) {
-      const { data, error } = await db
-        .from("booking_waitlist")
-        .select(ALL_COLUMNS)
-        .eq("business_id", businessId)
-        .in("status", ["waiting", "offered"])
-        .order("created_at", { ascending: true })
-        .range(offset, offset + WAITLIST_SWEEP_PAGE - 1);
-      if (error) throw new Error(`findLiveWaitlistEntriesForAttendee: ${error.message}`);
-      const batch = (data ?? []) as unknown as BookingWaitlistRow[];
-      rows.push(...batch);
-      if (batch.length < WAITLIST_SWEEP_PAGE) break;
-    }
+    const rows = await listLiveWaitlistEntries(businessId, client);
     const wantedDigits = attendee.phones.map((p) => digitsOf(p)).filter((d) => d.length > 0);
     const wantedEmail = attendee.email?.trim().toLowerCase() || null;
     return rows.filter((row) => {

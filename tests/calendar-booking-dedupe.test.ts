@@ -12,6 +12,7 @@ import {
   confirmBookingDedupe,
   deleteBookingClaim,
   deleteBookingClaimsByEvent,
+  findBookingClaimStartsByEvent,
   findUpcomingBookingClaim,
   findUpcomingBookingClaimByPhone,
   findZoomMeetingIdByEvent,
@@ -496,6 +497,35 @@ describe("deleteBookingClaim", () => {
     vi.mocked(createSupabaseServiceClient).mockRejectedValue("raw string");
     await deleteBookingClaim("row-1");
     expect(logger.warn).toHaveBeenCalledTimes(3);
+  });
+});
+
+describe("findBookingClaimStartsByEvent (vacated slots for the waitlist)", () => {
+  it("returns every claim start recorded for the event", async () => {
+    const calls = scriptClient([
+      { data: [{ start_at: "2026-07-13T20:00:00Z" }, { start_at: "2026-07-14T20:00:00Z" }], error: null }
+    ]);
+    expect(await findBookingClaimStartsByEvent(BIZ, "evt-1")).toEqual([
+      "2026-07-13T20:00:00Z",
+      "2026-07-14T20:00:00Z"
+    ]);
+    const eqArgs = calls.filter((c) => c.name === "eq").map((c) => c.args);
+    expect(eqArgs).toContainEqual(["event_id", "evt-1"]);
+  });
+
+  it("answers [] on read errors, null payloads, and thrown clients (any throw shape)", async () => {
+    scriptClient([{ data: null, error: { message: "boom" } }]);
+    expect(await findBookingClaimStartsByEvent(BIZ, "evt-1")).toEqual([]);
+
+    scriptClient([{ data: null, error: null }]);
+    expect(await findBookingClaimStartsByEvent(BIZ, "evt-1")).toEqual([]);
+
+    vi.mocked(createSupabaseServiceClient).mockRejectedValueOnce(new Error("db down"));
+    expect(await findBookingClaimStartsByEvent(BIZ, "evt-1")).toEqual([]);
+    expect(logger.warn).toHaveBeenCalled();
+
+    vi.mocked(createSupabaseServiceClient).mockRejectedValueOnce("string blast");
+    expect(await findBookingClaimStartsByEvent(BIZ, "evt-1")).toEqual([]);
   });
 });
 
