@@ -13,12 +13,17 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   KG_EVENTS_RETENTION_DAYS,
+  KG_KEEP_MIN_LOOKUPS,
   aggregateKgStats,
   classifyKgVerdict,
   countKgRetrievalEvents,
+  countUnverifiedClaims,
   getKgAdminSummary,
   groupKgStatsByBusiness,
+  isUnverifiedClaimLine,
+  kgKeepVerdict,
   kgVerdictHeadline,
+  listKgExtractionSpend,
   listKgRetrievalEvents,
   listKgRetrievalStatsRows,
   pruneKgRetrievalEvents,
@@ -273,6 +278,116 @@ describe("classifyKgVerdict", () => {
   });
 });
 
+describe("countUnverifiedClaims / isUnverifiedClaimLine", () => {
+  const CONTEXT = [
+    "- Amy Laidlaw (person)",
+    "- Amy Laidlaw phone: 602-695-1142",
+    "- Bryan Buyer roof_status: replaced 2019 — claimed by +14805551234 (unverified)",
+    "- Bryan Buyer budget: 500k — claimed by webchat (unverified)"
+  ].join("\n");
+
+  it("counts only attributed claim lines; empty contexts count zero", () => {
+    expect(countUnverifiedClaims(CONTEXT)).toBe(2);
+    expect(countUnverifiedClaims("- plain fact")).toBe(0);
+    expect(countUnverifiedClaims("")).toBe(0);
+  });
+
+  it("classifies single lines for the amber rendering", () => {
+    expect(isUnverifiedClaimLine("- x — claimed by a@b.co (unverified)")).toBe(true);
+    expect(isUnverifiedClaimLine("- Amy Laidlaw phone: 602-695-1142")).toBe(false);
+  });
+});
+
+describe("kgKeepVerdict", () => {
+  const stats = (lookups: number, graphOnlyRate: number, claimReliance: number | null) => ({
+    lookups,
+    graphOnlyRate,
+    claimReliance
+  });
+
+  it("covers the full matrix: pending, earning, claims-downgrade, borderline, not earning", () => {
+    expect(kgKeepVerdict(stats(KG_KEEP_MIN_LOOKUPS - 1, 50, 0))).toBe("insufficient_data");
+    expect(kgKeepVerdict(stats(20, 10, 0))).toBe("earning");
+    expect(kgKeepVerdict(stats(20, 15, null))).toBe("earning");
+    // Quality qualifier: a win rate riding on hearsay never shows clean green.
+    expect(kgKeepVerdict(stats(20, 15, 51))).toBe("earning_on_claims");
+    expect(kgKeepVerdict(stats(20, 15, 50))).toBe("earning");
+    expect(kgKeepVerdict(stats(20, 3, 0))).toBe("borderline");
+    expect(kgKeepVerdict(stats(20, 9, 0))).toBe("borderline");
+    expect(kgKeepVerdict(stats(20, 2, 0))).toBe("not_earning");
+    // Claim reliance only ever DOWNGRADES — it can't rescue a low win rate.
+    expect(kgKeepVerdict(stats(20, 2, 90))).toBe("not_earning");
+  });
+
+  it("honors a custom minimum sample", () => {
+    expect(kgKeepVerdict(stats(5, 15, 0), 5)).toBe("earning");
+    expect(kgKeepVerdict(stats(4, 15, 0), 5)).toBe("insufficient_data");
+  });
+});
+
+describe("listKgExtractionSpend", () => {
+  /** Chain resolving one page per .range() call (PostgREST paging). */
+  function chain(pages: Array<{ data?: unknown; error?: unknown }>) {
+    let page = 0;
+    const c: Record<string, ReturnType<typeof vi.fn>> = {};
+    for (const m of ["from", "select", "eq", "gte", "order"]) c[m] = vi.fn(() => c);
+    c.range = vi.fn(() => Promise.resolve(pages[Math.min(page++, pages.length - 1)]));
+    return c;
+  }
+
+  it("sums call_count/cost_micros per business across days and models", async () => {
+    const c = chain([
+      {
+        data: [
+          { business_id: "b1", call_count: 2, cost_micros: 100 },
+          { business_id: "b1", call_count: 3, cost_micros: 250 },
+          { business_id: "b2", call_count: 1, cost_micros: 40 }
+        ],
+        error: null
+      }
+    ]);
+    const spend = await listKgExtractionSpend("2026-07-17", c as never);
+    expect(spend.get("b1")).toEqual({ calls: 5, costMicros: 350 });
+    expect(spend.get("b2")).toEqual({ calls: 1, costMicros: 40 });
+    expect(c.from).toHaveBeenCalledWith("gemini_spend_daily");
+    expect(c.eq).toHaveBeenCalledWith("surface", "memory_graph");
+    expect(c.gte).toHaveBeenCalledWith("day", "2026-07-17");
+    expect(c.range).toHaveBeenCalledWith(0, 999);
+    // TOTAL order for offset paging: one row per day/tenant/model/pricing
+    // source, so every sort key must participate.
+    for (const col of ["day", "business_id", "model", "pricing_source"]) {
+      expect(c.order).toHaveBeenCalledWith(col, { ascending: true });
+    }
+  });
+
+  it("pages past PostgREST's silent 1000-row cap", async () => {
+    const fullPage = Array.from({ length: 1000 }, () => ({
+      business_id: "b1",
+      call_count: 1,
+      cost_micros: 10
+    }));
+    const c = chain([
+      { data: fullPage, error: null },
+      { data: [{ business_id: "b2", call_count: 2, cost_micros: 20 }], error: null }
+    ]);
+    const spend = await listKgExtractionSpend("2026-07-17", c as never);
+    expect(spend.get("b1")).toEqual({ calls: 1000, costMicros: 10_000 });
+    expect(spend.get("b2")).toEqual({ calls: 2, costMicros: 20 });
+    expect(c.range).toHaveBeenCalledWith(1000, 1999);
+  });
+
+  it("null data → empty map; errors throw; default client works", async () => {
+    const empty = chain([{ data: null, error: null }]);
+    defaultClientSpy.mockReturnValue(empty);
+    expect((await listKgExtractionSpend("2026-07-17")).size).toBe(0);
+
+    const failing = chain([{ data: null, error: { message: "denied" } }]);
+    await expect(listKgExtractionSpend("2026-07-17", failing as never)).rejects.toThrow(
+      "listKgExtractionSpend: denied"
+    );
+  });
+});
+
 describe("aggregateKgStats / groupKgStatsByBusiness / kgVerdictHeadline", () => {
   const events = [
     // graph_won
@@ -302,7 +417,64 @@ describe("aggregateKgStats / groupKgStatsByBusiness / kgVerdictHeadline", () => 
     expect(stats.lookups).toBe(0);
     expect(stats.graphContributionRate).toBe(0);
     expect(stats.avgGraphChars).toBe(0);
+    expect(stats.avgMemoryMs).toBeNull();
+    expect(stats.avgGraphMs).toBeNull();
+    expect(stats.claimReliance).toBeNull();
     expect(kgVerdictHeadline(stats)).toContain("No lookups recorded");
+  });
+
+  it("averages latency over MEASURED rows only (pre-migration rows are null-tolerant)", () => {
+    const stats = aggregateKgStats([
+      {
+        graph_context_chars: 10,
+        memory_context_chars: 10,
+        memory_fallback: false,
+        caller_provided: false,
+        memory_retrieval_ms: 2,
+        graph_retrieval_ms: 30
+      },
+      {
+        graph_context_chars: 0,
+        memory_context_chars: 10,
+        memory_fallback: false,
+        caller_provided: false,
+        memory_retrieval_ms: 4,
+        graph_retrieval_ms: 10
+      },
+      // Pre-migration row: no measurements at all.
+      {
+        graph_context_chars: 0,
+        memory_context_chars: 0,
+        memory_fallback: false,
+        caller_provided: false
+      }
+    ]);
+    expect(stats.avgMemoryMs).toBe(3);
+    expect(stats.avgGraphMs).toBe(20);
+  });
+
+  it("computes claimReliance from persisted counts, falling back to context text; null when the graph never contributed", () => {
+    const base = {
+      memory_context_chars: 10,
+      memory_fallback: false,
+      caller_provided: false
+    };
+    const stats = aggregateKgStats([
+      // Persisted count says claims present.
+      { ...base, graph_context_chars: 40, graph_claims: 2 },
+      // Persisted count says clean.
+      { ...base, graph_context_chars: 40, graph_claims: 0 },
+      // Pre-migration row: falls back to parsing the context text.
+      { ...base, graph_context_chars: 40, graph_context: "- x — claimed by y (unverified)" },
+      // Pre-migration row with neither count nor text: counts as clean.
+      { ...base, graph_context_chars: 40 },
+      // Non-contributing rows never enter the denominator.
+      { ...base, graph_context_chars: 0, graph_claims: 5 }
+    ]);
+    expect(stats.claimReliance).toBe(50); // 2 of 4 contributing lean on claims
+
+    const silent = aggregateKgStats([{ ...base, graph_context_chars: 0 }]);
+    expect(silent.claimReliance).toBeNull();
   });
 
   it("groups per business", () => {

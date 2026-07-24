@@ -3,8 +3,9 @@
 /**
  * Fleet-wide knowledge-graph default mode. Every tenant whose per-business
  * setting is 'inherit' follows this value (resolveMemoryGraphMode).
- * Retrieval/ingest converge within the resolver's ~60s cache; each
- * inherit-tenant's on-box projection refreshes on its next vault sync.
+ * Retrieval/ingest converge within the resolver's ~60s cache, and Apply
+ * fans out a vault sync to every inherit-mode tenant so their on-box
+ * projections ship/wipe immediately.
  */
 
 import { useState } from "react";
@@ -14,11 +15,11 @@ import { Button } from "@/components/ui/Button";
 type Mode = "off" | "shadow" | "active";
 
 const HINTS: Record<Mode, string> = {
-  off: "Graph writes, retrieval, and comparison logging stop for every inherit-mode tenant.",
+  off: "Graph writes, retrieval, and comparison logging stop for every inherit-mode tenant; their on-box projections wipe immediately.",
   shadow:
-    "Graphs build and comparisons record fleet-wide; live answers stay unchanged. The safe default.",
+    "Graphs build and comparisons record fleet-wide; live answers stay unchanged. Projections ship to inherit-mode boxes immediately. The safe default.",
   active:
-    "Graph facts feed answers for every inherit-mode tenant. Flip only after fleet-wide shadow numbers look right."
+    "Graph facts feed answers for every inherit-mode tenant, with projections shipped immediately. Flip only after fleet-wide shadow numbers look right."
 };
 
 export function MemoryGraphDefaultToggle({ initialDefault }: { initialDefault: Mode }) {

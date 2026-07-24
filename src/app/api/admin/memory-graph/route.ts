@@ -8,21 +8,24 @@
  *     CLI flips ran manually.
  *   { defaultMode }       — the fleet-wide default every 'inherit' tenant
  *     follows (admin_platform_settings key). Retrieval/ingest pick it up
- *     within the resolver's ~60s cache; each inherit-tenant's on-box
- *     projection refreshes on its next vault sync.
+ *     within the resolver's ~60s cache, and every inherit-mode tenant's
+ *     on-box projection ships/wipes immediately via a scheduled vault sync
+ *     fan-out (explicit-mode tenants are untouched by a default change, so
+ *     syncing them would be wasted SSH).
  */
 
 import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
-import { getBusiness } from "@/lib/db/businesses";
-import { patchBusinessConfig } from "@/lib/db/configs";
+import { getBusiness, listBusinesses } from "@/lib/db/businesses";
+import { getBusinessConfig, patchBusinessConfig } from "@/lib/db/configs";
 import { upsertAdminPlatformSetting } from "@/lib/admin/platform-settings";
 import {
   MEMORY_GRAPH_DEFAULT_MODE_KEY,
   resetMemoryGraphDefaultCache
 } from "@/lib/memory/graph-db";
 import { scheduleVaultSync } from "@/lib/vps/schedule-vault-sync";
+import { logger } from "@/lib/logger";
 
 // The vault sync (after()) SSHes into the tenant box; budget like the other
 // sync-scheduling routes.
@@ -50,7 +53,31 @@ export async function POST(request: Request) {
       // This serverless instance serves the new default immediately; other
       // instances converge within the resolver's ~60s cache TTL.
       resetMemoryGraphDefaultCache();
-      return successResponse({ defaultMode: body.defaultMode });
+
+      // Ship/wipe every INHERIT tenant's on-box projection now instead of
+      // waiting for each tenant's next organic vault sync. Best-effort: the
+      // default is already persisted above. A tenant whose config read
+      // fails is treated as inherit, which errs toward syncing — the sync
+      // itself resolves the true mode, so a spurious sync is harmless while
+      // a skipped one would leave a stale projection.
+      let synced = 0;
+      try {
+        const businesses = await listBusinesses();
+        for (const biz of businesses) {
+          const config = await getBusinessConfig(biz.id).catch(() => null);
+          const stored = config?.memory_graph_mode ?? "inherit";
+          if (stored !== "off" && stored !== "shadow" && stored !== "active") {
+            scheduleVaultSync(biz.id);
+            synced += 1;
+          }
+        }
+      } catch (err) {
+        logger.warn("admin memory-graph: fleet sync fan-out failed; boxes refresh on next sync", {
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+
+      return successResponse({ defaultMode: body.defaultMode, syncedTenants: synced });
     }
 
     const business = await getBusiness(body.businessId);
