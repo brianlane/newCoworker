@@ -44,6 +44,14 @@ export type NotificationPreferencesRow = {
   category_team: boolean;
   /** Category filter: platform/system events (number ports, etc.). */
   category_system: boolean;
+  /**
+   * Opt-in (default false): send digest emails only when the window had
+   * customer-facing activity (customer texts, calls, new customers, urgent
+   * alerts). Routine-only windows (background AiFlow runs, dashboard chat,
+   * owner-directed sends the owner already received in real time) are
+   * skipped. Optional on the type for rows read before 20260820100700.
+   */
+  digest_customer_facing_only?: boolean;
   phone_number: string | null;
   alert_email: string | null;
   /** Optional daily-digest recipient override; null = alert_email → owner_email chain. */
@@ -144,6 +152,7 @@ export type NotificationPreferencesUpdate = Partial<
     | "category_leads"
     | "category_team"
     | "category_system"
+    | "digest_customer_facing_only"
     | "phone_number"
     | "alert_email"
     | "digest_email_daily"
@@ -167,6 +176,7 @@ const defaults: Omit<NotificationPreferencesRow, "business_id" | "updated_at"> =
   category_leads: true,
   category_team: true,
   category_system: true,
+  digest_customer_facing_only: false,
   phone_number: null,
   alert_email: null,
   digest_email_daily: null,
@@ -271,6 +281,7 @@ export async function updateNotificationPreferences(
     "category_leads",
     "category_team",
     "category_system",
+    "digest_customer_facing_only",
     "phone_number",
     "alert_email",
     "digest_email_daily",
@@ -289,6 +300,8 @@ export async function updateNotificationPreferences(
   // clear unsubscribed_at unless they explicitly set it. Without this, an
   // owner who hit "Unsubscribe from all" then re-enabled email_urgent would
   // keep seeing the "you're unsubscribed" banner until a separate save.
+  // digest_customer_facing_only is deliberately absent: it narrows what a
+  // digest reports rather than turning a channel on, so it never re-subscribes.
   const reSubscribed =
     update.unsubscribed_at === undefined &&
     (patch.sms_urgent === true ||

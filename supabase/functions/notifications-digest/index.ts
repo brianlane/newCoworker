@@ -24,6 +24,10 @@
 //   - unsubscribed: notification_preferences.unsubscribed_at is set
 //   - no_email: no recipient could be resolved
 //   - no_activity: nothing happened in the window
+//   - no_customer_facing_activity: digest_customer_facing_only is on and the
+//     window held only routine activity (background AiFlow runs, dashboard
+//     chat, owner-directed sends) with no customer texts/calls, new
+//     customers, or urgent alerts
 //   - resend_unconfigured: RESEND_API_KEY missing
 //
 // Required Edge Function Secrets:
@@ -44,6 +48,7 @@ import {
   buildDigestEmailModel,
   buildDigestEventLinks,
   groupSmsThreads,
+  hasCustomerFacingDigestActivity,
   hasDigestActivity,
   isRenderableSmsSender,
   smsCounterpartFromPayload,
@@ -70,6 +75,8 @@ type DigestTarget = {
   digest_email_weekly: string | null;
   email_digest: boolean;
   email_digest_weekly: boolean;
+  /** When true, send only for windows with customer-facing activity. */
+  digest_customer_facing_only: boolean;
   unsubscribed_at: string | null;
 };
 
@@ -117,6 +124,7 @@ async function fetchActivity(
     smsInCountRes,
     repliesCountRes,
     outLogCountRes,
+    outLogCustomerCountRes,
     smsJobRowsRes,
     outLogRowsRes,
     callsRes,
@@ -160,6 +168,16 @@ async function fetchActivity(
         .from("sms_outbound_log")
         .select("id", { count: "exact", head: true })
         .eq("business_id", businessId)
+        .gte("created_at", sinceIso),
+      // Customer-directed subset of the same log, for the
+      // digest_customer_facing_only gate: owner pages (owner_notify /
+      // owner_alert) and roster offers (agent_offer) are texts the owner or
+      // team already saw in real time, not customer traffic.
+      supa
+        .from("sms_outbound_log")
+        .select("id", { count: "exact", head: true })
+        .eq("business_id", businessId)
+        .not("source", "in", '("owner_notify","owner_alert","agent_offer")')
         .gte("created_at", sinceIso),
       // Rows for per-conversation deep links. Reading the reply ("sent") side
       // from the SAME inbound rows as the received side means a thread's
@@ -225,6 +243,8 @@ async function fetchActivity(
     (repliesCountRes.error &&
       `sms_inbound_jobs (replies count): ${repliesCountRes.error.message}`) ||
     (outLogCountRes.error && `sms_outbound_log (count): ${outLogCountRes.error.message}`) ||
+    (outLogCustomerCountRes.error &&
+      `sms_outbound_log (customer count): ${outLogCustomerCountRes.error.message}`) ||
     (smsJobRowsRes.error && `sms_inbound_jobs (rows): ${smsJobRowsRes.error.message}`) ||
     (outLogRowsRes.error && `sms_outbound_log (rows): ${outLogRowsRes.error.message}`) ||
     (callsRes.error && `voice_call_transcripts: ${callsRes.error.message}`) ||
@@ -237,6 +257,10 @@ async function fetchActivity(
   // Exact totals from head counts (full window, uncapped).
   const smsInbound = smsInCountRes.count ?? 0;
   const smsOutbound = (repliesCountRes.count ?? 0) + (outLogCountRes.count ?? 0);
+  // AI replies always answer a customer text, so they count as
+  // customer-directed alongside the filtered outbound-log subset.
+  const smsOutboundCustomer =
+    (repliesCountRes.count ?? 0) + (outLogCustomerCountRes.count ?? 0);
 
   const jobRows = (smsJobRowsRes.data ?? []) as Array<{
     payload: Record<string, unknown> | null;
@@ -300,6 +324,7 @@ async function fetchActivity(
     chatTurns: chatRes.count ?? 0,
     smsInbound,
     smsOutbound,
+    smsOutboundCustomer,
     smsThreads,
     calls: (callsRes.data ?? []) as DigestCallRow[],
     aiFlowRuns,
@@ -379,7 +404,7 @@ serve(async (req: Request) => {
   const { data: prefsRows } = await supa
     .from("notification_preferences")
     .select(
-      "business_id, alert_email, digest_email_daily, digest_email_weekly, email_digest, email_digest_weekly, unsubscribed_at"
+      "business_id, alert_email, digest_email_daily, digest_email_weekly, email_digest, email_digest_weekly, digest_customer_facing_only, unsubscribed_at"
     )
     .in("business_id", ids);
   type PrefsRow = {
@@ -389,6 +414,7 @@ serve(async (req: Request) => {
     digest_email_weekly: string | null;
     email_digest: boolean;
     email_digest_weekly: boolean;
+    digest_customer_facing_only: boolean | null;
     unsubscribed_at: string | null;
   };
   const prefsByBiz = new Map<string, Omit<PrefsRow, "business_id">>();
@@ -399,6 +425,7 @@ serve(async (req: Request) => {
       digest_email_weekly: row.digest_email_weekly,
       email_digest: row.email_digest,
       email_digest_weekly: row.email_digest_weekly,
+      digest_customer_facing_only: row.digest_customer_facing_only,
       unsubscribed_at: row.unsubscribed_at
     });
   }
@@ -412,6 +439,8 @@ serve(async (req: Request) => {
       // Default-on when no prefs row exists (matches table defaults).
       email_digest: prefs ? prefs.email_digest : true,
       email_digest_weekly: prefs ? prefs.email_digest_weekly : true,
+      // Default-off (matches table default): full-activity gating unchanged.
+      digest_customer_facing_only: prefs?.digest_customer_facing_only ?? false,
       alert_email: prefs?.alert_email ?? null,
       digest_email_daily: prefs?.digest_email_daily ?? null,
       digest_email_weekly: prefs?.digest_email_weekly ?? null,
@@ -482,14 +511,23 @@ serve(async (req: Request) => {
       continue;
     }
 
-    if (!hasDigestActivity(activity)) {
+    const sendWorthy = t.digest_customer_facing_only
+      ? hasCustomerFacingDigestActivity(activity)
+      : hasDigestActivity(activity);
+    if (!sendWorthy) {
+      // Distinguish "nothing at all happened" from "only routine background
+      // activity happened" so the notifications row explains the skip.
+      const reason =
+        t.digest_customer_facing_only && hasDigestActivity(activity)
+          ? "no_customer_facing_activity"
+          : "no_activity";
       await recordDigestRow(
         supa,
         t.business_id,
         "skipped",
         digestLabel,
         { window, recipient },
-        "no_activity"
+        reason
       );
       skipped += 1;
       continue;

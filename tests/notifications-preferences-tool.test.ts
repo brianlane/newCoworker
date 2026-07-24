@@ -49,6 +49,7 @@ describe("applyNotificationPreferenceToggles", () => {
         "email_urgent",
         "email_digest",
         "email_digest_weekly",
+        "digest_customer_facing_only",
         "dashboard_alerts",
         "sms_warm_transfer",
         "image_limit_alerts",
@@ -127,6 +128,29 @@ describe("applyNotificationPreferenceToggles", () => {
       { enableOnly: true }
     );
     expect(enabled.ok).toBe(true);
+  });
+
+  it("enableOnly refuses quieting toggles even when set to true (enabling them SILENCES email)", async () => {
+    // digest_customer_facing_only inverts the enable-only threat model:
+    // "on" means fewer digest emails, so an injected customer could use it
+    // to quiet the owner. The texting surface must refuse it outright.
+    const result = await applyNotificationPreferenceToggles(
+      BIZ,
+      { digest_customer_facing_only: true },
+      { enableOnly: true }
+    );
+    expect(result).toMatchObject({ ok: false, detail: "enable_only_surface" });
+    expect(updateNotificationPreferences).not.toHaveBeenCalled();
+
+    // Role-verified surfaces (dashboard chat, MCP) flip it freely.
+    const dashboard = await applyNotificationPreferenceToggles(BIZ, {
+      digest_customer_facing_only: true
+    });
+    expect(dashboard.ok).toBe(true);
+    if (dashboard.ok) {
+      expect(dashboard.data.updated).toEqual({ digest_customer_facing_only: true });
+      expect(dashboard.data.settings.digest_customer_facing_only).toBe(true);
+    }
   });
 
   it("skips undefined values and defaults missing row columns to false", async () => {

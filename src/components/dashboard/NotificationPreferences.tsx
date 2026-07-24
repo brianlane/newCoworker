@@ -45,6 +45,9 @@ export function NotificationPreferences({ businessId, initial }: Props) {
   const [whatsappUrgent, setWhatsappUrgent] = useState(initial.whatsapp_urgent ?? true);
   const [emailDigest, setEmailDigest] = useState(initial.email_digest);
   const [emailDigestWeekly, setEmailDigestWeekly] = useState(initial.email_digest_weekly);
+  const [digestCustomerFacingOnly, setDigestCustomerFacingOnly] = useState(
+    initial.digest_customer_facing_only ?? false
+  );
   const [emailUrgent, setEmailUrgent] = useState(initial.email_urgent);
   const [dashboardAlerts, setDashboardAlerts] = useState(initial.dashboard_alerts);
   const [smsWarmTransfer, setSmsWarmTransfer] = useState(initial.sms_warm_transfer);
@@ -76,6 +79,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
     setWhatsappUrgent(initial.whatsapp_urgent ?? true);
     setEmailDigest(initial.email_digest);
     setEmailDigestWeekly(initial.email_digest_weekly);
+    setDigestCustomerFacingOnly(initial.digest_customer_facing_only ?? false);
     setEmailUrgent(initial.email_urgent);
     setDashboardAlerts(initial.dashboard_alerts);
     setSmsWarmTransfer(initial.sms_warm_transfer);
@@ -98,6 +102,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
     setWhatsappUrgent(prefs.whatsapp_urgent ?? true);
     setEmailDigest(prefs.email_digest);
     setEmailDigestWeekly(prefs.email_digest_weekly);
+    setDigestCustomerFacingOnly(prefs.digest_customer_facing_only ?? false);
     setEmailUrgent(prefs.email_urgent);
     setDashboardAlerts(prefs.dashboard_alerts);
     setSmsWarmTransfer(prefs.sms_warm_transfer);
@@ -128,6 +133,7 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           whatsapp_urgent: whatsappUrgent,
           email_digest: emailDigest,
           email_digest_weekly: emailDigestWeekly,
+          digest_customer_facing_only: digestCustomerFacingOnly,
           email_urgent: emailUrgent,
           dashboard_alerts: dashboardAlerts,
           sms_warm_transfer: smsWarmTransfer,
@@ -237,6 +243,13 @@ export function NotificationPreferences({ businessId, initial }: Props) {
           description="Roll-up of the past week's activity, sent Monday mornings."
           checked={emailDigestWeekly}
           onChange={setEmailDigestWeekly}
+          disabled={loading || unsubscribing}
+        />
+        <ToggleRow
+          label="Digests: customer activity only"
+          description="Only send a summary email when customers actually reached your business (texts, calls, new customers, urgent alerts). Skips summaries of routine background work. Off unless you opt in."
+          checked={digestCustomerFacingOnly}
+          onChange={setDigestCustomerFacingOnly}
           disabled={loading || unsubscribing}
         />
         <ToggleRow
