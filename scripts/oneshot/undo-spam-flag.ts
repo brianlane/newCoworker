@@ -16,16 +16,19 @@
  * sacred (CTIA / A2P 10DLC) and only the contact texting START may lift it.
  * Only tool-/owner-written suppression is reversible here.
  *
- * What --apply does:
- *   1. sms_clear_opt_out RPC for every identity number — removes the
- *      suppression rows.
- *   2. On suppress intent, cancel the lead's pending automation runs (shared
- *      cancelPendingRunsForLead core) — the cleared opt-outs were the only
- *      thing holding back runs the original flag's sweep missed.
- *   3. Contact: remove the "spam" tag, delete pinned-note lines carrying the
- *      spam-declaration marker, and set sms_reply_mode (default: suppress,
+ * What --apply does (ordered so no sending gap ever opens — the opt-outs
+ * clear LAST, after everything that limits sending is in place):
+ *   1. Set sms_reply_mode via the shared dashboard helper (alias-aware,
+ *      creates a minimal contact row when none exists). Default: suppress,
  *      honoring the owner's actual "stop texting them" request; pass
- *      --reply-mode auto to fully restore the coworker).
+ *      --reply-mode auto to fully restore the coworker.
+ *   2. On suppress intent, cancel the lead's pending automation runs (shared
+ *      cancelPendingRunsForLead core); an incomplete sweep ABORTS before the
+ *      opt-outs are touched.
+ *   3. Contact cleanup: remove the "spam" tag and the pinned-note lines
+ *      carrying the spam-declaration marker.
+ *   4. sms_clear_opt_out RPC for every identity number — removes the
+ *      suppression rows.
  *
  * Usage:
  *   set -a && source .env && set +a
@@ -67,6 +70,7 @@ const { isStopKeyword, inboundSmsBody } = await import(
   "../../supabase/functions/_shared/telnyx_sms_compliance.ts"
 );
 const { cancelPendingRunsForLead } = await import("@/lib/customer-tools/cancel-lead-runs");
+const { setContactSmsReplyMode } = await import("@/lib/customer-memory/db");
 
 const db = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL ?? "",
@@ -209,8 +213,73 @@ if (!APPLY) {
   process.exit(0);
 }
 
+// The order below is deliberate: everything that limits sending (reply mode,
+// run cancels) lands BEFORE the opt-outs are cleared — while opt-out rows
+// exist no path can text the person, so there is never a gap where an
+// uncanceled run could deliver.
+
 // ---------------------------------------------------------------------------
-// 1. Clear the suppression rows (every identity number).
+// 1. Reply mode FIRST — via the shared helper the dashboard toggle uses
+//    (alias-aware, creates a minimal contact row when none exists, so a
+//    wrongful flag whose tag write failed still ends in the intended mode).
+// ---------------------------------------------------------------------------
+await setContactSmsReplyMode(BUSINESS_ID, PHONE, REPLY_MODE as "suppress" | "auto", db as never);
+console.log(`[oneshot] sms_reply_mode set to ${REPLY_MODE}`);
+
+// ---------------------------------------------------------------------------
+// 2. On suppress intent, stop any pending automation runs for the lead —
+//    runs the original spam-flag sweep missed (or enrolled since) must be
+//    dead BEFORE the opt-outs stop shielding the recipient. Same shared core
+//    the set_contact_reply_mode suppress path uses.
+// ---------------------------------------------------------------------------
+if (REPLY_MODE === "suppress") {
+  const cancelResult = await cancelPendingRunsForLead(
+    db as never,
+    BUSINESS_ID,
+    identitySet,
+    "owner_stopped_texting"
+  );
+  console.log(
+    `[oneshot] pending runs: ${cancelResult.canceledRuns} canceled` +
+      (cancelResult.sweepComplete ? "" : " (sweep INCOMPLETE — aborting before opt-out clear)")
+  );
+  if (!cancelResult.sweepComplete) {
+    console.error(
+      "[oneshot] ABORT: run sweep incomplete — opt-outs left in place so nothing can send. Re-run."
+    );
+    process.exit(1);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 3. Contact cleanup: drop the spam tag + spam-declaration note lines.
+// ---------------------------------------------------------------------------
+if (contact) {
+  const tags: string[] = Array.isArray(contact.tags) ? (contact.tags as string[]) : [];
+  const pinned = typeof contact.pinned_md === "string" ? contact.pinned_md : "";
+  const keptPinned = pinned
+    .split("\n")
+    .filter((line) => !line.includes(SPAM_NOTE_MARKER))
+    .join("\n")
+    .trim();
+  const updates: Record<string, unknown> = {
+    tags: tags.filter((t) => t !== SPAM_TAG),
+    pinned_md: keptPinned.length > 0 ? keptPinned : null,
+    updated_at: new Date().toISOString()
+  };
+  const { error: updErr } = await db.from("contacts").update(updates).eq("id", contact.id);
+  if (updErr) {
+    console.error("[oneshot] contact update failed:", updErr.message);
+    process.exit(1);
+  }
+  console.log("[oneshot] contact updated: spam tag removed, spam note lines removed");
+} else {
+  console.log("[oneshot] no contact row existed — nothing to clean (mode row created above)");
+}
+
+// ---------------------------------------------------------------------------
+// 4. Clear the suppression rows LAST (every identity number) — only after
+//    the reply mode and run cancels guarantee nothing is waiting to send.
 // ---------------------------------------------------------------------------
 if (optRows.length > 0) {
   for (const row of optRows) {
@@ -226,54 +295,6 @@ if (optRows.length > 0) {
   }
 } else {
   console.log("[oneshot] no opt-out rows — nothing to clear");
-}
-
-// ---------------------------------------------------------------------------
-// 2. On suppress intent, stop any pending automation runs for the lead — the
-//    opt-outs just cleared were the only thing holding back runs the original
-//    spam-flag sweep missed (or runs enrolled since). Same shared core the
-//    set_contact_reply_mode suppress path uses.
-// ---------------------------------------------------------------------------
-if (REPLY_MODE === "suppress") {
-  const cancelResult = await cancelPendingRunsForLead(
-    db as never,
-    BUSINESS_ID,
-    identitySet,
-    "owner_stopped_texting"
-  );
-  console.log(
-    `[oneshot] pending runs: ${cancelResult.canceledRuns} canceled` +
-      (cancelResult.sweepComplete ? "" : " (sweep INCOMPLETE — re-run to re-check)")
-  );
-}
-
-// ---------------------------------------------------------------------------
-// 3. Contact: drop the spam tag + spam-declaration note lines; set reply mode.
-// ---------------------------------------------------------------------------
-if (contact) {
-  const tags: string[] = Array.isArray(contact.tags) ? (contact.tags as string[]) : [];
-  const pinned = typeof contact.pinned_md === "string" ? contact.pinned_md : "";
-  const keptPinned = pinned
-    .split("\n")
-    .filter((line) => !line.includes(SPAM_NOTE_MARKER))
-    .join("\n")
-    .trim();
-  const updates: Record<string, unknown> = {
-    tags: tags.filter((t) => t !== SPAM_TAG),
-    pinned_md: keptPinned.length > 0 ? keptPinned : null,
-    sms_reply_mode: REPLY_MODE,
-    updated_at: new Date().toISOString()
-  };
-  const { error: updErr } = await db.from("contacts").update(updates).eq("id", contact.id);
-  if (updErr) {
-    console.error("[oneshot] contact update failed:", updErr.message);
-    process.exit(1);
-  }
-  console.log(
-    `[oneshot] contact updated: spam tag removed, spam note lines removed, sms_reply_mode=${REPLY_MODE}`
-  );
-} else {
-  console.log("[oneshot] no contact row — tag/note/reply-mode skipped");
 }
 
 await recordOneshotApplied(db, {
