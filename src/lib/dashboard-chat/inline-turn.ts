@@ -328,9 +328,15 @@ function sideEffectNote(name: ActionToolName, result: unknown): string {
     const phone = (r as { phoneE164?: unknown }).phoneE164;
     const target = typeof phone === "string" ? phone : "the contact";
     const mode = (r as { mode?: unknown }).mode;
-    return mode === "auto"
-      ? `Texting resumed for ${target}: the coworker will reply to them automatically again.`
-      : `Texting stopped for ${target}: the coworker will no longer auto-reply to them and their pending automations were stopped (manual texts still work; reversible).`;
+    if (mode === "auto") {
+      return `Texting resumed for ${target}: the coworker will reply to them automatically again.`;
+    }
+    // Mirror the core's honesty: an unconfirmed run sweep must not read as
+    // "automations were stopped" (Bugbot Medium on PR #898).
+    const sweepComplete = (r as { runsSweepComplete?: unknown }).runsSweepComplete !== false;
+    return sweepComplete
+      ? `Texting stopped for ${target}: the coworker will no longer auto-reply to them and their pending automations were stopped (manual texts still work; reversible).`
+      : `Texting stopped for ${target}: the coworker will no longer auto-reply to them, but some of their pending automations could not be confirmed as stopped and may still send (manual texts still work; reversible).`;
   }
   if (name === "flag_contact_spam") {
     // The core's note carries the full honest outcome (blocked numbers,

@@ -1028,6 +1028,30 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
       expect(res.content).toContain("reversible");
     }
 
+    // An UNCONFIRMED run sweep must not read as "automations were stopped"
+    // (Bugbot Medium on PR #898).
+    const partialTool = vi.fn(async () => ({
+      ok: true,
+      phoneE164: "+18579289096",
+      mode: "suppress",
+      runsSweepComplete: false
+    }));
+    const chatStepPartial = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(
+        toolStep("set_contact_reply_mode", { phone: "+18579289096", mode: "suppress" })
+      )
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const resPartial = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep: chatStepPartial,
+      runActionTool: partialTool
+    });
+    expect(resPartial.ok).toBe(true);
+    if (resPartial.ok) {
+      expect(resPartial.content).toContain("could not be confirmed as stopped");
+      expect(resPartial.content).not.toContain("automations were stopped (");
+    }
+
     // Auto arm + defensive missing-phone arm.
     const autoTool = vi.fn(async () => ({ ok: true, mode: "auto" }));
     const chatStep2 = vi
