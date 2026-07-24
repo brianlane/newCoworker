@@ -47,7 +47,9 @@ describe("fireBookingGoalsForIdentities — KG booking ingest", () => {
       expect.objectContaining({
         phoneE164: "+14805551234",
         email: "buyer@x.co",
-        detail: expect.stringMatching(/^appointment booked \(\d{4}-\d{2}-\d{2}\)$/)
+        // Deliberately date-free: the goal fan-out doesn't know the
+        // appointment's real date; the calendar stays the event log.
+        detail: "appointment booked"
       })
     );
     expect(ingestBookingEvent).toHaveBeenCalledWith(

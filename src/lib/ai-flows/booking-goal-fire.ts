@@ -155,10 +155,14 @@ export async function fireBookingGoalsForIdentities(
   // authoritative that this person booked. One ingest per ORIGINAL identity
   // (not the alias fan-out — dedupe happens in resolution anyway); a
   // phone-only identity creates/resolves a phone-named node that later
-  // contact ingests enrich. Never-throws, mode-gated inside.
+  // contact ingests enrich. The fact value is deliberately DATE-FREE: the
+  // goal fan-out doesn't carry the appointment's actual date (a delayed
+  // Calendly sweep fires later than the booking), and the graph records
+  // the durable relationship — "this person books with us" — while the
+  // calendar stays the authoritative per-event log; the fact row's
+  // stated_at carries recency. Never-throws, mode-gated inside.
   /* c8 ignore next -- production default; tests inject */
   const ingest = deps.ingestBookingEvent ?? ingestBooking;
-  const bookedOn = new Date().toISOString().slice(0, 10);
   for (const identity of identities) {
     const phone = bookingPhoneE164(identity.phone ?? undefined);
     const email = (identity.email ?? "").trim().toLowerCase();
@@ -167,7 +171,7 @@ export async function fireBookingGoalsForIdentities(
       name: null,
       phoneE164: phone,
       email: email || null,
-      detail: `appointment booked (${bookedOn})`
+      detail: "appointment booked"
     });
   }
 
