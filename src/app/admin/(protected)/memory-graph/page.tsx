@@ -376,11 +376,14 @@ export default async function MemoryGraphAdminPage({
                     />
                   </td>
                   <td className="py-2 pr-4">
+                    {/* No roll-up rows with a HEALTHY read = genuinely zero
+                        spend — rendered as $0.00 to match the comparison
+                        tiles; "unavailable" is reserved for failed reads. */}
                     {!spendAvailable
                       ? "unavailable"
                       : spend
                         ? `${microsToMoney(spend.costMicros)} (${spend.calls})`
-                        : "—"}
+                        : "$0.00 (0)"}
                   </td>
                   <td className="py-2 text-right">
                     <Link
