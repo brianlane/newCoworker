@@ -231,7 +231,9 @@ export async function listBookingStartsBetween(
     .from("calendar_booking_dedupe")
     .select("start_at")
     .eq("business_id", businessId)
-    // Confirmed bookings only (see listUpcomingBookings).
+    // Confirmed bookings only: unconfirmed rows are transient in-flight
+    // claims (including the public page's slot-scoped claim), not
+    // appointments.
     .not("event_id", "is", null)
     .gte("start_at", fromIso)
     .lt("start_at", toIso);
