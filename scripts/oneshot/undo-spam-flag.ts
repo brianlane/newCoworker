@@ -69,7 +69,9 @@ const { recordOneshotApplied } = await import("./_ledger.ts");
 const { isStopKeyword, inboundSmsBody } = await import(
   "../../supabase/functions/_shared/telnyx_sms_compliance.ts"
 );
-const { cancelPendingRunsForLead } = await import("@/lib/customer-tools/cancel-lead-runs");
+const { cancelPendingRunsForLead, LEAD_STOPPABLE_STATUSES } = await import(
+  "@/lib/customer-tools/cancel-lead-runs"
+);
 const { setContactSmsReplyMode } = await import("@/lib/customer-memory/db");
 
 const db = createClient(
@@ -233,22 +235,47 @@ console.log(`[oneshot] sms_reply_mode set to ${REPLY_MODE}`);
 //    the set_contact_reply_mode suppress path uses.
 // ---------------------------------------------------------------------------
 if (REPLY_MODE === "suppress") {
-  const cancelResult = await cancelPendingRunsForLead(
-    db as never,
-    BUSINESS_ID,
-    identitySet,
-    "owner_stopped_texting"
-  );
-  console.log(
-    `[oneshot] pending runs: ${cancelResult.canceledRuns} canceled` +
-      (cancelResult.sweepComplete ? "" : " (sweep INCOMPLETE — aborting before opt-out clear)")
-  );
-  if (!cancelResult.sweepComplete) {
+  // The shared core cancels at most 25 runs per call (goal-jump parity
+  // bound), so DRAIN it until a pass cancels nothing, then verify zero
+  // pending matches remain — only that proves it is safe to clear opt-outs.
+  let totalCanceled = 0;
+  for (let pass = 0; pass < 40; pass++) {
+    const cancelResult = await cancelPendingRunsForLead(
+      db as never,
+      BUSINESS_ID,
+      identitySet,
+      "owner_stopped_texting"
+    );
+    totalCanceled += cancelResult.canceledRuns;
+    if (!cancelResult.sweepComplete) {
+      console.error(
+        "[oneshot] ABORT: run sweep hit an error — opt-outs left in place so nothing can send. Re-run."
+      );
+      process.exit(1);
+    }
+    if (cancelResult.canceledRuns === 0) break;
+  }
+  const pendingOr = identitySet
+    .flatMap((n) => [
+      `context->trigger->>from.eq.${n}`,
+      `context->vars->>lead_phone.eq.${n}`,
+      `context->waiting_reply->>from.eq.${n}`,
+      `context->waiting_call->>to.eq.${n}`
+    ])
+    .join(",");
+  const { count: remaining, error: remErr } = await db
+    .from("ai_flow_runs")
+    .select("id", { count: "exact", head: true })
+    .eq("business_id", BUSINESS_ID)
+    .in("status", [...LEAD_STOPPABLE_STATUSES])
+    .or(pendingOr);
+  if (remErr || (remaining ?? 0) > 0) {
     console.error(
-      "[oneshot] ABORT: run sweep incomplete — opt-outs left in place so nothing can send. Re-run."
+      `[oneshot] ABORT: ${remErr ? `verification failed: ${remErr.message}` : `${remaining} pending run(s) still match`} — opt-outs left in place. Re-run.`
     );
     process.exit(1);
   }
+  console.log(`[oneshot] pending runs: ${totalCanceled} canceled, 0 remaining (verified)`);
 }
 
 // ---------------------------------------------------------------------------
