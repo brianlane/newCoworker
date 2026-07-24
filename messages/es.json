@@ -1746,6 +1746,18 @@
       "activityTitle": "Actividad",
       "activitySubtitle": "Actividad de toda la flota en cada tenant, llamadas, mensajes, correos, ejecuciones de AiFlow y nuevos contactos.",
       "seeAll": "Ver todo →"
+    },
+    "feedFilters": {
+      "filterByType": "Filtrar por tipo",
+      "clear": "Limpiar",
+      "business": "Negocio",
+      "allBusinesses": "Todos los negocios",
+      "time": "Tiempo",
+      "today": "Hoy",
+      "lastDays": "Últimos {days} días",
+      "lastDaysAll": "Últimos {days} días (todo)",
+      "allTime": "Todo",
+      "unknownBusiness": "Negocio desconocido"
     }
   },
   "emails": {

@@ -1,24 +1,51 @@
 import { getTranslations } from "next-intl/server";
 import { listBusinesses } from "@/lib/db/businesses";
 import { getRecentAlertsAll } from "@/lib/db/logs";
+import { parseActivityDaysParam } from "@/lib/db/activity";
 import { getAdminMutedBusinessIds } from "@/lib/db/admin-mutes";
-import { summarizeAlertCounts } from "@/lib/admin/dashboard";
+import {
+  formatAlertStatusLabel,
+  parseAlertStatusesParam,
+  summarizeAlertCounts,
+  ALERT_FILTER_STATUSES
+} from "@/lib/admin/dashboard";
 import { AdminAlertRow } from "@/components/admin/feed-rows";
+import { AdminFeedFilters, type FeedFilterOption } from "@/components/admin/FeedFilters";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 
 export const dynamic = "force-dynamic";
 
-/** Bounded depth for the see-all view (the dashboard card shows 10). */
+/** Bounded depth for the see-all view (the dashboard card shows 15). */
 const ALERTS_PAGE_LIMIT = 100;
 
-export default async function AdminAlertsPage() {
+/** Status chips — labels match the badge terms the rows display. */
+const TYPE_OPTIONS: FeedFilterOption[] = ALERT_FILTER_STATUSES.map((status) => ({
+  value: status,
+  label: formatAlertStatusLabel(status)
+}));
+
+export default async function AdminAlertsPage(props: {
+  searchParams?: Promise<{ types?: string; business?: string; days?: string }>;
+}) {
   const t = await getTranslations("admin.pages");
+  const params = (await props.searchParams) ?? {};
+  const statuses = parseAlertStatusesParam(params.types);
+  const days = parseActivityDaysParam(params.days);
+
   const muted = await getAdminMutedBusinessIds();
-  const [businesses, alerts] = await Promise.all([
-    listBusinesses(),
-    getRecentAlertsAll(ALERTS_PAGE_LIMIT, undefined, { excludeBusinessIds: muted.alerts })
-  ]);
+  const businesses = await listBusinesses();
+  // An unknown business id still SCOPES the query (an honest empty list, and
+  // the select shows "Unknown business") rather than silently widening a
+  // shared link back to the whole fleet.
+  const businessId = params.business || undefined;
+
+  const alerts = await getRecentAlertsAll(ALERTS_PAGE_LIMIT, undefined, {
+    excludeBusinessIds: muted.alerts,
+    statuses,
+    businessId,
+    sinceDays: days
+  });
   const businessNames = new Map(businesses.map((b) => [b.id, b.name]));
   const counts = summarizeAlertCounts(alerts);
 
@@ -28,6 +55,15 @@ export default async function AdminAlertsPage() {
         <h1 className="text-2xl font-bold text-parchment">{t("alertsTitle")}</h1>
         <p className="text-sm text-parchment/50 mt-1">{t("alertsSubtitle")}</p>
       </div>
+
+      <AdminFeedFilters
+        basePath="/admin/alerts"
+        options={TYPE_OPTIONS}
+        selected={statuses}
+        businesses={businesses.map((b) => ({ id: b.id, name: b.name }))}
+        businessId={businessId}
+        days={days}
+      />
 
       <Card>
         <div className="flex items-center justify-between mb-4">

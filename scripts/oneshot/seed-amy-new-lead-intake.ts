@@ -22,10 +22,12 @@
  *        references neutralized; RE quiet hours with email fallback) plus
  *        the no-phone intro EMAIL variants.
  *     -> route_to_team: when Amy names a teammate ("I want Gabby to have
- *        this"), the offer pins to that exact roster member (route_variant
- *        token; explicit hand-off, so no $1M+ override); otherwise by lead
- *        type (buyer = un-pinned roster cascade; seller/both pinned to Dave
- *        Lane; $1M+ kept for Amy via ownerDirectWhen price_band)
+ *        this"), the DYNAMIC pin (agentNameVar) resolves the extracted name
+ *        against the live roster at run time, so any current or FUTURE
+ *        roster member is pinnable by name (explicit hand-off, so no $1M+
+ *        override); otherwise by lead type (buyer = un-pinned roster
+ *        cascade; seller/both pinned to Dave Lane; $1M+ kept for Amy via
+ *        ownerDirectWhen price_band)
  *     -> notify_owner outcome (plus an honest no-phone variant)
  *
  * The referral gate is equals-matched, so a missed extraction fails CLOSED
@@ -319,31 +321,21 @@ function routeStep(
 }
 
 /**
- * Roster members Amy can hand a lead to by name ("I want Gabby to have
- * this"). Tokens are what the extraction answers; names must match the
- * ai_flow_team_members roster EXACTLY, because route_to_team's agentName is
- * matched literally against roster rows (it is never template-rendered), so
- * a dynamic {{vars...}} pin can not work. A missing/renamed roster member
- * makes the pinned offer fall through to the owner fallback, never to an
- * unintended teammate (the engine's pinned-agent-missing path).
- */
-export const DEFAULT_PINNABLE_TEAMMATES: readonly { token: string; name: string }[] = [
-  { token: "dave", name: "Dave Lane" },
-  { token: "gabby", name: "Gabrielle Mota" },
-  { token: "jason", name: "Jason Lane" }
-];
-
-/**
- * A route pinned to the teammate Amy explicitly named. Deliberately NO
+ * Explicit hand-offs ("I want Gabby to have this") ride the engine's DYNAMIC
+ * pin (route_to_team.agentNameVar, PR #876): the extracted assigned_agent
+ * value is resolved against the LIVE roster at execution time (exact name,
+ * first name, unique prefix with nickname tolerance), so a new hire is
+ * pinnable the day they join and a rename never breaks the pin. An unmatched
+ * name falls back to Amy, never to an unintended teammate. Deliberately NO
  * ownerDirectWhen: naming a person IS Amy's routing decision, so the $1M+
  * keep-for-owner rule never overrides it.
  */
-function pinnedRouteStep(teammate: { token: string; name: string }): Record<string, unknown> {
+function assignedRouteStep(): Record<string, unknown> {
   return {
-    id: `route_pin_${teammate.token}`,
+    id: "route_assigned",
     type: "route_to_team",
-    agentName: teammate.name,
-    when: { var: "route_variant", equals: teammate.token } satisfies When,
+    agentNameVar: "assigned_agent",
+    when: { var: "route_variant", equals: "assigned" } satisfies When,
     offerWindow: {
       quietStart: "21:00",
       quietEnd: "08:30",
@@ -358,7 +350,7 @@ function pinnedRouteStep(teammate: { token: string; name: string }): Record<stri
       `${LEAD_SOURCE_LINE}\n${PASS_REASON_LINE}`,
     claimedNotifyTemplate: CLAIMED_NOTIFY_TEMPLATE,
     ownerFallbackTemplate:
-      `${teammate.name} didn't claim the {{vars.lead_type}} lead {{vars.lead_name}} ` +
+      "{{vars.assigned_agent}} didn't claim the {{vars.lead_type}} lead {{vars.lead_name}} " +
       `({{vars.lead_phone}}, email: {{vars.lead_email}}) in {{vars.location}}, ` +
       `even though you asked for them to take it. It's back with you.\n${LEAD_SOURCE_LINE}`
   };
@@ -371,11 +363,9 @@ function pinnedRouteStep(teammate: { token: string; name: string }): Record<stri
 export function buildDefinition(opts?: {
   agentName?: string;
   mailboxConnectionId?: string;
-  pinnableTeammates?: readonly { token: string; name: string }[];
 }): unknown {
   const agentName = opts?.agentName ?? DEFAULT_AGENT_NAME;
   const mailbox = opts?.mailboxConnectionId ?? DEFAULT_MAILBOX_CONNECTION_ID;
-  const pinnable = opts?.pinnableTeammates ?? DEFAULT_PINNABLE_TEAMMATES;
   return {
     version: 1,
     // Manual-only: started from the Run-now button or the coworker's
@@ -462,12 +452,19 @@ export function buildDefinition(opts?: {
               "one lowercase word: referral. Otherwise answer exactly: none"
           },
           {
+            name: "assigned_agent",
+            description:
+              "The teammate's name exactly as the message wrote it, when the message says " +
+              "a specific teammate should get or handle this lead (e.g. 'I want Gabby to " +
+              "have this' answers: Gabby). If no teammate is named, answer exactly: none"
+          },
+          {
             name: "route_variant",
             description:
-              "EXACTLY ONE lowercase token. When the message names the teammate who should " +
-              "get this lead, answer their token: dave (Dave), gabby (Gabby/Gabrielle), " +
-              "jason (Jason). Otherwise answer the lead type: buyer, seller, or both. " +
-              "If NO phone number is given for the lead, answer exactly: none"
+              "EXACTLY ONE lowercase token. When the message names a specific teammate " +
+              "who should get this lead, answer exactly: assigned. Otherwise answer the " +
+              "lead type: buyer, seller, or both. If NO phone number is given for the " +
+              "lead, answer exactly: none"
           }
         ]
       },
@@ -500,12 +497,10 @@ export function buildDefinition(opts?: {
         ],
         else: introSteps(mailbox, false)
       },
-      // Explicit hand-off ("I want Gabby to have this"): route_variant
-      // carries the teammate's token, and exactly one pinned route fires.
-      // Amy naming a person IS the routing decision, so these skip the $1M+
-      // keep-for-owner rule; an off-roster/renamed teammate falls through to
-      // the owner fallback, never to someone else.
-      ...pinnable.map((t) => pinnedRouteStep(t)),
+      // Explicit hand-off ("I want Gabby to have this"): the DYNAMIC pin
+      // resolves the extracted name against the live roster at run time, so
+      // any current or future roster member is pinnable by name.
+      assignedRouteStep(),
       // Otherwise route by lead type (RE shape): buyer un-pinned roster
       // cascade, seller/both to Dave, $1M+ kept for Amy.
       routeStep("buyer", agentName),

@@ -281,6 +281,20 @@ these standards:
 - **Row Level Security is on by default** with deny-by-default policies. Secret
   tables (`vps_gateway_tokens`, `vps_ssh_keys`) run RLS with **no policies**, so
   only `service_role` (which bypasses RLS) can read them.
+- **Data API grants are explicit; nothing is auto-exposed.** The project
+  opted in early (`supabase/migrations/20260820100400_revoke_default_data_api_grants.sql`)
+  to the Supabase platform default that reaches every existing project on
+  October 30, 2026: new tables, views, sequences, and functions in `public`
+  receive NO automatic grants to `anon`/`authenticated`/`service_role`.
+  Every migration that creates an object must grant access explicitly in the
+  same file (service_role only, unless the table is deliberately
+  client-readable via RLS policies); `tests/migration-grants.test.ts`
+  enforces this in CI and `.cursor/rules/migration-grants.mdc` documents the
+  convention. The companion sweep
+  (`…20260820100500_revoke_legacy_deny_all_table_grants.sql`) also revoked
+  the legacy anon/authenticated grants on every existing RLS-on/no-policies
+  table, so a deny-all table is no longer one accidental
+  `disable row level security` away from the anon PostgREST path.
 - **App-layer encryption at rest for stored secrets**: `vps_ssh_keys.private_key_pem`
   and `residency_backup_keys.passphrase` are wrapped in an AES-256-GCM envelope
   keyed by `SECRETS_ENCRYPTION_KEY` ([src/lib/crypto/secret-encryption.ts](src/lib/crypto/secret-encryption.ts)) —
