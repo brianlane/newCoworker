@@ -17,6 +17,7 @@ vi.mock("@/lib/admin/platform-settings", () => ({
 import {
   deactivateMemoryFacts,
   effectiveMemoryGraphMode,
+  touchMemoryFactStatedAt,
   getMemoryGraphDefaultMode,
   getMemoryGraphMode,
   insertMemoryEntity,
@@ -273,6 +274,24 @@ describe("effectiveMemoryGraphMode (pure — admin views with a fresh default)",
     expect(effectiveMemoryGraphMode(null, "shadow")).toBe("shadow");
     expect(effectiveMemoryGraphMode(undefined, "off")).toBe("off");
     expect(effectiveMemoryGraphMode("banana", "shadow")).toBe("shadow");
+  });
+});
+
+describe("touchMemoryFactStatedAt", () => {
+  it("bumps stated_at on the row; throws on error; default client works", async () => {
+    const c = chain({ error: null }, "eq");
+    await touchMemoryFactStatedAt("f1", c as never);
+    expect(c.from).toHaveBeenCalledWith("memory_facts");
+    expect(c.update).toHaveBeenCalledWith({ stated_at: expect.any(String) });
+    expect(c.eq).toHaveBeenCalledWith("id", "f1");
+
+    const failing = chain({ error: { message: "denied" } }, "eq");
+    await expect(touchMemoryFactStatedAt("f1", failing as never)).rejects.toThrow(
+      "touchMemoryFactStatedAt: denied"
+    );
+    defaultClientSpy.mockReturnValue(chain({ error: null }, "eq"));
+    await touchMemoryFactStatedAt("f1");
+    expect(defaultClientSpy).toHaveBeenCalled();
   });
 });
 

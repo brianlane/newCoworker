@@ -120,15 +120,16 @@ describe("builders", () => {
     expect(rosterExtraction({ name: "J" }).entities[0]).toMatchObject({ phones: [], emails: [] });
   });
 
-  it("contactExtraction: named contacts only (a bare number adds nothing new)", () => {
+  it("contactExtraction: names the node, falling back to the number for nameless contacts", () => {
     expect(
       contactExtraction({ displayName: "Bryan Buyer", e164: "+15551234567", email: "b@x.co" })
         .entities[0]
     ).toMatchObject({ name: "Bryan Buyer", phones: ["+15551234567"], emails: ["b@x.co"] });
-    expect(contactExtraction({ displayName: null, e164: "+15551234567" })).toEqual({
-      entities: [],
-      facts: []
-    });
+    // Nameless contact: identifier-named node (booking/lead convention) so
+    // an owner-attached email still lands in the graph.
+    expect(
+      contactExtraction({ displayName: null, e164: "+15551234567", email: "b@x.co" }).entities[0]
+    ).toMatchObject({ name: "+15551234567", emails: ["b@x.co"] });
     expect(contactExtraction({ displayName: "NoEmail", e164: "+1555" }).entities[0].emails).toEqual(
       []
     );
@@ -347,8 +348,11 @@ describe("retirePinnedNote (owner cleared the note)", () => {
     } as never;
   }
 
-  it("deactivates the person's active owner_note facts (no successor)", async () => {
-    const deps = retireDeps();
+  it("deactivates the person's active owner_note facts (no successor), matching NORMALIZED phones", async () => {
+    const deps = retireDeps({
+      // Stored with formatting; retire matches on normalized digits.
+      listEntities: vi.fn(async () => [{ ...PERSON, phones: ["(555) 123-4567"] }])
+    });
     const res = await retirePinnedNote(BIZ, "+15551234567", deps);
     expect(res).toEqual({ retired: 1 });
     const d = deps as { listFacts: ReturnType<typeof vi.fn>; deactivate: ReturnType<typeof vi.fn> };
@@ -356,7 +360,26 @@ describe("retirePinnedNote (owner cleared the note)", () => {
     expect(d.deactivate).toHaveBeenCalledWith(["f-1"]);
   });
 
-  it("no-ops on off mode, unknown numbers, and note-less people", async () => {
+  it("only PERSON nodes match (an org sharing the main line never shadows the contact), and every match sweeps", async () => {
+    const org = { ...PERSON, id: "e-org", kind: "organization", canonical_name: "Acme" };
+    const dupe = { ...PERSON, id: "e-2" };
+    const deps = retireDeps({
+      listEntities: vi.fn(async () => [org, PERSON, dupe]),
+      listFacts: vi
+        .fn()
+        .mockResolvedValueOnce([NOTE_FACT])
+        .mockResolvedValueOnce([{ id: "f-2" }])
+    });
+    const res = await retirePinnedNote(BIZ, "+15551234567", deps);
+    expect(res).toEqual({ retired: 2 });
+    const d = deps as { listFacts: ReturnType<typeof vi.fn>; deactivate: ReturnType<typeof vi.fn> };
+    // The org node is never consulted for owner_note facts.
+    expect(d.listFacts).not.toHaveBeenCalledWith(BIZ, "e-org", "owner_note");
+    expect(d.deactivate).toHaveBeenCalledWith(["f-1"]);
+    expect(d.deactivate).toHaveBeenCalledWith(["f-2"]);
+  });
+
+  it("no-ops on off mode, unknown/garbage numbers, and note-less people", async () => {
     const off = retireDeps({ getMode: vi.fn(async () => "off" as const) });
     expect(await retirePinnedNote(BIZ, "+15551234567", off)).toEqual({ retired: 0 });
     expect((off as { listEntities: ReturnType<typeof vi.fn> }).listEntities).not.toHaveBeenCalled();
@@ -364,6 +387,10 @@ describe("retirePinnedNote (owner cleared the note)", () => {
     const unknown = retireDeps();
     expect(await retirePinnedNote(BIZ, "+19998887777", unknown)).toEqual({ retired: 0 });
     expect((unknown as { deactivate: ReturnType<typeof vi.fn> }).deactivate).not.toHaveBeenCalled();
+
+    // A value normalizePhone rejects can never match anything.
+    const garbage = retireDeps();
+    expect(await retirePinnedNote(BIZ, "abc", garbage)).toEqual({ retired: 0 });
 
     const noteless = retireDeps({ listFacts: vi.fn(async () => []) });
     expect(await retirePinnedNote(BIZ, "+15551234567", noteless)).toEqual({ retired: 0 });
