@@ -195,11 +195,12 @@ export async function retirePinnedNote(
   e164: string,
   deps: RetireNoteDeps = {}
 ): Promise<{ retired: number }> {
-  /* c8 ignore next 4 -- production defaults; tests inject */
+  /* c8 ignore start -- production defaults; tests inject */
   const getMode = deps.getMode ?? getMemoryGraphMode;
   const listEntities = deps.listEntities ?? listMemoryEntities;
   const listFacts = deps.listFacts ?? listActiveFacts;
   const deactivate = deps.deactivate ?? deactivateMemoryFacts;
+  /* c8 ignore stop */
   try {
     const mode = await getMode(businessId);
     if (mode === "off") return { retired: 0 };
