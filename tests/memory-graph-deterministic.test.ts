@@ -21,6 +21,7 @@ import {
   leadName,
   pinnedNoteExtraction,
   profileExtraction,
+  retirePinnedNote,
   rosterExtraction
 } from "@/lib/memory/graph-deterministic";
 
@@ -245,6 +246,70 @@ describe("builders", () => {
     expect(
       docRecordExtraction({ title: "T", fields: { a: "b" }, contactName: "Bob" }).entities[0]
     ).toMatchObject({ name: "Bob", phones: [] });
+  });
+});
+
+describe("retirePinnedNote (owner cleared the note)", () => {
+  const PERSON = {
+    id: "e-1",
+    business_id: BIZ,
+    kind: "person",
+    canonical_name: "Joe",
+    aliases: [],
+    phones: ["+15551234567"],
+    emails: [],
+    customer_e164: null,
+    source: "contacts",
+    trust: 3,
+    attributed_to: null,
+    created_at: "",
+    updated_at: ""
+  };
+  const NOTE_FACT = { id: "f-1" } as never;
+
+  function retireDeps(overrides: Record<string, unknown> = {}) {
+    return {
+      getMode: vi.fn(async () => "shadow" as const),
+      listEntities: vi.fn(async () => [PERSON]),
+      listFacts: vi.fn(async () => [NOTE_FACT]),
+      deactivate: vi.fn(async () => undefined),
+      ...overrides
+    } as never;
+  }
+
+  it("deactivates the person's active owner_note facts (no successor)", async () => {
+    const deps = retireDeps();
+    const res = await retirePinnedNote(BIZ, "+15551234567", deps);
+    expect(res).toEqual({ retired: 1 });
+    const d = deps as { listFacts: ReturnType<typeof vi.fn>; deactivate: ReturnType<typeof vi.fn> };
+    expect(d.listFacts).toHaveBeenCalledWith(BIZ, "e-1", "owner_note");
+    expect(d.deactivate).toHaveBeenCalledWith(["f-1"]);
+  });
+
+  it("no-ops on off mode, unknown numbers, and note-less people", async () => {
+    const off = retireDeps({ getMode: vi.fn(async () => "off" as const) });
+    expect(await retirePinnedNote(BIZ, "+15551234567", off)).toEqual({ retired: 0 });
+    expect((off as { listEntities: ReturnType<typeof vi.fn> }).listEntities).not.toHaveBeenCalled();
+
+    const unknown = retireDeps();
+    expect(await retirePinnedNote(BIZ, "+19998887777", unknown)).toEqual({ retired: 0 });
+    expect((unknown as { deactivate: ReturnType<typeof vi.fn> }).deactivate).not.toHaveBeenCalled();
+
+    const noteless = retireDeps({ listFacts: vi.fn(async () => []) });
+    expect(await retirePinnedNote(BIZ, "+15551234567", noteless)).toEqual({ retired: 0 });
+    expect((noteless as { deactivate: ReturnType<typeof vi.fn> }).deactivate).not.toHaveBeenCalled();
+  });
+
+  it("never throws (Error and non-Error)", async () => {
+    const failing = retireDeps({
+      deactivate: vi.fn(async () => {
+        throw new Error("db down");
+      })
+    });
+    expect(await retirePinnedNote(BIZ, "+15551234567", failing)).toEqual({ retired: 0 });
+
+    const weird = retireDeps({ getMode: vi.fn(async () => Promise.reject("string throw")) });
+    expect(await retirePinnedNote(BIZ, "+15551234567", weird)).toEqual({ retired: 0 });
   });
 });
 

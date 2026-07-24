@@ -18,7 +18,11 @@ import type {
   SmsReplyMode
 } from "./types";
 import { normalizeContactTags } from "./types";
-import { ingestContact, ingestPinnedNote } from "@/lib/memory/graph-deterministic";
+import {
+  ingestContact,
+  ingestPinnedNote,
+  retirePinnedNote
+} from "@/lib/memory/graph-deterministic";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -486,12 +490,18 @@ export async function updateCustomerOwnerFields(
       email: row?.email ?? ("email" in edit ? (edit.email ?? null) : null)
     });
   }
-  if ("pinnedMd" in edit && edit.pinnedMd?.trim()) {
-    await ingestPinnedNote(businessId, {
-      displayName: "displayName" in edit ? edit.displayName ?? null : null,
-      e164: customerE164,
-      note: edit.pinnedMd
-    });
+  if ("pinnedMd" in edit) {
+    if (edit.pinnedMd?.trim()) {
+      await ingestPinnedNote(businessId, {
+        displayName: "displayName" in edit ? edit.displayName ?? null : null,
+        e164: customerE164,
+        note: edit.pinnedMd
+      });
+    } else {
+      // Cleared note → retire the graph's owner_note facts, or prompts
+      // would keep treating removed content as current owner knowledge.
+      await retirePinnedNote(businessId, customerE164);
+    }
   }
 }
 
