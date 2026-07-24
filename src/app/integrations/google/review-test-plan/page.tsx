@@ -77,12 +77,12 @@ export default function GoogleReviewTestPlanPage() {
 
           <Step n={2} title="Authorize Google (OAuth grant)">
             <p>
-              Open <b>Dashboard → Integrations</b> and click <b>Connect Google</b> in the
-              workspace connections card. The Google consent screen for <b>New Coworker</b>{" "}
-              appears; the URL carries our single OAuth client id
-              (<code className="text-xs text-claw-green">354099628168-…</code>) and the scope list
-              shows exactly the declared scopes: calendar events plus Gmail read/send/modify,
-              alongside basic profile. Complete the grant.
+              Open <b>Dashboard → Integrations → Workspace</b>, click <b>Connect workspace</b>,
+              and choose <b>Google</b> in the connect window. The Google consent screen for{" "}
+              <b>New Coworker</b> appears; the authorization URL carries our single OAuth client
+              id (<code className="text-xs text-claw-green">354099628168-…</code>) and the scope
+              list shows exactly the declared scopes: calendar events plus Gmail
+              read/send/modify, alongside basic profile. Complete the grant.
             </p>
             <p>
               Expected: you are returned to Dashboard → Integrations and the connection card shows
@@ -128,9 +128,9 @@ export default function GoogleReviewTestPlanPage() {
 
           <Step n={5} title="Remove the connection">
             <p>
-              Back on <b>Dashboard → Integrations</b>, click <b>Disconnect</b> on the Google
-              connection and confirm. Expected: the card returns to its disconnected state and the
-              stored tokens are deleted. The grant can also be revoked from the Google
+              Back on <b>Dashboard → Integrations → Workspace</b>, click <b>Disconnect</b> on the
+              Google connection and confirm. Expected: the connection disappears from the page
+              and the stored tokens are deleted. The grant can also be revoked from the Google
               account&apos;s security settings (Third-party access); the next dashboard visit
               shows the connection as needing reconnection.
             </p>
