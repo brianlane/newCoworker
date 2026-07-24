@@ -59,6 +59,89 @@ Rowboat talks to a small `llm-router` sidecar on the VPS (`vps/llm-router/`) whi
 - **Vagaro** connects directly (no Nango, no Zapier): the owner pastes their merchant Client ID/Secret on `/dashboard/integrations` (`vagaro_connections`, secret encrypted at rest; client-credentials token manager in `src/lib/vagaro/client.ts`). When connected, Vagaro **wins calendar-provider resolution** — `calendar_find_slots` runs a real availability search and `calendar_book_appointment` creates the appointment on the merchant's book (owner-picked default service, else closest duration match). Inbound Vagaro webhooks land on `/api/webhooks/vagaro?business=…&token=…` (per-tenant verification token), start `webhook`-channel AiFlows with `source: "vagaro"`, and sync customer events into contacts. Requires the merchant's Vagaro APIs & Webhooks access (Vagaro-gated approval). Authentication is a **per-tenant gateway token** (see [Per-tenant gateway tokens](#security-per-tenant-gateway-tokens)); the shared `ROWBOAT_GATEWAY_TOKEN` remains a fallback during the transition. **Booking-intelligence parity with Calendly (Jul 2026)** — appointments booked OFF-platform (the merchant's own Vagaro page, front desk) get the full Calendly-stack treatment: an `appointment` **created** webhook event fires the shared `appointment_booked` goal machinery in real time (`src/lib/ai-flows/booking-goal-fire.ts` — the provider-neutral fan-out both providers now use), the pre-send precheck (`src/lib/ai-flows/booking-precheck.ts`) matches the run's lead against upcoming Vagaro appointments so an already-booked lead gets zero nurture texts, and the SMS/voice/Messenger booking-status preamble (`src/lib/ai-flows/contact-booking-context.ts`) reports upcoming/canceled Vagaro appointments (no reschedule lineage on Vagaro — a moved appointment reads as booked at its new time). **Calendar triggers** work for Vagaro-only tenants: the ~1/min poller lists appointments through `src/lib/ai-flows/vagaro-poll.ts` (all four modes; customer name/phone/email land in the trigger window text), and the webhook receiver fires `event_created` / `event_canceled` in real time through the poller's own enqueue core — shared `cal:` dedupe keys make poll/webhook double-observation a no-op. Webhook appointment events also **sync the booking ledger** (created → record external claim, updated → move it, deleted/canceled → drop it), so `calendar_reschedule_appointment` / `calendar_cancel_appointment` can locate off-platform bookings (Vagaro resolution is ledger-only). All of it parses the approval-gated v3 API shapes defensively and fails open to the pre-parity behavior.
 - See [docs/VOICE-ROLLOUT.md §9](docs/VOICE-ROLLOUT.md) for the Phase 2 rollout runbook.
 
+## Memory knowledge graph (shadow rollout, Jul 2026)
+
+Beside the markdown memory (`memory_md` + `memory_archive_md`, ranked at
+retrieval time by `src/lib/memory/retrieval.ts`), every tenant has a per-tenant
+knowledge graph: `memory_entities` / `memory_facts` rows built through
+deterministic resolution and supersedence (`src/lib/memory/graph-write.ts`).
+The graph is the durable who/what layer: people, organizations, places, and
+the relationships between them, collapsed onto canonical nodes no matter which
+channel the information arrived on.
+
+**Modes.** `business_configs.memory_graph_mode` is `inherit` (default), `off`,
+`shadow`, or `active`. `inherit` follows the fleet-wide default stored in
+`admin_platform_settings` under `memory_graph_default_mode` (code fallback:
+`shadow`). Always resolve through `resolveMemoryGraphMode`
+(`src/lib/memory/graph-db.ts`, ~60s cache), never read the column raw. In
+`shadow`, graphs build and every knowledge lookup records a graph-vs-memory
+comparison while live answers stay byte-identical; in `active`, graph facts
+ride the knowledge-lookup prompt alongside ranked memory. Flips are made from
+the admin business-page card or `POST /api/admin/memory-graph`; a per-tenant
+flip schedules a vault sync so the on-box projection ships (shadow/active) or
+wipes (off) immediately.
+
+**Trust model.** Every entity and fact carries `source`, `trust` (0-3), and
+`attributed_to`:
+
+| Trust | Who | Examples |
+|---|---|---|
+| 3 | Owner-canonical | owner chat/SMS capture, roster, contacts, pinned notes, profile, identity_md, backfill |
+| 2 | Business systems/content | bookings, doc record fields, document bodies, website crawl |
+| 1 | Identified customers | voice calls, customer SMS, replied email, Messenger/Instagram/WhatsApp leads |
+| 0 | Anonymous | webchat leads, webhook/AiFlow leads, unanswered inbound email |
+
+Supersedence respects trust: a new fact retires only same-or-lower-trust
+facts for its (subject, predicate), so a caller's claim can never replace an
+owner statement (the KYP lesson as a model, not a wall). Trust <= 1 sources
+never merge phones/emails/aliases onto canonical entities, and retrieval plus
+the on-box notes render their facts as attributed claims ("claimed by
++1480... (unverified)").
+
+**Source coverage is a REQUIRED contract** (same spirit as the tool parity
+contract below): `src/lib/memory/kg-sources.ts` maps every content surface in
+the platform to a graph-ingestion decision, and
+`tests/kg-source-coverage.test.ts` pins it three ways (live sources must have
+`kg-source: <name>` marked call sites, entries must be well-formed, and the
+hand-pinned surface inventory must stay fully mapped). **Any new content
+surface (new channel, new content table) must add a registry entry and an
+inventory line, or its PR fails CI.** Deterministic mappers live in
+`graph-deterministic.ts` (zero model cost); conversational extraction rides
+the customer-memory summarizer boundary and the DM lead-capture tools
+(`graph-conversational.ts`); long-form content (documents, website, identity)
+chunks through `graph-longform.ts`.
+
+**Shadow comparison.** Every shadow/active lookup writes a `kg_retrieval_events`
+row (question, answer, graph context vs ranked-memory context, counts;
+90-day prune in the daily retention sweep; part of the end-user erasure
+surface). `/admin/memory-graph` renders it at a glance: fleet default toggle,
+per-tenant modes, verdict buckets (graph won / both / memory only / neither),
+stat tiles, and per-event side-by-side expanders. The rollout playbook is
+shadow-first: backtest offline, let shadow accumulate, review the verdict
+split, then flip tenants to `active` (a human decision, never automatic).
+
+**On-box projection.** The vault sync ships the graph to each tenant's VPS as
+Obsidian-style entity notes plus `graph.jsonl` under `/opt/rowboat/memory/graph/`;
+the chat-worker compiles `graph.jsonl` into a local SQLite `graph.db`
+(`vps/chat-worker/graph-db-build.mjs`, content-hash freshness). Off-mode
+tenants get the wipe on every sync.
+
+**Cost.** All LLM extraction meters into the `memory_graph` spend surface, and
+one daily per-tenant fuse covers every extraction path:
+`MEMORY_GRAPH_DAILY_EXTRACTION_CAP` (default 200/day, enforced by reading
+today's call count back from the spend ledger). `MEMORY_GRAPH_EXTRACT_MODEL`
+overrides the extractor model (default `gemini-3.5-flash-lite`).
+
+**Ops (read-only, engineering key, no sends):**
+
+```bash
+tsx debug/kg-backfill.ts --business <uuid>                    # dry-run memory_md backfill
+tsx debug/kg-backfill.ts --business <uuid> --apply            # land it (idempotent)
+tsx debug/kg-backfill.ts --business <uuid> --sources voice,sms,email   # widened dry run
+tsx debug/kg-backtest.ts --business <uuid> --sources voice,sms,email   # widened graph, then
+                                                              # memory-vs-graph replay report
+```
+
 ## Testing
 
 Run unit tests with:
