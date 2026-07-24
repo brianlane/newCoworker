@@ -386,8 +386,11 @@ export default async function MemoryGraphAdminPage({
                         : "$0.00 (0)"}
                   </td>
                   <td className="py-2 text-right">
+                    {/* Hash target: the comparison card renders below the
+                        fold, so without the jump a Compare click looks like
+                        nothing happened. */}
                     <Link
-                      href={`/admin/memory-graph?window=${window}&business=${row.id}`}
+                      href={`/admin/memory-graph?window=${window}&business=${row.id}#comparison`}
                       className="text-claw-green underline underline-offset-2"
                     >
                       Compare
@@ -401,7 +404,7 @@ export default async function MemoryGraphAdminPage({
       </Card>
 
       {selectedBusinessId && (
-        <Card>
+        <Card id="comparison">
           <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-1">
             Comparison — {businessNames.get(selectedBusinessId) ?? selectedBusinessId} ({window})
           </h2>
