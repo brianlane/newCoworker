@@ -1603,6 +1603,41 @@ describe("planStep: route_to_team", () => {
     ).toBe(false);
   });
 
+  it("renders claimedNotifyEmail, normalizing case/whitespace", () => {
+    const r = planStep({ ...base, claimedNotifyEmail: "  Team@AmyLaidlaw.com " }, {});
+    expect(r.ok && r.action.kind === "route_to_team" && r.action.claimedNotifyEmail).toBe(
+      "team@amylaidlaw.com"
+    );
+    const templated = planStep(
+      { ...base, claimedNotifyEmail: "{{vars.notify_to}}" },
+      { vars: { notify_to: "ops@example.com" } }
+    );
+    expect(
+      templated.ok &&
+        templated.action.kind === "route_to_team" &&
+        templated.action.claimedNotifyEmail
+    ).toBe("ops@example.com");
+  });
+
+  it("drops an undeliverable claimedNotifyEmail instead of failing (degrades to SMS-only)", () => {
+    // A template resolving to nothing (extraction miss) and a non-address
+    // both degrade to the SMS-only claim notice, never a step failure.
+    const unresolved = planStep({ ...base, claimedNotifyEmail: "{{vars.notify_to}}" }, { vars: {} });
+    expect(
+      unresolved.ok &&
+        unresolved.action.kind === "route_to_team" &&
+        "claimedNotifyEmail" in unresolved.action
+    ).toBe(false);
+    const junk = planStep({ ...base, claimedNotifyEmail: "not-an-email" }, {});
+    expect(
+      junk.ok && junk.action.kind === "route_to_team" && "claimedNotifyEmail" in junk.action
+    ).toBe(false);
+    const omitted = planStep(base, {});
+    expect(
+      omitted.ok && omitted.action.kind === "route_to_team" && "claimedNotifyEmail" in omitted.action
+    ).toBe(false);
+  });
+
   it("never carries the removed claimTimeframeOption/lateClaimOption digits", () => {
     // Reply digits are universal ("1" claim, "2" pass); legacy fields on an
     // old stored step type are ignored by planStep, not forwarded.

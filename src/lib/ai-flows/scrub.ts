@@ -182,8 +182,10 @@ export function scrubDefinition(
           break;
         case "route_to_team":
           // Pinning to one named agent is tenant-specific; default to roster
-          // rotation by dropping the pin.
+          // rotation by dropping the pin. The claim-outcome email address is
+          // tenant data too (a real inbox), so it never reaches the library.
           delete step.agentName;
+          delete step.claimedNotifyEmail;
           break;
         case "http_call":
           // The endpoint `path` and `bodyTemplate` can embed webhook URLs, API

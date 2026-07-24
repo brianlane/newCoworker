@@ -1253,6 +1253,32 @@ describe("route_to_team step", () => {
     ).toBe(true);
   });
 
+  it("accepts and preserves claimedNotifyEmail (claim-outcome email recipient)", () => {
+    const withEmail = JSON.parse(JSON.stringify(routedInput));
+    withEmail.steps[2].claimedNotifyEmail = "team@amylaidlaw.com";
+    const def = parseAiFlowDefinition(withEmail);
+    const step = def.steps[2];
+    expect(step.type === "route_to_team" && step.claimedNotifyEmail).toBe("team@amylaidlaw.com");
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("scope-checks a templated claimedNotifyEmail like any other route template", () => {
+    const ghost = JSON.parse(JSON.stringify(routedInput));
+    ghost.steps[2].claimedNotifyEmail = "{{vars.never_produced}}";
+    expect(
+      validateDefinitionSemantics(aiFlowDefinitionSchema.parse(ghost)).some((i) =>
+        i.includes("never_produced")
+      )
+    ).toBe(true);
+    // A var produced earlier is fine.
+    const ok = JSON.parse(JSON.stringify(routedInput));
+    ok.steps[1].fields.push({ name: "notify_to" });
+    ok.steps[2].claimedNotifyEmail = "{{vars.notify_to}}";
+    expect(
+      validateDefinitionSemantics(aiFlowDefinitionSchema.parse(ok))
+    ).toEqual([]);
+  });
+
   it("strips the removed claimTimeframeOption/lateClaimOption fields from old definitions", () => {
     // Reply digits are universal now ("1" claim, "2" pass); a definition
     // authored before the migration still parses, but the legacy per-flow

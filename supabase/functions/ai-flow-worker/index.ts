@@ -6430,6 +6430,19 @@ async function routeToTeamStep(
     const fallbackBody = renderTemplate(action.ownerFallbackTemplate, scope);
     const body = `${who} released this lead, it's back with you.\n${fallbackBody}`;
     await sendOwnerSms(supabase, run, body, `aiflow-unclaimed:${run.id}`);
+    // Email twin of the release notice: the inbox that heard "claimed by X"
+    // must also hear the retraction, or it keeps a stale owner on record.
+    if (action.claimedNotifyEmail) {
+      const leadLabel = claimEmailLeadLabel(scope);
+      await sendClaimOutcomeEmail(supabase, run, {
+        to: action.claimedNotifyEmail,
+        subject: `Lead released: ${leadLabel} by ${who}`,
+        body:
+          `${who} released this lead (replied "86"); it is back with the owner ` +
+          `and unclaimed.\n${fallbackBody}`,
+        idempotencyKey: `aiflow-unclaimed-email:${run.id}`
+      });
+    }
     appendActionTaken(scope, `lead unclaimed by ${who}; returned to the owner`);
     return {
       kind: "ok",
@@ -6509,6 +6522,36 @@ async function routeToTeamStep(
       // earlier owner-fallback/claim notice on the same run.
       const notifyKey = lateClaim ? `aiflow-late-claimed:${run.id}` : `aiflow-claimed:${run.id}`;
       await sendOwnerSms(supabase, run, body, notifyKey);
+    }
+    // Email twin of the claim notice (claimedNotifyEmail): fires here for
+    // BOTH on-time and late claims, so the inbox record is corrected even
+    // when the earlier "no one claimed" notice already went out.
+    if (action.claimedNotifyEmail) {
+      const claimerLabel = claimedName || claimedBy || "A teammate";
+      const leadLabel = claimEmailLeadLabel(scope);
+      let emailBody = action.claimedNotifyTemplate
+        ? renderTemplate(
+            action.claimedNotifyTemplate,
+            agentScope(scope, { name: claimedName, phone: claimedBy })
+          )
+        : `${claimerLabel} claimed the lead ${leadLabel}.`;
+      if (claimTimeframe) emailBody += `\nETA to contact lead: ${claimTimeframe}`;
+      if (lateClaim) {
+        emailBody +=
+          "\n\nThis claim came in AFTER the claim window closed, superseding the " +
+          "earlier notice that no one claimed this lead. The lead is handled; " +
+          "no reassignment is needed.";
+      }
+      await sendClaimOutcomeEmail(supabase, run, {
+        to: action.claimedNotifyEmail,
+        subject: lateClaim
+          ? `Lead claimed (late, after the no-claim notice): ${leadLabel} by ${claimerLabel}`
+          : `Lead claimed: ${leadLabel} by ${claimerLabel}`,
+        body: emailBody,
+        idempotencyKey: lateClaim
+          ? `aiflow-late-claimed-email:${run.id}`
+          : `aiflow-claimed-email:${run.id}`
+      });
     }
     // BROADCAST losers: tell each still-live offeree the lead is taken so they
     // stop watching for it. The owner's forward number is skipped — the
@@ -6730,6 +6773,20 @@ async function routeToTeamStep(
       if (action.claimedNotifyTemplate) {
         const ownerBody = renderTemplate(action.claimedNotifyTemplate, agentScope(scope, agent));
         await sendOwnerSms(supabase, run, ownerBody, `aiflow-claimed:${run.id}`);
+      }
+      // Email twin of the assignment notice (same recipient/shape as a claim:
+      // auto-assign IS the claim in this mode).
+      if (action.claimedNotifyEmail) {
+        const assigneeLabel = agent.name || agent.phone;
+        const leadLabel = claimEmailLeadLabel(scope);
+        await sendClaimOutcomeEmail(supabase, run, {
+          to: action.claimedNotifyEmail,
+          subject: `Lead assigned: ${leadLabel} to ${assigneeLabel}`,
+          body: action.claimedNotifyTemplate
+            ? renderTemplate(action.claimedNotifyTemplate, agentScope(scope, agent))
+            : `${assigneeLabel} was auto-assigned the lead ${leadLabel}.`,
+          idempotencyKey: `aiflow-claimed-email:${run.id}`
+        });
       }
       appendActionTaken(scope, `lead auto-assigned to ${agent.name || agent.phone} (round robin)`);
       await assignContactOwnerOnClaim(supabase, run, scope, agent.phone);
@@ -7910,6 +7967,93 @@ async function sendOwnerSms(
     body,
     source: "owner_notify"
   });
+}
+
+/**
+ * Claim-outcome email (route_to_team.claimedNotifyEmail): the email twin of
+ * the claimed/unclaimed owner SMS, sent at CLAIM FINALIZATION so it also
+ * covers LATE claims ("1" up to 24h after the offer lapsed) and "86"
+ * releases, which never replay post-route steps and therefore can never be
+ * reported by a flow-authored send_email step. Best-effort by design: the
+ * claim/release is already durable, so a transport hiccup logs a warning
+ * instead of failing (and replaying) the finalization.
+ */
+async function sendClaimOutcomeEmail(
+  supabase: Supabase,
+  run: RunRow,
+  args: { to: string; subject: string; body: string; idempotencyKey: string }
+): Promise<void> {
+  try {
+    const apiKey = Deno.env.get("RESEND_API_KEY") ?? "";
+    if (!apiKey) {
+      console.error("route_to_team claim email skipped: RESEND_API_KEY is not configured");
+      return;
+    }
+    // Same identity rule as flow send_email: always FROM the tenant's own AI
+    // mailbox, never the platform identity.
+    const mailbox = await ensureMailboxIdentity(supabase, run.business_id);
+    const res = await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+        // Mirrors the Telnyx idempotency keys so a retried finalization never
+        // double-emails.
+        "Idempotency-Key": args.idempotencyKey
+      },
+      body: JSON.stringify({
+        from: mailbox.from,
+        to: args.to,
+        reply_to: mailbox.address,
+        subject: args.subject,
+        text: args.body
+      })
+    });
+    if (!res.ok) {
+      const body = await res.text().catch(() => "");
+      throw new Error(`resend ${res.status}: ${body.slice(0, 200)}`);
+    }
+    let emailId: string | null = null;
+    try {
+      emailId = ((await res.json()) as { id?: string })?.id ?? null;
+    } catch {
+      emailId = null;
+    }
+    await logFlowEmail(supabase, run, {
+      to: args.to,
+      from: mailbox.from,
+      subject: args.subject,
+      body: args.body,
+      source: "tenant_mailbox_outbound",
+      providerMessageId: emailId
+    });
+  } catch (e) {
+    console.error("route_to_team claim email failed", e);
+    await systemLog(supabase, {
+      businessId: run.business_id,
+      source: "aiflow",
+      level: "warn",
+      event: "ai_flow_claim_email_failed",
+      message: `claim-outcome email failed: ${e instanceof Error ? e.message : String(e)}`,
+      payload: { run_id: run.id, flow_id: run.flow_id, to: args.to }
+    });
+  }
+}
+
+/**
+ * Best-effort lead label for claim-email subjects: the flows' extraction
+ * vars when they resolved ("none" is an extraction miss, not a name), else
+ * the generic "this lead".
+ */
+function claimEmailLeadLabel(scope: Scope): string {
+  for (const key of ["lead_name", "lead_first_name"]) {
+    const v = scope.vars[key];
+    if (typeof v === "string") {
+      const t = v.trim();
+      if (t && t.toLowerCase() !== "none") return t;
+    }
+  }
+  return "this lead";
 }
 
 // --- persistence helpers -----------------------------------------------------
