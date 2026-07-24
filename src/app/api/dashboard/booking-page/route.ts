@@ -42,7 +42,9 @@ const patchSchema = z.object({
   bufferMinutes: z.number().int().optional(),
   maxDailyBookings: z.number().int().nullable().optional(),
   requireStaffOnShift: z.boolean().optional(),
-  description: z.string().nullable().optional()
+  description: z.string().nullable().optional(),
+  slug: z.string().max(80).nullable().optional(),
+  title: z.string().max(200).nullable().optional()
 });
 
 const actionSchema = z.object({ action: z.literal("rotate") });

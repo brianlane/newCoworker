@@ -18,6 +18,7 @@
   },
   "overrides": {
     "adm-zip": ">=0.6.0",
+    "brace-expansion": ">=5.0.8",
     "form-data": ">=4.0.6",
     "tar": ">=7.5.16",
     "tmp": ">=0.2.6",

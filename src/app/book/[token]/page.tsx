@@ -9,7 +9,7 @@
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
 import { getTranslations } from "next-intl/server";
-import { BOOKING_PAGE_TOKEN_REGEX } from "@/lib/booking-page/keys";
+import { parseBookingPageRef } from "@/lib/booking-page/keys";
 import { getBookingPageContext } from "@/lib/booking-page/service";
 import { PublicBookingPage } from "@/components/booking/PublicBookingPage";
 
@@ -26,8 +26,9 @@ export default async function BookPage({
   params: Promise<{ token: string }>;
 }) {
   const { token } = await params;
-  // Fail closed on malformed tokens without hitting the DB.
-  if (!BOOKING_PAGE_TOKEN_REGEX.test(token)) notFound();
+  // Fail closed without a DB hit unless the segment is a well-formed
+  // capability token OR vanity slug (the two shapes are disjoint).
+  if (!parseBookingPageRef(token)) notFound();
 
   const resolved = await getBookingPageContext(token);
   if (!resolved.ok) notFound();
@@ -45,7 +46,7 @@ export default async function BookPage({
           allowedDurations={context.allowedDurations}
           videoCall={context.videoCall}
           strings={{
-            eventTitle: t("eventTitle", { business: context.businessName }),
+            eventTitle: context.title ?? t("eventTitle", { business: context.businessName }),
             durationMinutes: t("durationMinutes"),
             videoCallNote: t("videoCallNote"),
             selectDateTime: t("selectDateTime"),
