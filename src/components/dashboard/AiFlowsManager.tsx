@@ -843,29 +843,34 @@ function sanitizeStepForSave(step: FlowStep): FlowStep {
     return { ...step, to: undefined, toAgentName: undefined };
   }
   // route_to_team offer-set sources are mutually exclusive (schema-enforced):
-  // broadcast-all > broadcast list > dynamic var pin > picked ref > typed name.
-  if (step.type === "route_to_team" && step.broadcastAll) {
-    return {
-      ...step,
-      agentName: undefined,
-      agentRef: undefined,
-      agentNameVar: undefined,
-      agentNames: undefined
-    };
-  }
-  if (step.type === "route_to_team" && step.agentNames && step.agentNames.length >= 2) {
-    return { ...step, agentName: undefined, agentRef: undefined, agentNameVar: undefined };
-  }
-  // A lone broadcast name can exist mid-typing (the schema requires 2-10):
-  // drop it at save so the form's transient state never blocks a save.
-  if (step.type === "route_to_team" && step.agentNames && step.agentNames.length < 2) {
-    return { ...step, agentNames: undefined };
-  }
-  if (step.type === "route_to_team" && step.agentNameVar) {
-    return { ...step, agentName: undefined, agentRef: undefined };
-  }
-  if (step.type === "route_to_team" && step.agentRef) {
-    return { ...step, agentName: undefined };
+  // broadcast-all > broadcast list > dynamic var pin > picked ref > typed
+  // name. One cascading pass, so a dropped source (e.g. a lone broadcast
+  // name mid-typing, which the schema's 2-10 rule would reject) still lets
+  // the remaining sources resolve by priority instead of failing the save.
+  if (step.type === "route_to_team") {
+    const s =
+      step.agentNames && step.agentNames.length < 2
+        ? { ...step, agentNames: undefined }
+        : step;
+    if (s.broadcastAll) {
+      return {
+        ...s,
+        agentName: undefined,
+        agentRef: undefined,
+        agentNameVar: undefined,
+        agentNames: undefined
+      };
+    }
+    if (s.agentNames && s.agentNames.length >= 2) {
+      return { ...s, agentName: undefined, agentRef: undefined, agentNameVar: undefined };
+    }
+    if (s.agentNameVar) {
+      return { ...s, agentName: undefined, agentRef: undefined };
+    }
+    if (s.agentRef) {
+      return { ...s, agentName: undefined };
+    }
+    return s;
   }
   if (step.type !== "browse_action") return step;
   if (step.forEachLink) {
