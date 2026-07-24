@@ -35,6 +35,9 @@ vi.mock("@/lib/website-ingest", () => ({
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
+vi.mock("@/lib/memory/schedule-longform-extract", () => ({
+  scheduleLongFormGraphExtract: vi.fn()
+}));
 vi.mock("@/lib/vps/schedule-vault-sync", () => ({
   scheduleVaultSync: vi.fn()
 }));
@@ -60,6 +63,7 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import { POST } from "@/app/api/business/config/route";
+import { scheduleLongFormGraphExtract } from "@/lib/memory/schedule-longform-extract";
 import { getAuthUser } from "@/lib/auth";
 import { updateBusinessWebsiteUrl } from "@/lib/db/businesses";
 import { patchBusinessConfig } from "@/lib/db/configs";
@@ -162,6 +166,21 @@ describe("api/business/config — websiteUrl persistence", () => {
       BIZ,
       expect.objectContaining({ soul_md: "soul", identity_md: "identity" })
     );
+  });
+
+  it("schedules KG extraction for the identity write-up (kg-source: identity); whitespace skips", async () => {
+    const res = await POST(jsonRequest(baseBody()));
+    expect(res.status).toBe(200);
+    expect(scheduleLongFormGraphExtract).toHaveBeenCalledWith(BIZ, {
+      text: "identity",
+      source: "identity",
+      attributedTo: null
+    });
+
+    vi.mocked(scheduleLongFormGraphExtract).mockClear();
+    const blank = await POST(jsonRequest(baseBody({ identityMd: "  " })));
+    expect(blank.status).toBe(200);
+    expect(scheduleLongFormGraphExtract).not.toHaveBeenCalled();
   });
 
   it("clears websiteUrl when the owner submits an empty string", async () => {

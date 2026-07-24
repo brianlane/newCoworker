@@ -13,6 +13,7 @@ import {
   type WebsiteIngestProgressEvent
 } from "@/lib/website-ingest";
 import { scheduleVaultSync } from "@/lib/vps/schedule-vault-sync";
+import { scheduleLongFormGraphExtract } from "@/lib/memory/schedule-longform-extract";
 import { logger } from "@/lib/logger";
 
 // after() shares the route's max duration (it does NOT get a fresh window), so
@@ -171,6 +172,16 @@ async function runIngestAndPersist(
   });
 
   await setBusinessWebsiteMd(body.businessId, result.websiteMd);
+
+  // Knowledge graph (kg-source: website): entity extraction over the fresh
+  // crawl, trust 2, attributed to the site URL — marketing copy is the
+  // business's voice, but a crawl is not the owner speaking. Deferred via
+  // after(); mode-gated + daily-capped inside; never blocks the ingest.
+  scheduleLongFormGraphExtract(body.businessId, {
+    text: result.websiteMd,
+    source: "website",
+    attributedTo: normalized
+  });
 
   // Last-crawl snapshot for the dashboard ("Crawled N pages on <date>" +
   // page list). Cosmetic relative to website_md, so a write failure logs

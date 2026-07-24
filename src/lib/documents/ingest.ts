@@ -21,6 +21,7 @@ import { logger } from "@/lib/logger";
 import { DOCUMENT_CONTENT_MD_MAX_CHARS, DOCUMENT_SUMMARY_MAX_CHARS } from "./core";
 import { VTT_MIME_TYPE, isVttUpload, vttToPlainText } from "@/lib/transcripts/vtt";
 import { DOCX_MIME_TYPE, decodeDocxToText, isDocxUpload } from "./docx";
+import { scheduleLongFormGraphExtract } from "@/lib/memory/schedule-longform-extract";
 
 /** Raw text fed to the condenser is clipped to keep the prompt bounded. */
 export const DOCUMENT_INGEST_MAX_TEXT_CHARS = 40_000;
@@ -74,6 +75,8 @@ type GeminiCall = (params: GeminiGenerateTextParams) => Promise<GeminiGenerateTe
 export type DocumentIngestDeps = {
   /** Injectable Gemini call (tests). */
   generate?: GeminiCall;
+  /** Injectable knowledge-graph extraction scheduler (tests). */
+  scheduleGraphExtract?: typeof scheduleLongFormGraphExtract;
 };
 
 export type DocumentIngestInput = {
@@ -248,6 +251,7 @@ export async function ingestDocument(
         parsed.contentMd = `${parsed.contentMd}\n\n## Transcript\n\n${rawText.slice(0, headroom)}`;
       }
     }
+    scheduleGraphExtract(input, parsed.contentMd, deps);
     return { ok: true, ...parsed };
   }
 
@@ -265,10 +269,42 @@ export async function ingestDocument(
     if (!result.ok) return result;
     const parsed = parseCondensedReply(result.text);
     if (!parsed.contentMd) return { ok: false, error: "empty_content" };
+    scheduleGraphExtract(input, parsed.contentMd, deps);
     return { ok: true, ...parsed };
   }
 
   return { ok: false, error: "unsupported_type" };
+}
+
+/**
+ * Knowledge graph (kg-source: document): every successful ingest — first
+ * upload, AiFlow filing, Zoom import, owner re-ingest — schedules chunked
+ * entity extraction over the CONDENSED body (the retrieval source of
+ * truth; smaller and cleaner than the raw file), trust 2, attributed to
+ * the document title. Deferred via after(); never blocks or fails the
+ * ingest.
+ */
+function scheduleGraphExtract(
+  input: DocumentIngestInput,
+  contentMd: string,
+  deps: DocumentIngestDeps
+): void {
+  /* c8 ignore next -- production default; tests inject */
+  const schedule = deps.scheduleGraphExtract ?? scheduleLongFormGraphExtract;
+  try {
+    schedule(input.businessId, {
+      text: contentMd,
+      source: "document",
+      attributedTo: input.title
+    });
+  } catch (err) {
+    // after() throws outside a request scope (some tests/CLIs); the ingest
+    // result must not care.
+    logger.warn("document ingest: graph extract scheduling failed (ignored)", {
+      businessId: input.businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
 }
 
 export type DocumentRewriteResult =

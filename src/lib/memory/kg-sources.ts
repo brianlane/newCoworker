@@ -65,10 +65,15 @@ export const KG_SOURCES = {
   whatsapp: { status: "deterministic", trust: 1 },
   webchat: { status: "deterministic", trust: 0 },
 
-  // ── documents & long-form owner content (PR 5) ─────────────────────────
-  document: { status: "planned", trust: 2, plannedIn: "PR 5" },
-  website: { status: "planned", trust: 2, plannedIn: "PR 5" },
-  identity: { status: "planned", trust: 3, plannedIn: "PR 5" },
+  // ── documents & long-form owner content (live — graph-longform.ts) ──────
+  /** Condensed document bodies on every ingest/re-ingest, attributed to
+   * the document title. */
+  document: { status: "extracted", trust: 2 },
+  /** website_md on every crawl, attributed to the site URL (the business's
+   * voice, but a crawl is not the owner speaking — hence 2, not 3). */
+  website: { status: "extracted", trust: 2 },
+  /** identity_md on save — owner-authored onboarding write-up. */
+  identity: { status: "extracted", trust: 3 },
 
   // ── deliberately exempt ────────────────────────────────────────────────
   /** AI assistant replies on any channel: assistant-invented content must

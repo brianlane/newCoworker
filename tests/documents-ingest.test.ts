@@ -125,6 +125,83 @@ describe("ingestDocument (docx)", () => {
   });
 });
 
+describe("ingestDocument → knowledge-graph scheduling (kg-source: document)", () => {
+  it("schedules chunked extraction over the CONDENSED body on text and pdf success", async () => {
+    const scheduleGraphExtract = vi.fn();
+    const text = await ingestDocument(
+      {
+        businessId: BIZ,
+        title: "Price sheet",
+        mimeType: "text/markdown",
+        data: Buffer.from("Haircut $40. Beard trim $20. Open Mon-Fri.")
+      },
+      { generate: generateOk(GOOD_REPLY), scheduleGraphExtract }
+    );
+    expect(text.ok).toBe(true);
+    expect(scheduleGraphExtract).toHaveBeenCalledWith(BIZ, {
+      text: text.ok ? text.contentMd : "",
+      source: "document",
+      attributedTo: "Price sheet"
+    });
+
+    scheduleGraphExtract.mockClear();
+    const pdf = await ingestDocument(
+      {
+        businessId: BIZ,
+        title: "PDF quote",
+        mimeType: "application/pdf",
+        data: Buffer.from("%PDF-1.4 fake")
+      },
+      { generate: generateOk(GOOD_REPLY), scheduleGraphExtract }
+    );
+    expect(pdf.ok).toBe(true);
+    expect(scheduleGraphExtract).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ source: "document", attributedTo: "PDF quote" })
+    );
+  });
+
+  it("never schedules on failed ingests, and a throwing scheduler never fails the ingest", async () => {
+    const scheduleGraphExtract = vi.fn();
+    const failed = await ingestDocument(
+      { businessId: BIZ, title: "Broken", mimeType: "text/plain", data: Buffer.from("x") },
+      { generate: generateOk(GOOD_REPLY), scheduleGraphExtract }
+    );
+    expect(failed.ok).toBe(false);
+    expect(scheduleGraphExtract).not.toHaveBeenCalled();
+
+    // after() throws outside a request scope — the ingest result must not care.
+    const throwing = vi.fn(() => {
+      throw new Error("after() called outside a request scope");
+    });
+    const res = await ingestDocument(
+      {
+        businessId: BIZ,
+        title: "Price sheet",
+        mimeType: "text/markdown",
+        data: Buffer.from("Haircut $40. Beard trim $20. Open Mon-Fri.")
+      },
+      { generate: generateOk(GOOD_REPLY), scheduleGraphExtract: throwing }
+    );
+    expect(res.ok).toBe(true);
+
+    // Non-Error throw values are tolerated too.
+    const throwingWeird = vi.fn(() => {
+      throw "string failure";
+    });
+    const res2 = await ingestDocument(
+      {
+        businessId: BIZ,
+        title: "Price sheet",
+        mimeType: "text/markdown",
+        data: Buffer.from("Haircut $40. Beard trim $20. Open Mon-Fri.")
+      },
+      { generate: generateOk(GOOD_REPLY), scheduleGraphExtract: throwingWeird }
+    );
+    expect(res2.ok).toBe(true);
+  });
+});
+
 describe("ingestDocument (vtt transcript)", () => {
   it("converts cue soup to speaker lines before condensing", async () => {
     const generate = generateOk(GOOD_REPLY);
