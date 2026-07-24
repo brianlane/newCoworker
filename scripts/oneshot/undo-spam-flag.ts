@@ -121,23 +121,26 @@ optRows = (optData ?? []) as typeof optRows;
 
 // ---------------------------------------------------------------------------
 // SAFETY GATE: did this person ever text a STOP keyword themselves? Scan the
-// FULL inbound history — every identity number, paginated past any row cap,
-// bodies extracted with the SAME inboundSmsBody helper the compliance
-// handler uses (RCS nests text under a body object, a flat read misses it).
+// business's FULL inbound history (paginated past any row cap) and match the
+// sender per row from BOTH the customer_e164 column AND the raw Telnyx
+// payload — historical rows can carry the sender only in the payload (NULL /
+// mismatched column). Bodies are extracted with the SAME inboundSmsBody
+// helper the compliance handler uses (RCS nests text under a body object).
 // A genuine customer STOP must never be cleared by platform tooling.
 // ---------------------------------------------------------------------------
+const identityMatch = new Set(identitySet);
 const PAGE = 1000;
 const stopTexts: string[] = [];
 let scanned = 0;
-for (const number of identitySet) {
+{
   let cursor: string | null = null;
   for (;;) {
     let query = db
       .from("sms_inbound_jobs")
-      .select("created_at, payload")
+      .select("id, created_at, customer_e164, payload")
       .eq("business_id", BUSINESS_ID)
-      .eq("customer_e164", number)
       .order("created_at", { ascending: true })
+      .order("id", { ascending: true })
       .limit(PAGE);
     if (cursor) query = query.gt("created_at", cursor);
     const { data: inboundRows, error: inErr } = await query;
@@ -145,17 +148,28 @@ for (const number of identitySet) {
       console.error("[oneshot] inbound history read failed:", inErr.message);
       process.exit(1);
     }
-    const rows = (inboundRows ?? []) as Array<{ created_at: string; payload: unknown }>;
+    const rows = (inboundRows ?? []) as Array<{
+      created_at: string;
+      customer_e164: unknown;
+      payload: unknown;
+    }>;
     for (const row of rows) {
-      scanned += 1;
       const inner =
         (row.payload as { data?: { payload?: Record<string, unknown> } })?.data?.payload ?? {};
+      const payloadFrom = (inner as { from?: { phone_number?: unknown } }).from?.phone_number;
+      const senders = [row.customer_e164, payloadFrom].filter(
+        (s): s is string => typeof s === "string"
+      );
+      if (!senders.some((s) => identityMatch.has(s))) continue;
+      scanned += 1;
       const text = inboundSmsBody(inner);
       if (isStopKeyword(text.trim().toUpperCase())) {
-        stopTexts.push(`${row.created_at} (${number}): ${text.trim()}`);
+        stopTexts.push(`${row.created_at} (${senders.join("/")}): ${text.trim()}`);
       }
     }
     if (rows.length < PAGE) break;
+    // Microsecond-precision timestamps make a same-created_at page boundary
+    // effectively impossible; the strict-gt cursor is safe here.
     cursor = rows[rows.length - 1].created_at;
   }
 }
