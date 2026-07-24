@@ -405,10 +405,14 @@ export function PublicBookingPage({
               <p className="mt-2 text-sm text-amber-400">{strings.slotTaken}</p>
             ) : null}
             {slotsError ? (
-              <p className="mt-4 text-sm text-red-400">{strings.slotsUnavailable}</p>
-            ) : slots === null ? (
+              <p className="mt-2 text-sm text-red-400">{strings.slotsUnavailable}</p>
+            ) : null}
+            {slots === null && !slotsError ? (
               <p className="mt-4 text-sm text-parchment/50">{strings.loadingSlots}</p>
             ) : (
+              // The month grid always renders, even when availability failed
+              // to load: an empty dimmed calendar with the error notice reads
+              // as a page, not an outage.
               <div className="mt-4 grid grid-cols-1 gap-6 lg:grid-cols-[minmax(0,3fr)_minmax(0,2fr)]">
                 <div>
                   <div className="flex items-center justify-between">
@@ -471,7 +475,7 @@ export function PublicBookingPage({
                       )
                     )}
                   </div>
-                  {!monthHasSlots ? (
+                  {!monthHasSlots && !slotsError ? (
                     <p className="mt-3 text-xs text-parchment/40">{strings.noSlotsThisMonth}</p>
                   ) : null}
                   <div className="mt-5">

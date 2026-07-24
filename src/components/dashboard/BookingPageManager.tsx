@@ -21,6 +21,8 @@ type PageRow = {
   max_daily_bookings: number | null;
   require_staff_on_shift: boolean;
   description: string | null;
+  slug: string | null;
+  title: string | null;
 };
 
 type UpcomingRow = {
@@ -118,7 +120,9 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
   const publicUrl = useMemo(() => {
     if (!state?.page) return null;
     const origin = typeof window === "undefined" ? "" : window.location.origin;
-    return `${origin}/book/${state.page.token}`;
+    // The vanity slug is the shareable link when set; the token URL keeps
+    // working either way.
+    return `${origin}/book/${state.page.slug ?? state.page.token}`;
   }, [state?.page]);
 
   const copyLink = useCallback(async () => {
@@ -358,6 +362,48 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
                   />
                   {t("staffGateLabel")}
                 </label>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label className={label} htmlFor="bp-slug">
+                  {t("slugLabel")}
+                </label>
+                <input
+                  id="bp-slug"
+                  type="text"
+                  maxLength={60}
+                  placeholder={t("slugPlaceholder")}
+                  className="mt-1 w-full rounded-md border border-parchment/20 bg-deep-ink px-3 py-2 text-sm text-parchment placeholder:text-parchment/30"
+                  defaultValue={page.slug ?? ""}
+                  disabled={saving}
+                  onBlur={(e) => {
+                    const raw = e.target.value.trim().toLowerCase();
+                    if (raw === (page.slug ?? "")) return;
+                    void patch({ slug: raw === "" ? null : raw });
+                  }}
+                />
+                <p className="mt-1 text-xs text-parchment/40">{t("slugHint")}</p>
+              </div>
+              <div>
+                <label className={label} htmlFor="bp-title">
+                  {t("titleLabel")}
+                </label>
+                <input
+                  id="bp-title"
+                  type="text"
+                  maxLength={120}
+                  placeholder={t("titlePlaceholder")}
+                  className="mt-1 w-full rounded-md border border-parchment/20 bg-deep-ink px-3 py-2 text-sm text-parchment placeholder:text-parchment/30"
+                  defaultValue={page.title ?? ""}
+                  disabled={saving}
+                  onBlur={(e) => {
+                    const raw = e.target.value.trim();
+                    if (raw === (page.title ?? "")) return;
+                    void patch({ title: raw === "" ? null : raw });
+                  }}
+                />
               </div>
             </div>
 
