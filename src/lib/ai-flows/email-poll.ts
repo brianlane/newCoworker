@@ -18,6 +18,12 @@
  * Failure isolation: one mailbox failing (revoked grant, missing read scope,
  * provider 5xx) logs to system_logs and moves on; it can never block other
  * tenants' flows or the worker tick that kicked the poll.
+ *
+ * Mark-handled: when a Gmail message actually starts a run, the message is
+ * marked read in the owner's mailbox (best-effort, once per message even if
+ * several flows matched), so the inbox reflects that the AI coworker is on
+ * it. This is the write half of the gmail.modify grant the Google OAuth
+ * verification declares: read, reply from the owner's address, mark handled.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
@@ -219,6 +225,38 @@ async function fetchGmailMessages(
   return { messages: out, overflowed };
 }
 
+/**
+ * Mark a Gmail message read once a run has been enqueued for it (remove the
+ * UNREAD label via users.messages.modify). Best-effort by design: the run is
+ * already durably enqueued, so a failure here only logs a warning; it must
+ * never fail the poll or the run. Microsoft mailboxes are untouched (their
+ * granted scope set has no equivalent commitment).
+ */
+export async function markGmailMessageHandled(
+  businessId: string,
+  link: { connectionId: string; providerConfigKey: string },
+  messageId: string
+): Promise<void> {
+  try {
+    const res = await nangoProxyForBusiness(businessId, link, {
+      endpoint: `/gmail/v1/users/me/messages/${messageId}/modify`,
+      method: "POST",
+      data: { removeLabelIds: ["UNREAD"] }
+    });
+    if (!res) throw new Error("email_not_connected");
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    await recordSystemLog({
+      businessId,
+      source: "aiflow",
+      level: "warn",
+      event: "ai_flow_email_mark_read_failed",
+      message: `Could not mark triggering email read: ${message}`,
+      payload: { message_id: messageId }
+    });
+  }
+}
+
 type GraphMessage = {
   id?: string;
   subject?: string;
@@ -403,10 +441,10 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
         }
         return handled;
       };
-      const { messages, overflowed } =
-        providerFromKey(conn.provider_config_key) === "google"
-          ? await fetchGmailMessages(businessId, link, sinceMs, alreadyHandled)
-          : await fetchMicrosoftMessages(businessId, link, sinceMs, alreadyHandled);
+      const isGoogleMailbox = providerFromKey(conn.provider_config_key) === "google";
+      const { messages, overflowed } = isGoogleMailbox
+        ? await fetchGmailMessages(businessId, link, sinceMs, alreadyHandled)
+        : await fetchMicrosoftMessages(businessId, link, sinceMs, alreadyHandled);
       if (overflowed) {
         // This poll could not cover every in-window message (read cap hit,
         // or the listing guard cut a pathological page chain). Later ticks
@@ -448,6 +486,9 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
         }
       }
       const seenRows: Array<{ flow_id: string; message_id: string }> = [];
+      // Messages already marked read this poll: several flows can match the
+      // same message, but the mailbox write should happen once.
+      const markedHandled = new Set<string>();
       for (const msg of messages) {
         const scope = emailTriggerScope(msg);
         for (const flow of group) {
@@ -474,6 +515,10 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
           );
           if (!run) continue; // already enqueued by an earlier tick
           result.enqueued += 1;
+          if (isGoogleMailbox && !markedHandled.has(msg.id)) {
+            markedHandled.add(msg.id);
+            await markGmailMessageHandled(businessId, link, msg.id);
+          }
           // Surface the triggering email on the dashboard Emails page.
           await recordInboundTriggerEmail(
             {
