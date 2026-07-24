@@ -335,6 +335,207 @@ export function documentReceiptTemplate(): AiFlowTemplate {
  * and the save-time validator refuses anything that isn't a real, ready,
  * client-facing document of theirs.
  */
+/**
+ * "New Lead Intake": the owner texts (or types to) their coworker a lead's
+ * info in plain words, e.g. "I got a new lead, please deal with it. Jane
+ * +15551234567, looking for a quote. It's a referral from Donald. I want
+ * Gabby to have this." Run on demand (the operator's run_aiflow offers it
+ * by name), the flow parses the message, files the contact, texts the lead
+ * an intro (opening with a personal referral credit when a referrer was
+ * named), and offers the lead to the team, pinned DYNAMICALLY to the
+ * teammate the owner named via route_to_team.agentNameVar, so new hires
+ * are pinnable the day they join the roster. Installed DISABLED so the
+ * owner reviews (and personalizes) the intro wording before anything fires.
+ *
+ * Industry-neutral on purpose: no vertical-specific pitch, no quiet-hours
+ * timezone baked in. Owners tailor the copy in the editor after install.
+ */
+export function newLeadIntakeTemplate(): AiFlowTemplate {
+  return {
+    key: "new_lead_intake",
+    name: "New Lead Intake",
+    definition: {
+      version: 1,
+      trigger: { channel: "manual" },
+      steps: [
+        {
+          id: "s_parse",
+          type: "extract_text",
+          fields: [
+            {
+              name: "lead_name",
+              description:
+                "The lead's name as given (first and last if provided, else the first " +
+                "name alone). Never the sender's own name. If no name is given, answer " +
+                "exactly: none"
+            },
+            {
+              name: "lead_phone",
+              description:
+                "The NEW lead's phone number in E.164 (+1...). Never the business's own " +
+                "number. If no phone number is given, answer exactly: none"
+            },
+            {
+              name: "lead_email",
+              description: "The lead's email address, if given. If none, answer exactly: none"
+            },
+            {
+              name: "lead_details",
+              description:
+                "What the lead is looking for, in the message's own words, including who " +
+                "referred them when the message says so. If nothing is given, answer " +
+                "exactly: none"
+            },
+            {
+              name: "referred_by",
+              description:
+                "The name of the person who referred this lead, when the message says it " +
+                "is a referral (e.g. 'a referral from Donald' answers: Donald). If it is " +
+                "not a referral or no referrer is named, answer exactly: none"
+            },
+            {
+              name: "referral_gate",
+              description:
+                "If the message says this lead was referred by a NAMED person, answer " +
+                "exactly one lowercase word: referral. Otherwise answer exactly: none"
+            },
+            {
+              name: "assigned_agent",
+              description:
+                "The teammate's name exactly as the message wrote it, when the message " +
+                "says a specific teammate should get or handle this lead (e.g. 'I want " +
+                "Gabby to have this' answers: Gabby). If no teammate is named, answer " +
+                "exactly: none"
+            },
+            {
+              name: "has_phone",
+              description:
+                "If the message includes a phone number for the lead, answer exactly: " +
+                "yes. Otherwise answer exactly: none"
+            },
+            {
+              name: "email_only",
+              description:
+                "If the message gives NO phone number for the lead but DOES give an " +
+                "email address, answer exactly: yes. Otherwise answer exactly: none"
+            }
+          ]
+        },
+        {
+          id: "s_save_contact",
+          type: "upsert_customer",
+          when: { var: "has_phone", equals: "yes" },
+          phoneVar: "lead_phone",
+          nameVar: "lead_name",
+          emailVar: "lead_email"
+        },
+        {
+          id: "s_intro",
+          type: "branch",
+          question: "Was this lead referred by a named person?",
+          branches: [
+            {
+              id: "s_intro_referral",
+              label: "Referral with a named referrer",
+              condition: { var: "referral_gate", equals: "referral" },
+              steps: [
+                {
+                  id: "s_send_ref",
+                  type: "send_sms",
+                  to: "{{vars.lead_phone}}",
+                  when: { var: "has_phone", equals: "yes" },
+                  body:
+                    "Hi {{vars.lead_name.first}}. {{vars.referred_by}} shared your info " +
+                    "with me and thought I could help. I'm so glad they connected us! " +
+                    "When is a good time for a quick chat about what you're looking for?"
+                },
+                {
+                  id: "s_email_ref",
+                  type: "send_email",
+                  to: "{{vars.lead_email}}",
+                  when: { var: "email_only", equals: "yes" },
+                  subject: "Great to be connected!",
+                  body:
+                    "Hi {{vars.lead_name.first}},\n\n{{vars.referred_by}} shared your " +
+                    "info with me and thought I could help. I'm so glad they connected " +
+                    "us! When is a good time for a quick chat about what you're looking " +
+                    "for?"
+                }
+              ]
+            }
+          ],
+          else: [
+            {
+              id: "s_send_std",
+              type: "send_sms",
+              to: "{{vars.lead_phone}}",
+              when: { var: "has_phone", equals: "yes" },
+              body:
+                "Hi {{vars.lead_name.first}}. Thanks for reaching out! I'd love to " +
+                "help. When is a good time for a quick chat about what you're looking " +
+                "for?"
+            },
+            {
+              id: "s_email_std",
+              type: "send_email",
+              to: "{{vars.lead_email}}",
+              when: { var: "email_only", equals: "yes" },
+              subject: "Thanks for reaching out!",
+              body:
+                "Hi {{vars.lead_name.first}},\n\nThanks for reaching out! I'd love to " +
+                "help. When is a good time for a quick chat about what you're looking " +
+                "for?"
+            }
+          ]
+        },
+        {
+          id: "s_route",
+          type: "route_to_team",
+          when: { var: "has_phone", equals: "yes" },
+          // Dynamic pin: when the owner named a teammate, the offer goes to
+          // exactly that active roster member (resolved at run time, so new
+          // hires work immediately); empty/none = the normal rotation.
+          agentNameVar: "assigned_agent",
+          responseMinutes: 10,
+          offerTemplate:
+            "New lead: {{vars.lead_name}} ({{vars.lead_phone}}, email: " +
+            "{{vars.lead_email}}). Looking for: {{vars.lead_details}}.\n" +
+            "Reply 1 to claim or 2 to pass by {{offer.deadline}}.\n" +
+            'You can also reply "1, <ETA>" to claim and say when you\'ll reach out.',
+          claimedNotifyTemplate:
+            "{{agent.name}} claimed the lead {{vars.lead_name}} ({{vars.lead_phone}}).",
+          ownerFallbackTemplate:
+            "No one claimed the lead {{vars.lead_name}} ({{vars.lead_phone}}, email: " +
+            "{{vars.lead_email}}) in time. It's back with you."
+        },
+        {
+          id: "s_notify",
+          type: "notify_owner",
+          when: { var: "has_phone", equals: "yes" },
+          message:
+            "New Lead Intake handled the lead you sent in.\n" +
+            "Lead: {{vars.lead_name}} ({{vars.lead_phone}}, email: {{vars.lead_email}}). " +
+            "Looking for: {{vars.lead_details}}.\n" +
+            "Outcome: {{vars.actions_taken}}."
+        },
+        {
+          id: "s_notify_no_phone",
+          type: "notify_owner",
+          when: { var: "has_phone", equals: "none" },
+          message:
+            "New Lead Intake got a lead with NO usable phone number, so no text went " +
+            "out and no one was offered the lead.\n" +
+            "Lead: {{vars.lead_name}} (email: {{vars.lead_email}}). Looking for: " +
+            "{{vars.lead_details}}.\n" +
+            "If an email was on file, an intro email was sent instead; the outcome " +
+            "line shows exactly what went out.\n" +
+            "Outcome: {{vars.actions_taken}}."
+        }
+      ]
+    }
+  };
+}
+
 export function priceSheetShareTemplate(documentId: string, documentTitle: string): AiFlowTemplate {
   return {
     key: "price_sheet_share",

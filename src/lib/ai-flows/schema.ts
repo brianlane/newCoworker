@@ -1044,6 +1044,17 @@ const nonBranchStepMembers = [
     ownerFallbackTemplate: z.string().min(1).max(1600),
     claimedNotifyTemplate: z.string().min(1).max(1600).optional(),
     agentName: z.string().min(1).max(120).optional(),
+    // DYNAMIC pin: the name of an earlier-produced var whose VALUE (e.g. an
+    // extracted "I want Gabby to have this" answer) is resolved against the
+    // ACTIVE roster at execution time (exact full name, exact first name,
+    // then unique case-insensitive prefix). Empty/"none" means un-pinned:
+    // the step routes exactly as if no pin were set. A non-empty value that
+    // matches nobody falls through to the owner fallback, never to an
+    // unintended teammate. Mutually exclusive with agentName/agentRef/
+    // agentNames/broadcastAll (validateDefinitionSemantics). Structural (a
+    // var NAME, not prose), so it survives library scrubbing where static
+    // agentName pins are dropped.
+    agentNameVar: varName.optional(),
     // Pin the offer to a saved roster member by reference (employee source only;
     // mutually exclusive with agentName; enforced in validateDefinitionSemantics).
     agentRef: contactRefSchema.optional(),
@@ -2308,6 +2319,28 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       if (step.broadcastAll && (step.agentName || step.agentRef || step.agentNames)) {
         issues.push(
           `Step "${step.id}" sets broadcastAll alongside agentName/agentRef/agentNames; broadcastAll offers the whole active roster and is mutually exclusive with pinned recipients.`
+        );
+      }
+      // The dynamic pin decides pinned-vs-not at execution time from the
+      // var's value, so any static pin or broadcast alongside it would give
+      // the worker two contradictory answers.
+      if (
+        step.agentNameVar &&
+        (step.agentName || step.agentRef || step.agentNames || step.broadcastAll)
+      ) {
+        issues.push(
+          `Step "${step.id}" sets agentNameVar alongside another pin/broadcast option; the dynamic pin is mutually exclusive with agentName/agentRef/agentNames/broadcastAll.`
+        );
+      }
+      // The dynamic pin reads a var an EARLIER step must produce (same scope
+      // rule as wait_for_reply.phoneVar).
+      if (
+        step.agentNameVar &&
+        !vars.has(step.agentNameVar) &&
+        !ENGINE_VARS.has(step.agentNameVar)
+      ) {
+        issues.push(
+          `Step "${step.id}" pins via {{vars.${step.agentNameVar}}} which no earlier step produces.`
         );
       }
       // Duplicate names in one broadcast would double-text a teammate and

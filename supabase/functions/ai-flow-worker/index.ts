@@ -75,6 +75,7 @@ import {
   type StepAction
 } from "../_shared/ai_flows/steps.ts";
 import { resolveContactRef, resolveFromMatchesRefValues } from "../_shared/ai_flows/contact_ref.ts";
+import { matchRosterName } from "../_shared/ai_flows/roster_match.ts";
 import {
   normalizeBrowseUrl,
   parseActionResponse,
@@ -6257,6 +6258,70 @@ function approvalStep(
 const UNRESOLVED_AGENT_REF = "\u0000__unresolved_agent_ref__";
 
 /**
+ * Resolve a dynamic pin (route_to_team.agentNameVar): the var's VALUE names a
+ * teammate the flow's author (typically the owner mid-message: "I want Gabby
+ * to have this") wants this lead pinned to, resolved against the ACTIVE
+ * roster at execution time so it never desyncs as employees join or rename.
+ *
+ * Tiers, all trimmed/case-insensitive: exact full name, then exact first
+ * name, then UNIQUE prefix of the full or first name (3+ chars, so "Gabby"
+ * resolves "Gabrielle"). An ambiguous prefix (two Gabrielas) resolves
+ * nothing: misrouting a lead is worse than handing it back.
+ *
+ * Returns:
+ *   undefined                  var empty / "none": the step is UN-pinned
+ *   "<exact roster name>"      resolved: pin to this member
+ *   UNRESOLVED_AGENT_REF       named but not resolvable: owner fallback via
+ *                              the same pinned-agent-missing path agentRef uses
+ */
+async function resolveAgentNameVarPin(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  varName: string
+): Promise<string | undefined> {
+  const raw = scope.vars?.[varName];
+  const wanted = typeof raw === "string" ? raw.trim() : "";
+  if (!wanted || wanted.toLowerCase() === "none") return undefined;
+
+  const { data, error } = await supabase
+    .from("ai_flow_team_members")
+    .select("name")
+    .eq("business_id", run.business_id)
+    .eq("active", true);
+  if (error) {
+    // A transient roster read error must not misroute: treat as unresolved
+    // (owner fallback) rather than un-pinned (which could cascade the lead
+    // to someone the owner explicitly did not pick).
+    console.error("resolveAgentNameVarPin roster read", error);
+    return UNRESOLVED_AGENT_REF;
+  }
+  const roster = ((data ?? []) as { name?: string | null }[])
+    .map((r) => (r.name ?? "").trim())
+    .filter((n) => n.length > 0);
+
+  const match = matchRosterName(wanted, roster);
+  if (match.kind === "unpinned") return undefined;
+  if (match.kind === "pinned") return match.name;
+
+  await systemLog(supabase, {
+    businessId: run.business_id,
+    source: "aiflow",
+    level: "warn",
+    event: "ai_flow_dynamic_pin_unresolved",
+    message:
+      `route_to_team: the asked-for teammate "${wanted}" did not resolve to exactly one ` +
+      "active roster member; falling back to the owner, never to an unintended teammate",
+    payload: { run_id: run.id, flow_id: run.flow_id, requested: wanted, var: varName }
+  });
+  appendActionTaken(
+    scope,
+    `could not match "${wanted}" to one active roster member, so the lead went to the owner instead`
+  );
+  return UNRESOLVED_AGENT_REF;
+}
+
+/**
  * Is lead auto-assignment on for this business? (Truly Issue 7 — Employees
  * page toggle.) Fails CLOSED to offer-and-claim on any read error: wrongly
  * hard-assigning a lead is worse than wrongly asking for a claim.
@@ -6315,6 +6380,13 @@ async function routeToTeamStep(
   if (action.agentRef) {
     const referenced = await resolveContactRef(supabase, run.business_id, action.agentRef);
     pinnedAgentName = referenced?.name ?? UNRESOLVED_AGENT_REF;
+  }
+  // Dynamic pin (agentNameVar): the var's value names the teammate ("I want
+  // Gabby to have this"), resolved against the live roster; empty/"none"
+  // leaves the step un-pinned. Exclusive with the other pin modes at author
+  // time, so overwriting is safe.
+  if (action.agentNameVar) {
+    pinnedAgentName = await resolveAgentNameVarPin(supabase, run, scope, action.agentNameVar);
   }
 
   // A teammate retroactively UNCLAIMED a lead they'd taken (inbound "86"): clear

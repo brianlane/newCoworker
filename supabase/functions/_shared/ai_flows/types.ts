@@ -739,6 +739,17 @@ export type FlowStep =
        */
       agentName?: string;
       /**
+       * DYNAMIC pin: the name of an earlier-produced var whose VALUE is
+       * resolved against the ACTIVE roster at execution time (exact full
+       * name, exact first name, then unique case-insensitive prefix, so an
+       * extracted "Gabby" resolves "Gabrielle"). Empty/"none" = un-pinned
+       * (the step routes exactly as if no pin were set); a non-empty value
+       * matching nobody falls through to the owner fallback, never silently
+       * to a different teammate. Mutually exclusive with agentName/agentRef/
+       * agentNames/broadcastAll.
+       */
+      agentNameVar?: string;
+      /**
        * Pin the offer to a saved roster member by reference (resolved to their
        * CURRENT name at run time, then routed exactly like `agentName`). Employee
        * source only (a contact is not on the roster). Mutually exclusive with

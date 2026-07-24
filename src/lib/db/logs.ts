@@ -48,16 +48,38 @@ export type FleetFeedOptions = {
   excludeStatuses?: string[];
 };
 
+export type AlertFeedFilter = {
+  /**
+   * Alert statuses to include (see-all filter chips) — a subset of
+   * `urgent_alert` / `error`. Undefined or empty = both.
+   */
+  statuses?: string[];
+  /** Narrow the feed to one tenant (see-all business filter). */
+  businessId?: string;
+  /** Look-back in days; unset = no time bound (alerts are already rare). */
+  sinceDays?: number;
+};
+
 export async function getRecentAlertsAll(
   limit = 20,
   client?: SupabaseClient,
-  options?: FleetFeedOptions
+  options?: FleetFeedOptions & AlertFeedFilter
 ): Promise<LogRow[]> {
   const db = client ?? (await createSupabaseServiceClient());
-  let q = db
-    .from("coworker_logs")
-    .select()
-    .in("status", ["urgent_alert", "error"]);
+  const statuses =
+    options?.statuses && options.statuses.length > 0
+      ? options.statuses
+      : ["urgent_alert", "error"];
+  let q = db.from("coworker_logs").select().in("status", statuses);
+  if (options?.businessId) {
+    q = q.eq("business_id", options.businessId);
+  }
+  if (options?.sinceDays && options.sinceDays > 0) {
+    q = q.gte(
+      "created_at",
+      new Date(Date.now() - options.sinceDays * 24 * 60 * 60 * 1000).toISOString()
+    );
+  }
   const excluded = options?.excludeBusinessIds ?? [];
   if (excluded.length > 0) {
     q = q.not("business_id", "in", `(${excluded.join(",")})`);
