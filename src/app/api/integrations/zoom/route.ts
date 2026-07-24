@@ -1,15 +1,17 @@
 /**
  * Owner-facing management for the business's DIRECT Zoom connection
- * (first-party OAuth — the Nango-free path, mirroring
+ * (first-party OAuth, the Nango-free path, mirroring
  * /api/integrations/calendly).
  *
  *   GET    ?businessId=…       → connection state (masked; no token material)
- *   PATCH  {businessId, isActive}  → soft-disable / re-enable.
+ *   PATCH  {businessId, isActive?, autoImportTranscripts?}
+ *                              → soft-disable / re-enable, and/or flip the
+ *                                webhook auto-import switch.
  *   DELETE {businessId}        → best-effort token revoke at Zoom, then
  *                                remove the connection entirely.
  *
  * Connect/reconnect is the browser-navigated OAuth flow under
- * /api/integrations/zoom/connect — there is no token-paste path.
+ * /api/integrations/zoom/connect, there is no token-paste path.
  */
 import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
@@ -18,16 +20,22 @@ import {
   deleteZoomConnection,
   getPublicZoomConnection,
   getZoomConnection,
-  setZoomConnectionActive
+  setZoomConnectionActive,
+  setZoomConnectionAutoImport
 } from "@/lib/db/zoom-connections";
 import { revokeZoomToken } from "@/lib/zoom/oauth";
 
 const businessIdSchema = z.string().uuid();
 
-const patchSchema = z.object({
-  businessId: z.string().uuid(),
-  isActive: z.boolean()
-});
+const patchSchema = z
+  .object({
+    businessId: z.string().uuid(),
+    isActive: z.boolean().optional(),
+    autoImportTranscripts: z.boolean().optional()
+  })
+  .refine((body) => body.isActive !== undefined || body.autoImportTranscripts !== undefined, {
+    message: "isActive or autoImportTranscripts is required"
+  });
 
 async function authorize(businessId: string) {
   const user = await getAuthUser();
@@ -61,7 +69,12 @@ export async function PATCH(request: Request) {
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
     const existing = await getPublicZoomConnection(body.businessId);
     if (!existing) return errorResponse("NOT_FOUND", "No Zoom connection");
-    await setZoomConnectionActive(body.businessId, body.isActive);
+    if (body.isActive !== undefined) {
+      await setZoomConnectionActive(body.businessId, body.isActive);
+    }
+    if (body.autoImportTranscripts !== undefined) {
+      await setZoomConnectionAutoImport(body.businessId, body.autoImportTranscripts);
+    }
     const row = await getPublicZoomConnection(body.businessId);
     return successResponse(row);
   } catch (err) {

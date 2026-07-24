@@ -3,13 +3,13 @@
  *
  * The first-party OAuth path for Zoom (Nango-free primary; legacy Nango rows
  * in `workspace_oauth_connections` stay honored by the resolver). One row per
- * business holding the Zoom token pair — access token AND rotating refresh
+ * business holding the Zoom token pair, access token AND rotating refresh
  * token, both encrypted at rest via `@/lib/integrations/secrets` (same crypto
- * as calendly_connections / vagaro_connections) — plus the connected
+ * as calendly_connections / vagaro_connections), plus the connected
  * account's identity captured at connect time.
  *
  * Service-role only: RLS is on with no policies. Decrypted tokens never
- * leave a server-side function — the dashboard gets
+ * leave a server-side function, the dashboard gets
  * `toPublicZoomConnection` (has_tokens flag, no ciphertext).
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -30,11 +30,12 @@ type StoredZoomConnectionRow = {
   account_email: string | null;
   account_name: string | null;
   is_active: boolean;
+  auto_import_transcripts: boolean;
   created_at: string;
   updated_at: string;
 };
 
-/** Decrypted row — server-side use only (direct API calls / refresh). */
+/** Decrypted row, server-side use only (direct API calls / refresh). */
 export type ZoomConnectionRow = Omit<
   StoredZoomConnectionRow,
   "access_token_encrypted" | "refresh_token_encrypted"
@@ -54,7 +55,7 @@ export type PublicZoomConnectionRow = Omit<
 const ALL_COLUMNS =
   "id,business_id,access_token_encrypted,refresh_token_encrypted," +
   "token_expires_at,zoom_user_id,account_email,account_name," +
-  "is_active,created_at,updated_at";
+  "is_active,auto_import_transcripts,created_at,updated_at";
 
 function toDecryptedRow(row: StoredZoomConnectionRow): ZoomConnectionRow {
   const {
@@ -62,11 +63,17 @@ function toDecryptedRow(row: StoredZoomConnectionRow): ZoomConnectionRow {
     refresh_token_encrypted: encRefresh,
     ...rest
   } = row;
+  if (encAccess.length === 0 && encRefresh.length === 0) {
+    // Deliberately wiped pair (Zoom-side deauthorization): the row survives
+    // so the dashboard shows "Needs reconnect", but there is nothing to
+    // decrypt and no bearer to present.
+    return { ...rest, accessToken: "", refreshToken: "" };
+  }
   const accessToken = decryptIntegrationSecret(encAccess);
   const refreshToken = decryptIntegrationSecret(encRefresh);
   if (accessToken === null || refreshToken === null) {
-    // NOT NULL columns, so this only happens on a truly empty stored value —
-    // fail closed rather than calling Zoom with an empty bearer.
+    // NOT NULL columns, so this only happens on an undecryptable stored
+    // value, fail closed rather than calling Zoom with an empty bearer.
     throw new Error("zoom connection has no stored token pair");
   }
   return { ...rest, accessToken, refreshToken };
@@ -99,7 +106,7 @@ export async function getZoomConnection(
   return toDecryptedRow(data as unknown as StoredZoomConnectionRow);
 }
 
-/** Active connection only — the meeting-tool gate. */
+/** Active connection only, the meeting-tool gate. */
 export async function getActiveZoomConnection(
   businessId: string,
   client?: SupabaseClient
@@ -127,7 +134,7 @@ export async function getActiveZoomConnectionId(
   return (data as { id: string } | null)?.id ?? null;
 }
 
-/** Dashboard listing shape (no decrypt — masked). Null when not connected. */
+/** Dashboard listing shape (no decrypt, masked). Null when not connected. */
 export async function getPublicZoomConnection(
   businessId: string,
   client?: SupabaseClient
@@ -202,14 +209,14 @@ export async function upsertZoomConnection(
 
 /**
  * Persist a refreshed token pair. Zoom ROTATES the refresh token on every
- * refresh, so both tokens must land atomically in one UPDATE — a crash
+ * refresh, so both tokens must land atomically in one UPDATE, a crash
  * between "used old refresh token" and "stored new one" would strand the
  * connection (the old token is single-use).
  *
  * `expectedUpdatedAt` is an optimistic-concurrency fence for cross-instance
  * races: the update only applies while the row still carries the timestamp
  * the caller read the (now consumed) refresh token from. Returns whether the
- * pair was stored — `false` means another writer got there first and the
+ * pair was stored, `false` means another writer got there first and the
  * caller should re-read instead of clobbering the newer rotation.
  */
 export async function updateZoomTokens(
@@ -260,4 +267,68 @@ export async function deleteZoomConnection(
     .delete()
     .eq("business_id", businessId);
   if (error) throw new Error(`deleteZoomConnection: ${error.message}`);
+}
+
+/** What the webhook dispatcher needs to route an event, no token material. */
+export type ZoomConnectionSummary = {
+  business_id: string;
+  auto_import_transcripts: boolean;
+};
+
+/**
+ * Resolve the tenant behind a webhook event's host/user id. Active rows
+ * only, a deauthorized or soft-disabled connection routes nothing.
+ */
+export async function getActiveZoomConnectionSummaryByZoomUserId(
+  zoomUserId: string,
+  client?: SupabaseClient
+): Promise<ZoomConnectionSummary | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("zoom_connections")
+    .select("business_id,auto_import_transcripts")
+    .eq("zoom_user_id", zoomUserId)
+    .eq("is_active", true)
+    .maybeSingle();
+  if (error) {
+    throw new Error(`getActiveZoomConnectionSummaryByZoomUserId: ${error.message}`);
+  }
+  return (data as ZoomConnectionSummary | null) ?? null;
+}
+
+/** Owner toggle for the recording.transcript_completed auto-import path. */
+export async function setZoomConnectionAutoImport(
+  businessId: string,
+  enabled: boolean,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("zoom_connections")
+    .update({ auto_import_transcripts: enabled, updated_at: new Date().toISOString() })
+    .eq("business_id", businessId);
+  if (error) throw new Error(`setZoomConnectionAutoImport: ${error.message}`);
+}
+
+/**
+ * Zoom-side uninstall (app_deauthorized webhook): the token pair is dead at
+ * Zoom the moment the user deauthorizes, so wipe it and flip the row
+ * inactive in one update. The row survives so the dashboard card shows
+ * "Needs reconnect" rather than pretending the business never connected.
+ */
+export async function markZoomConnectionDeauthorized(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("zoom_connections")
+    .update({
+      is_active: false,
+      access_token_encrypted: "",
+      refresh_token_encrypted: "",
+      updated_at: new Date().toISOString()
+    })
+    .eq("business_id", businessId);
+  if (error) throw new Error(`markZoomConnectionDeauthorized: ${error.message}`);
 }
