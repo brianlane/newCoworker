@@ -89,11 +89,18 @@ async function backfillConversations(businessId: string, apiKey: string): Promis
     let voiceTurns = 0;
     let smsTurns = 0;
     let emails = 0;
+    // Same gate as the live summarizer (hasCustomerContent): assistant-only
+    // windows have nothing the customer stated — skip them instead of
+    // wasting a Gemini call on content the live hook would never extract.
+    let hasCustomerContent = false;
     if (SOURCES.has("voice")) {
       const turns = await listVoiceTurnsForCustomer(businessId, contact.customer_e164, {
         maxCalls: 5
       });
       voiceTurns = turns.length;
+      if (turns.some((t) => t.role === "caller" && t.content.trim().length > 0)) {
+        hasCustomerContent = true;
+      }
       if (turns.length > 0) {
         sections.push(
           "VOICE CALLS (oldest first):",
@@ -107,6 +114,9 @@ async function backfillConversations(businessId: string, apiKey: string): Promis
         limit: 40
       });
       smsTurns = history.length;
+      if (history.some((h) => h.inboundText.trim().length > 0)) {
+        hasCustomerContent = true;
+      }
       if (history.length > 0) {
         sections.push(
           "SMS EXCHANGES (oldest first):",
@@ -120,6 +130,9 @@ async function backfillConversations(businessId: string, apiKey: string): Promis
     if (SOURCES.has("email") && contact.email) {
       const mail = await listEmailLogForAddress(businessId, contact.email, { limit: 10 });
       emails = mail.length;
+      if (mail.some((m) => m.direction === "inbound")) {
+        hasCustomerContent = true;
+      }
       if (mail.length > 0) {
         sections.push(
           "EMAILS (oldest first):",
@@ -134,7 +147,7 @@ async function backfillConversations(businessId: string, apiKey: string): Promis
       }
     }
     const transcript = sections.join("\n").trim();
-    if (!transcript) continue;
+    if (!transcript || !hasCustomerContent) continue;
 
     const indexRows = APPLY ? await listMemoryEntities(businessId) : [];
     const entityIndex = indexRows.map((row) => ({
