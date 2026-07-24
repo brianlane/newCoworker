@@ -131,6 +131,7 @@ describe("flagContactSpam", () => {
       expect(res.canceledRuns).toBe(1);
       expect(res.runsSweepComplete).toBe(true);
       expect(res.note).toContain("1 pending automation run(s)");
+      expect(res.note).toContain("the contact is tagged spam");
     }
     const update = calls.find((c) => c.table === "ai_flow_runs" && c.name === "update");
     const payload = update?.args[0] as {
@@ -290,6 +291,11 @@ describe("flagContactSpam", () => {
       ]);
       const r1 = await flagContactSpam(BIZ, { phone: PHONE }, deps(readFail.db));
       expect(r1.ok && !r1.contactTagged).toBe(true);
+      // The note must not claim a tag that never landed (Bugbot, PR #884).
+      if (r1.ok) {
+        expect(r1.note).toContain("tagging the contact record failed");
+        expect(r1.note).not.toContain("the contact is tagged spam");
+      }
 
       const insertFail = makeDb([
         { data: [], error: null },

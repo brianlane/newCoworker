@@ -209,7 +209,7 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "flag_contact_spam",
         label: "Flag spam contacts",
         description:
-          "When you declare a lead or contact spam in chat (or by texting your coworker), block their number from all texting, stop their pending automations, and tag the contact. The block lifts only if the contact texts START.",
+          "When you declare a lead or contact spam in chat (or by texting your coworker), block their number from all texting, stop their pending automations, and tag the contact. Managers and owners only; the block lifts only if the contact texts START.",
         defaultEnabled: true,
         configurable: true
       }

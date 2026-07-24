@@ -208,6 +208,18 @@ export async function flagContactSpam(
     runsSweepComplete = false;
   }
 
+  // The note must mirror what ACTUALLY happened — the model relays it
+  // verbatim, and an owner told "tagged spam" when the tag write failed is
+  // exactly the dishonesty this tool exists to end.
+  const noteParts = [
+    "this number is now blocked from all texting",
+    runsSweepComplete
+      ? `${canceledRuns} pending automation run(s) were stopped`
+      : "some of their pending automation runs could not be confirmed as stopped (they may still show active on the dashboard, but any text they attempt to this number will be skipped)",
+    contactTagged
+      ? "the contact is tagged spam"
+      : "tagging the contact record failed, so the dashboard may not show a spam tag"
+  ];
   return {
     ok: true,
     phoneE164,
@@ -215,13 +227,9 @@ export async function flagContactSpam(
     canceledRuns,
     runsSweepComplete,
     contactTagged,
-    note: runsSweepComplete
-      ? "Tell the owner: this number is now blocked from all texting, " +
-        `${canceledRuns} pending automation run(s) were stopped, and the contact is tagged spam. ` +
-        "The block cannot be undone from chat (only the contact texting START lifts it)."
-      : "Tell the owner: this number is now blocked from all texting (no message can go out to it), " +
-        "but some of their pending automation runs could not be confirmed as stopped — those runs may " +
-        "still show as active on the dashboard, though any text they attempt to this number will be skipped."
+    note:
+      `Tell the owner: ${noteParts.join("; ")}. ` +
+      "The block cannot be undone from chat (only the contact texting START lifts it)."
   };
 }
 

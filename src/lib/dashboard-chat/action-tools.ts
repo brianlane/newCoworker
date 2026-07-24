@@ -118,7 +118,10 @@ export type ActionToolGates = {
    * contact tag through the shared core (customer-tools/flag-spam.ts).
    * INLINE-ONLY by design — declared solely on the owner-verified surfaces
    * (dashboard chat, owner-SMS operator turn); the customer-facing Rowboat
-   * texting coworker must never hold an irreversible suppression tool.
+   * texting coworker must never hold an irreversible suppression tool. On
+   * dashboard chat the gate also requires the caller's manage_settings role
+   * (same bar as /api/dashboard/sms-optouts — the suppression cannot be
+   * undone from the platform); the owner-SMS surface is the verified owner.
    */
   flag_contact_spam: boolean;
 };

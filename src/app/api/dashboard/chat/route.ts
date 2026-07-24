@@ -799,7 +799,11 @@ export async function POST(request: Request) {
       edit_aiflow: editAiflowEnabled,
       generate_image: generateImageEnabled,
       update_notification_preferences: notificationPrefsToolEnabled && canManageSettings,
-      flag_contact_spam: flagSpamToolEnabled
+      // Same role bar as the settings-page suppression API
+      // (/api/dashboard/sms-optouts requires manage_settings): the opt-out
+      // write is irreversible from the platform, so a staff-role teammate
+      // must never be handed this tool.
+      flag_contact_spam: flagSpamToolEnabled && canManageSettings
     };
 
     // Two message arrays:
