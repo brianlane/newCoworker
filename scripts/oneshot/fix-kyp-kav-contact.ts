@@ -1,23 +1,25 @@
 /**
- * fix-kyp-kav-contact.ts — repair a lead's split contact identity: name and
- * email the REAL-number contact row, delete the junk-number orphan carrying
- * the name.
+ * fix-kyp-kav-contact.ts — repair a nameless contact left by a pre-fix send:
+ * name and email the REAL-number contact row and, when the lead ALSO has a
+ * junk-number orphan carrying the name, delete that orphan.
  *
- * Background (KYP Ads, Jul 24 2026): a Facebook lead typed a junk phone into
- * the form, so the intake flow filed the contact NAME on an undialable
- * number. The lead then booked through Calendly with their real number and
- * email; the calendar pre-call reminder flow texted the real number, and the
- * send-side contact filing created that row NAMELESS because the flow's
- * `invitee_first_name` var was not in the engine's conventional name keys
- * (fixed in the same PR as this script). The dashboard Texts thread showed
- * "Set contact" for a lead the AI was addressing by name.
+ * Background (KYP Ads, Jul 24 2026): before the calendar-flow contact-filing
+ * fixes (PR #892), a flow or manual send could text a person by name while
+ * the contact row was created NAMELESS (the flow's `invitee_first_name` var
+ * was not in the engine's conventional name keys; MCP sends predating
+ * PR #802 filed nothing at all). The dashboard Texts thread showed
+ * "Set contact" for a lead the AI was addressing by name. Kav additionally
+ * had the name parked on a junk-number orphan row from his Facebook form;
+ * Bobby and Yaroslav (the other two pre-fix leftovers) did not, so the
+ * orphan handling is optional.
  *
  * What --apply does (idempotent, fill-only):
  *   1. On the REAL-number contact row: set display_name/email only where
  *      they are currently empty — an owner edit is never clobbered.
- *   2. Delete the junk-number row, but ONLY while it still looks exactly
- *      like the known orphan (the given name, no aliases, no tags) — if it
- *      has since been edited or merged, it is left alone with a note.
+ *   2. With --junk: delete the junk-number row, but ONLY while it still
+ *      looks exactly like the known orphan (the given name, no aliases, no
+ *      tags) — if it has since been edited or merged, it is left alone with
+ *      a note. Without --junk, orphan handling is skipped entirely.
  *
  * Per scripts/oneshot/README.md, every tenant-specific value rides argv/env
  * (never hard-coded PII).
@@ -25,9 +27,9 @@
  * Usage:
  *   set -a && source .env && set +a
  *   npx tsx scripts/oneshot/fix-kyp-kav-contact.ts --business <uuid> \
- *     --real +1XXXXXXXXXX --junk +XXXXXXXXX --name <name> [--email <email>]          # dry-run
+ *     --real +1XXXXXXXXXX --name <name> [--email <email>] [--junk +XXXXXXXXX]          # dry-run
  *   npx tsx scripts/oneshot/fix-kyp-kav-contact.ts --business <uuid> \
- *     --real +1XXXXXXXXXX --junk +XXXXXXXXX --name <name> [--email <email>] --apply  # write
+ *     --real +1XXXXXXXXXX --name <name> [--email <email>] [--junk +XXXXXXXXX] --apply  # write
  */
 import { loadEnv } from "../../debug/_shared.ts";
 
@@ -54,8 +56,9 @@ if (!/^\+\d{8,15}$/.test(REAL_E164)) {
   console.error("[oneshot] pass --real <E.164> (the lead's dialable number)");
   process.exit(1);
 }
-if (!/^\+\d{8,15}$/.test(JUNK_E164) || JUNK_E164 === REAL_E164) {
-  console.error("[oneshot] pass --junk <E.164> (the orphan row's number, distinct from --real)");
+// --junk is optional: most pre-fix leftovers have no orphan row to delete.
+if (JUNK_E164.length > 0 && (!/^\+\d{8,15}$/.test(JUNK_E164) || JUNK_E164 === REAL_E164)) {
+  console.error("[oneshot] --junk must be an E.164 number distinct from --real (or omit it)");
   process.exit(1);
 }
 if (NAME.length === 0) {
@@ -100,7 +103,7 @@ async function readContact(e164: string): Promise<ContactRow | null> {
 }
 
 const real = await readContact(REAL_E164);
-const junk = await readContact(JUNK_E164);
+const junk = JUNK_E164 ? await readContact(JUNK_E164) : null;
 
 console.log(
   `[oneshot] real-number row (${REAL_E164}): ${
@@ -109,11 +112,15 @@ console.log(
       : "MISSING"
   }`
 );
-console.log(
-  `[oneshot] junk-number row (${JUNK_E164}): ${
-    junk ? `${junk.id} name=${JSON.stringify(junk.display_name)}` : "none (already removed)"
-  }`
-);
+if (JUNK_E164) {
+  console.log(
+    `[oneshot] junk-number row (${JUNK_E164}): ${
+      junk ? `${junk.id} name=${JSON.stringify(junk.display_name)}` : "none (already removed)"
+    }`
+  );
+} else {
+  console.log("[oneshot] no --junk given: orphan handling skipped");
+}
 
 if (!real) {
   console.error(
