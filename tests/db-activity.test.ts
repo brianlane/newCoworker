@@ -397,6 +397,22 @@ describe("buildActivityFeed", () => {
     expect(items[0]).toMatchObject({ kind: "alert", href: "/dashboard/notifications" });
   });
 
+  it("deep-links alerts to the exact notification when the row carries its id", () => {
+    const [item] = buildActivityFeed(
+      emptyInput({
+        alerts: [
+          {
+            id: "log-abc",
+            task_type: "sms_needs_human",
+            log_payload: { reason: "asked for a person" },
+            created_at: "2026-01-07T00:00:00Z"
+          }
+        ]
+      })
+    );
+    expect(item.href).toBe("/dashboard/notifications?logId=log-abc");
+  });
+
   it("ignores blank payload fields when labeling alerts", () => {
     const [item] = buildActivityFeed(
       emptyInput({

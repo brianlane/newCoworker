@@ -1,5 +1,6 @@
 import { Badge } from "@/components/ui/Badge";
 import {
+  adminAlertHref,
   adminAlertSummary,
   formatAdminLabel,
   formatAlertStatusLabel,
@@ -7,6 +8,7 @@ import {
 } from "@/lib/admin/dashboard";
 import type { LogRow } from "@/lib/db/logs";
 import type { FleetActivityItem } from "@/lib/db/fleet-activity";
+import { ViewAsItemLink } from "@/components/admin/ViewAsItemLink";
 
 /**
  * Row treatments shared by the admin dashboard's Recent Alerts / Recent
@@ -36,15 +38,29 @@ export function AdminAlertRow({
   log: LogRow;
   businessName: string | null | undefined;
 }) {
+  // Urgent alerts open the exact alert on the tenant's notifications page
+  // under view-as; error rows (provisioning/system) have no owner-side page
+  // and keep linking to the admin business detail.
+  const itemHref = adminAlertHref(log);
   return (
     <li className="py-2.5 space-y-1">
       <div className="flex items-start justify-between gap-3">
-        <a
-          href={`/admin/${log.business_id}`}
-          className="text-xs text-parchment hover:text-signal-teal min-w-0"
-        >
-          {adminAlertSummary(log)}
-        </a>
+        {itemHref ? (
+          <ViewAsItemLink
+            businessId={log.business_id}
+            href={itemHref}
+            className="text-xs text-parchment hover:text-signal-teal"
+          >
+            {adminAlertSummary(log)}
+          </ViewAsItemLink>
+        ) : (
+          <a
+            href={`/admin/${log.business_id}`}
+            className="text-xs text-parchment hover:text-signal-teal min-w-0"
+          >
+            {adminAlertSummary(log)}
+          </a>
+        )}
         <span className="text-xs text-parchment/30 shrink-0">{timeAgo(log.created_at)}</span>
       </div>
       <div className="flex flex-wrap items-center gap-2">
@@ -76,12 +92,14 @@ export function AdminActivityRow({
   return (
     <li className="py-2.5 space-y-1">
       <div className="flex items-start justify-between gap-3">
-        <a
-          href={`/admin/${item.businessId}`}
-          className="text-xs text-parchment hover:text-signal-teal min-w-0"
+        {/* Opens the item's page in the tenant dashboard under view-as. */}
+        <ViewAsItemLink
+          businessId={item.businessId}
+          href={item.href}
+          className="text-xs text-parchment hover:text-signal-teal"
         >
           {item.label}
-        </a>
+        </ViewAsItemLink>
         <span className="text-xs text-parchment/30 shrink-0">{timeAgo(item.at)}</span>
       </div>
       <div className="flex flex-wrap items-center gap-2">

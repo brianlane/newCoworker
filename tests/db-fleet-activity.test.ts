@@ -217,9 +217,9 @@ describe("buildFleetActivityFeed", () => {
     const items = buildFleetActivityFeed({
       ...emptyInput(),
       flows: [
-        { business_id: "b1", status: "completed", created_at: "2026-07-23T10:00:00Z", ai_flows: { name: "Lead intake" } },
-        { business_id: "b1", status: "running", created_at: "2026-07-23T09:00:00Z", ai_flows: [{ name: "Nurture" }] },
-        { business_id: "b1", status: "failed", created_at: "2026-07-23T08:00:00Z", ai_flows: null }
+        { id: "run-1", flow_id: "flow-1", business_id: "b1", status: "completed", created_at: "2026-07-23T10:00:00Z", ai_flows: { name: "Lead intake" } },
+        { id: "run-2", flow_id: "flow-1", business_id: "b1", status: "running", created_at: "2026-07-23T09:00:00Z", ai_flows: [{ name: "Nurture" }] },
+        { id: "run-3", flow_id: "flow-2", business_id: "b1", status: "failed", created_at: "2026-07-23T08:00:00Z", ai_flows: null }
       ]
     });
     expect(items.map((i) => i.label)).toEqual([
@@ -227,7 +227,47 @@ describe("buildFleetActivityFeed", () => {
       "AiFlow: Nurture (running)",
       "AiFlow: AiFlow (failed)"
     ]);
-    expect(items[0]).toMatchObject({ badge: "AiFlow", variant: "success" });
+    expect(items[0]).toMatchObject({
+      badge: "AiFlow",
+      variant: "success",
+      href: "/dashboard/aiflows/runs?flowId=flow-1&run=run-1"
+    });
+  });
+
+  it("carries the item's tenant-dashboard href per source", () => {
+    const items = buildFleetActivityFeed({
+      ...emptyInput(),
+      calls: [
+        { business_id: "b1", caller_e164: "+16025550100", status: "completed", started_at: "2026-07-23T10:00:00Z" }
+      ],
+      smsInbound: [
+        { business_id: "b1", payload: smsPayload("+14805550111"), created_at: "2026-07-23T09:30:00Z" }
+      ],
+      smsReplies: [
+        { business_id: "b1", payload: smsPayload("+14805550111"), updated_at: "2026-07-23T09:00:00Z" }
+      ],
+      smsOutbound: [
+        { business_id: "b1", to_e164: "+16025550122", created_at: "2026-07-23T08:30:00Z" }
+      ],
+      emails: [
+        { business_id: "b1", direction: "outbound", to_email: "a@b.co", from_email: null, subject: null, created_at: "2026-07-23T08:00:00Z" }
+      ],
+      customers: [
+        { business_id: "b1", display_name: null, customer_e164: "+16025550133", created_at: "2026-07-23T07:30:00Z" }
+      ],
+      logs: [
+        { id: "log-1", business_id: "b1", task_type: "provisioning", status: "success", log_payload: null, created_at: "2026-07-23T07:00:00Z" }
+      ]
+    });
+    expect(items.map((i) => i.href)).toEqual([
+      "/dashboard/calls",
+      "/dashboard/messages/%2B14805550111",
+      "/dashboard/messages/%2B14805550111",
+      "/dashboard/messages/%2B16025550122",
+      "/dashboard/emails",
+      "/dashboard/customers/%2B16025550133",
+      "/dashboard"
+    ]);
   });
 
   it("labels new customers with the display name when present", () => {

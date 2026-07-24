@@ -141,6 +141,13 @@ export type ActivityCustomerRow = {
 };
 
 export type ActivityAlertRow = {
+  /**
+   * The coworker_logs id. Dispatched notifications carry it as
+   * `payload.logId`, so the feed can deep-link to the exact alert on the
+   * notifications page (`?logId=`). Optional so older callers keep compiling;
+   * absent = the bare notifications page.
+   */
+  id?: string;
   task_type: string;
   log_payload: Record<string, unknown> | null;
   created_at: string;
@@ -371,7 +378,12 @@ export function collectActivityItems(input: ActivityFeedInput): ActivityItem[] {
       id: `alert:${i}:${r.created_at}`,
       kind: "alert",
       label: alertLabel(r),
-      href: "/dashboard/notifications",
+      // Deep-link to the exact alert: the notifications page auto-expands
+      // the row whose payload.logId matches (dispatch stamps the log id on
+      // every notification it writes).
+      href: r.id
+        ? `/dashboard/notifications?logId=${encodeURIComponent(r.id)}`
+        : "/dashboard/notifications",
       at: r.created_at
     });
   });
@@ -703,7 +715,7 @@ async function fetchActivityFeedInput(
         : beforeLt(
             db
               .from("coworker_logs")
-              .select("task_type, log_payload, created_at")
+              .select("id, task_type, log_payload, created_at")
               .eq("business_id", businessId)
               .eq("status", "urgent_alert")
               .gte("created_at", since),

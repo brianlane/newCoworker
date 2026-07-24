@@ -1,6 +1,6 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { Badge } from "@/components/ui/Badge";
 import { Button } from "@/components/ui/Button";
@@ -15,6 +15,13 @@ import {
 type Props = {
   businessId: string;
   initial: NotificationRow[];
+  /**
+   * Deep-link target from the activity feeds: the coworker_logs id the
+   * alert was dispatched from (every dispatched notification carries it as
+   * `payload.logId`). The first matching row auto-expands and scrolls into
+   * view; no match renders normally.
+   */
+  highlightLogId?: string;
 };
 
 function statusVariant(status: NotificationRow["status"]): React.ComponentProps<typeof Badge>["variant"] {
@@ -70,11 +77,33 @@ function describeReason(payload: Record<string, unknown>): string | null {
   }
 }
 
-export function NotificationList({ businessId, initial }: Props) {
+export function NotificationList({ businessId, initial, highlightLogId }: Props) {
   const [items, setItems] = useState<NotificationRow[]>(initial);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [expandedId, setExpandedId] = useState<string | null>(null);
+  // A ?logId= deep link opens directly on the matching alert. One dispatch
+  // writes a row PER CHANNEL (dashboard/email/sms/whatsapp) sharing the same
+  // logId — prefer the dashboard row (the alert itself) over transport
+  // delivery records.
+  const matches = highlightLogId
+    ? initial.filter(
+        (n) => String((n.payload as Record<string, unknown>)?.logId ?? "") === highlightLogId
+      )
+    : [];
+  const highlightedId =
+    matches.find((n) => n.delivery_channel === "dashboard")?.id ?? matches[0]?.id ?? null;
+  const [expandedId, setExpandedId] = useState<string | null>(highlightedId);
+  const highlightRef = useRef<HTMLLIElement | null>(null);
+
+  useEffect(() => {
+    if (!highlightedId) return;
+    highlightRef.current?.scrollIntoView({ block: "center" });
+    // Deep-linked viewing counts as reading, same as a manual expand.
+    const target = initial.find((n) => n.id === highlightedId);
+    if (target && !target.read_at) void markOne(highlightedId);
+    // Mount-only: the deep link targets the initially loaded list.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   const unreadCount = items.filter((it) => !it.read_at).length;
 
@@ -173,6 +202,7 @@ export function NotificationList({ businessId, initial }: Props) {
           return (
             <li
               key={n.id}
+              ref={n.id === highlightedId ? highlightRef : undefined}
               className={["py-3 transition-colors", isUnread ? "" : "opacity-60"].join(" ")}
             >
               <button

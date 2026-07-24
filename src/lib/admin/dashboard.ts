@@ -162,6 +162,21 @@ export function parseAlertStatusesParam(raw: string | undefined): string[] {
   return [...new Set(raw.split(","))].filter((s) => valid.has(s));
 }
 
+/**
+ * The alert's page in the TENANT dashboard, or null when it has none.
+ *
+ * Every dispatched urgent alert lands on the owner's notifications page with
+ * `payload.logId` = the coworker_logs id (stamped by the notifications Edge
+ * function and the Node dispatch call sites alike), so `?logId=` deep-links
+ * to the exact alert. `error` rows (provisioning/system failures) are never
+ * dispatched owner-side — they have no tenant page, so callers keep the
+ * admin business link.
+ */
+export function adminAlertHref(log: { id: string; status: string }): string | null {
+  if (log.status !== "urgent_alert") return null;
+  return `/dashboard/notifications?logId=${encodeURIComponent(log.id)}`;
+}
+
 export type AlertCounts = {
   /** Admin-actionable `error` rows in the fetched window. */
   errors: number;

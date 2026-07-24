@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  adminAlertHref,
   adminAlertSummary,
   formatAdminLabel,
   formatAlertStatusLabel,
@@ -210,6 +211,18 @@ describe("adminAlertSummary", () => {
     );
     expect(result.length).toBe(160);
     expect(result.endsWith("…")).toBe(true);
+  });
+});
+
+describe("adminAlertHref", () => {
+  it("deep-links urgent alerts to the exact notification", () => {
+    expect(adminAlertHref({ id: "log-1", status: "urgent_alert" })).toBe(
+      "/dashboard/notifications?logId=log-1"
+    );
+  });
+
+  it("returns null for error rows (no owner-side page)", () => {
+    expect(adminAlertHref({ id: "log-2", status: "error" })).toBeNull();
   });
 });
 
