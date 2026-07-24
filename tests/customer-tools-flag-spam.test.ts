@@ -101,7 +101,7 @@ describe("flagContactSpam", () => {
     const res = await flagContactSpam(BIZ, { phone: "(203) 809-7763" }, d);
     expect(res.ok).toBe(true);
     if (res.ok) expect(res.phoneE164).toBe(PHONE);
-    expect(d.setOptOut).toHaveBeenCalledWith(BIZ, PHONE);
+    expect(d.setOptOut).toHaveBeenCalledWith(BIZ, PHONE, undefined, "owner_spam");
   });
 
   it("fails the whole call honestly when suppression cannot be written (Error and non-Error)", async () => {
@@ -142,12 +142,13 @@ describe("flagContactSpam", () => {
       expect(res.suppressionComplete).toBe(true);
       expect(res.note).toContain("their 2 linked number(s) too");
     }
-    // One opt-out per identity number (the given one first).
+    // One opt-out per identity number (the given one first), every write
+    // carrying the owner-initiated provenance kind.
     const optOutCalls = (d.setOptOut as ReturnType<typeof vi.fn>).mock.calls;
     expect(optOutCalls).toEqual([
-      [BIZ, PHONE],
-      [BIZ, CANONICAL],
-      [BIZ, "+15145550123"]
+      [BIZ, PHONE, undefined, "owner_spam"],
+      [BIZ, CANONICAL, undefined, "owner_spam"],
+      [BIZ, "+15145550123", undefined, "owner_spam"]
     ]);
     // The run OR filter names every identity number.
     const orFilter = calls.find((c) => c.table === "ai_flow_runs" && c.name === "or");

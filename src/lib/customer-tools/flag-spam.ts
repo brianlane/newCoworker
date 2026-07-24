@@ -135,7 +135,10 @@ export async function flagContactSpam(
   // 1. Suppression of the given number — load-bearing, fails the whole call
   // honestly.
   try {
-    await setOptOut(businessId, phoneE164);
+    // kind "owner_spam": auditable as owner-initiated, reversible by
+    // service-role tooling, and the RPC never downgrades a genuine customer
+    // "stop" row (Chris Gregoris incident, Jul 24 2026).
+    await setOptOut(businessId, phoneE164, undefined, "owner_spam");
   } catch (err) {
     logger.error("flag_contact_spam: opt-out write failed", {
       businessId,
@@ -193,7 +196,7 @@ export async function flagContactSpam(
     for (const n of identitySet) {
       if (n === phoneE164) continue; // already suppressed above
       try {
-        await setOptOut(businessId, n);
+        await setOptOut(businessId, n, undefined, "owner_spam");
       } catch (err) {
         logger.error("flag_contact_spam: alias opt-out failed", {
           businessId,
