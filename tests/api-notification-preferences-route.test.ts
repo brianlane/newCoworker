@@ -224,6 +224,24 @@ describe("api/notifications/preferences route", () => {
     );
   });
 
+  it("passes digest_customer_facing_only through to the update", async () => {
+    const response = await POST(
+      new Request("http://localhost/api/notifications/preferences", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId: PREFS.business_id,
+          digest_customer_facing_only: true
+        })
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(updateNotificationPreferences).toHaveBeenCalledWith(
+      PREFS.business_id,
+      expect.objectContaining({ digest_customer_facing_only: true })
+    );
+  });
+
   it("normalizes digest recipient overrides: trims values, blanks become null", async () => {
     const response = await POST(
       new Request("http://localhost/api/notifications/preferences", {

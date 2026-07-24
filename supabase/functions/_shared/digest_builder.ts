@@ -51,6 +51,14 @@ export type DigestActivity = {
   /** Outbound texts (sum of daily_usage.sms_sent over the window dates). */
   smsOutbound: number;
   /**
+   * Outbound texts to CUSTOMERS only: AI replies plus sms_outbound_log rows
+   * whose source is customer-directed (excludes owner_notify / owner_alert /
+   * agent_offer, which page the owner or the roster, not a customer). Feeds
+   * the digest_customer_facing_only send gate; optional so callers that
+   * never gate on it (the dashboard backfill script) need not compute it.
+   */
+  smsOutboundCustomer?: number;
+  /**
    * Per-customer texting conversations in the window, so the dashboard can
    * deep-link each text event straight into its thread instead of the
    * messages index. Empty when no counterpart could be parsed (the event
@@ -220,6 +228,26 @@ export function totalDigestEvents(a: DigestActivity): number {
 
 export function hasDigestActivity(a: DigestActivity): boolean {
   return totalDigestEvents(a) > 0;
+}
+
+/**
+ * The digest_customer_facing_only send gate: did anything happen that a
+ * customer drove (or that demands the owner's attention)? Counts inbound
+ * texts, customer-directed outbound texts, calls, new customers, and urgent
+ * alerts. Deliberately ignores dashboard chat turns (the owner's own usage),
+ * AiFlow runs (background housekeeping like scheduled inbox triage), owner-
+ * directed sends, and delivered-notification counts, all of which the owner
+ * either caused or was already told about in real time. When the gate
+ * passes, the email body still renders every section, including those.
+ */
+export function hasCustomerFacingDigestActivity(a: DigestActivity): boolean {
+  return (
+    a.smsInbound > 0 ||
+    (a.smsOutboundCustomer ?? 0) > 0 ||
+    a.calls.length > 0 ||
+    a.newCustomers.length > 0 ||
+    a.urgentAlerts > 0
+  );
 }
 
 export type DigestSection = { heading: string; lines: string[] };

@@ -52,6 +52,9 @@ describe("db/notification-preferences", () => {
     expect(row.category_leads).toBe(true);
     expect(row.category_team).toBe(true);
     expect(row.category_system).toBe(true);
+    // Opt-in by design: digests keep their full-activity gate until the
+    // owner narrows them to customer-facing windows.
+    expect(row.digest_customer_facing_only).toBe(false);
     expect(row.phone_number).toBeNull();
     expect(row.alert_email).toBeNull();
     expect(row.digest_email_daily).toBeNull();

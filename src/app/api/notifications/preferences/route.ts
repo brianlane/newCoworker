@@ -26,6 +26,7 @@ const patchSchema = z.object({
   category_leads: z.boolean().optional(),
   category_team: z.boolean().optional(),
   category_system: z.boolean().optional(),
+  digest_customer_facing_only: z.boolean().optional(),
   phone_number: z.string().max(40).nullable().optional(),
   alert_email: z.union([z.string().email(), z.literal(""), z.null()]).optional(),
   digest_email_daily: z.union([z.string().email(), z.literal(""), z.null()]).optional(),

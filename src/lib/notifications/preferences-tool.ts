@@ -1,27 +1,28 @@
 /**
- * AI-surface notification toggle core — the update_notification_preferences
+ * AI-surface notification toggle core: the update_notification_preferences
  * tool shared by dashboard chat (inline), the texting coworker (Rowboat),
  * and the Claude connector (MCP).
  *
  * Born from KYP (Jul 20 2026): James texted "You need to let me know when
  * clients text back", the AI promised alerts, and no tool could flip
- * `customer_reply_alerts` — the promise was empty until an operator one-shot.
+ * `customer_reply_alerts`, so the promise was empty until an operator one-shot.
  *
  * Security posture, identical on every surface:
  *   - BOOLEAN TOGGLES ONLY, whitelisted below. Recipients (`phone_number`,
- *     `alert_email`, digest overrides) and `unsubscribed_at` are untouchable
- *     — a hijacked alert destination is the scarier failure than a flipped
+ *     `alert_email`, digest overrides) and `unsubscribed_at` are untouchable:
+ *     a hijacked alert destination is the scarier failure than a flipped
  *     boolean, and unsubscribe is a human-consent action.
  *   - `enableOnly` (the SMS surface): the texting coworker serves customers
  *     and staff with the SAME agent, so a prompt-injected customer could
- *     reach this tool. Enable-only makes the worst outcome extra noise —
- *     alerts can never be SILENCED from a text conversation. Turning things
- *     off requires the dashboard (or MCP/dashboard-chat, where the caller's
- *     manage_settings role is verified).
+ *     reach this tool. Enable-only makes the worst outcome extra noise;
+ *     alerts can never be SILENCED from a text conversation (quieting
+ *     toggles, where "on" means less email, are refused entirely there).
+ *     Turning things off requires the dashboard (or MCP/dashboard-chat,
+ *     where the caller's manage_settings role is verified).
  *
  * Delegates to updateNotificationPreferences so re-enabling a channel also
  * clears `unsubscribed_at`, byte-identical to the settings page. Never
- * throws — tool arms return the refusal to the model instead.
+ * throws; tool arms return the refusal to the model instead.
  */
 import {
   updateNotificationPreferences,
@@ -43,6 +44,7 @@ export const NOTIFICATION_TOGGLE_KEYS = [
   "email_urgent",
   "email_digest",
   "email_digest_weekly",
+  "digest_customer_facing_only",
   "dashboard_alerts",
   "sms_warm_transfer",
   "image_limit_alerts",
@@ -52,6 +54,16 @@ export const NOTIFICATION_TOGGLE_KEYS = [
 ] as const;
 
 export type NotificationToggleKey = (typeof NOTIFICATION_TOGGLE_KEYS)[number];
+
+/**
+ * Toggles where ENABLING reduces what the owner hears (quieting toggles).
+ * The `enableOnly` SMS surface exists so a prompt-injected customer can at
+ * worst create extra noise; for these keys "on" means LESS email, so the
+ * texting surface may not touch them in either direction.
+ */
+export const QUIETING_TOGGLE_KEYS: ReadonlySet<NotificationToggleKey> = new Set([
+  "digest_customer_facing_only"
+]);
 
 export type NotificationToggleMap = Record<NotificationToggleKey, boolean>;
 
@@ -118,7 +130,10 @@ export async function applyNotificationPreferenceToggles(
     };
   }
 
-  if (opts.enableOnly && entries.some(([, value]) => value === false)) {
+  if (
+    opts.enableOnly &&
+    entries.some(([key, value]) => value === false || QUIETING_TOGGLE_KEYS.has(key))
+  ) {
     return {
       ok: false,
       detail: "enable_only_surface",
@@ -144,7 +159,7 @@ export async function applyNotificationPreferenceToggles(
       ok: false,
       detail: "update_failed",
       message:
-        "The settings write failed — nothing was changed. Tell them to try again or use " +
+        "The settings write failed: nothing was changed. Tell them to try again or use " +
         "Dashboard → Settings → Notifications."
     };
   }

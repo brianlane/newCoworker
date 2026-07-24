@@ -6,6 +6,7 @@ import {
   buildDigestEmailModel,
   buildDigestEventLinks,
   groupSmsThreads,
+  hasCustomerFacingDigestActivity,
   hasDigestActivity,
   isRenderableSmsSender,
   routingSummary,
@@ -154,6 +155,42 @@ describe("digest_builder activity totals", () => {
     const a = { ...emptyActivity(), urgentAlerts: 5, notificationsDelivered: 2 };
     expect(hasDigestActivity(a)).toBe(false);
   });
+});
+
+describe("digest_builder hasCustomerFacingDigestActivity", () => {
+  it("ignores routine-only windows: chat, AiFlow runs, owner-directed sends, delivered notifications", () => {
+    const a: DigestActivity = {
+      ...emptyActivity(),
+      chatTurns: 7,
+      aiFlowRuns: [makeRun(), makeRun()],
+      // Owner pages only: total outbound moved, customer-directed did not.
+      smsOutbound: 3,
+      smsOutboundCustomer: 0,
+      notificationsDelivered: 4
+    };
+    expect(hasDigestActivity(a)).toBe(true);
+    expect(hasCustomerFacingDigestActivity(a)).toBe(false);
+  });
+
+  it("treats a missing smsOutboundCustomer as zero", () => {
+    const a: DigestActivity = { ...emptyActivity(), smsOutbound: 2 };
+    expect(a.smsOutboundCustomer).toBeUndefined();
+    expect(hasCustomerFacingDigestActivity(a)).toBe(false);
+  });
+
+  it.each([
+    ["inbound texts", { smsInbound: 1 }],
+    ["customer-directed outbound texts", { smsOutboundCustomer: 1 }],
+    ["calls", { calls: [{ caller_e164: "+1", status: "completed", started_at: "t" }] }],
+    ["new customers", { newCustomers: [{ display_name: null, customer_e164: "+2" }] }],
+    ["urgent alerts", { urgentAlerts: 1 }]
+  ] as Array<[string, Partial<DigestActivity>]>)(
+    "passes the gate on %s alone",
+    (_label, overrides) => {
+      const a: DigestActivity = { ...emptyActivity(), ...overrides };
+      expect(hasCustomerFacingDigestActivity(a)).toBe(true);
+    }
+  );
 });
 
 describe("digest_builder windowLabel", () => {
