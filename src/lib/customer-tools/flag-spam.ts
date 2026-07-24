@@ -43,9 +43,16 @@ export const SPAM_TAG = "spam";
 /** `context.canceled.by` marker for a spam-flag cancel. */
 export const SPAM_CANCELED_BY = "owner_declared_spam";
 
-/** Every pending run state — human-parked included (spam stops everything). */
+/**
+ * Every non-terminal run state — human-parked AND `running` included (spam
+ * stops everything). Matches the dashboard owner-stop's
+ * CANCELABLE_RUN_STATUSES: a `running` run cancels cooperatively, the
+ * worker re-reads status at each step boundary and quits when it sees
+ * canceled.
+ */
 export const SPAM_STOPPABLE_STATUSES = [
   "queued",
+  "running",
   "awaiting_reply",
   "awaiting_call",
   "awaiting_approval",
@@ -233,13 +240,17 @@ async function tagContactSpam(
     `Owner declared this contact SPAM (${new Date().toISOString().slice(0, 10)}). ` +
     `Do not contact; all follow-ups stopped.${reason?.trim() ? ` Reason: ${reason.trim()}` : ""}`;
   try {
-    const { data: contact, error: readErr } = await db
+    // Match the primary number OR a merged alias (alias_e164s) — the same
+    // resolution the interaction writes use, so a merged contact still gets
+    // tagged instead of silently skipped.
+    const { data: contactRows, error: readErr } = await db
       .from("contacts")
       .select("id, tags, pinned_md")
       .eq("business_id", businessId)
-      .eq("customer_e164", phoneE164)
-      .maybeSingle();
+      .or(`customer_e164.eq.${phoneE164},alias_e164s.cs.{${phoneE164}}`)
+      .limit(1);
     if (readErr) throw new Error(readErr.message);
+    const contact = ((contactRows ?? []) as Array<Record<string, unknown>>)[0] ?? null;
 
     if (!contact) {
       const { error: insErr } = await db.from("contacts").insert({

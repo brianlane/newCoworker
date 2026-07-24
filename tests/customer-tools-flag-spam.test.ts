@@ -89,7 +89,7 @@ describe("flagContactSpam", () => {
   it("normalizes forgiving input to canonical E.164 before the opt-out write", async () => {
     const { db } = makeDb([
       { data: [], error: null }, // runs lookup
-      { data: contactRow(), error: null } // contact read
+      { data: [contactRow()], error: null } // contact read
     ]);
     const d = deps(db, {});
     const res = await flagContactSpam(BIZ, { phone: "(203) 809-7763" }, d);
@@ -122,7 +122,7 @@ describe("flagContactSpam", () => {
       { data: [{ id: "r1" }], error: null }, // r1 cancel lands
       { data: [], error: null }, // r2 lost its revision race
       { data: null, error: null }, // r3: null update data also reads as not landed
-      { data: contactRow(), error: null }, // contact read
+      { data: [contactRow()], error: null }, // contact read
       { error: null } // contact update
     ]);
     const res = await flagContactSpam(BIZ, { phone: PHONE }, deps(db));
@@ -147,7 +147,7 @@ describe("flagContactSpam", () => {
   it("a run-lookup error degrades to runsSweepComplete false (suppression already active)", async () => {
     const { db } = makeDb([
       { data: null, error: { message: "lookup down" } },
-      { data: contactRow(), error: null },
+      { data: [contactRow()], error: null },
       { error: null }
     ]);
     const res = await flagContactSpam(BIZ, { phone: PHONE }, deps(db));
@@ -164,7 +164,7 @@ describe("flagContactSpam", () => {
       { data: [runRow({ id: "r1" }), runRow({ id: "r2" })], error: null },
       { data: null, error: { message: "write refused" } }, // r1 fails
       { data: [{ id: "r2" }], error: null }, // r2 lands
-      { data: contactRow(), error: null },
+      { data: [contactRow()], error: null },
       { error: null }
     ]);
     const res = await flagContactSpam(BIZ, { phone: PHONE }, deps(db));
@@ -178,7 +178,7 @@ describe("flagContactSpam", () => {
   it("null run data reads as zero pending runs", async () => {
     const { db } = makeDb([
       { data: null, error: null },
-      { data: contactRow(), error: null },
+      { data: [contactRow()], error: null },
       { error: null }
     ]);
     const res = await flagContactSpam(BIZ, { phone: PHONE }, deps(db));
@@ -224,7 +224,7 @@ describe("flagContactSpam", () => {
     it("appends the tag and note to an existing contact, preserving prior content", async () => {
       const { db, calls } = makeDb([
         { data: [], error: null },
-        { data: contactRow({ tags: ["vip"], pinned_md: "- Prefers email" }), error: null },
+        { data: [contactRow({ tags: ["vip"], pinned_md: "- Prefers email" })], error: null },
         { error: null }
       ]);
       const res = await flagContactSpam(BIZ, { phone: PHONE }, deps(db));
@@ -236,6 +236,10 @@ describe("flagContactSpam", () => {
       expect(payload.pinned_md).toContain("- Prefers email\n- ");
       // No reason given → no Reason suffix (whitespace-only counts as none).
       expect(payload.pinned_md).not.toContain("Reason:");
+      // The lookup matches merged aliases too (Bugbot, PR #881): primary OR
+      // alias_e164s containment.
+      const orFilter = calls.find((c) => c.table === "contacts" && c.name === "or");
+      expect(orFilter?.args[0]).toBe(`customer_e164.eq.${PHONE},alias_e164s.cs.{${PHONE}}`);
     });
 
     it("a whitespace-only reason adds no Reason suffix", async () => {
@@ -253,10 +257,10 @@ describe("flagContactSpam", () => {
       const { db, calls } = makeDb([
         { data: [], error: null },
         {
-          data: contactRow({
+          data: [contactRow({
             tags: [SPAM_TAG],
             pinned_md: "- Owner declared this contact SPAM (2026-07-23)."
-          }),
+          })],
           error: null
         }
       ]);
@@ -269,7 +273,7 @@ describe("flagContactSpam", () => {
     it("non-array tags and non-string pinned_md are treated as empty", async () => {
       const { db, calls } = makeDb([
         { data: [], error: null },
-        { data: contactRow({ tags: null, pinned_md: 7 }), error: null },
+        { data: [contactRow({ tags: null, pinned_md: 7 })], error: null },
         { error: null }
       ]);
       await flagContactSpam(BIZ, { phone: PHONE }, deps(db));
@@ -297,7 +301,7 @@ describe("flagContactSpam", () => {
 
       const updateFail = makeDb([
         { data: [], error: null },
-        { data: contactRow(), error: null },
+        { data: [contactRow()], error: null },
         { error: { message: "tags over cap" } }
       ]);
       const r3 = await flagContactSpam(BIZ, { phone: PHONE }, deps(updateFail.db));
