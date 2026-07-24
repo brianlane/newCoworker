@@ -26,11 +26,15 @@ export type WaitlistAttendee = {
  * `newStartIso`. Their live waitlist entries resolve:
  *
  *  - the new start is at or before the entry's pending offer, or earlier
- *    than the booking the entry was trying to beat, or the entry had no
- *    linked booking at all → FULFILLED (they got their earlier time);
- *  - otherwise (they moved their appointment LATER, or booked an
- *    additional later slot) → the entry stays live and re-points at the
- *    new booking, so "earlier" keeps meaning earlier than what they hold.
+ *    than the booking the entry was trying to beat → FULFILLED (they got
+ *    their earlier time);
+ *  - otherwise (they moved their appointment LATER, booked an additional
+ *    later slot, or an UNLINKED entry just got its first booking) → the
+ *    entry stays live and re-points at the new booking, so "earlier"
+ *    keeps meaning earlier than what they hold. An unlinked entry must
+ *    NOT fulfill on a plain first booking (Bugbot Medium on PR #903):
+ *    "text me if anything sooner opens up" survives booking the earliest
+ *    time available today.
  */
 export async function resolveWaitlistAfterBooking(
   businessId: string,
@@ -48,8 +52,7 @@ export async function resolveWaitlistAfterBooking(
         : NaN;
       const acceptedOffer = Number.isFinite(offeredMs) && newStartMs <= offeredMs;
       const beatCurrent = Number.isFinite(currentMs) && newStartMs < currentMs;
-      const noLinkedBooking = !Number.isFinite(currentMs);
-      if (acceptedOffer || beatCurrent || noLinkedBooking) {
+      if (acceptedOffer || beatCurrent) {
         await setWaitlistStatus(entry.id, "fulfilled");
       } else {
         await updateWaitlistBookingLink(entry.id, {

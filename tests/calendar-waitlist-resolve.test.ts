@@ -75,17 +75,23 @@ describe("resolveWaitlistAfterBooking", () => {
     expect(mockLink).not.toHaveBeenCalled();
   });
 
-  it("fulfills when the new start beats the linked booking, or when no booking was linked", async () => {
+  it("fulfills when the new start beats the linked booking", async () => {
     mockFind.mockResolvedValue([
       entry({ current_booking_start_at: "2026-08-04T15:00:00Z" })
     ]);
     await resolveWaitlistAfterBooking(BIZ, ATTENDEE, "2026-08-02T15:00:00.000Z");
     expect(mockStatus).toHaveBeenCalledWith("wl-1", "fulfilled");
+  });
 
-    mockStatus.mockClear();
+  it("an UNLINKED entry's first booking re-points instead of fulfilling (the request survives)", async () => {
+    // "Text me if anything sooner opens up" then booking today's earliest
+    // available time must keep them in line for something earlier.
     mockFind.mockResolvedValue([entry()]);
     await resolveWaitlistAfterBooking(BIZ, ATTENDEE, "2026-08-09T15:00:00.000Z");
-    expect(mockStatus).toHaveBeenCalledWith("wl-1", "fulfilled");
+    expect(mockStatus).not.toHaveBeenCalled();
+    expect(mockLink).toHaveBeenCalledWith("wl-1", {
+      currentBookingStartAtIso: "2026-08-09T15:00:00.000Z"
+    });
   });
 
   it("re-points the entry when the attendee moved LATER instead", async () => {

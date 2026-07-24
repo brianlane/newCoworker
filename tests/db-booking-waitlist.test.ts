@@ -46,7 +46,8 @@ function makeDb(results: Scripted[]) {
       "lte",
       "gte",
       "order",
-      "limit"
+      "limit",
+      "range"
     ]) {
       builder[m] = (...args: unknown[]) => {
         calls.push({ table, name: m, args });
@@ -249,10 +250,30 @@ describe("findLiveWaitlistEntriesForAttendee", () => {
     expect(found.map((r) => r.id)).toEqual(["wl-1", "wl-2"]);
   });
 
-  it("answers [] with no identifiers matched and on any read error", async () => {
+  it("pages through EVERY live row so a customer past the first page still resolves", async () => {
+    const fullPage = Array.from({ length: 100 }, (_, i) =>
+      row({ id: `filler-${i}`, phone: `+1500555${String(i).padStart(4, "0")}` })
+    );
+    const target = row({ id: "wl-target", phone: "+15485773546" });
+    scriptClient([
+      { data: fullPage, error: null },
+      { data: [target], error: null }
+    ]);
+    const found = await findLiveWaitlistEntriesForAttendee(BIZ, {
+      phones: ["+15485773546"]
+    });
+    expect(found.map((r) => r.id)).toEqual(["wl-target"]);
+  });
+
+  it("answers [] with no identifiers matched, a null payload, and on any read error", async () => {
     scriptClient([{ data: [row()], error: null }]);
     expect(
       await findLiveWaitlistEntriesForAttendee(BIZ, { phones: [], email: null })
+    ).toEqual([]);
+
+    scriptClient([{ data: null, error: null }]);
+    expect(
+      await findLiveWaitlistEntriesForAttendee(BIZ, { phones: ["+15485773546"] })
     ).toEqual([]);
 
     scriptClient([{ data: null, error: { message: "boom" } }]);

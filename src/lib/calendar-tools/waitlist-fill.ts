@@ -392,6 +392,13 @@ export async function sweepWaitlist(deps: WaitlistFillDeps = {}): Promise<Waitli
     for (const entry of lapsed) {
       await setWaitlistStatus(entry.id, "expired", deps.client);
       result.lapsedEntries += 1;
+      // A lapsing row can be HOLDING a live offer; its slot must pass to
+      // the next candidate rather than silently strand once the cancel
+      // observation's lookback has passed (Bugbot High on PR #903).
+      if (entry.status === "offered" && entry.offered_start_at !== null) {
+        const outcome = await offerFreedSlot(entry.business_id, entry.offered_start_at, deps);
+        if (outcome === "offered") result.reoffered += 1;
+      }
     }
   } catch (err) {
     logger.warn("waitlist-fill: lapsed-entry sweep failed", {

@@ -498,15 +498,48 @@ describe("sweepWaitlist", () => {
     expect(mockMark).toHaveBeenCalledWith("wl-2", expect.anything(), undefined);
   });
 
+  it("a LAPSING row that still holds an offer passes its slot to the next candidate", async () => {
+    // The holder's linked booking start passed while their offer for an
+    // (unrelated) earlier slot was pending; expiring them must not strand
+    // the held slot.
+    mockLapsed.mockResolvedValue([
+      entry({
+        id: "holder",
+        status: "offered",
+        current_booking_start_at: "2026-07-31T00:00:00Z",
+        offered_start_at: SLOT,
+        offer_expires_at: "2026-08-01T02:00:00Z",
+        last_offered_start_at: SLOT
+      })
+    ]);
+    mockList.mockResolvedValue([
+      entry({ id: "wl-2", created_at: "2026-07-02T00:00:00Z" })
+    ]);
+    const result = await sweepWaitlist();
+    expect(result).toEqual({ lapsedEntries: 1, expiredOffers: 0, reoffered: 1 });
+    expect(mockStatus).toHaveBeenCalledWith("holder", "expired", undefined);
+    expect(mockMark).toHaveBeenCalledWith("wl-2", expect.anything(), undefined);
+  });
+
   it("skips the re-offer for rows with no recorded slot and counts non-offered outcomes honestly", async () => {
+    // One lapsing holder whose re-offer finds nobody, plus expired offers
+    // with and without a recorded slot.
+    mockLapsed.mockResolvedValue([
+      entry({
+        id: "lapsed-holder",
+        status: "offered",
+        current_booking_start_at: "2026-07-31T00:00:00Z",
+        offered_start_at: SLOT
+      })
+    ]);
     mockExpired.mockResolvedValue([
       entry({ id: "no-slot", status: "offered", offered_start_at: null }),
       entry({ id: "gone-slot", status: "offered", offered_start_at: SLOT })
     ]);
-    // The re-offer for gone-slot finds nobody eligible.
+    // Every re-offer finds nobody eligible.
     mockList.mockResolvedValue([]);
     const result = await sweepWaitlist();
-    expect(result).toEqual({ lapsedEntries: 0, expiredOffers: 2, reoffered: 0 });
+    expect(result).toEqual({ lapsedEntries: 1, expiredOffers: 2, reoffered: 0 });
   });
 
   it("isolates listing failures per phase (Error and non-Error shapes)", async () => {
