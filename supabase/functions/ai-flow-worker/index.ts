@@ -61,6 +61,7 @@ import {
   parseRoutedAgent,
   pickRosterAgent,
   renderTemplate,
+  sanitizeExtractedPhone,
   senderPinnedByFromMatches,
   type NowScope,
   type RoutedAgent
@@ -2931,8 +2932,12 @@ async function browseStep(
   const raw: Record<string, string> = {};
   for (const f of action.fields ?? []) {
     let val = extracted[f.name] ?? "";
-    if (!val && isPhoneFieldName(f.name)) {
-      val = extractLabeledPhones(pageText)[0] ?? "";
+    if (isPhoneFieldName(f.name)) {
+      if (!val) val = extractLabeledPhones(pageText)[0] ?? "";
+      // Undialable values (model-invented "+" prefixes included) become
+      // "none" so the flow's no-phone branch runs instead of a guaranteed
+      // Telnyx rejection (KYP "+492046781", Jul 23 2026).
+      val = sanitizeExtractedPhone(val, pageText);
     }
     raw[f.name] = val;
   }
@@ -3005,8 +3010,12 @@ async function extractTextStep(
   const raw: Record<string, string> = {};
   for (const f of action.fields) {
     let val = extracted[f.name] ?? "";
-    if (!val && isPhoneFieldName(f.name)) {
-      val = extractLabeledPhones(action.text)[0] ?? "";
+    if (isPhoneFieldName(f.name)) {
+      if (!val) val = extractLabeledPhones(action.text)[0] ?? "";
+      // Undialable values (model-invented "+" prefixes included) become
+      // "none" so the flow's no-phone branch runs instead of a guaranteed
+      // Telnyx rejection (KYP "+492046781", Jul 23 2026).
+      val = sanitizeExtractedPhone(val, action.text);
     }
     raw[f.name] = val;
   }
@@ -3102,8 +3111,12 @@ async function emailExtractStep(
       continue;
     }
     let val = extracted[f.name] ?? "";
-    if (!val && isPhoneFieldName(f.name)) {
-      val = extractLabeledPhones(data.bodyText)[0] ?? "";
+    if (isPhoneFieldName(f.name)) {
+      if (!val) val = extractLabeledPhones(data.bodyText)[0] ?? "";
+      // Undialable values (model-invented "+" prefixes included) become
+      // "none" so the flow's no-phone branch runs instead of a guaranteed
+      // Telnyx rejection (KYP "+492046781", Jul 23 2026).
+      val = sanitizeExtractedPhone(val, data.bodyText);
     }
     raw[f.name] = val;
   }
@@ -3498,8 +3511,12 @@ async function browseActionStep(
     const raw: Record<string, string> = {};
     for (const f of action.fields) {
       let val = extracted[f.name] ?? "";
-      if (!val && isPhoneFieldName(f.name)) {
-        val = extractLabeledPhones(pageText)[0] ?? "";
+      if (isPhoneFieldName(f.name)) {
+        if (!val) val = extractLabeledPhones(pageText)[0] ?? "";
+        // Undialable values (model-invented "+" prefixes included) become
+        // "none" so the flow's no-phone branch runs instead of a guaranteed
+        // Telnyx rejection (KYP "+492046781", Jul 23 2026).
+        val = sanitizeExtractedPhone(val, pageText);
       }
       raw[f.name] = val;
     }
