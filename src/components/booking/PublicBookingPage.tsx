@@ -8,7 +8,7 @@
  * never needs to know it.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 export type PublicBookingStrings = {
   eventTitle: string;
@@ -120,7 +120,13 @@ export function PublicBookingPage({
   >("idle");
   const [booked, setBooked] = useState<BookedState | null>(null);
 
+  // Monotonic fetch sequence: only the LATEST request may commit state, so
+  // an overlapping fetch (duration switch, post-409 refresh) can never pair
+  // a stale error banner with fresh slots or vice versa.
+  const slotsRequestSeq = useRef(0);
   const loadSlots = useCallback(async () => {
+    const seq = slotsRequestSeq.current + 1;
+    slotsRequestSeq.current = seq;
     setSlots(null);
     setSlotsError(false);
     try {
@@ -131,9 +137,10 @@ export function PublicBookingPage({
       });
       const body = await res.json();
       if (!res.ok || !body.ok) throw new Error("slots failed");
+      if (seq !== slotsRequestSeq.current) return;
       setSlots(body.data.slots as Slot[]);
     } catch {
-      setSlotsError(true);
+      if (seq === slotsRequestSeq.current) setSlotsError(true);
     }
   }, [token, duration]);
 
