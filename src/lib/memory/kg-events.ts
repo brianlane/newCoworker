@@ -32,6 +32,12 @@ export type KgRetrievalEventInsert = {
   memory_from_archive: number;
   memory_fallback: boolean;
   caller_provided: boolean;
+  /** Wall-clock ms of the ranked-markdown selection (null pre-migration). */
+  memory_retrieval_ms?: number | null;
+  /** Wall-clock ms of the graph retrieval (null pre-migration). */
+  graph_retrieval_ms?: number | null;
+  /** Attributed "(unverified)" claim lines in graph_context (null pre-migration). */
+  graph_claims?: number | null;
 };
 
 export type KgRetrievalEventRow = KgRetrievalEventInsert & {
@@ -110,13 +116,49 @@ export async function listKgRetrievalStatsRows(
   const { data, error } = await db
     .from("kg_retrieval_events")
     .select(
-      "business_id, mode, graph_context_chars, memory_context_chars, graph_matched_entities, graph_facts, memory_fallback, caller_provided"
+      "business_id, mode, graph_context_chars, memory_context_chars, graph_matched_entities, graph_facts, memory_fallback, caller_provided, memory_retrieval_ms, graph_retrieval_ms, graph_claims"
     )
     .gte("created_at", sinceIso)
     .order("created_at", { ascending: false })
     .limit(limit);
   if (error) throw new Error(`listKgRetrievalStatsRows: ${error.message}`);
   return (data ?? []) as never;
+}
+
+// ── Extraction spend (gemini_spend_daily, surface = memory_graph) ────────
+
+export type KgExtractionSpend = { calls: number; costMicros: number };
+
+/**
+ * Per-business graph-extraction spend since `sinceDay` (YYYY-MM-DD, UTC),
+ * read from the same roll-up the admin Gemini page bills against — the
+ * dashboard's cost tiles and the daily fuse can never disagree with the
+ * bill.
+ */
+export async function listKgExtractionSpend(
+  sinceDay: string,
+  client?: SupabaseClient
+): Promise<Map<string, KgExtractionSpend>> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("gemini_spend_daily")
+    .select("business_id, call_count, cost_micros")
+    .eq("surface", "memory_graph")
+    .gte("day", sinceDay);
+  if (error) throw new Error(`listKgExtractionSpend: ${error.message}`);
+  const out = new Map<string, KgExtractionSpend>();
+  for (const row of (data ?? []) as Array<{
+    business_id: string;
+    call_count: number;
+    cost_micros: number;
+  }>) {
+    const prior = out.get(row.business_id) ?? { calls: 0, costMicros: 0 };
+    out.set(row.business_id, {
+      calls: prior.calls + row.call_count,
+      costMicros: prior.costMicros + row.cost_micros
+    });
+  }
+  return out;
 }
 
 /** Fixed-window prune (daily retention sweep). Returns rows deleted. */
@@ -205,6 +247,26 @@ export function classifyKgVerdict(event: VerdictInput): KgVerdict {
   return "neither";
 }
 
+/**
+ * A trust <= 1 fact renders with this marker (graph-retrieval.ts +
+ * graph-projection.ts share the contract) — the deterministic hook the
+ * claim flagging and the keep-verdict's quality qualifier both key on.
+ */
+const UNVERIFIED_CLAIM_MARKER = "(unverified)";
+
+/** Lines in a graph context that are attributed, unverified claims. */
+export function countUnverifiedClaims(graphContext: string): number {
+  if (!graphContext) return 0;
+  return graphContext
+    .split("\n")
+    .filter((line) => line.includes(UNVERIFIED_CLAIM_MARKER)).length;
+}
+
+/** Is this graph-context line an attributed claim (for amber rendering)? */
+export function isUnverifiedClaimLine(line: string): boolean {
+  return line.includes(UNVERIFIED_CLAIM_MARKER);
+}
+
 export type KgStats = {
   lookups: number;
   verdicts: Record<KgVerdict, number>;
@@ -216,9 +278,34 @@ export type KgStats = {
   avgMemoryChars: number;
   memoryFallbackRate: number;
   callerScopedRate: number;
+  /** Avg ranked-memory selection ms over MEASURED rows (null: none measured). */
+  avgMemoryMs: number | null;
+  /** Avg graph retrieval ms over MEASURED rows (null: none measured). */
+  avgGraphMs: number | null;
+  /**
+   * % of graph-contributing lookups whose graph context leaned on
+   * attributed unverified claims — the keep-verdict's quality qualifier.
+   * null when the graph contributed nothing (no basis to judge).
+   */
+  claimReliance: number | null;
 };
 
-type StatsInput = VerdictInput & { caller_provided: boolean };
+type StatsInput = VerdictInput & {
+  caller_provided: boolean;
+  memory_retrieval_ms?: number | null;
+  graph_retrieval_ms?: number | null;
+  /** Persisted claim count (compact stats rows); null pre-migration. */
+  graph_claims?: number | null;
+  /** Optional: only full event rows carry the context text (fallback). */
+  graph_context?: string;
+};
+
+/** Claim count for one event: persisted count, else re-derived from text. */
+function eventClaims(event: StatsInput): number {
+  if (typeof event.graph_claims === "number") return event.graph_claims;
+  if (typeof event.graph_context === "string") return countUnverifiedClaims(event.graph_context);
+  return 0;
+}
 
 export function aggregateKgStats(events: StatsInput[]): KgStats {
   const verdicts: Record<KgVerdict, number> = {
@@ -231,12 +318,30 @@ export function aggregateKgStats(events: StatsInput[]): KgStats {
   let memoryChars = 0;
   let fallbacks = 0;
   let callerScoped = 0;
+  let memoryMsSum = 0;
+  let memoryMsCount = 0;
+  let graphMsSum = 0;
+  let graphMsCount = 0;
+  let graphContributing = 0;
+  let claimLeaning = 0;
   for (const event of events) {
     verdicts[classifyKgVerdict(event)] += 1;
     graphChars += event.graph_context_chars;
     memoryChars += event.memory_context_chars;
     if (event.memory_fallback) fallbacks += 1;
     if (event.caller_provided) callerScoped += 1;
+    if (typeof event.memory_retrieval_ms === "number") {
+      memoryMsSum += event.memory_retrieval_ms;
+      memoryMsCount += 1;
+    }
+    if (typeof event.graph_retrieval_ms === "number") {
+      graphMsSum += event.graph_retrieval_ms;
+      graphMsCount += 1;
+    }
+    if (event.graph_context_chars > 0) {
+      graphContributing += 1;
+      if (eventClaims(event) > 0) claimLeaning += 1;
+    }
   }
   const n = events.length;
   const pct = (x: number) => (n === 0 ? 0 : Math.round((x / n) * 100));
@@ -248,8 +353,64 @@ export function aggregateKgStats(events: StatsInput[]): KgStats {
     avgGraphChars: n === 0 ? 0 : Math.round(graphChars / n),
     avgMemoryChars: n === 0 ? 0 : Math.round(memoryChars / n),
     memoryFallbackRate: pct(fallbacks),
-    callerScopedRate: pct(callerScoped)
+    callerScopedRate: pct(callerScoped),
+    avgMemoryMs: memoryMsCount === 0 ? null : Math.round(memoryMsSum / memoryMsCount),
+    avgGraphMs: graphMsCount === 0 ? null : Math.round(graphMsSum / graphMsCount),
+    claimReliance:
+      graphContributing === 0 ? null : Math.round((claimLeaning / graphContributing) * 100)
   };
+}
+
+// ── "Earning its keep" verdict ───────────────────────────────────────────
+
+export type KgKeepVerdict =
+  | "insufficient_data"
+  | "earning"
+  | "earning_on_claims"
+  | "borderline"
+  | "not_earning";
+
+/** Minimum lookups before a keep-verdict is rendered at all. */
+export const KG_KEEP_MIN_LOOKUPS = 20;
+/** graph-won rate (%) at/above which the graph is earning its keep. */
+export const KG_KEEP_EARNING_PCT = 10;
+/** graph-won rate (%) below which the graph is not earning its keep. */
+export const KG_KEEP_BORDERLINE_PCT = 3;
+/** claimReliance (%) above which an 'earning' verdict downgrades. */
+export const KG_KEEP_CLAIM_RELIANCE_PCT = 50;
+
+export const KG_KEEP_LABELS: Record<KgKeepVerdict, string> = {
+  insufficient_data: "Verdict pending",
+  earning: "Earning its keep",
+  earning_on_claims: "Earning, on claims",
+  borderline: "Borderline",
+  not_earning: "Not earning its keep"
+};
+
+/**
+ * Is the graph layer earning its keep for this tenant/window?
+ *
+ * Quantity: the graph-won rate — lookups where ranked memory fell back to
+ * filler while the graph matched real facts, i.e. answers that would have
+ * been materially better with the graph active.
+ * Quality (one-way DOWNGRADE only): an 'earning' verdict whose wins lean
+ * mostly on attributed unverified claims (claimReliance) drops to
+ * 'earning_on_claims' — hearsay-built win rates never show clean green.
+ * What no classifier can see: WRONG plain facts parse identically to right
+ * ones, so correctness spot-checks in the side-by-side stay human.
+ */
+export function kgKeepVerdict(
+  stats: Pick<KgStats, "lookups" | "graphOnlyRate" | "claimReliance">,
+  minLookups = KG_KEEP_MIN_LOOKUPS
+): KgKeepVerdict {
+  if (stats.lookups < minLookups) return "insufficient_data";
+  if (stats.graphOnlyRate >= KG_KEEP_EARNING_PCT) {
+    return (stats.claimReliance ?? 0) > KG_KEEP_CLAIM_RELIANCE_PCT
+      ? "earning_on_claims"
+      : "earning";
+  }
+  if (stats.graphOnlyRate >= KG_KEEP_BORDERLINE_PCT) return "borderline";
+  return "not_earning";
 }
 
 /** Per-business stats from a fleet-wide stats-row fetch. */

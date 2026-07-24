@@ -265,8 +265,38 @@ describe("lookupBusinessKnowledge", () => {
         graph_facts: 2,
         graph_context_chars: "- Amy Laidlaw (person)".length,
         memory_fallback: false,
-        caller_provided: true
+        caller_provided: true,
+        // Latency is measured (whole ms, non-negative) and the context
+        // carries no attributed claims.
+        memory_retrieval_ms: expect.any(Number),
+        graph_retrieval_ms: expect.any(Number),
+        graph_claims: 0
       })
+    );
+    const recorded = vi.mocked(recordKgRetrievalEvent).mock.calls[0][0];
+    expect(recorded.memory_retrieval_ms).toBeGreaterThanOrEqual(0);
+    expect(recorded.graph_retrieval_ms).toBeGreaterThanOrEqual(0);
+  });
+
+  it("persists the claim count when the graph context carries attributed claims", async () => {
+    vi.mocked(getBusinessConfig).mockResolvedValue({
+      identity_md: "identity",
+      soul_md: "soul",
+      website_md: "website",
+      memory_md: "---\n\n### Owner chat (2026-07-01)\n\n- We are closed on Sundays",
+      memory_graph_mode: "shadow"
+    } as never);
+    vi.mocked(retrieveGraphContext).mockResolvedValue({
+      context:
+        "- Amy Laidlaw phone: 602-695-1142\n" +
+        "- Bryan Buyer roof_status: replaced 2019 — claimed by +14805551234 (unverified)",
+      matchedEntities: 2,
+      facts: 2
+    });
+    gemini.mockResolvedValue(geminiOk("answer", null));
+    await lookupBusinessKnowledge(BIZ, "roof status?");
+    expect(recordKgRetrievalEvent).toHaveBeenCalledWith(
+      expect.objectContaining({ graph_claims: 1 })
     );
   });
 

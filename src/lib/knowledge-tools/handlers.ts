@@ -9,7 +9,7 @@ import {
 import { MEMORY_CONTEXT_MAX_CHARS, selectMemoryForQuestion } from "@/lib/memory/retrieval";
 import { GRAPH_CONTEXT_MAX_CHARS, retrieveGraphContext } from "@/lib/memory/graph-retrieval";
 import { resolveMemoryGraphMode } from "@/lib/memory/graph-db";
-import { recordKgRetrievalEvent } from "@/lib/memory/kg-events";
+import { countUnverifiedClaims, recordKgRetrievalEvent } from "@/lib/memory/kg-events";
 import {
   GeminiEmptyError,
   geminiGenerateTextDetailed,
@@ -202,6 +202,10 @@ export async function lookupBusinessKnowledge(
   // retrieveGraphContext never throws — a graph failure degrades to "".
   const graphHeader = "# memory graph (facts most relevant to the question)\n";
   let graphRetrieval = { context: "", matchedEntities: 0, facts: 0 };
+  // Wall-clock cost of each retrieval path, recorded on the comparison
+  // ledger so /admin/memory-graph can report TIME beside cost. Whole ms is
+  // plenty of resolution against a multi-second Gemini answer.
+  let graphRetrievalMs = 0;
   if (graphMode === "shadow" || graphMode === "active") {
     const graphBudget = Math.max(
       0,
@@ -210,10 +214,12 @@ export async function lookupBusinessKnowledge(
         PROMPT_MAX_CONTEXT_CHARS - parts.join("\n\n").length - (graphHeader.length + 2)
       )
     );
+    const graphStarted = performance.now();
     graphRetrieval = await retrieveGraphContext(businessId, question, {
       callerE164: options.callerE164,
       charBudget: graphBudget
     });
+    graphRetrievalMs = Math.round(performance.now() - graphStarted);
   }
   if (graphMode === "active" && graphRetrieval.context.length > 0) {
     parts.push(`${graphHeader}${graphRetrieval.context}`);
@@ -231,12 +237,14 @@ export async function lookupBusinessKnowledge(
       PROMPT_MAX_CONTEXT_CHARS - parts.join("\n\n").length - (memoryHeader.length + 2)
     )
   );
+  const memoryStarted = performance.now();
   const memorySelection = selectMemoryForQuestion(
     config?.memory_md ?? "",
     config?.memory_archive_md ?? "",
     question,
     memoryBudget
   );
+  const memoryRetrievalMs = Math.round(performance.now() - memoryStarted);
   if (memorySelection.context) {
     parts.push(`${memoryHeader}${memorySelection.context}`);
   }
@@ -304,7 +312,10 @@ export async function lookupBusinessKnowledge(
           memory_selected: memorySelection.selected,
           memory_from_archive: memorySelection.fromArchive,
           memory_fallback: memorySelection.fallback,
-          caller_provided: Boolean(options.callerE164)
+          caller_provided: Boolean(options.callerE164),
+          memory_retrieval_ms: memoryRetrievalMs,
+          graph_retrieval_ms: graphRetrievalMs,
+          graph_claims: countUnverifiedClaims(graphRetrieval.context)
         });
       } catch (ledgerErr) {
         logger.warn("knowledge-tools: kg ledger write failed; answer unaffected", {
