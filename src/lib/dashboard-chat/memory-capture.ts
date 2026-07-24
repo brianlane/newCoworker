@@ -35,7 +35,7 @@ import { logger } from "@/lib/logger";
  */
 export const OWNER_MEMORY_SYSTEM_PROMPT = [
   "You extract DURABLE business knowledge that a business OWNER wants their AI",
-  "receptionist/assistant to remember and use permanently, on customer SMS,",
+  "coworker/assistant to remember and use permanently, on customer SMS,",
   "phone calls, and when assisting the owner.",
   "",
   "You are given the owner's latest dashboard message. Decide whether it",
