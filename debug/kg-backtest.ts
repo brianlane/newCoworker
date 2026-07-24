@@ -282,6 +282,12 @@ class LocalGraphStore {
     for (const id of ids) stmt.run(supersededBy, id);
   };
 
+  touchFact = async (id: string) => {
+    this.db
+      .prepare("update memory_facts set stated_at = ? where id = ?")
+      .run(new Date().toISOString(), id);
+  };
+
   counts(): { entities: number; activeFacts: number; supersededFacts: number } {
     const e = this.db.prepare("select count(*) as n from memory_entities").get() as { n: number };
     const fa = this.db
@@ -347,7 +353,8 @@ async function main(): Promise<void> {
         updateEntity: store.updateEntity,
         listFacts: store.listFacts,
         insertFact: store.insertFact as never,
-        supersedeFacts: store.supersedeFacts
+        supersedeFacts: store.supersedeFacts,
+        touchFact: store.touchFact
       });
       console.log(
         `[build] ${batch.length} bullets → +${result.entitiesCreated} entities, ` +

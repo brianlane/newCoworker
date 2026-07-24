@@ -14,7 +14,7 @@
 
 import { logger } from "@/lib/logger";
 import type { GraphExtraction } from "./graph-extract";
-import { applyGraphExtraction, type GraphProvenance } from "./graph-write";
+import { applyGraphExtraction, normalizePhone, type GraphProvenance } from "./graph-write";
 import {
   deactivateMemoryFacts,
   getMemoryGraphMode,
@@ -109,10 +109,10 @@ export function contactExtraction(contact: {
   e164: string;
   email?: string | null;
 }): GraphExtraction {
-  const name = clean(contact.displayName);
-  // A nameless contact is just a number — nothing entity-shaped to add
-  // beyond what customer_memories already tracks.
-  if (!name) return { entities: [], facts: [] };
+  // A nameless contact still gets an identifier-named node (same
+  // convention as bookings/leads) so an owner-attached email lands in the
+  // graph; later ingests resolve onto it by phone and enrich the name.
+  const name = clean(contact.displayName) || contact.e164;
   return {
     entities: [
       {
@@ -205,12 +205,23 @@ export async function retirePinnedNote(
     const mode = await getMode(businessId);
     if (mode === "off") return { retired: 0 };
     const entities = await listEntities(businessId);
-    const person = entities.find((row) => row.phones.includes(e164));
-    if (!person) return { retired: 0 };
-    const facts = await listFacts(businessId, person.id, "owner_note");
-    if (facts.length === 0) return { retired: 0 };
-    await deactivate(facts.map((f) => f.id));
-    return { retired: facts.length };
+    // NORMALIZED phone match (same evidence rule as entity resolution) and
+    // person-kind only — an organization sharing the business main line
+    // must never shadow the actual contact. Every matching person is
+    // swept: duplicates are rare but leaving one stale is worse.
+    const wanted = normalizePhone(e164);
+    if (!wanted) return { retired: 0 };
+    const people = entities.filter(
+      (row) => row.kind === "person" && row.phones.some((p) => normalizePhone(p) === wanted)
+    );
+    let retired = 0;
+    for (const person of people) {
+      const facts = await listFacts(businessId, person.id, "owner_note");
+      if (facts.length === 0) continue;
+      await deactivate(facts.map((f) => f.id));
+      retired += facts.length;
+    }
+    return { retired };
   } catch (err) {
     logger.warn("graph-deterministic pinned-note retire failed (ignored)", {
       businessId,
