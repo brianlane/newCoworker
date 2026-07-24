@@ -13,9 +13,12 @@
  *
  * Phases:
  *   1. BUILD — the tenant's saved memory bullets (memory_md + archive,
- *      oldest first), and optionally their raw owner chat turns
- *      (--replay-chat, runs the capture classifier first), are extracted
- *      into the local graph.
+ *      oldest first), optionally their raw owner chat turns
+ *      (--replay-chat, runs the capture classifier first), and optionally
+ *      their historical CONVERSATION windows (--sources voice,sms,email —
+ *      per identified customer through the CUSTOMER-source extraction
+ *      prompt at trust 1, exactly what the live summarizer hook does) are
+ *      extracted into the local graph.
  *   2. REPLAY — real caller questions from voice_call_transcript_turns run
  *      through BOTH retrieval paths: the ranked-markdown selection
  *      (selectMemoryForQuestion) and graph retrieval over the local store
@@ -28,6 +31,8 @@
  *   npx tsx debug/kg-backtest.ts                          # HQ tenant
  *   npx tsx debug/kg-backtest.ts --business <uuid>        # e.g. Amy
  *   npx tsx debug/kg-backtest.ts --business <uuid> --replay-chat --max-turns 40
+ *   npx tsx debug/kg-backtest.ts --business <uuid> \
+ *     --sources voice,sms,email --limit-customers 20      # widened graph
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -53,6 +58,14 @@ const BUSINESS_ID = flag("business") ?? HQ_TENANT;
 const REPLAY_CHAT = args.includes("--replay-chat");
 const MAX_TURNS = intFlag("max-turns", 30);
 const MAX_QUESTIONS = intFlag("max-questions", 25);
+/** Widened-graph build: replay these conversational sources (voice,sms,email). */
+const SOURCES = new Set(
+  (flag("sources") ?? "")
+    .split(",")
+    .map((s) => s.trim())
+    .filter(Boolean)
+);
+const LIMIT_CUSTOMERS = intFlag("limit-customers", 20);
 const BATCH_SIZE = 15;
 
 /**
@@ -430,6 +443,137 @@ async function main(): Promise<void> {
     }
   }
 
+  // Optional widened build: historical conversation windows through the
+  // CUSTOMER-source prompt — the same per-identified-customer window shape
+  // and trust-1 attributed provenance the live summarizer hook uses, so
+  // the Phase-2 comparison runs over the graph a widened rollout WOULD
+  // have built. Mirrors kg-backfill's --sources replay but lands in the
+  // local throwaway store (zero Supabase writes).
+  let conversationWindows = 0;
+  if (SOURCES.size > 0) {
+    const { CUSTOMER_GRAPH_EXTRACTION_SYSTEM_PROMPT, composeConversationExtractionInput } =
+      await import("../src/lib/memory/graph-extract.ts");
+    const { dominantConversationSource } = await import(
+      "../src/lib/memory/graph-conversational.ts"
+    );
+    const { listVoiceTurnsForCustomer } = await import("../src/lib/db/voice-transcripts.ts");
+    const { listSmsHistoryForCustomer } = await import("../src/lib/customer-memory/db.ts");
+    const { listEmailLogForAddress } = await import("../src/lib/db/email-log.ts");
+
+    const { data: contactRows, error: contactsErr } = await db
+      .from("contacts")
+      .select("customer_e164, display_name, email, interaction_count")
+      .eq("business_id", BUSINESS_ID)
+      .gt("interaction_count", 0)
+      .order("interaction_count", { ascending: false })
+      .limit(LIMIT_CUSTOMERS);
+    if (contactsErr) throw new Error(`contacts read: ${contactsErr.message}`);
+    const contacts = (contactRows ?? []) as Array<{
+      customer_e164: string;
+      display_name: string | null;
+      email: string | null;
+    }>;
+    console.log(
+      `[build-sources] ${contacts.length} customers (sources=${[...SOURCES].join(",")})`
+    );
+
+    for (const contact of contacts) {
+      const sections: string[] = [];
+      let voiceTurns = 0;
+      let smsTurns = 0;
+      let emails = 0;
+      if (SOURCES.has("voice")) {
+        const turns = await listVoiceTurnsForCustomer(BUSINESS_ID, contact.customer_e164, {
+          maxCalls: 5
+        });
+        voiceTurns = turns.length;
+        if (turns.length > 0) {
+          sections.push(
+            "VOICE CALLS (oldest first):",
+            turns.map((t) => `${t.role}: ${t.content}`).join("\n"),
+            ""
+          );
+        }
+      }
+      if (SOURCES.has("sms")) {
+        const history = await listSmsHistoryForCustomer(BUSINESS_ID, contact.customer_e164, {
+          limit: 40
+        });
+        smsTurns = history.length;
+        if (history.length > 0) {
+          sections.push(
+            "SMS EXCHANGES (oldest first):",
+            history
+              .map((h) => `customer: ${h.inboundText}\nassistant: ${h.assistantReply ?? ""}`)
+              .join("\n"),
+            ""
+          );
+        }
+      }
+      if (SOURCES.has("email") && contact.email) {
+        const mail = await listEmailLogForAddress(BUSINESS_ID, contact.email, { limit: 10 });
+        emails = mail.length;
+        if (mail.length > 0) {
+          sections.push(
+            "EMAILS (oldest first):",
+            mail
+              .slice()
+              .reverse()
+              .map(
+                (m) =>
+                  `${m.direction}: ${m.subject ?? ""} — ${(m.body_preview ?? "").slice(0, 500)}`
+              )
+              .join("\n")
+          );
+        }
+      }
+      const transcript = sections.join("\n").trim().slice(-24_000);
+      if (!transcript) continue;
+
+      const indexRows = await store.listEntities(BUSINESS_ID);
+      const entityIndex = indexRows.map((row) => ({
+        id: row.id,
+        kind: row.kind,
+        name: row.canonical_name,
+        aliases: row.aliases,
+        phones: row.phones,
+        emails: row.emails
+      }));
+      const { text } = await geminiGenerateTextDetailed({
+        apiKey,
+        model,
+        systemInstruction: CUSTOMER_GRAPH_EXTRACTION_SYSTEM_PROMPT,
+        userText: composeConversationExtractionInput(transcript, entityIndex),
+        temperature: 0,
+        maxOutputTokens: 2000,
+        responseMimeType: "application/json"
+      });
+      const extraction = parseGraphExtraction(text, 1);
+      conversationWindows += 1;
+      if (extraction.entities.length === 0) continue;
+      const source = dominantConversationSource({ voiceTurns, smsTurns, emails });
+      const result = await applyGraphExtraction(
+        BUSINESS_ID,
+        extraction,
+        [transcript],
+        {
+          listEntities: store.listEntities,
+          insertEntity: store.insertEntity as never,
+          updateEntity: store.updateEntity,
+          listFacts: store.listFacts,
+          insertFact: store.insertFact as never,
+          supersedeFacts: store.supersedeFacts,
+          touchFact: store.touchFact
+        },
+        { source, trust: 1, attributedTo: contact.customer_e164 }
+      );
+      console.log(
+        `[build-sources] ${contact.customer_e164} (${contact.display_name ?? "unnamed"}) ` +
+          `source=${source} → +${result.entitiesCreated} entities, +${result.factsInserted} facts`
+      );
+    }
+  }
+
   const built = store.counts();
   console.log(`[build] local graph: ${JSON.stringify(built)}`);
 
@@ -502,7 +646,13 @@ async function main(): Promise<void> {
   const summary = {
     businessId: BUSINESS_ID,
     ranAt: new Date().toISOString(),
-    build: { memoryBullets: bullets.length, chatTurnsReplayed, ...built },
+    build: {
+      memoryBullets: bullets.length,
+      chatTurnsReplayed,
+      conversationSources: [...SOURCES],
+      conversationWindows,
+      ...built
+    },
     replay: {
       questions: replays.length,
       graphHit: replays.filter((r) => r.graph.chars > 0).length,
