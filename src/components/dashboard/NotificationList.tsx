@@ -81,12 +81,17 @@ export function NotificationList({ businessId, initial, highlightLogId }: Props)
   const [items, setItems] = useState<NotificationRow[]>(initial);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  // A ?logId= deep link opens directly on the matching alert.
-  const highlightedId = highlightLogId
-    ? (initial.find(
+  // A ?logId= deep link opens directly on the matching alert. One dispatch
+  // writes a row PER CHANNEL (dashboard/email/sms/whatsapp) sharing the same
+  // logId — prefer the dashboard row (the alert itself) over transport
+  // delivery records.
+  const matches = highlightLogId
+    ? initial.filter(
         (n) => String((n.payload as Record<string, unknown>)?.logId ?? "") === highlightLogId
-      )?.id ?? null)
-    : null;
+      )
+    : [];
+  const highlightedId =
+    matches.find((n) => n.delivery_channel === "dashboard")?.id ?? matches[0]?.id ?? null;
   const [expandedId, setExpandedId] = useState<string | null>(highlightedId);
   const highlightRef = useRef<HTMLLIElement | null>(null);
 
