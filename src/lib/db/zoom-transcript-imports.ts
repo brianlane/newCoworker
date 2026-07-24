@@ -2,12 +2,13 @@
  * Idempotency ledger for Zoom transcript imports (`zoom_transcript_imports`,
  * service-role only: RLS on, zero policies).
  *
- * One row per (business, meeting UUID). The webhook path CLAIMS before it
- * imports so Zoom's delivery retries and manual-then-webhook overlap
- * collapse to one document; a claim that fails downstream is RELEASED so
- * the retry (or the owner) can try again. Manual imports record their row
- * best-effort AFTER succeeding: they are never blocked by the ledger,
- * because the owner asked explicitly.
+ * One row per (business, meeting UUID). Both import paths CLAIM before
+ * importing, so Zoom's delivery retries and manual/webhook overlap collapse
+ * to one document; a claim that fails downstream is RELEASED so the retry
+ * (or the owner) can try again, and an abandoned in-flight claim becomes
+ * stealable after a lease window. A completed row never blocks an explicit
+ * manual RE-import (the owner may have deleted the document); the route
+ * repoints the row's document_id instead.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
@@ -17,22 +18,69 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 const UNIQUE_VIOLATION = "23505";
 
 /**
+ * An in-flight claim (document_id still null) older than this is considered
+ * abandoned (crash/timeout before release) and may be stolen by the next
+ * claimant. Generously above the import route's 120s execution budget.
+ */
+export const ZOOM_IMPORT_CLAIM_LEASE_MS = 10 * 60 * 1000;
+
+/**
  * Claim the (business, meeting) slot. Returns false when another delivery
  * already holds it (unique-violation), which callers treat as "duplicate,
- * skip quietly".
+ * skip quietly". A stale IN-FLIGHT claim (see ZOOM_IMPORT_CLAIM_LEASE_MS)
+ * is stolen atomically instead, so a crash that skipped the release can
+ * never permanently block a meeting's auto-import.
  */
 export async function claimZoomTranscriptImport(
   businessId: string,
   meetingUuid: string,
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  now: () => number = Date.now
 ): Promise<boolean> {
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db
     .from("zoom_transcript_imports")
     .insert({ business_id: businessId, meeting_uuid: meetingUuid });
   if (!error) return true;
-  if (error.code === UNIQUE_VIOLATION) return false;
-  throw new Error(`claimZoomTranscriptImport: ${error.message}`);
+  if (error.code !== UNIQUE_VIOLATION) {
+    throw new Error(`claimZoomTranscriptImport: ${error.message}`);
+  }
+
+  // Steal only an ABANDONED in-flight claim: document_id must still be
+  // null and the row older than the lease. The conditional update is the
+  // atomic arbiter when several retries race for the steal.
+  const staleCutoffIso = new Date(now() - ZOOM_IMPORT_CLAIM_LEASE_MS).toISOString();
+  const { data, error: stealError } = await db
+    .from("zoom_transcript_imports")
+    .update({ created_at: new Date(now()).toISOString() })
+    .match({ business_id: businessId, meeting_uuid: meetingUuid })
+    .is("document_id", null)
+    .lt("created_at", staleCutoffIso)
+    .select("id");
+  if (stealError) {
+    throw new Error(`claimZoomTranscriptImport steal: ${stealError.message}`);
+  }
+  return ((data as { id: string }[] | null)?.length ?? 0) > 0;
+}
+
+/**
+ * The ledger row for a meeting, or null. The manual import route uses this
+ * to distinguish "auto-import is mid-flight right now" (document_id null)
+ * from "already imported once" (document_id set).
+ */
+export async function getZoomTranscriptImport(
+  businessId: string,
+  meetingUuid: string,
+  client?: SupabaseClient
+): Promise<{ document_id: string | null; created_at: string } | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("zoom_transcript_imports")
+    .select("document_id,created_at")
+    .match({ business_id: businessId, meeting_uuid: meetingUuid })
+    .maybeSingle();
+  if (error) throw new Error(`getZoomTranscriptImport: ${error.message}`);
+  return (data as { document_id: string | null; created_at: string } | null) ?? null;
 }
 
 /**
@@ -97,33 +145,6 @@ export async function finalizeZoomTranscriptImport(
     .match({ business_id: businessId, meeting_uuid: meetingUuid });
   if (error) {
     logger.warn("zoom transcript ledger: finalize failed", {
-      businessId,
-      error: error.message
-    });
-  }
-}
-
-/**
- * Best-effort record from the MANUAL import path (after success), so a
- * later webhook delivery for the same meeting becomes a no-op. Duplicate
- * rows are fine to lose; never throws (worst case: the webhook later
- * imports a duplicate the owner deletes).
- */
-export async function recordManualZoomTranscriptImport(
-  businessId: string,
-  meetingUuid: string,
-  documentId: string,
-  client?: SupabaseClient
-): Promise<void> {
-  const db = await ledgerClientOrNull(client, "manual record");
-  if (!db) return;
-  const { error } = await db.from("zoom_transcript_imports").insert({
-    business_id: businessId,
-    meeting_uuid: meetingUuid,
-    document_id: documentId
-  });
-  if (error && error.code !== UNIQUE_VIOLATION) {
-    logger.warn("zoom transcript ledger: manual record failed", {
       businessId,
       error: error.message
     });

@@ -1,7 +1,8 @@
 /**
  * Tests for the Zoom transcript-import dedupe ledger
- * (src/lib/db/zoom-transcript-imports.ts): claim/duplicate semantics and
- * the best-effort release/finalize/manual-record paths that never throw.
+ * (src/lib/db/zoom-transcript-imports.ts): claim/duplicate/steal semantics,
+ * the manual-path row inspector, and the best-effort release/finalize paths
+ * that never throw.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -17,20 +18,25 @@ import { logger } from "@/lib/logger";
 import {
   claimZoomTranscriptImport,
   finalizeZoomTranscriptImport,
-  recordManualZoomTranscriptImport,
-  releaseZoomTranscriptImport
+  getZoomTranscriptImport,
+  releaseZoomTranscriptImport,
+  ZOOM_IMPORT_CLAIM_LEASE_MS
 } from "@/lib/db/zoom-transcript-imports";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const UUID = "jhqVQlf1RyuEX/1TCRs+Jg==";
 const DOC = "22222222-2222-4222-8222-222222222222";
+const NOW = 1_800_000_000_000;
 
 type Chain = {
   insert: ReturnType<typeof vi.fn>;
   update: ReturnType<typeof vi.fn>;
   delete: ReturnType<typeof vi.fn>;
+  select: ReturnType<typeof vi.fn>;
   match: ReturnType<typeof vi.fn>;
   is: ReturnType<typeof vi.fn>;
+  lt: ReturnType<typeof vi.fn>;
+  maybeSingle: ReturnType<typeof vi.fn>;
 };
 
 function chain(terminal: unknown): Chain & PromiseLike<unknown> {
@@ -38,21 +44,28 @@ function chain(terminal: unknown): Chain & PromiseLike<unknown> {
     insert: vi.fn(() => c),
     update: vi.fn(() => c),
     delete: vi.fn(() => c),
+    select: vi.fn(() => c),
     match: vi.fn(() => c),
     is: vi.fn(() => c),
+    lt: vi.fn(() => c),
+    maybeSingle: vi.fn(),
     then: (resolve: (v: unknown) => unknown) => Promise.resolve(terminal).then(resolve)
   };
   return c as never;
 }
 
-function makeDb(c: unknown) {
-  return { from: vi.fn(() => c) } as never;
+/** Each db.from() call consumes the next chain (claim runs two queries). */
+function makeDb(...chains: unknown[]) {
+  let i = 0;
+  return { from: vi.fn(() => chains[Math.min(i++, chains.length - 1)]) } as never;
 }
 
 beforeEach(() => {
   vi.clearAllMocks();
   defaultClientSpy.mockReset();
 });
+
+const DUP = { error: { code: "23505", message: "duplicate key" } };
 
 describe("claimZoomTranscriptImport", () => {
   it("returns true when the claim inserts", async () => {
@@ -61,22 +74,83 @@ describe("claimZoomTranscriptImport", () => {
     expect(c.insert).toHaveBeenCalledWith({ business_id: BIZ, meeting_uuid: UUID });
   });
 
-  it("returns false on a unique violation (someone already holds it)", async () => {
-    const c = chain({ error: { code: "23505", message: "duplicate key" } });
-    expect(await claimZoomTranscriptImport(BIZ, UUID, makeDb(c))).toBe(false);
+  it("returns false when a FRESH in-flight claim holds the slot", async () => {
+    const steal = chain({ data: [], error: null });
+    expect(await claimZoomTranscriptImport(BIZ, UUID, makeDb(chain(DUP), steal))).toBe(false);
+    expect(steal.is).toHaveBeenCalledWith("document_id", null);
   });
 
-  it("throws on any other insert error", async () => {
+  it("steals an ABANDONED in-flight claim past the lease window", async () => {
+    const steal = chain({ data: [{ id: "row-1" }], error: null });
+    expect(
+      await claimZoomTranscriptImport(BIZ, UUID, makeDb(chain(DUP), steal), () => NOW)
+    ).toBe(true);
+    expect(steal.update).toHaveBeenCalledWith({
+      created_at: new Date(NOW).toISOString()
+    });
+    expect(steal.lt).toHaveBeenCalledWith(
+      "created_at",
+      new Date(NOW - ZOOM_IMPORT_CLAIM_LEASE_MS).toISOString()
+    );
+    expect(steal.match).toHaveBeenCalledWith({ business_id: BIZ, meeting_uuid: UUID });
+  });
+
+  it("treats a null steal payload as not stolen", async () => {
+    const steal = chain({ data: null, error: null });
+    expect(await claimZoomTranscriptImport(BIZ, UUID, makeDb(chain(DUP), steal))).toBe(false);
+  });
+
+  it("throws on non-duplicate insert errors and on steal errors", async () => {
     const c = chain({ error: { code: "42P01", message: "no such table" } });
     await expect(claimZoomTranscriptImport(BIZ, UUID, makeDb(c))).rejects.toThrow(
       /no such table/
     );
+
+    const steal = chain({ data: null, error: { message: "steal denied" } });
+    await expect(
+      claimZoomTranscriptImport(BIZ, UUID, makeDb(chain(DUP), steal))
+    ).rejects.toThrow(/steal denied/);
   });
 
   it("uses the default service client when none is provided", async () => {
     const c = chain({ error: null });
     defaultClientSpy.mockReturnValue(makeDb(c));
     expect(await claimZoomTranscriptImport(BIZ, UUID)).toBe(true);
+    expect(defaultClientSpy).toHaveBeenCalled();
+  });
+});
+
+describe("getZoomTranscriptImport", () => {
+  it("returns the row when present", async () => {
+    const c = chain(null);
+    c.maybeSingle.mockResolvedValue({
+      data: { document_id: DOC, created_at: "2026-07-24T00:00:00Z" },
+      error: null
+    });
+    expect(await getZoomTranscriptImport(BIZ, UUID, makeDb(c))).toEqual({
+      document_id: DOC,
+      created_at: "2026-07-24T00:00:00Z"
+    });
+    expect(c.match).toHaveBeenCalledWith({ business_id: BIZ, meeting_uuid: UUID });
+  });
+
+  it("returns null when no row exists", async () => {
+    const c = chain(null);
+    c.maybeSingle.mockResolvedValue({ data: null, error: null });
+    expect(await getZoomTranscriptImport(BIZ, UUID, makeDb(c))).toBeNull();
+  });
+
+  it("throws on a query error", async () => {
+    const c = chain(null);
+    c.maybeSingle.mockResolvedValue({ data: null, error: { message: "read boom" } });
+    await expect(getZoomTranscriptImport(BIZ, UUID, makeDb(c))).rejects.toThrow(/read boom/);
+  });
+
+  it("uses the default service client when none is provided", async () => {
+    const c = chain(null);
+    c.maybeSingle.mockResolvedValue({ data: null, error: null });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    expect(await getZoomTranscriptImport(BIZ, UUID)).toBeNull();
     expect(defaultClientSpy).toHaveBeenCalled();
   });
 });
@@ -153,45 +227,6 @@ describe("finalizeZoomTranscriptImport", () => {
     await expect(finalizeZoomTranscriptImport(BIZ, UUID, DOC)).resolves.toBeUndefined();
     expect(logger.warn).toHaveBeenCalledWith(
       "zoom transcript ledger: finalize client unavailable",
-      expect.objectContaining({ error: "db down" })
-    );
-  });
-});
-
-describe("recordManualZoomTranscriptImport", () => {
-  it("records the manual import with its document", async () => {
-    const c = chain({ error: null });
-    await recordManualZoomTranscriptImport(BIZ, UUID, DOC, makeDb(c));
-    expect(c.insert).toHaveBeenCalledWith({
-      business_id: BIZ,
-      meeting_uuid: UUID,
-      document_id: DOC
-    });
-    expect(logger.warn).not.toHaveBeenCalled();
-  });
-
-  it("treats a unique violation as already-recorded (no warning)", async () => {
-    const c = chain({ error: { code: "23505", message: "duplicate key" } });
-    await recordManualZoomTranscriptImport(BIZ, UUID, DOC, makeDb(c));
-    expect(logger.warn).not.toHaveBeenCalled();
-  });
-
-  it("logs other insert errors instead of throwing", async () => {
-    const c = chain({ error: { code: "42P01", message: "no such table" } });
-    await recordManualZoomTranscriptImport(BIZ, UUID, DOC, makeDb(c));
-    expect(logger.warn).toHaveBeenCalledWith(
-      "zoom transcript ledger: manual record failed",
-      expect.objectContaining({ error: "no such table" })
-    );
-  });
-
-  it("skips the write when the service client is unavailable", async () => {
-    defaultClientSpy.mockImplementation(() => {
-      throw new Error("db down");
-    });
-    await expect(recordManualZoomTranscriptImport(BIZ, UUID, DOC)).resolves.toBeUndefined();
-    expect(logger.warn).toHaveBeenCalledWith(
-      "zoom transcript ledger: manual record client unavailable",
       expect.objectContaining({ error: "db down" })
     );
   });
