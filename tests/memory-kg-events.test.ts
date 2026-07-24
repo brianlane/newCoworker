@@ -353,6 +353,11 @@ describe("listKgExtractionSpend", () => {
     expect(c.eq).toHaveBeenCalledWith("surface", "memory_graph");
     expect(c.gte).toHaveBeenCalledWith("day", "2026-07-17");
     expect(c.range).toHaveBeenCalledWith(0, 999);
+    // TOTAL order for offset paging: one row per day/tenant/model/pricing
+    // source, so every sort key must participate.
+    for (const col of ["day", "business_id", "model", "pricing_source"]) {
+      expect(c.order).toHaveBeenCalledWith(col, { ascending: true });
+    }
   });
 
   it("pages past PostgREST's silent 1000-row cap", async () => {

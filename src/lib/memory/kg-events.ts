@@ -151,8 +151,13 @@ export async function listKgExtractionSpend(
       .select("business_id, call_count, cost_micros")
       .eq("surface", "memory_graph")
       .gte("day", sinceDay)
+      // TOTAL order (the view has one row per day/tenant/model/pricing
+      // source): offset paging under a partial sort can drop or duplicate
+      // rows past the cap — same ordering contract as listGeminiSpendDaily.
       .order("day", { ascending: true })
       .order("business_id", { ascending: true })
+      .order("model", { ascending: true })
+      .order("pricing_source", { ascending: true })
       .range(from, from + pageSize - 1);
     if (error) throw new Error(`listKgExtractionSpend: ${error.message}`);
     const rows = (data ?? []) as Array<{
