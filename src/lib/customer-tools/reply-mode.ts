@@ -34,6 +34,12 @@ import { logger } from "@/lib/logger";
 /** `context.canceled.by` marker for a stop-texting cancel. */
 export const TEXTING_STOPPED_CANCELED_BY = "owner_stopped_texting";
 
+/**
+ * Drain bound for the 25-runs-per-call cancel core: 8 × 25 = 200 pending
+ * runs, far beyond any real lead. Exhausting it reports an incomplete sweep.
+ */
+const MAX_CANCEL_DRAIN_PASSES = 8;
+
 export type ContactTextingMode = "suppress" | "auto";
 
 export type SetContactReplyModeArgs = {
@@ -147,14 +153,30 @@ export async function setContactTextingMode(
           )
         ];
       }
-      const cancelResult = await cancelRuns(
-        db,
-        businessId,
-        identitySet,
-        TEXTING_STOPPED_CANCELED_BY
-      );
-      canceledRuns = cancelResult.canceledRuns;
-      runsSweepComplete = cancelResult.sweepComplete;
+      // DRAIN the cancel core: it cancels at most 25 runs per call (the
+      // goal-jump parity bound), and unlike the spam flag there is no
+      // opt-out backstop here — suppress does not block AiFlow outbound
+      // steps, so every pending run must actually be canceled. Loop until
+      // a pass cancels nothing; hitting the pass cap reports an incomplete
+      // sweep instead of a false "all stopped" (Bugbot Medium, PR #898).
+      for (let pass = 0; ; pass++) {
+        if (pass >= MAX_CANCEL_DRAIN_PASSES) {
+          runsSweepComplete = false;
+          break;
+        }
+        const cancelResult = await cancelRuns(
+          db,
+          businessId,
+          identitySet,
+          TEXTING_STOPPED_CANCELED_BY
+        );
+        canceledRuns += cancelResult.canceledRuns;
+        if (!cancelResult.sweepComplete) {
+          runsSweepComplete = false;
+          break;
+        }
+        if (cancelResult.canceledRuns === 0) break;
+      }
     } catch (err) {
       logger.error("set_contact_reply_mode: run cancel failed after mode write", {
         businessId,

@@ -44,7 +44,11 @@ function deps(db: unknown, overrides: Record<string, unknown> = {}) {
   return {
     createDb: vi.fn(async () => db) as never,
     setReplyMode: vi.fn(async () => undefined) as never,
-    cancelRuns: vi.fn(async () => ({ canceledRuns: 1, sweepComplete: true })) as never,
+    // Drain-friendly default: one pass cancels a run, the next finds none.
+    cancelRuns: vi
+      .fn()
+      .mockResolvedValueOnce({ canceledRuns: 1, sweepComplete: true })
+      .mockResolvedValue({ canceledRuns: 0, sweepComplete: true }) as never,
     ...overrides
   };
 }
@@ -161,6 +165,42 @@ describe("setContactTextingMode", () => {
       expect(res.runsSweepComplete).toBe(false);
       expect(res.note).toContain("could not be confirmed as stopped");
     }
+  });
+
+  it("drains the 25-run cancel bound across passes, summing the counts", async () => {
+    // Suppress has no opt-out backstop, so a single capped call is not
+    // enough (Bugbot Medium, PR #898) — the core loops until a pass finds
+    // nothing.
+    const { db } = makeDb([{ data: [], error: null }]);
+    const d = deps(db, {
+      cancelRuns: vi
+        .fn()
+        .mockResolvedValueOnce({ canceledRuns: 25, sweepComplete: true })
+        .mockResolvedValueOnce({ canceledRuns: 3, sweepComplete: true })
+        .mockResolvedValue({ canceledRuns: 0, sweepComplete: true }) as never
+    });
+    const res = await setContactTextingMode(BIZ, { phone: PHONE, mode: "suppress" }, d);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.canceledRuns).toBe(28);
+      expect(res.runsSweepComplete).toBe(true);
+    }
+    expect((d.cancelRuns as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(3);
+  });
+
+  it("exhausting the drain cap reports an incomplete sweep, never a false all-stopped", async () => {
+    const { db } = makeDb([{ data: [], error: null }]);
+    const d = deps(db, {
+      cancelRuns: vi.fn(async () => ({ canceledRuns: 25, sweepComplete: true })) as never
+    });
+    const res = await setContactTextingMode(BIZ, { phone: PHONE, mode: "suppress" }, d);
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.runsSweepComplete).toBe(false);
+      expect(res.canceledRuns).toBe(25 * 8);
+      expect(res.note).toContain("could not be confirmed as stopped");
+    }
+    expect((d.cancelRuns as ReturnType<typeof vi.fn>).mock.calls).toHaveLength(8);
   });
 
   it("a client blow-up after the mode write degrades to the honest partial result (Error and non-Error)", async () => {
