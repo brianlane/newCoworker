@@ -200,9 +200,13 @@ function patchColumns(patch: BookingPageSettingsPatch): Record<string, unknown> 
   };
 }
 
-/** Postgres unique-violation on the slug index → owner-facing message. */
+/**
+ * Postgres unique-violation on the SLUG index → owner-facing message.
+ * Other unique violations (e.g. a concurrent first-time insert racing on
+ * uq_booking_pages_business) stay generic errors.
+ */
 function mapSlugCollision(message: string): Error {
-  if (message.includes("uq_booking_pages_slug") || message.includes("duplicate key")) {
+  if (message.includes("uq_booking_pages_slug")) {
     return new BookingPageValidationError("That custom link is already taken");
   }
   return new Error(`upsertBookingPage: ${message}`);

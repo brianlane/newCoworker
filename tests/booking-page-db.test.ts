@@ -259,6 +259,20 @@ describe("upsertBookingPage", () => {
     await expect(upsertBookingPage(BIZ, { slug: "taken-name" }, client)).rejects.toThrow(
       "That custom link is already taken"
     );
+
+    // Any OTHER unique violation stays a generic error, never slug copy.
+    const otherUnique = fakeDb([
+      { data: null, error: null },
+      {
+        data: null,
+        error: {
+          message: 'duplicate key value violates unique constraint "uq_booking_pages_business"'
+        }
+      }
+    ]);
+    await expect(upsertBookingPage(BIZ, {}, otherUnique.client)).rejects.toThrow(
+      "upsertBookingPage: duplicate key"
+    );
   });
 
   it("throws on read, insert, and update errors", async () => {
