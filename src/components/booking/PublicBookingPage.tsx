@@ -75,13 +75,18 @@ function monthLabel(year: number, month: number): string {
   );
 }
 
-function fullDayLabel(isoDate: string, timeZone: string): string {
+/**
+ * Render a CIVIL date (already computed in the visitor's zone) without any
+ * second timezone conversion: formatting `${isoDate}T12:00:00Z` in the
+ * visitor zone shifts far-ahead zones (UTC+13/+14) onto the wrong day.
+ */
+function fullDayLabel(isoDate: string): string {
   return new Intl.DateTimeFormat("en-US", {
-    timeZone,
+    timeZone: "UTC",
     weekday: "long",
     month: "long",
     day: "numeric"
-  }).format(new Date(`${isoDate}T12:00:00Z`));
+  }).format(new Date(`${isoDate}T00:00:00Z`));
 }
 
 export function PublicBookingPage({
@@ -232,7 +237,7 @@ export function PublicBookingPage({
   if (booked) {
     const localLine =
       booked.startLocal ??
-      `${fullDayLabel(isoDateInZone(booked.startIso, timezone), timezone)}, ${timeLabelInZone(booked.startIso, timezone)}`;
+      `${fullDayLabel(isoDateInZone(booked.startIso, timezone))}, ${timeLabelInZone(booked.startIso, timezone)}`;
     return (
       <div className={`${panel} mx-auto max-w-xl p-8 text-center`}>
         <h1 className="text-2xl font-bold text-claw-green">{strings.bookedHeading}</h1>
@@ -308,7 +313,7 @@ export function PublicBookingPage({
               {strings.confirmHeading}
             </h2>
             <p className="mt-1 text-sm text-claw-green">
-              {fullDayLabel(isoDateInZone(selectedSlot.startIso, timezone), timezone)},{" "}
+              {fullDayLabel(isoDateInZone(selectedSlot.startIso, timezone))},{" "}
               {timeLabelInZone(selectedSlot.startIso, timezone)}
             </p>
             <form
@@ -495,7 +500,7 @@ export function PublicBookingPage({
                   {selectedDay ? (
                     <div>
                       <p className="text-sm font-medium text-parchment">
-                        {fullDayLabel(selectedDay, timezone)}
+                        {fullDayLabel(selectedDay)}
                       </p>
                       <div className="mt-3 flex max-h-80 flex-col gap-2 overflow-y-auto pr-1">
                         {(slotsByDay.get(selectedDay) ?? []).map((slot) => (

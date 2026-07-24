@@ -32,11 +32,22 @@ import { getActiveZoomConnectionId } from "@/lib/db/zoom-connections";
 import { parseBusinessHours } from "@/lib/business-profile/profile";
 import { normalizeContactNumber } from "@/lib/telnyx/format";
 import { ensureCapturedContact } from "@/lib/customer-memory/capture-contact";
-import { rateLimitDurable } from "@/lib/rate-limit";
+import {
+  claimBookingDedupe,
+  releaseBookingDedupe
+} from "@/lib/calendar-tools/booking-dedupe";
 import { localClock } from "../../../supabase/functions/_shared/ai_flows/engine";
 import { logger } from "@/lib/logger";
 
 export const BOOKING_PAGE_SOURCE_TAG = "Booking Page";
+
+/**
+ * Synthetic attendee key for the slot-scoped submission claim: uniqueness
+ * rides the ledger's (business, attendee_key, start_at), so one key
+ * serializes all public-page submissions for the same slot without ever
+ * colliding with a real attendee's claim.
+ */
+export const PUBLIC_SLOT_CLAIM_KEY = "slot:public-booking-page";
 
 const DAY_MS = 24 * 60 * 60 * 1000;
 
@@ -258,16 +269,25 @@ export async function submitPublicBooking(
   if (!stillOpen) return { ok: false, detail: "slot_taken" };
 
   // Two DIFFERENT visitors can both pass the re-verify while provider
-  // free/busy is stale (the dedupe ledger only guards the SAME attendee),
-  // so take a fleet-wide durable claim on (business, start) before the
-  // write: the first caller proceeds, the loser is told to re-pick. The
-  // claim self-expires, so a failed booking only parks the slot briefly;
-  // after a successful one, free/busy itself withdraws the slot.
-  const slotClaim = await rateLimitDurable(
-    `booking-slot:${context.businessId}:${start.toISOString()}`,
-    { interval: 60 * 1000, maxRequests: 1 }
+  // free/busy is stale (the booking core's own dedupe only guards the SAME
+  // attendee), so take a slot-scoped ledger claim under a synthetic
+  // attendee key before the write: the first caller proceeds, a racer gets
+  // in_flight/duplicate and is told to re-pick. Refusal paths RELEASE the
+  // claim immediately (the slot must not stay parked); after a successful
+  // booking the unconfirmed claim simply lapses with its lease while
+  // provider free/busy takes over withdrawing the slot. Fail-open on a
+  // ledger hiccup, matching the booking core's own claim contract.
+  const slotClaim = await claimBookingDedupe(
+    context.businessId,
+    PUBLIC_SLOT_CLAIM_KEY,
+    start.toISOString()
   );
-  if (!slotClaim.success) return { ok: false, detail: "slot_taken" };
+  if (slotClaim && slotClaim.kind !== "claimed") {
+    return { ok: false, detail: "slot_taken" };
+  }
+  const releaseSlotClaim = async () => {
+    if (slotClaim?.kind === "claimed") await releaseBookingDedupe(slotClaim.id);
+  };
 
   // Daily-cap recount AFTER winning the slot claim: concurrent submissions
   // for DIFFERENT slots on the same business-local day could each pass the
@@ -286,7 +306,10 @@ export async function submitPublicBooking(
     const sameDay = nearby.filter(
       (d) => localClock(d, context.timezone).isoDate === slotDay
     ).length;
-    if (sameDay >= cap) return { ok: false, detail: "slot_taken" };
+    if (sameDay >= cap) {
+      await releaseSlotClaim();
+      return { ok: false, detail: "slot_taken" };
+    }
   }
 
   const endIso = new Date(start.getTime() + input.durationMinutes * 60_000).toISOString();
@@ -317,6 +340,9 @@ export async function submitPublicBooking(
   );
 
   if (!booked.ok) {
+    // Every refusal releases the slot claim so the time is immediately
+    // bookable by someone else.
+    await releaseSlotClaim();
     // The attendee duplicate guard is a deliberate policy on this public
     // surface (one upcoming appointment per person keeps a single phone
     // number from strip-mining the calendar) — surface it honestly instead

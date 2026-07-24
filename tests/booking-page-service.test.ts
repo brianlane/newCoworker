@@ -16,13 +16,17 @@ vi.mock("@/lib/db/employees", () => ({ listTeamMembers: vi.fn(), listTimeOff: vi
 vi.mock("@/lib/db/zoom-connections", () => ({ getActiveZoomConnectionId: vi.fn() }));
 vi.mock("@/lib/customer-memory/capture-contact", () => ({ ensureCapturedContact: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }));
-vi.mock("@/lib/rate-limit", () => ({ rateLimitDurable: vi.fn() }));
+vi.mock("@/lib/calendar-tools/booking-dedupe", () => ({
+  claimBookingDedupe: vi.fn(),
+  releaseBookingDedupe: vi.fn()
+}));
 vi.mock("@/lib/logger", () => ({
   logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() }
 }));
 
 import {
   BOOKING_PAGE_SOURCE_TAG,
+  PUBLIC_SLOT_CLAIM_KEY,
   getBookingPageContext,
   listPublicSlots,
   submitPublicBooking
@@ -42,7 +46,10 @@ import { listTeamMembers, listTimeOff } from "@/lib/db/employees";
 import { getActiveZoomConnectionId } from "@/lib/db/zoom-connections";
 import { ensureCapturedContact } from "@/lib/customer-memory/capture-contact";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { rateLimitDurable } from "@/lib/rate-limit";
+import {
+  claimBookingDedupe,
+  releaseBookingDedupe
+} from "@/lib/calendar-tools/booking-dedupe";
 import { logger } from "@/lib/logger";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -86,7 +93,8 @@ const mockCapture = vi.mocked(ensureCapturedContact);
 const mockMembers = vi.mocked(listTeamMembers);
 const mockTimeOff = vi.mocked(listTimeOff);
 const mockClientFactory = vi.mocked(createSupabaseServiceClient);
-const mockSlotClaim = vi.mocked(rateLimitDurable);
+const mockSlotClaim = vi.mocked(claimBookingDedupe);
+const mockSlotRelease = vi.mocked(releaseBookingDedupe);
 const mockListStarts = vi.mocked(listBookingStartsBetween);
 
 function ledgerDb(result: { data?: unknown; error?: { message: string } | null }) {
@@ -109,7 +117,8 @@ beforeEach(() => {
   mockBusy.mockResolvedValue([]);
   mockClientFactory.mockResolvedValue(ledgerDb({ data: [], error: null }));
   mockCapture.mockResolvedValue({ created: true });
-  mockSlotClaim.mockResolvedValue({ success: true } as never);
+  mockSlotClaim.mockResolvedValue({ kind: "claimed", id: "claim-1" });
+  mockSlotRelease.mockResolvedValue(undefined);
   mockListStarts.mockResolvedValue([]);
 });
 
@@ -335,7 +344,7 @@ describe("submitPublicBooking", () => {
     expect(mockBook).not.toHaveBeenCalled();
   });
 
-  it("recounts the daily cap after winning the slot claim (different-slot race)", async () => {
+  it("recounts the daily cap after winning the slot claim, releasing it on refusal", async () => {
     mockPage.mockResolvedValue({ ...PAGE, max_daily_bookings: 1 });
     // Re-verify sees an open day; by the post-claim recount a concurrent
     // booking for ANOTHER slot on the same day has landed in the ledger.
@@ -347,6 +356,7 @@ describe("submitPublicBooking", () => {
       detail: "slot_taken"
     });
     expect(mockBook).not.toHaveBeenCalled();
+    expect(mockSlotRelease).toHaveBeenCalledWith("claim-1");
 
     // Same shape with a quiet day passes.
     mockListStarts.mockResolvedValue([]);
@@ -354,7 +364,7 @@ describe("submitPublicBooking", () => {
     expect(out.ok).toBe(true);
   });
 
-  it("maps the attendee duplicate guard to already_booked (deliberate one-per-person policy)", async () => {
+  it("maps the attendee duplicate guard to already_booked and releases the claim", async () => {
     mockBook.mockResolvedValueOnce({ ok: false, detail: "attendee_already_booked" });
     expect(await submitPublicBooking(TOKEN, VALID)).toEqual({
       ok: false,
@@ -362,19 +372,50 @@ describe("submitPublicBooking", () => {
     });
     expect(logger.warn).not.toHaveBeenCalled();
     expect(mockCapture).not.toHaveBeenCalled();
+    expect(mockSlotRelease).toHaveBeenCalledWith("claim-1");
   });
 
-  it("loses the durable slot claim to a racing visitor: slot_taken, no write", async () => {
-    mockSlotClaim.mockResolvedValueOnce({ success: false } as never);
+  it("loses the slot claim to a racing visitor (in_flight and duplicate): slot_taken, no write", async () => {
+    mockSlotClaim.mockResolvedValueOnce({ kind: "in_flight" });
     expect(await submitPublicBooking(TOKEN, VALID)).toEqual({
       ok: false,
       detail: "slot_taken"
     });
     expect(mockSlotClaim).toHaveBeenCalledWith(
-      `booking-slot:${BIZ}:2026-01-05T16:00:00.000Z`,
-      { interval: 60 * 1000, maxRequests: 1 }
+      BIZ,
+      PUBLIC_SLOT_CLAIM_KEY,
+      "2026-01-05T16:00:00.000Z"
     );
     expect(mockBook).not.toHaveBeenCalled();
+
+    mockSlotClaim.mockResolvedValueOnce({ kind: "duplicate", eventId: "evt-x" });
+    expect(await submitPublicBooking(TOKEN, VALID)).toEqual({
+      ok: false,
+      detail: "slot_taken"
+    });
+    expect(mockBook).not.toHaveBeenCalled();
+  });
+
+  it("a fail-open (null) claim releases nothing on a later refusal", async () => {
+    mockSlotClaim.mockResolvedValueOnce(null);
+    mockBook.mockResolvedValueOnce({ ok: false, detail: "provider_error" });
+    expect(await submitPublicBooking(TOKEN, VALID)).toEqual({
+      ok: false,
+      detail: "booking_failed"
+    });
+    expect(mockSlotRelease).not.toHaveBeenCalled();
+  });
+
+  it("fails open when the claim ledger is unavailable, and never releases on success", async () => {
+    mockSlotClaim.mockResolvedValueOnce(null);
+    const out = await submitPublicBooking(TOKEN, VALID);
+    expect(out.ok).toBe(true);
+    expect(mockSlotRelease).not.toHaveBeenCalled();
+
+    // Claimed + successful booking: the claim lapses with its lease.
+    const out2 = await submitPublicBooking(TOKEN, VALID);
+    expect(out2.ok).toBe(true);
+    expect(mockSlotRelease).not.toHaveBeenCalled();
   });
 
   it("books through the shared calendar core and files the contact", async () => {
@@ -438,5 +479,6 @@ describe("submitPublicBooking", () => {
       expect.objectContaining({ businessId: BIZ, detail: null })
     );
     expect(mockCapture).not.toHaveBeenCalled();
+    expect(mockSlotRelease).toHaveBeenCalledWith("claim-1");
   });
 });

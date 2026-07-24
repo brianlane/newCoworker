@@ -231,6 +231,8 @@ export async function listBookingStartsBetween(
     .from("calendar_booking_dedupe")
     .select("start_at")
     .eq("business_id", businessId)
+    // Confirmed bookings only (see listUpcomingBookings).
+    .not("event_id", "is", null)
     .gte("start_at", fromIso)
     .lt("start_at", toIso);
   if (error) throw new Error(`listBookingStartsBetween: ${error.message}`);

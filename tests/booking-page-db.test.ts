@@ -48,7 +48,7 @@ function fakeDb(results: QueryResult[]) {
 
   function builder(): Record<string, unknown> {
     const b: Record<string, unknown> = {};
-    for (const method of ["select", "eq", "gte", "lt", "insert", "update", "delete"]) {
+    for (const method of ["select", "eq", "not", "gte", "lt", "order", "limit", "insert", "update", "delete"]) {
       b[method] = vi.fn((...args: unknown[]) => {
         record(method, args);
         return b;
