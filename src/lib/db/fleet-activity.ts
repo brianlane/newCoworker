@@ -37,6 +37,12 @@ export type FleetActivityItem = {
   label: string;
   /** Owning tenant — the card names it and links to /admin/<id>. */
   businessId: string;
+  /**
+   * The item's page in the TENANT dashboard (same per-kind links as the
+   * owner feed) — the admin rows open it under a view-as session for
+   * `businessId`, landing the admin on the item itself.
+   */
+  href: string;
   /** ISO timestamp used for ordering and display. */
   at: string;
 };
@@ -89,7 +95,11 @@ export type FleetEmailRow = {
 };
 
 export type FleetFlowRow = {
+  /** The run id — deep-links the item straight to this run's detail. */
+  id: string;
   business_id: string;
+  /** The owning flow id — scopes the runs page so the run is in view. */
+  flow_id: string;
   status: string;
   created_at: string;
   ai_flows: { name: string } | { name: string }[] | null;
@@ -158,6 +168,7 @@ export function buildFleetActivityFeed(input: FleetActivityInput): FleetActivity
         c.caller_e164 ? named(c.business_id, c.caller_e164) : "unknown caller"
       } (${c.status})`,
       businessId: c.business_id,
+      href: "/dashboard/calls",
       at: c.started_at
     });
   });
@@ -171,6 +182,7 @@ export function buildFleetActivityFeed(input: FleetActivityInput): FleetActivity
       variant: "pending",
       label: `Text from ${named(r.business_id, cp)}`,
       businessId: r.business_id,
+      href: `/dashboard/messages/${encodeURIComponent(cp)}`,
       at: r.created_at
     });
   });
@@ -185,6 +197,7 @@ export function buildFleetActivityFeed(input: FleetActivityInput): FleetActivity
       variant: "neutral",
       label: `Reply to ${named(r.business_id, cp)}`,
       businessId: r.business_id,
+      href: `/dashboard/messages/${encodeURIComponent(cp)}`,
       at: r.updated_at
     });
   });
@@ -202,6 +215,7 @@ export function buildFleetActivityFeed(input: FleetActivityInput): FleetActivity
       variant: fromFlow ? "success" : "neutral",
       label: `Text to ${named(r.business_id, r.to_e164)}`,
       businessId: r.business_id,
+      href: `/dashboard/messages/${encodeURIComponent(r.to_e164)}`,
       at: r.created_at
     });
   });
@@ -221,6 +235,7 @@ export function buildFleetActivityFeed(input: FleetActivityInput): FleetActivity
       variant: fromFlow ? "success" : inbound ? "pending" : "neutral",
       label: `${inbound ? "Email from" : "Email to"} ${who}${subject}`,
       businessId: r.business_id,
+      href: "/dashboard/emails",
       at: r.created_at
     });
   });
@@ -232,6 +247,9 @@ export function buildFleetActivityFeed(input: FleetActivityInput): FleetActivity
       variant: "success",
       label: `AiFlow: ${flowName(r.ai_flows)} (${r.status})`,
       businessId: r.business_id,
+      // Deep-link to this exact run on the flow's runs page (same shape as
+      // the owner feed) so clicking a failed run opens its steps/error.
+      href: `/dashboard/aiflows/runs?flowId=${encodeURIComponent(r.flow_id)}&run=${encodeURIComponent(r.id)}`,
       at: r.created_at
     });
   });
@@ -248,6 +266,7 @@ export function buildFleetActivityFeed(input: FleetActivityInput): FleetActivity
       variant: "pending",
       label: `New customer: ${who}`,
       businessId: r.business_id,
+      href: `/dashboard/customers/${encodeURIComponent(r.customer_e164)}`,
       at: r.created_at
     });
   });
@@ -261,6 +280,8 @@ export function buildFleetActivityFeed(input: FleetActivityInput): FleetActivity
       variant: "success",
       label: adminAlertSummary(r),
       businessId: r.business_id,
+      // Provisioning finishes / tool captures have no deeper owner page.
+      href: "/dashboard",
       at: r.created_at
     });
   });
@@ -437,7 +458,7 @@ export async function getFleetRecentActivity(
         : restrict(
               db
                 .from("ai_flow_runs")
-                .select("business_id, status, created_at, ai_flows(name)")
+                .select("id, business_id, flow_id, status, created_at, ai_flows(name)")
                 .gte("created_at", since)
             )
             .order("created_at", { ascending: false })

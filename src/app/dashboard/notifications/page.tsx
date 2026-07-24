@@ -23,8 +23,13 @@ import { NotificationList } from "@/components/dashboard/NotificationList";
 
 export const dynamic = "force-dynamic";
 
-export default async function NotificationsPage() {
+export default async function NotificationsPage(props: {
+  searchParams?: Promise<{ logId?: string }>;
+}) {
   const t = await getTranslations("dashboard.notificationsPage");
+  // Deep link from the activity feeds (owner card and admin view-as click-
+  // throughs alike): auto-expand the alert dispatched from this log id.
+  const highlightLogId = (await props.searchParams)?.logId;
   const user = await getAuthUser();
   if (!user) redirect("/login?redirectTo=/dashboard/notifications");
   if (!user.email) redirect("/login");
@@ -143,7 +148,11 @@ export default async function NotificationsPage() {
             <div className="flex items-center justify-between mb-4">
               <h2 className="text-sm font-semibold text-parchment">{t("recent")}</h2>
             </div>
-            <NotificationList businessId={businessId} initial={recentWithNames} />
+            <NotificationList
+              businessId={businessId}
+              initial={recentWithNames}
+              highlightLogId={highlightLogId}
+            />
           </Card>
         </>
       )}
