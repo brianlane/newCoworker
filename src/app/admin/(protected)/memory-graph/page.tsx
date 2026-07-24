@@ -226,14 +226,19 @@ export default async function MemoryGraphAdminPage({
   const FLEET_STATS_LIMIT = 5000;
   const EVENTS_LIMIT = 500;
 
-  const [businesses, defaultSettingRaw, statsRows, extractionSpend] = await Promise.all([
+  // Spend degrades to an EXPLICIT unavailable state — a failed ledger read
+  // must never render as "$0.00 spent" during a rollout decision.
+  const [businesses, defaultSettingRaw, statsRows, spendResult] = await Promise.all([
     listBusinesses(),
     getAdminPlatformSetting(MEMORY_GRAPH_DEFAULT_MODE_KEY).catch(() => null),
     listKgRetrievalStatsRows(since, FLEET_STATS_LIMIT).catch(() => []),
-    listKgExtractionSpend(sinceDay(window)).catch(
-      () => new Map<string, { calls: number; costMicros: number }>()
+    listKgExtractionSpend(sinceDay(window)).then(
+      (map) => ({ ok: true as const, map }),
+      () => ({ ok: false as const, map: new Map<string, { calls: number; costMicros: number }>() })
     )
   ]);
+  const spendAvailable = spendResult.ok;
+  const extractionSpend = spendResult.map;
   const fleetSpend = [...extractionSpend.values()].reduce(
     (sum, s) => ({ calls: sum.calls + s.calls, costMicros: sum.costMicros + s.costMicros }),
     { calls: 0, costMicros: 0 }
@@ -317,13 +322,20 @@ export default async function MemoryGraphAdminPage({
           <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider">
             Tenants ({window})
           </h2>
-          <p className="text-xs text-parchment/50">
-            Extraction spend since {sinceDay(window)} (UTC days):{" "}
-            <span className="text-parchment">{microsToMoney(fleetSpend.costMicros)}</span> across{" "}
-            <span className="text-parchment">{fleetSpend.calls}</span> Gemini calls — surface{" "}
-            <code>memory_graph</code>, same ledger as /admin/gemini; the spend roll-up is
-            day-grained, so cost covers whole UTC days while lookup stats use the rolling window
-          </p>
+          {spendAvailable ? (
+            <p className="text-xs text-parchment/50">
+              Extraction spend since {sinceDay(window)} (UTC days):{" "}
+              <span className="text-parchment">{microsToMoney(fleetSpend.costMicros)}</span> across{" "}
+              <span className="text-parchment">{fleetSpend.calls}</span> Gemini calls — surface{" "}
+              <code>memory_graph</code>, same ledger as /admin/gemini; the spend roll-up is
+              day-grained, so cost covers whole UTC days while lookup stats use the rolling window
+            </p>
+          ) : (
+            <p className="text-xs text-amber-200/80">
+              Extraction spend unavailable: the gemini_spend_daily read failed, so cost columns
+              below show &quot;unavailable&quot; rather than a false $0.00. Reload to retry.
+            </p>
+          )}
         </div>
         {fleetStatsTruncated && (
           <p className="mb-3 text-xs text-amber-200/80">
@@ -364,7 +376,11 @@ export default async function MemoryGraphAdminPage({
                     />
                   </td>
                   <td className="py-2 pr-4">
-                    {spend ? `${microsToMoney(spend.costMicros)} (${spend.calls})` : "—"}
+                    {!spendAvailable
+                      ? "unavailable"
+                      : spend
+                        ? `${microsToMoney(spend.costMicros)} (${spend.calls})`
+                        : "—"}
                   </td>
                   <td className="py-2 text-right">
                     <Link
@@ -420,16 +436,20 @@ export default async function MemoryGraphAdminPage({
             <StatTile
               label="Extraction cost (UTC days)"
               value={
-                selectedBusinessId && extractionSpend.get(selectedBusinessId)
-                  ? microsToMoney(extractionSpend.get(selectedBusinessId)!.costMicros)
-                  : "$0.00"
+                !spendAvailable
+                  ? "unavailable"
+                  : selectedBusinessId && extractionSpend.get(selectedBusinessId)
+                    ? microsToMoney(extractionSpend.get(selectedBusinessId)!.costMicros)
+                    : "$0.00"
               }
             />
             <StatTile
               label="Extraction calls (UTC days)"
-              value={String(
-                (selectedBusinessId && extractionSpend.get(selectedBusinessId)?.calls) || 0
-              )}
+              value={
+                !spendAvailable
+                  ? "unavailable"
+                  : String((selectedBusinessId && extractionSpend.get(selectedBusinessId)?.calls) || 0)
+              }
             />
           </div>
 
