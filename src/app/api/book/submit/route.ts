@@ -56,8 +56,10 @@ export async function POST(request: Request) {
         return errorResponse("VALIDATION_ERROR", "Please check your details and try again.");
       }
       if (result.detail === "slot_taken") {
-        // Distinct code so the client re-fetches slots and asks for a new pick.
-        return errorResponse("CONFLICT", "That time was just taken, please pick another.", 409);
+        // Covers both a raced slot and a day that just hit its booking cap:
+        // the client re-fetches availability (where the slot or whole day is
+        // gone) and shows the "no longer available" copy, accurate for both.
+        return errorResponse("CONFLICT", "That time is no longer available.", 409);
       }
       if (result.detail === "already_booked") {
         // Deliberate policy: one upcoming appointment per person on the

@@ -288,6 +288,8 @@ export async function countBookingsBetween(
     .from("calendar_booking_dedupe")
     .select("id", { count: "exact", head: true })
     .eq("business_id", businessId)
+    // Confirmed bookings only, matching listBookingStartsBetween.
+    .not("event_id", "is", null)
     .gte("start_at", startIso)
     .lt("start_at", endIso);
   if (error) throw new Error(`countBookingsBetween: ${error.message}`);

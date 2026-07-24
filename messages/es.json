@@ -17,7 +17,7 @@
     "noteLabel": "¿Algo que debamos saber? (opcional)",
     "submitButton": "Confirmar reserva",
     "submitting": "Reservando…",
-    "slotTaken": "Ese horario acaba de ocuparse. Elige otro.",
+    "slotTaken": "Ese horario ya no está disponible. Elige otro.",
     "alreadyBooked": "Ya tienes una cita próxima con este negocio. Revisa tus mensajes de texto o correo para cambiarla.",
     "submitFailed": "No se pudo completar la reserva. Inténtalo de nuevo.",
     "checkDetails": "Revisa tus datos e inténtalo de nuevo.",

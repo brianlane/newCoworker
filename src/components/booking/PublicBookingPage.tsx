@@ -401,6 +401,9 @@ export function PublicBookingPage({
         ) : (
           <div>
             <h2 className="text-lg font-semibold text-parchment">{strings.selectDateTime}</h2>
+            {submitState === "slot_taken" ? (
+              <p className="mt-2 text-sm text-amber-400">{strings.slotTaken}</p>
+            ) : null}
             {slotsError ? (
               <p className="mt-4 text-sm text-red-400">{strings.slotsUnavailable}</p>
             ) : slots === null ? (
