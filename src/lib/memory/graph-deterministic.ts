@@ -425,7 +425,11 @@ export function capturedLeadExtraction(lead: {
   interest?: string | null;
   notes?: string | null;
 }): GraphExtraction {
-  const name = clean(lead.name);
+  // A nameless capture with a phone/email still creates an
+  // identifier-named node (booking/lead convention) so the interest/note
+  // facts land; an identity-less capture (interest only) has no node to
+  // attach to and builds nothing.
+  const name = clean(lead.name) || clean(lead.phone) || clean(lead.email);
   if (!name) return { entities: [], facts: [] };
   const facts: GraphExtraction["facts"] = [];
   const interest = clean(lead.interest);
