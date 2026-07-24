@@ -785,6 +785,27 @@ are RLS-on/no-policies (service-role only); core logic lives in
   `gemini-3.5-flash` / `gemini-3.1-flash-lite-image`); `RESEND_API_KEY`
   gates subscriber email (unset = publish still works, email skipped).
 
+## AiFlow team routing: claim notices (SMS + optional email)
+
+`route_to_team` offers a lead to the roster (reply "1" to claim, "2" to pass,
+"86" to release; a "1" still claims LATE, up to 24h after the offer window
+lapsed, via the inbound webhook's reopen path in
+`supabase/functions/_shared/ai_flows/late_claim.ts`). The owner is told the
+outcome by SMS (`claimedNotifyTemplate` / `ownerFallbackTemplate`). Because a
+late claim finalizes WITHOUT replaying post-route steps, a flow-authored
+`send_email` after the route step can never report it, so the step also takes
+an optional **`claimedNotifyEmail`** (templated address): the worker emails it
+at CLAIM FINALIZATION for on-time claims, late claims (subject marks them as
+superseding the earlier no-claim notice), auto-assignments, and "86" releases
+(Jul 2026, PR #883). Delivery is best-effort from the tenant's AI mailbox
+(logged to `email_log`, idempotency-keyed like the SMS notices; failures log
+`ai_flow_claim_email_failed` and never fail the durable claim); an address
+that renders undeliverable degrades to SMS-only. Available in the visual
+builder ("Also email the claim outcome to"), the AI flow author, and MCP flow
+CRUD; scrubbed from cross-tenant library copies. Off by default; first
+enabled on Amy Laidlaw's five lead-routing flows
+(`scripts/oneshot/set-amy-claim-notify-email.ts`, ledger-recorded).
+
 ## AiFlow webhook trigger (Meta Lead Ads etc.)
 
 AiFlows can start from an inbound webhook: `POST /api/public/v1/flow-events`
