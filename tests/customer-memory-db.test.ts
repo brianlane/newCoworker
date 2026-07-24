@@ -7,7 +7,8 @@ const defaultClientSpy = vi.fn();
 // in tests/db-voice-transcripts.test.ts.
 vi.mock("@/lib/memory/graph-deterministic", () => ({
   ingestContact: vi.fn(async () => ({ ran: false })),
-  ingestPinnedNote: vi.fn(async () => ({ ran: false }))
+  ingestPinnedNote: vi.fn(async () => ({ ran: false })),
+  retirePinnedNote: vi.fn(async () => ({ retired: 0 }))
 }));
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn(async () => defaultClientSpy())
@@ -54,7 +55,11 @@ import {
 } from "../src/lib/customer-memory/db";
 import { createSupabaseServiceClient } from "../src/lib/supabase/server";
 import { normalizeContactTags, type CustomerMemoryRow } from "../src/lib/customer-memory/types";
-import { ingestContact, ingestPinnedNote } from "@/lib/memory/graph-deterministic";
+import {
+  ingestContact,
+  ingestPinnedNote,
+  retirePinnedNote
+} from "@/lib/memory/graph-deterministic";
 
 const BIZ = "00000000-0000-0000-0000-000000000001";
 const CUSTOMER = "+15555550123";
@@ -936,7 +941,8 @@ describe("updateCustomerOwnerFields", () => {
     vi.mocked(ingestContact).mockClear();
     vi.mocked(ingestPinnedNote).mockClear();
 
-    // High-frequency knobs never touch the graph; clearing pinned doesn't either.
+    // High-frequency knobs never touch the graph; CLEARING pinned retires
+    // the graph's owner_note facts instead of ingesting.
     const knobs = makeClient({ fromTerminator: { data: null, error: null } });
     await updateCustomerOwnerFields(
       BIZ,
@@ -946,6 +952,13 @@ describe("updateCustomerOwnerFields", () => {
     );
     expect(ingestContact).not.toHaveBeenCalled();
     expect(ingestPinnedNote).not.toHaveBeenCalled();
+    expect(retirePinnedNote).toHaveBeenCalledWith(BIZ, CUSTOMER);
+
+    vi.mocked(retirePinnedNote).mockClear();
+    // Knob-only edits (no pinnedMd key) never touch the retire path either.
+    const pure = makeClient({ fromTerminator: { data: null, error: null } });
+    await updateCustomerOwnerFields(BIZ, CUSTOMER, { tags: ["vip"] }, pure.client);
+    expect(retirePinnedNote).not.toHaveBeenCalled();
   });
 
   it("writes normalized tags (trim, case-insensitive de-dup, drop empties)", async () => {

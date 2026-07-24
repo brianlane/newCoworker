@@ -15,7 +15,12 @@
 import { logger } from "@/lib/logger";
 import type { GraphExtraction } from "./graph-extract";
 import { applyGraphExtraction, type GraphProvenance } from "./graph-write";
-import { getMemoryGraphMode } from "./graph-db";
+import {
+  deactivateMemoryFacts,
+  getMemoryGraphMode,
+  listActiveFacts,
+  listMemoryEntities
+} from "./graph-db";
 import { kgSourceTrust, type KgSource } from "./kg-sources";
 
 export type DeterministicIngestDeps = {
@@ -169,6 +174,50 @@ export async function ingestPinnedNote(
     },
     deps
   );
+}
+
+export type RetireNoteDeps = {
+  getMode?: typeof getMemoryGraphMode;
+  listEntities?: typeof listMemoryEntities;
+  listFacts?: typeof listActiveFacts;
+  deactivate?: typeof deactivateMemoryFacts;
+};
+
+/**
+ * Owner CLEARED a pinned note → retire the graph's active owner_note facts
+ * on that person, or prompts would keep treating removed content as
+ * current owner knowledge. Resolution is by exact phone match (the same
+ * identity evidence the write path uses); no matching entity is a clean
+ * no-op. Never-throws, mode-gated.
+ */
+export async function retirePinnedNote(
+  businessId: string,
+  e164: string,
+  deps: RetireNoteDeps = {}
+): Promise<{ retired: number }> {
+  /* c8 ignore start -- production defaults; tests inject */
+  const getMode = deps.getMode ?? getMemoryGraphMode;
+  const listEntities = deps.listEntities ?? listMemoryEntities;
+  const listFacts = deps.listFacts ?? listActiveFacts;
+  const deactivate = deps.deactivate ?? deactivateMemoryFacts;
+  /* c8 ignore stop */
+  try {
+    const mode = await getMode(businessId);
+    if (mode === "off") return { retired: 0 };
+    const entities = await listEntities(businessId);
+    const person = entities.find((row) => row.phones.includes(e164));
+    if (!person) return { retired: 0 };
+    const facts = await listFacts(businessId, person.id, "owner_note");
+    if (facts.length === 0) return { retired: 0 };
+    await deactivate(facts.map((f) => f.id));
+    return { retired: facts.length };
+  } catch (err) {
+    logger.warn("graph-deterministic pinned-note retire failed (ignored)", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return { retired: 0 };
+  }
 }
 
 // ── Business profile (kg-source: business_profile) ───────────────────────
