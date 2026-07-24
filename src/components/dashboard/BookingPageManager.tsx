@@ -32,6 +32,7 @@ type UpcomingRow = {
 type LoadState = {
   page: PageRow | null;
   calendarProvider: string | null;
+  availability: "ok" | "unreadable" | "unsupported" | "not_connected";
   upcoming: UpcomingRow[];
 };
 
@@ -158,6 +159,21 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
 
   return (
     <div className="space-y-6">
+      {directBooking && state.availability === "unreadable" ? (
+        <Card>
+          <h2 className="text-base font-semibold text-red-400">
+            {t("calendarUnreadableTitle")}
+          </h2>
+          <p className="mt-2 text-sm text-parchment/60">{t("calendarUnreadableBody")}</p>
+          <Link
+            href="/dashboard/integrations/workspace"
+            className="mt-3 inline-block text-sm text-claw-green hover:underline"
+          >
+            {t("calendarUnreadableAction")}
+          </Link>
+        </Card>
+      ) : null}
+
       {!directBooking ? (
         <Card>
           <h2 className="text-base font-semibold text-parchment">{t("connectFirstTitle")}</h2>
