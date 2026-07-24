@@ -14,7 +14,8 @@
 -- over measured rows only (claim counts re-derive from graph_context when
 -- the full row is loaded).
 --
--- Version stamp continues the ledger sequence after 20260820100300.
+-- Version stamp continues the ledger sequence after 20260820100500 (the Data-API grant
+revokes took 100400-100500).
 
 alter table public.kg_retrieval_events
   add column if not exists memory_retrieval_ms integer,
