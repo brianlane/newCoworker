@@ -313,13 +313,17 @@ export async function offerFreedSlot(
     const timezone = await resolveToolTimezone(businessId, business?.timezone ?? undefined);
     const startLocal = formatBookingStartLocal(new Date(startMs).toISOString(), timezone);
 
+    let anyVerified = false;
     for (const entry of candidates.slice(0, WAITLIST_OFFER_CANDIDATE_CAP)) {
       const endMs = startMs + entry.duration_minutes * 60_000;
       const open = await verifyFreedSlotOpen(businessId, conn, startMs, endMs, deps);
-      // Verification is per-candidate only because durations can differ;
-      // a closed slot for THIS duration almost always means the slot is
-      // gone, so stop rather than burning more provider calls.
-      if (!open) return "slot_not_open";
+      // Verification is per-candidate because durations differ: the freed
+      // start can be closed for a 60-minute request yet open for the next
+      // candidate's 30 minutes, so a failed check moves on rather than
+      // dropping shorter candidates (Bugbot Medium on PR #903). The
+      // candidate cap bounds the provider calls either way.
+      if (!open) continue;
+      anyVerified = true;
 
       const claimed = await markWaitlistOffered(
         entry.id,
@@ -356,7 +360,7 @@ export async function offerFreedSlot(
       // memory cleared so a later observation may text them again.
       await revertWaitlistOfferToWaiting(entry.id, { clearLastOffered: true }, deps.client);
     }
-    return "offer_failed";
+    return anyVerified ? "offer_failed" : "slot_not_open";
   } catch (err) {
     logger.warn("waitlist-fill: offerFreedSlot failed", {
       businessId,

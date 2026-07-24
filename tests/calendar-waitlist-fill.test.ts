@@ -316,6 +316,25 @@ describe("offerFreedSlot", () => {
     expect(mockMark).not.toHaveBeenCalled();
   });
 
+  it("a slot too short for the first candidate still reaches a shorter-duration candidate", async () => {
+    const long = entry({ id: "wl-long", duration_minutes: 60 });
+    const short = entry({
+      id: "wl-short",
+      duration_minutes: 30,
+      phone: "+15005550001",
+      created_at: "2026-07-02T00:00:00Z"
+    });
+    mockList.mockResolvedValue([long, short]);
+    // Busy block 30 minutes after the freed start: 60 min does not fit,
+    // 30 min does.
+    mockBusy.mockResolvedValue([
+      { start: new Date(SLOT_MS + 30 * 60_000), end: new Date(SLOT_MS + 60 * 60_000) }
+    ]);
+    expect(await offerFreedSlot(BIZ, SLOT)).toBe("offered");
+    expect(mockMark).toHaveBeenCalledTimes(1);
+    expect(mockMark).toHaveBeenCalledWith("wl-short", expect.anything(), undefined);
+  });
+
   it("offers the oldest candidate: verified slot, CAS hold with the owner's TTL, metered SMS, outbound log", async () => {
     const insert = logDb();
     expect(await offerFreedSlot(BIZ, SLOT)).toBe("offered");
