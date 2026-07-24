@@ -24,6 +24,7 @@ import {
 } from "@/lib/webchat/db";
 import { ensureCapturedContact } from "@/lib/customer-memory/capture-contact";
 import { coerceOwnerPhoneToE164 } from "@/lib/telnyx/assign-did";
+import { ingestCapturedLead } from "@/lib/memory/graph-deterministic";
 import { logger } from "@/lib/logger";
 
 export type CaptureWebchatLeadArgs = {
@@ -151,6 +152,17 @@ export async function captureWebchatLead(
       channel: "webchat"
     });
   }
+
+  // Knowledge graph: structured lead details map deterministically at
+  // webchat's anonymous trust (0) — the visitor's claims can never
+  // supersede owner facts. Never-throws, mode-gated inside.
+  await ingestCapturedLead(businessId, "webchat", {
+    name,
+    phone: e164 ?? phone,
+    email,
+    interest,
+    notes
+  });
 
   return { ok: true, data: { logId } };
 }

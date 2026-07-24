@@ -48,14 +48,22 @@ export const KG_SOURCES = {
   booking: { status: "deterministic", trust: 2 },
   doc_extract_fields: { status: "deterministic", trust: 2 },
 
-  // ── conversational extraction (PR 4) ───────────────────────────────────
-  voice_call: { status: "planned", trust: 1, plannedIn: "PR 4" },
-  customer_sms: { status: "planned", trust: 1, plannedIn: "PR 4" },
-  messenger: { status: "planned", trust: 1, plannedIn: "PR 4" },
-  whatsapp: { status: "planned", trust: 1, plannedIn: "PR 4" },
-  webchat: { status: "planned", trust: 0, plannedIn: "PR 4" },
-  email_replied: { status: "planned", trust: 1, plannedIn: "PR 4" },
-  email_unanswered: { status: "planned", trust: 0, plannedIn: "PR 4" },
+  // ── conversational sources (live) ────────────────────────────────────────
+  /** Voice/SMS/replied-email windows extract at the customer-memory
+   * summarizer boundary (debounced conversation close, per identified
+   * customer) under the customer-source prompt. */
+  voice_call: { status: "extracted", trust: 1 },
+  customer_sms: { status: "extracted", trust: 1 },
+  email_replied: { status: "extracted", trust: 1 },
+  /** Cold inbound mail (no linked contact) extracts at anonymous trust —
+   * the reply gate as attribution, not exclusion. */
+  email_unanswered: { status: "extracted", trust: 0 },
+  /** DM channels ingest at their lead-capture boundary: the model already
+   * distilled the conversation into structured contact + interest, so the
+   * mapping is deterministic (no second LLM pass). */
+  messenger: { status: "deterministic", trust: 1 },
+  whatsapp: { status: "deterministic", trust: 1 },
+  webchat: { status: "deterministic", trust: 0 },
 
   // ── documents & long-form owner content (PR 5) ─────────────────────────
   document: { status: "planned", trust: 2, plannedIn: "PR 5" },

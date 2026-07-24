@@ -23,6 +23,7 @@ import {
   updateMessengerConversationContact
 } from "@/lib/messenger/db";
 import { ensureCapturedContact } from "@/lib/customer-memory/capture-contact";
+import { ingestCapturedLead } from "@/lib/memory/graph-deterministic";
 import { coerceOwnerPhoneToE164 } from "@/lib/telnyx/assign-did";
 import { logger } from "@/lib/logger";
 
@@ -126,6 +127,17 @@ export async function captureMessengerLead(
       channel
     });
   }
+
+  // Knowledge graph: the model already distilled the DM conversation into
+  // structured lead details — map them deterministically at the channel's
+  // trust. Never-throws, mode-gated inside.
+  await ingestCapturedLead(businessId, channel, {
+    name,
+    phone: e164 ?? phone,
+    email,
+    interest,
+    notes
+  });
 
   return { ok: true, data: { logId } };
 }

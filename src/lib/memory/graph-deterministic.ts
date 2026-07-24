@@ -21,7 +21,7 @@ import {
   listActiveFacts,
   listMemoryEntities
 } from "./graph-db";
-import { kgSourceTrust } from "./kg-sources";
+import { kgSourceTrust, type KgSource } from "./kg-sources";
 
 export type DeterministicIngestDeps = {
   /** Injectable mode read (tests). */
@@ -396,6 +396,87 @@ export async function ingestBooking(
     bookingExtraction(booking),
     `Booking: ${clean(booking.detail)}`,
     { source: "booking", trust: kgSourceTrust("booking"), attributedTo: null },
+    deps
+  );
+}
+
+// ── Captured DM/webchat leads (kg-source: messenger / kg-source: whatsapp /
+//    kg-source: webchat) ────────────────────────────────────────────────────
+//
+// The lead-capture tools are the graph boundary for the DM channels: the
+// model already distilled the conversation into STRUCTURED contact details
+// + interest, so this maps deterministically (no second LLM pass) at each
+// channel's trust — messenger/instagram/whatsapp are connected-account
+// customers (trust 1), webchat visitors are anonymous (trust 0).
+
+export type CapturedLeadChannel = "messenger" | "instagram" | "whatsapp" | "webchat";
+
+function capturedLeadSource(channel: CapturedLeadChannel): KgSource {
+  if (channel === "webchat") return "webchat";
+  if (channel === "whatsapp") return "whatsapp";
+  // Instagram DMs ride the Messenger platform surface.
+  return "messenger";
+}
+
+export function capturedLeadExtraction(lead: {
+  name?: string | null;
+  phone?: string | null;
+  email?: string | null;
+  interest?: string | null;
+  notes?: string | null;
+}): GraphExtraction {
+  // A nameless capture with a phone/email still creates an
+  // identifier-named node (booking/lead convention) so the interest/note
+  // facts land; an identity-less capture (interest only) has no node to
+  // attach to and builds nothing.
+  const name = clean(lead.name) || clean(lead.phone) || clean(lead.email);
+  if (!name) return { entities: [], facts: [] };
+  const facts: GraphExtraction["facts"] = [];
+  const interest = clean(lead.interest);
+  if (interest) {
+    facts.push({ subjectRef: "e1", predicate: "interested_in", objectValue: interest, sourceIndex: 0 });
+  }
+  const notes = clean(lead.notes);
+  if (notes) {
+    facts.push({ subjectRef: "e1", predicate: "note", objectValue: notes, sourceIndex: 0 });
+  }
+  return {
+    entities: [
+      {
+        ref: "e1",
+        kind: "person",
+        name,
+        aliases: [],
+        phones: lead.phone ? [lead.phone] : [],
+        emails: lead.email ? [lead.email] : []
+      }
+    ],
+    facts
+  };
+}
+
+export async function ingestCapturedLead(
+  businessId: string,
+  channel: CapturedLeadChannel,
+  lead: {
+    name?: string | null;
+    phone?: string | null;
+    email?: string | null;
+    interest?: string | null;
+    notes?: string | null;
+  },
+  deps: DeterministicIngestDeps = {}
+): Promise<{ ran: boolean }> {
+  const source = capturedLeadSource(channel);
+  return ingestDeterministic(
+    businessId,
+    capturedLeadExtraction(lead),
+    `Captured ${channel} lead: ${clean(lead.name)}`,
+    {
+      source,
+      trust: kgSourceTrust(source),
+      attributedTo: clean(lead.phone) || clean(lead.email) || channel
+    },
     deps
   );
 }

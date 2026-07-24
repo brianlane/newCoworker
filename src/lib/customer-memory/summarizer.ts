@@ -46,6 +46,10 @@ import {
   type SmsHistoryEntry
 } from "./db";
 import type { CustomerMemoryRow } from "./types";
+import {
+  dominantConversationSource,
+  extractConversationGraph
+} from "@/lib/memory/graph-conversational";
 
 /** Hard cap on persisted summary text. */
 export const SUMMARY_MAX_CHARS = 2000;
@@ -124,6 +128,8 @@ export type SummarizeDeps = {
   callRowboatChat?: typeof callRowboatChat;
   getCustomerMemory?: typeof getCustomerMemory;
   listSmsHistoryForCustomer?: typeof listSmsHistoryForCustomer;
+  /** Injectable knowledge-graph conversation extraction (tests). */
+  extractConversationGraph?: typeof extractConversationGraph;
   /**
    * Voice transcripts feeder. Provided as a typed dep here (rather
    * than imported directly) so the production import doesn't pull
@@ -438,6 +444,40 @@ export async function summarizeCustomerMemory(
       detail: err instanceof Error ? err.message : String(err)
     };
   }
+
+  // Knowledge-graph extraction over the SAME assembled window
+  // (kg-source: voice_call / kg-source: customer_sms /
+  // kg-source: email_replied) — the
+  // summarizer boundary is already the debounced conversation-close moment,
+  // the window is already per-identified-customer, and email here passed
+  // the relationship gate (a linked contact with real interactions), so
+  // everything lands at trust 1 attributed to the customer. Fresh material
+  // only — never the rolling summary (that would re-launder model output
+  // into facts). Never-throws + daily-capped inside.
+  /* c8 ignore next -- production default; tests inject */
+  const _extractGraph = deps.extractConversationGraph ?? extractConversationGraph;
+  const transcriptSections: string[] = [];
+  if (voiceTurns.length > 0) {
+    transcriptSections.push("VOICE CALLS (oldest first):", joinVoiceTurns(voiceTurns), "");
+  }
+  if (smsHistory.length > 0) {
+    transcriptSections.push("SMS EXCHANGES (oldest first):", joinSmsHistory(smsHistory), "");
+  }
+  if (emailHistory.length > 0) {
+    transcriptSections.push(
+      "EMAILS (oldest first):",
+      joinEmailHistory(emailHistory.slice().reverse())
+    );
+  }
+  await _extractGraph(businessId, {
+    transcript: transcriptSections.join("\n"),
+    source: dominantConversationSource({
+      voiceTurns: voiceTurns.length,
+      smsTurns: smsHistory.length,
+      emails: emailHistory.length
+    }),
+    attributedTo: customerE164
+  });
 
   return {
     ok: true,
