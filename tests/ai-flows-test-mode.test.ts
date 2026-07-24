@@ -256,6 +256,20 @@ describe("simulateTestAction", () => {
         scope()
       )
     ).toEqual({ simulated: "upsert_customer", customer_e164: "+1602", name: "Joe" });
+    // A planner skip (no usable phone) must read as the skip a live run
+    // records — never as a saved contact.
+    expect(
+      simulateTestAction(
+        {
+          kind: "upsert_customer",
+          e164: "",
+          name: "",
+          email: "",
+          skipReason: "no_contact_phone"
+        } as StepAction,
+        scope()
+      )
+    ).toEqual({ simulated: "upsert_customer", skipped: "no_contact_phone" });
     expect(
       simulateTestAction(
         { kind: "update_contact", e164: "+1602", addTags: ["A"], removeTags: [] } as StepAction,

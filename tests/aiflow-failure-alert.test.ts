@@ -23,7 +23,7 @@ const baseInput = (fetchFn: typeof fetch, over: Record<string, unknown> = {}) =>
   flowId: FLOW,
   trigger: { channel: "tenant_email" } as Record<string, unknown>,
   vars: { lead_name: "Dwight Colclough", lead_phone: "+14168775223" } as Record<string, unknown>,
-  error: "upsert_customer: the lead's phone is missing or unusable",
+  error: 'send_sms: agent "Lead Desk" is not on the active roster',
   notifyUrl: NOTIFY_URL,
   bearer: "service-key",
   fetchFn,
@@ -116,7 +116,7 @@ describe("sendAiflowFailureAlert", () => {
     expect(body.record.log_payload.run_id).toBe(RUN);
     expect(body.record.log_payload.flow_id).toBe(FLOW);
     expect(body.record.log_payload.lead_label).toBe("Dwight Colclough (+14168775223)");
-    expect(body.record.log_payload.reason).toContain("missing or unusable");
+    expect(body.record.log_payload.reason).toContain("is not on the active roster");
   });
 
   it("clips a long failure reason to 300 chars", async () => {

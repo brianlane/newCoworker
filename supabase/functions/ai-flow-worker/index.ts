@@ -1765,27 +1765,6 @@ async function runStep(
     }
   }
   if (!plan.ok) {
-    // When the self-number scrub emptied THIS step's phone var earlier in the
-    // run, an unusable-phone failure here is the scrub's doing — text the
-    // owner a plain-words explanation alongside the failed run (which
-    // otherwise reads as a technical error; the exact confusion from Truly's
-    // office-line test). Gated on the failing step's own phoneVar being among
-    // the scrubbed vars (a different scrubbed field with an already-empty
-    // phoneVar is a plain no-phone lead, not the business's number). Sent at
-    // failure time, not scrub time, because a later extraction step can still
-    // backfill a real phone. Best-effort + idempotent per run.
-    if (step.type === "upsert_customer" && selfScrubbedVars(scope).includes(step.phoneVar)) {
-      try {
-        await sendOwnerSms(
-          supabase,
-          run,
-          "A lead just came in, but their phone number matched your own business number, so I can't text them (this happens when a test form uses the office line, or a lead source page shows your number). Check the lead's real number and reach out directly.",
-          `aiflow-selfphone:${run.id}`
-        );
-      } catch (e) {
-        console.error("self-phone scrub owner notice failed", e);
-      }
-    }
     return { kind: "fail", error: plan.error };
   }
   const action = plan.action;
@@ -1838,6 +1817,32 @@ async function runStep(
     case "recall_url":
       return recallUrlStep(supabase, run, scope, action);
     case "upsert_customer":
+      // When the self-number scrub emptied THIS step's phone var earlier in
+      // the run, the skip below is the scrub's doing — text the owner a
+      // plain-words explanation (the exact confusion from Truly's office-line
+      // test). This notice used to ride the step's plan FAILURE; the step now
+      // SKIPS on a missing phone, so it is surfaced here instead. Gated on
+      // the step's own phoneVar being among the scrubbed vars (a different
+      // scrubbed field with an already-empty phoneVar is a plain no-phone
+      // lead, not the business's number). Best-effort + idempotent per run;
+      // never sent for test runs (they return from the simulation path
+      // before reaching this dispatch).
+      if (
+        action.skipReason &&
+        step.type === "upsert_customer" &&
+        selfScrubbedVars(scope).includes(step.phoneVar)
+      ) {
+        try {
+          await sendOwnerSms(
+            supabase,
+            run,
+            "A lead just came in, but their phone number matched your own business number, so I can't text them (this happens when a test form uses the office line, or a lead source page shows your number). Check the lead's real number and reach out directly.",
+            `aiflow-selfphone:${run.id}`
+          );
+        } catch (e) {
+          console.error("self-phone scrub owner notice failed", e);
+        }
+      }
       return upsertCustomerStep(supabase, run, scope, action);
     case "update_contact":
       return updateContactStep(supabase, run, scope, action);
@@ -2247,6 +2252,12 @@ async function upsertCustomerStep(
   scope: Scope,
   action: Extract<StepAction, { kind: "upsert_customer" }>
 ): Promise<StepOutcome> {
+  if (action.skipReason) {
+    // Mirror the update_contact skip path: filing is bookkeeping, and a
+    // phoneless lead must not fail a run whose sends skip for the same value.
+    appendActionTaken(scope, "skipped saving the contact (no usable phone)");
+    return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
+  }
   // Existence pre-check (alias-aware) so the contact_created trigger below
   // fires only for genuinely NEW contacts, never enrichments. Best-effort: a
   // read failure just means no trigger fires this pass — except on backfill

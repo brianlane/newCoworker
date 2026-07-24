@@ -172,19 +172,38 @@ describe("reviewRequestTemplate", () => {
     });
   });
 
-  it("extracts the customer, texts the review link, and briefs the owner", () => {
+  it("extracts the customer, files them, texts the review link, and briefs the owner", () => {
     const def = reviewRequestTemplate(LINK).definition;
-    expect(def.steps.map((s) => s.type)).toEqual(["extract_text", "send_sms", "notify_owner"]);
-    const sms = def.steps[1];
+    expect(def.steps.map((s) => s.type)).toEqual([
+      "extract_text",
+      "upsert_customer",
+      "send_sms",
+      "notify_owner"
+    ]);
+    const sms = def.steps[2];
     if (sms.type === "send_sms") {
       expect(sms.to).toBe("{{vars.customer_phone}}");
       expect(sms.body).toContain(LINK);
     }
     // The owner brief is gated on a real phone being found ('none' = no text
     // went out, so no "I texted them" claim).
-    const notify = def.steps[2];
+    const notify = def.steps[3];
     if (notify.type === "notify_owner") {
       expect(notify.when).toEqual({ var: "customer_phone", notEquals: "none" });
+    }
+  });
+
+  it("files the texted attendee as a contact, guarded on a usable phone (the Kav lesson)", () => {
+    // A calendar-sourced person the flow texts must get a NAMED contact row,
+    // not a bare number the Texts page renders with "Set contact".
+    const def = reviewRequestTemplate(LINK).definition;
+    const file = def.steps[1];
+    if (file.type === "upsert_customer") {
+      expect(file.phoneVar).toBe("customer_phone");
+      expect(file.nameVar).toBe("customer_name");
+      expect(file.when).toEqual({ var: "customer_phone", notEquals: "none" });
+    } else {
+      throw new Error("expected the filing step right after extraction");
     }
   });
 });

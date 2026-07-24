@@ -255,6 +255,17 @@ export function reviewRequestTemplate(reviewLink: string): AiFlowTemplate {
           ]
         },
         {
+          // File the attendee as a contact before texting them, so the Texts
+          // thread shows their name instead of a bare number (the Kav lesson,
+          // Jul 24 2026: calendar-sourced people the flow texts must be
+          // filed). Guarded: an event with no usable phone skips the step.
+          id: "s_file",
+          type: "upsert_customer",
+          phoneVar: "customer_phone",
+          nameVar: "customer_name",
+          when: { var: "customer_phone", notEquals: "none" }
+        },
+        {
           id: "s_text_review",
           type: "send_sms",
           to: "{{vars.customer_phone}}",

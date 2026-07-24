@@ -51,10 +51,28 @@ export function buildKypNoShowDefinition(): Record<string, unknown> {
             "The invitee's phone number from the 'invitee phone:' line, digits and + only. 'none' when absent."
         },
         {
+          name: "invitee_email",
+          description:
+            "The invitee's email address from the 'invitee email:' line. 'none' when absent."
+        },
+        {
           name: "event_title",
           description: "The event title from the 'title:' line, verbatim."
         }
       ]
+    },
+    {
+      // File the booker as a contact BEFORE any text goes out, so the Texts
+      // thread shows their name instead of a bare number + "Set contact"
+      // (Kav, Jul 24 2026: the reminder flow texted a Calendly booker whose
+      // contact row was created nameless). Guarded like the sends: a
+      // phoneless booking skips the step instead of failing the run.
+      id: "file_invitee",
+      type: "upsert_customer",
+      phoneVar: "invitee_phone",
+      nameVar: "invitee_first_name",
+      emailVar: "invitee_email",
+      when: { var: "invitee_phone", notEquals: "none" }
     },
     {
       // Route by which event type was no-showed, so the rebooking link is

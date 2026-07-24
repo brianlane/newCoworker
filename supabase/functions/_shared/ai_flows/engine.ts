@@ -543,9 +543,16 @@ const LEAD_NAME_KEYS = [
   "seller_name",
   "buyer_name",
   "customer_name",
+  // Calendar-flow vocabulary (Calendly bookings): the seeded pre-call
+  // reminder / no-show flows extract the booker as invitee_* — without these
+  // keys the send-side contact filing filed Kav's real number NAMELESS while
+  // his name sat on the junk lead-form number (KYP, Jul 24 2026).
+  "invitee_name",
+  "attendee_name",
   "lead_first_name",
   "seller_first_name",
   "buyer_first_name",
+  "invitee_first_name",
   "first_name",
   "name"
 ] as const;
@@ -556,6 +563,8 @@ const LEAD_EMAIL_KEYS = [
   "seller_email",
   "buyer_email",
   "customer_email",
+  "invitee_email",
+  "attendee_email",
   "email"
 ] as const;
 

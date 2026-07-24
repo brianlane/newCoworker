@@ -9,10 +9,11 @@ import { createFlow, enqueueRun, getRun, seedBusiness, serviceDb, tickWorker } f
  * owner ONLY when `notification_preferences.aiflow_failure_alerts` is true —
  * the default (false / no prefs row) stays exactly as silent as before.
  *
- * The failure is the real Truly shape (2026-07-10): a Privyr-style
- * tenant_email trigger whose window text carries NO usable phone, so the
- * extract fallback yields nothing and `upsert_customer` fails the run with
- * the PR #480 readable error.
+ * The failure fixture is a lead-intake flow that hands the lead to a roster
+ * member who does not exist: `send_sms` with `toAgentName` fails the run
+ * permanently with a readable error. (The old fixture relied on a phoneless
+ * `upsert_customer` failing, but that step now SKIPS on a missing phone like
+ * update_contact/send_sms do — the Kav calendar-filing PR.)
  */
 
 let db: SupabaseClient;
@@ -21,7 +22,7 @@ beforeAll(() => {
   db = serviceDb();
 });
 
-/** Lead-intake fixture that ALWAYS dead-letters: no phone to extract. */
+/** Lead-intake fixture that ALWAYS dead-letters: texts a roster member who doesn't exist. */
 function failingLeadIntakeFlow(): Record<string, unknown> {
   const def = {
     version: 1,
@@ -43,7 +44,14 @@ function failingLeadIntakeFlow(): Record<string, unknown> {
         id: "file_lead",
         type: "upsert_customer",
         phoneVar: "lead_phone",
-        nameVar: "lead_name"
+        nameVar: "lead_name",
+        when: { var: "lead_phone", notEquals: "none" }
+      },
+      {
+        id: "hand_off",
+        type: "send_sms",
+        toAgentName: "Lead Desk",
+        body: "New lead {{vars.lead_name}} needs a call"
       }
     ]
   };
@@ -67,8 +75,10 @@ async function failRunForBusiness(biz: string): Promise<string> {
   await tickWorker();
   const run = await getRun(db, runId);
   expect(run.status).toBe("failed");
-  // The PR #480 readable message, not the old cryptic one.
-  expect(run.last_error).toContain("missing or unusable");
+  // Readable, owner-facing wording — not a bare technical failure. (The
+  // phoneless upsert_customer no longer fails: it skips, so the fixture
+  // dead-letters on the nonexistent roster hand-off instead.)
+  expect(run.last_error).toContain("is not on the active roster");
   return runId;
 }
 
@@ -121,6 +131,6 @@ describe("aiflow failure alerts (opt-in, real notifications function)", () => {
     expect(dashboard?.status).toBe("sent");
     // Owner-readable copy: which lead, and that an automation stopped.
     expect(dashboard?.summary).toContain("An AiFlow stopped");
-    expect(dashboard?.summary).toContain("missing or unusable");
+    expect(dashboard?.summary).toContain("is not on the active roster");
   });
 });
