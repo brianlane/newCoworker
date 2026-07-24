@@ -212,6 +212,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
           "When you declare a lead or contact spam in chat (or by texting your coworker), block their number from all texting, stop their pending automations, and tag the contact. Managers and owners only; the block lifts only if the contact texts START.",
         defaultEnabled: true,
         configurable: true
+      },
+      {
+        toolKey: "set_contact_reply_mode",
+        label: "Stop or resume texting a contact",
+        description:
+          "When you ask your coworker (in chat or by text) to stop texting a specific contact, it turns off its automatic replies to them and stops their pending automations — you can still text them yourself, and asking to resume turns replies back on.",
+        defaultEnabled: true,
+        configurable: true
       }
     ]
   },

@@ -34,7 +34,8 @@ const ALL_ON: ActionToolGates = {
   edit_aiflow: true,
   generate_image: true,
   update_notification_preferences: true,
-  flag_contact_spam: true
+  flag_contact_spam: true,
+  set_contact_reply_mode: true
 };
 
 function insertResult(result: { error: { message: string } | null }) {
@@ -216,7 +217,8 @@ describe("declarations & naming", () => {
       edit_aiflow: false,
       generate_image: false,
       update_notification_preferences: false,
-      flag_contact_spam: false
+      flag_contact_spam: false,
+      set_contact_reply_mode: false
     });
     expect(some.map((d) => d.name)).toEqual([
       "calendar_find_slots",
@@ -349,6 +351,62 @@ describe("flag_contact_spam", () => {
     expect(invalid.ok).toBe(false);
     expect(invalid.message).toContain("invalid_args");
     expect(flagSpam).not.toHaveBeenCalled();
+  });
+
+  it("steers 'stop texting' requests away from the spam block (Chris Gregoris, Jul 24 2026)", () => {
+    const decl = actionToolDeclarations(ALL_ON).find((d) => d.name === "flag_contact_spam");
+    expect(decl?.description).toMatch(/NEVER use it just because the owner asked to stop texting/i);
+    expect(decl?.description).toContain("set_contact_reply_mode");
+  });
+});
+
+describe("set_contact_reply_mode", () => {
+  it("is declared with stop/resume + reversibility guidance and gated off cleanly", () => {
+    const decl = actionToolDeclarations(ALL_ON).find((d) => d.name === "set_contact_reply_mode");
+    expect(decl?.description).toMatch(/stop texting/i);
+    expect(decl?.description).toMatch(/reversible/i);
+    // And it points spam declarations at the irreversible tool.
+    expect(decl?.description).toContain("flag_contact_spam");
+    const props = Object.keys(
+      (decl?.parameters as { properties: Record<string, unknown> }).properties
+    );
+    expect(props).toEqual(["phone", "mode"]);
+
+    const gatedOff = actionToolDeclarations({ ...ALL_ON, set_contact_reply_mode: false });
+    expect(gatedOff.map((d) => d.name)).not.toContain("set_contact_reply_mode");
+  });
+
+  it("delegates to the shared core and returns its payload verbatim", async () => {
+    const setReplyMode = vi.fn(async () => ({
+      ok: true as const,
+      phoneE164: "+18579289096",
+      mode: "suppress" as const,
+      canceledRuns: 2,
+      runsSweepComplete: true,
+      note: "Tell the owner…"
+    }));
+    const res = (await executeActionTool(
+      BIZ,
+      { name: "set_contact_reply_mode", args: { phone: "+18579289096", mode: "suppress" } },
+      { setReplyMode: setReplyMode as never }
+    )) as { ok: boolean; canceledRuns?: number };
+    expect(setReplyMode).toHaveBeenCalledWith(BIZ, { phone: "+18579289096", mode: "suppress" });
+    expect(res.ok).toBe(true);
+    expect(res.canceledRuns).toBe(2);
+  });
+
+  it("rejects invalid args (bad mode included) without touching the core", async () => {
+    const setReplyMode = vi.fn();
+    for (const args of [{}, { phone: "+18579289096" }, { phone: "+18579289096", mode: "off" }]) {
+      const invalid = (await executeActionTool(
+        BIZ,
+        { name: "set_contact_reply_mode", args },
+        { setReplyMode: setReplyMode as never }
+      )) as { ok: boolean; message?: string };
+      expect(invalid.ok).toBe(false);
+      expect(invalid.message).toContain("invalid_args");
+    }
+    expect(setReplyMode).not.toHaveBeenCalled();
   });
 });
 

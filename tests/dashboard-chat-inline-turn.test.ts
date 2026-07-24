@@ -551,7 +551,8 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
     edit_aiflow: true,
     generate_image: true,
     update_notification_preferences: true,
-    flag_contact_spam: true
+    flag_contact_spam: true,
+    set_contact_reply_mode: true
   };
 
   it("declares gated action tools alongside the creation tools", async () => {
@@ -572,7 +573,8 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
       "edit_aiflow",
       "generate_image",
       "update_notification_preferences",
-      "flag_contact_spam"
+      "flag_contact_spam",
+      "set_contact_reply_mode"
     ]);
   });
 
@@ -1000,6 +1002,70 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
         "Spam flag applied to the number: the number is blocked from all texting"
       );
     }
+  });
+
+  it("a successful set_contact_reply_mode is side-effect pinned, both mode arms keep the outcome", async () => {
+    // Same fallback-denial hazard as the spam flag: the mode write + run
+    // cancels persist the moment the core returns ok.
+    const suppressTool = vi.fn(async () => ({
+      ok: true,
+      phoneE164: "+18579289096",
+      mode: "suppress"
+    }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(
+        toolStep("set_contact_reply_mode", { phone: "+18579289096", mode: "suppress" })
+      )
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep,
+      runActionTool: suppressTool
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.content).toContain("Texting stopped for +18579289096");
+      expect(res.content).toContain("reversible");
+    }
+
+    // An UNCONFIRMED run sweep must not read as "automations were stopped"
+    // (Bugbot Medium on PR #898).
+    const partialTool = vi.fn(async () => ({
+      ok: true,
+      phoneE164: "+18579289096",
+      mode: "suppress",
+      runsSweepComplete: false
+    }));
+    const chatStepPartial = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(
+        toolStep("set_contact_reply_mode", { phone: "+18579289096", mode: "suppress" })
+      )
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const resPartial = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep: chatStepPartial,
+      runActionTool: partialTool
+    });
+    expect(resPartial.ok).toBe(true);
+    if (resPartial.ok) {
+      expect(resPartial.content).toContain("could not be confirmed as stopped");
+      expect(resPartial.content).not.toContain("automations were stopped (");
+    }
+
+    // Auto arm + defensive missing-phone arm.
+    const autoTool = vi.fn(async () => ({ ok: true, mode: "auto" }));
+    const chatStep2 = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(
+        toolStep("set_contact_reply_mode", { phone: "+18579289096", mode: "auto" })
+      )
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res2 = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep: chatStep2,
+      runActionTool: autoTool
+    });
+    expect(res2.ok).toBe(true);
+    if (res2.ok) expect(res2.content).toContain("Texting resumed for the contact");
   });
 
   it("stops starting new steps once budgetMs is exhausted, fails fast when nothing committed", async () => {

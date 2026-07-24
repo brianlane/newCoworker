@@ -751,7 +751,8 @@ export async function POST(request: Request) {
       editAiflowEnabled,
       generateImageEnabled,
       notificationPrefsToolEnabled,
-      flagSpamToolEnabled
+      flagSpamToolEnabled,
+      replyModeToolEnabled
     ] = await Promise.all([
       isAgentToolEnabled(body.businessId, "dashboard", "send_sms"),
       isAgentToolEnabled(body.businessId, "dashboard", "send_whatsapp"),
@@ -763,7 +764,8 @@ export async function POST(request: Request) {
       isAgentToolEnabled(body.businessId, "dashboard", "edit_aiflow"),
       isAgentToolEnabled(body.businessId, "dashboard", "generate_image"),
       isAgentToolEnabled(body.businessId, "dashboard", "update_notification_preferences"),
-      isAgentToolEnabled(body.businessId, "dashboard", "flag_contact_spam")
+      isAgentToolEnabled(body.businessId, "dashboard", "flag_contact_spam"),
+      isAgentToolEnabled(body.businessId, "dashboard", "set_contact_reply_mode")
     ]);
     // Settings mutation needs more than chat access: the tool is declared
     // only when THIS caller passes manage_settings (manager+, the same
@@ -803,7 +805,10 @@ export async function POST(request: Request) {
       // (/api/dashboard/sms-optouts requires manage_settings): the opt-out
       // write is irreversible from the platform, so a staff-role teammate
       // must never be handed this tool.
-      flag_contact_spam: flagSpamToolEnabled && canManageSettings
+      flag_contact_spam: flagSpamToolEnabled && canManageSettings,
+      // Reversible thread management — same operate_messages bar as the
+      // dashboard thread's own reply-mode toggle, so chat access suffices.
+      set_contact_reply_mode: replyModeToolEnabled
     };
 
     // Two message arrays:

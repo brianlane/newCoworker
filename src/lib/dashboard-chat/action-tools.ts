@@ -46,6 +46,7 @@ import { editAiFlowDefinition } from "@/lib/ai-flows/compile-service";
 import { generateImageForDashboard, normalizeAspectRatio } from "@/lib/image-tools/handlers";
 import { recordInteractionAndIncrement } from "@/lib/customer-memory/db";
 import { flagContactSpam } from "@/lib/customer-tools/flag-spam";
+import { setContactTextingMode } from "@/lib/customer-tools/reply-mode";
 import {
   applyNotificationPreferenceToggles,
   NOTIFICATION_TOGGLE_KEYS
@@ -66,7 +67,8 @@ export const ACTION_TOOL_NAMES = [
   "edit_aiflow",
   "generate_image",
   "update_notification_preferences",
-  "flag_contact_spam"
+  "flag_contact_spam",
+  "set_contact_reply_mode"
 ] as const;
 
 export type ActionToolName = (typeof ACTION_TOOL_NAMES)[number];
@@ -124,6 +126,17 @@ export type ActionToolGates = {
    * undone from the platform); the owner-SMS surface is the verified owner.
    */
   flag_contact_spam: boolean;
+  /**
+   * "Stop texting X" / "resume texting X": sms_reply_mode suppress/auto +
+   * pending-run cancels through the shared core
+   * (customer-tools/reply-mode.ts). The REVERSIBLE sibling of
+   * flag_contact_spam, added after the Chris Gregoris incident (Jul 24
+   * 2026) where the spam block was the only tool that could stop
+   * follow-ups. Inline-only like the other contact tools; needs no
+   * manage_settings (the dashboard thread's reply-mode toggle is
+   * operate_messages-level).
+   */
+  set_contact_reply_mode: boolean;
 };
 
 // Every clock time in an outbound body carries a named timezone (KYP/Ayanna
@@ -359,7 +372,7 @@ const UPDATE_NOTIFICATION_PREFERENCES_DECLARATION: GeminiFunctionDeclaration = {
 const FLAG_CONTACT_SPAM_DECLARATION: GeminiFunctionDeclaration = {
   name: "flag_contact_spam",
   description:
-    "Flag a contact or lead as SPAM and stop all follow-ups to them. Use ONLY when the owner explicitly declares someone spam (or asks to stop all automated follow-ups to a number) in this conversation. Effects: the number is blocked from ALL outbound texting for this business, every pending automation run for them is canceled, and the contact is tagged spam. The block CANNOT be undone from chat, only the contact texting START lifts it, so when the target is ambiguous, confirm the exact number first. When the owner names a lead without a number, resolve the number from this conversation's context (e.g. the new-lead notification they are replying to). After the tool returns, tell the owner exactly what was done.",
+    "PERMANENTLY block a contact as SPAM. Use ONLY when the owner explicitly calls someone spam, junk, fake, a bot, or abusive in this conversation. NEVER use it just because the owner asked to stop texting, stop messaging, or stop following up with someone — that is set_contact_reply_mode, and using this tool instead would irreversibly cut off a real customer. Effects: the number is blocked from ALL outbound texting for this business, every pending automation run for them is canceled, and the contact is tagged spam. The block CANNOT be undone from chat, only the contact texting START lifts it — so when it is not 100% clear the owner means SPAM (not merely quiet), ask them to confirm before calling this. When the owner names a lead without a number, resolve the number from this conversation's context (e.g. the new-lead notification they are replying to). After the tool returns, tell the owner exactly what was done.",
   parameters: {
     type: "object",
     properties: {
@@ -376,6 +389,27 @@ const FLAG_CONTACT_SPAM_DECLARATION: GeminiFunctionDeclaration = {
   }
 };
 
+const SET_CONTACT_REPLY_MODE_DECLARATION: GeminiFunctionDeclaration = {
+  name: "set_contact_reply_mode",
+  description:
+    'Stop (or resume) the coworker texting one contact. Use mode "suppress" when the owner asks to stop texting, stop messaging, leave alone, or stop following up with someone — the coworker stops auto-replying to that contact and their pending automation runs are stopped, while the contact can still text in, the owner can still text them manually, and calls are unaffected. Use mode "auto" when the owner asks to resume normal replies to them. Fully reversible; this is thread management, NOT a spam block (a contact the owner explicitly calls spam/junk/abusive is flag_contact_spam instead). After the tool returns, tell the owner exactly what changed.',
+  parameters: {
+    type: "object",
+    properties: {
+      phone: {
+        type: "string",
+        description: "The contact's number, E.164 preferred, e.g. +15551234567."
+      },
+      mode: {
+        type: "string",
+        description:
+          '"suppress" to stop the coworker texting them, "auto" to resume normal replies.'
+      }
+    },
+    required: ["phone", "mode"]
+  }
+};
+
 const DECLARATIONS: Record<ActionToolName, GeminiFunctionDeclaration> = {
   send_sms: SEND_SMS_DECLARATION,
   send_whatsapp: SEND_WHATSAPP_DECLARATION,
@@ -388,7 +422,8 @@ const DECLARATIONS: Record<ActionToolName, GeminiFunctionDeclaration> = {
   edit_aiflow: EDIT_AIFLOW_DECLARATION,
   generate_image: GENERATE_IMAGE_DECLARATION,
   update_notification_preferences: UPDATE_NOTIFICATION_PREFERENCES_DECLARATION,
-  flag_contact_spam: FLAG_CONTACT_SPAM_DECLARATION
+  flag_contact_spam: FLAG_CONTACT_SPAM_DECLARATION,
+  set_contact_reply_mode: SET_CONTACT_REPLY_MODE_DECLARATION
 };
 
 /** The declarations for every gate that is ON, in stable order. */
@@ -474,6 +509,11 @@ const flagContactSpamArgsSchema = z.object({
   reason: z.string().max(500).optional()
 });
 
+const setContactReplyModeArgsSchema = z.object({
+  phone: z.string().min(5).max(32),
+  mode: z.enum(["suppress", "auto"])
+});
+
 // Same caps as the Rowboat dispatch's dashboardGenerateImageArgsSchema.
 const generateImageArgsSchema = z.object({
   prompt: z.string().min(1).max(2000),
@@ -552,6 +592,7 @@ export type ActionToolDeps = {
   recordContactInteraction?: typeof recordInteractionAndIncrement;
   applyNotificationToggles?: typeof applyNotificationPreferenceToggles;
   flagSpam?: typeof flagContactSpam;
+  setReplyMode?: typeof setContactTextingMode;
 };
 
 /**
@@ -582,6 +623,7 @@ export async function executeActionTool(
   const applyNotificationToggles =
     deps.applyNotificationToggles ?? applyNotificationPreferenceToggles;
   const flagSpam = deps.flagSpam ?? flagContactSpam;
+  const setReplyMode = deps.setReplyMode ?? setContactTextingMode;
   /* c8 ignore stop */
 
   // Outbound-first recipients must exist as contacts (KYP/Ayanna, Jul 20
@@ -857,6 +899,15 @@ export async function executeActionTool(
         // Shared core: opt-out suppression (load-bearing, fails honestly) →
         // pending-run cancels → contact tag. Never throws.
         return await flagSpam(businessId, parsed.data);
+      }
+      case "set_contact_reply_mode": {
+        const parsed = setContactReplyModeArgsSchema.safeParse(call.args);
+        if (!parsed.success) {
+          return { ok: false, message: `invalid_args:${parsed.error.issues[0]?.message}` };
+        }
+        // Shared core: reply-mode write (load-bearing, fails honestly) →
+        // pending-run cancels on suppress. Never throws.
+        return await setReplyMode(businessId, parsed.data);
       }
     }
   } catch (err) {

@@ -57,7 +57,11 @@ const DASHBOARD_NAME_MAP: Record<string, string[] | null> = {
   // the owner-SMS operator turn). The Rowboat paths carry no caller
   // identity, so neither agent gets a twin — the customer-facing texting
   // coworker especially must never hold this tool.
-  flag_contact_spam: null
+  flag_contact_spam: null,
+  // INLINE-ONLY for the same reason: "stop texting X" is an owner decision
+  // about the coworker's own behavior; a customer-facing agent must not be
+  // able to mute (or re-enable) threads.
+  set_contact_reply_mode: null
 };
 
 const WEBCHAT_CANONICAL = [
