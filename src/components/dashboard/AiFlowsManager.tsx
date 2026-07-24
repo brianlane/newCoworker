@@ -842,8 +842,35 @@ function sanitizeStepForSave(step: FlowStep): FlowStep {
   if (step.type === "send_whatsapp" && step.toRef) {
     return { ...step, to: undefined, toAgentName: undefined };
   }
-  if (step.type === "route_to_team" && step.agentRef) {
-    return { ...step, agentName: undefined };
+  // route_to_team offer-set sources are mutually exclusive (schema-enforced):
+  // broadcast-all > broadcast list > dynamic var pin > picked ref > typed
+  // name. One cascading pass, so a dropped source (e.g. a lone broadcast
+  // name mid-typing, which the schema's 2-10 rule would reject) still lets
+  // the remaining sources resolve by priority instead of failing the save.
+  if (step.type === "route_to_team") {
+    const s =
+      step.agentNames && step.agentNames.length < 2
+        ? { ...step, agentNames: undefined }
+        : step;
+    if (s.broadcastAll) {
+      return {
+        ...s,
+        agentName: undefined,
+        agentRef: undefined,
+        agentNameVar: undefined,
+        agentNames: undefined
+      };
+    }
+    if (s.agentNames && s.agentNames.length >= 2) {
+      return { ...s, agentName: undefined, agentRef: undefined, agentNameVar: undefined };
+    }
+    if (s.agentNameVar) {
+      return { ...s, agentName: undefined, agentRef: undefined };
+    }
+    if (s.agentRef) {
+      return { ...s, agentName: undefined };
+    }
+    return s;
   }
   if (step.type !== "browse_action") return step;
   if (step.forEachLink) {
@@ -854,6 +881,7 @@ function sanitizeStepForSave(step: FlowStep): FlowStep {
       actions: step.actions,
       forEachLink: step.forEachLink,
       ...(step.forEachLinkMatchVar ? { forEachLinkMatchVar: step.forEachLinkMatchVar } : {}),
+      ...(step.skipWhenText ? { skipWhenText: step.skipWhenText } : {}),
       ...(step.auth ? { auth: step.auth } : {}),
       ...(step.when ? { when: step.when } : {})
     };
@@ -3166,6 +3194,12 @@ function StepFields({
           onChange={(v) => patchStep(index, { urlVar: v })}
           help="The name of a link an earlier step saved (e.g. lead_url)."
         />
+        <Field
+          label="Finish gracefully when the page says (optional)"
+          value={step.skipWhenText ?? ""}
+          onChange={(v) => patchStep(index, { skipWhenText: v.trim() ? v : undefined })}
+          help='When the page contains this text (e.g. "already claimed"), there is nothing to read: the step is skipped and the run ends as done instead of failing.'
+        />
         <label className={labelClass}>Fields to extract</label>
         {fields.map((f, fi) => (
           <div key={fi} className="flex gap-2">
@@ -3863,10 +3897,87 @@ function StepFields({
           refValue={step.agentRef}
           people={people}
           employeesOnly
-          onChangeText={(v) => patchStep(index, { agentName: v.trim() ? v : undefined })}
-          onChangeRef={(ref) => patchStep(index, { agentRef: ref, agentName: undefined })}
+          onChangeText={(v) =>
+            patchStep(index, {
+              agentName: v.trim() ? v : undefined,
+              ...(v.trim()
+                ? { agentNameVar: undefined, agentNames: undefined, broadcastAll: undefined }
+                : {})
+            })
+          }
+          onChangeRef={(ref) =>
+            patchStep(index, {
+              agentRef: ref,
+              agentName: undefined,
+              agentNameVar: undefined,
+              agentNames: undefined,
+              broadcastAll: undefined
+            })
+          }
           help="Picked employees resolve to their current number at send time."
         />
+        <Field
+          label="Or pin dynamically from a variable (optional; e.g. assigned_agent)"
+          value={step.agentNameVar ?? ""}
+          onChange={(v) => {
+            const name = v.trim();
+            patchStep(
+              index,
+              name
+                ? {
+                    agentNameVar: name,
+                    agentName: undefined,
+                    agentRef: undefined,
+                    agentNames: undefined,
+                    broadcastAll: undefined
+                  }
+                : { agentNameVar: undefined }
+            );
+          }}
+          help='The variable&rsquo;s value (an extracted teammate name, e.g. from "I want Gabby to have this") is matched to your active roster at run time. Empty or "none" means no pin; a name that matches nobody sends the lead back to you.'
+        />
+        <div className="rounded-md border border-parchment/10 bg-deep-ink/30 px-3 py-2 space-y-2">
+          <label className="flex items-center gap-2 text-xs text-parchment/70">
+            <input
+              type="checkbox"
+              checked={Boolean(step.broadcastAll)}
+              onChange={(ev) =>
+                patchStep(
+                  index,
+                  ev.target.checked
+                    ? {
+                        broadcastAll: true,
+                        agentName: undefined,
+                        agentRef: undefined,
+                        agentNameVar: undefined,
+                        agentNames: undefined
+                      }
+                    : { broadcastAll: undefined }
+                )
+              }
+            />
+            Offer the WHOLE active roster at once (first &ldquo;1&rdquo; wins)
+          </label>
+          {!step.broadcastAll && (
+            <Field
+              label="Or offer several members at once (comma-separated names, 2-10; optional)"
+              value={(step.agentNames ?? []).join(", ")}
+              onChange={(v) => {
+                const names = v
+                  .split(",")
+                  .map((s) => s.trim())
+                  .filter(Boolean);
+                patchStep(index, {
+                  agentNames: names.length > 0 ? names : undefined,
+                  ...(names.length > 0
+                    ? { agentName: undefined, agentRef: undefined, agentNameVar: undefined }
+                    : {})
+                });
+              }}
+              help="Enter at least two names. Everyone listed is texted the offer at the same time and shares one deadline; the lead falls back to you when everyone passes or time runs out. A single name saves as no broadcast (use the pin above for one person)."
+            />
+          )}
+        </div>
         <Field
           label="Owner fallback SMS (when no agent claims)"
           value={step.ownerFallbackTemplate}
@@ -3900,7 +4011,13 @@ function StepFields({
                           step.ownerDirectTemplate ??
                           "HIGH-VALUE lead kept for you — not offered to the team."
                       }
-                    : { ownerDirectWhen: undefined, ownerDirectTemplate: undefined }
+                    : {
+                        ownerDirectWhen: undefined,
+                        ownerDirectTemplate: undefined,
+                        // Nudges are only valid alongside the keep-for-owner
+                        // pair; an orphaned flag would fail validation on save.
+                        ownerDirectNudges: undefined
+                      }
                 )
               }
             />
@@ -3975,6 +4092,18 @@ function StepFields({
                 onChange={(v) => patchStep(index, { ownerDirectTemplate: v })}
                 textarea
               />
+              <label className="flex items-center gap-2 text-xs text-parchment/70">
+                <input
+                  type="checkbox"
+                  checked={Boolean(step.ownerDirectNudges)}
+                  onChange={(ev) =>
+                    patchStep(index, {
+                      ownerDirectNudges: ev.target.checked ? true : undefined
+                    })
+                  }
+                />
+                Remind me at 10 and 30 minutes until I acknowledge the kept lead
+              </label>
               <p className="text-[11px] text-parchment/50">
                 Checked once, before anyone is offered. Steps gated on a claim are
                 skipped, and the outcome notification says the lead was kept.
@@ -4083,6 +4212,12 @@ function StepFields({
           onChange={(v) =>
             patchStep(index, { auth: v.trim() ? { integrationLabel: v } : undefined })
           }
+        />
+        <Field
+          label="Finish gracefully when the page says (optional)"
+          value={step.skipWhenText ?? ""}
+          onChange={(v) => patchStep(index, { skipWhenText: v.trim() ? v : undefined })}
+          help='When an action fails AND the page contains this text (e.g. "already claimed"), the goal is already met: the step is skipped and the run ends as done instead of failing.'
         />
         <label className={labelClass}>
           Page actions, in order (use {"{{vars.actions_taken}}"} in a fill value to describe what this flow did)
@@ -4801,6 +4936,16 @@ function StepFields({
               timeoutMinutes: Number.isFinite(n) && n > 0 ? Math.round(n) : undefined
             });
           }}
+        />
+        <Field
+          label="Or compute the wait from a variable (optional template)"
+          value={step.timeoutMinutesTemplate ?? ""}
+          onChange={(v) =>
+            patchStep(index, { timeoutMinutesTemplate: v.trim() ? v : undefined })
+          }
+          help={
+            'E.g. {{vars.report_wait_minutes}} from an earlier math step. When it renders to a positive number it wins over the fixed minutes above.'
+          }
         />
         <p className="text-[11px] text-parchment/40">
           While waiting, their next text is captured by this workflow (the AI&apos;s normal
