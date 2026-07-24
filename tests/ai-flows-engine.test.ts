@@ -78,6 +78,36 @@ describe("extractLeadIdentity", () => {
   it("returns nulls when nothing matches", () => {
     expect(extractLeadIdentity({ unrelated: "x" })).toEqual({ name: null, email: null });
   });
+
+  it("reads the calendar-flow invitee_* keys (KYP pre-call reminder, Jul 24 2026)", () => {
+    // The seeded Calendly flows extract the booker as invitee_first_name /
+    // invitee_email; these must enrich the contact like lead_* keys do.
+    expect(
+      extractLeadIdentity({ invitee_first_name: "Kav", invitee_email: " KAKIAN13@GMAIL.COM " })
+    ).toEqual({ name: "Kav", email: "kakian13@gmail.com" });
+    expect(extractLeadIdentity({ invitee_name: "Kav A", attendee_email: "a@b.co" })).toEqual({
+      name: "Kav A",
+      email: "a@b.co"
+    });
+    expect(extractLeadIdentity({ attendee_name: "Dana" })).toEqual({
+      name: "Dana",
+      email: null
+    });
+  });
+
+  it("prefers full invitee_name over invitee_first_name, and both over bare name", () => {
+    expect(
+      extractLeadIdentity({
+        name: "Generic",
+        invitee_first_name: "Kav",
+        invitee_name: "Kav Akian"
+      })
+    ).toEqual({ name: "Kav Akian", email: null });
+    expect(extractLeadIdentity({ name: "Generic", invitee_first_name: "Kav" })).toEqual({
+      name: "Kav",
+      email: null
+    });
+  });
 });
 
 describe("firstUrlInText", () => {

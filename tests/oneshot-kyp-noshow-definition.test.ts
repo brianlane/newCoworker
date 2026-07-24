@@ -82,6 +82,31 @@ describe("KYP no-show recovery definition (wrong-offer-link regression)", () => 
     expect(extract?.fields?.map((f) => f.name)).toContain("event_title");
   });
 
+  it("files the booker as a contact before any text (guarded on a usable phone)", () => {
+    // Kav (Jul 24 2026): a Calendly booker was texted by a calendar flow and
+    // the Texts thread showed a bare number + "Set contact" because nothing
+    // filed them. The definition must extract the invitee email and upsert
+    // the contact ahead of the branch that texts them.
+    const extract = steps.find((s) => s.type === "extract_text") as
+      | { fields?: Array<{ name?: string }> }
+      | undefined;
+    expect(extract?.fields?.map((f) => f.name)).toContain("invitee_email");
+    const upsertIdx = steps.findIndex((s) => s.type === "upsert_customer");
+    const branchIdx = steps.findIndex((s) => s.type === "branch");
+    expect(upsertIdx).toBeGreaterThan(-1);
+    expect(upsertIdx).toBeLessThan(branchIdx);
+    const upsert = steps[upsertIdx] as {
+      phoneVar?: string;
+      nameVar?: string;
+      emailVar?: string;
+      when?: Record<string, unknown>;
+    };
+    expect(upsert.phoneVar).toBe("invitee_phone");
+    expect(upsert.nameVar).toBe("invitee_first_name");
+    expect(upsert.emailVar).toBe("invitee_email");
+    expect(upsert.when).toEqual({ var: "invitee_phone", notEquals: "none" });
+  });
+
   it("a '| 2' ($200) no-show is offered the $200 link — and never the $100 one", () => {
     const arm = armFor("KYP Ads | Free Strategy Call | 2");
     const sends = armSends(arm);
