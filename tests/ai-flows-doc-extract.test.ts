@@ -8,6 +8,7 @@ import {
   parseDocExtractionReply
 } from "@/lib/ai-flows/doc-extract";
 import { GeminiEmptyError } from "@/lib/gemini-generate-content";
+import { ingestDocRecordFields } from "@/lib/memory/graph-deterministic";
 import {
   Document as DocxDocument,
   Packer as DocxPacker,
@@ -35,6 +36,9 @@ vi.mock("@/lib/documents/ingest", async (importOriginal) => {
     ingestDocument: vi.fn(async () => ({ ok: true, contentMd: "# doc", summary: "a doc" }))
   };
 });
+vi.mock("@/lib/memory/graph-deterministic", () => ({
+  ingestDocRecordFields: vi.fn(async () => ({ ran: false }))
+}));
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
@@ -646,6 +650,10 @@ describe("docExtract — record sinks (fileAs extras)", () => {
       expect.anything()
     );
 
+    // No linked contact → record fields never reach the knowledge graph
+    // (no subject entity to attach them to).
+    expect(ingestDocRecordFields).not.toHaveBeenCalled();
+
     const emptyGenerate = vi.fn(async () => ({
       text: '{"renewal_date": "", "premium": ""}',
       usage: { inputTokens: 1, outputTokens: 1 }
@@ -655,6 +663,24 @@ describe("docExtract — record sinks (fileAs extras)", () => {
       { client: makeDb({}).db as never, generate: emptyGenerate as never }
     );
     expect(nothing.ok && nothing.fileNotes).toEqual(["record fields skipped: nothing extracted"]);
+  });
+
+  it("feeds record fields to the knowledge graph when a contact is linked (kg-source: doc_extract_fields)", async () => {
+    const { db } = makeDb({ contactRow: { id: "contact-1" } });
+    const result = await docExtract(
+      {
+        ...input,
+        fileAs: { ...baseFile, contactPhone: "+16025551234", recordFieldsFromExtraction: true }
+      },
+      { client: db as never, generate: okGenerate as never }
+    );
+    expect(result.ok && result.filed).toBeTruthy();
+    expect(ingestDocRecordFields).toHaveBeenCalledWith(input.businessId, {
+      title: expect.any(String),
+      fields: { renewal_date: "2026-09-01", premium: "$1,200" },
+      contactName: null,
+      contactE164: "+16025551234"
+    });
   });
 
   it("sets renewal_date from the named extracted field (notes when unparseable/empty)", async () => {

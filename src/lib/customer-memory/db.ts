@@ -18,6 +18,11 @@ import type {
   SmsReplyMode
 } from "./types";
 import { normalizeContactTags } from "./types";
+import {
+  ingestContact,
+  ingestPinnedNote,
+  retirePinnedNote
+} from "@/lib/memory/graph-deterministic";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -101,6 +106,21 @@ export async function createCustomerMemory(
       throw new CustomerExistsError(input.customerE164);
     }
     throw new Error(`createCustomerMemory: ${error.message}`);
+  }
+  // Knowledge graph (kg-source: contacts / kg-source: customer_pinned_notes):
+  // named contacts become person nodes; a pinned note is an owner-authored
+  // fact. Never-throws, mode-gated inside.
+  await ingestContact(businessId, {
+    displayName: trimmedName,
+    e164: input.customerE164,
+    email: input.email?.trim() || null
+  });
+  if (input.pinnedMd?.trim()) {
+    await ingestPinnedNote(businessId, {
+      displayName: trimmedName,
+      e164: input.customerE164,
+      note: input.pinnedMd
+    });
   }
   return data as unknown as CustomerMemoryRow;
 }
@@ -445,6 +465,44 @@ export async function updateCustomerOwnerFields(
     .eq("business_id", businessId)
     .eq("customer_e164", customerE164);
   if (error) throw new Error(`updateCustomerOwnerFields: ${error.message}`);
+
+  // Knowledge graph: only identity-bearing edits touch it (this helper also
+  // carries high-frequency knobs like tags/reply-mode that say nothing
+  // entity-shaped). The graph gets the row's FULL post-update identity —
+  // read back after the write — never just the edited fields: an email-only
+  // save must still carry the stored name, and a name-only save must still
+  // carry the stored email (Bugbot #874, both directions). A nameless
+  // contact ingests as a number-named node (booking/lead convention).
+  if ("displayName" in edit || "email" in edit) {
+    const { data } = await db
+      .from("contacts")
+      .select("display_name, email")
+      .eq("business_id", businessId)
+      .eq("customer_e164", customerE164)
+      .maybeSingle();
+    const row = data as { display_name?: string | null; email?: string | null } | null;
+    // A failed/rowless read-back falls back to the values just WRITTEN —
+    // an edit the DB accepted must never be dropped from the graph because
+    // a follow-up read blipped.
+    await ingestContact(businessId, {
+      displayName: row?.display_name ?? ("displayName" in edit ? (edit.displayName ?? null) : null),
+      e164: customerE164,
+      email: row?.email ?? ("email" in edit ? (edit.email ?? null) : null)
+    });
+  }
+  if ("pinnedMd" in edit) {
+    if (edit.pinnedMd?.trim()) {
+      await ingestPinnedNote(businessId, {
+        displayName: "displayName" in edit ? edit.displayName ?? null : null,
+        e164: customerE164,
+        note: edit.pinnedMd
+      });
+    } else {
+      // Cleared note → retire the graph's owner_note facts, or prompts
+      // would keep treating removed content as current owner knowledge.
+      await retirePinnedNote(businessId, customerE164);
+    }
+  }
 }
 
 /**

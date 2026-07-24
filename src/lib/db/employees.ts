@@ -9,6 +9,7 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { ingestRosterMember } from "@/lib/memory/graph-deterministic";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -104,7 +105,15 @@ export async function createTeamMember(
     .select(MEMBER_COLUMNS)
     .single();
   if (error) throw new Error(`createTeamMember: ${error.message}`);
-  return data as unknown as TeamMemberRow;
+  const row = data as unknown as TeamMemberRow;
+  // Knowledge graph (kg-source: team_roster): the roster is the canonical
+  // "who works here" — never-throws, mode-gated inside.
+  await ingestRosterMember(businessId, {
+    name: row.name,
+    phoneE164: row.phone_e164,
+    email: row.email
+  });
+  return row;
 }
 
 export type TeamMemberPatch = {
@@ -139,7 +148,16 @@ export async function updateTeamMember(
     .select(MEMBER_COLUMNS)
     .maybeSingle();
   if (error) throw new Error(`updateTeamMember: ${error.message}`);
-  return (data as TeamMemberRow | null) ?? null;
+  const updated = (data as TeamMemberRow | null) ?? null;
+  if (updated && (patch.name !== undefined || patch.phoneE164 !== undefined || patch.email !== undefined)) {
+    // Roster identity changed → refresh the graph node (kg-source: team_roster).
+    await ingestRosterMember(businessId, {
+      name: updated.name,
+      phoneE164: updated.phone_e164,
+      email: updated.email
+    });
+  }
+  return updated;
 }
 
 export async function deleteTeamMember(

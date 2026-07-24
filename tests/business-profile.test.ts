@@ -11,6 +11,9 @@ vi.mock("@/lib/supabase/server", () => ({
 vi.mock("@/lib/db/businesses", () => ({ getBusiness: vi.fn() }));
 vi.mock("@/lib/db/configs", () => ({ patchBusinessConfig: vi.fn() }));
 vi.mock("@/lib/services/db", () => ({ listBusinessServices: vi.fn(async () => []) }));
+vi.mock("@/lib/memory/graph-deterministic", () => ({
+  ingestBusinessProfile: vi.fn(async () => ({ ran: false }))
+}));
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
@@ -30,6 +33,7 @@ import {
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getBusiness } from "@/lib/db/businesses";
 import { patchBusinessConfig } from "@/lib/db/configs";
+import { ingestBusinessProfile } from "@/lib/memory/graph-deterministic";
 import { listBusinessServices } from "@/lib/services/db";
 import { logger } from "@/lib/logger";
 
@@ -227,6 +231,11 @@ describe("refreshBusinessProfileMd", () => {
     expect(md).toContain("- Owner / primary contact: Pat Piper");
     expect(md).toContain("- Industry: Plumbing");
     expect(md).toContain("- Monday: 8:00 AM to 4:00 PM");
+    // The org node rides along (kg-source: business_profile).
+    expect(ingestBusinessProfile).toHaveBeenCalledWith(
+      "biz-1",
+      expect.objectContaining({ businessName: expect.any(String) })
+    );
     expect(patchBusinessConfig).toHaveBeenCalledWith("biz-1", { profile_md: md }, db);
     expect(createSupabaseServiceClient).not.toHaveBeenCalled();
   });

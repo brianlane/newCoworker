@@ -15,7 +15,9 @@ vi.mock("@/lib/admin/platform-settings", () => ({
 }));
 
 import {
+  deactivateMemoryFacts,
   effectiveMemoryGraphMode,
+  touchMemoryFactStatedAt,
   getMemoryGraphDefaultMode,
   getMemoryGraphMode,
   insertMemoryEntity,
@@ -272,6 +274,45 @@ describe("effectiveMemoryGraphMode (pure — admin views with a fresh default)",
     expect(effectiveMemoryGraphMode(null, "shadow")).toBe("shadow");
     expect(effectiveMemoryGraphMode(undefined, "off")).toBe("off");
     expect(effectiveMemoryGraphMode("banana", "shadow")).toBe("shadow");
+  });
+});
+
+describe("touchMemoryFactStatedAt", () => {
+  it("bumps stated_at on the row; throws on error; default client works", async () => {
+    const c = chain({ error: null }, "eq");
+    await touchMemoryFactStatedAt("f1", c as never);
+    expect(c.from).toHaveBeenCalledWith("memory_facts");
+    expect(c.update).toHaveBeenCalledWith({ stated_at: expect.any(String) });
+    expect(c.eq).toHaveBeenCalledWith("id", "f1");
+
+    const failing = chain({ error: { message: "denied" } }, "eq");
+    await expect(touchMemoryFactStatedAt("f1", failing as never)).rejects.toThrow(
+      "touchMemoryFactStatedAt: denied"
+    );
+    defaultClientSpy.mockReturnValue(chain({ error: null }, "eq"));
+    await touchMemoryFactStatedAt("f1");
+    expect(defaultClientSpy).toHaveBeenCalled();
+  });
+});
+
+describe("deactivateMemoryFacts", () => {
+  it("marks the ids inactive without a successor pointer", async () => {
+    const c = chain({ error: null }, "in");
+    await deactivateMemoryFacts(["f1", "f2"], c as never);
+    expect(c.from).toHaveBeenCalledWith("memory_facts");
+    expect(c.update).toHaveBeenCalledWith({ active: false });
+    expect(c.in).toHaveBeenCalledWith("id", ["f1", "f2"]);
+  });
+
+  it("throws on error and supports the default client", async () => {
+    const failing = chain({ error: { message: "denied" } }, "in");
+    await expect(deactivateMemoryFacts(["f1"], failing as never)).rejects.toThrow(
+      "deactivateMemoryFacts: denied"
+    );
+    const ok = chain({ error: null }, "in");
+    defaultClientSpy.mockReturnValue(ok);
+    await deactivateMemoryFacts(["f1"]);
+    expect(defaultClientSpy).toHaveBeenCalled();
   });
 });
 

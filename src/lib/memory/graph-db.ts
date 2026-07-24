@@ -156,6 +156,37 @@ export async function insertMemoryFact(
   return data as MemoryFactRow;
 }
 
+/**
+ * Re-stated fact: an identical (subject, predicate, object) landed again —
+ * no new row, but stated_at bumps so recency reflects the latest
+ * re-confirmation (repeat bookings, owners repeating rules).
+ */
+export async function touchMemoryFactStatedAt(
+  id: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("memory_facts")
+    .update({ stated_at: new Date().toISOString() })
+    .eq("id", id);
+  if (error) throw new Error(`touchMemoryFactStatedAt: ${error.message}`);
+}
+
+/**
+ * Retire facts WITHOUT a successor (owner removed the source content, e.g.
+ * a cleared pinned note): active=false, superseded_by stays null — which
+ * distinguishes "withdrawn" from "replaced by a newer statement".
+ */
+export async function deactivateMemoryFacts(
+  ids: string[],
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db.from("memory_facts").update({ active: false }).in("id", ids);
+  if (error) throw new Error(`deactivateMemoryFacts: ${error.message}`);
+}
+
 /** Mark old facts inactive, pointing at the fact that replaced them. */
 export async function supersedeMemoryFacts(
   ids: string[],
