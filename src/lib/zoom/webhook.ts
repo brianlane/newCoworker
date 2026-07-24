@@ -211,8 +211,13 @@ export type ZoomTranscriptWebhookOutcome =
   | "duplicate"
   /** Payload missing essentials, nothing actionable. */
   | "unusable"
-  /** Document cap reached, skipped quietly (claim released). */
-  | "skipped_cap"
+  /**
+   * Permanent refusal (document cap reached, transcript over the size
+   * ceiling): skipped quietly with a 200 so Zoom does NOT hammer retries at
+   * something that cannot succeed; the claim is released so a later manual
+   * import (after the owner clears space) stays possible.
+   */
+  | "skipped_permanent"
   /** Transient failure, claim released; the route answers 5xx so Zoom retries. */
   | "import_failed";
 
@@ -240,7 +245,7 @@ export type ZoomWebhookDeps = {
 const TRANSCRIPT_OUTCOME_RANK: Record<ZoomTranscriptWebhookOutcome, number> = {
   import_failed: 6,
   imported: 5,
-  skipped_cap: 4,
+  skipped_permanent: 4,
   duplicate: 3,
   disabled: 2,
   no_connection: 1,
@@ -348,18 +353,25 @@ export async function processZoomWebhookEvent(
 
         if (!imported.ok) {
           await releaseImport(businessId, extracted.meetingUuid);
-          if (imported.error === "limit_reached") {
-            // The meeting already happened; a cap is not an error worth
-            // retry-hammering. Log for the owner-facing activity trail.
+          if (imported.error === "limit_reached" || imported.error === "too_large") {
+            // Permanent refusals: retrying cannot change the outcome, so
+            // answer 200 (Zoom stops redelivering) and log for the
+            // owner-facing activity trail.
             await logSystem({
               businessId,
               source: "zoom-webhook",
-              event: "zoom_auto_import_skipped_cap",
+              event:
+                imported.error === "limit_reached"
+                  ? "zoom_auto_import_skipped_cap"
+                  : "zoom_auto_import_skipped_too_large",
               level: "warn",
-              message: "Zoom auto-import skipped: document limit reached",
+              message:
+                imported.error === "limit_reached"
+                  ? "Zoom auto-import skipped: document limit reached"
+                  : "Zoom auto-import skipped: transcript over the 10 MB limit",
               payload: { meetingUuid: extracted.meetingUuid }
             });
-            return { outcome: "skipped_cap", businessId };
+            return { outcome: "skipped_permanent", businessId };
           }
           return { outcome: "import_failed", businessId };
         }

@@ -164,36 +164,45 @@ export async function importZoomTranscriptDocument(
     };
   }
 
-  const ingested = await ingest({
-    businessId,
-    title,
-    mimeType: VTT_MIME_TYPE,
-    data: bytes,
-    businessName: business.name
-  });
-  if (ingested.ok) {
-    await patchDocument(businessId, documentId, {
-      content_md: ingested.contentMd,
-      summary: ingested.summary,
-      status: "ready",
-      error_detail: null
+  try {
+    const ingested = await ingest({
+      businessId,
+      title,
+      mimeType: VTT_MIME_TYPE,
+      data: bytes,
+      businessName: business.name
     });
-    // Fire-and-forget: the Supabase write is canonical; a slow VPS must not
-    // block the import.
-    void syncVault(businessId);
-    return {
-      ok: true,
-      document: row,
-      status: "ready",
-      errorDetail: null,
-      summary: ingested.summary
-    };
-  }
+    if (ingested.ok) {
+      await patchDocument(businessId, documentId, {
+        content_md: ingested.contentMd,
+        summary: ingested.summary,
+        status: "ready",
+        error_detail: null
+      });
+      // Fire-and-forget: the Supabase write is canonical; a slow VPS must
+      // not block the import.
+      void syncVault(businessId);
+      return {
+        ok: true,
+        document: row,
+        status: "ready",
+        errorDetail: null,
+        summary: ingested.summary
+      };
+    }
 
-  const errorDetail = ingested.detail ?? ingested.error;
-  await patchDocument(businessId, documentId, {
-    status: "failed",
-    error_detail: errorDetail
-  });
-  return { ok: true, document: row, status: "failed", errorDetail, summary: null };
+    const errorDetail = ingested.detail ?? ingested.error;
+    await patchDocument(businessId, documentId, {
+      status: "failed",
+      error_detail: errorDetail
+    });
+    return { ok: true, document: row, status: "failed", errorDetail, summary: null };
+  } catch (err) {
+    // An unexpected throw after the row exists must not strand a document:
+    // a caller-driven retry (the webhook's 5xx path) would otherwise import
+    // a SECOND copy of the same meeting. Roll back and rethrow.
+    await deleteDocument(businessId, documentId);
+    await removeUploadedObject();
+    throw err;
+  }
 }

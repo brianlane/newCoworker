@@ -93,50 +93,57 @@ export async function POST(request: Request) {
       }
     };
 
-    const transcript = await fetchZoomMeetingTranscript(businessId, meetingId);
-    if (!transcript.ok) {
-      await releaseHeldClaim();
-      // Every lib failure is owner-actionable copy; surface it verbatim.
-      return errorResponse("VALIDATION_ERROR", transcript.detail);
-    }
-
-    // The pasted reference may be a UUID or a full recording link, neither
-    // is filename/title material. Label with the digits when it's a plain
-    // meeting ID, else a generic marker.
-    const digits = meetingId.replace(/\s+/g, "");
-    const refLabel = /^\d{9,15}$/.test(digits) ? digits : "recording";
-    const title = parsed.data.title || `Zoom meeting ${refLabel} (transcript)`;
-
-    const imported = await importZoomTranscriptDocument({
-      businessId,
-      business: { name: business.name, tier: business.tier },
-      vtt: transcript.vtt,
-      title,
-      refLabel
-    });
-
-    if (!imported.ok) {
-      await releaseHeldClaim();
-      if (imported.error === "storage_failed") {
-        return errorResponse("INTERNAL_SERVER_ERROR", imported.detail);
+    try {
+      const transcript = await fetchZoomMeetingTranscript(businessId, meetingId);
+      if (!transcript.ok) {
+        await releaseHeldClaim();
+        // Every lib failure is owner-actionable copy; surface it verbatim.
+        return errorResponse("VALIDATION_ERROR", transcript.detail);
       }
-      return errorResponse("VALIDATION_ERROR", imported.detail);
-    }
 
-    // Stamp the produced document onto the ledger row (also repoints it on
-    // a deliberate re-import) so webhook deliveries stay no-ops.
-    if (meetingUuid) {
-      await finalizeZoomTranscriptImport(businessId, meetingUuid, imported.document.id);
-    }
+      // The pasted reference may be a UUID or a full recording link, neither
+      // is filename/title material. Label with the digits when it's a plain
+      // meeting ID, else a generic marker.
+      const digits = meetingId.replace(/\s+/g, "");
+      const refLabel = /^\d{9,15}$/.test(digits) ? digits : "recording";
+      const title = parsed.data.title || `Zoom meeting ${refLabel} (transcript)`;
 
-    return successResponse({
-      document: {
-        ...imported.document,
-        status: imported.status,
-        error_detail: imported.errorDetail
-      },
-      summary: imported.summary
-    });
+      const imported = await importZoomTranscriptDocument({
+        businessId,
+        business: { name: business.name, tier: business.tier },
+        vtt: transcript.vtt,
+        title,
+        refLabel
+      });
+
+      if (!imported.ok) {
+        await releaseHeldClaim();
+        if (imported.error === "storage_failed") {
+          return errorResponse("INTERNAL_SERVER_ERROR", imported.detail);
+        }
+        return errorResponse("VALIDATION_ERROR", imported.detail);
+      }
+
+      // Stamp the produced document onto the ledger row (also repoints it on
+      // a deliberate re-import) so webhook deliveries stay no-ops.
+      if (meetingUuid) {
+        await finalizeZoomTranscriptImport(businessId, meetingUuid, imported.document.id);
+      }
+
+      return successResponse({
+        document: {
+          ...imported.document,
+          status: imported.status,
+          error_detail: imported.errorDetail
+        },
+        summary: imported.summary
+      });
+    } catch (err) {
+      // A throw anywhere past the claim must not leave the in-flight row
+      // blocking webhook dedupe until the lease expires.
+      await releaseHeldClaim();
+      throw err;
+    }
   } catch (err) {
     return handleRouteError(err);
   }

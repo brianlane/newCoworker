@@ -153,6 +153,21 @@ describe("importZoomTranscriptDocument", () => {
     expect(d.syncVault).toHaveBeenCalledWith(BIZ);
   });
 
+  it("rolls back the document when a post-insert step throws (no retry duplicates)", async () => {
+    const storage = makeStorage();
+    const deleteDocument = vi.fn().mockResolvedValue(undefined);
+    const { deps } = makeDeps({
+      client: storage.client,
+      deleteDocument,
+      patchDocument: vi.fn().mockRejectedValue(new Error("patch boom"))
+    });
+    await expect(importZoomTranscriptDocument(PARAMS, deps)).rejects.toThrow(/patch boom/);
+    expect(deleteDocument).toHaveBeenCalledWith(BIZ, DOC_ID);
+    expect(storage.remove).toHaveBeenCalledWith([
+      `${BIZ}/${DOC_ID}/zoom-meeting-1784344402882.vtt`
+    ]);
+  });
+
   it("marks the document failed when condensation fails (detail preferred)", async () => {
     const { deps } = makeDeps({
       ingest: vi.fn().mockResolvedValue({ ok: false, error: "model_error", detail: "quota" })

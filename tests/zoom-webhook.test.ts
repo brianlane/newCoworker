@@ -558,14 +558,35 @@ describe("processZoomWebhookEvent", () => {
         .mockResolvedValue({ ok: false, error: "limit_reached", detail: "cap" })
     });
     const result = await processZoomWebhookEvent(transcriptBody(), deps);
-    expect(result).toEqual({ kind: "transcript", outcome: "skipped_cap", businessId: BIZ });
+    expect(result).toEqual({
+      kind: "transcript",
+      outcome: "skipped_permanent",
+      businessId: BIZ
+    });
     expect(deps.releaseImport).toHaveBeenCalledWith(BIZ, UUID);
     expect(deps.logSystem).toHaveBeenCalledWith(
       expect.objectContaining({ event: "zoom_auto_import_skipped_cap" })
     );
   });
 
-  it("fails (for redelivery) on non-cap import refusals", async () => {
+  it("skips quietly on an oversized transcript (permanent, no retry storm)", async () => {
+    const deps = makeDeps({
+      importCore: vi
+        .fn()
+        .mockResolvedValue({ ok: false, error: "too_large", detail: "10 MB" })
+    });
+    const result = await processZoomWebhookEvent(transcriptBody(), deps);
+    expect(result).toEqual({
+      kind: "transcript",
+      outcome: "skipped_permanent",
+      businessId: BIZ
+    });
+    expect(deps.logSystem).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "zoom_auto_import_skipped_too_large" })
+    );
+  });
+
+  it("fails (for redelivery) on transient import refusals", async () => {
     const deps = makeDeps({
       importCore: vi
         .fn()
