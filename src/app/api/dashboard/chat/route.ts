@@ -747,6 +747,7 @@ export async function POST(request: Request) {
       calBookEnabled,
       calRescheduleEnabled,
       calCancelEnabled,
+      calWaitlistEnabled,
       runAiflowEnabled,
       editAiflowEnabled,
       generateImageEnabled,
@@ -760,6 +761,7 @@ export async function POST(request: Request) {
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_book_appointment"),
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_reschedule_appointment"),
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_cancel_appointment"),
+      isAgentToolEnabled(body.businessId, "dashboard", "calendar_join_waitlist"),
       isAgentToolEnabled(body.businessId, "dashboard", "run_aiflow"),
       isAgentToolEnabled(body.businessId, "dashboard", "edit_aiflow"),
       isAgentToolEnabled(body.businessId, "dashboard", "generate_image"),
@@ -795,6 +797,7 @@ export async function POST(request: Request) {
       calendar_book_appointment: calBookEnabled,
       calendar_reschedule_appointment: calRescheduleEnabled,
       calendar_cancel_appointment: calCancelEnabled,
+      calendar_join_waitlist: calWaitlistEnabled,
       // One Settings toggle gates the pair: listing exists to serve running.
       list_aiflows: runAiflowEnabled,
       run_aiflow: runAiflowEnabled,

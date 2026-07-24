@@ -100,6 +100,33 @@ export function buildVoiceToolDeclarations(): VoiceToolDeclaration[] {
       }
     },
     {
+      name: "calendar_join_waitlist",
+      description:
+        "Put the caller on the cancellation waitlist: when a cancellation frees an appointment slot EARLIER than what they hold (or any slot, if they have no booking yet), they get ONE text offering it. Use when the caller asks to be told if anything sooner opens up. The offer arrives by text, omit attendeePhone to use the number they are calling from. Never promise that an earlier time WILL open up, only that they will be texted if one does.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          attendeePhone: {
+            type: Type.STRING,
+            description:
+              "Mobile number in E.164, ONLY when the caller dictated a different number. Omit to use the caller's own number."
+          },
+          attendeeName: { type: Type.STRING, description: "Caller's name, if known." },
+          attendeeEmail: { type: Type.STRING, description: "Caller's email, if known." },
+          durationMinutes: {
+            type: Type.NUMBER,
+            description: "Appointment length they want in minutes. Defaults to 30."
+          },
+          latestIso: {
+            type: Type.STRING,
+            description:
+              "Latest slot start they would accept, ISO-8601. Defaults to their current booking's start."
+          }
+        },
+        required: []
+      }
+    },
+    {
       name: "send_follow_up_sms",
       description:
         "Send the caller a short follow-up SMS (links, addresses, summaries). Keep to <= 300 chars. The body must only contain facts the caller stated or a tool returned — no invented details, and no appointment described as scheduled unless it was actually booked. To text the CALLER, OMIT toE164 entirely — it defaults to the number they are calling from, which you cannot see; NEVER fill it with a guessed or placeholder number.",

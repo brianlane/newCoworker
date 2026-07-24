@@ -59,6 +59,7 @@ export default async function BookPage({
             phoneLabel: t("phoneLabel"),
             emailLabel: t("emailLabel"),
             noteLabel: t("noteLabel"),
+            notifyEarlierLabel: t("notifyEarlierLabel"),
             submitButton: t("submitButton"),
             submitting: t("submitting"),
             slotTaken: t("slotTaken"),

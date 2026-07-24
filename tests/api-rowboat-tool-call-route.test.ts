@@ -68,6 +68,10 @@ vi.mock("@/lib/calendar-tools/handlers", () => ({
   bookCalendarAppointment: vi.fn()
 }));
 
+vi.mock("@/lib/calendar-tools/waitlist-join", () => ({
+  joinCalendarWaitlist: vi.fn()
+}));
+
 vi.mock("@/lib/db/logs", () => ({
   insertCoworkerLog: vi.fn()
 }));
@@ -119,6 +123,7 @@ import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
 import { lookupBusinessKnowledge } from "@/lib/knowledge-tools/handlers";
 import { findCalendarSlots, bookCalendarAppointment } from "@/lib/calendar-tools/handlers";
+import { joinCalendarWaitlist } from "@/lib/calendar-tools/waitlist-join";
 import { insertCoworkerLog } from "@/lib/db/logs";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { listAiFlowsTool, runAiFlowTool } from "@/lib/ai-flows/manual-run-tool";
@@ -673,6 +678,31 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
     const json = await res.json();
     expect(json.detail).toBe("invalid_window");
     expect(json.message).toBeUndefined();
+  });
+
+  it("dispatches calendar_join_waitlist (phone REQUIRED on the webhook path)", async () => {
+    vi.mocked(joinCalendarWaitlist).mockResolvedValue({
+      ok: true,
+      detail: "waitlist_joined",
+      data: { phone: "+15551230000" }
+    });
+    const args = { attendeePhone: "+15551230000", attendeeName: "Pat", durationMinutes: 60 };
+    const content = makeContent("calendar_join_waitlist", args);
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    const res = await POST(makeRequest(content));
+    expect((await res.json()).detail).toBe("waitlist_joined");
+    expect(vi.mocked(joinCalendarWaitlist)).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining(args),
+      null
+    );
+
+    // No phone → schema refusal, the core is never reached.
+    const bad = makeContent("calendar_join_waitlist", { attendeeName: "Pat" });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(bad));
+    const badRes = await POST(makeRequest(bad));
+    expect((await badRes.json()).detail).toMatch(/^invalid_args:/);
+    expect(vi.mocked(joinCalendarWaitlist)).toHaveBeenCalledTimes(1);
   });
 
   it("notify_team writes an urgent dashboard log and dispatches the owner notification", async () => {

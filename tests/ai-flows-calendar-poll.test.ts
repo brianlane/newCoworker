@@ -830,6 +830,76 @@ describe("pollCalendarTriggers", () => {
     );
   });
 
+  it("hands DUE cancellations with a start to the freed-slot callback, once per event id", async () => {
+    const slotStart = isoIn(120);
+    const canceledItems = [
+      {
+        id: "ev-c1",
+        summary: "Roof estimate",
+        status: "cancelled",
+        updated: isoIn(-2),
+        start: { dateTime: slotStart }
+      },
+      // Thin tombstone without a start: observed but nothing to offer.
+      { id: "ev-c2", status: "cancelled", updated: isoIn(-2) },
+      // Cancelled outside the lookback: not due, never offered.
+      {
+        id: "ev-c-old",
+        status: "cancelled",
+        updated: isoIn(-60),
+        start: { dateTime: slotStart }
+      }
+    ];
+    // A flow watching BOTH calendars observes the same event twice; the
+    // callback still fires once per event id.
+    vi.mocked(getSharedCalendar).mockResolvedValue({ calendarId: "shared-cal" } as never);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { items: canceledItems } } as never)
+      .mockResolvedValueOnce({ data: { items: canceledItems } } as never);
+    const onCanceledEvent = vi.fn(async () => "offered");
+    await pollCalendarTriggers(
+      dbWith([
+        flowRow("f-cancel", {
+          channel: "calendar",
+          on: "event_canceled",
+          calendar: "both",
+          conditions: []
+        })
+      ]),
+      { onCanceledEvent }
+    );
+    expect(onCanceledEvent).toHaveBeenCalledTimes(1);
+    expect(onCanceledEvent).toHaveBeenCalledWith(
+      BIZ,
+      new Date(slotStart).toISOString()
+    );
+  });
+
+  it("a throwing freed-slot callback is logged and never affects the poll", async () => {
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+      data: {
+        items: [
+          {
+            id: "ev-c1",
+            summary: "Roof estimate",
+            status: "cancelled",
+            updated: isoIn(-2),
+            start: { dateTime: isoIn(120) }
+          }
+        ]
+      }
+    } as never);
+    const res = await pollCalendarTriggers(
+      dbWith([flowRow("f-cancel", { channel: "calendar", on: "event_canceled", conditions: [] })]),
+      {
+        onCanceledEvent: vi.fn(async () => {
+          throw new Error("waitlist sad");
+        })
+      }
+    );
+    expect(res.enqueued).toBe(1);
+  });
+
   it("event_canceled (Microsoft): filters by lastModifiedDateTime and isCancelled", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValueOnce(microsoftConn as never);
     vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({

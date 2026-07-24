@@ -105,6 +105,7 @@ export async function POST(request: Request) {
       calBookEnabled,
       calRescheduleEnabled,
       calCancelEnabled,
+      calWaitlistEnabled,
       runAiflowEnabled,
       editAiflowEnabled,
       notificationPrefsToolEnabled,
@@ -120,6 +121,7 @@ export async function POST(request: Request) {
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_book_appointment"),
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_reschedule_appointment"),
       isAgentToolEnabled(body.businessId, "dashboard", "calendar_cancel_appointment"),
+      isAgentToolEnabled(body.businessId, "dashboard", "calendar_join_waitlist"),
       isAgentToolEnabled(body.businessId, "dashboard", "run_aiflow"),
       isAgentToolEnabled(body.businessId, "dashboard", "edit_aiflow"),
       isAgentToolEnabled(body.businessId, "dashboard", "update_notification_preferences"),
@@ -201,6 +203,7 @@ export async function POST(request: Request) {
         calendar_book_appointment: calBookEnabled,
         calendar_reschedule_appointment: calRescheduleEnabled,
         calendar_cancel_appointment: calCancelEnabled,
+        calendar_join_waitlist: calWaitlistEnabled,
         list_aiflows: runAiflowEnabled,
         run_aiflow: runAiflowEnabled,
         // Edits apply in place with full validation — no builder step

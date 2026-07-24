@@ -427,6 +427,7 @@ describe("processVagaroAppointmentEvent", () => {
       fireTriggers: vi.fn().mockResolvedValue(0),
       recordClaim: vi.fn(),
       deleteClaims: vi.fn(),
+      offerSlot: vi.fn().mockResolvedValue("no_candidates"),
       nowMs: NOW,
       ...overrides
     };
@@ -593,6 +594,8 @@ describe("processVagaroAppointmentEvent", () => {
     });
     expect(d.deleteClaims).toHaveBeenCalledWith(BIZ, "appt-1");
     expect(d.recordClaim).not.toHaveBeenCalled();
+    // The vacated slot is handed to the cancellation waitlist in real time.
+    expect(d.offerSlot).toHaveBeenCalledWith(BIZ, expect.any(String));
     expect(result).toEqual({
       goalsFired: 0,
       jumpedRuns: 0,
@@ -635,6 +638,8 @@ describe("processVagaroAppointmentEvent", () => {
     );
     expect(d.fireTriggers).not.toHaveBeenCalled();
     expect(d.deleteClaims).toHaveBeenCalledWith(BIZ, "appt-9");
+    // No parsed appointment means no start time to offer the waitlist.
+    expect(d.offerSlot).not.toHaveBeenCalled();
     expect(result.ledgerSynced).toBe(true);
   });
 

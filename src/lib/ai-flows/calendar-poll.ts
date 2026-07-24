@@ -888,8 +888,23 @@ export async function stampCalendarPollTick(client?: SupabaseClient): Promise<vo
 
 // ── The poll ────────────────────────────────────────────────────────────────
 
+export type CalendarPollOptions = {
+  /**
+   * Called once per DUE cancelled event observed this poll (deduped by
+   * event id across calendars) with the vacated slot's start. Wired by the
+   * internal route to the cancellation-waitlist fill
+   * (src/lib/calendar-tools/waitlist-fill.ts offerFreedSlot): a callback
+   * rather than an import because that module reaches the booking core,
+   * which imports this one. Failures are logged and never affect the poll.
+   */
+  onCanceledEvent?: (businessId: string, startIso: string) => Promise<unknown>;
+};
+
 /** Poll every watched calendar once and enqueue runs for due events. */
-export async function pollCalendarTriggers(client?: SupabaseClient): Promise<CalendarPollResult> {
+export async function pollCalendarTriggers(
+  client?: SupabaseClient,
+  opts: CalendarPollOptions = {}
+): Promise<CalendarPollResult> {
   const db = client ?? (await createSupabaseServiceClient());
   const flowRows: Array<{ id: string; business_id: string; definition: unknown }> = [];
   for (let offset = 0; ; offset += CALENDAR_POLL_FLOW_PAGE) {
@@ -1177,6 +1192,25 @@ export async function pollCalendarTriggers(client?: SupabaseClient): Promise<Cal
                 sourceFailures.every((f) => isConnectionFailure(f.message))
             }
           );
+        }
+      }
+
+      // Freed-slot hook: every DUE cancellation observed this tick vacates
+      // its slot, hand it to the waitlist callback (idempotent downstream,
+      // so the lookback re-observing the same cancel next tick is benign).
+      if (opts.onCanceledEvent) {
+        const seenCancelled = new Set<string>();
+        for (const events of eventsBySource.values()) {
+          for (const ev of events) {
+            if (!ev.cancelled || !ev.startIso || seenCancelled.has(ev.id)) continue;
+            if (!eventCanceledDue(ev, nowMs)) continue;
+            seenCancelled.add(ev.id);
+            try {
+              await opts.onCanceledEvent(businessId, ev.startIso);
+            } catch (err) {
+              console.error("calendar poll canceled-event hook", err);
+            }
+          }
         }
       }
 

@@ -36,6 +36,10 @@ import {
   claimBookingDedupe,
   releaseBookingDedupe
 } from "@/lib/calendar-tools/booking-dedupe";
+import {
+  getWaitlistSettings,
+  upsertLiveWaitlistEntry
+} from "@/lib/db/booking-waitlist";
 import { localClock } from "../../../supabase/functions/_shared/ai_flows/engine";
 import { logger } from "@/lib/logger";
 
@@ -215,6 +219,8 @@ export type SubmitPublicBookingInput = {
   phone: string;
   email: string;
   note?: string;
+  /** "Text me if an earlier time opens up" opt-in (cancellation waitlist). */
+  notifyEarlier?: boolean;
 };
 
 export type SubmitPublicBookingResult =
@@ -367,6 +373,24 @@ export async function submitPublicBooking(
     channel: "webchat",
     sourceTag: BOOKING_PAGE_SOURCE_TAG
   });
+
+  // Cancellation-waitlist opt-in ("text me if an earlier time opens up"):
+  // one live entry linked to the booking just made, so a freed EARLIER
+  // slot texts them an offer (waitlist-fill core). Best-effort (the
+  // booking is already durable) and gated on the owner's waitlist toggle.
+  if (input.notifyEarlier === true) {
+    const waitlist = await getWaitlistSettings(context.businessId);
+    if (waitlist.enabled) {
+      await upsertLiveWaitlistEntry(context.businessId, {
+        phone,
+        email,
+        name,
+        durationMinutes: input.durationMinutes,
+        latestAtIso: start.toISOString(),
+        currentBookingStartAtIso: start.toISOString()
+      });
+    }
+  }
 
   const data = (booked.data ?? {}) as Record<string, unknown>;
   return {

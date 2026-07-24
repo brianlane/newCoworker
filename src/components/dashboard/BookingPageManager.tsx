@@ -21,6 +21,8 @@ type PageRow = {
   max_daily_bookings: number | null;
   require_staff_on_shift: boolean;
   description: string | null;
+  waitlist_enabled: boolean;
+  waitlist_offer_ttl_minutes: number;
 };
 
 type UpcomingRow = {
@@ -39,6 +41,7 @@ const DURATION_CHOICES = [15, 30, 60];
 const NOTICE_CHOICES = [0, 60, 120, 240, 1440];
 const ADVANCE_CHOICES = [7, 14, 30, 60];
 const BUFFER_CHOICES = [0, 10, 15, 30];
+const WAITLIST_TTL_CHOICES = [15, 30, 60, 120, 240];
 
 export function BookingPageManager({ businessId }: { businessId: string }) {
   const t = useTranslations("dashboard.bookings");
@@ -358,6 +361,47 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
           </div>
         )}
         {saveError ? <p className="mt-3 text-sm text-red-400">{saveError}</p> : null}
+      </Card>
+
+      {/* Cancellation waitlist: independent of the public link, it also
+          covers waitlist entries the AI coworker takes over SMS/voice.
+          A missing settings row reads as the defaults (on, 60 min hold);
+          the first toggle write creates the row. */}
+      <Card>
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-base font-semibold text-parchment">{t("waitlistTitle")}</h2>
+            <p className="mt-1 text-sm text-parchment/60">{t("waitlistSubtitle")}</p>
+          </div>
+          <label className="flex items-center gap-2 text-sm text-parchment/70">
+            <input
+              type="checkbox"
+              checked={page ? page.waitlist_enabled : true}
+              disabled={saving}
+              onChange={(e) => void patch({ waitlistEnabled: e.target.checked })}
+            />
+            {t("waitlistToggle")}
+          </label>
+        </div>
+        <div className="mt-4">
+          <label className={label} htmlFor="bp-waitlist-ttl">
+            {t("waitlistTtlLabel")}
+          </label>
+          <select
+            id="bp-waitlist-ttl"
+            className={select}
+            disabled={saving || (page ? !page.waitlist_enabled : false)}
+            value={page?.waitlist_offer_ttl_minutes ?? 60}
+            onChange={(e) => void patch({ waitlistOfferTtlMinutes: Number(e.target.value) })}
+          >
+            {WAITLIST_TTL_CHOICES.map((m) => (
+              <option key={m} value={m}>
+                {m < 60 ? `${m} ${t("minutes")}` : t("waitlistTtlHours", { hours: m / 60 })}
+              </option>
+            ))}
+          </select>
+          <p className="mt-2 text-xs text-parchment/40">{t("waitlistHint")}</p>
+        </div>
       </Card>
 
       <Card>

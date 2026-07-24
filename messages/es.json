@@ -15,6 +15,7 @@
     "phoneLabel": "Teléfono móvil",
     "emailLabel": "Correo electrónico",
     "noteLabel": "¿Algo que debamos saber? (opcional)",
+    "notifyEarlierLabel": "Envíenme un mensaje de texto si se abre un horario más temprano",
     "submitButton": "Confirmar reserva",
     "submitting": "Reservando…",
     "slotTaken": "Ese horario ya no está disponible. Elige otro.",
@@ -1352,7 +1353,13 @@
       "descriptionLabel": "Descripción de la página (visible para los visitantes)",
       "upcomingTitle": "Próximas reservas",
       "upcomingEmpty": "Aún no hay reservas próximas. Las citas reservadas por tu coworker de IA y por esta página aparecerán aquí.",
-      "zoomBadge": "Zoom"
+      "zoomBadge": "Zoom",
+      "waitlistTitle": "Lista de espera por cancelaciones",
+      "waitlistSubtitle": "Cuando una cancelación libera un horario más temprano, el siguiente cliente en la lista recibe un mensaje de texto ofreciéndoselo.",
+      "waitlistToggle": "Activada",
+      "waitlistTtlLabel": "Cuánto tiempo un cliente retiene una oferta",
+      "waitlistTtlHours": "{hours} h",
+      "waitlistHint": "Los clientes se apuntan pidiéndole a tu coworker de IA un horario más temprano, o marcando la casilla en tu página de reservas. El mensaje de oferta cuenta para tu límite mensual de SMS."
     },
     "integrationsClaude": {
       "connectedBadge": "Conectado",

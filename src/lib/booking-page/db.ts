@@ -23,6 +23,10 @@ export type BookingPageRow = {
   max_daily_bookings: number | null;
   require_staff_on_shift: boolean;
   description: string | null;
+  /** Cancellation waitlist: master toggle (on by default). */
+  waitlist_enabled: boolean;
+  /** How long one customer holds an offered freed slot before it passes on. */
+  waitlist_offer_ttl_minutes: number;
   created_at: string;
   updated_at: string;
 };
@@ -30,7 +34,7 @@ export type BookingPageRow = {
 const ALL_COLUMNS =
   "id,business_id,token,enabled,allowed_durations,min_notice_minutes," +
   "max_advance_days,buffer_minutes,max_daily_bookings,require_staff_on_shift," +
-  "description,created_at,updated_at";
+  "description,waitlist_enabled,waitlist_offer_ttl_minutes,created_at,updated_at";
 
 /** Resolve a page by its public token. Enabled pages only. */
 export async function getEnabledBookingPageByToken(
@@ -72,6 +76,8 @@ export type BookingPageSettingsPatch = {
   maxDailyBookings?: number | null;
   requireStaffOnShift?: boolean;
   description?: string | null;
+  waitlistEnabled?: boolean;
+  waitlistOfferTtlMinutes?: number;
 };
 
 export class BookingPageValidationError extends Error {
@@ -137,6 +143,14 @@ function validatePatch(patch: BookingPageSettingsPatch): void {
   ) {
     throw new BookingPageValidationError("Description must be 500 characters or fewer");
   }
+  if (
+    patch.waitlistOfferTtlMinutes !== undefined &&
+    (!Number.isInteger(patch.waitlistOfferTtlMinutes) ||
+      patch.waitlistOfferTtlMinutes < 15 ||
+      patch.waitlistOfferTtlMinutes > 24 * 60)
+  ) {
+    throw new BookingPageValidationError("Waitlist offer hold must be 15 to 1440 minutes");
+  }
 }
 
 function patchColumns(patch: BookingPageSettingsPatch): Record<string, unknown> {
@@ -158,7 +172,11 @@ function patchColumns(patch: BookingPageSettingsPatch): Record<string, unknown> 
       : { require_staff_on_shift: patch.requireStaffOnShift }),
     ...(patch.description === undefined
       ? {}
-      : { description: patch.description?.trim() || null })
+      : { description: patch.description?.trim() || null }),
+    ...(patch.waitlistEnabled === undefined ? {} : { waitlist_enabled: patch.waitlistEnabled }),
+    ...(patch.waitlistOfferTtlMinutes === undefined
+      ? {}
+      : { waitlist_offer_ttl_minutes: patch.waitlistOfferTtlMinutes })
   };
 }
 

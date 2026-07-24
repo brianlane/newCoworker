@@ -15,6 +15,7 @@
     "phoneLabel": "Mobile phone",
     "emailLabel": "Email",
     "noteLabel": "Anything we should know? (optional)",
+    "notifyEarlierLabel": "Text me if an earlier time opens up",
     "submitButton": "Confirm booking",
     "submitting": "Booking…",
     "slotTaken": "That time is no longer available. Please pick another.",
@@ -1352,7 +1353,13 @@
       "descriptionLabel": "Page description (shown to visitors)",
       "upcomingTitle": "Upcoming bookings",
       "upcomingEmpty": "No upcoming bookings yet. Booked appointments from your AI coworker and this page will show here.",
-      "zoomBadge": "Zoom"
+      "zoomBadge": "Zoom",
+      "waitlistTitle": "Cancellation waitlist",
+      "waitlistSubtitle": "When a cancellation frees an earlier slot, the customer next in line gets one text offering it.",
+      "waitlistToggle": "On",
+      "waitlistTtlLabel": "How long one customer holds an offer",
+      "waitlistTtlHours": "{hours} h",
+      "waitlistHint": "Customers join by asking your AI coworker for an earlier time, or by checking the box on your booking page. The offer text counts toward your monthly SMS allowance."
     },
     "integrationsClaude": {
       "connectedBadge": "Connected",

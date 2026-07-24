@@ -33,6 +33,11 @@ import {
   deleteZoomMeetingForBooking,
   updateZoomMeetingForBooking
 } from "@/lib/zoom/meetings";
+import { offerFreedSlot } from "@/lib/calendar-tools/waitlist-fill";
+import {
+  cancelWaitlistForAttendee,
+  resolveWaitlistAfterBooking
+} from "@/lib/calendar-tools/waitlist-resolve";
 import { logger } from "@/lib/logger";
 
 /**
@@ -90,6 +95,12 @@ type LocatedEvent = {
    * move/delete it with the event, best-effort.
    */
   zoomMeetingId: string | null;
+  /**
+   * The event's start from the ledger claim (null for provider-search
+   * hits, which never learn the time): this is the slot the waitlist is
+   * told about when a cancel/reschedule frees it.
+   */
+  startAt: string | null;
 };
 
 /** How far ahead the provider-search fallback scans for the booking. */
@@ -237,7 +248,12 @@ async function locateUpcomingAppointment(
 ): Promise<LocatedEvent | null> {
   const claim = await findUpcomingBookingClaim(businessId, attendeeKey);
   if (claim) {
-    return { eventId: claim.eventId, claimId: claim.id, zoomMeetingId: claim.zoomMeetingId };
+    return {
+      eventId: claim.eventId,
+      claimId: claim.id,
+      zoomMeetingId: claim.zoomMeetingId,
+      startAt: claim.startAt
+    };
   }
   const eventId = await searchProviderEvent(businessId, conn, marker);
   if (!eventId) return null;
@@ -246,7 +262,7 @@ async function locateUpcomingAppointment(
   // meeting — capture it NOW, before the callers' by-event ledger cleanup
   // deletes that row, so the meeting still moves/dies with the event.
   const zoomMeetingId = await findZoomMeetingIdByEvent(businessId, eventId);
-  return { eventId, claimId: null, zoomMeetingId };
+  return { eventId, claimId: null, zoomMeetingId, startAt: null };
 }
 
 /**
@@ -360,6 +376,15 @@ export async function rescheduleCalendarAppointment(
             endIso: args.newEndIso
           });
         }
+        // Waitlist (both best-effort by module contract): the OLD slot just
+        // freed, offer it to whoever is waiting, and the attendee's own
+        // live entries resolve against the new start.
+        await offerFreedSlot(businessId, claim.startAt);
+        await resolveWaitlistAfterBooking(
+          businessId,
+          { phones: phone ? [phone] : [], email: args.attendeeEmail ?? null },
+          args.newStartIso
+        );
       } else if (moved.detail === "booking_not_found") {
         // The provider event is gone (deleted upstream) but the ledger row
         // survived — drop it so the stale claim can't shadow the slot or
@@ -431,6 +456,18 @@ export async function rescheduleCalendarAppointment(
       });
     }
 
+    // Waitlist (best-effort by module contract): the OLD slot just freed
+    // (known only for ledger-resolved events), and the attendee's own live
+    // entries resolve against the new start.
+    if (located.startAt) {
+      await offerFreedSlot(businessId, located.startAt);
+    }
+    await resolveWaitlistAfterBooking(
+      businessId,
+      { phones: phone ? [phone] : [], email: args.attendeeEmail ?? null },
+      args.newStartIso
+    );
+
     return {
       ok: true,
       data: {
@@ -470,10 +507,20 @@ export async function cancelCalendarAppointment(
     if (conn.provider === "calendly") {
       // Located + canceled through Calendly's own API (no ledger rows exist
       // for link-completed bookings).
-      return cancelCalendlyAppointment(businessId, conn, {
+      const calendlyCanceled = await cancelCalendlyAppointment(businessId, conn, {
         phone,
         email: args.attendeeEmail ?? null
       });
+      if (calendlyCanceled.ok) {
+        // No freed-slot offer here: the locate step never learns the event's
+        // start, and the calendar poll's canceled scan observes it anyway.
+        // The canceling attendee's own waitlist entries are moot though.
+        await cancelWaitlistForAttendee(businessId, {
+          phones: phone ? [phone] : [],
+          email: args.attendeeEmail ?? null
+        });
+      }
+      return calendlyCanceled;
     }
 
     if (conn.provider === "vagaro" || conn.provider === "caldav") {
@@ -492,6 +539,14 @@ export async function cancelCalendarAppointment(
         if (claim.zoomMeetingId) {
           await deleteZoomMeetingForBooking(businessId, claim.zoomMeetingId);
         }
+        // Waitlist (best-effort by module contract): the canceled slot is
+        // exactly what someone may be waiting for; the canceler's own
+        // entries are moot.
+        await offerFreedSlot(businessId, claim.startAt);
+        await cancelWaitlistForAttendee(businessId, {
+          phones: phone ? [phone] : [],
+          email: args.attendeeEmail ?? null
+        });
       }
       return canceled;
     }
@@ -526,6 +581,17 @@ export async function cancelCalendarAppointment(
     if (located.zoomMeetingId) {
       await deleteZoomMeetingForBooking(businessId, located.zoomMeetingId);
     }
+
+    // Waitlist (best-effort by module contract): offer the freed slot
+    // (known only for ledger-resolved events) and drop the canceler's own
+    // entries.
+    if (located.startAt) {
+      await offerFreedSlot(businessId, located.startAt);
+    }
+    await cancelWaitlistForAttendee(businessId, {
+      phones: phone ? [phone] : [],
+      email: args.attendeeEmail ?? null
+    });
 
     return {
       ok: true,

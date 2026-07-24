@@ -24,6 +24,7 @@ import { assertCronAuth } from "@/lib/cron-auth";
 import { verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { contactBookingContextForPhone } from "@/lib/ai-flows/contact-booking-context";
+import { pendingWaitlistOfferLine } from "@/lib/calendar-tools/waitlist-fill";
 
 // A lookup is 1-3 Calendly calls plus a capped invitee scan; 30s is generous.
 export const maxDuration = 30;
@@ -51,6 +52,17 @@ export async function POST(request: Request): Promise<Response> {
       undefined,
       timezone ?? null
     );
+    // Cancellation-waitlist context rides the same line: a contact with a
+    // PENDING earlier-slot offer must have their "YES" understood, so the
+    // line tells the model to complete the move with the calendar tools.
+    // Fails open to null like everything else on this route.
+    const offerLine = await pendingWaitlistOfferLine(businessId, phone, timezone ?? null);
+    if (offerLine) {
+      return successResponse({
+        ...result,
+        line: result.line ? `${result.line}\n${offerLine}` : offerLine
+      });
+    }
     return successResponse(result);
   } catch (err) {
     return handleRouteError(err);

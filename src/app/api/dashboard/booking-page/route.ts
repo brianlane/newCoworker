@@ -41,7 +41,9 @@ const patchSchema = z.object({
   bufferMinutes: z.number().int().optional(),
   maxDailyBookings: z.number().int().nullable().optional(),
   requireStaffOnShift: z.boolean().optional(),
-  description: z.string().nullable().optional()
+  description: z.string().nullable().optional(),
+  waitlistEnabled: z.boolean().optional(),
+  waitlistOfferTtlMinutes: z.number().int().optional()
 });
 
 const actionSchema = z.object({ action: z.literal("rotate") });

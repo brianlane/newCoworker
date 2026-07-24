@@ -69,6 +69,7 @@ const ALL_GATES: ActionToolGates = {
   calendar_book_appointment: true,
   calendar_reschedule_appointment: true,
   calendar_cancel_appointment: true,
+  calendar_join_waitlist: true,
   list_aiflows: true,
   run_aiflow: true,
   edit_aiflow: true,

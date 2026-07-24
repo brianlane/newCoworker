@@ -40,6 +40,7 @@ import {
   deleteBookingClaimsByEvent,
   recordExternalBookingClaim
 } from "@/lib/calendar-tools/booking-dedupe";
+import { offerFreedSlot } from "@/lib/calendar-tools/waitlist-fill";
 import {
   createCustomerMemory,
   CustomerExistsError,
@@ -224,6 +225,8 @@ export type VagaroAppointmentDeps = {
   /** Injectable ledger writes (tests). */
   recordClaim?: typeof recordExternalBookingClaim;
   deleteClaims?: typeof deleteBookingClaimsByEvent;
+  /** Injectable waitlist freed-slot offer (tests). */
+  offerSlot?: typeof offerFreedSlot;
   /** Injectable clock (tests). */
   nowMs?: number;
 };
@@ -270,6 +273,7 @@ export async function processVagaroAppointmentEvent(
   const fireTriggers = deps.fireTriggers ?? fireCalendarTriggersForPushedEvent;
   const recordClaim = deps.recordClaim ?? recordExternalBookingClaim;
   const deleteClaims = deps.deleteClaims ?? deleteBookingClaimsByEvent;
+  const offerSlot = deps.offerSlot ?? offerFreedSlot;
   const nowMs = deps.nowMs ?? Date.now();
 
   const result: VagaroAppointmentIntelligence = { ...NO_APPOINTMENT_INTELLIGENCE };
@@ -368,6 +372,13 @@ export async function processVagaroAppointmentEvent(
       appointmentId,
       error: err instanceof Error ? err.message : String(err)
     });
+  }
+
+  // WAITLIST: a canceled/deleted appointment vacates its slot in real
+  // time; offer it to whoever is waiting (idempotent with the minute
+  // poll's observation of the same cancellation; never throws).
+  if (gone && appt?.startIso) {
+    await offerSlot(businessId, appt.startIso);
   }
 
   return result;

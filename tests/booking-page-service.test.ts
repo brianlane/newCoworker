@@ -20,6 +20,10 @@ vi.mock("@/lib/calendar-tools/booking-dedupe", () => ({
   claimBookingDedupe: vi.fn(),
   releaseBookingDedupe: vi.fn()
 }));
+vi.mock("@/lib/db/booking-waitlist", () => ({
+  getWaitlistSettings: vi.fn(),
+  upsertLiveWaitlistEntry: vi.fn()
+}));
 vi.mock("@/lib/logger", () => ({
   logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() }
 }));
@@ -50,6 +54,10 @@ import {
   claimBookingDedupe,
   releaseBookingDedupe
 } from "@/lib/calendar-tools/booking-dedupe";
+import {
+  getWaitlistSettings,
+  upsertLiveWaitlistEntry
+} from "@/lib/db/booking-waitlist";
 import { logger } from "@/lib/logger";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -69,6 +77,8 @@ const PAGE = {
   max_daily_bookings: null as number | null,
   require_staff_on_shift: false,
   description: "Strategy call",
+  waitlist_enabled: true,
+  waitlist_offer_ttl_minutes: 60,
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z"
 };
@@ -466,6 +476,33 @@ describe("submitPublicBooking", () => {
     expect(out).toMatchObject({ ok: true, startLocal: null, zoomJoinUrl: null });
     const args = mockBook.mock.calls[0][1];
     expect(args.notes).not.toContain("Note:");
+  });
+
+  it("notifyEarlier joins the cancellation waitlist linked to the fresh booking", async () => {
+    vi.mocked(getWaitlistSettings).mockResolvedValue({ enabled: true, offerTtlMinutes: 60 });
+    vi.mocked(upsertLiveWaitlistEntry).mockResolvedValue({ row: {} as never, created: true });
+    const out = await submitPublicBooking(TOKEN, { ...VALID, notifyEarlier: true });
+    expect(out.ok).toBe(true);
+    expect(vi.mocked(upsertLiveWaitlistEntry)).toHaveBeenCalledWith(BIZ, {
+      phone: "+14805550100",
+      email: "liz@example.com",
+      name: "Liz Developer",
+      durationMinutes: 30,
+      latestAtIso: "2026-01-05T16:00:00.000Z",
+      currentBookingStartAtIso: "2026-01-05T16:00:00.000Z"
+    });
+  });
+
+  it("notifyEarlier respects the owner's waitlist toggle and is off by default", async () => {
+    vi.mocked(getWaitlistSettings).mockResolvedValue({ enabled: false, offerTtlMinutes: 60 });
+    expect((await submitPublicBooking(TOKEN, { ...VALID, notifyEarlier: true })).ok).toBe(true);
+    expect(vi.mocked(upsertLiveWaitlistEntry)).not.toHaveBeenCalled();
+
+    // No opt-in: the settings read is skipped entirely.
+    vi.mocked(getWaitlistSettings).mockClear();
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    expect(vi.mocked(getWaitlistSettings)).not.toHaveBeenCalled();
+    expect(vi.mocked(upsertLiveWaitlistEntry)).not.toHaveBeenCalled();
   });
 
   it("surfaces booking-core refusals as booking_failed (detail null branch too)", async () => {
