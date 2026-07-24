@@ -45,6 +45,7 @@ import { editAiFlowTool, editAiflowToolArgsSchema } from "@/lib/ai-flows/edit-fl
 import { editAiFlowDefinition } from "@/lib/ai-flows/compile-service";
 import { generateImageForDashboard, normalizeAspectRatio } from "@/lib/image-tools/handlers";
 import { recordInteractionAndIncrement } from "@/lib/customer-memory/db";
+import { flagContactSpam } from "@/lib/customer-tools/flag-spam";
 import {
   applyNotificationPreferenceToggles,
   NOTIFICATION_TOGGLE_KEYS
@@ -64,7 +65,8 @@ export const ACTION_TOOL_NAMES = [
   "run_aiflow",
   "edit_aiflow",
   "generate_image",
-  "update_notification_preferences"
+  "update_notification_preferences",
+  "flag_contact_spam"
 ] as const;
 
 export type ActionToolName = (typeof ACTION_TOOL_NAMES)[number];
@@ -111,6 +113,14 @@ export type ActionToolGates = {
    * carries no caller role, so it gets no dashboard_ twin.
    */
   update_notification_preferences: boolean;
+  /**
+   * Owner declared a lead spam: opt-out suppression + pending-run cancels +
+   * contact tag through the shared core (customer-tools/flag-spam.ts).
+   * INLINE-ONLY by design — declared solely on the owner-verified surfaces
+   * (dashboard chat, owner-SMS operator turn); the customer-facing Rowboat
+   * texting coworker must never hold an irreversible suppression tool.
+   */
+  flag_contact_spam: boolean;
 };
 
 // Every clock time in an outbound body carries a named timezone (KYP/Ayanna
@@ -343,6 +353,26 @@ const UPDATE_NOTIFICATION_PREFERENCES_DECLARATION: GeminiFunctionDeclaration = {
   }
 };
 
+const FLAG_CONTACT_SPAM_DECLARATION: GeminiFunctionDeclaration = {
+  name: "flag_contact_spam",
+  description:
+    "Flag a contact or lead as SPAM and stop all follow-ups to them. Use ONLY when the owner explicitly declares someone spam (or asks to stop all automated follow-ups to a number) in this conversation. Effects: the number is blocked from ALL outbound texting for this business, every pending automation run for them is canceled, and the contact is tagged spam. The block CANNOT be undone from chat, only the contact texting START lifts it, so when the target is ambiguous, confirm the exact number first. When the owner names a lead without a number, resolve the number from this conversation's context (e.g. the new-lead notification they are replying to). After the tool returns, tell the owner exactly what was done.",
+  parameters: {
+    type: "object",
+    properties: {
+      phone: {
+        type: "string",
+        description: "The number to flag, E.164 preferred, e.g. +15551234567."
+      },
+      reason: {
+        type: "string",
+        description: "The owner's stated reason, when they gave one (recorded on the contact)."
+      }
+    },
+    required: ["phone"]
+  }
+};
+
 const DECLARATIONS: Record<ActionToolName, GeminiFunctionDeclaration> = {
   send_sms: SEND_SMS_DECLARATION,
   send_whatsapp: SEND_WHATSAPP_DECLARATION,
@@ -354,7 +384,8 @@ const DECLARATIONS: Record<ActionToolName, GeminiFunctionDeclaration> = {
   run_aiflow: RUN_AIFLOW_DECLARATION,
   edit_aiflow: EDIT_AIFLOW_DECLARATION,
   generate_image: GENERATE_IMAGE_DECLARATION,
-  update_notification_preferences: UPDATE_NOTIFICATION_PREFERENCES_DECLARATION
+  update_notification_preferences: UPDATE_NOTIFICATION_PREFERENCES_DECLARATION,
+  flag_contact_spam: FLAG_CONTACT_SPAM_DECLARATION
 };
 
 /** The declarations for every gate that is ON, in stable order. */
@@ -435,6 +466,11 @@ const cancelAppointmentArgsSchema = z.object({
 const runAiflowArgsSchema = runAiflowToolArgsSchema;
 const editAiflowArgsSchema = editAiflowToolArgsSchema;
 
+const flagContactSpamArgsSchema = z.object({
+  phone: z.string().min(5).max(32),
+  reason: z.string().max(500).optional()
+});
+
 // Same caps as the Rowboat dispatch's dashboardGenerateImageArgsSchema.
 const generateImageArgsSchema = z.object({
   prompt: z.string().min(1).max(2000),
@@ -512,6 +548,7 @@ export type ActionToolDeps = {
   generateImage?: typeof generateImageForDashboard;
   recordContactInteraction?: typeof recordInteractionAndIncrement;
   applyNotificationToggles?: typeof applyNotificationPreferenceToggles;
+  flagSpam?: typeof flagContactSpam;
 };
 
 /**
@@ -541,6 +578,7 @@ export async function executeActionTool(
   const recordContactInteraction = deps.recordContactInteraction ?? recordInteractionAndIncrement;
   const applyNotificationToggles =
     deps.applyNotificationToggles ?? applyNotificationPreferenceToggles;
+  const flagSpam = deps.flagSpam ?? flagContactSpam;
   /* c8 ignore stop */
 
   // Outbound-first recipients must exist as contacts (KYP/Ayanna, Jul 20
@@ -807,6 +845,15 @@ export async function executeActionTool(
           ...result.data,
           note: "Tell the owner exactly which alerts were changed and their new state."
         };
+      }
+      case "flag_contact_spam": {
+        const parsed = flagContactSpamArgsSchema.safeParse(call.args);
+        if (!parsed.success) {
+          return { ok: false, message: `invalid_args:${parsed.error.issues[0]?.message}` };
+        }
+        // Shared core: opt-out suppression (load-bearing, fails honestly) →
+        // pending-run cancels → contact tag. Never throws.
+        return await flagSpam(businessId, parsed.data);
       }
     }
   } catch (err) {

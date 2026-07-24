@@ -77,7 +77,10 @@ const ALL_GATES: ActionToolGates = {
   generate_image: false,
   // The owner-over-SMS route declares this with full control (verified
   // owner identity), same as production.
-  update_notification_preferences: true
+  update_notification_preferences: true,
+  // Declared on the owner-over-SMS surface in production ("hes spam" is
+  // exactly this surface's request shape).
+  flag_contact_spam: true
 };
 const TOOLS = actionToolDeclarations(ALL_GATES);
 

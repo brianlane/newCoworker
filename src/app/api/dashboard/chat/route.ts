@@ -750,7 +750,8 @@ export async function POST(request: Request) {
       runAiflowEnabled,
       editAiflowEnabled,
       generateImageEnabled,
-      notificationPrefsToolEnabled
+      notificationPrefsToolEnabled,
+      flagSpamToolEnabled
     ] = await Promise.all([
       isAgentToolEnabled(body.businessId, "dashboard", "send_sms"),
       isAgentToolEnabled(body.businessId, "dashboard", "send_whatsapp"),
@@ -761,7 +762,8 @@ export async function POST(request: Request) {
       isAgentToolEnabled(body.businessId, "dashboard", "run_aiflow"),
       isAgentToolEnabled(body.businessId, "dashboard", "edit_aiflow"),
       isAgentToolEnabled(body.businessId, "dashboard", "generate_image"),
-      isAgentToolEnabled(body.businessId, "dashboard", "update_notification_preferences")
+      isAgentToolEnabled(body.businessId, "dashboard", "update_notification_preferences"),
+      isAgentToolEnabled(body.businessId, "dashboard", "flag_contact_spam")
     ]);
     // Settings mutation needs more than chat access: the tool is declared
     // only when THIS caller passes manage_settings (manager+, the same
@@ -796,7 +798,8 @@ export async function POST(request: Request) {
       run_aiflow: runAiflowEnabled,
       edit_aiflow: editAiflowEnabled,
       generate_image: generateImageEnabled,
-      update_notification_preferences: notificationPrefsToolEnabled && canManageSettings
+      update_notification_preferences: notificationPrefsToolEnabled && canManageSettings,
+      flag_contact_spam: flagSpamToolEnabled
     };
 
     // Two message arrays:

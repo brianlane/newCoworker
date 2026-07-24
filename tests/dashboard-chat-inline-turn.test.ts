@@ -550,7 +550,8 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
     run_aiflow: true,
     edit_aiflow: true,
     generate_image: true,
-    update_notification_preferences: true
+    update_notification_preferences: true,
+    flag_contact_spam: true
   };
 
   it("declares gated action tools alongside the creation tools", async () => {
@@ -570,7 +571,8 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
       "run_aiflow",
       "edit_aiflow",
       "generate_image",
-      "update_notification_preferences"
+      "update_notification_preferences",
+      "flag_contact_spam"
     ]);
   });
 

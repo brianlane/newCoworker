@@ -51,7 +51,13 @@ const DASHBOARD_NAME_MAP: Record<string, string[] | null> = {
   // only where the authed caller's manage_settings role is verified per turn
   // (the inline Gemini path). The Rowboat OwnerCoworker fallback carries no
   // caller role, so it deliberately gets no dashboard_ twin.
-  update_notification_preferences: null
+  update_notification_preferences: null,
+  // INLINE-ONLY by design: irreversible opt-out suppression + run cancels
+  // may only be declared on owner-verified surfaces (inline dashboard chat,
+  // the owner-SMS operator turn). The Rowboat paths carry no caller
+  // identity, so neither agent gets a twin — the customer-facing texting
+  // coworker especially must never hold this tool.
+  flag_contact_spam: null
 };
 
 const WEBCHAT_CANONICAL = [
