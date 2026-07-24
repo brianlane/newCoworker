@@ -274,7 +274,13 @@ describe("capturedLeadExtraction / ingestCapturedLead (DM lead-capture boundary)
     const bare = capturedLeadExtraction({ name: "V" });
     expect(bare.facts).toEqual([]);
     expect(bare.entities[0]).toMatchObject({ phones: [], emails: [] });
-    expect(capturedLeadExtraction({ phone: "+1555" })).toEqual({ entities: [], facts: [] });
+    // Nameless but identified: identifier-named node so facts still land;
+    // identity-less (interest only) builds nothing.
+    expect(
+      capturedLeadExtraction({ phone: "+1555", interest: "roofing" }).entities[0].name
+    ).toBe("+1555");
+    expect(capturedLeadExtraction({ email: "v@x.co" }).entities[0].name).toBe("v@x.co");
+    expect(capturedLeadExtraction({ interest: "roofing" })).toEqual({ entities: [], facts: [] });
   });
 
   it("maps channels to registry sources with each channel's trust", async () => {
