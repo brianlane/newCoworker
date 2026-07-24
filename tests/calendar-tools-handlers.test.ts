@@ -48,6 +48,7 @@ import {
   computeFreeSlots,
   findCalendarSlots,
   formatBookingStartLocal,
+  getWorkspaceBusyBlocks,
   wallClockInZone
 } from "@/lib/calendar-tools/handlers";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
@@ -1660,5 +1661,28 @@ describe("bookCalendarAppointment — stored contact EMAIL backfill (Truly, Jul 
     };
     expect(payload.data.attendees).toBeUndefined();
     expect(result.data).toMatchObject({ inviteEmail: null });
+  });
+});
+
+describe("getWorkspaceBusyBlocks (direct — the booking page's busy fetch)", () => {
+  const WINDOW_START = new Date("2026-01-05T00:00:00Z");
+  const WINDOW_END = new Date("2026-01-06T00:00:00Z");
+
+  it("defaults the Graph availabilityViewInterval to 30 when no options are passed", async () => {
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({
+      data: { value: [{ scheduleItems: [] }] }
+    } as never);
+
+    const busy = await getWorkspaceBusyBlocks(BIZ, MS_CONN, WINDOW_START, WINDOW_END);
+    expect(busy).toEqual([]);
+    const payload = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
+      data: { availabilityViewInterval: number };
+    };
+    expect(payload.data.availabilityViewInterval).toBe(30);
+  });
+
+  it("returns null when the proxy yields nothing (calendar_not_connected shape)", async () => {
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue(null as never);
+    expect(await getWorkspaceBusyBlocks(BIZ, GOOGLE_CONN, WINDOW_START, WINDOW_END)).toBeNull();
   });
 });

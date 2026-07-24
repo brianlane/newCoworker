@@ -147,6 +147,22 @@ describe("ensureCapturedContact", () => {
     expect(mockFire).toHaveBeenCalledTimes(1);
   });
 
+  it("honors an explicit sourceTag override (booking page rides webchat)", async () => {
+    const { client, updateCalls } = fakeDb({ data: null, error: null });
+    mockClientFactory.mockResolvedValue(client);
+
+    const out = await ensureCapturedContact(BIZ, {
+      e164: PHONE,
+      channel: "webchat",
+      sourceTag: "Booking Page"
+    });
+
+    expect(out).toEqual({ created: true });
+    expect(updateCalls).toEqual([expect.objectContaining({ tags: ["Booking Page"] })]);
+    const [, event] = mockFire.mock.calls[0];
+    expect(event.contact).toEqual({ e164: PHONE, tags: ["Booking Page"] });
+  });
+
   it("skips the tag write (and event tags) for channels without a source tag", async () => {
     const { client, update } = fakeDb({ data: null, error: null });
     mockClientFactory.mockResolvedValue(client);

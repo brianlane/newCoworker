@@ -273,6 +273,109 @@ export function computeFreeSlots(
   return slots;
 }
 
+/**
+ * Raw busy blocks for a Google/Microsoft workspace connection across the
+ * primary AND shared "NewCoworker" calendars — the exact fetch
+ * findCalendarSlots always ran, extracted so the public booking page can
+ * compute its own slot grid over the same free/busy truth. Returns null
+ * when the Nango proxy yields nothing (treat as calendar_not_connected).
+ *
+ * Callers pass google/microsoft connections only (the resolver's vagaro /
+ * calendly / caldav providers never reach this fetch).
+ */
+export async function getWorkspaceBusyBlocks(
+  businessId: string,
+  conn: { provider: string; connectionId: string; providerConfigKey: string },
+  windowStart: Date,
+  windowEnd: Date,
+  opts: { availabilityViewInterval?: number } = {}
+): Promise<Array<{ start: Date; end: Date }> | null> {
+  // Read-only: never creates the shared calendar from the search path.
+  const shared = await getSharedCalendar(businessId);
+
+  if (conn.provider === "google") {
+    const items = [{ id: "primary" }];
+    if (shared) items.push({ id: shared.calendarId });
+    const res = await nangoProxyForBusiness(
+      businessId,
+      { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
+      {
+        endpoint: "/calendar/v3/freeBusy",
+        method: "POST",
+        data: {
+          timeMin: windowStart.toISOString(),
+          timeMax: windowEnd.toISOString(),
+          items
+        }
+      }
+    );
+    if (!res) return null;
+    const data = res.data as FreeBusyBody;
+    const blocks = Object.values(data?.calendars ?? {}).flatMap((c) => c.busy ?? []);
+    return blocks.map((b) => ({ start: new Date(b.start), end: new Date(b.end) }));
+  }
+
+  // Microsoft Graph getSchedule: POST /me/calendar/getSchedule.
+  const res = await nangoProxyForBusiness(
+    businessId,
+    { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
+    {
+      endpoint: "/v1.0/me/calendar/getSchedule",
+      method: "POST",
+      data: {
+        startTime: { dateTime: windowStart.toISOString(), timeZone: "UTC" },
+        endTime: { dateTime: windowEnd.toISOString(), timeZone: "UTC" },
+        availabilityViewInterval: opts.availabilityViewInterval ?? 30,
+        schedules: ["me"]
+      }
+    }
+  );
+  if (!res) return null;
+  type GraphBusy = {
+    value?: Array<{
+      scheduleItems?: Array<{ start?: { dateTime: string }; end?: { dateTime: string } }>;
+    }>;
+  };
+  const data = res.data as GraphBusy;
+  const items = data?.value?.[0]?.scheduleItems ?? [];
+  let busy = items
+    .filter((i) => i.start?.dateTime && i.end?.dateTime)
+    .map((i) => ({
+      start: new Date(graphTimeIso({ dateTime: i.start!.dateTime })!),
+      end: new Date(graphTimeIso({ dateTime: i.end!.dateTime })!)
+    }));
+
+  // getSchedule only covers the default calendar; pull the shared
+  // NewCoworker calendar's events separately and merge them in.
+  if (shared) {
+    const viewRes = await nangoProxyForBusiness(
+      businessId,
+      { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
+      {
+        endpoint: `/v1.0/me/calendars/${encodeURIComponent(shared.calendarId)}/calendarView`,
+        method: "GET",
+        params: {
+          startDateTime: windowStart.toISOString(),
+          endDateTime: windowEnd.toISOString()
+        }
+      }
+    );
+    type GraphView = {
+      value?: Array<{ start?: { dateTime: string }; end?: { dateTime: string } }>;
+    };
+    const viewItems = ((viewRes?.data ?? null) as GraphView | null)?.value ?? [];
+    busy = busy.concat(
+      viewItems
+        .filter((i) => i.start?.dateTime && i.end?.dateTime)
+        .map((i) => ({
+          start: new Date(graphTimeIso({ dateTime: i.start!.dateTime })!),
+          end: new Date(graphTimeIso({ dateTime: i.end!.dateTime })!)
+        }))
+    );
+  }
+  return busy;
+}
+
 export async function findCalendarSlots(
   businessId: string,
   args: FindSlotsArgs
@@ -339,89 +442,11 @@ export async function findCalendarSlots(
       };
     }
 
-    // Read-only: never creates the shared calendar from the search path.
-    const shared = await getSharedCalendar(businessId);
-
-    if (conn.provider === "google") {
-      const items = [{ id: "primary" }];
-      if (shared) items.push({ id: shared.calendarId });
-      const res = await nangoProxyForBusiness(
-        businessId,
-        { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
-        {
-          endpoint: "/calendar/v3/freeBusy",
-          method: "POST",
-          data: {
-            timeMin: windowStart.toISOString(),
-            timeMax: windowEnd.toISOString(),
-            items
-          }
-        }
-      );
-      if (!res) return { ok: false, detail: "calendar_not_connected" };
-      const data = res.data as FreeBusyBody;
-      const blocks = Object.values(data?.calendars ?? {}).flatMap((c) => c.busy ?? []);
-      busy = blocks.map((b) => ({ start: new Date(b.start), end: new Date(b.end) }));
-    } else {
-      // Microsoft Graph getSchedule: POST /me/calendar/getSchedule.
-      const res = await nangoProxyForBusiness(
-        businessId,
-        { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
-        {
-          endpoint: "/v1.0/me/calendar/getSchedule",
-          method: "POST",
-          data: {
-            startTime: { dateTime: windowStart.toISOString(), timeZone: "UTC" },
-            endTime: { dateTime: windowEnd.toISOString(), timeZone: "UTC" },
-            availabilityViewInterval: args.durationMinutes,
-            schedules: ["me"]
-          }
-        }
-      );
-      if (!res) return { ok: false, detail: "calendar_not_connected" };
-      type GraphBusy = {
-        value?: Array<{
-          scheduleItems?: Array<{ start?: { dateTime: string }; end?: { dateTime: string } }>;
-        }>;
-      };
-      const data = res.data as GraphBusy;
-      const items = data?.value?.[0]?.scheduleItems ?? [];
-      busy = items
-        .filter((i) => i.start?.dateTime && i.end?.dateTime)
-        .map((i) => ({
-          start: new Date(graphTimeIso({ dateTime: i.start!.dateTime })!),
-          end: new Date(graphTimeIso({ dateTime: i.end!.dateTime })!)
-        }));
-
-      // getSchedule only covers the default calendar; pull the shared
-      // NewCoworker calendar's events separately and merge them in.
-      if (shared) {
-        const viewRes = await nangoProxyForBusiness(
-          businessId,
-          { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
-          {
-            endpoint: `/v1.0/me/calendars/${encodeURIComponent(shared.calendarId)}/calendarView`,
-            method: "GET",
-            params: {
-              startDateTime: windowStart.toISOString(),
-              endDateTime: windowEnd.toISOString()
-            }
-          }
-        );
-        type GraphView = {
-          value?: Array<{ start?: { dateTime: string }; end?: { dateTime: string } }>;
-        };
-        const viewItems = ((viewRes?.data ?? null) as GraphView | null)?.value ?? [];
-        busy = busy.concat(
-          viewItems
-            .filter((i) => i.start?.dateTime && i.end?.dateTime)
-            .map((i) => ({
-              start: new Date(graphTimeIso({ dateTime: i.start!.dateTime })!),
-              end: new Date(graphTimeIso({ dateTime: i.end!.dateTime })!)
-            }))
-        );
-      }
-    }
+    const workspaceBusy = await getWorkspaceBusyBlocks(businessId, conn, windowStart, windowEnd, {
+      availabilityViewInterval: args.durationMinutes
+    });
+    if (workspaceBusy === null) return { ok: false, detail: "calendar_not_connected" };
+    busy = workspaceBusy;
 
     // Resolved BEFORE the slot walk: quarter-hour candidates prefer :00/:30
     // in the requester's local clock, and the echo lets the model present

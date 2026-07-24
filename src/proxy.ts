@@ -212,6 +212,12 @@ export async function proxy(request: NextRequest) {
     // and CSRF must not 403 legitimate visitors. Same rationale as
     // /api/public/ above.
     !pathname.startsWith("/api/widget/") &&
+    // /api/book/* is the public self-serve booking page API, authenticated
+    // solely by the page's capability token (ncb_…) — never by a session
+    // cookie, so CSRF adds no protection. Visitors arrive from shared links
+    // and privacy tooling can blank Origin/Referer; CSRF must not 403 a
+    // legitimate booking. Same rationale as /api/widget/ above.
+    !pathname.startsWith("/api/book/") &&
     ["POST", "PUT", "DELETE", "PATCH"].includes(method)
   ) {
     const origin = request.headers.get("origin");

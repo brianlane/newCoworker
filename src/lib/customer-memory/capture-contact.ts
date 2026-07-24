@@ -51,6 +51,13 @@ export type CapturedContactInput = {
   email?: string | null;
   /** Which surface captured the lead (becomes `contacts.last_channel`). */
   channel: CustomerMemoryChannel;
+  /**
+   * Override the tag stamped on a NEWLY created contact. Defaults to the
+   * channel's CAPTURE_SOURCE_TAGS entry; surfaces that ride an existing
+   * channel but want their own CRM scoping (the public booking page rides
+   * `webchat` with tag "Booking Page") pass it explicitly.
+   */
+  sourceTag?: string;
 };
 
 export type CapturedContactResult = {
@@ -146,7 +153,7 @@ export async function ensureCapturedContact(
   // Source tag on the NEW row only (never touch an existing contact's tags):
   // lets the owner's CRM views and `contact_created` flow conditions single
   // out capture-sourced leads. Best-effort — the tag is a nice-to-have.
-  const sourceTag = CAPTURE_SOURCE_TAGS[input.channel];
+  const sourceTag = input.sourceTag ?? CAPTURE_SOURCE_TAGS[input.channel];
   if (sourceTag) {
     try {
       const { error: tagErr } = await db
