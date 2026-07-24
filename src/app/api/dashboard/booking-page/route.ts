@@ -25,6 +25,7 @@ import {
   upsertBookingPage
 } from "@/lib/booking-page/db";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
+import { probeCalendarAvailability } from "@/lib/booking-page/service";
 
 export const dynamic = "force-dynamic";
 
@@ -63,14 +64,19 @@ export async function GET(request: Request) {
       return errorResponse("CONFLICT", "Too many requests, please wait a moment.", 429);
     }
 
-    const [page, conn, upcoming] = await Promise.all([
+    const [page, conn, upcoming, availability] = await Promise.all([
       getBookingPageForBusiness(businessId),
       resolveCalendarConnection(businessId),
-      listUpcomingBookings(businessId)
+      listUpcomingBookings(businessId),
+      // Live free/busy probe: surfaces a connection that can write events
+      // but cannot READ availability (missing Calendar consent scope) to
+      // the owner, while the public page keeps failing safe for visitors.
+      probeCalendarAvailability(businessId)
     ]);
     return successResponse({
       page,
       calendarProvider: conn?.provider ?? null,
+      availability,
       upcoming
     });
   } catch (error) {

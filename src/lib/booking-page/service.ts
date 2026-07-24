@@ -127,6 +127,36 @@ async function fetchBusyBlocks(
   return getWorkspaceBusyBlocks(businessId, conn, windowStart, windowEnd);
 }
 
+export type CalendarAvailabilityProbe = "ok" | "unreadable" | "unsupported" | "not_connected";
+
+/**
+ * Owner-facing health probe for the Bookings dashboard: can the connected
+ * calendar actually serve availability reads? A connection that can write
+ * events but not read free/busy (a consent missing the Calendar scope, the
+ * Jul 2026 HQ case) renders the public page unable to offer slots; the
+ * page fails safe for visitors, and THIS is how the owner finds out why.
+ */
+export async function probeCalendarAvailability(
+  businessId: string
+): Promise<CalendarAvailabilityProbe> {
+  try {
+    const conn = await resolveCalendarConnection(businessId);
+    if (!conn) return "not_connected";
+    if (conn.provider === "vagaro" || conn.provider === "calendly") return "unsupported";
+    const now = new Date();
+    const busy = await fetchBusyBlocks(
+      businessId,
+      conn.provider,
+      conn,
+      now,
+      new Date(now.getTime() + DAY_MS)
+    );
+    return busy === null ? "unreadable" : "ok";
+  } catch {
+    return "unreadable";
+  }
+}
+
 export type ListPublicSlotsResult =
   | { ok: true; timezone: string; durationMinutes: number; slots: PublicSlot[] }
   | BookingPageFailure;

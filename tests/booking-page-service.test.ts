@@ -29,6 +29,7 @@ import {
   PUBLIC_SLOT_CLAIM_KEY,
   getBookingPageContext,
   listPublicSlots,
+  probeCalendarAvailability,
   submitPublicBooking
 } from "@/lib/booking-page/service";
 import {
@@ -173,6 +174,38 @@ describe("getBookingPageContext", () => {
       ok: true,
       context: { videoCall: false, timezone: "UTC" }
     });
+  });
+});
+
+describe("probeCalendarAvailability", () => {
+  it("classifies every connection state", async () => {
+    mockConn.mockResolvedValueOnce(null);
+    expect(await probeCalendarAvailability(BIZ)).toBe("not_connected");
+
+    for (const provider of ["vagaro", "calendly"]) {
+      mockConn.mockResolvedValueOnce({ provider } as never);
+      expect(await probeCalendarAvailability(BIZ)).toBe("unsupported");
+    }
+
+    // Healthy workspace read.
+    expect(await probeCalendarAvailability(BIZ)).toBe("ok");
+
+    // Proxy null = the scope-starved consent (the Jul 2026 HQ case).
+    mockBusy.mockResolvedValueOnce(null);
+    expect(await probeCalendarAvailability(BIZ)).toBe("unreadable");
+
+    // A thrown proxy error (Google 403) also reads as unreadable.
+    mockBusy.mockRejectedValueOnce(new Error("Request failed with status code 403"));
+    expect(await probeCalendarAvailability(BIZ)).toBe("unreadable");
+
+    // CalDAV rides the same probe.
+    mockConn.mockResolvedValueOnce({
+      provider: "caldav",
+      connectionId: "cd",
+      providerConfigKey: "caldav-direct"
+    } as never);
+    mockCaldav.mockResolvedValueOnce({ ok: true, busy: [] } as never);
+    expect(await probeCalendarAvailability(BIZ)).toBe("ok");
   });
 });
 
