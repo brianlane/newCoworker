@@ -381,6 +381,52 @@ export function extractLabeledPhones(text: string): string[] {
   return out;
 }
 
+/** Values the extractors use for "no value" — passed through untouched. */
+const EMPTY_PHONE_VALUES = new Set(["", "none", "n/a", "na", "null", "unknown"]);
+
+/**
+ * Validate an extracted phone-typed field against the SOURCE text it was
+ * extracted from, so an undialable value never reaches a send step.
+ *
+ * KYP Ads, Jul 23 2026: a Facebook lead typed `492046781` (9 junk digits)
+ * into the form; the extraction model "helpfully" E.164-ified it to
+ * `+492046781` — which reads as Germany — and the greeting send
+ * dead-lettered at Telnyx with 40306 ("Alpha sender not configured") plus
+ * an urgent owner alert. The digits were never dialable; the model
+ * invented the `+`.
+ *
+ * Rules, in order:
+ *  - empty / "none"-class values pass through unchanged (the extractors'
+ *    own no-value convention);
+ *  - anything NANP-coercible (10 digits, or 11 starting with 1, loose
+ *    formatting) is returned canonical (`+1…`) — same normalization the
+ *    fallback path already applies;
+ *  - an international `+…` E.164 value is kept ONLY when the source text
+ *    itself contains that number WITH the `+` prefix (allowing the usual
+ *    separator punctuation between digits). A `+` the model added to bare
+ *    digits is not a country code, it is a hallucination;
+ *  - everything else becomes "none", so the flow's existing no-phone
+ *    branch handles the lead instead of a guaranteed carrier rejection.
+ */
+export function sanitizeExtractedPhone(value: string, sourceText: string): string {
+  const trimmed = value.trim();
+  if (EMPTY_PHONE_VALUES.has(trimmed.toLowerCase())) return trimmed;
+
+  const nanp = normalizeNanpToE164(trimmed);
+  if (nanp) return nanp;
+
+  const digits = trimmed.replace(/[^\d]/g, "");
+  const candidate = `+${digits}`;
+  if (trimmed.startsWith("+") && isE164(candidate)) {
+    // Look for the SAME digit sequence in the source, `+`-prefixed, with
+    // ordinary separators (space, dot, dash, parens) between digits. Bounded:
+    // at most 3 separator chars between consecutive digits.
+    const pattern = new RegExp(`\\+\\s{0,3}${digits.split("").join("[\\s().\\-–]{0,3}")}(?!\\d)`);
+    if (pattern.test(sourceText)) return candidate;
+  }
+  return "none";
+}
+
 /**
  * Is the triggering sender PINNED to a declared identity by a `from_matches`
  * condition on one of the flow's SMS triggers? This is the safety gate for

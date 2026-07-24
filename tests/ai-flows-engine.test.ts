@@ -25,6 +25,7 @@ import {
   isE164,
   isPhoneFieldName,
   normalizeNanpToE164,
+  sanitizeExtractedPhone,
   parseExtractionJson,
   parseHmToMinutes,
   parseRoutedAgent,
@@ -426,6 +427,50 @@ describe("normalizeNanpToE164", () => {
   it("rejects NANP-invalid exchange codes (N digit must be 2-9)", () => {
     expect(normalizeNanpToE164("602-056-7890")).toBeNull();
     expect(normalizeNanpToE164("602-156-7890")).toBeNull();
+  });
+});
+
+describe("sanitizeExtractedPhone", () => {
+  it("passes the extractors' no-value convention through unchanged", () => {
+    for (const v of ["", "none", "None", "N/A", "na", "null", "unknown", "  none  "]) {
+      expect(sanitizeExtractedPhone(v, "whatever")).toBe(v.trim());
+    }
+  });
+
+  it("returns NANP-coercible values canonical regardless of the source", () => {
+    expect(sanitizeExtractedPhone("(203) 809-7763", "")).toBe("+12038097763");
+    expect(sanitizeExtractedPhone("1-514-518-8192", "")).toBe("+15145188192");
+    expect(sanitizeExtractedPhone("+15145188192", "")).toBe("+15145188192");
+  });
+
+  it("drops a model-invented '+' on bare junk digits (KYP '+492046781', Telnyx 40306)", () => {
+    // The form said `phone_number: 492046781` — no `+` anywhere. The
+    // extractor E.164-ified it into a German-looking number and the send
+    // dead-lettered at the carrier.
+    const source =
+      "full_name: Kav\nemail: x@example.com\nphone_number: 492046781\nindustry: Other";
+    expect(sanitizeExtractedPhone("+492046781", source)).toBe("none");
+  });
+
+  it("keeps an international number the source itself carried with the '+'", () => {
+    expect(
+      sanitizeExtractedPhone("+442071234567", "Phone: +44 20 7123 4567 (office)")
+    ).toBe("+442071234567");
+    expect(
+      sanitizeExtractedPhone("+44 20 7123 4567", "Reach me at +44(20)7123-4567")
+    ).toBe("+442071234567");
+  });
+
+  it("does not let a longer source number vouch for a truncated extraction", () => {
+    // (?!\d) guard: "+4420712345678" in the source must not validate the
+    // 12-digit prefix the model returned.
+    expect(sanitizeExtractedPhone("+442071234567", "call +4420712345678")).toBe("none");
+  });
+
+  it("turns undialable shapes into 'none' (bare short digits, malformed E.164)", () => {
+    expect(sanitizeExtractedPhone("492046781", "phone_number: 492046781")).toBe("none");
+    expect(sanitizeExtractedPhone("+0123456", "+0123456")).toBe("none");
+    expect(sanitizeExtractedPhone("call me maybe", "call me maybe")).toBe("none");
   });
 });
 
