@@ -54,6 +54,14 @@ export const SPAM_CANCELED_BY = "owner_declared_spam";
 const CONTACT_TAGS_CAP = 25;
 
 /**
+ * The pinned-note dedupe marker — the exact phrase every spam note carries.
+ * Deliberately NOT the bare word "SPAM": unrelated pinned content ("gets
+ * SPAM calls often") must not suppress the note, or a note_only outcome
+ * could claim a record that was never written (Bugbot Low on PR #884).
+ */
+const SPAM_NOTE_MARKER = "declared this contact SPAM";
+
+/**
  * Every non-terminal run state — human-parked AND `running` included (spam
  * stops everything). Matches the dashboard owner-stop's
  * CANCELABLE_RUN_STATUSES: a `running` run cancels cooperatively, the
@@ -336,7 +344,7 @@ async function tagContactSpam(
   reason: string | undefined
 ): Promise<SpamContactOutcome> {
   const noteLine =
-    `Owner declared this contact SPAM (${new Date().toISOString().slice(0, 10)}). ` +
+    `Owner ${SPAM_NOTE_MARKER} (${new Date().toISOString().slice(0, 10)}). ` +
     `Do not contact; all follow-ups stopped.${reason?.trim() ? ` Reason: ${reason.trim()}` : ""}`;
   try {
     if (!contact) {
@@ -355,8 +363,9 @@ async function tagContactSpam(
     const atCap = !tags.includes(SPAM_TAG) && tags.length >= CONTACT_TAGS_CAP;
     const updates: Record<string, unknown> = {};
     if (!tags.includes(SPAM_TAG) && !atCap) updates.tags = [...tags, SPAM_TAG];
-    // One spam note is enough — a re-flag must not stack duplicates.
-    if (!pinned.includes("SPAM")) {
+    // One spam note is enough — a re-flag must not stack duplicates. The
+    // precise marker (not the bare word) decides "already noted".
+    if (!pinned.includes(SPAM_NOTE_MARKER)) {
       updates.pinned_md = pinned ? `${pinned.trimEnd()}\n- ${noteLine}` : `- ${noteLine}`;
     }
     if (Object.keys(updates).length > 0) {

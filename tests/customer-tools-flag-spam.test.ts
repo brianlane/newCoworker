@@ -389,6 +389,22 @@ describe("flagContactSpam", () => {
       expect(calls.some((c) => c.table === "contacts" && c.name === "update")).toBe(false);
     });
 
+    it("unrelated 'SPAM' text in pinned notes does not suppress the real note", async () => {
+      // Bugbot Low (PR #884): the bare-word dedupe let "gets SPAM calls
+      // often" pass for a spam declaration, so note_only could claim a
+      // record that was never written.
+      const { db, calls } = makeDb([
+        { data: [contactRow({ pinned_md: "- Gets SPAM calls often" })], error: null },
+        { data: [], error: null },
+        { error: null }
+      ]);
+      const res = await flagContactSpam(BIZ, { phone: PHONE }, deps(db));
+      expect(res.ok).toBe(true);
+      const update = calls.find((c) => c.table === "contacts" && c.name === "update");
+      const payload = update?.args[0] as { pinned_md: string };
+      expect(payload.pinned_md).toContain("- Gets SPAM calls often\n- Owner declared this contact SPAM");
+    });
+
     it("non-array tags and non-string pinned_md are treated as empty", async () => {
       const { db, calls } = makeDb([
         { data: [contactRow({ tags: null, pinned_md: 7 })], error: null },
