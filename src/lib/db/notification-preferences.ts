@@ -49,7 +49,7 @@ export type NotificationPreferencesRow = {
    * customer-facing activity (customer texts, calls, new customers, urgent
    * alerts). Routine-only windows (background AiFlow runs, dashboard chat,
    * owner-directed sends the owner already received in real time) are
-   * skipped. Optional on the type for rows read before 20260724161548.
+   * skipped. Optional on the type for rows read before 20260820100700.
    */
   digest_customer_facing_only?: boolean;
   phone_number: string | null;
