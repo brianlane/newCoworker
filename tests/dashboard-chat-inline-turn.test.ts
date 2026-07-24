@@ -550,7 +550,8 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
     run_aiflow: true,
     edit_aiflow: true,
     generate_image: true,
-    update_notification_preferences: true
+    update_notification_preferences: true,
+    flag_contact_spam: true
   };
 
   it("declares gated action tools alongside the creation tools", async () => {
@@ -570,7 +571,8 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
       "run_aiflow",
       "edit_aiflow",
       "generate_image",
-      "update_notification_preferences"
+      "update_notification_preferences",
+      "flag_contact_spam"
     ]);
   });
 
@@ -955,6 +957,49 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
     });
     expect(res2.ok).toBe(true);
     if (res2.ok) expect(res2.content).toContain("Notification settings were changed.");
+  });
+
+  it("a successful flag_contact_spam is side-effect pinned, the degraded wrap-up keeps the outcome", async () => {
+    // Bugbot Medium (PR #884): the opt-out write is irreversible the moment
+    // the core returns ok — a wrap-up failure must degrade to the honest
+    // line, never fall back to Rowboat (which never declares this tool and
+    // would deny an action that already happened).
+    const runActionTool = vi.fn(async () => ({
+      ok: true,
+      phoneE164: "+12038097763",
+      note: "Tell the owner: this number is now blocked from all texting; 1 pending automation run(s) were stopped; the contact is tagged spam. The block cannot be undone from chat (only the contact texting START lifts it)."
+    }));
+    const chatStep = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("flag_contact_spam", { phone: "+12038097763" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep,
+      runActionTool
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.content).toContain("Spam flag applied to +12038097763");
+      expect(res.content).toContain("this number is now blocked from all texting");
+      expect(res.content).not.toContain("Tell the owner");
+    }
+
+    // Defensive arm: a result missing phone/note still notes the block.
+    const bareTool = vi.fn(async () => ({ ok: true }));
+    const chatStep2 = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("flag_contact_spam", { phone: "+12038097763" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const res2 = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep: chatStep2,
+      runActionTool: bareTool
+    });
+    expect(res2.ok).toBe(true);
+    if (res2.ok) {
+      expect(res2.content).toContain(
+        "Spam flag applied to the number: the number is blocked from all texting"
+      );
+    }
   });
 
   it("stops starting new steps once budgetMs is exhausted, fails fast when nothing committed", async () => {

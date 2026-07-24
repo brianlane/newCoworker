@@ -108,6 +108,7 @@ export async function POST(request: Request) {
       runAiflowEnabled,
       editAiflowEnabled,
       notificationPrefsToolEnabled,
+      flagSpamToolEnabled,
       integrationsLine,
       businessContextBlock
     ] = await Promise.all([
@@ -121,6 +122,7 @@ export async function POST(request: Request) {
       isAgentToolEnabled(body.businessId, "dashboard", "run_aiflow"),
       isAgentToolEnabled(body.businessId, "dashboard", "edit_aiflow"),
       isAgentToolEnabled(body.businessId, "dashboard", "update_notification_preferences"),
+      isAgentToolEnabled(body.businessId, "dashboard", "flag_contact_spam"),
       buildIntegrationsStatusLine(body.businessId),
       buildBusinessContextBlock(body.businessId)
     ]);
@@ -211,7 +213,11 @@ export async function POST(request: Request) {
         // established server-side from their number before this route is
         // called), and owners always pass manage_settings — "let me know
         // when clients text back" flips the toggle right from this thread.
-        update_notification_preferences: notificationPrefsToolEnabled
+        update_notification_preferences: notificationPrefsToolEnabled,
+        // The texter is the verified OWNER — exactly the caller a spam
+        // declaration comes from ("hes spam", KYP Jul 23 2026, was THIS
+        // surface promising an action it had no tool for).
+        flag_contact_spam: flagSpamToolEnabled
       }
     });
 

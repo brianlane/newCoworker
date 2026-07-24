@@ -830,13 +830,21 @@ describe("POST /api/dashboard/chat — inline (central Gemini) primary path", ()
     vi.mocked(getBusinessRoleForEmail).mockResolvedValueOnce("staff" as never);
     await POST(jsonRequest({ businessId: BIZ, message: "turn on client reply alerts" }));
     const staffArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
-    expect(staffArgs.actionToolGates).toMatchObject({ update_notification_preferences: false });
+    expect(staffArgs.actionToolGates).toMatchObject({
+      update_notification_preferences: false,
+      // Same role bar for the irreversible spam suppression (Bugbot, PR #884):
+      // staff must never be handed a STOP-list write.
+      flag_contact_spam: false
+    });
 
     vi.mocked(runInlineChatTurn).mockClear();
     vi.mocked(getBusinessRoleForEmail).mockResolvedValueOnce("manager" as never);
     await POST(jsonRequest({ businessId: BIZ, message: "turn on client reply alerts" }));
     const managerArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
-    expect(managerArgs.actionToolGates).toMatchObject({ update_notification_preferences: true });
+    expect(managerArgs.actionToolGates).toMatchObject({
+      update_notification_preferences: true,
+      flag_contact_spam: true
+    });
 
     // A role lookup failure fails CLOSED (no settings tool), never the turn.
     vi.mocked(runInlineChatTurn).mockClear();
@@ -844,7 +852,10 @@ describe("POST /api/dashboard/chat — inline (central Gemini) primary path", ()
     const res = await POST(jsonRequest({ businessId: BIZ, message: "hello" }));
     expect(res.status).toBe(200);
     const failArgs = vi.mocked(runInlineChatTurn).mock.calls[0][0];
-    expect(failArgs.actionToolGates).toMatchObject({ update_notification_preferences: false });
+    expect(failArgs.actionToolGates).toMatchObject({
+      update_notification_preferences: false,
+      flag_contact_spam: false
+    });
   });
 
   it("returns creation drafts from the inline turn to the client", async () => {

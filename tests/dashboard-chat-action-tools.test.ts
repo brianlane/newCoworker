@@ -33,7 +33,8 @@ const ALL_ON: ActionToolGates = {
   run_aiflow: true,
   edit_aiflow: true,
   generate_image: true,
-  update_notification_preferences: true
+  update_notification_preferences: true,
+  flag_contact_spam: true
 };
 
 function insertResult(result: { error: { message: string } | null }) {
@@ -214,7 +215,8 @@ describe("declarations & naming", () => {
       run_aiflow: false,
       edit_aiflow: false,
       generate_image: false,
-      update_notification_preferences: false
+      update_notification_preferences: false,
+      flag_contact_spam: false
     });
     expect(some.map((d) => d.name)).toEqual([
       "calendar_find_slots",
@@ -297,6 +299,56 @@ describe("update_notification_preferences", () => {
     expect(invalid.ok).toBe(false);
     expect(invalid.message).toContain("invalid_args");
     expect(untouched).not.toHaveBeenCalled();
+  });
+});
+
+describe("flag_contact_spam", () => {
+  it("is declared with explicit-consent + irreversibility guidance and gated off cleanly", () => {
+    const decl = actionToolDeclarations(ALL_ON).find((d) => d.name === "flag_contact_spam");
+    expect(decl?.description).toMatch(/ONLY when the owner explicitly/i);
+    expect(decl?.description).toMatch(/CANNOT be undone/i);
+    const props = Object.keys(
+      (decl?.parameters as { properties: Record<string, unknown> }).properties
+    );
+    expect(props).toEqual(["phone", "reason"]);
+
+    const gatedOff = actionToolDeclarations({ ...ALL_ON, flag_contact_spam: false });
+    expect(gatedOff.map((d) => d.name)).not.toContain("flag_contact_spam");
+  });
+
+  it("delegates to the shared core and returns its payload verbatim", async () => {
+    const flagSpam = vi.fn(async () => ({
+      ok: true as const,
+      phoneE164: "+12038097763",
+      optedOut: true as const,
+      canceledRuns: 1,
+      runsSweepComplete: true,
+      contactTagged: true,
+      note: "Tell the owner…"
+    }));
+    const res = (await executeActionTool(
+      BIZ,
+      { name: "flag_contact_spam", args: { phone: "+12038097763", reason: "junk form fill" } },
+      { flagSpam: flagSpam as never }
+    )) as { ok: boolean; canceledRuns?: number };
+    expect(flagSpam).toHaveBeenCalledWith(BIZ, {
+      phone: "+12038097763",
+      reason: "junk form fill"
+    });
+    expect(res.ok).toBe(true);
+    expect(res.canceledRuns).toBe(1);
+  });
+
+  it("rejects invalid args without touching the core", async () => {
+    const flagSpam = vi.fn();
+    const invalid = (await executeActionTool(
+      BIZ,
+      { name: "flag_contact_spam", args: {} },
+      { flagSpam: flagSpam as never }
+    )) as { ok: boolean; message?: string };
+    expect(invalid.ok).toBe(false);
+    expect(invalid.message).toContain("invalid_args");
+    expect(flagSpam).not.toHaveBeenCalled();
   });
 });
 

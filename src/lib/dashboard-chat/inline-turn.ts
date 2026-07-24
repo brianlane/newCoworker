@@ -252,7 +252,13 @@ const SIDE_EFFECT_TOOLS: ReadonlySet<string> = new Set([
   // path), so a post-write model failure falling back would produce a reply
   // claiming the change is impossible — contradicting a write that already
   // happened (Bugbot Medium on PR #805).
-  "update_notification_preferences"
+  "update_notification_preferences",
+  // The spam flag's opt-out write is IRREVERSIBLE the moment the core
+  // returns ok (only the contact texting START lifts it). The worker
+  // fallback never declares this tool, so a post-write model failure
+  // falling back would deny an action that already happened (Bugbot
+  // Medium on PR #884).
+  "flag_contact_spam"
 ]);
 
 /** Committed side effects + the user-facing facts a degraded wrap-up must carry. */
@@ -314,6 +320,18 @@ function sideEffectNote(name: ActionToolName, result: unknown): string {
             .join(", ")
         : "";
     return `Notification settings were changed${changes ? `: ${changes}` : ""}.`;
+  }
+  if (name === "flag_contact_spam") {
+    // The core's note carries the full honest outcome (blocked numbers,
+    // stopped runs, tag state) — keep it, minus the model instruction.
+    const phone = (r as { phoneE164?: unknown }).phoneE164;
+    const target = typeof phone === "string" ? phone : "the number";
+    const note = (r as { note?: unknown }).note;
+    const outcome =
+      typeof note === "string"
+        ? note.replace(/^Tell the owner: /, "")
+        : "the number is blocked from all texting and their pending follow-ups were stopped.";
+    return `Spam flag applied to ${target}: ${outcome}`;
   }
   return "The appointment was canceled.";
 }
