@@ -286,7 +286,9 @@ describe("pollEmailTriggers", () => {
             body: { data: b64url("Open https://rfrl.to/abc now") }
           }
         }
-      } as never);
+      } as never)
+      // users.messages.modify: the triggering message is marked read.
+      .mockResolvedValueOnce({ data: {} } as never);
 
     // Two flows watch the same mailbox: one matches, one does not.
     const res = await pollEmailTriggers(
@@ -296,6 +298,16 @@ describe("pollEmailTriggers", () => {
       ])
     );
     expect(res).toEqual({ flows: 2, mailboxes: 1, messages: 1, enqueued: 1 });
+    // The triggering message was marked handled (read) in the owner's inbox.
+    expect(nangoProxyForBusiness).toHaveBeenCalledWith(
+      BIZ,
+      expect.anything(),
+      expect.objectContaining({
+        endpoint: "/gmail/v1/users/me/messages/m1/modify",
+        method: "POST",
+        data: { removeLabelIds: ["UNREAD"] }
+      })
+    );
     expect(enqueueAiFlowRun).toHaveBeenCalledTimes(1);
     expect(enqueueAiFlowRun).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -328,6 +340,96 @@ describe("pollEmailTriggers", () => {
     );
   });
 
+  it("marks a triggering Gmail message read ONCE even when several flows match it", async () => {
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
+      .mockResolvedValueOnce({
+        data: {
+          payload: { mimeType: "text/plain", body: { data: b64url("See https://rfrl.to/a") } }
+        }
+      } as never)
+      .mockResolvedValueOnce({ data: {} } as never);
+    const res = await pollEmailTriggers(
+      dbWith([
+        flowRow("f-a", emailTrigger([{ type: "has_url" }])),
+        flowRow("f-b", emailTrigger([{ type: "has_url" }]))
+      ])
+    );
+    expect(res.enqueued).toBe(2);
+    const modifyCalls = vi
+      .mocked(nangoProxyForBusiness)
+      .mock.calls.filter((c) => c[2].endpoint.includes("/modify"));
+    expect(modifyCalls).toHaveLength(1);
+    expect(recordSystemLog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_email_mark_read_failed" })
+    );
+  });
+
+  it("logs a warning (and keeps the run) when the mark-read link is dead", async () => {
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
+      .mockResolvedValueOnce({
+        data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
+      } as never)
+      // modify → null (connection vanished between read and write)
+      .mockResolvedValueOnce(null as never);
+    const res = await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
+    expect(res.enqueued).toBe(1);
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ai_flow_email_mark_read_failed",
+        level: "warn",
+        message: expect.stringContaining("email_not_connected"),
+        payload: { message_id: "m1" }
+      })
+    );
+  });
+
+  it("stringifies a non-Error mark-read failure without failing the run", async () => {
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
+      .mockResolvedValueOnce({
+        data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
+      } as never)
+      .mockRejectedValueOnce("gmail hiccup" as never);
+    const res = await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
+    expect(res.enqueued).toBe(1);
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ai_flow_email_mark_read_failed",
+        message: expect.stringContaining("gmail hiccup")
+      })
+    );
+  });
+
+  it("never touches read state on a Microsoft mailbox", async () => {
+    vi.mocked(getWorkspaceOAuthConnection).mockResolvedValue({
+      ...googleConn,
+      provider_config_key: "outlook"
+    } as never);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+      data: {
+        value: [
+          {
+            id: "ms1",
+            subject: "Lead",
+            from: { emailAddress: { address: "leads@rx.com" } },
+            body: { contentType: "Text", content: "See https://rfrl.to/z" },
+            receivedDateTime: "2026-06-09T15:00:00Z"
+          }
+        ]
+      }
+    } as never);
+    const res = await pollEmailTriggers(
+      dbWith([flowRow("f1", emailTrigger([{ type: "has_url" }]))])
+    );
+    expect(res.enqueued).toBe(1);
+    const modifyCalls = vi
+      .mocked(nangoProxyForBusiness)
+      .mock.calls.filter((c) => c[2].endpoint.includes("/modify"));
+    expect(modifyCalls).toHaveLength(0);
+  });
+
   it("fires flows whose email trigger lives in the EXTRA triggers array, merging same-mailbox triggers (multi-trigger OR)", async () => {
     vi.mocked(nangoProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
@@ -343,7 +445,8 @@ describe("pollEmailTriggers", () => {
             body: { data: b64url("Open https://rfrl.to/abc now") }
           }
         }
-      } as never);
+      } as never)
+      .mockResolvedValueOnce({ data: {} } as never);
     const res = await pollEmailTriggers(
       dbWith([
         // Primary is manual; TWO email triggers on the same mailbox live in
