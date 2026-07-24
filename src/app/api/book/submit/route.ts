@@ -59,6 +59,15 @@ export async function POST(request: Request) {
         // Distinct code so the client re-fetches slots and asks for a new pick.
         return errorResponse("CONFLICT", "That time was just taken, please pick another.", 409);
       }
+      if (result.detail === "already_booked") {
+        // Deliberate policy: one upcoming appointment per person on the
+        // public page. 422 so the client shows the dedicated explanation.
+        return errorResponse(
+          "CONFLICT",
+          "You already have an upcoming appointment with this business.",
+          422
+        );
+      }
       return errorResponse("CONFLICT", "Booking failed, please try again.", 503);
     }
     return successResponse({

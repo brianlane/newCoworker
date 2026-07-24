@@ -2,7 +2,8 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/booking-page/db", () => ({
   getEnabledBookingPageByToken: vi.fn(),
-  countBookingsBetween: vi.fn()
+  countBookingsBetween: vi.fn(),
+  listBookingStartsBetween: vi.fn()
 }));
 vi.mock("@/lib/voice-tools/connections", () => ({ resolveCalendarConnection: vi.fn() }));
 vi.mock("@/lib/calendar-tools/handlers", () => ({
@@ -26,7 +27,10 @@ import {
   listPublicSlots,
   submitPublicBooking
 } from "@/lib/booking-page/service";
-import { getEnabledBookingPageByToken } from "@/lib/booking-page/db";
+import {
+  getEnabledBookingPageByToken,
+  listBookingStartsBetween
+} from "@/lib/booking-page/db";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import {
   bookCalendarAppointment,
@@ -83,6 +87,7 @@ const mockMembers = vi.mocked(listTeamMembers);
 const mockTimeOff = vi.mocked(listTimeOff);
 const mockClientFactory = vi.mocked(createSupabaseServiceClient);
 const mockSlotClaim = vi.mocked(rateLimitDurable);
+const mockListStarts = vi.mocked(listBookingStartsBetween);
 
 function ledgerDb(result: { data?: unknown; error?: { message: string } | null }) {
   const b: Record<string, unknown> = {};
@@ -105,6 +110,7 @@ beforeEach(() => {
   mockClientFactory.mockResolvedValue(ledgerDb({ data: [], error: null }));
   mockCapture.mockResolvedValue({ created: true });
   mockSlotClaim.mockResolvedValue({ success: true } as never);
+  mockListStarts.mockResolvedValue([]);
 });
 
 afterEach(() => {
@@ -205,20 +211,18 @@ describe("listPublicSlots", () => {
 
   it("feeds the daily cap from the booking ledger and fails soft on ledger errors", async () => {
     mockPage.mockResolvedValue({ ...PAGE, max_daily_bookings: 1 });
-    mockClientFactory.mockResolvedValue(
-      ledgerDb({ data: [{ start_at: "2026-01-05T18:00:00Z" }], error: null })
-    );
+    mockListStarts.mockResolvedValueOnce([new Date("2026-01-05T18:00:00Z")]);
     const capped = await listPublicSlots(TOKEN, 30);
     expect(capped.ok).toBe(true);
     if (!capped.ok) throw new Error("unreachable");
     // One existing booking on the only bookable day at cap 1: nothing offered.
     expect(capped.slots).toHaveLength(0);
 
-    mockClientFactory.mockResolvedValue(ledgerDb({ data: null, error: { message: "boom" } }));
+    mockListStarts.mockRejectedValueOnce(new Error("listBookingStartsBetween: boom"));
     expect(await listPublicSlots(TOKEN, 30)).toEqual({ ok: false, detail: "booking_failed" });
     expect(logger.warn).toHaveBeenCalledWith(
       "booking-page: slot listing failed",
-      expect.objectContaining({ error: "booking starts read: boom" })
+      expect.objectContaining({ error: "listBookingStartsBetween: boom" })
     );
   });
 
@@ -232,13 +236,10 @@ describe("listPublicSlots", () => {
     expect(out.slots.length).toBeGreaterThan(0);
   });
 
-  it("tolerates a null ledger payload when the daily cap is set", async () => {
-    mockPage.mockResolvedValue({ ...PAGE, max_daily_bookings: 3 });
-    mockClientFactory.mockResolvedValue(ledgerDb({ data: null, error: null }));
+  it("skips the ledger read entirely when no daily cap is set", async () => {
     const out = await listPublicSlots(TOKEN, 30);
     expect(out.ok).toBe(true);
-    if (!out.ok) throw new Error("unreachable");
-    expect(out.slots.length).toBeGreaterThan(0);
+    expect(mockListStarts).not.toHaveBeenCalled();
   });
 
   it("consults the roster only when the staff gate is on (active members only)", async () => {
@@ -332,6 +333,35 @@ describe("submitPublicBooking", () => {
       await submitPublicBooking(TOKEN, { ...VALID, startIso: "2026-01-05T16:07:00.000Z" })
     ).toEqual({ ok: false, detail: "slot_taken" });
     expect(mockBook).not.toHaveBeenCalled();
+  });
+
+  it("recounts the daily cap after winning the slot claim (different-slot race)", async () => {
+    mockPage.mockResolvedValue({ ...PAGE, max_daily_bookings: 1 });
+    // Re-verify sees an open day; by the post-claim recount a concurrent
+    // booking for ANOTHER slot on the same day has landed in the ledger.
+    mockListStarts
+      .mockResolvedValueOnce([]) // listPublicSlots (re-verify)
+      .mockResolvedValueOnce([new Date("2026-01-05T20:00:00Z")]); // recount
+    expect(await submitPublicBooking(TOKEN, VALID)).toEqual({
+      ok: false,
+      detail: "slot_taken"
+    });
+    expect(mockBook).not.toHaveBeenCalled();
+
+    // Same shape with a quiet day passes.
+    mockListStarts.mockResolvedValue([]);
+    const out = await submitPublicBooking(TOKEN, VALID);
+    expect(out.ok).toBe(true);
+  });
+
+  it("maps the attendee duplicate guard to already_booked (deliberate one-per-person policy)", async () => {
+    mockBook.mockResolvedValueOnce({ ok: false, detail: "attendee_already_booked" });
+    expect(await submitPublicBooking(TOKEN, VALID)).toEqual({
+      ok: false,
+      detail: "already_booked"
+    });
+    expect(logger.warn).not.toHaveBeenCalled();
+    expect(mockCapture).not.toHaveBeenCalled();
   });
 
   it("loses the durable slot claim to a racing visitor: slot_taken, no write", async () => {

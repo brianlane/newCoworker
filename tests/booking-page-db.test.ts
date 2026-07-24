@@ -7,6 +7,7 @@ import {
   countBookingsBetween,
   getBookingPageForBusiness,
   getEnabledBookingPageByToken,
+  listBookingStartsBetween,
   rotateBookingPageToken,
   upsertBookingPage
 } from "@/lib/booking-page/db";
@@ -232,6 +233,32 @@ describe("rotateBookingPageToken", () => {
     await expect(rotateBookingPageToken(BIZ, client)).rejects.toThrow(
       "rotateBookingPageToken: rotate boom"
     );
+  });
+});
+
+describe("listBookingStartsBetween", () => {
+  it("maps ledger rows to Date instants, defaulting an empty payload", async () => {
+    const { client } = fakeDb([
+      { data: [{ start_at: "2026-07-25T17:00:00Z" }], error: null },
+      { data: null, error: null }
+    ]);
+    mockClientFactory.mockResolvedValue(client);
+    const out = await listBookingStartsBetween(
+      BIZ,
+      "2026-07-25T00:00:00Z",
+      "2026-07-26T00:00:00Z"
+    );
+    expect(out).toEqual([new Date("2026-07-25T17:00:00Z")]);
+    expect(
+      await listBookingStartsBetween(BIZ, "2026-07-25T00:00:00Z", "2026-07-26T00:00:00Z", client)
+    ).toEqual([]);
+  });
+
+  it("throws on read errors", async () => {
+    const { client } = fakeDb([{ data: null, error: { message: "starts boom" } }]);
+    await expect(
+      listBookingStartsBetween(BIZ, "2026-07-25T00:00:00Z", "2026-07-26T00:00:00Z", client)
+    ).rejects.toThrow("listBookingStartsBetween: starts boom");
   });
 });
 

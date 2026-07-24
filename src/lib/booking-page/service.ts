@@ -11,7 +11,11 @@
  * behalf; the dashboard card explains both.
  */
 
-import { getEnabledBookingPageByToken, countBookingsBetween } from "@/lib/booking-page/db";
+import {
+  countBookingsBetween,
+  getEnabledBookingPageByToken,
+  listBookingStartsBetween
+} from "@/lib/booking-page/db";
 import type { BookingPageRow } from "@/lib/booking-page/db";
 import { parseBookingPageToken } from "@/lib/booking-page/keys";
 import { computePublicSlots } from "@/lib/booking-page/slots";
@@ -28,8 +32,8 @@ import { getActiveZoomConnectionId } from "@/lib/db/zoom-connections";
 import { parseBusinessHours } from "@/lib/business-profile/profile";
 import { normalizeContactNumber } from "@/lib/telnyx/format";
 import { ensureCapturedContact } from "@/lib/customer-memory/capture-contact";
-import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { rateLimitDurable } from "@/lib/rate-limit";
+import { localClock } from "../../../supabase/functions/_shared/ai_flows/engine";
 import { logger } from "@/lib/logger";
 
 export const BOOKING_PAGE_SOURCE_TAG = "Booking Page";
@@ -55,6 +59,7 @@ export type BookingPageFailure = {
     | "invalid_duration"
     | "invalid_request"
     | "slot_taken"
+    | "already_booked"
     | "booking_failed";
 };
 
@@ -155,20 +160,14 @@ export async function listPublicSlots(
       : [];
     const timeOff = page.require_staff_on_shift ? await listTimeOff(context.businessId) : [];
 
-    const db = await createSupabaseServiceClient();
-    const existingStarts: Date[] = [];
-    if (page.max_daily_bookings !== null) {
-      const { data, error } = await db
-        .from("calendar_booking_dedupe")
-        .select("start_at")
-        .eq("business_id", context.businessId)
-        .gte("start_at", now.toISOString())
-        .lt("start_at", windowEnd.toISOString());
-      if (error) throw new Error(`booking starts read: ${error.message}`);
-      for (const row of (data ?? []) as Array<{ start_at: string }>) {
-        existingStarts.push(new Date(row.start_at));
-      }
-    }
+    const existingStarts =
+      page.max_daily_bookings !== null
+        ? await listBookingStartsBetween(
+            context.businessId,
+            now.toISOString(),
+            windowEnd.toISOString()
+          )
+        : [];
 
     const slots = computePublicSlots({
       now,
@@ -270,6 +269,26 @@ export async function submitPublicBooking(
   );
   if (!slotClaim.success) return { ok: false, detail: "slot_taken" };
 
+  // Daily-cap recount AFTER winning the slot claim: concurrent submissions
+  // for DIFFERENT slots on the same business-local day could each pass the
+  // re-verify while the ledger count sat below the cap. Recounting here
+  // narrows that window to the ledger write itself; the cap is a courtesy
+  // limit, and exact enforcement would need a DB-side atomic reserve.
+  const cap = context.page.max_daily_bookings;
+  if (cap !== null) {
+    const DAY_WINDOW_MS = 26 * 60 * 60 * 1000;
+    const nearby = await listBookingStartsBetween(
+      context.businessId,
+      new Date(start.getTime() - DAY_WINDOW_MS).toISOString(),
+      new Date(start.getTime() + DAY_WINDOW_MS).toISOString()
+    );
+    const slotDay = localClock(start, context.timezone).isoDate;
+    const sameDay = nearby.filter(
+      (d) => localClock(d, context.timezone).isoDate === slotDay
+    ).length;
+    if (sameDay >= cap) return { ok: false, detail: "slot_taken" };
+  }
+
   const endIso = new Date(start.getTime() + input.durationMinutes * 60_000).toISOString();
   const noteLines = [
     `Booked via the public booking page.`,
@@ -298,6 +317,13 @@ export async function submitPublicBooking(
   );
 
   if (!booked.ok) {
+    // The attendee duplicate guard is a deliberate policy on this public
+    // surface (one upcoming appointment per person keeps a single phone
+    // number from strip-mining the calendar) — surface it honestly instead
+    // of a generic failure so the visitor knows what happened.
+    if (booked.detail === "attendee_already_booked") {
+      return { ok: false, detail: "already_booked" };
+    }
     logger.warn("booking-page: booking failed", {
       businessId: context.businessId,
       detail: booked.detail ?? null

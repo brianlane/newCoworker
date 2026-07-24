@@ -28,6 +28,7 @@ export type PublicBookingStrings = {
   submitButton: string;
   submitting: string;
   slotTaken: string;
+  alreadyBooked: string;
   submitFailed: string;
   checkDetails: string;
   bookedHeading: string;
@@ -110,7 +111,7 @@ export function PublicBookingPage({
   const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null);
   const [form, setForm] = useState({ name: "", phone: "", email: "", note: "" });
   const [submitState, setSubmitState] = useState<
-    "idle" | "submitting" | "slot_taken" | "invalid" | "failed"
+    "idle" | "submitting" | "slot_taken" | "already_booked" | "invalid" | "failed"
   >("idle");
   const [booked, setBooked] = useState<BookedState | null>(null);
 
@@ -202,6 +203,10 @@ export function PublicBookingPage({
         setSubmitState("slot_taken");
         setSelectedSlot(null);
         void loadSlots();
+        return;
+      }
+      if (res.status === 422) {
+        setSubmitState("already_booked");
         return;
       }
       if (!res.ok || !body.ok) {
@@ -369,6 +374,9 @@ export function PublicBookingPage({
               </div>
               {submitState === "slot_taken" ? (
                 <p className="text-sm text-amber-400">{strings.slotTaken}</p>
+              ) : null}
+              {submitState === "already_booked" ? (
+                <p className="text-sm text-amber-400">{strings.alreadyBooked}</p>
               ) : null}
               {submitState === "invalid" ? (
                 <p className="text-sm text-amber-400">{strings.checkDetails}</p>

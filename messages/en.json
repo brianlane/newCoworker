@@ -18,6 +18,7 @@
     "submitButton": "Confirm booking",
     "submitting": "Booking…",
     "slotTaken": "That time was just taken. Please pick another.",
+    "alreadyBooked": "You already have an upcoming appointment with this business. Check your text messages or email to change it.",
     "submitFailed": "Booking failed. Please try again.",
     "checkDetails": "Please check your details and try again.",
     "bookedHeading": "You are booked!",

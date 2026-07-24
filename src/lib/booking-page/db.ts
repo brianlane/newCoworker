@@ -216,6 +216,28 @@ export async function rotateBookingPageToken(
 }
 
 /**
+ * Booking start instants from the dedupe ledger inside a UTC window — the
+ * daily-cap input (covers platform bookings on every provider plus synced
+ * external Vagaro/Calendly claims). Callers group by business-local day.
+ */
+export async function listBookingStartsBetween(
+  businessId: string,
+  fromIso: string,
+  toIso: string,
+  client?: SupabaseClient
+): Promise<Date[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("calendar_booking_dedupe")
+    .select("start_at")
+    .eq("business_id", businessId)
+    .gte("start_at", fromIso)
+    .lt("start_at", toIso);
+  if (error) throw new Error(`listBookingStartsBetween: ${error.message}`);
+  return ((data ?? []) as Array<{ start_at: string }>).map((r) => new Date(r.start_at));
+}
+
+/**
  * Platform bookings created for a business-local day (UTC instants of the
  * day's bounds are computed by the caller) — the daily-cap input. Counts
  * the dedupe ledger, so external Vagaro/Calendly claims count too.

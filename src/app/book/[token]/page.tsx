@@ -62,6 +62,7 @@ export default async function BookPage({
             submitButton: t("submitButton"),
             submitting: t("submitting"),
             slotTaken: t("slotTaken"),
+            alreadyBooked: t("alreadyBooked"),
             submitFailed: t("submitFailed"),
             checkDetails: t("checkDetails"),
             bookedHeading: t("bookedHeading"),
