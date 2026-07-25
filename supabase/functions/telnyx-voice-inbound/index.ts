@@ -682,26 +682,15 @@ serve(async (req: Request) => {
       return jsonOk("handoff_answer_failed");
     }
 
-    // Accept the referral: the digits are what claim it, so they go out even
-    // when the bridge is unreachable (we ring a human for the conversation
-    // afterwards rather than letting the partner give the lead away).
-    const accept = planAiFirstAccept(ai);
-    let acceptSent = false;
-    for (const press of accept.digits) {
-      if (press.after_seconds > 0) await sleepMs(press.after_seconds * 1000);
-      const dt = await telnyxSendDtmf(apiKey, callControlId, press.digit);
-      if (!dt.ok) {
-        console.error("ai-first: send_dtmf failed", dt.status, (await dt.text()).slice(0, 300));
-        return await fallback("dtmf", { digit: press.digit, http_status: dt.status });
-      }
-      acceptSent = true;
-    }
-    // Record that the partner's IVR has already been answered. If this call
-    // later falls back to the ring chain and both humans miss, the takeover in
-    // telnyx-voice-call-end must NOT press again: the referral is accepted and
-    // the customer is already connected, so a second press mis-routes a live
-    // call. Best-effort, since a missed stamp only risks that duplicate press.
-    if (acceptSent) {
+    /**
+     * Record that the partner's IVR has already received a tone from us. If this
+     * call later falls back to the ring chain and both humans miss, the takeover
+     * in telnyx-voice-call-end must NOT press again: another tone into a live
+     * conversation can mis-route it. Stamped as soon as the FIRST digit lands,
+     * so a sequence that fails halfway is still marked. Best-effort, since a
+     * missed stamp only risks that duplicate press.
+     */
+    const stampAcceptSent = async (): Promise<void> => {
       const { error: stampErr } = await supabase
         .from("voice_handoff_sessions")
         .update({
@@ -712,6 +701,26 @@ serve(async (req: Request) => {
         })
         .eq("call_control_id", callControlId);
       if (stampErr) console.error("ai-first: could not stamp accept_sent", stampErr);
+    };
+
+    // Accept the referral: the digits are what claim it, so they go out even
+    // when the bridge is unreachable (we ring a human for the conversation
+    // afterwards rather than letting the partner give the lead away).
+    const accept = planAiFirstAccept(ai);
+    let acceptSent = false;
+    for (const press of accept.digits) {
+      if (press.after_seconds > 0) await sleepMs(press.after_seconds * 1000);
+      const dt = await telnyxSendDtmf(apiKey, callControlId, press.digit);
+      if (!dt.ok) {
+        console.error("ai-first: send_dtmf failed", dt.status, (await dt.text()).slice(0, 300));
+        // Half-pressed still counts: the tones that DID land reached the IVR.
+        if (acceptSent) await stampAcceptSent();
+        return await fallback("dtmf", { digit: press.digit, http_status: dt.status });
+      }
+      if (!acceptSent) {
+        acceptSent = true;
+        await stampAcceptSent();
+      }
     }
 
     if (!target) return await fallback("bridge_unavailable");
