@@ -25,9 +25,13 @@ import {
   deleteZoomConnection,
   getActiveZoomConnection,
   getActiveZoomConnectionId,
+  getActiveZoomConnectionSummariesByZoomUserId,
   getPublicZoomConnection,
   getZoomConnection,
+  getZoomConnectionBusinessIdsByZoomUserId,
+  markZoomConnectionDeauthorized,
   setZoomConnectionActive,
+  setZoomConnectionAutoImport,
   toPublicZoomConnection,
   updateZoomTokens,
   upsertZoomConnection
@@ -75,6 +79,7 @@ const STORED = {
   account_email: "owner@acme.com",
   account_name: "Acme Spa",
   is_active: true,
+  auto_import_transcripts: true,
   created_at: "2026-07-01T00:00:00Z",
   updated_at: "2026-07-01T00:00:00Z"
 };
@@ -118,6 +123,17 @@ describe("getZoomConnection", () => {
     const c = chain();
     c.maybeSingle.mockResolvedValue({ data: null, error: { message: "boom" } });
     await expect(getZoomConnection(BIZ, makeDb(c))).rejects.toThrow(/boom/);
+  });
+
+  it("returns a blank token pair for a deauthorized (wiped) row", async () => {
+    const c = chain();
+    c.maybeSingle.mockResolvedValue({
+      data: { ...STORED, access_token_encrypted: "", refresh_token_encrypted: "" },
+      error: null
+    });
+    const row = await getZoomConnection(BIZ, makeDb(c));
+    expect(row?.accessToken).toBe("");
+    expect(row?.refreshToken).toBe("");
   });
 
   it("fails closed when either stored token decrypts to nothing", async () => {
@@ -375,6 +391,123 @@ describe("setZoomConnectionActive", () => {
     const c = chain({ error: null });
     defaultClientSpy.mockReturnValue(makeDb(c));
     await setZoomConnectionActive(BIZ, true);
+    expect(defaultClientSpy).toHaveBeenCalled();
+  });
+});
+
+describe("getActiveZoomConnectionSummariesByZoomUserId", () => {
+  it("returns every active routing summary (shared Zoom account)", async () => {
+    const rows = [
+      { business_id: BIZ, auto_import_transcripts: true },
+      { business_id: "other-biz", auto_import_transcripts: false }
+    ];
+    const c = chain({ data: rows, error: null });
+    const summaries = await getActiveZoomConnectionSummariesByZoomUserId("zu-1", makeDb(c));
+    expect(summaries).toEqual(rows);
+    expect(c.eq).toHaveBeenCalledWith("zoom_user_id", "zu-1");
+    expect(c.eq).toHaveBeenCalledWith("is_active", true);
+  });
+
+  it("returns an empty list when no active connection matches", async () => {
+    const c = chain({ data: null, error: null });
+    expect(await getActiveZoomConnectionSummariesByZoomUserId("zu-x", makeDb(c))).toEqual([]);
+  });
+
+  it("throws on a query error", async () => {
+    const c = chain({ data: null, error: { message: "lookup boom" } });
+    await expect(
+      getActiveZoomConnectionSummariesByZoomUserId("zu-1", makeDb(c))
+    ).rejects.toThrow(/lookup boom/);
+  });
+
+  it("uses the default service client when none is provided", async () => {
+    const c = chain({ data: [], error: null });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    expect(await getActiveZoomConnectionSummariesByZoomUserId("zu-1")).toEqual([]);
+    expect(defaultClientSpy).toHaveBeenCalled();
+  });
+});
+
+describe("getZoomConnectionBusinessIdsByZoomUserId", () => {
+  it("returns every business for the user, active or not (deauth reach)", async () => {
+    const c = chain({
+      data: [{ business_id: BIZ }, { business_id: "other-biz" }],
+      error: null
+    });
+    expect(await getZoomConnectionBusinessIdsByZoomUserId("zu-1", makeDb(c))).toEqual([
+      BIZ,
+      "other-biz"
+    ]);
+    expect(c.eq).toHaveBeenCalledWith("zoom_user_id", "zu-1");
+    expect(c.eq).not.toHaveBeenCalledWith("is_active", true);
+  });
+
+  it("returns an empty list when nothing matches", async () => {
+    const c = chain({ data: null, error: null });
+    expect(await getZoomConnectionBusinessIdsByZoomUserId("zu-x", makeDb(c))).toEqual([]);
+  });
+
+  it("throws on a query error", async () => {
+    const c = chain({ data: null, error: { message: "ids boom" } });
+    await expect(
+      getZoomConnectionBusinessIdsByZoomUserId("zu-1", makeDb(c))
+    ).rejects.toThrow(/ids boom/);
+  });
+
+  it("uses the default service client when none is provided", async () => {
+    const c = chain({ data: [], error: null });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    expect(await getZoomConnectionBusinessIdsByZoomUserId("zu-1")).toEqual([]);
+    expect(defaultClientSpy).toHaveBeenCalled();
+  });
+});
+
+describe("setZoomConnectionAutoImport", () => {
+  it("updates the flag", async () => {
+    const c = chain({ error: null });
+    await setZoomConnectionAutoImport(BIZ, false, makeDb(c));
+    const updated = c.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(updated.auto_import_transcripts).toBe(false);
+    expect(updated.updated_at).toBeDefined();
+  });
+
+  it("throws on an update error", async () => {
+    const c = chain({ error: { message: "auto flag fail" } });
+    await expect(setZoomConnectionAutoImport(BIZ, true, makeDb(c))).rejects.toThrow(
+      /auto flag fail/
+    );
+  });
+
+  it("uses the default service client when none is provided", async () => {
+    const c = chain({ error: null });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    await setZoomConnectionAutoImport(BIZ, true);
+    expect(defaultClientSpy).toHaveBeenCalled();
+  });
+});
+
+describe("markZoomConnectionDeauthorized", () => {
+  it("wipes the token pair and flips the row inactive in one update", async () => {
+    const c = chain({ error: null });
+    await markZoomConnectionDeauthorized(BIZ, makeDb(c));
+    const updated = c.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(updated.is_active).toBe(false);
+    expect(updated.access_token_encrypted).toBe("");
+    expect(updated.refresh_token_encrypted).toBe("");
+    expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
+  });
+
+  it("throws on an update error", async () => {
+    const c = chain({ error: { message: "deauth fail" } });
+    await expect(markZoomConnectionDeauthorized(BIZ, makeDb(c))).rejects.toThrow(
+      /deauth fail/
+    );
+  });
+
+  it("uses the default service client when none is provided", async () => {
+    const c = chain({ error: null });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    await markZoomConnectionDeauthorized(BIZ);
     expect(defaultClientSpy).toHaveBeenCalled();
   });
 });

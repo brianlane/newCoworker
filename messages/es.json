@@ -992,8 +992,8 @@
       "card2Body": "El enlace de la reunión viaja en la confirmación de reserva que recibe tu cliente y en la descripción del evento de calendario, así nadie tiene que buscar el enlace.",
       "card3Title": "Sincronizado de punta a punta",
       "card3Body": "Si la cita se reagenda, la reunión de Zoom se mueve con ella. Si se cancela, la reunión se elimina. Sin reuniones huérfanas en tu cuenta.",
-      "card4Title": "Minutas de reunión bajo demanda",
-      "card4Body": "¿Tuviste una reunión grabada en la nube con transcripción de audio activada? Pega su ID de reunión en <b>Panel → Integraciones → Zoom → Minutas de reunión</b> y tu coworker obtiene la transcripción y la condensa en minutas dentro de tu biblioteca de documentos, solo para el personal por defecto. Las transcripciones solo se leen cuando pides una importación; nada se extrae automáticamente.",
+      "card4Title": "Minutas de reunión, automáticas",
+      "card4Body": "Graba una reunión en la nube con transcripción de audio activada y, cuando Zoom termine de procesarla, tu coworker importa la transcripción y la condensa en minutas dentro de tu biblioteca de documentos, solo para el personal por defecto. La importación automática viene activada por defecto y tiene un interruptor para apagarla en la tarjeta de Zoom; también puedes importar cualquier reunión bajo demanda pegando su ID o el enlace de la grabación en <b>Panel → Integraciones → Zoom → Minutas de reunión</b>.",
       "prereqNote": "Requisitos: una suscripción de New Coworker con un calendario conectado (Google, Microsoft 365 o CalDAV) y una cuenta de Zoom. La creación de reuniones de Zoom aplica a las citas que tu coworker reserva directamente en esos calendarios.",
       "setupEyebrow": "Configuración",
       "setupTitle": "Cómo agregar la integración",
@@ -1040,8 +1040,8 @@
       "scopeUse4": "Confirmar los detalles de la reunión después de cambios",
       "scopeUse5": "Crear el enlace de acceso que tu coworker envía al cliente",
       "scopeUse6": "Identificar la cuenta de Zoom conectada (nombre y correo mostrados en la tarjeta de tu panel)",
-      "scopeUse7": "Obtener la transcripción de una reunión grabada en la nube, solo cuando haces clic en Importar transcripción, para producir minutas en tus Documentos",
-      "privacyNote": "Tus tokens de Zoom se cifran en reposo (AES-256-GCM) en una base de datos protegida con seguridad a nivel de fila, nunca se exponen al navegador y se eliminan cuando desconectas. El contenido de reuniones se lee en exactamente un caso: cuando importas explícitamente la transcripción de una reunión grabada en la nube para minutas, la transcripción se procesa en tu biblioteca de documentos y nunca se extrae automáticamente. Todo lo demás toca solo los datos de agenda de las citas que tu coworker administra. Mira nuestra <privacy>Política de privacidad</privacy> para más detalles. ¿Preguntas? Escríbenos cuando quieras vía <contact>newcoworker.com/contact</contact>."
+      "scopeUse7": "Obtener la transcripción de una reunión grabada en la nube, automáticamente después de tus reuniones mientras la importación automática esté activada, o cuando haces clic en Importar transcripción, para producir minutas en tus Documentos",
+      "privacyNote": "Tus tokens de Zoom se cifran en reposo (AES-256-GCM) en una base de datos protegida con seguridad a nivel de fila, nunca se exponen al navegador y se eliminan cuando desconectas. El contenido de reuniones se lee solo para producir minutas en tu biblioteca de documentos: automáticamente después de tus propias reuniones grabadas en la nube mientras la importación automática esté activada (un interruptor en la tarjeta de Zoom la apaga), o cuando importas una explícitamente. Todo lo demás toca solo los datos de agenda de las citas que tu coworker administra. Mira nuestra <privacy>Política de privacidad</privacy> para más detalles. ¿Preguntas? Escríbenos cuando quieras vía <contact>newcoworker.com/contact</contact>."
     },
     "compareGhl": {
       "metaTitle": "New Coworker vs GoHighLevel",
@@ -1372,7 +1372,9 @@
       "firstConnected": "conectado por primera vez"
     },
     "integrationsZoom": {
-      "marketplaceLink": "Ver nuestra app en el Zoom App Marketplace"
+      "marketplaceLink": "Ver nuestra app en el Zoom App Marketplace",
+      "autoImportLabel": "Minutas automáticas de reuniones",
+      "autoImportHint": "Importa minutas automáticamente después de cada reunión grabada en la nube con transcripción."
     },
     "integrationsWorkspace": {
       "capUsage": "{used} de {max} conexiones de espacio de trabajo en uso",

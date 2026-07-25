@@ -38,6 +38,7 @@ type ZoomConnection = {
   account_email: string | null;
   account_name: string | null;
   is_active: boolean;
+  auto_import_transcripts: boolean;
   has_tokens: boolean;
   created_at: string;
   updated_at: string;
@@ -67,9 +68,33 @@ export function ZoomIntegrationCard({ businessId, initialConnection }: Props) {
 
   const connectHref = `/api/integrations/zoom/connect?businessId=${encodeURIComponent(businessId)}`;
   const connectedAndActive = !!connection && connection.is_active;
+  const [togglingAutoImport, setTogglingAutoImport] = useState(false);
 
   function startConnect() {
     window.location.href = connectHref;
+  }
+
+  async function toggleAutoImport(next: boolean) {
+    setBanner(null);
+    setTogglingAutoImport(true);
+    try {
+      const res = await fetch("/api/integrations/zoom", {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId, autoImportTranscripts: next })
+      });
+      const json = (await res.json().catch(() => null)) as {
+        data?: ZoomConnection | null;
+        error?: { message?: string };
+      } | null;
+      if (res.ok && json?.data) {
+        setConnection(json.data);
+      } else {
+        setBanner(json?.error?.message ?? "Could not update the auto-import setting");
+      }
+    } finally {
+      setTogglingAutoImport(false);
+    }
   }
 
   async function importTranscript() {
@@ -191,9 +216,32 @@ export function ZoomIntegrationCard({ businessId, initialConnection }: Props) {
           {connection.is_active ? (
             <div className="rounded-lg border border-parchment/10 bg-parchment/[0.02] p-3">
               <p className="text-xs font-semibold text-parchment">Meeting minutes</p>
-              <p className="text-[11px] text-parchment/40 mt-1">
+              <div className="mt-2 flex items-start justify-between gap-3">
+                <div>
+                  <p className="text-xs text-parchment/70">{t("autoImportLabel")}</p>
+                  <p className="text-[11px] text-parchment/40 mt-0.5">{t("autoImportHint")}</p>
+                </div>
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={connection.auto_import_transcripts}
+                  aria-label={t("autoImportLabel")}
+                  disabled={togglingAutoImport}
+                  onClick={() => toggleAutoImport(!connection.auto_import_transcripts)}
+                  className={`relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition-colors disabled:opacity-50 ${
+                    connection.auto_import_transcripts ? "bg-claw-green" : "bg-parchment/20"
+                  }`}
+                >
+                  <span
+                    className={`inline-block h-4 w-4 transform rounded-full bg-deep-ink transition-transform ${
+                      connection.auto_import_transcripts ? "translate-x-6" : "translate-x-1"
+                    }`}
+                  />
+                </button>
+              </div>
+              <p className="text-[11px] text-parchment/40 mt-3">
                 Paste the recording page link (Zoom portal → Recordings &amp; Transcripts →
-                your meeting) — or the meeting ID for scheduled meetings — and your
+                your meeting), or the meeting ID for scheduled meetings, and your
                 coworker turns the cloud-recording transcript into minutes in Documents.
               </p>
               <div className="mt-2 flex gap-2">

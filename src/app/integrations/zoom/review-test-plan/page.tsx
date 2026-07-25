@@ -40,10 +40,10 @@ export default function ZoomReviewTestPlanPage() {
         <p className="mt-4 text-parchment/60">
           New Coworker is an AI coworker for small businesses: it answers the phone, replies to
           SMS, email, and web chat, and books appointments. This integration lets it schedule Zoom
-          meetings for the appointments it books, send customers the join link, and — at the
-          owner&apos;s explicit request — turn a cloud-recorded meeting&apos;s transcript into
-          meeting minutes. The steps below walk through authorization, every requested scope, and
-          removal.{" "}
+          meetings for the appointments it books, send customers the join link, and turn a
+          cloud-recorded meeting&apos;s transcript into meeting minutes, automatically after the
+          meeting (owner-controlled switch) or on demand. The steps below walk through
+          authorization, every requested scope, the webhook event, and removal.{" "}
           <b>Test credentials are provided in the submission&apos;s release notes.</b>
         </p>
 
@@ -148,13 +148,31 @@ export default function ZoomReviewTestPlanPage() {
             </p>
           </Step>
 
-          <Step n={7} title="Remove the integration">
+          <Step n={7} title="Automatic meeting minutes (webhook)">
+            <p>
+              This step exercises the{" "}
+              <code className="text-xs text-claw-green">recording.transcript_completed</code>{" "}
+              event subscription. On <b>Dashboard → Integrations → Zoom</b>, confirm the{" "}
+              <b>Automatic meeting minutes</b> switch is on (it is on by default). Cloud-record
+              another short meeting with audio transcript enabled (as in Step 6) and end it.
+            </p>
+            <p>
+              Expected: once Zoom finishes processing the transcript and delivers the event, the
+              meeting&apos;s minutes appear in the business&apos;s <b>Documents</b> without any
+              action on the dashboard. Turning the switch off and repeating the recording results
+              in no automatic import (the manual import from Step 6 remains available). Redelivered
+              events do not create duplicate documents.
+            </p>
+          </Step>
+
+          <Step n={8} title="Remove the integration">
             <p>
               Back on <b>Dashboard → Integrations</b>, click <b>Disconnect</b> on the Zoom card and
               confirm. Expected: the card returns to its disconnected state; our server revokes the
               token with Zoom and deletes the stored credentials. Alternatively, remove the app
-              from <b>marketplace.zoom.us → Manage → Added Apps</b>; the next dashboard visit shows
-              the connection as needing reconnection.
+              from <b>marketplace.zoom.us → Manage → Added Apps</b>; our endpoint receives
+              Zoom&apos;s <code className="text-xs text-claw-green">app_deauthorized</code> event
+              and the next dashboard visit shows the connection as needing reconnection.
             </p>
           </Step>
         </ol>

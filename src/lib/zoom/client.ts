@@ -104,6 +104,9 @@ export async function getZoomAccessToken(
 ): Promise<string | null> {
   const row = await getZoomConnection(businessId);
   if (!row || !row.is_active) return null;
+  // A wiped pair (Zoom-side deauthorization) is not a usable connection,
+  // even if the row was later force-reactivated: never send an empty bearer.
+  if (row.accessToken.length === 0 || row.refreshToken.length === 0) return null;
 
   const expiresAt = new Date(row.token_expires_at).getTime();
   if (Number.isFinite(expiresAt) && expiresAt - now > ZOOM_TOKEN_REFRESH_MARGIN_MS) {

@@ -992,8 +992,8 @@
       "card2Body": "The meeting's join link rides along in the booking confirmation your customer receives and in the calendar event's description, so nobody hunts for the link.",
       "card3Title": "Kept in sync, end to end",
       "card3Body": "If the appointment is rescheduled, the Zoom meeting moves with it. If it's canceled, the meeting is deleted. No orphaned meetings on your account.",
-      "card4Title": "Meeting minutes on demand",
-      "card4Body": "Had a meeting you cloud-recorded with audio transcript on? Paste its meeting ID into <b>Dashboard → Integrations → Zoom → Meeting minutes</b> and your coworker fetches the transcript and condenses it into minutes in your document library, staff-only by default. Transcripts are only ever read when you ask for an import; nothing is pulled automatically.",
+      "card4Title": "Meeting minutes, automatically",
+      "card4Body": "Cloud-record a meeting with audio transcript on and, once Zoom finishes processing it, your coworker imports the transcript and condenses it into minutes in your document library, staff-only by default. Automatic import is on by default and has one switch to turn it off on the Zoom card; you can also import any meeting on demand by pasting its meeting ID or recording link into <b>Dashboard → Integrations → Zoom → Meeting minutes</b>.",
       "prereqNote": "Prerequisites: a New Coworker subscription with a connected calendar (Google, Microsoft 365, or CalDAV) and a Zoom account. Zoom meeting creation applies to appointments your coworker books directly on those calendars.",
       "setupEyebrow": "Setup",
       "setupTitle": "How to add the integration",
@@ -1040,8 +1040,8 @@
       "scopeUse4": "Confirm meeting details after changes",
       "scopeUse5": "Create the join link your coworker sends to the customer",
       "scopeUse6": "Identify the connected Zoom account (name and email shown on your dashboard card)",
-      "scopeUse7": "Fetch a cloud-recorded meeting's transcript, only when you click Import transcript, to produce meeting minutes in your Documents",
-      "privacyNote": "Your Zoom tokens are encrypted at rest (AES-256-GCM) in a row-level-security-protected database, are never exposed to the browser, and are deleted when you disconnect. Meeting content is read in exactly one case: when you explicitly import a cloud-recorded meeting's transcript for minutes, the transcript is processed into your document library and never pulled automatically. Everything else touches only the scheduling data for appointments your coworker manages. See our <privacy>Privacy Policy</privacy> for details. Questions? Reach us any time via <contact>newcoworker.com/contact</contact>."
+      "scopeUse7": "Fetch a cloud-recorded meeting's transcript, automatically after your meetings while auto-import is on, or when you click Import transcript, to produce meeting minutes in your Documents",
+      "privacyNote": "Your Zoom tokens are encrypted at rest (AES-256-GCM) in a row-level-security-protected database, are never exposed to the browser, and are deleted when you disconnect. Meeting content is read only to produce meeting minutes in your document library: automatically after your own cloud-recorded meetings while auto-import is enabled (one switch on the Zoom card turns it off), or when you explicitly import one. Everything else touches only the scheduling data for appointments your coworker manages. See our <privacy>Privacy Policy</privacy> for details. Questions? Reach us any time via <contact>newcoworker.com/contact</contact>."
     },
     "compareGhl": {
       "metaTitle": "New Coworker vs GoHighLevel",
@@ -1372,7 +1372,9 @@
       "firstConnected": "first connected"
     },
     "integrationsZoom": {
-      "marketplaceLink": "View our listing on the Zoom App Marketplace"
+      "marketplaceLink": "View our listing on the Zoom App Marketplace",
+      "autoImportLabel": "Automatic meeting minutes",
+      "autoImportHint": "Import minutes automatically after every cloud-recorded meeting with a transcript."
     },
     "integrationsWorkspace": {
       "capUsage": "{used} of {max} workspace connections used",

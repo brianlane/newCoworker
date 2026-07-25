@@ -94,6 +94,15 @@ describe("getZoomAccessToken", () => {
     expect(refreshZoomTokens).not.toHaveBeenCalled();
   });
 
+  it("returns null for a wiped token pair (deauthorized row force-reactivated)", async () => {
+    getZoomConnection.mockResolvedValueOnce(row({ accessToken: "", refreshToken: "" }));
+    expect(await getZoomAccessToken(BIZ, NOW)).toBeNull();
+
+    getZoomConnection.mockResolvedValueOnce(row({ refreshToken: "" }));
+    expect(await getZoomAccessToken(BIZ, NOW)).toBeNull();
+    expect(refreshZoomTokens).not.toHaveBeenCalled();
+  });
+
   it("returns the stored token while it has more than the refresh margin left", async () => {
     getZoomConnection.mockResolvedValueOnce(
       row({
