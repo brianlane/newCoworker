@@ -312,12 +312,39 @@ describe("listPublicSlots", () => {
     expect(mockBusy).toHaveBeenCalledTimes(1);
   });
 
-  it("treats a null workspace busy read as calendar_not_connected", async () => {
+  it("degrades to the ledger baseline when provider busy data is unreadable", async () => {
+    // Scope-starved consent (the HQ case): busy read refused, but a ledger
+    // booking still blocks its hour; everything else stays offerable.
     mockBusy.mockResolvedValueOnce(null);
-    expect(await listPublicSlots(TOKEN, 30)).toEqual({
-      ok: false,
-      detail: "calendar_not_connected"
-    });
+    mockListStarts.mockResolvedValueOnce([new Date("2026-01-05T16:00:00Z")]);
+    const out = await listPublicSlots(TOKEN, 30);
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error("unreachable");
+    const starts = out.slots.map((s) => s.startIso);
+    expect(starts).not.toContain("2026-01-05T16:00:00.000Z");
+    expect(starts).toContain("2026-01-05T17:00:00.000Z");
+    expect(logger.warn).toHaveBeenCalledWith(
+      "booking-page: provider busy unreadable; degrading to ledger baseline",
+      expect.objectContaining({ businessId: BIZ })
+    );
+  });
+
+  it("degrades on a thrown provider busy fetch too (non-Error shapes included)", async () => {
+    mockBusy.mockRejectedValueOnce(new Error("Request failed with status code 403"));
+    const out = await listPublicSlots(TOKEN, 30);
+    expect(out.ok).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "booking-page: provider busy fetch threw; degrading to ledger baseline",
+      expect.objectContaining({ error: "Request failed with status code 403" })
+    );
+
+    mockBusy.mockRejectedValueOnce("proxy string boom");
+    const out2 = await listPublicSlots(TOKEN, 30);
+    expect(out2.ok).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "booking-page: provider busy fetch threw; degrading to ledger baseline",
+      expect.objectContaining({ error: "proxy string boom" })
+    );
   });
 
   it("supports CalDAV connections (both busy outcomes)", async () => {
@@ -328,14 +355,17 @@ describe("listPublicSlots", () => {
     expect(ok.ok).toBe(true);
     expect(mockBusy).not.toHaveBeenCalled();
 
+    // An unreadable CalDAV calendar degrades to the ledger baseline too.
     mockCaldav.mockResolvedValueOnce({
       ok: false,
       result: { ok: false, detail: "calendar_not_connected" }
     } as never);
-    expect(await listPublicSlots(TOKEN, 30)).toEqual({
-      ok: false,
-      detail: "calendar_not_connected"
-    });
+    const degraded = await listPublicSlots(TOKEN, 30);
+    expect(degraded.ok).toBe(true);
+    expect(logger.warn).toHaveBeenCalledWith(
+      "booking-page: provider busy unreadable; degrading to ledger baseline",
+      expect.objectContaining({ businessId: BIZ })
+    );
   });
 
   it("feeds the daily cap from the booking ledger and fails soft on ledger errors", async () => {
@@ -365,10 +395,10 @@ describe("listPublicSlots", () => {
     expect(out.slots.length).toBeGreaterThan(0);
   });
 
-  it("skips the ledger read entirely when no daily cap is set", async () => {
+  it("always reads the ledger (cap input and the degraded-availability baseline)", async () => {
     const out = await listPublicSlots(TOKEN, 30);
     expect(out.ok).toBe(true);
-    expect(mockListStarts).not.toHaveBeenCalled();
+    expect(mockListStarts).toHaveBeenCalledTimes(1);
   });
 
   it("consults the roster only when the staff gate is on (active members only)", async () => {
@@ -406,11 +436,13 @@ describe("listPublicSlots", () => {
   });
 
   it("reports booking_failed on unexpected errors (non-Error shapes included)", async () => {
-    mockBusy.mockRejectedValueOnce("proxy exploded");
+    // Provider busy failures degrade (tested above); a LEDGER read failure
+    // is still an unexpected error the listing cannot recover from.
+    mockListStarts.mockRejectedValueOnce("ledger exploded");
     expect(await listPublicSlots(TOKEN, 30)).toEqual({ ok: false, detail: "booking_failed" });
     expect(logger.warn).toHaveBeenCalledWith(
       "booking-page: slot listing failed",
-      expect.objectContaining({ error: "proxy exploded" })
+      expect.objectContaining({ error: "ledger exploded" })
     );
   });
 });
@@ -514,11 +546,21 @@ describe("submitPublicBooking", () => {
   });
 
   it("passes slot-listing failures through the re-verify", async () => {
-    mockBusy.mockResolvedValue(null);
+    mockListStarts.mockRejectedValueOnce(new Error("ledger down"));
     expect(await submitPublicBooking(TOKEN, VALID)).toEqual({
       ok: false,
-      detail: "calendar_not_connected"
+      detail: "booking_failed"
     });
+  });
+
+  it("books through an unreadable provider (degraded availability, writable calendar)", async () => {
+    // The HQ shape: busy reads 403 but event creation works. The re-verify
+    // degrades to the ledger baseline and the booking core still lands the
+    // event on the provider calendar.
+    mockBusy.mockResolvedValue(null);
+    const out = await submitPublicBooking(TOKEN, VALID);
+    expect(out.ok).toBe(true);
+    expect(mockBook).toHaveBeenCalledTimes(1);
   });
 
   it("refuses a start that is no longer an offered slot", async () => {

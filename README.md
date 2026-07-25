@@ -738,6 +738,14 @@ engine's roster evaluators), and the upcoming-bookings list.
   Zoom join link directly (no invite email exists in this mode).
   Connecting Google/Microsoft/CalDAV later upgrades the page to provider
   mode automatically.
+- **A provider only ever ADDS availability signal**: when a connected
+  provider's busy data is unreadable (outage, scope-starved consent), slot
+  listing degrades to the platform baseline (business hours minus the
+  ledger) instead of taking the page down. The Bookings dashboard's
+  "cannot read availability" warning tells the owner that provider-side
+  events are invisible (double-booking them is possible) until the
+  connection heals; bookings keep landing on the provider when its write
+  path still works.
 - Vagaro/Calendly-resolved tenants deliberately do NOT get the page (Vagaro
   has its own booking site; link-mode Calendly cannot book on the invitee's
   behalf); the Bookings page explains this and calendar resolution order is
