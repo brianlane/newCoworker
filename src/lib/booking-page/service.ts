@@ -45,6 +45,7 @@ import { listTeamMembers, listTimeOff } from "@/lib/db/employees";
 import { getActiveZoomConnectionId } from "@/lib/db/zoom-connections";
 import { parseBusinessHours } from "@/lib/business-profile/profile";
 import { normalizeContactNumber } from "@/lib/telnyx/format";
+import { getSmsOptOutKind } from "@/lib/sms/opt-outs";
 import { ensureCapturedContact } from "@/lib/customer-memory/capture-contact";
 import {
   bookingAttendeeKey,
@@ -361,6 +362,19 @@ export async function submitPublicBooking(
     return { ok: false, detail: "invalid_request" };
   }
   const phone = phoneResult.value;
+
+  // Owner-declared spam blocks booking (flag_contact_spam, PR #884: a spam
+  // declaration must never start MORE automation; a booking would fire
+  // goals and page the owner via the unassigned-booking alert). A
+  // customer's own "stop" row does NOT block: they opted out of TEXTS, not
+  // of appointments they choose to make. The refusal is deliberately the
+  // generic booking_failed shape so the page never reveals a block.
+  if ((await getSmsOptOutKind(context.businessId, phone)) === "owner_spam") {
+    logger.warn("booking-page: refused owner_spam number", {
+      businessId: context.businessId
+    });
+    return { ok: false, detail: "booking_failed" };
+  }
 
   const endIso = new Date(start.getTime() + input.durationMinutes * 60_000).toISOString();
 

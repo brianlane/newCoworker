@@ -24,6 +24,7 @@ vi.mock("@/lib/zoom/meetings", () => ({
   deleteZoomMeetingForBooking: vi.fn()
 }));
 vi.mock("@/lib/ai-flows/goal-hooks", () => ({ fireGoalEvent: vi.fn() }));
+vi.mock("@/lib/sms/opt-outs", () => ({ getSmsOptOutKind: vi.fn() }));
 vi.mock("@/lib/calendar-tools/caldav", () => ({ getCaldavBusyBlocks: vi.fn() }));
 vi.mock("@/lib/db/businesses", () => ({ getBusiness: vi.fn() }));
 vi.mock("@/lib/db/employees", () => ({ listTeamMembers: vi.fn(), listTimeOff: vi.fn() }));
@@ -60,6 +61,7 @@ import {
   deleteZoomMeetingForBooking
 } from "@/lib/zoom/meetings";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
+import { getSmsOptOutKind } from "@/lib/sms/opt-outs";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import {
   bookCalendarAppointment,
@@ -129,6 +131,7 @@ const mockUnassignedAlert = vi.mocked(maybeAlertUnassignedBooking);
 const mockZoomCreate = vi.mocked(createZoomMeetingForBooking);
 const mockZoomDelete = vi.mocked(deleteZoomMeetingForBooking);
 const mockGoal = vi.mocked(fireGoalEvent);
+const mockOptOutKind = vi.mocked(getSmsOptOutKind);
 
 function ledgerDb(result: { data?: unknown; error?: { message: string } | null }) {
   const b: Record<string, unknown> = {};
@@ -162,6 +165,7 @@ beforeEach(() => {
   } as never);
   mockZoomDelete.mockResolvedValue(undefined as never);
   mockGoal.mockResolvedValue(undefined as never);
+  mockOptOutKind.mockResolvedValue(null);
 });
 
 afterEach(() => {
@@ -444,6 +448,28 @@ describe("submitPublicBooking", () => {
       });
     }
     expect(mockBook).not.toHaveBeenCalled();
+  });
+
+  it("refuses owner-declared spam numbers with the generic failure (never revealing the block)", async () => {
+    mockOptOutKind.mockResolvedValueOnce("owner_spam");
+    expect(await submitPublicBooking(TOKEN, VALID)).toEqual({
+      ok: false,
+      detail: "booking_failed"
+    });
+    expect(mockBook).not.toHaveBeenCalled();
+    expect(mockSlotClaim).not.toHaveBeenCalled();
+    expect(mockCapture).not.toHaveBeenCalled();
+    expect(logger.warn).toHaveBeenCalledWith(
+      "booking-page: refused owner_spam number",
+      expect.objectContaining({ businessId: BIZ })
+    );
+  });
+
+  it("still books a customer who texted STOP (they refused texts, not appointments)", async () => {
+    mockOptOutKind.mockResolvedValueOnce("stop");
+    const out = await submitPublicBooking(TOKEN, VALID);
+    expect(out.ok).toBe(true);
+    expect(mockBook).toHaveBeenCalledTimes(1);
   });
 
   it("answers a double submit for the attendee's existing start idempotently (both modes)", async () => {

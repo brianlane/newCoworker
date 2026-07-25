@@ -78,6 +78,41 @@ export async function checkSmsOptOut(
 export type SmsOptOutKind = "stop" | "owner_spam";
 
 /**
+ * The suppression row's KIND for a number, or null when not suppressed.
+ * For consumers where provenance changes the decision: the public booking
+ * page refuses owner_spam numbers (a spam declaration must never start
+ * more automation) but still books "stop" numbers, whose opt-out covers
+ * TEXTS, not appointments they choose to make themselves. Returns null on
+ * a read error too, with a warn: unlike SMS consent (fail-closed), a
+ * missed spam gate books an appointment, not a compliance violation.
+ */
+export async function getSmsOptOutKind(
+  businessId: string,
+  e164: string,
+  client?: SupabaseClient
+): Promise<SmsOptOutKind | null> {
+  try {
+    const db = client ?? (await createSupabaseServiceClient());
+    const { data, error } = await db
+      .from("sms_opt_outs")
+      .select("kind")
+      .eq("business_id", businessId)
+      .eq("sender_e164", e164)
+      .maybeSingle();
+    if (error) throw new Error(error.message);
+    const kind = (data as { kind?: string } | null)?.kind;
+    return kind === "stop" || kind === "owner_spam" ? kind : null;
+  } catch (err) {
+    const { logger } = await import("@/lib/logger");
+    logger.warn("getSmsOptOutKind failed (treated as not suppressed)", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
+  }
+}
+
+/**
  * Owner-initiated proactive suppression ("never text this number"). Wraps
  * the same RPC the STOP keyword handler uses, so every enforcement site
  * (Edge and Node) picks it up identically. Returns whether the row was new.
