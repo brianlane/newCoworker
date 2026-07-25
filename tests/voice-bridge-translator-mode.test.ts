@@ -226,9 +226,26 @@ describe("staff-requested translator mode (they add the other person themselves)
     expect(body).toContain("scheduleTranslatorCeiling()");
   });
 
+  it("honors the Settings toggle, which a bridge-local tool has no adapter to enforce", async () => {
+    // Bugbot: the registry advertises this as configurable, but HTTP-proxied
+    // voice tools are gated app-side by agentToolDisabledResponse and a
+    // bridge-local tool has no such chokepoint. Without the read below the
+    // Settings switch would be decoration.
+    expect(src).toContain(
+      'if (decl.name === "start_translator_mode" && !opts.translatorOnRequestEnabled) continue;'
+    );
+    const handler = src.slice(src.indexOf('if (name === "start_translator_mode")'));
+    expect(handler.slice(0, 1600)).toContain("voice_bridge_translator_tool_disabled");
+    // index.ts resolves it from agent_tool_settings, staff calls only.
+    const idx = readFileSync(INDEX, "utf8");
+    expect(idx).toContain('toolKey: "start_translator_mode"');
+    expect(idx).toContain("translatorOnRequestEnabled");
+  });
+
   it("bounds the staff-requested stretch with the same ceiling", () => {
     const handler = src.slice(src.indexOf('if (name === "start_translator_mode")'));
-    expect(handler.slice(0, 2500)).toContain("scheduleTranslatorCeiling()");
+    const body = handler.slice(0, handler.indexOf('if (name === "capture_lead"'));
+    expect(body).toContain("scheduleTranslatorCeiling()");
   });
 });
 

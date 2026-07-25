@@ -1110,8 +1110,16 @@ button already does.
   because asking the receptionist to start interpreting silences it for the rest
   of the call. Staff identity is the v2-signed caller number
   (`resolveCallerIdentity`), never something the model decides.
-- Same ceiling and the same tool refusals as the transfer path. Owners can turn
-  it off in Settings → Coworker tools ("Interpret on request").
+- Same ceiling and the same tool refusals as the transfer path.
+- **The Settings toggle is real, not decoration.** Owners can turn it off under
+  Settings → Coworker tools ("Interpret on request"). HTTP-proxied voice tools
+  are gated app-side by `agentToolDisabledResponse`, but a bridge-local tool has
+  no such chokepoint, so the bridge reads the owner's `agent_tool_settings` row
+  itself ([vps/voice-bridge/src/tool-settings.ts](vps/voice-bridge/src/tool-settings.ts))
+  and withholds the declaration when it is off. Missing row and read error both
+  resolve to the registry default, mirroring `isAgentToolEnabled`, so a DB blip
+  never flips behavior mid-call. Any future bridge-local tool that claims to be
+  configurable needs the same read.
 
 > The one thing no test can prove is whether the human actually HEARS the
 > interpreter, because `target_legs=both` on a transferred pair is Telnyx

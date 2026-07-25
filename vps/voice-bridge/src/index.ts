@@ -31,6 +31,7 @@ import {
   loadContactPreferredLanguage,
   resolveVoiceLanguagePrefs
 } from "./language-prefs.js";
+import { isBridgeToolEnabled } from "./tool-settings.js";
 import { loadVoiceBookingLine } from "./booking-context.js";
 import type { TranscriptAdapter } from "./voice-transcript.js";
 import { startIdleHeartbeatLoop, writeHeartbeat } from "./heartbeat.js";
@@ -1562,6 +1563,22 @@ function main(): void {
           // hardcode English, so a Spanish-speaking caller was greeted in the
           // wrong language on every call. Best-effort by contract: a failed
           // contact read degrades to the tenant default, never a refused call.
+          // Settings → Coworker tools for the bridge-local translator tool.
+          // HTTP-proxied voice tools are gated app-side by
+          // agentToolDisabledResponse; a bridge-local one has no such
+          // chokepoint, so read the owner's row here or the toggle would be
+          // decoration. Only staff callers can reach the tool at all, so skip
+          // the read entirely for a customer call.
+          const translatorOnRequestEnabled = callerIsStaff
+            ? await isBridgeToolEnabled(supabase, {
+                businessId,
+                agentKey: "voice",
+                toolKey: "start_translator_mode",
+                // Registry default for this tool (src/lib/agent-tools/registry.ts).
+                defaultEnabled: true
+              })
+            : false;
+
           const languagePrefs = resolveVoiceLanguagePrefs({
             contactPreferredLanguage: trustedFromE164
               ? await loadContactPreferredLanguage(supabase, businessId, trustedFromE164)
@@ -1597,6 +1614,7 @@ function main(): void {
             recentInteractionsNote,
             bookingStatusNote,
             languagePrefs,
+            translatorOnRequestEnabled,
             callerIdentity,
             intake,
             recordDiag

@@ -367,6 +367,13 @@ export type GeminiBridgeOptions = {
    */
   languagePrefs?: VoiceLanguagePrefs;
   /**
+   * Settings → Coworker tools state for the bridge-local
+   * `start_translator_mode` tool, resolved by index.ts (HTTP-proxied voice tools
+   * are gated app-side instead). Undefined/false withholds the declaration, so a
+   * disabled tool is not merely discouraged in the prompt.
+   */
+  translatorOnRequestEnabled?: boolean;
+  /**
    * Who the caller is (owner / team member / customer). When the caller is
    * staff, the system instruction switches from the customer receptionist
    * script to an internal-assistant persona — same intent as the SMS worker's
@@ -1022,6 +1029,9 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     for (const decl of buildVoiceToolDeclarations()) {
       if (callerIsStaff && STAFF_EXCLUDED_TOOLS.has(decl.name)) continue;
       if (!callerIsStaff && STAFF_ONLY_TOOLS.has(decl.name)) continue;
+      // Owner turned it off under Settings → Coworker tools. Bridge-local tools
+      // have no app-side adapter to refuse them, so withhold the declaration.
+      if (decl.name === "start_translator_mode" && !opts.translatorOnRequestEnabled) continue;
       declarations.push(decl);
     }
   }
@@ -1374,6 +1384,17 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
           sendToolResponse(call.id, name, {
             ok: false,
             detail: "translator mode is only available to the business's own team"
+          });
+          continue;
+        }
+        // Settings → Coworker tools. The declaration is already withheld when
+        // disabled; refuse here too so a stale session cannot slip through.
+        if (!opts.translatorOnRequestEnabled) {
+          emitDiag("voice_bridge_translator_tool_disabled", {});
+          sendToolResponse(call.id, name, {
+            ok: false,
+            detail:
+              "The owner turned this tool off under Settings → Coworker tools. Tell them plainly instead of pretending it worked."
           });
           continue;
         }
