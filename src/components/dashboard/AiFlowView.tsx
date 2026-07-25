@@ -382,9 +382,13 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
                   ? `${step.toRef.label ?? "Saved contact"} (saved contact: live number)`
                   : step.toAgentName
                     ? `${step.toAgentName} (team member)`
-                    : (step.to ?? "")
+                    : step.toAgentNameVar
+                      ? `The team member {{vars.${step.toAgentNameVar}}} names`
+                      : (step.to ?? "")
             }
-            mono={!step.replyToGroup && !step.toAgentName && !step.toRef}
+            mono={
+              !step.replyToGroup && !step.toAgentName && !step.toAgentNameVar && !step.toRef
+            }
           />
           <Row label="Message" value={step.body} />
           <SmsSegmentHint text={step.body} mode="aiflow" />
@@ -424,9 +428,11 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
                 ? `${step.toRef.label ?? "Saved contact"} (saved contact: live number)`
                 : step.toAgentName
                   ? `${step.toAgentName} (team member)`
-                  : (step.to ?? "")
+                  : step.toAgentNameVar
+                    ? `The team member {{vars.${step.toAgentNameVar}}} names`
+                    : (step.to ?? "")
             }
-            mono={!step.toAgentName && !step.toRef}
+            mono={!step.toAgentName && !step.toAgentNameVar && !step.toRef}
           />
           <Row label="Message" value={step.body} />
           <Chip>

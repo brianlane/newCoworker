@@ -575,11 +575,19 @@ export type FlowStep =
        */
       toAgentName?: string;
       /**
+       * DYNAMIC teammate recipient: var name whose VALUE the worker resolves
+       * against the active roster at run time, then sends exactly like
+       * `toAgentName`. Empty/"none" skips the step; an unresolved non-empty
+       * value fails it. Mutually exclusive with the other recipient sources.
+       */
+      toAgentNameVar?: string;
+      /**
        * Dynamic recipient: resolve a saved employee/contact's CURRENT phone at
        * run time (see ContactRef). Mutually exclusive with to/toAgentName/
-       * replyToGroup. An employee ref is treated like `toAgentName` (internal
-       * teammate text: {{agent.*}} in scope, no quiet-hours deferral, not filed
-       * as a lead); a contact ref is a normal 1:1 lead recipient.
+       * toAgentNameVar/replyToGroup. An employee ref is treated like
+       * `toAgentName` (internal teammate text: {{agent.*}} in scope, no
+       * quiet-hours deferral, not filed as a lead); a contact ref is a normal
+       * 1:1 lead recipient.
        */
       toRef?: ContactRef;
       /**
@@ -602,6 +610,8 @@ export type FlowStep =
       to?: string;
       body: string;
       toAgentName?: string;
+      /** Dynamic teammate recipient; see send_sms toAgentNameVar. */
+      toAgentNameVar?: string;
       toRef?: ContactRef;
       when?: StepCondition;
     }

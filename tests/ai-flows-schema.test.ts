@@ -2227,7 +2227,7 @@ describe("Clever engine: send_sms replyToGroup", () => {
     const def = baseDef();
     def.steps = [{ id: "g", type: "send_sms", body: "hi" }] as AiFlowDefinition["steps"];
     expect(validateDefinitionSemantics(def)).toEqual([
-      'Step "g" sends a text but has no recipient; set "to", "toAgentName", "toRef", or turn on replyToGroup.'
+      'Step "g" sends a text but has no recipient; set "to", "toAgentName", "toAgentNameVar", "toRef", or turn on replyToGroup.'
     ]);
   });
 
@@ -2266,7 +2266,7 @@ describe("Clever engine: send_sms toAgentName", () => {
       { id: "g", type: "send_sms", to: "{{vars.x}}", toAgentName: "Dave", body: "hi" }
     ] as AiFlowDefinition["steps"];
     expect(validateDefinitionSemantics(def)).toContain(
-      'Step "g" sets more than one recipient; use only one of "to", "toAgentName", "toRef", or replyToGroup.'
+      'Step "g" sets more than one recipient; use only one of "to", "toAgentName", "toAgentNameVar", "toRef", or replyToGroup.'
     );
   });
 
@@ -2289,7 +2289,7 @@ describe("Clever engine: send_sms toAgentName", () => {
       { id: "w", type: "send_whatsapp", body: "hi" }
     ] as AiFlowDefinition["steps"];
     expect(validateDefinitionSemantics(none)).toContain(
-      'Step "w" sends a WhatsApp message but has no recipient; set "to", "toAgentName", or "toRef".'
+      'Step "w" sends a WhatsApp message but has no recipient; set "to", "toAgentName", "toAgentNameVar", or "toRef".'
     );
 
     const multiple = baseDef();
@@ -2297,7 +2297,110 @@ describe("Clever engine: send_sms toAgentName", () => {
       { id: "w", type: "send_whatsapp", to: "{{vars.x}}", toAgentName: "Dave", body: "hi" }
     ] as AiFlowDefinition["steps"];
     expect(validateDefinitionSemantics(multiple)).toContain(
-      'Step "w" sets more than one recipient; use only one of "to", "toAgentName", or "toRef".'
+      'Step "w" sets more than one recipient; use only one of "to", "toAgentName", "toAgentNameVar", or "toRef".'
+    );
+  });
+
+  it("accepts toAgentNameVar naming an engine var, and exposes {{agent.*}}", () => {
+    // claimed_agent is engine-provided by route_to_team, so the canonical
+    // post-claim hand-off needs no producing step of its own.
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "sms", conditions: [{ type: "has_url" }] },
+      steps: [
+        {
+          id: "route",
+          type: "route_to_team",
+          offerTemplate: "New lead, reply 1 by {{offer.deadline}}",
+          responseMinutes: 5,
+          ownerFallbackTemplate: "Nobody claimed it"
+        },
+        {
+          id: "hand_off",
+          type: "send_sms",
+          toAgentNameVar: "claimed_agent",
+          body: "{{agent.name}}, this lead is yours",
+          when: { var: "claimed_agent", notEquals: "none" }
+        }
+      ]
+    });
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("accepts toAgentNameVar naming a var an earlier step produces", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "sms", conditions: [{ type: "has_url" }] },
+      steps: [
+        { id: "x", type: "extract_text", fields: [{ name: "assigned_agent" }] },
+        { id: "tell", type: "send_sms", toAgentNameVar: "assigned_agent", body: "yours" }
+      ]
+    });
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("rejects toAgentNameVar naming a var no earlier step produces", () => {
+    const def = baseDef();
+    def.steps = [
+      { id: "tell", type: "send_sms", toAgentNameVar: "never_set", body: "yours" }
+    ] as AiFlowDefinition["steps"];
+    expect(validateDefinitionSemantics(def)).toContain(
+      'Step "tell" picks its teammate from {{vars.never_set}} which no earlier step produces.'
+    );
+  });
+
+  it("rejects toAgentNameVar alongside another recipient source", () => {
+    const def = baseDef();
+    def.steps = [
+      {
+        id: "g",
+        type: "send_sms",
+        to: "{{vars.x}}",
+        toAgentNameVar: "claimed_agent",
+        body: "hi"
+      }
+    ] as AiFlowDefinition["steps"];
+    expect(validateDefinitionSemantics(def)).toContain(
+      'Step "g" sets more than one recipient; use only one of "to", "toAgentName", "toAgentNameVar", "toRef", or replyToGroup.'
+    );
+  });
+
+  it("send_whatsapp: accepts toAgentNameVar and scope-checks it", () => {
+    const ok = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "sms", conditions: [{ type: "has_url" }] },
+      steps: [
+        { id: "x", type: "extract_text", fields: [{ name: "assigned_agent" }] },
+        {
+          id: "w",
+          type: "send_whatsapp",
+          toAgentNameVar: "assigned_agent",
+          body: "hi {{agent.name}}"
+        }
+      ]
+    });
+    expect(validateDefinitionSemantics(ok)).toEqual([]);
+
+    const unproduced = baseDef();
+    unproduced.steps = [
+      { id: "w", type: "send_whatsapp", toAgentNameVar: "never_set", body: "hi" }
+    ] as AiFlowDefinition["steps"];
+    expect(validateDefinitionSemantics(unproduced)).toContain(
+      'Step "w" picks its teammate from {{vars.never_set}} which no earlier step produces.'
+    );
+
+    const multiple = baseDef();
+    multiple.steps = [
+      {
+        id: "w",
+        type: "send_whatsapp",
+        toAgentName: "Dave",
+        toAgentNameVar: "claimed_agent",
+        body: "hi"
+      }
+    ] as AiFlowDefinition["steps"];
+    expect(validateDefinitionSemantics(multiple)).toContain(
+      'Step "w" sets more than one recipient; use only one of "to", "toAgentName", "toAgentNameVar", or "toRef".'
     );
   });
 
@@ -2379,7 +2482,7 @@ describe("Dynamic contact refs: send_sms toRef", () => {
       { id: "g", type: "send_sms", to: "{{vars.x}}", toRef: contactRef, body: "hi" }
     ] as AiFlowDefinition["steps"];
     expect(validateDefinitionSemantics(def)).toContain(
-      'Step "g" sets more than one recipient; use only one of "to", "toAgentName", "toRef", or replyToGroup.'
+      'Step "g" sets more than one recipient; use only one of "to", "toAgentName", "toAgentNameVar", "toRef", or replyToGroup.'
     );
   });
 

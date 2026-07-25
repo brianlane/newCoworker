@@ -53,7 +53,15 @@ export function simulateTestAction(
       }
       return {
         simulated: "send_sms",
-        to: action.toAgentName || action.toRef?.label || action.to || "(group thread)",
+        // toAgentNameValue is the var's RENDERED value, not the roster name it
+        // would resolve to (only the worker can read the roster), so a test run
+        // shows what the flow asked for.
+        to:
+          action.toAgentName ||
+          action.toAgentNameValue ||
+          action.toRef?.label ||
+          action.to ||
+          "(group thread)",
         body: action.body
       };
     case "send_whatsapp":
@@ -63,7 +71,11 @@ export function simulateTestAction(
       }
       return {
         simulated: "send_whatsapp",
-        to: action.toAgentName || action.toRef?.label || action.to,
+        to:
+          action.toAgentName ||
+          action.toAgentNameValue ||
+          action.toRef?.label ||
+          action.to,
         body: action.body
       };
     case "send_email":

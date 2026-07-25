@@ -2034,15 +2034,41 @@ async function logFlowEmail(
 const LEAD_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
- * True when this number is saved as a manual (non-customer) contact on the
- * unified `contacts` table — i.e. a known vendor/integration sender (Clever's
- * numbers, a title company), the owner, or a tester, not a lead. Used to keep
- * such numbers off the Customers page. A row with type='customer' is a real
- * customer profile, so it does NOT count as a business contact. Best-effort: on
- * a query error we return false so a transient DB blip never silently drops a
- * real lead profile.
+ * True when this number is not a lead and must never be filed (or renamed) as
+ * a customer. Two independent reasons:
+ *
+ *   1. It is saved as a manual (non-customer) contact on the unified
+ *      `contacts` table: a known vendor/integration sender (Clever's
+ *      numbers, a title company), the owner, or a tester. A row with
+ *      type='customer' is a real customer profile, so it does NOT count.
+ *   2. It is OUR SIDE: a roster member's phone or one of the business's own
+ *      derived numbers, whether or not a contact row exists yet
+ *      (staffNumberCheck, shared with update_contact's tag protection).
+ *
+ * Reason 2 was the Dave Lane defect (Amy Laidlaw, Jul 25 2026): the HomeLight
+ * flow's post-claim hand-off texted the claiming teammate through
+ * `to: "{{vars.claimed_agent_phone}}"`, a raw templated recipient the send
+ * step did not recognize as internal, and the stored-type check alone passed
+ * because the teammate had no contact row at all. He was filed as a NEW
+ * CUSTOMER, and since the portal extraction had produced no lead phone, the
+ * LEAD's name was stamped on his row. Deliberately NOT gated on
+ * businesses.aiflow_protect_staff_contacts: that toggle exists so a business
+ * can maintain lead-state TAGS over its own team, whereas filing a teammate
+ * as a customer under a stranger's name is never wanted. A business that
+ * genuinely wants team contact rows creates them as type='employee', which
+ * reason 1 already skips.
+ *
+ * The two reasons fail in OPPOSITE directions, deliberately. A `contacts` read
+ * error only costs us reason 1, so it degrades to "not a saved business
+ * contact" (false) rather than dropping a real lead profile over a DB blip.
+ * Reason 2 still runs on that path: the roster/self check is the guard that
+ * protects our own team, and skipping it because a DIFFERENT table hiccupped
+ * would reopen exactly the defect above. Inside staffNumberCheck a read error
+ * fails the other way (staff, so nothing is filed) because filing a teammate
+ * under a stranger's name is worse than a missing lead row, which the lead's
+ * next interaction re-creates anyway.
  */
-async function isKnownBusinessContact(
+async function isNonLeadNumber(
   supabase: Supabase,
   businessId: string,
   e164: string
@@ -2053,22 +2079,23 @@ async function isKnownBusinessContact(
     .eq("business_id", businessId)
     .eq("customer_e164", e164)
     .maybeSingle();
-  if (error) {
-    console.error("isKnownBusinessContact (aiflow lead)", error);
-    return false;
-  }
-  return data != null && (data as { type?: string }).type !== "customer";
+  if (error) console.error("isNonLeadNumber contacts read (aiflow lead)", error);
+  const storedType = error ? null : ((data as { type?: string } | null)?.type ?? null);
+  if (!error && data != null && storedType !== "customer") return true;
+  const check = await staffNumberCheck(supabase, businessId, [e164], storedType);
+  return check.staff;
 }
 
 /**
  * Create/enrich a customer profile keyed by an E.164 number, filling display
  * name + email best-effort. Shared by the lead-contact side effect
- * (recordLeadCustomerProfile) and the explicit `upsert_customer` step. Known
- * business contacts (Clever's own numbers, the owner, vendors saved as "other
- * contacts") are never filed — this keeps the Customers page clean and prevents
- * stamping a lead's name onto a co-recipient business number. Fill-only on
- * email so a later run / owner edit is never clobbered. Best-effort: a profile
- * failure only logs (the contact/extraction already succeeded).
+ * (recordLeadCustomerProfile) and the explicit `upsert_customer` step. Non-lead
+ * numbers (Clever's own numbers, the owner, vendors saved as "other contacts",
+ * and every roster/self number) are never filed. This keeps the Customers page
+ * clean and prevents stamping a lead's name onto a co-recipient business number
+ * or a teammate. Fill-only on email so a later run / owner edit is never
+ * clobbered. Best-effort: a profile failure only logs (the contact/extraction
+ * already succeeded).
  */
 async function enrichCustomerProfile(
   supabase: Supabase,
@@ -2077,7 +2104,7 @@ async function enrichCustomerProfile(
   name: string,
   email: string
 ): Promise<void> {
-  if (await isKnownBusinessContact(supabase, businessId, customerE164)) return;
+  if (await isNonLeadNumber(supabase, businessId, customerE164)) return;
 
   const { data: interaction, error } = await supabase.rpc("record_customer_interaction", {
     p_business_id: businessId,
@@ -2128,8 +2155,10 @@ async function recordLeadCustomerProfile(
   // owner) — only the LEAD should get the extracted name/email, never a
   // co-recipient. The lead is the recipient matching vars.lead_phone when the
   // flow captured it; when it didn't (e.g. the Clever group reply, which only
-  // has seller_first_name), known business contacts are skipped inside
-  // enrichCustomerProfile, so the remaining recipient is the lead. Compare
+  // has seller_first_name), non-lead numbers (roster, self, saved business
+  // contacts) are skipped inside enrichCustomerProfile. That guard is what
+  // keeps a nameless lead_phone from stamping the lead's name onto a
+  // teammate, the Dave Lane defect (Jul 25 2026). Compare
   // normalized E.164 so a format mismatch between vars.lead_phone and the send
   // target doesn't skip it.
   const leadPhone = leadPhoneE164(scope);
@@ -2459,14 +2488,65 @@ async function upsertCustomerStep(
 }
 
 /**
- * Is this contact protected staff for update_contact purposes? True when the
- * stored row is typed owner/employee, or any of its numbers sits on the
+ * Do any of these numbers belong to OUR side of the business? True when the
+ * stored contact row is typed owner/employee, or any number sits on the
  * ai_flow_team_members roster (active or not — a deactivated broker is still
  * staff), or matches the business's own derived numbers (owner cell, forward
- * number, the coworker's DID — owner rows are often typed "customer"), AND
- * the business hasn't switched the protection off in Settings
- * (businesses.aiflow_protect_staff_contacts, default true). Read errors fail
- * SAFE (protected).
+ * number, the coworker's DID; owner rows are often typed "customer").
+ *
+ * `readFailed` reports that a lookup errored so the answer is not trustworthy;
+ * every caller treats that as staff (fail safe), but they differ in what they
+ * do next, so the flag is returned rather than collapsed into `staff`.
+ *
+ * Shared by the two staff guards, update_contact's tag protection
+ * (isProtectedStaffContact) and customer filing (enrichCustomerProfile), so
+ * they can never disagree on who counts as staff.
+ */
+async function staffNumberCheck(
+  supabase: Supabase,
+  businessId: string,
+  contactNumbers: string[],
+  storedType: string | null | undefined
+): Promise<{ staff: boolean; readFailed: boolean }> {
+  if (storedType === "owner" || storedType === "employee") {
+    return { staff: true, readFailed: false };
+  }
+  // Roster check spans EVERY number attached to the contact row (primary +
+  // merged aliases + the targeted number): the contact lookup is
+  // alias-aware, so protection must be too: a flow targeting an alias of
+  // a broker's row is still targeting the broker.
+  const { data: member, error } = await supabase
+    .from("ai_flow_team_members")
+    .select("id")
+    .eq("business_id", businessId)
+    .in("phone_e164", contactNumbers)
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.error("staff roster check", error);
+    return { staff: true, readFailed: true };
+  }
+  if (member != null) return { staff: true, readFailed: false };
+  // Owner numbers are usually DERIVED (businesses.phone, the forward cell,
+  // the coworker's own DID) rather than stored as an owner-typed contact, so
+  // an owner testing with their cell must be protected too. isSelfPhone is
+  // the SHARED both-sides-normalized comparator (same one the extraction
+  // scrub and send_sms self-send guard use), so the guards can never
+  // disagree on what counts as "ourselves".
+  const selfNumbers = await businessSelfNumbers(supabase, businessId);
+  return {
+    staff: contactNumbers.some((n) => isSelfPhone(n, selfNumbers)),
+    readFailed: false
+  };
+}
+
+/**
+ * Is this contact protected staff for update_contact purposes? Staff (per
+ * staffNumberCheck) AND the business hasn't switched the protection off in
+ * Settings (businesses.aiflow_protect_staff_contacts, default true). Read
+ * errors fail SAFE (protected): an unverifiable roster short-circuits ahead
+ * of the toggle, because a tag landing on a broker's row is the outcome the
+ * guard exists to prevent.
  */
 async function isProtectedStaffContact(
   supabase: Supabase,
@@ -2474,38 +2554,9 @@ async function isProtectedStaffContact(
   contactNumbers: string[],
   storedType: string | null | undefined
 ): Promise<boolean> {
-  let staff = storedType === "owner" || storedType === "employee";
-  if (!staff) {
-    // Roster check spans EVERY number attached to the contact row (primary +
-    // merged aliases + the targeted number): the contact lookup is
-    // alias-aware, so protection must be too — a flow targeting an alias of
-    // a broker's row is still targeting the broker.
-    const { data: member, error } = await supabase
-      .from("ai_flow_team_members")
-      .select("id")
-      .eq("business_id", businessId)
-      .in("phone_e164", contactNumbers)
-      .limit(1)
-      .maybeSingle();
-    if (error) {
-      // Fail SAFE: if we can't check the roster, treat the contact as staff
-      // rather than risk tagging a broker's row.
-      console.error("update_contact roster check", error);
-      return true;
-    }
-    staff = member != null;
-  }
-  if (!staff) {
-    // Owner numbers are usually DERIVED (businesses.phone, the forward cell,
-    // the coworker's own DID) rather than stored as an owner-typed contact —
-    // an owner testing with their cell must be protected too. isSelfPhone is
-    // the SHARED both-sides-normalized comparator (same one the extraction
-    // scrub and send_sms self-send guard use), so the guards can never
-    // disagree on what counts as "ourselves".
-    const selfNumbers = await businessSelfNumbers(supabase, businessId);
-    staff = contactNumbers.some((n) => isSelfPhone(n, selfNumbers));
-  }
-  if (!staff) return false;
+  const check = await staffNumberCheck(supabase, businessId, contactNumbers, storedType);
+  if (check.readFailed) return true;
+  if (!check.staff) return false;
   const { data: biz, error: bizErr } = await supabase
     .from("businesses")
     .select("aiflow_protect_staff_contacts")
@@ -2566,8 +2617,8 @@ async function updateContactStep(
   }
   // Staff-contact protection (default ON, toggled from Settings): lead-state
   // tags never land on the owner or a roster member — the classic trap is an
-  // employee testing a flow with their own number (upsert_customer has the
-  // same philosophy via its known-business-contact guard). Staff = a stored
+  // employee testing a flow with their own number (customer filing shares the
+  // same detection via staffNumberCheck). Staff = a stored
   // owner/employee type, OR any of the row's numbers (primary, merged
   // aliases, the targeted number) on the ai_flow_team_members roster — the
   // roster is authoritative even when the stored row is typed "customer".
@@ -4780,15 +4831,18 @@ async function sendWhatsAppStep(
   if (action.skipReason) {
     appendActionTaken(
       scope,
-      "skipped the WhatsApp message, no valid phone number was extracted"
+      action.skipReason === "no_teammate_named"
+        ? "skipped the teammate WhatsApp message, no teammate was named at this point in the flow"
+        : "skipped the WhatsApp message, no valid phone number was extracted"
     );
     return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
   }
 
-  // Named-agent / contact-ref recipients: resolve the live number and render
-  // the raw body, exactly like sendSmsStep.
+  // Named-agent / var-named / contact-ref recipients: resolve the live number
+  // and render the raw body, exactly like sendSmsStep.
   let toE164 = action.to;
   let bodyText = action.body;
+  let dynamicAgentName: string | null = null;
   if (action.toAgentName) {
     const agent = await resolveAgentByName(supabase, run.business_id, action.toAgentName);
     if (!agent) {
@@ -4798,6 +4852,24 @@ async function sendWhatsAppStep(
       };
     }
     toE164 = agent.phone;
+    bodyText = renderTemplate(action.body, agentScope(scope, agent)).trim();
+    if (!bodyText) {
+      return { kind: "fail", error: "send_whatsapp: body is empty after templating" };
+    }
+  } else if (action.toAgentNameValue) {
+    const agent = await resolveAgentByNameValue(
+      supabase,
+      run.business_id,
+      action.toAgentNameValue
+    );
+    if (!agent) {
+      return {
+        kind: "fail",
+        error: `send_whatsapp: "${action.toAgentNameValue}" did not resolve to exactly one active roster member`
+      };
+    }
+    toE164 = agent.phone;
+    dynamicAgentName = agent.name;
     bodyText = renderTemplate(action.body, agentScope(scope, agent)).trim();
     if (!bodyText) {
       return { kind: "fail", error: "send_whatsapp: body is empty after templating" };
@@ -4837,7 +4909,17 @@ async function sendWhatsAppStep(
     return { kind: "fail", error: "send_whatsapp: platform delivery is not configured" };
   }
 
-  const isTeammate = Boolean(action.toAgentName) || action.toRef?.source === "employee";
+  // Same three-forms-are-one rule as sendSmsStep: a roster number reached
+  // through a templated `to` is a teammate too, so an out-of-window send picks
+  // the owner-alert template rather than the lead follow-up one.
+  const declaredTeammate =
+    Boolean(action.toAgentName) ||
+    Boolean(action.toAgentNameValue) ||
+    action.toRef?.source === "employee";
+  const rosterRecipient = declaredTeammate
+    ? null
+    : await activeRosterMemberByPhone(supabase, run.business_id, toE164);
+  const isTeammate = declaredTeammate || rosterRecipient != null;
   let res: Response;
   try {
     res = await fetch(`${appUrl}/api/internal/whatsapp-send`, {
@@ -4909,8 +4991,13 @@ async function sendWhatsAppStep(
 
   appendActionTaken(
     scope,
-    `sent a WhatsApp message to ${action.toAgentName || action.toRef?.label || toE164}` +
-      (result.via === "template" ? " (via approved template, outside the 24h window)" : "")
+    `sent a WhatsApp message to ${
+      action.toAgentName ||
+      dynamicAgentName ||
+      action.toRef?.label ||
+      rosterRecipient?.name ||
+      toE164
+    }` + (result.via === "template" ? " (via approved template, outside the 24h window)" : "")
   );
   return { kind: "ok", result: { to: toE164, via: result.via ?? "text" } };
 }
@@ -4928,7 +5015,9 @@ async function sendSmsStep(
   if (action.skipReason) {
     appendActionTaken(
       scope,
-      "skipped texting the lead, no valid phone number was extracted"
+      action.skipReason === "no_teammate_named"
+        ? "skipped the teammate text, no teammate was named at this point in the flow"
+        : "skipped texting the lead, no valid phone number was extracted"
     );
     return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
   }
@@ -4937,6 +5026,9 @@ async function sendSmsStep(
   // worker can read the roster). Everything below then treats it as a 1:1 send.
   let toE164 = action.to;
   let bodyText = action.body;
+  // The roster name a dynamic (toAgentNameValue) recipient resolved to, so the
+  // owner's outcome line names the teammate rather than echoing the var value.
+  let dynamicAgentName: string | null = null;
   if (action.toAgentName) {
     const agent = await resolveAgentByName(supabase, run.business_id, action.toAgentName);
     if (!agent) {
@@ -4950,6 +5042,24 @@ async function sendSmsStep(
     // empty-body guard never ran. Re-check here so an all-template body that
     // resolves to nothing doesn't send a bare compliance-suffix text to a
     // teammate.
+    bodyText = renderTemplate(action.body, agentScope(scope, agent)).trim();
+    if (!bodyText) return { kind: "fail", error: "send_sms: body is empty after templating" };
+  } else if (action.toAgentNameValue) {
+    // Dynamic teammate send: the planner rendered the var, we resolve it against
+    // the live roster and then behave exactly like toAgentName.
+    const agent = await resolveAgentByNameValue(
+      supabase,
+      run.business_id,
+      action.toAgentNameValue
+    );
+    if (!agent) {
+      return {
+        kind: "fail",
+        error: `send_sms: "${action.toAgentNameValue}" did not resolve to exactly one active roster member`
+      };
+    }
+    toE164 = agent.phone;
+    dynamicAgentName = agent.name;
     bodyText = renderTemplate(action.body, agentScope(scope, agent)).trim();
     if (!bodyText) return { kind: "fail", error: "send_sms: body is empty after templating" };
   } else if (action.toRef) {
@@ -4970,11 +5080,33 @@ async function sendSmsStep(
     ).trim();
     if (!bodyText) return { kind: "fail", error: "send_sms: body is empty after templating" };
   }
-  // An employee recipient (named or referenced) is an internal teammate text:
-  // never quiet-hours-deferred and never filed as a lead. A contact ref is a
-  // lead-side recipient, so it is treated like a plain `to`.
-  const internalAgentSend = Boolean(action.toAgentName) || action.toRef?.source === "employee";
-  const recipientLabel = action.toAgentName ?? action.toRef?.label ?? "the lead";
+  // An employee recipient (named, var-named, or referenced) is an internal
+  // teammate text: never quiet-hours-deferred and never filed as a lead. A
+  // contact ref is a lead-side recipient, so it is treated like a plain `to`.
+  const declaredAgentSend =
+    Boolean(action.toAgentName) ||
+    Boolean(action.toAgentNameValue) ||
+    action.toRef?.source === "employee";
+  // A teammate the step did NOT declare as one: post-claim hand-offs address the
+  // claimer through a templated phone var (`to: "{{vars.claimed_agent_phone}}"`),
+  // which is just as internal as toAgentName. Recognizing it by the RESOLVED
+  // number keeps every teammate-recipient form behaving identically, so a
+  // hand-off never rides the branded RCS agent, never parks until morning on the
+  // lead's quiet hours, never gets lead-engagement link tracking, and is never
+  // filed as a customer (the Dave Lane defect, Amy Laidlaw, Jul 25 2026). A
+  // roster read error leaves this null: the send stays lead-side rather than
+  // pushing a genuine lead's overnight text out immediately, and the filing
+  // guard inside enrichCustomerProfile is the fail-closed layer.
+  const rosterRecipient = declaredAgentSend
+    ? null
+    : await activeRosterMemberByPhone(supabase, run.business_id, toE164);
+  const internalAgentSend = declaredAgentSend || rosterRecipient != null;
+  const recipientLabel =
+    action.toAgentName ??
+    dynamicAgentName ??
+    action.toRef?.label ??
+    rosterRecipient?.name ??
+    "the lead";
   // Lead-contact quiet hours: inside the configured overnight window the lead
   // is never texted. With an extracted lead email we email the same message
   // right away (email is not time-gated) AND still defer the run so the text
@@ -7462,6 +7594,91 @@ async function resolveAgentByName(
   const phone = match?.phone_e164?.trim();
   if (!match || !phone) return null;
   return { name: match.name, phone };
+}
+
+/**
+ * Resolve a send step's dynamic teammate recipient (`toAgentNameVar`, already
+ * rendered to `wanted` by the planner) against the ACTIVE roster.
+ *
+ * Two accepted shapes, because the vars a flow has in hand differ by path:
+ *   - a NAME, matched through the shared matchRosterName tiers (exact full,
+ *     exact first, unique 3+ char prefix), the same resolution route_to_team's
+ *     agentNameVar uses, so "Gabby" finds "Gabrielle";
+ *   - an E.164 that is ON the roster, so the post-claim `claimed_agent` var
+ *     (which holds the claimer's NUMBER when their roster row has no name)
+ *     still resolves instead of failing the hand-off.
+ *
+ * Returns null when the value names nobody resolvable. Unlike route_to_team,
+ * there is no owner fallback here: this step's whole purpose is to text ONE
+ * named teammate, and texting the wrong person (or silently nobody) is worse
+ * than a readable step failure the owner sees on the run.
+ */
+async function resolveAgentByNameValue(
+  supabase: Supabase,
+  businessId: string,
+  wanted: string
+): Promise<RoutedAgent | null> {
+  const { data, error } = await supabase
+    .from("ai_flow_team_members")
+    .select("name, phone_e164")
+    .eq("business_id", businessId)
+    .eq("active", true)
+    .order("created_at", { ascending: true });
+  if (error) throw new Error(`send: roster query failed: ${error.message}`);
+  const rows = ((data ?? []) as { name?: string | null; phone_e164?: string | null }[])
+    .map((r) => ({ name: (r.name ?? "").trim(), phone: (r.phone_e164 ?? "").trim() }))
+    .filter((r) => r.phone.length > 0);
+  const asPhone = isE164(wanted) ? wanted : normalizeNanpToE164(wanted);
+  if (asPhone) {
+    const byPhone = rows.find((r) => r.phone === asPhone);
+    // A number that is NOT on the roster is not a teammate, and a phone is
+    // never a name, so don't fall through to name matching with it.
+    return byPhone ? { name: byPhone.name || "a teammate", phone: byPhone.phone } : null;
+  }
+  const match = matchRosterName(
+    wanted,
+    rows.map((r) => r.name)
+  );
+  if (match.kind !== "pinned") return null;
+  const row = rows.find((r) => r.name === match.name);
+  return row ? { name: row.name, phone: row.phone } : null;
+}
+
+/**
+ * The ACTIVE roster member reachable at this E.164, or null. Used to recognize
+ * a teammate recipient that the step did not declare as one: a flow can address
+ * a hand-off through a templated phone var (`to: "{{vars.claimed_agent_phone}}"`)
+ * rather than toAgentName/toRef, and that text is still an internal notification,
+ * not lead outreach.
+ *
+ * Active-only, matching resolveAgentByName and the inbound webhook's employee
+ * gate: a deactivated member's texts take the normal customer path everywhere
+ * else, so they must here too. Returns null on a read error (the caller keeps
+ * lead-side send semantics; the customer-filing guard is the fail-closed layer).
+ */
+async function activeRosterMemberByPhone(
+  supabase: Supabase,
+  businessId: string,
+  e164: string
+): Promise<{ name: string } | null> {
+  if (!e164) return null;
+  const { data, error } = await supabase
+    .from("ai_flow_team_members")
+    .select("name")
+    .eq("business_id", businessId)
+    .eq("active", true)
+    .eq("phone_e164", e164)
+    .limit(1)
+    .maybeSingle();
+  if (error) {
+    console.error("activeRosterMemberByPhone", error);
+    return null;
+  }
+  if (data == null) return null;
+  // A roster row with a blank name is still a teammate: the recipient label
+  // degrades, the internal-send semantics must not.
+  const name = (data as { name?: string | null }).name?.trim();
+  return { name: name || "a teammate" };
 }
 
 /** The lead's own phone (from vars.lead_phone) normalized to E.164, or null. */

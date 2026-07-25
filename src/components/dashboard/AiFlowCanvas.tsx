@@ -175,17 +175,21 @@ function stepSubtitle(step: FlowStep): string {
           ? `to ${step.toRef.label}`
           : step.toAgentName
             ? `to ${step.toAgentName}`
-            : step.to
-              ? `to ${step.to}`
-              : "";
+            : step.toAgentNameVar
+              ? `to the teammate {{vars.${step.toAgentNameVar}}} names`
+              : step.to
+                ? `to ${step.to}`
+                : "";
     case "send_whatsapp":
       return step.toRef?.label
         ? `to ${step.toRef.label}`
         : step.toAgentName
           ? `to ${step.toAgentName}`
-          : step.to
-            ? `to ${step.to}`
-            : "";
+          : step.toAgentNameVar
+            ? `to the teammate {{vars.${step.toAgentNameVar}}} names`
+            : step.to
+              ? `to ${step.to}`
+              : "";
     case "send_email":
       return `to ${step.to}`;
     case "notify_owner":

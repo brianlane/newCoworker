@@ -50,12 +50,28 @@ describe("simulateTestAction: send_whatsapp", () => {
       )
     ).toEqual({ simulated: "send_whatsapp", to: "Joe", body: "x" });
 
+    // A var-named teammate shows the value the flow asked for; only the worker
+    // can turn it into a roster name.
+    expect(
+      simulateTestAction(
+        { kind: "send_whatsapp", to: "", toAgentNameValue: "Dave Lane", body: "x" } as StepAction,
+        { vars: {} }
+      )
+    ).toEqual({ simulated: "send_whatsapp", to: "Dave Lane", body: "x" });
+
     expect(
       simulateTestAction(
         { kind: "send_whatsapp", to: "", body: "x", skipReason: "no_recipient_phone" } as StepAction,
         { vars: {} }
       )
     ).toEqual({ simulated: "send_whatsapp", skipped: "no_recipient_phone" });
+
+    expect(
+      simulateTestAction(
+        { kind: "send_whatsapp", to: "", body: "x", skipReason: "no_teammate_named" } as StepAction,
+        { vars: {} }
+      )
+    ).toEqual({ simulated: "send_whatsapp", skipped: "no_teammate_named" });
   });
 });
 
@@ -163,13 +179,20 @@ describe("simulateTestAction", () => {
       )
     ).toEqual({ simulated: "send_sms", to: "+16025550111", body: "Hi Joe!" });
 
-    // Recipient display precedence: named agent > saved ref > to > group.
+    // Recipient display precedence: named agent > var-named agent > saved ref
+    // > to > group.
     expect(
       simulateTestAction(
         { kind: "send_sms", to: "", toAgentName: "Dania", body: "b" } as StepAction,
         scope()
       )
     ).toMatchObject({ to: "Dania" });
+    expect(
+      simulateTestAction(
+        { kind: "send_sms", to: "", toAgentNameValue: "Dave Lane", body: "b" } as StepAction,
+        scope()
+      )
+    ).toMatchObject({ to: "Dave Lane" });
     expect(
       simulateTestAction(
         { kind: "send_sms", to: "", toRef: { source: "contact", id: "x", label: "Joe" }, body: "b" } as StepAction,
@@ -189,6 +212,12 @@ describe("simulateTestAction", () => {
         scope()
       )
     ).toEqual({ simulated: "send_sms", skipped: "no_recipient_phone" });
+    expect(
+      simulateTestAction(
+        { kind: "send_sms", to: "", body: "b", skipReason: "no_teammate_named" } as StepAction,
+        scope()
+      )
+    ).toEqual({ simulated: "send_sms", skipped: "no_teammate_named" });
 
     expect(
       simulateTestAction(

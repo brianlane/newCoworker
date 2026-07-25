@@ -270,6 +270,14 @@ export type StepAction =
        */
       toAgentName?: string;
       /**
+       * The ALREADY-RENDERED value of the step's toAgentNameVar: the teammate
+       * the worker must resolve against the active roster (by name, or by an
+       * E.164 that is on the roster). The planner can render the var but cannot
+       * read the roster, so it passes the value through with a RAW body, like
+       * toAgentName. An empty/"none" value arrives as a skipReason instead.
+       */
+      toAgentNameValue?: string;
+      /**
        * When set, the worker resolves this saved employee/contact's current
        * phone at run time (see ContactRef). The planner passes it through with a
        * RAW body (like toAgentName) because only the worker knows whether to put
@@ -303,6 +311,8 @@ export type StepAction =
       kind: "send_whatsapp";
       to: string;
       toAgentName?: string;
+      /** Rendered toAgentNameVar value; see send_sms toAgentNameValue. */
+      toAgentNameValue?: string;
       toRef?: ContactRef;
       body: string;
       /** Templated recipient resolved to nothing usable → skip, not fail. */
@@ -591,6 +601,19 @@ function triggerString(scope: StepScope, key: string): string {
   return typeof v === "string" ? v : "";
 }
 
+/**
+ * The teammate a send step's `toAgentNameVar` asks for: the var's trimmed
+ * value, or "" when the flow reached this step without one (unset, empty, or
+ * the "none" the engine writes into claimed_agent when nobody claimed). Same
+ * empty/"none" convention as route_to_team's agentNameVar; the actual roster
+ * resolution happens in the worker, which alone can read the roster.
+ */
+function agentNameVarValue(varName: string, scope: StepScope): string {
+  const raw = scope.vars?.[varName];
+  const wanted = typeof raw === "string" ? raw.trim() : "";
+  return !wanted || wanted.toLowerCase() === "none" ? "" : wanted;
+}
+
 /** Max cc (and, separately, bcc) recipients on one send. Mirrors the schema. */
 const MAX_CC_BCC_RECIPIENTS = 10;
 // Same strictness class as the Node senders and the chat-worker regex.
@@ -792,6 +815,30 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           }
         };
       }
+      // Dynamic teammate send: render the var here, resolve it against the
+      // roster in the worker. Empty or "none" means the flow reached this step
+      // without a teammate (a route_to_team nobody claimed, an un-pinned
+      // hand-off). That is a state gap, so SKIP with a note rather than fail.
+      if (step.toAgentNameVar) {
+        const wanted = agentNameVarValue(step.toAgentNameVar, scope);
+        if (!wanted) {
+          return {
+            ok: true,
+            action: { kind: "send_sms", to: "", body: step.body, skipReason: "no_teammate_named" }
+          };
+        }
+        return {
+          ok: true,
+          action: {
+            kind: "send_sms",
+            to: "",
+            body: step.body,
+            toAgentNameValue: wanted,
+            ...(quiet ? { quiet } : {}),
+            ...(mediaUrl ? { mediaUrl } : {})
+          }
+        };
+      }
       // Dynamic recipient (saved employee/contact). Like toAgentName, the worker
       // resolves the number AND renders the body (it alone knows the source), so
       // the planner passes the raw body through.
@@ -906,6 +953,29 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
             to: "",
             body: step.body,
             toAgentName: step.toAgentName.trim()
+          }
+        };
+      }
+      if (step.toAgentNameVar) {
+        const waWanted = agentNameVarValue(step.toAgentNameVar, scope);
+        if (!waWanted) {
+          return {
+            ok: true,
+            action: {
+              kind: "send_whatsapp",
+              to: "",
+              body: step.body,
+              skipReason: "no_teammate_named"
+            }
+          };
+        }
+        return {
+          ok: true,
+          action: {
+            kind: "send_whatsapp",
+            to: "",
+            body: step.body,
+            toAgentNameValue: waWanted
           }
         };
       }
