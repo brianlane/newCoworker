@@ -48,6 +48,8 @@ export type BusinessTelnyxSettingsRow = {
   forward_to_e164: string | null;
   transfer_enabled: boolean;
   sms_fallback_enabled: boolean;
+  /** When true, the AI stays on a warm-transferred call as a live interpreter. */
+  translator_mode_enabled: boolean;
   /** When true, the voice-bridge health cron skips the stale-heartbeat alert (intentional no-bridge tenants). */
   bridge_stale_alert_muted: boolean;
   /** When true, owner/team texts get an internal-assistant reply (staff mode). */
@@ -168,6 +170,14 @@ export type UpsertBusinessTelnyxSettingsInput = {
   transferEnabled?: boolean;
   smsFallbackEnabled?: boolean;
   bridgeStaleAlertMuted?: boolean;
+  /**
+   * Live translator mode: after a warm transfer, the AI stays on the call
+   * interpreting between the caller and the human instead of detaching. Off by
+   * default. Read at ANSWER time by telnyx-voice-inbound (the Telnyx target-legs
+   * parameter cannot be re-pointed mid-call), so a flip applies to the NEXT
+   * call, not one already in progress.
+   */
+  translatorModeEnabled?: boolean;
 };
 
 export async function upsertBusinessTelnyxSettings(
@@ -188,7 +198,8 @@ export async function upsertBusinessTelnyxSettings(
     ["forwardToE164", "forward_to_e164"],
     ["transferEnabled", "transfer_enabled"],
     ["smsFallbackEnabled", "sms_fallback_enabled"],
-    ["bridgeStaleAlertMuted", "bridge_stale_alert_muted"]
+    ["bridgeStaleAlertMuted", "bridge_stale_alert_muted"],
+    ["translatorModeEnabled", "translator_mode_enabled"]
   ];
   const row: Record<string, unknown> = {
     business_id: input.businessId,

@@ -17,7 +17,8 @@ const schema = z.object({
     .optional(),
   transferEnabled: z.boolean().optional(),
   smsFallbackEnabled: z.boolean().optional(),
-  bridgeStaleAlertMuted: z.boolean().optional()
+  bridgeStaleAlertMuted: z.boolean().optional(),
+  translatorModeEnabled: z.boolean().optional()
 });
 
 export async function POST(request: Request) {
@@ -48,7 +49,8 @@ export async function POST(request: Request) {
       forwardToE164: normalizedForward,
       transferEnabled: body.transferEnabled,
       smsFallbackEnabled: body.smsFallbackEnabled,
-      bridgeStaleAlertMuted: body.bridgeStaleAlertMuted
+      bridgeStaleAlertMuted: body.bridgeStaleAlertMuted,
+      translatorModeEnabled: body.translatorModeEnabled
     });
     return successResponse({ settings });
   } catch (err) {

@@ -305,3 +305,56 @@ export function systemInstructionForBusiness(
 
   return base.join(" ");
 }
+
+/**
+ * Coordinator cue that turns a live session into an INTERPRETER, sent the
+ * moment a warm transfer with translator mode armed succeeds.
+ *
+ * Delivered as a mid-call coordinator message (`sendRealtimeInput({ text })`,
+ * the same channel the wind-down cues use) rather than a new system
+ * instruction: Gemini Live cannot swap its system instruction mid-session, and
+ * re-attaching the stream to get a fresh session would tear down this one (the
+ * transcript, the reservation, and everything the caller already said).
+ * Carrying the conversation forward is also the better product: the interpreter
+ * already knows what the caller called about.
+ *
+ * The wording is deliberately absolute. A model that keeps its receptionist
+ * reflexes will answer the human's questions itself, which is worse than not
+ * interpreting at all: the human believes they are hearing the caller.
+ */
+export function translatorModeCue(opts: {
+  /** What the caller has been speaking, when we know it. */
+  callerLanguage?: VoiceCustomerLanguage | null;
+  /** Name of the person who just picked up, when known. */
+  humanName?: string;
+  /** Speak a one-line disclosure to the human as they join. */
+  discloseToHuman?: boolean;
+}): string {
+  const human = opts.humanName?.trim();
+  const callerLang =
+    opts.callerLanguage === "es"
+      ? "Spanish"
+      : opts.callerLanguage === "en"
+        ? "English"
+        : null;
+  const parts: string[] = [
+    "[Coordinator] The call has just been connected to a colleague" +
+      (human ? ` (${human})` : "") +
+      ". From this moment on you are ONLY an interpreter between the two of them. Both of them can hear you.",
+    "Interpret each turn, in both directions, and do nothing else. When the caller speaks, say what they said" +
+      (callerLang ? ` in English` : " in the colleague's language") +
+      ". When your colleague speaks, say what they said" +
+      (callerLang ? ` in ${callerLang}` : " in the caller's language") +
+      ".",
+    "Speak in the FIRST PERSON as whoever you are interpreting, the way a professional interpreter does: if the caller says they need to reschedule, you say I need to reschedule. Never say things like he says or she is asking.",
+    "Never answer a question yourself, never add, explain, soften, summarize, or leave anything out, and never take a side. If a question is directed at you rather than at the other person, interpret it anyway. You have no other job on this call.",
+    "Do not use any tools from here on, do not book, text, email, look anything up, or end the call. Do not greet, do not introduce yourself again, and do not comment on the conversation.",
+    "Say nothing at all while neither of them is speaking. Silence is correct: never fill a pause."
+  ];
+  if (opts.discloseToHuman) {
+    parts.push(
+      "Before your first interpretation, say exactly one short line so your colleague knows you are there, in their language: that you are staying on the line to interpret. Then say nothing until someone speaks."
+    );
+  }
+  return parts.join(" ");
+}

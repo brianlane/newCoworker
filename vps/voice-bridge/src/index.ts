@@ -333,6 +333,13 @@ type TenantTelnyxSettings = {
   smsFallbackEnabled: boolean;
   smsFromE164: string | null;
   messagingProfileId: string | null;
+  /**
+   * Translator mode: after a warm transfer, stay on the call interpreting
+   * between the caller and the human instead of detaching. Only meaningful when
+   * telnyx-voice-inbound ARMED the stream at answer time (target_legs=both) off
+   * this same column, which is why the bridge does not re-derive it per call.
+   */
+  translatorModeEnabled: boolean;
 };
 
 /**
@@ -461,7 +468,7 @@ async function loadTenantTelnyxSettings(
   const { data } = await supabase
     .from("business_telnyx_settings")
     .select(
-      "forward_to_e164, transfer_enabled, sms_fallback_enabled, telnyx_sms_from_e164, telnyx_messaging_profile_id"
+      "forward_to_e164, transfer_enabled, sms_fallback_enabled, telnyx_sms_from_e164, telnyx_messaging_profile_id, translator_mode_enabled"
     )
     .eq("business_id", businessId)
     .maybeSingle();
@@ -471,13 +478,17 @@ async function loadTenantTelnyxSettings(
     sms_fallback_enabled: boolean | null;
     telnyx_sms_from_e164: string | null;
     telnyx_messaging_profile_id: string | null;
+    translator_mode_enabled: boolean | null;
   };
   return {
     forwardToE164: row?.forward_to_e164 ?? null,
     transferEnabled: row?.transfer_enabled ?? true,
     smsFallbackEnabled: row?.sms_fallback_enabled ?? true,
     smsFromE164: row?.telnyx_sms_from_e164 ?? null,
-    messagingProfileId: row?.telnyx_messaging_profile_id ?? null
+    messagingProfileId: row?.telnyx_messaging_profile_id ?? null,
+    // Opt-in: a box running an older schema (column absent) reads as false and
+    // behaves exactly as it did before translator mode existed.
+    translatorModeEnabled: row?.translator_mode_enabled === true
   };
 }
 
@@ -1270,6 +1281,15 @@ function main(): void {
             });
             return { ok: true, detail: "transfer initiated" };
           },
+          // Translator mode: the tenant opted in AND telnyx-voice-inbound armed
+          // this call's stream at answer time off the same column. Without the
+          // answer-time arming the fork reaches only the caller, so staying on
+          // would talk over them while the human hears nothing.
+          translatorMode: tenantSettings.translatorModeEnabled,
+          humanName:
+            (typeof (biz as { owner_name?: string | null } | null)?.owner_name === "string"
+              ? (biz as { owner_name?: string | null }).owner_name!.trim()
+              : "") || undefined,
           // After a successful transfer, remove the AI's media fork so the
           // caller can talk to the human privately. Stops the Telnyx stream
           // (does NOT hang up the caller leg). Best-effort: even if this fails,
@@ -1347,6 +1367,13 @@ function main(): void {
             }
             return { ok: true, detail: "transfer initiated" };
           },
+          // Same tenant opt-in as the receptionist transfer above. This
+          // capability REPLACES that one on a flow-driven call, so without this
+          // line the toggle would silently not apply to a tenant's main voice
+          // flow. Every site that attaches a bridge stream arms off the same
+          // column, so the fork can reach both legs here too.
+          translatorMode: tenantSettings.translatorModeEnabled,
+          humanName: flowTransfer.agentName || undefined,
           detach: async () => {
             if (!telnyxApiKey) return { ok: false, detail: "transfer not configured" };
             const result = await telnyxStreamingStop(telnyxApiKey, callControlId);

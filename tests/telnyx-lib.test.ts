@@ -166,6 +166,56 @@ describe("telnyx call-control", () => {
     expect(body.stream_sampling_rate).toBeUndefined();
   });
 
+  it("telnyxAnswerWithStream omits target legs unless translator mode arms them", async () => {
+    // The parameter must be ABSENT (not "opposite") on a normal call so the
+    // request body stays byte-identical to what shipped before translator mode.
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    await telnyxAnswerWithStream(
+      "key",
+      "c-legs-default",
+      { streamUrl: "wss://x" },
+      fetchMock as typeof fetch
+    );
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.stream_bidirectional_target_legs).toBeUndefined();
+  });
+
+  it("telnyxAnswerWithStream arms both legs for translator mode", async () => {
+    // `both` is what makes the AI audible to the caller AND the human once the
+    // warm transfer bridges them, which is the whole mechanism behind
+    // interpreting a call. Telnyx defaults to `opposite` (caller only).
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    await telnyxAnswerWithStream(
+      "key",
+      "c-legs-both",
+      { streamUrl: "wss://x", targetLegs: "both" },
+      fetchMock as typeof fetch
+    );
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(body.stream_bidirectional_target_legs).toBe("both");
+    // Arming must not disturb the audio contract that the May 2026 outage pinned.
+    expect(body.stream_track).toBe("both_tracks");
+    expect(body.stream_codec).toBe("L16");
+    expect(body.stream_bidirectional_sampling_rate).toBe(16000);
+  });
+
+  it("telnyxStreamingStart carries target legs the same way", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true });
+    await telnyxStreamingStart(
+      "key",
+      "c-ss-legs",
+      { streamUrl: "wss://x", targetLegs: "both" },
+      fetchMock as typeof fetch
+    );
+    const withLegs = JSON.parse((fetchMock.mock.calls[0][1] as RequestInit).body as string);
+    expect(withLegs.stream_bidirectional_target_legs).toBe("both");
+
+    const plain = vi.fn().mockResolvedValue({ ok: true });
+    await telnyxStreamingStart("key", "c-ss-plain", { streamUrl: "wss://x" }, plain as typeof fetch);
+    const withoutLegs = JSON.parse((plain.mock.calls[0][1] as RequestInit).body as string);
+    expect(withoutLegs.stream_bidirectional_target_legs).toBeUndefined();
+  });
+
   it("telnyxAnswerWithStream includes client_state when set", async () => {
     const fetchMock = vi.fn().mockResolvedValue({ ok: true });
     await telnyxAnswerWithStream(

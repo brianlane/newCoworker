@@ -23,6 +23,7 @@ type AssignDidPanelProps = {
   transferEnabled: boolean;
   smsFallbackEnabled: boolean;
   bridgeStaleAlertMuted: boolean;
+  translatorModeEnabled: boolean;
   defaultAreaCode?: string;
   defaultState?: string;
 };
@@ -52,6 +53,9 @@ export function AssignDidPanel(props: AssignDidPanelProps) {
   const [smsFallbackEnabled, setSmsFallbackEnabled] = useState(props.smsFallbackEnabled);
   const [bridgeStaleAlertMuted, setBridgeStaleAlertMuted] = useState(
     props.bridgeStaleAlertMuted
+  );
+  const [translatorModeEnabled, setTranslatorModeEnabled] = useState(
+    props.translatorModeEnabled
   );
 
   const bridge = ADMIN_HEALTH_COPY[resolveBridgeHealthState(props.bridgeHeartbeatAt)];
@@ -173,7 +177,8 @@ export function AssignDidPanel(props: AssignDidPanelProps) {
           forwardToE164: forward.trim().length === 0 ? null : forward.trim(),
           transferEnabled,
           smsFallbackEnabled,
-          bridgeStaleAlertMuted
+          bridgeStaleAlertMuted,
+          translatorModeEnabled
         })
       });
       const json = await res.json();
@@ -305,6 +310,25 @@ export function AssignDidPanel(props: AssignDidPanelProps) {
             onChange={(e) => setTransferEnabled(e.target.checked)}
           />
           Let the AI warm-transfer callers to this number
+        </label>
+        <label className="flex items-start gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
+            className="mt-0.5"
+            checked={translatorModeEnabled}
+            disabled={!transferEnabled}
+            onChange={(e) => setTranslatorModeEnabled(e.target.checked)}
+          />
+          <span>
+            Stay on the call as a live interpreter after a transfer
+            <span className="mt-1 block text-[11px] text-parchment/40">
+              For callers who do not share a language with whoever picks up. The AI
+              hears both people and speaks to both, translating each side. Costs
+              more than a normal transfer: an interpreted call meters BOTH call legs
+              and runs AI for the whole conversation, not just the first few
+              seconds. Applies to the next call, not one already in progress.
+            </span>
+          </span>
         </label>
         <label className="flex items-center gap-2 text-xs text-parchment/70">
           <input

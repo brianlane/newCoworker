@@ -98,7 +98,7 @@ async function resolveBridgeTarget(
   deps: HandoffDeps,
   businessId: string,
   toE164: string
-): Promise<{ origin: string; path: string } | null> {
+): Promise<{ origin: string; path: string; translatorArmed: boolean } | null> {
   if (!envVoiceAiStreamEnabled()) {
     console.warn("handoff: AI stream disabled by flag; skipping takeover");
     return null;
@@ -121,7 +121,9 @@ async function resolveBridgeTarget(
       .maybeSingle(),
     supabase
       .from("business_telnyx_settings")
-      .select("bridge_last_heartbeat_at, bridge_media_wss_origin, bridge_media_path")
+      .select(
+        "bridge_last_heartbeat_at, bridge_media_wss_origin, bridge_media_path, translator_mode_enabled"
+      )
       .eq("business_id", businessId)
       .maybeSingle()
   ]);
@@ -152,7 +154,13 @@ async function resolveBridgeTarget(
     "/voice/stream";
   const pathTrimmed = pathRaw.trim().replace(/\/+$/, "") || "/voice/stream";
   const path = pathTrimmed.startsWith("/") ? pathTrimmed : `/${pathTrimmed}`;
-  return { origin, path };
+  // Translator mode has to be armed when the stream STARTS (Telnyx cannot
+  // re-point a running stream's target legs), so every site that attaches the
+  // bridge reads the same tenant column. Without this, a flow-driven call would
+  // set the interpreter flag on the bridge while its fork could still only reach
+  // the caller: the AI would talk over them while the human heard nothing.
+  const translatorArmed = settings?.translator_mode_enabled === true;
+  return { origin, path, translatorArmed };
 }
 
 /**
@@ -171,6 +179,8 @@ async function attachAiStream(
     fromE164: string;
     origin: string;
     path: string;
+    /** Tenant opted into translator mode (resolveBridgeTarget). */
+    translatorArmed?: boolean;
   }
 ): Promise<boolean> {
   const { supabase, apiKey, streamSecret } = deps;
@@ -209,7 +219,10 @@ async function attachAiStream(
     .replace(/^http:/i, "ws:")
     .replace(/^https:/i, "wss:");
 
-  const res = await telnyxStreamingStart(apiKey, args.callControlId, { streamUrl });
+  const res = await telnyxStreamingStart(apiKey, args.callControlId, {
+    streamUrl,
+    ...(args.translatorArmed ? { targetLegs: "both" as const } : {})
+  });
   if (!res.ok) {
     console.error("handoff: streaming_start failed", res.status, (await res.text()).slice(0, 300));
     return false;
@@ -351,7 +364,8 @@ async function handleOutboundAnswered(
     toE164: ourDid,
     fromE164: callee,
     origin: target.origin,
-    path: target.path
+    path: target.path,
+    translatorArmed: target.translatorArmed
   });
   if (!ok) {
     const { error: relErr } = await supabase.rpc("voice_release_reservation_on_answer_fail", {
@@ -618,7 +632,8 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
         toE164: ctx.to_e164,
         fromE164: sess.from_e164,
         origin: target.origin,
-        path: target.path
+        path: target.path,
+        translatorArmed: target.translatorArmed
       });
       if (!ok) {
         await endHandoff(deps, aLeg);
