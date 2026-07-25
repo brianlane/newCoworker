@@ -220,9 +220,14 @@ export {
   VOICE_CUSTOMER_MEMORY_MAX_CHARS,
   VOICE_FLOW_CONTEXT_MAX_CHARS,
   VOICE_RECENT_INTERACTIONS_MAX_CHARS,
-  type CallerIdentity
+  type CallerIdentity,
+  type VoiceLanguagePrefs
 } from "./system-instruction.js";
-import { systemInstructionForBusiness, type CallerIdentity } from "./system-instruction.js";
+import {
+  systemInstructionForBusiness,
+  type CallerIdentity,
+  type VoiceLanguagePrefs
+} from "./system-instruction.js";
 
 export type GeminiBridgeOptions = {
   ws: WebSocket;
@@ -320,6 +325,13 @@ export type GeminiBridgeOptions = {
    * no booking context — the prompt is identical to the pre-feature shape.
    */
   bookingStatusNote?: string;
+  /**
+   * The caller's resolved language preference (contacts.preferred_language,
+   * else the tenant's businesses.default_customer_language). Undefined keeps
+   * the historical English default. Rides BOTH personas: the receptionist and
+   * the intake takeover.
+   */
+  languagePrefs?: VoiceLanguagePrefs;
   /**
    * Who the caller is (owner / team member / customer). When the caller is
    * staff, the system instruction switches from the customer receptionist
@@ -987,7 +999,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             hasEndCall,
             intake.allowTransfer ? { agentName: intake.transferAgentName } : undefined,
             opts.direction === "outbound",
-            intake.contextNote
+            intake.contextNote,
+            opts.languagePrefs
           )
         : systemInstructionForBusiness(
             opts.businessName,
@@ -1000,7 +1013,8 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             hasEndCall,
             opts.flowContextNote,
             opts.recentInteractionsNote,
-            opts.bookingStatusNote
+            opts.bookingStatusNote,
+            opts.languagePrefs
           ),
       tools: toolsForSession
     },

@@ -27,6 +27,7 @@ import {
 import { composeIntakeLeadSms } from "./intake.js";
 import { loadVoiceFlowContext } from "./flow-run-context.js";
 import { loadVoiceContactTimeline } from "./contact-context.js";
+import { resolveVoiceLanguagePrefs } from "./language-prefs.js";
 import { loadVoiceBookingLine } from "./booking-context.js";
 import type { TranscriptAdapter } from "./voice-transcript.js";
 import { startIdleHeartbeatLoop, writeHeartbeat } from "./heartbeat.js";
@@ -1064,7 +1065,7 @@ function main(): void {
       const tenantSettings = await loadTenantTelnyxSettings(supabase, businessId);
       const { data: biz } = await supabase
         .from("businesses")
-        .select("name, timezone, owner_name, phone")
+        .select("name, timezone, owner_name, phone, default_customer_language")
         .eq("id", businessId)
         .maybeSingle();
       const businessName = typeof biz?.name === "string" && biz.name.length > 0 ? biz.name : "your business";
@@ -1526,6 +1527,37 @@ function main(): void {
             if (bookingLine) bookingStatusNote = `Booking status: ${bookingLine}`;
           }
 
+          // Language: the caller's stored preference, else the tenant default.
+          // Every other channel already reads these two columns; voice used to
+          // hardcode English, so a Spanish-speaking caller was greeted in the
+          // wrong language on every call. Best-effort by contract: a failed
+          // contact read degrades to the tenant default, never a refused call.
+          let contactPreferredLanguage: unknown = null;
+          if (trustedFromE164) {
+            try {
+              const { data: langRow, error: langErr } = await supabase
+                .from("contacts")
+                .select("preferred_language")
+                .eq("business_id", businessId)
+                .eq("customer_e164", trustedFromE164)
+                .maybeSingle();
+              if (langErr) {
+                console.error("voice-bridge: contact language lookup", langErr);
+              } else {
+                contactPreferredLanguage =
+                  (langRow as { preferred_language?: string | null } | null)
+                    ?.preferred_language ?? null;
+              }
+            } catch (e) {
+              console.error("voice-bridge: contact language lookup threw", e);
+            }
+          }
+          const languagePrefs = resolveVoiceLanguagePrefs({
+            contactPreferredLanguage,
+            businessDefaultLanguage: (biz as { default_customer_language?: string | null } | null)
+              ?.default_customer_language
+          });
+
           const bridge = await createGeminiTelnyxBridge({
             ws,
             businessId,
@@ -1552,6 +1584,7 @@ function main(): void {
             flowContextNote,
             recentInteractionsNote,
             bookingStatusNote,
+            languagePrefs,
             callerIdentity,
             intake,
             recordDiag

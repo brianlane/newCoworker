@@ -13,7 +13,10 @@
  */
 import { composeVaultPromptSection, type VaultSnapshot } from "./vault-loader.js";
 import { currentDateTimeLine } from "./datetime-line.js";
-import { customerLanguageLine } from "./customer-language-line.js";
+import {
+  customerLanguageLine,
+  type VoiceCustomerLanguage
+} from "./customer-language-line.js";
 
 /**
  * Who the caller is (owner / team member / customer). When the caller is
@@ -62,6 +65,24 @@ export const VOICE_RECENT_INTERACTIONS_MAX_CHARS = 1400;
 /** Cap on the booking-status line — a single sentence from the platform. */
 export const VOICE_BOOKING_STATUS_MAX_CHARS = 400;
 
+/**
+ * The caller's language, resolved once per call by index.ts. Voice is the only
+ * channel that used to hardcode English here while SMS, Messenger, WhatsApp,
+ * and the Edge IVR all read stored preference, so a Spanish-speaking repeat
+ * caller was greeted in English on every call.
+ *
+ * - `established`: the language we already know this caller uses
+ *   (`contacts.preferred_language`, owner override included). Renders the
+ *   shared module's "Current conversation language" clause, so the model opens
+ *   in Spanish instead of switching only after the caller speaks.
+ * - `defaultLang`: the tenant's `businesses.default_customer_language`, the
+ *   same column the speak-only IVR paths already honor.
+ */
+export type VoiceLanguagePrefs = {
+  established?: VoiceCustomerLanguage | null;
+  defaultLang?: VoiceCustomerLanguage;
+};
+
 export function systemInstructionForBusiness(
   businessName: string,
   hasTransfer: boolean,
@@ -73,7 +94,8 @@ export function systemInstructionForBusiness(
   hasEndCall = false,
   flowContextNote?: string,
   recentInteractionsNote?: string,
-  bookingStatusNote?: string
+  bookingStatusNote?: string,
+  languagePrefs?: VoiceLanguagePrefs
 ): string {
   // Identity: present as a member of the team, never as software. The owner
   // wants callers to hear "the assistant", not "the AI assistant". Shared by
@@ -273,7 +295,12 @@ export function systemInstructionForBusiness(
   }
 
   if (!isStaff) {
-    base.push(customerLanguageLine({ defaultLang: "en" }));
+    base.push(
+      customerLanguageLine({
+        established: languagePrefs?.established ?? null,
+        defaultLang: languagePrefs?.defaultLang ?? "en"
+      })
+    );
   }
 
   return base.join(" ");

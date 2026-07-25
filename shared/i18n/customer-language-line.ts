@@ -19,7 +19,7 @@ export function customerLanguageLine(opts: {
 
   return (
     `Language: reply in the same language the customer uses (${langs} supported). ` +
-    `When they mix languages, follow the language carrying the substance of their message — ` +
+    `When they mix languages, follow the language carrying the substance of their message: ` +
     `broken English with a few Spanish words is still English; fluent Spanish with an English greeting is Spanish. ` +
     `If they switch languages mid-conversation with full sentences, follow the switch. ` +
     `Default to ${defaultLang} when unclear.` +
