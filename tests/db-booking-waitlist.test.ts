@@ -154,6 +154,19 @@ describe("upsertLiveWaitlistEntry", () => {
       current_booking_start_at: "2026-08-04T15:00:00Z",
       current_event_id: "evt-9"
     });
+    // No explicit earliest: the refresh keeps the row's existing bound
+    // instead of silently moving it to "now".
+    expect(update?.args[0]).not.toHaveProperty("earliest_at");
+  });
+
+  it("a refresh with an EXPLICIT earliest updates the bound", async () => {
+    const calls = scriptClient([{ data: row(), error: null }]);
+    await upsertLiveWaitlistEntry(BIZ, {
+      phone: "+15485773546",
+      earliestAtIso: "2026-08-02T00:00:00Z"
+    });
+    const update = calls.find((c) => c.name === "update");
+    expect(update?.args[0]).toMatchObject({ earliest_at: "2026-08-02T00:00:00Z" });
   });
 
   it("inserts a fresh row when no live one exists (created true, defaults applied)", async () => {

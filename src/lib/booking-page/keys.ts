@@ -1,7 +1,7 @@
 /**
  * Capability-token format for the public self-serve booking page.
  *
- * `ncb_<64 hex>` — one token per business, stored in plaintext on
+ * `ncb_<64 hex>`, one token per business, stored in plaintext on
  * `booking_pages.token` (the value ships inside links the owner hands
  * out, so it is public by design, mirroring the webchat site key). It
  * grants nothing beyond "list coarse slot starts and submit one booking

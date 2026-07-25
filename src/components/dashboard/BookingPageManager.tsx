@@ -154,10 +154,12 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
     );
   }
 
-  const directBooking =
-    state.calendarProvider !== null &&
-    state.calendarProvider !== "vagaro" &&
-    state.calendarProvider !== "calendly";
+  // Only Vagaro/Calendly are unsupported (their real book lives on their
+  // own pages). NO connection is fully supported: platform mode, where the
+  // booking ledger is the calendar of record.
+  const unsupportedProvider =
+    state.calendarProvider === "vagaro" || state.calendarProvider === "calendly";
+  const platformMode = state.calendarProvider === null;
   const page = state.page;
 
   const label = "block text-xs uppercase tracking-wider text-parchment/40";
@@ -166,7 +168,7 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
 
   return (
     <div className="space-y-6">
-      {directBooking && state.availability === "unreadable" ? (
+      {!unsupportedProvider && !platformMode && state.availability === "unreadable" ? (
         <Card>
           <h2 className="text-base font-semibold text-red-400">
             {t("calendarUnreadableTitle")}
@@ -185,16 +187,25 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
         </Card>
       ) : null}
 
-      {!directBooking ? (
+      {unsupportedProvider ? (
         <Card>
           <h2 className="text-base font-semibold text-parchment">{t("connectFirstTitle")}</h2>
           <p className="mt-2 text-sm text-parchment/60">
-            {state.calendarProvider === "vagaro"
-              ? t("vagaroNote")
-              : state.calendarProvider === "calendly"
-                ? t("calendlyNote")
-                : t("connectFirstBody")}
+            {state.calendarProvider === "vagaro" ? t("vagaroNote") : t("calendlyNote")}
           </p>
+          <Link
+            href="/dashboard/integrations"
+            className="mt-3 inline-block text-sm text-claw-green hover:underline"
+          >
+            {t("goToIntegrations")}
+          </Link>
+        </Card>
+      ) : null}
+
+      {platformMode ? (
+        <Card>
+          <h2 className="text-base font-semibold text-parchment">{t("platformModeTitle")}</h2>
+          <p className="mt-2 text-sm text-parchment/60">{t("platformModeBody")}</p>
           <Link
             href="/dashboard/integrations"
             className="mt-3 inline-block text-sm text-claw-green hover:underline"
@@ -215,7 +226,7 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
               <input
                 type="checkbox"
                 checked={page.enabled}
-                disabled={saving || !directBooking}
+                disabled={saving || unsupportedProvider}
                 onChange={(e) => void patch({ enabled: e.target.checked })}
               />
               {t("enabledToggle")}
@@ -226,7 +237,7 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
         {!page ? (
           <button
             type="button"
-            disabled={saving || !directBooking}
+            disabled={saving || unsupportedProvider}
             onClick={() => void patch({ enabled: true })}
             className="mt-4 rounded-lg bg-claw-green px-4 py-2 text-sm font-semibold text-deep-ink hover:bg-opacity-90 disabled:opacity-50"
           >

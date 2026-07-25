@@ -109,12 +109,21 @@ export type UpsertWaitlistInput = {
   currentEventId?: string | null;
 };
 
-function upsertColumns(input: UpsertWaitlistInput): Record<string, unknown> {
+function upsertColumns(
+  input: UpsertWaitlistInput,
+  mode: "insert" | "refresh"
+): Record<string, unknown> {
   return {
     ...(input.email !== undefined ? { email: input.email?.trim().toLowerCase() || null } : {}),
     ...(input.name !== undefined ? { name: input.name?.trim() || null } : {}),
     duration_minutes: input.durationMinutes ?? WAITLIST_DEFAULT_DURATION_MINUTES,
-    earliest_at: input.earliestAtIso ?? new Date().toISOString(),
+    // A REFRESH without an explicit earliest keeps the row's existing
+    // bound: silently moving it to "now" would make freed slots earlier
+    // the same day ineligible just because the customer restated the
+    // request (Bugbot Low on PR #903).
+    ...(mode === "insert" || input.earliestAtIso != null
+      ? { earliest_at: input.earliestAtIso ?? new Date().toISOString() }
+      : {}),
     latest_at: input.latestAtIso ?? null,
     current_booking_start_at: input.currentBookingStartAtIso ?? null,
     current_event_id: input.currentEventId ?? null
@@ -139,7 +148,7 @@ export async function upsertLiveWaitlistEntry(
     const refresh = async (): Promise<{ row: BookingWaitlistRow; created: boolean } | null> => {
       const { data, error } = await db
         .from("booking_waitlist")
-        .update({ ...upsertColumns(input), updated_at: new Date().toISOString() })
+        .update({ ...upsertColumns(input, "refresh"), updated_at: new Date().toISOString() })
         .eq("business_id", businessId)
         .eq("phone", phone)
         .in("status", ["waiting", "offered"])
@@ -154,7 +163,7 @@ export async function upsertLiveWaitlistEntry(
 
     const { data, error } = await db
       .from("booking_waitlist")
-      .insert({ business_id: businessId, phone, ...upsertColumns(input) })
+      .insert({ business_id: businessId, phone, ...upsertColumns(input, "insert") })
       .select(ALL_COLUMNS)
       .maybeSingle();
     if (!error && data) {

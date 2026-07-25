@@ -728,6 +728,16 @@ engine's roster evaluators), and the upcoming-bookings list.
 - Submission re-verifies the slot against live availability before the
   write; the dedupe ledger + attendee guard make the write idempotent, so a
   visitor race re-offers slots instead of double-booking.
+- **No calendar integration required (platform mode)**: with zero
+  connections the feature stands on its own. Availability = business hours
+  minus the booking ledger's own upcoming bookings (each blocks a
+  conservative hour), and a booking IS a confirmed `calendar_booking_dedupe`
+  row (synthetic `platform:` event id) with the same Zoom decoration, goal
+  fan-out, owner alert, and contact filing; the Bookings page's upcoming
+  list is the calendar of record and the public confirmation shows the
+  Zoom join link directly (no invite email exists in this mode).
+  Connecting Google/Microsoft/CalDAV later upgrades the page to provider
+  mode automatically.
 - Vagaro/Calendly-resolved tenants deliberately do NOT get the page (Vagaro
   has its own booking site; link-mode Calendly cannot book on the invitee's
   behalf); the Bookings page explains this and calendar resolution order is

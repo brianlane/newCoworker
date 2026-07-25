@@ -10,6 +10,7 @@ import {
   getEnabledBookingPageByToken,
   listBookingStartsBetween,
   listUpcomingBookings,
+  recordPlatformBooking,
   rotateBookingPageToken,
   upsertBookingPage
 } from "@/lib/booking-page/db";
@@ -419,6 +420,51 @@ describe("listBookingStartsBetween", () => {
     await expect(
       listBookingStartsBetween(BIZ, "2026-07-25T00:00:00Z", "2026-07-26T00:00:00Z", client)
     ).rejects.toThrow("listBookingStartsBetween: starts boom");
+  });
+});
+
+describe("recordPlatformBooking", () => {
+  function insertDb(error: { message: string; code?: string } | null = null) {
+    const inserts: Array<Record<string, unknown>> = [];
+    const insert = vi.fn((row: Record<string, unknown>) => {
+      inserts.push(row);
+      return Promise.resolve({ error });
+    });
+    return { client: { from: vi.fn(() => ({ insert })) } as never, inserts };
+  }
+
+  it("inserts the confirmed ledger row (the booking record in platform mode)", async () => {
+    const { client, inserts } = insertDb();
+    const out = await recordPlatformBooking(
+      BIZ,
+      "phone:+14805550100",
+      "2026-07-27T17:00:00.000Z",
+      "platform:abc",
+      "zm-1",
+      client
+    );
+    expect(out).toEqual({ ok: true });
+    expect(inserts[0]).toEqual({
+      business_id: BIZ,
+      attendee_key: "phone:+14805550100",
+      start_at: "2026-07-27T17:00:00.000Z",
+      event_id: "platform:abc",
+      zoom_meeting_id: "zm-1"
+    });
+  });
+
+  it("classifies duplicates and other errors, and falls back to the service client", async () => {
+    const dup = insertDb({ message: "duplicate key", code: "23505" });
+    expect(
+      await recordPlatformBooking(BIZ, "k", "2026-07-27T17:00:00Z", "platform:x", null, dup.client)
+    ).toEqual({ ok: false, reason: "duplicate" });
+
+    const boom = insertDb({ message: "denied" });
+    mockClientFactory.mockResolvedValue(boom.client);
+    expect(
+      await recordPlatformBooking(BIZ, "k", "2026-07-27T17:00:00Z", "platform:x", null)
+    ).toEqual({ ok: false, reason: "error" });
+    expect(mockClientFactory).toHaveBeenCalled();
   });
 });
 

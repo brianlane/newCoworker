@@ -2,7 +2,7 @@
  * `booking_pages` rows: one public self-serve booking page per business.
  *
  * Service-role only (RLS on, no policies). The token is plaintext by
- * design (public capability — see keys.ts); everything else is the
+ * design (public capability, see keys.ts); everything else is the
  * availability policy the slot search applies on top of calendar
  * free/busy.
  */
@@ -285,7 +285,7 @@ export async function rotateBookingPageToken(
 }
 
 export type UpcomingBookingRow = {
-  /** `phone:+1480...` or `email:x@y` — the ledger's attendee identity. */
+  /** `phone:+1480...` or `email:x@y`, the ledger's attendee identity. */
   attendee_key: string;
   start_at: string;
   event_id: string | null;
@@ -293,7 +293,7 @@ export type UpcomingBookingRow = {
 };
 
 /**
- * Upcoming bookings from the dedupe ledger (soonest first) — the Bookings
+ * Upcoming bookings from the dedupe ledger (soonest first), the Bookings
  * dashboard list. Ledger-backed on purpose: it covers platform bookings on
  * every provider plus synced external Vagaro/Calendly claims, without a
  * provider API fan-out on page load.
@@ -315,8 +315,44 @@ export async function listUpcomingBookings(
   return (data ?? []) as UpcomingBookingRow[];
 }
 
+export type PlatformBookingRecord =
+  | { ok: true }
+  | { ok: false; reason: "duplicate" | "error" };
+
 /**
- * Booking start instants from the dedupe ledger inside a UTC window — the
+ * Record a PLATFORM-NATIVE booking (no calendar integration connected):
+ * a confirmed dedupe-ledger row with a synthetic `platform:` event id.
+ * The ledger IS the calendar of record in this mode, the dashboard's
+ * upcoming list, the daily cap, the attendee duplicate guard, and slot
+ * busy-blocking all read it. Unlike recordExternalBookingClaim (a
+ * best-effort sync mirror), a failure here is surfaced: this row is the
+ * booking.
+ */
+export async function recordPlatformBooking(
+  businessId: string,
+  attendeeKey: string,
+  startIso: string,
+  eventId: string,
+  zoomMeetingId: string | null,
+  client?: SupabaseClient
+): Promise<PlatformBookingRecord> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db.from("calendar_booking_dedupe").insert({
+    business_id: businessId,
+    attendee_key: attendeeKey,
+    start_at: startIso,
+    event_id: eventId,
+    zoom_meeting_id: zoomMeetingId
+  });
+  if (!error) return { ok: true };
+  if ((error as { code?: string }).code === "23505") {
+    return { ok: false, reason: "duplicate" };
+  }
+  return { ok: false, reason: "error" };
+}
+
+/**
+ * Booking start instants from the dedupe ledger inside a UTC window, the
  * daily-cap input (covers platform bookings on every provider plus synced
  * external Vagaro/Calendly claims). Callers group by business-local day.
  */
@@ -343,7 +379,7 @@ export async function listBookingStartsBetween(
 
 /**
  * Platform bookings created for a business-local day (UTC instants of the
- * day's bounds are computed by the caller) — the daily-cap input. Counts
+ * day's bounds are computed by the caller), the daily-cap input. Counts
  * the dedupe ledger, so external Vagaro/Calendly claims count too.
  */
 export async function countBookingsBetween(
