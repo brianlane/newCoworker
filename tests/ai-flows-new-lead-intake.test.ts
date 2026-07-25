@@ -172,6 +172,39 @@ describe("seed-amy-new-lead-intake definition", () => {
     }
   });
 
+  /**
+   * Bugbot on #919: while the channel tokens still advertised an "es" value,
+   * an extraction that answered phone_lead_type="es" with lead_language="none"
+   * matched NO intro step and the lead heard nothing. Channel and language are
+   * separate questions, so the channel tokens must never offer a language.
+   */
+  it("the channel tokens carry no language value (only the lead type or none)", () => {
+    const parse = step(buildDefinition(), "parse") as Step & {
+      fields: { name: string; description: string }[];
+    };
+    for (const name of ["phone_lead_type", "email_intro_type"]) {
+      const desc = parse.fields.find((f) => f.name === name)?.description ?? "";
+      expect(desc).not.toMatch(/\bes\b/);
+      expect(desc.toLowerCase()).not.toContain("spanish");
+      expect(desc).toContain("buyer, seller, or both");
+    }
+    // Only lead_language decides the language.
+    const lang = parse.fields.find((f) => f.name === "lead_language")?.description ?? "";
+    expect(lang.toLowerCase()).toContain("spanish");
+  });
+
+  it("every English intro token a step matches is exactly what the extraction can answer", () => {
+    const def = buildDefinition();
+    for (const gateVar of ["phone_lead_type", "email_intro_type"]) {
+      const matched = allSteps(def)
+        .map((s) => s.when)
+        .filter((w) => w?.var === gateVar && w.equals !== undefined)
+        .map((w) => w?.equals);
+      // buyer/seller/both on each referral arm, and nothing else.
+      expect([...new Set(matched)].sort()).toEqual(["both", "buyer", "seller"]);
+    }
+  });
+
   it("the Spanish intro reuses the channel tokens, so language and channel stay independent", () => {
     const def = buildDefinition();
     for (const suffix of ["", "_ref"]) {

@@ -585,20 +585,24 @@ export function buildDefinition(opts?: {
               "Answer exactly es when the message says this lead speaks (or prefers) Spanish. " +
               "Otherwise answer exactly: none"
           },
+          // These two tokens carry the CHANNEL decision only. Language is
+          // lead_language's job alone (the intro branches on it), so they must
+          // never offer a language value: a token no step matches would send
+          // nothing at all (Bugbot on #919).
           {
             name: "phone_lead_type",
             description:
-              "Which intro TEXT to send. If there is a phone and the message does not ask ONLY " +
-              "for a call: answer es when the lead speaks Spanish, else the lead type (buyer, " +
-              "seller, or both). If it asks only for a call, or there is no phone, answer " +
-              "exactly: none"
+              "Whether to TEXT the lead an intro, and which one. If there is a phone number and " +
+              "the message does not ask ONLY for a call, answer the lead type as exactly one " +
+              "lowercase word: buyer, seller, or both. If it asks only for a call, or there is " +
+              "no phone, answer exactly: none"
           },
           {
             name: "email_intro_type",
             description:
-              "Which intro EMAIL to send. Only when there is NO phone but there IS an email: " +
-              "answer es when the lead speaks Spanish, else the lead type (buyer, seller, or " +
-              "both). Otherwise answer exactly: none"
+              "Whether to EMAIL the lead an intro, and which one. Only when the message gives NO " +
+              "phone number but DOES give an email, answer the lead type as exactly one lowercase " +
+              "word: buyer, seller, or both. Otherwise answer exactly: none"
           },
           {
             name: "call_gate",
