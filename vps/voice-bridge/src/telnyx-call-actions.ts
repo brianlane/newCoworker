@@ -134,7 +134,7 @@ export type TelnyxSmsOptions = {
 
 /**
  * Minimal outbound SMS helper — the VPS bridge uses it for the "your AI
- * receptionist couldn't connect, call from X" fallback. It deliberately does
+ * coworker couldn't connect, call from X" fallback. It deliberately does
  * NOT touch Supabase quota counters; that's tracked on the Edge/web side. The
  * bridge cares only about getting the missed-call alert out.
  */

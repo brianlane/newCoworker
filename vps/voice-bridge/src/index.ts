@@ -27,6 +27,10 @@ import {
 import { composeIntakeLeadSms } from "./intake.js";
 import { loadVoiceFlowContext } from "./flow-run-context.js";
 import { loadVoiceContactTimeline } from "./contact-context.js";
+import {
+  loadContactPreferredLanguage,
+  resolveVoiceLanguagePrefs
+} from "./language-prefs.js";
 import { loadVoiceBookingLine } from "./booking-context.js";
 import type { TranscriptAdapter } from "./voice-transcript.js";
 import { startIdleHeartbeatLoop, writeHeartbeat } from "./heartbeat.js";
@@ -1064,7 +1068,7 @@ function main(): void {
       const tenantSettings = await loadTenantTelnyxSettings(supabase, businessId);
       const { data: biz } = await supabase
         .from("businesses")
-        .select("name, timezone, owner_name, phone")
+        .select("name, timezone, owner_name, phone, default_customer_language")
         .eq("id", businessId)
         .maybeSingle();
       const businessName = typeof biz?.name === "string" && biz.name.length > 0 ? biz.name : "your business";
@@ -1526,6 +1530,19 @@ function main(): void {
             if (bookingLine) bookingStatusNote = `Booking status: ${bookingLine}`;
           }
 
+          // Language: the caller's stored preference, else the tenant default.
+          // Every other channel already reads these two columns; voice used to
+          // hardcode English, so a Spanish-speaking caller was greeted in the
+          // wrong language on every call. Best-effort by contract: a failed
+          // contact read degrades to the tenant default, never a refused call.
+          const languagePrefs = resolveVoiceLanguagePrefs({
+            contactPreferredLanguage: trustedFromE164
+              ? await loadContactPreferredLanguage(supabase, businessId, trustedFromE164)
+              : null,
+            businessDefaultLanguage: (biz as { default_customer_language?: string | null } | null)
+              ?.default_customer_language
+          });
+
           const bridge = await createGeminiTelnyxBridge({
             ws,
             businessId,
@@ -1552,6 +1569,7 @@ function main(): void {
             flowContextNote,
             recentInteractionsNote,
             bookingStatusNote,
+            languagePrefs,
             callerIdentity,
             intake,
             recordDiag

@@ -4,6 +4,10 @@
  * without pulling the @google/genai-coupled bridge module.
  */
 import { currentDateTimeLine } from "./datetime-line.js";
+import {
+  customerLanguageLine,
+  type VoiceCustomerLanguage
+} from "./customer-language-line.js";
 
 export const DEFAULT_INTAKE_CAPTURE_FIELDS = ["name", "phone", "address", "timeframe", "notes"];
 
@@ -46,6 +50,12 @@ export function intakeOpener(
  * just answered", and the checklist must NOT ask for a callback number — we
  * literally just called it (the first live test's exact complaint: "why do
  * you need my number if you just called it?").
+ *
+ * `languagePrefs` gives this persona the same bilingual handling the
+ * receptionist persona has. Without it an intake call ran English-only in
+ * practice, so a Spanish-speaking seller reached a takeover that answered in
+ * the wrong language. The captured fields stay ENGLISH regardless, because
+ * they are read by the owner, not the caller.
  */
 export function intakeSystemInstruction(
   businessName: string,
@@ -55,7 +65,11 @@ export function intakeSystemInstruction(
   hasEndCall = false,
   transfer?: { agentName?: string },
   outboundCall = false,
-  contextNote?: string
+  contextNote?: string,
+  languagePrefs?: {
+    established?: VoiceCustomerLanguage | null;
+    defaultLang?: VoiceCustomerLanguage;
+  }
 ): string {
   const opener = intakeOpener(
     businessName,
@@ -132,6 +146,29 @@ export function intakeSystemInstruction(
       transfer
         ? "After you've said your goodbye (when no transfer happened), call the `end_call` tool to hang up. Only end the call once the conversation is genuinely over, and never after a successful transfer — the human conversation continues without you."
         : "After you've captured the lead and said your goodbye, call the `end_call` tool to hang up. Only end the call once the conversation is genuinely over."
+    );
+  }
+  // Punctuation: lockstep copy of the receptionist persona's noEmDashLine
+  // (system-instruction.ts), itself a copy of NO_EM_DASH_PROMPT_LINE. This
+  // persona writes capture_lead values that land verbatim in the owner's SMS.
+  lines.push(
+    "Punctuation: never use an em dash in anything you write. Use a comma, " +
+      "a period, or a colon instead."
+  );
+  const languageLine = customerLanguageLine({
+    established: languagePrefs?.established ?? null,
+    defaultLang: languagePrefs?.defaultLang ?? "en"
+  });
+  if (languageLine) {
+    lines.push(
+      languageLine,
+      // The opener is owner-authored tenant content, so it is spoken as
+      // written rather than machine-translated; the language rule above takes
+      // over from the caller's first reply onward.
+      "Speak your opening line exactly as written above even if you expect the person to prefer another language, then follow their language for the rest of the call.",
+      // The captured fields and notes are read by the OWNER, not the caller,
+      // so they must not arrive in the caller's language.
+      "Whatever language you speak, always write the values you pass to `capture_lead` in ENGLISH: the business owner reads them in a text message. Translate what the person told you rather than passing their words through, and keep names, addresses, and phone numbers exactly as they gave them."
     );
   }
   lines.push(currentDateTimeLine(new Date(), businessTimezone));
