@@ -138,10 +138,22 @@ describe("the bridge only interprets on a call that was armed at answer time", (
 
   it("detaches before teardown at the ceiling so the humans keep talking", () => {
     const fn = src.slice(src.indexOf("const scheduleTranslatorCeiling"));
-    const detachAt = fn.indexOf("opts.transfer.detach");
+    const detachAt = fn.indexOf("const detach = opts.detachMedia ?? opts.transfer?.detach;");
     const teardownAt = fn.indexOf("await teardown()");
     expect(detachAt).toBeGreaterThan(-1);
     expect(teardownAt).toBeGreaterThan(detachAt);
+  });
+
+  it("can detach without a transfer capability, which the staff path has none of", () => {
+    // Regression: the ceiling originally detached only through
+    // transfer.detach, so a tenant with no transfer target would close the
+    // Gemini session while Telnyx kept streaming to a bridge with no session.
+    const fn = src.slice(src.indexOf("const scheduleTranslatorCeiling"));
+    expect(fn.slice(0, 1600)).toContain("opts.detachMedia ?? opts.transfer?.detach");
+    const idx = readFileSync(INDEX, "utf8");
+    // Wired unconditionally on the API key, NOT gated on a transfer target.
+    expect(idx).toContain("const detachMedia = detachMediaApiKey");
+    expect(idx).toContain("detachMedia,");
   });
 });
 

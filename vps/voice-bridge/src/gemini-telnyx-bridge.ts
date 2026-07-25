@@ -291,6 +291,15 @@ export type GeminiBridgeOptions = {
   /** When set, registers an `end_call` tool so the assistant can hang up when done. */
   hangup?: HangupCapability;
   /**
+   * Stop THIS call's media fork (Telnyx `streaming_stop`) without hanging the
+   * leg up. Independent of `transfer`, because translator mode can also be
+   * entered by staff on a tenant that has no transfer target configured at all:
+   * relying on `transfer.detach` there would close the Gemini session at the
+   * interpreter ceiling while leaving Telnyx streaming audio to a bridge that no
+   * longer has a session. Provided by index.ts whenever a Telnyx API key exists.
+   */
+  detachMedia?: () => Promise<{ ok: boolean; detail?: string }>;
+  /**
    * Whether the business received this call (inbound) or placed it (outbound).
    * Recorded on the transcript so the dashboard can tag the call. Defaults to
    * inbound (the historical behaviour) when omitted.
@@ -778,11 +787,22 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
           callControlId: opts.callControlId,
           ceilingMs
         });
-        // Remove the fork first so the humans keep talking privately, then
-        // close the session. Same order (and same best-effort contract) as the
-        // normal post-transfer detach.
+        // Remove the fork FIRST so the humans keep talking privately, then close
+        // the session. `detachMedia` rather than `transfer.detach`: staff can
+        // enter translator mode on a tenant with no transfer target at all, and
+        // that path has no transfer capability to borrow a detach from. Without
+        // it Telnyx would keep streaming audio to a bridge whose session is gone.
+        const detach = opts.detachMedia ?? opts.transfer?.detach;
         try {
-          if (opts.transfer?.detach) await opts.transfer.detach();
+          if (detach) {
+            const d = await detach();
+            if (!d.ok) {
+              console.error("gemini-bridge: translator ceiling detach failed", d.detail);
+              emitDiag("voice_bridge_translator_ceiling_detach_failed", {
+                detail: d.detail ?? null
+              });
+            }
+          }
         } catch (err) {
           console.error("gemini-bridge: translator ceiling detach threw", err);
         }
