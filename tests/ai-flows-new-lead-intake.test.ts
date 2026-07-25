@@ -220,9 +220,32 @@ describe("seed-amy-new-lead-intake definition", () => {
       expect(String(call.contextTemplate)).toContain("{{vars.lead_details}}");
     }
     expect(es.when).toEqual({ var: "lead_language", equals: "es" });
-    expect(en.when).toEqual({ var: "lead_language", equals: "none" });
+    // English is notEquals-"es", NOT equals-"none" (Bugbot on #919): an
+    // extraction that answered "" would otherwise match neither step and
+    // silently skip a call Amy explicitly asked for. The two gates are
+    // exhaustive and mutually exclusive for ANY value.
+    expect(en.when).toEqual({ var: "lead_language", notEquals: "es" });
     expect(String(es.personaTemplate)).toContain("Hola");
     expect(String(en.personaTemplate)).toContain("Amy Laidlaw's office");
+  });
+
+  it("a call still happens when the language extraction came back empty", () => {
+    const def = buildDefinition();
+    const es = step(def, "call_lead_es").when as { var: string; equals?: string };
+    const en = step(def, "call_lead_en").when as { var: string; notEquals?: string };
+    // Mirror the engine's evaluateStepCondition: values are trimmed, a missing
+    // var reads as "", and equals/notEquals are whole-value comparisons.
+    const fires = (value: string) => ({
+      spanish: es.equals === value,
+      english: en.notEquals !== value
+    });
+    for (const value of ["", "none", "en", "unknown"]) {
+      expect(fires(value), `lead_language=${JSON.stringify(value)}`).toEqual({
+        spanish: false,
+        english: true
+      });
+    }
+    expect(fires("es")).toEqual({ spanish: true, english: false });
   });
 
   it("a call request suppresses the intro TEXT but never the routing", () => {

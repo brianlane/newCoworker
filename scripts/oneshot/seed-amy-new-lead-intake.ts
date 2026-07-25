@@ -357,13 +357,17 @@ function callStep(language: "en" | "es"): Record<string, unknown> {
     id: `call_lead_${language}`,
     type: "place_ai_call",
     toVar: "lead_phone",
-    // Inside the call branch: Spanish when the lead speaks it, English
-    // otherwise. The voice AI follows the language they actually speak on the
-    // call regardless, so a wrong guess self-corrects live.
+    // Inside the call branch: Spanish when the lead speaks it, English for
+    // EVERYTHING else. English is deliberately notEquals rather than
+    // equals-"none" so an extraction that answered "" (or anything unexpected)
+    // still places the call Amy asked for. equals-"none" would have left both
+    // steps unmatched and silently skipped the call. The voice AI follows the
+    // language the callee actually speaks anyway, so a wrong guess
+    // self-corrects live.
     when:
       language === "es"
         ? ({ var: "lead_language", equals: "es" } satisfies When)
-        : ({ var: "lead_language", equals: "none" } satisfies When),
+        : ({ var: "lead_language", notEquals: "es" } satisfies When),
     personaTemplate: language === "es" ? CALL_PERSONA_ES : CALL_PERSONA_EN,
     contextTemplate: CALL_CONTEXT,
     captureFields: CALL_CAPTURE_FIELDS,
