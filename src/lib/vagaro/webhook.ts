@@ -364,6 +364,11 @@ export async function processVagaroAppointmentEvent(
   let vacatedStarts: string[] = [];
   try {
     if (gone) {
+      // Minimal cancel payloads may carry only the appointment id, but the
+      // ledger still knows the vacated start(s); read them BEFORE the
+      // delete so the waitlist below can offer them (Bugbot Medium on
+      // PR #903).
+      vacatedStarts = await claimStarts(businessId, appointmentId);
       await deleteClaims(businessId, appointmentId);
       result.ledgerSynced = true;
     } else if (appt && (action === "created" || action === "updated")) {
@@ -407,10 +412,14 @@ export async function processVagaroAppointmentEvent(
     email: wlEmail ?? null
   };
   const hasIdentity = wlAttendee.phones.length > 0 || wlAttendee.email !== null;
-  if (gone && appt?.startIso) {
+  if (gone) {
     if (hasIdentity) await cancelWaitlist(businessId, wlAttendee);
-    await offerSlot(businessId, appt.startIso, {}, hasIdentity ? wlAttendee : undefined);
-  } else if (!gone && (action === "created" || action === "updated") && appt) {
+    // A payload without a start still frees whatever the ledger recorded.
+    const freed = appt?.startIso ? [appt.startIso] : vacatedStarts;
+    for (const startIso of freed) {
+      await offerSlot(businessId, startIso, {}, hasIdentity ? wlAttendee : undefined);
+    }
+  } else if ((action === "created" || action === "updated") && appt) {
     // The customer's own live entries resolve against the booking they now
     // hold (fulfilled when it beat what they were waiting on, re-pointed
     // otherwise), matching the platform book/reschedule cores (Bugbot

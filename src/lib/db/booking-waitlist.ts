@@ -104,7 +104,12 @@ export type UpsertWaitlistInput = {
   name?: string | null;
   durationMinutes?: number;
   earliestAtIso?: string | null;
+  /** Undefined = leave a refreshed row's bound untouched (insert defaults
+   * to the {@link WAITLIST_DEFAULT_WINDOW_DAYS} window); null = unbounded. */
   latestAtIso?: string | null;
+  /** Undefined = leave a refreshed row's booking link untouched (a failed
+   * upcoming-booking lookup must never clobber a real link, Bugbot Medium
+   * on PR #903); null = explicitly unlinked. */
   currentBookingStartAtIso?: string | null;
   currentEventId?: string | null;
 };
@@ -124,9 +129,29 @@ function upsertColumns(
     ...(mode === "insert" || input.earliestAtIso != null
       ? { earliest_at: input.earliestAtIso ?? new Date().toISOString() }
       : {}),
-    latest_at: input.latestAtIso ?? null,
-    current_booking_start_at: input.currentBookingStartAtIso ?? null,
-    current_event_id: input.currentEventId ?? null
+    // Same undefined-means-untouched contract for the window bound and the
+    // booking link: callers omit them when they could not (re)derive them,
+    // and a refresh must not clobber real values. A fresh insert defaults
+    // to the standard window and no link.
+    ...(input.latestAtIso !== undefined
+      ? { latest_at: input.latestAtIso }
+      : mode === "insert"
+        ? {
+            latest_at: new Date(
+              Date.now() + WAITLIST_DEFAULT_WINDOW_DAYS * 24 * 60 * 60_000
+            ).toISOString()
+          }
+        : {}),
+    ...(input.currentBookingStartAtIso !== undefined
+      ? { current_booking_start_at: input.currentBookingStartAtIso }
+      : mode === "insert"
+        ? { current_booking_start_at: null }
+        : {}),
+    ...(input.currentEventId !== undefined
+      ? { current_event_id: input.currentEventId }
+      : mode === "insert"
+        ? { current_event_id: null }
+        : {})
   };
 }
 

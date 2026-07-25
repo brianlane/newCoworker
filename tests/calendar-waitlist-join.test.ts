@@ -101,7 +101,7 @@ describe("joinCalendarWaitlist", () => {
     expect(result.message).toContain("stays as is");
   });
 
-  it("joins unlinked with the default window when no booking exists (explicit latest wins)", async () => {
+  it("joins unlinked when no booking exists (explicit latest wins; default window is the db layer's)", async () => {
     const result = await joinCalendarWaitlist(BIZ, {
       attendeePhone: PHONE,
       latestIso: "2026-08-20T00:00:00Z"
@@ -118,17 +118,21 @@ describe("joinCalendarWaitlist", () => {
     });
     expect(result.message).not.toContain("stays as is");
 
-    // No explicit latest and no booking: the 14-day default window.
+    // No explicit latest and no booking: the bound is OMITTED, so a
+    // refresh keeps the row's window and an insert gets the db default.
     mockUpsert.mockClear();
     await joinCalendarWaitlist(BIZ, { attendeePhone: PHONE });
-    expect(mockUpsert.mock.calls[0][1].latestAtIso).toBe("2026-08-15T00:00:00.000Z");
+    expect(mockUpsert.mock.calls[0][1]).not.toHaveProperty("latestAtIso");
   });
 
-  it("joins unlinked when the upcoming-booking lookup blows up (fail-open, any throw shape)", async () => {
+  it("a failed upcoming-booking lookup never clobbers an existing link (fail-open, any throw shape)", async () => {
     mockUpcoming.mockRejectedValue(new Error("provider down"));
     const result = await joinCalendarWaitlist(BIZ, { attendeePhone: PHONE });
     expect(result.ok).toBe(true);
-    expect(mockUpsert.mock.calls[0][1].currentBookingStartAtIso).toBeNull();
+    // The link columns are omitted entirely: a refreshed entry keeps the
+    // booking link it already holds.
+    expect(mockUpsert.mock.calls[0][1]).not.toHaveProperty("currentBookingStartAtIso");
+    expect(mockUpsert.mock.calls[0][1]).not.toHaveProperty("currentEventId");
     expect(logger.warn).toHaveBeenCalled();
 
     mockUpcoming.mockRejectedValue("string blast");

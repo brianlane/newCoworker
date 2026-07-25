@@ -22,8 +22,7 @@ import { findUpcomingBookingsForAttendee } from "@/lib/calendar-tools/attendee-b
 import {
   getWaitlistSettings,
   upsertLiveWaitlistEntry,
-  WAITLIST_DEFAULT_DURATION_MINUTES,
-  WAITLIST_DEFAULT_WINDOW_DAYS
+  WAITLIST_DEFAULT_DURATION_MINUTES
 } from "@/lib/db/booking-waitlist";
 import { normalizeContactNumber } from "@/lib/telnyx/format";
 import { logger } from "@/lib/logger";
@@ -80,8 +79,12 @@ export async function joinCalendarWaitlist(
     }
 
     // Link the entry to their soonest upcoming booking (any provider, via
-    // the shared adapter). Fail-open: a lookup hiccup joins them unlinked.
+    // the shared adapter). Fail-open, but NEVER destructive: a lookup
+    // hiccup omits the link columns entirely, so a refreshed entry keeps
+    // the booking link it already holds (Bugbot Medium on PR #903); a
+    // fresh insert simply starts unlinked.
     const email = args.attendeeEmail?.trim().toLowerCase() || null;
+    let lookupOk = false;
     let currentStartIso: string | null = null;
     let currentEventId: string | null = null;
     try {
@@ -102,6 +105,7 @@ export async function joinCalendarWaitlist(
         currentStartIso = new Date(Date.parse(soonest.startIso)).toISOString();
         currentEventId = soonest.eventId;
       }
+      lookupOk = true;
     } catch (err) {
       logger.warn("waitlist-join: upcoming-booking lookup failed (joining unlinked)", {
         businessId,
@@ -109,11 +113,16 @@ export async function joinCalendarWaitlist(
       });
     }
 
+    // The window bound: explicit request first, then the linked booking's
+    // start (they want something sooner than it). When neither is known,
+    // the column is OMITTED: a refresh keeps the row's existing bound and
+    // an insert gets the standard default window in the db layer.
     const latestMs = args.latestIso ? Date.parse(args.latestIso) : NaN;
     const latestIso = Number.isFinite(latestMs)
       ? new Date(latestMs).toISOString()
-      : currentStartIso ??
-        new Date(Date.now() + WAITLIST_DEFAULT_WINDOW_DAYS * 24 * 60 * 60_000).toISOString();
+      : lookupOk && currentStartIso
+        ? currentStartIso
+        : undefined;
 
     const upserted = await upsertLiveWaitlistEntry(businessId, {
       phone,
@@ -123,9 +132,10 @@ export async function joinCalendarWaitlist(
         typeof args.durationMinutes === "number" && args.durationMinutes > 0
           ? Math.round(args.durationMinutes)
           : WAITLIST_DEFAULT_DURATION_MINUTES,
-      latestAtIso: latestIso,
-      currentBookingStartAtIso: currentStartIso,
-      currentEventId
+      ...(latestIso !== undefined ? { latestAtIso: latestIso } : {}),
+      ...(lookupOk
+        ? { currentBookingStartAtIso: currentStartIso, currentEventId }
+        : {})
     });
     if (!upserted) {
       return { ok: false, detail: "waitlist_failed" };
@@ -141,7 +151,7 @@ export async function joinCalendarWaitlist(
       data: {
         phone,
         currentBookingStartLocal: currentStartLocal,
-        watchUntilIso: latestIso
+        watchUntilIso: latestIso ?? upserted.row.latest_at
       },
       message:
         `They are on the waitlist. Tell them you will text ${phone} the moment an ` +

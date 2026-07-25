@@ -649,10 +649,28 @@ describe("processVagaroAppointmentEvent", () => {
     );
     expect(d.fireTriggers).not.toHaveBeenCalled();
     expect(d.deleteClaims).toHaveBeenCalledWith(BIZ, "appt-9");
-    // No parsed appointment means no start to offer and no identity to drop.
+    // No parsed appointment, no ledger claims: nothing to offer, nobody to
+    // drop.
     expect(d.offerSlot).not.toHaveBeenCalled();
     expect(d.cancelWaitlist).not.toHaveBeenCalled();
     expect(result.ledgerSynced).toBe(true);
+  });
+
+  it("a bare-id delete still frees the LEDGER-recorded start(s), read before the claim drop", async () => {
+    const d = deps({
+      claimStarts: vi.fn().mockResolvedValue(["2026-07-21T15:00:00.000Z"])
+    });
+    await processVagaroAppointmentEvent(
+      BIZ,
+      apptEvent({ action: "deleted" }, { appointment: { id: "appt-9" } }),
+      d
+    );
+    const readOrder = vi.mocked(d.claimStarts).mock.invocationCallOrder[0];
+    const deleteOrder = vi.mocked(d.deleteClaims).mock.invocationCallOrder[0];
+    expect(readOrder).toBeLessThan(deleteOrder);
+    // No identity in a bare-id payload: the offer runs unexcluded.
+    expect(d.offerSlot).toHaveBeenCalledWith(BIZ, "2026-07-21T15:00:00.000Z", {}, undefined);
+    expect(d.cancelWaitlist).not.toHaveBeenCalled();
   });
 
   it("deleted without a customer identity offers WITHOUT an exclusion and drops nobody", async () => {

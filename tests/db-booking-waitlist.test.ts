@@ -182,12 +182,22 @@ describe("upsertLiveWaitlistEntry", () => {
       business_id: BIZ,
       phone: "+15485773546",
       duration_minutes: WAITLIST_DEFAULT_DURATION_MINUTES,
-      latest_at: null,
+      // Omitted window/link inputs: the standard default window, no link.
+      latest_at: expect.any(String),
       current_booking_start_at: null,
       current_event_id: null
     });
     // email/name were not provided, so the columns are untouched.
     expect(insert?.args[0]).not.toHaveProperty("email");
+
+    // Explicit null latest = deliberately unbounded.
+    const calls2 = scriptClient([
+      { data: null, error: null },
+      { data: created, error: null }
+    ]);
+    await upsertLiveWaitlistEntry(BIZ, { phone: "+15485773546", latestAtIso: null });
+    const insert2 = calls2.find((c) => c.name === "insert");
+    expect(insert2?.args[0]).toMatchObject({ latest_at: null });
   });
 
   it("normalizes explicitly provided blank email/name to null", async () => {
@@ -202,6 +212,10 @@ describe("upsertLiveWaitlistEntry", () => {
     await upsertLiveWaitlistEntry(BIZ, { phone: "+15485773546", email: null, name: "  " });
     const update = calls.find((c) => c.name === "update");
     expect(update?.args[0]).toMatchObject({ email: null, name: null });
+    // Omitted window/link inputs leave a refreshed row's values untouched.
+    expect(update?.args[0]).not.toHaveProperty("latest_at");
+    expect(update?.args[0]).not.toHaveProperty("current_booking_start_at");
+    expect(update?.args[0]).not.toHaveProperty("current_event_id");
   });
 
   it("re-refreshes after a unique-violation insert race", async () => {
