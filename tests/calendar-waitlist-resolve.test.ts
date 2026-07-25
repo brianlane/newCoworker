@@ -83,6 +83,25 @@ describe("resolveWaitlistAfterBooking", () => {
     expect(mockStatus).toHaveBeenCalledWith("wl-1", "fulfilled");
   });
 
+  it("keeps a still-pending EARLIER offer alive: the entry re-points instead of fulfilling", async () => {
+    // Pending offer at 9 AM; they book 11 AM (earlier than their 3 PM).
+    // Fulfilling would orphan the held 9 AM slot, so the entry stays
+    // offered (TTL lifecycle intact) and just re-points at 11 AM.
+    mockFind.mockResolvedValue([
+      entry({
+        status: "offered",
+        offered_start_at: "2026-08-04T09:00:00Z",
+        offer_expires_at: "2026-08-04T10:00:00Z",
+        current_booking_start_at: "2026-08-04T15:00:00Z"
+      })
+    ]);
+    await resolveWaitlistAfterBooking(BIZ, ATTENDEE, "2026-08-04T11:00:00.000Z");
+    expect(mockStatus).not.toHaveBeenCalled();
+    expect(mockLink).toHaveBeenCalledWith("wl-1", {
+      currentBookingStartAtIso: "2026-08-04T11:00:00.000Z"
+    });
+  });
+
   it("an UNLINKED entry's first booking re-points instead of fulfilling (the request survives)", async () => {
     // "Text me if anything sooner opens up" then booking today's earliest
     // available time must keep them in line for something earlier.

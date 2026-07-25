@@ -26,8 +26,13 @@ export type WaitlistAttendee = {
  * `newStartIso`. Their live waitlist entries resolve:
  *
  *  - the new start is at or before the entry's pending offer, or earlier
- *    than the booking the entry was trying to beat → FULFILLED (they got
- *    their earlier time);
+ *    than the booking the entry was trying to beat (with no better offer
+ *    pending) → FULFILLED (they got their earlier time);
+ *  - an OFFERED entry whose pending offer is still earlier than the new
+ *    start only re-points: the offer stays live under its own TTL (they
+ *    may still take it; if not, the sweep hands the held slot to the next
+ *    candidate). Fulfilling here would silently orphan the held slot
+ *    (Bugbot Medium on PR #903);
  *  - otherwise (they moved their appointment LATER, booked an additional
  *    later slot, or an UNLINKED entry just got its first booking) → the
  *    entry stays live and re-points at the new booking, so "earlier"
@@ -51,8 +56,9 @@ export async function resolveWaitlistAfterBooking(
         ? Date.parse(entry.current_booking_start_at)
         : NaN;
       const acceptedOffer = Number.isFinite(offeredMs) && newStartMs <= offeredMs;
+      const offerStillPending = entry.status === "offered" && Number.isFinite(offeredMs);
       const beatCurrent = Number.isFinite(currentMs) && newStartMs < currentMs;
-      if (acceptedOffer || beatCurrent) {
+      if (acceptedOffer || (beatCurrent && !offerStillPending)) {
         await setWaitlistStatus(entry.id, "fulfilled");
       } else {
         await updateWaitlistBookingLink(entry.id, {
