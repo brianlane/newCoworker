@@ -62,10 +62,35 @@ export function compileVoiceFlow(
     (s): s is Extract<FlowStep, { type: "voice_ai_intake" }> => s.type === "voice_ai_intake"
   );
   if (intake && typeof intake.notifyE164 === "string" && intake.notifyE164.trim()) {
+    const alsoNotify =
+      typeof intake.alsoNotifyE164 === "string" ? intake.alsoNotifyE164.trim() : "";
+    // Author-time camelCase becomes the runtime snake_case the session row and
+    // the on-box bridge read. Absent fields stay absent so an ordinary takeover
+    // chain's persisted context is unchanged by this feature existing.
+    const digits = Array.isArray(intake.acceptDigits)
+      ? intake.acceptDigits
+          .filter((d) => typeof d?.digit === "string" && d.digit.trim())
+          .map((d) => ({
+            digit: d.digit.trim(),
+            // An unauthored wait stays ABSENT rather than becoming 0, so the
+            // runtime applies the announcement default instead of pressing into
+            // an announcement that is still playing.
+            ...(typeof d.afterSeconds === "number" ? { after_seconds: d.afterSeconds } : {})
+          }))
+      : [];
     aiTakeover = {
       notify_e164: intake.notifyE164.trim(),
       ...(intake.persona ? { persona: intake.persona } : {}),
-      ...(Array.isArray(intake.captureFields) ? { capture_fields: intake.captureFields } : {})
+      ...(Array.isArray(intake.captureFields) ? { capture_fields: intake.captureFields } : {}),
+      ...(alsoNotify ? { also_notify_e164: alsoNotify } : {}),
+      ...(intake.answerFirst === true ? { answer_first: true } : {}),
+      ...(digits.length > 0 ? { accept_digits: digits } : {}),
+      ...(typeof intake.mediaStartSeconds === "number"
+        ? { media_start_seconds: intake.mediaStartSeconds }
+        : {}),
+      ...(typeof intake.briefFromSmsContaining === "string" && intake.briefFromSmsContaining.trim()
+        ? { brief_sms_contains: intake.briefFromSmsContaining.trim() }
+        : {})
     };
   }
 

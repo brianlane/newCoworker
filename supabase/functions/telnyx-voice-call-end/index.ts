@@ -13,7 +13,6 @@ import {
 import {
   telnyxHangupCall,
   telnyxSendDtmf,
-  telnyxStreamingStart,
   telnyxTransferCall
 } from "../_shared/telnyx_call_actions.ts";
 import {
@@ -22,7 +21,7 @@ import {
   parseHandoffClientState,
   planHandoffAdvance
 } from "../_shared/voice_handoff.ts";
-import { signStreamUrlMac, type StreamPayloadV2 } from "../_shared/stream_url.ts";
+import { attachAiStream, resolveBridgeTarget } from "../_shared/voice_ai_attach.ts";
 import { reserveVoiceBudget } from "../_shared/voice_reserve.ts";
 import { parseOutboundClientState } from "../_shared/voice_outbound.ts";
 import {
@@ -83,152 +82,8 @@ type HandoffDeps = {
   stripeSecret: string;
 };
 
-function envVoiceAiStreamEnabled(): boolean {
-  const v = (Deno.env.get("VOICE_AI_STREAM_ENABLED") ?? "true").trim().toLowerCase();
-  return v !== "false" && v !== "0" && v !== "no";
-}
-
-/**
- * Resolve the bridge media target (origin + path) for an AI takeover, gated on
- * a fresh bridge heartbeat. Returns null when AI streaming is disabled, the
- * bridge is unhealthy, or no origin is configured — the caller then aborts the
- * takeover instead of connecting the client to dead air.
- */
-async function resolveBridgeTarget(
-  deps: HandoffDeps,
-  businessId: string,
-  toE164: string
-): Promise<{ origin: string; path: string; translatorArmed: boolean } | null> {
-  if (!envVoiceAiStreamEnabled()) {
-    console.warn("handoff: AI stream disabled by flag; skipping takeover");
-    return null;
-  }
-  // Without the signing secret attachAiStream would mint a stream URL with an
-  // empty/invalid MAC; Telnyx streaming_start would still return 200 but the VPS
-  // bridge rejects the WebSocket, leaving the connected seller in silence with no
-  // cleanup. Gate the takeover here (before any DTMF) so the caller aborts and
-  // ends the call cleanly instead.
-  if (!deps.streamSecret) {
-    console.error("handoff: STREAM_URL_SIGNING_SECRET missing; cannot AI-takeover", { businessId });
-    return null;
-  }
-  const { supabase, defaultBridgeOrigin } = deps;
-  const [{ data: route }, { data: settings }] = await Promise.all([
-    supabase
-      .from("telnyx_voice_routes")
-      .select("media_wss_origin, media_path")
-      .eq("to_e164", toE164)
-      .maybeSingle(),
-    supabase
-      .from("business_telnyx_settings")
-      .select(
-        "bridge_last_heartbeat_at, bridge_media_wss_origin, bridge_media_path, translator_mode_enabled"
-      )
-      .eq("business_id", businessId)
-      .maybeSingle()
-  ]);
-
-  const heartbeatTtlSec = (() => {
-    const raw = Number(Deno.env.get("BRIDGE_HEARTBEAT_TTL_SEC") ?? "150");
-    return Number.isFinite(raw) && raw >= 60 ? Math.floor(raw) : 150;
-  })();
-  const hb = settings?.bridge_last_heartbeat_at
-    ? new Date(settings.bridge_last_heartbeat_at as string).getTime()
-    : 0;
-  if (!hb || Date.now() - hb > heartbeatTtlSec * 1000) {
-    console.error("handoff: bridge down, cannot AI-takeover", { businessId });
-    return null;
-  }
-
-  const origin =
-    (route?.media_wss_origin as string | null) ??
-    (settings?.bridge_media_wss_origin as string | null) ??
-    defaultBridgeOrigin;
-  if (!origin) {
-    console.error("handoff: no bridge origin for AI-takeover", { businessId });
-    return null;
-  }
-  const pathRaw =
-    (route?.media_path as string | null) ??
-    (settings?.bridge_media_path as string | null) ??
-    "/voice/stream";
-  const pathTrimmed = pathRaw.trim().replace(/\/+$/, "") || "/voice/stream";
-  const path = pathTrimmed.startsWith("/") ? pathTrimmed : `/${pathTrimmed}`;
-  // Translator mode has to be armed when the stream STARTS (Telnyx cannot
-  // re-point a running stream's target legs), so every site that attaches the
-  // bridge reads the same tenant column. Without this, a flow-driven call would
-  // set the interpreter flag on the bridge while its fork could still only reach
-  // the caller: the AI would talk over them while the human heard nothing.
-  const translatorArmed = settings?.translator_mode_enabled === true;
-  return { origin, path, translatorArmed };
-}
-
-/**
- * Mint a signed v2 media-stream URL and attach the Gemini bridge to the
- * already-answered A-leg via streaming_start. Mirrors the URL signing the main
- * inbound path does at answer time. Unlike the main path this does NOT
- * reserve/bill — the warm-handoff fallback is unmetered like the per-caller
- * transfer rules (it only runs when both humans miss a HomeLight transfer).
- */
-async function attachAiStream(
-  deps: HandoffDeps,
-  args: {
-    businessId: string;
-    callControlId: string;
-    toE164: string;
-    fromE164: string;
-    origin: string;
-    path: string;
-    /** Tenant opted into translator mode (resolveBridgeTarget). */
-    translatorArmed?: boolean;
-  }
-): Promise<boolean> {
-  const { supabase, apiKey, streamSecret } = deps;
-  const exp = Math.floor(Date.now() / 1000) + 120;
-  const nonce = crypto.randomUUID().replace(/-/g, "");
-  const streamPayload: StreamPayloadV2 = {
-    v: 2,
-    call_control_id: args.callControlId,
-    business_id: args.businessId,
-    to_e164: args.toE164,
-    from_e164: args.fromE164,
-    exp,
-    nonce
-  };
-  const mac = await signStreamUrlMac(streamPayload, streamSecret);
-  const expiresAt = new Date((exp + 60) * 1000).toISOString();
-  const { error: nonceErr } = await supabase
-    .from("stream_url_nonces")
-    .insert({ nonce, expires_at: expiresAt });
-  if (nonceErr) {
-    console.error("handoff: nonce insert failed", nonceErr);
-    return false;
-  }
-
-  const qs = new URLSearchParams({
-    v: "2",
-    call_control_id: args.callControlId,
-    business_id: args.businessId,
-    to_e164: args.toE164,
-    exp: String(exp),
-    nonce,
-    mac
-  });
-  if (args.fromE164) qs.set("from_e164_info", args.fromE164);
-  const streamUrl = `${args.origin.replace(/\/$/, "")}${args.path}?${qs.toString()}`
-    .replace(/^http:/i, "ws:")
-    .replace(/^https:/i, "wss:");
-
-  const res = await telnyxStreamingStart(apiKey, args.callControlId, {
-    streamUrl,
-    ...(args.translatorArmed ? { targetLegs: "both" as const } : {})
-  });
-  if (!res.ok) {
-    console.error("handoff: streaming_start failed", res.status, (await res.text()).slice(0, 300));
-    return false;
-  }
-  return true;
-}
+// resolveBridgeTarget / attachAiStream moved to _shared/voice_ai_attach.ts when
+// telnyx-voice-inbound needed the identical sequence for AI-first answering.
 
 /**
  * Outbound origination: a `call.answered` for an AiFlow-placed call (vob
@@ -620,11 +475,22 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
       // bridge — otherwise the AI greeting plays to the IVR / dead air. If the
       // DTMF fails the client is never bridged, so abort rather than run the
       // intake assistant against hold music (and text Amy a phantom lead).
-      const dt = await telnyxSendDtmf(apiKey, aLeg, "1");
-      if (!dt.ok) {
-        console.error("handoff: send_dtmf failed", dt.status, (await dt.text()).slice(0, 300));
-        await endHandoff(deps, aLeg);
-        return jsonOk("handoff_dtmf_failed");
+      //
+      // SKIPPED when the AI-first path already accepted on this call (it stamps
+      // accept_sent before falling back to the rings): the partner's IVR is long
+      // past and the customer is already connected, so pressing again would send
+      // a stray tone into a live conversation.
+      if (ctx.ai_takeover?.accept_sent === true) {
+        console.log("handoff: accept digits already sent by the AI-first path; not re-pressing", {
+          call: aLeg
+        });
+      } else {
+        const dt = await telnyxSendDtmf(apiKey, aLeg, "1");
+        if (!dt.ok) {
+          console.error("handoff: send_dtmf failed", dt.status, (await dt.text()).slice(0, 300));
+          await endHandoff(deps, aLeg);
+          return jsonOk("handoff_dtmf_failed");
+        }
       }
       const ok = await attachAiStream(deps, {
         businessId: sess.business_id,

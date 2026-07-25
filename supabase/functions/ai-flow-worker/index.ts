@@ -1817,6 +1817,8 @@ async function runStep(
       return notifyLeadOwnerStep(supabase, run, scope, action);
     case "arm_voice_transfer":
       return armVoiceTransferStep(supabase, run, scope, action);
+    case "voice_brief":
+      return voiceBriefStep(supabase, run, scope, action);
     case "http_call":
       return httpCallStep(run, scope, action);
     case "await_approval":
@@ -6200,6 +6202,48 @@ async function armVoiceTransferStep(
     kind: "ok",
     result: { to: toE164, window_minutes: action.windowMinutes, expires_at: expiresAt }
   };
+}
+
+/**
+ * voice_brief: hand what this run just learned to the AI that is ON a call with
+ * the partner right now (voice_set_call_brief replaces the live session's
+ * context_note; the on-box bridge polls it and briefs the model mid-sentence).
+ *
+ * Best-effort BY DESIGN, and a no-op on most runs: the AI-first call only
+ * happens for some referrals, so "no live call to brief" is the normal case and
+ * must never fail a run whose texts and emails still need to go out.
+ */
+async function voiceBriefStep(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "voice_brief" }>
+): Promise<StepOutcome> {
+  if (action.skipReason) {
+    return { kind: "ok", result: { skipped: action.skipReason } };
+  }
+  const { data, error } = await supabase.rpc("voice_set_call_brief", {
+    p_business_id: run.business_id,
+    p_from_e164: action.fromE164,
+    p_note: action.note,
+    p_within_minutes: action.withinMinutes
+  });
+  if (error) {
+    // A briefing hiccup must not cost the lead its follow-up steps.
+    console.error("voice_brief: rpc failed", error.message);
+    return { kind: "ok", result: { skipped: "brief_rpc_error", detail: error.message } };
+  }
+  const briefed = typeof data === "number" ? data : Number(data ?? 0);
+  if (briefed > 0) {
+    appendActionTaken(scope, `briefed the AI on the live call from ${action.fromE164}`);
+    await telemetryRecord(supabase, "ai_flow_voice_brief_delivered", {
+      run_id: run.id,
+      business_id: run.business_id,
+      flow_id: run.flow_id,
+      sessions: briefed
+    });
+  }
+  return { kind: "ok", result: { briefed, from: action.fromE164 } };
 }
 
 async function httpCallStep(

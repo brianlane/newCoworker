@@ -216,6 +216,15 @@ export type IntakeCapability = {
   allowTransfer?: boolean;
   /** Display name of the transfer target ("one moment while I get Dave on the line"). */
   transferAgentName?: string;
+  /**
+   * MID-CALL brief source. An AI-first call (voice_ai_intake.answerFirst) is
+   * answered within seconds of the partner's alert text, while the flow's own
+   * portal read only finishes about a minute later. When set, the bridge polls
+   * this for the session's current note and, the moment it changes, tells the
+   * model what just arrived so it can work the details into the conversation it
+   * is already having. Returns the note ("" when unavailable); never throws.
+   */
+  pollBrief?: () => Promise<string>;
 };
 
 export type { CapturedLead } from "./intake.js";
@@ -1713,6 +1722,54 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     diag.uplinkPeakSampleWindow = 0;
   }, 15000);
   timers.push(heartbeat as unknown as NodeJS.Timeout);
+
+  // Mid-call brief: an AI-first call answers within seconds of the partner's
+  // alert, so the details its own flow extracts land while the AI is already
+  // talking. Poll the session's note and, when it changes, hand it over as a
+  // NON-spoken cue: the model weaves it in and acknowledges it arrived, which is
+  // the whole point: the customer must not be asked to repeat what we now have.
+  // Suppressed during translator mode (the AI is interpreting two humans, not
+  // running an intake) and after the session ends.
+  if (intake?.pollBrief) {
+    const pollBrief = intake.pollBrief;
+    let briefedNote = (intake.contextNote ?? "").trim();
+    let briefPollInFlight = false;
+    const briefPoll = setInterval(() => {
+      if (ended || translatorActive || briefPollInFlight) return;
+      briefPollInFlight = true;
+      void pollBrief()
+        .then((note) => {
+          const next = (note ?? "").trim();
+          if (!next || next === briefedNote || ended || translatorActive) return;
+          // voice_set_call_brief APPENDS, so the field holds everything the model
+          // has ever been told. Send only what is new: announcing the pre-call
+          // alert text as having "just arrived" would have the AI tell the
+          // customer their details came through when nothing actually changed.
+          const delta = next.startsWith(briefedNote)
+            ? next.slice(briefedNote.length).trim()
+            : next;
+          briefedNote = next;
+          if (!delta) return;
+          session.sendRealtimeInput({
+            text:
+              `[Coordinator, do NOT read this aloud] The office just received the client's details: ${delta} ` +
+              "Use them from now on and never ask for anything they cover. If the customer already gave you one of these, or you had to ask because we did not have them, briefly acknowledge that their information has now come through so they never repeat themselves. Then carry on naturally from wherever the conversation is."
+          });
+          console.log("gemini-bridge: mid-call brief delivered", {
+            callControlId: opts.callControlId,
+            chars: delta.length
+          });
+          emitDiag("voice_bridge_midcall_brief", { chars: delta.length });
+        })
+        .catch((err) => {
+          console.warn("gemini-bridge: mid-call brief poll failed (non-fatal)", err);
+        })
+        .finally(() => {
+          briefPollInFlight = false;
+        });
+    }, 15000);
+    timers.push(briefPoll as unknown as NodeJS.Timeout);
+  }
 
   // Every wind-down cue is suppressed once translator mode takes over: they are
   // written for an AI-led call ("you need to start wrapping up", "say goodbye"),

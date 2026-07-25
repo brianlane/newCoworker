@@ -596,6 +596,8 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
       };
     case "ring_handoff":
       return { id, type, toE164: "", ringSeconds: 20 };
+    case "voice_brief":
+      return { id, type, fromE164: "", noteTemplate: "", withinMinutes: 30 };
     case "voice_ai_intake":
       return {
         id,
@@ -5337,6 +5339,127 @@ function StepFields({
         >
           + detail
         </button>
+        <ContactRefPicker
+          label="Also text the summary to (optional)"
+          placeholder="+16025551234"
+          textValue={step.alsoNotifyE164 ?? ""}
+          refValue={step.alsoNotifyRef}
+          people={people}
+          onChangeText={(v) =>
+            patchStep(index, { alsoNotifyE164: v.trim() ? v.trim() : undefined })
+          }
+          onChangeRef={(ref) => patchStep(index, { alsoNotifyRef: ref, alsoNotifyE164: undefined })}
+          help="A second copy of the same summary, e.g. the details go to the agent working the lead and a copy to you."
+        />
+        <div className="rounded-md border border-parchment/10 p-3 space-y-2">
+          <label className="flex items-center gap-2 text-sm text-parchment/70">
+            <input
+              type="checkbox"
+              checked={step.answerFirst === true}
+              onChange={(ev) =>
+                patchStep(index, {
+                  answerFirst: ev.target.checked ? true : undefined,
+                  ...(ev.target.checked
+                    ? {}
+                    : {
+                        acceptDigits: undefined,
+                        mediaStartSeconds: undefined,
+                        briefFromSmsContaining: undefined
+                      })
+                })
+              }
+            />
+            The AI answers this call itself
+          </label>
+          <p className="text-[11px] text-parchment/40">
+            Instead of ringing the people above, the AI picks up immediately and handles the
+            whole call. They become the backup, rung only if the AI cannot run (no voice
+            minutes left, or the AI is offline). Use it for a partner line where accepting on
+            the call is what wins the lead.
+          </p>
+          {step.answerFirst === true && (
+            <>
+              <Field
+                label="Press these keys after answering"
+                value={(step.acceptDigits ?? [])
+                  .map((d) => `${d.digit}@${d.afterSeconds ?? 0}`)
+                  .join(", ")}
+                onChange={(v) => {
+                  // "1@3, 1@2" reads as: press 1 after 3s, then 1 after 2 more.
+                  const parsed = v
+                    .split(",")
+                    .map((chunk) => chunk.trim())
+                    .filter(Boolean)
+                    .map((chunk) => {
+                      const [digit, secs] = chunk.split("@");
+                      const raw = (secs ?? "").trim();
+                      const n = Number(raw);
+                      // A written "@0" MUST persist as 0: omitting it would mean
+                      // "no wait chosen", which the engine reads as the
+                      // announcement default, the opposite of what was typed.
+                      const authored = raw.length > 0 && Number.isFinite(n) && n >= 0;
+                      return {
+                        digit: (digit ?? "").trim(),
+                        ...(authored ? { afterSeconds: Math.round(n) } : {})
+                      };
+                    })
+                    .filter((d) => /^[0-9*#]$/.test(d.digit));
+                  patchStep(index, { acceptDigits: parsed.length ? parsed : undefined });
+                }}
+                help='Digit@seconds, in order, e.g. "1@3" presses 1 three seconds in, once the announcement has played. Blank presses 1 after 3 seconds.'
+              />
+              <Field
+                label="Wait this long before the AI speaks (seconds)"
+                value={String(step.mediaStartSeconds ?? 2)}
+                onChange={(v) => {
+                  const n = Number(v);
+                  patchStep(index, {
+                    mediaStartSeconds:
+                      Number.isFinite(n) && n >= 0 ? Math.round(n) : undefined
+                  });
+                }}
+                help="Time for the partner to connect the customer after you accept, so the AI does not greet hold music. The keys plus this wait cannot exceed 5 seconds total."
+              />
+              <Field
+                label="Brief the AI from the alert text containing (optional)"
+                value={step.briefFromSmsContaining ?? ""}
+                onChange={(v) =>
+                  patchStep(index, { briefFromSmsContaining: v.trim() ? v.trim() : undefined })
+                }
+                help='e.g. "HomeLight Referral". The newest text containing this becomes what the AI already knows when it picks up, since the call arrives seconds after the alert.'
+              />
+            </>
+          )}
+        </div>
+      </div>
+    );
+  }
+  if (step.type === "voice_brief") {
+    return (
+      <div className="space-y-2">
+        <Field
+          label="The line whose live call to brief (E.164)"
+          value={step.fromE164 ?? ""}
+          onChange={(v) => patchStep(index, { fromE164: v.trim() })}
+          help="The number the call came FROM, e.g. the referral partner's line. Nothing happens when no call from it is live."
+        />
+        <Field
+          label="What the AI should now know"
+          value={step.noteTemplate ?? ""}
+          onChange={(v) => patchStep(index, { noteTemplate: v })}
+          textarea
+          help='Rendered from this run, e.g. "Client notes: {{vars.lead_notes}}. Property: {{vars.lead_address}}." The AI works it in and tells them their details came through, so they never repeat themselves.'
+        />
+        <Field
+          label="Only brief a call started within (minutes)"
+          value={String(step.withinMinutes ?? 30)}
+          onChange={(v) => {
+            const n = Number(v);
+            patchStep(index, {
+              withinMinutes: Number.isFinite(n) && n > 0 ? Math.round(n) : undefined
+            });
+          }}
+        />
       </div>
     );
   }

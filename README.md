@@ -1066,6 +1066,55 @@ outbound send is appended to the conversation transcript so replies thread
 into the inbox. Meta app config steps live in
 `PRDs/whatsapp-meta-app-config.md`.
 
+## Voice call routing: the AI answers the call itself (`answerFirst`)
+
+A `voice_ai_intake` step normally takes over only after every `ring_handoff`
+missed. With **`answerFirst`** the order inverts: the AI answers the partner's
+call immediately and the ring steps become the fallback for when it cannot run
+(no voice budget, unhealthy bridge, refused DTMF). Built for a referral line
+that calls within seconds of texting its alert, where **pressing the accept
+digits is what claims the referral**, so a human picking up is not what wins it.
+
+- **The accept sequence is authored, not hardcoded**: `acceptDigits`
+  (`[{ digit, afterSeconds }]`, in order, so an IVR announcement can finish
+  first) then `mediaStartSeconds` before the Gemini bridge attaches, so the AI
+  never greets hold music while the partner dials the customer. Defaults: press
+  `1` at 3s, media 2s later. The whole sequence runs inside ONE Telnyx webhook,
+  so `AI_FIRST_MAX_DELAY_SECONDS` (5s) caps it, enforced at author time and
+  clamped again at runtime by dropping trailing waits rather than pressing
+  early. A longer announcement needs the continuation driven off a later Telnyx
+  event instead of stretching that handler.
+- **The AI knows what the alert said.** `briefFromSmsContaining` (e.g.
+  `"HomeLight Referral"`) makes the answer path read the newest matching inbound
+  text straight from `sms_inbound_jobs` and stamp it onto
+  `ai_takeover.context_note`, which the bridge already injects as "What you
+  ALREADY KNOW about this person". This cannot come from the flow run: the
+  partner texts and then calls about four seconds later, while the ai-flow-worker
+  ticks roughly once a minute, so no flow step has executed when the AI picks up.
+- **`voice_brief` briefs a call ALREADY in progress.** An SMS-triggered flow
+  finishes reading the partner's portal about a minute into the call; that step
+  calls `voice_set_call_brief`, which **appends** to the same `context_note`
+  (never overwrites, so the alert brief survives), and the bridge polls the field
+  every ~15s and tells the model mid-conversation to use the details **and
+  acknowledge they just arrived**, so the customer is never asked to repeat
+  themselves. It plans a skip when no var contributed, so a dry extraction cannot
+  dilute what the AI knows, and it is a recorded no-op when no call is live.
+- **`alsoNotifyE164` / `alsoNotifyRef`** send a second copy of the post-call
+  summary (the lead details to the agent working it, a copy to the owner).
+- Every failure before the media attaches leaves the session `ringing` and
+  transfers to step 0, so a live customer is never dropped because the AI could
+  not run. Telemetry: `voice_ai_first_started` / `voice_ai_first_fallback`
+  (with the failing stage).
+- `resolveBridgeTarget` / `attachAiStream` live in
+  [supabase/functions/_shared/voice_ai_attach.ts](supabase/functions/_shared/voice_ai_attach.ts),
+  shared with the takeover path in `telnyx-voice-call-end` so the two can never
+  drift. Both fail closed: no signing secret, a stale bridge heartbeat, or no
+  configured origin means no attach.
+
+Live on Amy Laidlaw's HomeLight live transfer. Enabling it for a tenant needs a
+voice-bridge redeploy (`tsx debug/redeploy-voice-bridge.ts --business-id <uuid>`)
+for the mid-call brief and the second summary recipient.
+
 ## Voice call routing: star-framed alerts (`options.starAlerts`)
 
 A voice warm-handoff flow can frame every alert text it sends in a row of

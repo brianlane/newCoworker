@@ -2913,6 +2913,118 @@ describe("voice trigger + voice steps", () => {
     expect(validateDefinitionSemantics(def)).toEqual([]);
   });
 
+  describe("AI-first intake (answerFirst)", () => {
+    const aiFirstFlow = (intake: Record<string, unknown>) => ({
+      version: 1,
+      trigger: { channel: "voice", fromE164: "+14159851909" },
+      steps: [
+        { id: "r1", type: "ring_handoff", toE164: "+16025245719", ringSeconds: 20 },
+        { id: "ai", type: "voice_ai_intake", notifyE164: "+16025245719", ...intake }
+      ]
+    });
+
+    it("accepts the full AI-first configuration", () => {
+      const def = parseAiFlowDefinition(
+        aiFirstFlow({
+          alsoNotifyE164: "+16026951142",
+          answerFirst: true,
+          acceptDigits: [{ digit: "1", afterSeconds: 3 }],
+          mediaStartSeconds: 2,
+          briefFromSmsContaining: "HomeLight Referral"
+        })
+      );
+      expect(validateDefinitionSemantics(def)).toEqual([]);
+      const intake = def.steps[1];
+      if (intake.type !== "voice_ai_intake") throw new Error("expected intake");
+      expect(intake.answerFirst).toBe(true);
+      expect(intake.acceptDigits).toEqual([{ digit: "1", afterSeconds: 3 }]);
+      expect(intake.briefFromSmsContaining).toBe("HomeLight Referral");
+    });
+
+    /** parseAiFlowDefinition throws on semantic issues; collect them. */
+    const issuesFor = (candidate: unknown): string => {
+      try {
+        parseAiFlowDefinition(candidate);
+        return "";
+      } catch (err) {
+        return err instanceof AiFlowValidationError ? err.issues.join(" ") : String(err);
+      }
+    };
+
+    it("rejects accept digits, a media pause, or a brief without answerFirst", () => {
+      for (const extra of [
+        { acceptDigits: [{ digit: "1" }] },
+        { mediaStartSeconds: 2 },
+        { briefFromSmsContaining: "HomeLight Referral" }
+      ]) {
+        expect(issuesFor(aiFirstFlow(extra))).toContain("without answerFirst");
+      }
+    });
+
+    it("rejects a wait longer than one webhook can hold", () => {
+      expect(
+        issuesFor(
+          aiFirstFlow({
+            answerFirst: true,
+            acceptDigits: [{ digit: "1", afterSeconds: 5 }],
+            mediaStartSeconds: 4
+          })
+        )
+      ).toContain("before the AI speaks");
+    });
+
+    it("counts the engine's defaults, so an unauthored wait is not free", () => {
+      // afterSeconds omitted costs the 3s announcement default at run time, and
+      // an omitted mediaStartSeconds costs its own 2s, so this really does
+      // overrun the one-webhook budget even though nothing looks large.
+      expect(
+        issuesFor(aiFirstFlow({ answerFirst: true, acceptDigits: [{ digit: "1" }, { digit: "1" }] }))
+      ).toContain("before the AI speaks");
+    });
+
+    it("accepts answerFirst on its own, with the engine defaults doing the pressing", () => {
+      const def = parseAiFlowDefinition(aiFirstFlow({ answerFirst: true }));
+      expect(validateDefinitionSemantics(def)).toEqual([]);
+    });
+
+    it("allows a sequence sitting exactly at the budget", () => {
+      const def = parseAiFlowDefinition(
+        aiFirstFlow({
+          answerFirst: true,
+          acceptDigits: [{ digit: "1", afterSeconds: 3 }],
+          mediaStartSeconds: 2
+        })
+      );
+      expect(validateDefinitionSemantics(def)).toEqual([]);
+    });
+
+    it("rejects both alsoNotify sources at once", () => {
+      expect(
+        issuesFor(
+          aiFirstFlow({
+            alsoNotifyE164: "+16026951142",
+            alsoNotifyRef: {
+              source: "employee",
+              id: "11111111-1111-4111-8111-111111111111"
+            }
+          })
+        )
+      ).toContain("both alsoNotifyE164 and alsoNotifyRef");
+    });
+
+    it("rejects a digit that is not a single DTMF key", () => {
+      expect(() =>
+        parseAiFlowDefinition(aiFirstFlow({ answerFirst: true, acceptDigits: [{ digit: "12" }] }))
+      ).toThrow(AiFlowValidationError);
+    });
+
+    it("rejects answerFirst set to anything but true", () => {
+      expect(() => parseAiFlowDefinition(aiFirstFlow({ answerFirst: false }))).toThrow(
+        AiFlowValidationError
+      );
+    });
+  });
+
   it("round-trips options.starAlerts on a handoff chain", () => {
     const def = parseAiFlowDefinition({
       version: 1,

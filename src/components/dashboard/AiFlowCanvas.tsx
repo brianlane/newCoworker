@@ -95,6 +95,7 @@ const STEP_TONES: Record<StepType, NodeTone> = {
   wait_for_reply: "wait",
   place_ai_call: "voice",
   arm_voice_transfer: "voice",
+  voice_brief: "voice",
   branch: "branch",
   goal: "goal",
   math: "read",
@@ -139,6 +140,7 @@ const STEP_ICONS: Record<StepType, ReactNode> = {
   wait_for_reply: <Hourglass className="h-4 w-4" />,
   place_ai_call: <Phone className="h-4 w-4" />,
   arm_voice_transfer: <Phone className="h-4 w-4" />,
+  voice_brief: <Phone className="h-4 w-4" />,
   branch: <GitBranch className="h-4 w-4" />,
   goal: <Flag className="h-4 w-4" />,
   math: <Calculator className="h-4 w-4" />,
@@ -265,7 +267,9 @@ function stepSubtitle(step: FlowStep): string {
     case "voice_transfer":
       return step.toRef?.label ?? step.toE164 ?? "";
     case "voice_ai_intake":
-      return "AI captures the lead";
+      return step.answerFirst ? "AI answers and handles the call" : "AI captures the lead";
+    case "voice_brief":
+      return `briefs the live call from ${step.fromE164}`;
     case "outbound_call":
       return step.toRef?.label ?? step.toE164 ?? "AI places the call";
     case "place_ai_call": {

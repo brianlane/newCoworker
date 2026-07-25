@@ -212,6 +212,47 @@ describe("resolveVoiceContactRefs", () => {
     expect((out.steps[1] as { notifyE164?: string }).notifyE164).toBe("+16025550000");
   });
 
+  it("resolves voice_ai_intake alsoNotifyRef into alsoNotifyE164", async () => {
+    // The owner-copy recipient is late-bound like every other voice target, so a
+    // saved teammate keeps working after their number changes.
+    const { db } = stubDb({
+      ai_flow_team_members: { data: { name: "Dave", phone_e164: "+16025551234" }, error: null },
+      contacts: { data: { display_name: "Pat", customer_e164: "+16025550000" }, error: null }
+    });
+    const def = voiceDef([
+      { id: "r", type: "ring_handoff", toE164: "+16025551234" },
+      { id: "ai", type: "voice_ai_intake", notifyRef: empRef, alsoNotifyRef: conRef }
+    ]);
+    const out = await resolveVoiceContactRefs(db, "biz", def);
+    expect(out.steps[1]).toMatchObject({
+      notifyE164: "+16025551234",
+      alsoNotifyE164: "+16025550000"
+    });
+  });
+
+  it("leaves alsoNotifyE164 alone when it is hardcoded or its ref misses", async () => {
+    const { db, calls } = stubDb({ contacts: { data: null, error: null } });
+    const pinned = voiceDef([
+      { id: "r", type: "ring_handoff", toE164: "+16025551234" },
+      {
+        id: "ai",
+        type: "voice_ai_intake",
+        notifyE164: "+16025551234",
+        alsoNotifyE164: "+16026951142",
+        alsoNotifyRef: conRef
+      }
+    ]);
+    // A hardcoded number wins, so the ref is never queried.
+    expect(await resolveVoiceContactRefs(db, "biz", pinned)).toBe(pinned);
+    expect(calls).toEqual([]);
+    const unresolvable = voiceDef([
+      { id: "r", type: "ring_handoff", toE164: "+16025551234" },
+      { id: "ai", type: "voice_ai_intake", notifyE164: "+16025551234", alsoNotifyRef: conRef }
+    ]);
+    const out = await resolveVoiceContactRefs(db, "biz", unresolvable);
+    expect((out.steps[1] as { alsoNotifyE164?: string }).alsoNotifyE164).toBeUndefined();
+  });
+
   it("resolves outbound_call toRef AND notifyRef independently", async () => {
     const { db } = stubDb({
       ai_flow_team_members: { data: { name: "Dave", phone_e164: "+16025551234" }, error: null },
