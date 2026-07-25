@@ -25,6 +25,7 @@ export type PublicBookingStrings = {
   phoneLabel: string;
   emailLabel: string;
   noteLabel: string;
+  notifyEarlierLabel: string;
   submitButton: string;
   submitting: string;
   slotTaken: string;
@@ -120,6 +121,7 @@ export function PublicBookingPage({
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null);
   const [form, setForm] = useState({ name: "", phone: "", email: "", note: "" });
+  const [notifyEarlier, setNotifyEarlier] = useState(false);
   const [submitState, setSubmitState] = useState<
     "idle" | "submitting" | "slot_taken" | "already_booked" | "invalid" | "failed"
   >("idle");
@@ -212,7 +214,8 @@ export function PublicBookingPage({
           name: form.name,
           phone: form.phone,
           email: form.email,
-          ...(form.note.trim() ? { note: form.note } : {})
+          ...(form.note.trim() ? { note: form.note } : {}),
+          ...(notifyEarlier ? { notifyEarlier: true } : {})
         })
       });
       const body = await res.json();
@@ -238,7 +241,7 @@ export function PublicBookingPage({
     } catch {
       setSubmitState("failed");
     }
-  }, [selectedSlot, token, duration, form, loadSlots]);
+  }, [selectedSlot, token, duration, form, notifyEarlier, loadSlots]);
 
   const panel = "rounded-lg border border-parchment/10 bg-parchment/5";
   const label = "block text-xs uppercase tracking-wider text-parchment/40";
@@ -405,6 +408,19 @@ export function PublicBookingPage({
                   onChange={(e) => setForm({ ...form, note: e.target.value })}
                 />
               </div>
+              <label
+                className="flex cursor-pointer items-start gap-2 text-sm text-parchment/70"
+                htmlFor="bk-notify-earlier"
+              >
+                <input
+                  id="bk-notify-earlier"
+                  type="checkbox"
+                  className="mt-0.5 accent-claw-green"
+                  checked={notifyEarlier}
+                  onChange={(e) => setNotifyEarlier(e.target.checked)}
+                />
+                <span>{strings.notifyEarlierLabel}</span>
+              </label>
               {submitState === "slot_taken" ? (
                 <p className="text-sm text-amber-400">{strings.slotTaken}</p>
               ) : null}

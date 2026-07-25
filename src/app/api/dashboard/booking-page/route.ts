@@ -43,6 +43,8 @@ const patchSchema = z.object({
   maxDailyBookings: z.number().int().nullable().optional(),
   requireStaffOnShift: z.boolean().optional(),
   description: z.string().nullable().optional(),
+  waitlistEnabled: z.boolean().optional(),
+  waitlistOfferTtlMinutes: z.number().int().optional(),
   slug: z.string().max(80).nullable().optional(),
   title: z.string().max(200).nullable().optional()
 });

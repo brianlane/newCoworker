@@ -427,6 +427,10 @@ describe("processVagaroAppointmentEvent", () => {
       fireTriggers: vi.fn().mockResolvedValue(0),
       recordClaim: vi.fn(),
       deleteClaims: vi.fn(),
+      claimStarts: vi.fn().mockResolvedValue([]),
+      offerSlot: vi.fn().mockResolvedValue("no_candidates"),
+      cancelWaitlist: vi.fn(),
+      resolveWaitlist: vi.fn(),
       nowMs: NOW,
       ...overrides
     };
@@ -593,6 +597,16 @@ describe("processVagaroAppointmentEvent", () => {
     });
     expect(d.deleteClaims).toHaveBeenCalledWith(BIZ, "appt-1");
     expect(d.recordClaim).not.toHaveBeenCalled();
+    // The canceler's own entries drop, then the vacated slot is offered
+    // with the canceler excluded (platform cancel-core parity).
+    expect(d.cancelWaitlist).toHaveBeenCalledWith(BIZ, {
+      phones: ["6025550000"],
+      email: "dana@example.com"
+    });
+    expect(d.offerSlot).toHaveBeenCalledWith(BIZ, "2026-07-21T15:00:00.000Z", {}, {
+      phones: ["6025550000"],
+      email: "dana@example.com"
+    });
     expect(result).toEqual({
       goalsFired: 0,
       jumpedRuns: 0,
@@ -635,7 +649,132 @@ describe("processVagaroAppointmentEvent", () => {
     );
     expect(d.fireTriggers).not.toHaveBeenCalled();
     expect(d.deleteClaims).toHaveBeenCalledWith(BIZ, "appt-9");
+    // No parsed appointment, no ledger claims: nothing to offer, nobody to
+    // drop.
+    expect(d.offerSlot).not.toHaveBeenCalled();
+    expect(d.cancelWaitlist).not.toHaveBeenCalled();
     expect(result.ledgerSynced).toBe(true);
+  });
+
+  it("a bare-id delete still frees the LEDGER-recorded start(s), read before the claim drop", async () => {
+    const d = deps({
+      claimStarts: vi.fn().mockResolvedValue(["2026-07-21T15:00:00.000Z"])
+    });
+    await processVagaroAppointmentEvent(
+      BIZ,
+      apptEvent({ action: "deleted" }, { appointment: { id: "appt-9" } }),
+      d
+    );
+    const readOrder = vi.mocked(d.claimStarts).mock.invocationCallOrder[0];
+    const deleteOrder = vi.mocked(d.deleteClaims).mock.invocationCallOrder[0];
+    expect(readOrder).toBeLessThan(deleteOrder);
+    // No identity in a bare-id payload: the offer runs unexcluded.
+    expect(d.offerSlot).toHaveBeenCalledWith(BIZ, "2026-07-21T15:00:00.000Z", {}, undefined);
+    expect(d.cancelWaitlist).not.toHaveBeenCalled();
+  });
+
+  it("a delete with BOTH a payload start and ledger starts frees the union, deduped by instant", async () => {
+    const d = deps({
+      claimStarts: vi.fn().mockResolvedValue([
+        // Same instant as the payload start (different formatting) plus a
+        // genuinely different ledger-recorded slot; junk is skipped.
+        "2026-07-21T15:00:00+00:00",
+        "2026-07-21T13:00:00.000Z",
+        "not-a-date"
+      ])
+    });
+    await processVagaroAppointmentEvent(BIZ, apptEvent({ action: "deleted" }), d);
+    expect(d.offerSlot).toHaveBeenCalledTimes(2);
+    expect(d.offerSlot).toHaveBeenCalledWith(BIZ, "2026-07-21T15:00:00.000Z", {}, {
+      phones: ["6025550000"],
+      email: "dana@example.com"
+    });
+    expect(d.offerSlot).toHaveBeenCalledWith(BIZ, "2026-07-21T13:00:00.000Z", {}, {
+      phones: ["6025550000"],
+      email: "dana@example.com"
+    });
+  });
+
+  it("deleted without a customer identity offers WITHOUT an exclusion and drops nobody", async () => {
+    const d = deps();
+    await processVagaroAppointmentEvent(
+      BIZ,
+      apptEvent(
+        { action: "deleted" },
+        { appointment: { id: "appt-1", startTime: "2026-07-21T15:00:00Z" } }
+      ),
+      d
+    );
+    expect(d.cancelWaitlist).not.toHaveBeenCalled();
+    expect(d.offerSlot).toHaveBeenCalledWith(BIZ, "2026-07-21T15:00:00.000Z", {}, undefined);
+  });
+
+  it("updated: the vacated OLD start is offered to the waitlist (mover excluded)", async () => {
+    const d = deps({
+      claimStarts: vi
+        .fn()
+        .mockResolvedValue(["2026-07-21T13:00:00.000Z", "2026-07-21T15:00:00.000Z"])
+    });
+    await processVagaroAppointmentEvent(
+      BIZ,
+      apptEvent({ action: "updated" }, apptPayload({ startTime: "2026-07-21T15:00:00Z" })),
+      d
+    );
+    // Read BEFORE the by-event delete, so the old starts are still there.
+    const readOrder = vi.mocked(d.claimStarts).mock.invocationCallOrder[0];
+    const deleteOrder = vi.mocked(d.deleteClaims).mock.invocationCallOrder[0];
+    expect(readOrder).toBeLessThan(deleteOrder);
+    // The mover's own entries resolve against the new start FIRST …
+    expect(d.resolveWaitlist).toHaveBeenCalledWith(
+      BIZ,
+      { phones: ["6025550000"], email: "dana@example.com" },
+      "2026-07-21T15:00:00.000Z"
+    );
+    const resolveOrder = vi.mocked(d.resolveWaitlist).mock.invocationCallOrder[0];
+    const offerOrder = vi.mocked(d.offerSlot).mock.invocationCallOrder[0];
+    expect(resolveOrder).toBeLessThan(offerOrder);
+    // … then only the start that actually changed is offered; the mover
+    // never is.
+    expect(d.offerSlot).toHaveBeenCalledTimes(1);
+    expect(d.offerSlot).toHaveBeenCalledWith(BIZ, "2026-07-21T13:00:00.000Z", {}, {
+      phones: ["6025550000"],
+      email: "dana@example.com"
+    });
+    expect(d.cancelWaitlist).not.toHaveBeenCalled();
+  });
+
+  it("created: the customer's live entries resolve against the new booking; no identity skips it", async () => {
+    const d = deps();
+    await processVagaroAppointmentEvent(BIZ, apptEvent(), d);
+    expect(d.resolveWaitlist).toHaveBeenCalledWith(
+      BIZ,
+      { phones: ["6025550000"], email: "dana@example.com" },
+      "2026-07-21T15:00:00.000Z"
+    );
+    expect(d.offerSlot).not.toHaveBeenCalled();
+
+    const d2 = deps();
+    await processVagaroAppointmentEvent(
+      BIZ,
+      apptEvent({}, { appointment: { id: "appt-1", startTime: "2026-07-21T15:00:00Z" } }),
+      d2
+    );
+    expect(d2.resolveWaitlist).not.toHaveBeenCalled();
+  });
+
+  it("updated without a customer identity offers the vacated start with no exclusion", async () => {
+    const d = deps({
+      claimStarts: vi.fn().mockResolvedValue(["2026-07-21T13:00:00.000Z"])
+    });
+    await processVagaroAppointmentEvent(
+      BIZ,
+      apptEvent(
+        { action: "updated" },
+        { appointment: { id: "appt-1", startTime: "2026-07-21T15:00:00Z" } }
+      ),
+      d
+    );
+    expect(d.offerSlot).toHaveBeenCalledWith(BIZ, "2026-07-21T13:00:00.000Z", {}, undefined);
   });
 
   it("a ledger failure logs and leaves ledgerSynced false", async () => {

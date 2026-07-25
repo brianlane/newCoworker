@@ -52,6 +52,11 @@ import {
   claimBookingDedupe,
   releaseBookingDedupe
 } from "@/lib/calendar-tools/booking-dedupe";
+import {
+  getWaitlistSettings,
+  upsertLiveWaitlistEntry
+} from "@/lib/db/booking-waitlist";
+import { resolveWaitlistAfterBooking } from "@/lib/calendar-tools/waitlist-resolve";
 import { findUpcomingBookingsForAttendee } from "@/lib/calendar-tools/attendee-bookings";
 import { maybeAlertUnassignedBooking } from "@/lib/calendar-tools/unassigned-booking-alert";
 import {
@@ -319,6 +324,8 @@ export type SubmitPublicBookingInput = {
   phone: string;
   email: string;
   note?: string;
+  /** "Text me if an earlier time opens up" opt-in (cancellation waitlist). */
+  notifyEarlier?: boolean;
 };
 
 export type SubmitPublicBookingResult =
@@ -516,9 +523,16 @@ export async function submitPublicBooking(
     zoomJoinUrl = zoomMeeting?.joinUrl ?? null;
 
     // Same post-booking fan-out the provider core runs: a confirmed
-    // booking may fast-forward parked AiFlow runs, and a booking for a
+    // booking may fast-forward parked AiFlow runs, the visitor's live
+    // waitlist entries resolve against what they now hold (the provider
+    // path gets this inside bookCalendarAppointment), and a booking for a
     // lead nobody owns pages the owner.
     await fireGoalEvent(context.businessId, phone, { kind: "appointment_booked" });
+    await resolveWaitlistAfterBooking(
+      context.businessId,
+      { phones: [phone], email: email.toLowerCase() },
+      start.toISOString()
+    );
     await maybeAlertUnassignedBooking(context.businessId, {
       attendeeName: name,
       attendeePhone: phone,
@@ -589,6 +603,24 @@ export async function submitPublicBooking(
     channel: "webchat",
     sourceTag: BOOKING_PAGE_SOURCE_TAG
   });
+
+  // Cancellation-waitlist opt-in ("text me if an earlier time opens up"):
+  // one live entry linked to the booking just made, so a freed EARLIER
+  // slot texts them an offer (waitlist-fill core). Best-effort (the
+  // booking is already durable) and gated on the owner's waitlist toggle.
+  if (input.notifyEarlier === true) {
+    const waitlist = await getWaitlistSettings(context.businessId);
+    if (waitlist.enabled) {
+      await upsertLiveWaitlistEntry(context.businessId, {
+        phone,
+        email,
+        name,
+        durationMinutes: input.durationMinutes,
+        latestAtIso: start.toISOString(),
+        currentBookingStartAtIso: start.toISOString()
+      });
+    }
+  }
 
   return {
     ok: true,

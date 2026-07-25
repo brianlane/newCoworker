@@ -49,6 +49,7 @@ import {
   cancelCalendarAppointment,
   rescheduleCalendarAppointment
 } from "@/lib/calendar-tools/reschedule";
+import { joinCalendarWaitlist } from "@/lib/calendar-tools/waitlist-join";
 import { insertCoworkerLog } from "@/lib/db/logs";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import {
@@ -191,6 +192,15 @@ const cancelAppointmentArgsSchema = z.object({
   attendeeName: z.string().max(200).optional(),
   attendeeEmail: z.string().email().optional(),
   attendeePhone: z.string().max(32).optional()
+});
+const joinWaitlistArgsSchema = z.object({
+  attendeeName: z.string().max(200).optional(),
+  attendeeEmail: z.string().email().optional(),
+  // Required on the webhook path: no caller context, and the offer rides SMS.
+  attendeePhone: z.string().max(32),
+  durationMinutes: z.number().int().min(5).max(480).optional(),
+  latestIso: z.string().optional(),
+  timezone: z.string().optional()
 });
 const documentShareArgsSchema = z.object({
   /** Document id or (partial) title. */
@@ -527,6 +537,15 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
         if (message) return { ...canceled, message };
       }
       return canceled;
+    }
+    case "calendar_join_waitlist": {
+      const parsed = joinWaitlistArgsSchema.safeParse(args);
+      if (!parsed.success) {
+        return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
+      }
+      // The core carries its own model-facing guidance on every failure
+      // detail (phone_required / waitlist_disabled / waitlist_failed).
+      return joinCalendarWaitlist(businessId, parsed.data, null);
     }
     case "notify_team": {
       const parsed = notifyTeamArgsSchema.safeParse(args);

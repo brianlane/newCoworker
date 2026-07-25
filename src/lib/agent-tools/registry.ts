@@ -138,6 +138,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         configurable: true
       },
       {
+        toolKey: "calendar_join_waitlist",
+        label: "Cancellation waitlist",
+        description:
+          "Put a customer on the waitlist from chat: when a cancellation frees an earlier slot, they get one text offering it.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
         toolKey: "customer_lookup_by_phone",
         label: "Recognize repeat customers",
         description: "Look up a customer's cross-channel history when you ask about them in chat.",
@@ -250,6 +258,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         configurable: true
       },
       {
+        toolKey: "calendar_join_waitlist",
+        label: "Cancellation waitlist",
+        description:
+          "Put a caller on the waitlist: when a cancellation frees an earlier slot, they get one text offering it.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
         toolKey: "send_follow_up_email",
         label: "Send follow-up email",
         description: "Email a short follow-up to a caller from your connected mailbox.",
@@ -348,6 +364,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         label: "Cancel appointments",
         description:
           "Cancel a texter's existing appointment — they get a single cancellation notice.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "calendar_join_waitlist",
+        label: "Cancellation waitlist",
+        description:
+          "Put a texter on the waitlist: when a cancellation frees an earlier slot, they get one text offering it.",
         defaultEnabled: true,
         configurable: true
       },

@@ -38,8 +38,14 @@ import { normalizeVagaroAppointment, type VagaroAppointmentItem } from "@/lib/va
 import {
   bookingAttendeeKey,
   deleteBookingClaimsByEvent,
+  findBookingClaimStartsByEvent,
   recordExternalBookingClaim
 } from "@/lib/calendar-tools/booking-dedupe";
+import { offerFreedSlot } from "@/lib/calendar-tools/waitlist-fill";
+import {
+  cancelWaitlistForAttendee,
+  resolveWaitlistAfterBooking
+} from "@/lib/calendar-tools/waitlist-resolve";
 import {
   createCustomerMemory,
   CustomerExistsError,
@@ -224,6 +230,14 @@ export type VagaroAppointmentDeps = {
   /** Injectable ledger writes (tests). */
   recordClaim?: typeof recordExternalBookingClaim;
   deleteClaims?: typeof deleteBookingClaimsByEvent;
+  /** Injectable ledger start read (tests). */
+  claimStarts?: typeof findBookingClaimStartsByEvent;
+  /** Injectable waitlist freed-slot offer (tests). */
+  offerSlot?: typeof offerFreedSlot;
+  /** Injectable waitlist canceler drop (tests). */
+  cancelWaitlist?: typeof cancelWaitlistForAttendee;
+  /** Injectable waitlist booking resolution (tests). */
+  resolveWaitlist?: typeof resolveWaitlistAfterBooking;
   /** Injectable clock (tests). */
   nowMs?: number;
 };
@@ -270,6 +284,10 @@ export async function processVagaroAppointmentEvent(
   const fireTriggers = deps.fireTriggers ?? fireCalendarTriggersForPushedEvent;
   const recordClaim = deps.recordClaim ?? recordExternalBookingClaim;
   const deleteClaims = deps.deleteClaims ?? deleteBookingClaimsByEvent;
+  const claimStarts = deps.claimStarts ?? findBookingClaimStartsByEvent;
+  const offerSlot = deps.offerSlot ?? offerFreedSlot;
+  const cancelWaitlist = deps.cancelWaitlist ?? cancelWaitlistForAttendee;
+  const resolveWaitlist = deps.resolveWaitlist ?? resolveWaitlistAfterBooking;
   const nowMs = deps.nowMs ?? Date.now();
 
   const result: VagaroAppointmentIntelligence = { ...NO_APPOINTMENT_INTELLIGENCE };
@@ -343,8 +361,14 @@ export async function processVagaroAppointmentEvent(
   // LEDGER — keep reschedule/cancel resolution working for off-platform
   // bookings. The ledger primitives are individually best-effort already;
   // the try/catch guards the composition.
+  let vacatedStarts: string[] = [];
   try {
     if (gone) {
+      // Minimal cancel payloads may carry only the appointment id, but the
+      // ledger still knows the vacated start(s); read them BEFORE the
+      // delete so the waitlist below can offer them (Bugbot Medium on
+      // PR #903).
+      vacatedStarts = await claimStarts(businessId, appointmentId);
       await deleteClaims(businessId, appointmentId);
       result.ledgerSynced = true;
     } else if (appt && (action === "created" || action === "updated")) {
@@ -355,8 +379,12 @@ export async function processVagaroAppointmentEvent(
         appt.customerName ?? customer.name
       );
       if (action === "updated") {
-        // A moved appointment: drop the stale-slot claim(s) and re-record at
-        // the new start (Vagaro bookings carry no Zoom meeting to preserve).
+        // A moved appointment: capture the stale claim start(s) FIRST (the
+        // move vacates exactly those slots, and the waitlist below must
+        // hear about them; Bugbot Medium on PR #903), then drop the claims
+        // and re-record at the new start (Vagaro bookings carry no Zoom
+        // meeting to preserve).
+        vacatedStarts = await claimStarts(businessId, appointmentId);
         await deleteClaims(businessId, appointmentId);
       }
       await recordClaim(businessId, attendeeKey, appt.startIso, appointmentId);
@@ -368,6 +396,45 @@ export async function processVagaroAppointmentEvent(
       appointmentId,
       error: err instanceof Error ? err.message : String(err)
     });
+  }
+
+  // WAITLIST: cancels and moves vacate slots in real time (idempotent with
+  // the minute poll's observation of the same change; never throws). The
+  // customer whose appointment changed is handled like the platform cancel
+  // core: a canceled customer's own live entries drop, and neither a
+  // canceler nor a mover is ever offered the slot they just gave up
+  // (Bugbot Medium on PR #903).
+  const customer = extractVagaroCustomer(event.payload);
+  const wlPhone = appt?.customerPhone ?? customer.phone;
+  const wlEmail = appt?.customerEmail ?? customer.email;
+  const wlAttendee = {
+    phones: wlPhone ? [wlPhone] : [],
+    email: wlEmail ?? null
+  };
+  const hasIdentity = wlAttendee.phones.length > 0 || wlAttendee.email !== null;
+  if (gone) {
+    if (hasIdentity) await cancelWaitlist(businessId, wlAttendee);
+    // The payload start AND every ledger-recorded start free up (deduped
+    // by instant): the webhook time can disagree with what the ledger
+    // booked, and neither view may be dropped (Bugbot Medium on PR #903).
+    const seenMs = new Set<number>();
+    for (const startIso of [...(appt?.startIso ? [appt.startIso] : []), ...vacatedStarts]) {
+      const ms = Date.parse(startIso);
+      if (!Number.isFinite(ms) || seenMs.has(ms)) continue;
+      seenMs.add(ms);
+      await offerSlot(businessId, startIso, {}, hasIdentity ? wlAttendee : undefined);
+    }
+  } else if ((action === "created" || action === "updated") && appt) {
+    // The customer's own live entries resolve against the booking they now
+    // hold (fulfilled when it beat what they were waiting on, re-pointed
+    // otherwise), matching the platform book/reschedule cores (Bugbot
+    // Medium on PR #903); THEN a move's vacated start goes to the waitlist.
+    if (hasIdentity) await resolveWaitlist(businessId, wlAttendee, appt.startIso);
+    const newStartMs = Date.parse(appt.startIso);
+    for (const oldStart of vacatedStarts) {
+      if (Date.parse(oldStart) === newStartMs) continue;
+      await offerSlot(businessId, oldStart, {}, hasIdentity ? wlAttendee : undefined);
+    }
   }
 
   return result;

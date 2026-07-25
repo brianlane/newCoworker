@@ -439,6 +439,34 @@ export async function findZoomMeetingIdByEvent(
 }
 
 /**
+ * Start instants of every claim recorded for a provider event, read BEFORE
+ * a by-event cleanup drops them: a moved off-platform appointment vacates
+ * exactly these slots, and the cancellation waitlist must hear about them
+ * (Bugbot Medium on PR #903). Best-effort: [] on any error.
+ */
+export async function findBookingClaimStartsByEvent(
+  businessId: string,
+  eventId: string
+): Promise<string[]> {
+  try {
+    const supabase = await createSupabaseServiceClient();
+    const { data, error } = await supabase
+      .from("calendar_booking_dedupe")
+      .select("start_at")
+      .eq("business_id", businessId)
+      .eq("event_id", eventId);
+    if (error || !data) return [];
+    return (data as Array<{ start_at: string }>).map((r) => r.start_at);
+  } catch (err) {
+    logger.warn("booking-dedupe: claim-starts-by-event lookup threw", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return [];
+  }
+}
+
+/**
  * Drop EVERY claim recorded for a provider event, regardless of attendee
  * key. Used when an event was located via provider search (no ledger hit
  * for the caller's key): the booking may still have a ledger row under a

@@ -71,6 +71,7 @@ export const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }>
     toolKey: "calendar_reschedule_appointment"
   },
   calendar_cancel_appointment: { agentKey: "sms", toolKey: "calendar_cancel_appointment" },
+  calendar_join_waitlist: { agentKey: "sms", toolKey: "calendar_join_waitlist" },
   dashboard_business_knowledge_lookup: {
     agentKey: "dashboard",
     toolKey: "business_knowledge_lookup"
@@ -87,6 +88,10 @@ export const TOOL_GATES: Record<string, { agentKey: AgentKey; toolKey: string }>
   dashboard_calendar_cancel_appointment: {
     agentKey: "dashboard",
     toolKey: "calendar_cancel_appointment"
+  },
+  dashboard_calendar_join_waitlist: {
+    agentKey: "dashboard",
+    toolKey: "calendar_join_waitlist"
   },
   // Website chat widget (anonymous internet surface): info + lead gen ONLY.
   // This is the COMPLETE `webchat_*` allowlist — the WebchatCoworker agent

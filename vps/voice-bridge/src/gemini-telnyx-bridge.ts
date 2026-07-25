@@ -410,6 +410,8 @@ function voiceToolPath(name: string): string {
       return "/api/voice/tools/calendar/find-slots";
     case "calendar_book_appointment":
       return "/api/voice/tools/calendar/book";
+    case "calendar_join_waitlist":
+      return "/api/voice/tools/calendar/waitlist";
     case "send_follow_up_sms":
       return "/api/voice/tools/sms";
     case "send_follow_up_email":

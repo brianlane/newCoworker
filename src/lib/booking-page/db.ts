@@ -23,6 +23,10 @@ export type BookingPageRow = {
   max_daily_bookings: number | null;
   require_staff_on_shift: boolean;
   description: string | null;
+  /** Cancellation waitlist: master toggle (on by default). */
+  waitlist_enabled: boolean;
+  /** How long one customer holds an offered freed slot before it passes on. */
+  waitlist_offer_ttl_minutes: number;
   /** Vanity /book/<slug> URL; null = token URL only. */
   slug: string | null;
   /** Public event title; null falls back to "Book a call with {business}". */
@@ -34,7 +38,8 @@ export type BookingPageRow = {
 const ALL_COLUMNS =
   "id,business_id,token,enabled,allowed_durations,min_notice_minutes," +
   "max_advance_days,buffer_minutes,max_daily_bookings,require_staff_on_shift," +
-  "description,slug,title,created_at,updated_at";
+  "description,waitlist_enabled,waitlist_offer_ttl_minutes,slug,title," +
+  "created_at,updated_at";
 
 /** Resolve a page by its public token. Enabled pages only. */
 export async function getEnabledBookingPageByToken(
@@ -92,6 +97,8 @@ export type BookingPageSettingsPatch = {
   maxDailyBookings?: number | null;
   requireStaffOnShift?: boolean;
   description?: string | null;
+  waitlistEnabled?: boolean;
+  waitlistOfferTtlMinutes?: number;
   /** Vanity URL slug; null/blank clears back to the token-only URL. */
   slug?: string | null;
   /** Public event title; null/blank restores the localized default. */
@@ -161,6 +168,14 @@ function validatePatch(patch: BookingPageSettingsPatch): void {
   ) {
     throw new BookingPageValidationError("Description must be 500 characters or fewer");
   }
+  if (
+    patch.waitlistOfferTtlMinutes !== undefined &&
+    (!Number.isInteger(patch.waitlistOfferTtlMinutes) ||
+      patch.waitlistOfferTtlMinutes < 15 ||
+      patch.waitlistOfferTtlMinutes > 24 * 60)
+  ) {
+    throw new BookingPageValidationError("Waitlist offer hold must be 15 to 1440 minutes");
+  }
   if (patch.slug !== undefined && patch.slug !== null && patch.slug.trim() !== "") {
     if (parseBookingPageSlug(patch.slug) === null) {
       throw new BookingPageValidationError(
@@ -193,6 +208,10 @@ function patchColumns(patch: BookingPageSettingsPatch): Record<string, unknown> 
     ...(patch.description === undefined
       ? {}
       : { description: patch.description?.trim() || null }),
+    ...(patch.waitlistEnabled === undefined ? {} : { waitlist_enabled: patch.waitlistEnabled }),
+    ...(patch.waitlistOfferTtlMinutes === undefined
+      ? {}
+      : { waitlist_offer_ttl_minutes: patch.waitlistOfferTtlMinutes }),
     ...(patch.slug === undefined
       ? {}
       : { slug: patch.slug === null ? null : parseBookingPageSlug(patch.slug) }),

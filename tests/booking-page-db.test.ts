@@ -203,6 +203,9 @@ describe("upsertBookingPage", () => {
       { maxDailyBookings: 0 },
       { maxDailyBookings: 101 },
       { description: "x".repeat(501) },
+      { waitlistOfferTtlMinutes: 14 },
+      { waitlistOfferTtlMinutes: 1441 },
+      { waitlistOfferTtlMinutes: 60.5 },
       { slug: "ab" },
       { slug: "Not Valid!" },
       { slug: "api" },
@@ -213,6 +216,23 @@ describe("upsertBookingPage", () => {
         BookingPageValidationError
       );
     }
+  });
+
+  it("persists the cancellation-waitlist knobs", async () => {
+    const { client, calls } = fakeDb([
+      { data: ROW, error: null }, // existence read
+      { data: { ...ROW, waitlist_enabled: false }, error: null } // update
+    ]);
+    await upsertBookingPage(
+      BIZ,
+      { waitlistEnabled: false, waitlistOfferTtlMinutes: 120 },
+      client
+    );
+    const update = calls.find((c) => c.method === "update");
+    expect(update?.args[0]).toMatchObject({
+      waitlist_enabled: false,
+      waitlist_offer_ttl_minutes: 120
+    });
   });
 
   it("normalizes slug and title writes, clearing on blank", async () => {

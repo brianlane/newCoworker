@@ -33,6 +33,11 @@ vi.mock("@/lib/zoom/meetings", () => ({
   updateZoomMeetingForBooking: vi.fn(),
   deleteZoomMeetingForBooking: vi.fn()
 }));
+vi.mock("@/lib/calendar-tools/waitlist-fill", () => ({ offerFreedSlot: vi.fn() }));
+vi.mock("@/lib/calendar-tools/waitlist-resolve", () => ({
+  cancelWaitlistForAttendee: vi.fn(),
+  resolveWaitlistAfterBooking: vi.fn()
+}));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn() } }));
 
 import {
@@ -67,6 +72,11 @@ import {
   deleteZoomMeetingForBooking,
   updateZoomMeetingForBooking
 } from "@/lib/zoom/meetings";
+import { offerFreedSlot } from "@/lib/calendar-tools/waitlist-fill";
+import {
+  cancelWaitlistForAttendee,
+  resolveWaitlistAfterBooking
+} from "@/lib/calendar-tools/waitlist-resolve";
 
 /**
  * Appointment lifecycle cores (Truly Issue 4): a reschedule PATCHes the
@@ -966,5 +976,202 @@ describe("Zoom meeting lifecycle rides the booking's ledger row", () => {
 
     expect((await cancelCalendarAppointment(BIZ, CANCEL_ARGS)).ok).toBe(false);
     expect(vi.mocked(deleteZoomMeetingForBooking)).not.toHaveBeenCalled();
+  });
+});
+
+describe("waitlist hooks", () => {
+  const CANCEL_ARGS = { attendeePhone: PHONE };
+
+  it("a ledger-resolved reschedule frees the OLD slot and resolves the attendee's entries", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALDAV_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
+    vi.mocked(rescheduleCaldavAppointment).mockResolvedValue({
+      ok: true,
+      data: { eventId: "evt-1" }
+    } as never);
+    await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS);
+    expect(vi.mocked(offerFreedSlot)).toHaveBeenCalledWith(
+      BIZ,
+      CLAIM.startAt,
+      {},
+      { phones: [PHONE], email: null }
+    );
+    expect(vi.mocked(resolveWaitlistAfterBooking)).toHaveBeenCalledWith(
+      BIZ,
+      { phones: [PHONE], email: null },
+      RESCHEDULE_ARGS.newStartIso
+    );
+  });
+
+  it("Google ledger reschedule frees the claim's old start; a start-less search hit has nothing to free", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS);
+    expect(vi.mocked(offerFreedSlot)).toHaveBeenCalledWith(
+      BIZ,
+      CLAIM.startAt,
+      {},
+      { phones: [PHONE], email: null }
+    );
+
+    vi.mocked(offerFreedSlot).mockClear();
+    vi.mocked(resolveWaitlistAfterBooking).mockClear();
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(null);
+    vi.mocked(nangoProxyForBusiness).mockReset();
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({
+        data: { items: [{ id: "evt-search", description: `Phone: ${PHONE}` }] }
+      } as never)
+      .mockResolvedValueOnce({ data: {} } as never);
+    await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS);
+    expect(vi.mocked(offerFreedSlot)).not.toHaveBeenCalled();
+    expect(vi.mocked(resolveWaitlistAfterBooking)).toHaveBeenCalled();
+  });
+
+  it("a searched event WITH a listed start frees that slot too (Google reschedule, Graph cancel)", async () => {
+    // Google search listing carries the event's start.
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({
+        data: {
+          items: [
+            {
+              id: "evt-search",
+              description: `Phone: ${PHONE}`,
+              start: { dateTime: "2026-07-13T20:00:00Z" }
+            }
+          ]
+        }
+      } as never)
+      .mockResolvedValueOnce({ data: {} } as never);
+    await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS);
+    expect(vi.mocked(offerFreedSlot)).toHaveBeenCalledWith(
+      BIZ,
+      "2026-07-13T20:00:00.000Z",
+      {},
+      { phones: [PHONE], email: null }
+    );
+
+    // Graph search listing: zone-less dateTime reads as UTC (graphTimeIso).
+    vi.mocked(offerFreedSlot).mockClear();
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
+    vi.mocked(nangoProxyForBusiness).mockReset();
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({
+        data: {
+          value: [
+            {
+              id: "evt-search",
+              bodyPreview: `Phone: ${PHONE}`,
+              start: { dateTime: "2026-07-13T20:00:00.0000000" }
+            }
+          ]
+        }
+      } as never)
+      .mockResolvedValueOnce({ data: {} } as never);
+    await cancelCalendarAppointment(BIZ, { attendeePhone: PHONE });
+    expect(vi.mocked(offerFreedSlot)).toHaveBeenCalledWith(
+      BIZ,
+      "2026-07-13T20:00:00.000Z",
+      {},
+      { phones: [PHONE], email: null }
+    );
+  });
+
+  it("cancel frees the slot and drops the canceler's own entries (ledger path); Calendly drops entries only", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
+    vi.mocked(cancelVagaroAppointment).mockResolvedValue({ ok: true, data: {} } as never);
+    await cancelCalendarAppointment(BIZ, CANCEL_ARGS);
+    // The canceler's own entries drop BEFORE the slot is offered, and the
+    // offer excludes them so they never get texted their own slot.
+    expect(vi.mocked(offerFreedSlot)).toHaveBeenCalledWith(BIZ, CLAIM.startAt, {}, {
+      phones: [PHONE],
+      email: null
+    });
+    expect(vi.mocked(cancelWaitlistForAttendee)).toHaveBeenCalledWith(BIZ, {
+      phones: [PHONE],
+      email: null
+    });
+    const cancelOrder = vi.mocked(cancelWaitlistForAttendee).mock.invocationCallOrder[0];
+    const offerOrder = vi.mocked(offerFreedSlot).mock.invocationCallOrder[0];
+    expect(cancelOrder).toBeLessThan(offerOrder);
+
+    vi.mocked(offerFreedSlot).mockClear();
+    vi.mocked(cancelWaitlistForAttendee).mockClear();
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALENDLY_CONN);
+    vi.mocked(cancelCalendlyAppointment).mockResolvedValue({ ok: true, data: {} } as never);
+    await cancelCalendarAppointment(BIZ, CANCEL_ARGS);
+    // The Calendly locate step never learns the event's start; the poll's
+    // canceled scan observes the freed slot instead.
+    expect(vi.mocked(offerFreedSlot)).not.toHaveBeenCalled();
+    expect(vi.mocked(cancelWaitlistForAttendee)).toHaveBeenCalled();
+  });
+
+  it("a searched (ledger-less) cancel drops entries but has no start to offer (email-only identity)", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({
+        data: { value: [{ id: "evt-search", bodyPreview: "Email: joe@acme.com" }] }
+      } as never)
+      .mockResolvedValueOnce({ data: {} } as never);
+    await cancelCalendarAppointment(BIZ, { attendeeEmail: "joe@acme.com" });
+    expect(vi.mocked(offerFreedSlot)).not.toHaveBeenCalled();
+    expect(vi.mocked(cancelWaitlistForAttendee)).toHaveBeenCalledWith(BIZ, {
+      phones: [],
+      email: "joe@acme.com"
+    });
+  });
+
+  it("email-only identities pass an empty phone list to the waitlist hooks (ledger paths)", async () => {
+    // CalDAV reschedule.
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALDAV_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
+    vi.mocked(rescheduleCaldavAppointment).mockResolvedValue({
+      ok: true,
+      data: { eventId: "evt-1" }
+    } as never);
+    await rescheduleCalendarAppointment(BIZ, {
+      newStartIso: RESCHEDULE_ARGS.newStartIso,
+      newEndIso: RESCHEDULE_ARGS.newEndIso,
+      attendeeEmail: "joe@acme.com"
+    });
+    expect(vi.mocked(resolveWaitlistAfterBooking)).toHaveBeenCalledWith(
+      BIZ,
+      { phones: [], email: "joe@acme.com" },
+      RESCHEDULE_ARGS.newStartIso
+    );
+
+    // Vagaro cancel.
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(cancelVagaroAppointment).mockResolvedValue({ ok: true, data: {} } as never);
+    await cancelCalendarAppointment(BIZ, { attendeeEmail: "joe@acme.com" });
+    expect(vi.mocked(cancelWaitlistForAttendee)).toHaveBeenCalledWith(BIZ, {
+      phones: [],
+      email: "joe@acme.com"
+    });
+
+    // Calendly cancel.
+    vi.mocked(cancelWaitlistForAttendee).mockClear();
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALENDLY_CONN);
+    vi.mocked(cancelCalendlyAppointment).mockResolvedValue({ ok: true, data: {} } as never);
+    await cancelCalendarAppointment(BIZ, { attendeeEmail: "joe@acme.com" });
+    expect(vi.mocked(cancelWaitlistForAttendee)).toHaveBeenCalledWith(BIZ, {
+      phones: [],
+      email: "joe@acme.com"
+    });
+  });
+
+  it("a FAILED provider mutation never touches the waitlist", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
+    vi.mocked(cancelVagaroAppointment).mockResolvedValue({
+      ok: false,
+      detail: "vagaro_auth_failed"
+    } as never);
+    await cancelCalendarAppointment(BIZ, CANCEL_ARGS);
+    expect(vi.mocked(offerFreedSlot)).not.toHaveBeenCalled();
+    expect(vi.mocked(cancelWaitlistForAttendee)).not.toHaveBeenCalled();
   });
 });

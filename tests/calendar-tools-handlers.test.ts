@@ -36,6 +36,9 @@ vi.mock("@/lib/calendar-tools/attendee-bookings", () => ({
 vi.mock("@/lib/calendar-tools/unassigned-booking-alert", () => ({
   maybeAlertUnassignedBooking: vi.fn()
 }));
+vi.mock("@/lib/calendar-tools/waitlist-resolve", () => ({
+  resolveWaitlistAfterBooking: vi.fn()
+}));
 vi.mock("@/lib/customer-memory/db", () => ({ getCustomerMemory: vi.fn() }));
 vi.mock("@/lib/ai-flows/goal-hooks", () => ({ fireGoalEvent: vi.fn() }));
 vi.mock("@/lib/zoom/meetings", () => ({
@@ -52,6 +55,7 @@ import {
   wallClockInZone
 } from "@/lib/calendar-tools/handlers";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
+import { resolveWaitlistAfterBooking } from "@/lib/calendar-tools/waitlist-resolve";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
 import { getBusinessTimezone } from "@/lib/db/businesses";
 import { ensureSharedCalendar, getSharedCalendar } from "@/lib/calendar-tools/shared-calendar";
@@ -1038,6 +1042,26 @@ describe("bookCalendarAppointment", () => {
       { email: "joe@example.com", displayName: "Joe Plumber" }
     ]);
     expect(payload.data.start.timeZone).toBe("America/Phoenix");
+  });
+
+  it("a fresh CONFIRMED create resolves the attendee's waitlist entries; a no-event result never does", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
+    await bookCalendarAppointment(
+      BIZ,
+      { ...ARGS, attendeeEmail: "joe@example.com" },
+      "+15551230000"
+    );
+    expect(vi.mocked(resolveWaitlistAfterBooking)).toHaveBeenCalledWith(
+      BIZ,
+      { phones: ["+15551230000"], email: "joe@example.com" },
+      new Date(ARGS.startIso).toISOString()
+    );
+
+    vi.mocked(resolveWaitlistAfterBooking).mockClear();
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    await bookCalendarAppointment(BIZ, ARGS);
+    expect(vi.mocked(resolveWaitlistAfterBooking)).not.toHaveBeenCalled();
   });
 
   it("prefers the explicit attendeePhone over the fallback", async () => {

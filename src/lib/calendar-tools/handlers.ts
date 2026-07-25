@@ -13,6 +13,7 @@ import {
 } from "@/lib/calendar-tools/booking-dedupe";
 import { findUpcomingBookingsForAttendee } from "@/lib/calendar-tools/attendee-bookings";
 import { maybeAlertUnassignedBooking } from "@/lib/calendar-tools/unassigned-booking-alert";
+import { resolveWaitlistAfterBooking } from "@/lib/calendar-tools/waitlist-resolve";
 import { getCustomerMemory } from "@/lib/customer-memory/db";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 import {
@@ -687,6 +688,21 @@ export async function bookCalendarAppointment(
     }
   }
   const finalResult = await withStartLocal(result);
+
+  // Waitlist resolution (best-effort by module contract): a fresh CONFIRMED
+  // booking for a waitlisted attendee either fulfills their entry (they got
+  // an earlier time) or re-points it at what they now hold. Dedupe retries
+  // returned above; link-mode results carry no eventId and are skipped.
+  if (finalResult.ok) {
+    const booked = (finalResult.data ?? {}) as Record<string, unknown>;
+    if (typeof booked.eventId === "string" && booked.eventId.length > 0) {
+      await resolveWaitlistAfterBooking(
+        businessId,
+        { phones: attendeePhone ? [attendeePhone] : [], email: args.attendeeEmail ?? null },
+        new Date(args.startIso).toISOString()
+      );
+    }
+  }
 
   // Unassigned-booking owner alert (Truly, Jul 21 2026): a customer-facing
   // AI surface just confirmed a REAL appointment — if no teammate owns this

@@ -28,7 +28,9 @@ const bodySchema = z.object({
   name: z.string().max(300),
   phone: z.string().max(64),
   email: z.string().max(320),
-  note: z.string().max(2000).optional()
+  note: z.string().max(2000).optional(),
+  // "Text me if an earlier time opens up" (cancellation waitlist opt-in).
+  notifyEarlier: z.boolean().optional()
 });
 
 export async function POST(request: Request) {
@@ -46,7 +48,8 @@ export async function POST(request: Request) {
       name: body.name,
       phone: body.phone,
       email: body.email,
-      note: body.note
+      note: body.note,
+      notifyEarlier: body.notifyEarlier
     });
     if (!result.ok) {
       if (result.detail === "not_found") {

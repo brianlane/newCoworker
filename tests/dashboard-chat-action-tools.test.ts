@@ -29,6 +29,7 @@ const ALL_ON: ActionToolGates = {
   calendar_book_appointment: true,
   calendar_reschedule_appointment: true,
   calendar_cancel_appointment: true,
+  calendar_join_waitlist: true,
   list_aiflows: true,
   run_aiflow: true,
   edit_aiflow: true,
@@ -223,7 +224,8 @@ describe("declarations & naming", () => {
     expect(some.map((d) => d.name)).toEqual([
       "calendar_find_slots",
       "calendar_book_appointment",
-      "calendar_reschedule_appointment"
+      "calendar_reschedule_appointment",
+      "calendar_join_waitlist"
     ]);
   });
 
@@ -1097,6 +1099,54 @@ describe("generate_image", () => {
     );
     expect(bad).toMatchObject({ ok: false, message: expect.stringContaining("invalid_args") });
     expect(generateImage).not.toHaveBeenCalled();
+  });
+});
+
+describe("calendar_join_waitlist", () => {
+  it("is declared with a required phone and honest no-promises guidance, gated off cleanly", () => {
+    const decl = actionToolDeclarations(ALL_ON).find((d) => d.name === "calendar_join_waitlist");
+    expect(decl?.description).toMatch(/waitlist/i);
+    expect(decl?.description).toMatch(/Never promise/i);
+    expect(
+      (decl?.parameters as { required: string[] }).required
+    ).toEqual(["attendeePhone"]);
+
+    const gatedOff = actionToolDeclarations({ ...ALL_ON, calendar_join_waitlist: false });
+    expect(gatedOff.map((d) => d.name)).not.toContain("calendar_join_waitlist");
+  });
+
+  it("delegates parsed args to the shared core and returns its payload verbatim", async () => {
+    const joinWaitlist = vi.fn(async () => ({
+      ok: true,
+      detail: "waitlist_joined",
+      data: { phone: "+15551234567" },
+      message: "They are on the waitlist."
+    }));
+    const res = await executeActionTool(
+      BIZ,
+      {
+        name: "calendar_join_waitlist",
+        args: { attendeePhone: "+15551234567", attendeeName: "Pat", durationMinutes: 60 }
+      },
+      happyDeps({ joinWaitlist: joinWaitlist as never })
+    );
+    expect(res).toMatchObject({ ok: true, detail: "waitlist_joined" });
+    expect(joinWaitlist).toHaveBeenCalledWith(
+      BIZ,
+      { attendeePhone: "+15551234567", attendeeName: "Pat", durationMinutes: 60 },
+      null
+    );
+  });
+
+  it("rejects invalid args before touching the core", async () => {
+    const joinWaitlist = vi.fn();
+    const res = await executeActionTool(
+      BIZ,
+      { name: "calendar_join_waitlist", args: { attendeeName: "Pat" } },
+      happyDeps({ joinWaitlist: joinWaitlist as never })
+    );
+    expect(res).toMatchObject({ ok: false, message: expect.stringContaining("invalid_args") });
+    expect(joinWaitlist).not.toHaveBeenCalled();
   });
 });
 

@@ -35,6 +35,7 @@ import {
   cancelCalendarAppointment,
   rescheduleCalendarAppointment
 } from "@/lib/calendar-tools/reschedule";
+import { joinCalendarWaitlist } from "@/lib/calendar-tools/waitlist-join";
 import { listAiFlows, enqueueAiFlowRun, updateAiFlow } from "@/lib/ai-flows/db";
 import {
   listAiFlowsTool,
@@ -62,6 +63,7 @@ export const ACTION_TOOL_NAMES = [
   "calendar_book_appointment",
   "calendar_reschedule_appointment",
   "calendar_cancel_appointment",
+  "calendar_join_waitlist",
   "list_aiflows",
   "run_aiflow",
   "edit_aiflow",
@@ -91,6 +93,12 @@ export type ActionToolGates = {
   calendar_book_appointment: boolean;
   calendar_reschedule_appointment: boolean;
   calendar_cancel_appointment: boolean;
+  /**
+   * Cancellation waitlist: put a customer in line for an earlier slot; a
+   * freed slot texts them an offer (waitlist-fill core). Same registry
+   * toggle as the Rowboat dashboard_ twin.
+   */
+  calendar_join_waitlist: boolean;
   list_aiflows: boolean;
   run_aiflow: boolean;
   /**
@@ -276,6 +284,33 @@ const CANCEL_DECLARATION: GeminiFunctionDeclaration = {
   }
 };
 
+const JOIN_WAITLIST_DECLARATION: GeminiFunctionDeclaration = {
+  name: "calendar_join_waitlist",
+  description:
+    "Put a customer on the cancellation waitlist: when a cancellation frees an appointment slot EARLIER than what they hold (or any slot, if they have no booking), they get ONE text offering it. Use when the owner asks to waitlist someone for an earlier or sooner time. A valid mobile number is required, the offer arrives by text. Never promise that an earlier time WILL open up.",
+  parameters: {
+    type: "object",
+    properties: {
+      attendeePhone: {
+        type: "string",
+        description: "Customer's mobile number (E.164 preferred). Required."
+      },
+      attendeeName: { type: "string", description: "Customer's name (optional)." },
+      attendeeEmail: { type: "string", description: "Customer's email (optional)." },
+      durationMinutes: {
+        type: "number",
+        description: "Appointment length they want in minutes (default 30)."
+      },
+      latestIso: {
+        type: "string",
+        description:
+          "Latest slot start they would accept, ISO 8601 (optional; defaults to their current booking's start)."
+      }
+    },
+    required: ["attendeePhone"]
+  }
+};
+
 const LIST_AIFLOWS_DECLARATION: GeminiFunctionDeclaration = {
   name: "list_aiflows",
   description:
@@ -417,6 +452,7 @@ const DECLARATIONS: Record<ActionToolName, GeminiFunctionDeclaration> = {
   calendar_book_appointment: BOOK_DECLARATION,
   calendar_reschedule_appointment: RESCHEDULE_DECLARATION,
   calendar_cancel_appointment: CANCEL_DECLARATION,
+  calendar_join_waitlist: JOIN_WAITLIST_DECLARATION,
   list_aiflows: LIST_AIFLOWS_DECLARATION,
   run_aiflow: RUN_AIFLOW_DECLARATION,
   edit_aiflow: EDIT_AIFLOW_DECLARATION,
@@ -497,6 +533,15 @@ const cancelAppointmentArgsSchema = z.object({
   attendeeName: z.string().max(200).optional(),
   attendeeEmail: z.string().email().optional(),
   attendeePhone: z.string().max(32).optional()
+});
+
+const joinWaitlistArgsSchema = z.object({
+  attendeePhone: z.string().min(5).max(32),
+  attendeeName: z.string().max(200).optional(),
+  attendeeEmail: z.string().email().optional(),
+  durationMinutes: z.number().int().min(5).max(480).optional(),
+  latestIso: z.string().optional(),
+  timezone: z.string().optional()
 });
 
 // Flow-run/edit arg schemas live with the shared cores (manual-run-tool.ts /
@@ -583,6 +628,7 @@ export type ActionToolDeps = {
   book?: typeof bookCalendarAppointment;
   reschedule?: typeof rescheduleCalendarAppointment;
   cancel?: typeof cancelCalendarAppointment;
+  joinWaitlist?: typeof joinCalendarWaitlist;
   createDb?: typeof createSupabaseServiceClient;
   listFlows?: typeof listAiFlows;
   enqueueFlowRun?: typeof enqueueAiFlowRun;
@@ -613,6 +659,7 @@ export async function executeActionTool(
   const book = deps.book ?? bookCalendarAppointment;
   const reschedule = deps.reschedule ?? rescheduleCalendarAppointment;
   const cancel = deps.cancel ?? cancelCalendarAppointment;
+  const joinWaitlist = deps.joinWaitlist ?? joinCalendarWaitlist;
   const createDb = deps.createDb ?? createSupabaseServiceClient;
   const listFlows = deps.listFlows ?? listAiFlows;
   const enqueueFlowRun = deps.enqueueFlowRun ?? enqueueAiFlowRun;
@@ -834,6 +881,14 @@ export async function executeActionTool(
           if (message) return { ...canceled, message };
         }
         return canceled;
+      }
+      case "calendar_join_waitlist": {
+        const parsed = joinWaitlistArgsSchema.safeParse(call.args);
+        if (!parsed.success) {
+          return { ok: false, message: `invalid_args:${parsed.error.issues[0]?.message}` };
+        }
+        // The core carries its own model-facing guidance on failures.
+        return await joinWaitlist(businessId, parsed.data, null);
       }
       case "list_aiflows": {
         // Shared core with the Rowboat dispatcher's dashboard_list_aiflows.

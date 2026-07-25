@@ -718,6 +718,7 @@ WORKFLOW_JSON=$(jq -nc \
         "calendar_book_appointment",
         "calendar_reschedule_appointment",
         "calendar_cancel_appointment",
+        "calendar_join_waitlist",
         "send_email",
         "notify_team",
         "generate_image",
@@ -753,6 +754,7 @@ WORKFLOW_JSON=$(jq -nc \
         "calendar_book_appointment",
         "calendar_reschedule_appointment",
         "calendar_cancel_appointment",
+        "calendar_join_waitlist",
         "send_email",
         "notify_team",
         "generate_image",
@@ -791,6 +793,7 @@ WORKFLOW_JSON=$(jq -nc \
         "dashboard_calendar_book_appointment",
         "dashboard_calendar_reschedule_appointment",
         "dashboard_calendar_cancel_appointment",
+        "dashboard_calendar_join_waitlist",
         "dashboard_generate_image",
         "dashboard_document_list",
         "dashboard_document_share",
@@ -830,6 +833,7 @@ WORKFLOW_JSON=$(jq -nc \
         "dashboard_calendar_book_appointment",
         "dashboard_calendar_reschedule_appointment",
         "dashboard_calendar_cancel_appointment",
+        "dashboard_calendar_join_waitlist",
         "dashboard_generate_image",
         "dashboard_document_list",
         "dashboard_document_share",
@@ -1253,6 +1257,22 @@ WORKFLOW_JSON=$(jq -nc \
       }
     },
     {
+      name: "calendar_join_waitlist",
+      description: "Put the customer on the cancellation waitlist: when a cancellation frees an appointment slot EARLIER than what they hold (or any slot, if they have no booking yet), they get ONE text offering it. Use when the customer asks to be told if anything sooner opens up. Requires their mobile number, the offer arrives by text. Never promise that an earlier time WILL open up, only that they will be texted if one does.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          attendeePhone: { type: "string", description: "Customer mobile number in E.164, exactly as given in your context. Required." },
+          attendeeName: { type: "string", description: "Customer name, if known." },
+          attendeeEmail: { type: "string", description: "Customer email, if known." },
+          durationMinutes: { type: "number", description: "Appointment length they want in minutes. Defaults to 30." },
+          latestIso: { type: "string", description: "Latest slot start they would accept, ISO 8601. Defaults to their current booking start." }
+        },
+        required: ["attendeePhone"]
+      }
+    },
+    {
       name: "document_share",
       description: "Text the customer an expiring link to one of the business documents on file (price sheet, policy, contract) when they ask for a copy. Refer to the document by its title from your instructions. Internal-only and expired documents are refused server-side — if the tool fails, say the team will follow up with a copy and never invent a link.",
       isWebhook: $toolsAreReal,
@@ -1357,6 +1377,22 @@ WORKFLOW_JSON=$(jq -nc \
           attendeeName: { type: "string", description: "Attendee name, if known." }
         },
         required: []
+      }
+    },
+    {
+      name: "dashboard_calendar_join_waitlist",
+      description: "Put a customer on the cancellation waitlist when the owner asks in dashboard chat: when a cancellation frees an appointment slot EARLIER than what the customer holds (or any slot, if they have no booking), the customer gets ONE text offering it. Requires the customer mobile number. Never promise that an earlier time WILL open up.",
+      isWebhook: $toolsAreReal,
+      parameters: {
+        type: "object",
+        properties: {
+          attendeePhone: { type: "string", description: "Customer mobile number in E.164. Required." },
+          attendeeName: { type: "string", description: "Customer name, if known." },
+          attendeeEmail: { type: "string", description: "Customer email, if known." },
+          durationMinutes: { type: "number", description: "Appointment length in minutes. Defaults to 30." },
+          latestIso: { type: "string", description: "Latest slot start the customer would accept, ISO 8601. Defaults to their current booking start." }
+        },
+        required: ["attendeePhone"]
       }
     },
     {

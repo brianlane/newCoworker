@@ -7,11 +7,15 @@ vi.mock("@/lib/rowboat/gateway-token", () => ({
 vi.mock("@/lib/ai-flows/contact-booking-context", () => ({
   contactBookingContextForPhone: vi.fn()
 }));
+vi.mock("@/lib/calendar-tools/waitlist-fill", () => ({
+  pendingWaitlistOfferLine: vi.fn()
+}));
 
 import { POST } from "@/app/api/internal/contact-booking-context/route";
 import { assertCronAuth } from "@/lib/cron-auth";
 import { verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
 import { contactBookingContextForPhone } from "@/lib/ai-flows/contact-booking-context";
+import { pendingWaitlistOfferLine } from "@/lib/calendar-tools/waitlist-fill";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const PHONE = "+17808039935";
@@ -29,6 +33,7 @@ describe("api/internal/contact-booking-context route", () => {
     vi.clearAllMocks();
     vi.mocked(assertCronAuth).mockReturnValue(true);
     vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(false);
+    vi.mocked(pendingWaitlistOfferLine).mockResolvedValue(null);
   });
 
   it("403 when NEITHER the cron bearer nor a tenant-bound gateway token authorizes", async () => {
@@ -87,6 +92,24 @@ describe("api/internal/contact-booking-context route", () => {
       undefined,
       "America/Toronto"
     );
+  });
+
+  it("appends a pending waitlist-offer line to the booking line (and stands alone at status none)", async () => {
+    const offerLine = "This contact has a PENDING waitlist offer: …";
+    vi.mocked(pendingWaitlistOfferLine).mockResolvedValue(offerLine);
+    vi.mocked(contactBookingContextForPhone).mockResolvedValue({
+      status: "booked",
+      line: "This contact has an upcoming booking."
+    });
+    let res = await POST(req({ businessId: BIZ, phone: PHONE, timezone: "America/Phoenix" }));
+    let body = await res.json();
+    expect(body.data.line).toBe(`This contact has an upcoming booking.\n${offerLine}`);
+    expect(pendingWaitlistOfferLine).toHaveBeenCalledWith(BIZ, PHONE, "America/Phoenix");
+
+    vi.mocked(contactBookingContextForPhone).mockResolvedValue({ status: "none", line: null });
+    res = await POST(req({ businessId: BIZ, phone: PHONE }));
+    body = await res.json();
+    expect(body.data).toEqual({ status: "none", line: offerLine });
   });
 
   it("maps a thrown lookup failure to the standard error contract", async () => {
