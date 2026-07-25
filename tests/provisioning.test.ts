@@ -20,6 +20,7 @@ vi.mock("@/lib/provisioning/progress", () => ({
 }));
 
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
+import { HQ_BUSINESS_ID } from "@/lib/vps/shared-hardware";
 import { recordProvisioningProgress, hasPriorOpsNewSignupAlert } from "@/lib/provisioning/progress";
 import * as fs from "fs";
 import type { ProvisionVpsForBusinessResult } from "@/lib/hostinger/provision";
@@ -423,6 +424,32 @@ describe("provisioning/orchestrate", () => {
       vpsSize: "kvm1",
       billingPeriod: null
     });
+  });
+
+  it("warns but never refuses when the box is co-tenanted", async () => {
+    // Provisioning is the recovery path, so this must stay a warning. What it
+    // owes the operator is naming what a re-image would take down with it.
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("hq1"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      await orchestrateProvisioning(
+        { businessId: HQ_BUSINESS_ID, tier: "standard", vpsSize: "kvm1" },
+        { vpsProvisioner, remoteExec }
+      );
+      const warned = consoleError.mock.calls
+        .map((c) => String(c[0]))
+        .filter((line) => line.includes("Provisioning a CO-TENANTED box"));
+      expect(warned).toHaveLength(1);
+      expect(warned[0]).toContain("jobarms-render");
+      expect(warned[0]).toContain("1806097");
+    } finally {
+      consoleError.mockRestore();
+    }
+    // The provision itself ran: warning only, no refusal.
+    expect(vpsProvisioner).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: HQ_BUSINESS_ID, vpsSize: "kvm1" })
+    );
   });
 
   it("standard tier forwards to provisioner with tier='standard' and default kvm2 hardware", async () => {

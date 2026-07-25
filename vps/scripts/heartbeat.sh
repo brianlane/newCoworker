@@ -131,6 +131,45 @@ report_posture() {
     add_check public_listeners false "unexpected listeners: ${listeners}"
   fi
 
+  # Memory headroom. On a CO-TENANTED box (the HQ KVM1 shares hardware with
+  # the JobArms render sidecar, see src/lib/vps/shared-hardware.ts) two
+  # Chromium services compete for 4GB, so running out of RAM is a real
+  # failure mode and the voice bridge, being realtime, is the first thing to
+  # suffer. Reporting headroom here means we see the cause before the symptom
+  # gets blamed on Gemini Live. ZRAM is on for kvm1, so swap in use is the
+  # honest early signal and rides along in the detail.
+  #
+  # Threshold is available-under-8% OR under 300 MiB, whichever is LARGER: a
+  # small box should not be held to a percentage it can never meet, and a big
+  # box should not be judged by an absolute floor it always clears. The
+  # posture route ANDs every check into one ok, so this fires only on real
+  # pressure, never as routine noise.
+  local mem_total_kb mem_avail_kb swap_total_kb swap_free_kb
+  mem_total_kb="$(awk '/^MemTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+  mem_avail_kb="$(awk '/^MemAvailable:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+  swap_total_kb="$(awk '/^SwapTotal:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+  swap_free_kb="$(awk '/^SwapFree:/ {print $2}' /proc/meminfo 2>/dev/null || echo 0)"
+  if [[ -n "$mem_total_kb" ]] && (( mem_total_kb > 0 )); then
+    local avail_mib avail_pct min_kb swap_note
+    avail_mib=$(( mem_avail_kb / 1024 ))
+    avail_pct=$(( mem_avail_kb * 100 / mem_total_kb ))
+    min_kb=$(( mem_total_kb * 8 / 100 ))
+    (( min_kb < 300 * 1024 )) && min_kb=$(( 300 * 1024 ))
+    if (( swap_total_kb > 0 )); then
+      swap_note=", swap $(( (swap_total_kb - swap_free_kb) / 1024 ))/$(( swap_total_kb / 1024 )) MiB used"
+    else
+      swap_note=", no swap"
+    fi
+    if (( mem_avail_kb >= min_kb )); then
+      add_check memory_headroom true "${avail_mib} MiB available (${avail_pct}%)${swap_note}"
+    else
+      add_check memory_headroom false \
+        "only ${avail_mib} MiB available (${avail_pct}%, floor $(( min_kb / 1024 )) MiB)${swap_note}"
+    fi
+  else
+    add_check memory_headroom false "cannot read MemTotal from /proc/meminfo"
+  fi
+
   # Ollama must be reachable THROUGH the docker bridge — the path the
   # dockerised llm-router actually uses (host.docker.internal → host
   # gateway). A loopback-only Ollama passes every host-side probe while the

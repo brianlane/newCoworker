@@ -35,6 +35,7 @@
 import { logger } from "@/lib/logger";
 import { resolveDeployedVpsSize, type VpsSize } from "@/lib/vps/size";
 import { providerUsesHostingerLifecycle, resolveVpsProvider } from "@/lib/vps/provider";
+import { sharedHardwareFor } from "@/lib/vps/shared-hardware";
 import type { HostingerClient } from "@/lib/hostinger/client";
 import type { BusinessRow } from "@/lib/db/businesses";
 import type { SubscriptionRow } from "@/lib/db/subscriptions";
@@ -162,6 +163,24 @@ export async function migrateBusinessVpsSize(
         `data_residency_mode=${residencyMode}: hardware migration would strand the box datastore ` +
         "(only copy of purged history). Follow the manual runbook: fresh encrypted backup -> " +
         "migrate -> debug/residency-restore.ts --apply onto the new box."
+    };
+  }
+
+  // Co-tenanted boxes FAIL CLOSED: step 7 tears the old box down, which
+  // destroys a second product's service on it with no backup of ours to
+  // restore. There is deliberately no ack parameter here, because the admin
+  // panel is the wrong place to accept that consequence: the operator has to
+  // coordinate the co-tenant's redeploy first, then run the debug script with
+  // --shared-box-ack.
+  const shared = sharedHardwareFor(businessId);
+  if (shared) {
+    return {
+      ok: false,
+      stage: "guard",
+      error:
+        `${shared.businessName} runs on shared hardware (VM ${shared.vmId}): migrating it destroys ` +
+        `${shared.coTenants.map((c) => c.name).join(", ")}. Coordinate the co-tenant redeploy, ` +
+        "then run debug/migrate-vps-size.ts --shared-box-ack."
     };
   }
 

@@ -279,6 +279,23 @@ tenant and the KVM1/KVM2 smoke clones were retired when HQ was onboarded
 (CI "E2E (live AI + AiFlows)") is fixture-based and targets no live tenant.
 See [debug/README.md](debug/README.md#internal-test-tenant-new-coworker-hq-internal).
 
+**HQ's box is the fleet's one piece of SHARED hardware** (Jul 2026): VM 1806097
+also hosts JobArms, our own second product (`jobarms-render` +
+`cloudflared-jobarms` on `127.0.0.1:8085`, files under `/opt/jobarms-render`,
+tunnel in the JobArms Cloudflare account). The registry is
+[src/lib/vps/shared-hardware.ts](src/lib/vps/shared-hardware.ts), and every
+destructive fleet path consults it: `debug/migrate-vps-size.ts` refuses without
+`--shared-box-ack`, the admin-panel hardware migration refuses outright (a
+re-image destroys the co-tenant with no backup of ours to restore), and
+provisioning logs a loud co-tenancy warning rather than refusing, since it is
+the recovery path. Two Chromium sidecars now share 1 vCPU / 4GB with a realtime
+voice bridge, so the `memory_headroom` posture check
+([vps/scripts/heartbeat.sh](vps/scripts/heartbeat.sh)) is the first thing to
+read when HQ feels slow. **No customer box is shared, and none should be**: the
+per-tenant isolation described under
+[Security: per-VPS box hardening](#security-per-vps-box-hardening--isolation)
+depends on it.
+
 > ⚠️ These touch production (service-role key + decryptable VPS SSH keys via
 > `SECRETS_ENCRYPTION_KEY`, and they recreate live containers). Before running
 > or writing anything here, read the **Security rules (agents & operators)**
@@ -497,13 +514,19 @@ order from the wire inward:
   deleting a tunnel, expiring an SSH key, pausing a tenant, or flipping
   residency mode are all central DB/API operations.
 
-Two honest caveats: (1) the Cloudflare Access service-token edge gate on
+Three honest caveats: (1) the Cloudflare Access service-token edge gate on
 `data-*` hostnames (defense-in-depth in front of the bearer check) is
 deferred until the residency client plumbing needs it — the bearer gate alone
 protects the data plane today; (2) SSH keys, gateway tokens, and backup
 passphrases are escrowed centrally, so per-box isolation protects tenants
 from **each other** and shrinks a single-box compromise to one tenant — it
-does not remove the platform as the root of trust.
+does not remove the platform as the root of trust; (3) **one box in the fleet
+is not single-tenant: our own internal HQ box** (VM 1806097), which since Jul
+2026 also runs the JobArms render sidecar and whose SSH key that product's
+deploy therefore holds in decrypted form. It carries no customer's data, every
+customer box remains ours alone, and the co-tenancy is recorded in
+[src/lib/vps/shared-hardware.ts](src/lib/vps/shared-hardware.ts) so the fleet
+tooling refuses to re-image it by accident.
 
 ## Security: per-tenant gateway tokens
 

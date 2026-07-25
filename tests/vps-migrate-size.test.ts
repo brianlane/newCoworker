@@ -16,6 +16,7 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import { migrateBusinessVpsSize, type MigrateVpsSizeDeps } from "@/lib/vps/migrate-size";
+import { HQ_BUSINESS_ID } from "@/lib/vps/shared-hardware";
 import type { BusinessRow } from "@/lib/db/businesses";
 import type { SubscriptionRow } from "@/lib/db/subscriptions";
 import type { VpsSshKeyRow } from "@/lib/db/vps-ssh-keys";
@@ -140,6 +141,23 @@ describe("migrateBusinessVpsSize — guards", () => {
       expect(out.stage).toBe("guard");
       expect(out.error).toContain("residency");
       expect(out.error).toContain("residency-restore");
+    }
+    expect(deps.orchestrateProvisioning).not.toHaveBeenCalled();
+  });
+
+  it("fails closed on co-tenanted hardware (teardown would destroy the co-tenant)", async () => {
+    // The admin panel deliberately has no ack: coordinating the co-tenant's
+    // redeploy comes first, then the debug script with --shared-box-ack.
+    const deps = makeDeps({
+      getBusiness: vi.fn(async () => bizRow({ id: HQ_BUSINESS_ID } as never))
+    });
+    const out = await migrateBusinessVpsSize({ ...input, businessId: HQ_BUSINESS_ID }, deps);
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.stage).toBe("guard");
+      expect(out.error).toContain("shared hardware");
+      expect(out.error).toContain("jobarms-render");
+      expect(out.error).toContain("--shared-box-ack");
     }
     expect(deps.orchestrateProvisioning).not.toHaveBeenCalled();
   });
