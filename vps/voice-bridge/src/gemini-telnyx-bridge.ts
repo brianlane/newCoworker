@@ -1045,15 +1045,31 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   // callers is the strong gate (the prompt alone would still let the model try
   // it); each handler re-checks the caller as defense in depth.
   const STAFF_ONLY_TOOLS = new Set(["run_aiflow", "start_translator_mode"]);
+  /**
+   * Tools handled ON THE BOX rather than proxied to `/api/voice/tools/*`. They
+   * are registered separately below because they must NOT depend on
+   * `voiceToolsReady` (the HTTP proxy's app URL + gateway token): they need no
+   * app round trip, exactly like `transfer_to_owner` and `end_call`. A box
+   * missing that config is degraded, but interpreting still works there.
+   */
+  const BRIDGE_LOCAL_TOOLS = new Set(["start_translator_mode"]);
   if (!intake && voiceToolsReady) {
     for (const decl of buildVoiceToolDeclarations()) {
       if (callerIsStaff && STAFF_EXCLUDED_TOOLS.has(decl.name)) continue;
       if (!callerIsStaff && STAFF_ONLY_TOOLS.has(decl.name)) continue;
-      // Owner turned it off under Settings → Coworker tools. Bridge-local tools
-      // have no app-side adapter to refuse them, so withhold the declaration.
-      if (decl.name === "start_translator_mode" && !opts.translatorOnRequestEnabled) continue;
+      if (BRIDGE_LOCAL_TOOLS.has(decl.name)) continue;
       declarations.push(decl);
     }
+  }
+  // Bridge-local staff tools. Gated on the caller being staff and on the owner's
+  // Settings → Coworker tools row (resolved by index.ts): a bridge-local tool has
+  // no app-side adapter to answer `tool_disabled`, so withholding the declaration
+  // is the enforcement.
+  if (!intake && callerIsStaff && opts.translatorOnRequestEnabled) {
+    const translatorDecl = buildVoiceToolDeclarations().find(
+      (d) => d.name === "start_translator_mode"
+    );
+    if (translatorDecl) declarations.push(translatorDecl);
   }
   // `end_call` is available to every persona (receptionist, staff, and intake)
   // whenever the host wired a hangup capability — so the assistant can cleanly

@@ -215,9 +215,30 @@ describe("staff-requested translator mode (they add the other person themselves)
   });
 
   it("is withheld from customer callers at declaration time", () => {
-    // Rides the same STAFF_ONLY_TOOLS gate run_aiflow uses.
+    // Named in STAFF_ONLY_TOOLS alongside run_aiflow, and registered only under
+    // the callerIsStaff branch below, so a customer never sees the declaration.
     expect(src).toContain('STAFF_ONLY_TOOLS = new Set(["run_aiflow", "start_translator_mode"])');
-    expect(src).toContain("if (!callerIsStaff && STAFF_ONLY_TOOLS.has(decl.name)) continue;");
+    expect(src).toContain(
+      "if (!intake && callerIsStaff && opts.translatorOnRequestEnabled) {"
+    );
+  });
+
+  it("does not depend on the HTTP voice-tools proxy being configured", () => {
+    // Bugbot: it was registered inside the `voiceToolsReady` loop with the
+    // PROXIED tools, so a box missing APP_BASE_URL or the gateway token lost a
+    // tool that needs neither. Bridge-local tools follow transfer_to_owner and
+    // end_call instead, which are declared outside that gate.
+    expect(src).toContain('BRIDGE_LOCAL_TOOLS = new Set(["start_translator_mode"])');
+    expect(src).toContain("if (BRIDGE_LOCAL_TOOLS.has(decl.name)) continue;");
+    // The registration block must sit OUTSIDE the voiceToolsReady loop.
+    const loopAt = src.indexOf("if (!intake && voiceToolsReady) {");
+    const bridgeLocalAt = src.indexOf(
+      "if (!intake && callerIsStaff && opts.translatorOnRequestEnabled) {"
+    );
+    expect(bridgeLocalAt).toBeGreaterThan(loopAt);
+    const between = src.slice(loopAt, bridgeLocalAt);
+    // The loop closes before the bridge-local block opens.
+    expect(between).toContain("declarations.push(decl);");
   });
 
   it("refuses a customer a second time in the handler, not just by omission", () => {
@@ -247,7 +268,7 @@ describe("staff-requested translator mode (they add the other person themselves)
     // bridge-local tool has no such chokepoint. Without the read below the
     // Settings switch would be decoration.
     expect(src).toContain(
-      'if (decl.name === "start_translator_mode" && !opts.translatorOnRequestEnabled) continue;'
+      "if (!intake && callerIsStaff && opts.translatorOnRequestEnabled) {"
     );
     const handler = src.slice(src.indexOf('if (name === "start_translator_mode")'));
     expect(handler.slice(0, 1600)).toContain("voice_bridge_translator_tool_disabled");
