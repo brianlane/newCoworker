@@ -99,6 +99,8 @@ type ContactRow = {
   owner_employee_id: string | null;
   summary_md: string | null;
   pinned_md: string | null;
+  /** Concurrency token: a before-update trigger stamps this on EVERY write. */
+  updated_at: string;
 };
 
 const { data: rosterData, error: rosterErr } = await db
@@ -132,7 +134,7 @@ if (offRoster.length > 0) {
 const { data: contactData, error: contactErr } = await db
   .from("contacts")
   .select(
-    "id, customer_e164, display_name, type, name_source, email, tags, alias_e164s, owner_employee_id, summary_md, pinned_md"
+    "id, customer_e164, display_name, type, name_source, email, tags, alias_e164s, owner_employee_id, summary_md, pinned_md, updated_at"
   )
   .eq("business_id", BUSINESS_ID)
   .in("customer_e164", targets);
@@ -201,23 +203,33 @@ if (!APPLY) {
 
 const deletedIds: string[] = [];
 for (const row of deletable) {
-  // Re-assert the artifact shape in the DELETE itself, so a row edited between
-  // the read and the write is left alone rather than silently removed.
+  // Optimistic concurrency: `updated_at` is stamped by a BEFORE UPDATE trigger
+  // on contacts, so matching it covers EVERY keepReason condition at once (and
+  // any field a future column adds). A real interaction landing between the
+  // audit read and this write — an inbound text bumping the counters, a tag,
+  // a summarizer pass — moves it and the delete becomes a no-op. The shape
+  // columns are re-asserted alongside it so the guarantee is readable in the
+  // query itself rather than resting on one timestamp.
   const { data, error } = await db
     .from("contacts")
     .delete()
     .eq("id", row.id)
     .eq("business_id", BUSINESS_ID)
     .eq("customer_e164", row.customer_e164)
+    .eq("updated_at", row.updated_at)
     .eq("type", "customer")
     .eq("name_source", "auto")
+    .is("email", null)
+    .is("owner_employee_id", null)
+    .is("summary_md", null)
+    .is("pinned_md", null)
     .select("id");
   if (error) {
     console.error(`[oneshot] delete ${row.id} failed: ${error.message}`);
     process.exit(1);
   }
   if (((data as { id: string }[] | null) ?? []).length === 0) {
-    console.log(`[oneshot] ${row.id} changed shape since the read, left alone`);
+    console.log(`[oneshot] ${row.id} changed since the read, left alone`);
     continue;
   }
   deletedIds.push(row.id);
