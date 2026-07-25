@@ -307,7 +307,14 @@ export function AssignDidPanel(props: AssignDidPanelProps) {
           <input
             type="checkbox"
             checked={transferEnabled}
-            onChange={(e) => setTransferEnabled(e.target.checked)}
+            onChange={(e) => {
+              setTransferEnabled(e.target.checked);
+              // Interpreting only ever happens AFTER a transfer, so turning
+              // transfer off must visibly turn this off too. Leaving it checked
+              // (while its input is disabled) would strand an operator who
+              // cannot uncheck it, and still post true.
+              if (!e.target.checked) setTranslatorModeEnabled(false);
+            }}
           />
           Let the AI warm-transfer callers to this number
         </label>
