@@ -138,10 +138,14 @@ async function main(): Promise<void> {
   }
 
   // 2. What did the recent calls actually do?
+  //
+  // `telemetry_events` has no business_id COLUMN: the bridge's recordDiag puts it
+  // inside `payload` (vps/voice-bridge/src/index.ts), so the tenant filter has to
+  // be a jsonb path.
   const { data: events, error: eErr } = await supabase
     .from("telemetry_events")
     .select("event_type, payload, created_at")
-    .eq("business_id", businessId)
+    .eq("payload->>business_id", businessId)
     .in("event_type", TRANSLATOR_EVENTS as unknown as string[])
     .gte("created_at", sinceIso)
     .order("created_at", { ascending: true })
