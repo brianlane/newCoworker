@@ -673,6 +673,28 @@ describe("processVagaroAppointmentEvent", () => {
     expect(d.cancelWaitlist).not.toHaveBeenCalled();
   });
 
+  it("a delete with BOTH a payload start and ledger starts frees the union, deduped by instant", async () => {
+    const d = deps({
+      claimStarts: vi.fn().mockResolvedValue([
+        // Same instant as the payload start (different formatting) plus a
+        // genuinely different ledger-recorded slot; junk is skipped.
+        "2026-07-21T15:00:00+00:00",
+        "2026-07-21T13:00:00.000Z",
+        "not-a-date"
+      ])
+    });
+    await processVagaroAppointmentEvent(BIZ, apptEvent({ action: "deleted" }), d);
+    expect(d.offerSlot).toHaveBeenCalledTimes(2);
+    expect(d.offerSlot).toHaveBeenCalledWith(BIZ, "2026-07-21T15:00:00.000Z", {}, {
+      phones: ["6025550000"],
+      email: "dana@example.com"
+    });
+    expect(d.offerSlot).toHaveBeenCalledWith(BIZ, "2026-07-21T13:00:00.000Z", {}, {
+      phones: ["6025550000"],
+      email: "dana@example.com"
+    });
+  });
+
   it("deleted without a customer identity offers WITHOUT an exclusion and drops nobody", async () => {
     const d = deps();
     await processVagaroAppointmentEvent(

@@ -1,0 +1,9 @@
+Rename the waitlist migration past the Zoom import's timestamp; Vagaro deletes free the payload + ledger union
+
+The concurrently merged Zoom auto-import PR used 20260821000000, colliding
+with the booking_waitlist migration version and failing the local-Supabase
+apply in CI; the waitlist migration moves to 20260821002000. Vagaro delete
+handling now offers the UNION of the payload start and every
+ledger-recorded start (deduped by instant), so a webhook time that
+disagrees with the ledger can never skip the slot that actually freed
+(Bugbot Medium on PR #903).

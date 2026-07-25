@@ -414,9 +414,14 @@ export async function processVagaroAppointmentEvent(
   const hasIdentity = wlAttendee.phones.length > 0 || wlAttendee.email !== null;
   if (gone) {
     if (hasIdentity) await cancelWaitlist(businessId, wlAttendee);
-    // A payload without a start still frees whatever the ledger recorded.
-    const freed = appt?.startIso ? [appt.startIso] : vacatedStarts;
-    for (const startIso of freed) {
+    // The payload start AND every ledger-recorded start free up (deduped
+    // by instant): the webhook time can disagree with what the ledger
+    // booked, and neither view may be dropped (Bugbot Medium on PR #903).
+    const seenMs = new Set<number>();
+    for (const startIso of [...(appt?.startIso ? [appt.startIso] : []), ...vacatedStarts]) {
+      const ms = Date.parse(startIso);
+      if (!Number.isFinite(ms) || seenMs.has(ms)) continue;
+      seenMs.add(ms);
       await offerSlot(businessId, startIso, {}, hasIdentity ? wlAttendee : undefined);
     }
   } else if ((action === "created" || action === "updated") && appt) {
