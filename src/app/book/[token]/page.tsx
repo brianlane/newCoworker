@@ -45,6 +45,7 @@ export default async function BookPage({
           description={context.description}
           allowedDurations={context.allowedDurations}
           videoCall={context.videoCall}
+          sendsInvite={context.mode === "provider"}
           strings={{
             eventTitle: context.title ?? t("eventTitle", { business: context.businessName }),
             durationMinutes: t("durationMinutes"),
@@ -68,7 +69,9 @@ export default async function BookPage({
             checkDetails: t("checkDetails"),
             bookedHeading: t("bookedHeading"),
             bookedBody: t("bookedBody", { business: context.businessName }),
+            bookedBodyNoInvite: t("bookedBodyNoInvite", { business: context.businessName }),
             bookedVideoNote: t("bookedVideoNote"),
+            bookedZoomLinkLabel: t("bookedZoomLinkLabel"),
             poweredBy: t("poweredBy"),
             weekdaysShort: [
               t("weekdaySun"),
