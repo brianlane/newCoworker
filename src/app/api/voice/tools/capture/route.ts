@@ -11,6 +11,7 @@ import { insertCoworkerLog } from "@/lib/db/logs";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { linkCustomerEmail } from "@/lib/customer-memory/db";
+import { persistDetectedContactLanguage } from "@/lib/db/contact-language";
 import { ensureCapturedContact } from "@/lib/customer-memory/capture-contact";
 import { coerceOwnerPhoneToE164 } from "@/lib/phone/e164";
 import { logger } from "@/lib/logger";
@@ -36,7 +37,14 @@ const argsSchema = z.object({
   email: z.string().email().optional(),
   reason: z.string().max(1000).optional(),
   notes: z.string().max(2000).optional(),
-  urgency: z.enum(["low", "normal", "high"]).optional()
+  urgency: z.enum(["low", "normal", "high"]).optional(),
+  /**
+   * The language the caller is actually SPEAKING. Voice was the one channel
+   * that never recorded it, so a caller who spoke Spanish still got English
+   * texts afterward. Persisted as a detection (never over an owner override),
+   * so every later surface follows it.
+   */
+  language: z.enum(["en", "es"]).optional()
 });
 
 export async function POST(request: Request) {
@@ -65,9 +73,10 @@ export async function POST(request: Request) {
   }
   const args = parsed.data;
 
-  // Require at least one useful field so the log isn't empty noise.
+  // Require at least one useful field so the log isn't empty noise. `language`
+  // counts: "the caller is speaking Spanish" is worth recording on its own.
   const hasContent = Boolean(
-    args.name || args.phone || args.email || args.reason || args.notes
+    args.name || args.phone || args.email || args.reason || args.notes || args.language
   );
   if (!hasContent) {
     return voiceToolResponse({ ok: false, detail: "empty_capture" });
@@ -112,6 +121,25 @@ export async function POST(request: Request) {
         email: args.email ?? null,
         channel: "voice"
       });
+    }
+
+    // Language: record what the caller is SPEAKING so later texts, emails, and
+    // AI replies follow it (voice was the only channel that never learned
+    // this). Keyed on the trusted caller id, and only when a contact row can
+    // exist for it. Never over an owner override; best-effort mid-call.
+    const languageE164 = trustedCallerE164 ?? contactE164;
+    if (args.language && languageE164) {
+      try {
+        await persistDetectedContactLanguage(
+          envelope.businessId,
+          languageE164,
+          args.language
+        );
+      } catch (err) {
+        logger.warn("voice-tools/capture: language persist failed", {
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
     }
 
     // Cross-channel link: when the caller shares an email but asked to be

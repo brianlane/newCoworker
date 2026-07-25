@@ -280,6 +280,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         configurable: true
       },
       {
+        toolKey: "run_aiflow",
+        label: "Run automations",
+        description:
+          "Start one of your AiFlows from a phone call when YOU or a team member calls in (e.g. hand over a new lead and have it run your intake). Callers who are not on your team can never start one.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
         toolKey: "capture_caller_details",
         label: "Capture caller details",
         description: "Record caller name, contact info, and intent for your dashboard.",

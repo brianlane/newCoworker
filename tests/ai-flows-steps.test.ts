@@ -2057,6 +2057,26 @@ describe("planStep: upsert_customer", () => {
       action: { kind: "upsert_customer", e164: "+14804929641", name: "", email: "" }
     });
   });
+  it("carries a supported language and DROPS anything else (never junk on the contact)", () => {
+    const withLang: FlowStep = { ...base, languageVar: "lead_language" } as FlowStep;
+    const es = planStep(withLang, {
+      vars: { lead_phone: "+14804929641", lead_language: " ES " }
+    });
+    expect(es.ok && es.action.kind === "upsert_customer" && es.action.language).toBe("es");
+    // "none" is what the extraction answers when it does not know, and any
+    // other value is equally untrustworthy: both leave the stored language be.
+    for (const value of ["none", "spanish", "", 42, null]) {
+      const r = planStep(withLang, {
+        vars: { lead_phone: "+14804929641", lead_language: value }
+      });
+      expect(r.ok && r.action.kind === "upsert_customer" && "language" in r.action).toBe(false);
+    }
+    // No languageVar at all: unchanged shape.
+    const none = planStep(base, { vars: { lead_phone: "+14804929641" } });
+    expect(none.ok && none.action.kind === "upsert_customer" && "language" in none.action).toBe(
+      false
+    );
+  });
   it("SKIPS (never fails) when the phone var is missing — filing is bookkeeping", () => {
     // A "none"/empty/scrubbed phone slips past a notEquals-"none" when-guard
     // as the empty string; the send steps skip gracefully for that value, so

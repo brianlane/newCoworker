@@ -898,6 +898,25 @@ describe("upsert_customer step", () => {
     const def = parseAiFlowDefinition(JSON.parse(JSON.stringify(withUpsert("lead_phone"))));
     expect(summarizeDefinition(def)).toContain("upsert_customer");
   });
+
+  it("accepts a languageVar an earlier step produced, and flags a ghost one", () => {
+    const base = withUpsert("lead_phone") as {
+      steps: Array<Record<string, unknown>>;
+    };
+    const withLang = JSON.parse(JSON.stringify(base)) as typeof base;
+    (withLang.steps[1].fields as Array<{ name: string }>).push({ name: "lead_language" });
+    withLang.steps[2].languageVar = "lead_language";
+    const ok = parseAiFlowDefinition(JSON.parse(JSON.stringify(withLang)));
+    expect(validateDefinitionSemantics(ok)).toEqual([]);
+    expect(ok.steps[2]).toMatchObject({ languageVar: "lead_language" });
+
+    const ghost = JSON.parse(JSON.stringify(base)) as typeof base;
+    ghost.steps[2].languageVar = "ghost_language";
+    const issues = validateDefinitionSemantics(
+      aiFlowDefinitionSchema.parse(JSON.parse(JSON.stringify(ghost)))
+    );
+    expect(issues.some((i) => i.includes("languageVar {{vars.ghost_language}}"))).toBe(true);
+  });
 });
 
 describe("step `when` guard", () => {

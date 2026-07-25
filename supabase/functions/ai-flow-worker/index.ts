@@ -78,6 +78,10 @@ import {
 import { resolveContactRef, resolveFromMatchesRefValues } from "../_shared/ai_flows/contact_ref.ts";
 import { matchRosterName } from "../_shared/ai_flows/roster_match.ts";
 import {
+  persistDetectedContactLanguage,
+  readContactLanguageState
+} from "../_shared/customer_language_persist.ts";
+import {
   normalizeBrowseUrl,
   parseActionResponse,
   parseRenderResponse,
@@ -585,6 +589,22 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
           typeof scope.trigger.to === "string" ? scope.trigger.to : "",
           ...(await businessSelfNumbers(supabase, run.business_id))
         ])
+      : "";
+  }
+  // Engine-provided {{vars.contact_language}}: the language this person is
+  // known to speak ("en"/"es", "" when unknown), so a flow can pick the right
+  // copy WITHOUT the owner having to tell it. Seeded from the triggering
+  // sender when the trigger has one; an intake flow whose lead phone only
+  // appears mid-run gets it refreshed by its upsert_customer step instead.
+  // Persisted via buildContext like every other var, so a park/resume keeps
+  // whatever the run has learned.
+  if (scope.vars.contact_language === undefined) {
+    const triggerFrom = typeof scope.trigger.from === "string" ? scope.trigger.from : "";
+    const groupLead =
+      typeof scope.vars.group_lead_phone === "string" ? scope.vars.group_lead_phone : "";
+    const languageE164 = groupLead || triggerFrom;
+    scope.vars.contact_language = languageE164
+      ? await readContactLanguageValue(supabase, run.business_id, languageE164)
       : "";
   }
   // Resolve (and self-heal) the business's dedicated AI mailbox up front so every
@@ -2246,6 +2266,20 @@ async function findDuplicateLeadRun(
   }
 }
 
+/**
+ * The contact's effective language ("en"/"es"), or "" when nothing is stored.
+ * Used to seed and refresh {{vars.contact_language}}; any read trouble answers
+ * "" so a blip degrades to the flow's default copy instead of failing a run.
+ */
+async function readContactLanguageValue(
+  supabase: Supabase,
+  businessId: string,
+  customerE164: string
+): Promise<string> {
+  const state = await readContactLanguageState(supabase, businessId, customerE164);
+  return state.preferred ?? "";
+}
+
 async function upsertCustomerStep(
   supabase: Supabase,
   run: RunRow,
@@ -2387,12 +2421,39 @@ async function upsertCustomerStep(
       console.error("upsert_customer contact_created verify", e);
     }
   }
+  // Language: persist what the flow was told (as a DETECTION, so the lead's
+  // own replies can still correct it), then refresh
+  // {{vars.contact_language}} for this contact so LATER steps can branch on
+  // the language without the owner having named it. This is the point an
+  // intake flow first knows the lead's number, which is why the refresh lives
+  // here rather than only at run start. Best-effort by contract.
+  try {
+    const state = await readContactLanguageState(supabase, run.business_id, action.e164);
+    if (action.language === "en" || action.language === "es") {
+      await persistDetectedContactLanguage(
+        supabase,
+        run.business_id,
+        action.e164,
+        action.language,
+        state
+      );
+      scope.vars.contact_language =
+        state.source === "owner_set" ? (state.preferred ?? "") : action.language;
+    } else {
+      scope.vars.contact_language = state.preferred ?? "";
+    }
+  } catch (e) {
+    console.error("upsert_customer contact language", e);
+  }
   return {
     kind: "ok",
     result: {
       customer_e164: action.e164,
       display_name: action.name || null,
-      email: action.email || null
+      email: action.email || null,
+      ...(scope.vars.contact_language
+        ? { contact_language: scope.vars.contact_language }
+        : {})
     }
   };
 }
@@ -6105,6 +6166,20 @@ async function placeAiCallStep(
       };
     }
     notifyE164 = resolved.phone;
+  }
+  // notifyOwner: the tenant-neutral recipient (what lets a shared template
+  // carry a call step). Resolved to the owner's configured alert number, the
+  // same one notify_owner texts.
+  if (action.notifyOwner === true) {
+    const owner = await ownerForwardE164(supabase, run.business_id);
+    if (!owner) {
+      return {
+        kind: "fail",
+        error:
+          "place_ai_call: the call summary goes to the owner, but no owner alert number is configured (Settings, then Notifications)"
+      };
+    }
+    notifyE164 = owner;
   }
   if (!notifyE164) {
     return { kind: "fail", error: "place_ai_call: no notify number configured" };

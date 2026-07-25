@@ -135,7 +135,15 @@ export const ENGINE_PROVIDED_VARS = [
   "claimed_agent",
   "claimed_agent_phone",
   "claimed_agent_eta_minutes",
-  "group_lead_phone"
+  "group_lead_phone",
+  /**
+   * The contact's known language ("en" / "es", empty when unknown), so a flow
+   * can send the right copy WITHOUT the owner having to say which language the
+   * lead speaks. Seeded at run start from the triggering sender when there is
+   * one, and refreshed by every `upsert_customer` step for the contact it just
+   * keyed (which is when an intake flow first learns the lead's number).
+   */
+  "contact_language"
 ] as const;
 
 /** The UI action kinds a browse_action step may perform. */
@@ -977,9 +985,18 @@ const nonBranchStepMembers = [
      * details the flow already extracted.
      */
     contextTemplate: z.string().min(1).max(2000).optional(),
-    // Post-call summary recipient: exactly one of notifyE164 / notifyRef.
+    // Post-call summary recipient: exactly one of notifyE164 / notifyRef /
+    // notifyOwner.
     notifyE164: e164.optional(),
     notifyRef: contactRefSchema.optional(),
+    /**
+     * Send the post-call summary to the business OWNER through the same
+     * notification path `notify_owner` uses. Tenant-neutral (no phone or row
+     * id baked in), which is what lets a curated starter template ship a call
+     * step at all. Only the literal `true` is accepted: absence IS the off
+     * state.
+     */
+    notifyOwner: z.literal(true).optional(),
     transfer: z
       .object({
         // Exactly one of toE164 / toRef (validateDefinitionSemantics).
@@ -1160,6 +1177,14 @@ const nonBranchStepMembers = [
     phoneVar: varName,
     nameVar: varName.optional(),
     emailVar: varName.optional(),
+    /**
+     * Var holding the lead's language ("en" / "es"; anything else is ignored),
+     * e.g. an extract_text field for "she speaks Spanish". Stored as a
+     * DETECTED language, never an owner override, so the lead's own replies
+     * can still correct a wrong guess. Either way the step refreshes
+     * {{vars.contact_language}} with the contact's effective language.
+     */
+    languageVar: varName.optional(),
     when: whenSchema.optional()
   }),
   // Generate an AI image from a prompt template and save a signed URL to the
@@ -2047,14 +2072,16 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
           `Step "${step.id}" calls {{vars.${step.toVar}}} which no earlier step produces.`
         );
       }
-      const notifySources = [Boolean(step.notifyE164), Boolean(step.notifyRef)].filter(
-        Boolean
-      ).length;
+      const notifySources = [
+        Boolean(step.notifyE164),
+        Boolean(step.notifyRef),
+        Boolean(step.notifyOwner)
+      ].filter(Boolean).length;
       if (notifySources !== 1) {
         issues.push(
           notifySources === 0
-            ? `Step "${step.id}" has nowhere to send the call summary; set notifyE164 or pick a saved contact (notifyRef).`
-            : `Step "${step.id}" sets both notifyE164 and notifyRef; use only one.`
+            ? `Step "${step.id}" has nowhere to send the call summary; set notifyOwner, notifyE164, or pick a saved contact (notifyRef).`
+            : `Step "${step.id}" sets more than one call-summary recipient; use exactly one of notifyOwner / notifyE164 / notifyRef.`
         );
       }
       if (step.transfer) {
@@ -2160,7 +2187,8 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       const refs: Array<[string, string | undefined]> = [
         ["phoneVar", step.phoneVar],
         ["nameVar", step.nameVar],
-        ["emailVar", step.emailVar]
+        ["emailVar", step.emailVar],
+        ["languageVar", step.languageVar]
       ];
       for (const [label, v] of refs) {
         if (v && !vars.has(v) && !ENGINE_VARS.has(v)) {

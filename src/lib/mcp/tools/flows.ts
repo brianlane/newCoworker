@@ -273,6 +273,44 @@ export const triggerFlowTool = defineMcpTool({
   }
 });
 
+export const runFlowTool = defineMcpTool({
+  name: "run_flow",
+  description:
+    "Run one of the business's ENABLED automations right now (a manual run), the same as pressing Run now in the dashboard. Use this to hand work to a flow directly, e.g. give a new lead's details to the owner's lead-intake automation. `input` is passed to the run as its triggering text, so include everything the flow needs to extract. Unlike trigger_flow (which only reaches webhook-triggered flows), this starts a flow by name or id whatever its trigger, except voice flows, which only run on a live call.",
+  schema: {
+    business_id: businessIdField,
+    flow: z
+      .string()
+      .min(1)
+      .max(200)
+      .describe("The flow's id, exact name, or a unique fragment of its name."),
+    input: z
+      .string()
+      .max(4000)
+      .optional()
+      .describe("Text the run starts with (the flow's extraction reads it).")
+  },
+  handler: async (args, auth) => {
+    const businessId = await resolveMcpBusinessId(auth, args.business_id);
+    await requireMcpBusinessRole(auth, businessId, "manage_aiflows");
+    // Shares the rate limiter with trigger_flow: both enqueue runs, and one
+    // budget keeps a chatty client from flooding the worker either way.
+    const limiter = rateLimit(`mcp-flow-events:${businessId}`, MCP_FLOW_EVENT_RATE);
+    if (!limiter.success) {
+      throw new McpToolError("Flow-run rate limit exceeded — retry shortly.");
+    }
+    // The same shared core the dashboard, owner-SMS, and voice surfaces use,
+    // so refusals (unknown, ambiguous, disabled, voice-only) read identically.
+    const { runAiFlowTool } = await import("@/lib/ai-flows/manual-run-tool");
+    const result = await runAiFlowTool(businessId, {
+      flow: args.flow,
+      ...(args.input ? { input: args.input } : {})
+    });
+    if (!result.ok) throw new McpToolError(result.message);
+    return { run_id: result.runId, flow_name: result.flowName, note: result.note };
+  }
+});
+
 export const flowTools = [
   listFlowsTool,
   getFlowTool,
@@ -280,5 +318,6 @@ export const flowTools = [
   createFlowTool,
   updateFlowTool,
   setFlowEnabledTool,
-  triggerFlowTool
+  triggerFlowTool,
+  runFlowTool
 ];

@@ -232,6 +232,32 @@ export function buildVoiceToolDeclarations(): VoiceToolDeclaration[] {
           urgency: {
             type: Type.STRING,
             description: "'low', 'normal', or 'high' — high escalates to the owner."
+          },
+          language: {
+            type: Type.STRING,
+            description:
+              "'en' or 'es': the language the caller is actually SPEAKING. Set it whenever the caller speaks Spanish (or switches to it) so their later texts and emails come in that language too. Omit when unsure."
+          }
+        },
+        required: []
+      }
+    },
+    {
+      name: "run_aiflow",
+      description:
+        "Start one of the business's saved automations. Only offered when the caller is the owner or a team member (e.g. they call in with a new lead's details and ask you to run their lead intake). Call it with NO arguments first to see the automations, then call it again with the exact name from that listing plus everything the caller told you as `input`. Report the result honestly: a disabled automation cannot run.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          flow: {
+            type: Type.STRING,
+            description:
+              "The automation's exact name (or id) from the listing. Omit to list what is available."
+          },
+          input: {
+            type: Type.STRING,
+            description:
+              "Everything the caller said that the automation needs, in their own words (names, phone numbers, what they are looking for, who should handle it)."
           }
         },
         required: []
