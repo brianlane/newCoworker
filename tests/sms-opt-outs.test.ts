@@ -4,7 +4,12 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
 }));
 
-import { checkSmsOptOut, listSmsOptOuts, setSmsOptOut } from "@/lib/sms/opt-outs";
+import {
+  checkSmsOptOut,
+  getSmsOptOutKind,
+  listSmsOptOuts,
+  setSmsOptOut
+} from "@/lib/sms/opt-outs";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -48,6 +53,56 @@ describe("listSmsOptOuts", () => {
     const db = listDb({ data: [], error: null });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     await expect(listSmsOptOuts(BIZ)).resolves.toEqual([]);
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
+  });
+});
+
+describe("getSmsOptOutKind", () => {
+  function kindDb(result: { data: unknown; error: { message: string } | null }) {
+    return {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue(result)
+    };
+  }
+
+  it("returns the row's kind, and null when the number is not suppressed", async () => {
+    expect(
+      await getSmsOptOutKind(BIZ, "+16025550111", kindDb({ data: { kind: "owner_spam" }, error: null }) as never)
+    ).toBe("owner_spam");
+    expect(
+      await getSmsOptOutKind(BIZ, "+16025550111", kindDb({ data: { kind: "stop" }, error: null }) as never)
+    ).toBe("stop");
+    expect(
+      await getSmsOptOutKind(BIZ, "+16025550111", kindDb({ data: null, error: null }) as never)
+    ).toBeNull();
+    // An unknown provenance value degrades to "not suppressed" rather than
+    // guessing at semantics.
+    expect(
+      await getSmsOptOutKind(BIZ, "+16025550111", kindDb({ data: { kind: "???" }, error: null }) as never)
+    ).toBeNull();
+  });
+
+  it("treats read errors as not suppressed (warn-logged), unlike SMS consent", async () => {
+    expect(
+      await getSmsOptOutKind(BIZ, "+16025550111", kindDb({ data: null, error: { message: "rls" } }) as never)
+    ).toBeNull();
+
+    // Non-Error rejection shapes too (PG drivers can surface plain strings).
+    const throwing = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockRejectedValue("socket boom")
+    };
+    expect(await getSmsOptOutKind(BIZ, "+16025550111", throwing as never)).toBeNull();
+  });
+
+  it("falls back to the service client when none is provided", async () => {
+    const db = kindDb({ data: { kind: "stop" }, error: null });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    expect(await getSmsOptOutKind(BIZ, "+16025550111")).toBe("stop");
     expect(createSupabaseServiceClient).toHaveBeenCalled();
   });
 });
