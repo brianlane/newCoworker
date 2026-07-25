@@ -374,28 +374,65 @@ describe("salvageFlowDefinition: semantic repair loop", () => {
     expect(res!.definition.steps.map((s) => s.type)).toEqual(["notify_owner"]);
   });
 
-  it("mends a send_sms with multiple recipients (to > toAgentName > replyToGroup)", () => {
+  it("mends a send_sms with multiple recipients (to > toAgentName > toAgentNameVar > replyToGroup)", () => {
     const keepTo = salvageFlowDefinition({
       version: 1,
       trigger: { channel: "sms", conditions: [] },
       steps: [
-        { id: "s", type: "send_sms", to: "+16025551234", toAgentName: "Dave", body: "hi" }
+        {
+          id: "s",
+          type: "send_sms",
+          to: "+16025551234",
+          toAgentName: "Dave",
+          toAgentNameVar: "claimed_agent",
+          body: "hi"
+        }
       ]
     });
     const s1 = keepTo!.definition.steps[0];
     expect(s1.type === "send_sms" && s1.to).toBe("+16025551234");
     expect(s1.type === "send_sms" && s1.toAgentName).toBeUndefined();
+    expect(s1.type === "send_sms" && s1.toAgentNameVar).toBeUndefined();
 
     const keepAgent = salvageFlowDefinition({
       version: 1,
       trigger: { channel: "sms", conditions: [] },
       steps: [
-        { id: "s", type: "send_sms", toAgentName: "Dave", replyToGroup: true, body: "hi" }
+        {
+          id: "s",
+          type: "send_sms",
+          toAgentName: "Dave",
+          toAgentNameVar: "claimed_agent",
+          replyToGroup: true,
+          body: "hi"
+        }
       ]
     });
     const s2 = keepAgent!.definition.steps[0];
     expect(s2.type === "send_sms" && s2.toAgentName).toBe("Dave");
+    expect(s2.type === "send_sms" && s2.toAgentNameVar).toBeUndefined();
     expect(s2.type === "send_sms" && s2.replyToGroup).toBeUndefined();
+
+    // The var pin outranks replyToGroup and a ref: a hand-off addressed to a
+    // named teammate must not degrade into a group blast.
+    const keepAgentVar = salvageFlowDefinition({
+      version: 1,
+      trigger: { channel: "sms", conditions: [] },
+      steps: [
+        {
+          id: "s",
+          type: "send_sms",
+          toAgentNameVar: "claimed_agent",
+          toRef: { source: "employee", id: "22222222-2222-4222-8222-222222222222" },
+          replyToGroup: true,
+          body: "hi"
+        }
+      ]
+    });
+    const s2v = keepAgentVar!.definition.steps[0];
+    expect(s2v.type === "send_sms" && s2v.toAgentNameVar).toBe("claimed_agent");
+    expect(s2v.type === "send_sms" && s2v.toRef).toBeUndefined();
+    expect(s2v.type === "send_sms" && s2v.replyToGroup).toBeUndefined();
 
     const keepGroup = salvageFlowDefinition({
       version: 1,

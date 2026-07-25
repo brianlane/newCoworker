@@ -795,6 +795,19 @@ const nonBranchStepMembers = [
      * reference {{agent.name}}/{{agent.phone}} (the resolved member).
      */
     toAgentName: z.string().min(1).max(120).optional(),
+    /**
+     * DYNAMIC teammate recipient: the name of an earlier-produced var whose
+     * VALUE the worker resolves against the ACTIVE roster at run time, then
+     * sends exactly like `toAgentName`. This is how a post-claim hand-off
+     * addresses whoever claimed the lead ({{vars.claimed_agent}}) without
+     * hard-coding a name: the counterpart of route_to_team's agentNameVar.
+     * Prefer it over `to: "{{vars.claimed_agent_phone}}"`, which reads as lead
+     * outreach in the definition even though the worker now recognizes a roster
+     * number either way. Mutually exclusive with the other recipient sources.
+     * Structural (a var NAME, not a person's name), so unlike `toAgentName` it
+     * survives library scrubbing untouched.
+     */
+    toAgentNameVar: varName.optional(),
     // Dynamic recipient: resolve a saved employee/contact's current phone at run
     // time. Mutually exclusive with to/toAgentName/replyToGroup (enforced in
     // validateDefinitionSemantics alongside the other recipient sources).
@@ -809,11 +822,13 @@ const nonBranchStepMembers = [
     // the tenant per template message; not-yet-approved templates skip
     // with an honest note). Requires a connected WhatsApp integration.
     type: z.literal("send_whatsapp"),
-    // Exactly one of to / toAgentName / toRef (same rule as send_sms,
-    // enforced in validateDefinitionSemantics).
+    // Exactly one of to / toAgentName / toAgentNameVar / toRef (same rule as
+    // send_sms, enforced in validateDefinitionSemantics).
     to: z.string().min(1).max(200).optional(),
     body: z.string().min(1).max(1600),
     toAgentName: z.string().min(1).max(120).optional(),
+    /** Dynamic teammate recipient; see send_sms toAgentNameVar. */
+    toAgentNameVar: varName.optional(),
     toRef: contactRefSchema.optional(),
     when: whenSchema.optional()
   }),
@@ -1858,11 +1873,13 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
         } else if (ref.scope === "agent") {
           // {{agent.name}}/{{agent.phone}} is the resolved team member, known at
           // run time inside a route_to_team step (the offered agent) or a
-          // send_sms { toAgentName } step (the named recipient).
+          // send_sms { toAgentName | toAgentNameVar } step (the named recipient).
           const hasAgent =
             step.type === "route_to_team" ||
             ((step.type === "send_sms" || step.type === "send_whatsapp") &&
-              (Boolean(step.toAgentName) || step.toRef?.source === "employee"));
+              (Boolean(step.toAgentName) ||
+                Boolean(step.toAgentNameVar) ||
+                step.toRef?.source === "employee"));
           if (!hasAgent) {
             issues.push(
               `Step "${step.id}" uses {{agent.${ref.key}}} but only a route_to_team or send_sms toAgentName step has an agent.`
@@ -2185,27 +2202,29 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
     }
 
     // A send_sms needs EXACTLY ONE recipient source: a templated `to`, a named
-    // roster member (`toAgentName`), or `replyToGroup` (reply into the inbound
-    // group thread). replyToGroup only makes sense for an SMS-triggered flow
-    // that can carry participants.
+    // roster member (`toAgentName`), a var-resolved roster member
+    // (`toAgentNameVar`), or `replyToGroup` (reply into the inbound group
+    // thread). replyToGroup only makes sense for an SMS-triggered flow that can
+    // carry participants.
     if (step.type === "send_sms") {
       // `to` is either absent or (by schema) a non-empty string, so a truthy
-      // `to` means a recipient is configured. `toRef` is a fourth source (a
+      // `to` means a recipient is configured. `toRef` is a fifth source (a
       // saved employee/contact resolved to a number at run time).
       const sources = [
         Boolean(step.to),
         Boolean(step.toAgentName),
+        Boolean(step.toAgentNameVar),
         Boolean(step.replyToGroup),
         Boolean(step.toRef)
       ];
       const count = sources.filter(Boolean).length;
       if (count === 0) {
         issues.push(
-          `Step "${step.id}" sends a text but has no recipient; set "to", "toAgentName", "toRef", or turn on replyToGroup.`
+          `Step "${step.id}" sends a text but has no recipient; set "to", "toAgentName", "toAgentNameVar", "toRef", or turn on replyToGroup.`
         );
       } else if (count > 1) {
         issues.push(
-          `Step "${step.id}" sets more than one recipient; use only one of "to", "toAgentName", "toRef", or replyToGroup.`
+          `Step "${step.id}" sets more than one recipient; use only one of "to", "toAgentName", "toAgentNameVar", "toRef", or replyToGroup.`
         );
       }
       if (step.replyToGroup && def.trigger.channel !== "sms") {
@@ -2218,17 +2237,37 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
     // A send_whatsapp needs EXACTLY ONE recipient source (same rule as
     // send_sms, minus replyToGroup — WhatsApp has no group-MMS reply path).
     if (step.type === "send_whatsapp") {
-      const waSources = [Boolean(step.to), Boolean(step.toAgentName), Boolean(step.toRef)];
+      const waSources = [
+        Boolean(step.to),
+        Boolean(step.toAgentName),
+        Boolean(step.toAgentNameVar),
+        Boolean(step.toRef)
+      ];
       const waCount = waSources.filter(Boolean).length;
       if (waCount === 0) {
         issues.push(
-          `Step "${step.id}" sends a WhatsApp message but has no recipient; set "to", "toAgentName", or "toRef".`
+          `Step "${step.id}" sends a WhatsApp message but has no recipient; set "to", "toAgentName", "toAgentNameVar", or "toRef".`
         );
       } else if (waCount > 1) {
         issues.push(
-          `Step "${step.id}" sets more than one recipient; use only one of "to", "toAgentName", or "toRef".`
+          `Step "${step.id}" sets more than one recipient; use only one of "to", "toAgentName", "toAgentNameVar", or "toRef".`
         );
       }
+    }
+
+    // The dynamic teammate recipient reads a var an EARLIER step must produce
+    // (same scope rule as route_to_team's agentNameVar and wait_for_reply's
+    // phoneVar). `claimed_agent` is an ENGINE_VARS entry, so the common
+    // post-claim hand-off passes without an explicit producer step.
+    if (
+      (step.type === "send_sms" || step.type === "send_whatsapp") &&
+      step.toAgentNameVar &&
+      !vars.has(step.toAgentNameVar) &&
+      !ENGINE_VARS.has(step.toAgentNameVar)
+    ) {
+      issues.push(
+        `Step "${step.id}" picks its teammate from {{vars.${step.toAgentNameVar}}} which no earlier step produces.`
+      );
     }
 
     // A run_agent needs EXACTLY ONE input source: rendered text (`input`)
@@ -2559,9 +2598,14 @@ function mendStepForIssue(step: Record<string, unknown>, issue: string): boolean
   if (/sets more than one recipient/.test(issue)) {
     if (step.to) {
       delete step.toAgentName;
+      delete step.toAgentNameVar;
       delete step.toRef;
       delete step.replyToGroup;
     } else if (step.toAgentName) {
+      delete step.toAgentNameVar;
+      delete step.toRef;
+      delete step.replyToGroup;
+    } else if (step.toAgentNameVar) {
       delete step.toRef;
       delete step.replyToGroup;
     } else {

@@ -22,6 +22,7 @@ and is **not** part of any automated path.
 | Script | What it does |
 | --- | --- |
 | `patch-kyp-offer-branch.ts` | Rewrites KYP Ads' "Lead follow-up (white-glove build)" flow to route by Facebook lead form: form name containing "Simple form setup 5/7/26" or "100/week" → the $100/week greeting/Calendly link, everything else → $200/week. Deterministic branch (no LLM classify); idempotent — re-running `--apply` resets the flow to this known-good shape. `--business <uuid>` (or `KYP_BUSINESS_ID`). Applied 2026-07-17 (ledger-recorded). |
+| `fix-staff-contact-rows.ts` | Deletes contact rows a pre-fix AiFlow send filed for a ROSTER MEMBER (the Dave Lane defect, Jul 25 2026: a post-claim hand-off addressed the teammate through a phone var, so the engine filed them as a new customer and stamped the LEAD's name on the row). Audits every roster number for a business, or just the given `--phone` ones (repeatable); deletes only while the row still looks like the untouched artifact (type `customer`, `name_source` auto, no aliases/tags/owner/email/memory) and re-asserts that shape in the DELETE. Idempotent (a deleted row simply reports clean), dry-run by default, ledger-recorded. |
 
 ## Removed
 

@@ -910,6 +910,55 @@ CRUD; scrubbed from cross-tenant library copies. Off by default; first
 enabled on Amy Laidlaw's five lead-routing flows
 (`scripts/oneshot/set-amy-claim-notify-email.ts`, ledger-recorded).
 
+### A teammate is never a lead, however the step addressed them
+
+One rule, three gates, so a roster member is treated as staff on every channel:
+the inbound SMS webhook's employee gate (PR #154), the voice bridge's staff
+persona, and now **outbound AiFlow sends**. A number on the tenant's active
+`ai_flow_team_members` roster (or one of the business's own derived numbers) is
+an INTERNAL recipient no matter how the step names it, so the text never rides
+the branded RCS agent, never parks until morning on the lead's quiet hours,
+never gets lead-engagement link tracking, and is **never filed or renamed as a
+customer**.
+
+The gap this closes (the Dave Lane defect, Amy Laidlaw, Jul 25 2026): a
+post-claim hand-off addressed the claimer through a templated phone var,
+`to: "{{vars.claimed_agent_phone}}"`. Only `toAgentName` and an employee
+`toRef` counted as internal, so the send filed a lead customer profile, and the
+one guard it had checked for an EXISTING non-customer `contacts` row, which a
+teammate who had never been a contact did not have. He was inserted as a NEW
+CUSTOMER, and because that run's portal extraction produced no lead phone the
+engine treated the recipient AS the lead, stamping the LEAD's name on the
+teammate's row. Two independent layers now hold the rule:
+
+- **The send step recognizes the recipient** (`activeRosterMemberByPhone` in
+  `supabase/functions/ai-flow-worker/index.ts`): a resolved number on the
+  active roster flips the send internal. A roster read error deliberately fails
+  OPEN here, keeping lead-side semantics rather than pushing a genuine lead's
+  overnight text out immediately.
+- **The filing guard is roster-aware** (`isNonLeadNumber` → the shared
+  `staffNumberCheck`, the same detection `update_contact`'s tag protection
+  uses): it fails SAFE, so an unverifiable roster skips filing. It is
+  deliberately NOT gated on `businesses.aiflow_protect_staff_contacts`: that
+  toggle exists so a business can maintain lead-state TAGS over its own team,
+  whereas filing a teammate as a customer under a stranger's name is never
+  wanted. A business that genuinely wants team contact rows creates them as
+  `type='employee'`, which the stored-type check already skips.
+
+Author hand-offs with **`toAgentNameVar`** on `send_sms` / `send_whatsapp`
+(the counterpart of `route_to_team`'s `agentNameVar`): the var's value is
+resolved against the live roster at run time by name (exact, first name, unique
+prefix) or by an E.164 that is on the roster, so
+`"toAgentNameVar": "claimed_agent"` texts whoever claimed the lead and puts
+`{{agent.*}}` in scope. Empty or `"none"` (nobody claimed) skips the step; an
+unresolved name fails it readably rather than texting the wrong person. Being a
+var NAME rather than a person's name, it survives library scrubbing untouched.
+
+Pinned by `tests/worker-integration/staff-recipient-not-filed.itest.ts` (real
+worker, real Postgres, real Telnyx hop). Rows filed before the fix are cleaned
+by `scripts/oneshot/fix-staff-contact-rows.ts`, which deletes only while the
+row still looks like the untouched artifact.
+
 ## AiFlow webhook trigger (Meta Lead Ads etc.)
 
 AiFlows can start from an inbound webhook: `POST /api/public/v1/flow-events`

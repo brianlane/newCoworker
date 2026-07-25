@@ -29,6 +29,34 @@ describe("planStep: send_whatsapp", () => {
     });
   });
 
+  it("resolves toAgentNameVar to its value, skipping when no teammate is named", () => {
+    const named = planStep({ ...base, toAgentNameVar: "claimed_agent" } as FlowStep, {
+      vars: { claimed_agent: " Dave Lane " }
+    });
+    expect(named).toEqual({
+      ok: true,
+      action: {
+        kind: "send_whatsapp",
+        to: "",
+        body: "Hi {{vars.name}}",
+        toAgentNameValue: "Dave Lane"
+      }
+    });
+
+    const unclaimed = planStep({ ...base, toAgentNameVar: "claimed_agent" } as FlowStep, {
+      vars: { claimed_agent: "none" }
+    });
+    expect(unclaimed).toEqual({
+      ok: true,
+      action: {
+        kind: "send_whatsapp",
+        to: "",
+        body: "Hi {{vars.name}}",
+        skipReason: "no_teammate_named"
+      }
+    });
+  });
+
   it("renders templated recipients/bodies with lead-data-gap skip semantics", () => {
     const rendered = planStep(
       { ...base, to: "{{vars.lead_phone}}" } as FlowStep,
@@ -1092,6 +1120,91 @@ describe("planStep: send_sms", () => {
         to: "",
         toAgentName: "Dave",
         body: "{{agent.name}}, heads up",
+        quiet: {
+          timezone: "America/Phoenix",
+          noSendAfter: "22:00",
+          resumeAt: "08:30",
+          emailTo: "",
+          emailSubject: "Following up on your inquiry"
+        }
+      }
+    });
+  });
+
+  it("renders toAgentNameVar to its value and passes an UNRENDERED body through", () => {
+    const handOff: FlowStep = {
+      id: "x",
+      type: "send_sms",
+      toAgentNameVar: "claimed_agent",
+      body: "{{agent.name}}, this lead is yours"
+    };
+    expect(planStep(handOff, { vars: { claimed_agent: "  Dave Lane  " } })).toEqual({
+      ok: true,
+      action: {
+        kind: "send_sms",
+        to: "",
+        toAgentNameValue: "Dave Lane",
+        body: "{{agent.name}}, this lead is yours"
+      }
+    });
+  });
+
+  it("passes a PHONE-valued toAgentNameVar through for the worker to match on the roster", () => {
+    // claimed_agent falls back to the claimer's number when their roster row
+    // has no name; the worker resolves it against phone_e164.
+    const handOff: FlowStep = {
+      id: "x",
+      type: "send_sms",
+      toAgentNameVar: "claimed_agent",
+      body: "this lead is yours"
+    };
+    expect(planStep(handOff, { vars: { claimed_agent: "+16025245719" } })).toEqual({
+      ok: true,
+      action: {
+        kind: "send_sms",
+        to: "",
+        toAgentNameValue: "+16025245719",
+        body: "this lead is yours"
+      }
+    });
+  });
+
+  it("skips a toAgentNameVar send when the var is empty, unset, or \"none\"", () => {
+    const handOff: FlowStep = {
+      id: "x",
+      type: "send_sms",
+      toAgentNameVar: "claimed_agent",
+      body: "yours"
+    };
+    // "none" is what route_to_team writes when nobody claimed the lead.
+    for (const vars of [{}, { claimed_agent: "" }, { claimed_agent: "  " }, { claimed_agent: "None" }, { claimed_agent: 7 }]) {
+      expect(planStep(handOff, { vars: vars as Record<string, unknown> })).toEqual({
+        ok: true,
+        action: { kind: "send_sms", to: "", body: "yours", skipReason: "no_teammate_named" }
+      });
+    }
+  });
+
+  it("carries quiet hours and media through a toAgentNameVar send", () => {
+    const handOff: FlowStep = {
+      id: "x",
+      type: "send_sms",
+      toAgentNameVar: "claimed_agent",
+      body: "{{agent.name}}, yours",
+      mediaUrlVar: "flyer_url",
+      quietHours: { timezone: "America/Phoenix", noSendAfter: "22:00", resumeAt: "08:30" }
+    };
+    const r = planStep(handOff, {
+      vars: { claimed_agent: "Dave Lane", flyer_url: "https://signed.example/p.png" }
+    });
+    expect(r).toEqual({
+      ok: true,
+      action: {
+        kind: "send_sms",
+        to: "",
+        toAgentNameValue: "Dave Lane",
+        body: "{{agent.name}}, yours",
+        mediaUrl: "https://signed.example/p.png",
         quiet: {
           timezone: "America/Phoenix",
           noSendAfter: "22:00",

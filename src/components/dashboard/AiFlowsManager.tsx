@@ -839,13 +839,19 @@ function sanitizeStepForSave(step: FlowStep): FlowStep {
   // the "exactly one recipient/agent" rules pass even with stale hidden state.
   // Group reply is its own recipient source and supersedes everything.
   if (step.type === "send_sms" && step.replyToGroup) {
-    return { ...step, to: undefined, toAgentName: undefined, toRef: undefined };
+    return {
+      ...step,
+      to: undefined,
+      toAgentName: undefined,
+      toAgentNameVar: undefined,
+      toRef: undefined
+    };
   }
   if (step.type === "send_sms" && step.toRef) {
-    return { ...step, to: undefined, toAgentName: undefined };
+    return { ...step, to: undefined, toAgentName: undefined, toAgentNameVar: undefined };
   }
   if (step.type === "send_whatsapp" && step.toRef) {
-    return { ...step, to: undefined, toAgentName: undefined };
+    return { ...step, to: undefined, toAgentName: undefined, toAgentNameVar: undefined };
   }
   // route_to_team offer-set sources are mutually exclusive (schema-enforced):
   // broadcast-all > broadcast list > dynamic var pin > picked ref > typed
@@ -3628,7 +3634,13 @@ function StepFields({
               patchStep(
                 index,
                 ev.target.checked
-                  ? { replyToGroup: true, to: undefined, toAgentName: undefined, toRef: undefined }
+                  ? {
+                      replyToGroup: true,
+                      to: undefined,
+                      toAgentName: undefined,
+                      toAgentNameVar: undefined,
+                      toRef: undefined
+                    }
                   : { replyToGroup: undefined }
               )
             }
@@ -3646,30 +3658,54 @@ function StepFields({
               people={people}
               onChangeText={() => patchStep(index, { toRef: undefined })}
               onChangeRef={(ref) =>
-                patchStep(index, { toRef: ref, to: undefined, toAgentName: undefined })
+                patchStep(index, {
+                  toRef: ref,
+                  to: undefined,
+                  toAgentName: undefined,
+                  toAgentNameVar: undefined
+                })
               }
             />
           ) : (
             <>
-              {/* Recipient is phone OR team-member OR saved contact, never
-                  more than one. Hide the other controls once one is chosen;
-                  but if BOTH text fields are somehow set (invalid imported/
-                  legacy data) keep both visible so it can be corrected. */}
-              {(!step.toAgentName || Boolean(step.to)) && (
+              {/* Recipient is phone OR team-member (typed or from a variable)
+                  OR saved contact, never more than one. Hide the other
+                  controls once one is chosen; but if several text fields are
+                  somehow set (invalid imported/legacy data) keep them visible
+                  so it can be corrected. */}
+              {(!step.toAgentName && !step.toAgentNameVar) || Boolean(step.to) ? (
                 <Field
                   label="Recipient (phone or {{vars.x}})"
                   value={step.to ?? ""}
                   onChange={(v) => patchStep(index, { to: v.trim() ? v : undefined })}
                 />
-              )}
-              {(!step.to || Boolean(step.toAgentName)) && (
+              ) : null}
+              {(!step.to && !step.toAgentNameVar) || Boolean(step.toAgentName) ? (
                 <Field
                   label="Or send to a team member by name (resolves their phone; body can use {{agent.name}})"
                   value={step.toAgentName ?? ""}
-                  onChange={(v) => patchStep(index, { toAgentName: v.trim() ? v : undefined })}
+                  onChange={(v) =>
+                    patchStep(index, {
+                      toAgentName: v.trim() ? v : undefined,
+                      ...(v.trim() ? { toAgentNameVar: undefined } : {})
+                    })
+                  }
                 />
-              )}
-              {!step.to && !step.toAgentName && people.length > 0 && (
+              ) : null}
+              {(!step.to && !step.toAgentName) || Boolean(step.toAgentNameVar) ? (
+                <Field
+                  label="Or send to the team member a variable names (e.g. claimed_agent)"
+                  value={step.toAgentNameVar ?? ""}
+                  onChange={(v) =>
+                    patchStep(index, {
+                      toAgentNameVar: v.trim() ? v : undefined,
+                      ...(v.trim() ? { toAgentName: undefined } : {})
+                    })
+                  }
+                  help='Use this to hand a lead off after a "Offer the lead to your team" step: claimed_agent names whoever claimed it. The value is matched to your active roster when the step runs, so it stays right as your team changes, and the message counts as an internal teammate text (never delayed by the lead&rsquo;s quiet hours, never filed as a customer). Empty or "none" (nobody claimed) skips the step.'
+                />
+              ) : null}
+              {!step.to && !step.toAgentName && !step.toAgentNameVar && people.length > 0 && (
                 <button
                   type="button"
                   onClick={() => {
@@ -3677,7 +3713,8 @@ function StepFields({
                     patchStep(index, {
                       toRef: { source: first.source, id: first.id, label: first.name },
                       to: undefined,
-                      toAgentName: undefined
+                      toAgentName: undefined,
+                      toAgentNameVar: undefined
                     });
                   }}
                   className="text-[11px] text-signal-teal hover:underline"
@@ -3780,26 +3817,49 @@ function StepFields({
             people={people}
             onChangeText={() => patchStep(index, { toRef: undefined })}
             onChangeRef={(ref) =>
-              patchStep(index, { toRef: ref, to: undefined, toAgentName: undefined })
+              patchStep(index, {
+                toRef: ref,
+                to: undefined,
+                toAgentName: undefined,
+                toAgentNameVar: undefined
+              })
             }
           />
         ) : (
           <>
-            {(!step.toAgentName || Boolean(step.to)) && (
+            {(!step.toAgentName && !step.toAgentNameVar) || Boolean(step.to) ? (
               <Field
                 label="Recipient (phone or {{vars.x}})"
                 value={step.to ?? ""}
                 onChange={(v) => patchStep(index, { to: v.trim() ? v : undefined })}
               />
-            )}
-            {(!step.to || Boolean(step.toAgentName)) && (
+            ) : null}
+            {(!step.to && !step.toAgentNameVar) || Boolean(step.toAgentName) ? (
               <Field
                 label="Or send to a team member by name (resolves their phone; body can use {{agent.name}})"
                 value={step.toAgentName ?? ""}
-                onChange={(v) => patchStep(index, { toAgentName: v.trim() ? v : undefined })}
+                onChange={(v) =>
+                  patchStep(index, {
+                    toAgentName: v.trim() ? v : undefined,
+                    ...(v.trim() ? { toAgentNameVar: undefined } : {})
+                  })
+                }
               />
-            )}
-            {!step.to && !step.toAgentName && people.length > 0 && (
+            ) : null}
+            {(!step.to && !step.toAgentName) || Boolean(step.toAgentNameVar) ? (
+              <Field
+                label="Or send to the team member a variable names (e.g. claimed_agent)"
+                value={step.toAgentNameVar ?? ""}
+                onChange={(v) =>
+                  patchStep(index, {
+                    toAgentNameVar: v.trim() ? v : undefined,
+                    ...(v.trim() ? { toAgentName: undefined } : {})
+                  })
+                }
+                help='Matched to your active roster when the step runs, so a hand-off stays right as your team changes. Empty or "none" skips the step.'
+              />
+            ) : null}
+            {!step.to && !step.toAgentName && !step.toAgentNameVar && people.length > 0 && (
               <button
                 type="button"
                 onClick={() => {
@@ -3807,7 +3867,8 @@ function StepFields({
                   patchStep(index, {
                     toRef: { source: first.source, id: first.id, label: first.name },
                     to: undefined,
-                    toAgentName: undefined
+                    toAgentName: undefined,
+                    toAgentNameVar: undefined
                   });
                 }}
                 className="text-[11px] text-signal-teal hover:underline"
