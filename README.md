@@ -740,12 +740,20 @@ engine's roster evaluators), and the upcoming-bookings list.
   mode automatically.
 - **A provider only ever ADDS availability signal**: when a connected
   provider's busy data is unreadable (outage, scope-starved consent), slot
-  listing degrades to the platform baseline (business hours minus the
-  ledger) instead of taking the page down. The Bookings dashboard's
-  "cannot read availability" warning tells the owner that provider-side
-  events are invisible (double-booking them is possible) until the
-  connection heals; bookings keep landing on the provider when its write
-  path still works.
+  listing degrades instead of taking the page down. Degradation serves the
+  **last-known-good busy snapshot** first: every successful provider fetch
+  writes its spans through to `booking_busy_cache` (one row per business,
+  service-role only), and a failed fetch reads that snapshot back (24h
+  staleness bound, `BUSY_CACHE_MAX_AGE_MS`) unioned with the ledger, so a
+  time the provider reported busy stays blocked through the outage. With
+  no fresh snapshot it falls back to the platform baseline (business hours
+  minus the ledger). The Bookings dashboard's "cannot read availability"
+  warning tells the owner reads are failing either way; only provider
+  events created DURING the outage are invisible (double-booking those is
+  possible) until the connection heals, and bookings keep landing on the
+  provider when its write path still works. Cache reads and writes are
+  best-effort (`src/lib/booking-page/busy-cache.ts`): a cache error
+  degrades exactly like a cache miss.
 - Vagaro/Calendly-resolved tenants deliberately do NOT get the page (Vagaro
   has its own booking site; link-mode Calendly cannot book on the invitee's
   behalf); the Bookings page explains this and calendar resolution order is
