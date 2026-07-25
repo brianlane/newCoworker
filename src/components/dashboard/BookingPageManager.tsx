@@ -234,16 +234,10 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
           ) : null}
         </div>
 
-        {!page ? (
-          <button
-            type="button"
-            disabled={saving || unsupportedProvider}
-            onClick={() => void patch({ enabled: true })}
-            className="mt-4 rounded-lg bg-claw-green px-4 py-2 text-sm font-semibold text-deep-ink hover:bg-opacity-90 disabled:opacity-50"
-          >
-            {t("createLink")}
-          </button>
-        ) : (
+        {/* The dashboard endpoint auto-provisions the page on first view,
+            so `page` is only null for Vagaro/Calendly tenants; the
+            connect-first card above already explains that state. */}
+        {page ? (
           <div className="mt-4 space-y-4">
             <div className="flex flex-wrap items-center gap-2">
               <code className="min-w-0 flex-1 truncate rounded-md border border-parchment/15 bg-deep-ink px-3 py-2 text-xs text-parchment/80">
@@ -357,7 +351,9 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
                   min={1}
                   max={100}
                   placeholder={t("dailyCapUnlimited")}
-                  className={select}
+                  // Number inputs get a narrow intrinsic width that clips
+                  // the "Unlimited" placeholder; fill the grid cell instead.
+                  className={`${select} w-full`}
                   disabled={saving}
                   defaultValue={page.max_daily_bookings ?? ""}
                   onBlur={(e) => {
@@ -436,7 +432,7 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
               />
             </div>
           </div>
-        )}
+        ) : null}
         {saveError ? <p className="mt-3 text-sm text-red-400">{saveError}</p> : null}
       </Card>
 

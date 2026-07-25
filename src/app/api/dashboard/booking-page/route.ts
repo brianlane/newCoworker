@@ -68,7 +68,7 @@ export async function GET(request: Request) {
       return errorResponse("CONFLICT", "Too many requests, please wait a moment.", 429);
     }
 
-    const [page, conn, upcoming, availability] = await Promise.all([
+    const [existingPage, conn, upcoming, availability] = await Promise.all([
       getBookingPageForBusiness(businessId),
       resolveCalendarConnection(businessId),
       listUpcomingBookings(businessId),
@@ -77,9 +77,29 @@ export async function GET(request: Request) {
       // the owner, while the public page keeps failing safe for visitors.
       probeCalendarAvailability(businessId)
     ]);
+
+    // Auto-provision on first view: the link should already exist when the
+    // owner lands on Bookings, not sit behind a create button. Enabled from
+    // birth is safe because the token is unguessable until the owner shares
+    // it. Vagaro/Calendly tenants are skipped: booking lives on the
+    // provider's own page and the dashboard card explains that instead.
+    const provider = conn?.provider ?? null;
+    let page = existingPage;
+    if (!page && provider !== "vagaro" && provider !== "calendly") {
+      try {
+        page = await upsertBookingPage(businessId, { enabled: true });
+      } catch (err) {
+        // Two overlapping first-time loads can race the insert; the loser
+        // hits the business_id unique constraint. Re-read the winner's row
+        // and only surface the error when there is genuinely no page.
+        page = await getBookingPageForBusiness(businessId);
+        if (!page) throw err;
+      }
+    }
+
     return successResponse({
       page,
-      calendarProvider: conn?.provider ?? null,
+      calendarProvider: provider,
       availability,
       upcoming
     });
