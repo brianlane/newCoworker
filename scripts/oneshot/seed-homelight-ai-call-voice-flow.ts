@@ -128,6 +128,44 @@ export function aiCallVoiceDefinition(opts: {
   };
 }
 
+export type VoiceFlowRow = { id: string; name: string; enabled: boolean };
+
+export type VoiceCutoverPlan = {
+  /** Insert the copy (absent today). */
+  seed: boolean;
+  /** Turn ON an existing copy that is still disabled. */
+  enableExistingId: string | null;
+  /** Older voice flows for this caller to switch off. */
+  disableFlowIds: string[];
+  /** Switch off the legacy voice_handoff_chains row too. */
+  disableLegacyChain: boolean;
+};
+
+/**
+ * Decide the cutover, so the ordering rule lives somewhere testable rather than
+ * inside the IO: the replacement must be LIVE before anything else is switched
+ * off, or the caller is left with no routing at all. Nothing is disabled unless
+ * `enable` is set, which is what makes a bare `--apply` a safe no-op preview.
+ */
+export function planVoiceCutover(args: {
+  existing: readonly VoiceFlowRow[];
+  flowName: string;
+  enable: boolean;
+  legacyChainLive: boolean;
+}): VoiceCutoverPlan {
+  const mine = args.existing.find((f) => f.name.trim() === args.flowName);
+  return {
+    seed: !mine,
+    // Re-running with --enable after seeding disabled is the documented cutover,
+    // so an existing-but-off copy has to be switched on here.
+    enableExistingId: mine && args.enable && !mine.enabled ? mine.id : null,
+    disableFlowIds: args.enable
+      ? args.existing.filter((f) => f.name.trim() !== args.flowName && f.enabled).map((f) => f.id)
+      : [],
+    disableLegacyChain: args.enable && args.legacyChainLive
+  };
+}
+
 function requireEnv(name: string, fallback?: string): string {
   const v = process.env[name] ?? fallback;
   if (!v) {
@@ -172,26 +210,8 @@ async function main(): Promise<void> {
     console.error(`Read failed: ${error.message}`);
     process.exit(1);
   }
-  const existing = (rows ?? []) as Array<{ id: string; name: string; enabled: boolean }>;
+  const existing = (rows ?? []) as VoiceFlowRow[];
   const alreadySeeded = existing.find((f) => f.name.trim() === AI_CALL_FLOW_NAME);
-  const toDisable = existing.filter((f) => f.name.trim() !== AI_CALL_FLOW_NAME && f.enabled);
-
-  console.log(`Business : ${businessId}`);
-  console.log(`Caller   : ${fromE164}`);
-  console.log(`Name     : ${AI_CALL_FLOW_NAME}`);
-  console.log(`Enabled  : ${args.enable}`);
-  console.log(`Summary  : ${summarizeDefinition(definition)}`);
-  console.log(`AI first : answers, presses 1 at 3s, media at +2s, brief from "${BRIEF_MATCH}"`);
-  console.log(`Details  : ${daveE164} (copy to ${amyE164})`);
-  console.log(`Fallback : ring ${daveE164}, then ${amyE164}, only if the AI cannot run`);
-  for (const f of toDisable) console.log(`Disable  : ${f.name} (${f.id})`);
-  if (alreadySeeded) {
-    console.log(
-      `\nFlow "${AI_CALL_FLOW_NAME}" already exists (id=${alreadySeeded.id}, ` +
-        `enabled=${alreadySeeded.enabled}). Nothing to seed.`
-    );
-  }
-  console.log(`\nDefinition:\n${JSON.stringify(definition, null, 2)}`);
 
   // The legacy chain row for this caller is shadowed while a voice flow matches,
   // but it would silently resurrect ring-Dave-then-Amy if both flows were ever
@@ -206,17 +226,62 @@ async function main(): Promise<void> {
     process.exit(1);
   }
   const liveChain = (chainRows ?? []).some((c) => (c as { enabled?: boolean }).enabled);
-  if (liveChain) console.log(`Disable  : legacy voice_handoff_chains row ${fromE164}`);
+
+  const plan = planVoiceCutover({
+    existing,
+    flowName: AI_CALL_FLOW_NAME,
+    enable: args.enable,
+    legacyChainLive: liveChain
+  });
+  const byId = new Map(existing.map((f) => [f.id, f]));
+
+  console.log(`Business : ${businessId}`);
+  console.log(`Caller   : ${fromE164}`);
+  console.log(`Name     : ${AI_CALL_FLOW_NAME}`);
+  console.log(`Enabled  : ${args.enable}`);
+  console.log(`Summary  : ${summarizeDefinition(definition)}`);
+  console.log(`AI first : answers, presses 1 at 3s, media at +2s, brief from "${BRIEF_MATCH}"`);
+  console.log(`Details  : ${daveE164} (copy to ${amyE164})`);
+  console.log(`Fallback : ring ${daveE164}, then ${amyE164}, only if the AI cannot run`);
+  for (const id of plan.disableFlowIds) {
+    console.log(`Disable  : ${byId.get(id)?.name ?? id} (${id})`);
+  }
+  if (plan.disableLegacyChain) {
+    console.log(`Disable  : legacy voice_handoff_chains row ${fromE164}`);
+  }
+  if (alreadySeeded) {
+    console.log(
+      `\nFlow "${AI_CALL_FLOW_NAME}" already exists (id=${alreadySeeded.id}, ` +
+        `enabled=${alreadySeeded.enabled}). Nothing to seed` +
+        (args.enable && !alreadySeeded.enabled ? ", but it will be ENABLED." : ".")
+    );
+  }
+  console.log(`\nDefinition:\n${JSON.stringify(definition, null, 2)}`);
 
   if (!args.apply) {
     console.log("\n[dry-run] Not writing. Re-run with --apply (add --enable to turn it on).");
     return;
   }
 
-  // Seed FIRST, disable second: if the insert fails, the tenant keeps working
-  // call routing rather than none at all.
+  // Seed (or enable) FIRST, disable second: if this half fails, the tenant keeps
+  // working call routing rather than none at all.
   let seededId = alreadySeeded?.id ?? "";
-  if (!alreadySeeded) {
+  // The documented cutover is --apply, then --apply --enable. On that second run
+  // the row already exists, so enabling it here is what makes the switch real:
+  // without it the old flows would be disabled while the replacement stayed off,
+  // leaving the caller with NO routing.
+  if (plan.enableExistingId) {
+    const { error: enErr } = await db
+      .from("ai_flows")
+      .update({ enabled: true })
+      .eq("id", plan.enableExistingId);
+    if (enErr) {
+      console.error(`Enable failed for ${plan.enableExistingId}: ${enErr.message}`);
+      process.exit(1);
+    }
+    console.log(`\n  -> enabled the existing ${AI_CALL_FLOW_NAME} (${plan.enableExistingId}).`);
+  }
+  if (plan.seed) {
     const { data: inserted, error: insErr } = await db
       .from("ai_flows")
       .insert({
@@ -238,17 +303,17 @@ async function main(): Promise<void> {
   // Only retire the old routing once the replacement is enabled, so a
   // --apply without --enable never leaves the caller unrouted.
   const disabled: string[] = [];
-  if (args.enable) {
-    for (const f of toDisable) {
-      const { error: upErr } = await db.from("ai_flows").update({ enabled: false }).eq("id", f.id);
+  {
+    for (const id of plan.disableFlowIds) {
+      const { error: upErr } = await db.from("ai_flows").update({ enabled: false }).eq("id", id);
       if (upErr) {
-        console.error(`Disable failed for ${f.id}: ${upErr.message}`);
+        console.error(`Disable failed for ${id}: ${upErr.message}`);
         process.exit(1);
       }
-      console.log(`  -> disabled ${f.name}.`);
-      disabled.push(f.id);
+      console.log(`  -> disabled ${byId.get(id)?.name ?? id}.`);
+      disabled.push(id);
     }
-    if (liveChain) {
+    if (plan.disableLegacyChain) {
       const { error: chainUpErr } = await db
         .from("voice_handoff_chains")
         .update({ enabled: false })
@@ -260,7 +325,8 @@ async function main(): Promise<void> {
       }
       console.log(`  -> disabled the legacy chain row ${fromE164}.`);
     }
-  } else {
+  }
+  if (!args.enable) {
     console.log(
       "\nSeeded DISABLED, so the old routing is untouched. Re-run with --enable " +
         "to switch the caller over."
@@ -273,9 +339,11 @@ async function main(): Promise<void> {
     details: {
       from_e164: fromE164,
       seeded_flow_id: seededId,
+      seeded_now: plan.seed,
+      enabled_existing: plan.enableExistingId,
       enabled: args.enable,
       disabled_flow_ids: disabled,
-      disabled_legacy_chain: args.enable && liveChain
+      disabled_legacy_chain: plan.disableLegacyChain
     }
   });
   if (args.enable) {

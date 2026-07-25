@@ -4,7 +4,12 @@ import {
   validateDefinitionSemantics,
   type AiFlowDefinition
 } from "@/lib/ai-flows/schema";
-import { aiCallVoiceDefinition } from "../scripts/oneshot/seed-homelight-ai-call-voice-flow";
+import {
+  aiCallVoiceDefinition,
+  AI_CALL_FLOW_NAME,
+  planVoiceCutover,
+  type VoiceFlowRow
+} from "../scripts/oneshot/seed-homelight-ai-call-voice-flow";
 import {
   addCallBrief,
   addClaimClick,
@@ -74,6 +79,64 @@ describe("aiCallVoiceDefinition", () => {
     if (intake.type !== "voice_ai_intake") throw new Error("expected intake");
     expect(intake.captureFields).toContain("phone");
     expect(intake.captureFields).toContain("address");
+  });
+});
+
+describe("planVoiceCutover", () => {
+  const OLD: VoiceFlowRow = { id: "old", name: "Voice routing (+1415...)", enabled: true };
+  const MINE_OFF: VoiceFlowRow = { id: "mine", name: AI_CALL_FLOW_NAME, enabled: false };
+  const MINE_ON: VoiceFlowRow = { id: "mine", name: AI_CALL_FLOW_NAME, enabled: true };
+  const plan = (existing: VoiceFlowRow[], enable: boolean, legacyChainLive = true) =>
+    planVoiceCutover({ existing, flowName: AI_CALL_FLOW_NAME, enable, legacyChainLive });
+
+  it("first pass without --enable seeds and touches nothing else", () => {
+    // A bare --apply must be a safe preview: the tenant keeps working routing.
+    expect(plan([OLD], false)).toEqual({
+      seed: true,
+      enableExistingId: null,
+      disableFlowIds: [],
+      disableLegacyChain: false
+    });
+  });
+
+  it("ENABLES the already-seeded copy on the second pass, before disabling the old", () => {
+    // The documented cutover is --apply then --apply --enable. Without this the
+    // old flows would go off while the replacement stayed off too, leaving the
+    // caller with no routing at all.
+    expect(plan([OLD, MINE_OFF], true)).toEqual({
+      seed: false,
+      enableExistingId: "mine",
+      disableFlowIds: ["old"],
+      disableLegacyChain: true
+    });
+  });
+
+  it("seeds and cuts over in one pass when --apply --enable runs first", () => {
+    expect(plan([OLD], true)).toEqual({
+      seed: true,
+      enableExistingId: null,
+      disableFlowIds: ["old"],
+      disableLegacyChain: true
+    });
+  });
+
+  it("is a no-op once the copy is live and the old routing is off", () => {
+    expect(plan([{ ...OLD, enabled: false }, MINE_ON], true, false)).toEqual({
+      seed: false,
+      enableExistingId: null,
+      disableFlowIds: [],
+      disableLegacyChain: false
+    });
+  });
+
+  it("never disables its own copy, whatever else matches the caller", () => {
+    const p = plan([OLD, MINE_ON, { id: "other", name: "Another", enabled: true }], true);
+    expect(p.disableFlowIds).toEqual(["old", "other"]);
+    expect(p.disableFlowIds).not.toContain("mine");
+  });
+
+  it("leaves an already-off legacy chain alone", () => {
+    expect(plan([OLD], true, false).disableLegacyChain).toBe(false);
   });
 });
 
