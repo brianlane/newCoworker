@@ -20,6 +20,9 @@ vi.mock("@/lib/db/booking-waitlist", async (importOriginal) => ({
   revertWaitlistOfferToWaiting: vi.fn(),
   setWaitlistStatus: vi.fn()
 }));
+vi.mock("@/lib/calendar-tools/waitlist-resolve", () => ({
+  cancelWaitlistForAttendee: vi.fn()
+}));
 vi.mock("@/lib/db/businesses", () => ({ getBusiness: vi.fn() }));
 vi.mock("@/lib/db/contact-language", () => ({ getContactLanguage: vi.fn() }));
 vi.mock("@/lib/sms/opt-outs", () => ({ checkSmsOptOut: vi.fn() }));
@@ -31,6 +34,7 @@ vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), error: vi.fn() } }));
 
 import {
   eligibleWaitlistCandidates,
+  handleObservedCancellation,
   offerFreedSlot,
   pendingWaitlistOfferLine,
   sweepWaitlist,
@@ -38,6 +42,7 @@ import {
   waitlistOfferSmsBody,
   WAITLIST_OFFER_SMS_SOURCE
 } from "@/lib/calendar-tools/waitlist-fill";
+import { cancelWaitlistForAttendee } from "@/lib/calendar-tools/waitlist-resolve";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import { getWorkspaceBusyBlocks } from "@/lib/calendar-tools/handlers";
@@ -512,6 +517,54 @@ describe("offerFreedSlot", () => {
     mockClientFactory.mockRejectedValue("db blast");
     mockList.mockResolvedValue([entry({ id: "wl-9", phone: "+15005550001" })]);
     expect(await offerFreedSlot(BIZ, SLOT)).toBe("offered");
+  });
+});
+
+describe("handleObservedCancellation", () => {
+  it("drops the canceled customer's entries FIRST and offers with them excluded", async () => {
+    const outcome = await handleObservedCancellation(BIZ, SLOT, {
+      phones: ["+15485773546"],
+      email: null
+    });
+    // The single default candidate IS the canceler: excluded, so nothing
+    // to offer.
+    expect(outcome).toBe("no_candidates");
+    expect(vi.mocked(cancelWaitlistForAttendee)).toHaveBeenCalledWith(BIZ, {
+      phones: ["+15485773546"],
+      email: null
+    });
+    expect(mockSend).not.toHaveBeenCalled();
+
+    // Email-only identity normalizes the missing email field to null.
+    vi.mocked(cancelWaitlistForAttendee).mockClear();
+    await handleObservedCancellation(BIZ, SLOT, { phones: [], email: "joe@acme.com" });
+    expect(vi.mocked(cancelWaitlistForAttendee)).toHaveBeenCalledWith(BIZ, {
+      phones: [],
+      email: "joe@acme.com"
+    });
+  });
+
+  it("offers unexcluded when no identity is derivable (thin tombstones)", async () => {
+    expect(await handleObservedCancellation(BIZ, SLOT)).toBe("offered");
+    expect(vi.mocked(cancelWaitlistForAttendee)).not.toHaveBeenCalled();
+
+    vi.clearAllMocks();
+    mockSettings.mockResolvedValue({ enabled: true, offerTtlMinutes: 60 });
+    mockList.mockResolvedValue([entry()]);
+    mockConn.mockResolvedValue(GOOGLE);
+    mockBusy.mockResolvedValue([]);
+    mockBusiness.mockResolvedValue({ name: "Acme", timezone: "America/Phoenix" } as never);
+    mockLanguage.mockResolvedValue({ preferred_language: null, language_source: null });
+    mockOptOut.mockResolvedValue({ ok: true, optedOut: false } as never);
+    mockMessaging.mockResolvedValue({ fromE164: "+15550001111" } as never);
+    mockSend.mockResolvedValue({ id: "msg-1", channel: "sms" } as never);
+    mockMark.mockResolvedValue(true);
+    logDb();
+    // An empty identity object counts as no identity too.
+    expect(
+      await handleObservedCancellation(BIZ, SLOT, { phones: [], email: null })
+    ).toBe("offered");
+    expect(vi.mocked(cancelWaitlistForAttendee)).not.toHaveBeenCalled();
   });
 });
 

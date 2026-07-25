@@ -42,7 +42,10 @@ import {
   recordExternalBookingClaim
 } from "@/lib/calendar-tools/booking-dedupe";
 import { offerFreedSlot } from "@/lib/calendar-tools/waitlist-fill";
-import { cancelWaitlistForAttendee } from "@/lib/calendar-tools/waitlist-resolve";
+import {
+  cancelWaitlistForAttendee,
+  resolveWaitlistAfterBooking
+} from "@/lib/calendar-tools/waitlist-resolve";
 import {
   createCustomerMemory,
   CustomerExistsError,
@@ -233,6 +236,8 @@ export type VagaroAppointmentDeps = {
   offerSlot?: typeof offerFreedSlot;
   /** Injectable waitlist canceler drop (tests). */
   cancelWaitlist?: typeof cancelWaitlistForAttendee;
+  /** Injectable waitlist booking resolution (tests). */
+  resolveWaitlist?: typeof resolveWaitlistAfterBooking;
   /** Injectable clock (tests). */
   nowMs?: number;
 };
@@ -282,6 +287,7 @@ export async function processVagaroAppointmentEvent(
   const claimStarts = deps.claimStarts ?? findBookingClaimStartsByEvent;
   const offerSlot = deps.offerSlot ?? offerFreedSlot;
   const cancelWaitlist = deps.cancelWaitlist ?? cancelWaitlistForAttendee;
+  const resolveWaitlist = deps.resolveWaitlist ?? resolveWaitlistAfterBooking;
   const nowMs = deps.nowMs ?? Date.now();
 
   const result: VagaroAppointmentIntelligence = { ...NO_APPOINTMENT_INTELLIGENCE };
@@ -404,7 +410,12 @@ export async function processVagaroAppointmentEvent(
   if (gone && appt?.startIso) {
     if (hasIdentity) await cancelWaitlist(businessId, wlAttendee);
     await offerSlot(businessId, appt.startIso, {}, hasIdentity ? wlAttendee : undefined);
-  } else if (!gone && action === "updated" && appt) {
+  } else if (!gone && (action === "created" || action === "updated") && appt) {
+    // The customer's own live entries resolve against the booking they now
+    // hold (fulfilled when it beat what they were waiting on, re-pointed
+    // otherwise), matching the platform book/reschedule cores (Bugbot
+    // Medium on PR #903); THEN a move's vacated start goes to the waitlist.
+    if (hasIdentity) await resolveWaitlist(businessId, wlAttendee, appt.startIso);
     const newStartMs = Date.parse(appt.startIso);
     for (const oldStart of vacatedStarts) {
       if (Date.parse(oldStart) === newStartMs) continue;

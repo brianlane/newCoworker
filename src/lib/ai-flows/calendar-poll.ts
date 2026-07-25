@@ -891,14 +891,48 @@ export async function stampCalendarPollTick(client?: SupabaseClient): Promise<vo
 export type CalendarPollOptions = {
   /**
    * Called once per DUE cancelled event observed this poll (deduped by
-   * event id across calendars) with the vacated slot's start. Wired by the
+   * event id across calendars) with the vacated slot's start and, when
+   * derivable, the canceled customer's identity (so the waitlist can drop
+   * their entries and never offer them their own slot). Wired by the
    * internal route to the cancellation-waitlist fill
-   * (src/lib/calendar-tools/waitlist-fill.ts offerFreedSlot): a callback
-   * rather than an import because that module reaches the booking core,
-   * which imports this one. Failures are logged and never affect the poll.
+   * (src/lib/calendar-tools/waitlist-fill.ts handleObservedCancellation):
+   * a callback rather than an import because that module reaches the
+   * booking core, which imports this one. Failures are logged and never
+   * affect the poll.
    */
-  onCanceledEvent?: (businessId: string, startIso: string) => Promise<unknown>;
+  onCanceledEvent?: (
+    businessId: string,
+    startIso: string,
+    attendee?: { phones: string[]; email: string | null }
+  ) => Promise<unknown>;
 };
+
+/**
+ * Best-effort identity of a cancelled event's customer: platform-booked
+ * events carry `Phone:` / `Email:` marker lines in the description, and
+ * provider payloads may carry attendee emails. Undefined when nothing
+ * identifying survives (e.g. Google's thin tombstones).
+ */
+export function cancelledEventAttendee(
+  ev: CalendarEventInput
+): { phones: string[]; email: string | null } | undefined {
+  const description = ev.description ?? "";
+  const phoneMatch = description.match(/Phone:\s*(\+?[()\d][\d\s().-]{6,})/i);
+  const emailMatch = description.match(/Email:\s*([^\s<>,;]+@[^\s<>,;]+)/i);
+  let email = emailMatch ? emailMatch[1].toLowerCase() : null;
+  if (!email) {
+    for (const attendee of ev.attendees ?? []) {
+      const m = attendee.match(/[^\s<>,;]+@[^\s<>,;]+/);
+      if (m) {
+        email = m[0].toLowerCase();
+        break;
+      }
+    }
+  }
+  const phones = phoneMatch ? [phoneMatch[1].trim()] : [];
+  if (phones.length === 0 && email === null) return undefined;
+  return { phones, email };
+}
 
 /** Poll every watched calendar once and enqueue runs for due events. */
 export async function pollCalendarTriggers(
@@ -1206,7 +1240,7 @@ export async function pollCalendarTriggers(
             if (!eventCanceledDue(ev, nowMs)) continue;
             seenCancelled.add(ev.id);
             try {
-              await opts.onCanceledEvent(businessId, ev.startIso);
+              await opts.onCanceledEvent(businessId, ev.startIso, cancelledEventAttendee(ev));
             } catch (err) {
               console.error("calendar poll canceled-event hook", err);
             }

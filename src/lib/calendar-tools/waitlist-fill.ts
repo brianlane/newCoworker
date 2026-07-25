@@ -41,6 +41,7 @@ import {
 import { getCaldavBusyBlocks } from "@/lib/calendar-tools/caldav";
 import { findVagaroSlots } from "@/lib/calendar-tools/vagaro";
 import { digitsOf, phoneDigitsMatch } from "@/lib/calendar-tools/phone-match";
+import { cancelWaitlistForAttendee } from "@/lib/calendar-tools/waitlist-resolve";
 import {
   findLiveWaitlistEntriesForAttendee,
   getWaitlistSettings,
@@ -395,6 +396,30 @@ export async function offerFreedSlot(
     });
     return "offer_failed";
   }
+}
+
+/**
+ * One OBSERVED off-platform cancellation (the calendar poll's canceled
+ * scan): treat the canceled customer exactly like the platform cancel core
+ * does — their own live entries drop FIRST, and the freed slot is offered
+ * with them excluded, so a poll-observed cancel can never text the person
+ * who freed the slot (Bugbot Medium on PR #903). With no derivable
+ * identity the offer simply runs unexcluded. Never throws.
+ */
+export async function handleObservedCancellation(
+  businessId: string,
+  freedStartIso: string,
+  attendee?: WaitlistOfferExclusion,
+  deps: WaitlistFillDeps = {}
+): Promise<OfferFreedSlotOutcome> {
+  const identity =
+    attendee && (attendee.phones.length > 0 || (attendee.email ?? null) !== null)
+      ? { phones: attendee.phones, email: attendee.email ?? null }
+      : undefined;
+  if (identity) {
+    await cancelWaitlistForAttendee(businessId, identity);
+  }
+  return offerFreedSlot(businessId, freedStartIso, deps, identity);
 }
 
 export type WaitlistSweepResult = {

@@ -26,6 +26,7 @@ import {
   CALENDAR_POLL_TICK_EVENT,
   CALENDAR_START_HORIZON_BUFFER_MINUTES,
   calendarDedupeKey,
+  cancelledEventAttendee,
   eventCanceledDue,
   eventCreatedDue,
   eventEndDue,
@@ -838,7 +839,8 @@ describe("pollCalendarTriggers", () => {
         summary: "Roof estimate",
         status: "cancelled",
         updated: isoIn(-2),
-        start: { dateTime: slotStart }
+        start: { dateTime: slotStart },
+        description: "Attendee: Joe\nPhone: +15485773546\nEmail: Joe@Acme.Com"
       },
       // Thin tombstone without a start: observed but nothing to offer.
       { id: "ev-c2", status: "cancelled", updated: isoIn(-2) },
@@ -869,10 +871,33 @@ describe("pollCalendarTriggers", () => {
       { onCanceledEvent }
     );
     expect(onCanceledEvent).toHaveBeenCalledTimes(1);
-    expect(onCanceledEvent).toHaveBeenCalledWith(
-      BIZ,
-      new Date(slotStart).toISOString()
-    );
+    // The canceled customer's identity rides along (booked events carry
+    // the Phone:/Email: marker lines), so the waitlist can drop their
+    // entries and never offer them their own slot.
+    expect(onCanceledEvent).toHaveBeenCalledWith(BIZ, new Date(slotStart).toISOString(), {
+      phones: ["+15485773546"],
+      email: "joe@acme.com"
+    });
+  });
+
+  it("cancelledEventAttendee derives identity from markers, attendees, or nothing", () => {
+    const base = { id: "e1", title: "t", calendar: "primary" as const };
+    expect(
+      cancelledEventAttendee({ ...base, description: "Phone: (548) 577-3546" })
+    ).toEqual({ phones: ["(548) 577-3546"], email: null });
+    expect(
+      cancelledEventAttendee({ ...base, description: "Email: Joe@Acme.Com" })
+    ).toEqual({ phones: [], email: "joe@acme.com" });
+    // No marker email: the first attendee email stands in.
+    expect(
+      cancelledEventAttendee({
+        ...base,
+        attendees: ["No Email Here", "Joe <joe@acme.com>"]
+      })
+    ).toEqual({ phones: [], email: "joe@acme.com" });
+    // Thin tombstone: nothing identifying at all.
+    expect(cancelledEventAttendee(base)).toBeUndefined();
+    expect(cancelledEventAttendee({ ...base, attendees: ["nobody"] })).toBeUndefined();
   });
 
   it("a throwing freed-slot callback is logged and never affects the poll", async () => {

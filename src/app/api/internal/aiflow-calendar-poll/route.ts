@@ -20,7 +20,7 @@ import { assertCronAuth } from "@/lib/cron-auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { pollCalendarTriggers } from "@/lib/ai-flows/calendar-poll";
 import { sweepCalendlyBookingGoals } from "@/lib/ai-flows/calendly-booking-goals";
-import { offerFreedSlot, sweepWaitlist } from "@/lib/calendar-tools/waitlist-fill";
+import { handleObservedCancellation, sweepWaitlist } from "@/lib/calendar-tools/waitlist-fill";
 
 // A poll is a few provider list calls per watched calendar; 60s is ample
 // headroom without letting a hung provider pin the function.
@@ -36,10 +36,12 @@ export async function POST(request: Request): Promise<Response> {
     // list: short event_start leads keep per-minute polling). The booking-
     // goal sweep below stays per-minute either way: booking → goal-jump
     // latency is its point. Observed cancellations hand their vacated slot
-    // to the cancellation waitlist (callback because waitlist-fill imports
-    // the booking core, which imports the poll module).
+    // (plus the canceled customer's identity, when derivable) to the
+    // cancellation waitlist (callback because waitlist-fill imports the
+    // booking core, which imports the poll module).
     const result = await pollCalendarTriggers(undefined, {
-      onCanceledEvent: (businessId, startIso) => offerFreedSlot(businessId, startIso)
+      onCanceledEvent: (businessId, startIso, attendee) =>
+        handleObservedCancellation(businessId, startIso, attendee)
     });
     // Calendly booking → appointment_booked goal sweep rides the same tick
     // (per-business failures already isolate inside; this guard keeps a

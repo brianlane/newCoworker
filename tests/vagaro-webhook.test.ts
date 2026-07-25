@@ -430,6 +430,7 @@ describe("processVagaroAppointmentEvent", () => {
       claimStarts: vi.fn().mockResolvedValue([]),
       offerSlot: vi.fn().mockResolvedValue("no_candidates"),
       cancelWaitlist: vi.fn(),
+      resolveWaitlist: vi.fn(),
       nowMs: NOW,
       ...overrides
     };
@@ -683,13 +684,42 @@ describe("processVagaroAppointmentEvent", () => {
     const readOrder = vi.mocked(d.claimStarts).mock.invocationCallOrder[0];
     const deleteOrder = vi.mocked(d.deleteClaims).mock.invocationCallOrder[0];
     expect(readOrder).toBeLessThan(deleteOrder);
-    // Only the start that actually changed is offered; the mover never is.
+    // The mover's own entries resolve against the new start FIRST …
+    expect(d.resolveWaitlist).toHaveBeenCalledWith(
+      BIZ,
+      { phones: ["6025550000"], email: "dana@example.com" },
+      "2026-07-21T15:00:00.000Z"
+    );
+    const resolveOrder = vi.mocked(d.resolveWaitlist).mock.invocationCallOrder[0];
+    const offerOrder = vi.mocked(d.offerSlot).mock.invocationCallOrder[0];
+    expect(resolveOrder).toBeLessThan(offerOrder);
+    // … then only the start that actually changed is offered; the mover
+    // never is.
     expect(d.offerSlot).toHaveBeenCalledTimes(1);
     expect(d.offerSlot).toHaveBeenCalledWith(BIZ, "2026-07-21T13:00:00.000Z", {}, {
       phones: ["6025550000"],
       email: "dana@example.com"
     });
     expect(d.cancelWaitlist).not.toHaveBeenCalled();
+  });
+
+  it("created: the customer's live entries resolve against the new booking; no identity skips it", async () => {
+    const d = deps();
+    await processVagaroAppointmentEvent(BIZ, apptEvent(), d);
+    expect(d.resolveWaitlist).toHaveBeenCalledWith(
+      BIZ,
+      { phones: ["6025550000"], email: "dana@example.com" },
+      "2026-07-21T15:00:00.000Z"
+    );
+    expect(d.offerSlot).not.toHaveBeenCalled();
+
+    const d2 = deps();
+    await processVagaroAppointmentEvent(
+      BIZ,
+      apptEvent({}, { appointment: { id: "appt-1", startTime: "2026-07-21T15:00:00Z" } }),
+      d2
+    );
+    expect(d2.resolveWaitlist).not.toHaveBeenCalled();
   });
 
   it("updated without a customer identity offers the vacated start with no exclusion", async () => {
