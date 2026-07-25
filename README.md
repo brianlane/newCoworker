@@ -745,6 +745,48 @@ engine's roster evaluators), and the upcoming-bookings list.
   routing forms, custom questions, payments, invitee self-reschedule,
   embeds.
 
+## Cancellation waitlist ("I'll let you know if a spot opens")
+
+When an appointment slot FREES UP, the platform offers it by text to the
+customer who asked for an earlier time, encoding the real-life exchange
+"if you can come any sooner please let me know" / "I'll let you know if I
+have a cancellation" (PR #903). One live `booking_waitlist` entry per
+(business, phone) (RLS-on/no-policies), captured two ways: the
+`calendar_join_waitlist` coworker tool (texting, dashboard chat, owner
+SMS, and voice, wired through the tool parity contract) and the booking
+page's "Text me if an earlier time opens up" opt-in. Entries link to the
+customer's upcoming booking, so a freed slot is offered only when it is
+EARLIER than what they hold, and they expire when that booking starts.
+
+- **Freed-slot detection funnels into ONE core**
+  ([src/lib/calendar-tools/waitlist-fill.ts](src/lib/calendar-tools/waitlist-fill.ts)
+  `offerFreedSlot`): `calendar_cancel_appointment`, the reschedule tool's
+  vacated old start, the calendar poll's observed off-platform
+  cancellations (a callback wired in `/api/internal/aiflow-calendar-poll`;
+  the canceled customer's identity is derived from the event's
+  `Phone:`/`Email:` marker lines), and the Vagaro webhook's cancels and
+  moves (the union of the payload start and the ledger-recorded starts).
+- **Offer mechanics**: the slot is re-verified against LIVE provider
+  availability (fail closed), then the oldest eligible candidate gets ONE
+  metered SMS (STOP list fail-closed, `sms_outbound_log` source
+  `waitlist_offer`, EN/ES per `contacts.preferred_language`) under a
+  compare-and-set hold with the owner's TTL (default 60 min). A lapsed
+  hold passes to the NEXT candidate, never back to the same person; the
+  actor who freed the slot is excluded, and a canceler's own entries drop.
+- **Acceptance rides the normal conversation**: a pending offer is
+  appended to the `/api/internal/contact-booking-context` preamble line,
+  so a "YES" reply completes through the existing
+  `calendar_reschedule_appointment` / `calendar_book_appointment` tools.
+  Confirmed bookings resolve entries: fulfilled when the new time beat
+  what they were waiting on, otherwise re-pointed (a booking-derived
+  window moves with the booking; a still-pending earlier offer stays
+  live under its own TTL).
+- **Maintenance** (window expiry + hold handoff, `sweepWaitlist`) rides
+  the ~1/min calendar-poll tick. Owner knobs (master toggle, ON by
+  default; offer hold length) live on `/dashboard/bookings`. Everything
+  is best-effort by contract: a waitlist failure can never affect the
+  booking, cancel, reschedule, webhook, or poll result that triggered it.
+
 ## Writing rule: NO EM DASHES, ever, in any context
 
 **Never use an em dash. Anywhere.** Not in user-facing copy, SMS/email
