@@ -180,44 +180,6 @@ export type UpsertBusinessTelnyxSettingsInput = {
   translatorModeEnabled?: boolean;
 };
 
-/**
- * Keep `translator_mode_enabled` consistent with `transfer_enabled`.
- *
- * The AI only ever interprets AFTER a warm transfer bridges a human onto the
- * call, so translator mode without transfer is dead configuration that still
- * arms `stream_bidirectional_target_legs=both` on every answer. Worse, the admin
- * UI disables the interpreter checkbox when transfer is off, so an inconsistent
- * pair could not be corrected from the UI at all.
- *
- * Returns what should actually be written:
- *   - `undefined` when the patch does not touch translator mode and cannot break
- *     the invariant (leave the column alone),
- *   - `false` when transfer ends up off,
- *   - the requested value otherwise.
- *
- * `loadCurrent` is only invoked when the answer genuinely depends on the stored
- * row, so the common patch costs no extra read.
- */
-export async function resolveTranslatorModePatch(input: {
-  requested: boolean | undefined;
-  transferEnabledPatch: boolean | undefined;
-  loadCurrent: () => Promise<BusinessTelnyxSettingsRow | null>;
-}): Promise<boolean | undefined> {
-  // Transfer is being turned off in this same patch: translator mode cannot
-  // survive it, whether or not the caller mentioned it.
-  if (input.transferEnabledPatch === false) return false;
-  // Nothing being asked of translator mode, and transfer is not being disabled.
-  if (input.requested === undefined) return undefined;
-  // Turning it OFF is always allowed.
-  if (input.requested === false) return false;
-  // Turning it ON is only allowed when transfer is on: either this patch enables
-  // it, or the stored row already has it.
-  if (input.transferEnabledPatch === true) return true;
-  const current = await input.loadCurrent();
-  // No row yet means the column default (transfer on) applies.
-  return current === null ? true : current.transfer_enabled === true;
-}
-
 export async function upsertBusinessTelnyxSettings(
   input: UpsertBusinessTelnyxSettingsInput,
   client?: SupabaseClient

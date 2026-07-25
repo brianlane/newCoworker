@@ -348,11 +348,21 @@ describe("arming is off by default and read from the tenant column", () => {
     expect(src).toContain('...(translatorArmed ? { targetLegs: "both" as const } : {})');
   });
 
-  it("the migration defaults the column to false", () => {
-    const sql = readFileSync(
+  it("shipped opt-in, then flipped to default ON once the echo risk was cleared", () => {
+    // The original migration created the column default false, because arming
+    // sends target_legs=both on EVERY call and we could not yet prove that was
+    // inert on an ordinary one-party call. Verified on HQ 2026-07-25, so the
+    // follow-up flips the default and arms existing tenants.
+    const original = readFileSync(
       join(__dirname, "../supabase/migrations/20260821004000_voice_translator_mode.sql"),
       "utf8"
     );
-    expect(sql).toContain("translator_mode_enabled boolean not null default false");
+    expect(original).toContain("translator_mode_enabled boolean not null default false");
+    const flip = readFileSync(
+      join(__dirname, "../supabase/migrations/20260821006000_translator_mode_default_on.sql"),
+      "utf8"
+    );
+    expect(flip).toContain("alter column translator_mode_enabled set default true");
+    expect(flip).toContain("set translator_mode_enabled = true");
   });
 });

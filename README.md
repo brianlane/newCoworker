@@ -1199,11 +1199,23 @@ whole time. Remember voice has no overage, it hard-refuses the NEXT call once th
 pool is spent, so heavy use makes the 300-second `voice-low-balance-alerts` email
 load-bearing. The admin toggle and the owner's phone card both say so.
 
-Per-tenant, OFF by default: `business_telnyx_settings.translator_mode_enabled`,
-flipped from the admin business page ("Voice & SMS DID" card). It applies to the
-NEXT call, not one in progress. Turning it on needs a voice-bridge redeploy
-(`tsx debug/redeploy-voice-bridge.ts --business-id <uuid>`); the arming half
-ships with the edge deploy.
+**ON by default** since `20260821006000_translator_mode_default_on.sql`;
+`business_telnyx_settings.translator_mode_enabled` remains a per-tenant kill
+switch on the admin business page ("Voice & SMS DID" card), and applies to the
+NEXT call, not one in progress. It shipped opt-in for one reason: arming sends
+`target_legs=both` on EVERY call, and the open question was whether that would
+loop the AI's audio back into its own `both_tracks` fork on an ordinary
+one-party call. Verified on HQ 2026-07-25 (70s armed call: 11 cleanly
+alternating turns, zero assistant text transcribed as inbound, clean settlement)
+so the parameter is inert until a second leg exists, and an opt-in was the wrong
+shape for a capability that already only engages when someone needs it.
+
+Translator mode is INDEPENDENT of the warm-transfer toggle. An earlier cut
+coerced it off whenever transfer was off, which fought the default and silently
+opted tenants out; interpreting self-gates at runtime instead (it needs a
+transfer, or a staff request, to engage at all). A bridge code change still needs
+a voice-bridge redeploy (`tsx debug/redeploy-voice-bridge.ts --business-id
+<uuid>`); the arming half ships with the edge deploy.
 
 ### Staff can also ask for an interpreter directly
 
