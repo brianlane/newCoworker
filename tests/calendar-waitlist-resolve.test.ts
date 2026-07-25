@@ -124,6 +124,35 @@ describe("resolveWaitlistAfterBooking", () => {
     });
   });
 
+  it("a booking-derived window moves with the booking; an explicit bound stays", async () => {
+    // latest_at pinned to the OLD booking start (the join default): both
+    // move together, or the entry would lapse while a booking still stands.
+    mockFind.mockResolvedValue([
+      entry({
+        current_booking_start_at: "2026-08-04T15:00:00Z",
+        latest_at: "2026-08-04T15:00:00Z"
+      })
+    ]);
+    await resolveWaitlistAfterBooking(BIZ, ATTENDEE, "2026-08-06T15:00:00.000Z");
+    expect(mockLink).toHaveBeenCalledWith("wl-1", {
+      currentBookingStartAtIso: "2026-08-06T15:00:00.000Z",
+      latestAtIso: "2026-08-06T15:00:00.000Z"
+    });
+
+    // An explicit bound the customer stated is respected as stated.
+    mockLink.mockClear();
+    mockFind.mockResolvedValue([
+      entry({
+        current_booking_start_at: "2026-08-04T15:00:00Z",
+        latest_at: "2026-08-03T00:00:00Z"
+      })
+    ]);
+    await resolveWaitlistAfterBooking(BIZ, ATTENDEE, "2026-08-06T15:00:00.000Z");
+    expect(mockLink).toHaveBeenCalledWith("wl-1", {
+      currentBookingStartAtIso: "2026-08-06T15:00:00.000Z"
+    });
+  });
+
   it("ignores unparseable starts and never throws on lookup trouble", async () => {
     await resolveWaitlistAfterBooking(BIZ, ATTENDEE, "not-a-date");
     expect(mockFind).not.toHaveBeenCalled();

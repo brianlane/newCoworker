@@ -61,8 +61,19 @@ export async function resolveWaitlistAfterBooking(
       if (acceptedOffer || (beatCurrent && !offerStillPending)) {
         await setWaitlistStatus(entry.id, "fulfilled");
       } else {
+        // A window pinned to the OLD booking start (the join/opt-in
+        // default) moves with the booking, or a later-moved appointment
+        // would leave the entry ineligible for valid earlier slots and
+        // lapsing while a future booking still stands (Bugbot High on
+        // PR #903). An explicit, non-derived bound is respected as stated.
+        const latestMs = entry.latest_at !== null ? Date.parse(entry.latest_at) : NaN;
+        const windowWasBookingDerived =
+          Number.isFinite(latestMs) && Number.isFinite(currentMs) && latestMs === currentMs;
         await updateWaitlistBookingLink(entry.id, {
-          currentBookingStartAtIso: new Date(newStartMs).toISOString()
+          currentBookingStartAtIso: new Date(newStartMs).toISOString(),
+          ...(windowWasBookingDerived
+            ? { latestAtIso: new Date(newStartMs).toISOString() }
+            : {})
         });
       }
     }

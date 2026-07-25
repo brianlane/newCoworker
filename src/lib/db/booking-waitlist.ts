@@ -312,10 +312,19 @@ export async function setWaitlistStatus(
   }
 }
 
-/** Re-point a live entry at the attendee's moved booking. Best-effort. */
+/**
+ * Re-point a live entry at the attendee's moved booking. `latestAtIso`
+ * rides along when the entry's window was derived from the old booking, so
+ * a booking moved later keeps the entry eligible (and un-lapsed) up to the
+ * new start. Best-effort.
+ */
 export async function updateWaitlistBookingLink(
   id: string,
-  link: { currentBookingStartAtIso: string; currentEventId?: string | null },
+  link: {
+    currentBookingStartAtIso: string;
+    currentEventId?: string | null;
+    latestAtIso?: string;
+  },
   client?: SupabaseClient
 ): Promise<void> {
   try {
@@ -325,6 +334,7 @@ export async function updateWaitlistBookingLink(
       .update({
         current_booking_start_at: link.currentBookingStartAtIso,
         ...(link.currentEventId !== undefined ? { current_event_id: link.currentEventId } : {}),
+        ...(link.latestAtIso !== undefined ? { latest_at: link.latestAtIso } : {}),
         updated_at: new Date().toISOString()
       })
       .eq("id", id)

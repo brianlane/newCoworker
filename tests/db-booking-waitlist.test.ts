@@ -365,6 +365,16 @@ describe("setWaitlistStatus / updateWaitlistBookingLink", () => {
     });
     update = calls.find((c) => c.name === "update");
     expect(update?.args[0]).not.toHaveProperty("current_event_id");
+    expect(update?.args[0]).not.toHaveProperty("latest_at");
+
+    // A booking-derived window rides along when the caller passes it.
+    calls = scriptClient([{ data: null, error: null }]);
+    await updateWaitlistBookingLink("wl-1", {
+      currentBookingStartAtIso: "2026-08-02T16:00:00Z",
+      latestAtIso: "2026-08-02T16:00:00Z"
+    });
+    update = calls.find((c) => c.name === "update");
+    expect(update?.args[0]).toMatchObject({ latest_at: "2026-08-02T16:00:00Z" });
   });
 
   it("both swallow thrown clients (best-effort)", async () => {
