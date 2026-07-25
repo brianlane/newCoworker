@@ -28,6 +28,16 @@ import { fileURLToPath } from "node:url";
  * (CI swaps host.docker.internal for the supabase docker network's gateway
  * IP — Linux containers don't get the Docker Desktop alias.)
  *
+ * Any Supabase CLI version works. It did not always: on a CLI whose baseline
+ * no longer auto-grants the Data API roles, replaying the migrations left
+ * `service_role` with no privileges on the pre-convention tables, and the suite
+ * died with "permission denied for table ai_flow_runs" despite a valid service
+ * key. The schema now states those grants itself
+ * (20260821004100_backfill_service_role_grants.sql), and `preflight.ts` below
+ * checks for the stale-stack case up front with a one-line fix instead of
+ * letting it surface as a cryptic failure mid-suite. CI still pins the CLI, but
+ * for `supabase status` output stability, not for grants.
+ *
  * No coverage (the code under test runs in the edge runtime container, not
  * this process). Serial: scenarios share one worker and tick it globally.
  */
@@ -41,6 +51,9 @@ export default defineConfig({
     environment: "node",
     include: ["tests/worker-integration/**/*.itest.ts"],
     exclude: [],
+    // Fails fast with an actionable message when the local stack itself is the
+    // problem (unreachable, no key, or missing the Data API grants).
+    globalSetup: ["./tests/worker-integration/preflight.ts"],
     testTimeout: 120_000,
     hookTimeout: 60_000,
     fileParallelism: false,
