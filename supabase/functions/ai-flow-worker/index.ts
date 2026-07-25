@@ -2038,10 +2038,15 @@ const LEAD_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
  * genuinely wants team contact rows creates them as type='employee', which
  * reason 1 already skips.
  *
- * A contacts read error returns false so a transient DB blip never silently
- * drops a real lead profile; the roster/self check inside staffNumberCheck
- * fails the other way (staff) because filing our own team is the worse
- * outcome and the row is trivially re-created by the lead's next interaction.
+ * The two reasons fail in OPPOSITE directions, deliberately. A `contacts` read
+ * error only costs us reason 1, so it degrades to "not a saved business
+ * contact" (false) rather than dropping a real lead profile over a DB blip.
+ * Reason 2 still runs on that path: the roster/self check is the guard that
+ * protects our own team, and skipping it because a DIFFERENT table hiccupped
+ * would reopen exactly the defect above. Inside staffNumberCheck a read error
+ * fails the other way (staff, so nothing is filed) because filing a teammate
+ * under a stranger's name is worse than a missing lead row, which the lead's
+ * next interaction re-creates anyway.
  */
 async function isNonLeadNumber(
   supabase: Supabase,
@@ -2054,12 +2059,9 @@ async function isNonLeadNumber(
     .eq("business_id", businessId)
     .eq("customer_e164", e164)
     .maybeSingle();
-  if (error) {
-    console.error("isNonLeadNumber contacts read (aiflow lead)", error);
-    return false;
-  }
-  const storedType = (data as { type?: string } | null)?.type ?? null;
-  if (data != null && storedType !== "customer") return true;
+  if (error) console.error("isNonLeadNumber contacts read (aiflow lead)", error);
+  const storedType = error ? null : ((data as { type?: string } | null)?.type ?? null);
+  if (!error && data != null && storedType !== "customer") return true;
   const check = await staffNumberCheck(supabase, businessId, [e164], storedType);
   return check.staff;
 }
