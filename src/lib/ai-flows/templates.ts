@@ -429,6 +429,25 @@ export function newLeadIntakeTemplate(): AiFlowTemplate {
               description:
                 "If the message gives NO phone number for the lead but DOES give an " +
                 "email address, answer exactly: yes. Otherwise answer exactly: none"
+            },
+            {
+              name: "lead_language",
+              description:
+                "Answer exactly es when the message says this lead speaks (or prefers) " +
+                "Spanish. Otherwise answer exactly: none"
+            },
+            {
+              name: "text_gate",
+              description:
+                "Answer exactly yes when the lead should be TEXTED: there is a phone " +
+                "number and the message does not ask ONLY for a call. Otherwise answer " +
+                "exactly: none"
+            },
+            {
+              name: "call_gate",
+              description:
+                "Answer exactly yes when the message asks for the lead to be CALLED and " +
+                "a phone number is given. Otherwise answer exactly: none"
             }
           ]
         },
@@ -438,7 +457,11 @@ export function newLeadIntakeTemplate(): AiFlowTemplate {
           when: { var: "has_phone", equals: "yes" },
           phoneVar: "lead_phone",
           nameVar: "lead_name",
-          emailVar: "lead_email"
+          emailVar: "lead_email",
+          // Stamps the language when the owner mentioned one, so later texts,
+          // emails, and AI replies use it. Stored as a detection, so the lead's
+          // own replies can still correct it.
+          languageVar: "lead_language"
         },
         {
           id: "s_intro",
@@ -454,7 +477,7 @@ export function newLeadIntakeTemplate(): AiFlowTemplate {
                   id: "s_send_ref",
                   type: "send_sms",
                   to: "{{vars.lead_phone}}",
-                  when: { var: "has_phone", equals: "yes" },
+                  when: { var: "text_gate", equals: "yes" },
                   body:
                     "Hi {{vars.lead_name.first}}. {{vars.referred_by}} shared your info " +
                     "with me and thought I could help. I'm so glad they connected us! " +
@@ -480,7 +503,7 @@ export function newLeadIntakeTemplate(): AiFlowTemplate {
               id: "s_send_std",
               type: "send_sms",
               to: "{{vars.lead_phone}}",
-              when: { var: "has_phone", equals: "yes" },
+              when: { var: "text_gate", equals: "yes" },
               body:
                 "Hi {{vars.lead_name.first}}. Thanks for reaching out! I'd love to " +
                 "help. When is a good time for a quick chat about what you're looking " +
@@ -498,6 +521,25 @@ export function newLeadIntakeTemplate(): AiFlowTemplate {
                 "for?"
             }
           ]
+        },
+        {
+          // "Call this lead": the AI places the call and does what it normally
+          // does, then the owner gets the summary (notifyOwner, so the template
+          // carries no tenant phone number). The lead is still routed below: a
+          // call does not replace ownership of the lead.
+          id: "s_call",
+          type: "place_ai_call",
+          when: { var: "call_gate", equals: "yes" },
+          toVar: "lead_phone",
+          personaTemplate:
+            "Hi, is this {{vars.lead_name.first}}? I'm calling on behalf of the team " +
+            "about your enquiry. Is now a good time for a couple of quick questions?",
+          contextTemplate:
+            "Their name: {{vars.lead_name}}. What they are looking for: " +
+            "{{vars.lead_details}}. Never ask for details you were already given.",
+          captureFields: ["what they are looking for", "their timeline", "best time to reach them"],
+          notifyOwner: true,
+          saveAs: "call_outcome"
         },
         {
           id: "s_route",
@@ -527,6 +569,10 @@ export function newLeadIntakeTemplate(): AiFlowTemplate {
             "New Lead Intake handled the lead you sent in.\n" +
             "Lead: {{vars.lead_name}} ({{vars.lead_phone}}, email: {{vars.lead_email}}). " +
             "Looking for: {{vars.lead_details}}.\n" +
+            // No call-outcome line: {{vars.call_outcome}} only exists on runs
+            // that placed a call, so elsewhere it would render as a bare
+            // "Call outcome: ." The call step texts its own post-call summary
+            // (notifyOwner) and actions_taken records that a call went out.
             "Outcome: {{vars.actions_taken}}."
         },
         {
