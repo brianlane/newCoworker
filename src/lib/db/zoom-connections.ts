@@ -322,6 +322,9 @@ export async function getZoomConnectionBusinessIdsByZoomUserId(
  * Backfill the connected account's identity onto a row whose connect-time
  * users/me fetch failed (zoom_user_id null): without it, webhook host
  * routing can never match this tenant. Email/name are fill-only extras.
+ * The update is CONDITIONAL on zoom_user_id still being null, so a slow
+ * backfill can never overwrite the fresh identity written by a concurrent
+ * OAuth reconnect.
  */
 export async function updateZoomConnectionIdentity(
   businessId: string,
@@ -337,7 +340,8 @@ export async function updateZoomConnectionIdentity(
       ...(identity.displayName === null ? {} : { account_name: identity.displayName }),
       updated_at: new Date().toISOString()
     })
-    .eq("business_id", businessId);
+    .eq("business_id", businessId)
+    .is("zoom_user_id", null);
   if (error) throw new Error(`updateZoomConnectionIdentity: ${error.message}`);
 }
 
