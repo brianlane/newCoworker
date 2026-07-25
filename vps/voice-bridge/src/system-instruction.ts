@@ -185,6 +185,7 @@ export function systemInstructionForBusiness(
         // Staff are not customers: do not create/edit a customer profile for
         // their number (the SMS gate avoids this too).
         "Do NOT use the customer CRM tools (`customer_lookup_by_phone`, `customer_set_display_name`, `customer_append_pinned_note`, `capture_caller_details`) on this caller — they are staff, not a customer.",
+        "When they hand you work one of their automations covers (most often a new lead: a name, a number, what the person wants, who should handle it), use `run_aiflow`: call it with no arguments to see the automations, then run the matching one and pass along everything they told you. It is the only way to start one from a call, so never promise to run something without it.",
         "If you say you'll pass a message along, call `notify_team` before the call ends — it is your only channel to the rest of the team.",
         "Always explain what you're about to do in plain language before calling a tool, and never read a tool's raw response aloud."
       ].join(" ")
@@ -199,7 +200,7 @@ export function systemInstructionForBusiness(
         "- `send_follow_up_sms` to text the caller a short summary or link.",
         "- `send_follow_up_email` to email them; if the tool returns `email_not_connected`, explain you'll send it by text instead and call `send_follow_up_sms`.",
         "- `notify_team` whenever the caller needs something only the team can resolve (confirm an appointment you couldn't book, answer a question you couldn't, return a call). This is your ONLY way to reach the team.",
-        "- `capture_caller_details` at any point a caller provides their name, phone, email, or reason for calling so the owner has a CRM record. Never let a call with a genuine lead end without having called it.",
+        "- `capture_caller_details` at any point a caller provides their name, phone, email, or reason for calling so the owner has a CRM record. Never let a call with a genuine lead end without having called it. When the caller speaks Spanish (or switches to it), also pass `language`: 'es' so their later texts and emails come in Spanish too.",
         "- `customer_lookup_by_phone` AT THE START of every call to recognize repeat callers — defaults to the current caller's number; if it returns a profile, use the summary as your own working notes (never quote it verbatim).",
         "- `customer_set_display_name` once the caller gives you their name (won't overwrite a name the owner already saved).",
         "- `customer_append_pinned_note` for facts the owner needs to remember across conversations (preferences, allergies, recurring scheduling constraints). Use sparingly — only for facts that should reach the next conversation unchanged.",

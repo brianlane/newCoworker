@@ -502,6 +502,12 @@ export type StepAction =
       e164: string;
       name: string;
       email: string;
+      /**
+       * Resolved lead language ("en"/"es") when the step named a var holding
+       * one. Any other value is dropped at plan time, so the worker never
+       * writes a junk language.
+       */
+      language?: string;
       /** Set when the phone var was missing/unusable — skip, never fail. */
       skipReason?: string;
     }
@@ -564,6 +570,8 @@ export type StepAction =
       contextNote: string;
       notifyE164?: string;
       notifyRef?: ContactRef;
+      /** Send the summary to the business owner (tenant-neutral recipient). */
+      notifyOwner?: boolean;
       transferToE164?: string;
       transferToRef?: ContactRef;
       /** Rendered pre-alert SMS body ("" = none configured). */
@@ -1373,6 +1381,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         contextNote,
         ...(step.notifyE164 ? { notifyE164: step.notifyE164 } : {}),
         ...(step.notifyRef ? { notifyRef: step.notifyRef } : {}),
+        ...(step.notifyOwner === true ? { notifyOwner: true } : {}),
         ...(step.transfer?.toE164 ? { transferToE164: step.transfer.toE164 } : {}),
         ...(step.transfer?.toRef ? { transferToRef: step.transfer.toRef } : {}),
         preSmsBody,
@@ -1440,13 +1449,19 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         const v = scope.vars?.[name];
         return typeof v === "string" ? v.trim() : "";
       };
+      // Language: only the two supported tokens survive, so an extraction that
+      // answered "none" (or anything else) simply leaves the stored language
+      // alone instead of writing junk onto the contact.
+      const languageRaw = readVar(step.languageVar).toLowerCase();
+      const language = languageRaw === "en" || languageRaw === "es" ? languageRaw : "";
       return {
         ok: true,
         action: {
           kind: "upsert_customer",
           e164,
           name: readVar(step.nameVar),
-          email: readVar(step.emailVar)
+          email: readVar(step.emailVar),
+          ...(language ? { language } : {})
         }
       };
     }

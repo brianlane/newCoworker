@@ -1,7 +1,8 @@
 import { describe, expect, it, vi } from "vitest";
 import {
   AiFlowValidationError,
-  parseAiFlowDefinition
+  parseAiFlowDefinition,
+  validateDefinitionSemantics
 } from "@/lib/ai-flows/schema";
 import { varsProducedByStep } from "@/lib/ai-flows/tree";
 import type { FlowStep as UiFlowStep } from "@/lib/ai-flows/schema";
@@ -110,7 +111,30 @@ describe("schema: place_ai_call", () => {
           notifyRef: EMP_REF
         })
       ).join("\n")
-    ).toContain("both notifyE164 and notifyRef");
+    ).toContain("more than one call-summary recipient");
+  });
+
+  /**
+   * notifyOwner is the tenant-neutral recipient: without it a shared starter
+   * template could not carry a call step at all (both other sources bake in a
+   * tenant's phone or row id).
+   */
+  it("accepts notifyOwner as the sole summary recipient", () => {
+    const def = parseAiFlowDefinition(
+      defWith({ toVar: "lead_phone", personaTemplate: "Hi", notifyOwner: true })
+    );
+    expect(def.steps[1]).toMatchObject({ notifyOwner: true });
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("rejects notifyOwner combined with either explicit recipient", () => {
+    for (const extra of [{ notifyE164: "+16025245719" }, { notifyRef: EMP_REF }]) {
+      expect(
+        issuesOf(
+          defWith({ toVar: "lead_phone", personaTemplate: "Hi", notifyOwner: true, ...extra })
+        ).join("\n")
+      ).toContain("more than one call-summary recipient");
+    }
   });
 
   it("requires exactly one transfer target when a transfer is configured", () => {
@@ -226,6 +250,21 @@ describe("planStep: place_ai_call", () => {
         marker: "__called_call1"
       }
     });
+  });
+
+  it("carries notifyOwner through to the action (the worker resolves the number)", () => {
+    const plan = planStep(
+      step({ notifyE164: undefined, notifyOwner: true }),
+      { vars: { lead_phone: "+17572390150", lead_name: "Bryan" } }
+    );
+    expect(plan.ok && plan.action.kind === "place_ai_call" ? plan.action : null).toMatchObject({
+      notifyOwner: true
+    });
+    // Absence stays absent (no false "owner" default on existing flows).
+    const without = planStep(step(), { vars: { lead_phone: "+17572390150" } });
+    expect(
+      without.ok && without.action.kind === "place_ai_call" && "notifyOwner" in without.action
+    ).toBe(false);
   });
 
   it("keeps an already-E.164 callee, defaults saveAs, and carries a hardcoded transfer target", () => {

@@ -430,6 +430,11 @@ function voiceToolPath(name: string): string {
       return "/api/voice/tools/email";
     case "capture_caller_details":
       return "/api/voice/tools/capture";
+    // Staff-only: start one of the business's automations from a call. The
+    // declaration is withheld from customer callers below, and the adapter
+    // re-checks the caller server-side.
+    case "run_aiflow":
+      return "/api/voice/tools/run-aiflow";
     case "notify_team":
       return "/api/voice/tools/notify-team";
     // Phase 5: cross-channel customer memory tools. The agent uses
@@ -933,9 +938,15 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     "customer_set_display_name",
     "customer_append_pinned_note"
   ]);
+  // The mirror image: starting one of the business's own automations is a
+  // STAFF action. Withholding the declaration from customer callers is the
+  // strong gate (the prompt alone would still let the model try it); the
+  // adapter re-resolves the caller server-side as defense in depth.
+  const STAFF_ONLY_TOOLS = new Set(["run_aiflow"]);
   if (!intake && voiceToolsReady) {
     for (const decl of buildVoiceToolDeclarations()) {
       if (callerIsStaff && STAFF_EXCLUDED_TOOLS.has(decl.name)) continue;
+      if (!callerIsStaff && STAFF_ONLY_TOOLS.has(decl.name)) continue;
       declarations.push(decl);
     }
   }

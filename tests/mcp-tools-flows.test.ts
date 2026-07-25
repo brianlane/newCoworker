@@ -32,6 +32,7 @@ vi.mock("@/lib/ai-flows/db", () => ({
   updateAiFlow: vi.fn()
 }));
 vi.mock("@/lib/ai-flows/webhook-events", () => ({ processWebhookFlowEvent: vi.fn() }));
+vi.mock("@/lib/ai-flows/manual-run-tool", () => ({ runAiFlowTool: vi.fn() }));
 vi.mock("@/lib/rate-limit", () => ({ rateLimit: vi.fn() }));
 
 import { McpToolError, requireMcpBusinessRole } from "@/lib/mcp/auth";
@@ -40,6 +41,7 @@ import {
   getFlowSchemaTool,
   getFlowTool,
   listFlowsTool,
+  runFlowTool,
   setFlowEnabledTool,
   triggerFlowTool,
   updateFlowTool,
@@ -56,6 +58,7 @@ import { validateRunAgentSteps } from "@/lib/ai-flows/agent-steps";
 import { validateMailboxConnectionSteps } from "@/lib/ai-flows/mailbox-steps";
 import { createAiFlow, getAiFlow, listAiFlows, updateAiFlow } from "@/lib/ai-flows/db";
 import { processWebhookFlowEvent } from "@/lib/ai-flows/webhook-events";
+import { runAiFlowTool } from "@/lib/ai-flows/manual-run-tool";
 import { rateLimit } from "@/lib/rate-limit";
 
 const AUTH = { userId: "user-1", email: "owner@biz.com" };
@@ -312,5 +315,72 @@ describe("trigger_flow", () => {
       McpToolError
     );
     expect(processWebhookFlowEvent).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * run_flow: the manual-run companion to trigger_flow. trigger_flow only ever
+ * reaches WEBHOOK-triggered flows, so a manual flow (an owner's lead-intake,
+ * say) was unreachable from Claude entirely.
+ */
+describe("run_flow", () => {
+  it("runs a flow by reference through the shared manual-run core", async () => {
+    vi.mocked(runAiFlowTool).mockResolvedValue({
+      ok: true,
+      runId: "run-9",
+      flowName: "New Lead Intake",
+      note: "Run enqueued."
+    } as never);
+    const result = await runFlowTool.handler(
+      { flow: "New Lead Intake", input: "Jane +16025551212 wants a quote" },
+      AUTH
+    );
+    expect(runAiFlowTool).toHaveBeenCalledWith("biz-1", {
+      flow: "New Lead Intake",
+      input: "Jane +16025551212 wants a quote"
+    });
+    expect(result).toEqual({
+      run_id: "run-9",
+      flow_name: "New Lead Intake",
+      note: "Run enqueued."
+    });
+  });
+
+  it("omits input when none was given", async () => {
+    vi.mocked(runAiFlowTool).mockResolvedValue({
+      ok: true,
+      runId: "run-10",
+      flowName: "F",
+      note: "n"
+    } as never);
+    await runFlowTool.handler({ flow: "F" }, AUTH);
+    expect(runAiFlowTool).toHaveBeenCalledWith("biz-1", { flow: "F" });
+  });
+
+  it("surfaces a core refusal (disabled / unknown / voice-only) as a tool error", async () => {
+    vi.mocked(runAiFlowTool).mockResolvedValue({
+      ok: false,
+      message: '"Voice routing" is a voice flow'
+    } as never);
+    await expect(runFlowTool.handler({ flow: "Voice routing" }, AUTH)).rejects.toThrow(
+      /is a voice flow/
+    );
+  });
+
+  it("requires the manage_aiflows role", async () => {
+    vi.mocked(runAiFlowTool).mockResolvedValue({
+      ok: true,
+      runId: "r",
+      flowName: "F",
+      note: "n"
+    } as never);
+    await runFlowTool.handler({ flow: "F" }, AUTH);
+    expect(requireMcpBusinessRole).toHaveBeenCalledWith(AUTH, "biz-1", "manage_aiflows");
+  });
+
+  it("refuses when rate limited, before any run is enqueued", async () => {
+    vi.mocked(rateLimit).mockReturnValue({ success: false, limit: 1, remaining: 0, reset: 0 });
+    await expect(runFlowTool.handler({ flow: "F" }, AUTH)).rejects.toBeInstanceOf(McpToolError);
+    expect(runAiFlowTool).not.toHaveBeenCalled();
   });
 });

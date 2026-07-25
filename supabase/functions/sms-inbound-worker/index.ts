@@ -60,9 +60,12 @@ import {
 } from "../_shared/sms_prompt_lines.ts";
 import {
   customerLanguageLine,
-  detectCustomerLanguage,
   type CustomerLanguage
 } from "../_shared/customer_language.ts";
+import {
+  contactLanguageStateFromRow,
+  detectAndPersistCustomerLanguage
+} from "../_shared/customer_language_persist.ts";
 import { inboundSmsBody, telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
 import { isTapbackText } from "../_shared/sms_tapback.ts";
 import {
@@ -935,6 +938,19 @@ serve(async (req: Request) => {
         if (memErr) {
           console.error("record_customer_interaction (suppressed sms)", memErr);
         }
+        // Language: an AiFlow owning this turn is exactly when a lead answers
+        // a flow's question, so their language must be recorded HERE too. Left
+        // out, a Spanish reply captured by a flow kept the contact flagged
+        // English and every later message stayed English. Best-effort by
+        // contract; never blocks the suppressed path.
+        await detectAndPersistCustomerLanguage({
+          supabase,
+          businessId: job.business_id,
+          customerE164: fromE164,
+          text: inboundPayloadText(payload),
+          defaultLanguage: businessDefaultLang,
+          supported: businessSupportedLangs
+        });
       }
       await telemetryRecord(supabase, "sms_worker_suppressed_ai_flow", {
         job_id: job.id,
@@ -1334,62 +1350,20 @@ serve(async (req: Request) => {
         .eq("business_id", job.business_id)
         .or(`customer_e164.eq.${fromE164},alias_e164s.cs.{${fromE164}}`)
         .maybeSingle();
-      const contactLang = (memoryRow as { preferred_language?: CustomerLanguage | null; language_source?: string | null } | null)
-        ?.preferred_language;
-      const contactLangSource = (memoryRow as { language_source?: string | null } | null)?.language_source;
-      const envelope = job.payload as { data?: { payload?: Record<string, unknown> } };
-      const inboundPayload = envelope?.data?.payload ?? {};
-      const inboundText = inboundPayloadText(inboundPayload);
-      const detected = detectCustomerLanguage({
-        text: inboundText,
-        establishedLanguage: contactLang ?? undefined,
-        defaultLanguage: businessDefaultLang,
-        supported: businessSupportedLangs
-      });
-      if (detected.persist && contactLangSource !== "owner_set") {
-        const langPatch = {
-          preferred_language: detected.language,
-          language_source: "detected"
-        };
-        if (memoryRow) {
-          // Alias-aware: a texter merged into another profile must persist on
-          // the surviving row's primary number, not the alias (which matches
-          // zero rows).
-          const contactPrimaryE164 =
-            (memoryRow as { customer_e164?: string | null }).customer_e164 ?? fromE164;
-          await supabase
-            .from("contacts")
-            .update(langPatch)
-            .eq("business_id", job.business_id)
-            .eq("customer_e164", contactPrimaryE164);
-        } else {
-          // First contact: no contacts row exists yet (record_customer_interaction
-          // runs later in this job), so an UPDATE would silently hit zero rows and
-          // the detected language would never land. Insert the row now; on a
-          // concurrent-create race (unique violation) fall back to the update.
-          const { error: langInsErr } = await supabase.from("contacts").insert({
-            business_id: job.business_id,
-            customer_e164: fromE164,
-            ...langPatch
-          });
-          if (langInsErr) {
-            await supabase
-              .from("contacts")
-              .update(langPatch)
-              .eq("business_id", job.business_id)
-              .eq("customer_e164", fromE164);
-          }
-        }
-      }
-      // Thread language for the prompt: an owner override is authoritative;
-      // otherwise a confident detection wins (mid-thread switch), and a weak
-      // signal keeps the stored thread language (mirrors the Messenger engine).
-      const smsThreadLanguage =
-        contactLangSource === "owner_set"
-          ? contactLang
-          : detected.persist
-            ? detected.language
-            : contactLang ?? detected.language;
+      const inboundText = inboundPayloadText(payload);
+      // Detect + persist through the shared helper, reusing the contacts row
+      // already read above (no second query). The suppressed branch calls the
+      // same helper, so a flow-owned turn records language identically.
+      const { detected, threadLanguage: smsThreadLanguage } =
+        await detectAndPersistCustomerLanguage({
+          supabase,
+          businessId: job.business_id,
+          customerE164: fromE164,
+          text: inboundText,
+          defaultLanguage: businessDefaultLang,
+          supported: businessSupportedLangs,
+          state: contactLanguageStateFromRow(memoryRow)
+        });
       const languageLine = customerLanguageLine({
         detected: detected.language,
         established: smsThreadLanguage,

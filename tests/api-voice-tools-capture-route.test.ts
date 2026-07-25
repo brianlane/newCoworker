@@ -21,6 +21,9 @@ vi.mock("@/lib/customer-memory/db", () => ({
   linkCustomerEmail: vi.fn()
 }));
 
+vi.mock("@/lib/db/contact-language", () => ({
+  persistDetectedContactLanguage: vi.fn()
+}));
 vi.mock("@/lib/customer-memory/capture-contact", () => ({
   ensureCapturedContact: vi.fn()
 }));
@@ -32,6 +35,7 @@ import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import { linkCustomerEmail } from "@/lib/customer-memory/db";
 import { ensureCapturedContact } from "@/lib/customer-memory/capture-contact";
+import { persistDetectedContactLanguage } from "@/lib/db/contact-language";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -76,6 +80,65 @@ describe("api/voice/tools/capture route", () => {
       "capture_caller_details"
     );
     expect(insertCoworkerLog).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Voice was the ONE channel that never learned a caller's language, so
+   * someone who spoke Spanish on the phone still got English texts afterward.
+   */
+  describe("caller language", () => {
+    it("persists the language the caller is speaking, keyed on the trusted caller id", async () => {
+      const r = await POST(
+        req({
+          businessId: BIZ,
+          callerE164: "+16025551212",
+          args: { name: "Alex", language: "es" }
+        })
+      );
+      expect(r.status).toBe(200);
+      expect(persistDetectedContactLanguage).toHaveBeenCalledWith(BIZ, "+16025551212", "es");
+    });
+
+    it("is enough on its own to be a useful capture (no other field needed)", async () => {
+      const r = await POST(
+        req({ businessId: BIZ, callerE164: "+16025551212", args: { language: "es" } })
+      );
+      expect(r.status).toBe(200);
+      await expect(r.json()).resolves.toMatchObject({ ok: true });
+    });
+
+    it("writes nothing when the model omitted the language", async () => {
+      await POST(req({ businessId: BIZ, callerE164: "+16025551212", args: { name: "Alex" } }));
+      expect(persistDetectedContactLanguage).not.toHaveBeenCalled();
+    });
+
+    it("falls back to the number the caller asked to be reached at", async () => {
+      await POST(
+        req({ businessId: BIZ, args: { phone: "+14805559999", language: "es" } })
+      );
+      expect(persistDetectedContactLanguage).toHaveBeenCalledWith(BIZ, "+14805559999", "es");
+    });
+
+    it("rejects a language outside the supported set", async () => {
+      const r = await POST(
+        req({ businessId: BIZ, callerE164: "+16025551212", args: { language: "fr" } })
+      );
+      expect(r.status).toBe(400);
+      expect(persistDetectedContactLanguage).not.toHaveBeenCalled();
+    });
+
+    it("never fails the capture when the language write throws (mid-call)", async () => {
+      vi.mocked(persistDetectedContactLanguage).mockRejectedValueOnce(new Error("db down"));
+      const r = await POST(
+        req({
+          businessId: BIZ,
+          callerE164: "+16025551212",
+          args: { name: "Alex", language: "es" }
+        })
+      );
+      expect(r.status).toBe(200);
+      await expect(r.json()).resolves.toMatchObject({ ok: true });
+    });
   });
 
   it("logs but does not dispatch for non-urgent capture", async () => {

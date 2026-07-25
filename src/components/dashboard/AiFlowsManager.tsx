@@ -827,10 +827,15 @@ function sanitizeStepForSave(step: FlowStep): FlowStep {
             preSmsTemplate: step.transfer.preSmsTemplate?.trim() || undefined
           }
         : undefined;
+    // notifyOwner is the tenant-neutral recipient and supersedes both explicit
+    // ones, so the "exactly one summary recipient" rule passes even with stale
+    // hidden state from before the box was checked.
     return {
       ...step,
       contextTemplate: step.contextTemplate?.trim() || undefined,
-      notifyE164: step.notifyRef ? undefined : step.notifyE164?.trim() || undefined,
+      notifyE164:
+        step.notifyOwner || step.notifyRef ? undefined : step.notifyE164?.trim() || undefined,
+      notifyRef: step.notifyOwner ? undefined : step.notifyRef,
       transfer,
       captureFields: captureFields.length > 0 ? captureFields : undefined
     };
@@ -4476,6 +4481,12 @@ function StepFields({
           value={step.emailVar ?? ""}
           onChange={(v) => patchStep(index, { emailVar: v || undefined })}
         />
+        <Field
+          label="Language variable (optional)"
+          value={step.languageVar ?? ""}
+          onChange={(v) => patchStep(index, { languageVar: v || undefined })}
+          help='A variable holding "en" or "es" (anything else is ignored), e.g. a field that extracted "she speaks Spanish". Saves it on the contact so later texts, emails, and AI replies use that language. Their own replies can still correct it.'
+        />
       </div>
     );
   }
@@ -5015,16 +5026,35 @@ function StepFields({
           textarea
           help='Details the AI must never re-ask for, e.g. "Their name: {{vars.lead_name}}. Address: {{vars.lead_address}}."'
         />
-        <ContactRefPicker
-          label="Text the summary to (E.164, e.g. +16025551234)"
-          placeholder="+16025551234"
-          textValue={step.notifyE164 ?? ""}
-          refValue={step.notifyRef}
-          people={people}
-          onChangeText={(v) => patchStep(index, { notifyE164: v.trim() ? v.trim() : undefined })}
-          onChangeRef={(ref) => patchStep(index, { notifyRef: ref, notifyE164: undefined })}
-          help="After the call, the AI texts this number a summary and transcript."
-        />
+        <label className="flex items-center gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
+            checked={Boolean(step.notifyOwner)}
+            onChange={(ev) =>
+              patchStep(
+                index,
+                ev.target.checked
+                  ? { notifyOwner: true, notifyE164: undefined, notifyRef: undefined }
+                  : { notifyOwner: undefined }
+              )
+            }
+          />
+          Text the call summary to me (your alert number)
+        </label>
+        {!step.notifyOwner && (
+          <ContactRefPicker
+            label="Text the summary to (E.164, e.g. +16025551234)"
+            placeholder="+16025551234"
+            textValue={step.notifyE164 ?? ""}
+            refValue={step.notifyRef}
+            people={people}
+            onChangeText={(v) =>
+              patchStep(index, { notifyE164: v.trim() ? v.trim() : undefined })
+            }
+            onChangeRef={(ref) => patchStep(index, { notifyRef: ref, notifyE164: undefined })}
+            help="After the call, the AI texts this number a summary and transcript."
+          />
+        )}
         <label className="flex items-center gap-2 text-xs text-parchment/70">
           <input
             type="checkbox"

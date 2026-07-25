@@ -896,6 +896,12 @@ export type FlowStep =
       phoneVar: string;
       nameVar?: string;
       emailVar?: string;
+      /**
+       * Var holding the person's language ("en"/"es"; anything else ignored).
+       * Stored as a DETECTED language so their own replies can still correct
+       * it, and the step refreshes {{vars.contact_language}} either way.
+       */
+      languageVar?: string;
       when?: StepCondition;
     }
   | {
@@ -1154,9 +1160,14 @@ export type FlowStep =
        * asking my name if you already have it?", live test Jul 15 2026).
        */
       contextTemplate?: string;
-      /** Post-call summary recipient: exactly one of notifyE164 / notifyRef. */
+      /**
+       * Post-call summary recipient: exactly one of notifyE164 / notifyRef /
+       * notifyOwner. `notifyOwner` texts the business owner's configured alert
+       * number, the tenant-neutral option a shared template can carry.
+       */
       notifyE164?: string;
       notifyRef?: ContactRef;
+      notifyOwner?: true;
       /** Optional live-transfer config (pre-alert SMS + warm transfer). */
       transfer?: PlaceCallTransfer;
       /** Optional lead fields the AI captures during the call. */
