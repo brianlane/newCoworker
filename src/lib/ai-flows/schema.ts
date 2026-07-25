@@ -1770,10 +1770,15 @@ export function validateVoiceFlow(def: AiFlowDefinition): string[] {
       }
       // The whole sequence runs inside ONE Telnyx webhook, so its delays are
       // bounded: a longer wait would risk the webhook timing out and Telnyx
-      // retrying a call the AI has already answered.
+      // retrying a call the AI has already answered. Counted the way the engine
+      // spends it, defaults included, so a flow cannot save cleanly and then
+      // have its configured pauses silently clamped at run time.
       if (s.answerFirst) {
         const total = aiFirstDelaySeconds(
-          (s.acceptDigits ?? []).map((d) => d.afterSeconds),
+          // No acceptDigits at all still costs the default press.
+          s.acceptDigits === undefined
+            ? [undefined]
+            : s.acceptDigits.map((d) => d.afterSeconds),
           s.mediaStartSeconds
         );
         if (total > AI_FIRST_MAX_DELAY_SECONDS) {

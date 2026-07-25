@@ -22,9 +22,19 @@ describe("aiFirstDelaySeconds", () => {
     expect(aiFirstDelaySeconds([3, 1], 2)).toBe(6);
   });
 
-  it("ignores absent, zero, negative, and non-finite waits", () => {
-    expect(aiFirstDelaySeconds([undefined, 0, -4, Number.NaN, 2], undefined)).toBe(2);
-    expect(aiFirstDelaySeconds(undefined, undefined)).toBe(0);
+  it("counts the defaults the engine actually spends, not zero", () => {
+    // The budget the author is checked against has to be the budget the webhook
+    // spends, or a flow saves cleanly and then has its pauses clamped away.
+    expect(aiFirstDelaySeconds([undefined], undefined)).toBe(
+      DEFAULT_ACCEPT_WAIT_SECONDS + AI_FIRST_DEFAULT_MEDIA_SECONDS
+    );
+    expect(aiFirstDelaySeconds([undefined], 0)).toBe(DEFAULT_ACCEPT_WAIT_SECONDS);
+    expect(aiFirstDelaySeconds([], undefined)).toBe(AI_FIRST_DEFAULT_MEDIA_SECONDS);
+  });
+
+  it("reads an explicit zero, negative, or non-finite wait as no wait", () => {
+    expect(aiFirstDelaySeconds([0, -4, Number.NaN, 2], 0)).toBe(2);
+    expect(aiFirstDelaySeconds(undefined, 0)).toBe(0);
     expect(aiFirstDelaySeconds([], -1)).toBe(0);
   });
 });

@@ -2870,6 +2870,15 @@ describe("voice trigger + voice steps", () => {
       ).toContain("before the AI speaks");
     });
 
+    it("counts the engine's defaults, so an unauthored wait is not free", () => {
+      // afterSeconds omitted costs the 3s announcement default at run time, and
+      // an omitted mediaStartSeconds costs its own 2s, so this really does
+      // overrun the one-webhook budget even though nothing looks large.
+      expect(
+        issuesFor(aiFirstFlow({ answerFirst: true, acceptDigits: [{ digit: "1" }, { digit: "1" }] }))
+      ).toContain("before the AI speaks");
+    });
+
     it("accepts answerFirst on its own, with the engine defaults doing the pressing", () => {
       const def = parseAiFlowDefinition(aiFirstFlow({ answerFirst: true }));
       expect(validateDefinitionSemantics(def)).toEqual([]);

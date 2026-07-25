@@ -5331,10 +5331,15 @@ function StepFields({
                     .filter(Boolean)
                     .map((chunk) => {
                       const [digit, secs] = chunk.split("@");
-                      const n = Number((secs ?? "").trim());
+                      const raw = (secs ?? "").trim();
+                      const n = Number(raw);
+                      // A written "@0" MUST persist as 0: omitting it would mean
+                      // "no wait chosen", which the engine reads as the
+                      // announcement default, the opposite of what was typed.
+                      const authored = raw.length > 0 && Number.isFinite(n) && n >= 0;
                       return {
                         digit: (digit ?? "").trim(),
-                        ...(Number.isFinite(n) && n > 0 ? { afterSeconds: Math.round(n) } : {})
+                        ...(authored ? { afterSeconds: Math.round(n) } : {})
                       };
                     })
                     .filter((d) => /^[0-9*#]$/.test(d.digit));

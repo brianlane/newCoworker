@@ -99,19 +99,25 @@ export const AI_FIRST_DEFAULT_MEDIA_SECONDS = 2;
  * Total seconds an AI-first answer waits before the AI speaks. Shape-agnostic
  * (takes the delays, not the objects) so the camelCase authoring schema and the
  * snake_case runtime context can share one budget rule.
+ *
+ * Applies the SAME defaults planAiFirstAccept does, because the budget the
+ * author is checked against has to be the budget the webhook actually spends: an
+ * unauthored wait costs the announcement default, not nothing, and an unauthored
+ * media pause costs its default too. Counting them as zero would let a flow save
+ * cleanly and then have its configured mediaStartSeconds silently clamped away.
  */
 export function aiFirstDelaySeconds(
   digitDelays: readonly (number | undefined)[] | undefined,
   mediaStartSeconds: number | undefined
 ): number {
   const digits = (digitDelays ?? []).reduce<number>(
-    (sum, d) => sum + (typeof d === "number" && Number.isFinite(d) && d > 0 ? d : 0),
+    (sum, d) => sum + (d === undefined ? DEFAULT_ACCEPT_WAIT_SECONDS : coerceDelaySeconds(d)),
     0
   );
   const media =
-    typeof mediaStartSeconds === "number" && Number.isFinite(mediaStartSeconds) && mediaStartSeconds > 0
-      ? mediaStartSeconds
-      : 0;
+    mediaStartSeconds === undefined
+      ? AI_FIRST_DEFAULT_MEDIA_SECONDS
+      : coerceDelaySeconds(mediaStartSeconds);
   return digits + media;
 }
 
