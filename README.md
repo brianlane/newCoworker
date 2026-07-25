@@ -1199,7 +1199,7 @@ whole time. Remember voice has no overage, it hard-refuses the NEXT call once th
 pool is spent, so heavy use makes the 300-second `voice-low-balance-alerts` email
 load-bearing. The admin toggle and the owner's phone card both say so.
 
-**ON by default** since `20260821005000_translator_mode_default_on.sql`;
+**ON by default** since `20260821006000_translator_mode_default_on.sql`;
 `business_telnyx_settings.translator_mode_enabled` remains a per-tenant kill
 switch on the admin business page ("Voice & SMS DID" card), and applies to the
 NEXT call, not one in progress. It shipped opt-in for one reason: arming sends

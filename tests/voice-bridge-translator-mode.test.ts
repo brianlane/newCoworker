@@ -359,7 +359,7 @@ describe("arming is off by default and read from the tenant column", () => {
     );
     expect(original).toContain("translator_mode_enabled boolean not null default false");
     const flip = readFileSync(
-      join(__dirname, "../supabase/migrations/20260821005000_translator_mode_default_on.sql"),
+      join(__dirname, "../supabase/migrations/20260821006000_translator_mode_default_on.sql"),
       "utf8"
     );
     expect(flip).toContain("alter column translator_mode_enabled set default true");
