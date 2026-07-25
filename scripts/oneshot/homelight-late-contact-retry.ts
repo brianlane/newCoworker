@@ -130,6 +130,16 @@ export const CONTACT_STATUS_VAR = "contact_status";
 export const RUNG_1_STATUS_VAR = "late_contact_status";
 export const RUNG_2_STATUS_VAR = "late2_contact_status";
 export const ALREADY_CLAIMED_VAR = "already_claimed";
+/**
+ * Set to "1" by rung 1 when it ran and did NOT come away with the details.
+ *
+ * Rung 2 cannot gate on rung 1's sentinel alone, because the sentinel is UNSET
+ * in two opposite cases: rung 1 never ran (the details arrived on the first
+ * pass, so rung 2 must stay away) and rung 1's mailbox lookup matched nothing
+ * (so rung 2 must run). `when` carries one condition, so rung 1 records the
+ * distinction explicitly instead.
+ */
+export const RUNG_1_UNRESOLVED_VAR = "late_unresolved";
 
 const CONTACT_STATUS_FIELD = {
   name: CONTACT_STATUS_VAR,
@@ -375,6 +385,18 @@ export function addRung1(def: Definition, sleepMinutes: number): boolean {
     steps: [
       { id: "late_wait", type: "sleep", minutes: sleepMinutes },
       rungRead(def, "late_read", RUNG_1_STATUS_VAR, 90),
+      // "Rung 1 ran and still does not have the details." notEquals catches
+      // BOTH a "missing" sentinel and an UNSET one (no mailbox message matched
+      // at all, where email_extract writes nothing).
+      {
+        id: "late_unresolved",
+        type: "math",
+        operation: "add",
+        left: "1",
+        right: "0",
+        saveAs: RUNG_1_UNRESOLVED_VAR,
+        when: { var: RUNG_1_STATUS_VAR, notEquals: "found" }
+      },
       ...rungDelivery(def, "late", RUNG_1_STATUS_VAR)
     ]
   });
@@ -387,20 +409,24 @@ export function addRung1(def: Definition, sleepMinutes: number): boolean {
 /**
  * Edit 4: retry rung 2, appended after the existing agent-report block so it
  * costs no extra dead time (the run has already waited ~60 minutes there).
- * Gated on rung 1 having RUN and still come up empty (`equals "missing"`, not
- * `notEquals "found"`) so a lead whose details arrived on the first pass never
- * re-reads the mailbox. Pure and idempotent.
+ * Gated on rung 1's explicit "ran and still unresolved" marker, so a lead whose
+ * details arrived on the first pass never re-reads the mailbox (which would
+ * duplicate every send) while a rung 1 whose lookup matched nothing still
+ * escalates here. Pure and idempotent.
  */
 export function addRung2(def: Definition, sleepMinutes: number): boolean {
   if (findStep(def, RUNG_2_BRANCH_ID)) return false;
-  const missing = { var: RUNG_2_STATUS_VAR, equals: "missing" };
+  // notEquals, so a lookup that matched NO message (sentinel unwritten) still
+  // reports the outcome instead of going quiet. The delivery steps use the
+  // opposite (`equals "found"`), so an unset sentinel never sends anything.
+  const missing = { var: RUNG_2_STATUS_VAR, notEquals: "found" };
   const branch = rungBranch({
     id: RUNG_2_BRANCH_ID,
     outerQuestion: "Is this referral still ours?",
     innerId: "late2_missing",
     innerQuestion: "Did the client contact details ever arrive?",
     innerLabel: "Still missing after the first retry",
-    innerCondition: { var: RUNG_1_STATUS_VAR, equals: "missing" },
+    innerCondition: { var: RUNG_1_UNRESOLVED_VAR, equals: "1" },
     steps: [
       { id: "late2_wait", type: "sleep", minutes: sleepMinutes },
       rungRead(def, "late2_read", RUNG_2_STATUS_VAR, 240),

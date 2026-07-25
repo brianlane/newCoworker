@@ -15,6 +15,7 @@ import {
   patchDefinition,
   RUNG_1_BRANCH_ID,
   RUNG_1_STATUS_VAR,
+  RUNG_1_UNRESOLVED_VAR,
   RUNG_2_BRANCH_ID,
   RUNG_2_STATUS_VAR,
   type Definition,
@@ -349,6 +350,8 @@ describe("addRung1", () => {
     expect(arm.map((s) => s.type)).toEqual([
       "sleep",
       "email_extract",
+      // the "ran and still unresolved" marker rung 2 gates on
+      "math",
       "upsert_customer",
       "send_sms",
       "notify_owner",
@@ -367,10 +370,10 @@ describe("addRung1", () => {
       RUNG_1_STATUS_VAR
     ]);
     // Every delivery step waits for the FRESH sentinel, not the stale one.
-    for (const step of arm.slice(2)) {
+    for (const step of arm.slice(3)) {
       expect(step.when).toEqual({ var: RUNG_1_STATUS_VAR, equals: "found" });
     }
-    expect(arm[3].to).toBe("{{vars.claimed_agent_phone}}");
+    expect(arm.find((s) => s.id === "late_to_agent")!.to).toBe("{{vars.claimed_agent_phone}}");
   });
 
   it("re-sends the owner's exact intro copy rather than a second version of it", () => {
@@ -416,18 +419,19 @@ describe("addRung2", () => {
     expect(ids.indexOf("bp_branch")).toBeLessThan(ids.indexOf(RUNG_2_BRANCH_ID));
   });
 
-  it("fires only when rung 1 RAN and still came up empty", () => {
-    // equals "missing", not notEquals "found": an unset var (rung 1 never ran
-    // because the details arrived on the first pass) must NOT re-read the
-    // mailbox and re-text the claimer.
+  it("fires on rung 1's explicit unresolved marker, not on its sentinel", () => {
+    // Rung 1's sentinel is unset in two OPPOSITE cases: rung 1 never ran (the
+    // details arrived on the first pass, so re-reading here would duplicate
+    // every send) and rung 1's lookup matched nothing (so we must escalate).
+    // One condition cannot tell those apart, hence the marker.
     const def = liveShape();
     addSentinels(def);
     addRung1(def, 10);
     addRung2(def, 60);
     const inner = armOf(def, RUNG_2_BRANCH_ID)[0];
     expect((inner.branches as Array<{ condition?: unknown }>)[0].condition).toEqual({
-      var: RUNG_1_STATUS_VAR,
-      equals: "missing"
+      var: RUNG_1_UNRESOLVED_VAR,
+      equals: "1"
     });
   });
 
@@ -444,17 +448,27 @@ describe("addRung2", () => {
   });
 
   it("tells the claimer and the owner when the details never arrived at all", () => {
+    // notEquals "found", NOT equals "missing" (Bugbot, PR 913): when the
+    // lookup matches no message at all, email_extract writes no sentinel, so
+    // an equals gate would skip both notices and the outcome would be silent.
     const def = liveShape();
     addSentinels(def);
     addRung1(def, 10);
     addRung2(def, 60);
     const arm = rungSteps(def, RUNG_2_BRANCH_ID);
-    const never = arm.filter((s) =>
-      JSON.stringify(s.when ?? {}) === JSON.stringify({ var: RUNG_2_STATUS_VAR, equals: "missing" })
+    const never = arm.filter(
+      (s) =>
+        JSON.stringify(s.when ?? {}) ===
+        JSON.stringify({ var: RUNG_2_STATUS_VAR, notEquals: "found" })
     );
     expect(never.map((s) => s.type)).toEqual(["send_sms", "notify_owner"]);
     expect(never[0].to).toBe("{{vars.claimed_agent_phone}}");
     expect(String(never[1].message)).toContain("never sent");
+    // And nothing in the rung waits on `equals "missing"`, which is the shape
+    // that would go quiet on an empty lookup.
+    for (const step of arm) {
+      expect(step.when).not.toEqual({ var: RUNG_2_STATUS_VAR, equals: "missing" });
+    }
   });
 
   it("is idempotent", () => {
@@ -463,6 +477,22 @@ describe("addRung2", () => {
     addRung1(def, 10);
     expect(addRung2(def, 60)).toBe(true);
     expect(addRung2(def, 60)).toBe(false);
+  });
+
+  it("rung 1 sets the unresolved marker for a missing OR an unwritten sentinel", () => {
+    const def = liveShape();
+    addSentinels(def);
+    addRung1(def, 10);
+    const marker = rungSteps(def, RUNG_1_BRANCH_ID).find(
+      (s) => s.saveAs === RUNG_1_UNRESOLVED_VAR
+    )!;
+    expect(marker.type).toBe("math");
+    // notEquals passes for "missing" AND for an unset sentinel; it is skipped
+    // only once the details are actually in hand.
+    expect(marker.when).toEqual({ var: RUNG_1_STATUS_VAR, notEquals: "found" });
+    // Written after the read, so it reflects that read's outcome.
+    const ids = rungSteps(def, RUNG_1_BRANCH_ID).map((s) => s.id);
+    expect(ids.indexOf("late_read")).toBeLessThan(ids.indexOf("late_unresolved"));
   });
 });
 
