@@ -690,6 +690,35 @@ describe("submitPublicBooking", () => {
       expect(mockSlotClaim).not.toHaveBeenCalled();
     });
 
+    it("re-runs the per-person guard post-claim: an overlapping different-slot submit is refused", async () => {
+      mockUpcomingForAttendee
+        .mockResolvedValueOnce([]) // early check: clean
+        .mockResolvedValueOnce([
+          { startIso: "2026-01-05T20:00:00Z", eventId: "evt-race" }
+        ] as never); // post-claim recheck: a racing submit landed
+      expect(await submitPublicBooking(TOKEN, VALID)).toEqual({
+        ok: false,
+        detail: "already_booked"
+      });
+      expect(mockRecordPlatform).not.toHaveBeenCalled();
+      expect(mockZoomDelete).toHaveBeenCalledWith(BIZ, "zm-1");
+      expect(mockSlotRelease).toHaveBeenCalledWith("claim-1");
+    });
+
+    it("the post-claim recheck without a Zoom meeting cleans up nothing extra", async () => {
+      mockZoomCreate.mockResolvedValueOnce(null);
+      mockUpcomingForAttendee
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          { startIso: "2026-01-05T20:00:00Z", eventId: "evt-race" }
+        ] as never);
+      expect(await submitPublicBooking(TOKEN, VALID)).toEqual({
+        ok: false,
+        detail: "already_booked"
+      });
+      expect(mockZoomDelete).not.toHaveBeenCalled();
+    });
+
     it("a duplicate ledger row reads as already_booked and cleans up the Zoom meeting", async () => {
       mockRecordPlatform.mockResolvedValueOnce({ ok: false, reason: "duplicate" });
       expect(await submitPublicBooking(TOKEN, VALID)).toEqual({

@@ -462,6 +462,25 @@ export async function submitPublicBooking(
       agenda: note || undefined
     });
 
+    // Re-run the per-person guard AFTER winning the slot claim: two
+    // overlapping submits from the same attendee for DIFFERENT slots could
+    // both pass the early check (the provider core runs its own late guard;
+    // this is the platform-mode equivalent).
+    const recheck = await findUpcomingBookingsForAttendee(
+      context.businessId,
+      { phones: [phone], email: email.toLowerCase(), name },
+      {},
+      { mode: "detail" }
+    );
+    const recheckNowMs = Date.now();
+    if (recheck.some((b) => Date.parse(b.startIso) > recheckNowMs)) {
+      if (zoomMeeting) {
+        await deleteZoomMeetingForBooking(context.businessId, zoomMeeting.meetingId);
+      }
+      await releaseSlotClaim();
+      return { ok: false, detail: "already_booked" };
+    }
+
     const record = await recordPlatformBooking(
       context.businessId,
       bookingAttendeeKey(phone, email, name),
