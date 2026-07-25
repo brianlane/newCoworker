@@ -36,6 +36,47 @@ export function normalizeVoiceLanguage(value: unknown): VoiceCustomerLanguage | 
   return null;
 }
 
+// Minimal structural client, mirroring contact-context.ts's shape.
+type AnyClient = any;
+
+/**
+ * The caller's stored `contacts.preferred_language`, or null.
+ *
+ * Resolves through `alias_e164s` as well as `customer_e164`: merged contacts
+ * keep their old numbers as aliases, and the cross-channel memory lookup on
+ * the same call already resolves them that way (`resolveContactNumbers` in
+ * contact-context.ts). Matching only the primary number here would hand an
+ * alias caller their memory but not their language.
+ *
+ * Best-effort by contract: never throws. Any failure returns null, which
+ * degrades to the tenant default rather than refusing the call.
+ */
+export async function loadContactPreferredLanguage(
+  supabase: AnyClient,
+  businessId: string,
+  contactE164: string
+): Promise<VoiceCustomerLanguage | null> {
+  if (!contactE164) return null;
+  try {
+    const { data, error } = await supabase
+      .from("contacts")
+      .select("preferred_language")
+      .eq("business_id", businessId)
+      .or(`customer_e164.eq.${contactE164},alias_e164s.cs.{${contactE164}}`)
+      .maybeSingle();
+    if (error) {
+      console.error("language-prefs: contact language lookup", error);
+      return null;
+    }
+    return normalizeVoiceLanguage(
+      (data as { preferred_language?: string | null } | null)?.preferred_language
+    );
+  } catch (e) {
+    console.error("language-prefs: contact language lookup threw", e);
+    return null;
+  }
+}
+
 export function resolveVoiceLanguagePrefs(input: {
   /** contacts.preferred_language for the caller, when the number is known. */
   contactPreferredLanguage?: unknown;

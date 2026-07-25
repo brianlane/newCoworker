@@ -1,7 +1,10 @@
-import { describe, expect, it } from "vitest";
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
+import { describe, expect, it, vi } from "vitest";
 import { customerLanguageLine as sharedLanguageLine } from "../shared/i18n/customer-language-line";
 import { customerLanguageLine as voiceLanguageLine } from "../vps/voice-bridge/src/customer-language-line";
 import {
+  loadContactPreferredLanguage,
   normalizeVoiceLanguage,
   resolveVoiceLanguagePrefs
 } from "../vps/voice-bridge/src/language-prefs";
@@ -70,6 +73,104 @@ describe("normalizeVoiceLanguage", () => {
     for (const v of ["fr", "es-MX", "", "   ", null, undefined, 7, {}, ["es"]]) {
       expect(normalizeVoiceLanguage(v)).toBeNull();
     }
+  });
+});
+
+describe("loadContactPreferredLanguage", () => {
+  const BIZ = "00000000-0000-0000-0000-000000000001";
+  const CALLER = "+16023131823";
+
+  /** Records the query chain so the alias predicate can be asserted. */
+  function clientReturning(result: { data: unknown; error?: { message: string } | null }) {
+    const calls: { or?: string; eq: Array<[string, unknown]>; select?: string; table?: string } = {
+      eq: []
+    };
+    const chain = {
+      select(cols: string) {
+        calls.select = cols;
+        return chain;
+      },
+      eq(col: string, val: unknown) {
+        calls.eq.push([col, val]);
+        return chain;
+      },
+      or(pred: string) {
+        calls.or = pred;
+        return chain;
+      },
+      maybeSingle: async () => ({ data: result.data, error: result.error ?? null })
+    };
+    const client = {
+      from(table: string) {
+        calls.table = table;
+        return chain;
+      }
+    };
+    return { client, calls };
+  }
+
+  it("resolves a caller dialing from a merged ALIAS number, not just the primary", async () => {
+    // Regression: the first cut matched only customer_e164, so an alias caller
+    // got their cross-channel memory but fell back to the tenant language.
+    const { client, calls } = clientReturning({ data: { preferred_language: "es" } });
+    await expect(loadContactPreferredLanguage(client, BIZ, CALLER)).resolves.toBe("es");
+    expect(calls.table).toBe("contacts");
+    expect(calls.eq).toEqual([["business_id", BIZ]]);
+    expect(calls.or).toBe(
+      `customer_e164.eq.${CALLER},alias_e164s.cs.{${CALLER}}`
+    );
+  });
+
+  it("matches the alias predicate contact-context.ts uses to resolve the same caller", async () => {
+    // Both lookups run on the same call; a divergence here is the bug above.
+    const src = readFileSync(
+      join(__dirname, "../vps/voice-bridge/src/contact-context.ts"),
+      "utf8"
+    );
+    expect(src).toContain("customer_e164.eq.${contactE164},alias_e164s.cs.{${contactE164}}");
+    const langSrc = readFileSync(
+      join(__dirname, "../vps/voice-bridge/src/language-prefs.ts"),
+      "utf8"
+    );
+    expect(langSrc).toContain(
+      "customer_e164.eq.${contactE164},alias_e164s.cs.{${contactE164}}"
+    );
+  });
+
+  it("returns null for an unknown caller", async () => {
+    const { client } = clientReturning({ data: null });
+    await expect(loadContactPreferredLanguage(client, BIZ, CALLER)).resolves.toBeNull();
+  });
+
+  it("returns null for an unsupported stored value", async () => {
+    const { client } = clientReturning({ data: { preferred_language: "fr" } });
+    await expect(loadContactPreferredLanguage(client, BIZ, CALLER)).resolves.toBeNull();
+  });
+
+  it("degrades to null on a query error instead of throwing", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const { client } = clientReturning({ data: null, error: { message: "boom" } });
+    await expect(loadContactPreferredLanguage(client, BIZ, CALLER)).resolves.toBeNull();
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("degrades to null when the client throws", async () => {
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    const thrower = {
+      from() {
+        throw new Error("network");
+      }
+    };
+    await expect(loadContactPreferredLanguage(thrower, BIZ, CALLER)).resolves.toBeNull();
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("skips the query entirely for an anonymous caller", async () => {
+    const { client, calls } = clientReturning({ data: { preferred_language: "es" } });
+    await expect(loadContactPreferredLanguage(client, BIZ, "")).resolves.toBeNull();
+    expect(calls.table).toBeUndefined();
   });
 });
 

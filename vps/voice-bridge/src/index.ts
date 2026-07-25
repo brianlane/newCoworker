@@ -27,7 +27,10 @@ import {
 import { composeIntakeLeadSms } from "./intake.js";
 import { loadVoiceFlowContext } from "./flow-run-context.js";
 import { loadVoiceContactTimeline } from "./contact-context.js";
-import { resolveVoiceLanguagePrefs } from "./language-prefs.js";
+import {
+  loadContactPreferredLanguage,
+  resolveVoiceLanguagePrefs
+} from "./language-prefs.js";
 import { loadVoiceBookingLine } from "./booking-context.js";
 import type { TranscriptAdapter } from "./voice-transcript.js";
 import { startIdleHeartbeatLoop, writeHeartbeat } from "./heartbeat.js";
@@ -1532,28 +1535,10 @@ function main(): void {
           // hardcode English, so a Spanish-speaking caller was greeted in the
           // wrong language on every call. Best-effort by contract: a failed
           // contact read degrades to the tenant default, never a refused call.
-          let contactPreferredLanguage: unknown = null;
-          if (trustedFromE164) {
-            try {
-              const { data: langRow, error: langErr } = await supabase
-                .from("contacts")
-                .select("preferred_language")
-                .eq("business_id", businessId)
-                .eq("customer_e164", trustedFromE164)
-                .maybeSingle();
-              if (langErr) {
-                console.error("voice-bridge: contact language lookup", langErr);
-              } else {
-                contactPreferredLanguage =
-                  (langRow as { preferred_language?: string | null } | null)
-                    ?.preferred_language ?? null;
-              }
-            } catch (e) {
-              console.error("voice-bridge: contact language lookup threw", e);
-            }
-          }
           const languagePrefs = resolveVoiceLanguagePrefs({
-            contactPreferredLanguage,
+            contactPreferredLanguage: trustedFromE164
+              ? await loadContactPreferredLanguage(supabase, businessId, trustedFromE164)
+              : null,
             businessDefaultLanguage: (biz as { default_customer_language?: string | null } | null)
               ?.default_customer_language
           });
