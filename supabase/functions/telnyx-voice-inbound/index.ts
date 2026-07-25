@@ -555,6 +555,10 @@ serve(async (req: Request) => {
         .select("payload")
         .eq("business_id", businessId)
         .gte("created_at", cutoffIso)
+        // A text the tenant deleted must not come back as something the AI
+        // "already knows" and asserts to a live customer, so the same
+        // soft-delete stamp every other inbound reader honors is honored here.
+        .is("deleted_at", null)
         .order("created_at", { ascending: false })
         .limit(50);
       if (error) {
