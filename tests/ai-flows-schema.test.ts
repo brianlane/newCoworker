@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { docExtractBodySchema } from "@/app/api/internal/aiflow-doc-extract/route";
 import {
   AiFlowValidationError,
   aiFlowDefinitionSchema,
@@ -3628,5 +3629,25 @@ describe("extraction field cap", () => {
     // New Lead Intake parses 15 fields; a cap at or below that would force a
     // second extraction step (and a second Gemini call) on a shipped flow.
     expect(MAX_EXTRACT_FIELDS).toBeGreaterThan(15);
+  });
+
+  /**
+   * doc_extract is the ONE extraction step whose fields cross an HTTP boundary
+   * (the worker cannot run Gemini's document pipeline from the edge runtime, so
+   * it proxies to /api/internal/aiflow-doc-extract). That route validates its
+   * own body, so a hardcoded cap there rejects flows the builder accepted, at
+   * RUN time, on a step that already consumed the trigger. Bugbot caught
+   * exactly that on #924, where raising the schema left the route at 15.
+   */
+  it("the doc_extract adapter route accepts every field count the flow schema allows", () => {
+    const body = (count: number) => ({
+      businessId: "11111111-1111-4111-8111-111111111111",
+      sourceRef: "email-attachments:tenant/msg/policy.pdf",
+      fields: Array.from({ length: count }, (_, i) => ({ name: `f${i}` }))
+    });
+    // The contract that matters: anything the builder saved, the route runs.
+    expect(docExtractBodySchema.safeParse(body(MAX_EXTRACT_FIELDS)).success).toBe(true);
+    expect(docExtractBodySchema.safeParse(body(MAX_EXTRACT_FIELDS + 1)).success).toBe(false);
+    expect(docExtractBodySchema.safeParse(body(0)).success).toBe(false);
   });
 });
