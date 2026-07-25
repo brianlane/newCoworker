@@ -118,6 +118,72 @@ describe("compileVoiceFlow", () => {
     expect(compileVoiceFlow(outbound, TO)).toBeNull();
   });
 
+  it("compiles an AI-first intake onto the takeover context", () => {
+    const plan = compileVoiceFlow(
+      def([
+        { id: "r1", type: "ring_handoff", toE164: "+16025245719", ringSeconds: 20 },
+        {
+          id: "ai",
+          type: "voice_ai_intake",
+          notifyE164: "+16025245719",
+          alsoNotifyE164: "+16026951142",
+          answerFirst: true,
+          acceptDigits: [{ digit: "1", afterSeconds: 3 }],
+          mediaStartSeconds: 2,
+          briefFromSmsContaining: "HomeLight Referral"
+        }
+      ]),
+      TO
+    );
+    if (plan?.kind !== "handoff") throw new Error("expected handoff");
+    expect(plan.context.ai_takeover).toEqual({
+      notify_e164: "+16025245719",
+      persona: undefined,
+      capture_fields: undefined,
+      also_notify_e164: "+16026951142",
+      answer_first: true,
+      accept_digits: [{ digit: "1", after_seconds: 3 }],
+      media_start_seconds: 2,
+      brief_sms_contains: "HomeLight Referral"
+    });
+    // The ring steps survive as the fallback the AI-first path needs.
+    expect(plan.context.steps).toEqual([{ to_e164: "+16025245719", ring_secs: 20 }]);
+  });
+
+  it("leaves an ordinary intake's takeover context unchanged", () => {
+    const plan = compileVoiceFlow(
+      def([
+        { id: "r1", type: "ring_handoff", toE164: "+16025245719" },
+        { id: "ai", type: "voice_ai_intake", notifyE164: "+16026951142", persona: "Hi" }
+      ]),
+      TO
+    );
+    if (plan?.kind !== "handoff") throw new Error("expected handoff");
+    expect(plan.context.ai_takeover).toEqual({
+      notify_e164: "+16026951142",
+      persona: "Hi",
+      capture_fields: undefined
+    });
+  });
+
+  it("defaults a digit with no afterSeconds to an immediate press", () => {
+    const plan = compileVoiceFlow(
+      def([
+        { id: "r1", type: "ring_handoff", toE164: "+16025245719" },
+        {
+          id: "ai",
+          type: "voice_ai_intake",
+          notifyE164: "+16026951142",
+          answerFirst: true,
+          acceptDigits: [{ digit: "1" }]
+        }
+      ]),
+      TO
+    );
+    if (plan?.kind !== "handoff") throw new Error("expected handoff");
+    expect(plan.context.ai_takeover?.accept_digits).toEqual([{ digit: "1", after_seconds: 0 }]);
+  });
+
   it("carries options.starAlerts onto the handoff context", () => {
     // The flag rides the session row so telnyx-voice-call-end and the voice
     // bridge can frame their texts without re-reading the flow mid-call.

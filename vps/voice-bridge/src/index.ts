@@ -1122,6 +1122,9 @@ function main(): void {
       // number so we can text the owner a summary + transcript at call end.
       let intake: IntakeCapability | undefined;
       let intakeNotifyE164 = "";
+      // Optional second recipient of the same summary: the lead details go to
+      // the agent working it and a copy to the owner.
+      let intakeAlsoNotifyE164 = "";
       // The flow's options.starAlerts, snapshotted on the handoff context by
       // the edge at chain start: frame the intake summary in asterisks so it
       // stands out like the rest of this flow's alerts.
@@ -1173,6 +1176,7 @@ function main(): void {
             outbound?: boolean;
             ai_takeover?: {
               notify_e164?: string;
+              also_notify_e164?: string;
               persona?: string;
               capture_fields?: unknown;
               context_note?: string;
@@ -1189,6 +1193,8 @@ function main(): void {
           intakeStarFrame = ctx.star_alerts === true;
           const ai = ctx.ai_takeover ?? undefined;
           intakeNotifyE164 = typeof ai?.notify_e164 === "string" ? ai.notify_e164 : "";
+          intakeAlsoNotifyE164 =
+            typeof ai?.also_notify_e164 === "string" ? ai.also_notify_e164.trim() : "";
           intake = {
             persona: typeof ai?.persona === "string" ? ai.persona : undefined,
             captureFields: Array.isArray(ai?.capture_fields)
@@ -1197,7 +1203,26 @@ function main(): void {
             contextNote:
               typeof ai?.context_note === "string" && ai.context_note.trim()
                 ? ai.context_note.trim()
-                : undefined
+                : undefined,
+            // Re-read the SAME field the flow's voice_brief step rewrites, so
+            // details extracted after the AI picked up reach the live call.
+            pollBrief: async () => {
+              try {
+                const { data, error } = await supabase
+                  .from("voice_handoff_sessions")
+                  .select("context")
+                  .eq("call_control_id", callControlId)
+                  .maybeSingle();
+                if (error) return "";
+                const note = (
+                  (data as { context?: { ai_takeover?: { context_note?: unknown } } } | null)
+                    ?.context?.ai_takeover?.context_note
+                );
+                return typeof note === "string" ? note : "";
+              } catch {
+                return "";
+              }
+            }
           };
           // place_ai_call live-transfer config: the flow explicitly authorized
           // a mid-call warm transfer (pre-alert SMS + wt: transfer) — carried
@@ -1746,21 +1771,33 @@ function main(): void {
           // failure / disabled / no key) we must NOT text the owner a phantom
           // "lead" with no captured fields and no transcript.
           if (intake && intakeNotifyE164 && geminiGetLead) {
-            try {
-              await sendIntakeLeadSms({
-                supabase,
-                settings: tenantSettings,
-                notifyE164: intakeNotifyE164,
-                callControlId,
-                // The ANI is the transfer partner's line (e.g. HomeLight), not
-                // the seller — pass it only as the "transferred via" reference.
-                transferFromE164: trustedFromE164 || fromE164Info || "",
-                businessName,
-                lead: geminiGetLead(),
-                starFrame: intakeStarFrame
-              });
-            } catch (err) {
-              console.error("voice-bridge: intake SMS error", err);
+            // The details go to whoever works the lead, and (when configured) a
+            // copy to the owner. Deduped so one number never gets it twice, and
+            // sent in sequence so the primary recipient is never starved by a
+            // failure on the copy.
+            const recipients = [
+              intakeNotifyE164,
+              ...(intakeAlsoNotifyE164 && intakeAlsoNotifyE164 !== intakeNotifyE164
+                ? [intakeAlsoNotifyE164]
+                : [])
+            ];
+            for (const notifyE164 of recipients) {
+              try {
+                await sendIntakeLeadSms({
+                  supabase,
+                  settings: tenantSettings,
+                  notifyE164,
+                  callControlId,
+                  // The ANI is the transfer partner's line (e.g. HomeLight), not
+                  // the seller, so pass it only as the "transferred via" reference.
+                  transferFromE164: trustedFromE164 || fromE164Info || "",
+                  businessName,
+                  lead: geminiGetLead(),
+                  starFrame: intakeStarFrame
+                });
+              } catch (err) {
+                console.error("voice-bridge: intake SMS error", err, { notifyE164 });
+              }
             }
           }
           await supabase

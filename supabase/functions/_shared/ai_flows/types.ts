@@ -1200,6 +1200,27 @@ export type FlowStep =
       whisper?: string;
       when?: StepCondition;
     }
+  | {
+      id: string;
+      /**
+       * Brief the AI that is on a live call RIGHT NOW with what this run just
+       * learned (voice_set_call_brief replaces the session's context_note; the
+       * on-box bridge polls it and tells the model mid-conversation). Pairs with
+       * voice_ai_intake.answerFirst, where the AI answers within seconds of a
+       * partner's alert while the portal read only finishes a minute later.
+       *
+       * A BATCH step like arm_voice_transfer, and a recorded NO-OP when no call
+       * from `fromE164` is live: most runs have no call to brief.
+       */
+      type: "voice_brief";
+      /** The partner/customer line whose live call is briefed. */
+      fromE164: string;
+      /** What the AI should now know; rendered against run vars. */
+      noteTemplate: string;
+      /** Only brief a call that started within this window. Default 30. */
+      withinMinutes?: number;
+      when?: StepCondition;
+    }
   // ── Voice steps (real-time call routing; executed by the Telnyx voice webhook
   // state machine, NOT the async ai-flow-worker). Only valid under a VoiceTrigger. ──
   | {
@@ -1230,8 +1251,27 @@ export type FlowStep =
       notifyE164?: string;
       /** Dynamic summary recipient resolved live just before compile. */
       notifyRef?: ContactRef;
+      /** Optional SECOND recipient of the same summary (at most one source). */
+      alsoNotifyE164?: string;
+      alsoNotifyRef?: ContactRef;
       persona?: string;
       captureFields?: string[];
+      /**
+       * AI-first: the AI answers the call itself and the ring_handoff steps
+       * above become the fallback for when it cannot (no voice budget,
+       * unhealthy bridge, refused DTMF). Built for partner lines that call the
+       * moment a lead lands, where the referral is won by accepting ON the call.
+       */
+      answerFirst?: true;
+      /** IVR accept digits pressed after answering, in order. answerFirst only. */
+      acceptDigits?: Array<{ digit: string; afterSeconds?: number }>;
+      /** Pause between the last digit and attaching the AI media. answerFirst only. */
+      mediaStartSeconds?: number;
+      /**
+       * Text identifying the partner's alert SMS; the newest inbound text
+       * containing it becomes the AI's pre-call brief. answerFirst only.
+       */
+      briefFromSmsContaining?: string;
       when?: StepCondition;
     }
   | {

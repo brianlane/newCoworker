@@ -23,7 +23,7 @@ import {
   resolveChatPeriodStart,
   STARTER_CHAT_SPEND_CAP_MICROS
 } from "../_shared/chat_spend_cap.ts";
-import { telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
+import { inboundSmsBody, telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
 import {
   VOICE_MSG_UNCONFIGURED_NUMBER,
   voiceMessageForLocale
@@ -37,14 +37,19 @@ import {
   telnyxAnswerPlain,
   telnyxAnswerWithStream,
   telnyxHangupCall,
+  telnyxSendDtmf,
   telnyxSpeak,
   telnyxTransferCall
 } from "../_shared/telnyx_call_actions.ts";
 import {
+  AI_FIRST_BRIEF_LOOKBACK_MINUTES,
   buildHandoffContext,
+  buildPreCallBrief,
   encodeHandoffClientState,
+  planAiFirstAccept,
   type HandoffContext
 } from "../_shared/voice_handoff.ts";
+import { attachAiStream, resolveBridgeTarget } from "../_shared/voice_ai_attach.ts";
 import { encodeWtClientState } from "../_shared/warm_transfer_notify.ts";
 import { compileVoiceFlow } from "../_shared/ai_flows/voice.ts";
 import {
@@ -119,6 +124,11 @@ const AI_BUDGET_RESERVATION_TTL_SECONDS = Math.ceil(GEMINI_LIVE_SESSION_MAX_MS /
 function envVoiceAiStreamEnabled(): boolean {
   const v = (Deno.env.get("VOICE_AI_STREAM_ENABLED") ?? "true").trim().toLowerCase();
   return v !== "false" && v !== "0" && v !== "no";
+}
+
+/** Wait inside the handler (accept-digit pacing, safe-mode whisper spacing). */
+function sleepMs(ms: number): Promise<void> {
+  return new Promise<void>((resolve) => setTimeout(resolve, ms));
 }
 
 function jsonOk(path: string, extra: Record<string, unknown> = {}): Response {
@@ -513,77 +523,76 @@ serve(async (req: Request) => {
   // sources can never diverge. Both run BEFORE the kill switch / reserve / Stripe
   // / bridge checks so a routed call never consumes concurrency or bills minutes.
 
+  /** Give back a reservation whose media never attached (best-effort). */
+  const releaseVoiceReservation = async (): Promise<void> => {
+    const { error } = await supabase.rpc("voice_release_reservation_on_answer_fail", {
+      p_call_control_id: callControlId
+    });
+    if (error) console.error("ai-first: release reservation failed", error);
+  };
+
   /**
-   * Start a warm-handoff chain for `ctx`: persist the session, answer the leg,
-   * and transfer to the first human. Returns a terminal Response when it acted
-   * (started, or failed after answering), or null when it could NOT start
-   * (no steps / session write failed) so the caller falls through to the next
-   * routing source / the normal AI path.
+   * Pre-call brief for an AI-first answer: the newest inbound text matching the
+   * takeover's `brief_sms_contains` becomes `ai_takeover.context_note`, which
+   * the bridge injects as "What you ALREADY KNOW about this person".
+   *
+   * Read straight from `sms_inbound_jobs` rather than from the flow run, because
+   * the partner texts and then calls seconds later while the batch worker ticks
+   * about once a minute: at answer time no flow step has executed yet. One
+   * indexed read, and best-effort by contract: an uninformed AI still beats a
+   * dropped seller, so any failure returns the context unchanged.
    */
-  const runHandoffChain = async (ctx: HandoffContext): Promise<Response | null> => {
-    const first = ctx.steps[0];
-    if (!first) {
-      // No ringable human — make the misconfiguration observable, then fall
-      // through (AI-only chains aren't supported; we always ring a human first).
-      console.warn("handoff: chain has no usable steps; falling through", {
+  const withPreCallBrief = async (ctx: HandoffContext): Promise<HandoffContext> => {
+    const ai = ctx.ai_takeover;
+    const needle = (ai?.brief_sms_contains ?? "").trim().toLowerCase();
+    if (!ai || !needle) return ctx;
+    try {
+      const cutoffIso = new Date(
+        Date.now() - AI_FIRST_BRIEF_LOOKBACK_MINUTES * 60_000
+      ).toISOString();
+      const { data, error } = await supabase
+        .from("sms_inbound_jobs")
+        .select("payload")
+        .eq("business_id", businessId)
+        .gte("created_at", cutoffIso)
+        .order("created_at", { ascending: false })
+        .limit(50);
+      if (error) {
+        console.error("ai-first: pre-call brief read failed", error);
+        return ctx;
+      }
+      for (const row of (data ?? []) as Array<{ payload?: Record<string, unknown> }>) {
+        const env = (row.payload ?? {}) as { data?: { payload?: Record<string, unknown> } };
+        const text = inboundSmsBody(env?.data?.payload ?? {});
+        if (!text || !text.toLowerCase().includes(needle)) continue;
+        const note = buildPreCallBrief(text);
+        if (!note) continue;
+        return { ...ctx, ai_takeover: { ...ai, context_note: note } };
+      }
+      console.warn("ai-first: no matching alert text for the pre-call brief", {
         businessId,
-        from: fromE164Informational,
-        has_ai_takeover: Boolean(ctx.ai_takeover)
+        needle
       });
-      await telemetryRecord(supabase, "voice_handoff_failed", {
-        business_id: businessId,
-        call_control_id: callControlId,
-        stage: "no_steps"
-      });
-      return null;
+    } catch (e) {
+      console.error("ai-first: pre-call brief lookup threw", e);
     }
+    return ctx;
+  };
+
+  /**
+   * Transfer the answered A-leg to the chain's first human. Shared by the
+   * ordinary ring-first start and by the AI-first fallback, so both leave the
+   * session in the identical `ringing` state the call-end advancer expects.
+   */
+  const transferToFirstStep = async (
+    ctx: HandoffContext,
+    stage: string
+  ): Promise<Response> => {
+    const first = ctx.steps[0]!;
     // Normalize the ring window the same way planHandoffAdvance does for later
     // steps: a 0/missing ring_secs must NOT omit timeout_secs (Telnyx would then
     // ring the first human forever and the chain would never advance).
     const firstRingSecs = first.ring_secs > 0 ? Math.floor(first.ring_secs) : 20;
-    // Persist the session FIRST — the chain can only advance (call.bridged /
-    // call.hangup → telnyx-voice-call-end) if a session row keyed by this A-leg
-    // call_control_id exists. If the write fails, fall through rather than ringing
-    // a single dead-end leg with no Amy/AI fallback.
-    const { error: sessErr } = await supabase.from("voice_handoff_sessions").upsert(
-      {
-        call_control_id: callControlId,
-        business_id: businessId,
-        from_e164: fromE164Informational,
-        chain_from_e164: fromE164Informational,
-        status: "ringing",
-        current_step: 0,
-        context: ctx as unknown as Record<string, unknown>
-      },
-      { onConflict: "call_control_id" }
-    );
-    if (sessErr) {
-      console.error("handoff: session upsert failed; skipping handoff", sessErr);
-      await telemetryRecord(supabase, "voice_handoff_failed", {
-        business_id: businessId,
-        call_control_id: callControlId,
-        stage: "session_upsert"
-      });
-      return null;
-    }
-    // A warm transfer bridges an *answered* leg. Answer first (HomeLight's IVR
-    // keeps looping while we ring), then transfer to the first step.
-    const ans = await telnyxAnswerPlain(apiKey, callControlId);
-    if (!ans.ok) {
-      const errText = (await ans.text()).slice(0, 300);
-      console.error("handoff: answer failed", ans.status, errText);
-      await supabase
-        .from("voice_handoff_sessions")
-        .update({ status: "done" })
-        .eq("call_control_id", callControlId);
-      await telemetryRecord(supabase, "voice_handoff_failed", {
-        business_id: businessId,
-        call_control_id: callControlId,
-        stage: "answer",
-        http_status: ans.status
-      });
-      return jsonOk("handoff_answer_failed");
-    }
     const tf = await telnyxTransferCall(apiKey, callControlId, first.to_e164, {
       timeoutSecs: firstRingSecs,
       clientState: encodeHandoffClientState(callControlId, 0)
@@ -599,7 +608,7 @@ serve(async (req: Request) => {
       await telemetryRecord(supabase, "voice_handoff_failed", {
         business_id: businessId,
         call_control_id: callControlId,
-        stage: "first_transfer",
+        stage,
         http_status: tf.status
       });
       return jsonOk("handoff_first_transfer_failed");
@@ -620,6 +629,227 @@ serve(async (req: Request) => {
       payload: { call_control_id: callControlId, from: fromE164Informational }
     });
     return jsonOk("handoff_chain_start");
+  };
+
+  /**
+   * AI-FIRST answer (`voice_ai_intake.answerFirst`): the AI takes the call
+   * itself instead of ringing humans. Built for a partner line that calls the
+   * moment a lead lands and where the referral is won by ACCEPTING on the call:
+   * answer, press the accept digits once the announcement has had time to play,
+   * reserve voice budget, then attach the Gemini bridge with whatever the
+   * partner's own alert text already told us about the lead.
+   *
+   * The session stays `ringing` until the last possible moment, so every failure
+   * before the media attaches simply rings the humans instead: a live person is
+   * never dropped because the AI could not run.
+   */
+  const runAiFirstIntake = async (ctx: HandoffContext): Promise<Response> => {
+    const ai = ctx.ai_takeover!;
+    const fallback = async (stage: string, detail?: Record<string, unknown>): Promise<Response> => {
+      console.warn("ai-first: falling back to the ring chain", { stage, ...detail });
+      await telemetryRecord(supabase, "voice_ai_first_fallback", {
+        business_id: businessId,
+        call_control_id: callControlId,
+        stage,
+        ...detail
+      });
+      return await transferToFirstStep(ctx, `ai_first_fallback_${stage}`);
+    };
+
+    // Resolve the media target BEFORE answering or pressing anything: a dead
+    // bridge must ring humans, not accept a referral nobody can service.
+    const target = await resolveBridgeTarget(
+      { supabase, apiKey, streamSecret, defaultBridgeOrigin },
+      businessId,
+      toE164,
+      "ai-first"
+    );
+
+    const ans = await telnyxAnswerPlain(apiKey, callControlId);
+    if (!ans.ok) {
+      const errText = (await ans.text()).slice(0, 300);
+      console.error("ai-first: answer failed", ans.status, errText);
+      await supabase
+        .from("voice_handoff_sessions")
+        .update({ status: "done" })
+        .eq("call_control_id", callControlId);
+      await telemetryRecord(supabase, "voice_handoff_failed", {
+        business_id: businessId,
+        call_control_id: callControlId,
+        stage: "ai_first_answer",
+        http_status: ans.status
+      });
+      return jsonOk("handoff_answer_failed");
+    }
+
+    // Accept the referral: the digits are what claim it, so they go out even
+    // when the bridge is unreachable (we ring a human for the conversation
+    // afterwards rather than letting the partner give the lead away).
+    const accept = planAiFirstAccept(ai);
+    for (const press of accept.digits) {
+      if (press.after_seconds > 0) await sleepMs(press.after_seconds * 1000);
+      const dt = await telnyxSendDtmf(apiKey, callControlId, press.digit);
+      if (!dt.ok) {
+        console.error("ai-first: send_dtmf failed", dt.status, (await dt.text()).slice(0, 300));
+        return await fallback("dtmf", { digit: press.digit, http_status: dt.status });
+      }
+    }
+
+    if (!target) return await fallback("bridge_unavailable");
+
+    // Same system-level gate every Gemini-voice path passes. Reserved AFTER the
+    // accept digits (the referral is already ours) but strictly BEFORE media.
+    const reserve = await reserveVoiceBudget(supabase, {
+      businessId,
+      callControlId,
+      stripeSecret: Deno.env.get("STRIPE_SECRET_KEY") ?? ""
+    });
+    if (!reserve.ok) {
+      return await fallback("no_budget", { reason: reserve.reason });
+    }
+
+    // Give the partner time to connect the customer before the AI speaks,
+    // otherwise its greeting plays to hold music.
+    if (accept.mediaStartSeconds > 0) await sleepMs(accept.mediaStartSeconds * 1000);
+
+    // Flip to ai_intake LAST: this is what makes the bridge run the intake
+    // persona (and expose only capture_lead) instead of the receptionist.
+    const { error: intakeErr } = await supabase
+      .from("voice_handoff_sessions")
+      .update({ status: "ai_intake" })
+      .eq("call_control_id", callControlId);
+    if (intakeErr) {
+      console.error("ai-first: could not flip the session to ai_intake", intakeErr);
+      await releaseVoiceReservation();
+      return await fallback("session_flip");
+    }
+
+    const attached = await attachAiStream(
+      { supabase, apiKey, streamSecret, defaultBridgeOrigin },
+      {
+        businessId,
+        callControlId,
+        toE164,
+        fromE164: fromE164Informational ?? "",
+        origin: target.origin,
+        path: target.path,
+        translatorArmed: target.translatorArmed,
+        label: "ai-first"
+      }
+    );
+    if (!attached) {
+      // Put the session back the way the ring chain expects before falling back.
+      await supabase
+        .from("voice_handoff_sessions")
+        .update({ status: "ringing", current_step: 0 })
+        .eq("call_control_id", callControlId);
+      await releaseVoiceReservation();
+      return await fallback("stream_start");
+    }
+
+    await telemetryRecord(supabase, "voice_ai_first_started", {
+      business_id: businessId,
+      call_control_id: callControlId,
+      from: fromE164Informational,
+      digits: accept.digits.length,
+      has_brief: Boolean(ai.context_note)
+    });
+    await systemLog(supabase, {
+      businessId,
+      source: "voice",
+      level: "info",
+      event: "voice_ai_first_started",
+      message: `AI answered the call from ${fromE164Informational} itself, pressed ${accept.digits
+        .map((d) => d.digit)
+        .join("")}, and is handling the conversation`,
+      payload: {
+        call_control_id: callControlId,
+        from: fromE164Informational,
+        briefed: Boolean(ai.context_note)
+      }
+    });
+    return jsonOk("ai_first_intake");
+  };
+
+  /**
+   * Start a warm-handoff chain for `ctx`: persist the session, then either let
+   * the AI answer it (answerFirst) or answer and transfer to the first human.
+   * Returns a terminal Response when it acted (started, or failed after
+   * answering), or null when it could NOT start (no steps / session write
+   * failed) so the caller falls through to the next routing source / the normal
+   * AI path.
+   */
+  const runHandoffChain = async (ctx: HandoffContext): Promise<Response | null> => {
+    const first = ctx.steps[0];
+    if (!first) {
+      // No ringable human — make the misconfiguration observable, then fall
+      // through (AI-only chains aren't supported; we always ring a human first).
+      console.warn("handoff: chain has no usable steps; falling through", {
+        businessId,
+        from: fromE164Informational,
+        has_ai_takeover: Boolean(ctx.ai_takeover)
+      });
+      await telemetryRecord(supabase, "voice_handoff_failed", {
+        business_id: businessId,
+        call_control_id: callControlId,
+        stage: "no_steps"
+      });
+      return null;
+    }
+    // AI-first chains brief the AI from the partner's own alert text, which is
+    // the only thing available this early: the referral SMS lands seconds before
+    // the call and the batch worker has not run a single step yet.
+    const aiFirst = ctx.ai_takeover?.answer_first === true;
+    const briefed = aiFirst ? await withPreCallBrief(ctx) : ctx;
+    // Persist the session FIRST — the chain can only advance (call.bridged /
+    // call.hangup → telnyx-voice-call-end) if a session row keyed by this A-leg
+    // call_control_id exists. If the write fails, fall through rather than ringing
+    // a single dead-end leg with no Amy/AI fallback. Always written as `ringing`,
+    // even for AI-first: that keeps the ring fallback one transfer away until the
+    // media actually attaches.
+    const { error: sessErr } = await supabase.from("voice_handoff_sessions").upsert(
+      {
+        call_control_id: callControlId,
+        business_id: businessId,
+        from_e164: fromE164Informational,
+        chain_from_e164: fromE164Informational,
+        status: "ringing",
+        current_step: 0,
+        context: briefed as unknown as Record<string, unknown>
+      },
+      { onConflict: "call_control_id" }
+    );
+    if (sessErr) {
+      console.error("handoff: session upsert failed; skipping handoff", sessErr);
+      await telemetryRecord(supabase, "voice_handoff_failed", {
+        business_id: businessId,
+        call_control_id: callControlId,
+        stage: "session_upsert"
+      });
+      return null;
+    }
+    // AI-first owns the whole call from here (it answers itself, and every
+    // failure inside falls back to ringing this same chain).
+    if (aiFirst) return await runAiFirstIntake(briefed);
+    // A warm transfer bridges an *answered* leg. Answer first (HomeLight's IVR
+    // keeps looping while we ring), then transfer to the first step.
+    const ans = await telnyxAnswerPlain(apiKey, callControlId);
+    if (!ans.ok) {
+      const errText = (await ans.text()).slice(0, 300);
+      console.error("handoff: answer failed", ans.status, errText);
+      await supabase
+        .from("voice_handoff_sessions")
+        .update({ status: "done" })
+        .eq("call_control_id", callControlId);
+      await telemetryRecord(supabase, "voice_handoff_failed", {
+        business_id: businessId,
+        call_control_id: callControlId,
+        stage: "answer",
+        http_status: ans.status
+      });
+      return jsonOk("handoff_answer_failed");
+    }
+    return await transferToFirstStep(briefed, "first_transfer");
   };
 
   /**

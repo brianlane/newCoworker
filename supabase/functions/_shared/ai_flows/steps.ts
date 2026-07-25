@@ -386,6 +386,17 @@ export type StepAction =
       windowMinutes: number;
       whisper?: string;
     }
+  // Brief the AI on a live call from `fromE164` with `note` (already rendered).
+  // An empty render means the extraction this brief was meant to carry came up
+  // empty: `skipReason` set, so the worker notes it rather than telling the
+  // model it now knows nothing.
+  | {
+      kind: "voice_brief";
+      fromE164: string;
+      note: string;
+      withinMinutes: number;
+      skipReason?: string;
+    }
   | { kind: "await_approval"; prompt: string }
   | {
       kind: "http_call";
@@ -1568,6 +1579,29 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           ...(step.toRef ? { toRef: step.toRef } : {}),
           windowMinutes,
           ...(whisper ? { whisper } : {})
+        }
+      };
+    }
+    case "voice_brief": {
+      const note = renderTemplate(step.noteTemplate, scope).trim();
+      // "Nothing to say" is NOT an empty render: a note like "Client notes:
+      // {{vars.lead_notes}}" still renders its literal scaffolding when the
+      // extraction came up dry. Compare against the same template rendered with
+      // NO vars in scope: an identical result means not one var contributed, so
+      // there is nothing worth interrupting a live call for.
+      const scaffolding = renderTemplate(step.noteTemplate, {
+        ...scope,
+        vars: {}
+      }).trim();
+      const substantive = note.length > 0 && note !== scaffolding;
+      return {
+        ok: true,
+        action: {
+          kind: "voice_brief",
+          fromE164: step.fromE164,
+          note,
+          withinMinutes: Math.min(120, Math.max(1, Math.round(step.withinMinutes ?? 30))),
+          ...(substantive ? {} : { skipReason: "nothing_to_brief" })
         }
       };
     }

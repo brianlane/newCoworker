@@ -132,6 +132,14 @@ export function intakeSystemInstruction(
         : `When you have what you need, let them know someone from ${businessName} will call them back shortly about their home, thank them, and wrap up.`
     );
   }
+  // The referral partner's details often reach us AFTER the call starts (or
+  // never). If the caller expects us to already have them, own it briefly and
+  // ask instead of stalling or pretending to look something up.
+  if (!outboundCall && !transfer) {
+    lines.push(
+      "If they refer to details you were not given (their address, their price, what they submitted), apologize briefly that it has not reached your side yet, then simply ask them for it and carry on."
+    );
+  }
   // Known details (a place_ai_call step's rendered contextTemplate): the AI
   // must never ask for something the flow already extracted — "why are you
   // asking my name if you already have it?" (live test, Jul 15 2026).

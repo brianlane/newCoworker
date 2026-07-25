@@ -805,11 +805,38 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
     case "voice_ai_intake":
       return (
         <>
+          {step.answerFirst && (
+            <Row
+              label="Who answers"
+              value="The AI answers this call itself; the ring steps above are the backup if it cannot run"
+            />
+          )}
           <Row
             label="Texts summary to"
             value={voiceTarget(step.notifyE164, step.notifyRef)}
             mono={Boolean(step.notifyE164)}
           />
+          {(step.alsoNotifyE164 || step.alsoNotifyRef) && (
+            <Row
+              label="Copy of the summary to"
+              value={voiceTarget(step.alsoNotifyE164, step.alsoNotifyRef)}
+              mono={Boolean(step.alsoNotifyE164)}
+            />
+          )}
+          {step.answerFirst && (
+            <Row
+              label="Presses"
+              value={(step.acceptDigits ?? [{ digit: "1", afterSeconds: 3 }])
+                .map((d) => `${d.digit} after ${d.afterSeconds ?? 0}s`)
+                .join(", ")}
+            />
+          )}
+          {step.answerFirst && (
+            <Row label="Waits before speaking" value={`${step.mediaStartSeconds ?? 2} seconds`} />
+          )}
+          {step.briefFromSmsContaining && (
+            <Row label="Knows what the alert said, matched on" value={step.briefFromSmsContaining} />
+          )}
           {step.persona && <Row label="AI persona" value={step.persona} />}
           {step.captureFields && step.captureFields.length > 0 && (
             <div className="space-y-1">
@@ -821,6 +848,14 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
               </div>
             </div>
           )}
+        </>
+      );
+    case "voice_brief":
+      return (
+        <>
+          <Row label="Briefs the live call from" value={step.fromE164} mono />
+          <Row label="Tells the AI" value={step.noteTemplate} />
+          <Row label="Only if the call started within" value={`${step.withinMinutes ?? 30} minutes`} />
         </>
       );
     case "voice_transfer":

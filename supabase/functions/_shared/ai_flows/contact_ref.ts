@@ -234,10 +234,21 @@ export async function resolveVoiceContactRefs(
       changed = true;
       continue;
     }
-    if (step.type === "voice_ai_intake" && !step.notifyE164 && isRef(step.notifyRef)) {
-      const hit = await resolve(step.notifyRef);
-      steps.push(hit ? { ...step, notifyE164: hit.phone } : step);
-      changed = true;
+    if (step.type === "voice_ai_intake") {
+      let next = step;
+      if (!step.notifyE164 && isRef(step.notifyRef)) {
+        const hit = await resolve(step.notifyRef);
+        if (hit) next = { ...next, notifyE164: hit.phone };
+        changed = true;
+      }
+      // The optional owner-copy recipient resolves the same way, so a saved
+      // teammate keeps working after their number changes.
+      if (!step.alsoNotifyE164 && isRef(step.alsoNotifyRef)) {
+        const hit = await resolve(step.alsoNotifyRef);
+        if (hit) next = { ...next, alsoNotifyE164: hit.phone };
+        changed = true;
+      }
+      steps.push(next);
       continue;
     }
     if (step.type === "outbound_call") {

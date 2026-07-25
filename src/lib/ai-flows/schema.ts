@@ -16,6 +16,14 @@
  */
 import { z } from "zod";
 import { formatDurationMinutes } from "./duration";
+// The AI-first accept budget is a RUNTIME rule (one Telnyx webhook holds the
+// whole sequence), so the constant and its arithmetic live with the other pure
+// handoff helpers the edge function uses and are imported here rather than
+// duplicated.
+import {
+  AI_FIRST_MAX_DELAY_SECONDS,
+  aiFirstDelaySeconds
+} from "../../../supabase/functions/_shared/voice_handoff";
 
 export const TRIGGER_CONDITION_TYPES = [
   "contains",
@@ -60,6 +68,11 @@ export const FLOW_STEP_TYPES = [
   // window). Built for referral services (e.g. Clever) whose concierges call
   // from a rotating number pool right after an SMS cue is confirmed.
   "arm_voice_transfer",
+  // Brief the AI that is ON a call right now: replace what it already knows so
+  // details the flow just extracted reach a conversation in progress. Pairs
+  // with voice_ai_intake.answerFirst, where the AI answers within seconds of a
+  // partner's alert and the portal read only finishes a minute later.
+  "voice_brief",
   "branch",
   "goal",
   "math",
@@ -1033,6 +1046,23 @@ const nonBranchStepMembers = [
     whisper: z.string().min(1).max(300).optional(),
     when: whenSchema.optional()
   }),
+  // Brief the AI that is on a live call RIGHT NOW with what this run just
+  // learned. Written onto the caller's in-progress AI session, which the voice
+  // bridge polls: the model is told mid-conversation and acknowledges the
+  // details rather than making the customer repeat them. A no-op (recorded,
+  // never failed) when no call from `fromE164` is live: the flow usually runs
+  // without one.
+  z.object({
+    id: stepId,
+    type: z.literal("voice_brief"),
+    /** The partner/customer line whose live call is briefed. */
+    fromE164: e164,
+    /** What the AI should now know. Rendered against run vars. */
+    noteTemplate: z.string().min(1).max(1600),
+    /** Only brief a call that started within this window. Default 30. */
+    withinMinutes: z.number().int().min(1).max(120).optional(),
+    when: whenSchema.optional()
+  }),
   // GHL-style Goal Event checkpoint: when a watched external milestone lands
   // for the run's lead (replied / appointment booked / tag added / claimed),
   // the run fast-forwards to this step and everything in between is skipped
@@ -1304,6 +1334,12 @@ const nonBranchStepMembers = [
   // live caller to the AI worker, which captures the lead and texts a summary
   // (+ transcript) to `notifyE164`. At most one per flow, and it must come AFTER
   // the ring_handoff steps (enforced in validateVoiceFlow).
+  //
+  // With `answerFirst` the order INVERTS at runtime: the AI answers the call
+  // itself and the ring_handoff steps above become the fallback for when it
+  // cannot (no voice budget, unhealthy bridge, refused DTMF). Built for partner
+  // lines that call the moment a lead lands, where a referral is won by
+  // accepting on the call rather than by a human picking up.
   z.object({
     id: stepId,
     type: z.literal("voice_ai_intake"),
@@ -1311,8 +1347,40 @@ const nonBranchStepMembers = [
     notifyE164: e164.optional(),
     // Dynamic summary recipient (saved employee/contact, resolved live).
     notifyRef: contactRefSchema.optional(),
+    // SECOND recipient of the same post-call summary (e.g. the lead details go
+    // to the agent working it and a copy to the owner). At most one source, and
+    // never required: the primary notify covers the historical single-recipient
+    // behavior. Enforced in validateVoiceFlow.
+    alsoNotifyE164: e164.optional(),
+    alsoNotifyRef: contactRefSchema.optional(),
     persona: z.string().min(1).max(500).optional(),
     captureFields: z.array(z.string().min(1).max(60)).min(1).max(15).optional(),
+    // AI-first: answer immediately instead of ringing humans, who become the
+    // fallback. Only the literal `true` is accepted: absence IS the off state.
+    answerFirst: z.literal(true).optional(),
+    // IVR accept sequence pressed after answering, in order: each digit is sent
+    // `afterSeconds` after the previous action, so an announcement can finish
+    // before the press lands. Only meaningful with answerFirst.
+    acceptDigits: z
+      .array(
+        z.object({
+          digit: z.string().regex(/^[0-9*#]$/, 'must be a single DTMF digit (0-9, * or #)'),
+          afterSeconds: z.number().int().min(0).max(8).optional()
+        })
+      )
+      .min(1)
+      .max(5)
+      .optional(),
+    // Pause between the last accept digit and attaching the AI media, so a
+    // partner that dials the customer after acceptance has time to connect them
+    // (otherwise the AI greets hold music). Only meaningful with answerFirst.
+    mediaStartSeconds: z.number().int().min(0).max(8).optional(),
+    // Text identifying the partner's alert SMS (e.g. "HomeLight Referral"): the
+    // newest inbound text containing it becomes the AI's pre-call brief. The
+    // alert arrives from a different number than the call and only seconds
+    // earlier, so this is the only lead detail available when the AI picks up.
+    // Only meaningful with answerFirst.
+    briefFromSmsContaining: z.string().min(2).max(200).optional(),
     when: whenSchema.optional()
   }),
   // Single blind warm transfer (e.g. a known partner line that should connect
@@ -1588,6 +1656,9 @@ function templateStringsForStep(step: FlowStep): string[] {
     // step's output), so it gets the same scope checking as any other template.
     case "wait_for_reply":
       return [step.timeoutMinutesTemplate ?? ""];
+    // The mid-call brief is built from what earlier steps extracted.
+    case "voice_brief":
+      return [step.noteTemplate];
     case "extract_url":
     case "browse_extract":
     case "extract_text":
@@ -1677,6 +1748,39 @@ export function validateVoiceFlow(def: AiFlowDefinition): string[] {
       // supply it per call) but still at most ONE source.
       if (s.type === "outbound_call" && s.toE164 && s.toRef) {
         issues.push(`Step "${s.id}" sets both toE164 and toRef; use only one.`);
+      }
+    }
+    if (s.type === "voice_ai_intake") {
+      // The optional SECOND summary recipient: at most one source.
+      if (s.alsoNotifyE164 && s.alsoNotifyRef) {
+        issues.push(
+          `Step "${s.id}" sets both alsoNotifyE164 and alsoNotifyRef; use only one.`
+        );
+      }
+      // The accept sequence, media pause, and pre-call brief only mean
+      // something when the AI answers the call itself; on the takeover path a
+      // human already accepted and the flow has long since run.
+      if (
+        !s.answerFirst &&
+        (s.acceptDigits || s.mediaStartSeconds !== undefined || s.briefFromSmsContaining)
+      ) {
+        issues.push(
+          `Step "${s.id}" configures AI-first answering (accept digits / media pause / pre-call brief) without answerFirst; set answerFirst or remove them.`
+        );
+      }
+      // The whole sequence runs inside ONE Telnyx webhook, so its delays are
+      // bounded: a longer wait would risk the webhook timing out and Telnyx
+      // retrying a call the AI has already answered.
+      if (s.answerFirst) {
+        const total = aiFirstDelaySeconds(
+          (s.acceptDigits ?? []).map((d) => d.afterSeconds),
+          s.mediaStartSeconds
+        );
+        if (total > AI_FIRST_MAX_DELAY_SECONDS) {
+          issues.push(
+            `Step "${s.id}" waits ${total}s before the AI speaks; keep the accept digits plus mediaStartSeconds at or under ${AI_FIRST_MAX_DELAY_SECONDS}s (it all runs inside one webhook).`
+          );
+        }
       }
     }
   }
