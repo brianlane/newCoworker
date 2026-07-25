@@ -86,7 +86,15 @@ export async function GET(request: Request) {
     const provider = conn?.provider ?? null;
     let page = existingPage;
     if (!page && provider !== "vagaro" && provider !== "calendly") {
-      page = await upsertBookingPage(businessId, { enabled: true });
+      try {
+        page = await upsertBookingPage(businessId, { enabled: true });
+      } catch (err) {
+        // Two overlapping first-time loads can race the insert; the loser
+        // hits the business_id unique constraint. Re-read the winner's row
+        // and only surface the error when there is genuinely no page.
+        page = await getBookingPageForBusiness(businessId);
+        if (!page) throw err;
+      }
     }
 
     return successResponse({
