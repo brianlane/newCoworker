@@ -39,6 +39,9 @@ vi.mock("@/lib/db/booking-waitlist", () => ({
   getWaitlistSettings: vi.fn(),
   upsertLiveWaitlistEntry: vi.fn()
 }));
+vi.mock("@/lib/calendar-tools/waitlist-resolve", () => ({
+  resolveWaitlistAfterBooking: vi.fn()
+}));
 vi.mock("@/lib/logger", () => ({
   logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() }
 }));
@@ -83,6 +86,7 @@ import {
   getWaitlistSettings,
   upsertLiveWaitlistEntry
 } from "@/lib/db/booking-waitlist";
+import { resolveWaitlistAfterBooking } from "@/lib/calendar-tools/waitlist-resolve";
 import { logger } from "@/lib/logger";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -674,6 +678,13 @@ describe("submitPublicBooking", () => {
       expect(mockGoal).toHaveBeenCalledWith(BIZ, "+14805550100", {
         kind: "appointment_booked"
       });
+      // Provider mode gets this inside bookCalendarAppointment; platform
+      // mode must run the same waitlist resolution itself.
+      expect(vi.mocked(resolveWaitlistAfterBooking)).toHaveBeenCalledWith(
+        BIZ,
+        { phones: ["+14805550100"], email: "liz@example.com" },
+        "2026-01-05T16:00:00.000Z"
+      );
       expect(mockUnassignedAlert).toHaveBeenCalledWith(
         BIZ,
         expect.objectContaining({

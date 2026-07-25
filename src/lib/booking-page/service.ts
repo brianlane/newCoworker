@@ -55,6 +55,7 @@ import {
   getWaitlistSettings,
   upsertLiveWaitlistEntry
 } from "@/lib/db/booking-waitlist";
+import { resolveWaitlistAfterBooking } from "@/lib/calendar-tools/waitlist-resolve";
 import { findUpcomingBookingsForAttendee } from "@/lib/calendar-tools/attendee-bookings";
 import { maybeAlertUnassignedBooking } from "@/lib/calendar-tools/unassigned-booking-alert";
 import {
@@ -508,9 +509,16 @@ export async function submitPublicBooking(
     zoomJoinUrl = zoomMeeting?.joinUrl ?? null;
 
     // Same post-booking fan-out the provider core runs: a confirmed
-    // booking may fast-forward parked AiFlow runs, and a booking for a
+    // booking may fast-forward parked AiFlow runs, the visitor's live
+    // waitlist entries resolve against what they now hold (the provider
+    // path gets this inside bookCalendarAppointment), and a booking for a
     // lead nobody owns pages the owner.
     await fireGoalEvent(context.businessId, phone, { kind: "appointment_booked" });
+    await resolveWaitlistAfterBooking(
+      context.businessId,
+      { phones: [phone], email: email.toLowerCase() },
+      start.toISOString()
+    );
     await maybeAlertUnassignedBooking(context.businessId, {
       attendeeName: name,
       attendeePhone: phone,
