@@ -2791,6 +2791,17 @@ describe("voice trigger + voice steps", () => {
     expect(validateDefinitionSemantics(def)).toEqual([]);
   });
 
+  it("round-trips options.starAlerts on a handoff chain", () => {
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "voice", fromE164: "+14159851909" },
+      steps: [{ id: "r1", type: "ring_handoff", toE164: "+16025245719", ringSeconds: 20 }],
+      options: { starAlerts: true }
+    });
+    expect(def.options?.starAlerts).toBe(true);
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
   it("rejects an E.164 that isn't well-formed", () => {
     expect(() =>
       parseAiFlowDefinition({

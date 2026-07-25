@@ -991,6 +991,37 @@ outbound send is appended to the conversation transcript so replies thread
 into the inbox. Meta app config steps live in
 `PRDs/whatsapp-meta-app-config.md`.
 
+## Voice call routing: star-framed alerts (`options.starAlerts`)
+
+A voice warm-handoff flow can frame every alert text it sends in a row of
+asterisks, the same `****************` framing the $1M+ keep-for-owner lead
+alert uses, so a live transfer is unmissable among routine notifications.
+Off by default, per flow, and it changes NOTHING else: no extra sends, no
+timing change, and the message bodies stay byte-identical.
+
+Set it in the visual builder ("Frame this flow's alert texts in a row of
+asterisks", shown only on voice flows), through the AI author, or via MCP.
+`compileVoiceFlow` snapshots the flag onto the handoff context
+(`star_alerts`) that `telnyx-voice-inbound` persists on
+`voice_handoff_sessions.context` at chain start, so both senders read it off
+the session row mid-call: `telnyx-voice-call-end` frames the missed/answered
+warm-transfer notices (the `hl:` keys, recipient AND owner copy) and the
+voice bridge frames the AI intake summary. The frame itself is
+[supabase/functions/_shared/star_block.ts](supabase/functions/_shared/star_block.ts)
+(idempotent, so an already-wrapped body never stacks rows), with lockstep
+`STAR_ROW` copies in `scripts/oneshot/realtor-retrigger-guard.ts` and
+`vps/voice-bridge/src/intake.ts` pinned by `tests/star-block.test.ts`.
+
+Live on Amy Laidlaw's HomeLight live-transfer flow
+(`scripts/oneshot/set-homelight-star-alerts.ts`, ledger-recorded): the owner
+copy telling her Dave missed the transfer lands the instant before her own
+phone rings, and Telnyx keeps HomeLight's caller id on the transfer leg, so
+the framed text is how she recognizes the ring. Turning it on for a tenant
+needs a voice-bridge redeploy (`tsx debug/redeploy-voice-bridge.ts
+--business-id <uuid>`) for the intake-summary half; the warm-transfer notices
+follow the edge deploy. Legacy `voice_handoff_chains` rows cannot carry the
+flag and stay plain.
+
 ## Telnyx voice inbound (ops note)
 
 **§6 HTTP semantics (shipped vs matrix shorthand):** The failure matrix highlights **403** for **bad webhook signature** (no processing, no answer). For many **logical** failures after verify (unknown DID, quota, bridge unhealthy, etc.), the handler deliberately returns **HTTP 200** with Telnyx **`hangup` / `speak`** (or equivalent) so Telnyx treats delivery as successful and **does not** retry the webhook as a transport failure—see Telnyx [webhook retries](https://developers.telnyx.com/docs/messaging/messages/receiving-webhooks). That is an intentional tradeoff: clearer PSTN UX and less duplicate traffic vs strict “non-2xx for every failure class.”

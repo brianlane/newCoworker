@@ -1316,6 +1316,16 @@ export type AiFlowOptions = {
    * other automation.
    */
   agentInvocable?: boolean;
+  /**
+   * Voice warm-handoff flows only: frame every alert text this flow sends
+   * (the missed/answered warm-transfer notices from telnyx-voice-call-end and
+   * the AI intake summary from the voice bridge) in a row of asterisks, the
+   * same framing the $1M+ keep-for-owner alert uses, so a live transfer is
+   * unmissable among routine texts. Bodies are unchanged; only the frame is
+   * added. Carried onto the compiled HandoffContext (`star_alerts`) at chain
+   * start so both senders read it off the session row. Default off.
+   */
+  starAlerts?: boolean;
 };
 
 /**

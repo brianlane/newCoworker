@@ -21,6 +21,14 @@ export type HandoffContext = {
   to_e164: string;
   steps: HandoffStep[];
   ai_takeover: HandoffAiTakeover | null;
+  /**
+   * The flow's `options.starAlerts`: frame every alert text this chain sends
+   * in a row of asterisks so a live transfer stands out. Snapshotted here at
+   * chain start, so the call-end webhook and the on-box voice bridge both read
+   * it off the session row instead of re-reading the flow. Absent (legacy
+   * `voice_handoff_chains` rows, flows that never opted in) = plain text.
+   */
+  star_alerts?: boolean;
 };
 
 export const HANDOFF_CS_PREFIX = "hl";
@@ -97,6 +105,8 @@ export function buildHandoffContext(input: {
   toE164: string;
   steps: unknown;
   aiTakeover: unknown;
+  /** Flow opt-in (options.starAlerts). Legacy chain rows never pass it. */
+  starAlerts?: boolean;
 }): HandoffContext {
   const steps: HandoffStep[] = Array.isArray(input.steps)
     ? (input.steps as unknown[])
@@ -121,5 +131,12 @@ export function buildHandoffContext(input: {
       };
     }
   }
-  return { to_e164: input.toE164, steps, ai_takeover: ai };
+  // Omitted rather than stored as false so an opted-out chain's persisted
+  // context stays byte-identical to what it was before star alerts existed.
+  return {
+    to_e164: input.toE164,
+    steps,
+    ai_takeover: ai,
+    ...(input.starAlerts === true ? { star_alerts: true } : {})
+  };
 }

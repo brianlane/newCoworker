@@ -116,7 +116,12 @@ export function addRetriggerGuard(def: Definition): boolean {
   return changed;
 }
 
-/** A full SMS-width row of asterisks framing the $1M+ owner alert. */
+/**
+ * A full SMS-width row of asterisks framing the $1M+ owner alert. Lockstep
+ * copy of `STAR_ROW` in supabase/functions/_shared/star_block.ts (this script
+ * runs under Node and cannot import the Deno module); tests/star-block.test.ts
+ * pins them equal.
+ */
 export const STAR_ROW = "****************";
 
 /** First line is already an asterisk row (4+ stars) → don't wrap again. */

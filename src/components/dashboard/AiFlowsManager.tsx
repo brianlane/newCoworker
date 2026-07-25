@@ -155,6 +155,8 @@ type EditorState = {
   allowReentry: boolean;
   /** Let the texting coworker enroll the customer it's texting with. */
   agentInvocable: boolean;
+  /** Voice call routing: frame this flow's alert texts in a row of asterisks. */
+  starAlerts: boolean;
   channel: FlowTrigger["channel"];
   correlationWindowMinutes: number;
   conditions: TriggerCondition[];
@@ -222,6 +224,7 @@ function emptyEditor(): EditorState {
     stopOnResponse: false,
     allowReentry: true,
     agentInvocable: false,
+    starAlerts: false,
     channel: "sms",
     correlationWindowMinutes: 10,
     conditions: [{ type: "has_url" }],
@@ -415,6 +418,7 @@ function editorFromRow(row: AiFlowRow): EditorState {
     stopOnResponse: def.options?.stopOnResponse ?? false,
     allowReentry: def.options?.allowReentry ?? true,
     agentInvocable: def.options?.agentInvocable ?? false,
+    starAlerts: def.options?.starAlerts ?? false,
     ...triggerToEditorFields(def.trigger),
     extraTriggers: def.triggers ?? [],
     editingTriggerIndex: 0,
@@ -436,6 +440,7 @@ function editorFromDefinition(def: AiFlowDefinition, name: string): EditorState 
     stopOnResponse: def.options?.stopOnResponse ?? false,
     allowReentry: def.options?.allowReentry ?? true,
     agentInvocable: def.options?.agentInvocable ?? false,
+    starAlerts: def.options?.starAlerts ?? false,
     ...triggerToEditorFields(def.trigger),
     extraTriggers: def.triggers ?? [],
     editingTriggerIndex: 0,
@@ -912,7 +917,8 @@ function toDefinition(s: EditorState): AiFlowDefinition {
       captureStepScreenshots: s.captureStepScreenshots,
       stopOnResponse: s.stopOnResponse,
       allowReentry: s.allowReentry,
-      agentInvocable: s.agentInvocable
+      agentInvocable: s.agentInvocable,
+      starAlerts: s.starAlerts
     }
   };
 }
@@ -1560,6 +1566,7 @@ export function AiFlowsManager({
         stopOnResponse: def.options?.stopOnResponse ?? false,
         allowReentry: def.options?.allowReentry ?? true,
         agentInvocable: def.options?.agentInvocable ?? false,
+        starAlerts: def.options?.starAlerts ?? false,
         ...triggerToEditorFields(def.trigger),
         extraTriggers: def.triggers ?? [],
         editingTriggerIndex: 0,
@@ -2636,6 +2643,24 @@ export function AiFlowsManager({
               never count.
             </p>
           </div>
+          {editor.channel === "voice" && (
+            <div>
+              <label className="flex items-center gap-2 text-sm text-parchment/70">
+                <input
+                  type="checkbox"
+                  checked={editor.starAlerts}
+                  onChange={(ev) => setEditor({ ...editor, starAlerts: ev.target.checked })}
+                />
+                Frame this flow&apos;s alert texts in a row of asterisks
+              </label>
+              <p className="mt-1 pl-6 text-[11px] text-parchment/40">
+                The texts this call routing sends (someone missed or answered the
+                transfer, and the AI intake summary) arrive wrapped in **** so a live
+                transfer stands out from routine messages. The wording doesn&apos;t
+                change, only the framing.
+              </p>
+            </div>
+          )}
           <div>
             <label className="flex items-center gap-2 text-sm text-parchment/70">
               <input

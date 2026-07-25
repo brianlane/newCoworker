@@ -640,6 +640,8 @@ async function sendIntakeLeadSms(params: {
   transferFromE164: string;
   businessName: string;
   lead: CapturedLead;
+  /** Frame the summary in asterisks (the flow's options.starAlerts). */
+  starFrame?: boolean;
 }): Promise<void> {
   const { supabase, settings, notifyE164, callControlId, transferFromE164, businessName, lead } = params;
   const apiKey = process.env.TELNYX_API_KEY ?? "";
@@ -679,7 +681,8 @@ async function sendIntakeLeadSms(params: {
     lead,
     transferFromE164,
     transcript,
-    maxChars: INTAKE_SMS_MAX_CHARS
+    maxChars: INTAKE_SMS_MAX_CHARS,
+    starFrame: params.starFrame === true
   });
 
   const res = await telnyxSendPlainSms(apiKey, {
@@ -1104,6 +1107,10 @@ function main(): void {
       // number so we can text the owner a summary + transcript at call end.
       let intake: IntakeCapability | undefined;
       let intakeNotifyE164 = "";
+      // The flow's options.starAlerts, snapshotted on the handoff context by
+      // the edge at chain start: frame the intake summary in asterisks so it
+      // stands out like the rest of this flow's alerts.
+      let intakeStarFrame = false;
       // place_ai_call live-transfer config + parked-run link, read off the
       // outbound session context written by telnyx-voice-originate.
       let intakeTransferConfig:
@@ -1161,8 +1168,10 @@ function main(): void {
               agent_name?: string;
             } | null;
             flow_run?: FlowRunLink | null;
+            star_alerts?: boolean;
           };
           if (ctx.outbound === true) callDirection = "outbound";
+          intakeStarFrame = ctx.star_alerts === true;
           const ai = ctx.ai_takeover ?? undefined;
           intakeNotifyE164 = typeof ai?.notify_e164 === "string" ? ai.notify_e164 : "";
           intake = {
@@ -1702,7 +1711,8 @@ function main(): void {
                 // the seller — pass it only as the "transferred via" reference.
                 transferFromE164: trustedFromE164 || fromE164Info || "",
                 businessName,
-                lead: geminiGetLead()
+                lead: geminiGetLead(),
+                starFrame: intakeStarFrame
               });
             } catch (err) {
               console.error("voice-bridge: intake SMS error", err);

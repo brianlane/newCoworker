@@ -206,6 +206,13 @@ describe("salvageFlowDefinition: step salvage (zod level)", () => {
       captureStepScreenshots: true
     });
   });
+
+  it("keeps starAlerts through a repair so a voice flow's framing survives", () => {
+    const kept = salvageFlowDefinition({ ...VALID, options: { starAlerts: true } });
+    expect(kept!.definition.options?.starAlerts).toBe(true);
+    const off = salvageFlowDefinition({ ...VALID, options: { starAlerts: false } });
+    expect(off!.definition.options?.starAlerts).toBeUndefined();
+  });
 });
 
 describe("salvageFlowDefinition: semantic repair loop", () => {

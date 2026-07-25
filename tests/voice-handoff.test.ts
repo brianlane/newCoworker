@@ -120,6 +120,30 @@ describe("buildHandoffContext", () => {
     });
   });
 
+  it("carries the flow's star-alert opt-in onto the context", () => {
+    const ctx = buildHandoffContext({
+      toE164: "+1a",
+      steps: [{ to_e164: "+16025245719", ring_secs: 20 }],
+      aiTakeover: null,
+      starAlerts: true
+    });
+    expect(ctx.star_alerts).toBe(true);
+  });
+
+  it("omits star_alerts for legacy chain rows and opted-out flows", () => {
+    // Legacy voice_handoff_chains callers never pass the flag; an omitted key
+    // keeps the persisted context identical to the pre-star-alerts shape.
+    for (const starAlerts of [undefined, false]) {
+      const ctx = buildHandoffContext({
+        toE164: "+1a",
+        steps: [{ to_e164: "+16025245719", ring_secs: 20 }],
+        aiTakeover: null,
+        starAlerts
+      });
+      expect(Object.keys(ctx)).not.toContain("star_alerts");
+    }
+  });
+
   it("coerces numeric-string ring_secs from JSONB instead of forcing 20", () => {
     const ctx = buildHandoffContext({
       toE164: "+1a",

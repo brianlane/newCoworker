@@ -69,7 +69,15 @@ export function compileVoiceFlow(
     };
   }
 
-  const context = buildHandoffContext({ toE164, steps: rawSteps, aiTakeover });
+  // options.starAlerts rides the context so the call-end webhook (warm-transfer
+  // notices) and the voice bridge (AI intake summary) can frame their texts
+  // without re-reading the flow mid-call.
+  const context = buildHandoffContext({
+    toE164,
+    steps: rawSteps,
+    aiTakeover,
+    starAlerts: def.options?.starAlerts === true
+  });
   if (context.steps.length === 0) return null;
   return { kind: "handoff", context };
 }

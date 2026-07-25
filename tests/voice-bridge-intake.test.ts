@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   composeIntakeLeadSms,
   DEFAULT_INTAKE_CAPTURE_FIELDS,
-  intakeSystemInstruction
+  intakeSystemInstruction,
+  STAR_ROW
 } from "../vps/voice-bridge/src/intake";
 
 describe("intakeSystemInstruction", () => {
@@ -216,5 +217,56 @@ describe("composeIntakeLeadSms", () => {
       maxChars: 200
     });
     expect(text.length).toBe(200);
+  });
+
+  it("frames the summary in asterisks when the flow opted into star alerts", () => {
+    const plain = composeIntakeLeadSms({
+      businessName: "Amy Laidlaw",
+      lead: { name: "Javier" },
+      transcript: "AI: Hi",
+      maxChars: 3000
+    });
+    const framed = composeIntakeLeadSms({
+      businessName: "Amy Laidlaw",
+      lead: { name: "Javier" },
+      transcript: "AI: Hi",
+      maxChars: 3000,
+      starFrame: true
+    });
+    // Same body, only framed: the wording never changes with the option.
+    expect(framed).toBe(`${STAR_ROW}\n${plain}\n${STAR_ROW}`);
+  });
+
+  it("leaves the summary plain when starFrame is false or omitted", () => {
+    const args = { businessName: "Acme", lead: { name: "Sam" }, transcript: "", maxChars: 3000 };
+    expect(composeIntakeLeadSms(args).startsWith(STAR_ROW)).toBe(false);
+    expect(composeIntakeLeadSms({ ...args, starFrame: false }).startsWith(STAR_ROW)).toBe(false);
+  });
+
+  it("keeps a framed summary inside maxChars, closing row included", () => {
+    // The frame comes out of the truncation budget: a long transcript must
+    // never push the closing row off the end of the message.
+    const text = composeIntakeLeadSms({
+      businessName: "Acme",
+      lead: {},
+      transferFromE164: "+1555",
+      transcript: "x".repeat(5000),
+      maxChars: 200,
+      starFrame: true
+    });
+    expect(text.length).toBeLessThanOrEqual(200);
+    expect(text.startsWith(`${STAR_ROW}\n`)).toBe(true);
+    expect(text.endsWith(`\n${STAR_ROW}`)).toBe(true);
+  });
+
+  it("still frames when the budget leaves no room for a body", () => {
+    const text = composeIntakeLeadSms({
+      businessName: "Acme",
+      lead: {},
+      transcript: "",
+      maxChars: 1,
+      starFrame: true
+    });
+    expect(text).toBe(`${STAR_ROW}\n\n${STAR_ROW}`);
   });
 });
