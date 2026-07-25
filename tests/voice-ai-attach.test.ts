@@ -197,7 +197,10 @@ describe("attachAiStream", () => {
   const target = { origin: "https://bridge.example", path: "/voice/stream" };
 
   it("signs a v2 stream URL, records its nonce, and starts the stream", async () => {
-    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    const fetchMock = vi.fn(
+      async (_url: string | URL | Request, init?: RequestInit) =>
+        new Response(JSON.stringify({ seen: String(init?.body ?? "") }), { status: 200 })
+    );
     vi.stubGlobal("fetch", fetchMock);
     const { deps: d, inserted } = deps({});
     const ok = await attachAiStream(d, {
@@ -227,7 +230,10 @@ describe("attachAiStream", () => {
   });
 
   it("arms both legs when translator mode is on", async () => {
-    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    const fetchMock = vi.fn(
+      async (_url: string | URL | Request, init?: RequestInit) =>
+        new Response(JSON.stringify({ seen: String(init?.body ?? "") }), { status: 200 })
+    );
     vi.stubGlobal("fetch", fetchMock);
     const { deps: d } = deps({});
     await attachAiStream(d, {
@@ -243,7 +249,10 @@ describe("attachAiStream", () => {
   });
 
   it("omits the caller hint when the number is withheld", async () => {
-    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    const fetchMock = vi.fn(
+      async (_url: string | URL | Request, init?: RequestInit) =>
+        new Response(JSON.stringify({ seen: String(init?.body ?? "") }), { status: 200 })
+    );
     vi.stubGlobal("fetch", fetchMock);
     const { deps: d } = deps({});
     await attachAiStream(d, {
@@ -258,7 +267,10 @@ describe("attachAiStream", () => {
   });
 
   it("trims a trailing slash off the origin", async () => {
-    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    const fetchMock = vi.fn(
+      async (_url: string | URL | Request, init?: RequestInit) =>
+        new Response(JSON.stringify({ seen: String(init?.body ?? "") }), { status: 200 })
+    );
     vi.stubGlobal("fetch", fetchMock);
     const { deps: d } = deps({});
     await attachAiStream(d, {
@@ -277,7 +289,10 @@ describe("attachAiStream", () => {
   it("returns false without calling Telnyx when the nonce cannot be stored", async () => {
     // An unstored nonce would be rejected at redemption, so the stream must not
     // be started at all.
-    const fetchMock = vi.fn(async () => new Response("{}", { status: 200 }));
+    const fetchMock = vi.fn(
+      async (_url: string | URL | Request, init?: RequestInit) =>
+        new Response(JSON.stringify({ seen: String(init?.body ?? "") }), { status: 200 })
+    );
     vi.stubGlobal("fetch", fetchMock);
     const { deps: d } = deps({}, {}, { message: "duplicate key" });
     const ok = await attachAiStream(d, {

@@ -38,8 +38,19 @@ export type VoiceAiAttachDeps = {
 
 export type BridgeTarget = { origin: string; path: string; translatorArmed: boolean };
 
+/**
+ * Env read through `globalThis` (the cron_auth.ts convention) rather than the
+ * `Deno` global directly: the Vitest suite imports this module to pin its
+ * fail-closed guards, and the Node typecheck has no Deno types.
+ */
+type DenoEnv = { env: { get: (key: string) => string | undefined } };
+
+function envValue(key: string): string | undefined {
+  return (globalThis as unknown as { Deno?: DenoEnv }).Deno?.env?.get(key);
+}
+
 function envVoiceAiStreamEnabled(): boolean {
-  const v = (Deno.env.get("VOICE_AI_STREAM_ENABLED") ?? "true").trim().toLowerCase();
+  const v = (envValue("VOICE_AI_STREAM_ENABLED") ?? "true").trim().toLowerCase();
   return v !== "false" && v !== "0" && v !== "no";
 }
 
@@ -90,7 +101,7 @@ export async function resolveBridgeTarget(
   } | null;
 
   const heartbeatTtlSec = (() => {
-    const raw = Number(Deno.env.get("BRIDGE_HEARTBEAT_TTL_SEC") ?? "150");
+    const raw = Number(envValue("BRIDGE_HEARTBEAT_TTL_SEC") ?? "150");
     return Number.isFinite(raw) && raw >= 60 ? Math.floor(raw) : 150;
   })();
   const hb = settings?.bridge_last_heartbeat_at
