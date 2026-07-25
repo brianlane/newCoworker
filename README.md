@@ -1025,6 +1025,73 @@ needs a voice-bridge redeploy (`tsx debug/redeploy-voice-bridge.ts
 follow the edge deploy. Legacy `voice_handoff_chains` rows cannot carry the
 flag and stay plain.
 
+## Live translator mode (interpret a call after the transfer)
+
+The AI worker has always handled a Spanish-speaking caller in Spanish (Gemini
+Live is speech to speech and multilingual, and every customer-persona call
+carries the bilingual `customerLanguageLine`). What it could not do was help
+once a HUMAN joined: `transfer_to_owner` bridges the caller to the owner or a
+teammate and the bridge then issues `streaming_stop` so the two of them talk
+privately. If they do not share a language, that hand-off is exactly where the
+call fails.
+
+With **translator mode** armed, the AI stays on the bridged call and interprets
+between them, in the first person, both directions.
+
+- **The whole mechanism is one Telnyx parameter.** `stream_bidirectional_target_legs`
+  defaults to `opposite`, meaning injected audio reaches only the PSTN party;
+  `both` makes the AI audible to the caller AND the human. Paired with the
+  `both_tracks` fork we already request (which is what lets the AI hear both
+  sides), that is a three-way with no conference.
+- **It must be armed at ANSWER time, not at transfer time.** Telnyx cannot
+  re-point a running stream's target legs, and restarting the stream would tear
+  down the Live session (transcript, reservation, and everything the caller
+  already said). So every site that attaches a bridge stream reads the tenant
+  column: `telnyx-voice-inbound` at answer, and `attachAiStream` in
+  `telnyx-voice-call-end` for the AI-takeover and outbound-answered paths.
+  `both` is inert until a second leg exists, so an armed call that never
+  transfers behaves exactly like any other call.
+- **The persona switch is a coordinator cue**, `translatorModeCue`
+  ([vps/voice-bridge/src/system-instruction.ts](vps/voice-bridge/src/system-instruction.ts)),
+  delivered through `sendRealtimeInput({ text })` like the wind-down cues. It is
+  deliberately absolute: interpret each turn and do nothing else, speak in the
+  first person as whoever is talking, never answer a question yourself, no tools,
+  and stay silent between turns. A model that keeps its receptionist reflexes is
+  worse than no interpreter, because the human believes they are hearing the
+  caller. Tool calls are ALSO refused in code while interpreting, since Gemini
+  Live cannot un-declare tools mid-session.
+- **Wind-down cues are suppressed** while interpreting (a "say goodbye now" cue
+  would be spoken to two humans having their own conversation), and the
+  interpreted stretch is bounded by `VOICE_TRANSLATOR_MAX_MS` (default 30 min).
+  That ceiling is a runaway guard, not a spend policy: when it fires the AI
+  detaches quietly and the two humans keep their call. The diagnostics heartbeat
+  keeps running throughout, so an interpreted call is as observable as any other.
+- **Fails safe.** If the cue cannot be delivered the call falls back to today's
+  detach, and an unarmed call can never enter the branch at all.
+
+**Cost, and it is deliberate: the tenant pays for what they use.** An interpreted
+call meters BOTH legs (the caller leg through AI settlement, the human leg
+through `voice_meter_forwarded_call`) and runs Gemini Live for the whole human
+conversation instead of the first few seconds. That is accurate rather than
+punitive: Telnyx bills the platform per leg and the model really is listening the
+whole time. Remember voice has no overage, it hard-refuses the NEXT call once the
+pool is spent, so heavy use makes the 300-second `voice-low-balance-alerts` email
+load-bearing. The admin toggle and the owner's phone card both say so.
+
+Per-tenant, OFF by default: `business_telnyx_settings.translator_mode_enabled`,
+flipped from the admin business page ("Voice & SMS DID" card). It applies to the
+NEXT call, not one in progress. Turning it on needs a voice-bridge redeploy
+(`tsx debug/redeploy-voice-bridge.ts --business-id <uuid>`); the arming half
+ships with the edge deploy.
+
+> The one thing no test can prove is whether the human actually HEARS the
+> interpreter, because `target_legs=both` on a transferred pair is Telnyx
+> behavior, not ours. `tsx debug/verify-translator-mode.ts [businessId]`
+> (read-only) checks the arming and prints what the last interpreted call left in
+> telemetry; its header carries the two-handset listening runbook. If `both`
+> turns out not to be honored on a bridged pair, the design moves to a Telnyx
+> conference and the fail-safe above is what protects tenants in the meantime.
+
 ## Telnyx voice inbound (ops note)
 
 **§6 HTTP semantics (shipped vs matrix shorthand):** The failure matrix highlights **403** for **bad webhook signature** (no processing, no answer). For many **logical** failures after verify (unknown DID, quota, bridge unhealthy, etc.), the handler deliberately returns **HTTP 200** with Telnyx **`hangup` / `speak`** (or equivalent) so Telnyx treats delivery as successful and **does not** retry the webhook as a transport failure—see Telnyx [webhook retries](https://developers.telnyx.com/docs/messaging/messages/receiving-webhooks). That is an intentional tradeoff: clearer PSTN UX and less duplicate traffic vs strict “non-2xx for every failure class.”

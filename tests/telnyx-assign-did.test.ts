@@ -56,6 +56,7 @@ const sampleSettings = {
   transfer_enabled: true,
   sms_fallback_enabled: true,
   bridge_stale_alert_muted: false,
+  translator_mode_enabled: false,
   staff_sms_assistant_reply_enabled: true,
   staff_sms_forward_to_owner_enabled: false,
   updated_at: "2026-01-01T00:00:00Z"

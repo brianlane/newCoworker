@@ -7,9 +7,31 @@
  * + webhook `telnyx_webhook_try_begin` single-flight per `event_id`.
  */
 
+/**
+ * Which legs of a bridged call hear the audio we inject on the media stream
+ * (Telnyx `stream_bidirectional_target_legs`).
+ *
+ * Telnyx defaults to `opposite`, which is why a normal call works the way it
+ * does: the AI's audio reaches the PSTN party and nobody else, and after the AI
+ * warm-transfers, the bridge REMOVES its fork so the caller and the human get a
+ * private conversation.
+ *
+ * `both` is what translator mode needs: once the transfer bridges the caller to
+ * a human, the AI must be audible to BOTH of them to interpret between them.
+ * Paired with the `both_tracks` fork we already request, which is what lets the
+ * AI hear both sides.
+ *
+ * Only ever sent when translator mode is armed for the call. Omitted otherwise,
+ * so the request body for every other call stays byte-identical to what shipped
+ * before this existed.
+ */
+export type TelnyxStreamTargetLegs = "both" | "self" | "opposite";
+
 export type TelnyxAnswerStreamOptions = {
   streamUrl: string;
   clientState?: string;
+  /** Omit for Telnyx's `opposite` default. `both` arms translator mode. */
+  targetLegs?: TelnyxStreamTargetLegs;
 };
 
 export async function telnyxAnswerPlain(
@@ -70,6 +92,10 @@ export async function telnyxAnswerWithStream(
     stream_bidirectional_codec: "L16",
     stream_bidirectional_sampling_rate: 16000
   };
+  // Only present when translator mode is armed; see TelnyxStreamTargetLegs.
+  if (opts.targetLegs) {
+    body.stream_bidirectional_target_legs = opts.targetLegs;
+  }
   if (opts.clientState) {
     body.client_state = opts.clientState;
   }
@@ -192,7 +218,7 @@ export async function telnyxTransferCall(
 export async function telnyxStreamingStart(
   apiKey: string,
   callControlId: string,
-  opts: { streamUrl: string; clientState?: string },
+  opts: { streamUrl: string; clientState?: string; targetLegs?: TelnyxStreamTargetLegs },
   fetchImpl: typeof fetch = fetch
 ): Promise<Response> {
   const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/streaming_start`;
@@ -204,6 +230,10 @@ export async function telnyxStreamingStart(
     stream_bidirectional_codec: "L16",
     stream_bidirectional_sampling_rate: 16000
   };
+  // Only present when translator mode is armed; see TelnyxStreamTargetLegs.
+  if (opts.targetLegs) {
+    body.stream_bidirectional_target_legs = opts.targetLegs;
+  }
   if (opts.clientState) {
     body.client_state = encodeClientState(opts.clientState);
   }

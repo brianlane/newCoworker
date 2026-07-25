@@ -2,7 +2,11 @@ import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { getBusiness } from "@/lib/db/businesses";
-import { upsertBusinessTelnyxSettings } from "@/lib/db/telnyx-routes";
+import {
+  getBusinessTelnyxSettings,
+  resolveTranslatorModePatch,
+  upsertBusinessTelnyxSettings
+} from "@/lib/db/telnyx-routes";
 import { normalizeE164 } from "@/lib/telnyx/assign-did";
 
 /**
@@ -17,7 +21,8 @@ const schema = z.object({
     .optional(),
   transferEnabled: z.boolean().optional(),
   smsFallbackEnabled: z.boolean().optional(),
-  bridgeStaleAlertMuted: z.boolean().optional()
+  bridgeStaleAlertMuted: z.boolean().optional(),
+  translatorModeEnabled: z.boolean().optional()
 });
 
 export async function POST(request: Request) {
@@ -43,12 +48,25 @@ export async function POST(request: Request) {
       }
     }
 
+    // Translator mode is meaningless without warm transfer (the AI only ever
+    // interprets AFTER a transfer bridges a human in), and leaving the pair
+    // inconsistent would arm `target_legs=both` on every answer for nothing.
+    // Enforced here rather than only in the UI so a direct API call cannot
+    // create the state either. Reads current settings only when the patch could
+    // actually produce the bad pair.
+    const translatorModeEnabled = await resolveTranslatorModePatch({
+      requested: body.translatorModeEnabled,
+      transferEnabledPatch: body.transferEnabled,
+      loadCurrent: () => getBusinessTelnyxSettings(body.businessId)
+    });
+
     const settings = await upsertBusinessTelnyxSettings({
       businessId: body.businessId,
       forwardToE164: normalizedForward,
       transferEnabled: body.transferEnabled,
       smsFallbackEnabled: body.smsFallbackEnabled,
-      bridgeStaleAlertMuted: body.bridgeStaleAlertMuted
+      bridgeStaleAlertMuted: body.bridgeStaleAlertMuted,
+      translatorModeEnabled
     });
     return successResponse({ settings });
   } catch (err) {

@@ -9,13 +9,19 @@ vi.mock("@/lib/db/businesses", () => ({
 }));
 
 vi.mock("@/lib/db/telnyx-routes", () => ({
-  upsertBusinessTelnyxSettings: vi.fn()
+  upsertBusinessTelnyxSettings: vi.fn(),
+  getBusinessTelnyxSettings: vi.fn(),
+  resolveTranslatorModePatch: vi.fn()
 }));
 
 import { POST } from "@/app/api/admin/telnyx/update-settings/route";
 import { requireAdmin } from "@/lib/auth";
 import { getBusiness } from "@/lib/db/businesses";
-import { upsertBusinessTelnyxSettings } from "@/lib/db/telnyx-routes";
+import {
+  getBusinessTelnyxSettings,
+  resolveTranslatorModePatch,
+  upsertBusinessTelnyxSettings
+} from "@/lib/db/telnyx-routes";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -67,8 +73,14 @@ describe("POST /api/admin/telnyx/update-settings", () => {
       forward_to_e164: "+16025551234",
       transfer_enabled: true,
       sms_fallback_enabled: true,
+      translator_mode_enabled: false,
       updated_at: "2026-01-01T00:00:00Z"
     } as never);
+    // Default: pass the requested value straight through. Individual tests
+    // override to assert the route honors whatever the resolver decides.
+    vi.mocked(resolveTranslatorModePatch).mockImplementation(
+      async (input: { requested: boolean | undefined }) => input.requested
+    );
   });
 
   it("normalizes forwardToE164 and forwards to DB helper", async () => {
@@ -139,5 +151,41 @@ describe("POST /api/admin/telnyx/update-settings", () => {
     await POST(request({ businessId: BIZ, transferEnabled: true }));
     const call = vi.mocked(upsertBusinessTelnyxSettings).mock.calls[0][0] as Record<string, unknown>;
     expect(call.bridgeStaleAlertMuted).toBeUndefined();
+  });
+
+  it("accepts the translator mode toggle", async () => {
+    await POST(request({ businessId: BIZ, translatorModeEnabled: true, transferEnabled: true }));
+    expect(upsertBusinessTelnyxSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ translatorModeEnabled: true })
+    );
+  });
+
+  it("writes whatever the transfer-consistency resolver decides, not the raw request", async () => {
+    // Translator mode without warm transfer is dead config that would still arm
+    // target_legs=both on every answer, and the admin UI cannot correct the pair
+    // once it exists. The route must not bypass the resolver.
+    vi.mocked(resolveTranslatorModePatch).mockResolvedValueOnce(false);
+    await POST(request({ businessId: BIZ, translatorModeEnabled: true, transferEnabled: false }));
+    expect(resolveTranslatorModePatch).toHaveBeenCalledWith(
+      expect.objectContaining({ requested: true, transferEnabledPatch: false })
+    );
+    expect(upsertBusinessTelnyxSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ translatorModeEnabled: false })
+    );
+  });
+
+  it("hands the resolver a lazy reader for the stored settings row", async () => {
+    vi.mocked(getBusinessTelnyxSettings).mockResolvedValue(null as never);
+    let loaded = false;
+    vi.mocked(resolveTranslatorModePatch).mockImplementationOnce(
+      async (input: { loadCurrent: () => Promise<unknown> }) => {
+        await input.loadCurrent();
+        loaded = true;
+        return true;
+      }
+    );
+    await POST(request({ businessId: BIZ, translatorModeEnabled: true }));
+    expect(loaded).toBe(true);
+    expect(getBusinessTelnyxSettings).toHaveBeenCalledWith(BIZ);
   });
 });

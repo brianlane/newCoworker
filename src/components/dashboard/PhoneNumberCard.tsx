@@ -12,6 +12,12 @@ type Props = {
   forwardToE164?: string | null;
   transferEnabled?: boolean;
   /**
+   * Live translator mode: the AI stays on a transferred call interpreting
+   * between the caller and whoever picked up. Shown so the owner knows why a
+   * third voice is on their calls (and that those calls cost more).
+   */
+  translatorModeEnabled?: boolean;
+  /**
    * Per-business 10DLC (A2P SMS) carrier-registration status. When `pending`
    * or `rejected` we show a callout explaining why outbound SMS may not be
    * delivering yet — Verizon/AT&T/T-Mobile silently drop A2P traffic from
@@ -79,6 +85,7 @@ export function PhoneNumberCard({
   bridgeHeartbeatAt,
   forwardToE164,
   transferEnabled,
+  translatorModeEnabled,
   smsCampaignStatus
 }: Props) {
   const [copied, setCopied] = useState(false);
@@ -139,6 +146,13 @@ export function PhoneNumberCard({
       {forwardToE164 && transferEnabled === false && (
         <p className="mt-2 text-xs text-parchment/40 italic">
           Warm transfer is currently off.
+        </p>
+      )}
+      {forwardToE164 && transferEnabled !== false && translatorModeEnabled && (
+        <p className="mt-2 text-xs text-parchment/60">
+          On a transferred call it stays on the line to interpret, so you and the
+          caller can talk even without a shared language. These calls use more of
+          your minutes than a plain transfer.
         </p>
       )}
       {(() => {

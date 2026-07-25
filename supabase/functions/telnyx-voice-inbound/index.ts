@@ -1283,7 +1283,9 @@ serve(async (req: Request) => {
 
   const { data: settings } = await supabase
     .from("business_telnyx_settings")
-    .select("bridge_last_heartbeat_at, bridge_media_wss_origin, bridge_media_path")
+    .select(
+      "bridge_last_heartbeat_at, bridge_media_wss_origin, bridge_media_path, translator_mode_enabled"
+    )
     .eq("business_id", businessId)
     .maybeSingle();
 
@@ -1552,7 +1554,18 @@ serve(async (req: Request) => {
   }
   const streamUrl = `${base}${pth}?${qs.toString()}`.replace(/^http:/i, "ws:").replace(/^https:/i, "wss:");
 
-  const answerRes = await telnyxAnswerWithStream(apiKey, callControlId, { streamUrl });
+  // Translator mode arming. This has to be decided HERE, at answer, not when the
+  // AI later transfers: Telnyx cannot re-point a running stream's target legs,
+  // and restarting the stream would tear down the Live session (transcript,
+  // reservation, and everything the caller already said). `both` is inert until
+  // a second leg exists, so an armed call that never transfers behaves normally.
+  const translatorArmed =
+    (settings as { translator_mode_enabled?: boolean | null } | null)
+      ?.translator_mode_enabled === true;
+  const answerRes = await telnyxAnswerWithStream(apiKey, callControlId, {
+    streamUrl,
+    ...(translatorArmed ? { targetLegs: "both" as const } : {})
+  });
   if (!answerRes.ok) {
     const errText = await answerRes.text();
     console.error("answer failed", answerRes.status, errText.slice(0, 500));

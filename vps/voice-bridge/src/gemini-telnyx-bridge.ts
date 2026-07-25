@@ -27,6 +27,21 @@ const TELNYX_PCM_RATE = 16000;
 const GEMINI_OUTPUT_DEFAULT_RATE = 24000;
 
 /**
+ * Default ceiling on the INTERPRETED stretch of a call, measured from the
+ * moment translator mode takes over. Generous on purpose: a real interpreted
+ * conversation (an inspection, a quote, a scheduling back-and-forth) runs
+ * longer than the AI-led calls the 14-minute session cap was sized for, and
+ * cutting the interpreter off mid-sentence is a worse failure than the spend.
+ * Override per box with VOICE_TRANSLATOR_MAX_MS.
+ */
+const TRANSLATOR_CEILING_DEFAULT_MS = 30 * 60 * 1000;
+
+function readTranslatorCeilingMs(): number {
+  const v = Number(process.env.VOICE_TRANSLATOR_MAX_MS);
+  return Number.isFinite(v) && v > 0 ? v : TRANSLATOR_CEILING_DEFAULT_MS;
+}
+
+/**
  * Resolved `@google/genai` package version at boot. Persisted in the
  * `voice_bridge_gemini_session_start` telemetry so we can confirm — without
  * SSHing the VPS — which SDK the running container actually has. A major
@@ -139,6 +154,23 @@ export type TransferCapability = {
    * brief "connecting you now" line finishes playing first. Defaults to 2000.
    */
   graceMs?: number;
+  /**
+   * TRANSLATOR MODE: stay on the bridged call as a live interpreter instead of
+   * detaching. Requires the call to have been ARMED at answer time
+   * (`stream_bidirectional_target_legs=both`), because Telnyx cannot re-point a
+   * running stream's target legs and restarting the stream would tear this
+   * session down. An unarmed call must NEVER set this: the fork would reach only
+   * the caller, so the AI would talk over them while the human heard nothing.
+   */
+  translatorMode?: boolean;
+  /** Name of the person being transferred to, when known. Used in the cue. */
+  humanName?: string;
+  /**
+   * Speak one short line to the human as they join, telling them an interpreter
+   * is on the line. Defaults to true; the person picking up otherwise has no
+   * idea why a third voice is speaking.
+   */
+  discloseToHuman?: boolean;
 };
 
 /**
@@ -217,6 +249,7 @@ export type VoiceToolsConfig = {
 // Re-exported so existing importers keep one entry point.
 export {
   systemInstructionForBusiness,
+  translatorModeCue,
   VOICE_CUSTOMER_MEMORY_MAX_CHARS,
   VOICE_FLOW_CONTEXT_MAX_CHARS,
   VOICE_RECENT_INTERACTIONS_MAX_CHARS,
@@ -225,6 +258,7 @@ export {
 } from "./system-instruction.js";
 import {
   systemInstructionForBusiness,
+  translatorModeCue,
   type CallerIdentity,
   type VoiceLanguagePrefs
 } from "./system-instruction.js";
@@ -558,6 +592,12 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   // Set once a warm transfer succeeds so we detach the AI exactly once (a
   // duplicate transfer tool-call can't schedule two teardowns).
   let transferDetachRequested = false;
+  /**
+   * True from the moment a translator-armed transfer succeeds and the
+   * interpreter cue lands. Suppresses the AI-led wind-down cues, drops the tool
+   * surface, and is what keeps the media fork attached instead of detaching.
+   */
+  let translatorActive = false;
   const timers: ReturnType<typeof setTimeout>[] = [];
   const downlinkTelemetry: DownlinkTelemetry = {
     droppedFrames: 0,
@@ -708,6 +748,40 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   const clearTimers = () => {
     for (const t of timers) clearTimeout(t);
     timers.length = 0;
+  };
+
+  /**
+   * Bound the interpreted stretch. Deliberately a STANDALONE timer (like the
+   * end_call grace): a clearTimers() must never be able to strand an open Live
+   * session on a human conversation that could run for an hour.
+   *
+   * This is a runaway guard, not a budget policy. The tenant pays for what they
+   * use, and the voice reserve gate plus the low-balance alert are what handle
+   * spend; this only stops a session nobody is watching. When it fires the AI
+   * leaves quietly: the two humans keep their bridged call, exactly as they
+   * would have had translator mode never been armed.
+   */
+  const scheduleTranslatorCeiling = (): void => {
+    const ceilingMs = readTranslatorCeilingMs();
+    setTimeout(() => {
+      if (ended) return;
+      void (async () => {
+        emitDiag("voice_bridge_translator_ceiling_reached", { ceiling_ms: ceilingMs });
+        console.log("gemini-bridge: translator ceiling reached, leaving the call", {
+          callControlId: opts.callControlId,
+          ceilingMs
+        });
+        // Remove the fork first so the humans keep talking privately, then
+        // close the session. Same order (and same best-effort contract) as the
+        // normal post-transfer detach.
+        try {
+          if (opts.transfer?.detach) await opts.transfer.detach();
+        } catch (err) {
+          console.error("gemini-bridge: translator ceiling detach threw", err);
+        }
+        await teardown();
+      })();
+    }, ceilingMs);
   };
 
   let session!: Session;
@@ -1276,6 +1350,19 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         has_id: Boolean(call.id),
         arg_keys: call.args && typeof call.args === "object" ? Object.keys(call.args).slice(0, 20) : []
       });
+      // Once interpreting, the model has no business taking actions: it is
+      // relaying two humans' words, and anything it "books" or "sends" would be
+      // its own reading of a conversation it is not part of. The prompt says so,
+      // but the declarations stay registered from before the handoff (Gemini
+      // Live cannot re-declare mid-session), so refuse them here too.
+      if (translatorActive) {
+        emitDiag("voice_bridge_translator_tool_refused", { name });
+        sendToolResponse(call.id, name, {
+          ok: false,
+          detail: "interpreting: tools are unavailable on this call"
+        });
+        continue;
+      }
       if (name === "capture_lead" && intake) {
         // Bridge-local: merge the captured fields so getLead() can return them
         // for the post-call SMS. Non-empty string values only.
@@ -1315,6 +1402,49 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             ok: result.ok,
             detail: result.detail ?? (result.ok ? "transfer initiated" : "transfer failed")
           });
+          // TRANSLATOR MODE: stay on the line as an interpreter instead of
+          // leaving. Only when the call was ARMED at answer time, because the
+          // Telnyx target-legs parameter has to be set before the legs bridge:
+          // an unarmed call's fork can only reach the caller, so staying would
+          // mean talking over the caller while the human hears nothing.
+          if (result.ok && opts.transfer!.translatorMode === true && !transferDetachRequested) {
+            // Set BEFORE the cue so the wind-down timers (which check this) can
+            // never fire between arming and the cue landing.
+            translatorActive = true;
+            try {
+              session.sendRealtimeInput({
+                text: translatorModeCue({
+                  callerLanguage: opts.languagePrefs?.established ?? null,
+                  humanName: opts.transfer!.humanName,
+                  discloseToHuman: opts.transfer!.discloseToHuman !== false
+                })
+              });
+              emitDiag("voice_bridge_translator_mode_entered", {
+                reason: reason ?? null,
+                caller_language: opts.languagePrefs?.established ?? null
+              });
+              console.log("gemini-bridge: translator mode entered", {
+                callControlId: opts.callControlId
+              });
+            } catch (err) {
+              // The cue is the whole feature: without it the model keeps its
+              // receptionist reflexes while audible to both parties. Fall back
+              // to the normal detach so we degrade to today's behavior rather
+              // than leaving a receptionist in the middle of their call.
+              console.error("gemini-bridge: translator cue failed, detaching", err);
+              emitDiag("voice_bridge_translator_cue_failed", {
+                error: err instanceof Error ? err.message : String(err)
+              });
+              translatorActive = false;
+            }
+            if (translatorActive) {
+              // Hold the session open for the human conversation, then leave
+              // cleanly when the interpreter ceiling is reached. Returning
+              // (not falling through) is what keeps the fork attached.
+              scheduleTranslatorCeiling();
+              return;
+            }
+          }
           // On a SUCCESSFUL warm transfer the caller is now bridged to a human,
           // so the AI must leave the line — otherwise it keeps injecting audio
           // into (and hearing) the bridged leg, talking over both parties. We
@@ -1468,9 +1598,16 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   }, 15000);
   timers.push(heartbeat as unknown as NodeJS.Timeout);
 
+  // Every wind-down cue is suppressed once translator mode takes over: they are
+  // written for an AI-led call ("you need to start wrapping up", "say goodbye"),
+  // and firing one mid-interpretation would have the interpreter announce a
+  // session limit to two people having their own conversation. The interpreted
+  // stretch is bounded by scheduleTranslatorCeiling() instead. The diagnostics
+  // heartbeat deliberately keeps running, so an interpreted call stays as
+  // observable as any other.
   timers.push(
     setTimeout(() => {
-      if (ended) return;
+      if (ended || translatorActive) return;
       // Realtime text (not sendClientContent) so this coordinator cue stays in
       // the same auto-VAD turn regime as the caller's audio; a manual turn here
       // would make the caller's next reply close the session with 1007.
@@ -1480,14 +1617,14 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
 
   timers.push(
     setTimeout(() => {
-      if (ended) return;
+      if (ended || translatorActive) return;
       session.sendRealtimeInput({ text: nudgeText });
     }, nudgeAt)
   );
 
   timers.push(
     setTimeout(() => {
-      if (ended) return;
+      if (ended || translatorActive) return;
       void (async () => {
         try {
           session.sendRealtimeInput({ text: finalText });
