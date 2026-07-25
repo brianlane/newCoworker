@@ -52,7 +52,8 @@ const SCOPE_IDS = [
   "meeting:read:meeting / meeting:read:list_meetings",
   "meeting:write:invite_links",
   "user:read:user",
-  "cloud_recording:read:meeting_transcript"
+  "cloud_recording:read:meeting_transcript",
+  "meeting:read:past_meeting"
 ];
 
 function StepCard({

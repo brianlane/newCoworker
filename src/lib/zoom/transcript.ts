@@ -128,10 +128,58 @@ async function timedFetch(
 }
 
 /**
+ * Resolve a NUMERIC meeting id to its latest past-meeting instance UUID via
+ * GET /past_meetings/{meetingId} (`meeting:read:past_meeting`, the scope
+ * added in the Jul 2026 Marketplace update). FAIL-OPEN by design: tokens
+ * minted before the scope shipped answer 401/403 here, and callers keep the
+ * pre-scope behavior (numeric flow, no UUID). Null on ANY failure.
+ */
+export async function resolvePastMeetingUuid(
+  businessId: string,
+  numericMeetingId: string,
+  deps: TranscriptDeps = {}
+): Promise<string | null> {
+  const getToken = deps.getToken ?? getZoomAccessToken;
+  const fetchImpl = deps.fetchImpl ?? fetch;
+
+  if (!/^\d{9,15}$/.test(numericMeetingId)) return null;
+
+  let token: string | null;
+  try {
+    token = await getToken(businessId);
+  } catch {
+    return null;
+  }
+  if (!token) return null;
+
+  let res: Response;
+  try {
+    res = await timedFetch(
+      fetchImpl,
+      `${ZOOM_API_BASE_URL}/past_meetings/${numericMeetingId}`,
+      { Authorization: `Bearer ${token}`, Accept: "application/json" }
+    );
+  } catch {
+    return null;
+  }
+  if (!res.ok) return null;
+
+  const body = (await res.json().catch(() => null)) as { uuid?: unknown } | null;
+  return typeof body?.uuid === "string" && body.uuid.trim().length > 0
+    ? body.uuid.trim()
+    : null;
+}
+
+/**
  * Fetch the cloud-recording transcript (raw WebVTT text) for one of the
  * connected account's meetings. `meetingRef` is whatever the owner pasted,
  * numeric ID, UUID, or recording link (see normalizeZoomMeetingRef). Never
  * throws, every failure returns a typed, owner-presentable result.
+ *
+ * Zoom quirk closed in Jul 2026: a NUMERIC id often 404s for instant/ended
+ * meetings (code 3322) even when a transcript exists, so on that 404 the
+ * id is resolved to its past-meeting instance UUID (scope permitting) and
+ * the lookup retried once through the UUID.
  */
 export async function fetchZoomMeetingTranscript(
   businessId: string,
@@ -201,7 +249,14 @@ export async function fetchZoomMeetingTranscript(
   if (metaRes.status === 404) {
     // Zoom quirk: for instant/ended meetings the numeric ID often 404s
     // (code 3322) even though the portal shows a transcript, only the
-    // past-meeting instance UUID resolves. Steer the owner to the link.
+    // past-meeting instance UUID resolves. When the reference was numeric,
+    // resolve it to the instance UUID and retry once through that path
+    // (fail-open: without the past-meeting scope the resolver returns null
+    // and the owner gets the steer-to-link copy, exactly as before).
+    if (/^\d{9,15}$/.test(segment)) {
+      const uuid = await resolvePastMeetingUuid(businessId, segment, deps);
+      if (uuid) return fetchZoomMeetingTranscript(businessId, uuid, deps);
+    }
     return {
       ok: false,
       error: "not_found",

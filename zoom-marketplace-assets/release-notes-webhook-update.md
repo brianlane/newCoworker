@@ -2,7 +2,20 @@
 
 ## What changed since the approved 2026-07-24 publication
 
-NO scope changes. One EVENT SUBSCRIPTION was added, with two events:
+ONE scope was ADDED: `meeting:read:past_meeting`.
+
+WHY: Zoom's transcript endpoint (GET /meetings/{id}/transcript) resolves a
+NUMERIC meeting ID only for scheduled meetings; for instant/ended meetings it
+returns 404 (code 3322) and only the past-meeting instance UUID resolves. When
+the connected owner pastes one of THEIR OWN meeting IDs into the minutes
+import, the app now calls GET /past_meetings/{meetingId} once to translate the
+ID to its instance UUID, then fetches the transcript exactly as before. The
+same UUID keys the server-side de-duplication between manual imports and the
+automatic webhook import. No other past-meeting data (participants, polls,
+details beyond the uuid field) is read or stored. Exercised by Step 6 of the
+reviewer test plan (paste the numeric meeting ID of an instant meeting).
+
+One EVENT SUBSCRIPTION was also added, with two events:
 
 1. `recording.transcript_completed` - powers automatic meeting minutes.
    When the connected owner cloud-records one of THEIR OWN meetings with

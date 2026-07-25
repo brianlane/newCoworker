@@ -17,7 +17,8 @@ vi.mock("@/lib/zoom/client", () => ({
 import {
   fetchZoomMeetingTranscript,
   normalizeZoomMeetingRef,
-  rawZoomMeetingUuid
+  rawZoomMeetingUuid,
+  resolvePastMeetingUuid
 } from "@/lib/zoom/transcript";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -101,6 +102,103 @@ describe("rawZoomMeetingUuid", () => {
     expect(rawZoomMeetingUuid("https://[bad")).toBeNull();
     expect(rawZoomMeetingUuid("not a meeting")).toBeNull();
     expect(rawZoomMeetingUuid("   ")).toBeNull();
+  });
+});
+
+describe("resolvePastMeetingUuid", () => {
+  const UUID_RAW = "jhqVQlf1RyuEX/1TCRs+Jg==";
+
+  it("resolves a numeric id to the latest past-meeting instance UUID", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(jsonResponse(200, { uuid: ` ${UUID_RAW} ` }));
+    expect(await resolvePastMeetingUuid(BIZ, MEETING, { fetchImpl })).toBe(UUID_RAW);
+    expect(fetchImpl).toHaveBeenCalledWith(
+      `https://api.zoom.us/v2/past_meetings/${MEETING}`,
+      expect.objectContaining({
+        headers: expect.objectContaining({ Authorization: "Bearer tok-1" })
+      })
+    );
+  });
+
+  it("refuses non-numeric references without calling Zoom", async () => {
+    const fetchImpl = vi.fn();
+    expect(await resolvePastMeetingUuid(BIZ, UUID_RAW, { fetchImpl })).toBeNull();
+    expect(await resolvePastMeetingUuid(BIZ, "12345", { fetchImpl })).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+    // Default-deps entry (global fetch binding) with the same early return.
+    expect(await resolvePastMeetingUuid(BIZ, "12345")).toBeNull();
+  });
+
+  it("fails open when the token is missing or resolution throws", async () => {
+    const fetchImpl = vi.fn();
+    getZoomAccessToken.mockResolvedValueOnce(null);
+    expect(await resolvePastMeetingUuid(BIZ, MEETING, { fetchImpl })).toBeNull();
+
+    getZoomAccessToken.mockRejectedValueOnce(new Error("refresh down"));
+    expect(await resolvePastMeetingUuid(BIZ, MEETING, { fetchImpl })).toBeNull();
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
+  it("fails open on non-2xx (pre-scope tokens 401 here) and on transport errors", async () => {
+    const denied = vi.fn().mockResolvedValue(jsonResponse(401, { code: 124 }));
+    expect(await resolvePastMeetingUuid(BIZ, MEETING, { fetchImpl: denied })).toBeNull();
+
+    const down = vi.fn().mockRejectedValue(new Error("net down"));
+    expect(await resolvePastMeetingUuid(BIZ, MEETING, { fetchImpl: down })).toBeNull();
+  });
+
+  it("returns null when the response carries no usable uuid", async () => {
+    const noUuid = vi.fn().mockResolvedValue(jsonResponse(200, { id: 123 }));
+    expect(await resolvePastMeetingUuid(BIZ, MEETING, { fetchImpl: noUuid })).toBeNull();
+
+    const blank = vi.fn().mockResolvedValue(jsonResponse(200, { uuid: "  " }));
+    expect(await resolvePastMeetingUuid(BIZ, MEETING, { fetchImpl: blank })).toBeNull();
+
+    const badJson = vi.fn().mockResolvedValue(new Response("not json", { status: 200 }));
+    expect(await resolvePastMeetingUuid(BIZ, MEETING, { fetchImpl: badJson })).toBeNull();
+  });
+});
+
+describe("fetchZoomMeetingTranscript numeric-404 UUID retry", () => {
+  const UUID_RAW = "jhqVQlf1RyuEX/1TCRs+Jg==";
+
+  it("resolves the instance UUID and retries once on a numeric 404", async () => {
+    const fetchImpl = vi
+      .fn()
+      // 1: numeric transcript lookup 404s (the instant-meeting quirk)
+      .mockResolvedValueOnce(jsonResponse(404, { code: 3322 }))
+      // 2: past_meetings resolves the instance UUID
+      .mockResolvedValueOnce(jsonResponse(200, { uuid: UUID_RAW }))
+      // 3: UUID transcript lookup succeeds
+      .mockResolvedValueOnce(
+        jsonResponse(200, { can_download: true, download_url: "https://zoom.us/dl/vtt" })
+      )
+      // 4: the VTT download
+      .mockResolvedValueOnce(new Response(VTT));
+    const res = await fetchZoomMeetingTranscript(BIZ, MEETING, { fetchImpl });
+    expect(res).toMatchObject({ ok: true });
+    expect(fetchImpl.mock.calls[1][0]).toBe(
+      `https://api.zoom.us/v2/past_meetings/${MEETING}`
+    );
+    expect(fetchImpl.mock.calls[2][0]).toBe(
+      `https://api.zoom.us/v2/meetings/${encodeURIComponent(UUID_RAW)}/transcript`
+    );
+  });
+
+  it("keeps the steer-to-link copy when the UUID cannot be resolved (pre-scope)", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(jsonResponse(404, { code: 3322 }))
+      .mockResolvedValueOnce(jsonResponse(401, { code: 124 }));
+    const res = await fetchZoomMeetingTranscript(BIZ, MEETING, { fetchImpl });
+    expect(res).toMatchObject({ ok: false, error: "not_found" });
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+  });
+
+  it("does not attempt resolution for a non-numeric 404", async () => {
+    const fetchImpl = vi.fn().mockResolvedValueOnce(jsonResponse(404, { code: 3301 }));
+    const res = await fetchZoomMeetingTranscript(BIZ, UUID_RAW, { fetchImpl });
+    expect(res).toMatchObject({ ok: false, error: "not_found" });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
   });
 });
 
