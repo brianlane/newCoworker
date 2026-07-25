@@ -22,15 +22,24 @@ import {
   voiceToolValidationError
 } from "@/lib/voice-tools/common";
 import { docExtract } from "@/lib/ai-flows/doc-extract";
+import { MAX_EXTRACT_FIELDS } from "@/lib/ai-flows/schema";
 import { logger } from "@/lib/logger";
 import { recordSystemLog } from "@/lib/db/system-logs";
 
 export const maxDuration = 120;
 export const runtime = "nodejs";
 
-const bodySchema = z.object({
+/**
+ * Exported for the boundary test: doc_extract is the one extraction step whose
+ * fields travel over HTTP, so a cap here that disagrees with the flow schema
+ * rejects a saved flow at RUN time. The test asserts the two agree.
+ */
+export const docExtractBodySchema = z.object({
   businessId: z.string().uuid(),
   sourceRef: z.string().min(1).max(600),
+  // Shares the schema's cap rather than restating it: doc_extract is the one
+  // extraction step whose fields cross an HTTP boundary, so a hardcoded number
+  // here would silently reject flows the builder accepted (Bugbot on #924).
   fields: z
     .array(
       z.object({
@@ -39,7 +48,7 @@ const bodySchema = z.object({
       })
     )
     .min(1)
-    .max(15),
+    .max(MAX_EXTRACT_FIELDS),
   fileAs: z
     .object({
       title: z.string().min(1).max(200),
@@ -55,9 +64,9 @@ const bodySchema = z.object({
 });
 
 export async function POST(request: Request) {
-  let body: z.infer<typeof bodySchema>;
+  let body: z.infer<typeof docExtractBodySchema>;
   try {
-    body = bodySchema.parse(await request.json());
+    body = docExtractBodySchema.parse(await request.json());
   } catch (err) {
     const detail =
       err instanceof z.ZodError ? err.issues[0]?.message ?? "invalid args" : "invalid body";

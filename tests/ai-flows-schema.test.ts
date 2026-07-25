@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { docExtractBodySchema } from "@/app/api/internal/aiflow-doc-extract/route";
 import {
   AiFlowValidationError,
   aiFlowDefinitionSchema,
   collectTemplateRefs,
+  MAX_EXTRACT_FIELDS,
   parseAiFlowDefinition,
   summarizeDefinition,
   validateDefinitionSemantics,
@@ -3679,5 +3681,85 @@ describe("share_document steps", () => {
       )
     );
     expect(dirty.some((i) => /unknown template scope "mystery"/.test(i))).toBe(true);
+  });
+});
+
+/**
+ * DRIFT GUARD for the extraction field cap.
+ *
+ * The cap was hand-typed as a bare `.max(15)` on the first extraction step in
+ * the original engine (#114) and then COPIED into every extraction step added
+ * afterwards. That is why raising it later meant editing five places, and why a
+ * sixth extraction step could silently ship with a different number. These
+ * tests pin the cap to the exported constant on every step type that reads
+ * fields, so the next one has to use it too.
+ */
+describe("extraction field cap", () => {
+  /** A definition whose ONE extraction step asks for `count` fields. */
+  const withFieldCount = (type: string, count: number, extra: Record<string, unknown> = {}) => ({
+    version: 1,
+    trigger: { channel: "manual" },
+    steps: [
+      { id: "u", type: "extract_url", saveAs: "lead_url" },
+      {
+        id: "x",
+        type,
+        fields: Array.from({ length: count }, (_, i) => ({ name: `f${i}` })),
+        ...extra
+      }
+    ]
+  });
+
+  const EXTRACTION_STEPS: { type: string; extra?: Record<string, unknown> }[] = [
+    { type: "extract_text" },
+    { type: "browse_extract", extra: { urlVar: "lead_url" } },
+    {
+      type: "email_extract",
+      extra: { connectionId: "9ddd5344-14f2-46df-a89d-dddc2d50e944" }
+    },
+    { type: "doc_extract" },
+    {
+      type: "browse_action",
+      extra: { urlVar: "lead_url", actions: [{ kind: "click_text", target: "Accept" }] }
+    }
+  ];
+
+  it("every extraction step type accepts exactly the cap and refuses one more", () => {
+    for (const { type, extra } of EXTRACTION_STEPS) {
+      expect(
+        () => aiFlowDefinitionSchema.parse(withFieldCount(type, MAX_EXTRACT_FIELDS, extra)),
+        `${type} should accept ${MAX_EXTRACT_FIELDS} fields`
+      ).not.toThrow();
+      expect(
+        () => aiFlowDefinitionSchema.parse(withFieldCount(type, MAX_EXTRACT_FIELDS + 1, extra)),
+        `${type} should refuse ${MAX_EXTRACT_FIELDS + 1} fields`
+      ).toThrow();
+    }
+  });
+
+  it("the cap leaves real headroom over the widest flow the platform ships", () => {
+    // New Lead Intake parses 15 fields; a cap at or below that would force a
+    // second extraction step (and a second Gemini call) on a shipped flow.
+    expect(MAX_EXTRACT_FIELDS).toBeGreaterThan(15);
+  });
+
+  /**
+   * doc_extract is the ONE extraction step whose fields cross an HTTP boundary
+   * (the worker cannot run Gemini's document pipeline from the edge runtime, so
+   * it proxies to /api/internal/aiflow-doc-extract). That route validates its
+   * own body, so a hardcoded cap there rejects flows the builder accepted, at
+   * RUN time, on a step that already consumed the trigger. Bugbot caught
+   * exactly that on #924, where raising the schema left the route at 15.
+   */
+  it("the doc_extract adapter route accepts every field count the flow schema allows", () => {
+    const body = (count: number) => ({
+      businessId: "11111111-1111-4111-8111-111111111111",
+      sourceRef: "email-attachments:tenant/msg/policy.pdf",
+      fields: Array.from({ length: count }, (_, i) => ({ name: `f${i}` }))
+    });
+    // The contract that matters: anything the builder saved, the route runs.
+    expect(docExtractBodySchema.safeParse(body(MAX_EXTRACT_FIELDS)).success).toBe(true);
+    expect(docExtractBodySchema.safeParse(body(MAX_EXTRACT_FIELDS + 1)).success).toBe(false);
+    expect(docExtractBodySchema.safeParse(body(0)).success).toBe(false);
   });
 });
