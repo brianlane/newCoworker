@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { translatorModeCue } from "../vps/voice-bridge/src/system-instruction";
+import {
+  systemInstructionForBusiness,
+  translatorModeCue
+} from "../vps/voice-bridge/src/system-instruction";
 
 /**
  * Live translator mode: after a warm transfer the AI stays on the bridged call
@@ -138,10 +141,193 @@ describe("the bridge only interprets on a call that was armed at answer time", (
 
   it("detaches before teardown at the ceiling so the humans keep talking", () => {
     const fn = src.slice(src.indexOf("const scheduleTranslatorCeiling"));
-    const detachAt = fn.indexOf("opts.transfer.detach");
+    const detachAt = fn.indexOf("const detach = opts.detachMedia ?? opts.transfer?.detach;");
     const teardownAt = fn.indexOf("await teardown()");
     expect(detachAt).toBeGreaterThan(-1);
     expect(teardownAt).toBeGreaterThan(detachAt);
+  });
+
+  it("can detach without a transfer capability, which the staff path has none of", () => {
+    // Regression: the ceiling originally detached only through
+    // transfer.detach, so a tenant with no transfer target would close the
+    // Gemini session while Telnyx kept streaming to a bridge with no session.
+    const fn = src.slice(src.indexOf("const scheduleTranslatorCeiling"));
+    expect(fn.slice(0, 1600)).toContain("opts.detachMedia ?? opts.transfer?.detach");
+    const idx = readFileSync(INDEX, "utf8");
+    // Wired unconditionally on the API key, NOT gated on a transfer target.
+    expect(idx).toContain("const detachMedia = detachMediaApiKey");
+    expect(idx).toContain("detachMedia,");
+  });
+});
+
+describe("staff-requested translator mode (they add the other person themselves)", () => {
+  const src = readFileSync(BRIDGE, "utf8");
+  const decls = readFileSync(
+    join(__dirname, "../vps/voice-bridge/src/tool-declarations.ts"),
+    "utf8"
+  );
+
+  it("frames the other party as someone the colleague is adding", () => {
+    const cue = translatorModeCue({ entry: "staff_request", humanName: "Amy" });
+    expect(cue).toContain("(Amy)");
+    expect(cue).toContain("asked you to interpret");
+    expect(cue).toContain("adding someone");
+    expect(cue).toContain("Everyone on the call can hear you");
+  });
+
+  it("uses the language the staff member named, and still follows what it hears", () => {
+    const cue = translatorModeCue({ entry: "staff_request", otherLanguage: "Spanish" });
+    expect(cue).toContain("said that person speaks Spanish");
+    expect(cue).toContain("Put what your colleague says into Spanish");
+    expect(cue).toContain("Follow the languages you actually hear");
+  });
+
+  it("degrades to relative wording when no language was named", () => {
+    const cue = translatorModeCue({ entry: "staff_request" });
+    expect(cue).toContain("the other person's language");
+    expect(cue).not.toContain("said that person speaks");
+  });
+
+  it("waits through the dialing and hold tones instead of narrating them", () => {
+    // The staff member needs a moment to merge the other person in; an
+    // interpreter that starts talking over hold music is unusable.
+    const cue = translatorModeCue({ entry: "staff_request" });
+    expect(cue).toContain("Wait quietly until you hear the other person");
+    expect(cue).toContain("never talk over that");
+  });
+
+  it("keeps the same relay discipline as the transfer path", () => {
+    const cue = translatorModeCue({ entry: "staff_request" });
+    expect(cue).toContain("FIRST PERSON");
+    expect(cue).toContain("Never answer a question yourself");
+    expect(cue).toContain("Do not use any tools from here on");
+    expect(cue).toContain("never fill a pause");
+  });
+
+  it("carries no em dash (repo writing rule)", () => {
+    expect(
+      translatorModeCue({ entry: "staff_request", humanName: "Amy", otherLanguage: "Spanish" })
+    ).not.toContain("\u2014");
+  });
+
+  it("is declared as a voice tool so the registry parity guard is satisfied", () => {
+    expect(decls).toContain('name: "start_translator_mode"');
+  });
+
+  it("is withheld from customer callers at declaration time", () => {
+    // Named in STAFF_ONLY_TOOLS alongside run_aiflow, and registered only under
+    // the callerIsStaff branch below, so a customer never sees the declaration.
+    expect(src).toContain('STAFF_ONLY_TOOLS = new Set(["run_aiflow", "start_translator_mode"])');
+    expect(src).toContain(
+      "if (!intake && callerIsStaff && opts.translatorOnRequestEnabled) {"
+    );
+  });
+
+  it("does not depend on the HTTP voice-tools proxy being configured", () => {
+    // Bugbot: it was registered inside the `voiceToolsReady` loop with the
+    // PROXIED tools, so a box missing APP_BASE_URL or the gateway token lost a
+    // tool that needs neither. Bridge-local tools follow transfer_to_owner and
+    // end_call instead, which are declared outside that gate.
+    expect(src).toContain('BRIDGE_LOCAL_TOOLS = new Set(["start_translator_mode"])');
+    expect(src).toContain("if (BRIDGE_LOCAL_TOOLS.has(decl.name)) continue;");
+    // The registration block must sit OUTSIDE the voiceToolsReady loop.
+    const loopAt = src.indexOf("if (!intake && voiceToolsReady) {");
+    const bridgeLocalAt = src.indexOf(
+      "if (!intake && callerIsStaff && opts.translatorOnRequestEnabled) {"
+    );
+    expect(bridgeLocalAt).toBeGreaterThan(loopAt);
+    const between = src.slice(loopAt, bridgeLocalAt);
+    // The loop closes before the bridge-local block opens.
+    expect(between).toContain("declarations.push(decl);");
+  });
+
+  it("refuses a customer a second time in the handler, not just by omission", () => {
+    // Defense in depth: a leaked declaration must not be enough to silence the
+    // receptionist for the rest of a stranger's call.
+    const handler = src.slice(src.indexOf('if (name === "start_translator_mode")'));
+    expect(handler.slice(0, 900)).toContain("voice_bridge_translator_staff_refused");
+    expect(handler.slice(0, 900)).toContain(
+      "translator mode is only available to the business's own team"
+    );
+  });
+
+  it("needs no target-legs arming, unlike the post-transfer path", () => {
+    // The AI is already audible on the staff member's own leg, so whatever they
+    // merge in hears it through that leg. Nothing to arm, nothing to fail open to.
+    const handler = src.slice(src.indexOf('if (name === "start_translator_mode")'));
+    const body = handler.slice(0, handler.indexOf('if (name === "capture_lead"'));
+    // It must not consult the answer-time arming flag the transfer path needs.
+    expect(body).not.toContain("transfer!.translatorMode");
+    expect(body).not.toContain("translatorModeEnabled");
+    expect(body).toContain("scheduleTranslatorCeiling()");
+  });
+
+  it("honors the Settings toggle, which a bridge-local tool has no adapter to enforce", async () => {
+    // Bugbot: the registry advertises this as configurable, but HTTP-proxied
+    // voice tools are gated app-side by agentToolDisabledResponse and a
+    // bridge-local tool has no such chokepoint. Without the read below the
+    // Settings switch would be decoration.
+    expect(src).toContain(
+      "if (!intake && callerIsStaff && opts.translatorOnRequestEnabled) {"
+    );
+    const handler = src.slice(src.indexOf('if (name === "start_translator_mode")'));
+    expect(handler.slice(0, 1600)).toContain("voice_bridge_translator_tool_disabled");
+    // index.ts resolves it from agent_tool_settings, staff calls only.
+    const idx = readFileSync(INDEX, "utf8");
+    expect(idx).toContain('toolKey: "start_translator_mode"');
+    expect(idx).toContain("translatorOnRequestEnabled");
+  });
+
+  it("teaches the tool in the staff prompt only when it was actually declared", () => {
+    // Bugbot: with the toggle off the declaration is withheld, so a prompt that
+    // still coached the tool would have the model try to call something that
+    // does not exist. There is no adapter to answer "tool_disabled" here.
+    const staffWith = systemInstructionForBusiness(
+      "Acme",
+      false,
+      true,
+      undefined,
+      undefined,
+      null,
+      { kind: "owner", name: "Amy" },
+      false,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true
+    );
+    const staffWithout = systemInstructionForBusiness(
+      "Acme",
+      false,
+      true,
+      undefined,
+      undefined,
+      null,
+      { kind: "owner", name: "Amy" },
+      false,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false
+    );
+    expect(staffWith).toContain("`start_translator_mode`");
+    expect(staffWithout).not.toContain("start_translator_mode");
+    // Default (omitted) keeps the prompt as it was before the tool existed.
+    expect(
+      systemInstructionForBusiness("Acme", false, true, undefined, undefined, null, {
+        kind: "owner"
+      })
+    ).not.toContain("start_translator_mode");
+    // The bridge derives the flag from the declarations it just built.
+    expect(src).toContain('declarations.some((d) => d.name === "start_translator_mode")');
+  });
+
+  it("bounds the staff-requested stretch with the same ceiling", () => {
+    const handler = src.slice(src.indexOf('if (name === "start_translator_mode")'));
+    const body = handler.slice(0, handler.indexOf('if (name === "capture_lead"'));
+    expect(body).toContain("scheduleTranslatorCeiling()");
   });
 });
 

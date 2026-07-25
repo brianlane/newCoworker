@@ -95,7 +95,16 @@ export function systemInstructionForBusiness(
   flowContextNote?: string,
   recentInteractionsNote?: string,
   bookingStatusNote?: string,
-  languagePrefs?: VoiceLanguagePrefs
+  languagePrefs?: VoiceLanguagePrefs,
+  /**
+   * Whether the bridge actually DECLARED `start_translator_mode` for this
+   * session (staff caller + the owner's Settings toggle on). The prompt must not
+   * teach a tool the model cannot call: unlike HTTP-proxied tools there is no
+   * adapter to answer "tool_disabled", so the model would either invent the
+   * behavior or stall. Defaults false, which keeps the prompt byte-identical to
+   * before the tool existed.
+   */
+  hasTranslatorOnRequest = false
 ): string {
   // Identity: present as a member of the team, never as software. The owner
   // wants callers to hear "the assistant", not "the AI assistant". Shared by
@@ -182,6 +191,14 @@ export function systemInstructionForBusiness(
         "- `document_share` to text them an expiring link to a document listed in your documents.md briefing when they need a copy.",
         "- `send_follow_up_sms` to text them a short summary or link, and `send_follow_up_email` to email them; if email returns `email_not_connected`, send it by text instead.",
         "- `notify_team` when they ask you to pass a message to someone else on the team.",
+        // Staff-only AND Settings-gated: taught only when the bridge actually
+        // declared it, since there is no adapter to answer "tool_disabled" for a
+        // bridge-local tool the model was coached to call but cannot.
+        ...(hasTranslatorOnRequest
+          ? [
+              "- `start_translator_mode` when they ask you to translate or interpret, or say they are about to add someone to the call who does not speak their language. Tell them you are ready and will stay quiet until they bring the other person on, then call it. After that you are only an interpreter for the rest of the call, so do not call it until they actually want that."
+            ]
+          : []),
         // Staff are not customers: do not create/edit a customer profile for
         // their number (the SMS gate avoids this too).
         "Do NOT use the customer CRM tools (`customer_lookup_by_phone`, `customer_set_display_name`, `customer_append_pinned_note`, `capture_caller_details`) on this caller — they are staff, not a customer.",
@@ -308,8 +325,11 @@ export function systemInstructionForBusiness(
 }
 
 /**
- * Coordinator cue that turns a live session into an INTERPRETER, sent the
- * moment a warm transfer with translator mode armed succeeds.
+ * Coordinator cue that turns a live session into an INTERPRETER. Sent either
+ * when a warm transfer with translator mode armed succeeds (`entry: "transfer"`,
+ * the default: a customer was just bridged to a colleague) or when staff ask for
+ * it directly mid-call (`entry: "staff_request"`: they are about to add someone
+ * to the call themselves, by conference or three-way).
  *
  * Delivered as a mid-call coordinator message (`sendRealtimeInput({ text })`,
  * the same channel the wind-down cues use) rather than a new system
@@ -317,19 +337,23 @@ export function systemInstructionForBusiness(
  * re-attaching the stream to get a fresh session would tear down this one (the
  * transcript, the reservation, and everything the caller already said).
  * Carrying the conversation forward is also the better product: the interpreter
- * already knows what the caller called about.
+ * already knows what the call is about.
  *
  * The wording is deliberately absolute. A model that keeps its receptionist
- * reflexes will answer the human's questions itself, which is worse than not
- * interpreting at all: the human believes they are hearing the caller.
+ * reflexes will answer questions itself, which is worse than not interpreting at
+ * all: the listener believes they are hearing the other person.
  */
 export function translatorModeCue(opts: {
   /** What the caller has been speaking, when we know it. */
   callerLanguage?: VoiceCustomerLanguage | null;
-  /** Name of the person who just picked up, when known. */
+  /** Name of the person who just picked up (transfer) or who asked (staff). */
   humanName?: string;
   /** Speak a one-line disclosure to the human as they join. */
   discloseToHuman?: boolean;
+  /** How interpreting began. Defaults to the post-transfer path. */
+  entry?: "transfer" | "staff_request";
+  /** Language the staff member named for the other party, when they did. */
+  otherLanguage?: string;
 }): string {
   const human = opts.humanName?.trim();
   const callerLang =
@@ -338,6 +362,28 @@ export function translatorModeCue(opts: {
       : opts.callerLanguage === "en"
         ? "English"
         : null;
+  if (opts.entry === "staff_request") {
+    // Staff asked directly: the OTHER party is whoever they are adding, the
+    // language we know is the one they named, and the AI must wait through the
+    // dialing/hold audio instead of narrating it.
+    const namedOther = opts.otherLanguage?.trim();
+    const staffParts = [
+      "[Coordinator] Your colleague" +
+        (human ? ` (${human})` : "") +
+        " has asked you to interpret for the rest of this call. They are adding someone who does not speak their language" +
+        (namedOther ? `, and said that person speaks ${namedOther}` : "") +
+        ". From this moment on you are ONLY an interpreter between them. Everyone on the call can hear you.",
+      "Interpret each turn, in both directions, and do nothing else. Put what your colleague says into" +
+        (namedOther ? ` ${namedOther}` : " the other person's language") +
+        ", and put what the other person says into your colleague's language. Follow the languages you actually hear, even if they differ from what you were told.",
+      "Wait quietly until you hear the other person. Your colleague needs a moment to add them and there may be dialing or hold tones first: never talk over that and never fill the gap.",
+      "Speak in the FIRST PERSON as whoever you are interpreting, the way a professional interpreter does: if they say they need to reschedule, you say I need to reschedule. Never say things like he says or she is asking.",
+      "Never answer a question yourself, never add, explain, soften, summarize, or leave anything out, and never take a side. If a question is directed at you rather than at the other person, interpret it anyway. You have no other job on this call.",
+      "Do not use any tools from here on, do not book, text, email, look anything up, or end the call. Do not comment on the conversation.",
+      "Say nothing at all while nobody is speaking. Silence is correct: never fill a pause."
+    ];
+    return staffParts.join(" ");
+  }
   const parts: string[] = [
     "[Coordinator] The call has just been connected to a colleague" +
       (human ? ` (${human})` : "") +

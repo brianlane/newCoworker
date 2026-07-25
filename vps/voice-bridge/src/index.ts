@@ -31,6 +31,7 @@ import {
   loadContactPreferredLanguage,
   resolveVoiceLanguagePrefs
 } from "./language-prefs.js";
+import { isBridgeToolEnabled } from "./tool-settings.js";
 import { loadVoiceBookingLine } from "./booking-context.js";
 import type { TranscriptAdapter } from "./voice-transcript.js";
 import { startIdleHeartbeatLoop, writeHeartbeat } from "./heartbeat.js";
@@ -1229,6 +1230,27 @@ function main(): void {
       // Let the assistant hang up when the conversation is over. Available on
       // every call (inbound + outbound) whenever we have a Telnyx API key — the
       // bridge gates the `end_call` tool on this capability being present.
+      // Stop this call's media fork without hanging the leg up. Wired
+      // unconditionally (not only alongside `transfer`) because translator mode
+      // can be entered by staff on a tenant with no transfer target at all, and
+      // the interpreter ceiling must be able to detach on that path too.
+      const detachMediaApiKey = process.env.TELNYX_API_KEY ?? "";
+      const detachMedia = detachMediaApiKey
+        ? async (): Promise<{ ok: boolean; detail?: string }> => {
+            const result = await telnyxStreamingStop(detachMediaApiKey, callControlId);
+            if (!result.ok) {
+              console.error(
+                "voice-bridge: detachMedia streaming_stop failed",
+                result.status,
+                result.body
+              );
+              return { ok: false, detail: `telnyx ${result.status}` };
+            }
+            console.log("voice-bridge: detachMedia (streaming_stop)", { callControlId });
+            return { ok: true, detail: "streaming stopped" };
+          }
+        : undefined;
+
       const hangupApiKey = process.env.TELNYX_API_KEY ?? "";
       const hangup: HangupCapability | undefined = hangupApiKey
         ? {
@@ -1562,6 +1584,22 @@ function main(): void {
           // hardcode English, so a Spanish-speaking caller was greeted in the
           // wrong language on every call. Best-effort by contract: a failed
           // contact read degrades to the tenant default, never a refused call.
+          // Settings → Coworker tools for the bridge-local translator tool.
+          // HTTP-proxied voice tools are gated app-side by
+          // agentToolDisabledResponse; a bridge-local one has no such
+          // chokepoint, so read the owner's row here or the toggle would be
+          // decoration. Only staff callers can reach the tool at all, so skip
+          // the read entirely for a customer call.
+          const translatorOnRequestEnabled = callerIsStaff
+            ? await isBridgeToolEnabled(supabase, {
+                businessId,
+                agentKey: "voice",
+                toolKey: "start_translator_mode",
+                // Registry default for this tool (src/lib/agent-tools/registry.ts).
+                defaultEnabled: true
+              })
+            : false;
+
           const languagePrefs = resolveVoiceLanguagePrefs({
             contactPreferredLanguage: trustedFromE164
               ? await loadContactPreferredLanguage(supabase, businessId, trustedFromE164)
@@ -1584,6 +1622,7 @@ function main(): void {
             businessTimezone,
             transfer,
             hangup,
+            detachMedia,
             direction: callDirection,
             vault,
             // Trusted number only: this flows into the transcript's caller_e164
@@ -1597,6 +1636,7 @@ function main(): void {
             recentInteractionsNote,
             bookingStatusNote,
             languagePrefs,
+            translatorOnRequestEnabled,
             callerIdentity,
             intake,
             recordDiag

@@ -319,6 +319,26 @@ export function buildVoiceToolDeclarations(): VoiceToolDeclaration[] {
         },
         required: ["note"]
       }
+    },
+    {
+      // STAFF ONLY. The bridge withholds this declaration from customer callers
+      // (CUSTOMER_EXCLUDED_TOOLS in gemini-telnyx-bridge.ts) and the handler
+      // refuses it a second time, because "start interpreting" from a customer
+      // would let anyone silence the receptionist.
+      name: "start_translator_mode",
+      description:
+        "Become a live interpreter for the rest of this call. Use ONLY when the owner or a team member asks you to translate, usually because they are about to add someone to the call (conference or three-way) who does not speak their language. After this you stop assisting and only relay what each person says. Tell them you are ready before calling it.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          otherLanguage: {
+            type: Type.STRING,
+            description:
+              "The language the other person speaks, if they said it (e.g. 'Spanish'). Omit if unknown; you will follow whatever you hear."
+          }
+        },
+        required: []
+      }
     }
   ];
 }

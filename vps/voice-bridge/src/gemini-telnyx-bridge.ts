@@ -291,6 +291,15 @@ export type GeminiBridgeOptions = {
   /** When set, registers an `end_call` tool so the assistant can hang up when done. */
   hangup?: HangupCapability;
   /**
+   * Stop THIS call's media fork (Telnyx `streaming_stop`) without hanging the
+   * leg up. Independent of `transfer`, because translator mode can also be
+   * entered by staff on a tenant that has no transfer target configured at all:
+   * relying on `transfer.detach` there would close the Gemini session at the
+   * interpreter ceiling while leaving Telnyx streaming audio to a bridge that no
+   * longer has a session. Provided by index.ts whenever a Telnyx API key exists.
+   */
+  detachMedia?: () => Promise<{ ok: boolean; detail?: string }>;
+  /**
    * Whether the business received this call (inbound) or placed it (outbound).
    * Recorded on the transcript so the dashboard can tag the call. Defaults to
    * inbound (the historical behaviour) when omitted.
@@ -366,6 +375,13 @@ export type GeminiBridgeOptions = {
    * the intake takeover.
    */
   languagePrefs?: VoiceLanguagePrefs;
+  /**
+   * Settings → Coworker tools state for the bridge-local
+   * `start_translator_mode` tool, resolved by index.ts (HTTP-proxied voice tools
+   * are gated app-side instead). Undefined/false withholds the declaration, so a
+   * disabled tool is not merely discouraged in the prompt.
+   */
+  translatorOnRequestEnabled?: boolean;
   /**
    * Who the caller is (owner / team member / customer). When the caller is
    * staff, the system instruction switches from the customer receptionist
@@ -771,11 +787,22 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
           callControlId: opts.callControlId,
           ceilingMs
         });
-        // Remove the fork first so the humans keep talking privately, then
-        // close the session. Same order (and same best-effort contract) as the
-        // normal post-transfer detach.
+        // Remove the fork FIRST so the humans keep talking privately, then close
+        // the session. `detachMedia` rather than `transfer.detach`: staff can
+        // enter translator mode on a tenant with no transfer target at all, and
+        // that path has no transfer capability to borrow a detach from. Without
+        // it Telnyx would keep streaming audio to a bridge whose session is gone.
+        const detach = opts.detachMedia ?? opts.transfer?.detach;
         try {
-          if (opts.transfer?.detach) await opts.transfer.detach();
+          if (detach) {
+            const d = await detach();
+            if (!d.ok) {
+              console.error("gemini-bridge: translator ceiling detach failed", d.detail);
+              emitDiag("voice_bridge_translator_ceiling_detach_failed", {
+                detail: d.detail ?? null
+              });
+            }
+          }
         } catch (err) {
           console.error("gemini-bridge: translator ceiling detach threw", err);
         }
@@ -1012,17 +1039,37 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     "customer_set_display_name",
     "customer_append_pinned_note"
   ]);
-  // The mirror image: starting one of the business's own automations is a
-  // STAFF action. Withholding the declaration from customer callers is the
-  // strong gate (the prompt alone would still let the model try it); the
-  // adapter re-resolves the caller server-side as defense in depth.
-  const STAFF_ONLY_TOOLS = new Set(["run_aiflow"]);
+  // The mirror image: starting one of the business's own automations, or asking
+  // the receptionist to stop assisting and become an interpreter for the rest of
+  // the call, is a STAFF action. Withholding the declaration from customer
+  // callers is the strong gate (the prompt alone would still let the model try
+  // it); each handler re-checks the caller as defense in depth.
+  const STAFF_ONLY_TOOLS = new Set(["run_aiflow", "start_translator_mode"]);
+  /**
+   * Tools handled ON THE BOX rather than proxied to `/api/voice/tools/*`. They
+   * are registered separately below because they must NOT depend on
+   * `voiceToolsReady` (the HTTP proxy's app URL + gateway token): they need no
+   * app round trip, exactly like `transfer_to_owner` and `end_call`. A box
+   * missing that config is degraded, but interpreting still works there.
+   */
+  const BRIDGE_LOCAL_TOOLS = new Set(["start_translator_mode"]);
   if (!intake && voiceToolsReady) {
     for (const decl of buildVoiceToolDeclarations()) {
       if (callerIsStaff && STAFF_EXCLUDED_TOOLS.has(decl.name)) continue;
       if (!callerIsStaff && STAFF_ONLY_TOOLS.has(decl.name)) continue;
+      if (BRIDGE_LOCAL_TOOLS.has(decl.name)) continue;
       declarations.push(decl);
     }
+  }
+  // Bridge-local staff tools. Gated on the caller being staff and on the owner's
+  // Settings → Coworker tools row (resolved by index.ts): a bridge-local tool has
+  // no app-side adapter to answer `tool_disabled`, so withholding the declaration
+  // is the enforcement.
+  if (!intake && callerIsStaff && opts.translatorOnRequestEnabled) {
+    const translatorDecl = buildVoiceToolDeclarations().find(
+      (d) => d.name === "start_translator_mode"
+    );
+    if (translatorDecl) declarations.push(translatorDecl);
   }
   // `end_call` is available to every persona (receptionist, staff, and intake)
   // whenever the host wired a hangup capability — so the assistant can cleanly
@@ -1099,7 +1146,9 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             opts.flowContextNote,
             opts.recentInteractionsNote,
             opts.bookingStatusNote,
-            opts.languagePrefs
+            opts.languagePrefs,
+            // Only teach the tool when it was actually declared above.
+            declarations.some((d) => d.name === "start_translator_mode")
           ),
       tools: toolsForSession
     },
@@ -1363,6 +1412,73 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         });
         continue;
       }
+      if (name === "start_translator_mode") {
+        // STAFF ONLY, checked here as well as at declaration time: a customer
+        // must never be able to silence the receptionist for the rest of a call.
+        const requesterIsStaff =
+          opts.callerIdentity != null && opts.callerIdentity.kind !== "customer";
+        if (!requesterIsStaff) {
+          emitDiag("voice_bridge_translator_staff_refused", {});
+          sendToolResponse(call.id, name, {
+            ok: false,
+            detail: "translator mode is only available to the business's own team"
+          });
+          continue;
+        }
+        // Settings → Coworker tools. The declaration is already withheld when
+        // disabled; refuse here too so a stale session cannot slip through.
+        if (!opts.translatorOnRequestEnabled) {
+          emitDiag("voice_bridge_translator_tool_disabled", {});
+          sendToolResponse(call.id, name, {
+            ok: false,
+            detail:
+              "The owner turned this tool off under Settings → Coworker tools. Tell them plainly instead of pretending it worked."
+          });
+          continue;
+        }
+        const otherLanguage =
+          typeof call.args?.otherLanguage === "string"
+            ? (call.args.otherLanguage as string).slice(0, 40)
+            : undefined;
+        // Unlike the post-transfer path this needs no target-legs arming: the AI
+        // is already audible on the staff member's own leg, and whatever they
+        // merge in (carrier three-way or a conference) hears it through that
+        // same leg's audio. So there is nothing to fail open to.
+        try {
+          session.sendRealtimeInput({
+            text: translatorModeCue({
+              entry: "staff_request",
+              humanName: opts.callerIdentity?.name,
+              otherLanguage
+            })
+          });
+        } catch (err) {
+          console.error("gemini-bridge: staff translator cue failed", err);
+          emitDiag("voice_bridge_translator_cue_failed", {
+            entry: "staff_request",
+            error: err instanceof Error ? err.message : String(err)
+          });
+          sendToolResponse(call.id, name, {
+            ok: false,
+            detail: "could not switch to interpreting"
+          });
+          continue;
+        }
+        translatorActive = true;
+        emitDiag("voice_bridge_translator_mode_entered", {
+          entry: "staff_request",
+          other_language: otherLanguage ?? null
+        });
+        console.log("gemini-bridge: translator mode entered (staff request)", {
+          callControlId: opts.callControlId
+        });
+        // The tool response lands BEFORE the flag is read by the wind-down
+        // timers, so acknowledge after flipping it.
+        sendToolResponse(call.id, name, { ok: true, detail: "interpreting" });
+        scheduleTranslatorCeiling();
+        continue;
+      }
+
       if (name === "capture_lead" && intake) {
         // Bridge-local: merge the captured fields so getLead() can return them
         // for the post-call SMS. Non-empty string values only.

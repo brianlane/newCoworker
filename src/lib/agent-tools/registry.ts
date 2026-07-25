@@ -303,6 +303,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         configurable: true
       },
       {
+        toolKey: "start_translator_mode",
+        label: "Interpret on request (your team only)",
+        description:
+          "When you or a teammate calls your own line and asks for a translator, your coworker becomes a live interpreter for the rest of that call, so you can add a customer who does not share your language. Only offered to your team's own numbers, never to customers.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
         toolKey: "customer_lookup_by_phone",
         label: "Recognize repeat customers",
         description: "Look up the caller's cross-channel history so they're greeted as a known customer.",
