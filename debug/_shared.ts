@@ -75,6 +75,13 @@ export async function resolveVpsIp(
  * (GOOGLE_API_KEY, MEMORY_CAPTURE_*, OLLAMA_BASE_URL) and removes the dead
  * router var — every other line in `.env` is left untouched.
  *
+ * It also reinstalls `/opt/newcoworker/scripts/heartbeat.sh` from the
+ * refreshed repo. That install used to live only in deploy-client.sh, which
+ * made a heartbeat or posture-check change require a FULL per-box redeploy to
+ * reach the fleet while this script pulled the new source and then ignored
+ * it. The README points at `update-all-vps` for `vps/` changes, so it needs
+ * to be true for the one `vps/` file that is not a container.
+ *
  * `set -euo pipefail` — `-e` is critical: without it a failed `git fetch`,
  * `rsync`, or `docker compose up` would NOT stop the script, the final
  * `docker logs … | tail` would exit 0, and sshExec (plus the fleet rollout
@@ -93,6 +100,21 @@ echo "== rsync chat-worker =="
 rsync -a --delete --exclude .env --exclude node_modules "$REPO/vps/chat-worker/" /opt/chat-worker/
 echo "== docker-compose extra_hosts check =="
 grep -n "host.docker.internal" /opt/chat-worker/docker-compose.yml || echo "NO extra_hosts!"
+
+# Refresh the cron-driven heartbeat too. Only deploy-client.sh installed it,
+# so a heartbeat/posture change needed a FULL redeploy per box (rewriting
+# .env, recreating containers, rotating the gateway token) to reach the
+# fleet, while this script quietly left the old copy in place after
+# refreshing the repo it comes from. Same install as deploy-client.sh, and
+# idempotent.
+echo "== install heartbeat.sh =="
+mkdir -p /opt/newcoworker/scripts
+if [ -f "$REPO/vps/scripts/heartbeat.sh" ]; then
+  install -m 0755 "$REPO/vps/scripts/heartbeat.sh" /opt/newcoworker/scripts/heartbeat.sh
+  echo "heartbeat.sh installed/updated"
+else
+  echo "WARN: $REPO/vps/scripts/heartbeat.sh missing; heartbeat not refreshed"
+fi
 
 echo "== reconcile capture env =="
 RB_ENV=/opt/rowboat/.env
