@@ -2,12 +2,12 @@
  * `booking_pages` rows: one public self-serve booking page per business.
  *
  * Service-role only (RLS on, no policies). The token is plaintext by
- * design (public capability — see keys.ts); everything else is the
+ * design (public capability, see keys.ts); everything else is the
  * availability policy the slot search applies on top of calendar
  * free/busy.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { mintBookingPageToken } from "@/lib/booking-page/keys";
+import { mintBookingPageToken, parseBookingPageSlug } from "@/lib/booking-page/keys";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -23,6 +23,10 @@ export type BookingPageRow = {
   max_daily_bookings: number | null;
   require_staff_on_shift: boolean;
   description: string | null;
+  /** Vanity /book/<slug> URL; null = token URL only. */
+  slug: string | null;
+  /** Public event title; null falls back to "Book a call with {business}". */
+  title: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -30,7 +34,7 @@ export type BookingPageRow = {
 const ALL_COLUMNS =
   "id,business_id,token,enabled,allowed_durations,min_notice_minutes," +
   "max_advance_days,buffer_minutes,max_daily_bookings,require_staff_on_shift," +
-  "description,created_at,updated_at";
+  "description,slug,title,created_at,updated_at";
 
 /** Resolve a page by its public token. Enabled pages only. */
 export async function getEnabledBookingPageByToken(
@@ -45,6 +49,22 @@ export async function getEnabledBookingPageByToken(
     .eq("enabled", true)
     .maybeSingle();
   if (error) throw new Error(`getEnabledBookingPageByToken: ${error.message}`);
+  return (data as unknown as BookingPageRow | null) ?? null;
+}
+
+/** Resolve a page by its vanity slug. Enabled pages only. */
+export async function getEnabledBookingPageBySlug(
+  slug: string,
+  client?: SupabaseClient
+): Promise<BookingPageRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("booking_pages")
+    .select(ALL_COLUMNS)
+    .eq("slug", slug)
+    .eq("enabled", true)
+    .maybeSingle();
+  if (error) throw new Error(`getEnabledBookingPageBySlug: ${error.message}`);
   return (data as unknown as BookingPageRow | null) ?? null;
 }
 
@@ -72,6 +92,10 @@ export type BookingPageSettingsPatch = {
   maxDailyBookings?: number | null;
   requireStaffOnShift?: boolean;
   description?: string | null;
+  /** Vanity URL slug; null/blank clears back to the token-only URL. */
+  slug?: string | null;
+  /** Public event title; null/blank restores the localized default. */
+  title?: string | null;
 };
 
 export class BookingPageValidationError extends Error {
@@ -137,6 +161,16 @@ function validatePatch(patch: BookingPageSettingsPatch): void {
   ) {
     throw new BookingPageValidationError("Description must be 500 characters or fewer");
   }
+  if (patch.slug !== undefined && patch.slug !== null && patch.slug.trim() !== "") {
+    if (parseBookingPageSlug(patch.slug) === null) {
+      throw new BookingPageValidationError(
+        "Custom link must be 3 to 60 lowercase letters, digits, or hyphens"
+      );
+    }
+  }
+  if (patch.title !== undefined && patch.title !== null && patch.title.length > 120) {
+    throw new BookingPageValidationError("Title must be 120 characters or fewer");
+  }
 }
 
 function patchColumns(patch: BookingPageSettingsPatch): Record<string, unknown> {
@@ -158,8 +192,24 @@ function patchColumns(patch: BookingPageSettingsPatch): Record<string, unknown> 
       : { require_staff_on_shift: patch.requireStaffOnShift }),
     ...(patch.description === undefined
       ? {}
-      : { description: patch.description?.trim() || null })
+      : { description: patch.description?.trim() || null }),
+    ...(patch.slug === undefined
+      ? {}
+      : { slug: patch.slug === null ? null : parseBookingPageSlug(patch.slug) }),
+    ...(patch.title === undefined ? {} : { title: patch.title?.trim() || null })
   };
+}
+
+/**
+ * Postgres unique-violation on the SLUG index → owner-facing message.
+ * Other unique violations (e.g. a concurrent first-time insert racing on
+ * uq_booking_pages_business) stay generic errors.
+ */
+function mapSlugCollision(message: string): Error {
+  if (message.includes("uq_booking_pages_slug")) {
+    return new BookingPageValidationError("That custom link is already taken");
+  }
+  return new Error(`upsertBookingPage: ${message}`);
 }
 
 /**
@@ -185,7 +235,7 @@ export async function upsertBookingPage(
       })
       .select(ALL_COLUMNS)
       .single();
-    if (error) throw new Error(`upsertBookingPage: ${error.message}`);
+    if (error) throw mapSlugCollision(error.message);
     return data as unknown as BookingPageRow;
   }
 
@@ -195,7 +245,7 @@ export async function upsertBookingPage(
     .eq("business_id", businessId)
     .select(ALL_COLUMNS)
     .single();
-  if (error) throw new Error(`upsertBookingPage: ${error.message}`);
+  if (error) throw mapSlugCollision(error.message);
   return data as unknown as BookingPageRow;
 }
 
@@ -216,7 +266,7 @@ export async function rotateBookingPageToken(
 }
 
 export type UpcomingBookingRow = {
-  /** `phone:+1480...` or `email:x@y` — the ledger's attendee identity. */
+  /** `phone:+1480...` or `email:x@y`, the ledger's attendee identity. */
   attendee_key: string;
   start_at: string;
   event_id: string | null;
@@ -224,7 +274,7 @@ export type UpcomingBookingRow = {
 };
 
 /**
- * Upcoming bookings from the dedupe ledger (soonest first) — the Bookings
+ * Upcoming bookings from the dedupe ledger (soonest first), the Bookings
  * dashboard list. Ledger-backed on purpose: it covers platform bookings on
  * every provider plus synced external Vagaro/Calendly claims, without a
  * provider API fan-out on page load.
@@ -246,8 +296,44 @@ export async function listUpcomingBookings(
   return (data ?? []) as UpcomingBookingRow[];
 }
 
+export type PlatformBookingRecord =
+  | { ok: true }
+  | { ok: false; reason: "duplicate" | "error" };
+
 /**
- * Booking start instants from the dedupe ledger inside a UTC window — the
+ * Record a PLATFORM-NATIVE booking (no calendar integration connected):
+ * a confirmed dedupe-ledger row with a synthetic `platform:` event id.
+ * The ledger IS the calendar of record in this mode, the dashboard's
+ * upcoming list, the daily cap, the attendee duplicate guard, and slot
+ * busy-blocking all read it. Unlike recordExternalBookingClaim (a
+ * best-effort sync mirror), a failure here is surfaced: this row is the
+ * booking.
+ */
+export async function recordPlatformBooking(
+  businessId: string,
+  attendeeKey: string,
+  startIso: string,
+  eventId: string,
+  zoomMeetingId: string | null,
+  client?: SupabaseClient
+): Promise<PlatformBookingRecord> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db.from("calendar_booking_dedupe").insert({
+    business_id: businessId,
+    attendee_key: attendeeKey,
+    start_at: startIso,
+    event_id: eventId,
+    zoom_meeting_id: zoomMeetingId
+  });
+  if (!error) return { ok: true };
+  if ((error as { code?: string }).code === "23505") {
+    return { ok: false, reason: "duplicate" };
+  }
+  return { ok: false, reason: "error" };
+}
+
+/**
+ * Booking start instants from the dedupe ledger inside a UTC window, the
  * daily-cap input (covers platform bookings on every provider plus synced
  * external Vagaro/Calendly claims). Callers group by business-local day.
  */
@@ -274,7 +360,7 @@ export async function listBookingStartsBetween(
 
 /**
  * Platform bookings created for a business-local day (UTC instants of the
- * day's bounds are computed by the caller) — the daily-cap input. Counts
+ * day's bounds are computed by the caller), the daily-cap input. Counts
  * the dedupe ledger, so external Vagaro/Calendly claims count too.
  */
 export async function countBookingsBetween(

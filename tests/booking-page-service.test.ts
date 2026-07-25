@@ -2,14 +2,28 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/booking-page/db", () => ({
   getEnabledBookingPageByToken: vi.fn(),
+  getEnabledBookingPageBySlug: vi.fn(),
   countBookingsBetween: vi.fn(),
-  listBookingStartsBetween: vi.fn()
+  listBookingStartsBetween: vi.fn(),
+  recordPlatformBooking: vi.fn()
 }));
 vi.mock("@/lib/voice-tools/connections", () => ({ resolveCalendarConnection: vi.fn() }));
 vi.mock("@/lib/calendar-tools/handlers", () => ({
   bookCalendarAppointment: vi.fn(),
-  getWorkspaceBusyBlocks: vi.fn()
+  getWorkspaceBusyBlocks: vi.fn(),
+  formatBookingStartLocal: vi.fn(() => "Monday, January 5, 2026 at 9:00 AM MST")
 }));
+vi.mock("@/lib/calendar-tools/attendee-bookings", () => ({
+  findUpcomingBookingsForAttendee: vi.fn()
+}));
+vi.mock("@/lib/calendar-tools/unassigned-booking-alert", () => ({
+  maybeAlertUnassignedBooking: vi.fn()
+}));
+vi.mock("@/lib/zoom/meetings", () => ({
+  createZoomMeetingForBooking: vi.fn(),
+  deleteZoomMeetingForBooking: vi.fn()
+}));
+vi.mock("@/lib/ai-flows/goal-hooks", () => ({ fireGoalEvent: vi.fn() }));
 vi.mock("@/lib/calendar-tools/caldav", () => ({ getCaldavBusyBlocks: vi.fn() }));
 vi.mock("@/lib/db/businesses", () => ({ getBusiness: vi.fn() }));
 vi.mock("@/lib/db/employees", () => ({ listTeamMembers: vi.fn(), listTimeOff: vi.fn() }));
@@ -18,7 +32,8 @@ vi.mock("@/lib/customer-memory/capture-contact", () => ({ ensureCapturedContact:
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }));
 vi.mock("@/lib/calendar-tools/booking-dedupe", () => ({
   claimBookingDedupe: vi.fn(),
-  releaseBookingDedupe: vi.fn()
+  releaseBookingDedupe: vi.fn(),
+  bookingAttendeeKey: vi.fn(() => "phone:+14805550100")
 }));
 vi.mock("@/lib/logger", () => ({
   logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() }
@@ -29,12 +44,22 @@ import {
   PUBLIC_SLOT_CLAIM_KEY,
   getBookingPageContext,
   listPublicSlots,
+  probeCalendarAvailability,
   submitPublicBooking
 } from "@/lib/booking-page/service";
 import {
+  getEnabledBookingPageBySlug,
   getEnabledBookingPageByToken,
-  listBookingStartsBetween
+  listBookingStartsBetween,
+  recordPlatformBooking
 } from "@/lib/booking-page/db";
+import { findUpcomingBookingsForAttendee } from "@/lib/calendar-tools/attendee-bookings";
+import { maybeAlertUnassignedBooking } from "@/lib/calendar-tools/unassigned-booking-alert";
+import {
+  createZoomMeetingForBooking,
+  deleteZoomMeetingForBooking
+} from "@/lib/zoom/meetings";
+import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import {
   bookCalendarAppointment,
@@ -69,6 +94,8 @@ const PAGE = {
   max_daily_bookings: null as number | null,
   require_staff_on_shift: false,
   description: "Strategy call",
+  slug: null as string | null,
+  title: null as string | null,
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z"
 };
@@ -96,6 +123,12 @@ const mockClientFactory = vi.mocked(createSupabaseServiceClient);
 const mockSlotClaim = vi.mocked(claimBookingDedupe);
 const mockSlotRelease = vi.mocked(releaseBookingDedupe);
 const mockListStarts = vi.mocked(listBookingStartsBetween);
+const mockRecordPlatform = vi.mocked(recordPlatformBooking);
+const mockUpcomingForAttendee = vi.mocked(findUpcomingBookingsForAttendee);
+const mockUnassignedAlert = vi.mocked(maybeAlertUnassignedBooking);
+const mockZoomCreate = vi.mocked(createZoomMeetingForBooking);
+const mockZoomDelete = vi.mocked(deleteZoomMeetingForBooking);
+const mockGoal = vi.mocked(fireGoalEvent);
 
 function ledgerDb(result: { data?: unknown; error?: { message: string } | null }) {
   const b: Record<string, unknown> = {};
@@ -120,6 +153,15 @@ beforeEach(() => {
   mockSlotClaim.mockResolvedValue({ kind: "claimed", id: "claim-1" });
   mockSlotRelease.mockResolvedValue(undefined);
   mockListStarts.mockResolvedValue([]);
+  mockRecordPlatform.mockResolvedValue({ ok: true });
+  mockUpcomingForAttendee.mockResolvedValue([]);
+  mockUnassignedAlert.mockResolvedValue("sent" as never);
+  mockZoomCreate.mockResolvedValue({
+    meetingId: "zm-1",
+    joinUrl: "https://zoom.example/j/9"
+  } as never);
+  mockZoomDelete.mockResolvedValue(undefined as never);
+  mockGoal.mockResolvedValue(undefined as never);
 });
 
 afterEach(() => {
@@ -127,7 +169,13 @@ afterEach(() => {
 });
 
 describe("getBookingPageContext", () => {
-  it("fails closed as not_found on malformed tokens, unknown tokens, and orphan pages", async () => {
+  it("fails closed as not_found on malformed refs, unknown tokens, and orphan pages", async () => {
+    // Neither a token nor a slug shape: refused before any DB read.
+    expect(await getBookingPageContext("Not A Ref!")).toEqual({
+      ok: false,
+      detail: "not_found"
+    });
+    // Valid slug shape with no matching page.
     expect(await getBookingPageContext("nope")).toEqual({ ok: false, detail: "not_found" });
 
     mockPage.mockResolvedValueOnce(null);
@@ -137,12 +185,7 @@ describe("getBookingPageContext", () => {
     expect(await getBookingPageContext(TOKEN)).toEqual({ ok: false, detail: "not_found" });
   });
 
-  it("requires a direct-booking calendar provider", async () => {
-    mockConn.mockResolvedValueOnce(null);
-    expect(await getBookingPageContext(TOKEN)).toEqual({
-      ok: false,
-      detail: "calendar_not_connected"
-    });
+  it("refuses Vagaro/Calendly (their book lives elsewhere), allows NO connection as platform mode", async () => {
     for (const provider of ["vagaro", "calendly"]) {
       mockConn.mockResolvedValueOnce({ provider } as never);
       expect(await getBookingPageContext(TOKEN)).toEqual({
@@ -150,6 +193,33 @@ describe("getBookingPageContext", () => {
         detail: "calendar_not_connected"
       });
     }
+    mockConn.mockResolvedValueOnce(null);
+    expect(await getBookingPageContext(TOKEN)).toMatchObject({
+      ok: true,
+      context: { mode: "platform" }
+    });
+    // A workspace connection resolves provider mode.
+    expect(await getBookingPageContext(TOKEN)).toMatchObject({
+      ok: true,
+      context: { mode: "provider" }
+    });
+  });
+
+  it("resolves by vanity slug and surfaces the custom title", async () => {
+    const bySlug = vi.mocked(getEnabledBookingPageBySlug);
+    bySlug.mockResolvedValueOnce({ ...PAGE, slug: "new-coworker", title: "  Free strategy call  " });
+    const out = await getBookingPageContext("new-coworker");
+    expect(bySlug).toHaveBeenCalledWith("new-coworker");
+    expect(mockPage).not.toHaveBeenCalled();
+    expect(out).toMatchObject({
+      ok: true,
+      context: { title: "Free strategy call" }
+    });
+
+    // Blank stored title falls back to null (the localized default).
+    mockPage.mockResolvedValueOnce({ ...PAGE, title: "   " });
+    const fallback = await getBookingPageContext(TOKEN);
+    expect(fallback).toMatchObject({ ok: true, context: { title: null } });
   });
 
   it("resolves the render context (zoom flag, timezone fallback)", async () => {
@@ -173,6 +243,38 @@ describe("getBookingPageContext", () => {
       ok: true,
       context: { videoCall: false, timezone: "UTC" }
     });
+  });
+});
+
+describe("probeCalendarAvailability", () => {
+  it("classifies every connection state", async () => {
+    mockConn.mockResolvedValueOnce(null);
+    expect(await probeCalendarAvailability(BIZ)).toBe("platform");
+
+    for (const provider of ["vagaro", "calendly"]) {
+      mockConn.mockResolvedValueOnce({ provider } as never);
+      expect(await probeCalendarAvailability(BIZ)).toBe("unsupported");
+    }
+
+    // Healthy workspace read.
+    expect(await probeCalendarAvailability(BIZ)).toBe("ok");
+
+    // Proxy null = the scope-starved consent (the Jul 2026 HQ case).
+    mockBusy.mockResolvedValueOnce(null);
+    expect(await probeCalendarAvailability(BIZ)).toBe("unreadable");
+
+    // A thrown proxy error (Google 403) also reads as unreadable.
+    mockBusy.mockRejectedValueOnce(new Error("Request failed with status code 403"));
+    expect(await probeCalendarAvailability(BIZ)).toBe("unreadable");
+
+    // CalDAV rides the same probe.
+    mockConn.mockResolvedValueOnce({
+      provider: "caldav",
+      connectionId: "cd",
+      providerConfigKey: "caldav-direct"
+    } as never);
+    mockCaldav.mockResolvedValueOnce({ ok: true, busy: [] } as never);
+    expect(await probeCalendarAvailability(BIZ)).toBe("ok");
   });
 });
 
@@ -270,6 +372,21 @@ describe("listPublicSlots", () => {
     expect(mockTimeOff).toHaveBeenCalledTimes(1);
   });
 
+  it("platform mode: the booking ledger is the busy source, no provider fetch", async () => {
+    mockConn.mockResolvedValue(null);
+    // One existing booking at 9:00 Phoenix blocks a conservative hour.
+    mockListStarts.mockResolvedValue([new Date("2026-01-05T16:00:00Z")]);
+    const out = await listPublicSlots(TOKEN, 30);
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error("unreachable");
+    expect(mockBusy).not.toHaveBeenCalled();
+    expect(mockCaldav).not.toHaveBeenCalled();
+    const starts = out.slots.map((s) => s.startIso);
+    expect(starts).not.toContain("2026-01-05T16:00:00.000Z");
+    expect(starts).not.toContain("2026-01-05T16:30:00.000Z");
+    expect(starts).toContain("2026-01-05T17:00:00.000Z");
+  });
+
   it("reports booking_failed on unexpected errors (non-Error shapes included)", async () => {
     mockBusy.mockRejectedValueOnce("proxy exploded");
     expect(await listPublicSlots(TOKEN, 30)).toEqual({ ok: false, detail: "booking_failed" });
@@ -326,6 +443,33 @@ describe("submitPublicBooking", () => {
         detail: "invalid_request"
       });
     }
+    expect(mockBook).not.toHaveBeenCalled();
+  });
+
+  it("answers a double submit for the attendee's existing start idempotently (both modes)", async () => {
+    mockUpcomingForAttendee.mockResolvedValueOnce([
+      { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
+    ] as never);
+    const out = await submitPublicBooking(TOKEN, VALID);
+    expect(out).toEqual({
+      ok: true,
+      startIso: "2026-01-05T16:00:00.000Z",
+      endIso: "2026-01-05T16:30:00.000Z",
+      startLocal: "Monday, January 5, 2026 at 9:00 AM MST",
+      zoomJoinUrl: null
+    });
+    expect(mockBook).not.toHaveBeenCalled();
+    expect(mockSlotClaim).not.toHaveBeenCalled();
+  });
+
+  it("refuses a different upcoming booking for the same person before any claim", async () => {
+    mockUpcomingForAttendee.mockResolvedValueOnce([
+      { startIso: "2026-01-06T17:00:00Z", eventId: "evt-2" }
+    ] as never);
+    expect(await submitPublicBooking(TOKEN, VALID)).toEqual({
+      ok: false,
+      detail: "already_booked"
+    });
     expect(mockBook).not.toHaveBeenCalled();
   });
 
@@ -466,6 +610,139 @@ describe("submitPublicBooking", () => {
     expect(out).toMatchObject({ ok: true, startLocal: null, zoomJoinUrl: null });
     const args = mockBook.mock.calls[0][1];
     expect(args.notes).not.toContain("Note:");
+  });
+
+  describe("platform mode (no calendar integration)", () => {
+    beforeEach(() => {
+      mockConn.mockResolvedValue(null);
+    });
+
+    it("books onto the ledger with Zoom, goal fan-out, owner alert, and contact filing", async () => {
+      const out = await submitPublicBooking(TOKEN, VALID);
+      expect(out).toEqual({
+        ok: true,
+        startIso: "2026-01-05T16:00:00.000Z",
+        endIso: "2026-01-05T16:30:00.000Z",
+        startLocal: "Monday, January 5, 2026 at 9:00 AM MST",
+        zoomJoinUrl: "https://zoom.example/j/9"
+      });
+      expect(mockBook).not.toHaveBeenCalled();
+      expect(mockRecordPlatform).toHaveBeenCalledWith(
+        BIZ,
+        "phone:+14805550100",
+        "2026-01-05T16:00:00.000Z",
+        expect.stringMatching(/^platform:/),
+        "zm-1"
+      );
+      expect(mockGoal).toHaveBeenCalledWith(BIZ, "+14805550100", {
+        kind: "appointment_booked"
+      });
+      expect(mockUnassignedAlert).toHaveBeenCalledWith(
+        BIZ,
+        expect.objectContaining({
+          attendeePhone: "+14805550100",
+          surface: "webchat",
+          eventId: "platform"
+        })
+      );
+      expect(mockCapture).toHaveBeenCalledTimes(1);
+      expect(mockSlotRelease).not.toHaveBeenCalled();
+    });
+
+    it("books without Zoom when none is connected (note omitted too)", async () => {
+      mockZoomCreate.mockResolvedValueOnce(null);
+      const { note: _unused, ...noNote } = VALID;
+      void _unused;
+      const out = await submitPublicBooking(TOKEN, noNote);
+      expect(out).toMatchObject({ ok: true, zoomJoinUrl: null });
+      expect(mockZoomCreate).toHaveBeenCalledWith(
+        BIZ,
+        expect.objectContaining({ agenda: undefined })
+      );
+      expect(mockRecordPlatform).toHaveBeenCalledWith(
+        BIZ,
+        "phone:+14805550100",
+        "2026-01-05T16:00:00.000Z",
+        expect.stringMatching(/^platform:/),
+        null
+      );
+    });
+
+    it("a ledger failure without a Zoom meeting cleans up nothing extra", async () => {
+      mockZoomCreate.mockResolvedValueOnce(null);
+      mockRecordPlatform.mockResolvedValueOnce({ ok: false, reason: "duplicate" });
+      expect(await submitPublicBooking(TOKEN, VALID)).toEqual({
+        ok: false,
+        detail: "already_booked"
+      });
+      expect(mockZoomDelete).not.toHaveBeenCalled();
+    });
+
+    it("keeps the one-upcoming-appointment-per-person policy (before any claim)", async () => {
+      mockUpcomingForAttendee.mockResolvedValueOnce([
+        { startIso: "2026-01-06T17:00:00Z", eventId: "evt-9" }
+      ] as never);
+      expect(await submitPublicBooking(TOKEN, VALID)).toEqual({
+        ok: false,
+        detail: "already_booked"
+      });
+      expect(mockRecordPlatform).not.toHaveBeenCalled();
+      expect(mockSlotClaim).not.toHaveBeenCalled();
+    });
+
+    it("re-runs the per-person guard post-claim: an overlapping different-slot submit is refused", async () => {
+      mockUpcomingForAttendee
+        .mockResolvedValueOnce([]) // early check: clean
+        .mockResolvedValueOnce([
+          { startIso: "2026-01-05T20:00:00Z", eventId: "evt-race" }
+        ] as never); // post-claim recheck: a racing submit landed
+      expect(await submitPublicBooking(TOKEN, VALID)).toEqual({
+        ok: false,
+        detail: "already_booked"
+      });
+      expect(mockRecordPlatform).not.toHaveBeenCalled();
+      expect(mockZoomDelete).toHaveBeenCalledWith(BIZ, "zm-1");
+      expect(mockSlotRelease).toHaveBeenCalledWith("claim-1");
+    });
+
+    it("the post-claim recheck without a Zoom meeting cleans up nothing extra", async () => {
+      mockZoomCreate.mockResolvedValueOnce(null);
+      mockUpcomingForAttendee
+        .mockResolvedValueOnce([])
+        .mockResolvedValueOnce([
+          { startIso: "2026-01-05T20:00:00Z", eventId: "evt-race" }
+        ] as never);
+      expect(await submitPublicBooking(TOKEN, VALID)).toEqual({
+        ok: false,
+        detail: "already_booked"
+      });
+      expect(mockZoomDelete).not.toHaveBeenCalled();
+    });
+
+    it("a duplicate ledger row reads as already_booked and cleans up the Zoom meeting", async () => {
+      mockRecordPlatform.mockResolvedValueOnce({ ok: false, reason: "duplicate" });
+      expect(await submitPublicBooking(TOKEN, VALID)).toEqual({
+        ok: false,
+        detail: "already_booked"
+      });
+      expect(mockZoomDelete).toHaveBeenCalledWith(BIZ, "zm-1");
+      expect(mockSlotRelease).toHaveBeenCalledWith("claim-1");
+      expect(mockGoal).not.toHaveBeenCalled();
+    });
+
+    it("a ledger write error is booking_failed with full cleanup", async () => {
+      mockRecordPlatform.mockResolvedValueOnce({ ok: false, reason: "error" });
+      expect(await submitPublicBooking(TOKEN, VALID)).toEqual({
+        ok: false,
+        detail: "booking_failed"
+      });
+      expect(mockZoomDelete).toHaveBeenCalledWith(BIZ, "zm-1");
+      expect(mockSlotRelease).toHaveBeenCalledWith("claim-1");
+      expect(logger.warn).toHaveBeenCalledWith(
+        "booking-page: platform booking write failed",
+        expect.objectContaining({ businessId: BIZ })
+      );
+    });
   });
 
   it("surfaces booking-core refusals as booking_failed (detail null branch too)", async () => {

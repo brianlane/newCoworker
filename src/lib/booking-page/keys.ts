@@ -1,7 +1,7 @@
 /**
  * Capability-token format for the public self-serve booking page.
  *
- * `ncb_<64 hex>` — one token per business, stored in plaintext on
+ * `ncb_<64 hex>`, one token per business, stored in plaintext on
  * `booking_pages.token` (the value ships inside links the owner hands
  * out, so it is public by design, mirroring the webchat site key). It
  * grants nothing beyond "list coarse slot starts and submit one booking
@@ -28,4 +28,46 @@ export function parseBookingPageToken(value: unknown): string | null {
   if (typeof value !== "string") return null;
   const trimmed = value.trim();
   return BOOKING_PAGE_TOKEN_REGEX.test(trimmed) ? trimmed : null;
+}
+
+/**
+ * Vanity-slug shape for the friendly /book/<slug> URL: lowercase kebab,
+ * 3-60 chars, letter/digit at both ends. Deliberately disjoint from the
+ * token shape (no underscores), so one route segment resolves both.
+ */
+export const BOOKING_PAGE_SLUG_REGEX = /^[a-z0-9](?:[a-z0-9-]{1,58}[a-z0-9])$/;
+
+/** Platform path segments a tenant slug must never shadow. */
+export const RESERVED_BOOKING_SLUGS = new Set([
+  "api",
+  "book",
+  "admin",
+  "dashboard",
+  "new",
+  "www"
+]);
+
+/** Normalize owner input to a valid slug, or null when unusable. */
+export function parseBookingPageSlug(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const slug = value.trim().toLowerCase();
+  if (!BOOKING_PAGE_SLUG_REGEX.test(slug)) return null;
+  if (RESERVED_BOOKING_SLUGS.has(slug)) return null;
+  return slug;
+}
+
+export type BookingPageRef =
+  | { kind: "token"; value: string }
+  | { kind: "slug"; value: string };
+
+/**
+ * Classify a public /book/<ref> path segment: capability token or vanity
+ * slug. Null for anything else so routes 404 without a DB round-trip.
+ */
+export function parseBookingPageRef(value: unknown): BookingPageRef | null {
+  const token = parseBookingPageToken(value);
+  if (token) return { kind: "token", value: token };
+  const slug = parseBookingPageSlug(value);
+  if (slug) return { kind: "slug", value: slug };
+  return null;
 }

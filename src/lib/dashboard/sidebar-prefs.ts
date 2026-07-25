@@ -5,9 +5,12 @@
  *
  *   - Stored rows order the nav (by position); unknown keys (removed nav
  *     items) are dropped silently.
- *   - Catalog items MISSING from the stored set are appended in default
- *     order, visible — so newly shipped pages show up for users with saved
- *     layouts instead of being invisible forever.
+ *   - Catalog items MISSING from the stored set are INSERTED at their
+ *     default spot (after the nearest preceding catalog neighbor present
+ *     in the layout), visible — so a newly shipped page lands where the
+ *     catalog intends (Bookings directly below Employees) instead of
+ *     dangling at the bottom of every stale saved layout (the Jul 2026
+ *     Bookings rollout bug).
  *   - Locked items (Settings, Notifications) are always visible regardless
  *     of what a stale row says, so a user can never hide the page that
  *     hosts the customizer.
@@ -38,8 +41,20 @@ export function mergeSidebarLayout(stored: StoredSidebarItem[]): SidebarLayoutIt
     seen.add(row.item_key);
     out.push({ ...def, visible: def.locked ? true : row.visible });
   }
-  for (const def of SIDEBAR_ITEMS) {
-    if (!seen.has(def.key)) out.push({ ...def, visible: true });
+  // Anchor-based insertion for catalog items the stored layout predates:
+  // walk the catalog in order and place each missing item right after its
+  // catalog predecessor. By induction every earlier catalog item is already
+  // in the layout when item i is processed (stored or just inserted), so
+  // the predecessor lookup always hits; a hypothetical miss returns -1 and
+  // -1 + 1 = 0 degrades to a front insert. Catalog-order iteration keeps
+  // multiple new items in their intended relative order.
+  for (let i = 0; i < SIDEBAR_ITEMS.length; i += 1) {
+    const def = SIDEBAR_ITEMS[i];
+    if (seen.has(def.key)) continue;
+    seen.add(def.key);
+    const insertAt =
+      i === 0 ? 0 : out.findIndex((item) => item.key === SIDEBAR_ITEMS[i - 1].key) + 1;
+    out.splice(insertAt, 0, { ...def, visible: true });
   }
   return out;
 }

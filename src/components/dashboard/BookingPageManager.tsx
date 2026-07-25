@@ -21,6 +21,8 @@ type PageRow = {
   max_daily_bookings: number | null;
   require_staff_on_shift: boolean;
   description: string | null;
+  slug: string | null;
+  title: string | null;
 };
 
 type UpcomingRow = {
@@ -32,6 +34,7 @@ type UpcomingRow = {
 type LoadState = {
   page: PageRow | null;
   calendarProvider: string | null;
+  availability: "ok" | "unreadable" | "unsupported" | "not_connected";
   upcoming: UpcomingRow[];
 };
 
@@ -117,7 +120,9 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
   const publicUrl = useMemo(() => {
     if (!state?.page) return null;
     const origin = typeof window === "undefined" ? "" : window.location.origin;
-    return `${origin}/book/${state.page.token}`;
+    // The vanity slug is the shareable link when set; the token URL keeps
+    // working either way.
+    return `${origin}/book/${state.page.slug ?? state.page.token}`;
   }, [state?.page]);
 
   const copyLink = useCallback(async () => {
@@ -146,10 +151,12 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
     );
   }
 
-  const directBooking =
-    state.calendarProvider !== null &&
-    state.calendarProvider !== "vagaro" &&
-    state.calendarProvider !== "calendly";
+  // Only Vagaro/Calendly are unsupported (their real book lives on their
+  // own pages). NO connection is fully supported: platform mode, where the
+  // booking ledger is the calendar of record.
+  const unsupportedProvider =
+    state.calendarProvider === "vagaro" || state.calendarProvider === "calendly";
+  const platformMode = state.calendarProvider === null;
   const page = state.page;
 
   const label = "block text-xs uppercase tracking-wider text-parchment/40";
@@ -158,16 +165,44 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
 
   return (
     <div className="space-y-6">
-      {!directBooking ? (
+      {!unsupportedProvider && !platformMode && state.availability === "unreadable" ? (
+        <Card>
+          <h2 className="text-base font-semibold text-red-400">
+            {t("calendarUnreadableTitle")}
+          </h2>
+          <p className="mt-2 text-sm text-parchment/60">{t("calendarUnreadableBody")}</p>
+          <Link
+            href={
+              state.calendarProvider === "caldav"
+                ? "/dashboard/integrations/caldav"
+                : "/dashboard/integrations/workspace"
+            }
+            className="mt-3 inline-block text-sm text-claw-green hover:underline"
+          >
+            {t("calendarUnreadableAction")}
+          </Link>
+        </Card>
+      ) : null}
+
+      {unsupportedProvider ? (
         <Card>
           <h2 className="text-base font-semibold text-parchment">{t("connectFirstTitle")}</h2>
           <p className="mt-2 text-sm text-parchment/60">
-            {state.calendarProvider === "vagaro"
-              ? t("vagaroNote")
-              : state.calendarProvider === "calendly"
-                ? t("calendlyNote")
-                : t("connectFirstBody")}
+            {state.calendarProvider === "vagaro" ? t("vagaroNote") : t("calendlyNote")}
           </p>
+          <Link
+            href="/dashboard/integrations"
+            className="mt-3 inline-block text-sm text-claw-green hover:underline"
+          >
+            {t("goToIntegrations")}
+          </Link>
+        </Card>
+      ) : null}
+
+      {platformMode ? (
+        <Card>
+          <h2 className="text-base font-semibold text-parchment">{t("platformModeTitle")}</h2>
+          <p className="mt-2 text-sm text-parchment/60">{t("platformModeBody")}</p>
           <Link
             href="/dashboard/integrations"
             className="mt-3 inline-block text-sm text-claw-green hover:underline"
@@ -188,7 +223,7 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
               <input
                 type="checkbox"
                 checked={page.enabled}
-                disabled={saving || !directBooking}
+                disabled={saving || unsupportedProvider}
                 onChange={(e) => void patch({ enabled: e.target.checked })}
               />
               {t("enabledToggle")}
@@ -199,7 +234,7 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
         {!page ? (
           <button
             type="button"
-            disabled={saving || !directBooking}
+            disabled={saving || unsupportedProvider}
             onClick={() => void patch({ enabled: true })}
             className="mt-4 rounded-lg bg-claw-green px-4 py-2 text-sm font-semibold text-deep-ink hover:bg-opacity-90 disabled:opacity-50"
           >
@@ -338,6 +373,48 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
                   />
                   {t("staffGateLabel")}
                 </label>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              <div>
+                <label className={label} htmlFor="bp-slug">
+                  {t("slugLabel")}
+                </label>
+                <input
+                  id="bp-slug"
+                  type="text"
+                  maxLength={60}
+                  placeholder={t("slugPlaceholder")}
+                  className="mt-1 w-full rounded-md border border-parchment/20 bg-deep-ink px-3 py-2 text-sm text-parchment placeholder:text-parchment/30"
+                  defaultValue={page.slug ?? ""}
+                  disabled={saving}
+                  onBlur={(e) => {
+                    const raw = e.target.value.trim().toLowerCase();
+                    if (raw === (page.slug ?? "")) return;
+                    void patch({ slug: raw === "" ? null : raw });
+                  }}
+                />
+                <p className="mt-1 text-xs text-parchment/40">{t("slugHint")}</p>
+              </div>
+              <div>
+                <label className={label} htmlFor="bp-title">
+                  {t("titleLabel")}
+                </label>
+                <input
+                  id="bp-title"
+                  type="text"
+                  maxLength={120}
+                  placeholder={t("titlePlaceholder")}
+                  className="mt-1 w-full rounded-md border border-parchment/20 bg-deep-ink px-3 py-2 text-sm text-parchment placeholder:text-parchment/30"
+                  defaultValue={page.title ?? ""}
+                  disabled={saving}
+                  onBlur={(e) => {
+                    const raw = e.target.value.trim();
+                    if (raw === (page.title ?? "")) return;
+                    void patch({ title: raw === "" ? null : raw });
+                  }}
+                />
               </div>
             </div>
 
