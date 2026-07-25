@@ -67,7 +67,7 @@ const DAY_MS = 24 * 60 * 60 * 1000;
 /**
  * Default availability when the owner never filled in business hours:
  * weekdays 9 to 5. An explicitly closed day (null) or a missing day on a
- * PARTIALLY specified schedule stays closed — ambiguity must never offer a
+ * PARTIALLY specified schedule stays closed, ambiguity must never offer a
  * Sunday 3 PM the owner would have to honor.
  */
 const DEFAULT_HOURS: BusinessHours = {

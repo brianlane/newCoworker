@@ -33,7 +33,9 @@ export type PublicBookingStrings = {
   checkDetails: string;
   bookedHeading: string;
   bookedBody: string;
+  bookedBodyNoInvite: string;
   bookedVideoNote: string;
+  bookedZoomLinkLabel: string;
   poweredBy: string;
   weekdaysShort: string[];
 };
@@ -44,6 +46,8 @@ type Props = {
   description: string | null;
   allowedDurations: number[];
   videoCall: boolean;
+  /** Provider mode sends a calendar invite email; platform mode does not. */
+  sendsInvite: boolean;
   strings: PublicBookingStrings;
 };
 
@@ -95,6 +99,7 @@ export function PublicBookingPage({
   description,
   allowedDurations,
   videoCall,
+  sendsInvite,
   strings
 }: Props) {
   const browserZone = useMemo(
@@ -248,12 +253,28 @@ export function PublicBookingPage({
     return (
       <div className={`${panel} mx-auto max-w-xl p-8 text-center`}>
         <h1 className="text-2xl font-bold text-claw-green">{strings.bookedHeading}</h1>
-        <p className="mt-3 text-sm text-parchment/80">{strings.bookedBody}</p>
+        <p className="mt-3 text-sm text-parchment/80">
+          {sendsInvite ? strings.bookedBody : strings.bookedBodyNoInvite}
+        </p>
         <p className="mt-4 rounded-md border border-claw-green/40 bg-claw-green/10 px-4 py-3 text-sm text-claw-green">
           {localLine}
         </p>
         {booked.zoomJoinUrl ? (
-          <p className="mt-3 text-sm text-parchment/60">{strings.bookedVideoNote}</p>
+          <div className="mt-3 space-y-2">
+            {/* No invite email in platform mode: the join link must live
+                on this screen, so it renders as a real anchor. */}
+            <a
+              href={booked.zoomJoinUrl}
+              target="_blank"
+              rel="noopener noreferrer"
+              className="inline-block rounded-md border border-claw-green/50 px-4 py-2 text-sm text-claw-green hover:bg-claw-green/10"
+            >
+              {strings.bookedZoomLinkLabel}
+            </a>
+            {sendsInvite ? (
+              <p className="text-sm text-parchment/60">{strings.bookedVideoNote}</p>
+            ) : null}
+          </div>
         ) : null}
         <p className="mt-8 text-xs text-parchment/30">{strings.poweredBy}</p>
       </div>
