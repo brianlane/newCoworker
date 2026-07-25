@@ -518,6 +518,33 @@ const triggerSchema = z.discriminatedUnion("channel", [
   voiceTriggerSchema
 ]);
 
+/**
+ * Most fields ONE extraction step may read.
+ *
+ * What the bound is actually for: every extraction step (`extract_text`,
+ * `browse_extract`, `email_extract`, `doc_extract`, `browse_action.fields`) is
+ * a SINGLE Gemini call that must answer every field in one JSON object, and
+ * that call already carries the role-disambiguation rules and the
+ * prompt-injection guard. Accuracy degrades with breadth, not with prompt size
+ * (a field line is capped at 300 chars, so even a full step is a few KB against
+ * a 12,000-char content budget). So this is an accuracy guardrail, plus a bound
+ * on what a runaway AI-drafted flow can ask for.
+ *
+ * It is NOT a ceiling on how many vars a flow can extract: nothing limits a
+ * flow to one extraction step, and each step is a fresh call. A flow needing
+ * more than this should chain a SECOND extraction step (better accuracy per
+ * call, at the cost of one more metered Gemini call per run) rather than have
+ * this raised again.
+ *
+ * History: this was 15 from the original engine (#114, Jun 8 2026), an
+ * arbitrary sanity bound that every later extraction step copied by hand.
+ * Raised to 20 in Jul 2026 when a real flow (New Lead Intake) hit it with 15
+ * legitimate fields. Raising is always backward compatible (it is an upper
+ * bound on jsonb definitions, so every stored flow still fits); LOWERING would
+ * invalidate live flows, so check the fleet first.
+ */
+export const MAX_EXTRACT_FIELDS = 20;
+
 const extractFieldSchema = z.object({
   name: varName,
   description: z.string().max(300).optional()
@@ -680,7 +707,7 @@ const nonBranchStepMembers = [
       urlVar: varName,
       // Either pull structured text fields, capture link hrefs by button text,
       // or both; but the step must do at least one (refined below).
-      fields: z.array(extractFieldSchema).min(1).max(15).optional(),
+      fields: z.array(extractFieldSchema).min(1).max(MAX_EXTRACT_FIELDS).optional(),
       extractLinks: z.array(extractLinkSchema).min(1).max(10).optional(),
       auth: browseAuthSchema.optional(),
       screenshot: z.boolean().optional(),
@@ -703,7 +730,7 @@ const nonBranchStepMembers = [
   z.object({
     id: stepId,
     type: z.literal("extract_text"),
-    fields: z.array(extractFieldSchema).min(1).max(15),
+    fields: z.array(extractFieldSchema).min(1).max(MAX_EXTRACT_FIELDS),
     when: whenSchema.optional()
   }),
   // Read a recent message from a connected mailbox (the same Nango Gmail/Outlook
@@ -727,7 +754,7 @@ const nonBranchStepMembers = [
     // in the email; ALL must match. More terms = tighter lead disambiguation.
     matchTemplates: z.array(z.string().min(1).max(200)).min(1).max(5).optional(),
     lookbackMinutes: z.number().int().min(1).max(1440).optional(),
-    fields: z.array(extractFieldSchema).min(1).max(15),
+    fields: z.array(extractFieldSchema).min(1).max(MAX_EXTRACT_FIELDS),
     fillOnlyEmpty: z.boolean().optional(),
     when: whenSchema.optional()
   }),
@@ -747,7 +774,7 @@ const nonBranchStepMembers = [
     // Template resolving to a document ref (an `email-attachments:<path>`
     // or `business-docs:<documentId>` value). Omitted = {{trigger.document}}.
     sourceTemplate: z.string().min(1).max(300).optional(),
-    fields: z.array(extractFieldSchema).min(1).max(15),
+    fields: z.array(extractFieldSchema).min(1).max(MAX_EXTRACT_FIELDS),
     fileAs: z
       .object({
         titleTemplate: z.string().min(1).max(200),
@@ -1151,7 +1178,7 @@ const nonBranchStepMembers = [
     // Optional same-pass extraction: pull these fields from the page text AFTER
     // the actions run (e.g. accept a lead then read its name/phone/email in one
     // credentialed session). Produces {{vars.<field>}} like browse_extract.
-    fields: z.array(extractFieldSchema).min(1).max(15).optional(),
+    fields: z.array(extractFieldSchema).min(1).max(MAX_EXTRACT_FIELDS).optional(),
     screenshot: z.boolean().optional(),
     // Persist this step's final URL keyed by the (normalized) phone in this var,
     // so a later run for the same person can recall it via a recall_url step.

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseAiFlowDefinition } from "@/lib/ai-flows/schema";
+import { MAX_EXTRACT_FIELDS, parseAiFlowDefinition } from "@/lib/ai-flows/schema";
 import {
   buildDefinition,
   DEFAULT_FLOW_NAME,
@@ -13,7 +13,7 @@ import {
  * Pins the contracts its correctness rides on:
  *
  *   - the definition parses through the REAL parseAiFlowDefinition, inside the
- *     extract step's 15-field cap;
+ *     extract step's field cap;
  *   - manual trigger channel (never auto-starts);
  *   - the contact upsert stamps the language it was told, and is gated on a
  *     parsed phone (upsert_customer fails hard on an unusable phoneVar);
@@ -76,7 +76,7 @@ describe("seed-amy-new-lead-intake definition", () => {
     expect(DEFAULT_FLOW_NAME).toBe("New Lead Intake");
   });
 
-  it("extracts the exact gate vars the steps rely on, within the 15-field cap", () => {
+  it("extracts the exact gate vars the steps rely on, within the field cap", () => {
     const parse = step(buildDefinition(), "parse") as Step & {
       fields: { name: string; description: string }[];
     };
@@ -100,9 +100,9 @@ describe("seed-amy-new-lead-intake definition", () => {
     ]) {
       expect(names).toContain(required);
     }
-    // The schema caps extract_text at 15 fields; this flow sits exactly at it,
-    // so a new field has to replace one rather than be bolted on.
-    expect(parse.fields.length).toBeLessThanOrEqual(15);
+    // One extraction step is one Gemini call, so breadth costs accuracy: past
+    // the cap a flow chains a SECOND extract step rather than widening this one.
+    expect(parse.fields.length).toBeLessThanOrEqual(MAX_EXTRACT_FIELDS);
     // Every gate a step reads must be produced here.
     const gates = new Set(
       allSteps(buildDefinition())

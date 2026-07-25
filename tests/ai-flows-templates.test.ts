@@ -12,7 +12,11 @@ import {
   reviewRequestTemplate,
   REVIEW_LINK_MAX_LENGTH
 } from "@/lib/ai-flows/templates";
-import { parseAiFlowDefinition, summarizeDefinition } from "@/lib/ai-flows/schema";
+import {
+  MAX_EXTRACT_FIELDS,
+  parseAiFlowDefinition,
+  summarizeDefinition
+} from "@/lib/ai-flows/schema";
 import { evaluateTriggerConditions } from "@/lib/ai-flows/trigger-eval";
 
 describe("metaLeadFollowUpTemplate", () => {
@@ -319,7 +323,7 @@ describe("newLeadIntakeTemplate", () => {
     for (const required of ["lead_language", "text_gate", "call_gate"]) {
       expect(names).toContain(required);
     }
-    expect(parse.fields.length).toBeLessThanOrEqual(15);
+    expect(parse.fields.length).toBeLessThanOrEqual(MAX_EXTRACT_FIELDS);
     // The intro texts gate on text_gate (which answers none for a call-only
     // request), never on has_phone, so "call this lead" does not also text.
     const intro = def.steps.find((s) => s.type === "branch");

@@ -11,6 +11,7 @@ import {
   GOAL_EVENT_KINDS,
   MATH_OPERATIONS,
   MAX_BRANCH_ARMS,
+  MAX_EXTRACT_FIELDS,
   MAX_GOAL_EVENTS,
   VOICE_STEP_TYPES,
   TRIGGER_CONDITION_TYPES,
@@ -103,6 +104,36 @@ export type AgentOption = { id: string; name: string; enabled: boolean };
 const inputClass =
   "w-full rounded-md border border-parchment/15 bg-deep-ink/40 px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:border-signal-teal focus:outline-none";
 const labelClass = "block text-xs font-medium text-parchment/60 mb-1";
+
+/**
+ * "+ field" for every extraction step, in one place so the cap is enforced
+ * identically. At the cap the button becomes a plain-words explanation instead
+ * of letting the owner add a field they can only discover is invalid on save.
+ * A wider parse belongs in a SECOND extraction step anyway: each step is its
+ * own AI read, and a narrower read is a more accurate one.
+ */
+function AddFieldButton({
+  count,
+  onAdd
+}: {
+  count: number;
+  onAdd: () => void;
+}) {
+  if (count >= MAX_EXTRACT_FIELDS) {
+    return (
+      <p className="text-xs text-parchment/40">
+        That is the most fields one step can read ({MAX_EXTRACT_FIELDS}). To pull more, add
+        another extraction step after this one: each step is a separate read, and shorter
+        lists are read more accurately.
+      </p>
+    );
+  }
+  return (
+    <button onClick={onAdd} className="text-xs text-signal-teal hover:underline">
+      + field
+    </button>
+  );
+}
 
 /** How the workflow starts. Mirrors TRIGGER_CHANNELS in the schema. */
 const CHANNEL_LABELS: Record<FlowTrigger["channel"], string> = {
@@ -3279,12 +3310,10 @@ function StepFields({
             </button>
           </div>
         ))}
-        <button
-          onClick={() => patchStep(index, { fields: [...fields, { name: "", description: "" }] })}
-          className="text-xs text-signal-teal hover:underline"
-        >
-          + field
-        </button>
+        <AddFieldButton
+          count={fields.length}
+          onAdd={() => patchStep(index, { fields: [...fields, { name: "", description: "" }] })}
+        />
         <label className={labelClass}>Links to capture (by button text)</label>
         {links.map((l, li) => (
           <div key={li} className="flex gap-2">
@@ -3383,12 +3412,12 @@ function StepFields({
             />
           </div>
         ))}
-        <button
-          onClick={() => patchStep(index, { fields: [...step.fields, { name: "", description: "" }] })}
-          className="text-xs text-signal-teal hover:underline"
-        >
-          + field
-        </button>
+        <AddFieldButton
+          count={step.fields.length}
+          onAdd={() =>
+            patchStep(index, { fields: [...step.fields, { name: "", description: "" }] })
+          }
+        />
       </div>
     );
   }
@@ -3436,12 +3465,12 @@ function StepFields({
             />
           </div>
         ))}
-        <button
-          onClick={() => patchStep(index, { fields: [...step.fields, { name: "", description: "" }] })}
-          className="text-xs text-signal-teal hover:underline"
-        >
-          + field
-        </button>
+        <AddFieldButton
+          count={step.fields.length}
+          onAdd={() =>
+            patchStep(index, { fields: [...step.fields, { name: "", description: "" }] })
+          }
+        />
         <label className="flex items-center gap-2 text-xs text-parchment/70">
           <input
             type="checkbox"
@@ -3615,12 +3644,12 @@ function StepFields({
             />
           </div>
         ))}
-        <button
-          onClick={() => patchStep(index, { fields: [...step.fields, { name: "", description: "" }] })}
-          className="text-xs text-signal-teal hover:underline"
-        >
-          + field
-        </button>
+        <AddFieldButton
+          count={step.fields.length}
+          onAdd={() =>
+            patchStep(index, { fields: [...step.fields, { name: "", description: "" }] })
+          }
+        />
       </div>
     );
   }
@@ -4464,16 +4493,14 @@ function StepFields({
                 </button>
               </div>
             ))}
-            <button
-              onClick={() =>
+            <AddFieldButton
+              count={(step.fields ?? []).length}
+              onAdd={() =>
                 patchStep(index, {
                   fields: [...(step.fields ?? []), { name: "", description: "" }]
                 })
               }
-              className="text-xs text-signal-teal hover:underline"
-            >
-              + field
-            </button>
+            />
             <label className="flex items-center gap-2 text-xs text-parchment/70">
               <input
                 type="checkbox"
