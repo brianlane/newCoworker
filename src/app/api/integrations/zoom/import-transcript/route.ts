@@ -84,6 +84,11 @@ export async function POST(request: Request) {
           // in-flight so concurrent re-imports serialize; the loser falls
           // through to the in-flight refusal below.
           holdsClaim = await reclaimCompletedZoomTranscriptImport(businessId, meetingUuid);
+        } else if (!existing) {
+          // The claim vanished between attempts (a failing webhook import
+          // released it): the slot is free, take it now instead of showing
+          // a false already-importing refusal.
+          holdsClaim = await claimZoomTranscriptImport(businessId, meetingUuid);
         }
         if (!holdsClaim) {
           // An import holds a fresh claim right now; a second copy would
