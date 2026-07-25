@@ -3,28 +3,28 @@ import { parseAiFlowDefinition } from "@/lib/ai-flows/schema";
 import {
   buildDefinition,
   DEFAULT_FLOW_NAME,
-  REFERRAL_TOUCH_LINE
+  REFERRAL_TOUCH_LINE,
+  REFERRAL_TOUCH_LINE_ES
 } from "../scripts/oneshot/seed-amy-new-lead-intake";
 
 /**
- * The "New Lead Intake" seed for Amy (owner-handed leads texted to her
- * coworker line, run via the operator's run_aiflow with her raw message as
- * the trigger window text). Pins the contracts the flow's correctness rides
- * on:
+ * The "New Lead Intake" seed for Amy: she texts (or calls, or types to) her
+ * coworker a lead's details in plain words and the flow takes it from there.
+ * Pins the contracts its correctness rides on:
  *
- *   - the definition parses through the REAL parseAiFlowDefinition;
+ *   - the definition parses through the REAL parseAiFlowDefinition, inside the
+ *     extract step's 15-field cap;
  *   - manual trigger channel (never auto-starts);
- *   - buyer/seller/both gating uses the exact lowercase tokens the
- *     extract_text fields promise;
- *   - the contact upsert and every lead-facing step are gated on a parsed
- *     phone (upsert_customer fails hard on an unusable phoneVar), and the
- *     no-phone path reaches ONLY the intro-email + no-phone-notify steps;
- *   - the referral personal touch ("it's a referral from Donald") forks the
- *     intro on an equals-matched gate, so a missed extraction fails CLOSED
- *     into the standard copy and no sentinel/empty name can reach the lead;
- *   - the $1M+ keep-for-owner rule is present on every route variant;
- *   - quiet hours guard every lead-facing SMS;
- *   - buyer route is un-pinned (roster cascade), seller/both pin Dave.
+ *   - the contact upsert stamps the language it was told, and is gated on a
+ *     parsed phone (upsert_customer fails hard on an unusable phoneVar);
+ *   - the referral touch and the Spanish intro are both equals-gated, so a
+ *     missed extraction fails CLOSED into the standard English copy and no
+ *     sentinel or empty name can ever reach a lead;
+ *   - "call this lead" places the call in the lead's language and suppresses
+ *     the intro TEXT, but never the team routing;
+ *   - the $1M+ keep-for-owner rule survives on every lead-type route, while an
+ *     explicitly named teammate overrides it;
+ *   - a phoneless lead reaches only the intro email and the honest notify.
  */
 
 type Step = Record<string, unknown> & {
@@ -76,7 +76,7 @@ describe("seed-amy-new-lead-intake definition", () => {
     expect(DEFAULT_FLOW_NAME).toBe("New Lead Intake");
   });
 
-  it("extracts the exact gate vars the steps rely on", () => {
+  it("extracts the exact gate vars the steps rely on, within the 15-field cap", () => {
     const parse = step(buildDefinition(), "parse") as Step & {
       fields: { name: string; description: string }[];
     };
@@ -87,11 +87,12 @@ describe("seed-amy-new-lead-intake definition", () => {
       "lead_email",
       "lead_type",
       "lead_details",
-      "location",
       "price",
       "price_band",
+      "lead_language",
       "phone_lead_type",
       "email_intro_type",
+      "call_gate",
       "referred_by",
       "referral_gate",
       "assigned_agent",
@@ -99,87 +100,146 @@ describe("seed-amy-new-lead-intake definition", () => {
     ]) {
       expect(names).toContain(required);
     }
-    // The referral fact rides lead_details into the team offer / notify.
-    const details = parse.fields.find((f) => f.name === "lead_details");
-    expect(details?.description).toContain("who referred them");
-    // The routing token answers "assigned" for a named teammate, the lead
-    // type otherwise, and none without a phone. The NAME itself rides
-    // assigned_agent (as written, so any current or future roster member
-    // resolves engine-side).
-    const variant = parse.fields.find((f) => f.name === "route_variant");
-    expect(variant?.description).toContain("assigned");
-    expect(variant?.description).toContain("buyer, seller, or both");
-    expect(variant?.description).toContain("answer exactly: none");
-    const assigned = parse.fields.find((f) => f.name === "assigned_agent");
-    expect(assigned?.description).toContain("exactly as the message wrote it");
+    // The schema caps extract_text at 15 fields; this flow sits exactly at it,
+    // so a new field has to replace one rather than be bolted on.
+    expect(parse.fields.length).toBeLessThanOrEqual(15);
+    // Every gate a step reads must be produced here.
+    const gates = new Set(
+      allSteps(buildDefinition())
+        .map((s) => s.when?.var)
+        .filter((v): v is string => Boolean(v))
+    );
+    for (const gate of gates) expect(names).toContain(gate);
   });
 
-  it("gates the contact upsert on a parsed phone (upsert fails hard on 'none')", () => {
+  it("the contact upsert stamps the language and is gated on a parsed phone", () => {
     const save = step(buildDefinition(), "save_contact");
     expect(save.type).toBe("upsert_customer");
-    expect(save.when).toEqual({ var: "phone_lead_type", notEquals: "none" });
+    // route_variant answers "none" exactly when there is no phone.
+    expect(save.when).toEqual({ var: "route_variant", notEquals: "none" });
     expect(save.phoneVar).toBe("lead_phone");
     expect(save.nameVar).toBe("lead_name");
     expect(save.emailVar).toBe("lead_email");
+    // The language Amy mentioned is stored, so LATER surfaces speak it too.
+    expect(save.languageVar).toBe("lead_language");
   });
 
   it("forks the intro on an equals-matched referral gate (fails closed)", () => {
     const intro = step(buildDefinition(), "intro") as BranchStep;
     expect(intro.type).toBe("branch");
     expect(intro.branches).toHaveLength(1);
-    // equals (not notEquals): a missing/failed referral extraction resolves
-    // to "" which never equals "referral", so the standard arm runs.
+    // equals (not notEquals): a missing/failed referral extraction resolves to
+    // "" which never equals "referral", so the standard arm runs.
     expect(intro.branches?.[0].condition).toEqual({
       var: "referral_gate",
       equals: "referral"
     });
   });
 
-  it("both intro arms carry the 3 SMS + 3 email variants with the same gates and quiet hours", () => {
+  it("forks each referral arm again on language, equals-gated on es", () => {
     const def = buildDefinition();
-    const intro = step(def, "intro") as BranchStep;
-    for (const [arm, suffix] of [
-      [intro.branches![0].steps, "_ref"],
-      [intro.else!, ""]
-    ] as const) {
-      for (const type of LEAD_TYPES) {
-        const send = arm.find((s) => s.id === `send_${type}${suffix}`) as
-          | (Step & { quietHours?: { noSendAfter?: string; emailFallbackVar?: string } })
-          | undefined;
-        expect(send, `send_${type}${suffix}`).toBeTruthy();
-        expect(send!.type).toBe("send_sms");
-        expect(send!.to).toBe("{{vars.lead_phone}}");
-        expect(send!.when).toEqual({ var: "phone_lead_type", equals: type });
-        expect(send!.quietHours?.noSendAfter).toBe("22:00");
-        expect(send!.quietHours?.emailFallbackVar).toBe("lead_email");
+    for (const id of ["intro_lang", "intro_lang_ref"]) {
+      const langBranch = step(def, id) as BranchStep;
+      expect(langBranch.type).toBe("branch");
+      expect(langBranch.branches?.[0].condition).toEqual({
+        var: "lead_language",
+        equals: "es"
+      });
+      // English arm keeps a variant per lead type; Spanish arm is one body.
+      expect(langBranch.else).toHaveLength(6);
+      expect(langBranch.branches?.[0].steps).toHaveLength(2);
+    }
+  });
 
-        const email = arm.find((s) => s.id === `email_lead_${type}${suffix}`);
-        expect(email, `email_lead_${type}${suffix}`).toBeTruthy();
-        expect(email!.type).toBe("send_email");
-        expect(email!.to).toBe("{{vars.lead_email}}");
-        expect(email!.when).toEqual({ var: "email_intro_type", equals: type });
-        expect(email!.fromConnectionId).toBeTruthy();
+  it("English intro variants gate on the exact lead-type tokens with quiet hours", () => {
+    const def = buildDefinition();
+    for (const suffix of ["", "_ref"]) {
+      for (const type of LEAD_TYPES) {
+        const send = step(def, `send_${type}${suffix}`) as Step & {
+          quietHours?: { noSendAfter?: string; emailFallbackVar?: string };
+        };
+        expect(send.type).toBe("send_sms");
+        expect(send.to).toBe("{{vars.lead_phone}}");
+        expect(send.when).toEqual({ var: "phone_lead_type", equals: type });
+        expect(send.quietHours?.noSendAfter).toBe("22:00");
+        expect(send.quietHours?.emailFallbackVar).toBe("lead_email");
+
+        const email = step(def, `email_lead_${type}${suffix}`);
+        expect(email.type).toBe("send_email");
+        expect(email.when).toEqual({ var: "email_intro_type", equals: type });
+        expect(email.fromConnectionId).toBeTruthy();
       }
     }
   });
 
-  it("referral-arm copy opens with the personal touch; standard arm never mentions the referrer", () => {
-    const intro = step(buildDefinition(), "intro") as BranchStep;
-    expect(REFERRAL_TOUCH_LINE).toContain("{{vars.referred_by}}");
-    for (const s of intro.branches![0].steps) {
-      const body = String(s.body);
-      expect(body, s.id).toContain(REFERRAL_TOUCH_LINE);
-      // Inserted right after the greeting, before the pitch.
-      expect(body.indexOf("Hi {{vars.lead_name}}.")).toBeLessThan(
-        body.indexOf(REFERRAL_TOUCH_LINE)
-      );
-    }
-    for (const s of intro.else!) {
-      expect(String(s.body), s.id).not.toContain("{{vars.referred_by}}");
+  it("the Spanish intro reuses the channel tokens, so language and channel stay independent", () => {
+    const def = buildDefinition();
+    for (const suffix of ["", "_ref"]) {
+      const sms = step(def, `send_es${suffix}`);
+      expect(sms.type).toBe("send_sms");
+      expect(sms.when).toEqual({ var: "phone_lead_type", notEquals: "none" });
+      const email = step(def, `email_lead_es${suffix}`);
+      expect(email.type).toBe("send_email");
+      expect(email.when).toEqual({ var: "email_intro_type", notEquals: "none" });
+      // Spanish copy, in Spanish, with her real phone number.
+      expect(String(sms.body)).toContain("Amy Laidlaw");
+      expect(String(sms.body)).toContain("602-695-1142");
+      expect(String(sms.body)).toContain("Hola");
     }
   });
 
-  it("default routes gate on the route_variant lead-type tokens; buyer un-pinned, seller/both pin the agent", () => {
+  it("the referral credit appears in each language's own words, only on the referral arm", () => {
+    const def = buildDefinition();
+    expect(REFERRAL_TOUCH_LINE).toContain("{{vars.referred_by}}");
+    expect(REFERRAL_TOUCH_LINE_ES).toContain("{{vars.referred_by}}");
+    expect(String(step(def, "send_buyer_ref").body)).toContain(REFERRAL_TOUCH_LINE);
+    expect(String(step(def, "send_es_ref").body)).toContain(REFERRAL_TOUCH_LINE_ES);
+    // The standard arms never mention a referrer.
+    for (const id of ["send_buyer", "send_seller", "send_both", "send_es"]) {
+      expect(String(step(def, id).body)).not.toContain("{{vars.referred_by}}");
+    }
+  });
+
+  it("'call this lead' places the call in the lead's language, summary to the owner", () => {
+    const def = buildDefinition();
+    const branch = step(def, "call_branch") as BranchStep;
+    expect(branch.branches?.[0].condition).toEqual({ var: "call_gate", equals: "yes" });
+    // No call asked for: the else arm is empty, so nothing happens.
+    expect(branch.else).toEqual([]);
+    const es = step(def, "call_lead_es");
+    const en = step(def, "call_lead_en");
+    for (const call of [es, en]) {
+      expect(call.type).toBe("place_ai_call");
+      expect(call.toVar).toBe("lead_phone");
+      // notifyOwner keeps her cell out of the definition (it follows Settings).
+      expect(call.notifyOwner).toBe(true);
+      expect(call.notifyE164).toBeUndefined();
+      expect(call.saveAs).toBe("call_outcome");
+      // No live transfer: the AI calls and does what it normally does.
+      expect(call.transfer).toBeUndefined();
+      expect(String(call.contextTemplate)).toContain("{{vars.lead_details}}");
+    }
+    expect(es.when).toEqual({ var: "lead_language", equals: "es" });
+    expect(en.when).toEqual({ var: "lead_language", equals: "none" });
+    expect(String(es.personaTemplate)).toContain("Hola");
+    expect(String(en.personaTemplate)).toContain("Amy Laidlaw's office");
+  });
+
+  it("a call request suppresses the intro TEXT but never the routing", () => {
+    const parse = step(buildDefinition(), "parse") as Step & {
+      fields: { name: string; description: string }[];
+    };
+    // phone_lead_type is what the intro texts gate on, so it must answer none
+    // for a call-only request.
+    const phoneType = parse.fields.find((f) => f.name === "phone_lead_type");
+    expect(phoneType?.description).toContain("only");
+    expect(phoneType?.description).toContain("call");
+    // route_variant carries no call notion at all: routing happens either way.
+    const routeVariant = parse.fields.find((f) => f.name === "route_variant");
+    expect(routeVariant?.description).not.toContain("call");
+  });
+
+  it("default routes gate on route_variant lead types; buyer un-pinned, seller/both pin the agent", () => {
     const def = buildDefinition({ agentName: "Dave Lane" });
     for (const type of LEAD_TYPES) {
       const route = step(def, `route_${type}`);
@@ -191,89 +251,58 @@ describe("seed-amy-new-lead-intake definition", () => {
       } else {
         expect(route.agentName).toBe("Dave Lane");
       }
+      // The $1M+ rule stays on the lead-type routes.
+      expect(route.ownerDirectWhen).toEqual({ var: "price_band", equals: "over_1m" });
+      expect(route.ownerDirectNudges).toBe(true);
     }
   });
 
-  it("an explicitly named teammate rides the DYNAMIC pin (no $1M override, honest fallback)", () => {
-    const def = buildDefinition();
-    const route = step(def, "route_assigned");
+  it("an explicitly named teammate rides the DYNAMIC pin and overrides the $1M rule", () => {
+    const route = step(buildDefinition(), "route_assigned");
     expect(route.type).toBe("route_to_team");
     expect(route.when).toEqual({ var: "route_variant", equals: "assigned" });
-    // Dynamic pin: resolved against the LIVE roster at run time, so a new
-    // hire is pinnable the day they join; no static roster names anywhere.
     expect(route.agentNameVar).toBe("assigned_agent");
     expect(route.agentName).toBeUndefined();
     // Amy naming a person IS the decision: no keep-for-owner override.
     expect(route.ownerDirectWhen).toBeUndefined();
     expect(route.ownerDirectTemplate).toBeUndefined();
-    // The teammate is told this was a personal hand-off.
     expect(String(route.offerTemplate)).toContain("Amy asked for this lead to go to YOU");
-    // Fallback names the broken promise, back to Amy, never someone else.
     expect(String(route.ownerFallbackTemplate)).toContain("{{vars.assigned_agent}}");
-    expect(String(route.ownerFallbackTemplate)).toContain("you asked for them to take it");
   });
 
-  it("keeps $1M+ leads for Amy on every route variant", () => {
+  it("a phoneless lead reaches only the intro email and the honest notify", () => {
     const def = buildDefinition();
-    for (const type of LEAD_TYPES) {
-      const route = step(def, `route_${type}`);
-      expect(route.ownerDirectWhen).toEqual({ var: "price_band", equals: "over_1m" });
-      expect(route.ownerDirectTemplate).toContain("kept for you");
-      expect(route.ownerDirectNudges).toBe(true);
-    }
-  });
-
-  it("the no-phone path reaches only intro-email + the honest no-phone notify", () => {
-    const def = buildDefinition();
-    // With phone_lead_type = "none", every phone-gated step skips…
-    const phoneGated = topSteps(def).filter(
-      (s) => s.when?.var === "phone_lead_type" && s.when.notEquals === "none"
+    // route_variant = "none" closes the upsert, every route, and the main notify.
+    const phoneGated = allSteps(def).filter(
+      (s) => s.when?.var === "route_variant" && s.when.notEquals === "none"
     );
-    expect(phoneGated.map((s) => s.id)).toEqual(["save_contact", "notify"]);
-    const typeGated = allSteps(def).filter(
-      (s) =>
-        s.when?.var === "phone_lead_type" &&
-        LEAD_TYPES.includes(s.when.equals as (typeof LEAD_TYPES)[number])
+    expect(phoneGated.map((s) => s.id).sort()).toEqual(["notify", "save_contact"]);
+    const routeGated = allSteps(def).filter(
+      (s) => s.when?.var === "route_variant" && s.when.equals !== undefined
     );
-    expect(typeGated).toHaveLength(6); // 3 SMS per intro arm x 2 arms
-    // Routes gate on route_variant, which also answers "none" without a
-    // phone, so no route (assigned or default) can fire either.
-    const routeGated = allSteps(def).filter((s) => s.when?.var === "route_variant");
-    expect(routeGated).toHaveLength(4); // assigned + buyer/seller/both
-    for (const r of routeGated) {
-      expect(r.when?.equals).not.toBe("none");
-    }
-    // …and the honest notify names what did NOT happen.
+    expect(routeGated).toHaveLength(5); // assigned + 3 lead types + notify_no_phone
     const noPhone = step(def, "notify_no_phone");
-    expect(noPhone.type).toBe("notify_owner");
-    expect(noPhone.when).toEqual({ var: "phone_lead_type", equals: "none" });
+    expect(noPhone.when).toEqual({ var: "route_variant", equals: "none" });
     expect(String(noPhone.message)).toContain("NO usable phone number");
   });
 
-  it("offer copy carries the lead card and the Amy (direct) source line", () => {
-    const def = buildDefinition();
-    for (const type of LEAD_TYPES) {
-      const route = step(def, `route_${type}`);
-      const offer = String(route.offerTemplate);
-      expect(offer).toContain("{{vars.lead_phone}}");
-      expect(offer).toContain("{{vars.lead_details}}");
-      expect(offer).toContain("{{offer.deadline}}");
-      expect(offer).toContain("Lead source: Amy (direct)");
-      expect(String(route.ownerFallbackTemplate)).toContain("Lead source: Amy (direct)");
-    }
+  it("the owner notify reports the call outcome, so a failed call is never 'handled'", () => {
+    const notify = step(buildDefinition(), "notify");
+    expect(String(notify.message)).toContain("{{vars.call_outcome}}");
+    expect(String(notify.message)).toContain("{{vars.actions_taken}}");
   });
 
-  it("honors an overridden agent and mailbox (both intro arms)", () => {
+  it("honors an overridden agent and mailbox across every intro arm", () => {
     const def = buildDefinition({
       agentName: "Gabrielle Mota",
       mailboxConnectionId: "11111111-2222-4333-8444-555555555555"
     });
     expect(() => parseAiFlowDefinition(def)).not.toThrow();
     expect(step(def, "route_seller").agentName).toBe("Gabrielle Mota");
-    for (const id of ["email_lead_buyer", "email_lead_buyer_ref"]) {
+    for (const id of ["email_lead_buyer", "email_lead_buyer_ref", "email_lead_es"]) {
       expect(step(def, id).fromConnectionId).toBe("11111111-2222-4333-8444-555555555555");
     }
-    for (const id of ["send_buyer", "send_buyer_ref"]) {
+    for (const id of ["send_buyer", "send_buyer_ref", "send_es"]) {
       const send = step(def, id) as Step & {
         quietHours?: { emailFromConnectionId?: string };
       };

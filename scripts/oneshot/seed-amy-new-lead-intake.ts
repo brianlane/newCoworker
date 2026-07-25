@@ -21,6 +21,9 @@
  *        buyer/seller/both SMS variants of Amy's RE copy (source-site
  *        references neutralized; RE quiet hours with email fallback) plus
  *        the no-phone intro EMAIL variants.
+ *     -> "call this lead": the AI places the call in the lead's language
+ *        (place_ai_call, no live transfer) and Amy gets the summary. A call
+ *        request suppresses the intro TEXT but never the team routing.
  *     -> route_to_team: when Amy names a teammate ("I want Gabby to have
  *        this"), the DYNAMIC pin (agentNameVar) resolves the extracted name
  *        against the live roster at run time, so any current or FUTURE
@@ -112,6 +115,36 @@ const DEFAULT_MAILBOX_CONNECTION_ID = "9ddd5344-14f2-46df-a89d-dddc2d50e944";
 const PHOENIX_TZ = "America/Phoenix";
 
 /**
+ * The AI call Amy can ask for ("call this lead"). Two persona variants so a
+ * lead already known to speak Spanish is called in Spanish; either way the
+ * voice AI follows the language the callee actually speaks once they answer.
+ * No live transfer by design: the AI calls and does what it normally does,
+ * then Amy gets the summary.
+ */
+const CALL_PERSONA_EN =
+  "Hi, is this {{vars.lead_name.first}}? I'm calling from Amy Laidlaw's office at " +
+  "HomeSmart. Amy asked me to reach out about your real estate plans. Is now a good " +
+  "time for a couple of quick questions?";
+
+const CALL_PERSONA_ES =
+  "Hola, habla usted con {{vars.lead_name.first}}? Le llamo de la oficina de Amy " +
+  "Laidlaw en HomeSmart. Amy me pidio comunicarme con usted sobre sus planes de bienes " +
+  "raices. Es buen momento para hacerle unas preguntas rapidas?";
+
+/** What the AI already knows, so it never re-asks what Amy already sent. */
+const CALL_CONTEXT =
+  "Their name: {{vars.lead_name}}. Phone: {{vars.lead_phone}}. " +
+  "What they are looking for: {{vars.lead_details}}. " +
+  "Price or budget: {{vars.price}}.";
+
+/** Lead details the AI should come back with from the call. */
+const CALL_CAPTURE_FIELDS = [
+  "what they are looking for",
+  "their timeline",
+  "best time to reach them"
+];
+
+/**
  * The referral personal touch: when Amy's message says who referred the
  * lead ("it's a referral from Donald"), the intro opens by crediting them
  * by name. Inserted right after the greeting paragraph, ONLY on the
@@ -121,6 +154,14 @@ const PHOENIX_TZ = "America/Phoenix";
 export const REFERRAL_TOUCH_LINE =
   "{{vars.referred_by}} shared your info with me and thought I could help. " +
   "I'm so glad they connected us!";
+
+/** The same credit, in Spanish, for the Spanish intro. */
+export const REFERRAL_TOUCH_LINE_ES =
+  "{{vars.referred_by}} me compartio su informacion y penso que yo podria ayudarle. " +
+  "Me alegra mucho que nos haya conectado!";
+
+/** The Spanish intro's greeting paragraph (its insertion anchor). */
+const SPANISH_GREETING_PARAGRAPH = "Hola {{vars.lead_name.first}}.\n\n";
 
 /** The greeting paragraph every intro variant opens with (insertion anchor). */
 const GREETING_PARAGRAPH = "Hi {{vars.lead_name}}.\n\n";
@@ -181,22 +222,54 @@ const BOTH_INTRO_BODY =
   "I look forward to exceeding your expectations!\n\n" +
   "Thanks, Amy Laidlaw ~ HomeSmart \u{1F60A}";
 
-const INTRO_SUBJECTS: Record<"buyer" | "seller" | "both", string> = {
+/**
+ * The Spanish intro. Deliberately SHORT and claim-free next to Amy's English
+ * pitch: every fact here already appears in her own copy (licensed since 1989,
+ * a top Arizona agent, the free appraisal for sellers, her number), because
+ * inventing marketing claims in a language the owner has not reviewed is worse
+ * than a plainer message.
+ *
+ * REVIEW NOTE for Amy: replace this with your own Spanish wording whenever you
+ * like. It is one flow edit (/dashboard/aiflows) and needs no code change.
+ * Until then this is what a Spanish-speaking lead receives.
+ */
+const SPANISH_INTRO_BODY =
+  "Hola {{vars.lead_name.first}}.\n\n" +
+  "Soy Amy Laidlaw de HomeSmart. Tengo licencia desde 1989 y soy una de las agentes " +
+  "con mas experiencia en Arizona.\n\n" +
+  "Si esta pensando en vender, le ofrezco una evaluacion GRATIS de su casa. Si esta " +
+  "buscando comprar, le puedo enviar las casas disponibles en las zonas que le " +
+  "interesen.\n\n" +
+  "Cuando es un buen momento para hablar unos minutos? Puede llamarme o escribirme al " +
+  "602-695-1142.\n\n" +
+  "Gracias, Amy Laidlaw ~ HomeSmart \u{1F60A}";
+
+/**
+ * Intro variants. `es` is a language variant rather than a lead type: one
+ * Spanish body covers buyer, seller, and both (it speaks to each), which keeps
+ * the reviewed-copy surface small.
+ */
+type IntroVariant = "buyer" | "seller" | "both" | "es";
+
+const INTRO_VARIANTS: readonly IntroVariant[] = ["buyer", "seller", "both", "es"];
+
+const INTRO_SUBJECTS: Record<IntroVariant, string> = {
   buyer: "Re: Your home search",
   seller: "Re: Selling your home",
-  both: "Re: Your next real estate move"
+  both: "Re: Your next real estate move",
+  es: "Sobre su busqueda de casa"
 };
 
-const INTRO_BODIES: Record<"buyer" | "seller" | "both", string> = {
+const INTRO_BODIES: Record<IntroVariant, string> = {
   buyer: BUYER_INTRO_BODY,
   seller: SELLER_INTRO_BODY,
-  both: BOTH_INTRO_BODY
+  both: BOTH_INTRO_BODY,
+  es: SPANISH_INTRO_BODY
 };
 
 /** Shared lead summary line for offers/alerts. */
 const LEAD_SUMMARY_LINE =
-  "{{vars.lead_name}} ({{vars.lead_phone}}, email: {{vars.lead_email}}) in {{vars.location}}, " +
-  "around {{vars.price}}. Looking for: {{vars.lead_details}}.";
+  "{{vars.lead_name}} ({{vars.lead_phone}}, email: {{vars.lead_email}}) around {{vars.price}}. Looking for: {{vars.lead_details}}.";
 
 const LEAD_SOURCE_LINE = "Lead source: Amy (direct)";
 
@@ -216,70 +289,153 @@ const CLAIMED_NOTIFY_TEMPLATE =
 type When = { var: string; equals?: string; notEquals?: string };
 
 /** Quiet hours mirroring her ReferralExchange lead texts (email fallback). */
-function introQuietHours(mailboxConnectionId: string, leadType: "buyer" | "seller" | "both") {
+function introQuietHours(mailboxConnectionId: string, variant: IntroVariant) {
   return {
     resumeAt: "08:30",
     timezone: PHOENIX_TZ,
     noSendAfter: "22:00",
-    emailSubject: INTRO_SUBJECTS[leadType],
+    emailSubject: INTRO_SUBJECTS[variant],
     emailFallbackVar: "lead_email",
     emailFromConnectionId: mailboxConnectionId
   };
 }
 
 /**
- * The intro body for a lead type, with the referral personal touch inserted
+ * The intro body for a variant, with the referral personal touch inserted
  * after the greeting on the referral branch. Both branch arms are generated
- * from the same base copy, so they can never drift.
+ * from the same base copy, so they can never drift. The Spanish variant gets
+ * the Spanish credit line.
  */
-function introBody(leadType: "buyer" | "seller" | "both", referral: boolean): string {
-  const base = INTRO_BODIES[leadType];
+function introBody(variant: IntroVariant, referral: boolean): string {
+  const base = INTRO_BODIES[variant];
   if (!referral) return base;
-  return base.replace(
-    GREETING_PARAGRAPH,
-    `${GREETING_PARAGRAPH}${REFERRAL_TOUCH_LINE}\n\n`
-  );
+  const touch = variant === "es" ? REFERRAL_TOUCH_LINE_ES : REFERRAL_TOUCH_LINE;
+  const anchor = variant === "es" ? SPANISH_GREETING_PARAGRAPH : GREETING_PARAGRAPH;
+  return base.replace(anchor, `${anchor}${touch}\n\n`);
 }
 
 function introSmsStep(
   mailboxConnectionId: string,
-  leadType: "buyer" | "seller" | "both",
+  variant: IntroVariant,
   referral: boolean
 ) {
   return {
-    id: referral ? `send_${leadType}_ref` : `send_${leadType}`,
+    id: referral ? `send_${variant}_ref` : `send_${variant}`,
     type: "send_sms",
     to: "{{vars.lead_phone}}",
-    body: introBody(leadType, referral),
-    when: { var: "phone_lead_type", equals: leadType } satisfies When,
-    quietHours: introQuietHours(mailboxConnectionId, leadType)
+    body: introBody(variant, referral),
+    when: { var: "phone_lead_type", equals: variant } satisfies When,
+    quietHours: introQuietHours(mailboxConnectionId, variant)
   };
 }
 
 /** No-phone intro email (only when the owner gave an email but no number). */
 function introEmailStep(
   mailboxConnectionId: string,
-  leadType: "buyer" | "seller" | "both",
+  variant: IntroVariant,
   referral: boolean
 ) {
   return {
-    id: referral ? `email_lead_${leadType}_ref` : `email_lead_${leadType}`,
+    id: referral ? `email_lead_${variant}_ref` : `email_lead_${variant}`,
     type: "send_email",
     to: "{{vars.lead_email}}",
-    subject: INTRO_SUBJECTS[leadType],
-    body: introBody(leadType, referral),
-    when: { var: "email_intro_type", equals: leadType } satisfies When,
+    subject: INTRO_SUBJECTS[variant],
+    body: introBody(variant, referral),
+    when: { var: "email_intro_type", equals: variant } satisfies When,
     fromConnectionId: mailboxConnectionId
   };
 }
 
-/** All six intro steps (3 SMS + 3 email) for one branch arm. */
+/**
+ * The AI call, in the language the lead is known to speak. No live transfer by
+ * design (Amy asked for "the AI calls and does what it normally does"), and the
+ * summary goes to her. Two steps, one per language, gated on the same token so
+ * exactly one can fire.
+ */
+function callStep(language: "en" | "es"): Record<string, unknown> {
+  return {
+    id: `call_lead_${language}`,
+    type: "place_ai_call",
+    toVar: "lead_phone",
+    // Inside the call branch: Spanish when the lead speaks it, English
+    // otherwise. The voice AI follows the language they actually speak on the
+    // call regardless, so a wrong guess self-corrects live.
+    when:
+      language === "es"
+        ? ({ var: "lead_language", equals: "es" } satisfies When)
+        : ({ var: "lead_language", equals: "none" } satisfies When),
+    personaTemplate: language === "es" ? CALL_PERSONA_ES : CALL_PERSONA_EN,
+    contextTemplate: CALL_CONTEXT,
+    captureFields: CALL_CAPTURE_FIELDS,
+    // notifyOwner rather than her hardcoded cell: the summary follows her
+    // configured alert number, so changing it in Settings is enough.
+    notifyOwner: true,
+    saveAs: "call_outcome"
+  };
+}
+
+/**
+ * The intro for one referral arm, forked again on language. Spanish is a
+ * nested branch rather than another extraction token because the extract step
+ * is capped at 15 fields: one `lead_language` answer drives the Spanish intro
+ * AND the call persona AND the contact's stored language.
+ *
+ * Inside the Spanish arm the two steps still gate on the SAME phone/email
+ * tokens the English steps use, so "which channel" and "which language" stay
+ * independent decisions.
+ */
 function introSteps(mailboxConnectionId: string, referral: boolean) {
-  const types = ["buyer", "seller", "both"] as const;
+  const englishTypes = ["buyer", "seller", "both"] as const;
   return [
-    ...types.map((t) => introSmsStep(mailboxConnectionId, t, referral)),
-    ...types.map((t) => introEmailStep(mailboxConnectionId, t, referral))
+    {
+      id: referral ? "intro_lang_ref" : "intro_lang",
+      type: "branch",
+      question: "Does this lead speak Spanish?",
+      branches: [
+        {
+          id: referral ? "intro_es_ref" : "intro_es",
+          label: "Spanish speaker",
+          condition: { var: "lead_language", equals: "es" } satisfies When,
+          steps: [
+            {
+              ...introSmsStep(mailboxConnectionId, "es", referral),
+              when: { var: "phone_lead_type", notEquals: "none" } satisfies When
+            },
+            {
+              ...introEmailStep(mailboxConnectionId, "es", referral),
+              when: { var: "email_intro_type", notEquals: "none" } satisfies When
+            }
+          ]
+        }
+      ],
+      else: [
+        ...englishTypes.map((t) => introSmsStep(mailboxConnectionId, t, referral)),
+        ...englishTypes.map((t) => introEmailStep(mailboxConnectionId, t, referral))
+      ]
+    }
   ];
+}
+
+/**
+ * The call, as its own branch so "should we call?" and "in which language?"
+ * stay one extraction token each. An empty else means no call was asked for and
+ * nothing happens.
+ */
+function callBranch(): Record<string, unknown> {
+  return {
+    id: "call_branch",
+    type: "branch",
+    question: "Did the message ask for this lead to be called?",
+    branches: [
+      {
+        id: "call_yes",
+        label: "Call the lead",
+        condition: { var: "call_gate", equals: "yes" } satisfies When,
+        steps: [callStep("es"), callStep("en")]
+      }
+    ],
+    else: []
+  };
 }
 
 function routeStep(
@@ -314,9 +470,9 @@ function routeStep(
     claimedNotifyTemplate: CLAIMED_NOTIFY_TEMPLATE,
     ownerFallbackTemplate: pinned
       ? `${agentName} didn't claim the {{vars.lead_type}} lead {{vars.lead_name}} ` +
-        `({{vars.lead_phone}}, email: {{vars.lead_email}}) in {{vars.location}}.\n${LEAD_SOURCE_LINE}`
+        `({{vars.lead_phone}}, email: {{vars.lead_email}}).\n${LEAD_SOURCE_LINE}`
       : "No agent claimed the {{vars.lead_type}} lead {{vars.lead_name}} " +
-        `({{vars.lead_phone}}, email: {{vars.lead_email}}) in {{vars.location}}.\n${LEAD_SOURCE_LINE}`
+        `({{vars.lead_phone}}, email: {{vars.lead_email}}).\n${LEAD_SOURCE_LINE}`
   };
 }
 
@@ -351,7 +507,7 @@ function assignedRouteStep(): Record<string, unknown> {
     claimedNotifyTemplate: CLAIMED_NOTIFY_TEMPLATE,
     ownerFallbackTemplate:
       "{{vars.assigned_agent}} didn't claim the {{vars.lead_type}} lead {{vars.lead_name}} " +
-      `({{vars.lead_phone}}, email: {{vars.lead_email}}) in {{vars.location}}, ` +
+      "({{vars.lead_phone}}, email: {{vars.lead_email}}), " +
       `even though you asked for them to take it. It's back with you.\n${LEAD_SOURCE_LINE}`
   };
 }
@@ -408,10 +564,6 @@ export function buildDefinition(opts?: {
               "(e.g. 'referral from Donald'). If nothing is given, answer exactly: none"
           },
           {
-            name: "location",
-            description: "The city/area of the lead, if given. If none, answer exactly: none"
-          },
-          {
             name: "price",
             description:
               "The price, budget, or home value if given (e.g. $450K). If none, answer exactly: none"
@@ -424,18 +576,32 @@ export function buildDefinition(opts?: {
               "$999,999 and below are under_1m. If no price is given, answer under_1m."
           },
           {
+            name: "lead_language",
+            description:
+              "Answer exactly es when the message says this lead speaks (or prefers) Spanish. " +
+              "Otherwise answer exactly: none"
+          },
+          {
             name: "phone_lead_type",
             description:
-              "If the message includes a phone number for the lead, answer with the lead type as " +
-              "exactly one lowercase word: buyer, seller, or both (the same answer as lead_type). " +
-              "If NO phone number is given for the lead, answer exactly: none"
+              "Which intro TEXT to send. If there is a phone and the message does not ask ONLY " +
+              "for a call: answer es when the lead speaks Spanish, else the lead type (buyer, " +
+              "seller, or both). If it asks only for a call, or there is no phone, answer " +
+              "exactly: none"
           },
           {
             name: "email_intro_type",
             description:
-              "If the message gives NO phone number for the lead but DOES give an email address, " +
-              "answer with the lead type as exactly one lowercase word: buyer, seller, or both. " +
-              "Otherwise answer exactly: none"
+              "Which intro EMAIL to send. Only when there is NO phone but there IS an email: " +
+              "answer es when the lead speaks Spanish, else the lead type (buyer, seller, or " +
+              "both). Otherwise answer exactly: none"
+          },
+          {
+            name: "call_gate",
+            description:
+              "Answer exactly yes when the message asks for the lead to be CALLED (e.g. 'call " +
+              "this lead', 'give them a call') AND a phone number is given. Otherwise answer " +
+              "exactly: none"
           },
           {
             name: "referred_by",
@@ -469,14 +635,18 @@ export function buildDefinition(opts?: {
         ]
       },
       // File the lead as a contact BEFORE any outreach, gated on a parsed
-      // phone (upsert_customer fails hard on an unusable phoneVar).
+      // phone (upsert_customer fails hard on an unusable phoneVar). It also
+      // stamps the language when the message named one, so every LATER surface
+      // (AI replies, follow-ups, the next flow) speaks it without being told
+      // again; stored as a detection, so the lead's own replies can correct it.
       {
         id: "save_contact",
         type: "upsert_customer",
-        when: { var: "phone_lead_type", notEquals: "none" } satisfies When,
+        when: { var: "route_variant", notEquals: "none" } satisfies When,
         phoneVar: "lead_phone",
         nameVar: "lead_name",
-        emailVar: "lead_email"
+        emailVar: "lead_email",
+        languageVar: "lead_language"
       },
       // Intro from the AI worker (RE copy, quiet hours + email fallback),
       // forked on the referral personal touch. The gate is equals-matched
@@ -497,6 +667,12 @@ export function buildDefinition(opts?: {
         ],
         else: introSteps(mailbox, false)
       },
+      // "Call this lead": the AI places the call and does what it normally
+      // does, in the lead's language, then Amy gets the summary. Exactly one
+      // of the two fires (call_language is es, en, or none), and none means
+      // no call at all. The lead is still routed to a teammate below either
+      // way, because a call does not replace ownership of the lead.
+      callBranch(),
       // Explicit hand-off ("I want Gabby to have this"): the DYNAMIC pin
       // resolves the extracted name against the live roster at run time, so
       // any current or future roster member is pinnable by name.
@@ -509,20 +685,23 @@ export function buildDefinition(opts?: {
       {
         id: "notify",
         type: "notify_owner",
-        when: { var: "phone_lead_type", notEquals: "none" } satisfies When,
+        when: { var: "route_variant", notEquals: "none" } satisfies When,
         message:
           "New Lead Intake handled the {{vars.lead_type}} lead you sent in.\n" +
           `Lead: ${LEAD_SUMMARY_LINE}\n${LEAD_SOURCE_LINE}\n` +
+          // The call outcome is spelled out so a call that never connected is
+          // never reported as handled ("none" when no call was asked for).
+          "Call outcome: {{vars.call_outcome}}.\n" +
           "Outcome: {{vars.actions_taken}}."
       },
       {
         id: "notify_no_phone",
         type: "notify_owner",
-        when: { var: "phone_lead_type", equals: "none" } satisfies When,
+        when: { var: "route_variant", equals: "none" } satisfies When,
         message:
           "New Lead Intake got a lead with NO usable phone number, so no text went out and " +
           "no one was offered the lead.\n" +
-          "Lead: {{vars.lead_name}} (email: {{vars.lead_email}}) in {{vars.location}}, " +
+          "Lead: {{vars.lead_name}} (email: {{vars.lead_email}}) " +
           "around {{vars.price}}. Looking for: {{vars.lead_details}}.\n" +
           "If an email was on file, an intro email was sent instead; the outcome line " +
           "shows exactly what went out.\n" +

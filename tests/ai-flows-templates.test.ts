@@ -277,17 +277,58 @@ describe("newLeadIntakeTemplate", () => {
     expect(tpl.name).toBe("New Lead Intake");
   });
 
-  it("parses, files, intro-texts (referral-forked), routes, and briefs the owner", () => {
+  it("parses, files, intro-texts (referral-forked), can call, routes, and briefs the owner", () => {
     const def = newLeadIntakeTemplate().definition;
     expect(def.steps.map((s) => s.type)).toEqual([
       "extract_text",
       "upsert_customer",
       "branch",
+      "place_ai_call",
       "route_to_team",
       "notify_owner",
       "notify_owner"
     ]);
     expect(summarizeDefinition(def)).toContain("On demand");
+  });
+
+  /**
+   * The starter has to work for ANY tenant, which is exactly why the call step
+   * needs notifyOwner: the other two summary recipients bake in a phone number
+   * or a contact row id.
+   */
+  it("its call step is tenant-neutral: summary to the owner, no live transfer", () => {
+    const def = newLeadIntakeTemplate().definition;
+    const call = def.steps.find((s) => s.type === "place_ai_call");
+    if (!call || call.type !== "place_ai_call") throw new Error("call step missing");
+    expect(call.notifyOwner).toBe(true);
+    expect(call.notifyE164).toBeUndefined();
+    expect(call.notifyRef).toBeUndefined();
+    expect(call.transfer).toBeUndefined();
+    expect(call.when).toEqual({ var: "call_gate", equals: "yes" });
+    expect(call.toVar).toBe("lead_phone");
+  });
+
+  it("stamps the lead's language and separates texting from calling", () => {
+    const def = newLeadIntakeTemplate().definition;
+    const save = def.steps.find((s) => s.type === "upsert_customer");
+    if (!save || save.type !== "upsert_customer") throw new Error("upsert missing");
+    expect(save.languageVar).toBe("lead_language");
+    const parse = def.steps[0];
+    if (parse.type !== "extract_text") throw new Error("extract missing");
+    const names = parse.fields.map((f) => f.name);
+    for (const required of ["lead_language", "text_gate", "call_gate"]) {
+      expect(names).toContain(required);
+    }
+    expect(parse.fields.length).toBeLessThanOrEqual(15);
+    // The intro texts gate on text_gate (which answers none for a call-only
+    // request), never on has_phone, so "call this lead" does not also text.
+    const intro = def.steps.find((s) => s.type === "branch");
+    if (!intro || intro.type !== "branch") throw new Error("intro branch missing");
+    const smsSteps = [...intro.branches[0].steps, ...(intro.else ?? [])].filter(
+      (s) => s.type === "send_sms"
+    );
+    expect(smsSteps).toHaveLength(2);
+    for (const s of smsSteps) expect(s.when).toEqual({ var: "text_gate", equals: "yes" });
   });
 
   it("pins DYNAMICALLY to the teammate the owner named (agentNameVar, no static roster)", () => {
