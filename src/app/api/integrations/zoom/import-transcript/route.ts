@@ -25,6 +25,7 @@ import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { getBusiness } from "@/lib/db/businesses";
+import { recordSystemLog } from "@/lib/db/system-logs";
 import {
   claimZoomTranscriptImport,
   finalizeZoomTranscriptImport,
@@ -133,11 +134,23 @@ export async function POST(request: Request) {
 
       // Stamp the produced document onto the ledger row (also repoints it on
       // a deliberate re-import) so webhook deliveries stay no-ops. Retry the
-      // stamp once; a persistent failure only means the next import attempt
-      // for this meeting waits out the claim lease.
+      // stamp once and escalate like the webhook path does: an unstamped row
+      // is a lease-steal duplicate hazard ops should repair.
       if (meetingUuid) {
-        (await finalizeZoomTranscriptImport(businessId, meetingUuid, imported.document.id)) ||
+        const finalized =
+          (await finalizeZoomTranscriptImport(businessId, meetingUuid, imported.document.id)) ||
           (await finalizeZoomTranscriptImport(businessId, meetingUuid, imported.document.id));
+        if (!finalized) {
+          await recordSystemLog({
+            businessId,
+            source: "zoom-import",
+            event: "zoom_ledger_finalize_failed",
+            level: "error",
+            message:
+              "Manual Zoom import succeeded but the ledger stamp failed twice; repair zoom_transcript_imports.document_id to prevent a lease-steal duplicate",
+            payload: { meetingUuid, documentId: imported.document.id }
+          });
+        }
       }
 
       return successResponse({
