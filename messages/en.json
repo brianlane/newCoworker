@@ -1340,7 +1340,6 @@
       "linkTitle": "Your public booking link",
       "linkSubtitle": "Anyone with this link can book an open time on your calendar. No account needed.",
       "enabledToggle": "Live",
-      "createLink": "Create my booking link",
       "copyLink": "Copy link",
       "copied": "Copied!",
       "rotateLink": "Rotate link",

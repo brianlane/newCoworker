@@ -710,7 +710,10 @@ ledger, `appointment_booked` goal fan-out, the unassigned-booking owner
 alert, and contact filing (tag `Booking Page`, fires `contact_created` so
 round-robin lead assignment picks an on-shift employee) behave exactly like
 AI-made bookings. Owner management lives on the **Bookings** sidebar page
-(`/dashboard/bookings`, below Employees): enable, copy/rotate the link,
+(`/dashboard/bookings`, below Employees). The page auto-provisions, enabled,
+the first time the owner opens Bookings (safe because the token is
+unguessable until shared; Vagaro/Calendly tenants are skipped since booking
+lives on the provider's own page): toggle live, copy/rotate the link,
 durations (15/30/60), minimum notice, max advance, buffer, daily cap, an
 optional "only when an employee is on shift" gate (reuses the AiFlow
 engine's roster evaluators), and the upcoming-bookings list.
