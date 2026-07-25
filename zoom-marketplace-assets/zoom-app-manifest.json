@@ -134,8 +134,12 @@
       "shortcuts" : [ ]
     },
     "event_subscription" : {
-      "enable" : false,
-      "events" : [ ]
+      "enable" : true,
+      "event_notification_url" : "https://www.newcoworker.com/api/webhooks/zoom",
+      "events" : [
+        "recording.transcript_completed",
+        "app_deauthorized"
+      ]
     },
     "custom_form" : {
       "enable" : false

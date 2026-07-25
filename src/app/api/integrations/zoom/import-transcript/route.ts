@@ -5,39 +5,40 @@
  *
  * Fetches the cloud-recording transcript (VTT) through the business's direct
  * Zoom connection (`cloud_recording:read:meeting_transcript` scope), then
- * runs the exact same pipeline as a manual VTT upload to Documents: store
+ * runs the shared import pipeline (src/lib/zoom/import-core.ts, the same
+ * core the recording.transcript_completed webhook auto-import uses): store
  * the original in the private bucket, insert a document row, condense to
  * meeting minutes via ingestDocument, re-sync the VPS vault. The saved
- * document is staff-only by default — meeting content never reaches
+ * document is staff-only by default, meeting content never reaches
  * customer channels unless the owner deliberately widens it.
+ *
+ * The manual path participates in the same dedupe ledger as the webhook
+ * auto-import (when the pasted reference carries the meeting UUID): it
+ * claims the meeting first, politely refuses when an auto-import is
+ * actively mid-flight for it (instead of producing a duplicate document),
+ * and treats a PREVIOUSLY COMPLETED import as a deliberate re-import (the
+ * owner may have deleted the document). A held claim is released on
+ * failure; success stamps the produced document onto the ledger row.
  */
-import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
-import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getBusiness } from "@/lib/db/businesses";
+import { recordSystemLog } from "@/lib/db/system-logs";
 import {
-  countBusinessDocuments,
-  deleteBusinessDocument,
-  insertBusinessDocument,
-  patchBusinessDocument
-} from "@/lib/documents/db";
-import { BUSINESS_DOCS_BUCKET, documentLimitForTier } from "@/lib/documents/core";
-import { ingestDocument } from "@/lib/documents/ingest";
-import { VTT_MIME_TYPE } from "@/lib/transcripts/vtt";
-import { fetchZoomMeetingTranscript } from "@/lib/zoom/transcript";
-import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
-import { logger } from "@/lib/logger";
+  claimZoomTranscriptImport,
+  finalizeZoomTranscriptImport,
+  getZoomTranscriptImport,
+  reclaimCompletedZoomTranscriptImport,
+  releaseZoomTranscriptImport
+} from "@/lib/db/zoom-transcript-imports";
+import { importZoomTranscriptDocument } from "@/lib/zoom/import-core";
+import { fetchZoomMeetingTranscript, rawZoomMeetingUuid } from "@/lib/zoom/transcript";
 
 export const dynamic = "force-dynamic";
 // Zoom fetch + Gemini condense both run inline (owner-attended action).
 export const maxDuration = 120;
-
-// Same ceiling as POST /api/dashboard/documents — an imported transcript
-// must not exceed what a manual upload of the same VTT would be allowed.
-const MAX_DOCUMENT_BYTES = 10 * 1024 * 1024;
 
 const bodySchema = z.object({
   businessId: z.string().uuid(),
@@ -69,123 +70,108 @@ export async function POST(request: Request) {
     const business = await getBusiness(businessId);
     if (!business) return errorResponse("NOT_FOUND", "Business not found", 404);
 
-    const limit = documentLimitForTier(business.tier);
-    const existing = await countBusinessDocuments(businessId, "library");
-    if (existing >= limit) {
-      return errorResponse(
-        "VALIDATION_ERROR",
-        `Document limit reached for your plan (${limit}). Delete a document or upgrade to add more.`
-      );
+    // Coordinate with the webhook auto-import through the shared ledger
+    // (only possible when the pasted reference carries the meeting UUID).
+    const meetingUuid = rawZoomMeetingUuid(meetingId);
+    let holdsClaim = false;
+    if (meetingUuid) {
+      holdsClaim = await claimZoomTranscriptImport(businessId, meetingUuid);
+      if (!holdsClaim) {
+        const existing = await getZoomTranscriptImport(businessId, meetingUuid);
+        if (existing && existing.document_id !== null) {
+          // Completed before: a deliberate RE-import (the owner may have
+          // deleted the document). Atomically flip the row back to
+          // in-flight so concurrent re-imports serialize; the loser falls
+          // through to the in-flight refusal below.
+          holdsClaim = await reclaimCompletedZoomTranscriptImport(businessId, meetingUuid);
+        } else if (!existing) {
+          // The claim vanished between attempts (a failing webhook import
+          // released it): the slot is free, take it now instead of showing
+          // a false already-importing refusal.
+          holdsClaim = await claimZoomTranscriptImport(businessId, meetingUuid);
+        }
+        if (!holdsClaim) {
+          // An import holds a fresh claim right now; a second copy would
+          // just be a duplicate document.
+          return errorResponse(
+            "VALIDATION_ERROR",
+            "Your coworker is already importing this meeting's minutes automatically. Check Documents in a minute or two."
+          );
+        }
+      }
     }
-
-    const transcript = await fetchZoomMeetingTranscript(businessId, meetingId);
-    if (!transcript.ok) {
-      // Every lib failure is owner-actionable copy; surface it verbatim.
-      return errorResponse("VALIDATION_ERROR", transcript.detail);
-    }
-
-    // The pasted reference may be a UUID or a full recording link — neither
-    // is filename/title material. Label with the digits when it's a plain
-    // meeting ID, else a generic marker.
-    const digits = meetingId.replace(/\s+/g, "");
-    const refLabel = /^\d{9,15}$/.test(digits) ? digits : "recording";
-    const title = parsed.data.title || `Zoom meeting ${refLabel} — transcript`;
-    const documentId = randomUUID();
-    const storagePath = `${businessId}/${documentId}/zoom-meeting-${refLabel}.vtt`;
-    const bytes = Buffer.from(transcript.vtt, "utf8");
-    if (bytes.byteLength > MAX_DOCUMENT_BYTES) {
-      return errorResponse(
-        "VALIDATION_ERROR",
-        "This transcript is larger than the 10 MB document limit."
-      );
-    }
-
-    const db = await createSupabaseServiceClient();
-    const { error: uploadError } = await db.storage
-      .from(BUSINESS_DOCS_BUCKET)
-      .upload(storagePath, bytes, { contentType: VTT_MIME_TYPE });
-    if (uploadError) {
-      logger.warn("zoom import-transcript: storage upload failed", {
-        businessId,
-        error: uploadError.message
-      });
-      return errorResponse("INTERNAL_SERVER_ERROR", "Could not store the transcript");
-    }
-
-    const removeUploadedObject = async (): Promise<void> => {
-      const { error: removeError } = await db.storage
-        .from(BUSINESS_DOCS_BUCKET)
-        .remove([storagePath]);
-      if (removeError) {
-        logger.warn("zoom import-transcript: orphan object cleanup failed", {
-          businessId,
-          storagePath,
-          error: removeError.message
-        });
+    const releaseHeldClaim = async (): Promise<void> => {
+      if (holdsClaim && meetingUuid) {
+        await releaseZoomTranscriptImport(businessId, meetingUuid);
       }
     };
 
-    let row;
     try {
-      row = await insertBusinessDocument({
-        id: documentId,
-        business_id: businessId,
+      const transcript = await fetchZoomMeetingTranscript(businessId, meetingId);
+      if (!transcript.ok) {
+        await releaseHeldClaim();
+        // Every lib failure is owner-actionable copy; surface it verbatim.
+        return errorResponse("VALIDATION_ERROR", transcript.detail);
+      }
+
+      // The pasted reference may be a UUID or a full recording link, neither
+      // is filename/title material. Label with the digits when it's a plain
+      // meeting ID, else a generic marker.
+      const digits = meetingId.replace(/\s+/g, "");
+      const refLabel = /^\d{9,15}$/.test(digits) ? digits : "recording";
+      const title = parsed.data.title || `Zoom meeting ${refLabel} (transcript)`;
+
+      const imported = await importZoomTranscriptDocument({
+        businessId,
+        business: { name: business.name, tier: business.tier },
+        vtt: transcript.vtt,
         title,
-        category: "meeting",
-        audience: "staff",
-        storage_path: storagePath,
-        mime_type: VTT_MIME_TYPE,
-        byte_size: bytes.byteLength
+        refLabel
+      });
+
+      if (!imported.ok) {
+        await releaseHeldClaim();
+        if (imported.error === "storage_failed") {
+          return errorResponse("INTERNAL_SERVER_ERROR", imported.detail);
+        }
+        return errorResponse("VALIDATION_ERROR", imported.detail);
+      }
+
+      // Stamp the produced document onto the ledger row (also repoints it on
+      // a deliberate re-import) so webhook deliveries stay no-ops. Retry the
+      // stamp once and escalate like the webhook path does: an unstamped row
+      // is a lease-steal duplicate hazard ops should repair.
+      if (meetingUuid) {
+        const finalized =
+          (await finalizeZoomTranscriptImport(businessId, meetingUuid, imported.document.id)) ||
+          (await finalizeZoomTranscriptImport(businessId, meetingUuid, imported.document.id));
+        if (!finalized) {
+          await recordSystemLog({
+            businessId,
+            source: "zoom-import",
+            event: "zoom_ledger_finalize_failed",
+            level: "error",
+            message:
+              "Manual Zoom import succeeded but the ledger stamp failed twice; repair zoom_transcript_imports.document_id to prevent a lease-steal duplicate",
+            payload: { meetingUuid, documentId: imported.document.id }
+          });
+        }
+      }
+
+      return successResponse({
+        document: {
+          ...imported.document,
+          status: imported.status,
+          error_detail: imported.errorDetail
+        },
+        summary: imported.summary
       });
     } catch (err) {
-      await removeUploadedObject();
+      // A throw anywhere past the claim must not leave the in-flight row
+      // blocking webhook dedupe until the lease expires.
+      await releaseHeldClaim();
       throw err;
     }
-
-    // Serial re-check closes the pre-insert cap race (same convention as
-    // the documents upload route).
-    const afterInsert = await countBusinessDocuments(businessId, "library");
-    if (afterInsert > limit) {
-      await deleteBusinessDocument(businessId, documentId);
-      await removeUploadedObject();
-      return errorResponse(
-        "VALIDATION_ERROR",
-        `Document limit reached for your plan (${limit}). Delete a document or upgrade to add more.`
-      );
-    }
-
-    const ingested = await ingestDocument({
-      businessId,
-      title,
-      mimeType: VTT_MIME_TYPE,
-      data: bytes,
-      businessName: business.name
-    });
-    if (ingested.ok) {
-      await patchBusinessDocument(businessId, documentId, {
-        content_md: ingested.contentMd,
-        summary: ingested.summary,
-        status: "ready",
-        error_detail: null
-      });
-      // Fire-and-forget: the Supabase write is canonical; a slow VPS must
-      // not block the import response.
-      void syncVaultToVpsAndLog(businessId);
-    } else {
-      await patchBusinessDocument(businessId, documentId, {
-        status: "failed",
-        error_detail: ingested.detail ?? ingested.error
-      });
-    }
-
-    return successResponse({
-      document: {
-        ...row,
-        status: ingested.ok ? "ready" : "failed",
-        error_detail: ingested.ok ? null : ingested.detail ?? ingested.error
-      },
-      summary: ingested.ok ? ingested.summary : null
-    });
   } catch (err) {
     return handleRouteError(err);
   }

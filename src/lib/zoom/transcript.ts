@@ -1,5 +1,5 @@
 /**
- * Zoom meeting transcript fetch — the `cloud_recording:read:meeting_transcript`
+ * Zoom meeting transcript fetch, the `cloud_recording:read:meeting_transcript`
  * scope added to the "New Coworker OAuth" Marketplace app (2026-07-17).
  *
  * `GET /meetings/{meetingId}/transcript` reports whether the cloud-recording
@@ -9,7 +9,7 @@
  *
  * Direct (first-party) connections only: the transcript scope is granted to
  * OUR OAuth app, so legacy Nango-proxied Zoom links can never carry it.
- * Errors are typed for the owner-facing import flow — every failure mode
+ * Errors are typed for the owner-facing import flow, every failure mode
  * maps to an actionable message, never a bare 500.
  */
 import { logger } from "@/lib/logger";
@@ -36,9 +36,9 @@ export type ZoomTranscriptResult =
 /**
  * Normalize an owner-pasted meeting reference into the path segment the
  * transcript endpoint accepts. Zoom's `GET /meetings/{id}/transcript`
- * resolves ONLY the past-meeting instance UUID for instant/ended meetings —
+ * resolves ONLY the past-meeting instance UUID for instant/ended meetings,
  * the numeric meeting id 404s (code 3322) even when the portal shows a
- * transcript — so owners can paste any of:
+ * transcript, so owners can paste any of:
  *
  *   - the numeric meeting ID ("876 3018 1550"), kept for scheduled meetings;
  *   - the meeting UUID ("jhqVQlf1RyuEX/1TCRs+Jg==");
@@ -82,6 +82,30 @@ function encodeUuidSegment(uuid: string): string {
   return uuid.startsWith("/") || uuid.includes("//") ? encodeURIComponent(once) : once;
 }
 
+/**
+ * The RAW (unencoded) meeting UUID from an owner-pasted reference, when the
+ * reference carries one: a recording page link's `meeting_id` param or a
+ * bare UUID. Numeric meeting IDs and unusable inputs return null. Used to
+ * key the transcript-import dedupe ledger, which stores raw UUIDs (the
+ * webhook payload's `object.uuid` is raw too).
+ */
+export function rawZoomMeetingUuid(raw: string): string | null {
+  const input = raw.trim();
+  if (!input) return null;
+  if (/^https?:\/\//i.test(input)) {
+    try {
+      const url = new URL(input);
+      if (!/(^|\.)zoom\.(us|com)$/i.test(url.hostname)) return null;
+      const uuid = url.searchParams.get("meeting_id")?.trim();
+      return uuid && uuid.length > 0 ? uuid : null;
+    } catch {
+      return null;
+    }
+  }
+  if (/^[A-Za-z0-9+/=]{16,64}$/.test(input) && /[^0-9]/.test(input)) return input;
+  return null;
+}
+
 type TranscriptDeps = {
   /** Injectable token resolver (tests). */
   getToken?: (businessId: string) => Promise<string | null>;
@@ -105,9 +129,9 @@ async function timedFetch(
 
 /**
  * Fetch the cloud-recording transcript (raw WebVTT text) for one of the
- * connected account's meetings. `meetingRef` is whatever the owner pasted —
+ * connected account's meetings. `meetingRef` is whatever the owner pasted,
  * numeric ID, UUID, or recording link (see normalizeZoomMeetingRef). Never
- * throws — every failure returns a typed, owner-presentable result.
+ * throws, every failure returns a typed, owner-presentable result.
  */
 export async function fetchZoomMeetingTranscript(
   businessId: string,
@@ -166,7 +190,7 @@ export async function fetchZoomMeetingTranscript(
 
   if (metaRes.status === 401 || metaRes.status === 403) {
     // Insufficient scope or revoked token: connections made before the
-    // transcript scope shipped don't carry it — reconnect re-consents.
+    // transcript scope shipped don't carry it, reconnect re-consents.
     return {
       ok: false,
       error: "not_connected",
@@ -176,7 +200,7 @@ export async function fetchZoomMeetingTranscript(
   }
   if (metaRes.status === 404) {
     // Zoom quirk: for instant/ended meetings the numeric ID often 404s
-    // (code 3322) even though the portal shows a transcript — only the
+    // (code 3322) even though the portal shows a transcript, only the
     // past-meeting instance UUID resolves. Steer the owner to the link.
     return {
       ok: false,
@@ -238,7 +262,7 @@ export async function fetchZoomMeetingTranscript(
 
   const vtt = (await dlRes.text()).trim();
   if (!/^\uFEFF?WEBVTT/.test(vtt)) {
-    // A login page or error body instead of a transcript — refuse rather
+    // A login page or error body instead of a transcript, refuse rather
     // than ingest garbage into the owner's document library.
     return {
       ok: false,

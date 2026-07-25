@@ -14,7 +14,11 @@ vi.mock("@/lib/zoom/client", () => ({
   getZoomAccessToken: (...args: unknown[]) => getZoomAccessToken(...args)
 }));
 
-import { fetchZoomMeetingTranscript, normalizeZoomMeetingRef } from "@/lib/zoom/transcript";
+import {
+  fetchZoomMeetingTranscript,
+  normalizeZoomMeetingRef,
+  rawZoomMeetingUuid
+} from "@/lib/zoom/transcript";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const MEETING = "1784344402882";
@@ -72,6 +76,31 @@ describe("normalizeZoomMeetingRef", () => {
     expect(normalizeZoomMeetingRef("not a meeting")).toBeNull();
     expect(normalizeZoomMeetingRef("  ")).toBeNull();
     expect(normalizeZoomMeetingRef("12345")).toBeNull();
+  });
+});
+
+describe("rawZoomMeetingUuid", () => {
+  it("returns the raw UUID from a recording page link", () => {
+    const link =
+      "https://us06web.zoom.us/recording/detail?meeting_id=jhqVQlf1RyuEX%2F1TCRs%2BJg%3D%3D";
+    expect(rawZoomMeetingUuid(link)).toBe("jhqVQlf1RyuEX/1TCRs+Jg==");
+  });
+
+  it("returns a bare UUID unchanged", () => {
+    expect(rawZoomMeetingUuid("jhqVQlf1RyuEX/1TCRs+Jg==")).toBe("jhqVQlf1RyuEX/1TCRs+Jg==");
+  });
+
+  it("returns null for numeric ids (no UUID to dedupe on)", () => {
+    expect(rawZoomMeetingUuid("1784344402882")).toBeNull();
+  });
+
+  it("rejects non-zoom links, linkless params, bad URLs, and junk", () => {
+    expect(rawZoomMeetingUuid("https://evil.example.com/?meeting_id=abc==")).toBeNull();
+    expect(rawZoomMeetingUuid("https://zoom.us/recording/detail")).toBeNull();
+    expect(rawZoomMeetingUuid("https://zoom.us/recording/detail?meeting_id=")).toBeNull();
+    expect(rawZoomMeetingUuid("https://[bad")).toBeNull();
+    expect(rawZoomMeetingUuid("not a meeting")).toBeNull();
+    expect(rawZoomMeetingUuid("   ")).toBeNull();
   });
 });
 

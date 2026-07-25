@@ -1,0 +1,186 @@
+/**
+ * Tests for the shared Zoom transcript-import pipeline
+ * (src/lib/zoom/import-core.ts): tier cap (pre-insert and the serial
+ * re-check), the 10 MB ceiling, storage failure/cleanup, and both
+ * ingestion outcomes.
+ */
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/lib/logger", () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
+}));
+// Production collaborators are injected in every test; mock the modules so
+// importing the core stays hermetic (no supabase/gemini/vps module init).
+vi.mock("@/lib/supabase/server", () => ({
+  createSupabaseServiceClient: vi.fn()
+}));
+vi.mock("@/lib/documents/db", () => ({
+  countBusinessDocuments: vi.fn(),
+  deleteBusinessDocument: vi.fn(),
+  insertBusinessDocument: vi.fn(),
+  patchBusinessDocument: vi.fn()
+}));
+vi.mock("@/lib/documents/ingest", () => ({
+  ingestDocument: vi.fn()
+}));
+vi.mock("@/lib/vps/sync-vault", () => ({
+  syncVaultToVpsAndLog: vi.fn()
+}));
+
+import {
+  importZoomTranscriptDocument,
+  MAX_ZOOM_TRANSCRIPT_BYTES
+} from "@/lib/zoom/import-core";
+
+const BIZ = "11111111-1111-4111-8111-111111111111";
+const DOC_ID = "22222222-2222-4222-8222-222222222222";
+const VTT = "WEBVTT\n\n1\n00:00:01.000 --> 00:00:03.000\nBrian: Hello everyone\n";
+
+const DOC_ROW = { id: DOC_ID, business_id: BIZ, title: "T" };
+
+function makeStorage(uploadError: unknown = null, removeError: unknown = null) {
+  const upload = vi.fn().mockResolvedValue({ error: uploadError });
+  const remove = vi.fn().mockResolvedValue({ error: removeError });
+  const client = { storage: { from: vi.fn(() => ({ upload, remove })) } };
+  return { client: client as never, upload, remove };
+}
+
+function makeDeps(overrides: Record<string, unknown> = {}) {
+  const storage = makeStorage();
+  return {
+    storage,
+    deps: {
+      client: storage.client,
+      countDocuments: vi.fn().mockResolvedValue(0),
+      insertDocument: vi.fn().mockResolvedValue(DOC_ROW),
+      patchDocument: vi.fn().mockResolvedValue(undefined),
+      deleteDocument: vi.fn().mockResolvedValue(undefined),
+      ingest: vi
+        .fn()
+        .mockResolvedValue({ ok: true, contentMd: "## Minutes", summary: "Short recap" }),
+      syncVault: vi.fn().mockResolvedValue(undefined),
+      uuid: vi.fn(() => DOC_ID),
+      ...overrides
+    } as never
+  };
+}
+
+const PARAMS = {
+  businessId: BIZ,
+  business: { name: "Acme Spa", tier: "standard" as never },
+  vtt: VTT,
+  title: "Team sync (transcript)",
+  refLabel: "1784344402882"
+};
+
+beforeEach(() => {
+  vi.clearAllMocks();
+});
+
+describe("importZoomTranscriptDocument", () => {
+  it("refuses when the document cap is already reached", async () => {
+    const { deps } = makeDeps({ countDocuments: vi.fn().mockResolvedValue(10_000) });
+    const result = await importZoomTranscriptDocument(PARAMS, deps);
+    expect(result).toMatchObject({ ok: false, error: "limit_reached" });
+  });
+
+  it("refuses a transcript over the 10 MB ceiling", async () => {
+    const { deps } = makeDeps();
+    const huge = "WEBVTT\n" + "x".repeat(MAX_ZOOM_TRANSCRIPT_BYTES);
+    const result = await importZoomTranscriptDocument({ ...PARAMS, vtt: huge }, deps);
+    expect(result).toMatchObject({ ok: false, error: "too_large" });
+  });
+
+  it("reports a storage failure without inserting a row", async () => {
+    const storage = makeStorage({ message: "bucket down" });
+    const { deps } = makeDeps({ client: storage.client });
+    const result = await importZoomTranscriptDocument(PARAMS, deps);
+    expect(result).toMatchObject({ ok: false, error: "storage_failed" });
+  });
+
+  it("cleans up the uploaded object when the row insert throws", async () => {
+    const storage = makeStorage();
+    const { deps } = makeDeps({
+      client: storage.client,
+      insertDocument: vi.fn().mockRejectedValue(new Error("insert boom"))
+    });
+    await expect(importZoomTranscriptDocument(PARAMS, deps)).rejects.toThrow(/insert boom/);
+    expect(storage.remove).toHaveBeenCalledWith([
+      `${BIZ}/${DOC_ID}/zoom-meeting-1784344402882.vtt`
+    ]);
+  });
+
+  it("logs (but does not mask) an orphan-cleanup failure", async () => {
+    const storage = makeStorage(null, { message: "remove failed" });
+    const { deps } = makeDeps({
+      client: storage.client,
+      insertDocument: vi.fn().mockRejectedValue(new Error("insert boom"))
+    });
+    await expect(importZoomTranscriptDocument(PARAMS, deps)).rejects.toThrow(/insert boom/);
+  });
+
+  it("rolls back when the serial re-check finds the cap exceeded", async () => {
+    const countDocuments = vi
+      .fn()
+      .mockResolvedValueOnce(0)
+      .mockResolvedValueOnce(10_000);
+    const storage = makeStorage();
+    const deleteDocument = vi.fn().mockResolvedValue(undefined);
+    const { deps } = makeDeps({ client: storage.client, countDocuments, deleteDocument });
+    const result = await importZoomTranscriptDocument(PARAMS, deps);
+    expect(result).toMatchObject({ ok: false, error: "limit_reached" });
+    expect(deleteDocument).toHaveBeenCalledWith(BIZ, DOC_ID);
+    expect(storage.remove).toHaveBeenCalled();
+  });
+
+  it("stores, condenses, patches ready, and fires the vault sync on success", async () => {
+    const { deps, storage } = makeDeps();
+    const result = await importZoomTranscriptDocument(PARAMS, deps);
+    expect(result).toMatchObject({
+      ok: true,
+      status: "ready",
+      errorDetail: null,
+      summary: "Short recap"
+    });
+    expect(storage.upload).toHaveBeenCalled();
+    const d = deps as { patchDocument: ReturnType<typeof vi.fn>; syncVault: ReturnType<typeof vi.fn> };
+    expect(d.patchDocument).toHaveBeenCalledWith(BIZ, DOC_ID, {
+      content_md: "## Minutes",
+      summary: "Short recap",
+      status: "ready",
+      error_detail: null
+    });
+    expect(d.syncVault).toHaveBeenCalledWith(BIZ);
+  });
+
+  it("rolls back the document when a post-insert step throws (no retry duplicates)", async () => {
+    const storage = makeStorage();
+    const deleteDocument = vi.fn().mockResolvedValue(undefined);
+    const { deps } = makeDeps({
+      client: storage.client,
+      deleteDocument,
+      patchDocument: vi.fn().mockRejectedValue(new Error("patch boom"))
+    });
+    await expect(importZoomTranscriptDocument(PARAMS, deps)).rejects.toThrow(/patch boom/);
+    expect(deleteDocument).toHaveBeenCalledWith(BIZ, DOC_ID);
+    expect(storage.remove).toHaveBeenCalledWith([
+      `${BIZ}/${DOC_ID}/zoom-meeting-1784344402882.vtt`
+    ]);
+  });
+
+  it("marks the document failed when condensation fails (detail preferred)", async () => {
+    const { deps } = makeDeps({
+      ingest: vi.fn().mockResolvedValue({ ok: false, error: "model_error", detail: "quota" })
+    });
+    const result = await importZoomTranscriptDocument(PARAMS, deps);
+    expect(result).toMatchObject({ ok: true, status: "failed", errorDetail: "quota" });
+  });
+
+  it("falls back to the error code when the failure has no detail", async () => {
+    const { deps } = makeDeps({
+      ingest: vi.fn().mockResolvedValue({ ok: false, error: "model_error" })
+    });
+    const result = await importZoomTranscriptDocument(PARAMS, deps);
+    expect(result).toMatchObject({ ok: true, status: "failed", errorDetail: "model_error" });
+  });
+});

@@ -1,7 +1,11 @@
 # Zoom deauthorization webhook + data compliance (planned fast follow)
 
-Status: PLANNED, not yet built. Written 2026-07-24, the day "New Coworker
-OAuth" was approved and published on the Zoom App Marketplace
+Status: IMPLEMENTED (Jul 2026) as part of the automatic-meeting-minutes
+webhook build: `/api/webhooks/zoom` handles `app_deauthorized` alongside
+`recording.transcript_completed` (core in `src/lib/zoom/webhook.ts`). The
+sections below are the original plan, kept for the rationale and the
+rollout caution. Written 2026-07-24, the day "New Coworker OAuth" was
+approved and published on the Zoom App Marketplace
 (listing: https://marketplace.zoom.us/apps/il8znyqrQ1y7GdkFnZ11dg).
 
 ## Why
