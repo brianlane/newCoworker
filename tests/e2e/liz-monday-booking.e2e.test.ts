@@ -12,6 +12,10 @@ import {
   type ContactTimelineEvent
 } from "../../supabase/functions/_shared/contact_context";
 import { currentDateTimeLine } from "../../supabase/functions/_shared/datetime_line";
+import {
+  REASONING_PROMPT_INSTRUCTION,
+  splitReplyReasoning
+} from "../../supabase/functions/_shared/reply_reasoning";
 import { renderWorkflowSeed } from "../../debug/_workflow-seed";
 import { requireGeminiKey, transientBackoffMs } from "./gemini";
 import { judgeReply, type JudgeVerdict } from "./judge";
@@ -134,14 +138,20 @@ function buildSystem(): string {
         "sometime today?"
     }
   ];
-  return [
-    PERSONA,
-    `${SMS_IDENTITY_LINE}\n\n${SMS_GROUNDED_ACTIONS_LINE}\n\n${SMS_CONVERSATION_QUALITY_LINE}\n\n${SMS_TIMEZONE_LINE}\n\n${NO_EM_DASH_PROMPT_LINE}\n\n${dateLine}\n\n${phoneLine}`,
-    memoryPreamble,
-    formatContactTimeline(timeline)
-  ]
-    .filter((part): part is string => Boolean(part))
-    .join("\n\n");
+  return (
+    [
+      PERSONA,
+      `${SMS_IDENTITY_LINE}\n\n${SMS_GROUNDED_ACTIONS_LINE}\n\n${SMS_CONVERSATION_QUALITY_LINE}\n\n${SMS_TIMEZONE_LINE}\n\n${NO_EM_DASH_PROMPT_LINE}\n\n${dateLine}\n\n${phoneLine}`,
+      memoryPreamble,
+      formatContactTimeline(timeline)
+    ]
+      .filter((part): part is string => Boolean(part))
+      .join("\n\n") +
+    // Customer turns always carry the reasoning-trailer ask
+    // (sms-inbound-worker line "customerPreamble += REASONING_..."); the
+    // harness strips it with splitReplyReasoning like the worker does.
+    REASONING_PROMPT_INSTRUCTION
+  );
 }
 
 const SYSTEM = buildSystem();
@@ -259,7 +269,11 @@ async function smsTurn(
     });
     contents.push({ role: "user", parts: responses });
   }
-  return { finalText, calls, contents };
+  // The worker strips the reasoning trailer before caching/sending
+  // (splitReplyReasoning), so assertions and the judge see exactly what
+  // the texter would. Trailer PRESENCE is pinned by the KYP replay; this
+  // suite stays focused on the booking contracts.
+  return { finalText: splitReplyReasoning(finalText).reply, calls, contents };
 }
 
 /** Stub results shaped like the /api/rowboat/tool-call envelopes. */
@@ -274,9 +288,22 @@ function baseRouter(
   return (name, args) => {
     if (overrides[name]) return overrides[name](args);
     if (name === "customer_lookup_by_phone") {
+      // Production lookupCustomerByPhone nests the profile under
+      // data.customer (customer-tools/handlers.ts) — keep the envelope
+      // byte-shaped so tool-loop behavior matches live SMS.
       return {
         ok: true,
-        data: { found: true, displayName: "Liz Alvarez", phone: LEAD, email: null }
+        data: {
+          found: true,
+          customer: {
+            displayName: "Liz Alvarez",
+            customerE164: LEAD,
+            summary: null,
+            lastChannel: "sms",
+            lastInteractionAt: "2026-07-25T15:57:00.000Z",
+            totalInteractionCount: 3
+          }
+        }
       };
     }
     if (name === "customer_set_display_name") return { ok: true, data: { saved: true } };
