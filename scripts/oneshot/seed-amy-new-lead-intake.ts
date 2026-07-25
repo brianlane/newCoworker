@@ -697,9 +697,12 @@ export function buildDefinition(opts?: {
         message:
           "New Lead Intake handled the {{vars.lead_type}} lead you sent in.\n" +
           `Lead: ${LEAD_SUMMARY_LINE}\n${LEAD_SOURCE_LINE}\n` +
-          // The call outcome is spelled out so a call that never connected is
-          // never reported as handled ("none" when no call was asked for).
-          "Call outcome: {{vars.call_outcome}}.\n" +
+          // No explicit call-outcome line here: {{vars.call_outcome}} only
+          // exists on runs that actually placed a call, so on every other run
+          // it would render as a bare "Call outcome: ." (Bugbot on #919). The
+          // call step texts its own post-call summary and transcript
+          // (notifyOwner), which reports the outcome in more detail than a
+          // token, and actions_taken below records that a call was placed.
           "Outcome: {{vars.actions_taken}}."
       },
       {

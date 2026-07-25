@@ -569,9 +569,10 @@ export function newLeadIntakeTemplate(): AiFlowTemplate {
             "New Lead Intake handled the lead you sent in.\n" +
             "Lead: {{vars.lead_name}} ({{vars.lead_phone}}, email: {{vars.lead_email}}). " +
             "Looking for: {{vars.lead_details}}.\n" +
-            // Spelled out so a call that never connected is never reported as
-            // handled ("none" when no call was asked for).
-            "Call outcome: {{vars.call_outcome}}.\n" +
+            // No call-outcome line: {{vars.call_outcome}} only exists on runs
+            // that placed a call, so elsewhere it would render as a bare
+            // "Call outcome: ." The call step texts its own post-call summary
+            // (notifyOwner) and actions_taken records that a call went out.
             "Outcome: {{vars.actions_taken}}."
         },
         {

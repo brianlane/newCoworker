@@ -342,10 +342,22 @@ describe("seed-amy-new-lead-intake definition", () => {
     expect(String(noPhone.message)).toContain("NO usable phone number");
   });
 
-  it("the owner notify reports the call outcome, so a failed call is never 'handled'", () => {
-    const notify = step(buildDefinition(), "notify");
-    expect(String(notify.message)).toContain("{{vars.call_outcome}}");
-    expect(String(notify.message)).toContain("{{vars.actions_taken}}");
+  /**
+   * Bugbot on #919: every var a notify renders must exist on EVERY run that
+   * notify can fire on. call_outcome only exists when a call was placed, so
+   * naming it left "Call outcome: ." on every other run. The call step's own
+   * post-call summary (notifyOwner) is the authoritative report.
+   */
+  it("the owner notifies name only vars that exist on every run they fire on", () => {
+    const def = buildDefinition();
+    const perRunVars = new Set(["actions_taken", "lead_name", "lead_phone", "lead_email", "price", "lead_details", "lead_type"]);
+    for (const id of ["notify", "notify_no_phone"]) {
+      const message = String(step(def, id).message);
+      const referenced = [...message.matchAll(/\{\{vars\.([a-z_]+)/g)].map((m) => m[1]);
+      for (const name of referenced) expect(perRunVars).toContain(name);
+      expect(message).toContain("{{vars.actions_taken}}");
+      expect(message).not.toContain("call_outcome");
+    }
   });
 
   it("honors an overridden agent and mailbox across every intro arm", () => {
