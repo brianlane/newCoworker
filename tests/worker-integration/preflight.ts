@@ -61,12 +61,21 @@ export async function setup(): Promise<void> {
     );
   }
 
-  // An RPC too: function EXECUTE is granted separately from table DML, so a
-  // table-only probe would miss a stack that can read but cannot claim runs.
-  // A permission error is fatal; anything else (bad args, empty result) means
-  // the callable surface is reachable, which is all this checks.
-  const { error: rpcErr } = await db.rpc("claim_ai_flow_runs", { p_limit: 0 });
+  // The RPC path too: function EXECUTE is granted separately from table DML, so
+  // a table-only probe would miss a stack that can read but cannot call
+  // anything. The probe MUST be side-effect-free, since this runs before any
+  // scenario and shares the database with all of them:
+  // check_sms_monthly_limit only SELECTs, and an unknown business id returns
+  // `{allowed: false, reason: "no_business"}` without touching a row.
+  // (claim_ai_flow_runs would be the wrong choice here: it takes a lease, and
+  // `limit greatest(1, p_limit)` means even p_limit 0 flips a queued run to
+  // running.) This function carries an explicit grant in its own migration, so
+  // it proves the callable surface works rather than proving the backfill
+  // landed; the table probe above is what detects the stale-stack case.
+  const { error: rpcErr } = await db.rpc("check_sms_monthly_limit", {
+    p_business_id: "00000000-0000-4000-8000-000000000000"
+  });
   if (rpcErr && /permission denied|does not exist/i.test(rpcErr.message)) {
-    fail("service_role cannot execute claim_ai_flow_runs", rpcErr.message);
+    fail("service_role cannot call RPCs (check_sms_monthly_limit)", rpcErr.message);
   }
 }
