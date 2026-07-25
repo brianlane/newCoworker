@@ -307,14 +307,7 @@ export function AssignDidPanel(props: AssignDidPanelProps) {
           <input
             type="checkbox"
             checked={transferEnabled}
-            onChange={(e) => {
-              setTransferEnabled(e.target.checked);
-              // Interpreting only ever happens AFTER a transfer, so turning
-              // transfer off must visibly turn this off too. Leaving it checked
-              // (while its input is disabled) would strand an operator who
-              // cannot uncheck it, and still post true.
-              if (!e.target.checked) setTranslatorModeEnabled(false);
-            }}
+            onChange={(e) => setTransferEnabled(e.target.checked)}
           />
           Let the AI warm-transfer callers to this number
         </label>
@@ -323,17 +316,18 @@ export function AssignDidPanel(props: AssignDidPanelProps) {
             type="checkbox"
             className="mt-0.5"
             checked={translatorModeEnabled}
-            disabled={!transferEnabled}
             onChange={(e) => setTranslatorModeEnabled(e.target.checked)}
           />
           <span>
             Stay on the call as a live interpreter after a transfer
             <span className="mt-1 block text-[11px] text-parchment/40">
-              For callers who do not share a language with whoever picks up. The AI
-              hears both people and speaks to both, translating each side. Costs
-              more than a normal transfer: an interpreted call meters BOTH call legs
-              and runs AI for the whole conversation, not just the first few
-              seconds. Applies to the next call, not one already in progress.
+              On by default. For callers who do not share a language with whoever
+              picks up: the AI hears both people and speaks to both, translating
+              each side. It only engages when someone actually needs it, so leaving
+              it on costs nothing on ordinary calls. An interpreted call does cost
+              more than a plain transfer: it meters BOTH legs and runs AI for the
+              whole conversation. Applies to the next call, not one in progress.
+              {!transferEnabled ? " Needs warm transfer on to have any effect." : ""}
             </span>
           </span>
         </label>

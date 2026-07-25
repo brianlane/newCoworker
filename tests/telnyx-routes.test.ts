@@ -14,7 +14,6 @@ import {
   setForwardToE164,
   setBusinessMessagingCampaignStatus,
   listBusinessesPendingTendlcAttach,
-  resolveTranslatorModePatch,
   upsertBusinessTelnyxSettings,
   setStaffSmsSettings
 } from "@/lib/db/telnyx-routes";
@@ -269,95 +268,6 @@ describe("telnyx-routes DB layer", () => {
       const [row] = c.upsert.mock.calls[0];
       expect(row as Record<string, unknown>).toHaveProperty(expectedKey);
     }
-  });
-
-  describe("resolveTranslatorModePatch (translator mode requires warm transfer)", () => {
-    // Interpreting only happens AFTER a transfer bridges a human in, and the
-    // admin UI disables the interpreter checkbox when transfer is off, so an
-    // inconsistent pair could not be fixed from the UI. Enforced server-side.
-    const neverLoads = () => {
-      throw new Error("should not read current settings");
-    };
-
-    it("forces translator off when the same patch turns transfer off", async () => {
-      await expect(
-        resolveTranslatorModePatch({
-          requested: true,
-          transferEnabledPatch: false,
-          loadCurrent: neverLoads as never
-        })
-      ).resolves.toBe(false);
-    });
-
-    it("forces translator off when transfer is turned off without mentioning it", async () => {
-      await expect(
-        resolveTranslatorModePatch({
-          requested: undefined,
-          transferEnabledPatch: false,
-          loadCurrent: neverLoads as never
-        })
-      ).resolves.toBe(false);
-    });
-
-    it("leaves the column untouched when the patch does not mention either", async () => {
-      await expect(
-        resolveTranslatorModePatch({
-          requested: undefined,
-          transferEnabledPatch: undefined,
-          loadCurrent: neverLoads as never
-        })
-      ).resolves.toBeUndefined();
-    });
-
-    it("always allows turning translator off", async () => {
-      await expect(
-        resolveTranslatorModePatch({
-          requested: false,
-          transferEnabledPatch: undefined,
-          loadCurrent: neverLoads as never
-        })
-      ).resolves.toBe(false);
-    });
-
-    it("allows turning it on when the same patch enables transfer", async () => {
-      await expect(
-        resolveTranslatorModePatch({
-          requested: true,
-          transferEnabledPatch: true,
-          loadCurrent: neverLoads as never
-        })
-      ).resolves.toBe(true);
-    });
-
-    it("allows turning it on when the stored row already has transfer on", async () => {
-      await expect(
-        resolveTranslatorModePatch({
-          requested: true,
-          transferEnabledPatch: undefined,
-          loadCurrent: async () => ({ ...sampleSettings, transfer_enabled: true }) as never
-        })
-      ).resolves.toBe(true);
-    });
-
-    it("refuses to turn it on when the stored row has transfer off", async () => {
-      await expect(
-        resolveTranslatorModePatch({
-          requested: true,
-          transferEnabledPatch: undefined,
-          loadCurrent: async () => ({ ...sampleSettings, transfer_enabled: false }) as never
-        })
-      ).resolves.toBe(false);
-    });
-
-    it("treats a missing row as transfer on (the column default)", async () => {
-      await expect(
-        resolveTranslatorModePatch({
-          requested: true,
-          transferEnabledPatch: undefined,
-          loadCurrent: async () => null
-        })
-      ).resolves.toBe(true);
-    });
   });
 
   it("upsertBusinessTelnyxSettings accepts explicit null values to clear fields", async () => {

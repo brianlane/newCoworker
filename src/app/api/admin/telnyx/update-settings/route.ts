@@ -2,11 +2,7 @@ import { z } from "zod";
 import { requireAdmin } from "@/lib/auth";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { getBusiness } from "@/lib/db/businesses";
-import {
-  getBusinessTelnyxSettings,
-  resolveTranslatorModePatch,
-  upsertBusinessTelnyxSettings
-} from "@/lib/db/telnyx-routes";
+import { upsertBusinessTelnyxSettings } from "@/lib/db/telnyx-routes";
 import { normalizeE164 } from "@/lib/telnyx/assign-did";
 
 /**
@@ -48,25 +44,20 @@ export async function POST(request: Request) {
       }
     }
 
-    // Translator mode is meaningless without warm transfer (the AI only ever
-    // interprets AFTER a transfer bridges a human in), and leaving the pair
-    // inconsistent would arm `target_legs=both` on every answer for nothing.
-    // Enforced here rather than only in the UI so a direct API call cannot
-    // create the state either. Reads current settings only when the patch could
-    // actually produce the bad pair.
-    const translatorModeEnabled = await resolveTranslatorModePatch({
-      requested: body.translatorModeEnabled,
-      transferEnabledPatch: body.transferEnabled,
-      loadCurrent: () => getBusinessTelnyxSettings(body.businessId)
-    });
-
+    // Translator mode is INDEPENDENT of warm transfer. It used to be coerced to
+    // false whenever transfer was off, on the theory that arming
+    // `target_legs=both` for a tenant who cannot transfer was misleading state.
+    // Now that arming is the default and proven inert without a second leg, that
+    // coupling only fought the schema default and silently opted tenants out of a
+    // default-on feature. Interpreting is self-gating at runtime: it needs a
+    // transfer (or a staff request) to engage at all.
     const settings = await upsertBusinessTelnyxSettings({
       businessId: body.businessId,
       forwardToE164: normalizedForward,
       transferEnabled: body.transferEnabled,
       smsFallbackEnabled: body.smsFallbackEnabled,
       bridgeStaleAlertMuted: body.bridgeStaleAlertMuted,
-      translatorModeEnabled
+      translatorModeEnabled: body.translatorModeEnabled
     });
     return successResponse({ settings });
   } catch (err) {
