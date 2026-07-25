@@ -7,6 +7,7 @@ import {
   aiFirstDelaySeconds,
   buildHandoffContext,
   buildPreCallBrief,
+  DEFAULT_ACCEPT_WAIT_SECONDS,
   planAiFirstAccept,
   type HandoffAiTakeover
 } from "../supabase/functions/_shared/voice_handoff";
@@ -108,6 +109,18 @@ describe("planAiFirstAccept", () => {
   it("honors an explicit zero media pause instead of substituting the default", () => {
     const plan = planAiFirstAccept(takeover({ media_start_seconds: 0 }));
     expect(plan.mediaStartSeconds).toBe(0);
+  });
+
+  it("gives a digit with NO authored wait the announcement default", () => {
+    // Pressing into an announcement that is still playing is not accepted at
+    // all, so an unauthored wait must not collapse to 0.
+    const plan = planAiFirstAccept(takeover({ accept_digits: [{ digit: "1" }] }));
+    expect(plan.digits).toEqual([{ digit: "1", after_seconds: DEFAULT_ACCEPT_WAIT_SECONDS }]);
+  });
+
+  it("honors an explicit zero wait as press immediately", () => {
+    const plan = planAiFirstAccept(takeover({ accept_digits: [{ digit: "1", after_seconds: 0 }] }));
+    expect(plan.digits).toEqual([{ digit: "1", after_seconds: 0 }]);
   });
 
   it("treats a null takeover as the default sequence", () => {
@@ -230,6 +243,58 @@ describe("buildHandoffContext: AI-first takeover fields", () => {
       aiTakeover: { notify_e164: "+16026951142", accept_digits: "1" }
     });
     expect(Object.keys(ctx.ai_takeover ?? {})).not.toContain("accept_digits");
+  });
+
+  it("keeps an unauthored wait absent so the runtime can default it", () => {
+    const ctx = buildHandoffContext({
+      toE164: "+1",
+      steps: [{ to_e164: "+16025245719", ring_secs: 20 }],
+      aiTakeover: {
+        notify_e164: "+16026951142",
+        accept_digits: [{ digit: "1" }, { digit: "2", after_seconds: 0 }]
+      }
+    });
+    expect(ctx.ai_takeover?.accept_digits).toEqual([
+      { digit: "1" },
+      { digit: "2", after_seconds: 0 }
+    ]);
+    // Which the planner then reads as "default, then immediate".
+    expect(planAiFirstAccept(ctx.ai_takeover).digits).toEqual([
+      { digit: "1", after_seconds: DEFAULT_ACCEPT_WAIT_SECONDS },
+      { digit: "2", after_seconds: 0 }
+    ]);
+  });
+
+  it("bounds JSONB delays: over-long clamps to 8, junk reads as none", () => {
+    const ctx = buildHandoffContext({
+      toE164: "+1",
+      steps: [{ to_e164: "+16025245719", ring_secs: 20 }],
+      aiTakeover: {
+        notify_e164: "+16026951142",
+        accept_digits: [{ digit: "1", after_seconds: 99 }],
+        media_start_seconds: { nope: true }
+      }
+    });
+    expect(ctx.ai_takeover?.accept_digits).toEqual([{ digit: "1", after_seconds: 8 }]);
+    expect(ctx.ai_takeover?.media_start_seconds).toBe(0);
+  });
+
+  it("carries the accept_sent stamp that stops a second press after a fallback", () => {
+    const ctx = buildHandoffContext({
+      toE164: "+1",
+      steps: [{ to_e164: "+16025245719", ring_secs: 20 }],
+      aiTakeover: { notify_e164: "+16026951142", accept_sent: true }
+    });
+    expect(ctx.ai_takeover?.accept_sent).toBe(true);
+    // Absent unless literally true, so an ordinary takeover still presses.
+    for (const raw of [undefined, false, "yes"]) {
+      const other = buildHandoffContext({
+        toE164: "+1",
+        steps: [{ to_e164: "+16025245719", ring_secs: 20 }],
+        aiTakeover: { notify_e164: "+16026951142", accept_sent: raw }
+      });
+      expect(Object.keys(other.ai_takeover ?? {})).not.toContain("accept_sent");
+    }
   });
 
   it("drops null and non-string-digit entries from a JSONB accept sequence", () => {

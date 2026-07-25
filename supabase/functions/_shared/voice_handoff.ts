@@ -10,8 +10,13 @@
 
 export type HandoffStep = { to_e164: string; ring_secs: number };
 
-/** One DTMF press in an AI-first accept sequence (see planAiFirstAccept). */
-export type AcceptDigit = { digit: string; after_seconds: number };
+/**
+ * One DTMF press in an AI-first accept sequence (see planAiFirstAccept).
+ * `after_seconds` ABSENT means "use the default wait"; an explicit 0 means
+ * "press immediately". The distinction matters: an author who never chose a
+ * wait should still get the announcement pause, while one who typed 0 meant it.
+ */
+export type AcceptDigit = { digit: string; after_seconds?: number };
 
 export type HandoffAiTakeover = {
   notify_e164: string;
@@ -42,6 +47,13 @@ export type HandoffAiTakeover = {
    * call, seconds earlier, before any flow step has run.
    */
   brief_sms_contains?: string;
+  /**
+   * Stamped once the AI-first path has sent the accept digits, so the takeover
+   * in telnyx-voice-call-end does NOT press again if the call later falls back
+   * to ringing humans: the partner already accepted and connected the customer,
+   * and a second press can mis-route a live call.
+   */
+  accept_sent?: boolean;
 };
 
 /** How far back the pre-call brief looks for the partner's alert text. */
@@ -72,9 +84,12 @@ export function buildPreCallBrief(alertText: string): string {
  */
 export const AI_FIRST_MAX_DELAY_SECONDS = 5;
 
+/** Wait before a press whose delay was never authored (announcement pause). */
+export const DEFAULT_ACCEPT_WAIT_SECONDS = 3;
+
 /** Press "1" three seconds in: long enough for a short IVR announcement. */
 export const AI_FIRST_DEFAULT_ACCEPT: readonly AcceptDigit[] = [
-  { digit: "1", after_seconds: 3 }
+  { digit: "1", after_seconds: DEFAULT_ACCEPT_WAIT_SECONDS }
 ];
 
 /** Default pause after accepting, for the partner to connect the customer. */
@@ -109,18 +124,25 @@ export function aiFirstDelaySeconds(
  * risks the AI greeting a beat early.
  */
 export function planAiFirstAccept(ai: HandoffAiTakeover | null): {
-  digits: AcceptDigit[];
+  /** Every wait resolved to a concrete number, so the caller just sleeps it. */
+  digits: Array<{ digit: string; after_seconds: number }>;
   mediaStartSeconds: number;
 } {
   const authored = Array.isArray(ai?.accept_digits) ? ai!.accept_digits : null;
   const source: readonly AcceptDigit[] =
     authored && authored.length > 0 ? authored : AI_FIRST_DEFAULT_ACCEPT;
-  const digits: AcceptDigit[] = [];
+  const digits: Array<{ digit: string; after_seconds: number }> = [];
   let spent = 0;
   for (const raw of source) {
     const digit = typeof raw?.digit === "string" ? raw.digit.trim() : "";
     if (!/^[0-9*#]$/.test(digit)) continue;
-    const wanted = coerceDelaySeconds(raw?.after_seconds);
+    // No authored wait means the author never chose one, so use the announcement
+    // default rather than pressing into an announcement that is still playing.
+    // An explicit 0 is honored as "press immediately".
+    const wanted =
+      raw?.after_seconds === undefined
+        ? DEFAULT_ACCEPT_WAIT_SECONDS
+        : coerceDelaySeconds(raw.after_seconds);
     const room = Math.max(0, AI_FIRST_MAX_DELAY_SECONDS - spent);
     const after = Math.min(wanted, room);
     spent += after;
@@ -129,7 +151,7 @@ export function planAiFirstAccept(ai: HandoffAiTakeover | null): {
   // Every authored digit was malformed: fall back to the default press rather
   // than answering and then never accepting.
   if (digits.length === 0) {
-    const after = Math.min(AI_FIRST_DEFAULT_ACCEPT[0]!.after_seconds, AI_FIRST_MAX_DELAY_SECONDS);
+    const after = Math.min(DEFAULT_ACCEPT_WAIT_SECONDS, AI_FIRST_MAX_DELAY_SECONDS);
     digits.push({ digit: AI_FIRST_DEFAULT_ACCEPT[0]!.digit, after_seconds: after });
     spent = after;
   }
@@ -263,7 +285,11 @@ export function buildHandoffContext(input: {
               const row = (d ?? {}) as Record<string, unknown>;
               return {
                 digit: typeof row.digit === "string" ? row.digit.trim() : "",
-                after_seconds: coerceDelaySeconds(row.after_seconds)
+                // Absent stays absent so planAiFirstAccept can tell "no wait
+                // chosen" (use the default) from an explicit 0.
+                ...(row.after_seconds === undefined
+                  ? {}
+                  : { after_seconds: coerceDelaySeconds(row.after_seconds) })
               };
             })
             .filter((d) => d.digit.length > 0)
@@ -285,6 +311,7 @@ export function buildHandoffContext(input: {
         ...(typeof o.brief_sms_contains === "string" && o.brief_sms_contains.trim()
           ? { brief_sms_contains: o.brief_sms_contains.trim() }
           : {}),
+        ...(o.accept_sent === true ? { accept_sent: true } : {}),
         ...(typeof o.context_note === "string" && o.context_note.trim()
           ? { context_note: o.context_note.trim() }
           : {})

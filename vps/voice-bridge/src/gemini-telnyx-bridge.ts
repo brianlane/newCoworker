@@ -1625,17 +1625,25 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         .then((note) => {
           const next = (note ?? "").trim();
           if (!next || next === briefedNote || ended || translatorActive) return;
+          // voice_set_call_brief APPENDS, so the field holds everything the model
+          // has ever been told. Send only what is new: announcing the pre-call
+          // alert text as having "just arrived" would have the AI tell the
+          // customer their details came through when nothing actually changed.
+          const delta = next.startsWith(briefedNote)
+            ? next.slice(briefedNote.length).trim()
+            : next;
           briefedNote = next;
+          if (!delta) return;
           session.sendRealtimeInput({
             text:
-              `[Coordinator, do NOT read this aloud] The office just received the client's details: ${next} ` +
+              `[Coordinator, do NOT read this aloud] The office just received the client's details: ${delta} ` +
               "Use them from now on and never ask for anything they cover. If the customer already gave you one of these, or you had to ask because we did not have them, briefly acknowledge that their information has now come through so they never repeat themselves. Then carry on naturally from wherever the conversation is."
           });
           console.log("gemini-bridge: mid-call brief delivered", {
             callControlId: opts.callControlId,
-            chars: next.length
+            chars: delta.length
           });
-          emitDiag("voice_bridge_midcall_brief", { chars: next.length });
+          emitDiag("voice_bridge_midcall_brief", { chars: delta.length });
         })
         .catch((err) => {
           console.warn("gemini-bridge: mid-call brief poll failed (non-fatal)", err);

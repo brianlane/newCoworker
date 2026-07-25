@@ -72,7 +72,10 @@ export function compileVoiceFlow(
           .filter((d) => typeof d?.digit === "string" && d.digit.trim())
           .map((d) => ({
             digit: d.digit.trim(),
-            after_seconds: typeof d.afterSeconds === "number" ? d.afterSeconds : 0
+            // An unauthored wait stays ABSENT rather than becoming 0, so the
+            // runtime applies the announcement default instead of pressing into
+            // an announcement that is still playing.
+            ...(typeof d.afterSeconds === "number" ? { after_seconds: d.afterSeconds } : {})
           }))
       : [];
     aiTakeover = {

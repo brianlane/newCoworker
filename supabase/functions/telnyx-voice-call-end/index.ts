@@ -475,11 +475,22 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
       // bridge — otherwise the AI greeting plays to the IVR / dead air. If the
       // DTMF fails the client is never bridged, so abort rather than run the
       // intake assistant against hold music (and text Amy a phantom lead).
-      const dt = await telnyxSendDtmf(apiKey, aLeg, "1");
-      if (!dt.ok) {
-        console.error("handoff: send_dtmf failed", dt.status, (await dt.text()).slice(0, 300));
-        await endHandoff(deps, aLeg);
-        return jsonOk("handoff_dtmf_failed");
+      //
+      // SKIPPED when the AI-first path already accepted on this call (it stamps
+      // accept_sent before falling back to the rings): the partner's IVR is long
+      // past and the customer is already connected, so pressing again would send
+      // a stray tone into a live conversation.
+      if (ctx.ai_takeover?.accept_sent === true) {
+        console.log("handoff: accept digits already sent by the AI-first path; not re-pressing", {
+          call: aLeg
+        });
+      } else {
+        const dt = await telnyxSendDtmf(apiKey, aLeg, "1");
+        if (!dt.ok) {
+          console.error("handoff: send_dtmf failed", dt.status, (await dt.text()).slice(0, 300));
+          await endHandoff(deps, aLeg);
+          return jsonOk("handoff_dtmf_failed");
+        }
       }
       const ok = await attachAiStream(deps, {
         businessId: sess.business_id,

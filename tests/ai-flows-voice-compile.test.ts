@@ -166,7 +166,9 @@ describe("compileVoiceFlow", () => {
     });
   });
 
-  it("defaults a digit with no afterSeconds to an immediate press", () => {
+  it("leaves an unauthored digit wait absent instead of collapsing it to zero", () => {
+    // 0 would press into an announcement that is still playing, which the
+    // partner's IVR does not accept at all; absent means "use the default".
     const plan = compileVoiceFlow(
       def([
         { id: "r1", type: "ring_handoff", toE164: "+16025245719" },
@@ -175,13 +177,16 @@ describe("compileVoiceFlow", () => {
           type: "voice_ai_intake",
           notifyE164: "+16026951142",
           answerFirst: true,
-          acceptDigits: [{ digit: "1" }]
+          acceptDigits: [{ digit: "1" }, { digit: "2", afterSeconds: 0 }]
         }
       ]),
       TO
     );
     if (plan?.kind !== "handoff") throw new Error("expected handoff");
-    expect(plan.context.ai_takeover?.accept_digits).toEqual([{ digit: "1", after_seconds: 0 }]);
+    expect(plan.context.ai_takeover?.accept_digits).toEqual([
+      { digit: "1" },
+      { digit: "2", after_seconds: 0 }
+    ]);
   });
 
   it("carries options.starAlerts onto the handoff context", () => {
