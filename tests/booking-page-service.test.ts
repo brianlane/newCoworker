@@ -446,6 +446,33 @@ describe("submitPublicBooking", () => {
     expect(mockBook).not.toHaveBeenCalled();
   });
 
+  it("answers a double submit for the attendee's existing start idempotently (both modes)", async () => {
+    mockUpcomingForAttendee.mockResolvedValueOnce([
+      { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
+    ] as never);
+    const out = await submitPublicBooking(TOKEN, VALID);
+    expect(out).toEqual({
+      ok: true,
+      startIso: "2026-01-05T16:00:00.000Z",
+      endIso: "2026-01-05T16:30:00.000Z",
+      startLocal: "Monday, January 5, 2026 at 9:00 AM MST",
+      zoomJoinUrl: null
+    });
+    expect(mockBook).not.toHaveBeenCalled();
+    expect(mockSlotClaim).not.toHaveBeenCalled();
+  });
+
+  it("refuses a different upcoming booking for the same person before any claim", async () => {
+    mockUpcomingForAttendee.mockResolvedValueOnce([
+      { startIso: "2026-01-06T17:00:00Z", eventId: "evt-2" }
+    ] as never);
+    expect(await submitPublicBooking(TOKEN, VALID)).toEqual({
+      ok: false,
+      detail: "already_booked"
+    });
+    expect(mockBook).not.toHaveBeenCalled();
+  });
+
   it("passes slot-listing failures through the re-verify", async () => {
     mockBusy.mockResolvedValue(null);
     expect(await submitPublicBooking(TOKEN, VALID)).toEqual({
@@ -651,7 +678,7 @@ describe("submitPublicBooking", () => {
       expect(mockZoomDelete).not.toHaveBeenCalled();
     });
 
-    it("keeps the one-upcoming-appointment-per-person policy", async () => {
+    it("keeps the one-upcoming-appointment-per-person policy (before any claim)", async () => {
       mockUpcomingForAttendee.mockResolvedValueOnce([
         { startIso: "2026-01-06T17:00:00Z", eventId: "evt-9" }
       ] as never);
@@ -660,7 +687,7 @@ describe("submitPublicBooking", () => {
         detail: "already_booked"
       });
       expect(mockRecordPlatform).not.toHaveBeenCalled();
-      expect(mockSlotRelease).toHaveBeenCalledWith("claim-1");
+      expect(mockSlotClaim).not.toHaveBeenCalled();
     });
 
     it("a duplicate ledger row reads as already_booked and cleans up the Zoom meeting", async () => {

@@ -215,7 +215,20 @@ export async function listPublicSlots(
 ): Promise<ListPublicSlotsResult> {
   const resolved = await getBookingPageContext(rawToken);
   if (!resolved.ok) return resolved;
-  const { context } = resolved;
+  return listSlotsForContext(resolved.context, durationMinutes, nowOverride);
+}
+
+/**
+ * Slot listing against a PRE-RESOLVED context. Submission re-verifies with
+ * ITS OWN snapshot through this function, so a calendar connecting mid
+ * request can never split the mode between the availability check and the
+ * write; the fresh connection simply governs the next request.
+ */
+async function listSlotsForContext(
+  context: BookingPageContext,
+  durationMinutes: number,
+  nowOverride?: Date
+): Promise<ListPublicSlotsResult> {
   const page = context.page;
 
   if (!page.allowed_durations.includes(durationMinutes)) {
@@ -349,9 +362,41 @@ export async function submitPublicBooking(
   }
   const phone = phoneResult.value;
 
+  const endIso = new Date(start.getTime() + input.durationMinutes * 60_000).toISOString();
+
+  // One-upcoming-appointment-per-person policy, BOTH modes, checked before
+  // the re-verify (which would otherwise answer a double submit with a
+  // confusing slot_taken): a repeat request for the attendee's EXISTING
+  // start is idempotent success; a different upcoming booking is refused
+  // honestly. The shared lookup reads the ledger plus provider adapters.
+  const existing = await findUpcomingBookingsForAttendee(
+    context.businessId,
+    { phones: [phone], email: email.toLowerCase(), name },
+    {},
+    { mode: "detail" }
+  );
+  const requestedStartMs = start.getTime();
+  if (existing.some((b) => Date.parse(b.startIso) === requestedStartMs)) {
+    return {
+      ok: true,
+      startIso: start.toISOString(),
+      endIso,
+      startLocal: formatBookingStartLocal(start.toISOString(), context.timezone),
+      // The join link was shown on the original confirmation; a retry
+      // cannot reconstruct it from the ledger's meeting id alone.
+      zoomJoinUrl: null
+    };
+  }
+  const nowMs = Date.now();
+  if (existing.some((b) => Date.parse(b.startIso) > nowMs)) {
+    return { ok: false, detail: "already_booked" };
+  }
+
   // Re-verify the requested start is still an offered slot against live
   // free/busy (a booking made anywhere since page load withdraws the slot).
-  const listed = await listPublicSlots(rawToken, input.durationMinutes);
+  // Deliberately the SAME context snapshot as the write below, so the mode
+  // cannot change between the availability check and the booking path.
+  const listed = await listSlotsForContext(context, input.durationMinutes);
   if (!listed.ok) return listed;
   const stillOpen = listed.slots.some(
     (s) => new Date(s.startIso).getTime() === start.getTime()
@@ -402,28 +447,14 @@ export async function submitPublicBooking(
     }
   }
 
-  const endIso = new Date(start.getTime() + input.durationMinutes * 60_000).toISOString();
   const summary = `${name} + ${context.businessName} (${input.durationMinutes} min)`;
 
   let startLocal: string | null = null;
   let zoomJoinUrl: string | null = null;
 
   if (context.mode === "platform") {
-    // PLATFORM MODE: the booking ledger is the calendar of record.
-    // Same one-upcoming-appointment-per-person policy as provider mode
-    // (the shared attendee lookup reads the same ledger).
-    const existing = await findUpcomingBookingsForAttendee(
-      context.businessId,
-      { phones: [phone], email: email.toLowerCase(), name },
-      {},
-      { mode: "detail" }
-    );
-    const nowMs = Date.now();
-    if (existing.some((b) => Date.parse(b.startIso) > nowMs)) {
-      await releaseSlotClaim();
-      return { ok: false, detail: "already_booked" };
-    }
-
+    // PLATFORM MODE: the booking ledger is the calendar of record (the
+    // per-person policy already ran above, shared with provider mode).
     const zoomMeeting = await createZoomMeetingForBooking(context.businessId, {
       topic: summary,
       startIso: start.toISOString(),
