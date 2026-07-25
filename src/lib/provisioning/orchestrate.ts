@@ -79,6 +79,7 @@ import {
   type CloudflareTunnelProvisioner
 } from "@/lib/cloudflare/tunnel";
 import { resolveVpsSize, type VpsSize } from "@/lib/vps/size";
+import { sharedHardwareFor, sharedHardwareWarning } from "@/lib/vps/shared-hardware";
 import {
   assertVpsProviderAllowed,
   providerUsesHostingerLifecycle,
@@ -565,6 +566,22 @@ export async function orchestrateProvisioning(
     vpsSize,
     billingPeriod: billingPeriod ?? null
   });
+
+  // Co-tenanted hardware WARNS, never refuses. Provisioning is the path that
+  // recovers a broken box, so it must not gain a new way to fail. But a
+  // reprovision can re-image the machine, which takes a second product's
+  // service with it, so the operator reading these logs needs to know what
+  // else is on there and who has to redeploy it.
+  const sharedBox = sharedHardwareFor(businessId);
+  if (sharedBox) {
+    logger.warn("Provisioning a CO-TENANTED box", {
+      businessId,
+      vmId: sharedBox.vmId,
+      hostname: sharedBox.hostname,
+      coTenants: sharedBox.coTenants.map((c) => c.name),
+      detail: sharedHardwareWarning(sharedBox)
+    });
+  }
 
   await recordProvisioningProgress({
     businessId,

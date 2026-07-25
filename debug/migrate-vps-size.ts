@@ -46,6 +46,11 @@
  *                           flow provision-kvm2-smoke.ts validated, injected
  *                           as the orchestrator's vpsProvisioner so bootstrap,
  *                           tunnel, and deploy run identically to a purchase.
+ *          --shared-box-ack proceed on co-tenanted hardware (src/lib/vps/
+ *                           shared-hardware.ts). Refused without it: both the
+ *                           torn-down old box and an adopted target are
+ *                           re-imaged, which destroys a second product's
+ *                           service with no backup of ours to restore it.
  *
  * State (for audit / manual recovery) is written to
  * debug/.migrate-vps-size-<businessId>.json after each apply run.
@@ -71,7 +76,7 @@ if (
   !BUSINESS_ID ||
   (TARGET_SIZE !== "kvm1" && TARGET_SIZE !== "kvm2" && TARGET_SIZE !== "kvm4" && TARGET_SIZE !== "kvm8")
 ) {
-  console.error("usage: migrate-vps-size.ts --business <uuid> --size kvm1|kvm2|kvm4|kvm8 [--apply] [--notify-owner] [--keep-old] [--adopt-vm <vmId>]");
+  console.error("usage: migrate-vps-size.ts --business <uuid> --size kvm1|kvm2|kvm4|kvm8 [--apply] [--notify-owner] [--keep-old] [--adopt-vm <vmId>] [--shared-box-ack]");
   process.exit(1);
 }
 const adoptRaw = argValue("--adopt-vm");
@@ -112,6 +117,31 @@ if ((biz.vps_provider ?? "hostinger") !== "hostinger") {
       "Resize the box provider-side (customer/OVH plan change), then re-run provisioning."
   );
   process.exit(1);
+}
+
+// Co-tenanted hardware FAILS CLOSED, in both directions: the OLD box is torn
+// down at the end of a migration, and an --adopt-vm target is re-imaged before
+// it serves. Either one silently destroys a second product's service, which no
+// backup of ours restores. --shared-box-ack is the escape hatch once the
+// co-tenant's owner knows to redeploy.
+const { sharedHardwareFor, sharedHardwareForVm, sharedHardwareWarning } = await import(
+  "../src/lib/vps/shared-hardware.ts"
+);
+const SHARED_ACK = process.argv.includes("--shared-box-ack");
+for (const [label, entry] of [
+  ["the business's current box", sharedHardwareFor(BUSINESS_ID)],
+  ["the --adopt-vm target", ADOPT_VM_ID !== null ? sharedHardwareForVm(ADOPT_VM_ID) : null]
+] as const) {
+  if (!entry) continue;
+  console.error(`\n${sharedHardwareWarning(entry)}\n`);
+  if (!SHARED_ACK) {
+    console.error(
+      `REFUSING: ${label} is shared hardware. Tell the co-tenant's owner to redeploy after ` +
+        "the move, then re-run with --shared-box-ack."
+    );
+    process.exit(1);
+  }
+  console.error(`--shared-box-ack given: proceeding, ${label} co-tenant WILL be destroyed.`);
 }
 
 const { data: subRows } = await db

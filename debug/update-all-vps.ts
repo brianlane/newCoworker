@@ -15,6 +15,11 @@
  * Exit code: 0 only when every VPS updated cleanly; 1 if any failed (the
  * per-VPS failures are summarized at the end so one bad box doesn't hide the
  * rest).
+ *
+ * Co-tenanted boxes (src/lib/vps/shared-hardware.ts) are called out in the
+ * log but never skipped: a worker update touches only /opt/chat-worker and is
+ * safe on shared hardware. The note exists so that when such a box behaves
+ * oddly afterwards, the operator knows what else is on it.
  */
 import { loadEnv, makeHostingerClient, resolveVpsIp, UPDATE_WORKER_REMOTE } from "./_shared.ts";
 
@@ -31,6 +36,7 @@ const DRY_RUN = process.argv.includes("--dry-run");
 
 const { listActiveVpsSshKeys } = await import("../src/lib/db/vps-ssh-keys.ts");
 const { sshExec } = await import("../src/lib/hostinger/ssh.ts");
+const { sharedHardwareFor } = await import("../src/lib/vps/shared-hardware.ts");
 
 const keys = await listActiveVpsSshKeys();
 console.log(`[update-all] found ${keys.length} active VPS instance(s)`);
@@ -50,6 +56,17 @@ async function updateOne(key: (typeof keys)[number]): Promise<Outcome> {
   }
 
   console.log(`\n========== ${key.business_id} (vps ${key.hostinger_vps_id} @ ${ip}) ==========`);
+  // A worker update only replaces /opt/chat-worker, so this is a note and not
+  // a prompt. It matters when the box misbehaves afterwards: the operator
+  // should know a second product's service is competing for the same RAM and
+  // core before reading the symptom as ours.
+  const shared = sharedHardwareFor(key.business_id);
+  if (shared) {
+    console.log(
+      `[update-all] NOTE: co-tenanted box, also runs ` +
+        `${shared.coTenants.map((c) => `${c.name} [${c.product}]`).join("; ")}`
+    );
+  }
   if (DRY_RUN) {
     console.log("[update-all] dry-run — skipping SSH");
     return { ...base, ip, ok: true, detail: "dry-run" };

@@ -55,6 +55,37 @@ Consequences to keep in mind:
 - The flow harness (`flow-test-setup/kickoff/reset`) layers on top of HQ and
   never creates the business or buys a DID.
 
+### HQ's box is SHARED hardware (Jul 2026)
+
+`srv1806097` (VM **1806097**, KVM1: 1 vCPU / 4GB) also hosts **JobArms**, our
+own second product. The registry is
+[src/lib/vps/shared-hardware.ts](../src/lib/vps/shared-hardware.ts); it is the
+only shared box in the fleet, and no customer box may ever join it.
+
+What JobArms owns there: `jobarms-render.service` and
+`cloudflared-jobarms.service`, bound to `127.0.0.1:8085`, files under
+`/opt/jobarms-render` and `/var/lib/jobarms-render`, fronted by a tunnel in the
+**JobArms** Cloudflare account (`browser.jobarms.com`). It is namespaced end to
+end and shares no secret, port, or config directory with our stack. Removing it
+is `systemctl disable --now jobarms-render cloudflared-jobarms`.
+
+Three things to keep in mind:
+
+- **Anything that re-images this box destroys it, with no backup of ours to
+  restore.** `debug/migrate-vps-size.ts` now refuses without
+  `--shared-box-ack`, the admin-panel migration refuses outright, and
+  provisioning logs a `Provisioning a CO-TENANTED box` warning. If you re-image
+  it deliberately, tell whoever owns JobArms to redeploy.
+- **The box is resource-tight by decision.** Two Chromium sidecars on 4GB with
+  one core, and HQ answers the homepage demo voice line over Gemini Live, which
+  is the least forgiving neighbor there is. When HQ's voice or chat gets slow,
+  read the `memory_headroom` posture check before blaming the voice bridge.
+- **JobArms holds a decrypted copy of this box's SSH key.** Its deploy reads our
+  `vps_ssh_keys` row for 1806097 and decrypts it with `SECRETS_ENCRYPTION_KEY`.
+  That is the one place a credential of ours lives outside this repo, it was an
+  explicit decision, and it applies to this internal box only. Rotating HQ's
+  keypair means the JobArms deploy needs the new one.
+
 ## Security rules (agents & operators)
 
 Non-negotiable rules for anyone — human or AI agent — running or writing
