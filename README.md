@@ -1084,6 +1084,35 @@ NEXT call, not one in progress. Turning it on needs a voice-bridge redeploy
 (`tsx debug/redeploy-voice-bridge.ts --business-id <uuid>`); the arming half
 ships with the edge deploy.
 
+### Staff can also ask for an interpreter directly
+
+The other direction: the owner or a teammate calls their OWN business line, says
+they need a translator, and then adds the customer themselves (carrier three-way
+or a conference). The AI interprets for the rest of that call.
+
+This path needs no telephony work at all, which is why it is a tool rather than a
+dial-out. The AI is already audible on the staff member's own leg, and whatever
+they merge in hears it through that same leg's audio, so `opposite` (the Telnyx
+default) is already correct and there is no arming to get wrong. The AI dialing
+the customer itself would mean building an outbound dial-and-bridge path with its
+own budget gate and robodial surface, for a worse version of what a phone's merge
+button already does.
+
+- **`start_translator_mode`** ([vps/voice-bridge/src/tool-declarations.ts](vps/voice-bridge/src/tool-declarations.ts)),
+  handled bridge-locally like `transfer_to_owner`. It sends the same
+  `translatorModeCue` with `entry: "staff_request"`, which frames the other party
+  as someone the colleague is adding, uses the language they named (while still
+  following what it actually hears), and tells the AI to **wait quietly through
+  the dialing and hold tones** instead of narrating them.
+- **Staff only, enforced twice.** The declaration is withheld from customer
+  callers (`CUSTOMER_EXCLUDED_TOOLS`, the mirror of the existing
+  `STAFF_EXCLUDED_TOOLS`) and the handler refuses a non-staff requester again,
+  because asking the receptionist to start interpreting silences it for the rest
+  of the call. Staff identity is the v2-signed caller number
+  (`resolveCallerIdentity`), never something the model decides.
+- Same ceiling and the same tool refusals as the transfer path. Owners can turn
+  it off in Settings → Coworker tools ("Interpret on request").
+
 > The one thing no test can prove is whether the human actually HEARS the
 > interpreter, because `target_legs=both` on a transferred pair is Telnyx
 > behavior, not ours. `tsx debug/verify-translator-mode.ts [businessId]`

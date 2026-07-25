@@ -145,6 +145,93 @@ describe("the bridge only interprets on a call that was armed at answer time", (
   });
 });
 
+describe("staff-requested translator mode (they add the other person themselves)", () => {
+  const src = readFileSync(BRIDGE, "utf8");
+  const decls = readFileSync(
+    join(__dirname, "../vps/voice-bridge/src/tool-declarations.ts"),
+    "utf8"
+  );
+
+  it("frames the other party as someone the colleague is adding", () => {
+    const cue = translatorModeCue({ entry: "staff_request", humanName: "Amy" });
+    expect(cue).toContain("(Amy)");
+    expect(cue).toContain("asked you to interpret");
+    expect(cue).toContain("adding someone");
+    expect(cue).toContain("Everyone on the call can hear you");
+  });
+
+  it("uses the language the staff member named, and still follows what it hears", () => {
+    const cue = translatorModeCue({ entry: "staff_request", otherLanguage: "Spanish" });
+    expect(cue).toContain("said that person speaks Spanish");
+    expect(cue).toContain("Put what your colleague says into Spanish");
+    expect(cue).toContain("Follow the languages you actually hear");
+  });
+
+  it("degrades to relative wording when no language was named", () => {
+    const cue = translatorModeCue({ entry: "staff_request" });
+    expect(cue).toContain("the other person's language");
+    expect(cue).not.toContain("said that person speaks");
+  });
+
+  it("waits through the dialing and hold tones instead of narrating them", () => {
+    // The staff member needs a moment to merge the other person in; an
+    // interpreter that starts talking over hold music is unusable.
+    const cue = translatorModeCue({ entry: "staff_request" });
+    expect(cue).toContain("Wait quietly until you hear the other person");
+    expect(cue).toContain("never talk over that");
+  });
+
+  it("keeps the same relay discipline as the transfer path", () => {
+    const cue = translatorModeCue({ entry: "staff_request" });
+    expect(cue).toContain("FIRST PERSON");
+    expect(cue).toContain("Never answer a question yourself");
+    expect(cue).toContain("Do not use any tools from here on");
+    expect(cue).toContain("never fill a pause");
+  });
+
+  it("carries no em dash (repo writing rule)", () => {
+    expect(
+      translatorModeCue({ entry: "staff_request", humanName: "Amy", otherLanguage: "Spanish" })
+    ).not.toContain("\u2014");
+  });
+
+  it("is declared as a voice tool so the registry parity guard is satisfied", () => {
+    expect(decls).toContain('name: "start_translator_mode"');
+  });
+
+  it("is withheld from customer callers at declaration time", () => {
+    // Rides the same STAFF_ONLY_TOOLS gate run_aiflow uses.
+    expect(src).toContain('STAFF_ONLY_TOOLS = new Set(["run_aiflow", "start_translator_mode"])');
+    expect(src).toContain("if (!callerIsStaff && STAFF_ONLY_TOOLS.has(decl.name)) continue;");
+  });
+
+  it("refuses a customer a second time in the handler, not just by omission", () => {
+    // Defense in depth: a leaked declaration must not be enough to silence the
+    // receptionist for the rest of a stranger's call.
+    const handler = src.slice(src.indexOf('if (name === "start_translator_mode")'));
+    expect(handler.slice(0, 900)).toContain("voice_bridge_translator_staff_refused");
+    expect(handler.slice(0, 900)).toContain(
+      "translator mode is only available to the business's own team"
+    );
+  });
+
+  it("needs no target-legs arming, unlike the post-transfer path", () => {
+    // The AI is already audible on the staff member's own leg, so whatever they
+    // merge in hears it through that leg. Nothing to arm, nothing to fail open to.
+    const handler = src.slice(src.indexOf('if (name === "start_translator_mode")'));
+    const body = handler.slice(0, handler.indexOf('if (name === "capture_lead"'));
+    // It must not consult the answer-time arming flag the transfer path needs.
+    expect(body).not.toContain("transfer!.translatorMode");
+    expect(body).not.toContain("translatorModeEnabled");
+    expect(body).toContain("scheduleTranslatorCeiling()");
+  });
+
+  it("bounds the staff-requested stretch with the same ceiling", () => {
+    const handler = src.slice(src.indexOf('if (name === "start_translator_mode")'));
+    expect(handler.slice(0, 2500)).toContain("scheduleTranslatorCeiling()");
+  });
+});
+
 describe("arming is off by default and read from the tenant column", () => {
   it("the bridge treats a missing column as off", () => {
     const src = readFileSync(INDEX, "utf8");

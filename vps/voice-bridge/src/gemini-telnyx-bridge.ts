@@ -1012,11 +1012,12 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     "customer_set_display_name",
     "customer_append_pinned_note"
   ]);
-  // The mirror image: starting one of the business's own automations is a
-  // STAFF action. Withholding the declaration from customer callers is the
-  // strong gate (the prompt alone would still let the model try it); the
-  // adapter re-resolves the caller server-side as defense in depth.
-  const STAFF_ONLY_TOOLS = new Set(["run_aiflow"]);
+  // The mirror image: starting one of the business's own automations, or asking
+  // the receptionist to stop assisting and become an interpreter for the rest of
+  // the call, is a STAFF action. Withholding the declaration from customer
+  // callers is the strong gate (the prompt alone would still let the model try
+  // it); each handler re-checks the caller as defense in depth.
+  const STAFF_ONLY_TOOLS = new Set(["run_aiflow", "start_translator_mode"]);
   if (!intake && voiceToolsReady) {
     for (const decl of buildVoiceToolDeclarations()) {
       if (callerIsStaff && STAFF_EXCLUDED_TOOLS.has(decl.name)) continue;
@@ -1363,6 +1364,62 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         });
         continue;
       }
+      if (name === "start_translator_mode") {
+        // STAFF ONLY, checked here as well as at declaration time: a customer
+        // must never be able to silence the receptionist for the rest of a call.
+        const requesterIsStaff =
+          opts.callerIdentity != null && opts.callerIdentity.kind !== "customer";
+        if (!requesterIsStaff) {
+          emitDiag("voice_bridge_translator_staff_refused", {});
+          sendToolResponse(call.id, name, {
+            ok: false,
+            detail: "translator mode is only available to the business's own team"
+          });
+          continue;
+        }
+        const otherLanguage =
+          typeof call.args?.otherLanguage === "string"
+            ? (call.args.otherLanguage as string).slice(0, 40)
+            : undefined;
+        // Unlike the post-transfer path this needs no target-legs arming: the AI
+        // is already audible on the staff member's own leg, and whatever they
+        // merge in (carrier three-way or a conference) hears it through that
+        // same leg's audio. So there is nothing to fail open to.
+        try {
+          session.sendRealtimeInput({
+            text: translatorModeCue({
+              entry: "staff_request",
+              humanName: opts.callerIdentity?.name,
+              otherLanguage
+            })
+          });
+        } catch (err) {
+          console.error("gemini-bridge: staff translator cue failed", err);
+          emitDiag("voice_bridge_translator_cue_failed", {
+            entry: "staff_request",
+            error: err instanceof Error ? err.message : String(err)
+          });
+          sendToolResponse(call.id, name, {
+            ok: false,
+            detail: "could not switch to interpreting"
+          });
+          continue;
+        }
+        translatorActive = true;
+        emitDiag("voice_bridge_translator_mode_entered", {
+          entry: "staff_request",
+          other_language: otherLanguage ?? null
+        });
+        console.log("gemini-bridge: translator mode entered (staff request)", {
+          callControlId: opts.callControlId
+        });
+        // The tool response lands BEFORE the flag is read by the wind-down
+        // timers, so acknowledge after flipping it.
+        sendToolResponse(call.id, name, { ok: true, detail: "interpreting" });
+        scheduleTranslatorCeiling();
+        continue;
+      }
+
       if (name === "capture_lead" && intake) {
         // Bridge-local: merge the captured fields so getLead() can return them
         // for the post-call SMS. Non-empty string values only.
