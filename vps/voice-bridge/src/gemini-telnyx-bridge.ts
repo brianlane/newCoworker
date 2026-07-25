@@ -20,6 +20,7 @@ import {
 } from "./voice-transcript.js";
 import { readLiveUsage, type GeminiLiveUsage } from "./live-usage.js";
 import { buildVoiceToolDeclarations } from "./tool-declarations.js";
+import { resolveVoiceName } from "./voice-name.js";
 
 export { readLiveUsage, type GeminiLiveUsage };
 
@@ -384,6 +385,13 @@ export type GeminiBridgeOptions = {
    * the intake takeover.
    */
   languagePrefs?: VoiceLanguagePrefs;
+  /**
+   * The tenant's chosen Gemini Live voice (`business_telnyx_settings.voice_name`),
+   * or null/undefined to fall through to the box env and then the platform
+   * default. Passed per call rather than read from env so an admin change
+   * applies to the next call without redeploying the box.
+   */
+  tenantVoiceName?: string | null;
   /**
    * Settings → Coworker tools state for the bridge-local
    * `start_translator_mode` tool, resolved by index.ts (HTTP-proxied voice tools
@@ -1117,13 +1125,18 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       }
     : {};
 
-  // Enterprise voice picker: a prebuilt Gemini Live voice name written into
-  // the bridge .env by deploy-client.sh (VOICE_NAME, validated app-side
-  // against the prebuilt-voice allow-list). Blank keeps the model default.
-  const voiceName = (process.env.VOICE_NAME ?? "").trim();
-  const speechConfig = voiceName
-    ? { speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } } }
-    : {};
+  // Voice: the tenant's own choice (read per call from
+  // business_telnyx_settings.voice_name), else the box's VOICE_NAME env, else the
+  // platform default. ALWAYS sent now: leaving it unset took Gemini's
+  // undocumented per-model default, which Google warns can change and which was
+  // observed differing between two identically configured boxes.
+  const voiceName = resolveVoiceName({
+    tenantVoiceName: opts.tenantVoiceName,
+    envVoiceName: process.env.VOICE_NAME
+  });
+  const speechConfig = {
+    speechConfig: { voiceConfig: { prebuiltVoiceConfig: { voiceName } } }
+  };
 
   session = await ai.live.connect({
     model: opts.model,

@@ -52,6 +52,42 @@ admin business page ("Messaging channel (RCS)" card).
 
 Rowboat talks to a small `llm-router` sidecar on the VPS (`vps/llm-router/`) which forwards `gemini-*` traffic to Google's OpenAI-compatible endpoint and everything else to Ollama's `/v1` API. The SMS `dispatcher` agent stays on Ollama; the voice `voice_task` agent uses `GEMINI_ROWBOAT_MODEL` (default `gemini-3.6-flash`). No Bifrost layer.
 
+### The voice callers hear (per tenant, live)
+
+`business_telnyx_settings.voice_name` picks the Gemini Live prebuilt voice for a
+tenant's calls, from the admin business page ("Voice & SMS DID" card, every
+tier). It is **live-applied**: the bridge reads it in the per-call settings query
+it already runs, so a change lands on the NEXT call with no redeploy, which is
+what makes auditioning voices practical.
+
+Resolution order is tenant choice, then the box's `VOICE_NAME` env (a per-box ops
+override), then the platform default **`Kore`**
+(`DEFAULT_GEMINI_LIVE_VOICE` / `DEFAULT_VOICE_NAME`).
+
+**The bridge now ALWAYS sends a voice.** It used to send `speechConfig` only when
+`VOICE_NAME` was set, which left the choice to Gemini's per-model default: that
+default is undocumented, differs by model, Google warns it can change, and two
+identically-configured boxes were observed answering in different voices. A
+caller hearing a different person week to week is a brand defect, so we ask
+explicitly.
+
+The allow-list is Google's full published set (30 voices) with their one-word
+character labels in the dropdown, in
+[src/lib/plans/enterprise-models.ts](src/lib/plans/enterprise-models.ts), mirrored
+standalone for the VPS in
+[vps/voice-bridge/src/voice-name.ts](vps/voice-bridge/src/voice-name.ts) and as a
+CHECK constraint on the column. `tests/voice-name-lockstep.test.ts` pins all four
+together, so widening the set cannot half-land.
+
+> The voice deliberately does NOT live in `businesses.enterprise_models`
+> anymore. That blob is enterprise-tier only and applies only at the next box
+> redeploy, which made a cosmetic choice both gated and slow; `enterprise_models`
+> keeps the three MODEL ids. Note the guard there: a translate-flavored live
+> model (`gemini-3.5-live-translate-preview`) satisfies "must be live" but
+> supports no tools and no system instructions, so it would silently strip every
+> tool and the whole persona from a tenant's phone coworker. It is rejected in
+> that slot.
+
 ### Voice knowledge + tools
 
 - The voice bridge loads `/opt/rowboat/vault/{soul,identity,memory,website}.md` (mounted read-only from Rowboat's vault) and injects them into Gemini Live's system prompt on every call. Owners set the website URL during onboarding; `/api/onboard/website-ingest` crawls once (SSRF-guarded, robots-respecting) and stores a summary in `business_configs.website_md`, which is editable from `/dashboard/memory` → "Website Knowledge".

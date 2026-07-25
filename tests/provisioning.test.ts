@@ -1288,8 +1288,7 @@ describe("provisioning/orchestrate", () => {
       enterprise_models: {
         ownerChatModel: "gemini-3.1-pro",
         smsChatModel: "gemini-3.1-flash",
-        geminiLiveModel: "gemini-3.2-flash-live-preview",
-        voiceName: "Aoede"
+        geminiLiveModel: "gemini-3.2-flash-live-preview"
       }
     } as never);
     const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("42"));
@@ -1302,7 +1301,10 @@ describe("provisioning/orchestrate", () => {
     expectDeployHasEnv(cmd, "OWNER_CHAT_MODEL", "gemini-3.1-pro");
     expectDeployHasEnv(cmd, "SMS_CHAT_MODEL", "gemini-3.1-flash");
     expectDeployHasEnv(cmd, "GEMINI_LIVE_MODEL", "gemini-3.2-flash-live-preview");
-    expectDeployHasEnv(cmd, "VOICE_NAME", "Aoede");
+    // VOICE_NAME is no longer an enterprise_models override: the tenant's voice
+    // lives in business_telnyx_settings.voice_name and is read per call, so the
+    // box env stays whatever the platform set (a per-box ops override only).
+    expectDeployHasEnv(cmd, "VOICE_NAME", "Puck");
   });
 
   it("deploy command includes Telnyx env and gateway token", async () => {

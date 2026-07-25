@@ -1600,9 +1600,11 @@ async function runOrchestrator(
     ["BRIDGE_MEDIA_WSS_ORIGIN", bridgeMediaWssOrigin],
     ["GOOGLE_API_KEY", process.env.GOOGLE_API_KEY ?? ""],
     ["GEMINI_LIVE_MODEL", modelOverrides?.geminiLiveModel ?? process.env.GEMINI_LIVE_MODEL ?? ""],
-    // Prebuilt Gemini Live voice for the tenant (professional voice picker).
-    // Blank keeps the model's default voice.
-    ["VOICE_NAME", modelOverrides?.voiceName ?? process.env.VOICE_NAME ?? ""],
+    // Prebuilt Gemini Live voice. This is now only a per-BOX ops override: the
+    // tenant's own choice lives in `business_telnyx_settings.voice_name` and is
+    // read per call by the bridge, so it needs no redeploy. Blank falls through
+    // to the platform default (Kore) in the bridge.
+    ["VOICE_NAME", process.env.VOICE_NAME ?? ""],
     ["GEMINI_LIVE_ENABLED", process.env.GEMINI_LIVE_ENABLED ?? ""],
     // Rollout flag for Gemini Live transcript capture. Read by the voice
     // bridge (vps/voice-bridge/src/index.ts); when "true" it attaches the

@@ -3,6 +3,7 @@ import { requireAdmin } from "@/lib/auth";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { getBusiness } from "@/lib/db/businesses";
 import { upsertBusinessTelnyxSettings } from "@/lib/db/telnyx-routes";
+import { GEMINI_LIVE_VOICES } from "@/lib/plans/enterprise-models";
 import { normalizeE164 } from "@/lib/telnyx/assign-did";
 
 /**
@@ -18,7 +19,15 @@ const schema = z.object({
   transferEnabled: z.boolean().optional(),
   smsFallbackEnabled: z.boolean().optional(),
   bridgeStaleAlertMuted: z.boolean().optional(),
-  translatorModeEnabled: z.boolean().optional()
+  translatorModeEnabled: z.boolean().optional(),
+  /**
+   * Gemini Live voice for this tenant. Empty string or null clears back to the
+   * platform default; any other value must be a known prebuilt voice, so a typo
+   * cannot reach Gemini and silently break audio on every call.
+   */
+  voiceName: z
+    .union([z.enum(GEMINI_LIVE_VOICES), z.literal(""), z.null()])
+    .optional()
 });
 
 export async function POST(request: Request) {
@@ -51,13 +60,21 @@ export async function POST(request: Request) {
     // coupling only fought the schema default and silently opted tenants out of a
     // default-on feature. Interpreting is self-gating at runtime: it needs a
     // transfer (or a staff request) to engage at all.
+    //
+    // Empty string means "back to the platform default" voice, which is a NULL
+    // column rather than an empty voice name (Gemini would reject that).
+    const voiceName =
+      body.voiceName === undefined ? undefined : body.voiceName === "" ? null : body.voiceName;
+
+
     const settings = await upsertBusinessTelnyxSettings({
       businessId: body.businessId,
       forwardToE164: normalizedForward,
       transferEnabled: body.transferEnabled,
       smsFallbackEnabled: body.smsFallbackEnabled,
       bridgeStaleAlertMuted: body.bridgeStaleAlertMuted,
-      translatorModeEnabled: body.translatorModeEnabled
+      translatorModeEnabled: body.translatorModeEnabled,
+      voiceName
     });
     return successResponse({ settings });
   } catch (err) {

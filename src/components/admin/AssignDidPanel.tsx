@@ -6,6 +6,11 @@ import { Button } from "@/components/ui/Button";
 import { Badge } from "@/components/ui/Badge";
 import { formatDid } from "@/lib/telnyx/format";
 import { resolveBridgeHealthState, type BridgeHealthState } from "@/lib/telnyx/bridge-health";
+import {
+  DEFAULT_GEMINI_LIVE_VOICE,
+  GEMINI_LIVE_VOICES,
+  GEMINI_LIVE_VOICE_LABELS
+} from "@/lib/plans/enterprise-models";
 
 type AvailableNumber = {
   phone_number: string;
@@ -24,6 +29,8 @@ type AssignDidPanelProps = {
   smsFallbackEnabled: boolean;
   bridgeStaleAlertMuted: boolean;
   translatorModeEnabled: boolean;
+  /** Tenant's Gemini Live voice; null/empty = platform default. */
+  voiceName: string | null;
   defaultAreaCode?: string;
   defaultState?: string;
 };
@@ -57,6 +64,7 @@ export function AssignDidPanel(props: AssignDidPanelProps) {
   const [translatorModeEnabled, setTranslatorModeEnabled] = useState(
     props.translatorModeEnabled
   );
+  const [voiceName, setVoiceName] = useState(props.voiceName ?? "");
 
   const bridge = ADMIN_HEALTH_COPY[resolveBridgeHealthState(props.bridgeHeartbeatAt)];
 
@@ -178,7 +186,8 @@ export function AssignDidPanel(props: AssignDidPanelProps) {
           transferEnabled,
           smsFallbackEnabled,
           bridgeStaleAlertMuted,
-          translatorModeEnabled
+          translatorModeEnabled,
+          voiceName
         })
       });
       const json = await res.json();
@@ -338,6 +347,28 @@ export function AssignDidPanel(props: AssignDidPanelProps) {
             onChange={(e) => setSmsFallbackEnabled(e.target.checked)}
           />
           SMS this number if the voice bridge fails to attach
+        </label>
+        <label className="text-xs text-parchment/60 flex flex-col max-w-xs">
+          Voice callers hear
+          <select
+            className="mt-1 rounded-md border border-parchment/20 bg-deep-ink/60 px-2 py-1 text-sm text-parchment focus:border-signal-teal focus:outline-none"
+            value={voiceName}
+            onChange={(e) => setVoiceName(e.target.value)}
+          >
+            <option value="">
+              Platform default ({DEFAULT_GEMINI_LIVE_VOICE} —{" "}
+              {GEMINI_LIVE_VOICE_LABELS[DEFAULT_GEMINI_LIVE_VOICE]})
+            </option>
+            {GEMINI_LIVE_VOICES.map((v) => (
+              <option key={v} value={v}>
+                {v} — {GEMINI_LIVE_VOICE_LABELS[v]}
+              </option>
+            ))}
+          </select>
+          <span className="mt-1 text-[11px] text-parchment/40">
+            Applies to the NEXT call, no redeploy needed. Preview the voices in
+            Google AI Studio before choosing.
+          </span>
         </label>
         <label className="flex items-center gap-2 text-xs text-parchment/70">
           <input

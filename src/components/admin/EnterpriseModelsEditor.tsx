@@ -1,21 +1,20 @@
 "use client";
 
 /**
- * Admin "Models & voice" card (enterprise): per-tenant designated reasoning
- * models and the Gemini Live prebuilt voice. Saves to
- * /api/admin/enterprise-models; values apply at the NEXT deploy/redeploy of
- * the tenant box (the orchestrator turns them into deploy env), which the
- * copy states explicitly.
+ * Admin "Designated models" card (enterprise): per-tenant reasoning/voice MODEL
+ * ids. Saves to /api/admin/enterprise-models; values apply at the NEXT
+ * deploy/redeploy of the tenant box (the orchestrator turns them into deploy
+ * env), which the copy states explicitly.
+ *
+ * The VOICE picker is deliberately not here: it lives on the "Voice & SMS DID"
+ * card, which every tier gets, and is live-applied per call. See
+ * business_telnyx_settings.voice_name.
  */
 
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
-import {
-  GEMINI_LIVE_VOICES,
-  type EnterpriseModels,
-  type GeminiLiveVoice
-} from "@/lib/plans/enterprise-models";
+import { type EnterpriseModels } from "@/lib/plans/enterprise-models";
 
 export function EnterpriseModelsEditor({
   businessId,
@@ -28,9 +27,6 @@ export function EnterpriseModelsEditor({
   const [ownerChatModel, setOwnerChatModel] = useState(initialModels?.ownerChatModel ?? "");
   const [smsChatModel, setSmsChatModel] = useState(initialModels?.smsChatModel ?? "");
   const [geminiLiveModel, setGeminiLiveModel] = useState(initialModels?.geminiLiveModel ?? "");
-  const [voiceName, setVoiceName] = useState<GeminiLiveVoice | "">(
-    initialModels?.voiceName ?? ""
-  );
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [saved, setSaved] = useState(false);
@@ -66,7 +62,6 @@ export function EnterpriseModelsEditor({
     if (ownerChatModel.trim()) models.ownerChatModel = ownerChatModel.trim();
     if (smsChatModel.trim()) models.smsChatModel = smsChatModel.trim();
     if (geminiLiveModel.trim()) models.geminiLiveModel = geminiLiveModel.trim();
-    if (voiceName) models.voiceName = voiceName;
     void submit(Object.keys(models).length > 0 ? models : null);
   }
 
@@ -77,8 +72,9 @@ export function EnterpriseModelsEditor({
     <div className="space-y-4 text-sm">
       <p className="text-parchment/50 text-xs">
         Per-tenant model overrides (empty = platform default). Chat slots take non-live
-        gemini-* ids; voice takes a live-flavored model. Changes apply on the NEXT
-        deploy/redeploy of the tenant box — they are not live-applied.
+        gemini-* ids; voice takes a live-flavored, non-translate model. Changes apply on
+        the NEXT deploy/redeploy of the tenant box — they are not live-applied. The voice
+        itself is picked on the Voice &amp; SMS DID card and applies immediately.
       </p>
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <label className="space-y-1">
@@ -111,21 +107,6 @@ export function EnterpriseModelsEditor({
             maxLength={64}
           />
         </label>
-        <label className="space-y-1">
-          <span className="text-xs text-parchment/40">Professional voice</span>
-          <select
-            className={inputCls}
-            value={voiceName}
-            onChange={(e) => setVoiceName(e.target.value as GeminiLiveVoice | "")}
-          >
-            <option value="">Model default</option>
-            {GEMINI_LIVE_VOICES.map((v) => (
-              <option key={v} value={v}>
-                {v}
-              </option>
-            ))}
-          </select>
-        </label>
       </div>
       <div className="flex flex-wrap gap-2 items-center">
         <Button size="sm" onClick={save} loading={loading}>
@@ -143,7 +124,6 @@ export function EnterpriseModelsEditor({
               setOwnerChatModel("");
               setSmsChatModel("");
               setGeminiLiveModel("");
-              setVoiceName("");
             }
           }}
           loading={loading}
