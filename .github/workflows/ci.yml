@@ -182,6 +182,14 @@ jobs:
       # and handed the suite a non-service key ("permission denied for table
       # businesses" on the first CI run). 2.78.1 is the version the suite was
       # validated against locally; bump deliberately, not implicitly.
+      #
+      # The pin no longer covers GRANTS. A newer CLI also builds the schema
+      # without the Data API grants the pre-convention tables used to get
+      # automatically, which produced the SAME "permission denied" text from a
+      # completely different cause; the schema now states those grants itself
+      # (20260821004100_backfill_service_role_grants.sql) and the suite's
+      # preflight names the failure. So this pin is about `supabase status`
+      # output only, and bumping it is now a small, checkable change.
       - name: Setup Supabase CLI
         uses: supabase/setup-cli@v3
         with:
