@@ -235,12 +235,29 @@ function liveShape(): Definition {
   };
 }
 
-/** The live shape must itself be valid, or every assertion below is worthless. */
+/** The first (only) arm's steps of a branch. */
 function armOf(def: Definition, branchId: string): Step[] {
   const branch = findStep(def, branchId);
   if (!branch) throw new Error(`branch ${branchId} missing`);
   const arms = branch.branches as Array<{ steps?: Step[] }>;
   return arms[0].steps ?? [];
+}
+
+/** The condition on a branch's first arm. */
+function armCondition(def: Definition, branchId: string): unknown {
+  const branch = findStep(def, branchId);
+  if (!branch) throw new Error(`branch ${branchId} missing`);
+  return (branch.branches as Array<{ condition?: unknown }>)[0].condition;
+}
+
+/**
+ * The working steps of a retry rung: outer "still ours" arm, then the nested
+ * sentinel branch's arm.
+ */
+function rungSteps(def: Definition, branchId: string): Step[] {
+  const outer = armOf(def, branchId);
+  expect(outer.map((s) => s.type)).toEqual(["branch"]);
+  return (outer[0].branches as Array<{ steps?: Step[] }>)[0].steps ?? [];
 }
 
 function trunkIds(def: Definition): string[] {
@@ -306,19 +323,29 @@ describe("addRung1", () => {
     expect(ids).toHaveLength(18);
   });
 
-  it("gates on the first-pass sentinel, which doubles as the claim gate", () => {
+  it("gates on still-ours OUTSIDE the first-pass sentinel gate", () => {
+    // Both gates are required and `when` carries one condition, so the AND is
+    // structural. The inner sentinel gate doubles as the claim gate: only a
+    // claimed lead ever runs email_card.
     const def = liveShape();
     addSentinels(def);
     addRung1(def, 10);
-    const arms = findStep(def, RUNG_1_BRANCH_ID)!.branches as Array<{ condition?: unknown }>;
-    expect(arms[0].condition).toEqual({ var: CONTACT_STATUS_VAR, equals: "missing" });
+    expect(armCondition(def, RUNG_1_BRANCH_ID)).toEqual({
+      var: ALREADY_CLAIMED_VAR,
+      notEquals: "yes"
+    });
+    const inner = armOf(def, RUNG_1_BRANCH_ID)[0];
+    expect((inner.branches as Array<{ condition?: unknown }>)[0].condition).toEqual({
+      var: CONTACT_STATUS_VAR,
+      equals: "missing"
+    });
   });
 
   it("sleeps, re-reads the mailbox, then delivers to the claimer and the lead", () => {
     const def = liveShape();
     addSentinels(def);
     addRung1(def, 10);
-    const arm = armOf(def, RUNG_1_BRANCH_ID);
+    const arm = rungSteps(def, RUNG_1_BRANCH_ID);
     expect(arm.map((s) => s.type)).toEqual([
       "sleep",
       "email_extract",
@@ -350,7 +377,7 @@ describe("addRung1", () => {
     const def = liveShape();
     addSentinels(def);
     addRung1(def, 10);
-    const arm = armOf(def, RUNG_1_BRANCH_ID);
+    const arm = rungSteps(def, RUNG_1_BRANCH_ID);
     const original = findStep(liveShape(), "lead_sms")!;
     const clone = arm.find((s) => s.id === "late_lead_sms")!;
     expect(clone.body).toBe(original.body);
@@ -367,7 +394,7 @@ describe("addRung1", () => {
     addSentinels(def);
     expect(addRung1(def, 25)).toBe(true);
     expect(addRung1(def, 25)).toBe(false);
-    expect(armOf(def, RUNG_1_BRANCH_ID)[0].minutes).toBe(25);
+    expect(rungSteps(def, RUNG_1_BRANCH_ID)[0].minutes).toBe(25);
   });
 
   it("throws when the anchor step is gone", () => {
@@ -397,8 +424,11 @@ describe("addRung2", () => {
     addSentinels(def);
     addRung1(def, 10);
     addRung2(def, 60);
-    const arms = findStep(def, RUNG_2_BRANCH_ID)!.branches as Array<{ condition?: unknown }>;
-    expect(arms[0].condition).toEqual({ var: RUNG_1_STATUS_VAR, equals: "missing" });
+    const inner = armOf(def, RUNG_2_BRANCH_ID)[0];
+    expect((inner.branches as Array<{ condition?: unknown }>)[0].condition).toEqual({
+      var: RUNG_1_STATUS_VAR,
+      equals: "missing"
+    });
   });
 
   it("uses its own fresh sentinel so fillOnlyEmpty cannot serve a stale value", () => {
@@ -406,7 +436,7 @@ describe("addRung2", () => {
     addSentinels(def);
     addRung1(def, 10);
     addRung2(def, 60);
-    const arm = armOf(def, RUNG_2_BRANCH_ID);
+    const arm = rungSteps(def, RUNG_2_BRANCH_ID);
     const read = arm.find((s) => s.type === "email_extract")!;
     expect(read.fields?.map((f) => f.name)).toContain(RUNG_2_STATUS_VAR);
     expect(read.fields?.map((f) => f.name)).not.toContain(RUNG_1_STATUS_VAR);
@@ -418,7 +448,7 @@ describe("addRung2", () => {
     addSentinels(def);
     addRung1(def, 10);
     addRung2(def, 60);
-    const arm = armOf(def, RUNG_2_BRANCH_ID);
+    const arm = rungSteps(def, RUNG_2_BRANCH_ID);
     const never = arm.filter((s) =>
       JSON.stringify(s.when ?? {}) === JSON.stringify({ var: RUNG_2_STATUS_VAR, equals: "missing" })
     );
@@ -592,6 +622,29 @@ describe("patchDefinition (the whole patch, as applied)", () => {
     expect(route.ownerDirectWhen).toEqual(routeBefore.ownerDirectWhen);
     expect(route.ownerDirectTemplate).toEqual(routeBefore.ownerDirectTemplate);
     expect(route.claimedNotifyEmail).toEqual(routeBefore.claimedNotifyEmail);
+  });
+
+  it("never retries a referral HomeLight took away (Bugbot, PR 913)", () => {
+    // The harm: email_card is claim-gated, not already-claimed-gated, so for a
+    // reassigned referral it still reports contact_status "missing". Without a
+    // still-ours gate on the rungs, the run would text the claimer and the
+    // lead about a referral that is not theirs, right after lost_branch told
+    // them it was gone. Every path into a rung's work must therefore pass
+    // already_claimed != yes FIRST.
+    const def = liveShape();
+    patchDefinition(def, MINUTES);
+    for (const rung of [RUNG_1_BRANCH_ID, RUNG_2_BRANCH_ID]) {
+      expect(armCondition(def, rung), `${rung} must gate on still-ours`).toEqual({
+        var: ALREADY_CLAIMED_VAR,
+        notEquals: "yes"
+      });
+      // Nothing that sends or sleeps may sit outside that gate.
+      const outer = armOf(def, rung);
+      expect(outer.map((s) => s.type)).toEqual(["branch"]);
+      expect(findStep(def, rung)!.else).toEqual([]);
+      // And the work itself is real, so the gate is not guarding an empty arm.
+      expect(rungSteps(def, rung).length).toBeGreaterThan(4);
+    }
   });
 
   it("adds no new lead-facing copy: every intro send quotes the originals", () => {

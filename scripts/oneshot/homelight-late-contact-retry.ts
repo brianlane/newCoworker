@@ -301,8 +301,63 @@ function rungDelivery(def: Definition, prefix: string, statusVar: string): Step[
 }
 
 /**
+ * A retry rung: "still ours?" on the outside, "details still missing?" inside.
+ *
+ * Both gates are REQUIRED and `when` carries exactly one condition, so the AND
+ * has to be structural. Without the outer gate a referral HomeLight reassigned
+ * would still retry: `email_card` is claim-gated, not already-claimed-gated, so
+ * it reports `missing` for a lead that is no longer ours and the rung would
+ * text the claimer (and the lead) about someone else's referral, undoing the
+ * whole point of the lost-referral guard.
+ *
+ * Mirrors the nesting the flow's own `bp_branch` already uses (trunk branch,
+ * one nested branch, then steps), so it stays inside MAX_BRANCH_DEPTH.
+ */
+function rungBranch(args: {
+  id: string;
+  outerQuestion: string;
+  innerId: string;
+  innerQuestion: string;
+  innerLabel: string;
+  innerCondition: Record<string, unknown>;
+  steps: Step[];
+}): Step {
+  return {
+    id: args.id,
+    type: "branch",
+    question: args.outerQuestion,
+    branches: [
+      {
+        id: `${args.id}_still_ours`,
+        label: "Still ours",
+        // notEquals "yes" so an UNSET var still passes: an unclaimed referral
+        // never runs `card`, and the inner sentinel gate stops it there.
+        condition: { var: ALREADY_CLAIMED_VAR, notEquals: "yes" },
+        steps: [
+          {
+            id: args.innerId,
+            type: "branch",
+            question: args.innerQuestion,
+            branches: [
+              {
+                id: `${args.innerId}_hit`,
+                label: args.innerLabel,
+                condition: args.innerCondition,
+                steps: args.steps
+              }
+            ],
+            else: []
+          }
+        ]
+      }
+    ],
+    else: []
+  };
+}
+
+/**
  * Edit 3: retry rung 1, a single trunk branch inserted after
- * `notify_unclaimed`. The arm condition doubles as the claim gate: only a
+ * `notify_unclaimed`. The inner sentinel gate doubles as the claim gate: only a
  * CLAIMED lead ever runs `email_card`, so `contact_status` is unset (and the
  * arm untaken) for an unclaimed one. Pure and idempotent.
  */
@@ -310,24 +365,19 @@ export function addRung1(def: Definition, sleepMinutes: number): boolean {
   if (findStep(def, RUNG_1_BRANCH_ID)) return false;
   const at = trunkIndex(def, NOTIFY_UNCLAIMED_STEP_ID);
   if (at === -1) throw new Error(`trunk step "${NOTIFY_UNCLAIMED_STEP_ID}" not found`);
-  const branch: Step = {
+  const branch = rungBranch({
     id: RUNG_1_BRANCH_ID,
-    type: "branch",
-    question: "Did HomeLight send the client contact details yet?",
-    branches: [
-      {
-        id: "late_missing",
-        label: "Contact details still missing",
-        condition: { var: CONTACT_STATUS_VAR, equals: "missing" },
-        steps: [
-          { id: "late_wait", type: "sleep", minutes: sleepMinutes },
-          rungRead(def, "late_read", RUNG_1_STATUS_VAR, 90),
-          ...rungDelivery(def, "late", RUNG_1_STATUS_VAR)
-        ]
-      }
-    ],
-    else: []
-  };
+    outerQuestion: "Is this referral still ours?",
+    innerId: "late_missing",
+    innerQuestion: "Did HomeLight send the client contact details yet?",
+    innerLabel: "Contact details still missing",
+    innerCondition: { var: CONTACT_STATUS_VAR, equals: "missing" },
+    steps: [
+      { id: "late_wait", type: "sleep", minutes: sleepMinutes },
+      rungRead(def, "late_read", RUNG_1_STATUS_VAR, 90),
+      ...rungDelivery(def, "late", RUNG_1_STATUS_VAR)
+    ]
+  });
   const steps = [...(def.steps ?? [])];
   steps.splice(at + 1, 0, branch);
   def.steps = steps;
@@ -344,44 +394,39 @@ export function addRung1(def: Definition, sleepMinutes: number): boolean {
 export function addRung2(def: Definition, sleepMinutes: number): boolean {
   if (findStep(def, RUNG_2_BRANCH_ID)) return false;
   const missing = { var: RUNG_2_STATUS_VAR, equals: "missing" };
-  const branch: Step = {
+  const branch = rungBranch({
     id: RUNG_2_BRANCH_ID,
-    type: "branch",
-    question: "Did the client contact details ever arrive?",
-    branches: [
+    outerQuestion: "Is this referral still ours?",
+    innerId: "late2_missing",
+    innerQuestion: "Did the client contact details ever arrive?",
+    innerLabel: "Still missing after the first retry",
+    innerCondition: { var: RUNG_1_STATUS_VAR, equals: "missing" },
+    steps: [
+      { id: "late2_wait", type: "sleep", minutes: sleepMinutes },
+      rungRead(def, "late2_read", RUNG_2_STATUS_VAR, 240),
+      ...rungDelivery(def, "late2", RUNG_2_STATUS_VAR),
       {
-        id: "late2_missing",
-        label: "Still missing after the first retry",
-        condition: { var: RUNG_1_STATUS_VAR, equals: "missing" },
-        steps: [
-          { id: "late2_wait", type: "sleep", minutes: sleepMinutes },
-          rungRead(def, "late2_read", RUNG_2_STATUS_VAR, 240),
-          ...rungDelivery(def, "late2", RUNG_2_STATUS_VAR),
-          {
-            id: "late2_never_agent",
-            type: "send_sms",
-            to: "{{vars.claimed_agent_phone}}",
-            when: missing,
-            body:
-              "HomeLight still has not sent {{vars.lead_first_name}}'s contact info " +
-              "({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}). Nothing to call yet.\n" +
-              "Check the portal: {{vars.leadUrl}}"
-          },
-          {
-            id: "late2_never_notify",
-            type: "notify_owner",
-            when: missing,
-            message:
-              "HomeLight never sent {{vars.lead_first_name}}'s contact info " +
-              "({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}), claimed by " +
-              "{{vars.claimed_agent}}. No phone, email, or address arrived by email, so " +
-              "no outreach went out.\nPortal: {{vars.leadUrl}}"
-          }
-        ]
+        id: "late2_never_agent",
+        type: "send_sms",
+        to: "{{vars.claimed_agent_phone}}",
+        when: missing,
+        body:
+          "HomeLight still has not sent {{vars.lead_first_name}}'s contact info " +
+          "({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}). Nothing to call yet.\n" +
+          "Check the portal: {{vars.leadUrl}}"
+      },
+      {
+        id: "late2_never_notify",
+        type: "notify_owner",
+        when: missing,
+        message:
+          "HomeLight never sent {{vars.lead_first_name}}'s contact info " +
+          "({{vars.lead_type}} in {{vars.city}}, ~{{vars.price}}), claimed by " +
+          "{{vars.claimed_agent}}. No phone, email, or address arrived by email, so " +
+          "no outreach went out.\nPortal: {{vars.leadUrl}}"
       }
-    ],
-    else: []
-  };
+    ]
+  });
   def.steps = [...(def.steps ?? []), branch];
   return true;
 }
