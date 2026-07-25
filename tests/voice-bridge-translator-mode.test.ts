@@ -1,7 +1,10 @@
 import { readFileSync } from "node:fs";
 import { join } from "node:path";
 import { describe, expect, it } from "vitest";
-import { translatorModeCue } from "../vps/voice-bridge/src/system-instruction";
+import {
+  systemInstructionForBusiness,
+  translatorModeCue
+} from "../vps/voice-bridge/src/system-instruction";
 
 /**
  * Live translator mode: after a warm transfer the AI stays on the bridged call
@@ -252,6 +255,52 @@ describe("staff-requested translator mode (they add the other person themselves)
     const idx = readFileSync(INDEX, "utf8");
     expect(idx).toContain('toolKey: "start_translator_mode"');
     expect(idx).toContain("translatorOnRequestEnabled");
+  });
+
+  it("teaches the tool in the staff prompt only when it was actually declared", () => {
+    // Bugbot: with the toggle off the declaration is withheld, so a prompt that
+    // still coached the tool would have the model try to call something that
+    // does not exist. There is no adapter to answer "tool_disabled" here.
+    const staffWith = systemInstructionForBusiness(
+      "Acme",
+      false,
+      true,
+      undefined,
+      undefined,
+      null,
+      { kind: "owner", name: "Amy" },
+      false,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      true
+    );
+    const staffWithout = systemInstructionForBusiness(
+      "Acme",
+      false,
+      true,
+      undefined,
+      undefined,
+      null,
+      { kind: "owner", name: "Amy" },
+      false,
+      undefined,
+      undefined,
+      undefined,
+      undefined,
+      false
+    );
+    expect(staffWith).toContain("`start_translator_mode`");
+    expect(staffWithout).not.toContain("start_translator_mode");
+    // Default (omitted) keeps the prompt as it was before the tool existed.
+    expect(
+      systemInstructionForBusiness("Acme", false, true, undefined, undefined, null, {
+        kind: "owner"
+      })
+    ).not.toContain("start_translator_mode");
+    // The bridge derives the flag from the declarations it just built.
+    expect(src).toContain('declarations.some((d) => d.name === "start_translator_mode")');
   });
 
   it("bounds the staff-requested stretch with the same ceiling", () => {

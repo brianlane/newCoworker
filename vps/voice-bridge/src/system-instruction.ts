@@ -95,7 +95,16 @@ export function systemInstructionForBusiness(
   flowContextNote?: string,
   recentInteractionsNote?: string,
   bookingStatusNote?: string,
-  languagePrefs?: VoiceLanguagePrefs
+  languagePrefs?: VoiceLanguagePrefs,
+  /**
+   * Whether the bridge actually DECLARED `start_translator_mode` for this
+   * session (staff caller + the owner's Settings toggle on). The prompt must not
+   * teach a tool the model cannot call: unlike HTTP-proxied tools there is no
+   * adapter to answer "tool_disabled", so the model would either invent the
+   * behavior or stall. Defaults false, which keeps the prompt byte-identical to
+   * before the tool existed.
+   */
+  hasTranslatorOnRequest = false
 ): string {
   // Identity: present as a member of the team, never as software. The owner
   // wants callers to hear "the assistant", not "the AI assistant". Shared by
@@ -182,8 +191,14 @@ export function systemInstructionForBusiness(
         "- `document_share` to text them an expiring link to a document listed in your documents.md briefing when they need a copy.",
         "- `send_follow_up_sms` to text them a short summary or link, and `send_follow_up_email` to email them; if email returns `email_not_connected`, send it by text instead.",
         "- `notify_team` when they ask you to pass a message to someone else on the team.",
-        // Staff-only: the customer persona never gets this declaration.
-        "- `start_translator_mode` when they ask you to translate or interpret, or say they are about to add someone to the call who does not speak their language. Tell them you are ready and will stay quiet until they bring the other person on, then call it. After that you are only an interpreter for the rest of the call, so do not call it until they actually want that.",
+        // Staff-only AND Settings-gated: taught only when the bridge actually
+        // declared it, since there is no adapter to answer "tool_disabled" for a
+        // bridge-local tool the model was coached to call but cannot.
+        ...(hasTranslatorOnRequest
+          ? [
+              "- `start_translator_mode` when they ask you to translate or interpret, or say they are about to add someone to the call who does not speak their language. Tell them you are ready and will stay quiet until they bring the other person on, then call it. After that you are only an interpreter for the rest of the call, so do not call it until they actually want that."
+            ]
+          : []),
         // Staff are not customers: do not create/edit a customer profile for
         // their number (the SMS gate avoids this too).
         "Do NOT use the customer CRM tools (`customer_lookup_by_phone`, `customer_set_display_name`, `customer_append_pinned_note`, `capture_caller_details`) on this caller — they are staff, not a customer.",

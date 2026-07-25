@@ -1130,7 +1130,9 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             opts.flowContextNote,
             opts.recentInteractionsNote,
             opts.bookingStatusNote,
-            opts.languagePrefs
+            opts.languagePrefs,
+            // Only teach the tool when it was actually declared above.
+            declarations.some((d) => d.name === "start_translator_mode")
           ),
       tools: toolsForSession
     },
