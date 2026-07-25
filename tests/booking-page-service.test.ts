@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/booking-page/db", () => ({
   getEnabledBookingPageByToken: vi.fn(),
+  getEnabledBookingPageBySlug: vi.fn(),
   countBookingsBetween: vi.fn(),
   listBookingStartsBetween: vi.fn()
 }));
@@ -33,9 +34,11 @@ import {
   PUBLIC_SLOT_CLAIM_KEY,
   getBookingPageContext,
   listPublicSlots,
+  probeCalendarAvailability,
   submitPublicBooking
 } from "@/lib/booking-page/service";
 import {
+  getEnabledBookingPageBySlug,
   getEnabledBookingPageByToken,
   listBookingStartsBetween
 } from "@/lib/booking-page/db";
@@ -79,6 +82,8 @@ const PAGE = {
   description: "Strategy call",
   waitlist_enabled: true,
   waitlist_offer_ttl_minutes: 60,
+  slug: null as string | null,
+  title: null as string | null,
   created_at: "2026-01-01T00:00:00Z",
   updated_at: "2026-01-01T00:00:00Z"
 };
@@ -137,7 +142,13 @@ afterEach(() => {
 });
 
 describe("getBookingPageContext", () => {
-  it("fails closed as not_found on malformed tokens, unknown tokens, and orphan pages", async () => {
+  it("fails closed as not_found on malformed refs, unknown tokens, and orphan pages", async () => {
+    // Neither a token nor a slug shape: refused before any DB read.
+    expect(await getBookingPageContext("Not A Ref!")).toEqual({
+      ok: false,
+      detail: "not_found"
+    });
+    // Valid slug shape with no matching page.
     expect(await getBookingPageContext("nope")).toEqual({ ok: false, detail: "not_found" });
 
     mockPage.mockResolvedValueOnce(null);
@@ -162,6 +173,23 @@ describe("getBookingPageContext", () => {
     }
   });
 
+  it("resolves by vanity slug and surfaces the custom title", async () => {
+    const bySlug = vi.mocked(getEnabledBookingPageBySlug);
+    bySlug.mockResolvedValueOnce({ ...PAGE, slug: "new-coworker", title: "  Free strategy call  " });
+    const out = await getBookingPageContext("new-coworker");
+    expect(bySlug).toHaveBeenCalledWith("new-coworker");
+    expect(mockPage).not.toHaveBeenCalled();
+    expect(out).toMatchObject({
+      ok: true,
+      context: { title: "Free strategy call" }
+    });
+
+    // Blank stored title falls back to null (the localized default).
+    mockPage.mockResolvedValueOnce({ ...PAGE, title: "   " });
+    const fallback = await getBookingPageContext(TOKEN);
+    expect(fallback).toMatchObject({ ok: true, context: { title: null } });
+  });
+
   it("resolves the render context (zoom flag, timezone fallback)", async () => {
     const ok = await getBookingPageContext(TOKEN);
     expect(ok).toMatchObject({
@@ -183,6 +211,38 @@ describe("getBookingPageContext", () => {
       ok: true,
       context: { videoCall: false, timezone: "UTC" }
     });
+  });
+});
+
+describe("probeCalendarAvailability", () => {
+  it("classifies every connection state", async () => {
+    mockConn.mockResolvedValueOnce(null);
+    expect(await probeCalendarAvailability(BIZ)).toBe("not_connected");
+
+    for (const provider of ["vagaro", "calendly"]) {
+      mockConn.mockResolvedValueOnce({ provider } as never);
+      expect(await probeCalendarAvailability(BIZ)).toBe("unsupported");
+    }
+
+    // Healthy workspace read.
+    expect(await probeCalendarAvailability(BIZ)).toBe("ok");
+
+    // Proxy null = the scope-starved consent (the Jul 2026 HQ case).
+    mockBusy.mockResolvedValueOnce(null);
+    expect(await probeCalendarAvailability(BIZ)).toBe("unreadable");
+
+    // A thrown proxy error (Google 403) also reads as unreadable.
+    mockBusy.mockRejectedValueOnce(new Error("Request failed with status code 403"));
+    expect(await probeCalendarAvailability(BIZ)).toBe("unreadable");
+
+    // CalDAV rides the same probe.
+    mockConn.mockResolvedValueOnce({
+      provider: "caldav",
+      connectionId: "cd",
+      providerConfigKey: "caldav-direct"
+    } as never);
+    mockCaldav.mockResolvedValueOnce({ ok: true, busy: [] } as never);
+    expect(await probeCalendarAvailability(BIZ)).toBe("ok");
   });
 });
 

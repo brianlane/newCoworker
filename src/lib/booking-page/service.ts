@@ -13,11 +13,12 @@
 
 import {
   countBookingsBetween,
+  getEnabledBookingPageBySlug,
   getEnabledBookingPageByToken,
   listBookingStartsBetween
 } from "@/lib/booking-page/db";
 import type { BookingPageRow } from "@/lib/booking-page/db";
-import { parseBookingPageToken } from "@/lib/booking-page/keys";
+import { parseBookingPageRef } from "@/lib/booking-page/keys";
 import { computePublicSlots } from "@/lib/booking-page/slots";
 import type { BusyBlock, PublicSlot } from "@/lib/booking-page/slots";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
@@ -60,6 +61,8 @@ export type BookingPageContext = {
   businessName: string;
   timezone: string;
   description: string | null;
+  /** Owner-set public event title; null = localized default. */
+  title: string | null;
   allowedDurations: number[];
   /** True when bookings will carry a Zoom join link. */
   videoCall: boolean;
@@ -79,17 +82,20 @@ export type BookingPageFailure = {
 };
 
 /**
- * Resolve the public page context for rendering. `not_found` covers every
- * fail-closed case (bad token shape, unknown token, disabled page); the
- * page 404s rather than explaining which.
+ * Resolve the public page context for rendering. The ref is either the
+ * capability token or the owner's vanity slug (shapes are disjoint).
+ * `not_found` covers every fail-closed case (bad ref shape, unknown ref,
+ * disabled page); the page 404s rather than explaining which.
  */
 export async function getBookingPageContext(
-  rawToken: string
+  rawRef: string
 ): Promise<{ ok: true; context: BookingPageContext } | BookingPageFailure> {
-  const token = parseBookingPageToken(rawToken);
-  if (!token) return { ok: false, detail: "not_found" };
+  const ref = parseBookingPageRef(rawRef);
+  if (!ref) return { ok: false, detail: "not_found" };
 
-  const page = await getEnabledBookingPageByToken(token);
+  const page = await (ref.kind === "token"
+    ? getEnabledBookingPageByToken(ref.value)
+    : getEnabledBookingPageBySlug(ref.value));
   if (!page) return { ok: false, detail: "not_found" };
 
   const business = await getBusiness(page.business_id);
@@ -109,6 +115,7 @@ export async function getBookingPageContext(
       businessName: business.name,
       timezone: business.timezone?.trim() || "UTC",
       description: page.description,
+      title: page.title?.trim() || null,
       allowedDurations: page.allowed_durations,
       videoCall: zoomId !== null,
       page
@@ -129,6 +136,36 @@ async function fetchBusyBlocks(
     return res.ok ? res.busy : null;
   }
   return getWorkspaceBusyBlocks(businessId, conn, windowStart, windowEnd);
+}
+
+export type CalendarAvailabilityProbe = "ok" | "unreadable" | "unsupported" | "not_connected";
+
+/**
+ * Owner-facing health probe for the Bookings dashboard: can the connected
+ * calendar actually serve availability reads? A connection that can write
+ * events but not read free/busy (a consent missing the Calendar scope, the
+ * Jul 2026 HQ case) renders the public page unable to offer slots; the
+ * page fails safe for visitors, and THIS is how the owner finds out why.
+ */
+export async function probeCalendarAvailability(
+  businessId: string
+): Promise<CalendarAvailabilityProbe> {
+  try {
+    const conn = await resolveCalendarConnection(businessId);
+    if (!conn) return "not_connected";
+    if (conn.provider === "vagaro" || conn.provider === "calendly") return "unsupported";
+    const now = new Date();
+    const busy = await fetchBusyBlocks(
+      businessId,
+      conn.provider,
+      conn,
+      now,
+      new Date(now.getTime() + DAY_MS)
+    );
+    return busy === null ? "unreadable" : "ok";
+  } catch {
+    return "unreadable";
+  }
 }
 
 export type ListPublicSlotsResult =

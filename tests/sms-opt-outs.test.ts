@@ -94,9 +94,11 @@ describe("setSmsOptOut", () => {
   it("returns isNew from the RPC payload", async () => {
     const db = { rpc: vi.fn().mockResolvedValue({ data: { ok: true, new: true }, error: null }) };
     await expect(setSmsOptOut(BIZ, "+16025550111", db as never)).resolves.toEqual({ isNew: true });
+    // Defaults to the sacred customer-STOP kind when the caller doesn't say.
     expect(db.rpc).toHaveBeenCalledWith("sms_set_opt_out", {
       p_business_id: BIZ,
-      p_sender_e164: "+16025550111"
+      p_sender_e164: "+16025550111",
+      p_kind: "stop"
     });
 
     const dbExisting = {
@@ -104,6 +106,16 @@ describe("setSmsOptOut", () => {
     };
     await expect(setSmsOptOut(BIZ, "+16025550111", dbExisting as never)).resolves.toEqual({
       isNew: false
+    });
+  });
+
+  it("passes an owner-initiated kind through to the RPC (provenance, Chris Gregoris incident)", async () => {
+    const db = { rpc: vi.fn().mockResolvedValue({ data: { ok: true, new: true }, error: null }) };
+    await setSmsOptOut(BIZ, "+16025550111", db as never, "owner_spam");
+    expect(db.rpc).toHaveBeenCalledWith("sms_set_opt_out", {
+      p_business_id: BIZ,
+      p_sender_e164: "+16025550111",
+      p_kind: "owner_spam"
     });
   });
 

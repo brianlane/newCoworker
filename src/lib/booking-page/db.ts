@@ -7,7 +7,7 @@
  * free/busy.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { mintBookingPageToken } from "@/lib/booking-page/keys";
+import { mintBookingPageToken, parseBookingPageSlug } from "@/lib/booking-page/keys";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -27,6 +27,10 @@ export type BookingPageRow = {
   waitlist_enabled: boolean;
   /** How long one customer holds an offered freed slot before it passes on. */
   waitlist_offer_ttl_minutes: number;
+  /** Vanity /book/<slug> URL; null = token URL only. */
+  slug: string | null;
+  /** Public event title; null falls back to "Book a call with {business}". */
+  title: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -34,7 +38,8 @@ export type BookingPageRow = {
 const ALL_COLUMNS =
   "id,business_id,token,enabled,allowed_durations,min_notice_minutes," +
   "max_advance_days,buffer_minutes,max_daily_bookings,require_staff_on_shift," +
-  "description,waitlist_enabled,waitlist_offer_ttl_minutes,created_at,updated_at";
+  "description,waitlist_enabled,waitlist_offer_ttl_minutes,slug,title," +
+  "created_at,updated_at";
 
 /** Resolve a page by its public token. Enabled pages only. */
 export async function getEnabledBookingPageByToken(
@@ -49,6 +54,22 @@ export async function getEnabledBookingPageByToken(
     .eq("enabled", true)
     .maybeSingle();
   if (error) throw new Error(`getEnabledBookingPageByToken: ${error.message}`);
+  return (data as unknown as BookingPageRow | null) ?? null;
+}
+
+/** Resolve a page by its vanity slug. Enabled pages only. */
+export async function getEnabledBookingPageBySlug(
+  slug: string,
+  client?: SupabaseClient
+): Promise<BookingPageRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("booking_pages")
+    .select(ALL_COLUMNS)
+    .eq("slug", slug)
+    .eq("enabled", true)
+    .maybeSingle();
+  if (error) throw new Error(`getEnabledBookingPageBySlug: ${error.message}`);
   return (data as unknown as BookingPageRow | null) ?? null;
 }
 
@@ -78,6 +99,10 @@ export type BookingPageSettingsPatch = {
   description?: string | null;
   waitlistEnabled?: boolean;
   waitlistOfferTtlMinutes?: number;
+  /** Vanity URL slug; null/blank clears back to the token-only URL. */
+  slug?: string | null;
+  /** Public event title; null/blank restores the localized default. */
+  title?: string | null;
 };
 
 export class BookingPageValidationError extends Error {
@@ -151,6 +176,16 @@ function validatePatch(patch: BookingPageSettingsPatch): void {
   ) {
     throw new BookingPageValidationError("Waitlist offer hold must be 15 to 1440 minutes");
   }
+  if (patch.slug !== undefined && patch.slug !== null && patch.slug.trim() !== "") {
+    if (parseBookingPageSlug(patch.slug) === null) {
+      throw new BookingPageValidationError(
+        "Custom link must be 3 to 60 lowercase letters, digits, or hyphens"
+      );
+    }
+  }
+  if (patch.title !== undefined && patch.title !== null && patch.title.length > 120) {
+    throw new BookingPageValidationError("Title must be 120 characters or fewer");
+  }
 }
 
 function patchColumns(patch: BookingPageSettingsPatch): Record<string, unknown> {
@@ -176,8 +211,24 @@ function patchColumns(patch: BookingPageSettingsPatch): Record<string, unknown> 
     ...(patch.waitlistEnabled === undefined ? {} : { waitlist_enabled: patch.waitlistEnabled }),
     ...(patch.waitlistOfferTtlMinutes === undefined
       ? {}
-      : { waitlist_offer_ttl_minutes: patch.waitlistOfferTtlMinutes })
+      : { waitlist_offer_ttl_minutes: patch.waitlistOfferTtlMinutes }),
+    ...(patch.slug === undefined
+      ? {}
+      : { slug: patch.slug === null ? null : parseBookingPageSlug(patch.slug) }),
+    ...(patch.title === undefined ? {} : { title: patch.title?.trim() || null })
   };
+}
+
+/**
+ * Postgres unique-violation on the SLUG index → owner-facing message.
+ * Other unique violations (e.g. a concurrent first-time insert racing on
+ * uq_booking_pages_business) stay generic errors.
+ */
+function mapSlugCollision(message: string): Error {
+  if (message.includes("uq_booking_pages_slug")) {
+    return new BookingPageValidationError("That custom link is already taken");
+  }
+  return new Error(`upsertBookingPage: ${message}`);
 }
 
 /**
@@ -203,7 +254,7 @@ export async function upsertBookingPage(
       })
       .select(ALL_COLUMNS)
       .single();
-    if (error) throw new Error(`upsertBookingPage: ${error.message}`);
+    if (error) throw mapSlugCollision(error.message);
     return data as unknown as BookingPageRow;
   }
 
@@ -213,7 +264,7 @@ export async function upsertBookingPage(
     .eq("business_id", businessId)
     .select(ALL_COLUMNS)
     .single();
-  if (error) throw new Error(`upsertBookingPage: ${error.message}`);
+  if (error) throw mapSlugCollision(error.message);
   return data as unknown as BookingPageRow;
 }
 

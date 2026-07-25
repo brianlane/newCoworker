@@ -90,20 +90,45 @@ describe("mergeSidebarLayout", () => {
       { item_key: "dashboard", position: 1, visible: true },
       { item_key: "analytics", position: 2, visible: false }
     ]);
-    expect(layout[0].key).toBe("chat");
-    expect(layout[1].key).toBe("dashboard");
-    expect(layout[2]).toMatchObject({ key: "analytics", visible: false });
+    const keys = layout.map((i) => i.key);
+    // Stored rows keep their relative order (chat deliberately ahead of
+    // dashboard); missing catalog items are anchor-inserted around them.
+    expect(keys.indexOf("chat")).toBeLessThan(keys.indexOf("dashboard"));
+    expect(keys.indexOf("dashboard")).toBeLessThan(keys.indexOf("analytics"));
+    expect(layout.find((i) => i.key === "analytics")).toMatchObject({ visible: false });
+    expect(layout).toHaveLength(SIDEBAR_ITEMS.length);
   });
 
-  it("appends newly shipped items missing from the saved layout (visible)", () => {
-    const layout = mergeSidebarLayout([{ item_key: "chat", position: 0, visible: true }]);
-    expect(layout[0].key).toBe("chat");
-    // Everything else follows in default order, visible.
-    expect(layout).toHaveLength(SIDEBAR_ITEMS.length);
-    expect(layout.slice(1).every((i) => i.visible)).toBe(true);
-    expect(layout.slice(1).map((i) => i.key)).toEqual(
-      SIDEBAR_ITEMS.filter((i) => i.key !== "chat").map((i) => i.key)
+  it("inserts newly shipped items at their catalog spot in stale saved layouts", () => {
+    // The Jul 2026 Bookings rollout bug: a complete pre-Bookings snapshot
+    // (like every real saved layout) must get the new page directly below
+    // Employees, not dangling at the bottom under Notifications.
+    const stale = SIDEBAR_ITEMS.filter((i) => !["bookings", "whatsapp"].includes(i.key)).map(
+      (item, position) => ({ item_key: item.key, position, visible: true })
     );
+    const layout = mergeSidebarLayout(stale);
+    const keys = layout.map((i) => i.key);
+    expect(keys.indexOf("bookings")).toBe(keys.indexOf("employees") + 1);
+    expect(keys.indexOf("whatsapp")).toBe(keys.indexOf("messenger") + 1);
+    expect(layout).toHaveLength(SIDEBAR_ITEMS.length);
+    expect(layout.find((i) => i.key === "bookings")?.visible).toBe(true);
+  });
+
+  it("re-anchors missing items even when the saved order was customized", () => {
+    // Employees moved to the front: Bookings follows its anchor, wherever
+    // the user put it.
+    const stale = [
+      { item_key: "employees", position: 0, visible: true },
+      { item_key: "dashboard", position: 1, visible: true },
+      { item_key: "memory", position: 2, visible: false }
+    ];
+    const keys = mergeSidebarLayout(stale).map((i) => i.key);
+    expect(keys.indexOf("bookings")).toBe(keys.indexOf("employees") + 1);
+    // An item whose ENTIRE preceding catalog is absent lands at the front.
+    const dashboardless = mergeSidebarLayout([
+      { item_key: "tasks", position: 0, visible: true }
+    ]);
+    expect(dashboardless[0].key).toBe("dashboard");
   });
 
   it("drops unknown keys (removed nav items) and duplicate rows", () => {
@@ -113,13 +138,14 @@ describe("mergeSidebarLayout", () => {
       { item_key: "chat", position: 2, visible: false }
     ]);
     expect(layout.filter((i) => i.key === "chat")).toHaveLength(1);
-    expect(layout[0]).toMatchObject({ key: "chat", visible: true });
+    // First matching row wins: chat stays visible despite the duplicate.
+    expect(layout.find((i) => i.key === "chat")).toMatchObject({ visible: true });
     expect(layout.some((i) => i.key === "retired-page")).toBe(false);
   });
 
   it("forces locked items visible even when a stale row hid them", () => {
     const layout = mergeSidebarLayout([{ item_key: "settings", position: 0, visible: false }]);
-    expect(layout[0]).toMatchObject({ key: "settings", visible: true });
+    expect(layout.find((i) => i.key === "settings")).toMatchObject({ visible: true });
   });
 });
 
@@ -134,7 +160,8 @@ describe("getSidebarLayout", () => {
       })
     };
     const layout = await getSidebarLayout(USER, db as never);
-    expect(layout[0].key).toBe("billing");
+    expect(layout.some((i) => i.key === "billing")).toBe(true);
+    expect(layout).toHaveLength(SIDEBAR_ITEMS.length);
     expect(db.from).toHaveBeenCalledWith("user_sidebar_items");
     expect(db.eq).toHaveBeenCalledWith("user_id", USER);
   });

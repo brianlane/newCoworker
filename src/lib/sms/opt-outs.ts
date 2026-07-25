@@ -67,6 +67,17 @@ export async function checkSmsOptOut(
 }
 
 /**
+ * Provenance kinds for a suppression row (migration 20260724204311):
+ *  - "stop"       — the customer texted STOP themselves. Sacred: only the
+ *                   START keyword handler may lift it.
+ *  - "owner_spam" — the owner flagged the contact as spam
+ *                   (flag_contact_spam). Same send-blocking effect
+ *                   everywhere; reversible by service-role tooling. The RPC
+ *                   never downgrades an existing "stop" row to this kind.
+ */
+export type SmsOptOutKind = "stop" | "owner_spam";
+
+/**
  * Owner-initiated proactive suppression ("never text this number"). Wraps
  * the same RPC the STOP keyword handler uses, so every enforcement site
  * (Edge and Node) picks it up identically. Returns whether the row was new.
@@ -74,12 +85,14 @@ export async function checkSmsOptOut(
 export async function setSmsOptOut(
   businessId: string,
   e164: string,
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  kind: SmsOptOutKind = "stop"
 ): Promise<{ isNew: boolean }> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db.rpc("sms_set_opt_out", {
     p_business_id: businessId,
-    p_sender_e164: e164
+    p_sender_e164: e164,
+    p_kind: kind
   });
   if (error) throw new Error(`setSmsOptOut: ${error.message}`);
   const result = data as { ok?: boolean; reason?: string; new?: boolean } | null;

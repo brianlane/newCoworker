@@ -6,6 +6,7 @@ import {
   BookingPageValidationError,
   countBookingsBetween,
   getBookingPageForBusiness,
+  getEnabledBookingPageBySlug,
   getEnabledBookingPageByToken,
   listBookingStartsBetween,
   listUpcomingBookings,
@@ -96,6 +97,21 @@ describe("getEnabledBookingPageByToken / getBookingPageForBusiness", () => {
     await expect(getBookingPageForBusiness(BIZ)).rejects.toThrow(
       "getBookingPageForBusiness: boom"
     );
+    await expect(getEnabledBookingPageBySlug("new-coworker")).rejects.toThrow(
+      "getEnabledBookingPageBySlug: boom"
+    );
+  });
+
+  it("resolves enabled pages by vanity slug", async () => {
+    const { client, calls } = fakeDb([
+      { data: ROW, error: null },
+      { data: null, error: null }
+    ]);
+    expect(await getEnabledBookingPageBySlug("new-coworker", client)).toEqual(ROW);
+    const eqCalls = calls.filter((c) => c.method === "eq").map((c) => c.args);
+    expect(eqCalls).toContainEqual(["slug", "new-coworker"]);
+    expect(eqCalls).toContainEqual(["enabled", true]);
+    expect(await getEnabledBookingPageBySlug("other", client)).toBeNull();
   });
 
   it("returns the business row when present", async () => {
@@ -188,7 +204,11 @@ describe("upsertBookingPage", () => {
       { description: "x".repeat(501) },
       { waitlistOfferTtlMinutes: 14 },
       { waitlistOfferTtlMinutes: 1441 },
-      { waitlistOfferTtlMinutes: 60.5 }
+      { waitlistOfferTtlMinutes: 60.5 },
+      { slug: "ab" },
+      { slug: "Not Valid!" },
+      { slug: "api" },
+      { title: "x".repeat(121) }
     ];
     for (const patch of bad) {
       await expect(upsertBookingPage(BIZ, patch, client)).rejects.toThrow(
@@ -212,6 +232,67 @@ describe("upsertBookingPage", () => {
       waitlist_enabled: false,
       waitlist_offer_ttl_minutes: 120
     });
+  });
+
+  it("normalizes slug and title writes, clearing on blank", async () => {
+    const { client, calls } = fakeDb([
+      { data: ROW, error: null }, // existence read
+      { data: ROW, error: null } // update
+    ]);
+    await upsertBookingPage(
+      BIZ,
+      { slug: " New-Coworker ", title: "  Free strategy call  " },
+      client
+    );
+    const update = calls.find((c) => c.method === "update");
+    expect(update?.args[0]).toMatchObject({
+      slug: "new-coworker",
+      title: "Free strategy call"
+    });
+
+    const clearing = fakeDb([
+      { data: ROW, error: null },
+      { data: ROW, error: null }
+    ]);
+    await upsertBookingPage(BIZ, { slug: "", title: null }, clearing.client);
+    const clearUpdate = clearing.calls.find((c) => c.method === "update");
+    expect(clearUpdate?.args[0]).toMatchObject({ slug: null, title: null });
+
+    // Explicit null clears too (the API's nullable field).
+    const nullClear = fakeDb([
+      { data: ROW, error: null },
+      { data: ROW, error: null }
+    ]);
+    await upsertBookingPage(BIZ, { slug: null }, nullClear.client);
+    const nullUpdate = nullClear.calls.find((c) => c.method === "update");
+    expect(nullUpdate?.args[0]).toMatchObject({ slug: null });
+  });
+
+  it("maps a slug unique-violation to an owner-facing validation error", async () => {
+    const { client } = fakeDb([
+      { data: ROW, error: null },
+      {
+        data: null,
+        error: { message: 'duplicate key value violates unique constraint "uq_booking_pages_slug"' }
+      }
+    ]);
+    await expect(upsertBookingPage(BIZ, { slug: "taken-name" }, client)).rejects.toThrow(
+      "That custom link is already taken"
+    );
+
+    // Any OTHER unique violation stays a generic error, never slug copy.
+    const otherUnique = fakeDb([
+      { data: null, error: null },
+      {
+        data: null,
+        error: {
+          message: 'duplicate key value violates unique constraint "uq_booking_pages_business"'
+        }
+      }
+    ]);
+    await expect(upsertBookingPage(BIZ, {}, otherUnique.client)).rejects.toThrow(
+      "upsertBookingPage: duplicate key"
+    );
   });
 
   it("throws on read, insert, and update errors", async () => {
