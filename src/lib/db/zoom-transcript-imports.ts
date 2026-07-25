@@ -144,10 +144,11 @@ export async function finalizeZoomTranscriptImport(
 ): Promise<boolean> {
   const db = await ledgerClientOrNull(client, "finalize");
   if (!db) return false;
-  const { error } = await db
+  const { data, error } = await db
     .from("zoom_transcript_imports")
     .update({ document_id: documentId })
-    .match({ business_id: businessId, meeting_uuid: meetingUuid });
+    .match({ business_id: businessId, meeting_uuid: meetingUuid })
+    .select("id");
   if (error) {
     logger.warn("zoom transcript ledger: finalize failed", {
       businessId,
@@ -155,7 +156,9 @@ export async function finalizeZoomTranscriptImport(
     });
     return false;
   }
-  return true;
+  // Zero matched rows (claim deleted/stolen mid-import) is NOT success:
+  // the dedupe row is missing, which is exactly what callers escalate on.
+  return ((data as { id: string }[] | null)?.length ?? 0) > 0;
 }
 
 /**

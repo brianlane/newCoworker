@@ -207,11 +207,19 @@ describe("releaseZoomTranscriptImport", () => {
 
 describe("finalizeZoomTranscriptImport", () => {
   it("stamps the produced document onto the claim and reports success", async () => {
-    const c = chain({ error: null });
+    const c = chain({ data: [{ id: "row-1" }], error: null });
     expect(await finalizeZoomTranscriptImport(BIZ, UUID, DOC, makeDb(c))).toBe(true);
     expect(c.update).toHaveBeenCalledWith({ document_id: DOC });
     expect(c.match).toHaveBeenCalledWith({ business_id: BIZ, meeting_uuid: UUID });
     expect(logger.warn).not.toHaveBeenCalled();
+  });
+
+  it("reports failure when no ledger row matched (claim vanished)", async () => {
+    const c = chain({ data: [], error: null });
+    expect(await finalizeZoomTranscriptImport(BIZ, UUID, DOC, makeDb(c))).toBe(false);
+
+    const c2 = chain({ data: null, error: null });
+    expect(await finalizeZoomTranscriptImport(BIZ, UUID, DOC, makeDb(c2))).toBe(false);
   });
 
   it("logs a query error and reports failure instead of throwing", async () => {
