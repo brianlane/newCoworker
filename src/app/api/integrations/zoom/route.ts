@@ -23,6 +23,7 @@ import {
   setZoomConnectionActive,
   setZoomConnectionAutoImport
 } from "@/lib/db/zoom-connections";
+import { backfillZoomIdentityIfMissing } from "@/lib/zoom/client";
 import { revokeZoomToken } from "@/lib/zoom/oauth";
 
 const businessIdSchema = z.string().uuid();
@@ -55,6 +56,9 @@ export async function GET(request: Request) {
     }
     const user = await authorize(parsed.data);
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
+    // Heal a connect that raced a users/me failure: without zoom_user_id,
+    // webhook host routing (auto-import, deauthorization) misses the tenant.
+    await backfillZoomIdentityIfMissing(parsed.data);
     const row = await getPublicZoomConnection(parsed.data);
     return successResponse(row);
   } catch (err) {

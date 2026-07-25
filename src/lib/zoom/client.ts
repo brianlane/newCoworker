@@ -24,10 +24,16 @@ import { logger } from "@/lib/logger";
 import {
   getZoomConnection,
   setZoomConnectionActive,
+  updateZoomConnectionIdentity,
   updateZoomTokens,
   type ZoomConnectionRow
 } from "@/lib/db/zoom-connections";
-import { refreshZoomTokens, ZOOM_API_BASE_URL, ZoomOAuthError } from "@/lib/zoom/oauth";
+import {
+  fetchZoomUserProfile,
+  refreshZoomTokens,
+  ZOOM_API_BASE_URL,
+  ZoomOAuthError
+} from "@/lib/zoom/oauth";
 
 /** Refresh when less than this much validity remains. */
 export const ZOOM_TOKEN_REFRESH_MARGIN_MS = 60_000;
@@ -201,4 +207,61 @@ export async function zoomRequestForBusiness(
   const accessToken = await getZoomAccessToken(businessId);
   if (accessToken === null) return null;
   return zoomApiRequest(accessToken, req);
+}
+
+export type ZoomIdentityBackfillDeps = {
+  getConnection?: typeof getZoomConnection;
+  getToken?: typeof getZoomAccessToken;
+  fetchProfile?: typeof fetchZoomUserProfile;
+  persistIdentity?: typeof updateZoomConnectionIdentity;
+};
+
+async function backfillZoomIdentityCore(
+  businessId: string,
+  deps: ZoomIdentityBackfillDeps
+): Promise<boolean> {
+  /* c8 ignore start -- production defaults; tests inject */
+  const getConnection = deps.getConnection ?? getZoomConnection;
+  const getToken = deps.getToken ?? getZoomAccessToken;
+  const fetchProfile = deps.fetchProfile ?? fetchZoomUserProfile;
+  const persistIdentity = deps.persistIdentity ?? updateZoomConnectionIdentity;
+  /* c8 ignore stop */
+
+  const row = await getConnection(businessId);
+  if (!row || !row.is_active || row.zoom_user_id !== null) return false;
+
+  const token = await getToken(businessId);
+  if (!token) return false;
+
+  const profile = await fetchProfile(token);
+  if (!profile?.zoomUserId) return false;
+
+  await persistIdentity(businessId, {
+    zoomUserId: profile.zoomUserId,
+    email: profile.email,
+    displayName: profile.displayName
+  });
+  return true;
+}
+
+/**
+ * Lazy identity repair: a connect whose users/me fetch failed leaves
+ * `zoom_user_id` null, and webhook host routing (transcript auto-import,
+ * deauthorization) can never match that tenant. Called from the connection
+ * GET route so the next dashboard visit heals the row. Best-effort, never
+ * throws; true when the row was repaired.
+ */
+export async function backfillZoomIdentityIfMissing(
+  businessId: string,
+  deps: ZoomIdentityBackfillDeps = {}
+): Promise<boolean> {
+  try {
+    return await backfillZoomIdentityCore(businessId, deps);
+  } catch (err) {
+    logger.warn("zoom identity backfill failed", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return false;
+  }
 }

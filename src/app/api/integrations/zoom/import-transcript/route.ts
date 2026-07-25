@@ -34,7 +34,11 @@ import {
   releaseZoomTranscriptImport
 } from "@/lib/db/zoom-transcript-imports";
 import { importZoomTranscriptDocument } from "@/lib/zoom/import-core";
-import { fetchZoomMeetingTranscript, rawZoomMeetingUuid } from "@/lib/zoom/transcript";
+import {
+  fetchZoomMeetingTranscript,
+  rawZoomMeetingUuid,
+  resolvePastMeetingUuid
+} from "@/lib/zoom/transcript";
 
 export const dynamic = "force-dynamic";
 // Zoom fetch + Gemini condense both run inline (owner-attended action).
@@ -70,9 +74,16 @@ export async function POST(request: Request) {
     const business = await getBusiness(businessId);
     if (!business) return errorResponse("NOT_FOUND", "Business not found", 404);
 
-    // Coordinate with the webhook auto-import through the shared ledger
-    // (only possible when the pasted reference carries the meeting UUID).
-    const meetingUuid = rawZoomMeetingUuid(meetingId);
+    // Coordinate with the webhook auto-import through the shared ledger.
+    // A pasted link/UUID carries the key directly; a NUMERIC id resolves to
+    // its past-meeting instance UUID (fail-open pre-scope: null keeps the
+    // legacy unkeyed flow), closing the numeric-ID dedupe bypass.
+    const digitsRef = meetingId.replace(/\s+/g, "");
+    const meetingUuid =
+      rawZoomMeetingUuid(meetingId) ??
+      (/^\d{9,15}$/.test(digitsRef)
+        ? await resolvePastMeetingUuid(businessId, digitsRef)
+        : null);
     let holdsClaim = false;
     if (meetingUuid) {
       holdsClaim = await claimZoomTranscriptImport(businessId, meetingUuid);
@@ -117,8 +128,7 @@ export async function POST(request: Request) {
       // The pasted reference may be a UUID or a full recording link, neither
       // is filename/title material. Label with the digits when it's a plain
       // meeting ID, else a generic marker.
-      const digits = meetingId.replace(/\s+/g, "");
-      const refLabel = /^\d{9,15}$/.test(digits) ? digits : "recording";
+      const refLabel = /^\d{9,15}$/.test(digitsRef) ? digitsRef : "recording";
       const title = parsed.data.title || `Zoom meeting ${refLabel} (transcript)`;
 
       const imported = await importZoomTranscriptDocument({

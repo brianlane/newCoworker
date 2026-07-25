@@ -318,6 +318,33 @@ export async function getZoomConnectionBusinessIdsByZoomUserId(
   return ((data ?? []) as Array<{ business_id: string }>).map((row) => row.business_id);
 }
 
+/**
+ * Backfill the connected account's identity onto a row whose connect-time
+ * users/me fetch failed (zoom_user_id null): without it, webhook host
+ * routing can never match this tenant. Email/name are fill-only extras.
+ * The update is CONDITIONAL on zoom_user_id still being null, so a slow
+ * backfill can never overwrite the fresh identity written by a concurrent
+ * OAuth reconnect.
+ */
+export async function updateZoomConnectionIdentity(
+  businessId: string,
+  identity: { zoomUserId: string; email: string | null; displayName: string | null },
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("zoom_connections")
+    .update({
+      zoom_user_id: identity.zoomUserId,
+      ...(identity.email === null ? {} : { account_email: identity.email }),
+      ...(identity.displayName === null ? {} : { account_name: identity.displayName }),
+      updated_at: new Date().toISOString()
+    })
+    .eq("business_id", businessId)
+    .is("zoom_user_id", null);
+  if (error) throw new Error(`updateZoomConnectionIdentity: ${error.message}`);
+}
+
 /** Owner toggle for the recording.transcript_completed auto-import path. */
 export async function setZoomConnectionAutoImport(
   businessId: string,

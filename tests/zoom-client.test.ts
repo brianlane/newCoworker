@@ -12,10 +12,12 @@ vi.mock("@/lib/logger", () => ({
 const getZoomConnection = vi.fn();
 const setZoomConnectionActive = vi.fn();
 const updateZoomTokens = vi.fn();
+const updateZoomConnectionIdentity = vi.fn();
 vi.mock("@/lib/db/zoom-connections", () => ({
   getZoomConnection: (...args: unknown[]) => getZoomConnection(...args),
   setZoomConnectionActive: (...args: unknown[]) => setZoomConnectionActive(...args),
-  updateZoomTokens: (...args: unknown[]) => updateZoomTokens(...args)
+  updateZoomTokens: (...args: unknown[]) => updateZoomTokens(...args),
+  updateZoomConnectionIdentity: (...args: unknown[]) => updateZoomConnectionIdentity(...args)
 }));
 
 const refreshZoomTokens = vi.fn();
@@ -28,6 +30,7 @@ vi.mock("@/lib/zoom/oauth", async (importOriginal) => {
 });
 
 import {
+  backfillZoomIdentityIfMissing,
   getZoomAccessToken,
   resetZoomRefreshStateForTests,
   zoomApiRequest,
@@ -404,5 +407,70 @@ describe("zoomRequestForBusiness", () => {
     expect((init.headers as Record<string, string>).Authorization).toBe(
       "Bearer live-access"
     );
+  });
+});
+
+describe("backfillZoomIdentityIfMissing", () => {
+  const PROFILE = { zoomUserId: "zu-9", email: "o@a.com", displayName: "Acme Owner" };
+
+  function backfillDeps(overrides: Record<string, unknown> = {}) {
+    return {
+      getConnection: vi.fn().mockResolvedValue(row({ zoom_user_id: null })),
+      getToken: vi.fn().mockResolvedValue("tok-1"),
+      fetchProfile: vi.fn().mockResolvedValue(PROFILE),
+      persistIdentity: vi.fn().mockResolvedValue(undefined),
+      ...overrides
+    } as never;
+  }
+
+  it("repairs a null zoom_user_id row from users/me", async () => {
+    const deps = backfillDeps();
+    expect(await backfillZoomIdentityIfMissing(BIZ, deps)).toBe(true);
+    const d = deps as { persistIdentity: ReturnType<typeof vi.fn> };
+    expect(d.persistIdentity).toHaveBeenCalledWith(BIZ, {
+      zoomUserId: "zu-9",
+      email: "o@a.com",
+      displayName: "Acme Owner"
+    });
+  });
+
+  it("no-ops when there is no row, the row is inactive, or identity exists", async () => {
+    const missing = backfillDeps({ getConnection: vi.fn().mockResolvedValue(null) });
+    expect(await backfillZoomIdentityIfMissing(BIZ, missing)).toBe(false);
+
+    const inactive = backfillDeps({
+      getConnection: vi.fn().mockResolvedValue(row({ zoom_user_id: null, is_active: false }))
+    });
+    expect(await backfillZoomIdentityIfMissing(BIZ, inactive)).toBe(false);
+
+    const healthy = backfillDeps({ getConnection: vi.fn().mockResolvedValue(row()) });
+    expect(await backfillZoomIdentityIfMissing(BIZ, healthy)).toBe(false);
+    const h = healthy as { getToken: ReturnType<typeof vi.fn> };
+    expect(h.getToken).not.toHaveBeenCalled();
+  });
+
+  it("no-ops without a usable token or a usable profile", async () => {
+    const noToken = backfillDeps({ getToken: vi.fn().mockResolvedValue(null) });
+    expect(await backfillZoomIdentityIfMissing(BIZ, noToken)).toBe(false);
+
+    const noProfile = backfillDeps({ fetchProfile: vi.fn().mockResolvedValue(null) });
+    expect(await backfillZoomIdentityIfMissing(BIZ, noProfile)).toBe(false);
+
+    const noId = backfillDeps({
+      fetchProfile: vi.fn().mockResolvedValue({ ...PROFILE, zoomUserId: null })
+    });
+    expect(await backfillZoomIdentityIfMissing(BIZ, noId)).toBe(false);
+  });
+
+  it("swallows failures (Error and non-Error) and reports false", async () => {
+    const throwing = backfillDeps({
+      getConnection: vi.fn().mockRejectedValue(new Error("db down"))
+    });
+    expect(await backfillZoomIdentityIfMissing(BIZ, throwing)).toBe(false);
+
+    const throwingString = backfillDeps({
+      persistIdentity: vi.fn().mockRejectedValue("string down")
+    });
+    expect(await backfillZoomIdentityIfMissing(BIZ, throwingString)).toBe(false);
   });
 });

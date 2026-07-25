@@ -33,6 +33,7 @@ import {
   setZoomConnectionActive,
   setZoomConnectionAutoImport,
   toPublicZoomConnection,
+  updateZoomConnectionIdentity,
   updateZoomTokens,
   upsertZoomConnection
 } from "@/lib/db/zoom-connections";
@@ -43,6 +44,7 @@ type Chain = {
   update: ReturnType<typeof vi.fn>;
   delete: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
+  is: ReturnType<typeof vi.fn>;
   match: ReturnType<typeof vi.fn>;
   single: ReturnType<typeof vi.fn>;
   maybeSingle: ReturnType<typeof vi.fn>;
@@ -55,6 +57,7 @@ function chain(terminal?: unknown): Chain & PromiseLike<unknown> {
     update: vi.fn(() => c),
     delete: vi.fn(() => c),
     eq: vi.fn(() => c),
+    is: vi.fn(() => c),
     match: vi.fn(() => c),
     single: vi.fn(),
     maybeSingle: vi.fn(),
@@ -458,6 +461,57 @@ describe("getZoomConnectionBusinessIdsByZoomUserId", () => {
     const c = chain({ data: [], error: null });
     defaultClientSpy.mockReturnValue(makeDb(c));
     expect(await getZoomConnectionBusinessIdsByZoomUserId("zu-1")).toEqual([]);
+    expect(defaultClientSpy).toHaveBeenCalled();
+  });
+});
+
+describe("updateZoomConnectionIdentity", () => {
+  it("backfills the identity, filling email/name only when present", async () => {
+    const c = chain({ error: null });
+    await updateZoomConnectionIdentity(
+      BIZ,
+      { zoomUserId: "zu-9", email: "o@a.com", displayName: "Acme Owner" },
+      makeDb(c)
+    );
+    const updated = c.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(updated.zoom_user_id).toBe("zu-9");
+    expect(updated.account_email).toBe("o@a.com");
+    expect(updated.account_name).toBe("Acme Owner");
+    expect(c.eq).toHaveBeenCalledWith("business_id", BIZ);
+    // Conditional write: a concurrent reconnect's fresh identity wins.
+    expect(c.is).toHaveBeenCalledWith("zoom_user_id", null);
+
+    const c2 = chain({ error: null });
+    await updateZoomConnectionIdentity(
+      BIZ,
+      { zoomUserId: "zu-9", email: null, displayName: null },
+      makeDb(c2)
+    );
+    const sparse = c2.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(sparse.zoom_user_id).toBe("zu-9");
+    expect(sparse).not.toHaveProperty("account_email");
+    expect(sparse).not.toHaveProperty("account_name");
+  });
+
+  it("throws on an update error", async () => {
+    const c = chain({ error: { message: "identity fail" } });
+    await expect(
+      updateZoomConnectionIdentity(
+        BIZ,
+        { zoomUserId: "zu-9", email: null, displayName: null },
+        makeDb(c)
+      )
+    ).rejects.toThrow(/identity fail/);
+  });
+
+  it("uses the default service client when none is provided", async () => {
+    const c = chain({ error: null });
+    defaultClientSpy.mockReturnValue(makeDb(c));
+    await updateZoomConnectionIdentity(BIZ, {
+      zoomUserId: "zu-9",
+      email: null,
+      displayName: null
+    });
     expect(defaultClientSpy).toHaveBeenCalled();
   });
 });
