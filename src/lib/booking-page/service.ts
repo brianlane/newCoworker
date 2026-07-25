@@ -33,6 +33,7 @@ import type { BookingPageRow } from "@/lib/booking-page/db";
 import { parseBookingPageRef } from "@/lib/booking-page/keys";
 import { computePublicSlots } from "@/lib/booking-page/slots";
 import type { BusyBlock, PublicSlot } from "@/lib/booking-page/slots";
+import { readBusyCache, saveBusyCache } from "@/lib/booking-page/busy-cache";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import {
   bookCalendarAppointment,
@@ -271,27 +272,37 @@ async function listSlotsForContext(
       }
       // A connected provider is ADDITIVE availability signal: when its
       // busy data is unreadable (outage, scope-starved consent), the page
-      // degrades to the platform baseline (business hours minus the
-      // booking ledger) instead of going down. The owner sees the
-      // "cannot read availability" warning on the Bookings dashboard, and
-      // provider events invisible to us can be double-booked until the
-      // connection heals; that is the deliberate trade.
+      // degrades instead of going down. Degradation prefers the
+      // LAST-KNOWN-GOOD snapshot (stale-while-error, bounded staleness) so
+      // a time the provider reported busy stays blocked through the
+      // outage; with no fresh snapshot it falls back to the platform
+      // baseline (business hours minus the booking ledger). The owner
+      // sees the "cannot read availability" warning on the Bookings
+      // dashboard either way; only events created DURING the outage can
+      // be double-booked.
       let fetched: BusyBlock[] | null = null;
       try {
         fetched = await fetchBusyBlocks(context.businessId, conn.provider, conn, now, windowEnd);
       } catch (err) {
-        logger.warn("booking-page: provider busy fetch threw; degrading to ledger baseline", {
+        logger.warn("booking-page: provider busy fetch threw; degrading", {
           businessId: context.businessId,
           error: err instanceof Error ? err.message : String(err)
         });
       }
       if (fetched === null) {
-        logger.warn("booking-page: provider busy unreadable; degrading to ledger baseline", {
-          businessId: context.businessId
+        const cached = await readBusyCache(context.businessId);
+        logger.warn("booking-page: provider busy unreadable; degrading", {
+          businessId: context.businessId,
+          cachedSnapshot: cached !== null
         });
-        busy = ledgerBusy;
+        // The ledger union covers bookings the outage kept off the
+        // snapshot; overlapping spans are harmless to the slot walk.
+        busy = cached ? [...ledgerBusy, ...cached] : ledgerBusy;
       } else {
         busy = fetched;
+        // Write-through (best-effort inside): the snapshot future outages
+        // will serve.
+        await saveBusyCache(context.businessId, now, windowEnd, fetched);
       }
     }
 

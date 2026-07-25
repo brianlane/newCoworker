@@ -25,6 +25,10 @@ vi.mock("@/lib/zoom/meetings", () => ({
 }));
 vi.mock("@/lib/ai-flows/goal-hooks", () => ({ fireGoalEvent: vi.fn() }));
 vi.mock("@/lib/sms/opt-outs", () => ({ getSmsOptOutKind: vi.fn() }));
+vi.mock("@/lib/booking-page/busy-cache", () => ({
+  readBusyCache: vi.fn(),
+  saveBusyCache: vi.fn()
+}));
 vi.mock("@/lib/calendar-tools/caldav", () => ({ getCaldavBusyBlocks: vi.fn() }));
 vi.mock("@/lib/db/businesses", () => ({ getBusiness: vi.fn() }));
 vi.mock("@/lib/db/employees", () => ({ listTeamMembers: vi.fn(), listTimeOff: vi.fn() }));
@@ -69,6 +73,7 @@ import {
 } from "@/lib/zoom/meetings";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 import { getSmsOptOutKind } from "@/lib/sms/opt-outs";
+import { readBusyCache, saveBusyCache } from "@/lib/booking-page/busy-cache";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import {
   bookCalendarAppointment,
@@ -146,6 +151,8 @@ const mockZoomCreate = vi.mocked(createZoomMeetingForBooking);
 const mockZoomDelete = vi.mocked(deleteZoomMeetingForBooking);
 const mockGoal = vi.mocked(fireGoalEvent);
 const mockOptOutKind = vi.mocked(getSmsOptOutKind);
+const mockCacheRead = vi.mocked(readBusyCache);
+const mockCacheSave = vi.mocked(saveBusyCache);
 
 function ledgerDb(result: { data?: unknown; error?: { message: string } | null }) {
   const b: Record<string, unknown> = {};
@@ -180,6 +187,8 @@ beforeEach(() => {
   mockZoomDelete.mockResolvedValue(undefined as never);
   mockGoal.mockResolvedValue(undefined as never);
   mockOptOutKind.mockResolvedValue(null);
+  mockCacheRead.mockResolvedValue(null);
+  mockCacheSave.mockResolvedValue(undefined);
 });
 
 afterEach(() => {
@@ -324,9 +333,46 @@ describe("listPublicSlots", () => {
     expect(starts).not.toContain("2026-01-05T16:00:00.000Z");
     expect(starts).toContain("2026-01-05T17:00:00.000Z");
     expect(logger.warn).toHaveBeenCalledWith(
-      "booking-page: provider busy unreadable; degrading to ledger baseline",
-      expect.objectContaining({ businessId: BIZ })
+      "booking-page: provider busy unreadable; degrading",
+      expect.objectContaining({ businessId: BIZ, cachedSnapshot: false })
     );
+    // Nothing good to write through on a failed fetch.
+    expect(mockCacheSave).not.toHaveBeenCalled();
+  });
+
+  it("serves the last-known-good busy snapshot when the live fetch fails", async () => {
+    // The outage case the cache exists for: yesterday's fetch saw a
+    // provider event at 17:00; today's fetch fails. The cached span keeps
+    // that hour blocked (unioned with the ledger) instead of reopening it.
+    mockBusy.mockResolvedValueOnce(null);
+    mockCacheRead.mockResolvedValueOnce([
+      { start: new Date("2026-01-05T17:00:00Z"), end: new Date("2026-01-05T18:00:00Z") }
+    ]);
+    mockListStarts.mockResolvedValueOnce([new Date("2026-01-05T16:00:00Z")]);
+    const out = await listPublicSlots(TOKEN, 30);
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error("unreachable");
+    const starts = out.slots.map((s) => s.startIso);
+    expect(starts).not.toContain("2026-01-05T16:00:00.000Z"); // ledger
+    expect(starts).not.toContain("2026-01-05T17:00:00.000Z"); // cached provider span
+    expect(starts).toContain("2026-01-05T18:00:00.000Z");
+    expect(logger.warn).toHaveBeenCalledWith(
+      "booking-page: provider busy unreadable; degrading",
+      expect.objectContaining({ cachedSnapshot: true })
+    );
+  });
+
+  it("writes the snapshot through on every successful provider fetch", async () => {
+    const span = { start: new Date("2026-01-05T17:00:00Z"), end: new Date("2026-01-05T18:00:00Z") };
+    mockBusy.mockResolvedValueOnce([span]);
+    const out = await listPublicSlots(TOKEN, 30);
+    expect(out.ok).toBe(true);
+    expect(mockCacheSave).toHaveBeenCalledTimes(1);
+    const [bizArg, winStart, winEnd, spans] = mockCacheSave.mock.calls[0];
+    expect(bizArg).toBe(BIZ);
+    expect(winStart.getTime()).toBeLessThan(winEnd.getTime());
+    expect(spans).toEqual([span]);
+    expect(mockCacheRead).not.toHaveBeenCalled();
   });
 
   it("degrades on a thrown provider busy fetch too (non-Error shapes included)", async () => {
@@ -334,7 +380,7 @@ describe("listPublicSlots", () => {
     const out = await listPublicSlots(TOKEN, 30);
     expect(out.ok).toBe(true);
     expect(logger.warn).toHaveBeenCalledWith(
-      "booking-page: provider busy fetch threw; degrading to ledger baseline",
+      "booking-page: provider busy fetch threw; degrading",
       expect.objectContaining({ error: "Request failed with status code 403" })
     );
 
@@ -342,7 +388,7 @@ describe("listPublicSlots", () => {
     const out2 = await listPublicSlots(TOKEN, 30);
     expect(out2.ok).toBe(true);
     expect(logger.warn).toHaveBeenCalledWith(
-      "booking-page: provider busy fetch threw; degrading to ledger baseline",
+      "booking-page: provider busy fetch threw; degrading",
       expect.objectContaining({ error: "proxy string boom" })
     );
   });
@@ -363,7 +409,7 @@ describe("listPublicSlots", () => {
     const degraded = await listPublicSlots(TOKEN, 30);
     expect(degraded.ok).toBe(true);
     expect(logger.warn).toHaveBeenCalledWith(
-      "booking-page: provider busy unreadable; degrading to ledger baseline",
+      "booking-page: provider busy unreadable; degrading",
       expect.objectContaining({ businessId: BIZ })
     );
   });
