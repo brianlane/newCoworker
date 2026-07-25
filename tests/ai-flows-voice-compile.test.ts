@@ -118,6 +118,34 @@ describe("compileVoiceFlow", () => {
     expect(compileVoiceFlow(outbound, TO)).toBeNull();
   });
 
+  it("carries options.starAlerts onto the handoff context", () => {
+    // The flag rides the session row so telnyx-voice-call-end and the voice
+    // bridge can frame their texts without re-reading the flow mid-call.
+    const withStars: AiFlowDefinition = {
+      ...def([{ id: "r1", type: "ring_handoff", toE164: "+16025245719", ringSeconds: 20 }]),
+      options: { starAlerts: true }
+    };
+    const plan = compileVoiceFlow(withStars, TO);
+    if (plan?.kind !== "handoff") throw new Error("expected handoff");
+    expect(plan.context.star_alerts).toBe(true);
+  });
+
+  it("omits star_alerts entirely when the flow did not opt in", () => {
+    // Absent (not false) keeps an opted-out chain's persisted context
+    // byte-identical to what it was before star alerts existed.
+    for (const options of [undefined, { starAlerts: false }, { suppressDefaultReply: true }]) {
+      const plan = compileVoiceFlow(
+        {
+          ...def([{ id: "r1", type: "ring_handoff", toE164: "+16025245719" }]),
+          ...(options ? { options } : {})
+        },
+        TO
+      );
+      if (plan?.kind !== "handoff") throw new Error("expected handoff");
+      expect(Object.keys(plan.context)).not.toContain("star_alerts");
+    }
+  });
+
   it("drops ring steps with a blank destination", () => {
     const plan = compileVoiceFlow(
       def([

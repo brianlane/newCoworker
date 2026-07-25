@@ -138,6 +138,17 @@ export function intakeSystemInstruction(
   return lines.join(" ");
 }
 
+/**
+ * A full SMS-width row of asterisks framing an urgent alert. Lockstep copy of
+ * `STAR_ROW` in supabase/functions/_shared/star_block.ts (the bridge is its own
+ * package and cannot import the Deno module); tests/star-block.test.ts pins
+ * them equal.
+ */
+export const STAR_ROW = "****************";
+
+/** Characters the frame adds: both rows plus their newlines. */
+const STAR_FRAME_CHARS = (STAR_ROW.length + 1) * 2;
+
 const INTAKE_FIELD_LABELS: Record<string, string> = {
   name: "Name",
   phone: "Callback",
@@ -168,6 +179,11 @@ function fieldLabel(key: string): string {
  *
  * Wording is generic (no hardcoded agent names) because `voice_handoff_chains`
  * is a per-tenant table any business can configure.
+ *
+ * `starFrame` (the flow's `options.starAlerts`, carried on the handoff session
+ * context) wraps the finished body in a row of asterisks so the alert stands
+ * out in the owner's message list. The body itself is untouched, and the
+ * truncation budget shrinks by the frame so the closing row always survives.
  */
 export function composeIntakeLeadSms(input: {
   businessName: string;
@@ -176,6 +192,8 @@ export function composeIntakeLeadSms(input: {
   transferFromE164?: string;
   transcript: string;
   maxChars: number;
+  /** Frame the message in a row of asterisks (flow opted into star alerts). */
+  starFrame?: boolean;
 }): string {
   const lines: string[] = [
     `${input.businessName}: New live-transfer lead (AI intake) — the team missed the warm handoff, so I captured this on the call.`
@@ -202,5 +220,9 @@ export function composeIntakeLeadSms(input: {
     lines.push("", "Transcript:", input.transcript.trim());
   }
   const text = lines.join("\n");
-  return text.length > input.maxChars ? text.slice(0, input.maxChars) : text;
+  const budget = input.starFrame
+    ? Math.max(0, input.maxChars - STAR_FRAME_CHARS)
+    : input.maxChars;
+  const body = text.length > budget ? text.slice(0, budget) : text;
+  return input.starFrame ? `${STAR_ROW}\n${body.trim()}\n${STAR_ROW}` : body;
 }

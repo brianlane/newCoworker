@@ -1435,7 +1435,13 @@ export const aiFlowDefinitionSchema = z.object({
       // tool: when true, the SMS model may enroll the CURRENT texter into
       // this flow. Default off — the customer-facing surface stays barred
       // from every flow the owner has not explicitly flagged.
-      agentInvocable: z.boolean().optional()
+      agentInvocable: z.boolean().optional(),
+      // Voice warm-handoff flows only: frame every alert text this flow
+      // sends (the missed/answered warm-transfer notices and the AI intake
+      // summary) in a row of asterisks, the same framing the $1M+
+      // keep-for-owner alert uses, so a live transfer stands out from
+      // routine texts. Message bodies are unchanged. Default off.
+      starAlerts: z.boolean().optional()
     })
     .optional()
 });
@@ -2672,7 +2678,9 @@ export function salvageFlowDefinition(candidate: unknown): SalvagedFlow | null {
           suppressDefaultReply:
             (raw.options as Record<string, unknown>).suppressDefaultReply === true || undefined,
           captureStepScreenshots:
-            (raw.options as Record<string, unknown>).captureStepScreenshots === true || undefined
+            (raw.options as Record<string, unknown>).captureStepScreenshots === true || undefined,
+          starAlerts:
+            (raw.options as Record<string, unknown>).starAlerts === true || undefined
         }
       : undefined;
 

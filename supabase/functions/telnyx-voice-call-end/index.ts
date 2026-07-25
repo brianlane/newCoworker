@@ -40,6 +40,7 @@ import {
   type WtOutcome
 } from "../_shared/warm_transfer_notify.ts";
 import { telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
+import { starBlock } from "../_shared/star_block.ts";
 import { sendCapAlertOnce, smsCapPeriodKey } from "../_shared/cap_alerts.ts";
 import {
   recordForwardedCall,
@@ -524,7 +525,8 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
       callerE164: sess.from_e164 ?? "",
       recipientE164: ctx.steps?.[failedStep]?.to_e164 ?? "",
       outcome: "failed",
-      dedupeKey: `hl:failed:${aLeg}:${failedStep}`
+      dedupeKey: `hl:failed:${aLeg}:${failedStep}`,
+      starFrame: ctx.star_alerts === true
     });
     // The claim already advanced current_step, so a thrown network error (not
     // just a non-OK status) would otherwise strand the caller: retried hangups
@@ -557,7 +559,8 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
       callerE164: sess.from_e164 ?? "",
       recipientE164: ctx.steps?.[failedStep]?.to_e164 ?? "",
       outcome: "failed",
-      dedupeKey: `hl:failed:${aLeg}:${failedStep}`
+      dedupeKey: `hl:failed:${aLeg}:${failedStep}`,
+      starFrame: ctx.star_alerts === true
     });
     // Resolve the bridge target (and health) BEFORE pressing 1, so we never
     // connect the live client to a dead bridge.
@@ -637,7 +640,8 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
     callerE164: sess.from_e164 ?? "",
     recipientE164: ctx.steps?.[failedStep]?.to_e164 ?? "",
     outcome: "failed",
-    dedupeKey: `hl:failed:${aLeg}:${failedStep}`
+    dedupeKey: `hl:failed:${aLeg}:${failedStep}`,
+    starFrame: ctx.star_alerts === true
   });
   if (await claimStep(deps, aLeg, failedStep, { status: "done" })) {
     await telnyxHangupCall(apiKey, aLeg);
@@ -693,7 +697,8 @@ async function handleHandoffLifecycle(
           callerE164: bridged.from_e164 ?? "",
           recipientE164,
           outcome: "success",
-          dedupeKey: `hl:success:${parsed.aLegCallId}`
+          dedupeKey: `hl:success:${parsed.aLegCallId}`,
+          starFrame: bridged.context?.star_alerts === true
         });
       }
     }
@@ -793,7 +798,8 @@ async function handleHandoffLifecycle(
             callerE164: done.from_e164 ?? "",
             recipientE164,
             outcome: "success",
-            dedupeKey: `hl:success:${parsed.aLegCallId}`
+            dedupeKey: `hl:success:${parsed.aLegCallId}`,
+            starFrame: done.context?.star_alerts === true
           });
         }
       }
@@ -957,9 +963,18 @@ async function sendWarmTransferNotifications(
     recipientE164: string;
     outcome: WtOutcome;
     dedupeKey: string;
+    /**
+     * Frame both texts in a row of asterisks (the handoff chain's flow set
+     * `options.starAlerts`). Omitted everywhere else, so the receptionist and
+     * caller-rule `wt:` notices stay exactly as they were.
+     */
+    starFrame?: boolean;
   }
 ): Promise<{ sent: boolean; reason?: string }> {
   const { businessId, callerE164, recipientE164, outcome, dedupeKey } = args;
+  // The BODY is never rewritten, only framed, so a starred notice reads
+  // identically to its plain twin.
+  const frame = (text: string): string => (args.starFrame ? starBlock(text) : text);
   if (!apiKey) return { sent: false, reason: "no_api_key" };
   if (!recipientE164) return { sent: false, reason: "no_recipient" };
 
@@ -1034,7 +1049,7 @@ async function sendWarmTransferNotifications(
     messagingProfileId,
     fromE164: from,
     toE164: recipientE164,
-    text: buildRecipientMessage(outcome, callerLabel)
+    text: frame(buildRecipientMessage(outcome, callerLabel))
   });
   if (!recip.ok) {
     if (recip.reason === "send_failed" || recip.reason === "reserve_error") {
@@ -1058,7 +1073,7 @@ async function sendWarmTransferNotifications(
       messagingProfileId,
       fromE164: from,
       toE164: ownerE164,
-      text: buildOwnerMessage(outcome, recipientLabel, callerLabel)
+      text: frame(buildOwnerMessage(outcome, recipientLabel, callerLabel))
     });
     if (!owner.ok) {
       console.error("warm-transfer notify: owner SMS not sent", owner.reason);
