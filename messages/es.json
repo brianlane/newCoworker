@@ -1327,7 +1327,7 @@
       "loadFailed": "No se pudo cargar tu página de reservas. Actualiza para reintentar.",
       "saveFailed": "No se pudo guardar. Inténtalo de nuevo.",
       "calendarUnreadableTitle": "Tu conexión de calendario no puede leer la disponibilidad",
-      "calendarUnreadableBody": "Se pueden crear citas, pero tu proveedor de calendario rechaza las lecturas de disponibilidad, así que la página pública no puede ofrecer horarios. Esto suele significar que un permiso de calendario no se aprobó al conectar la cuenta. Vuelve a conectar el calendario y aprueba todos los permisos, incluido el acceso al calendario.",
+      "calendarUnreadableBody": "Tu proveedor de calendario rechaza las lecturas de disponibilidad, así que la página pública funciona solo con tu horario de negocio y las citas ya reservadas. No puede ver los eventos de tu propio calendario, por lo que un visitante podría reservar sobre uno de ellos. Esto suele significar que un permiso de calendario no se aprobó al conectar la cuenta. Vuelve a conectar el calendario y aprueba todos los permisos, incluido el acceso al calendario.",
       "calendarUnreadableAction": "Reconectar tu calendario →",
       "connectFirstTitle": "Primero conecta un calendario",
       "connectFirstBody": "La página de reservas necesita un calendario de Google, Microsoft 365 o CalDAV conectado para leer la disponibilidad y crear citas.",

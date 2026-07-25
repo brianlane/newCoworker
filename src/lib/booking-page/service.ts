@@ -245,40 +245,54 @@ async function listSlotsForContext(
     const now = nowOverride ?? new Date();
     const windowEnd = new Date(now.getTime() + (page.max_advance_days + 2) * DAY_MS);
 
-    // Ledger starts serve the daily cap in both modes, and in platform
-    // mode they are ALSO the busy blocks (the ledger is the calendar).
-    const existingStarts =
-      context.mode === "platform" || page.max_daily_bookings !== null
-        ? await listBookingStartsBetween(
-            context.businessId,
-            now.toISOString(),
-            windowEnd.toISOString()
-          )
-        : [];
+    // Ledger starts serve the daily cap in both modes, the busy blocks in
+    // platform mode, and the DEGRADED busy baseline in provider mode, so
+    // they are always fetched.
+    const existingStarts = await listBookingStartsBetween(
+      context.businessId,
+      now.toISOString(),
+      windowEnd.toISOString()
+    );
+    // The ledger stores starts only; block a conservative hour per booking
+    // so no offered duration can overlap a prior one.
+    const ledgerBusy: BusyBlock[] = existingStarts.map((start) => ({
+      start,
+      end: new Date(start.getTime() + PLATFORM_BUSY_BLOCK_MS)
+    }));
 
     let busy: BusyBlock[];
     if (context.mode === "platform") {
-      // The ledger stores starts only; block a conservative hour per
-      // booking so no offered duration can overlap a prior one.
-      busy = existingStarts.map((start) => ({
-        start,
-        end: new Date(start.getTime() + PLATFORM_BUSY_BLOCK_MS)
-      }));
+      busy = ledgerBusy;
     } else {
       const conn = await resolveCalendarConnection(context.businessId);
       /* c8 ignore next 3 -- context resolution above already vetted the connection */
       if (!conn || conn.provider === "vagaro" || conn.provider === "calendly") {
         return { ok: false, detail: "calendar_not_connected" };
       }
-      const fetched = await fetchBusyBlocks(
-        context.businessId,
-        conn.provider,
-        conn,
-        now,
-        windowEnd
-      );
-      if (fetched === null) return { ok: false, detail: "calendar_not_connected" };
-      busy = fetched;
+      // A connected provider is ADDITIVE availability signal: when its
+      // busy data is unreadable (outage, scope-starved consent), the page
+      // degrades to the platform baseline (business hours minus the
+      // booking ledger) instead of going down. The owner sees the
+      // "cannot read availability" warning on the Bookings dashboard, and
+      // provider events invisible to us can be double-booked until the
+      // connection heals; that is the deliberate trade.
+      let fetched: BusyBlock[] | null = null;
+      try {
+        fetched = await fetchBusyBlocks(context.businessId, conn.provider, conn, now, windowEnd);
+      } catch (err) {
+        logger.warn("booking-page: provider busy fetch threw; degrading to ledger baseline", {
+          businessId: context.businessId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+      if (fetched === null) {
+        logger.warn("booking-page: provider busy unreadable; degrading to ledger baseline", {
+          businessId: context.businessId
+        });
+        busy = ledgerBusy;
+      } else {
+        busy = fetched;
+      }
     }
 
     const business = await getBusiness(context.businessId);

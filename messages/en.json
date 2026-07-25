@@ -1327,7 +1327,7 @@
       "loadFailed": "Could not load your booking page. Refresh to try again.",
       "saveFailed": "Could not save. Please try again.",
       "calendarUnreadableTitle": "Your calendar connection cannot read availability",
-      "calendarUnreadableBody": "Bookings can be created, but your calendar provider is refusing availability reads, so the public page cannot offer time slots. This usually means a calendar permission was not approved when the account was connected. Reconnect the calendar and approve every permission, including calendar access.",
+      "calendarUnreadableBody": "Your calendar provider is refusing availability reads, so the public page is running on business hours plus already-booked times only. It cannot see events on your own calendar, which means a visitor could book over one of them. This usually means a calendar permission was not approved when the account was connected. Reconnect the calendar and approve every permission, including calendar access.",
       "calendarUnreadableAction": "Reconnect your calendar →",
       "connectFirstTitle": "Connect a calendar first",
       "connectFirstBody": "The booking page needs a connected Google, Microsoft 365, or CalDAV calendar to read availability and create appointments.",
