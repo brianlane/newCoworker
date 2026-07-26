@@ -14,6 +14,7 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { PG_UNIQUE_VIOLATION } from "@/lib/customer-memory/db";
 import { logger } from "@/lib/logger";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -204,20 +205,29 @@ export async function filterUnseenMessages(
 }
 
 /**
- * Mark messages evaluated. Written BEFORE the turn runs: a crash mid-turn
- * must not re-answer the same email on the next tick (an owner would
- * rather lose one reply than send two).
+ * ATOMICALLY claim one message for this pass, returning false when someone
+ * else already holds it.
+ *
+ * A plain INSERT against the (business_id, message_id) primary key is the
+ * claim: an unseen-check followed by a write is not atomic, so two
+ * overlapping passes (the poll is kicked ~1/min and a slow pass can outlive
+ * its tick) could both decide to answer the same email. Losing the race
+ * means someone else is answering, which is exactly the desired outcome.
+ * Same posture as the AiFlow run dedupe keys.
+ *
+ * Claimed BEFORE the turn runs: a crash mid-turn must not re-answer on the
+ * next tick, since an owner would rather lose one reply than send two.
  */
-export async function markMessagesSeen(
+export async function claimMessage(
   businessId: string,
-  messageIds: string[],
+  messageId: string,
   client?: SupabaseClient
-): Promise<void> {
-  if (messageIds.length === 0) return;
+): Promise<boolean> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { error } = await db.from("email_coworker_seen").upsert(
-    messageIds.map((id) => ({ business_id: businessId, message_id: id })),
-    { onConflict: "business_id,message_id", ignoreDuplicates: true }
-  );
-  if (error) throw new Error(`markMessagesSeen: ${error.message}`);
+  const { error } = await db
+    .from("email_coworker_seen")
+    .insert({ business_id: businessId, message_id: messageId });
+  if (!error) return true;
+  if ((error as { code?: string }).code === PG_UNIQUE_VIOLATION) return false;
+  throw new Error(`claimMessage: ${error.message}`);
 }

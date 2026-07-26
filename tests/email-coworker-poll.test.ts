@@ -19,7 +19,7 @@ vi.mock("@/lib/email-coworker/threads", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/email-coworker/threads")>()),
   listActiveThreads: vi.fn(),
   filterUnseenMessages: vi.fn(),
-  markMessagesSeen: vi.fn(),
+  claimMessage: vi.fn(),
   markThreadHandedOff: vi.fn(),
   recordThreadTurn: vi.fn()
 }));
@@ -36,7 +36,7 @@ import {
   EMAIL_COWORKER_MAX_TURNS_PER_DAY,
   filterUnseenMessages,
   listActiveThreads,
-  markMessagesSeen,
+  claimMessage,
   markThreadHandedOff,
   recordThreadTurn
 } from "@/lib/email-coworker/threads";
@@ -56,7 +56,7 @@ const mockFetch = vi.mocked(fetchInboxWithThreads);
 const mockMailboxAddress = vi.mocked(fetchMailboxAddress);
 const mockList = vi.mocked(listActiveThreads);
 const mockUnseen = vi.mocked(filterUnseenMessages);
-const mockSeen = vi.mocked(markMessagesSeen);
+const mockClaim = vi.mocked(claimMessage);
 const mockHandoff = vi.mocked(markThreadHandedOff);
 const mockRecordTurn = vi.mocked(recordThreadTurn);
 const mockTurn = vi.mocked(runEmailCoworkerTurn);
@@ -111,7 +111,7 @@ beforeEach(() => {
   mockFetch.mockResolvedValue([message()]);
   mockMailboxAddress.mockResolvedValue(MAILBOX_EMAIL);
   mockUnseen.mockImplementation(async (_biz, ids) => ids);
-  mockSeen.mockResolvedValue(undefined);
+  mockClaim.mockResolvedValue(true);
   mockHandoff.mockResolvedValue(undefined);
   mockRecordTurn.mockResolvedValue(undefined);
   mockTurn.mockResolvedValue({ ok: true, reply: "Booked.", handoff: false });
@@ -150,7 +150,7 @@ describe("pollEmailCoworker", () => {
     const out = await pollEmailCoworker(businessDb());
     expect(out.messages).toBe(0);
     expect(mockTurn).not.toHaveBeenCalled();
-    expect(mockSeen).not.toHaveBeenCalled();
+    expect(mockClaim).not.toHaveBeenCalled();
   });
 
   it("never answers the CONNECTED MAILBOX's own message (no talking to itself)", async () => {
@@ -185,28 +185,38 @@ describe("pollEmailCoworker", () => {
     expect(mockTurn).not.toHaveBeenCalled();
   });
 
-  it("marks each message seen immediately BEFORE its own turn", async () => {
+  it("claims each message immediately BEFORE its own turn", async () => {
     // Per message, not per batch: a pass that dies partway must leave the
-    // replies it never reached unseen so a later tick still answers them.
+    // replies it never reached unclaimed so a later tick still answers them.
     mockFetch.mockResolvedValue([message({ id: "m-1" }), message({ id: "m-2" })]);
     const order: string[] = [];
-    mockSeen.mockImplementation(async (_biz, ids) => {
-      order.push(`seen:${ids.join(",")}`);
+    mockClaim.mockImplementation(async (_biz, id) => {
+      order.push(`claim:${id}`);
+      return true;
     });
     mockTurn.mockImplementation(async ({ message: m }) => {
       order.push(`turn:${m.id}`);
       return { ok: true, reply: "ok", handoff: false };
     });
     await pollEmailCoworker(businessDb());
-    expect(order).toEqual(["seen:m-1", "turn:m-1", "seen:m-2", "turn:m-2"]);
+    expect(order).toEqual(["claim:m-1", "turn:m-1", "claim:m-2", "turn:m-2"]);
   });
 
-  it("leaves later replies unseen when a turn throws mid-batch", async () => {
+  it("leaves later replies unclaimed when a turn throws mid-batch", async () => {
     mockFetch.mockResolvedValue([message({ id: "m-1" }), message({ id: "m-2" })]);
     mockTurn.mockRejectedValueOnce(new Error("engine exploded"));
     await pollEmailCoworker(businessDb());
     // Only the message we actually attempted was consumed.
-    expect(mockSeen.mock.calls.map((c) => c[1])).toEqual([["m-1"]]);
+    expect(mockClaim.mock.calls.map((c) => c[1])).toEqual(["m-1"]);
+  });
+
+  it("skips a message another overlapping pass already claimed", async () => {
+    // The claim is atomic, so the loser of the race must not also answer.
+    mockFetch.mockResolvedValue([message({ id: "m-1" }), message({ id: "m-2" })]);
+    mockClaim.mockResolvedValueOnce(false).mockResolvedValueOnce(true);
+    const out = await pollEmailCoworker(businessDb());
+    expect(out.replied).toBe(1);
+    expect(mockTurn.mock.calls.map((c) => c[0].message.id)).toEqual(["m-2"]);
   });
 
   it("hands a circling thread to a human at the daily cap and alerts the owner once", async () => {
@@ -243,7 +253,7 @@ describe("pollEmailCoworker", () => {
     expect(mockTurn).not.toHaveBeenCalled();
     // The claim still lands: a thread a human took over must not get an
     // automated answer from the AiFlow side either.
-    expect(mockSeen.mock.calls.map((c) => c[1])).toEqual([["m-1"], ["m-2"]]);
+    expect(mockClaim.mock.calls.map((c) => c[1])).toEqual(["m-1", "m-2"]);
   });
 
   it("still hands off when the owner alert itself fails, and names a subject-less thread", async () => {

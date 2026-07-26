@@ -13,9 +13,9 @@ vi.mock("@/lib/logger", () => ({
 import {
   EMAIL_COWORKER_MAX_TURNS_PER_DAY,
   EMAIL_COWORKER_THREAD_ACTIVE_DAYS,
+  claimMessage,
   filterUnseenMessages,
   listActiveThreads,
-  markMessagesSeen,
   markThreadHandedOff,
   recordThreadTurn,
   rememberSentThread,
@@ -299,32 +299,35 @@ describe("seen ledger", () => {
     );
   });
 
-  it("upserts markers ignoring duplicates, and no-ops on an empty list", async () => {
-    const { db, upsert } = seenDb([]);
-    await markMessagesSeen(BIZ, ["m-1", "m-2"], db);
-    expect(upsert).toHaveBeenCalledWith(
-      [
-        { business_id: BIZ, message_id: "m-1" },
-        { business_id: BIZ, message_id: "m-2" }
-      ],
-      { onConflict: "business_id,message_id", ignoreDuplicates: true }
-    );
-
-    upsert.mockClear();
-    await markMessagesSeen(BIZ, [], db);
-    expect(upsert).not.toHaveBeenCalled();
+  it("claims a message with a plain insert (the primary key IS the lock)", async () => {
+    const insert = vi.fn().mockResolvedValue({ error: null });
+    const db = { from: vi.fn(() => ({ insert })) } as never;
+    expect(await claimMessage(BIZ, "m-1", db)).toBe(true);
+    expect(insert).toHaveBeenCalledWith({ business_id: BIZ, message_id: "m-1" });
   });
 
-  it("throws when the marker write fails (a lost marker would double-answer)", async () => {
-    const { db } = seenDb([], { message: "denied" });
-    await expect(markMessagesSeen(BIZ, ["m-1"], db)).rejects.toThrow(/markMessagesSeen: denied/);
+  it("loses the claim (false, not an error) when another pass got there first", async () => {
+    // An unseen-check followed by a write is not atomic, so two overlapping
+    // passes could otherwise both answer one email. Losing means someone
+    // else is answering, which is the desired outcome.
+    const insert = vi.fn().mockResolvedValue({ error: { code: "23505", message: "dup" } });
+    const db = { from: vi.fn(() => ({ insert })) } as never;
+    expect(await claimMessage(BIZ, "m-1", db)).toBe(false);
+  });
+
+  it("throws on a real write failure (never answers unclaimed)", async () => {
+    const insert = vi.fn().mockResolvedValue({ error: { code: "42501", message: "denied" } });
+    const db = { from: vi.fn(() => ({ insert })) } as never;
+    await expect(claimMessage(BIZ, "m-1", db)).rejects.toThrow(/claimMessage: denied/);
   });
 
   it("falls back to the service client for both helpers", async () => {
-    const { db, upsert } = seenDb([]);
+    const { db } = seenDb([]);
     mockClientFactory.mockResolvedValue(db);
     expect(await filterUnseenMessages(BIZ, ["m-1"])).toEqual(["m-1"]);
-    await markMessagesSeen(BIZ, ["m-1"]);
-    expect(upsert).toHaveBeenCalled();
+
+    const insert = vi.fn().mockResolvedValue({ error: null });
+    mockClientFactory.mockResolvedValue({ from: vi.fn(() => ({ insert })) } as never);
+    expect(await claimMessage(BIZ, "m-1")).toBe(true);
   });
 });

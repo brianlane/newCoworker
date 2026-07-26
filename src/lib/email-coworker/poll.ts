@@ -28,9 +28,9 @@ import {
 } from "@/lib/email-coworker/mailbox";
 import {
   EMAIL_COWORKER_MAX_TURNS_PER_DAY,
+  claimMessage,
   filterUnseenMessages,
   listActiveThreads,
-  markMessagesSeen,
   markThreadHandedOff,
   recordThreadTurn,
   turnsToday,
@@ -158,18 +158,17 @@ export async function pollEmailCoworker(
 
       for (const message of fresh) {
         const thread = ownedByThreadId.get(message.threadId)!;
-        // Seen PER MESSAGE, immediately before we act on it: marking the
-        // whole batch up front meant a pass that died partway (route
-        // timeout, a long turn) left later replies marked seen but never
-        // answered, with no retry. One at a time keeps the
-        // never-double-answer guarantee without spending it on messages we
-        // have not reached.
+        // Claimed PER MESSAGE, immediately before we act on it, and
+        // atomically: claiming the whole batch up front meant a pass that
+        // died partway left later replies consumed but unanswered, while a
+        // check-then-write would let two overlapping passes both answer.
+        // Losing the claim means another pass owns this message.
         //
-        // Written even when the thread is handed off below, because the
-        // marker is also the claim the AiFlow email poll honors: a thread a
-        // human took over must not get an automated answer from the other
-        // side of the house either.
-        await markMessagesSeen(businessId, [message.id], db);
+        // Claimed even when the thread is handed off below, because the row
+        // is also what the AiFlow email poll honors: a thread a human took
+        // over must not get an automated answer from the other side of the
+        // house either.
+        if (!(await claimMessage(businessId, message.id, db))) continue;
 
         // A batch can carry several replies on the SAME thread; once it is
         // handed off, the rest are the human's to answer (and re-alerting

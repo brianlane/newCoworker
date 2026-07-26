@@ -1458,8 +1458,10 @@ the email sibling of the owner-over-SMS operator turn: same inline engine
   prevent. A booking's video link is also pasted into the reply, since the
   coordinator needs something forwardable.
 - **Rails** ([poll.ts](src/lib/email-coworker/poll.ts)): never answers mail
-  from the mailbox's own address; marks a message seen BEFORE the turn (an
-  owner would rather lose a reply than send two); caps autonomous replies
+  from the mailbox's own address; **atomically claims** each message before
+  its turn (a plain insert against the `email_coworker_seen` primary key, so
+  two overlapping passes cannot both answer, and a crash mid-turn does not
+  re-answer: an owner would rather lose a reply than send two); caps autonomous replies
   per thread per UTC day, then hands the thread to a human and alerts the
   owner once. Per-business failures are isolated.
 - **Escalation is an action, not a sentence**: when the model brings in a
