@@ -499,7 +499,12 @@ const MANAGE_EMPLOYEE_DECLARATION: GeminiFunctionDeclaration = {
       leadRotation: {
         type: "boolean",
         description:
-          "Whether they receive leads in the round robin, including automatic assignment and automations pinned to them by name. False stops all of those."
+          "Whether they receive leads in the round robin, including automatic assignment. False stops those; it does NOT stop an automation that asks for them by name (that is namedLeads)."
+      },
+      namedLeads: {
+        type: "boolean",
+        description:
+          'Whether an automation can send them one lead by asking for them specifically ("I want Amy on this one"). Independent of leadRotation, so someone can be out of the round robin and still reachable by name.'
       },
       namedGroupOffers: {
         type: "boolean",
@@ -640,6 +645,7 @@ const manageEmployeeArgsSchema = z.object({
   scheduleText: z.string().max(500).optional(),
   preferredText: z.string().max(500).optional(),
   leadRotation: z.boolean().optional(),
+  namedLeads: z.boolean().optional(),
   namedGroupOffers: z.boolean().optional(),
   wholeTeamOffers: z.boolean().optional()
 });

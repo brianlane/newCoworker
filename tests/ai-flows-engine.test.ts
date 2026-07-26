@@ -35,7 +35,8 @@ import {
   resolvePath,
   resolvePlaceholder,
   safeRegexTest,
-  senderPinnedByFromMatches
+  senderPinnedByFromMatches,
+  type AvailabilityMode
 } from "../supabase/functions/_shared/ai_flows/engine";
 import type {
   AiFlowDefinition,
@@ -1424,29 +1425,49 @@ describe("filterRosterByAvailability", () => {
   });
 
   // Per-mode opt-outs (Amy Laidlaw, Jul 2026): the owner is on the roster so
-  // her named HomeLight broadcast can reach her, but she does not want
-  // rotation leads or the whole-team handoff.
+  // her named HomeLight broadcast can reach her, and a flow can still ask for
+  // her by name, but she wants no rotation leads and no whole-team handoff.
   it("applies only the opted-out mode's flag, leaving the other modes alone", () => {
     const roster = [
       member("amy", {
         routing_enabled: false,
+        named_routing_enabled: true,
         named_broadcast_enabled: true,
         team_broadcast_enabled: false
       }),
       member("dave")
     ];
-    const ids = (mode: "rotation" | "named_broadcast" | "team_broadcast") =>
+    const ids = (mode: AvailabilityMode) =>
       filterRosterByAvailability(roster, new Set(), monMorning, mode).map((m) => m.id);
     expect(ids("rotation")).toEqual(["dave"]);
+    expect(ids("named_routing")).toEqual(["amy", "dave"]);
     expect(ids("named_broadcast")).toEqual(["amy", "dave"]);
     expect(ids("team_broadcast")).toEqual(["dave"]);
   });
 
+  // The two "one recipient" modes are independent in BOTH directions: the
+  // engine choosing you and a flow asking for you are separate permissions.
+  it("separates the rotation from being asked for by name, either way round", () => {
+    const roster = [
+      member("rotation-only", { named_routing_enabled: false }),
+      member("by-name-only", { routing_enabled: false })
+    ];
+    const ids = (mode: AvailabilityMode) =>
+      filterRosterByAvailability(roster, new Set(), monMorning, mode).map((m) => m.id);
+    expect(ids("rotation")).toEqual(["rotation-only"]);
+    expect(ids("named_routing")).toEqual(["by-name-only"]);
+  });
+
   it("treats absent and null flags as available (pre-migration rows, unselected columns)", () => {
-    const roster = [member("legacy"), member("explicit-null", { routing_enabled: null })];
-    expect(
-      filterRosterByAvailability(roster, new Set(), monMorning, "rotation").map((m) => m.id)
-    ).toEqual(["legacy", "explicit-null"]);
+    const roster = [
+      member("legacy"),
+      member("explicit-null", { routing_enabled: null, named_routing_enabled: null })
+    ];
+    for (const mode of ["rotation", "named_routing"] as const) {
+      expect(
+        filterRosterByAvailability(roster, new Set(), monMorning, mode).map((m) => m.id)
+      ).toEqual(["legacy", "explicit-null"]);
+    }
   });
 
   it("keeps an opted-out member out even when they would be the preferred pick", () => {

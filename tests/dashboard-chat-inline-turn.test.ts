@@ -1083,6 +1083,7 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
       email: null,
       active: true,
       leadRotation: true,
+      namedLeads: true,
       namedGroupOffers: true,
       wholeTeamOffers: true
     };

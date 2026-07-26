@@ -32,6 +32,7 @@ export const EMPLOYEES_EXPORT_HEADERS = [
   "weekly_schedule",
   "preferred_times",
   "lead_rotation",
+  "named_leads",
   "named_group_offers",
   "whole_team_offers",
   "last_offered_at",
@@ -40,7 +41,8 @@ export const EMPLOYEES_EXPORT_HEADERS = [
 
 const MEMBER_COLUMNS =
   "id,name,phone_e164,email,active,weekly_schedule,preferred_windows," +
-  "routing_enabled,named_broadcast_enabled,team_broadcast_enabled,last_offered_at,created_at";
+  "routing_enabled,named_routing_enabled,named_broadcast_enabled," +
+  "team_broadcast_enabled,last_offered_at,created_at";
 
 const E164_RE = /^\+[1-9]\d{6,14}$/;
 
@@ -77,6 +79,7 @@ export async function exportEmployeesCsv(
       // Pre-migration rows read as null over PostgREST; export them as the
       // column default rather than an empty cell that re-imports as "keep".
       r.routing_enabled === false ? "false" : "true",
+      r.named_routing_enabled === false ? "false" : "true",
       r.named_broadcast_enabled === false ? "false" : "true",
       r.team_broadcast_enabled === false ? "false" : "true",
       r.last_offered_at ?? "",
@@ -96,6 +99,7 @@ export function employeesCsvTemplate(): string {
       "weekly_schedule",
       "preferred_times",
       "lead_rotation",
+      "named_leads",
       "named_group_offers",
       "whole_team_offers"
     ],
@@ -106,6 +110,7 @@ export function employeesCsvTemplate(): string {
       "true",
       "mon-fri 09:00-17:00",
       "mon-fri 09:00-12:00",
+      "true",
       "true",
       "true",
       "true"
@@ -128,6 +133,7 @@ function parseBooleanCell(raw: string): boolean | null {
  */
 const AVAILABILITY_CSV_COLUMNS = [
   { header: "lead_rotation", column: "routing_enabled" },
+  { header: "named_leads", column: "named_routing_enabled" },
   { header: "named_group_offers", column: "named_broadcast_enabled" },
   { header: "whole_team_offers", column: "team_broadcast_enabled" }
 ] as const;

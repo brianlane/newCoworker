@@ -1067,7 +1067,7 @@ worker, real Postgres, real Telnyx hop). Rows filed before the fix are cleaned
 by `scripts/oneshot/fix-staff-contact-rows.ts`, which deletes only while the
 row still looks like the untouched artifact.
 
-### Per-employee lead availability (three flags on the roster row)
+### Per-employee lead availability (four flags on the roster row)
 
 Being ON the roster and TAKING LEADS IN ROTATION used to be the same bit, and
 they are not the same decision. The gap (Amy Laidlaw, Jul 20 2026): routing her
@@ -1076,28 +1076,42 @@ HomeLight referrals to Amy AND Dave simultaneously required Amy on
 Roster membership is global, so that one change also entered the owner into the
 round-robin rotation of every unpinned `route_to_team` step in the tenant.
 
-`ai_flow_team_members` carries three independent flags, all default TRUE, one
-per way the engine can choose a recipient:
+`ai_flow_team_members` carries four independent flags, all default TRUE. They
+are **two axes, not a list**: does the ENGINE choose the recipient or does the
+FLOW name them, and is it one person or the group?
 
-| Flag | Employees page | Gates |
+|  | ONE recipient | the GROUP |
 |---|---|---|
-| `routing_enabled` | Leads in rotation | `pickNextAgent` round robin, `lead_auto_assign` (same pick), `preferContactOwner`, and single-agent pins (`agentName` / `agentRef` / `agentNameVar`) |
-| `named_broadcast_enabled` | Group offers that name them | `route_to_team` broadcast with an explicit `agentNames` list |
-| `team_broadcast_enabled` | Whole-team offers | `broadcastAll`, today the team-first human handoff |
+| **engine chooses** | `routing_enabled` (round robin, `lead_auto_assign`, `preferContactOwner`) | `team_broadcast_enabled` (`broadcastAll`, the team-first handoff) |
+| **a flow names them** | `named_routing_enabled` (`agentName` / `agentRef` / `agentNameVar`) | `named_broadcast_enabled` (an explicit `agentNames` list) |
 
-**A pin does not beat the flag.** A step pinned to a rotation-off member falls
-through to the owner fallback with the existing `ai_flow_pinned_agent_missing` /
-`ai_flow_no_agent_available` shape (the message names the opt-out so the owner
-knows which switch to flip), exactly how `active = false` and time off already
-behave. One rule, no exception to remember.
+Employees page labels, in the same order: Leads in rotation, Whole-team offers,
+Leads named to them, Group offers that name them.
+
+**Each mode reads only its own flag.** Nothing is inferred from another flag's
+value, which is what lets "no rotation leads, but reachable when a flow asks
+for me" exist as a setting (Amy's shape), and its opposite too. `active =
+false` and time off still supersede all four, and a member skipped by whichever
+flag applies falls through to the owner fallback with the existing
+`ai_flow_pinned_agent_missing` / `ai_flow_no_agent_available` shape. That log
+names the switch **for the mode being tried**, so a pinned member is never
+reported as having "lead rotation" off when the setting that skipped them was
+"leads named to them".
+
+> `named_routing_enabled` arrived after the first three (Jul 26 2026). The
+> original rule was blunter: a pin obeyed `routing_enabled`, so turning off
+> rotation also made the person unreachable by name. That conflated "stop
+> feeding me the rotation" with "never send me a lead". Defaulting the new flag
+> to TRUE deliberately restores pins on a rotation-off member.
 
 Enforcement is a single chokepoint: `filterRosterByAvailability`
 ([supabase/functions/_shared/ai_flows/engine.ts](supabase/functions/_shared/ai_flows/engine.ts))
 takes an `AvailabilityMode` and is called by the only three lead-selection
 sites: `resolveBroadcastAgents` (mode from whether the list is `"all"`),
-`pickNextAgent`, and `contactOwnerAgent`. A null/absent flag reads as
-available, so pre-migration rows and any query that forgot the columns behave
-exactly as before.
+`pickNextAgent` (mode from whether a pin is in play), and `contactOwnerAgent`
+(always rotation, since ownership preference is the engine choosing). A
+null/absent flag reads as available, so pre-migration rows and any query that
+forgot the columns behave exactly as before.
 
 **Not gated, deliberately.** Teammate hand-off SENDS (`send_sms` `toAgentName` /
 `toAgentNameVar` / a templated phone that resolves to a roster row) are staff
@@ -1105,16 +1119,17 @@ messaging, not lead distribution, and every staff-detection read
 (`staffNumberCheck`, `businessSelfNames`, `activeRosterMemberByPhone`) stays
 flag-blind, or a rotation-off teammate would start being filed as a
 customer again, which is the defect two sections up. **Owner notices are
-untouched** by all three: keep-for-owner alerts and their nudges, the
+untouched** by all four: keep-for-owner alerts and their nudges, the
 roster-exhausted fallback, and claim notices all resolve
 `business_telnyx_settings.forward_to_e164` and never read the roster at all.
 
 Editable on the Employees page (per member, under Edit), through the CSV
-import/export (`lead_rotation`, `named_group_offers`, `whole_team_offers`), and
-by asking the coworker (see `manage_employee` below). Live on Amy Laidlaw:
-rotation off, named group offers on, whole-team offers off
-(`scripts/oneshot/set-amy-roster-availability.ts`, ledger-recorded), which
-restores her pre-broadcast lead distribution while keeping the HomeLight offer.
+import/export (`lead_rotation`, `named_leads`, `named_group_offers`,
+`whole_team_offers`), and by asking the coworker (see `manage_employee` below).
+Live on Amy Laidlaw: rotation off, whole-team offers off, named leads and named
+group offers on (`scripts/oneshot/set-amy-roster-availability.ts`,
+ledger-recorded), which restores her pre-broadcast lead distribution while
+keeping the HomeLight offer and leaving her reachable by name.
 Pinned by `tests/worker-integration/roster-lead-availability.itest.ts`.
 
 ### Roster changes by asking (`manage_employee`)

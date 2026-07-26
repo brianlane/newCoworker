@@ -421,6 +421,12 @@ describe("manage_employee", () => {
     // number sends a teammate's leads to a stranger, and deactivating or
     // un-rotating someone silently reroutes live leads.
     expect(decl?.description).toMatch(/number back digit by digit/i);
+    // The two single-recipient switches must read as distinct, or the model
+    // turns off the rotation when the owner only meant "stop naming me".
+    const props2 = (decl?.parameters as { properties: Record<string, { description: string }> })
+      .properties;
+    expect(props2.leadRotation.description).toContain("namedLeads");
+    expect(props2.namedLeads.description).toMatch(/independent of leadRotation/i);
     expect(decl?.description).toMatch(/confirm/i);
     expect(decl?.description).toMatch(/never invent a number/i);
     const props = Object.keys(
@@ -435,6 +441,7 @@ describe("manage_employee", () => {
       "scheduleText",
       "preferredText",
       "leadRotation",
+      "namedLeads",
       "namedGroupOffers",
       "wholeTeamOffers"
     ]);
@@ -455,6 +462,7 @@ describe("manage_employee", () => {
         email: null,
         active: true,
         leadRotation: false,
+        namedLeads: true,
         namedGroupOffers: true,
         wholeTeamOffers: false
       },

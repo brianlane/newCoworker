@@ -117,6 +117,7 @@ const TRIGGER = {
 
 type Availability = {
   routing_enabled: boolean;
+  named_routing_enabled: boolean;
   named_broadcast_enabled: boolean;
   team_broadcast_enabled: boolean;
 };
@@ -124,6 +125,7 @@ type Availability = {
 /** Every flag on, the column defaults, spelled out. */
 const ALL_ON: Availability = {
   routing_enabled: true,
+  named_routing_enabled: true,
   named_broadcast_enabled: true,
   team_broadcast_enabled: true
 };
@@ -154,16 +156,32 @@ async function seedRoster(biz: string, amy: Availability, dave: Availability = A
   if (error) throw new Error(`seedRoster: ${error.message}`);
 }
 
+/** Returns the business too, since some assertions read its system_logs. */
 async function seedRun(
   name: string,
   amy: Availability,
   definition: Record<string, unknown>
-): Promise<string> {
+): Promise<{ biz: string; runId: string }> {
   const biz = await seedBusiness(db, name);
   await seedRoster(biz, amy);
   await seedContact(db, biz, LEAD);
   const flowId = await createFlow(db, biz, definition);
-  return await enqueueRun(db, flowId, biz, TRIGGER);
+  return { biz, runId: await enqueueRun(db, flowId, biz, TRIGGER) };
+}
+
+/** The newest no-agent-available log for a business, or undefined. */
+async function noAgentLog(
+  biz: string
+): Promise<{ message: string; payload: Record<string, unknown> } | undefined> {
+  const { data } = await db
+    .from("system_logs")
+    .select("message, payload")
+    .eq("business_id", biz)
+    .eq("event", "ai_flow_no_agent_available")
+    .limit(1);
+  return (data ?? [])[0] as
+    | { message: string; payload: Record<string, unknown> }
+    | undefined;
 }
 
 function routingOf(run: Awaited<ReturnType<typeof getRun>>): Record<string, unknown> {
@@ -173,9 +191,10 @@ function routingOf(run: Awaited<ReturnType<typeof getRun>>): Record<string, unkn
   >;
 }
 
-/** Amy's live configuration: named offers only. */
+/** Amy's live configuration: reachable by name, never by the engine's choice. */
 const AMY_NAMED_ONLY: Availability = {
   routing_enabled: false,
+  named_routing_enabled: true,
   named_broadcast_enabled: true,
   team_broadcast_enabled: false
 };
@@ -185,23 +204,30 @@ beforeAll(() => {
 });
 
 describe("per-employee lead availability (real worker)", () => {
-  it("ships all three flags default ON, so an existing roster keeps its behavior", async () => {
+  it("ships all four flags default ON, so an existing roster keeps its behavior", async () => {
     const biz = await seedBusiness(db, "IT availability defaults");
     const { data, error } = await db
       .from("ai_flow_team_members")
       .insert({ business_id: biz, name: "Dave Lane", phone_e164: DAVE, active: true })
-      .select("routing_enabled, named_broadcast_enabled, team_broadcast_enabled")
+      .select(
+        "routing_enabled, named_routing_enabled, named_broadcast_enabled, team_broadcast_enabled"
+      )
       .single();
     if (error) throw new Error(error.message);
     expect(data).toEqual({
       routing_enabled: true,
+      named_routing_enabled: true,
       named_broadcast_enabled: true,
       team_broadcast_enabled: true
     });
   });
 
   it("rotation skips the opted-out member and offers the lead to the next person", async () => {
-    const runId = await seedRun("IT availability rotation skip", AMY_NAMED_ONLY, rotationFlow());
+    const { runId } = await seedRun(
+      "IT availability rotation skip",
+      AMY_NAMED_ONLY,
+      rotationFlow()
+    );
 
     await tickWorker();
 
@@ -210,10 +236,24 @@ describe("per-employee lead availability (real worker)", () => {
     expect(routingOf(run).offered).toBe(DAVE);
   });
 
-  it("a pin on an opted-out member falls through to the owner, like time off does", async () => {
-    const runId = await seedRun(
-      "IT availability pin blocked",
+  it("a pin still reaches a rotation-off member: being asked for by name is its own permission", async () => {
+    const { runId } = await seedRun(
+      "IT availability pin by name",
       AMY_NAMED_ONLY,
+      pinnedFlow("Amy Laidlaw")
+    );
+
+    await tickWorker();
+
+    const run = await getRun(db, runId);
+    expect(run.status).toBe("awaiting_agent");
+    expect(routingOf(run).offered).toBe(AMY);
+  });
+
+  it("turning off named leads blocks the pin and falls through to the owner", async () => {
+    const { biz, runId } = await seedRun(
+      "IT availability pin blocked",
+      { ...AMY_NAMED_ONLY, named_routing_enabled: false },
       pinnedFlow("Amy Laidlaw")
     );
 
@@ -226,10 +266,16 @@ describe("per-employee lead availability (real worker)", () => {
     expect(run.context.vars?.claimed_agent).toBe("none");
     const route = (await getSteps(db, runId)).find((s) => s.step_type === "route_to_team");
     expect((route?.result as { routed?: string }).routed).toBe("owner_fallback");
+
+    // The log must name the switch for the mode that was tried, or the owner
+    // goes looking at "lead rotation" for a pin that named leads blocked.
+    const log = await noAgentLog(biz);
+    expect(log?.message).toContain("named leads turned off");
+    expect(log?.payload?.mode).toBe("named_routing");
   });
 
   it("a pin on a member who still takes rotation leads is unaffected", async () => {
-    const runId = await seedRun(
+    const { runId } = await seedRun(
       "IT availability pin allowed",
       AMY_NAMED_ONLY,
       pinnedFlow("Dave Lane")
@@ -243,7 +289,7 @@ describe("per-employee lead availability (real worker)", () => {
   });
 
   it("a named group offer still reaches her: rotation off does not mean unreachable", async () => {
-    const runId = await seedRun(
+    const { runId } = await seedRun(
       "IT availability named broadcast",
       AMY_NAMED_ONLY,
       broadcastFlow("named")
@@ -259,7 +305,7 @@ describe("per-employee lead availability (real worker)", () => {
   });
 
   it("the whole-team fan-out leaves her out while still reaching the rest of the team", async () => {
-    const runId = await seedRun(
+    const { runId } = await seedRun(
       "IT availability team broadcast",
       AMY_NAMED_ONLY,
       broadcastFlow("all")
@@ -273,7 +319,7 @@ describe("per-employee lead availability (real worker)", () => {
   });
 
   it("opting out of named offers removes her from that list too", async () => {
-    const runId = await seedRun(
+    const { runId } = await seedRun(
       "IT availability named off",
       { ...ALL_ON, named_broadcast_enabled: false },
       broadcastFlow("named")
@@ -301,14 +347,9 @@ describe("per-employee lead availability (real worker)", () => {
 
     // The operator-facing log names the cause an owner can actually act on,
     // instead of blaming time off.
-    const { data: logs } = await db
-      .from("system_logs")
-      .select("message, payload")
-      .eq("business_id", biz)
-      .eq("event", "ai_flow_no_agent_available")
-      .limit(1);
-    const log = (logs ?? [])[0] as { message: string; payload: Record<string, unknown> } | undefined;
+    const log = await noAgentLog(biz);
     expect(log?.message).toContain("lead rotation turned off");
-    expect(log?.payload?.rotation_opted_out).toBe(2);
+    expect(log?.payload?.mode).toBe("rotation");
+    expect(log?.payload?.opted_out).toBe(2);
   });
 });

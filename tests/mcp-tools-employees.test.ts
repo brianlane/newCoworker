@@ -47,6 +47,7 @@ function member(overrides: Partial<TeamMemberRow> = {}): TeamMemberRow {
     weekly_schedule: { mon: [["09:00", "17:00"]] },
     preferred_windows: null,
     routing_enabled: false,
+    named_routing_enabled: true,
     named_broadcast_enabled: true,
     team_broadcast_enabled: false,
     created_at: "2026-07-21T01:45:13Z",
@@ -64,6 +65,7 @@ const OK_RESULT = {
     email: null,
     active: true,
     leadRotation: true,
+    namedLeads: true,
     namedGroupOffers: true,
     wholeTeamOffers: true
   },
@@ -91,6 +93,7 @@ describe("list_employees (MCP)", () => {
       weekly_schedule: "mon 09:00-17:00",
       preferred_times: null,
       lead_rotation: false,
+      named_leads: true,
       named_group_offers: true,
       whole_team_offers: false
     });
@@ -102,6 +105,7 @@ describe("list_employees (MCP)", () => {
         // No hours set either: "always available" reads as null, not "".
         weekly_schedule: null,
         routing_enabled: null as unknown as boolean,
+        named_routing_enabled: null as unknown as boolean,
         named_broadcast_enabled: null as unknown as boolean,
         team_broadcast_enabled: null as unknown as boolean
       })
@@ -112,6 +116,7 @@ describe("list_employees (MCP)", () => {
     expect(result.employees[0]).toMatchObject({
       weekly_schedule: null,
       lead_rotation: true,
+      named_leads: true,
       named_group_offers: true,
       whole_team_offers: true
     });
@@ -129,6 +134,7 @@ describe("create_employee (MCP)", () => {
         weekly_schedule: "mon-fri 09:00-17:00",
         preferred_times: "mon 09:00-12:00",
         lead_rotation: false,
+        named_leads: true,
         named_group_offers: true,
         whole_team_offers: false
       },
@@ -143,6 +149,7 @@ describe("create_employee (MCP)", () => {
       scheduleText: "mon-fri 09:00-17:00",
       preferredText: "mon 09:00-12:00",
       leadRotation: false,
+      namedLeads: true,
       namedGroupOffers: true,
       wholeTeamOffers: false
     });
@@ -209,6 +216,7 @@ describe("update_employee (MCP)", () => {
         weekly_schedule: "mon-fri 09:00-17:00",
         preferred_times: "",
         lead_rotation: false,
+        named_leads: true,
         named_group_offers: true,
         whole_team_offers: false
       },
@@ -222,6 +230,7 @@ describe("update_employee (MCP)", () => {
       scheduleText: "mon-fri 09:00-17:00",
       preferredText: "",
       leadRotation: false,
+      namedLeads: true,
       namedGroupOffers: true,
       wholeTeamOffers: false
     });

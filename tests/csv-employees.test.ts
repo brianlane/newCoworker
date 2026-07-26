@@ -88,6 +88,7 @@ describe("exportEmployeesCsv", () => {
         data: [
           memberRow({
             routing_enabled: false,
+            named_routing_enabled: false,
             named_broadcast_enabled: false,
             team_broadcast_enabled: false
           }),
@@ -130,11 +131,13 @@ describe("exportEmployeesCsv", () => {
     // that would re-import as "keep".
     expect(parsed.rows[0]).toMatchObject({
       lead_rotation: "false",
+      named_leads: "false",
       named_group_offers: "false",
       whole_team_offers: "false"
     });
     expect(parsed.rows[1]).toMatchObject({
       lead_rotation: "true",
+      named_leads: "true",
       named_group_offers: "true",
       whole_team_offers: "true"
     });
@@ -192,6 +195,7 @@ describe("employeesCsvTemplate", () => {
       "weekly_schedule",
       "preferred_times",
       "lead_rotation",
+      "named_leads",
       "named_group_offers",
       "whole_team_offers"
     ]);
@@ -278,8 +282,8 @@ describe("importEmployeesCsv", () => {
     ]);
     const summary = await importEmployeesCsv(
       BIZ,
-      "name,phone,lead_rotation,named_group_offers,whole_team_offers\n" +
-        "Amy Laidlaw,+16026951142,false,true,",
+      "name,phone,lead_rotation,named_leads,named_group_offers,whole_team_offers\n" +
+        "Amy Laidlaw,+16026951142,false,true,true,",
       db
     );
     expect(summary.updated).toBe(1);
@@ -287,6 +291,7 @@ describe("importEmployeesCsv", () => {
     expect(update?.args[0]).toEqual({
       name: "Amy Laidlaw",
       routing_enabled: false,
+      named_routing_enabled: true,
       named_broadcast_enabled: true
     });
   });

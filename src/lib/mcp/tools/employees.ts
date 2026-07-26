@@ -28,7 +28,13 @@ const availabilityFields = {
     .boolean()
     .optional()
     .describe(
-      "Receive leads in the round-robin rotation, including automatic assignment and automations pinned to them by name."
+      "Receive leads in the round-robin rotation, including automatic assignment. Does not cover automations that ask for them by name (see named_leads)."
+    ),
+  named_leads: z
+    .boolean()
+    .optional()
+    .describe(
+      'Receive one lead when an automation asks for them specifically ("I want Amy on this one"). Independent of lead_rotation.'
     ),
   named_group_offers: z
     .boolean()
@@ -48,6 +54,28 @@ const availabilityFields = {
 function unwrap(result: ManageEmployeeResult): Extract<ManageEmployeeResult, { ok: true }> {
   if (!result.ok) throw new McpToolError(result.message);
   return result;
+}
+
+/**
+ * snake_case tool args to the core's camelCase, omitting anything the caller
+ * left out so column defaults (create) and stored values (update) survive.
+ * One mapper for both writers: a hand-copied list is how a new flag ships
+ * wired on one path and silently missing on the other.
+ */
+function availabilityArgs(args: {
+  lead_rotation?: boolean;
+  named_leads?: boolean;
+  named_group_offers?: boolean;
+  whole_team_offers?: boolean;
+}) {
+  return {
+    ...(args.lead_rotation !== undefined ? { leadRotation: args.lead_rotation } : {}),
+    ...(args.named_leads !== undefined ? { namedLeads: args.named_leads } : {}),
+    ...(args.named_group_offers !== undefined
+      ? { namedGroupOffers: args.named_group_offers }
+      : {}),
+    ...(args.whole_team_offers !== undefined ? { wholeTeamOffers: args.whole_team_offers } : {})
+  };
 }
 
 export const listEmployeesTool = defineMcpTool({
@@ -73,6 +101,7 @@ export const listEmployeesTool = defineMcpTool({
         preferred_times: formatScheduleText(m.preferred_windows) || null,
         // Pre-migration rows read null over PostgREST; the default is true.
         lead_rotation: m.routing_enabled !== false,
+        named_leads: m.named_routing_enabled !== false,
         named_group_offers: m.named_broadcast_enabled !== false,
         whole_team_offers: m.team_broadcast_enabled !== false
       }))
@@ -116,13 +145,7 @@ export const createEmployeeTool = defineMcpTool({
         ...(args.email !== undefined ? { email: args.email } : {}),
         ...(args.weekly_schedule !== undefined ? { scheduleText: args.weekly_schedule } : {}),
         ...(args.preferred_times !== undefined ? { preferredText: args.preferred_times } : {}),
-        ...(args.lead_rotation !== undefined ? { leadRotation: args.lead_rotation } : {}),
-        ...(args.named_group_offers !== undefined
-          ? { namedGroupOffers: args.named_group_offers }
-          : {}),
-        ...(args.whole_team_offers !== undefined
-          ? { wholeTeamOffers: args.whole_team_offers }
-          : {})
+        ...availabilityArgs(args)
       })
     );
     return { created: true, employee: result.employee, note: result.note };
@@ -172,13 +195,7 @@ export const updateEmployeeTool = defineMcpTool({
         ...(args.email !== undefined ? { email: args.email } : {}),
         ...(args.weekly_schedule !== undefined ? { scheduleText: args.weekly_schedule } : {}),
         ...(args.preferred_times !== undefined ? { preferredText: args.preferred_times } : {}),
-        ...(args.lead_rotation !== undefined ? { leadRotation: args.lead_rotation } : {}),
-        ...(args.named_group_offers !== undefined
-          ? { namedGroupOffers: args.named_group_offers }
-          : {}),
-        ...(args.whole_team_offers !== undefined
-          ? { wholeTeamOffers: args.whole_team_offers }
-          : {})
+        ...availabilityArgs(args)
       })
     );
     return { updated: true, employee: result.employee, note: result.note };
