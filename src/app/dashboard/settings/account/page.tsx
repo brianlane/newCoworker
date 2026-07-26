@@ -7,6 +7,7 @@ import { resolveActiveRenewalDate } from "@/lib/billing/renewal";
 import type { PlanTier } from "@/lib/plans/tier";
 import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import { AccountCredentialsForms } from "@/components/dashboard/AccountCredentialsForms";
+import { PasskeysCard } from "@/components/dashboard/PasskeysCard";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { LanguageSwitcher } from "@/components/i18n/LanguageSwitcher";
 import { loadSettingsContext, SettingsPageShell } from "../_shared";
@@ -97,6 +98,8 @@ export default async function AccountSettingsPage() {
       </Card>
 
       <AccountCredentialsForms email={user.email ?? ""} />
+
+      <PasskeysCard />
     </SettingsPageShell>
   );
 }

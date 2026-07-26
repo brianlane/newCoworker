@@ -3,10 +3,12 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
 import Image from "next/image";
-import { useTranslations } from "next-intl";
+import { useLocale, useTranslations } from "next-intl";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import { Card } from "@/components/ui/Card";
+import type { AppLocale } from "@/i18n/routing";
+import { getPasswordRules, getPasswordValidationError } from "@/lib/password";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 /**
@@ -17,6 +19,7 @@ import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
  */
 export default function ResetPasswordPage() {
   const t = useTranslations("auth");
+  const locale = useLocale() as AppLocale;
   const router = useRouter();
   const [hasSession, setHasSession] = useState<boolean | null>(null);
   const [password, setPassword] = useState("");
@@ -45,8 +48,9 @@ export default function ResetPasswordPage() {
 
   async function handleSubmit(e: FormEvent) {
     e.preventDefault();
-    if (password.length < 8) {
-      setError(t("resetTooShort"));
+    const passwordError = getPasswordValidationError(password, locale);
+    if (passwordError) {
+      setError(passwordError);
       return;
     }
     if (password !== confirm) {
@@ -116,6 +120,14 @@ export default function ResetPasswordPage() {
                 autoComplete="new-password"
                 required
               />
+              <div className="rounded-lg border border-parchment/10 bg-parchment/5 px-3 py-2 text-xs text-parchment/65">
+                <p className="font-medium text-parchment/75">{t("passwordRules")}</p>
+                <ul className="mt-1 list-disc pl-4 space-y-1">
+                  {getPasswordRules(locale).map((rule) => (
+                    <li key={rule}>{rule}</li>
+                  ))}
+                </ul>
+              </div>
               {error && <p className="text-xs text-spark-orange">{error}</p>}
               <Button type="submit" loading={loading} disabled={hasSession === null} className="w-full">
                 {t("updatePassword")}

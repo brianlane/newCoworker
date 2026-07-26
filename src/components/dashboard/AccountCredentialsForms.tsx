@@ -4,6 +4,7 @@ import { useState, type FormEvent } from "react";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
+import { PASSWORD_RULES, getPasswordValidationError } from "@/lib/password";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 type Status = { kind: "idle" | "saving" | "success" | "error"; message?: string };
@@ -59,7 +60,7 @@ export function AccountCredentialsForms({ email }: { email: string }) {
       setNewEmail("");
       setEmailStatus({
         kind: "success",
-        message: `Almost done. We sent a confirmation link to ${trimmed}. Click it to finish the change. Your current email stays active until then.`
+        message: `Almost done. We sent a confirmation link to both ${email} and ${trimmed}. Click the link in each inbox to finish the change. Your current email stays active until then.`
       });
     } catch {
       setEmailStatus({ kind: "error", message: "Network error. Please try again." });
@@ -74,8 +75,9 @@ export function AccountCredentialsForms({ email }: { email: string }) {
 
   async function savePassword(e: FormEvent) {
     e.preventDefault();
-    if (newPassword.length < 8) {
-      setPwStatus({ kind: "error", message: "New password must be at least 8 characters." });
+    const passwordError = getPasswordValidationError(newPassword);
+    if (passwordError) {
+      setPwStatus({ kind: "error", message: passwordError });
       return;
     }
     if (newPassword !== confirmPassword) {
@@ -115,7 +117,7 @@ export function AccountCredentialsForms({ email }: { email: string }) {
         <h2 className="text-sm font-semibold text-parchment mb-1">Account email</h2>
         <p className="text-xs text-parchment/40 mb-4">
           Current: <span className="text-parchment/70">{email}</span>. Changing it requires
-          confirming the new address by email.
+          confirming from both your current address and the new one.
         </p>
         <form onSubmit={saveEmail} className="space-y-3">
           <Input
@@ -154,7 +156,7 @@ export function AccountCredentialsForms({ email }: { email: string }) {
             value={newPassword}
             onChange={(e) => setNewPassword(e.target.value)}
             autoComplete="new-password"
-            placeholder="At least 8 characters"
+            placeholder="8+ chars, upper, lower, number, symbol"
           />
           <Input
             label="Confirm new password"
@@ -163,6 +165,14 @@ export function AccountCredentialsForms({ email }: { email: string }) {
             onChange={(e) => setConfirmPassword(e.target.value)}
             autoComplete="new-password"
           />
+          <div className="rounded-lg border border-parchment/10 bg-parchment/5 px-3 py-2 text-xs text-parchment/65">
+            <p className="font-medium text-parchment/75">Password rules</p>
+            <ul className="mt-1 list-disc pl-4 space-y-1">
+              {PASSWORD_RULES.map((rule) => (
+                <li key={rule}>{rule}</li>
+              ))}
+            </ul>
+          </div>
           <div className="flex items-center gap-3">
             <Button
               type="submit"

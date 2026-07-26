@@ -15,10 +15,28 @@ export function getSupabaseBrowserClient() {
   }
 
   if (!browserClient) {
-    browserClient = createBrowserClient(url, anonKey);
+    browserClient = createBrowserClient(url, anonKey, {
+      auth: {
+        // Passkey sign-in and registration (`signInWithPasskey`,
+        // `registerPasskey`, `auth.passkey.*`) throw at call time unless this
+        // opt-in is set. Passkeys are enabled on the Supabase project with
+        // relying party `newcoworker.com`, so the WebAuthn ceremony only
+        // completes on that domain (never on localhost).
+        experimental: { passkey: true }
+      }
+    });
   }
 
   return browserClient;
+}
+
+/**
+ * Whether this browser can run a WebAuthn ceremony at all. Older browsers and
+ * non-secure contexts have no `PublicKeyCredential`, and offering a passkey
+ * button there is a guaranteed dead end.
+ */
+export function browserSupportsPasskeys(): boolean {
+  return typeof window !== "undefined" && typeof window.PublicKeyCredential === "function";
 }
 
 export function resetSupabaseBrowserClientCache(): void {
