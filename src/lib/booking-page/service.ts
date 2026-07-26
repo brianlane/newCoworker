@@ -523,13 +523,25 @@ export async function submitPublicBooking(
   const email = input.email.trim();
   const note = input.note?.trim() ?? "";
 
-  // The page's intake questions, answered. Refused BEFORE any claim: a
-  // required question left blank is a form problem, and the slot must stay
-  // bookable while the visitor fixes it.
+  // The page's intake questions, answered. Validated here but only REFUSED
+  // after the idempotent resubmit check below: a visitor whose first submit
+  // already booked must get their idempotent success even if the owner has
+  // since added a required question. What DID validate is kept either way
+  // (the lenient pass treats every question as optional) so a resubmit can
+  // still stamp whatever answers it carried.
   const intakeQuestions = parseIntakeQuestions(context.page.intake_questions);
   const intake = validateIntakeAnswers(intakeQuestions, input.intakeAnswers);
-  if (!intake.ok) return { ok: false, detail: "missing_answers" };
-  const intakeLines = formatIntakeAnswers(intakeQuestions, intake.answers);
+  const lenient = intake.ok
+    ? intake
+    : validateIntakeAnswers(
+        intakeQuestions.map((q) => ({ ...q, required: false })),
+        input.intakeAnswers
+      );
+  // With every question optional the lenient pass cannot report missing,
+  // so the fallback object is unreachable and exists only for the narrow.
+  /* c8 ignore next */
+  const intakeAnswers = lenient.ok ? lenient.answers : {};
+  const intakeLines = formatIntakeAnswers(intakeQuestions, intakeAnswers);
   const phoneResult = normalizeContactNumber(input.phone);
   const start = new Date(input.startIso);
   if (
@@ -604,7 +616,7 @@ export async function submitPublicBooking(
       start.toISOString(),
       // Answers included: the first request may have booked and died before
       // its final stamp, and the retry is the last chance for them to land.
-      { email, name, intakeAnswers: intakeLines.length > 0 ? intake.answers : null }
+      { email, name, intakeAnswers: intakeLines.length > 0 ? intakeAnswers : null }
     ).catch((err: unknown) => {
       logger.warn("booking-page: attendee contact re-stamp failed", {
         businessId: context.businessId,
@@ -628,6 +640,11 @@ export async function submitPublicBooking(
   if (existing.some((b) => Date.parse(b.startIso) > nowMs)) {
     return { ok: false, detail: "already_booked" };
   }
+
+  // Only a FRESH booking is refused for unanswered required questions
+  // (after the idempotent path above, before any claim: the slot stays
+  // bookable while the visitor fixes the form).
+  if (!intake.ok) return { ok: false, detail: "missing_answers" };
 
   // Re-verify the requested start is still an offered slot against live
   // free/busy (a booking made anywhere since page load withdraws the slot).

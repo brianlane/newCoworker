@@ -979,6 +979,28 @@ describe("submitPublicBooking", () => {
     expect(mockBook).not.toHaveBeenCalled();
   });
 
+  it("a resubmit wins over a stale form: idempotent success despite a new required question", async () => {
+    // The owner added a required question AFTER the visitor booked; the
+    // retry for the same start is still the idempotent success, stamping
+    // whatever answers it carried (here: none).
+    mockPage.mockResolvedValue({
+      ...PAGE,
+      intake_questions: [
+        { id: "project", label: "Project?", type: "choice", options: ["A", "B"], required: true }
+      ]
+    });
+    mockUpcomingForAttendee.mockResolvedValueOnce([
+      { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
+    ] as never);
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    expect(mockStampContact).toHaveBeenCalledWith(
+      BIZ,
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ intakeAnswers: null })
+    );
+  });
+
   it("carries the intake answers into the event notes and onto the booking row", async () => {
     mockPage.mockResolvedValue({
       ...PAGE,
