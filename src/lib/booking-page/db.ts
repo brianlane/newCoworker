@@ -215,12 +215,12 @@ function validatePatch(patch: BookingPageSettingsPatch): void {
   ) {
     throw new BookingPageValidationError("Unknown assignment mode");
   }
-  // A 'fixed' page without an employee silently behaves like 'any', so
-  // switching to it must name somebody in the same write: omitted counts as
-  // missing, not as "keep whatever is there".
+  // Explicitly clearing the employee while asking for 'fixed' is
+  // self-contradictory. Omitting it is checked against the STORED employee
+  // in upsertBookingPage, which is the only place that can see it.
   if (
     patch.assignmentMode === "fixed" &&
-    (patch.employeeId === null || patch.employeeId === undefined || patch.employeeId.trim() === "")
+    (patch.employeeId === null || patch.employeeId?.trim() === "")
   ) {
     throw new BookingPageValidationError("Pick the employee this page books");
   }
@@ -305,6 +305,14 @@ export async function upsertBookingPage(
   validatePatch(patch);
   const db = client ?? (await createSupabaseServiceClient());
   const existing = await getBookingPageForBusiness(businessId, db);
+
+  // A 'fixed' page with nobody named silently behaves like an unassigned
+  // one. Checked here rather than in validatePatch because "keep the
+  // employee already on the page" is a legitimate patch, and only this
+  // scope knows what is stored.
+  if (patch.assignmentMode === "fixed" && patch.employeeId === undefined && !existing?.employee_id) {
+    throw new BookingPageValidationError("Pick the employee this page books");
+  }
 
   if (!existing) {
     const { data, error } = await db
@@ -631,4 +639,31 @@ export async function countUpcomingByAssignee(
     counts.set(id, (counts.get(id) ?? 0) + 1);
   }
   return counts;
+}
+
+/**
+ * Fill in a booking's assignee ONLY if it does not have one.
+ *
+ * For the idempotent resubmit: the original booking's assignment is the
+ * right answer, and re-resolving can legitimately name someone else (loads
+ * moved, shifts changed), so a blind write would silently reassign work
+ * that is already on somebody's calendar. Conditional on the column still
+ * being null, so the retry only repairs a genuine gap.
+ */
+export async function stampAssigneeIfUnset(
+  businessId: string,
+  attendeeKey: string,
+  startIso: string,
+  memberId: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("calendar_booking_dedupe")
+    .update({ assignee_member_id: memberId })
+    .eq("business_id", businessId)
+    .eq("attendee_key", attendeeKey)
+    .eq("start_at", startIso)
+    .is("assignee_member_id", null);
+  if (error) throw new Error(`stampAssigneeIfUnset: ${error.message}`);
 }

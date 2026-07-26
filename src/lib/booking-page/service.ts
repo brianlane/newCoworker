@@ -25,6 +25,7 @@ import { randomUUID } from "crypto";
 import {
   countBookingsBetween,
   countUpcomingByAssignee,
+  stampAssigneeIfUnset,
   getBookingPageForBusiness,
   stampAttendeeContact,
   getEnabledBookingPageBySlug,
@@ -566,11 +567,22 @@ export async function submitPublicBooking(
     // NOT re-sent: it either went out already or the visitor is holding an
     // appointment they can see, and a duplicate is worse than a missing one.
     const retryAssignee = await resolveAssignee(context, start).catch(() => null);
+    if (retryAssignee) {
+      // Only fills a genuine gap: the original assignment is the right
+      // answer, and re-resolving can name someone else as loads move, so
+      // overwriting would reassign work already on somebody's calendar.
+      await stampAssigneeIfUnset(
+        context.businessId,
+        bookingAttendeeKey(phone, email, name),
+        start.toISOString(),
+        retryAssignee
+      ).catch(() => {});
+    }
     await stampAttendeeContact(
       context.businessId,
       bookingAttendeeKey(phone, email, name),
       start.toISOString(),
-      { email, name, assigneeMemberId: retryAssignee }
+      { email, name }
     ).catch((err: unknown) => {
       logger.warn("booking-page: attendee contact re-stamp failed", {
         businessId: context.businessId,

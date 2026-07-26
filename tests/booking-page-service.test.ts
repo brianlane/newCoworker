@@ -9,7 +9,8 @@ vi.mock("@/lib/booking-page/db", () => ({
   recordPlatformBooking: vi.fn(),
   stampManageToken: vi.fn(),
   stampAttendeeContact: vi.fn(),
-  countUpcomingByAssignee: vi.fn()
+  countUpcomingByAssignee: vi.fn(),
+  stampAssigneeIfUnset: vi.fn()
 }));
 vi.mock("@/lib/booking-page/confirmation-email", () => ({
   sendBookingConfirmationEmail: vi.fn()
@@ -75,6 +76,7 @@ import {
   listBookingStartsBetween,
   recordPlatformBooking,
   countUpcomingByAssignee,
+  stampAssigneeIfUnset,
   stampAttendeeContact,
   stampManageToken
 } from "@/lib/booking-page/db";
@@ -168,6 +170,7 @@ const mockRecordPlatform = vi.mocked(recordPlatformBooking);
 const mockStampManage = vi.mocked(stampManageToken);
 const mockStampContact = vi.mocked(stampAttendeeContact);
 const mockAssigneeCounts = vi.mocked(countUpcomingByAssignee);
+const mockStampAssignee = vi.mocked(stampAssigneeIfUnset);
 const mockConfirmationEmail = vi.mocked(sendBookingConfirmationEmail);
 const mockPageByBusiness = vi.mocked(getBookingPageForBusiness);
 const mockUpcomingForAttendee = vi.mocked(findUpcomingBookingsForAttendee);
@@ -206,6 +209,7 @@ beforeEach(() => {
   mockStampManage.mockResolvedValue(true);
   mockStampContact.mockResolvedValue(true);
   mockAssigneeCounts.mockResolvedValue(new Map());
+  mockStampAssignee.mockResolvedValue(undefined);
   mockConfirmationEmail.mockResolvedValue(true);
   mockUpcomingForAttendee.mockResolvedValue([]);
   mockUnassignedAlert.mockResolvedValue("sent" as never);
@@ -723,12 +727,21 @@ describe("submitPublicBooking", () => {
     ] as never);
     mockStampContact.mockClear();
     expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
-    expect(mockStampContact).toHaveBeenCalledWith(
+    // Conditional fill, so a retry repairs a gap without reassigning work
+    // that is already on somebody's calendar.
+    expect(mockStampAssignee).toHaveBeenCalledWith(
       BIZ,
-      expect.any(String),
-      expect.any(String),
-      expect.objectContaining({ assigneeMemberId: "m-ana" })
+      "phone:+14805550100",
+      "2026-01-05T16:00:00.000Z",
+      "m-ana"
     );
+
+    // A failed fill is swallowed: the appointment is real either way.
+    mockUpcomingForAttendee.mockResolvedValueOnce([
+      { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
+    ] as never);
+    mockStampAssignee.mockRejectedValueOnce(new Error("denied"));
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
 
     // A failed resolution on the retry is still a successful answer.
     mockUpcomingForAttendee.mockResolvedValueOnce([
