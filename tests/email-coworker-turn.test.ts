@@ -10,6 +10,7 @@ vi.mock("@/lib/dashboard-chat/context-blocks", () => ({
   buildBusinessContextBlock: vi.fn()
 }));
 vi.mock("@/lib/db/agent-tool-settings", () => ({ isAgentToolEnabled: vi.fn() }));
+vi.mock("@/lib/booking-page/prompt-line", () => ({ bookingLinkPromptLine: vi.fn() }));
 vi.mock("@/lib/email/owner-mailbox", () => ({ sendFromMailboxConnection: vi.fn() }));
 vi.mock("@/lib/db/email-log", () => ({ recordOutboundAssistantEmail: vi.fn() }));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } }));
@@ -29,6 +30,7 @@ import {
   buildIntegrationsStatusLine
 } from "@/lib/dashboard-chat/context-blocks";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
+import { bookingLinkPromptLine } from "@/lib/booking-page/prompt-line";
 import { sendFromMailboxConnection } from "@/lib/email/owner-mailbox";
 import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
 
@@ -37,6 +39,7 @@ const mockTurn = vi.mocked(runInlineChatTurn);
 const mockIntegrations = vi.mocked(buildIntegrationsStatusLine);
 const mockContext = vi.mocked(buildBusinessContextBlock);
 const mockToolEnabled = vi.mocked(isAgentToolEnabled);
+const mockBookingLine = vi.mocked(bookingLinkPromptLine);
 const mockSend = vi.mocked(sendFromMailboxConnection);
 const mockRecord = vi.mocked(recordOutboundAssistantEmail);
 
@@ -73,6 +76,7 @@ beforeEach(() => {
   mockIntegrations.mockResolvedValue("Connected: Google Calendar");
   mockContext.mockResolvedValue("Business: New Coworker");
   mockToolEnabled.mockResolvedValue(true);
+  mockBookingLine.mockResolvedValue("SCHEDULING LINK. https://www.newcoworker.com/book/new-coworker");
   mockTurn.mockResolvedValue({ ok: true, content: "Monday at 12:00 PM Eastern works." } as never);
   mockSend.mockResolvedValue({
     ok: true,
@@ -127,6 +131,16 @@ describe("replySubject", () => {
 });
 
 describe("buildEmailTurnSystem", () => {
+  it("carries the booking-link hint so the coworker can answer with the real URL", () => {
+    const system = buildEmailTurnSystem({
+      businessTimezone: "America/Phoenix",
+      correspondentEmail: "beth@lizdev.com",
+      subject: "NC Discovery Call w/ Liz",
+      bookingLinkLine: "SCHEDULING LINK. https://www.newcoworker.com/book/new-coworker"
+    });
+    expect(system).toContain("https://www.newcoworker.com/book/new-coworker");
+  });
+
   it("carries the surface block, the correspondent, the date line, and context", () => {
     const system = buildEmailTurnSystem({
       businessTimezone: "America/Phoenix",

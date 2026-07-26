@@ -67,6 +67,7 @@
  * Realtime can't deliver the assistant message INSERT.
  */
 
+import { bookingLinkPromptLine } from "@/lib/booking-page/prompt-line";
 import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
@@ -433,6 +434,8 @@ function buildRowboatChatMessages(args: {
    * buildIntegrationsStatusLine). Null/omitted ⇒ no line.
    */
   integrationsLine?: string | null;
+  /** Public booking page hint (see booking-page/prompt-line.ts). */
+  bookingLinkLine?: string | null;
 }): DashboardChatJobInputMessage[] {
   const out: DashboardChatJobInputMessage[] = [];
   // ALWAYS first: OWNER_PREAMBLE establishes that this is the
@@ -452,6 +455,10 @@ function buildRowboatChatMessages(args: {
   const integrationsLine = args.integrationsLine?.trim();
   if (integrationsLine) {
     out.push({ role: "system", content: integrationsLine });
+  }
+  const bookingLinkLine = args.bookingLinkLine?.trim();
+  if (bookingLinkLine) {
+    out.push({ role: "system", content: bookingLinkLine });
   }
   const customerPreamble = args.customerPreamble?.trim();
   if (customerPreamble) {
@@ -845,6 +852,9 @@ export async function POST(request: Request) {
     // agent's vault instructions describe the business, not its live
     // connections). Best-effort; null adds no block.
     const integrationsLine = await buildIntegrationsStatusLine(body.businessId);
+    // The public booking link: a delegation email should carry the page,
+    // not a list of times that goes stale.
+    const bookingLinkLine = await bookingLinkPromptLine(body.businessId);
 
     const inputMessages = buildRowboatChatMessages({
       summaryMd: thread.summary_md,
@@ -854,7 +864,8 @@ export async function POST(request: Request) {
       customerPreamble,
       emailToolEnabled,
       businessTimezone: flags.timezone,
-      integrationsLine
+      integrationsLine,
+      bookingLinkLine
     });
     const statelessInputMessages = hasContinuation
       ? buildRowboatChatMessages({
@@ -865,7 +876,8 @@ export async function POST(request: Request) {
           customerPreamble,
           emailToolEnabled,
           businessTimezone: flags.timezone,
-          integrationsLine
+          integrationsLine,
+          bookingLinkLine
         })
       : null;
 
