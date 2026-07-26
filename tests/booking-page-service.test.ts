@@ -717,9 +717,15 @@ describe("submitPublicBooking", () => {
     expect(mockBook).not.toHaveBeenCalled();
     expect(mockSlotClaim).not.toHaveBeenCalled();
     // Reminder addressing is re-stamped (idempotent) in case the first
-    // submit landed the booking and died before stamping. The confirmation
-    // email is NOT re-sent: a duplicate is worse than none.
-    expect(mockStampContact).toHaveBeenCalled();
+    // submit landed the booking and died before stamping, intake answers
+    // included (their last chance to land). The confirmation email is NOT
+    // re-sent: a duplicate is worse than none.
+    expect(mockStampContact).toHaveBeenCalledWith(
+      BIZ,
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ intakeAnswers: null })
+    );
     expect(mockConfirmationEmail).not.toHaveBeenCalled();
 
     // The retry also settles the assignment, or a shared page's booking
@@ -935,6 +941,27 @@ describe("submitPublicBooking", () => {
     // No roster read and no tiebreak write at all on the unassigned path.
     expect(mockAssigneeCounts).not.toHaveBeenCalled();
     expect(mockMarkOffered).not.toHaveBeenCalled();
+  });
+
+  it("a resubmit carries the intake answers too (their last chance to land)", async () => {
+    mockPage.mockResolvedValue({
+      ...PAGE,
+      intake_questions: [
+        { id: "project", label: "Project?", type: "choice", options: ["A", "B"], required: true }
+      ]
+    });
+    mockUpcomingForAttendee.mockResolvedValueOnce([
+      { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
+    ] as never);
+    expect(
+      (await submitPublicBooking(TOKEN, { ...VALID, intakeAnswers: { project: "A" } })).ok
+    ).toBe(true);
+    expect(mockStampContact).toHaveBeenCalledWith(
+      BIZ,
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ intakeAnswers: { project: "A" } })
+    );
   });
 
   it("refuses a submission missing a required intake answer BEFORE any claim", async () => {

@@ -75,11 +75,12 @@ export async function POST(request: Request) {
       }
       if (result.detail === "missing_answers") {
         // A stale form (the owner added a required question while it sat
-        // open): 422 with a hint to reload.
+        // open). 400, NOT 422: the client reads 422 as "you already have an
+        // appointment", and this is a fixable form problem.
         return errorResponse(
           "VALIDATION_ERROR",
           "Please answer the required questions and try again.",
-          422
+          400
         );
       }
       if (result.detail === "already_booked") {

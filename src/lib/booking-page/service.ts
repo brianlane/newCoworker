@@ -602,7 +602,9 @@ export async function submitPublicBooking(
       context.businessId,
       bookingAttendeeKey(phone, email, name),
       start.toISOString(),
-      { email, name }
+      // Answers included: the first request may have booked and died before
+      // its final stamp, and the retry is the last chance for them to land.
+      { email, name, intakeAnswers: intakeLines.length > 0 ? intake.answers : null }
     ).catch((err: unknown) => {
       logger.warn("booking-page: attendee contact re-stamp failed", {
         businessId: context.businessId,
