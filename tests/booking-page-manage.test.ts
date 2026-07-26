@@ -23,7 +23,8 @@ vi.mock("@/lib/calendar-tools/waitlist-resolve", () => ({
 vi.mock("@/lib/calendar-tools/booking-dedupe", () => ({
   claimBookingDedupe: vi.fn(),
   findUpcomingBookingClaim: vi.fn(),
-  releaseBookingDedupe: vi.fn()
+  releaseBookingDedupe: vi.fn(),
+  releaseParkedSlotClaims: vi.fn()
 }));
 vi.mock("@/lib/booking-page/db", () => ({
   getBookingPageForBusiness: vi.fn(),
@@ -61,7 +62,8 @@ import {
 import {
   claimBookingDedupe,
   findUpcomingBookingClaim,
-  releaseBookingDedupe
+  releaseBookingDedupe,
+  releaseParkedSlotClaims
 } from "@/lib/calendar-tools/booking-dedupe";
 import {
   deleteManagedBooking,
@@ -89,6 +91,7 @@ const mockResolveWaitlist = vi.mocked(resolveWaitlistAfterBooking);
 const mockClaim = vi.mocked(claimBookingDedupe);
 const mockRelease = vi.mocked(releaseBookingDedupe);
 const mockFindClaim = vi.mocked(findUpcomingBookingClaim);
+const mockReleaseParked = vi.mocked(releaseParkedSlotClaims);
 const mockRow = vi.mocked(getBookingByManageToken);
 const mockPage = vi.mocked(getBookingPageForBusiness);
 const mockMove = vi.mocked(moveManagedBooking);
@@ -125,6 +128,7 @@ beforeEach(() => {
   mockResolveWaitlist.mockResolvedValue(undefined);
   mockClaim.mockResolvedValue({ kind: "claimed", id: "claim-1" } as never);
   mockRelease.mockResolvedValue(undefined);
+  mockReleaseParked.mockResolvedValue(undefined);
   // By default the core would act on exactly this booking.
   mockFindClaim.mockResolvedValue({ id: "claim-9", eventId: "evt-1", startAt: FUTURE, zoomMeetingId: null } as never);
   mockMove.mockResolvedValue(undefined);
@@ -231,6 +235,9 @@ describe("cancelManagedBooking", () => {
     // Their OWN live waitlist entries end with the appointment (parity with
     // the provider cancel core), and only then is the time offered on.
     expect(mockCancelWaitlist).toHaveBeenCalledWith(BIZ, { phones: [], email: "liz@x.co" });
+    // The original booking's parked slot claim goes too, or the freed time
+    // turns the next booker away until its lease lapses.
+    expect(mockReleaseParked).toHaveBeenCalledWith(BIZ, "slot:public-booking-page", FUTURE);
     expect(mockOfferFreed).toHaveBeenCalledWith(BIZ, FUTURE);
     expect(mockCancelCore).not.toHaveBeenCalled();
   });
@@ -314,6 +321,7 @@ describe("rescheduleManagedBooking", () => {
       { phones: ["+14805550177"], email: null },
       NEW_START
     );
+    expect(mockReleaseParked).toHaveBeenCalledWith(BIZ, "slot:public-booking-page", FUTURE);
     expect(mockOfferFreed).toHaveBeenCalledWith(BIZ, FUTURE);
   });
 

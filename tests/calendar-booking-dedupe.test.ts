@@ -15,6 +15,7 @@ import {
   LEDGER_BLOCK_MS,
   findBookingClaimStartsByEvent,
   isLedgerSlotOpen,
+  releaseParkedSlotClaims,
   findUpcomingBookingClaim,
   findUpcomingBookingClaimByPhone,
   findZoomMeetingIdByEvent,
@@ -542,6 +543,35 @@ describe("findBookingClaimStartsByEvent (vacated slots for the waitlist)", () =>
 
     vi.mocked(createSupabaseServiceClient).mockRejectedValueOnce("string blast");
     expect(await findBookingClaimStartsByEvent(BIZ, "evt-1")).toEqual([]);
+  });
+});
+
+describe("releaseParkedSlotClaims (a freed slot must not stay in_flight)", () => {
+  it("deletes only the UNCONFIRMED claim on that start under that key", async () => {
+    const calls = scriptClient([{ data: null, error: null }]);
+    await releaseParkedSlotClaims(BIZ, "slot:public-booking-page", START);
+    expect(calls.some((c) => c.name === "delete")).toBe(true);
+    const eqArgs = calls.filter((c) => c.name === "eq").map((c) => c.args);
+    expect(eqArgs).toContainEqual(["attendee_key", "slot:public-booking-page"]);
+    expect(eqArgs).toContainEqual(["start_at", START]);
+    // Confirmed bookings are never touched.
+    expect(calls.filter((c) => c.name === "is").map((c) => c.args)).toContainEqual([
+      "event_id",
+      null
+    ]);
+  });
+
+  it("never throws: the change that freed the slot already happened", async () => {
+    scriptClient([{ data: null, error: { message: "denied" } }]);
+    await expect(
+      releaseParkedSlotClaims(BIZ, "slot:public-booking-page", START)
+    ).resolves.toBeUndefined();
+    expect(logger.warn).toHaveBeenCalled();
+
+    vi.mocked(createSupabaseServiceClient).mockRejectedValueOnce("string blast");
+    await expect(
+      releaseParkedSlotClaims(BIZ, "slot:public-booking-page", START)
+    ).resolves.toBeUndefined();
   });
 });
 

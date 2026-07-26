@@ -36,7 +36,8 @@ import {
 import {
   claimBookingDedupe,
   findUpcomingBookingClaim,
-  releaseBookingDedupe
+  releaseBookingDedupe,
+  releaseParkedSlotClaims
 } from "@/lib/calendar-tools/booking-dedupe";
 import {
   PUBLIC_SLOT_CLAIM_KEY,
@@ -220,6 +221,14 @@ export async function cancelManagedBooking(
         resolved.row.business_id,
         waitlistAttendee(resolved.row.attendee_key)
       );
+      // The original booking's slot claim is still parked on this start
+      // until its lease lapses; without dropping it the freed time turns
+      // the next booker away.
+      await releaseParkedSlotClaims(
+        resolved.row.business_id,
+        PUBLIC_SLOT_CLAIM_KEY,
+        resolved.row.start_at
+      );
       await offerFreedSlot(resolved.row.business_id, resolved.row.start_at);
       return { ok: true };
     }
@@ -326,6 +335,12 @@ export async function rescheduleManagedBooking(
         resolved.row.business_id,
         waitlistAttendee(resolved.row.attendee_key),
         newStartIso
+      );
+      // Same for the time just vacated (see the cancel path).
+      await releaseParkedSlotClaims(
+        resolved.row.business_id,
+        PUBLIC_SLOT_CLAIM_KEY,
+        resolved.row.start_at
       );
       await offerFreedSlot(resolved.row.business_id, resolved.row.start_at);
       return { ok: true, startIso: newStartIso };

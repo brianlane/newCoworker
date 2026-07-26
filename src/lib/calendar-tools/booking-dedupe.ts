@@ -439,6 +439,40 @@ export async function findZoomMeetingIdByEvent(
 }
 
 /**
+ * Drop any UNCONFIRMED claim still parked on a start under one key.
+ *
+ * A public-page booking leaves its slot-scoped claim behind on success (it
+ * lapses with its lease rather than being released). When that booking is
+ * then cancelled or moved, the lapse has not happened yet, so the freed
+ * time keeps answering `in_flight` to the next booker for the rest of the
+ * lease. Confirmed rows are never touched: only the parked claim goes.
+ *
+ * Best-effort: the change that freed the slot already happened.
+ */
+export async function releaseParkedSlotClaims(
+  businessId: string,
+  attendeeKey: string,
+  startIso: string
+): Promise<void> {
+  try {
+    const supabase = await createSupabaseServiceClient();
+    const { error } = await supabase
+      .from("calendar_booking_dedupe")
+      .delete()
+      .eq("business_id", businessId)
+      .eq("attendee_key", attendeeKey)
+      .eq("start_at", startIso)
+      .is("event_id", null);
+    if (error) throw new Error(error.message);
+  } catch (err) {
+    logger.warn("booking-dedupe: parked slot claim cleanup failed", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
+
+/**
  * Conservative occupancy a ledger row implies: the ledger stores starts
  * only, so one booking blocks the hour after it (same rule the public
  * booking page uses for platform-mode busy blocks).
