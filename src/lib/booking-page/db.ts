@@ -251,11 +251,7 @@ function validatePatch(patch: BookingPageSettingsPatch): void {
   ) {
     throw new BookingPageValidationError("Unsupported currency");
   }
-  // Requiring payment without a price would refuse every booking while
-  // telling the owner nothing; the pair has to arrive together.
-  if (patch.paymentRequired === true && !patch.paymentAmountCents) {
-    throw new BookingPageValidationError("Set a price to require payment");
-  }
+
   for (const [value, label] of [
     [patch.reminderEmailHours, "Email reminder"],
     [patch.reminderSmsHours, "Text reminder"]
@@ -358,6 +354,19 @@ export async function upsertBookingPage(
     patch.employeeId === undefined ? (existing?.employee_id ?? null) : patch.employeeId;
   if (effectiveMode === "fixed" && !effectiveEmployee?.trim()) {
     throw new BookingPageValidationError("Pick the employee this page books");
+  }
+
+  // Requiring payment without a price would refuse every booking while
+  // telling the owner nothing. Checked on the RESULTING state (patch merged
+  // over stored), so clearing the price on a page already requiring payment
+  // is refused the same as enabling payment without one.
+  const effectiveRequired = patch.paymentRequired ?? existing?.payment_required ?? false;
+  const effectiveAmount =
+    patch.paymentAmountCents === undefined
+      ? (existing?.payment_amount_cents ?? null)
+      : patch.paymentAmountCents;
+  if (effectiveRequired && !effectiveAmount) {
+    throw new BookingPageValidationError("Set a price to require payment");
   }
 
   if (!existing) {

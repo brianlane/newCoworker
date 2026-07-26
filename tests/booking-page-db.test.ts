@@ -809,6 +809,24 @@ describe("payment hooks (schema only)", () => {
     ] as Array<[Record<string, unknown>, RegExp]>) {
       await expect(upsertBookingPage(BIZ, patch, client)).rejects.toThrow(message);
     }
+
+    // The RESULTING state is what gets checked: clearing the price on a
+    // page ALREADY requiring payment is the same broken state.
+    const { client: paidPage } = fakeDb([
+      { data: { ...ROW, payment_required: true, payment_amount_cents: 5000 }, error: null }
+    ]);
+    await expect(
+      upsertBookingPage(BIZ, { paymentAmountCents: null }, paidPage)
+    ).rejects.toThrow(/Set a price/);
+
+    // And enabling it works when the STORED price already exists.
+    const { client: priced } = fakeDb([
+      { data: { ...ROW, payment_amount_cents: 5000 }, error: null },
+      { data: ROW, error: null }
+    ]);
+    await expect(
+      upsertBookingPage(BIZ, { paymentRequired: true }, priced)
+    ).resolves.toBeTruthy();
   });
 
   it("writes the pair, and lets a price be cleared when payment is off", async () => {
