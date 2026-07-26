@@ -63,6 +63,7 @@ export default async function ManageBooking({
             noSlots: t("noSlotsThisMonth"),
             tooLate: t("manageTooLate"),
             past: t("managePast"),
+            slotsUnavailable: t("slotsUnavailable"),
             needsHuman: t("manageNeedsHuman"),
             canceledHeading: t("manageCanceledHeading"),
             canceledBody: t("manageCanceledBody", { business: view.businessName }),

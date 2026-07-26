@@ -46,6 +46,10 @@ export async function POST(request: Request) {
       if (result.detail === "invalid_request") {
         return errorResponse("VALIDATION_ERROR", "Please pick a time and try again.");
       }
+      if (result.detail === "already_past") {
+        // A stale tab acting on a finished appointment: say what is true.
+        return errorResponse("CONFLICT", "This appointment has already passed.", 410);
+      }
       if (result.detail === "too_late") {
         // Inside the business's minimum-notice window: a person has to make
         // this change, and saying so beats a generic failure.

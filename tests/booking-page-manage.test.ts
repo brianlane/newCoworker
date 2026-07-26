@@ -250,10 +250,14 @@ describe("cancelManagedBooking", () => {
     expect(mockZoomDelete).not.toHaveBeenCalled();
   });
 
-  it("refuses inside the notice window and on an unknown token", async () => {
+  it("refuses inside the notice window, on a past appointment, and on an unknown token", async () => {
     mockRow.mockResolvedValue(row({ start_at: new Date(Date.now() + 60_000).toISOString() }));
     expect(await cancelManagedBooking(TOKEN)).toEqual({ ok: false, detail: "too_late" });
     expect(mockCancelCore).not.toHaveBeenCalled();
+
+    // A stale tab acting on a finished appointment hears the truth.
+    mockRow.mockResolvedValue(row({ start_at: new Date(Date.now() - 60_000).toISOString() }));
+    expect(await cancelManagedBooking(TOKEN)).toEqual({ ok: false, detail: "already_past" });
 
     mockRow.mockResolvedValue(null);
     expect(await cancelManagedBooking(TOKEN)).toEqual({ ok: false, detail: "not_found" });
@@ -442,6 +446,12 @@ describe("rescheduleManagedBooking", () => {
     expect(await rescheduleManagedBooking(TOKEN, NEW_START)).toEqual({
       ok: false,
       detail: "too_late"
+    });
+
+    mockRow.mockResolvedValue(row({ start_at: new Date(Date.now() - 60_000).toISOString() }));
+    expect(await rescheduleManagedBooking(TOKEN, NEW_START)).toEqual({
+      ok: false,
+      detail: "already_past"
     });
 
     mockRow.mockResolvedValue(null);

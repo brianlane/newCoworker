@@ -44,7 +44,9 @@ export async function GET(request: Request) {
       excludeStartIso: booking.start_at
     });
     if (!slots.ok) {
-      return successResponse({ timezone: view.view.timezone, slots: [] });
+      // Reported as a failure, not as an empty list: "no times available"
+      // would send the invitee away when the real answer is "try again".
+      return errorResponse("CONFLICT", "Could not load times, please try again.", 503);
     }
     return successResponse({ timezone: slots.timezone, slots: slots.slots });
   } catch (error) {

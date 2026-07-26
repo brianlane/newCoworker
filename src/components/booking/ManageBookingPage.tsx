@@ -26,6 +26,7 @@ type Strings = {
   tooLate: string;
   needsHuman: string;
   past: string;
+  slotsUnavailable: string;
   canceledHeading: string;
   canceledBody: string;
   movedHeading: string;
@@ -112,7 +113,9 @@ export function ManageBookingPage({
         const body = await res.json();
         if (!active) return;
         if (!res.ok || !body.ok) {
+          // A failed listing is not "no times": say so, and let them retry.
           setSlots([]);
+          setError(strings.slotsUnavailable);
           return;
         }
         setSlotsTimezone(body.data.timezone ?? timezone);
@@ -124,7 +127,7 @@ export function ManageBookingPage({
     return () => {
       active = false;
     };
-  }, [view, slots, token, timezone]);
+  }, [view, slots, token, timezone, strings.slotsUnavailable]);
 
   const act = useCallback(
     async (action: "cancel" | "reschedule", startChoice?: string) => {
@@ -148,7 +151,9 @@ export function ManageBookingPage({
                 ? strings.tooLate
                 : res.status === 423
                   ? strings.needsHuman
-                  : strings.changeFailed
+                  : res.status === 410
+                    ? strings.past
+                    : strings.changeFailed
           );
           // A raced slot means the offer is stale: re-fetch rather than
           // leave the visitor clicking a time that is gone.
@@ -171,7 +176,14 @@ export function ManageBookingPage({
         setBusy(false);
       }
     },
-    [strings.changeFailed, strings.needsHuman, strings.slotTaken, strings.tooLate, token]
+    [
+      strings.changeFailed,
+      strings.needsHuman,
+      strings.past,
+      strings.slotTaken,
+      strings.tooLate,
+      token
+    ]
   );
 
   const card = "rounded-2xl border border-parchment/15 bg-ink-800/60 p-6";

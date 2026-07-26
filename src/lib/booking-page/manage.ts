@@ -66,6 +66,8 @@ export type ManageFailure = {
     | "slot_taken"
     | "invalid_request"
     | "change_failed"
+    /** The appointment already happened: nothing to change. */
+    | "already_past"
     /**
      * The shared cores resolve by attendee identity, so they would act on
      * this person's SOONEST upcoming booking. When that is a different
@@ -130,6 +132,14 @@ async function resolve(rawToken: string): Promise<Resolved | null> {
 /** True when the appointment is still far enough out to be changed. */
 function withinNotice(startIso: string, minNoticeMinutes: number, now = Date.now()): boolean {
   return new Date(startIso).getTime() - now >= minNoticeMinutes * 60_000;
+}
+
+/**
+ * Why a change is refused, told apart: a stale tab still showing buttons on
+ * a past appointment should hear "already passed", not "too soon".
+ */
+function refusalFor(startIso: string, minNoticeMinutes: number): "already_past" | "too_late" {
+  return Date.parse(startIso) <= Date.now() ? "already_past" : "too_late";
 }
 
 export async function getManagedBooking(
@@ -203,7 +213,10 @@ export async function cancelManagedBooking(
   const resolved = await resolve(rawToken);
   if (!resolved) return { ok: false, detail: "not_found" };
   if (!withinNotice(resolved.row.start_at, resolved.minNoticeMinutes)) {
-    return { ok: false, detail: "too_late" };
+    return {
+      ok: false,
+      detail: refusalFor(resolved.row.start_at, resolved.minNoticeMinutes)
+    };
   }
 
   try {
@@ -275,7 +288,10 @@ export async function rescheduleManagedBooking(
   const startMs = new Date(startIso).getTime();
   if (!Number.isFinite(startMs)) return { ok: false, detail: "invalid_request" };
   if (!withinNotice(resolved.row.start_at, resolved.minNoticeMinutes)) {
-    return { ok: false, detail: "too_late" };
+    return {
+      ok: false,
+      detail: refusalFor(resolved.row.start_at, resolved.minNoticeMinutes)
+    };
   }
 
   try {
