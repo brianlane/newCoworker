@@ -71,7 +71,7 @@ export type Definition = { steps?: Step[] } & Record<string, unknown>;
  * returns false). Throws when the flow has no AI-first intake to patch, so a
  * renamed or rebuilt flow fails loudly instead of silently doing nothing.
  */
-export function useAcceptOnPrompt(
+export function switchToAcceptOnPrompt(
   def: Definition,
   opts: { digit: string; fallbackSeconds: number }
 ): boolean {
@@ -132,7 +132,7 @@ async function main(): Promise<void> {
 
   let changed: boolean;
   try {
-    changed = useAcceptOnPrompt(def, { digit, fallbackSeconds });
+    changed = switchToAcceptOnPrompt(def, { digit, fallbackSeconds });
   } catch (err) {
     console.error(
       `The flow does not have the shape this patch expects, so nothing was written: ${

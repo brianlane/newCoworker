@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
-  useAcceptOnPrompt,
+  switchToAcceptOnPrompt,
   type Definition
 } from "../scripts/oneshot/homelight-accept-on-prompt";
 import { parseAiFlowDefinition } from "@/lib/ai-flows/schema";
@@ -35,7 +35,7 @@ const intakeOf = (def: Definition) => (def.steps ?? []).find((s) => s.type === "
 describe("homelight-accept-on-prompt", () => {
   it("replaces the guessed 3-second press with one on the prompt", () => {
     const def = voiceDef();
-    expect(useAcceptOnPrompt(def, { digit: "1", fallbackSeconds: 12 })).toBe(true);
+    expect(switchToAcceptOnPrompt(def, { digit: "1", fallbackSeconds: 12 })).toBe(true);
     expect(intakeOf(def).acceptOnPrompt).toEqual({ digit: "1", fallbackSeconds: 12 });
   });
 
@@ -44,7 +44,7 @@ describe("homelight-accept-on-prompt", () => {
     // second tone would land on whatever the menu moved on to. The schema
     // rejects the combination outright, so leaving them would fail authoring.
     const def = voiceDef();
-    useAcceptOnPrompt(def, { digit: "1", fallbackSeconds: 12 });
+    switchToAcceptOnPrompt(def, { digit: "1", fallbackSeconds: 12 });
     expect(intakeOf(def).acceptDigits).toBeUndefined();
     expect(intakeOf(def).mediaStartSeconds).toBeUndefined();
     expect(() => parseAiFlowDefinition(def)).not.toThrow();
@@ -52,7 +52,7 @@ describe("homelight-accept-on-prompt", () => {
 
   it("leaves everything else about the intake alone", () => {
     const def = voiceDef();
-    useAcceptOnPrompt(def, { digit: "1", fallbackSeconds: 12 });
+    switchToAcceptOnPrompt(def, { digit: "1", fallbackSeconds: 12 });
     expect(intakeOf(def)).toMatchObject({
       answerFirst: true,
       notifyE164: "+16025245719",
@@ -67,13 +67,13 @@ describe("homelight-accept-on-prompt", () => {
 
   it("is idempotent", () => {
     const def = voiceDef();
-    expect(useAcceptOnPrompt(def, { digit: "1", fallbackSeconds: 12 })).toBe(true);
-    expect(useAcceptOnPrompt(def, { digit: "1", fallbackSeconds: 12 })).toBe(false);
+    expect(switchToAcceptOnPrompt(def, { digit: "1", fallbackSeconds: 12 })).toBe(true);
+    expect(switchToAcceptOnPrompt(def, { digit: "1", fallbackSeconds: 12 })).toBe(false);
   });
 
   it("honours a different digit and backstop", () => {
     const def = voiceDef();
-    useAcceptOnPrompt(def, { digit: "9", fallbackSeconds: 20 });
+    switchToAcceptOnPrompt(def, { digit: "9", fallbackSeconds: 20 });
     expect(intakeOf(def).acceptOnPrompt).toEqual({ digit: "9", fallbackSeconds: 20 });
     expect(() => parseAiFlowDefinition(def)).not.toThrow();
   });
@@ -84,13 +84,13 @@ describe("homelight-accept-on-prompt", () => {
       trigger: { channel: "voice", fromE164: "+14159851909" },
       steps: [{ id: "ring1", type: "ring_handoff", toE164: "+16025245719" }]
     };
-    expect(() => useAcceptOnPrompt(noIntake, { digit: "1", fallbackSeconds: 12 })).toThrow(
+    expect(() => switchToAcceptOnPrompt(noIntake, { digit: "1", fallbackSeconds: 12 })).toThrow(
       /voice_ai_intake/
     );
     // A takeover-only intake has no announcement to hear: a human already
     // accepted the referral before the AI ever picks up.
     const takeover = voiceDef({ answerFirst: undefined, acceptDigits: undefined });
-    expect(() => useAcceptOnPrompt(takeover, { digit: "1", fallbackSeconds: 12 })).toThrow(
+    expect(() => switchToAcceptOnPrompt(takeover, { digit: "1", fallbackSeconds: 12 })).toThrow(
       /answerFirst/
     );
   });
