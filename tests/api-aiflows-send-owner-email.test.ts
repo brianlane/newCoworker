@@ -56,7 +56,8 @@ beforeEach(() => {
   vi.mocked(sendFromMailboxConnection).mockResolvedValue({
     ok: true,
     provider: "google",
-    messageId: "gmail-1"
+    messageId: "gmail-1",
+    threadId: null
   });
 });
 
@@ -116,7 +117,8 @@ describe("POST /api/aiflows/send-owner-email", () => {
     vi.mocked(sendFromMailboxConnection).mockResolvedValue({
       ok: true,
       provider: "microsoft",
-      messageId: null
+      messageId: null,
+      threadId: null
     });
     const res = await POST(makeRequest(validBody));
     expect(await res.json()).toEqual({

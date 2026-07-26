@@ -1410,9 +1410,83 @@ Deliberate exemptions (also encoded in the parity test): dashboard
 `send_email` is fulfilled by the chat-worker email adapter, `memory_capture`
 is Rowboat's `owner_append_business_memory`, and the **webchat surface is a
 frozen 5-tool allowlist** (anonymous internet — never add side-effect tools
-there). AiFlow STEP types (`route_to_team`, `place_ai_call`, …) are engine
+there).
+
+**Owner email is a prompt BLOCK, not a declared tool**, on both inline owner
+surfaces: the model emits an `EMAIL_SEND` sentinel block (taught by
+`EMAIL_TOOL_ENABLED_PREAMBLE`) and the platform sends it afterwards through
+the shared `fulfillOwnerEmailBlocks`
+([src/lib/dashboard-chat/email-blocks.ts](src/lib/dashboard-chat/email-blocks.ts)),
+which re-checks the Settings toggle per send and files the result on the
+Emails page. Dashboard chat and the **owner-over-SMS operator turn** both
+run it, so "schedule Liz through her assistant Beth" texted to the business
+line can reach a delegate who works by email (the Jul 2026 Beth delegation:
+before this, that surface could only offer to TEXT her). Because the
+protocol lives in a prompt block rather than a gated declaration, the
+authoritative permission check is the one inside the fulfiller: never send
+from a new surface without it. Contracts pinned live in
+`tests/e2e/beth-delegation.e2e.test.ts`. AiFlow STEP types (`route_to_team`, `place_ai_call`, …) are engine
 features in the shared `ai-flow-worker`, not per-tenant tools — they need
 none of this.
+
+## Email coworker (replies in threads the assistant started)
+
+Inbound email used to reach AI only as an AiFlow TRIGGER, so a delegate's
+reply ("Liz has availability Monday at 12 PM EST, send the Zoom invite")
+died in the owner's inbox. The email coworker is the conversational half,
+the email sibling of the owner-over-SMS operator turn: same inline engine
+(`runInlineChatTurn`), different audience.
+
+- **Safety model, the whole design**: it answers ONLY inside a thread the
+  assistant itself started. Ownership is recorded in `email_coworker_threads`
+  when an owner surface sends through the EMAIL_SEND protocol, so receipts,
+  newsletters, and the owner's real correspondence are never candidates and
+  there is no allowlist to curate. Deleting a row ends its involvement.
+- **Narrow tools**: a new `email` surface in
+  [the registry](src/lib/agent-tools/registry.ts) (its own Settings toggles)
+  carrying calendar lifecycle plus knowledge lookup. `send_sms`,
+  `flag_contact_spam`, `set_contact_reply_mode`, and the AiFlow tools are
+  **hard-false** in [turn.ts](src/lib/email-coworker/turn.ts), not merely
+  un-toggled: the correspondent is a third party, and a prompt-injected
+  email must not be able to text anyone or reconfigure anything. It is
+  exempt from the Rowboat seed parity contract by construction (inline
+  engine, no Rowboat agent).
+- **The third-party rule** in `EMAIL_SURFACE_BLOCK` is load-bearing: an
+  assistant arranging for their principal means the PRINCIPAL is the
+  attendee, so the invitation and video link reach the person actually
+  attending. Booking the assistant is the failure this surface exists to
+  prevent. A booking's video link is also pasted into the reply, since the
+  coordinator needs something forwardable.
+- **Rails** ([poll.ts](src/lib/email-coworker/poll.ts)): never answers mail
+  from the mailbox's own address; **atomically claims** each message before
+  its turn (a plain insert against the `email_coworker_seen` primary key, so
+  two overlapping passes cannot both answer, and a crash mid-turn does not
+  re-answer: an owner would rather lose a reply than send two); caps autonomous replies
+  per thread per UTC day, then hands the thread to a human and alerts the
+  owner once. Per-business failures are isolated.
+- **Escalation is an action, not a sentence**: when the model brings in a
+  colleague it must end the reply with the `NEEDS_HUMAN` sentinel, which is
+  stripped before sending and is what marks the thread handed off and alerts
+  the owner. Same reasoning as the EMAIL_SEND protocol: a deterministic
+  marker beats classifying prose after the fact, and without it "a colleague
+  will follow up" was an empty promise while the coworker kept answering.
+  An owner EMAIL_SEND on the thread revives it (budget included).
+- **Threading**: `sendFromMailboxConnection` takes optional thread args.
+  Gmail sets `In-Reply-To`/`References` AND the `threadId` (headers alone
+  let Gmail split the conversation); Graph has no raw-MIME send, so a
+  threaded answer rides the message's own `/reply` action.
+- **Gmail-first, honestly**: Graph's `sendMail` returns no body, so a
+  Microsoft mailbox cannot report the conversation id that seeds ownership.
+  Those tenants send fine and get no autonomous follow-ups yet.
+- **One answer per email**: both polls read the same inbox, so the AiFlow
+  email-trigger poll skips messages the coworker has already claimed
+  (`email_coworker_seen`), or a tenant with a broad email-trigger flow would
+  get a flow run AND an autonomous reply to one message. Best-effort
+  ordering (the claim is written before the turn, and both polls run each
+  tick); a lookup failure degrades to the pre-coworker behavior.
+- Entry point: `/api/internal/email-coworker-poll`, kicked ~1/min by the
+  ai-flow-worker tick beside the AiFlow trigger polls. Contracts pinned in
+  `tests/e2e/beth-email-loop.e2e.test.ts`.
 
 ## Internationalization (i18n) — REQUIRED for every new feature
 

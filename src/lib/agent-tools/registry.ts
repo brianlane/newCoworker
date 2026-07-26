@@ -18,7 +18,7 @@
  * per call, so they ARE configurable.
  */
 
-export type AgentKey = "dashboard" | "voice" | "sms" | "webchat";
+export type AgentKey = "dashboard" | "voice" | "sms" | "webchat" | "email";
 
 export type AgentToolDefinition = {
   toolKey: string;
@@ -515,6 +515,64 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         label: "Share documents",
         description:
           "Give a website visitor an expiring link to a client-facing document (price sheet, policy, contract) right in the chat.",
+        defaultEnabled: true,
+        configurable: true
+      }
+    ]
+  },
+  {
+    // Email coworker. NOT a Rowboat surface: it runs the inline engine
+    // (src/lib/email-coworker/turn.ts), so these toggles are enforced there
+    // and the tools below are the complete set it can ever hold. It answers
+    // ONLY inside threads the assistant itself started, so it is exempt from
+    // the Rowboat seed parity contract by construction.
+    key: "email",
+    label: "Email coworker",
+    description:
+      "Answers replies in email threads your assistant started, from your connected mailbox. Scheduling only, and only on those threads.",
+    tools: [
+      {
+        toolKey: "business_knowledge_lookup",
+        label: "Business knowledge lookup",
+        description:
+          "Answer a correspondent's question from your business knowledge and website summary.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "calendar_find_slots",
+        label: "Find calendar openings",
+        description: "Look up free slots on your connected calendar to offer by email.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "calendar_book_appointment",
+        label: "Book appointments",
+        description:
+          "Book the appointment once the correspondent confirms a time, on the attendee's behalf when they are arranging for someone else.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "calendar_reschedule_appointment",
+        label: "Reschedule appointments",
+        description: "Move an existing appointment when they ask for a different time by email.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "calendar_cancel_appointment",
+        label: "Cancel appointments",
+        description: "Cancel an existing appointment when they ask to by email.",
+        defaultEnabled: true,
+        configurable: true
+      },
+      {
+        toolKey: "calendar_join_waitlist",
+        label: "Cancellation waitlist",
+        description:
+          "Offer to text them if an earlier slot frees up, when they ask for something sooner.",
         defaultEnabled: true,
         configurable: true
       }

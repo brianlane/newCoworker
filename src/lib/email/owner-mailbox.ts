@@ -19,10 +19,38 @@ export type OwnerMailboxSendArgs = {
   ccEmails?: string[];
   /** Optional bcc recipients (already normalized to valid addresses). */
   bccEmails?: string[];
+  /**
+   * Reply INTO an existing conversation instead of starting a new one.
+   * Without this a reply arrives as a fresh thread, which reads as a
+   * different person answering (the email coworker's whole value is
+   * continuing the thread it started).
+   *
+   *  - `threadId`: Gmail threadId / Graph conversationId.
+   *  - `inReplyToMessageRef`: the RFC Message-Id of the message being
+   *    answered, for the In-Reply-To/References headers Gmail threads on.
+   *  - `providerMessageId`: the PROVIDER's id for that message. Microsoft
+   *    Graph has no raw-MIME send, so its threading rides the message's own
+   *    reply action, which needs this id.
+   */
+  thread?: {
+    threadId?: string | null;
+    inReplyToMessageRef?: string | null;
+    providerMessageId?: string | null;
+  };
 };
 
 export type OwnerMailboxSendResult =
-  | { ok: true; provider: "google" | "microsoft"; messageId: string | null }
+  | {
+      ok: true;
+      provider: "google" | "microsoft";
+      messageId: string | null;
+      /**
+       * Provider conversation the sent message landed in. Gmail returns it
+       * on the send; Graph's sendMail/reply return no body, so it is null
+       * there (see the thread-ownership note in the email coworker docs).
+       */
+      threadId: string | null;
+    }
   | { ok: false; detail: "email_not_connected" };
 
 function encodeRfc2822(args: OwnerMailboxSendArgs): string {
@@ -34,6 +62,12 @@ function encodeRfc2822(args: OwnerMailboxSendArgs): string {
   }
   if (args.bccEmails && args.bccEmails.length > 0) {
     lines.push(`Bcc: ${args.bccEmails.join(", ")}`);
+  }
+  const inReplyTo = args.thread?.inReplyToMessageRef?.trim();
+  if (inReplyTo) {
+    // Both headers: clients thread on References, and In-Reply-To is what
+    // marks this as a direct answer.
+    lines.push(`In-Reply-To: ${inReplyTo}`, `References: ${inReplyTo}`);
   }
   lines.push(
     `Subject: ${args.subject}`,
@@ -87,18 +121,48 @@ export async function sendFromMailboxConnection(
 ): Promise<OwnerMailboxSendResult> {
   if (conn.provider === "google") {
     const raw = encodeRfc2822(args);
+    const threadId = args.thread?.threadId?.trim();
     const res = await nangoProxyForBusiness(
       businessId,
       { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
       {
         endpoint: "/gmail/v1/users/me/messages/send",
         method: "POST",
-        data: { raw }
+        // threadId alongside the raw MIME is what actually files the message
+        // in the conversation; the headers alone leave Gmail free to split it.
+        data: { raw, ...(threadId ? { threadId } : {}) }
       }
     );
     if (!res) return { ok: false, detail: "email_not_connected" };
-    const data = res.data as { id?: string };
-    return { ok: true, provider: "google", messageId: data?.id ?? null };
+    const data = res.data as { id?: string; threadId?: string };
+    return {
+      ok: true,
+      provider: "google",
+      messageId: data?.id ?? null,
+      threadId: data?.threadId ?? null
+    };
+  }
+
+  // Graph has no raw-MIME send, so a threaded answer must ride the original
+  // message's reply action (which sets the conversation headers itself).
+  const replyToId = args.thread?.providerMessageId?.trim();
+  if (replyToId) {
+    const replied = await nangoProxyForBusiness(
+      businessId,
+      { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
+      {
+        endpoint: `/v1.0/me/messages/${encodeURIComponent(replyToId)}/reply`,
+        method: "POST",
+        data: {
+          comment: args.bodyText,
+          ...(args.ccEmails && args.ccEmails.length > 0
+            ? { message: { ccRecipients: toGraphRecipients(args.ccEmails) } }
+            : {})
+        }
+      }
+    );
+    if (!replied) return { ok: false, detail: "email_not_connected" };
+    return { ok: true, provider: "microsoft", messageId: null, threadId: null };
   }
 
   const res = await nangoProxyForBusiness(
@@ -124,5 +188,5 @@ export async function sendFromMailboxConnection(
     }
   );
   if (!res) return { ok: false, detail: "email_not_connected" };
-  return { ok: true, provider: "microsoft", messageId: null };
+  return { ok: true, provider: "microsoft", messageId: null, threadId: null };
 }

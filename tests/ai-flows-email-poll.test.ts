@@ -50,6 +50,9 @@ type SeenTable = {
   pruneError?: { message: string };
   /** Captures upsert payloads for assertions. */
   upserts?: unknown[];
+  /** email_coworker_seen rows: messages the email coworker has claimed. */
+  coworkerRows?: Array<{ message_id: string }> | null;
+  coworkerError?: { message: string };
 };
 
 /**
@@ -77,11 +80,26 @@ function dbWithRange(range: ReturnType<typeof vi.fn>, seen: SeenTable = {}) {
   });
   const lt = vi.fn(() => Promise.resolve({ error: seen.pruneError ?? null }));
   const seenDelete = vi.fn(() => ({ lt }));
+  // email_coworker_seen: the coworker's claim on a message, consulted so one
+  // inbound reply never gets both a flow run and an autonomous answer.
+  const coworkerIn = vi.fn(() =>
+    Promise.resolve(
+      seen.coworkerError
+        ? { data: null, error: seen.coworkerError }
+        : // `null` passes through (a driver can answer data: null), while an
+          // unset option means "no claims".
+          { data: seen.coworkerRows === undefined ? [] : seen.coworkerRows, error: null }
+    )
+  );
+  const coworkerEq = vi.fn(() => ({ in: coworkerIn }));
+  const coworkerSelect = vi.fn(() => ({ eq: coworkerEq }));
   return {
     from: vi.fn((table: string) =>
       table === "ai_flow_email_seen"
         ? { select: seenSelect, upsert: seenUpsert, delete: seenDelete }
-        : { select: flowsSelect }
+        : table === "email_coworker_seen"
+          ? { select: coworkerSelect }
+          : { select: flowsSelect }
     )
   } as never;
 }
@@ -269,6 +287,68 @@ describe("pollEmailTriggers", () => {
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({ message: expect.stringContaining("not_email_connection") })
     );
+  });
+
+  it("leaves a message the email coworker already claimed to the coworker", async () => {
+    // Both polls read the same inbox each tick. A reply on a thread the
+    // assistant started must not ALSO fire a flow, or the tenant gets two
+    // uncoordinated answers to one email.
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+      data: { messages: [{ id: "m1" }] }
+    } as never);
+    const res = await pollEmailTriggers(
+      dbWith([flowRow("f1", emailTrigger())], null, {
+        // A second, unclaimed id proves the filter is per message.
+        coworkerRows: [{ message_id: "m1" }]
+      })
+    );
+    expect(res).toEqual({ flows: 1, mailboxes: 1, messages: 0, enqueued: 0 });
+    expect(enqueueAiFlowRun).not.toHaveBeenCalled();
+  });
+
+  it("claims nothing when the coworker owns no messages in the window", async () => {
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
+      .mockResolvedValueOnce({
+        data: {
+          internalDate: "1760000000000",
+          payload: {
+            headers: [{ name: "From", value: "leads@rx.com" }],
+            mimeType: "text/plain",
+            body: { data: b64url("hello") }
+          }
+        }
+      } as never)
+      .mockResolvedValueOnce({ data: {} } as never);
+    const res = await pollEmailTriggers(
+      dbWith([flowRow("f1", emailTrigger())], null, { coworkerRows: null })
+    );
+    expect(res.enqueued).toBe(1);
+  });
+
+  it("still runs flows when the coworker claim lookup fails", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
+      .mockResolvedValueOnce({
+        data: {
+          internalDate: "1760000000000",
+          payload: {
+            headers: [{ name: "From", value: "leads@rx.com" }],
+            mimeType: "text/plain",
+            body: { data: b64url("hello") }
+          }
+        }
+      } as never)
+      .mockResolvedValueOnce({ data: {} } as never);
+    const res = await pollEmailTriggers(
+      dbWith([flowRow("f1", emailTrigger())], null, {
+        coworkerError: { message: "table missing" }
+      })
+    );
+    expect(res.enqueued).toBe(1);
+    expect(err).toHaveBeenCalledWith("email coworker claim lookup", expect.anything());
+    err.mockRestore();
   });
 
   it("polls Gmail, matches conditions, and enqueues with a per-message dedupe key", async () => {

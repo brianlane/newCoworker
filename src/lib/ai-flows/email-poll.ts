@@ -439,6 +439,29 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
         for (const [id, n] of counts) {
           if (n >= flowIds.length) handled.add(id);
         }
+        // The email coworker reads the SAME inbox for replies on threads the
+        // assistant started, and a message it has claimed must not also fire
+        // a flow: the tenant would get two uncoordinated answers to one
+        // email. Its claim is written before its turn, so this is
+        // best-effort ordering (both polls run each tick); the common case,
+        // a reply arriving while the coworker already holds the thread, is
+        // covered. Failure here is non-fatal: flows behave as before.
+        try {
+          for (let i = 0; i < messageIds.length; i += 100) {
+            const chunk = messageIds.slice(i, i + 100);
+            const { data, error } = await db
+              .from("email_coworker_seen")
+              .select("message_id")
+              .eq("business_id", businessId)
+              .in("message_id", chunk);
+            if (error) throw new Error(error.message);
+            for (const row of (data ?? []) as Array<{ message_id: string }>) {
+              handled.add(row.message_id);
+            }
+          }
+        } catch (e) {
+          console.error("email coworker claim lookup", e);
+        }
         return handled;
       };
       const isGoogleMailbox = providerFromKey(conn.provider_config_key) === "google";

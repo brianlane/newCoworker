@@ -51,7 +51,10 @@ export type EmailLogSource =
   | "tenant_mailbox_outbound"
   // Owner typed + sent this email by hand from the dashboard Emails page
   // (reply-in-thread or compose-new), sent from their connected mailbox.
-  | "owner_manual";
+  | "owner_manual"
+  // The email coworker answered a correspondent inside a thread the
+  // assistant itself started (src/lib/email-coworker/turn.ts).
+  | "email_coworker";
 
 /**
  * Attachment metadata as stored inline on email_log.attachments. `storage_path`
@@ -456,7 +459,7 @@ export type RecordOutboundAssistantEmailInput = {
   subject: string;
   bodyText: string;
   /** Surface the assistant sent from. */
-  source: "dashboard_chat" | "sms_assistant" | "voice_assistant";
+  source: "dashboard_chat" | "sms_assistant" | "voice_assistant" | "email_coworker";
   providerMessageId?: string | null;
   /** Optional cc recipients (already normalized to valid addresses). */
   ccEmails?: string[];

@@ -4,7 +4,12 @@
  * with the worker twin, honest outcome lines, and the inline fulfilment
  * pipeline with an injected sender.
  */
-import { describe, expect, it, vi } from "vitest";
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+vi.mock("@/lib/db/agent-tool-settings", () => ({ isAgentToolEnabled: vi.fn() }));
+vi.mock("@/lib/email/owner-mailbox", () => ({ sendFromOwnerMailbox: vi.fn() }));
+vi.mock("@/lib/db/email-log", () => ({ recordOutboundAssistantEmail: vi.fn() }));
+vi.mock("@/lib/email-coworker/threads", () => ({ rememberSentThread: vi.fn() }));
 
 import {
   BODY_MAX_CHARS,
@@ -16,8 +21,18 @@ import {
   appendEmailResults,
   describeEmailOutcome,
   extractEmailSendRequests,
-  fulfillEmailBlocks
+  fulfillEmailBlocks,
+  fulfillOwnerEmailBlocks
 } from "@/lib/dashboard-chat/email-blocks";
+import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
+import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
+import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
+import { rememberSentThread } from "@/lib/email-coworker/threads";
+
+const mockToolEnabled = vi.mocked(isAgentToolEnabled);
+const mockSend = vi.mocked(sendFromOwnerMailbox);
+const mockRecord = vi.mocked(recordOutboundAssistantEmail);
+const mockRemember = vi.mocked(rememberSentThread);
 
 function block(json: string): string {
   return `${EMAIL_SEND_OPEN}\n${json}\n${EMAIL_SEND_CLOSE}`;
@@ -202,5 +217,108 @@ describe("fulfillEmailBlocks", () => {
     expect(send).not.toHaveBeenCalled();
     expect(out.failedCount).toBe(1);
     expect(out.content).toContain("malformed");
+  });
+});
+
+describe("fulfillOwnerEmailBlocks", () => {
+  const BIZ = "11111111-1111-4111-8111-111111111111";
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mockToolEnabled.mockResolvedValue(true);
+    mockSend.mockResolvedValue({
+      ok: true,
+      provider: "google",
+      messageId: "m-1",
+      threadId: "thread-9"
+    });
+    mockRecord.mockResolvedValue(undefined);
+    mockRemember.mockResolvedValue(undefined);
+  });
+
+  it("sends through the owner mailbox and files the send under the calling surface", async () => {
+    const out = await fulfillOwnerEmailBlocks({
+      businessId: BIZ,
+      content: `Sending it now.\n${block('{"to": "beth@lizdev.com", "cc": ["liz@lizdev.com"], "subject": "Discovery call", "body": "Monday works."}')}`,
+      source: "sms_assistant"
+    });
+    expect(mockSend).toHaveBeenCalledWith(BIZ, {
+      toEmail: "beth@lizdev.com",
+      subject: "Discovery call",
+      bodyText: "Monday works.",
+      ccEmails: ["liz@lizdev.com"],
+      bccEmails: []
+    });
+    expect(mockRecord).toHaveBeenCalledWith(
+      expect.objectContaining({ source: "sms_assistant", providerMessageId: "m-1" })
+    );
+    expect(out.sentCount).toBe(1);
+    expect(out.content).not.toContain(EMAIL_SEND_OPEN);
+    expect(out.content).toContain("sent from your connected mailbox");
+    // Claims the conversation so the email coworker may answer replies on
+    // it later; this is the ONLY way a thread becomes eligible.
+    expect(mockRemember).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: BIZ,
+        provider: "google",
+        threadId: "thread-9",
+        correspondentEmail: "beth@lizdev.com"
+      })
+    );
+  });
+
+  it("claims no thread when the provider reports no conversation id", async () => {
+    // Graph sendMail returns no body: the mail goes out, but there is
+    // nothing to own, so no autonomous follow-up is possible.
+    mockSend.mockResolvedValue({
+      ok: true,
+      provider: "microsoft",
+      messageId: null,
+      threadId: null
+    });
+    const out = await fulfillOwnerEmailBlocks({
+      businessId: BIZ,
+      content: block('{"to": "a@b.co", "subject": "s", "body": "b"}'),
+      source: "dashboard_chat"
+    });
+    expect(out.sentCount).toBe(1);
+    expect(mockRemember).not.toHaveBeenCalled();
+  });
+
+  it("re-checks the Settings toggle per send and never files a refused one", async () => {
+    // The protocol lives in a prompt block, so a model can emit one even
+    // with the tool off: the authoritative gate is here.
+    mockToolEnabled.mockResolvedValue(false);
+    const out = await fulfillOwnerEmailBlocks({
+      businessId: BIZ,
+      content: block('{"to": "a@b.co", "subject": "s", "body": "b"}'),
+      source: "dashboard_chat"
+    });
+    expect(mockSend).not.toHaveBeenCalled();
+    expect(mockRecord).not.toHaveBeenCalled();
+    expect(out.failedCount).toBe(1);
+    expect(out.content).toContain("turned off");
+  });
+
+  it("surfaces a disconnected mailbox honestly and files nothing", async () => {
+    mockSend.mockResolvedValue({ ok: false, detail: "email_not_connected" });
+    const out = await fulfillOwnerEmailBlocks({
+      businessId: BIZ,
+      content: block('{"to": "a@b.co", "subject": "s", "body": "b"}'),
+      source: "dashboard_chat"
+    });
+    expect(mockRecord).not.toHaveBeenCalled();
+    expect(out.failedCount).toBe(1);
+    expect(out.content).toContain("no email account is connected");
+  });
+
+  it("leaves a block-free reply untouched (no toggle read, no send)", async () => {
+    const out = await fulfillOwnerEmailBlocks({
+      businessId: BIZ,
+      content: "Just a plain answer.",
+      source: "sms_assistant"
+    });
+    expect(out).toEqual({ content: "Just a plain answer.", sentCount: 0, failedCount: 0 });
+    expect(mockToolEnabled).not.toHaveBeenCalled();
   });
 });
