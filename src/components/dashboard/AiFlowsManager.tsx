@@ -5605,6 +5605,25 @@ function StepFields({
           {`{{vars.${prefix}name}}`}, {`{{vars.${prefix}address}}`} and so on, kept separate from
           anything the partner&apos;s own page gave you so you can show both.
         </p>
+        <Field
+          label="Also fill in these when still empty (optional)"
+          value={(step.backfill ?? []).map((b) => `${b.from}->${b.to}`).join(", ")}
+          onChange={(v) => {
+            // "phone->lead_phone, name->lead_name" reads as: if the partner
+            // never gave us one, use what the person said on the call.
+            const parsed = v
+              .split(",")
+              .map((chunk) => chunk.trim())
+              .filter(Boolean)
+              .map((chunk) => {
+                const [from, to] = chunk.split("->");
+                return { from: (from ?? "").trim(), to: (to ?? "").trim() };
+              })
+              .filter((b) => /^[a-z][a-z0-9_]*$/.test(b.from) && /^[a-z][a-z0-9_]*$/.test(b.to));
+            patchStep(index, { backfill: parsed.length ? parsed : undefined });
+          }}
+          help='e.g. "phone->lead_phone". Only fills a detail nothing else supplied, so a value the partner did send always wins.'
+        />
       </div>
     );
   }

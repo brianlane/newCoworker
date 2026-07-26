@@ -1145,6 +1145,25 @@ const nonBranchStepMembers = [
       .string()
       .regex(/^[a-z][a-z0-9_]{0,20}$/)
       .optional(),
+    /**
+     * Also copy a captured field into the flow's own var, but ONLY when that var
+     * is still empty (the email_extract.fillOnlyEmpty rule). The prefixed copies
+     * above are for showing the team what the person said; this is for the one
+     * var that has to drive a send: the contact record and the customer's intro
+     * text need a single number, and the partner may never supply one.
+     */
+    backfill: z
+      .array(
+        z.object({
+          /** Captured field name, e.g. "phone" (unprefixed). */
+          from: z.string().regex(/^[a-z][a-z0-9_]{0,30}$/),
+          /** Flow var to fill when empty, e.g. "lead_phone". */
+          to: varName
+        })
+      )
+      .min(1)
+      .max(10)
+      .optional(),
     when: whenSchema.optional()
   }),
   // GHL-style Goal Event checkpoint: when a watched external milestone lands
@@ -2738,6 +2757,10 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       for (const f of WAIT_FOR_CALL_CAPTURED_FIELDS) {
         vars.add(`${step.capturePrefix ?? "call_"}${f}`);
       }
+      // A backfill target is only ever FILLED here, never created from nothing,
+      // but registering it keeps a flow valid whose canonical var has no other
+      // producer (a referral the partner never released anything for).
+      for (const b of step.backfill ?? []) vars.add(b.to);
     } else if (step.type === "classify") {
       vars.add(step.saveAs);
     } else if (step.type === "generate_image") {

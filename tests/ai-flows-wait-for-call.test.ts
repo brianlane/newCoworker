@@ -93,6 +93,32 @@ describe("wait_for_call: authoring", () => {
     expect(validateDefinitionSemantics(def)).toEqual([]);
   });
 
+  it("accepts a backfill mapping and registers its target", () => {
+    // The contact record and the customer's intro text need ONE number, and the
+    // partner may never supply one, so the spoken value has to be able to fill
+    // the flow's canonical var.
+    const def = parseAiFlowDefinition(
+      waitFlow({ backfill: [{ from: "phone", to: "lead_phone" }] }, [
+        {
+          id: "save",
+          type: "upsert_customer",
+          phoneVar: "lead_phone",
+          nameVar: "call_name"
+        }
+      ])
+    );
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("rejects a backfill that names an illegal var", () => {
+    expect(() =>
+      parseAiFlowDefinition(waitFlow({ backfill: [{ from: "phone", to: "Lead Phone" }] }))
+    ).toThrow(AiFlowValidationError);
+    expect(() =>
+      parseAiFlowDefinition(waitFlow({ backfill: [{ from: "Phone!", to: "lead_phone" }] }))
+    ).toThrow(AiFlowValidationError);
+  });
+
   it("is rejected inside a voice flow (it parks the batch worker)", () => {
     expect(() =>
       parseAiFlowDefinition({
@@ -121,8 +147,21 @@ describe("wait_for_call: planning", () => {
       timeoutMinutes: 60,
       saveAs: "call_outcome",
       capturePrefix: "call_",
+      backfill: [],
       resumed: false
     });
+  });
+
+  it("passes a backfill mapping through, dropping half-written entries", () => {
+    const p = plan({
+      backfill: [
+        { from: "phone", to: "lead_phone" },
+        { from: "", to: "lead_name" }
+      ]
+    });
+    expect(p.ok && (p.action as { backfill: unknown }).backfill).toEqual([
+      { from: "phone", to: "lead_phone" }
+    ]);
   });
 
   it("clamps an out-of-range window and timeout rather than refusing", () => {

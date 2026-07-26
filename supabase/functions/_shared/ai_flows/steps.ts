@@ -420,6 +420,8 @@ export type StepAction =
       saveAs: string;
       marker: string;
       capturePrefix: string;
+      /** Captured field → flow var, filled only when that var is empty. */
+      backfill: Array<{ from: string; to: string }>;
       resumed: boolean;
     }
   | { kind: "await_approval"; prompt: string }
@@ -1706,6 +1708,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           saveAs: step.saveAs ?? "call_outcome",
           marker,
           capturePrefix: step.capturePrefix ?? "call_",
+          backfill: (step.backfill ?? []).filter((b) => b?.from && b?.to),
           resumed: scope.vars?.[marker] !== undefined
         }
       };

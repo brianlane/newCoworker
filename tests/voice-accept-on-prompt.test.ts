@@ -110,6 +110,7 @@ describe("acceptOnPrompt: compiled onto the handoff context", () => {
       acceptOnPrompt: { digit: "1", fallbackSeconds: 15 }
     });
     const reparsed = buildHandoffContext({
+      toE164: "+14805550000",
       steps: ctx.steps,
       aiTakeover: ctx.ai_takeover as unknown as Record<string, unknown>
     });
@@ -118,6 +119,7 @@ describe("acceptOnPrompt: compiled onto the handoff context", () => {
 
   it("drops a malformed gate on the way back in", () => {
     const reparsed = buildHandoffContext({
+      toE164: "+14805550000",
       steps: [],
       aiTakeover: { notify_e164: "+16025559999", ivr_gate: { digit: "   " } }
     });

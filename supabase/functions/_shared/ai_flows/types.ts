@@ -1263,6 +1263,12 @@ export type FlowStep =
       saveAs?: string;
       /** Namespace for the captured fields. Default "call_". */
       capturePrefix?: string;
+      /**
+       * Also copy a captured field into the flow's own var when that var is
+       * still empty, so one var can drive the sends even if the partner never
+       * supplied a value.
+       */
+      backfill?: Array<{ from: string; to: string }>;
       when?: StepCondition;
     }
   // ── Voice steps (real-time call routing; executed by the Telnyx voice webhook

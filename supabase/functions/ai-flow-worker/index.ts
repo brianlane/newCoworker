@@ -6305,13 +6305,26 @@ async function waitForCallStep(
     // the partner's own page produced: the flow shows the team both.
     const hydrated = capturedCallVars(sess?.context?.ai_takeover?.captured, action.capturePrefix);
     Object.assign(scope.vars, hydrated);
+    // Backfill the flow's canonical vars so a single one can drive the sends.
+    // Empty-only, so a value the partner DID release keeps winning.
+    const filled: string[] = [];
+    for (const { from, to } of action.backfill) {
+      const spoken = hydrated[`${action.capturePrefix}${from}`];
+      if (typeof spoken !== "string" || !spoken) continue;
+      if (!isEmptyVarValue(scope.vars[to])) continue;
+      scope.vars[to] = spoken;
+      filled.push(to);
+    }
     scope.vars[action.saveAs] = outcome;
     scope.vars[action.marker] = "1";
     const names = Object.keys(hydrated);
     if (names.length > 0) {
       appendActionTaken(scope, `picked up ${names.length} detail(s) the AI captured on the call`);
     }
-    return { kind: "ok", result: { ...detail, outcome, captured: names } };
+    if (filled.length > 0) {
+      appendActionTaken(scope, `used what the seller said for ${filled.join(", ")}`);
+    }
+    return { kind: "ok", result: { ...detail, outcome, captured: names, backfilled: filled } };
   };
 
   // Coming back from the park: the call is over and the bridge has already

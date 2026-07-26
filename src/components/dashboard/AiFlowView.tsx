@@ -887,6 +887,13 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
             value={`{{vars.${step.capturePrefix ?? "call_"}phone}}, ...`}
             mono
           />
+          {step.backfill && step.backfill.length > 0 && (
+            <Row
+              label="Fills in when still empty"
+              value={step.backfill.map((b) => `${b.from} → ${b.to}`).join(", ")}
+              mono
+            />
+          )}
         </>
       );
     case "voice_transfer":
