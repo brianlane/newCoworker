@@ -451,8 +451,10 @@ describe("db/businesses", () => {
   it("updateEnterpriseModels writes/clears enterprise_models json, throws on error", async () => {
     const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-    await updateEnterpriseModels("uuid-biz-1", { voiceName: "Puck" });
-    expect(db.update).toHaveBeenCalledWith({ enterprise_models: { voiceName: "Puck" } });
+    await updateEnterpriseModels("uuid-biz-1", { smsChatModel: "gemini-3.5-flash" });
+    expect(db.update).toHaveBeenCalledWith({
+      enterprise_models: { smsChatModel: "gemini-3.5-flash" }
+    });
 
     await updateEnterpriseModels("uuid-biz-1", null);
     expect(db.update).toHaveBeenCalledWith({ enterprise_models: null });

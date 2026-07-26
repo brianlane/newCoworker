@@ -11,16 +11,18 @@ describe("enterpriseModelsSchema", () => {
     const parsed = enterpriseModelsSchema.parse({
       ownerChatModel: "gemini-2.5-flash-lite",
       smsChatModel: "gemini-3.1-flash",
-      geminiLiveModel: "gemini-3.1-flash-live-preview",
-      voiceName: "Puck"
+      geminiLiveModel: "gemini-3.1-flash-live-preview"
     });
-    expect(parsed.voiceName).toBe("Puck");
+    expect(parsed.geminiLiveModel).toBe("gemini-3.1-flash-live-preview");
   });
 
   it("accepts partial configs and strips unknown keys", () => {
-    expect(enterpriseModelsSchema.parse({ voiceName: "Kore", extra: 1 })).toEqual({
-      voiceName: "Kore"
+    expect(enterpriseModelsSchema.parse({ smsChatModel: "gemini-3.5-flash", extra: 1 })).toEqual({
+      smsChatModel: "gemini-3.5-flash"
     });
+    // The voice moved to business_telnyx_settings.voice_name, so it is now an
+    // unknown key here and must be stripped rather than stored in two places.
+    expect(enterpriseModelsSchema.parse({ voiceName: "Kore" })).toEqual({});
   });
 
   it("rejects live models in chat slots (AI-budget metering bypass)", () => {
@@ -40,13 +42,21 @@ describe("enterpriseModelsSchema", () => {
     expect(
       enterpriseModelsSchema.safeParse({ ownerChatModel: "gemini-$(rm -rf /)" }).success
     ).toBe(false);
-    expect(enterpriseModelsSchema.safeParse({ voiceName: "NotAVoice" }).success).toBe(false);
+    // Translate-flavored live models pass the "contains live" check but support
+    // no tools or instructions, so they cannot run the phone coworker.
+    expect(
+      enterpriseModelsSchema.safeParse({ geminiLiveModel: "gemini-3.5-live-translate-preview" })
+        .success
+    ).toBe(false);
   });
 
   it("exposes the prebuilt voice allow-list for the picker UI", () => {
+    // Widened from the original 8-voice subset to Google's full published set;
+    // tests/voice-name-lockstep.test.ts pins it against the bridge and the DB.
     expect(GEMINI_LIVE_VOICES).toContain("Puck");
     expect(GEMINI_LIVE_VOICES).toContain("Aoede");
-    expect(GEMINI_LIVE_VOICES.length).toBeGreaterThanOrEqual(8);
+    expect(GEMINI_LIVE_VOICES).toContain("Sulafat");
+    expect(GEMINI_LIVE_VOICES.length).toBe(30);
   });
 });
 
@@ -60,6 +70,10 @@ describe("parseEnterpriseModels", () => {
   });
 
   it("returns the parsed config for valid input", () => {
-    expect(parseEnterpriseModels({ voiceName: "Charon" })).toEqual({ voiceName: "Charon" });
+    expect(parseEnterpriseModels({ geminiLiveModel: "gemini-3.1-flash-live-preview" })).toEqual({
+      geminiLiveModel: "gemini-3.1-flash-live-preview"
+    });
+    // A voice-only blob now parses to nothing, so it reads as "no overrides".
+    expect(parseEnterpriseModels({ voiceName: "Charon" })).toBeNull();
   });
 });

@@ -141,8 +141,10 @@ function buildDeployEnvPrefix(
     // tenant spend as engineering spend in AI Studio).
     ["GOOGLE_API_KEY", process.env.GOOGLE_API_KEY_TENANTS ?? process.env.GOOGLE_API_KEY ?? ""],
     ["GEMINI_LIVE_MODEL", modelOverrides?.geminiLiveModel ?? process.env.GEMINI_LIVE_MODEL ?? ""],
-    // Prebuilt Gemini Live voice (enterprise voice picker); blank = default.
-    ["VOICE_NAME", modelOverrides?.voiceName ?? process.env.VOICE_NAME ?? ""],
+    // Prebuilt Gemini Live voice: per-BOX ops override only. The tenant's choice
+    // lives in `business_telnyx_settings.voice_name`, read per call by the bridge
+    // (no redeploy). Blank falls through to the platform default in the bridge.
+    ["VOICE_NAME", process.env.VOICE_NAME ?? ""],
     ["GEMINI_LIVE_ENABLED", process.env.GEMINI_LIVE_ENABLED ?? ""],
     ["VOICE_TRANSCRIPTION_ENABLED", process.env.VOICE_TRANSCRIPTION_ENABLED ?? ""],
     // Optional per-box Gemini Live session cap (ms); blank preserves the value

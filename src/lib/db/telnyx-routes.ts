@@ -50,6 +50,8 @@ export type BusinessTelnyxSettingsRow = {
   sms_fallback_enabled: boolean;
   /** When true, the AI stays on a warm-transferred call as a live interpreter. */
   translator_mode_enabled: boolean;
+  /** Gemini Live prebuilt voice for this tenant; null = platform default (Kore). */
+  voice_name: string | null;
   /** When true, the voice-bridge health cron skips the stale-heartbeat alert (intentional no-bridge tenants). */
   bridge_stale_alert_muted: boolean;
   /** When true, owner/team texts get an internal-assistant reply (staff mode). */
@@ -178,6 +180,13 @@ export type UpsertBusinessTelnyxSettingsInput = {
    * call, not one already in progress.
    */
   translatorModeEnabled?: boolean;
+  /**
+   * Gemini Live prebuilt voice for this tenant. `null` clears back to the
+   * platform default. Unlike the model overrides in `enterprise_models`, this is
+   * LIVE: the voice bridge reads it per call, so a change applies to the next
+   * call with no redeploy.
+   */
+  voiceName?: string | null;
 };
 
 export async function upsertBusinessTelnyxSettings(
@@ -199,7 +208,8 @@ export async function upsertBusinessTelnyxSettings(
     ["transferEnabled", "transfer_enabled"],
     ["smsFallbackEnabled", "sms_fallback_enabled"],
     ["bridgeStaleAlertMuted", "bridge_stale_alert_muted"],
-    ["translatorModeEnabled", "translator_mode_enabled"]
+    ["translatorModeEnabled", "translator_mode_enabled"],
+    ["voiceName", "voice_name"]
   ];
   const row: Record<string, unknown> = {
     business_id: input.businessId,

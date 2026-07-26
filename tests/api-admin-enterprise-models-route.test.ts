@@ -42,12 +42,15 @@ describe("api/admin/enterprise-models route", () => {
   it("saves model overrides for an enterprise business", async () => {
     const res = await post({
       businessId: BIZ_ID,
-      enterpriseModels: { ownerChatModel: "gemini-3.1-flash", voiceName: "Kore" }
+      enterpriseModels: {
+        ownerChatModel: "gemini-3.1-flash",
+        geminiLiveModel: "gemini-3.1-flash-live-preview"
+      }
     });
     expect(res.status).toBe(200);
     expect(updateEnterpriseModels).toHaveBeenCalledWith(BIZ_ID, {
       ownerChatModel: "gemini-3.1-flash",
-      voiceName: "Kore"
+      geminiLiveModel: "gemini-3.1-flash-live-preview"
     });
   });
 
@@ -61,7 +64,10 @@ describe("api/admin/enterprise-models route", () => {
 
   it("rejects non-enterprise businesses and missing rows", async () => {
     vi.mocked(getBusiness).mockResolvedValue({ id: BIZ_ID, tier: "standard" } as never);
-    const gated = await post({ businessId: BIZ_ID, enterpriseModels: { voiceName: "Puck" } });
+    const gated = await post({
+      businessId: BIZ_ID,
+      enterpriseModels: { ownerChatModel: "gemini-3.1-flash" }
+    });
     expect(gated.status).toBe(400);
     expect(updateEnterpriseModels).not.toHaveBeenCalled();
 

@@ -341,6 +341,12 @@ type TenantTelnyxSettings = {
    * this same column, which is why the bridge does not re-derive it per call.
    */
   translatorModeEnabled: boolean;
+  /**
+   * The tenant's chosen Gemini Live voice, or null for the platform default.
+   * Read per call (not baked into box env at provision) so an owner can audition
+   * voices from the admin page without a redeploy.
+   */
+  voiceName: string | null;
 };
 
 /**
@@ -469,7 +475,7 @@ async function loadTenantTelnyxSettings(
   const { data } = await supabase
     .from("business_telnyx_settings")
     .select(
-      "forward_to_e164, transfer_enabled, sms_fallback_enabled, telnyx_sms_from_e164, telnyx_messaging_profile_id, translator_mode_enabled"
+      "forward_to_e164, transfer_enabled, sms_fallback_enabled, telnyx_sms_from_e164, telnyx_messaging_profile_id, translator_mode_enabled, voice_name"
     )
     .eq("business_id", businessId)
     .maybeSingle();
@@ -480,6 +486,7 @@ async function loadTenantTelnyxSettings(
     telnyx_sms_from_e164: string | null;
     telnyx_messaging_profile_id: string | null;
     translator_mode_enabled: boolean | null;
+    voice_name: string | null;
   };
   return {
     forwardToE164: row?.forward_to_e164 ?? null,
@@ -489,7 +496,8 @@ async function loadTenantTelnyxSettings(
     messagingProfileId: row?.telnyx_messaging_profile_id ?? null,
     // Opt-in: a box running an older schema (column absent) reads as false and
     // behaves exactly as it did before translator mode existed.
-    translatorModeEnabled: row?.translator_mode_enabled === true
+    translatorModeEnabled: row?.translator_mode_enabled === true,
+    voiceName: row?.voice_name ?? null
   };
 }
 
@@ -1661,6 +1669,10 @@ function main(): void {
             recentInteractionsNote,
             bookingStatusNote,
             languagePrefs,
+            // Per-tenant voice, resolved in the bridge against the box env and
+            // the platform default. Read per call, so an admin change lands on
+            // the next call with no redeploy.
+            tenantVoiceName: tenantSettings.voiceName,
             translatorOnRequestEnabled,
             callerIdentity,
             intake,

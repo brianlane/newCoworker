@@ -714,6 +714,7 @@ export default async function BusinessDetailPage({
           smsFallbackEnabled={telnyxSettings?.sms_fallback_enabled ?? true}
           bridgeStaleAlertMuted={telnyxSettings?.bridge_stale_alert_muted ?? false}
           translatorModeEnabled={telnyxSettings?.translator_mode_enabled ?? true}
+          voiceName={telnyxSettings?.voice_name ?? null}
           defaultAreaCode={process.env.TELNYX_DEFAULT_AREA_CODE ?? "602"}
           defaultState={process.env.TELNYX_DEFAULT_STATE ?? "AZ"}
         />
