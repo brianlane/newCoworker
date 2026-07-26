@@ -185,17 +185,28 @@ describe("pollEmailCoworker", () => {
     expect(mockTurn).not.toHaveBeenCalled();
   });
 
-  it("marks messages seen BEFORE running the turn", async () => {
+  it("marks each message seen immediately BEFORE its own turn", async () => {
+    // Per message, not per batch: a pass that dies partway must leave the
+    // replies it never reached unseen so a later tick still answers them.
+    mockFetch.mockResolvedValue([message({ id: "m-1" }), message({ id: "m-2" })]);
     const order: string[] = [];
-    mockSeen.mockImplementation(async () => {
-      order.push("seen");
+    mockSeen.mockImplementation(async (_biz, ids) => {
+      order.push(`seen:${ids.join(",")}`);
     });
-    mockTurn.mockImplementation(async () => {
-      order.push("turn");
+    mockTurn.mockImplementation(async ({ message: m }) => {
+      order.push(`turn:${m.id}`);
       return { ok: true, reply: "ok", handoff: false };
     });
     await pollEmailCoworker(businessDb());
-    expect(order).toEqual(["seen", "turn"]);
+    expect(order).toEqual(["seen:m-1", "turn:m-1", "seen:m-2", "turn:m-2"]);
+  });
+
+  it("leaves later replies unseen when a turn throws mid-batch", async () => {
+    mockFetch.mockResolvedValue([message({ id: "m-1" }), message({ id: "m-2" })]);
+    mockTurn.mockRejectedValueOnce(new Error("engine exploded"));
+    await pollEmailCoworker(businessDb());
+    // Only the message we actually attempted was consumed.
+    expect(mockSeen.mock.calls.map((c) => c[1])).toEqual([["m-1"]]);
   });
 
   it("hands a circling thread to a human at the daily cap and alerts the owner once", async () => {

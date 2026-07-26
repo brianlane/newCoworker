@@ -56,7 +56,10 @@ describe("rememberSentThread", () => {
       thread_id: "t-1",
       subject: "NC Discovery Call w/ Liz",
       correspondent_email: "beth@lizdev.com",
-      last_sent_message_ref: "<abc@mail>"
+      last_sent_message_ref: "<abc@mail>",
+      // Re-engagement: the owner mailing through the assistant again revives
+      // a thread a previous handoff had silenced.
+      handed_off: false
     });
     expect(calls[0][1]).toEqual({ onConflict: "business_id,thread_id" });
   });

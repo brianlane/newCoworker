@@ -95,6 +95,11 @@ export async function rememberSentThread(
         subject: input.subject ?? null,
         correspondent_email: input.correspondentEmail?.trim().toLowerCase() || null,
         last_sent_message_ref: input.sentMessageRef ?? null,
+        // The owner sending through the assistant again is an explicit
+        // re-engagement: a previously handed-off thread comes back under the
+        // coworker, otherwise one handoff would silence that conversation
+        // forever.
+        handed_off: false,
         updated_at: new Date().toISOString()
       },
       { onConflict: "business_id,thread_id" }

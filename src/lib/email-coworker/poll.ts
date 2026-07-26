@@ -156,19 +156,19 @@ export async function pollEmailCoworker(
       if (fresh.length === 0) continue;
       result.messages += fresh.length;
 
-      // Seen BEFORE the turn: a crash mid-turn must not double-answer.
-      await markMessagesSeen(
-        businessId,
-        fresh.map((m) => m.id),
-        db
-      );
-
       for (const message of fresh) {
         const thread = ownedByThreadId.get(message.threadId)!;
         // A batch can carry several replies on the SAME thread; once it is
         // handed off, the rest are the human's to answer (and re-alerting
         // per message would spam the owner).
         if (thread.handedOff) continue;
+        // Seen PER MESSAGE, immediately before its turn: marking the whole
+        // batch up front meant a pass that died partway (route timeout, a
+        // long turn) left later replies marked seen but never answered,
+        // with no retry. One message at a time keeps the never-double-answer
+        // guarantee without spending it on messages we have not reached.
+        await markMessagesSeen(businessId, [message.id], db);
+
         const spent = turnsToday(thread);
         if (spent >= EMAIL_COWORKER_MAX_TURNS_PER_DAY) {
           // A conversation this long is not converging: hand it to a human
