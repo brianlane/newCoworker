@@ -560,7 +560,10 @@ describe("manage tokens on the booking ledger", () => {
     const { client, calls } = fakeDb([{ error: null }]);
     await moveManagedBooking("row-9", "2026-07-28T16:00:00Z", client);
     expect(calls.find((c) => c.method === "update")?.args[0]).toEqual({
-      start_at: "2026-07-28T16:00:00Z"
+      start_at: "2026-07-28T16:00:00Z",
+      // The old time's reminder stamps go with it, or the new time is
+      // never reminded.
+      reminders_sent: {}
     });
 
     const { client: delClient, calls: delCalls } = fakeDb([{ error: null }]);

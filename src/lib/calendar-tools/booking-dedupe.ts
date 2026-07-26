@@ -349,7 +349,13 @@ export async function rescheduleBookingClaim(
     const move = () =>
       supabase
         .from("calendar_booking_dedupe")
-        .update({ start_at: newStartIso, created_at: new Date().toISOString() })
+        // reminders_sent resets with the move: the stamps belong to the OLD
+        // time, and leaving them means the new time is never reminded.
+        .update({
+          start_at: newStartIso,
+          created_at: new Date().toISOString(),
+          reminders_sent: {}
+        })
         .eq("id", claimId);
     const { error } = await move();
     if (!error) return;

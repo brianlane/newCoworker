@@ -511,7 +511,9 @@ export async function moveManagedBooking(
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db
     .from("calendar_booking_dedupe")
-    .update({ start_at: startIso })
+    // Reminder stamps belong to the OLD time; keeping them would silence
+    // the reminders for the time the invitee actually holds now.
+    .update({ start_at: startIso, reminders_sent: {} })
     .eq("id", rowId);
   if (error) throw new Error(`moveManagedBooking: ${error.message}`);
 }
