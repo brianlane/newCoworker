@@ -495,4 +495,65 @@ describe("proxy", () => {
     const res = await proxy(req);
     expect(res.status).toBe(200);
   });
+
+  // --- AI traffic notes ---
+
+  describe("AI traffic", () => {
+    /** A NextFetchEvent stand-in that just collects the scheduled promises. */
+    function makeEvent() {
+      const scheduled: Promise<unknown>[] = [];
+      return {
+        event: { waitUntil: (p: Promise<unknown>) => scheduled.push(p) } as never,
+        scheduled
+      };
+    }
+
+    it("schedules a note when an AI crawler fetches a marketing page", async () => {
+      mockSupabaseWithUser(null);
+      const { event, scheduled } = makeEvent();
+      const req = makeRequest("/pricing", {
+        headers: { "user-agent": "Mozilla/5.0 (compatible; GPTBot/1.2; +https://openai.com/gptbot)" }
+      });
+      await proxy(req, event);
+      expect(scheduled).toHaveLength(1);
+      // The write swallows its own errors, so settling is the contract.
+      await expect(Promise.all(scheduled)).resolves.toBeDefined();
+    });
+
+    it("schedules a note when a visitor arrives from an AI answer", async () => {
+      mockSupabaseWithUser(null);
+      const { event, scheduled } = makeEvent();
+      await proxy(
+        makeRequest("/", { headers: { referer: "https://chatgpt.com/c/abc" } }),
+        event
+      );
+      expect(scheduled).toHaveLength(1);
+      await Promise.all(scheduled);
+    });
+
+    it("stays out of the way of ordinary traffic", async () => {
+      mockSupabaseWithUser(null);
+      const { event, scheduled } = makeEvent();
+      await proxy(makeRequest("/pricing", { headers: { "user-agent": "Mozilla/5.0" } }), event);
+      // A crawler on an authenticated path is noise: robots.txt disallows it.
+      await proxy(
+        makeRequest("/dashboard", { headers: { "user-agent": "GPTBot/1.2" } }),
+        event
+      );
+      // Crawlers read; they do not POST.
+      await proxy(
+        makeRequest("/pricing", { method: "POST", headers: { "user-agent": "GPTBot/1.2" } }),
+        event
+      );
+      expect(scheduled).toHaveLength(0);
+    });
+
+    it("still serves the page when no fetch event is available to schedule on", async () => {
+      mockSupabaseWithUser(null);
+      const res = await proxy(
+        makeRequest("/pricing", { headers: { "user-agent": "GPTBot/1.2" } })
+      );
+      expect(res.status).toBe(200);
+    });
+  });
 });

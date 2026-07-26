@@ -1,8 +1,9 @@
-import { NextResponse, type NextRequest } from "next/server";
+import { NextResponse, type NextFetchEvent, type NextRequest } from "next/server";
 import { createServerClient } from "@supabase/ssr";
 import { rateLimit, RATE_LIMITS, type RateLimitConfig } from "@/lib/rate-limit";
 import { LOCALE_COOKIE } from "@/i18n/routing";
 import { isSpanishMarketingPath, stripSpanishPrefix } from "@/lib/i18n/es-routes";
+import { classifyAiTraffic, recordAiTrafficEvent } from "@/lib/marketing/ai-traffic";
 
 type AuthUser = {
   id: string;
@@ -84,9 +85,37 @@ function sourceMatchesRequestOrigin(request: NextRequest, source: string): boole
   return originsMatch(source, own);
 }
 
-export async function proxy(request: NextRequest) {
+/**
+ * Note the AI crawlers reading us and the humans arriving from AI answers.
+ *
+ * Here because it is the only place that sees every request WITH its path,
+ * before rewrites. The cost on a normal request is two header reads and a
+ * string match that fails; only a matched request does any work at all, and
+ * that work runs through `waitUntil` so it never delays the response.
+ * Recording swallows its own errors.
+ */
+function noteAiTraffic(request: NextRequest, event?: NextFetchEvent): void {
+  // Reads only. A crawler never POSTs, and an AI referral lands as a GET.
+  if (request.method !== "GET") return;
+
+  const observed = classifyAiTraffic({
+    pathname: request.nextUrl.pathname,
+    userAgent: request.headers.get("user-agent"),
+    referrer: request.headers.get("referer")
+  });
+  if (!observed) return;
+
+  const write = recordAiTrafficEvent(observed);
+  // `event` is absent when proxy() is called directly (tests, some local
+  // paths); awaiting there is wrong and dropping the row is harmless.
+  if (event) event.waitUntil(write);
+}
+
+export async function proxy(request: NextRequest, event?: NextFetchEvent) {
   const pathname = request.nextUrl.pathname;
   const method = request.method;
+
+  noteAiTraffic(request, event);
 
   // --- /es/... SEO mirrors for public marketing pages ---
   // Rewrite to the canonical unprefixed route and pin the locale cookie to

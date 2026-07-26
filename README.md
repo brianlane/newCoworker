@@ -1025,6 +1025,32 @@ never un-publish a post.
   `https://newcoworker.com/sitemap.xml` there. IndexNow accelerates recrawl of
   a known site; it does not replace initial verification.
 
+**4. Know whether any of it worked.** `/admin/ai-search` answers the only two
+questions that matter: are the assistants READING us (crawler hits, by day and
+by operator) and are they CITING us (people arriving with an AI surface as
+their `Referer`). Without it the rest of this section is unfalsifiable.
+
+- **Where the write happens**: [src/proxy.ts](src/proxy.ts) `noteAiTraffic`,
+  the only place that sees every request WITH its path, before rewrites. A
+  normal request costs two header reads and a failed string match; only a
+  matched request writes, and the write rides `event.waitUntil` so it never
+  delays the response. Proxy runs on the Node.js runtime in Next 16, and
+  `after()` is not available there, so `waitUntil` is the primitive.
+- **Crawler identity beats referrer**: `ChatGPT-User` fetches on a person's
+  behalf and can carry both, and filing that as a referral would inflate the
+  human number with robot traffic.
+- **Not analytics**: `ai_traffic_events` stores kind, source, operator, path,
+  and time. No IP, no session, no user, no query string, and the
+  capability-token surfaces (`/book`, `/intake`, `/sign`, `/s/`) are excluded
+  so a token can never land in the `path` column. It is platform ops data, so
+  it sits outside the per-tenant retention window and the end-user erasure
+  surface; the daily retention sweep prunes it at a fixed 90 days beside
+  `kg_retrieval_events`.
+- **Read the absences.** The page names registry operators with ZERO hits.
+  That is the signature of an edge block, which produces no other symptom:
+  run `tsx debug/aeo-crawler-probe.ts`, then check Cloudflare Security →
+  Events before assuming disinterest.
+
 ## Platform blog (newcoworker.com/blog)
 
 **Copy rule: no em dashes in blog posts** (now part of the repo-wide writing
