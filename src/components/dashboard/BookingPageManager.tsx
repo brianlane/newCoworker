@@ -6,7 +6,7 @@
  * list from the booking ledger.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { Card } from "@/components/ui/Card";
@@ -107,11 +107,13 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
         const body = await res.json();
         if (!res.ok || !body.ok) {
           setSaveError(body?.error?.message ?? t("saveFailed"));
-          return;
+          return false;
         }
         setState((prev) => (prev ? { ...prev, page: body.data.page as PageRow } : prev));
+        return true;
       } catch {
         setSaveError(t("saveFailed"));
+        return false;
       } finally {
         setSaving(false);
       }
@@ -119,9 +121,27 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
     [api, t]
   );
 
-  /** Whole-list replacement: the server normalizes and stores it. */
+  // Question edits are serialized and expressed as MUTATIONS of the latest
+  // acknowledged list, not as whole lists built from render-time state: two
+  // blur saves in flight (label, then options) would otherwise race, and
+  // whichever finished last would silently undo the other.
+  const pageQuestionsRef = useRef<IntakeQuestion[]>([]);
+  pageQuestionsRef.current = state?.page?.intake_questions ?? [];
+  const pendingQuestionsRef = useRef<IntakeQuestion[] | null>(null);
+  const questionsQueueRef = useRef<Promise<void>>(Promise.resolve());
   const patchQuestions = useCallback(
-    (questions: IntakeQuestion[]) => patch({ intakeQuestions: questions }),
+    (mutate: (questions: IntakeQuestion[]) => IntakeQuestion[]) => {
+      questionsQueueRef.current = questionsQueueRef.current.then(async () => {
+        const base = pendingQuestionsRef.current ?? pageQuestionsRef.current;
+        const next = mutate(base);
+        pendingQuestionsRef.current = next;
+        const saved = await patch({ intakeQuestions: next });
+        // A refused save resyncs the next edit from what the server actually
+        // holds; a successful one keeps building on this list.
+        if (!saved) pendingQuestionsRef.current = null;
+      });
+      return questionsQueueRef.current;
+    },
     [patch]
   );
 
@@ -630,10 +650,8 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
                     onBlur={(e) => {
                       const next = e.target.value.trim();
                       if (next && next !== q.label) {
-                        void patchQuestions(
-                          (page?.intake_questions ?? []).map((it, i) =>
-                            i === idx ? { ...it, label: next } : it
-                          )
+                        void patchQuestions((qs) =>
+                          qs.map((it, i) => (i === idx ? { ...it, label: next } : it))
                         );
                       } else if (!next) {
                         // An emptied label cannot save; put the stored one
@@ -654,8 +672,8 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
                     value={q.type}
                     onChange={(e) => {
                       const type = e.target.value as IntakeQuestion["type"];
-                      void patchQuestions(
-                        (page?.intake_questions ?? []).map((it, i) =>
+                      void patchQuestions((qs) =>
+                        qs.map((it, i) =>
                           i === idx
                             ? {
                                 ...it,
@@ -684,13 +702,12 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
                     type="checkbox"
                     checked={q.required}
                     disabled={saving}
-                    onChange={(e) =>
-                      void patchQuestions(
-                        (page?.intake_questions ?? []).map((it, i) =>
-                          i === idx ? { ...it, required: e.target.checked } : it
-                        )
-                      )
-                    }
+                    onChange={(e) => {
+                      const required = e.target.checked;
+                      void patchQuestions((qs) =>
+                        qs.map((it, i) => (i === idx ? { ...it, required } : it))
+                      );
+                    }}
                   />
                   {t("intakeRequired")}
                 </label>
@@ -698,11 +715,7 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
                   type="button"
                   className="pb-1.5 text-sm text-clay-red/80 hover:text-clay-red"
                   disabled={saving}
-                  onClick={() =>
-                    void patchQuestions(
-                      (page?.intake_questions ?? []).filter((_, i) => i !== idx)
-                    )
-                  }
+                  onClick={() => void patchQuestions((qs) => qs.filter((_, i) => i !== idx))}
                 >
                   {t("intakeRemove")}
                 </button>
@@ -726,10 +739,8 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
                         .filter(Boolean)
                         .slice(0, 8);
                       if (options.length >= 2) {
-                        void patchQuestions(
-                          (page?.intake_questions ?? []).map((it, i) =>
-                            i === idx ? { ...it, options } : it
-                          )
+                        void patchQuestions((qs) =>
+                          qs.map((it, i) => (i === idx ? { ...it, options } : it))
                         );
                       } else {
                         // Fewer than two options is not a choice; revert to
@@ -749,8 +760,8 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
             className="mt-3 rounded-md border border-parchment/25 px-3 py-1.5 text-sm text-parchment/80 hover:border-parchment/50"
             disabled={saving}
             onClick={() =>
-              void patchQuestions([
-                ...(page?.intake_questions ?? []),
+              void patchQuestions((qs) => [
+                ...qs,
                 {
                   id: `q-${Date.now().toString(36)}`,
                   label: t("intakeNewQuestionLabel"),
