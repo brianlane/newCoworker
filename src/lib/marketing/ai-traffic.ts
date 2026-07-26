@@ -31,28 +31,38 @@ export type AiTrafficEvent = {
 };
 
 /**
+ * Route sections that are never AEO signal.
+ *
+ * Matched as a whole segment, never as a bare string prefix: `/sign` is the
+ * capability-token signing surface but `/signup` is a public marketing page
+ * and one of the most important URLs we have, so a `startsWith("/sign")`
+ * test would silently drop exactly the conversions we are trying to measure.
+ */
+const UNTRACKED_SECTIONS = [
+  // Authenticated and machine surfaces: robots.txt already disallows these,
+  // so a hit here is noise rather than signal.
+  "/dashboard",
+  "/admin",
+  "/api",
+  "/oauth",
+  "/_next",
+  "/widget",
+  // Per-tenant capability-token surfaces: noindex, and the token itself
+  // would end up in the path column.
+  "/book",
+  "/intake",
+  "/sign",
+  "/s"
+];
+
+/**
  * Paths worth recording: the public marketing surface plus the machine-facing
- * files. Authenticated and API paths are excluded because robots.txt already
- * disallows them, so a hit there is noise rather than signal.
+ * files (`/llms.txt`, `/sitemap.xml`).
  */
 export function isTrackablePath(pathname: string): boolean {
-  if (
-    pathname.startsWith("/dashboard") ||
-    pathname.startsWith("/admin") ||
-    pathname.startsWith("/api") ||
-    pathname.startsWith("/oauth") ||
-    pathname.startsWith("/_next") ||
-    pathname.startsWith("/widget") ||
-    // Per-tenant capability-token surfaces: noindex, and the token itself
-    // would end up in the path column.
-    pathname.startsWith("/book") ||
-    pathname.startsWith("/intake") ||
-    pathname.startsWith("/sign") ||
-    pathname.startsWith("/s/")
-  ) {
-    return false;
-  }
-  return true;
+  return !UNTRACKED_SECTIONS.some(
+    (section) => pathname === section || pathname.startsWith(`${section}/`)
+  );
 }
 
 /**

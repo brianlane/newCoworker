@@ -78,6 +78,21 @@ describe("isTrackablePath", () => {
       expect(isTrackablePath(path)).toBe(false);
     }
   });
+
+  it("matches whole segments, so /signup is not mistaken for the signing surface", () => {
+    // /signup is one of the most important URLs we have; a bare
+    // startsWith("/sign") would drop exactly the conversions being measured.
+    expect(isTrackablePath("/signup")).toBe(true);
+    expect(isTrackablePath("/bookkeeping-ai")).toBe(true);
+    expect(isTrackablePath("/apid")).toBe(true);
+    expect(isTrackablePath("/administration")).toBe(true);
+  });
+
+  it("still excludes an untracked section requested without a trailing path", () => {
+    for (const path of ["/dashboard", "/admin", "/book", "/sign"]) {
+      expect(isTrackablePath(path)).toBe(false);
+    }
+  });
 });
 
 describe("classifyAiTraffic", () => {
