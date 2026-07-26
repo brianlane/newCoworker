@@ -220,7 +220,8 @@ describe("runEmailCoworkerTurn", () => {
     expect(out).toEqual({
       ok: true,
       reply: "Monday at 12:00 PM Eastern works.",
-      handoff: false
+      handoff: false,
+      sent: true
     });
     const [, conn, sendArgs] = mockSend.mock.calls[0];
     expect(conn).toEqual({
@@ -322,7 +323,9 @@ describe("runEmailCoworkerTurn", () => {
     expect(mockSend.mock.calls[0][2].bodyText).toContain("bringing in a colleague");
   });
 
-  it("treats a sentinel-only draw as empty rather than mailing nothing", async () => {
+  it("escalates a sentinel-only draw without mailing an empty body", async () => {
+    // Nothing to send, but the signal must still reach a person: dropping it
+    // would claim the message, send nothing, and leave the thread live.
     mockTurn.mockResolvedValue({ ok: true, content: NEEDS_HUMAN_SENTINEL } as never);
     expect(
       await runEmailCoworkerTurn({
@@ -331,8 +334,20 @@ describe("runEmailCoworkerTurn", () => {
         link: LINK,
         businessTimezone: null
       })
-    ).toEqual({ ok: false, detail: "empty_reply" });
+    ).toEqual({ ok: true, reply: "", handoff: true, sent: false });
     expect(mockSend).not.toHaveBeenCalled();
+  });
+
+  it("still reports a genuinely empty draw as a failure", async () => {
+    mockTurn.mockResolvedValue({ ok: true, content: "   " } as never);
+    expect(
+      await runEmailCoworkerTurn({
+        thread: THREAD,
+        message: MESSAGE,
+        link: LINK,
+        businessTimezone: null
+      })
+    ).toEqual({ ok: false, detail: "empty_reply" });
   });
 
   it("passes an explicit clock through to the date line", async () => {

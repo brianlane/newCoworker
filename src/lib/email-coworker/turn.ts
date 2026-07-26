@@ -61,7 +61,17 @@ export const EMAIL_SURFACE_BLOCK = `THIS CONVERSATION IS OVER EMAIL, and the per
 - Whenever you hand off to a person like that, end your reply with ${NEEDS_HUMAN_SENTINEL} on its own final line. It is removed before the email is sent and is how the team is actually pulled in, so a handoff without it is an empty promise. Never use it on a reply you handled yourself.`;
 
 export type EmailTurnResult =
-  | { ok: true; reply: string; handoff: boolean }
+  | {
+      ok: true;
+      reply: string;
+      handoff: boolean;
+      /**
+       * False when nothing was emailed: a reply consisting only of the
+       * escalation sentinel still hands the thread to a human (the signal
+       * must not be lost), but there is no body worth sending.
+       */
+      sent: boolean;
+    }
   | { ok: false; detail: string };
 
 /**
@@ -191,7 +201,13 @@ export async function runEmailCoworkerTurn(args: {
   }
 
   const { text: reply, handoff } = splitHandoffSentinel(inline.content.trim());
-  if (!reply) return { ok: false, detail: "empty_reply" };
+  if (!reply) {
+    // Sentinel with no prose: there is nothing to email, but the escalation
+    // it signals must still reach a person. Dropping it here would claim the
+    // message, send nothing, and leave the thread live with no owner alert.
+    if (handoff) return { ok: true, reply: "", handoff: true, sent: false };
+    return { ok: false, detail: "empty_reply" };
+  }
 
   const sent = await sendFromMailboxConnection(
     businessId,
@@ -222,5 +238,5 @@ export async function runEmailCoworkerTurn(args: {
     providerMessageId: sent.messageId
   });
 
-  return { ok: true, reply, handoff };
+  return { ok: true, reply, handoff, sent: true };
 }

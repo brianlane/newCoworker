@@ -220,25 +220,29 @@ export async function pollEmailCoworker(
           });
           continue;
         }
-        result.replied += 1;
-        // The reply is already sent, so a bookkeeping failure must not abort
-        // the pass: that would leave the count stale AND skip the remaining
-        // businesses. Logged and carried in memory instead, which still
-        // bounds this pass; a persistently failing write can overshoot the
-        // daily cap across ticks, and losing a reply is the worse outcome.
-        try {
-          await recordThreadTurn(thread.id, {}, spent, db);
-        } catch (err) {
-          logger.warn("email-coworker: turn count write failed after sending", {
-            businessId,
-            threadId: thread.threadId,
-            error: err instanceof Error ? err.message : String(err)
-          });
+        // A sentinel-only escalation sends nothing: it counts as neither a
+        // reply nor a spent turn, but the handoff below still runs.
+        if (turn.sent) {
+          result.replied += 1;
+          // The reply is already out, so a bookkeeping failure must not abort
+          // the pass: that would leave the count stale AND skip the remaining
+          // businesses. Logged and carried in memory instead, which still
+          // bounds this pass; a persistently failing write can overshoot the
+          // daily cap across ticks, and losing a reply is the worse outcome.
+          try {
+            await recordThreadTurn(thread.id, {}, spent, db);
+          } catch (err) {
+            logger.warn("email-coworker: turn count write failed after sending", {
+              businessId,
+              threadId: thread.threadId,
+              error: err instanceof Error ? err.message : String(err)
+            });
+          }
+          // Keep the in-memory copy honest: several replies can land on one
+          // thread in a single poll, and each must count against the budget.
+          thread.turns = spent + 1;
+          thread.turnsDay = new Date().toISOString().slice(0, 10);
         }
-        // Keep the in-memory copy honest: several replies can land on one
-        // thread in a single poll, and each must count against the budget.
-        thread.turns = spent + 1;
-        thread.turnsDay = new Date().toISOString().slice(0, 10);
 
         // The model escalated. Its reply already told the correspondent a
         // colleague is coming, so the thread must actually change hands: no

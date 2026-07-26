@@ -114,7 +114,7 @@ beforeEach(() => {
   mockClaim.mockResolvedValue(true);
   mockHandoff.mockResolvedValue(undefined);
   mockRecordTurn.mockResolvedValue(undefined);
-  mockTurn.mockResolvedValue({ ok: true, reply: "Booked.", handoff: false });
+  mockTurn.mockResolvedValue({ ok: true, reply: "Booked.", handoff: false, sent: true });
   mockDispatch.mockResolvedValue({ results: [] } as never);
   mockSystemLog.mockResolvedValue(undefined as never);
 });
@@ -196,7 +196,7 @@ describe("pollEmailCoworker", () => {
     });
     mockTurn.mockImplementation(async ({ message: m }) => {
       order.push(`turn:${m.id}`);
-      return { ok: true, reply: "ok", handoff: false };
+      return { ok: true, reply: "ok", handoff: false, sent: true };
     });
     await pollEmailCoworker(businessDb());
     expect(order).toEqual(["claim:m-1", "turn:m-1", "claim:m-2", "turn:m-2"]);
@@ -305,7 +305,7 @@ describe("pollEmailCoworker", () => {
 
   it("hands the thread over when the turn escalates, alerting the owner once", async () => {
     mockFetch.mockResolvedValue([message({ id: "m-1" }), message({ id: "m-2" })]);
-    mockTurn.mockResolvedValueOnce({ ok: true, reply: "A colleague will follow up.", handoff: true });
+    mockTurn.mockResolvedValueOnce({ ok: true, reply: "A colleague will follow up.", handoff: true, sent: true });
     const out = await pollEmailCoworker(businessDb());
     expect(out.replied).toBe(1);
     expect(out.handedOff).toBe(1);
@@ -317,8 +317,18 @@ describe("pollEmailCoworker", () => {
     expect(mockDispatch.mock.calls[0][0].payload).toMatchObject({ reason: "escalated" });
   });
 
+  it("hands over a sentinel-only escalation without counting a reply or a turn", async () => {
+    mockTurn.mockResolvedValue({ ok: true, reply: "", handoff: true, sent: false });
+    const out = await pollEmailCoworker(businessDb());
+    expect(out.replied).toBe(0);
+    expect(out.handedOff).toBe(1);
+    expect(mockRecordTurn).not.toHaveBeenCalled();
+    expect(mockHandoff).toHaveBeenCalledWith("row-1", expect.anything());
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
+  });
+
   it("still hands over when the escalation bookkeeping fails", async () => {
-    mockTurn.mockResolvedValue({ ok: true, reply: "A colleague will follow up.", handoff: true });
+    mockTurn.mockResolvedValue({ ok: true, reply: "A colleague will follow up.", handoff: true, sent: true });
     mockHandoff.mockRejectedValueOnce(new Error("update denied"));
     mockDispatch.mockRejectedValue(new Error("smtp down"));
     expect((await pollEmailCoworker(businessDb())).handedOff).toBe(1);
@@ -385,7 +395,7 @@ describe("pollEmailCoworker", () => {
     mockList.mockResolvedValue([{ ...THREAD }]);
     mockFetch.mockResolvedValue([message()]);
     mockUnseen.mockImplementation(async (_biz, ids) => ids);
-    mockTurn.mockResolvedValue({ ok: true, reply: "ok", handoff: false });
+    mockTurn.mockResolvedValue({ ok: true, reply: "ok", handoff: false, sent: true });
     const throwingDb = {
       from: vi.fn(() => ({
         select: vi.fn(() => ({
