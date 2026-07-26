@@ -359,14 +359,36 @@ describe("offerFreedSlot", () => {
     expect(mockConn).not.toHaveBeenCalled();
   });
 
-  it("answers slot_not_open with no connection or a busy/re-taken slot", async () => {
-    mockConn.mockResolvedValue(null as never);
-    expect(await offerFreedSlot(BIZ, SLOT)).toBe("slot_not_open");
-
+  it("answers slot_not_open on a busy or re-taken slot", async () => {
     mockConn.mockResolvedValue(GOOGLE);
     mockBusy.mockResolvedValue(null);
     expect(await offerFreedSlot(BIZ, SLOT)).toBe("slot_not_open");
     expect(mockMark).not.toHaveBeenCalled();
+  });
+
+  it("offers on a PLATFORM tenant, verifying against the ledger instead", async () => {
+    // No calendar connected is platform mode, not "no calendar": refusing
+    // here silently switched the waitlist off for every ledger-only
+    // business (Bugbot High on PR #933).
+    mockConn.mockResolvedValue(null as never);
+    const isLedgerSlotOpen = vi.fn().mockResolvedValue(true);
+    expect(await offerFreedSlot(BIZ, SLOT, { isLedgerSlotOpen })).toBe("offered");
+    expect(isLedgerSlotOpen).toHaveBeenCalledWith(BIZ, Date.parse(SLOT), expect.any(Number));
+    expect(mockBusy).not.toHaveBeenCalled();
+  });
+
+  it("platform: a slot the ledger says is taken is not offered", async () => {
+    mockConn.mockResolvedValue(null as never);
+    const isLedgerSlotOpen = vi.fn().mockResolvedValue(false);
+    expect(await offerFreedSlot(BIZ, SLOT, { isLedgerSlotOpen })).toBe("slot_not_open");
+    expect(mockMark).not.toHaveBeenCalled();
+  });
+
+  it("platform: falls back to the real ledger check when no override is injected", async () => {
+    // The production wiring (no deps hook), so the default path is covered
+    // rather than only the injected one.
+    mockConn.mockResolvedValue(null as never);
+    expect(await offerFreedSlot(BIZ, SLOT)).toBe("slot_not_open");
   });
 
   it("a slot too short for the first candidate still reaches a shorter-duration candidate", async () => {

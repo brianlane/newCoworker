@@ -37,6 +37,7 @@
     "manageKeepButton": "Keep it",
     "managePickNewTime": "Pick a new time:",
     "manageTooLate": "This appointment is too soon to change online. Please contact the business directly.",
+    "managePast": "This appointment has already passed.",
     "manageNeedsHuman": "This appointment needs a person to change it. Please contact the business.",
     "manageCanceledHeading": "Appointment canceled",
     "manageCanceledBody": "Your appointment with {business} is canceled. You can book again any time.",

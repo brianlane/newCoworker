@@ -153,6 +153,7 @@ describe("getManagedBooking", () => {
         durationMinutes: 30,
         zoomJoinUrl: "https://zoom.us/j/93412345678?pwd=secret",
         changeable: true,
+        past: false,
         minNoticeMinutes: 120
       }
     });
@@ -168,6 +169,16 @@ describe("getManagedBooking", () => {
     mockRow.mockResolvedValue(row({ start_at: new Date(Date.now() + 30 * 60_000).toISOString() }));
     const out = await getManagedBooking(TOKEN);
     expect(out.ok && out.view.changeable).toBe(false);
+    expect(out.ok && out.view.past).toBe(false);
+  });
+
+  it("flags an appointment that already happened, distinct from the notice window", async () => {
+    // An old link should say the appointment passed, not that it is "too
+    // soon to change".
+    mockRow.mockResolvedValue(row({ start_at: new Date(Date.now() - 60 * 60_000).toISOString() }));
+    const out = await getManagedBooking(TOKEN);
+    expect(out.ok && out.view.changeable).toBe(false);
+    expect(out.ok && out.view.past).toBe(true);
   });
 
   it("treats a page with no notice setting as always changeable, and a missing page as zero notice", async () => {

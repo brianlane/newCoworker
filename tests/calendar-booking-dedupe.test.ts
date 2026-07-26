@@ -12,7 +12,9 @@ import {
   confirmBookingDedupe,
   deleteBookingClaim,
   deleteBookingClaimsByEvent,
+  LEDGER_BLOCK_MS,
   findBookingClaimStartsByEvent,
+  isLedgerSlotOpen,
   findUpcomingBookingClaim,
   findUpcomingBookingClaimByPhone,
   findZoomMeetingIdByEvent,
@@ -49,7 +51,21 @@ function makeDb(results: Scripted[]) {
   const next = () => results[idx++] ?? { data: null, error: null };
   const from = (table: string) => {
     const builder: Record<string, unknown> = {};
-    for (const m of ["insert", "select", "update", "delete", "eq", "neq", "is", "not", "gte", "like", "order", "limit"]) {
+    for (const m of [
+      "insert",
+      "select",
+      "update",
+      "delete",
+      "eq",
+      "neq",
+      "is",
+      "not",
+      "gte",
+      "lt",
+      "like",
+      "order",
+      "limit"
+    ]) {
       builder[m] = (...args: unknown[]) => {
         calls.push({ table, name: m, args });
         return builder;
@@ -526,6 +542,57 @@ describe("findBookingClaimStartsByEvent (vacated slots for the waitlist)", () =>
 
     vi.mocked(createSupabaseServiceClient).mockRejectedValueOnce("string blast");
     expect(await findBookingClaimStartsByEvent(BIZ, "evt-1")).toEqual([]);
+  });
+});
+
+describe("isLedgerSlotOpen (platform mode has no calendar to ask)", () => {
+  const START = Date.parse("2026-07-27T16:00:00Z");
+  const END = START + 30 * 60_000;
+
+  it("is open when no ledger booking overlaps the window", async () => {
+    const calls = scriptClient([{ data: [], error: null }]);
+    expect(await isLedgerSlotOpen(BIZ, START, END)).toBe(true);
+    // Confirmed bookings only, read from one block before the slot so an
+    // earlier booking's hour is seen.
+    expect(calls.filter((c) => c.name === "not").map((c) => c.args)).toContainEqual([
+      "event_id",
+      "is",
+      null
+    ]);
+    expect(calls.find((c) => c.name === "gte")?.args[1]).toBe(
+      new Date(START - LEDGER_BLOCK_MS).toISOString()
+    );
+  });
+
+  it("is closed by a booking that starts inside the slot, or whose hour runs into it", async () => {
+    scriptClient([{ data: [{ start_at: new Date(START + 5 * 60_000).toISOString() }], error: null }]);
+    expect(await isLedgerSlotOpen(BIZ, START, END)).toBe(false);
+
+    // Started 30 minutes earlier: its conservative hour still covers this.
+    scriptClient([{ data: [{ start_at: new Date(START - 30 * 60_000).toISOString() }], error: null }]);
+    expect(await isLedgerSlotOpen(BIZ, START, END)).toBe(false);
+  });
+
+  it("ignores a booking whose hour ends before the slot, and unparseable rows", async () => {
+    scriptClient([{ data: [{ start_at: new Date(START - LEDGER_BLOCK_MS).toISOString() }], error: null }]);
+    expect(await isLedgerSlotOpen(BIZ, START, END)).toBe(true);
+
+    scriptClient([{ data: [{ start_at: "not-a-date" }], error: null }]);
+    expect(await isLedgerSlotOpen(BIZ, START, END)).toBe(true);
+  });
+
+  it("fails CLOSED on read errors and thrown clients (a false offer is a broken promise)", async () => {
+    scriptClient([{ data: null, error: { message: "rls" } }]);
+    expect(await isLedgerSlotOpen(BIZ, START, END)).toBe(false);
+
+    scriptClient([{ data: null, error: null }]);
+    expect(await isLedgerSlotOpen(BIZ, START, END)).toBe(true);
+
+    vi.mocked(createSupabaseServiceClient).mockRejectedValueOnce(new Error("db down"));
+    expect(await isLedgerSlotOpen(BIZ, START, END)).toBe(false);
+
+    vi.mocked(createSupabaseServiceClient).mockRejectedValueOnce("string blast");
+    expect(await isLedgerSlotOpen(BIZ, START, END)).toBe(false);
   });
 });
 

@@ -439,6 +439,50 @@ export async function findZoomMeetingIdByEvent(
 }
 
 /**
+ * Conservative occupancy a ledger row implies: the ledger stores starts
+ * only, so one booking blocks the hour after it (same rule the public
+ * booking page uses for platform-mode busy blocks).
+ */
+export const LEDGER_BLOCK_MS = 60 * 60 * 1000;
+
+/**
+ * Is [startMs, endMs) free according to the LEDGER alone?
+ *
+ * The platform-mode answer to "is this slot actually open": those tenants
+ * have no calendar to ask, and the ledger IS their calendar of record.
+ * Fails CLOSED like its provider-side sibling (verifyFreedSlotOpen): a
+ * missed waitlist offer is a nuisance, a false one is a broken promise.
+ */
+export async function isLedgerSlotOpen(
+  businessId: string,
+  startMs: number,
+  endMs: number
+): Promise<boolean> {
+  try {
+    const supabase = await createSupabaseServiceClient();
+    const { data, error } = await supabase
+      .from("calendar_booking_dedupe")
+      .select("start_at")
+      .eq("business_id", businessId)
+      .not("event_id", "is", null)
+      .gte("start_at", new Date(startMs - LEDGER_BLOCK_MS).toISOString())
+      .lt("start_at", new Date(endMs).toISOString());
+    if (error) throw new Error(error.message);
+    return !((data ?? []) as Array<{ start_at: string }>).some((row) => {
+      const bookedStart = Date.parse(row.start_at);
+      if (!Number.isFinite(bookedStart)) return false;
+      return bookedStart < endMs && bookedStart + LEDGER_BLOCK_MS > startMs;
+    });
+  } catch (err) {
+    logger.warn("booking-dedupe: ledger slot check failed (treating as taken)", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return false;
+  }
+}
+
+/**
  * Start instants of every claim recorded for a provider event, read BEFORE
  * a by-event cleanup drops them: a moved off-platform appointment vacates
  * exactly these slots, and the cancellation waitlist must hear about them

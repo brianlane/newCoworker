@@ -84,6 +84,12 @@ export type ManagedBookingView = {
   zoomJoinUrl: string | null;
   /** False inside the page's minimum-notice window: view only. */
   changeable: boolean;
+  /**
+   * The appointment already happened. Distinct from `!changeable`, which
+   * also covers the notice window: someone opening an old link should be
+   * told it is past, not that it is "too soon to change".
+   */
+  past: boolean;
   /** Minutes of notice the business requires, for the explain-why copy. */
   minNoticeMinutes: number;
 };
@@ -147,6 +153,7 @@ export async function getManagedBooking(
         ? await getZoomJoinUrl(resolved.row.business_id, resolved.row.zoom_meeting_id)
         : null,
       changeable: withinNotice(resolved.row.start_at, resolved.minNoticeMinutes),
+      past: Date.parse(resolved.row.start_at) <= Date.now(),
       minNoticeMinutes: resolved.minNoticeMinutes
     }
   };

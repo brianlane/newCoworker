@@ -25,6 +25,7 @@ type Strings = {
   noSlots: string;
   tooLate: string;
   needsHuman: string;
+  past: string;
   canceledHeading: string;
   canceledBody: string;
   movedHeading: string;
@@ -42,6 +43,7 @@ type Props = {
   durationMinutes: number;
   zoomJoinUrl: string | null;
   changeable: boolean;
+  past: boolean;
   strings: Strings;
 };
 
@@ -54,6 +56,7 @@ export function ManageBookingPage({
   durationMinutes,
   zoomJoinUrl,
   changeable,
+  past,
   strings
 }: Props) {
   const [view, setView] = useState<View>("summary");
@@ -210,7 +213,9 @@ export function ManageBookingPage({
       {error ? <p className="mt-4 text-sm text-red-400">{error}</p> : null}
 
       {!changeable ? (
-        <p className="mt-4 text-sm text-parchment/60">{strings.tooLate}</p>
+        <p className="mt-4 text-sm text-parchment/60">
+          {past ? strings.past : strings.tooLate}
+        </p>
       ) : view === "summary" || view === "moved" ? (
         <div className="mt-5 flex flex-wrap gap-3">
           <button
