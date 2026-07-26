@@ -31,7 +31,7 @@
  * TELNYX_API_KEY for the carrier column.
  */
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { loadEnv } from "./_shared.ts";
+import { fetchAllPaged, loadEnv } from "./_shared.ts";
 
 /* -------------------------------------------------------------------------- */
 /* args                                                                        */
@@ -172,33 +172,51 @@ function truncate(text: string, max = 110): string {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
-async function buildTimeline(db: SupabaseClient, args: Args, sinceIso: string): Promise<TimelineEntry[]> {
+async function buildTimeline(
+  db: SupabaseClient,
+  args: Args,
+  sinceIso: string
+): Promise<{ entries: TimelineEntry[]; truncated: string[] }> {
   const e164 = normalizeE164(args.to);
 
-  let outboundQuery = db
-    .from("sms_outbound_log")
-    .select("id, business_id, to_e164, from_e164, body, source, flow_id, run_id, telnyx_message_id, channel, created_at")
-    .eq("to_e164", e164)
-    .gte("created_at", sinceIso)
-    .order("created_at", { ascending: true });
-  if (args.businessId) outboundQuery = outboundQuery.eq("business_id", args.businessId);
+  // Paged: a busy number over a wide window exceeds PostgREST's 1000-row cap,
+  // and a timeline that silently stops partway is exactly the wrong answer to
+  // "did we ever text them?".
+  const [outbound, inbound] = await Promise.all([
+    fetchAllPaged<OutboundRow>((from, to) => {
+      let q = db
+        .from("sms_outbound_log")
+        .select(
+          "id, business_id, to_e164, from_e164, body, source, flow_id, run_id, telnyx_message_id, channel, created_at"
+        )
+        .eq("to_e164", e164)
+        .gte("created_at", sinceIso)
+        .order("created_at", { ascending: true })
+        .range(from, to);
+      if (args.businessId) q = q.eq("business_id", args.businessId);
+      return q;
+    }, { label: "sms_outbound_log" }),
+    fetchAllPaged<InboundRow>((from, to) => {
+      let q = db
+        .from("sms_inbound_jobs")
+        .select("id, business_id, payload, status, assistant_reply_text, last_error, created_at, updated_at")
+        .eq("customer_e164", e164)
+        .gte("created_at", sinceIso)
+        .order("created_at", { ascending: true })
+        .range(from, to);
+      if (args.businessId) q = q.eq("business_id", args.businessId);
+      return q;
+    }, { label: "sms_inbound_jobs" })
+  ]);
 
-  let inboundQuery = db
-    .from("sms_inbound_jobs")
-    .select("id, business_id, payload, status, assistant_reply_text, last_error, created_at, updated_at")
-    .eq("customer_e164", e164)
-    .gte("created_at", sinceIso)
-    .order("created_at", { ascending: true });
-  if (args.businessId) inboundQuery = inboundQuery.eq("business_id", args.businessId);
-
-  const [outbound, inbound] = await Promise.all([outboundQuery, inboundQuery]);
-  if (outbound.error) throw new Error(`sms_outbound_log: ${outbound.error.message}`);
-  if (inbound.error) throw new Error(`sms_inbound_jobs: ${inbound.error.message}`);
+  const truncated: string[] = [];
+  if (outbound.truncated) truncated.push("sms_outbound_log");
+  if (inbound.truncated) truncated.push("sms_inbound_jobs");
 
   const apiKey = process.env.TELNYX_API_KEY ?? "";
   const entries: TimelineEntry[] = [];
 
-  for (const row of (outbound.data ?? []) as OutboundRow[]) {
+  for (const row of outbound.rows) {
     const bits = [row.channel ?? "sms", `from ${row.from_e164 ?? "?"}`, `source ${row.source ?? "?"}`];
     if (row.flow_id) bits.push(`flow ${row.flow_id.slice(0, 8)}`);
     if (row.run_id) bits.push(`run ${row.run_id.slice(0, 8)}`);
@@ -214,7 +232,7 @@ async function buildTimeline(db: SupabaseClient, args: Args, sinceIso: string): 
     });
   }
 
-  for (const row of (inbound.data ?? []) as InboundRow[]) {
+  for (const row of inbound.rows) {
     entries.push({
       at: row.created_at,
       direction: "inbound",
@@ -233,7 +251,7 @@ async function buildTimeline(db: SupabaseClient, args: Args, sinceIso: string): 
     }
   }
 
-  return entries.sort((a, b) => a.at.localeCompare(b.at));
+  return { entries: entries.sort((a, b) => a.at.localeCompare(b.at)), truncated };
 }
 
 /* -------------------------------------------------------------------------- */
@@ -254,10 +272,10 @@ async function main(): Promise<void> {
 
   const e164 = normalizeE164(args.to);
   const sinceIso = new Date(Date.now() - parseSince(args.since)).toISOString();
-  const entries = await buildTimeline(db, args, sinceIso);
+  const { entries, truncated } = await buildTimeline(db, args, sinceIso);
 
   if (args.json) {
-    process.stdout.write(`${JSON.stringify({ to: e164, since: sinceIso, entries }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ to: e164, since: sinceIso, truncated, entries }, null, 2)}\n`);
     return;
   }
 
@@ -294,6 +312,12 @@ async function main(): Promise<void> {
     process.stdout.write(
       `${undelivered.length} outbound message(s) the carrier did NOT confirm as delivered. ` +
         "That is a carrier/number problem, not a flow problem.\n"
+    );
+  }
+  if (truncated.length > 0) {
+    process.stdout.write(
+      `Row ceiling reached for: ${truncated.join(", ")}. This timeline is PARTIAL. ` +
+        "Narrow the window with --since.\n"
     );
   }
 }

@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  escapeTableCell,
   extractPrNumbers,
   extractReadmeSections,
   extractUserQuery,
@@ -142,6 +143,22 @@ describe("headingAnchor", () => {
     expect(headingAnchor("Memory knowledge graph (shadow rollout, Jul 2026)")).toBe(
       "memory-knowledge-graph-shadow-rollout-jul-2026"
     );
+  });
+});
+
+describe("escapeTableCell", () => {
+  it("escapes pipes so a title cannot split the table", () => {
+    expect(escapeTableCell("Fix a|b routing")).toBe("Fix a\\|b routing");
+  });
+
+  it("escapes backslashes first, so a trailing backslash cannot free the pipe", () => {
+    // "a\" + "|" naively becomes "a\\|", where the original backslash escapes
+    // the added one and the pipe splits the cell anyway.
+    expect(escapeTableCell("a\\|b")).toBe("a\\\\\\|b");
+  });
+
+  it("leaves ordinary text untouched", () => {
+    expect(escapeTableCell("Booking confirmations and reminders")).toBe("Booking confirmations and reminders");
   });
 });
 

@@ -36,7 +36,7 @@
  * Env (repo-root `.env`): SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY.
  */
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { loadEnv } from "./_shared.ts";
+import { fetchAllPaged, loadEnv } from "./_shared.ts";
 
 type Args = { businessId: string | null; days: number; minRepeats: number; json: boolean };
 
@@ -156,28 +156,24 @@ export function summarizeSurfaces(rows: SurfaceRow[]): SurfaceSummary[] {
     .sort((a, b) => b.costMicros - a.costMicros);
 }
 
+type LedgerRow = { business_id: string; question: string; answer: string; created_at: string };
+
 /** Page through the ledger: a 30-day fleet window exceeds the 1000-row default. */
 async function fetchAllEvents(
   db: SupabaseClient,
   sinceIso: string,
   businessId: string | null
-): Promise<Array<{ business_id: string; question: string; answer: string; created_at: string }>> {
-  const page = 1000;
-  const all: Array<{ business_id: string; question: string; answer: string; created_at: string }> = [];
-  for (let from = 0; ; from += page) {
+): Promise<{ rows: LedgerRow[]; truncated: boolean }> {
+  return fetchAllPaged<LedgerRow>((from, to) => {
     let q = db
       .from("kg_retrieval_events")
       .select("business_id,question,answer,created_at")
       .gte("created_at", sinceIso)
       .order("created_at", { ascending: true })
-      .range(from, from + page - 1);
+      .range(from, to);
     if (businessId) q = q.eq("business_id", businessId);
-    const { data, error } = await q;
-    if (error) throw new Error(`kg_retrieval_events: ${error.message}`);
-    const rows = (data ?? []) as typeof all;
-    all.push(...rows);
-    if (rows.length < page) return all;
-  }
+    return q;
+  }, { label: "kg_retrieval_events" });
 }
 
 async function main(): Promise<void> {
@@ -193,7 +189,7 @@ async function main(): Promise<void> {
   const db = createClient(url, key, { auth: { persistSession: false } });
 
   const sinceIso = new Date(Date.now() - args.days * 86_400_000).toISOString();
-  const events = await fetchAllEvents(db, sinceIso, args.businessId);
+  const { rows: events, truncated } = await fetchAllEvents(db, sinceIso, args.businessId);
   const groups = groupRepeatedQuestions(events, args.minRepeats);
 
   let spendQuery = db
@@ -206,13 +202,19 @@ async function main(): Promise<void> {
   const surfaces = summarizeSurfaces((spend.data ?? []) as SurfaceRow[]);
 
   if (args.json) {
-    process.stdout.write(`${JSON.stringify({ sinceIso, groups, surfaces }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ sinceIso, truncated, groups, surfaces }, null, 2)}\n`);
     return;
   }
 
   const out = process.stdout;
   out.write(`\n=== Repeated knowledge lookups (last ${args.days} days, >= ${args.minRepeats} asks)\n`);
   out.write(`    ${events.length} lookups recorded in kg_retrieval_events.\n`);
+  if (truncated) {
+    out.write(
+      "    Row ceiling reached: this sample is PARTIAL, so repeat counts are floors.\n" +
+        "    Narrow with --days or --business for an exact picture.\n"
+    );
+  }
   if (events.length === 0) {
     out.write(
       "    Note: only shadow/active memory-graph tenants write this ledger, so an\n" +

@@ -31,6 +31,38 @@ export function loadEnv(): void {
   }
 }
 
+/**
+ * PostgREST returns at most 1000 rows per request. A diagnostic that selects
+ * without paging therefore reports a silently truncated answer on exactly the
+ * busy tenants worth diagnosing, which is worse than reporting nothing: the
+ * operator has no way to tell a complete count from a capped one.
+ */
+export const SUPABASE_PAGE_SIZE = 1000;
+
+/**
+ * Read every row a query matches, one page at a time.
+ *
+ * `fetchPage` receives an inclusive `[from, to]` row range to hand to
+ * supabase-js `.range()`. Paging stops at `maxRows` and reports `truncated`
+ * so the caller can SAY the result is partial rather than imply it is whole.
+ */
+export async function fetchAllPaged<T>(
+  fetchPage: (from: number, to: number) => PromiseLike<{ data: T[] | null; error: { message: string } | null }>,
+  opts: { label: string; maxRows?: number }
+): Promise<{ rows: T[]; truncated: boolean }> {
+  const maxRows = opts.maxRows ?? 20_000;
+  const rows: T[] = [];
+  for (let from = 0; from < maxRows; from += SUPABASE_PAGE_SIZE) {
+    const to = Math.min(from + SUPABASE_PAGE_SIZE, maxRows) - 1;
+    const { data, error } = await fetchPage(from, to);
+    if (error) throw new Error(`${opts.label}: ${error.message}`);
+    const page = data ?? [];
+    rows.push(...page);
+    if (page.length < to - from + 1) return { rows, truncated: false };
+  }
+  return { rows, truncated: true };
+}
+
 /** A Hostinger API client built from the env (HOSTINGER_API_TOKEN, optional base URL). */
 export function makeHostingerClient(): HostingerClient {
   return new HostingerClient({

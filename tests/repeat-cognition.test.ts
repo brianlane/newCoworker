@@ -7,6 +7,7 @@ import {
 } from "../debug/repeat-cognition";
 import { inboundBody, normalizeE164, parseSince } from "../debug/trace-sms";
 import { tally } from "../debug/audit-account";
+import { fetchAllPaged, SUPABASE_PAGE_SIZE } from "../debug/_shared";
 
 /**
  * Unit coverage for the pure helpers behind the three read-only investigation
@@ -151,5 +152,49 @@ describe("audit-account helpers", () => {
       ["failed", 2]
     ]);
     expect(tally([])).toEqual([]);
+  });
+});
+
+describe("fetchAllPaged", () => {
+  /** A fake table of `total` rows served through the [from, to] range contract. */
+  const pagedSource = (total: number) => {
+    const calls: Array<[number, number]> = [];
+    const fetchPage = (from: number, to: number) => {
+      calls.push([from, to]);
+      const rows = Array.from({ length: Math.max(0, Math.min(to, total - 1) - from + 1) }, (_, i) => ({
+        n: from + i
+      }));
+      return Promise.resolve({ data: rows, error: null });
+    };
+    return { calls, fetchPage };
+  };
+
+  it("returns everything in a single short page without asking for a second", async () => {
+    const { calls, fetchPage } = pagedSource(3);
+    const result = await fetchAllPaged(fetchPage, { label: "t" });
+    expect(result.rows).toHaveLength(3);
+    expect(result.truncated).toBe(false);
+    expect(calls).toHaveLength(1);
+  });
+
+  it("keeps paging past the row cap that would otherwise silently truncate", async () => {
+    const { calls, fetchPage } = pagedSource(SUPABASE_PAGE_SIZE + 5);
+    const result = await fetchAllPaged(fetchPage, { label: "t" });
+    expect(result.rows).toHaveLength(SUPABASE_PAGE_SIZE + 5);
+    expect(result.truncated).toBe(false);
+    expect(calls).toHaveLength(2);
+  });
+
+  it("reports truncated rather than pretending a capped read was complete", async () => {
+    const { fetchPage } = pagedSource(10_000);
+    const result = await fetchAllPaged(fetchPage, { label: "t", maxRows: SUPABASE_PAGE_SIZE * 2 });
+    expect(result.rows).toHaveLength(SUPABASE_PAGE_SIZE * 2);
+    expect(result.truncated).toBe(true);
+  });
+
+  it("surfaces a query error with its label instead of returning partial rows", async () => {
+    await expect(
+      fetchAllPaged(() => Promise.resolve({ data: null, error: { message: "boom" } }), { label: "some_table" })
+    ).rejects.toThrow("some_table: boom");
   });
 });

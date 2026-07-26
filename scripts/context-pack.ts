@@ -144,6 +144,18 @@ export function oneLine(text: string, max = 200): string {
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
 }
 
+/**
+ * Escape a value for a markdown table cell.
+ *
+ * The backslash must be escaped BEFORE the pipe: escaping only `|` leaves a
+ * trailing backslash in the input able to consume the escape we just added
+ * (`a\` becomes `a\|`, whose backslash escapes our backslash and frees the
+ * pipe to split the cell). CodeQL flags the pipe-only form for exactly this.
+ */
+export function escapeTableCell(value: string): string {
+  return value.replace(/\\/g, "\\\\").replace(/\|/g, "\\|");
+}
+
 /** GitHub's heading-to-anchor slug, for linking into the README. */
 export function headingAnchor(heading: string): string {
   return heading
@@ -280,7 +292,7 @@ function renderPullRequests(repoRoot: string, days: number): string {
     "| --- | --- | --- |"
   ];
   for (const r of rows) {
-    lines.push(`| #${r.number} | ${r.state.toLowerCase()} | ${oneLine(r.title, 140).replace(/\|/g, "\\|")} |`);
+    lines.push(`| #${r.number} | ${r.state.toLowerCase()} | ${escapeTableCell(oneLine(r.title, 140))} |`);
   }
   return lines.join("\n");
 }
@@ -525,7 +537,7 @@ async function renderFleetInner(repoRoot: string): Promise<string> {
   for (const b of rows) {
     const counts = flowCount.get(b.id) ?? { total: 0, enabled: 0 };
     lines.push(
-      `| ${b.name.trim().replace(/\|/g, "\\|")} | \`${b.id}\` | ${b.tier} | ${b.status} | ${didFor.get(b.id) ?? "-"} | ${counts.enabled}/${counts.total} |`
+      `| ${escapeTableCell(b.name.trim())} | \`${b.id}\` | ${b.tier} | ${b.status} | ${didFor.get(b.id) ?? "-"} | ${counts.enabled}/${counts.total} |`
     );
   }
   lines.push("", "Per-tenant detail lives in `docs/tenants/`.");

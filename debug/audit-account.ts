@@ -31,7 +31,7 @@
  * Env (repo-root `.env`): SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY.
  */
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { loadEnv } from "./_shared.ts";
+import { fetchAllPaged, loadEnv } from "./_shared.ts";
 
 type Args = { businessId: string | null; hours: number; list: boolean; json: boolean };
 
@@ -81,43 +81,70 @@ type AuditReport = {
   errors: Array<[string, number]>;
   spend: Array<[string, number]>;
   windowHours: number;
+  /** Sections whose row set hit the paging ceiling, so their counts are floors. */
+  truncated: string[];
 };
 
 async function audit(db: SupabaseClient, businessId: string, hours: number): Promise<AuditReport> {
   const sinceIso = new Date(Date.now() - hours * 3_600_000).toISOString();
   const sinceDay = sinceIso.slice(0, 10);
 
-  const [business, routes, roster, flows, runs, inbound, outbound, logs, spend] = await Promise.all([
+  // Volumes come from exact COUNT queries, never from the length of a fetched
+  // page: a `select()` caps at 1000 rows, so counting what came back reports a
+  // floor while looking like a total. Row sets that must be grouped ARE
+  // fetched, but paged, and say so when they hit the ceiling.
+  const [business, routes, roster, flows, runs, inbound, deadLettered, outbound, logs, spend] = await Promise.all([
     db.from("businesses").select("id,name,tier,status,owner_name,hostinger_vps_id,created_at").eq("id", businessId).maybeSingle(),
     db.from("telnyx_voice_routes").select("to_e164").eq("business_id", businessId),
     db.from("ai_flow_team_members").select("name,active").eq("business_id", businessId),
     db.from("ai_flows").select("id,name,enabled,definition,updated_at").eq("business_id", businessId),
+    fetchAllPaged<{ status: string; flow_id: string | null; last_error: string | null; created_at: string }>(
+      (from, to) =>
+        db
+          .from("ai_flow_runs")
+          .select("id,status,flow_id,last_error,created_at")
+          .eq("business_id", businessId)
+          .gte("created_at", sinceIso)
+          .order("created_at", { ascending: false })
+          .range(from, to),
+      { label: "ai_flow_runs" }
+    ),
     db
-      .from("ai_flow_runs")
-      .select("id,status,flow_id,last_error,created_at")
+      .from("sms_inbound_jobs")
+      .select("id", { count: "exact", head: true })
       .eq("business_id", businessId)
       .gte("created_at", sinceIso),
     db
       .from("sms_inbound_jobs")
-      .select("id,status", { count: "exact" })
+      .select("id", { count: "exact", head: true })
       .eq("business_id", businessId)
+      .eq("status", "dead_letter")
       .gte("created_at", sinceIso),
     db
       .from("sms_outbound_log")
       .select("id", { count: "exact", head: true })
       .eq("business_id", businessId)
       .gte("created_at", sinceIso),
-    db
-      .from("system_logs")
-      .select("level,event")
-      .eq("business_id", businessId)
-      .in("level", ["warn", "error"])
-      .gte("created_at", sinceIso),
+    fetchAllPaged<{ level: string; event: string }>(
+      (from, to) =>
+        db
+          .from("system_logs")
+          .select("level,event")
+          .eq("business_id", businessId)
+          .in("level", ["warn", "error"])
+          .gte("created_at", sinceIso)
+          .order("created_at", { ascending: false })
+          .range(from, to),
+      { label: "system_logs" }
+    ),
     db.from("gemini_spend_daily").select("surface,cost_micros,call_count").eq("business_id", businessId).gte("day", sinceDay)
   ]);
 
   if (business.error) throw new Error(`businesses: ${business.error.message}`);
   if (!business.data) throw new Error(`no business with id ${businessId}`);
+  if (inbound.error) throw new Error(`sms_inbound_jobs: ${inbound.error.message}`);
+  if (deadLettered.error) throw new Error(`sms_inbound_jobs (dead_letter): ${deadLettered.error.message}`);
+  if (outbound.error) throw new Error(`sms_outbound_log: ${outbound.error.message}`);
 
   const flowRows = (flows.data ?? []) as Array<{
     id: string;
@@ -128,13 +155,10 @@ async function audit(db: SupabaseClient, businessId: string, hours: number): Pro
   }>;
   const flowName = new Map(flowRows.map((f) => [f.id, f.name]));
 
-  const runRows = (runs.data ?? []) as Array<{
-    status: string;
-    flow_id: string | null;
-    last_error: string | null;
-    created_at: string;
-  }>;
-  const inboundRows = (inbound.data ?? []) as Array<{ status: string | null }>;
+  const runRows = runs.rows;
+  const truncated: string[] = [];
+  if (runs.truncated) truncated.push("ai_flow_runs");
+  if (logs.truncated) truncated.push("system_logs");
 
   return {
     business: business.data as Record<string, unknown>,
@@ -153,8 +177,11 @@ async function audit(db: SupabaseClient, businessId: string, hours: number): Pro
       }))
       .sort((a, b) => Number(b.enabled) - Number(a.enabled) || a.name.localeCompare(b.name)),
     runs: tally(runRows.map((r) => r.status)),
+    // Newest first: the section is labeled "recent errors", so it has to sort
+    // by time rather than trust whatever order the rows arrived in.
     runFailures: runRows
       .filter((r) => r.last_error)
+      .sort((a, b) => b.created_at.localeCompare(a.created_at))
       .slice(0, 10)
       .map((r) => ({
         flow: (r.flow_id && flowName.get(r.flow_id)) || "(unknown flow)",
@@ -162,11 +189,11 @@ async function audit(db: SupabaseClient, businessId: string, hours: number): Pro
         at: r.created_at
       })),
     messaging: {
-      inbound: inbound.count ?? inboundRows.length,
+      inbound: inbound.count ?? 0,
       outbound: outbound.count ?? 0,
-      deadLettered: inboundRows.filter((r) => r.status === "dead_letter").length
+      deadLettered: deadLettered.count ?? 0
     },
-    errors: tally(((logs.data ?? []) as Array<{ level: string; event: string }>).map((l) => `${l.level}:${l.event}`)),
+    errors: tally(logs.rows.map((l) => `${l.level}:${l.event}`)),
     spend: (() => {
       const bySurface = new Map<string, number>();
       for (const row of (spend.data ?? []) as Array<{ surface: string; cost_micros: number }>) {
@@ -174,7 +201,8 @@ async function audit(db: SupabaseClient, businessId: string, hours: number): Pro
       }
       return [...bySurface.entries()].sort((a, b) => b[1] - a[1]);
     })(),
-    windowHours: hours
+    windowHours: hours,
+    truncated
   };
 }
 
@@ -223,6 +251,13 @@ function print(report: AuditReport): void {
   out.write(`\n--- Gemini spend (since ${new Date(Date.now() - report.windowHours * 3_600_000).toISOString().slice(0, 10)}, UTC days)\n`);
   if (report.spend.length === 0) out.write("    none recorded\n");
   for (const [surface, micros] of report.spend) out.write(`    ${formatUsd(micros).padStart(9)}  ${surface}\n`);
+
+  if (report.truncated.length > 0) {
+    out.write(
+      `\n!!! Row ceiling reached for: ${report.truncated.join(", ")}. Those counts are FLOORS,\n` +
+        "    not totals. Narrow the window with --hours to get an exact picture.\n"
+    );
+  }
   out.write("\n");
 }
 
