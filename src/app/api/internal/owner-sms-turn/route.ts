@@ -45,6 +45,7 @@ import {
   OWNER_PREAMBLE
 } from "@/app/api/dashboard/chat/route";
 import { fulfillOwnerEmailBlocks } from "@/lib/dashboard-chat/email-blocks";
+import { bookingLinkPromptLine } from "@/lib/booking-page/prompt-line";
 import { logger } from "@/lib/logger";
 import { currentDateTimeLine } from "../../../../../supabase/functions/_shared/datetime_line";
 
@@ -119,7 +120,8 @@ export async function POST(request: Request) {
       manageEmployeeToolEnabled,
       emailToolEnabled,
       integrationsLine,
-      businessContextBlock
+      businessContextBlock,
+      bookingLinkLine
     ] = await Promise.all([
       isAgentToolEnabled(body.businessId, "dashboard", "business_knowledge_lookup"),
       isAgentToolEnabled(body.businessId, "dashboard", "send_sms"),
@@ -137,7 +139,10 @@ export async function POST(request: Request) {
       isAgentToolEnabled(body.businessId, "dashboard", "manage_employee"),
       isAgentToolEnabled(body.businessId, "dashboard", "send_email"),
       buildIntegrationsStatusLine(body.businessId),
-      buildBusinessContextBlock(body.businessId)
+      buildBusinessContextBlock(body.businessId),
+      // The public booking link, so "schedule Liz through her assistant"
+      // can send the page instead of negotiating times over email.
+      bookingLinkPromptLine(body.businessId)
     ]);
 
     // Continuity: the recent SMS exchange with the owner's number (both
@@ -184,6 +189,7 @@ export async function POST(request: Request) {
       emailToolEnabled ? EMAIL_TOOL_ENABLED_PREAMBLE : EMAIL_TOOL_DISABLED_PREAMBLE,
       currentDateTimeLine(new Date(), meta.timezone),
       ...(integrationsLine ? [integrationsLine] : []),
+      ...(bookingLinkLine ? [bookingLinkLine] : []),
       ...(businessContextBlock ? [businessContextBlock] : []),
       ...(transcript
         ? [

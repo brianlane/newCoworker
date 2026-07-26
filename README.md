@@ -881,6 +881,18 @@ engine's roster evaluators), and the upcoming-bookings list.
   contact-the-business copy) until collection ships, so it can never hand
   out free appointments. No dashboard control yet by design; the price pair
   must arrive together (requiring payment without a price is refused).
+- **The coworker knows its own booking link**
+  (`src/lib/booking-page/prompt-line.ts`): every owner-facing AI surface
+  (dashboard chat, owner SMS, the email coworker) gets a system line naming
+  the page's vanity URL and public title, so "schedule Liz through her
+  assistant Beth" can email Beth the page instead of negotiating times, and
+  a correspondent asking "just send me the calendar" gets the real URL,
+  never an invented one. The hint prefers the link over listed times but
+  defers to an owner who explicitly asked for times; computed per turn
+  (slug and title are owner-editable) and best-effort, so a failed page read
+  costs the hint, never the turn. Pinned by a live-model scenario in
+  `tests/e2e/beth-delegation.e2e.test.ts` asserting the exact URL lands in
+  the composed email.
 - Vagaro/Calendly-resolved tenants deliberately do NOT get the page (Vagaro
   has its own booking site; link-mode Calendly cannot book on the invitee's
   behalf); the Bookings page explains this and calendar resolution order is

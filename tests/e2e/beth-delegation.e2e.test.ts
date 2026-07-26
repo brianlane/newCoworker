@@ -18,6 +18,7 @@ import {
   type GeminiFunctionCall
 } from "@/lib/gemini-chat";
 import { currentDateTimeLine } from "../../supabase/functions/_shared/datetime_line";
+import { formatBookingLinkPromptLine } from "@/lib/booking-page/prompt-line";
 import { requireGeminiKey, transientBackoffMs } from "./gemini";
 import { judgeReply, type JudgeVerdict } from "./judge";
 import { recordGeminiUsage } from "./usage-log";
@@ -58,6 +59,11 @@ const OPERATOR_MODEL = "gemini-3.6-flash";
 const OWNER_E164 = "+16026886672";
 const BETH_EMAIL = "beth@lizdev.example.com";
 const LIZ_EMAIL = "liz@lizdev.example.com";
+/** The vanity link the coworker is told about, asserted verbatim below. */
+const BOOKING_LINK = {
+  url: "https://www.newcoworker.com/book/new-coworker",
+  title: "NC Discovery Call"
+};
 /** HQ runs on America/Phoenix; Beth and Liz are Eastern. */
 const BUSINESS_TZ = "America/Phoenix";
 
@@ -233,6 +239,9 @@ beforeAll(async () => {
     EMAIL_TOOL_ENABLED_PREAMBLE,
     currentDateTimeLine(new Date("2026-07-24T16:00:00.000Z"), BUSINESS_TZ),
     integrationsLine ?? "",
+    // The REAL booking-link hint (imported, not paraphrased), the same
+    // line production injects when the business has an enabled page.
+    formatBookingLinkPromptLine(BOOKING_LINK),
     contextBlock ?? ""
   ]
     .filter((s) => s.length > 0)
@@ -375,6 +384,136 @@ describe("Beth delegation, address supplied", () => {
       expect(verdict.answers.offers_times).toBe(true);
       expect(verdict.answers.bare_time_no_zone).toBe(false);
       expect(verdict.answers.claims_scheduled).toBe(false);
+    }
+  );
+});
+
+describe("Beth delegation, booking link requested", () => {
+  it(
+    "emails Beth the exact vanity link, books nothing, invents no URL",
+    { retry: 1, timeout: 240_000 },
+    async () => {
+      const out = await operatorTurn(
+        [],
+        "[SMS from owner] Please schedule liz thru her assistant beth for a discovery call. " +
+          `Beth is ${BETH_EMAIL}. Just email her our booking link so she can pick a time`,
+        (name) => {
+          if (name === "calendar_find_slots") return FIND_SLOTS_OK;
+          return { ok: false, message: `unexpected tool in this scenario: ${name}` };
+        }
+      );
+
+      const requests = emailTargets(out.finalText);
+      if (requests.length !== 1) {
+        console.error("live reply:", out.finalText);
+      }
+      expect(requests.length, `reply: ${out.finalText}`).toBe(1);
+      const mail = requests[0];
+      expect(mail.to.toLowerCase()).toBe(BETH_EMAIL);
+
+      // The EXACT link from the system context, character for character: a
+      // paraphrased or invented URL is a dead link in a prospect's inbox.
+      expect(mail.body, `email body: ${mail.body}`).toContain(BOOKING_LINK.url);
+
+      // Nothing is booked and nobody is texted: Beth picks the time on the
+      // page, and the page itself pages the owner when she does.
+      const committed = out.calls.filter(
+        (c) => c.name === "calendar_book_appointment" || c.name === "send_sms"
+      );
+      expect(committed, `calls: ${JSON.stringify(out.calls)}`).toEqual([]);
+
+      const verdict: JudgeVerdict = await judgeReply(
+        "the body of an email the business's assistant is sending to Beth, the executive " +
+          "assistant of a prospect named Liz, whose boss wants a 30 minute discovery call; " +
+          "the email should hand Beth a self-serve booking link",
+        mail.body,
+        {
+          sends_booking_link:
+            "Does the message present a booking or scheduling link for Beth to pick a " +
+            "time herself?",
+          claims_scheduled:
+            "Does the message state the call is already scheduled, booked, or confirmed?",
+          invents_other_url:
+            "Does the message contain any OTHER http(s) URL besides " +
+            `${BOOKING_LINK.url} (a second, different link)?`
+        }
+      );
+      if (
+        !verdict.answers.sends_booking_link ||
+        verdict.answers.claims_scheduled ||
+        verdict.answers.invents_other_url
+      ) {
+        console.error("email body:", mail.body);
+        console.error("judge verdict:", JSON.stringify(verdict));
+      }
+      expect(verdict.answers.sends_booking_link).toBe(true);
+      expect(verdict.answers.claims_scheduled).toBe(false);
+      expect(verdict.answers.invents_other_url).toBe(false);
+    }
+  );
+});
+
+describe("Beth delegation, booking link requested", () => {
+  it(
+    "emails Beth the exact vanity link, books nothing, invents no URL",
+    { retry: 1, timeout: 240_000 },
+    async () => {
+      const out = await operatorTurn(
+        [],
+        "[SMS from owner] Please schedule liz thru her assistant beth for a discovery call. " +
+          `Beth is ${BETH_EMAIL}. Just email her our booking link so she can pick a time`,
+        (name) => {
+          if (name === "calendar_find_slots") return FIND_SLOTS_OK;
+          return { ok: false, message: `unexpected tool in this scenario: ${name}` };
+        }
+      );
+
+      const requests = emailTargets(out.finalText);
+      if (requests.length !== 1) {
+        console.error("live reply:", out.finalText);
+      }
+      expect(requests.length, `reply: ${out.finalText}`).toBe(1);
+      const mail = requests[0];
+      expect(mail.to.toLowerCase()).toBe(BETH_EMAIL);
+
+      // The EXACT link from the system context, character for character: a
+      // paraphrased or invented URL is a dead link in a prospect's inbox.
+      expect(mail.body, `email body: ${mail.body}`).toContain(BOOKING_LINK.url);
+
+      // Nothing is booked and nobody is texted: Beth picks the time on the
+      // page, and the page itself pages the owner when she does.
+      const committed = out.calls.filter(
+        (c) => c.name === "calendar_book_appointment" || c.name === "send_sms"
+      );
+      expect(committed, `calls: ${JSON.stringify(out.calls)}`).toEqual([]);
+
+      const verdict: JudgeVerdict = await judgeReply(
+        "the body of an email the business's assistant is sending to Beth, the executive " +
+          "assistant of a prospect named Liz, whose boss wants a 30 minute discovery call; " +
+          "the email should hand Beth a self-serve booking link",
+        mail.body,
+        {
+          sends_booking_link:
+            "Does the message present a booking or scheduling link for Beth to pick a " +
+            "time herself?",
+          claims_scheduled:
+            "Does the message state the call is already scheduled, booked, or confirmed?",
+          invents_other_url:
+            "Does the message contain any OTHER http(s) URL besides " +
+            `${BOOKING_LINK.url} (a second, different link)?`
+        }
+      );
+      if (
+        !verdict.answers.sends_booking_link ||
+        verdict.answers.claims_scheduled ||
+        verdict.answers.invents_other_url
+      ) {
+        console.error("email body:", mail.body);
+        console.error("judge verdict:", JSON.stringify(verdict));
+      }
+      expect(verdict.answers.sends_booking_link).toBe(true);
+      expect(verdict.answers.claims_scheduled).toBe(false);
+      expect(verdict.answers.invents_other_url).toBe(false);
     }
   );
 });

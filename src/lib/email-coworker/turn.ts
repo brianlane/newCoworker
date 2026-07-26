@@ -22,6 +22,7 @@ import { NO_EM_DASH_PROMPT_LINE } from "../../../supabase/functions/_shared/sms_
 import { currentDateTimeLine } from "../../../supabase/functions/_shared/datetime_line";
 import type { EmailCoworkerThread } from "@/lib/email-coworker/threads";
 import type { InboxMessage } from "@/lib/email-coworker/mailbox";
+import { bookingLinkPromptLine } from "@/lib/booking-page/prompt-line";
 import { logger } from "@/lib/logger";
 
 /**
@@ -131,6 +132,8 @@ export function buildEmailTurnSystem(args: {
   correspondentEmail: string;
   subject: string | null;
   integrationsLine?: string | null;
+  /** Public booking page hint (see booking-page/prompt-line.ts). */
+  bookingLinkLine?: string | null;
   businessContextBlock?: string | null;
   now?: Date;
 }): string {
@@ -140,6 +143,7 @@ export function buildEmailTurnSystem(args: {
     NO_EM_DASH_PROMPT_LINE,
     currentDateTimeLine(args.now ?? new Date(), args.businessTimezone),
     args.integrationsLine ?? "",
+    args.bookingLinkLine ?? "",
     args.businessContextBlock ?? ""
   ]
     .filter((s) => s.length > 0)
@@ -160,10 +164,13 @@ export async function runEmailCoworkerTurn(args: {
   const { thread, message } = args;
   const businessId = thread.businessId;
 
-  const [integrationsLine, businessContextBlock, gates] = await Promise.all([
+  const [integrationsLine, businessContextBlock, gates, bookingLinkLine] = await Promise.all([
     buildIntegrationsStatusLine(businessId),
     buildBusinessContextBlock(businessId),
-    emailToolGates(businessId)
+    emailToolGates(businessId),
+    // The booking page link, so "just send me the calendar" from a
+    // correspondent gets the real URL, never an invented one.
+    bookingLinkPromptLine(businessId)
   ]);
 
   const systemInstruction = buildEmailTurnSystem({
@@ -171,6 +178,7 @@ export async function runEmailCoworkerTurn(args: {
     correspondentEmail: message.fromEmail,
     subject: thread.subject ?? message.subject,
     integrationsLine,
+    bookingLinkLine,
     businessContextBlock,
     ...(args.now ? { now: args.now } : {})
   });
