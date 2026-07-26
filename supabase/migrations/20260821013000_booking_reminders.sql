@@ -60,3 +60,30 @@ alter table public.email_log add constraint email_log_source_check
       'booking_reminder'
     )
   );
+
+-- Atomic, MERGE-SAFE reminder claim.
+--
+-- A read-modify-write from the app would spread a stale `reminders_sent`
+-- and could wipe the other channel's stamp (then re-send it later, which is
+-- exactly the double-send this ledger exists to prevent). Concatenating
+-- server-side keeps both stamps, and the WHERE clause makes the claim
+-- atomic: the loser of a race updates no row.
+create or replace function public.claim_booking_reminder(
+  p_booking_id uuid,
+  p_channel text
+) returns boolean
+language sql
+as $$
+  with claimed as (
+    update public.calendar_booking_dedupe
+       set reminders_sent =
+             coalesce(reminders_sent, '{}'::jsonb)
+             || jsonb_build_object(p_channel, to_char(now() at time zone 'utc', 'YYYY-MM-DD"T"HH24:MI:SS"Z"'))
+     where id = p_booking_id
+       and (reminders_sent ->> p_channel) is null
+    returning 1
+  )
+  select exists (select 1 from claimed);
+$$;
+
+grant execute on function public.claim_booking_reminder(uuid, text) to service_role;

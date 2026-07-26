@@ -73,18 +73,15 @@ function db(rows: Array<Record<string, unknown>>, claimResults: Array<{ data: un
       b[m] = vi.fn(() => b);
     }
     b.limit = vi.fn(() => Promise.resolve({ data: rows, error: null }));
-    b.update = vi.fn((row: Record<string, unknown>) => {
-      claims.push(row);
-      const u: Record<string, unknown> = {};
-      for (const m of ["eq", "is", "not"]) u[m] = vi.fn(() => u);
-      u.select = vi.fn(() =>
-        Promise.resolve(claimResults[claimIdx++] ?? { data: [{ id: "row-1" }], error: null })
-      );
-      return u;
-    });
     return b;
   });
-  return { client: { from } as never, claims };
+  // The claim is a server-side jsonb merge (claim_booking_reminder), so it
+  // rides rpc rather than an update payload.
+  const rpc = vi.fn((_fn: string, args: Record<string, unknown>) => {
+    claims.push(args);
+    return Promise.resolve(claimResults[claimIdx++] ?? { data: true, error: null });
+  });
+  return { client: { from, rpc } as never, claims };
 }
 
 beforeEach(() => {
@@ -146,8 +143,9 @@ describe("sweepBookingReminders", () => {
     expect(mockRecord).toHaveBeenCalledWith(
       expect.objectContaining({ source: "booking_reminder" })
     );
-    // Claimed before sending, on the email channel only.
-    expect(claims[0]).toMatchObject({ reminders_sent: expect.objectContaining({ email: expect.any(String) }) });
+    // Claimed before sending, on the email channel only, through the
+    // merge-safe function.
+    expect(claims[0]).toEqual({ p_booking_id: "row-1", p_channel: "email" });
     expect(mockSendSms).not.toHaveBeenCalled();
   });
 
@@ -171,7 +169,7 @@ describe("sweepBookingReminders", () => {
   });
 
   it("loses the claim race quietly (another pass is sending)", async () => {
-    const { client } = db([booking()], [{ data: [] }]);
+    const { client } = db([booking()], [{ data: false }]);
     const out = await sweepBookingReminders(SITE, client, NOW);
     expect(out.emailsSent).toBe(0);
     expect(mockSendEmail).not.toHaveBeenCalled();
@@ -195,6 +193,31 @@ describe("sweepBookingReminders", () => {
     } as never);
     mockBusiness.mockResolvedValue(null as never);
     expect((await sweepBookingReminders(SITE, db([booking()]).client, NOW)).skipped).toBe(1);
+  });
+
+  it("scans PAGE bookings only (AI, voice, and synced appointments are not opted in)", async () => {
+    const { client } = db([booking()]);
+    await sweepBookingReminders(SITE, client, NOW);
+    const from = (client as unknown as { from: ReturnType<typeof vi.fn> }).from;
+    const builder = from.mock.results[0].value as Record<string, ReturnType<typeof vi.fn>>;
+    // The manage token is what marks a public-page booking; nothing else
+    // has one.
+    expect(builder.not.mock.calls).toContainEqual(["manage_token", "is", null]);
+  });
+
+  it("claims both channels without either wiping the other's stamp", async () => {
+    // Both due in one pass: the merge happens server-side, so the second
+    // claim cannot drop the first channel's stamp (which a later pass would
+    // otherwise re-send).
+    const { client, claims } = db([
+      booking({ start_at: new Date(NOW + 90 * 60_000).toISOString(), reminders_sent: {} })
+    ]);
+    const out = await sweepBookingReminders(SITE, client, NOW);
+    expect(out).toMatchObject({ emailsSent: 1, textsSent: 1 });
+    expect(claims).toEqual([
+      { p_booking_id: "row-1", p_channel: "email" },
+      { p_booking_id: "row-1", p_channel: "sms" }
+    ]);
   });
 
   it("is a cheap no-op with nothing upcoming", async () => {
@@ -323,7 +346,8 @@ describe("sweepBookingReminders", () => {
         }
         b.limit = vi.fn(() => Promise.resolve({ data: null, error: { message: "rls" } }));
         return b;
-      })
+      }),
+      rpc: vi.fn(() => Promise.resolve({ data: true, error: null }))
     } as never;
     await expect(sweepBookingReminders(SITE, failingRead, NOW)).rejects.toThrow(
       /upcomingBookings: rls/
@@ -337,14 +361,9 @@ describe("sweepBookingReminders", () => {
           b[m] = vi.fn(() => b);
         }
         b.limit = vi.fn(() => Promise.resolve({ data: [booking()], error: null }));
-        b.update = vi.fn(() => {
-          const u: Record<string, unknown> = {};
-          for (const m of ["eq", "is", "not"]) u[m] = vi.fn(() => u);
-          u.select = vi.fn(() => Promise.resolve({ data: null, error: { message: "denied" } }));
-          return u;
-        });
         return b;
-      })
+      }),
+      rpc: vi.fn(() => Promise.resolve({ data: null, error: { message: "denied" } }))
     } as never;
     const out = await sweepBookingReminders(SITE, failingClaim, NOW);
     expect(out.skipped).toBe(1);
@@ -360,7 +379,8 @@ describe("sweepBookingReminders", () => {
         }
         b.limit = vi.fn(() => Promise.resolve({ data: null, error: null }));
         return b;
-      })
+      }),
+      rpc: vi.fn(() => Promise.resolve({ data: true, error: null }))
     } as never;
     expect((await sweepBookingReminders(SITE, nullScan, NOW)).scanned).toBe(0);
 

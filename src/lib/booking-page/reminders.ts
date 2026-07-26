@@ -85,6 +85,11 @@ async function upcomingBookings(db: SupabaseClient, nowMs: number): Promise<Remi
     .from("calendar_booking_dedupe")
     .select(COLUMNS)
     .not("event_id", "is", null)
+    // Public-page bookings ONLY. Every page booking gets a manage token, and
+    // nothing else does, so this is what keeps page reminders away from AI,
+    // voice, and synced provider appointments (whose attendees never opted
+    // into them).
+    .not("manage_token", "is", null)
     .gte("start_at", new Date(nowMs).toISOString())
     .lt("start_at", new Date(nowMs + REMINDER_SCAN_HOURS * 60 * 60 * 1000).toISOString())
     .order("start_at", { ascending: true })
@@ -103,17 +108,16 @@ async function claimReminder(
   row: ReminderRow,
   channel: ReminderChannel
 ): Promise<boolean> {
-  const stamps = { ...(row.reminders_sent ?? {}), [channel]: new Date().toISOString() };
-  const { data, error } = await db
-    .from("calendar_booking_dedupe")
-    .update({ reminders_sent: stamps })
-    .eq("id", row.id)
-    // Conditional on the channel still being unstamped: this is what makes
-    // the claim atomic, so two overlapping passes cannot both send.
-    .is(`reminders_sent->>${channel}`, null)
-    .select("id");
+  // Server-side jsonb concat, not a read-modify-write: spreading the scan
+  // row's stamps here would let the second channel's write drop the first
+  // channel's stamp (which a later pass would then re-send), and the
+  // WHERE clause inside the function is what makes the claim atomic.
+  const { data, error } = await db.rpc("claim_booking_reminder", {
+    p_booking_id: row.id,
+    p_channel: channel
+  });
   if (error) throw new Error(`claimReminder: ${error.message}`);
-  return (data ?? []).length > 0;
+  return data === true;
 }
 
 async function sendEmailReminder(
