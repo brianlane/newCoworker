@@ -15,6 +15,8 @@ import {
   moveManagedBooking,
   recordPlatformBooking,
   rotateBookingPageToken,
+  countUpcomingByAssignee,
+  stampAssigneeIfUnset,
   stampAttendeeContact,
   stampManageToken,
   upsertBookingPage
@@ -660,6 +662,56 @@ describe("reminder settings and attendee contact", () => {
     });
   });
 
+  it("fills a missing assignee without overwriting one that exists", async () => {
+    const { client, calls } = fakeDb([{ data: [{ id: "row-1" }], error: null }]);
+    expect(
+      await stampAssigneeIfUnset(BIZ, "phone:+14805550100", "2026-07-27T16:00:00Z", "m-ana", client)
+    ).toBe(true);
+    expect(calls.find((c) => c.method === "update")?.args[0]).toEqual({
+      assignee_member_id: "m-ana"
+    });
+    // Conditional on the gap: re-resolving can name someone else, and
+    // overwriting would reassign work already on a calendar.
+    expect(calls.filter((c) => c.method === "is").map((c) => c.args)).toContainEqual([
+      "assignee_member_id",
+      null
+    ]);
+
+    // An already-assigned booking answers false: a repair, not a reassign.
+    const { client: taken } = fakeDb([{ data: [], error: null }]);
+    expect(await stampAssigneeIfUnset(BIZ, "k", "2026-07-27T16:00:00Z", "m-ana", taken)).toBe(
+      false
+    );
+    const { client: nullData } = fakeDb([{ data: null, error: null }]);
+    expect(await stampAssigneeIfUnset(BIZ, "k", "2026-07-27T16:00:00Z", "m-ana", nullData)).toBe(
+      false
+    );
+
+    const { client: failing } = fakeDb([{ data: null, error: { message: "denied" } }]);
+    await expect(
+      stampAssigneeIfUnset(BIZ, "k", "2026-07-27T16:00:00Z", "m-ana", failing)
+    ).rejects.toThrow("stampAssigneeIfUnset: denied");
+
+    const { client: fallback } = fakeDb([{ data: [], error: null }]);
+    mockClientFactory.mockResolvedValue(fallback);
+    await stampAssigneeIfUnset(BIZ, "k", "2026-07-27T16:00:00Z", "m-ana");
+    expect(mockClientFactory).toHaveBeenCalled();
+  });
+
+  it("stamps who holds the booking when the page assigns one", async () => {
+    const { client, calls } = fakeDb([{ data: [{ id: "row-1" }], error: null }]);
+    await stampAttendeeContact(
+      BIZ,
+      "phone:+14805550100",
+      "2026-07-27T16:00:00Z",
+      { name: "Liz", assigneeMemberId: "m-ana" },
+      client
+    );
+    expect(calls.find((c) => c.method === "update")?.args[0]).toMatchObject({
+      assignee_member_id: "m-ana"
+    });
+  });
+
   it("stamps the attendee's email and name for reminder addressing", async () => {
     const { client, calls } = fakeDb([{ error: null }]);
     await stampAttendeeContact(
@@ -706,6 +758,105 @@ describe("reminder settings and attendee contact", () => {
     const { client } = fakeDb([{ error: null }]);
     mockClientFactory.mockResolvedValue(client);
     await stampAttendeeContact(BIZ, "k", "2026-07-27T16:00:00Z", { email: "a@b.co" });
+    expect(mockClientFactory).toHaveBeenCalled();
+  });
+});
+
+describe("assignment settings and per-assignee load", () => {
+  it("refuses an unknown mode, and a fixed page with nobody named", async () => {
+    const { client } = fakeDb([{ data: ROW, error: null }, { data: ROW, error: null }]);
+    await expect(
+      upsertBookingPage(BIZ, { assignmentMode: "pooled" }, client)
+    ).rejects.toThrow(/Unknown assignment mode/);
+    // 'fixed' with no employee silently behaves like 'any', whether the
+    // employee is cleared, omitted, or blank.
+    for (const patch of [
+      { assignmentMode: "fixed", employeeId: null },
+      { assignmentMode: "fixed", employeeId: "   " }
+    ]) {
+      await expect(upsertBookingPage(BIZ, patch, client)).rejects.toThrow(/Pick the employee/);
+    }
+
+    // Clearing the employee on a page ALREADY fixed is the same mistake
+    // as switching to fixed without naming anyone: the resulting state is
+    // what gets checked.
+    const { client: fixedPage } = fakeDb([
+      { data: { ...ROW, assignment_mode: "fixed", employee_id: "m-ana" }, error: null }
+    ]);
+    await expect(
+      upsertBookingPage(BIZ, { employeeId: null }, fixedPage)
+    ).rejects.toThrow(/Pick the employee/);
+
+    // Omitted is refused only when the STORED page has nobody either:
+    // "keep the employee already on this page" is a legitimate patch.
+    const { client: bare } = fakeDb([{ data: { ...ROW, employee_id: null }, error: null }]);
+    await expect(
+      upsertBookingPage(BIZ, { assignmentMode: "fixed" }, bare)
+    ).rejects.toThrow(/Pick the employee/);
+
+    const { client: named } = fakeDb([
+      { data: { ...ROW, employee_id: "m-ana" }, error: null },
+      { data: ROW, error: null }
+    ]);
+    await expect(
+      upsertBookingPage(BIZ, { assignmentMode: "fixed" }, named)
+    ).resolves.toBeTruthy();
+
+    // A cleared employee on an unassigned page stays legal.
+    const { client: anyPage } = fakeDb([
+      { data: { ...ROW }, error: null },
+      { data: ROW, error: null }
+    ]);
+    await expect(upsertBookingPage(BIZ, { employeeId: null }, anyPage)).resolves.toBeTruthy();
+  });
+
+  it("writes the mode and the employee", async () => {
+    const { client, calls } = fakeDb([{ data: ROW, error: null }, { data: ROW, error: null }]);
+    await upsertBookingPage(
+      BIZ,
+      { assignmentMode: "fixed", employeeId: "22222222-2222-4222-8222-222222222222" },
+      client
+    );
+    expect(calls.find((c) => c.method === "update")?.args[0]).toMatchObject({
+      assignment_mode: "fixed",
+      employee_id: "22222222-2222-4222-8222-222222222222"
+    });
+  });
+
+  it("counts each employee's upcoming assigned bookings", async () => {
+    const { client } = fakeDb([
+      {
+        data: [
+          { assignee_member_id: "m-ana" },
+          { assignee_member_id: "m-ana" },
+          { assignee_member_id: "m-ben" },
+          // Defensive: a null slips through the filter in no scenario, but
+          // it must never become a "null" bucket.
+          { assignee_member_id: null }
+        ],
+        error: null
+      }
+    ]);
+    const counts = await countUpcomingByAssignee(BIZ, client);
+    expect(counts.get("m-ana")).toBe(2);
+    expect(counts.get("m-ben")).toBe(1);
+    expect(counts.size).toBe(2);
+  });
+
+  it("answers an empty map with nothing booked, and throws on a read failure", async () => {
+    const { client } = fakeDb([{ data: null, error: null }]);
+    expect((await countUpcomingByAssignee(BIZ, client)).size).toBe(0);
+
+    const { client: failing } = fakeDb([{ data: null, error: { message: "rls" } }]);
+    await expect(countUpcomingByAssignee(BIZ, failing)).rejects.toThrow(
+      "countUpcomingByAssignee: rls"
+    );
+  });
+
+  it("uses the service client by default", async () => {
+    const { client } = fakeDb([{ data: [], error: null }]);
+    mockClientFactory.mockResolvedValue(client);
+    expect((await countUpcomingByAssignee(BIZ)).size).toBe(0);
     expect(mockClientFactory).toHaveBeenCalled();
   });
 });

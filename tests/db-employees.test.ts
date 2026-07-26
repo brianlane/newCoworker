@@ -29,6 +29,7 @@ import {
   listTeamMembers,
   listTimeOff,
   setTimeOffCalendarEventId,
+  markMemberOffered,
   updateTeamMember,
   type TeamMemberRow,
   type TimeOffRow
@@ -255,6 +256,35 @@ describe("createTeamMember", () => {
       phoneE164: created.phone_e164,
       email: created.email
     });
+  });
+});
+
+describe("markMemberOffered", () => {
+  it("advances the round-robin tiebreak for that member", async () => {
+    // Without this the tiebreak is frozen and the same person always wins
+    // among equally loaded candidates.
+    const now = new Date("2026-07-27T16:00:00.000Z");
+    const { client, fromCalls } = makeClient({ error: null });
+    await markMemberOffered(MEMBER_ID, client, now);
+    expect(fromCalls[0]!.table).toBe("ai_flow_team_members");
+    expect(fromCalls[0]!.calls.find((c) => c.name === "update")?.args[0]).toEqual({
+      last_offered_at: "2026-07-27T16:00:00.000Z"
+    });
+    expect(fromCalls[0]!.calls.find((c) => c.name === "eq")?.args).toEqual(["id", MEMBER_ID]);
+  });
+
+  it("surfaces a write failure to its caller", async () => {
+    const { client } = makeClient({ error: { message: "denied" } });
+    await expect(markMemberOffered(MEMBER_ID, client)).rejects.toThrow(
+      "markMemberOffered: denied"
+    );
+  });
+
+  it("falls back to the default service client", async () => {
+    const { client } = makeClient({ error: null });
+    defaultClientSpy.mockReturnValue(client);
+    await markMemberOffered(MEMBER_ID);
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
   });
 });
 

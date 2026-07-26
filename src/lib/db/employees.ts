@@ -379,3 +379,24 @@ export async function listEmployeeRoutingStats(
   if (error) throw new Error(`listEmployeeRoutingStats: ${error.message}`);
   return aggregateRoutingStats((data ?? []) as RoutingRunLike[]);
 }
+
+/**
+ * Record that a member was just handed work.
+ *
+ * `last_offered_at` is the tiebreak when two candidates carry the same
+ * load; without advancing it the tiebreak is frozen and the same person
+ * always wins among equals. Best-effort by contract: the caller has already
+ * given them the booking.
+ */
+export async function markMemberOffered(
+  memberId: string,
+  client?: SupabaseClient,
+  now = new Date()
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("ai_flow_team_members")
+    .update({ last_offered_at: now.toISOString() })
+    .eq("id", memberId);
+  if (error) throw new Error(`markMemberOffered: ${error.message}`);
+}

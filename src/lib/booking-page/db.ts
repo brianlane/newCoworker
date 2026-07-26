@@ -39,6 +39,10 @@ export type BookingPageRow = {
   reminder_email_hours: number;
   /** Hours before the start for the SMS reminder; 0 disables just that one. */
   reminder_sms_hours: number;
+  /** 'any' | 'round_robin' | 'fixed'; see booking-page/assignment.ts. */
+  assignment_mode: string;
+  /** The employee a 'fixed' page books; null otherwise. */
+  employee_id: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -48,6 +52,7 @@ const ALL_COLUMNS =
   "max_advance_days,buffer_minutes,max_daily_bookings,require_staff_on_shift," +
   "description,waitlist_enabled,waitlist_offer_ttl_minutes,slug,title," +
   "send_confirmation_email,reminders_enabled,reminder_email_hours,reminder_sms_hours," +
+  "assignment_mode,employee_id," +
   "created_at,updated_at";
 
 /** Resolve a page by its public token. Enabled pages only. */
@@ -114,6 +119,9 @@ export type BookingPageSettingsPatch = {
   reminderEmailHours?: number;
   /** Hours before the start; 0 turns off just the text reminder. */
   reminderSmsHours?: number;
+  assignmentMode?: string;
+  /** Required by 'fixed'; null clears it. */
+  employeeId?: string | null;
   /** Vanity URL slug; null/blank clears back to the token-only URL. */
   slug?: string | null;
   /** Public event title; null/blank restores the localized default. */
@@ -201,6 +209,12 @@ function validatePatch(patch: BookingPageSettingsPatch): void {
   if (patch.title !== undefined && patch.title !== null && patch.title.length > 120) {
     throw new BookingPageValidationError("Title must be 120 characters or fewer");
   }
+  if (
+    patch.assignmentMode !== undefined &&
+    !["any", "round_robin", "fixed"].includes(patch.assignmentMode)
+  ) {
+    throw new BookingPageValidationError("Unknown assignment mode");
+  }
   for (const [value, label] of [
     [patch.reminderEmailHours, "Email reminder"],
     [patch.reminderSmsHours, "Text reminder"]
@@ -252,7 +266,9 @@ function patchColumns(patch: BookingPageSettingsPatch): Record<string, unknown> 
       : { reminder_email_hours: patch.reminderEmailHours }),
     ...(patch.reminderSmsHours === undefined
       ? {}
-      : { reminder_sms_hours: patch.reminderSmsHours })
+      : { reminder_sms_hours: patch.reminderSmsHours }),
+    ...(patch.assignmentMode === undefined ? {} : { assignment_mode: patch.assignmentMode }),
+    ...(patch.employeeId === undefined ? {} : { employee_id: patch.employeeId })
   };
 }
 
@@ -280,6 +296,18 @@ export async function upsertBookingPage(
   validatePatch(patch);
   const db = client ?? (await createSupabaseServiceClient());
   const existing = await getBookingPageForBusiness(businessId, db);
+
+  // A 'fixed' page with nobody named silently behaves like an unassigned
+  // one, so the RESULTING state is what gets checked, not the patch shape:
+  // switching to fixed without naming anyone, and clearing the employee on
+  // a page already fixed, are the same mistake. Checked here rather than in
+  // validatePatch because only this scope can see what is stored.
+  const effectiveMode = patch.assignmentMode ?? existing?.assignment_mode ?? "any";
+  const effectiveEmployee =
+    patch.employeeId === undefined ? (existing?.employee_id ?? null) : patch.employeeId;
+  if (effectiveMode === "fixed" && !effectiveEmployee?.trim()) {
+    throw new BookingPageValidationError("Pick the employee this page books");
+  }
 
   if (!existing) {
     const { data, error } = await db
@@ -548,7 +576,12 @@ export async function stampAttendeeContact(
   businessId: string,
   attendeeKey: string,
   startIso: string,
-  contact: { email?: string | null; name?: string | null },
+  contact: {
+    email?: string | null;
+    name?: string | null;
+    /** Who holds it, for a round-robin or per-employee page. */
+    assigneeMemberId?: string | null;
+  },
   client?: SupabaseClient
 ): Promise<boolean> {
   const email = contact.email?.trim() || null;
@@ -558,6 +591,9 @@ export async function stampAttendeeContact(
     .from("calendar_booking_dedupe")
     .update({
       booking_source: BOOKING_PAGE_SOURCE,
+      ...(contact.assigneeMemberId === undefined
+        ? {}
+        : { assignee_member_id: contact.assigneeMemberId }),
       ...(email ? { attendee_email: email } : {}),
       ...(name ? { attendee_name: name } : {})
     })
@@ -568,5 +604,65 @@ export async function stampAttendeeContact(
     // the booking unreachable for reminders with no sign anything was wrong.
     .select("id");
   if (error) throw new Error(`stampAttendeeContact: ${error.message}`);
+  return (data ?? []).length > 0;
+}
+
+/**
+ * Each employee's upcoming assigned load, for the round-robin choice.
+ *
+ * Counting real bookings rather than rotating a pointer means a week that
+ * emptied out to cancellations self-corrects instead of compounding. Only
+ * confirmed, still-upcoming page bookings count.
+ */
+export async function countUpcomingByAssignee(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<Map<string, number>> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("calendar_booking_dedupe")
+    .select("assignee_member_id")
+    .eq("business_id", businessId)
+    .not("event_id", "is", null)
+    .not("assignee_member_id", "is", null)
+    .gte("start_at", new Date().toISOString());
+  if (error) throw new Error(`countUpcomingByAssignee: ${error.message}`);
+  const counts = new Map<string, number>();
+  for (const row of (data ?? []) as Array<{ assignee_member_id: string | null }>) {
+    const id = row.assignee_member_id;
+    if (!id) continue;
+    counts.set(id, (counts.get(id) ?? 0) + 1);
+  }
+  return counts;
+}
+
+/**
+ * Fill in a booking's assignee ONLY if it does not have one.
+ *
+ * For the idempotent resubmit: the original booking's assignment is the
+ * right answer, and re-resolving can legitimately name someone else (loads
+ * moved, shifts changed), so a blind write would silently reassign work
+ * that is already on somebody's calendar. Conditional on the column still
+ * being null, so the retry only repairs a genuine gap.
+ */
+export async function stampAssigneeIfUnset(
+  businessId: string,
+  attendeeKey: string,
+  startIso: string,
+  memberId: string,
+  client?: SupabaseClient
+): Promise<boolean> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("calendar_booking_dedupe")
+    .update({ assignee_member_id: memberId })
+    .eq("business_id", businessId)
+    .eq("attendee_key", attendeeKey)
+    .eq("start_at", startIso)
+    .is("assignee_member_id", null)
+    // Whether the gap was actually filled, so the caller can tell a repair
+    // from a no-op and only then advance the round-robin tiebreak.
+    .select("id");
+  if (error) throw new Error(`stampAssigneeIfUnset: ${error.message}`);
   return (data ?? []).length > 0;
 }

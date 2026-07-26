@@ -1396,7 +1396,16 @@
       "reminderSmsLabel": "Recordatorio por texto",
       "reminderOff": "Desactivado",
       "reminderHoursBefore": "{hours} h antes",
-      "remindersHint": "Los recordatorios se envían al teléfono y al correo que el cliente dio al reservar. Los textos cuentan para tu límite mensual de SMS."
+      "remindersHint": "Los recordatorios se envían al teléfono y al correo que el cliente dio al reservar. Los textos cuentan para tu límite mensual de SMS.",
+      "assignTitle": "A quién reserva esta página",
+      "assignSubtitle": "La disponibilidad sigue tu respuesta, para no ofrecer horarios que tu equipo no pueda cubrir.",
+      "assignModeLabel": "Las reservas van a",
+      "assignModeAny": "El negocio (nadie en particular)",
+      "assignModeRoundRobin": "Repartir en el equipo",
+      "assignModeFixed": "Una persona",
+      "assignEmployeeLabel": "Persona",
+      "assignHint": "Al repartir en el equipo, cada reserva va a quien esté en turno con menos citas próximas.",
+      "assignNoRoster": "Agrega empleados para reservar con una persona específica o repartir en el equipo."
     },
     "integrationsClaude": {
       "connectedBadge": "Conectado",

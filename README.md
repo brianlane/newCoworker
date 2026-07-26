@@ -850,6 +850,19 @@ engine's roster evaluators), and the upcoming-bookings list.
   opted in) and a booking whose manage-link stamp failed is still reminded.
   Entry point `/api/internal/booking-reminder-sweep`, kicked ~1/min by the
   ai-flow-worker tick.
+- **Who the booking is for** (`src/lib/booking-page/assignment.ts`): a page
+  books either the business as a whole (`any`, the original behavior, no
+  assignee recorded), the team (`round_robin`), or one employee (`fixed`).
+  The mode is visible to the visitor AS AVAILABILITY: an assigned page reads
+  the roster regardless of the require-staff toggle and offers only times
+  somebody who could take the booking is actually working. Round robin picks
+  the eligible member with the LIGHTEST upcoming load (tie broken by who has
+  waited longest, then a stable id), so a week emptied by cancellations
+  self-corrects instead of a rotation pointer compounding the imbalance. A
+  `fixed` page whose employee left falls back to the whole roster rather than
+  showing no times, and a booking that cannot be assigned (nobody on shift by
+  the time it lands) is recorded unassigned and logged: the visitor already
+  holds the time, so a bookkeeping gap never becomes a lost appointment.
 - Vagaro/Calendly-resolved tenants deliberately do NOT get the page (Vagaro
   has its own booking site; link-mode Calendly cannot book on the invitee's
   behalf); the Bookings page explains this and calendar resolution order is
