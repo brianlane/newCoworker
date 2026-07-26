@@ -1859,20 +1859,23 @@ function main(): void {
           //
           // Written BEFORE the resume below so the worker never reads a session
           // that has not been filled in yet.
-          if (intake && geminiGetLead) {
+          if (intake) {
             try {
-              const captured = geminiGetLead();
+              // Re-read rather than reuse the context parsed at attach. Two
+              // things change DURING the call: a voice_brief step appends to the
+              // note, and a `wait_for_call` step stamps `flow_run` when it parks
+              // (about a minute in). The link read at attach is therefore null
+              // for exactly the calls this feature exists for.
+              const { data: liveRow } = await supabase
+                .from("voice_handoff_sessions")
+                .select("context")
+                .eq("call_control_id", callControlId)
+                .maybeSingle();
+              const liveCtx = ((liveRow as { context?: Record<string, unknown> } | null)
+                ?.context ?? {}) as Record<string, unknown>;
+              const liveAi = (liveCtx.ai_takeover ?? {}) as Record<string, unknown>;
+              const captured = geminiGetLead ? geminiGetLead() : null;
               if (captured && Object.keys(captured).length > 0) {
-                const { data: liveRow } = await supabase
-                  .from("voice_handoff_sessions")
-                  .select("context")
-                  .eq("call_control_id", callControlId)
-                  .maybeSingle();
-                // Re-read rather than reuse the context parsed at attach: a
-                // voice_brief step may have appended to it during the call.
-                const liveCtx = ((liveRow as { context?: Record<string, unknown> } | null)
-                  ?.context ?? {}) as Record<string, unknown>;
-                const liveAi = (liveCtx.ai_takeover ?? {}) as Record<string, unknown>;
                 await supabase
                   .from("voice_handoff_sessions")
                   .update({
@@ -1883,19 +1886,17 @@ function main(): void {
                   })
                   .eq("call_control_id", callControlId);
               }
+              // Release a flow parked on this call, using the link as it stands
+              // NOW. Ordered after the write above so the worker can never wake
+              // to a session whose captured fields have not landed yet — this is
+              // why the bridge owns the resume and the call-end webhook does not
+              // (the overdue sweep is the backstop for a bridge that dies here).
+              const liveLink = (liveCtx.flow_run ?? null) as FlowRunLink | null;
+              if (liveLink && callDirection === "inbound") {
+                await resumeFlowRunWithCallOutcome(supabase, liveLink, "answered");
+              }
             } catch (err) {
-              console.error("voice-bridge: persist captured lead failed", err);
-            }
-          }
-          // Release a flow parked on this call (`wait_for_call`). The bridge does
-          // it rather than the call-end webhook so the captured fields above are
-          // always already on the session when the worker picks the run back up.
-          // First-writer-wins, and the overdue sweep backstops a miss.
-          if (intake && intakeFlowRun && callDirection === "inbound") {
-            try {
-              await resumeFlowRunWithCallOutcome(supabase, intakeFlowRun, "answered");
-            } catch (err) {
-              console.error("voice-bridge: resume parked run failed", err);
+              console.error("voice-bridge: persist captured lead / resume failed", err);
             }
           }
           // Only notify when the Gemini bridge actually ran (geminiGetLead is

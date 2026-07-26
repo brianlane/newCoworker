@@ -706,13 +706,13 @@ async function handleHandoffLifecycle(
     context?: { flow_run?: FlowRunLink } | null;
   };
   const priorStatus = String(sessEnd.status ?? "");
-  // Backstop for a run parked on this call by a `wait_for_call` step. The BRIDGE
-  // normally resumes it at teardown, because it writes the captured lead fields
-  // first and the worker wants those; this covers a bridge that died without
-  // getting there. First-writer-wins, so the usual case is a no-op here.
-  if (priorStatus === "ai_intake" && sessEnd.context?.flow_run) {
-    await resumeFlowRunWithCallOutcome(supabase, sessEnd.context.flow_run, "answered");
-  }
+  // A run parked on this call by a `wait_for_call` step is deliberately NOT
+  // resumed here. The bridge owns that resume because it writes the captured
+  // lead fields first, and this webhook races its teardown: resuming from here
+  // could wake the worker against a session whose capture blob has not landed,
+  // losing the seller's phone number, which is the whole point of the step. A
+  // bridge that dies before it gets there is covered by resume_overdue_call_waits
+  // (the same no-webhook backstop place_ai_call relies on for its transfers).
   await supabase
     .from("voice_handoff_sessions")
     .update({ status: "done" })

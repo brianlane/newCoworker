@@ -154,7 +154,7 @@ import type {
 } from "../_shared/ai_flows/types.ts";
 import { multiOfferHeadsUpLine, type OfferRouting } from "../_shared/ai_flows/routing.ts";
 import { parseEtaMinutes } from "../_shared/ai_flows/claim_timeframe.ts";
-import { capturedCallVars } from "../_shared/ai_flows/call_capture.ts";
+import { capturedCallVars, capturedSpoken } from "../_shared/ai_flows/call_capture.ts";
 
 // The actual createClient(url, key) call infers SupabaseClient<any, "public", any>,
 // but `ReturnType<typeof createClient>` resolves to <unknown, never, GenericSchema>
@@ -6309,15 +6309,17 @@ async function waitForCallStep(
     // Empty-only, so a value the partner DID release keeps winning.
     const filled: string[] = [];
     for (const { from, to } of action.backfill) {
-      const spoken = hydrated[`${action.capturePrefix}${from}`];
-      if (typeof spoken !== "string" || !spoken) continue;
+      const spoken = capturedSpoken(hydrated, action.capturePrefix, from);
+      if (!spoken) continue;
       if (!isEmptyVarValue(scope.vars[to])) continue;
       scope.vars[to] = spoken;
       filled.push(to);
     }
     scope.vars[action.saveAs] = outcome;
     scope.vars[action.marker] = "1";
-    const names = Object.keys(hydrated);
+    // The standard fields are always published (as "none"), so count only the
+    // ones the AI genuinely came away with.
+    const names = Object.keys(hydrated).filter((k) => !isEmptyVarValue(hydrated[k]));
     if (names.length > 0) {
       appendActionTaken(scope, `picked up ${names.length} detail(s) the AI captured on the call`);
     }

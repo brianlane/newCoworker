@@ -5,7 +5,11 @@ import {
   validateDefinitionSemantics
 } from "@/lib/ai-flows/schema";
 import { planStep } from "../supabase/functions/_shared/ai_flows/steps";
-import { capturedCallVars, capturedVarSuffix } from "../supabase/functions/_shared/ai_flows/call_capture";
+import {
+  capturedCallVars,
+  capturedSpoken,
+  capturedVarSuffix
+} from "../supabase/functions/_shared/ai_flows/call_capture";
 import type { FlowStep } from "../supabase/functions/_shared/ai_flows/types";
 
 const PARTNER = "+14159851909";
@@ -186,33 +190,50 @@ describe("wait_for_call: planning", () => {
 });
 
 describe("capturedCallVars", () => {
+  const NONE = {
+    call_name: "none",
+    call_phone: "none",
+    call_email: "none",
+    call_address: "none",
+    call_timeframe: "none",
+    call_notes: "none"
+  };
+
   it("namespaces what the AI captured", () => {
-    expect(
-      capturedCallVars({ name: "Duane", phone: "+16025550100" }, "call_")
-    ).toEqual({ call_name: "Duane", call_phone: "+16025550100" });
+    expect(capturedCallVars({ name: "Duane", phone: "+16025550100" }, "call_")).toEqual({
+      ...NONE,
+      call_name: "Duane",
+      call_phone: "+16025550100"
+    });
   });
 
-  it("drops blanks so an absent detail stays absent for a when guard", () => {
-    // Writing "" would make `{ var: "call_phone", notEquals: "none" }` pass on a
-    // call where the AI never got a number.
+  it('publishes "none" for what the AI did not get, so a label never dangles', () => {
+    // A team text reading "Seller said on the call: " is the failure this
+    // avoids, and `notEquals: "none"` needs a real value to test against.
     expect(capturedCallVars({ phone: "   ", name: "Duane" }, "call_")).toEqual({
+      ...NONE,
       call_name: "Duane"
     });
+    expect(capturedCallVars(null, "call_")).toEqual(NONE);
+    expect(capturedCallVars(undefined, "call_")).toEqual(NONE);
+    expect(capturedCallVars({ phone: 42 } as never, "call_")).toEqual(NONE);
   });
 
   it("normalizes owner-authored capture-field names into legal vars", () => {
     // captureFields is free text ("reason for calling"), so it cannot be
     // trusted to already be var-shaped.
     expect(capturedCallVars({ "Reason For Calling!": "downsizing" }, "call_")).toEqual({
+      ...NONE,
       call_reason_for_calling: "downsizing"
     });
     expect(capturedVarSuffix("  --  ")).toBe("");
-    expect(capturedCallVars({ "!!": "x" }, "call_")).toEqual({});
+    expect(capturedCallVars({ "!!": "x" }, "call_")).toEqual(NONE);
   });
 
-  it("ignores a missing or non-object captured blob", () => {
-    expect(capturedCallVars(null, "call_")).toEqual({});
-    expect(capturedCallVars(undefined, "call_")).toEqual({});
-    expect(capturedCallVars({ phone: 42 } as never, "call_")).toEqual({});
+  it("capturedSpoken reads through the none sentinel", () => {
+    const vars = capturedCallVars({ phone: "+16025550100" }, "call_");
+    expect(capturedSpoken(vars, "call_", "phone")).toBe("+16025550100");
+    expect(capturedSpoken(vars, "call_", "email")).toBe("");
+    expect(capturedSpoken({}, "call_", "phone")).toBe("");
   });
 });
