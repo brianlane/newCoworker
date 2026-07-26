@@ -695,7 +695,7 @@ async function handleHandoffLifecycle(
   if (!callControlId) return { handled: false, response: jsonOk("ignored_hangup") };
   const { data: sessRow } = await supabase
     .from("voice_handoff_sessions")
-    .select("call_control_id, status, business_id, from_e164, context")
+    .select("call_control_id, status, business_id, from_e164")
     .eq("call_control_id", callControlId)
     .maybeSingle();
   if (!sessRow) return { handled: false, response: jsonOk("ignored_hangup") };
@@ -703,7 +703,6 @@ async function handleHandoffLifecycle(
     status?: string;
     business_id?: string;
     from_e164?: string;
-    context?: { flow_run?: FlowRunLink } | null;
   };
   const priorStatus = String(sessEnd.status ?? "");
   // A run parked on this call by a `wait_for_call` step is deliberately NOT

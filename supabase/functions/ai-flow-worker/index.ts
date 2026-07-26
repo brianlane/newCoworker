@@ -6263,7 +6263,11 @@ async function voiceBriefStep(
 /** The most recent AI-intake session for a partner line, live or finished. */
 type CallSessionRow = {
   status?: string;
-  context?: { ai_takeover?: { captured?: Record<string, unknown> } | null } | null;
+  context?: {
+    ai_takeover?: { captured?: Record<string, unknown> } | null;
+    /** Stamped by voice_link_call_run when a run parks on this call. */
+    flow_run?: { run_id?: unknown } | null;
+  } | null;
 };
 
 /**
@@ -6374,7 +6378,7 @@ async function waitForCallStep(
     // than continuing against the row we read before the RPC.
     sess = await readSession();
     if (sess?.status === "ai_intake") {
-      const existing = (sess.context?.flow_run ?? null) as { run_id?: unknown } | null;
+      const existing = sess.context?.flow_run ?? null;
       // Already ours: a worker crash between the link and the park write. Park.
       if (existing?.run_id === run.id) return park();
       // Another run owns this call. Don't park on a link that will never resume
