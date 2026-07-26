@@ -404,11 +404,14 @@ describe("interpreting can END, so staff get their assistant back", () => {
   });
 
   it("cancels the interpreter ceiling on exit so it cannot tear down a normal call", () => {
-    const guard = src.slice(src.indexOf('if (name === "stop_translator_mode")'));
-    expect(guard.slice(0, 1400)).toContain("clearTimeout(translatorCeilingTimer)");
-    // Belt and braces: the ceiling itself also re-checks the flag.
+    const stop = src.slice(src.indexOf('if (name === "stop_translator_mode") {\n          if ('));
+    const body = stop.slice(0, stop.indexOf("emitDiag(\"voice_bridge_translator_mode_exited\""));
+    expect(body).toContain("clearTimeout(translatorCeilingTimer)");
+    // Belt and braces: the ceiling itself also re-checks the flag at fire time.
     const ceiling = src.slice(src.indexOf("const scheduleTranslatorCeiling"));
-    expect(ceiling.slice(0, 900)).toContain("if (ended || !translatorActive) return;");
+    expect(ceiling.slice(0, ceiling.indexOf("void (async () => {"))).toContain(
+      "if (ended || !translatorActive) return;"
+    );
   });
 
   it("treats a stop request when not interpreting as a no-op", () => {
@@ -418,6 +421,45 @@ describe("interpreting can END, so staff get their assistant back", () => {
   it("records how interpreting began at both entry points", () => {
     expect(src).toContain('translatorEntry = "staff_request"');
     expect(src).toContain('translatorEntry = "transfer"');
+  });
+
+  it("sends the handback cue BEFORE flipping state, mirroring the entry path", () => {
+    // Clearing the flags first and then throwing on the cue would report a
+    // handback that never happened: the model keeps interpreting while the
+    // ceiling that bounded it is already cancelled.
+    const stop = src.slice(src.indexOf('if (name === "stop_translator_mode") {\n          if ('));
+    const body = stop.slice(0, stop.indexOf("emitDiag(\"voice_bridge_translator_mode_exited\""));
+    const cueAt = body.indexOf("translatorModeEndCue");
+    const clearAt = body.indexOf("translatorActive = false");
+    expect(cueAt).toBeGreaterThan(-1);
+    expect(clearAt).toBeGreaterThan(cueAt);
+    // And a failed cue keeps interpreting rather than reporting success.
+    expect(body).toContain("could not stop interpreting");
+  });
+
+  it("re-arms the session cap on exit, since both bounds are otherwise gone", () => {
+    // The one-shot sessionMaxMs teardown returns early while interpreting, so
+    // it is consumed. Exiting also cancels the interpreter ceiling, which would
+    // leave an assistant-mode call with no cap and open Live billing.
+    expect(src).toContain("sessionCapDeferredByTranslator = true");
+    expect(src).toContain("function scheduleSessionCapTeardown(");
+    const stop = src.slice(src.indexOf('if (name === "stop_translator_mode") {\n          if ('));
+    const body = stop.slice(0, stop.indexOf("emitDiag(\"voice_bridge_translator_mode_exited\""));
+    expect(body).toContain("if (sessionCapDeferredByTranslator) {");
+    expect(body).toContain("timers.push(scheduleSessionCapTeardown(capMs))");
+    // Whatever is left of the original budget, else a short grace.
+    expect(body).toContain("remainingMs > 0 ? remainingMs : TRANSLATOR_EXIT_GRACE_MS");
+  });
+
+  it("the ceiling claims the end synchronously, before any await", () => {
+    // clearTimeout cannot stop a callback already running. Without a claim, an
+    // exit landing during the detach would leave the call detached (no audio)
+    // and never torn down.
+    const ceiling = src.slice(src.indexOf("const scheduleTranslatorCeiling"));
+    const head = ceiling.slice(0, ceiling.indexOf("void (async () => {"));
+    expect(head).toContain("if (ended || !translatorActive) return;");
+    expect(head).toContain("translatorActive = false;");
+    expect(head).toContain("translatorCeilingTimer = null;");
   });
 });
 
