@@ -135,6 +135,42 @@ describe("intakeSystemInstruction", () => {
     expect(instr).toContain("call you right back");
     expect(instr).toContain("name, phone, address, timeframe, notes");
   });
+
+  it("the inbound intake chases the phone number FIRST", () => {
+    // The referral partner withholds the seller's number until after this call,
+    // so the person on the line is often the only source for it: a hang-up two
+    // minutes in must not leave the team with no way to reach them.
+    const instr = intakeSystemInstruction("Acme", undefined, null, []);
+    expect(instr).toContain("YOUR FIRST PRIORITY is their phone number");
+    expect(instr).toContain("read it back to confirm it");
+    expect(instr).toContain("someone from the team will be in touch");
+    expect(instr).toContain("answer their questions about selling as best you can");
+  });
+
+  it("does not chase the number on a call WE placed", () => {
+    // We dialed them, so asking is the "why do you need my number?" non-sequitur.
+    const outbound = intakeSystemInstruction("Acme", undefined, null, [], false, undefined, true);
+    expect(outbound).not.toContain("YOUR FIRST PRIORITY");
+    const transfer = intakeSystemInstruction("Acme", undefined, null, [], false, {});
+    expect(transfer).not.toContain("YOUR FIRST PRIORITY");
+  });
+
+  it("a mid-call brief carrying the number overrides the phone-first priority", () => {
+    // The portal released the details while the AI was talking, so it must stop
+    // asking rather than making them repeat what we now have.
+    const instr = intakeSystemInstruction(
+      "Acme",
+      undefined,
+      null,
+      [],
+      false,
+      undefined,
+      false,
+      "Their phone: +16025550100."
+    );
+    expect(instr).toContain("INCLUDING the phone-number priority");
+    expect(instr).toContain("NEVER ask for a detail listed there");
+  });
 });
 
 describe("composeIntakeLeadSms", () => {

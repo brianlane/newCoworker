@@ -189,6 +189,16 @@ export type HangupCapability = {
 };
 
 /**
+ * Lets the assistant press keypad digits on the live leg. Registered as the
+ * `press_digits` tool, and used by the IVR gate below so a partner announcement
+ * ("press 1 to accept this referral") is answered when it is actually HEARD.
+ */
+export type DtmfCapability = {
+  /** Send the digits to the Telnyx leg. Resolved value is for logging only. */
+  execute: (digits: string) => Promise<{ ok: boolean; detail?: string }>;
+};
+
+/**
  * HomeLight live-transfer "AI takeover" intake. When set, the bridge runs a
  * dedicated lead-intake persona instead of the receptionist persona: it greets
  * as the owner's office, registers a `capture_lead` tool, and accumulates the
@@ -226,6 +236,19 @@ export type IntakeCapability = {
    * is already having. Returns the note ("" when unavailable); never throws.
    */
   pollBrief?: () => Promise<string>;
+  /**
+   * IVR GATE. The call was answered into a partner's automated announcement
+   * rather than a person, so the assistant must stay silent, press `digit` the
+   * moment the recording asks it to accept, and only then wait for the human
+   * the partner dials in. Needs a `dtmf` capability to do anything; without one
+   * the gate is ignored and the session greets normally.
+   *
+   * `fallbackMs` is the backstop: a missed cue would cost the referral outright,
+   * so the bridge presses the digit blindly once that long has passed with no
+   * press. Pressing twice is harmless here (the announcement has moved on) but
+   * is prevented anyway.
+   */
+  ivrGate?: { digit: string; fallbackMs?: number };
 };
 
 export type { CapturedLead } from "./intake.js";
@@ -302,6 +325,12 @@ export type GeminiBridgeOptions = {
   transfer?: TransferCapability;
   /** When set, registers an `end_call` tool so the assistant can hang up when done. */
   hangup?: HangupCapability;
+  /**
+   * When set, registers a `press_digits` tool so the assistant can work a
+   * partner IVR. Provided by index.ts whenever a Telnyx API key exists; the
+   * tool is only DECLARED for a session that also asked for the IVR gate.
+   */
+  dtmf?: DtmfCapability;
   /**
    * Stop THIS call's media fork (Telnyx `streaming_stop`) without hanging the
    * leg up. Independent of `transfer`, because translator mode can also be
@@ -892,8 +921,105 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
    * injects the greeting cue inside the realtime stream, keeping every turn
    * consistent.
    */
+  // IVR gate: only armed when the session asked for it AND a DTMF capability
+  // exists to satisfy it. Without the capability the assistant could be told to
+  // press a digit it has no way to send, which would hold the greeting back on a
+  // call it can never accept. Read through `opts` rather than the `intake`
+  // alias, which is declared far below: the alias is only safe inside closures.
+  const ivrGate = opts.dtmf && opts.intake?.ivrGate ? opts.intake.ivrGate : undefined;
+  let acceptPressed = false;
+
+  /** The opening line, shared so no cue can quote a different one. */
+  const intakeOpenerText = (): string =>
+    intakeOpener(
+      opts.businessName,
+      opts.intake?.persona,
+      opts.intake?.allowTransfer || opts.direction === "outbound" ? "outbound" : "inbound"
+    );
+
+  /**
+   * Hold the assistant silent while the partner's recording plays. Sent INSTEAD
+   * of the greeting: speaking here would talk over the announcement, and the
+   * person we actually want has not been dialed in yet.
+   */
+  let ivrListenCueSent = false;
+  const sendIvrListenCue = (): void => {
+    if (ivrListenCueSent) return;
+    ivrListenCueSent = true;
+    try {
+      session.sendRealtimeInput({
+        text:
+          "[Coordinator, do NOT speak] This call was answered into an automated recording, not a person. " +
+          "Say absolutely nothing. Listen to the announcement, and the moment it asks you to press a key to accept " +
+          `(for example "press ${ivrGate?.digit ?? "1"} to accept"), call the press_digits tool with that digit. ` +
+          "Do not speak before or after pressing. Someone will be connected to you shortly afterwards."
+      });
+      emitDiag("voice_bridge_ivr_gate_listening", { digit: ivrGate?.digit ?? "" });
+    } catch (err) {
+      console.error("gemini-bridge: IVR listen cue failed", err);
+    }
+  };
+
+  /**
+   * After the accept, the partner dials the customer in, so there is still no
+   * one to greet. Arm the opener and let the model fire it when a human actually
+   * speaks. Marks the greeting as triggered so nothing greets the recording.
+   */
+  const sendPostAcceptCue = (): void => {
+    if (diag.greetingTriggered) return;
+    diag.greetingTriggered = true;
+    try {
+      session.sendRealtimeInput({
+        text:
+          "[Coordinator, do NOT speak yet] The referral is accepted. Stay completely silent while the line connects. " +
+          `The moment you hear a real person speak, say your opening line ONCE ("${intakeOpenerText()}"), never repeat it, ` +
+          "and then begin the intake."
+      });
+      emitDiag("voice_bridge_ivr_gate_accepted");
+    } catch (err) {
+      console.error("gemini-bridge: post-accept cue failed", err);
+    }
+  };
+
+  /** Press the accept digit, from either the model's cue or the backstop timer. */
+  const pressAcceptDigit = async (
+    digits: string,
+    source: "model" | "fallback"
+  ): Promise<boolean> => {
+    if (acceptPressed || ended || !opts.dtmf) return false;
+    // Claim the press BEFORE awaiting so the backstop timer firing mid-request
+    // cannot double-send.
+    acceptPressed = true;
+    const result = await opts.dtmf.execute(digits).catch((err) => ({
+      ok: false,
+      detail: err instanceof Error ? err.message : String(err)
+    }));
+    if (!result.ok) {
+      // Let the other path retry: a refused press with no retry loses the
+      // referral, which is the exact failure this whole gate exists to avoid.
+      acceptPressed = false;
+      console.error("gemini-bridge: accept digit failed", { source, detail: result.detail });
+      emitDiag("voice_bridge_ivr_gate_press_failed", { source, detail: result.detail ?? "" });
+      return false;
+    }
+    console.log("gemini-bridge: accept digit pressed", {
+      callControlId: opts.callControlId,
+      digits,
+      source
+    });
+    emitDiag("voice_bridge_ivr_gate_pressed", { digits, source });
+    sendPostAcceptCue();
+    return true;
+  };
+
   const sendGreetingCue = (): void => {
     if (diag.greetingTriggered) return;
+    // A gated session greets a recording if it greets now. The opener is armed
+    // by sendPostAcceptCue once the accept digit is in.
+    if (ivrGate && !acceptPressed) {
+      sendIvrListenCue();
+      return;
+    }
     diag.greetingTriggered = true;
     try {
       const greetIdentity = opts.callerIdentity;
@@ -1134,6 +1260,28 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       }
     }
   }
+  // `press_digits` exists only for a gated session: it is the tool that clears
+  // the partner IVR, and no other persona has a keypad to work.
+  if (ivrGate) {
+    declarations.push({
+      name: "press_digits",
+      description:
+        "Press keypad digits on the phone line. Call this the INSTANT the automated recording asks you to " +
+        `press a key to accept this referral (usually "${ivrGate.digit}"). Do not speak when you call it, and do not ` +
+        "call it for anything else.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {
+          digits: {
+            type: Type.STRING,
+            description: 'The digit(s) the recording asked for, e.g. "1".'
+          }
+        },
+        required: ["digits"]
+      }
+    });
+  }
+
   // `end_call` is available to every persona (receptionist, staff, and intake)
   // whenever the host wired a hangup capability — so the assistant can cleanly
   // end any call once it's over instead of leaving dead air on the line.
@@ -1746,6 +1894,25 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         continue;
       }
 
+      if (name === "press_digits" && opts.dtmf) {
+        const requested =
+          typeof call.args?.digits === "string" ? (call.args.digits as string).trim() : "";
+        // Fall back to the authored digit rather than refusing: the model heard
+        // the cue, which is the hard part, and an empty or malformed argument
+        // should not cost the referral.
+        const digits = /^[0-9A-D#*wW]{1,32}$/.test(requested)
+          ? requested
+          : (ivrGate?.digit ?? "1");
+        void (async () => {
+          const ok = await pressAcceptDigit(digits, "model");
+          sendToolResponse(call.id, name, {
+            ok,
+            detail: ok ? `pressed ${digits}` : "press failed"
+          });
+        })();
+        continue;
+      }
+
       if (name === "end_call" && opts.hangup) {
         const reason =
           typeof call.args?.reason === "string" ? (call.args.reason as string) : undefined;
@@ -1859,6 +2026,20 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     diag.uplinkPeakSampleWindow = 0;
   }, 15000);
   timers.push(heartbeat as unknown as NodeJS.Timeout);
+
+  // IVR gate backstop. The model pressing on cue is the good path; this covers
+  // the recording being worded unusually, or the model simply not calling the
+  // tool. Not pressing at all forfeits the referral, so a blind press is
+  // strictly better than waiting.
+  if (ivrGate) {
+    const fallbackMs = Math.min(Math.max(ivrGate.fallbackMs ?? 12000, 1000), 60000);
+    timers.push(
+      setTimeout(() => {
+        if (acceptPressed || ended) return;
+        void pressAcceptDigit(ivrGate.digit, "fallback");
+      }, fallbackMs)
+    );
+  }
 
   // Mid-call brief: an AI-first call answers within seconds of the partner's
   // alert, so the details its own flow extracts land while the AI is already
