@@ -51,6 +51,27 @@ export const AI_CRAWLERS: AiCrawlerDef[] = [
 export const AI_CRAWLER_TOKENS: string[] = AI_CRAWLERS.map((c) => c.token);
 
 /**
+ * The tokens our own robots.txt asserts an allow for: the agents that answer
+ * questions and cite sources, NOT the training crawlers.
+ *
+ * The `train` agents are left out on purpose. Cloudflare prepends a managed
+ * block to this zone's robots.txt whose default policy is
+ * `search=yes, ai-train=no`, which disallows GPTBot, ClaudeBot, CCBot,
+ * Amazonbot, Google-Extended, Applebot-Extended, and meta-externalagent. If
+ * we also emitted an allow group for those tokens, the served file would
+ * carry two contradicting groups for one agent and which one wins would be
+ * up to each crawler's parser: undefined behavior no matter which policy you
+ * actually want. Training access is a zone-level decision, so it is made in
+ * the one place that enforces it rather than argued with from here.
+ *
+ * `debug/aeo-crawler-probe.ts` checks the served file for exactly this
+ * conflict.
+ */
+export const AI_ANSWER_CRAWLER_TOKENS: string[] = AI_CRAWLERS.filter(
+  (c) => c.kind !== "train"
+).map((c) => c.token);
+
+/**
  * Operators we could ever OBSERVE, i.e. those with at least one entry that
  * identifies itself in a User-Agent header.
  *

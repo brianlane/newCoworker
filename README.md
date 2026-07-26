@@ -977,21 +977,48 @@ the access probe, and AI-traffic attribution. A crawler that matches its own
 robots group ignores `*` entirely, so the disallows (`/dashboard`, `/admin`,
 `/api`) are repeated there rather than inherited.
 
-> ⚠️ **Cloudflare, not the app, is how this breaks.** The `newcoworker.com`
-> zone's **"Block AI bots"** setting and **Super Bot Fight Mode** both
-> challenge these agents at the edge, with a 403 or an interstitial and ZERO
-> origin trace, exactly like the Claude-connector failure documented under
-> [Claude connector](#claude-connector-remote-mcp). Free-plan Bot Fight Mode
-> ignores WAF skip rules entirely and must stay OFF. Verify from outside:
+There are **two independent ways to be shut out**, and only the first
+produces an error anyone would notice:
+
+- **Transport**: the edge refuses the request. The zone's **"Block AI bots"**
+  setting and **Super Bot Fight Mode** both challenge these agents with a 403
+  or an interstitial and ZERO origin trace, exactly like the Claude-connector
+  failure under [Claude connector](#claude-connector-remote-mcp). Free-plan
+  Bot Fight Mode ignores WAF skip rules entirely and must stay OFF.
+- **Policy**: transport is fine and robots.txt tells the agent to go away. A
+  well-behaved crawler then never requests anything, so every status code is
+  200, nothing errors, and the only symptom is silence on `/admin/ai-search`.
+
+The probe checks both. Read-only, no credentials, non-zero exit on either:
+
+```bash
+tsx debug/aeo-crawler-probe.ts            # production
+tsx debug/aeo-crawler-probe.ts https://…  # any other origin
+```
+
+> ⚠️ **Cloudflare owns this zone's robots.txt, and it does NOT do the same
+> thing on both hosts** (observed 2026-07-26):
 >
-> ```bash
-> tsx debug/aeo-crawler-probe.ts            # production, read-only, no creds
-> tsx debug/aeo-crawler-probe.ts https://…  # any other origin
-> ```
+> - `www.newcoworker.com/robots.txt` = Cloudflare's managed block
+>   **prepended to** our origin file.
+> - `newcoworker.com/robots.txt` (apex) = the managed block **only**. Our
+>   file never ships there, so on the apex nothing disallows `/dashboard`,
+>   `/admin`, or `/api` and there is no `Sitemap:` line at all.
 >
-> It fetches the marketing surfaces once per real AI user-agent string and
-> exits non-zero on any non-200 or `cf-mitigated` response. Check Cloudflare
-> Security → Events before suspecting the app.
+> The managed block's default policy is `search=yes, ai-train=no`, which
+> disallows the training crawlers (GPTBot, ClaudeBot, CCBot, Amazonbot,
+> Google-Extended, Applebot-Extended, meta-externalagent) while leaving the
+> answer engines (OAI-SearchBot, Claude-SearchBot, PerplexityBot, and the
+> `*-User` fetchers) free. That posture is defensible, so our robots.txt does
+> not argue with it: `AI_ANSWER_CRAWLER_TOKENS` deliberately omits the
+> `train` agents, because emitting an allow for a token the managed block
+> disallows leaves the served file with two contradicting groups whose
+> meaning is up to each crawler's parser. **Change the training policy in
+> Cloudflare, never by re-adding those tokens here.**
+>
+> The apex replacement is a real gap and the fix is in the Cloudflare
+> dashboard (AI Crawl Control / managed robots.txt): make the managed block
+> append to the origin file rather than replace it. The probe fails on it.
 
 **2. A brief written for machines.** `/llms.txt` (short index) and
 `/llms-full.txt` (adds differentiators, industries, recent posts) are composed

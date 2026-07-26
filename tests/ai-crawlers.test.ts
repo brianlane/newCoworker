@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  AI_ANSWER_CRAWLER_TOKENS,
   AI_CRAWLERS,
   AI_CRAWLER_TOKENS,
   AI_REFERRERS,
@@ -131,10 +132,25 @@ describe("robots.txt", () => {
     expect(wildcard?.disallow).toEqual(["/dashboard", "/admin", "/api"]);
   });
 
-  it("gives the AI agents their own allow group", () => {
+  it("gives the answer engines their own allow group", () => {
     const aiRule = rules().find((r) => Array.isArray(r.userAgent));
-    expect(aiRule?.userAgent).toEqual(AI_CRAWLER_TOKENS);
+    expect(aiRule?.userAgent).toEqual(AI_ANSWER_CRAWLER_TOKENS);
     expect(aiRule?.allow).toBe("/");
+    for (const token of ["OAI-SearchBot", "Claude-SearchBot", "PerplexityBot"]) {
+      expect(aiRule?.userAgent).toContain(token);
+    }
+  });
+
+  it("asserts nothing about the training crawlers, which the zone disallows", () => {
+    // Cloudflare prepends a managed block (search=yes, ai-train=no) that
+    // disallows these. Emitting an allow for the same token would make the
+    // served file carry two contradicting groups, and which wins is up to
+    // each crawler's parser. Training access is decided in Cloudflare.
+    for (const token of ["GPTBot", "ClaudeBot", "CCBot", "Google-Extended"]) {
+      expect(AI_CRAWLER_TOKENS).toContain(token);
+      expect(AI_ANSWER_CRAWLER_TOKENS).not.toContain(token);
+    }
+    expect(AI_ANSWER_CRAWLER_TOKENS.length).toBeLessThan(AI_CRAWLER_TOKENS.length);
   });
 
   it("repeats the disallows in the AI group, since a matched group ignores *", () => {

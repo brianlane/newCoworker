@@ -1,12 +1,24 @@
 /**
  * Can the AI assistants actually read newcoworker.com?
  *
- * Fetches the marketing surfaces that matter for AI answers once per AI user
- * agent and reports the status. Everything else in the AEO work is pointless
- * if the edge is challenging these agents, and the failure is invisible from
- * the app: Cloudflare's Super Bot Fight Mode / "Block AI bots" settings serve
- * a 403 or a managed challenge with ZERO origin trace (the same class of
- * failure documented for the Claude MCP connector in the README).
+ * Two independent ways to be shut out, so this checks both:
+ *
+ *   1. TRANSPORT. The edge refuses the request. Cloudflare's Super Bot Fight
+ *      Mode / "Block AI bots" settings serve a 403 or a managed challenge
+ *      with ZERO origin trace (the same class of failure documented for the
+ *      Claude MCP connector in the README). Caught by fetching the marketing
+ *      surfaces once per real AI user-agent string.
+ *
+ *   2. POLICY. The transport is fine and robots.txt tells the agent to go
+ *      away. A well-behaved crawler then never requests anything, so every
+ *      status code here is 200 and nothing looks wrong. Cloudflare PREPENDS
+ *      a managed block to the origin's robots.txt (its default AI policy is
+ *      `search=yes, ai-train=no`, which disallows the training crawlers:
+ *      GPTBot, ClaudeBot, CCBot, Amazonbot, Google-Extended,
+ *      Applebot-Extended, meta-externalagent). That block sits ABOVE the
+ *      group src/app/robots.ts emits, so the served file can contain two
+ *      contradicting groups for one token, and which one wins is up to each
+ *      crawler's parser.
  *
  * Read-only: plain GETs against the public site, no credentials, no writes.
  *
@@ -65,6 +77,68 @@ async function probe(userAgent: string, path: string): Promise<string> {
   }
 }
 
+/** What robots.txt says about `/` for one user-agent token. */
+type RobotsRuling = "allowed" | "disallowed" | "conflicting" | "unmentioned";
+
+/**
+ * Parse robots.txt into groups. Consecutive `User-agent:` lines share the
+ * rules that follow, which is how both our own file and Cloudflare's managed
+ * block are written.
+ */
+function parseRobots(text: string): Array<{ agents: string[]; allowRoot: boolean | null }> {
+  const groups: Array<{ agents: string[]; allowRoot: boolean | null }> = [];
+  let current: { agents: string[]; allowRoot: boolean | null } | null = null;
+  let collectingAgents = false;
+
+  for (const raw of text.split(/\r?\n/)) {
+    const line = raw.replace(/#.*$/, "").trim();
+    if (line === "") continue;
+    const [rawField, ...rest] = line.split(":");
+    const field = rawField.trim().toLowerCase();
+    const value = rest.join(":").trim();
+
+    if (field === "user-agent") {
+      if (!collectingAgents || current === null) {
+        current = { agents: [], allowRoot: null };
+        groups.push(current);
+        collectingAgents = true;
+      }
+      current.agents.push(value.toLowerCase());
+      continue;
+    }
+    if (current === null) continue;
+    collectingAgents = false;
+
+    // Only root-scoped rules decide "can this agent read the site at all".
+    if (field === "disallow" && value === "/") current.allowRoot = false;
+    if (field === "allow" && value === "/" && current.allowRoot === null) current.allowRoot = true;
+  }
+  return groups;
+}
+
+function rulingFor(
+  groups: ReturnType<typeof parseRobots>,
+  token: string
+): RobotsRuling {
+  const matched = groups
+    .filter((g) => g.agents.includes(token.toLowerCase()))
+    .map((g) => g.allowRoot)
+    .filter((v): v is boolean => v !== null);
+  if (matched.length === 0) return "unmentioned";
+  if (matched.every((v) => v)) return "allowed";
+  if (matched.every((v) => !v)) return "disallowed";
+  return "conflicting";
+}
+
+async function fetchRobots(): Promise<string | null> {
+  try {
+    const res = await fetch(`${BASE_URL}/robots.txt`, { redirect: "follow" });
+    return res.ok ? await res.text() : null;
+  } catch {
+    return null;
+  }
+}
+
 console.log(`AI crawler access probe: ${BASE_URL}\n`);
 
 const header = ["agent".padEnd(20), ...PATHS.map((p) => p.padStart(13))].join("");
@@ -90,10 +164,80 @@ for (const crawler of AI_CRAWLERS) {
 console.log();
 if (blocked > 0) {
   console.log(
-    `FAIL: ${blocked} non-200 response(s). Check Cloudflare Security -> Events for the\n` +
-      `newcoworker.com zone: Super Bot Fight Mode and the "Block AI bots" setting both\n` +
-      `challenge these agents, and free-plan Bot Fight Mode ignores WAF skip rules.`
+    `TRANSPORT FAIL: ${blocked} non-200 response(s). Check Cloudflare Security -> Events\n` +
+      `for the zone: Super Bot Fight Mode and the "Block AI bots" setting both challenge\n` +
+      `these agents, and free-plan Bot Fight Mode ignores WAF skip rules.\n`
   );
-  process.exit(1);
+} else {
+  console.log("Transport OK: every AI agent got 200 on every probed path.\n");
 }
-console.log("OK: every AI agent got 200 on every probed path.");
+
+// --- robots.txt policy -----------------------------------------------------
+const robotsText = await fetchRobots();
+let policyProblem = false;
+
+if (robotsText === null) {
+  console.log("POLICY UNKNOWN: could not read /robots.txt.");
+  policyProblem = true;
+} else {
+  const groups = parseRobots(robotsText);
+  const managed = robotsText.includes("Cloudflare Managed content");
+
+  // Does the file we are looking at contain OUR robots.txt at all? Cloudflare
+  // can either PREPEND its managed block to the origin's file or REPLACE it
+  // outright, and the two look similar until you check for our own markers.
+  // Replacement is the dangerous case: it silently drops the /dashboard,
+  // /admin, and /api disallows and the Sitemap line.
+  const oursPresent = robotsText.includes("Disallow: /dashboard");
+  if (!oursPresent) {
+    policyProblem = true;
+    console.log(
+      "ORIGIN robots.txt IS NOT BEING SERVED on this host: Cloudflare has REPLACED it\n" +
+        "rather than prepending to it. src/app/robots.ts never reaches a crawler here, so\n" +
+        "/dashboard, /admin, and /api are not disallowed and the Sitemap line is missing.\n" +
+        "Fix in the Cloudflare dashboard (AI Crawl Control / managed robots.txt) so the\n" +
+        "managed block APPENDS to the origin file instead of replacing it.\n"
+    );
+  }
+  if (!robotsText.includes("Sitemap:")) {
+    policyProblem = true;
+    console.log("No Sitemap: line in this robots.txt. Crawlers lose the cheapest route in.\n");
+  }
+  const rulings = AI_CRAWLERS.map((c) => ({ token: c.token, kind: c.kind, ruling: rulingFor(groups, c.token) }));
+  const denied = rulings.filter((r) => r.ruling === "disallowed");
+  const conflicting = rulings.filter((r) => r.ruling === "conflicting");
+
+  console.log("robots.txt ruling for / (transport says nothing about this):");
+  for (const r of rulings) {
+    const mark = r.ruling === "allowed" ? " " : r.ruling === "unmentioned" ? "?" : "!";
+    console.log(`  ${mark} ${r.token.padEnd(20)} ${r.kind.padEnd(6)} ${r.ruling}`);
+  }
+  console.log();
+
+  if (managed) {
+    console.log(
+      "NOTE: Cloudflare is PREPENDING a managed block to this robots.txt. Its default AI\n" +
+        "policy (search=yes, ai-train=no) disallows the training crawlers, which is a\n" +
+        "deliberate posture, not necessarily a defect. Decide it on purpose:\n" +
+        "Cloudflare dashboard -> the zone -> AI Crawl Control / robots.txt.\n"
+    );
+  }
+  if (conflicting.length > 0) {
+    policyProblem = true;
+    console.log(
+      `POLICY CONFLICT: ${conflicting.map((r) => r.token).join(", ")} appear in BOTH an\n` +
+        "allow and a disallow group. Which one wins is up to each crawler's parser, so\n" +
+        "this is undefined behavior either way. Make the two sources agree.\n"
+    );
+  }
+  if (denied.length > 0) {
+    console.log(
+      `Disallowed outright: ${denied.map((r) => r.token).join(", ")}.\n` +
+        "A well-behaved agent here simply never requests anything, so it costs no HTTP\n" +
+        "errors and shows up only as silence on /admin/ai-search.\n"
+    );
+  }
+}
+
+if (blocked > 0 || policyProblem) process.exit(1);
+console.log("OK: transport and robots.txt policy both clear.");
