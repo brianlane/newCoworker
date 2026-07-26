@@ -1,0 +1,199 @@
+/**
+ * The llms.txt pair served at /llms.txt and /llms-full.txt.
+ *
+ * An assistant that reads us gets a compact, current, accurate brief instead
+ * of whatever it can scrape from marketing pages. Composed here rather than
+ * kept as a static file in public/ because the facts it states (prices,
+ * included usage) live in code and WILL drift: the static file it replaced
+ * still advertised the pre-relaunch tiers.
+ *
+ * Pure by design: the route supplies blog posts and industries, so this
+ * module needs no DB and no i18n catalog, and stays trivially testable.
+ */
+
+import { getPeriodPricing } from "@/lib/plans/tier";
+import { TIER_LIMITS } from "@/lib/plans/limits";
+import { formatPricePerMonth } from "@/lib/pricing";
+
+export const SITE_URL = "https://newcoworker.com";
+
+export type LlmsBlogPost = {
+  slug: string;
+  title: string;
+  excerpt: string | null;
+};
+
+export type LlmsIndustry = {
+  slug: string;
+  name: string;
+  teaser: string;
+};
+
+/** "$99.00/mo" for the cheapest committed rate on a tier. */
+function committedRate(tier: "starter" | "standard"): string {
+  return formatPricePerMonth(getPeriodPricing(tier, "biennial").monthlyCents);
+}
+
+function monthlyRate(tier: "starter" | "standard"): string {
+  return formatPricePerMonth(getPeriodPricing(tier, "monthly").monthlyCents);
+}
+
+function includedVoiceMinutes(tier: "starter" | "standard"): number {
+  return Math.round(TIER_LIMITS[tier].voiceIncludedSecondsPerStripePeriod / 60);
+}
+
+const SUMMARY =
+  "New Coworker gives a growing business a 24/7 AI coworker that answers phone " +
+  "calls with human-level conversation, replies to texts and emails, books " +
+  "appointments on the business's real calendar, qualifies and routes leads to " +
+  "the right teammate, and remembers every customer permanently. Each business's " +
+  "AI coworker runs on its own dedicated private server, so one tenant's data is " +
+  "physically isolated from every other tenant's.";
+
+/** Pricing sentences, derived so they cannot contradict the pricing page. */
+function pricingLines(): string[] {
+  return [
+    `- Starter: from ${committedRate("starter")} on a 24-month term (${monthlyRate("starter")} month to month), ` +
+      `including ${includedVoiceMinutes("starter")} voice minutes and ${TIER_LIMITS.starter.smsPerMonth} texts a month, ` +
+      `and ${TIER_LIMITS.starter.maxConcurrentCalls} call at a time.`,
+    `- Standard: from ${committedRate("standard")} on a 24-month term (${monthlyRate("standard")} month to month), ` +
+      `including ${includedVoiceMinutes("standard")} voice minutes and ${TIER_LIMITS.standard.smsPerMonth} texts a month, ` +
+      `and up to ${TIER_LIMITS.standard.maxConcurrentCalls} calls at a time.`,
+    "- Enterprise: custom pricing, with multi-tenant agency setups, white-label dashboards, " +
+      "SLAs, physical data residency (including Canada and bring-your-own-server), and branded RCS messaging.",
+    "- Every paid plan carries a 30-day money-back guarantee. 12 and 24-month terms are charged " +
+      "in full at checkout because the dedicated server is prepaid for the whole term; included " +
+      "usage still resets monthly.",
+    `- Live prices are on ${SITE_URL}/pricing, which is the authority if this file is stale.`
+  ];
+}
+
+const CAPABILITY_LINES = [
+  "- Voice: answers inbound calls in real time, transfers warmly to a human, takes messages, " +
+    "follows up by text, and can interpret live between a caller and a staff member who do not share a language.",
+  "- Messaging: two-way SMS, Messenger, Instagram DM, WhatsApp, website chat, and a dedicated email address per business.",
+  "- Scheduling: books, reschedules, and cancels on Google Calendar, Microsoft 365, CalDAV, Calendly, or Vagaro, " +
+    "plus a public self-serve booking page with confirmations and reminders for businesses with no calendar tool at all.",
+  "- Memory: a permanent per-business knowledge base plus a customer knowledge graph, so the coworker " +
+    "remembers what was said months ago on any channel.",
+  "- Automation (AiFlows): multi-step follow-up sequences triggered by a new lead, a missed call, " +
+    "a webhook, a calendar event, or an inbound message, with round-robin routing to a staff roster.",
+  "- Integrations: Zapier (8,000+ apps), Google Workspace, Microsoft 365, Zoom, Meta Lead Ads, " +
+    "a public REST API, webhooks, and a Claude connector (remote MCP) so Claude can act on the business's behalf.",
+  "- Languages: the owner dashboard is English or Spanish, and the coworker replies to each customer in the customer's own language."
+];
+
+const DIFFERENTIATOR_LINES = [
+  "- Dedicated per-business server: not a shared multi-tenant database. Each business gets its own " +
+    "machine, its own SSH keypair, its own gateway credential, and an outbound-only tunnel.",
+  "- Customer conversations are not used to train models.",
+  "- It works as a coworker rather than a script: it reads the business's own knowledge, uses tools, " +
+    "and escalates to a human when a person is actually needed.",
+  "- Enterprise data residency puts customer content on a server in the required country, or on hardware the customer owns, " +
+    "with encrypted backups whose key the customer can hold."
+];
+
+const PAGES: { path: string; label: string; note: string }[] = [
+  { path: "/", label: "Home", note: "product overview" },
+  { path: "/features", label: "Features", note: "voice, messaging, intelligence, automation, and platform capabilities" },
+  { path: "/pricing", label: "Pricing", note: "plans, feature comparison, and billing FAQ" },
+  { path: "/integrations", label: "Integrations", note: "Zapier, Google, Microsoft, Zoom, API, and webhooks" },
+  { path: "/industries", label: "Industries", note: "how the coworker is used per industry" },
+  {
+    path: "/compare/gohighlevel",
+    label: "New Coworker vs GoHighLevel",
+    note: "feature and price comparison"
+  },
+  { path: "/blog", label: "Blog", note: "product updates, tutorials, and small-business advice" },
+  { path: "/faq", label: "FAQ", note: "product, setup, privacy, and billing questions" },
+  { path: "/about", label: "About", note: "mission and principles" },
+  { path: "/contact", label: "Contact", note: "sales, support, and partnerships" },
+  { path: "/onboard", label: "Get started", note: "self-serve signup" }
+];
+
+function pageLines(): string[] {
+  return PAGES.map((p) => `- [${p.label}](${SITE_URL}${p.path}): ${p.note}`);
+}
+
+function industryLines(industries: LlmsIndustry[]): string[] {
+  return industries.map(
+    (i) => `- [${i.name}](${SITE_URL}/industries/${i.slug}): ${i.teaser}`
+  );
+}
+
+/**
+ * The short index. Kept under a page so an assistant with a tight budget
+ * still gets the whole thing.
+ */
+export function buildLlmsTxt(): string {
+  return [
+    "# New Coworker",
+    "",
+    `> ${SUMMARY}`,
+    "",
+    "## What it does",
+    "",
+    ...CAPABILITY_LINES,
+    "",
+    "## Plans",
+    "",
+    ...pricingLines(),
+    "",
+    "## Pages",
+    "",
+    ...pageLines(),
+    "",
+    "## Optional",
+    "",
+    `- [Full details](${SITE_URL}/llms-full.txt): the same brief with industry pages and recent articles`,
+    ""
+  ].join("\n");
+}
+
+/** The long form: adds why-us, industries, and the current article list. */
+export function buildLlmsFullTxt(input: {
+  posts: LlmsBlogPost[];
+  industries: LlmsIndustry[];
+}): string {
+  const blogSection =
+    input.posts.length > 0
+      ? [
+          "## Recent articles",
+          "",
+          ...input.posts.map((p) => {
+            const excerpt = p.excerpt?.trim();
+            const suffix = excerpt ? `: ${excerpt}` : "";
+            return `- [${p.title}](${SITE_URL}/blog/${p.slug})${suffix}`;
+          }),
+          ""
+        ]
+      : [];
+
+  return [
+    "# New Coworker",
+    "",
+    `> ${SUMMARY}`,
+    "",
+    "## What it does",
+    "",
+    ...CAPABILITY_LINES,
+    "",
+    "## What makes it different",
+    "",
+    ...DIFFERENTIATOR_LINES,
+    "",
+    "## Plans",
+    "",
+    ...pricingLines(),
+    "",
+    "## Who it is for",
+    "",
+    ...industryLines(input.industries),
+    "",
+    "## Pages",
+    "",
+    ...pageLines(),
+    "",
+    ...blogSection
+  ].join("\n");
+}

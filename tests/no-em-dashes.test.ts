@@ -40,6 +40,8 @@ function guardedFiles(): string[] {
     "messages/edge-en.json",
     "messages/edge-es.json",
     "supabase/functions/_shared/sms_prompt_lines.ts",
+    // The llms.txt brief is copy an AI assistant quotes back to a buyer.
+    "src/lib/marketing/llms-content.ts",
     "scripts/oneshot/seed-amy-new-lead-intake.ts",
     ...readdirSync(emailTemplatesDir)
       .filter((f) => f.endsWith(".ts"))

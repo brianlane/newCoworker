@@ -15,6 +15,8 @@
  *        aren't clickable in IG captions). Draft by default; the
  *        `instagram_publish_immediately` toggle schedules it now instead,
  *        and the existing social-post-sweep publishes it.
+ *      - Ping IndexNow so Bing (and therefore ChatGPT search) can index the
+ *        post today instead of on its own recrawl schedule.
  *
  * Side-effect failures never un-publish the post — they are logged and
  * reported in the sweep summary.
@@ -23,6 +25,7 @@
 import { logger } from "@/lib/logger";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { buildBlogNewPostEmail } from "@/lib/email/templates/blog-new-post";
+import { submitToIndexNow } from "@/lib/marketing/indexnow";
 import { insertSocialPost, SOCIAL_CAPTION_MAX_LENGTH } from "@/lib/social/db";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
@@ -43,6 +46,7 @@ export type BlogPublishDeps = {
   loadSubscribers?: typeof listActiveBlogSubscribers;
   sendEmail?: typeof sendOwnerEmail;
   insertSocial?: typeof insertSocialPost;
+  submitIndexNow?: typeof submitToIndexNow;
   now?: () => Date;
 };
 
@@ -50,6 +54,7 @@ export type BlogPublishFanOut = {
   emailed: number;
   emailErrors: number;
   crossPosted: boolean;
+  indexNowSubmitted: boolean;
 };
 
 function appBaseUrl(): string {
@@ -92,10 +97,16 @@ export async function runBlogPublishSideEffects(
   const loadSubscribers = deps.loadSubscribers ?? listActiveBlogSubscribers;
   const sendEmail = deps.sendEmail ?? sendOwnerEmail;
   const insertSocial = deps.insertSocial ?? insertSocialPost;
+  const submitIndexNow = deps.submitIndexNow ?? submitToIndexNow;
   const now = deps.now ?? (() => new Date());
   /* c8 ignore stop */
 
-  const result: BlogPublishFanOut = { emailed: 0, emailErrors: 0, crossPosted: false };
+  const result: BlogPublishFanOut = {
+    emailed: 0,
+    emailErrors: 0,
+    crossPosted: false,
+    indexNowSubmitted: false
+  };
   const siteUrl = appBaseUrl();
 
   // --- Subscriber email fan-out -------------------------------------------
@@ -185,6 +196,24 @@ export async function runBlogPublishSideEffects(
     });
   }
 
+  // --- IndexNow ping --------------------------------------------------------
+  // The post itself plus the index and sitemap, which both just changed.
+  // submitToIndexNow swallows its own failures; the try/catch is belt and
+  // braces so no future throw can un-report a publish that already happened.
+  try {
+    const outcome = await submitIndexNow([
+      `${siteUrl}/blog/${post.slug}`,
+      `${siteUrl}/blog`,
+      `${siteUrl}/sitemap.xml`
+    ]);
+    result.indexNowSubmitted = outcome.status === "sent";
+  } catch (err) {
+    logger.warn("blog-publish: IndexNow ping failed", {
+      postId: post.id,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+
   return result;
 }
 
@@ -193,6 +222,7 @@ export type BlogSweepResult = {
   emailed: number;
   emailErrors: number;
   crossPosted: number;
+  indexNowSubmitted: number;
   errors: Array<{ postId: string; message: string }>;
 };
 
@@ -213,6 +243,7 @@ export async function processBlogPublishSweep(
     emailed: 0,
     emailErrors: 0,
     crossPosted: 0,
+    indexNowSubmitted: 0,
     errors: []
   };
   const nowIso = now().toISOString();
@@ -235,6 +266,7 @@ export async function processBlogPublishSweep(
       result.emailed += fanOut.emailed;
       result.emailErrors += fanOut.emailErrors;
       if (fanOut.crossPosted) result.crossPosted += 1;
+      if (fanOut.indexNowSubmitted) result.indexNowSubmitted += 1;
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       logger.error("blog-publish-sweep: post pass failed", { postId: post.id, message });
