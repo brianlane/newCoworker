@@ -794,6 +794,73 @@ describe("intake question settings", () => {
   });
 });
 
+describe("payment hooks (schema only)", () => {
+  it("refuses a bad price, an unknown currency, and payment without a price", async () => {
+    const { client } = fakeDb([{ data: ROW, error: null }]);
+    for (const [patch, message] of [
+      [{ paymentAmountCents: 10 }, /Price must be/],
+      [{ paymentAmountCents: 6_000_000 }, /Price must be/],
+      [{ paymentAmountCents: 12.5 }, /Price must be/],
+      [{ paymentCurrency: "btc" }, /Unsupported currency/],
+      // Requiring payment without a price would refuse every booking while
+      // telling the owner nothing.
+      [{ paymentRequired: true }, /Set a price/],
+      [{ paymentRequired: true, paymentAmountCents: null }, /Set a price/]
+    ] as Array<[Record<string, unknown>, RegExp]>) {
+      await expect(upsertBookingPage(BIZ, patch, client)).rejects.toThrow(message);
+    }
+
+    // The RESULTING state is what gets checked: clearing the price on a
+    // page ALREADY requiring payment is the same broken state.
+    const { client: paidPage } = fakeDb([
+      { data: { ...ROW, payment_required: true, payment_amount_cents: 5000 }, error: null }
+    ]);
+    await expect(
+      upsertBookingPage(BIZ, { paymentAmountCents: null }, paidPage)
+    ).rejects.toThrow(/Set a price/);
+
+    // And enabling it works when the STORED price already exists.
+    const { client: priced } = fakeDb([
+      { data: { ...ROW, payment_amount_cents: 5000 }, error: null },
+      { data: ROW, error: null }
+    ]);
+    await expect(
+      upsertBookingPage(BIZ, { paymentRequired: true }, priced)
+    ).resolves.toBeTruthy();
+  });
+
+  it("writes the pair, and lets a price be cleared when payment is off", async () => {
+    const { client, calls } = fakeDb([
+      { data: ROW, error: null },
+      { data: ROW, error: null }
+    ]);
+    await upsertBookingPage(
+      BIZ,
+      { paymentRequired: true, paymentAmountCents: 5000, paymentCurrency: "usd" },
+      client
+    );
+    expect(calls.find((c) => c.method === "update")?.args[0]).toMatchObject({
+      payment_required: true,
+      payment_amount_cents: 5000,
+      payment_currency: "usd"
+    });
+
+    const { client: clearing, calls: clearingCalls } = fakeDb([
+      { data: ROW, error: null },
+      { data: ROW, error: null }
+    ]);
+    await upsertBookingPage(
+      BIZ,
+      { paymentRequired: false, paymentAmountCents: null },
+      clearing
+    );
+    expect(clearingCalls.find((c) => c.method === "update")?.args[0]).toMatchObject({
+      payment_required: false,
+      payment_amount_cents: null
+    });
+  });
+});
+
 describe("assignment settings and per-assignee load", () => {
   it("refuses an unknown mode, and a fixed page with nobody named", async () => {
     const { client } = fakeDb([{ data: ROW, error: null }, { data: ROW, error: null }]);

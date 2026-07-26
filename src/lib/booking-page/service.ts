@@ -130,7 +130,12 @@ export type BookingPageFailure = {
     | "already_booked"
     | "booking_failed"
     /** A required intake question went unanswered (form problem, retryable). */
-    | "missing_answers";
+    | "missing_answers"
+    /**
+     * The page requires payment and collection has not shipped: refusing
+     * is the only answer that does not give paid work away free.
+     */
+    | "payment_required";
 };
 
 /**
@@ -641,9 +646,20 @@ export async function submitPublicBooking(
     return { ok: false, detail: "already_booked" };
   }
 
-  // Only a FRESH booking is refused for unanswered required questions
-  // (after the idempotent path above, before any claim: the slot stays
-  // bookable while the visitor fixes the form).
+  // Only a FRESH booking is refused by the gates below, after the
+  // idempotent path above and before any claim: a visitor who already
+  // holds this appointment gets their idempotent success even if the page
+  // has since gained required questions or turned on payment.
+
+  // Payment gate, schema-hooks phase: a page marked as requiring payment
+  // must not hand out free appointments before collection exists.
+  if (context.page.payment_required) {
+    logger.warn("booking-page: booking refused, page requires payment (not yet supported)", {
+      businessId: context.businessId
+    });
+    return { ok: false, detail: "payment_required" };
+  }
+
   if (!intake.ok) return { ok: false, detail: "missing_answers" };
 
   // Re-verify the requested start is still an offered slot against live

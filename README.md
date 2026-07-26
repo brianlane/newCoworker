@@ -874,11 +874,18 @@ engine's roster evaluators), and the upcoming-bookings list.
   longer exist are discarded, not refused: the owner may have edited the
   page under an open form. Answers travel with the appointment: the provider
   event's notes, and structured `intake_answers` on the ledger row.
+- **Payment hooks, schema only** (v3 groundwork): `payment_required`,
+  `payment_amount_cents`, `payment_currency` on `booking_pages` and
+  `payment_status` on the ledger, with the ONE invariant already enforced:
+  a page marked as requiring payment refuses public bookings (409 with
+  contact-the-business copy) until collection ships, so it can never hand
+  out free appointments. No dashboard control yet by design; the price pair
+  must arrive together (requiring payment without a price is refused).
 - Vagaro/Calendly-resolved tenants deliberately do NOT get the page (Vagaro
   has its own booking site; link-mode Calendly cannot book on the invitee's
   behalf); the Bookings page explains this and calendar resolution order is
   untouched. Deliberate v1 exclusions: round robin / pick-a-person,
-  routing forms, payments, embeds.
+  routing forms, embeds; payment COLLECTION (the schema hooks are in).
 
 ## Cancellation waitlist ("I'll let you know if a spot opens")
 
