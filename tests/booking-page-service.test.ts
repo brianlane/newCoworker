@@ -982,6 +982,15 @@ describe("submitPublicBooking", () => {
     expect(mockSlotClaim).not.toHaveBeenCalled();
     expect(mockBook).not.toHaveBeenCalled();
     expect(mockStampContact).not.toHaveBeenCalled();
+
+    // A visitor who ALREADY holds this appointment gets their idempotent
+    // success (with its repair stamps), same precedent as the intake gate:
+    // only a fresh booking is refused.
+    mockUpcomingForAttendee.mockResolvedValueOnce([
+      { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
+    ] as never);
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    expect(mockStampContact).toHaveBeenCalled();
   });
 
   it("refuses a submission missing a required intake answer BEFORE any claim", async () => {

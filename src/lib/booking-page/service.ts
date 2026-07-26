@@ -528,16 +528,6 @@ export async function submitPublicBooking(
   const email = input.email.trim();
   const note = input.note?.trim() ?? "";
 
-  // Payment gate, schema-hooks phase: a page marked as requiring payment
-  // must not hand out free appointments before collection exists. First
-  // check in the submit path, so nothing is claimed or written.
-  if (context.page.payment_required) {
-    logger.warn("booking-page: booking refused, page requires payment (not yet supported)", {
-      businessId: context.businessId
-    });
-    return { ok: false, detail: "payment_required" };
-  }
-
   // The page's intake questions, answered. Validated here but only REFUSED
   // after the idempotent resubmit check below: a visitor whose first submit
   // already booked must get their idempotent success even if the owner has
@@ -656,9 +646,20 @@ export async function submitPublicBooking(
     return { ok: false, detail: "already_booked" };
   }
 
-  // Only a FRESH booking is refused for unanswered required questions
-  // (after the idempotent path above, before any claim: the slot stays
-  // bookable while the visitor fixes the form).
+  // Only a FRESH booking is refused by the gates below, after the
+  // idempotent path above and before any claim: a visitor who already
+  // holds this appointment gets their idempotent success even if the page
+  // has since gained required questions or turned on payment.
+
+  // Payment gate, schema-hooks phase: a page marked as requiring payment
+  // must not hand out free appointments before collection exists.
+  if (context.page.payment_required) {
+    logger.warn("booking-page: booking refused, page requires payment (not yet supported)", {
+      businessId: context.businessId
+    });
+    return { ok: false, detail: "payment_required" };
+  }
+
   if (!intake.ok) return { ok: false, detail: "missing_answers" };
 
   // Re-verify the requested start is still an offered slot against live
