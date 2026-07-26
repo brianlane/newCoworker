@@ -45,7 +45,8 @@ beforeEach(() => {
   vi.mocked(sendFromOwnerMailbox).mockResolvedValue({
     ok: true,
     provider: "microsoft",
-    messageId: null
+    messageId: null,
+    threadId: null
   });
 });
 

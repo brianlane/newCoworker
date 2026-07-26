@@ -9,6 +9,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/db/agent-tool-settings", () => ({ isAgentToolEnabled: vi.fn() }));
 vi.mock("@/lib/email/owner-mailbox", () => ({ sendFromOwnerMailbox: vi.fn() }));
 vi.mock("@/lib/db/email-log", () => ({ recordOutboundAssistantEmail: vi.fn() }));
+vi.mock("@/lib/email-coworker/threads", () => ({ rememberSentThread: vi.fn() }));
 
 import {
   BODY_MAX_CHARS,
@@ -26,10 +27,12 @@ import {
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
+import { rememberSentThread } from "@/lib/email-coworker/threads";
 
 const mockToolEnabled = vi.mocked(isAgentToolEnabled);
 const mockSend = vi.mocked(sendFromOwnerMailbox);
 const mockRecord = vi.mocked(recordOutboundAssistantEmail);
+const mockRemember = vi.mocked(rememberSentThread);
 
 function block(json: string): string {
   return `${EMAIL_SEND_OPEN}\n${json}\n${EMAIL_SEND_CLOSE}`;
@@ -223,8 +226,14 @@ describe("fulfillOwnerEmailBlocks", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockToolEnabled.mockResolvedValue(true);
-    mockSend.mockResolvedValue({ ok: true, provider: "google", messageId: "m-1" });
+    mockSend.mockResolvedValue({
+      ok: true,
+      provider: "google",
+      messageId: "m-1",
+      threadId: "thread-9"
+    });
     mockRecord.mockResolvedValue(undefined);
+    mockRemember.mockResolvedValue(undefined);
   });
 
   it("sends through the owner mailbox and files the send under the calling surface", async () => {
@@ -246,6 +255,34 @@ describe("fulfillOwnerEmailBlocks", () => {
     expect(out.sentCount).toBe(1);
     expect(out.content).not.toContain(EMAIL_SEND_OPEN);
     expect(out.content).toContain("sent from your connected mailbox");
+    // Claims the conversation so the email coworker may answer replies on
+    // it later; this is the ONLY way a thread becomes eligible.
+    expect(mockRemember).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: BIZ,
+        provider: "google",
+        threadId: "thread-9",
+        correspondentEmail: "beth@lizdev.com"
+      })
+    );
+  });
+
+  it("claims no thread when the provider reports no conversation id", async () => {
+    // Graph sendMail returns no body: the mail goes out, but there is
+    // nothing to own, so no autonomous follow-up is possible.
+    mockSend.mockResolvedValue({
+      ok: true,
+      provider: "microsoft",
+      messageId: null,
+      threadId: null
+    });
+    const out = await fulfillOwnerEmailBlocks({
+      businessId: BIZ,
+      content: block('{"to": "a@b.co", "subject": "s", "body": "b"}'),
+      source: "dashboard_chat"
+    });
+    expect(out.sentCount).toBe(1);
+    expect(mockRemember).not.toHaveBeenCalled();
   });
 
   it("re-checks the Settings toggle per send and never files a refused one", async () => {

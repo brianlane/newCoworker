@@ -21,6 +21,7 @@
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
+import { rememberSentThread } from "@/lib/email-coworker/threads";
 
 export const EMAIL_SEND_OPEN = "<<EMAIL_SEND>>";
 export const EMAIL_SEND_CLOSE = "<<END_EMAIL_SEND>>";
@@ -278,6 +279,22 @@ export async function fulfillOwnerEmailBlocks(args: {
         ccEmails: req.cc,
         bccEmails: req.bcc
       });
+      // Claim the conversation for the email coworker: replies on a thread
+      // the assistant started are the ONLY mail it will ever answer, so
+      // this write is what makes an autonomous follow-up possible at all.
+      // Best-effort inside; the mail is already out either way. Providers
+      // that return no conversation id (Graph sendMail) simply do not get
+      // an owned thread.
+      if (sent.threadId) {
+        await rememberSentThread({
+          businessId: args.businessId,
+          provider: sent.provider,
+          threadId: sent.threadId,
+          subject: req.subject,
+          correspondentEmail: req.to,
+          sentMessageRef: null
+        });
+      }
       return { ok: true };
     }
   });

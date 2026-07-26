@@ -381,7 +381,11 @@ serve(async (req: Request): Promise<Response> => {
   await enqueueDueOutboundCalls(supabase, supabaseUrl, Deno.env.get("INTERNAL_CRON_SECRET") ?? "");
   const triggerPolls = Promise.all([
     kickTriggerPoll("/api/internal/aiflow-email-poll"),
-    kickTriggerPoll("/api/internal/aiflow-calendar-poll")
+    kickTriggerPoll("/api/internal/aiflow-calendar-poll"),
+    // The email coworker's own pass: same mailboxes, different question
+    // (is this a reply on a thread the assistant started), same
+    // failure-isolated posture.
+    kickTriggerPoll("/api/internal/email-coworker-poll")
   ]);
 
   const { data: claimed, error: claimErr } = await supabase.rpc("claim_ai_flow_runs", {

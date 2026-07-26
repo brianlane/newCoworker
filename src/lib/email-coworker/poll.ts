@@ -1,0 +1,215 @@
+/**
+ * The email coworker's poll: one pass over every business that owns an
+ * active email thread, answering replies that landed on those threads.
+ *
+ * Deliberately separate from the AiFlow trigger poll: that one asks "does
+ * this message match a flow's conditions", this one asks "is this message
+ * a reply on a conversation we started". Both read the same mailboxes, and
+ * both are failure-isolated per business so one broken connection cannot
+ * stall the rest.
+ *
+ * Rails, in order of application:
+ *   1. The thread must be OWNED (started by the assistant) and not handed off.
+ *   2. The message must not be from the mailbox itself (no self-answering).
+ *   3. The message must be unseen, and is marked seen BEFORE the turn runs:
+ *      an owner would rather lose a reply than receive two.
+ *   4. The thread's daily turn budget must not be spent; hitting it hands
+ *      the thread to a human and alerts the owner once.
+ */
+
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { resolveEmailConnection } from "@/lib/voice-tools/connections";
+import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
+import { recordSystemLog } from "@/lib/db/system-logs";
+import { fetchInboxWithThreads, INBOX_LOOKBACK_MINUTES } from "@/lib/email-coworker/mailbox";
+import {
+  EMAIL_COWORKER_MAX_TURNS_PER_DAY,
+  filterUnseenMessages,
+  listActiveThreads,
+  markMessagesSeen,
+  markThreadHandedOff,
+  recordThreadTurn,
+  turnsToday,
+  type EmailCoworkerThread
+} from "@/lib/email-coworker/threads";
+import { runEmailCoworkerTurn } from "@/lib/email-coworker/turn";
+import { logger } from "@/lib/logger";
+
+type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
+
+export type EmailCoworkerPollResult = {
+  businesses: number;
+  threads: number;
+  messages: number;
+  replied: number;
+  handedOff: number;
+};
+
+/** Mailbox address of the connection itself, so we never answer our own mail. */
+async function mailboxSelfAddress(
+  businessId: string,
+  db: SupabaseClient
+): Promise<string | null> {
+  try {
+    const { data } = await db
+      .from("businesses")
+      .select("owner_email")
+      .eq("id", businessId)
+      .maybeSingle();
+    const email = (data as { owner_email?: string } | null)?.owner_email;
+    return typeof email === "string" ? email.trim().toLowerCase() : null;
+  } catch {
+    return null;
+  }
+}
+
+async function businessTimezone(businessId: string, db: SupabaseClient): Promise<string | null> {
+  try {
+    const { data } = await db
+      .from("businesses")
+      .select("timezone")
+      .eq("id", businessId)
+      .maybeSingle();
+    const tz = (data as { timezone?: string } | null)?.timezone;
+    return typeof tz === "string" && tz.trim() ? tz : null;
+  } catch {
+    return null;
+  }
+}
+
+export async function pollEmailCoworker(
+  client?: SupabaseClient
+): Promise<EmailCoworkerPollResult> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const result: EmailCoworkerPollResult = {
+    businesses: 0,
+    threads: 0,
+    messages: 0,
+    replied: 0,
+    handedOff: 0
+  };
+
+  const threads = await listActiveThreads(db);
+  result.threads = threads.length;
+  if (threads.length === 0) return result;
+
+  const byBusiness = new Map<string, EmailCoworkerThread[]>();
+  for (const t of threads) {
+    byBusiness.set(t.businessId, [...(byBusiness.get(t.businessId) ?? []), t]);
+  }
+
+  const sinceMs = Date.now() - INBOX_LOOKBACK_MINUTES * 60_000;
+  for (const [businessId, owned] of byBusiness) {
+    result.businesses += 1;
+    try {
+      const conn = await resolveEmailConnection(businessId);
+      if (!conn) continue;
+      const [selfAddress, timezone] = await Promise.all([
+        mailboxSelfAddress(businessId, db),
+        businessTimezone(businessId, db)
+      ]);
+
+      const messages = await fetchInboxWithThreads(
+        businessId,
+        conn.provider,
+        { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
+        sinceMs
+      );
+
+      const ownedByThreadId = new Map(owned.map((t) => [t.threadId, t]));
+      const candidates = messages.filter((m) => {
+        if (!m.threadId || !ownedByThreadId.has(m.threadId)) return false;
+        // Our own sent copy can appear in some mailbox views; answering it
+        // would be an infinite conversation with ourselves.
+        if (selfAddress && m.fromEmail.trim().toLowerCase() === selfAddress) return false;
+        return true;
+      });
+      if (candidates.length === 0) continue;
+
+      const unseenIds = new Set(
+        await filterUnseenMessages(
+          businessId,
+          candidates.map((m) => m.id),
+          db
+        )
+      );
+      const fresh = candidates.filter((m) => unseenIds.has(m.id));
+      if (fresh.length === 0) continue;
+      result.messages += fresh.length;
+
+      // Seen BEFORE the turn: a crash mid-turn must not double-answer.
+      await markMessagesSeen(
+        businessId,
+        fresh.map((m) => m.id),
+        db
+      );
+
+      for (const message of fresh) {
+        const thread = ownedByThreadId.get(message.threadId)!;
+        const spent = turnsToday(thread);
+        if (spent >= EMAIL_COWORKER_MAX_TURNS_PER_DAY) {
+          // A conversation this long is not converging: hand it to a human
+          // rather than keep answering.
+          await markThreadHandedOff(thread.id, db);
+          result.handedOff += 1;
+          await dispatchUrgentNotification({
+            businessId,
+            summary: `Email thread needs you: ${thread.subject ?? "(no subject)"}`,
+            kind: "email_coworker_handoff",
+            payload: { thread_id: thread.threadId, from: message.fromEmail },
+            emailSubject: `Take over the email thread with ${message.fromEmail}`,
+            emailBody:
+              `Your coworker has answered ${EMAIL_COWORKER_MAX_TURNS_PER_DAY} times today on ` +
+              `"${thread.subject ?? "(no subject)"}" with ${message.fromEmail} and has stopped ` +
+              "so it does not talk in circles. The thread is in your mailbox.",
+            smsBody:
+              `[Coworker] Email thread with ${message.fromEmail} needs you: ` +
+              `${thread.subject ?? "(no subject)"}`
+          }).catch(() => {});
+          continue;
+        }
+
+        const turn = await runEmailCoworkerTurn({
+          thread,
+          message,
+          link: {
+            provider: conn.provider,
+            connectionId: conn.connectionId,
+            providerConfigKey: conn.providerConfigKey
+          },
+          businessTimezone: timezone
+        });
+        if (!turn.ok) {
+          await recordSystemLog({
+            businessId,
+            source: "email",
+            level: "warn",
+            event: "email_coworker_turn_failed",
+            message: `Email coworker could not answer ${message.fromEmail}: ${turn.detail}`,
+            payload: { thread_id: thread.threadId, message_id: message.id }
+          });
+          continue;
+        }
+        result.replied += 1;
+        await recordThreadTurn(thread.id, {}, spent, db);
+        // Keep the in-memory copy honest: several replies can land on one
+        // thread in a single poll, and each must count against the budget.
+        thread.turns = spent + 1;
+        thread.turnsDay = new Date().toISOString().slice(0, 10);
+      }
+    } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
+      logger.warn("email-coworker: poll failed for business", { businessId, error: message });
+      await recordSystemLog({
+        businessId,
+        source: "email",
+        level: "error",
+        event: "email_coworker_poll_failed",
+        message: `Email coworker poll failed: ${message}`,
+        payload: {}
+      });
+    }
+  }
+
+  return result;
+}

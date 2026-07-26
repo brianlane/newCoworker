@@ -204,7 +204,12 @@ export async function POST(request: Request) {
       // tool calls) before the worker gives up and falls back to the Rowboat
       // staff reply — otherwise a slow turn could keep acting after the
       // owner already received a contradictory fallback answer.
-      budgetMs: 70_000,
+      //
+      // 60s, not 70s, because EMAIL_SEND fulfilment runs AFTER this returns
+      // (up to 3 provider sends). At 70s a slow turn could still be mailing
+      // when the worker aborts, leaving mail in flight that the owner is
+      // never told about.
+      budgetMs: 60_000,
       actionToolGates: {
         send_sms: smsToolEnabled,
         // Same connection-aware gating as dashboard chat: never declare a

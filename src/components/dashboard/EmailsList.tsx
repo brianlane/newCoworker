@@ -51,7 +51,10 @@ const SOURCE_META: Record<EmailLogSource, SourceMeta> = {
   sms_assistant: { label: "Texts", tagClass: "text-parchment/45" },
   voice_assistant: { label: "Call", tagClass: "text-parchment/45" },
   ai_flow: { label: "AiFlow", tagClass: "text-parchment/45" },
-  owner_manual: { label: "You", tagClass: "text-claw-green" }
+  owner_manual: { label: "You", tagClass: "text-claw-green" },
+  // The coworker answered a reply on a thread it started: distinct from
+  // "Chat" (owner asked for it) and "You" (owner typed it).
+  email_coworker: { label: "Coworker", tagClass: "text-signal-teal" }
 };
 
 function sourceMeta(source: EmailLogSource): SourceMeta {
