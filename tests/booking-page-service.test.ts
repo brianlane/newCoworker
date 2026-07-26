@@ -214,7 +214,7 @@ beforeEach(() => {
   mockStampManage.mockResolvedValue(true);
   mockStampContact.mockResolvedValue(true);
   mockAssigneeCounts.mockResolvedValue(new Map());
-  mockStampAssignee.mockResolvedValue(undefined);
+  mockStampAssignee.mockResolvedValue(true);
   mockMarkOffered.mockResolvedValue(undefined);
   mockConfirmationEmail.mockResolvedValue(true);
   mockUpcomingForAttendee.mockResolvedValue([]);
@@ -742,12 +742,36 @@ describe("submitPublicBooking", () => {
       "m-ana"
     );
 
-    // A failed fill is swallowed: the appointment is real either way.
+    // A failed fill is swallowed: the appointment is real either way. And
+    // with nothing filled, the tiebreak must not move.
     mockUpcomingForAttendee.mockResolvedValueOnce([
       { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
     ] as never);
     mockStampAssignee.mockRejectedValueOnce(new Error("denied"));
+    mockMarkOffered.mockClear();
     expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    expect(mockMarkOffered).not.toHaveBeenCalled();
+
+    // A resubmit whose booking ALREADY has an assignee is a no-op repair:
+    // no fill, no tiebreak movement (a harmless retry must not skew who
+    // wins the next tie).
+    mockUpcomingForAttendee.mockResolvedValueOnce([
+      { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
+    ] as never);
+    mockStampAssignee.mockResolvedValueOnce(false);
+    mockMarkOffered.mockClear();
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    expect(mockMarkOffered).not.toHaveBeenCalled();
+
+    // And when the retry genuinely fills the gap, the tiebreak advances.
+    mockUpcomingForAttendee.mockResolvedValueOnce([
+      { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
+    ] as never);
+    mockStampAssignee.mockResolvedValueOnce(true);
+    mockMarkOffered.mockClear();
+    mockMarkOffered.mockRejectedValueOnce(new Error("update denied"));
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    expect(mockMarkOffered).toHaveBeenCalledWith("m-ana");
 
     // A failed resolution on the retry is still a successful answer.
     mockUpcomingForAttendee.mockResolvedValueOnce([

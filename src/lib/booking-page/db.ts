@@ -215,15 +215,6 @@ function validatePatch(patch: BookingPageSettingsPatch): void {
   ) {
     throw new BookingPageValidationError("Unknown assignment mode");
   }
-  // Explicitly clearing the employee while asking for 'fixed' is
-  // self-contradictory. Omitting it is checked against the STORED employee
-  // in upsertBookingPage, which is the only place that can see it.
-  if (
-    patch.assignmentMode === "fixed" &&
-    (patch.employeeId === null || patch.employeeId?.trim() === "")
-  ) {
-    throw new BookingPageValidationError("Pick the employee this page books");
-  }
   for (const [value, label] of [
     [patch.reminderEmailHours, "Email reminder"],
     [patch.reminderSmsHours, "Text reminder"]
@@ -307,10 +298,14 @@ export async function upsertBookingPage(
   const existing = await getBookingPageForBusiness(businessId, db);
 
   // A 'fixed' page with nobody named silently behaves like an unassigned
-  // one. Checked here rather than in validatePatch because "keep the
-  // employee already on the page" is a legitimate patch, and only this
-  // scope knows what is stored.
-  if (patch.assignmentMode === "fixed" && patch.employeeId === undefined && !existing?.employee_id) {
+  // one, so the RESULTING state is what gets checked, not the patch shape:
+  // switching to fixed without naming anyone, and clearing the employee on
+  // a page already fixed, are the same mistake. Checked here rather than in
+  // validatePatch because only this scope can see what is stored.
+  const effectiveMode = patch.assignmentMode ?? existing?.assignment_mode ?? "any";
+  const effectiveEmployee =
+    patch.employeeId === undefined ? (existing?.employee_id ?? null) : patch.employeeId;
+  if (effectiveMode === "fixed" && !effectiveEmployee?.trim()) {
     throw new BookingPageValidationError("Pick the employee this page books");
   }
 
@@ -656,14 +651,18 @@ export async function stampAssigneeIfUnset(
   startIso: string,
   memberId: string,
   client?: SupabaseClient
-): Promise<void> {
+): Promise<boolean> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { error } = await db
+  const { data, error } = await db
     .from("calendar_booking_dedupe")
     .update({ assignee_member_id: memberId })
     .eq("business_id", businessId)
     .eq("attendee_key", attendeeKey)
     .eq("start_at", startIso)
-    .is("assignee_member_id", null);
+    .is("assignee_member_id", null)
+    // Whether the gap was actually filled, so the caller can tell a repair
+    // from a no-op and only then advance the round-robin tiebreak.
+    .select("id");
   if (error) throw new Error(`stampAssigneeIfUnset: ${error.message}`);
+  return (data ?? []).length > 0;
 }

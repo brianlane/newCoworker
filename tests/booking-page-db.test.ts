@@ -663,8 +663,10 @@ describe("reminder settings and attendee contact", () => {
   });
 
   it("fills a missing assignee without overwriting one that exists", async () => {
-    const { client, calls } = fakeDb([{ error: null }]);
-    await stampAssigneeIfUnset(BIZ, "phone:+14805550100", "2026-07-27T16:00:00Z", "m-ana", client);
+    const { client, calls } = fakeDb([{ data: [{ id: "row-1" }], error: null }]);
+    expect(
+      await stampAssigneeIfUnset(BIZ, "phone:+14805550100", "2026-07-27T16:00:00Z", "m-ana", client)
+    ).toBe(true);
     expect(calls.find((c) => c.method === "update")?.args[0]).toEqual({
       assignee_member_id: "m-ana"
     });
@@ -675,12 +677,22 @@ describe("reminder settings and attendee contact", () => {
       null
     ]);
 
-    const { client: failing } = fakeDb([{ error: { message: "denied" } }]);
+    // An already-assigned booking answers false: a repair, not a reassign.
+    const { client: taken } = fakeDb([{ data: [], error: null }]);
+    expect(await stampAssigneeIfUnset(BIZ, "k", "2026-07-27T16:00:00Z", "m-ana", taken)).toBe(
+      false
+    );
+    const { client: nullData } = fakeDb([{ data: null, error: null }]);
+    expect(await stampAssigneeIfUnset(BIZ, "k", "2026-07-27T16:00:00Z", "m-ana", nullData)).toBe(
+      false
+    );
+
+    const { client: failing } = fakeDb([{ data: null, error: { message: "denied" } }]);
     await expect(
       stampAssigneeIfUnset(BIZ, "k", "2026-07-27T16:00:00Z", "m-ana", failing)
     ).rejects.toThrow("stampAssigneeIfUnset: denied");
 
-    const { client: fallback } = fakeDb([{ error: null }]);
+    const { client: fallback } = fakeDb([{ data: [], error: null }]);
     mockClientFactory.mockResolvedValue(fallback);
     await stampAssigneeIfUnset(BIZ, "k", "2026-07-27T16:00:00Z", "m-ana");
     expect(mockClientFactory).toHaveBeenCalled();
@@ -765,6 +777,16 @@ describe("assignment settings and per-assignee load", () => {
       await expect(upsertBookingPage(BIZ, patch, client)).rejects.toThrow(/Pick the employee/);
     }
 
+    // Clearing the employee on a page ALREADY fixed is the same mistake
+    // as switching to fixed without naming anyone: the resulting state is
+    // what gets checked.
+    const { client: fixedPage } = fakeDb([
+      { data: { ...ROW, assignment_mode: "fixed", employee_id: "m-ana" }, error: null }
+    ]);
+    await expect(
+      upsertBookingPage(BIZ, { employeeId: null }, fixedPage)
+    ).rejects.toThrow(/Pick the employee/);
+
     // Omitted is refused only when the STORED page has nobody either:
     // "keep the employee already on this page" is a legitimate patch.
     const { client: bare } = fakeDb([{ data: { ...ROW, employee_id: null }, error: null }]);
@@ -779,6 +801,13 @@ describe("assignment settings and per-assignee load", () => {
     await expect(
       upsertBookingPage(BIZ, { assignmentMode: "fixed" }, named)
     ).resolves.toBeTruthy();
+
+    // A cleared employee on an unassigned page stays legal.
+    const { client: anyPage } = fakeDb([
+      { data: { ...ROW }, error: null },
+      { data: ROW, error: null }
+    ]);
+    await expect(upsertBookingPage(BIZ, { employeeId: null }, anyPage)).resolves.toBeTruthy();
   });
 
   it("writes the mode and the employee", async () => {

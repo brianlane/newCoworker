@@ -479,17 +479,7 @@ async function resolveAssignee(
       businessId: context.businessId,
       reason: choice.reason
     });
-    return null;
   }
-  // Advance the tiebreak, or two members carrying the same load would
-  // forever resolve to the same person. Best-effort: they already have the
-  // booking, and a stale timestamp only costs fairness on the next tie.
-  await markMemberOffered(choice.memberId).catch((err: unknown) => {
-    logger.warn("booking-page: could not advance the assignment tiebreak", {
-      businessId: context.businessId,
-      error: err instanceof Error ? err.message : String(err)
-    });
-  });
   return choice.memberId;
 }
 
@@ -581,12 +571,15 @@ export async function submitPublicBooking(
       // Only fills a genuine gap: the original assignment is the right
       // answer, and re-resolving can name someone else as loads move, so
       // overwriting would reassign work already on somebody's calendar.
-      await stampAssigneeIfUnset(
+      // The tiebreak advances only when the gap was ACTUALLY filled: a
+      // harmless resubmit must not skew who wins the next tie.
+      const filled = await stampAssigneeIfUnset(
         context.businessId,
         bookingAttendeeKey(phone, email, name),
         start.toISOString(),
         retryAssignee
-      ).catch(() => {});
+      ).catch(() => false);
+      if (filled) await markMemberOffered(retryAssignee).catch(() => {});
     }
     await stampAttendeeContact(
       context.businessId,
@@ -852,6 +845,17 @@ export async function submitPublicBooking(
     });
     return null;
   });
+  if (assignee) {
+    // Advance the round-robin tiebreak, or two members carrying the same
+    // load would forever resolve to the same person. Best-effort: a stale
+    // timestamp only costs fairness on the next tie, never the booking.
+    await markMemberOffered(assignee).catch((err: unknown) => {
+      logger.warn("booking-page: could not advance the assignment tiebreak", {
+        businessId: context.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    });
+  }
 
   await stampAttendeeContact(
     context.businessId,
