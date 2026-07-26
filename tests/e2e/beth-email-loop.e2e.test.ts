@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { EMAIL_SURFACE_BLOCK, buildEmailTurnSystem } from "@/lib/email-coworker/turn";
+import {
+  EMAIL_SURFACE_BLOCK,
+  buildEmailTurnSystem,
+  splitHandoffSentinel
+} from "@/lib/email-coworker/turn";
 import { actionToolDeclarations, type ActionToolGates } from "@/lib/dashboard-chat/action-tools";
 import {
   buildFunctionResponseContent,
@@ -268,5 +272,14 @@ describe("the email surface cannot act beyond its calendar tools", () => {
     expect(verdict.answers.grants_discount).toBe(false);
     expect(verdict.answers.promises_text).toBe(false);
     expect(EMAIL_SURFACE_BLOCK).toMatch(/bringing in a colleague/i);
+
+    // The escalation must be ACTED on, not just said: the sentinel is what
+    // marks the thread handed off and alerts the owner, so a reply that
+    // promises a colleague without it is an empty promise.
+    const { handoff } = splitHandoffSentinel(out.finalText);
+    if (!handoff) {
+      console.error("live reply (no handoff sentinel):", out.finalText);
+    }
+    expect(handoff).toBe(true);
   }, 300_000);
 });

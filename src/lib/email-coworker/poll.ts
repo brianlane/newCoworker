@@ -240,6 +240,35 @@ export async function pollEmailCoworker(
         // thread in a single poll, and each must count against the budget.
         thread.turns = spent + 1;
         thread.turnsDay = new Date().toISOString().slice(0, 10);
+
+        // The model escalated. Its reply already told the correspondent a
+        // colleague is coming, so the thread must actually change hands: no
+        // further autonomous turns, and the owner hears about it once.
+        if (turn.handoff) {
+          await markThreadHandedOff(thread.id, db).catch((err: unknown) => {
+            logger.warn("email-coworker: handoff write failed after escalating", {
+              businessId,
+              threadId: thread.threadId,
+              error: err instanceof Error ? err.message : String(err)
+            });
+          });
+          thread.handedOff = true;
+          result.handedOff += 1;
+          await dispatchUrgentNotification({
+            businessId,
+            summary: `Email needs you: ${thread.subject ?? "(no subject)"}`,
+            kind: "email_coworker_handoff",
+            payload: { thread_id: thread.threadId, from: message.fromEmail, reason: "escalated" },
+            emailSubject: `Take over the email thread with ${message.fromEmail}`,
+            emailBody:
+              `Your coworker told ${message.fromEmail} that a colleague would follow up on ` +
+              `"${thread.subject ?? "(no subject)"}" and stopped answering. Their message:\n\n` +
+              message.bodyText.slice(0, 800),
+            smsBody:
+              `[Coworker] ${message.fromEmail} needs a person on: ` +
+              `${thread.subject ?? "(no subject)"}`
+          }).catch(() => {});
+        }
       }
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);

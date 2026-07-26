@@ -1462,6 +1462,13 @@ the email sibling of the owner-over-SMS operator turn: same inline engine
   owner would rather lose a reply than send two); caps autonomous replies
   per thread per UTC day, then hands the thread to a human and alerts the
   owner once. Per-business failures are isolated.
+- **Escalation is an action, not a sentence**: when the model brings in a
+  colleague it must end the reply with the `NEEDS_HUMAN` sentinel, which is
+  stripped before sending and is what marks the thread handed off and alerts
+  the owner. Same reasoning as the EMAIL_SEND protocol: a deterministic
+  marker beats classifying prose after the fact, and without it "a colleague
+  will follow up" was an empty promise while the coworker kept answering.
+  An owner EMAIL_SEND on the thread revives it (budget included).
 - **Threading**: `sendFromMailboxConnection` takes optional thread args.
   Gmail sets `In-Reply-To`/`References` AND the `threadId` (headers alone
   let Gmail split the conversation); Graph has no raw-MIME send, so a

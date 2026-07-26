@@ -293,6 +293,37 @@ describe("pollEmailCoworker", () => {
     );
   });
 
+  it("hands the thread over when the turn escalates, alerting the owner once", async () => {
+    mockFetch.mockResolvedValue([message({ id: "m-1" }), message({ id: "m-2" })]);
+    mockTurn.mockResolvedValueOnce({ ok: true, reply: "A colleague will follow up.", handoff: true });
+    const out = await pollEmailCoworker(businessDb());
+    expect(out.replied).toBe(1);
+    expect(out.handedOff).toBe(1);
+    // The escalation reply went out, then the thread changed hands: the
+    // second message in the batch gets no autonomous turn.
+    expect(mockTurn).toHaveBeenCalledTimes(1);
+    expect(mockHandoff).toHaveBeenCalledWith("row-1", expect.anything());
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
+    expect(mockDispatch.mock.calls[0][0].payload).toMatchObject({ reason: "escalated" });
+  });
+
+  it("still hands over when the escalation bookkeeping fails", async () => {
+    mockTurn.mockResolvedValue({ ok: true, reply: "A colleague will follow up.", handoff: true });
+    mockHandoff.mockRejectedValueOnce(new Error("update denied"));
+    mockDispatch.mockRejectedValue(new Error("smtp down"));
+    expect((await pollEmailCoworker(businessDb())).handedOff).toBe(1);
+
+    // Non-Error throw shape, and a subject-less thread in the alert copy.
+    mockList.mockResolvedValue([{ ...THREAD, subject: null }]);
+    mockHandoff.mockRejectedValueOnce("update denied");
+    const out = await pollEmailCoworker(businessDb());
+    expect(out.handedOff).toBe(1);
+    const alert = mockDispatch.mock.calls.at(-1)![0];
+    expect(alert.summary).toContain("(no subject)");
+    expect(String(alert.emailBody)).toContain("(no subject)");
+    expect(String(alert.smsBody)).toContain("(no subject)");
+  });
+
   it("logs a failed turn and moves on", async () => {
     mockTurn.mockResolvedValue({ ok: false, detail: "over_cap" });
     const out = await pollEmailCoworker(businessDb());

@@ -25,6 +25,24 @@ import type { InboxMessage } from "@/lib/email-coworker/mailbox";
 import { logger } from "@/lib/logger";
 
 /**
+ * Sentinel the model appends when it escalates. Stripped before sending;
+ * its presence is what actually pulls a human in (marks the thread handed
+ * off and alerts the owner), so "I am bringing in a colleague" cannot be an
+ * empty promise. Same shape as the EMAIL_SEND protocol on the owner
+ * surfaces: a deterministic marker beats classifying prose after the fact.
+ */
+export const NEEDS_HUMAN_SENTINEL = "<<NEEDS_HUMAN>>";
+
+/** Strip the escalation sentinel, reporting whether it was there. */
+export function splitHandoffSentinel(reply: string): { text: string; handoff: boolean } {
+  if (!reply.includes(NEEDS_HUMAN_SENTINEL)) return { text: reply, handoff: false };
+  return {
+    text: reply.split(NEEDS_HUMAN_SENTINEL).join("").replace(/\n{3,}/g, "\n\n").trim(),
+    handoff: true
+  };
+}
+
+/**
  * The surface contract, exported so the live-AI e2e suite replays the EXACT
  * production string (same convention as SMS_SURFACE_BLOCK).
  *
@@ -39,7 +57,8 @@ export const EMAIL_SURFACE_BLOCK = `THIS CONVERSATION IS OVER EMAIL, and the per
 - Always name the time zone for any time you mention, and when you know the other person's zone, give their local time.
 - When a booking result carries a video meeting link, put that exact link in your reply, even when the calendar invitation goes to someone else. The person writing is usually coordinating and needs something they can forward. Never invent a link: use the one the tool returned, or say the invitation is on its way.
 - Only state that something is booked, moved, or canceled after the matching tool call succeeded in this conversation. If a booking fails, say the time is no longer available and offer another, never blame a technical problem.
-- You cannot send text messages, change any settings, or take any action beyond your calendar tools and this reply. If the request needs a person (pricing negotiation, anything you are unsure of, anything angry), say plainly that you are bringing in a colleague and stop there.`;
+- You cannot send text messages, change any settings, or take any action beyond your calendar tools and this reply. If the request needs a person (pricing negotiation, anything you are unsure of, anything angry), say plainly that you are bringing in a colleague and stop there.
+- Whenever you hand off to a person like that, end your reply with ${NEEDS_HUMAN_SENTINEL} on its own final line. It is removed before the email is sent and is how the team is actually pulled in, so a handoff without it is an empty promise. Never use it on a reply you handled yourself.`;
 
 export type EmailTurnResult =
   | { ok: true; reply: string; handoff: boolean }
@@ -171,7 +190,7 @@ export async function runEmailCoworkerTurn(args: {
     return { ok: false, detail: inline.detail ?? inline.error ?? "turn_failed" };
   }
 
-  const reply = inline.content.trim();
+  const { text: reply, handoff } = splitHandoffSentinel(inline.content.trim());
   if (!reply) return { ok: false, detail: "empty_reply" };
 
   const sent = await sendFromMailboxConnection(
@@ -203,5 +222,5 @@ export async function runEmailCoworkerTurn(args: {
     providerMessageId: sent.messageId
   });
 
-  return { ok: true, reply, handoff: false };
+  return { ok: true, reply, handoff };
 }

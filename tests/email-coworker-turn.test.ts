@@ -17,9 +17,11 @@ vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), info: vi.fn(), error: 
 import {
   EMAIL_SURFACE_BLOCK,
   EMAIL_TURN_BUDGET_MS,
+  NEEDS_HUMAN_SENTINEL,
   buildEmailTurnSystem,
   replySubject,
-  runEmailCoworkerTurn
+  runEmailCoworkerTurn,
+  splitHandoffSentinel
 } from "@/lib/email-coworker/turn";
 import { runInlineChatTurn } from "@/lib/dashboard-chat/inline-turn";
 import {
@@ -89,6 +91,27 @@ describe("EMAIL_SURFACE_BLOCK", () => {
     expect(EMAIL_SURFACE_BLOCK).toMatch(/book the PRINCIPAL/i);
     expect(EMAIL_SURFACE_BLOCK).toMatch(/cannot send text messages/i);
     expect(EMAIL_SURFACE_BLOCK).not.toContain("—");
+  });
+});
+
+describe("splitHandoffSentinel", () => {
+  it("strips the sentinel and reports the escalation", () => {
+    expect(
+      splitHandoffSentinel(`I am bringing in a colleague on pricing.\n\n${NEEDS_HUMAN_SENTINEL}`)
+    ).toEqual({ text: "I am bringing in a colleague on pricing.", handoff: true });
+  });
+
+  it("leaves an ordinary reply untouched", () => {
+    expect(splitHandoffSentinel("Booked for Monday at 9 AM Mountain.")).toEqual({
+      text: "Booked for Monday at 9 AM Mountain.",
+      handoff: false
+    });
+  });
+
+  it("collapses the gap a mid-body sentinel leaves behind", () => {
+    expect(
+      splitHandoffSentinel(`Line one.\n\n${NEEDS_HUMAN_SENTINEL}\n\nLine two.`).text
+    ).toBe("Line one.\n\nLine two.");
   });
 });
 
@@ -281,6 +304,35 @@ describe("runEmailCoworkerTurn", () => {
       })
     ).toEqual({ ok: false, detail: "email_not_connected" });
     expect(mockRecord).not.toHaveBeenCalled();
+  });
+
+  it("reports an escalation and never mails the sentinel to the correspondent", async () => {
+    mockTurn.mockResolvedValue({
+      ok: true,
+      content: `Liz's team handles pricing, I am bringing in a colleague.\n\n${NEEDS_HUMAN_SENTINEL}`
+    } as never);
+    const out = await runEmailCoworkerTurn({
+      thread: THREAD,
+      message: MESSAGE,
+      link: LINK,
+      businessTimezone: null
+    });
+    expect(out).toMatchObject({ ok: true, handoff: true });
+    expect(mockSend.mock.calls[0][2].bodyText).not.toContain(NEEDS_HUMAN_SENTINEL);
+    expect(mockSend.mock.calls[0][2].bodyText).toContain("bringing in a colleague");
+  });
+
+  it("treats a sentinel-only draw as empty rather than mailing nothing", async () => {
+    mockTurn.mockResolvedValue({ ok: true, content: NEEDS_HUMAN_SENTINEL } as never);
+    expect(
+      await runEmailCoworkerTurn({
+        thread: THREAD,
+        message: MESSAGE,
+        link: LINK,
+        businessTimezone: null
+      })
+    ).toEqual({ ok: false, detail: "empty_reply" });
+    expect(mockSend).not.toHaveBeenCalled();
   });
 
   it("passes an explicit clock through to the date line", async () => {
