@@ -119,20 +119,26 @@ function LoginForm() {
     try {
       await clearStaleSupabaseAuthCookies();
       const supabase = getSupabaseBrowserClient();
-      // Recorded before the redirect because the browser leaves this page for
-      // Google and comes back through /api/auth/callback, which never renders
-      // this component. An abandoned consent screen leaves a stale hint, which
-      // is the acceptable cost of a badge that works at all.
-      rememberLastLoginMethod("google");
-      const { error: oauthError } = await supabase.auth.signInWithOAuth({
+      // We drive the redirect ourselves so the "last used" hint is only
+      // written once Supabase has actually handed us an authorization URL.
+      // Letting the SDK redirect would force the write to happen before we
+      // know the call succeeded, badging Google after a failure that never
+      // left this page.
+      const { data, error: oauthError } = await supabase.auth.signInWithOAuth({
         provider: "google",
-        options: { redirectTo: callbackUrl(redirectTo) }
+        options: { redirectTo: callbackUrl(redirectTo), skipBrowserRedirect: true }
       });
-      if (oauthError) {
-        setError(oauthError.message);
+      if (oauthError || !data?.url) {
+        setError(oauthError?.message ?? t("signInFailed"));
         setPending(null);
+        return;
       }
-      // On success the browser is navigating away: leave the button spinning.
+      // The owner comes back through /api/auth/callback, which never renders
+      // this component, so this is the last chance to record the method. An
+      // abandoned consent screen leaves a stale hint: acceptable for a badge.
+      rememberLastLoginMethod("google");
+      window.location.assign(data.url);
+      // Navigating away: leave the button spinning rather than flickering.
     } catch {
       setError(t("signInFailed"));
       setPending(null);
