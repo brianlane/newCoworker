@@ -157,6 +157,10 @@ export function ManageBookingPage({
           return;
         }
         if (startChoice) setStart(body.data?.startIso ?? startChoice);
+        // The old list is stale the moment the appointment moves: it was
+        // built around the previous time (and excluded it). Dropping it
+        // makes re-entering the picker refetch.
+        setSlots(null);
         setView("moved");
       } catch {
         setError(strings.changeFailed);
@@ -214,6 +218,9 @@ export function ManageBookingPage({
             disabled={busy}
             onClick={() => {
               setError(null);
+              // Always refetch on entry: availability moves while this page
+              // sits open, and a cached list can offer times that are gone.
+              setSlots(null);
               setView("picking");
             }}
             className="rounded-lg border border-claw-green/50 px-4 py-2 text-sm text-claw-green hover:bg-claw-green/10 disabled:opacity-50"
