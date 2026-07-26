@@ -63,6 +63,8 @@ export function ManageBookingPage({
   const [view, setView] = useState<View>("summary");
   const [start, setStart] = useState(startIso);
   const [slots, setSlots] = useState<Slot[] | null>(null);
+  // Distinct from an empty list: a failed load must not read as "no times".
+  const [slotsFailed, setSlotsFailed] = useState(false);
   const [slotsTimezone, setSlotsTimezone] = useState(timezone);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -113,21 +115,23 @@ export function ManageBookingPage({
         const body = await res.json();
         if (!active) return;
         if (!res.ok || !body.ok) {
-          // A failed listing is not "no times": say so, and let them retry.
+          setSlotsFailed(true);
           setSlots([]);
-          setError(strings.slotsUnavailable);
           return;
         }
         setSlotsTimezone(body.data.timezone ?? timezone);
         setSlots(body.data.slots ?? []);
       } catch {
-        if (active) setSlots([]);
+        if (active) {
+          setSlotsFailed(true);
+          setSlots([]);
+        }
       }
     })();
     return () => {
       active = false;
     };
-  }, [view, slots, token, timezone, strings.slotsUnavailable]);
+  }, [view, slots, token, timezone]);
 
   const act = useCallback(
     async (action: "cancel" | "reschedule", startChoice?: string) => {
@@ -157,7 +161,10 @@ export function ManageBookingPage({
           );
           // A raced slot means the offer is stale: re-fetch rather than
           // leave the visitor clicking a time that is gone.
-          if (res.status === 409) setSlots(null);
+          if (res.status === 409) {
+            setSlotsFailed(false);
+            setSlots(null);
+          }
           return;
         }
         if (action === "cancel") {
@@ -168,6 +175,7 @@ export function ManageBookingPage({
         // The old list is stale the moment the appointment moves: it was
         // built around the previous time (and excluded it). Dropping it
         // makes re-entering the picker refetch.
+        setSlotsFailed(false);
         setSlots(null);
         setView("moved");
       } catch {
@@ -237,6 +245,7 @@ export function ManageBookingPage({
               setError(null);
               // Always refetch on entry: availability moves while this page
               // sits open, and a cached list can offer times that are gone.
+              setSlotsFailed(false);
               setSlots(null);
               setView("picking");
             }}
@@ -283,6 +292,8 @@ export function ManageBookingPage({
           <p className="text-sm text-parchment/80">{strings.pickNewTime}</p>
           {slots === null ? (
             <p className="mt-3 text-sm text-parchment/50">{strings.loadingSlots}</p>
+          ) : slotsFailed ? (
+            <p className="mt-3 text-sm text-red-400">{strings.slotsUnavailable}</p>
           ) : slots.length === 0 ? (
             <p className="mt-3 text-sm text-parchment/50">{strings.noSlots}</p>
           ) : (
