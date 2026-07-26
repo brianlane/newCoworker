@@ -33,6 +33,7 @@ vi.mock("@/lib/zoom/client", () => ({
 import {
   createZoomMeetingForBooking,
   deleteZoomMeetingForBooking,
+  getZoomJoinUrl,
   resolveZoomTransport,
   updateZoomMeetingForBooking
 } from "@/lib/zoom/meetings";
@@ -199,6 +200,43 @@ describe("updateZoomMeetingForBooking", () => {
 
     zoomRequestForBusiness.mockRejectedValue("raw string failure");
     expect(await updateZoomMeetingForBooking(BIZ, "zm-1", BOOKING)).toBe(false);
+  });
+});
+
+describe("getZoomJoinUrl", () => {
+  it("reads the real join URL back (a rebuilt /j/<id> link drops the password)", async () => {
+    getActiveZoomConnectionId.mockResolvedValue("zc-1");
+    zoomRequestForBusiness.mockResolvedValue({
+      data: { join_url: "https://zoom.us/j/zm-1?pwd=secret" }
+    });
+    expect(await getZoomJoinUrl(BIZ, "zm-1")).toBe("https://zoom.us/j/zm-1?pwd=secret");
+    expect(zoomRequestForBusiness).toHaveBeenCalledWith(BIZ, {
+      endpoint: "/meetings/zm-1",
+      method: "GET"
+    });
+  });
+
+  it("answers null (never a broken link) with no transport, no url, or a failure", async () => {
+    expect(await getZoomJoinUrl(BIZ, "zm-1")).toBeNull();
+
+    getActiveZoomConnectionId.mockResolvedValue("zc-1");
+    zoomRequestForBusiness.mockResolvedValue(null);
+    expect(await getZoomJoinUrl(BIZ, "zm-1")).toBeNull();
+
+    zoomRequestForBusiness.mockResolvedValue({ data: {} });
+    expect(await getZoomJoinUrl(BIZ, "zm-1")).toBeNull();
+
+    zoomRequestForBusiness.mockResolvedValue({ data: { join_url: "" } });
+    expect(await getZoomJoinUrl(BIZ, "zm-1")).toBeNull();
+
+    zoomRequestForBusiness.mockResolvedValue({ data: { join_url: 42 } });
+    expect(await getZoomJoinUrl(BIZ, "zm-1")).toBeNull();
+
+    zoomRequestForBusiness.mockRejectedValue(new Error("down"));
+    expect(await getZoomJoinUrl(BIZ, "zm-1")).toBeNull();
+
+    zoomRequestForBusiness.mockRejectedValue("raw string failure");
+    expect(await getZoomJoinUrl(BIZ, "zm-1")).toBeNull();
   });
 });
 

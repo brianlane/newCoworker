@@ -175,6 +175,38 @@ export async function updateZoomMeetingForBooking(
 }
 
 /**
+ * The meeting's real join URL, read back from Zoom.
+ *
+ * Only the meeting ID is persisted on a booking, and a join URL rebuilt
+ * from that ID alone drops the `?pwd=` a password-protected meeting needs,
+ * so the invitee lands on a page that will not let them in. Null when the
+ * meeting or the connection is gone; callers show no link rather than a
+ * broken one.
+ */
+export async function getZoomJoinUrl(
+  businessId: string,
+  meetingId: string
+): Promise<string | null> {
+  try {
+    const transport = await resolveZoomTransport(businessId);
+    if (!transport) return null;
+    const res = await zoomRequestViaTransport(businessId, transport, {
+      endpoint: `/meetings/${encodeURIComponent(meetingId)}`,
+      method: "GET"
+    });
+    const joinUrl = (res?.data as { join_url?: unknown } | null)?.join_url;
+    return typeof joinUrl === "string" && joinUrl ? joinUrl : null;
+  } catch (err) {
+    logger.warn("zoom join url read failed", {
+      businessId,
+      meetingId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
+  }
+}
+
+/**
  * Delete a booking's Zoom meeting (cancellation, or cleanup when the
  * calendar create failed AFTER the meeting was made). Best-effort.
  */

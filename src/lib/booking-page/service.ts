@@ -24,13 +24,15 @@
 import { randomUUID } from "crypto";
 import {
   countBookingsBetween,
+  getBookingPageForBusiness,
   getEnabledBookingPageBySlug,
   getEnabledBookingPageByToken,
   listBookingStartsBetween,
-  recordPlatformBooking
+  recordPlatformBooking,
+  stampManageToken
 } from "@/lib/booking-page/db";
 import type { BookingPageRow } from "@/lib/booking-page/db";
-import { parseBookingPageRef } from "@/lib/booking-page/keys";
+import { mintBookingManageToken, parseBookingPageRef } from "@/lib/booking-page/keys";
 import { computePublicSlots } from "@/lib/booking-page/slots";
 import type { BusyBlock, PublicSlot } from "@/lib/booking-page/slots";
 import { readBusyCache, saveBusyCache } from "@/lib/booking-page/busy-cache";
@@ -226,6 +228,36 @@ export async function listPublicSlots(
 }
 
 /**
+ * The same availability, addressed by BUSINESS rather than by page ref.
+ * The invitee manage page (/book/manage/<token>) holds a booking, not a
+ * page link, and must offer exactly the slots the public page would: same
+ * policy knobs, same busy sources, same degradation.
+ */
+export async function listSlotsForBusiness(
+  businessId: string,
+  durationMinutes: number,
+  opts: {
+    nowOverride?: Date;
+    /**
+     * A booking to ignore while computing availability: the invitee's OWN
+     * appointment, when they are moving it. Without this their existing
+     * slot blocks itself and, worse, counts against the day's booking cap,
+     * so a same-day move can find no times at all even though the move adds
+     * no appointment.
+     */
+    excludeStartIso?: string;
+  } = {}
+): Promise<ListPublicSlotsResult> {
+  const page = await getBookingPageForBusiness(businessId);
+  if (!page || !page.enabled) return { ok: false, detail: "not_found" };
+  const resolved = await getBookingPageContext(page.token);
+  if (!resolved.ok) return resolved;
+  return listSlotsForContext(resolved.context, durationMinutes, opts.nowOverride, {
+    ...(opts.excludeStartIso ? { excludeStartIso: opts.excludeStartIso } : {})
+  });
+}
+
+/**
  * Slot listing against a PRE-RESOLVED context. Submission re-verifies with
  * ITS OWN snapshot through this function, so a calendar connecting mid
  * request can never split the mode between the availability check and the
@@ -234,7 +266,8 @@ export async function listPublicSlots(
 async function listSlotsForContext(
   context: BookingPageContext,
   durationMinutes: number,
-  nowOverride?: Date
+  nowOverride?: Date,
+  opts: { excludeStartIso?: string } = {}
 ): Promise<ListPublicSlotsResult> {
   const page = context.page;
 
@@ -249,11 +282,17 @@ async function listSlotsForContext(
     // Ledger starts serve the daily cap in both modes, the busy blocks in
     // platform mode, and the DEGRADED busy baseline in provider mode, so
     // they are always fetched.
-    const existingStarts = await listBookingStartsBetween(
+    const allStarts = await listBookingStartsBetween(
       context.businessId,
       now.toISOString(),
       windowEnd.toISOString()
     );
+    // An invitee moving their own appointment must not be blocked by it, or
+    // counted against the day's cap for it (see excludeStartIso).
+    const excludeMs = opts.excludeStartIso ? Date.parse(opts.excludeStartIso) : NaN;
+    const existingStarts = Number.isFinite(excludeMs)
+      ? allStarts.filter((s) => s.getTime() !== excludeMs)
+      : allStarts;
     // The ledger stores starts only; block a conservative hour per booking
     // so no offered duration can overlap a prior one.
     const ledgerBusy: BusyBlock[] = existingStarts.map((start) => ({
@@ -353,6 +392,43 @@ export type SubmitPublicBookingInput = {
   notifyEarlier?: boolean;
 };
 
+/**
+ * Has the target's business-local day already hit `max_daily_bookings`?
+ *
+ * Run AFTER winning the slot claim: concurrent writes for DIFFERENT slots
+ * on the same day could each pass their availability read while the ledger
+ * count still sat below the cap. This narrows that window to the ledger
+ * write itself; the cap is a courtesy limit, and exact enforcement would
+ * need a DB-side atomic reserve. Shared so a self-serve RESCHEDULE onto a
+ * day cannot bypass what a new booking onto it respects.
+ *
+ * `excludeStartIso` drops the booking being moved from the count, so a
+ * same-day move does not count itself.
+ */
+export async function dailyCapReached(
+  businessId: string,
+  page: Pick<BookingPageRow, "max_daily_bookings">,
+  timezone: string,
+  start: Date,
+  excludeStartIso?: string
+): Promise<boolean> {
+  const cap = page.max_daily_bookings;
+  if (cap === null) return false;
+  const DAY_WINDOW_MS = 26 * 60 * 60 * 1000;
+  const nearby = await listBookingStartsBetween(
+    businessId,
+    new Date(start.getTime() - DAY_WINDOW_MS).toISOString(),
+    new Date(start.getTime() + DAY_WINDOW_MS).toISOString()
+  );
+  const excludeMs = excludeStartIso ? Date.parse(excludeStartIso) : NaN;
+  const slotDay = localClock(start, timezone).isoDate;
+  const sameDay = nearby.filter(
+    (d) =>
+      d.getTime() !== excludeMs && localClock(d, timezone).isoDate === slotDay
+  ).length;
+  return sameDay >= cap;
+}
+
 export type SubmitPublicBookingResult =
   | {
       ok: true;
@@ -361,6 +437,12 @@ export type SubmitPublicBookingResult =
       /** Human-readable local start from the booking core (business zone). */
       startLocal: string | null;
       zoomJoinUrl: string | null;
+      /**
+       * Self-serve reschedule/cancel path for THIS booking
+       * (`/book/manage/<token>`), or null when the token could not be
+       * attached. Relative: the caller renders it against its own origin.
+       */
+      manageLink: string | null;
     }
   | BookingPageFailure;
 
@@ -430,7 +512,10 @@ export async function submitPublicBooking(
       startLocal: formatBookingStartLocal(start.toISOString(), context.timezone),
       // The join link was shown on the original confirmation; a retry
       // cannot reconstruct it from the ledger's meeting id alone.
-      zoomJoinUrl: null
+      zoomJoinUrl: null,
+      // Same reason: the first confirmation carried the manage link, and
+      // minting a second token here would orphan the one already sent.
+      manageLink: null
     };
   }
   const nowMs = Date.now();
@@ -475,28 +560,19 @@ export async function submitPublicBooking(
   // re-verify while the ledger count sat below the cap. Recounting here
   // narrows that window to the ledger write itself; the cap is a courtesy
   // limit, and exact enforcement would need a DB-side atomic reserve.
-  const cap = context.page.max_daily_bookings;
-  if (cap !== null) {
-    const DAY_WINDOW_MS = 26 * 60 * 60 * 1000;
-    const nearby = await listBookingStartsBetween(
-      context.businessId,
-      new Date(start.getTime() - DAY_WINDOW_MS).toISOString(),
-      new Date(start.getTime() + DAY_WINDOW_MS).toISOString()
-    );
-    const slotDay = localClock(start, context.timezone).isoDate;
-    const sameDay = nearby.filter(
-      (d) => localClock(d, context.timezone).isoDate === slotDay
-    ).length;
-    if (sameDay >= cap) {
-      await releaseSlotClaim();
-      return { ok: false, detail: "slot_taken" };
-    }
+  if (await dailyCapReached(context.businessId, context.page, context.timezone, start)) {
+    await releaseSlotClaim();
+    return { ok: false, detail: "slot_taken" };
   }
 
   const summary = `${name} + ${context.businessName} (${input.durationMinutes} min)`;
 
   let startLocal: string | null = null;
   let zoomJoinUrl: string | null = null;
+  // Minted before either write so both modes stamp the SAME token, and the
+  // confirmation can hand the visitor a link that manages this booking.
+  const manageToken = mintBookingManageToken();
+  let manageLink: string | null = `/book/manage/${manageToken}`;
 
   if (context.mode === "platform") {
     // PLATFORM MODE: the booking ledger is the calendar of record (the
@@ -532,7 +608,9 @@ export async function submitPublicBooking(
       bookingAttendeeKey(phone, email, name),
       start.toISOString(),
       `platform:${randomUUID()}`,
-      zoomMeeting?.meetingId ?? null
+      zoomMeeting?.meetingId ?? null,
+      undefined,
+      { token: manageToken, durationMinutes: input.durationMinutes }
     );
     if (!record.ok) {
       if (zoomMeeting) await deleteZoomMeetingForBooking(context.businessId, zoomMeeting.meetingId);
@@ -616,6 +694,27 @@ export async function submitPublicBooking(
     const data = (booked.data ?? {}) as Record<string, unknown>;
     startLocal = typeof data.startLocal === "string" ? data.startLocal : null;
     zoomJoinUrl = typeof data.zoomJoinUrl === "string" ? data.zoomJoinUrl : null;
+
+    // The booking core owns the ledger write in this mode and knows nothing
+    // about manage links, so the token is stamped onto the row it just
+    // created. Best-effort: the appointment is real either way, and a
+    // visitor who cannot self-serve still has the business's number.
+    try {
+      const stamped = await stampManageToken(
+        context.businessId,
+        bookingAttendeeKey(phone, email, name),
+        start.toISOString(),
+        manageToken,
+        input.durationMinutes
+      );
+      if (!stamped) manageLink = null;
+    } catch (err) {
+      manageLink = null;
+      logger.warn("booking-page: manage token stamp failed", {
+        businessId: context.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
   }
 
   // File the visitor as a contact (fires contact_created for new leads, so
@@ -652,7 +751,8 @@ export async function submitPublicBooking(
     startIso: start.toISOString(),
     endIso,
     startLocal,
-    zoomJoinUrl
+    zoomJoinUrl,
+    manageLink
   };
 }
 

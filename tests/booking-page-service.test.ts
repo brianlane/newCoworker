@@ -3,9 +3,11 @@ import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/booking-page/db", () => ({
   getEnabledBookingPageByToken: vi.fn(),
   getEnabledBookingPageBySlug: vi.fn(),
+  getBookingPageForBusiness: vi.fn(),
   countBookingsBetween: vi.fn(),
   listBookingStartsBetween: vi.fn(),
-  recordPlatformBooking: vi.fn()
+  recordPlatformBooking: vi.fn(),
+  stampManageToken: vi.fn()
 }));
 vi.mock("@/lib/voice-tools/connections", () => ({ resolveCalendarConnection: vi.fn() }));
 vi.mock("@/lib/calendar-tools/handlers", () => ({
@@ -56,14 +58,18 @@ import {
   PUBLIC_SLOT_CLAIM_KEY,
   getBookingPageContext,
   listPublicSlots,
+  dailyCapReached,
+  listSlotsForBusiness,
   probeCalendarAvailability,
   submitPublicBooking
 } from "@/lib/booking-page/service";
 import {
+  getBookingPageForBusiness,
   getEnabledBookingPageBySlug,
   getEnabledBookingPageByToken,
   listBookingStartsBetween,
-  recordPlatformBooking
+  recordPlatformBooking,
+  stampManageToken
 } from "@/lib/booking-page/db";
 import { findUpcomingBookingsForAttendee } from "@/lib/calendar-tools/attendee-bookings";
 import { maybeAlertUnassignedBooking } from "@/lib/calendar-tools/unassigned-booking-alert";
@@ -145,6 +151,8 @@ const mockSlotClaim = vi.mocked(claimBookingDedupe);
 const mockSlotRelease = vi.mocked(releaseBookingDedupe);
 const mockListStarts = vi.mocked(listBookingStartsBetween);
 const mockRecordPlatform = vi.mocked(recordPlatformBooking);
+const mockStampManage = vi.mocked(stampManageToken);
+const mockPageByBusiness = vi.mocked(getBookingPageForBusiness);
 const mockUpcomingForAttendee = vi.mocked(findUpcomingBookingsForAttendee);
 const mockUnassignedAlert = vi.mocked(maybeAlertUnassignedBooking);
 const mockZoomCreate = vi.mocked(createZoomMeetingForBooking);
@@ -178,6 +186,7 @@ beforeEach(() => {
   mockSlotRelease.mockResolvedValue(undefined);
   mockListStarts.mockResolvedValue([]);
   mockRecordPlatform.mockResolvedValue({ ok: true });
+  mockStampManage.mockResolvedValue(true);
   mockUpcomingForAttendee.mockResolvedValue([]);
   mockUnassignedAlert.mockResolvedValue("sent" as never);
   mockZoomCreate.mockResolvedValue({
@@ -302,6 +311,101 @@ describe("probeCalendarAvailability", () => {
     } as never);
     mockCaldav.mockResolvedValueOnce({ ok: true, busy: [] } as never);
     expect(await probeCalendarAvailability(BIZ)).toBe("ok");
+  });
+});
+
+describe("dailyCapReached", () => {
+  const DAY_START = new Date("2026-01-05T16:00:00Z");
+
+  it("is never reached when the page is uncapped", async () => {
+    expect(
+      await dailyCapReached(BIZ, { max_daily_bookings: null }, "America/Phoenix", DAY_START)
+    ).toBe(false);
+    expect(mockListStarts).not.toHaveBeenCalled();
+  });
+
+  it("counts the target's business-local day only", async () => {
+    mockListStarts.mockResolvedValue([
+      new Date("2026-01-05T17:00:00Z"),
+      // Next local day: outside the count even though it is inside the
+      // 26 hour read window.
+      new Date("2026-01-06T17:00:00Z")
+    ]);
+    expect(
+      await dailyCapReached(BIZ, { max_daily_bookings: 2 }, "America/Phoenix", DAY_START)
+    ).toBe(false);
+    expect(
+      await dailyCapReached(BIZ, { max_daily_bookings: 1 }, "America/Phoenix", DAY_START)
+    ).toBe(true);
+  });
+
+  it("excludes a booking being moved, so a same-day move never counts itself", async () => {
+    mockListStarts.mockResolvedValue([new Date("2026-01-05T17:00:00Z")]);
+    expect(
+      await dailyCapReached(
+        BIZ,
+        { max_daily_bookings: 1 },
+        "America/Phoenix",
+        DAY_START,
+        "2026-01-05T17:00:00.000Z"
+      )
+    ).toBe(false);
+    // A junk exclusion is ignored rather than dropping the whole count.
+    expect(
+      await dailyCapReached(BIZ, { max_daily_bookings: 1 }, "America/Phoenix", DAY_START, "nope")
+    ).toBe(true);
+  });
+});
+
+describe("listSlotsForBusiness", () => {
+  // The invitee manage page holds a booking, not a page link, but must be
+  // offered exactly what the public page offers.
+  it("lists the page's own availability when addressed by business", async () => {
+    mockPageByBusiness.mockResolvedValue({ ...PAGE });
+    const out = await listSlotsForBusiness(BIZ, 30);
+    expect(out.ok).toBe(true);
+    if (!out.ok) throw new Error("unreachable");
+    expect(out.slots[0].startIso).toBe("2026-01-05T16:00:00.000Z");
+  });
+
+  it("refuses when the business has no page, or its page is switched off", async () => {
+    mockPageByBusiness.mockResolvedValue(null);
+    expect(await listSlotsForBusiness(BIZ, 30)).toEqual({ ok: false, detail: "not_found" });
+
+    mockPageByBusiness.mockResolvedValue({ ...PAGE, enabled: false });
+    expect(await listSlotsForBusiness(BIZ, 30)).toEqual({ ok: false, detail: "not_found" });
+  });
+
+  it("drops the invitee's own booking from availability when asked", async () => {
+    // Their own slot must not block the move (nor count against the day's
+    // cap), or a same-day reschedule finds no times at all.
+    // Platform mode, where the ledger IS the availability source (in
+    // provider mode the ledger is only the degraded baseline).
+    mockConn.mockResolvedValue(null);
+    mockPageByBusiness.mockResolvedValue({ ...PAGE });
+    mockListStarts.mockResolvedValue([new Date("2026-01-05T16:00:00Z")]);
+
+    const blocked = await listSlotsForBusiness(BIZ, 30);
+    expect(blocked.ok && blocked.slots.map((s) => s.startIso)).not.toContain(
+      "2026-01-05T16:00:00.000Z"
+    );
+
+    const freed = await listSlotsForBusiness(BIZ, 30, {
+      excludeStartIso: "2026-01-05T16:00:00.000Z"
+    });
+    expect(freed.ok && freed.slots.map((s) => s.startIso)).toContain("2026-01-05T16:00:00.000Z");
+
+    // A junk value is ignored rather than dropping every booking.
+    const junk = await listSlotsForBusiness(BIZ, 30, { excludeStartIso: "not-a-date" });
+    expect(junk.ok && junk.slots.map((s) => s.startIso)).not.toContain(
+      "2026-01-05T16:00:00.000Z"
+    );
+  });
+
+  it("passes a context failure through (a page that no longer resolves)", async () => {
+    mockPageByBusiness.mockResolvedValue({ ...PAGE });
+    mockPage.mockResolvedValue(null);
+    expect(await listSlotsForBusiness(BIZ, 30)).toEqual({ ok: false, detail: "not_found" });
   });
 });
 
@@ -574,7 +678,10 @@ describe("submitPublicBooking", () => {
       startIso: "2026-01-05T16:00:00.000Z",
       endIso: "2026-01-05T16:30:00.000Z",
       startLocal: "Monday, January 5, 2026 at 9:00 AM MST",
-      zoomJoinUrl: null
+      zoomJoinUrl: null,
+      // A retry must not mint a SECOND manage token: the first
+      // confirmation already carried the link to this booking.
+      manageLink: null
     });
     expect(mockBook).not.toHaveBeenCalled();
     expect(mockSlotClaim).not.toHaveBeenCalled();
@@ -597,6 +704,23 @@ describe("submitPublicBooking", () => {
       ok: false,
       detail: "booking_failed"
     });
+  });
+
+  it("drops the manage link rather than the booking when the stamp does not land", async () => {
+    // The appointment is real either way; a visitor who cannot self-serve
+    // still has the business's number.
+    mockStampManage.mockResolvedValue(false);
+    const out = await submitPublicBooking(TOKEN, VALID);
+    expect(out.ok && out.manageLink).toBeNull();
+
+    mockStampManage.mockRejectedValue(new Error("update denied"));
+    const thrown = await submitPublicBooking(TOKEN, VALID);
+    expect(thrown.ok).toBe(true);
+    expect(thrown.ok && thrown.manageLink).toBeNull();
+
+    mockStampManage.mockRejectedValue("string boom");
+    const nonError = await submitPublicBooking(TOKEN, VALID);
+    expect(nonError.ok && nonError.manageLink).toBeNull();
   });
 
   it("books through an unreadable provider (degraded availability, writable calendar)", async () => {
@@ -697,8 +821,18 @@ describe("submitPublicBooking", () => {
       startIso: "2026-01-05T16:00:00.000Z",
       endIso: "2026-01-05T16:30:00.000Z",
       startLocal: "Monday, January 5, 2026 at 9:00 AM MST",
-      zoomJoinUrl: "https://zoom.example/j/1"
+      zoomJoinUrl: "https://zoom.example/j/1",
+      // Self-serve reschedule/cancel for this booking, stamped onto the
+      // ledger row the core wrote.
+      manageLink: expect.stringMatching(/^\/book\/manage\/ncbm_[0-9a-f]{64}$/)
     });
+    expect(mockStampManage).toHaveBeenCalledWith(
+      BIZ,
+      "phone:+14805550100",
+      "2026-01-05T16:00:00.000Z",
+      expect.stringMatching(/^ncbm_[0-9a-f]{64}$/),
+      30
+    );
     expect(mockBook).toHaveBeenCalledWith(
       BIZ,
       expect.objectContaining({
@@ -779,7 +913,8 @@ describe("submitPublicBooking", () => {
         startIso: "2026-01-05T16:00:00.000Z",
         endIso: "2026-01-05T16:30:00.000Z",
         startLocal: "Monday, January 5, 2026 at 9:00 AM MST",
-        zoomJoinUrl: "https://zoom.example/j/9"
+        zoomJoinUrl: "https://zoom.example/j/9",
+        manageLink: expect.stringMatching(/^\/book\/manage\/ncbm_[0-9a-f]{64}$/)
       });
       expect(mockBook).not.toHaveBeenCalled();
       expect(mockRecordPlatform).toHaveBeenCalledWith(
@@ -787,8 +922,16 @@ describe("submitPublicBooking", () => {
         "phone:+14805550100",
         "2026-01-05T16:00:00.000Z",
         expect.stringMatching(/^platform:/),
-        "zm-1"
+        "zm-1",
+        undefined,
+        // The manage token rides the INSERT here (no separate stamp): the
+        // ledger row is the booking in platform mode.
+        {
+          token: expect.stringMatching(/^ncbm_[0-9a-f]{64}$/),
+          durationMinutes: 30
+        }
       );
+      expect(mockStampManage).not.toHaveBeenCalled();
       expect(mockGoal).toHaveBeenCalledWith(BIZ, "+14805550100", {
         kind: "appointment_booked"
       });
@@ -826,7 +969,9 @@ describe("submitPublicBooking", () => {
         "phone:+14805550100",
         "2026-01-05T16:00:00.000Z",
         expect.stringMatching(/^platform:/),
-        null
+        null,
+        undefined,
+        expect.objectContaining({ durationMinutes: 30 })
       );
     });
 

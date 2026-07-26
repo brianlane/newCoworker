@@ -38,6 +38,7 @@ import {
   getWorkspaceBusyBlocks,
   resolveToolTimezone
 } from "@/lib/calendar-tools/handlers";
+import { isLedgerSlotOpen } from "@/lib/calendar-tools/booking-dedupe";
 import { getCaldavBusyBlocks } from "@/lib/calendar-tools/caldav";
 import { findVagaroSlots } from "@/lib/calendar-tools/vagaro";
 import { digitsOf, phoneDigitsMatch } from "@/lib/calendar-tools/phone-match";
@@ -75,6 +76,8 @@ export type WaitlistFillDeps = {
   client?: SupabaseClient;
   /** Injectable connection resolver (tests). */
   resolveConnection?: typeof resolveCalendarConnection;
+  /** Platform-mode slot check (no calendar connected). */
+  isLedgerSlotOpen?: typeof isLedgerSlotOpen;
   /** Injectable workspace free/busy fetch (tests). */
   getBusyBlocks?: typeof getWorkspaceBusyBlocks;
   /** Injectable CalDAV busy fetch (tests). */
@@ -333,8 +336,11 @@ export async function offerFreedSlot(
     const candidates = eligibleWaitlistCandidates(entries, startMs, exclude);
     if (candidates.length === 0) return "no_candidates";
 
+    // No calendar connected is PLATFORM mode, not "no calendar": the
+    // booking ledger is that tenant's calendar of record, so the slot is
+    // verified against it instead of refusing to offer at all (which
+    // silently switched the waitlist off for every ledger-only business).
     const conn = await (deps.resolveConnection ?? resolveCalendarConnection)(businessId);
-    if (!conn) return "slot_not_open";
 
     const business = await (deps.getBusinessRow ?? getBusiness)(businessId);
     const businessName = business?.name?.trim() || "the business";
@@ -344,7 +350,13 @@ export async function offerFreedSlot(
     let anyVerified = false;
     for (const entry of candidates.slice(0, WAITLIST_OFFER_CANDIDATE_CAP)) {
       const endMs = startMs + entry.duration_minutes * 60_000;
-      const open = await verifyFreedSlotOpen(businessId, conn, startMs, endMs, deps);
+      let open: boolean;
+      if (conn) {
+        open = await verifyFreedSlotOpen(businessId, conn, startMs, endMs, deps);
+      } else {
+        const checkLedger = deps.isLedgerSlotOpen ?? isLedgerSlotOpen;
+        open = await checkLedger(businessId, startMs, endMs);
+      }
       // Verification is per-candidate because durations differ: the freed
       // start can be closed for a 60-minute request yet open for the next
       // candidate's 30 minutes, so a failed check moves on rather than

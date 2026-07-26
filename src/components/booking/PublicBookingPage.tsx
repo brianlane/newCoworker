@@ -37,6 +37,7 @@ export type PublicBookingStrings = {
   bookedBodyNoInvite: string;
   bookedVideoNote: string;
   bookedZoomLinkLabel: string;
+  bookedManageLinkLabel: string;
   poweredBy: string;
   weekdaysShort: string[];
 };
@@ -54,7 +55,13 @@ type Props = {
 
 type Slot = { startIso: string; endIso: string };
 
-type BookedState = { startLocal: string | null; startIso: string; zoomJoinUrl: string | null };
+type BookedState = {
+  startLocal: string | null;
+  startIso: string;
+  zoomJoinUrl: string | null;
+  /** Self-serve reschedule/cancel path for this booking, when it has one. */
+  manageLink: string | null;
+};
 
 /** "YYYY-MM-DD" of an instant in a timezone. */
 function isoDateInZone(iso: string, timeZone: string): string {
@@ -236,7 +243,8 @@ export function PublicBookingPage({
       setBooked({
         startLocal: body.data.startLocal ?? null,
         startIso: body.data.startIso,
-        zoomJoinUrl: body.data.zoomJoinUrl ?? null
+        zoomJoinUrl: body.data.zoomJoinUrl ?? null,
+        manageLink: body.data.manageLink ?? null
       });
     } catch {
       setSubmitState("failed");
@@ -278,6 +286,19 @@ export function PublicBookingPage({
               <p className="text-sm text-parchment/60">{strings.bookedVideoNote}</p>
             ) : null}
           </div>
+        ) : null}
+        {booked.manageLink ? (
+          // Self-serve reschedule/cancel for this booking. Shown here (and
+          // carried by the confirmation email) so a change never has to go
+          // through a person.
+          <p className="mt-4">
+            <a
+              href={booked.manageLink}
+              className="text-sm text-parchment/60 underline hover:text-parchment/80"
+            >
+              {strings.bookedManageLinkLabel}
+            </a>
+          </p>
         ) : null}
         <p className="mt-8 text-xs text-parchment/30">{strings.poweredBy}</p>
       </div>

@@ -79,7 +79,8 @@ export async function POST(request: Request) {
       startIso: result.startIso,
       endIso: result.endIso,
       startLocal: result.startLocal,
-      zoomJoinUrl: result.zoomJoinUrl
+      zoomJoinUrl: result.zoomJoinUrl,
+      manageLink: result.manageLink
     });
   } catch (error) {
     return handleRouteError(error);

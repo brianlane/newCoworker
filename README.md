@@ -816,12 +816,26 @@ engine's roster evaluators), and the upcoming-bookings list.
   provider when its write path still works. Cache reads and writes are
   best-effort (`src/lib/booking-page/busy-cache.ts`): a cache error
   degrades exactly like a cache miss.
+- **Invitee self-serve** (`/book/manage/<ncbm_token>`): every page booking
+  gets its own per-BOOKING capability token, carried on the confirmation, so
+  the visitor can reschedule or cancel without texting the business. The
+  token shape is deliberately disjoint from the page token, so a leaked
+  manage link can never act as the business's booking page. In provider mode
+  the reschedule/cancel CORES own the change (the provider sends its own
+  updated or cancelled invitation); in platform mode the ledger row IS the
+  appointment, so it is moved or deleted directly and the freed time goes to
+  the waitlist exactly like a provider-side cancellation. A new time must be
+  a slot the page is offering right now (the same re-verify the public
+  submit does), the page's `min_notice_minutes` closes the window near the
+  appointment ("contact the business"), and a Calendly reschedule-link
+  answer is refused rather than shown as a move that has not happened. The
+  token survives a reschedule; AI-made bookings are untouched (no token, no
+  behavior change).
 - Vagaro/Calendly-resolved tenants deliberately do NOT get the page (Vagaro
   has its own booking site; link-mode Calendly cannot book on the invitee's
   behalf); the Bookings page explains this and calendar resolution order is
   untouched. Deliberate v1 exclusions: round robin / pick-a-person,
-  routing forms, custom questions, payments, invitee self-reschedule,
-  embeds.
+  routing forms, custom questions, payments, embeds.
 
 ## Cancellation waitlist ("I'll let you know if a spot opens")
 

@@ -3,7 +3,9 @@ import { describe, expect, it } from "vitest";
 import {
   BOOKING_PAGE_TOKEN_PREFIX,
   BOOKING_PAGE_TOKEN_REGEX,
+  mintBookingManageToken,
   mintBookingPageToken,
+  parseBookingManageToken,
   parseBookingPageRef,
   parseBookingPageSlug,
   parseBookingPageToken
@@ -62,5 +64,30 @@ describe("parseBookingPageRef", () => {
     });
     expect(parseBookingPageRef("Not A Ref!")).toBeNull();
     expect(parseBookingPageRef(null)).toBeNull();
+  });
+
+  it("never mistakes a per-booking manage token for a page ref", () => {
+    // The prefixes are deliberately disjoint: a leaked manage link must not
+    // resolve as the business's whole booking page.
+    expect(parseBookingPageRef(mintBookingManageToken())).toBeNull();
+  });
+});
+
+describe("booking manage tokens", () => {
+  it("mints the ncbm_ shape and round-trips it", () => {
+    const token = mintBookingManageToken();
+    expect(token).toMatch(/^ncbm_[0-9a-f]{64}$/);
+    expect(parseBookingManageToken(` ${token} `)).toBe(token);
+  });
+
+  it("rejects page tokens, malformed values, and non-strings", () => {
+    expect(parseBookingManageToken(mintBookingPageToken())).toBeNull();
+    expect(parseBookingManageToken("ncbm_short")).toBeNull();
+    expect(parseBookingManageToken(`ncbm_${"g".repeat(64)}`)).toBeNull();
+    expect(parseBookingManageToken(null)).toBeNull();
+  });
+
+  it("reserves the /book/manage route family from tenant slugs", () => {
+    expect(parseBookingPageSlug("manage")).toBeNull();
   });
 });
