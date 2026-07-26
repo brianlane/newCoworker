@@ -215,10 +215,15 @@ if (robotsText === null) {
   console.log();
 
   if (managed) {
+    // Word this off `oursPresent`: saying "prepending" on a host where the
+    // origin file is gone contradicts the replacement warning printed above.
+    const verb = oursPresent
+      ? "is PREPENDING a managed block to this robots.txt"
+      : "has REPLACED this robots.txt with its managed block";
     console.log(
-      "NOTE: Cloudflare is PREPENDING a managed block to this robots.txt. Its default AI\n" +
-        "policy (search=yes, ai-train=no) disallows the training crawlers, which is a\n" +
-        "deliberate posture, not necessarily a defect. Decide it on purpose:\n" +
+      `NOTE: Cloudflare ${verb}. Its default AI policy\n` +
+        "(search=yes, ai-train=no) disallows the training crawlers, which is a deliberate\n" +
+        "posture, not necessarily a defect. Decide it on purpose:\n" +
         "Cloudflare dashboard -> the zone -> AI Crawl Control / robots.txt.\n"
     );
   }
