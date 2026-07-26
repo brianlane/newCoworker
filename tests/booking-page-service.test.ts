@@ -699,6 +699,21 @@ describe("submitPublicBooking", () => {
     });
     expect(mockBook).not.toHaveBeenCalled();
     expect(mockSlotClaim).not.toHaveBeenCalled();
+    // Reminder addressing is re-stamped (idempotent) in case the first
+    // submit landed the booking and died before stamping. The confirmation
+    // email is NOT re-sent: a duplicate is worse than none.
+    expect(mockStampContact).toHaveBeenCalled();
+    expect(mockConfirmationEmail).not.toHaveBeenCalled();
+
+    // A failed re-stamp still answers the resubmit successfully: the
+    // appointment is real either way.
+    for (const boom of [new Error("update denied"), "string boom"]) {
+      mockUpcomingForAttendee.mockResolvedValueOnce([
+        { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
+      ] as never);
+      mockStampContact.mockRejectedValueOnce(boom);
+      expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    }
   });
 
   it("refuses a different upcoming booking for the same person before any claim", async () => {

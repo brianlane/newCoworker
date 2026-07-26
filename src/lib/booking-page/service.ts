@@ -514,6 +514,23 @@ export async function submitPublicBooking(
   );
   const requestedStartMs = start.getTime();
   if (existing.some((b) => Date.parse(b.startIso) === requestedStartMs)) {
+    // The first submit may have landed the booking and then died before
+    // stamping (a client timeout mid-flight), which would leave the visitor
+    // unreachable for reminders. The stamp is idempotent, so redo it here.
+    // The confirmation email deliberately is NOT re-sent: it either went
+    // out already or the visitor is holding an appointment they can see,
+    // and a duplicate confirmation is worse than a missing one.
+    await stampAttendeeContact(
+      context.businessId,
+      bookingAttendeeKey(phone, email, name),
+      start.toISOString(),
+      { email, name }
+    ).catch((err: unknown) => {
+      logger.warn("booking-page: attendee contact re-stamp failed", {
+        businessId: context.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    });
     return {
       ok: true,
       startIso: start.toISOString(),
