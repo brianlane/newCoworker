@@ -56,6 +56,13 @@ function MethodSlot({
   );
 }
 
+/**
+ * What is currently in flight. Sending a reset email is not a way to sign in,
+ * so it gets its own token: reusing `"password"` would spin the Sign in
+ * button when the owner clicked "Forgot password?".
+ */
+type PendingAction = LoginMethod | "reset";
+
 function LoginForm() {
   const t = useTranslations("auth");
   const router = useRouter();
@@ -66,7 +73,7 @@ function LoginForm() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
-  const [pending, setPending] = useState<LoginMethod | null>(null);
+  const [pending, setPending] = useState<PendingAction | null>(null);
   const [magicSent, setMagicSent] = useState(false);
   const [resetSent, setResetSent] = useState(false);
   const [lastUsed, setLastUsed] = useState<LoginMethod | null>(null);
@@ -210,7 +217,7 @@ function LoginForm() {
       setError(t("enterEmailFirst"));
       return;
     }
-    setPending("password");
+    setPending("reset");
     setError(null);
 
     try {
