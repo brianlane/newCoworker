@@ -100,9 +100,9 @@ const PAGES: { path: string; label: string; note: string }[] = [
   { path: "/integrations", label: "Integrations", note: "Zapier, Google, Microsoft, Zoom, API, and webhooks" },
   { path: "/industries", label: "Industries", note: "how the coworker is used per industry" },
   {
-    path: "/compare/gohighlevel",
-    label: "New Coworker vs GoHighLevel",
-    note: "feature and price comparison"
+    path: "/compare",
+    label: "Comparisons",
+    note: "New Coworker against GoHighLevel, Zinng, Marblism, and phone answering services, with sourced figures and where each one wins"
   },
   { path: "/blog", label: "Blog", note: "product updates, tutorials, and small-business advice" },
   { path: "/faq", label: "FAQ", note: "product, setup, privacy, and billing questions" },
