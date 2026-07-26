@@ -1,0 +1,179 @@
+import { describe, expect, it } from "vitest";
+import {
+  AiFlowValidationError,
+  parseAiFlowDefinition,
+  validateDefinitionSemantics
+} from "@/lib/ai-flows/schema";
+import { planStep } from "../supabase/functions/_shared/ai_flows/steps";
+import { capturedCallVars, capturedVarSuffix } from "../supabase/functions/_shared/ai_flows/call_capture";
+import type { FlowStep } from "../supabase/functions/_shared/ai_flows/types";
+
+const PARTNER = "+14159851909";
+
+const waitFlow = (step: Record<string, unknown>, trailing: Record<string, unknown>[] = []) => ({
+  version: 1,
+  trigger: { channel: "sms", conditions: [{ type: "has_url" }] },
+  steps: [
+    { id: "wait", type: "wait_for_call", fromE164: PARTNER, ...step },
+    ...trailing
+  ]
+});
+
+describe("wait_for_call: authoring", () => {
+  it("accepts the minimal shape", () => {
+    const def = parseAiFlowDefinition(waitFlow({}));
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("requires an E.164 partner line", () => {
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "sms", conditions: [{ type: "has_url" }] },
+        steps: [{ id: "wait", type: "wait_for_call", fromE164: "4159851909" }]
+      })
+    ).toThrow(AiFlowValidationError);
+  });
+
+  it("publishes the captured fields so later steps can template them", () => {
+    // The whole point of the step is that the follow-up can USE what the AI got
+    // out of the person, so a send referencing them must validate.
+    const def = parseAiFlowDefinition(
+      waitFlow({}, [
+        {
+          id: "tell_dave",
+          type: "send_sms",
+          to: "+16025551234",
+          body: "Seller said {{vars.call_phone}} ({{vars.call_name}}) at {{vars.call_address}}"
+        }
+      ])
+    );
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("honours a custom capturePrefix when publishing them", () => {
+    const def = parseAiFlowDefinition(
+      waitFlow({ capturePrefix: "spoken_" }, [
+        {
+          id: "tell_dave",
+          type: "send_sms",
+          to: "+16025551234",
+          body: "Seller said {{vars.spoken_phone}}"
+        }
+      ])
+    );
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+    // ...and the DEFAULT prefix is no longer in scope, so a copy/paste from
+    // another flow fails at save time instead of rendering blank on a live lead.
+    expect(() =>
+      parseAiFlowDefinition(
+        waitFlow({ capturePrefix: "spoken_" }, [
+          {
+            id: "tell_dave",
+            type: "send_sms",
+            to: "+16025551234",
+            body: "Seller said {{vars.call_phone}}"
+          }
+        ])
+      )
+    ).toThrow(AiFlowValidationError);
+  });
+
+  it("publishes the outcome var for a later branch", () => {
+    const def = parseAiFlowDefinition(
+      waitFlow({ saveAs: "hl_call" }, [
+        {
+          id: "note",
+          type: "notify_owner",
+          message: "Call outcome: {{vars.hl_call}}",
+          when: { var: "hl_call", equals: "no_call" }
+        }
+      ])
+    );
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("is rejected inside a voice flow (it parks the batch worker)", () => {
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "voice" },
+        steps: [{ id: "wait", type: "wait_for_call", fromE164: PARTNER }]
+      })
+    ).toThrow(AiFlowValidationError);
+  });
+});
+
+describe("wait_for_call: planning", () => {
+  const plan = (step: Record<string, unknown>, vars: Record<string, unknown> = {}) =>
+    planStep({ id: "wait", type: "wait_for_call", fromE164: PARTNER, ...step } as FlowStep, {
+      vars,
+      trigger: {}
+    } as never);
+
+  it("defaults the window, timeout, outcome var and prefix", () => {
+    const p = plan({});
+    expect(p.ok).toBe(true);
+    expect(p.ok && p.action).toMatchObject({
+      kind: "wait_for_call",
+      fromE164: PARTNER,
+      withinMinutes: 30,
+      timeoutMinutes: 60,
+      saveAs: "call_outcome",
+      capturePrefix: "call_",
+      resumed: false
+    });
+  });
+
+  it("clamps an out-of-range window and timeout rather than refusing", () => {
+    const p = plan({ withinMinutes: 9999, timeoutMinutes: 99999 });
+    expect(p.ok && p.action).toMatchObject({ withinMinutes: 120, timeoutMinutes: 1440 });
+  });
+
+  it("reports the return trip so the worker hydrates instead of parking twice", () => {
+    // Unlike place_ai_call the marker does NOT short-circuit the step: coming
+    // back from the park is exactly when the captured fields exist to be read.
+    const p = plan({}, { __waited_call_wait: "1" });
+    expect(p.ok && p.action).toMatchObject({ kind: "wait_for_call", resumed: true });
+  });
+
+  it("keys the marker per step, so two waits in one flow are independent", () => {
+    const other = planStep(
+      { id: "wait2", type: "wait_for_call", fromE164: PARTNER } as FlowStep,
+      { vars: { __waited_call_wait: "1" }, trigger: {} } as never
+    );
+    expect(other.ok && other.action).toMatchObject({ resumed: false });
+  });
+});
+
+describe("capturedCallVars", () => {
+  it("namespaces what the AI captured", () => {
+    expect(
+      capturedCallVars({ name: "Duane", phone: "+16025550100" }, "call_")
+    ).toEqual({ call_name: "Duane", call_phone: "+16025550100" });
+  });
+
+  it("drops blanks so an absent detail stays absent for a when guard", () => {
+    // Writing "" would make `{ var: "call_phone", notEquals: "none" }` pass on a
+    // call where the AI never got a number.
+    expect(capturedCallVars({ phone: "   ", name: "Duane" }, "call_")).toEqual({
+      call_name: "Duane"
+    });
+  });
+
+  it("normalizes owner-authored capture-field names into legal vars", () => {
+    // captureFields is free text ("reason for calling"), so it cannot be
+    // trusted to already be var-shaped.
+    expect(capturedCallVars({ "Reason For Calling!": "downsizing" }, "call_")).toEqual({
+      call_reason_for_calling: "downsizing"
+    });
+    expect(capturedVarSuffix("  --  ")).toBe("");
+    expect(capturedCallVars({ "!!": "x" }, "call_")).toEqual({});
+  });
+
+  it("ignores a missing or non-object captured blob", () => {
+    expect(capturedCallVars(null, "call_")).toEqual({});
+    expect(capturedCallVars(undefined, "call_")).toEqual({});
+    expect(capturedCallVars({ phone: 42 } as never, "call_")).toEqual({});
+  });
+});
