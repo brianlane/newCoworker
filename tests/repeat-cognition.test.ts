@@ -5,7 +5,7 @@ import {
   normalizeQuestion,
   summarizeSurfaces
 } from "../debug/repeat-cognition";
-import { isCarrierFailure, matchesInbound, normalizeE164, parseSince } from "../debug/trace-sms";
+import { columnVariants, isCarrierFailure, matchesInbound, normalizeE164, parseSince } from "../debug/trace-sms";
 import { tally } from "../debug/audit-account";
 
 /**
@@ -134,17 +134,24 @@ describe("trace-sms helpers", () => {
     expect(() => parseSince("soon")).toThrow(/--since/);
   });
 
-  it("matches an inbound job by its denormalized column", () => {
+  it("asks the database for every spelling the column has been seen to hold", () => {
+    // The query filters on these, which keeps it targeted; scanning the whole
+    // window instead is what let a busy window drop the newest rows.
+    expect(columnVariants("+14805551234").sort()).toEqual(["+14805551234", "14805551234", "4805551234"]);
+    expect(columnVariants("+442071234567").sort()).toEqual(["+442071234567", "442071234567"]);
+  });
+
+  it("matches an inbound job by its denormalized column, in any of those spellings", () => {
     expect(matchesInbound({ customer_e164: "+14805551234", payload: null }, "+14805551234")).toBe(true);
+    expect(matchesInbound({ customer_e164: "4805551234", payload: null }, "+14805551234")).toBe(true);
     expect(matchesInbound({ customer_e164: "+14805559999", payload: null }, "+14805551234")).toBe(false);
   });
 
-  it("falls back to the payload when the column is null or diverged", () => {
+  it("falls back to the payload for rows that predate the column", () => {
     // Column-only matching reported "the customer never texted" for threads
     // the dashboard renders, because the reader finds these by payload.
     const payload = { data: { payload: { from: { phone_number: "+14805551234" } } } };
     expect(matchesInbound({ customer_e164: null, payload }, "+14805551234")).toBe(true);
-    expect(matchesInbound({ customer_e164: "4805551234", payload }, "+14805551234")).toBe(true);
   });
 
   it("drops a row that matches neither", () => {

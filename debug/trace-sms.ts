@@ -180,21 +180,45 @@ export function isCarrierFailure(entry: TimelineEntry): boolean {
 }
 
 /**
+ * Every spelling of a number the denormalized column has been seen to hold.
+ *
+ * The column is written by several code paths and has drifted: some rows lack
+ * the leading `+`, some store the national 10-digit form. Matching only the
+ * canonical E.164 misses those, and asking the database for a set of exact
+ * values keeps the query targeted, which a payload scan over the whole window
+ * would not be.
+ */
+export function columnVariants(e164: string): string[] {
+  const digits = e164.replace(/\D/g, "");
+  const variants = new Set([e164, digits]);
+  if (digits.length === 11 && digits.startsWith("1")) variants.add(digits.slice(1));
+  return [...variants];
+}
+
+/**
  * Does this inbound job belong to the number being traced? The denormalized
- * column is authoritative when set; otherwise fall back to parsing the Telnyx
- * envelope, which is how the dashboard thread reader finds the same rows.
+ * column is authoritative when it matches; otherwise fall back to parsing the
+ * Telnyx envelope, which is how the dashboard thread reader finds the rows
+ * that predate the column.
  */
 export function matchesInbound(
   row: { customer_e164?: string | null; payload: Record<string, unknown> | null },
   e164: string
 ): boolean {
-  if (row.customer_e164 === e164) return true;
+  if (row.customer_e164 && columnVariants(e164).includes(row.customer_e164)) return true;
   return customerE164FromPayload(row.payload) === e164;
 }
 
 function truncate(text: string, max = 110): string {
   const flat = text.replace(/\s+/g, " ").trim();
   return flat.length > max ? `${flat.slice(0, max - 1)}…` : flat;
+}
+
+const INBOUND_COLS =
+  "id, business_id, payload, status, assistant_reply_text, rowboat_reply_cached, last_error, customer_e164, created_at, updated_at";
+
+function inboundSelect(db: SupabaseClient) {
+  return db.from("sms_inbound_jobs").select(INBOUND_COLS);
 }
 
 async function buildTimeline(
@@ -207,7 +231,7 @@ async function buildTimeline(
   // Paged: a busy number over a wide window exceeds PostgREST's 1000-row cap,
   // and a timeline that silently stops partway is exactly the wrong answer to
   // "did we ever text them?".
-  const [outbound, inbound] = await Promise.all([
+  const [outbound, inboundByColumn, inboundLegacy] = await Promise.all([
     fetchAllPaged<OutboundRow>((from, to) => {
       let q = db
         .from("sms_outbound_log")
@@ -222,28 +246,38 @@ async function buildTimeline(
       return q;
     }, { label: "sms_outbound_log" }),
     // Inbound is matched the way the dashboard thread reader matches it: the
-    // denormalized `customer_e164` column, PLUS a payload parse over the
-    // window for rows where that column is null or diverged (legacy rows,
-    // normalization differences). Column-only matching made the tool report
-    // "the customer never texted" for threads the dashboard shows, which is
-    // the exact wrong answer for this question.
+    // denormalized `customer_e164` column, PLUS the payload for rows that
+    // predate the column. Column-only matching made the tool report "the
+    // customer never texted" for threads the dashboard shows, which is the
+    // exact wrong answer for this question.
+    //
+    // Both halves stay TARGETED. An earlier version dropped the filter and
+    // paged every inbound row in the window, which meant a busy window hit
+    // the ceiling and silently discarded the newest rows for this number.
     fetchAllPaged<InboundRow>((from, to) => {
-      let q = db
-        .from("sms_inbound_jobs")
-        .select(
-          "id, business_id, payload, status, assistant_reply_text, rowboat_reply_cached, last_error, customer_e164, created_at, updated_at"
-        )
-        .gte("created_at", sinceIso)
-        .order("created_at", { ascending: true })
-        .range(from, to);
+      let q = inboundSelect(db).in("customer_e164", columnVariants(e164));
+      q = q.gte("created_at", sinceIso).order("created_at", { ascending: true }).range(from, to);
       if (args.businessId) q = q.eq("business_id", args.businessId);
       return q;
-    }, { label: "sms_inbound_jobs" })
+    }, { label: "sms_inbound_jobs" }),
+    fetchAllPaged<InboundRow>((from, to) => {
+      let q = inboundSelect(db).is("customer_e164", null);
+      q = q.gte("created_at", sinceIso).order("created_at", { ascending: true }).range(from, to);
+      if (args.businessId) q = q.eq("business_id", args.businessId);
+      return q;
+    }, { label: "sms_inbound_jobs (legacy, null column)" })
   ]);
 
   const truncated: string[] = [];
   if (outbound.truncated) truncated.push("sms_outbound_log");
-  if (inbound.truncated) truncated.push("sms_inbound_jobs");
+  if (inboundByColumn.truncated) truncated.push("sms_inbound_jobs");
+  if (inboundLegacy.truncated) truncated.push("sms_inbound_jobs (legacy scan)");
+
+  // The two halves can overlap only in principle (the legacy half is scoped
+  // to a NULL column), but dedupe by id so a future widening of either query
+  // cannot double-print a message.
+  const inboundRows = new Map<string, InboundRow>();
+  for (const row of [...inboundByColumn.rows, ...inboundLegacy.rows]) inboundRows.set(row.id, row);
 
   const apiKey = process.env.TELNYX_API_KEY ?? "";
   const entries: TimelineEntry[] = [];
@@ -266,7 +300,7 @@ async function buildTimeline(
     });
   }
 
-  for (const row of inbound.rows) {
+  for (const row of inboundRows.values()) {
     if (!matchesInbound(row, e164)) continue;
     entries.push({
       at: row.created_at,
