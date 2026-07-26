@@ -6323,10 +6323,20 @@ async function waitForCallStep(
     scope.vars[pinVar] = sess.call_control_id;
   }
 
-  const finish = (outcome: string, detail: Record<string, unknown>): StepOutcome => {
+  /**
+   * `from` is passed explicitly rather than read off `sess`, because one exit
+   * must NOT hydrate: a session another run already owns belongs to a different
+   * referral, and copying its captured details here would hand this run another
+   * lead's phone number.
+   */
+  const finish = (
+    outcome: string,
+    detail: Record<string, unknown>,
+    from: CallSessionRow | null
+  ): StepOutcome => {
     // Namespaced by capturePrefix so the AI's values can never overwrite what
     // the partner's own page produced: the flow shows the team both.
-    const hydrated = capturedCallVars(sess?.context?.ai_takeover?.captured, action.capturePrefix);
+    const hydrated = capturedCallVars(from?.context?.ai_takeover?.captured, action.capturePrefix);
     Object.assign(scope.vars, hydrated);
     // Backfill the flow's canonical vars so a single one can drive the sends.
     // Empty-only, so a value the partner DID release keeps winning.
@@ -6364,7 +6374,7 @@ async function waitForCallStep(
     // that branch on it. Hydration still runs: a bridge that wrote its captured
     // fields but never resumed us is exactly the case the sweep covers.
     const outcome = !resumedOutcome || resumedOutcome === "no_answer" ? "no_call" : resumedOutcome;
-    return finish(outcome, { resumed: true, timed_out: resumedOutcome === "no_answer" });
+    return finish(outcome, { resumed: true, timed_out: resumedOutcome === "no_answer" }, sess);
   }
 
   const park = (): StepOutcome => ({
@@ -6405,13 +6415,14 @@ async function waitForCallStep(
       const existing = sess.context?.flow_run ?? null;
       // Already ours: a worker crash between the link and the park write. Park.
       if (existing?.run_id === run.id) return park();
-      // Another run owns this call. Don't park on a link that will never resume
-      // us, and don't pretend to have call details we were never given.
-      return finish("no_call", { waited: false, reason: "call_owned_by_another_run" });
+      // Another run owns this call, so it is a DIFFERENT referral's conversation.
+      // Don't park on a link that will never resume us, and hydrate nothing:
+      // those captured details belong to the other lead.
+      return finish("no_call", { waited: false, reason: "call_owned_by_another_run" }, null);
     }
   }
 
-  if (!sess) return finish("no_call", { waited: false, reason: "no_session" });
+  if (!sess) return finish("no_call", { waited: false, reason: "no_session" }, null);
 
   // The call is over. Its captured fields are written by the bridge during
   // teardown, so a call that ended moments ago may not have them yet — give it
@@ -6426,7 +6437,7 @@ async function waitForCallStep(
       reason: "waiting for the call's captured details to land"
     };
   }
-  return finish("answered", { waited: false });
+  return finish("answered", { waited: false }, sess);
 }
 
 async function httpCallStep(
