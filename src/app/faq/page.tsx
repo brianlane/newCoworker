@@ -67,7 +67,10 @@ export default async function FaqPage() {
         { question: t("whatIsQ"), plainAnswer: t("whatIsA"), answer: <>{t("whatIsA")}</> },
         { question: t("differentQ"), plainAnswer: t("differentA"), answer: <>{t("differentA")}</> },
         { question: t("knowledgeQ"), plainAnswer: t("knowledgeA"), answer: <>{t("knowledgeA")}</> },
-        { question: t("transfersQ"), plainAnswer: t("transfersA"), answer: <>{t("transfersA")}</> }
+        { question: t("transfersQ"), plainAnswer: t("transfersA"), answer: <>{t("transfersA")}</> },
+        { question: t("bookQ"), plainAnswer: t("bookA"), answer: <>{t("bookA")}</> },
+        { question: t("channelsQ"), plainAnswer: t("channelsA"), answer: <>{t("channelsA")}</> },
+        { question: t("languagesQ"), plainAnswer: t("languagesA"), answer: <>{t("languagesA")}</> }
       ]
     },
     {
@@ -84,7 +87,8 @@ export default async function FaqPage() {
           question: t("carrierFeeQ", { carrierFee }),
           plainAnswer: t("carrierFeeA", { carrierFee }),
           answer: <>{t("carrierFeeA", { carrierFee })}</>
-        }
+        },
+        { question: t("readyQ"), plainAnswer: t("readyA"), answer: <>{t("readyA")}</> }
       ]
     },
     {
@@ -102,6 +106,11 @@ export default async function FaqPage() {
           question: t("costQ"),
           plainAnswer: t("costPlain", { starterPrice, standardConcurrent }),
           answer: <>{t.rich("costA", { starterPrice, standardConcurrent, link: pricingLink })}</>
+        },
+        {
+          question: t("vsHiringQ"),
+          plainAnswer: t("vsHiringA", { starterPrice }),
+          answer: <>{t("vsHiringA", { starterPrice })}</>
         },
         { question: t("upfrontQ"), plainAnswer: t("upfrontA"), answer: <>{t("upfrontA")}</> },
         { question: t("cancelQ"), plainAnswer: t("cancelA"), answer: <>{t("cancelA")}</> },

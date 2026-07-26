@@ -12,7 +12,7 @@ const PRODUCT_LINKS: FooterLink[] = [
   { href: "/pricing", labelKey: "pricing" },
   { href: "/integrations", labelKey: "integrations" },
   { href: "/industries", labelKey: "industries" },
-  { href: "/compare/gohighlevel", labelKey: "vsGohighlevel" },
+  { href: "/compare", labelKey: "compare" },
   { href: "/onboard", labelKey: "getStarted" },
   { href: "/login", labelKey: "signIn" }
 ];

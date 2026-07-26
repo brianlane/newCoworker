@@ -71,7 +71,7 @@
       "pricing": "Precios",
       "integrations": "Integraciones",
       "industries": "Industrias",
-      "vsGohighlevel": "vs GoHighLevel",
+      "compare": "Comparar",
       "faq": "Preguntas",
       "blog": "Blog",
       "about": "Nosotros",
@@ -538,6 +538,12 @@
       "knowledgeA": "Durante el onboarding respondes un cuestionario breve, y tu coworker puede leer tu sitio web para aprender tus servicios, precios y políticas. Desde entonces aprende de cada conversación. Puedes revisar y editar su memoria en cualquier momento desde el panel.",
       "transfersQ": "¿Puede transferir llamadas a mí o a mi equipo?",
       "transfersA": "Sí. Los planes Standard incluyen transferencias con contexto: cuando alguien necesita a un humano, tu coworker te pone en la línea con el contexto ya recopilado, para que nadie repita su historia.",
+      "bookQ": "¿Una IA realmente puede agendar citas o solo toma recados?",
+      "bookA": "Agenda. Tu coworker revisa la disponibilidad en vivo de tu calendario real (Google Calendar, Microsoft 365, CalDAV, Calendly o Vagaro), ofrece horarios y registra la cita mientras la persona sigue en la llamada. Si no usas ninguna herramienta de calendario, agenda en una página de reservas que alojamos para ti, y todos reciben confirmación y recordatorio.",
+      "channelsQ": "¿Atiende mensajes y DMs o solo llamadas telefónicas?",
+      "channelsA": "Ambos. El mismo coworker contesta llamadas, SMS bidireccional, WhatsApp, Facebook Messenger, DMs de Instagram y el chat de tu sitio web, y recibe su propia dirección de correo. Es una sola memoria para todos esos canales, así que un cliente que llamó el martes y escribe el viernes no tiene que empezar de nuevo.",
+      "languagesQ": "¿Puede hablar con mis clientes que hablan español?",
+      "languagesA": "Sí. Detecta el idioma que usa cada cliente y responde en ese idioma, en llamadas y en mensajes, y recuerda esa preferencia para la próxima vez. También puede quedarse en una llamada transferida e interpretar en tiempo real entre tu personal y quien llama. Tu panel puede estar en inglés o español, de forma independiente.",
       "setupTitle": "Configuración y números telefónicos",
       "setupTimeQ": "¿Cuánto tarda la configuración?",
       "setupTimeA": "Minutos. Después del pago, el aprovisionamiento es totalmente automático: se crean tu servidor dedicado, número telefónico y correo, y tu coworker se entrena con tu cuestionario y tu sitio web. Sin proyecto de TI ni llamada de ventas.",
@@ -548,6 +554,8 @@
       "whiteGlovePlain": "Sí. White-glove setup ($750) te da un especialista que configura todo en vivo contigo, gestiona la portabilidad del número y te entrena 1:1. White-glove buildout ($2,000) agrega una construcción completa de flujos a medida. Ambos incluyen 30 días de soporte prioritario por llamada y video.",
       "carrierFeeQ": "¿Qué es la tarifa única de registro de operador de {carrierFee}?",
       "carrierFeeA": "Los operadores de EE. UU. exigen que todo negocio que envía mensajes de texto complete el registro 10DLC. Trasladamos esta tarifa única al costo. Se cobra al registrarte y no es reembolsable porque los operadores no nos la devuelven.",
+      "readyQ": "¿Qué necesito tener listo antes de que empiece?",
+      "readyA": "El nombre de tu negocio, qué vendes, tu horario y la dirección de tu sitio web. La configuración inicial revisa el sitio una vez para aprender tus servicios, y después puedes corregir lo que haya entendido mal. Se incluye un número de teléfono dedicado, así que no tienes que cambiar tu línea actual para probarlo.",
       "privacyTitle": "Privacidad y seguridad",
       "dataQ": "¿Dónde viven mis datos?",
       "dataA": "Tu coworker de IA corre en un servidor privado dedicado a tu negocio, con sus propias credenciales y una postura de seguridad deny-by-default. Las conversaciones y registros del negocio se guardan de forma segura en nuestra base de datos de plataforma, aislados por negocio y nunca compartidos con otros negocios, y puedes exportar tus datos en cualquier momento.",
@@ -559,6 +567,8 @@
       "costQ": "¿Cuánto cuesta?",
       "costA": "Los planes comienzan en {starterPrice} con el plan Starter de 24 meses. Standard agrega límites de uso más altos, {standardConcurrent}, Zapier, analítica y más. Enterprise es a medida y agrega mensajería RCS de marca. Todos los planes tienen garantía de devolución de 30 días. Mira el desglose completo en la <link>página de precios</link>.",
       "costPlain": "Los planes comienzan en {starterPrice} con el plan Starter de 24 meses. Standard agrega límites de uso más altos, {standardConcurrent}, Zapier, analítica y más. Enterprise es a medida y agrega mensajería RCS de marca. Todos los planes tienen garantía de devolución de 30 días.",
+      "vsHiringQ": "¿Sale más barato que contratar a alguien de medio tiempo?",
+      "vsHiringA": "En costo, por mucho: los planes empiezan en {starterPrice}, frente a unos dos mil dólares al mes por ayuda de medio tiempo que además se va a las cinco. El intercambio honesto es el criterio. Una persona maneja mejor la llamada incómoda, y por eso tu coworker transfiere a una persona cuando quien llama lo pide o la conversación lo necesita.",
       "upfrontQ": "¿Por qué se factura el término completo por adelantado en planes de 12 y 24 meses?",
       "upfrontA": "Porque tu plan incluye un servidor privado dedicado que prepagamos por todo tu contrato. Facturar el término una sola vez es lo que hace posible la tarifa mensual con descuento. Los planes mensuales se facturan mes a mes.",
       "cancelQ": "¿Puedo cancelar?",
@@ -1162,6 +1172,230 @@
       "ctaTitle": "Pon a un empleado a cargo, no otro inicio de sesión",
       "ctaSubtitle": "En vivo en minutos, leads de Meta respondidos en segundos, garantía de devolución de 30 días.",
       "ctaLabel": "Comenzar"
+    },
+    "compare": {
+      "gohighlevel": {
+        "name": "GoHighLevel",
+        "teaser": "Una caja de herramientas potente que tú operas, frente a un empleado que se opera solo."
+      },
+      "zinng": {
+        "name": "Zinng",
+        "teaser": "Una línea telefónica con IA enfocada y con muchos minutos, frente a un coworker que además atiende mensajes, DMs, correo y seguimiento.",
+        "metaTitle": "New Coworker frente a Zinng",
+        "metaDescription": "Zinng ofrece más minutos de voz por dólar. New Coworker ofrece todos los canales, un motor de automatización y tu propio servidor. Una comparación honesta y documentada.",
+        "ogTitle": "New Coworker frente a Zinng",
+        "ogDescription": "Más minutos frente a más coworker. Una comparación honesta para pequeños negocios.",
+        "heroEyebrow": "New Coworker frente a Zinng",
+        "heroTitle": "Ellos contestan el teléfono.",
+        "heroHighlight": "Nosotros contestamos todo.",
+        "heroSubtitle": "Zinng es una buena línea telefónica con IA y, si solo necesitas llamadas, cuesta menos por minuto que nosotros. New Coworker es un coworker: el teléfono, más mensajes, DMs, correo, reservas y el seguimiento que continúa cuando la llamada termina.",
+        "themColumn": "Zinng",
+        "row1": {
+          "label": "Qué estás comprando",
+          "us": "Un coworker con IA en voz, SMS, WhatsApp, Messenger, Instagram, chat web y correo, con un motor de automatización detrás.",
+          "them": "Una línea telefónica con IA enfocada y bandeja de SMS, creada primero para recepciones dentales y clínicas."
+        },
+        "row2": {
+          "label": "Minutos de voz por dólar",
+          "us": "Standard a {standardMonthly} incluye 250 minutos de voz.",
+          "them": "Pro a $99/mes incluye 700 minutos, mes a mes, y $0.12 por minuto adicional. Las llamadas spam y transferidas no cuentan."
+        },
+        "row3": {
+          "label": "Calidad de voz e idiomas",
+          "us": "Voz conversacional en tiempo real que sigue automáticamente el idioma de quien llama.",
+          "them": "Voz en tiempo real con 63 idiomas admitidos."
+        },
+        "row4": {
+          "label": "Canales más allá del teléfono",
+          "us": "SMS, WhatsApp, Messenger, DM de Instagram, chat del sitio web y una dirección de correo dedicada por negocio.",
+          "them": "SMS bidireccional. Sin WhatsApp, Messenger ni Instagram."
+        },
+        "row5": {
+          "label": "Seguimiento y automatización",
+          "us": "Secuencias de varios pasos activadas por un nuevo prospecto, una llamada perdida, un webhook o un evento de calendario, con asignación rotativa a tu equipo.",
+          "them": "Reservas y envío al CRM. Sin motor de flujos ni llamadas salientes con IA."
+        },
+        "row6": {
+          "label": "Dónde viven tus datos",
+          "us": "Tu propio servidor dedicado, con residencia canadiense opcional o tu propio hardware en Enterprise.",
+          "them": "Nube compartida, con HIPAA y BAA firmado disponibles."
+        },
+        "themCardTitle": "Cuándo Zinng es la mejor compra",
+        "themCard1": "Si tu negocio es solo el teléfono, sus minutos rinden más: 700 minutos a $99 frente a nuestros 250, mes a mes y sin pago por adelantado.",
+        "themCard2": "HIPAA con BAA firmado, 63 idiomas e integraciones directas con sistemas dentales como Eaglesoft, Dentrix y Open Dental.",
+        "themCard3": "Las llamadas spam y las transferidas no consumen minutos, y hay prueba de 7 días sin contrato.",
+        "usCardTitle": "Cuándo gana un coworker",
+        "usCard1": "La mayoría de los clientes no solo llaman. Mensajes, DMs de Instagram, WhatsApp y correo llegan al mismo coworker, con la misma memoria del cliente.",
+        "usCard2": "El trabajo después de la llamada es el trabajo: seguimiento automático, asignación al compañero correcto y reservas directas en tu calendario real.",
+        "usCard3": "Tu negocio corre en su propio servidor dedicado, que es lo que hace posible la residencia canadiense y usar tu propio hardware.",
+        "faq1": {
+          "q": "¿Zinng es más barato?",
+          "a": "Para voz sola, normalmente sí. Su plan Pro cuesta $99 al mes por 700 minutos frente a nuestros 250 a {standardMonthly}, y cobran mes a mes. Si el teléfono es todo el trabajo, esa es la respuesta honesta. Nuestro plan Starter a {starterMonthly} cuesta menos que su plan de entrada, pero con muchos menos minutos."
+        },
+        "faq2": {
+          "q": "¿Zinng puede atender mensajes y DMs?",
+          "a": "Hace SMS bidireccional. No hace WhatsApp, Messenger ni DMs de Instagram, y no tiene motor de automatización para secuencias de seguimiento, así que todo lo que viene después de la primera respuesta vuelve a ti."
+        },
+        "faq3": {
+          "q": "¿Cuál debería elegir?",
+          "a": "Elige Zinng si quieres una buena línea telefónica al menor costo por minuto y nada más. Elige New Coworker si tus clientes te contactan por más de un canal, si el seguimiento se te escapa, o si necesitas tus datos en tu propio servidor."
+        },
+        "ctaTitle": "Contesta más que el teléfono",
+        "ctaSubtitle": "Listo en minutos, con garantía de devolución de 30 días."
+      },
+      "marblism": {
+        "name": "Marblism",
+        "teaser": "Seis asistentes que redactan y tú apruebas cada día, frente a un coworker que termina el trabajo solo.",
+        "metaTitle": "New Coworker frente a Marblism",
+        "metaDescription": "Marblism ofrece seis asistentes con IA por unos $24 al mes, con tu aprobación de por medio. New Coworker contesta el teléfono y termina el trabajo. Una comparación honesta y documentada.",
+        "ogTitle": "New Coworker frente a Marblism",
+        "ogDescription": "Una suite barata que revisas a diario frente a un coworker que actúa. Una comparación honesta.",
+        "heroEyebrow": "New Coworker frente a Marblism",
+        "heroTitle": "Ellos redactan.",
+        "heroHighlight": "Nosotros hacemos el trabajo.",
+        "heroSubtitle": "Marblism es un paquete realmente barato de seis asistentes que escriben cosas para que tú las apruebes. New Coworker es un coworker que contesta el teléfono, agenda la cita y da seguimiento, sin esperar a que aprietes aprobar.",
+        "themColumn": "Marblism",
+        "row1": {
+          "label": "Qué estás comprando",
+          "us": "Un coworker con IA que actúa por su cuenta en voz, mensajería y reservas.",
+          "them": "Seis asistentes con nombre para bandeja de entrada, redes, correo en frío, blogs, teléfono y contratos, que redactan para que tú revises."
+        },
+        "row2": {
+          "label": "Precio",
+          "us": "Starter desde {starterMonthly} y Standard desde {standardMonthly} con plazo de 24 meses.",
+          "them": "Un plan único a $24/mes facturado anualmente, $33 trimestral o $44 mensual, con 50 horas de trabajo incluidas y negocios ilimitados."
+        },
+        "row3": {
+          "label": "Llamadas telefónicas",
+          "us": "Voz conversacional en tiempo real que transfiere con contexto, toma recados y agenda en tu calendario.",
+          "them": "Un asistente telefónico con reservas y transferencias, que las reseñas describen como robótico en llamadas complejas."
+        },
+        "row4": {
+          "label": "Quién da la orden",
+          "us": "El coworker actúa: contesta, agenda y da seguimiento, y luego te cuenta qué pasó.",
+          "them": "Un ciclo de aprobación: los asistentes redactan y tú los revisas a diario."
+        },
+        "row5": {
+          "label": "Seguimiento e integraciones",
+          "us": "Seguimiento de varios pasos más Zapier, Google Workspace, Microsoft 365, Zoom, Meta Lead Ads, una API REST y webhooks.",
+          "them": "Gmail, Outlook y las redes sociales. Sin profundidad de CRM ni una salida tipo Zapier."
+        },
+        "row6": {
+          "label": "Dónde viven tus datos",
+          "us": "Tu propio servidor dedicado, uno por negocio.",
+          "them": "Infraestructura en nube compartida, sin aislamiento por cliente publicado."
+        },
+        "themCardTitle": "Cuándo Marblism es la mejor compra",
+        "themCard1": "Es barato e inmediato: unos $24 al mes facturado anualmente, listo en minutos, con reembolso de 7 días y negocios ilimitados en una cuenta.",
+        "themCard2": "Amplitud para un fundador en solitario: publicaciones en redes, correo en frío, blogs de SEO y revisión de contratos bajo un mismo acceso.",
+        "themCard3": "Si quieres un asistente de redacción que revisas cada mañana en lugar de algo que actúa sin ti, eso es exactamente lo que construyeron.",
+        "usCardTitle": "Cuándo gana un coworker",
+        "usCard1": "Una llamada perdida no puede esperar en una fila de aprobación. El coworker la contesta en vivo a las 9 de la noche y agenda la cita antes de que esa persona llame al siguiente negocio.",
+        "usCard2": "Escribe en tu sistema de reservas real, sea Google Calendar, Microsoft 365, Calendly o Vagaro, en lugar de redactar algo para que tú lo captures.",
+        "usCard3": "El aislamiento por negocio, los controles de retención y las opciones de residencia existen porque el teléfono y la lista de clientes son críticos para los negocios que atendemos.",
+        "faq1": {
+          "q": "Marblism es mucho más barato. ¿Por qué?",
+          "a": "Son trabajos distintos. Unos $24 al mes compran asistentes que redactan para que tú apruebes, en infraestructura compartida. Nuestro plan Starter a {starterMonthly} tiene un precio cercano pero compra una línea telefónica en vivo en un servidor dedicado, y Standard a {standardMonthly} agrega el volumen y los canales que necesita un negocio más ocupado."
+        },
+        "faq2": {
+          "q": "¿Marblism puede contestar mi teléfono?",
+          "a": "Tiene un asistente telefónico que agenda y transfiere. Las reseñas lo describen como robótico cuando la llamada se complica, y no atiende WhatsApp, Messenger ni Instagram."
+        },
+        "faq3": {
+          "q": "¿Cuál debería elegir?",
+          "a": "Elige Marblism si eres un fundador en solitario que quiere ayuda barata de redacción en marketing y administración y te parece bien revisarla a diario. Elige New Coworker si perder una llamada te cuesta dinero."
+        },
+        "ctaTitle": "Deja de aprobar borradores",
+        "ctaSubtitle": "Listo en minutos, con garantía de devolución de 30 días."
+      },
+      "answeringService": {
+        "name": "Servicios de contestación telefónica",
+        "teaser": "Un centro de llamadas con personas que toma un recado, frente a un coworker con IA que agenda la cita.",
+        "metaTitle": "Coworker con IA frente a un servicio de contestación telefónica",
+        "metaDescription": "Los servicios de contestación toman un recado. Un coworker con IA contesta con la voz de tu negocio, agenda en tu calendario real y da seguimiento por mensaje. Una comparación honesta de costo, cobertura y calidad.",
+        "ogTitle": "Coworker con IA frente a un servicio de contestación telefónica",
+        "ogDescription": "Recados humanos cobrados por minuto frente a una IA que termina el trabajo. Una comparación honesta.",
+        "heroEyebrow": "Coworker con IA frente a un servicio de contestación",
+        "heroTitle": "Un recado no es",
+        "heroHighlight": "un trabajo agendado.",
+        "heroSubtitle": "Los servicios de contestación son buenos para asegurar que una persona conteste. No están preparados para conocer tus precios, revisar tu calendario y cerrar la cita, y tú pagas por minuto esa diferencia.",
+        "themColumn": "Servicio de contestación",
+        "row1": {
+          "label": "Qué pasa en la llamada",
+          "us": "Contesta con la voz de tu negocio, conoce tus servicios y precios, revisa la disponibilidad en vivo y agenda la cita.",
+          "them": "Una persona capacitada toma un recado siguiendo un guion y lo pasa. Agendar suele significar que tú devuelvas la llamada."
+        },
+        "row2": {
+          "label": "Cuánto cuesta",
+          "us": "Un plan mensual fijo desde {starterMonthly}, con minutos incluidos y sin cargo por llamada.",
+          "them": "Normalmente se cobra por minuto o por llamada, así que un mes ocupado cuesta más justo cuando más ocupado estás."
+        },
+        "row3": {
+          "label": "Cómo suena",
+          "us": "Voz conversacional en tiempo real que sigue automáticamente el idioma de quien llama.",
+          "them": "Una persona real, que algunos prefieren, leyendo un guion de un negocio en el que no trabaja."
+        },
+        "row4": {
+          "label": "Fuera de horario y desbordes",
+          "us": "La misma cobertura a las 2 de la mañana que a las 2 de la tarde, en varias llamadas a la vez y sin fila.",
+          "them": "La cobertura las 24 horas es normal, pero las llamadas simultáneas y el horario extendido suelen costar más."
+        },
+        "row5": {
+          "label": "Qué pasa después",
+          "us": "Envía un mensaje a quien llamó, da seguimiento con un calendario, asigna el prospecto al compañero correcto y recuerda la conversación la próxima vez.",
+          "them": "El recado te llega. El seguimiento es tuyo."
+        },
+        "row6": {
+          "label": "Cumplimiento y privacidad",
+          "us": "Aislamiento por negocio, controles de retención y opciones de residencia en Enterprise.",
+          "them": "Los proveedores establecidos ofrecen planes compatibles con HIPAA y personal capacitado."
+        },
+        "themCardTitle": "Cuándo un servicio de contestación sigue siendo lo correcto",
+        "themCard1": "Algunas personas quieren hablar con alguien, y para la primera llamada de un despacho legal o un cliente angustiado ese criterio puede importar más que la rapidez.",
+        "themCard2": "No hay nada que configurar. Desvías tu línea y funciona, sin una base de conocimiento que llenar.",
+        "themCard3": "Los proveedores establecidos tienen décadas de operación compatible con HIPAA y personal capacitado para admisiones reguladas.",
+        "usCardTitle": "Cuándo gana un coworker con IA",
+        "usCard1": "Termina el trabajo. Conocer tus precios y tu calendario es la diferencia entre un recado y una cita agendada.",
+        "usCard2": "Precio fijo. El cobro por minuto castiga justo los meses en que más suena el teléfono.",
+        "usCard3": "Sigue trabajando después de la llamada: mensajes, secuencias de seguimiento, asignación a la persona correcta y memoria permanente del cliente.",
+        "faq1": {
+          "q": "¿Una IA es más barata que un servicio de contestación?",
+          "a": "Normalmente sí, y de forma más predecible. Los servicios de contestación cobran por minuto o por llamada, así que el costo sube con el volumen. Nuestros planes son fijos desde {starterMonthly}, y Standard a {standardMonthly} cubre una línea ocupada con minutos incluidos."
+        },
+        "faq2": {
+          "q": "¿Quien llame se dará cuenta de que no es una persona?",
+          "a": "Algunos sí y otros no. Lo que más importa es si la llamada se resuelve: una IA que conoce tus precios y agenda el horario vale más que un recado amable que tienes que devolver."
+        },
+        "faq3": {
+          "q": "¿Puedo tener los dos?",
+          "a": "Sí. Una configuración común es que el coworker conteste primero y transfiera a una persona, o a tu servicio de contestación, cuando quien llama pide hablar con alguien o la conversación requiere criterio."
+        },
+        "ctaTitle": "Agenda el trabajo, no la devolución de llamada",
+        "ctaSubtitle": "Listo en minutos, con garantía de devolución de 30 días."
+      }
+    },
+    "comparePage": {
+      "metaTitle": "Compara New Coworker",
+      "metaDescription": "Comparaciones honestas y documentadas de New Coworker frente a GoHighLevel, Zinng, Marblism y los servicios tradicionales de contestación telefónica, incluyendo cuándo son la mejor opción.",
+      "ogTitle": "Compara New Coworker | Las alternativas, lado a lado",
+      "ogDescription": "Cómo se compara New Coworker con las alternativas, incluyendo dónde ellas ganan.",
+      "heroEyebrow": "Comparar",
+      "heroTitle": "Cómo nos comparamos,",
+      "heroHighlight": "incluso donde perdemos",
+      "heroSubtitle": "Cada comparación usa los precios publicados por la otra parte y dice con claridad cuándo son la mejor opción. De todos modos lo vas a verificar.",
+      "cardCta": "Leer la comparación",
+      "indexCtaTitle": "¿Todavía lo estás pensando?",
+      "indexCtaSubtitle": "Todos los planes incluyen garantía de devolución de 30 días, así que la forma más barata de comparar es probarlo.",
+      "ctaLabel": "Comenzar",
+      "tableEyebrow": "Lado a lado",
+      "tableTitle": "New Coworker frente a {name}",
+      "tableSubtitle": "Sus datos reflejan los precios que publican, a julio de 2026. Donde son mejores, lo decimos.",
+      "usColumn": "New Coworker",
+      "diffEyebrow": "La diferencia real",
+      "diffTitle": "Dos cosas distintas que comprar",
+      "sourcedNote": "Las cifras de {name} provienen de sus precios publicados en julio de 2026 y pueden cambiar. Revisa sus precios actuales antes de decidir y avísanos si algo aquí quedó desactualizado.",
+      "faqEyebrow": "Preguntas",
+      "faqTitle": "Lo que preguntan antes de cambiar"
     },
     "stats": {
       "stat1Value": "24/7",

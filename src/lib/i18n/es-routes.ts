@@ -14,6 +14,7 @@ const SPANISH_MARKETING_PREFIXES = [
   "/pricing",
   "/integrations",
   "/industries",
+  "/compare",
   "/faq",
   "/about",
   "/contact",
