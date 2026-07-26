@@ -1410,7 +1410,22 @@ Deliberate exemptions (also encoded in the parity test): dashboard
 `send_email` is fulfilled by the chat-worker email adapter, `memory_capture`
 is Rowboat's `owner_append_business_memory`, and the **webchat surface is a
 frozen 5-tool allowlist** (anonymous internet — never add side-effect tools
-there). AiFlow STEP types (`route_to_team`, `place_ai_call`, …) are engine
+there).
+
+**Owner email is a prompt BLOCK, not a declared tool**, on both inline owner
+surfaces: the model emits an `EMAIL_SEND` sentinel block (taught by
+`EMAIL_TOOL_ENABLED_PREAMBLE`) and the platform sends it afterwards through
+the shared `fulfillOwnerEmailBlocks`
+([src/lib/dashboard-chat/email-blocks.ts](src/lib/dashboard-chat/email-blocks.ts)),
+which re-checks the Settings toggle per send and files the result on the
+Emails page. Dashboard chat and the **owner-over-SMS operator turn** both
+run it, so "schedule Liz through her assistant Beth" texted to the business
+line can reach a delegate who works by email (the Jul 2026 Beth delegation:
+before this, that surface could only offer to TEXT her). Because the
+protocol lives in a prompt block rather than a gated declaration, the
+authoritative permission check is the one inside the fulfiller: never send
+from a new surface without it. Contracts pinned live in
+`tests/e2e/beth-delegation.e2e.test.ts`. AiFlow STEP types (`route_to_team`, `place_ai_call`, …) are engine
 features in the shared `ai-flow-worker`, not per-tenant tools — they need
 none of this.
 

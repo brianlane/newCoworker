@@ -114,7 +114,7 @@ import {
 import {
   EMAIL_SEND_OPEN as EMAIL_BLOCK_OPEN,
   EMAIL_SEND_CLOSE as EMAIL_BLOCK_CLOSE,
-  fulfillEmailBlocks
+  fulfillOwnerEmailBlocks
 } from "@/lib/dashboard-chat/email-blocks";
 import { scheduleCaptureOwnerRuleInline } from "@/lib/dashboard-chat/schedule-memory-capture";
 import {
@@ -122,8 +122,6 @@ import {
   buildIntegrationsStatusLine
 } from "@/lib/dashboard-chat/context-blocks";
 import { shouldSummarize, summarizeThread } from "@/lib/dashboard-chat/summarizer";
-import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
-import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
 import { getBusinessDocument } from "@/lib/documents/db";
 import { BUSINESS_DOCS_BUCKET } from "@/lib/documents/core";
 import { isSupportedDocumentMime, normalizeUploadMime } from "@/lib/documents/ingest";
@@ -935,31 +933,10 @@ export async function POST(request: Request) {
         // worker fulfils via the gateway adapter): the send re-checks the
         // Settings toggle authoritatively, and the stored reply is the
         // cleaned text + honest per-email outcomes.
-        const emailOutcome = await fulfillEmailBlocks({
+        const emailOutcome = await fulfillOwnerEmailBlocks({
+          businessId: body.businessId,
           content: inline.content,
-          send: async (req) => {
-            const enabled = await isAgentToolEnabled(body.businessId, "dashboard", "send_email");
-            if (!enabled) return { ok: false, detail: "tool_disabled" };
-            const sent = await sendFromOwnerMailbox(body.businessId, {
-              toEmail: req.to,
-              subject: req.subject,
-              bodyText: req.body,
-              ccEmails: req.cc,
-              bccEmails: req.bcc
-            });
-            if (!sent.ok) return { ok: false, detail: sent.detail };
-            await recordOutboundAssistantEmail({
-              businessId: body.businessId,
-              toEmail: req.to,
-              subject: req.subject,
-              bodyText: req.body,
-              source: "dashboard_chat",
-              providerMessageId: sent.messageId,
-              ccEmails: req.cc,
-              bccEmails: req.bcc
-            });
-            return { ok: true };
-          }
+          source: "dashboard_chat"
         });
         return await finishInlineTurn({
           businessId: body.businessId,

@@ -18,6 +18,10 @@
  *   - src/app/api/voice/tools/dashboard-email/route.ts (zod field caps)
  */
 
+import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
+import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
+import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
+
 export const EMAIL_SEND_OPEN = "<<EMAIL_SEND>>";
 export const EMAIL_SEND_CLOSE = "<<END_EMAIL_SEND>>";
 
@@ -235,4 +239,46 @@ export async function fulfillEmailBlocks(args: {
     sentCount: results.filter((r) => r.ok).length,
     failedCount: results.filter((r) => !r.ok).length
   };
+}
+
+/**
+ * The owner-surface fulfilment used by BOTH inline owner turns: dashboard
+ * chat and the owner-over-SMS operator route. Every send re-checks the
+ * Settings toggle authoritatively (the declared-tool gate is advisory: the
+ * protocol lives in a prompt block, so a model could emit one anyway) and
+ * files the send on the Emails page.
+ *
+ * `source` distinguishes the two surfaces in the email log.
+ */
+export async function fulfillOwnerEmailBlocks(args: {
+  businessId: string;
+  content: string;
+  source: "dashboard_chat" | "sms_assistant";
+}): Promise<{ content: string; sentCount: number; failedCount: number }> {
+  return fulfillEmailBlocks({
+    content: args.content,
+    send: async (req) => {
+      const enabled = await isAgentToolEnabled(args.businessId, "dashboard", "send_email");
+      if (!enabled) return { ok: false, detail: "tool_disabled" };
+      const sent = await sendFromOwnerMailbox(args.businessId, {
+        toEmail: req.to,
+        subject: req.subject,
+        bodyText: req.body,
+        ccEmails: req.cc,
+        bccEmails: req.bcc
+      });
+      if (!sent.ok) return { ok: false, detail: sent.detail };
+      await recordOutboundAssistantEmail({
+        businessId: args.businessId,
+        toEmail: req.to,
+        subject: req.subject,
+        bodyText: req.body,
+        source: args.source,
+        providerMessageId: sent.messageId,
+        ccEmails: req.cc,
+        bccEmails: req.bcc
+      });
+      return { ok: true };
+    }
+  });
 }

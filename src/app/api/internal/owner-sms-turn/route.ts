@@ -39,7 +39,12 @@ import {
 } from "@/lib/dashboard-chat/context-blocks";
 import { scheduleCaptureOwnerRuleInline } from "@/lib/dashboard-chat/schedule-memory-capture";
 import { listMessagesForCustomer } from "@/lib/db/sms-history";
-import { OWNER_PREAMBLE } from "@/app/api/dashboard/chat/route";
+import {
+  EMAIL_TOOL_DISABLED_PREAMBLE,
+  EMAIL_TOOL_ENABLED_PREAMBLE,
+  OWNER_PREAMBLE
+} from "@/app/api/dashboard/chat/route";
+import { fulfillOwnerEmailBlocks } from "@/lib/dashboard-chat/email-blocks";
 import { logger } from "@/lib/logger";
 import { currentDateTimeLine } from "../../../../../supabase/functions/_shared/datetime_line";
 
@@ -111,6 +116,7 @@ export async function POST(request: Request) {
       notificationPrefsToolEnabled,
       flagSpamToolEnabled,
       replyModeToolEnabled,
+      emailToolEnabled,
       integrationsLine,
       businessContextBlock
     ] = await Promise.all([
@@ -127,6 +133,7 @@ export async function POST(request: Request) {
       isAgentToolEnabled(body.businessId, "dashboard", "update_notification_preferences"),
       isAgentToolEnabled(body.businessId, "dashboard", "flag_contact_spam"),
       isAgentToolEnabled(body.businessId, "dashboard", "set_contact_reply_mode"),
+      isAgentToolEnabled(body.businessId, "dashboard", "send_email"),
       buildIntegrationsStatusLine(body.businessId),
       buildBusinessContextBlock(body.businessId)
     ]);
@@ -166,6 +173,13 @@ export async function POST(request: Request) {
       OWNER_PREAMBLE,
       SMS_SURFACE_BLOCK,
       ownerLine,
+      // Email over SMS (the Beth delegation, Jul 2026): the owner texting
+      // "schedule Liz through her assistant Beth" needs the SAME EMAIL_SEND
+      // protocol dashboard chat teaches, or the coworker can only offer to
+      // text a person who works by email. The disabled twin is equally
+      // load-bearing: without it the model invents tool-call syntax and
+      // claims the mail went out.
+      emailToolEnabled ? EMAIL_TOOL_ENABLED_PREAMBLE : EMAIL_TOOL_DISABLED_PREAMBLE,
       currentDateTimeLine(new Date(), meta.timezone),
       ...(integrationsLine ? [integrationsLine] : []),
       ...(businessContextBlock ? [businessContextBlock] : []),
@@ -238,16 +252,25 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: false, detail: inline.detail ?? inline.error });
     }
 
+    // Fulfil EMAIL_SEND blocks BEFORE the SMS clip: the raw JSON must never
+    // reach the owner's phone, and a clip applied first could truncate a
+    // block into an unparseable fragment that then leaks verbatim.
+    const emailOutcome = await fulfillOwnerEmailBlocks({
+      businessId: body.businessId,
+      content: inline.content,
+      source: "sms_assistant"
+    });
+
     // Same silent durable-rule capture as dashboard turns — deferred via
     // after() so the capture (and its graph ingest) reliably completes on
     // Vercel instead of being frozen when the response flushes.
     scheduleCaptureOwnerRuleInline({
       businessId: body.businessId,
       ownerMessage: body.text,
-      assistantReply: inline.content
+      assistantReply: emailOutcome.content
     });
 
-    return NextResponse.json({ ok: true, reply: inline.content.slice(0, SMS_REPLY_MAX_CHARS) });
+    return NextResponse.json({ ok: true, reply: emailOutcome.content.slice(0, SMS_REPLY_MAX_CHARS) });
   } catch (err) {
     logger.error("owner-sms-turn: unexpected error", {
       businessId: body.businessId,
