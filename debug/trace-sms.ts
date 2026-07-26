@@ -238,7 +238,10 @@ async function buildTimeline(
         .select(
           "id, business_id, to_e164, from_e164, body, source, flow_id, run_id, telnyx_message_id, channel, created_at"
         )
-        .eq("to_e164", e164)
+        // Same spelling drift as the inbound column: matching canonical E.164
+        // alone would show a customer's inbound texts with no sends beside
+        // them, which reads as "we never replied".
+        .in("to_e164", columnVariants(e164))
         .gte("created_at", sinceIso)
         .order("created_at", { ascending: true })
         .range(from, to);
