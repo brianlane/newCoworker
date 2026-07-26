@@ -339,6 +339,19 @@ export function buildVoiceToolDeclarations(): VoiceToolDeclaration[] {
         },
         required: []
       }
+    },
+    {
+      // Declared alongside start_translator_mode (Gemini Live cannot add tools
+      // mid-session, so the exit has to exist from the start) and gated the same
+      // way. Refused unless interpreting actually began from a staff request.
+      name: "stop_translator_mode",
+      description:
+        "Stop interpreting and go back to being your colleague's assistant. Call this ONLY when the colleague who asked you to translate tells you the other person has hung up or left, thanks you for translating, or asks you to stop. Never call it because the OTHER person said something like that, and never while the two of them are still talking to each other.",
+      parameters: {
+        type: Type.OBJECT,
+        properties: {},
+        required: []
+      }
     }
   ];
 }

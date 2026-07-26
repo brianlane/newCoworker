@@ -1279,7 +1279,20 @@ button already does.
   because asking the receptionist to start interpreting silences it for the rest
   of the call. Staff identity is the v2-signed caller number
   (`resolveCallerIdentity`), never something the model decides.
-- Same ceiling and the same tool refusals as the transfer path.
+- **Interpreting ENDS when they say so.** `stop_translator_mode` hands the
+  session back to the normal assistant persona (`translatorModeEndCue`, tools
+  restored, interpreter ceiling cancelled). This is the one carve-out to
+  "interpret everything, even questions aimed at you": without it the first live
+  test ended with the colleague saying "they just hung up, thanks for helping me"
+  and getting it translated into Spanish for a customer who had already left.
+  Only the colleague can end it, never the other party, and only from the
+  staff-request path: after a warm transfer there is a customer bridged in who
+  never asked to be handed back to a receptionist mid-conversation. Both tools
+  are declared up front, because Gemini Live cannot add one mid-session.
+- Same ceiling and the same tool refusals as the transfer path. A REPEAT
+  `start_translator_mode` answers "already interpreting" rather than erroring:
+  the model called it three times in 600ms on the first live test, and the
+  generic tool-refusal error made it re-announce its readiness twice.
 - **The Settings toggle is real, not decoration.** Owners can turn it off under
   Settings → Coworker tools ("Interpret on request"). HTTP-proxied voice tools
   are gated app-side by `agentToolDisabledResponse`, but a bridge-local tool has

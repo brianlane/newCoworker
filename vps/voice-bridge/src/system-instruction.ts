@@ -380,7 +380,12 @@ export function translatorModeCue(opts: {
       "Speak in the FIRST PERSON as whoever you are interpreting, the way a professional interpreter does: if they say they need to reschedule, you say I need to reschedule. Never say things like he says or she is asking.",
       "Never answer a question yourself, never add, explain, soften, summarize, or leave anything out, and never take a side. If a question is directed at you rather than at the other person, interpret it anyway. You have no other job on this call.",
       "Do not use any tools from here on, do not book, text, email, look anything up, or end the call. Do not comment on the conversation.",
-      "Say nothing at all while nobody is speaking. Silence is correct: never fill a pause."
+      "Say nothing at all while nobody is speaking. Silence is correct: never fill a pause.",
+      // The one carve-out to "interpret everything". Without it there is no way
+      // out: observed live, a colleague said "they hung up, thanks for
+      // translating" and got it translated into Spanish for a customer who had
+      // already left.
+      "ONE exception to interpreting everything: your colleague can end this. When THEY tell you the other person has hung up or left, or thank you for translating, or ask you to stop interpreting, that is meant for you, not for the other person. Do not interpret it: call the `stop_translator_mode` tool and go back to being their assistant. Only when your colleague says it, and only when they clearly mean the interpreting is over. If you are not sure, keep interpreting."
     ];
     return staffParts.join(" ");
   }
@@ -404,4 +409,20 @@ export function translatorModeCue(opts: {
     );
   }
   return parts.join(" ");
+}
+
+/**
+ * Coordinator cue that ENDS interpreting and hands the session back to the
+ * normal assistant persona, sent when staff call `stop_translator_mode`.
+ *
+ * Only the staff-request path can reach this. After a warm transfer there is a
+ * customer bridged in who never asked to be handed back to a receptionist.
+ */
+export function translatorModeEndCue(opts: { humanName?: string } = {}): string {
+  const human = opts.humanName?.trim();
+  return [
+    `[Coordinator] Interpreting is finished${human ? `, ${human}` : ""}. The other person is off the call and you are talking to your colleague again, one to one.`,
+    "Go back to being their assistant exactly as you were before: normal conversation, in their language, and your tools work again.",
+    "Do not translate anything else, and do not recap or narrate the conversation you just interpreted unless they ask. Acknowledge briefly and let them lead."
+  ].join(" ");
 }

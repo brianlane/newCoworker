@@ -306,7 +306,7 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "start_translator_mode",
         label: "Interpret on request (your team only)",
         description:
-          "When you or a teammate calls your own line and asks for a translator, your coworker becomes a live interpreter for the rest of that call, so you can add a customer who does not share your language. Only offered to your team's own numbers, never to customers.",
+          "When you or a teammate calls your own line and asks for a translator, your coworker becomes a live interpreter so you can add a customer who does not share your language. Tell it the other person has hung up (or just thank it for translating) and it goes back to being your assistant. Only offered to your team's own numbers, never to customers.",
         defaultEnabled: true,
         configurable: true
       },
