@@ -130,9 +130,10 @@ describe("homelight-call-end-details: the re-read block", () => {
       "brief_call",
       "recheck1_wait",
       "recheck1",
+      "brief_release",
       "recheck2_wait",
       "recheck2",
-      "brief_release",
+      "brief_release2",
       "wait_hl_call",
       "final_read",
       "lost_branch",
@@ -140,6 +141,28 @@ describe("homelight-call-end-details: the re-read block", () => {
       "bp_classify",
       "bp_branch"
     ]);
+  });
+
+  it("gives each look its own release sentinel", () => {
+    // fillOnlyEmpty applies to EVERY field on the step, the sentinel included.
+    // Sharing one var would freeze it at the first look's "withheld" and no
+    // later read could ever flip it to "released".
+    const def = liveDef();
+    addRecheckBlock(def, FROM);
+    const sentinelOf = (id: string) =>
+      (findStep(def, id)?.fields ?? []).map((f) => f.name).at(-1);
+    expect(sentinelOf("recheck1")).toBe("contact_release");
+    expect(sentinelOf("recheck2")).toBe("contact_release2");
+    expect(sentinelOf("final_read")).toBe("contact_release3");
+    // ...and each brief watches the look that could set it.
+    expect(findStep(def, "brief_release")?.when).toEqual({
+      var: "contact_release",
+      equals: "released"
+    });
+    expect(findStep(def, "brief_release2")?.when).toEqual({
+      var: "contact_release2",
+      equals: "released"
+    });
   });
 
   it("puts the screenshot read BEFORE qt_email, which is the whole QT fix", () => {
@@ -190,7 +213,6 @@ describe("homelight-call-end-details: the re-read block", () => {
       notEquals: "released"
     });
     expect(findStep(def, "recheck2")?.when).toEqual({ var: RELEASE_VAR, notEquals: "released" });
-    expect(findStep(def, "brief_release")?.when).toEqual({ var: RELEASE_VAR, equals: "released" });
   });
 
   it("backfills the flow's own vars from what the seller said", () => {

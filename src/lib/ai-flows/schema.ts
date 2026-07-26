@@ -1134,7 +1134,10 @@ const nonBranchStepMembers = [
     withinMinutes: z.number().int().min(1).max(120).optional(),
     /** Give up after this long and continue with "no_call". Default 60. */
     timeoutMinutes: z.number().int().min(1).max(1440).optional(),
-    /** Outcome var: answered / no_call. Default "call_outcome". */
+    /**
+     * Outcome var, always one of exactly two values: "answered" or "no_call"
+     * (a timeout counts as no_call). Default "call_outcome".
+     */
     saveAs: varName.optional(),
     /**
      * Namespace for the captured fields so they cannot collide with what the

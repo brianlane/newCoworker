@@ -97,32 +97,42 @@ export const BRANCH_STEP_ID = "bp_branch";
 export const RECHECK_STEP_IDS = [
   "recheck1_wait",
   "recheck1",
+  "brief_release",
   "recheck2_wait",
   "recheck2",
-  "brief_release",
+  "brief_release2",
   "wait_hl_call",
   "final_read"
 ] as const;
 export const ETA_ARM_ID = "bp_calling_at";
 
-/** Sentinel: has HomeLight released the contact details on the page yet? */
-export const RELEASE_VAR = "contact_release";
+/**
+ * Sentinel: has HomeLight released the contact details on the page yet? One var
+ * PER READ, because the re-reads are `fillOnlyEmpty` and that applies to every
+ * field on the step: a shared sentinel would freeze at whatever the first look
+ * saw ("withheld"), and could never flip to "released" afterwards. The existing
+ * retry rungs already use per-rung sentinels (late_/late2_) for the same reason.
+ */
+export const RELEASE_VARS = ["contact_release", "contact_release2", "contact_release3"] as const;
+/** The first look's sentinel, which gates whether a second look happens. */
+export const RELEASE_VAR = RELEASE_VARS[0];
 /** Namespace for what the AI captured on the call. */
 export const CALL_PREFIX = "call_";
 /** The classify category for "here is when I will call them". */
 export const ETA_CATEGORY = "calling_at";
 
 const CLAIMED_WHEN = { var: "claimed_agent", notEquals: "none" } as const;
-const RELEASED_WHEN = { var: RELEASE_VAR, equals: "released" } as const;
 const NOT_RELEASED_WHEN = { var: RELEASE_VAR, notEquals: "released" } as const;
 
-const RELEASE_FIELD = {
-  name: RELEASE_VAR,
+const releasedWhen = (v: string) => ({ var: v, equals: "released" });
+
+const releaseField = (name: string) => ({
+  name,
   description:
     "Answer exactly one lowercase word: released if this page now shows the CLIENT's own " +
     "phone number or email, withheld if it does not. Never count the agent's own contact " +
     "details or a HomeLight support number."
-};
+});
 
 /** Walk the trunk and every nested arm, yielding each step. */
 function walkSteps(steps: unknown, visit: (step: Step) => void): void {
@@ -164,6 +174,7 @@ function rereadStep(
   def: Definition,
   id: string,
   when: Record<string, unknown>,
+  releaseVar: string,
   opts: { screenshot?: boolean } = {}
 ): Step {
   const card = findStep(def, CARD_STEP_ID)!;
@@ -173,11 +184,13 @@ function rereadStep(
     urlVar: "leadUrl",
     ...(card.auth ? { auth: card.auth } : {}),
     // The point of the re-read: keep whatever the first pass (or the seller on
-    // the call) already established, and only fill what is still blank.
+    // the call) already established, and only fill what is still blank. Note
+    // this also freezes the release sentinel, which is why each read gets its
+    // own (see RELEASE_VARS).
     fillOnlyEmpty: true,
     ...(opts.screenshot ? { screenshot: true } : {}),
     when,
-    fields: [...contactFields(def), { ...RELEASE_FIELD }]
+    fields: [...contactFields(def), releaseField(releaseVar)]
   };
 }
 
@@ -192,25 +205,28 @@ export function addRecheckBlock(def: Definition, fromE164: string): boolean {
   if (steps.some((s) => s.id === "wait_hl_call")) return false;
   const at = steps.findIndex((s) => s.id === BRIEF_STEP_ID);
   if (at === -1) throw new Error(`trunk step "${BRIEF_STEP_ID}" not found`);
+  // Hand the released card to the conversation still in progress. One per look,
+  // because each look reports into its own sentinel. Double-briefing is not a
+  // risk: the engine skips a brief when nothing rendered, and
+  // voice_set_call_brief ignores a note it has already delivered.
+  const briefStep = (id: string, releaseVar: string): Step => ({
+    id,
+    type: "voice_brief",
+    fromE164,
+    noteTemplate:
+      "HomeLight just released the client's contact details: {{vars.lead_phone}} " +
+      "{{vars.lead_email}}. Property address: {{vars.lead_address}}.",
+    withinMinutes: 30,
+    when: releasedWhen(releaseVar)
+  });
   const block: Step[] = [
     { id: "recheck1_wait", type: "sleep", minutes: 2, when: CLAIMED_WHEN },
-    rereadStep(def, "recheck1", CLAIMED_WHEN),
+    rereadStep(def, "recheck1", CLAIMED_WHEN, RELEASE_VARS[0]),
+    briefStep("brief_release", RELEASE_VARS[0]),
     // Only if the first look came up empty: a released card needs no second try.
     { id: "recheck2_wait", type: "sleep", minutes: 3, when: NOT_RELEASED_WHEN },
-    rereadStep(def, "recheck2", NOT_RELEASED_WHEN),
-    // Hand the released card to the conversation still in progress. The engine
-    // skips this when nothing rendered, and voice_set_call_brief ignores a note
-    // it has already delivered, so the two re-reads cannot double-brief.
-    {
-      id: "brief_release",
-      type: "voice_brief",
-      fromE164,
-      noteTemplate:
-        "HomeLight just released the client's contact details: {{vars.lead_phone}} " +
-        "{{vars.lead_email}}. Property address: {{vars.lead_address}}.",
-      withinMinutes: 30,
-      when: RELEASED_WHEN
-    },
+    rereadStep(def, "recheck2", NOT_RELEASED_WHEN, RELEASE_VARS[1]),
+    briefStep("brief_release2", RELEASE_VARS[1]),
     // Park until the AI hangs up. What it got out of the seller comes back under
     // call_*, and backfills the flow's own vars when HomeLight supplied nothing:
     // the contact record and the seller's intro text need ONE number, and on a
@@ -234,7 +250,7 @@ export function addRecheckBlock(def: Definition, fromE164: string): boolean {
     // The read that finally sees a populated card, and the screenshot the QT
     // email attaches (each screenshotting browse overwrites screenshot_path, and
     // this is the last one before qt_email runs).
-    rereadStep(def, "final_read", CLAIMED_WHEN, { screenshot: true })
+    rereadStep(def, "final_read", CLAIMED_WHEN, RELEASE_VARS[2], { screenshot: true })
   ];
   def.steps = [...steps.slice(0, at + 1), ...block, ...steps.slice(at + 1)];
   return true;

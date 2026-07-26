@@ -13,18 +13,21 @@
 -- jsonb_set under the row lock cannot lose a concurrent mid-call brief the way a
 -- select-then-update round trip can.
 --
--- Targeted by (business, caller) for the same reason voice_set_call_brief is:
--- the flow run knows which partner line was involved, never which
--- call_control_id the partner happened to dial with. Scoped to a session that is
+-- Targeted by call_control_id: the caller has already resolved WHICH live
+-- session it means (and pins that choice for the rest of the run), so linking by
+-- (business, caller) alone would be wrong — two live calls from the same partner
+-- line would both receive the same link, and the hangup of either would resume a
+-- run that was waiting on the other. business_id is still required so a call id
+-- can only ever be linked by its own tenant. Scoped to a session that is
 -- actually running the AI (`status = 'ai_intake'`) and started inside
 -- p_within_minutes, so a run can never park on a finished call (which would
 -- never resume it) or on an unrelated later one.
 --
 -- Returns the number of sessions linked: 0 means "nothing live to wait for", and
--- the caller continues instead of parking.
+-- the caller re-reads to find out why instead of parking.
 create or replace function public.voice_link_call_run(
   p_business_id uuid,
-  p_from_e164 text,
+  p_call_control_id text,
   p_link jsonb,
   p_within_minutes int default 30
 )
@@ -37,7 +40,10 @@ declare
   v_window interval := make_interval(mins => greatest(coalesce(p_within_minutes, 30), 1));
   v_updated int := 0;
 begin
-  if p_business_id is null or p_link is null or jsonb_typeof(p_link) <> 'object' then
+  if p_business_id is null
+     or coalesce(btrim(p_call_control_id), '') = ''
+     or p_link is null
+     or jsonb_typeof(p_link) <> 'object' then
     return 0;
   end if;
 
@@ -48,12 +54,12 @@ begin
         p_link,
         true
       )
-  where business_id = p_business_id
+  where call_control_id = btrim(p_call_control_id)
+    and business_id = p_business_id
     and status = 'ai_intake'
     -- Never steal a call another run is already parked on: two runs resuming
     -- off one link would leave the loser waiting for its timeout sweep.
     and (context -> 'flow_run') is null
-    and (p_from_e164 is null or btrim(p_from_e164) = '' or from_e164 = btrim(p_from_e164))
     and created_at > now() - v_window;
 
   get diagnostics v_updated = row_count;
@@ -62,7 +68,7 @@ end;
 $$;
 
 comment on function public.voice_link_call_run(uuid, text, jsonb, int) is
-  'Attach a parked ai_flow_run link to a live ai_intake handoff session so the call end resumes that run. Returns the number of sessions linked (0 = no live call).';
+  'Attach a parked ai_flow_run link to ONE live ai_intake handoff session (by call_control_id) so that call ending resumes that run. Returns the number of sessions linked (0 = not live, already linked, or outside the window).';
 
 revoke execute on function public.voice_link_call_run(uuid, text, jsonb, int) from public;
 grant execute on function public.voice_link_call_run(uuid, text, jsonb, int) to service_role;

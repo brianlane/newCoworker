@@ -6262,6 +6262,7 @@ async function voiceBriefStep(
 
 /** The most recent AI-intake session for a partner line, live or finished. */
 type CallSessionRow = {
+  call_control_id?: string;
   status?: string;
   context?: {
     ai_takeover?: { captured?: Record<string, unknown> } | null;
@@ -6291,21 +6292,36 @@ async function waitForCallStep(
   scope: Scope,
   action: Extract<StepAction, { kind: "wait_for_call" }>
 ): Promise<StepOutcome> {
+  // The call this step settled on, pinned for the rest of the run. Without it,
+  // every pass (the capture-settle defer, the resume) re-runs the newest-in-
+  // window lookup, so a SECOND referral call arriving on the same partner line
+  // could hand this run the other lead's captured details.
+  const pinVar = `${action.marker}_call`;
+  const pinned = typeof scope.vars[pinVar] === "string" ? (scope.vars[pinVar] as string) : "";
+
   const readSession = async (): Promise<CallSessionRow | null> => {
-    const sinceIso = new Date(Date.now() - action.withinMinutes * 60_000).toISOString();
-    const { data, error } = await supabase
+    const base = supabase
       .from("voice_handoff_sessions")
-      .select("status, context")
-      .eq("business_id", run.business_id)
-      .eq("from_e164", action.fromE164)
-      .gte("created_at", sinceIso)
-      .order("created_at", { ascending: false })
-      .limit(1)
-      .maybeSingle();
+      .select("call_control_id, status, context")
+      .eq("business_id", run.business_id);
+    const sinceIso = new Date(Date.now() - action.withinMinutes * 60_000).toISOString();
+    const { data, error } = pinned
+      ? await base.eq("call_control_id", pinned).maybeSingle()
+      : await base
+          .eq("from_e164", action.fromE164)
+          .gte("created_at", sinceIso)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
     if (error) console.error("wait_for_call: session lookup", error.message);
     return (data ?? null) as CallSessionRow | null;
   };
   let sess = await readSession();
+  // Pin on the way in, so the settle defer and the resume both come back to the
+  // same call even if the partner rings again in the meantime.
+  if (!pinned && typeof sess?.call_control_id === "string" && sess.call_control_id) {
+    scope.vars[pinVar] = sess.call_control_id;
+  }
 
   const finish = (outcome: string, detail: Record<string, unknown>): StepOutcome => {
     // Namespaced by capturePrefix so the AI's values can never overwrite what
@@ -6339,11 +6355,16 @@ async function waitForCallStep(
   // Coming back from the park: the call is over and the bridge has already
   // written what it captured, so this pass exists purely to hydrate.
   if (action.resumed) {
-    const resumedOutcome = scope.vars[action.saveAs];
-    return finish(
-      typeof resumedOutcome === "string" && resumedOutcome ? resumedOutcome : "answered",
-      { resumed: true }
-    );
+    const resumedOutcome = typeof scope.vars[action.saveAs] === "string"
+      ? (scope.vars[action.saveAs] as string)
+      : "";
+    // resume_overdue_call_waits is shared with place_ai_call and writes its
+    // "no_answer" sentinel on timeout. This step only ever promises
+    // answered/no_call, so normalize rather than leak a third value into flows
+    // that branch on it. Hydration still runs: a bridge that wrote its captured
+    // fields but never resumed us is exactly the case the sweep covers.
+    const outcome = !resumedOutcome || resumedOutcome === "no_answer" ? "no_call" : resumedOutcome;
+    return finish(outcome, { resumed: true, timed_out: resumedOutcome === "no_answer" });
   }
 
   const park = (): StepOutcome => ({
@@ -6362,7 +6383,10 @@ async function waitForCallStep(
     // the call is still live at the instant it links.
     const { data: linked, error: linkErr } = await supabase.rpc("voice_link_call_run", {
       p_business_id: run.business_id,
-      p_from_e164: action.fromE164,
+      // The specific call we settled on, never "whatever is live on this line":
+      // two live calls from one partner would otherwise both get this link, and
+      // either hangup would resume a run waiting on the other.
+      p_call_control_id: sess.call_control_id ?? "",
       p_link: {
         run_id: run.id,
         save_as: action.saveAs,
