@@ -1,3 +1,5 @@
+import fs from "node:fs";
+import path from "node:path";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
 type StubResult = { data: unknown; error: { message: string } | null };
@@ -65,6 +67,24 @@ describe("registry invariants", () => {
   it("findAgentToolDefinition returns null for unknown keys", () => {
     expect(findAgentToolDefinition("dashboard", "nope")).toBeNull();
     expect(findAgentToolDefinition("nope", "send_email")).toBeNull();
+  });
+
+  it("every rendered surface is writable through the settings API", () => {
+    // The Settings page renders whatever the registry lists, but the PUT
+    // route validates agentKey against its own enum: a surface missing there
+    // shows toggles that 400 on save (the email surface shipped that way for
+    // one commit). Read the route's literal source so the two cannot drift.
+    const routeText = fs.readFileSync(
+      path.join(process.cwd(), "src/app/api/dashboard/agent-tools/route.ts"),
+      "utf8"
+    );
+    for (const agent of AGENT_TOOL_REGISTRY) {
+      expect(
+        routeText.includes(`"${agent.key}"`),
+        `surface ${agent.key} is rendered but its agentKey is not accepted by ` +
+          "src/app/api/dashboard/agent-tools/route.ts"
+      ).toBe(true);
+    }
   });
 });
 
