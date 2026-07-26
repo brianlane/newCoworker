@@ -1,9 +1,11 @@
 import { describe, expect, it } from "vitest";
 import {
+  AI_ANSWER_CRAWLER_TOKENS,
   AI_CRAWLERS,
   AI_CRAWLER_TOKENS,
   AI_REFERRERS,
   OBSERVABLE_AI_OPERATORS,
+  ZONE_DISALLOWED_AI_TOKENS,
   matchAiCrawler,
   matchAiReferrer
 } from "@/lib/marketing/ai-crawlers";
@@ -131,10 +133,52 @@ describe("robots.txt", () => {
     expect(wildcard?.disallow).toEqual(["/dashboard", "/admin", "/api"]);
   });
 
-  it("gives the AI agents their own allow group", () => {
+  it("gives the answer engines their own allow group", () => {
     const aiRule = rules().find((r) => Array.isArray(r.userAgent));
-    expect(aiRule?.userAgent).toEqual(AI_CRAWLER_TOKENS);
+    expect(aiRule?.userAgent).toEqual(AI_ANSWER_CRAWLER_TOKENS);
     expect(aiRule?.allow).toBe("/");
+    for (const token of ["OAI-SearchBot", "Claude-SearchBot", "PerplexityBot"]) {
+      expect(aiRule?.userAgent).toContain(token);
+    }
+  });
+
+  it("asserts nothing about a token the zone already disallows", () => {
+    // Cloudflare prepends a managed block (search=yes, ai-train=no).
+    // Emitting an allow for the same token would make the served file carry
+    // two contradicting groups, and which wins is up to each crawler's
+    // parser. This is the whole invariant: zero overlap.
+    for (const token of ZONE_DISALLOWED_AI_TOKENS) {
+      expect(AI_ANSWER_CRAWLER_TOKENS).not.toContain(token);
+    }
+    expect(AI_ANSWER_CRAWLER_TOKENS.length).toBeLessThan(AI_CRAWLER_TOKENS.length);
+  });
+
+  it("does not infer the zone's list from our own kind classification", () => {
+    // Amazonbot reads as an `index` agent but Cloudflare disallows it, so a
+    // `kind !== "train"` filter would leave exactly one token conflicting.
+    // The disallow list has to stay an observed fact.
+    expect(ZONE_DISALLOWED_AI_TOKENS).toContain("Amazonbot");
+    expect(AI_CRAWLERS.find((c) => c.token === "Amazonbot")?.kind).toBe("index");
+    expect(AI_ANSWER_CRAWLER_TOKENS).not.toContain("Amazonbot");
+  });
+
+  it("names only tokens that exist in the registry, so a typo cannot hide", () => {
+    for (const token of ZONE_DISALLOWED_AI_TOKENS) {
+      expect(AI_CRAWLER_TOKENS).toContain(token);
+    }
+  });
+
+  it("still allows the answer engines that drive citations", () => {
+    for (const token of [
+      "OAI-SearchBot",
+      "ChatGPT-User",
+      "Claude-SearchBot",
+      "Claude-User",
+      "PerplexityBot",
+      "Perplexity-User"
+    ]) {
+      expect(AI_ANSWER_CRAWLER_TOKENS).toContain(token);
+    }
   });
 
   it("repeats the disallows in the AI group, since a matched group ignores *", () => {
