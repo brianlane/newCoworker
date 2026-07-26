@@ -26,7 +26,7 @@
  *   tsx debug/aeo-crawler-probe.ts                       # production
  *   tsx debug/aeo-crawler-probe.ts https://staging.host  # another origin
  */
-import { AI_CRAWLERS } from "../src/lib/marketing/ai-crawlers.ts";
+import { AI_CRAWLERS, ZONE_DISALLOWED_AI_TOKENS } from "../src/lib/marketing/ai-crawlers.ts";
 
 const BASE_URL = (process.argv[2] ?? "https://newcoworker.com").replace(/\/$/, "");
 
@@ -235,6 +235,22 @@ if (robotsText === null) {
       `Disallowed outright: ${denied.map((r) => r.token).join(", ")}.\n` +
         "A well-behaved agent here simply never requests anything, so it costs no HTTP\n" +
         "errors and shows up only as silence on /admin/ai-search.\n"
+    );
+  }
+
+  // ZONE_DISALLOWED_AI_TOKENS is an observed fact about Cloudflare's managed
+  // list, and facts drift. Cross-check it against what is actually served so
+  // the next change there surfaces here instead of as a fresh conflict.
+  const servedDenied = new Set([...denied, ...conflicting].map((r) => r.token));
+  const staleEntries = ZONE_DISALLOWED_AI_TOKENS.filter((t) => !servedDenied.has(t));
+  const unrecorded = [...servedDenied].filter((t) => !ZONE_DISALLOWED_AI_TOKENS.includes(t));
+  if (oursPresent && (staleEntries.length > 0 || unrecorded.length > 0)) {
+    policyProblem = true;
+    console.log(
+      "ZONE_DISALLOWED_AI_TOKENS is out of date with the served file:\n" +
+        (unrecorded.length > 0 ? `  newly disallowed, add: ${unrecorded.join(", ")}\n` : "") +
+        (staleEntries.length > 0 ? `  no longer disallowed, drop: ${staleEntries.join(", ")}\n` : "") +
+        "Update src/lib/marketing/ai-crawlers.ts so robots.txt keeps agreeing with the zone.\n"
     );
   }
 }
