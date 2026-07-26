@@ -5,7 +5,7 @@ import {
   normalizeQuestion,
   summarizeSurfaces
 } from "../debug/repeat-cognition";
-import { inboundBody, isCarrierFailure, normalizeE164, parseSince } from "../debug/trace-sms";
+import { isCarrierFailure, matchesInbound, normalizeE164, parseSince } from "../debug/trace-sms";
 import { tally } from "../debug/audit-account";
 
 /**
@@ -134,13 +134,21 @@ describe("trace-sms helpers", () => {
     expect(() => parseSince("soon")).toThrow(/--since/);
   });
 
-  it("pulls the inbound text out of the Telnyx envelope shapes seen over time", () => {
-    expect(inboundBody({ data: { payload: { text: "hi there" } } })).toBe("hi there");
-    expect(inboundBody({ payload: { text: "hi there" } })).toBe("hi there");
-    expect(inboundBody({ text: "hi there" })).toBe("hi there");
-    expect(inboundBody({ body: "hi there" })).toBe("hi there");
-    expect(inboundBody(null)).toBe("");
-    expect(inboundBody({})).toBe("");
+  it("matches an inbound job by its denormalized column", () => {
+    expect(matchesInbound({ customer_e164: "+14805551234", payload: null }, "+14805551234")).toBe(true);
+    expect(matchesInbound({ customer_e164: "+14805559999", payload: null }, "+14805551234")).toBe(false);
+  });
+
+  it("falls back to the payload when the column is null or diverged", () => {
+    // Column-only matching reported "the customer never texted" for threads
+    // the dashboard renders, because the reader finds these by payload.
+    const payload = { data: { payload: { from: { phone_number: "+14805551234" } } } };
+    expect(matchesInbound({ customer_e164: null, payload }, "+14805551234")).toBe(true);
+    expect(matchesInbound({ customer_e164: "4805551234", payload }, "+14805551234")).toBe(true);
+  });
+
+  it("drops a row that matches neither", () => {
+    expect(matchesInbound({ customer_e164: null, payload: null }, "+14805551234")).toBe(false);
   });
 });
 

@@ -31,6 +31,11 @@
  * TELNYX_API_KEY for the carrier column.
  */
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
+import {
+  customerE164FromPayload,
+  inboundTextFromPayload,
+  outboundReplyFromRow
+} from "../src/lib/db/sms-history.ts";
 import { fetchAllPaged } from "../src/lib/supabase/paging.ts";
 import { loadEnv } from "./_shared.ts";
 
@@ -145,6 +150,7 @@ type InboundRow = {
   payload: Record<string, unknown> | null;
   status: string | null;
   assistant_reply_text: string | null;
+  rowboat_reply_cached: string | null;
   last_error: string | null;
   created_at: string;
   updated_at: string;
@@ -173,13 +179,17 @@ export function isCarrierFailure(entry: TimelineEntry): boolean {
   return Boolean(entry.carrier) && !/^delivered/i.test(entry.carrier as string);
 }
 
-/** Inbound text lives in the raw Telnyx envelope; shapes have drifted over time. */
-export function inboundBody(payload: Record<string, unknown> | null): string {
-  if (!payload) return "";
-  const data = (payload.data ?? payload) as Record<string, unknown>;
-  const payloadInner = (data.payload ?? data) as Record<string, unknown>;
-  const text = payloadInner.text ?? payloadInner.body ?? "";
-  return typeof text === "string" ? text : "";
+/**
+ * Does this inbound job belong to the number being traced? The denormalized
+ * column is authoritative when set; otherwise fall back to parsing the Telnyx
+ * envelope, which is how the dashboard thread reader finds the same rows.
+ */
+export function matchesInbound(
+  row: { customer_e164?: string | null; payload: Record<string, unknown> | null },
+  e164: string
+): boolean {
+  if (row.customer_e164 === e164) return true;
+  return customerE164FromPayload(row.payload) === e164;
 }
 
 function truncate(text: string, max = 110): string {
@@ -211,11 +221,18 @@ async function buildTimeline(
       if (args.businessId) q = q.eq("business_id", args.businessId);
       return q;
     }, { label: "sms_outbound_log" }),
+    // Inbound is matched the way the dashboard thread reader matches it: the
+    // denormalized `customer_e164` column, PLUS a payload parse over the
+    // window for rows where that column is null or diverged (legacy rows,
+    // normalization differences). Column-only matching made the tool report
+    // "the customer never texted" for threads the dashboard shows, which is
+    // the exact wrong answer for this question.
     fetchAllPaged<InboundRow>((from, to) => {
       let q = db
         .from("sms_inbound_jobs")
-        .select("id, business_id, payload, status, assistant_reply_text, last_error, created_at, updated_at")
-        .eq("customer_e164", e164)
+        .select(
+          "id, business_id, payload, status, assistant_reply_text, rowboat_reply_cached, last_error, customer_e164, created_at, updated_at"
+        )
         .gte("created_at", sinceIso)
         .order("created_at", { ascending: true })
         .range(from, to);
@@ -250,20 +267,27 @@ async function buildTimeline(
   }
 
   for (const row of inbound.rows) {
+    if (!matchesInbound(row, e164)) continue;
     entries.push({
       at: row.created_at,
       direction: "inbound",
       businessId: row.business_id,
       detail: `job ${row.status ?? "?"}${row.last_error ? `, error: ${truncate(row.last_error, 60)}` : ""}`,
-      body: inboundBody(row.payload)
+      // Shared with the dashboard, so RCS bodies (nested under a body object)
+      // are not rendered blank here while showing fine there.
+      body: inboundTextFromPayload(row.payload)
     });
-    if (row.assistant_reply_text) {
+    // Shared with the dashboard too: older jobs carry the worker reply only
+    // in the transient `rowboat_reply_cached`, and reading the durable column
+    // alone silently dropped their reply from the timeline.
+    const reply = outboundReplyFromRow(row);
+    if (reply) {
       entries.push({
         at: row.updated_at,
         direction: "reply",
         businessId: row.business_id,
         detail: "assistant reply generated for the inbound above",
-        body: row.assistant_reply_text
+        body: reply
       });
     }
   }
