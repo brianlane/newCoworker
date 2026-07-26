@@ -339,7 +339,12 @@ function EmployeeCard({
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
 
-  // Edit fields (seeded when the panel opens)
+  // Edit fields, re-seeded from the row every time the panel OPENS (see
+  // toggleEditing). Seeding once on mount was a live hazard for the
+  // availability switches in particular: every save PATCHes all three, so a
+  // panel opened before a change made elsewhere (the coworker tool, a CSV
+  // import, a second tab) would quietly write the old flags back while the
+  // owner thought they were only fixing a phone number.
   const [name, setName] = useState(member.name);
   const [phone, setPhone] = useState(member.phone_e164);
   const [email, setEmail] = useState(member.email ?? "");
@@ -348,6 +353,25 @@ function EmployeeCard({
     formatScheduleText(member.preferred_windows)
   );
   const [availability, setAvailability] = useState<Availability>(availabilityOf(member));
+
+  /**
+   * Open with the row's current values, close without touching them. A
+   * refresh landing WHILE the panel is open deliberately leaves the fields
+   * alone, so a background poll never eats what the owner is typing.
+   */
+  function toggleEditing(): void {
+    if (editing) {
+      setEditing(false);
+      return;
+    }
+    setName(member.name);
+    setPhone(member.phone_e164);
+    setEmail(member.email ?? "");
+    setScheduleText(formatScheduleText(member.weekly_schedule));
+    setPreferredText(formatScheduleText(member.preferred_windows));
+    setAvailability(availabilityOf(member));
+    setEditing(true);
+  }
 
   // Time-off add form
   const [tooStart, setTooStart] = useState(todayIso());
@@ -496,7 +520,7 @@ function EmployeeCard({
         <div className="flex items-center gap-2 shrink-0">
           <button
             type="button"
-            onClick={() => setEditing((v) => !v)}
+            onClick={toggleEditing}
             disabled={busy}
             className="rounded-lg border border-parchment/20 text-parchment/80 px-3 py-1.5 text-xs hover:bg-parchment/5 transition-colors disabled:opacity-40"
           >

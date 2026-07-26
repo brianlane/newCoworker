@@ -116,9 +116,16 @@ const TRIGGER = {
 };
 
 type Availability = {
-  routing_enabled?: boolean;
-  named_broadcast_enabled?: boolean;
-  team_broadcast_enabled?: boolean;
+  routing_enabled: boolean;
+  named_broadcast_enabled: boolean;
+  team_broadcast_enabled: boolean;
+};
+
+/** Every flag on, the column defaults, spelled out. */
+const ALL_ON: Availability = {
+  routing_enabled: true,
+  named_broadcast_enabled: true,
+  team_broadcast_enabled: true
 };
 
 let db: SupabaseClient;
@@ -127,15 +134,20 @@ let db: SupabaseClient;
  * Amy is deliberately FIRST in rotation order (null last_offered_at sorts
  * ahead of Dave's recent stamp), so "Dave was offered the lead" can only mean
  * the flag excluded her, never that the cursor happened to favor him.
+ *
+ * Every flag is spelled out on BOTH rows: PostgREST unions the keys across a
+ * multi-row insert, so a row that omits them would be sent an explicit NULL
+ * and trip the NOT NULL constraint rather than falling to the default.
  */
-async function seedRoster(biz: string, amy: Availability): Promise<void> {
+async function seedRoster(biz: string, amy: Availability, dave: Availability = ALL_ON) {
   const { error } = await db.from("ai_flow_team_members").insert([
     {
       business_id: biz,
       name: "Dave Lane",
       phone_e164: DAVE,
       active: true,
-      last_offered_at: new Date().toISOString()
+      last_offered_at: new Date().toISOString(),
+      ...dave
     },
     { business_id: biz, name: "Amy Laidlaw", phone_e164: AMY, active: true, ...amy }
   ]);
@@ -263,7 +275,7 @@ describe("per-employee lead availability (real worker)", () => {
   it("opting out of named offers removes her from that list too", async () => {
     const runId = await seedRun(
       "IT availability named off",
-      { named_broadcast_enabled: false },
+      { ...ALL_ON, named_broadcast_enabled: false },
       broadcastFlow("named")
     );
 
@@ -276,17 +288,7 @@ describe("per-employee lead availability (real worker)", () => {
 
   it("everyone opted out of rotation hands the lead to the owner and says why", async () => {
     const biz = await seedBusiness(db, "IT availability all off");
-    const { error } = await db.from("ai_flow_team_members").insert([
-      {
-        business_id: biz,
-        name: "Dave Lane",
-        phone_e164: DAVE,
-        active: true,
-        routing_enabled: false
-      },
-      { business_id: biz, name: "Amy Laidlaw", phone_e164: AMY, active: true, ...AMY_NAMED_ONLY }
-    ]);
-    if (error) throw new Error(error.message);
+    await seedRoster(biz, AMY_NAMED_ONLY, { ...ALL_ON, routing_enabled: false });
     await seedContact(db, biz, LEAD);
     const flowId = await createFlow(db, biz, rotationFlow());
     const runId = await enqueueRun(db, flowId, biz, TRIGGER);
