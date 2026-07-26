@@ -23,6 +23,8 @@ export type BookingConfirmationSendInput = {
   /** Relative manage path from the booking flow, or null. */
   manageLink: string | null;
   visitorTimeZone: string | null;
+  /** Page locale; anything but "es" reads as English. */
+  locale?: string | null;
 };
 
 export async function sendBookingConfirmationEmail(
@@ -43,7 +45,8 @@ export async function sendBookingConfirmationEmail(
     joinUrl: input.joinUrl,
     manageUrl: input.manageLink ? `${siteUrl}${input.manageLink}` : null,
     recipientEmail: email,
-    siteUrl
+    siteUrl,
+    locale: input.locale === "es" ? "es" : "en"
   });
 
   const sent = await sendFromOwnerMailbox(input.businessId, {

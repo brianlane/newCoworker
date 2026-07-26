@@ -50,6 +50,8 @@ type Props = {
   videoCall: boolean;
   /** Provider mode sends a calendar invite email; platform mode does not. */
   sendsInvite: boolean;
+  /** Active page locale, carried into the confirmation email. */
+  locale: string;
   strings: PublicBookingStrings;
 };
 
@@ -108,6 +110,7 @@ export function PublicBookingPage({
   allowedDurations,
   videoCall,
   sendsInvite,
+  locale,
   strings
 }: Props) {
   const browserZone = useMemo(
@@ -225,7 +228,9 @@ export function PublicBookingPage({
           ...(notifyEarlier ? { notifyEarlier: true } : {}),
           // The confirmation email shows THEIR clock beside the business's,
           // and the browser is the only place that zone is known.
-          visitorTimeZone: timezone
+          visitorTimeZone: timezone,
+          // The page's own language, so the email matches what they read.
+          locale
         })
       });
       const body = await res.json();
@@ -252,7 +257,7 @@ export function PublicBookingPage({
     } catch {
       setSubmitState("failed");
     }
-  }, [selectedSlot, token, duration, form, notifyEarlier, timezone, loadSlots]);
+  }, [selectedSlot, token, duration, form, notifyEarlier, timezone, locale, loadSlots]);
 
   const panel = "rounded-lg border border-parchment/10 bg-parchment/5";
   const label = "block text-xs uppercase tracking-wider text-parchment/40";

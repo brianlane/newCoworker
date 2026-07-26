@@ -32,7 +32,9 @@ const bodySchema = z.object({
   // "Text me if an earlier time opens up" (cancellation waitlist opt-in).
   notifyEarlier: z.boolean().optional(),
   /** Browser IANA zone, for the confirmation email's "your time" line. */
-  visitorTimeZone: z.string().max(64).optional()
+  visitorTimeZone: z.string().max(64).optional(),
+  /** Locale of the page the visitor booked on. */
+  locale: z.string().max(8).optional()
 });
 
 export async function POST(request: Request) {
@@ -52,7 +54,8 @@ export async function POST(request: Request) {
       email: body.email,
       note: body.note,
       notifyEarlier: body.notifyEarlier,
-      visitorTimeZone: body.visitorTimeZone
+      visitorTimeZone: body.visitorTimeZone,
+      locale: body.locale
     });
     if (!result.ok) {
       if (result.detail === "not_found") {

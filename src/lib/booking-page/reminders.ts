@@ -22,6 +22,9 @@ import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messa
 import { checkSmsOptOut } from "@/lib/sms/opt-outs";
 import { getZoomJoinUrl } from "@/lib/zoom/meetings";
 import { bookingTimeLabel } from "@/lib/email/templates/booking-confirmation";
+import { getContactLanguage } from "@/lib/db/contact-language";
+import { fmtEmail } from "@/lib/i18n/email-copy";
+import type { AppLocale } from "@/i18n/routing";
 import { logger } from "@/lib/logger";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -57,6 +60,35 @@ type ReminderRow = {
 const COLUMNS =
   "id,business_id,attendee_key,attendee_email,attendee_name,start_at," +
   "duration_minutes,zoom_meeting_id,manage_token,reminders_sent";
+
+/** SMS reminder copy. Kept beside the email catalog entry it mirrors. */
+function reminderSmsCopy(locale: AppLocale): { body: string; change: string } {
+  return locale === "es"
+    ? {
+        body: "Recordatorio: tu cita con {business} es {when}.",
+        change: "Cámbiala aquí: {url}"
+      }
+    : {
+        body: "Reminder: your appointment with {business} is {when}.",
+        change: "Change it here: {url}"
+      };
+}
+
+/**
+ * Language for one booking's reminders: the contact's stored preference
+ * when there is one, else English. Phone-keyed lookups only, which is what
+ * the contacts table is keyed on.
+ */
+async function contactLocale(row: ReminderRow, db: SupabaseClient): Promise<AppLocale> {
+  const phone = attendeePhoneFromKey(row.attendee_key);
+  if (!phone) return "en";
+  try {
+    const language = await getContactLanguage(row.business_id, phone, db);
+    return language.preferred_language === "es" ? "es" : "en";
+  } catch {
+    return "en";
+  }
+}
 
 /** Phone from the ledger's attendee key, when it is phone-keyed. */
 export function attendeePhoneFromKey(attendeeKey: string): string | null {
@@ -124,8 +156,10 @@ async function sendEmailReminder(
   row: ReminderRow,
   businessName: string,
   businessTimeZone: string,
-  siteUrl: string
+  siteUrl: string,
+  locale: AppLocale
 ): Promise<boolean> {
+  /* c8 ignore next -- callers gate on attendee_email before claiming */
   if (!row.attendee_email) return false;
   const joinUrl = row.zoom_meeting_id
     ? await getZoomJoinUrl(row.business_id, row.zoom_meeting_id)
@@ -139,7 +173,8 @@ async function sendEmailReminder(
     joinUrl,
     manageUrl: row.manage_token ? `${siteUrl}/book/manage/${row.manage_token}` : null,
     recipientEmail: row.attendee_email,
-    siteUrl
+    siteUrl,
+    locale
   });
   const sent = await sendFromOwnerMailbox(row.business_id, {
     toEmail: row.attendee_email,
@@ -164,19 +199,22 @@ async function sendSmsReminder(
   row: ReminderRow,
   businessName: string,
   businessTimeZone: string,
-  siteUrl: string
+  siteUrl: string,
+  locale: AppLocale
 ): Promise<boolean> {
   const phone = attendeePhoneFromKey(row.attendee_key);
+  /* c8 ignore next -- callers gate on a phone-keyed booking before claiming */
   if (!phone) return false;
   // STOP-list gate, fail closed like every other customer-facing send.
   const optOut = await checkSmsOptOut(row.business_id, phone);
   if (!optOut.ok || optOut.optedOut) return false;
 
-  const when = bookingTimeLabel(row.start_at, businessTimeZone, "en");
+  const when = bookingTimeLabel(row.start_at, businessTimeZone, locale);
   const manageUrl = row.manage_token ? `${siteUrl}/book/manage/${row.manage_token}` : null;
+  const copy = reminderSmsCopy(locale);
   const body = [
-    `Reminder: your appointment with ${businessName} is ${when}.`,
-    ...(manageUrl ? [`Change it here: ${manageUrl}`] : [])
+    fmtEmail(copy.body, { business: businessName, when }),
+    ...(manageUrl ? [fmtEmail(copy.change, { url: manageUrl })] : [])
   ].join(" ");
 
   const config = await getTelnyxMessagingForBusiness(row.business_id, undefined, {
@@ -235,20 +273,30 @@ export async function sweepBookingReminders(
 
       const startMs = Date.parse(row.start_at);
       const stamps = row.reminders_sent ?? {};
+      // The contact's own language, the same source SMS and waitlist offers
+      // use, so a Spanish-speaking visitor is not reminded in English.
+      const locale = await contactLocale(row, db);
 
-      if (!stamps.email && reminderDue(startMs, page.reminder_email_hours, nowMs)) {
+      // Reachability BEFORE the claim: claiming a channel we cannot use
+      // would stamp it and stop every later pass from trying.
+      const canEmail = Boolean(row.attendee_email);
+      const canText = attendeePhoneFromKey(row.attendee_key) !== null;
+
+      if (canEmail && !stamps.email && reminderDue(startMs, page.reminder_email_hours, nowMs)) {
         // Claimed BEFORE sending: a crash after this point costs one
         // reminder, while claiming after would risk sending twice.
         if (await claimReminder(db, row, "email")) {
-          if (await sendEmailReminder(row, business.name, business.timezone, siteUrl)) {
+          if (
+            await sendEmailReminder(row, business.name, business.timezone, siteUrl, locale)
+          ) {
             result.emailsSent += 1;
           }
         }
       }
 
-      if (!stamps.sms && reminderDue(startMs, page.reminder_sms_hours, nowMs)) {
+      if (canText && !stamps.sms && reminderDue(startMs, page.reminder_sms_hours, nowMs)) {
         if (await claimReminder(db, row, "sms")) {
-          if (await sendSmsReminder(row, business.name, business.timezone, siteUrl)) {
+          if (await sendSmsReminder(row, business.name, business.timezone, siteUrl, locale)) {
             result.textsSent += 1;
           }
         }

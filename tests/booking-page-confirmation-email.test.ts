@@ -68,6 +68,15 @@ describe("sendBookingConfirmationEmail", () => {
     );
   });
 
+  it("sends Spanish for a Spanish page, English for anything else", async () => {
+    await sendBookingConfirmationEmail({ ...INPUT, locale: "es" });
+    expect(String(mockSend.mock.calls[0][1].subject)).toContain("está confirmada");
+
+    mockSend.mockClear();
+    await sendBookingConfirmationEmail({ ...INPUT, locale: "fr" });
+    expect(String(mockSend.mock.calls[0][1].subject)).toContain("You are booked");
+  });
+
   it("omits the manage link when the booking has none", async () => {
     await sendBookingConfirmationEmail({ ...INPUT, manageLink: null, joinUrl: null });
     expect(String(mockSend.mock.calls[0][1].bodyText)).not.toContain("/book/manage/");

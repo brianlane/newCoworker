@@ -8,7 +8,7 @@
  */
 import type { Metadata } from "next";
 import { notFound } from "next/navigation";
-import { getTranslations } from "next-intl/server";
+import { getLocale, getTranslations } from "next-intl/server";
 import { parseBookingPageRef } from "@/lib/booking-page/keys";
 import { getBookingPageContext } from "@/lib/booking-page/service";
 import { PublicBookingPage } from "@/components/booking/PublicBookingPage";
@@ -35,6 +35,7 @@ export default async function BookPage({
   const { context } = resolved;
 
   const t = await getTranslations("bookingPage");
+  const locale = await getLocale();
 
   return (
     <main className="min-h-screen bg-deep-ink px-4 py-10">
@@ -46,6 +47,7 @@ export default async function BookPage({
           allowedDurations={context.allowedDurations}
           videoCall={context.videoCall}
           sendsInvite={context.mode === "provider"}
+          locale={locale}
           strings={{
             eventTitle: context.title ?? t("eventTitle", { business: context.businessName }),
             durationMinutes: t("durationMinutes"),

@@ -397,6 +397,8 @@ export type SubmitPublicBookingInput = {
    * THEIR clock next to the business's. Absent is fine (business zone only).
    */
   visitorTimeZone?: string | null;
+  /** Locale of the page they booked on, so the email is in their language. */
+  locale?: string | null;
 };
 
 /**
@@ -761,7 +763,22 @@ export async function submitPublicBooking(
     bookingAttendeeKey(phone, email, name),
     start.toISOString(),
     { email, name }
-  ).catch(() => {});
+  )
+    .then((stamped) => {
+      if (!stamped) {
+        // Reminders address the visitor from this row, so a miss means they
+        // will hear nothing before the appointment.
+        logger.warn("booking-page: attendee contact not stamped (no matching row)", {
+          businessId: context.businessId
+        });
+      }
+    })
+    .catch((err: unknown) => {
+      logger.warn("booking-page: attendee contact stamp failed", {
+        businessId: context.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    });
 
   if (context.page.send_confirmation_email) {
     await sendBookingConfirmationEmail({
@@ -773,7 +790,8 @@ export async function submitPublicBooking(
       attendeeEmail: email,
       joinUrl: zoomJoinUrl,
       manageLink,
-      visitorTimeZone: input.visitorTimeZone ?? null
+      visitorTimeZone: input.visitorTimeZone ?? null,
+      locale: input.locale ?? null
     }).catch((err: unknown) => {
       logger.warn("booking-page: confirmation email failed", {
         businessId: context.businessId,

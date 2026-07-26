@@ -542,12 +542,12 @@ export async function stampAttendeeContact(
   startIso: string,
   contact: { email?: string | null; name?: string | null },
   client?: SupabaseClient
-): Promise<void> {
+): Promise<boolean> {
   const email = contact.email?.trim() || null;
   const name = contact.name?.trim() || null;
-  if (!email && !name) return;
+  if (!email && !name) return false;
   const db = client ?? (await createSupabaseServiceClient());
-  const { error } = await db
+  const { data, error } = await db
     .from("calendar_booking_dedupe")
     .update({
       ...(email ? { attendee_email: email } : {}),
@@ -555,6 +555,10 @@ export async function stampAttendeeContact(
     })
     .eq("business_id", businessId)
     .eq("attendee_key", attendeeKey)
-    .eq("start_at", startIso);
+    .eq("start_at", startIso)
+    // Reported, not assumed: a key or start mismatch would otherwise leave
+    // the booking unreachable for reminders with no sign anything was wrong.
+    .select("id");
   if (error) throw new Error(`stampAttendeeContact: ${error.message}`);
+  return (data ?? []).length > 0;
 }

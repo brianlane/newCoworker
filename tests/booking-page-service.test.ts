@@ -199,7 +199,7 @@ beforeEach(() => {
   mockListStarts.mockResolvedValue([]);
   mockRecordPlatform.mockResolvedValue({ ok: true });
   mockStampManage.mockResolvedValue(true);
-  mockStampContact.mockResolvedValue(undefined);
+  mockStampContact.mockResolvedValue(true);
   mockConfirmationEmail.mockResolvedValue(true);
   mockUpcomingForAttendee.mockResolvedValue([]);
   mockUnassignedAlert.mockResolvedValue("sent" as never);
@@ -739,6 +739,11 @@ describe("submitPublicBooking", () => {
       { email: VALID.email, name: VALID.name }
     );
 
+    // A stamp that matches no row is reported (reminders would silently
+    // never reach them) but still never costs the booking.
+    mockStampContact.mockResolvedValue(false);
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+
     // A dead mailbox (or a failed stamp) must not cost the visitor their
     // appointment.
     mockConfirmationEmail.mockRejectedValue(new Error("gmail 500"));
@@ -746,6 +751,7 @@ describe("submitPublicBooking", () => {
     expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
 
     mockConfirmationEmail.mockRejectedValue("string boom");
+    mockStampContact.mockRejectedValue("string boom");
     expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
   });
 

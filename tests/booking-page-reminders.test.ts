@@ -17,6 +17,7 @@ vi.mock("@/lib/telnyx/messaging", () => ({
 }));
 vi.mock("@/lib/sms/opt-outs", () => ({ checkSmsOptOut: vi.fn() }));
 vi.mock("@/lib/zoom/meetings", () => ({ getZoomJoinUrl: vi.fn() }));
+vi.mock("@/lib/db/contact-language", () => ({ getContactLanguage: vi.fn() }));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 
 import {
@@ -32,6 +33,7 @@ import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
 import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
 import { checkSmsOptOut } from "@/lib/sms/opt-outs";
 import { getZoomJoinUrl } from "@/lib/zoom/meetings";
+import { getContactLanguage } from "@/lib/db/contact-language";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const SITE = "https://www.newcoworker.com";
@@ -45,6 +47,7 @@ const mockTelnyxConfig = vi.mocked(getTelnyxMessagingForBusiness);
 const mockSendSms = vi.mocked(sendTelnyxSms);
 const mockOptOut = vi.mocked(checkSmsOptOut);
 const mockJoinUrl = vi.mocked(getZoomJoinUrl);
+const mockLanguage = vi.mocked(getContactLanguage);
 
 function booking(over: Record<string, unknown> = {}) {
   return {
@@ -103,6 +106,7 @@ beforeEach(() => {
   mockSendSms.mockResolvedValue({ id: "sms-1", channel: "sms" } as never);
   mockOptOut.mockResolvedValue({ ok: true, optedOut: false } as never);
   mockJoinUrl.mockResolvedValue(null);
+  mockLanguage.mockResolvedValue({ preferred_language: null, language_source: null } as never);
 });
 
 describe("reminderDue", () => {
@@ -218,6 +222,50 @@ describe("sweepBookingReminders", () => {
       { p_booking_id: "row-1", p_channel: "email" },
       { p_booking_id: "row-1", p_channel: "sms" }
     ]);
+  });
+
+  it("reminds a Spanish-speaking contact in Spanish, both channels", async () => {
+    mockLanguage.mockResolvedValue({
+      preferred_language: "es",
+      language_source: "detected"
+    } as never);
+    const { client } = db([
+      booking({ start_at: new Date(NOW + 90 * 60_000).toISOString(), reminders_sent: {} })
+    ]);
+    await sweepBookingReminders(SITE, client, NOW);
+    expect(String(mockSendEmail.mock.calls[0][1].subject)).toContain("Recordatorio");
+    expect(String(mockSendSms.mock.calls[0][2])).toContain("Recordatorio");
+  });
+
+  it("falls back to English when the language read fails or the booking has no phone", async () => {
+    mockLanguage.mockRejectedValue(new Error("db down"));
+    await sweepBookingReminders(SITE, db([booking()]).client, NOW);
+    expect(String(mockSendEmail.mock.calls[0][1].subject)).toContain("Reminder");
+
+    mockSendEmail.mockClear();
+    await sweepBookingReminders(
+      SITE,
+      db([booking({ attendee_key: "email:liz@example.com" })]).client,
+      NOW
+    );
+    expect(String(mockSendEmail.mock.calls[0][1].subject)).toContain("Reminder");
+  });
+
+  it("never claims a channel it cannot use (no address, no phone)", async () => {
+    // Claiming an unusable channel would stamp it and stop every later pass.
+    const noEmail = db([booking({ attendee_email: null })]);
+    await sweepBookingReminders(SITE, noEmail.client, NOW);
+    expect(noEmail.claims).toEqual([]);
+
+    const noPhone = db([
+      booking({
+        attendee_key: "email:liz@example.com",
+        start_at: new Date(NOW + 90 * 60_000).toISOString(),
+        reminders_sent: { email: "x" }
+      })
+    ]);
+    await sweepBookingReminders(SITE, noPhone.client, NOW);
+    expect(noPhone.claims).toEqual([]);
   });
 
   it("is a cheap no-op with nothing upcoming", async () => {
