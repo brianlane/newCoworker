@@ -6,7 +6,7 @@
  * list from the booking ledger.
  */
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { Card } from "@/components/ui/Card";
@@ -31,6 +31,17 @@ type PageRow = {
   reminder_sms_hours: number;
   assignment_mode: string;
   employee_id: string | null;
+  intake_questions: IntakeQuestion[];
+};
+
+/** Mirror of BookingIntakeQuestion; the API stores it normalized. */
+type IntakeQuestion = {
+  id: string;
+  label: string;
+  help?: string;
+  type: "choice" | "multi" | "text" | "textarea";
+  options?: string[];
+  required: boolean;
 };
 
 type RosterMember = { id: string; name: string };
@@ -96,16 +107,42 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
         const body = await res.json();
         if (!res.ok || !body.ok) {
           setSaveError(body?.error?.message ?? t("saveFailed"));
-          return;
+          return false;
         }
         setState((prev) => (prev ? { ...prev, page: body.data.page as PageRow } : prev));
+        return true;
       } catch {
         setSaveError(t("saveFailed"));
+        return false;
       } finally {
         setSaving(false);
       }
     },
     [api, t]
+  );
+
+  // Question edits are serialized and expressed as MUTATIONS of the latest
+  // acknowledged list, not as whole lists built from render-time state: two
+  // blur saves in flight (label, then options) would otherwise race, and
+  // whichever finished last would silently undo the other.
+  const pageQuestionsRef = useRef<IntakeQuestion[]>([]);
+  pageQuestionsRef.current = state?.page?.intake_questions ?? [];
+  const pendingQuestionsRef = useRef<IntakeQuestion[] | null>(null);
+  const questionsQueueRef = useRef<Promise<void>>(Promise.resolve());
+  const patchQuestions = useCallback(
+    (mutate: (questions: IntakeQuestion[]) => IntakeQuestion[]) => {
+      questionsQueueRef.current = questionsQueueRef.current.then(async () => {
+        const base = pendingQuestionsRef.current ?? pageQuestionsRef.current;
+        const next = mutate(base);
+        pendingQuestionsRef.current = next;
+        const saved = await patch({ intakeQuestions: next });
+        // A refused save resyncs the next edit from what the server actually
+        // holds; a successful one keeps building on this list.
+        if (!saved) pendingQuestionsRef.current = null;
+      });
+      return questionsQueueRef.current;
+    },
+    [patch]
   );
 
   const rotate = useCallback(async () => {
@@ -580,6 +617,167 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
           </div>
         </div>
         <p className="mt-3 text-xs text-parchment/40">{t("remindersHint")}</p>
+      </Card>
+
+      {/* Intake questions: what the visitor answers while booking. Same
+          vocabulary as the white-glove questionnaire; answers travel with
+          the appointment (event notes, booking row, manage page). */}
+      <Card>
+        <h2 className="text-base font-semibold text-parchment">{t("intakeTitle")}</h2>
+        <p className="mt-1 text-sm text-parchment/60">{t("intakeSubtitle")}</p>
+        <div className="mt-4 space-y-3">
+          {(page?.intake_questions ?? []).map((q) => (
+            <div
+              key={q.id}
+              className="rounded-md border border-parchment/15 bg-deep-ink/60 p-3"
+            >
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="min-w-48 flex-1">
+                  <label className={label} htmlFor={`bp-q-label-${q.id}`}>
+                    {t("intakeQuestionLabel")}
+                  </label>
+                  <input
+                    id={`bp-q-label-${q.id}`}
+                    // Keyed on the stored value so a successful save (or a
+                    // reverted one) re-renders the input from what is
+                    // actually persisted; the field can never show text the
+                    // public page is not using.
+                    key={q.label}
+                    className={`${select} w-full`}
+                    maxLength={160}
+                    defaultValue={q.label}
+                    disabled={saving}
+                    onBlur={(e) => {
+                      const next = e.target.value.trim();
+                      if (next && next !== q.label) {
+                        // Matched by id, not index: the queued base list can
+                        // differ from what this row rendered from.
+                        void patchQuestions((qs) =>
+                          qs.map((it) => (it.id === q.id ? { ...it, label: next } : it))
+                        );
+                      } else if (!next) {
+                        // An emptied label cannot save; put the stored one
+                        // back rather than showing an edit that never landed.
+                        e.target.value = q.label;
+                      }
+                    }}
+                  />
+                </div>
+                <div>
+                  <label className={label} htmlFor={`bp-q-type-${q.id}`}>
+                    {t("intakeTypeLabel")}
+                  </label>
+                  <select
+                    id={`bp-q-type-${q.id}`}
+                    className={select}
+                    disabled={saving}
+                    value={q.type}
+                    onChange={(e) => {
+                      const type = e.target.value as IntakeQuestion["type"];
+                      void patchQuestions((qs) =>
+                        qs.map((it) =>
+                          it.id === q.id
+                            ? {
+                                ...it,
+                                type,
+                                // A choice needs options to choose from.
+                                options:
+                                  type === "choice" || type === "multi"
+                                    ? (it.options?.length ?? 0) >= 2
+                                      ? it.options
+                                      : [t("intakeOptionOne"), t("intakeOptionTwo")]
+                                    : undefined
+                              }
+                            : it
+                        )
+                      );
+                    }}
+                  >
+                    <option value="text">{t("intakeTypeText")}</option>
+                    <option value="textarea">{t("intakeTypeTextarea")}</option>
+                    <option value="choice">{t("intakeTypeChoice")}</option>
+                    <option value="multi">{t("intakeTypeMulti")}</option>
+                  </select>
+                </div>
+                <label className="flex items-center gap-2 pb-1.5 text-sm text-parchment/70">
+                  <input
+                    type="checkbox"
+                    checked={q.required}
+                    disabled={saving}
+                    onChange={(e) => {
+                      const required = e.target.checked;
+                      void patchQuestions((qs) =>
+                        qs.map((it) => (it.id === q.id ? { ...it, required } : it))
+                      );
+                    }}
+                  />
+                  {t("intakeRequired")}
+                </label>
+                <button
+                  type="button"
+                  className="pb-1.5 text-sm text-clay-red/80 hover:text-clay-red"
+                  disabled={saving}
+                  onClick={() => void patchQuestions((qs) => qs.filter((it) => it.id !== q.id))}
+                >
+                  {t("intakeRemove")}
+                </button>
+              </div>
+              {q.type === "choice" || q.type === "multi" ? (
+                <div className="mt-2">
+                  <label className={label} htmlFor={`bp-q-options-${q.id}`}>
+                    {t("intakeOptionsLabel")}
+                  </label>
+                  <input
+                    id={`bp-q-options-${q.id}`}
+                    key={(q.options ?? []).join(", ")}
+                    className={`${select} w-full`}
+                    disabled={saving}
+                    defaultValue={(q.options ?? []).join(", ")}
+                    placeholder={t("intakeOptionsPlaceholder")}
+                    onBlur={(e) => {
+                      const options = e.target.value
+                        .split(",")
+                        .map((o) => o.trim())
+                        .filter(Boolean)
+                        .slice(0, 8);
+                      if (options.length >= 2) {
+                        void patchQuestions((qs) =>
+                          qs.map((it) => (it.id === q.id ? { ...it, options } : it))
+                        );
+                      } else {
+                        // Fewer than two options is not a choice; revert to
+                        // what is stored instead of showing a phantom edit.
+                        e.target.value = (q.options ?? []).join(", ");
+                      }
+                    }}
+                  />
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+        {(page?.intake_questions ?? []).length < 5 ? (
+          <button
+            type="button"
+            className="mt-3 rounded-md border border-parchment/25 px-3 py-1.5 text-sm text-parchment/80 hover:border-parchment/50"
+            disabled={saving}
+            onClick={() =>
+              void patchQuestions((qs) => [
+                ...qs,
+                {
+                  id: `q-${Date.now().toString(36)}`,
+                  label: t("intakeNewQuestionLabel"),
+                  type: "text" as const,
+                  required: false
+                }
+              ])
+            }
+          >
+            {t("intakeAdd")}
+          </button>
+        ) : (
+          <p className="mt-3 text-xs text-parchment/40">{t("intakeMax")}</p>
+        )}
       </Card>
 
       {/* Cancellation waitlist: independent of the public link, it also

@@ -37,6 +37,11 @@ import {
 import type { BookingPageRow } from "@/lib/booking-page/db";
 import { mintBookingManageToken, parseBookingPageRef } from "@/lib/booking-page/keys";
 import { chooseAssignee, eligibleMembers, parseAssignmentMode } from "@/lib/booking-page/assignment";
+import {
+  formatIntakeAnswers,
+  parseIntakeQuestions,
+  validateIntakeAnswers
+} from "@/lib/booking-page/intake";
 import { sendBookingConfirmationEmail } from "@/lib/booking-page/confirmation-email";
 import { computePublicSlots } from "@/lib/booking-page/slots";
 import type { BusyBlock, PublicSlot } from "@/lib/booking-page/slots";
@@ -123,7 +128,9 @@ export type BookingPageFailure = {
     | "invalid_request"
     | "slot_taken"
     | "already_booked"
-    | "booking_failed";
+    | "booking_failed"
+    /** A required intake question went unanswered (form problem, retryable). */
+    | "missing_answers";
 };
 
 /**
@@ -401,6 +408,8 @@ export type SubmitPublicBookingInput = {
   phone: string;
   email: string;
   note?: string;
+  /** Answers to the page's intake questions, keyed by question id. */
+  intakeAnswers?: unknown;
   /** "Text me if an earlier time opens up" opt-in (cancellation waitlist). */
   notifyEarlier?: boolean;
   /**
@@ -513,6 +522,26 @@ export async function submitPublicBooking(
   const name = input.name.trim();
   const email = input.email.trim();
   const note = input.note?.trim() ?? "";
+
+  // The page's intake questions, answered. Validated here but only REFUSED
+  // after the idempotent resubmit check below: a visitor whose first submit
+  // already booked must get their idempotent success even if the owner has
+  // since added a required question. What DID validate is kept either way
+  // (the lenient pass treats every question as optional) so a resubmit can
+  // still stamp whatever answers it carried.
+  const intakeQuestions = parseIntakeQuestions(context.page.intake_questions);
+  const intake = validateIntakeAnswers(intakeQuestions, input.intakeAnswers);
+  const lenient = intake.ok
+    ? intake
+    : validateIntakeAnswers(
+        intakeQuestions.map((q) => ({ ...q, required: false })),
+        input.intakeAnswers
+      );
+  // With every question optional the lenient pass cannot report missing,
+  // so the fallback object is unreachable and exists only for the narrow.
+  /* c8 ignore next */
+  const intakeAnswers = lenient.ok ? lenient.answers : {};
+  const intakeLines = formatIntakeAnswers(intakeQuestions, intakeAnswers);
   const phoneResult = normalizeContactNumber(input.phone);
   const start = new Date(input.startIso);
   if (
@@ -585,7 +614,9 @@ export async function submitPublicBooking(
       context.businessId,
       bookingAttendeeKey(phone, email, name),
       start.toISOString(),
-      { email, name }
+      // Answers included: the first request may have booked and died before
+      // its final stamp, and the retry is the last chance for them to land.
+      { email, name, intakeAnswers: intakeLines.length > 0 ? intakeAnswers : null }
     ).catch((err: unknown) => {
       logger.warn("booking-page: attendee contact re-stamp failed", {
         businessId: context.businessId,
@@ -609,6 +640,11 @@ export async function submitPublicBooking(
   if (existing.some((b) => Date.parse(b.startIso) > nowMs)) {
     return { ok: false, detail: "already_booked" };
   }
+
+  // Only a FRESH booking is refused for unanswered required questions
+  // (after the idempotent path above, before any claim: the slot stays
+  // bookable while the visitor fixes the form).
+  if (!intake.ok) return { ok: false, detail: "missing_answers" };
 
   // Re-verify the requested start is still an offered slot against live
   // free/busy (a booking made anywhere since page load withdraws the slot).
@@ -664,11 +700,15 @@ export async function submitPublicBooking(
   if (context.mode === "platform") {
     // PLATFORM MODE: the booking ledger is the calendar of record (the
     // per-person policy already ran above, shared with provider mode).
+    // The agenda is where a Zoom-hosted call shows what the visitor said:
+    // their note plus the intake answers, same content the provider path
+    // puts in the event notes.
+    const agendaLines = [...(note ? [note] : []), ...intakeLines];
     const zoomMeeting = await createZoomMeetingForBooking(context.businessId, {
       topic: summary,
       startIso: start.toISOString(),
       endIso,
-      agenda: note || undefined
+      agenda: agendaLines.length > 0 ? agendaLines.join("\n") : undefined
     });
 
     // Re-run the per-person guard AFTER winning the slot claim: two
@@ -738,7 +778,10 @@ export async function submitPublicBooking(
       `Booked via the public booking page.`,
       `Phone: ${phone}`,
       `Email: ${email}`,
-      ...(note ? [`Note: ${note}`] : [])
+      ...(note ? [`Note: ${note}`] : []),
+      // The answers travel with the event, so the person taking the call
+      // reads them where they will actually look.
+      ...intakeLines
     ];
 
     const booked = await bookCalendarAppointment(
@@ -861,7 +904,12 @@ export async function submitPublicBooking(
     context.businessId,
     bookingAttendeeKey(phone, email, name),
     start.toISOString(),
-    { email, name, assigneeMemberId: assignee }
+    {
+      email,
+      name,
+      assigneeMemberId: assignee,
+      intakeAnswers: intakeLines.length > 0 ? intake.answers : null
+    }
   )
     .then((stamped) => {
       if (!stamped) {

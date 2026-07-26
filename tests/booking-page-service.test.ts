@@ -141,6 +141,7 @@ const PAGE = {
   reminder_sms_hours: 2,
   assignment_mode: "any",
   employee_id: null,
+  intake_questions: [],
   slug: null as string | null,
   title: null as string | null,
   created_at: "2026-01-01T00:00:00Z",
@@ -716,9 +717,15 @@ describe("submitPublicBooking", () => {
     expect(mockBook).not.toHaveBeenCalled();
     expect(mockSlotClaim).not.toHaveBeenCalled();
     // Reminder addressing is re-stamped (idempotent) in case the first
-    // submit landed the booking and died before stamping. The confirmation
-    // email is NOT re-sent: a duplicate is worse than none.
-    expect(mockStampContact).toHaveBeenCalled();
+    // submit landed the booking and died before stamping, intake answers
+    // included (their last chance to land). The confirmation email is NOT
+    // re-sent: a duplicate is worse than none.
+    expect(mockStampContact).toHaveBeenCalledWith(
+      BIZ,
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ intakeAnswers: null })
+    );
     expect(mockConfirmationEmail).not.toHaveBeenCalled();
 
     // The retry also settles the assignment, or a shared page's booking
@@ -934,6 +941,113 @@ describe("submitPublicBooking", () => {
     // No roster read and no tiebreak write at all on the unassigned path.
     expect(mockAssigneeCounts).not.toHaveBeenCalled();
     expect(mockMarkOffered).not.toHaveBeenCalled();
+  });
+
+  it("a resubmit carries the intake answers too (their last chance to land)", async () => {
+    mockPage.mockResolvedValue({
+      ...PAGE,
+      intake_questions: [
+        { id: "project", label: "Project?", type: "choice", options: ["A", "B"], required: true }
+      ]
+    });
+    mockUpcomingForAttendee.mockResolvedValueOnce([
+      { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
+    ] as never);
+    expect(
+      (await submitPublicBooking(TOKEN, { ...VALID, intakeAnswers: { project: "A" } })).ok
+    ).toBe(true);
+    expect(mockStampContact).toHaveBeenCalledWith(
+      BIZ,
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ intakeAnswers: { project: "A" } })
+    );
+  });
+
+  it("refuses a submission missing a required intake answer BEFORE any claim", async () => {
+    mockPage.mockResolvedValue({
+      ...PAGE,
+      intake_questions: [
+        { id: "project", label: "Project?", type: "choice", options: ["A", "B"], required: true }
+      ]
+    });
+    expect(await submitPublicBooking(TOKEN, VALID)).toEqual({
+      ok: false,
+      detail: "missing_answers"
+    });
+    expect(mockSlotClaim).not.toHaveBeenCalled();
+    expect(mockBook).not.toHaveBeenCalled();
+  });
+
+  it("a resubmit wins over a stale form: idempotent success despite a new required question", async () => {
+    // The owner added a required question AFTER the visitor booked; the
+    // retry for the same start is still the idempotent success, stamping
+    // whatever answers it carried (here: none).
+    mockPage.mockResolvedValue({
+      ...PAGE,
+      intake_questions: [
+        { id: "project", label: "Project?", type: "choice", options: ["A", "B"], required: true }
+      ]
+    });
+    mockUpcomingForAttendee.mockResolvedValueOnce([
+      { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
+    ] as never);
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    expect(mockStampContact).toHaveBeenCalledWith(
+      BIZ,
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ intakeAnswers: null })
+    );
+  });
+
+  it("platform mode: the Zoom agenda carries the note and the intake answers", async () => {
+    mockConn.mockResolvedValue(null);
+    mockPage.mockResolvedValue({
+      ...PAGE,
+      intake_questions: [
+        { id: "project", label: "Project?", type: "choice", options: ["A", "B"], required: true }
+      ]
+    });
+    expect(
+      (
+        await submitPublicBooking(TOKEN, {
+          ...VALID,
+          note: "Side gate is open",
+          intakeAnswers: { project: "A" }
+        })
+      ).ok
+    ).toBe(true);
+    expect(mockZoomCreate).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ agenda: "Side gate is open\nProject?: A" })
+    );
+  });
+
+  it("carries the intake answers into the event notes and onto the booking row", async () => {
+    mockPage.mockResolvedValue({
+      ...PAGE,
+      intake_questions: [
+        { id: "project", label: "Project?", type: "choice", options: ["A", "B"], required: true }
+      ]
+    });
+    expect(
+      (await submitPublicBooking(TOKEN, { ...VALID, intakeAnswers: { project: "A" } })).ok
+    ).toBe(true);
+    // The person taking the call reads the answers on the event itself.
+    expect(mockBook).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ notes: expect.stringContaining("Project?: A") }),
+      expect.anything(),
+      expect.anything()
+    );
+    // And the row keeps the structured answers for the dashboard.
+    expect(mockStampContact).toHaveBeenCalledWith(
+      BIZ,
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ intakeAnswers: { project: "A" } })
+    );
   });
 
   it("drops the manage link rather than the booking when the stamp does not land", async () => {

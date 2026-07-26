@@ -50,7 +50,9 @@
     "weekdayWed": "Wed",
     "weekdayThu": "Thu",
     "weekdayFri": "Fri",
-    "weekdaySat": "Sat"
+    "weekdaySat": "Sat",
+    "intakePickOne": "Choose one…",
+    "intakeAnswerRequired": "Please pick at least one."
   },
   "common": {
     "language": "Language",
@@ -1405,7 +1407,24 @@
       "assignModeFixed": "One person",
       "assignEmployeeLabel": "Person",
       "assignHint": "Sharing across the team gives each booking to whoever is on shift with the lightest upcoming load.",
-      "assignNoRoster": "Add employees to book a specific person or share across the team."
+      "assignNoRoster": "Add employees to book a specific person or share across the team.",
+      "intakeTitle": "Questions to ask while booking",
+      "intakeSubtitle": "Up to five. Answers travel with the appointment, so the call starts prepared.",
+      "intakeQuestionLabel": "Question",
+      "intakeTypeLabel": "Answer type",
+      "intakeTypeText": "Short answer",
+      "intakeTypeTextarea": "Long answer",
+      "intakeTypeChoice": "Pick one",
+      "intakeTypeMulti": "Pick any",
+      "intakeRequired": "Required",
+      "intakeRemove": "Remove",
+      "intakeOptionsLabel": "Options (comma separated)",
+      "intakeOptionsPlaceholder": "Kitchen, Bathroom, Whole house",
+      "intakeAdd": "Add a question",
+      "intakeMax": "Five questions keeps booking short; remove one to add another.",
+      "intakeNewQuestionLabel": "What should we know before the call?",
+      "intakeOptionOne": "Option A",
+      "intakeOptionTwo": "Option B"
     },
     "integrationsClaude": {
       "connectedBadge": "Connected",

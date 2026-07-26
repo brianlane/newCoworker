@@ -34,7 +34,9 @@ const bodySchema = z.object({
   /** Browser IANA zone, for the confirmation email's "your time" line. */
   visitorTimeZone: z.string().max(64).optional(),
   /** Locale of the page the visitor booked on. */
-  locale: z.string().max(8).optional()
+  locale: z.string().max(8).optional(),
+  /** Answers to the page's intake questions, keyed by question id. */
+  intakeAnswers: z.record(z.string(), z.union([z.string(), z.array(z.string())])).optional()
 });
 
 export async function POST(request: Request) {
@@ -55,7 +57,8 @@ export async function POST(request: Request) {
       note: body.note,
       notifyEarlier: body.notifyEarlier,
       visitorTimeZone: body.visitorTimeZone,
-      locale: body.locale
+      locale: body.locale,
+      intakeAnswers: body.intakeAnswers
     });
     if (!result.ok) {
       if (result.detail === "not_found") {
@@ -69,6 +72,16 @@ export async function POST(request: Request) {
         // the client re-fetches availability (where the slot or whole day is
         // gone) and shows the "no longer available" copy, accurate for both.
         return errorResponse("CONFLICT", "That time is no longer available.", 409);
+      }
+      if (result.detail === "missing_answers") {
+        // A stale form (the owner added a required question while it sat
+        // open). 400, NOT 422: the client reads 422 as "you already have an
+        // appointment", and this is a fixable form problem.
+        return errorResponse(
+          "VALIDATION_ERROR",
+          "Please answer the required questions and try again.",
+          400
+        );
       }
       if (result.detail === "already_booked") {
         // Deliberate policy: one upcoming appointment per person on the
