@@ -235,12 +235,15 @@ describe("pollEmailCoworker", () => {
     expect(mockDispatch).toHaveBeenCalledTimes(1);
   });
 
-  it("leaves the rest of a batch alone once a thread is handed off", async () => {
+  it("leaves the rest of a batch alone once a thread is handed off, but still claims it", async () => {
     mockList.mockResolvedValue([{ ...THREAD, handedOff: true }]);
     mockFetch.mockResolvedValue([message({ id: "m-1" }), message({ id: "m-2" })]);
     const out = await pollEmailCoworker(businessDb());
     expect(out.replied).toBe(0);
     expect(mockTurn).not.toHaveBeenCalled();
+    // The claim still lands: a thread a human took over must not get an
+    // automated answer from the AiFlow side either.
+    expect(mockSeen.mock.calls.map((c) => c[1])).toEqual([["m-1"], ["m-2"]]);
   });
 
   it("still hands off when the owner alert itself fails, and names a subject-less thread", async () => {

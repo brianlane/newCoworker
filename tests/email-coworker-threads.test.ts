@@ -58,8 +58,12 @@ describe("rememberSentThread", () => {
       correspondent_email: "beth@lizdev.com",
       last_sent_message_ref: "<abc@mail>",
       // Re-engagement: the owner mailing through the assistant again revives
-      // a thread a previous handoff had silenced.
-      handed_off: false
+      // a thread a previous handoff had silenced, budget included (a
+      // same-day revival with the day's turns still spent would hand off
+      // again on the very next reply).
+      handed_off: false,
+      turns: 0,
+      turns_day: null
     });
     expect(calls[0][1]).toEqual({ onConflict: "business_id,thread_id" });
   });

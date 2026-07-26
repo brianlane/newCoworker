@@ -98,8 +98,11 @@ export async function rememberSentThread(
         // The owner sending through the assistant again is an explicit
         // re-engagement: a previously handed-off thread comes back under the
         // coworker, otherwise one handoff would silence that conversation
-        // forever.
+        // forever. The daily budget resets with it, or a same-day revival
+        // would hand off again on the very next reply without answering.
         handed_off: false,
+        turns: 0,
+        turns_day: null,
         updated_at: new Date().toISOString()
       },
       { onConflict: "business_id,thread_id" }
