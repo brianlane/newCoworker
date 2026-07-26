@@ -1028,28 +1028,65 @@ export function isWithinWeeklyWindows(windows: WeeklyWindows, clock: LocalClock)
   return dayWindows.some(([start, end]) => clock.minutes >= start && clock.minutes < end);
 }
 
+/**
+ * WHICH way the engine is trying to hand this roster member a lead. Each mode
+ * reads its own opt-out column, because an owner can reasonably want any
+ * subset: Amy Laidlaw takes her HomeLight broadcast but not rotation leads.
+ *
+ *   rotation        the one-at-a-time round robin (pickNextAgent), the hard
+ *                   auto-assign that reuses that pick, preferContactOwner,
+ *                   and single-agent pins. A pin on a rotation-off member
+ *                   falls through to the owner fallback, exactly like a pin
+ *                   on someone deactivated or on time off.
+ *   named_broadcast a route_to_team step that lists them in `agentNames`.
+ *   team_broadcast  a `broadcastAll` fan-out (the team-first human handoff).
+ */
+export type AvailabilityMode = "rotation" | "named_broadcast" | "team_broadcast";
+
 /** Roster row shape the availability filter needs (worker passes DB rows through). */
 export type AvailabilityInput = {
   id: string;
   weekly_schedule?: unknown;
   preferred_windows?: unknown;
+  /**
+   * Per-mode opt-outs. Absent/null reads as available, so a caller that did
+   * not select these columns (and a pre-migration row) behaves as before.
+   */
+  routing_enabled?: boolean | null;
+  named_broadcast_enabled?: boolean | null;
+  team_broadcast_enabled?: boolean | null;
 };
+
+/** The member's opt-out for `mode`. Only an explicit `false` excludes them. */
+function allowsMode(member: AvailabilityInput, mode: AvailabilityMode): boolean {
+  const flag =
+    mode === "rotation"
+      ? member.routing_enabled
+      : mode === "named_broadcast"
+        ? member.named_broadcast_enabled
+        : member.team_broadcast_enabled;
+  return flag !== false;
+}
 
 /**
  * Apply the working-info rules to a rotation-ordered roster:
- *   1. members in `offIds` (time off covering today) are dropped — hard skip;
- *   2. members with a valid weekly_schedule are dropped when the clock is
- *      outside it — hard skip (no schedule = always available);
- *   3. members currently inside a preferred window float to the front,
- *      otherwise relative rotation order is preserved — soft priority only,
+ *   1. members who opted out of `mode` are dropped (hard skip): the owner's
+ *      standing decision about how this person receives leads;
+ *   2. members in `offIds` (time off covering today) are dropped (hard skip);
+ *   3. members with a valid weekly_schedule are dropped when the clock is
+ *      outside it (hard skip; no schedule = always available);
+ *   4. members currently inside a preferred window float to the front,
+ *      otherwise relative rotation order is preserved. Soft priority only,
  *      so a lead is never dropped because nobody "prefers" the current hour.
  */
 export function filterRosterByAvailability<T extends AvailabilityInput>(
   roster: T[],
   offIds: ReadonlySet<string>,
-  clock: LocalClock
+  clock: LocalClock,
+  mode: AvailabilityMode
 ): T[] {
   const available = roster.filter((m) => {
+    if (!allowsMode(m, mode)) return false;
     if (offIds.has(m.id)) return false;
     const schedule = parseWeeklyWindows(m.weekly_schedule);
     if (schedule && !isWithinWeeklyWindows(schedule, clock)) return false;

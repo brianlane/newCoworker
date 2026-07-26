@@ -31,12 +31,16 @@ export const EMPLOYEES_EXPORT_HEADERS = [
   "active",
   "weekly_schedule",
   "preferred_times",
+  "lead_rotation",
+  "named_group_offers",
+  "whole_team_offers",
   "last_offered_at",
   "created_at"
 ] as const;
 
 const MEMBER_COLUMNS =
-  "id,name,phone_e164,email,active,weekly_schedule,preferred_windows,last_offered_at,created_at";
+  "id,name,phone_e164,email,active,weekly_schedule,preferred_windows," +
+  "routing_enabled,named_broadcast_enabled,team_broadcast_enabled,last_offered_at,created_at";
 
 const E164_RE = /^\+[1-9]\d{6,14}$/;
 
@@ -70,6 +74,11 @@ export async function exportEmployeesCsv(
       r.active ? "true" : "false",
       formatScheduleText(r.weekly_schedule),
       formatScheduleText(r.preferred_windows),
+      // Pre-migration rows read as null over PostgREST; export them as the
+      // column default rather than an empty cell that re-imports as "keep".
+      r.routing_enabled === false ? "false" : "true",
+      r.named_broadcast_enabled === false ? "false" : "true",
+      r.team_broadcast_enabled === false ? "false" : "true",
       r.last_offered_at ?? "",
       r.created_at
     ])
@@ -79,8 +88,28 @@ export async function exportEmployeesCsv(
 /** Header + one example row showing the importable columns. */
 export function employeesCsvTemplate(): string {
   return serializeCsv([
-    ["name", "phone", "email", "active", "weekly_schedule", "preferred_times"],
-    ["Alex Rivera", "+16025551234", "alex@example.com", "true", "mon-fri 09:00-17:00", "mon-fri 09:00-12:00"]
+    [
+      "name",
+      "phone",
+      "email",
+      "active",
+      "weekly_schedule",
+      "preferred_times",
+      "lead_rotation",
+      "named_group_offers",
+      "whole_team_offers"
+    ],
+    [
+      "Alex Rivera",
+      "+16025551234",
+      "alex@example.com",
+      "true",
+      "mon-fri 09:00-17:00",
+      "mon-fri 09:00-12:00",
+      "true",
+      "true",
+      "true"
+    ]
   ]);
 }
 
@@ -92,6 +121,16 @@ function parseBooleanCell(raw: string): boolean | null {
   if (["false", "no", "n", "0", "f"].includes(v)) return false;
   return null;
 }
+
+/**
+ * Lead-availability columns, CSV header to DB column. Owner-facing headers
+ * rather than the internal names, matching the Employees page labels.
+ */
+const AVAILABILITY_CSV_COLUMNS = [
+  { header: "lead_rotation", column: "routing_enabled" },
+  { header: "named_group_offers", column: "named_broadcast_enabled" },
+  { header: "whole_team_offers", column: "team_broadcast_enabled" }
+] as const;
 
 /**
  * Import an employees CSV. Row-by-row like the contacts import; returns the
@@ -161,15 +200,32 @@ export async function importEmployeesCsv(
       continue;
     }
 
-    const activeRaw = (row.active ?? "").trim();
-    const active = activeRaw ? parseBooleanCell(activeRaw) : null;
-    if (activeRaw && active === null) {
-      summary.errors.push({
-        row: fileRow,
-        message: `active: "${activeRaw}" is not true/false.`
-      });
+    // Blank = "keep whatever is stored"; a garbled value errors the row
+    // rather than silently changing who receives leads.
+    const booleanCells: Record<string, boolean | null> = {};
+    let badBooleanCell = "";
+    for (const column of ["active", ...AVAILABILITY_CSV_COLUMNS.map((c) => c.header)]) {
+      const raw = (row[column] ?? "").trim();
+      const value = raw ? parseBooleanCell(raw) : null;
+      if (raw && value === null) {
+        summary.errors.push({
+          row: fileRow,
+          message: `${column}: "${raw}" is not true/false.`
+        });
+        badBooleanCell = column;
+        break;
+      }
+      booleanCells[column] = value;
+    }
+    if (badBooleanCell) {
       summary.skipped += 1;
       continue;
+    }
+    const active = booleanCells.active ?? null;
+    const availability: Record<string, boolean> = {};
+    for (const { header, column } of AVAILABILITY_CSV_COLUMNS) {
+      const value = booleanCells[header];
+      if (value !== null && value !== undefined) availability[column] = value;
     }
 
     const scheduleText = (row.weekly_schedule ?? "").trim();
@@ -194,7 +250,8 @@ export async function importEmployeesCsv(
         ...(email ? { email } : {}),
         ...(active !== null ? { active } : {}),
         ...(scheduleText ? { weekly_schedule: schedule.value } : {}),
-        ...(preferredText ? { preferred_windows: preferred.value } : {})
+        ...(preferredText ? { preferred_windows: preferred.value } : {}),
+        ...availability
       };
       const applyUpdate = async (): Promise<boolean> => {
         const { data: existing, error: selErr } = await db
@@ -223,7 +280,8 @@ export async function importEmployeesCsv(
           email: email || null,
           ...(active !== null ? { active } : {}),
           weekly_schedule: schedule.value,
-          preferred_windows: preferred.value
+          preferred_windows: preferred.value,
+          ...availability
         });
         if (insErr) {
           if (insErr.code !== PG_UNIQUE_VIOLATION) throw new Error(insErr.message);

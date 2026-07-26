@@ -65,7 +65,8 @@ const EMAIL_GATES: ActionToolGates = {
   generate_image: false,
   update_notification_preferences: false,
   flag_contact_spam: false,
-  set_contact_reply_mode: false
+  set_contact_reply_mode: false,
+  manage_employee: false
 };
 const TOOLS = actionToolDeclarations(EMAIL_GATES);
 

@@ -1409,6 +1409,21 @@
       "saved": "Saved.",
       "saveFailed": "Save failed"
     },
+    "employeeAvailability": {
+      "ownerBadge": "Owner",
+      "sectionTitle": "Lead availability",
+      "sectionHelp": "The ways this person can be handed a lead. Time off and their weekly schedule still apply on top of these.",
+      "rotationLabel": "Leads in rotation",
+      "rotationHelp": "Offer them new leads in the round robin, including automatic assignment and any automation pinned to them by name. Off means those leads go to the next person, or back to you when nobody is left.",
+      "rotationShort": "leads in rotation",
+      "namedLabel": "Group offers that name them",
+      "namedHelp": "Include them when an automation texts one lead to several named people at once and the first to reply \"1\" takes it.",
+      "namedShort": "named group offers",
+      "teamLabel": "Whole-team offers",
+      "teamHelp": "Include them when your coworker offers something to the entire team at once, such as the team-first human handoff above.",
+      "teamShort": "whole-team offers",
+      "summaryOff": "Not receiving: {list}"
+    },
     "home": {
       "title": "Your AI Coworker",
       "subtitle": "Monitor and manage your digital employee",

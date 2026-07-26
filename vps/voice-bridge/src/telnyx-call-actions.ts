@@ -94,6 +94,46 @@ export async function telnyxHangupCall(
 }
 
 /**
+ * Digits Telnyx accepts on send_dtmf: the keypad, plus `w` (0.5s pause) and
+ * `W` (1s pause). Anything else is rejected before the request so a model-chosen
+ * argument can never reach the API as a malformed sequence.
+ */
+const DTMF_DIGITS_RE = /^[0-9A-D#*wW]{1,32}$/;
+
+/**
+ * Press keypad digits on a live call leg. Used by the bridge's `press_digits`
+ * tool so the assistant can clear a partner IVR ("press 1 to accept") when it
+ * HEARS the prompt, instead of the answer webhook guessing how long the
+ * announcement runs.
+ */
+export async function telnyxSendDtmf(
+  apiKey: string,
+  callControlId: string,
+  digits: string,
+  fetchImpl: typeof fetch = fetch
+): Promise<TelnyxActionResult> {
+  if (!apiKey) return { ok: false, status: 0, body: "missing TELNYX_API_KEY" };
+  if (!callControlId) return { ok: false, status: 0, body: "missing call_control_id" };
+  if (!DTMF_DIGITS_RE.test(digits)) return { ok: false, status: 0, body: "invalid digits" };
+
+  const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/send_dtmf`;
+  try {
+    const res = await fetchImpl(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({ digits })
+    });
+    const text = await res.text().catch(() => "");
+    return { ok: res.ok, status: res.status, body: text.slice(0, 500) };
+  } catch (err) {
+    return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
  * Stop the bidirectional media stream on a call leg WITHOUT hanging it up.
  * Used after a successful warm transfer so the AI's media fork is removed while
  * the caller stays bridged to the human. Telnyx closes our media WebSocket when

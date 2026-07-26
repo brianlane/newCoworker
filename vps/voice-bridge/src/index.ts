@@ -12,6 +12,7 @@ import {
   createGeminiTelnyxBridge,
   type TransferCapability,
   type HangupCapability,
+  type DtmfCapability,
   type CallerIdentity,
   type CapturedLead,
   type IntakeCapability,
@@ -22,6 +23,7 @@ import {
   telnyxTransferCall,
   telnyxSendPlainSms,
   telnyxHangupCall,
+  telnyxSendDtmf,
   telnyxStreamingStop
 } from "./telnyx-call-actions.js";
 import { composeIntakeLeadSms } from "./intake.js";
@@ -1189,6 +1191,7 @@ function main(): void {
               persona?: string;
               capture_fields?: unknown;
               context_note?: string;
+              ivr_gate?: { digit?: string; fallback_ms?: number } | null;
             } | null;
             transfer?: {
               to_e164?: string;
@@ -1204,8 +1207,19 @@ function main(): void {
           intakeNotifyE164 = typeof ai?.notify_e164 === "string" ? ai.notify_e164 : "";
           intakeAlsoNotifyE164 =
             typeof ai?.also_notify_e164 === "string" ? ai.also_notify_e164.trim() : "";
+          // The partner answered us with a recording, not a person: hold the
+          // greeting and press the accept digit when the announcement asks.
+          const gateDigit =
+            typeof ai?.ivr_gate?.digit === "string" ? ai.ivr_gate.digit.trim() : "";
+          const gateFallbackMs =
+            typeof ai?.ivr_gate?.fallback_ms === "number" && ai.ivr_gate.fallback_ms > 0
+              ? ai.ivr_gate.fallback_ms
+              : undefined;
           intake = {
             persona: typeof ai?.persona === "string" ? ai.persona : undefined,
+            ivrGate: gateDigit
+              ? { digit: gateDigit, ...(gateFallbackMs ? { fallbackMs: gateFallbackMs } : {}) }
+              : undefined,
             captureFields: Array.isArray(ai?.capture_fields)
               ? (ai!.capture_fields as unknown[]).filter((x): x is string => typeof x === "string")
               : undefined,
@@ -1299,6 +1313,23 @@ function main(): void {
                 reason: reason ?? ""
               });
               return { ok: true, detail: "hung up" };
+            }
+          }
+        : undefined;
+
+      // Keypad access for the `press_digits` tool. Always provided when we have
+      // an API key; the tool is only DECLARED for a session whose context asked
+      // for the IVR gate, so no other persona gains a keypad.
+      const dtmf: DtmfCapability | undefined = hangupApiKey
+        ? {
+            execute: async (digits: string) => {
+              const result = await telnyxSendDtmf(hangupApiKey, callControlId, digits);
+              if (!result.ok) {
+                console.error("voice-bridge: send_dtmf failed", result.status, result.body);
+                return { ok: false, detail: `telnyx ${result.status}` };
+              }
+              console.log("voice-bridge: send_dtmf", { callControlId, digits });
+              return { ok: true, detail: "pressed" };
             }
           }
         : undefined;
@@ -1655,6 +1686,7 @@ function main(): void {
             businessTimezone,
             transfer,
             hangup,
+            dtmf,
             detachMedia,
             direction: callDirection,
             vault,
@@ -1817,6 +1849,55 @@ function main(): void {
             }
           } catch (err) {
             console.error("voice-bridge: meter Gemini Live spend error", err);
+          }
+          // What the AI got out of the person itself. On a referral line the
+          // partner withholds the seller's number until after this call, so the
+          // conversation is frequently the ONLY source for it. Persist it on the
+          // session so a flow parked on `wait_for_call` can hydrate its vars and
+          // run the whole follow-up (contact record, QT email, agent hand-off)
+          // even when the portal never releases anything.
+          //
+          // Written BEFORE the resume below so the worker never reads a session
+          // that has not been filled in yet.
+          if (intake) {
+            try {
+              // Re-read rather than reuse the context parsed at attach. Two
+              // things change DURING the call: a voice_brief step appends to the
+              // note, and a `wait_for_call` step stamps `flow_run` when it parks
+              // (about a minute in). The link read at attach is therefore null
+              // for exactly the calls this feature exists for.
+              const { data: liveRow } = await supabase
+                .from("voice_handoff_sessions")
+                .select("context")
+                .eq("call_control_id", callControlId)
+                .maybeSingle();
+              const liveCtx = ((liveRow as { context?: Record<string, unknown> } | null)
+                ?.context ?? {}) as Record<string, unknown>;
+              const liveAi = (liveCtx.ai_takeover ?? {}) as Record<string, unknown>;
+              const captured = geminiGetLead ? geminiGetLead() : null;
+              if (captured && Object.keys(captured).length > 0) {
+                await supabase
+                  .from("voice_handoff_sessions")
+                  .update({
+                    context: {
+                      ...liveCtx,
+                      ai_takeover: { ...liveAi, captured }
+                    }
+                  })
+                  .eq("call_control_id", callControlId);
+              }
+              // Release a flow parked on this call, using the link as it stands
+              // NOW. Ordered after the write above so the worker can never wake
+              // to a session whose captured fields have not landed yet — this is
+              // why the bridge owns the resume and the call-end webhook does not
+              // (the overdue sweep is the backstop for a bridge that dies here).
+              const liveLink = (liveCtx.flow_run ?? null) as FlowRunLink | null;
+              if (liveLink && callDirection === "inbound") {
+                await resumeFlowRunWithCallOutcome(supabase, liveLink, "answered");
+              }
+            } catch (err) {
+              console.error("voice-bridge: persist captured lead / resume failed", err);
+            }
           }
           // Only notify when the Gemini bridge actually ran (geminiGetLead is
           // set on successful bridge init). If Gemini never started (init

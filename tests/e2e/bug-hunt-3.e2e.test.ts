@@ -238,11 +238,12 @@ describe("BUG 3 (fixed): an overnight shift (18:00–02:00) keeps the member rou
       }
     ];
     // Tuesday 22:00 business-local — squarely inside their working hours.
-    const kept = filterRosterByAvailability(roster, new Set<string>(), {
-      isoDate: "2026-07-14",
-      weekday: "tue",
-      minutes: 22 * 60
-    });
+    const kept = filterRosterByAvailability(
+      roster,
+      new Set<string>(),
+      { isoDate: "2026-07-14", weekday: "tue", minutes: 22 * 60 },
+      "rotation"
+    );
     expect(kept.map((m) => m.id)).toEqual(["night-shift-member"]);
   });
 });

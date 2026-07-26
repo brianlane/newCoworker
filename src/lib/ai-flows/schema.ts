@@ -73,6 +73,10 @@ export const FLOW_STEP_TYPES = [
   // with voice_ai_intake.answerFirst, where the AI answers within seconds of a
   // partner's alert and the portal read only finishes a minute later.
   "voice_brief",
+  // Park until the AI's live call ends, then continue with whatever the AI got
+  // out of the person. The other half of voice_brief: that one pushes INTO the
+  // call, this one waits for it and pulls the captured details back out.
+  "wait_for_call",
   "branch",
   "goal",
   "math",
@@ -724,6 +728,12 @@ const nonBranchStepMembers = [
       extractLinks: z.array(extractLinkSchema).min(1).max(10).optional(),
       auth: browseAuthSchema.optional(),
       screenshot: z.boolean().optional(),
+      // Backfill only (same semantic as email_extract.fillOnlyEmpty): write a
+      // field only when its var is still empty/"none", so an earlier read's
+      // values win. Required for RE-READING a page that releases its details
+      // late: a second pass that still shows a blank card would otherwise wipe
+      // whatever the first pass (or the call) had already established.
+      fillOnlyEmpty: z.boolean().optional(),
       // Terminal-state guard (mirrors browse_action.skipWhenText): when the
       // fetched page contains this marker text (case-insensitive) there is
       // nothing to read (e.g. a lead another agent already claimed shows a
@@ -1105,6 +1115,60 @@ const nonBranchStepMembers = [
     withinMinutes: z.number().int().min(1).max(120).optional(),
     when: whenSchema.optional()
   }),
+  // Park until the AI's live call from `fromE164` hangs up, then continue with
+  // whatever the AI captured on it (name/phone/address land in
+  // {{vars.<capturePrefix><field>}}). Built for a referral partner that
+  // withholds the customer's number until after the call, where the person on
+  // the line is the only source for it and the follow-up cannot run until the
+  // conversation is over.
+  //
+  // Not a park when nothing is live: an ENDED session inside the window still
+  // hydrates (the call finished before the flow got here), and no session at
+  // all just continues. `{{vars.<saveAs>}}` says which happened.
+  z.object({
+    id: stepId,
+    type: z.literal("wait_for_call"),
+    /** The partner line whose AI call this run waits on. */
+    fromE164: e164,
+    /** Only wait on a call that started within this window. Default 30. */
+    withinMinutes: z.number().int().min(1).max(120).optional(),
+    /** Give up after this long and continue with "no_call". Default 60. */
+    timeoutMinutes: z.number().int().min(1).max(1440).optional(),
+    /**
+     * Outcome var, always one of exactly two values: "answered" or "no_call"
+     * (a timeout counts as no_call). Default "call_outcome".
+     */
+    saveAs: varName.optional(),
+    /**
+     * Namespace for the captured fields so they cannot collide with what the
+     * portal produced: the AI's spoken phone lands in `<prefix>phone`, which the
+     * flow can then compare against the partner's own value. Default "call_".
+     */
+    capturePrefix: z
+      .string()
+      .regex(/^[a-z][a-z0-9_]{0,20}$/)
+      .optional(),
+    /**
+     * Also copy a captured field into the flow's own var, but ONLY when that var
+     * is still empty (the email_extract.fillOnlyEmpty rule). The prefixed copies
+     * above are for showing the team what the person said; this is for the one
+     * var that has to drive a send: the contact record and the customer's intro
+     * text need a single number, and the partner may never supply one.
+     */
+    backfill: z
+      .array(
+        z.object({
+          /** Captured field name, e.g. "phone" (unprefixed). */
+          from: z.string().regex(/^[a-z][a-z0-9_]{0,30}$/),
+          /** Flow var to fill when empty, e.g. "lead_phone". */
+          to: varName
+        })
+      )
+      .min(1)
+      .max(10)
+      .optional(),
+    when: whenSchema.optional()
+  }),
   // GHL-style Goal Event checkpoint: when a watched external milestone lands
   // for the run's lead (replied / appointment booked / tag added / claimed),
   // the run fast-forwards to this step and everything in between is skipped
@@ -1417,6 +1481,21 @@ const nonBranchStepMembers = [
     // partner that dials the customer after acceptance has time to connect them
     // (otherwise the AI greets hold music). Only meaningful with answerFirst.
     mediaStartSeconds: z.number().int().min(0).max(8).optional(),
+    // Press the accept digit WHEN THE RECORDING ASKS, instead of on a timer.
+    // Media attaches immediately so the AI hears the announcement, it stays
+    // silent until it is asked to accept, and it presses `digit` through the
+    // bridge's press_digits tool. `fallbackSeconds` is the backstop blind press
+    // for a cue it never recognizes.
+    //
+    // This moves the press out of the answer webhook entirely, so it is exempt
+    // from AI_FIRST_MAX_DELAY_SECONDS and cannot be combined with the timed
+    // acceptDigits/mediaStartSeconds sequence. Only meaningful with answerFirst.
+    acceptOnPrompt: z
+      .object({
+        digit: z.string().regex(/^[0-9*#]$/, "must be a single DTMF digit (0-9, * or #)"),
+        fallbackSeconds: z.number().int().min(3).max(60).optional()
+      })
+      .optional(),
     // Text identifying the partner's alert SMS (e.g. "HomeLight Referral"): the
     // newest inbound text containing it becomes the AI's pre-call brief. The
     // alert arrives from a different number than the call and only seconds
@@ -1701,6 +1780,8 @@ function templateStringsForStep(step: FlowStep): string[] {
     // The mid-call brief is built from what earlier steps extracted.
     case "voice_brief":
       return [step.noteTemplate];
+    // wait_for_call carries a literal partner E.164 and var NAMES — no templates.
+    case "wait_for_call":
     case "extract_url":
     case "browse_extract":
     case "extract_text":
@@ -1733,6 +1814,22 @@ function templateStringsForStep(step: FlowStep): string[] {
 const TRIGGER_KEYS = new Set<string>(TRIGGER_SCOPE_KEYS);
 const AGENT_KEYS = new Set<string>(AGENT_SCOPE_KEYS);
 const OFFER_KEYS = new Set<string>(OFFER_SCOPE_KEYS);
+/**
+ * Fields a `wait_for_call` step publishes under its capturePrefix. The live set
+ * is whatever the voice flow's captureFields asked the AI to collect, which is
+ * authored in a SEPARATE flow, so authoring validates against the standard
+ * intake fields. A field the AI captures outside this list still lands in vars
+ * at run time; it just cannot be referenced by a template that has to validate.
+ */
+export const WAIT_FOR_CALL_CAPTURED_FIELDS = [
+  "name",
+  "phone",
+  "email",
+  "address",
+  "timeframe",
+  "notes"
+] as const;
+
 const ENGINE_VARS = new Set<string>(ENGINE_PROVIDED_VARS);
 const NOW_KEYS = new Set<string>(NOW_SCOPE_KEYS);
 const VOICE_STEPS = new Set<string>(VOICE_STEP_TYPES);
@@ -1804,10 +1901,22 @@ export function validateVoiceFlow(def: AiFlowDefinition): string[] {
       // human already accepted and the flow has long since run.
       if (
         !s.answerFirst &&
-        (s.acceptDigits || s.mediaStartSeconds !== undefined || s.briefFromSmsContaining)
+        (s.acceptDigits ||
+          s.mediaStartSeconds !== undefined ||
+          s.briefFromSmsContaining ||
+          s.acceptOnPrompt)
       ) {
         issues.push(
           `Step "${s.id}" configures AI-first answering (accept digits / media pause / pre-call brief) without answerFirst; set answerFirst or remove them.`
+        );
+      }
+      // Pressing on cue and pressing on a timer are two different owners of the
+      // same digit (the bridge vs the answer webhook). Allowing both would press
+      // twice, and the second press would land on whatever the partner's menu
+      // moved on to.
+      if (s.acceptOnPrompt && (s.acceptDigits || s.mediaStartSeconds !== undefined)) {
+        issues.push(
+          `Step "${s.id}" sets acceptOnPrompt alongside acceptDigits/mediaStartSeconds; pressing on cue replaces the timed sequence, so use one or the other.`
         );
       }
       // The whole sequence runs inside ONE Telnyx webhook, so its delays are
@@ -1815,7 +1924,9 @@ export function validateVoiceFlow(def: AiFlowDefinition): string[] {
       // retrying a call the AI has already answered. Counted the way the engine
       // spends it, defaults included, so a flow cannot save cleanly and then
       // have its configured pauses silently clamped at run time.
-      if (s.answerFirst) {
+      // acceptOnPrompt exempt: the webhook answers and attaches media with no
+      // waiting at all, and the press happens later on the bridge's own clock.
+      if (s.answerFirst && !s.acceptOnPrompt) {
         const total = aiFirstDelaySeconds(
           // No acceptDigits at all still costs the default press.
           s.acceptDigits === undefined
@@ -2640,6 +2751,19 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       // The call outcome (transferred/answered/no_answer/not_placed/failed)
       // becomes a var for later `when` branches.
       vars.add(step.saveAs ?? "call_outcome");
+    } else if (step.type === "wait_for_call") {
+      vars.add(step.saveAs ?? "call_outcome");
+      // What the AI captured on the call. The exact set depends on the voice
+      // flow's captureFields, which lives in a DIFFERENT flow and cannot be read
+      // from here, so the standard intake fields are registered: an unregistered
+      // one would fail authoring for a var the run really does produce.
+      for (const f of WAIT_FOR_CALL_CAPTURED_FIELDS) {
+        vars.add(`${step.capturePrefix ?? "call_"}${f}`);
+      }
+      // A backfill target is only ever FILLED here, never created from nothing,
+      // but registering it keeps a flow valid whose canonical var has no other
+      // producer (a referral the partner never released anything for).
+      for (const b of step.backfill ?? []) vars.add(b.to);
     } else if (step.type === "classify") {
       vars.add(step.saveAs);
     } else if (step.type === "generate_image") {

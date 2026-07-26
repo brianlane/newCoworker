@@ -707,10 +707,18 @@ serve(async (req: Request) => {
       if (stampErr) console.error("ai-first: could not stamp accept_sent", stampErr);
     };
 
+    // IVR GATE: the bridge presses when it HEARS the announcement ask, so this
+    // path does no pressing and no waiting at all. If the bridge turns out to be
+    // unreachable below, falling back to the ring chain is what protects the
+    // referral: the humans it rings are bridged to the partner's still-looping
+    // menu and their own keypad accepts it, exactly as before AI-first.
+    const gated = Boolean(ai.ivr_gate?.digit);
     // Accept the referral: the digits are what claim it, so they go out even
     // when the bridge is unreachable (we ring a human for the conversation
     // afterwards rather than letting the partner give the lead away).
-    const accept = planAiFirstAccept(ai);
+    const accept = gated
+      ? { digits: [] as Array<{ digit: string; after_seconds: number }>, mediaStartSeconds: 0 }
+      : planAiFirstAccept(ai);
     let acceptSent = false;
     for (const press of accept.digits) {
       if (press.after_seconds > 0) await sleepMs(press.after_seconds * 1000);
@@ -784,6 +792,7 @@ serve(async (req: Request) => {
       call_control_id: callControlId,
       from: fromE164Informational,
       digits: accept.digits.length,
+      ivr_gated: gated,
       has_brief: Boolean(ai.context_note)
     });
     await systemLog(supabase, {
@@ -791,9 +800,11 @@ serve(async (req: Request) => {
       source: "voice",
       level: "info",
       event: "voice_ai_first_started",
-      message: `AI answered the call from ${fromE164Informational} itself, pressed ${accept.digits
-        .map((d) => d.digit)
-        .join("")}, and is handling the conversation`,
+      message: gated
+        ? `AI answered the call from ${fromE164Informational} itself and is listening for the prompt to press ${ai.ivr_gate?.digit}`
+        : `AI answered the call from ${fromE164Informational} itself, pressed ${accept.digits
+            .map((d) => d.digit)
+            .join("")}, and is handling the conversation`,
       payload: {
         call_control_id: callControlId,
         from: fromE164Informational,

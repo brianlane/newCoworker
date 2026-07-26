@@ -42,6 +42,7 @@ export const STEP_TYPE_LABELS: Record<StepType, string> = {
   place_ai_call: "Call them (AI talks, can live-transfer)",
   arm_voice_transfer: "Expect a call (send it to a person)",
   voice_brief: "Brief the AI on a call in progress",
+  wait_for_call: "Wait for the AI's call to end",
   route_to_team: "Hand off to team/employees",
   browse_action: "Do something on a web page (click / type)",
   recall_url: "Recall a saved link from an earlier run",
@@ -87,6 +88,8 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
     "For a short window after this step runs, the next incoming call that doesn't match your per-caller call routing is connected straight to the person you pick instead of the AI answering. Use it when a referral service texts you a cue and then calls from an unpredictable number minutes later (one window connects one call).",
   voice_brief:
     "Hands what this workflow just found to the AI that is on a call right now, so it can use those details and tell the customer their information came through instead of asking them to repeat it. Does nothing when no call from that number is live, which is the normal case.",
+  wait_for_call:
+    "Pauses until the AI's call with that number hangs up, then carries on with whatever the AI learned on it (their name, the best number to reach them, the address). Use it when the details only exist in the conversation, for example a referral service that will not release the customer's phone number until after the call. If there is no call, the workflow just keeps going.",
   branch:
     "Splits the workflow into paths: each path has a condition (checked top to bottom, first match wins) and its own steps; no match runs the \"none matched\" path.",
   goal:

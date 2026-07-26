@@ -108,7 +108,10 @@ async function emailToolGates(businessId: string) {
     generate_image: false,
     update_notification_preferences: false,
     flag_contact_spam: false,
-    set_contact_reply_mode: false
+    set_contact_reply_mode: false,
+    // The correspondent here is a delegate or prospect, not the owner, so
+    // this surface never holds roster CRUD.
+    manage_employee: false
   };
 }
 

@@ -154,6 +154,7 @@ import type {
 } from "../_shared/ai_flows/types.ts";
 import { multiOfferHeadsUpLine, type OfferRouting } from "../_shared/ai_flows/routing.ts";
 import { parseEtaMinutes } from "../_shared/ai_flows/claim_timeframe.ts";
+import { capturedCallVars, capturedSpoken } from "../_shared/ai_flows/call_capture.ts";
 
 // The actual createClient(url, key) call infers SupabaseClient<any, "public", any>,
 // but `ReturnType<typeof createClient>` resolves to <unknown, never, GenericSchema>
@@ -1823,6 +1824,8 @@ async function runStep(
       return armVoiceTransferStep(supabase, run, scope, action);
     case "voice_brief":
       return voiceBriefStep(supabase, run, scope, action);
+    case "wait_for_call":
+      return waitForCallStep(supabase, run, index, scope, action);
     case "http_call":
       return httpCallStep(run, scope, action);
     case "await_approval":
@@ -3060,6 +3063,13 @@ async function browseStep(
 
   const raw: Record<string, string> = {};
   for (const f of action.fields ?? []) {
+    // Backfill (a RE-READ of a page that releases its details late): keep the
+    // value an earlier pass, or the call itself, already established rather than
+    // letting a still-blank card overwrite it with nothing.
+    if (action.fillOnlyEmpty && !isEmptyVarValue(scope.vars[f.name])) {
+      raw[f.name] = scope.vars[f.name] as string;
+      continue;
+    }
     let val = extracted[f.name] ?? "";
     if (isPhoneFieldName(f.name)) {
       if (!val) val = extractLabeledPhones(pageText)[0] ?? "";
@@ -6250,6 +6260,186 @@ async function voiceBriefStep(
   return { kind: "ok", result: { briefed, from: action.fromE164 } };
 }
 
+/** The most recent AI-intake session for a partner line, live or finished. */
+type CallSessionRow = {
+  call_control_id?: string;
+  status?: string;
+  context?: {
+    ai_takeover?: { captured?: Record<string, unknown> } | null;
+    /** Stamped by voice_link_call_run when a run parks on this call. */
+    flow_run?: { run_id?: unknown } | null;
+  } | null;
+};
+
+/**
+ * wait_for_call: park until the AI's call from `fromE164` ends, then continue
+ * with what it captured.
+ *
+ * Three shapes, because the flow and the call race each other:
+ *   - a LIVE session   → link the run to it and park (the bridge resumes us at
+ *                        teardown, having written the captured fields first);
+ *   - a FINISHED one   → the call beat us here; hydrate and carry on;
+ *   - none at all      → the AI never took this one (rang humans, no budget);
+ *                        `no_call` into saveAs so later steps can branch on it.
+ *
+ * Never fails a run: a follow-up that still has texts and emails to send must
+ * not die because the call bookkeeping went sideways.
+ */
+async function waitForCallStep(
+  supabase: Supabase,
+  run: RunRow,
+  index: number,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "wait_for_call" }>
+): Promise<StepOutcome> {
+  // The call this step settled on, pinned for the rest of the run. Without it,
+  // every pass (the capture-settle defer, the resume) re-runs the newest-in-
+  // window lookup, so a SECOND referral call arriving on the same partner line
+  // could hand this run the other lead's captured details.
+  const pinVar = `${action.marker}_call`;
+  const pinned = typeof scope.vars[pinVar] === "string" ? (scope.vars[pinVar] as string) : "";
+
+  const readSession = async (): Promise<CallSessionRow | null> => {
+    const base = supabase
+      .from("voice_handoff_sessions")
+      .select("call_control_id, status, context")
+      .eq("business_id", run.business_id);
+    const sinceIso = new Date(Date.now() - action.withinMinutes * 60_000).toISOString();
+    const { data, error } = pinned
+      ? await base.eq("call_control_id", pinned).maybeSingle()
+      : await base
+          .eq("from_e164", action.fromE164)
+          .gte("created_at", sinceIso)
+          .order("created_at", { ascending: false })
+          .limit(1)
+          .maybeSingle();
+    if (error) console.error("wait_for_call: session lookup", error.message);
+    return (data ?? null) as CallSessionRow | null;
+  };
+  let sess = await readSession();
+  // Pin on the way in, so the settle defer and the resume both come back to the
+  // same call even if the partner rings again in the meantime.
+  if (!pinned && typeof sess?.call_control_id === "string" && sess.call_control_id) {
+    scope.vars[pinVar] = sess.call_control_id;
+  }
+
+  /**
+   * `from` is passed explicitly rather than read off `sess`, because one exit
+   * must NOT hydrate: a session another run already owns belongs to a different
+   * referral, and copying its captured details here would hand this run another
+   * lead's phone number.
+   */
+  const finish = (
+    outcome: string,
+    detail: Record<string, unknown>,
+    from: CallSessionRow | null
+  ): StepOutcome => {
+    // Namespaced by capturePrefix so the AI's values can never overwrite what
+    // the partner's own page produced: the flow shows the team both.
+    const hydrated = capturedCallVars(from?.context?.ai_takeover?.captured, action.capturePrefix);
+    Object.assign(scope.vars, hydrated);
+    // Backfill the flow's canonical vars so a single one can drive the sends.
+    // Empty-only, so a value the partner DID release keeps winning.
+    const filled: string[] = [];
+    for (const { from, to } of action.backfill) {
+      const spoken = capturedSpoken(hydrated, action.capturePrefix, from);
+      if (!spoken) continue;
+      if (!isEmptyVarValue(scope.vars[to])) continue;
+      scope.vars[to] = spoken;
+      filled.push(to);
+    }
+    scope.vars[action.saveAs] = outcome;
+    scope.vars[action.marker] = "1";
+    // The standard fields are always published (as "none"), so count only the
+    // ones the AI genuinely came away with.
+    const names = Object.keys(hydrated).filter((k) => !isEmptyVarValue(hydrated[k]));
+    if (names.length > 0) {
+      appendActionTaken(scope, `picked up ${names.length} detail(s) the AI captured on the call`);
+    }
+    if (filled.length > 0) {
+      appendActionTaken(scope, `used what the seller said for ${filled.join(", ")}`);
+    }
+    return { kind: "ok", result: { ...detail, outcome, captured: names, backfilled: filled } };
+  };
+
+  // Coming back from the park: the call is over and the bridge has already
+  // written what it captured, so this pass exists purely to hydrate.
+  if (action.resumed) {
+    const resumedOutcome = typeof scope.vars[action.saveAs] === "string"
+      ? (scope.vars[action.saveAs] as string)
+      : "";
+    // resume_overdue_call_waits is shared with place_ai_call and writes its
+    // "no_answer" sentinel on timeout. This step only ever promises
+    // answered/no_call, so normalize rather than leak a third value into flows
+    // that branch on it. Hydration still runs: a bridge that wrote its captured
+    // fields but never resumed us is exactly the case the sweep covers.
+    const outcome = !resumedOutcome || resumedOutcome === "no_answer" ? "no_call" : resumedOutcome;
+    return finish(outcome, { resumed: true, timed_out: resumedOutcome === "no_answer" }, sess);
+  }
+
+  const park = (): StepOutcome => ({
+    kind: "pause_call",
+    e164: action.fromE164,
+    respondByMs: action.timeoutMinutes * 60_000,
+    saveAs: action.saveAs,
+    marker: action.marker,
+    // We waited on a call the PARTNER placed, so there is no dialed leg of
+    // ours to record; the session's flow_run link is what resumes this run.
+    callControlId: ""
+  });
+
+  if (sess?.status === "ai_intake") {
+    // Atomic under the row lock, and it re-checks liveness, so it also tells us
+    // the call is still live at the instant it links.
+    const { data: linked, error: linkErr } = await supabase.rpc("voice_link_call_run", {
+      p_business_id: run.business_id,
+      // The specific call we settled on, never "whatever is live on this line":
+      // two live calls from one partner would otherwise both get this link, and
+      // either hangup would resume a run waiting on the other.
+      p_call_control_id: sess.call_control_id ?? "",
+      p_link: {
+        run_id: run.id,
+        save_as: action.saveAs,
+        marker: action.marker,
+        step_index: index
+      },
+      p_within_minutes: action.withinMinutes
+    });
+    if (linkErr) console.error("wait_for_call: link rpc", linkErr.message);
+    const count = typeof linked === "number" ? linked : Number(linked ?? 0);
+    if (count > 0) return park();
+    // Refused. Re-read to find out which of the three reasons it was, rather
+    // than continuing against the row we read before the RPC.
+    sess = await readSession();
+    if (sess?.status === "ai_intake") {
+      const existing = sess.context?.flow_run ?? null;
+      // Already ours: a worker crash between the link and the park write. Park.
+      if (existing?.run_id === run.id) return park();
+      // Another run owns this call, so it is a DIFFERENT referral's conversation.
+      // Don't park on a link that will never resume us, and hydrate nothing:
+      // those captured details belong to the other lead.
+      return finish("no_call", { waited: false, reason: "call_owned_by_another_run" }, null);
+    }
+  }
+
+  if (!sess) return finish("no_call", { waited: false, reason: "no_session" }, null);
+
+  // The call is over. Its captured fields are written by the bridge during
+  // teardown, so a call that ended moments ago may not have them yet — give it
+  // one short beat rather than hydrating an empty blob. Once only, so a call
+  // that captured nothing at all still finishes promptly.
+  const settleMarker = `${action.marker}_settled`;
+  if (!sess.context?.ai_takeover?.captured && scope.vars[settleMarker] === undefined) {
+    scope.vars[settleMarker] = "1";
+    return {
+      kind: "defer",
+      resumeAtMs: Date.now() + 60_000,
+      reason: "waiting for the call's captured details to land"
+    };
+  }
+  return finish("answered", { waited: false }, sess);
+}
+
 async function httpCallStep(
   run: RunRow,
   scope: Scope,
@@ -7427,10 +7617,42 @@ async function routeBroadcastStep(
 const BROADCAST_ALL_MAX_RECIPIENTS = 10;
 
 /**
+ * Columns every lead-SELECTION read needs: identity, the working-info rules,
+ * and the three per-mode availability opt-outs. Shared by the broadcast and
+ * rotation queries because a missing column reads as `undefined`, which
+ * filterRosterByAvailability treats as available: a silent way to ship the
+ * feature switched off.
+ */
+const ROSTER_SELECTION_COLUMNS =
+  "id, name, phone_e164, weekly_schedule, preferred_windows, " +
+  "routing_enabled, named_broadcast_enabled, team_broadcast_enabled";
+
+/**
+ * supabase-js infers the row type from a select-string LITERAL; a shared
+ * constant degrades it to GenericStringError[], so every read below casts
+ * through `unknown`. Keeping one constant is worth the cast: two queries with
+ * hand-copied column lists is exactly how a mode ships silently switched off.
+ */
+const asRosterRows = (rows: unknown): RosterSelectionRow[] =>
+  (rows ?? []) as RosterSelectionRow[];
+
+type RosterSelectionRow = {
+  id: string;
+  name: string;
+  phone_e164: string;
+  weekly_schedule?: unknown;
+  preferred_windows?: unknown;
+  routing_enabled?: boolean | null;
+  named_broadcast_enabled?: boolean | null;
+  team_broadcast_enabled?: boolean | null;
+};
+
+/**
  * Resolve a broadcast recipient list against the ACTIVE roster. Names match
  * trimmed/case-insensitively (the same rule as the agentName pin); a member
- * on time off or outside their weekly schedule today is skipped (same hard
- * skip pickNextAgent applies); an unknown name is logged and skipped — the
+ * on time off, outside their weekly schedule today, or opted out of this
+ * broadcast mode is skipped (the same hard skips pickNextAgent applies); an
+ * unknown name is logged and skipped, because the
  * roster is authoritative, never guess. The lead's own number is never
  * offered, and duplicate phones collapse. Preserves the flow's listed order.
  * `"all"` (broadcastAll) takes the ENTIRE available roster instead, in
@@ -7447,7 +7669,7 @@ async function resolveBroadcastAgents(
 ): Promise<RoutedAgent[]> {
   const { data: rosterRows, error: rosterErr } = await supabase
     .from("ai_flow_team_members")
-    .select("id, name, phone_e164, weekly_schedule, preferred_windows")
+    .select(ROSTER_SELECTION_COLUMNS)
     .eq("business_id", run.business_id)
     .eq("active", true)
     // Rotation order (matters for the broadcastAll clamp): least recently
@@ -7458,13 +7680,7 @@ async function resolveBroadcastAgents(
   if (rosterErr) {
     throw new Error(`route_to_team: roster query failed: ${rosterErr.message}`);
   }
-  const roster = (rosterRows ?? []) as {
-    id: string;
-    name: string;
-    phone_e164: string;
-    weekly_schedule?: unknown;
-    preferred_windows?: unknown;
-  }[];
+  const roster = asRosterRows(rosterRows);
   const [tzRes, offRes] = await Promise.all([
     supabase.from("businesses").select("timezone").eq("id", run.business_id).maybeSingle(),
     supabase
@@ -7482,7 +7698,16 @@ async function resolveBroadcastAgents(
       .filter((t) => t.starts_on <= clock.isoDate && t.ends_on >= clock.isoDate)
       .map((t) => t.member_id)
   );
-  const available = filterRosterByAvailability(roster, offIds, clock);
+  // Which opt-out applies: a flow that NAMES people reads
+  // named_broadcast_enabled, a whole-roster fan-out reads
+  // team_broadcast_enabled. Amy Laidlaw is the shape this separates: on for
+  // her named HomeLight offer, off for the team-first handoff.
+  const available = filterRosterByAvailability(
+    roster,
+    offIds,
+    clock,
+    names === "all" ? "team_broadcast" : "named_broadcast"
+  );
   const leadPhone = leadPhoneE164(scope);
   const out: RoutedAgent[] = [];
   const pickedIds: string[] = [];
@@ -7752,9 +7977,10 @@ function leadContactPhone(scope: Scope): string | null {
  * The roster member who OWNS this lead's contact (contacts.owner_employee_id),
  * resolved to {name, phone}, or null (no phone / no contact / unowned /
  * owner inactive / owner unavailable). Alias-aware like getCustomerMemory.
- * Applies the SAME working-info rules as pickNextAgent — time off covering
- * today and out-of-schedule members are hard skips — so ownership preference
- * never routes around an owner's time off; the normal cascade takes over.
+ * Applies the SAME rules as pickNextAgent (time off covering today,
+ * out-of-schedule members, and members opted out of rotation are hard skips),
+ * so ownership preference never routes around an owner's time off or their
+ * standing "no rotation leads"; the normal cascade takes over.
  * Best-effort: a lookup error logs and returns null — ownership preference
  * must never stall routing.
  */
@@ -7776,21 +8002,15 @@ async function contactOwnerAgent(
     if (!ownerId) return null;
     const { data: member } = await supabase
       .from("ai_flow_team_members")
-      .select("id, name, phone_e164, active, weekly_schedule, preferred_windows")
+      .select(`${ROSTER_SELECTION_COLUMNS}, active`)
       .eq("business_id", businessId)
       .eq("id", ownerId)
       .maybeSingle();
-    const m = member as {
-      id?: string;
-      name?: string;
-      phone_e164?: string;
-      active?: boolean;
-      weekly_schedule?: unknown;
-      preferred_windows?: unknown;
-    } | null;
+    const m = member as unknown as (RosterSelectionRow & { active?: boolean }) | null;
     if (!m?.id || !m.active || !m.phone_e164?.trim()) return null;
-    // Availability (business-local): the owner on time off today or outside
-    // their weekly schedule is skipped, same as in pickNextAgent.
+    // Availability (business-local): the owner on time off today, outside
+    // their weekly schedule, or opted out of rotation is skipped, same as in
+    // pickNextAgent.
     const [tzRes, offRes] = await Promise.all([
       supabase.from("businesses").select("timezone").eq("id", businessId).maybeSingle(),
       supabase
@@ -7813,11 +8033,15 @@ async function contactOwnerAgent(
           name: m.name ?? "",
           phone_e164: m.phone_e164.trim(),
           weekly_schedule: m.weekly_schedule,
-          preferred_windows: m.preferred_windows
+          preferred_windows: m.preferred_windows,
+          routing_enabled: m.routing_enabled,
+          named_broadcast_enabled: m.named_broadcast_enabled,
+          team_broadcast_enabled: m.team_broadcast_enabled
         }
       ],
       offIds,
-      clock
+      clock,
+      "rotation"
     );
     if (available.length === 0) return null;
     return { name: m.name ?? "", phone: m.phone_e164.trim() };
@@ -7912,7 +8136,7 @@ async function pickNextAgent(
   // --- Deterministic roster path -------------------------------------------
   const { data: rosterRows, error: rosterErr } = await supabase
     .from("ai_flow_team_members")
-    .select("id, name, phone_e164, weekly_schedule, preferred_windows")
+    .select(ROSTER_SELECTION_COLUMNS)
     .eq("business_id", run.business_id)
     .eq("active", true)
     .order("last_offered_at", { ascending: true, nullsFirst: true })
@@ -7920,13 +8144,7 @@ async function pickNextAgent(
   if (rosterErr) {
     throw new Error(`route_to_team: roster query failed: ${rosterErr.message}`);
   }
-  let roster = (rosterRows ?? []) as {
-    id: string;
-    name: string;
-    phone_e164: string;
-    weekly_schedule?: unknown;
-    preferred_windows?: unknown;
-  }[];
+  let roster = asRosterRows(rosterRows);
   // Pinned routing (step.agentName): this lead type goes to ONE named member
   // (e.g. every seller lead straight to the broker). Restrict the roster to
   // that member; if they're missing/renamed — or there is no roster at all —
@@ -7972,16 +8190,36 @@ async function pickNextAgent(
         .filter((t) => t.starts_on <= clock.isoDate && t.ends_on >= clock.isoDate)
         .map((t) => t.member_id)
     );
-    const availableRoster = filterRosterByAvailability(roster, offIds, clock);
+    const availableRoster = filterRosterByAvailability(roster, offIds, clock, "rotation");
     if (availableRoster.length === 0) {
+      // Two different causes end up here and the owner fixes them in
+      // different places, so name the one that applies: a standing "no
+      // rotation leads" opt-out is a switch on the Employees page, while
+      // time off and schedules resolve themselves. A PINNED member who
+      // opted out lands here too (the pin filter ran first), which is how
+      // the opt-out stops pinned leads without deactivating anyone.
+      const optedOut = roster.filter((r) => r.routing_enabled === false).length;
+      const allOptedOut = optedOut === roster.length;
+      const reason = pinnedAgentName
+        ? allOptedOut
+          ? `pinned agent "${pinnedAgentName}" has lead rotation turned off`
+          : `pinned agent "${pinnedAgentName}" is on time off, outside their schedule, or has lead rotation turned off`
+        : allOptedOut
+          ? "every roster member has lead rotation turned off"
+          : "every roster member is on time off, outside their schedule, or has lead rotation turned off";
       await systemLog(supabase, {
         businessId: run.business_id,
         source: "aiflow",
         level: "warn",
         event: "ai_flow_no_agent_available",
-        message:
-          "route_to_team: every roster member is on time off or outside their schedule; falling back to the owner",
-        payload: { run_id: run.id, flow_id: run.flow_id, roster_size: roster.length }
+        message: `route_to_team: ${reason}; falling back to the owner`,
+        payload: {
+          run_id: run.id,
+          flow_id: run.flow_id,
+          roster_size: roster.length,
+          rotation_opted_out: optedOut,
+          ...(pinnedAgentName ? { agent_name: pinnedAgentName } : {})
+        }
       });
       return null;
     }

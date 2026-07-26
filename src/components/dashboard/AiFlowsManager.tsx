@@ -629,6 +629,8 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
       return { id, type, toE164: "", ringSeconds: 20 };
     case "voice_brief":
       return { id, type, fromE164: "", noteTemplate: "", withinMinutes: 30 };
+    case "wait_for_call":
+      return { id, type, fromE164: "", withinMinutes: 30, timeoutMinutes: 60 };
     case "voice_ai_intake":
       return {
         id,
@@ -3269,6 +3271,20 @@ function StepFields({
           onChange={(v) => patchStep(index, { skipWhenText: v.trim() ? v : undefined })}
           help='When the page contains this text (e.g. "already claimed"), there is nothing to read: the step is skipped and the run ends as done instead of failing.'
         />
+        <label className="flex items-center gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
+            checked={step.fillOnlyEmpty === true}
+            onChange={(ev) =>
+              patchStep(index, { fillOnlyEmpty: ev.target.checked ? true : undefined })
+            }
+          />
+          Only fill in details that earlier steps left empty
+        </label>
+        <p className="text-[11px] text-parchment/40">
+          Turn this on when you are re-opening a page to look for details that were not there
+          the first time, so a page that is still blank cannot erase what you already have.
+        </p>
         <label className={labelClass}>Fields to extract</label>
         {fields.map((f, fi) => (
           <div key={fi} className="flex gap-2">
@@ -5391,7 +5407,8 @@ function StepFields({
                     : {
                         acceptDigits: undefined,
                         mediaStartSeconds: undefined,
-                        briefFromSmsContaining: undefined
+                        briefFromSmsContaining: undefined,
+                        acceptOnPrompt: undefined
                       })
                 })
               }
@@ -5406,6 +5423,60 @@ function StepFields({
           </p>
           {step.answerFirst === true && (
             <>
+              <label className="flex items-center gap-2 text-sm text-parchment/70">
+                <input
+                  type="checkbox"
+                  checked={Boolean(step.acceptOnPrompt)}
+                  onChange={(ev) =>
+                    patchStep(index, {
+                      // The two accept styles own the same keypress, so turning
+                      // one on clears the other rather than saving an invalid flow.
+                      acceptOnPrompt: ev.target.checked ? { digit: "1" } : undefined,
+                      ...(ev.target.checked
+                        ? { acceptDigits: undefined, mediaStartSeconds: undefined }
+                        : {})
+                    })
+                  }
+                />
+                Press the key when the recording asks for it
+              </label>
+              <p className="text-[11px] text-parchment/40">
+                The AI listens to the partner&apos;s announcement and presses the moment it is
+                asked to accept, instead of guessing how long the announcement runs. It stays
+                silent until a real person is connected.
+              </p>
+              {step.acceptOnPrompt ? (
+                <>
+                  <Field
+                    label="Key to press when asked"
+                    value={step.acceptOnPrompt.digit}
+                    onChange={(v) => {
+                      const digit = v.trim();
+                      if (!/^[0-9*#]$/.test(digit)) return;
+                      patchStep(index, {
+                        acceptOnPrompt: { ...step.acceptOnPrompt!, digit }
+                      });
+                    }}
+                    help='The key the announcement asks for, e.g. "1" for "press 1 to accept".'
+                  />
+                  <Field
+                    label="Press it anyway after this long (seconds)"
+                    value={String(step.acceptOnPrompt.fallbackSeconds ?? 12)}
+                    onChange={(v) => {
+                      const n = Number(v);
+                      patchStep(index, {
+                        acceptOnPrompt: {
+                          ...step.acceptOnPrompt!,
+                          fallbackSeconds:
+                            Number.isFinite(n) && n >= 0 ? Math.round(n) : undefined
+                        }
+                      });
+                    }}
+                    help="Backstop for an announcement the AI does not recognize. Not pressing at all would lose the lead, so it presses blind once this long has passed."
+                  />
+                </>
+              ) : (
+                <>
               <Field
                 label="Press these keys after answering"
                 value={(step.acceptDigits ?? [])
@@ -5447,6 +5518,8 @@ function StepFields({
                 }}
                 help="Time for the partner to connect the customer after you accept, so the AI does not greet hold music. The keys plus this wait cannot exceed 5 seconds total."
               />
+                </>
+              )}
               <Field
                 label="Brief the AI from the alert text containing (optional)"
                 value={step.briefFromSmsContaining ?? ""}
@@ -5486,6 +5559,70 @@ function StepFields({
               withinMinutes: Number.isFinite(n) && n > 0 ? Math.round(n) : undefined
             });
           }}
+        />
+      </div>
+    );
+  }
+  if (step.type === "wait_for_call") {
+    const prefix = step.capturePrefix ?? "call_";
+    return (
+      <div className="space-y-2">
+        <Field
+          label="The line whose call to wait for (E.164)"
+          value={step.fromE164 ?? ""}
+          onChange={(v) => patchStep(index, { fromE164: v.trim() })}
+          help="The number the call came FROM, e.g. the referral partner's line. If there is no call, this step just continues."
+        />
+        <Field
+          label="Only wait on a call started within (minutes)"
+          value={String(step.withinMinutes ?? 30)}
+          onChange={(v) => {
+            const n = Number(v);
+            patchStep(index, {
+              withinMinutes: Number.isFinite(n) && n > 0 ? Math.round(n) : undefined
+            });
+          }}
+        />
+        <Field
+          label="Give up waiting after (minutes)"
+          value={String(step.timeoutMinutes ?? 60)}
+          onChange={(v) => {
+            const n = Number(v);
+            patchStep(index, {
+              timeoutMinutes: Number.isFinite(n) && n > 0 ? Math.round(n) : undefined
+            });
+          }}
+          help="A long call should never strand the follow-up. When this lapses the workflow carries on anyway."
+        />
+        <Field
+          label="Save the outcome as"
+          value={step.saveAs ?? "call_outcome"}
+          onChange={(v) => patchStep(index, { saveAs: v.trim() ? v.trim() : undefined })}
+          help='"answered" when there was a call, "no_call" when there was not.'
+        />
+        <p className="text-[11px] text-parchment/40">
+          What the AI captured on the call lands in {`{{vars.${prefix}phone}}`},{" "}
+          {`{{vars.${prefix}name}}`}, {`{{vars.${prefix}address}}`} and so on, kept separate from
+          anything the partner&apos;s own page gave you so you can show both.
+        </p>
+        <Field
+          label="Also fill in these when still empty (optional)"
+          value={(step.backfill ?? []).map((b) => `${b.from}->${b.to}`).join(", ")}
+          onChange={(v) => {
+            // "phone->lead_phone, name->lead_name" reads as: if the partner
+            // never gave us one, use what the person said on the call.
+            const parsed = v
+              .split(",")
+              .map((chunk) => chunk.trim())
+              .filter(Boolean)
+              .map((chunk) => {
+                const [from, to] = chunk.split("->");
+                return { from: (from ?? "").trim(), to: (to ?? "").trim() };
+              })
+              .filter((b) => /^[a-z][a-z0-9_]*$/.test(b.from) && /^[a-z][a-z0-9_]*$/.test(b.to));
+            patchStep(index, { backfill: parsed.length ? parsed : undefined });
+          }}
+          help='e.g. "phone->lead_phone". Only fills a detail nothing else supplied, so a value the partner did send always wins.'
         />
       </div>
     );
