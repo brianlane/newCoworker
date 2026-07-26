@@ -1706,6 +1706,39 @@ shipped" post, `blog: skip` for bug fixes / internal / ops work (see
 [Platform blog](#platform-blog-newcoworkercomblog) — unlabeled PRs fall back
 to an AI classifier, but the label is authoritative).
 
+### Writing a migration: always stamp it with the helper
+
+```bash
+bash scripts/new-migration.sh add_booking_reminder_window
+```
+
+Never hand-write the version. A stamp must sort after every applied
+migration AND be unique against branches you cannot see, and plain
+`date -u +%Y%m%d%H%M%S` currently satisfies only the second: this repo's
+applied stamps run about 26 days ahead of the wall clock (the head is in
+late August 2026, the clock reads late July), so a true timestamp sorts
+BEHIND the head, which makes `supabase db push` refuse the order and makes a
+fresh `supabase start` run the file before the migration creating the objects
+it touches. That gap is exactly why stamps get hand-invented, and
+hand-invented stamps broke main three times on 2026-07-26 (#932/#934,
+#938/#939) and twice on 2026-07-14 (#600/#601).
+
+The helper emits `max(real UTC, head + a small random offset)`, reading the
+head from your tree AND origin/main so a branch cut before someone else's
+migration merged still stamps above it. **It converges with no cleanup
+event**: the head gains minutes a day while real time gains a full day, and
+once the clock passes the head (around 2026-08-21) the helper starts emitting
+true timestamps on its own. Do not schedule a mass re-stamp to get there
+sooner; that would be ~196 `supabase migration repair` operations against the
+production ledger to buy a state that arrives by itself.
+
+A collision is caught at review time by the `Supabase Drift Check` job
+([.github/scripts/migration-stamp-guard.sh](.github/scripts/migration-stamp-guard.sh),
+which compares the PR against the live tip of main, the case a local
+`uniq -d` cannot see) and post-merge by `supabase start` in the worker
+integration job. Fix one by rebasing and re-running the helper, never by
+editing a file already applied to production.
+
 ### Post-merge: what CI does vs what you still do
 
 **CI does automatically on every push to main** (the `Vercel Deploy` job, in
