@@ -831,6 +831,25 @@ engine's roster evaluators), and the upcoming-bookings list.
   answer is refused rather than shown as a move that has not happened. The
   token survives a reschedule; AI-made bookings are untouched (no token, no
   behavior change).
+- **Confirmations and reminders** (`src/lib/booking-page/reminders.ts`): a
+  branded confirmation email at booking time, then an email a day out and a
+  text a couple of hours out (lead times per page; 0 turns a channel off).
+  The confirmation carries what a bare calendar invite cannot: the time in
+  BOTH the visitor's and the business's zone, the video link, and the manage
+  link. Sent from the tenant's connected mailbox, so it reads as the business
+  writing; tenants without one simply do not get it and the booking is
+  unaffected. Every send is CLAIMED on the booking row before it goes out
+  (`reminders_sent`, conditional update), so an overlapping tick, a retry, or
+  a mid-sweep redeploy can never text someone twice: an owner would rather a
+  reminder be missed than doubled. A missed exact moment still sends while
+  the appointment is in the future, since a late reminder beats none. Texts
+  ride the STOP-list gate and the metered Telnyx path like every other
+  customer-facing send, and both follow the contact's stored language. Scope
+  is keyed on a `booking_source` stamp rather than the manage token, so page
+  bookings are the only ones swept (AI, voice, and synced appointments never
+  opted in) and a booking whose manage-link stamp failed is still reminded.
+  Entry point `/api/internal/booking-reminder-sweep`, kicked ~1/min by the
+  ai-flow-worker tick.
 - Vagaro/Calendly-resolved tenants deliberately do NOT get the page (Vagaro
   has its own booking site; link-mode Calendly cannot book on the invitee's
   behalf); the Bookings page explains this and calendar resolution order is

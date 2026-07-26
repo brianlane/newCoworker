@@ -1387,7 +1387,16 @@
       "waitlistToggle": "Activada",
       "waitlistTtlLabel": "Cuánto tiempo un cliente retiene una oferta",
       "waitlistTtlHours": "{hours} h",
-      "waitlistHint": "Los clientes se apuntan pidiéndole a tu coworker de IA un horario más temprano, o marcando la casilla en tu página de reservas. El mensaje de oferta cuenta para tu límite mensual de SMS."
+      "waitlistHint": "Los clientes se apuntan pidiéndole a tu coworker de IA un horario más temprano, o marcando la casilla en tu página de reservas. El mensaje de oferta cuenta para tu límite mensual de SMS.",
+      "remindersTitle": "Confirmaciones y recordatorios",
+      "remindersSubtitle": "Lo que recibe el cliente al reservar y antes de la cita.",
+      "remindersToggle": "Recordatorios activos",
+      "confirmationEmailLabel": "Enviar confirmación por correo",
+      "reminderEmailLabel": "Recordatorio por correo",
+      "reminderSmsLabel": "Recordatorio por texto",
+      "reminderOff": "Desactivado",
+      "reminderHoursBefore": "{hours} h antes",
+      "remindersHint": "Los recordatorios se envían al teléfono y al correo que el cliente dio al reservar. Los textos cuentan para tu límite mensual de SMS."
     },
     "integrationsClaude": {
       "connectedBadge": "Conectado",
@@ -1901,6 +1910,20 @@
     "provisioningLive": {
       "subject": "¡Tu Coworker de IA está en vivo!",
       "body": "Tu New Coworker está configurado y listo."
+    },
+    "bookingConfirmation": {
+      "confirmationSubject": "Tu cita con {business} está confirmada",
+      "reminderSubject": "Recordatorio: tu cita con {business}",
+      "confirmationIntro": "Todo listo. {business} ya tiene tu cita en el calendario.",
+      "reminderIntro": "Un recordatorio rápido de tu cita con {business}.",
+      "when": "Cuándo: {time}",
+      "whenBothZones": "Cuándo: {yourTime} (equivale a {businessTime} para el negocio)",
+      "duration": "Duración: {minutes} minutos",
+      "joinLine": "Enlace de la videollamada: {url}",
+      "manageLine": "¿Necesitas otro horario? Reprograma o cancela aquí: {url}",
+      "joinCta": "Entrar a la videollamada",
+      "manageCta": "Reprogramar o cancelar",
+      "signoff": "Nos vemos."
     },
     "ncSignoff": "- El equipo de NewCoworker\nnewcoworker.com | 602.313.1823 (contesta nuestro coworker de IA)",
     "questionsReply": "¿Preguntas? Solo responde a este correo.",

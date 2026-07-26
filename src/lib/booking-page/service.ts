@@ -25,6 +25,7 @@ import { randomUUID } from "crypto";
 import {
   countBookingsBetween,
   getBookingPageForBusiness,
+  stampAttendeeContact,
   getEnabledBookingPageBySlug,
   getEnabledBookingPageByToken,
   listBookingStartsBetween,
@@ -33,6 +34,7 @@ import {
 } from "@/lib/booking-page/db";
 import type { BookingPageRow } from "@/lib/booking-page/db";
 import { mintBookingManageToken, parseBookingPageRef } from "@/lib/booking-page/keys";
+import { sendBookingConfirmationEmail } from "@/lib/booking-page/confirmation-email";
 import { computePublicSlots } from "@/lib/booking-page/slots";
 import type { BusyBlock, PublicSlot } from "@/lib/booking-page/slots";
 import { readBusyCache, saveBusyCache } from "@/lib/booking-page/busy-cache";
@@ -390,6 +392,13 @@ export type SubmitPublicBookingInput = {
   note?: string;
   /** "Text me if an earlier time opens up" opt-in (cancellation waitlist). */
   notifyEarlier?: boolean;
+  /**
+   * Visitor IANA zone from the browser, so the confirmation email can show
+   * THEIR clock next to the business's. Absent is fine (business zone only).
+   */
+  visitorTimeZone?: string | null;
+  /** Locale of the page they booked on, so the email is in their language. */
+  locale?: string | null;
 };
 
 /**
@@ -505,6 +514,23 @@ export async function submitPublicBooking(
   );
   const requestedStartMs = start.getTime();
   if (existing.some((b) => Date.parse(b.startIso) === requestedStartMs)) {
+    // The first submit may have landed the booking and then died before
+    // stamping (a client timeout mid-flight), which would leave the visitor
+    // unreachable for reminders. The stamp is idempotent, so redo it here.
+    // The confirmation email deliberately is NOT re-sent: it either went
+    // out already or the visitor is holding an appointment they can see,
+    // and a duplicate confirmation is worse than a missing one.
+    await stampAttendeeContact(
+      context.businessId,
+      bookingAttendeeKey(phone, email, name),
+      start.toISOString(),
+      { email, name }
+    ).catch((err: unknown) => {
+      logger.warn("booking-page: attendee contact re-stamp failed", {
+        businessId: context.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    });
     return {
       ok: true,
       startIso: start.toISOString(),
@@ -744,6 +770,51 @@ export async function submitPublicBooking(
         currentBookingStartAtIso: start.toISOString()
       });
     }
+  }
+
+  // Reminder addressing + the confirmation email. Best-effort: the booking
+  // is already durable, and a visitor who gets no email still holds the
+  // appointment (and, in provider mode, the provider's own invitation).
+  await stampAttendeeContact(
+    context.businessId,
+    bookingAttendeeKey(phone, email, name),
+    start.toISOString(),
+    { email, name }
+  )
+    .then((stamped) => {
+      if (!stamped) {
+        // Reminders address the visitor from this row, so a miss means they
+        // will hear nothing before the appointment.
+        logger.warn("booking-page: attendee contact not stamped (no matching row)", {
+          businessId: context.businessId
+        });
+      }
+    })
+    .catch((err: unknown) => {
+      logger.warn("booking-page: attendee contact stamp failed", {
+        businessId: context.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    });
+
+  if (context.page.send_confirmation_email) {
+    await sendBookingConfirmationEmail({
+      businessId: context.businessId,
+      businessName: context.businessName,
+      businessTimeZone: context.timezone,
+      startIso: start.toISOString(),
+      durationMinutes: input.durationMinutes,
+      attendeeEmail: email,
+      joinUrl: zoomJoinUrl,
+      manageLink,
+      visitorTimeZone: input.visitorTimeZone ?? null,
+      locale: input.locale ?? null
+    }).catch((err: unknown) => {
+      logger.warn("booking-page: confirmation email failed", {
+        businessId: context.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    });
   }
 
   return {

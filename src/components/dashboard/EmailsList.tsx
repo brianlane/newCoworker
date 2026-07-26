@@ -54,7 +54,9 @@ const SOURCE_META: Record<EmailLogSource, SourceMeta> = {
   owner_manual: { label: "You", tagClass: "text-claw-green" },
   // The coworker answered a reply on a thread it started: distinct from
   // "Chat" (owner asked for it) and "You" (owner typed it).
-  email_coworker: { label: "Coworker", tagClass: "text-signal-teal" }
+  email_coworker: { label: "Coworker", tagClass: "text-signal-teal" },
+  // Booking confirmation or reminder for a public-page booking.
+  booking_reminder: { label: "Booking", tagClass: "text-parchment/45" }
 };
 
 function sourceMeta(source: EmailLogSource): SourceMeta {

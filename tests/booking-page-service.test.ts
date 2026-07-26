@@ -7,7 +7,11 @@ vi.mock("@/lib/booking-page/db", () => ({
   countBookingsBetween: vi.fn(),
   listBookingStartsBetween: vi.fn(),
   recordPlatformBooking: vi.fn(),
-  stampManageToken: vi.fn()
+  stampManageToken: vi.fn(),
+  stampAttendeeContact: vi.fn()
+}));
+vi.mock("@/lib/booking-page/confirmation-email", () => ({
+  sendBookingConfirmationEmail: vi.fn()
 }));
 vi.mock("@/lib/voice-tools/connections", () => ({ resolveCalendarConnection: vi.fn() }));
 vi.mock("@/lib/calendar-tools/handlers", () => ({
@@ -69,8 +73,10 @@ import {
   getEnabledBookingPageByToken,
   listBookingStartsBetween,
   recordPlatformBooking,
+  stampAttendeeContact,
   stampManageToken
 } from "@/lib/booking-page/db";
+import { sendBookingConfirmationEmail } from "@/lib/booking-page/confirmation-email";
 import { findUpcomingBookingsForAttendee } from "@/lib/calendar-tools/attendee-bookings";
 import { maybeAlertUnassignedBooking } from "@/lib/calendar-tools/unassigned-booking-alert";
 import {
@@ -121,6 +127,10 @@ const PAGE = {
   description: "Strategy call",
   waitlist_enabled: true,
   waitlist_offer_ttl_minutes: 60,
+  send_confirmation_email: true,
+  reminders_enabled: true,
+  reminder_email_hours: 24,
+  reminder_sms_hours: 2,
   slug: null as string | null,
   title: null as string | null,
   created_at: "2026-01-01T00:00:00Z",
@@ -152,6 +162,8 @@ const mockSlotRelease = vi.mocked(releaseBookingDedupe);
 const mockListStarts = vi.mocked(listBookingStartsBetween);
 const mockRecordPlatform = vi.mocked(recordPlatformBooking);
 const mockStampManage = vi.mocked(stampManageToken);
+const mockStampContact = vi.mocked(stampAttendeeContact);
+const mockConfirmationEmail = vi.mocked(sendBookingConfirmationEmail);
 const mockPageByBusiness = vi.mocked(getBookingPageForBusiness);
 const mockUpcomingForAttendee = vi.mocked(findUpcomingBookingsForAttendee);
 const mockUnassignedAlert = vi.mocked(maybeAlertUnassignedBooking);
@@ -187,6 +199,8 @@ beforeEach(() => {
   mockListStarts.mockResolvedValue([]);
   mockRecordPlatform.mockResolvedValue({ ok: true });
   mockStampManage.mockResolvedValue(true);
+  mockStampContact.mockResolvedValue(true);
+  mockConfirmationEmail.mockResolvedValue(true);
   mockUpcomingForAttendee.mockResolvedValue([]);
   mockUnassignedAlert.mockResolvedValue("sent" as never);
   mockZoomCreate.mockResolvedValue({
@@ -685,6 +699,21 @@ describe("submitPublicBooking", () => {
     });
     expect(mockBook).not.toHaveBeenCalled();
     expect(mockSlotClaim).not.toHaveBeenCalled();
+    // Reminder addressing is re-stamped (idempotent) in case the first
+    // submit landed the booking and died before stamping. The confirmation
+    // email is NOT re-sent: a duplicate is worse than none.
+    expect(mockStampContact).toHaveBeenCalled();
+    expect(mockConfirmationEmail).not.toHaveBeenCalled();
+
+    // A failed re-stamp still answers the resubmit successfully: the
+    // appointment is real either way.
+    for (const boom of [new Error("update denied"), "string boom"]) {
+      mockUpcomingForAttendee.mockResolvedValueOnce([
+        { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
+      ] as never);
+      mockStampContact.mockRejectedValueOnce(boom);
+      expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    }
   });
 
   it("refuses a different upcoming booking for the same person before any claim", async () => {
@@ -704,6 +733,47 @@ describe("submitPublicBooking", () => {
       ok: false,
       detail: "booking_failed"
     });
+  });
+
+  it("sends the confirmation email, and never lets it fail the booking", async () => {
+    const out = await submitPublicBooking(TOKEN, { ...VALID, visitorTimeZone: "America/New_York" });
+    expect(out.ok).toBe(true);
+    expect(mockConfirmationEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: BIZ,
+        attendeeEmail: VALID.email,
+        visitorTimeZone: "America/New_York"
+      })
+    );
+    // Reminder addressing: the ledger is phone-keyed, so the email and name
+    // are stamped onto the row.
+    expect(mockStampContact).toHaveBeenCalledWith(
+      BIZ,
+      "phone:+14805550100",
+      "2026-01-05T16:00:00.000Z",
+      { email: VALID.email, name: VALID.name }
+    );
+
+    // A stamp that matches no row is reported (reminders would silently
+    // never reach them) but still never costs the booking.
+    mockStampContact.mockResolvedValue(false);
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+
+    // A dead mailbox (or a failed stamp) must not cost the visitor their
+    // appointment.
+    mockConfirmationEmail.mockRejectedValue(new Error("gmail 500"));
+    mockStampContact.mockRejectedValue(new Error("update denied"));
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+
+    mockConfirmationEmail.mockRejectedValue("string boom");
+    mockStampContact.mockRejectedValue("string boom");
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+  });
+
+  it("skips the confirmation email when the owner turned it off", async () => {
+    mockPage.mockResolvedValue({ ...PAGE, send_confirmation_email: false });
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    expect(mockConfirmationEmail).not.toHaveBeenCalled();
   });
 
   it("drops the manage link rather than the booking when the stamp does not land", async () => {
