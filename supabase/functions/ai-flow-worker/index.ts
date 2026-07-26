@@ -7437,6 +7437,15 @@ const ROSTER_SELECTION_COLUMNS =
   "id, name, phone_e164, weekly_schedule, preferred_windows, " +
   "routing_enabled, named_broadcast_enabled, team_broadcast_enabled";
 
+/**
+ * supabase-js infers the row type from a select-string LITERAL; a shared
+ * constant degrades it to GenericStringError[], so every read below casts
+ * through `unknown`. Keeping one constant is worth the cast: two queries with
+ * hand-copied column lists is exactly how a mode ships silently switched off.
+ */
+const asRosterRows = (rows: unknown): RosterSelectionRow[] =>
+  (rows ?? []) as RosterSelectionRow[];
+
 type RosterSelectionRow = {
   id: string;
   name: string;
@@ -7481,7 +7490,7 @@ async function resolveBroadcastAgents(
   if (rosterErr) {
     throw new Error(`route_to_team: roster query failed: ${rosterErr.message}`);
   }
-  const roster = (rosterRows ?? []) as RosterSelectionRow[];
+  const roster = asRosterRows(rosterRows);
   const [tzRes, offRes] = await Promise.all([
     supabase.from("businesses").select("timezone").eq("id", run.business_id).maybeSingle(),
     supabase
@@ -7807,7 +7816,7 @@ async function contactOwnerAgent(
       .eq("business_id", businessId)
       .eq("id", ownerId)
       .maybeSingle();
-    const m = member as (RosterSelectionRow & { active?: boolean }) | null;
+    const m = member as unknown as (RosterSelectionRow & { active?: boolean }) | null;
     if (!m?.id || !m.active || !m.phone_e164?.trim()) return null;
     // Availability (business-local): the owner on time off today, outside
     // their weekly schedule, or opted out of rotation is skipped, same as in
@@ -7945,7 +7954,7 @@ async function pickNextAgent(
   if (rosterErr) {
     throw new Error(`route_to_team: roster query failed: ${rosterErr.message}`);
   }
-  let roster = (rosterRows ?? []) as RosterSelectionRow[];
+  let roster = asRosterRows(rosterRows);
   // Pinned routing (step.agentName): this lead type goes to ONE named member
   // (e.g. every seller lead straight to the broker). Restrict the roster to
   // that member; if they're missing/renamed — or there is no roster at all —
