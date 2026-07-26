@@ -93,15 +93,20 @@ export default async function AiSearchPage({
   const since = new Date(now.getTime() - WINDOWS[window] * 24 * 60 * 60 * 1000).toISOString();
 
   const rows = await listAiTrafficRows(since, ROW_LIMIT);
-  const summary = summarizeAiTraffic(rows, since, now);
   const truncated = rows.length >= ROW_LIMIT;
+  const summary = summarizeAiTraffic(rows, since, now);
 
   // The useful reading is the absence: an operator with zero hits is either
   // uninterested or blocked at the edge. Only operators we could actually
   // observe count, so a robots-only control token (Google-Extended) is never
   // reported as a crawler that failed to show up.
+  //
+  // A truncated sample cannot support the claim at all: `summary` sees only
+  // the newest ROW_LIMIT rows, so an operator that crawled earlier in the
+  // window would read as missing and raise an edge-block alarm that is not
+  // happening. Say the check is unavailable instead of guessing.
   const seen = new Set(summary.crawlerOperators);
-  const missing = OBSERVABLE_AI_OPERATORS.filter((op) => !seen.has(op));
+  const missing = truncated ? [] : OBSERVABLE_AI_OPERATORS.filter((op) => !seen.has(op));
 
   return (
     <div className="space-y-6">
@@ -149,6 +154,25 @@ export default async function AiSearchPage({
         <StatTile label="Window" value={window} hint={`since ${since.slice(0, 10)}`} />
       </div>
 
+      {truncated && (
+        <Card>
+          <div className="flex items-start gap-3">
+            <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0 text-amber-300" />
+            <div>
+              <p className="text-sm font-semibold text-parchment">
+                Window truncated at {ROW_LIMIT.toLocaleString("en-US")} events
+              </p>
+              <p className="mt-1 text-xs text-parchment/50">
+                Counts and rankings cover the most recent events only, and the
+                missing-operator check is suppressed: an operator that crawled earlier in this
+                window would look absent and raise a false edge-block alarm. Pick a shorter
+                window for an exact read.
+              </p>
+            </div>
+          </div>
+        </Card>
+      )}
+
       {missing.length > 0 && (
         <Card>
           <div className="flex items-start gap-3">
@@ -180,12 +204,6 @@ export default async function AiSearchPage({
           </p>
         ) : (
           <TrendChart days={summary.byDay} />
-        )}
-        {truncated && (
-          <p className="mt-3 text-xs text-amber-200">
-            Showing the most recent {ROW_LIMIT.toLocaleString("en-US")} events; earlier events in
-            this window are not counted.
-          </p>
         )}
       </Card>
 

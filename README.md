@@ -1049,10 +1049,13 @@ their `Referer`). Without it the rest of this section is unfalsifiable.
 - **Read the absences.** The page names operators with ZERO hits, which is
   the signature of an edge block and produces no other symptom: run
   `tsx debug/aeo-crawler-probe.ts`, then check Cloudflare Security → Events
-  before assuming disinterest. Only `OBSERVABLE_AI_OPERATORS` can be listed:
-  an operator whose sole registry entry is a robots.txt opt-out control
-  (Google, via `Google-Extended`) never appears in traffic by definition, so
-  reporting it as missing would invent an outage.
+  before assuming disinterest. Two guards keep that alarm honest, because a
+  false one sends you hunting a Cloudflare problem that does not exist: only
+  `OBSERVABLE_AI_OPERATORS` can be listed (an operator whose sole registry
+  entry is a robots.txt opt-out control, Google via `Google-Extended`, never
+  appears in traffic by definition), and the check is suppressed entirely
+  when the row fetch truncates, since the newest N rows cannot prove an
+  operator was absent earlier in the window.
 
 ## Platform blog (newcoworker.com/blog)
 
