@@ -57,8 +57,10 @@ export type ManageEmployeeArgs = {
   scheduleText?: string;
   /** Compact preferred lead hours, same format. "" clears. */
   preferredText?: string;
-  /** Round-robin rotation, auto-assign, and pins by name. */
+  /** Round-robin rotation and auto-assign. */
   leadRotation?: boolean;
+  /** One lead an automation asks for them by name. */
+  namedLeads?: boolean;
   /** Offers that list this person by name alongside others. */
   namedGroupOffers?: boolean;
   /** Whole-roster offers (the team-first human handoff). */
@@ -76,6 +78,7 @@ export type ManageEmployeeResult =
         email: string | null;
         active: boolean;
         leadRotation: boolean;
+        namedLeads: boolean;
         namedGroupOffers: boolean;
         wholeTeamOffers: boolean;
       };
@@ -100,6 +103,7 @@ function describe(row: TeamMemberRow): Extract<ManageEmployeeResult, { ok: true 
     // Pre-migration rows come back null over PostgREST; the column default is
     // true, so read anything that is not an explicit false as on.
     leadRotation: row.routing_enabled !== false,
+    namedLeads: row.named_routing_enabled !== false,
     namedGroupOffers: row.named_broadcast_enabled !== false,
     wholeTeamOffers: row.team_broadcast_enabled !== false
   };
@@ -162,11 +166,13 @@ function ambiguous(wanted: string, candidates: TeamMemberRow[]): string {
 /** Availability fields present in the args, mapped to the db patch shape. */
 function availabilityPatch(args: ManageEmployeeArgs): {
   routingEnabled?: boolean;
+  namedRoutingEnabled?: boolean;
   namedBroadcastEnabled?: boolean;
   teamBroadcastEnabled?: boolean;
 } {
   return {
     ...(args.leadRotation !== undefined ? { routingEnabled: args.leadRotation } : {}),
+    ...(args.namedLeads !== undefined ? { namedRoutingEnabled: args.namedLeads } : {}),
     ...(args.namedGroupOffers !== undefined
       ? { namedBroadcastEnabled: args.namedGroupOffers }
       : {}),
@@ -191,10 +197,15 @@ function availabilityNote(e: Extract<ManageEmployeeResult, { ok: true }>["employ
   if (!e.active) return "They are inactive, so they receive no leads at all until reactivated.";
   const off: string[] = [];
   if (!e.leadRotation) off.push("leads in rotation");
+  if (!e.namedLeads) off.push("leads named to them");
   if (!e.namedGroupOffers) off.push("group offers that name them");
   if (!e.wholeTeamOffers) off.push("whole-team offers");
-  if (off.length === 0) return "They receive leads every way: rotation, named group offers, and whole-team offers.";
-  if (off.length === 3) return "They receive no lead offers of any kind while all three availability switches are off.";
+  if (off.length === 0) {
+    return "They receive leads every way: rotation, leads named to them, named group offers, and whole-team offers.";
+  }
+  if (off.length === 4) {
+    return "They receive no lead offers of any kind while all four availability switches are off.";
+  }
   return `They no longer receive: ${off.join(", ")}.`;
 }
 

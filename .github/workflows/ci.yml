@@ -262,10 +262,11 @@ jobs:
         if: failure()
         run: tail -200 /tmp/functions-serve.log || true
 
-  # Catches Supabase migration-ledger drift at REVIEW time instead of at
-  # deploy time on main. No `needs` — it starts the moment the PR run does
-  # (~1 min: CLI setup + a dry-run push), so drift shows up as a red check
-  # while the other jobs are still building. A red drift check also holds
+  # Catches Supabase migration problems at REVIEW time instead of at deploy
+  # time on main: a duplicate version stamp against the live tip of main
+  # (migration-stamp-guard.sh), then ledger drift. No `needs`: it starts the
+  # moment the PR run does (~1 min: CLI setup + a dry-run push), so either
+  # shows up as a red check while the other jobs are still building. A red drift check also holds
   # the e2e gate (and therefore the preview deploy) closed, and blocks the
   # merge per the repo merge policy. On Dependabot PRs the steps no-op and
   # the job reports success (a job-level skip would hard-fail the e2e gate,
@@ -281,6 +282,16 @@ jobs:
       - name: Checkout
         if: github.event.pull_request.user.login != 'dependabot[bot]'
         uses: actions/checkout@v7
+
+      # Duplicate version stamps are a RACE between branches, so the tree this
+      # PR was branched from cannot show them: the collision only exists once
+      # the other branch merges. Comparing against the live tip of main is what
+      # turns that into a red PR check instead of a broken main (PRs #600/#601,
+      # #932/#934). Runs before the CLI setup because it needs neither the CLI
+      # nor the repo secrets, so a collision reports in seconds.
+      - name: Guard against duplicate migration version stamps
+        if: github.event.pull_request.user.login != 'dependabot[bot]'
+        run: bash .github/scripts/migration-stamp-guard.sh "${{ github.base_ref }}"
 
       # Same pin as worker-integration: bump deliberately, not implicitly.
       - name: Setup Supabase CLI

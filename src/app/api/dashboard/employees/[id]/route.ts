@@ -3,7 +3,8 @@
  *
  * PATCH  /api/dashboard/employees/:id?businessId=<uuid>
  *          body: { name?, phoneE164?, email?, active?, scheduleText?, preferredText?,
- *                  routingEnabled?, namedBroadcastEnabled?, teamBroadcastEnabled? }
+ *                  routingEnabled?, namedRoutingEnabled?,
+ *                  namedBroadcastEnabled?, teamBroadcastEnabled? }
  *          → { member }
  *
  * DELETE /api/dashboard/employees/:id?businessId=<uuid>
@@ -54,6 +55,7 @@ const patchSchema = z
     preferredText: z.string().max(500).optional(),
     // Lead availability, each independently patchable.
     routingEnabled: z.boolean().optional(),
+    namedRoutingEnabled: z.boolean().optional(),
     namedBroadcastEnabled: z.boolean().optional(),
     teamBroadcastEnabled: z.boolean().optional()
   })
@@ -87,6 +89,9 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
       ...(body.email !== undefined ? { email: body.email } : {}),
       ...(body.active !== undefined ? { active: body.active } : {}),
       ...(body.routingEnabled !== undefined ? { routingEnabled: body.routingEnabled } : {}),
+      ...(body.namedRoutingEnabled !== undefined
+        ? { namedRoutingEnabled: body.namedRoutingEnabled }
+        : {}),
       ...(body.namedBroadcastEnabled !== undefined
         ? { namedBroadcastEnabled: body.namedBroadcastEnabled }
         : {}),

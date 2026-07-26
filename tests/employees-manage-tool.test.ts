@@ -33,6 +33,7 @@ function member(overrides: Partial<TeamMemberRow> = {}): TeamMemberRow {
     weekly_schedule: null,
     preferred_windows: null,
     routing_enabled: true,
+    named_routing_enabled: true,
     named_broadcast_enabled: true,
     team_broadcast_enabled: true,
     created_at: "2026-06-10T00:52:26.492Z",
@@ -56,6 +57,7 @@ function deps(roster: TeamMemberRow[], overrides: Record<string, unknown> = {}) 
         phone_e164: String(input.phoneE164),
         email: (input.email as string | null) ?? null,
         routing_enabled: (input.routingEnabled as boolean) ?? true,
+        named_routing_enabled: (input.namedRoutingEnabled as boolean) ?? true,
         named_broadcast_enabled: (input.namedBroadcastEnabled as boolean) ?? true,
         team_broadcast_enabled: (input.teamBroadcastEnabled as boolean) ?? true
       })
@@ -70,6 +72,9 @@ function deps(roster: TeamMemberRow[], overrides: Record<string, unknown> = {}) 
         ...(patch.active !== undefined ? { active: patch.active as boolean } : {}),
         ...(patch.routingEnabled !== undefined
           ? { routing_enabled: patch.routingEnabled as boolean }
+          : {}),
+        ...(patch.namedRoutingEnabled !== undefined
+          ? { named_routing_enabled: patch.namedRoutingEnabled as boolean }
           : {}),
         ...(patch.namedBroadcastEnabled !== undefined
           ? { named_broadcast_enabled: patch.namedBroadcastEnabled as boolean }
@@ -111,6 +116,7 @@ describe("manageEmployee, add", () => {
         name: "Sandy Reyes",
         phone: "+16025550134",
         leadRotation: false,
+        namedLeads: true,
         namedGroupOffers: true,
         wholeTeamOffers: false
       },
@@ -120,6 +126,7 @@ describe("manageEmployee, add", () => {
     if (!res.ok) return;
     expect(res.employee).toMatchObject({
       leadRotation: false,
+      namedLeads: true,
       namedGroupOffers: true,
       wholeTeamOffers: false
     });
@@ -383,10 +390,25 @@ describe("manageEmployee, update and deactivate", () => {
     expect(d.updateMember).toHaveBeenCalledWith(BIZ, roster[0].id, { routingEnabled: false });
     expect(res.employee).toMatchObject({
       leadRotation: false,
+      namedLeads: true,
       namedGroupOffers: true,
       wholeTeamOffers: true
     });
     expect(res.note).toContain("They no longer receive: leads in rotation.");
+  });
+
+  it("turns off only being asked for by name, leaving the rotation on", async () => {
+    const d = deps(roster);
+    const res = await manageEmployee(
+      BIZ,
+      { action: "update", employee: "Dave Lane", namedLeads: false },
+      d
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(d.updateMember).toHaveBeenCalledWith(BIZ, DAVE.id, { namedRoutingEnabled: false });
+    expect(res.employee).toMatchObject({ leadRotation: true, namedLeads: false });
+    expect(res.note).toContain("They no longer receive: leads named to them.");
   });
 
   it("tells the owner their own alerts are untouched", async () => {
@@ -400,13 +422,14 @@ describe("manageEmployee, update and deactivate", () => {
     expect(res.note).toContain("Owner alerts are unaffected");
   });
 
-  it("says plainly when all three switches are off", async () => {
+  it("says plainly when all four switches are off", async () => {
     const res = await manageEmployee(
       BIZ,
       {
         action: "update",
         employee: "Dave Lane",
         leadRotation: false,
+        namedLeads: false,
         namedGroupOffers: false,
         wholeTeamOffers: false
       },
@@ -415,6 +438,18 @@ describe("manageEmployee, update and deactivate", () => {
     expect(res.ok).toBe(true);
     if (!res.ok) return;
     expect(res.note).toContain("no lead offers of any kind");
+  });
+
+  it("says so when every way in is open", async () => {
+    const res = await manageEmployee(
+      BIZ,
+      { action: "update", employee: "Dave Lane", leadRotation: true },
+      deps(roster)
+    );
+    expect(res.ok).toBe(true);
+    if (!res.ok) return;
+    expect(res.note).toContain("They receive leads every way");
+    expect(res.note).toContain("leads named to them");
   });
 
   it("deactivates, and says that outranks the switches", async () => {

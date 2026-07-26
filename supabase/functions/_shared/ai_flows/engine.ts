@@ -1029,19 +1029,32 @@ export function isWithinWeeklyWindows(windows: WeeklyWindows, clock: LocalClock)
 }
 
 /**
- * WHICH way the engine is trying to hand this roster member a lead. Each mode
- * reads its own opt-out column, because an owner can reasonably want any
- * subset: Amy Laidlaw takes her HomeLight broadcast but not rotation leads.
+ * WHICH way the engine is trying to hand this roster member a lead. Two axes,
+ * because "stop feeding me the rotation" and "never send me a lead" are
+ * different sentences: does the ENGINE choose the recipient or does the FLOW
+ * name them, and is it one person or the group?
+ *
+ *                   |  ONE recipient       |  the GROUP
+ *   ----------------+----------------------+--------------------
+ *   engine chooses  |  rotation            |  team_broadcast
+ *   a flow names    |  named_routing       |  named_broadcast
  *
  *   rotation        the one-at-a-time round robin (pickNextAgent), the hard
- *                   auto-assign that reuses that pick, preferContactOwner,
- *                   and single-agent pins. A pin on a rotation-off member
- *                   falls through to the owner fallback, exactly like a pin
- *                   on someone deactivated or on time off.
- *   named_broadcast a route_to_team step that lists them in `agentNames`.
+ *                   auto-assign that reuses that pick, and preferContactOwner.
+ *   named_routing   a step that PINS them: agentName, agentRef, or a resolved
+ *                   agentNameVar ("I want Amy on this one").
+ *   named_broadcast a step that lists them in `agentNames`.
  *   team_broadcast  a `broadcastAll` fan-out (the team-first human handoff).
+ *
+ * Each mode reads its own flag and nothing is inferred from another, so Amy
+ * Laidlaw's shape (no rotation leads, but reachable by name and by her
+ * HomeLight broadcast) is expressible, and so is its opposite.
  */
-export type AvailabilityMode = "rotation" | "named_broadcast" | "team_broadcast";
+export type AvailabilityMode =
+  | "rotation"
+  | "named_routing"
+  | "named_broadcast"
+  | "team_broadcast";
 
 /** Roster row shape the availability filter needs (worker passes DB rows through). */
 export type AvailabilityInput = {
@@ -1053,6 +1066,7 @@ export type AvailabilityInput = {
    * not select these columns (and a pre-migration row) behaves as before.
    */
   routing_enabled?: boolean | null;
+  named_routing_enabled?: boolean | null;
   named_broadcast_enabled?: boolean | null;
   team_broadcast_enabled?: boolean | null;
 };
@@ -1062,9 +1076,11 @@ function allowsMode(member: AvailabilityInput, mode: AvailabilityMode): boolean 
   const flag =
     mode === "rotation"
       ? member.routing_enabled
-      : mode === "named_broadcast"
-        ? member.named_broadcast_enabled
-        : member.team_broadcast_enabled;
+      : mode === "named_routing"
+        ? member.named_routing_enabled
+        : mode === "named_broadcast"
+          ? member.named_broadcast_enabled
+          : member.team_broadcast_enabled;
   return flag !== false;
 }
 

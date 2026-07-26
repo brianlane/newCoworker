@@ -43,6 +43,7 @@ type ApiError = { error?: { message?: string } };
  */
 const AVAILABILITY_TOGGLES = [
   { key: "rotation", field: "routingEnabled" },
+  { key: "namedRouting", field: "namedRoutingEnabled" },
   { key: "named", field: "namedBroadcastEnabled" },
   { key: "team", field: "teamBroadcastEnabled" }
 ] as const;
@@ -54,6 +55,7 @@ type Availability = Record<AvailabilityKey, boolean>;
 function availabilityOf(member: TeamMemberRow): Availability {
   return {
     rotation: member.routing_enabled !== false,
+    namedRouting: member.named_routing_enabled !== false,
     named: member.named_broadcast_enabled !== false,
     team: member.team_broadcast_enabled !== false
   };
