@@ -58,6 +58,16 @@ export async function POST(request: Request) {
       if (result.detail === "slot_taken") {
         return errorResponse("CONFLICT", "That time is no longer available.", 409);
       }
+      if (result.detail === "needs_human") {
+        // This person holds more than one upcoming appointment, so the
+        // shared cores cannot be pointed at the right one. 423 (distinct
+        // from the 422 notice window) so the page shows its own copy.
+        return errorResponse(
+          "CONFLICT",
+          "This appointment needs a person to change it. Please contact the business.",
+          423
+        );
+      }
       return errorResponse("CONFLICT", "That change did not go through, please try again.", 503);
     }
 

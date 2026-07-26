@@ -21,6 +21,7 @@ vi.mock("@/lib/calendar-tools/waitlist-resolve", () => ({
 }));
 vi.mock("@/lib/calendar-tools/booking-dedupe", () => ({
   claimBookingDedupe: vi.fn(),
+  findUpcomingBookingClaim: vi.fn(),
   releaseBookingDedupe: vi.fn()
 }));
 vi.mock("@/lib/booking-page/db", () => ({
@@ -51,7 +52,11 @@ import {
   cancelWaitlistForAttendee,
   resolveWaitlistAfterBooking
 } from "@/lib/calendar-tools/waitlist-resolve";
-import { claimBookingDedupe, releaseBookingDedupe } from "@/lib/calendar-tools/booking-dedupe";
+import {
+  claimBookingDedupe,
+  findUpcomingBookingClaim,
+  releaseBookingDedupe
+} from "@/lib/calendar-tools/booking-dedupe";
 import {
   deleteManagedBooking,
   getBookingByManageToken,
@@ -76,6 +81,7 @@ const mockCancelWaitlist = vi.mocked(cancelWaitlistForAttendee);
 const mockResolveWaitlist = vi.mocked(resolveWaitlistAfterBooking);
 const mockClaim = vi.mocked(claimBookingDedupe);
 const mockRelease = vi.mocked(releaseBookingDedupe);
+const mockFindClaim = vi.mocked(findUpcomingBookingClaim);
 const mockRow = vi.mocked(getBookingByManageToken);
 const mockPage = vi.mocked(getBookingPageForBusiness);
 const mockMove = vi.mocked(moveManagedBooking);
@@ -109,6 +115,8 @@ beforeEach(() => {
   mockResolveWaitlist.mockResolvedValue(undefined);
   mockClaim.mockResolvedValue({ kind: "claimed", id: "claim-1" } as never);
   mockRelease.mockResolvedValue(undefined);
+  // By default the core would act on exactly this booking.
+  mockFindClaim.mockResolvedValue({ id: "claim-9", eventId: "evt-1", startAt: FUTURE, zoomMeetingId: null } as never);
   mockMove.mockResolvedValue(undefined);
   mockDelete.mockResolvedValue(undefined);
   mockSlots.mockResolvedValue({
@@ -218,6 +226,26 @@ describe("cancelManagedBooking", () => {
     expect(await cancelManagedBooking(TOKEN)).toEqual({ ok: false, detail: "not_found" });
   });
 
+  it("refuses rather than cancel the WRONG appointment (attendee holds two)", async () => {
+    // The shared cores resolve the attendee's soonest upcoming booking, not
+    // this token's row: silently cancelling a different event is the
+    // failure this guard exists for.
+    mockFindClaim.mockResolvedValue({
+      id: "claim-other",
+      eventId: "evt-other",
+      startAt: new Date(Date.parse(FUTURE) - 24 * 60 * 60 * 1000).toISOString(),
+      zoomMeetingId: null
+    } as never);
+    expect(await cancelManagedBooking(TOKEN)).toEqual({ ok: false, detail: "needs_human" });
+    expect(mockCancelCore).not.toHaveBeenCalled();
+  });
+
+  it("proceeds when the ledger has no claim to compare (pre-ledger bookings)", async () => {
+    mockFindClaim.mockResolvedValue(null);
+    expect(await cancelManagedBooking(TOKEN)).toEqual({ ok: true });
+    expect(mockCancelCore).toHaveBeenCalled();
+  });
+
   it("reports a refused or thrown provider cancel honestly", async () => {
     mockCancelCore.mockResolvedValue({ ok: false, detail: "booking_not_found" } as never);
     expect(await cancelManagedBooking(TOKEN)).toEqual({ ok: false, detail: "change_failed" });
@@ -313,6 +341,20 @@ describe("rescheduleManagedBooking", () => {
     // over someone else.
     const out = await rescheduleManagedBooking(TOKEN, new Date(Date.parse(NEW_START) + 60_000).toISOString());
     expect(out).toEqual({ ok: false, detail: "slot_taken" });
+    expect(mockRescheduleCore).not.toHaveBeenCalled();
+  });
+
+  it("refuses rather than move the WRONG appointment (attendee holds two)", async () => {
+    mockFindClaim.mockResolvedValue({
+      id: "claim-other",
+      eventId: "evt-other",
+      startAt: new Date(Date.parse(FUTURE) - 24 * 60 * 60 * 1000).toISOString(),
+      zoomMeetingId: null
+    } as never);
+    expect(await rescheduleManagedBooking(TOKEN, NEW_START)).toEqual({
+      ok: false,
+      detail: "needs_human"
+    });
     expect(mockRescheduleCore).not.toHaveBeenCalled();
   });
 

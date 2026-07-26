@@ -24,6 +24,7 @@ type Strings = {
   loadingSlots: string;
   noSlots: string;
   tooLate: string;
+  needsHuman: string;
   canceledHeading: string;
   canceledBody: string;
   movedHeading: string;
@@ -142,7 +143,9 @@ export function ManageBookingPage({
               ? strings.slotTaken
               : res.status === 422
                 ? strings.tooLate
-                : strings.changeFailed
+                : res.status === 423
+                  ? strings.needsHuman
+                  : strings.changeFailed
           );
           // A raced slot means the offer is stale: re-fetch rather than
           // leave the visitor clicking a time that is gone.
@@ -161,7 +164,7 @@ export function ManageBookingPage({
         setBusy(false);
       }
     },
-    [strings.changeFailed, strings.slotTaken, strings.tooLate, token]
+    [strings.changeFailed, strings.needsHuman, strings.slotTaken, strings.tooLate, token]
   );
 
   const card = "rounded-2xl border border-parchment/15 bg-ink-800/60 p-6";

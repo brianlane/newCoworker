@@ -37,6 +37,7 @@
     "manageKeepButton": "Conservarla",
     "managePickNewTime": "Elige un nuevo horario:",
     "manageTooLate": "Esta cita es demasiado próxima para cambiarla en línea. Comunícate directamente con el negocio.",
+    "manageNeedsHuman": "Esta cita necesita que una persona la modifique. Comunícate con el negocio.",
     "manageCanceledHeading": "Cita cancelada",
     "manageCanceledBody": "Tu cita con {business} quedó cancelada. Puedes reservar de nuevo cuando quieras.",
     "manageMovedHeading": "Cita reprogramada",

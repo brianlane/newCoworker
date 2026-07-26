@@ -29,7 +29,11 @@ import {
   cancelWaitlistForAttendee,
   resolveWaitlistAfterBooking
 } from "@/lib/calendar-tools/waitlist-resolve";
-import { claimBookingDedupe, releaseBookingDedupe } from "@/lib/calendar-tools/booking-dedupe";
+import {
+  claimBookingDedupe,
+  findUpcomingBookingClaim,
+  releaseBookingDedupe
+} from "@/lib/calendar-tools/booking-dedupe";
 import { PUBLIC_SLOT_CLAIM_KEY, listSlotsForBusiness } from "@/lib/booking-page/service";
 import { getBookingPageForBusiness } from "@/lib/booking-page/db";
 import {
@@ -46,7 +50,20 @@ export const PLATFORM_EVENT_PREFIX = "platform:";
 
 export type ManageFailure = {
   ok: false;
-  detail: "not_found" | "too_late" | "slot_taken" | "invalid_request" | "change_failed";
+  detail:
+    | "not_found"
+    | "too_late"
+    | "slot_taken"
+    | "invalid_request"
+    | "change_failed"
+    /**
+     * The shared cores resolve by attendee identity, so they would act on
+     * this person's SOONEST upcoming booking. When that is a different
+     * appointment than the one this link addresses, self-serve stops: a
+     * person has to sort it out. Moving the wrong event silently is the
+     * failure worth refusing for.
+     */
+    | "needs_human";
 };
 
 export type ManagedBookingView = {
@@ -129,6 +146,20 @@ function attendeeArgs(attendeeKey: string): {
   return {};
 }
 
+/**
+ * True when the shared cores would act on the very booking this manage
+ * token addresses. They resolve the attendee's soonest upcoming claim, so
+ * a visitor holding two upcoming appointments could otherwise see one time
+ * on this page while a different event is moved or cancelled.
+ */
+async function coreWouldActOnThisBooking(row: ManagedBookingRow): Promise<boolean> {
+  const claim = await findUpcomingBookingClaim(row.business_id, row.attendee_key);
+  // No claim at all: the core does its own provider-side resolution (older
+  // bookings that predate the ledger), which this guard cannot second-guess.
+  if (!claim) return true;
+  return Date.parse(claim.startAt) === Date.parse(row.start_at);
+}
+
 /** The same identity in the shape the waitlist helpers take. */
 function waitlistAttendee(attendeeKey: string): { phones: string[]; email: string | null } {
   const args = attendeeArgs(attendeeKey);
@@ -166,6 +197,9 @@ export async function cancelManagedBooking(
       return { ok: true };
     }
 
+    if (!(await coreWouldActOnThisBooking(resolved.row))) {
+      return { ok: false, detail: "needs_human" };
+    }
     const result = await cancelCalendarAppointment(
       resolved.row.business_id,
       attendeeArgs(resolved.row.attendee_key),
@@ -248,10 +282,13 @@ export async function rescheduleManagedBooking(
       return { ok: true, startIso: newStartIso };
     }
 
+    if (!(await coreWouldActOnThisBooking(resolved.row))) {
+      return { ok: false, detail: "needs_human" };
+    }
     const result = await rescheduleCalendarAppointment(
       resolved.row.business_id,
       {
-        newStartIso: new Date(startMs).toISOString(),
+        newStartIso: newStartIso,
         newEndIso: endIso,
         ...attendeeArgs(resolved.row.attendee_key)
       },
@@ -270,7 +307,7 @@ export async function rescheduleManagedBooking(
     if (result.detail === "reschedule_link_created") {
       return { ok: false, detail: "change_failed" };
     }
-    return { ok: true, startIso: new Date(startMs).toISOString() };
+    return { ok: true, startIso: newStartIso };
   } catch (err) {
     logger.warn("booking-manage: reschedule failed", {
       businessId: resolved.row.business_id,
