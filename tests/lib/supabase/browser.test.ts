@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from "vitest";
 import {
+  browserSupportsPasskeys,
   clearStaleSupabaseAuthCookies,
   getSupabaseBrowserClient,
   resetSupabaseBrowserClientCache
@@ -57,6 +58,33 @@ describe("getSupabaseBrowserClient", () => {
     expect(() => getSupabaseBrowserClient()).toThrow(
       "Missing Supabase URL environment variable"
     );
+  });
+});
+
+describe("browserSupportsPasskeys", () => {
+  const original = (globalThis as { window?: unknown }).window;
+
+  afterEach(() => {
+    if (original === undefined) {
+      delete (globalThis as { window?: unknown }).window;
+    } else {
+      (globalThis as { window?: unknown }).window = original;
+    }
+  });
+
+  it("is false on the server, where there is no window", () => {
+    delete (globalThis as { window?: unknown }).window;
+    expect(browserSupportsPasskeys()).toBe(false);
+  });
+
+  it("is false in a browser without WebAuthn", () => {
+    (globalThis as { window?: unknown }).window = {};
+    expect(browserSupportsPasskeys()).toBe(false);
+  });
+
+  it("is true once PublicKeyCredential exists", () => {
+    (globalThis as { window?: unknown }).window = { PublicKeyCredential: function () {} };
+    expect(browserSupportsPasskeys()).toBe(true);
   });
 });
 
