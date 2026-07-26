@@ -945,6 +945,67 @@ Three layers hold this in place:
   editing when cheap. Live tenant flow copy was scrubbed via
   `scripts/oneshot/strip-em-dashes-flows.ts`.
 
+## AI search visibility (AEO)
+
+Buyers increasingly ask an assistant instead of searching, so being readable
+and citable by ChatGPT, Claude, Perplexity, and Copilot is a distribution
+channel, not an SEO detail. Three pieces hold it up.
+
+**1. The crawlers must actually reach us.** Every AI agent we care about is
+listed once in [src/lib/marketing/ai-crawlers.ts](src/lib/marketing/ai-crawlers.ts),
+which feeds the robots.txt allow group ([src/app/robots.ts](src/app/robots.ts)),
+the access probe, and AI-traffic attribution. A crawler that matches its own
+robots group ignores `*` entirely, so the disallows (`/dashboard`, `/admin`,
+`/api`) are repeated there rather than inherited.
+
+> ⚠️ **Cloudflare, not the app, is how this breaks.** The `newcoworker.com`
+> zone's **"Block AI bots"** setting and **Super Bot Fight Mode** both
+> challenge these agents at the edge, with a 403 or an interstitial and ZERO
+> origin trace, exactly like the Claude-connector failure documented under
+> [Claude connector](#claude-connector-remote-mcp). Free-plan Bot Fight Mode
+> ignores WAF skip rules entirely and must stay OFF. Verify from outside:
+>
+> ```bash
+> tsx debug/aeo-crawler-probe.ts            # production, read-only, no creds
+> tsx debug/aeo-crawler-probe.ts https://…  # any other origin
+> ```
+>
+> It fetches the marketing surfaces once per real AI user-agent string and
+> exits non-zero on any non-200 or `cf-mitigated` response. Check Cloudflare
+> Security → Events before suspecting the app.
+
+**2. A brief written for machines.** `/llms.txt` (short index) and
+`/llms-full.txt` (adds differentiators, industries, recent posts) are composed
+in [src/lib/marketing/llms-content.ts](src/lib/marketing/llms-content.ts) and
+served by route handlers, NOT kept as a static file: the facts they state
+(prices, included minutes, SMS caps) live in `src/lib/plans/*`, and the static
+`public/llms.txt` they replaced had gone stale against the Jul 2026 tier
+relaunch without anyone noticing. `tests/llms-content.test.ts` pins the output
+against `getPeriodPricing` / `TIER_LIMITS`, so a pricing change that misses
+this file fails CI. The module is also under the no-em-dash guard.
+`/llms-full.txt` reads the English catalog directly rather than through
+next-intl, since the request config resolves the READER's locale and would
+otherwise hand a Spanish brief to a crawler sending `Accept-Language: es`.
+
+**3. Tell the index immediately.** ChatGPT's search rides Bing's index, and
+Bing is the largest IndexNow participant, so a post can be citable the day it
+publishes instead of whenever a crawler returns. The blog publish fan-out
+(`runBlogPublishSideEffects`, both the sweep and admin "Publish now") pings
+[src/lib/marketing/indexnow.ts](src/lib/marketing/indexnow.ts) with the post,
+`/blog`, and the sitemap. Best-effort by contract: it never throws and can
+never un-publish a post.
+
+- **Env**: `INDEXNOW_KEY` (8-128 chars of `[A-Za-z0-9-]`, e.g.
+  `openssl rand -hex 16`). Unset = feature off. The key is **public by
+  design**: it is served at `/indexnow-key.txt` as the ownership proof the
+  engines fetch. Served from a fixed path with `keyLocation` rather than the
+  protocol's default `/{key}.txt`, so there is no committed filename to keep
+  hand-synced with an env var; a key file in the root directory scopes to the
+  whole host either way.
+- **Manual, one-time**: verify the site in Bing Webmaster Tools and submit
+  `https://newcoworker.com/sitemap.xml` there. IndexNow accelerates recrawl of
+  a known site; it does not replace initial verification.
+
 ## Platform blog (newcoworker.com/blog)
 
 **Copy rule: no em dashes in blog posts** (now part of the repo-wide writing

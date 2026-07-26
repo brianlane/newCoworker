@@ -131,7 +131,12 @@ describe("runBlogPublishSideEffects", () => {
       sendEmail: sendEmail as never,
       insertSocial: insertSocial as never
     });
-    expect(result).toEqual({ emailed: 0, emailErrors: 0, crossPosted: false });
+    expect(result).toEqual({
+      emailed: 0,
+      emailErrors: 0,
+      crossPosted: false,
+      indexNowSubmitted: false
+    });
     expect(sendEmail).not.toHaveBeenCalled();
     expect(insertSocial).not.toHaveBeenCalled();
   });
@@ -294,12 +299,16 @@ describe("runBlogPublishSideEffects", () => {
 describe("processBlogPublishSweep", () => {
   it("publishes due posts and aggregates the fan-out", async () => {
     vi.stubEnv("RESEND_API_KEY", "re_key");
+    vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://www.newcoworker.com");
     listDueMock.mockResolvedValue([
       post({ id: "p1", status: "scheduled", featured_image_path: "cover.png" })
     ]);
     transitionMock.mockResolvedValue(true);
     const sendEmail = vi.fn().mockResolvedValue("id-1");
     const insertSocial = vi.fn().mockResolvedValue({ id: "sp-1" });
+    const submitIndexNow = vi
+      .fn()
+      .mockResolvedValue({ status: "sent", submitted: 3, httpStatus: 200 });
     const now = () => new Date("2026-07-20T15:00:00.000Z");
 
     const result = await processBlogPublishSweep({
@@ -308,6 +317,7 @@ describe("processBlogPublishSweep", () => {
       loadSubscribers: async () => [subscriber()],
       sendEmail: sendEmail as never,
       insertSocial: insertSocial as never,
+      submitIndexNow: submitIndexNow as never,
       now
     });
 
@@ -322,8 +332,35 @@ describe("processBlogPublishSweep", () => {
       emailed: 1,
       emailErrors: 0,
       crossPosted: 1,
+      indexNowSubmitted: 1,
       errors: []
     });
+    // The post, the index it now appears on, and the sitemap all changed.
+    expect(submitIndexNow).toHaveBeenCalledWith([
+      "https://www.newcoworker.com/blog/big-feature",
+      "https://www.newcoworker.com/blog",
+      "https://www.newcoworker.com/sitemap.xml"
+    ]);
+  });
+
+  it.each([
+    ["an Error", new Error("network down")],
+    ["a bare string", "network down"]
+  ])("still reports the publish when the IndexNow ping throws %s", async (_label, thrown) => {
+    vi.stubEnv("RESEND_API_KEY", undefined);
+    listDueMock.mockResolvedValue([post({ id: "p1", status: "scheduled" })]);
+    transitionMock.mockResolvedValue(true);
+    const result = await processBlogPublishSweep({
+      client: DB,
+      loadSettings: async () => settings(),
+      loadSubscribers: async () => [],
+      sendEmail: vi.fn() as never,
+      insertSocial: vi.fn() as never,
+      submitIndexNow: vi.fn().mockRejectedValue(thrown) as never
+    });
+    expect(result.published).toBe(1);
+    expect(result.indexNowSubmitted).toBe(0);
+    expect(result.errors).toEqual([]);
   });
 
   it("publishes without a cross-post when no business is designated", async () => {
