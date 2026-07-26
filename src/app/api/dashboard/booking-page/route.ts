@@ -53,7 +53,8 @@ const patchSchema = z.object({
   reminderEmailHours: z.number().int().optional(),
   reminderSmsHours: z.number().int().optional(),
   assignmentMode: z.enum(["any", "round_robin", "fixed"]).optional(),
-  employeeId: z.string().uuid().nullable().optional()
+  employeeId: z.string().uuid().nullable().optional(),
+  intakeQuestions: z.array(z.unknown()).max(20).optional()
 });
 
 const actionSchema = z.object({ action: z.literal("rotate") });

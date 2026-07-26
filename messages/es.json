@@ -50,7 +50,8 @@
     "weekdayWed": "Mié",
     "weekdayThu": "Jue",
     "weekdayFri": "Vie",
-    "weekdaySat": "Sáb"
+    "weekdaySat": "Sáb",
+    "intakePickOne": "Elige una opción…"
   },
   "common": {
     "language": "Idioma",
@@ -1405,7 +1406,24 @@
       "assignModeFixed": "Una persona",
       "assignEmployeeLabel": "Persona",
       "assignHint": "Al repartir en el equipo, cada reserva va a quien esté en turno con menos citas próximas.",
-      "assignNoRoster": "Agrega empleados para reservar con una persona específica o repartir en el equipo."
+      "assignNoRoster": "Agrega empleados para reservar con una persona específica o repartir en el equipo.",
+      "intakeTitle": "Preguntas al reservar",
+      "intakeSubtitle": "Hasta cinco. Las respuestas viajan con la cita, para llegar preparados a la llamada.",
+      "intakeQuestionLabel": "Pregunta",
+      "intakeTypeLabel": "Tipo de respuesta",
+      "intakeTypeText": "Respuesta corta",
+      "intakeTypeTextarea": "Respuesta larga",
+      "intakeTypeChoice": "Elegir una",
+      "intakeTypeMulti": "Elegir varias",
+      "intakeRequired": "Obligatoria",
+      "intakeRemove": "Quitar",
+      "intakeOptionsLabel": "Opciones (separadas por comas)",
+      "intakeOptionsPlaceholder": "Cocina, Baño, Toda la casa",
+      "intakeAdd": "Agregar una pregunta",
+      "intakeMax": "Cinco preguntas mantienen la reserva corta; quita una para agregar otra.",
+      "intakeNewQuestionLabel": "¿Qué debemos saber antes de la llamada?",
+      "intakeOptionOne": "Opción A",
+      "intakeOptionTwo": "Opción B"
     },
     "integrationsClaude": {
       "connectedBadge": "Conectado",

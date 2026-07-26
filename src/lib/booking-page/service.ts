@@ -37,6 +37,11 @@ import {
 import type { BookingPageRow } from "@/lib/booking-page/db";
 import { mintBookingManageToken, parseBookingPageRef } from "@/lib/booking-page/keys";
 import { chooseAssignee, eligibleMembers, parseAssignmentMode } from "@/lib/booking-page/assignment";
+import {
+  formatIntakeAnswers,
+  parseIntakeQuestions,
+  validateIntakeAnswers
+} from "@/lib/booking-page/intake";
 import { sendBookingConfirmationEmail } from "@/lib/booking-page/confirmation-email";
 import { computePublicSlots } from "@/lib/booking-page/slots";
 import type { BusyBlock, PublicSlot } from "@/lib/booking-page/slots";
@@ -123,7 +128,9 @@ export type BookingPageFailure = {
     | "invalid_request"
     | "slot_taken"
     | "already_booked"
-    | "booking_failed";
+    | "booking_failed"
+    /** A required intake question went unanswered (form problem, retryable). */
+    | "missing_answers";
 };
 
 /**
@@ -401,6 +408,8 @@ export type SubmitPublicBookingInput = {
   phone: string;
   email: string;
   note?: string;
+  /** Answers to the page's intake questions, keyed by question id. */
+  intakeAnswers?: unknown;
   /** "Text me if an earlier time opens up" opt-in (cancellation waitlist). */
   notifyEarlier?: boolean;
   /**
@@ -513,6 +522,14 @@ export async function submitPublicBooking(
   const name = input.name.trim();
   const email = input.email.trim();
   const note = input.note?.trim() ?? "";
+
+  // The page's intake questions, answered. Refused BEFORE any claim: a
+  // required question left blank is a form problem, and the slot must stay
+  // bookable while the visitor fixes it.
+  const intakeQuestions = parseIntakeQuestions(context.page.intake_questions);
+  const intake = validateIntakeAnswers(intakeQuestions, input.intakeAnswers);
+  if (!intake.ok) return { ok: false, detail: "missing_answers" };
+  const intakeLines = formatIntakeAnswers(intakeQuestions, intake.answers);
   const phoneResult = normalizeContactNumber(input.phone);
   const start = new Date(input.startIso);
   if (
@@ -738,7 +755,10 @@ export async function submitPublicBooking(
       `Booked via the public booking page.`,
       `Phone: ${phone}`,
       `Email: ${email}`,
-      ...(note ? [`Note: ${note}`] : [])
+      ...(note ? [`Note: ${note}`] : []),
+      // The answers travel with the event, so the person taking the call
+      // reads them where they will actually look.
+      ...intakeLines
     ];
 
     const booked = await bookCalendarAppointment(
@@ -861,7 +881,12 @@ export async function submitPublicBooking(
     context.businessId,
     bookingAttendeeKey(phone, email, name),
     start.toISOString(),
-    { email, name, assigneeMemberId: assignee }
+    {
+      email,
+      name,
+      assigneeMemberId: assignee,
+      intakeAnswers: intakeLines.length > 0 ? intake.answers : null
+    }
   )
     .then((stamped) => {
       if (!stamped) {

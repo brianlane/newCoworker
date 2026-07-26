@@ -10,6 +10,16 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+/** The question shape the server passes down (already validated). */
+export type IntakeQuestionView = {
+  id: string;
+  label: string;
+  help?: string;
+  type: "choice" | "multi" | "text" | "textarea";
+  options?: string[];
+  required: boolean;
+};
+
 export type PublicBookingStrings = {
   eventTitle: string;
   durationMinutes: string;
@@ -25,6 +35,7 @@ export type PublicBookingStrings = {
   phoneLabel: string;
   emailLabel: string;
   noteLabel: string;
+  intakePickOne: string;
   notifyEarlierLabel: string;
   submitButton: string;
   submitting: string;
@@ -52,6 +63,8 @@ type Props = {
   sendsInvite: boolean;
   /** Active page locale, carried into the confirmation email. */
   locale: string;
+  /** Owner-defined intake questions, already parsed server-side. */
+  intakeQuestions: IntakeQuestionView[];
   strings: PublicBookingStrings;
 };
 
@@ -111,6 +124,7 @@ export function PublicBookingPage({
   videoCall,
   sendsInvite,
   locale,
+  intakeQuestions,
   strings
 }: Props) {
   const browserZone = useMemo(
@@ -131,6 +145,8 @@ export function PublicBookingPage({
   const [selectedDay, setSelectedDay] = useState<string | null>(null);
   const [selectedSlot, setSelectedSlot] = useState<Slot | null>(null);
   const [form, setForm] = useState({ name: "", phone: "", email: "", note: "" });
+  // Intake answers keyed by question id; multi answers are string arrays.
+  const [intake, setIntake] = useState<Record<string, string | string[]>>({});
   const [notifyEarlier, setNotifyEarlier] = useState(false);
   const [submitState, setSubmitState] = useState<
     "idle" | "submitting" | "slot_taken" | "already_booked" | "invalid" | "failed"
@@ -225,6 +241,7 @@ export function PublicBookingPage({
           phone: form.phone,
           email: form.email,
           ...(form.note.trim() ? { note: form.note } : {}),
+          ...(Object.keys(intake).length > 0 ? { intakeAnswers: intake } : {}),
           ...(notifyEarlier ? { notifyEarlier: true } : {}),
           // The confirmation email shows THEIR clock beside the business's,
           // and the browser is the only place that zone is known.
@@ -257,7 +274,7 @@ export function PublicBookingPage({
     } catch {
       setSubmitState("failed");
     }
-  }, [selectedSlot, token, duration, form, notifyEarlier, timezone, locale, loadSlots]);
+  }, [selectedSlot, token, duration, form, notifyEarlier, timezone, locale, intake, loadSlots]);
 
   const panel = "rounded-lg border border-parchment/10 bg-parchment/5";
   const label = "block text-xs uppercase tracking-wider text-parchment/40";
@@ -437,6 +454,94 @@ export function PublicBookingPage({
                   onChange={(e) => setForm({ ...form, note: e.target.value })}
                 />
               </div>
+              {intakeQuestions.map((q) => (
+                <div key={q.id}>
+                  <label className={label} htmlFor={`bk-q-${q.id}`}>
+                    {q.label}
+                    {q.required ? <span className="ml-1 text-clay-red">*</span> : null}
+                  </label>
+                  {q.help ? <p className="text-xs text-parchment/45">{q.help}</p> : null}
+                  {q.type === "choice" ? (
+                    <select
+                      id={`bk-q-${q.id}`}
+                      required={q.required}
+                      className={input}
+                      value={typeof intake[q.id] === "string" ? (intake[q.id] as string) : ""}
+                      onChange={(e) =>
+                        setIntake((prev) =>
+                          e.target.value
+                            ? { ...prev, [q.id]: e.target.value }
+                            : (({ [q.id]: _dropped, ...rest }) => rest)(prev)
+                        )
+                      }
+                    >
+                      <option value="">{strings.intakePickOne}</option>
+                      {(q.options ?? []).map((opt) => (
+                        <option key={opt} value={opt}>
+                          {opt}
+                        </option>
+                      ))}
+                    </select>
+                  ) : q.type === "multi" ? (
+                    <div className="mt-1 flex flex-wrap gap-2">
+                      {(q.options ?? []).map((opt) => {
+                        const picked = Array.isArray(intake[q.id])
+                          ? (intake[q.id] as string[])
+                          : [];
+                        const on = picked.includes(opt);
+                        return (
+                          <button
+                            key={opt}
+                            type="button"
+                            className={`rounded-full border px-3 py-1.5 text-sm transition-colors ${
+                              on
+                                ? "border-claw-green bg-claw-green/15 text-claw-green"
+                                : "border-parchment/20 text-parchment/70 hover:border-parchment/40"
+                            }`}
+                            onClick={() =>
+                              setIntake((prev) => {
+                                const next = on
+                                  ? picked.filter((v) => v !== opt)
+                                  : [...picked, opt];
+                                if (next.length === 0) {
+                                  const { [q.id]: _dropped, ...rest } = prev;
+                                  return rest;
+                                }
+                                return { ...prev, [q.id]: next };
+                              })
+                            }
+                          >
+                            {opt}
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : q.type === "textarea" ? (
+                    <textarea
+                      id={`bk-q-${q.id}`}
+                      required={q.required}
+                      maxLength={500}
+                      rows={3}
+                      className={input}
+                      value={typeof intake[q.id] === "string" ? (intake[q.id] as string) : ""}
+                      onChange={(e) =>
+                        setIntake((prev) => ({ ...prev, [q.id]: e.target.value }))
+                      }
+                    />
+                  ) : (
+                    <input
+                      id={`bk-q-${q.id}`}
+                      required={q.required}
+                      maxLength={500}
+                      className={input}
+                      value={typeof intake[q.id] === "string" ? (intake[q.id] as string) : ""}
+                      onChange={(e) =>
+                        setIntake((prev) => ({ ...prev, [q.id]: e.target.value }))
+                      }
+                    />
+                  )}
+                </div>
+              ))}
               <label
                 className="flex cursor-pointer items-start gap-2 text-sm text-parchment/70"
                 htmlFor="bk-notify-earlier"

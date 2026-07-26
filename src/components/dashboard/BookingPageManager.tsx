@@ -31,6 +31,17 @@ type PageRow = {
   reminder_sms_hours: number;
   assignment_mode: string;
   employee_id: string | null;
+  intake_questions: IntakeQuestion[];
+};
+
+/** Mirror of BookingIntakeQuestion; the API stores it normalized. */
+type IntakeQuestion = {
+  id: string;
+  label: string;
+  help?: string;
+  type: "choice" | "multi" | "text" | "textarea";
+  options?: string[];
+  required: boolean;
 };
 
 type RosterMember = { id: string; name: string };
@@ -106,6 +117,12 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
       }
     },
     [api, t]
+  );
+
+  /** Whole-list replacement: the server normalizes and stores it. */
+  const patchQuestions = useCallback(
+    (questions: IntakeQuestion[]) => patch({ intakeQuestions: questions }),
+    [patch]
   );
 
   const rotate = useCallback(async () => {
@@ -580,6 +597,160 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
           </div>
         </div>
         <p className="mt-3 text-xs text-parchment/40">{t("remindersHint")}</p>
+      </Card>
+
+      {/* Intake questions: what the visitor answers while booking. Same
+          vocabulary as the white-glove questionnaire; answers travel with
+          the appointment (event notes, booking row, manage page). */}
+      <Card>
+        <h2 className="text-base font-semibold text-parchment">{t("intakeTitle")}</h2>
+        <p className="mt-1 text-sm text-parchment/60">{t("intakeSubtitle")}</p>
+        <div className="mt-4 space-y-3">
+          {(page?.intake_questions ?? []).map((q, idx) => (
+            <div
+              key={q.id}
+              className="rounded-md border border-parchment/15 bg-deep-ink/60 p-3"
+            >
+              <div className="flex flex-wrap items-end gap-3">
+                <div className="min-w-48 flex-1">
+                  <label className={label} htmlFor={`bp-q-label-${q.id}`}>
+                    {t("intakeQuestionLabel")}
+                  </label>
+                  <input
+                    id={`bp-q-label-${q.id}`}
+                    className={`${select} w-full`}
+                    maxLength={160}
+                    defaultValue={q.label}
+                    disabled={saving}
+                    onBlur={(e) => {
+                      const next = e.target.value.trim();
+                      if (next && next !== q.label) {
+                        void patchQuestions(
+                          (page?.intake_questions ?? []).map((it, i) =>
+                            i === idx ? { ...it, label: next } : it
+                          )
+                        );
+                      }
+                    }}
+                  />
+                </div>
+                <div>
+                  <label className={label} htmlFor={`bp-q-type-${q.id}`}>
+                    {t("intakeTypeLabel")}
+                  </label>
+                  <select
+                    id={`bp-q-type-${q.id}`}
+                    className={select}
+                    disabled={saving}
+                    value={q.type}
+                    onChange={(e) => {
+                      const type = e.target.value as IntakeQuestion["type"];
+                      void patchQuestions(
+                        (page?.intake_questions ?? []).map((it, i) =>
+                          i === idx
+                            ? {
+                                ...it,
+                                type,
+                                // A choice needs options to choose from.
+                                options:
+                                  type === "choice" || type === "multi"
+                                    ? (it.options?.length ?? 0) >= 2
+                                      ? it.options
+                                      : [t("intakeOptionOne"), t("intakeOptionTwo")]
+                                    : undefined
+                              }
+                            : it
+                        )
+                      );
+                    }}
+                  >
+                    <option value="text">{t("intakeTypeText")}</option>
+                    <option value="textarea">{t("intakeTypeTextarea")}</option>
+                    <option value="choice">{t("intakeTypeChoice")}</option>
+                    <option value="multi">{t("intakeTypeMulti")}</option>
+                  </select>
+                </div>
+                <label className="flex items-center gap-2 pb-1.5 text-sm text-parchment/70">
+                  <input
+                    type="checkbox"
+                    checked={q.required}
+                    disabled={saving}
+                    onChange={(e) =>
+                      void patchQuestions(
+                        (page?.intake_questions ?? []).map((it, i) =>
+                          i === idx ? { ...it, required: e.target.checked } : it
+                        )
+                      )
+                    }
+                  />
+                  {t("intakeRequired")}
+                </label>
+                <button
+                  type="button"
+                  className="pb-1.5 text-sm text-clay-red/80 hover:text-clay-red"
+                  disabled={saving}
+                  onClick={() =>
+                    void patchQuestions(
+                      (page?.intake_questions ?? []).filter((_, i) => i !== idx)
+                    )
+                  }
+                >
+                  {t("intakeRemove")}
+                </button>
+              </div>
+              {q.type === "choice" || q.type === "multi" ? (
+                <div className="mt-2">
+                  <label className={label} htmlFor={`bp-q-options-${q.id}`}>
+                    {t("intakeOptionsLabel")}
+                  </label>
+                  <input
+                    id={`bp-q-options-${q.id}`}
+                    className={`${select} w-full`}
+                    disabled={saving}
+                    defaultValue={(q.options ?? []).join(", ")}
+                    placeholder={t("intakeOptionsPlaceholder")}
+                    onBlur={(e) => {
+                      const options = e.target.value
+                        .split(",")
+                        .map((o) => o.trim())
+                        .filter(Boolean)
+                        .slice(0, 8);
+                      if (options.length >= 2) {
+                        void patchQuestions(
+                          (page?.intake_questions ?? []).map((it, i) =>
+                            i === idx ? { ...it, options } : it
+                          )
+                        );
+                      }
+                    }}
+                  />
+                </div>
+              ) : null}
+            </div>
+          ))}
+        </div>
+        {(page?.intake_questions ?? []).length < 5 ? (
+          <button
+            type="button"
+            className="mt-3 rounded-md border border-parchment/25 px-3 py-1.5 text-sm text-parchment/80 hover:border-parchment/50"
+            disabled={saving}
+            onClick={() =>
+              void patchQuestions([
+                ...(page?.intake_questions ?? []),
+                {
+                  id: `q-${Date.now().toString(36)}`,
+                  label: t("intakeNewQuestionLabel"),
+                  type: "text" as const,
+                  required: false
+                }
+              ])
+            }
+          >
+            {t("intakeAdd")}
+          </button>
+        ) : (
+          <p className="mt-3 text-xs text-parchment/40">{t("intakeMax")}</p>
+        )}
       </Card>
 
       {/* Cancellation waitlist: independent of the public link, it also

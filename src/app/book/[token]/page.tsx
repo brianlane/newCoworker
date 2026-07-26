@@ -11,6 +11,7 @@ import { notFound } from "next/navigation";
 import { getLocale, getTranslations } from "next-intl/server";
 import { parseBookingPageRef } from "@/lib/booking-page/keys";
 import { getBookingPageContext } from "@/lib/booking-page/service";
+import { parseIntakeQuestions } from "@/lib/booking-page/intake";
 import { PublicBookingPage } from "@/components/booking/PublicBookingPage";
 
 export const dynamic = "force-dynamic";
@@ -48,6 +49,7 @@ export default async function BookPage({
           videoCall={context.videoCall}
           sendsInvite={context.mode === "provider"}
           locale={locale}
+          intakeQuestions={parseIntakeQuestions(context.page.intake_questions)}
           strings={{
             eventTitle: context.title ?? t("eventTitle", { business: context.businessName }),
             durationMinutes: t("durationMinutes"),
@@ -63,6 +65,7 @@ export default async function BookPage({
             phoneLabel: t("phoneLabel"),
             emailLabel: t("emailLabel"),
             noteLabel: t("noteLabel"),
+            intakePickOne: t("intakePickOne"),
             notifyEarlierLabel: t("notifyEarlierLabel"),
             submitButton: t("submitButton"),
             submitting: t("submitting"),

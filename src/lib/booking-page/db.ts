@@ -8,6 +8,7 @@
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { mintBookingPageToken, parseBookingPageSlug } from "@/lib/booking-page/keys";
+import { parseIntakeQuestions } from "@/lib/booking-page/intake";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -43,6 +44,8 @@ export type BookingPageRow = {
   assignment_mode: string;
   /** The employee a 'fixed' page books; null otherwise. */
   employee_id: string | null;
+  /** Owner-defined intake questions (see booking-page/intake.ts); [] = none. */
+  intake_questions: unknown;
   created_at: string;
   updated_at: string;
 };
@@ -52,7 +55,7 @@ const ALL_COLUMNS =
   "max_advance_days,buffer_minutes,max_daily_bookings,require_staff_on_shift," +
   "description,waitlist_enabled,waitlist_offer_ttl_minutes,slug,title," +
   "send_confirmation_email,reminders_enabled,reminder_email_hours,reminder_sms_hours," +
-  "assignment_mode,employee_id," +
+  "assignment_mode,employee_id,intake_questions," +
   "created_at,updated_at";
 
 /** Resolve a page by its public token. Enabled pages only. */
@@ -122,6 +125,8 @@ export type BookingPageSettingsPatch = {
   assignmentMode?: string;
   /** Required by 'fixed'; null clears it. */
   employeeId?: string | null;
+  /** Full replacement of the question list; validated before writing. */
+  intakeQuestions?: unknown;
   /** Vanity URL slug; null/blank clears back to the token-only URL. */
   slug?: string | null;
   /** Public event title; null/blank restores the localized default. */
@@ -215,6 +220,9 @@ function validatePatch(patch: BookingPageSettingsPatch): void {
   ) {
     throw new BookingPageValidationError("Unknown assignment mode");
   }
+  if (patch.intakeQuestions !== undefined && !Array.isArray(patch.intakeQuestions)) {
+    throw new BookingPageValidationError("Questions must be a list");
+  }
   for (const [value, label] of [
     [patch.reminderEmailHours, "Email reminder"],
     [patch.reminderSmsHours, "Text reminder"]
@@ -268,7 +276,12 @@ function patchColumns(patch: BookingPageSettingsPatch): Record<string, unknown> 
       ? {}
       : { reminder_sms_hours: patch.reminderSmsHours }),
     ...(patch.assignmentMode === undefined ? {} : { assignment_mode: patch.assignmentMode }),
-    ...(patch.employeeId === undefined ? {} : { employee_id: patch.employeeId })
+    ...(patch.employeeId === undefined ? {} : { employee_id: patch.employeeId }),
+    // Stored NORMALIZED (parsed and re-serialized), never raw: the public
+    // page trusts this column's shape.
+    ...(patch.intakeQuestions === undefined
+      ? {}
+      : { intake_questions: parseIntakeQuestions(patch.intakeQuestions) })
   };
 }
 
@@ -581,6 +594,8 @@ export async function stampAttendeeContact(
     name?: string | null;
     /** Who holds it, for a round-robin or per-employee page. */
     assigneeMemberId?: string | null;
+    /** The visitor's intake answers, when the page asks questions. */
+    intakeAnswers?: Record<string, string | string[]> | null;
   },
   client?: SupabaseClient
 ): Promise<boolean> {
@@ -594,6 +609,7 @@ export async function stampAttendeeContact(
       ...(contact.assigneeMemberId === undefined
         ? {}
         : { assignee_member_id: contact.assigneeMemberId }),
+      ...(contact.intakeAnswers ? { intake_answers: contact.intakeAnswers } : {}),
       ...(email ? { attendee_email: email } : {}),
       ...(name ? { attendee_name: name } : {})
     })

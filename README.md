@@ -863,11 +863,22 @@ engine's roster evaluators), and the upcoming-bookings list.
   showing no times, and a booking that cannot be assigned (nobody on shift by
   the time it lands) is recorded unassigned and logged: the visitor already
   holds the time, so a bookkeeping gap never becomes a lost appointment.
+- **Intake questions** (`src/lib/booking-page/intake.ts`): up to five
+  owner-defined questions in the white-glove questionnaire's vocabulary
+  (choice, multi, text, textarea), answered inside the booking form. Two
+  validators at two trust levels: the OWNER's stored list is normalized
+  leniently (junk questions are dropped, never fatal, so settings rot cannot
+  take the public page down), the VISITOR's answers are checked strictly
+  (required answered, choices from the offered options, all lengths capped)
+  and a miss refuses BEFORE any slot claim. Answers to questions that no
+  longer exist are discarded, not refused: the owner may have edited the
+  page under an open form. Answers travel with the appointment: the provider
+  event's notes, and structured `intake_answers` on the ledger row.
 - Vagaro/Calendly-resolved tenants deliberately do NOT get the page (Vagaro
   has its own booking site; link-mode Calendly cannot book on the invitee's
   behalf); the Bookings page explains this and calendar resolution order is
   untouched. Deliberate v1 exclusions: round robin / pick-a-person,
-  routing forms, custom questions, payments, embeds.
+  routing forms, payments, embeds.
 
 ## Cancellation waitlist ("I'll let you know if a spot opens")
 

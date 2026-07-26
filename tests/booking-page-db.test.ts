@@ -704,11 +704,12 @@ describe("reminder settings and attendee contact", () => {
       BIZ,
       "phone:+14805550100",
       "2026-07-27T16:00:00Z",
-      { name: "Liz", assigneeMemberId: "m-ana" },
+      { name: "Liz", assigneeMemberId: "m-ana", intakeAnswers: { project: "A" } },
       client
     );
     expect(calls.find((c) => c.method === "update")?.args[0]).toMatchObject({
-      assignee_member_id: "m-ana"
+      assignee_member_id: "m-ana",
+      intake_answers: { project: "A" }
     });
   });
 
@@ -759,6 +760,37 @@ describe("reminder settings and attendee contact", () => {
     mockClientFactory.mockResolvedValue(client);
     await stampAttendeeContact(BIZ, "k", "2026-07-27T16:00:00Z", { email: "a@b.co" });
     expect(mockClientFactory).toHaveBeenCalled();
+  });
+});
+
+describe("intake question settings", () => {
+  it("refuses a non-list and stores the NORMALIZED question set", async () => {
+    const { client } = fakeDb([{ data: ROW, error: null }]);
+    await expect(
+      upsertBookingPage(BIZ, { intakeQuestions: "not-a-list" }, client)
+    ).rejects.toThrow(/Questions must be a list/);
+
+    const { client: writing, calls } = fakeDb([
+      { data: ROW, error: null },
+      { data: ROW, error: null }
+    ]);
+    await upsertBookingPage(
+      BIZ,
+      {
+        intakeQuestions: [
+          { id: "project", label: " Project? ", type: "choice", options: ["A", "B"], required: true },
+          { id: "junk!", label: "dropped", type: "text", required: false }
+        ]
+      },
+      writing
+    );
+    // Parsed and re-serialized, never raw: the public page trusts this
+    // column's shape.
+    expect(calls.find((c) => c.method === "update")?.args[0]).toMatchObject({
+      intake_questions: [
+        { id: "project", label: "Project?", type: "choice", options: ["A", "B"], required: true }
+      ]
+    });
   });
 });
 

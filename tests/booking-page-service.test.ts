@@ -141,6 +141,7 @@ const PAGE = {
   reminder_sms_hours: 2,
   assignment_mode: "any",
   employee_id: null,
+  intake_questions: [],
   slug: null as string | null,
   title: null as string | null,
   created_at: "2026-01-01T00:00:00Z",
@@ -934,6 +935,47 @@ describe("submitPublicBooking", () => {
     // No roster read and no tiebreak write at all on the unassigned path.
     expect(mockAssigneeCounts).not.toHaveBeenCalled();
     expect(mockMarkOffered).not.toHaveBeenCalled();
+  });
+
+  it("refuses a submission missing a required intake answer BEFORE any claim", async () => {
+    mockPage.mockResolvedValue({
+      ...PAGE,
+      intake_questions: [
+        { id: "project", label: "Project?", type: "choice", options: ["A", "B"], required: true }
+      ]
+    });
+    expect(await submitPublicBooking(TOKEN, VALID)).toEqual({
+      ok: false,
+      detail: "missing_answers"
+    });
+    expect(mockSlotClaim).not.toHaveBeenCalled();
+    expect(mockBook).not.toHaveBeenCalled();
+  });
+
+  it("carries the intake answers into the event notes and onto the booking row", async () => {
+    mockPage.mockResolvedValue({
+      ...PAGE,
+      intake_questions: [
+        { id: "project", label: "Project?", type: "choice", options: ["A", "B"], required: true }
+      ]
+    });
+    expect(
+      (await submitPublicBooking(TOKEN, { ...VALID, intakeAnswers: { project: "A" } })).ok
+    ).toBe(true);
+    // The person taking the call reads the answers on the event itself.
+    expect(mockBook).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ notes: expect.stringContaining("Project?: A") }),
+      expect.anything(),
+      expect.anything()
+    );
+    // And the row keeps the structured answers for the dashboard.
+    expect(mockStampContact).toHaveBeenCalledWith(
+      BIZ,
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ intakeAnswers: { project: "A" } })
+    );
   });
 
   it("drops the manage link rather than the booking when the stamp does not land", async () => {
