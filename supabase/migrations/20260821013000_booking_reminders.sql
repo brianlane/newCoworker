@@ -32,12 +32,18 @@ alter table public.calendar_booking_dedupe
   -- otherwise be unreachable by email.
   add column if not exists attendee_email text,
   -- Attendee display name, for the greeting.
-  add column if not exists attendee_name text;
+  add column if not exists attendee_name text,
+  -- Where the booking came from. Reminders are a booking-page feature, and
+  -- their attendees are the only ones who opted into them: AI, voice, and
+  -- synced provider appointments must never be swept. Deliberately NOT
+  -- inferred from manage_token, so a booking whose manage-link stamp failed
+  -- still gets its reminders.
+  add column if not exists booking_source text;
 
--- The sweep scans upcoming bookings with a reminder still owed.
+-- The sweep scans upcoming page bookings with a reminder still owed.
 create index if not exists idx_calendar_booking_dedupe_upcoming_reminders
   on public.calendar_booking_dedupe (start_at)
-  where event_id is not null;
+  where event_id is not null and booking_source is not null;
 
 -- grants: none (columns and indexes on existing tables that already grant
 -- service_role; no new objects are created here).

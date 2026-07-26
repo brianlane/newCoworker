@@ -528,13 +528,21 @@ export async function deleteManagedBooking(
   if (error) throw new Error(`deleteManagedBooking: ${error.message}`);
 }
 
+/** Marks a ledger row as having come from the public booking page. */
+export const BOOKING_PAGE_SOURCE = "booking_page";
+
 /**
- * Record the attendee's email and display name on the booking row.
+ * Record who the booking is for, and that it came from the public page.
  *
- * The ledger's `attendee_key` is phone-first, so an email-reachable booking
- * would otherwise be unreachable by email at reminder time. Matched the same
- * way the manage-token stamp is (business, attendee, start); best-effort by
- * contract, the booking is already durable.
+ * Two jobs, one write, because reminders need both: the ledger's
+ * `attendee_key` is phone-first (so an email-reachable booking would be
+ * unreachable by email), and the sweep must be able to tell page bookings
+ * from AI, voice, and synced appointments whose attendees never opted into
+ * reminders. The provenance is deliberately NOT inferred from the manage
+ * token, so a booking whose manage-link stamp failed still gets reminded.
+ *
+ * Matched the same way the manage-token stamp is (business, attendee,
+ * start), and answers whether a row actually matched.
  */
 export async function stampAttendeeContact(
   businessId: string,
@@ -545,11 +553,11 @@ export async function stampAttendeeContact(
 ): Promise<boolean> {
   const email = contact.email?.trim() || null;
   const name = contact.name?.trim() || null;
-  if (!email && !name) return false;
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("calendar_booking_dedupe")
     .update({
+      booking_source: BOOKING_PAGE_SOURCE,
       ...(email ? { attendee_email: email } : {}),
       ...(name ? { attendee_name: name } : {})
     })

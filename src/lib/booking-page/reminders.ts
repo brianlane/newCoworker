@@ -14,7 +14,11 @@
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getBusiness } from "@/lib/db/businesses";
-import { getBookingPageForBusiness, type BookingPageRow } from "@/lib/booking-page/db";
+import {
+  BOOKING_PAGE_SOURCE,
+  getBookingPageForBusiness,
+  type BookingPageRow
+} from "@/lib/booking-page/db";
 import { buildBookingConfirmationEmail } from "@/lib/email/templates/booking-confirmation";
 import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
@@ -117,11 +121,11 @@ async function upcomingBookings(db: SupabaseClient, nowMs: number): Promise<Remi
     .from("calendar_booking_dedupe")
     .select(COLUMNS)
     .not("event_id", "is", null)
-    // Public-page bookings ONLY. Every page booking gets a manage token, and
-    // nothing else does, so this is what keeps page reminders away from AI,
-    // voice, and synced provider appointments (whose attendees never opted
-    // into them).
-    .not("manage_token", "is", null)
+    // Public-page bookings ONLY: their attendees are the ones who opted into
+    // reminders, unlike AI, voice, and synced provider appointments. Keyed
+    // on the provenance stamp rather than the manage token, so a booking
+    // whose manage-link stamp failed still gets reminded.
+    .eq("booking_source", BOOKING_PAGE_SOURCE)
     .gte("start_at", new Date(nowMs).toISOString())
     .lt("start_at", new Date(nowMs + REMINDER_SCAN_HOURS * 60 * 60 * 1000).toISOString())
     .order("start_at", { ascending: true })

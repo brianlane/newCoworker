@@ -844,8 +844,12 @@ engine's roster evaluators), and the upcoming-bookings list.
   reminder be missed than doubled. A missed exact moment still sends while
   the appointment is in the future, since a late reminder beats none. Texts
   ride the STOP-list gate and the metered Telnyx path like every other
-  customer-facing send. Entry point `/api/internal/booking-reminder-sweep`,
-  kicked ~1/min by the ai-flow-worker tick.
+  customer-facing send, and both follow the contact's stored language. Scope
+  is keyed on a `booking_source` stamp rather than the manage token, so page
+  bookings are the only ones swept (AI, voice, and synced appointments never
+  opted in) and a booking whose manage-link stamp failed is still reminded.
+  Entry point `/api/internal/booking-reminder-sweep`, kicked ~1/min by the
+  ai-flow-worker tick.
 - Vagaro/Calendly-resolved tenants deliberately do NOT get the page (Vagaro
   has its own booking site; link-mode Calendly cannot book on the invitee's
   behalf); the Bookings page explains this and calendar resolution order is

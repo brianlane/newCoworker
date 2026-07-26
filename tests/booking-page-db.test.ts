@@ -670,19 +670,29 @@ describe("reminder settings and attendee contact", () => {
       client
     );
     expect(calls.find((c) => c.method === "update")?.args[0]).toEqual({
+      // The provenance rides the same write, so reminders can tell page
+      // bookings from AI, voice, and synced appointments.
+      booking_source: "booking_page",
       attendee_email: "Liz@Example.com",
       attendee_name: "Liz"
     });
   });
 
-  it("writes nothing when there is nothing to stamp, and throws on failure", async () => {
-    const { client, calls } = fakeDb([{ error: null }]);
+  it("still stamps provenance with no contact details, and throws on failure", async () => {
+    // A phone-only booking has nothing to write but the provenance, and
+    // without it the sweep would never see the booking at all.
+    const { client, calls } = fakeDb([{ data: [{ id: "row-1" }], error: null }]);
     await stampAttendeeContact(BIZ, "k", "2026-07-27T16:00:00Z", { email: "  ", name: null }, client);
-    expect(calls.some((c) => c.method === "update")).toBe(false);
+    expect(calls.find((c) => c.method === "update")?.args[0]).toEqual({
+      booking_source: "booking_page"
+    });
 
-    const { client: partial, calls: partialCalls } = fakeDb([{ error: null }]);
+    const { client: partial, calls: partialCalls } = fakeDb([
+      { data: [{ id: "row-1" }], error: null }
+    ]);
     await stampAttendeeContact(BIZ, "k", "2026-07-27T16:00:00Z", { name: "Liz" }, partial);
     expect(partialCalls.find((c) => c.method === "update")?.args[0]).toEqual({
+      booking_source: "booking_page",
       attendee_name: "Liz"
     });
 

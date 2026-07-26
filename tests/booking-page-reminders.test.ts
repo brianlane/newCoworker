@@ -8,7 +8,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }));
 vi.mock("@/lib/db/businesses", () => ({ getBusiness: vi.fn() }));
-vi.mock("@/lib/booking-page/db", () => ({ getBookingPageForBusiness: vi.fn() }));
+vi.mock("@/lib/booking-page/db", () => ({
+  getBookingPageForBusiness: vi.fn(),
+  BOOKING_PAGE_SOURCE: "booking_page"
+}));
 vi.mock("@/lib/email/owner-mailbox", () => ({ sendFromOwnerMailbox: vi.fn() }));
 vi.mock("@/lib/db/email-log", () => ({ recordOutboundAssistantEmail: vi.fn() }));
 vi.mock("@/lib/telnyx/messaging", () => ({
@@ -206,7 +209,9 @@ describe("sweepBookingReminders", () => {
     const builder = from.mock.results[0].value as Record<string, ReturnType<typeof vi.fn>>;
     // The manage token is what marks a public-page booking; nothing else
     // has one.
-    expect(builder.not.mock.calls).toContainEqual(["manage_token", "is", null]);
+    // Keyed on the provenance stamp, not the manage token: a booking whose
+    // manage-link stamp failed must still be reminded.
+    expect(builder.eq.mock.calls).toContainEqual(["booking_source", "booking_page"]);
   });
 
   it("claims both channels without either wiping the other's stamp", async () => {
