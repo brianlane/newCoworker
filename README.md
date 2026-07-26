@@ -1707,6 +1707,143 @@ fails CI if `messages/en.json` and `messages/es.json` ever diverge.
 English URLs and metadata stay canonical. Metadata is translated via
 `generateMetadata` + catalog keys.
 
+## Start every session from the context pack
+
+Almost every session on this repo used to open the same way: read this
+1,700-line README, review the application code, review the last two weeks of
+conversations, skim the last two weeks of pull requests. That is the same
+orientation re-derived from scratch every time, paid for in tokens, arriving
+at the same answer. It is generated once instead, mechanically:
+
+```bash
+tsx scripts/context-pack.ts        # writes docs/CONTEXT-PACK.md, read-only, a few seconds
+```
+
+The pack carries a repo map, a line-numbered index of every section in this
+README (so "read the README" becomes "open the two sections this task needs"),
+the last 14 days of pull requests, the last 14 days of agent sessions with the
+shared opening boilerplate stripped and the PRs each one touched, and a fleet
+snapshot with every tenant's full business id, tier, DID, and flow counts.
+Read it first, then open only the raw sources the task actually needs.
+
+The output is **gitignored and generated**: never hand-edit it, and
+regenerate when the header timestamp is more than a day old. It is derived
+from the local Cursor transcript archive and live tenant rows, neither of
+which belongs in git. `--days N` widens the window, `--no-fleet` skips the
+Supabase queries, `--out -` prints to stdout.
+
+The pack orients, it does not replace reading. Go to the source when you are
+changing code, when the task names a tenant (`docs/tenants/<slug>.md` first,
+then the live rows), when the task depends on a contract documented here (tool
+parity, KG source coverage, i18n, migration stamps), or when you need what a
+past session actually decided.
+
+**If you find yourself re-deriving something the pack should have told you,
+improve [scripts/context-pack.ts](scripts/context-pack.ts)** rather than going
+back to reading everything by hand. That is the same rule this repo already
+applies to `debug/`, `scripts/oneshot/`, and the CI guards: once a behavior is
+understood and repeatable, capture it in deterministic code. Agents should
+spend tokens on discovery, not on rebuying an answer we already have.
+`tests/context-pack.test.ts` pins the generator's text handling.
+
+### Tenant dossiers (REQUIRED reading before you touch a tenant)
+
+"Review everything about Amy / KYP / Truly" was asked more than ten times in
+two weeks, and each time meant re-deriving the same picture from the chat
+archive and the PR list. That picture is written down now, one file per
+tenant, in [docs/tenants/](docs/tenants/README.md):
+[Amy](docs/tenants/amy-laidlaw-real-estate.md),
+[KYP Ads](docs/tenants/kyp-ads.md),
+[Truly](docs/tenants/truly-insurance.md),
+[HQ](docs/tenants/new-coworker-hq.md), and the
+[HomeLight referral flow](docs/tenants/homelight-flow.md) (a lead source
+inside Amy's account, intricate enough to own a file). Each carries the ids,
+DID, box, roster, flow inventory, the sharp edges already discovered on that
+account, and the one-shots applied to it.
+
+**A PR that changes a tenant's flows, seeds, or one-shots must update that
+tenant's dossier in the same PR.** Same contract as the KG source registry and
+the coworker-tool parity list, and enforced the same way:
+[tests/tenant-dossiers.test.ts](tests/tenant-dossiers.test.ts) fails when a
+tenant-named script in `scripts/oneshot/` has no mention in its dossier, when a
+dossier references a script that no longer exists, or when a phone number that
+is not a known business DID appears in one. A dossier that lies is worse than
+no dossier, because it gets trusted.
+
+Live values (flow enable state, roster, applied one-shots) should still be read
+fresh: `tsx debug/audit-account.ts --business <uuid>`. The dossier carries what
+a query cannot: why the account is shaped this way, and what has already cut us.
+
+### Solve it twice, then capture it
+
+**When an investigation or procedure is performed a second time, the work is
+not done until it exists as something deterministic**: a `debug/` tool, a
+`scripts/oneshot/` script, a CI guard, a section of a dossier, or a rule. An
+agent rediscovering a known answer through fresh reasoning is the most
+expensive way to obtain it, and the least reliable.
+
+This is not a new policy so much as a name for what the repo already does.
+`scripts/new-migration.sh` exists because stamps were being hand-invented.
+The migration stamp guard, the KG source-coverage registry, the coworker-tool
+parity contract, and the no-em-dash test each pin a problem that was solved
+once and must not be re-solved. `debug/` holds ~100 procedures that used to be
+ad-hoc SSH sessions.
+
+Recent captures, and what each replaced:
+
+| Was re-derived every time | Now |
+| --- | --- |
+| Read the README, the transcripts, the PR list to get oriented | `tsx scripts/context-pack.ts` |
+| "Review everything about Amy / KYP / Truly" | [docs/tenants/](docs/tenants/README.md) |
+| "What is this tenant's posture, is anything broken?" | `tsx debug/audit-account.ts --business <uuid>` |
+| "They say they never got the text" | `tsx debug/trace-sms.ts --to +1…` |
+
+Multi-step procedures that are judgment, not code, are captured as Cursor
+skills under `.cursor/skills/` (`e2e-bug-hunt`, `dependabot-triage`,
+`oneshot-patch`). `.cursor/` is gitignored, so those are local to the laptop;
+anything that must survive a fresh clone belongs in `debug/`, `docs/`, or this
+README instead.
+
+### The same rule, applied to model spend
+
+Tenant-facing AI should also stop paying to re-derive answers it already has.
+The platform keeps the two ledgers needed to see where that happens, and
+`debug/repeat-cognition.ts` reads them:
+
+```bash
+tsx debug/repeat-cognition.ts --days 30        # read-only, no model calls
+```
+
+It reports repeated `business_knowledge_lookup` questions from
+`kg_retrieval_events` (normalized and grouped, with whether the answer was
+identical every time) and Gemini spend per surface from `gemini_spend_daily`,
+highest first. A surface with many calls and low output variance is a
+candidate for **deterministic replacement, not a cheaper model**. The template
+is the bare-acknowledgment suppression in PR #826, which stopped paying to
+generate replies to "ok".
+
+**Measured Jul 2026, and the reason there is no answer cache:** 30 days of
+ledger showed 2 recorded knowledge lookups, zero repeated questions, and
+`$0.05` of `knowledge_lookup` spend across 16 calls. A cache table with
+invalidation would have been real complexity bought against nothing. Revisit
+when the tool reports a stable repeat group in the tens per month, or when
+`knowledge_lookup` spend becomes material; the lookup already assembles its
+full context before calling the model
+([src/lib/knowledge-tools/handlers.ts](src/lib/knowledge-tools/handlers.ts)),
+so hashing that context is an exact invalidation key when the day comes.
+Measuring first is the point of the rule, not an exception to it.
+
+**Promotion path for white-glove work.** When a tenant-specific one-shot
+proves out and the next tenant will want it, promote it rather than rewriting
+it: engine behavior belongs in `src/lib/ai-flows/`, and an installable starter
+belongs in [src/lib/ai-flows/templates.ts](src/lib/ai-flows/templates.ts) (the
+curated, code-defined catalog, distinct from `ai_flow_library`, which is
+aggregated from real tenant flows and pruned hourly). Precedents already
+shipped this way: `route_to_team` broadcast offers, the booking precheck, the
+bad-phone report, and per-employee lead availability all began as one
+tenant's problem. The second tenant asking for something is the signal to
+promote it; the third is overdue.
+
 ## All work and code modifications must follow this flow
 
 For any changes use a worktree and never stop to ask for permission to continue always continue with your work by using this flow: Branch -> PR -> babysit CI + Bugbot to green -> merge (per PR merge policy). Then after the successful merge do the post-merge steps below, return back to main -> **clean up the worktree** (mandatory, see below).

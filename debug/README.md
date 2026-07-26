@@ -130,8 +130,18 @@ production secrets, root SSH, and tenant PII all meet.
 
 ## Scripts
 
+> **Start here for a recurring question.** Two investigations came up so often
+> they were promoted out of chat and into tools: `audit-account.ts` ("what is
+> this tenant's posture, and is anything quietly broken?") and `trace-sms.ts`
+> ("they say they never got the text"). Both are read-only. If you find
+> yourself running the same sequence of queries a second time, that is the
+> signal to add a script here rather than re-derive it again.
+
 | Script | What it does |
 | --- | --- |
+| `audit-account.ts` | **One tenant's posture in one command**, replacing the dozen-query walk this used to take. Identity (ids, DID, box, roster, dossier pointer), every flow with enable state and step count, recent AiFlow runs bucketed by status with their errors, inbound/outbound volume and dead-lettered jobs, `system_logs` warnings/errors grouped by event, and Gemini spend by surface. `tsx debug/audit-account.ts --business <uuid> [--hours 72] [--json]`; `--list` prints every tenant's id. Read-only, Supabase only (no SSH). |
+| `repeat-cognition.ts` | **Where are we paying a model to re-derive an answer we already have?** Reads two ledgers: repeated `business_knowledge_lookup` questions from `kg_retrieval_events` (normalized and grouped, reporting whether the answer was identical every time, so an unstable group is correctly ruled out as a cache candidate), and Gemini spend per surface from `gemini_spend_daily`, highest first. A high-call, low-variance surface is a candidate for deterministic replacement rather than a cheaper model (template: PR #826). `tsx debug/repeat-cognition.ts [--business <uuid>] [--days 30] [--min-repeats 2] [--json]`. Read-only, makes no model calls. |
+| `trace-sms.ts` | **"They say they never got the text."** Merges `sms_outbound_log`, `sms_inbound_jobs` (with the assistant reply and job status), and the **Telnyx carrier verdict per message** into one timeline for a single number. The carrier column is the point: it is the only thing that separates "we never sent it" from "we sent it and the carrier dropped it". `tsx debug/trace-sms.ts --to +1… [--business <uuid>] [--since 72h] [--no-carrier] [--json]`. Accepts any pasted number format. Read-only. |
 | `update-all-vps.ts` | **Fleet rollout.** Updates the chat-worker on **every** active VPS to the latest `origin/main`. `--concurrency=N` to fan out, `--dry-run` to list targets. Exits non-zero if any box fails. |
 | `deploy-worker.ts` | Same worker update for a **single** tenant: `tsx debug/deploy-worker.ts <businessId>`. |
 | `smoke-rule.ts` | End-to-end check of owner-rule memory capture: enqueues a rule, waits for the worker, then polls `memory_md` until the rule lands. Capture is silent + async (background queue after the job is `done`, no reply confirmation), so this polls past `done`. |
