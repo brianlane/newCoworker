@@ -61,7 +61,11 @@ const DASHBOARD_NAME_MAP: Record<string, string[] | null> = {
   // INLINE-ONLY for the same reason: "stop texting X" is an owner decision
   // about the coworker's own behavior; a customer-facing agent must not be
   // able to mute (or re-enable) threads.
-  set_contact_reply_mode: null
+  set_contact_reply_mode: null,
+  // INLINE-ONLY, and the sharpest case of the rule: the roster decides who
+  // receives leads. A customer talking to the texting coworker must never be
+  // able to add themselves to it, or take a real teammate off it.
+  manage_employee: null
 };
 
 const WEBCHAT_CANONICAL = [

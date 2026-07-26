@@ -1021,6 +1021,80 @@ worker, real Postgres, real Telnyx hop). Rows filed before the fix are cleaned
 by `scripts/oneshot/fix-staff-contact-rows.ts`, which deletes only while the
 row still looks like the untouched artifact.
 
+### Per-employee lead availability (three flags on the roster row)
+
+Being ON the roster and TAKING LEADS IN ROTATION used to be the same bit, and
+they are not the same decision. The gap (Amy Laidlaw, Jul 20 2026): routing her
+HomeLight referrals to Amy AND Dave simultaneously required Amy on
+`ai_flow_team_members`, because broadcast claims are matched by roster phone.
+Roster membership is global, so that one change also entered the owner into the
+round-robin rotation of every unpinned `route_to_team` step in the tenant.
+
+`ai_flow_team_members` carries three independent flags, all default TRUE, one
+per way the engine can choose a recipient:
+
+| Flag | Employees page | Gates |
+|---|---|---|
+| `routing_enabled` | Leads in rotation | `pickNextAgent` round robin, `lead_auto_assign` (same pick), `preferContactOwner`, and single-agent pins (`agentName` / `agentRef` / `agentNameVar`) |
+| `named_broadcast_enabled` | Group offers that name them | `route_to_team` broadcast with an explicit `agentNames` list |
+| `team_broadcast_enabled` | Whole-team offers | `broadcastAll`, today the team-first human handoff |
+
+**A pin does not beat the flag.** A step pinned to a rotation-off member falls
+through to the owner fallback with the existing `ai_flow_pinned_agent_missing` /
+`ai_flow_no_agent_available` shape (the message names the opt-out so the owner
+knows which switch to flip), exactly how `active = false` and time off already
+behave. One rule, no exception to remember.
+
+Enforcement is a single chokepoint: `filterRosterByAvailability`
+([supabase/functions/_shared/ai_flows/engine.ts](supabase/functions/_shared/ai_flows/engine.ts))
+takes an `AvailabilityMode` and is called by the only three lead-selection
+sites: `resolveBroadcastAgents` (mode from whether the list is `"all"`),
+`pickNextAgent`, and `contactOwnerAgent`. A null/absent flag reads as
+available, so pre-migration rows and any query that forgot the columns behave
+exactly as before.
+
+**Not gated, deliberately.** Teammate hand-off SENDS (`send_sms` `toAgentName` /
+`toAgentNameVar` / a templated phone that resolves to a roster row) are staff
+messaging, not lead distribution, and every staff-detection read
+(`staffNumberCheck`, `businessSelfNames`, `activeRosterMemberByPhone`) stays
+flag-blind, or a rotation-off teammate would start being filed as a
+customer again, which is the defect two sections up. **Owner notices are
+untouched** by all three: keep-for-owner alerts and their nudges, the
+roster-exhausted fallback, and claim notices all resolve
+`business_telnyx_settings.forward_to_e164` and never read the roster at all.
+
+Editable on the Employees page (per member, under Edit), through the CSV
+import/export (`lead_rotation`, `named_group_offers`, `whole_team_offers`), and
+by asking the coworker (see `manage_employee` below). Live on Amy Laidlaw:
+rotation off, named group offers on, whole-team offers off
+(`scripts/oneshot/set-amy-roster-availability.ts`, ledger-recorded), which
+restores her pre-broadcast lead distribution while keeping the HomeLight offer.
+Pinned by `tests/worker-integration/roster-lead-availability.itest.ts`.
+
+### Roster changes by asking (`manage_employee`)
+
+Roster edits happen away from a laptop ("Sandy starts today, her cell is 602
+555 0134"), so the roster is editable by the coworker: add, update (name,
+number, email, hours), deactivate, reactivate, and set the three availability
+flags. One core, `src/lib/employees/manage-tool.ts`, over the same db helpers
+the Employees page uses, so the AI path and the page cannot drift.
+
+Surface posture is `flag_contact_spam`'s, and this is the sharpest case for it:
+**inline-only on verified owner surfaces** (dashboard chat at the
+`manage_settings` bar, the owner-SMS operator turn) plus the MCP connector
+(`list_employees` / `create_employee` / `update_employee`, same role bar).
+It is **never seeded to the Rowboat texting coworker**, because that agent
+talks to customers, and a customer must not be able to talk their way onto the
+roster that receives leads (encoded in the `DASHBOARD_NAME_MAP` exemption in
+`tests/agent-tool-seed-parity.test.ts`). Off on the email coworker and webchat.
+
+The write itself is strict where guessing is expensive: a name that matches two
+teammates returns both with their numbers instead of picking one, an off-roster
+number never falls back to name matching, and a duplicate number names the
+person who already holds it. The tool description makes the model read a new
+teammate's number back digit by digit, and confirm before deactivating anyone
+or turning rotation off.
+
 ## AiFlow webhook trigger (Meta Lead Ads etc.)
 
 AiFlows can start from an inbound webhook: `POST /api/public/v1/flow-events`
@@ -1421,9 +1495,12 @@ test.** Checklist for a new tool:
 
 Deliberate exemptions (also encoded in the parity test): dashboard
 `send_email` is fulfilled by the chat-worker email adapter, `memory_capture`
-is Rowboat's `owner_append_business_memory`, and the **webchat surface is a
-frozen 5-tool allowlist** (anonymous internet — never add side-effect tools
-there).
+is Rowboat's `owner_append_business_memory`, the owner-only inline tools
+(`update_notification_preferences`, `flag_contact_spam`,
+`set_contact_reply_mode`, `manage_employee`) are declared ONLY on
+owner-verified surfaces because the Rowboat paths carry no caller identity,
+and the **webchat surface is a frozen 5-tool allowlist** (anonymous internet,
+so never add side-effect tools there).
 
 **Owner email is a prompt BLOCK, not a declared tool**, on both inline owner
 surfaces: the model emits an `EMAIL_SEND` sentinel block (taught by

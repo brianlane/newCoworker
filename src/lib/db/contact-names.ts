@@ -23,6 +23,58 @@ export type ContactName = {
 };
 
 /**
+ * The business's own owner numbers, coerced to E.164: the Safe Mode forward
+ * cell, the notification alert phone, and the onboarding phone.
+ *
+ * Exported so surfaces that need to RECOGNIZE the owner (the Employees page
+ * badges the owner's own roster row) read the same three sources this
+ * resolver does, instead of growing a fourth opinion about which number is
+ * the owner's. Returns [] on a read error: not labeling the owner is a
+ * cosmetic miss, and no caller should fail over it.
+ */
+export async function businessOwnerNumbers(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<string[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const [bizRes, telnyxRes, prefsRes] = await Promise.all([
+    db.from("businesses").select("phone").eq("id", businessId).maybeSingle(),
+    db
+      .from("business_telnyx_settings")
+      .select("forward_to_e164")
+      .eq("business_id", businessId)
+      .maybeSingle(),
+    db
+      .from("notification_preferences")
+      .select("phone_number")
+      .eq("business_id", businessId)
+      .maybeSingle()
+  ]);
+  return ownerNumbersFrom({
+    phone: (bizRes.data as { phone?: string | null } | null)?.phone,
+    forwardToE164: (telnyxRes.data as { forward_to_e164?: string | null } | null)?.forward_to_e164,
+    alertPhone: (prefsRes.data as { phone_number?: string | null } | null)?.phone_number
+  });
+}
+
+/**
+ * coerceOwnerPhoneToE164 over the three owner-typed free-text fields
+ * ("6026951142", "(602) 805-3377"), the same coercion the DID-assign path
+ * uses for the onboarding phone. Pure, so both callers share one ordering.
+ */
+function ownerNumbersFrom(input: {
+  phone?: string | null;
+  forwardToE164?: string | null;
+  alertPhone?: string | null;
+}): string[] {
+  return [
+    coerceOwnerPhoneToE164(input.forwardToE164),
+    coerceOwnerPhoneToE164(input.alertPhone),
+    coerceOwnerPhoneToE164(input.phone)
+  ].filter((n): n is string => Boolean(n));
+}
+
+/**
  * Map E.164 → display name for every number we can identify. Numbers with
  * no roster entry and no named customer profile are simply absent from the
  * result — callers fall back to showing the raw number.
@@ -131,14 +183,11 @@ export async function resolveContactNames(
   const telnyx = telnyxRes.data as { forward_to_e164?: string | null } | null;
   const prefs = prefsRes.data as { phone_number?: string | null } | null;
   const ownerName = biz?.owner_name?.trim() || "Owner";
-  // coerceOwnerPhoneToE164: these are owner-typed free-text fields
-  // ("6026951142", "(602) 805-3377") — same coercion the DID-assign path
-  // uses for the onboarding phone.
-  const ownerNumbers = [
-    coerceOwnerPhoneToE164(telnyx?.forward_to_e164),
-    coerceOwnerPhoneToE164(prefs?.phone_number),
-    coerceOwnerPhoneToE164(biz?.phone)
-  ];
+  const ownerNumbers = ownerNumbersFrom({
+    phone: biz?.phone,
+    forwardToE164: telnyx?.forward_to_e164,
+    alertPhone: prefs?.phone_number
+  });
   for (const num of ownerNumbers) {
     if (!num || !wanted.has(num)) continue;
     const labeled = manualLabel.get(num);

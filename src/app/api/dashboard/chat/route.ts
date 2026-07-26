@@ -751,7 +751,8 @@ export async function POST(request: Request) {
       generateImageEnabled,
       notificationPrefsToolEnabled,
       flagSpamToolEnabled,
-      replyModeToolEnabled
+      replyModeToolEnabled,
+      manageEmployeeToolEnabled
     ] = await Promise.all([
       isAgentToolEnabled(body.businessId, "dashboard", "send_sms"),
       isAgentToolEnabled(body.businessId, "dashboard", "send_whatsapp"),
@@ -765,7 +766,8 @@ export async function POST(request: Request) {
       isAgentToolEnabled(body.businessId, "dashboard", "generate_image"),
       isAgentToolEnabled(body.businessId, "dashboard", "update_notification_preferences"),
       isAgentToolEnabled(body.businessId, "dashboard", "flag_contact_spam"),
-      isAgentToolEnabled(body.businessId, "dashboard", "set_contact_reply_mode")
+      isAgentToolEnabled(body.businessId, "dashboard", "set_contact_reply_mode"),
+      isAgentToolEnabled(body.businessId, "dashboard", "manage_employee")
     ]);
     // Settings mutation needs more than chat access: the tool is declared
     // only when THIS caller passes manage_settings (manager+, the same
@@ -809,7 +811,12 @@ export async function POST(request: Request) {
       flag_contact_spam: flagSpamToolEnabled && canManageSettings,
       // Reversible thread management — same operate_messages bar as the
       // dashboard thread's own reply-mode toggle, so chat access suffices.
-      set_contact_reply_mode: replyModeToolEnabled
+      set_contact_reply_mode: replyModeToolEnabled,
+      // Roster CRUD decides who receives leads, so it sits at the same
+      // manage_settings bar the Employees page enforces: a staff-role
+      // teammate with chat access must not be able to reroute the team's
+      // leads (or add themselves).
+      manage_employee: manageEmployeeToolEnabled && canManageSettings
     };
 
     // Two message arrays:

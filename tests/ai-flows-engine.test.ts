@@ -1363,9 +1363,9 @@ describe("filterRosterByAvailability", () => {
 
   it("hard-skips members on time off (supersedes everything, including pinned routing upstream)", () => {
     const roster = [member("1"), member("2")];
-    expect(filterRosterByAvailability(roster, new Set(["1"]), monMorning).map((m) => m.id)).toEqual([
-      "2"
-    ]);
+    expect(
+      filterRosterByAvailability(roster, new Set(["1"]), monMorning, "rotation").map((m) => m.id)
+    ).toEqual(["2"]);
   });
 
   it("hard-skips members outside their weekly schedule; no schedule = always available", () => {
@@ -1374,17 +1374,16 @@ describe("filterRosterByAvailability", () => {
       member("off-today", { weekly_schedule: { tue: [["09:00", "17:00"]] } }),
       member("no-schedule")
     ];
-    expect(filterRosterByAvailability(roster, new Set(), monMorning).map((m) => m.id)).toEqual([
-      "works-now",
-      "no-schedule"
-    ]);
+    expect(
+      filterRosterByAvailability(roster, new Set(), monMorning, "rotation").map((m) => m.id)
+    ).toEqual(["works-now", "no-schedule"]);
   });
 
   it("treats an unparseable schedule as unset (owner typo must not bench an employee)", () => {
     const roster = [member("garbled", { weekly_schedule: { mon: [["9am", "5pm"]] } })];
-    expect(filterRosterByAvailability(roster, new Set(), monMorning).map((m) => m.id)).toEqual([
-      "garbled"
-    ]);
+    expect(
+      filterRosterByAvailability(roster, new Set(), monMorning, "rotation").map((m) => m.id)
+    ).toEqual(["garbled"]);
   });
 
   it("keeps a night-shift member available during their overnight window", () => {
@@ -1394,13 +1393,13 @@ describe("filterRosterByAvailability", () => {
     const tueNight = { isoDate: "2026-06-09", weekday: "tue" as const, minutes: 22 * 60 };
     const wedSmallHours = { isoDate: "2026-06-10", weekday: "wed" as const, minutes: 60 };
     const tueMorning = { isoDate: "2026-06-09", weekday: "tue" as const, minutes: 600 };
-    expect(filterRosterByAvailability(roster, new Set(), tueNight).map((m) => m.id)).toEqual([
-      "night"
-    ]);
-    expect(filterRosterByAvailability(roster, new Set(), wedSmallHours).map((m) => m.id)).toEqual([
-      "night"
-    ]);
-    expect(filterRosterByAvailability(roster, new Set(), tueMorning)).toEqual([]);
+    expect(
+      filterRosterByAvailability(roster, new Set(), tueNight, "rotation").map((m) => m.id)
+    ).toEqual(["night"]);
+    expect(
+      filterRosterByAvailability(roster, new Set(), wedSmallHours, "rotation").map((m) => m.id)
+    ).toEqual(["night"]);
+    expect(filterRosterByAvailability(roster, new Set(), tueMorning, "rotation")).toEqual([]);
   });
 
   it("floats members inside a preferred window to the front, preserving rotation order otherwise", () => {
@@ -1409,11 +1408,9 @@ describe("filterRosterByAvailability", () => {
       member("prefers-now", { preferred_windows: { mon: [["09:00", "12:00"]] } }),
       member("prefers-later", { preferred_windows: { mon: [["18:00", "20:00"]] } })
     ];
-    expect(filterRosterByAvailability(roster, new Set(), monMorning).map((m) => m.id)).toEqual([
-      "prefers-now",
-      "first-in-rotation",
-      "prefers-later"
-    ]);
+    expect(
+      filterRosterByAvailability(roster, new Set(), monMorning, "rotation").map((m) => m.id)
+    ).toEqual(["prefers-now", "first-in-rotation", "prefers-later"]);
   });
 
   it("returns an empty array when everyone is out (worker falls back to the owner)", () => {
@@ -1421,7 +1418,48 @@ describe("filterRosterByAvailability", () => {
       member("away", { weekly_schedule: { tue: [["09:00", "17:00"]] } }),
       member("off")
     ];
-    expect(filterRosterByAvailability(roster, new Set(["off"]), monMorning)).toEqual([]);
+    expect(filterRosterByAvailability(roster, new Set(["off"]), monMorning, "rotation")).toEqual(
+      []
+    );
+  });
+
+  // Per-mode opt-outs (Amy Laidlaw, Jul 2026): the owner is on the roster so
+  // her named HomeLight broadcast can reach her, but she does not want
+  // rotation leads or the whole-team handoff.
+  it("applies only the opted-out mode's flag, leaving the other modes alone", () => {
+    const roster = [
+      member("amy", {
+        routing_enabled: false,
+        named_broadcast_enabled: true,
+        team_broadcast_enabled: false
+      }),
+      member("dave")
+    ];
+    const ids = (mode: "rotation" | "named_broadcast" | "team_broadcast") =>
+      filterRosterByAvailability(roster, new Set(), monMorning, mode).map((m) => m.id);
+    expect(ids("rotation")).toEqual(["dave"]);
+    expect(ids("named_broadcast")).toEqual(["amy", "dave"]);
+    expect(ids("team_broadcast")).toEqual(["dave"]);
+  });
+
+  it("treats absent and null flags as available (pre-migration rows, unselected columns)", () => {
+    const roster = [member("legacy"), member("explicit-null", { routing_enabled: null })];
+    expect(
+      filterRosterByAvailability(roster, new Set(), monMorning, "rotation").map((m) => m.id)
+    ).toEqual(["legacy", "explicit-null"]);
+  });
+
+  it("keeps an opted-out member out even when they would be the preferred pick", () => {
+    const roster = [
+      member("prefers-now-but-off", {
+        preferred_windows: { mon: [["09:00", "12:00"]] },
+        routing_enabled: false
+      }),
+      member("available")
+    ];
+    expect(
+      filterRosterByAvailability(roster, new Set(), monMorning, "rotation").map((m) => m.id)
+    ).toEqual(["available"]);
   });
 });
 

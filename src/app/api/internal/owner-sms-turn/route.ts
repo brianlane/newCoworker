@@ -116,6 +116,7 @@ export async function POST(request: Request) {
       notificationPrefsToolEnabled,
       flagSpamToolEnabled,
       replyModeToolEnabled,
+      manageEmployeeToolEnabled,
       emailToolEnabled,
       integrationsLine,
       businessContextBlock
@@ -133,6 +134,7 @@ export async function POST(request: Request) {
       isAgentToolEnabled(body.businessId, "dashboard", "update_notification_preferences"),
       isAgentToolEnabled(body.businessId, "dashboard", "flag_contact_spam"),
       isAgentToolEnabled(body.businessId, "dashboard", "set_contact_reply_mode"),
+      isAgentToolEnabled(body.businessId, "dashboard", "manage_employee"),
       isAgentToolEnabled(body.businessId, "dashboard", "send_email"),
       buildIntegrationsStatusLine(body.businessId),
       buildBusinessContextBlock(body.businessId)
@@ -244,7 +246,11 @@ export async function POST(request: Request) {
         flag_contact_spam: flagSpamToolEnabled,
         // "stop texting chris please" (KYP Jul 24 2026) belongs HERE, not
         // on the spam block — the reversible sibling.
-        set_contact_reply_mode: replyModeToolEnabled
+        set_contact_reply_mode: replyModeToolEnabled,
+        // Roster changes happen away from a laptop ("Sandy starts today,
+        // her cell is..."), and the texter is the verified owner, who
+        // always passes manage_settings.
+        manage_employee: manageEmployeeToolEnabled
       }
     });
 

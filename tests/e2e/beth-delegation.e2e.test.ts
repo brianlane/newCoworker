@@ -83,7 +83,8 @@ const ALL_GATES: ActionToolGates = {
   generate_image: false,
   update_notification_preferences: true,
   flag_contact_spam: true,
-  set_contact_reply_mode: true
+  set_contact_reply_mode: true,
+  manage_employee: true
 };
 const TOOLS = actionToolDeclarations(ALL_GATES);
 

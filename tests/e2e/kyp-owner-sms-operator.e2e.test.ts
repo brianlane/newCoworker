@@ -83,7 +83,9 @@ const ALL_GATES: ActionToolGates = {
   // exactly this surface's request shape).
   flag_contact_spam: true,
   // Also production-declared here ("stop texting chris please", Jul 24).
-  set_contact_reply_mode: true
+  set_contact_reply_mode: true,
+  // Roster changes happen away from a laptop ("Sandy starts today").
+  manage_employee: true
 };
 const TOOLS = actionToolDeclarations(ALL_GATES);
 

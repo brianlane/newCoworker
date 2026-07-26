@@ -228,6 +228,14 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
           "When you ask your coworker (in chat or by text) to stop texting a specific contact, it turns off its automatic replies to them and stops their pending automations — you can still text them yourself, and asking to resume turns replies back on.",
         defaultEnabled: true,
         configurable: true
+      },
+      {
+        toolKey: "manage_employee",
+        label: "Manage your employee roster",
+        description:
+          "Add a teammate, change their number, hours, or name, deactivate them, and turn their lead availability on or off when you ask in chat (or by texting your coworker). Managers and owners only; every change is also visible and reversible on the Employees page.",
+        defaultEnabled: true,
+        configurable: true
       }
     ]
   },

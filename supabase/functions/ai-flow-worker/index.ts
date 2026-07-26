@@ -7427,10 +7427,33 @@ async function routeBroadcastStep(
 const BROADCAST_ALL_MAX_RECIPIENTS = 10;
 
 /**
+ * Columns every lead-SELECTION read needs: identity, the working-info rules,
+ * and the three per-mode availability opt-outs. Shared by the broadcast and
+ * rotation queries because a missing column reads as `undefined`, which
+ * filterRosterByAvailability treats as available: a silent way to ship the
+ * feature switched off.
+ */
+const ROSTER_SELECTION_COLUMNS =
+  "id, name, phone_e164, weekly_schedule, preferred_windows, " +
+  "routing_enabled, named_broadcast_enabled, team_broadcast_enabled";
+
+type RosterSelectionRow = {
+  id: string;
+  name: string;
+  phone_e164: string;
+  weekly_schedule?: unknown;
+  preferred_windows?: unknown;
+  routing_enabled?: boolean | null;
+  named_broadcast_enabled?: boolean | null;
+  team_broadcast_enabled?: boolean | null;
+};
+
+/**
  * Resolve a broadcast recipient list against the ACTIVE roster. Names match
  * trimmed/case-insensitively (the same rule as the agentName pin); a member
- * on time off or outside their weekly schedule today is skipped (same hard
- * skip pickNextAgent applies); an unknown name is logged and skipped — the
+ * on time off, outside their weekly schedule today, or opted out of this
+ * broadcast mode is skipped (the same hard skips pickNextAgent applies); an
+ * unknown name is logged and skipped, because the
  * roster is authoritative, never guess. The lead's own number is never
  * offered, and duplicate phones collapse. Preserves the flow's listed order.
  * `"all"` (broadcastAll) takes the ENTIRE available roster instead, in
@@ -7447,7 +7470,7 @@ async function resolveBroadcastAgents(
 ): Promise<RoutedAgent[]> {
   const { data: rosterRows, error: rosterErr } = await supabase
     .from("ai_flow_team_members")
-    .select("id, name, phone_e164, weekly_schedule, preferred_windows")
+    .select(ROSTER_SELECTION_COLUMNS)
     .eq("business_id", run.business_id)
     .eq("active", true)
     // Rotation order (matters for the broadcastAll clamp): least recently
@@ -7458,13 +7481,7 @@ async function resolveBroadcastAgents(
   if (rosterErr) {
     throw new Error(`route_to_team: roster query failed: ${rosterErr.message}`);
   }
-  const roster = (rosterRows ?? []) as {
-    id: string;
-    name: string;
-    phone_e164: string;
-    weekly_schedule?: unknown;
-    preferred_windows?: unknown;
-  }[];
+  const roster = (rosterRows ?? []) as RosterSelectionRow[];
   const [tzRes, offRes] = await Promise.all([
     supabase.from("businesses").select("timezone").eq("id", run.business_id).maybeSingle(),
     supabase
@@ -7482,7 +7499,16 @@ async function resolveBroadcastAgents(
       .filter((t) => t.starts_on <= clock.isoDate && t.ends_on >= clock.isoDate)
       .map((t) => t.member_id)
   );
-  const available = filterRosterByAvailability(roster, offIds, clock);
+  // Which opt-out applies: a flow that NAMES people reads
+  // named_broadcast_enabled, a whole-roster fan-out reads
+  // team_broadcast_enabled. Amy Laidlaw is the shape this separates: on for
+  // her named HomeLight offer, off for the team-first handoff.
+  const available = filterRosterByAvailability(
+    roster,
+    offIds,
+    clock,
+    names === "all" ? "team_broadcast" : "named_broadcast"
+  );
   const leadPhone = leadPhoneE164(scope);
   const out: RoutedAgent[] = [];
   const pickedIds: string[] = [];
@@ -7752,9 +7778,10 @@ function leadContactPhone(scope: Scope): string | null {
  * The roster member who OWNS this lead's contact (contacts.owner_employee_id),
  * resolved to {name, phone}, or null (no phone / no contact / unowned /
  * owner inactive / owner unavailable). Alias-aware like getCustomerMemory.
- * Applies the SAME working-info rules as pickNextAgent — time off covering
- * today and out-of-schedule members are hard skips — so ownership preference
- * never routes around an owner's time off; the normal cascade takes over.
+ * Applies the SAME rules as pickNextAgent (time off covering today,
+ * out-of-schedule members, and members opted out of rotation are hard skips),
+ * so ownership preference never routes around an owner's time off or their
+ * standing "no rotation leads"; the normal cascade takes over.
  * Best-effort: a lookup error logs and returns null — ownership preference
  * must never stall routing.
  */
@@ -7776,21 +7803,15 @@ async function contactOwnerAgent(
     if (!ownerId) return null;
     const { data: member } = await supabase
       .from("ai_flow_team_members")
-      .select("id, name, phone_e164, active, weekly_schedule, preferred_windows")
+      .select(`${ROSTER_SELECTION_COLUMNS}, active`)
       .eq("business_id", businessId)
       .eq("id", ownerId)
       .maybeSingle();
-    const m = member as {
-      id?: string;
-      name?: string;
-      phone_e164?: string;
-      active?: boolean;
-      weekly_schedule?: unknown;
-      preferred_windows?: unknown;
-    } | null;
+    const m = member as (RosterSelectionRow & { active?: boolean }) | null;
     if (!m?.id || !m.active || !m.phone_e164?.trim()) return null;
-    // Availability (business-local): the owner on time off today or outside
-    // their weekly schedule is skipped, same as in pickNextAgent.
+    // Availability (business-local): the owner on time off today, outside
+    // their weekly schedule, or opted out of rotation is skipped, same as in
+    // pickNextAgent.
     const [tzRes, offRes] = await Promise.all([
       supabase.from("businesses").select("timezone").eq("id", businessId).maybeSingle(),
       supabase
@@ -7813,11 +7834,15 @@ async function contactOwnerAgent(
           name: m.name ?? "",
           phone_e164: m.phone_e164.trim(),
           weekly_schedule: m.weekly_schedule,
-          preferred_windows: m.preferred_windows
+          preferred_windows: m.preferred_windows,
+          routing_enabled: m.routing_enabled,
+          named_broadcast_enabled: m.named_broadcast_enabled,
+          team_broadcast_enabled: m.team_broadcast_enabled
         }
       ],
       offIds,
-      clock
+      clock,
+      "rotation"
     );
     if (available.length === 0) return null;
     return { name: m.name ?? "", phone: m.phone_e164.trim() };
@@ -7912,7 +7937,7 @@ async function pickNextAgent(
   // --- Deterministic roster path -------------------------------------------
   const { data: rosterRows, error: rosterErr } = await supabase
     .from("ai_flow_team_members")
-    .select("id, name, phone_e164, weekly_schedule, preferred_windows")
+    .select(ROSTER_SELECTION_COLUMNS)
     .eq("business_id", run.business_id)
     .eq("active", true)
     .order("last_offered_at", { ascending: true, nullsFirst: true })
@@ -7920,13 +7945,7 @@ async function pickNextAgent(
   if (rosterErr) {
     throw new Error(`route_to_team: roster query failed: ${rosterErr.message}`);
   }
-  let roster = (rosterRows ?? []) as {
-    id: string;
-    name: string;
-    phone_e164: string;
-    weekly_schedule?: unknown;
-    preferred_windows?: unknown;
-  }[];
+  let roster = (rosterRows ?? []) as RosterSelectionRow[];
   // Pinned routing (step.agentName): this lead type goes to ONE named member
   // (e.g. every seller lead straight to the broker). Restrict the roster to
   // that member; if they're missing/renamed — or there is no roster at all —
@@ -7972,16 +7991,36 @@ async function pickNextAgent(
         .filter((t) => t.starts_on <= clock.isoDate && t.ends_on >= clock.isoDate)
         .map((t) => t.member_id)
     );
-    const availableRoster = filterRosterByAvailability(roster, offIds, clock);
+    const availableRoster = filterRosterByAvailability(roster, offIds, clock, "rotation");
     if (availableRoster.length === 0) {
+      // Two different causes end up here and the owner fixes them in
+      // different places, so name the one that applies: a standing "no
+      // rotation leads" opt-out is a switch on the Employees page, while
+      // time off and schedules resolve themselves. A PINNED member who
+      // opted out lands here too (the pin filter ran first), which is how
+      // the opt-out stops pinned leads without deactivating anyone.
+      const optedOut = roster.filter((r) => r.routing_enabled === false).length;
+      const allOptedOut = optedOut === roster.length;
+      const reason = pinnedAgentName
+        ? allOptedOut
+          ? `pinned agent "${pinnedAgentName}" has lead rotation turned off`
+          : `pinned agent "${pinnedAgentName}" is on time off, outside their schedule, or has lead rotation turned off`
+        : allOptedOut
+          ? "every roster member has lead rotation turned off"
+          : "every roster member is on time off, outside their schedule, or has lead rotation turned off";
       await systemLog(supabase, {
         businessId: run.business_id,
         source: "aiflow",
         level: "warn",
         event: "ai_flow_no_agent_available",
-        message:
-          "route_to_team: every roster member is on time off or outside their schedule; falling back to the owner",
-        payload: { run_id: run.id, flow_id: run.flow_id, roster_size: roster.length }
+        message: `route_to_team: ${reason}; falling back to the owner`,
+        payload: {
+          run_id: run.id,
+          flow_id: run.flow_id,
+          roster_size: roster.length,
+          rotation_opted_out: optedOut,
+          ...(pinnedAgentName ? { agent_name: pinnedAgentName } : {})
+        }
       });
       return null;
     }

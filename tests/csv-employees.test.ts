@@ -86,7 +86,11 @@ describe("exportEmployeesCsv", () => {
     const { db, log } = makeDb([
       {
         data: [
-          memberRow(),
+          memberRow({
+            routing_enabled: false,
+            named_broadcast_enabled: false,
+            team_broadcast_enabled: false
+          }),
           memberRow({
             id: "m-2",
             name: "Sam",
@@ -120,6 +124,19 @@ describe("exportEmployeesCsv", () => {
       weekly_schedule: "",
       preferred_times: "sat 10:00-14:00",
       last_offered_at: ""
+    });
+    // Availability round-trips as true/false, and a pre-migration row (null
+    // over PostgREST) exports as the column default rather than a blank cell
+    // that would re-import as "keep".
+    expect(parsed.rows[0]).toMatchObject({
+      lead_rotation: "false",
+      named_group_offers: "false",
+      whole_team_offers: "false"
+    });
+    expect(parsed.rows[1]).toMatchObject({
+      lead_rotation: "true",
+      named_group_offers: "true",
+      whole_team_offers: "true"
     });
     expect(log[0].table).toBe("ai_flow_team_members");
     expect(log[0].calls.find((c) => c.name === "eq")?.args).toEqual(["business_id", BIZ]);
@@ -173,7 +190,10 @@ describe("employeesCsvTemplate", () => {
       "email",
       "active",
       "weekly_schedule",
-      "preferred_times"
+      "preferred_times",
+      "lead_rotation",
+      "named_group_offers",
+      "whole_team_offers"
     ]);
     expect(parsed.rows[0].weekly_schedule).toBe("mon-fri 09:00-17:00");
   });
@@ -249,6 +269,37 @@ describe("importEmployeesCsv", () => {
       weekly_schedule: null,
       preferred_windows: null
     });
+  });
+
+  it("imports the availability columns, and a blank cell keeps what is stored", async () => {
+    const { db, log } = makeDb([
+      { data: { id: "m-1" }, error: null },
+      { data: null, error: null }
+    ]);
+    const summary = await importEmployeesCsv(
+      BIZ,
+      "name,phone,lead_rotation,named_group_offers,whole_team_offers\n" +
+        "Amy Laidlaw,+16026951142,false,true,",
+      db
+    );
+    expect(summary.updated).toBe(1);
+    const update = log[1].calls.find((c) => c.name === "update");
+    expect(update?.args[0]).toEqual({
+      name: "Amy Laidlaw",
+      routing_enabled: false,
+      named_broadcast_enabled: true
+    });
+  });
+
+  it("errors the row on a garbled availability cell instead of guessing", async () => {
+    const { db } = makeDb([]);
+    const summary = await importEmployeesCsv(
+      BIZ,
+      "name,phone,lead_rotation\nAmy,+16026951142,sometimes",
+      db
+    );
+    expect(summary).toMatchObject({ created: 0, updated: 0, skipped: 1 });
+    expect(summary.errors[0].message).toBe('lead_rotation: "sometimes" is not true/false.');
   });
 
   it("updates an existing member by phone, leaving blank cells untouched", async () => {

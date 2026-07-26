@@ -59,6 +59,9 @@ function memberRow(overrides: Partial<TeamMemberRow> = {}): TeamMemberRow {
     last_offered_at: null,
     weekly_schedule: null,
     preferred_windows: null,
+    routing_enabled: true,
+    named_broadcast_enabled: true,
+    team_broadcast_enabled: true,
     created_at: "2026-06-01T00:00:00Z",
     ...overrides
   };
@@ -202,6 +205,39 @@ describe("createTeamMember", () => {
     });
   });
 
+  it("writes only the availability flags that were supplied (the rest keep column defaults)", async () => {
+    const { client, fromCalls } = makeClient({ data: memberRow(), error: null });
+    await createTeamMember(
+      BIZ,
+      {
+        name: "Amy Laidlaw",
+        phoneE164: PHONE,
+        routingEnabled: false,
+        namedBroadcastEnabled: true,
+        teamBroadcastEnabled: false
+      },
+      client
+    );
+    expect(fromCalls[0]!.calls.find((c) => c.name === "insert")?.args[0]).toMatchObject({
+      routing_enabled: false,
+      named_broadcast_enabled: true,
+      team_broadcast_enabled: false
+    });
+
+    const { client: partial, fromCalls: partialCalls } = makeClient({
+      data: memberRow(),
+      error: null
+    });
+    await createTeamMember(BIZ, { name: "Dave", phoneE164: PHONE, teamBroadcastEnabled: false }, partial);
+    const insert = partialCalls[0]!.calls.find((c) => c.name === "insert")?.args[0] as Record<
+      string,
+      unknown
+    >;
+    expect(insert.team_broadcast_enabled).toBe(false);
+    expect(insert).not.toHaveProperty("routing_enabled");
+    expect(insert).not.toHaveProperty("named_broadcast_enabled");
+  });
+
   it("throws on PostgREST error (e.g. duplicate phone)", async () => {
     const { client } = makeClient({ data: null, error: { message: "duplicate key" } });
     await expect(createTeamMember(BIZ, { name: "G", phoneE164: PHONE }, client)).rejects.toThrow(
@@ -253,6 +289,26 @@ describe("updateTeamMember", () => {
       email: null,
       weekly_schedule: null,
       preferred_windows: { tue: [["10:00", "12:00"]] }
+    });
+  });
+
+  it("patches the availability flags independently, leaving unmentioned ones alone", async () => {
+    const { client, fromCalls } = makeClient({ data: memberRow(), error: null });
+    await updateTeamMember(BIZ, MEMBER_ID, { namedBroadcastEnabled: true }, client);
+    expect(fromCalls[0]!.calls.find((c) => c.name === "update")?.args[0]).toEqual({
+      named_broadcast_enabled: true
+    });
+
+    const { client: both, fromCalls: bothCalls } = makeClient({ data: memberRow(), error: null });
+    await updateTeamMember(
+      BIZ,
+      MEMBER_ID,
+      { routingEnabled: false, teamBroadcastEnabled: false },
+      both
+    );
+    expect(bothCalls[0]!.calls.find((c) => c.name === "update")?.args[0]).toEqual({
+      routing_enabled: false,
+      team_broadcast_enabled: false
     });
   });
 

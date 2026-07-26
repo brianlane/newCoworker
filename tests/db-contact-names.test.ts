@@ -5,7 +5,7 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn(async () => defaultClientSpy())
 }));
 
-import { resolveContactNames } from "@/lib/db/contact-names";
+import { businessOwnerNumbers, resolveContactNames } from "@/lib/db/contact-names";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -464,5 +464,45 @@ describe("resolveContactNames", () => {
     await expect(
       resolveContactNames(BIZ, ["+1555"], db as unknown as Client)
     ).rejects.toThrow(/resolveContactNames: settings rls/);
+  });
+});
+
+/**
+ * The owner-number list on its own, for surfaces that need to RECOGNIZE the
+ * owner rather than name a number: the Employees page badges the owner's own
+ * roster row (an owner who works leads is on her own roster). It reads the
+ * same three sources in the same order the resolver does, so the two can
+ * never disagree about which number is the owner's.
+ */
+describe("businessOwnerNumbers", () => {
+  it("coerces all three owner-typed fields to E.164, forward number first", async () => {
+    const { db } = makeDb({
+      businesses: { data: { phone: "(602) 805-3377" }, error: null },
+      business_telnyx_settings: { data: { forward_to_e164: "6026951142" }, error: null },
+      notification_preferences: { data: { phone_number: "+14805551234" }, error: null }
+    });
+    const out = await businessOwnerNumbers(BIZ, db as unknown as Client);
+    expect(out).toEqual(["+16026951142", "+14805551234", "+16028053377"]);
+  });
+
+  it("drops blanks and unusable values rather than emitting junk", async () => {
+    const { db } = makeDb({
+      businesses: { data: { phone: null }, error: null },
+      business_telnyx_settings: { data: { forward_to_e164: "+16026951142" }, error: null },
+      notification_preferences: { data: { phone_number: "not a phone" }, error: null }
+    });
+    expect(await businessOwnerNumbers(BIZ, db as unknown as Client)).toEqual(["+16026951142"]);
+  });
+
+  it("answers an empty list for a business with none of the three set", async () => {
+    const { db } = makeDb({});
+    expect(await businessOwnerNumbers(BIZ, db as unknown as Client)).toEqual([]);
+  });
+
+  it("falls back to createSupabaseServiceClient when no client is injected", async () => {
+    const { db } = makeDb({});
+    defaultClientSpy.mockReturnValue(db);
+    await businessOwnerNumbers(BIZ);
+    expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
   });
 });

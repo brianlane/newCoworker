@@ -1,6 +1,7 @@
 "use client";
 
 import { useState } from "react";
+import { useTranslations } from "next-intl";
 import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import type {
@@ -30,9 +31,33 @@ type Props = {
   initialTimeOff: TimeOffRow[];
   initialStats: Record<string, EmployeeRoutingStats>;
   initialSharedCalendar: SharedCalendarStatus;
+  /** The business's own owner numbers, for badging the owner's roster row. */
+  ownerNumbers: string[];
 };
 
 type ApiError = { error?: { message?: string } };
+
+/**
+ * The three lead-availability flags, in the order the edit panel shows them.
+ * `key` names the translation keys, `field` is the PATCH body key.
+ */
+const AVAILABILITY_TOGGLES = [
+  { key: "rotation", field: "routingEnabled" },
+  { key: "named", field: "namedBroadcastEnabled" },
+  { key: "team", field: "teamBroadcastEnabled" }
+] as const;
+
+type AvailabilityKey = (typeof AVAILABILITY_TOGGLES)[number]["key"];
+type Availability = Record<AvailabilityKey, boolean>;
+
+/** A row's flags, reading null/undefined (pre-migration) as on. */
+function availabilityOf(member: TeamMemberRow): Availability {
+  return {
+    rotation: member.routing_enabled !== false,
+    named: member.named_broadcast_enabled !== false,
+    team: member.team_broadcast_enabled !== false
+  };
+}
 
 async function readError(res: Response): Promise<string> {
   const json = (await res.json().catch(() => null)) as ApiError | null;
@@ -282,6 +307,7 @@ export function EmployeesManager(props: Props) {
             member={m}
             timeOff={timeOff.filter((t) => t.member_id === m.id)}
             stats={stats[m.phone_e164] ?? null}
+            isOwner={props.ownerNumbers.includes(m.phone_e164)}
             qs={qs}
             onChanged={refresh}
             onError={setErrorMsg}
@@ -296,6 +322,7 @@ function EmployeeCard({
   member,
   timeOff,
   stats,
+  isOwner,
   qs,
   onChanged,
   onError
@@ -303,10 +330,12 @@ function EmployeeCard({
   member: TeamMemberRow;
   timeOff: TimeOffRow[];
   stats: EmployeeRoutingStats | null;
+  isOwner: boolean;
   qs: string;
   onChanged: () => Promise<void>;
   onError: (msg: string | null) => void;
 }) {
+  const t = useTranslations("dashboard.employeeAvailability");
   const [editing, setEditing] = useState(false);
   const [busy, setBusy] = useState(false);
 
@@ -318,6 +347,7 @@ function EmployeeCard({
   const [preferredText, setPreferredText] = useState(
     formatScheduleText(member.preferred_windows)
   );
+  const [availability, setAvailability] = useState<Availability>(availabilityOf(member));
 
   // Time-off add form
   const [tooStart, setTooStart] = useState(todayIso());
@@ -353,7 +383,10 @@ function EmployeeCard({
         phoneE164: phone.trim(),
         email: email.trim() ? email.trim() : null,
         scheduleText,
-        preferredText
+        preferredText,
+        ...Object.fromEntries(
+          AVAILABILITY_TOGGLES.map((toggle) => [toggle.field, availability[toggle.key]])
+        )
       })
     });
     if (ok) setEditing(false);
@@ -398,6 +431,14 @@ function EmployeeCard({
   const outNow = timeOff.some((t) => t.starts_on <= today && t.ends_on >= today);
   const upcoming = timeOff.filter((t) => t.ends_on >= today);
 
+  // Collapsed rows stay quiet in the default all-on case and name the
+  // exceptions otherwise, so "why didn't Gabby get that lead" is answerable
+  // without opening the panel.
+  const stored = availabilityOf(member);
+  const offLabels = AVAILABILITY_TOGGLES.filter((toggle) => !stored[toggle.key]).map((toggle) =>
+    t(`${toggle.key}Short`)
+  );
+
   return (
     <Card>
       <div className="flex items-start justify-between gap-3">
@@ -407,6 +448,11 @@ function EmployeeCard({
             <span className="text-xs text-parchment/50 font-mono">{member.phone_e164}</span>
             {member.email && (
               <span className="text-xs text-parchment/50">{member.email}</span>
+            )}
+            {isOwner && (
+              <span className="text-[10px] uppercase tracking-wide text-claw-green bg-claw-green/10 rounded px-1.5 py-0.5">
+                {t("ownerBadge")}
+              </span>
             )}
             {!member.active && (
               <span className="text-[10px] uppercase tracking-wide text-parchment/60 bg-parchment/10 rounded px-1.5 py-0.5">
@@ -431,13 +477,20 @@ function EmployeeCard({
             )}
           </p>
           {!editing && (
-            <p className="text-[11px] text-parchment/40 mt-0.5">
-              {formatScheduleText(member.weekly_schedule)
-                ? `Works ${formatScheduleText(member.weekly_schedule)}`
-                : "No schedule; always available"}
-              {formatScheduleText(member.preferred_windows) &&
-                ` • prefers ${formatScheduleText(member.preferred_windows)}`}
-            </p>
+            <>
+              <p className="text-[11px] text-parchment/40 mt-0.5">
+                {formatScheduleText(member.weekly_schedule)
+                  ? `Works ${formatScheduleText(member.weekly_schedule)}`
+                  : "No schedule; always available"}
+                {formatScheduleText(member.preferred_windows) &&
+                  ` • prefers ${formatScheduleText(member.preferred_windows)}`}
+              </p>
+              {offLabels.length > 0 && (
+                <p className="text-[11px] text-spark-orange/80 mt-0.5">
+                  {t("summaryOff", { list: offLabels.join(", ") })}
+                </p>
+              )}
+            </>
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
@@ -517,6 +570,38 @@ function EmployeeCard({
               className="mt-1 w-full bg-deep-ink/60 border border-parchment/15 rounded-lg px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 font-mono focus:outline-none focus:border-claw-green/60"
             />
           </label>
+
+          <fieldset className="border-t border-parchment/10 pt-3">
+            <legend className="text-xs font-semibold text-parchment">
+              {t("sectionTitle")}
+            </legend>
+            <p className="text-[11px] text-parchment/40 mb-2">{t("sectionHelp")}</p>
+            <div className="space-y-2">
+              {AVAILABILITY_TOGGLES.map((toggle) => (
+                <label
+                  key={toggle.key}
+                  className="flex items-start gap-2 text-xs text-parchment/80"
+                >
+                  <input
+                    type="checkbox"
+                    className="mt-0.5"
+                    checked={availability[toggle.key]}
+                    disabled={busy}
+                    onChange={(e) =>
+                      setAvailability((prev) => ({ ...prev, [toggle.key]: e.target.checked }))
+                    }
+                  />
+                  <span>
+                    {t(`${toggle.key}Label`)}
+                    <span className="block text-[11px] text-parchment/40 mt-0.5">
+                      {t(`${toggle.key}Help`)}
+                    </span>
+                  </span>
+                </label>
+              ))}
+            </div>
+          </fieldset>
+
           <div className="flex items-center gap-3">
             <button
               type="button"
