@@ -260,6 +260,7 @@ export type VoiceToolsConfig = {
 export {
   systemInstructionForBusiness,
   translatorModeCue,
+  translatorModeEndCue,
   VOICE_CUSTOMER_MEMORY_MAX_CHARS,
   VOICE_FLOW_CONTEXT_MAX_CHARS,
   VOICE_RECENT_INTERACTIONS_MAX_CHARS,
@@ -269,6 +270,7 @@ export {
 import {
   systemInstructionForBusiness,
   translatorModeCue,
+  translatorModeEndCue,
   type CallerIdentity,
   type VoiceLanguagePrefs
 } from "./system-instruction.js";
@@ -631,6 +633,32 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
    * surface, and is what keeps the media fork attached instead of detaching.
    */
   let translatorActive = false;
+  /**
+   * How interpreting began, which decides whether it can be ENDED mid-call.
+   *
+   * `staff_request`: the AI is on a staff member's own leg and they added the
+   * other party themselves, so when they say the other person is gone the AI
+   * should go back to being their assistant.
+   *
+   * `transfer`: a customer is bridged to a human. Leaving interpreter mode there
+   * would drop the AI back into receptionist behavior in the middle of two
+   * people's conversation, and the customer never consented to that, so this
+   * path has no exit short of hanging up.
+   */
+  let translatorEntry: "transfer" | "staff_request" | null = null;
+  /** Handle for the interpreted-stretch ceiling, so an exit can cancel it. */
+  let translatorCeilingTimer: ReturnType<typeof setTimeout> | null = null;
+  /**
+   * True once the one-shot `sessionMaxMs` teardown has come and gone while
+   * interpreting. That timer returns early rather than firing, so leaving
+   * interpreter mode afterwards would strand an assistant-mode call with no
+   * session cap at all (the interpreter ceiling is cancelled on exit), and open
+   * Live billing until someone hangs up. The exit re-arms from this.
+   */
+  let sessionCapDeferredByTranslator = false;
+  const sessionStartedAtMs = Date.now();
+  /** Grace given back to the colleague when the cap already lapsed mid-interpretation. */
+  const TRANSLATOR_EXIT_GRACE_MS = 90_000;
   const timers: ReturnType<typeof setTimeout>[] = [];
   const downlinkTelemetry: DownlinkTelemetry = {
     droppedFrames: 0,
@@ -796,8 +824,19 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
    */
   const scheduleTranslatorCeiling = (): void => {
     const ceilingMs = readTranslatorCeilingMs();
-    setTimeout(() => {
-      if (ended) return;
+    translatorCeilingTimer = setTimeout(() => {
+      // Cleared when interpreting ENDS mid-call: without this the ceiling would
+      // later detach and tear down a session that had gone back to being an
+      // ordinary assistant call.
+      if (ended || !translatorActive) return;
+      // CLAIM the end synchronously, before any await. clearTimeout cannot stop
+      // a callback already running, so without this a stop_translator_mode
+      // landing during the detach would leave the call detached (no audio) but
+      // never torn down. Claiming means a racing exit simply finds interpreting
+      // already over and takes its no-op path.
+      translatorActive = false;
+      translatorEntry = null;
+      translatorCeilingTimer = null;
       void (async () => {
         emitDiag("voice_bridge_translator_ceiling_reached", { ceiling_ms: ceilingMs });
         console.log("gemini-bridge: translator ceiling reached, leaving the call", {
@@ -1061,7 +1100,11 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   // the call, is a STAFF action. Withholding the declaration from customer
   // callers is the strong gate (the prompt alone would still let the model try
   // it); each handler re-checks the caller as defense in depth.
-  const STAFF_ONLY_TOOLS = new Set(["run_aiflow", "start_translator_mode"]);
+  const STAFF_ONLY_TOOLS = new Set([
+    "run_aiflow",
+    "start_translator_mode",
+    "stop_translator_mode"
+  ]);
   /**
    * Tools handled ON THE BOX rather than proxied to `/api/voice/tools/*`. They
    * are registered separately below because they must NOT depend on
@@ -1069,7 +1112,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
    * app round trip, exactly like `transfer_to_owner` and `end_call`. A box
    * missing that config is degraded, but interpreting still works there.
    */
-  const BRIDGE_LOCAL_TOOLS = new Set(["start_translator_mode"]);
+  const BRIDGE_LOCAL_TOOLS = new Set(["start_translator_mode", "stop_translator_mode"]);
   if (!intake && voiceToolsReady) {
     for (const decl of buildVoiceToolDeclarations()) {
       if (callerIsStaff && STAFF_EXCLUDED_TOOLS.has(decl.name)) continue;
@@ -1083,10 +1126,13 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   // no app-side adapter to answer `tool_disabled`, so withholding the declaration
   // is the enforcement.
   if (!intake && callerIsStaff && opts.translatorOnRequestEnabled) {
-    const translatorDecl = buildVoiceToolDeclarations().find(
-      (d) => d.name === "start_translator_mode"
-    );
-    if (translatorDecl) declarations.push(translatorDecl);
+    // Both halves ship together: Gemini Live cannot add a tool mid-session, so
+    // the way OUT of interpreting has to be declared before it ever starts.
+    for (const decl of buildVoiceToolDeclarations()) {
+      if (decl.name === "start_translator_mode" || decl.name === "stop_translator_mode") {
+        declarations.push(decl);
+      }
+    }
   }
   // `end_call` is available to every persona (receptionist, staff, and intake)
   // whenever the host wired a hangup capability — so the assistant can cleanly
@@ -1427,6 +1473,74 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       // but the declarations stay registered from before the handoff (Gemini
       // Live cannot re-declare mid-session), so refuse them here too.
       if (translatorActive) {
+        // Asking to START interpreting while already interpreting is a no-op,
+        // not a failure. Observed live (Amy's tenant, 2026-07-26): the model
+        // called start_translator_mode three times in ~600ms, and answering the
+        // repeats with the generic "tools are unavailable" error had it
+        // re-announce its readiness twice in a row to the staff member. Confirm
+        // the state it is asking for instead.
+        if (name === "start_translator_mode") {
+          emitDiag("voice_bridge_translator_already_active", {});
+          sendToolResponse(call.id, name, { ok: true, detail: "already interpreting" });
+          continue;
+        }
+        // The way OUT has to survive the blanket refusal, or interpreting could
+        // never end: observed live, a colleague said "they hung up, thanks for
+        // translating" and had it translated into Spanish for someone who had
+        // already left.
+        if (name === "stop_translator_mode") {
+          if (translatorEntry !== "staff_request") {
+            // A warm transfer has a real customer bridged in who never asked to
+            // be handed back to a receptionist mid-conversation.
+            emitDiag("voice_bridge_translator_stop_refused", { entry: translatorEntry });
+            sendToolResponse(call.id, name, {
+              ok: false,
+              detail: "keep interpreting: this call was handed to you as a transfer"
+            });
+            continue;
+          }
+          // Cue FIRST, then flip state, mirroring the entry path. Clearing the
+          // flags before a cue that then throws would report a handback that
+          // never happened: the model would keep interpreting with the ceiling
+          // already cancelled.
+          try {
+            session.sendRealtimeInput({
+              text: translatorModeEndCue({ humanName: opts.callerIdentity?.name })
+            });
+          } catch (err) {
+            console.error("gemini-bridge: translator end cue failed", err);
+            emitDiag("voice_bridge_translator_end_cue_failed", {
+              error: err instanceof Error ? err.message : String(err)
+            });
+            sendToolResponse(call.id, name, {
+              ok: false,
+              detail: "could not stop interpreting: keep relaying for now"
+            });
+            continue;
+          }
+          translatorActive = false;
+          translatorEntry = null;
+          if (translatorCeilingTimer) {
+            clearTimeout(translatorCeilingTimer);
+            translatorCeilingTimer = null;
+          }
+          if (sessionCapDeferredByTranslator) {
+            // The call is back to being an ordinary assistant call, and both of
+            // its bounds are now gone. Re-arm: whatever is left of the original
+            // budget, or a short grace when interpreting outlasted it.
+            sessionCapDeferredByTranslator = false;
+            const remainingMs = opts.sessionMaxMs - (Date.now() - sessionStartedAtMs);
+            const capMs = remainingMs > 0 ? remainingMs : TRANSLATOR_EXIT_GRACE_MS;
+            timers.push(scheduleSessionCapTeardown(capMs));
+            emitDiag("voice_bridge_session_cap_rearmed", { cap_ms: capMs });
+          }
+          emitDiag("voice_bridge_translator_mode_exited", {});
+          console.log("gemini-bridge: translator mode exited", {
+            callControlId: opts.callControlId
+          });
+          sendToolResponse(call.id, name, { ok: true, detail: "back to assistant" });
+          continue;
+        }
         emitDiag("voice_bridge_translator_tool_refused", { name });
         sendToolResponse(call.id, name, {
           ok: false,
@@ -1434,6 +1548,13 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         });
         continue;
       }
+      if (name === "stop_translator_mode") {
+        // Reached only when NOT interpreting (the guard above handles the live
+        // case). Asking to stop something that is not running is a no-op.
+        sendToolResponse(call.id, name, { ok: true, detail: "not interpreting" });
+        continue;
+      }
+
       if (name === "start_translator_mode") {
         // STAFF ONLY, checked here as well as at declaration time: a customer
         // must never be able to silence the receptionist for the rest of a call.
@@ -1487,6 +1608,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
           continue;
         }
         translatorActive = true;
+        translatorEntry = "staff_request";
         emitDiag("voice_bridge_translator_mode_entered", {
           entry: "staff_request",
           other_language: otherLanguage ?? null
@@ -1549,6 +1671,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             // Set BEFORE the cue so the wind-down timers (which check this) can
             // never fire between arming and the cue landing.
             translatorActive = true;
+            translatorEntry = "transfer";
             try {
               session.sendRealtimeInput({
                 text: translatorModeCue({
@@ -1574,6 +1697,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
                 error: err instanceof Error ? err.message : String(err)
               });
               translatorActive = false;
+              translatorEntry = null;
             }
             if (translatorActive) {
               // Hold the session open for the human conversation, then leave
@@ -1808,9 +1932,35 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     }, nudgeAt)
   );
 
+  /**
+   * The session cap's wind-down and teardown. A function declaration so the
+   * translator exit (defined earlier in the file, called later in time) can
+   * re-arm it after the one-shot timer below was consumed mid-interpretation.
+   */
+  function scheduleSessionCapTeardown(delayMs: number): ReturnType<typeof setTimeout> {
+    return setTimeout(() => {
+      if (ended || translatorActive) return;
+      void (async () => {
+        try {
+          session.sendRealtimeInput({ text: finalText });
+          await new Promise((r) => setTimeout(r, 1200));
+        } catch {
+          /* ignore */
+        }
+        await teardown();
+      })();
+    }, delayMs);
+  }
+
   timers.push(
     setTimeout(() => {
-      if (ended || translatorActive) return;
+      if (ended) return;
+      if (translatorActive) {
+        // Consumed: remember so the exit can re-arm rather than leaving the
+        // call uncapped once the interpreter ceiling is also gone.
+        sessionCapDeferredByTranslator = true;
+        return;
+      }
       void (async () => {
         try {
           session.sendRealtimeInput({ text: finalText });
