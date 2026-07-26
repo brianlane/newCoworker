@@ -23,8 +23,14 @@ import {
   cancelCalendarAppointment,
   rescheduleCalendarAppointment
 } from "@/lib/calendar-tools/reschedule";
-import { deleteZoomMeetingForBooking } from "@/lib/zoom/meetings";
+import { deleteZoomMeetingForBooking, updateZoomMeetingForBooking } from "@/lib/zoom/meetings";
 import { offerFreedSlot } from "@/lib/calendar-tools/waitlist-fill";
+import {
+  cancelWaitlistForAttendee,
+  resolveWaitlistAfterBooking
+} from "@/lib/calendar-tools/waitlist-resolve";
+import { claimBookingDedupe, releaseBookingDedupe } from "@/lib/calendar-tools/booking-dedupe";
+import { PUBLIC_SLOT_CLAIM_KEY, listSlotsForBusiness } from "@/lib/booking-page/service";
 import { getBookingPageForBusiness } from "@/lib/booking-page/db";
 import {
   deleteManagedBooking,
@@ -33,7 +39,6 @@ import {
   type ManagedBookingRow
 } from "@/lib/booking-page/db";
 import { parseBookingManageToken } from "@/lib/booking-page/keys";
-import { listSlotsForBusiness } from "@/lib/booking-page/service";
 import { logger } from "@/lib/logger";
 
 /** Platform-mode bookings carry a synthetic event id (no provider event). */
@@ -124,6 +129,15 @@ function attendeeArgs(attendeeKey: string): {
   return {};
 }
 
+/** The same identity in the shape the waitlist helpers take. */
+function waitlistAttendee(attendeeKey: string): { phones: string[]; email: string | null } {
+  const args = attendeeArgs(attendeeKey);
+  return {
+    phones: args.attendeePhone ? [args.attendeePhone] : [],
+    email: args.attendeeEmail?.toLowerCase() ?? null
+  };
+}
+
 export async function cancelManagedBooking(
   rawToken: string
 ): Promise<{ ok: true } | ManageFailure> {
@@ -136,12 +150,18 @@ export async function cancelManagedBooking(
   try {
     if (resolved.platform) {
       // The ledger is the calendar here: dropping the row IS the
-      // cancellation. Zoom cleanup and the waitlist offer mirror what the
-      // provider-mode core does.
+      // cancellation. Everything after it mirrors what the provider-mode
+      // core does, in the same order: Zoom cleanup, drop the canceler's own
+      // live waitlist entries (they are no longer waiting on anything), and
+      // only then offer the freed time to whoever is.
       await deleteManagedBooking(resolved.row.id);
       if (resolved.row.zoom_meeting_id) {
         await deleteZoomMeetingForBooking(resolved.row.business_id, resolved.row.zoom_meeting_id);
       }
+      await cancelWaitlistForAttendee(
+        resolved.row.business_id,
+        waitlistAttendee(resolved.row.attendee_key)
+      );
       await offerFreedSlot(resolved.row.business_id, resolved.row.start_at);
       return { ok: true };
     }
@@ -190,11 +210,42 @@ export async function rescheduleManagedBooking(
     if (!offered) return { ok: false, detail: "slot_taken" };
 
     const endIso = new Date(startMs + resolved.durationMinutes * 60_000).toISOString();
+    const newStartIso = new Date(startMs).toISOString();
     if (resolved.platform) {
-      await moveManagedBooking(resolved.row.id, new Date(startMs).toISOString());
-      // The old time is free now: same waitlist courtesy as a cancellation.
+      // Slot-scoped claim before the write, exactly like the public submit:
+      // the availability read above can be stale, and without this two
+      // people can land on the same start.
+      const claim = await claimBookingDedupe(
+        resolved.row.business_id,
+        PUBLIC_SLOT_CLAIM_KEY,
+        newStartIso
+      );
+      if (claim && claim.kind !== "claimed") return { ok: false, detail: "slot_taken" };
+      try {
+        await moveManagedBooking(resolved.row.id, newStartIso);
+      } catch (err) {
+        if (claim?.kind === "claimed") await releaseBookingDedupe(claim.id);
+        throw err;
+      }
+      // The meeting itself has to move too, or the invitee joins a call
+      // still scheduled at the old time.
+      if (resolved.row.zoom_meeting_id) {
+        await updateZoomMeetingForBooking(
+          resolved.row.business_id,
+          resolved.row.zoom_meeting_id,
+          { startIso: newStartIso, endIso }
+        );
+      }
+      // Same waitlist bookkeeping as a provider reschedule: their own live
+      // entries re-point at what they now hold, then the old time is
+      // offered to whoever is waiting.
+      await resolveWaitlistAfterBooking(
+        resolved.row.business_id,
+        waitlistAttendee(resolved.row.attendee_key),
+        newStartIso
+      );
       await offerFreedSlot(resolved.row.business_id, resolved.row.start_at);
-      return { ok: true, startIso: new Date(startMs).toISOString() };
+      return { ok: true, startIso: newStartIso };
     }
 
     const result = await rescheduleCalendarAppointment(

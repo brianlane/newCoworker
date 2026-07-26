@@ -10,15 +10,29 @@ vi.mock("@/lib/calendar-tools/reschedule", () => ({
   cancelCalendarAppointment: vi.fn(),
   rescheduleCalendarAppointment: vi.fn()
 }));
-vi.mock("@/lib/zoom/meetings", () => ({ deleteZoomMeetingForBooking: vi.fn() }));
+vi.mock("@/lib/zoom/meetings", () => ({
+  deleteZoomMeetingForBooking: vi.fn(),
+  updateZoomMeetingForBooking: vi.fn()
+}));
 vi.mock("@/lib/calendar-tools/waitlist-fill", () => ({ offerFreedSlot: vi.fn() }));
+vi.mock("@/lib/calendar-tools/waitlist-resolve", () => ({
+  cancelWaitlistForAttendee: vi.fn(),
+  resolveWaitlistAfterBooking: vi.fn()
+}));
+vi.mock("@/lib/calendar-tools/booking-dedupe", () => ({
+  claimBookingDedupe: vi.fn(),
+  releaseBookingDedupe: vi.fn()
+}));
 vi.mock("@/lib/booking-page/db", () => ({
   getBookingPageForBusiness: vi.fn(),
   getBookingByManageToken: vi.fn(),
   moveManagedBooking: vi.fn(),
   deleteManagedBooking: vi.fn()
 }));
-vi.mock("@/lib/booking-page/service", () => ({ listSlotsForBusiness: vi.fn() }));
+vi.mock("@/lib/booking-page/service", () => ({
+  listSlotsForBusiness: vi.fn(),
+  PUBLIC_SLOT_CLAIM_KEY: "slot:public-booking-page"
+}));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 
 import {
@@ -31,8 +45,13 @@ import {
   cancelCalendarAppointment,
   rescheduleCalendarAppointment
 } from "@/lib/calendar-tools/reschedule";
-import { deleteZoomMeetingForBooking } from "@/lib/zoom/meetings";
+import { deleteZoomMeetingForBooking, updateZoomMeetingForBooking } from "@/lib/zoom/meetings";
 import { offerFreedSlot } from "@/lib/calendar-tools/waitlist-fill";
+import {
+  cancelWaitlistForAttendee,
+  resolveWaitlistAfterBooking
+} from "@/lib/calendar-tools/waitlist-resolve";
+import { claimBookingDedupe, releaseBookingDedupe } from "@/lib/calendar-tools/booking-dedupe";
 import {
   deleteManagedBooking,
   getBookingByManageToken,
@@ -51,7 +70,12 @@ const mockBusiness = vi.mocked(getBusiness);
 const mockCancelCore = vi.mocked(cancelCalendarAppointment);
 const mockRescheduleCore = vi.mocked(rescheduleCalendarAppointment);
 const mockZoomDelete = vi.mocked(deleteZoomMeetingForBooking);
+const mockZoomUpdate = vi.mocked(updateZoomMeetingForBooking);
 const mockOfferFreed = vi.mocked(offerFreedSlot);
+const mockCancelWaitlist = vi.mocked(cancelWaitlistForAttendee);
+const mockResolveWaitlist = vi.mocked(resolveWaitlistAfterBooking);
+const mockClaim = vi.mocked(claimBookingDedupe);
+const mockRelease = vi.mocked(releaseBookingDedupe);
 const mockRow = vi.mocked(getBookingByManageToken);
 const mockPage = vi.mocked(getBookingPageForBusiness);
 const mockMove = vi.mocked(moveManagedBooking);
@@ -79,7 +103,12 @@ beforeEach(() => {
   mockCancelCore.mockResolvedValue({ ok: true } as never);
   mockRescheduleCore.mockResolvedValue({ ok: true } as never);
   mockZoomDelete.mockResolvedValue(undefined as never);
+  mockZoomUpdate.mockResolvedValue(true);
   mockOfferFreed.mockResolvedValue({ offered: false } as never);
+  mockCancelWaitlist.mockResolvedValue(undefined);
+  mockResolveWaitlist.mockResolvedValue(undefined);
+  mockClaim.mockResolvedValue({ kind: "claimed", id: "claim-1" } as never);
+  mockRelease.mockResolvedValue(undefined);
   mockMove.mockResolvedValue(undefined);
   mockDelete.mockResolvedValue(undefined);
   mockSlots.mockResolvedValue({
@@ -167,6 +196,9 @@ describe("cancelManagedBooking", () => {
     expect(await cancelManagedBooking(TOKEN)).toEqual({ ok: true });
     expect(mockDelete).toHaveBeenCalledWith("row-1");
     expect(mockZoomDelete).toHaveBeenCalledWith(BIZ, "934123");
+    // Their OWN live waitlist entries end with the appointment (parity with
+    // the provider cancel core), and only then is the time offered on.
+    expect(mockCancelWaitlist).toHaveBeenCalledWith(BIZ, { phones: [], email: "liz@x.co" });
     expect(mockOfferFreed).toHaveBeenCalledWith(BIZ, FUTURE);
     expect(mockCancelCore).not.toHaveBeenCalled();
   });
@@ -213,12 +245,67 @@ describe("rescheduleManagedBooking", () => {
     );
   });
 
-  it("platform mode: moves the ledger row and frees the old time to the waitlist", async () => {
-    mockRow.mockResolvedValue(row({ event_id: "platform:abc" }));
+  it("platform mode: claims the slot, moves the row, moves Zoom, and fixes the waitlist", async () => {
+    mockRow.mockResolvedValue(row({ event_id: "platform:abc", zoom_meeting_id: "934123" }));
     const out = await rescheduleManagedBooking(TOKEN, NEW_START);
     expect(out).toEqual({ ok: true, startIso: NEW_START });
+    expect(mockClaim).toHaveBeenCalledWith(BIZ, "slot:public-booking-page", NEW_START);
     expect(mockMove).toHaveBeenCalledWith("row-1", NEW_START);
+    // The meeting has to move too, or the invitee joins a call still
+    // scheduled at the old time.
+    expect(mockZoomUpdate).toHaveBeenCalledWith(BIZ, "934123", {
+      startIso: NEW_START,
+      endIso: new Date(Date.parse(NEW_START) + 30 * 60_000).toISOString()
+    });
+    expect(mockResolveWaitlist).toHaveBeenCalledWith(
+      BIZ,
+      { phones: ["+14805550177"], email: null },
+      NEW_START
+    );
     expect(mockOfferFreed).toHaveBeenCalledWith(BIZ, FUTURE);
+  });
+
+  it("platform mode: refuses when another booker already claimed that start", async () => {
+    // The availability read can be stale; the claim is what actually stops
+    // two people landing on the same slot.
+    mockRow.mockResolvedValue(row({ event_id: "platform:abc" }));
+    mockClaim.mockResolvedValue({ kind: "duplicate" } as never);
+    expect(await rescheduleManagedBooking(TOKEN, NEW_START)).toEqual({
+      ok: false,
+      detail: "slot_taken"
+    });
+    expect(mockMove).not.toHaveBeenCalled();
+  });
+
+  it("platform mode: releases the claim when the move itself fails", async () => {
+    mockRow.mockResolvedValue(row({ event_id: "platform:abc" }));
+    mockMove.mockRejectedValue(new Error("locked"));
+    expect(await rescheduleManagedBooking(TOKEN, NEW_START)).toEqual({
+      ok: false,
+      detail: "change_failed"
+    });
+    expect(mockRelease).toHaveBeenCalledWith("claim-1");
+
+    // A ledger that could not claim has nothing to release on the way out.
+    mockRelease.mockClear();
+    mockClaim.mockResolvedValue(null as never);
+    expect(await rescheduleManagedBooking(TOKEN, NEW_START)).toEqual({
+      ok: false,
+      detail: "change_failed"
+    });
+    expect(mockRelease).not.toHaveBeenCalled();
+  });
+
+  it("platform mode: books on through a ledger that cannot claim, and skips Zoom when there is none", async () => {
+    // Fail-open on a ledger hiccup, matching the booking core's contract.
+    mockRow.mockResolvedValue(row({ event_id: "platform:abc", zoom_meeting_id: null }));
+    mockClaim.mockResolvedValue(null as never);
+    expect(await rescheduleManagedBooking(TOKEN, NEW_START)).toEqual({
+      ok: true,
+      startIso: NEW_START
+    });
+    expect(mockZoomUpdate).not.toHaveBeenCalled();
+    expect(mockRelease).not.toHaveBeenCalled();
   });
 
   it("only accepts a time the page is actually offering right now", async () => {

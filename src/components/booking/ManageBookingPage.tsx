@@ -134,7 +134,16 @@ export function ManageBookingPage({
         });
         const body = await res.json();
         if (!res.ok || !body.ok) {
-          setError(res.status === 409 ? strings.slotTaken : strings.changeFailed);
+          // 409 = someone took that time, 422 = inside the business's
+          // minimum-notice window. Both have their own copy; a generic
+          // failure would leave the visitor guessing.
+          setError(
+            res.status === 409
+              ? strings.slotTaken
+              : res.status === 422
+                ? strings.tooLate
+                : strings.changeFailed
+          );
           // A raced slot means the offer is stale: re-fetch rather than
           // leave the visitor clicking a time that is gone.
           if (res.status === 409) setSlots(null);
@@ -152,7 +161,7 @@ export function ManageBookingPage({
         setBusy(false);
       }
     },
-    [strings.changeFailed, strings.slotTaken, token]
+    [strings.changeFailed, strings.slotTaken, strings.tooLate, token]
   );
 
   const card = "rounded-2xl border border-parchment/15 bg-ink-800/60 p-6";
