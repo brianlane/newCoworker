@@ -46,6 +46,13 @@ export type EmailTurnResult =
   | { ok: false; detail: string };
 
 /**
+ * Wall-clock budget for the model half of one turn. Sized against the poll
+ * route's 60s maxDuration: the reply send (and, on a booking turn, the
+ * calendar writes it already made) has to finish inside what is left.
+ */
+export const EMAIL_TURN_BUDGET_MS = 40_000;
+
+/**
  * The narrow tool set. Every owner-power tool is hard-false here, not
  * merely un-toggled: a prompt-injected email must not be able to text
  * anyone, flag a contact, or run an automation.
@@ -147,7 +154,12 @@ export async function runEmailCoworkerTurn(args: {
       "email",
       "business_knowledge_lookup"
     ),
-    actionToolGates: gates
+    actionToolGates: gates,
+    // MUST leave room under the poll route's 60s maxDuration for the reply
+    // send that follows. Without a budget the engine would happily spend the
+    // whole request on model steps, and the route would die after the
+    // message was already marked seen: no reply, no retry.
+    budgetMs: EMAIL_TURN_BUDGET_MS
   });
 
   if (!inline.ok) {

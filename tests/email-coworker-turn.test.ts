@@ -16,6 +16,7 @@ vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), info: vi.fn(), error: 
 
 import {
   EMAIL_SURFACE_BLOCK,
+  EMAIL_TURN_BUDGET_MS,
   buildEmailTurnSystem,
   replySubject,
   runEmailCoworkerTurn
@@ -164,6 +165,9 @@ describe("runEmailCoworkerTurn", () => {
       expect(gates[owned], `${owned} must be hard-false on the email surface`).toBe(false);
     }
     expect(mockTurn.mock.calls[0][0].includeCreationTools).toBe(false);
+    // Bounded so the reply send still fits inside the poll route's 60s.
+    expect(mockTurn.mock.calls[0][0].budgetMs).toBe(EMAIL_TURN_BUDGET_MS);
+    expect(EMAIL_TURN_BUDGET_MS).toBeLessThan(60_000);
     // Gates are read from the EMAIL surface's own toggles, not the owner's.
     for (const call of mockToolEnabled.mock.calls) {
       expect(call[1]).toBe("email");

@@ -31,6 +31,7 @@ import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { normalizeRecipients } from "@/lib/email/recipients";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
+import { rememberSentThread } from "@/lib/email-coworker/threads";
 import { logger } from "@/lib/logger";
 
 const recipientList = z.union([z.string(), z.array(z.string())]).optional();
@@ -95,6 +96,20 @@ export async function POST(request: Request) {
       ccEmails,
       bccEmails
     });
+    // Same thread claim the inline paths make (fulfillOwnerEmailBlocks):
+    // dashboard chat still falls back to the VPS worker, which sends here,
+    // and without this a delegation email sent on THAT path would never
+    // become a thread the email coworker can answer replies on.
+    if (result.threadId) {
+      await rememberSentThread({
+        businessId: envelope.businessId,
+        provider: result.provider,
+        threadId: result.threadId,
+        subject: args.subject,
+        correspondentEmail: args.toEmail,
+        sentMessageRef: null
+      });
+    }
     logger.info("voice-tools/dashboard-email: sent", {
       businessId: envelope.businessId,
       provider: result.provider
