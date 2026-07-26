@@ -215,9 +215,13 @@ function validatePatch(patch: BookingPageSettingsPatch): void {
   ) {
     throw new BookingPageValidationError("Unknown assignment mode");
   }
-  // A 'fixed' page without an employee would silently behave like 'any',
-  // so it is refused at the edge instead.
-  if (patch.assignmentMode === "fixed" && patch.employeeId === null) {
+  // A 'fixed' page without an employee silently behaves like 'any', so
+  // switching to it must name somebody in the same write: omitted counts as
+  // missing, not as "keep whatever is there".
+  if (
+    patch.assignmentMode === "fixed" &&
+    (patch.employeeId === null || patch.employeeId === undefined || patch.employeeId.trim() === "")
+  ) {
     throw new BookingPageValidationError("Pick the employee this page books");
   }
   for (const [value, label] of [

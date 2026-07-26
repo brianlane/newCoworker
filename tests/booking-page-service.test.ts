@@ -711,6 +711,32 @@ describe("submitPublicBooking", () => {
     expect(mockStampContact).toHaveBeenCalled();
     expect(mockConfirmationEmail).not.toHaveBeenCalled();
 
+    // The retry also settles the assignment, or a shared page's booking
+    // stays unassigned forever and skews the round-robin counts.
+    mockPage.mockResolvedValue({ ...PAGE, assignment_mode: "round_robin" });
+    mockMembers.mockResolvedValue([
+      { id: "m-ana", active: true, weekly_schedule: null, last_offered_at: null }
+    ] as never);
+    mockTimeOff.mockResolvedValue([]);
+    mockUpcomingForAttendee.mockResolvedValueOnce([
+      { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
+    ] as never);
+    mockStampContact.mockClear();
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    expect(mockStampContact).toHaveBeenCalledWith(
+      BIZ,
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ assigneeMemberId: "m-ana" })
+    );
+
+    // A failed resolution on the retry is still a successful answer.
+    mockUpcomingForAttendee.mockResolvedValueOnce([
+      { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
+    ] as never);
+    mockAssigneeCounts.mockRejectedValueOnce(new Error("count failed"));
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+
     // A failed re-stamp still answers the resubmit successfully: the
     // appointment is real either way.
     for (const boom of [new Error("update denied"), "string boom"]) {

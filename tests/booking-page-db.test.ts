@@ -731,10 +731,15 @@ describe("assignment settings and per-assignee load", () => {
     await expect(
       upsertBookingPage(BIZ, { assignmentMode: "pooled" }, client)
     ).rejects.toThrow(/Unknown assignment mode/);
-    // 'fixed' with no employee would silently behave like 'any'.
-    await expect(
-      upsertBookingPage(BIZ, { assignmentMode: "fixed", employeeId: null }, client)
-    ).rejects.toThrow(/Pick the employee/);
+    // 'fixed' with no employee silently behaves like 'any', whether the
+    // employee is cleared, omitted, or blank.
+    for (const patch of [
+      { assignmentMode: "fixed", employeeId: null },
+      { assignmentMode: "fixed" },
+      { assignmentMode: "fixed", employeeId: "   " }
+    ]) {
+      await expect(upsertBookingPage(BIZ, patch, client)).rejects.toThrow(/Pick the employee/);
+    }
   });
 
   it("writes the mode and the employee", async () => {

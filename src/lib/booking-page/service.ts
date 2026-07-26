@@ -560,15 +560,17 @@ export async function submitPublicBooking(
   if (existing.some((b) => Date.parse(b.startIso) === requestedStartMs)) {
     // The first submit may have landed the booking and then died before
     // stamping (a client timeout mid-flight), which would leave the visitor
-    // unreachable for reminders. The stamp is idempotent, so redo it here.
-    // The confirmation email deliberately is NOT re-sent: it either went
-    // out already or the visitor is holding an appointment they can see,
-    // and a duplicate confirmation is worse than a missing one.
+    // unreachable for reminders and the booking unassigned (which also
+    // skews the round-robin load counts). The stamp is idempotent, so redo
+    // it here, assignee included. The confirmation email deliberately is
+    // NOT re-sent: it either went out already or the visitor is holding an
+    // appointment they can see, and a duplicate is worse than a missing one.
+    const retryAssignee = await resolveAssignee(context, start).catch(() => null);
     await stampAttendeeContact(
       context.businessId,
       bookingAttendeeKey(phone, email, name),
       start.toISOString(),
-      { email, name }
+      { email, name, assigneeMemberId: retryAssignee }
     ).catch((err: unknown) => {
       logger.warn("booking-page: attendee contact re-stamp failed", {
         businessId: context.businessId,

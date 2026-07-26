@@ -13,7 +13,7 @@ alter table public.booking_pages
   -- The employee for 'fixed'. Set null on their deletion rather than
   -- cascading the page away: an owner losing their booking link because an
   -- employee left is a worse failure than a page that falls back to 'any'.
-  add column if not exists employee_id uuid references public.team_members(id) on delete set null;
+  add column if not exists employee_id uuid references public.ai_flow_team_members(id) on delete set null;
 
 alter table public.booking_pages
   add constraint booking_pages_assignment_mode_chk
@@ -23,7 +23,7 @@ alter table public.calendar_booking_dedupe
   -- Who holds this appointment. Null means unassigned (mode 'any', or a
   -- round-robin pass that found nobody on shift).
   add column if not exists assignee_member_id uuid
-    references public.team_members(id) on delete set null;
+    references public.ai_flow_team_members(id) on delete set null;
 
 -- Round robin reads each candidate's upcoming load.
 create index if not exists idx_calendar_booking_dedupe_assignee_upcoming
