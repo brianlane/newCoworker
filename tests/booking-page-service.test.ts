@@ -8,7 +8,8 @@ vi.mock("@/lib/booking-page/db", () => ({
   listBookingStartsBetween: vi.fn(),
   recordPlatformBooking: vi.fn(),
   stampManageToken: vi.fn(),
-  stampAttendeeContact: vi.fn()
+  stampAttendeeContact: vi.fn(),
+  countUpcomingByAssignee: vi.fn()
 }));
 vi.mock("@/lib/booking-page/confirmation-email", () => ({
   sendBookingConfirmationEmail: vi.fn()
@@ -73,6 +74,7 @@ import {
   getEnabledBookingPageByToken,
   listBookingStartsBetween,
   recordPlatformBooking,
+  countUpcomingByAssignee,
   stampAttendeeContact,
   stampManageToken
 } from "@/lib/booking-page/db";
@@ -131,6 +133,8 @@ const PAGE = {
   reminders_enabled: true,
   reminder_email_hours: 24,
   reminder_sms_hours: 2,
+  assignment_mode: "any",
+  employee_id: null,
   slug: null as string | null,
   title: null as string | null,
   created_at: "2026-01-01T00:00:00Z",
@@ -163,6 +167,7 @@ const mockListStarts = vi.mocked(listBookingStartsBetween);
 const mockRecordPlatform = vi.mocked(recordPlatformBooking);
 const mockStampManage = vi.mocked(stampManageToken);
 const mockStampContact = vi.mocked(stampAttendeeContact);
+const mockAssigneeCounts = vi.mocked(countUpcomingByAssignee);
 const mockConfirmationEmail = vi.mocked(sendBookingConfirmationEmail);
 const mockPageByBusiness = vi.mocked(getBookingPageForBusiness);
 const mockUpcomingForAttendee = vi.mocked(findUpcomingBookingsForAttendee);
@@ -200,6 +205,7 @@ beforeEach(() => {
   mockRecordPlatform.mockResolvedValue({ ok: true });
   mockStampManage.mockResolvedValue(true);
   mockStampContact.mockResolvedValue(true);
+  mockAssigneeCounts.mockResolvedValue(new Map());
   mockConfirmationEmail.mockResolvedValue(true);
   mockUpcomingForAttendee.mockResolvedValue([]);
   mockUnassignedAlert.mockResolvedValue("sent" as never);
@@ -751,7 +757,7 @@ describe("submitPublicBooking", () => {
       BIZ,
       "phone:+14805550100",
       "2026-01-05T16:00:00.000Z",
-      { email: VALID.email, name: VALID.name }
+      expect.objectContaining({ email: VALID.email, name: VALID.name })
     );
 
     // A stamp that matches no row is reported (reminders would silently
@@ -774,6 +780,80 @@ describe("submitPublicBooking", () => {
     mockPage.mockResolvedValue({ ...PAGE, send_confirmation_email: false });
     expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
     expect(mockConfirmationEmail).not.toHaveBeenCalled();
+  });
+
+  it("names who a shared page's booking belongs to", async () => {
+    mockPage.mockResolvedValue({ ...PAGE, assignment_mode: "round_robin" });
+    mockMembers.mockResolvedValue([
+      { id: "m-ana", active: true, weekly_schedule: null, last_offered_at: null },
+      { id: "m-ben", active: true, weekly_schedule: null, last_offered_at: null }
+    ] as never);
+    mockTimeOff.mockResolvedValue([]);
+    mockAssigneeCounts.mockResolvedValue(new Map([["m-ana", 4]]));
+
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    // The lighter load gets it, recorded on the booking row.
+    expect(mockStampContact).toHaveBeenCalledWith(
+      BIZ,
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ assigneeMemberId: "m-ben" })
+    );
+  });
+
+  it("still books when the assignee cannot be resolved (the time is already theirs)", async () => {
+    mockPage.mockResolvedValue({ ...PAGE, assignment_mode: "round_robin" });
+    mockMembers.mockResolvedValue([
+      { id: "m-ana", active: true, weekly_schedule: null, last_offered_at: null }
+    ] as never);
+    mockTimeOff.mockResolvedValue([]);
+    // Only the load read fails: availability itself is fine, so the visitor
+    // holds the time and the assignment is what is lost.
+    mockAssigneeCounts.mockRejectedValue(new Error("count failed"));
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    expect(mockStampContact).toHaveBeenCalledWith(
+      BIZ,
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ assigneeMemberId: null })
+    );
+
+    mockAssigneeCounts.mockRejectedValue("string boom");
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+  });
+
+  it("leaves the booking unassigned, and says so, when nobody is on shift", async () => {
+    mockPage.mockResolvedValue({ ...PAGE, assignment_mode: "round_robin" });
+    // On shift when the slot was verified, then deactivated before the
+    // assignment read. The booking still stands (the visitor holds the
+    // time); only the assignment is lost.
+    mockMembers
+      .mockResolvedValueOnce([
+        { id: "m-ana", active: true, weekly_schedule: null, last_offered_at: null }
+      ] as never)
+      .mockResolvedValue([
+        { id: "m-ana", active: false, weekly_schedule: null, last_offered_at: null }
+      ] as never);
+    mockTimeOff.mockResolvedValue([]);
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    expect(mockStampContact).toHaveBeenCalledWith(
+      BIZ,
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ assigneeMemberId: null })
+    );
+  });
+
+  it("records nobody for an unassigned page", async () => {
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    expect(mockStampContact).toHaveBeenCalledWith(
+      BIZ,
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ assigneeMemberId: null })
+    );
+    // No roster read at all on the unassigned path.
+    expect(mockAssigneeCounts).not.toHaveBeenCalled();
   });
 
   it("drops the manage link rather than the booking when the stamp does not land", async () => {

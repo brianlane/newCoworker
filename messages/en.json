@@ -1396,7 +1396,16 @@
       "reminderSmsLabel": "Text reminder",
       "reminderOff": "Off",
       "reminderHoursBefore": "{hours}h before",
-      "remindersHint": "Reminders go to the phone and email the customer gave when booking. Texts count toward your monthly SMS allowance."
+      "remindersHint": "Reminders go to the phone and email the customer gave when booking. Texts count toward your monthly SMS allowance.",
+      "assignTitle": "Who this page books",
+      "assignSubtitle": "Availability follows your answer, so nobody is offered a time your team cannot cover.",
+      "assignModeLabel": "Bookings go to",
+      "assignModeAny": "The business (no one in particular)",
+      "assignModeRoundRobin": "Share across the team",
+      "assignModeFixed": "One person",
+      "assignEmployeeLabel": "Person",
+      "assignHint": "Sharing across the team gives each booking to whoever is on shift with the lightest upcoming load.",
+      "assignNoRoster": "Add employees to book a specific person or share across the team."
     },
     "integrationsClaude": {
       "connectedBadge": "Connected",

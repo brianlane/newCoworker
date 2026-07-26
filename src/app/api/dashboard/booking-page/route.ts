@@ -16,6 +16,7 @@
 import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
+import { listTeamMembers } from "@/lib/db/employees";
 import { rateLimit } from "@/lib/rate-limit";
 import {
   BookingPageValidationError,
@@ -50,7 +51,9 @@ const patchSchema = z.object({
   sendConfirmationEmail: z.boolean().optional(),
   remindersEnabled: z.boolean().optional(),
   reminderEmailHours: z.number().int().optional(),
-  reminderSmsHours: z.number().int().optional()
+  reminderSmsHours: z.number().int().optional(),
+  assignmentMode: z.enum(["any", "round_robin", "fixed"]).optional(),
+  employeeId: z.string().uuid().nullable().optional()
 });
 
 const actionSchema = z.object({ action: z.literal("rotate") });
@@ -101,11 +104,19 @@ export async function GET(request: Request) {
       }
     }
 
+    // The roster drives the assignment controls: an owner picking who a page
+    // books needs the names, and there is nowhere else on this page to get
+    // them.
+    const roster = (await listTeamMembers(businessId))
+      .filter((m) => m.active)
+      .map((m) => ({ id: m.id, name: m.name }));
+
     return successResponse({
       page,
       calendarProvider: provider,
       availability,
-      upcoming
+      upcoming,
+      roster
     });
   } catch (error) {
     return handleRouteError(error);

@@ -15,6 +15,7 @@ import {
   moveManagedBooking,
   recordPlatformBooking,
   rotateBookingPageToken,
+  countUpcomingByAssignee,
   stampAttendeeContact,
   stampManageToken,
   upsertBookingPage
@@ -660,6 +661,20 @@ describe("reminder settings and attendee contact", () => {
     });
   });
 
+  it("stamps who holds the booking when the page assigns one", async () => {
+    const { client, calls } = fakeDb([{ data: [{ id: "row-1" }], error: null }]);
+    await stampAttendeeContact(
+      BIZ,
+      "phone:+14805550100",
+      "2026-07-27T16:00:00Z",
+      { name: "Liz", assigneeMemberId: "m-ana" },
+      client
+    );
+    expect(calls.find((c) => c.method === "update")?.args[0]).toMatchObject({
+      assignee_member_id: "m-ana"
+    });
+  });
+
   it("stamps the attendee's email and name for reminder addressing", async () => {
     const { client, calls } = fakeDb([{ error: null }]);
     await stampAttendeeContact(
@@ -706,6 +721,69 @@ describe("reminder settings and attendee contact", () => {
     const { client } = fakeDb([{ error: null }]);
     mockClientFactory.mockResolvedValue(client);
     await stampAttendeeContact(BIZ, "k", "2026-07-27T16:00:00Z", { email: "a@b.co" });
+    expect(mockClientFactory).toHaveBeenCalled();
+  });
+});
+
+describe("assignment settings and per-assignee load", () => {
+  it("refuses an unknown mode, and a fixed page with nobody named", async () => {
+    const { client } = fakeDb([{ data: ROW, error: null }, { data: ROW, error: null }]);
+    await expect(
+      upsertBookingPage(BIZ, { assignmentMode: "pooled" }, client)
+    ).rejects.toThrow(/Unknown assignment mode/);
+    // 'fixed' with no employee would silently behave like 'any'.
+    await expect(
+      upsertBookingPage(BIZ, { assignmentMode: "fixed", employeeId: null }, client)
+    ).rejects.toThrow(/Pick the employee/);
+  });
+
+  it("writes the mode and the employee", async () => {
+    const { client, calls } = fakeDb([{ data: ROW, error: null }, { data: ROW, error: null }]);
+    await upsertBookingPage(
+      BIZ,
+      { assignmentMode: "fixed", employeeId: "22222222-2222-4222-8222-222222222222" },
+      client
+    );
+    expect(calls.find((c) => c.method === "update")?.args[0]).toMatchObject({
+      assignment_mode: "fixed",
+      employee_id: "22222222-2222-4222-8222-222222222222"
+    });
+  });
+
+  it("counts each employee's upcoming assigned bookings", async () => {
+    const { client } = fakeDb([
+      {
+        data: [
+          { assignee_member_id: "m-ana" },
+          { assignee_member_id: "m-ana" },
+          { assignee_member_id: "m-ben" },
+          // Defensive: a null slips through the filter in no scenario, but
+          // it must never become a "null" bucket.
+          { assignee_member_id: null }
+        ],
+        error: null
+      }
+    ]);
+    const counts = await countUpcomingByAssignee(BIZ, client);
+    expect(counts.get("m-ana")).toBe(2);
+    expect(counts.get("m-ben")).toBe(1);
+    expect(counts.size).toBe(2);
+  });
+
+  it("answers an empty map with nothing booked, and throws on a read failure", async () => {
+    const { client } = fakeDb([{ data: null, error: null }]);
+    expect((await countUpcomingByAssignee(BIZ, client)).size).toBe(0);
+
+    const { client: failing } = fakeDb([{ data: null, error: { message: "rls" } }]);
+    await expect(countUpcomingByAssignee(BIZ, failing)).rejects.toThrow(
+      "countUpcomingByAssignee: rls"
+    );
+  });
+
+  it("uses the service client by default", async () => {
+    const { client } = fakeDb([{ data: [], error: null }]);
+    mockClientFactory.mockResolvedValue(client);
+    expect((await countUpcomingByAssignee(BIZ)).size).toBe(0);
     expect(mockClientFactory).toHaveBeenCalled();
   });
 });

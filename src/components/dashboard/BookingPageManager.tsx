@@ -29,7 +29,11 @@ type PageRow = {
   reminders_enabled: boolean;
   reminder_email_hours: number;
   reminder_sms_hours: number;
+  assignment_mode: string;
+  employee_id: string | null;
 };
+
+type RosterMember = { id: string; name: string };
 
 type UpcomingRow = {
   attendee_key: string;
@@ -42,6 +46,7 @@ type LoadState = {
   calendarProvider: string | null;
   availability: "ok" | "unreadable" | "unsupported" | "not_connected";
   upcoming: UpcomingRow[];
+  roster: RosterMember[];
 };
 
 const DURATION_CHOICES = [15, 30, 60];
@@ -167,6 +172,7 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
     state.calendarProvider === "vagaro" || state.calendarProvider === "calendly";
   const platformMode = state.calendarProvider === null;
   const page = state.page;
+  const roster = state.roster ?? [];
 
   const label = "block text-xs uppercase tracking-wider text-parchment/40";
   const select =
@@ -440,6 +446,68 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
           </div>
         ) : null}
         {saveError ? <p className="mt-3 text-sm text-red-400">{saveError}</p> : null}
+      </Card>
+
+      {/* Who the page books. Availability follows the answer: an assigned
+          page must never offer a time nobody who could take it is working. */}
+      <Card>
+        <h2 className="text-base font-semibold text-parchment">{t("assignTitle")}</h2>
+        <p className="mt-1 text-sm text-parchment/60">{t("assignSubtitle")}</p>
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+          <div>
+            <label className={label} htmlFor="bp-assign-mode">
+              {t("assignModeLabel")}
+            </label>
+            <select
+              id="bp-assign-mode"
+              className={select}
+              disabled={saving}
+              value={page?.assignment_mode ?? "any"}
+              onChange={(e) => {
+                const mode = e.target.value;
+                // A fixed page needs a name, so default to the first
+                // teammate rather than saving a mode that cannot work.
+                const employeeId =
+                  mode === "fixed" && !page?.employee_id ? (roster[0]?.id ?? null) : undefined;
+                void patch({
+                  assignmentMode: mode,
+                  ...(employeeId === undefined ? {} : { employeeId })
+                });
+              }}
+            >
+              <option value="any">{t("assignModeAny")}</option>
+              <option value="round_robin" disabled={roster.length === 0}>
+                {t("assignModeRoundRobin")}
+              </option>
+              <option value="fixed" disabled={roster.length === 0}>
+                {t("assignModeFixed")}
+              </option>
+            </select>
+          </div>
+          {page?.assignment_mode === "fixed" ? (
+            <div>
+              <label className={label} htmlFor="bp-assign-employee">
+                {t("assignEmployeeLabel")}
+              </label>
+              <select
+                id="bp-assign-employee"
+                className={select}
+                disabled={saving}
+                value={page.employee_id ?? ""}
+                onChange={(e) => void patch({ employeeId: e.target.value || null })}
+              >
+                {roster.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name}
+                  </option>
+                ))}
+              </select>
+            </div>
+          ) : null}
+        </div>
+        <p className="mt-3 text-xs text-parchment/40">
+          {roster.length === 0 ? t("assignNoRoster") : t("assignHint")}
+        </p>
       </Card>
 
       {/* Confirmations and reminders: what the visitor hears after booking.

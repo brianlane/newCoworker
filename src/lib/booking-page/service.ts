@@ -24,6 +24,7 @@
 import { randomUUID } from "crypto";
 import {
   countBookingsBetween,
+  countUpcomingByAssignee,
   getBookingPageForBusiness,
   stampAttendeeContact,
   getEnabledBookingPageBySlug,
@@ -34,6 +35,7 @@ import {
 } from "@/lib/booking-page/db";
 import type { BookingPageRow } from "@/lib/booking-page/db";
 import { mintBookingManageToken, parseBookingPageRef } from "@/lib/booking-page/keys";
+import { chooseAssignee, eligibleMembers, parseAssignmentMode } from "@/lib/booking-page/assignment";
 import { sendBookingConfirmationEmail } from "@/lib/booking-page/confirmation-email";
 import { computePublicSlots } from "@/lib/booking-page/slots";
 import type { BusyBlock, PublicSlot } from "@/lib/booking-page/slots";
@@ -350,10 +352,18 @@ async function listSlotsForContext(
     const business = await getBusiness(context.businessId);
     const businessHours = parseBusinessHours(business?.business_hours ?? null);
 
-    const roster = page.require_staff_on_shift
-      ? (await listTeamMembers(context.businessId)).filter((m) => m.active)
-      : [];
-    const timeOff = page.require_staff_on_shift ? await listTimeOff(context.businessId) : [];
+    // An assigned page's availability IS its people's availability: a
+    // visitor must not be offered a time nobody who could take it is
+    // working. So those modes read the roster regardless of the
+    // require-staff toggle, and narrow it to the members the page can book.
+    const mode = parseAssignmentMode(page.assignment_mode);
+    const assigned = mode !== "any";
+    const needsRoster = page.require_staff_on_shift || assigned;
+    const allMembers = needsRoster ? await listTeamMembers(context.businessId) : [];
+    const roster = assigned
+      ? eligibleMembers(mode, page.employee_id, allMembers)
+      : allMembers.filter((m) => m.active);
+    const timeOff = needsRoster ? await listTimeOff(context.businessId) : [];
 
     const slots = computePublicSlots({
       now,
@@ -366,7 +376,7 @@ async function listSlotsForContext(
         maxAdvanceDays: page.max_advance_days,
         bufferMinutes: page.buffer_minutes,
         maxDailyBookings: page.max_daily_bookings,
-        requireStaffOnShift: page.require_staff_on_shift
+        requireStaffOnShift: page.require_staff_on_shift || assigned
       },
       roster,
       timeOff,
@@ -436,6 +446,40 @@ export async function dailyCapReached(
       d.getTime() !== excludeMs && localClock(d, timezone).isoDate === slotDay
   ).length;
   return sameDay >= cap;
+}
+
+/**
+ * Who this booking belongs to, or null when the page is unassigned (mode
+ * `any`) or nobody eligible is working that slot. Reads the roster fresh so
+ * a member deactivated between listing and booking is not handed work.
+ */
+async function resolveAssignee(
+  context: BookingPageContext,
+  start: Date
+): Promise<string | null> {
+  const mode = parseAssignmentMode(context.page.assignment_mode);
+  if (mode === "any") return null;
+  const [roster, timeOff, upcomingCounts] = await Promise.all([
+    listTeamMembers(context.businessId),
+    listTimeOff(context.businessId),
+    countUpcomingByAssignee(context.businessId)
+  ]);
+  const choice = chooseAssignee({
+    mode,
+    employeeId: context.page.employee_id,
+    roster,
+    timeOff,
+    startIso: start.toISOString(),
+    timezone: context.timezone,
+    upcomingCounts
+  });
+  if (choice.memberId === null) {
+    logger.warn("booking-page: booking left unassigned", {
+      businessId: context.businessId,
+      reason: choice.reason
+    });
+  }
+  return choice.memberId;
 }
 
 export type SubmitPublicBookingResult =
@@ -775,11 +819,21 @@ export async function submitPublicBooking(
   // Reminder addressing + the confirmation email. Best-effort: the booking
   // is already durable, and a visitor who gets no email still holds the
   // appointment (and, in provider mode, the provider's own invitation).
+  const assignee = await resolveAssignee(context, start).catch((err: unknown) => {
+    // An unassigned booking is a bookkeeping loss, never a lost
+    // appointment: the visitor already holds the time.
+    logger.warn("booking-page: assignee resolution failed", {
+      businessId: context.businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
+  });
+
   await stampAttendeeContact(
     context.businessId,
     bookingAttendeeKey(phone, email, name),
     start.toISOString(),
-    { email, name }
+    { email, name, assigneeMemberId: assignee }
   )
     .then((stamped) => {
       if (!stamped) {
