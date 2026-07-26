@@ -12,7 +12,8 @@ vi.mock("@/lib/notifications/dispatch", () => ({ dispatchUrgentNotification: vi.
 vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
 vi.mock("@/lib/email-coworker/mailbox", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/email-coworker/mailbox")>()),
-  fetchInboxWithThreads: vi.fn()
+  fetchInboxWithThreads: vi.fn(),
+  fetchMailboxAddress: vi.fn()
 }));
 vi.mock("@/lib/email-coworker/threads", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/email-coworker/threads")>()),
@@ -30,7 +31,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { resolveEmailConnection } from "@/lib/voice-tools/connections";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { recordSystemLog } from "@/lib/db/system-logs";
-import { fetchInboxWithThreads } from "@/lib/email-coworker/mailbox";
+import { fetchInboxWithThreads, fetchMailboxAddress } from "@/lib/email-coworker/mailbox";
 import {
   EMAIL_COWORKER_MAX_TURNS_PER_DAY,
   filterUnseenMessages,
@@ -42,13 +43,17 @@ import {
 import { runEmailCoworkerTurn } from "@/lib/email-coworker/turn";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
-const OWNER_EMAIL = "team@newcoworker.com";
+/** The dashboard login, which need NOT be the connected mailbox. */
+const OWNER_EMAIL = "founder@newcoworker.com";
+/** The mailbox the assistant actually corresponds from. */
+const MAILBOX_EMAIL = "team@newcoworker.com";
 
 const mockClientFactory = vi.mocked(createSupabaseServiceClient);
 const mockConn = vi.mocked(resolveEmailConnection);
 const mockDispatch = vi.mocked(dispatchUrgentNotification);
 const mockSystemLog = vi.mocked(recordSystemLog);
 const mockFetch = vi.mocked(fetchInboxWithThreads);
+const mockMailboxAddress = vi.mocked(fetchMailboxAddress);
 const mockList = vi.mocked(listActiveThreads);
 const mockUnseen = vi.mocked(filterUnseenMessages);
 const mockSeen = vi.mocked(markMessagesSeen);
@@ -104,6 +109,7 @@ beforeEach(() => {
   // a shared object would leak that mutation into the next test.
   mockList.mockResolvedValue([{ ...THREAD }]);
   mockFetch.mockResolvedValue([message()]);
+  mockMailboxAddress.mockResolvedValue(MAILBOX_EMAIL);
   mockUnseen.mockImplementation(async (_biz, ids) => ids);
   mockSeen.mockResolvedValue(undefined);
   mockHandoff.mockResolvedValue(undefined);
@@ -147,11 +153,29 @@ describe("pollEmailCoworker", () => {
     expect(mockSeen).not.toHaveBeenCalled();
   });
 
-  it("never answers the mailbox's own message (no talking to itself)", async () => {
-    mockFetch.mockResolvedValue([message({ fromEmail: OWNER_EMAIL.toUpperCase() })]);
+  it("never answers the CONNECTED MAILBOX's own message (no talking to itself)", async () => {
+    // The mailbox address, not the dashboard login: HQ signs in as one
+    // address and corresponds from another, and using the login alone let
+    // the coworker answer its own sent copy.
+    mockFetch.mockResolvedValue([message({ fromEmail: MAILBOX_EMAIL.toUpperCase() })]);
     const out = await pollEmailCoworker(businessDb());
     expect(out.messages).toBe(0);
     expect(mockTurn).not.toHaveBeenCalled();
+  });
+
+  it("also treats the dashboard login as us, and survives an unreadable profile", async () => {
+    mockFetch.mockResolvedValue([message({ fromEmail: OWNER_EMAIL })]);
+    expect((await pollEmailCoworker(businessDb())).messages).toBe(0);
+
+    // Provider refuses the profile: the login fallback still guards.
+    mockMailboxAddress.mockRejectedValue(new Error("scope missing"));
+    mockFetch.mockResolvedValue([message({ fromEmail: OWNER_EMAIL })]);
+    expect((await pollEmailCoworker(businessDb())).messages).toBe(0);
+
+    // Null profile + a genuine correspondent still gets answered.
+    mockMailboxAddress.mockResolvedValue(null);
+    mockFetch.mockResolvedValue([message()]);
+    expect((await pollEmailCoworker(businessDb())).replied).toBe(1);
   });
 
   it("skips messages already evaluated", async () => {
@@ -186,6 +210,26 @@ describe("pollEmailCoworker", () => {
     expect(mockDispatch).toHaveBeenCalledWith(
       expect.objectContaining({ kind: "email_coworker_handoff" })
     );
+  });
+
+  it("alerts the owner ONCE when a batch carries several replies on a capped thread", async () => {
+    const today = new Date().toISOString().slice(0, 10);
+    mockList.mockResolvedValue([
+      { ...THREAD, turns: EMAIL_COWORKER_MAX_TURNS_PER_DAY, turnsDay: today }
+    ]);
+    mockFetch.mockResolvedValue([message({ id: "m-1" }), message({ id: "m-2" })]);
+    const out = await pollEmailCoworker(businessDb());
+    expect(out.handedOff).toBe(1);
+    expect(mockHandoff).toHaveBeenCalledTimes(1);
+    expect(mockDispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("leaves the rest of a batch alone once a thread is handed off", async () => {
+    mockList.mockResolvedValue([{ ...THREAD, handedOff: true }]);
+    mockFetch.mockResolvedValue([message({ id: "m-1" }), message({ id: "m-2" })]);
+    const out = await pollEmailCoworker(businessDb());
+    expect(out.replied).toBe(0);
+    expect(mockTurn).not.toHaveBeenCalled();
   });
 
   it("still hands off when the owner alert itself fails, and names a subject-less thread", async () => {

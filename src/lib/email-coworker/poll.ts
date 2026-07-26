@@ -21,7 +21,11 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { resolveEmailConnection } from "@/lib/voice-tools/connections";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { recordSystemLog } from "@/lib/db/system-logs";
-import { fetchInboxWithThreads, INBOX_LOOKBACK_MINUTES } from "@/lib/email-coworker/mailbox";
+import {
+  fetchInboxWithThreads,
+  fetchMailboxAddress,
+  INBOX_LOOKBACK_MINUTES
+} from "@/lib/email-coworker/mailbox";
 import {
   EMAIL_COWORKER_MAX_TURNS_PER_DAY,
   filterUnseenMessages,
@@ -45,11 +49,26 @@ export type EmailCoworkerPollResult = {
   handedOff: number;
 };
 
-/** Mailbox address of the connection itself, so we never answer our own mail. */
-async function mailboxSelfAddress(
+/**
+ * Every address that IS us, so we never answer our own mail. The connected
+ * mailbox is authoritative (a tenant can sign in as one address and
+ * correspond from a shared one), with the dashboard login kept as a weaker
+ * fallback for when the provider will not report a profile.
+ */
+async function selfAddresses(
   businessId: string,
+  provider: "google" | "microsoft",
+  link: { connectionId: string; providerConfigKey: string },
   db: SupabaseClient
-): Promise<string | null> {
+): Promise<Set<string>> {
+  const out = new Set<string>();
+  try {
+    const mailbox = await fetchMailboxAddress(businessId, provider, link);
+    if (mailbox) out.add(mailbox);
+  } catch {
+    // A profile read failure must not stop the poll; the login below still
+    // catches the common case.
+  }
   try {
     const { data } = await db
       .from("businesses")
@@ -57,10 +76,11 @@ async function mailboxSelfAddress(
       .eq("id", businessId)
       .maybeSingle();
     const email = (data as { owner_email?: string } | null)?.owner_email;
-    return typeof email === "string" ? email.trim().toLowerCase() : null;
+    if (typeof email === "string" && email.trim()) out.add(email.trim().toLowerCase());
   } catch {
-    return null;
+    // Same posture.
   }
+  return out;
 }
 
 async function businessTimezone(businessId: string, db: SupabaseClient): Promise<string | null> {
@@ -104,24 +124,23 @@ export async function pollEmailCoworker(
     try {
       const conn = await resolveEmailConnection(businessId);
       if (!conn) continue;
-      const [selfAddress, timezone] = await Promise.all([
-        mailboxSelfAddress(businessId, db),
+      const link = {
+        connectionId: conn.connectionId,
+        providerConfigKey: conn.providerConfigKey
+      };
+      const [ourAddresses, timezone] = await Promise.all([
+        selfAddresses(businessId, conn.provider, link, db),
         businessTimezone(businessId, db)
       ]);
 
-      const messages = await fetchInboxWithThreads(
-        businessId,
-        conn.provider,
-        { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey },
-        sinceMs
-      );
+      const messages = await fetchInboxWithThreads(businessId, conn.provider, link, sinceMs);
 
       const ownedByThreadId = new Map(owned.map((t) => [t.threadId, t]));
       const candidates = messages.filter((m) => {
         if (!m.threadId || !ownedByThreadId.has(m.threadId)) return false;
         // Our own sent copy can appear in some mailbox views; answering it
         // would be an infinite conversation with ourselves.
-        if (selfAddress && m.fromEmail.trim().toLowerCase() === selfAddress) return false;
+        if (ourAddresses.has(m.fromEmail.trim().toLowerCase())) return false;
         return true;
       });
       if (candidates.length === 0) continue;
@@ -146,11 +165,16 @@ export async function pollEmailCoworker(
 
       for (const message of fresh) {
         const thread = ownedByThreadId.get(message.threadId)!;
+        // A batch can carry several replies on the SAME thread; once it is
+        // handed off, the rest are the human's to answer (and re-alerting
+        // per message would spam the owner).
+        if (thread.handedOff) continue;
         const spent = turnsToday(thread);
         if (spent >= EMAIL_COWORKER_MAX_TURNS_PER_DAY) {
           // A conversation this long is not converging: hand it to a human
           // rather than keep answering.
           await markThreadHandedOff(thread.id, db);
+          thread.handedOff = true;
           result.handedOff += 1;
           await dispatchUrgentNotification({
             businessId,

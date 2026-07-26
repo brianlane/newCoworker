@@ -10,7 +10,8 @@ vi.mock("@/lib/nango/workspace", () => ({ nangoProxyForBusiness: vi.fn() }));
 import {
   INBOX_LOOKBACK_MINUTES,
   INBOX_MAX_MESSAGES,
-  fetchInboxWithThreads
+  fetchInboxWithThreads,
+  fetchMailboxAddress
 } from "@/lib/email-coworker/mailbox";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
 
@@ -170,6 +171,49 @@ describe("fetchInboxWithThreads: Microsoft Graph", () => {
     await expect(fetchInboxWithThreads(BIZ, "microsoft", GRAPH_LINK, SINCE)).rejects.toThrow(
       "email_not_connected"
     );
+  });
+});
+
+describe("fetchMailboxAddress", () => {
+  const GRAPH_LINK = { connectionId: "c-2", providerConfigKey: "outlook" };
+
+  it("reads the Gmail profile address, lower cased", async () => {
+    mockProxy.mockResolvedValueOnce({
+      data: { emailAddress: " Team@NewCoworker.com " }
+    } as never);
+    expect(await fetchMailboxAddress(BIZ, "google", LINK)).toBe("team@newcoworker.com");
+    expect(String(mockProxy.mock.calls[0][2].endpoint)).toBe("/gmail/v1/users/me/profile");
+  });
+
+  it("prefers Graph's mail, falling back to the user principal name", async () => {
+    mockProxy.mockResolvedValueOnce({ data: { mail: "Team@NewCoworker.com" } } as never);
+    expect(await fetchMailboxAddress(BIZ, "microsoft", GRAPH_LINK)).toBe("team@newcoworker.com");
+
+    mockProxy.mockResolvedValueOnce({
+      data: { mail: "", userPrincipalName: "team@newcoworker.onmicrosoft.com" }
+    } as never);
+    expect(await fetchMailboxAddress(BIZ, "microsoft", GRAPH_LINK)).toBe(
+      "team@newcoworker.onmicrosoft.com"
+    );
+  });
+
+  it("returns null when the provider says nothing usable", async () => {
+    // Callers fall back to a weaker self-check rather than dropping the
+    // guard, so "unknown" must be expressible.
+    mockProxy.mockResolvedValueOnce(null as never);
+    expect(await fetchMailboxAddress(BIZ, "google", LINK)).toBeNull();
+
+    mockProxy.mockResolvedValueOnce({ data: {} } as never);
+    expect(await fetchMailboxAddress(BIZ, "google", LINK)).toBeNull();
+
+    mockProxy.mockResolvedValueOnce({ data: { emailAddress: "   " } } as never);
+    expect(await fetchMailboxAddress(BIZ, "google", LINK)).toBeNull();
+
+    mockProxy.mockResolvedValueOnce({ data: { emailAddress: 42 } } as never);
+    expect(await fetchMailboxAddress(BIZ, "google", LINK)).toBeNull();
+
+    mockProxy.mockResolvedValueOnce({ data: { mail: null } } as never);
+    expect(await fetchMailboxAddress(BIZ, "microsoft", GRAPH_LINK)).toBeNull();
   });
 });
 

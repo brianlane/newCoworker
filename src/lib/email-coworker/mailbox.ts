@@ -36,6 +36,43 @@ export const INBOX_LOOKBACK_MINUTES = 30;
 export const INBOX_MAX_MESSAGES = 25;
 
 /**
+ * The address the CONNECTED MAILBOX itself sends from, which is not
+ * necessarily the dashboard login: a tenant can sign in as one address and
+ * connect a shared mailbox (New Coworker HQ signs in as one Google account
+ * and corresponds from team@). The poller needs the real one to recognize
+ * its own sent copies, or the coworker can answer itself.
+ *
+ * Null when the provider will not say; callers fall back to a weaker
+ * check rather than skipping the guard entirely.
+ */
+export async function fetchMailboxAddress(
+  businessId: string,
+  provider: "google" | "microsoft",
+  link: MailboxLink
+): Promise<string | null> {
+  const res = await nangoProxyForBusiness(businessId, link, {
+    endpoint:
+      provider === "google"
+        ? "/gmail/v1/users/me/profile"
+        : "/v1.0/me?$select=mail,userPrincipalName",
+    method: "GET"
+  });
+  if (!res) return null;
+  const data = res.data as {
+    emailAddress?: unknown;
+    mail?: unknown;
+    userPrincipalName?: unknown;
+  };
+  const raw =
+    provider === "google"
+      ? data?.emailAddress
+      : typeof data?.mail === "string" && data.mail
+        ? data.mail
+        : data?.userPrincipalName;
+  return typeof raw === "string" && raw.trim() ? raw.trim().toLowerCase() : null;
+}
+
+/**
  * Recent inbox messages with conversation ids attached. Gmail needs a
  * list-then-get (ids only come back from the list); Graph returns
  * everything in one select.
