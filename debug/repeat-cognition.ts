@@ -211,7 +211,16 @@ async function main(): Promise<void> {
   const surfaces = summarizeSurfaces(spend.rows);
 
   if (args.json) {
-    process.stdout.write(`${JSON.stringify({ sinceIso, truncated, groups, surfaces }, null, 2)}\n`);
+    // Both ceilings are reported. Emitting only the ledger's flag let a JSON
+    // consumer treat a partial spend total as complete, which is the same
+    // silent-truncation problem the text path already warns about.
+    process.stdout.write(
+      `${JSON.stringify(
+        { sinceIso, truncated: { events: truncated, spend: spend.truncated }, groups, surfaces },
+        null,
+        2
+      )}\n`
+    );
     return;
   }
 
