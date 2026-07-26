@@ -41,43 +41,79 @@ function StatTile({ label, value, hint }: { label: string; value: string; hint?:
 }
 
 /**
- * Daily columns. Crawler and referral are stacked because they answer
- * different questions and their magnitudes differ by orders of magnitude:
- * a shared scale would flatten referrals into nothing.
+ * One row of daily columns for a single series.
+ *
+ * The two series get their OWN charts and their own peak. Crawler hits and
+ * referrals answer different questions and their magnitudes differ by orders
+ * of magnitude, so a shared scale would flatten referrals to invisible on
+ * days that actually mattered. The cost is that bar heights are not
+ * comparable BETWEEN charts, which the per-chart peak label makes explicit.
  */
-function TrendChart({ days }: { days: AiTrafficDay[] }) {
-  const peak = Math.max(1, ...days.map((d) => Math.max(d.crawler, d.referral)));
+function TrendRow({
+  days,
+  values,
+  barClass,
+  label,
+  noun
+}: {
+  days: AiTrafficDay[];
+  values: (day: AiTrafficDay) => number;
+  barClass: string;
+  label: string;
+  noun: string;
+}) {
+  const peak = Math.max(1, ...days.map(values));
   return (
     <div>
-      <div className="mobile-scroll-x overflow-x-auto">
-        <div className="flex min-w-full items-end gap-1" style={{ height: "120px" }}>
-          {days.map((day) => (
-            <div key={day.day} className="flex min-w-[8px] flex-1 flex-col justify-end gap-0.5">
+      <div className="flex flex-wrap items-baseline justify-between gap-x-4 text-xs">
+        <span className="text-parchment/60">
+          <span className={`mr-1.5 inline-block h-2 w-2 rounded-sm ${barClass}`} />
+          {label}
+        </span>
+        <span className="text-parchment/30">peak {peak}/day</span>
+      </div>
+      <div className="mobile-scroll-x mt-1 overflow-x-auto">
+        <div className="flex min-w-full items-end gap-1" style={{ height: "72px" }}>
+          {days.map((day) => {
+            const value = values(day);
+            return (
               <div
-                className="w-full rounded-t bg-signal-teal/70"
-                style={{ height: `${(day.referral / peak) * 50}%` }}
-                title={`${day.day}: ${day.referral} referral(s)`}
+                key={day.day}
+                className={`min-w-[6px] flex-1 rounded-t ${barClass}`}
+                // A non-zero day always shows at least a sliver, so "some"
+                // never renders identically to "none".
+                style={{ height: value === 0 ? "1px" : `${Math.max(4, (value / peak) * 100)}%` }}
+                title={`${day.day}: ${value} ${noun}`}
               />
-              <div
-                className="w-full rounded-t bg-claw-green/60"
-                style={{ height: `${(day.crawler / peak) * 50}%` }}
-                title={`${day.day}: ${day.crawler} crawler hit(s)`}
-              />
-            </div>
-          ))}
+            );
+          })}
         </div>
       </div>
-      <div className="mt-2 flex flex-wrap items-center justify-between gap-x-4 gap-y-1 text-xs text-parchment/50">
-        <span>
-          <span className="mr-1 inline-block h-2 w-2 rounded-sm bg-claw-green/60" />
-          Crawler hits
-          <span className="ml-4 mr-1 inline-block h-2 w-2 rounded-sm bg-signal-teal/70" />
-          AI referrals
-        </span>
-        <span className="text-parchment/30">
-          {days[0]?.day} to {days[days.length - 1]?.day} (peak {peak}/day)
-        </span>
-      </div>
+    </div>
+  );
+}
+
+function TrendChart({ days }: { days: AiTrafficDay[] }) {
+  return (
+    <div className="space-y-5">
+      <TrendRow
+        days={days}
+        values={(d) => d.crawler}
+        barClass="bg-claw-green/60"
+        label="Crawler hits"
+        noun="crawler hit(s)"
+      />
+      <TrendRow
+        days={days}
+        values={(d) => d.referral}
+        barClass="bg-signal-teal/70"
+        label="AI referrals"
+        noun="referral(s)"
+      />
+      <p className="text-xs text-parchment/30">
+        {days[0]?.day} to {days[days.length - 1]?.day}. Each chart is scaled to its own peak, so
+        heights compare within a chart, not between the two.
+      </p>
     </div>
   );
 }
