@@ -38,6 +38,11 @@ supabase/.temp/
 # It contains no secrets (project_id is public, it's in every Supabase URL);
 # the link-time credentials live under supabase/.temp/, which stays ignored.
 
+# Generated agent context pack (scripts/context-pack.ts). Derived from local
+# Cursor transcripts and live tenant rows, both of which stay on the laptop,
+# and stale within hours anyway — the generator is tracked, the output is not.
+docs/CONTEXT-PACK.md
+
 # Misc
 *.tsbuildinfo
 .testconvo

@@ -7,10 +7,34 @@
  * are intentionally NOT part of the app bundle and NOT covered by the test
  * suite (coverage is scoped to `src/lib/**`). See debug/README.md.
  */
+import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import type { VpsSshKeyRow } from "../src/lib/db/vps-ssh-keys.ts";
 import { HostingerClient, DEFAULT_HOSTINGER_BASE_URL } from "../src/lib/hostinger/client.ts";
+
+/**
+ * Locate the repo-root `.env`.
+ *
+ * The obvious answer, `cwd/.env`, is wrong inside a git worktree, and the
+ * repo's own workflow requires worktrees: `.env` is gitignored, so it exists
+ * only in the main checkout. A script run from a worktree would silently see
+ * no credentials and report "not configured" or an empty result. Fall back to
+ * the main checkout, which is the parent of the shared git common dir.
+ */
+function resolveEnvPath(): string | null {
+  const candidates = [process.cwd()];
+  try {
+    const commonDir = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim();
+    if (commonDir) candidates.push(path.dirname(commonDir));
+  } catch {
+    // Not a git checkout, or no git on PATH: cwd is the only candidate.
+  }
+  return candidates.map((dir) => path.resolve(dir, ".env")).find((p) => fs.existsSync(p)) ?? null;
+}
 
 /**
  * Load the repo-root `.env` into process.env WITHOUT clobbering anything
@@ -19,8 +43,8 @@ import { HostingerClient, DEFAULT_HOSTINGER_BASE_URL } from "../src/lib/hostinge
  * must run before importing/calling them.
  */
 export function loadEnv(): void {
-  const envPath = path.resolve(process.cwd(), ".env");
-  if (!fs.existsSync(envPath)) return;
+  const envPath = resolveEnvPath();
+  if (!envPath) return;
   for (const line of fs.readFileSync(envPath, "utf8").split(/\r?\n/)) {
     const m = /^([A-Z0-9_]+)=(.*)$/.exec(line);
     if (!m) continue;
