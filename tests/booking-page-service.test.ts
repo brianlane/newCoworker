@@ -39,7 +39,11 @@ vi.mock("@/lib/booking-page/busy-cache", () => ({
 }));
 vi.mock("@/lib/calendar-tools/caldav", () => ({ getCaldavBusyBlocks: vi.fn() }));
 vi.mock("@/lib/db/businesses", () => ({ getBusiness: vi.fn() }));
-vi.mock("@/lib/db/employees", () => ({ listTeamMembers: vi.fn(), listTimeOff: vi.fn() }));
+vi.mock("@/lib/db/employees", () => ({
+  listTeamMembers: vi.fn(),
+  listTimeOff: vi.fn(),
+  markMemberOffered: vi.fn()
+}));
 vi.mock("@/lib/db/zoom-connections", () => ({ getActiveZoomConnectionId: vi.fn() }));
 vi.mock("@/lib/customer-memory/capture-contact", () => ({ ensureCapturedContact: vi.fn() }));
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }));
@@ -97,7 +101,7 @@ import {
 } from "@/lib/calendar-tools/handlers";
 import { getCaldavBusyBlocks } from "@/lib/calendar-tools/caldav";
 import { getBusiness } from "@/lib/db/businesses";
-import { listTeamMembers, listTimeOff } from "@/lib/db/employees";
+import { listTeamMembers, listTimeOff, markMemberOffered } from "@/lib/db/employees";
 import { getActiveZoomConnectionId } from "@/lib/db/zoom-connections";
 import { ensureCapturedContact } from "@/lib/customer-memory/capture-contact";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -162,6 +166,7 @@ const mockBook = vi.mocked(bookCalendarAppointment);
 const mockCapture = vi.mocked(ensureCapturedContact);
 const mockMembers = vi.mocked(listTeamMembers);
 const mockTimeOff = vi.mocked(listTimeOff);
+const mockMarkOffered = vi.mocked(markMemberOffered);
 const mockClientFactory = vi.mocked(createSupabaseServiceClient);
 const mockSlotClaim = vi.mocked(claimBookingDedupe);
 const mockSlotRelease = vi.mocked(releaseBookingDedupe);
@@ -210,6 +215,7 @@ beforeEach(() => {
   mockStampContact.mockResolvedValue(true);
   mockAssigneeCounts.mockResolvedValue(new Map());
   mockStampAssignee.mockResolvedValue(undefined);
+  mockMarkOffered.mockResolvedValue(undefined);
   mockConfirmationEmail.mockResolvedValue(true);
   mockUpcomingForAttendee.mockResolvedValue([]);
   mockUnassignedAlert.mockResolvedValue("sent" as never);
@@ -838,6 +844,16 @@ describe("submitPublicBooking", () => {
       expect.any(String),
       expect.objectContaining({ assigneeMemberId: "m-ben" })
     );
+    // The tiebreak advances, or two members on equal load would forever
+    // resolve to the same person.
+    expect(mockMarkOffered).toHaveBeenCalledWith("m-ben");
+
+    // A failed advance still books and still assigns: it only costs
+    // fairness on the next tie.
+    mockMarkOffered.mockRejectedValueOnce(new Error("update denied"));
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    mockMarkOffered.mockRejectedValueOnce("string boom");
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
   });
 
   it("still books when the assignee cannot be resolved (the time is already theirs)", async () => {
@@ -891,8 +907,9 @@ describe("submitPublicBooking", () => {
       expect.any(String),
       expect.objectContaining({ assigneeMemberId: null })
     );
-    // No roster read at all on the unassigned path.
+    // No roster read and no tiebreak write at all on the unassigned path.
     expect(mockAssigneeCounts).not.toHaveBeenCalled();
+    expect(mockMarkOffered).not.toHaveBeenCalled();
   });
 
   it("drops the manage link rather than the booking when the stamp does not land", async () => {

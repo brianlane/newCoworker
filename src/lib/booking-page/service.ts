@@ -49,7 +49,7 @@ import {
 } from "@/lib/calendar-tools/handlers";
 import { getCaldavBusyBlocks } from "@/lib/calendar-tools/caldav";
 import { getBusiness } from "@/lib/db/businesses";
-import { listTeamMembers, listTimeOff } from "@/lib/db/employees";
+import { listTeamMembers, listTimeOff, markMemberOffered } from "@/lib/db/employees";
 import { getActiveZoomConnectionId } from "@/lib/db/zoom-connections";
 import { parseBusinessHours } from "@/lib/business-profile/profile";
 import { normalizeContactNumber } from "@/lib/telnyx/format";
@@ -479,7 +479,17 @@ async function resolveAssignee(
       businessId: context.businessId,
       reason: choice.reason
     });
+    return null;
   }
+  // Advance the tiebreak, or two members carrying the same load would
+  // forever resolve to the same person. Best-effort: they already have the
+  // booking, and a stale timestamp only costs fairness on the next tie.
+  await markMemberOffered(choice.memberId).catch((err: unknown) => {
+    logger.warn("booking-page: could not advance the assignment tiebreak", {
+      businessId: context.businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  });
   return choice.memberId;
 }
 
