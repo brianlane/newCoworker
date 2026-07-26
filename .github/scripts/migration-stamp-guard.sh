@@ -36,7 +36,21 @@ fi
 # The checkout is shallow (fetch-depth 1) and, on a pull_request event, is the
 # merge commit. Fetching the base explicitly is what makes the comparison
 # reflect main as it is RIGHT NOW rather than whenever the merge ref was built.
-if ! git fetch --depth=1 origin "$BASE" --quiet 2>/dev/null; then
+#
+# Depth matters here. `--depth=1` is right in CI, where actions/checkout has
+# already made the repo shallow, but running it against a COMPLETE clone
+# truncates that clone's history: git writes .git/shallow, after which
+# origin/<base> appears to share no ancestor with your branch and the repo
+# reports thousands of phantom "ahead" commits (observed on 2026-07-26 while
+# testing this script locally; the repair is `git fetch --unshallow`). So ask
+# the repo what it is rather than assuming CI.
+if [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+  fetch_base() { git fetch --depth=1 origin "$1" --quiet 2>/dev/null; }
+else
+  fetch_base() { git fetch origin "$1" --quiet 2>/dev/null; }
+fi
+
+if ! fetch_base "$BASE"; then
   echo "::warning::could not fetch origin/$BASE, checking the checked-out tree only."
   base_files=""
 else

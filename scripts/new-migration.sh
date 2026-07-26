@@ -64,8 +64,21 @@ local_head=$(ls -1 "$MIGRATIONS_DIR" | grep '\.sql$' | cut -d_ -f1 | sort | tail
 
 # Best effort: offline or a missing remote just means we stamp above the
 # local head, and the CI guard remains the backstop.
+#
+# NEVER `--depth=1` here without checking. This script runs on developer
+# machines with complete clones, and a shallow fetch TRUNCATES the local
+# history: git writes .git/shallow, after which origin/main appears to share
+# no ancestor with your branch and the repo reports thousands of phantom
+# "ahead" commits (done to this repo on 2026-07-26; repaired with
+# `git fetch --unshallow`). Shallow-fetch only a repo that is already shallow.
 remote_head=""
-if git fetch --depth=1 origin main --quiet 2>/dev/null; then
+if [ "$(git rev-parse --is-shallow-repository 2>/dev/null)" = "true" ]; then
+  fetch_main() { git fetch --depth=1 origin main --quiet 2>/dev/null; }
+else
+  fetch_main() { git fetch origin main --quiet 2>/dev/null; }
+fi
+
+if fetch_main; then
   remote_head=$(git ls-tree --name-only FETCH_HEAD -- "$MIGRATIONS_DIR/" 2>/dev/null \
     | sed 's#.*/##' | grep '\.sql$' | cut -d_ -f1 | sort | tail -1 || true)
 else
