@@ -154,6 +154,7 @@ import type {
 } from "../_shared/ai_flows/types.ts";
 import { multiOfferHeadsUpLine, type OfferRouting } from "../_shared/ai_flows/routing.ts";
 import { parseEtaMinutes } from "../_shared/ai_flows/claim_timeframe.ts";
+import { capturedCallVars } from "../_shared/ai_flows/call_capture.ts";
 
 // The actual createClient(url, key) call infers SupabaseClient<any, "public", any>,
 // but `ReturnType<typeof createClient>` resolves to <unknown, never, GenericSchema>
@@ -1823,6 +1824,8 @@ async function runStep(
       return armVoiceTransferStep(supabase, run, scope, action);
     case "voice_brief":
       return voiceBriefStep(supabase, run, scope, action);
+    case "wait_for_call":
+      return waitForCallStep(supabase, run, index, scope, action);
     case "http_call":
       return httpCallStep(run, scope, action);
     case "await_approval":
@@ -3060,6 +3063,13 @@ async function browseStep(
 
   const raw: Record<string, string> = {};
   for (const f of action.fields ?? []) {
+    // Backfill (a RE-READ of a page that releases its details late): keep the
+    // value an earlier pass, or the call itself, already established rather than
+    // letting a still-blank card overwrite it with nothing.
+    if (action.fillOnlyEmpty && !isEmptyVarValue(scope.vars[f.name])) {
+      raw[f.name] = scope.vars[f.name] as string;
+      continue;
+    }
     let val = extracted[f.name] ?? "";
     if (isPhoneFieldName(f.name)) {
       if (!val) val = extractLabeledPhones(pageText)[0] ?? "";
@@ -6248,6 +6258,106 @@ async function voiceBriefStep(
     });
   }
   return { kind: "ok", result: { briefed, from: action.fromE164 } };
+}
+
+/** The most recent AI-intake session for a partner line, live or finished. */
+type CallSessionRow = {
+  status?: string;
+  context?: { ai_takeover?: { captured?: Record<string, unknown> } | null } | null;
+};
+
+/**
+ * wait_for_call: park until the AI's call from `fromE164` ends, then continue
+ * with what it captured.
+ *
+ * Three shapes, because the flow and the call race each other:
+ *   - a LIVE session   → link the run to it and park (the bridge resumes us at
+ *                        teardown, having written the captured fields first);
+ *   - a FINISHED one   → the call beat us here; hydrate and carry on;
+ *   - none at all      → the AI never took this one (rang humans, no budget);
+ *                        `no_call` into saveAs so later steps can branch on it.
+ *
+ * Never fails a run: a follow-up that still has texts and emails to send must
+ * not die because the call bookkeeping went sideways.
+ */
+async function waitForCallStep(
+  supabase: Supabase,
+  run: RunRow,
+  index: number,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "wait_for_call" }>
+): Promise<StepOutcome> {
+  const sinceIso = new Date(Date.now() - action.withinMinutes * 60_000).toISOString();
+  const { data, error } = await supabase
+    .from("voice_handoff_sessions")
+    .select("status, context")
+    .eq("business_id", run.business_id)
+    .eq("from_e164", action.fromE164)
+    .gte("created_at", sinceIso)
+    .order("created_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) console.error("wait_for_call: session lookup", error.message);
+  const sess = (data ?? null) as CallSessionRow | null;
+
+  const finish = (outcome: string, detail: Record<string, unknown>): StepOutcome => {
+    // Namespaced by capturePrefix so the AI's values can never overwrite what
+    // the partner's own page produced: the flow shows the team both.
+    const hydrated = capturedCallVars(sess?.context?.ai_takeover?.captured, action.capturePrefix);
+    Object.assign(scope.vars, hydrated);
+    scope.vars[action.saveAs] = outcome;
+    scope.vars[action.marker] = "1";
+    const names = Object.keys(hydrated);
+    if (names.length > 0) {
+      appendActionTaken(scope, `picked up ${names.length} detail(s) the AI captured on the call`);
+    }
+    return { kind: "ok", result: { ...detail, outcome, captured: names } };
+  };
+
+  // Coming back from the park: the call is over and the bridge has already
+  // written what it captured, so this pass exists purely to hydrate.
+  if (action.resumed) {
+    const resumedOutcome = scope.vars[action.saveAs];
+    return finish(
+      typeof resumedOutcome === "string" && resumedOutcome ? resumedOutcome : "answered",
+      { resumed: true }
+    );
+  }
+
+  if (sess?.status === "ai_intake") {
+    // Atomic under the row lock, and it re-checks liveness: a call that ended
+    // between the select above and here links nothing, and we hydrate instead
+    // of parking on a call that will never resume us.
+    const { data: linked, error: linkErr } = await supabase.rpc("voice_link_call_run", {
+      p_business_id: run.business_id,
+      p_from_e164: action.fromE164,
+      p_link: {
+        run_id: run.id,
+        save_as: action.saveAs,
+        marker: action.marker,
+        step_index: index
+      },
+      p_within_minutes: action.withinMinutes
+    });
+    if (linkErr) console.error("wait_for_call: link rpc", linkErr.message);
+    const count = typeof linked === "number" ? linked : Number(linked ?? 0);
+    if (count > 0) {
+      return {
+        kind: "pause_call",
+        e164: action.fromE164,
+        respondByMs: action.timeoutMinutes * 60_000,
+        saveAs: action.saveAs,
+        marker: action.marker,
+        // We waited on a call the PARTNER placed, so there is no dialed leg of
+        // ours to record; the session's flow_run link is what resumes this run.
+        callControlId: ""
+      };
+    }
+  }
+
+  return sess
+    ? finish("answered", { waited: false })
+    : finish("no_call", { waited: false, reason: "no_session" });
 }
 
 async function httpCallStep(

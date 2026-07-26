@@ -137,7 +137,12 @@ export function intakeSystemInstruction(
   // ask instead of stalling or pretending to look something up.
   if (!outboundCall && !transfer) {
     lines.push(
-      "If they refer to details you were not given (their address, their price, what they submitted), apologize briefly that it has not reached your side yet, then simply ask them for it and carry on."
+      "If they refer to details you were not given (their address, their price, what they submitted), apologize briefly that it has not reached your side yet, then simply ask them for it and carry on.",
+      // The partner withholds the seller's number until after this call, so the
+      // person on the line is often the ONLY source for it. A hang-up two
+      // minutes in otherwise leaves the team with no way to reach them at all.
+      "YOUR FIRST PRIORITY is their phone number. Ask for the best number to reach them within your first couple of exchanges, naturally and early (\"what's the best number for you?\"), read it back to confirm it, and record it with `capture_lead` immediately, before you work through anything else on the list. If the call ends abruptly, that number is the one thing that must not be missing.",
+      "Once you have it, tell them someone from the team will be in touch shortly, and use the rest of the call to be useful: answer their questions about selling as best you can, and be honest that a person will handle the specifics you cannot."
     );
   }
   // Known details (a place_ai_call step's rendered contextTemplate): the AI
@@ -146,7 +151,7 @@ export function intakeSystemInstruction(
   if (contextNote && contextNote.trim()) {
     lines.push(
       `What you ALREADY KNOW about this person: ${contextNote.trim()}`,
-      "This OVERRIDES any collect list above: NEVER ask for a detail listed there — you already have it. Use their name naturally, record known details straight into `capture_lead` without asking, and only ask about what is genuinely missing. If a known detail matters, confirm it in passing instead of asking for it fresh."
+      "This OVERRIDES any collect list above, INCLUDING the phone-number priority: NEVER ask for a detail listed there — you already have it. Use their name naturally, record known details straight into `capture_lead` without asking, and only ask about what is genuinely missing. If a known detail matters, confirm it in passing instead of asking for it fresh."
     );
   }
   if (hasEndCall) {

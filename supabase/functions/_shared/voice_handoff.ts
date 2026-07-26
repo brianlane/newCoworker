@@ -34,6 +34,14 @@ export type HandoffAiTakeover = {
   /** Pause between the last digit and attaching the AI media. */
   media_start_seconds?: number;
   /**
+   * IVR GATE. Press the accept digit when the partner's recording ASKS for it
+   * rather than on a guessed timer: the answer path attaches media immediately
+   * and presses nothing, and the bridge holds its greeting, listens, and sends
+   * the digit through its press_digits tool (blind-pressing at `fallback_ms` if
+   * it never recognizes the cue). Mutually exclusive with accept_digits.
+   */
+  ivr_gate?: { digit: string; fallback_ms?: number };
+  /**
    * What the AI already KNOWS about the person, injected into its system
    * prompt with a never-re-ask rule. Stamped at answer time from the partner's
    * inbound alert text, and REPLACED mid-call by a voice_brief step once the
@@ -300,6 +308,15 @@ export function buildHandoffContext(input: {
             })
             .filter((d) => d.digit.length > 0)
         : undefined;
+      const gate = (o.ivr_gate ?? null) as Record<string, unknown> | null;
+      const gateDigit = typeof gate?.digit === "string" ? gate.digit.trim() : "";
+      const gateFallbackMs =
+        typeof gate?.fallback_ms === "number" && Number.isFinite(gate.fallback_ms)
+          ? Math.max(0, Math.round(gate.fallback_ms))
+          : 0;
+      const ivrGate = gateDigit
+        ? { digit: gateDigit, ...(gateFallbackMs > 0 ? { fallback_ms: gateFallbackMs } : {}) }
+        : null;
       ai = {
         notify_e164: notify,
         persona: typeof o.persona === "string" ? o.persona : undefined,
@@ -317,6 +334,7 @@ export function buildHandoffContext(input: {
         ...(typeof o.brief_sms_contains === "string" && o.brief_sms_contains.trim()
           ? { brief_sms_contains: o.brief_sms_contains.trim() }
           : {}),
+        ...(ivrGate ? { ivr_gate: ivrGate } : {}),
         ...(o.accept_sent === true ? { accept_sent: true } : {}),
         ...(typeof o.context_note === "string" && o.context_note.trim()
           ? { context_note: o.context_note.trim() }

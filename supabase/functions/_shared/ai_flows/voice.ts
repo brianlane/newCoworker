@@ -90,6 +90,18 @@ export function compileVoiceFlow(
         : {}),
       ...(typeof intake.briefFromSmsContaining === "string" && intake.briefFromSmsContaining.trim()
         ? { brief_sms_contains: intake.briefFromSmsContaining.trim() }
+        : {}),
+      // The bridge reads ivr_gate to hold its greeting and press on cue; the
+      // answer webhook reads it to know it must NOT press or pause itself.
+      ...(intake.acceptOnPrompt
+        ? {
+            ivr_gate: {
+              digit: intake.acceptOnPrompt.digit,
+              ...(typeof intake.acceptOnPrompt.fallbackSeconds === "number"
+                ? { fallback_ms: intake.acceptOnPrompt.fallbackSeconds * 1000 }
+                : {})
+            }
+          }
         : {})
     };
   }

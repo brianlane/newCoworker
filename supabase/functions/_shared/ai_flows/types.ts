@@ -470,6 +470,13 @@ export type FlowStep =
        */
       screenshot?: boolean;
       /**
+       * Backfill only (same semantic as email_extract.fillOnlyEmpty): write a
+       * field only when its var is still empty/"none". Required for RE-READING a
+       * page that releases its details late, where a second pass showing a blank
+       * card must not wipe what the first pass already established.
+       */
+      fillOnlyEmpty?: boolean;
+      /**
        * Terminal-state guard (mirrors browse_action.skipWhenText): when the
        * fetched page contains this marker text (case-insensitive substring of
        * the page text/source), there is nothing to read — e.g. a lead another
@@ -1231,6 +1238,33 @@ export type FlowStep =
       withinMinutes?: number;
       when?: StepCondition;
     }
+  | {
+      id: string;
+      /**
+       * Park until the AI's live call from `fromE164` hangs up, then continue
+       * with what the AI captured on it. The other half of voice_brief: that one
+       * pushes details INTO a live call, this one waits for the call and pulls
+       * the captured details back out (the partner withholds the customer's
+       * number until after the call, so the conversation is often the only
+       * source for it).
+       *
+       * Parks like place_ai_call (status `awaiting_call`, resumed through the
+       * session's flow_run link). An ENDED session inside the window hydrates
+       * without parking, and no session at all just continues.
+       */
+      type: "wait_for_call";
+      /** The partner line whose AI call this run waits on. */
+      fromE164: string;
+      /** Only wait on a call that started within this window. Default 30. */
+      withinMinutes?: number;
+      /** Give up after this long and continue with "no_call". Default 60. */
+      timeoutMinutes?: number;
+      /** Outcome var: answered / no_call. Default "call_outcome". */
+      saveAs?: string;
+      /** Namespace for the captured fields. Default "call_". */
+      capturePrefix?: string;
+      when?: StepCondition;
+    }
   // ── Voice steps (real-time call routing; executed by the Telnyx voice webhook
   // state machine, NOT the async ai-flow-worker). Only valid under a VoiceTrigger. ──
   | {
@@ -1277,6 +1311,13 @@ export type FlowStep =
       acceptDigits?: Array<{ digit: string; afterSeconds?: number }>;
       /** Pause between the last digit and attaching the AI media. answerFirst only. */
       mediaStartSeconds?: number;
+      /**
+       * Press the accept digit when the recording ASKS for it rather than on a
+       * timer: media attaches immediately, the AI listens, and the bridge's
+       * press_digits tool sends the digit. Replaces acceptDigits/
+       * mediaStartSeconds. answerFirst only.
+       */
+      acceptOnPrompt?: { digit: string; fallbackSeconds?: number };
       /**
        * Text identifying the partner's alert SMS; the newest inbound text
        * containing it becomes the AI's pre-call brief. answerFirst only.

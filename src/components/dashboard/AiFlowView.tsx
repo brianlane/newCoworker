@@ -256,6 +256,9 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
       return (
         <>
           <Row label="URL variable" value={step.urlVar} mono />
+          {step.fillOnlyEmpty === true && (
+            <Row label="Fill mode" value="Only fills details earlier steps left empty" />
+          )}
           {step.fields && step.fields.length > 0 && (
             <div className="space-y-1">
               <div className="text-xs font-medium text-parchment/50">Fields to extract</div>
@@ -829,7 +832,15 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
               mono={Boolean(step.alsoNotifyE164)}
             />
           )}
-          {step.answerFirst && (
+          {step.answerFirst && step.acceptOnPrompt && (
+            <Row
+              label="Presses"
+              value={`${step.acceptOnPrompt.digit} when the recording asks (or after ${
+                step.acceptOnPrompt.fallbackSeconds ?? 12
+              }s regardless)`}
+            />
+          )}
+          {step.answerFirst && !step.acceptOnPrompt && (
             <Row
               label="Presses"
               value={(step.acceptDigits ?? [{ digit: "1", afterSeconds: 3 }])
@@ -837,7 +848,7 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
                 .join(", ")}
             />
           )}
-          {step.answerFirst && (
+          {step.answerFirst && !step.acceptOnPrompt && (
             <Row label="Waits before speaking" value={`${step.mediaStartSeconds ?? 2} seconds`} />
           )}
           {step.briefFromSmsContaining && (
@@ -862,6 +873,20 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           <Row label="Briefs the live call from" value={step.fromE164} mono />
           <Row label="Tells the AI" value={step.noteTemplate} />
           <Row label="Only if the call started within" value={`${step.withinMinutes ?? 30} minutes`} />
+        </>
+      );
+    case "wait_for_call":
+      return (
+        <>
+          <Row label="Waits for the call from" value={step.fromE164} mono />
+          <Row label="Only if the call started within" value={`${step.withinMinutes ?? 30} minutes`} />
+          <Row label="Gives up after" value={`${step.timeoutMinutes ?? 60} minutes`} />
+          <Row label="Outcome saved as" value={step.saveAs ?? "call_outcome"} mono />
+          <Row
+            label="Captured details land in"
+            value={`{{vars.${step.capturePrefix ?? "call_"}phone}}, ...`}
+            mono
+          />
         </>
       );
     case "voice_transfer":

@@ -695,7 +695,7 @@ async function handleHandoffLifecycle(
   if (!callControlId) return { handled: false, response: jsonOk("ignored_hangup") };
   const { data: sessRow } = await supabase
     .from("voice_handoff_sessions")
-    .select("call_control_id, status, business_id, from_e164")
+    .select("call_control_id, status, business_id, from_e164, context")
     .eq("call_control_id", callControlId)
     .maybeSingle();
   if (!sessRow) return { handled: false, response: jsonOk("ignored_hangup") };
@@ -703,8 +703,16 @@ async function handleHandoffLifecycle(
     status?: string;
     business_id?: string;
     from_e164?: string;
+    context?: { flow_run?: FlowRunLink } | null;
   };
   const priorStatus = String(sessEnd.status ?? "");
+  // Backstop for a run parked on this call by a `wait_for_call` step. The BRIDGE
+  // normally resumes it at teardown, because it writes the captured lead fields
+  // first and the worker wants those; this covers a bridge that died without
+  // getting there. First-writer-wins, so the usual case is a no-op here.
+  if (priorStatus === "ai_intake" && sessEnd.context?.flow_run) {
+    await resumeFlowRunWithCallOutcome(supabase, sessEnd.context.flow_run, "answered");
+  }
   await supabase
     .from("voice_handoff_sessions")
     .update({ status: "done" })

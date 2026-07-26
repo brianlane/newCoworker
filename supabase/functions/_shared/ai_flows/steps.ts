@@ -210,6 +210,8 @@ export type StepAction =
       extractLinks?: ExtractLink[];
       auth?: BrowseAuth;
       screenshot?: boolean;
+      /** Backfill only: keep a value an earlier step already established. */
+      fillOnlyEmpty?: boolean;
       /**
        * Terminal-state marker: when the fetched page contains this
        * (case-insensitive) text, the worker ends the run gracefully (step
@@ -406,6 +408,19 @@ export type StepAction =
       note: string;
       withinMinutes: number;
       skipReason?: string;
+    }
+  // Park until the AI's live call from `fromE164` ends, then hydrate what it
+  // captured. `resumed` is set when the run is coming BACK from that park, so
+  // the worker hydrates and continues instead of parking a second time.
+  | {
+      kind: "wait_for_call";
+      fromE164: string;
+      withinMinutes: number;
+      timeoutMinutes: number;
+      saveAs: string;
+      marker: string;
+      capturePrefix: string;
+      resumed: boolean;
     }
   | { kind: "await_approval"; prompt: string }
   | {
@@ -684,6 +699,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
             : {}),
           auth: step.auth,
           screenshot: step.screenshot,
+          ...(step.fillOnlyEmpty === true ? { fillOnlyEmpty: true } : {}),
           ...(step.skipWhenText && step.skipWhenText.trim()
             ? { skipWhenText: step.skipWhenText.trim() }
             : {})
@@ -1672,6 +1688,25 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           note,
           withinMinutes: Math.min(120, Math.max(1, Math.round(step.withinMinutes ?? 30))),
           ...(substantive ? {} : { skipReason: "nothing_to_brief" })
+        }
+      };
+    }
+    case "wait_for_call": {
+      // Unlike place_ai_call, re-entry does NOT short-circuit on the marker:
+      // the return trip is exactly when the captured fields become available, so
+      // the executor runs again to hydrate them and only then continues.
+      const marker = `__waited_call_${step.id}`;
+      return {
+        ok: true,
+        action: {
+          kind: "wait_for_call",
+          fromE164: step.fromE164,
+          withinMinutes: Math.min(120, Math.max(1, Math.round(step.withinMinutes ?? 30))),
+          timeoutMinutes: Math.min(1440, Math.max(1, Math.round(step.timeoutMinutes ?? 60))),
+          saveAs: step.saveAs ?? "call_outcome",
+          marker,
+          capturePrefix: step.capturePrefix ?? "call_",
+          resumed: scope.vars?.[marker] !== undefined
         }
       };
     }
