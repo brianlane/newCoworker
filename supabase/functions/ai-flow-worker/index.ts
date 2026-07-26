@@ -63,6 +63,7 @@ import {
   renderTemplate,
   sanitizeExtractedPhone,
   senderPinnedByFromMatches,
+  type AvailabilityMode,
   type NowScope,
   type RoutedAgent
 } from "../_shared/ai_flows/engine.ts";
@@ -7628,7 +7629,7 @@ const BROADCAST_ALL_MAX_RECIPIENTS = 10;
  */
 const ROSTER_SELECTION_COLUMNS =
   "id, name, phone_e164, weekly_schedule, preferred_windows, " +
-  "routing_enabled, named_broadcast_enabled, team_broadcast_enabled";
+  "routing_enabled, named_routing_enabled, named_broadcast_enabled, team_broadcast_enabled";
 
 /**
  * supabase-js infers the row type from a select-string LITERAL; a shared
@@ -7646,6 +7647,7 @@ type RosterSelectionRow = {
   weekly_schedule?: unknown;
   preferred_windows?: unknown;
   routing_enabled?: boolean | null;
+  named_routing_enabled?: boolean | null;
   named_broadcast_enabled?: boolean | null;
   team_broadcast_enabled?: boolean | null;
 };
@@ -8038,6 +8040,7 @@ async function contactOwnerAgent(
           weekly_schedule: m.weekly_schedule,
           preferred_windows: m.preferred_windows,
           routing_enabled: m.routing_enabled,
+          named_routing_enabled: m.named_routing_enabled,
           named_broadcast_enabled: m.named_broadcast_enabled,
           team_broadcast_enabled: m.team_broadcast_enabled
         }
@@ -8193,23 +8196,30 @@ async function pickNextAgent(
         .filter((t) => t.starts_on <= clock.isoDate && t.ends_on >= clock.isoDate)
         .map((t) => t.member_id)
     );
-    const availableRoster = filterRosterByAvailability(roster, offIds, clock, "rotation");
+    // A pin is the flow NAMING someone, which is a different permission from
+    // taking leads off the rotation: an owner who wants no rotation leads can
+    // still be the person a flow asks for by name.
+    const mode: AvailabilityMode = pinnedAgentName ? "named_routing" : "rotation";
+    const availableRoster = filterRosterByAvailability(roster, offIds, clock, mode);
     if (availableRoster.length === 0) {
       // Two different causes end up here and the owner fixes them in
-      // different places, so name the one that applies: a standing "no
-      // rotation leads" opt-out is a switch on the Employees page, while
-      // time off and schedules resolve themselves. A PINNED member who
-      // opted out lands here too (the pin filter ran first), which is how
-      // the opt-out stops pinned leads without deactivating anyone.
-      const optedOut = roster.filter((r) => r.routing_enabled === false).length;
+      // different places, so name the one that applies: a standing opt-out is
+      // a switch on the Employees page, while time off and schedules resolve
+      // themselves. Report the switch for the mode actually being tried, or a
+      // pinned member would be told to check "lead rotation" when the setting
+      // that skipped them was "leads named to them".
+      const switchLabel = mode === "named_routing" ? "named leads" : "lead rotation";
+      const optedOut = roster.filter(
+        (r) => (mode === "named_routing" ? r.named_routing_enabled : r.routing_enabled) === false
+      ).length;
       const allOptedOut = optedOut === roster.length;
       const reason = pinnedAgentName
         ? allOptedOut
-          ? `pinned agent "${pinnedAgentName}" has lead rotation turned off`
-          : `pinned agent "${pinnedAgentName}" is on time off, outside their schedule, or has lead rotation turned off`
+          ? `pinned agent "${pinnedAgentName}" has ${switchLabel} turned off`
+          : `pinned agent "${pinnedAgentName}" is on time off, outside their schedule, or has ${switchLabel} turned off`
         : allOptedOut
-          ? "every roster member has lead rotation turned off"
-          : "every roster member is on time off, outside their schedule, or has lead rotation turned off";
+          ? `every roster member has ${switchLabel} turned off`
+          : `every roster member is on time off, outside their schedule, or has ${switchLabel} turned off`;
       await systemLog(supabase, {
         businessId: run.business_id,
         source: "aiflow",
@@ -8220,7 +8230,8 @@ async function pickNextAgent(
           run_id: run.id,
           flow_id: run.flow_id,
           roster_size: roster.length,
-          rotation_opted_out: optedOut,
+          mode,
+          opted_out: optedOut,
           ...(pinnedAgentName ? { agent_name: pinnedAgentName } : {})
         }
       });

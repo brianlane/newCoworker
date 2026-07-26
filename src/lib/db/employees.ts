@@ -25,8 +25,10 @@ export type TeamMemberRow = {
   weekly_schedule: unknown;
   /** Same shape as weekly_schedule; preferred lead-time windows. */
   preferred_windows: unknown;
-  /** Eligible for the round-robin rotation, auto-assign, and single-agent pins. */
+  /** Eligible for the round-robin rotation and auto-assign. */
   routing_enabled: boolean;
+  /** Eligible when a flow pins one lead to them by name. */
+  named_routing_enabled: boolean;
   /** Eligible when a flow lists them by name in a simultaneous offer. */
   named_broadcast_enabled: boolean;
   /** Eligible for whole-roster offers (the team-first human handoff). */
@@ -41,6 +43,7 @@ export type TeamMemberRow = {
  */
 export type LeadAvailabilityPatch = {
   routingEnabled?: boolean;
+  namedRoutingEnabled?: boolean;
   namedBroadcastEnabled?: boolean;
   teamBroadcastEnabled?: boolean;
 };
@@ -49,6 +52,9 @@ export type LeadAvailabilityPatch = {
 function availabilityColumns(input: LeadAvailabilityPatch): Record<string, boolean> {
   return {
     ...(input.routingEnabled !== undefined ? { routing_enabled: input.routingEnabled } : {}),
+    ...(input.namedRoutingEnabled !== undefined
+      ? { named_routing_enabled: input.namedRoutingEnabled }
+      : {}),
     ...(input.namedBroadcastEnabled !== undefined
       ? { named_broadcast_enabled: input.namedBroadcastEnabled }
       : {}),
@@ -74,7 +80,8 @@ export type TimeOffRow = {
 const MEMBER_COLUMNS =
   "id,business_id,name,phone_e164,email,active,last_offered_at," +
   "weekly_schedule,preferred_windows," +
-  "routing_enabled,named_broadcast_enabled,team_broadcast_enabled,created_at";
+  "routing_enabled,named_routing_enabled,named_broadcast_enabled," +
+  "team_broadcast_enabled,created_at";
 
 const TIME_OFF_COLUMNS =
   "id,business_id,member_id,starts_on,ends_on,note,calendar_event_id,created_at";

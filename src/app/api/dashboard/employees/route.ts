@@ -6,7 +6,8 @@
  *
  * POST /api/dashboard/employees?businessId=<uuid>
  *        body: { name, phoneE164, email?, scheduleText?, preferredText?,
- *                routingEnabled?, namedBroadcastEnabled?, teamBroadcastEnabled? }
+ *                routingEnabled?, namedRoutingEnabled?,
+ *                namedBroadcastEnabled?, teamBroadcastEnabled? }
  *        → { member }
  *
  * The roster is the same ai_flow_team_members table route_to_team rotates
@@ -63,6 +64,7 @@ const createSchema = z.object({
   // Lead availability. Omitted = the column defaults (all true), so an
   // ordinary "add a teammate" is unchanged.
   routingEnabled: z.boolean().optional(),
+  namedRoutingEnabled: z.boolean().optional(),
   namedBroadcastEnabled: z.boolean().optional(),
   teamBroadcastEnabled: z.boolean().optional()
 });
@@ -142,6 +144,9 @@ export async function POST(request: Request) {
       weeklySchedule,
       preferredWindows,
       ...(body.routingEnabled !== undefined ? { routingEnabled: body.routingEnabled } : {}),
+      ...(body.namedRoutingEnabled !== undefined
+        ? { namedRoutingEnabled: body.namedRoutingEnabled }
+        : {}),
       ...(body.namedBroadcastEnabled !== undefined
         ? { namedBroadcastEnabled: body.namedBroadcastEnabled }
         : {}),

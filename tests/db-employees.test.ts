@@ -61,6 +61,7 @@ function memberRow(overrides: Partial<TeamMemberRow> = {}): TeamMemberRow {
     weekly_schedule: null,
     preferred_windows: null,
     routing_enabled: true,
+    named_routing_enabled: true,
     named_broadcast_enabled: true,
     team_broadcast_enabled: true,
     created_at: "2026-06-01T00:00:00Z",
@@ -214,6 +215,7 @@ describe("createTeamMember", () => {
         name: "Amy Laidlaw",
         phoneE164: PHONE,
         routingEnabled: false,
+        namedRoutingEnabled: true,
         namedBroadcastEnabled: true,
         teamBroadcastEnabled: false
       },
@@ -221,6 +223,7 @@ describe("createTeamMember", () => {
     );
     expect(fromCalls[0]!.calls.find((c) => c.name === "insert")?.args[0]).toMatchObject({
       routing_enabled: false,
+      named_routing_enabled: true,
       named_broadcast_enabled: true,
       team_broadcast_enabled: false
     });
@@ -236,6 +239,7 @@ describe("createTeamMember", () => {
     >;
     expect(insert.team_broadcast_enabled).toBe(false);
     expect(insert).not.toHaveProperty("routing_enabled");
+    expect(insert).not.toHaveProperty("named_routing_enabled");
     expect(insert).not.toHaveProperty("named_broadcast_enabled");
   });
 
@@ -333,11 +337,12 @@ describe("updateTeamMember", () => {
     await updateTeamMember(
       BIZ,
       MEMBER_ID,
-      { routingEnabled: false, teamBroadcastEnabled: false },
+      { routingEnabled: false, namedRoutingEnabled: true, teamBroadcastEnabled: false },
       both
     );
     expect(bothCalls[0]!.calls.find((c) => c.name === "update")?.args[0]).toEqual({
       routing_enabled: false,
+      named_routing_enabled: true,
       team_broadcast_enabled: false
     });
   });

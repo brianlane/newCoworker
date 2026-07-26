@@ -233,7 +233,7 @@ export const AGENT_TOOL_REGISTRY: AgentDefinition[] = [
         toolKey: "manage_employee",
         label: "Manage your employee roster",
         description:
-          "Add a teammate, change their number, hours, or name, deactivate them, and turn their lead availability on or off when you ask in chat (or by texting your coworker). Managers and owners only; every change is also visible and reversible on the Employees page.",
+          "Add a teammate, change their number, hours, or name, deactivate them, and turn any of their four lead-availability switches on or off when you ask in chat (or by texting your coworker). Managers and owners only; every change is also visible and reversible on the Employees page.",
         defaultEnabled: true,
         configurable: true
       }
