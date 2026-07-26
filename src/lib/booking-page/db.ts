@@ -334,7 +334,8 @@ export async function recordPlatformBooking(
   startIso: string,
   eventId: string,
   zoomMeetingId: string | null,
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  manage?: { token: string; durationMinutes: number }
 ): Promise<PlatformBookingRecord> {
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db.from("calendar_booking_dedupe").insert({
@@ -342,7 +343,10 @@ export async function recordPlatformBooking(
     attendee_key: attendeeKey,
     start_at: startIso,
     event_id: eventId,
-    zoom_meeting_id: zoomMeetingId
+    zoom_meeting_id: zoomMeetingId,
+    ...(manage
+      ? { manage_token: manage.token, duration_minutes: manage.durationMinutes }
+      : {})
   });
   if (!error) return { ok: true };
   if ((error as { code?: string }).code === "23505") {
@@ -399,4 +403,88 @@ export async function countBookingsBetween(
     .lt("start_at", endIso);
   if (error) throw new Error(`countBookingsBetween: ${error.message}`);
   return count ?? 0;
+}
+
+/** One public-page booking, addressed by its own manage token. */
+export type ManagedBookingRow = {
+  id: string;
+  business_id: string;
+  attendee_key: string;
+  start_at: string;
+  event_id: string | null;
+  zoom_meeting_id: string | null;
+  duration_minutes: number | null;
+};
+
+/**
+ * Attach a manage token to the ledger row a page booking just created, so
+ * the confirmation can carry a self-serve reschedule/cancel link.
+ *
+ * Matched on (business, attendee, start) because the provider-mode write
+ * happens inside the booking core, which knows nothing about manage links.
+ * Only ever stamps a row that has none: a retry of the same booking must
+ * not mint a second token and orphan the first.
+ */
+export async function stampManageToken(
+  businessId: string,
+  attendeeKey: string,
+  startIso: string,
+  token: string,
+  durationMinutes: number,
+  client?: SupabaseClient
+): Promise<boolean> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("calendar_booking_dedupe")
+    .update({ manage_token: token, duration_minutes: durationMinutes })
+    .eq("business_id", businessId)
+    .eq("attendee_key", attendeeKey)
+    .eq("start_at", startIso)
+    .is("manage_token", null)
+    .select("id");
+  if (error) throw new Error(`stampManageToken: ${error.message}`);
+  return (data ?? []).length > 0;
+}
+
+/** The booking a manage token addresses, or null when it matches nothing. */
+export async function getBookingByManageToken(
+  token: string,
+  client?: SupabaseClient
+): Promise<ManagedBookingRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("calendar_booking_dedupe")
+    .select("id,business_id,attendee_key,start_at,event_id,zoom_meeting_id,duration_minutes")
+    .eq("manage_token", token)
+    .maybeSingle();
+  if (error) throw new Error(`getBookingByManageToken: ${error.message}`);
+  return (data as ManagedBookingRow | null) ?? null;
+}
+
+/**
+ * Move a platform-mode booking in place. The ledger IS the calendar there,
+ * so the row's start is the appointment; the token (and thus the invitee's
+ * link) survives the move.
+ */
+export async function moveManagedBooking(
+  rowId: string,
+  startIso: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("calendar_booking_dedupe")
+    .update({ start_at: startIso })
+    .eq("id", rowId);
+  if (error) throw new Error(`moveManagedBooking: ${error.message}`);
+}
+
+/** Drop a platform-mode booking: the row is the appointment. */
+export async function deleteManagedBooking(
+  rowId: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db.from("calendar_booking_dedupe").delete().eq("id", rowId);
+  if (error) throw new Error(`deleteManagedBooking: ${error.message}`);
 }

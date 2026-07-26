@@ -24,13 +24,15 @@
 import { randomUUID } from "crypto";
 import {
   countBookingsBetween,
+  getBookingPageForBusiness,
   getEnabledBookingPageBySlug,
   getEnabledBookingPageByToken,
   listBookingStartsBetween,
-  recordPlatformBooking
+  recordPlatformBooking,
+  stampManageToken
 } from "@/lib/booking-page/db";
 import type { BookingPageRow } from "@/lib/booking-page/db";
-import { parseBookingPageRef } from "@/lib/booking-page/keys";
+import { mintBookingManageToken, parseBookingPageRef } from "@/lib/booking-page/keys";
 import { computePublicSlots } from "@/lib/booking-page/slots";
 import type { BusyBlock, PublicSlot } from "@/lib/booking-page/slots";
 import { readBusyCache, saveBusyCache } from "@/lib/booking-page/busy-cache";
@@ -226,6 +228,24 @@ export async function listPublicSlots(
 }
 
 /**
+ * The same availability, addressed by BUSINESS rather than by page ref.
+ * The invitee manage page (/book/manage/<token>) holds a booking, not a
+ * page link, and must offer exactly the slots the public page would: same
+ * policy knobs, same busy sources, same degradation.
+ */
+export async function listSlotsForBusiness(
+  businessId: string,
+  durationMinutes: number,
+  nowOverride?: Date
+): Promise<ListPublicSlotsResult> {
+  const page = await getBookingPageForBusiness(businessId);
+  if (!page || !page.enabled) return { ok: false, detail: "not_found" };
+  const resolved = await getBookingPageContext(page.token);
+  if (!resolved.ok) return resolved;
+  return listSlotsForContext(resolved.context, durationMinutes, nowOverride);
+}
+
+/**
  * Slot listing against a PRE-RESOLVED context. Submission re-verifies with
  * ITS OWN snapshot through this function, so a calendar connecting mid
  * request can never split the mode between the availability check and the
@@ -361,6 +381,12 @@ export type SubmitPublicBookingResult =
       /** Human-readable local start from the booking core (business zone). */
       startLocal: string | null;
       zoomJoinUrl: string | null;
+      /**
+       * Self-serve reschedule/cancel path for THIS booking
+       * (`/book/manage/<token>`), or null when the token could not be
+       * attached. Relative: the caller renders it against its own origin.
+       */
+      manageLink: string | null;
     }
   | BookingPageFailure;
 
@@ -430,7 +456,10 @@ export async function submitPublicBooking(
       startLocal: formatBookingStartLocal(start.toISOString(), context.timezone),
       // The join link was shown on the original confirmation; a retry
       // cannot reconstruct it from the ledger's meeting id alone.
-      zoomJoinUrl: null
+      zoomJoinUrl: null,
+      // Same reason: the first confirmation carried the manage link, and
+      // minting a second token here would orphan the one already sent.
+      manageLink: null
     };
   }
   const nowMs = Date.now();
@@ -497,6 +526,10 @@ export async function submitPublicBooking(
 
   let startLocal: string | null = null;
   let zoomJoinUrl: string | null = null;
+  // Minted before either write so both modes stamp the SAME token, and the
+  // confirmation can hand the visitor a link that manages this booking.
+  const manageToken = mintBookingManageToken();
+  let manageLink: string | null = `/book/manage/${manageToken}`;
 
   if (context.mode === "platform") {
     // PLATFORM MODE: the booking ledger is the calendar of record (the
@@ -532,7 +565,9 @@ export async function submitPublicBooking(
       bookingAttendeeKey(phone, email, name),
       start.toISOString(),
       `platform:${randomUUID()}`,
-      zoomMeeting?.meetingId ?? null
+      zoomMeeting?.meetingId ?? null,
+      undefined,
+      { token: manageToken, durationMinutes: input.durationMinutes }
     );
     if (!record.ok) {
       if (zoomMeeting) await deleteZoomMeetingForBooking(context.businessId, zoomMeeting.meetingId);
@@ -616,6 +651,27 @@ export async function submitPublicBooking(
     const data = (booked.data ?? {}) as Record<string, unknown>;
     startLocal = typeof data.startLocal === "string" ? data.startLocal : null;
     zoomJoinUrl = typeof data.zoomJoinUrl === "string" ? data.zoomJoinUrl : null;
+
+    // The booking core owns the ledger write in this mode and knows nothing
+    // about manage links, so the token is stamped onto the row it just
+    // created. Best-effort: the appointment is real either way, and a
+    // visitor who cannot self-serve still has the business's number.
+    try {
+      const stamped = await stampManageToken(
+        context.businessId,
+        bookingAttendeeKey(phone, email, name),
+        start.toISOString(),
+        manageToken,
+        input.durationMinutes
+      );
+      if (!stamped) manageLink = null;
+    } catch (err) {
+      manageLink = null;
+      logger.warn("booking-page: manage token stamp failed", {
+        businessId: context.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
   }
 
   // File the visitor as a contact (fires contact_created for new leads, so
@@ -652,7 +708,8 @@ export async function submitPublicBooking(
     startIso: start.toISOString(),
     endIso,
     startLocal,
-    zoomJoinUrl
+    zoomJoinUrl,
+    manageLink
   };
 }
 

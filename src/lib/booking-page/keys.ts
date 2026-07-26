@@ -31,6 +31,27 @@ export function parseBookingPageToken(value: unknown): string | null {
 }
 
 /**
+ * Per-BOOKING capability token behind /book/manage/<token>: "see, move, or
+ * cancel this one appointment". Deliberately a different prefix from the
+ * page token so a leaked manage link can never be mistaken for (or used
+ * as) the business's booking page, and vice versa.
+ */
+export const BOOKING_MANAGE_TOKEN_PREFIX = "ncbm_";
+
+export const BOOKING_MANAGE_TOKEN_REGEX = /^ncbm_[0-9a-f]{64}$/;
+
+export function mintBookingManageToken(): string {
+  return `${BOOKING_MANAGE_TOKEN_PREFIX}${randomBytes(32).toString("hex")}`;
+}
+
+/** Valid manage token from a path segment, else null (fail closed, no DB hit). */
+export function parseBookingManageToken(value: unknown): string | null {
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return BOOKING_MANAGE_TOKEN_REGEX.test(trimmed) ? trimmed : null;
+}
+
+/**
  * Vanity-slug shape for the friendly /book/<slug> URL: lowercase kebab,
  * 3-60 chars, letter/digit at both ends. Deliberately disjoint from the
  * token shape (no underscores), so one route segment resolves both.
@@ -44,7 +65,10 @@ export const RESERVED_BOOKING_SLUGS = new Set([
   "admin",
   "dashboard",
   "new",
-  "www"
+  "www",
+  // /book/manage/<token> is the invitee's self-serve route family; a tenant
+  // page at /book/manage would sit confusingly next to it.
+  "manage"
 ]);
 
 /** Normalize owner input to a valid slug, or null when unusable. */

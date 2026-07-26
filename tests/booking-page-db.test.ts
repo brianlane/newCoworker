@@ -5,13 +5,17 @@ vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }
 import {
   BookingPageValidationError,
   countBookingsBetween,
+  deleteManagedBooking,
+  getBookingByManageToken,
   getBookingPageForBusiness,
   getEnabledBookingPageBySlug,
   getEnabledBookingPageByToken,
   listBookingStartsBetween,
   listUpcomingBookings,
+  moveManagedBooking,
   recordPlatformBooking,
   rotateBookingPageToken,
+  stampManageToken,
   upsertBookingPage
 } from "@/lib/booking-page/db";
 import { BOOKING_PAGE_TOKEN_REGEX } from "@/lib/booking-page/keys";
@@ -51,7 +55,19 @@ function fakeDb(results: QueryResult[]) {
 
   function builder(): Record<string, unknown> {
     const b: Record<string, unknown> = {};
-    for (const method of ["select", "eq", "not", "gte", "lt", "order", "limit", "insert", "update", "delete"]) {
+    for (const method of [
+      "select",
+      "eq",
+      "is",
+      "not",
+      "gte",
+      "lt",
+      "order",
+      "limit",
+      "insert",
+      "update",
+      "delete"
+    ]) {
       b[method] = vi.fn((...args: unknown[]) => {
         record(method, args);
         return b;
@@ -488,5 +504,114 @@ describe("countBookingsBetween", () => {
     await expect(
       countBookingsBetween(BIZ, "2026-07-24T00:00:00Z", "2026-07-25T00:00:00Z", client)
     ).rejects.toThrow("countBookingsBetween: count boom");
+  });
+});
+
+describe("manage tokens on the booking ledger", () => {
+  const TOKEN = `ncbm_${"b".repeat(64)}`;
+
+  it("stamps a token onto the row a page booking just created, once", async () => {
+    const { client, calls } = fakeDb([{ data: [{ id: "row-9" }], error: null }]);
+    expect(
+      await stampManageToken(BIZ, "phone:+14805550100", "2026-07-27T16:00:00Z", TOKEN, 30, client)
+    ).toBe(true);
+    expect(calls.find((c) => c.method === "update")?.args[0]).toEqual({
+      manage_token: TOKEN,
+      duration_minutes: 30
+    });
+    // Only ever a row that has none: a retry must not mint a second token
+    // and orphan the first.
+    expect(calls.some((c) => c.method === "is" || c.method === "eq")).toBe(true);
+  });
+
+  it("reports no stamp when nothing matched (already stamped, or gone)", async () => {
+    const { client } = fakeDb([{ data: [], error: null }]);
+    expect(
+      await stampManageToken(BIZ, "phone:+1", "2026-07-27T16:00:00Z", TOKEN, 30, client)
+    ).toBe(false);
+
+    const { client: nullData } = fakeDb([{ data: null, error: null }]);
+    expect(
+      await stampManageToken(BIZ, "phone:+1", "2026-07-27T16:00:00Z", TOKEN, 30, nullData)
+    ).toBe(false);
+  });
+
+  it("resolves a booking by its manage token, and passes null through", async () => {
+    const row = {
+      id: "row-9",
+      business_id: BIZ,
+      attendee_key: "phone:+14805550100",
+      start_at: "2026-07-27T16:00:00Z",
+      event_id: "evt-1",
+      zoom_meeting_id: null,
+      duration_minutes: 30
+    };
+    const { client } = fakeDb([
+      { data: row, error: null },
+      { data: null, error: null }
+    ]);
+    mockClientFactory.mockResolvedValue(client);
+    expect(await getBookingByManageToken(TOKEN)).toEqual(row);
+    expect(await getBookingByManageToken(TOKEN)).toBeNull();
+  });
+
+  it("moves and deletes a platform booking by row id", async () => {
+    const { client, calls } = fakeDb([{ error: null }]);
+    await moveManagedBooking("row-9", "2026-07-28T16:00:00Z", client);
+    expect(calls.find((c) => c.method === "update")?.args[0]).toEqual({
+      start_at: "2026-07-28T16:00:00Z"
+    });
+
+    const { client: delClient, calls: delCalls } = fakeDb([{ error: null }]);
+    await deleteManagedBooking("row-9", delClient);
+    expect(delCalls.some((c) => c.method === "delete")).toBe(true);
+  });
+
+  it("throws on write failures rather than silently losing the change", async () => {
+    const { client } = fakeDb([{ data: null, error: { message: "denied" } }]);
+    await expect(
+      stampManageToken(BIZ, "phone:+1", "2026-07-27T16:00:00Z", TOKEN, 30, client)
+    ).rejects.toThrow("stampManageToken: denied");
+
+    const { client: readFail } = fakeDb([{ data: null, error: { message: "rls" } }]);
+    await expect(getBookingByManageToken(TOKEN, readFail)).rejects.toThrow(
+      "getBookingByManageToken: rls"
+    );
+
+    const { client: moveFail } = fakeDb([{ error: { message: "locked" } }]);
+    await expect(moveManagedBooking("row-9", "2026-07-28T16:00:00Z", moveFail)).rejects.toThrow(
+      "moveManagedBooking: locked"
+    );
+
+    const { client: delFail } = fakeDb([{ error: { message: "locked" } }]);
+    await expect(deleteManagedBooking("row-9", delFail)).rejects.toThrow(
+      "deleteManagedBooking: locked"
+    );
+  });
+
+  it("uses the service client by default", async () => {
+    const { client } = fakeDb([{ error: null }]);
+    mockClientFactory.mockResolvedValue(client);
+    await moveManagedBooking("row-9", "2026-07-28T16:00:00Z");
+    await deleteManagedBooking("row-9");
+    await stampManageToken(BIZ, "phone:+1", "2026-07-27T16:00:00Z", TOKEN, 30);
+    expect(mockClientFactory).toHaveBeenCalled();
+  });
+
+  it("carries the manage token on a platform booking INSERT", async () => {
+    const { client, calls } = fakeDb([{ error: null }]);
+    await recordPlatformBooking(
+      BIZ,
+      "phone:+14805550100",
+      "2026-07-27T16:00:00Z",
+      "platform:abc",
+      null,
+      client,
+      { token: TOKEN, durationMinutes: 60 }
+    );
+    expect(calls.find((c) => c.method === "insert")?.args[0]).toMatchObject({
+      manage_token: TOKEN,
+      duration_minutes: 60
+    });
   });
 });

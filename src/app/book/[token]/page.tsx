@@ -73,6 +73,7 @@ export default async function BookPage({
             bookedBodyNoInvite: t("bookedBodyNoInvite", { business: context.businessName }),
             bookedVideoNote: t("bookedVideoNote"),
             bookedZoomLinkLabel: t("bookedZoomLinkLabel"),
+            bookedManageLinkLabel: t("bookedManageLinkLabel"),
             poweredBy: t("poweredBy"),
             weekdaysShort: [
               t("weekdaySun"),
