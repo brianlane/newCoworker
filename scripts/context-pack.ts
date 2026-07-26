@@ -506,21 +506,37 @@ async function renderFleetInner(repoRoot: string): Promise<string> {
   if (!url || !key) return "_`SUPABASE_URL` / `SUPABASE_SERVICE_ROLE_KEY` not in `.env`; fleet snapshot skipped._";
 
   const { createClient } = await import("@supabase/supabase-js");
+  const { fetchAllPaged } = await import("../src/lib/supabase/paging.ts");
   const db = createClient(url, key, { auth: { persistSession: false } });
 
+  // Routes and flows are paged: PostgREST caps a response at 1000 rows, and a
+  // silently short read here would print wrong DIDs and wrong flow counts,
+  // which is worse than printing nothing (renderFleet's catch reports a
+  // thrown error as an unavailable section).
   const [businesses, routes, flows] = await Promise.all([
     db.from("businesses").select("id,name,tier,status,created_at").order("created_at", { ascending: true }),
-    db.from("telnyx_voice_routes").select("to_e164,business_id"),
-    db.from("ai_flows").select("business_id,enabled")
+    fetchAllPaged<{ to_e164: string; business_id: string }>(
+      (from, to) =>
+        db
+          .from("telnyx_voice_routes")
+          .select("to_e164,business_id")
+          .order("to_e164", { ascending: true })
+          .range(from, to),
+      { label: "telnyx_voice_routes" }
+    ),
+    fetchAllPaged<{ business_id: string; enabled: boolean; id: string }>(
+      (from, to) => db.from("ai_flows").select("id,business_id,enabled").order("id", { ascending: true }).range(from, to),
+      { label: "ai_flows" }
+    )
   ]);
   if (businesses.error) return `_Fleet snapshot failed: ${businesses.error.message}_`;
 
   const didFor = new Map<string, string>();
-  for (const r of (routes.data ?? []) as Array<{ to_e164: string; business_id: string }>) {
+  for (const r of routes.rows) {
     if (!didFor.has(r.business_id)) didFor.set(r.business_id, r.to_e164);
   }
   const flowCount = new Map<string, { total: number; enabled: number }>();
-  for (const f of (flows.data ?? []) as Array<{ business_id: string; enabled: boolean }>) {
+  for (const f of flows.rows) {
     const cur = flowCount.get(f.business_id) ?? { total: 0, enabled: 0 };
     cur.total += 1;
     if (f.enabled) cur.enabled += 1;
@@ -539,6 +555,9 @@ async function renderFleetInner(repoRoot: string): Promise<string> {
     lines.push(
       `| ${escapeTableCell(b.name.trim())} | \`${b.id}\` | ${b.tier} | ${b.status} | ${didFor.get(b.id) ?? "-"} | ${counts.enabled}/${counts.total} |`
     );
+  }
+  if (routes.truncated || flows.truncated) {
+    lines.push("", "**Partial:** the route/flow read hit its row ceiling, so DIDs and flow counts may be incomplete.");
   }
   lines.push("", "Per-tenant detail lives in `docs/tenants/`.");
   return lines.join("\n");

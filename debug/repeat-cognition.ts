@@ -36,7 +36,8 @@
  * Env (repo-root `.env`): SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY.
  */
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { fetchAllPaged, loadEnv } from "./_shared.ts";
+import { fetchAllPaged } from "../src/lib/supabase/paging.ts";
+import { loadEnv } from "./_shared.ts";
 
 type Args = { businessId: string | null; days: number; minRepeats: number; json: boolean };
 
@@ -192,14 +193,22 @@ async function main(): Promise<void> {
   const { rows: events, truncated } = await fetchAllEvents(db, sinceIso, args.businessId);
   const groups = groupRepeatedQuestions(events, args.minRepeats);
 
-  let spendQuery = db
-    .from("gemini_spend_daily")
-    .select("surface,model,cost_micros,call_count")
-    .gte("day", sinceIso.slice(0, 10));
-  if (args.businessId) spendQuery = spendQuery.eq("business_id", args.businessId);
-  const spend = await spendQuery;
-  if (spend.error) throw new Error(`gemini_spend_daily: ${spend.error.message}`);
-  const surfaces = summarizeSurfaces((spend.data ?? []) as SurfaceRow[]);
+  // Paged like the ledger above: a fleet-wide window is one row per day per
+  // tenant per surface per model, which passes 1000 quickly, and an
+  // under-reported cost is exactly the wrong output for a spend review.
+  const spend = await fetchAllPaged<SurfaceRow>((from, to) => {
+    let q = db
+      .from("gemini_spend_daily")
+      .select("surface,model,cost_micros,call_count")
+      .gte("day", sinceIso.slice(0, 10))
+      .order("day", { ascending: true })
+      .order("surface", { ascending: true })
+      .order("model", { ascending: true })
+      .range(from, to);
+    if (args.businessId) q = q.eq("business_id", args.businessId);
+    return q;
+  }, { label: "gemini_spend_daily" });
+  const surfaces = summarizeSurfaces(spend.rows);
 
   if (args.json) {
     process.stdout.write(`${JSON.stringify({ sinceIso, truncated, groups, surfaces }, null, 2)}\n`);
@@ -237,6 +246,7 @@ async function main(): Promise<void> {
   }
 
   out.write(`\n=== Gemini spend by surface (last ${args.days} days)\n`);
+  if (spend.truncated) out.write("    Row ceiling reached: these totals are FLOORS. Narrow with --days or --business.\n");
   if (surfaces.length === 0) out.write("    none recorded\n");
   else {
     out.write("       cost     calls    per call  surface\n");

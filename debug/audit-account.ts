@@ -31,7 +31,8 @@
  * Env (repo-root `.env`): SUPABASE_URL + SUPABASE_SERVICE_ROLE_KEY.
  */
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { fetchAllPaged, loadEnv } from "./_shared.ts";
+import { fetchAllPaged } from "../src/lib/supabase/paging.ts";
+import { loadEnv } from "./_shared.ts";
 
 type Args = { businessId: string | null; hours: number; list: boolean; json: boolean };
 
@@ -140,11 +141,22 @@ async function audit(db: SupabaseClient, businessId: string, hours: number): Pro
     db.from("gemini_spend_daily").select("surface,cost_micros,call_count").eq("business_id", businessId).gte("day", sinceDay)
   ]);
 
-  if (business.error) throw new Error(`businesses: ${business.error.message}`);
+  // Every read is checked. An unchecked `.error` reads as empty data, which
+  // would print "no flows", "no DIDs", or "no spend" for a database failure:
+  // a confident wrong answer, and the worst possible output for an audit.
+  for (const [label, res] of [
+    ["businesses", business],
+    ["telnyx_voice_routes", routes],
+    ["ai_flow_team_members", roster],
+    ["ai_flows", flows],
+    ["sms_inbound_jobs", inbound],
+    ["sms_inbound_jobs (dead_letter)", deadLettered],
+    ["sms_outbound_log", outbound],
+    ["gemini_spend_daily", spend]
+  ] as const) {
+    if (res.error) throw new Error(`${label}: ${res.error.message}`);
+  }
   if (!business.data) throw new Error(`no business with id ${businessId}`);
-  if (inbound.error) throw new Error(`sms_inbound_jobs: ${inbound.error.message}`);
-  if (deadLettered.error) throw new Error(`sms_inbound_jobs (dead_letter): ${deadLettered.error.message}`);
-  if (outbound.error) throw new Error(`sms_outbound_log: ${outbound.error.message}`);
 
   const flowRows = (flows.data ?? []) as Array<{
     id: string;

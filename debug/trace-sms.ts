@@ -31,7 +31,8 @@
  * TELNYX_API_KEY for the carrier column.
  */
 import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { fetchAllPaged, loadEnv } from "./_shared.ts";
+import { fetchAllPaged } from "../src/lib/supabase/paging.ts";
+import { loadEnv } from "./_shared.ts";
 
 /* -------------------------------------------------------------------------- */
 /* args                                                                        */
@@ -155,8 +156,22 @@ export type TimelineEntry = {
   businessId: string;
   detail: string;
   body: string;
+  /** The carrier's verdict, or null when there is nothing to ask Telnyx about. */
   carrier?: string | null;
+  /**
+   * Whether the row carries a Telnyx message id at all. Kept separate from
+   * `carrier` so an untracked send is never counted as a carrier failure:
+   * "we have no record of handing this to Telnyx" and "Telnyx tried and
+   * failed" are opposite diagnoses.
+   */
+  telnyxTracked?: boolean;
 };
+
+/** True when the carrier explicitly did NOT confirm delivery of a tracked send. */
+export function isCarrierFailure(entry: TimelineEntry): boolean {
+  if (entry.direction !== "outbound" || !entry.telnyxTracked) return false;
+  return Boolean(entry.carrier) && !/^delivered/i.test(entry.carrier as string);
+}
 
 /** Inbound text lives in the raw Telnyx envelope; shapes have drifted over time. */
 export function inboundBody(payload: Record<string, unknown> | null): string {
@@ -220,6 +235,7 @@ async function buildTimeline(
     const bits = [row.channel ?? "sms", `from ${row.from_e164 ?? "?"}`, `source ${row.source ?? "?"}`];
     if (row.flow_id) bits.push(`flow ${row.flow_id.slice(0, 8)}`);
     if (row.run_id) bits.push(`run ${row.run_id.slice(0, 8)}`);
+    const telnyxTracked = Boolean(row.telnyx_message_id);
     const carrier =
       args.carrier && apiKey && row.telnyx_message_id ? await telnyxStatus(row.telnyx_message_id, apiKey) : null;
     entries.push({
@@ -228,7 +244,8 @@ async function buildTimeline(
       businessId: row.business_id,
       detail: bits.join(", "),
       body: row.body ?? "",
-      carrier: row.telnyx_message_id ? carrier : "no telnyx id recorded"
+      carrier: telnyxTracked ? carrier : "no telnyx id recorded",
+      telnyxTracked
     });
   }
 
@@ -303,7 +320,8 @@ async function main(): Promise<void> {
   }
 
   const outbound = entries.filter((e) => e.direction === "outbound");
-  const undelivered = outbound.filter((e) => e.carrier && !/^delivered/i.test(e.carrier));
+  const undelivered = outbound.filter(isCarrierFailure);
+  const untracked = outbound.filter((e) => !e.telnyxTracked);
   process.stdout.write(
     `\n${entries.length} events: ${outbound.length} outbound, ` +
       `${entries.filter((e) => e.direction === "inbound").length} inbound.\n`
@@ -312,6 +330,12 @@ async function main(): Promise<void> {
     process.stdout.write(
       `${undelivered.length} outbound message(s) the carrier did NOT confirm as delivered. ` +
         "That is a carrier/number problem, not a flow problem.\n"
+    );
+  }
+  if (untracked.length > 0) {
+    process.stdout.write(
+      `${untracked.length} outbound row(s) carry no Telnyx message id, so the carrier has no verdict ` +
+        "for them. That is OUR side (the send was never recorded as handed off), not the carrier's.\n"
     );
   }
   if (truncated.length > 0) {
