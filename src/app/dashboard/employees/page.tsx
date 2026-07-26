@@ -19,6 +19,7 @@ import {
   listTeamMembers,
   listTimeOff
 } from "@/lib/db/employees";
+import { businessOwnerNumbers } from "@/lib/db/contact-names";
 import { sharedCalendarStatus } from "@/lib/calendar-tools/shared-calendar";
 import { EmployeesManager } from "@/components/dashboard/EmployeesManager";
 import { LeadAssignmentSettings } from "@/components/dashboard/LeadAssignmentSettings";
@@ -69,11 +70,14 @@ export default async function DashboardEmployeesPage() {
     );
   }
 
-  const [members, timeOff, stats, sharedCalendar] = await Promise.all([
+  const [members, timeOff, stats, sharedCalendar, ownerNumbers] = await Promise.all([
     listTeamMembers(business.id),
     listTimeOff(business.id),
     listEmployeeRoutingStats(business.id),
-    sharedCalendarStatus(business.id)
+    sharedCalendarStatus(business.id),
+    // An owner who works leads is on her own roster (Amy Laidlaw, Jul 2026),
+    // which reads as "the owner is her own employee" without a badge.
+    businessOwnerNumbers(business.id, db)
   ]);
 
   return (
@@ -101,6 +105,7 @@ export default async function DashboardEmployeesPage() {
         initialTimeOff={timeOff}
         initialStats={stats}
         initialSharedCalendar={sharedCalendar}
+        ownerNumbers={ownerNumbers}
       />
     </div>
   );

@@ -48,6 +48,7 @@ import { generateImageForDashboard, normalizeAspectRatio } from "@/lib/image-too
 import { recordInteractionAndIncrement } from "@/lib/customer-memory/db";
 import { flagContactSpam } from "@/lib/customer-tools/flag-spam";
 import { setContactTextingMode } from "@/lib/customer-tools/reply-mode";
+import { manageEmployee } from "@/lib/employees/manage-tool";
 import {
   applyNotificationPreferenceToggles,
   NOTIFICATION_TOGGLE_KEYS
@@ -70,7 +71,8 @@ export const ACTION_TOOL_NAMES = [
   "generate_image",
   "update_notification_preferences",
   "flag_contact_spam",
-  "set_contact_reply_mode"
+  "set_contact_reply_mode",
+  "manage_employee"
 ] as const;
 
 export type ActionToolName = (typeof ACTION_TOOL_NAMES)[number];
@@ -145,6 +147,15 @@ export type ActionToolGates = {
    * operate_messages-level).
    */
   set_contact_reply_mode: boolean;
+  /**
+   * Roster CRUD: add a teammate, edit them, deactivate them, and set the
+   * three lead-availability switches. Inline-only on verified owner surfaces
+   * (dashboard chat, owner-SMS operator turn) plus MCP; the customer-facing
+   * texting coworker must never be able to put someone on the roster that
+   * receives leads. On dashboard chat the gate also requires manage_settings,
+   * the same bar the Employees page itself enforces.
+   */
+  manage_employee: boolean;
 };
 
 // Every clock time in an outbound body carries a named timezone (KYP/Ayanna
@@ -445,6 +456,66 @@ const SET_CONTACT_REPLY_MODE_DECLARATION: GeminiFunctionDeclaration = {
   }
 };
 
+const MANAGE_EMPLOYEE_DECLARATION: GeminiFunctionDeclaration = {
+  name: "manage_employee",
+  description:
+    'Add, edit, deactivate, or reactivate someone on the business\'s employee roster, and control how they receive leads. Use ONLY when the owner asks for a roster change in this conversation ("add Sandy, her cell is 602 555 0134", "Gabby\'s number changed", "take Dave off lead rotation", "Jason is back from leave"). The roster decides who gets lead offers, so: read a NEW teammate\'s number back digit by digit after adding them, and CONFIRM with the owner before deactivating anyone or turning lead rotation off, because both immediately redirect live leads to other people. Never invent a number or a name. To change someone, identify them in "employee" by their roster name or their phone number. Turning a lead-availability switch off never affects the owner\'s own alerts. After the tool returns, tell the owner exactly what changed.',
+  parameters: {
+    type: "object",
+    properties: {
+      action: {
+        type: "string",
+        description:
+          '"add" a new teammate, "update" an existing one, "deactivate" (they stop receiving everything, history kept), or "reactivate".'
+      },
+      employee: {
+        type: "string",
+        description:
+          'Who to change for update/deactivate/reactivate: their roster name or phone number. Omit for "add".'
+      },
+      name: {
+        type: "string",
+        description: 'The new teammate\'s name for "add", or the corrected name for "update".'
+      },
+      phone: {
+        type: "string",
+        description:
+          'The new teammate\'s mobile number for "add", or the corrected number for "update". E.164 preferred, e.g. +16025551234.'
+      },
+      email: {
+        type: "string",
+        description: "Their email, when the owner gives one. Send an empty string to clear it."
+      },
+      scheduleText: {
+        type: "string",
+        description:
+          'Working hours in the compact form "mon-fri 09:00-17:00; sat 10:00-14:00". Outside these hours they are not offered leads. Empty string clears the schedule (always available).'
+      },
+      preferredText: {
+        type: "string",
+        description:
+          "Preferred lead hours, same format. Soft priority only: it moves them to the front of the rotation during those hours, never excludes them."
+      },
+      leadRotation: {
+        type: "boolean",
+        description:
+          "Whether they receive leads in the round robin, including automatic assignment and automations pinned to them by name. False stops all of those."
+      },
+      namedGroupOffers: {
+        type: "boolean",
+        description:
+          'Whether they are included when an automation texts one lead to several named people at once and the first to reply "1" takes it.'
+      },
+      wholeTeamOffers: {
+        type: "boolean",
+        description:
+          "Whether they are included when something is offered to the entire team at once, such as the team-first human handoff."
+      }
+    },
+    required: ["action"]
+  }
+};
+
 const DECLARATIONS: Record<ActionToolName, GeminiFunctionDeclaration> = {
   send_sms: SEND_SMS_DECLARATION,
   send_whatsapp: SEND_WHATSAPP_DECLARATION,
@@ -459,7 +530,8 @@ const DECLARATIONS: Record<ActionToolName, GeminiFunctionDeclaration> = {
   generate_image: GENERATE_IMAGE_DECLARATION,
   update_notification_preferences: UPDATE_NOTIFICATION_PREFERENCES_DECLARATION,
   flag_contact_spam: FLAG_CONTACT_SPAM_DECLARATION,
-  set_contact_reply_mode: SET_CONTACT_REPLY_MODE_DECLARATION
+  set_contact_reply_mode: SET_CONTACT_REPLY_MODE_DECLARATION,
+  manage_employee: MANAGE_EMPLOYEE_DECLARATION
 };
 
 /** The declarations for every gate that is ON, in stable order. */
@@ -559,6 +631,19 @@ const setContactReplyModeArgsSchema = z.object({
   mode: z.enum(["suppress", "auto"])
 });
 
+const manageEmployeeArgsSchema = z.object({
+  action: z.enum(["add", "update", "deactivate", "reactivate"]),
+  employee: z.string().max(160).optional(),
+  name: z.string().max(120).optional(),
+  phone: z.string().max(32).optional(),
+  email: z.string().max(254).optional(),
+  scheduleText: z.string().max(500).optional(),
+  preferredText: z.string().max(500).optional(),
+  leadRotation: z.boolean().optional(),
+  namedGroupOffers: z.boolean().optional(),
+  wholeTeamOffers: z.boolean().optional()
+});
+
 // Same caps as the Rowboat dispatch's dashboardGenerateImageArgsSchema.
 const generateImageArgsSchema = z.object({
   prompt: z.string().min(1).max(2000),
@@ -639,6 +724,7 @@ export type ActionToolDeps = {
   applyNotificationToggles?: typeof applyNotificationPreferenceToggles;
   flagSpam?: typeof flagContactSpam;
   setReplyMode?: typeof setContactTextingMode;
+  manageRoster?: typeof manageEmployee;
 };
 
 /**
@@ -671,6 +757,7 @@ export async function executeActionTool(
     deps.applyNotificationToggles ?? applyNotificationPreferenceToggles;
   const flagSpam = deps.flagSpam ?? flagContactSpam;
   const setReplyMode = deps.setReplyMode ?? setContactTextingMode;
+  const manageRoster = deps.manageRoster ?? manageEmployee;
   /* c8 ignore stop */
 
   // Outbound-first recipients must exist as contacts (KYP/Ayanna, Jul 20
@@ -963,6 +1050,15 @@ export async function executeActionTool(
         // Shared core: reply-mode write (load-bearing, fails honestly) →
         // pending-run cancels on suppress. Never throws.
         return await setReplyMode(businessId, parsed.data);
+      }
+      case "manage_employee": {
+        const parsed = manageEmployeeArgsSchema.safeParse(call.args);
+        if (!parsed.success) {
+          return { ok: false, message: `invalid_args:${parsed.error.issues[0]?.message}` };
+        }
+        // Shared core: the same db helpers the Employees page writes through,
+        // so the AI path and the page cannot drift. Never throws.
+        return await manageRoster(businessId, parsed.data);
       }
     }
   } catch (err) {

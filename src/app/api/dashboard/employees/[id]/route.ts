@@ -2,7 +2,8 @@
  * Per-employee endpoint.
  *
  * PATCH  /api/dashboard/employees/:id?businessId=<uuid>
- *          body: { name?, phoneE164?, email?, active?, scheduleText?, preferredText? }
+ *          body: { name?, phoneE164?, email?, active?, scheduleText?, preferredText?,
+ *                  routingEnabled?, namedBroadcastEnabled?, teamBroadcastEnabled? }
  *          → { member }
  *
  * DELETE /api/dashboard/employees/:id?businessId=<uuid>
@@ -50,7 +51,11 @@ const patchSchema = z
     email: z.string().trim().email().max(254).nullable().optional(),
     active: z.boolean().optional(),
     scheduleText: z.string().max(500).optional(),
-    preferredText: z.string().max(500).optional()
+    preferredText: z.string().max(500).optional(),
+    // Lead availability, each independently patchable.
+    routingEnabled: z.boolean().optional(),
+    namedBroadcastEnabled: z.boolean().optional(),
+    teamBroadcastEnabled: z.boolean().optional()
   })
   .refine((b) => Object.values(b).some((v) => v !== undefined), {
     message: "Provide at least one field to update"
@@ -80,7 +85,14 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
       ...(body.name !== undefined ? { name: body.name } : {}),
       ...(body.phoneE164 !== undefined ? { phoneE164: body.phoneE164 } : {}),
       ...(body.email !== undefined ? { email: body.email } : {}),
-      ...(body.active !== undefined ? { active: body.active } : {})
+      ...(body.active !== undefined ? { active: body.active } : {}),
+      ...(body.routingEnabled !== undefined ? { routingEnabled: body.routingEnabled } : {}),
+      ...(body.namedBroadcastEnabled !== undefined
+        ? { namedBroadcastEnabled: body.namedBroadcastEnabled }
+        : {}),
+      ...(body.teamBroadcastEnabled !== undefined
+        ? { teamBroadcastEnabled: body.teamBroadcastEnabled }
+        : {})
     };
     if (body.scheduleText !== undefined) {
       const parsed = parseScheduleText(body.scheduleText);

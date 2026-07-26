@@ -5,14 +5,15 @@
  *        → { members, timeOff, stats }   (roster + time off + routing stats)
  *
  * POST /api/dashboard/employees?businessId=<uuid>
- *        body: { name, phoneE164, email?, scheduleText?, preferredText? }
+ *        body: { name, phoneE164, email?, scheduleText?, preferredText?,
+ *                routingEnabled?, namedBroadcastEnabled?, teamBroadcastEnabled? }
  *        → { member }
  *
  * The roster is the same ai_flow_team_members table route_to_team rotates
  * through, so adding someone here immediately puts them in the lead
- * rotation. Schedules arrive as the compact text form ("mon-fri
- * 09:00-17:00") and are parsed server-side so the stored jsonb is always
- * canonical.
+ * rotation unless the availability flags say otherwise. Schedules arrive as
+ * the compact text form ("mon-fri 09:00-17:00") and are parsed server-side so
+ * the stored jsonb is always canonical.
  *
  * Auth: getAuthUser + requireBusinessRole(businessId, "manage_settings"); admins bypass the ownership
  * check (existing dashboard convention).
@@ -58,7 +59,12 @@ const createSchema = z.object({
   phoneE164: phoneField,
   email: z.string().trim().email().max(254).nullable().optional(),
   scheduleText: z.string().max(500).optional(),
-  preferredText: z.string().max(500).optional()
+  preferredText: z.string().max(500).optional(),
+  // Lead availability. Omitted = the column defaults (all true), so an
+  // ordinary "add a teammate" is unchanged.
+  routingEnabled: z.boolean().optional(),
+  namedBroadcastEnabled: z.boolean().optional(),
+  teamBroadcastEnabled: z.boolean().optional()
 });
 
 /** Parse a schedule text field, mapping parse failures to a 400. */
@@ -134,7 +140,14 @@ export async function POST(request: Request) {
       phoneE164: body.phoneE164,
       email: body.email ?? null,
       weeklySchedule,
-      preferredWindows
+      preferredWindows,
+      ...(body.routingEnabled !== undefined ? { routingEnabled: body.routingEnabled } : {}),
+      ...(body.namedBroadcastEnabled !== undefined
+        ? { namedBroadcastEnabled: body.namedBroadcastEnabled }
+        : {}),
+      ...(body.teamBroadcastEnabled !== undefined
+        ? { teamBroadcastEnabled: body.teamBroadcastEnabled }
+        : {})
     });
 
     return successResponse({ member });

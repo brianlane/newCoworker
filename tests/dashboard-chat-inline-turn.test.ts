@@ -553,7 +553,8 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
     generate_image: true,
     update_notification_preferences: true,
     flag_contact_spam: true,
-    set_contact_reply_mode: true
+    set_contact_reply_mode: true,
+    manage_employee: true
   };
 
   it("declares gated action tools alongside the creation tools", async () => {
@@ -576,7 +577,8 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
       "generate_image",
       "update_notification_preferences",
       "flag_contact_spam",
-      "set_contact_reply_mode"
+      "set_contact_reply_mode",
+      "manage_employee"
     ]);
   });
 
@@ -1068,6 +1070,87 @@ describe("runInlineChatTurn, action tools (send_sms + calendar)", () => {
     });
     expect(res2.ok).toBe(true);
     if (res2.ok) expect(res2.content).toContain("Texting resumed for the contact");
+  });
+
+  it("a successful manage_employee is side-effect pinned, one line per action", async () => {
+    // The roster row exists the moment the core returns ok, and the worker
+    // fallback never declares this tool, so a degraded wrap-up must report
+    // the change rather than deny it.
+    const employee = {
+      id: "m-1",
+      name: "Sandy Reyes",
+      phoneE164: "+16025550134",
+      email: null,
+      active: true,
+      leadRotation: true,
+      namedGroupOffers: true,
+      wholeTeamOffers: true
+    };
+    const cases = [
+      { action: "add", expect: "Sandy Reyes (+16025550134) was added to the employee roster." },
+      {
+        action: "deactivate",
+        expect: "was deactivated: they receive no lead offers until reactivated."
+      },
+      { action: "reactivate", expect: "was reactivated on the roster." },
+      { action: "update", expect: "was updated on the employee roster." }
+    ] as const;
+
+    for (const c of cases) {
+      const runActionTool = vi.fn(async () => ({
+        ok: true,
+        action: c.action,
+        employee,
+        note: "Tell the owner exactly what changed for Sandy Reyes. They no longer receive: leads in rotation."
+      }));
+      const chatStep = vi
+        .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+        .mockResolvedValueOnce(toolStep("manage_employee", { action: c.action }))
+        .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+      const res = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+        chatStep,
+        runActionTool
+      });
+      expect(res.ok, c.action).toBe(true);
+      if (res.ok) expect(res.content).toContain(c.expect);
+    }
+
+    // The update arm relays the core's plain-English availability sentence,
+    // minus the instruction addressed to the model.
+    const updateTool = vi.fn(async () => ({
+      ok: true,
+      action: "update",
+      employee,
+      note: "Tell the owner exactly what changed for Sandy Reyes. They no longer receive: leads in rotation."
+    }));
+    const chatStepUpdate = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("manage_employee", { action: "update" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const updated = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep: chatStepUpdate,
+      runActionTool: updateTool
+    });
+    expect(updated.ok).toBe(true);
+    if (updated.ok) {
+      expect(updated.content).toContain("They no longer receive: leads in rotation.");
+      expect(updated.content).not.toContain("Tell the owner");
+    }
+
+    // Defensive arm: a payload missing employee/note still names the change.
+    const bareTool = vi.fn(async () => ({ ok: true, action: "update" }));
+    const chatStepBare = vi
+      .fn<(p: GeminiChatStepParams) => Promise<GeminiChatStepResult>>()
+      .mockResolvedValueOnce(toolStep("manage_employee", { action: "update" }))
+      .mockRejectedValueOnce(new Error("gemini_http_500:wrap-up died"));
+    const bare = await runInlineChatTurn(baseArgs({ actionToolGates: ALL_ON }), {
+      chatStep: chatStepBare,
+      runActionTool: bareTool
+    });
+    expect(bare.ok).toBe(true);
+    if (bare.ok) {
+      expect(bare.content).toContain("the teammate was updated on the employee roster.");
+    }
   });
 
   it("stops starting new steps once budgetMs is exhausted, fails fast when nothing committed", async () => {

@@ -36,7 +36,8 @@ const ALL_ON: ActionToolGates = {
   generate_image: true,
   update_notification_preferences: true,
   flag_contact_spam: true,
-  set_contact_reply_mode: true
+  set_contact_reply_mode: true,
+  manage_employee: true
 };
 
 function insertResult(result: { error: { message: string } | null }) {
@@ -219,7 +220,8 @@ describe("declarations & naming", () => {
       generate_image: false,
       update_notification_preferences: false,
       flag_contact_spam: false,
-      set_contact_reply_mode: false
+      set_contact_reply_mode: false,
+      manage_employee: false
     });
     expect(some.map((d) => d.name)).toEqual([
       "calendar_find_slots",
@@ -409,6 +411,84 @@ describe("set_contact_reply_mode", () => {
       expect(invalid.message).toContain("invalid_args");
     }
     expect(setReplyMode).not.toHaveBeenCalled();
+  });
+});
+
+describe("manage_employee", () => {
+  it("is declared with confirm-before-redirecting-leads guidance and gated off cleanly", () => {
+    const decl = actionToolDeclarations(ALL_ON).find((d) => d.name === "manage_employee");
+    // The two irreversible-feeling moves must be called out: a mistyped
+    // number sends a teammate's leads to a stranger, and deactivating or
+    // un-rotating someone silently reroutes live leads.
+    expect(decl?.description).toMatch(/number back digit by digit/i);
+    expect(decl?.description).toMatch(/confirm/i);
+    expect(decl?.description).toMatch(/never invent a number/i);
+    const props = Object.keys(
+      (decl?.parameters as { properties: Record<string, unknown> }).properties
+    );
+    expect(props).toEqual([
+      "action",
+      "employee",
+      "name",
+      "phone",
+      "email",
+      "scheduleText",
+      "preferredText",
+      "leadRotation",
+      "namedGroupOffers",
+      "wholeTeamOffers"
+    ]);
+    expect((decl?.parameters as { required: string[] }).required).toEqual(["action"]);
+
+    const gatedOff = actionToolDeclarations({ ...ALL_ON, manage_employee: false });
+    expect(gatedOff.map((d) => d.name)).not.toContain("manage_employee");
+  });
+
+  it("delegates to the shared core and returns its payload verbatim", async () => {
+    const manageRoster = vi.fn(async () => ({
+      ok: true as const,
+      action: "update" as const,
+      employee: {
+        id: "m-1",
+        name: "Amy Laidlaw",
+        phoneE164: "+16026951142",
+        email: null,
+        active: true,
+        leadRotation: false,
+        namedGroupOffers: true,
+        wholeTeamOffers: false
+      },
+      note: "Tell the owner…"
+    }));
+    const res = (await executeActionTool(
+      BIZ,
+      {
+        name: "manage_employee",
+        args: { action: "update", employee: "Amy Laidlaw", leadRotation: false }
+      },
+      { manageRoster: manageRoster as never }
+    )) as { ok: boolean; employee?: { leadRotation?: boolean } };
+    expect(manageRoster).toHaveBeenCalledWith(BIZ, {
+      action: "update",
+      employee: "Amy Laidlaw",
+      leadRotation: false
+    });
+    expect(res.ok).toBe(true);
+    expect(res.employee?.leadRotation).toBe(false);
+  });
+
+  it("rejects invalid args without touching the core", async () => {
+    const manageRoster = vi.fn();
+    for (const args of [{}, { action: "fire" }, { action: "update", leadRotation: "no" }]) {
+      const invalid = (await executeActionTool(
+        BIZ,
+        { name: "manage_employee", args },
+        { manageRoster: manageRoster as never }
+      )) as { ok: boolean; message?: string };
+      expect(invalid.ok).toBe(false);
+      expect(invalid.message).toContain("invalid_args");
+    }
+    expect(manageRoster).not.toHaveBeenCalled();
   });
 });
 

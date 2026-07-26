@@ -25,8 +25,38 @@ export type TeamMemberRow = {
   weekly_schedule: unknown;
   /** Same shape as weekly_schedule; preferred lead-time windows. */
   preferred_windows: unknown;
+  /** Eligible for the round-robin rotation, auto-assign, and single-agent pins. */
+  routing_enabled: boolean;
+  /** Eligible when a flow lists them by name in a simultaneous offer. */
+  named_broadcast_enabled: boolean;
+  /** Eligible for whole-roster offers (the team-first human handoff). */
+  team_broadcast_enabled: boolean;
   created_at: string;
 };
+
+/**
+ * The lead-availability flags, as the API and the AI tool accept them. All
+ * optional: an omitted flag is left untouched, which is what makes "take
+ * Gabby off rotation" a one-field edit.
+ */
+export type LeadAvailabilityPatch = {
+  routingEnabled?: boolean;
+  namedBroadcastEnabled?: boolean;
+  teamBroadcastEnabled?: boolean;
+};
+
+/** Column-name mapping for the availability flags, shared by insert and update. */
+function availabilityColumns(input: LeadAvailabilityPatch): Record<string, boolean> {
+  return {
+    ...(input.routingEnabled !== undefined ? { routing_enabled: input.routingEnabled } : {}),
+    ...(input.namedBroadcastEnabled !== undefined
+      ? { named_broadcast_enabled: input.namedBroadcastEnabled }
+      : {}),
+    ...(input.teamBroadcastEnabled !== undefined
+      ? { team_broadcast_enabled: input.teamBroadcastEnabled }
+      : {})
+  };
+}
 
 export type TimeOffRow = {
   id: string;
@@ -43,7 +73,8 @@ export type TimeOffRow = {
 
 const MEMBER_COLUMNS =
   "id,business_id,name,phone_e164,email,active,last_offered_at," +
-  "weekly_schedule,preferred_windows,created_at";
+  "weekly_schedule,preferred_windows," +
+  "routing_enabled,named_broadcast_enabled,team_broadcast_enabled,created_at";
 
 const TIME_OFF_COLUMNS =
   "id,business_id,member_id,starts_on,ends_on,note,calendar_event_id,created_at";
@@ -78,7 +109,7 @@ export async function getTeamMember(
   return (data as unknown as TeamMemberRow | null) ?? null;
 }
 
-export type TeamMemberInput = {
+export type TeamMemberInput = LeadAvailabilityPatch & {
   name: string;
   phoneE164: string;
   email?: string | null;
@@ -100,7 +131,10 @@ export async function createTeamMember(
       phone_e164: input.phoneE164,
       email: input.email ?? null,
       weekly_schedule: input.weeklySchedule ?? null,
-      preferred_windows: input.preferredWindows ?? null
+      preferred_windows: input.preferredWindows ?? null,
+      // Omitted flags fall to the column defaults (all true), so the common
+      // "add a teammate" call keeps its old meaning.
+      ...availabilityColumns(input)
     })
     .select(MEMBER_COLUMNS)
     .single();
@@ -116,7 +150,7 @@ export async function createTeamMember(
   return row;
 }
 
-export type TeamMemberPatch = {
+export type TeamMemberPatch = LeadAvailabilityPatch & {
   name?: string;
   phoneE164?: string;
   email?: string | null;
@@ -138,7 +172,8 @@ export async function updateTeamMember(
     ...(patch.email !== undefined ? { email: patch.email } : {}),
     ...(patch.active !== undefined ? { active: patch.active } : {}),
     ...("weeklySchedule" in patch ? { weekly_schedule: patch.weeklySchedule ?? null } : {}),
-    ...("preferredWindows" in patch ? { preferred_windows: patch.preferredWindows ?? null } : {})
+    ...("preferredWindows" in patch ? { preferred_windows: patch.preferredWindows ?? null } : {}),
+    ...availabilityColumns(patch)
   };
   const { data, error } = await db
     .from("ai_flow_team_members")

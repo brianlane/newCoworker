@@ -261,7 +261,11 @@ const SIDE_EFFECT_TOOLS: ReadonlySet<string> = new Set([
   "flag_contact_spam",
   // The reply-mode write + run cancels persist the moment the core returns
   // ok; same fallback-denial hazard as the spam flag.
-  "set_contact_reply_mode"
+  "set_contact_reply_mode",
+  // The roster write persists the moment the core returns ok, and the worker
+  // fallback never declares this tool, so falling back would tell the owner
+  // their teammate was not added after the row already exists.
+  "manage_employee"
 ]);
 
 /** Committed side effects + the user-facing facts a degraded wrap-up must carry. */
@@ -349,6 +353,26 @@ function sideEffectNote(name: ActionToolName, result: unknown): string {
         ? note.replace(/^Tell the owner: /, "")
         : "the number is blocked from all texting and their pending follow-ups were stopped.";
     return `Spam flag applied to ${target}: ${outcome}`;
+  }
+  if (name === "manage_employee") {
+    const employee = (r as { employee?: { name?: unknown; phoneE164?: unknown } }).employee;
+    const who =
+      typeof employee?.name === "string" && employee.name ? employee.name : "the teammate";
+    const phone = typeof employee?.phoneE164 === "string" ? ` (${employee.phoneE164})` : "";
+    const action = (r as { action?: unknown }).action;
+    if (action === "add") return `${who}${phone} was added to the employee roster.`;
+    if (action === "deactivate") {
+      return `${who}${phone} was deactivated: they receive no lead offers until reactivated.`;
+    }
+    if (action === "reactivate") return `${who}${phone} was reactivated on the roster.`;
+    // The core's note already states the resulting availability in plain
+    // English; keep it minus the model instruction.
+    const note = (r as { note?: unknown }).note;
+    const outcome =
+      typeof note === "string"
+        ? note.replace(/^Tell the owner exactly what changed for [^.]*\. /, "")
+        : "";
+    return `${who}${phone} was updated on the employee roster. ${outcome}`.trim();
   }
   return "The appointment was canceled.";
 }

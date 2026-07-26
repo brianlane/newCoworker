@@ -1394,6 +1394,21 @@
       "saved": "Guardado.",
       "saveFailed": "No se pudo guardar"
     },
+    "employeeAvailability": {
+      "ownerBadge": "Propietario",
+      "sectionTitle": "Disponibilidad para leads",
+      "sectionHelp": "Las formas en que esta persona puede recibir un lead. El tiempo libre y su horario semanal se aplican además de esto.",
+      "rotationLabel": "Leads por rotación",
+      "rotationHelp": "Ofrecer nuevos leads a esta persona en la rotación, incluida la asignación automática y cualquier automatización dirigida a su nombre. Desactivado, esos leads pasan a la siguiente persona o vuelven a ti cuando no queda nadie.",
+      "rotationShort": "leads por rotación",
+      "namedLabel": "Ofertas grupales que la mencionan",
+      "namedHelp": "Incluir a esta persona cuando una automatización envía un mismo lead a varias personas nombradas a la vez y quien primero responda \"1\" se lo queda.",
+      "namedShort": "ofertas grupales con su nombre",
+      "teamLabel": "Ofertas a todo el equipo",
+      "teamHelp": "Incluir a esta persona cuando tu coworker ofrece algo a todo el equipo a la vez, como el traspaso a humano con el equipo primero de arriba.",
+      "teamShort": "ofertas a todo el equipo",
+      "summaryOff": "No recibe: {list}"
+    },
     "home": {
       "title": "Tu Coworker de IA",
       "subtitle": "Monitorea y administra a tu empleado digital",
