@@ -626,7 +626,7 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
         <h2 className="text-base font-semibold text-parchment">{t("intakeTitle")}</h2>
         <p className="mt-1 text-sm text-parchment/60">{t("intakeSubtitle")}</p>
         <div className="mt-4 space-y-3">
-          {(page?.intake_questions ?? []).map((q, idx) => (
+          {(page?.intake_questions ?? []).map((q) => (
             <div
               key={q.id}
               className="rounded-md border border-parchment/15 bg-deep-ink/60 p-3"
@@ -650,8 +650,10 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
                     onBlur={(e) => {
                       const next = e.target.value.trim();
                       if (next && next !== q.label) {
+                        // Matched by id, not index: the queued base list can
+                        // differ from what this row rendered from.
                         void patchQuestions((qs) =>
-                          qs.map((it, i) => (i === idx ? { ...it, label: next } : it))
+                          qs.map((it) => (it.id === q.id ? { ...it, label: next } : it))
                         );
                       } else if (!next) {
                         // An emptied label cannot save; put the stored one
@@ -673,8 +675,8 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
                     onChange={(e) => {
                       const type = e.target.value as IntakeQuestion["type"];
                       void patchQuestions((qs) =>
-                        qs.map((it, i) =>
-                          i === idx
+                        qs.map((it) =>
+                          it.id === q.id
                             ? {
                                 ...it,
                                 type,
@@ -705,7 +707,7 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
                     onChange={(e) => {
                       const required = e.target.checked;
                       void patchQuestions((qs) =>
-                        qs.map((it, i) => (i === idx ? { ...it, required } : it))
+                        qs.map((it) => (it.id === q.id ? { ...it, required } : it))
                       );
                     }}
                   />
@@ -715,7 +717,7 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
                   type="button"
                   className="pb-1.5 text-sm text-clay-red/80 hover:text-clay-red"
                   disabled={saving}
-                  onClick={() => void patchQuestions((qs) => qs.filter((_, i) => i !== idx))}
+                  onClick={() => void patchQuestions((qs) => qs.filter((it) => it.id !== q.id))}
                 >
                   {t("intakeRemove")}
                 </button>
@@ -740,7 +742,7 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
                         .slice(0, 8);
                       if (options.length >= 2) {
                         void patchQuestions((qs) =>
-                          qs.map((it, i) => (i === idx ? { ...it, options } : it))
+                          qs.map((it) => (it.id === q.id ? { ...it, options } : it))
                         );
                       } else {
                         // Fewer than two options is not a choice; revert to
