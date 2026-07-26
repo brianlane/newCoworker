@@ -618,6 +618,11 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
                   </label>
                   <input
                     id={`bp-q-label-${q.id}`}
+                    // Keyed on the stored value so a successful save (or a
+                    // reverted one) re-renders the input from what is
+                    // actually persisted; the field can never show text the
+                    // public page is not using.
+                    key={q.label}
                     className={`${select} w-full`}
                     maxLength={160}
                     defaultValue={q.label}
@@ -630,6 +635,10 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
                             i === idx ? { ...it, label: next } : it
                           )
                         );
+                      } else if (!next) {
+                        // An emptied label cannot save; put the stored one
+                        // back rather than showing an edit that never landed.
+                        e.target.value = q.label;
                       }
                     }}
                   />
@@ -705,6 +714,7 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
                   </label>
                   <input
                     id={`bp-q-options-${q.id}`}
+                    key={(q.options ?? []).join(", ")}
                     className={`${select} w-full`}
                     disabled={saving}
                     defaultValue={(q.options ?? []).join(", ")}
@@ -721,6 +731,10 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
                             i === idx ? { ...it, options } : it
                           )
                         );
+                      } else {
+                        // Fewer than two options is not a choice; revert to
+                        // what is stored instead of showing a phantom edit.
+                        e.target.value = (q.options ?? []).join(", ");
                       }
                     }}
                   />
