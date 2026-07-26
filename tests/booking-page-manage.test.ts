@@ -220,9 +220,11 @@ describe("cancelManagedBooking", () => {
       { attendeePhone: "+14805550177" },
       null
     );
-    // The core handles the ledger, Zoom, and the waitlist offer itself.
+    // The core handles the ledger, Zoom, and the waitlist offer itself,
+    // but the page's parked slot claim is ours to clear.
     expect(mockDelete).not.toHaveBeenCalled();
     expect(mockOfferFreed).not.toHaveBeenCalled();
+    expect(mockReleaseParked).toHaveBeenCalledWith(BIZ, "slot:public-booking-page", FUTURE);
   });
 
   it("platform mode: the ledger row IS the appointment, plus Zoom and waitlist", async () => {
@@ -302,6 +304,7 @@ describe("rescheduleManagedBooking", () => {
       }),
       null
     );
+    expect(mockReleaseParked).toHaveBeenCalledWith(BIZ, "slot:public-booking-page", FUTURE);
   });
 
   it("platform mode: claims the slot, moves the row, moves Zoom, and fixes the waitlist", async () => {

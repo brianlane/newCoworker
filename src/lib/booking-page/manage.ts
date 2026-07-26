@@ -248,6 +248,14 @@ export async function cancelManagedBooking(
       });
       return { ok: false, detail: "change_failed" };
     }
+    // Same parked-claim cleanup as platform mode: the core clears the
+    // CONFIRMED row, but the public page's slot claim sits on that start
+    // until its lease lapses and would turn the next booker away.
+    await releaseParkedSlotClaims(
+      resolved.row.business_id,
+      PUBLIC_SLOT_CLAIM_KEY,
+      resolved.row.start_at
+    );
     return { ok: true };
   } catch (err) {
     logger.warn("booking-manage: cancel failed", {
@@ -371,6 +379,12 @@ export async function rescheduleManagedBooking(
     if (result.detail === "reschedule_link_created") {
       return { ok: false, detail: "change_failed" };
     }
+    // The vacated start keeps its parked claim otherwise (see cancel).
+    await releaseParkedSlotClaims(
+      resolved.row.business_id,
+      PUBLIC_SLOT_CLAIM_KEY,
+      resolved.row.start_at
+    );
     return { ok: true, startIso: newStartIso };
   } catch (err) {
     logger.warn("booking-manage: reschedule failed", {
