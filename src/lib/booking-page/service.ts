@@ -392,6 +392,43 @@ export type SubmitPublicBookingInput = {
   notifyEarlier?: boolean;
 };
 
+/**
+ * Has the target's business-local day already hit `max_daily_bookings`?
+ *
+ * Run AFTER winning the slot claim: concurrent writes for DIFFERENT slots
+ * on the same day could each pass their availability read while the ledger
+ * count still sat below the cap. This narrows that window to the ledger
+ * write itself; the cap is a courtesy limit, and exact enforcement would
+ * need a DB-side atomic reserve. Shared so a self-serve RESCHEDULE onto a
+ * day cannot bypass what a new booking onto it respects.
+ *
+ * `excludeStartIso` drops the booking being moved from the count, so a
+ * same-day move does not count itself.
+ */
+export async function dailyCapReached(
+  businessId: string,
+  page: Pick<BookingPageRow, "max_daily_bookings">,
+  timezone: string,
+  start: Date,
+  excludeStartIso?: string
+): Promise<boolean> {
+  const cap = page.max_daily_bookings;
+  if (cap === null) return false;
+  const DAY_WINDOW_MS = 26 * 60 * 60 * 1000;
+  const nearby = await listBookingStartsBetween(
+    businessId,
+    new Date(start.getTime() - DAY_WINDOW_MS).toISOString(),
+    new Date(start.getTime() + DAY_WINDOW_MS).toISOString()
+  );
+  const excludeMs = excludeStartIso ? Date.parse(excludeStartIso) : NaN;
+  const slotDay = localClock(start, timezone).isoDate;
+  const sameDay = nearby.filter(
+    (d) =>
+      d.getTime() !== excludeMs && localClock(d, timezone).isoDate === slotDay
+  ).length;
+  return sameDay >= cap;
+}
+
 export type SubmitPublicBookingResult =
   | {
       ok: true;
@@ -523,22 +560,9 @@ export async function submitPublicBooking(
   // re-verify while the ledger count sat below the cap. Recounting here
   // narrows that window to the ledger write itself; the cap is a courtesy
   // limit, and exact enforcement would need a DB-side atomic reserve.
-  const cap = context.page.max_daily_bookings;
-  if (cap !== null) {
-    const DAY_WINDOW_MS = 26 * 60 * 60 * 1000;
-    const nearby = await listBookingStartsBetween(
-      context.businessId,
-      new Date(start.getTime() - DAY_WINDOW_MS).toISOString(),
-      new Date(start.getTime() + DAY_WINDOW_MS).toISOString()
-    );
-    const slotDay = localClock(start, context.timezone).isoDate;
-    const sameDay = nearby.filter(
-      (d) => localClock(d, context.timezone).isoDate === slotDay
-    ).length;
-    if (sameDay >= cap) {
-      await releaseSlotClaim();
-      return { ok: false, detail: "slot_taken" };
-    }
+  if (await dailyCapReached(context.businessId, context.page, context.timezone, start)) {
+    await releaseSlotClaim();
+    return { ok: false, detail: "slot_taken" };
   }
 
   const summary = `${name} + ${context.businessName} (${input.durationMinutes} min)`;

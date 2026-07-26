@@ -58,6 +58,7 @@ import {
   PUBLIC_SLOT_CLAIM_KEY,
   getBookingPageContext,
   listPublicSlots,
+  dailyCapReached,
   listSlotsForBusiness,
   probeCalendarAvailability,
   submitPublicBooking
@@ -310,6 +311,49 @@ describe("probeCalendarAvailability", () => {
     } as never);
     mockCaldav.mockResolvedValueOnce({ ok: true, busy: [] } as never);
     expect(await probeCalendarAvailability(BIZ)).toBe("ok");
+  });
+});
+
+describe("dailyCapReached", () => {
+  const DAY_START = new Date("2026-01-05T16:00:00Z");
+
+  it("is never reached when the page is uncapped", async () => {
+    expect(
+      await dailyCapReached(BIZ, { max_daily_bookings: null }, "America/Phoenix", DAY_START)
+    ).toBe(false);
+    expect(mockListStarts).not.toHaveBeenCalled();
+  });
+
+  it("counts the target's business-local day only", async () => {
+    mockListStarts.mockResolvedValue([
+      new Date("2026-01-05T17:00:00Z"),
+      // Next local day: outside the count even though it is inside the
+      // 26 hour read window.
+      new Date("2026-01-06T17:00:00Z")
+    ]);
+    expect(
+      await dailyCapReached(BIZ, { max_daily_bookings: 2 }, "America/Phoenix", DAY_START)
+    ).toBe(false);
+    expect(
+      await dailyCapReached(BIZ, { max_daily_bookings: 1 }, "America/Phoenix", DAY_START)
+    ).toBe(true);
+  });
+
+  it("excludes a booking being moved, so a same-day move never counts itself", async () => {
+    mockListStarts.mockResolvedValue([new Date("2026-01-05T17:00:00Z")]);
+    expect(
+      await dailyCapReached(
+        BIZ,
+        { max_daily_bookings: 1 },
+        "America/Phoenix",
+        DAY_START,
+        "2026-01-05T17:00:00.000Z"
+      )
+    ).toBe(false);
+    // A junk exclusion is ignored rather than dropping the whole count.
+    expect(
+      await dailyCapReached(BIZ, { max_daily_bookings: 1 }, "America/Phoenix", DAY_START, "nope")
+    ).toBe(true);
   });
 });
 

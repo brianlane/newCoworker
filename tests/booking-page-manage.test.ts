@@ -33,6 +33,7 @@ vi.mock("@/lib/booking-page/db", () => ({
 }));
 vi.mock("@/lib/booking-page/service", () => ({
   listSlotsForBusiness: vi.fn(),
+  dailyCapReached: vi.fn(),
   PUBLIC_SLOT_CLAIM_KEY: "slot:public-booking-page"
 }));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } }));
@@ -68,7 +69,7 @@ import {
   getBookingPageForBusiness,
   moveManagedBooking
 } from "@/lib/booking-page/db";
-import { listSlotsForBusiness } from "@/lib/booking-page/service";
+import { dailyCapReached, listSlotsForBusiness } from "@/lib/booking-page/service";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const TOKEN = `ncbm_${"a".repeat(64)}`;
@@ -93,6 +94,7 @@ const mockPage = vi.mocked(getBookingPageForBusiness);
 const mockMove = vi.mocked(moveManagedBooking);
 const mockDelete = vi.mocked(deleteManagedBooking);
 const mockSlots = vi.mocked(listSlotsForBusiness);
+const mockCapReached = vi.mocked(dailyCapReached);
 
 function row(over: Record<string, unknown> = {}) {
   return {
@@ -110,7 +112,8 @@ function row(over: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   mockRow.mockResolvedValue(row());
-  mockPage.mockResolvedValue({ min_notice_minutes: 120 } as never);
+  mockPage.mockResolvedValue({ min_notice_minutes: 120, max_daily_bookings: null } as never);
+  mockCapReached.mockResolvedValue(false);
   mockBusiness.mockResolvedValue({ name: "New Coworker", timezone: "America/Phoenix" } as never);
   mockCancelCore.mockResolvedValue({ ok: true } as never);
   mockRescheduleCore.mockResolvedValue({ ok: true } as never);
@@ -301,6 +304,27 @@ describe("rescheduleManagedBooking", () => {
       NEW_START
     );
     expect(mockOfferFreed).toHaveBeenCalledWith(BIZ, FUTURE);
+  });
+
+  it("platform mode: respects the day's booking cap, excluding the booking being moved", async () => {
+    // Concurrent moves onto one day could otherwise push it past the cap a
+    // new booking respects.
+    mockRow.mockResolvedValue(row({ event_id: "platform:abc" }));
+    mockCapReached.mockResolvedValue(true);
+    expect(await rescheduleManagedBooking(TOKEN, NEW_START)).toEqual({
+      ok: false,
+      detail: "slot_taken"
+    });
+    expect(mockCapReached).toHaveBeenCalledWith(
+      BIZ,
+      { max_daily_bookings: null },
+      "America/Phoenix",
+      new Date(NEW_START),
+      FUTURE
+    );
+    expect(mockMove).not.toHaveBeenCalled();
+    // The slot claim is handed back so the time is bookable again.
+    expect(mockRelease).toHaveBeenCalledWith("claim-1");
   });
 
   it("platform mode: refuses when another booker already claimed that start", async () => {

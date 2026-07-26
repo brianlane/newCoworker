@@ -38,8 +38,13 @@ import {
   findUpcomingBookingClaim,
   releaseBookingDedupe
 } from "@/lib/calendar-tools/booking-dedupe";
-import { PUBLIC_SLOT_CLAIM_KEY, listSlotsForBusiness } from "@/lib/booking-page/service";
+import {
+  PUBLIC_SLOT_CLAIM_KEY,
+  dailyCapReached,
+  listSlotsForBusiness
+} from "@/lib/booking-page/service";
 import { getBookingPageForBusiness } from "@/lib/booking-page/db";
+import type { BookingPageRow } from "@/lib/booking-page/db";
 import {
   deleteManagedBooking,
   getBookingByManageToken,
@@ -91,6 +96,9 @@ type Resolved = {
   durationMinutes: number;
   platform: boolean;
   minNoticeMinutes: number;
+  /** Cap knob for the post-claim recount; null page reads as uncapped. */
+  page: Pick<BookingPageRow, "max_daily_bookings">;
+  timezone: string;
 };
 
 async function resolve(rawToken: string): Promise<Resolved | null> {
@@ -98,12 +106,17 @@ async function resolve(rawToken: string): Promise<Resolved | null> {
   if (!token) return null;
   const row = await getBookingByManageToken(token);
   if (!row) return null;
-  const page = await getBookingPageForBusiness(row.business_id);
+  const [page, business] = await Promise.all([
+    getBookingPageForBusiness(row.business_id),
+    getBusiness(row.business_id)
+  ]);
   return {
     row,
     durationMinutes: row.duration_minutes ?? DEFAULT_DURATION_MINUTES,
     platform: (row.event_id ?? "").startsWith(PLATFORM_EVENT_PREFIX),
-    minNoticeMinutes: page?.min_notice_minutes ?? 0
+    minNoticeMinutes: page?.min_notice_minutes ?? 0,
+    page: { max_daily_bookings: page?.max_daily_bookings ?? null },
+    timezone: business?.timezone || "UTC"
   };
 }
 
@@ -124,7 +137,7 @@ export async function getManagedBooking(
     ok: true,
     view: {
       businessName: business.name,
-      timezone: business.timezone || "UTC",
+      timezone: resolved.timezone,
       startIso: resolved.row.start_at,
       durationMinutes: resolved.durationMinutes,
       // Read back from Zoom rather than rebuilt from the id: a
@@ -266,10 +279,28 @@ export async function rescheduleManagedBooking(
         newStartIso
       );
       if (claim && claim.kind !== "claimed") return { ok: false, detail: "slot_taken" };
+      const releaseClaim = async () => {
+        if (claim?.kind === "claimed") await releaseBookingDedupe(claim.id);
+      };
+      // Same post-claim cap recount a new booking runs, or concurrent moves
+      // onto one day could push it past max_daily_bookings. The booking
+      // being moved is excluded so a same-day move never counts itself.
+      if (
+        await dailyCapReached(
+          resolved.row.business_id,
+          resolved.page,
+          resolved.timezone,
+          new Date(startMs),
+          resolved.row.start_at
+        )
+      ) {
+        await releaseClaim();
+        return { ok: false, detail: "slot_taken" };
+      }
       try {
         await moveManagedBooking(resolved.row.id, newStartIso);
       } catch (err) {
-        if (claim?.kind === "claimed") await releaseBookingDedupe(claim.id);
+        await releaseClaim();
         throw err;
       }
       // The meeting itself has to move too, or the invitee joins a call
