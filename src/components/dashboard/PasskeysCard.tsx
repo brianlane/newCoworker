@@ -1,13 +1,65 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import type { VerifyPasskeyRegistrationParams } from "@supabase/supabase-js";
 import { KeyRound } from "lucide-react";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { isPasskeyCeremonyCancellation, passkeyErrorMessage } from "@/lib/auth/passkey-errors";
+import {
+  applyAuthenticatorPreference,
+  supportsWebAuthnJson,
+  type PasskeyAuthenticatorPreference
+} from "@/lib/auth/passkey-registration";
 import { browserSupportsPasskeys, getSupabaseBrowserClient } from "@/lib/supabase/browser";
+
+type SupabaseAuth = ReturnType<typeof getSupabaseBrowserClient>["auth"];
+
+/**
+ * Runs the registration ceremony ourselves so we can tell the browser which
+ * kind of authenticator the owner asked for. Supabase's one-shot
+ * `registerPasskey()` sends the server's options verbatim, and those state no
+ * preference, so Chrome opens a chooser instead of going straight to Touch ID
+ * and iCloud Keychain.
+ *
+ * Only the authenticator preference is restated. Everything the server signs
+ * against (challenge, relying party, resident-key requirement) is passed
+ * through, and the challenge id goes back untouched for verification.
+ */
+async function registerWithPreference(
+  auth: SupabaseAuth,
+  preference: PasskeyAuthenticatorPreference
+): Promise<{ error: unknown | null }> {
+  // Browsers without the Level 3 JSON helpers cannot round-trip the options,
+  // so they get the SDK's own flow and the chooser that comes with it.
+  if (!supportsWebAuthnJson()) {
+    const { error } = await auth.registerPasskey();
+    return { error };
+  }
+
+  const { data: challenge, error: startError } = await auth.passkey.startRegistration();
+  if (startError || !challenge) {
+    return { error: startError ?? new Error("No registration challenge was issued.") };
+  }
+
+  const publicKey = PublicKeyCredential.parseCreationOptionsFromJSON(
+    applyAuthenticatorPreference(
+      challenge.options as unknown as PublicKeyCredentialCreationOptionsJSON,
+      preference
+    )
+  );
+
+  const credential = (await navigator.credentials.create({ publicKey })) as PublicKeyCredential | null;
+  if (!credential) return { error: new Error("No passkey was created.") };
+
+  const { error: verifyError } = await auth.passkey.verifyRegistration({
+    challengeId: challenge.challenge_id,
+    credential: credential.toJSON() as VerifyPasskeyRegistrationParams["credential"]
+  });
+  return { error: verifyError };
+}
 
 type Passkey = {
   id: string;
@@ -29,7 +81,7 @@ export function PasskeysCard() {
   const [passkeys, setPasskeys] = useState<Passkey[] | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
-  const [registering, setRegistering] = useState(false);
+  const [registering, setRegistering] = useState<PasskeyAuthenticatorPreference | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [renamingId, setRenamingId] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
@@ -57,13 +109,13 @@ export function PasskeysCard() {
     if (available) void load();
   }, [load]);
 
-  async function addPasskey() {
-    setRegistering(true);
+  async function addPasskey(preference: PasskeyAuthenticatorPreference) {
+    setRegistering(preference);
     setError(null);
     setNotice(null);
     try {
       const supabase = getSupabaseBrowserClient();
-      const { error: registerError } = await supabase.auth.registerPasskey();
+      const { error: registerError } = await registerWithPreference(supabase.auth, preference);
       if (registerError) {
         if (!isPasskeyCeremonyCancellation(registerError)) {
           setError(passkeyErrorMessage(registerError, "We could not add that passkey."));
@@ -77,7 +129,7 @@ export function PasskeysCard() {
         setError(passkeyErrorMessage(err, "We could not add that passkey."));
       }
     } finally {
-      setRegistering(false);
+      setRegistering(null);
     }
   }
 
@@ -261,14 +313,29 @@ export function PasskeysCard() {
             <Button
               type="button"
               size="sm"
-              variant="ghost"
-              loading={registering}
-              disabled={supported === null}
-              onClick={() => void addPasskey()}
+              loading={registering === "this-device"}
+              disabled={supported === null || registering !== null}
+              onClick={() => void addPasskey("this-device")}
             >
               <KeyRound className="h-4 w-4" aria-hidden="true" />
-              Add a passkey
+              Add a passkey on this device
             </Button>
+            <Button
+              type="button"
+              size="sm"
+              variant="ghost"
+              loading={registering === "any"}
+              disabled={supported === null || registering !== null}
+              onClick={() => void addPasskey("any")}
+            >
+              Use a phone or security key
+            </Button>
+          </div>
+          <div className="space-y-1">
+            <p className="text-[11px] text-parchment/40">
+              On a Mac, adding a passkey on this device saves it to iCloud Keychain with Touch ID,
+              so it works on your iPhone and iPad too.
+            </p>
             {notice && <p className="text-xs text-claw-green">{notice}</p>}
             {error && <p className="text-xs text-spark-orange">{error}</p>}
           </div>
