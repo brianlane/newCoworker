@@ -38,7 +38,11 @@ export async function GET(request: Request) {
     const view = await getManagedBooking(token);
     if (!view.ok) return errorResponse("NOT_FOUND", "This appointment link is no longer valid.");
 
-    const slots = await listSlotsForBusiness(booking.business_id, view.view.durationMinutes);
+    const slots = await listSlotsForBusiness(booking.business_id, view.view.durationMinutes, {
+      // Offer the invitee times as if their own appointment were not there:
+      // it is the one they are moving.
+      excludeStartIso: booking.start_at
+    });
     if (!slots.ok) {
       return successResponse({ timezone: view.view.timezone, slots: [] });
     }

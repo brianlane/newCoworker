@@ -12,6 +12,7 @@ vi.mock("@/lib/calendar-tools/reschedule", () => ({
 }));
 vi.mock("@/lib/zoom/meetings", () => ({
   deleteZoomMeetingForBooking: vi.fn(),
+  getZoomJoinUrl: vi.fn(),
   updateZoomMeetingForBooking: vi.fn()
 }));
 vi.mock("@/lib/calendar-tools/waitlist-fill", () => ({ offerFreedSlot: vi.fn() }));
@@ -46,7 +47,11 @@ import {
   cancelCalendarAppointment,
   rescheduleCalendarAppointment
 } from "@/lib/calendar-tools/reschedule";
-import { deleteZoomMeetingForBooking, updateZoomMeetingForBooking } from "@/lib/zoom/meetings";
+import {
+  deleteZoomMeetingForBooking,
+  getZoomJoinUrl,
+  updateZoomMeetingForBooking
+} from "@/lib/zoom/meetings";
 import { offerFreedSlot } from "@/lib/calendar-tools/waitlist-fill";
 import {
   cancelWaitlistForAttendee,
@@ -76,6 +81,7 @@ const mockCancelCore = vi.mocked(cancelCalendarAppointment);
 const mockRescheduleCore = vi.mocked(rescheduleCalendarAppointment);
 const mockZoomDelete = vi.mocked(deleteZoomMeetingForBooking);
 const mockZoomUpdate = vi.mocked(updateZoomMeetingForBooking);
+const mockZoomJoinUrl = vi.mocked(getZoomJoinUrl);
 const mockOfferFreed = vi.mocked(offerFreedSlot);
 const mockCancelWaitlist = vi.mocked(cancelWaitlistForAttendee);
 const mockResolveWaitlist = vi.mocked(resolveWaitlistAfterBooking);
@@ -110,6 +116,7 @@ beforeEach(() => {
   mockRescheduleCore.mockResolvedValue({ ok: true } as never);
   mockZoomDelete.mockResolvedValue(undefined as never);
   mockZoomUpdate.mockResolvedValue(true);
+  mockZoomJoinUrl.mockResolvedValue("https://zoom.us/j/93412345678?pwd=secret");
   mockOfferFreed.mockResolvedValue({ offered: false } as never);
   mockCancelWaitlist.mockResolvedValue(undefined);
   mockResolveWaitlist.mockResolvedValue(undefined);
@@ -131,6 +138,9 @@ describe("getManagedBooking", () => {
   it("returns the booking with its join link and change window open", async () => {
     mockRow.mockResolvedValue(row({ zoom_meeting_id: "93412345678" }));
     const out = await getManagedBooking(TOKEN);
+    // Read back from Zoom: a rebuilt /j/<id> link drops the pwd a
+    // password-protected meeting needs.
+    expect(mockZoomJoinUrl).toHaveBeenCalledWith(BIZ, "93412345678");
     expect(out).toEqual({
       ok: true,
       view: {
@@ -138,7 +148,7 @@ describe("getManagedBooking", () => {
         timezone: "America/Phoenix",
         startIso: FUTURE,
         durationMinutes: 30,
-        zoomJoinUrl: "https://zoom.us/j/93412345678",
+        zoomJoinUrl: "https://zoom.us/j/93412345678?pwd=secret",
         changeable: true,
         minNoticeMinutes: 120
       }
@@ -334,6 +344,13 @@ describe("rescheduleManagedBooking", () => {
     });
     expect(mockZoomUpdate).not.toHaveBeenCalled();
     expect(mockRelease).not.toHaveBeenCalled();
+  });
+
+  it("excludes the invitee's OWN booking from availability (their move adds nothing)", async () => {
+    // Otherwise their slot blocks itself and counts against the day's cap,
+    // so a same-day move can find no times at all.
+    await rescheduleManagedBooking(TOKEN, NEW_START);
+    expect(mockSlots).toHaveBeenCalledWith(BIZ, 30, { excludeStartIso: FUTURE });
   });
 
   it("only accepts a time the page is actually offering right now", async () => {

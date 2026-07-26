@@ -332,6 +332,32 @@ describe("listSlotsForBusiness", () => {
     expect(await listSlotsForBusiness(BIZ, 30)).toEqual({ ok: false, detail: "not_found" });
   });
 
+  it("drops the invitee's own booking from availability when asked", async () => {
+    // Their own slot must not block the move (nor count against the day's
+    // cap), or a same-day reschedule finds no times at all.
+    // Platform mode, where the ledger IS the availability source (in
+    // provider mode the ledger is only the degraded baseline).
+    mockConn.mockResolvedValue(null);
+    mockPageByBusiness.mockResolvedValue({ ...PAGE });
+    mockListStarts.mockResolvedValue([new Date("2026-01-05T16:00:00Z")]);
+
+    const blocked = await listSlotsForBusiness(BIZ, 30);
+    expect(blocked.ok && blocked.slots.map((s) => s.startIso)).not.toContain(
+      "2026-01-05T16:00:00.000Z"
+    );
+
+    const freed = await listSlotsForBusiness(BIZ, 30, {
+      excludeStartIso: "2026-01-05T16:00:00.000Z"
+    });
+    expect(freed.ok && freed.slots.map((s) => s.startIso)).toContain("2026-01-05T16:00:00.000Z");
+
+    // A junk value is ignored rather than dropping every booking.
+    const junk = await listSlotsForBusiness(BIZ, 30, { excludeStartIso: "not-a-date" });
+    expect(junk.ok && junk.slots.map((s) => s.startIso)).not.toContain(
+      "2026-01-05T16:00:00.000Z"
+    );
+  });
+
   it("passes a context failure through (a page that no longer resolves)", async () => {
     mockPageByBusiness.mockResolvedValue({ ...PAGE });
     mockPage.mockResolvedValue(null);

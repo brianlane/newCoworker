@@ -236,13 +236,25 @@ export async function listPublicSlots(
 export async function listSlotsForBusiness(
   businessId: string,
   durationMinutes: number,
-  nowOverride?: Date
+  opts: {
+    nowOverride?: Date;
+    /**
+     * A booking to ignore while computing availability: the invitee's OWN
+     * appointment, when they are moving it. Without this their existing
+     * slot blocks itself and, worse, counts against the day's booking cap,
+     * so a same-day move can find no times at all even though the move adds
+     * no appointment.
+     */
+    excludeStartIso?: string;
+  } = {}
 ): Promise<ListPublicSlotsResult> {
   const page = await getBookingPageForBusiness(businessId);
   if (!page || !page.enabled) return { ok: false, detail: "not_found" };
   const resolved = await getBookingPageContext(page.token);
   if (!resolved.ok) return resolved;
-  return listSlotsForContext(resolved.context, durationMinutes, nowOverride);
+  return listSlotsForContext(resolved.context, durationMinutes, opts.nowOverride, {
+    ...(opts.excludeStartIso ? { excludeStartIso: opts.excludeStartIso } : {})
+  });
 }
 
 /**
@@ -254,7 +266,8 @@ export async function listSlotsForBusiness(
 async function listSlotsForContext(
   context: BookingPageContext,
   durationMinutes: number,
-  nowOverride?: Date
+  nowOverride?: Date,
+  opts: { excludeStartIso?: string } = {}
 ): Promise<ListPublicSlotsResult> {
   const page = context.page;
 
@@ -269,11 +282,17 @@ async function listSlotsForContext(
     // Ledger starts serve the daily cap in both modes, the busy blocks in
     // platform mode, and the DEGRADED busy baseline in provider mode, so
     // they are always fetched.
-    const existingStarts = await listBookingStartsBetween(
+    const allStarts = await listBookingStartsBetween(
       context.businessId,
       now.toISOString(),
       windowEnd.toISOString()
     );
+    // An invitee moving their own appointment must not be blocked by it, or
+    // counted against the day's cap for it (see excludeStartIso).
+    const excludeMs = opts.excludeStartIso ? Date.parse(opts.excludeStartIso) : NaN;
+    const existingStarts = Number.isFinite(excludeMs)
+      ? allStarts.filter((s) => s.getTime() !== excludeMs)
+      : allStarts;
     // The ledger stores starts only; block a conservative hour per booking
     // so no offered duration can overlap a prior one.
     const ledgerBusy: BusyBlock[] = existingStarts.map((start) => ({

@@ -23,7 +23,11 @@ import {
   cancelCalendarAppointment,
   rescheduleCalendarAppointment
 } from "@/lib/calendar-tools/reschedule";
-import { deleteZoomMeetingForBooking, updateZoomMeetingForBooking } from "@/lib/zoom/meetings";
+import {
+  deleteZoomMeetingForBooking,
+  getZoomJoinUrl,
+  updateZoomMeetingForBooking
+} from "@/lib/zoom/meetings";
 import { offerFreedSlot } from "@/lib/calendar-tools/waitlist-fill";
 import {
   cancelWaitlistForAttendee,
@@ -123,8 +127,11 @@ export async function getManagedBooking(
       timezone: business.timezone || "UTC",
       startIso: resolved.row.start_at,
       durationMinutes: resolved.durationMinutes,
+      // Read back from Zoom rather than rebuilt from the id: a
+      // password-protected meeting needs the pwd parameter, and a link
+      // without it opens a page the invitee cannot get past.
       zoomJoinUrl: resolved.row.zoom_meeting_id
-        ? `https://zoom.us/j/${resolved.row.zoom_meeting_id}`
+        ? await getZoomJoinUrl(resolved.row.business_id, resolved.row.zoom_meeting_id)
         : null,
       changeable: withinNotice(resolved.row.start_at, resolved.minNoticeMinutes),
       minNoticeMinutes: resolved.minNoticeMinutes
@@ -238,7 +245,11 @@ export async function rescheduleManagedBooking(
     // The new time must be a slot the page is actually offering right now:
     // this is the same re-verify the public submit does, and it is what
     // stops a stale tab from booking over someone else.
-    const slots = await listSlotsForBusiness(resolved.row.business_id, resolved.durationMinutes);
+    const slots = await listSlotsForBusiness(resolved.row.business_id, resolved.durationMinutes, {
+      // Their own appointment must not block the move, or count against the
+      // day's cap for it.
+      excludeStartIso: resolved.row.start_at
+    });
     if (!slots.ok) return { ok: false, detail: "change_failed" };
     const offered = slots.slots.some((s) => new Date(s.startIso).getTime() === startMs);
     if (!offered) return { ok: false, detail: "slot_taken" };
