@@ -1,5 +1,6 @@
 import type { MetadataRoute } from "next";
 import { INDUSTRIES } from "./industries/data";
+import { COMPARISONS } from "./compare/data";
 import { listPublishedPosts } from "@/lib/blog/db";
 
 const BASE_URL = "https://newcoworker.com";
@@ -15,7 +16,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { path: "/features", priority: 0.8 },
     { path: "/integrations", priority: 0.8 },
     { path: "/integrations/zoom", priority: 0.6 },
-    { path: "/compare/gohighlevel", priority: 0.7 },
+    { path: "/compare", priority: 0.8 },
     { path: "/industries", priority: 0.7 },
     { path: "/blog", priority: 0.8 },
     { path: "/faq", priority: 0.6 },
@@ -31,6 +32,13 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     priority: 0.7
   }));
 
+  // Comparison pages punch above their weight in AI answers, where "X vs Y"
+  // is one of the most common buyer questions.
+  const compareRoutes = COMPARISONS.map((c) => ({
+    path: `/compare/${c.slug}`,
+    priority: 0.7
+  }));
+
   // Published blog posts — best-effort: a DB hiccup must not 500 the
   // sitemap, so the static routes always render.
   let blogRoutes: { path: string; priority: number }[] = [];
@@ -41,7 +49,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     blogRoutes = [];
   }
 
-  return [...staticRoutes, ...industryRoutes, ...blogRoutes].map((r) => ({
+  return [...staticRoutes, ...industryRoutes, ...compareRoutes, ...blogRoutes].map((r) => ({
     url: `${BASE_URL}${r.path}`,
     changeFrequency: "weekly" as const,
     priority: r.priority

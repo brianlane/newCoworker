@@ -71,7 +71,7 @@
       "pricing": "Pricing",
       "integrations": "Integrations",
       "industries": "Industries",
-      "vsGohighlevel": "vs GoHighLevel",
+      "compare": "Compare",
       "faq": "FAQ",
       "blog": "Blog",
       "about": "About",
@@ -538,6 +538,12 @@
       "knowledgeA": "During onboarding you answer a short questionnaire, and your coworker can read your website to learn your services, pricing, and policies. From then on it learns from every conversation. You can review and edit its memory anytime from the dashboard.",
       "transfersQ": "Can it transfer calls to me or my team?",
       "transfersA": "Yes. Standard plans include warm handoff transfers: when a caller needs a human, your coworker brings you onto the line with the context already gathered, so the caller never repeats themselves.",
+      "bookQ": "Can an AI actually book appointments, or does it just take a message?",
+      "bookA": "It books. Your coworker checks live availability on your real calendar (Google Calendar, Microsoft 365, CalDAV, Calendly, or Vagaro), offers times, and writes the appointment while the caller is still on the phone. If you have no calendar tool at all, it books on a scheduling page we host for you, and everyone gets a confirmation and a reminder.",
+      "channelsQ": "Does it handle texts and DMs, or only phone calls?",
+      "channelsA": "Both. The same coworker answers calls, two-way SMS, WhatsApp, Facebook Messenger, Instagram DMs, and website chat, and it gets its own email address. It is one memory across all of them, so a customer who called on Tuesday and texts on Friday does not have to start over.",
+      "languagesQ": "Can it talk to my Spanish-speaking customers?",
+      "languagesA": "Yes. It detects the language a customer uses and replies in it, on calls and in messages, and remembers that preference for next time. It can also stay on a transferred call and interpret between your staff member and the caller in real time. Your own dashboard can be in English or Spanish, independently.",
       "setupTitle": "Setup & phone numbers",
       "setupTimeQ": "How long does setup take?",
       "setupTimeA": "Minutes. After checkout, provisioning is fully automated: your dedicated server, phone number, and email are created, and your coworker is trained from your questionnaire and website. No IT project, no sales call required.",
@@ -548,6 +554,8 @@
       "whiteGlovePlain": "Yes. White-glove setup ($750) gets you a specialist who configures everything live with you, handles number porting, and trains you 1:1. White-glove buildout ($2,000) adds a full custom workflow buildout. Both include 30 days of priority call and video support.",
       "carrierFeeQ": "What is the one-time {carrierFee} carrier registration fee?",
       "carrierFeeA": "US carriers require every business that sends text messages to complete 10DLC registration. We pass this one-time fee through at cost. It is charged at signup and is non-refundable because carriers do not refund it to us.",
+      "readyQ": "What do I need to have ready before it can start?",
+      "readyA": "Your business name, what you sell, your hours, and your website address. Onboarding crawls the site once to learn your services, and you can correct anything it got wrong afterward. A dedicated phone number is included, so you do not have to change your existing line to try it.",
       "privacyTitle": "Privacy & security",
       "dataQ": "Where does my data live?",
       "dataA": "Your AI coworker runs on a private server dedicated to your business, with its own credentials and a deny-by-default security posture. Conversations and business records are stored securely in our platform database, isolated per business and never shared with other businesses, and you can export your data at any time.",
@@ -559,6 +567,8 @@
       "costQ": "How much does it cost?",
       "costA": "Plans start at {starterPrice} on the 24-month Starter plan. Standard adds higher usage caps, {standardConcurrent}, Zapier, analytics, and more. Enterprise is custom and adds branded RCS messaging. Every plan has a 30-day money-back guarantee. See the full breakdown on the <link>pricing page</link>.",
       "costPlain": "Plans start at {starterPrice} on the 24-month Starter plan. Standard adds higher usage caps, {standardConcurrent}, Zapier, analytics, and more. Enterprise is custom and adds branded RCS messaging. Every plan has a 30-day money-back guarantee.",
+      "vsHiringQ": "Is this cheaper than hiring someone part time?",
+      "vsHiringA": "By a wide margin on cost: plans start at {starterPrice}, against roughly a couple of thousand dollars a month for part-time help that still goes home at five. The honest trade is judgment. A person handles the awkward call better, which is why your coworker transfers to one whenever the caller asks or the conversation needs it.",
       "upfrontQ": "Why is the full term billed upfront on 12 and 24-month plans?",
       "upfrontA": "Because your plan includes a dedicated private server that we prepay for your whole contract. Billing the term once is what makes the discounted monthly rate possible. Monthly plans are billed month-to-month.",
       "cancelQ": "Can I cancel?",
@@ -1162,6 +1172,230 @@
       "ctaTitle": "Put an employee on it, not another login",
       "ctaSubtitle": "Live in minutes, Meta leads answered in seconds, 30-day money-back guarantee.",
       "ctaLabel": "Get Started"
+    },
+    "compare": {
+      "gohighlevel": {
+        "name": "GoHighLevel",
+        "teaser": "A powerful toolbox you operate, against an employee that operates itself."
+      },
+      "zinng": {
+        "name": "Zinng",
+        "teaser": "A focused AI phone line with generous minutes, against a coworker that also handles texts, DMs, email, and follow-up.",
+        "metaTitle": "New Coworker vs Zinng",
+        "metaDescription": "Zinng gives you more voice minutes per dollar. New Coworker gives you every channel, an automation engine, and your own server. An honest, sourced comparison.",
+        "ogTitle": "New Coworker vs Zinng",
+        "ogDescription": "More minutes vs more coworker. An honest comparison for small businesses.",
+        "heroEyebrow": "New Coworker vs Zinng",
+        "heroTitle": "They answer the phone.",
+        "heroHighlight": "We answer everything.",
+        "heroSubtitle": "Zinng is a well-built AI phone line, and if calls are all you need it costs less per minute than we do. New Coworker is a coworker: the phone, plus texts, DMs, email, booking, and the follow-up that keeps going after the call ends.",
+        "themColumn": "Zinng",
+        "row1": {
+          "label": "What you're buying",
+          "us": "An AI coworker across voice, SMS, WhatsApp, Messenger, Instagram, webchat, and email, with an automation engine behind it.",
+          "them": "A focused AI phone line with an SMS inbox, built first for dental and clinic front desks."
+        },
+        "row2": {
+          "label": "Voice minutes per dollar",
+          "us": "Standard at {standardMonthly} includes 250 voice minutes.",
+          "them": "Pro at $99/mo includes 700 minutes, month to month, with $0.12 per minute after that. Spam and transferred calls do not count."
+        },
+        "row3": {
+          "label": "Voice quality and languages",
+          "us": "Real-time conversational voice that follows the caller's language automatically.",
+          "them": "Real-time voice with 63 supported languages."
+        },
+        "row4": {
+          "label": "Channels beyond the phone",
+          "us": "SMS, WhatsApp, Messenger, Instagram DM, website chat, and a dedicated email address per business.",
+          "them": "Two-way SMS. No WhatsApp, Messenger, or Instagram."
+        },
+        "row5": {
+          "label": "Follow-up and automation",
+          "us": "Multi-step sequences triggered by a new lead, a missed call, a webhook, or a calendar event, with round-robin routing to your team.",
+          "them": "Booking and a CRM push. No workflow engine and no outbound AI calling."
+        },
+        "row6": {
+          "label": "Where your data lives",
+          "us": "Your own dedicated server, with optional Canadian residency or your own hardware on Enterprise.",
+          "them": "Shared cloud, with HIPAA and a signed BAA available."
+        },
+        "themCardTitle": "Where Zinng is the better buy",
+        "themCard1": "If your business is only the phone, their minutes are better value: 700 minutes at $99 against our 250, month to month with no prepaid term.",
+        "themCard2": "HIPAA with a signed BAA, 63 languages, and direct integrations with dental practice systems like Eaglesoft, Dentrix, and Open Dental.",
+        "themCard3": "Spam calls and transferred calls do not burn minutes, and there is a 7-day trial with no contract.",
+        "usCardTitle": "Where a coworker wins",
+        "usCard1": "Most customers do not only call. Texts, Instagram DMs, WhatsApp, and email land in the same coworker, with the same memory of the customer.",
+        "usCard2": "The work after the call is the work: automatic follow-up, lead routing to the right teammate, and booking straight onto your real calendar.",
+        "usCard3": "Your business runs on its own dedicated server, which is what makes Canadian residency and bring-your-own-hardware possible at all.",
+        "faq1": {
+          "q": "Is Zinng cheaper?",
+          "a": "For voice alone, usually yes. Their Pro plan is $99 a month for 700 minutes against our 250 at {standardMonthly}, and they bill month to month. If the phone is the whole job, that is the honest answer. Our Starter plan at {starterMonthly} undercuts their entry price, but with far fewer minutes."
+        },
+        "faq2": {
+          "q": "Can Zinng handle texts and DMs?",
+          "a": "It does two-way SMS. It does not do WhatsApp, Messenger, or Instagram DMs, and it has no automation engine for follow-up sequences, so everything after the first reply is back on you."
+        },
+        "faq3": {
+          "q": "Which should I pick?",
+          "a": "Pick Zinng if you want a good phone line at the lowest cost per minute and nothing else. Pick New Coworker if customers reach you on more than one channel, if follow-up keeps falling through, or if you need your data on your own server."
+        },
+        "ctaTitle": "Answer more than the phone",
+        "ctaSubtitle": "Live in minutes, with a 30-day money-back guarantee."
+      },
+      "marblism": {
+        "name": "Marblism",
+        "teaser": "Six drafting assistants you approve each day, against one coworker that finishes the job on its own.",
+        "metaTitle": "New Coworker vs Marblism",
+        "metaDescription": "Marblism gives you six AI assistants for about $24 a month, with you approving their work. New Coworker answers the phone and finishes the job. An honest, sourced comparison.",
+        "ogTitle": "New Coworker vs Marblism",
+        "ogDescription": "A cheap suite you review daily vs a coworker that acts. An honest comparison.",
+        "heroEyebrow": "New Coworker vs Marblism",
+        "heroTitle": "They draft.",
+        "heroHighlight": "We do the work.",
+        "heroSubtitle": "Marblism is a genuinely cheap bundle of six assistants that write things for you to approve. New Coworker is one coworker that picks up the phone, books the appointment, and follows up, without waiting for you to press approve.",
+        "themColumn": "Marblism",
+        "row1": {
+          "label": "What you're buying",
+          "us": "One AI coworker that acts on its own across voice, messaging, and booking.",
+          "them": "Six named assistants for inbox, social, cold email, blogs, phone, and contracts, drafting work for you to review."
+        },
+        "row2": {
+          "label": "Price",
+          "us": "Starter from {starterMonthly} and Standard from {standardMonthly} on a 24-month term.",
+          "them": "One flat plan at $24/mo billed yearly, $33 quarterly, or $44 monthly, with 50 hours of work included and unlimited businesses."
+        },
+        "row3": {
+          "label": "Phone calls",
+          "us": "Real-time conversational voice that transfers warmly, takes messages, and books on your calendar.",
+          "them": "A phone assistant with calendar booking and transfers, which reviewers describe as robotic on complex calls."
+        },
+        "row4": {
+          "label": "Who presses go",
+          "us": "The coworker acts: it answers, books, and follows up, then tells you what happened.",
+          "them": "An approval loop: the assistants draft and you review them daily."
+        },
+        "row5": {
+          "label": "Follow-up and integrations",
+          "us": "Multi-step follow-up plus Zapier, Google Workspace, Microsoft 365, Zoom, Meta Lead Ads, a REST API, and webhooks.",
+          "them": "Gmail, Outlook, and the social networks. No CRM depth and no Zapier-style escape hatch."
+        },
+        "row6": {
+          "label": "Where your data lives",
+          "us": "Your own dedicated server, one per business.",
+          "them": "Shared cloud infrastructure, with no published per-tenant isolation."
+        },
+        "themCardTitle": "Where Marblism is the better buy",
+        "themCard1": "It is cheap and immediate: about $24 a month billed yearly, live in minutes, with a 7-day refund and unlimited businesses on one account.",
+        "themCard2": "Breadth for a solo founder: social posting, cold email, SEO blogs, and contract review all sit under one login.",
+        "themCard3": "If you want a writing assistant you review each morning rather than something that acts without you, that is exactly what they built.",
+        "usCardTitle": "Where a coworker wins",
+        "usCard1": "A missed call cannot wait for an approval queue. The coworker answers it live at 9pm and books the appointment before the caller tries the next business.",
+        "usCard2": "It writes to your real booking system, whether that is Google Calendar, Microsoft 365, Calendly, or Vagaro, rather than drafting something for you to enter.",
+        "usCard3": "Per-business isolation, retention controls, and residency options exist because the phone and the customer list are load-bearing for the businesses we serve.",
+        "faq1": {
+          "q": "Marblism is much cheaper. Why?",
+          "a": "Different jobs. About $24 a month buys assistants that draft work for you to approve, on shared infrastructure. Our Starter plan at {starterMonthly} is close in price but buys a live phone line on a dedicated server, and Standard at {standardMonthly} adds the volume and channels a busier business needs."
+        },
+        "faq2": {
+          "q": "Can Marblism answer my phone?",
+          "a": "It has a phone assistant that books and transfers. Reviewers describe it as robotic once a call gets complicated, and it does not do WhatsApp, Messenger, or Instagram at all."
+        },
+        "faq3": {
+          "q": "Which should I pick?",
+          "a": "Pick Marblism if you are a solo founder who wants cheap drafting help across marketing and admin and you are happy to review it daily. Pick New Coworker if missing a call costs you money."
+        },
+        "ctaTitle": "Stop approving drafts",
+        "ctaSubtitle": "Live in minutes, with a 30-day money-back guarantee."
+      },
+      "answeringService": {
+        "name": "Phone answering services",
+        "teaser": "A human call center that takes a message, against an AI coworker that books the appointment.",
+        "metaTitle": "AI coworker vs a phone answering service",
+        "metaDescription": "Answering services take a message. An AI coworker answers in your business's voice, books on your real calendar, and follows up by text. An honest comparison of cost, coverage, and quality.",
+        "ogTitle": "AI coworker vs a phone answering service",
+        "ogDescription": "Per-minute human message taking vs an AI that finishes the job. An honest comparison.",
+        "heroEyebrow": "AI coworker vs an answering service",
+        "heroTitle": "A message is not",
+        "heroHighlight": "a booked job.",
+        "heroSubtitle": "Answering services are good at making sure a human picks up. They are not set up to know your prices, check your calendar, and close the appointment, and you pay by the minute for the difference.",
+        "themColumn": "Answering service",
+        "row1": {
+          "label": "What happens on the call",
+          "us": "Answers in your business's voice, knows your services and prices, checks live availability, and books the appointment.",
+          "them": "A trained operator takes a message from a script and passes it on. Booking usually means a callback from you."
+        },
+        "row2": {
+          "label": "What it costs",
+          "us": "A flat monthly plan from {starterMonthly}, with included minutes and no per-call fee.",
+          "them": "Typically billed per minute or per call, so a busy month costs more exactly when you are busiest."
+        },
+        "row3": {
+          "label": "How it sounds",
+          "us": "Real-time conversational voice that follows the caller's language automatically.",
+          "them": "A real person, which some callers prefer, reading from a script for a business they do not work at."
+        },
+        "row4": {
+          "label": "After hours and overflow",
+          "us": "The same coverage at 2am as at 2pm, on several calls at once, with no queue.",
+          "them": "Round-the-clock coverage is normal, but simultaneous calls and after-hours cover often cost extra."
+        },
+        "row5": {
+          "label": "What happens next",
+          "us": "Texts the caller, follows up on a schedule, routes the lead to the right teammate, and remembers the conversation next time.",
+          "them": "The message reaches you. The follow-up is yours."
+        },
+        "row6": {
+          "label": "Compliance and privacy",
+          "us": "Per-business isolation, retention controls, and residency options on Enterprise.",
+          "them": "Established vendors offer HIPAA-compliant plans and trained operators."
+        },
+        "themCardTitle": "Where an answering service is still right",
+        "themCard1": "Some callers want a human, and for a law firm's first call or a distressed customer that judgment can matter more than speed.",
+        "themCard2": "There is nothing to set up. You forward your line and it works, with no knowledge base to fill in.",
+        "themCard3": "Established vendors have decades of HIPAA-compliant operations and trained operators for regulated intake.",
+        "usCardTitle": "Where an AI coworker wins",
+        "usCard1": "It finishes the job. Knowing your prices and your calendar is the difference between a message and a booked appointment.",
+        "usCard2": "Flat pricing. Per-minute billing punishes exactly the months when the phone is ringing most.",
+        "usCard3": "It keeps working after the call: texts, follow-up sequences, routing to the right person, and permanent memory of the customer.",
+        "faq1": {
+          "q": "Is an AI cheaper than an answering service?",
+          "a": "Usually, and more predictably. Answering services bill by the minute or by the call, so the cost rises with volume. Our plans are flat from {starterMonthly}, and Standard at {standardMonthly} covers a busy line with included minutes."
+        },
+        "faq2": {
+          "q": "Will my callers know it is not a person?",
+          "a": "Some will and some will not. What matters more is whether the call gets resolved: an AI that knows your prices and books the slot beats a friendly message you have to call back about."
+        },
+        "faq3": {
+          "q": "Can I have both?",
+          "a": "Yes. A common setup is the coworker answering first and transferring to a person, or to your answering service, whenever the caller asks for a human or the conversation needs judgment."
+        },
+        "ctaTitle": "Book the job, not the callback",
+        "ctaSubtitle": "Live in minutes, with a 30-day money-back guarantee."
+      }
+    },
+    "comparePage": {
+      "metaTitle": "Compare New Coworker",
+      "metaDescription": "Honest, sourced comparisons of New Coworker against GoHighLevel, Zinng, Marblism, and traditional phone answering services, including where they are the better buy.",
+      "ogTitle": "Compare New Coworker | The alternatives, side by side",
+      "ogDescription": "How New Coworker stacks up against the alternatives, including where they win.",
+      "heroEyebrow": "Compare",
+      "heroTitle": "How we stack up,",
+      "heroHighlight": "including where we don't",
+      "heroSubtitle": "Every comparison below uses the other side's own published pricing and says plainly where they are the better choice. You are going to check anyway.",
+      "cardCta": "Read the comparison",
+      "indexCtaTitle": "Still deciding?",
+      "indexCtaSubtitle": "Every plan carries a 30-day money-back guarantee, so the cheapest way to compare is to try it.",
+      "ctaLabel": "Get Started",
+      "tableEyebrow": "Side by side",
+      "tableTitle": "New Coworker vs {name}",
+      "tableSubtitle": "Their details reflect their own published pricing as of July 2026. Where they are stronger, we say so.",
+      "usColumn": "New Coworker",
+      "diffEyebrow": "The real difference",
+      "diffTitle": "Two different things to buy",
+      "sourcedNote": "Figures for {name} come from their published pricing in July 2026 and can change. Check their current pricing before you decide, and tell us if anything here is out of date.",
+      "faqEyebrow": "Questions",
+      "faqTitle": "What people ask before switching"
     },
     "stats": {
       "stat1Value": "24/7",
