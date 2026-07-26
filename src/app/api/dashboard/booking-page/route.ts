@@ -46,7 +46,11 @@ const patchSchema = z.object({
   waitlistEnabled: z.boolean().optional(),
   waitlistOfferTtlMinutes: z.number().int().optional(),
   slug: z.string().max(80).nullable().optional(),
-  title: z.string().max(200).nullable().optional()
+  title: z.string().max(200).nullable().optional(),
+  sendConfirmationEmail: z.boolean().optional(),
+  remindersEnabled: z.boolean().optional(),
+  reminderEmailHours: z.number().int().optional(),
+  reminderSmsHours: z.number().int().optional()
 });
 
 const actionSchema = z.object({ action: z.literal("rotate") });

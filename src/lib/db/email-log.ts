@@ -54,7 +54,10 @@ export type EmailLogSource =
   | "owner_manual"
   // The email coworker answered a correspondent inside a thread the
   // assistant itself started (src/lib/email-coworker/turn.ts).
-  | "email_coworker";
+  | "email_coworker"
+  // Booking confirmation or reminder for a public-page booking
+  // (src/lib/booking-page/reminders.ts).
+  | "booking_reminder";
 
 /**
  * Attachment metadata as stored inline on email_log.attachments. `storage_path`
@@ -459,7 +462,12 @@ export type RecordOutboundAssistantEmailInput = {
   subject: string;
   bodyText: string;
   /** Surface the assistant sent from. */
-  source: "dashboard_chat" | "sms_assistant" | "voice_assistant" | "email_coworker";
+  source:
+    | "dashboard_chat"
+    | "sms_assistant"
+    | "voice_assistant"
+    | "email_coworker"
+    | "booking_reminder";
   providerMessageId?: string | null;
   /** Optional cc recipients (already normalized to valid addresses). */
   ccEmails?: string[];

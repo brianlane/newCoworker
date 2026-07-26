@@ -1387,7 +1387,16 @@
       "waitlistToggle": "On",
       "waitlistTtlLabel": "How long one customer holds an offer",
       "waitlistTtlHours": "{hours} h",
-      "waitlistHint": "Customers join by asking your AI coworker for an earlier time, or by checking the box on your booking page. The offer text counts toward your monthly SMS allowance."
+      "waitlistHint": "Customers join by asking your AI coworker for an earlier time, or by checking the box on your booking page. The offer text counts toward your monthly SMS allowance.",
+      "remindersTitle": "Confirmations and reminders",
+      "remindersSubtitle": "What the customer hears after they book, and before they show up.",
+      "remindersToggle": "Reminders on",
+      "confirmationEmailLabel": "Email a confirmation",
+      "reminderEmailLabel": "Email reminder",
+      "reminderSmsLabel": "Text reminder",
+      "reminderOff": "Off",
+      "reminderHoursBefore": "{hours}h before",
+      "remindersHint": "Reminders go to the phone and email the customer gave when booking. Texts count toward your monthly SMS allowance."
     },
     "integrationsClaude": {
       "connectedBadge": "Connected",
@@ -1901,6 +1910,20 @@
     "provisioningLive": {
       "subject": "Your AI Coworker is live!",
       "body": "Your New Coworker is set up and ready."
+    },
+    "bookingConfirmation": {
+      "confirmationSubject": "You are booked with {business}",
+      "reminderSubject": "Reminder: your appointment with {business}",
+      "confirmationIntro": "You are all set. {business} has your appointment on the calendar.",
+      "reminderIntro": "A quick reminder about your appointment with {business}.",
+      "when": "When: {time}",
+      "whenBothZones": "When: {yourTime} (that is {businessTime} for the business)",
+      "duration": "How long: {minutes} minutes",
+      "joinLine": "Video call link: {url}",
+      "manageLine": "Need a different time? Reschedule or cancel here: {url}",
+      "joinCta": "Join the video call",
+      "manageCta": "Reschedule or cancel",
+      "signoff": "See you then."
     },
     "ncSignoff": "- The NewCoworker Team\nnewcoworker.com | 602.313.1823 (our AI coworker answers)",
     "questionsReply": "Questions? Just reply to this email.",

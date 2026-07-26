@@ -25,6 +25,7 @@ import { randomUUID } from "crypto";
 import {
   countBookingsBetween,
   getBookingPageForBusiness,
+  stampAttendeeContact,
   getEnabledBookingPageBySlug,
   getEnabledBookingPageByToken,
   listBookingStartsBetween,
@@ -33,6 +34,7 @@ import {
 } from "@/lib/booking-page/db";
 import type { BookingPageRow } from "@/lib/booking-page/db";
 import { mintBookingManageToken, parseBookingPageRef } from "@/lib/booking-page/keys";
+import { sendBookingConfirmationEmail } from "@/lib/booking-page/confirmation-email";
 import { computePublicSlots } from "@/lib/booking-page/slots";
 import type { BusyBlock, PublicSlot } from "@/lib/booking-page/slots";
 import { readBusyCache, saveBusyCache } from "@/lib/booking-page/busy-cache";
@@ -390,6 +392,11 @@ export type SubmitPublicBookingInput = {
   note?: string;
   /** "Text me if an earlier time opens up" opt-in (cancellation waitlist). */
   notifyEarlier?: boolean;
+  /**
+   * Visitor IANA zone from the browser, so the confirmation email can show
+   * THEIR clock next to the business's. Absent is fine (business zone only).
+   */
+  visitorTimeZone?: string | null;
 };
 
 /**
@@ -744,6 +751,35 @@ export async function submitPublicBooking(
         currentBookingStartAtIso: start.toISOString()
       });
     }
+  }
+
+  // Reminder addressing + the confirmation email. Best-effort: the booking
+  // is already durable, and a visitor who gets no email still holds the
+  // appointment (and, in provider mode, the provider's own invitation).
+  await stampAttendeeContact(
+    context.businessId,
+    bookingAttendeeKey(phone, email, name),
+    start.toISOString(),
+    { email, name }
+  ).catch(() => {});
+
+  if (context.page.send_confirmation_email) {
+    await sendBookingConfirmationEmail({
+      businessId: context.businessId,
+      businessName: context.businessName,
+      businessTimeZone: context.timezone,
+      startIso: start.toISOString(),
+      durationMinutes: input.durationMinutes,
+      attendeeEmail: email,
+      joinUrl: zoomJoinUrl,
+      manageLink,
+      visitorTimeZone: input.visitorTimeZone ?? null
+    }).catch((err: unknown) => {
+      logger.warn("booking-page: confirmation email failed", {
+        businessId: context.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    });
   }
 
   return {

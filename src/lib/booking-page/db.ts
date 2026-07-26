@@ -31,6 +31,14 @@ export type BookingPageRow = {
   slug: string | null;
   /** Public event title; null falls back to "Book a call with {business}". */
   title: string | null;
+  /** Branded confirmation email at booking time (needs an attendee email). */
+  send_confirmation_email: boolean;
+  /** Master switch for both reminders. */
+  reminders_enabled: boolean;
+  /** Hours before the start for the email reminder; 0 disables just that one. */
+  reminder_email_hours: number;
+  /** Hours before the start for the SMS reminder; 0 disables just that one. */
+  reminder_sms_hours: number;
   created_at: string;
   updated_at: string;
 };
@@ -39,6 +47,7 @@ const ALL_COLUMNS =
   "id,business_id,token,enabled,allowed_durations,min_notice_minutes," +
   "max_advance_days,buffer_minutes,max_daily_bookings,require_staff_on_shift," +
   "description,waitlist_enabled,waitlist_offer_ttl_minutes,slug,title," +
+  "send_confirmation_email,reminders_enabled,reminder_email_hours,reminder_sms_hours," +
   "created_at,updated_at";
 
 /** Resolve a page by its public token. Enabled pages only. */
@@ -99,6 +108,12 @@ export type BookingPageSettingsPatch = {
   description?: string | null;
   waitlistEnabled?: boolean;
   waitlistOfferTtlMinutes?: number;
+  sendConfirmationEmail?: boolean;
+  remindersEnabled?: boolean;
+  /** Hours before the start; 0 turns off just the email reminder. */
+  reminderEmailHours?: number;
+  /** Hours before the start; 0 turns off just the text reminder. */
+  reminderSmsHours?: number;
   /** Vanity URL slug; null/blank clears back to the token-only URL. */
   slug?: string | null;
   /** Public event title; null/blank restores the localized default. */
@@ -186,6 +201,16 @@ function validatePatch(patch: BookingPageSettingsPatch): void {
   if (patch.title !== undefined && patch.title !== null && patch.title.length > 120) {
     throw new BookingPageValidationError("Title must be 120 characters or fewer");
   }
+  for (const [value, label] of [
+    [patch.reminderEmailHours, "Email reminder"],
+    [patch.reminderSmsHours, "Text reminder"]
+  ] as Array<[number | undefined, string]>) {
+    // 0 is meaningful (that channel off); a week is the ceiling because the
+    // sweep only scans that far ahead.
+    if (value !== undefined && (!Number.isInteger(value) || value < 0 || value > 168)) {
+      throw new BookingPageValidationError(`${label} lead time must be 0 to 168 hours`);
+    }
+  }
 }
 
 function patchColumns(patch: BookingPageSettingsPatch): Record<string, unknown> {
@@ -215,7 +240,19 @@ function patchColumns(patch: BookingPageSettingsPatch): Record<string, unknown> 
     ...(patch.slug === undefined
       ? {}
       : { slug: patch.slug === null ? null : parseBookingPageSlug(patch.slug) }),
-    ...(patch.title === undefined ? {} : { title: patch.title?.trim() || null })
+    ...(patch.title === undefined ? {} : { title: patch.title?.trim() || null }),
+    ...(patch.sendConfirmationEmail === undefined
+      ? {}
+      : { send_confirmation_email: patch.sendConfirmationEmail }),
+    ...(patch.remindersEnabled === undefined
+      ? {}
+      : { reminders_enabled: patch.remindersEnabled }),
+    ...(patch.reminderEmailHours === undefined
+      ? {}
+      : { reminder_email_hours: patch.reminderEmailHours }),
+    ...(patch.reminderSmsHours === undefined
+      ? {}
+      : { reminder_sms_hours: patch.reminderSmsHours })
   };
 }
 
@@ -487,4 +524,35 @@ export async function deleteManagedBooking(
   const db = client ?? (await createSupabaseServiceClient());
   const { error } = await db.from("calendar_booking_dedupe").delete().eq("id", rowId);
   if (error) throw new Error(`deleteManagedBooking: ${error.message}`);
+}
+
+/**
+ * Record the attendee's email and display name on the booking row.
+ *
+ * The ledger's `attendee_key` is phone-first, so an email-reachable booking
+ * would otherwise be unreachable by email at reminder time. Matched the same
+ * way the manage-token stamp is (business, attendee, start); best-effort by
+ * contract, the booking is already durable.
+ */
+export async function stampAttendeeContact(
+  businessId: string,
+  attendeeKey: string,
+  startIso: string,
+  contact: { email?: string | null; name?: string | null },
+  client?: SupabaseClient
+): Promise<void> {
+  const email = contact.email?.trim() || null;
+  const name = contact.name?.trim() || null;
+  if (!email && !name) return;
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("calendar_booking_dedupe")
+    .update({
+      ...(email ? { attendee_email: email } : {}),
+      ...(name ? { attendee_name: name } : {})
+    })
+    .eq("business_id", businessId)
+    .eq("attendee_key", attendeeKey)
+    .eq("start_at", startIso);
+  if (error) throw new Error(`stampAttendeeContact: ${error.message}`);
 }

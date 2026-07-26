@@ -15,6 +15,7 @@ import {
   moveManagedBooking,
   recordPlatformBooking,
   rotateBookingPageToken,
+  stampAttendeeContact,
   stampManageToken,
   upsertBookingPage
 } from "@/lib/booking-page/db";
@@ -613,5 +614,85 @@ describe("manage tokens on the booking ledger", () => {
       manage_token: TOKEN,
       duration_minutes: 60
     });
+  });
+});
+
+describe("reminder settings and attendee contact", () => {
+  it("accepts 0 (channel off) through 168 hours, and rejects the rest", async () => {
+    const { client } = fakeDb([{ data: ROW, error: null }, { data: ROW, error: null }]);
+    await expect(
+      upsertBookingPage(BIZ, { reminderEmailHours: 0, reminderSmsHours: 168 }, client)
+    ).resolves.toBeTruthy();
+
+    for (const patch of [
+      { reminderEmailHours: -1 },
+      { reminderEmailHours: 169 },
+      { reminderEmailHours: 1.5 },
+      { reminderSmsHours: -1 }
+    ]) {
+      await expect(upsertBookingPage(BIZ, patch, client)).rejects.toThrow(
+        /lead time must be 0 to 168 hours/
+      );
+    }
+  });
+
+  it("writes the reminder knobs onto the page", async () => {
+    const { client, calls } = fakeDb([{ data: ROW, error: null }, { data: ROW, error: null }]);
+    await upsertBookingPage(
+      BIZ,
+      {
+        sendConfirmationEmail: false,
+        remindersEnabled: false,
+        reminderEmailHours: 48,
+        reminderSmsHours: 4
+      },
+      client
+    );
+    const update = calls.find((c) => c.method === "update");
+    expect(update?.args[0]).toMatchObject({
+      send_confirmation_email: false,
+      reminders_enabled: false,
+      reminder_email_hours: 48,
+      reminder_sms_hours: 4
+    });
+  });
+
+  it("stamps the attendee's email and name for reminder addressing", async () => {
+    const { client, calls } = fakeDb([{ error: null }]);
+    await stampAttendeeContact(
+      BIZ,
+      "phone:+14805550100",
+      "2026-07-27T16:00:00Z",
+      { email: " Liz@Example.com ", name: "  Liz  " },
+      client
+    );
+    expect(calls.find((c) => c.method === "update")?.args[0]).toEqual({
+      attendee_email: "Liz@Example.com",
+      attendee_name: "Liz"
+    });
+  });
+
+  it("writes nothing when there is nothing to stamp, and throws on failure", async () => {
+    const { client, calls } = fakeDb([{ error: null }]);
+    await stampAttendeeContact(BIZ, "k", "2026-07-27T16:00:00Z", { email: "  ", name: null }, client);
+    expect(calls.some((c) => c.method === "update")).toBe(false);
+
+    const { client: partial, calls: partialCalls } = fakeDb([{ error: null }]);
+    await stampAttendeeContact(BIZ, "k", "2026-07-27T16:00:00Z", { name: "Liz" }, partial);
+    expect(partialCalls.find((c) => c.method === "update")?.args[0]).toEqual({
+      attendee_name: "Liz"
+    });
+
+    const { client: failing } = fakeDb([{ error: { message: "denied" } }]);
+    await expect(
+      stampAttendeeContact(BIZ, "k", "2026-07-27T16:00:00Z", { email: "a@b.co" }, failing)
+    ).rejects.toThrow("stampAttendeeContact: denied");
+  });
+
+  it("uses the service client by default", async () => {
+    const { client } = fakeDb([{ error: null }]);
+    mockClientFactory.mockResolvedValue(client);
+    await stampAttendeeContact(BIZ, "k", "2026-07-27T16:00:00Z", { email: "a@b.co" });
+    expect(mockClientFactory).toHaveBeenCalled();
   });
 });

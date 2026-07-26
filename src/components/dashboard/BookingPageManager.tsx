@@ -25,6 +25,10 @@ type PageRow = {
   waitlist_offer_ttl_minutes: number;
   slug: string | null;
   title: string | null;
+  send_confirmation_email: boolean;
+  reminders_enabled: boolean;
+  reminder_email_hours: number;
+  reminder_sms_hours: number;
 };
 
 type UpcomingRow = {
@@ -45,6 +49,8 @@ const NOTICE_CHOICES = [0, 60, 120, 240, 1440];
 const ADVANCE_CHOICES = [7, 14, 30, 60];
 const BUFFER_CHOICES = [0, 10, 15, 30];
 const WAITLIST_TTL_CHOICES = [15, 30, 60, 120, 240];
+/** Reminder lead times, in hours. 0 turns that channel off. */
+const REMINDER_HOUR_CHOICES = [0, 2, 4, 24, 48];
 
 export function BookingPageManager({ businessId }: { businessId: string }) {
   const t = useTranslations("dashboard.bookings");
@@ -434,6 +440,78 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
           </div>
         ) : null}
         {saveError ? <p className="mt-3 text-sm text-red-400">{saveError}</p> : null}
+      </Card>
+
+      {/* Confirmations and reminders: what the visitor hears after booking.
+          The confirmation carries what a bare calendar invite cannot (both
+          clocks, the video link, the manage link), and the reminders are the
+          part that actually reduces no-shows. */}
+      <Card>
+        <div className="flex items-center justify-between gap-4">
+          <div>
+            <h2 className="text-base font-semibold text-parchment">{t("remindersTitle")}</h2>
+            <p className="mt-1 text-sm text-parchment/60">{t("remindersSubtitle")}</p>
+          </div>
+          <label className="flex items-center gap-2 text-sm text-parchment/70">
+            <input
+              type="checkbox"
+              checked={page ? page.reminders_enabled : true}
+              disabled={saving}
+              onChange={(e) => void patch({ remindersEnabled: e.target.checked })}
+            />
+            {t("remindersToggle")}
+          </label>
+        </div>
+        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <div className="flex items-end">
+            <label className="flex items-center gap-2 text-sm text-parchment/70">
+              <input
+                type="checkbox"
+                checked={page ? page.send_confirmation_email : true}
+                disabled={saving}
+                onChange={(e) => void patch({ sendConfirmationEmail: e.target.checked })}
+              />
+              {t("confirmationEmailLabel")}
+            </label>
+          </div>
+          <div>
+            <label className={label} htmlFor="bp-reminder-email">
+              {t("reminderEmailLabel")}
+            </label>
+            <select
+              id="bp-reminder-email"
+              className={select}
+              disabled={saving || (page ? !page.reminders_enabled : false)}
+              value={page?.reminder_email_hours ?? 24}
+              onChange={(e) => void patch({ reminderEmailHours: Number(e.target.value) })}
+            >
+              {REMINDER_HOUR_CHOICES.map((h) => (
+                <option key={h} value={h}>
+                  {h === 0 ? t("reminderOff") : t("reminderHoursBefore", { hours: h })}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div>
+            <label className={label} htmlFor="bp-reminder-sms">
+              {t("reminderSmsLabel")}
+            </label>
+            <select
+              id="bp-reminder-sms"
+              className={select}
+              disabled={saving || (page ? !page.reminders_enabled : false)}
+              value={page?.reminder_sms_hours ?? 2}
+              onChange={(e) => void patch({ reminderSmsHours: Number(e.target.value) })}
+            >
+              {REMINDER_HOUR_CHOICES.map((h) => (
+                <option key={h} value={h}>
+                  {h === 0 ? t("reminderOff") : t("reminderHoursBefore", { hours: h })}
+                </option>
+              ))}
+            </select>
+          </div>
+        </div>
+        <p className="mt-3 text-xs text-parchment/40">{t("remindersHint")}</p>
       </Card>
 
       {/* Cancellation waitlist: independent of the public link, it also

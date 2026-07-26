@@ -386,7 +386,10 @@ serve(async (req: Request): Promise<Response> => {
     // The email coworker's own pass: same mailboxes, different question
     // (is this a reply on a thread the assistant started), same
     // failure-isolated posture.
-    kickTriggerPoll("/api/internal/email-coworker-poll")
+    kickTriggerPoll("/api/internal/email-coworker-poll"),
+    // Booking reminders (email a day out, text a couple of hours out).
+    // Cheap when no appointment is inside a reminder window.
+    kickTriggerPoll("/api/internal/booking-reminder-sweep")
   ]);
 
   const { data: claimed, error: claimErr } = await supabase.rpc("claim_ai_flow_runs", {

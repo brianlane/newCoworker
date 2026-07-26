@@ -222,7 +222,10 @@ export function PublicBookingPage({
           phone: form.phone,
           email: form.email,
           ...(form.note.trim() ? { note: form.note } : {}),
-          ...(notifyEarlier ? { notifyEarlier: true } : {})
+          ...(notifyEarlier ? { notifyEarlier: true } : {}),
+          // The confirmation email shows THEIR clock beside the business's,
+          // and the browser is the only place that zone is known.
+          visitorTimeZone: timezone
         })
       });
       const body = await res.json();
@@ -249,7 +252,7 @@ export function PublicBookingPage({
     } catch {
       setSubmitState("failed");
     }
-  }, [selectedSlot, token, duration, form, notifyEarlier, loadSlots]);
+  }, [selectedSlot, token, duration, form, notifyEarlier, timezone, loadSlots]);
 
   const panel = "rounded-lg border border-parchment/10 bg-parchment/5";
   const label = "block text-xs uppercase tracking-wider text-parchment/40";
