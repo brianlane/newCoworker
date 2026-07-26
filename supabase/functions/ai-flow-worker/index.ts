@@ -6287,18 +6287,21 @@ async function waitForCallStep(
   scope: Scope,
   action: Extract<StepAction, { kind: "wait_for_call" }>
 ): Promise<StepOutcome> {
-  const sinceIso = new Date(Date.now() - action.withinMinutes * 60_000).toISOString();
-  const { data, error } = await supabase
-    .from("voice_handoff_sessions")
-    .select("status, context")
-    .eq("business_id", run.business_id)
-    .eq("from_e164", action.fromE164)
-    .gte("created_at", sinceIso)
-    .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
-  if (error) console.error("wait_for_call: session lookup", error.message);
-  const sess = (data ?? null) as CallSessionRow | null;
+  const readSession = async (): Promise<CallSessionRow | null> => {
+    const sinceIso = new Date(Date.now() - action.withinMinutes * 60_000).toISOString();
+    const { data, error } = await supabase
+      .from("voice_handoff_sessions")
+      .select("status, context")
+      .eq("business_id", run.business_id)
+      .eq("from_e164", action.fromE164)
+      .gte("created_at", sinceIso)
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (error) console.error("wait_for_call: session lookup", error.message);
+    return (data ?? null) as CallSessionRow | null;
+  };
+  let sess = await readSession();
 
   const finish = (outcome: string, detail: Record<string, unknown>): StepOutcome => {
     // Namespaced by capturePrefix so the AI's values can never overwrite what
@@ -6339,10 +6342,20 @@ async function waitForCallStep(
     );
   }
 
+  const park = (): StepOutcome => ({
+    kind: "pause_call",
+    e164: action.fromE164,
+    respondByMs: action.timeoutMinutes * 60_000,
+    saveAs: action.saveAs,
+    marker: action.marker,
+    // We waited on a call the PARTNER placed, so there is no dialed leg of
+    // ours to record; the session's flow_run link is what resumes this run.
+    callControlId: ""
+  });
+
   if (sess?.status === "ai_intake") {
-    // Atomic under the row lock, and it re-checks liveness: a call that ended
-    // between the select above and here links nothing, and we hydrate instead
-    // of parking on a call that will never resume us.
+    // Atomic under the row lock, and it re-checks liveness, so it also tells us
+    // the call is still live at the instant it links.
     const { data: linked, error: linkErr } = await supabase.rpc("voice_link_call_run", {
       p_business_id: run.business_id,
       p_from_e164: action.fromE164,
@@ -6356,23 +6369,36 @@ async function waitForCallStep(
     });
     if (linkErr) console.error("wait_for_call: link rpc", linkErr.message);
     const count = typeof linked === "number" ? linked : Number(linked ?? 0);
-    if (count > 0) {
-      return {
-        kind: "pause_call",
-        e164: action.fromE164,
-        respondByMs: action.timeoutMinutes * 60_000,
-        saveAs: action.saveAs,
-        marker: action.marker,
-        // We waited on a call the PARTNER placed, so there is no dialed leg of
-        // ours to record; the session's flow_run link is what resumes this run.
-        callControlId: ""
-      };
+    if (count > 0) return park();
+    // Refused. Re-read to find out which of the three reasons it was, rather
+    // than continuing against the row we read before the RPC.
+    sess = await readSession();
+    if (sess?.status === "ai_intake") {
+      const existing = (sess.context?.flow_run ?? null) as { run_id?: unknown } | null;
+      // Already ours: a worker crash between the link and the park write. Park.
+      if (existing?.run_id === run.id) return park();
+      // Another run owns this call. Don't park on a link that will never resume
+      // us, and don't pretend to have call details we were never given.
+      return finish("no_call", { waited: false, reason: "call_owned_by_another_run" });
     }
   }
 
-  return sess
-    ? finish("answered", { waited: false })
-    : finish("no_call", { waited: false, reason: "no_session" });
+  if (!sess) return finish("no_call", { waited: false, reason: "no_session" });
+
+  // The call is over. Its captured fields are written by the bridge during
+  // teardown, so a call that ended moments ago may not have them yet — give it
+  // one short beat rather than hydrating an empty blob. Once only, so a call
+  // that captured nothing at all still finishes promptly.
+  const settleMarker = `${action.marker}_settled`;
+  if (!sess.context?.ai_takeover?.captured && scope.vars[settleMarker] === undefined) {
+    scope.vars[settleMarker] = "1";
+    return {
+      kind: "defer",
+      resumeAtMs: Date.now() + 60_000,
+      reason: "waiting for the call's captured details to land"
+    };
+  }
+  return finish("answered", { waited: false });
 }
 
 async function httpCallStep(
