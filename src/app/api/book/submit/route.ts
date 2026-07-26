@@ -73,6 +73,15 @@ export async function POST(request: Request) {
         // gone) and shows the "no longer available" copy, accurate for both.
         return errorResponse("CONFLICT", "That time is no longer available.", 409);
       }
+      if (result.detail === "payment_required") {
+        // Collection is not built yet; the visitor should call rather than
+        // walk away thinking the business is broken.
+        return errorResponse(
+          "CONFLICT",
+          "This appointment requires payment, which is not yet available online. Please contact the business to book.",
+          409
+        );
+      }
       if (result.detail === "missing_answers") {
         // A stale form (the owner added a required question while it sat
         // open). 400, NOT 422: the client reads 422 as "you already have an

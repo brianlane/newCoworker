@@ -46,6 +46,14 @@ export type BookingPageRow = {
   employee_id: string | null;
   /** Owner-defined intake questions (see booking-page/intake.ts); [] = none. */
   intake_questions: unknown;
+  /**
+   * Payment hooks, schema only: when true the public submit refuses
+   * bookings until collection ships, so a page marked as paid can never
+   * hand out free appointments. No dashboard control yet by design.
+   */
+  payment_required: boolean;
+  payment_amount_cents: number | null;
+  payment_currency: string;
   created_at: string;
   updated_at: string;
 };
@@ -56,6 +64,7 @@ const ALL_COLUMNS =
   "description,waitlist_enabled,waitlist_offer_ttl_minutes,slug,title," +
   "send_confirmation_email,reminders_enabled,reminder_email_hours,reminder_sms_hours," +
   "assignment_mode,employee_id,intake_questions," +
+  "payment_required,payment_amount_cents,payment_currency," +
   "created_at,updated_at";
 
 /** Resolve a page by its public token. Enabled pages only. */
@@ -127,6 +136,9 @@ export type BookingPageSettingsPatch = {
   employeeId?: string | null;
   /** Full replacement of the question list; validated before writing. */
   intakeQuestions?: unknown;
+  paymentRequired?: boolean;
+  paymentAmountCents?: number | null;
+  paymentCurrency?: string;
   /** Vanity URL slug; null/blank clears back to the token-only URL. */
   slug?: string | null;
   /** Public event title; null/blank restores the localized default. */
@@ -223,6 +235,27 @@ function validatePatch(patch: BookingPageSettingsPatch): void {
   if (patch.intakeQuestions !== undefined && !Array.isArray(patch.intakeQuestions)) {
     throw new BookingPageValidationError("Questions must be a list");
   }
+  if (
+    patch.paymentAmountCents !== undefined &&
+    patch.paymentAmountCents !== null &&
+    (!Number.isInteger(patch.paymentAmountCents) ||
+      patch.paymentAmountCents < 50 ||
+      patch.paymentAmountCents > 5_000_000)
+  ) {
+    // Stripe's own floor and a sanity ceiling; the DB check mirrors this.
+    throw new BookingPageValidationError("Price must be between $0.50 and $50,000");
+  }
+  if (
+    patch.paymentCurrency !== undefined &&
+    !["usd", "cad", "mxn", "eur", "gbp"].includes(patch.paymentCurrency)
+  ) {
+    throw new BookingPageValidationError("Unsupported currency");
+  }
+  // Requiring payment without a price would refuse every booking while
+  // telling the owner nothing; the pair has to arrive together.
+  if (patch.paymentRequired === true && !patch.paymentAmountCents) {
+    throw new BookingPageValidationError("Set a price to require payment");
+  }
   for (const [value, label] of [
     [patch.reminderEmailHours, "Email reminder"],
     [patch.reminderSmsHours, "Text reminder"]
@@ -281,7 +314,12 @@ function patchColumns(patch: BookingPageSettingsPatch): Record<string, unknown> 
     // page trusts this column's shape.
     ...(patch.intakeQuestions === undefined
       ? {}
-      : { intake_questions: parseIntakeQuestions(patch.intakeQuestions) })
+      : { intake_questions: parseIntakeQuestions(patch.intakeQuestions) }),
+    ...(patch.paymentRequired === undefined ? {} : { payment_required: patch.paymentRequired }),
+    ...(patch.paymentAmountCents === undefined
+      ? {}
+      : { payment_amount_cents: patch.paymentAmountCents }),
+    ...(patch.paymentCurrency === undefined ? {} : { payment_currency: patch.paymentCurrency })
   };
 }
 

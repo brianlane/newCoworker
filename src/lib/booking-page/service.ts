@@ -130,7 +130,12 @@ export type BookingPageFailure = {
     | "already_booked"
     | "booking_failed"
     /** A required intake question went unanswered (form problem, retryable). */
-    | "missing_answers";
+    | "missing_answers"
+    /**
+     * The page requires payment and collection has not shipped: refusing
+     * is the only answer that does not give paid work away free.
+     */
+    | "payment_required";
 };
 
 /**
@@ -522,6 +527,16 @@ export async function submitPublicBooking(
   const name = input.name.trim();
   const email = input.email.trim();
   const note = input.note?.trim() ?? "";
+
+  // Payment gate, schema-hooks phase: a page marked as requiring payment
+  // must not hand out free appointments before collection exists. First
+  // check in the submit path, so nothing is claimed or written.
+  if (context.page.payment_required) {
+    logger.warn("booking-page: booking refused, page requires payment (not yet supported)", {
+      businessId: context.businessId
+    });
+    return { ok: false, detail: "payment_required" };
+  }
 
   // The page's intake questions, answered. Validated here but only REFUSED
   // after the idempotent resubmit check below: a visitor whose first submit

@@ -142,6 +142,9 @@ const PAGE = {
   assignment_mode: "any",
   employee_id: null,
   intake_questions: [],
+  payment_required: false,
+  payment_amount_cents: null,
+  payment_currency: "usd",
   slug: null as string | null,
   title: null as string | null,
   created_at: "2026-01-01T00:00:00Z",
@@ -962,6 +965,23 @@ describe("submitPublicBooking", () => {
       expect.any(String),
       expect.objectContaining({ intakeAnswers: { project: "A" } })
     );
+  });
+
+  it("refuses to book a page that requires payment (collection has not shipped)", async () => {
+    // The one invariant this phase must hold: a paid page never hands out
+    // free appointments, and nothing is claimed or written in refusing.
+    mockPage.mockResolvedValue({
+      ...PAGE,
+      payment_required: true,
+      payment_amount_cents: 5000
+    });
+    expect(await submitPublicBooking(TOKEN, VALID)).toEqual({
+      ok: false,
+      detail: "payment_required"
+    });
+    expect(mockSlotClaim).not.toHaveBeenCalled();
+    expect(mockBook).not.toHaveBeenCalled();
+    expect(mockStampContact).not.toHaveBeenCalled();
   });
 
   it("refuses a submission missing a required intake answer BEFORE any claim", async () => {
