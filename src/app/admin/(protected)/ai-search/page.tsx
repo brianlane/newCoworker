@@ -11,7 +11,7 @@
 
 import { AlertTriangle } from "lucide-react";
 import { Card } from "@/components/ui/Card";
-import { AI_CRAWLERS } from "@/lib/marketing/ai-crawlers";
+import { OBSERVABLE_AI_OPERATORS } from "@/lib/marketing/ai-crawlers";
 import {
   AI_TRAFFIC_RETENTION_DAYS,
   listAiTrafficRows,
@@ -96,10 +96,12 @@ export default async function AiSearchPage({
   const summary = summarizeAiTraffic(rows, since, now);
   const truncated = rows.length >= ROW_LIMIT;
 
-  // The useful reading is the absence: a registry entry with zero hits is
-  // either uninterested or blocked at the edge.
+  // The useful reading is the absence: an operator with zero hits is either
+  // uninterested or blocked at the edge. Only operators we could actually
+  // observe count, so a robots-only control token (Google-Extended) is never
+  // reported as a crawler that failed to show up.
   const seen = new Set(summary.crawlerOperators);
-  const missing = [...new Set(AI_CRAWLERS.map((c) => c.operator))].filter((op) => !seen.has(op));
+  const missing = OBSERVABLE_AI_OPERATORS.filter((op) => !seen.has(op));
 
   return (
     <div className="space-y-6">

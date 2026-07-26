@@ -3,6 +3,7 @@ import {
   AI_CRAWLERS,
   AI_CRAWLER_TOKENS,
   AI_REFERRERS,
+  OBSERVABLE_AI_OPERATORS,
   matchAiCrawler,
   matchAiReferrer
 } from "@/lib/marketing/ai-crawlers";
@@ -29,6 +30,31 @@ describe("AI crawler registry", () => {
       if (crawler.match !== null) {
         expect(crawler.match).toBe(crawler.match.toLowerCase());
       }
+    }
+  });
+
+  it("counts an operator as observable only if something identifies itself", () => {
+    // Google's only entry is Google-Extended, a robots.txt opt-out control
+    // that never appears in a User-Agent. Treating it as observable would
+    // make the admin page report Google as a permanently missing crawler,
+    // which reads as an edge block that is not happening.
+    expect(OBSERVABLE_AI_OPERATORS).not.toContain("Google");
+    expect(OBSERVABLE_AI_OPERATORS).toContain("Apple");
+    expect(OBSERVABLE_AI_OPERATORS).toContain("OpenAI");
+    expect(OBSERVABLE_AI_OPERATORS).toEqual([...OBSERVABLE_AI_OPERATORS].sort());
+    expect(new Set(OBSERVABLE_AI_OPERATORS).size).toBe(OBSERVABLE_AI_OPERATORS.length);
+  });
+
+  it("can reach every observable operator through matchAiCrawler", () => {
+    // Pins the page's contract: anything it can list as missing must be
+    // something matchAiCrawler could have recorded.
+    const reachable = new Set(
+      AI_CRAWLERS.filter((c) => c.match !== null).map(
+        (c) => matchAiCrawler(`bot ${c.match} /1.0`)?.operator
+      )
+    );
+    for (const operator of OBSERVABLE_AI_OPERATORS) {
+      expect(reachable).toContain(operator);
     }
   });
 });

@@ -1046,10 +1046,13 @@ their `Referer`). Without it the rest of this section is unfalsifiable.
   it sits outside the per-tenant retention window and the end-user erasure
   surface; the daily retention sweep prunes it at a fixed 90 days beside
   `kg_retrieval_events`.
-- **Read the absences.** The page names registry operators with ZERO hits.
-  That is the signature of an edge block, which produces no other symptom:
-  run `tsx debug/aeo-crawler-probe.ts`, then check Cloudflare Security →
-  Events before assuming disinterest.
+- **Read the absences.** The page names operators with ZERO hits, which is
+  the signature of an edge block and produces no other symptom: run
+  `tsx debug/aeo-crawler-probe.ts`, then check Cloudflare Security → Events
+  before assuming disinterest. Only `OBSERVABLE_AI_OPERATORS` can be listed:
+  an operator whose sole registry entry is a robots.txt opt-out control
+  (Google, via `Google-Extended`) never appears in traffic by definition, so
+  reporting it as missing would invent an outage.
 
 ## Platform blog (newcoworker.com/blog)
 
