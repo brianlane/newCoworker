@@ -275,6 +275,21 @@ describe("pollEmailCoworker", () => {
     expect(mockHandoff).not.toHaveBeenCalled();
   });
 
+  it("keeps the reply when the turn-count write fails (already sent)", async () => {
+    // The mail is out: aborting here would both lose the count and skip the
+    // remaining businesses, so the failure is logged and the pass continues.
+    // Both throw shapes, since a driver can reject with a bare string.
+    mockRecordTurn.mockRejectedValueOnce(new Error("update denied"));
+    expect((await pollEmailCoworker(businessDb())).replied).toBe(1);
+
+    mockRecordTurn.mockRejectedValueOnce("update denied");
+    const out = await pollEmailCoworker(businessDb());
+    expect(out.replied).toBe(1);
+    expect(mockSystemLog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "email_coworker_poll_failed" })
+    );
+  });
+
   it("logs a failed turn and moves on", async () => {
     mockTurn.mockResolvedValue({ ok: false, detail: "over_cap" });
     const out = await pollEmailCoworker(businessDb());

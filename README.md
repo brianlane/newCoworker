@@ -1469,6 +1469,12 @@ the email sibling of the owner-over-SMS operator turn: same inline engine
 - **Gmail-first, honestly**: Graph's `sendMail` returns no body, so a
   Microsoft mailbox cannot report the conversation id that seeds ownership.
   Those tenants send fine and get no autonomous follow-ups yet.
+- **One answer per email**: both polls read the same inbox, so the AiFlow
+  email-trigger poll skips messages the coworker has already claimed
+  (`email_coworker_seen`), or a tenant with a broad email-trigger flow would
+  get a flow run AND an autonomous reply to one message. Best-effort
+  ordering (the claim is written before the turn, and both polls run each
+  tick); a lookup failure degrades to the pre-coworker behavior.
 - Entry point: `/api/internal/email-coworker-poll`, kicked ~1/min by the
   ai-flow-worker tick beside the AiFlow trigger polls. Contracts pinned in
   `tests/e2e/beth-email-loop.e2e.test.ts`.
