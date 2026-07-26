@@ -700,11 +700,15 @@ export async function submitPublicBooking(
   if (context.mode === "platform") {
     // PLATFORM MODE: the booking ledger is the calendar of record (the
     // per-person policy already ran above, shared with provider mode).
+    // The agenda is where a Zoom-hosted call shows what the visitor said:
+    // their note plus the intake answers, same content the provider path
+    // puts in the event notes.
+    const agendaLines = [...(note ? [note] : []), ...intakeLines];
     const zoomMeeting = await createZoomMeetingForBooking(context.businessId, {
       topic: summary,
       startIso: start.toISOString(),
       endIso,
-      agenda: note || undefined
+      agenda: agendaLines.length > 0 ? agendaLines.join("\n") : undefined
     });
 
     // Re-run the per-person guard AFTER winning the slot claim: two

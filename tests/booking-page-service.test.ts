@@ -1001,6 +1001,29 @@ describe("submitPublicBooking", () => {
     );
   });
 
+  it("platform mode: the Zoom agenda carries the note and the intake answers", async () => {
+    mockConn.mockResolvedValue(null);
+    mockPage.mockResolvedValue({
+      ...PAGE,
+      intake_questions: [
+        { id: "project", label: "Project?", type: "choice", options: ["A", "B"], required: true }
+      ]
+    });
+    expect(
+      (
+        await submitPublicBooking(TOKEN, {
+          ...VALID,
+          note: "Side gate is open",
+          intakeAnswers: { project: "A" }
+        })
+      ).ok
+    ).toBe(true);
+    expect(mockZoomCreate).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ agenda: "Side gate is open\nProject?: A" })
+    );
+  });
+
   it("carries the intake answers into the event notes and onto the booking row", async () => {
     mockPage.mockResolvedValue({
       ...PAGE,

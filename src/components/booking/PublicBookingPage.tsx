@@ -36,6 +36,7 @@ export type PublicBookingStrings = {
   emailLabel: string;
   noteLabel: string;
   intakePickOne: string;
+  intakeAnswerRequired: string;
   notifyEarlierLabel: string;
   submitButton: string;
   submitting: string;
@@ -147,6 +148,8 @@ export function PublicBookingPage({
   const [form, setForm] = useState({ name: "", phone: "", email: "", note: "" });
   // Intake answers keyed by question id; multi answers are string arrays.
   const [intake, setIntake] = useState<Record<string, string | string[]>>({});
+  // Question id blocking the submit (a required multi with nothing picked).
+  const [intakeError, setIntakeError] = useState<string | null>(null);
   const [notifyEarlier, setNotifyEarlier] = useState(false);
   const [submitState, setSubmitState] = useState<
     "idle" | "submitting" | "slot_taken" | "already_booked" | "invalid" | "failed"
@@ -397,6 +400,20 @@ export function PublicBookingPage({
               className="mt-4 space-y-4"
               onSubmit={(e) => {
                 e.preventDefault();
+                // Required multi questions have no native `required` (they
+                // are toggle buttons), so the browser cannot block an empty
+                // pick; do it here and point at the exact question.
+                const unanswered = intakeQuestions.find(
+                  (q) =>
+                    q.required &&
+                    q.type === "multi" &&
+                    !(Array.isArray(intake[q.id]) && (intake[q.id] as string[]).length > 0)
+                );
+                if (unanswered) {
+                  setIntakeError(unanswered.id);
+                  return;
+                }
+                setIntakeError(null);
                 void submit();
               }}
             >
@@ -461,6 +478,9 @@ export function PublicBookingPage({
                     {q.required ? <span className="ml-1 text-clay-red">*</span> : null}
                   </label>
                   {q.help ? <p className="text-xs text-parchment/45">{q.help}</p> : null}
+                  {intakeError === q.id ? (
+                    <p className="text-xs text-clay-red">{strings.intakeAnswerRequired}</p>
+                  ) : null}
                   {q.type === "choice" ? (
                     <select
                       id={`bk-q-${q.id}`}

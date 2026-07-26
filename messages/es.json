@@ -51,7 +51,8 @@
     "weekdayThu": "Jue",
     "weekdayFri": "Vie",
     "weekdaySat": "Sáb",
-    "intakePickOne": "Elige una opción…"
+    "intakePickOne": "Elige una opción…",
+    "intakeAnswerRequired": "Elige al menos una opción."
   },
   "common": {
     "language": "Idioma",
