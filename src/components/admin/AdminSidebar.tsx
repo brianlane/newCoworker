@@ -14,7 +14,8 @@ import {
   MessageSquare,
   Newspaper,
   Sparkles,
-  Network
+  Network,
+  Radar
 } from "lucide-react";
 
 const adminNavItems = [
@@ -27,6 +28,7 @@ const adminNavItems = [
   { labelKey: "usage", href: "/admin/usage", icon: Gauge },
   { labelKey: "gemini", href: "/admin/gemini", icon: Sparkles },
   { labelKey: "memoryGraph", href: "/admin/memory-graph", icon: Network },
+  { labelKey: "aiSearch", href: "/admin/ai-search", icon: Radar },
   { labelKey: "engagement", href: "/admin/engagement", icon: Activity },
   { labelKey: "provisioning", href: "/admin/provision", icon: Server },
   { labelKey: "system", href: "/admin/system", icon: Settings }

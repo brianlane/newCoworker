@@ -17,6 +17,7 @@ import { logger } from "@/lib/logger";
 import { listBusinessesWithRetention } from "@/lib/db/businesses";
 import { pruneExpiredContent } from "@/lib/privacy/retention";
 import { pruneKgRetrievalEvents } from "@/lib/memory/kg-events";
+import { pruneAiTrafficEvents } from "@/lib/marketing/ai-traffic";
 
 // A fleet-wide sweep does many small deletes (and box round-trips for
 // residency tenants); pin the Vercel ceiling like the other sweeps.
@@ -73,6 +74,17 @@ export async function POST(request: Request): Promise<Response> {
     logger.error("data-retention-sweep: kg_retrieval_events prune failed", { error: message });
   }
 
+  // Same fixed 90-day platform prune for the AI-traffic ledger: ops data
+  // about crawlers and referrers, not tenant content.
+  let aiTrafficPruned = 0;
+  try {
+    aiTrafficPruned = await pruneAiTrafficEvents();
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    errors.push({ businessId: "platform:ai_traffic_events", message });
+    logger.error("data-retention-sweep: ai_traffic_events prune failed", { error: message });
+  }
+
   const durationMs = Date.now() - startedAt;
   logger.info("data-retention-sweep: summary", {
     targets: targets.length,
@@ -80,6 +92,7 @@ export async function POST(request: Request): Promise<Response> {
     centralRows,
     boxRows,
     kgEventsPruned,
+    aiTrafficPruned,
     errors: errors.length,
     durationMs
   });
@@ -90,6 +103,7 @@ export async function POST(request: Request): Promise<Response> {
     centralRows,
     boxRows,
     kgEventsPruned,
+    aiTrafficPruned,
     errors,
     durationMs
   });

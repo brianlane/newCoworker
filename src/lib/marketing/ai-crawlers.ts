@@ -51,6 +51,19 @@ export const AI_CRAWLERS: AiCrawlerDef[] = [
 export const AI_CRAWLER_TOKENS: string[] = AI_CRAWLERS.map((c) => c.token);
 
 /**
+ * Operators we could ever OBSERVE, i.e. those with at least one entry that
+ * identifies itself in a User-Agent header.
+ *
+ * The distinction matters for "who have we not heard from": an operator whose
+ * only entry is a robots.txt opt-out control (Google, whose sole entry is
+ * `Google-Extended`) can never show up in traffic, so listing it as missing
+ * would report a blocked crawler that was never going to appear.
+ */
+export const OBSERVABLE_AI_OPERATORS: string[] = [
+  ...new Set(AI_CRAWLERS.filter((c) => c.match !== null).map((c) => c.operator))
+].sort();
+
+/**
  * Identify an AI agent from a User-Agent header. `Applebot-Extended` is
  * checked before `Applebot` in the registry order above, but neither ever
  * matches a header, so ordering only matters for readability there.

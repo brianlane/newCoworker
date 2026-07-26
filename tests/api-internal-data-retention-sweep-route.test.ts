@@ -12,6 +12,9 @@ vi.mock("@/lib/privacy/retention", () => ({
 vi.mock("@/lib/memory/kg-events", () => ({
   pruneKgRetrievalEvents: vi.fn(async () => 0)
 }));
+vi.mock("@/lib/marketing/ai-traffic", () => ({
+  pruneAiTrafficEvents: vi.fn(async () => 0)
+}));
 vi.mock("@/lib/logger", () => ({
   logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn() }
 }));
@@ -21,6 +24,7 @@ import { assertCronAuth } from "@/lib/cron-auth";
 import { listBusinessesWithRetention } from "@/lib/db/businesses";
 import { pruneExpiredContent } from "@/lib/privacy/retention";
 import { pruneKgRetrievalEvents } from "@/lib/memory/kg-events";
+import { pruneAiTrafficEvents } from "@/lib/marketing/ai-traffic";
 
 function makeRequest(): Request {
   return new Request("http://localhost/api/internal/data-retention-sweep", {
@@ -111,6 +115,31 @@ describe("api/internal/data-retention-sweep route", () => {
     vi.mocked(pruneKgRetrievalEvents).mockRejectedValueOnce("string failure");
     const res2 = await POST(makeRequest());
     const json2 = await res2.json();
+    expect(json2.data.errors[0].message).toBe("string failure");
+  });
+
+  it("prunes the AI-traffic ledger on its fixed window and reports the count", async () => {
+    vi.mocked(listBusinessesWithRetention).mockResolvedValue([]);
+    vi.mocked(pruneAiTrafficEvents).mockResolvedValue(7);
+    const res = await POST(makeRequest());
+    const json = await res.json();
+    expect(json.data.aiTrafficPruned).toBe(7);
+    expect(pruneAiTrafficEvents).toHaveBeenCalledTimes(1);
+  });
+
+  it("captures an AI-traffic prune failure without failing the sweep (non-Error too)", async () => {
+    vi.mocked(listBusinessesWithRetention).mockResolvedValue([]);
+    vi.mocked(pruneAiTrafficEvents).mockRejectedValueOnce(new Error("locked"));
+    const res = await POST(makeRequest());
+    const json = await res.json();
+    expect(res.status).toBe(200);
+    expect(json.data.aiTrafficPruned).toBe(0);
+    expect(json.data.errors).toEqual([
+      { businessId: "platform:ai_traffic_events", message: "locked" }
+    ]);
+
+    vi.mocked(pruneAiTrafficEvents).mockRejectedValueOnce("string failure");
+    const json2 = await (await POST(makeRequest())).json();
     expect(json2.data.errors[0].message).toBe("string failure");
   });
 
