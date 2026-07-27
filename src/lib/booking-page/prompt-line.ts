@@ -18,7 +18,7 @@
  * contract: a failed read costs only this hint, never the turn.
  */
 
-import { getBookingPageForBusiness } from "@/lib/booking-page/db";
+import { getBookingPageForBusiness, upsertBookingPage } from "@/lib/booking-page/db";
 import { getBusiness } from "@/lib/db/businesses";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import { pickCalendlyEventType } from "@/lib/calendar-tools/calendly";
@@ -42,9 +42,32 @@ export type SchedulingLink = PublicBookingLink & {
  */
 const CALENDLY_DEFAULT_DURATION_MINUTES = 30;
 
-/** The enabled page's public URL and title, or null when there is none. */
-export async function publicBookingLink(businessId: string): Promise<PublicBookingLink | null> {
-  const page = await getBookingPageForBusiness(businessId);
+/**
+ * The enabled page's public URL and title, or null when there is none.
+ *
+ * `provisionIfMissing` creates the page when NO row exists at all, exactly
+ * the way the dashboard's first view does (enabled from birth is safe: the
+ * token is unguessable until somebody shares it). A tenant delegating
+ * scheduling before ever opening the Bookings dashboard should not lose
+ * the link to a visit they never made. A row that EXISTS but is disabled
+ * is the owner's off switch, and it stays off.
+ */
+export async function publicBookingLink(
+  businessId: string,
+  opts: { provisionIfMissing?: boolean } = {}
+): Promise<PublicBookingLink | null> {
+  let page = await getBookingPageForBusiness(businessId);
+  if (!page && opts.provisionIfMissing) {
+    try {
+      page = await upsertBookingPage(businessId, { enabled: true });
+    } catch (err) {
+      // Two concurrent first-time turns can race the insert; the loser hits
+      // the business_id unique constraint. Re-read the winner's row and
+      // only give up when there is genuinely no page.
+      page = await getBookingPageForBusiness(businessId);
+      if (!page) throw err;
+    }
+  }
   if (!page || !page.enabled) return null;
   const site = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
   const business = await getBusiness(businessId);
@@ -64,7 +87,8 @@ export async function publicBookingLink(businessId: string): Promise<PublicBooki
  * - Vagaro tenants get NO link: their booking site's URL is not held by
  *   the platform, and no link beats an invented one.
  * - Everyone else (Google, Microsoft, CalDAV, platform mode) gets the
- *   native booking page when it is enabled.
+ *   native booking page, provisioned on first need if the owner has never
+ *   opened the Bookings dashboard.
  */
 export async function schedulingLink(businessId: string): Promise<SchedulingLink | null> {
   const conn = await resolveCalendarConnection(businessId);
@@ -84,7 +108,10 @@ export async function schedulingLink(businessId: string): Promise<SchedulingLink
     return null;
   }
   if (conn?.provider === "vagaro") return null;
-  const page = await publicBookingLink(businessId);
+  // Provision on first need: the same rule as the dashboard's first view,
+  // and only reachable for the providers the page supports (the Vagaro and
+  // Calendly branches above never get here).
+  const page = await publicBookingLink(businessId, { provisionIfMissing: true });
   return page ? { ...page, kind: "booking_page" } : null;
 }
 

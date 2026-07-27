@@ -888,7 +888,10 @@ engine's roster evaluators), and the upcoming-bookings list.
   same provider order the calendar tools use: Calendly tenants get their
   Calendly event type's scheduling URL, Vagaro tenants get NO link (their
   site's URL is not held by the platform, and no link beats an invented
-  one), and everyone else gets the native booking page when enabled. The
+  one), and everyone else gets the native booking page, PROVISIONED on
+  first need when the owner has never opened the Bookings dashboard (same
+  rule as the dashboard's first view: created enabled, token unguessable
+  until shared; a page the owner disabled stays off). The
   link is the DEFAULT for a delegation: a bare "schedule Liz through her
   assistant Beth, her email is X" sends Beth the link without the owner
   naming it (an address-supplied delegation is itself the send
