@@ -52,7 +52,9 @@
     "weekdayFri": "Vie",
     "weekdaySat": "Sáb",
     "intakePickOne": "Elige una opción…",
-    "intakeAnswerRequired": "Elige al menos una opción."
+    "intakeAnswerRequired": "Elige al menos una opción.",
+    "unavailableHeading": "Esta página de reservas no está disponible",
+    "unavailableBody": "Las reservas en línea están desactivadas por ahora. Comunícate directamente con el negocio para agendar, o pídeles un enlace nuevo."
   },
   "common": {
     "language": "Idioma",
@@ -1661,7 +1663,8 @@
       "intakeMax": "Cinco preguntas mantienen la reserva corta; quita una para agregar otra.",
       "intakeNewQuestionLabel": "¿Qué debemos saber antes de la llamada?",
       "intakeOptionOne": "Opción A",
-      "intakeOptionTwo": "Opción B"
+      "intakeOptionTwo": "Opción B",
+      "intakeAsk": "Preguntar"
     },
     "integrationsClaude": {
       "connectedBadge": "Conectado",

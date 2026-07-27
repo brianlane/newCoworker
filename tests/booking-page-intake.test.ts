@@ -9,6 +9,7 @@ import { describe, expect, it } from "vitest";
 import {
   MAX_INTAKE_QUESTIONS,
   MAX_TEXT_ANSWER_LENGTH,
+  activeIntakeQuestions,
   formatIntakeAnswers,
   parseIntakeQuestions,
   validateIntakeAnswers,
@@ -20,13 +21,15 @@ const PROJECT: BookingIntakeQuestion = {
   label: "What kind of project?",
   type: "choice",
   options: ["Kitchen", "Bathroom"],
-  required: true
+  required: true,
+  enabled: true
 };
 const DETAILS: BookingIntakeQuestion = {
   id: "details",
   label: "Anything else?",
   type: "textarea",
-  required: false
+  required: false,
+  enabled: true
 };
 
 describe("parseIntakeQuestions", () => {
@@ -42,9 +45,10 @@ describe("parseIntakeQuestions", () => {
         help: "Pick the closest.",
         type: "choice",
         options: ["Kitchen", "Bathroom"],
-        required: true
+        required: true,
+        enabled: true
       },
-      { id: "details", label: "Anything else?", type: "textarea", required: false }
+      { id: "details", label: "Anything else?", type: "textarea", required: false, enabled: true }
     ]);
   });
 
@@ -92,6 +96,36 @@ describe("parseIntakeQuestions", () => {
   });
 });
 
+describe("paused questions (the Ask toggle)", () => {
+  it("normalizes the flag: explicit false pauses, everything else asks", () => {
+    const parsed = parseIntakeQuestions([
+      { id: "on", label: "Asked", type: "text", required: false },
+      { id: "off", label: "Paused", type: "text", required: false, enabled: false },
+      { id: "legacy", label: "Stored before the flag", type: "text", required: false, enabled: undefined }
+    ]);
+    expect(parsed.map((q) => [q.id, q.enabled])).toEqual([
+      ["on", true],
+      ["off", false],
+      ["legacy", true]
+    ]);
+  });
+
+  it("keeps paused questions in storage but away from the visitor", () => {
+    const parsed = parseIntakeQuestions([
+      { id: "on", label: "Asked", type: "text", required: false },
+      // Paused AND required: pausing must win, or the invisible question
+      // would block every booking.
+      { id: "off", label: "Paused", type: "text", required: true, enabled: false }
+    ]);
+    // The builder still sees both...
+    expect(parsed).toHaveLength(2);
+    // ...the visitor sees one, and validation ignores the paused required.
+    const active = activeIntakeQuestions(parsed);
+    expect(active.map((q) => q.id)).toEqual(["on"]);
+    expect(validateIntakeAnswers(active, {})).toEqual({ ok: true, answers: {} });
+  });
+});
+
 describe("validateIntakeAnswers", () => {
   it("accepts answers, trims text, and caps its length", () => {
     const out = validateIntakeAnswers([PROJECT, DETAILS], {
@@ -134,7 +168,8 @@ describe("validateIntakeAnswers", () => {
       label: "Which rooms?",
       type: "multi",
       options: ["Kitchen", "Bathroom"],
-      required: true
+      required: true,
+      enabled: true
     };
     const out = validateIntakeAnswers([q], { rooms: ["Kitchen", "Spaceship", 42] });
     expect(out.ok && out.answers.rooms).toEqual(["Kitchen"]);
@@ -168,13 +203,15 @@ describe("validateIntakeAnswers", () => {
       id: "c",
       label: "C",
       type: "choice",
-      required: true
+      required: true,
+      enabled: true
     };
     const bareMulti: BookingIntakeQuestion = {
       id: "m",
       label: "M",
       type: "multi",
-      required: true
+      required: true,
+      enabled: true
     };
     expect(validateIntakeAnswers([bareChoice], { c: "anything" })).toEqual({
       ok: false,
@@ -220,7 +257,8 @@ describe("formatIntakeAnswers", () => {
       label: "Rooms",
       type: "multi",
       options: ["A", "B"],
-      required: false
+      required: false,
+      enabled: true
     };
     expect(formatIntakeAnswers([multi], { rooms: ["A", "B"] })).toEqual(["Rooms: A, B"]);
     expect(formatIntakeAnswers([multi], { rooms: [] })).toEqual([]);

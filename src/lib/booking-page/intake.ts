@@ -27,6 +27,13 @@ export type BookingIntakeQuestion = {
   /** For choice/multi. */
   options?: string[];
   required: boolean;
+  /**
+   * Paused questions stay saved but are not asked: an owner who does not
+   * want a question before THIS week's calls should not have to retype it
+   * next month. Absent on rows stored before the flag existed, which reads
+   * as enabled.
+   */
+  enabled: boolean;
 };
 
 /** Owners get a handful, not a form builder: booking must stay short. */
@@ -84,10 +91,24 @@ export function parseIntakeQuestions(raw: unknown): BookingIntakeQuestion[] {
       ...(help ? { help } : {}),
       type,
       ...(options ? { options } : {}),
-      required: q.required === true
+      required: q.required === true,
+      // Only an explicit false pauses; rows stored before the flag existed
+      // keep asking.
+      enabled: q.enabled !== false
     });
   }
   return questions;
+}
+
+/**
+ * The questions a VISITOR actually sees and must answer: paused ones stay
+ * in storage for the builder but never reach the public form or its
+ * validation (a paused required question must not block bookings).
+ */
+export function activeIntakeQuestions(
+  questions: BookingIntakeQuestion[]
+): BookingIntakeQuestion[] {
+  return questions.filter((q) => q.enabled);
 }
 
 export type IntakeAnswers = Record<string, string | string[]>;
