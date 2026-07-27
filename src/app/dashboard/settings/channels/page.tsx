@@ -46,17 +46,6 @@ export default async function ChannelsSettingsPage() {
       )}
 
       <Card>
-        <h2 className="text-sm font-semibold text-parchment mb-4">{t("channelsPhoneTitle")}</h2>
-        <p className="text-xs text-parchment/40">{t("channelsPhoneBody")}</p>
-        <a
-          href="/dashboard/settings/number"
-          className="mt-4 inline-block text-sm text-claw-green hover:underline"
-        >
-          {t("channelsPhoneCta")}
-        </a>
-      </Card>
-
-      <Card>
         <h2 className="text-sm font-semibold text-parchment mb-4">{t("channelsNotificationsTitle")}</h2>
         <p className="text-xs text-parchment/40">{t("channelsNotificationsBody")}</p>
         <a
