@@ -15,6 +15,7 @@ vi.mock("@/lib/booking-page/db", () => ({
 vi.mock("@/lib/booking-page/confirmation-email", () => ({
   sendBookingConfirmationEmail: vi.fn()
 }));
+vi.mock("@/lib/booking-page/assignee-notify", () => ({ notifyAssigneeOfBooking: vi.fn() }));
 vi.mock("@/lib/voice-tools/connections", () => ({ resolveCalendarConnection: vi.fn() }));
 vi.mock("@/lib/calendar-tools/handlers", () => ({
   bookCalendarAppointment: vi.fn(),
@@ -85,6 +86,7 @@ import {
   stampManageToken
 } from "@/lib/booking-page/db";
 import { sendBookingConfirmationEmail } from "@/lib/booking-page/confirmation-email";
+import { notifyAssigneeOfBooking } from "@/lib/booking-page/assignee-notify";
 import { findUpcomingBookingsForAttendee } from "@/lib/calendar-tools/attendee-bookings";
 import { maybeAlertUnassignedBooking } from "@/lib/calendar-tools/unassigned-booking-alert";
 import {
@@ -141,6 +143,7 @@ const PAGE = {
   reminder_sms_hours: 2,
   assignment_mode: "any",
   employee_id: null,
+  notify_assignee: true,
   intake_questions: [],
   payment_required: false,
   payment_amount_cents: null,
@@ -181,6 +184,7 @@ const mockStampContact = vi.mocked(stampAttendeeContact);
 const mockAssigneeCounts = vi.mocked(countUpcomingByAssignee);
 const mockStampAssignee = vi.mocked(stampAssigneeIfUnset);
 const mockConfirmationEmail = vi.mocked(sendBookingConfirmationEmail);
+const mockNotifyAssignee = vi.mocked(notifyAssigneeOfBooking);
 const mockPageByBusiness = vi.mocked(getBookingPageForBusiness);
 const mockUpcomingForAttendee = vi.mocked(findUpcomingBookingsForAttendee);
 const mockUnassignedAlert = vi.mocked(maybeAlertUnassignedBooking);
@@ -221,6 +225,7 @@ beforeEach(() => {
   mockStampAssignee.mockResolvedValue(true);
   mockMarkOffered.mockResolvedValue(undefined);
   mockConfirmationEmail.mockResolvedValue(true);
+  mockNotifyAssignee.mockResolvedValue(true);
   mockUpcomingForAttendee.mockResolvedValue([]);
   mockUnassignedAlert.mockResolvedValue("sent" as never);
   mockZoomCreate.mockResolvedValue({
@@ -773,15 +778,33 @@ describe("submitPublicBooking", () => {
     expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
     expect(mockMarkOffered).not.toHaveBeenCalled();
 
-    // And when the retry genuinely fills the gap, the tiebreak advances.
+    // And when the retry genuinely fills the gap, the tiebreak advances
+    // and the member finally hears about the booking (the gap-fill is the
+    // first time it had an owner).
     mockUpcomingForAttendee.mockResolvedValueOnce([
       { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
     ] as never);
     mockStampAssignee.mockResolvedValueOnce(true);
     mockMarkOffered.mockClear();
     mockMarkOffered.mockRejectedValueOnce(new Error("update denied"));
+    mockNotifyAssignee.mockClear();
     expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
     expect(mockMarkOffered).toHaveBeenCalledWith("m-ana");
+    expect(mockNotifyAssignee).toHaveBeenCalledWith(BIZ, "m-ana", expect.anything());
+
+    // The toggle silences the retry path too.
+    mockPage.mockResolvedValue({
+      ...PAGE,
+      assignment_mode: "round_robin",
+      notify_assignee: false
+    });
+    mockUpcomingForAttendee.mockResolvedValueOnce([
+      { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
+    ] as never);
+    mockStampAssignee.mockResolvedValueOnce(true);
+    mockNotifyAssignee.mockClear();
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    expect(mockNotifyAssignee).not.toHaveBeenCalled();
 
     // A failed resolution on the retry is still a successful answer.
     mockUpcomingForAttendee.mockResolvedValueOnce([
@@ -869,6 +892,9 @@ describe("submitPublicBooking", () => {
     ] as never);
     mockTimeOff.mockResolvedValue([]);
     mockAssigneeCounts.mockResolvedValue(new Map([["m-ana", 4]]));
+    // The booking core answering WITHOUT a human-readable time exercises
+    // the notifier's fallback formatting.
+    mockBook.mockResolvedValueOnce({ ok: true, data: { eventId: "evt-1" } });
 
     expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
     // The lighter load gets it, recorded on the booking row.
@@ -881,6 +907,42 @@ describe("submitPublicBooking", () => {
     // The tiebreak advances, or two members on equal load would forever
     // resolve to the same person.
     expect(mockMarkOffered).toHaveBeenCalledWith("m-ben");
+    // And the person who must show up hears about it, with a readable time
+    // even when the booking core answered without one (the fallback
+    // formats it from the instant).
+    expect(mockNotifyAssignee).toHaveBeenCalledWith(
+      BIZ,
+      "m-ben",
+      expect.objectContaining({
+        visitorName: VALID.name,
+        visitorPhone: "+14805550100",
+        durationMinutes: 30,
+        startLocal: expect.stringContaining("9:00")
+      })
+    );
+
+    // A stamp that does not land silences the text: the resubmit's
+    // gap-fill is the one true ownership moment then, and texting both
+    // times would double.
+    mockNotifyAssignee.mockClear();
+    mockStampContact.mockResolvedValueOnce(false);
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    expect(mockNotifyAssignee).not.toHaveBeenCalled();
+
+    mockNotifyAssignee.mockClear();
+    mockStampContact.mockRejectedValueOnce(new Error("update denied"));
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    expect(mockNotifyAssignee).not.toHaveBeenCalled();
+
+    // The owner's toggle turns just the text off; assignment still happens.
+    mockNotifyAssignee.mockClear();
+    mockPage.mockResolvedValue({
+      ...PAGE,
+      assignment_mode: "round_robin",
+      notify_assignee: false
+    });
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    expect(mockNotifyAssignee).not.toHaveBeenCalled();
 
     // A failed advance still books and still assigns: it only costs
     // fairness on the next tie.
@@ -941,9 +1003,11 @@ describe("submitPublicBooking", () => {
       expect.any(String),
       expect.objectContaining({ assigneeMemberId: null })
     );
-    // No roster read and no tiebreak write at all on the unassigned path.
+    // No roster read, no tiebreak write, and no member text at all on the
+    // unassigned path.
     expect(mockAssigneeCounts).not.toHaveBeenCalled();
     expect(mockMarkOffered).not.toHaveBeenCalled();
+    expect(mockNotifyAssignee).not.toHaveBeenCalled();
   });
 
   it("a resubmit carries the intake answers too (their last chance to land)", async () => {

@@ -37,6 +37,7 @@ import {
 import type { BookingPageRow } from "@/lib/booking-page/db";
 import { mintBookingManageToken, parseBookingPageRef } from "@/lib/booking-page/keys";
 import { chooseAssignee, eligibleMembers, parseAssignmentMode } from "@/lib/booking-page/assignment";
+import { notifyAssigneeOfBooking } from "@/lib/booking-page/assignee-notify";
 import {
   activeIntakeQuestions,
   formatIntakeAnswers,
@@ -616,7 +617,20 @@ export async function submitPublicBooking(
         start.toISOString(),
         retryAssignee
       ).catch(() => false);
-      if (filled) await markMemberOffered(retryAssignee).catch(() => {});
+      if (filled) {
+        await markMemberOffered(retryAssignee).catch(() => {});
+        // The gap-fill is the first time this booking had an owner, so the
+        // owner has never heard about it either.
+        if (context.page.notify_assignee) {
+          await notifyAssigneeOfBooking(context.businessId, retryAssignee, {
+            visitorName: name,
+            visitorPhone: phone,
+            startLocal: formatBookingStartLocal(start.toISOString(), context.timezone),
+            durationMinutes: input.durationMinutes,
+            summary: `${name} + ${context.businessName} (${input.durationMinutes} min)`
+          });
+        }
+      }
     }
     await stampAttendeeContact(
       context.businessId,
@@ -919,7 +933,7 @@ export async function submitPublicBooking(
     });
   }
 
-  await stampAttendeeContact(
+  const contactStamped = await stampAttendeeContact(
     context.businessId,
     bookingAttendeeKey(phone, email, name),
     start.toISOString(),
@@ -938,13 +952,29 @@ export async function submitPublicBooking(
           businessId: context.businessId
         });
       }
+      return stamped;
     })
     .catch((err: unknown) => {
       logger.warn("booking-page: attendee contact stamp failed", {
         businessId: context.businessId,
         error: err instanceof Error ? err.message : String(err)
       });
+      return false;
     });
+
+  // The person who must show up hears about it where they look: their
+  // texts. Sent only AFTER their ownership is durably on the row: a text
+  // before a failed stamp would double when the resubmit's gap-fill
+  // (rightly) treats itself as the first ownership moment.
+  if (assignee && contactStamped && context.page.notify_assignee) {
+    await notifyAssigneeOfBooking(context.businessId, assignee, {
+      visitorName: name,
+      visitorPhone: phone,
+      startLocal: startLocal ?? formatBookingStartLocal(start.toISOString(), context.timezone),
+      durationMinutes: input.durationMinutes,
+      summary
+    });
+  }
 
   if (context.page.send_confirmation_email) {
     await sendBookingConfirmationEmail({

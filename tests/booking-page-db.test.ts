@@ -920,6 +920,15 @@ describe("assignment settings and per-assignee load", () => {
       assignment_mode: "fixed",
       employee_id: "22222222-2222-4222-8222-222222222222"
     });
+
+    const { client: toggling, calls: toggleCalls } = fakeDb([
+      { data: ROW, error: null },
+      { data: ROW, error: null }
+    ]);
+    await upsertBookingPage(BIZ, { notifyAssignee: false }, toggling);
+    expect(toggleCalls.find((c) => c.method === "update")?.args[0]).toMatchObject({
+      notify_assignee: false
+    });
   });
 
   it("counts each employee's upcoming assigned bookings", async () => {

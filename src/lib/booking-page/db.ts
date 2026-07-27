@@ -44,6 +44,8 @@ export type BookingPageRow = {
   assignment_mode: string;
   /** The employee a 'fixed' page books; null otherwise. */
   employee_id: string | null;
+  /** Text the assigned teammate when a booking lands on them. */
+  notify_assignee: boolean;
   /** Owner-defined intake questions (see booking-page/intake.ts); [] = none. */
   intake_questions: unknown;
   /**
@@ -63,7 +65,7 @@ const ALL_COLUMNS =
   "max_advance_days,buffer_minutes,max_daily_bookings,require_staff_on_shift," +
   "description,waitlist_enabled,waitlist_offer_ttl_minutes,slug,title," +
   "send_confirmation_email,reminders_enabled,reminder_email_hours,reminder_sms_hours," +
-  "assignment_mode,employee_id,intake_questions," +
+  "assignment_mode,employee_id,notify_assignee,intake_questions," +
   "payment_required,payment_amount_cents,payment_currency," +
   "created_at,updated_at";
 
@@ -134,6 +136,7 @@ export type BookingPageSettingsPatch = {
   assignmentMode?: string;
   /** Required by 'fixed'; null clears it. */
   employeeId?: string | null;
+  notifyAssignee?: boolean;
   /** Full replacement of the question list; validated before writing. */
   intakeQuestions?: unknown;
   paymentRequired?: boolean;
@@ -306,6 +309,7 @@ function patchColumns(patch: BookingPageSettingsPatch): Record<string, unknown> 
       : { reminder_sms_hours: patch.reminderSmsHours }),
     ...(patch.assignmentMode === undefined ? {} : { assignment_mode: patch.assignmentMode }),
     ...(patch.employeeId === undefined ? {} : { employee_id: patch.employeeId }),
+    ...(patch.notifyAssignee === undefined ? {} : { notify_assignee: patch.notifyAssignee }),
     // Stored NORMALIZED (parsed and re-serialized), never raw: the public
     // page trusts this column's shape.
     ...(patch.intakeQuestions === undefined
