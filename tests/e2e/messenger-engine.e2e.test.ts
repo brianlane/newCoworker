@@ -270,10 +270,13 @@ describe("DM lead capture (live engine turn, real tool declarations)", () => {
           "their phone number and asked to be texted to set up an appointment",
         reply,
         {
+          // Calibrated in judge-calibration.e2e.test.ts (keep in lockstep).
           claims_sender_texted:
             "Does the message claim the SENDER ITSELF has sent, or will send, a text/SMS or " +
-            "email to the visitor? Saying the TEAM (or someone else) will text or reach out " +
-            "is false; answering the question in the chat itself is false."
+            "email to the visitor? Only first-person SINGULAR claims count ('I texted you', " +
+            "'I'll text you'). Saying the TEAM (or someone else) will text or reach out is " +
+            "false; first-person PLURAL business voice ('we'll text you soon') speaks for " +
+            "the team and is false; answering the question in the chat itself is false."
         }
       );
       if (verdict.answers.claims_sender_texted) {
