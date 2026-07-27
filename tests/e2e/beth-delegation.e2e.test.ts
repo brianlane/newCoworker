@@ -62,7 +62,8 @@ const LIZ_EMAIL = "liz@lizdev.example.com";
 /** The vanity link the coworker is told about, asserted verbatim below. */
 const BOOKING_LINK = {
   url: "https://www.newcoworker.com/book/new-coworker",
-  title: "NC Discovery Call"
+  title: "NC Discovery Call",
+  kind: "booking_page" as const
 };
 /** HQ runs on America/Phoenix; Beth and Liz are Eastern. */
 const BUSINESS_TZ = "America/Phoenix";
@@ -384,6 +385,42 @@ describe("Beth delegation, address supplied", () => {
       expect(verdict.answers.offers_times).toBe(true);
       expect(verdict.answers.bare_time_no_zone).toBe(false);
       expect(verdict.answers.claims_scheduled).toBe(false);
+    }
+  );
+});
+
+describe("Beth delegation, bare ask: the link is the default", () => {
+  it(
+    "emails Beth the booking link WITHOUT being told to",
+    { retry: 1, timeout: 240_000 },
+    async () => {
+      // The exact ask from the owner, nothing about links or availability:
+      // knowing the business schedules through this link is the coworker's
+      // job, not the owner's.
+      const out = await operatorTurn(
+        [],
+        "[SMS from owner] Please schedule liz thru her assistant beth for a discovery call. " +
+          `Beth is ${BETH_EMAIL}`,
+        (name) => {
+          if (name === "calendar_find_slots") return FIND_SLOTS_OK;
+          return { ok: false, message: `unexpected tool in this scenario: ${name}` };
+        }
+      );
+
+      const requests = emailTargets(out.finalText);
+      if (requests.length !== 1) {
+        console.error("live reply:", out.finalText);
+      }
+      expect(requests.length, `reply: ${out.finalText}`).toBe(1);
+      const mail = requests[0];
+      expect(mail.to.toLowerCase()).toBe(BETH_EMAIL);
+      expect(mail.body, `email body: ${mail.body}`).toContain(BOOKING_LINK.url);
+
+      // Nothing is booked and nobody is texted while Beth has not answered.
+      const committed = out.calls.filter(
+        (c) => c.name === "calendar_book_appointment" || c.name === "send_sms"
+      );
+      expect(committed, `calls: ${JSON.stringify(out.calls)}`).toEqual([]);
     }
   );
 });
