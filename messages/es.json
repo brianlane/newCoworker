@@ -55,7 +55,9 @@
     "intakeAnswerRequired": "Elige al menos una opción.",
     "unavailableHeading": "Esta página de reservas no está disponible",
     "unavailableBody": "Las reservas en línea están desactivadas por ahora. Comunícate directamente con el negocio para agendar, o pídeles un enlace nuevo.",
-    "unavailableProviderBody": "Este negocio recibe reservas en su propio sitio de agenda, no en esta página. Comunícate con el negocio para obtener el enlace correcto."
+    "unavailableProviderBody": "Este negocio recibe reservas en su propio sitio de agenda, no en esta página. Comunícate con el negocio para obtener el enlace correcto.",
+    "manageGoneHeading": "Este enlace de reserva ya no está activo",
+    "manageGoneBody": "La cita que administraba fue cancelada o ya no está disponible desde este enlace. Para reservar un nuevo horario, usa la página de reservas del negocio o contáctalo directamente."
   },
   "common": {
     "language": "Idioma",
@@ -2276,5 +2278,10 @@
       "priorityLine": "Tu línea prioritaria de soporte por llamada y video está abierta hasta el {date}.",
       "ctaBook": "Reservar tu sesión"
     }
+  },
+  "notFound": {
+    "heading": "No encontramos esa página",
+    "body": "La dirección puede estar mal escrita, o el enlace que seguiste puede haber expirado. Si alguien te envió este enlace, pídele uno nuevo.",
+    "homeCta": "Ir a newcoworker.com"
   }
 }

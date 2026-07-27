@@ -55,7 +55,9 @@
     "intakeAnswerRequired": "Please pick at least one.",
     "unavailableHeading": "This booking page is not available",
     "unavailableBody": "Online booking is turned off right now. Please contact the business directly to schedule, or ask them for a fresh link.",
-    "unavailableProviderBody": "This business takes bookings on its own scheduling site rather than this page. Please contact the business for the right link."
+    "unavailableProviderBody": "This business takes bookings on its own scheduling site rather than this page. Please contact the business for the right link.",
+    "manageGoneHeading": "This booking link is no longer active",
+    "manageGoneBody": "The appointment it managed was cancelled or is no longer available through this link. To book a new time, use the business's booking page or contact them directly."
   },
   "common": {
     "language": "Language",
@@ -2276,5 +2278,10 @@
       "priorityLine": "Your priority call & video support line is open through {date}.",
       "ctaBook": "Book your session"
     }
+  },
+  "notFound": {
+    "heading": "We could not find that page",
+    "body": "The address may be mistyped, or the link you followed may have expired. If somebody sent you this link, ask them for a fresh one.",
+    "homeCta": "Go to newcoworker.com"
   }
 }

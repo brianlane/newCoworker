@@ -32,10 +32,24 @@ export default async function ManageBooking({
   if (!parseBookingManageToken(manageToken)) notFound();
 
   const resolved = await getManagedBooking(manageToken);
-  if (!resolved.ok) notFound();
-  const { view } = resolved;
-
   const t = await getTranslations("bookingPage");
+
+  // A WELL-FORMED manage token that no longer resolves is most often a
+  // visitor re-clicking the emailed link after cancelling: a normal moment,
+  // not an error. Say so instead of a 404 that reads as breakage.
+  if (!resolved.ok) {
+    return (
+      <main className="min-h-screen bg-deep-ink px-4 py-10">
+        <div className="mx-auto w-full max-w-lg pt-16 text-center">
+          <h1 className="text-xl font-semibold text-parchment">{t("manageGoneHeading")}</h1>
+          <p className="mt-3 rounded-md border border-spark-orange/40 bg-spark-orange/10 px-4 py-3 text-sm text-spark-orange">
+            {t("manageGoneBody")}
+          </p>
+        </div>
+      </main>
+    );
+  }
+  const { view } = resolved;
 
   return (
     <main className="min-h-screen bg-deep-ink px-4 py-10">
