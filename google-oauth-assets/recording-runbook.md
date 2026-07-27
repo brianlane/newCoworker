@@ -117,9 +117,9 @@ justifications are built around this set.
 - CASA Tier 2 self-assessment (required for gmail.modify): reuse the
   `zoom-marketplace-assets/` evidence pack (ZAP DAST, SAST, SSDLC,
   policies).
-- Confirm which OAuth client the Supabase-Auth "Log in with Google"
-  (PR #942) uses; if it is this client, mention sign-in usage in any
-  follow-up and keep its redirect URI on the client config.
+- CONFIRMED (Jul 27): Supabase-Auth "Log in with Google" (PR #942) uses
+  this same client, so sign-in usage is stated in the reply and shown as a
+  beat in the video; keep its redirect URI on the client config.
 - Known risk: `nango.dev` sits in authorized domains via the
   `api.nango.dev` redirect. If reviewers demand Search Console ownership,
   the fix is Nango's custom callback domain or a Zoom-style direct OAuth

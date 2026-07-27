@@ -6,7 +6,7 @@ for project `new-coworker`. Placeholders:
 
 - `[REVIEWER_PASSWORD]`: mint with `tsx debug/google-reviewer-setup.ts --apply`
   right before sending (the credential is never stored in this repo).
-- `[VIDEO_URL]`: the re-recorded unlisted YouTube demo video.
+- Demo video (recorded Jul 27, unlisted): https://youtu.be/un8DqDUi26Q
 
 Keep the same video link and credentials in the Verification Center
 submission so the two channels never disagree.
@@ -36,7 +36,10 @@ ever called a Gmail settings endpoint). The declared set:
 - `https://www.googleapis.com/auth/calendar.app.created` (non-sensitive)
 - `https://www.googleapis.com/auth/calendar.events` (sensitive)
 - `https://www.googleapis.com/auth/gmail.modify` (restricted)
-- `openid`, `userinfo.email`, `userinfo.profile` (sign-in identity)
+- `openid`, `userinfo.email`, `userinfo.profile` (sign-in identity; this
+  same client also powers "Log in with Google" at
+  https://www.newcoworker.com/login, which requests the identity scopes
+  only)
 
 ## 2. Scope justifications (feature to scope)
 
@@ -95,18 +98,19 @@ at: https://www.newcoworker.com/integrations/google/review-test-plan
 
 ## 4. Demo video
 
-Updated demo video (unlisted): [VIDEO_URL]
+Updated demo video (unlisted): https://youtu.be/un8DqDUi26Q
 
 It shows, in order and without cuts around the consent screen: the app
-context, the full OAuth grant from Dashboard -> Integrations with the
-browser URL bar visible (client id identifiable) and the complete consent
-screen; the calendar scopes in use (AI booking by chat landing on the
-app-created NewCoworker calendar, the public booking page computing open
-slots from free/busy, and a reschedule of an appointment on the owner's own
-calendar, shown in Google Calendar); and `gmail.modify` in use (inbound
-customer email read by the AI coworker, the reply visible in the owner's
-Gmail Sent folder, and the original message marked read), ending with
-disconnect.
+context; sign-in with Google on the same client (identity scopes only); the
+full OAuth grant from Dashboard -> Integrations with the browser URL bar
+visible (client id identifiable) and the complete consent screen; the
+calendar scopes in use (AI booking by chat landing on the app-created
+NewCoworker calendar, a reschedule of an appointment on the owner's own
+calendar shown in Google Calendar, and the public booking page computing
+open slots from free/busy); and `gmail.modify` in use (inbound customer
+email read by the AI coworker, the reply visible in the owner's Gmail Sent
+folder, and the original message marked read), ending with disconnect
+availability.
 
 ## 5. Limited Use and AI disclosures
 
