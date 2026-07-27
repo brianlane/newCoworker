@@ -11,6 +11,13 @@ for project `new-coworker`. Placeholders:
 Keep the same video link and credentials in the Verification Center
 submission so the two channels never disagree.
 
+Scope-set note (Jul 26, 2026): the public self-serve booking page shipped
+after the first submission and deliberately re-added the two NON-sensitive
+granular calendar scopes (`calendar.events.freebusy`,
+`calendar.app.created`) so most calendar work rides least-privilege scopes.
+The declared set below is final; do not trim it back to the Jul 24 two-scope
+set.
+
 ---
 
 Hello,
@@ -20,15 +27,16 @@ Thank you for the review. We have addressed each item below for project
 
 ## 1. Scope alignment (discrepancy resolved)
 
-We audited the authorization request against the console configuration and
-removed `https://www.googleapis.com/auth/gmail.settings.basic` from both. No
-feature ever called a Gmail settings endpoint, so it has been dropped rather
-than justified. The OAuth client now requests exactly the scopes declared in
-Data Access, nothing more:
+We audited the authorization request against the console configuration:
+the client now requests exactly the scopes declared in Data Access, nothing
+more. `gmail.settings.basic` was REMOVED rather than justified (no feature
+ever called a Gmail settings endpoint). The declared set:
 
-- `https://www.googleapis.com/auth/calendar.events`
-- `https://www.googleapis.com/auth/gmail.modify`
-- `openid`, `userinfo.email`, `userinfo.profile` (sign-in identity only)
+- `https://www.googleapis.com/auth/calendar.events.freebusy` (non-sensitive)
+- `https://www.googleapis.com/auth/calendar.app.created` (non-sensitive)
+- `https://www.googleapis.com/auth/calendar.events` (sensitive)
+- `https://www.googleapis.com/auth/gmail.modify` (restricted)
+- `openid`, `userinfo.email`, `userinfo.profile` (sign-in identity)
 
 ## 2. Scope justifications (feature to scope)
 
@@ -36,25 +44,38 @@ New Coworker (https://www.newcoworker.com) is an AI coworker for small
 businesses. Only the business OWNER connects their Google account (Dashboard
 -> Integrations); customers of the business never grant access.
 
-**calendar.events.** Feature: the coworker answers the business phone, SMS,
-and web chat, finds an open slot on the owner's calendar, and books,
-reschedules, or cancels the appointment for the customer. It must therefore
-search events for availability and create, update, and delete events on the
-owner's calendar. `calendar.events.readonly` cannot write bookings and
-`calendar.freebusy` cannot create, move, or cancel events, so neither
-narrower scope supports the feature.
+Our three calendar scopes are split by least privilege:
 
-**gmail.modify.** Feature: the owner points automations at their business
-inbox; when a customer email arrives, the coworker reads it, sends the reply
-FROM the owner's own Gmail address (so the customer sees the business
-address, not a third-party sender), and marks the original message read so
-the owner's inbox shows it was handled. That is one read (messages.list /
-messages.get), one send (messages.send), and one label change
-(messages.modify, removing UNREAD) per handled email. `gmail.readonly`
-cannot send or mark handled; `gmail.send` cannot read the inbound email or
-mark it handled; combining them still cannot update the message state. The
-single narrowest scope that covers read + send + label change is
-`gmail.modify`, and we request nothing beyond those three operations (no
+**calendar.events.freebusy.** Availability reads ONLY. The AI coworker and
+the business's public self-serve booking page (`/book/<token>`) compute open
+slots from the owner's free/busy data (`freeBusy` query). Visitors see
+coarse open slot starts, never event data.
+
+**calendar.app.created.** The app creates ONE secondary "NewCoworker"
+booking calendar on the owner's account and writes there: new bookings land
+on it (so the whole team can subscribe to it), and employee time-off is
+mirrored onto it as all-day display events. This scope grants access only
+to calendars the app itself created.
+
+**calendar.events.** Required for what the two narrower scopes cannot do:
+rescheduling and canceling appointments that live on the owner's OWN
+calendars (bookings made before the app calendar existed, and owner-created
+events the owner asks the AI coworker to move or cancel), booking fallback
+to the primary calendar when the app calendar cannot be created, and
+calendar-based automations that read event details from the owner's
+calendars to run the owner's configured workflows (free/busy exposes no
+event details, and app.created cannot read or write the owner's own
+calendars).
+
+**gmail.modify.** The owner points automations at their business inbox;
+when a customer email arrives, the AI coworker reads it (messages.list /
+messages.get), sends the reply FROM the owner's own Gmail address so the
+customer sees the business address (messages.send), and marks the original
+message read (messages.modify, removing UNREAD) so the owner's inbox shows
+it was handled. `gmail.readonly` cannot send or mark handled; `gmail.send`
+cannot read the inbound email or mark it handled; combining them still
+cannot update message state. `gmail.modify` is the single narrowest scope
+covering read + send + state update, and we use no other Gmail surface (no
 settings, no deletion, no full mailbox access via mail.google.com).
 
 ## 3. Test credentials (no authentication blockers)
@@ -67,10 +88,10 @@ production client above:
 - Password: [REVIEWER_PASSWORD]
 
 The account has no 2FA, no phone verification, and no CAPTCHA on login. It
-owns a pre-configured sandbox business with the Integrations page and an
-enabled email-triggered flow. A step-by-step walkthrough covering the grant,
-each scope in use, and removal is published at:
-https://www.newcoworker.com/integrations/google/review-test-plan
+owns a pre-configured sandbox business with the Integrations page, the
+public booking page, and an enabled email-triggered flow. A step-by-step
+walkthrough covering the grant, each scope in use, and removal is published
+at: https://www.newcoworker.com/integrations/google/review-test-plan
 
 ## 4. Demo video
 
@@ -79,10 +100,13 @@ Updated demo video (unlisted): [VIDEO_URL]
 It shows, in order and without cuts around the consent screen: the app
 context, the full OAuth grant from Dashboard -> Integrations with the
 browser URL bar visible (client id identifiable) and the complete consent
-screen, `calendar.events` in use (booking by chat, then the event shown on
-the owner's Google Calendar), and `gmail.modify` in use (inbound customer
-email read by the coworker, the AI reply visible in the owner's Gmail Sent
-folder, and the original message marked read), ending with disconnect.
+screen; the calendar scopes in use (AI booking by chat landing on the
+app-created NewCoworker calendar, the public booking page computing open
+slots from free/busy, and a reschedule of an appointment on the owner's own
+calendar, shown in Google Calendar); and `gmail.modify` in use (inbound
+customer email read by the AI coworker, the reply visible in the owner's
+Gmail Sent folder, and the original message marked read), ending with
+disconnect.
 
 ## 5. Limited Use and AI disclosures
 
