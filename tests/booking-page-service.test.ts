@@ -993,6 +993,24 @@ describe("submitPublicBooking", () => {
     expect(mockStampContact).toHaveBeenCalled();
   });
 
+  it("a PAUSED required question neither blocks the booking nor lands in the notes", async () => {
+    mockPage.mockResolvedValue({
+      ...PAGE,
+      intake_questions: [
+        {
+          id: "project",
+          label: "Project?",
+          type: "choice",
+          options: ["A", "B"],
+          required: true,
+          enabled: false
+        }
+      ]
+    });
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    expect(String(mockBook.mock.calls[0][1].notes)).not.toContain("Project?");
+  });
+
   it("refuses a submission missing a required intake answer BEFORE any claim", async () => {
     mockPage.mockResolvedValue({
       ...PAGE,

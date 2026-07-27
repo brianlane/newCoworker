@@ -38,6 +38,7 @@ import type { BookingPageRow } from "@/lib/booking-page/db";
 import { mintBookingManageToken, parseBookingPageRef } from "@/lib/booking-page/keys";
 import { chooseAssignee, eligibleMembers, parseAssignmentMode } from "@/lib/booking-page/assignment";
 import {
+  activeIntakeQuestions,
   formatIntakeAnswers,
   parseIntakeQuestions,
   validateIntakeAnswers
@@ -534,7 +535,9 @@ export async function submitPublicBooking(
   // since added a required question. What DID validate is kept either way
   // (the lenient pass treats every question as optional) so a resubmit can
   // still stamp whatever answers it carried.
-  const intakeQuestions = parseIntakeQuestions(context.page.intake_questions);
+  const intakeQuestions = activeIntakeQuestions(
+    parseIntakeQuestions(context.page.intake_questions)
+  );
   const intake = validateIntakeAnswers(intakeQuestions, input.intakeAnswers);
   const lenient = intake.ok
     ? intake

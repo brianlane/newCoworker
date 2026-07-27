@@ -11,7 +11,7 @@ import { notFound } from "next/navigation";
 import { getLocale, getTranslations } from "next-intl/server";
 import { parseBookingPageRef } from "@/lib/booking-page/keys";
 import { getBookingPageContext } from "@/lib/booking-page/service";
-import { parseIntakeQuestions } from "@/lib/booking-page/intake";
+import { activeIntakeQuestions, parseIntakeQuestions } from "@/lib/booking-page/intake";
 import { PublicBookingPage } from "@/components/booking/PublicBookingPage";
 
 export const dynamic = "force-dynamic";
@@ -32,11 +32,32 @@ export default async function BookPage({
   if (!parseBookingPageRef(token)) notFound();
 
   const resolved = await getBookingPageContext(token);
-  if (!resolved.ok) notFound();
-  const { context } = resolved;
-
   const t = await getTranslations("bookingPage");
   const locale = await getLocale();
+
+  // A well-formed link that does not resolve is a REAL page turned off (or
+  // rotated away), and whoever holds it was invited by the business: a bare
+  // 404 reads as "this business is broken". Say what is true instead, and
+  // say the RIGHT thing: a Vagaro/Calendly-resolved tenant
+  // (calendar_not_connected) books on their provider's own page, which is
+  // not the same as Live being unchecked.
+  if (!resolved.ok) {
+    const body =
+      resolved.detail === "calendar_not_connected"
+        ? t("unavailableProviderBody")
+        : t("unavailableBody");
+    return (
+      <main className="min-h-screen bg-deep-ink px-4 py-10">
+        <div className="mx-auto w-full max-w-lg pt-16 text-center">
+          <h1 className="text-xl font-semibold text-parchment">{t("unavailableHeading")}</h1>
+          <p className="mt-3 rounded-md border border-spark-orange/40 bg-spark-orange/10 px-4 py-3 text-sm text-spark-orange">
+            {body}
+          </p>
+        </div>
+      </main>
+    );
+  }
+  const { context } = resolved;
 
   return (
     <main className="min-h-screen bg-deep-ink px-4 py-10">
@@ -49,7 +70,7 @@ export default async function BookPage({
           videoCall={context.videoCall}
           sendsInvite={context.mode === "provider"}
           locale={locale}
-          intakeQuestions={parseIntakeQuestions(context.page.intake_questions)}
+          intakeQuestions={activeIntakeQuestions(parseIntakeQuestions(context.page.intake_questions))}
           strings={{
             eventTitle: context.title ?? t("eventTitle", { business: context.businessName }),
             durationMinutes: t("durationMinutes"),

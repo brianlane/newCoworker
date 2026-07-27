@@ -872,7 +872,10 @@ engine's roster evaluators), and the upcoming-bookings list.
   (required answered, choices from the offered options, all lengths capped)
   and a miss refuses BEFORE any slot claim. Answers to questions that no
   longer exist are discarded, not refused: the owner may have edited the
-  page under an open form. Answers travel with the appointment: the provider
+  page under an open form. Each question has an Ask toggle: pausing keeps it
+  saved for next month instead of forcing a delete-and-retype, and a paused
+  question never reaches the public form (a paused REQUIRED question must
+  not block bookings). Answers travel with the appointment: the provider
   event's notes, and structured `intake_answers` on the ledger row.
 - **Payment hooks, schema only** (v3 groundwork): `payment_required`,
   `payment_amount_cents`, `payment_currency` on `booking_pages` and
