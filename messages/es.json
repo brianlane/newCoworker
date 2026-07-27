@@ -1667,7 +1667,8 @@
       "intakeNewQuestionLabel": "¿Qué debemos saber antes de la llamada?",
       "intakeOptionOne": "Opción A",
       "intakeOptionTwo": "Opción B",
-      "intakeAsk": "Preguntar"
+      "intakeAsk": "Preguntar",
+      "assignNotifyLabel": "Enviar un texto al empleado asignado cuando le llegue una reserva"
     },
     "integrationsClaude": {
       "connectedBadge": "Conectado",

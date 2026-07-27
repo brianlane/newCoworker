@@ -54,6 +54,7 @@ const patchSchema = z.object({
   reminderSmsHours: z.number().int().optional(),
   assignmentMode: z.enum(["any", "round_robin", "fixed"]).optional(),
   employeeId: z.string().uuid().nullable().optional(),
+  notifyAssignee: z.boolean().optional(),
   intakeQuestions: z.array(z.unknown()).max(20).optional()
 });
 

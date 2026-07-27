@@ -867,6 +867,14 @@ engine's roster evaluators), and the upcoming-bookings list.
   showing no times, and a booking that cannot be assigned (nobody on shift by
   the time it lands) is recorded unassigned and logged: the visitor already
   holds the time, so a bookkeeping gap never becomes a lost appointment.
+  The assigned member is texted the moment a booking lands on them (who,
+  when, how long, from the business's own number), owner-toggleable per
+  page (`notify_assignee`, on by default: the person who must show up
+  should hear about it); the STOP list applies to staff numbers like
+  anyone else's, and a failed text is logged, never surfaced (the booking
+  and the visitor's confirmation are already durable). A retry that fills
+  a missing assignment sends the text then, the first moment the booking
+  has an owner to tell.
 - **Intake questions** (`src/lib/booking-page/intake.ts`): up to five
   owner-defined questions in the white-glove questionnaire's vocabulary
   (choice, multi, text, textarea), answered inside the booking form. Two

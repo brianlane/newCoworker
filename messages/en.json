@@ -1667,7 +1667,8 @@
       "intakeNewQuestionLabel": "What should we know before the call?",
       "intakeOptionOne": "Option A",
       "intakeOptionTwo": "Option B",
-      "intakeAsk": "Ask"
+      "intakeAsk": "Ask",
+      "assignNotifyLabel": "Text the assigned teammate when a booking lands on them"
     },
     "integrationsClaude": {
       "connectedBadge": "Connected",

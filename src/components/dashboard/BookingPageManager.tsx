@@ -31,6 +31,7 @@ type PageRow = {
   reminder_sms_hours: number;
   assignment_mode: string;
   employee_id: string | null;
+  notify_assignee: boolean;
   intake_questions: IntakeQuestion[];
 };
 
@@ -544,6 +545,17 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
             </div>
           ) : null}
         </div>
+        {page && page.assignment_mode !== "any" ? (
+          <label className="mt-4 flex items-center gap-2 text-sm text-parchment/70">
+            <input
+              type="checkbox"
+              checked={page.notify_assignee}
+              disabled={saving}
+              onChange={(e) => void patch({ notifyAssignee: e.target.checked })}
+            />
+            {t("assignNotifyLabel")}
+          </label>
+        ) : null}
         <p className="mt-3 text-xs text-parchment/40">
           {roster.length === 0 ? t("assignNoRoster") : t("assignHint")}
         </p>

@@ -37,6 +37,7 @@ import {
 import type { BookingPageRow } from "@/lib/booking-page/db";
 import { mintBookingManageToken, parseBookingPageRef } from "@/lib/booking-page/keys";
 import { chooseAssignee, eligibleMembers, parseAssignmentMode } from "@/lib/booking-page/assignment";
+import { notifyAssigneeOfBooking } from "@/lib/booking-page/assignee-notify";
 import {
   activeIntakeQuestions,
   formatIntakeAnswers,
@@ -616,7 +617,20 @@ export async function submitPublicBooking(
         start.toISOString(),
         retryAssignee
       ).catch(() => false);
-      if (filled) await markMemberOffered(retryAssignee).catch(() => {});
+      if (filled) {
+        await markMemberOffered(retryAssignee).catch(() => {});
+        // The gap-fill is the first time this booking had an owner, so the
+        // owner has never heard about it either.
+        if (context.page.notify_assignee) {
+          await notifyAssigneeOfBooking(context.businessId, retryAssignee, {
+            visitorName: name,
+            visitorPhone: phone,
+            startLocal: formatBookingStartLocal(start.toISOString(), context.timezone),
+            durationMinutes: input.durationMinutes,
+            summary: `${name} + ${context.businessName} (${input.durationMinutes} min)`
+          });
+        }
+      }
     }
     await stampAttendeeContact(
       context.businessId,
@@ -917,6 +931,17 @@ export async function submitPublicBooking(
         error: err instanceof Error ? err.message : String(err)
       });
     });
+    // The person who must show up hears about it where they look: their
+    // texts. Owner-toggleable per page; best-effort inside.
+    if (context.page.notify_assignee) {
+      await notifyAssigneeOfBooking(context.businessId, assignee, {
+        visitorName: name,
+        visitorPhone: phone,
+        startLocal: startLocal ?? formatBookingStartLocal(start.toISOString(), context.timezone),
+        durationMinutes: input.durationMinutes,
+        summary
+      });
+    }
   }
 
   await stampAttendeeContact(
