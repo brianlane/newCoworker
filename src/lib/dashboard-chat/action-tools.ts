@@ -265,15 +265,23 @@ const BOOK_DECLARATION: GeminiFunctionDeclaration = {
 const RESCHEDULE_DECLARATION: GeminiFunctionDeclaration = {
   name: "calendar_reschedule_appointment",
   description:
-    "Move an EXISTING appointment to a new time, the invitation is updated in place, never duplicated. Identify the appointment by the attendee's phone or email. Times MUST be ISO 8601 with a timezone offset.",
+    "Move an EXISTING appointment to a new time, the invitation is updated in place, never duplicated. Identify the appointment by the attendee's name, phone, or email; pass appointmentStartIso too when the owner names the current time. If several appointments match the name you get multiple_matches with their start times, then ask which one. Times MUST be ISO 8601 with a timezone offset.",
   parameters: {
     type: "object",
     properties: {
       newStartIso: { type: "string", description: "New start time, ISO 8601 with offset." },
       newEndIso: { type: "string", description: "New end time, ISO 8601 with offset." },
-      attendeeName: { type: "string", description: "Attendee's name (optional)." },
+      attendeeName: {
+        type: "string",
+        description: "Attendee's name; enough on its own to find the appointment."
+      },
       attendeeEmail: { type: "string", description: "Attendee's email (optional)." },
       attendeePhone: { type: "string", description: "Attendee's phone (optional)." },
+      appointmentStartIso: {
+        type: "string",
+        description:
+          "The appointment's CURRENT start, ISO 8601 with offset, whenever the owner names it (for example Tuesday 4pm). Disambiguates same-name appointments."
+      },
       timezone: { type: "string", description: "IANA timezone (optional)." }
     },
     required: ["newStartIso", "newEndIso"]
@@ -283,13 +291,21 @@ const RESCHEDULE_DECLARATION: GeminiFunctionDeclaration = {
 const CANCEL_DECLARATION: GeminiFunctionDeclaration = {
   name: "calendar_cancel_appointment",
   description:
-    "Cancel an EXISTING appointment, the attendee gets a single cancellation notice. Identify the appointment by the attendee's phone or email. Use ONLY when the owner explicitly asks to cancel.",
+    "Cancel an EXISTING appointment, the attendee gets a single cancellation notice. Identify the appointment by the attendee's name, phone, or email; pass appointmentStartIso too when the owner names the current time. If several appointments match the name you get multiple_matches with their start times, then ask which one. Use ONLY when the owner explicitly asks to cancel.",
   parameters: {
     type: "object",
     properties: {
-      attendeeName: { type: "string", description: "Attendee's name (optional)." },
+      attendeeName: {
+        type: "string",
+        description: "Attendee's name; enough on its own to find the appointment."
+      },
       attendeeEmail: { type: "string", description: "Attendee's email (optional)." },
-      attendeePhone: { type: "string", description: "Attendee's phone (optional)." }
+      attendeePhone: { type: "string", description: "Attendee's phone (optional)." },
+      appointmentStartIso: {
+        type: "string",
+        description:
+          "The appointment's CURRENT start, ISO 8601 with offset, whenever the owner names it (for example Tuesday 4pm). Disambiguates same-name appointments."
+      }
     },
     required: []
   }
@@ -603,13 +619,15 @@ const rescheduleAppointmentArgsSchema = z.object({
   attendeeName: z.string().max(200).optional(),
   attendeeEmail: z.string().email().optional(),
   attendeePhone: z.string().max(32).optional(),
+  appointmentStartIso: z.string().datetime({ offset: true }).optional(),
   timezone: z.string().optional()
 });
 
 const cancelAppointmentArgsSchema = z.object({
   attendeeName: z.string().max(200).optional(),
   attendeeEmail: z.string().email().optional(),
-  attendeePhone: z.string().max(32).optional()
+  attendeePhone: z.string().max(32).optional(),
+  appointmentStartIso: z.string().datetime({ offset: true }).optional()
 });
 
 const joinWaitlistArgsSchema = z.object({
@@ -680,9 +698,9 @@ function bookFailureGuidance(detail: string): string {
 function lifecycleFailureGuidance(detail: string, verb: "reschedule" | "cancel"): string | null {
   if (detail === "booking_not_found") {
     return (
-      "No upcoming appointment was found for that person. Ask the owner for the phone " +
-      "number or email the appointment was booked under and the original time. Never book " +
-      `a new appointment to fake a ${verb}.`
+      "No upcoming appointment was found for that person. Ask the owner for the " +
+      "appointment's current time (pass it as appointmentStartIso), or the phone number or " +
+      `email it was booked under. Never book a new appointment to fake a ${verb}.`
     );
   }
   if (detail === "calendar_not_connected") {

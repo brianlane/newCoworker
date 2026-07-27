@@ -68,6 +68,13 @@ import { logger } from "@/lib/logger";
  * predate the ledger fall back to a provider-side search for the attendee's
  * phone/email marker in the event body (bookings always carry an
  * `Attendee:`/`Phone:`/`Email:` description).
+ *
+ * A NAME alone also resolves, because that is how owners ask ("move John
+ * Smith's Tuesday 4pm"): the search matches the event's `Attendee:` line, so
+ * it only ever hits an appointment we booked for that person. When a name
+ * matches several upcoming appointments the caller's `appointmentStartIso`
+ * picks one, and failing that the tools return `multiple_matches` with the
+ * candidate start times so the model asks which one instead of guessing.
  */
 
 export type RescheduleAppointmentArgs = {
@@ -76,6 +83,13 @@ export type RescheduleAppointmentArgs = {
   attendeeName?: string;
   attendeeEmail?: string;
   attendeePhone?: string;
+  /**
+   * The appointment's CURRENT start, when the caller named one ("move John's
+   * Tuesday 4pm"). Disambiguates a name that matches several upcoming
+   * appointments, and guards the ledger path: a claim at a different time
+   * falls through to the provider search rather than moving the wrong one.
+   */
+  appointmentStartIso?: string;
   timezone?: string;
 };
 
@@ -83,6 +97,8 @@ export type CancelAppointmentArgs = {
   attendeeName?: string;
   attendeeEmail?: string;
   attendeePhone?: string;
+  /** Same disambiguation contract as reschedule (see above). */
+  appointmentStartIso?: string;
 };
 
 type LocatedEvent = {
@@ -121,28 +137,76 @@ type SearchedEvent = {
 };
 
 /**
- * Provider-side fallback search for the attendee's next upcoming event.
- * Matches on the phone/email marker embedded in every booked event's
- * description. Null when there is no usable marker or nothing matches.
+ * How the provider search identifies the attendee's event. A phone/email
+ * `marker` is exact and wins; `name` is the fallback for the way owners
+ * actually talk ("move John Smith's Tuesday 4pm"), matched against the
+ * `Attendee:` line every booked event carries.
  */
-async function searchProviderEvent(
-  businessId: string,
-  conn: ResolvedVoiceConnection,
-  marker: string
-): Promise<SearchedEvent | null> {
-  if (!marker) return null;
-  // Bounded, case-insensitive matching (Bugbot on PR #577):
-  //  - case-insensitive because the caller may hold a lowercased email (the
-  //    ledger key shape) while the event body stores the form's casing;
-  //  - boundary-guarded because a raw substring would let one attendee's
-  //    marker match inside a longer value ("joe@acme.com" inside
-  //    "notjoe@acme.com", or an E.164 as the prefix of a longer number) and
-  //    mutate the wrong event.
-  const escaped = marker.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+type SearchQuery = {
+  /** Phone (E.164) or email; "" when the caller gave neither. */
+  marker: string;
+  /** Attendee name; "" when the caller gave none. */
+  name: string;
+};
+
+/** Escape a user-supplied string for embedding in a RegExp. */
+function escapeForRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+/**
+ * Bounded, case-insensitive marker matching (Bugbot on PR #577):
+ *  - case-insensitive because the caller may hold a lowercased email (the
+ *    ledger key shape) while the event body stores the form's casing;
+ *  - boundary-guarded because a raw substring would let one attendee's
+ *    marker match inside a longer value ("joe@acme.com" inside
+ *    "notjoe@acme.com", or an E.164 as the prefix of a longer number) and
+ *    mutate the wrong event.
+ */
+function markerMatcher(marker: string): (haystack: string) => boolean {
   // Lookahead allows a bare trailing period (sentence end) but rejects a
   // continuation like ".au" or further digits/letters.
-  const markerRe = new RegExp(`(?<![\\w.+@])${escaped}(?!\\.?[\\w@])`, "i");
-  const containsMarker = (haystack: string) => markerRe.test(haystack);
+  const re = new RegExp(`(?<![\\w.+@])${escapeForRegExp(marker)}(?!\\.?[\\w@])`, "i");
+  return (haystack) => re.test(haystack);
+}
+
+/**
+ * Name matching is deliberately anchored to the `Attendee:` line rather than
+ * a loose substring: it must only ever hit an appointment WE booked for that
+ * person, never an owner's own meeting that happens to mention them. The
+ * name must also END the line's value (whitespace, HTML tag, or line break
+ * after it), so "John Smith" never matches "John Smithson".
+ */
+function attendeeNameMatcher(name: string): (haystack: string) => boolean {
+  const re = new RegExp(`Attendee:\\s*${escapeForRegExp(name)}\\s*(?:$|<|\\r|\\n)`, "im");
+  return (haystack) => re.test(haystack);
+}
+
+/**
+ * Provider-side fallback search for the attendee's upcoming events. Returns
+ * EVERY verified match, so a name that hits several appointments can be
+ * disambiguated (or handed back to the model to ask "which one") instead of
+ * silently mutating the first. Empty when the query carries no identity or
+ * nothing matches.
+ *
+ * Marker mode keeps its first-hit short-circuit (an exact phone/email can
+ * only mean one person, and stopping early saves a request); name mode scans
+ * every calendar because the ambiguity contract needs every candidate.
+ */
+async function searchProviderEvents(
+  businessId: string,
+  conn: ResolvedVoiceConnection,
+  query: SearchQuery
+): Promise<SearchedEvent[]> {
+  const marker = query.marker.trim();
+  const name = query.name.trim();
+  if (!marker && !name) return [];
+  // The provider-side full-text term; the matcher below is what actually
+  // verifies a hit (`q` is loose on both providers).
+  const term = marker || name;
+  const matches = marker ? markerMatcher(marker) : attendeeNameMatcher(name);
+  const collectAll = !marker;
+  const found: SearchedEvent[] = [];
   const nowIso = new Date().toISOString();
   const endIso = new Date(Date.now() + SEARCH_WINDOW_DAYS * 86_400_000).toISOString();
   const shared = await getSharedCalendar(businessId);
@@ -158,11 +222,11 @@ async function searchProviderEvent(
           endpoint,
           method: "GET",
           params: {
-            q: marker,
+            q: term,
             timeMin: nowIso,
             singleEvents: "true",
             orderBy: "startTime",
-            // q already narrows server-side to marker matches; a generous
+            // q already narrows server-side to matching events; a generous
             // page keeps a busy calendar's valid booking from falling past
             // it without pagination (Bugbot on PR #577).
             maxResults: "50"
@@ -176,20 +240,19 @@ async function searchProviderEvent(
               start?: { dateTime?: string };
             }>;
           } | null)?.items ?? [];
-        // `q` is a loose full-text match — verify the marker actually sits in
-        // the event description before mutating anything, mirroring the
+        // `q` is a loose full-text match — verify the identity actually sits
+        // in the event description before mutating anything, mirroring the
         // Microsoft path, so a fuzzy hit can never reschedule/cancel someone
         // else's event (Bugbot on PR #577).
-        const hit = items.find(
-          (e) =>
-            typeof e.id === "string" && e.id.length > 0 && containsMarker(e.description ?? "")
-        );
-        if (hit?.id) {
-          const startMs = Date.parse(hit.start?.dateTime ?? "");
-          return {
-            eventId: hit.id,
+        for (const e of items) {
+          if (typeof e.id !== "string" || e.id.length === 0) continue;
+          if (!matches(e.description ?? "")) continue;
+          const startMs = Date.parse(e.start?.dateTime ?? "");
+          found.push({
+            eventId: e.id,
             startIso: Number.isFinite(startMs) ? new Date(startMs).toISOString() : null
-          };
+          });
+          if (!collectAll) return found;
         }
       } catch (err) {
         logger.warn("calendar-tools/search: google lookup failed", {
@@ -198,7 +261,7 @@ async function searchProviderEvent(
         });
       }
     }
-    return null;
+    return found;
   }
 
   // Microsoft: calendarView carries bodyPreview; scan the shared calendar
@@ -241,18 +304,15 @@ async function searchProviderEvent(
             start?: { dateTime?: string; timeZone?: string };
           }>;
         } | null)?.value ?? [];
-      const hit = items.find(
-        (e) =>
-          typeof e.id === "string" &&
-          e.id.length > 0 &&
-          containsMarker(`${e.body?.content ?? ""}\n${e.bodyPreview ?? ""}`)
-      );
-      if (hit?.id) {
-        const startMs = Date.parse(graphTimeIso(hit.start) ?? "");
-        return {
-          eventId: hit.id,
+      for (const e of items) {
+        if (typeof e.id !== "string" || e.id.length === 0) continue;
+        if (!matches(`${e.body?.content ?? ""}\n${e.bodyPreview ?? ""}`)) continue;
+        const startMs = Date.parse(graphTimeIso(e.start) ?? "");
+        found.push({
+          eventId: e.id,
           startIso: Number.isFinite(startMs) ? new Date(startMs).toISOString() : null
-        };
+        });
+        if (!collectAll) return found;
       }
     } catch (err) {
       logger.warn("calendar-tools/search: microsoft lookup failed", {
@@ -261,7 +321,42 @@ async function searchProviderEvent(
       });
     }
   }
-  return null;
+  return found;
+}
+
+/**
+ * Outcome of locating the appointment to act on. `ambiguous` is what lets
+ * the model ask "which one?" instead of guessing: several upcoming
+ * appointments carry the same attendee name and the caller named no time
+ * (or a time none of them sit at).
+ */
+type LocateOutcome =
+  | { kind: "found"; event: LocatedEvent }
+  | { kind: "ambiguous"; candidates: SearchedEvent[] }
+  | { kind: "none" };
+
+/** True when two ISO instants denote the same moment (formatting-agnostic). */
+function sameInstant(a: string, b: string): boolean {
+  const left = Date.parse(a);
+  const right = Date.parse(b);
+  return Number.isFinite(left) && Number.isFinite(right) && left === right;
+}
+
+/**
+ * Narrow candidates to the appointment the caller meant. With no target
+ * start every candidate stays (the ambiguity contract decides). With one,
+ * candidates AT that instant win; if none sits there the full set is kept,
+ * so a single candidate still resolves (it is the person's only upcoming
+ * appointment, and provider listings do not always carry a start) while a
+ * genuinely ambiguous set still asks.
+ */
+function narrowToTargetStart(
+  candidates: SearchedEvent[],
+  targetStartIso: string | undefined
+): SearchedEvent[] {
+  if (!targetStartIso) return candidates;
+  const atTarget = candidates.filter((c) => c.startIso && sameInstant(c.startIso, targetStartIso));
+  return atTarget.length > 0 ? atTarget : candidates;
 }
 
 /** Ledger first, provider search second. */
@@ -269,29 +364,63 @@ async function locateUpcomingAppointment(
   businessId: string,
   conn: ResolvedVoiceConnection,
   attendeeKey: string,
-  marker: string
-): Promise<LocatedEvent | null> {
+  query: SearchQuery,
+  targetStartIso?: string
+): Promise<LocateOutcome> {
   const claim = await findUpcomingBookingClaim(businessId, attendeeKey);
-  if (claim) {
+  // A claim at a DIFFERENT time than the one the caller named is not the
+  // appointment they meant: fall through to the search rather than move or
+  // delete the wrong booking.
+  const claimMatchesTarget =
+    !targetStartIso || (claim ? sameInstant(claim.startAt, targetStartIso) : false);
+  if (claim && claimMatchesTarget) {
     return {
-      eventId: claim.eventId,
-      claimId: claim.id,
-      zoomMeetingId: claim.zoomMeetingId,
-      startAt: claim.startAt
+      kind: "found",
+      event: {
+        eventId: claim.eventId,
+        claimId: claim.id,
+        zoomMeetingId: claim.zoomMeetingId,
+        startAt: claim.startAt
+      }
     };
   }
-  const searched = await searchProviderEvent(businessId, conn, marker);
-  if (!searched) return null;
+  const candidates = narrowToTargetStart(
+    await searchProviderEvents(businessId, conn, query),
+    targetStartIso
+  );
+  if (candidates.length === 0) return { kind: "none" };
+  if (candidates.length > 1) return { kind: "ambiguous", candidates };
+  const searched = candidates[0];
   // The event may still hold a ledger row under a DIFFERENT attendee key
   // (booked by phone, rescheduled by email) carrying the booking's Zoom
   // meeting — capture it NOW, before the callers' by-event ledger cleanup
   // deletes that row, so the meeting still moves/dies with the event.
   const zoomMeetingId = await findZoomMeetingIdByEvent(businessId, searched.eventId);
   return {
-    eventId: searched.eventId,
-    claimId: null,
-    zoomMeetingId,
-    startAt: searched.startIso
+    kind: "found",
+    event: {
+      eventId: searched.eventId,
+      claimId: null,
+      zoomMeetingId,
+      startAt: searched.startIso
+    }
+  };
+}
+
+/**
+ * The "which one?" result. Candidate start times ride in `data` so the model
+ * can name the options back to the owner, and `message` steers it to ask
+ * rather than retry blindly.
+ */
+function multipleMatchesResult(candidates: SearchedEvent[]): CalendarToolResult {
+  return {
+    ok: false,
+    detail: "multiple_matches",
+    data: {
+      candidates: candidates.map((c) => ({ startIso: c.startIso }))
+    },
+    message:
+      "Several upcoming appointments match that name. Ask which one they mean, naming the start times in data.candidates, then call again with appointmentStartIso set to the one they pick."
   };
 }
 
@@ -423,8 +552,16 @@ export async function rescheduleCalendarAppointment(
       return moved;
     }
 
-    const located = await locateUpcomingAppointment(businessId, conn, attendeeKey, marker);
-    if (!located) return { ok: false, detail: "booking_not_found" };
+    const outcome = await locateUpcomingAppointment(
+      businessId,
+      conn,
+      attendeeKey,
+      { marker, name: args.attendeeName ?? "" },
+      args.appointmentStartIso
+    );
+    if (outcome.kind === "ambiguous") return multipleMatchesResult(outcome.candidates);
+    if (outcome.kind === "none") return { ok: false, detail: "booking_not_found" };
+    const located = outcome.event;
 
     const eventTimezone = await resolveToolTimezone(businessId, args.timezone);
     const startInstant = new Date(args.newStartIso);
@@ -581,8 +718,16 @@ export async function cancelCalendarAppointment(
       return canceled;
     }
 
-    const located = await locateUpcomingAppointment(businessId, conn, attendeeKey, marker);
-    if (!located) return { ok: false, detail: "booking_not_found" };
+    const outcome = await locateUpcomingAppointment(
+      businessId,
+      conn,
+      attendeeKey,
+      { marker, name: args.attendeeName ?? "" },
+      args.appointmentStartIso
+    );
+    if (outcome.kind === "ambiguous") return multipleMatchesResult(outcome.candidates);
+    if (outcome.kind === "none") return { ok: false, detail: "booking_not_found" };
+    const located = outcome.event;
 
     if (conn.provider === "google") {
       const deleted = await mutateGoogleEvent(businessId, conn, located.eventId, "DELETE");

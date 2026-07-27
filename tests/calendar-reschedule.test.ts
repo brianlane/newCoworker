@@ -328,12 +328,11 @@ describe("rescheduleCalendarAppointment", () => {
     });
   });
 
-  it("booking_not_found with NO provider search when there is no phone/email marker", async () => {
+  it("booking_not_found with NO provider search when the caller gives no identity at all", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
     const result = await rescheduleCalendarAppointment(BIZ, {
       newStartIso: RESCHEDULE_ARGS.newStartIso,
-      newEndIso: RESCHEDULE_ARGS.newEndIso,
-      attendeeName: "Joe"
+      newEndIso: RESCHEDULE_ARGS.newEndIso
     });
     expect(result).toEqual({ ok: false, detail: "booking_not_found" });
     expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
@@ -1173,5 +1172,272 @@ describe("waitlist hooks", () => {
     await cancelCalendarAppointment(BIZ, CANCEL_ARGS);
     expect(vi.mocked(offerFreedSlot)).not.toHaveBeenCalled();
     expect(vi.mocked(cancelWaitlistForAttendee)).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * Name-based resolution: owners ask "move John Smith's Tuesday 4pm", not
+ * "move +1555…'s appointment". The search matches the `Attendee:` line every
+ * booked event carries, `appointmentStartIso` disambiguates, and a name that
+ * still matches several appointments comes back as `multiple_matches` so the
+ * model asks which one instead of guessing.
+ */
+describe("resolution by attendee name", () => {
+  const NAME = "John Smith";
+  const NAME_ARGS = {
+    newStartIso: RESCHEDULE_ARGS.newStartIso,
+    newEndIso: RESCHEDULE_ARGS.newEndIso,
+    attendeeName: NAME
+  };
+  /** A Google search hit with the `Attendee:` marker line. */
+  const namedEvent = (id: string, startDateTime: string) => ({
+    id,
+    description: `Attendee: ${NAME}\nPhone: ${PHONE}`,
+    start: { dateTime: startDateTime }
+  });
+
+  it("finds the event by name alone and moves it", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({
+        data: { items: [namedEvent("evt-name", "2026-07-28T23:00:00.000Z")] }
+      } as never)
+      .mockResolvedValueOnce({ data: {} } as never);
+
+    const result = await rescheduleCalendarAppointment(BIZ, NAME_ARGS);
+    expect(result.ok).toBe(true);
+    const searchCall = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as unknown as {
+      params: { q: string };
+    };
+    expect(searchCall.params.q).toBe(NAME);
+    const patchCall = vi.mocked(nangoProxyForBusiness).mock.calls[1][2] as { endpoint: string };
+    expect(patchCall.endpoint).toContain("evt-name");
+  });
+
+  it("returns multiple_matches with candidate starts (and mutates nothing) when a name is ambiguous", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+      data: {
+        items: [
+          namedEvent("evt-a", "2026-07-28T23:00:00.000Z"),
+          namedEvent("evt-b", "2026-07-30T17:00:00.000Z")
+        ]
+      }
+    } as never);
+
+    const result = await rescheduleCalendarAppointment(BIZ, NAME_ARGS);
+    expect(result.ok).toBe(false);
+    expect(result.detail).toBe("multiple_matches");
+    expect(result.data).toEqual({
+      candidates: [
+        { startIso: "2026-07-28T23:00:00.000Z" },
+        { startIso: "2026-07-30T17:00:00.000Z" }
+      ]
+    });
+    expect(result.message).toContain("Ask which one");
+    // Search only: the ambiguity is reported BEFORE anything is mutated.
+    expect(vi.mocked(nangoProxyForBusiness)).toHaveBeenCalledTimes(1);
+  });
+
+  it("appointmentStartIso picks the appointment the owner named out of several", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({
+        data: {
+          items: [
+            namedEvent("evt-a", "2026-07-28T23:00:00.000Z"),
+            namedEvent("evt-b", "2026-07-30T17:00:00.000Z")
+          ]
+        }
+      } as never)
+      .mockResolvedValueOnce({ data: {} } as never);
+
+    const result = await rescheduleCalendarAppointment(BIZ, {
+      ...NAME_ARGS,
+      // Same instant as evt-b, written with an offset instead of Z.
+      appointmentStartIso: "2026-07-30T10:00:00.000-07:00"
+    });
+    expect(result.ok).toBe(true);
+    const patchCall = vi.mocked(nangoProxyForBusiness).mock.calls[1][2] as { endpoint: string };
+    expect(patchCall.endpoint).toContain("evt-b");
+  });
+
+  it("a lone candidate still resolves when no candidate sits at the named time", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(nangoProxyForBusiness)
+      // Start-less listing: the narrowing cannot confirm the time, but one
+      // candidate is unambiguous (their only upcoming appointment).
+      .mockResolvedValueOnce({
+        data: { items: [{ id: "evt-only", description: `Attendee: ${NAME}` }] }
+      } as never)
+      .mockResolvedValueOnce({ data: {} } as never);
+
+    const result = await rescheduleCalendarAppointment(BIZ, {
+      ...NAME_ARGS,
+      appointmentStartIso: "2026-07-28T23:00:00.000Z"
+    });
+    expect(result.ok).toBe(true);
+    const patchCall = vi.mocked(nangoProxyForBusiness).mock.calls[1][2] as { endpoint: string };
+    expect(patchCall.endpoint).toContain("evt-only");
+  });
+
+  it("name matching is anchored to the Attendee line and never partial", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+      data: {
+        items: [
+          // A longer name that merely STARTS with the search name.
+          { id: "evt-son", description: "Attendee: John Smithson\nPhone: +15550001111" },
+          // The name in free-form prose, not as the attendee: someone else's
+          // meeting that merely mentions them.
+          { id: "evt-prose", description: "Notes: John Smith called about parking" },
+          // Unusable ids are skipped before matching (a blank id could not be
+          // PATCHed anyway).
+          { id: "", description: `Attendee: ${NAME}` }
+        ]
+      }
+    } as never);
+
+    expect(await rescheduleCalendarAppointment(BIZ, NAME_ARGS)).toEqual({
+      ok: false,
+      detail: "booking_not_found"
+    });
+  });
+
+  it("collects same-name candidates across the shared AND primary calendars", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(getSharedCalendar).mockResolvedValue({ calendarId: "shared-cal" } as never);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({
+        data: { items: [namedEvent("evt-shared", "2026-07-28T23:00:00.000Z")] }
+      } as never)
+      .mockResolvedValueOnce({
+        data: { items: [namedEvent("evt-primary", "2026-07-30T17:00:00.000Z")] }
+      } as never);
+
+    const result = await rescheduleCalendarAppointment(BIZ, NAME_ARGS);
+    expect(result.detail).toBe("multiple_matches");
+    expect((result.data as { candidates: unknown[] }).candidates).toHaveLength(2);
+    // Name mode does NOT short-circuit: both calendars were scanned.
+    const endpoints = vi
+      .mocked(nangoProxyForBusiness)
+      .mock.calls.map((c) => (c[2] as { endpoint: string }).endpoint);
+    expect(endpoints).toEqual([
+      "/calendar/v3/calendars/shared-cal/events",
+      "/calendar/v3/calendars/primary/events"
+    ]);
+  });
+
+  it("Microsoft resolves by name from the event body", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({
+        data: {
+          value: [
+            { id: "evt-other", bodyPreview: "Attendee: Someone Else" },
+            {
+              id: "evt-ms",
+              body: { content: `<html><div>Attendee: ${NAME}</div></html>` },
+              start: { dateTime: "2026-07-28T16:00:00", timeZone: "America/Phoenix" }
+            }
+          ]
+        }
+      } as never)
+      .mockResolvedValueOnce({ data: {} } as never);
+
+    const result = await rescheduleCalendarAppointment(BIZ, NAME_ARGS);
+    expect(result.ok).toBe(true);
+    const patchCall = vi.mocked(nangoProxyForBusiness).mock.calls[1][2] as { endpoint: string };
+    expect(patchCall.endpoint).toBe("/v1.0/me/events/evt-ms");
+  });
+
+  it("a ledger claim at a DIFFERENT time than the named one falls through to the search", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    // The ledger holds this person's NEXT appointment (Jul 13), but the owner
+    // named the Jul 28 one: the claim must not be moved.
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({
+        data: { items: [namedEvent("evt-named", "2026-07-28T23:00:00.000Z")] }
+      } as never)
+      .mockResolvedValueOnce({ data: {} } as never);
+
+    const result = await rescheduleCalendarAppointment(BIZ, {
+      ...NAME_ARGS,
+      appointmentStartIso: "2026-07-28T23:00:00.000Z"
+    });
+    expect(result.ok).toBe(true);
+    const patchCall = vi.mocked(nangoProxyForBusiness).mock.calls[1][2] as { endpoint: string };
+    expect(patchCall.endpoint).toContain("evt-named");
+    expect(patchCall.endpoint).not.toContain("evt-1");
+    // Resolved by search, so the ledger row is re-recorded by event id.
+    expect(vi.mocked(deleteBookingClaimsByEvent)).toHaveBeenCalledWith(BIZ, "evt-named");
+    expect(vi.mocked(rescheduleBookingClaim)).not.toHaveBeenCalled();
+  });
+
+  it("a ledger claim AT the named time is used directly, with no provider search", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+
+    const result = await rescheduleCalendarAppointment(BIZ, {
+      ...NAME_ARGS,
+      // CLAIM.startAt as the same instant in a different format.
+      appointmentStartIso: "2026-07-13T16:00:00.000-04:00"
+    });
+    expect(result.ok).toBe(true);
+    expect(vi.mocked(nangoProxyForBusiness)).toHaveBeenCalledTimes(1);
+    const patchCall = vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as { endpoint: string };
+    expect(patchCall.endpoint).toContain("evt-1");
+  });
+
+  it("an unparseable claim start never satisfies a named time", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue({
+      ...CLAIM,
+      startAt: "not-a-date"
+    } as never);
+    // Nothing else matches, so the guard surfaces as booking_not_found rather
+    // than moving the claim the caller did not name.
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({ data: { items: [] } } as never);
+
+    expect(
+      await rescheduleCalendarAppointment(BIZ, {
+        ...NAME_ARGS,
+        appointmentStartIso: "2026-07-28T23:00:00.000Z"
+      })
+    ).toEqual({ ok: false, detail: "booking_not_found" });
+  });
+
+  it("cancel resolves by name and reports ambiguity the same way", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({
+        data: { items: [namedEvent("evt-cancel", "2026-07-28T23:00:00.000Z")] }
+      } as never)
+      .mockResolvedValueOnce({ data: {} } as never);
+
+    const canceled = await cancelCalendarAppointment(BIZ, { attendeeName: NAME });
+    expect(canceled.ok).toBe(true);
+    const deleteCall = vi.mocked(nangoProxyForBusiness).mock.calls[1][2] as {
+      endpoint: string;
+      method: string;
+    };
+    expect(deleteCall.method).toBe("DELETE");
+    expect(deleteCall.endpoint).toContain("evt-cancel");
+
+    vi.mocked(nangoProxyForBusiness).mockReset();
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({
+      data: {
+        items: [
+          namedEvent("evt-a", "2026-07-28T23:00:00.000Z"),
+          namedEvent("evt-b", "2026-07-30T17:00:00.000Z")
+        ]
+      }
+    } as never);
+    const ambiguous = await cancelCalendarAppointment(BIZ, { attendeeName: NAME });
+    expect(ambiguous.detail).toBe("multiple_matches");
+    // Nothing was deleted while the model still has to ask.
+    expect(vi.mocked(nangoProxyForBusiness)).toHaveBeenCalledTimes(1);
   });
 });
