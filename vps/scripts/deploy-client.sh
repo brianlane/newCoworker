@@ -1227,7 +1227,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "calendar_reschedule_appointment",
-      description: "Move the customer existing upcoming appointment to a new time. The SAME event is updated in place and the customer receives an UPDATED invitation — this is the ONLY way to change an appointment time. NEVER book a second appointment to change a time. Confirm the new time with the customer before calling. Times must be ISO 8601 with timezone offset. If the result contains rescheduleLink, the appointment is NOT moved yet — send that link so the customer picks the new time themselves; never state the reschedule is done.",
+      description: "Move the customer existing upcoming appointment to a new time. The SAME event is updated in place and the customer receives an UPDATED invitation — this is the ONLY way to change an appointment time. NEVER book a second appointment to change a time. Identify the appointment by phone, email, or name; also pass appointmentStartIso whenever the customer names the current time. If the result detail is multiple_matches, several appointments match — ask which one using the start times in data.candidates, then call again with appointmentStartIso. Confirm the new time with the customer before calling. Times must be ISO 8601 with timezone offset. If the result contains rescheduleLink, the appointment is NOT moved yet — send that link so the customer picks the new time themselves; never state the reschedule is done.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1236,7 +1236,8 @@ WORKFLOW_JSON=$(jq -nc \
           newEndIso: { type: "string", description: "New end time, ISO 8601 with offset." },
           attendeePhone: { type: "string", description: "Customer phone the appointment was booked under (E.164)." },
           attendeeEmail: { type: "string", description: "Customer email, if the phone is unknown." },
-          attendeeName: { type: "string", description: "Customer name, if known." },
+          attendeeName: { type: "string", description: "Customer name; enough on its own to find the appointment." },
+          appointmentStartIso: { type: "string", description: "The appointment CURRENT start, ISO 8601 with offset, whenever the customer names it. Disambiguates same-name appointments." },
           timezone: { type: "string", description: "IANA timezone for the new times." }
         },
         required: ["newStartIso", "newEndIso"]
@@ -1244,14 +1245,15 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "calendar_cancel_appointment",
-      description: "Cancel the customer existing upcoming appointment. The event is deleted and the customer receives ONE cancellation notice. Only call when the customer clearly asks to cancel; confirm before calling. This is the ONLY way an appointment gets canceled — never just say it is canceled.",
+      description: "Cancel the customer existing upcoming appointment. The event is deleted and the customer receives ONE cancellation notice. Identify the appointment by phone, email, or name; also pass appointmentStartIso whenever the customer names the current time. If the result detail is multiple_matches, several appointments match — ask which one using the start times in data.candidates, then call again with appointmentStartIso. Only call when the customer clearly asks to cancel; confirm before calling. This is the ONLY way an appointment gets canceled — never just say it is canceled.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
         properties: {
           attendeePhone: { type: "string", description: "Customer phone the appointment was booked under (E.164)." },
           attendeeEmail: { type: "string", description: "Customer email, if the phone is unknown." },
-          attendeeName: { type: "string", description: "Customer name, if known." }
+          attendeeName: { type: "string", description: "Customer name; enough on its own to find the appointment." },
+          appointmentStartIso: { type: "string", description: "The appointment CURRENT start, ISO 8601 with offset, whenever the customer names it. Disambiguates same-name appointments." }
         },
         required: []
       }
@@ -1350,7 +1352,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "dashboard_calendar_reschedule_appointment",
-      description: "Move an existing upcoming appointment to a new time when the owner asks in dashboard chat. The SAME event is updated in place — never book a second appointment to change a time. Times must be ISO 8601 with timezone offset. If the result contains rescheduleLink, the appointment is NOT moved yet — share that link so the invitee picks the new time themselves.",
+      description: "Move an existing upcoming appointment to a new time when the owner asks in dashboard chat. The SAME event is updated in place — never book a second appointment to change a time. The attendee NAME is enough to find the appointment; also pass appointmentStartIso whenever the owner names the current time, as in move John Smith Tuesday 4pm appointment. If the result detail is multiple_matches, several appointments match that name — ask which one using the start times in data.candidates, then call again with appointmentStartIso. Times must be ISO 8601 with timezone offset. If the result contains rescheduleLink, the appointment is NOT moved yet — share that link so the invitee picks the new time themselves.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
@@ -1359,7 +1361,8 @@ WORKFLOW_JSON=$(jq -nc \
           newEndIso: { type: "string", description: "New end time, ISO 8601 with offset." },
           attendeePhone: { type: "string", description: "Attendee phone the appointment was booked under (E.164)." },
           attendeeEmail: { type: "string", description: "Attendee email, if the phone is unknown." },
-          attendeeName: { type: "string", description: "Attendee name, if known." },
+          attendeeName: { type: "string", description: "Attendee name; enough on its own to find the appointment." },
+          appointmentStartIso: { type: "string", description: "The appointment CURRENT start, ISO 8601 with offset, whenever the owner names it. Disambiguates same-name appointments." },
           timezone: { type: "string", description: "IANA timezone for the new times." }
         },
         required: ["newStartIso", "newEndIso"]
@@ -1367,14 +1370,15 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "dashboard_calendar_cancel_appointment",
-      description: "Cancel an existing upcoming appointment when the owner asks in dashboard chat. The event is deleted and the attendee receives ONE cancellation notice.",
+      description: "Cancel an existing upcoming appointment when the owner asks in dashboard chat. The event is deleted and the attendee receives ONE cancellation notice. The attendee NAME is enough to find the appointment; also pass appointmentStartIso whenever the owner names the current time. If the result detail is multiple_matches, several appointments match that name — ask which one using the start times in data.candidates, then call again with appointmentStartIso.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
         properties: {
           attendeePhone: { type: "string", description: "Attendee phone the appointment was booked under (E.164)." },
           attendeeEmail: { type: "string", description: "Attendee email, if the phone is unknown." },
-          attendeeName: { type: "string", description: "Attendee name, if known." }
+          attendeeName: { type: "string", description: "Attendee name; enough on its own to find the appointment." },
+          appointmentStartIso: { type: "string", description: "The appointment CURRENT start, ISO 8601 with offset, whenever the owner names it. Disambiguates same-name appointments." }
         },
         required: []
       }

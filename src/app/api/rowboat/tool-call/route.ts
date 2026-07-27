@@ -186,12 +186,14 @@ const rescheduleAppointmentArgsSchema = z.object({
   attendeeName: z.string().max(200).optional(),
   attendeeEmail: z.string().email().optional(),
   attendeePhone: z.string().max(32).optional(),
+  appointmentStartIso: z.string().datetime({ offset: true }).optional(),
   timezone: z.string().optional()
 });
 const cancelAppointmentArgsSchema = z.object({
   attendeeName: z.string().max(200).optional(),
   attendeeEmail: z.string().email().optional(),
-  attendeePhone: z.string().max(32).optional()
+  attendeePhone: z.string().max(32).optional(),
+  appointmentStartIso: z.string().datetime({ offset: true }).optional()
 });
 const joinWaitlistArgsSchema = z.object({
   attendeeName: z.string().max(200).optional(),
@@ -275,10 +277,10 @@ function bookFailureGuidance(toolName: string, detail: string): string {
 function lifecycleFailureGuidance(detail: string, verb: "reschedule" | "cancel"): string | null {
   if (detail === "booking_not_found") {
     return (
-      "No upcoming appointment was found for this person. Confirm the phone number or " +
-      "email their appointment was booked under and the original time. Never book a new " +
-      `appointment to fake a ${verb} — if it still can't be found, call notify_team with ` +
-      "the details and tell them a team member will sort it out."
+      "No upcoming appointment was found for this person. Confirm the appointment's " +
+      "current time (pass it as appointmentStartIso), or the phone number or email it was " +
+      `booked under. Never book a new appointment to fake a ${verb} — if it still can't be ` +
+      "found, call notify_team with the details and tell them a team member will sort it out."
     );
   }
   if (detail === "calendar_not_connected") {
