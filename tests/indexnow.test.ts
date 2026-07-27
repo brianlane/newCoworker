@@ -51,6 +51,38 @@ describe("submitToIndexNow", () => {
     });
   });
 
+  it("prefers an explicitly passed key over the environment", async () => {
+    // CI reads the PUBLIC key file off the live site rather than keeping a
+    // copy in GitHub secrets, so it supplies the key directly.
+    vi.stubEnv("INDEXNOW_KEY", undefined);
+    const fetchImpl = okFetch();
+    const outcome = await submitToIndexNow(["https://newcoworker.com/x"], {
+      fetchImpl: fetchImpl as never,
+      key: `  ${KEY}  `
+    });
+    expect(outcome).toEqual({ status: "sent", submitted: 1, httpStatus: 200 });
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body).key).toBe(KEY);
+  });
+
+  it("falls back to the environment when the passed key is blank", async () => {
+    const fetchImpl = okFetch();
+    await submitToIndexNow(["https://newcoworker.com/x"], {
+      fetchImpl: fetchImpl as never,
+      key: "   "
+    });
+    expect(JSON.parse(fetchImpl.mock.calls[0][1].body).key).toBe(KEY);
+  });
+
+  it("validates a passed key the same as an env one", async () => {
+    const fetchImpl = okFetch();
+    const outcome = await submitToIndexNow(["https://newcoworker.com/x"], {
+      fetchImpl: fetchImpl as never,
+      key: "too short"
+    });
+    expect(outcome).toEqual({ status: "invalid-key" });
+    expect(fetchImpl).not.toHaveBeenCalled();
+  });
+
   it("does nothing at all without a key", async () => {
     vi.stubEnv("INDEXNOW_KEY", undefined);
     const fetchImpl = okFetch();

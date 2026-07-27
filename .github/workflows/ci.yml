@@ -582,3 +582,68 @@ jobs:
           github.event.pull_request.user.login != 'dependabot[bot]' &&
           steps.aiscope.outputs.skip != 'true'
         run: bash .github/scripts/e2e-usage-summary.sh
+
+  # Tell IndexNow (and therefore Bing, and therefore ChatGPT search) that the
+  # public pages just changed, instead of waiting for the next crawl.
+  #
+  # A SEPARATE job rather than a step in vercel-deploy, on purpose:
+  # main-failure-watch.yml keys its wording off the "Vercel Deploy" job's
+  # conclusion and emails "production did not update" when the workflow
+  # fails. A failing step in that job would page a human with the wrong
+  # message over a search-engine notification. This job cannot fail at all
+  # (the script always exits 0) and blocks nothing.
+  #
+  # No new secret: the IndexNow key is PUBLIC by protocol design, served at
+  # /indexnow-key.txt for the engines to verify ownership, so the script
+  # reads it off the live site. Unset there = feature off = no-op.
+  indexnow-ping:
+    name: IndexNow ping
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    # Push only: a preview deployment must never announce production URLs.
+    if: github.event_name == 'push'
+    needs: [vercel-deploy]
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Node
+        uses: actions/setup-node@v7
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      # The compare API rather than a git diff: the checkout is shallow, and
+      # deepening it here would repeat the mistake #944 fixed. Same source
+      # e2e-scope.sh uses, including its force-push shape (an all-zero
+      # before-SHA) and the 300-file cap on .files.
+      #
+      # FAIL CLOSED throughout: any error emits an empty list, and the script
+      # skips on an empty list. Missing a ping costs a few days of latency
+      # (the weekly auto-post re-submits the sitemap anyway); announcing every
+      # URL on every backend-only deploy is the behavior IndexNow asks us not
+      # to have.
+      - name: Announce changed public pages
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          SHA: ${{ github.sha }}
+          BEFORE: ${{ github.event.before }}
+        run: |
+          set -uo pipefail
+          changed=""
+          if printf '%s' "$BEFORE" | grep -qv '^0*$'; then
+            changed=$(gh api "repos/$REPO/compare/$BEFORE...$SHA" \
+              -q '.files[].filename' 2>/dev/null) || changed=""
+          fi
+          if [ -z "$changed" ]; then
+            echo "IndexNow: no usable changed-file list (new branch, force push, or API error), skipping." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          printf '%s\n' "$changed" | npx tsx scripts/indexnow-submit.ts --changed --stdin
