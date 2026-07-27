@@ -2283,5 +2283,11 @@
     "heading": "No encontramos esa página",
     "body": "La dirección puede estar mal escrita, o el enlace que seguiste puede haber expirado. Si alguien te envió este enlace, pídele uno nuevo.",
     "homeCta": "Ir a newcoworker.com"
+  },
+  "errorPage": {
+    "heading": "Algo salió mal de nuestro lado",
+    "body": "La página encontró un error al cargar. No fue nada que hicieras; volver a intentar suele funcionar.",
+    "retryCta": "Intentar de nuevo",
+    "digest": "Referencia del error: {digest}"
   }
 }

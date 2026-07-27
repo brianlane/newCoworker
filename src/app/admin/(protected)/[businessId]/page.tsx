@@ -80,6 +80,11 @@ export default async function BusinessDetailPage({
   params: Promise<{ businessId: string }>;
 }) {
   const { businessId } = await params;
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(businessId)) {
+    // Junk in the segment (a mistyped URL) must 404, not crash the page
+    // when Postgres refuses the uuid cast.
+    notFound();
+  }
   const [
     business,
     logs,
