@@ -820,7 +820,11 @@ engine's roster evaluators), and the upcoming-bookings list.
   gets its own per-BOOKING capability token, carried on the confirmation, so
   the visitor can reschedule or cancel without texting the business. The
   token shape is deliberately disjoint from the page token, so a leaked
-  manage link can never act as the business's booking page. In provider mode
+  manage link can never act as the business's booking page. A well-formed
+  manage link that no longer resolves (usually a visitor re-clicking the
+  emailed link after cancelling) renders a "no longer active" explanation,
+  not a 404; the app-wide branded 404 (`src/app/not-found.tsx`) covers
+  junk URLs and every other `notFound()` with expired-link-aware copy. In provider mode
   the reschedule/cancel CORES own the change (the provider sends its own
   updated or cancelled invitation); in platform mode the ledger row IS the
   appointment, so it is moved or deleted directly and the freed time goes to
