@@ -17,31 +17,43 @@ single place that records their intended state.
   `newcoworker.com` (`resend._domainkey`), Return-Path on
   `send.newcoworker.com`. This traffic is DMARC-aligned.
 - **Outbound (human replies from team@/contact@)**: Gmail "Send mail as"
-  from the platform Gmail account. Until the send-as entries are switched to
-  Resend SMTP (below), these sends are signed as `gmail.com` and are NOT
+  from the platform Gmail account, relayed through Resend SMTP (switched
+  2026-07-26), so these sends are DKIM-signed as `newcoworker.com` and
   DMARC-aligned.
 
 ## DMARC state and ramp plan
 
-`_dmarc.newcoworker.com` was published 2026-07-24 (Cloudflare, TTL 1h):
+`_dmarc.newcoworker.com` was published 2026-07-24 and updated 2026-07-26 to
+route aggregate reports to Postmark's free DMARC digest (Cloudflare, TTL 1h):
 
 ```text
-v=DMARC1; p=none; rua=mailto:team@newcoworker.com
+v=DMARC1; p=none; rua=mailto:re+ritoxfovpsh@dmarc.postmarkapp.com
 ```
 
-`p=none` is monitoring only: nothing is quarantined, and aggregate reports
-arrive at team@ (forwarded to the platform Gmail). Ramp procedure:
+`p=none` is monitoring only: nothing is quarantined. Raw aggregate reports
+go to Postmark (dmarc.postmarkapp.com), which emails a weekly human-readable
+digest to team@. Tokens live in `.env` (`POSTMARK_DMARC_PUBLIC_TOKEN`,
+`POSTMARK_DMARC_PRIVATE_TOKEN`); the private token queries their API
+(`GET https://dmarc.postmarkapp.com/records/my/reports`, `X-Api-Token`
+header) if the raw XML is ever needed. Ramp procedure:
 
-1. **Prerequisite, do first**: switch the Gmail "Send mail as" entries for
-   `team@` and `contact@` to Resend SMTP so human replies are DKIM-aligned:
-   server `smtp.resend.com`, port `465` (SSL), username `resend`, password =
-   a dedicated Resend API key (create a separate key named for this use;
-   never reuse the production `RESEND_API_KEY`). Verify by emailing an
-   outside Gmail account and checking Show original: SPF/DKIM/DMARC all
-   `PASS` with DKIM domain `newcoworker.com`.
-2. Watch the aggregate reports for 2-4 weeks. Every legitimate source
+1. **Prerequisite, DONE 2026-07-26**: the Gmail "Send mail as" entries for
+   `team@` and `contact@` now relay through Resend SMTP so human replies are
+   DKIM-aligned: server `smtp.resend.com`, port `465` (SSL), username
+   `resend`, password = a dedicated Resend API key (separate key named for
+   this use; never the production `RESEND_API_KEY`). If a send-as entry is
+   ever re-created, verify by emailing an outside Gmail account and checking
+   Show original: SPF/DKIM/DMARC all `PASS` with DKIM domain
+   `newcoworker.com`.
+2. Watch the weekly Postmark digests for 2-4 weeks. Every legitimate source
    (Resend transactional, blog subscriber email, tenant AI mailboxes, the
    Gmail-via-Resend replies) must show as aligned before ramping.
+
+   First data point (Google report for 2026-07-25): both messages passed
+   DMARC via aligned DKIM. Resend sends showed `spf=fail` at the policy
+   level because `send.newcoworker.com` had no SPF TXT record; added
+   2026-07-26 (`v=spf1 include:amazonses.com ~all`, the standard Resend
+   Return-Path record), so future reports should show SPF aligned too.
 3. Move to `p=quarantine`, then after another clean cycle `p=reject`.
    Never ramp while step 1 is incomplete: an enforcing policy sends our own
    Gmail-relayed replies to spam.
@@ -77,8 +89,9 @@ Two mechanisms, independent of each other:
 ## Verification commands
 
 ```bash
-dig +short TXT _dmarc.newcoworker.com        # DMARC policy
+dig +short TXT _dmarc.newcoworker.com        # DMARC policy (rua -> Postmark)
 dig +short TXT newcoworker.com               # SPF (Cloudflare Email Routing)
+dig +short TXT send.newcoworker.com          # SPF (Resend Return-Path)
 dig +short TXT resend._domainkey.newcoworker.com   # Resend DKIM key
 dig +short TXT default._bimi.newcoworker.com # BIMI (empty until eligible)
 ```
