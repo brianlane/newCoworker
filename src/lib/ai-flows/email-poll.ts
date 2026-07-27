@@ -19,11 +19,15 @@
  * provider 5xx) logs to system_logs and moves on; it can never block other
  * tenants' flows or the worker tick that kicked the poll.
  *
- * Mark-handled: when a Gmail message actually starts a run, the message is
- * marked read in the owner's mailbox (best-effort, once per message even if
- * several flows matched), so the inbox reflects that the AI coworker is on
- * it. This is the write half of the gmail.modify grant the Google OAuth
+ * Mark-handled: when a Gmail message starts a run of a flow that can itself
+ * answer the email (the flow has a send_email step), the message is marked
+ * read in the owner's mailbox (best-effort, once per message even if several
+ * flows matched), so the inbox reflects that the AI coworker handled it.
+ * This is the write half of the gmail.modify grant the Google OAuth
  * verification declares: read, reply from the owner's address, mark handled.
+ * Notify-only flows (e.g. inbox triage that texts the owner) leave read
+ * state alone: the owner still has to read those emails, and a triage flow
+ * silently marking them read makes the inbox lie about what needs attention.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
@@ -95,6 +99,13 @@ type EmailFlow = {
    * watching two different mailboxes appears once per mailbox group.
    */
   conditionSets: TriggerCondition[][];
+  /**
+   * Whether the flow can answer the email itself (a send_email step anywhere
+   * in its step tree, branch arms included). Only such flows mark the
+   * triggering Gmail message read; notify-only flows must leave the owner's
+   * unread state alone.
+   */
+  handlesEmail: boolean;
 };
 
 export type EmailPollResult = {
@@ -227,10 +238,12 @@ async function fetchGmailMessages(
 
 /**
  * Mark a Gmail message read once a run has been enqueued for it (remove the
- * UNREAD label via users.messages.modify). Best-effort by design: the run is
- * already durably enqueued, so a failure here only logs a warning; it must
- * never fail the poll or the run. Microsoft mailboxes are untouched (their
- * granted scope set has no equivalent commitment).
+ * UNREAD label via users.messages.modify). Only called for flows that can
+ * answer the email themselves (send_email step); see the header comment.
+ * Best-effort by design: the run is already durably enqueued, so a failure
+ * here only logs a warning; it must never fail the poll or the run.
+ * Microsoft mailboxes are untouched (their granted scope set has no
+ * equivalent commitment).
  */
 export async function markGmailMessageHandled(
   businessId: string,
@@ -328,6 +341,31 @@ async function fetchMicrosoftMessages(
   return { messages, overflowed };
 }
 
+/**
+ * Whether a raw stored step tree contains a send_email step ANYWHERE (trunk,
+ * branch arms, branch elses). Deliberately schema-tolerant, like
+ * collectRawWorkspaceConnectionRefs: stored definitions can predate the
+ * current schema, and unknown shapes contribute nothing.
+ */
+function rawStepsSendEmail(steps: unknown[]): boolean {
+  for (const raw of steps) {
+    if (!raw || typeof raw !== "object") continue;
+    const step = raw as {
+      type?: unknown;
+      branches?: Array<{ steps?: unknown[] }>;
+      else?: unknown[];
+    };
+    if (step.type === "send_email") return true;
+    if (step.type === "branch") {
+      for (const arm of Array.isArray(step.branches) ? step.branches : []) {
+        if (Array.isArray(arm?.steps) && rawStepsSendEmail(arm.steps)) return true;
+      }
+      if (Array.isArray(step.else) && rawStepsSendEmail(step.else)) return true;
+    }
+  }
+  return false;
+}
+
 function emailFlowsFrom(
   rows: Array<{ id: string; business_id: string; definition: unknown }>
 ): EmailFlow[] {
@@ -336,7 +374,9 @@ function emailFlowsFrom(
     const def = row.definition as {
       trigger?: { channel?: string; connectionId?: unknown; conditions?: unknown };
       triggers?: Array<{ channel?: string; connectionId?: unknown; conditions?: unknown }>;
+      steps?: unknown[];
     } | null;
+    const handlesEmail = Array.isArray(def?.steps) && rawStepsSendEmail(def.steps);
     // Collect every email trigger in the flow's set, merging the ones that
     // watch the same mailbox into one entry (OR across condition lists) so a
     // flow never appears twice in a mailbox group (the seen-marker math and
@@ -349,7 +389,7 @@ function emailFlowsFrom(
       byConnection.set(trig.connectionId, sets);
     }
     for (const [connectionId, conditionSets] of byConnection) {
-      out.push({ id: row.id, business_id: row.business_id, connectionId, conditionSets });
+      out.push({ id: row.id, business_id: row.business_id, connectionId, conditionSets, handlesEmail });
     }
   }
   return out;
@@ -538,7 +578,9 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
           );
           if (!run) continue; // already enqueued by an earlier tick
           result.enqueued += 1;
-          if (isGoogleMailbox && !markedHandled.has(msg.id)) {
+          // Only a flow that answers the email itself may mark it read; a
+          // notify-only run leaves the message for the owner to read.
+          if (isGoogleMailbox && flow.handlesEmail && !markedHandled.has(msg.id)) {
             markedHandled.add(msg.id);
             await markGmailMessageHandled(businessId, link, msg.id);
           }
