@@ -596,26 +596,33 @@ jobs:
   # No new secret: the IndexNow key is PUBLIC by protocol design, served at
   # /indexnow-key.txt for the engines to verify ownership, so the script
   # reads it off the live site. Unset there = feature off = no-op.
+  # The push-only condition is on every STEP, never on the job. A job-level
+  # `if` reports the check as "skipped", which the merge policy treats as
+  # blocking and which fails the e2e gate ("e2e gate: check(s) failed —
+  # IndexNow ping"). Same reason vercel-deploy and e2e gate step-by-step.
+  # The job must always run and always report SUCCESS; on a PR every step
+  # below no-ops.
   indexnow-ping:
     name: IndexNow ping
     runs-on: ubuntu-latest
     timeout-minutes: 5
-    # Push only: a preview deployment must never announce production URLs.
-    if: github.event_name == 'push'
     needs: [vercel-deploy]
     permissions:
       contents: read
     steps:
       - name: Checkout
+        if: github.event_name == 'push'
         uses: actions/checkout@v7
 
       - name: Setup Node
+        if: github.event_name == 'push'
         uses: actions/setup-node@v7
         with:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
 
       - name: Install dependencies
+        if: github.event_name == 'push'
         run: npm ci
 
       # The compare API rather than a git diff: the checkout is shallow, and
@@ -629,6 +636,8 @@ jobs:
       # URL on every backend-only deploy is the behavior IndexNow asks us not
       # to have.
       - name: Announce changed public pages
+        # Push only: a preview deployment must never announce production URLs.
+        if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
           REPO: ${{ github.repository }}
