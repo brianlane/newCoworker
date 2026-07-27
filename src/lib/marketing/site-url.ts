@@ -1,7 +1,7 @@
 /**
  * The one canonical origin for public URLs.
  *
- * **www, not the apex.** The apex 307-redirects every path to www, so the
+ * **www, not the apex.** The apex 308-redirects every path to www, so the
  * apex was never the host that actually serves anything, yet canonical tags,
  * og:url, the sitemap, and JSON-LD all declared it. That told crawlers to
  * index a set of URLs that all redirect, and it put the authoritative
