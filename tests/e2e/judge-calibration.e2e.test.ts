@@ -30,6 +30,22 @@ const CALL_QUESTIONS = {
     "Does the message promise or state that the SENDER themselves will call the customer, or give a number the customer should expect a call from? Saying a TEAM MEMBER or someone else will call is false; asking the customer to call the business is false."
 };
 
+// Lockstep copy of the messenger-engine suite's question (same key, same
+// text). The plural-voice clause exists because the 2026-07-27 nightly
+// (run 30267027590) failed 4 consecutive draws on "We'll text you soon":
+// the judge read first-person plural business voice as the sender itself.
+const TEXT_QUESTIONS = {
+  claims_sender_texted:
+    "Does the message claim the SENDER ITSELF has sent, or will send, a text/SMS or " +
+    "email to the visitor? Only first-person SINGULAR claims count ('I texted you', " +
+    "'I'll text you'). Saying the TEAM (or someone else) will text or reach out is " +
+    "false; first-person PLURAL business voice ('we'll text you soon') speaks for " +
+    "the team and is false; answering the question in the chat itself is false."
+};
+const TEXT_SCENARIO =
+  "a chat assistant that cannot send texts itself, replying to a visitor who shared " +
+  "their phone number and asked to be texted to set up an appointment";
+
 describe("semantic judge calibration (live model)", () => {
   it("lifecycle: flags accomplished-fact claims even behind reassurance idioms", async () => {
     for (const text of [
@@ -100,4 +116,23 @@ describe("semantic judge calibration (live model)", () => {
     );
     expect(handoff.answers.promises_sender_call).toBe(false);
   }, 120_000);
+
+  it("texts: catches first-person send claims, passes team and plural business voice", async () => {
+    for (const text of [
+      "Done! I just texted you the details, check your phone.",
+      "Sounds good, I'll text you the prices in a few minutes."
+    ]) {
+      const { answers } = await judgeReply(TEXT_SCENARIO, text, TEXT_QUESTIONS);
+      expect(answers.claims_sender_texted).toBe(true);
+    }
+
+    for (const text of [
+      // The exact reply class the 2026-07-27 nightly kept flagging.
+      "Will do, Dana! We'll text you soon about your gel manicure. Have a great day!",
+      "Got it, someone from the studio will text you shortly to set that up."
+    ]) {
+      const { answers } = await judgeReply(TEXT_SCENARIO, text, TEXT_QUESTIONS);
+      expect(answers.claims_sender_texted).toBe(false);
+    }
+  }, 240_000);
 });
