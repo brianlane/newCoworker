@@ -922,6 +922,22 @@ engine's roster evaluators), and the upcoming-bookings list.
   untouched. Deliberate v1 exclusions: round robin / pick-a-person,
   routing forms, embeds; payment COLLECTION (the schema hooks are in).
 
+## Every business text is metered
+
+Two ledgers, one rule: nothing reaches Telnyx uncounted. Customer-facing
+sends reserve a slot against the tier's monthly cap BEFORE sending
+(`try_reserve_sms_outbound_slot`, DB-side and atomic; `sendTelnyxSms` with
+`meterBusinessId` on the Next side, the same RPC from the edge workers).
+Operational sends (owner alerts, provisioning, the voice-bridge's
+missed-call fallback / intake lead summary / transfer pre-alert) count
+through `meter_sms_operational_send` instead, tracked without consuming
+the customer allowance or being throttled by it. The Jul 2026 audit found
+exactly one leak, the three voice-bridge sends, whose comments claimed
+"tracked on the Edge/web side" while the outbound webhook was
+telemetry-only; the bridge now meters each successful send itself
+(`meterBridgeOperationalSms`). If you add a sender, it meters through one
+of those two paths or it does not ship.
+
 ## Cancellation waitlist ("I'll let you know if a spot opens")
 
 When an appointment slot FREES UP, the platform offers it by text to the

@@ -95,7 +95,10 @@ const BETH_REPLY =
 
 type ToolRouter = (name: string, args: Record<string, unknown>) => unknown;
 
-async function stepWithRetry(contents: GeminiChatContent[]): Promise<GeminiChatStepResult> {
+async function stepWithRetry(
+  contents: GeminiChatContent[],
+  system: string = SYSTEM
+): Promise<GeminiChatStepResult> {
   const apiKey = requireGeminiKey();
   let lastErr: unknown;
   for (let attempt = 1; attempt <= 5; attempt++) {
@@ -103,7 +106,7 @@ async function stepWithRetry(contents: GeminiChatContent[]): Promise<GeminiChatS
       const result = await geminiChatStep({
         apiKey,
         model: EMAIL_MODEL,
-        systemInstruction: SYSTEM,
+        systemInstruction: system,
         contents,
         tools: TOOLS,
         temperature: 0,
@@ -126,19 +129,20 @@ async function stepWithRetry(contents: GeminiChatContent[]): Promise<GeminiChatS
 /** One inbound email through the model-tool loop (same shape as the turn). */
 async function emailTurn(
   userText: string,
-  route: ToolRouter
+  route: ToolRouter,
+  system: string = SYSTEM
 ): Promise<{ finalText: string; calls: GeminiFunctionCall[] }> {
   const contents: GeminiChatContent[] = [{ role: "user", parts: [{ text: userText }] }];
   const calls: GeminiFunctionCall[] = [];
   let finalText = "";
   for (let step = 0; step < 5; step++) {
-    let result = await stepWithRetry(contents);
+    let result = await stepWithRetry(contents, system);
     for (
       let empty = 1;
       empty <= 2 && !result.text && result.functionCalls.length === 0 && !finalText;
       empty++
     ) {
-      result = await stepWithRetry(contents);
+      result = await stepWithRetry(contents, system);
     }
     if (result.text) finalText = result.text;
     if (result.functionCalls.length === 0 || !result.modelContent) break;
@@ -283,4 +287,127 @@ describe("the email surface cannot act beyond its calendar tools", () => {
     }
     expect(handoff).toBe(true);
   }, 300_000);
+});
+
+/**
+ * The reschedule reply (the Jul 27 dogfood case, replayed): the call is
+ * booked for TODAY, and Beth writes in asking to move it to Wednesday at
+ * the same time. The contract is that the SAME appointment moves: one
+ * reschedule call with Liz as the attendee and the Wednesday instant, and
+ * never a second booking.
+ */
+describe("Beth's reschedule reply moves the appointment (live model)", () => {
+  /** Wednesday Jul 29 2026, 9:00 AM Phoenix = 12:00 PM EDT. */
+  const WEDNESDAY_START = "2026-07-29T16:00:00.000Z";
+
+  const RESCHEDULE_SYSTEM = buildEmailTurnSystem({
+    businessTimezone: BUSINESS_TZ,
+    correspondentEmail: BETH,
+    subject: "NC Discovery Call w/ Liz",
+    integrationsLine: "Connected integrations: Google Calendar, Gmail, Zoom.",
+    businessContextBlock: [
+      "Business Name: New Coworker",
+      "Owner / Primary Contact: Brian Lane",
+      "Timezone: America/Phoenix",
+      "- Discovery calls are 30 minutes over Zoom with Brian, the founder.",
+      "- Liz Alvarez is a warm lead; Beth Ranken is her executive assistant.",
+      "- Booked: discovery call with Liz Alvarez TODAY (Monday July 27) at " +
+        "9:00 AM Arizona (12:00 PM Eastern), 30 minutes, over Zoom."
+    ].join("\n"),
+    // Monday morning, two hours before the call Beth is moving.
+    now: new Date("2026-07-27T14:00:00.000Z")
+  });
+
+  const BETH_RESCHEDULE =
+    `[Email from ${BETH}] Subject: Re: NC Discovery Call w/ Liz\n\n` +
+    "Hi Brian,\n\nSorry for the last-minute change, but could we please reschedule " +
+    "this call to later this week? Liz is unable to make this call at this time " +
+    "today. Wednesday is wide open for her if this time works for you then.\n\n" +
+    "Apologies again for the cancellation. Please let me know about Wednesday.\n\n" +
+    "Thank you!\nBeth Ranken\nExecutive Assistant to the CEO\nLizDev, Inc.";
+
+  it(
+    "moves the SAME appointment to Wednesday for LIZ, and books nothing new",
+    { retry: 1, timeout: 300_000 },
+    async () => {
+      const out = await emailTurn(
+        BETH_RESCHEDULE,
+        (name) => {
+          if (name === "calendar_find_slots") {
+            return {
+              ok: true,
+              slots: [{ startIso: WEDNESDAY_START, endIso: "2026-07-29T16:30:00.000Z" }],
+              timezone: BUSINESS_TZ,
+              durationMinutes: 30
+            };
+          }
+          if (name === "calendar_reschedule_appointment") {
+            return {
+              ok: true,
+              eventId: "e2e-evt-liz",
+              startLocal: "Wednesday, July 29, 2026 at 9:00 AM MST",
+              zoomJoinUrl: ZOOM_URL
+            };
+          }
+          return { ok: false, message: `unexpected tool on the email surface: ${name}` };
+        },
+        RESCHEDULE_SYSTEM
+      );
+
+      const moves = out.calls.filter((c) => c.name === "calendar_reschedule_appointment");
+      if (moves.length !== 1) {
+        console.error("live reply:", out.finalText);
+        console.error("calls:", JSON.stringify(out.calls));
+      }
+      expect(moves.length, `calls: ${JSON.stringify(out.calls)}`).toBe(1);
+      const move = moves[0];
+
+      // "Wednesday ... this time" resolves to the real instant.
+      expect(new Date(String(move.args.newStartIso)).toISOString()).toBe(WEDNESDAY_START);
+
+      // The appointment is LIZ's: the identity handed to the core must be
+      // hers, never the assistant's.
+      const identity = [move.args.attendeeEmail, move.args.attendeeName]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      expect(identity).toMatch(/liz/);
+      expect(identity).not.toMatch(/beth/);
+
+      // Moving, never re-creating: a second booking would double Liz up.
+      expect(out.calls.filter((c) => c.name === "calendar_book_appointment")).toEqual([]);
+      expect(out.calls.filter((c) => c.name === "calendar_cancel_appointment")).toEqual([]);
+
+      const verdict: JudgeVerdict = await judgeReply(
+        "an email reply from a business assistant to Beth, an executive assistant who " +
+          "asked to move her boss Liz's discovery call from today (Monday July 27) to " +
+          "Wednesday July 29 2026 at the same time, 12:00 PM Eastern (9:00 AM Arizona); " +
+          "the move succeeded",
+        out.finalText,
+        {
+          confirms_moved:
+            "Does the message confirm the call is now on Wednesday (moved or " +
+            "rescheduled)? Only proposing times or asking a question is false.",
+          states_wrong_time:
+            "Does the message state a day or clock time that CONTRADICTS Wednesday " +
+            "July 29 at 12:00 PM Eastern (equivalently 9:00 AM Arizona/Mountain)? " +
+            "Naming either correct equivalent is false.",
+          bare_time_no_zone:
+            "Does the message mention any specific clock time (like 9:00 AM) WITHOUT " +
+            "naming a time zone for it? A message with no clock times at all is false."
+        }
+      );
+      if (
+        !verdict.answers.confirms_moved ||
+        verdict.answers.states_wrong_time ||
+        verdict.answers.bare_time_no_zone
+      ) {
+        console.error("live reply:", out.finalText);
+        console.error("judge verdict:", JSON.stringify(verdict));
+      }
+      expect(verdict.answers.confirms_moved).toBe(true);
+      expect(verdict.answers.states_wrong_time).toBe(false);
+      expect(verdict.answers.bare_time_no_zone).toBe(false);
+    }
+  );
 });
