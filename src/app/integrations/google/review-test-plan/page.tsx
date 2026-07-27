@@ -40,11 +40,16 @@ export default function GoogleReviewTestPlanPage() {
         </h1>
         <p className="mt-4 text-parchment/60">
           New Coworker is an AI coworker for small businesses: it answers the phone, replies to
-          SMS, email, and web chat, and books appointments. The business owner connects their own
-          Google account so the coworker can book appointments on their calendar
-          (<code className="text-xs text-claw-green">calendar.events</code>) and read, reply to,
-          and mark handled inbound customer email in their Gmail
-          (<code className="text-xs text-claw-green">gmail.modify</code>). All access is
+          SMS, email, and web chat, books appointments, and runs a public self-serve booking
+          page. The business owner connects their own Google account. Calendar access is split by
+          least privilege: availability reads ride{" "}
+          <code className="text-xs text-claw-green">calendar.events.freebusy</code>, new bookings
+          land on an app-created &quot;NewCoworker&quot; calendar under{" "}
+          <code className="text-xs text-claw-green">calendar.app.created</code>, and{" "}
+          <code className="text-xs text-claw-green">calendar.events</code> manages appointments
+          that live on the owner&apos;s own calendars. Inbound customer email is read, replied to
+          from the owner&apos;s address, and marked handled under{" "}
+          <code className="text-xs text-claw-green">gmail.modify</code>. All access is
           server-side; owners can disconnect at any time. The steps below walk through the grant,
           each scope in use, and removal.{" "}
           <b>Test credentials are provided in the verification reply.</b>
@@ -58,7 +63,7 @@ export default function GoogleReviewTestPlanPage() {
             connect is the &quot;owner mailbox and calendar&quot; in the steps below.
           </li>
           <li>
-            A second email account (any provider) to play the customer in Step 4.
+            A second email account (any provider) to play the customer in Step 5.
           </li>
         </ul>
 
@@ -80,9 +85,10 @@ export default function GoogleReviewTestPlanPage() {
               Open <b>Dashboard → Integrations → Workspace</b>, click <b>Connect workspace</b>,
               and choose <b>Google</b> in the connect window. The Google consent screen for{" "}
               <b>New Coworker</b> appears; the authorization URL carries our single OAuth client
-              id (<code className="text-xs text-claw-green">354099628168-…</code>) and the scope
-              list shows exactly the declared scopes: calendar events plus Gmail
-              read/send/modify, alongside basic profile. Complete the grant.
+              id (<code className="text-xs text-claw-green">354099628168-…</code>) and the
+              permission list shows exactly the declared scopes: secondary (app-created)
+              calendars, calendar availability, view/edit events, Gmail read/compose/send, and
+              basic profile. Complete the grant.
             </p>
             <p>
               Expected: you are returned to Dashboard → Integrations and the connection card shows
@@ -90,22 +96,39 @@ export default function GoogleReviewTestPlanPage() {
             </p>
           </Step>
 
-          <Step n={3} title="calendar.events: book an appointment">
+          <Step n={3} title="Calendar scopes: book, then manage the owner's own calendar">
             <p>
               Open <b>Dashboard → Chat</b> (the owner&apos;s chat with their AI coworker) and
               send: <i>&quot;Book an appointment for John Smith tomorrow at 2pm, 30 minutes,
               phone +1 555 010 0000.&quot;</i>
             </p>
             <p>
-              Expected: the coworker checks availability on the connected calendar, books the
-              slot, and replies with a confirmation. In Google Calendar the new event appears on
-              the connected account at that time. Rescheduling and canceling by chat move and
-              remove the same event, which is why read-only or free/busy scopes are not
-              sufficient.
+              Expected: the coworker checks availability (free/busy read,{" "}
+              <code className="text-xs text-claw-green">calendar.events.freebusy</code>), books
+              the slot, and replies with a confirmation. In Google Calendar the event appears on
+              the app-created <b>NewCoworker</b> calendar
+              (<code className="text-xs text-claw-green">calendar.app.created</code>). To see{" "}
+              <code className="text-xs text-claw-green">calendar.events</code> specifically,
+              create an event yourself on your primary calendar, then ask the coworker by chat to
+              move or cancel it: managing events on the owner&apos;s own calendars is what the
+              narrower scopes cannot do.
             </p>
           </Step>
 
-          <Step n={4} title="gmail.modify: read, reply from the owner's address, mark handled">
+          <Step n={4} title="calendar.events.freebusy: the public booking page">
+            <p>
+              Open <b>Dashboard → Bookings</b> (the page provisions itself on first visit) and
+              copy the public booking link. Open it in a private window as a visitor: the page
+              offers open slots computed from the connected calendar&apos;s free/busy data and
+              business hours; no event details are ever shown. Book a slot.
+            </p>
+            <p>
+              Expected: the booking confirmation appears, and the appointment lands on the
+              NewCoworker calendar in Google Calendar, exactly like an AI-made booking.
+            </p>
+          </Step>
+
+          <Step n={5} title="gmail.modify: read, reply from the owner's address, mark handled">
             <p>
               Open <b>Dashboard → AiFlows</b> and enable the pre-seeded email demo flow, choosing
               the mailbox you connected in Step 2 as its watched mailbox (one dropdown in the
@@ -126,7 +149,7 @@ export default function GoogleReviewTestPlanPage() {
             </p>
           </Step>
 
-          <Step n={5} title="Remove the connection">
+          <Step n={6} title="Remove the connection">
             <p>
               Back on <b>Dashboard → Integrations → Workspace</b>, click <b>Disconnect</b> on the
               Google connection and confirm. Expected: the connection disappears from the page
