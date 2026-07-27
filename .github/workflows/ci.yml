@@ -630,11 +630,12 @@ jobs:
       # e2e-scope.sh uses, including its force-push shape (an all-zero
       # before-SHA) and the 300-file cap on .files.
       #
-      # FAIL CLOSED throughout: any error emits an empty list, and the script
-      # skips on an empty list. Missing a ping costs a few days of latency
-      # (the weekly auto-post re-submits the sitemap anyway); announcing every
-      # URL on every backend-only deploy is the behavior IndexNow asks us not
-      # to have.
+      # FAIL CLOSED, with one documented exception. Any error emits an empty
+      # list and the script skips on an empty list: missing a ping costs a few
+      # days of latency (the weekly auto-post re-submits the sitemap anyway),
+      # while announcing every URL on every backend-only deploy is the
+      # behavior IndexNow asks us not to have. The exception is the 300-file
+      # cap below, where a false gate reading is likelier than a true one.
       - name: Announce changed public pages
         # Push only: a preview deployment must never announce production URLs.
         if: github.event_name == 'push'
@@ -653,6 +654,18 @@ jobs:
           if [ -z "$changed" ]; then
             echo "IndexNow: no usable changed-file list (new branch, force push, or API error), skipping." \
               | tee -a "$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          # The ONE case that fails open. `.files` is capped at 300, so a
+          # bigger push returns a slice: the gate could read false purely
+          # because the public files landed outside it. A 300-file push is
+          # more likely to touch public pages, not less, and over-announcing
+          # once on a giant release is cheaper than silently skipping it.
+          count=$(printf '%s\n' "$changed" | wc -l | tr -d ' ')
+          if [ "$count" -ge 300 ]; then
+            echo "IndexNow: compare API capped at ${count} files, assuming public pages changed." \
+              | tee -a "$GITHUB_STEP_SUMMARY"
+            npx tsx scripts/indexnow-submit.ts --all
             exit 0
           fi
           printf '%s\n' "$changed" | npx tsx scripts/indexnow-submit.ts --changed --stdin
