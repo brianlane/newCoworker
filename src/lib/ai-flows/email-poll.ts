@@ -100,9 +100,10 @@ type EmailFlow = {
    */
   conditionSets: TriggerCondition[][];
   /**
-   * Whether the flow can answer the email itself (it has a send_email step).
-   * Only such flows mark the triggering Gmail message read; notify-only
-   * flows must leave the owner's unread state alone.
+   * Whether the flow can answer the email itself (a send_email step anywhere
+   * in its step tree, branch arms included). Only such flows mark the
+   * triggering Gmail message read; notify-only flows must leave the owner's
+   * unread state alone.
    */
   handlesEmail: boolean;
 };
@@ -340,6 +341,31 @@ async function fetchMicrosoftMessages(
   return { messages, overflowed };
 }
 
+/**
+ * Whether a raw stored step tree contains a send_email step ANYWHERE (trunk,
+ * branch arms, branch elses). Deliberately schema-tolerant, like
+ * collectRawWorkspaceConnectionRefs: stored definitions can predate the
+ * current schema, and unknown shapes contribute nothing.
+ */
+function rawStepsSendEmail(steps: unknown[]): boolean {
+  for (const raw of steps) {
+    if (!raw || typeof raw !== "object") continue;
+    const step = raw as {
+      type?: unknown;
+      branches?: Array<{ steps?: unknown[] }>;
+      else?: unknown[];
+    };
+    if (step.type === "send_email") return true;
+    if (step.type === "branch") {
+      for (const arm of Array.isArray(step.branches) ? step.branches : []) {
+        if (Array.isArray(arm?.steps) && rawStepsSendEmail(arm.steps)) return true;
+      }
+      if (Array.isArray(step.else) && rawStepsSendEmail(step.else)) return true;
+    }
+  }
+  return false;
+}
+
 function emailFlowsFrom(
   rows: Array<{ id: string; business_id: string; definition: unknown }>
 ): EmailFlow[] {
@@ -348,11 +374,9 @@ function emailFlowsFrom(
     const def = row.definition as {
       trigger?: { channel?: string; connectionId?: unknown; conditions?: unknown };
       triggers?: Array<{ channel?: string; connectionId?: unknown; conditions?: unknown }>;
-      steps?: Array<{ type?: unknown }>;
+      steps?: unknown[];
     } | null;
-    const handlesEmail = (Array.isArray(def?.steps) ? def.steps : []).some(
-      (s) => s?.type === "send_email"
-    );
+    const handlesEmail = Array.isArray(def?.steps) && rawStepsSendEmail(def.steps);
     // Collect every email trigger in the flow's set, merging the ones that
     // watch the same mailbox into one entry (OR across condition lists) so a
     // flow never appears twice in a mailbox group (the seen-marker math and

@@ -512,6 +512,71 @@ describe("pollEmailTriggers", () => {
     expect(modifyCalls).toHaveLength(0);
   });
 
+  it("counts a send_email step nested in a branch arm as reply-capable (marks read)", async () => {
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
+      .mockResolvedValueOnce({
+        data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
+      } as never)
+      // users.messages.modify
+      .mockResolvedValueOnce({ data: {} } as never);
+    const res = await pollEmailTriggers(
+      dbWith([
+        flowRow("f-branch", emailTrigger(), undefined, [
+          // Degenerate shapes stored definitions can carry must contribute
+          // nothing instead of crashing the walk.
+          null,
+          { id: "b-junk", type: "branch", branches: "junk" },
+          {
+            id: "b",
+            type: "branch",
+            branches: [
+              { id: "arm-armless", label: "no steps array" },
+              { id: "arm-reply", label: "reply", steps: [sendEmailStep] }
+            ],
+            else: []
+          }
+        ])
+      ])
+    );
+    expect(res.enqueued).toBe(1);
+    expect(nangoProxyForBusiness).toHaveBeenCalledWith(
+      BIZ,
+      expect.anything(),
+      expect.objectContaining({ endpoint: "/gmail/v1/users/me/messages/m1/modify" })
+    );
+  });
+
+  it("counts a send_email step nested in a branch ELSE as reply-capable (marks read)", async () => {
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
+      .mockResolvedValueOnce({
+        data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
+      } as never)
+      // users.messages.modify
+      .mockResolvedValueOnce({ data: {} } as never);
+    const res = await pollEmailTriggers(
+      dbWith([
+        flowRow("f-else", emailTrigger(), undefined, [
+          {
+            id: "b",
+            type: "branch",
+            branches: [
+              { id: "arm-quiet", label: "quiet", steps: [{ id: "s_n", type: "notify_owner" }] }
+            ],
+            else: [sendEmailStep]
+          }
+        ])
+      ])
+    );
+    expect(res.enqueued).toBe(1);
+    expect(nangoProxyForBusiness).toHaveBeenCalledWith(
+      BIZ,
+      expect.anything(),
+      expect.objectContaining({ endpoint: "/gmail/v1/users/me/messages/m1/modify" })
+    );
+  });
+
   it("never touches read state on a Microsoft mailbox", async () => {
     vi.mocked(getWorkspaceOAuthConnection).mockResolvedValue({
       ...googleConn,
