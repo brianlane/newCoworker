@@ -22,6 +22,7 @@ import { loadVaultForPrompt } from "./vault-loader.js";
 import {
   telnyxTransferCall,
   telnyxSendPlainSms,
+  meterBridgeOperationalSms,
   telnyxHangupCall,
   telnyxSendDtmf,
   telnyxStreamingStop
@@ -509,12 +510,14 @@ async function loadTenantTelnyxSettings(
  * AND a `forward_to_e164` is configured; we never SMS the caller.
  */
 async function sendMissedCallSms(params: {
+  supabase: SupabaseClient;
+  businessId: string;
   settings: TenantTelnyxSettings;
   callerE164: string;
   businessName: string;
   reason: string;
 }): Promise<void> {
-  const { settings, callerE164, businessName, reason } = params;
+  const { supabase, businessId, settings, callerE164, businessName, reason } = params;
   if (!settings.smsFallbackEnabled || !settings.forwardToE164 || !settings.smsFromE164) return;
   const apiKey = process.env.TELNYX_API_KEY ?? "";
   if (!apiKey) return;
@@ -529,6 +532,8 @@ async function sendMissedCallSms(params: {
   });
   if (!res.ok) {
     console.error("voice-bridge: fallback SMS failed", res.status, res.body);
+  } else {
+    await meterBridgeOperationalSms(supabase, businessId);
   }
 }
 
@@ -659,6 +664,7 @@ const INTAKE_SMS_MAX_CHARS = 3000;
  */
 async function sendIntakeLeadSms(params: {
   supabase: SupabaseClient;
+  businessId: string;
   settings: TenantTelnyxSettings;
   notifyE164: string;
   callControlId: string;
@@ -669,7 +675,8 @@ async function sendIntakeLeadSms(params: {
   /** Frame the summary in asterisks (the flow's options.starAlerts). */
   starFrame?: boolean;
 }): Promise<void> {
-  const { supabase, settings, notifyE164, callControlId, transferFromE164, businessName, lead } = params;
+  const { supabase, businessId, settings, notifyE164, callControlId, transferFromE164, businessName, lead } =
+    params;
   const apiKey = process.env.TELNYX_API_KEY ?? "";
   if (!apiKey || !settings.smsFromE164 || !notifyE164) {
     console.warn("voice-bridge: intake SMS skipped (missing api key / from / notify number)");
@@ -721,23 +728,26 @@ async function sendIntakeLeadSms(params: {
     console.error("voice-bridge: intake SMS failed", res.status, res.body);
   } else {
     console.log("voice-bridge: intake lead SMS sent", { callControlId, to: notifyE164 });
+    await meterBridgeOperationalSms(supabase, businessId);
   }
 }
 
 /**
  * Text the flow-configured transfer target the pre-alert ("LIVE TRANSFER
  * incoming — pick up!") right before the warm transfer rings them. Same
- * bridge-side send path as the intake summary SMS (teammate alert; quota
- * tracking lives on the Edge/web side). Best-effort — an SMS hiccup must
- * never block the actual transfer.
+ * bridge-side send path as the intake summary SMS; a successful send is
+ * counted against the tenant's operational SMS pool. Best-effort — an SMS
+ * hiccup must never block the actual transfer.
  */
 async function sendTransferPreAlertSms(params: {
+  supabase: SupabaseClient;
+  businessId: string;
   settings: TenantTelnyxSettings;
   toE164: string;
   body: string;
   callControlId: string;
 }): Promise<void> {
-  const { settings, toE164, body, callControlId } = params;
+  const { supabase, businessId, settings, toE164, body, callControlId } = params;
   const apiKey = process.env.TELNYX_API_KEY ?? "";
   if (!apiKey || !settings.smsFromE164) {
     console.warn("voice-bridge: transfer pre-alert skipped (missing api key / from number)");
@@ -754,6 +764,7 @@ async function sendTransferPreAlertSms(params: {
       console.error("voice-bridge: transfer pre-alert SMS failed", res.status, res.body);
     } else {
       console.log("voice-bridge: transfer pre-alert SMS sent", { callControlId, to: toE164 });
+      await meterBridgeOperationalSms(supabase, businessId);
     }
   } catch (err) {
     console.error("voice-bridge: transfer pre-alert SMS threw", err);
@@ -1419,6 +1430,8 @@ function main(): void {
             }
             if (flowTransfer.preSmsBody) {
               await sendTransferPreAlertSms({
+                supabase,
+                businessId,
                 settings: tenantSettings,
                 toE164: flowTransfer.toE164,
                 body: flowTransfer.preSmsBody,
@@ -1726,6 +1739,8 @@ function main(): void {
           // Skip it; the no-lead intake SMS below still notifies the intake owner.
           if (!intake) {
             await sendMissedCallSms({
+              supabase,
+              businessId,
               settings: tenantSettings,
               callerE164: fromE164Info || "unknown",
               businessName,
@@ -1737,6 +1752,8 @@ function main(): void {
         console.warn("voice-bridge: GEMINI_LIVE_ENABLED=false; AI audio pipe disabled (media stream still accepted)");
         if (!intake) {
           await sendMissedCallSms({
+            supabase,
+            businessId,
             settings: tenantSettings,
             callerE164: fromE164Info || "unknown",
             businessName,
@@ -1747,6 +1764,8 @@ function main(): void {
         console.warn("voice-bridge: GOOGLE_API_KEY or GEMINI_API_KEY unset; AI audio pipe disabled");
         if (!intake) {
           await sendMissedCallSms({
+            supabase,
+            businessId,
             settings: tenantSettings,
             callerE164: fromE164Info || "unknown",
             businessName,
@@ -1918,6 +1937,7 @@ function main(): void {
               try {
                 await sendIntakeLeadSms({
                   supabase,
+                  businessId,
                   settings: tenantSettings,
                   notifyE164,
                   callControlId,

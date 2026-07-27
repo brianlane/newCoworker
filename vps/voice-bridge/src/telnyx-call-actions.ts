@@ -173,10 +173,11 @@ export type TelnyxSmsOptions = {
 };
 
 /**
- * Minimal outbound SMS helper — the VPS bridge uses it for the "your AI
- * coworker couldn't connect, call from X" fallback. It deliberately does
- * NOT touch Supabase quota counters; that's tracked on the Edge/web side. The
- * bridge cares only about getting the missed-call alert out.
+ * Minimal outbound SMS helper for the bridge's operational alerts
+ * (missed-call fallback, intake lead summary, transfer pre-alert). The
+ * transport itself does not meter; every caller counts a successful send
+ * through meterBridgeOperationalSms, the same operational ledger the
+ * notifications function uses.
  */
 export async function telnyxSendPlainSms(
   apiKey: string,
@@ -207,5 +208,38 @@ export async function telnyxSendPlainSms(
     return { ok: res.ok, status: res.status, body: text.slice(0, 500) };
   } catch (err) {
     return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/** The slice of a Supabase client the meter needs (injectable in tests). */
+export type BridgeMeterClient = {
+  rpc(
+    fn: string,
+    args: Record<string, unknown>
+  ): PromiseLike<{ data: unknown; error: { message: string } | null }>;
+};
+
+/**
+ * Count one bridge-sent operational SMS against the tenant's pool, the
+ * same `meter_sms_operational_send` ledger the notifications function
+ * uses. The bridge's three sends (missed-call fallback, intake lead
+ * summary, transfer pre-alert) used to claim "tracked on the Edge/web
+ * side" while nothing counted them; this closes that. Never throws and
+ * never refuses: the send has already happened, this is bookkeeping.
+ */
+export async function meterBridgeOperationalSms(
+  supabase: BridgeMeterClient,
+  businessId: string
+): Promise<void> {
+  try {
+    const { error } = await supabase.rpc("meter_sms_operational_send", {
+      p_business_id: businessId
+    });
+    if (error) {
+      console.warn(`voice-bridge: sms meter rpc failed (${businessId}): ${error.message}`);
+    }
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err);
+    console.warn(`voice-bridge: sms meter threw (${businessId}): ${message}`);
   }
 }
