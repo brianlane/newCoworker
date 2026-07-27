@@ -1127,12 +1127,24 @@ next-intl, since the request config resolves the READER's locale and would
 otherwise hand a Spanish brief to a crawler sending `Accept-Language: es`.
 
 **3. Tell the index immediately.** ChatGPT's search rides Bing's index, and
-Bing is the largest IndexNow participant, so a post can be citable the day it
-publishes instead of whenever a crawler returns. The blog publish fan-out
-(`runBlogPublishSideEffects`, both the sweep and admin "Publish now") pings
-[src/lib/marketing/indexnow.ts](src/lib/marketing/indexnow.ts) with the post,
-`/blog`, and the sitemap. Best-effort by contract: it never throws and can
-never un-publish a post.
+Bing is the largest IndexNow participant, so a page can be citable the day it
+ships instead of whenever a crawler returns. Two things ping
+[src/lib/marketing/indexnow.ts](src/lib/marketing/indexnow.ts):
+
+- **A blog publish**, via `runBlogPublishSideEffects` (both the sweep and
+  admin "Publish now"), with the post, `/blog`, and the sitemap.
+- **A production deploy that touches public pages**, via the `indexnow-ping`
+  job in [.github/workflows/ci.yml](.github/workflows/ci.yml) running
+  `scripts/indexnow-submit.ts`. Publishing a post used to be the ONLY trigger,
+  so shipping a marketing page announced nothing: the four `/compare/*` pages
+  were found only because the sitemap happened to get crawled.
+
+Best-effort by contract everywhere: the module never throws, it cannot
+un-publish a post, and the CI script **always exits 0**. A search-engine
+notification must never read as a failed deploy, which is also why the ping is
+its own job rather than a step in `Vercel Deploy` (see the comment there:
+`main-failure-watch.yml` keys its "production did not update" email off that
+job's conclusion).
 
 - **Env**: `INDEXNOW_KEY` (8-128 chars of `[A-Za-z0-9-]`, e.g.
   `openssl rand -hex 16`). Unset = feature off. The key is **public by
@@ -1140,10 +1152,37 @@ never un-publish a post.
   engines fetch. Served from a fixed path with `keyLocation` rather than the
   protocol's default `/{key}.txt`, so there is no committed filename to keep
   hand-synced with an env var; a key file in the root directory scopes to the
-  whole host either way.
+  whole host either way. **CI holds no copy** and needs no GitHub secret: it
+  reads the key off the live site, exactly as an engine would.
+- **What gets submitted, and why the whole set.** The URL list comes from the
+  LIVE sitemap plus the machine surfaces it never lists (`/llms.txt`,
+  `/llms-full.txt`, `/sitemap.xml`), never a path-to-URL table: a table is the
+  drift shape from the section above, where a new page needs a registry entry
+  nobody remembers. The changed-file list decides IF we ping, not WHICH URLs,
+  because shared marketing components and the shared copy catalogs genuinely
+  can change any page. At ~29 URLs on a handful of deploys a week that is far
+  inside the protocol's limits (10,000 per request).
+- **Fail CLOSED** (`deployTouchesPublicPages` in
+  [src/lib/marketing/indexnow-deploy.ts](src/lib/marketing/indexnow-deploy.ts)):
+  no changed-file list, or nothing public in it, means no ping. Deliberately
+  the opposite of `e2e-scope.sh`, which fails open. Missing a ping costs a few
+  days of latency since the weekly auto-post re-submits the sitemap anyway;
+  announcing every URL on every backend-only deploy is the rate-limit-courting
+  behavior the protocol asks us not to have.
+- **On demand**, when something important just shipped:
+
+```bash
+tsx scripts/indexnow-submit.ts --all --dry-run   # print what would go
+tsx scripts/indexnow-submit.ts --all
+```
+
 - **Manual, one-time**: verify the site in Bing Webmaster Tools and submit
-  `https://newcoworker.com/sitemap.xml` there. IndexNow accelerates recrawl of
-  a known site; it does not replace initial verification.
+  `https://www.newcoworker.com/sitemap.xml` there (done 2026-07-27; one
+  property covers both hosts). IndexNow accelerates recrawl of a known site;
+  it does not replace initial verification. **Bing Webmaster Tools → IndexNow
+  is where to confirm pings are actually landing** — the submission returns
+  202 ("received, key validation pending"), so a 202 alone does not prove the
+  key file was readable.
 
 **4. Know whether any of it worked.** `/admin/ai-search` answers the only two
 questions that matter: are the assistants READING us (crawler hits, by day and

@@ -47,9 +47,17 @@ export function indexNowKey(): string | null {
  */
 export async function submitToIndexNow(
   urls: string[],
-  deps: { fetchImpl?: typeof fetch } = {}
+  deps: {
+    fetchImpl?: typeof fetch;
+    /**
+     * Use this key instead of the environment's. For callers that resolve it
+     * some other way, notably CI reading the PUBLIC key file off the live
+     * site so no copy has to be kept in GitHub secrets.
+     */
+    key?: string;
+  } = {}
 ): Promise<IndexNowOutcome> {
-  const key = indexNowKey();
+  const key = deps.key?.trim() || indexNowKey();
   if (!key) return { status: "disabled" };
   if (!KEY_PATTERN.test(key)) {
     logger.warn("indexnow: INDEXNOW_KEY is not a valid key, skipping submission");
