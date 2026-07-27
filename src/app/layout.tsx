@@ -4,8 +4,7 @@ import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages } from "next-intl/server";
 import { JsonLd } from "@/components/marketing/JsonLd";
 import "./globals.css";
-
-const SITE_URL = "https://newcoworker.com";
+import { SITE_URL } from "@/lib/marketing/site-url";
 
 const ORGANIZATION_JSON_LD = {
   "@context": "https://schema.org",
@@ -38,7 +37,8 @@ export const viewport: Viewport = {
 };
 
 export const metadata: Metadata = {
-  metadataBase: new URL("https://newcoworker.com"),
+  // Resolves every page's relative `alternates.canonical` and og:url.
+  metadataBase: new URL(SITE_URL),
   title: {
     default: "New Coworker",
     template: "%s | New Coworker"

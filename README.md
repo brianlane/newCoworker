@@ -975,12 +975,23 @@ Buyers increasingly ask an assistant instead of searching, so being readable
 and citable by ChatGPT, Claude, Perplexity, and Copilot is a distribution
 channel, not an SEO detail. Three pieces hold it up.
 
+**0. One canonical host: `www`.** [src/lib/marketing/site-url.ts](src/lib/marketing/site-url.ts)
+is the single `SITE_URL`, and `tests/site-url.test.ts` fails the build if a
+hardcoded origin reappears anywhere in `src/`. It used to be copy-pasted into
+six files as the APEX while the blog pages quietly used `www`, and since the
+apex 307-redirects every path to www, every canonical tag, og:url, and sitemap
+entry pointed at a URL that redirects. Import it; never re-declare it.
+
 **1. The crawlers must actually reach us.** Every AI agent we care about is
 listed once in [src/lib/marketing/ai-crawlers.ts](src/lib/marketing/ai-crawlers.ts),
-which feeds the robots.txt allow group ([src/app/robots.ts](src/app/robots.ts)),
-the access probe, and AI-traffic attribution. A crawler that matches its own
-robots group ignores `*` entirely, so the disallows (`/dashboard`, `/admin`,
-`/api`) are repeated there rather than inherited.
+whose `kind` drives the whole split: `index`/`fetch` agents (the ones that
+answer a question and cite us) are explicitly allowed, `train` agents are
+disallowed outright. That registry feeds the served robots.txt
+([src/lib/marketing/robots-txt.ts](src/lib/marketing/robots-txt.ts) →
+`/robots.txt`), the access probe, and AI-traffic attribution. A crawler that
+matches its own robots group ignores `*` entirely, so the disallows
+(`/dashboard`, `/admin`, `/api`) are repeated in each group rather than
+inherited.
 
 There are **two independent ways to be shut out**, and only the first
 produces an error anyone would notice:
@@ -1001,29 +1012,25 @@ tsx debug/aeo-crawler-probe.ts            # production
 tsx debug/aeo-crawler-probe.ts https://…  # any other origin
 ```
 
-> ⚠️ **Cloudflare owns this zone's robots.txt, and it does NOT do the same
-> thing on both hosts** (observed 2026-07-26):
+> ⚠️ **Cloudflare's "Managed robots.txt" must stay OFF**
+> (AI Crawl Control → Signals). It is a single on/off toggle with no
+> append-vs-replace option, and it *creates or updates* the file, which broke
+> differently on each host (observed 2026-07-26, before it was disabled):
 >
-> - `www.newcoworker.com/robots.txt` = Cloudflare's managed block
->   **prepended to** our origin file.
-> - `newcoworker.com/robots.txt` (apex) = the managed block **only**. Our
->   file never ships there, so on the apex nothing disallows `/dashboard`,
->   `/admin`, or `/api` and there is no `Sitemap:` line at all.
+> - `www` got the managed block **prepended to** ours, so seven agents
+>   appeared in an allow group and a disallow group at once, and which one
+>   won was up to each crawler's parser.
+> - The **apex** got the managed block **only**, because the apex serves no
+>   origin robots.txt of its own. Nothing disallowed `/dashboard`, `/admin`,
+>   or `/api` there, and there was no `Sitemap:` line at all.
 >
-> The managed block's default policy is `search=yes, ai-train=no`, which
-> disallows the training crawlers (GPTBot, ClaudeBot, CCBot, Amazonbot,
-> Google-Extended, Applebot-Extended, meta-externalagent) while leaving the
-> answer engines (OAI-SearchBot, Claude-SearchBot, PerplexityBot, and the
-> `*-User` fetchers) free. That posture is defensible, so our robots.txt does
-> not argue with it: `AI_ANSWER_CRAWLER_TOKENS` deliberately omits the
-> `train` agents, because emitting an allow for a token the managed block
-> disallows leaves the served file with two contradicting groups whose
-> meaning is up to each crawler's parser. **Change the training policy in
-> Cloudflare, never by re-adding those tokens here.**
->
-> The apex replacement is a real gap and the fix is in the Cloudflare
-> dashboard (AI Crawl Control / managed robots.txt): make the managed block
-> append to the origin file rather than replace it. The probe fails on it.
+> Its policy (`search=yes, ai-train=no`) is preserved verbatim in
+> [robots-txt.ts](src/lib/marketing/robots-txt.ts), Content-Signal included,
+> so turning it off cost nothing and bought one reviewable, tested source of
+> truth. **Change the training posture by flipping a token's `kind` in the
+> registry, not by re-enabling the Cloudflare feature.** The probe fails if
+> the managed block reappears, if our file stops being served, or if the
+> served file disagrees with the registry token-for-token.
 
 **2. A brief written for machines.** `/llms.txt` (short index) and
 `/llms-full.txt` (adds differentiators, industries, recent posts) are composed

@@ -1,3 +1,4 @@
+import { SITE_URL } from "@/lib/marketing/site-url";
 /**
  * Branded transactional HTML for owner emails (Resend multipart).
  *
@@ -141,7 +142,7 @@ export function buildBrandedEmailHtml(input: BrandedEmailHtmlInput): string {
         <span style="font-weight:700;">The New Coworker Team</span><br>
         <span style="font-style:italic;color:#8a9bb0;">Brian Lane, Founder</span><br>
         Call: <a href="tel:+16023131823" style="color:#F5F0E8;text-decoration:none;">602.313.1823</a><br>
-        Web: <a href="https://www.newcoworker.com" target="_blank" style="color:#2EC4B6;text-decoration:underline;">newcoworker.com</a>
+        Web: <a href="${SITE_URL}" target="_blank" style="color:#2EC4B6;text-decoration:underline;">newcoworker.com</a>
       </td>
     </tr>
   </table>

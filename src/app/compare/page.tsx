@@ -7,8 +7,7 @@ import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import { CtaBanner, PageHero } from "@/components/marketing/sections";
 import { JsonLd } from "@/components/marketing/JsonLd";
 import { COMPARISONS } from "./data";
-
-const SITE_URL = "https://newcoworker.com";
+import { SITE_URL } from "@/lib/marketing/site-url";
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("marketing.comparePage");
