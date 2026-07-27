@@ -2283,5 +2283,11 @@
     "heading": "We could not find that page",
     "body": "The address may be mistyped, or the link you followed may have expired. If somebody sent you this link, ask them for a fresh one.",
     "homeCta": "Go to newcoworker.com"
+  },
+  "errorPage": {
+    "heading": "Something went wrong on our side",
+    "body": "The page hit an error while loading. It was not anything you did; trying again usually works.",
+    "retryCta": "Try again",
+    "digest": "Error reference: {digest}"
   }
 }

@@ -14,6 +14,10 @@ export default async function AdminBlogEditorPage({
   if (postId === "new") {
     return <BlogPostEditor initialPost={null} />;
   }
+  if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(postId)) {
+    // Junk in the segment must 404, not crash on the uuid cast.
+    notFound();
+  }
   const post = await getBlogPost(postId);
   if (!post) notFound();
   return <BlogPostEditor initialPost={post} />;
