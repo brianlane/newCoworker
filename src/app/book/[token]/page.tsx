@@ -37,14 +37,21 @@ export default async function BookPage({
 
   // A well-formed link that does not resolve is a REAL page turned off (or
   // rotated away), and whoever holds it was invited by the business: a bare
-  // 404 reads as "this business is broken". Say what is true instead.
+  // 404 reads as "this business is broken". Say what is true instead, and
+  // say the RIGHT thing: a Vagaro/Calendly-resolved tenant
+  // (calendar_not_connected) books on their provider's own page, which is
+  // not the same as Live being unchecked.
   if (!resolved.ok) {
+    const body =
+      resolved.detail === "calendar_not_connected"
+        ? t("unavailableProviderBody")
+        : t("unavailableBody");
     return (
       <main className="min-h-screen bg-deep-ink px-4 py-10">
         <div className="mx-auto w-full max-w-lg pt-16 text-center">
           <h1 className="text-xl font-semibold text-parchment">{t("unavailableHeading")}</h1>
           <p className="mt-3 rounded-md border border-spark-orange/40 bg-spark-orange/10 px-4 py-3 text-sm text-spark-orange">
-            {t("unavailableBody")}
+            {body}
           </p>
         </div>
       </main>

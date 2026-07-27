@@ -54,7 +54,8 @@
     "intakePickOne": "Elige una opción…",
     "intakeAnswerRequired": "Elige al menos una opción.",
     "unavailableHeading": "Esta página de reservas no está disponible",
-    "unavailableBody": "Las reservas en línea están desactivadas por ahora. Comunícate directamente con el negocio para agendar, o pídeles un enlace nuevo."
+    "unavailableBody": "Las reservas en línea están desactivadas por ahora. Comunícate directamente con el negocio para agendar, o pídeles un enlace nuevo.",
+    "unavailableProviderBody": "Este negocio recibe reservas en su propio sitio de agenda, no en esta página. Comunícate con el negocio para obtener el enlace correcto."
   },
   "common": {
     "language": "Idioma",

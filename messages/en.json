@@ -54,7 +54,8 @@
     "intakePickOne": "Choose one…",
     "intakeAnswerRequired": "Please pick at least one.",
     "unavailableHeading": "This booking page is not available",
-    "unavailableBody": "Online booking is turned off right now. Please contact the business directly to schedule, or ask them for a fresh link."
+    "unavailableBody": "Online booking is turned off right now. Please contact the business directly to schedule, or ask them for a fresh link.",
+    "unavailableProviderBody": "This business takes bookings on its own scheduling site rather than this page. Please contact the business for the right link."
   },
   "common": {
     "language": "Language",

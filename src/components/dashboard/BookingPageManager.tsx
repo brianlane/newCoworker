@@ -42,7 +42,8 @@ type IntakeQuestion = {
   type: "choice" | "multi" | "text" | "textarea";
   options?: string[];
   required: boolean;
-  enabled: boolean;
+  /** Absent on rows stored before the flag existed, which means asking. */
+  enabled?: boolean;
 };
 
 type RosterMember = { id: string; name: string };
@@ -631,7 +632,7 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
             <div
               key={q.id}
               className={`rounded-md border border-parchment/15 bg-deep-ink/60 p-3 ${
-                q.enabled ? "" : "opacity-60"
+                q.enabled !== false ? "" : "opacity-60"
               }`}
             >
               <div className="flex flex-wrap items-end gap-3">
@@ -708,7 +709,10 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
                 <label className="flex items-center gap-2 pb-1.5 text-sm text-parchment/70">
                   <input
                     type="checkbox"
-                    checked={q.enabled}
+                    // Same normalization the parser applies: only an
+                    // explicit false is paused, so legacy rows stored
+                    // before the flag show as asking (which they are).
+                    checked={q.enabled !== false}
                     disabled={saving}
                     onChange={(e) => {
                       const enabled = e.target.checked;
