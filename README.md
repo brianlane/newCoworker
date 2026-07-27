@@ -1035,6 +1035,58 @@ tsx debug/aeo-crawler-probe.ts https://…  # any other origin
 > the managed block reappears, if our file stops being served, or if the
 > served file disagrees with the registry token-for-token.
 
+### Why the above drifted, and the rules that keep it from drifting again
+
+Both defects here (the apex robots.txt and the apex-canonical mismatch) were
+live for months, shipped nothing red, and were found only by fetching the site
+from outside and reading the bytes. They share one cause worth naming, because
+it will recur in other places if it is not:
+
+**Two sources of truth for one served artifact, with nothing reconciling
+them.** Cloudflare's dashboard and `src/` both generated robots.txt. Neither
+knew about the other, the merge happened at the edge where no test could see
+it, and the failure mode was silence rather than an error. The canonical host
+was the same shape: `SITE_URL` was copy-pasted into six files plus four inline
+literals, so "change the host" was ten edits and any missed one drifted
+quietly. The blog pages had in fact already drifted to `www` while everything
+else said apex, and nothing noticed.
+
+Standing rules, in priority order:
+
+1. **Generate it in code, or at the edge, never both.** If a Cloudflare (or
+   Vercel, or DNS) feature produces a file or header we also produce, turn one
+   of them off. An edge feature that "creates or updates" something we own is
+   a drift generator, and its output is invisible to CI by construction.
+2. **A constant that describes the deployment gets exactly one home.**
+   `SITE_URL` lives in
+   [src/lib/marketing/site-url.ts](src/lib/marketing/site-url.ts) and nowhere
+   else; `tests/site-url.test.ts` fails the build if a hardcoded origin
+   reappears in `src/` outside a doc comment. Copy the pattern rather than the
+   value.
+3. **Anything only observable from outside needs a probe that runs from
+   outside.** Unit tests assert what we *intend* to serve;
+   `debug/aeo-crawler-probe.ts` asserts what is *actually* served and fails on
+   any disagreement with the registry, in both directions. That reconciliation
+   is the only thing that would have caught either defect.
+4. **Treat silence as a symptom.** A robots.txt policy block, an edge
+   challenge, and a crawler that simply is not interested all look identical
+   from the origin: no errors, no logs, nothing. `/admin/ai-search` exists so
+   that absence is visible, and the probe exists to tell the three apart.
+
+**Run the probe after any change to the Cloudflare zone, the DNS records, the
+hostnames, or `src/lib/marketing/*`** — and periodically regardless, since the
+things it watches are changed by vendors, not only by us:
+
+```bash
+tsx debug/aeo-crawler-probe.ts                        # apex
+tsx debug/aeo-crawler-probe.ts https://www.newcoworker.com
+```
+
+> **Known, deliberate, not drift:** the apex serves a **307** (temporary) to
+> `www`. A `301` would consolidate ranking signals permanently and is worth
+> doing, but it is a redirect-semantics change with SEO consequences, so it is
+> a decision rather than a cleanup. Do not "fix" it incidentally.
+
 **2. A brief written for machines.** `/llms.txt` (short index) and
 `/llms-full.txt` (adds differentiators, industries, recent posts) are composed
 in [src/lib/marketing/llms-content.ts](src/lib/marketing/llms-content.ts) and
@@ -2062,6 +2114,11 @@ team@newcoworker.com — production has not updated until that run is green.
 - VPS fleet redeploys when `vps/` changed (`tsx debug/update-all-vps.ts`,
   voice-bridge redeploy) — per-box SSH keys never leave the laptop.
 - Seeds / one-shot scripts (`scripts/oneshot/`, ledger-recorded).
+- `tsx debug/aeo-crawler-probe.ts` when the change touched hostnames, the
+  Cloudflare zone, DNS, or `src/lib/marketing/*`. CI can only assert what we
+  intend to serve; this asserts what is actually served, and the drift it
+  catches shows up as silence rather than a failure. See
+  [Why the above drifted](#why-the-above-drifted-and-the-rules-that-keep-it-from-drifting-again).
 - Worktree cleanup (below).
 
 ### Worktree cleanup (mandatory after merge)
