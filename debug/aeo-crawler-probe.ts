@@ -26,7 +26,11 @@
  *   tsx debug/aeo-crawler-probe.ts                       # production
  *   tsx debug/aeo-crawler-probe.ts https://staging.host  # another origin
  */
-import { AI_CRAWLERS, ZONE_DISALLOWED_AI_TOKENS } from "../src/lib/marketing/ai-crawlers.ts";
+import {
+  AI_ANSWER_CRAWLER_TOKENS,
+  AI_CRAWLERS,
+  AI_TRAINING_CRAWLER_TOKENS
+} from "../src/lib/marketing/ai-crawlers.ts";
 
 const BASE_URL = (process.argv[2] ?? "https://newcoworker.com").replace(/\/$/, "");
 
@@ -183,20 +187,17 @@ if (robotsText === null) {
   const groups = parseRobots(robotsText);
   const managed = robotsText.includes("Cloudflare Managed content");
 
-  // Does the file we are looking at contain OUR robots.txt at all? Cloudflare
-  // can either PREPEND its managed block to the origin's file or REPLACE it
-  // outright, and the two look similar until you check for our own markers.
-  // Replacement is the dangerous case: it silently drops the /dashboard,
-  // /admin, and /api disallows and the Sitemap line.
-  const oursPresent = robotsText.includes("Disallow: /dashboard");
+  // Is the file we are looking at OURS? Cloudflare's "Managed robots.txt"
+  // CREATES a file where the origin serves none, which is how the apex ended
+  // up with a standalone block carrying none of our rules.
+  const oursPresent = robotsText.includes("src/lib/marketing/robots-txt.ts");
   if (!oursPresent) {
     policyProblem = true;
     console.log(
-      "ORIGIN robots.txt IS NOT BEING SERVED on this host: Cloudflare has REPLACED it\n" +
-        "rather than prepending to it. src/app/robots.ts never reaches a crawler here, so\n" +
-        "/dashboard, /admin, and /api are not disallowed and the Sitemap line is missing.\n" +
-        "Fix in the Cloudflare dashboard (AI Crawl Control / managed robots.txt) so the\n" +
-        "managed block APPENDS to the origin file instead of replacing it.\n"
+      "OUR robots.txt IS NOT BEING SERVED on this host. Something upstream is generating\n" +
+        "it instead, so /dashboard, /admin, and /api may not be disallowed and the Sitemap\n" +
+        "line may be missing. Check Cloudflare -> AI Crawl Control -> Signals ->\n" +
+        "Managed robots.txt; it must stay OFF now that the policy lives in our code.\n"
     );
   }
   if (!robotsText.includes("Sitemap:")) {
@@ -215,16 +216,15 @@ if (robotsText === null) {
   console.log();
 
   if (managed) {
-    // Word this off `oursPresent`: saying "prepending" on a host where the
-    // origin file is gone contradicts the replacement warning printed above.
+    policyProblem = true;
     const verb = oursPresent
-      ? "is PREPENDING a managed block to this robots.txt"
-      : "has REPLACED this robots.txt with its managed block";
+      ? "is PREPENDING a managed block to our robots.txt"
+      : "has REPLACED our robots.txt with its managed block";
     console.log(
-      `NOTE: Cloudflare ${verb}. Its default AI policy\n` +
-        "(search=yes, ai-train=no) disallows the training crawlers, which is a deliberate\n" +
-        "posture, not necessarily a defect. Decide it on purpose:\n" +
-        "Cloudflare dashboard -> the zone -> AI Crawl Control / robots.txt.\n"
+      `Cloudflare ${verb}. That feature was turned OFF deliberately\n` +
+        "(it creates a file where the origin serves none, which left the apex without our\n" +
+        "Disallow rules or Sitemap line). If it is back on, turn it off again:\n" +
+        "Cloudflare -> the zone -> AI Crawl Control -> Signals -> Managed robots.txt.\n"
     );
   }
   if (conflicting.length > 0) {
@@ -243,19 +243,22 @@ if (robotsText === null) {
     );
   }
 
-  // ZONE_DISALLOWED_AI_TOKENS is an observed fact about Cloudflare's managed
-  // list, and facts drift. Cross-check it against what is actually served so
-  // the next change there surfaces here instead of as a fresh conflict.
+  // The served file must match what our code intends, token for token.
   const servedDenied = new Set([...denied, ...conflicting].map((r) => r.token));
-  const staleEntries = ZONE_DISALLOWED_AI_TOKENS.filter((t) => !servedDenied.has(t));
-  const unrecorded = [...servedDenied].filter((t) => !ZONE_DISALLOWED_AI_TOKENS.includes(t));
-  if (oursPresent && (staleEntries.length > 0 || unrecorded.length > 0)) {
+  const shouldDeny = new Set(AI_TRAINING_CRAWLER_TOKENS);
+  const missingDeny = [...shouldDeny].filter((t) => !servedDenied.has(t));
+  const unexpectedDeny = [...servedDenied].filter((t) => !shouldDeny.has(t));
+  const notAllowed = AI_ANSWER_CRAWLER_TOKENS.filter(
+    (t) => rulings.find((r) => r.token === t)?.ruling !== "allowed"
+  );
+  if (oursPresent && (missingDeny.length > 0 || unexpectedDeny.length > 0 || notAllowed.length > 0)) {
     policyProblem = true;
     console.log(
-      "ZONE_DISALLOWED_AI_TOKENS is out of date with the served file:\n" +
-        (unrecorded.length > 0 ? `  newly disallowed, add: ${unrecorded.join(", ")}\n` : "") +
-        (staleEntries.length > 0 ? `  no longer disallowed, drop: ${staleEntries.join(", ")}\n` : "") +
-        "Update src/lib/marketing/ai-crawlers.ts so robots.txt keeps agreeing with the zone.\n"
+      "SERVED FILE DOES NOT MATCH src/lib/marketing/robots-txt.ts:\n" +
+        (missingDeny.length > 0 ? `  should be disallowed but is not: ${missingDeny.join(", ")}\n` : "") +
+        (unexpectedDeny.length > 0 ? `  disallowed but should not be: ${unexpectedDeny.join(", ")}\n` : "") +
+        (notAllowed.length > 0 ? `  should be explicitly allowed but is not: ${notAllowed.join(", ")}\n` : "") +
+        "Either the deploy has not landed or something upstream is rewriting the file.\n"
     );
   }
 }

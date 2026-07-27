@@ -14,8 +14,9 @@
 import { getPeriodPricing } from "@/lib/plans/tier";
 import { TIER_LIMITS } from "@/lib/plans/limits";
 import { formatPricePerMonth } from "@/lib/pricing";
+import { SITE_URL } from "./site-url";
 
-export const SITE_URL = "https://newcoworker.com";
+export { SITE_URL } from "./site-url";
 
 export type LlmsBlogPost = {
   slug: string;

@@ -42,7 +42,11 @@ export const AI_CRAWLERS: AiCrawlerDef[] = [
   { token: "Applebot", match: "applebot", operator: "Apple", kind: "index" },
   { token: "DuckAssistBot", match: "duckassistbot", operator: "DuckDuckGo", kind: "index" },
   { token: "MistralAI-User", match: "mistralai-user", operator: "Mistral", kind: "fetch" },
-  { token: "Amazonbot", match: "amazonbot", operator: "Amazon", kind: "index" },
+  // `train`, not `index`: Amazonbot feeds Amazon's own products rather than
+  // an assistant that cites sources back to a buyer, and Cloudflare's
+  // managed policy classed it with the training crawlers. Calling it `index`
+  // put it on the wrong side of the allow/disallow split.
+  { token: "Amazonbot", match: "amazonbot", operator: "Amazon", kind: "train" },
   { token: "meta-externalagent", match: "meta-externalagent", operator: "Meta", kind: "train" },
   { token: "CCBot", match: "ccbot", operator: "Common Crawl", kind: "train" }
 ];
@@ -51,43 +55,33 @@ export const AI_CRAWLERS: AiCrawlerDef[] = [
 export const AI_CRAWLER_TOKENS: string[] = AI_CRAWLERS.map((c) => c.token);
 
 /**
- * Tokens this zone's Cloudflare managed robots.txt block disallows under its
- * default AI policy (`search=yes, ai-train=no`), read off the served file on
- * 2026-07-26.
+ * Crawlers our robots.txt disallows outright: the ones that collect a corpus
+ * for model training rather than answer a question and cite us.
  *
- * This is an OBSERVED external fact, deliberately not derived from `kind`.
- * The two do not agree: Amazonbot is an `index` agent by our reading and
- * Cloudflare disallows it anyway, so inferring the list from our own
- * classification would leave exactly one token conflicting. Re-read the
- * served file (or run the probe) when Cloudflare changes its managed list.
+ * We publish this ourselves now. It used to come from Cloudflare's managed
+ * robots.txt, whose default AI policy (`search=yes, ai-train=no`) disallowed
+ * exactly these seven. That feature had to go: it CREATES a robots.txt where
+ * the origin serves none, so the apex got a standalone file with none of our
+ * `Disallow` rules and no `Sitemap:` line, and on www it prepended a block
+ * that contradicted our own. Owning the whole file keeps the same posture in
+ * one reviewable, tested place.
+ *
+ * Flipping the posture to allow training is a one-line change here: models
+ * would be likelier to know New Coworker unprompted, at the cost of the
+ * content being trained on.
  */
-export const ZONE_DISALLOWED_AI_TOKENS: string[] = [
-  "Amazonbot",
-  "Applebot-Extended",
-  "CCBot",
-  "ClaudeBot",
-  "GPTBot",
-  "Google-Extended",
-  "meta-externalagent"
-];
+export const AI_TRAINING_CRAWLER_TOKENS: string[] = AI_CRAWLERS.filter(
+  (c) => c.kind === "train"
+).map((c) => c.token);
 
 /**
- * The tokens our own robots.txt asserts an allow for: the agents that answer
- * questions and cite sources.
- *
- * Anything the zone disallows is left out on purpose. Cloudflare PREPENDS its
- * managed block to this zone's robots.txt, so emitting an allow for a token
- * it disallows leaves the served file carrying two contradicting groups for
- * one agent, and which one wins is up to each crawler's parser: undefined
- * behavior no matter which policy you actually want. Training access is a
- * zone-level decision, so it is made in the one place that enforces it
- * rather than argued with from here.
- *
- * `debug/aeo-crawler-probe.ts` checks the served file for exactly this
- * conflict.
+ * The tokens our robots.txt explicitly allows: the agents that answer a
+ * question and cite the source, which is the traffic this whole effort is
+ * for. The exact complement of AI_TRAINING_CRAWLER_TOKENS, so no token can
+ * ever land in both groups (`tests/ai-crawlers.test.ts` pins that).
  */
 export const AI_ANSWER_CRAWLER_TOKENS: string[] = AI_CRAWLERS.filter(
-  (c) => !ZONE_DISALLOWED_AI_TOKENS.includes(c.token)
+  (c) => c.kind !== "train"
 ).map((c) => c.token);
 
 /**

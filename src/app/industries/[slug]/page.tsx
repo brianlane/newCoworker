@@ -12,8 +12,7 @@ import {
 } from "@/components/marketing/sections";
 import { JsonLd } from "@/components/marketing/JsonLd";
 import { getIndustry, INDUSTRIES } from "../data";
-
-const SITE_URL = "https://newcoworker.com";
+import { SITE_URL } from "@/lib/marketing/site-url";
 
 type Params = { slug: string };
 

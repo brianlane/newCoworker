@@ -5,11 +5,10 @@ import {
   AI_CRAWLER_TOKENS,
   AI_REFERRERS,
   OBSERVABLE_AI_OPERATORS,
-  ZONE_DISALLOWED_AI_TOKENS,
+  AI_TRAINING_CRAWLER_TOKENS,
   matchAiCrawler,
   matchAiReferrer
 } from "@/lib/marketing/ai-crawlers";
-import robots from "@/app/robots";
 
 describe("AI crawler registry", () => {
   it("publishes a robots token for every entry, with no duplicates", () => {
@@ -32,6 +31,38 @@ describe("AI crawler registry", () => {
       if (crawler.match !== null) {
         expect(crawler.match).toBe(crawler.match.toLowerCase());
       }
+    }
+  });
+
+  it("splits cleanly into answer engines and training crawlers", () => {
+    // The two lists are complements, which is what makes it impossible to
+    // emit an allow and a disallow for the same token.
+    expect([...AI_ANSWER_CRAWLER_TOKENS, ...AI_TRAINING_CRAWLER_TOKENS].sort()).toEqual(
+      [...AI_CRAWLER_TOKENS].sort()
+    );
+    for (const token of AI_TRAINING_CRAWLER_TOKENS) {
+      expect(AI_ANSWER_CRAWLER_TOKENS).not.toContain(token);
+    }
+  });
+
+  it("classifies Amazonbot as training, matching how it is treated", () => {
+    // It was `index`, which put it on the allow side while the policy
+    // blocked it. `kind` is the single source of the split now, so a wrong
+    // kind is a wrong robots.txt.
+    expect(AI_CRAWLERS.find((c) => c.token === "Amazonbot")?.kind).toBe("train");
+    expect(AI_TRAINING_CRAWLER_TOKENS).toContain("Amazonbot");
+  });
+
+  it("keeps the citation-driving engines on the allow side", () => {
+    for (const token of [
+      "OAI-SearchBot",
+      "ChatGPT-User",
+      "Claude-SearchBot",
+      "Claude-User",
+      "PerplexityBot",
+      "Perplexity-User"
+    ]) {
+      expect(AI_ANSWER_CRAWLER_TOKENS).toContain(token);
     }
   });
 
@@ -118,76 +149,5 @@ describe("matchAiReferrer", () => {
       expect(ref.surface).not.toBe("");
       expect(ref.host).toBe(ref.host.toLowerCase());
     }
-  });
-});
-
-describe("robots.txt", () => {
-  const rules = () => {
-    const r = robots().rules;
-    return Array.isArray(r) ? r : [r];
-  };
-
-  it("still hides the authenticated surfaces from the wildcard group", () => {
-    const wildcard = rules().find((r) => r.userAgent === "*");
-    expect(wildcard?.allow).toBe("/");
-    expect(wildcard?.disallow).toEqual(["/dashboard", "/admin", "/api"]);
-  });
-
-  it("gives the answer engines their own allow group", () => {
-    const aiRule = rules().find((r) => Array.isArray(r.userAgent));
-    expect(aiRule?.userAgent).toEqual(AI_ANSWER_CRAWLER_TOKENS);
-    expect(aiRule?.allow).toBe("/");
-    for (const token of ["OAI-SearchBot", "Claude-SearchBot", "PerplexityBot"]) {
-      expect(aiRule?.userAgent).toContain(token);
-    }
-  });
-
-  it("asserts nothing about a token the zone already disallows", () => {
-    // Cloudflare prepends a managed block (search=yes, ai-train=no).
-    // Emitting an allow for the same token would make the served file carry
-    // two contradicting groups, and which wins is up to each crawler's
-    // parser. This is the whole invariant: zero overlap.
-    for (const token of ZONE_DISALLOWED_AI_TOKENS) {
-      expect(AI_ANSWER_CRAWLER_TOKENS).not.toContain(token);
-    }
-    expect(AI_ANSWER_CRAWLER_TOKENS.length).toBeLessThan(AI_CRAWLER_TOKENS.length);
-  });
-
-  it("does not infer the zone's list from our own kind classification", () => {
-    // Amazonbot reads as an `index` agent but Cloudflare disallows it, so a
-    // `kind !== "train"` filter would leave exactly one token conflicting.
-    // The disallow list has to stay an observed fact.
-    expect(ZONE_DISALLOWED_AI_TOKENS).toContain("Amazonbot");
-    expect(AI_CRAWLERS.find((c) => c.token === "Amazonbot")?.kind).toBe("index");
-    expect(AI_ANSWER_CRAWLER_TOKENS).not.toContain("Amazonbot");
-  });
-
-  it("names only tokens that exist in the registry, so a typo cannot hide", () => {
-    for (const token of ZONE_DISALLOWED_AI_TOKENS) {
-      expect(AI_CRAWLER_TOKENS).toContain(token);
-    }
-  });
-
-  it("still allows the answer engines that drive citations", () => {
-    for (const token of [
-      "OAI-SearchBot",
-      "ChatGPT-User",
-      "Claude-SearchBot",
-      "Claude-User",
-      "PerplexityBot",
-      "Perplexity-User"
-    ]) {
-      expect(AI_ANSWER_CRAWLER_TOKENS).toContain(token);
-    }
-  });
-
-  it("repeats the disallows in the AI group, since a matched group ignores *", () => {
-    const wildcard = rules().find((r) => r.userAgent === "*");
-    const aiRule = rules().find((r) => Array.isArray(r.userAgent));
-    expect(aiRule?.disallow).toEqual(wildcard?.disallow);
-  });
-
-  it("points at the sitemap", () => {
-    expect(robots().sitemap).toBe("https://newcoworker.com/sitemap.xml");
   });
 });

@@ -30,6 +30,7 @@ import type { AppLocale } from "@/i18n/routing";
 import { formatPricePerMonthLocalized } from "@/lib/i18n/format";
 import { getPeriodPricing } from "@/lib/plans/tier";
 import { TIER_LIMITS } from "@/lib/plans/limits";
+import { SITE_URL } from "@/lib/marketing/site-url";
 
 const FEATURE_DEFS: {
   key: string;
@@ -94,7 +95,7 @@ export default async function HomePage() {
     name: "New Coworker",
     applicationCategory: "BusinessApplication",
     operatingSystem: "Web",
-    url: "https://newcoworker.com",
+    url: SITE_URL,
     description: t("home.metaDescription"),
     offers: {
       "@type": "AggregateOffer",
@@ -102,7 +103,7 @@ export default async function HomePage() {
       lowPrice: (getPeriodPricing("starter", "biennial").monthlyCents / 100).toFixed(2),
       highPrice: (getPeriodPricing("standard", "monthly").monthlyCents / 100).toFixed(2),
       offerCount: 3,
-      url: "https://newcoworker.com/pricing"
+      url: `${SITE_URL}/pricing`
     }
   };
 

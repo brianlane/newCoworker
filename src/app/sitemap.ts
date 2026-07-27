@@ -2,8 +2,8 @@ import type { MetadataRoute } from "next";
 import { INDUSTRIES } from "./industries/data";
 import { COMPARISONS } from "./compare/data";
 import { listPublishedPosts } from "@/lib/blog/db";
+import { SITE_URL } from "@/lib/marketing/site-url";
 
-const BASE_URL = "https://newcoworker.com";
 
 // Rendered per request so published blog posts appear without a redeploy
 // (and the CI build, which has mock Supabase env, never touches the DB).
@@ -50,7 +50,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
   }
 
   return [...staticRoutes, ...industryRoutes, ...compareRoutes, ...blogRoutes].map((r) => ({
-    url: `${BASE_URL}${r.path}`,
+    url: `${SITE_URL}${r.path}`,
     changeFrequency: "weekly" as const,
     priority: r.priority
   }));

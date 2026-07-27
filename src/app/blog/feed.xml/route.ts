@@ -4,12 +4,12 @@
 
 import { listPublishedPosts } from "@/lib/blog/db";
 import { markdownToPlainText } from "@/lib/blog/markdown";
+import { SITE_URL } from "@/lib/marketing/site-url";
 
 // DB-backed at request time; the Cache-Control header below still lets CDNs
 // hold the feed for 5 minutes. Keeps the build DB-free (CI mock env).
 export const dynamic = "force-dynamic";
 
-const SITE_URL = "https://www.newcoworker.com";
 
 function xmlEscape(text: string): string {
   return text

@@ -22,6 +22,7 @@ import {
 import { parseWidgetTheme } from "@/lib/webchat/settings-schema";
 import { WEBCHAT_MAX_MESSAGE_CHARS } from "@/lib/webchat/prompt";
 import { handleRouteError } from "@/lib/api-response";
+import { SITE_URL } from "@/lib/marketing/site-url";
 
 export const dynamic = "force-dynamic";
 
@@ -164,7 +165,7 @@ export async function GET(request: Request) {
     <textarea id="input" rows="1" placeholder="Type a message&#8230;" maxlength="2000"></textarea>
     <button type="submit" id="sendBtn">Send</button>
   </form>
-  <div class="foot">Powered by <a href="https://newcoworker.com" target="_blank" rel="noopener">New Coworker</a></div>
+  <div class="foot">Powered by <a href="${SITE_URL}" target="_blank" rel="noopener">New Coworker</a></div>
   <script id="cfg" type="application/json">${configJson}</script>
   <script>
   (function () {

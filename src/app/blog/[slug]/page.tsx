@@ -14,12 +14,12 @@ import {
   listRelatedPosts
 } from "@/lib/blog/db";
 import { renderMarkdown } from "@/lib/blog/markdown";
+import { SITE_URL } from "@/lib/marketing/site-url";
 
 // DB-backed at request time: posts appear the moment they publish, and the
 // build stays DB-free (CI builds with mock Supabase env).
 export const dynamic = "force-dynamic";
 
-const SITE_URL = "https://www.newcoworker.com";
 
 export async function generateMetadata({
   params

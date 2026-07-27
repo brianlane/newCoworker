@@ -14,8 +14,7 @@ import { JsonLd } from "@/components/marketing/JsonLd";
 import { getPeriodPricing } from "@/lib/plans/tier";
 import { formatPricePerMonth } from "@/lib/pricing";
 import { COMPARE_ROW_COUNT, COMPARISONS, getComparison, type RowVerdict } from "../data";
-
-const SITE_URL = "https://newcoworker.com";
+import { SITE_URL } from "@/lib/marketing/site-url";
 
 type Params = { slug: string };
 

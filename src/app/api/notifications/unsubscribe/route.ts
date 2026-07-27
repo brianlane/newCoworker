@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { updateNotificationPreferences } from "@/lib/db/notification-preferences";
 import { logger } from "@/lib/logger";
+import { SITE_URL } from "@/lib/marketing/site-url";
 
 /**
  * Unauthenticated one-click unsubscribe endpoint linked from operator emails.
@@ -82,7 +83,7 @@ function htmlPage(title: string, body: string, status: number): NextResponse {
 }
 
 function appUrl(): string {
-  return (process.env.NEXT_PUBLIC_APP_URL ?? "https://www.newcoworker.com").replace(/\/$/, "");
+  return (process.env.NEXT_PUBLIC_APP_URL ?? SITE_URL).replace(/\/$/, "");
 }
 
 export async function GET(request: Request) {

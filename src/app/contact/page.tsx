@@ -11,15 +11,16 @@ import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import { ContactForm } from "@/components/marketing/ContactForm";
 import { JsonLd } from "@/components/marketing/JsonLd";
 import { PageHero } from "@/components/marketing/sections";
+import { SITE_URL } from "@/lib/marketing/site-url";
 
 const CONTACT_PAGE_JSON_LD = {
   "@context": "https://schema.org",
   "@type": "ContactPage",
   name: "Contact New Coworker",
-  url: "https://newcoworker.com/contact",
+  url: `${SITE_URL}/contact`,
   description:
     "Contact New Coworker for sales, support, white-glove onboarding, and partnerships. Most inquiries receive a response within 24 hours.",
-  about: { "@id": "https://newcoworker.com/#organization" }
+  about: { "@id": `${SITE_URL}/#organization` }
 };
 
 export async function generateMetadata(): Promise<Metadata> {
