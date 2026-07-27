@@ -931,20 +931,9 @@ export async function submitPublicBooking(
         error: err instanceof Error ? err.message : String(err)
       });
     });
-    // The person who must show up hears about it where they look: their
-    // texts. Owner-toggleable per page; best-effort inside.
-    if (context.page.notify_assignee) {
-      await notifyAssigneeOfBooking(context.businessId, assignee, {
-        visitorName: name,
-        visitorPhone: phone,
-        startLocal: startLocal ?? formatBookingStartLocal(start.toISOString(), context.timezone),
-        durationMinutes: input.durationMinutes,
-        summary
-      });
-    }
   }
 
-  await stampAttendeeContact(
+  const contactStamped = await stampAttendeeContact(
     context.businessId,
     bookingAttendeeKey(phone, email, name),
     start.toISOString(),
@@ -963,13 +952,29 @@ export async function submitPublicBooking(
           businessId: context.businessId
         });
       }
+      return stamped;
     })
     .catch((err: unknown) => {
       logger.warn("booking-page: attendee contact stamp failed", {
         businessId: context.businessId,
         error: err instanceof Error ? err.message : String(err)
       });
+      return false;
     });
+
+  // The person who must show up hears about it where they look: their
+  // texts. Sent only AFTER their ownership is durably on the row: a text
+  // before a failed stamp would double when the resubmit's gap-fill
+  // (rightly) treats itself as the first ownership moment.
+  if (assignee && contactStamped && context.page.notify_assignee) {
+    await notifyAssigneeOfBooking(context.businessId, assignee, {
+      visitorName: name,
+      visitorPhone: phone,
+      startLocal: startLocal ?? formatBookingStartLocal(start.toISOString(), context.timezone),
+      durationMinutes: input.durationMinutes,
+      summary
+    });
+  }
 
   if (context.page.send_confirmation_email) {
     await sendBookingConfirmationEmail({

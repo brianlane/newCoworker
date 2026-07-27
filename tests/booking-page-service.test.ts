@@ -921,6 +921,19 @@ describe("submitPublicBooking", () => {
       })
     );
 
+    // A stamp that does not land silences the text: the resubmit's
+    // gap-fill is the one true ownership moment then, and texting both
+    // times would double.
+    mockNotifyAssignee.mockClear();
+    mockStampContact.mockResolvedValueOnce(false);
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    expect(mockNotifyAssignee).not.toHaveBeenCalled();
+
+    mockNotifyAssignee.mockClear();
+    mockStampContact.mockRejectedValueOnce(new Error("update denied"));
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    expect(mockNotifyAssignee).not.toHaveBeenCalled();
+
     // The owner's toggle turns just the text off; assignment still happens.
     mockNotifyAssignee.mockClear();
     mockPage.mockResolvedValue({
