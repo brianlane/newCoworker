@@ -982,7 +982,7 @@ channel, not an SEO detail. Three pieces hold it up.
 is the single `SITE_URL`, and `tests/site-url.test.ts` fails the build if a
 hardcoded origin reappears anywhere in `src/`. It used to be copy-pasted into
 six files as the APEX while the blog pages quietly used `www`, and since the
-apex 307-redirects every path to www, every canonical tag, og:url, and sitemap
+apex redirects every path to www, every canonical tag, og:url, and sitemap
 entry pointed at a URL that redirects. Import it; never re-declare it.
 
 **1. The crawlers must actually reach us.** Every AI agent we care about is
@@ -1082,10 +1082,21 @@ tsx debug/aeo-crawler-probe.ts                        # apex
 tsx debug/aeo-crawler-probe.ts https://www.newcoworker.com
 ```
 
-> **Known, deliberate, not drift:** the apex serves a **307** (temporary) to
-> `www`. A `301` would consolidate ranking signals permanently and is worth
-> doing, but it is a redirect-semantics change with SEO consequences, so it is
-> a decision rather than a cleanup. Do not "fix" it incidentally.
+> **Known, deliberate, not drift:** the apex serves a **308** (permanent) to
+> `www`, configured as a Vercel project domain redirect (`redirect:
+> www.newcoworker.com`, `redirectStatusCode: 308`), NOT in `vercel.json` or
+> Cloudflare. It was Vercel's default 307 until 2026-07-27; a temporary
+> redirect told crawlers the apex was still the real home and to keep it
+> indexed, which contradicted the canonical tags, og:url, sitemap, and
+> robots.txt that all name `www`, and left authority on any apex inbound link
+> only partly consolidated.
+>
+> `308` rather than `301` because it is the permanent counterpart of the `307`
+> it replaced and preserves the request method; Google and Bing treat it the
+> same as `301` for canonicalization. **Permanent redirects are cached hard by
+> browsers**, so serving content from the apex again would strand anyone who
+> already followed this one. That is the cost of reversing, and it is why
+> `SITE_URL` moving back to the apex is not a small change.
 
 **2. A brief written for machines.** `/llms.txt` (short index) and
 `/llms-full.txt` (adds differentiators, industries, recent posts) are composed
