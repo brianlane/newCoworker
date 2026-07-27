@@ -8,10 +8,17 @@
  * robots.txt on a hostname whose robots.txt we do not fully control.
  *
  * Lives here, alone, because this string was previously copy-pasted into six
- * files (layout, sitemap, robots, home, industries, compare) and a host
- * change had to be made six times to stay consistent. Import it; never
- * re-declare it. `tests/site-url.test.ts` fails the build if a hardcoded
- * newcoworker.com origin reappears in src/.
+ * files (layout, sitemap, robots, home, industries, compare) plus four inline
+ * literals, so a host change was ten edits and any missed one drifted
+ * quietly. The blog pages HAD already drifted to www while everything else
+ * said apex, and nothing caught it. Import it; never re-declare it.
+ * `tests/site-url.test.ts` fails the build if a hardcoded newcoworker.com
+ * origin reappears in src/ outside a doc comment.
+ *
+ * Changing this host is not a rename: it moves every canonical tag, og:url,
+ * sitemap entry, and the robots.txt Sitemap line. Re-run
+ * `tsx debug/aeo-crawler-probe.ts` against both hosts afterward. See the
+ * README, "Why the above drifted".
  */
 export const SITE_URL = "https://www.newcoworker.com";
 

@@ -10,6 +10,12 @@
  * of our `Disallow` rules and no `Sitemap:` line.
  *
  * Same shape as src/app/llms.txt/route.ts: a pure builder plus a thin route.
+ *
+ * **Keep this the only generator.** Re-enabling the Cloudflare feature, or
+ * adding a rewrite/Worker that also emits robots.txt, recreates the exact
+ * drift this replaced: two sources merging at the edge where no test can see
+ * the result. Verify from outside with `tsx debug/aeo-crawler-probe.ts` after
+ * touching this file or the zone. See the README, "Why the above drifted".
  */
 
 import { AI_ANSWER_CRAWLER_TOKENS, AI_TRAINING_CRAWLER_TOKENS } from "./ai-crawlers";
