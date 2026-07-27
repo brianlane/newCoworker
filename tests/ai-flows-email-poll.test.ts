@@ -34,13 +34,16 @@ function b64url(text: string): string {
   return Buffer.from(text, "utf8").toString("base64").replace(/\+/g, "-").replace(/\//g, "_");
 }
 
-function flowRow(id: string, trigger: unknown, triggers?: unknown[]) {
+function flowRow(id: string, trigger: unknown, triggers?: unknown[], steps: unknown[] = []) {
   return {
     id,
     business_id: BIZ,
-    definition: { version: 1, trigger, ...(triggers ? { triggers } : {}), steps: [] }
+    definition: { version: 1, trigger, ...(triggers ? { triggers } : {}), steps }
   };
 }
+
+/** A flow that answers the email itself — the only kind that marks it read. */
+const sendEmailStep = { id: "s_reply", type: "send_email" };
 
 type SeenTable = {
   /** Rows every seen-lookup chunk returns (one row = one flow's marker). */
@@ -318,8 +321,7 @@ describe("pollEmailTriggers", () => {
             body: { data: b64url("hello") }
           }
         }
-      } as never)
-      .mockResolvedValueOnce({ data: {} } as never);
+      } as never);
     const res = await pollEmailTriggers(
       dbWith([flowRow("f1", emailTrigger())], null, { coworkerRows: null })
     );
@@ -339,8 +341,7 @@ describe("pollEmailTriggers", () => {
             body: { data: b64url("hello") }
           }
         }
-      } as never)
-      .mockResolvedValueOnce({ data: {} } as never);
+      } as never);
     const res = await pollEmailTriggers(
       dbWith([flowRow("f1", emailTrigger())], null, {
         coworkerError: { message: "table missing" }
@@ -370,10 +371,11 @@ describe("pollEmailTriggers", () => {
       // users.messages.modify: the triggering message is marked read.
       .mockResolvedValueOnce({ data: {} } as never);
 
-    // Two flows watch the same mailbox: one matches, one does not.
+    // Two flows watch the same mailbox: one matches (and can reply by
+    // email, so it marks the message read), one does not.
     const res = await pollEmailTriggers(
       dbWith([
-        flowRow("f-match", emailTrigger([{ type: "has_url" }])),
+        flowRow("f-match", emailTrigger([{ type: "has_url" }]), undefined, [sendEmailStep]),
         flowRow("f-miss", emailTrigger([{ type: "contains", value: "unrelated" }]))
       ])
     );
@@ -431,8 +433,8 @@ describe("pollEmailTriggers", () => {
       .mockResolvedValueOnce({ data: {} } as never);
     const res = await pollEmailTriggers(
       dbWith([
-        flowRow("f-a", emailTrigger([{ type: "has_url" }])),
-        flowRow("f-b", emailTrigger([{ type: "has_url" }]))
+        flowRow("f-a", emailTrigger([{ type: "has_url" }]), undefined, [sendEmailStep]),
+        flowRow("f-b", emailTrigger([{ type: "has_url" }]), undefined, [sendEmailStep])
       ])
     );
     expect(res.enqueued).toBe(2);
@@ -453,7 +455,9 @@ describe("pollEmailTriggers", () => {
       } as never)
       // modify → null (connection vanished between read and write)
       .mockResolvedValueOnce(null as never);
-    const res = await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
+    const res = await pollEmailTriggers(
+      dbWith([flowRow("f1", emailTrigger(), undefined, [sendEmailStep])])
+    );
     expect(res.enqueued).toBe(1);
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -472,7 +476,9 @@ describe("pollEmailTriggers", () => {
         data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
       } as never)
       .mockRejectedValueOnce("gmail hiccup" as never);
-    const res = await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
+    const res = await pollEmailTriggers(
+      dbWith([flowRow("f1", emailTrigger(), undefined, [sendEmailStep])])
+    );
     expect(res.enqueued).toBe(1);
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -480,6 +486,30 @@ describe("pollEmailTriggers", () => {
         message: expect.stringContaining("gmail hiccup")
       })
     );
+  });
+
+  it("leaves the message UNREAD when only notify-only flows match (triage must not eat the inbox)", async () => {
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
+      .mockResolvedValueOnce({
+        data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
+      } as never);
+    const res = await pollEmailTriggers(
+      dbWith([
+        // Triage-style flow: classifies and texts the owner, never replies.
+        flowRow("f-triage", emailTrigger(), undefined, [
+          { id: "s_notify", type: "notify_owner", message: "heads up" }
+        ]),
+        // A stored definition without a steps array at all must also count
+        // as notify-only, not crash or mark read.
+        { id: "f-no-steps", business_id: BIZ, definition: { version: 1, trigger: emailTrigger() } }
+      ])
+    );
+    expect(res.enqueued).toBe(2);
+    const modifyCalls = vi
+      .mocked(nangoProxyForBusiness)
+      .mock.calls.filter((c) => c[2].endpoint.includes("/modify"));
+    expect(modifyCalls).toHaveLength(0);
   });
 
   it("never touches read state on a Microsoft mailbox", async () => {
@@ -500,8 +530,9 @@ describe("pollEmailTriggers", () => {
         ]
       }
     } as never);
+    // Even a reply-capable flow must not touch Microsoft read state.
     const res = await pollEmailTriggers(
-      dbWith([flowRow("f1", emailTrigger([{ type: "has_url" }]))])
+      dbWith([flowRow("f1", emailTrigger([{ type: "has_url" }]), undefined, [sendEmailStep])])
     );
     expect(res.enqueued).toBe(1);
     const modifyCalls = vi
@@ -525,8 +556,7 @@ describe("pollEmailTriggers", () => {
             body: { data: b64url("Open https://rfrl.to/abc now") }
           }
         }
-      } as never)
-      .mockResolvedValueOnce({ data: {} } as never);
+      } as never);
     const res = await pollEmailTriggers(
       dbWith([
         // Primary is manual; TWO email triggers on the same mailbox live in
