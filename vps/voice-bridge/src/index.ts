@@ -736,7 +736,7 @@ async function sendIntakeLeadSms(params: {
  * Text the flow-configured transfer target the pre-alert ("LIVE TRANSFER
  * incoming — pick up!") right before the warm transfer rings them. Same
  * bridge-side send path as the intake summary SMS; a successful send is
- * counted against the tenant's operational SMS pool. Best-effort — an SMS
+ * counted against the tenant's operational SMS pool. Best-effort: an SMS
  * hiccup must never block the actual transfer.
  */
 async function sendTransferPreAlertSms(params: {
