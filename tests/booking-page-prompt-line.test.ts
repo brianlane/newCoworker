@@ -5,7 +5,10 @@
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
-vi.mock("@/lib/booking-page/db", () => ({ getBookingPageForBusiness: vi.fn() }));
+vi.mock("@/lib/booking-page/db", () => ({
+  getBookingPageForBusiness: vi.fn(),
+  upsertBookingPage: vi.fn()
+}));
 vi.mock("@/lib/db/businesses", () => ({ getBusiness: vi.fn() }));
 vi.mock("@/lib/voice-tools/connections", () => ({ resolveCalendarConnection: vi.fn() }));
 vi.mock("@/lib/calendar-tools/calendly", () => ({ pickCalendlyEventType: vi.fn() }));
@@ -17,7 +20,7 @@ import {
   publicBookingLink,
   schedulingLink
 } from "@/lib/booking-page/prompt-line";
-import { getBookingPageForBusiness } from "@/lib/booking-page/db";
+import { getBookingPageForBusiness, upsertBookingPage } from "@/lib/booking-page/db";
 import { getBusiness } from "@/lib/db/businesses";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import { pickCalendlyEventType } from "@/lib/calendar-tools/calendly";
@@ -25,6 +28,7 @@ import { logger } from "@/lib/logger";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const mockPage = vi.mocked(getBookingPageForBusiness);
+const mockUpsert = vi.mocked(upsertBookingPage);
 const mockBusiness = vi.mocked(getBusiness);
 const mockConn = vi.mocked(resolveCalendarConnection);
 const mockCalendly = vi.mocked(pickCalendlyEventType);
@@ -40,6 +44,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.stubEnv("NEXT_PUBLIC_APP_URL", "https://www.newcoworker.com/");
   mockPage.mockResolvedValue(PAGE as never);
+  mockUpsert.mockResolvedValue(PAGE as never);
   mockBusiness.mockResolvedValue({ name: "New Coworker" } as never);
   // Default: a Google-connected tenant, which books through the native page.
   mockConn.mockResolvedValue({
@@ -77,9 +82,10 @@ describe("publicBookingLink", () => {
     expect((await publicBookingLink(BIZ))?.url).toBe("http://localhost:3000/book/new-coworker");
   });
 
-  it("answers null with no page or a disabled one", async () => {
+  it("answers null with no page or a disabled one, and does not provision by default", async () => {
     mockPage.mockResolvedValue(null as never);
     expect(await publicBookingLink(BIZ)).toBeNull();
+    expect(mockUpsert).not.toHaveBeenCalled();
 
     mockPage.mockResolvedValue({ ...PAGE, enabled: false } as never);
     expect(await publicBookingLink(BIZ)).toBeNull();
@@ -137,6 +143,63 @@ describe("schedulingLink (provider resolution)", () => {
     expect(mockPage).not.toHaveBeenCalled();
   });
 
+  it("provisions the page on first need when the owner never opened Bookings", async () => {
+    // A tenant delegating scheduling before ever visiting the dashboard
+    // must not lose the link to a visit they never made. Same rule as the
+    // dashboard's first view: created enabled, token unguessable.
+    mockPage.mockResolvedValue(null as never);
+    mockUpsert.mockResolvedValue(PAGE as never);
+    expect(await schedulingLink(BIZ)).toEqual({
+      url: "https://www.newcoworker.com/book/new-coworker",
+      title: "NC Discovery Call",
+      kind: "booking_page"
+    });
+    expect(mockUpsert).toHaveBeenCalledWith(BIZ, { enabled: true });
+  });
+
+  it("a DISABLED page is the owner's off switch: no link, and no re-provisioning", async () => {
+    mockPage.mockResolvedValue({ ...PAGE, enabled: false } as never);
+    expect(await schedulingLink(BIZ)).toBeNull();
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it("loses the provisioning race gracefully: the winner's row serves the link", async () => {
+    mockPage
+      .mockResolvedValueOnce(null as never)
+      .mockResolvedValueOnce(PAGE as never);
+    mockUpsert.mockRejectedValue(new Error("duplicate key uq_booking_pages_business"));
+    expect((await schedulingLink(BIZ))?.url).toBe(
+      "https://www.newcoworker.com/book/new-coworker"
+    );
+
+    // A failed provision with genuinely no page surfaces to the caller,
+    // where bookingLinkPromptLine turns it into a missing hint.
+    mockPage.mockReset();
+    mockPage.mockResolvedValue(null as never);
+    mockUpsert.mockRejectedValue(new Error("insert denied"));
+    await expect(schedulingLink(BIZ)).rejects.toThrow("insert denied");
+    expect(await bookingLinkPromptLine(BIZ)).toBeNull();
+  });
+
+  it("never provisions for a Calendly or Vagaro tenant (their book lives elsewhere)", async () => {
+    mockPage.mockResolvedValue(null as never);
+    mockConn.mockResolvedValue({
+      provider: "calendly",
+      providerConfigKey: "calendly",
+      connectionId: "c-2"
+    });
+    mockCalendly.mockResolvedValue("no_event_types");
+    expect(await schedulingLink(BIZ)).toBeNull();
+
+    mockConn.mockResolvedValue({
+      provider: "vagaro",
+      providerConfigKey: "vagaro",
+      connectionId: "c-3"
+    });
+    expect(await schedulingLink(BIZ)).toBeNull();
+    expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
   it("Google, CalDAV, and platform-mode tenants get the native page", async () => {
     expect((await schedulingLink(BIZ))?.kind).toBe("booking_page");
 
@@ -192,10 +255,19 @@ describe("bookingLinkPromptLine", () => {
     expect(line).toContain('"KYP Intro Call"');
   });
 
-  it("is silent (null) without a page, and a failed read costs only the hint", async () => {
+  it("a missing page provisions rather than staying silent; silence is the off switch or a failure", async () => {
+    // No row: provisioned on first need, so the hint exists immediately.
     mockPage.mockResolvedValue(null as never);
-    expect(await bookingLinkPromptLine(BIZ)).toBeNull();
+    expect(await bookingLinkPromptLine(BIZ)).toContain("/book/new-coworker");
+    expect(mockUpsert).toHaveBeenCalledWith(BIZ, { enabled: true });
 
+    // Disabled row: the owner's off switch, no line and no re-provision.
+    mockUpsert.mockClear();
+    mockPage.mockResolvedValue({ ...PAGE, enabled: false } as never);
+    expect(await bookingLinkPromptLine(BIZ)).toBeNull();
+    expect(mockUpsert).not.toHaveBeenCalled();
+
+    // A failed read costs only the hint.
     mockPage.mockRejectedValue(new Error("rls"));
     expect(await bookingLinkPromptLine(BIZ)).toBeNull();
     expect(logger.warn).toHaveBeenCalled();
