@@ -153,6 +153,25 @@ describe("listInboundDeadLetters", () => {
     expect(rows.map((r) => r.from)).toEqual(["", ""]);
     expect(rows.map((r) => r.preview)).toEqual(["", ""]);
   });
+
+  it("reads every envelope shape Telnyx actually sends", async () => {
+    // Telnyx is inconsistent: `from` is sometimes a bare string, the body is
+    // `text` or `body`, and RCS nests it under a body object. Parsing only one
+    // shape would show "(no sender)" and a blank preview for a real failure.
+    const { client } = fakeClient({
+      data: [
+        jobRow({ id: "a", payload: { data: { payload: { from: "+16025550100", body: "in body" } } } }),
+        jobRow({ id: "b", payload: { data: { payload: { from: "73339", text: "short code" } } } }),
+        jobRow({
+          id: "c",
+          payload: { data: { payload: { from: { phone_number: "+16025550101" }, body: { text: "rcs" } } } }
+        })
+      ]
+    });
+    const rows = await listInboundDeadLetters(undefined, client);
+    expect(rows.map((r) => r.from)).toEqual(["+16025550100", "73339", "+16025550101"]);
+    expect(rows.map((r) => r.preview)).toEqual(["in body", "short code", "rcs"]);
+  });
 });
 
 describe("countByBusiness", () => {

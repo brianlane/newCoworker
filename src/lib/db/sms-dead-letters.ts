@@ -11,6 +11,7 @@
  * in `dead_letter` is worth looking at.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { customerE164FromPayload, inboundTextFromPayload } from "@/lib/db/sms-history";
 import type { SupabaseClient } from "@supabase/supabase-js";
 
 export type InboundDeadLetterRow = {
@@ -31,16 +32,19 @@ export type InboundDeadLetterCount = { businessId: string; count: number };
 
 const PREVIEW_CHARS = 160;
 
-type InboundJobPayload = {
-  data?: { payload?: { text?: string; from?: { phone_number?: string } } };
-};
-
-/** Pull the sender and text out of the stored Telnyx envelope. */
+/**
+ * Pull the sender and text out of the stored Telnyx envelope, reusing the Text
+ * history parsers rather than a second implementation. Telnyx is inconsistent
+ * about all of it: `from` is sometimes a string and sometimes an object, the body
+ * is `text` or `body` or a nested RCS object, and a sender can be a short code
+ * rather than E.164. Those helpers already handle every one of those shapes.
+ */
 function readEnvelope(payload: unknown): { from: string; preview: string } {
-  const inner = ((payload ?? {}) as InboundJobPayload).data?.payload ?? {};
-  const from = typeof inner.from?.phone_number === "string" ? inner.from.phone_number : "";
-  const text = typeof inner.text === "string" ? inner.text : "";
-  return { from, preview: text.replace(/\s+/g, " ").trim().slice(0, PREVIEW_CHARS) };
+  const row = (payload ?? null) as Record<string, unknown> | null;
+  return {
+    from: customerE164FromPayload(row) ?? "",
+    preview: inboundTextFromPayload(row).replace(/\s+/g, " ").trim().slice(0, PREVIEW_CHARS)
+  };
 }
 
 /**

@@ -610,7 +610,9 @@ serve(async (req: Request) => {
       (inboundImages.length > 0 ? "(The texter sent a photo with no text.)" : "");
 
     const target = classifyReplyTarget({ fromRaw, fromE164, text: userText });
-    if (target.kind !== "reply") {
+    // `!fromE164` is implied by a non-reply target, and restating it is what
+    // narrows fromE164 to a string for the rest of this loop body.
+    if (target.kind !== "reply" || !fromE164) {
       // A short-code blast (ReferralExchange, Realtor.com) is unreplyable by
       // design and its flows have already run in the webhook, so completing it
       // is the honest outcome. Only a genuinely unusable sender dead-letters,
