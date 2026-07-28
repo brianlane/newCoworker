@@ -75,8 +75,13 @@ const OBSERVATION_BY_FINDING: Record<string, string> = {
     "there is no chat on the site, so a visitor with a quick question has to pick up the phone",
   no_text_option: "there is no way to text you from the site",
   no_tap_to_call: "the phone number is not tappable on a phone, so it has to be copied out by hand",
-  closed_weekends: "the site says you are closed at the weekend",
-  after_hours_gap: "your posted hours end in the afternoon"
+  // The two hours openings are phrased WITHOUT naming a source, because the
+  // evidence can come from the prospect's markup or from their Google listing
+  // (see hoursFindings). "The site says you are closed at the weekend" would be
+  // a claim about their site that is false whenever Google supplied the fact,
+  // and a cold email that opens by getting something wrong is finished.
+  closed_weekends: "you are closed at the weekend",
+  after_hours_gap: "your hours end in the afternoon"
 };
 
 /** Findings we lead with, best first: the ones that map to lost work. */
@@ -142,7 +147,10 @@ export function pitchParagraphs(
   const where = prospect.city.trim() ? ` in ${prospect.city.trim()}` : "";
   return [
     `Hi ${firstName(prospect.businessName)},`,
-    `I was looking at your site${where} and noticed ${observation}.`,
+    // "Looking you up" rather than "looking at your site": the hours findings
+    // can come from their Google listing instead of their markup, and an
+    // opening line that misstates where we looked is a bad first sentence.
+    `I was looking you up${where} and noticed ${observation}.`,
     tenant.valueProp.trim(),
     "Worth a quick look?"
   ];

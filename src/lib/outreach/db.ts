@@ -14,6 +14,7 @@
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { PG_UNIQUE_VIOLATION } from "@/lib/customer-memory/db";
+import type { PlacesOpeningHours } from "./discover";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -62,6 +63,11 @@ export type OutreachProspectRow = {
   website: string | null;
   vertical: string;
   city: string;
+  /** `places.regularOpeningHours` at discovery; the hours findings prefer it. */
+  google_hours: PlacesOpeningHours | null;
+  rating: number | null;
+  /** Orders the probe queue. Never a filter: see the migration comment. */
+  review_count: number | null;
   findings: Array<{ code: string; detail: string }>;
   pitch_subject: string | null;
   pitch_body: string | null;
@@ -175,7 +181,15 @@ export async function insertProspects(
       Partial<
         Pick<
           OutreachProspectRow,
-          "business_name" | "email" | "phone" | "website" | "vertical" | "city"
+          | "business_name"
+          | "email"
+          | "phone"
+          | "website"
+          | "vertical"
+          | "city"
+          | "google_hours"
+          | "rating"
+          | "review_count"
         >
       >
   >,
@@ -210,6 +224,34 @@ export async function existingProspectDomains(
     .in("domain", domains);
   if (error) throw new Error(`existingProspectDomains: ${error.message}`);
   return new Set(((data as Array<{ domain: string }> | null) ?? []).map((r) => r.domain));
+}
+
+/**
+ * Newly discovered prospects to probe and draft next, busiest first.
+ *
+ * Ordered by review count rather than discovery time: a probe and a draft cost
+ * a site fetch and a Gemini call each, and an established business with
+ * hundreds of reviews is a better use of both than a listing with two. It only
+ * ORDERS. Nothing is excluded on rating or review count, because a thin Google
+ * profile is not evidence a business would not want this, and filtering on it
+ * would quietly narrow the market to whoever is already doing well.
+ */
+export async function listProspectsToProbe(
+  businessId: string,
+  limit: number,
+  client?: SupabaseClient
+): Promise<OutreachProspectRow[]> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("outreach_prospects")
+    .select()
+    .eq("business_id", businessId)
+    .eq("status", "discovered")
+    .order("review_count", { ascending: false, nullsFirst: false })
+    .order("created_at", { ascending: true })
+    .limit(limit);
+  if (error) throw new Error(`listProspectsToProbe: ${error.message}`);
+  return (data ?? []) as OutreachProspectRow[];
 }
 
 export async function listProspectsByStatus(

@@ -53,6 +53,7 @@ import {
   OUTREACH_ACTIVE_PAGE_SIZE,
   listProspectsByStatus,
   listProspectsDueForNudge,
+  listProspectsToProbe,
   patchProspect,
   transitionProspect,
   upsertOutreachSettings,
@@ -67,7 +68,7 @@ import {
   rotationWindow,
   searchPlaces
 } from "./discover";
-import { probeSite } from "./probe";
+import { hoursFindings, mergeHoursFindings, probeSite } from "./probe";
 import {
   assembleBody,
   composePitch,
@@ -284,7 +285,12 @@ async function discoverForBusiness(
         // stays a single question downstream.
         phone: c.phone || null,
         vertical: c.vertical,
-        city: c.city
+        city: c.city,
+        // Free with the query we already pay for: hours ground the after-hours
+        // finding, and the review count orders which prospects get probed.
+        google_hours: c.openingHours,
+        rating: c.rating,
+        review_count: c.reviewCount
       })),
       r.db
     );
@@ -300,7 +306,7 @@ async function draftForBusiness(
   result: OutreachSweepResult
 ): Promise<void> {
   const budget = Math.max(DRAFT_BUDGET_MIN, settings.daily_cap * DRAFT_BUDGET_MULTIPLIER);
-  const pending = await listProspectsByStatus(settings.business_id, ["discovered"], budget, r.db);
+  const pending = await listProspectsToProbe(settings.business_id, budget, r.db);
 
   for (const prospect of pending) {
     const retire = async (detail: string): Promise<void> => {
@@ -325,7 +331,11 @@ async function draftForBusiness(
       await retire("no published contact address");
       continue;
     }
-    if (!isPitchable(probed.findings)) {
+    // Google's opening hours beat a regex over the prospect's markup, which
+    // finds nothing on any site that renders its hours in JavaScript. The
+    // site's own findings still supply everything Google cannot see.
+    const findings = mergeHoursFindings(probed.findings, hoursFindings(prospect.google_hours));
+    if (!isPitchable(findings)) {
       await retire("nothing checkable to say about their site");
       continue;
     }
@@ -335,7 +345,7 @@ async function draftForBusiness(
     const claimed = await patchProspect(
       settings.business_id,
       prospect.id,
-      { email: probed.email, findings: probed.findings },
+      { email: probed.email, findings },
       r.db
     );
     if (!claimed) {
@@ -351,7 +361,7 @@ async function draftForBusiness(
     const pitchProspect = {
       businessName: prospect.business_name,
       city: prospect.city,
-      findings: probed.findings
+      findings
     };
     // isPitchable already proved a lead finding with an honest opening exists,
     // so composePitch cannot come back empty here.
@@ -360,7 +370,7 @@ async function draftForBusiness(
       pitchProspect,
       unsubscribeUrl
     ) as { subject: string; body: string };
-    const lead = leadFinding(probed.findings) as { code: string; detail: string };
+    const lead = leadFinding(findings) as { code: string; detail: string };
     // Polish the middle only, then re-assemble: the footer never reaches a
     // model, so it cannot be reworded away.
     const polished = await r.polish(
@@ -459,7 +469,7 @@ async function nudgeForBusiness(
       tenant,
       [
         `Hi ${prospect.business_name.trim() || "there"},`,
-        "I wrote last week about what I noticed on your site. If it is not useful, no problem at all and I will leave it there.",
+        "I wrote last week about what I noticed when I looked you up. If it is not useful, no problem at all and I will leave it there.",
         "If it is, I am happy to walk you through it."
       ],
       unsubscribeUrl

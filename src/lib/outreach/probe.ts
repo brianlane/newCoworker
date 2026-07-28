@@ -15,6 +15,7 @@
  */
 
 import { siteUrl } from "@/lib/marketing/site-url";
+import type { PlacesOpeningHours } from "./discover";
 
 /** A checkable observation about a prospect's site. */
 export type ProbeFinding = { code: string; detail: string };
@@ -205,6 +206,119 @@ export function extractEmails(html: string, domain: string): string[] {
     return (ownDomain ? 2 : 0) + (role ? 1 : 0);
   };
   return candidates.sort((a, b) => score(b) - score(a));
+}
+
+/** Codes whose evidence Google can supply better than the prospect's HTML can. */
+const HOURS_CODES = ["closed_weekends", "after_hours_gap"];
+
+/** Weekday indexes in Google's opening-hours periods (0 = Sunday). */
+const SATURDAY = 6;
+const SUNDAY = 0;
+
+/**
+ * Latest weekday close, on Google's 24-hour clock, that still leaves an
+ * after-hours gap worth mentioning. Separate from the HTML regex's constant
+ * because that one reads a 12-hour clock off the page.
+ */
+const AFTER_HOURS_LATEST_CLOSE_HOUR_24 = 18;
+
+/**
+ * The hours findings, from Google's structured opening hours instead of a
+ * regex over the prospect's markup.
+ *
+ * This is the same claim as the HTML version and a far better source. Google
+ * holds hours for most operating businesses, in fields, whereas the site check
+ * finds nothing at all on any page that renders its hours in JavaScript, which
+ * is most modern sites. Returns null when Google has no hours, which is the
+ * signal to fall back to the markup.
+ *
+ * The detail lines are phrased from the numbers rather than quoting Google's
+ * own `weekdayDescriptions`: those carry a dash character we are not allowed to
+ * emit, and a sentence reads better in a cold email than a pasted schedule.
+ */
+export function hoursFindings(hours: PlacesOpeningHours | null): ProbeFinding[] | null {
+  const periods = hours?.periods;
+  if (!Array.isArray(periods) || periods.length === 0) return null;
+
+  /**
+   * Two shapes make every hours claim unsafe, and both look innocuous in the
+   * data:
+   *
+   * A period with NO `close` is open-ended. Google reports "always open" this
+   * way, and reading the remaining periods as a weekly schedule then invents a
+   * weekend closure for a business that never shuts.
+   *
+   * A `close` on a LATER day than its `open` runs past midnight: Friday 6 PM to
+   * Saturday 2 AM arrives as close.hour 2, which reads as "closes by 2 AM" and
+   * would tell a bar that stays open until 2 in the morning that it closes too
+   * early. It also means they ARE open on the next day, so the weekend claim is
+   * wrong too.
+   *
+   * Either shape returns an empty list rather than null: Google DID have hours,
+   * so the markup regex should not get a second guess at the same question. The
+   * prospect can still be pitched on what their site is missing. Saying nothing
+   * about hours costs a sentence; saying something false costs the reply.
+   */
+  const unsafeToRead = periods.some((p) => {
+    if (!p.close || typeof p.close.hour !== "number") return true;
+    return (
+      typeof p.close.day === "number" &&
+      typeof p.open?.day === "number" &&
+      p.close.day !== p.open.day
+    );
+  });
+  if (unsafeToRead) return [];
+
+  const findings: ProbeFinding[] = [];
+  const openDays = new Set(
+    periods.map((p) => p.open?.day).filter((d): d is number => typeof d === "number")
+  );
+  if (openDays.size > 0 && !openDays.has(SATURDAY) && !openDays.has(SUNDAY)) {
+    findings.push({
+      code: "closed_weekends",
+      detail: "Google lists the business as closed on Saturday and Sunday, so weekend enquiries wait until Monday."
+    });
+  }
+
+  const weekdayCloses = periods
+    .filter((p) => {
+      const day = p.open?.day;
+      return typeof day === "number" && day !== SATURDAY && day !== SUNDAY;
+    })
+    .map((p) => p.close?.hour)
+    .filter((h): h is number => typeof h === "number");
+  if (weekdayCloses.length > 0) {
+    const latest = Math.max(...weekdayCloses);
+    if (latest <= AFTER_HOURS_LATEST_CLOSE_HOUR_24) {
+      findings.push({
+        code: "after_hours_gap",
+        detail: `Google lists the business as closing by ${formatHour(latest)} on weekdays, so calls after that go unanswered.`
+      });
+    }
+  }
+  return findings;
+}
+
+/** 17 to "5 PM", for a sentence rather than a schedule. */
+function formatHour(hour24: number): string {
+  const suffix = hour24 >= 12 ? "PM" : "AM";
+  const hour = hour24 % 12 === 0 ? 12 : hour24 % 12;
+  return `${hour} ${suffix}`;
+}
+
+/**
+ * Google's hours findings replace the site's, when Google has hours at all.
+ *
+ * Only the hours codes are substituted: the booking link, chat widget, text
+ * option and tap-to-call findings are properties of the SITE, and Google has
+ * nothing to say about them.
+ */
+export function mergeHoursFindings(
+  siteFindings: ProbeFinding[],
+  googleFindings: ProbeFinding[] | null
+): ProbeFinding[] {
+  if (googleFindings === null) return siteFindings;
+  return [...siteFindings.filter((f) => !HOURS_CODES.includes(f.code)), ...googleFindings];
 }
 
 export type ProbeDeps = {

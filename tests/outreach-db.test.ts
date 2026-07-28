@@ -29,6 +29,7 @@ import {
   listProspectOutcomes,
   listProspectsByStatus,
   listProspectsDueForNudge,
+  listProspectsToProbe,
   OUTREACH_ACTIVE_PAGE_SIZE,
   patchProspect,
   transitionProspect,
@@ -205,6 +206,29 @@ describe("existingProspectDomains", () => {
     await expect(
       existingProspectDomains(BIZ, ["x.com"], makeDb(chain({ data: null, error: { message: "dm" } })))
     ).rejects.toThrow(/dm/);
+  });
+});
+
+describe("listProspectsToProbe", () => {
+  it("takes the busiest prospects first, oldest as the tie-break", async () => {
+    const c = chain({ data: [{ id: PROSPECT }], error: null });
+    expect(await listProspectsToProbe(BIZ, 8, makeDb(c))).toHaveLength(1);
+    expect(c.eq).toHaveBeenCalledWith("status", "discovered");
+    // A probe and a draft each cost a fetch and a model call, so the
+    // established businesses get them first. Ordering only: nothing is
+    // excluded on review count.
+    expect(c.order).toHaveBeenCalledWith("review_count", {
+      ascending: false,
+      nullsFirst: false
+    });
+    expect(c.order).toHaveBeenCalledWith("created_at", { ascending: true });
+
+    defaultClientSpy.mockReturnValue(makeDb(chain({ data: null, error: null })));
+    expect(await listProspectsToProbe(BIZ, 8)).toEqual([]);
+
+    await expect(
+      listProspectsToProbe(BIZ, 8, makeDb(chain({ data: null, error: { message: "tp" } })))
+    ).rejects.toThrow(/tp/);
   });
 });
 

@@ -9,6 +9,8 @@ import { describe, expect, it, vi } from "vitest";
 import {
   detectFindings,
   extractEmails,
+  hoursFindings,
+  mergeHoursFindings,
   PROBE_MAX_BYTES,
   PROBE_TIMEOUT_MS,
   probeSite
@@ -65,6 +67,118 @@ describe("detectFindings", () => {
         (f) => f.code
       )
     ).toEqual(["after_hours_gap"]);
+  });
+});
+
+describe("hoursFindings", () => {
+  /** Google's shape: one period per open day, 0 = Sunday. */
+  const weekday = (day: number, openHour: number, closeHour: number) => ({
+    open: { day, hour: openHour, minute: 0 },
+    close: { day, hour: closeHour, minute: 0 }
+  });
+  const monToFri = (closeHour: number) => [1, 2, 3, 4, 5].map((d) => weekday(d, 8, closeHour));
+
+  it("finds nothing to fall back on when Google holds no hours", () => {
+    // Null is the signal to use the site's markup instead.
+    expect(hoursFindings(null)).toBeNull();
+    expect(hoursFindings({})).toBeNull();
+    expect(hoursFindings({ periods: [] })).toBeNull();
+  });
+
+  it("reports a weekend closure when no period opens on Saturday or Sunday", () => {
+    expect(hoursFindings({ periods: monToFri(17) })).toEqual([
+      { code: "closed_weekends", detail: expect.stringContaining("closed on Saturday and Sunday") },
+      { code: "after_hours_gap", detail: expect.stringContaining("5 PM") }
+    ]);
+
+    // Open Saturday: no weekend claim, and the weekday gap still stands.
+    const withSaturday = { periods: [...monToFri(17), weekday(6, 9, 13)] };
+    expect(hoursFindings(withSaturday)?.map((f) => f.code)).toEqual(["after_hours_gap"]);
+  });
+
+  it("reports an after-hours gap only when the weekday close is early", () => {
+    expect(hoursFindings({ periods: monToFri(18) })?.map((f) => f.code)).toContain(
+      "after_hours_gap"
+    );
+    // Open until 8pm: nothing worth claiming about after-hours calls.
+    expect(hoursFindings({ periods: monToFri(20) })?.map((f) => f.code)).toEqual([
+      "closed_weekends"
+    ]);
+  });
+
+  it("claims NOTHING about a business that never closes", () => {
+    // Google reports "always open" as a period with no close. Reading the rest
+    // as a weekly schedule would invent a weekend closure for a business that
+    // never shuts, and an after-hours gap out of a missing closing time.
+    const alwaysOpen = { periods: [{ open: { day: 1, hour: 0, minute: 0 } }] };
+    expect(hoursFindings(alwaysOpen)).toEqual([]);
+    // One open-ended period poisons the whole schedule, not just its own day.
+    expect(hoursFindings({ periods: [...monToFri(17), { open: { day: 3, hour: 0 } }] })).toEqual(
+      []
+    );
+  });
+
+  it("claims NOTHING when a period runs past midnight", () => {
+    // Friday 6 PM to Saturday 2 AM arrives as close.hour 2. Reading that as the
+    // closing time would tell a bar open until 2 in the morning that it shuts
+    // too early, and it is also open on Saturday, so the weekend claim is wrong.
+    const lateNight = {
+      periods: [
+        ...monToFri(17),
+        { open: { day: 5, hour: 18, minute: 0 }, close: { day: 6, hour: 2, minute: 0 } }
+      ]
+    };
+    expect(hoursFindings(lateNight)).toEqual([]);
+
+    // An empty list is NOT the same as null: Google had hours, so the markup
+    // regex does not get a second guess at the same question.
+    expect(mergeHoursFindings([{ code: "after_hours_gap", detail: "markup" }], [])).toEqual([]);
+  });
+
+  it("ignores periods with no usable day, and weekend closing times", () => {
+    // A malformed period contributes nothing rather than throwing.
+    expect(hoursFindings({ periods: [{ close: { day: 2, hour: 17 } }] })).toEqual([]);
+    // A Saturday close must not be read as the weekday closing time.
+    const saturdayOnly = { periods: [weekday(6, 9, 13)] };
+    expect(saturdayOnly.periods.length).toBe(1);
+    expect(hoursFindings(saturdayOnly)).toEqual([]);
+  });
+
+  it("phrases the hour in words, and never emits a dash character", () => {
+    const detail = hoursFindings({ periods: monToFri(12) })?.[1]?.detail ?? "";
+    // Noon reads as 12 PM, not 0 PM.
+    expect(detail).toContain("12 PM");
+    // Google's own weekdayDescriptions carry a dash we are not allowed to emit,
+    // which is why the sentence is built from the numbers instead.
+    expect(detail).not.toContain("\u2014");
+    expect(detail).not.toContain("\u2013");
+    const morning = hoursFindings({ periods: [weekday(1, 6, 11)] })?.[1]?.detail ?? "";
+    expect(morning).toContain("11 AM");
+  });
+});
+
+describe("mergeHoursFindings", () => {
+  const site = [
+    { code: "no_online_booking", detail: "site" },
+    { code: "after_hours_gap", detail: "from the markup" },
+    { code: "closed_weekends", detail: "from the markup" }
+  ];
+
+  it("keeps the site's findings when Google has no hours", () => {
+    expect(mergeHoursFindings(site, null)).toEqual(site);
+  });
+
+  it("substitutes ONLY the hours findings, never the site-only ones", () => {
+    const merged = mergeHoursFindings(site, [{ code: "after_hours_gap", detail: "from Google" }]);
+    expect(merged).toEqual([
+      { code: "no_online_booking", detail: "site" },
+      { code: "after_hours_gap", detail: "from Google" }
+    ]);
+  });
+
+  it("drops a markup hours claim Google contradicts", () => {
+    // Google has hours and reports no gap: the regex's guess does not survive.
+    expect(mergeHoursFindings(site, [])).toEqual([{ code: "no_online_booking", detail: "site" }]);
   });
 });
 
