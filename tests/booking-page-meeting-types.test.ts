@@ -8,8 +8,11 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }));
 
 import {
+  DEFAULT_MEETING_NAME,
+  DEFAULT_MEETING_SLUG,
   MAX_MEETING_TYPES,
   createMeetingType,
+  ensureDefaultMeetingType,
   deleteMeetingType,
   effectiveTypeSettings,
   getEnabledMeetingType,
@@ -186,6 +189,84 @@ describe("getEnabledMeetingType", () => {
     const { client } = fakeDb([{ data: null, error: null }]);
     mockClientFactory.mockResolvedValue(client);
     await getEnabledMeetingType(BIZ, "discovery-call");
+    expect(mockClientFactory).toHaveBeenCalled();
+  });
+});
+
+describe("ensureDefaultMeetingType", () => {
+  it("gives a fresh page its first meeting, carrying the page's identity", async () => {
+    const { client, calls } = fakeDb([
+      { data: [], error: null },
+      // createMeetingType re-reads the list for its cap check.
+      { data: [], error: null },
+      { data: typeRow(), error: null }
+    ]);
+    await ensureDefaultMeetingType(pageRow({ title: "Free strategy call" }), client);
+    const insert = calls.find((c) => c.method === "insert")?.args[0] as Record<string, unknown>;
+    expect(insert).toMatchObject({
+      business_id: BIZ,
+      name: "Free strategy call",
+      slug: DEFAULT_MEETING_SLUG,
+      description: "Page blurb",
+      // The shortest offered duration is what the picker defaulted to.
+      duration_minutes: 15
+    });
+    // An explicit list, never null: inheriting questions the dashboard no
+    // longer shows would surprise the owner.
+    expect(insert.intake_questions).toEqual([
+      { id: "page-q", label: "Page question", type: "text", required: false, enabled: true }
+    ]);
+  });
+
+  it("falls back to the default name and duration on a bare page", async () => {
+    const { client, calls } = fakeDb([
+      { data: [], error: null },
+      { data: [], error: null },
+      { data: typeRow(), error: null }
+    ]);
+    await ensureDefaultMeetingType(
+      pageRow({ title: "   ", allowed_durations: [], description: null, intake_questions: [] }),
+      client
+    );
+    expect(calls.find((c) => c.method === "insert")?.args[0]).toMatchObject({
+      name: DEFAULT_MEETING_NAME,
+      duration_minutes: 30,
+      description: null
+    });
+  });
+
+  it("is idempotent: a page with any meeting is left alone", async () => {
+    const { client, calls } = fakeDb([{ data: [typeRow({ id: "existing" })], error: null }]);
+    expect((await ensureDefaultMeetingType(pageRow(), client))?.id).toBe("existing");
+    expect(calls.some((c) => c.method === "insert")).toBe(false);
+  });
+
+  it("loses the create race gracefully: the winner's meeting serves", async () => {
+    const { client } = fakeDb([
+      { data: [], error: null },
+      { data: [], error: null },
+      // The insert loses on the per-business slug index...
+      { data: null, error: { message: 'duplicate key "uq_booking_meeting_types_business_slug"' } },
+      // ...so the re-read answers with what the other tab created.
+      { data: [typeRow({ id: "winner" })], error: null }
+    ]);
+    expect((await ensureDefaultMeetingType(pageRow(), client))?.id).toBe("winner");
+  });
+
+  it("answers null when the race leaves genuinely nothing", async () => {
+    const { client } = fakeDb([
+      { data: [], error: null },
+      { data: [], error: null },
+      { data: null, error: { message: "insert denied" } },
+      { data: [], error: null }
+    ]);
+    expect(await ensureDefaultMeetingType(pageRow(), client)).toBeNull();
+  });
+
+  it("uses the service client by default", async () => {
+    const { client } = fakeDb([{ data: [typeRow()], error: null }]);
+    mockClientFactory.mockResolvedValue(client);
+    await ensureDefaultMeetingType(pageRow());
     expect(mockClientFactory).toHaveBeenCalled();
   });
 });

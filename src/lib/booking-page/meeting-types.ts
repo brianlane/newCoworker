@@ -268,6 +268,62 @@ function assertCoherent(
   }
 }
 
+/**
+ * The name the backfill and the first-view provision both use, so a page
+ * with no title reads the same in the dashboard as on the public page.
+ */
+export const DEFAULT_MEETING_NAME = "Book a call";
+export const DEFAULT_MEETING_SLUG = "book-a-call";
+
+/**
+ * Give a page its first meeting, carrying the page's own identity across.
+ *
+ * Meetings are the only way a visitor books, so a page with none has
+ * nothing to offer. The backfill migration handled every page that existed;
+ * this covers pages created after it, called from the Bookings dashboard's
+ * first view beside the page auto-provision.
+ *
+ * Idempotent by contract: a page that already has any meeting is left
+ * exactly as it is, and losing the create race to a second tab answers with
+ * whatever the winner made.
+ */
+export async function ensureDefaultMeetingType(
+  page: Pick<
+    BookingPageRow,
+    "business_id" | "title" | "description" | "allowed_durations" | "intake_questions"
+  >,
+  client?: SupabaseClient
+): Promise<BookingMeetingTypeRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const existing = await listMeetingTypes(page.business_id, db);
+  if (existing.length > 0) return existing[0];
+
+  // The shortest offered duration is what the page's picker selected by
+  // default, so it is what visitors were most likely booking.
+  const durationMinutes = page.allowed_durations.length
+    ? Math.min(...page.allowed_durations)
+    : 30;
+  try {
+    return await createMeetingType(
+      page.business_id,
+      {
+        name: page.title?.trim() || DEFAULT_MEETING_NAME,
+        slug: DEFAULT_MEETING_SLUG,
+        description: page.description,
+        durationMinutes,
+        // An explicit list, never null: inheriting questions the dashboard
+        // no longer shows would surprise the owner.
+        intakeQuestions: parseIntakeQuestions(page.intake_questions)
+      },
+      db
+    );
+  } catch {
+    // A second tab won the insert (unique slug per business); serve theirs.
+    const after = await listMeetingTypes(page.business_id, db);
+    return after[0] ?? null;
+  }
+}
+
 /** Add one meeting type. Name, slug, and duration are required at birth. */
 export async function createMeetingType(
   businessId: string,

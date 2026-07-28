@@ -25,6 +25,8 @@ import {
   rotateBookingPageToken,
   upsertBookingPage
 } from "@/lib/booking-page/db";
+import { ensureDefaultMeetingType } from "@/lib/booking-page/meeting-types";
+import { logger } from "@/lib/logger";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import { probeCalendarAvailability } from "@/lib/booking-page/service";
 
@@ -103,6 +105,20 @@ export async function GET(request: Request) {
         // and only surface the error when there is genuinely no page.
         page = await getBookingPageForBusiness(businessId);
         if (!page) throw err;
+      }
+    }
+
+    // Meetings are the only way a visitor books, so a page with none has
+    // nothing to offer. Best-effort: a failed provision costs the default
+    // meeting, never the dashboard load.
+    if (page) {
+      try {
+        await ensureDefaultMeetingType(page);
+      } catch (err) {
+        logger.warn("booking-page: default meeting provision failed", {
+          businessId,
+          error: err instanceof Error ? err.message : String(err)
+        });
       }
     }
 

@@ -18,6 +18,7 @@
  * Serialization itself lives with the caller, which owns the save queue.
  */
 
+import { useCallback, useState } from "react";
 import { useTranslations } from "next-intl";
 
 export type IntakeQuestion = {
@@ -48,6 +49,23 @@ export function IntakeQuestionsEditor({
   onChange: (mutate: (questions: IntakeQuestion[]) => IntakeQuestion[]) => void;
 }) {
   const t = useTranslations("dashboard.bookings");
+  // A new question starts BLANK and local. Pre-filling it with a canned
+  // label read as "this pulled in the default question", since it was the
+  // same string the page's own default used. Nothing persists until the
+  // owner types a label, which parseIntakeQuestions requires anyway.
+  const [draft, setDraft] = useState<string | null>(null);
+  const commitDraft = useCallback(
+    (raw: string) => {
+      const text = raw.trim();
+      setDraft(null);
+      if (!text) return;
+      onChange((qs) => [
+        ...qs,
+        { id: `q-${Date.now().toString(36)}`, label: text, type: "text" as const, required: false, enabled: true }
+      ]);
+    },
+    [onChange]
+  );
   const label = "block text-xs uppercase tracking-wider text-parchment/40";
   const select =
     "mt-1 rounded-md border border-parchment/20 bg-deep-ink px-2 py-1.5 text-sm text-parchment";
@@ -201,23 +219,40 @@ export function IntakeQuestionsEditor({
           </div>
         ))}
       </div>
-      {questions.length < MAX_INTAKE_QUESTIONS ? (
+      {draft !== null ? (
+        <div className="mt-3 rounded-md border border-claw-green/40 bg-deep-ink/60 p-3">
+          <label className={label} htmlFor={`${idPrefix}-q-draft`}>
+            {t("intakeQuestionLabel")}
+          </label>
+          <input
+            id={`${idPrefix}-q-draft`}
+            autoFocus
+            className={`${select} w-full`}
+            maxLength={160}
+            placeholder={t("intakeNewQuestionPlaceholder")}
+            value={draft}
+            disabled={saving}
+            onChange={(e) => setDraft(e.target.value)}
+            onBlur={(e) => commitDraft(e.target.value)}
+            onKeyDown={(e) => {
+              // Enter saves, Escape abandons: the row never lingers as an
+              // unsaved half-question.
+              if (e.key === "Enter") {
+                e.preventDefault();
+                commitDraft(draft);
+              } else if (e.key === "Escape") {
+                setDraft(null);
+              }
+            }}
+          />
+          <p className="mt-1 text-xs text-parchment/40">{t("intakeNewQuestionHint")}</p>
+        </div>
+      ) : questions.length < MAX_INTAKE_QUESTIONS ? (
         <button
           type="button"
           className="mt-3 rounded-md border border-parchment/25 px-3 py-1.5 text-sm text-parchment/80 hover:border-parchment/50"
           disabled={saving}
-          onClick={() =>
-            onChange((qs) => [
-              ...qs,
-              {
-                id: `q-${Date.now().toString(36)}`,
-                label: t("intakeNewQuestionLabel"),
-                type: "text" as const,
-                required: false,
-                enabled: true
-              }
-            ])
-          }
+          onClick={() => setDraft("")}
         >
           {t("intakeAdd")}
         </button>

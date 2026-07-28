@@ -772,10 +772,22 @@ AI-made bookings. Owner management lives on the **Bookings** sidebar page
 (`/dashboard/bookings`, below Employees). The page auto-provisions, enabled,
 the first time the owner opens Bookings (safe because the token is
 unguessable until shared; Vagaro/Calendly tenants are skipped since booking
-lives on the provider's own page): toggle live, copy/rotate the link,
-durations (15/30/60), minimum notice, max advance, buffer, daily cap, an
-optional "only when an employee is on shift" gate (reuses the AiFlow
-engine's roster evaluators), and the upcoming-bookings list.
+lives on the provider's own page).
+
+The page reads as Calendly does, because the alternative confused owners:
+one scheduling link on a single line at the top (Copy, live toggle, and a
+"Customize" disclosure holding the vanity slug, heading, blurb, and the
+rotate button), then **Meetings** as the centerpiece, then everything that
+applies to all of them folded into one collapsed "Applies to every meeting"
+section (when people can book, who bookings go to, confirmations and
+reminders, waitlist), then the upcoming-bookings list. Meeting types are
+the ONLY way to define what gets booked: the page carries the shared
+policy, never a competing duration or questionnaire of its own. Any page
+with no meetings gets one automatically, carrying its own title,
+description, shortest duration, and questions across
+(`ensureDefaultMeetingType`, plus a backfill migration for pages that
+predate this), so an owner always lands on a list rather than an empty
+page.
 
 - **Meeting types** (`src/lib/booking-page/meeting-types.ts`): the page is
   the shared policy; a meeting type is what a visitor actually books
@@ -793,9 +805,9 @@ engine's roster evaluators), and the upcoming-bookings list.
   description, and may override the questionnaire (an explicit `[]` means
   "this meeting asks nothing", which is why the column is nullable), the
   assignment (the employee travels WITH the mode, so a type declaring
-  round-robin cannot borrow the page's fixed person), and the price
-  (upward only: a type can charge for a meeting the page gives away, and a
-  page that charges cannot be undercut). The booked type is stamped on the
+  round-robin cannot borrow the page's fixed person). Nothing collects
+  money yet, so the dashboard shows no price field: the payment columns
+  stay as schema hooks only. The booked type is stamped on the
   ledger row (`meeting_type_id`, null on AI bookings and pre-types rows);
   deleting a type never deletes the appointments people hold.
 - Availability = live provider free/busy (Google/Microsoft via
