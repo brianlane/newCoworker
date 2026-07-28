@@ -328,7 +328,9 @@
       "canadaFeeNote": "The {name} covers the per-message fees Canadian mobile carriers charge for business texting, and renews with your plan.",
       "termBilledNote": "The full {period} term is billed today. After the term, service continues month-to-month at {renewalPrice} unless you renew your contract.",
       "guaranteeNote": "30-day money-back guarantee: cancel within 30 days and we refund your term payment minus one month of service at the monthly rate ({monthlyPrice}) and the carrier registration fee.",
-      "promoDiscount": "Promo code {code}"
+      "promoDiscount": "Promo code {code}",
+      "promoOngoingMonths": "{code} takes {amount} off each of your first {months} months",
+      "promoOngoingForever": "{code} takes {amount} off every month"
     },
     "planCards": {
       "saveUpTo": "Save up to {percent}%",

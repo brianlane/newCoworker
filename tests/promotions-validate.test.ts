@@ -8,8 +8,10 @@ vi.mock("@/lib/db/promotions", () => ({
 import { countPromotionRedemptions, getPromotionByCode } from "@/lib/db/promotions";
 import type { PromotionRow } from "@/lib/db/promotions";
 import {
+  comparisonCycles,
   computePromotionDiscountCents,
   evaluatePromotion,
+  FOREVER_COMPARISON_MONTHS,
   normalizePromotionCode,
   promotionLifecycle,
   validatePromotionCode
@@ -205,6 +207,72 @@ describe("promotions/validate", () => {
         discountCents: 1350,
         planDueTodayCents: 1349
       });
+    });
+
+    it("weighs a forever code over a year, so 20% off every month beats the one-time intro", () => {
+      // Month one alone is worse ($21.59 vs $15.99), but 12 x $21.59 = $259.08
+      // beats $15.99 + 11 x $26.99 = $312.88. Judging by the first invoice
+      // only used to refuse this genuinely better deal.
+      const result = evaluatePromotion(promo({ percent_off: 20, duration: "forever" }), {
+        ...base,
+        tier: "starter",
+        period: "monthly"
+      });
+      expect(result).toMatchObject({ ok: true, discountCents: 540, planDueTodayCents: 2159 });
+    });
+
+    it("weighs a repeating code over its own span", () => {
+      // 3 x $21.59 = $64.77 vs $15.99 + 2 x $26.99 = $69.97.
+      const result = evaluatePromotion(
+        promo({ percent_off: 20, duration: "repeating", duration_in_months: 3 }),
+        { ...base, tier: "starter", period: "monthly" }
+      );
+      expect(result.ok).toBe(true);
+    });
+
+    it("still refuses a repeating code whose whole span loses to the intro discount", () => {
+      // Two months of 20% saves $10.80; the intro discount saves $11.00.
+      expect(
+        evaluatePromotion(
+          promo({ percent_off: 20, duration: "repeating", duration_in_months: 2 }),
+          { ...base, tier: "starter", period: "monthly" }
+        )
+      ).toEqual({ ok: false, reason: "not_better" });
+    });
+
+    it("compares a term plan over its single prepaid invoice whatever the duration says", () => {
+      // One prepaid invoice, no intro discount to displace: any real discount
+      // is an improvement, and post-term pricing belongs to the commitment
+      // schedule, not this code.
+      const result = evaluatePromotion(promo({ percent_off: 20, duration: "forever" }), base);
+      expect(result).toMatchObject({ ok: true, discountCents: 47520 });
+    });
+  });
+
+  describe("comparisonCycles", () => {
+    it("is one cycle for once codes and for every term plan", () => {
+      expect(comparisonCycles({ duration: "once", duration_in_months: null }, "monthly")).toBe(1);
+      expect(comparisonCycles({ duration: "forever", duration_in_months: null }, "biennial")).toBe(1);
+      expect(
+        comparisonCycles({ duration: "repeating", duration_in_months: 6 }, "annual")
+      ).toBe(1);
+    });
+
+    it("is the covered span on monthly plans", () => {
+      expect(
+        comparisonCycles({ duration: "repeating", duration_in_months: 3 }, "monthly")
+      ).toBe(3);
+      expect(comparisonCycles({ duration: "forever", duration_in_months: null }, "monthly")).toBe(
+        FOREVER_COMPARISON_MONTHS
+      );
+    });
+
+    it("falls back to one month for a repeating row missing its month count", () => {
+      // The table CHECK makes this unrepresentable; the fallback just keeps
+      // the math defined if it ever weren't.
+      expect(
+        comparisonCycles({ duration: "repeating", duration_in_months: null }, "monthly")
+      ).toBe(1);
     });
   });
 

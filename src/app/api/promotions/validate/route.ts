@@ -50,7 +50,13 @@ export async function POST(request: Request) {
       code: result.promotion.code,
       name: result.promotion.name,
       discountCents: result.discountCents,
-      planDueTodayCents: result.planDueTodayCents
+      planDueTodayCents: result.planDueTodayCents,
+      // So the order summary can say the discount continues past the first
+      // invoice: a repeating/forever code on a monthly plan can be the better
+      // deal over its span while its month one is ABOVE the intro price, and
+      // showing that without the continuation note would read as a mistake.
+      duration: result.promotion.duration,
+      durationInMonths: result.promotion.duration_in_months
     });
   } catch (err) {
     if (err instanceof z.ZodError) {
