@@ -245,6 +245,38 @@ export async function GET() {
   }
 }
 
+/**
+ * Undo a coupon replacement whose row write did not land.
+ *
+ * Without this the two sides disagree in the worst direction: the row still
+ * names the OLD Stripe ids, but the old promotion code was switched off to
+ * free the code string, so validation would keep accepting the promo while
+ * Stripe refused the discount at checkout. Switching the abandoned new code
+ * off and the stored one back on restores exactly the pre-edit state.
+ *
+ * No-op when the edit never touched Stripe. Best-effort: it runs while an
+ * error is already being surfaced, so a failure here is logged rather than
+ * masking the original fault.
+ */
+async function rollBackCouponReplacement(
+  current: PromotionRow,
+  stripePatch: { stripePromotionCodeId?: string }
+): Promise<void> {
+  if (!stripePatch.stripePromotionCodeId) return;
+  try {
+    await setPromotionCodeActive(stripePatch.stripePromotionCodeId, false);
+    await setPromotionCodeActive(current.stripe_promotion_code_id, current.active);
+  } catch (err) {
+    logger.error("promotions: Stripe left ahead of the row after a failed edit", {
+      promotionId: current.id,
+      code: current.code,
+      storedPromotionCodeId: current.stripe_promotion_code_id,
+      abandonedPromotionCodeId: stripePatch.stripePromotionCodeId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
+
 export async function PATCH(request: Request) {
   try {
     await requireAdmin();
@@ -285,21 +317,30 @@ export async function PATCH(request: Request) {
       await setPromotionCodeActive(current.stripe_promotion_code_id, body.active);
     }
 
-    const promotion = await updatePromotion(body.promotionId, {
-      name: body.name,
-      percentOff: discount.discount.percentOff,
-      amountOffCents: discount.discount.amountOffCents,
-      duration: discount.discount.duration,
-      durationInMonths: discount.discount.durationInMonths,
-      allowedTiers,
-      allowedPeriods: body.allowedPeriods,
-      startsAt: body.startsAt,
-      endsAt: body.endsAt,
-      maxRedemptions: body.maxRedemptions,
-      active: body.active,
-      ...stripePatch
-    });
-    if (!promotion) return errorResponse("NOT_FOUND", "Promotion not found");
+    let promotion: PromotionRow | null;
+    try {
+      promotion = await updatePromotion(body.promotionId, {
+        name: body.name,
+        percentOff: discount.discount.percentOff,
+        amountOffCents: discount.discount.amountOffCents,
+        duration: discount.discount.duration,
+        durationInMonths: discount.discount.durationInMonths,
+        allowedTiers,
+        allowedPeriods: body.allowedPeriods,
+        startsAt: body.startsAt,
+        endsAt: body.endsAt,
+        maxRedemptions: body.maxRedemptions,
+        active: body.active,
+        ...stripePatch
+      });
+    } catch (err) {
+      await rollBackCouponReplacement(current, stripePatch);
+      throw err;
+    }
+    if (!promotion) {
+      await rollBackCouponReplacement(current, stripePatch);
+      return errorResponse("NOT_FOUND", "Promotion not found");
+    }
 
     return successResponse({ promotion });
   } catch (err) {

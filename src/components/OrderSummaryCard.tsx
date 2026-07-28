@@ -65,10 +65,17 @@ export function OrderSummaryCard({
   // plan's LIST price (on monthly, that is the full renewal rate the Stripe
   // price carries, not the already-discounted intro figure).
   const isTermPlan = period !== "monthly";
+  // Clamped to the plan line: the discount is priced for one plan, so a value
+  // left over from a plan switch must never drive the total negative or eat
+  // into the carrier fee.
+  const promoDiscountCents =
+    promotion === null
+      ? 0
+      : Math.min(Math.max(promotion.discountCents, 0), getPlanListPriceCents(tier, period));
   const planDueTodayCents =
     promotion === null
       ? getPlanDueTodayCents(tier, period)
-      : getPlanListPriceCents(tier, period) - promotion.discountCents;
+      : getPlanListPriceCents(tier, period) - promoDiscountCents;
   // Canadian signups: $4.99/mo surcharge billed at the plan's cadence, so a
   // term plan pays it upfront for the whole term (like the plan itself).
   const canadaFeeDueTodayCents = canadianFee
@@ -122,7 +129,7 @@ export function OrderSummaryCard({
       {promotion !== null && (
         <div className="flex justify-between text-claw-green text-xs">
           <span>{t("promoDiscount", { code: promotion.code })}</span>
-          <span>-{formatPriceCents(promotion.discountCents)}</span>
+          <span>-{formatPriceCents(promoDiscountCents)}</span>
         </div>
       )}
       <div className="flex justify-between text-parchment/40 text-xs">

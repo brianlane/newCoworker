@@ -774,6 +774,15 @@ function QuestionnaireForm() {
     setPromoError(null);
   }
 
+  // A promo preview is priced against ONE plan, so switching plan (the tier
+  // and period come from the URL) invalidates it: reusing the old discount
+  // would show a total that checkout will not honor, and a code scoped to the
+  // previous plan would 422 at the click. Drop it and make them re-apply.
+  useEffect(() => {
+    setPromoApplied(null);
+    setPromoError(null);
+  }, [tier, period]);
+
   async function handleAdvanceStep() {
     if (step === 1) {
       if (!signupEmail.trim()) {

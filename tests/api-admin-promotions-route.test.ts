@@ -354,6 +354,63 @@ describe("api/admin/promotions route", () => {
       vi.mocked(updatePromotion).mockResolvedValue(null);
       const res = await PATCH(patch({ promotionId: PROMO_ID, name: "New name" }));
       expect(res.status).toBe(404);
+      // Nothing was replaced, so there is nothing to undo.
+      expect(setPromotionCodeActive).not.toHaveBeenCalled();
+    });
+
+    it("rolls the replacement back when the row write throws, so Stripe cannot lead the row", async () => {
+      vi.mocked(replacePromotionCoupon).mockResolvedValue({
+        couponId: "coupon_2",
+        promotionCodeId: "promo_2"
+      });
+      vi.mocked(updatePromotion).mockRejectedValue(new Error("row locked"));
+
+      const res = await PATCH(patch({ promotionId: PROMO_ID, percentOff: 30 }));
+
+      expect(res.status).toBe(500);
+      // The abandoned code goes off and the one the row still names comes
+      // back on, or validation would accept a promo Stripe then refuses.
+      expect(setPromotionCodeActive).toHaveBeenNthCalledWith(1, "promo_2", false);
+      expect(setPromotionCodeActive).toHaveBeenNthCalledWith(2, "promo_1", true);
+    });
+
+    it("rolls the replacement back when the row disappeared mid-edit", async () => {
+      vi.mocked(replacePromotionCoupon).mockResolvedValue({
+        couponId: "coupon_2",
+        promotionCodeId: "promo_2"
+      });
+      vi.mocked(updatePromotion).mockResolvedValue(null);
+
+      const res = await PATCH(patch({ promotionId: PROMO_ID, percentOff: 30 }));
+
+      expect(res.status).toBe(404);
+      expect(setPromotionCodeActive).toHaveBeenNthCalledWith(1, "promo_2", false);
+      expect(setPromotionCodeActive).toHaveBeenNthCalledWith(2, "promo_1", true);
+    });
+
+    it("restores a switched-off promotion to switched off, not on", async () => {
+      vi.mocked(getPromotion).mockResolvedValue({ ...PROMO, active: false });
+      vi.mocked(replacePromotionCoupon).mockResolvedValue({
+        couponId: "coupon_2",
+        promotionCodeId: "promo_2"
+      });
+      vi.mocked(updatePromotion).mockResolvedValue(null);
+
+      await PATCH(patch({ promotionId: PROMO_ID, percentOff: 30 }));
+
+      expect(setPromotionCodeActive).toHaveBeenLastCalledWith("promo_1", false);
+    });
+
+    it("still reports the original failure when the rollback itself fails", async () => {
+      vi.mocked(replacePromotionCoupon).mockResolvedValue({
+        couponId: "coupon_2",
+        promotionCodeId: "promo_2"
+      });
+      vi.mocked(updatePromotion).mockRejectedValue(new Error("row locked"));
+      vi.mocked(setPromotionCodeActive).mockRejectedValue(new Error("stripe down"));
+
+      const res = await PATCH(patch({ promotionId: PROMO_ID, percentOff: 30 }));
+      expect(res.status).toBe(500);
     });
 
     it("refuses an end date that is not after the (unchanged) start date", async () => {
