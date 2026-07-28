@@ -158,7 +158,6 @@ describe("prospectOutreachTemplate", () => {
     const def = prospectOutreachTemplate().definition;
     expect(def.steps.map((s) => s.type)).toEqual([
       "extract_text",
-      "notify_owner",
       "upsert_customer",
       "update_contact"
     ]);
@@ -168,20 +167,19 @@ describe("prospectOutreachTemplate", () => {
     expect(def.steps.some((s) => s.type === "send_email" || s.type === "send_sms")).toBe(false);
   });
 
-  it("briefs the owner about a send that ALREADY happened, without promising one", () => {
+  it("says NOTHING to the owner per prospect: filing is not news", () => {
+    // notify_owner texts the owner's alert number, so at a cap of twelve a day
+    // this flow would send twelve texts announcing that strangers received
+    // email. The numbers are on the Marketing page and the reply alert already
+    // comes from the email coworker, so the running commentary is pure noise.
     const def = prospectOutreachTemplate().definition;
-    const notify = def.steps[1];
-    if (notify.type !== "notify_owner") throw new Error("expected the brief second");
-    expect(notify.when).toBeUndefined();
-    expect(notify.message).toMatch(/Cold email sent/);
-    expect(notify.message).toContain("{{vars.prospect_domain}}");
-    expect(notify.message).toContain("one follow-up only");
+    expect(def.steps.some((s) => s.type === "notify_owner")).toBe(false);
   });
 
   it("gates the phone-keyed file + tag steps on a usable phone", () => {
     const def = prospectOutreachTemplate().definition;
-    const file = def.steps[2];
-    const tag = def.steps[3];
+    const file = def.steps[1];
+    const tag = def.steps[2];
     if (file.type !== "upsert_customer" || tag.type !== "update_contact") {
       throw new Error("expected file then tag");
     }
