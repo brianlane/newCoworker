@@ -23,8 +23,9 @@
  * emailing on the next 5-minute tick, from our own domain, is not a change
  * anybody should be able to make without seeing a draft first.
  *
- * Idempotent: the flow is installed once (matched by name), and the settings
- * upsert never downgrades a mode that is already auto.
+ * Idempotent: the flow is installed once (matched by name), and an existing
+ * mode is left alone in both directions. Off is a deliberate decision to stop,
+ * so a re-run must not quietly restart outreach.
  *
  * Usage:
  *   set -a && source .env && set +a
@@ -107,8 +108,13 @@ const { data: existingSettings, error: settingsError } = await db
   .maybeSingle();
 if (settingsError) throw new Error(`read outreach_settings: ${settingsError.message}`);
 
-// Never downgrade a mode somebody already turned up.
-const mode = existingSettings?.mode === "auto" ? "auto" : "manual";
+/**
+ * An existing mode is left exactly as it is, in BOTH directions. Off is the
+ * owner's kill switch, so a re-run that quietly turned it back to manual would
+ * be the script overruling a deliberate decision to stop. Manual defaults only
+ * when there is no row yet.
+ */
+const mode = existingSettings?.mode ?? "manual";
 
 console.log(`Business: ${business.name} (${HQ_BUSINESS_ID})`);
 console.log(`Timezone: ${business.timezone ?? "(none, the send window will read as UTC)"}`);

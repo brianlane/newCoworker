@@ -24,7 +24,7 @@ const upsertOutreachSettingsSpy = vi.fn(
     mode: "manual"
   })
 );
-const patchProspectSpy = vi.fn(async () => true);
+const transitionProspectSpy = vi.fn(async () => true);
 vi.mock("@/lib/outreach/db", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
@@ -36,7 +36,7 @@ vi.mock("@/lib/outreach/db", async (importOriginal) => {
       upsertOutreachSettingsSpy(
         ...(a as unknown as Parameters<typeof upsertOutreachSettingsSpy>)
       ),
-    patchProspect: (...a: unknown[]) => patchProspectSpy(...(a as []))
+    transitionProspect: (...a: unknown[]) => transitionProspectSpy(...(a as []))
   };
 });
 
@@ -95,7 +95,7 @@ function input(over: Partial<ProspectingSettingsInput> = {}): ProspectingSetting
 beforeEach(() => {
   vi.clearAllMocks();
   getOutreachSettingsSpy.mockResolvedValue(settingsRow());
-  patchProspectSpy.mockResolvedValue(true);
+  transitionProspectSpy.mockResolvedValue(true);
 });
 
 describe("loadProspectingView", () => {
@@ -248,17 +248,25 @@ describe("saveProspectingSettings", () => {
 
 describe("skipProspect", () => {
   it("retires the draft permanently, which is what keeps the domain out of discovery", async () => {
-    await skipProspect(BIZ, PROSPECT, {} as never);
-    expect(patchProspectSpy).toHaveBeenCalledWith(
+    expect(await skipProspect(BIZ, PROSPECT, {} as never)).toBe(true);
+    expect(transitionProspectSpy).toHaveBeenCalledWith(
       BIZ,
       PROSPECT,
+      "drafted",
       { status: "skipped", status_detail: "the owner read the draft and passed" },
       expect.anything()
     );
 
     defaultClientSpy.mockReturnValue({});
-    await skipProspect(BIZ, PROSPECT);
-    expect(patchProspectSpy).toHaveBeenCalledTimes(2);
+    expect(await skipProspect(BIZ, PROSPECT)).toBe(true);
+  });
+
+  it("refuses to skip anything that is no longer a draft", async () => {
+    // The queue can be minutes stale: the sweep may have sent this prospect
+    // while the page sat open. An unguarded write would mark a real send
+    // skipped and quietly remove it from the funnel.
+    transitionProspectSpy.mockResolvedValue(false);
+    expect(await skipProspect(BIZ, PROSPECT, {} as never)).toBe(false);
   });
 });
 

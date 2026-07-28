@@ -18,7 +18,7 @@ import {
   listProspectOutcomes,
   listProspectsByStatus,
   upsertOutreachSettings,
-  patchProspect,
+  transitionProspect,
   OUTREACH_DEFAULT_DAILY_CAP,
   type OutreachMode,
   type OutreachProspectRow,
@@ -170,16 +170,23 @@ function dedupeList(values: string[], limit: number): string[] {
  * The owner read a draft and passed on it. The row stays in the ledger, which
  * is what keeps the domain out of future discovery: a skip means "not this
  * business", not "ask me again next week".
+ *
+ * Guarded on the draft still being a draft, and it returns whether it moved.
+ * A review queue can be minutes stale: the sweep may have sent this prospect
+ * while the page sat open, and an unguarded write would then mark a SENT
+ * prospect skipped, quietly removing a real send from the funnel. Same claim
+ * discipline as the Send button beside it.
  */
 export async function skipProspect(
   businessId: string,
   prospectId: string,
   client?: SupabaseClient
-): Promise<void> {
+): Promise<boolean> {
   const db = client ?? (await createSupabaseServiceClient());
-  await patchProspect(
+  return transitionProspect(
     businessId,
     prospectId,
+    "drafted",
     { status: "skipped", status_detail: "the owner read the draft and passed" },
     db
   );

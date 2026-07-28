@@ -64,7 +64,12 @@ export async function POST(
     }
 
     if (body.data.action === "skip") {
-      await skipProspect(body.data.businessId, id.data);
+      // A review queue can be minutes stale, so a Skip that finds no draft is
+      // reported rather than answered with a cheerful success.
+      const skipped = await skipProspect(body.data.businessId, id.data);
+      if (!skipped) {
+        return errorResponse("VALIDATION_ERROR", SEND_FAILURE_MESSAGE.not_drafted);
+      }
       return successResponse({ status: "skipped" });
     }
 
