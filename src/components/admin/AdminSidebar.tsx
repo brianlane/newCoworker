@@ -11,7 +11,6 @@ import {
   Receipt,
   Gauge,
   Activity,
-  MessageSquare,
   Newspaper,
   Sparkles,
   Network,
@@ -22,7 +21,6 @@ import {
 const adminNavItems = [
   { labelKey: "dashboard", href: "/admin/dashboard", icon: LayoutDashboard },
   { labelKey: "allClients", href: "/admin/clients", icon: Users },
-  { labelKey: "webchat", href: "/admin/webchat", icon: MessageSquare },
   { labelKey: "blog", href: "/admin/blog", icon: Newspaper },
   { labelKey: "revenue", href: "/admin/revenue", icon: DollarSign },
   { labelKey: "promotions", href: "/admin/promotions", icon: Tag },

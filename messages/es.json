@@ -2142,7 +2142,6 @@
     "dashboard": "Panel",
     "clients": "Clientes",
     "allClients": "Todos los clientes",
-    "webchat": "Chat web",
     "blog": "Blog",
     "blogPage": {
       "title": "Blog",
@@ -2262,8 +2261,6 @@
       "systemSubtitle": "Configuración del entorno y salud de los servicios.",
       "revenueTitle": "Ingresos",
       "revenueSubtitle": "Analítica de suscripciones, métricas de operador de mejor esfuerzo, nada se factura con estos números.",
-      "webchatTitle": "Chat web",
-      "webchatSubtitle": "Conversaciones de visitantes del widget de chat de newcoworker.com",
       "tenantWebchatTitle": "Conversaciones de chat web",
       "tenantWebchatSubtitle": "Sesiones de visitantes del widget de chat del sitio web de este negocio",
       "alertsTitle": "Alertas",
