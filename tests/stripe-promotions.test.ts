@@ -97,7 +97,8 @@ describe("stripe/promotions", () => {
           code: "SUMMER20",
           name: "Summer 2026",
           tiers: ["standard"],
-          discount: PERCENT_DISCOUNT
+          discount: PERCENT_DISCOUNT,
+          remainingRedemptions: null
         })
       ).resolves.toEqual({ couponId: "coupon_new", promotionCodeId: "promo_new" });
 
@@ -113,6 +114,23 @@ describe("stripe/promotions", () => {
       });
     });
 
+    it("hands a capped promotion's balance to Stripe, which settles the cap atomically", async () => {
+      // Our own count is a read-time check and races; Stripe's
+      // max_redemptions is what actually stops the (N+1)th payment.
+      await createPromotionCoupon({
+        code: "FIRST50",
+        name: "First 50",
+        tiers: ["standard"],
+        discount: PERCENT_DISCOUNT,
+        remainingRedemptions: 50
+      });
+      expect(mockPromotionCodeCreate).toHaveBeenCalledWith({
+        promotion: { type: "coupon", coupon: "coupon_new" },
+        code: "FIRST50",
+        max_redemptions: 50
+      });
+    });
+
     it("mints a fixed-amount coupon in USD", async () => {
       await createPromotionCoupon({
         code: "FIFTYOFF",
@@ -123,7 +141,8 @@ describe("stripe/promotions", () => {
           amountOffCents: 5000,
           duration: "repeating",
           durationInMonths: 3
-        }
+        },
+        remainingRedemptions: null
       });
       expect(mockCouponCreate).toHaveBeenCalledWith({
         name: "Fifty off",
@@ -145,7 +164,8 @@ describe("stripe/promotions", () => {
           amountOffCents: null,
           duration: "forever",
           durationInMonths: null
-        }
+        },
+        remainingRedemptions: null
       });
       expect(mockCouponCreate.mock.calls[0][0]).toMatchObject({ amount_off: 0, currency: "usd" });
     });
@@ -157,7 +177,8 @@ describe("stripe/promotions", () => {
           code: "SUMMER20",
           name: "Summer",
           tiers: ["starter"],
-          discount: PERCENT_DISCOUNT
+          discount: PERCENT_DISCOUNT,
+          remainingRedemptions: null
         })
       ).rejects.toThrow("code already exists");
       expect(mockCouponDel).toHaveBeenCalledWith("coupon_new");
@@ -174,7 +195,8 @@ describe("stripe/promotions", () => {
           code: "SUMMER20",
           name: "Summer",
           tiers: ["starter"],
-          discount: PERCENT_DISCOUNT
+          discount: PERCENT_DISCOUNT,
+          remainingRedemptions: null
         })
       ).rejects.toThrow("code already exists");
       expect(logger.warn).toHaveBeenCalledWith(
@@ -199,7 +221,8 @@ describe("stripe/promotions", () => {
           code: "SUMMER20",
           name: "Summer 2026",
           tiers: ["standard"],
-          discount: { ...PERCENT_DISCOUNT, percentOff: 30 }
+          discount: { ...PERCENT_DISCOUNT, percentOff: 30 },
+          remainingRedemptions: null
         })
       ).resolves.toEqual({ couponId: "coupon_new", promotionCodeId: "promo_new" });
 
@@ -216,7 +239,8 @@ describe("stripe/promotions", () => {
           code: "SUMMER20",
           name: "Summer",
           tiers: ["starter"],
-          discount: PERCENT_DISCOUNT
+          discount: PERCENT_DISCOUNT,
+          remainingRedemptions: null
         })
       ).rejects.toThrow("stripe down");
       expect(mockPromotionCodeUpdate).toHaveBeenNthCalledWith(1, "promo_old", { active: false });
@@ -237,7 +261,8 @@ describe("stripe/promotions", () => {
           code: "SUMMER20",
           name: "Summer",
           tiers: ["starter"],
-          discount: PERCENT_DISCOUNT
+          discount: PERCENT_DISCOUNT,
+          remainingRedemptions: null
         })
       ).rejects.toThrow("stripe down");
       expect(logger.warn).toHaveBeenCalledWith(

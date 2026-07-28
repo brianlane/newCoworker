@@ -709,12 +709,15 @@ function QuestionnaireForm() {
       if (!checkoutRes.ok) {
         // 422 is this route's dedicated "the promo code stopped being valid
         // between the preview and the click" signal (an admin switched it off,
-        // it hit its cap, its window closed). Drop the code so the next click
-        // goes through at the normal price instead of trapping the customer.
+        // it hit its cap, its window closed). Drop the code and say so next to
+        // the promo field only: nothing is wrong with the signup, so raising
+        // the step-level banner too would read like a hard checkout failure
+        // and bury the one-click recovery.
         if (checkoutRes.status === 422) {
           setPromoApplied(null);
           setPromoInput("");
           setPromoError(t("promoExpiredDuringCheckout"));
+          return;
         }
         throw new Error(checkoutJson?.error?.message ?? t("errCheckout"));
       }

@@ -82,6 +82,14 @@ function couponCreateParams(
 /**
  * Mint the Coupon + Promotion Code pair for a new promotion.
  *
+ * `remainingRedemptions` becomes the promotion code's `max_redemptions`, which
+ * Stripe enforces ATOMICALLY at payment time. Our own count is a read-time
+ * check and therefore races: two customers can both pass it and both check
+ * out. Stripe is the only party that can settle that, so the cap lives in both
+ * places. It is "remaining" rather than the configured cap because a code
+ * minted to REPLACE another starts its counter at zero, so an edit has to hand
+ * Stripe the balance rather than the whole allowance.
+ *
  * If the promotion-code create fails (most likely cause: the customer-facing
  * code collides with another ACTIVE code) the just-created coupon is deleted
  * before rethrowing, so a failed admin submit does not litter the Stripe
@@ -92,6 +100,8 @@ export async function createPromotionCoupon(params: {
   name: string;
   tiers: PromotionTier[];
   discount: PromotionDiscount;
+  /** Null leaves the code uncapped at Stripe (unlimited, or already spent). */
+  remainingRedemptions: number | null;
 }): Promise<PromotionStripeIds> {
   const stripe = getStripe();
   const productIds = await resolveMembershipProductIds(params.tiers);
@@ -101,7 +111,10 @@ export async function createPromotionCoupon(params: {
   try {
     const promotionCode = await stripe.promotionCodes.create({
       promotion: { type: "coupon", coupon: coupon.id },
-      code: params.code
+      code: params.code,
+      ...(params.remainingRedemptions === null
+        ? {}
+        : { max_redemptions: params.remainingRedemptions })
     });
     return { couponId: coupon.id, promotionCodeId: promotionCode.id };
   } catch (err) {
@@ -127,9 +140,11 @@ export async function setPromotionCodeActive(
 
 /**
  * Swap in a new discount VALUE under the same customer-facing code, for an
- * admin edit that changes percent/amount (or duration, or the tier scope the
- * coupon is restricted to). Stripe coupons are immutable, so "editing" is
- * really: retire the old code, mint a replacement pair with the same string.
+ * admin edit that changes percent/amount (or the duration, the tier scope the
+ * coupon is restricted to, or the redemption cap). Stripe coupons are
+ * immutable and a promotion code's `max_redemptions` is fixed at creation, so
+ * "editing" any of those is really: retire the old code, mint a replacement
+ * pair with the same string.
  *
  * The old COUPON is deliberately left in place rather than deleted. A Checkout
  * Session minted moments before the edit still references it, and deleting a
@@ -145,6 +160,7 @@ export async function replacePromotionCoupon(params: {
   name: string;
   tiers: PromotionTier[];
   discount: PromotionDiscount;
+  remainingRedemptions: number | null;
 }): Promise<PromotionStripeIds> {
   await setPromotionCodeActive(params.previous.promotionCodeId, false);
   try {
@@ -152,7 +168,8 @@ export async function replacePromotionCoupon(params: {
       code: params.code,
       name: params.name,
       tiers: params.tiers,
-      discount: params.discount
+      discount: params.discount,
+      remainingRedemptions: params.remainingRedemptions
     });
   } catch (err) {
     try {

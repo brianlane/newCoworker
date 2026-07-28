@@ -86,6 +86,13 @@ export function promotionLifecycle(
  * already on it. Split out from the DB lookup so the rules are directly
  * testable and so the admin surface can reuse the same reasoning.
  *
+ * The cap check here is a read-time one and therefore racy on its own: two
+ * customers can both pass it and both reach Stripe. It is the fast, friendly
+ * half of the enforcement, the half that can explain itself in the order
+ * summary. The settling half is Stripe's, which holds the same cap as the
+ * promotion code's `max_redemptions` and rejects the session atomically at
+ * payment time (see createPromotionCoupon).
+ *
  * The last rule is the product one: a code is refused when it would leave the
  * customer paying MORE than they would without it. That is reachable on
  * monthly plans, where applying a promo replaces the standard intro coupon

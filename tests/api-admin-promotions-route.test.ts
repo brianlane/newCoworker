@@ -144,6 +144,20 @@ describe("api/admin/promotions route", () => {
       expect(setPromotionCodeActive).not.toHaveBeenCalled();
     });
 
+    it("gives Stripe the cap to enforce, since our own count is racy", async () => {
+      await POST(post({ ...VALID_CREATE, maxRedemptions: 50 }));
+      expect(createPromotionCoupon).toHaveBeenCalledWith(
+        expect.objectContaining({ remainingRedemptions: 50 })
+      );
+    });
+
+    it("leaves an uncapped promotion uncapped at Stripe", async () => {
+      await POST(post(VALID_CREATE));
+      expect(createPromotionCoupon).toHaveBeenCalledWith(
+        expect.objectContaining({ remainingRedemptions: null })
+      );
+    });
+
     it("converts a whole-dollar amount to cents", async () => {
       await POST(post({ ...VALID_CREATE, percentOff: null, amountOffUsd: 25.5 }));
       expect(createPromotion).toHaveBeenCalledWith(
@@ -317,6 +331,44 @@ describe("api/admin/promotions route", () => {
           stripeCouponId: "coupon_2",
           stripePromotionCodeId: "promo_2"
         })
+      );
+    });
+
+    it("mints a replacement carrying the REMAINING balance when the cap changes", async () => {
+      // A promotion code's max_redemptions is fixed at creation, and the
+      // replacement counts from zero, so Stripe gets 100 - 40 rather than 100.
+      vi.mocked(getPromotion).mockResolvedValue({ ...PROMO, max_redemptions: 100 });
+      vi.mocked(countPromotionRedemptions).mockResolvedValue(40);
+      vi.mocked(replacePromotionCoupon).mockResolvedValue({
+        couponId: "coupon_2",
+        promotionCodeId: "promo_2"
+      });
+
+      await PATCH(patch({ promotionId: PROMO_ID, maxRedemptions: 120 }));
+      expect(replacePromotionCoupon).toHaveBeenCalledWith(
+        expect.objectContaining({ remainingRedemptions: 80 })
+      );
+    });
+
+    it("does not mint a replacement when the cap is re-submitted unchanged", async () => {
+      vi.mocked(getPromotion).mockResolvedValue({ ...PROMO, max_redemptions: 100 });
+      await PATCH(patch({ promotionId: PROMO_ID, maxRedemptions: 100 }));
+      expect(replacePromotionCoupon).not.toHaveBeenCalled();
+    });
+
+    it("leaves an already-spent cap uncapped at Stripe, where our exhausted check is the gate", async () => {
+      vi.mocked(getPromotion).mockResolvedValue({ ...PROMO, max_redemptions: 100 });
+      vi.mocked(countPromotionRedemptions).mockResolvedValue(60);
+      vi.mocked(replacePromotionCoupon).mockResolvedValue({
+        couponId: "coupon_2",
+        promotionCodeId: "promo_2"
+      });
+
+      // Stripe rejects max_redemptions below 1, and the local cap check
+      // already refuses the code at 60 of 50.
+      await PATCH(patch({ promotionId: PROMO_ID, maxRedemptions: 50 }));
+      expect(replacePromotionCoupon).toHaveBeenCalledWith(
+        expect.objectContaining({ remainingRedemptions: null })
       );
     });
 

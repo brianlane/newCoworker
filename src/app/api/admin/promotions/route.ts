@@ -136,19 +136,44 @@ function resolveDiscount(
   return { ok: true, discount: { percentOff, amountOffCents, duration, durationInMonths } };
 }
 
-/** True when the edit changes anything the immutable Stripe coupon encodes. */
+/**
+ * True when the edit changes something the Stripe objects fix at creation: the
+ * coupon's discount, duration, and product scope, or the promotion code's
+ * `max_redemptions`. None of those can be updated in place, so they can only
+ * be changed by minting a replacement pair.
+ */
 function needsCouponReplacement(
   current: PromotionRow,
   discount: PromotionDiscount,
-  tiers: PromotionTier[]
+  tiers: PromotionTier[],
+  maxRedemptions: number | null
 ): boolean {
   return (
     current.percent_off !== discount.percentOff ||
     current.amount_off_cents !== discount.amountOffCents ||
     current.duration !== discount.duration ||
     current.duration_in_months !== discount.durationInMonths ||
+    current.max_redemptions !== maxRedemptions ||
     current.allowed_tiers.slice().sort().join(",") !== tiers.slice().sort().join(",")
   );
+}
+
+/**
+ * What is left of a cap, for the promotion code Stripe will enforce.
+ *
+ * A replacement code counts from zero, so an edit hands Stripe the balance
+ * rather than the whole allowance. Null means "do not cap at Stripe": either
+ * the promotion is uncapped, or the allowance is already spent, in which case
+ * our own `exhausted` check refuses the code before Stripe is ever asked
+ * (Stripe rejects a `max_redemptions` below 1 anyway).
+ */
+function remainingRedemptions(
+  maxRedemptions: number | null,
+  alreadyRedeemed: number
+): number | null {
+  if (maxRedemptions === null) return null;
+  const remaining = maxRedemptions - alreadyRedeemed;
+  return remaining > 0 ? remaining : null;
 }
 
 export async function POST(request: Request) {
@@ -170,11 +195,14 @@ export async function POST(request: Request) {
       return errorResponse("VALIDATION_ERROR", "The end date must come after the start date");
     }
 
+    const maxRedemptions = body.maxRedemptions ?? null;
     const stripeIds = await createPromotionCoupon({
       code,
       name: body.name,
       tiers: body.allowedTiers,
-      discount: discount.discount
+      discount: discount.discount,
+      // Nothing has been redeemed yet, so the balance is the whole cap.
+      remainingRedemptions: maxRedemptions
     });
 
     let promotion: PromotionRow;
@@ -190,7 +218,7 @@ export async function POST(request: Request) {
         allowedPeriods: body.allowedPeriods,
         startsAt,
         endsAt,
-        maxRedemptions: body.maxRedemptions ?? null,
+        maxRedemptions,
         active: body.active,
         stripeCouponId: stripeIds.couponId,
         stripePromotionCodeId: stripeIds.promotionCodeId,
@@ -289,6 +317,8 @@ export async function PATCH(request: Request) {
     if (!discount.ok) return errorResponse("VALIDATION_ERROR", discount.message);
 
     const allowedTiers = body.allowedTiers ?? current.allowed_tiers;
+    const maxRedemptions =
+      body.maxRedemptions !== undefined ? body.maxRedemptions : current.max_redemptions;
     const startsAt = body.startsAt ?? current.starts_at;
     const endsAt = body.endsAt !== undefined ? body.endsAt : current.ends_at;
     if (endsAt !== null && new Date(endsAt) <= new Date(startsAt)) {
@@ -296,7 +326,7 @@ export async function PATCH(request: Request) {
     }
 
     const stripePatch: { stripeCouponId?: string; stripePromotionCodeId?: string } = {};
-    if (needsCouponReplacement(current, discount.discount, allowedTiers)) {
+    if (needsCouponReplacement(current, discount.discount, allowedTiers, maxRedemptions)) {
       const replacement = await replacePromotionCoupon({
         previous: {
           couponId: current.stripe_coupon_id,
@@ -305,7 +335,12 @@ export async function PATCH(request: Request) {
         code: current.code,
         name: body.name ?? current.name,
         tiers: allowedTiers,
-        discount: discount.discount
+        discount: discount.discount,
+        // The replacement counts from zero, so Stripe gets the balance.
+        remainingRedemptions: remainingRedemptions(
+          maxRedemptions,
+          await countPromotionRedemptions(current.id)
+        )
       });
       stripePatch.stripeCouponId = replacement.couponId;
       stripePatch.stripePromotionCodeId = replacement.promotionCodeId;
