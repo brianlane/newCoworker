@@ -12,6 +12,7 @@ import {
   localWeekdayAndHour,
   looksLikeOptOut,
   outreachUnsubscribeToken,
+  topReplyText,
   utcDayStartIso,
   verifyOutreachUnsubscribeToken,
   weekdayIndex
@@ -121,20 +122,55 @@ describe("utcDayStartIso / discoveryDueToday", () => {
 });
 
 describe("looksLikeOptOut", () => {
-  it("recognizes the ways people ask to be left alone", () => {
+  it("recognizes an explicit instruction to stop", () => {
     for (const reply of [
       "Please unsubscribe me",
       "REMOVE ME from your list",
       "take me off this list",
-      "not interested, thanks",
+      "Do not contact me again",
       "opt-out"
     ]) {
       expect(looksLikeOptOut(reply)).toBe(true);
     }
   });
 
-  it("leaves a real reply for the coworker to answer", () => {
+  it("does not read a lukewarm reply as an opt-out", () => {
+    // These are opinions, not instructions. Suppressing on them would lose a
+    // prospect mid-sentence and stop the coworker answering. Nothing is lost
+    // by letting them through: any reply already cancels the follow-up.
+    expect(looksLikeOptOut("Not interested in the booking part, but tell me about texting")).toBe(
+      false
+    );
+    expect(looksLikeOptOut("No thanks, we just hired someone")).toBe(false);
     expect(looksLikeOptOut("Sure, how much does it cost?")).toBe(false);
     expect(looksLikeOptOut("")).toBe(false);
+  });
+
+  it("ignores our OWN footer quoted back in the reply", () => {
+    // The pitch footer says "You can unsubscribe here", so a quoted reply
+    // carries the word. Matching the whole body would suppress a warm lead.
+    const quoted = [
+      "Yes please, Tuesday works.",
+      "",
+      "On Mon, Jul 27, 2026 at 9:02 AM Brian wrote:",
+      "> Worth a quick look?",
+      "> You can unsubscribe here and I will not email you again: https://x/u",
+      "> 1 Example Plaza, Phoenix AZ"
+    ].join("\n");
+    expect(looksLikeOptOut(quoted)).toBe(false);
+
+    // An instruction ABOVE the quote is still honored.
+    expect(looksLikeOptOut(`Please unsubscribe me.\n\n${quoted}`)).toBe(true);
+  });
+});
+
+describe("topReplyText", () => {
+  it("keeps what the person typed and drops every common quote style", () => {
+    expect(topReplyText("Thanks!\n> old text")).toBe("Thanks!");
+    expect(topReplyText("Thanks!\n-----Original Message-----\nold")).toBe("Thanks!");
+    expect(topReplyText("Thanks!\nOn Mon, Jul 27 2026, Brian wrote:\nold")).toBe("Thanks!");
+    expect(topReplyText("Thanks!\nFrom: Brian\nold")).toBe("Thanks!");
+    expect(topReplyText("Thanks!\nSent from my iPhone")).toBe("Thanks!");
+    expect(topReplyText("No quote here")).toBe("No quote here");
   });
 });

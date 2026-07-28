@@ -510,11 +510,20 @@ async function deliverPitch(
   // does guarantee is that no LATER send follows, and that the ledger does not
   // claim a send that was abandoned here.
   const current = await getProspect(settings.business_id, prospect.id, r.db);
-  if (!current || current.status === "unsubscribed" || current.replied_at !== null) {
+  if (!current) return false;
+  const optedOut = current.status === "unsubscribed";
+  const answered = current.replied_at !== null;
+  if (optedOut || answered) {
+    // Undo the claim to the state the abort reason implies, not just the
+    // stamp. Clearing `sent_at` alone could leave a row reading `sent` with no
+    // send behind it: invisible to the drafted queue, unsendable, and counted
+    // as outreach by the funnel.
     await patchProspect(
       settings.business_id,
       prospect.id,
-      mail.stamp === "sent_at" ? { sent_at: null } : { nudged_at: null },
+      mail.stamp === "sent_at"
+        ? { sent_at: null, status: optedOut ? "unsubscribed" : "replied" }
+        : { nudged_at: null },
       r.db
     );
     return false;

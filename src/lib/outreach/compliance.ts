@@ -129,9 +129,16 @@ export function discoveryDueToday(lastDiscoveryAt: string | null, now: Date): bo
 }
 
 /**
- * Replies that are asking us to stop rather than opening a conversation. The
- * email coworker handles real replies; these must never reach a model that
- * might helpfully keep the thread going.
+ * Explicit instructions to stop. Deliberately narrow: every phrase here is a
+ * request, not an opinion.
+ *
+ * "Not interested" and "no thanks" are NOT here, though they look like they
+ * belong. They are ordinary replies, and treating them as opt-outs would
+ * permanently suppress a prospect who was mid-sentence ("not interested in the
+ * booking part, but tell me about the texting") and stop the coworker from
+ * answering. Nothing is lost by leaving them out: ANY reply cancels the
+ * follow-up, because the nudge only chases silence. A real opt-out gets the
+ * permanent treatment; a lukewarm reply gets a human answer.
  */
 const STOP_PHRASES = [
   "unsubscribe",
@@ -141,15 +148,39 @@ const STOP_PHRASES = [
   "stop contacting",
   "do not contact",
   "don't contact",
-  "not interested",
-  "no thanks",
-  "no thank you",
   "opt out",
   "opt-out"
 ];
 
-/** True when a reply body reads as an opt-out request. */
+/** Quote markers the common clients insert above the history they append. */
+const QUOTE_MARKERS = [
+  /^>/,
+  /^-{2,}\s*original message/i,
+  /^on\b.*\bwrote:\s*$/i,
+  /^from:\s/i,
+  /^sent from my /i
+];
+
+/**
+ * What the person actually typed: everything above the quoted history.
+ *
+ * This is load-bearing rather than tidy. Our own pitch footer says "You can
+ * unsubscribe here", so a reply that quotes the thread carries the word
+ * "unsubscribe" in its body. Matching the whole body would read a warm reply
+ * as an opt-out and permanently suppress the prospect.
+ */
+export function topReplyText(body: string): string {
+  const kept: string[] = [];
+  for (const line of body.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (QUOTE_MARKERS.some((re) => re.test(trimmed))) break;
+    kept.push(line);
+  }
+  return kept.join("\n");
+}
+
+/** True when the reply, above any quoted history, asks us to stop. */
 export function looksLikeOptOut(replyText: string): boolean {
-  const text = replyText.toLowerCase();
+  const text = topReplyText(replyText).toLowerCase();
   return STOP_PHRASES.some((p) => text.includes(p));
 }

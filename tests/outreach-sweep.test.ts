@@ -528,27 +528,39 @@ describe("phase 3: sending", () => {
     // The claim is guarded on status, so an opt-out landing BEFORE it loses
     // cleanly. One landing just after it is caught here, or we would mail
     // somebody who has already asked to stop.
-    for (const suppressed of [
-      prospect({ status: "unsubscribed" }),
-      prospect({ replied_at: "2026-07-27T15:59:00Z" }),
-      null
-    ]) {
-      const ledger = sendLedger({ getProspect: vi.fn(async () => suppressed) });
+    // The undo restores the state the abort reason implies. Clearing sent_at
+    // alone would leave a row reading `sent` with no send behind it: invisible
+    // to the queue, unsendable, and counted as outreach by the funnel.
+    for (const [current, expectedPatch] of [
+      [prospect({ status: "unsubscribed" }), { sent_at: null, status: "unsubscribed" }],
+      [prospect({ replied_at: "2026-07-27T15:59:00Z" }), { sent_at: null, status: "replied" }]
+    ] as const) {
+      const ledger = sendLedger({ getProspect: vi.fn(async () => current) });
       const deps = baseDeps();
       const result = await processOutreachSweep(deps);
       expect(result.sent).toBe(0);
       expect(
         (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl
       ).not.toHaveBeenCalled();
-      // The abandoned claim is cleared, so it never counts against the cap or
-      // reads as outreach that happened.
       expect(ledger.patchProspect).toHaveBeenCalledWith(
         BIZ,
         prospect().id,
-        { sent_at: null },
+        expectedPatch,
         expect.anything()
       );
     }
+  });
+
+  it("abandons the send silently when the row vanished under it", async () => {
+    const ledger = sendLedger({ getProspect: vi.fn(async () => null) });
+    const deps = baseDeps();
+    const result = await processOutreachSweep(deps);
+    expect(result.sent).toBe(0);
+    expect(
+      (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl
+    ).not.toHaveBeenCalled();
+    // Nothing to undo: there is no row to write to.
+    expect(ledger.patchProspect).not.toHaveBeenCalled();
   });
 
   it("does not send twice when another pass already claimed the prospect", async () => {
