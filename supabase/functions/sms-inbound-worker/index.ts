@@ -67,10 +67,16 @@ import {
   detectAndPersistCustomerLanguage
 } from "../_shared/customer_language_persist.ts";
 import { inboundSmsBody, telnyxSendSms } from "../_shared/telnyx_sms_compliance.ts";
-import { isTapbackText } from "../_shared/sms_tapback.ts";
+import {
+  formatTapbackAnswerNote,
+  parseTapback,
+  type Tapback
+} from "../_shared/sms_tapback.ts";
 import {
   assistantMessageInvitesReply,
-  isBareAcknowledgmentText
+  formatEmojiOnlyAnswerNote,
+  isBareAcknowledgmentText,
+  isEmojiOnlyText
 } from "../_shared/sms_ack.ts";
 // Tracked short links for AI replies — the same rewrite AiFlow sends get, so
 // one customer thread never mixes raw booking URLs with /s/<code> links
@@ -420,18 +426,21 @@ async function storeInboundImageForEditing(
 }
 
 /**
- * Whether the assistant's LATEST message to this customer stands on its own
- * (exists, and does not end in a question) — the gate for suppressing a
- * bare-acknowledgment reply. Looks at the newest completed job reply and
- * the newest outbound-log row (composer sends, flow texts) and judges the
- * later of the two. No prior assistant message, or any read error, answers
- * false — the worker replies as it always did (fail open to replying).
+ * The assistant's LATEST message to this customer, or null when there is
+ * none (or the read failed). Looks at the newest completed job reply and the
+ * newest outbound-log row (composer sends, flow texts) and returns the later
+ * of the two.
+ *
+ * Callers decide what null means, and they disagree on purpose: an ack with
+ * no prior message is ambiguous so the worker replies, while a tapback ALWAYS
+ * quotes a real message, so an empty lookup there means we missed the row,
+ * not that a question is open (see the two branches in the drain loop).
  */
-async function lastAssistantMessageStandsWithoutReply(
+async function loadLatestAssistantMessage(
   supabase: SupabaseClient<any, any, any>,
   businessId: string,
   customerE164: string
-): Promise<boolean> {
+): Promise<string | null> {
   try {
     const [jobRes, outRes] = await Promise.all([
       supabase
@@ -455,7 +464,7 @@ async function lastAssistantMessageStandsWithoutReply(
         .limit(1)
         .maybeSingle()
     ]);
-    if (jobRes.error || outRes.error) return false;
+    if (jobRes.error || outRes.error) return null;
     const jobRow = jobRes.data as { assistant_reply_text?: string | null; updated_at?: string } | null;
     const outRow = outRes.data as { body?: string | null; created_at?: string } | null;
     const candidates = [
@@ -464,13 +473,32 @@ async function lastAssistantMessageStandsWithoutReply(
         : null,
       outRow?.body ? { text: outRow.body, atMs: Date.parse(outRow.created_at ?? "") } : null
     ].filter((c): c is { text: string; atMs: number } => c !== null);
-    if (candidates.length === 0) return false;
+    if (candidates.length === 0) return null;
     candidates.sort((a, b) => (Number.isFinite(b.atMs) ? b.atMs : 0) - (Number.isFinite(a.atMs) ? a.atMs : 0));
-    return !assistantMessageInvitesReply(candidates[0].text);
+    return candidates[0].text;
   } catch (err) {
-    console.error("ack last-assistant lookup failed (replying as normal)", err);
-    return false;
+    console.error("last-assistant lookup failed", err);
+    return null;
   }
+}
+
+/**
+ * The assistant's last message stands on its own: it exists and does not end
+ * in a question. The gate for suppressing a bare acknowledgment — no prior
+ * message fails open to replying.
+ */
+function assistantMessageStandsAlone(latest: string | null): boolean {
+  return latest !== null && !assistantMessageInvitesReply(latest);
+}
+
+/**
+ * The assistant is waiting on an answer: its last message exists and ends in
+ * a question. The gate for LETTING A REACTION THROUGH — an unknown last
+ * message keeps the reaction suppressed, which is what the worker did for
+ * every tapback before 2026-07-28.
+ */
+function assistantAwaitsAnswer(latest: string | null): boolean {
+  return latest !== null && assistantMessageInvitesReply(latest);
 }
 
 async function clearJobReplyCache(
@@ -960,49 +988,80 @@ serve(async (req: Request) => {
       continue;
     }
 
-    // iMessage tapback (Liked/Loved/… “…”) rendered over SMS: a reaction, not
-    // a message — never generate an AI reply to one, platform-wide (a Like
-    // answered with "Glad to hear it!" reads as bot noise; KYP 2026-07-20).
+    // The tapback and ack branches below both ask "what did we last say to
+    // this person?". Memoized so a job pays for that lookup once, and only
+    // when a branch actually needs it.
+    let latestAssistantLoaded: { text: string | null } | null = null;
+    const latestAssistantMessage = async (): Promise<string | null> => {
+      latestAssistantLoaded ??= {
+        text: await loadLatestAssistantMessage(supabase, job.business_id, fromE164)
+      };
+      return latestAssistantLoaded.text;
+    };
+    // Set when a reaction is answered instead of suppressed: the note rides
+    // inside the user turn so the model knows what "❤️" is answering.
+    let reactionNote: string | null = null;
+
+    // Tapback (Liked/Loved/❤️ “…”) rendered over SMS: a reaction, not a
+    // message. Answering one reads as bot noise (a Like answered with "Glad
+    // to hear it!"; KYP 2026-07-20, and three hearts in a row each drawing a
+    // fresh reply; KYP 2026-07-28), so the generated reply is suppressed
+    // platform-wide EXCEPT when the reaction carries something the thread is
+    // waiting on:
+    //   removal  → always suppressed. Un-reacting is cleanup, never a "no".
+    //   question → always answered. "Questioned"/❓ means "I don't follow".
+    //   reaction → suppressed unless our last message asked a question, in
+    //              which case the reaction IS the answer (👎 means no).
     // Runs AFTER the Safe-Mode/AiFlow gates (a paused tenant's owner forward
     // and a flow that consumed the text already happened) and BEFORE the
     // contact reply-mode branch. Customer jobs only, and only when the
     // inbound carries no photo (a photo with a tapback-shaped caption is a
-    // real message). The inbound is still logged + counted below, exactly
-    // like the contact-suppress branch — only the generated reply is skipped.
-    if (!job.staff_kind && inboundImages.length === 0 && isTapbackText(userText)) {
-      await supabase.rpc("complete_sms_inbound_job", {
-        p_job_id: job.id,
-        p_status: "done",
-        p_telnyx_outbound_message_id: null,
-        p_rowboat_conversation_id: null,
-        p_last_error: "suppressed_tapback"
-      });
-      await clearJobReplyCache(supabase, job.id);
-      // Same bookkeeping as the other suppression branches: the tapback is a
-      // real customer interaction, so stamp the sender and bump the counters.
-      const { error: stampErr } = await supabase
-        .from("sms_inbound_jobs")
-        .update({ customer_e164: fromE164 })
-        .eq("id", job.id)
-        .is("customer_e164", null);
-      if (stampErr) {
-        console.error("tapback customer_e164 stamp", stampErr);
+    // real message). A suppressed tapback is still logged + counted below,
+    // exactly like the contact-suppress branch.
+    const inboundTapback: Tapback | null =
+      !job.staff_kind && inboundImages.length === 0 ? parseTapback(userText) : null;
+    if (inboundTapback) {
+      const suppress =
+        inboundTapback.kind === "removal" ||
+        (inboundTapback.kind === "reaction" &&
+          !assistantAwaitsAnswer(await latestAssistantMessage()));
+      if (suppress) {
+        await supabase.rpc("complete_sms_inbound_job", {
+          p_job_id: job.id,
+          p_status: "done",
+          p_telnyx_outbound_message_id: null,
+          p_rowboat_conversation_id: null,
+          p_last_error: "suppressed_tapback"
+        });
+        await clearJobReplyCache(supabase, job.id);
+        // Same bookkeeping as the other suppression branches: the tapback is
+        // a real customer interaction, so stamp the sender and bump counters.
+        const { error: stampErr } = await supabase
+          .from("sms_inbound_jobs")
+          .update({ customer_e164: fromE164 })
+          .eq("id", job.id)
+          .is("customer_e164", null);
+        if (stampErr) {
+          console.error("tapback customer_e164 stamp", stampErr);
+        }
+        const { error: memErr } = await supabase.rpc("record_customer_interaction", {
+          p_business_id: job.business_id,
+          p_customer_e164: fromE164,
+          p_channel: "sms",
+          p_display_name: null
+        });
+        if (memErr) {
+          console.error("record_customer_interaction (tapback sms)", memErr);
+        }
+        await telemetryRecord(supabase, "sms_worker_suppressed_tapback", {
+          job_id: job.id,
+          business_id: job.business_id,
+          kind: inboundTapback.kind
+        });
+        processed += 1;
+        continue;
       }
-      const { error: memErr } = await supabase.rpc("record_customer_interaction", {
-        p_business_id: job.business_id,
-        p_customer_e164: fromE164,
-        p_channel: "sms",
-        p_display_name: null
-      });
-      if (memErr) {
-        console.error("record_customer_interaction (tapback sms)", memErr);
-      }
-      await telemetryRecord(supabase, "sms_worker_suppressed_tapback", {
-        job_id: job.id,
-        business_id: job.business_id
-      });
-      processed += 1;
-      continue;
+      reactionNote = formatTapbackAnswerNote(inboundTapback);
     }
 
     // Bare acknowledgments ("Ok", "Okay 👍", "Thanks") get NO generated
@@ -1018,7 +1077,7 @@ serve(async (req: Request) => {
       !job.staff_kind &&
       inboundImages.length === 0 &&
       isBareAcknowledgmentText(userText) &&
-      (await lastAssistantMessageStandsWithoutReply(supabase, job.business_id, fromE164))
+      assistantMessageStandsAlone(await latestAssistantMessage())
     ) {
       await supabase.rpc("complete_sms_inbound_job", {
         p_job_id: job.id,
@@ -1051,6 +1110,21 @@ serve(async (req: Request) => {
       });
       processed += 1;
       continue;
+    }
+
+    // An emoji-only reply that survived the branch above is answering a
+    // question we just asked ("Does noon work?" → "🙂‍↕️"), or is a thumbs
+    // down, which is never swallowed. Either way the glyph alone does not
+    // say which question it answers, and a meaningless one ("🐬") invites a
+    // guess, so the same note the tapback branch attaches rides along.
+    if (
+      !reactionNote &&
+      !job.staff_kind &&
+      inboundImages.length === 0 &&
+      isEmojiOnlyText(userText) &&
+      assistantAwaitsAnswer(await latestAssistantMessage())
+    ) {
+      reactionNote = formatEmojiOnlyAnswerNote(userText);
     }
 
     // Per-contact reply mode (contacts.sms_reply_mode). Runs AFTER the AiFlow
@@ -1301,8 +1375,9 @@ serve(async (req: Request) => {
     const dateLine = currentDateTimeLine(new Date(), businessTimezone);
 
     let customerPreamble: string;
-    // Set only on customer turns where an automation just texted this
-    // contact and no Rowboat thread exists yet (see the block below).
+    // Set only on customer turns: an automation just texted this contact and
+    // no Rowboat thread exists yet, and/or the inbound is a reaction we let
+    // through (see the block below).
     let flowAnswerNote: string | null = null;
     if (isStaff) {
       // Internal-assistant mode (mirrors the voice staff persona): the texter
@@ -1414,9 +1489,16 @@ serve(async (req: Request) => {
       const lastFlowMessage =
         flowDetail.recentMessages[flowDetail.recentMessages.length - 1] ?? "";
       const freshThread = !thread?.rowboat_conversation_id?.trim();
-      flowAnswerNote = freshThread && lastFlowMessage
-        ? formatFlowAnswerNote(lastFlowMessage)
-        : null;
+      // A reaction we let through rides next to the user turn for the same
+      // reason the flow anchor does: "❤️" on its own tells the model nothing
+      // about which question it answers. Both notes can apply at once (a
+      // flow asked the question, the texter answered it with an emoji), so
+      // they are joined rather than one winning.
+      const notes = [
+        freshThread && lastFlowMessage ? formatFlowAnswerNote(lastFlowMessage) : null,
+        reactionNote
+      ].filter((n): n is string => Boolean(n));
+      flowAnswerNote = notes.length > 0 ? notes.join(" ") : null;
       // Cross-channel timeline, FRESH THREADS ONLY: a conversation Rowboat
       // hasn't rooted yet starts with zero history — and mid-conversation
       // the rolling summary (contacts.summary_md) is typically still empty

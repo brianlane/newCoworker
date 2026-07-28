@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
 import {
   assistantMessageInvitesReply,
-  isBareAcknowledgmentText
+  formatEmojiOnlyAnswerNote,
+  isBareAcknowledgmentText,
+  isEmojiOnlyText
 } from "../supabase/functions/_shared/sms_ack";
 
 /**
@@ -45,6 +47,14 @@ describe("isBareAcknowledgmentText", () => {
     expect(isBareAcknowledgmentText("👍?")).toBe(false);
   });
 
+  it("a thumbs down is never an ack, whatever its skin tone", () => {
+    // Swallowing a complaint is worse than answering one.
+    expect(isBareAcknowledgmentText("👎")).toBe(false);
+    expect(isBareAcknowledgmentText("👎🏽")).toBe(false);
+    expect(isBareAcknowledgmentText("👎👎")).toBe(false);
+    expect(isBareAcknowledgmentText("👍👎")).toBe(false);
+  });
+
   it("never matches real content, questions, or numeric replies", () => {
     for (const t of [
       "Ok broker will call or I have to call?",
@@ -69,6 +79,43 @@ describe("isBareAcknowledgmentText", () => {
         "thanks thanks thanks thanks thanks thanks thanks thanks"
       )
     ).toBe(false);
+  });
+});
+
+/**
+ * Emoji-only replies get the guidance note when they land on a question the
+ * assistant just asked: "🐬" answers nothing, and a model with no note picks
+ * a reading and moves on.
+ */
+describe("isEmojiOnlyText", () => {
+  it("matches emoji-only inbounds, whether or not they are acks", () => {
+    for (const t of ["👍", "👎", "🐬", "🛎️", "🙂‍↕️", "🙏🙏", "  ❤️ "]) {
+      expect(isEmojiOnlyText(t), t).toBe(true);
+    }
+  });
+
+  it("strips the zero-width padding renderers add", () => {
+    expect(isEmojiOnlyText("\u200B\u2764\uFE0F\u200B")).toBe(true);
+  });
+
+  it("never matches text, digits, bare punctuation, or long inbounds", () => {
+    for (const t of ["Ok 👍", "👍 sounds good", "1️⃣", "?", "!!!", "", "   ", "😀".repeat(30)]) {
+      expect(isEmojiOnlyText(t), t).toBe(false);
+    }
+  });
+});
+
+describe("formatEmojiOnlyAnswerNote", () => {
+  it("quotes the emoji and tells the model to re-ask when it is unclear", () => {
+    const note = formatEmojiOnlyAnswerNote("\u200B🐬\u200B");
+    expect(note).toContain("🐬");
+    expect(note).not.toContain("\u200B");
+    expect(note).toContain("means no");
+    expect(note).toContain("ask it again in plain words");
+  });
+
+  it("never writes an em dash (README writing rule)", () => {
+    expect(formatEmojiOnlyAnswerNote("👎")).not.toContain("\u2014");
   });
 });
 
