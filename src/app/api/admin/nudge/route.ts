@@ -14,8 +14,12 @@ import { getBusiness } from "@/lib/db/businesses";
 import { getBusinessConfig } from "@/lib/db/configs";
 import { getSubscription } from "@/lib/db/subscriptions";
 import { getTelnyxVoiceRouteForBusiness } from "@/lib/db/telnyx-routes";
-import { listWhiteGloveOffers, whiteGloveOfferPayUrl } from "@/lib/db/white-glove-offers";
-import { listEnterpriseDeals, enterpriseDealPayUrl } from "@/lib/db/enterprise-deals";
+import { listWhiteGloveOffers } from "@/lib/db/white-glove-offers";
+import { listEnterpriseDeals } from "@/lib/db/enterprise-deals";
+import {
+  computeOnboardingNudgeItems,
+  nudgeAppUrl
+} from "@/lib/admin/onboarding-nudge";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { buildBrandedEmailHtml } from "@/lib/email/branded-html";
 import { logger } from "@/lib/logger";
@@ -26,8 +30,6 @@ export const maxDuration = 60;
 const schema = z.object({
   businessId: z.string().uuid()
 });
-
-type NudgeItem = { label: string; href?: string };
 
 export async function POST(request: Request) {
   try {
@@ -40,50 +42,34 @@ export async function POST(request: Request) {
       return errorResponse("CONFLICT", "Business has no reachable owner email", 409);
     }
 
-    const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+    const appUrl = nudgeAppUrl();
 
+    // Every read is unguarded ON PURPOSE. These used to be wrapped in
+    // `.catch(() => null | [])`, which quietly turned a transient failure
+    // into wrong CUSTOMER-FACING copy: an unreadable `telnyx_voice_routes`
+    // row became "your coworker doesn't have a phone number yet" in a real
+    // email, and an unreadable offer list silently dropped a payment
+    // request. There is no honest checklist to send when we cannot read
+    // what is done, so fail the request (the operator retries) instead of
+    // guessing. This also keeps the route in step with the admin page's
+    // preview, which loads the same five inputs unguarded.
     const [config, subscription, didRoute, offers, deals] = await Promise.all([
       getBusinessConfig(businessId),
       getSubscription(businessId),
-      getTelnyxVoiceRouteForBusiness(businessId).catch(() => null),
-      listWhiteGloveOffers(businessId).catch(() => []),
-      listEnterpriseDeals(businessId).catch(() => [])
+      getTelnyxVoiceRouteForBusiness(businessId),
+      listWhiteGloveOffers(businessId),
+      listEnterpriseDeals(businessId)
     ]);
 
-    const items: NudgeItem[] = [];
-    if (!subscription || subscription.status === "pending") {
-      items.push({
-        label: "Finish checkout to bring your coworker online",
-        href: `${appUrl}/pricing`
-      });
-    }
-    if (!config?.website_md?.trim()) {
-      items.push({
-        label: "Add your website so your coworker can answer customer questions",
-        href: `${appUrl}/dashboard/memory`
-      });
-    }
-    if (!didRoute?.to_e164) {
-      items.push({
-        label: "Your coworker doesn't have a phone number yet — reply to this email and we'll sort it out"
-      });
-    }
-    for (const offer of offers) {
-      if (offer.status === "open") {
-        items.push({
-          label: `Complete payment for "${offer.name}"`,
-          href: whiteGloveOfferPayUrl(offer)
-        });
-      }
-    }
-    for (const deal of deals) {
-      if (deal.status === "open") {
-        items.push({
-          label: "Complete your enterprise plan payment",
-          href: enterpriseDealPayUrl(deal)
-        });
-      }
-    }
+    // Same computation the admin page renders as the nudge reasons, so the
+    // operator's preview and this email can never disagree.
+    const items = computeOnboardingNudgeItems({
+      subscription,
+      websiteMd: config?.website_md,
+      didE164: didRoute?.to_e164,
+      offers,
+      deals
+    });
 
     if (items.length === 0) {
       return successResponse({ sent: false, items: [] });
@@ -96,13 +82,13 @@ export async function POST(request: Request) {
     const text = [
       `Hi${business.owner_name ? ` ${business.owner_name}` : ""},`,
       "",
-      "Your AI coworker is almost ready — a few steps are still open:",
+      "Your AI coworker is almost ready. A few steps are still open:",
       "",
       ...textLines,
       "",
       `Open your dashboard: ${appUrl}/dashboard`,
       "",
-      "Reply to this email if you're stuck — happy to help."
+      "Reply to this email if you're stuck. Happy to help."
     ].join("\n");
 
     const html = buildBrandedEmailHtml({
@@ -112,13 +98,13 @@ export async function POST(request: Request) {
       bodyBlocks: [
         {
           kind: "text" as const,
-          text: `Hi${business.owner_name ? ` ${business.owner_name}` : ""}, your AI coworker is almost ready — a few steps are still open:`
+          text: `Hi${business.owner_name ? ` ${business.owner_name}` : ""}, your AI coworker is almost ready. A few steps are still open:`
         },
         ...items.map((item) => ({
           kind: "text" as const,
-          text: `• ${item.label}${item.href ? ` — ${item.href}` : ""}`
+          text: `• ${item.label}${item.href ? `: ${item.href}` : ""}`
         })),
-        { kind: "text" as const, text: "Reply to this email if you're stuck — happy to help." }
+        { kind: "text" as const, text: "Reply to this email if you're stuck. Happy to help." }
       ],
       cta: { label: "Open dashboard", href: `${appUrl}/dashboard` },
       recipientEmail: business.owner_email
