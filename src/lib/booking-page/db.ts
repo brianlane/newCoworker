@@ -30,7 +30,12 @@ export type BookingPageRow = {
   waitlist_offer_ttl_minutes: number;
   /** Vanity /book/<slug> URL; null = token URL only. */
   slug: string | null;
-  /** Public event title; null falls back to "Book a call with {business}". */
+  /**
+   * Dormant relic of the page-level heading. Nothing renders it and nothing
+   * writes it: a visitor reads the business name plus the meeting's own
+   * name, so the column survives only for the meetings the backfill named
+   * from it.
+   */
   title: string | null;
   /** Branded confirmation email at booking time (needs an attendee email). */
   send_confirmation_email: boolean;
@@ -144,8 +149,6 @@ export type BookingPageSettingsPatch = {
   paymentCurrency?: string;
   /** Vanity URL slug; null/blank clears back to the token-only URL. */
   slug?: string | null;
-  /** Public event title; null/blank restores the localized default. */
-  title?: string | null;
 };
 
 export class BookingPageValidationError extends Error {
@@ -226,9 +229,6 @@ function validatePatch(patch: BookingPageSettingsPatch): void {
       );
     }
   }
-  if (patch.title !== undefined && patch.title !== null && patch.title.length > 120) {
-    throw new BookingPageValidationError("Title must be 120 characters or fewer");
-  }
   if (
     patch.assignmentMode !== undefined &&
     !["any", "round_robin", "fixed"].includes(patch.assignmentMode)
@@ -294,7 +294,6 @@ function patchColumns(patch: BookingPageSettingsPatch): Record<string, unknown> 
     ...(patch.slug === undefined
       ? {}
       : { slug: patch.slug === null ? null : parseBookingPageSlug(patch.slug) }),
-    ...(patch.title === undefined ? {} : { title: patch.title?.trim() || null }),
     ...(patch.sendConfirmationEmail === undefined
       ? {}
       : { send_confirmation_email: patch.sendConfirmationEmail }),

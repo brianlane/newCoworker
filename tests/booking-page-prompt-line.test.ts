@@ -1,7 +1,7 @@
 /**
  * The coworker's knowledge of its own booking link: vanity slug over raw
- * token, the same title fallback the public page renders, silence when
- * there is no enabled page, and a read failure that costs only the hint.
+ * token, the meetings that name the link, silence when there is no enabled
+ * page, and a read failure that costs only the hint.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -9,6 +9,13 @@ vi.mock("@/lib/booking-page/db", () => ({
   getBookingPageForBusiness: vi.fn(),
   upsertBookingPage: vi.fn()
 }));
+vi.mock("@/lib/booking-page/meeting-types", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/booking-page/meeting-types")>(
+    "@/lib/booking-page/meeting-types"
+  );
+  // The visibility rule is the real one; only the read is faked.
+  return { listMeetingTypes: vi.fn(), visibleMeetingTypes: actual.visibleMeetingTypes };
+});
 vi.mock("@/lib/db/businesses", () => ({ getBusiness: vi.fn() }));
 vi.mock("@/lib/voice-tools/connections", () => ({ resolveCalendarConnection: vi.fn() }));
 vi.mock("@/lib/calendar-tools/calendly", () => ({ pickCalendlyEventType: vi.fn() }));
@@ -21,6 +28,7 @@ import {
   schedulingLink
 } from "@/lib/booking-page/prompt-line";
 import { getBookingPageForBusiness, upsertBookingPage } from "@/lib/booking-page/db";
+import { listMeetingTypes } from "@/lib/booking-page/meeting-types";
 import { getBusiness } from "@/lib/db/businesses";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import { pickCalendlyEventType } from "@/lib/calendar-tools/calendly";
@@ -32,13 +40,18 @@ const mockUpsert = vi.mocked(upsertBookingPage);
 const mockBusiness = vi.mocked(getBusiness);
 const mockConn = vi.mocked(resolveCalendarConnection);
 const mockCalendly = vi.mocked(pickCalendlyEventType);
+const mockTypes = vi.mocked(listMeetingTypes);
 
 const PAGE = {
   enabled: true,
   slug: "new-coworker",
-  token: "ncb_deadbeef",
-  title: "NC Discovery Call"
+  token: "ncb_deadbeef"
 };
+
+/** Enough of a meeting for the label: name, and whether it is listed. */
+function meeting(name: string, over: Record<string, unknown> = {}) {
+  return { id: name, name, enabled: true, hidden: false, ...over } as never;
+}
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -46,6 +59,7 @@ beforeEach(() => {
   mockPage.mockResolvedValue(PAGE as never);
   mockUpsert.mockResolvedValue(PAGE as never);
   mockBusiness.mockResolvedValue({ name: "New Coworker" } as never);
+  mockTypes.mockResolvedValue([meeting("NC Discovery Call")]);
   // Default: a Google-connected tenant, which books through the native page.
   mockConn.mockResolvedValue({
     provider: "google",
@@ -56,24 +70,41 @@ beforeEach(() => {
 });
 
 describe("publicBookingLink", () => {
-  it("prefers the vanity slug and carries the owner's public title", async () => {
+  it("prefers the vanity slug and names the link by its one meeting", async () => {
+    // One meeting IS the page, so the coworker can say what it books.
     expect(await publicBookingLink(BIZ)).toEqual({
       url: "https://www.newcoworker.com/book/new-coworker",
-      title: "NC Discovery Call"
+      title: "NC Discovery Call",
+      meetings: ["NC Discovery Call"]
     });
   });
 
-  it("falls back to the token URL and the default title, like the page itself", async () => {
-    mockPage.mockResolvedValue({ ...PAGE, slug: null, title: null } as never);
+  it("falls back to the token URL, and to the business name when the link opens a choice", async () => {
+    mockPage.mockResolvedValue({ ...PAGE, slug: null } as never);
+    mockTypes.mockResolvedValue([meeting("Discovery call"), meeting("Support call")]);
     expect(await publicBookingLink(BIZ)).toEqual({
       url: "https://www.newcoworker.com/book/ncb_deadbeef",
-      title: "Book a call with New Coworker"
+      title: "Book a call with New Coworker",
+      meetings: ["Discovery call", "Support call"]
     });
 
-    // A blank title reads as unset, and a missing business still answers.
-    mockPage.mockResolvedValue({ ...PAGE, title: "   " } as never);
+    // A missing business still answers, with nothing to name it after.
     mockBusiness.mockResolvedValue(null as never);
     expect((await publicBookingLink(BIZ))?.title).toBe("Book a call with us");
+  });
+
+  it("offers only the meetings a visitor can actually see", async () => {
+    mockTypes.mockResolvedValue([
+      meeting("Discovery call"),
+      meeting("Secret call", { hidden: true }),
+      meeting("Paused call", { enabled: false })
+    ]);
+    // An unlisted or paused meeting is not a choice the link offers, so one
+    // visible meeting still names the link outright.
+    expect(await publicBookingLink(BIZ)).toMatchObject({
+      title: "Discovery call",
+      meetings: ["Discovery call"]
+    });
   });
 
   it("falls back to localhost when the app origin is unset (dev)", async () => {
@@ -110,6 +141,7 @@ describe("schedulingLink (provider resolution)", () => {
     expect(await schedulingLink(BIZ)).toEqual({
       url: "https://calendly.com/kyp/intro",
       title: "KYP Intro Call",
+      meetings: ["KYP Intro Call"],
       kind: "calendly"
     });
     expect(mockCalendly).toHaveBeenCalledWith(BIZ, expect.anything(), 30);
@@ -152,6 +184,7 @@ describe("schedulingLink (provider resolution)", () => {
     expect(await schedulingLink(BIZ)).toEqual({
       url: "https://www.newcoworker.com/book/new-coworker",
       title: "NC Discovery Call",
+      meetings: ["NC Discovery Call"],
       kind: "booking_page"
     });
     expect(mockUpsert).toHaveBeenCalledWith(BIZ, { enabled: true });
@@ -216,10 +249,10 @@ describe("schedulingLink (provider resolution)", () => {
 });
 
 describe("bookingLinkPromptLine", () => {
-  it("names the exact URL and title, sends by default, forbids inventing another", async () => {
+  it("names the exact URL and what it books, sends by default, forbids inventing another", async () => {
     const line = await bookingLinkPromptLine(BIZ);
     expect(line).toContain("https://www.newcoworker.com/book/new-coworker");
-    expect(line).toContain('"NC Discovery Call"');
+    expect(line).toContain('which books "NC Discovery Call"');
     expect(line).toContain("Never invent a different booking URL");
     // The link is the DEFAULT for a delegation, not a menu option to offer
     // back to the owner; listed times only on an explicit ask, and an
@@ -231,9 +264,23 @@ describe("bookingLinkPromptLine", () => {
       formatBookingLinkPromptLine({
         url: "https://www.newcoworker.com/book/new-coworker",
         title: "NC Discovery Call",
+        meetings: ["NC Discovery Call"],
         kind: "booking_page"
       })
     );
+  });
+
+  it("lists the meetings when the link opens a choice, and stays vague with none", async () => {
+    mockTypes.mockResolvedValue([meeting("Discovery call"), meeting("Support call")]);
+    const many = await bookingLinkPromptLine(BIZ);
+    expect(many).toContain("chooses one of these meetings and then a time: Discovery call, Support call");
+
+    // No meeting to name: the link still works, so the hint stays, minus
+    // any claim about what it books.
+    mockTypes.mockResolvedValue([]);
+    const none = await bookingLinkPromptLine(BIZ);
+    expect(none).toContain("where the visitor picks a time");
+    expect(none).not.toContain("which books");
   });
 
   it("a Calendly tenant's line carries their Calendly event link", async () => {

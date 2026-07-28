@@ -604,20 +604,19 @@ describe("deleteMeetingType", () => {
 });
 
 describe("effectiveTypeSettings", () => {
-  it("is the page itself when there is no type (today's flow)", () => {
+  it("is the page itself when there is no type (the legacy flow)", () => {
     const eff = effectiveTypeSettings(pageRow(), null, 30);
     expect(eff).toMatchObject({
       durationMinutes: 30,
-      title: "Book a call",
+      // Only a meeting names a booking, so a typeless page reports null and
+      // the caller renders its own localized default. The page's own title
+      // column is a relic nothing renders.
+      title: null,
       description: "Page blurb",
       assignmentMode: "any",
       paymentRequired: false
     });
     expect(eff.questions.map((q) => q.id)).toEqual(["page-q"]);
-
-    // A page with no custom title reports null, so the caller renders its
-    // own localized default.
-    expect(effectiveTypeSettings(pageRow({ title: "  " }), null, 30).title).toBeNull();
   });
 
   it("a bare type takes its duration and name, inheriting everything else", () => {

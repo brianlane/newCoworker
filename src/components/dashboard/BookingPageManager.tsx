@@ -294,47 +294,28 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
 
             {linkOpen ? (
               <div className="space-y-4 border-t border-parchment/10 pt-4">
-                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-                  <div>
-                    <label className={label} htmlFor="bp-slug">
-                      {t("slugLabel")}
-                    </label>
-                    <input
-                      id="bp-slug"
-                      type="text"
-                      maxLength={60}
-                      placeholder={t("slugPlaceholder")}
-                      className={textField}
-                      defaultValue={page.slug ?? ""}
-                      disabled={saving}
-                      onBlur={(e) => {
-                        const raw = e.target.value.trim().toLowerCase();
-                        if (raw === (page.slug ?? "")) return;
-                        void patch({ slug: raw === "" ? null : raw });
-                      }}
-                    />
-                    <p className="mt-1 text-xs text-parchment/40">{t("slugHint")}</p>
-                  </div>
-                  <div>
-                    <label className={label} htmlFor="bp-title">
-                      {t("titleLabel")}
-                    </label>
-                    <input
-                      id="bp-title"
-                      type="text"
-                      maxLength={120}
-                      placeholder={t("titlePlaceholder")}
-                      className={textField}
-                      defaultValue={page.title ?? ""}
-                      disabled={saving}
-                      onBlur={(e) => {
-                        const raw = e.target.value.trim();
-                        if (raw === (page.title ?? "")) return;
-                        void patch({ title: raw === "" ? null : raw });
-                      }}
-                    />
-                    <p className="mt-1 text-xs text-parchment/40">{t("titleHint")}</p>
-                  </div>
+                {/* No heading field: visitors read the business name and the
+                    meeting's own name, so a page-level heading had nowhere
+                    left to render. */}
+                <div>
+                  <label className={label} htmlFor="bp-slug">
+                    {t("slugLabel")}
+                  </label>
+                  <input
+                    id="bp-slug"
+                    type="text"
+                    maxLength={60}
+                    placeholder={t("slugPlaceholder")}
+                    className={textField}
+                    defaultValue={page.slug ?? ""}
+                    disabled={saving}
+                    onBlur={(e) => {
+                      const raw = e.target.value.trim().toLowerCase();
+                      if (raw === (page.slug ?? "")) return;
+                      void patch({ slug: raw === "" ? null : raw });
+                    }}
+                  />
+                  <p className="mt-1 text-xs text-parchment/40">{t("slugHint")}</p>
                 </div>
                 <div>
                   <label className={label} htmlFor="bp-desc">

@@ -117,8 +117,6 @@ export type BookingPageContext = {
   businessName: string;
   timezone: string;
   description: string | null;
-  /** Owner-set public event title; null = localized default. */
-  title: string | null;
   allowedDurations: number[];
   /** True when bookings will carry a Zoom join link. */
   videoCall: boolean;
@@ -196,7 +194,6 @@ export async function getBookingPageContext(
       businessName: business.name,
       timezone: business.timezone?.trim() || "UTC",
       description: page.description,
-      title: page.title?.trim() || null,
       allowedDurations: page.allowed_durations,
       videoCall: zoomId !== null,
       mode: conn ? "provider" : "platform",
