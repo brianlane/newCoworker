@@ -97,6 +97,31 @@ export function hasFirstCycleDiscount(tier: PlanTier, period: BillingPeriod): bo
   return getFirstCycleDiscountCents(tier, period) > 0;
 }
 
+/**
+ * What the plan's Stripe line item costs BEFORE any coupon: the base a
+ * promotion's percentage or fixed amount comes off.
+ *
+ * Monthly is the subtle one: the Stripe monthly price object carries the FULL
+ * renewal rate, and the advertised first-month price is that rate minus the
+ * intro coupon. So a promo code replacing the intro coupon discounts the full
+ * rate, not the already-discounted one. Term plans are prepaid in full at
+ * checkout, so their base is the whole commitment total.
+ */
+export function getPlanListPriceCents(tier: PlanTier, period: BillingPeriod): number {
+  if (period === "monthly") return getPeriodPricing(tier, period).renewalMonthlyCents;
+  return calculateCommitmentTotal(tier, period);
+}
+
+/**
+ * The plan portion of "due today" with no promo code applied: the list price
+ * less the standard first-cycle intro discount. Excludes the carrier
+ * registration fee and the Canadian messaging surcharge, which are separate
+ * lines a promotion never touches.
+ */
+export function getPlanDueTodayCents(tier: PlanTier, period: BillingPeriod): number {
+  return getPlanListPriceCents(tier, period) - getFirstCycleDiscountCents(tier, period);
+}
+
 export function getFirstCycleDiscountDisplay(tier: PlanTier, period: BillingPeriod): string {
   return formatPriceCents(getFirstCycleDiscountCents(tier, period));
 }

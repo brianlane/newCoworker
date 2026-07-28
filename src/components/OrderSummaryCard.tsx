@@ -11,11 +11,12 @@ import {
   CANADA_MESSAGING_FEE_NAME
 } from "@/lib/plans/canadian-messaging";
 import {
-  calculateCommitmentTotal,
   formatCommitmentTotal,
   formatPriceCents,
   getFirstCycleDiscountDisplay,
   getMonthlyRateDisplay,
+  getPlanDueTodayCents,
+  getPlanListPriceCents,
   getRenewalRateDisplay,
   hasFirstCycleDiscount
 } from "@/lib/pricing";
@@ -32,6 +33,13 @@ type OrderSummaryCardProps = {
    * pass isCanadianBusiness() over the same phone/timezone the draft holds.
    */
   canadianFee?: boolean;
+  /**
+   * Applied promo code, as returned by /api/promotions/validate. Stripe allows
+   * one discount per Checkout Session, so an applied promo REPLACES the
+   * first-cycle intro coupon, the same precedence /api/checkout uses, which
+   * is why the intro-discount line disappears while one is applied.
+   */
+  promotion?: { code: string; discountCents: number } | null;
 };
 
 export function OrderSummaryCard({
@@ -39,10 +47,11 @@ export function OrderSummaryCard({
   period,
   businessName,
   preferFirstMonthLabel = false,
-  canadianFee = false
+  canadianFee = false,
+  promotion = null
 }: OrderSummaryCardProps) {
   const t = useTranslations("marketing.orderSummary");
-  const hasIntroDiscount = hasFirstCycleDiscount(tier, period);
+  const hasIntroDiscount = hasFirstCycleDiscount(tier, period) && promotion === null;
   const firstCyclePrice = getMonthlyRateDisplay(tier, period);
   const renewalPrice = getRenewalRateDisplay(tier, period);
   const firstCycleDiscount = getFirstCycleDiscountDisplay(tier, period);
@@ -52,10 +61,14 @@ export function OrderSummaryCard({
   // Every new signup additionally pays the one-time 10DLC carrier
   // registration fee (non-refundable pass-through, Phase C3) on the first
   // invoice, so it is part of "due today".
+  // A promo code replaces the intro coupon, so its discount comes off the
+  // plan's LIST price (on monthly, that is the full renewal rate the Stripe
+  // price carries, not the already-discounted intro figure).
   const isTermPlan = period !== "monthly";
-  const planDueTodayCents = isTermPlan
-    ? calculateCommitmentTotal(tier, period)
-    : getPeriodPricing(tier, period).monthlyCents;
+  const planDueTodayCents =
+    promotion === null
+      ? getPlanDueTodayCents(tier, period)
+      : getPlanListPriceCents(tier, period) - promotion.discountCents;
   // Canadian signups: $4.99/mo surcharge billed at the plan's cadence, so a
   // term plan pays it upfront for the whole term (like the plan itself).
   const canadaFeeDueTodayCents = canadianFee
@@ -64,6 +77,9 @@ export function OrderSummaryCard({
   const totalDueToday = formatPriceCents(
     planDueTodayCents + CARRIER_REGISTRATION_FEE_CENTS + canadaFeeDueTodayCents
   );
+  // With a promo applied to a monthly plan the intro coupon is gone, so the
+  // rate row shows the plan's real rate and the promo line carries the saving.
+  const rateDisplay = !isTermPlan && promotion !== null ? renewalPrice : firstCyclePrice;
   const monthlyLabel = isTermPlan
     ? t("effectiveMonthly")
     : preferFirstMonthLabel && hasIntroDiscount
@@ -94,13 +110,19 @@ export function OrderSummaryCard({
           {hasIntroDiscount && (
             <span className="text-parchment/35 line-through">{renewalPrice}</span>
           )}
-          <span>{firstCyclePrice}</span>
+          <span>{rateDisplay}</span>
         </span>
       </div>
       {hasIntroDiscount && (
         <div className="flex justify-between text-spark-orange text-xs">
           <span>{t("introDiscount")}</span>
           <span>-{firstCycleDiscount}</span>
+        </div>
+      )}
+      {promotion !== null && (
+        <div className="flex justify-between text-claw-green text-xs">
+          <span>{t("promoDiscount", { code: promotion.code })}</span>
+          <span>-{formatPriceCents(promotion.discountCents)}</span>
         </div>
       )}
       <div className="flex justify-between text-parchment/40 text-xs">

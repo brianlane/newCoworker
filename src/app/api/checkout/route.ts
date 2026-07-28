@@ -25,6 +25,7 @@ import {
   isCanadianBusiness
 } from "@/lib/plans/canadian-messaging";
 import { getOnboardingDraft } from "@/lib/db/onboarding-drafts";
+import { validatePromotionCode } from "@/lib/promotions/validate";
 
 const schema = z.object({
   tier: z.enum(["starter", "standard"]),
@@ -40,7 +41,13 @@ const schema = z.object({
    * timezone (the phone is always authoritative when NANP). Keeps the
    * order-summary preview and the actual charge in lockstep.
    */
-  timezone: z.string().min(1).max(60).optional()
+  timezone: z.string().min(1).max(60).optional(),
+  /**
+   * Admin promotion the customer entered on Step 3. Re-validated here against
+   * the same rules the preview ran (`validatePromotionCode`), so the summary
+   * and the charge cannot diverge and a forged preview buys nothing.
+   */
+  promoCode: z.string().trim().min(1).max(40).optional()
 });
 
 /**
@@ -243,6 +250,31 @@ export async function POST(request: Request) {
     const discountCouponId = resolveIntroDiscountCouponId(body.tier, body.billingPeriod);
     const commitmentMonths = getCommitmentMonths(body.billingPeriod);
 
+    // Promo code. Fails CLOSED: a code that no longer validates (switched off,
+    // capped out, window closed since the customer previewed it) refuses the
+    // checkout rather than silently charging full price on a session the
+    // customer expects to be discounted. 422 is the client's signal to drop
+    // the code and retry at the normal price.
+    let promotion: Awaited<ReturnType<typeof validatePromotionCode>> | null = null;
+    if (body.promoCode) {
+      promotion = await validatePromotionCode({
+        code: body.promoCode,
+        tier: body.tier,
+        period: body.billingPeriod
+      });
+      if (!promotion.ok) {
+        logger.info("checkout: promo code rejected at redemption time", {
+          businessId: body.businessId,
+          reason: promotion.reason
+        });
+        return errorResponse(
+          "VALIDATION_ERROR",
+          "That promo code is no longer valid for this plan. Remove it and continue at the regular price.",
+          422
+        );
+      }
+    }
+
     // Canadian signups pay the labeled monthly messaging surcharge (Canadian
     // carriers charge per-message pass-through fees US traffic doesn't).
     // Detection uses the phone + timezone the owner entered at onboarding —
@@ -350,6 +382,11 @@ export async function POST(request: Request) {
       cancelUrl: `${appUrl}/onboard/questionnaire?tier=${encodeURIComponent(body.tier)}&period=${encodeURIComponent(body.billingPeriod)}`,
       customerEmail,
       discountCouponId,
+      // Wins over the intro coupon inside createCheckoutSession (Stripe allows
+      // one discount per session), matching what the order summary previewed.
+      ...(promotion?.ok
+        ? { discountPromotionCodeId: promotion.promotion.stripe_promotion_code_id }
+        : {}),
       // New signups register a fresh 10DLC campaign — pass the carrier fee
       // through as a one-time line item. Plan changes and reactivations
       // (separate routes) keep the existing campaign and never re-charge it.
@@ -371,6 +408,11 @@ export async function POST(request: Request) {
         // the sub it is replacing carried the surcharge (grandfathered
         // pre-fee tenants never get it added on a later plan change).
         ...(canadian ? { canadianMessagingFee: "1" } : {}),
+        // The webhook files the redemption from this id; the code rides along
+        // so a Stripe session is legible without a join.
+        ...(promotion?.ok
+          ? { promotionId: promotion.promotion.id, promotionCode: promotion.promotion.code }
+          : {}),
         ...(customerProfileId ? { customerProfileId } : {})
       }
     });

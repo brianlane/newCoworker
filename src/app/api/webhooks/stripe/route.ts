@@ -8,6 +8,7 @@ import {
   updateSubscription,
   type SubscriptionPeriodStripeCache
 } from "@/lib/db/subscriptions";
+import { recordPromotionRedemption } from "@/lib/db/promotions";
 import { successResponse, errorResponse } from "@/lib/api-response";
 import { logger } from "@/lib/logger";
 import type Stripe from "stripe";
@@ -1194,6 +1195,34 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
       });
     }
 
+  }
+
+  // Promotion attribution. Records what Stripe ACTUALLY discounted rather than
+  // the code's nominal value, so the admin stats report real dollars. Keyed on
+  // the session id, so a webhook re-delivery is a no-op instead of inflating
+  // the count or burning a second slot against the redemption cap. Best-effort
+  // by design: a stats row is not worth failing an activation that has already
+  // taken the customer's money.
+  const promotionId = session.metadata?.promotionId;
+  if (promotionId && billingPeriod && tier !== "enterprise") {
+    try {
+      await recordPromotionRedemption({
+        promotionId,
+        businessId,
+        tier,
+        billingPeriod,
+        stripeSessionId: session.id,
+        amountDiscountedCents: session.total_details?.amount_discount ?? 0
+      });
+    } catch (err) {
+      logger.warn("promotion redemption not recorded (non-fatal)", {
+        businessId,
+        promotionId,
+        sessionId: session.id,
+        eventId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
   }
 
   // Skip when the owner has opted into auto-renew: a late webhook retry
