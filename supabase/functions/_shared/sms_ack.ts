@@ -100,15 +100,17 @@ export function isBareAcknowledgmentText(text: string): boolean {
   // Digits are never acks — numeric replies are meaningful ("1" claims a
   // team offer; "2" picks slot two).
   if (/\d/.test(t)) return false;
+  // A thumbs down is never an ack, and the check sits above the phrase match
+  // on purpose: "Ok 👎" normalizes to the ack phrase "ok", and swallowing a
+  // grudging yes loses the complaint riding with it.
+  if (THUMBS_DOWN_RE.test(t)) return false;
   const letters = t
     .toLowerCase()
     .replace(/[^\p{L}]+/gu, " ")
     .trim();
   if (letters === "") {
     // Letterless: an emoji reaction ("👍", "🙏🙏") is an ack; bare
-    // punctuation — especially "?" — is a nudge that deserves a reply. A
-    // thumbs down is the one emoji we never swallow: it is a complaint.
-    if (THUMBS_DOWN_RE.test(t)) return false;
+    // punctuation — especially "?" — is a nudge that deserves a reply.
     return /\p{Extended_Pictographic}/u.test(t) && !t.includes("?");
   }
   return ACK_PHRASES.has(letters.replace(/\s+/g, " "));

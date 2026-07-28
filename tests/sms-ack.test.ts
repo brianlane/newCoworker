@@ -47,12 +47,13 @@ describe("isBareAcknowledgmentText", () => {
     expect(isBareAcknowledgmentText("👍?")).toBe(false);
   });
 
-  it("a thumbs down is never an ack, whatever its skin tone", () => {
-    // Swallowing a complaint is worse than answering one.
-    expect(isBareAcknowledgmentText("👎")).toBe(false);
-    expect(isBareAcknowledgmentText("👎🏽")).toBe(false);
-    expect(isBareAcknowledgmentText("👎👎")).toBe(false);
-    expect(isBareAcknowledgmentText("👍👎")).toBe(false);
+  it("a thumbs down is never an ack, whatever its skin tone or company", () => {
+    // Swallowing a complaint is worse than answering one, and a thumbs down
+    // beside an ack phrase ("Ok 👎") is a grudging yes that still deserves
+    // an answer.
+    for (const t of ["👎", "👎🏽", "👎👎", "👍👎", "Ok 👎", "Thanks 👎", "👎 will do"]) {
+      expect(isBareAcknowledgmentText(t), t).toBe(false);
+    }
   });
 
   it("never matches real content, questions, or numeric replies", () => {
