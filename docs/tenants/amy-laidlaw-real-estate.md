@@ -91,7 +91,23 @@ Account-level: `seed-amy-new-lead-intake.ts`,
 `set-amy-claim-notify-email.ts`, `set-amy-roster-availability.ts`,
 `update-dave-routed-aiflows.ts`, `add-price-band-routing.ts`,
 `add-bad-phone-agent-report.ts`, `enrich-owner-notify.ts`,
-`fix-staff-contact-rows.ts`, `strip-em-dashes-flows.ts`.
+`fix-staff-contact-rows.ts`, `strip-em-dashes-flows.ts`,
+`recover-amy-biennial-switch.ts`.
+
+## Billing
+
+Switched monthly -> Standard biennial on Jul 28 2026. The switch's Hostinger
+purchase "failed but charged" (HTTP 402 while the order completed server-side
+about a minute later), the orchestrator aborted, and the recovery was applied
+by `scripts/oneshot/recover-amy-biennial-switch.ts`: the paid 2-year box was
+adopted directly and the plan bookkeeping completed manually.
+
+One durable caveat: the Stripe subscription OBJECT backing the biennial
+contract is canceled (the abort path canceled it; the $2,376 payment itself
+was captured and kept). That means the dashboard's contract auto-renew toggle
+and `ensureCommitmentSchedule` are inert for this term. At the 24-month mark
+(renewal Jul 28 2028) the plan card's "Start a new contract" CTA is the path
+back onto a contract rate; it creates a fresh Stripe subscription.
 
 `tests/tenant-dossiers.test.ts` fails if a tenant-named script exists without
 a mention here, so adding a one-shot means adding a line.
