@@ -2103,13 +2103,15 @@
         "read": "Read",
         "hide": "Hide",
         "send": "Send",
-        "skip": "Skip"
+        "skip": "Skip",
+        "saveSettings": "Save settings"
       },
       "saved": "Saved. The change takes effect on the next pass.",
       "saveFailed": "That could not be saved.",
       "actionFailed": "That did not work. Try again.",
       "sentOne": "Sent.",
-      "skippedOne": "Skipped, and they will not come up again."
+      "skippedOne": "Skipped, and they will not come up again.",
+      "unsavedChanges": "You have unsaved changes."
     }
   },
   "admin": {

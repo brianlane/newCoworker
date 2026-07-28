@@ -97,27 +97,43 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  /**
+   * Unsaved edits in the form. Send and Skip both re-read from the server, so
+   * without this a targeting change typed while working through the queue
+   * would be silently overwritten by the refresh that follows.
+   */
+  const [dirty, setDirty] = useState(false);
 
-  const refresh = useCallback(async () => {
-    try {
-      const res = await fetch(`/api/dashboard/outreach?businessId=${encodeURIComponent(businessId)}`, {
-        cache: "no-store"
-      });
-      const json = (await res.json()) as { ok: boolean; data?: View };
-      if (json.ok && json.data) {
+  const refresh = useCallback(
+    async (syncForm: boolean) => {
+      try {
+        const res = await fetch(
+          `/api/dashboard/outreach?businessId=${encodeURIComponent(businessId)}`,
+          { cache: "no-store" }
+        );
+        const json = (await res.json()) as { ok: boolean; data?: View };
+        if (!json.ok || !json.data) return;
         setView(json.data);
+        if (!syncForm) return;
         const next = json.data.settings ?? DEFAULTS;
         setForm(next);
         setTerms(next.search_terms.join(", "));
         setCities(next.cities.join(", "));
+      } catch {
+        /* keep whatever is on screen */
       }
-    } catch {
-      /* keep whatever is on screen */
-    }
-  }, [businessId]);
+    },
+    [businessId]
+  );
+
+  /** Field edits mark the form dirty so a background refresh cannot clobber them. */
+  const edit = (patch: Partial<Settings>) => {
+    setDirty(true);
+    setForm((prev) => ({ ...prev, ...patch }));
+  };
 
   useEffect(() => {
-    void refresh();
+    void refresh(true);
   }, [refresh]);
 
   const save = async (mode: Mode) => {
@@ -147,7 +163,8 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
         return;
       }
       setNotice(t("saved"));
-      await refresh();
+      setDirty(false);
+      await refresh(true);
     } catch {
       setError(t("saveFailed"));
     } finally {
@@ -171,7 +188,9 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
         return;
       }
       setNotice(action === "send" ? t("sentOne") : t("skippedOne"));
-      await refresh();
+      // Refresh the queue and the numbers, but leave a half-typed settings
+      // form alone: the owner did not ask to discard it by pressing Send.
+      await refresh(!dirty);
     } catch {
       setError(t("actionFailed"));
     } finally {
@@ -254,7 +273,10 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
             id="prospecting-terms"
             className={inputClass}
             value={terms}
-            onChange={(e) => setTerms(e.target.value)}
+            onChange={(e) => {
+              setDirty(true);
+              setTerms(e.target.value);
+            }}
             placeholder={t("placeholders.searchTerms")}
           />
         </div>
@@ -266,7 +288,10 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
             id="prospecting-cities"
             className={inputClass}
             value={cities}
-            onChange={(e) => setCities(e.target.value)}
+            onChange={(e) => {
+              setDirty(true);
+              setCities(e.target.value);
+            }}
             placeholder={t("placeholders.cities")}
           />
         </div>
@@ -278,7 +303,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
             id="prospecting-offer"
             className={`${inputClass} min-h-20`}
             value={form.value_prop ?? ""}
-            onChange={(e) => setForm({ ...form, value_prop: e.target.value })}
+            onChange={(e) => edit({ value_prop: e.target.value })}
             placeholder={t("placeholders.valueProp")}
           />
         </div>
@@ -290,7 +315,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
             id="prospecting-postal"
             className={inputClass}
             value={form.postal_address ?? ""}
-            onChange={(e) => setForm({ ...form, postal_address: e.target.value })}
+            onChange={(e) => edit({ postal_address: e.target.value })}
             placeholder={t("placeholders.postalAddress")}
           />
           <p className="mt-1 text-xs text-parchment/50">{t("postalHelp")}</p>
@@ -303,7 +328,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
             id="prospecting-sender"
             className={inputClass}
             value={form.sender_name ?? ""}
-            onChange={(e) => setForm({ ...form, sender_name: e.target.value })}
+            onChange={(e) => edit({ sender_name: e.target.value })}
           />
         </div>
         <div>
@@ -317,7 +342,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
             max={200}
             className={inputClass}
             value={form.daily_cap}
-            onChange={(e) => setForm({ ...form, daily_cap: Number(e.target.value) })}
+            onChange={(e) => edit({ daily_cap: Number(e.target.value) })}
           />
           <p className="mt-1 text-xs text-parchment/50">{t("capHelp")}</p>
         </div>
@@ -333,7 +358,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
             className={inputClass}
             value={form.send_window_start_hour}
             onChange={(e) =>
-              setForm({ ...form, send_window_start_hour: Number(e.target.value) })
+              edit({ send_window_start_hour: Number(e.target.value) })
             }
           />
         </div>
@@ -348,13 +373,13 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
             max={24}
             className={inputClass}
             value={form.send_window_end_hour}
-            onChange={(e) => setForm({ ...form, send_window_end_hour: Number(e.target.value) })}
+            onChange={(e) => edit({ send_window_end_hour: Number(e.target.value) })}
           />
           <p className="mt-1 text-xs text-parchment/50">{t("windowHelp")}</p>
         </div>
       </div>
 
-      <div className="flex flex-wrap gap-2">
+      <div className="flex flex-wrap items-center gap-2">
         <Button onClick={() => void save("off")} disabled={saving} variant="secondary">
           {t("actions.turnOff")}
         </Button>
@@ -364,6 +389,12 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
         <Button onClick={() => void save("auto")} disabled={saving}>
           {t("actions.automatic")}
         </Button>
+        {/* Saving settings without touching the mode: editing targeting or the
+            offer should not require deciding about sending at the same time. */}
+        <Button onClick={() => void save(mode)} disabled={saving || !dirty} variant="secondary">
+          {t("actions.saveSettings")}
+        </Button>
+        {dirty ? <span className="text-xs text-amber-200">{t("unsavedChanges")}</span> : null}
       </div>
 
       {view && view.byVertical.length > 0 ? (

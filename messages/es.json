@@ -2103,13 +2103,15 @@
         "read": "Leer",
         "hide": "Ocultar",
         "send": "Enviar",
-        "skip": "Omitir"
+        "skip": "Omitir",
+        "saveSettings": "Guardar ajustes"
       },
       "saved": "Guardado. El cambio se aplica en la siguiente pasada.",
       "saveFailed": "No se pudo guardar.",
       "actionFailed": "No funcionó. Inténtalo de nuevo.",
       "sentOne": "Enviado.",
-      "skippedOne": "Omitido, y no volverá a aparecer."
+      "skippedOne": "Omitido, y no volverá a aparecer.",
+      "unsavedChanges": "Tienes cambios sin guardar."
     }
   },
   "admin": {
