@@ -216,6 +216,13 @@ const SATURDAY = 6;
 const SUNDAY = 0;
 
 /**
+ * Latest weekday close, on Google's 24-hour clock, that still leaves an
+ * after-hours gap worth mentioning. Separate from the HTML regex's constant
+ * because that one reads a 12-hour clock off the page.
+ */
+const AFTER_HOURS_LATEST_CLOSE_HOUR_24 = 18;
+
+/**
  * The hours findings, from Google's structured opening hours instead of a
  * regex over the prospect's markup.
  *
@@ -232,12 +239,40 @@ const SUNDAY = 0;
 export function hoursFindings(hours: PlacesOpeningHours | null): ProbeFinding[] | null {
   const periods = hours?.periods;
   if (!Array.isArray(periods) || periods.length === 0) return null;
-  const findings: ProbeFinding[] = [];
 
+  /**
+   * Two shapes make every hours claim unsafe, and both look innocuous in the
+   * data:
+   *
+   * A period with NO `close` is open-ended. Google reports "always open" this
+   * way, and reading the remaining periods as a weekly schedule then invents a
+   * weekend closure for a business that never shuts.
+   *
+   * A `close` on a LATER day than its `open` runs past midnight: Friday 6 PM to
+   * Saturday 2 AM arrives as close.hour 2, which reads as "closes by 2 AM" and
+   * would tell a bar that stays open until 2 in the morning that it closes too
+   * early. It also means they ARE open on the next day, so the weekend claim is
+   * wrong too.
+   *
+   * Either shape returns an empty list rather than null: Google DID have hours,
+   * so the markup regex should not get a second guess at the same question. The
+   * prospect can still be pitched on what their site is missing. Saying nothing
+   * about hours costs a sentence; saying something false costs the reply.
+   */
+  const unsafeToRead = periods.some((p) => {
+    if (!p.close || typeof p.close.hour !== "number") return true;
+    return (
+      typeof p.close.day === "number" &&
+      typeof p.open?.day === "number" &&
+      p.close.day !== p.open.day
+    );
+  });
+  if (unsafeToRead) return [];
+
+  const findings: ProbeFinding[] = [];
   const openDays = new Set(
     periods.map((p) => p.open?.day).filter((d): d is number => typeof d === "number")
   );
-  // A place open 24/7 reports one period with no close, and no weekend gap.
   if (openDays.size > 0 && !openDays.has(SATURDAY) && !openDays.has(SUNDAY)) {
     findings.push({
       code: "closed_weekends",
@@ -245,22 +280,16 @@ export function hoursFindings(hours: PlacesOpeningHours | null): ProbeFinding[] 
     });
   }
 
-  // The latest weekday closing time. A period with no `close` is a 24-hour
-  // day, which is the opposite of an after-hours gap, so it disqualifies.
-  const weekdayCloses: number[] = [];
-  let openAllDay = false;
-  for (const period of periods) {
-    const day = period.open?.day;
-    if (typeof day !== "number" || day === SATURDAY || day === SUNDAY) continue;
-    if (!period.close || typeof period.close.hour !== "number") {
-      openAllDay = true;
-      continue;
-    }
-    weekdayCloses.push(period.close.hour);
-  }
-  if (!openAllDay && weekdayCloses.length > 0) {
+  const weekdayCloses = periods
+    .filter((p) => {
+      const day = p.open?.day;
+      return typeof day === "number" && day !== SATURDAY && day !== SUNDAY;
+    })
+    .map((p) => p.close?.hour)
+    .filter((h): h is number => typeof h === "number");
+  if (weekdayCloses.length > 0) {
     const latest = Math.max(...weekdayCloses);
-    if (latest <= AFTER_HOURS_CLOSE_AT_OR_BEFORE + 12) {
+    if (latest <= AFTER_HOURS_LATEST_CLOSE_HOUR_24) {
       findings.push({
         code: "after_hours_gap",
         detail: `Google lists the business as closing by ${formatHour(latest)} on weekdays, so calls after that go unanswered.`

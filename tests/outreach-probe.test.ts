@@ -106,18 +106,33 @@ describe("hoursFindings", () => {
     ]);
   });
 
-  it("never claims an after-hours gap for a business that never closes", () => {
-    // Google reports 24/7 as an open period with no close. That is the
-    // opposite of a gap, so it must disqualify the finding rather than be
-    // read as closing at midnight.
+  it("claims NOTHING about a business that never closes", () => {
+    // Google reports "always open" as a period with no close. Reading the rest
+    // as a weekly schedule would invent a weekend closure for a business that
+    // never shuts, and an after-hours gap out of a missing closing time.
     const alwaysOpen = { periods: [{ open: { day: 1, hour: 0, minute: 0 } }] };
-    expect(hoursFindings(alwaysOpen)?.map((f) => f.code)).not.toContain("after_hours_gap");
-    // Mixed: normal weekdays plus one all-day weekday still disqualifies.
-    expect(
-      hoursFindings({ periods: [...monToFri(17), { open: { day: 3, hour: 0 } }] })?.map(
-        (f) => f.code
-      )
-    ).toEqual(["closed_weekends"]);
+    expect(hoursFindings(alwaysOpen)).toEqual([]);
+    // One open-ended period poisons the whole schedule, not just its own day.
+    expect(hoursFindings({ periods: [...monToFri(17), { open: { day: 3, hour: 0 } }] })).toEqual(
+      []
+    );
+  });
+
+  it("claims NOTHING when a period runs past midnight", () => {
+    // Friday 6 PM to Saturday 2 AM arrives as close.hour 2. Reading that as the
+    // closing time would tell a bar open until 2 in the morning that it shuts
+    // too early, and it is also open on Saturday, so the weekend claim is wrong.
+    const lateNight = {
+      periods: [
+        ...monToFri(17),
+        { open: { day: 5, hour: 18, minute: 0 }, close: { day: 6, hour: 2, minute: 0 } }
+      ]
+    };
+    expect(hoursFindings(lateNight)).toEqual([]);
+
+    // An empty list is NOT the same as null: Google had hours, so the markup
+    // regex does not get a second guess at the same question.
+    expect(mergeHoursFindings([{ code: "after_hours_gap", detail: "markup" }], [])).toEqual([]);
   });
 
   it("ignores periods with no usable day, and weekend closing times", () => {
