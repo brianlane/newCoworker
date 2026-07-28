@@ -16,6 +16,7 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import {
+  claimProspectNudge,
   countProspectsNudgedSince,
   countProspectsSentSince,
   existingProspectDomains,
@@ -347,6 +348,37 @@ describe("transitionProspect", () => {
         makeDb(chain({ data: null, error: { message: "tp" } }))
       )
     ).rejects.toThrow(/tp/);
+  });
+});
+
+describe("claimProspectNudge", () => {
+  it("wins only while the follow-up is still unspent", async () => {
+    const won = chain({ data: [{ id: PROSPECT }], error: null });
+    expect(await claimProspectNudge(BIZ, PROSPECT, "2026-07-27T16:00:00Z", makeDb(won))).toBe(true);
+    // Both guards ride inside the UPDATE, so exactly one caller can win: the
+    // status check alone would let two overlapping passes both send.
+    expect(won.eq).toHaveBeenCalledWith("status", "sent");
+    expect(won.is).toHaveBeenCalledWith("nudged_at", null);
+    expect(won.update).toHaveBeenCalledWith(
+      expect.objectContaining({ nudged_at: "2026-07-27T16:00:00Z" })
+    );
+
+    const lost = chain({ data: [], error: null });
+    expect(await claimProspectNudge(BIZ, PROSPECT, "2026-07-27T16:00:00Z", makeDb(lost))).toBe(
+      false
+    );
+
+    defaultClientSpy.mockReturnValue(makeDb(chain({ data: [{ id: PROSPECT }], error: null })));
+    expect(await claimProspectNudge(BIZ, PROSPECT, "2026-07-27T16:00:00Z")).toBe(true);
+
+    await expect(
+      claimProspectNudge(
+        BIZ,
+        PROSPECT,
+        "2026-07-27T16:00:00Z",
+        makeDb(chain({ data: null, error: { message: "cn" } }))
+      )
+    ).rejects.toThrow(/cn/);
   });
 });
 

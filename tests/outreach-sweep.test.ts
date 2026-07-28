@@ -151,6 +151,7 @@ function stubLedger(over: Record<string, unknown> = {}) {
     listProspectsDueForNudge: vi.fn(async () => []),
     patchProspect: vi.fn(async () => true),
     transitionProspect: vi.fn(async () => true),
+    claimProspectNudge: vi.fn(async () => true),
     countProspectsSentSince: vi.fn(async () => 0),
     countProspectsNudgedSince: vi.fn(async () => 0),
     ...over
@@ -938,12 +939,13 @@ describe("phase 4: the single nudge", () => {
     const deps = baseDeps();
     const result = await processOutreachSweep(deps);
     expect(result.nudged).toBe(1);
-    // The nudge is stamped, which is what makes "one follow-up, ever" true.
-    expect(ledger.transitionProspect).toHaveBeenCalledWith(
+    // Claimed through the nudge-specific guard, not the status transition: a
+    // nudge leaves the status alone, so "nudged_at is still null" is the only
+    // thing that stops two overlapping passes both sending it.
+    expect(ledger.claimProspectNudge).toHaveBeenCalledWith(
       BIZ,
       prospect().id,
-      "sent",
-      { nudged_at: MONDAY_MORNING.toISOString() },
+      MONDAY_MORNING.toISOString(),
       expect.anything()
     );
     const send = (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl;
@@ -1034,9 +1036,13 @@ describe("phase 4: the single nudge", () => {
   });
 
   it("counts nothing when the nudge claim is lost to another pass", async () => {
-    nudgeLedger({ transitionProspect: vi.fn(async () => false) });
-    const result = await processOutreachSweep(baseDeps());
+    nudgeLedger({ claimProspectNudge: vi.fn(async () => false) });
+    const deps = baseDeps();
+    const result = await processOutreachSweep(deps);
     expect(result.nudged).toBe(0);
+    expect(
+      (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl
+    ).not.toHaveBeenCalled();
   });
 
   it("abandons a claimed nudge when the prospect replied, opted out, or vanished", async () => {

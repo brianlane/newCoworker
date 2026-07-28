@@ -41,6 +41,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { logger } from "@/lib/logger";
 import {
+  claimProspectNudge,
   countProspectsNudgedSince,
   countProspectsSentSince,
   existingProspectDomains,
@@ -416,7 +417,6 @@ async function sendForBusiness(
       to,
       subject,
       body,
-      fromStatus: "drafted",
       stamp: "sent_at"
     });
     if (!sent) continue;
@@ -467,7 +467,6 @@ async function nudgeForBusiness(
       to,
       subject: prospect.pitch_subject?.trim() || "Following up",
       body,
-      fromStatus: "sent",
       stamp: "nudged_at"
     });
     if (sent) result.nudged += 1;
@@ -490,20 +489,26 @@ async function deliverPitch(
     to: string;
     subject: string;
     body: string;
-    fromStatus: "drafted" | "sent";
     stamp: "sent_at" | "nudged_at";
   }
 ): Promise<boolean> {
   const to = mail.to;
-  const claimed = await transitionProspect(
-    settings.business_id,
-    prospect.id,
-    mail.fromStatus,
+  // Two different atomic claims, because the two sends have different
+  // invariants. A first pitch is guarded on the STATUS moving (drafted to
+  // sent), which no second pass can repeat. A nudge leaves the status alone,
+  // so the guard has to be "nudged_at is still null", checked inside the same
+  // UPDATE that sets it, or two overlapping passes both send the one follow-up
+  // a prospect ever gets.
+  const claimed =
     mail.stamp === "sent_at"
-      ? { status: "sent", sent_at: r.now.toISOString() }
-      : { nudged_at: r.now.toISOString() },
-    r.db
-  );
+      ? await transitionProspect(
+          settings.business_id,
+          prospect.id,
+          "drafted",
+          { status: "sent", sent_at: r.now.toISOString() },
+          r.db
+        )
+      : await claimProspectNudge(settings.business_id, prospect.id, r.now.toISOString(), r.db);
   if (!claimed) return false;
 
   // LAST-MILE SUPPRESSION RE-CHECK, immediately before the provider call and
@@ -784,7 +789,6 @@ export async function sendProspectNow(
     to,
     subject,
     body,
-    fromStatus: "drafted",
     stamp: "sent_at"
   });
   if (!sent) return { ok: false, reason: "send_failed" };

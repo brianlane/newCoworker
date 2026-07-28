@@ -374,6 +374,34 @@ export async function transitionProspect(
   return Array.isArray(data) && data.length > 0;
 }
 
+/**
+ * Claim the ONE follow-up a prospect ever gets, atomically.
+ *
+ * `transitionProspect` guards on status, which is enough for the first pitch
+ * (drafted to sent) but not for a nudge: the row stays `sent` either way, so
+ * two overlapping passes would both win the status check and both send. The
+ * guard that matters here is `nudged_at is null`, evaluated inside the same
+ * UPDATE that sets it, so exactly one caller can ever win.
+ */
+export async function claimProspectNudge(
+  businessId: string,
+  prospectId: string,
+  nowIso: string,
+  client?: SupabaseClient
+): Promise<boolean> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("outreach_prospects")
+    .update({ nudged_at: nowIso, updated_at: new Date().toISOString() })
+    .eq("business_id", businessId)
+    .eq("id", prospectId)
+    .eq("status", "sent")
+    .is("nudged_at", null)
+    .select("id");
+  if (error) throw new Error(`claimProspectNudge: ${error.message}`);
+  return Array.isArray(data) && data.length > 0;
+}
+
 /** Sends already made in the current window — half the daily-cap numerator. */
 export async function countProspectsSentSince(
   businessId: string,
