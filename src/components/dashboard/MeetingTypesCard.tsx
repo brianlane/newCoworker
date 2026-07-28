@@ -106,6 +106,8 @@ export function MeetingTypesCard({
       if (seq >= paintedSeq.current) {
         paintedSeq.current = seq;
         setTypes(fetched);
+        // A good read clears whatever the last bad one complained about.
+        setError(null);
       }
       return fetched;
     } catch {

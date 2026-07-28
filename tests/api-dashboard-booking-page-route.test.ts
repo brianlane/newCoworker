@@ -70,7 +70,7 @@ beforeEach(() => {
   mockLimit.mockReturnValue({ success: true } as never);
   mockGetPage.mockResolvedValue(page);
   mockUpsert.mockResolvedValue(page);
-  mockEnsureMeeting.mockResolvedValue(null);
+  mockEnsureMeeting.mockResolvedValue({ meetingType: null, pageQuestionsCleared: false });
   mockUpcoming.mockResolvedValue([]);
   mockProbe.mockResolvedValue("ok" as never);
   mockConn.mockResolvedValue(null as never);
@@ -85,6 +85,15 @@ describe("GET /api/dashboard/booking-page", () => {
     expect(mockEnsureMeeting).toHaveBeenCalledWith(page);
     // The page already existed, so nothing was created for it.
     expect(mockUpsert).not.toHaveBeenCalled();
+  });
+
+  it("answers with the page as the ensure pass left it", async () => {
+    mockGetPage.mockResolvedValue({ ...(page as object), intake_questions: [{ id: "q" }] } as never);
+    mockEnsureMeeting.mockResolvedValue({ meetingType: null, pageQuestionsCleared: true });
+    const res = await get();
+    // The questions moved onto the meetings that were inheriting them, so
+    // the dashboard must not keep offering them as the page's.
+    expect(await res.json()).toMatchObject({ data: { page: { intake_questions: [] } } });
   });
 
   it("provisions the page and its meeting together on a first view", async () => {

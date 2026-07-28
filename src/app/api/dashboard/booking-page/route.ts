@@ -113,7 +113,12 @@ export async function GET(request: Request) {
     // meeting, never the dashboard load.
     if (page) {
       try {
-        await ensureDefaultMeetingType(page);
+        const ensured = await ensureDefaultMeetingType(page);
+        // The ensure pass may have moved the page's questions onto the
+        // meetings that were inheriting them. Answer with the page as it now
+        // is, or the dashboard would keep offering a list the row no longer
+        // holds.
+        if (ensured.pageQuestionsCleared) page = { ...page, intake_questions: [] };
       } catch (err) {
         logger.warn("booking-page: default meeting provision failed", {
           businessId,

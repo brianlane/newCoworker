@@ -86,6 +86,11 @@ function pageRow(over: Partial<BookingPageRow> = {}): BookingPageRow {
   } as BookingPageRow;
 }
 
+/** What the page hands to a meeting that was inheriting it. */
+const PAGE_QUESTIONS = [
+  { id: "page-q", label: "Page question", type: "text", required: false, enabled: true }
+];
+
 type QueryResult = { data?: unknown; error?: { message: string } | null };
 
 /** Chainable supabase fake: records calls, resolves queued results in order. */
@@ -199,9 +204,10 @@ describe("ensureDefaultMeetingType", () => {
       { data: [], error: null },
       // createMeetingType re-reads the list for its cap check.
       { data: [], error: null },
-      { data: typeRow(), error: null }
+      { data: typeRow({ intake_questions: PAGE_QUESTIONS }), error: null }
     ]);
-    await ensureDefaultMeetingType(pageRow({ title: "Free strategy call" }), client);
+    const result = await ensureDefaultMeetingType(pageRow({ title: "Free strategy call" }), client);
+    expect(result.pageQuestionsCleared).toBe(true);
     const insert = calls.find((c) => c.method === "insert")?.args[0] as Record<string, unknown>;
     expect(insert).toMatchObject({
       business_id: BIZ,
@@ -213,9 +219,7 @@ describe("ensureDefaultMeetingType", () => {
     });
     // An explicit list, never null: inheriting questions the dashboard no
     // longer shows would surprise the owner.
-    expect(insert.intake_questions).toEqual([
-      { id: "page-q", label: "Page question", type: "text", required: false, enabled: true }
-    ]);
+    expect(insert.intake_questions).toEqual(PAGE_QUESTIONS);
     // And the page's copy goes, or a SECOND meeting created later would
     // inherit a list nothing in the dashboard shows.
     expect(calls.find((c) => c.method === "update")?.args[0]).toEqual({ intake_questions: [] });
@@ -250,7 +254,9 @@ describe("ensureDefaultMeetingType", () => {
 
   it("is idempotent: a page with any meeting is left alone", async () => {
     const { client, calls } = fakeDb([{ data: [typeRow({ id: "existing" })], error: null }]);
-    expect((await ensureDefaultMeetingType(pageRow(), client))?.id).toBe("existing");
+    expect((await ensureDefaultMeetingType(pageRow({ intake_questions: [] }), client)).meetingType?.id).toBe(
+      "existing"
+    );
     expect(calls.some((c) => c.method === "insert")).toBe(false);
   });
 
@@ -263,7 +269,9 @@ describe("ensureDefaultMeetingType", () => {
       // ...so the re-read answers with what the other tab created.
       { data: [typeRow({ id: "winner" })], error: null }
     ]);
-    expect((await ensureDefaultMeetingType(pageRow(), client))?.id).toBe("winner");
+    expect(
+      (await ensureDefaultMeetingType(pageRow({ intake_questions: [] }), client)).meetingType?.id
+    ).toBe("winner");
   });
 
   it("answers null when the race leaves genuinely nothing", async () => {
@@ -273,13 +281,48 @@ describe("ensureDefaultMeetingType", () => {
       { data: null, error: { message: "insert denied" } },
       { data: [], error: null }
     ]);
-    expect(await ensureDefaultMeetingType(pageRow(), client)).toBeNull();
+    expect((await ensureDefaultMeetingType(pageRow(), client)).meetingType).toBeNull();
+  });
+
+  it("copies the page's questions onto a meeting still inheriting them", async () => {
+    // The delicate case: a meeting stored null, so the public page resolves
+    // the page's list for it. Clearing the page first would silently stop
+    // asking those visitors anything.
+    const { client, calls } = fakeDb([
+      { data: [typeRow({ id: "legacy", intake_questions: null })], error: null },
+      { error: null },
+      { error: null }
+    ]);
+    const result = await ensureDefaultMeetingType(pageRow(), client);
+    expect(result.pageQuestionsCleared).toBe(true);
+    const updates = calls.filter((c) => c.method === "update").map((c) => c.args[0]);
+    expect(updates).toEqual([{ intake_questions: PAGE_QUESTIONS }, { intake_questions: [] }]);
+  });
+
+  it("keeps the page's copy when a meeting cannot take its own", async () => {
+    const { client, calls } = fakeDb([
+      { data: [typeRow({ id: "legacy", intake_questions: null })], error: null },
+      { error: { message: "update denied" } }
+    ]);
+    const result = await ensureDefaultMeetingType(pageRow(), client);
+    // The page's list is the only record of what that meeting asks until
+    // the copy lands, so it stays and the next load retries.
+    expect(result.pageQuestionsCleared).toBe(false);
+    expect(calls.filter((c) => c.method === "update")).toHaveLength(1);
+  });
+
+  it("reports the page as unchanged when the clear itself fails", async () => {
+    const { client } = fakeDb([
+      { data: [typeRow({ intake_questions: PAGE_QUESTIONS })], error: null },
+      { error: { message: "clear denied" } }
+    ]);
+    expect((await ensureDefaultMeetingType(pageRow(), client)).pageQuestionsCleared).toBe(false);
   });
 
   it("uses the service client by default", async () => {
     const { client } = fakeDb([{ data: [typeRow()], error: null }]);
     mockClientFactory.mockResolvedValue(client);
-    await ensureDefaultMeetingType(pageRow());
+    await ensureDefaultMeetingType(pageRow({ intake_questions: [] }));
     expect(mockClientFactory).toHaveBeenCalled();
   });
 });

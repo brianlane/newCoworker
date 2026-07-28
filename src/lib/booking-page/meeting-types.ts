@@ -17,6 +17,7 @@
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { parseBookingPageSlug } from "@/lib/booking-page/keys";
+import { logger } from "@/lib/logger";
 import { parseIntakeQuestions, type BookingIntakeQuestion } from "@/lib/booking-page/intake";
 import { BookingPageValidationError, type BookingPageRow } from "@/lib/booking-page/db";
 
@@ -276,16 +277,30 @@ export const DEFAULT_MEETING_NAME = "Book a call";
 export const DEFAULT_MEETING_SLUG = "book-a-call";
 
 /**
- * Give a page its first meeting, carrying the page's own identity across.
+ * What an ensure pass did, so a caller holding a page snapshot can keep it
+ * honest: `pageQuestionsCleared` means the page row no longer carries the
+ * questions the snapshot still shows.
+ */
+export type EnsureDefaultMeetingResult = {
+  meetingType: BookingMeetingTypeRow | null;
+  pageQuestionsCleared: boolean;
+};
+
+/**
+ * Give a page its first meeting and finish the move of questions onto
+ * meetings.
  *
  * Meetings are the only way a visitor books, so a page with none has
  * nothing to offer. The backfill migration handled every page that existed;
  * this covers pages created after it, called from the Bookings dashboard's
  * first view beside the page auto-provision.
  *
- * Idempotent by contract: a page that already has any meeting is left
- * exactly as it is, and losing the create race to a second tab answers with
- * whatever the winner made.
+ * Questions are the delicate half. A page's list is still resolved by
+ * `effectiveTypeSettings` for any meeting storing null, so the page's copy
+ * cannot simply be deleted: every inheriting meeting takes its own copy
+ * first, exactly as the migration does, and only then is the page cleared.
+ * Both halves are idempotent and retried on later loads, since a page that
+ * keeps its copy keeps handing hidden questions to new meetings.
  */
 export async function ensureDefaultMeetingType(
   page: Pick<
@@ -293,48 +308,76 @@ export async function ensureDefaultMeetingType(
     "business_id" | "title" | "description" | "allowed_durations" | "intake_questions"
   >,
   client?: SupabaseClient
-): Promise<BookingMeetingTypeRow | null> {
+): Promise<EnsureDefaultMeetingResult> {
   const db = client ?? (await createSupabaseServiceClient());
-  const existing = await listMeetingTypes(page.business_id, db);
-  if (existing.length > 0) return existing[0];
+  const pageQuestions = parseIntakeQuestions(page.intake_questions);
+  let existing = await listMeetingTypes(page.business_id, db);
 
-  // The shortest offered duration is what the page's picker selected by
-  // default, so it is what visitors were most likely booking.
-  const durationMinutes = page.allowed_durations.length
-    ? Math.min(...page.allowed_durations)
-    : 30;
-  const questions = parseIntakeQuestions(page.intake_questions);
-  try {
-    const created = await createMeetingType(
-      page.business_id,
-      {
-        name: page.title?.trim() || DEFAULT_MEETING_NAME,
-        slug: DEFAULT_MEETING_SLUG,
-        description: page.description,
-        durationMinutes,
-        // An explicit list, never null: inheriting questions the dashboard
-        // no longer shows would surprise the owner.
-        intakeQuestions: questions
-      },
-      db
-    );
-    // The questions now live on the meeting that inherited them, so the
-    // page's copy has to go, exactly as the backfill migration does it: a
-    // second meeting created later would otherwise inherit a list nothing
-    // in the dashboard shows. Best-effort, since the meeting people book
-    // matters more than the leftover copy.
-    if (questions.length > 0) {
-      await db
-        .from("booking_pages")
-        .update({ intake_questions: [] })
-        .eq("business_id", page.business_id);
+  if (existing.length === 0) {
+    // The shortest offered duration is what the page's picker selected by
+    // default, so it is what visitors were most likely booking.
+    const durationMinutes = page.allowed_durations.length
+      ? Math.min(...page.allowed_durations)
+      : 30;
+    try {
+      existing = [
+        await createMeetingType(
+          page.business_id,
+          {
+            name: page.title?.trim() || DEFAULT_MEETING_NAME,
+            slug: DEFAULT_MEETING_SLUG,
+            description: page.description,
+            durationMinutes,
+            // An explicit list, never null: inheriting questions the
+            // dashboard no longer shows would surprise the owner.
+            intakeQuestions: pageQuestions
+          },
+          db
+        )
+      ];
+    } catch {
+      // A second tab won the insert (unique slug per business); serve theirs.
+      existing = await listMeetingTypes(page.business_id, db);
     }
-    return created;
-  } catch {
-    // A second tab won the insert (unique slug per business); serve theirs.
-    const after = await listMeetingTypes(page.business_id, db);
-    return after[0] ?? null;
   }
+
+  const first = existing[0] ?? null;
+  if (pageQuestions.length === 0 || !first) {
+    return { meetingType: first, pageQuestionsCleared: false };
+  }
+
+  // Anything still storing null is asking the page's questions right now,
+  // so it takes its own copy before the page loses them.
+  const inheriting = existing.filter((t) => t.intake_questions === null);
+  for (const type of inheriting) {
+    const { error } = await db
+      .from("booking_meeting_types")
+      .update({ intake_questions: pageQuestions })
+      .eq("id", type.id);
+    // Leave the page's copy in place: it is the only record of what that
+    // meeting asks until the copy lands. The next load retries.
+    if (error) {
+      logger.warn("ensureDefaultMeetingType: could not copy questions to a meeting", {
+        businessId: page.business_id,
+        meetingTypeId: type.id,
+        error: error.message
+      });
+      return { meetingType: first, pageQuestionsCleared: false };
+    }
+  }
+
+  const { error } = await db
+    .from("booking_pages")
+    .update({ intake_questions: [] })
+    .eq("business_id", page.business_id);
+  if (error) {
+    logger.warn("ensureDefaultMeetingType: could not clear the page's questions", {
+      businessId: page.business_id,
+      error: error.message
+    });
+    return { meetingType: first, pageQuestionsCleared: false };
+  }
+  return { meetingType: first, pageQuestionsCleared: true };
 }
 
 /** Add one meeting type. Name, slug, and duration are required at birth. */
