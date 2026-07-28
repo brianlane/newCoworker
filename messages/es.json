@@ -1091,6 +1091,7 @@
       "scopeUse6": "Identificar la cuenta de Zoom conectada (nombre y correo mostrados en la tarjeta de tu panel)",
       "scopeUse7": "Obtener la transcripción de una reunión grabada en la nube, automáticamente después de tus reuniones mientras la importación automática esté activada, o cuando haces clic en Importar transcripción, para producir minutas en tus Documentos",
       "scopeUse8": "Traducir un ID de reunión que pegues a su instancia de reunión pasada (la búsqueda de transcripciones de Zoom necesita la instancia para reuniones instantáneas) y mantener las importaciones sin duplicados",
+      "scopeUse9": "Requerido por Zoom para la notificación de transcripción lista que impulsa las minutas automáticas; la app no le da ningún otro uso",
       "privacyNote": "Tus tokens de Zoom se cifran en reposo (AES-256-GCM) en una base de datos protegida con seguridad a nivel de fila, nunca se exponen al navegador y se eliminan cuando desconectas. El contenido de reuniones se lee solo para producir minutas en tu biblioteca de documentos: automáticamente después de tus propias reuniones grabadas en la nube mientras la importación automática esté activada (un interruptor en la tarjeta de Zoom la apaga), o cuando importas una explícitamente. Todo lo demás toca solo los datos de agenda de las citas que tu coworker administra. Mira nuestra <privacy>Política de privacidad</privacy> para más detalles. ¿Preguntas? Escríbenos cuando quieras vía <contact>newcoworker.com/contact</contact>."
     },
     "compareGhl": {

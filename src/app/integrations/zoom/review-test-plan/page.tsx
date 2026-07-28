@@ -125,46 +125,70 @@ export default function ZoomReviewTestPlanPage() {
             </p>
           </Step>
 
-          <Step n={6} title="Import a meeting transcript (recording scope)">
+          <Step n={6} title="Import a meeting transcript (transcript + past-meeting scopes)">
             <p>
               This step exercises{" "}
               <code className="text-xs text-claw-green">
                 cloud_recording:read:meeting_transcript
-              </code>
-              . On the Zoom account you connected in Step 2, start a short meeting, record it{" "}
-              <b>to the cloud</b> with audio transcript enabled (Settings → Recording → Cloud
-              recording → Create audio transcript), say a few sentences, then end the meeting and
-              wait for Zoom&apos;s &quot;cloud recording is now available&quot; email (transcript
-              processing can take a few minutes).
+              </code>{" "}
+              and <code className="text-xs text-claw-green">meeting:read:past_meeting</code>. On
+              the Zoom account you connected in Step 2, start a short <b>instant</b> meeting,
+              record it <b>to the cloud</b> with audio transcript enabled (Settings → Recording →
+              Cloud recording → Create audio transcript), say a few sentences, then end the
+              meeting and wait for Zoom&apos;s &quot;cloud recording is now available&quot; email
+              (transcript processing can take a few minutes).
             </p>
             <p>
               Back on <b>Dashboard → Integrations → Zoom</b>, paste the meeting&apos;s{" "}
-              <b>numeric meeting ID</b> into <b>Meeting minutes → Import transcript</b>. This also
-              exercises <code className="text-xs text-claw-green">meeting:read:past_meeting</code>:
-              for an instant meeting the ID is translated to its past-meeting instance before the
-              transcript lookup (the recording page link from{" "}
-              <b>Recordings &amp; Transcripts → your meeting</b> works too). Expected: the
-              transcript is fetched from your Zoom account and saved to the business&apos;s
-              Documents as meeting minutes (a success note with the generated summary appears on
-              the card). If the meeting was not cloud-recorded with a transcript, an explanatory
-              error is shown instead, and nothing is stored.
+              <b>numeric meeting ID</b> into <b>Meeting minutes → Import transcript</b>.
+            </p>
+            <p>
+              <b>
+                How <code className="text-xs">meeting:read:past_meeting</code> is exercised
+              </b>
+              : Zoom&apos;s transcript endpoint does not resolve a numeric ID for an instant
+              meeting (error 3322), so the app first calls{" "}
+              <code className="text-xs text-claw-green">
+                GET /past_meetings/&#123;meetingId&#125;
+              </code>{" "}
+              to translate your pasted ID into its past-meeting instance UUID, then fetches the
+              transcript with{" "}
+              <code className="text-xs text-claw-green">
+                GET /meetings/&#123;uuid&#125;/transcript
+              </code>{" "}
+              (the <code className="text-xs">cloud_recording:read:meeting_transcript</code>{" "}
+              scope). That ID-to-UUID translation and import de-duplication are the past-meeting
+              scope&apos;s only uses; no other past-meeting data is read.
+            </p>
+            <p>
+              Expected: the transcript is fetched from your Zoom account and saved to the
+              business&apos;s Documents as meeting minutes (a success note with the generated
+              summary appears on the card). If the meeting was not cloud-recorded with a
+              transcript, an explanatory error is shown instead, and nothing is stored.
             </p>
           </Step>
 
-          <Step n={7} title="Automatic meeting minutes (webhook)">
+          <Step n={7} title="Automatic meeting minutes (webhook + recording read scope)">
             <p>
               This step exercises the{" "}
               <code className="text-xs text-claw-green">recording.transcript_completed</code>{" "}
-              event subscription. On <b>Dashboard → Integrations → Zoom</b>, confirm the{" "}
-              <b>Automatic meeting minutes</b> switch is on (it is on by default). Cloud-record
-              another short meeting with audio transcript enabled (as in Step 6) and end it.
+              event subscription and its Zoom-required event scope{" "}
+              <code className="text-xs text-claw-green">cloud_recording:read:recording</code>{" "}
+              (attached automatically by the Marketplace when a recording event is subscribed; the
+              app makes no other use of it). On <b>Dashboard → Integrations → Zoom</b>, confirm
+              the <b>Automatic meeting minutes</b> switch is on (it is on by default).
+              Cloud-record another short meeting with audio transcript enabled (as in Step 6) and
+              end it.
             </p>
             <p>
-              Expected: once Zoom finishes processing the transcript and delivers the event, the
+              Expected: once Zoom finishes processing the transcript and delivers the{" "}
+              <code className="text-xs">recording.transcript_completed</code> webhook, the
               meeting&apos;s minutes appear in the business&apos;s <b>Documents</b> without any
-              action on the dashboard. Turning the switch off and repeating the recording results
-              in no automatic import (the manual import from Step 6 remains available). Redelivered
-              events do not create duplicate documents.
+              action on the dashboard, the transcript file itself is downloaded with the
+              delivery&apos;s download token or the already-approved transcript scope. Turning the
+              switch off and repeating the recording results in no automatic import (the manual
+              import from Step 6 remains available). Redelivered events do not create duplicate
+              documents.
             </p>
           </Step>
 
