@@ -1884,6 +1884,95 @@ describe("stripe webhook route", () => {
     expect(updateSubscription).not.toHaveBeenCalledWith("new_sub_row", expect.any(Object));
   });
 
+  it("mirrors pause_collection onto the row so an admin pause (or a Stripe auto-resume) is visible", async () => {
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
+      id: "local_sub_paused",
+      business_id: "biz_paused",
+      status: "active",
+      stripe_subscription_id: "sub_paused"
+    } as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_paused",
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "sub_paused",
+          status: "active",
+          cancel_at_period_end: false,
+          pause_collection: { behavior: "void", resumes_at: 1790000000 },
+          metadata: { businessId: "biz_paused" }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "local_sub_paused",
+      expect.objectContaining({
+        status: "active",
+        billing_paused: true,
+        billing_pause_resumes_at: new Date(1790000000 * 1000).toISOString()
+      })
+    );
+  });
+
+  it("does NOT tear down a tenant whose collection is paused (pause is a comp, not dunning)", async () => {
+    // The admin pause lever sets `pause_collection` while leaving the Stripe
+    // status `active`, precisely so this handler's dunning branch
+    // (past_due / unpaid / paused, which dispatches
+    // autoCancelOnPaymentFailure) never fires on a comped tenant. If a
+    // future change ever keyed the teardown on the
+    // presence of a pause rather than on the status, a comped customer would
+    // silently lose their box.
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
+      id: "local_sub_comp",
+      business_id: "biz_comp",
+      status: "active",
+      stripe_subscription_id: "sub_comp"
+    } as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_comp",
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "sub_comp",
+          status: "active",
+          cancel_at_period_end: false,
+          pause_collection: { behavior: "void" },
+          metadata: { businessId: "biz_comp" }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(afterCallbacks.length).toBe(0);
+    expect(mockLoadLifecycleContext).not.toHaveBeenCalled();
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "local_sub_comp",
+      expect.objectContaining({
+        status: "active",
+        billing_paused: true,
+        billing_pause_resumes_at: null
+      })
+    );
+  });
+
   it("does NOT adopt a pending row on early customer.subscription.created (prevents lifetime-cap bypass)", async () => {
     // Stripe does not guarantee webhook ordering. If `customer.subscription
     // .created` arrives before `checkout.session.completed` and we adopted
