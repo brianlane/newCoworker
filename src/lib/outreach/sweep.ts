@@ -498,6 +498,28 @@ async function deliverPitch(
   );
   if (!claimed) return false;
 
+  // LAST-MILE SUPPRESSION RE-CHECK, immediately before the provider call and
+  // after the claim. The claim is guarded on status, so an opt-out that lands
+  // BEFORE it loses cleanly; one that lands just after it would otherwise be
+  // ignored, and the mail would go to somebody who has already asked to stop.
+  // Same shape as the campaign sweep's re-check, and the same reason.
+  //
+  // This narrows the window rather than closing it: an opt-out arriving in the
+  // milliseconds between this read and the provider accepting the message
+  // cannot be caught without a transaction spanning an external API. What it
+  // does guarantee is that no LATER send follows, and that the ledger does not
+  // claim a send that was abandoned here.
+  const current = await getProspect(settings.business_id, prospect.id, r.db);
+  if (!current || current.status === "unsubscribed" || current.replied_at !== null) {
+    await patchProspect(
+      settings.business_id,
+      prospect.id,
+      mail.stamp === "sent_at" ? { sent_at: null } : { nudged_at: null },
+      r.db
+    );
+    return false;
+  }
+
   try {
     const outcome = await sendThroughConfiguredMailbox(settings, r, {
       toEmail: to,
