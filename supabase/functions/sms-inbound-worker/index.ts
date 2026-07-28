@@ -641,7 +641,9 @@ serve(async (req: Request) => {
       }
       await telemetryRecord(supabase, "sms_inbound_no_reply", {
         business_id: job.business_id,
-        reason: failed ? "unusable_sender" : target.reason
+        // `target` is still the reply variant when the extra !fromE164 guard
+        // above is what brought us here, so read the reason defensively.
+        reason: target.kind === "skip" ? target.reason : "unusable_sender"
       });
       processed += 1;
       continue;

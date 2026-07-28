@@ -9,13 +9,14 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
   countByBusiness,
   listInboundDeadLetters,
-  type InboundDeadLetterRow
+  summarizeInboundDeadLetters,
+  TALLY_SCAN_LIMIT
 } from "@/lib/db/sms-dead-letters";
 
 type Row = Record<string, unknown>;
 
 /** Records the filters applied so the query contract can be asserted. */
-function fakeClient(result: { data?: Row[]; error?: { message: string } }) {
+function fakeClient(result: { data?: Row[]; error?: { message: string }; count?: number }) {
   const calls: Record<string, unknown[]> = {};
   const record = (name: string, ...args: unknown[]) => {
     calls[name] = [...(calls[name] ?? []), args];
@@ -29,7 +30,11 @@ function fakeClient(result: { data?: Row[]; error?: { message: string } }) {
   }
   builder.limit = (...args: unknown[]) => {
     record("limit", ...args);
-    return Promise.resolve({ data: result.data ?? null, error: result.error ?? null });
+    return Promise.resolve({
+      data: result.data ?? null,
+      error: result.error ?? null,
+      count: result.count
+    });
   };
   const client = {
     from: (table: string) => {
@@ -175,18 +180,8 @@ describe("listInboundDeadLetters", () => {
 });
 
 describe("countByBusiness", () => {
-  const row = (businessId: string): InboundDeadLetterRow => ({
-    id: `${businessId}-${Math.random()}`,
-    businessId,
-    createdAt: "2026-07-28T00:00:00.000Z",
-    attemptCount: 1,
-    error: "missing_from_or_text",
-    from: "73339",
-    preview: ""
-  });
-
   it("puts the most affected tenant first", () => {
-    expect(countByBusiness([row("a"), row("b"), row("b"), row("c"), row("b")])).toEqual([
+    expect(countByBusiness(["a", "b", "b", "c", "b"])).toEqual([
       { businessId: "b", count: 3 },
       { businessId: "a", count: 1 },
       { businessId: "c", count: 1 }
@@ -194,7 +189,7 @@ describe("countByBusiness", () => {
   });
 
   it("breaks ties predictably, so the card does not reshuffle between loads", () => {
-    expect(countByBusiness([row("z"), row("a")])).toEqual([
+    expect(countByBusiness(["z", "a"])).toEqual([
       { businessId: "a", count: 1 },
       { businessId: "z", count: 1 }
     ]);
@@ -202,5 +197,88 @@ describe("countByBusiness", () => {
 
   it("handles nothing", () => {
     expect(countByBusiness([])).toEqual([]);
+  });
+});
+
+describe("summarizeInboundDeadLetters", () => {
+  it("reports the EXACT total, not the size of the scanned sample", () => {
+    // The card shows 20 rows; saying "20 failures" when there were 300 is the
+    // bug this exists to avoid.
+    const { client } = fakeClient({ data: [{ business_id: "a" }], count: 300 });
+    return summarizeInboundDeadLetters({ sinceDays: 14 }, client).then((s) => {
+      expect(s.total).toBe(300);
+      expect(s.capped).toBe(true);
+      expect(s.byBusiness).toEqual([{ businessId: "a", count: 1 }]);
+    });
+  });
+
+  it("is not capped when the scan saw everything", async () => {
+    const { client } = fakeClient({ data: [{ business_id: "a" }, { business_id: "b" }], count: 2 });
+    const s = await summarizeInboundDeadLetters(undefined, client);
+    expect(s).toEqual({
+      total: 2,
+      capped: false,
+      byBusiness: [
+        { businessId: "a", count: 1 },
+        { businessId: "b", count: 1 }
+      ]
+    });
+  });
+
+  it("applies the same status, deleted and window filters as the row query", async () => {
+    const { client, calls } = fakeClient({ data: [], count: 0 });
+    await summarizeInboundDeadLetters({ businessId: "biz-9", sinceDays: 14 }, client);
+    expect(calls.select[0]).toEqual(["business_id", { count: "exact" }]);
+    expect(calls.eq).toContainEqual(["status", "dead_letter"]);
+    expect(calls.eq).toContainEqual(["business_id", "biz-9"]);
+    expect(calls.is).toContainEqual(["deleted_at", null]);
+    expect(calls.gte?.length).toBe(1);
+    expect(calls.limit[0]).toEqual([TALLY_SCAN_LIMIT]);
+  });
+
+  it("ignores a zero window", async () => {
+    const { client, calls } = fakeClient({ data: [], count: 0 });
+    await summarizeInboundDeadLetters({ sinceDays: 0 }, client);
+    expect(calls.gte).toBeUndefined();
+  });
+
+  it("falls back to the row count when the driver returns no count", async () => {
+    const { client } = fakeClient({ data: [{ business_id: "a" }, { business_id: "a" }] });
+    const s = await summarizeInboundDeadLetters(undefined, client);
+    expect(s.total).toBe(2);
+    expect(s.capped).toBe(false);
+  });
+
+  it("reports zero rather than throwing when the query fails", async () => {
+    const { client } = fakeClient({ error: { message: "boom" } });
+    const spy = vi.spyOn(console, "error").mockImplementation(() => {});
+    expect(await summarizeInboundDeadLetters(undefined, client)).toEqual({
+      total: 0,
+      capped: false,
+      byBusiness: []
+    });
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("uses the service client when none is injected", async () => {
+    const { client } = fakeClient({ data: [], count: 0 });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
+    await summarizeInboundDeadLetters();
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
+  });
+
+  it("treats a null result set as empty while still trusting the exact count", async () => {
+    // A count with no rows back is a real driver response; the tallies are then
+    // simply unknown rather than wrong.
+    const { client } = fakeClient({ count: 7 });
+    const s = await summarizeInboundDeadLetters({ businessId: "b" }, client);
+    expect(s).toEqual({ total: 7, capped: true, byBusiness: [] });
+  });
+
+  it("tolerates a row with no business id", async () => {
+    const { client } = fakeClient({ data: [{}], count: 1 });
+    const s = await summarizeInboundDeadLetters(undefined, client);
+    expect(s.byBusiness).toEqual([{ businessId: "undefined", count: 1 }]);
   });
 });

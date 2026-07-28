@@ -46,8 +46,8 @@ export type NoReplyReason = "shortcode_sender" | "no_text";
  *                                      real signal worth surfacing in admin.
  */
 export function classifyReplyTarget(args: {
-  /** The raw sender string from the Telnyx payload. */
-  fromRaw: string;
+  /** The raw sender from the Telnyx payload; absent on a malformed envelope. */
+  fromRaw: string | null | undefined;
   /** The normalized E.164, or "" / null when it could not be parsed. */
   fromE164: string | null;
   /** The message text (already defaulted for image-only messages). */

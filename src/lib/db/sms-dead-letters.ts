@@ -32,6 +32,11 @@ export type InboundDeadLetterCount = { businessId: string; count: number };
 
 const PREVIEW_CHARS = 160;
 
+/** Start of the lookback window as an ISO timestamp. */
+function windowStart(sinceDays: number): string {
+  return new Date(Date.now() - sinceDays * 24 * 60 * 60 * 1000).toISOString();
+}
+
 /**
  * Pull the sender and text out of the stored Telnyx envelope, reusing the Text
  * history parsers rather than a second implementation. Telnyx is inconsistent
@@ -60,19 +65,14 @@ export async function listInboundDeadLetters(
   client?: SupabaseClient
 ): Promise<InboundDeadLetterRow[]> {
   const db = client ?? (await createSupabaseServiceClient());
-  const limit = options?.limit ?? 25;
+  const { businessId, sinceDays, limit = 25 } = options ?? {};
   let q = db
     .from("sms_inbound_jobs")
     .select("id, business_id, created_at, attempt_count, last_error, payload")
     .eq("status", "dead_letter")
     .is("deleted_at", null);
-  if (options?.businessId) q = q.eq("business_id", options.businessId);
-  if (options?.sinceDays && options.sinceDays > 0) {
-    q = q.gte(
-      "created_at",
-      new Date(Date.now() - options.sinceDays * 24 * 60 * 60 * 1000).toISOString()
-    );
-  }
+  if (businessId) q = q.eq("business_id", businessId);
+  if (sinceDays && sinceDays > 0) q = q.gte("created_at", windowStart(sinceDays));
   const { data, error } = await q.order("created_at", { ascending: false }).limit(limit);
   // Never break the admin page over this: an empty list reads as "nothing
   // wrong", and the page has plenty of other signal.
@@ -94,11 +94,58 @@ export async function listInboundDeadLetters(
   });
 }
 
-/** Group rows by tenant, most affected first. Pure. */
-export function countByBusiness(rows: readonly InboundDeadLetterRow[]): InboundDeadLetterCount[] {
+/** Group ids by tenant, most affected first. Pure. */
+export function countByBusiness(
+  businessIds: readonly string[]
+): InboundDeadLetterCount[] {
   const counts = new Map<string, number>();
-  for (const r of rows) counts.set(r.businessId, (counts.get(r.businessId) ?? 0) + 1);
+  for (const id of businessIds) counts.set(id, (counts.get(id) ?? 0) + 1);
   return [...counts]
     .map(([businessId, count]) => ({ businessId, count }))
     .sort((a, b) => b.count - a.count || a.businessId.localeCompare(b.businessId));
+}
+
+/**
+ * How many rows the tallies are allowed to scan. The TOTAL is an exact count
+ * from the database regardless; this only bounds the per-tenant breakdown.
+ */
+export const TALLY_SCAN_LIMIT = 500;
+
+export type InboundDeadLetterSummary = {
+  /** Exact count for the window, NOT the length of any displayed sample. */
+  total: number;
+  /** True when more rows exist than the tallies scanned, so they are a floor. */
+  capped: boolean;
+  byBusiness: InboundDeadLetterCount[];
+};
+
+/**
+ * Totals for the window. Separate from `listInboundDeadLetters` because the card
+ * shows a short sample of rows but must report the real scale: deriving the count
+ * from a 20-row sample would tell an admin there were 20 failures when there were
+ * 300.
+ */
+export async function summarizeInboundDeadLetters(
+  options?: { businessId?: string; sinceDays?: number },
+  client?: SupabaseClient
+): Promise<InboundDeadLetterSummary> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { businessId, sinceDays } = options ?? {};
+  let q = db
+    .from("sms_inbound_jobs")
+    .select("business_id", { count: "exact" })
+    .eq("status", "dead_letter")
+    .is("deleted_at", null);
+  if (businessId) q = q.eq("business_id", businessId);
+  if (sinceDays && sinceDays > 0) q = q.gte("created_at", windowStart(sinceDays));
+  const { data, error, count } = await q
+    .order("created_at", { ascending: false })
+    .limit(TALLY_SCAN_LIMIT);
+  if (error) {
+    console.error("summarizeInboundDeadLetters", error.message);
+    return { total: 0, capped: false, byBusiness: [] };
+  }
+  const ids = ((data ?? []) as Array<{ business_id?: unknown }>).map((r) => String(r.business_id));
+  const total = typeof count === "number" ? count : ids.length;
+  return { total, capped: total > ids.length, byBusiness: countByBusiness(ids) };
 }

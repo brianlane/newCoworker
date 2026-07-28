@@ -1,7 +1,7 @@
 import { listBusinesses } from "@/lib/db/businesses";
 import {
-  countByBusiness,
-  listInboundDeadLetters
+  listInboundDeadLetters,
+  summarizeInboundDeadLetters
 } from "@/lib/db/sms-dead-letters";
 import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
@@ -9,6 +9,7 @@ import { LocalTime } from "@/components/LocalTime";
 
 /** Two weeks is long enough to notice a pattern, short enough to stay actionable. */
 const SINCE_DAYS = 14;
+/** Rows shown. The COUNT is exact and independent of this (see the summary). */
 const ROW_LIMIT = 20;
 
 /**
@@ -22,12 +23,15 @@ const ROW_LIMIT = 20;
  * `sms-inbound-worker`, so anything appearing here is worth a look.
  */
 export async function InboundFailuresCard() {
-  const rows = await listInboundDeadLetters({ sinceDays: SINCE_DAYS, limit: ROW_LIMIT });
-  if (rows.length === 0) return null;
+  const [summary, rows] = await Promise.all([
+    summarizeInboundDeadLetters({ sinceDays: SINCE_DAYS }),
+    listInboundDeadLetters({ sinceDays: SINCE_DAYS, limit: ROW_LIMIT })
+  ]);
+  if (summary.total === 0 && rows.length === 0) return null;
 
   const businesses = await listBusinesses();
   const names = new Map(businesses.map((b) => [b.id, b.name]));
-  const perTenant = countByBusiness(rows);
+  const hidden = summary.total - rows.length;
 
   return (
     <Card>
@@ -35,19 +39,20 @@ export async function InboundFailuresCard() {
         <h2 className="text-xs font-semibold uppercase tracking-wider text-parchment/40">
           Inbound texts that failed
         </h2>
-        <Badge variant="error">{rows.length}</Badge>
+        <Badge variant="error">{summary.total}</Badge>
       </div>
       <p className="mb-3 text-xs text-parchment/50">
         Texts the platform received but could not answer, last {SINCE_DAYS} days. Routine
         one-way senders (lead-service short codes) are not counted here, so these are real
         failures.
       </p>
-      {perTenant.length > 1 && (
+      {summary.byBusiness.length > 1 && (
         <ul className="mb-3 flex flex-wrap gap-2">
-          {perTenant.map((t) => (
+          {summary.byBusiness.map((t) => (
             <li key={t.businessId}>
               <Badge variant="neutral">
                 {names.get(t.businessId) ?? t.businessId}: {t.count}
+                {summary.capped ? "+" : ""}
               </Badge>
             </li>
           ))}
@@ -75,6 +80,11 @@ export async function InboundFailuresCard() {
           </li>
         ))}
       </ul>
+      {hidden > 0 && (
+        <p className="mt-3 text-xs text-parchment/40">
+          Showing the {rows.length} most recent of {summary.total}.
+        </p>
+      )}
     </Card>
   );
 }
