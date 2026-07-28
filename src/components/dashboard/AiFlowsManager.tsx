@@ -179,6 +179,8 @@ type EditorState = {
   name: string;
   enabled: boolean;
   suppressDefaultReply: boolean;
+  /** Kick the worker on enqueue instead of waiting for its next tick. */
+  startImmediately: boolean;
   captureStepScreenshots: boolean;
   /** Cancel a contact's pending runs of this flow when they text back. */
   stopOnResponse: boolean;
@@ -251,6 +253,7 @@ function emptyEditor(): EditorState {
     name: "",
     enabled: true,
     suppressDefaultReply: false,
+    startImmediately: false,
     captureStepScreenshots: false,
     stopOnResponse: false,
     allowReentry: true,
@@ -445,6 +448,7 @@ function editorFromRow(row: AiFlowRow): EditorState {
     name: row.name,
     enabled: row.enabled,
     suppressDefaultReply: def.options?.suppressDefaultReply ?? false,
+    startImmediately: def.options?.startImmediately ?? false,
     captureStepScreenshots: def.options?.captureStepScreenshots ?? false,
     stopOnResponse: def.options?.stopOnResponse ?? false,
     allowReentry: def.options?.allowReentry ?? true,
@@ -467,6 +471,7 @@ function editorFromDefinition(def: AiFlowDefinition, name: string): EditorState 
     name,
     enabled: false,
     suppressDefaultReply: def.options?.suppressDefaultReply ?? false,
+    startImmediately: def.options?.startImmediately ?? false,
     captureStepScreenshots: def.options?.captureStepScreenshots ?? false,
     stopOnResponse: def.options?.stopOnResponse ?? false,
     allowReentry: def.options?.allowReentry ?? true,
@@ -960,6 +965,7 @@ function toDefinition(s: EditorState): AiFlowDefinition {
       : {}),
     options: {
       suppressDefaultReply: s.suppressDefaultReply,
+      startImmediately: s.startImmediately,
       captureStepScreenshots: s.captureStepScreenshots,
       stopOnResponse: s.stopOnResponse,
       allowReentry: s.allowReentry,
@@ -1608,6 +1614,7 @@ export function AiFlowsManager({
         // run: load it disabled, like the adapt hand-off does.
         enabled: warnings.length > 0 ? false : (e?.enabled ?? true),
         suppressDefaultReply: def.options?.suppressDefaultReply ?? false,
+        startImmediately: def.options?.startImmediately ?? false,
         captureStepScreenshots: e?.captureStepScreenshots ?? def.options?.captureStepScreenshots ?? false,
         stopOnResponse: def.options?.stopOnResponse ?? false,
         allowReentry: def.options?.allowReentry ?? true,
@@ -2648,6 +2655,24 @@ export function AiFlowsManager({
               />
               Suppress the normal Coworker reply when this flow matches
             </label>
+          )}
+          {editor.channel === "sms" && (
+            <div>
+              <label className="flex items-center gap-2 text-sm text-parchment/70">
+                <input
+                  type="checkbox"
+                  checked={editor.startImmediately}
+                  onChange={(ev) => setEditor({ ...editor, startImmediately: ev.target.checked })}
+                />
+                Start the moment the text arrives
+              </label>
+              <p className="mt-1 pl-6 text-[11px] text-parchment/40">
+                Normally a workflow begins at the next check, up to about a minute after the
+                text. Turn this on for a lead source that takes the lead back if nobody
+                responds fast, so the first step starts within seconds instead. Leave it off
+                otherwise: for everything else a minute makes no difference.
+              </p>
+            </div>
           )}
           <label className="flex items-center gap-2 text-sm text-parchment/70">
             <input

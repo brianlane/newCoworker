@@ -1012,6 +1012,12 @@ export function AiFlowView({
           Suppresses the normal Coworker reply when this flow matches.
         </p>
       )}
+      {definition.options?.startImmediately && (
+        <p className="text-xs text-parchment/50">
+          Starts within seconds of the text arriving instead of at the next check, for a lead
+          source that takes the lead back if nobody responds fast.
+        </p>
+      )}
       {definition.options?.captureStepScreenshots && (
         <p className="text-xs text-parchment/50">
           Captures a screenshot of each browser step (and a before/at-failure pair on
