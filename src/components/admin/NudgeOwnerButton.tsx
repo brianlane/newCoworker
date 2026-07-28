@@ -13,13 +13,14 @@ import { Button } from "@/components/ui/Button";
  * to find out. `openItems` comes from the same `computeOnboardingNudgeItems`
  * the API route runs, so the two can never describe the checks differently.
  *
- * The preview is a PAGE-LOAD SNAPSHOT and deliberately does not gate the send.
- * The offer and enterprise-deal panels above refresh their own state without
- * re-rendering this server component, so creating an unpaid offer leaves this
- * list stale. Disabling the button on a stale "nothing open" would block a
- * legitimate nudge for the offer just created. The route recomputes on every
- * request and is the authority: it refuses to send when nothing is open, and
- * the items it returns replace the snapshot below once we hear back.
+ * The preview deliberately does not gate the send. The offer and
+ * enterprise-deal panels re-render this card after a create or revoke
+ * (`router.refresh()`), so the common way it went stale is closed, but a
+ * payment landing by webhook or a second operator in another tab can still
+ * move a step to done underneath it. Disabling the button on a stale
+ * "nothing open" would block a legitimate nudge. The route recomputes on
+ * every request and is the authority: it refuses to send when nothing is
+ * open, and the items it returns replace the preview once we hear back.
  */
 export function NudgeOwnerButton({
   businessId,
@@ -34,7 +35,7 @@ export function NudgeOwnerButton({
   const [confirmedItems, setConfirmedItems] = useState<string[] | null>(null);
 
   const items = confirmedItems ?? openItems;
-  const stale = confirmedItems === null;
+  const sent = confirmedItems !== null;
 
   async function nudge() {
     setLoading(true);
@@ -71,16 +72,12 @@ export function NudgeOwnerButton({
     <div className="space-y-2">
       {items.length === 0 ? (
         <p className="text-xs text-parchment/50">
-          {stale
-            ? "Onboarding looked complete at page load, so there is probably nothing to nudge about. Send anyway to re-check: no email goes out if every step is done."
-            : "Onboarding is complete: nothing to nudge this owner about."}
+          Onboarding is complete: nothing to nudge this owner about.
         </p>
       ) : (
         <div className="space-y-1">
           <p className="text-xs text-parchment/40">
-            {stale
-              ? "At page load, the reminder email would ask them to:"
-              : "The reminder covered:"}
+            {sent ? "The reminder covered:" : "The reminder email will ask them to:"}
           </p>
           {/* Keyed by position, not by label: two open enterprise deals
               produce the identical "Complete your enterprise plan payment"

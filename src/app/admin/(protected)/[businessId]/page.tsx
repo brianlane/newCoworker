@@ -620,6 +620,13 @@ export default async function BusinessDetailPage({
             the operator sees what the email would say before sending it. */}
         <div className="mt-4 border-t border-parchment/10 pt-4">
           <NudgeOwnerButton
+            // Remount when the open items change so the component drops the
+            // post-send list it pins in state. The offer and deal panels
+            // router.refresh() this page after a create, and without the
+            // remount that pinned list would shadow the newly-open item.
+            // Keyed on the items rather than the count: revoking one offer
+            // and creating another keeps the count identical.
+            key={`${businessId}:${nudgeItems.map((item) => item.label).join("|")}`}
             businessId={businessId}
             openItems={nudgeItems.map((item) => item.label)}
           />
