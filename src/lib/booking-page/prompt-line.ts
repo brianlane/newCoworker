@@ -14,11 +14,13 @@
  * books through their Calendly event type, and a Vagaro tenant books
  * through Vagaro's own site (whose URL the platform does not hold, so no
  * link is offered rather than an invented one). Computed per turn (the
- * slug, title, and provider are all owner-editable) and best-effort by
- * contract: a failed read costs only this hint, never the turn.
+ * slug, the meetings, and the provider are all owner-editable) and
+ * best-effort by contract: a failed read costs only this hint, never the
+ * turn.
  */
 
 import { getBookingPageForBusiness, upsertBookingPage } from "@/lib/booking-page/db";
+import { listMeetingTypes, visibleMeetingTypes } from "@/lib/booking-page/meeting-types";
 import { getBusiness } from "@/lib/db/businesses";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import { pickCalendlyEventType } from "@/lib/calendar-tools/calendly";
@@ -27,8 +29,14 @@ import { logger } from "@/lib/logger";
 export type PublicBookingLink = {
   /** Absolute URL, vanity slug preferred over the raw token. */
   url: string;
-  /** The title visitors see on the page. */
+  /** What the link books, for the coworker to name it by. */
   title: string;
+  /**
+   * The meetings a visitor can pick from, so the coworker can name them
+   * instead of guessing. One entry for a Calendly event type; empty only
+   * when a page somehow has no meeting to offer.
+   */
+  meetings: string[];
 };
 
 export type SchedulingLink = PublicBookingLink & {
@@ -70,11 +78,21 @@ export async function publicBookingLink(
   }
   if (!page || !page.enabled) return null;
   const site = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
-  const business = await getBusiness(businessId);
+  const [business, meetingTypes] = await Promise.all([
+    getBusiness(businessId),
+    listMeetingTypes(businessId)
+  ]);
+  // The meetings name the link, because they are what a visitor actually
+  // sees: one meeting IS the page, so the coworker can say "book the
+  // discovery call", and several mean the link opens a choice.
+  const meetings = visibleMeetingTypes(meetingTypes).map((t) => t.name);
   return {
     url: `${site}/book/${page.slug ?? page.token}`,
-    // Same fallback the public page renders when no custom title is set.
-    title: page.title?.trim() || `Book a call with ${business?.name?.trim() || "us"}`
+    title:
+      meetings.length === 1
+        ? meetings[0]
+        : `Book a call with ${business?.name?.trim() || "us"}`,
+    meetings
   };
 }
 
@@ -102,6 +120,7 @@ export async function schedulingLink(businessId: string): Promise<SchedulingLink
       return {
         url: picked.eventType.schedulingUrl,
         title: picked.eventType.name,
+        meetings: [picked.eventType.name],
         kind: "calendly"
       };
     }
@@ -123,7 +142,14 @@ export function formatBookingLinkPromptLine(link: SchedulingLink): string {
   const surface =
     link.kind === "calendly"
       ? `This business schedules through Calendly: ${link.url} (the event is called "${link.title}").`
-      : `This business has a public self-serve booking page: ${link.url} (visitors see it titled "${link.title}").`;
+      : link.meetings.length > 1
+        ? `This business has a public self-serve booking page: ${link.url}, where the visitor ` +
+          `chooses one of these meetings and then a time: ${link.meetings.join(", ")}.`
+        : link.meetings.length === 1
+          ? `This business has a public self-serve booking page: ${link.url}, which books ` +
+            `"${link.meetings[0]}".`
+          : `This business has a public self-serve booking page: ${link.url}, where the ` +
+            `visitor picks a time.`;
   return (
     `SCHEDULING LINK. ${surface} When you write to someone so THEY choose the time, for ` +
     `example emailing an assistant who books on someone's behalf, send that exact link by ` +

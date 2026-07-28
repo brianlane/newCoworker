@@ -459,7 +459,7 @@ export async function deleteMeetingType(
 
 export type EffectiveBookingSettings = {
   durationMinutes: number;
-  /** The event title and the left panel's heading. */
+  /** The meeting's name: the event title and the left panel's heading. */
   title: string | null;
   description: string | null;
   questions: BookingIntakeQuestion[];
@@ -487,7 +487,9 @@ export function effectiveTypeSettings(
   if (!type) {
     return {
       durationMinutes: fallbackDurationMinutes,
-      title: page.title?.trim() || null,
+      // A meeting names itself, and without one there is nothing to name
+      // the booking after: the caller falls back to its localized default.
+      title: null,
       description: page.description,
       questions: pageQuestions,
       assignmentMode: page.assignment_mode,

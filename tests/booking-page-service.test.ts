@@ -313,21 +313,13 @@ describe("getBookingPageContext", () => {
     });
   });
 
-  it("resolves by vanity slug and surfaces the custom title", async () => {
+  it("resolves by vanity slug without touching the token lookup", async () => {
     const bySlug = vi.mocked(getEnabledBookingPageBySlug);
-    bySlug.mockResolvedValueOnce({ ...PAGE, slug: "new-coworker", title: "  Free strategy call  " });
+    bySlug.mockResolvedValueOnce({ ...PAGE, slug: "new-coworker" });
     const out = await getBookingPageContext("new-coworker");
     expect(bySlug).toHaveBeenCalledWith("new-coworker");
     expect(mockPage).not.toHaveBeenCalled();
-    expect(out).toMatchObject({
-      ok: true,
-      context: { title: "Free strategy call" }
-    });
-
-    // Blank stored title falls back to null (the localized default).
-    mockPage.mockResolvedValueOnce({ ...PAGE, title: "   " });
-    const fallback = await getBookingPageContext(TOKEN);
-    expect(fallback).toMatchObject({ ok: true, context: { title: null } });
+    expect(out).toMatchObject({ ok: true, context: { businessId: BIZ } });
   });
 
   it("resolves the render context (zoom flag, timezone fallback)", async () => {

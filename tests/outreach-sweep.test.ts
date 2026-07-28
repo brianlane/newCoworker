@@ -126,6 +126,7 @@ function baseDeps(over: Record<string, unknown> = {}) {
     schedulingLinkImpl: vi.fn(async () => ({
       url: "https://app.example.com/book/hq",
       title: "Book a call",
+      meetings: ["Book a call"],
       kind: "booking_page" as const
     })),
     processFlowEventImpl: vi.fn(async () => ({

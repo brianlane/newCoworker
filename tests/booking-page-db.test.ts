@@ -227,8 +227,7 @@ describe("upsertBookingPage", () => {
       { waitlistOfferTtlMinutes: 60.5 },
       { slug: "ab" },
       { slug: "Not Valid!" },
-      { slug: "api" },
-      { title: "x".repeat(121) }
+      { slug: "api" }
     ];
     for (const patch of bad) {
       await expect(upsertBookingPage(BIZ, patch, client)).rejects.toThrow(
@@ -254,29 +253,22 @@ describe("upsertBookingPage", () => {
     });
   });
 
-  it("normalizes slug and title writes, clearing on blank", async () => {
+  it("normalizes slug writes, clearing on blank", async () => {
     const { client, calls } = fakeDb([
       { data: ROW, error: null }, // existence read
       { data: ROW, error: null } // update
     ]);
-    await upsertBookingPage(
-      BIZ,
-      { slug: " New-Coworker ", title: "  Free strategy call  " },
-      client
-    );
+    await upsertBookingPage(BIZ, { slug: " New-Coworker " }, client);
     const update = calls.find((c) => c.method === "update");
-    expect(update?.args[0]).toMatchObject({
-      slug: "new-coworker",
-      title: "Free strategy call"
-    });
+    expect(update?.args[0]).toMatchObject({ slug: "new-coworker" });
 
     const clearing = fakeDb([
       { data: ROW, error: null },
       { data: ROW, error: null }
     ]);
-    await upsertBookingPage(BIZ, { slug: "", title: null }, clearing.client);
+    await upsertBookingPage(BIZ, { slug: "" }, clearing.client);
     const clearUpdate = clearing.calls.find((c) => c.method === "update");
-    expect(clearUpdate?.args[0]).toMatchObject({ slug: null, title: null });
+    expect(clearUpdate?.args[0]).toMatchObject({ slug: null });
 
     // Explicit null clears too (the API's nullable field).
     const nullClear = fakeDb([

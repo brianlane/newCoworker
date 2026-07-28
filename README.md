@@ -776,14 +776,17 @@ lives on the provider's own page).
 
 The page reads as Calendly does, because the alternative confused owners:
 one scheduling link on a single line at the top (Copy, live toggle, and a
-"Customize" disclosure holding the vanity slug, heading, blurb, and the
-rotate button), then **Meetings** as the centerpiece, then everything that
+"Customize" disclosure holding the vanity slug, the blurb, and the rotate
+button), then **Meetings** as the centerpiece, then everything that
 applies to all of them folded into one collapsed "Applies to every meeting"
 section (when people can book, who bookings go to, confirmations and
 reminders, waitlist), then the upcoming-bookings list. Meeting types are
 the ONLY way to define what gets booked: the page carries the shared
-policy, never a competing duration or questionnaire of its own. Any page
-with no meetings gets one automatically, carrying its own title,
+policy, never a competing duration, questionnaire, or heading of its own.
+A visitor reads the business name plus the meeting's own name, which is why
+there is no page-level heading field (`booking_pages.title` survives as a
+dormant column nothing renders or writes). Any page with no meetings gets
+one automatically, carrying the page's title,
 description, shortest duration, and questions across
 (`ensureDefaultMeetingType`, plus a backfill migration for pages that
 predate this), so an owner always lands on a list rather than an empty
@@ -932,8 +935,10 @@ page.
 - **The coworker knows the business's scheduling link, whichever calendar
   they book with** (`src/lib/booking-page/prompt-line.ts`): every
   owner-facing AI surface (dashboard chat, owner SMS, the email coworker)
-  gets a system line naming the link and its public title, resolved by the
-  same provider order the calendar tools use: Calendly tenants get their
+  gets a system line naming the link and the meetings it books (one meeting
+  is named outright, several are listed as the choice the visitor gets),
+  resolved by the same provider order the calendar tools use: Calendly
+  tenants get their
   Calendly event type's scheduling URL, Vagaro tenants get NO link (their
   site's URL is not held by the platform, and no link beats an invented
   one), and everyone else gets the native booking page, PROVISIONED on

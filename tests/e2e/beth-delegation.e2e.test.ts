@@ -63,6 +63,7 @@ const LIZ_EMAIL = "liz@lizdev.example.com";
 const BOOKING_LINK = {
   url: "https://www.newcoworker.com/book/new-coworker",
   title: "NC Discovery Call",
+  meetings: ["NC Discovery Call"],
   kind: "booking_page" as const
 };
 /** HQ runs on America/Phoenix; Beth and Liz are Eastern. */
