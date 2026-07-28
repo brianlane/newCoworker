@@ -37,6 +37,7 @@ import {
   type EmailCoworkerThread
 } from "@/lib/email-coworker/threads";
 import { runEmailCoworkerTurn } from "@/lib/email-coworker/turn";
+import { noteProspectReply } from "@/lib/outreach/reply";
 import { logger } from "@/lib/logger";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -169,6 +170,13 @@ export async function pollEmailCoworker(
         // over must not get an automated answer from the other side of the
         // house either.
         if (!(await claimMessage(businessId, message.id, db))) continue;
+
+        // If this is a cold-outreach prospect answering, the ledger has to know
+        // before the follow-up sweep runs again: a nudge sent to somebody who
+        // already replied reads as a machine talking over them. Also catches
+        // "take me off your list", which suppresses rather than just records.
+        // Best-effort, and independent of whether we answer below.
+        await noteProspectReply(businessId, message.fromEmail, message.bodyText, db);
 
         // A batch can carry several replies on the SAME thread; once it is
         // handed off, the rest are the human's to answer (and re-alerting

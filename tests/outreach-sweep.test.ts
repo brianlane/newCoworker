@@ -20,7 +20,11 @@ vi.mock("@/lib/db/system-logs", () => ({
   recordSystemLog: (...args: unknown[]) => recordSystemLogSpy(...(args as []))
 }));
 
-import { processOutreachSweep, recordOutreachEmailLog } from "@/lib/outreach/sweep";
+import {
+  processOutreachSweep,
+  recordOutreachEmailLog,
+  sendProspectNow
+} from "@/lib/outreach/sweep";
 import { PROSPECT_OUTREACH_SOURCE } from "@/lib/ai-flows/templates";
 import * as db from "@/lib/outreach/db";
 import type { OutreachProspectRow, OutreachSettingsRow } from "@/lib/outreach/db";
@@ -100,6 +104,18 @@ function baseDeps(over: Record<string, unknown> = {}) {
       messageId: "msg-1",
       threadId: "thread-1"
     })),
+    sendFromConnectionImpl: vi.fn(async () => ({
+      ok: true as const,
+      provider: "google" as const,
+      messageId: "msg-2",
+      threadId: "thread-2"
+    })),
+    getMailboxConnectionImpl: vi.fn(async () => ({
+      id: "conn-row",
+      connection_id: "nango-conn",
+      provider_config_key: "google-mail"
+    })),
+    rememberThreadImpl: vi.fn(async () => {}),
     getBusinessImpl: vi.fn(async () => ({
       id: BIZ,
       name: "New Coworker",
@@ -116,7 +132,6 @@ function baseDeps(over: Record<string, unknown> = {}) {
       flowsEvaluated: 1,
       flowsMatched: 1
     })),
-    countFlowsImpl: vi.fn(async () => 1),
     recordEmailLogImpl: vi.fn(async () => {}),
     ...over
   } as never;
@@ -126,6 +141,8 @@ function baseDeps(over: Record<string, unknown> = {}) {
 function stubLedger(over: Record<string, unknown> = {}) {
   const defaults = {
     listActiveOutreachSettings: vi.fn(async () => [settings()]),
+    getOutreachSettings: vi.fn(async () => settings()),
+    getProspect: vi.fn(async () => prospect()),
     upsertOutreachSettings: vi.fn(async () => settings()),
     existingProspectDomains: vi.fn(async () => new Set<string>()),
     insertProspects: vi.fn(async () => []),
@@ -607,14 +624,124 @@ describe("phase 3: sending", () => {
     );
   });
 
-  it("emails the prospect even with no flow installed, and says so", async () => {
+  it("says so when no flow MATCHED, not merely when none exists", async () => {
+    // A tenant can have other webhook flows enabled while the prospect
+    // follow-through one is missing or switched off. Counting enabled flows
+    // would call that fine and file nothing, silently.
     sendLedger();
-    const result = await processOutreachSweep(baseDeps({ countFlowsImpl: vi.fn(async () => 0) }));
+    const result = await processOutreachSweep(
+      baseDeps({
+        processFlowEventImpl: vi.fn(async () => ({
+          enqueued: 0,
+          flowsEvaluated: 3,
+          flowsMatched: 0
+        }))
+      })
+    );
     expect(result.sent).toBe(1);
     expect(result.notes).toContainEqual({
       businessId: BIZ,
-      note: "no webhook flow enabled, so the prospect was emailed but not filed"
+      note: "no flow matched, so the prospect was emailed but not filed"
     });
+  });
+
+  it("treats a matched-but-not-enqueued event as the redelivery it is", async () => {
+    sendLedger();
+    const result = await processOutreachSweep(
+      baseDeps({
+        processFlowEventImpl: vi.fn(async () => ({
+          enqueued: 0,
+          flowsEvaluated: 1,
+          flowsMatched: 1
+        }))
+      })
+    );
+    expect(result.sent).toBe(1);
+    expect(result.notes).toEqual([]);
+  });
+
+  it("registers the thread so the coworker can answer the prospect's reply", async () => {
+    sendLedger();
+    const deps = baseDeps();
+    await processOutreachSweep(deps);
+    expect(
+      (deps as unknown as { rememberThreadImpl: ReturnType<typeof vi.fn> }).rememberThreadImpl
+    ).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: BIZ,
+        provider: "google",
+        threadId: "thread-1",
+        correspondentEmail: "info@acmehvac.com",
+        sentMessageRef: "msg-1"
+      }),
+      expect.anything()
+    );
+  });
+
+  it("sends fine when the provider reports no thread id (Microsoft)", async () => {
+    sendLedger();
+    const deps = baseDeps({
+      sendEmailImpl: vi.fn(async () => ({
+        ok: true as const,
+        provider: "microsoft" as const,
+        messageId: "msg-1",
+        threadId: null
+      }))
+    });
+    const result = await processOutreachSweep(deps);
+    expect(result.sent).toBe(1);
+    // Nothing to register, so no autonomous follow-ups for that tenant yet.
+    expect(
+      (deps as unknown as { rememberThreadImpl: ReturnType<typeof vi.fn> }).rememberThreadImpl
+    ).not.toHaveBeenCalled();
+  });
+
+  it("sends from the mailbox the owner picked for outreach", async () => {
+    sendLedger({
+      listActiveOutreachSettings: vi.fn(async () => [
+        settings({ from_connection_id: "conn-row" })
+      ])
+    });
+    const deps = baseDeps();
+    const result = await processOutreachSweep(deps);
+    expect(result.sent).toBe(1);
+    const viaConnection = (
+      deps as unknown as { sendFromConnectionImpl: ReturnType<typeof vi.fn> }
+    ).sendFromConnectionImpl;
+    expect(viaConnection).toHaveBeenCalledWith(
+      BIZ,
+      { provider: "google", providerConfigKey: "google-mail", connectionId: "nango-conn" },
+      expect.objectContaining({ toEmail: "info@acmehvac.com" })
+    );
+    // The default-connection path is NOT used when a choice was stored.
+    expect(
+      (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl
+    ).not.toHaveBeenCalled();
+  });
+
+  it("fails rather than silently sending from the wrong address when that mailbox is gone", async () => {
+    for (const getMailboxConnectionImpl of [
+      vi.fn(async () => null),
+      vi.fn(async () => ({
+        id: "conn-row",
+        connection_id: "nango-conn",
+        provider_config_key: "google-calendar"
+      }))
+    ]) {
+      const ledger = sendLedger({
+        listActiveOutreachSettings: vi.fn(async () => [
+          settings({ from_connection_id: "conn-row" })
+        ])
+      });
+      const result = await processOutreachSweep(baseDeps({ getMailboxConnectionImpl }));
+      expect(result.sent).toBe(0);
+      expect(ledger.patchProspect).toHaveBeenCalledWith(
+        BIZ,
+        prospect().id,
+        expect.objectContaining({ status: "failed", status_detail: "email_not_connected" }),
+        expect.anything()
+      );
+    }
   });
 
   it("keeps the send when the flow hand-off itself fails, however it failed", async () => {
@@ -859,6 +986,136 @@ describe("phase 4: the single nudge", () => {
     expect(
       (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl
     ).not.toHaveBeenCalled();
+  });
+});
+
+describe("sendProspectNow (the owner pressed Send in manual mode)", () => {
+  function nowLedger(over: Record<string, unknown> = {}) {
+    return stubLedger({
+      getOutreachSettings: vi.fn(async () => settings({ mode: "manual" })),
+      getProspect: vi.fn(async () => prospect()),
+      ...over
+    });
+  }
+
+  it("sends through the same path the sweep uses, including the flow hand-off", async () => {
+    const ledger = nowLedger();
+    const deps = baseDeps();
+    const result = await sendProspectNow(BIZ, prospect().id, deps);
+    expect(result).toEqual({ ok: true, notes: [] });
+    // Same guarded claim as the automatic path: one prospect, one email.
+    expect(ledger.transitionProspect).toHaveBeenCalledWith(
+      BIZ,
+      prospect().id,
+      "drafted",
+      { status: "sent", sent_at: MONDAY_MORNING.toISOString() },
+      expect.anything()
+    );
+    expect(
+      (deps as unknown as { processFlowEventImpl: ReturnType<typeof vi.fn> }).processFlowEventImpl
+    ).toHaveBeenCalled();
+  });
+
+  it("ignores the send window, because the owner chose this moment", async () => {
+    nowLedger();
+    const result = await sendProspectNow(
+      BIZ,
+      prospect().id,
+      baseDeps({ now: () => MONDAY_AFTERNOON })
+    );
+    expect(result.ok).toBe(true);
+  });
+
+  it("still honors the daily cap, counting today's follow-ups too", async () => {
+    nowLedger({
+      countProspectsSentSince: vi.fn(async () => 8),
+      countProspectsNudgedSince: vi.fn(async () => 4)
+    });
+    const deps = baseDeps();
+    expect(await sendProspectNow(BIZ, prospect().id, deps)).toEqual({
+      ok: false,
+      reason: "cap_reached"
+    });
+    expect(
+      (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl
+    ).not.toHaveBeenCalled();
+  });
+
+  it("refuses when the business is unconfigured, or its setup is incomplete", async () => {
+    nowLedger({ getOutreachSettings: vi.fn(async () => null) });
+    expect(await sendProspectNow(BIZ, prospect().id, baseDeps())).toEqual({
+      ok: false,
+      reason: "not_configured"
+    });
+
+    nowLedger({
+      getOutreachSettings: vi.fn(async () => settings({ mode: "manual", value_prop: null }))
+    });
+    expect(await sendProspectNow(BIZ, prospect().id, baseDeps())).toEqual({
+      ok: false,
+      reason: "not_configured",
+      detail: "no value proposition configured"
+    });
+  });
+
+  it("refuses a prospect that is gone, already handled, or missing its text", async () => {
+    nowLedger({ getProspect: vi.fn(async () => null) });
+    expect(await sendProspectNow(BIZ, prospect().id, baseDeps())).toEqual({
+      ok: false,
+      reason: "not_found"
+    });
+
+    nowLedger({ getProspect: vi.fn(async () => prospect({ status: "sent" })) });
+    expect(await sendProspectNow(BIZ, prospect().id, baseDeps())).toEqual({
+      ok: false,
+      reason: "not_drafted"
+    });
+
+    nowLedger({ getProspect: vi.fn(async () => prospect({ pitch_body: null })) });
+    expect(await sendProspectNow(BIZ, prospect().id, baseDeps())).toEqual({
+      ok: false,
+      reason: "not_drafted",
+      detail: "the draft has no address or pitch text"
+    });
+  });
+
+  it("reports a send that failed, and a send with no flow to file it", async () => {
+    nowLedger();
+    expect(
+      await sendProspectNow(
+        BIZ,
+        prospect().id,
+        baseDeps({
+          sendEmailImpl: vi.fn(async () => ({ ok: false as const, detail: "email_not_connected" }))
+        })
+      )
+    ).toEqual({ ok: false, reason: "send_failed" });
+
+    nowLedger();
+    const noFlow = await sendProspectNow(
+      BIZ,
+      prospect().id,
+      baseDeps({
+        processFlowEventImpl: vi.fn(async () => ({
+          enqueued: 0,
+          flowsEvaluated: 2,
+          flowsMatched: 0
+        }))
+      })
+    );
+    // The mail went; the owner is told the filing did not happen.
+    expect(noFlow).toEqual({
+      ok: true,
+      notes: ["no flow matched, so the prospect was emailed but not filed"]
+    });
+  });
+
+  it("does not send when another pass already claimed the prospect", async () => {
+    nowLedger({ transitionProspect: vi.fn(async () => false) });
+    expect(await sendProspectNow(BIZ, prospect().id, baseDeps())).toEqual({
+      ok: false,
+      reason: "send_failed"
+    });
   });
 });
 

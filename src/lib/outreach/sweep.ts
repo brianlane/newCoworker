@@ -27,11 +27,15 @@
 
 import { getBusiness } from "@/lib/db/businesses";
 import { schedulingLink } from "@/lib/booking-page/prompt-line";
-import { sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import {
-  countEnabledWebhookFlows,
-  processWebhookFlowEvent
-} from "@/lib/ai-flows/webhook-events";
+  sendFromMailboxConnection,
+  sendFromOwnerMailbox,
+  type OwnerMailboxSendResult
+} from "@/lib/email/owner-mailbox";
+import { getWorkspaceOAuthConnection } from "@/lib/db/workspace-oauth-connections";
+import { isEmailProviderConfigKey, providerFromKey } from "@/lib/voice-tools/connections";
+import { rememberSentThread } from "@/lib/email-coworker/threads";
+import { processWebhookFlowEvent } from "@/lib/ai-flows/webhook-events";
 import { PROSPECT_OUTREACH_SOURCE } from "@/lib/ai-flows/templates";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { recordSystemLog } from "@/lib/db/system-logs";
@@ -40,6 +44,8 @@ import {
   countProspectsNudgedSince,
   countProspectsSentSince,
   existingProspectDomains,
+  getOutreachSettings,
+  getProspect,
   insertProspects,
   listActiveOutreachSettings,
   listProspectsByStatus,
@@ -118,10 +124,12 @@ export type OutreachSweepDeps = {
   probeSiteImpl?: typeof probeSite;
   polishImpl?: typeof polishParagraphs;
   sendEmailImpl?: typeof sendFromOwnerMailbox;
+  sendFromConnectionImpl?: typeof sendFromMailboxConnection;
+  getMailboxConnectionImpl?: typeof getWorkspaceOAuthConnection;
+  rememberThreadImpl?: typeof rememberSentThread;
   getBusinessImpl?: typeof getBusiness;
   schedulingLinkImpl?: typeof schedulingLink;
   processFlowEventImpl?: typeof processWebhookFlowEvent;
-  countFlowsImpl?: typeof countEnabledWebhookFlows;
   recordEmailLogImpl?: typeof recordOutreachEmailLog;
 };
 
@@ -135,10 +143,12 @@ type Resolved = {
   probeSite: typeof probeSite;
   polish: typeof polishParagraphs;
   sendEmail: typeof sendFromOwnerMailbox;
+  sendFromConnection: typeof sendFromMailboxConnection;
+  getMailboxConnection: typeof getWorkspaceOAuthConnection;
+  rememberThread: typeof rememberSentThread;
   getBusiness: typeof getBusiness;
   schedulingLink: typeof schedulingLink;
   processFlowEvent: typeof processWebhookFlowEvent;
-  countFlows: typeof countEnabledWebhookFlows;
   recordEmailLog: typeof recordOutreachEmailLog;
 };
 
@@ -153,10 +163,12 @@ async function resolveDeps(deps: OutreachSweepDeps): Promise<Resolved> {
     probeSite: deps.probeSiteImpl ?? probeSite,
     polish: deps.polishImpl ?? polishParagraphs,
     sendEmail: deps.sendEmailImpl ?? sendFromOwnerMailbox,
+    sendFromConnection: deps.sendFromConnectionImpl ?? sendFromMailboxConnection,
+    getMailboxConnection: deps.getMailboxConnectionImpl ?? getWorkspaceOAuthConnection,
+    rememberThread: deps.rememberThreadImpl ?? rememberSentThread,
     getBusiness: deps.getBusinessImpl ?? getBusiness,
     schedulingLink: deps.schedulingLinkImpl ?? schedulingLink,
     processFlowEvent: deps.processFlowEventImpl ?? processWebhookFlowEvent,
-    countFlows: deps.countFlowsImpl ?? countEnabledWebhookFlows,
     recordEmailLog: deps.recordEmailLogImpl ?? recordOutreachEmailLog
   };
 }
@@ -487,7 +499,7 @@ async function deliverPitch(
   if (!claimed) return false;
 
   try {
-    const outcome = await r.sendEmail(settings.business_id, {
+    const outcome = await sendThroughConfiguredMailbox(settings, r, {
       toEmail: to,
       subject: mail.subject,
       bodyText: mail.body
@@ -506,12 +518,65 @@ async function deliverPitch(
       body: mail.body,
       providerMessageId: outcome.messageId
     });
+    // Hand the thread to the email coworker, which is what lets a prospect's
+    // REPLY be read at all: it polls owned threads, answers in-thread, can book
+    // the call, and marks this prospect replied so no follow-up talks over
+    // them. Gmail returns the conversation id on send; Graph returns no body,
+    // so Microsoft tenants send fine and simply get no autonomous follow-ups
+    // (the same limitation the email coworker documents).
+    if (outcome.threadId) {
+      await r.rememberThread(
+        {
+          businessId: settings.business_id,
+          provider: outcome.provider,
+          threadId: outcome.threadId,
+          subject: mail.subject,
+          correspondentEmail: to,
+          sentMessageRef: outcome.messageId
+        },
+        r.db
+      );
+    }
     return true;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     await recordSendFailure(settings, prospect, r, mail.stamp, message.slice(0, 300));
     return false;
   }
+}
+
+/**
+ * Send through the mailbox the owner PICKED for outreach when they picked one,
+ * and the business's default email connection otherwise.
+ *
+ * A tenant with several connected mailboxes (a personal one and a shared
+ * sales@, say) cares which address a cold email comes from: it is the address
+ * replies land in and the domain whose reputation is at stake. Storing that
+ * choice and then ignoring it would silently send from the wrong place.
+ */
+async function sendThroughConfiguredMailbox(
+  settings: OutreachSettingsRow,
+  r: Resolved,
+  args: { toEmail: string; subject: string; bodyText: string }
+): Promise<OwnerMailboxSendResult> {
+  const chosen = settings.from_connection_id?.trim();
+  if (!chosen) return r.sendEmail(settings.business_id, args);
+  const row = await r.getMailboxConnection(settings.business_id, chosen);
+  // A deleted or reconnected mailbox leaves a stale id. Falling back to the
+  // default would send from an address the owner did not choose, so this fails
+  // instead and the ledger records why.
+  if (!row || !isEmailProviderConfigKey(row.provider_config_key)) {
+    return { ok: false, detail: "email_not_connected" };
+  }
+  return r.sendFromConnection(
+    settings.business_id,
+    {
+      provider: providerFromKey(row.provider_config_key),
+      providerConfigKey: row.provider_config_key,
+      connectionId: row.connection_id
+    },
+    args
+  );
 }
 
 /**
@@ -561,14 +626,7 @@ async function handOffToFlow(
   mail: { email: string; subject: string }
 ): Promise<void> {
   try {
-    if ((await r.countFlows(settings.business_id, r.db)) === 0) {
-      result.notes.push({
-        businessId: settings.business_id,
-        note: "no webhook flow enabled, so the prospect was emailed but not filed"
-      });
-      return;
-    }
-    await r.processFlowEvent(
+    const outcome = await r.processFlowEvent(
       settings.business_id,
       {
         source: PROSPECT_OUTREACH_SOURCE,
@@ -587,6 +645,18 @@ async function handOffToFlow(
       },
       r.db
     );
+    // Ask the MATCHER, not a flow count: a tenant can have other webhook flows
+    // enabled while the prospect follow-through one is missing or switched off,
+    // and then nothing files the prospect and nobody is told. `flowsMatched`
+    // counts flows whose conditions actually matched this event, so zero means
+    // exactly "no flow handled it". A positive match with nothing enqueued is a
+    // redelivery of an event already handled, which is fine.
+    if (outcome.flowsMatched === 0) {
+      result.notes.push({
+        businessId: settings.business_id,
+        note: "no flow matched, so the prospect was emailed but not filed"
+      });
+    }
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     logger.warn("outreach: flow hand-off failed", {
@@ -598,6 +668,76 @@ async function handOffToFlow(
       note: `flow hand-off failed: ${message.slice(0, 120)}`
     });
   }
+}
+
+export type SendNowResult =
+  | { ok: true; notes: string[] }
+  | {
+      ok: false;
+      reason: "not_found" | "not_drafted" | "cap_reached" | "not_configured" | "send_failed";
+      detail?: string;
+    };
+
+/**
+ * Send ONE drafted prospect right now, because the owner pressed Send in manual
+ * mode. Shares the whole send path with the sweep (same claim, same mailbox,
+ * same email_log write, same flow hand-off), so a manual send and an automatic
+ * one are the same event with the same audit trail.
+ *
+ * The send WINDOW is deliberately not enforced: the owner is choosing this
+ * moment. The daily cap still is, because deliverability is physics rather than
+ * policy, and a burst is what gets a sending domain filtered.
+ */
+export async function sendProspectNow(
+  businessId: string,
+  prospectId: string,
+  deps: OutreachSweepDeps = {}
+): Promise<SendNowResult> {
+  const r = await resolveDeps(deps);
+  const settings = await getOutreachSettings(businessId, r.db);
+  if (!settings) return { ok: false, reason: "not_configured" };
+  const resolved = await resolveTenant(settings, r);
+  if ("missing" in resolved) return { ok: false, reason: "not_configured", detail: resolved.missing };
+
+  const prospect = await getProspect(businessId, prospectId, r.db);
+  if (!prospect) return { ok: false, reason: "not_found" };
+  if (prospect.status !== "drafted") return { ok: false, reason: "not_drafted" };
+  const to = prospect.email;
+  const subject = prospect.pitch_subject?.trim();
+  const body = prospect.pitch_body?.trim();
+  if (!to || !subject || !body) {
+    return { ok: false, reason: "not_drafted", detail: "the draft has no address or pitch text" };
+  }
+
+  const dayStart = utcDayStartIso(r.now);
+  const [sentToday, nudgedToday] = await Promise.all([
+    countProspectsSentSince(businessId, dayStart, r.db),
+    countProspectsNudgedSince(businessId, dayStart, r.db)
+  ]);
+  if (settings.daily_cap - sentToday - nudgedToday <= 0) {
+    return { ok: false, reason: "cap_reached" };
+  }
+
+  const result: OutreachSweepResult = {
+    businesses: 1,
+    discovered: 0,
+    drafted: 0,
+    sent: 0,
+    nudged: 0,
+    skipped: 0,
+    notes: [],
+    errors: []
+  };
+  const sent = await deliverPitch(settings, resolved.tenant, prospect, r, {
+    to,
+    subject,
+    body,
+    fromStatus: "drafted",
+    stamp: "sent_at"
+  });
+  if (!sent) return { ok: false, reason: "send_failed" };
+  await handOffToFlow(settings, prospect, r, result, { email: to, subject });
+  return { ok: true, notes: result.notes.map((n) => n.note) };
 }
 
 /** Everything one business gets in one pass. */

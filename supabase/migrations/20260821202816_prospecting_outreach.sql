@@ -61,9 +61,11 @@ create table if not exists public.outreach_settings (
   -- aspirational — a compliance footer that an owner could forget is not a
   -- compliance footer.
   postal_address text,
-  -- What the tenant wants said about themselves in one or two sentences.
-  -- Optional: the composer otherwise grounds the pitch in the business
-  -- profile the coworker already uses.
+  -- What the tenant wants said about themselves in one or two sentences. Like
+  -- the postal address this is a PRECONDITION rather than a preference: the
+  -- pitch is built from a probe finding plus this line, so without it there is
+  -- no honest email to send, and the check below keeps the schema and the code
+  -- telling the same story.
   value_prop text,
   -- Who the pitch is signed by. Optional; the business name signs it otherwise.
   sender_name text,
@@ -73,10 +75,15 @@ create table if not exists public.outreach_settings (
   updated_at timestamptz not null default now(),
   constraint outreach_settings_window_ordered
     check (send_window_end_hour > send_window_start_hour),
-  constraint outreach_settings_postal_address_required_when_on
+  constraint outreach_settings_ready_when_on
     check (
       mode = 'off'
-      or (postal_address is not null and length(btrim(postal_address)) > 0)
+      or (
+        postal_address is not null
+        and length(btrim(postal_address)) > 0
+        and value_prop is not null
+        and length(btrim(value_prop)) > 0
+      )
     )
 );
 
@@ -161,7 +168,9 @@ grant select, insert, update, delete on table public.outreach_prospects to servi
 comment on table public.outreach_settings is
   'Per-business Prospecting configuration: mode (off/manual/auto), Places targeting (search terms x cities), daily send cap, weekday send window, sending mailbox connection, and the CAN-SPAM postal address. Mode defaults to off, and a check constraint makes leaving off impossible without a postal address, so no cold mail can go out without one.';
 comment on column public.outreach_settings.postal_address is
-  'Physical postal address printed in every pitch footer (CAN-SPAM requirement). Enforced by outreach_settings_postal_address_required_when_on: the feature cannot be switched on without it.';
+  'Physical postal address printed in every pitch footer (CAN-SPAM requirement). Enforced by outreach_settings_ready_when_on: the feature cannot be switched on without it.';
+comment on column public.outreach_settings.value_prop is
+  'One or two sentences on what the tenant offers, used as the middle of every pitch. Required whenever mode is not off (outreach_settings_ready_when_on): without it there is no honest email to compose.';
 comment on table public.outreach_prospects is
   'Cold-outreach ledger: one permanent row per discovered domain per business, carrying probe findings and the composed pitch through discovered/drafted/queued/sent/replied/booked/unsubscribed/skipped/failed. Any existing row suppresses the domain from future discovery; the partial unique index on lower(email) suppresses the address axis too, so nobody is pitched twice.';
 comment on column public.outreach_prospects.findings is

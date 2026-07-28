@@ -263,6 +263,10 @@ export async function findProspectByEmail(
  * follow-up each, oldest first. `sentBefore` is the patience window and
  * `sentAfter` the staleness floor, because nudging a two-month-old cold email
  * reads as a stranger rediscovering you rather than a follow-up.
+ *
+ * A reply moves the row off `sent`, so the status filter alone would do. The
+ * explicit `replied_at is null` is belt and braces on the one thing that must
+ * never happen: a machine following up on somebody who already answered.
  */
 export async function listProspectsDueForNudge(
   businessId: string,
@@ -278,6 +282,7 @@ export async function listProspectsDueForNudge(
     .eq("business_id", businessId)
     .eq("status", "sent")
     .is("nudged_at", null)
+    .is("replied_at", null)
     .gte("sent_at", sentAfterIso)
     .lte("sent_at", sentBeforeIso)
     .order("sent_at", { ascending: true })
