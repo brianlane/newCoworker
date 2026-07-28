@@ -28,6 +28,9 @@ function hit(over: Partial<PlacesHit> = {}): PlacesHit {
     websiteUri: "https://www.acmehvac.com/",
     nationalPhoneNumber: "(602) 555-0100",
     businessStatus: "OPERATIONAL",
+    regularOpeningHours: null,
+    rating: null,
+    reviewCount: null,
     ...over
   };
 }
@@ -117,7 +120,10 @@ describe("searchPlaces", () => {
             displayName: { text: "Acme HVAC" },
             websiteUri: "https://acmehvac.com",
             nationalPhoneNumber: "(602) 555-0100",
-            businessStatus: "OPERATIONAL"
+            businessStatus: "OPERATIONAL",
+            regularOpeningHours: { periods: [{ open: { day: 1, hour: 8 }, close: { day: 1, hour: 17 } }] },
+            rating: 4.7,
+            userRatingCount: 312
           },
           {}
         ]
@@ -130,18 +136,43 @@ describe("searchPlaces", () => {
         displayName: "Acme HVAC",
         websiteUri: "https://acmehvac.com",
         nationalPhoneNumber: "(602) 555-0100",
-        businessStatus: "OPERATIONAL"
+        businessStatus: "OPERATIONAL",
+        regularOpeningHours: {
+          periods: [{ open: { day: 1, hour: 8 }, close: { day: 1, hour: 17 } }]
+        },
+        rating: 4.7,
+        reviewCount: 312
       },
-      // A hit missing every optional field maps to blanks, never undefined.
-      { displayName: "", websiteUri: "", nationalPhoneNumber: "", businessStatus: "" }
+      // A hit missing every optional field maps to blanks and nulls, never
+      // undefined: the ledger stores these, and undefined would erase a column.
+      {
+        displayName: "",
+        websiteUri: "",
+        nationalPhoneNumber: "",
+        businessStatus: "",
+        regularOpeningHours: null,
+        rating: null,
+        reviewCount: null
+      }
     ]);
     const [, init] = (fetchImpl as unknown as ReturnType<typeof vi.fn>).mock.calls[0];
     const headers = (init as { headers: Record<string, string> }).headers;
     expect(headers["X-Goog-Api-Key"]).toBe("key");
-    // websiteUri is the field that makes this a pricier SKU; it must stay, and
-    // nothing else may quietly join it.
+    // The mask is the cost lever. websiteUri and nationalPhoneNumber put this
+    // call in Google's Text Search ENTERPRISE tier, and hours, rating, and
+    // review count are in that same tier, so they ride along free. A field
+    // from a HIGHER tier (reviews, editorialSummary) would move every query up
+    // a price band, so this assertion is deliberately exact.
     expect(headers["X-Goog-FieldMask"]).toBe(
-      "places.displayName,places.websiteUri,places.nationalPhoneNumber,places.businessStatus"
+      [
+        "places.displayName",
+        "places.websiteUri",
+        "places.nationalPhoneNumber",
+        "places.businessStatus",
+        "places.regularOpeningHours",
+        "places.rating",
+        "places.userRatingCount"
+      ].join(",")
     );
     expect(JSON.parse((init as { body: string }).body)).toEqual({
       textQuery: "hvac in Phoenix",
@@ -215,7 +246,10 @@ describe("prospectsFromHits", () => {
         website: "https://www.acmehvac.com/",
         phone: "(602) 555-0100",
         vertical: "hvac",
-        city: "Phoenix"
+        city: "Phoenix",
+        openingHours: null,
+        rating: null,
+        reviewCount: null
       },
       {
         domain: "otherco.com",
@@ -223,7 +257,10 @@ describe("prospectsFromHits", () => {
         website: "https://otherco.com",
         phone: "(602) 555-0100",
         vertical: "hvac",
-        city: "Phoenix"
+        city: "Phoenix",
+        openingHours: null,
+        rating: null,
+        reviewCount: null
       }
     ]);
   });

@@ -1357,6 +1357,30 @@ deterministic pitch on any failure. `GOOGLE_PLACES_API_KEY` must be set, or
 the sweep reports "no Places API key configured" per business and does nothing
 else.
 
+**The field mask is the Places cost lever, and it is already at Enterprise.**
+`places.websiteUri` and `places.nationalPhoneNumber` are Text Search
+**Enterprise** fields, and a request bills at the highest tier among the fields
+it asks for, so discovery has always billed Enterprise (1,000 free calls a
+month, against 5,000 for Pro). Two consequences, both worth knowing before
+touching `searchPlaces`:
+
+- Every other Enterprise field is then **free**. `regularOpeningHours`,
+  `rating`, and `userRatingCount` are requested for exactly that reason: the
+  hours replace regex-scraping the prospect's markup (which finds nothing on
+  any site rendering hours in JavaScript), and the review count orders which
+  prospects get probed first.
+- A field from a HIGHER tier (`places.reviews`, `places.editorialSummary`,
+  anything atmosphere-shaped) moves EVERY query up a price band. Check the
+  tier, in Google's Text Search field lists, before adding one.
+  `tests/outreach-discover.test.ts` asserts the mask exactly, so widening it is
+  a deliberate act with a failing test attached.
+
+The legacy `Places API` is deliberately unused: Google closed it to new
+customers in March 2025, it carries its own SKUs and quotas, and it returns
+less than the New API. More Places surface means more of `places.googleapis.com`
+(Nearby Search, when a tenant's area is a radius rather than a list of towns),
+never the old endpoints.
+
 ### Reading the numbers
 
 Drafted and sent are separate columns, drafts waiting on the owner are

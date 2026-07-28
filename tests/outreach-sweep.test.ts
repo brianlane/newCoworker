@@ -68,6 +68,9 @@ function prospect(over: Partial<OutreachProspectRow> = {}): OutreachProspectRow 
     website: "https://acmehvac.com",
     vertical: "hvac",
     city: "Phoenix",
+    google_hours: null,
+    rating: null,
+    review_count: null,
     findings: [{ code: "no_online_booking", detail: "No booking link." }],
     pitch_subject: "Acme HVAC: booking a job without the phone tag",
     pitch_body: "Hi Acme HVAC,\n\nbody\n\nunsubscribe",
@@ -149,6 +152,7 @@ function stubLedger(over: Record<string, unknown> = {}) {
     existingProspectDomains: vi.fn(async () => new Set<string>()),
     insertProspects: vi.fn(async () => []),
     listProspectsByStatus: vi.fn(async () => []),
+    listProspectsToProbe: vi.fn(async () => []),
     listProspectsDueForNudge: vi.fn(async () => []),
     patchProspect: vi.fn(async () => true),
     transitionProspect: vi.fn(async () => true),
@@ -294,9 +298,7 @@ describe("tenant resolution", () => {
 
   it("still runs when the booking-link lookup fails: the pitch just asks for a reply", async () => {
     const ledger = stubLedger({
-      listProspectsByStatus: vi.fn(async (_b: string, statuses: string[]) =>
-        statuses.includes("discovered") ? [prospect({ status: "discovered" })] : []
-      )
+      listProspectsToProbe: vi.fn(async () => [prospect({ status: "discovered" })])
     });
     const schedulingLinkImpl = vi.fn(async () => {
       throw new Error("calendar down");
@@ -417,9 +419,7 @@ describe("phase 2: drafting", () => {
 
   function draftLedger(over: Record<string, unknown> = {}) {
     return stubLedger({
-      listProspectsByStatus: vi.fn(async (_b: string, statuses: string[]) =>
-        statuses.includes("discovered") ? discovered() : []
-      ),
+      listProspectsToProbe: vi.fn(async () => discovered()),
       ...over
     });
   }
@@ -490,11 +490,9 @@ describe("phase 2: drafting", () => {
       reachable: true as const
     }));
     draftLedger({
-      listProspectsByStatus: vi.fn(async (_b: string, statuses: string[]) =>
-        statuses.includes("discovered")
-          ? [prospect({ status: "discovered", website: null, email: null })]
-          : []
-      )
+      listProspectsToProbe: vi.fn(async () => [
+        prospect({ status: "discovered", website: null, email: null })
+      ])
     });
     await processOutreachSweep(baseDeps({ probeSiteImpl }));
     expect(probeSiteImpl).toHaveBeenCalledWith("https://acmehvac.com", "acmehvac.com");

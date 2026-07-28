@@ -12,11 +12,29 @@
  * window by a FULL run per day means consecutive passes never re-buy the same
  * paid searches.
  *
- * Cost note: the field mask requests `places.websiteUri`, which puts these
- * calls in a higher-priced Places SKU. It is required (a prospect with no
- * site is nothing to say anything about), but do not widen the mask without
- * checking current pricing.
+ * COST NOTE, and it is not the obvious one. `places.websiteUri` and
+ * `places.nationalPhoneNumber` sit in Google's Text Search **Enterprise**
+ * field tier, and a request is billed at the highest tier among the fields it
+ * asks for, so this call has always billed Enterprise (1,000 free calls a
+ * month, against 5,000 for Pro). The useful consequence: every other
+ * Enterprise field is then free to request. Opening hours, rating, and review
+ * count are all in that tier, which is why they are here.
+ *
+ * So the rule is narrower than "do not widen the mask": adding a field from a
+ * tier we already pay for is free, and adding one from a HIGHER tier
+ * (`places.reviews`, `places.editorialSummary`, anything atmosphere-ish) moves
+ * every query up a price band. Check which tier a field is in before adding
+ * it: https://developers.google.com/maps/documentation/places/web-service/text-search
  */
+
+/** Google's structured opening hours, as much of them as we use. */
+export type PlacesOpeningHours = {
+  periods?: Array<{
+    open?: { day?: number; hour?: number; minute?: number };
+    close?: { day?: number; hour?: number; minute?: number };
+  }>;
+  weekdayDescriptions?: string[];
+};
 
 /** One Places hit, narrowed to the fields the mask asks for. */
 export type PlacesHit = {
@@ -24,6 +42,11 @@ export type PlacesHit = {
   websiteUri: string;
   nationalPhoneNumber: string;
   businessStatus: string;
+  /** Null when Google holds no hours for the place. */
+  regularOpeningHours: PlacesOpeningHours | null;
+  /** 1.0 to 5.0, or null when the place has no rating yet. */
+  rating: number | null;
+  reviewCount: number | null;
 };
 
 /** A prospect discovery produced, before probing has found anything. */
@@ -34,6 +57,9 @@ export type DiscoveredProspect = {
   phone: string;
   vertical: string;
   city: string;
+  openingHours: PlacesOpeningHours | null;
+  rating: number | null;
+  reviewCount: number | null;
 };
 
 /**
@@ -154,8 +180,18 @@ export async function searchPlaces(
     headers: {
       "Content-Type": "application/json",
       "X-Goog-Api-Key": apiKey,
-      "X-Goog-FieldMask":
-        "places.displayName,places.websiteUri,places.nationalPhoneNumber,places.businessStatus"
+      // Every field here is Enterprise-tier or below, so the whole mask bills
+      // at the Enterprise rate this call has always paid. See the cost note at
+      // the top of this file before adding anything.
+      "X-Goog-FieldMask": [
+        "places.displayName",
+        "places.websiteUri",
+        "places.nationalPhoneNumber",
+        "places.businessStatus",
+        "places.regularOpeningHours",
+        "places.rating",
+        "places.userRatingCount"
+      ].join(",")
     },
     body: JSON.stringify({ textQuery: query, pageSize: PLACES_RESULTS_PER_QUERY })
   });
@@ -169,13 +205,19 @@ export async function searchPlaces(
       websiteUri?: string;
       nationalPhoneNumber?: string;
       businessStatus?: string;
+      regularOpeningHours?: PlacesOpeningHours;
+      rating?: number;
+      userRatingCount?: number;
     }>;
   } | null;
   return (json?.places ?? []).map((p) => ({
     displayName: p.displayName?.text ?? "",
     websiteUri: p.websiteUri ?? "",
     nationalPhoneNumber: p.nationalPhoneNumber ?? "",
-    businessStatus: p.businessStatus ?? ""
+    businessStatus: p.businessStatus ?? "",
+    regularOpeningHours: p.regularOpeningHours ?? null,
+    rating: typeof p.rating === "number" ? p.rating : null,
+    reviewCount: typeof p.userRatingCount === "number" ? p.userRatingCount : null
   }));
 }
 
@@ -204,7 +246,10 @@ export function prospectsFromHits(
       website: hit.websiteUri.trim(),
       phone: hit.nationalPhoneNumber.trim(),
       vertical,
-      city
+      city,
+      openingHours: hit.regularOpeningHours,
+      rating: hit.rating,
+      reviewCount: hit.reviewCount
     });
   }
   return out;
