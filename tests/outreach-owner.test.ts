@@ -198,6 +198,45 @@ describe("saveProspectingSettings", () => {
     );
   });
 
+  it("turning OFF is never blocked by a half-typed cap or window", async () => {
+    // The panel posts the whole form, so rejecting these on the way out would
+    // leave outreach RUNNING until the owner fixed a field they were editing.
+    // Off is the one action a form error must not be able to block.
+    await saveProspectingSettings(
+      BIZ,
+      input({ mode: "off", dailyCap: 9999, sendWindowStartHour: 15, sendWindowEndHour: 2 }),
+      {} as never
+    );
+    expect(upsertOutreachSettingsSpy).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({
+        mode: "off",
+        // Sanitized, not rejected: meaningless while off, and the schema still
+        // requires a legal pair.
+        daily_cap: MAX_DAILY_CAP,
+        send_window_start_hour: 8,
+        send_window_end_hour: 11
+      }),
+      expect.anything()
+    );
+
+    // A negative cap clamps up, and an already-valid window is kept as typed.
+    await saveProspectingSettings(
+      BIZ,
+      input({ mode: "off", dailyCap: -5, sendWindowStartHour: 9, sendWindowEndHour: 17 }),
+      {} as never
+    );
+    expect(upsertOutreachSettingsSpy).toHaveBeenLastCalledWith(
+      BIZ,
+      expect.objectContaining({
+        daily_cap: 0,
+        send_window_start_hour: 9,
+        send_window_end_hour: 17
+      }),
+      expect.anything()
+    );
+  });
+
   it("refuses an impossible cap or an inverted send window", async () => {
     await expect(saveProspectingSettings(BIZ, input({ dailyCap: -1 }), {} as never)).rejects.toThrow(
       /daily cap/

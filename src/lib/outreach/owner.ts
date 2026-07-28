@@ -38,6 +38,10 @@ export const MAX_CITIES = 12;
 /** Hard ceiling on the daily cap, mirroring the DB check constraint. */
 export const MAX_DAILY_CAP = 200;
 
+/** Weekday morning, the shape cold email lands best in. */
+export const DEFAULT_WINDOW_START_HOUR = 8;
+export const DEFAULT_WINDOW_END_HOUR = 11;
+
 export type ProspectingView = {
   /** Null when the owner has never opened Prospecting: means mode 'off'. */
   settings: OutreachSettingsRow | null;
@@ -125,12 +129,27 @@ export async function saveProspectingSettings(
       "Say what you want the email to offer before switching outreach on."
     );
   }
-  if (input.dailyCap < 0 || input.dailyCap > MAX_DAILY_CAP) {
+  // TURNING OFF ALWAYS WORKS. The panel posts the whole form, so validating
+  // pacing fields on the way out would let a half-typed window refuse the kill
+  // switch: outreach would keep sending until the owner fixed a field they were
+  // in the middle of editing. Off is the one action that must never be blocked
+  // by a form error, so the pacing values are sanitized instead of rejected.
+  // They are meaningless while off, and the schema still requires a legal pair.
+  const strict = input.mode !== "off";
+  if (strict && (input.dailyCap < 0 || input.dailyCap > MAX_DAILY_CAP)) {
     throw new ProspectingSettingsError(`The daily cap has to be between 0 and ${MAX_DAILY_CAP}.`);
   }
-  if (input.sendWindowEndHour <= input.sendWindowStartHour) {
+  if (strict && input.sendWindowEndHour <= input.sendWindowStartHour) {
     throw new ProspectingSettingsError("The send window has to end after it starts.");
   }
+  const dailyCap = strict
+    ? input.dailyCap
+    : Math.min(MAX_DAILY_CAP, Math.max(0, Math.round(input.dailyCap)));
+  const windowOk = input.sendWindowEndHour > input.sendWindowStartHour;
+  const [startHour, endHour] =
+    strict || windowOk
+      ? [input.sendWindowStartHour, input.sendWindowEndHour]
+      : [DEFAULT_WINDOW_START_HOUR, DEFAULT_WINDOW_END_HOUR];
 
   const db = client ?? (await createSupabaseServiceClient());
   return upsertOutreachSettings(
@@ -139,9 +158,9 @@ export async function saveProspectingSettings(
       mode: input.mode,
       search_terms: searchTerms,
       cities,
-      daily_cap: input.dailyCap,
-      send_window_start_hour: input.sendWindowStartHour,
-      send_window_end_hour: input.sendWindowEndHour,
+      daily_cap: dailyCap,
+      send_window_start_hour: startHour,
+      send_window_end_hour: endHour,
       postal_address: postalAddress || null,
       value_prop: valueProp || null,
       sender_name: input.senderName.trim() || null
@@ -199,8 +218,8 @@ export function defaultProspectingSettings(): ProspectingSettingsInput {
     searchTerms: [],
     cities: [],
     dailyCap: OUTREACH_DEFAULT_DAILY_CAP,
-    sendWindowStartHour: 8,
-    sendWindowEndHour: 11,
+    sendWindowStartHour: DEFAULT_WINDOW_START_HOUR,
+    sendWindowEndHour: DEFAULT_WINDOW_END_HOUR,
     postalAddress: "",
     valueProp: "",
     senderName: ""
