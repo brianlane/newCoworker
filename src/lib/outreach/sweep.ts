@@ -48,6 +48,7 @@ import {
   getProspect,
   insertProspects,
   listActiveOutreachSettings,
+  OUTREACH_ACTIVE_PAGE_SIZE,
   listProspectsByStatus,
   listProspectsDueForNudge,
   patchProspect,
@@ -97,6 +98,13 @@ export const NUDGE_STALE_AFTER_DAYS = 21;
 
 /** Follow-ups per pass, per business. */
 export const NUDGE_BATCH = 5;
+
+/**
+ * Pages of active businesses one pass will walk. A safety rail against a
+ * pathological read, not a product limit: at the page size this covers ten
+ * thousand tenants with the feature switched on.
+ */
+export const MAX_ACTIVE_PAGES = 50;
 
 export type OutreachSweepResult = {
   businesses: number;
@@ -850,32 +858,48 @@ export async function processOutreachSweep(
     errors: []
   };
 
-  const active = await listActiveOutreachSettings(r.db);
-  for (const settings of active) {
-    result.businesses += 1;
-    try {
-      await sweepBusiness(settings, r, result);
-    } catch (err) {
-      const message = err instanceof Error ? err.message : String(err);
-      result.errors.push({ businessId: settings.business_id, message });
-      logger.warn("outreach-sweep: business failed; continuing", {
-        businessId: settings.business_id,
-        error: message
-      });
-      await recordSystemLog(
-        {
-          businessId: settings.business_id,
-          source: "aiflow",
-          level: "error",
-          event: "outreach_sweep_failed",
-          message: `Prospecting sweep failed: ${message}`,
-          payload: { mode: settings.mode }
-        },
-        r.db
-      ).catch(() => {
-        // A logging failure must never mask the failure it was logging.
-      });
+  // Paged, not capped: a fleet larger than one page must not leave the tail of
+  // the tenant list permanently unswept. The page bound is a safety rail
+  // against a pathological read, not a product limit.
+  for (let page = 0; page < MAX_ACTIVE_PAGES; page += 1) {
+    const active = await listActiveOutreachSettings(r.db, page * OUTREACH_ACTIVE_PAGE_SIZE);
+    for (const settings of active) {
+      result.businesses += 1;
+      try {
+        await sweepBusiness(settings, r, result);
+      } catch (err) {
+        await recordBusinessFailure(settings, err, r, result);
+      }
     }
+    if (active.length < OUTREACH_ACTIVE_PAGE_SIZE) break;
   }
   return result;
+}
+
+/** Collect one business's failure and carry on with the next. */
+async function recordBusinessFailure(
+  settings: OutreachSettingsRow,
+  err: unknown,
+  r: Resolved,
+  result: OutreachSweepResult
+): Promise<void> {
+  const message = err instanceof Error ? err.message : String(err);
+  result.errors.push({ businessId: settings.business_id, message });
+  logger.warn("outreach-sweep: business failed; continuing", {
+    businessId: settings.business_id,
+    error: message
+  });
+  await recordSystemLog(
+    {
+      businessId: settings.business_id,
+      source: "aiflow",
+      level: "error",
+      event: "outreach_sweep_failed",
+      message: `Prospecting sweep failed: ${message}`,
+      payload: { mode: settings.mode }
+    },
+    r.db
+  ).catch(() => {
+    // A logging failure must never mask the failure it was logging.
+  });
 }

@@ -27,6 +27,7 @@ import {
   listProspectOutcomes,
   listProspectsByStatus,
   listProspectsDueForNudge,
+  OUTREACH_ACTIVE_PAGE_SIZE,
   patchProspect,
   transitionProspect,
   upsertOutreachSettings
@@ -54,6 +55,7 @@ function chain(terminal?: unknown): Chain {
     "gte",
     "lte",
     "order",
+    "range",
     "limit"
   ]) {
     c[m] = vi.fn(() => c);
@@ -136,6 +138,11 @@ describe("listActiveOutreachSettings", () => {
     const c = chain({ data: [{ business_id: BIZ, mode: "auto" }], error: null });
     expect(await listActiveOutreachSettings(makeDb(c))).toHaveLength(1);
     expect(c.neq).toHaveBeenCalledWith("mode", "off");
+    // Ordered by a STABLE key: the sweep stamps last_discovery_at as it goes,
+    // so a time ordering would reshuffle rows underneath the pagination and a
+    // business could be swept twice or skipped.
+    expect(c.order).toHaveBeenCalledWith("business_id", { ascending: true });
+    expect(c.range).toHaveBeenCalledWith(0, 199);
 
     defaultClientSpy.mockReturnValue(makeDb(chain({ data: null, error: null })));
     expect(await listActiveOutreachSettings()).toEqual([]);
@@ -143,6 +150,12 @@ describe("listActiveOutreachSettings", () => {
     await expect(
       listActiveOutreachSettings(makeDb(chain({ data: null, error: { message: "list" } })))
     ).rejects.toThrow(/list/);
+  });
+
+  it("reads a later page when asked, so a big fleet is not truncated", async () => {
+    const c = chain({ data: [], error: null });
+    await listActiveOutreachSettings(makeDb(c), OUTREACH_ACTIVE_PAGE_SIZE);
+    expect(c.range).toHaveBeenCalledWith(200, 399);
   });
 });
 

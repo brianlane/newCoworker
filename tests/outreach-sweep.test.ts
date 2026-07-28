@@ -27,6 +27,7 @@ import {
 } from "@/lib/outreach/sweep";
 import { PROSPECT_OUTREACH_SOURCE } from "@/lib/ai-flows/templates";
 import * as db from "@/lib/outreach/db";
+import { OUTREACH_ACTIVE_PAGE_SIZE } from "@/lib/outreach/db";
 import type { OutreachProspectRow, OutreachSettingsRow } from "@/lib/outreach/db";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -187,6 +188,24 @@ describe("processOutreachSweep: the outer loop", () => {
       expect.objectContaining({ businessId: BIZ, event: "outreach_sweep_failed" }),
       expect.anything()
     );
+  });
+
+  it("walks past the first page, so a big fleet is not silently truncated", async () => {
+    // A full page means "there may be more". The old single capped read left
+    // the tail of the tenant list permanently unswept.
+    const page = (n: number, offset: number) =>
+      Array.from({ length: n }, (_, i) =>
+        settings({ business_id: `biz-${offset + i}`, mode: "manual" })
+      );
+    const listSpy = vi.fn(async (_db: unknown, offset = 0) =>
+      offset === 0 ? page(OUTREACH_ACTIVE_PAGE_SIZE, 0) : page(3, 200)
+    );
+    stubLedger({ listActiveOutreachSettings: listSpy });
+    const result = await processOutreachSweep(
+      baseDeps({ getBusinessImpl: vi.fn(async () => null) })
+    );
+    expect(listSpy).toHaveBeenCalledTimes(2);
+    expect(result.businesses).toBe(OUTREACH_ACTIVE_PAGE_SIZE + 3);
   });
 
   it("does nothing at all when no business has the feature on", async () => {

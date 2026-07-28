@@ -138,17 +138,28 @@ export async function upsertOutreachSettings(
   return data as OutreachSettingsRow;
 }
 
-/** Every business the feature is switched on for (the sweep's outer loop). */
+/** Businesses read per page by the sweep's outer loop. */
+export const OUTREACH_ACTIVE_PAGE_SIZE = 200;
+
+/**
+ * One page of the businesses the feature is switched on for.
+ *
+ * Ordered by business id, not by `updated_at`, and that matters: the sweep
+ * stamps `last_discovery_at` as it goes, which moves a row's `updated_at`. With
+ * a time ordering, rows would reshuffle underneath the pagination mid-pass and
+ * a business could be swept twice or skipped entirely. The id is stable.
+ */
 export async function listActiveOutreachSettings(
-  client?: SupabaseClient
+  client?: SupabaseClient,
+  offset = 0
 ): Promise<OutreachSettingsRow[]> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("outreach_settings")
     .select()
     .neq("mode", "off")
-    .order("updated_at", { ascending: true })
-    .limit(200);
+    .order("business_id", { ascending: true })
+    .range(offset, offset + OUTREACH_ACTIVE_PAGE_SIZE - 1);
   if (error) throw new Error(`listActiveOutreachSettings: ${error.message}`);
   return (data ?? []) as OutreachSettingsRow[];
 }
