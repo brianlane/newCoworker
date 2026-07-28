@@ -49,7 +49,25 @@ where not exists (
   where m.business_id = p.business_id
 );
 
--- Questions now live on the meeting that inherited them.
+-- A meeting created BEFORE this migration may carry null questions, which
+-- effectiveTypeSettings resolves from the page. Clearing the page without
+-- copying first would silently stop asking those visitors anything, so
+-- every inheriting meeting takes its own copy of what it was already
+-- asking.
+update public.booking_meeting_types m
+   set intake_questions = p.intake_questions
+  from public.booking_pages p
+ where p.business_id = m.business_id
+   and m.intake_questions is null
+   and p.intake_questions is not null
+   and p.intake_questions <> '[]'::jsonb;
+
+-- Anything still inheriting was inheriting an empty list.
+update public.booking_meeting_types
+   set intake_questions = '[]'::jsonb
+ where intake_questions is null;
+
+-- Questions now live on the meetings that inherited them.
 update public.booking_pages
    set intake_questions = '[]'::jsonb
  where intake_questions is not null

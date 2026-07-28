@@ -54,12 +54,20 @@ function slugify(name: string): string {
 export function MeetingTypesCard({
   businessId,
   pageRef,
-  roster
+  roster,
+  refreshKey = 0
 }: {
   businessId: string;
   /** The page's vanity slug or token: the first segment of every meeting URL. */
   pageRef: string | null;
   roster: RosterMember[];
+  /**
+   * Bumped by the Bookings page once its own load finishes, which is where
+   * a first-view page and its default meeting are provisioned. Without it
+   * this list can answer before that provision lands and show the empty
+   * state until a manual refresh.
+   */
+  refreshKey?: number;
 }) {
   const t = useTranslations("dashboard.bookings");
   const [types, setTypes] = useState<MeetingTypeRow[] | null>(null);
@@ -70,27 +78,31 @@ export function MeetingTypesCard({
 
   const api = `/api/dashboard/booking-page/meeting-types?businessId=${encodeURIComponent(businessId)}`;
 
-  const load = useCallback(async () => {
+  /** Answers the fetched list, since React state is not readable yet. */
+  const load = useCallback(async (): Promise<MeetingTypeRow[] | null> => {
     try {
       const res = await fetch(api);
       const body = await res.json();
       if (!res.ok || !body.ok) {
         setError(t("saveFailed"));
-        return;
+        return null;
       }
-      setTypes(body.data.meetingTypes as MeetingTypeRow[]);
+      const fetched = body.data.meetingTypes as MeetingTypeRow[];
+      setTypes(fetched);
+      return fetched;
     } catch {
       setError(t("saveFailed"));
+      return null;
     }
   }, [api, t]);
 
   useEffect(() => {
     void load();
-  }, [load]);
+  }, [load, refreshKey]);
 
-  /** One write. Answers whether it landed, for the question queue. */
+  /** One write, answering the list it produced (null when it was refused). */
   const send = useCallback(
-    async (init: RequestInit, url = api): Promise<boolean> => {
+    async (init: RequestInit, url = api): Promise<MeetingTypeRow[] | null> => {
       setSaving(true);
       setError(null);
       try {
@@ -101,13 +113,12 @@ export function MeetingTypesCard({
         const body = await res.json();
         if (!res.ok || !body.ok) {
           setError(body?.error?.message ?? t("saveFailed"));
-          return false;
+          return null;
         }
-        await load();
-        return true;
+        return await load();
       } catch {
         setError(t("saveFailed"));
-        return false;
+        return null;
       } finally {
         setSaving(false);
       }
@@ -456,10 +467,10 @@ export function MeetingTypesCard({
               body: JSON.stringify({ name, slug, durationMinutes: 30, intakeQuestions: [] })
             });
             // Open it immediately: a row called "New meeting" is not a
-            // finished thought, and naming it is the next step.
-            if (created) {
-              setOpenId(typesRef.current?.find((x) => x.slug === slug)?.id ?? null);
-            }
+            // finished thought, and naming it is the next step. The id comes
+            // from the response, since the state holding it is not readable
+            // until React re-renders.
+            if (created) setOpenId(created.find((x) => x.slug === slug)?.id ?? null);
           }}
         >
           {t("meetingAdd")}

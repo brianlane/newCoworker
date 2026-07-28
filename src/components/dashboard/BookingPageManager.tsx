@@ -73,6 +73,7 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
   // settings an owner visits rarely.
   const [linkOpen, setLinkOpen] = useState(false);
   const [sharedOpen, setSharedOpen] = useState(false);
+  const [meetingsKey, setMeetingsKey] = useState(0);
 
   const api = `/api/dashboard/booking-page?businessId=${encodeURIComponent(businessId)}`;
 
@@ -83,6 +84,10 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
       const body = await res.json();
       if (!res.ok || !body.ok) throw new Error("load failed");
       setState(body.data as LoadState);
+      // This load is where a first-view page and its default meeting are
+      // provisioned, so the meetings list has to re-read after it: its own
+      // fetch runs in parallel and can answer before the provision lands.
+      setMeetingsKey((n) => n + 1);
     } catch {
       setLoadFailed(true);
     }
@@ -370,6 +375,7 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
         businessId={businessId}
         pageRef={page ? (page.slug ?? page.token) : null}
         roster={roster}
+        refreshKey={meetingsKey}
       />
 
       {/* Everything below applies to EVERY meeting, which is why it is one

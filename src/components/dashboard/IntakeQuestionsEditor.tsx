@@ -18,7 +18,7 @@
  * Serialization itself lives with the caller, which owns the save queue.
  */
 
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 
 export type IntakeQuestion = {
@@ -54,8 +54,14 @@ export function IntakeQuestionsEditor({
   // same string the page's own default used. Nothing persists until the
   // owner types a label, which parseIntakeQuestions requires anyway.
   const [draft, setDraft] = useState<string | null>(null);
+  // Enter commits, and removing the focused input can fire blur on the way
+  // out, which would append the same question twice. The latch makes the
+  // commit happen once per draft; opening a new one arms it again.
+  const draftLive = useRef(false);
   const commitDraft = useCallback(
     (raw: string) => {
+      if (!draftLive.current) return;
+      draftLive.current = false;
       const text = raw.trim();
       setDraft(null);
       if (!text) return;
@@ -241,6 +247,7 @@ export function IntakeQuestionsEditor({
                 e.preventDefault();
                 commitDraft(draft);
               } else if (e.key === "Escape") {
+                draftLive.current = false;
                 setDraft(null);
               }
             }}
@@ -252,7 +259,10 @@ export function IntakeQuestionsEditor({
           type="button"
           className="mt-3 rounded-md border border-parchment/25 px-3 py-1.5 text-sm text-parchment/80 hover:border-parchment/50"
           disabled={saving}
-          onClick={() => setDraft("")}
+          onClick={() => {
+            draftLive.current = true;
+            setDraft("");
+          }}
         >
           {t("intakeAdd")}
         </button>
