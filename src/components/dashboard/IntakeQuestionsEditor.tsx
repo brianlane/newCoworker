@@ -245,7 +245,9 @@ export function IntakeQuestionsEditor({
               // unsaved half-question.
               if (e.key === "Enter") {
                 e.preventDefault();
-                commitDraft(draft);
+                // The field's own value, not the state behind it: Enter can
+                // land before the last keystroke has re-rendered.
+                commitDraft(e.currentTarget.value);
               } else if (e.key === "Escape") {
                 draftLive.current = false;
                 setDraft(null);
