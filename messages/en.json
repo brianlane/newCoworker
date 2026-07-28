@@ -1428,6 +1428,14 @@
         "title": "Texting & Auto-Replies",
         "description": "Two-way SMS messaging, texts sent during live calls, auto-text on missed calls, plus scheduled texts and saved templates. Branded RCS on Enterprise."
       },
+      "everyChannel": {
+        "title": "Every Channel, One Memory",
+        "description": "The same coworker answers WhatsApp, Facebook Messenger, Instagram DMs, and website chat, and gets its own email address. A customer who called Tuesday and texts Friday never starts over."
+      },
+      "speaksTheirLanguage": {
+        "title": "Speaks Your Customers' Language",
+        "description": "It replies in whatever language a customer uses, on calls and in messages, and remembers the preference. It can even stay on a transferred call and interpret for your team in real time."
+      },
       "callSummaries": {
         "title": "AI Call Summaries & Sentiment",
         "description": "Every call lands on your dashboard with an AI summary and caller sentiment, so you know what happened without replaying audio."
@@ -1438,7 +1446,7 @@
       },
       "automatedWorkflows": {
         "title": "Automated Workflows",
-        "description": "AiFlows capture leads from Meta (Facebook & Instagram) ads and text them back in seconds, follow up on schedule, route to your team, and run browser tasks."
+        "description": "AiFlows capture leads from Meta (Facebook & Instagram) ads and text them back in seconds, follow up on schedule, place outbound calls, and hand each lead to a named teammate to claim."
       },
       "appIntegrations": {
         "title": "8,000+ App Integrations",
@@ -1450,7 +1458,11 @@
       },
       "appointmentBooking": {
         "title": "Appointment Booking",
-        "description": "Your coworker finds open slots on your Google or Microsoft calendar and books them mid-call, then sends the confirmation for you."
+        "description": "Your coworker checks live availability on Google Calendar, Microsoft 365, CalDAV, Calendly, or Vagaro and books mid-call, then reschedules or cancels when plans change."
+      },
+      "bookingPage": {
+        "title": "Your Own Booking Page",
+        "description": "A self-serve scheduling page we host for you, no calendar tool required. Per-employee pages, round robin, confirmations and reminders, and a waitlist text when an earlier slot frees up."
       },
       "complianceGuardrails": {
         "title": "Compliance Guardrails",

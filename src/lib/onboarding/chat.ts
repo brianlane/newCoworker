@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { buildComplianceSystemPrompt } from "@/lib/compliance/fha";
+import { NO_EM_DASH_PROMPT_LINE } from "../../../supabase/functions/_shared/sms_prompt_lines";
 
 function normalizeString(value: unknown): string {
   return typeof value === "string" ? value : "";
@@ -255,6 +256,36 @@ function humanizeSlug(value: string): string {
     .join(" ");
 }
 
+/**
+ * What the coworker can actually do once it is provisioned, written for
+ * the interviewer rather than for the buyer.
+ *
+ * Without this the interviewer runs a generic "tell me about your
+ * business" script that predates most of the product: it asks about
+ * scheduling with no idea we book on five calendar providers (or on a
+ * hosted page when the business has none), asks about routing with no
+ * idea leads can be claimed by a named teammate, never asks about
+ * languages although the coworker follows the customer's language and
+ * can interpret a transferred call live, and has nothing to say when a
+ * user asks "can it handle WhatsApp?" mid-interview.
+ *
+ * Keep it short. It rides every turn's system prompt, so each line
+ * costs input tokens on every request. Add a bullet only when it
+ * changes what the interviewer should ASK, not merely what we ship.
+ */
+export const COWORKER_CAPABILITY_BRIEF = [
+  "What the AI coworker will be able to do once it is live:",
+  "- Answers phone calls in real time, and warm-transfers a caller to a named person with the context already gathered.",
+  "- Handles two-way SMS, WhatsApp, Facebook Messenger, Instagram DMs, and website chat, and gets its own email address. All of them share one memory, so a customer who called Tuesday and texts Friday does not start over.",
+  "- Books appointments on Google Calendar, Microsoft 365, CalDAV, Calendly, or Vagaro, and can reschedule or cancel an existing one. With no calendar tool at all it books on a scheduling page we host, including per-person pages and round robin.",
+  "- Sends booking confirmations and reminders, and texts the next customer in line when an earlier slot frees up.",
+  "- Routes a new lead to a specific teammate by name, either first-to-claim or on rotation, and pages the owner when nobody claims it.",
+  "- Follows the customer's language automatically, Spanish included, on calls and in messages, remembers that preference, and can stay on a transferred call to interpret between the caller and a staff member.",
+  "- Runs scheduled follow-up sequences, places outbound calls, and captures leads from website forms, Meta lead ads, and other webhook sources.",
+  "- Reads documents and website content, files the details it finds, and keeps a durable memory of the business that the owner can review and edit later.",
+  "Never promise anything beyond this list, and never walk the user through configuring any of it. Onboarding captures how the business works; setup happens later."
+].join("\n");
+
 export function buildOnboardingChatSystemPrompt(
   knownContext: OnboardingKnownContext,
   existingProfile?: OnboardingAssistantProfile | null
@@ -280,7 +311,7 @@ export function buildOnboardingChatSystemPrompt(
     : knownContext.websiteUrl
       ? [
           "",
-          `The user has a website at ${knownContext.websiteUrl} but the crawl summary is not yet available. Acknowledge that you can see the URL — do NOT ask "do you have a website?" — and ask for whatever specific detail you need (bio, services, hours) instead of asking the user to retype the URL.`
+          `The user has a website at ${knownContext.websiteUrl} but the crawl summary is not yet available. Acknowledge that you can see the URL, do NOT ask "do you have a website?", and ask for whatever specific detail you need (bio, services, hours) instead of asking the user to retype the URL.`
         ].join("\n")
       : "";
 
@@ -291,6 +322,17 @@ export function buildOnboardingChatSystemPrompt(
     "Ask one focused question at a time. Keep assistant replies concise, practical, and easy to answer.",
     "Prefer collecting cause/effect communication patterns, routing rules, escalation rules, FAQ facts, and tone guidance over generic marketing copy.",
     "Do not ask for technical integration setup in detail during onboarding. Gmail, calendar, CRM, and OAuth tooling can be captured as current-tool context only.",
+    "",
+    COWORKER_CAPABILITY_BRIEF,
+    "",
+    "Interview for those capabilities rather than for a generic autoresponder. Use this list to make your questions specific; it does not replace the answered topic status below, which is what you must cover:",
+    "- Scheduling: what a typical appointment is, how long it runs, how much notice the business needs, and which hours are bookable. Record in profile.schedulingRules.",
+    "- Routing: who a lead should reach by name and role, and whether the first teammate to respond takes it or it rotates. Record in profile.routingRules.",
+    "- Language: whether customers regularly speak a language other than English. Ask once. Record in profile.factsToRemember.",
+    "- Channels: where customers actually reach the business today (calls, texts, WhatsApp, social DMs, website chat, email). Record in profile.tools.",
+    "- Boundaries: what the coworker must never do or say on its own. Record in profile.policies.",
+    "Stay efficient: aim to have everything you need within roughly ten exchanges, and combine related details into one question rather than asking them one field at a time.",
+    "If the user asks what the coworker can do, answer briefly and accurately from the brief above, then continue with your next question in the same message.",
     "Never mention internal implementation details or file names like SOUL.md, IDENTITY.md, MEMORY.md, markdown files, knowledge base files, or technical setup artifacts in assistantMessage.",
     // Service area / team size / CRM are collected on the Step 1
     // form as closed-class fields (segmented control + dropdown +
@@ -300,11 +342,12 @@ export function buildOnboardingChatSystemPrompt(
     // them (legacy localStorage drafts that pre-date the Step 1
     // fields) is it acceptable to confirm the answer in chat — and
     // even then, ask once and move on.
-    "Service area, team size, and CRM/tools are collected on the Step 1 form. The values in `knownContext.{serviceArea,teamSize,crmUsed}` are authoritative — do NOT re-ask those topics. If a value is empty in `knownContext`, treat it as the user choosing not to specify and skip past it rather than re-asking.",
+    "Service area, team size, and CRM/tools are collected on the Step 1 form. The values in `knownContext.{serviceArea,teamSize,crmUsed}` are authoritative: do NOT re-ask those topics. If a value is empty in `knownContext`, treat it as the user choosing not to specify and skip past it rather than re-asking.",
     "If the user has no formal CRM (e.g. `knownContext.crmUsed` says \"None — texts, email, or calendar only\"), keep `profile.crmUsed` empty and capture the real operating tools under `tools` and `factsToRemember` instead.",
     "If the user gives vague answers, ask for one or two concrete examples.",
     "Never ask for information that is already known in the existing profile, known context, or transcript. If a topic is already answered, move to the next missing topic instead of re-asking it.",
     "Update the profile using the conversation and the known context below. Preserve useful prior details; do not erase good data.",
+    NO_EM_DASH_PROMPT_LINE,
     "Return JSON only.",
     "",
     "Known context:",
@@ -327,7 +370,7 @@ export function buildOnboardingChatSystemPrompt(
     "Mark readyToFinalize true only when you have enough information to draft a useful business assistant without obvious gaps.",
     "When readyToFinalize is true, assistantMessage should briefly confirm that you have what you need and tell the user they can continue.",
     "When readyToFinalize is false, the LAST sentence of assistantMessage MUST be a single concrete question that ends with a question mark. Do not summarize what you have unless it is followed by that question.",
-    "When readyToFinalize is false, NEVER write phrases like 'you can continue', 'answer the next question', 'ready to finalize soon', 'almost done', or any similar wording that implies the interview is wrapping up. Either ask the next concrete question or set readyToFinalize true — never both, and never neither."
+    "When readyToFinalize is false, NEVER write phrases like 'you can continue', 'answer the next question', 'ready to finalize soon', 'almost done', or any similar wording that implies the interview is wrapping up. Either ask the next concrete question or set readyToFinalize true, never both, and never neither."
   ].join("\n");
 }
 

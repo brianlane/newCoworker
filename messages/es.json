@@ -1428,6 +1428,14 @@
         "title": "Textos y respuestas automáticas",
         "description": "SMS bidireccional, textos durante llamadas en vivo, auto-texto en llamadas perdidas, más textos programados y plantillas guardadas. RCS de marca en Enterprise."
       },
+      "everyChannel": {
+        "title": "Todos los canales, una memoria",
+        "description": "El mismo coworker atiende WhatsApp, Facebook Messenger, mensajes directos de Instagram y el chat de tu sitio web, y recibe su propia dirección de correo. Quien llamó el martes y escribe el viernes nunca empieza de cero."
+      },
+      "speaksTheirLanguage": {
+        "title": "Habla el idioma de tus clientes",
+        "description": "Responde en el idioma que use cada cliente, en llamadas y mensajes, y recuerda esa preferencia. Incluso puede quedarse en una llamada transferida e interpretar para tu equipo en tiempo real."
+      },
       "callSummaries": {
         "title": "Resúmenes de llamadas y sentimiento",
         "description": "Cada llamada llega a tu panel con un resumen de IA y el sentimiento del cliente, para saber qué pasó sin escuchar el audio."
@@ -1438,7 +1446,7 @@
       },
       "automatedWorkflows": {
         "title": "Flujos automatizados",
-        "description": "AiFlows capturan leads de anuncios de Meta (Facebook e Instagram) y les responden por texto en segundos, dan seguimiento, enrutan a tu equipo y ejecutan tareas en el navegador."
+        "description": "AiFlows capturan leads de anuncios de Meta (Facebook e Instagram) y les responden por texto en segundos, dan seguimiento, hacen llamadas salientes y asignan cada lead a un compañero de equipo por nombre para que lo tome."
       },
       "appIntegrations": {
         "title": "Más de 8,000 integraciones",
@@ -1450,7 +1458,11 @@
       },
       "appointmentBooking": {
         "title": "Reserva de citas",
-        "description": "Tu coworker encuentra espacios libres en Google o Microsoft Calendar y reserva en la llamada, luego envía la confirmación por ti."
+        "description": "Tu coworker revisa la disponibilidad real en Google Calendar, Microsoft 365, CalDAV, Calendly o Vagaro y reserva durante la llamada, y reprograma o cancela cuando los planes cambian."
+      },
+      "bookingPage": {
+        "title": "Tu propia página de reservas",
+        "description": "Una página de agendamiento que alojamos por ti, sin necesidad de ninguna herramienta de calendario. Páginas por empleado, rotación por turnos, confirmaciones y recordatorios, y un texto de lista de espera cuando se libera un espacio antes."
       },
       "complianceGuardrails": {
         "title": "Cumplimiento normativo",

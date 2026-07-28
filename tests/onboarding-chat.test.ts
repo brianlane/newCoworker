@@ -1,8 +1,10 @@
 import { describe, expect, it } from "vitest";
+import { NO_EM_DASH_PROMPT_LINE } from "../supabase/functions/_shared/sms_prompt_lines";
 import {
   areAllChatTopicsCovered,
   buildOnboardingChatSystemPrompt,
   CHAT_ELICITED_TOPIC_KEYS,
+  COWORKER_CAPABILITY_BRIEF,
   compileIdentityMd,
   compileMemoryMd,
   compileSoulMd,
@@ -36,6 +38,94 @@ describe("onboarding chat helpers", () => {
     expect(prompt).toContain("no formal CRM");
     expect(prompt).toContain("None — texts, email, or calendar only");
     expect(prompt).toContain("Answered topic status");
+  });
+
+  it("carries the coworker capability brief so the interviewer knows what it is interviewing for", () => {
+    // Regression guard for a real drift: the interviewer's script
+    // predated most of the product, so it ran a generic "tell us about
+    // your business" interview with no idea the coworker books on five
+    // calendar providers, routes leads to named teammates, works on
+    // WhatsApp/Messenger/Instagram/web chat, or follows the customer's
+    // language. Pinning the capability lines (not just the section
+    // header) means a future feature launch that forgets to update the
+    // brief still leaves the interview asking the right questions.
+    const prompt = buildOnboardingChatSystemPrompt({ businessName: "Northwind Services" });
+
+    expect(prompt).toContain(COWORKER_CAPABILITY_BRIEF);
+    expect(COWORKER_CAPABILITY_BRIEF).toContain("WhatsApp, Facebook Messenger, Instagram DMs, and website chat");
+    expect(COWORKER_CAPABILITY_BRIEF).toContain("Google Calendar, Microsoft 365, CalDAV, Calendly, or Vagaro");
+    expect(COWORKER_CAPABILITY_BRIEF).toContain("scheduling page we host");
+    expect(COWORKER_CAPABILITY_BRIEF).toContain("first-to-claim or on rotation");
+    expect(COWORKER_CAPABILITY_BRIEF).toContain("interpret");
+    expect(COWORKER_CAPABILITY_BRIEF).toContain("Never promise anything beyond this list");
+    // Terminology rule: the product is an AI coworker, never an "AI
+    // receptionist", and the brief is quoted back to the user verbatim
+    // when they ask what it can do.
+    expect(COWORKER_CAPABILITY_BRIEF).toContain("AI coworker");
+    expect(COWORKER_CAPABILITY_BRIEF.toLowerCase()).not.toContain("ai receptionist");
+  });
+
+  it("steers the interview at the capabilities and names the profile field each answer lands in", () => {
+    const prompt = buildOnboardingChatSystemPrompt({ businessName: "Northwind Services" });
+
+    expect(prompt).toContain("profile.schedulingRules");
+    expect(prompt).toContain("profile.routingRules");
+    expect(prompt).toContain("profile.factsToRemember");
+    expect(prompt).toContain("profile.tools");
+    expect(prompt).toContain("profile.policies");
+    // Capability questions get answered from the brief instead of
+    // stalling the interview, but the turn still ends in a question
+    // (the dead-end guard in the route depends on that).
+    expect(prompt).toContain("If the user asks what the coworker can do");
+    expect(prompt).toContain("continue with your next question in the same message");
+    // The extra steering must not turn a ~10-exchange interview into a
+    // 36-message slog against MAX_ONBOARDING_CHAT_MESSAGES.
+    expect(prompt).toContain("roughly ten exchanges");
+  });
+
+  it("keeps the JSON response contract unchanged alongside the new steering", () => {
+    // The capability brief is prompt-only: no new profile fields, no
+    // new envelope keys. If a future edit grows the schema, this fails
+    // loudly rather than silently shipping a contract the route's
+    // parser and the compiled markdown do not understand.
+    const prompt = buildOnboardingChatSystemPrompt({ businessName: "Northwind Services" });
+
+    expect(prompt).toContain("Return an object with exactly these keys:");
+    expect(prompt).toContain(
+      "- profile: { businessSummary, serviceArea, teamSize, crmUsed, offerings, customerTypes, commonRequests, inquiryFlows[{trigger,responseGoal}], routingRules, schedulingRules, escalationRules, tools, toneDirectives, signature, policies, factsToRemember }"
+    );
+    expect(Object.keys(createEmptyAssistantProfile()).sort()).toEqual(
+      [
+        "businessSummary",
+        "commonRequests",
+        "crmUsed",
+        "customerTypes",
+        "escalationRules",
+        "factsToRemember",
+        "inquiryFlows",
+        "offerings",
+        "policies",
+        "routingRules",
+        "schedulingRules",
+        "serviceArea",
+        "signature",
+        "teamSize",
+        "toneDirectives",
+        "tools"
+      ].sort()
+    );
+  });
+
+  it("injects the shared no-em-dash instruction and writes none itself", () => {
+    // The interviewer's assistantMessage is user-facing copy, so it is
+    // bound by the repo-wide writing rule like every other AI surface.
+    // The prompt telling it so must not contain the character either,
+    // apart from the CRM sentinel it has to quote literally.
+    const prompt = buildOnboardingChatSystemPrompt({ businessName: "Northwind Services" });
+
+    expect(prompt).toContain(NO_EM_DASH_PROMPT_LINE);
+    const withoutCrmSentinel = prompt.split("None \u2014 texts, email, or calendar only").join("");
+    expect(withoutCrmSentinel.includes("\u2014")).toBe(false);
   });
 
   it("instructs the model NOT to re-ask service area / team size / CRM (Step 1 form-collected)", () => {
