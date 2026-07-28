@@ -173,7 +173,21 @@ describe("formatTapbackAnswerNote", () => {
     expect(note).toContain("\u{1F44E}");
     expect(note).toContain("Does noon work for you?");
     expect(note).toContain("means no");
-    expect(note).toContain("ask it again in plain words");
+    expect(note).toContain("ask your question again in plain words");
+  });
+
+  it("does not assume the reaction hit the pending question", () => {
+    // A texter can react to an older message while a newer question waits.
+    // The note names what they reacted to and asks for a re-ask on mismatch,
+    // rather than asserting the reaction answers the latest question.
+    const note = formatTapbackAnswerNote({
+      kind: "reaction",
+      reaction: "\u2764\uFE0F",
+      quoted: "James is on it, I'll make sure he sees this right away."
+    });
+    expect(note).toContain("James is on it");
+    expect(note).toContain("If that is the message you are waiting on");
+    expect(note).toContain("reacted to something else");
   });
 
   it("asks for a re-explanation on a question-mark reaction", () => {

@@ -156,6 +156,14 @@ function truncate(text: string, max: number): string {
  * which question it answers, and whether it means yes, live in the quoted
  * message. Same anchoring reason as formatFlowAnswerNote (a small model
  * ignores the equivalent fact in the system preamble).
+ *
+ * The quoted message is stated rather than assumed to be the pending
+ * question, because it need not be: a texter can react to an older message
+ * while a newer question sits unanswered. Comparing the quote against our
+ * last message would be the obvious guard and is deliberately not done,
+ * since renderers pad, truncate, and re-punctuate the quote. Handing the
+ * model both halves and telling it to re-ask on a mismatch is the reliable
+ * version of the same check.
  */
 export function formatTapbackAnswerNote(tapback: Tapback): string {
   const quoted = truncate(tapback.quoted, MAX_QUOTED_CHARS);
@@ -170,10 +178,11 @@ export function formatTapbackAnswerNote(tapback: Tapback): string {
     );
   }
   return (
-    `${head} Read that reaction as their answer to the question you asked: a ` +
-    `thumbs down, a dislike, or a clearly negative reaction means no, and a ` +
-    `thumbs up, a heart, or a clearly positive reaction means yes. Act on ` +
-    `that answer in this reply. If the reaction does not clearly answer the ` +
-    `question, ask it again in plain words instead of guessing.)`
+    `${head} If that is the message you are waiting on an answer to, read ` +
+    `the reaction as the answer: a thumbs down, a dislike, or a clearly ` +
+    `negative reaction means no, and a thumbs up, a heart, or a clearly ` +
+    `positive reaction means yes, and act on that answer in this reply. If ` +
+    `they reacted to something else, or the reaction does not clearly answer ` +
+    `you, do not guess: ask your question again in plain words.)`
   );
 }
