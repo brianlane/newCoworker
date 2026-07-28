@@ -763,6 +763,16 @@ export async function sendProspectNow(
   const subject = prospect.pitch_subject?.trim();
   const body = prospect.pitch_body?.trim();
   if (!to || !subject || !body) {
+    // Marked failed, exactly as the automatic path does. Returning the reason
+    // without recording it would leave a broken draft sitting in the queue for
+    // the owner to press Send on again, and again.
+    await recordSendFailure(
+      settings,
+      prospect,
+      r,
+      "sent_at",
+      "draft is missing its address or pitch text"
+    );
     return { ok: false, reason: "not_drafted", detail: "the draft has no address or pitch text" };
   }
 

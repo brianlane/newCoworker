@@ -1161,12 +1161,24 @@ describe("sendProspectNow (the owner pressed Send in manual mode)", () => {
       reason: "not_drafted"
     });
 
-    nowLedger({ getProspect: vi.fn(async () => prospect({ pitch_body: null })) });
+    const ledger = nowLedger({ getProspect: vi.fn(async () => prospect({ pitch_body: null })) });
     expect(await sendProspectNow(BIZ, prospect().id, baseDeps())).toEqual({
       ok: false,
       reason: "not_drafted",
       detail: "the draft has no address or pitch text"
     });
+    // Recorded, not just reported: otherwise the broken draft stays in the
+    // queue and the owner can press Send on it forever.
+    expect(ledger.patchProspect).toHaveBeenCalledWith(
+      BIZ,
+      prospect().id,
+      {
+        status: "failed",
+        status_detail: "draft is missing its address or pitch text",
+        sent_at: null
+      },
+      expect.anything()
+    );
   });
 
   it("reports a send that failed, and a send with no flow to file it", async () => {
