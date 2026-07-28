@@ -57,7 +57,10 @@
     "unavailableBody": "Online booking is turned off right now. Please contact the business directly to schedule, or ask them for a fresh link.",
     "unavailableProviderBody": "This business takes bookings on its own scheduling site rather than this page. Please contact the business for the right link.",
     "manageGoneHeading": "This booking link is no longer active",
-    "manageGoneBody": "The appointment it managed was cancelled or is no longer available through this link. To book a new time, use the business's booking page or contact them directly."
+    "manageGoneBody": "The appointment it managed was cancelled or is no longer available through this link. To book a new time, use the business's booking page or contact them directly.",
+    "pickMeetingHeading": "What would you like to book?",
+    "pickMeetingSubtitle": "Pick a meeting and we will show you the open times.",
+    "unavailableMeetingBody": "This meeting is no longer offered at this link. Please contact the business for the right link, or ask about their other times."
   },
   "common": {
     "language": "Language",
@@ -1668,7 +1671,29 @@
       "intakeOptionOne": "Option A",
       "intakeOptionTwo": "Option B",
       "intakeAsk": "Ask",
-      "assignNotifyLabel": "Text the assigned teammate when a booking lands on them"
+      "assignNotifyLabel": "Text the assigned teammate when a booking lands on them",
+      "meetingTypesTitle": "Meeting types",
+      "meetingTypesSubtitle": "Each meeting gets its own link that shows only that meeting. Anything you leave alone follows the settings below.",
+      "meetingNameLabel": "Meeting",
+      "meetingDurationLabel": "Length",
+      "meetingMinutes": "min",
+      "meetingEnabled": "Live",
+      "meetingHidden": "Link only",
+      "meetingLinkLabel": "Link ending",
+      "meetingCopyLink": "Copy link",
+      "meetingRemove": "Remove",
+      "meetingRemoveConfirm": "Remove this meeting type? Appointments already booked keep their times.",
+      "meetingDescriptionLabel": "What this meeting is for (shown to the customer)",
+      "meetingAssignLabel": "Bookings go to",
+      "meetingAssignInherit": "Same as the page",
+      "meetingPriceLabel": "Price",
+      "meetingPriceFree": "Free",
+      "meetingQuestionsLabel": "Questions for this meeting",
+      "meetingQuestionsOwn": "Ask different questions",
+      "meetingQuestionsInherit": "This meeting asks the page's questions.",
+      "meetingAdd": "Add a meeting type",
+      "meetingMax": "Ten meeting types is the limit; remove one to add another.",
+      "meetingNewName": "New meeting"
     },
     "integrationsClaude": {
       "connectedBadge": "Connected",

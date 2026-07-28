@@ -57,7 +57,10 @@
     "unavailableBody": "Las reservas en línea están desactivadas por ahora. Comunícate directamente con el negocio para agendar, o pídeles un enlace nuevo.",
     "unavailableProviderBody": "Este negocio recibe reservas en su propio sitio de agenda, no en esta página. Comunícate con el negocio para obtener el enlace correcto.",
     "manageGoneHeading": "Este enlace de reserva ya no está activo",
-    "manageGoneBody": "La cita que administraba fue cancelada o ya no está disponible desde este enlace. Para reservar un nuevo horario, usa la página de reservas del negocio o contáctalo directamente."
+    "manageGoneBody": "La cita que administraba fue cancelada o ya no está disponible desde este enlace. Para reservar un nuevo horario, usa la página de reservas del negocio o contáctalo directamente.",
+    "pickMeetingHeading": "¿Qué te gustaría reservar?",
+    "pickMeetingSubtitle": "Elige una reunión y te mostramos los horarios disponibles.",
+    "unavailableMeetingBody": "Esta reunión ya no se ofrece en este enlace. Comunícate con el negocio para obtener el enlace correcto o pregunta por otros horarios."
   },
   "common": {
     "language": "Idioma",
@@ -1668,7 +1671,29 @@
       "intakeOptionOne": "Opción A",
       "intakeOptionTwo": "Opción B",
       "intakeAsk": "Preguntar",
-      "assignNotifyLabel": "Enviar un texto al empleado asignado cuando le llegue una reserva"
+      "assignNotifyLabel": "Enviar un texto al empleado asignado cuando le llegue una reserva",
+      "meetingTypesTitle": "Tipos de reunión",
+      "meetingTypesSubtitle": "Cada reunión tiene su propio enlace que muestra solo esa reunión. Lo que no cambies sigue la configuración de abajo.",
+      "meetingNameLabel": "Reunión",
+      "meetingDurationLabel": "Duración",
+      "meetingMinutes": "min",
+      "meetingEnabled": "Activa",
+      "meetingHidden": "Solo por enlace",
+      "meetingLinkLabel": "Final del enlace",
+      "meetingCopyLink": "Copiar enlace",
+      "meetingRemove": "Quitar",
+      "meetingRemoveConfirm": "¿Quitar este tipo de reunión? Las citas ya reservadas conservan su horario.",
+      "meetingDescriptionLabel": "De qué se trata esta reunión (visible para el cliente)",
+      "meetingAssignLabel": "Las reservas van a",
+      "meetingAssignInherit": "Igual que la página",
+      "meetingPriceLabel": "Precio",
+      "meetingPriceFree": "Gratis",
+      "meetingQuestionsLabel": "Preguntas para esta reunión",
+      "meetingQuestionsOwn": "Hacer preguntas diferentes",
+      "meetingQuestionsInherit": "Esta reunión usa las preguntas de la página.",
+      "meetingAdd": "Agregar un tipo de reunión",
+      "meetingMax": "El límite es diez tipos de reunión; quita uno para agregar otro.",
+      "meetingNewName": "Nueva reunión"
     },
     "integrationsClaude": {
       "connectedBadge": "Conectado",

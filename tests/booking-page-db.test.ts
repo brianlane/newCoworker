@@ -704,12 +704,19 @@ describe("reminder settings and attendee contact", () => {
       BIZ,
       "phone:+14805550100",
       "2026-07-27T16:00:00Z",
-      { name: "Liz", assigneeMemberId: "m-ana", intakeAnswers: { project: "A" } },
+      {
+        name: "Liz",
+        assigneeMemberId: "m-ana",
+        intakeAnswers: { project: "A" },
+        meetingTypeId: "mt-discovery"
+      },
       client
     );
     expect(calls.find((c) => c.method === "update")?.args[0]).toMatchObject({
       assignee_member_id: "m-ana",
-      intake_answers: { project: "A" }
+      intake_answers: { project: "A" },
+      // The dashboard and reminders need to know WHICH meeting this was.
+      meeting_type_id: "mt-discovery"
     });
   });
 

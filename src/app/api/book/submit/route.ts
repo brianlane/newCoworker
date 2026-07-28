@@ -35,6 +35,8 @@ const bodySchema = z.object({
   visitorTimeZone: z.string().max(64).optional(),
   /** Locale of the page the visitor booked on. */
   locale: z.string().max(8).optional(),
+  /** The meeting being booked (/book/<page>/<typeSlug>). */
+  meetingTypeSlug: z.string().max(60).optional(),
   /** Answers to the page's intake questions, keyed by question id. */
   intakeAnswers: z.record(z.string(), z.union([z.string(), z.array(z.string())])).optional()
 });
@@ -58,6 +60,7 @@ export async function POST(request: Request) {
       notifyEarlier: body.notifyEarlier,
       visitorTimeZone: body.visitorTimeZone,
       locale: body.locale,
+      meetingTypeSlug: body.meetingTypeSlug,
       intakeAnswers: body.intakeAnswers
     });
     if (!result.ok) {

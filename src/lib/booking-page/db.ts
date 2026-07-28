@@ -647,6 +647,8 @@ export async function stampAttendeeContact(
     assigneeMemberId?: string | null;
     /** The visitor's intake answers, when the page asks questions. */
     intakeAnswers?: Record<string, string | string[]> | null;
+    /** Which meeting type was booked; null on the typeless page flow. */
+    meetingTypeId?: string | null;
   },
   client?: SupabaseClient
 ): Promise<boolean> {
@@ -661,6 +663,7 @@ export async function stampAttendeeContact(
         ? {}
         : { assignee_member_id: contact.assigneeMemberId }),
       ...(contact.intakeAnswers ? { intake_answers: contact.intakeAnswers } : {}),
+      ...(contact.meetingTypeId ? { meeting_type_id: contact.meetingTypeId } : {}),
       ...(email ? { attendee_email: email } : {}),
       ...(name ? { attendee_name: name } : {})
     })

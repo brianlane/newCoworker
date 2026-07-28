@@ -35,8 +35,18 @@ import {
   stampManageToken
 } from "@/lib/booking-page/db";
 import type { BookingPageRow } from "@/lib/booking-page/db";
-import { mintBookingManageToken, parseBookingPageRef } from "@/lib/booking-page/keys";
+import {
+  mintBookingManageToken,
+  parseBookingPageRef,
+  parseBookingPageSlug
+} from "@/lib/booking-page/keys";
 import { chooseAssignee, eligibleMembers, parseAssignmentMode } from "@/lib/booking-page/assignment";
+import {
+  effectiveTypeSettings,
+  listMeetingTypes,
+  type BookingMeetingTypeRow,
+  type EffectiveBookingSettings
+} from "@/lib/booking-page/meeting-types";
 import { notifyAssigneeOfBooking } from "@/lib/booking-page/assignee-notify";
 import {
   activeIntakeQuestions,
@@ -119,6 +129,12 @@ export type BookingPageContext = {
    */
   mode: BookingPageMode;
   page: BookingPageRow;
+  /**
+   * Every meeting type the business has defined (any visibility). The
+   * public page filters to the visible ones for its picker; the
+   * single-type route resolves its own by slug.
+   */
+  meetingTypes: BookingMeetingTypeRow[];
 };
 
 export type BookingPageFailure = {
@@ -168,7 +184,10 @@ export async function getBookingPageContext(
     return { ok: false, detail: "calendar_not_connected" };
   }
 
-  const zoomId = await getActiveZoomConnectionId(page.business_id);
+  const [zoomId, meetingTypes] = await Promise.all([
+    getActiveZoomConnectionId(page.business_id),
+    listMeetingTypes(page.business_id)
+  ]);
 
   return {
     ok: true,
@@ -181,7 +200,8 @@ export async function getBookingPageContext(
       allowedDurations: page.allowed_durations,
       videoCall: zoomId !== null,
       mode: conn ? "provider" : "platform",
-      page
+      page,
+      meetingTypes
     }
   };
 }
@@ -239,11 +259,43 @@ export type ListPublicSlotsResult =
 export async function listPublicSlots(
   rawToken: string,
   durationMinutes: number,
-  nowOverride?: Date
+  nowOverride?: Date,
+  /**
+   * The meeting the visitor is booking (/book/<page>/<typeSlug>). Its
+   * duration REPLACES the requested one, so a stale tab cannot ask for a
+   * length this meeting does not offer.
+   */
+  meetingTypeSlug?: string | null
 ): Promise<ListPublicSlotsResult> {
   const resolved = await getBookingPageContext(rawToken);
   if (!resolved.ok) return resolved;
-  return listSlotsForContext(resolved.context, durationMinutes, nowOverride);
+  const typed = resolveMeetingType(resolved.context, meetingTypeSlug);
+  if (!typed.ok) return typed;
+  return listSlotsForContext(
+    resolved.context,
+    typed.type ? typed.type.duration_minutes : durationMinutes,
+    nowOverride,
+    { meetingType: typed.type }
+  );
+}
+
+/**
+ * The requested meeting type, or null for the typeless flow. An unknown or
+ * disabled slug is refused rather than silently falling back to the page:
+ * a direct link that no longer works must say so, never quietly book
+ * something else.
+ */
+function resolveMeetingType(
+  context: BookingPageContext,
+  slug?: string | null
+): { ok: true; type: BookingMeetingTypeRow | null } | BookingPageFailure {
+  if (!slug) return { ok: true, type: null };
+  const parsed = parseBookingPageSlug(slug);
+  const type = parsed
+    ? context.meetingTypes.find((t) => t.slug === parsed && t.enabled)
+    : undefined;
+  if (!type) return { ok: false, detail: "not_found" };
+  return { ok: true, type };
 }
 
 /**
@@ -286,11 +338,14 @@ async function listSlotsForContext(
   context: BookingPageContext,
   durationMinutes: number,
   nowOverride?: Date,
-  opts: { excludeStartIso?: string } = {}
+  opts: { excludeStartIso?: string; meetingType?: BookingMeetingTypeRow | null } = {}
 ): Promise<ListPublicSlotsResult> {
   const page = context.page;
 
-  if (!page.allowed_durations.includes(durationMinutes)) {
+  // A meeting type OWNS its duration, so the page's picker list does not
+  // apply to it (a 45 minute meeting is legal even though the picker only
+  // offers 15/30/60).
+  if (!opts.meetingType && !page.allowed_durations.includes(durationMinutes)) {
     return { ok: false, detail: "invalid_duration" };
   }
 
@@ -371,12 +426,13 @@ async function listSlotsForContext(
     // visitor must not be offered a time nobody who could take it is
     // working. So those modes read the roster regardless of the
     // require-staff toggle, and narrow it to the members the page can book.
-    const mode = parseAssignmentMode(page.assignment_mode);
+    const effective = effectiveTypeSettings(page, opts.meetingType ?? null, durationMinutes);
+    const mode = parseAssignmentMode(effective.assignmentMode);
     const assigned = mode !== "any";
     const needsRoster = page.require_staff_on_shift || assigned;
     const allMembers = needsRoster ? await listTeamMembers(context.businessId) : [];
     const roster = assigned
-      ? eligibleMembers(mode, page.employee_id, allMembers)
+      ? eligibleMembers(mode, effective.employeeId, allMembers)
       : allMembers.filter((m) => m.active);
     const timeOff = needsRoster ? await listTimeOff(context.businessId) : [];
 
@@ -426,6 +482,8 @@ export type SubmitPublicBookingInput = {
   visitorTimeZone?: string | null;
   /** Locale of the page they booked on, so the email is in their language. */
   locale?: string | null;
+  /** The meeting being booked (/book/<page>/<typeSlug>); null = the page itself. */
+  meetingTypeSlug?: string | null;
 };
 
 /**
@@ -472,9 +530,10 @@ export async function dailyCapReached(
  */
 async function resolveAssignee(
   context: BookingPageContext,
-  start: Date
+  start: Date,
+  effective: Pick<EffectiveBookingSettings, "assignmentMode" | "employeeId">
 ): Promise<string | null> {
-  const mode = parseAssignmentMode(context.page.assignment_mode);
+  const mode = parseAssignmentMode(effective.assignmentMode);
   if (mode === "any") return null;
   const [roster, timeOff, upcomingCounts] = await Promise.all([
     listTeamMembers(context.businessId),
@@ -483,7 +542,7 @@ async function resolveAssignee(
   ]);
   const choice = chooseAssignee({
     mode,
-    employeeId: context.page.employee_id,
+    employeeId: effective.employeeId,
     roster,
     timeOff,
     startIso: start.toISOString(),
@@ -526,9 +585,26 @@ export async function submitPublicBooking(
   if (!resolved.ok) return resolved;
   const { context } = resolved;
 
+  // The meeting being booked. An unknown or disabled slug is refused here,
+  // never silently downgraded to the page: a dead link must say so rather
+  // than book something the visitor did not choose.
+  const typed = resolveMeetingType(context, input.meetingTypeSlug);
+  if (!typed.ok) return typed;
+  const meetingType = typed.type;
+  const effective = effectiveTypeSettings(context.page, meetingType, input.durationMinutes);
+  // The type owns its length, so a stale tab cannot book a 30 when the
+  // owner has since made this meeting 60.
+  const durationMinutes = effective.durationMinutes;
+
   const name = input.name.trim();
   const email = input.email.trim();
   const note = input.note?.trim() ?? "";
+  // Named once, before the idempotent-resubmit branch can need it: a
+  // meeting type puts its own name on the event, so "Liz + New Coworker:
+  // Discovery call" beats a bare duration.
+  const summary = meetingType
+    ? `${name} + ${context.businessName}: ${meetingType.name}`
+    : `${name} + ${context.businessName} (${durationMinutes} min)`;
 
   // The page's intake questions, answered. Validated here but only REFUSED
   // after the idempotent resubmit check below: a visitor whose first submit
@@ -536,9 +612,7 @@ export async function submitPublicBooking(
   // since added a required question. What DID validate is kept either way
   // (the lenient pass treats every question as optional) so a resubmit can
   // still stamp whatever answers it carried.
-  const intakeQuestions = activeIntakeQuestions(
-    parseIntakeQuestions(context.page.intake_questions)
-  );
+  const intakeQuestions = activeIntakeQuestions(effective.questions);
   const intake = validateIntakeAnswers(intakeQuestions, input.intakeAnswers);
   const lenient = intake.ok
     ? intake
@@ -582,7 +656,7 @@ export async function submitPublicBooking(
     return { ok: false, detail: "booking_failed" };
   }
 
-  const endIso = new Date(start.getTime() + input.durationMinutes * 60_000).toISOString();
+  const endIso = new Date(start.getTime() + durationMinutes * 60_000).toISOString();
 
   // One-upcoming-appointment-per-person policy, BOTH modes, checked before
   // the re-verify (which would otherwise answer a double submit with a
@@ -604,7 +678,7 @@ export async function submitPublicBooking(
     // it here, assignee included. The confirmation email deliberately is
     // NOT re-sent: it either went out already or the visitor is holding an
     // appointment they can see, and a duplicate is worse than a missing one.
-    const retryAssignee = await resolveAssignee(context, start).catch(() => null);
+    const retryAssignee = await resolveAssignee(context, start, effective).catch(() => null);
     if (retryAssignee) {
       // Only fills a genuine gap: the original assignment is the right
       // answer, and re-resolving can name someone else as loads move, so
@@ -626,8 +700,8 @@ export async function submitPublicBooking(
             visitorName: name,
             visitorPhone: phone,
             startLocal: formatBookingStartLocal(start.toISOString(), context.timezone),
-            durationMinutes: input.durationMinutes,
-            summary: `${name} + ${context.businessName} (${input.durationMinutes} min)`
+            durationMinutes,
+            summary
           });
         }
       }
@@ -638,7 +712,12 @@ export async function submitPublicBooking(
       start.toISOString(),
       // Answers included: the first request may have booked and died before
       // its final stamp, and the retry is the last chance for them to land.
-      { email, name, intakeAnswers: intakeLines.length > 0 ? intakeAnswers : null }
+      {
+        email,
+        name,
+        intakeAnswers: intakeLines.length > 0 ? intakeAnswers : null,
+        meetingTypeId: meetingType?.id ?? null
+      }
     ).catch((err: unknown) => {
       logger.warn("booking-page: attendee contact re-stamp failed", {
         businessId: context.businessId,
@@ -670,7 +749,7 @@ export async function submitPublicBooking(
 
   // Payment gate, schema-hooks phase: a page marked as requiring payment
   // must not hand out free appointments before collection exists.
-  if (context.page.payment_required) {
+  if (effective.paymentRequired) {
     logger.warn("booking-page: booking refused, page requires payment (not yet supported)", {
       businessId: context.businessId
     });
@@ -683,7 +762,9 @@ export async function submitPublicBooking(
   // free/busy (a booking made anywhere since page load withdraws the slot).
   // Deliberately the SAME context snapshot as the write below, so the mode
   // cannot change between the availability check and the booking path.
-  const listed = await listSlotsForContext(context, input.durationMinutes);
+  const listed = await listSlotsForContext(context, durationMinutes, undefined, {
+    meetingType
+  });
   if (!listed.ok) return listed;
   const stillOpen = listed.slots.some(
     (s) => new Date(s.startIso).getTime() === start.getTime()
@@ -720,8 +801,6 @@ export async function submitPublicBooking(
     await releaseSlotClaim();
     return { ok: false, detail: "slot_taken" };
   }
-
-  const summary = `${name} + ${context.businessName} (${input.durationMinutes} min)`;
 
   let startLocal: string | null = null;
   let zoomJoinUrl: string | null = null;
@@ -770,7 +849,7 @@ export async function submitPublicBooking(
       `platform:${randomUUID()}`,
       zoomMeeting?.meetingId ?? null,
       undefined,
-      { token: manageToken, durationMinutes: input.durationMinutes }
+      { token: manageToken, durationMinutes }
     );
     if (!record.ok) {
       if (zoomMeeting) await deleteZoomMeetingForBooking(context.businessId, zoomMeeting.meetingId);
@@ -868,7 +947,7 @@ export async function submitPublicBooking(
         bookingAttendeeKey(phone, email, name),
         start.toISOString(),
         manageToken,
-        input.durationMinutes
+        durationMinutes
       );
       if (!stamped) manageLink = null;
     } catch (err) {
@@ -902,7 +981,7 @@ export async function submitPublicBooking(
         phone,
         email,
         name,
-        durationMinutes: input.durationMinutes,
+        durationMinutes,
         latestAtIso: start.toISOString(),
         currentBookingStartAtIso: start.toISOString()
       });
@@ -912,7 +991,7 @@ export async function submitPublicBooking(
   // Reminder addressing + the confirmation email. Best-effort: the booking
   // is already durable, and a visitor who gets no email still holds the
   // appointment (and, in provider mode, the provider's own invitation).
-  const assignee = await resolveAssignee(context, start).catch((err: unknown) => {
+  const assignee = await resolveAssignee(context, start, effective).catch((err: unknown) => {
     // An unassigned booking is a bookkeeping loss, never a lost
     // appointment: the visitor already holds the time.
     logger.warn("booking-page: assignee resolution failed", {
@@ -941,7 +1020,8 @@ export async function submitPublicBooking(
       email,
       name,
       assigneeMemberId: assignee,
-      intakeAnswers: intakeLines.length > 0 ? intake.answers : null
+      intakeAnswers: intakeLines.length > 0 ? intake.answers : null,
+      meetingTypeId: meetingType?.id ?? null
     }
   )
     .then((stamped) => {
@@ -971,7 +1051,7 @@ export async function submitPublicBooking(
       visitorName: name,
       visitorPhone: phone,
       startLocal: startLocal ?? formatBookingStartLocal(start.toISOString(), context.timezone),
-      durationMinutes: input.durationMinutes,
+      durationMinutes,
       summary
     });
   }
@@ -982,7 +1062,7 @@ export async function submitPublicBooking(
       businessName: context.businessName,
       businessTimeZone: context.timezone,
       startIso: start.toISOString(),
-      durationMinutes: input.durationMinutes,
+      durationMinutes,
       attendeeEmail: email,
       joinUrl: zoomJoinUrl,
       manageLink,
