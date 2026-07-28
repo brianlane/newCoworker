@@ -29,6 +29,15 @@ export type CheckoutParams = {
   metadata?: Record<string, string>;
   discountCouponId?: string;
   /**
+   * Admin promotion redeemed at signup. Stripe allows exactly ONE discount on
+   * a Checkout Session, so this WINS over `discountCouponId` (the monthly
+   * intro coupon) when both are present. The order summary applies the same
+   * precedence, so what the customer previewed is what Stripe charges. We pass
+   * the promotion code rather than its coupon so the redemption also lands on
+   * the code's `times_redeemed` in the Stripe dashboard.
+   */
+  discountPromotionCodeId?: string;
+  /**
    * One-time 10DLC carrier-registration pass-through (Phase C3), added as an
    * inline `price_data` line so no per-environment Stripe product setup is
    * needed. Set by the NEW-SIGNUP checkout only — plan changes and
@@ -85,7 +94,11 @@ export async function createCheckoutSession(params: CheckoutParams): Promise<{
     cancel_url: params.cancelUrl,
     customer_email: params.customerEmail,
     billing_address_collection: "auto",
-    discounts: params.discountCouponId ? [{ coupon: params.discountCouponId }] : undefined,
+    discounts: params.discountPromotionCodeId
+      ? [{ promotion_code: params.discountPromotionCodeId }]
+      : params.discountCouponId
+        ? [{ coupon: params.discountCouponId }]
+        : undefined,
     metadata: params.metadata ?? {},
     subscription_data: { metadata: params.metadata ?? {} }
   });

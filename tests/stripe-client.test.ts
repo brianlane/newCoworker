@@ -171,6 +171,21 @@ describe("stripe/client", () => {
     );
   });
 
+  it("createCheckoutSession lets an admin promotion win over the intro coupon", async () => {
+    // Stripe allows exactly one discount per session, and the Step 3 order
+    // summary applies the same precedence.
+    await createCheckoutSession({
+      priceId: "price_mock_standard",
+      successUrl: "https://example.com/success",
+      cancelUrl: "https://example.com/cancel",
+      discountCouponId: "coupon_intro",
+      discountPromotionCodeId: "promo_summer20"
+    });
+    expect(mockSessionCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ discounts: [{ promotion_code: "promo_summer20" }] })
+    );
+  });
+
   it("createCheckoutSession works without optional fields", async () => {
     const result = await createCheckoutSession({
       priceId: "price_mock",

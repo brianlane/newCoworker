@@ -143,6 +143,17 @@ function QuestionnaireForm() {
   const [signupEmail, setSignupEmail] = useState("");
   const [signupLoading, setSignupLoading] = useState(false);
   const [emailChecking, setEmailChecking] = useState(false);
+  // Promo code: what the customer typed, the applied result (mirrored into the
+  // order summary), and the rejection message when a code does not stick. The
+  // applied value is only a PREVIEW: /api/checkout re-validates the code
+  // server-side, so nothing here can conjure a discount.
+  const [promoInput, setPromoInput] = useState("");
+  const [promoApplied, setPromoApplied] = useState<{
+    code: string;
+    discountCents: number;
+  } | null>(null);
+  const [promoError, setPromoError] = useState<string | null>(null);
+  const [promoChecking, setPromoChecking] = useState(false);
   const [draftSaving, setDraftSaving] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
@@ -684,6 +695,9 @@ function QuestionnaireForm() {
           ownerEmail: onboardingData.ownerEmail,
           onboardingToken: onboardingData.onboardingToken,
           draftToken: onboardingData.draftToken,
+          // Re-validated server-side against the same rules the preview ran,
+          // so the summary and the charge cannot diverge.
+          ...(promoApplied ? { promoCode: promoApplied.code } : {}),
           // Same browser timezone the order summary's Canada-fee preview
           // used, so the server's fallback detection (only consulted when
           // the phone isn't NANP and the stored row predates timezones)
@@ -693,6 +707,18 @@ function QuestionnaireForm() {
       });
       const checkoutJson = await checkoutRes.json().catch(() => null);
       if (!checkoutRes.ok) {
+        // 422 is this route's dedicated "the promo code stopped being valid
+        // between the preview and the click" signal (an admin switched it off,
+        // it hit its cap, its window closed). Drop the code and say so next to
+        // the promo field only: nothing is wrong with the signup, so raising
+        // the step-level banner too would read like a hard checkout failure
+        // and bury the one-click recovery.
+        if (checkoutRes.status === 422) {
+          setPromoApplied(null);
+          setPromoInput("");
+          setPromoError(t("promoExpiredDuringCheckout"));
+          return;
+        }
         throw new Error(checkoutJson?.error?.message ?? t("errCheckout"));
       }
 
@@ -709,6 +735,56 @@ function QuestionnaireForm() {
       setSignupLoading(false);
     }
   }
+
+  /**
+   * Preview a promo code against the chosen plan. Purely presentational:
+   * /api/checkout runs the identical validation before it mints the Stripe
+   * session, so a forged preview buys nothing.
+   */
+  async function handleApplyPromo() {
+    const code = promoInput.trim();
+    if (!code) return;
+    setPromoChecking(true);
+    setPromoError(null);
+    try {
+      const res = await fetch("/api/promotions/validate", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ code, tier, billingPeriod: period })
+      });
+      const json = await res.json().catch(() => null);
+      const data = json?.data as
+        | { valid: boolean; reason?: string; code?: string; discountCents?: number }
+        | undefined;
+      if (!res.ok || !data) throw new Error(t("promoCheckFailed"));
+      if (!data.valid || !data.code || typeof data.discountCents !== "number") {
+        setPromoApplied(null);
+        setPromoError(data.reason === "notBetter" ? t("promoNotBetter") : t("promoInvalid"));
+        return;
+      }
+      setPromoApplied({ code: data.code, discountCents: data.discountCents });
+    } catch (err) {
+      setPromoApplied(null);
+      setPromoError(err instanceof Error ? err.message : t("promoCheckFailed"));
+    } finally {
+      setPromoChecking(false);
+    }
+  }
+
+  function handleRemovePromo() {
+    setPromoApplied(null);
+    setPromoInput("");
+    setPromoError(null);
+  }
+
+  // A promo preview is priced against ONE plan, so switching plan (the tier
+  // and period come from the URL) invalidates it: reusing the old discount
+  // would show a total that checkout will not honor, and a code scoped to the
+  // previous plan would 422 at the click. Drop it and make them re-apply.
+  useEffect(() => {
+    setPromoApplied(null);
+    setPromoError(null);
+  }, [tier, period]);
 
   async function handleAdvanceStep() {
     if (step === 1) {
@@ -1189,7 +1265,54 @@ function QuestionnaireForm() {
                       phone: form.phone,
                       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
                     })}
+                    promotion={promoApplied}
                   />
+
+                  <div className="space-y-2">
+                    {promoApplied ? (
+                      <div className="flex items-center justify-between rounded-lg border border-claw-green/40 bg-claw-green/10 px-3 py-2 text-xs">
+                        <span className="text-claw-green">
+                          {t("promoApplied", { code: promoApplied.code })}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={handleRemovePromo}
+                          className="text-parchment/60 underline hover:text-parchment"
+                        >
+                          {t("promoRemove")}
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="flex items-end gap-2">
+                        <Input
+                          label={t("promoLabel")}
+                          className="flex-1"
+                          value={promoInput}
+                          autoCapitalize="characters"
+                          placeholder={t("promoPlaceholder")}
+                          onChange={(e) => setPromoInput(e.target.value.toUpperCase())}
+                          onKeyDown={(e) => {
+                            // The surrounding form submits to Stripe, so Enter
+                            // inside this field must apply the code instead.
+                            if (e.key === "Enter") {
+                              e.preventDefault();
+                              void handleApplyPromo();
+                            }
+                          }}
+                        />
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          loading={promoChecking}
+                          disabled={!promoInput.trim()}
+                          onClick={() => void handleApplyPromo()}
+                        >
+                          {t("promoApply")}
+                        </Button>
+                      </div>
+                    )}
+                    {promoError && <p className="text-xs text-spark-orange">{promoError}</p>}
+                  </div>
 
                   <p className="text-xs text-parchment/40 text-center">{t("guaranteeNote")}</p>
 

@@ -10,7 +10,9 @@ import {
   hasFirstCycleDiscount,
   getFirstCycleDiscountDisplay,
   getExistingCustomerMonthlyCents,
-  getExistingCustomerMonthlyDisplay
+  getExistingCustomerMonthlyDisplay,
+  getPlanListPriceCents,
+  getPlanDueTodayCents
 } from "@/lib/pricing";
 import { getPeriodPricing, PlanTier, BillingPeriod } from "@/lib/plans/tier";
 
@@ -194,6 +196,24 @@ describe("pricing", () => {
       expect(getExistingCustomerMonthlyDisplay("standard", "monthly")).toBe("$279");
       expect(getExistingCustomerMonthlyDisplay("standard", "annual")).toBe("$109");
       expect(getExistingCustomerMonthlyDisplay("starter", "biennial")).toBe("$9.99");
+    });
+  });
+
+  describe("plan list price vs due today (the promo-discount base)", () => {
+    it("monthly bases on the FULL renewal rate, which is the price Stripe carries", () => {
+      // The intro coupon is what turns $26.99 into the advertised $15.99, so a
+      // promo replacing that coupon comes off $26.99.
+      expect(getPlanListPriceCents("starter", "monthly")).toBe(2699);
+      expect(getPlanDueTodayCents("starter", "monthly")).toBe(1599);
+      expect(getPlanListPriceCents("standard", "monthly")).toBe(27900);
+      expect(getPlanDueTodayCents("standard", "monthly")).toBe(19500);
+    });
+
+    it("term plans are prepaid in full, so list and due today are the commitment total", () => {
+      expect(getPlanListPriceCents("standard", "biennial")).toBe(9900 * 24);
+      expect(getPlanDueTodayCents("standard", "biennial")).toBe(9900 * 24);
+      expect(getPlanListPriceCents("starter", "annual")).toBe(1099 * 12);
+      expect(getPlanDueTodayCents("starter", "annual")).toBe(1099 * 12);
     });
   });
 

@@ -39,6 +39,10 @@ vi.mock("@/lib/onboarding/token", () => ({
   createPendingOwnerEmail: vi.fn((businessId: string) => `pending+${businessId}@onboarding.local`)
 }));
 
+vi.mock("@/lib/promotions/validate", () => ({
+  validatePromotionCode: vi.fn()
+}));
+
 import { POST } from "@/app/api/checkout/route";
 import { authUserExistsByEmail, getAuthUser, verifySignupIdentity } from "@/lib/auth";
 import { createCheckoutSession, resolveIntroDiscountCouponId, resolvePriceId } from "@/lib/stripe/client";
@@ -52,6 +56,7 @@ import {
 import { getOnboardingDraft } from "@/lib/db/onboarding-drafts";
 import { upsertCustomerProfile, getCustomerProfileById } from "@/lib/db/customer-profiles";
 import { verifyOnboardingToken } from "@/lib/onboarding/token";
+import { validatePromotionCode } from "@/lib/promotions/validate";
 
 describe("api/checkout route", () => {
   const OLD_ENV = process.env;
@@ -849,5 +854,75 @@ describe("api/checkout route", () => {
     expect(response.status).toBe(200);
     expect(authUserExistsByEmail).not.toHaveBeenCalled();
     expect(createCheckoutSession).toHaveBeenCalled();
+  });
+
+  describe("promo codes", () => {
+    const promoRequest = (promoCode?: string) =>
+      new Request("http://localhost:3000/api/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tier: "standard",
+          businessId,
+          billingPeriod: "biennial",
+          ownerEmail: "owner@example.com",
+          signupUserId,
+          ...(promoCode ? { promoCode } : {})
+        })
+      });
+
+    beforeEach(() => {
+      vi.mocked(getAuthUser).mockResolvedValue(null);
+      vi.mocked(verifySignupIdentity).mockResolvedValue(true);
+    });
+
+    it("never validates a code when none was submitted", async () => {
+      const response = await POST(promoRequest());
+      expect(response.status).toBe(200);
+      expect(validatePromotionCode).not.toHaveBeenCalled();
+      const call = vi.mocked(createCheckoutSession).mock.calls.at(-1)?.[0];
+      expect(call && "discountPromotionCodeId" in call).toBe(false);
+      expect(call?.metadata && "promotionId" in call.metadata).toBe(false);
+    });
+
+    it("passes the promotion's Stripe code to Checkout and tags the session", async () => {
+      vi.mocked(validatePromotionCode).mockResolvedValue({
+        ok: true,
+        promotion: {
+          id: "44444444-4444-4444-8444-444444444444",
+          code: "SUMMER20",
+          stripe_promotion_code_id: "promo_stripe_1"
+        } as never,
+        discountCents: 47520,
+        planDueTodayCents: 190080
+      });
+
+      const response = await POST(promoRequest("summer20"));
+
+      expect(response.status).toBe(200);
+      expect(validatePromotionCode).toHaveBeenCalledWith({
+        code: "summer20",
+        tier: "standard",
+        period: "biennial"
+      });
+      const call = vi.mocked(createCheckoutSession).mock.calls.at(-1)?.[0];
+      expect(call?.discountPromotionCodeId).toBe("promo_stripe_1");
+      expect(call?.metadata).toMatchObject({
+        promotionId: "44444444-4444-4444-8444-444444444444",
+        promotionCode: "SUMMER20"
+      });
+    });
+
+    it("fails closed with a 422 when the code stopped being valid, minting no session", async () => {
+      vi.mocked(validatePromotionCode).mockResolvedValue({ ok: false, reason: "exhausted" });
+
+      const response = await POST(promoRequest("SUMMER20"));
+
+      // 422 is the client's cue to drop the code and retry at full price,
+      // rather than being charged full price on a session it previewed as
+      // discounted.
+      expect(response.status).toBe(422);
+      expect(createCheckoutSession).not.toHaveBeenCalled();
+    });
   });
 });
