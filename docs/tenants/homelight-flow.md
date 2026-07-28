@@ -55,7 +55,7 @@ a key to accept it. Everything downstream follows from that:
   text alongside a URL.
 - **The warm-transfer window can be shorter than the worker tick.** Withdrawals
   landed 46s, 1m34s and 1m54s after the alert, and once after 3s, while the
-  worker claims a run about once a minute. `options.startImmediately` (PR #987,
+  worker claims a run about once a minute. `options.startImmediately` (PR #990,
   `homelight-start-immediately.ts`) makes the inbound webhook kick the worker on
   enqueue so the claim starts within seconds. That removes the QUEUE delay, not
   the work: the claim still needs a credentialed page load, so a single-digit
@@ -80,4 +80,4 @@ re-run: several supersede each other.
 
 ## History
 
-PRs #790, #911, #913, #920, #927, #932, #936, #986, #987.
+PRs #790, #911, #913, #920, #927, #932, #936, #986, #990.
