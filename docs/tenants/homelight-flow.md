@@ -41,6 +41,22 @@ a key to accept it. Everything downstream follows from that:
 - **The details can arrive after the call ends.** Do not assume the call-end
   event is the end of the referral (`homelight-call-end-details.ts`,
   `homelight-late-contact-retry.ts`).
+- **HomeLight alerts arrive in two wordings, from two different sender lines**,
+  and the flow has to match both. They open with either
+  `New HomeLight Referral: <name> - $250K seller in ...` or
+  `New HomeLight Warm Transfer Opportunity: <name> - ...`.
+  The trigger matched only the first for weeks, so every warm-transfer
+  opportunity was silently ignored, and each was withdrawn seconds later by
+  "Sorry, this referral is no longer available for a live transfer" (PR #986).
+  Neither alert carries the link: it arrives as its OWN message in the same
+  second, which is what `has_url` plus `correlationWindowMinutes` is for. Match
+  on `New HomeLight (Referral|Warm Transfer)` and not on a bare
+  "HomeLight referral", which also appears in HomeLight's post-call feedback
+  text alongside a URL.
+- **The warm-transfer window can be shorter than the worker tick.** One alert
+  was withdrawn after 3 seconds; the batch worker claims a run about once a
+  minute. Firing the flow gets these referrals the full follow-up, but winning
+  the live transfer itself needs the claim to happen on the inbound-SMS path.
 - **This flow is live on a real account earning real commissions.** Changes go
   out as ledger-recorded one-shots (`homelight-*` in `scripts/oneshot/`),
   dry-run first, and Amy is told what changed.
@@ -52,12 +68,12 @@ Seeds: `seed-homelight-lead-aiflow.ts`,
 
 Patches: `homelight-accept-on-prompt.ts`, `homelight-call-end-details.ts`,
 `homelight-late-contact-retry.ts`, `homelight-broadcast-offer.ts`,
-`homelight-ai-call-referral-patch.ts`, `set-homelight-star-alerts.ts`,
-`fix-homelight-extraction.ts`.
+`homelight-ai-call-referral-patch.ts`, `homelight-warm-transfer-trigger.ts`,
+`set-homelight-star-alerts.ts`, `fix-homelight-extraction.ts`.
 
 All are idempotent and dry-run by default. Read the one you are about to
 re-run: several supersede each other.
 
 ## History
 
-PRs #790, #911, #913, #920, #927, #932, #936.
+PRs #790, #911, #913, #920, #927, #932, #936, #986.
