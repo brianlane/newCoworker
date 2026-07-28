@@ -51,6 +51,16 @@ export type SubscriptionRow = {
    * the contract price (schedule released). Toggled via /api/billing/auto-renew.
    */
   contract_auto_renew: boolean;
+  /**
+   * Mirror of Stripe's `pause_collection` (§20260821200258_admin_billing_pause).
+   * true = an operator comped this tenant: Stripe voids the invoices it
+   * generates, and the subscription status stays `active` so service keeps
+   * running. Written by /api/admin/billing-pause and by the
+   * customer.subscription.updated webhook, both from the Stripe response.
+   */
+  billing_paused: boolean;
+  /** Mirror of `pause_collection.resumes_at`; null = paused until resumed. */
+  billing_pause_resumes_at: string | null;
   created_at: string;
 };
 
@@ -393,6 +403,8 @@ export async function updateSubscription(
       | "renewal_at"
       | "commitment_months"
       | "contract_auto_renew"
+      | "billing_paused"
+      | "billing_pause_resumes_at"
     >
   >,
   client?: SupabaseClient

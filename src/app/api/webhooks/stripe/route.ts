@@ -18,6 +18,7 @@ import {
   executeLifecyclePlanSlowPhase
 } from "@/lib/billing/lifecycle-executor";
 import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader";
+import { pauseStateFromStripeSubscription } from "@/lib/billing/admin-billing-controls";
 import {
   incrementLifetimeSubscriptionCount,
   markFirstPaidIfUnset,
@@ -427,11 +428,15 @@ export async function POST(request: Request) {
           }
 
           // Mirror cancel_at_period_end so the dashboard reflects user
-          // intent without polling Stripe on every render.
+          // intent without polling Stripe on every render. The pause state
+          // rides along for the same reason, and so an auto-resume Stripe
+          // performs on its own (pause_collection.resumes_at elapsing) is
+          // reflected without an operator touching the admin page.
           await updateSubscription(existing.id, {
             status,
             stripe_subscription_id: sub.id,
             cancel_at_period_end: Boolean(sub.cancel_at_period_end),
+            ...pauseStateFromStripeSubscription(sub),
             ...stripeSubscriptionPeriodCache(sub)
           });
         } else {

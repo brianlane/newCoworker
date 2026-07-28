@@ -21,6 +21,7 @@ import { SoulEditor } from "@/components/dashboard/SoulEditor";
 import { SkipPaymentButton } from "@/components/admin/SkipPaymentButton";
 import { DeleteClientButton } from "@/components/admin/DeleteClientButton";
 import { ForceRefundButton } from "@/components/admin/ForceRefundButton";
+import { BillingControlsPanel } from "@/components/admin/BillingControlsPanel";
 import { NudgeOwnerButton } from "@/components/admin/NudgeOwnerButton";
 import { StripeDiagnosticsPanel } from "@/components/admin/StripeDiagnosticsPanel";
 import { ViewAsButton } from "@/components/admin/ViewAsButton";
@@ -526,7 +527,7 @@ export default async function BusinessDetailPage({
               <dl className="grid grid-cols-1 sm:grid-cols-2 gap-x-8 gap-y-3 text-sm">
                 <div>
                   <dt className="text-parchment/40 text-xs">Status</dt>
-                  <dd>
+                  <dd className="flex flex-wrap items-center gap-2">
                     <Badge
                       variant={
                         subscription.status === "active"
@@ -538,6 +539,7 @@ export default async function BusinessDetailPage({
                     >
                       {formatAdminLabel(subscription.status)}
                     </Badge>
+                    {subscription.billing_paused && <Badge variant="pending">billing paused</Badge>}
                   </dd>
                 </div>
                 <div>
@@ -549,6 +551,19 @@ export default async function BusinessDetailPage({
                   <dd className="text-parchment">
                     {subscription.renewal_at ? (
                       <LocalDateTime iso={subscription.renewal_at} style="date" />
+                    ) : (
+                      "–"
+                    )}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-parchment/40 text-xs">Next charge</dt>
+                  <dd className="text-parchment">
+                    {subscription.stripe_current_period_end ? (
+                      <LocalDateTime
+                        iso={subscription.stripe_current_period_end}
+                        style="date"
+                      />
                     ) : (
                       "–"
                     )}
@@ -570,6 +585,24 @@ export default async function BusinessDetailPage({
             <SkipPaymentButton businessId={businessId} />
           )}
         </div>
+        {/* Comp levers for a live Stripe-billed tenant: pause collection, or
+            move the next charge. Hidden for Stripe-less rows (admin-created
+            enterprise, skip-payment) because nobody is being charged there. */}
+        {subscription &&
+          subscription.status === "active" &&
+          subscription.stripe_subscription_id && (
+            <div className="mt-4 border-t border-parchment/10 pt-4">
+              <BillingControlsPanel
+                // Remount when the pause state changes so useState re-seeds
+                // after a router.refresh().
+                key={`${businessId}:${subscription.billing_paused}:${subscription.billing_pause_resumes_at ?? ""}`}
+                businessId={businessId}
+                initialPaused={subscription.billing_paused}
+                initialResumesAt={subscription.billing_pause_resumes_at}
+                nextChargeAt={subscription.stripe_current_period_end}
+              />
+            </div>
+          )}
         {/* Nudge the owner about unfinished onboarding (checkout, website,
             unpaid offers) — the API computes the open items server-side. */}
         <div className="mt-4">
