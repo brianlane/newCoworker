@@ -1889,8 +1889,6 @@
       "aiflowLibraryTitle": "Biblioteca de AiFlows",
       "aiflowLibrarySubtitle": "Automatizaciones iniciales que creamos, más las que otros negocios ejecutan con éxito.",
       "starterDismiss": "Ocultar esta sugerencia",
-      "starterHidden": "{count, plural, one {# sugerencia inicial oculta.} other {# sugerencias iniciales ocultas.}}",
-      "starterShowAgain": "Mostrarlas de nuevo",
       "aiflowNotFound": "AiFlow no encontrado",
       "aiflowRunsTitle": "Ejecuciones de AiFlow",
       "aiflowRunsTitleFlow": "{name}: ejecuciones",

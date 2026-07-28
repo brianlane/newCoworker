@@ -2,7 +2,6 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { useTranslations } from "next-intl";
 import { Card } from "@/components/ui/Card";
 import { Plus, Trash2, ArrowUp, ArrowDown, Sparkles, Pencil, Copy } from "lucide-react";
 import {
@@ -1002,7 +1001,6 @@ export function AiFlowsManager({
   /** Starter cards this user has hidden (per user, not per business). */
   initialDismissedCards?: DismissibleCardKey[];
 }) {
-  const t = useTranslations("dashboard.pages");
   const examples = getAiFlowExampleCopy(businessType);
   const [flows, setFlows] = useState<AiFlowRow[]>(initialFlows);
   const [dismissedCards, setDismissedCards] = useState<Set<string>>(
@@ -1415,21 +1413,16 @@ export function AiFlowsManager({
   };
 
   /**
-   * Hide (or bring back) a starter card for this user. The local set moves
-   * first so the card disappears instantly; a failed write is reverted, since
-   * a card that silently reappears on the next load is worse than one that
-   * never went away.
+   * Hide a starter card for this user. The local set moves first so the card
+   * disappears instantly; a failed write puts it back, since a card that
+   * silently reappears on the next load is worse than one that never went
+   * away.
    */
-  const setCardDismissed = async (cardKey: DismissibleCardKey, dismissed: boolean) => {
-    setDismissedCards((prev) => {
-      const next = new Set(prev);
-      if (dismissed) next.add(cardKey);
-      else next.delete(cardKey);
-      return next;
-    });
+  const dismissStarterCard = async (cardKey: DismissibleCardKey) => {
+    setDismissedCards((prev) => new Set(prev).add(cardKey));
     try {
       const res = await fetch("/api/dashboard/dismissed-cards", {
-        method: dismissed ? "POST" : "DELETE",
+        method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ cardKey })
       });
@@ -1437,8 +1430,7 @@ export function AiFlowsManager({
     } catch {
       setDismissedCards((prev) => {
         const next = new Set(prev);
-        if (dismissed) next.delete(cardKey);
-        else next.add(cardKey);
+        next.delete(cardKey);
         return next;
       });
     }
@@ -2879,7 +2871,7 @@ export function AiFlowsManager({
             return row ? { id: row.id, enabled: row.enabled } : null;
           })()}
           onInstalled={reload}
-          onDismiss={() => setCardDismissed("aiflows.review_request", true)}
+          onDismiss={() => dismissStarterCard("aiflows.review_request")}
           onEdit={(flowId) => {
             const row = flows.find((f) => f.id === flowId);
             if (!row) return;
@@ -2898,7 +2890,7 @@ export function AiFlowsManager({
             return row ? { id: row.id, enabled: row.enabled } : null;
           })()}
           onInstalled={reload}
-          onDismiss={() => setCardDismissed("aiflows.document_receipt", true)}
+          onDismiss={() => dismissStarterCard("aiflows.document_receipt")}
           onEdit={(flowId) => {
             const row = flows.find((f) => f.id === flowId);
             if (!row) return;
@@ -2917,7 +2909,7 @@ export function AiFlowsManager({
             return row ? { id: row.id, enabled: row.enabled } : null;
           })()}
           onInstalled={reload}
-          onDismiss={() => setCardDismissed("aiflows.new_lead_intake", true)}
+          onDismiss={() => dismissStarterCard("aiflows.new_lead_intake")}
           onEdit={(flowId) => {
             const row = flows.find((f) => f.id === flowId);
             if (!row) return;
@@ -2927,22 +2919,6 @@ export function AiFlowsManager({
             setEditorBaseline(JSON.stringify(opened));
           }}
         />
-      )}
-      {dismissedCards.size > 0 && (
-        <p className="text-xs text-parchment/40">
-          {t("starterHidden", { count: dismissedCards.size })}{" "}
-          <button
-            type="button"
-            onClick={() => {
-              for (const key of [...dismissedCards]) {
-                void setCardDismissed(key as DismissibleCardKey, false);
-              }
-            }}
-            className="text-signal-teal hover:underline"
-          >
-            {t("starterShowAgain")}
-          </button>
-        </p>
       )}
       {flows.length === 0 ? (
         <Card>

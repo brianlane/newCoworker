@@ -1889,8 +1889,6 @@
       "aiflowLibraryTitle": "AiFlow library",
       "aiflowLibrarySubtitle": "Starter automations we built, plus the ones other businesses run successfully.",
       "starterDismiss": "Hide this suggestion",
-      "starterHidden": "{count, plural, one {# starter suggestion hidden.} other {# starter suggestions hidden.}}",
-      "starterShowAgain": "Show them again",
       "aiflowNotFound": "AiFlow not found",
       "aiflowRunsTitle": "AiFlow runs",
       "aiflowRunsTitleFlow": "{name}: runs",

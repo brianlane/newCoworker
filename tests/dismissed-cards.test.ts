@@ -11,8 +11,7 @@ import {
   DISMISSIBLE_CARDS,
   dismissCard,
   isDismissibleCardKey,
-  listDismissedCardKeys,
-  restoreCard
+  listDismissedCardKeys
 } from "@/lib/dashboard/dismissed-cards";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
@@ -129,45 +128,3 @@ describe("dismissCard", () => {
   });
 });
 
-describe("restoreCard", () => {
-  function deleteDb(error: { message: string } | null = null) {
-    const chain: Record<string, unknown> = {};
-    chain.from = vi.fn(() => chain);
-    chain.delete = vi.fn(() => chain);
-    let eqCalls = 0;
-    chain.eq = vi.fn(() => {
-      eqCalls += 1;
-      // Resolves only once BOTH filters are applied (user + card).
-      return eqCalls >= 2 ? Promise.resolve({ error }) : chain;
-    });
-    return chain;
-  }
-
-  it("deletes the user's row for that card", async () => {
-    const db = deleteDb();
-    await restoreCard(USER, "aiflows.review_request", db as never);
-    expect(db.from).toHaveBeenCalledWith("user_dismissed_cards");
-    expect(db.eq).toHaveBeenCalledWith("user_id", USER);
-    expect(db.eq).toHaveBeenCalledWith("card_key", "aiflows.review_request");
-  });
-
-  it("rejects a key that is not in the catalog", async () => {
-    await expect(restoreCard(USER, "nope", deleteDb() as never)).rejects.toThrow(
-      'restoreCard: unknown card key "nope"'
-    );
-  });
-
-  it("throws on a delete error", async () => {
-    const db = deleteDb({ message: "boom" });
-    await expect(restoreCard(USER, "aiflows.review_request", db as never)).rejects.toThrow(
-      "restoreCard: boom"
-    );
-  });
-
-  it("falls back to the service client", async () => {
-    const db = deleteDb();
-    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
-    await restoreCard(USER, "aiflows.review_request");
-    expect(createSupabaseServiceClient).toHaveBeenCalled();
-  });
-});

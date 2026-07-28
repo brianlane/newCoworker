@@ -106,7 +106,7 @@ export function ReviewRequestCard({
             <p className="text-sm text-parchment/60">
               An hour after a calendar appointment ends, your coworker texts the customer
               your review link and briefs you. Paste your Google review link (or any
-              review URL) to install the starter — it&apos;s created disabled so you can
+              review URL) to install the starter. It&apos;s created disabled so you can
               tweak the wording first.
             </p>
             <div className="flex flex-wrap items-center gap-2">
