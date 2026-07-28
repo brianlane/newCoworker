@@ -22,6 +22,15 @@ export const OWNER_PHONE_PLACEHOLDER = "{{owner_phone}}";
 export const OWNER_EMAIL_PLACEHOLDER = "{{owner_email}}";
 /** Placeholder a scrubbed pinned roster member becomes; refilled on duplicate. */
 export const EMPLOYEE_NAME_PLACEHOLDER = "{{employee_name}}";
+/**
+ * Stand-in URL a curated review-request starter ships with in the library.
+ * Chosen so the published definition stays schema-valid (a `{{review_link}}`
+ * token would fail as an unknown template scope). The use route replaces it
+ * with the owner's cleaned Google/Yelp/Facebook URL before createAiFlow.
+ * Host is example.invalid so a forgotten substitution can never text a real
+ * customer a working link.
+ */
+export const REVIEW_LINK_PLACEHOLDER = "https://example.invalid/your-review-link";
 /** Replacement for a personal name found in free-text copy (not refilled). */
 export const NAME_PLACEHOLDER = "[name]";
 /** Stand-in for a blanked tenant-specific mailbox connection id (schema-valid). */
@@ -251,6 +260,8 @@ type SubstituteOptions = {
   ownerPhone?: string | null;
   ownerEmail?: string | null;
   employeeName?: string | null;
+  /** Owner-pasted Google/Yelp/Facebook review URL for the review starter. */
+  reviewLink?: string | null;
 };
 
 function deepSubstitute(value: unknown, replacements: ReadonlyArray<[string, string]>): unknown {
@@ -283,15 +294,26 @@ export function applyLibrarySubstitutions(
   if (opts.ownerPhone) replacements.push([OWNER_PHONE_PLACEHOLDER, opts.ownerPhone]);
   if (opts.ownerEmail) replacements.push([OWNER_EMAIL_PLACEHOLDER, opts.ownerEmail]);
   if (opts.employeeName) replacements.push([EMPLOYEE_NAME_PLACEHOLDER, opts.employeeName]);
+  if (opts.reviewLink) replacements.push([REVIEW_LINK_PLACEHOLDER, opts.reviewLink]);
   if (replacements.length === 0) return scrubbed;
   return deepSubstitute(scrubbed, replacements);
 }
 
 /** True if any library placeholder still remains anywhere in the value. */
 export function hasUnresolvedPlaceholders(value: unknown): boolean {
-  const tokens = [OWNER_PHONE_PLACEHOLDER, OWNER_EMAIL_PLACEHOLDER, EMPLOYEE_NAME_PLACEHOLDER];
+  const tokens = [
+    OWNER_PHONE_PLACEHOLDER,
+    OWNER_EMAIL_PLACEHOLDER,
+    EMPLOYEE_NAME_PLACEHOLDER,
+    REVIEW_LINK_PLACEHOLDER
+  ];
   const json = JSON.stringify(value) ?? "";
   return tokens.some((t) => json.includes(t));
+}
+
+/** True when this library definition still needs the owner to paste a review URL. */
+export function needsReviewLink(value: unknown): boolean {
+  return (JSON.stringify(value) ?? "").includes(REVIEW_LINK_PLACEHOLDER);
 }
 
 /**

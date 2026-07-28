@@ -8,6 +8,7 @@ import { getAiFlowLibraryEntry } from "@/lib/ai-flows/library";
 import { Card } from "@/components/ui/Card";
 import { AiFlowView } from "@/components/dashboard/AiFlowView";
 import { AiFlowLibraryActions } from "@/components/dashboard/AiFlowLibraryActions";
+import { needsReviewLink } from "@/lib/ai-flows/scrub";
 
 export const dynamic = "force-dynamic";
 
@@ -101,7 +102,11 @@ export default async function AiFlowLibraryDetailPage({ params }: Props) {
       )}
 
       <Card className="space-y-4">
-        <AiFlowLibraryActions businessId={businessId} libraryId={entry.id} />
+        <AiFlowLibraryActions
+          businessId={businessId}
+          libraryId={entry.id}
+          needsReviewLink={needsReviewLink(entry.scrubbed_definition)}
+        />
         <p className="text-[11px] text-parchment/40">
           {entry.source === "starter"
             ? "This flow was built by New Coworker, so its wording is written to be used as is. It installs disabled, and you can edit every message before turning it on."

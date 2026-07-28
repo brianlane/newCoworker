@@ -6,9 +6,11 @@ import {
   NIL_UUID,
   OWNER_EMAIL_PLACEHOLDER,
   OWNER_PHONE_PLACEHOLDER,
+  REVIEW_LINK_PLACEHOLDER,
   applyLibrarySubstitutions,
   containsLikelyPii,
   hasUnresolvedPlaceholders,
+  needsReviewLink,
   redactText,
   scrubDefinition,
   templateKeyFromName
@@ -426,6 +428,29 @@ describe("applyLibrarySubstitutions", () => {
   it("returns the input unchanged when no values are provided", () => {
     expect(applyLibrarySubstitutions(scrubbed, {})).toBe(scrubbed);
   });
+
+  it("fills a review-link placeholder from the pasted URL", () => {
+    const withLink = {
+      version: 1,
+      trigger: { channel: "calendar", on: "event_end", followMinutes: 60, calendar: "both", conditions: [] },
+      steps: [
+        {
+          id: "s1",
+          type: "send_sms",
+          to: "{{vars.customer_phone}}",
+          body: `Leave a review: ${REVIEW_LINK_PLACEHOLDER}`
+        }
+      ]
+    };
+    expect(needsReviewLink(withLink)).toBe(true);
+    const filled = applyLibrarySubstitutions(withLink, {
+      reviewLink: "https://g.page/r/abc/review"
+    });
+    expect(needsReviewLink(filled)).toBe(false);
+    expect(hasUnresolvedPlaceholders(filled)).toBe(false);
+    expect(JSON.stringify(filled)).toContain("https://g.page/r/abc/review");
+    expect(JSON.stringify(filled)).not.toContain(REVIEW_LINK_PLACEHOLDER);
+  });
 });
 
 describe("scrubDefinition edge cases", () => {
@@ -465,5 +490,13 @@ describe("scrubDefinition edge cases", () => {
 describe("hasUnresolvedPlaceholders", () => {
   it("returns false for undefined input", () => {
     expect(hasUnresolvedPlaceholders(undefined)).toBe(false);
+  });
+});
+
+describe("needsReviewLink", () => {
+  it("detects the sentinel URL and ignores everything else", () => {
+    expect(needsReviewLink({ body: REVIEW_LINK_PLACEHOLDER })).toBe(true);
+    expect(needsReviewLink({ body: "https://g.page/r/abc/review" })).toBe(false);
+    expect(needsReviewLink(undefined)).toBe(false);
   });
 });
