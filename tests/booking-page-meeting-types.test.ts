@@ -216,6 +216,19 @@ describe("ensureDefaultMeetingType", () => {
     expect(insert.intake_questions).toEqual([
       { id: "page-q", label: "Page question", type: "text", required: false, enabled: true }
     ]);
+    // And the page's copy goes, or a SECOND meeting created later would
+    // inherit a list nothing in the dashboard shows.
+    expect(calls.find((c) => c.method === "update")?.args[0]).toEqual({ intake_questions: [] });
+  });
+
+  it("leaves the page alone when it had no questions to hand over", async () => {
+    const { client, calls } = fakeDb([
+      { data: [], error: null },
+      { data: [], error: null },
+      { data: typeRow(), error: null }
+    ]);
+    await ensureDefaultMeetingType(pageRow({ intake_questions: [] }), client);
+    expect(calls.some((c) => c.method === "update")).toBe(false);
   });
 
   it("falls back to the default name and duration on a bare page", async () => {

@@ -303,8 +303,9 @@ export async function ensureDefaultMeetingType(
   const durationMinutes = page.allowed_durations.length
     ? Math.min(...page.allowed_durations)
     : 30;
+  const questions = parseIntakeQuestions(page.intake_questions);
   try {
-    return await createMeetingType(
+    const created = await createMeetingType(
       page.business_id,
       {
         name: page.title?.trim() || DEFAULT_MEETING_NAME,
@@ -313,10 +314,22 @@ export async function ensureDefaultMeetingType(
         durationMinutes,
         // An explicit list, never null: inheriting questions the dashboard
         // no longer shows would surprise the owner.
-        intakeQuestions: parseIntakeQuestions(page.intake_questions)
+        intakeQuestions: questions
       },
       db
     );
+    // The questions now live on the meeting that inherited them, so the
+    // page's copy has to go, exactly as the backfill migration does it: a
+    // second meeting created later would otherwise inherit a list nothing
+    // in the dashboard shows. Best-effort, since the meeting people book
+    // matters more than the leftover copy.
+    if (questions.length > 0) {
+      await db
+        .from("booking_pages")
+        .update({ intake_questions: [] })
+        .eq("business_id", page.business_id);
+    }
+    return created;
   } catch {
     // A second tab won the insert (unique slug per business); serve theirs.
     const after = await listMeetingTypes(page.business_id, db);

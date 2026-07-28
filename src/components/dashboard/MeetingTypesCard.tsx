@@ -55,12 +55,20 @@ export function MeetingTypesCard({
   businessId,
   pageRef,
   roster,
+  inheritedQuestions,
   refreshKey = 0
 }: {
   businessId: string;
   /** The page's vanity slug or token: the first segment of every meeting URL. */
   pageRef: string | null;
   roster: RosterMember[];
+  /**
+   * What a meeting with a null list is actually asking today: storage keeps
+   * null for rows that predate per-meeting questions, and the public page
+   * resolves those from the page. Showing them empty would let the first
+   * edit drop questions the owner never saw.
+   */
+  inheritedQuestions: IntakeQuestion[];
   /**
    * Bumped by the Bookings page once its own load finishes, which is where
    * a first-view page and its default meeting are provisioned. Without it
@@ -148,12 +156,15 @@ export function MeetingTypesCard({
   const typesRef = useRef<MeetingTypeRow[] | null>(null);
   typesRef.current = types;
   const pendingRef = useRef<Record<string, IntakeQuestion[]>>({});
+  const inheritedRef = useRef<IntakeQuestion[]>(inheritedQuestions);
+  inheritedRef.current = inheritedQuestions;
   const queueRef = useRef<Promise<void>>(Promise.resolve());
   const patchQuestionsFor = useCallback(
     (id: string) => (mutate: (questions: IntakeQuestion[]) => IntakeQuestion[]) => {
       queueRef.current = queueRef.current.then(async () => {
         const stored = typesRef.current?.find((x) => x.id === id);
-        const base = pendingRef.current[id] ?? stored?.intake_questions ?? [];
+        const base =
+          pendingRef.current[id] ?? stored?.intake_questions ?? inheritedRef.current;
         const next = mutate(base);
         pendingRef.current[id] = next;
         const saved = await patchType(id, { intakeQuestions: next });
@@ -429,7 +440,7 @@ export function MeetingTypesCard({
                     <p className="text-sm text-parchment/70">{t("meetingQuestionsLabel")}</p>
                     <p className="mt-0.5 text-xs text-parchment/40">{t("meetingQuestionsHint")}</p>
                     <IntakeQuestionsEditor
-                      questions={type.intake_questions ?? []}
+                      questions={type.intake_questions ?? inheritedQuestions}
                       saving={saving}
                       idPrefix={`mt-${type.id}`}
                       onChange={patchQuestionsFor(type.id)}

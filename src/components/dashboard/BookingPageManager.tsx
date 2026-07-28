@@ -375,6 +375,7 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
         businessId={businessId}
         pageRef={page ? (page.slug ?? page.token) : null}
         roster={roster}
+        inheritedQuestions={page?.intake_questions ?? []}
         refreshKey={meetingsKey}
       />
 
