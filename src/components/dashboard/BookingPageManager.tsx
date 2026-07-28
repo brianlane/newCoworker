@@ -7,10 +7,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  IntakeQuestionsEditor,
-  type IntakeQuestion
-} from "@/components/dashboard/IntakeQuestionsEditor";
+import { type IntakeQuestion } from "@/components/dashboard/IntakeQuestionsEditor";
 import { MeetingTypesCard } from "@/components/dashboard/MeetingTypesCard";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
@@ -58,7 +55,6 @@ type LoadState = {
   roster: RosterMember[];
 };
 
-const DURATION_CHOICES = [15, 30, 60];
 const NOTICE_CHOICES = [0, 60, 120, 240, 1440];
 const ADVANCE_CHOICES = [7, 14, 30, 60];
 const BUFFER_CHOICES = [0, 10, 15, 30];
@@ -73,6 +69,11 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
   const [saving, setSaving] = useState(false);
   const [saveError, setSaveError] = useState<string | null>(null);
   const [copied, setCopied] = useState(false);
+  // Both start closed: the meetings list IS the page, and these are
+  // settings an owner visits rarely.
+  const [linkOpen, setLinkOpen] = useState(false);
+  const [sharedOpen, setSharedOpen] = useState(false);
+  const [meetingsKey, setMeetingsKey] = useState(0);
 
   const api = `/api/dashboard/booking-page?businessId=${encodeURIComponent(businessId)}`;
 
@@ -83,6 +84,10 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
       const body = await res.json();
       if (!res.ok || !body.ok) throw new Error("load failed");
       setState(body.data as LoadState);
+      // This load is where a first-view page and its default meeting are
+      // provisioned, so the meetings list has to re-read after it: its own
+      // fetch runs in parallel and can answer before the provision lands.
+      setMeetingsKey((n) => n + 1);
     } catch {
       setLoadFailed(true);
     }
@@ -117,30 +122,6 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
       }
     },
     [api, t]
-  );
-
-  // Question edits are serialized and expressed as MUTATIONS of the latest
-  // acknowledged list, not as whole lists built from render-time state: two
-  // blur saves in flight (label, then options) would otherwise race, and
-  // whichever finished last would silently undo the other.
-  const pageQuestionsRef = useRef<IntakeQuestion[]>([]);
-  pageQuestionsRef.current = state?.page?.intake_questions ?? [];
-  const pendingQuestionsRef = useRef<IntakeQuestion[] | null>(null);
-  const questionsQueueRef = useRef<Promise<void>>(Promise.resolve());
-  const patchQuestions = useCallback(
-    (mutate: (questions: IntakeQuestion[]) => IntakeQuestion[]) => {
-      questionsQueueRef.current = questionsQueueRef.current.then(async () => {
-        const base = pendingQuestionsRef.current ?? pageQuestionsRef.current;
-        const next = mutate(base);
-        pendingQuestionsRef.current = next;
-        const saved = await patch({ intakeQuestions: next });
-        // A refused save resyncs the next edit from what the server actually
-        // holds; a successful one keeps building on this list.
-        if (!saved) pendingQuestionsRef.current = null;
-      });
-      return questionsQueueRef.current;
-    },
-    [patch]
   );
 
   const rotate = useCallback(async () => {
@@ -212,6 +193,8 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
   const label = "block text-xs uppercase tracking-wider text-parchment/40";
   const select =
     "mt-1 rounded-md border border-parchment/20 bg-deep-ink px-2 py-1.5 text-sm text-parchment";
+  const textField =
+    "mt-1 w-full rounded-md border border-parchment/20 bg-deep-ink px-3 py-2 text-sm text-parchment placeholder:text-parchment/30";
 
   return (
     <div className="space-y-6">
@@ -262,9 +245,12 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
         </Card>
       ) : null}
 
+      {/* The scheduling link itself, on one line: the meetings below are
+          what owners actually manage. Slug, title, blurb, and the rotate
+          button sit behind Customize so they stop competing with them. */}
       <Card>
-        <div className="flex items-center justify-between gap-4">
-          <div>
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
             <h2 className="text-base font-semibold text-parchment">{t("linkTitle")}</h2>
             <p className="mt-1 text-sm text-parchment/60">{t("linkSubtitle")}</p>
           </div>
@@ -299,397 +285,408 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
               </button>
               <button
                 type="button"
-                disabled={saving}
-                onClick={() => void rotate()}
+                onClick={() => setLinkOpen(!linkOpen)}
                 className="rounded-md border border-parchment/20 px-3 py-2 text-xs text-parchment/60 hover:border-parchment/40"
               >
-                {t("rotateLink")}
+                {linkOpen ? t("customizeDone") : t("customizeLink")}
               </button>
             </div>
 
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              <div>
-                <span className={label}>{t("durationsLabel")}</span>
-                <div className="mt-1 flex gap-3">
-                  {DURATION_CHOICES.map((d) => (
-                    <label key={d} className="flex items-center gap-1 text-sm text-parchment/70">
-                      <input
-                        type="checkbox"
-                        checked={page.allowed_durations.includes(d)}
-                        disabled={saving}
-                        onChange={(e) => {
-                          const next = e.target.checked
-                            ? [...page.allowed_durations, d].sort((a, b) => a - b)
-                            : page.allowed_durations.filter((x) => x !== d);
-                          if (next.length === 0) return;
-                          void patch({ allowedDurations: next });
-                        }}
-                      />
-                      {d} {t("minutes")}
+            {linkOpen ? (
+              <div className="space-y-4 border-t border-parchment/10 pt-4">
+                <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+                  <div>
+                    <label className={label} htmlFor="bp-slug">
+                      {t("slugLabel")}
                     </label>
-                  ))}
+                    <input
+                      id="bp-slug"
+                      type="text"
+                      maxLength={60}
+                      placeholder={t("slugPlaceholder")}
+                      className={textField}
+                      defaultValue={page.slug ?? ""}
+                      disabled={saving}
+                      onBlur={(e) => {
+                        const raw = e.target.value.trim().toLowerCase();
+                        if (raw === (page.slug ?? "")) return;
+                        void patch({ slug: raw === "" ? null : raw });
+                      }}
+                    />
+                    <p className="mt-1 text-xs text-parchment/40">{t("slugHint")}</p>
+                  </div>
+                  <div>
+                    <label className={label} htmlFor="bp-title">
+                      {t("titleLabel")}
+                    </label>
+                    <input
+                      id="bp-title"
+                      type="text"
+                      maxLength={120}
+                      placeholder={t("titlePlaceholder")}
+                      className={textField}
+                      defaultValue={page.title ?? ""}
+                      disabled={saving}
+                      onBlur={(e) => {
+                        const raw = e.target.value.trim();
+                        if (raw === (page.title ?? "")) return;
+                        void patch({ title: raw === "" ? null : raw });
+                      }}
+                    />
+                    <p className="mt-1 text-xs text-parchment/40">{t("titleHint")}</p>
+                  </div>
+                </div>
+                <div>
+                  <label className={label} htmlFor="bp-desc">
+                    {t("descriptionLabel")}
+                  </label>
+                  <textarea
+                    id="bp-desc"
+                    rows={2}
+                    maxLength={500}
+                    placeholder={t("descriptionPlaceholder")}
+                    className={textField}
+                    defaultValue={page.description ?? ""}
+                    disabled={saving}
+                    onBlur={(e) => void patch({ description: e.target.value })}
+                  />
+                </div>
+                <div>
+                  <button
+                    type="button"
+                    disabled={saving}
+                    onClick={() => void rotate()}
+                    className="rounded-md border border-parchment/20 px-3 py-2 text-xs text-parchment/60 hover:border-parchment/40"
+                  >
+                    {t("rotateLink")}
+                  </button>
+                  <p className="mt-1 text-xs text-parchment/40">{t("rotateHint")}</p>
                 </div>
               </div>
-              <div>
-                <label className={label} htmlFor="bp-notice">
-                  {t("noticeLabel")}
-                </label>
-                <select
-                  id="bp-notice"
-                  className={select}
-                  disabled={saving}
-                  value={page.min_notice_minutes}
-                  onChange={(e) => void patch({ minNoticeMinutes: Number(e.target.value) })}
-                >
-                  {NOTICE_CHOICES.map((m) => (
-                    <option key={m} value={m}>
-                      {m === 0
-                        ? t("noticeNone")
-                        : m < 1440
-                          ? t("noticeHours", { hours: m / 60 })
-                          : t("noticeDay")}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className={label} htmlFor="bp-advance">
-                  {t("advanceLabel")}
-                </label>
-                <select
-                  id="bp-advance"
-                  className={select}
-                  disabled={saving}
-                  value={page.max_advance_days}
-                  onChange={(e) => void patch({ maxAdvanceDays: Number(e.target.value) })}
-                >
-                  {ADVANCE_CHOICES.map((d) => (
-                    <option key={d} value={d}>
-                      {t("advanceDays", { days: d })}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className={label} htmlFor="bp-buffer">
-                  {t("bufferLabel")}
-                </label>
-                <select
-                  id="bp-buffer"
-                  className={select}
-                  disabled={saving}
-                  value={page.buffer_minutes}
-                  onChange={(e) => void patch({ bufferMinutes: Number(e.target.value) })}
-                >
-                  {BUFFER_CHOICES.map((m) => (
-                    <option key={m} value={m}>
-                      {m === 0 ? t("bufferNone") : `${m} ${t("minutes")}`}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className={label} htmlFor="bp-cap">
-                  {t("dailyCapLabel")}
-                </label>
-                <input
-                  id="bp-cap"
-                  type="number"
-                  min={1}
-                  max={100}
-                  placeholder={t("dailyCapUnlimited")}
-                  // Number inputs get a narrow intrinsic width that clips
-                  // the "Unlimited" placeholder; fill the grid cell instead.
-                  className={`${select} w-full`}
-                  disabled={saving}
-                  defaultValue={page.max_daily_bookings ?? ""}
-                  onBlur={(e) => {
-                    const raw = e.target.value.trim();
-                    void patch({ maxDailyBookings: raw === "" ? null : Number(raw) });
-                  }}
-                />
-              </div>
-              <div className="flex items-end">
-                <label className="flex items-center gap-2 text-sm text-parchment/70">
-                  <input
-                    type="checkbox"
-                    checked={page.require_staff_on_shift}
-                    disabled={saving}
-                    onChange={(e) => void patch({ requireStaffOnShift: e.target.checked })}
-                  />
-                  {t("staffGateLabel")}
-                </label>
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-              <div>
-                <label className={label} htmlFor="bp-slug">
-                  {t("slugLabel")}
-                </label>
-                <input
-                  id="bp-slug"
-                  type="text"
-                  maxLength={60}
-                  placeholder={t("slugPlaceholder")}
-                  className="mt-1 w-full rounded-md border border-parchment/20 bg-deep-ink px-3 py-2 text-sm text-parchment placeholder:text-parchment/30"
-                  defaultValue={page.slug ?? ""}
-                  disabled={saving}
-                  onBlur={(e) => {
-                    const raw = e.target.value.trim().toLowerCase();
-                    if (raw === (page.slug ?? "")) return;
-                    void patch({ slug: raw === "" ? null : raw });
-                  }}
-                />
-                <p className="mt-1 text-xs text-parchment/40">{t("slugHint")}</p>
-              </div>
-              <div>
-                <label className={label} htmlFor="bp-title">
-                  {t("titleLabel")}
-                </label>
-                <input
-                  id="bp-title"
-                  type="text"
-                  maxLength={120}
-                  placeholder={t("titlePlaceholder")}
-                  className="mt-1 w-full rounded-md border border-parchment/20 bg-deep-ink px-3 py-2 text-sm text-parchment placeholder:text-parchment/30"
-                  defaultValue={page.title ?? ""}
-                  disabled={saving}
-                  onBlur={(e) => {
-                    const raw = e.target.value.trim();
-                    if (raw === (page.title ?? "")) return;
-                    void patch({ title: raw === "" ? null : raw });
-                  }}
-                />
-              </div>
-            </div>
-
-            <div>
-              <label className={label} htmlFor="bp-desc">
-                {t("descriptionLabel")}
-              </label>
-              <textarea
-                id="bp-desc"
-                rows={2}
-                maxLength={500}
-                className="mt-1 w-full rounded-md border border-parchment/20 bg-deep-ink px-3 py-2 text-sm text-parchment"
-                defaultValue={page.description ?? ""}
-                disabled={saving}
-                onBlur={(e) => void patch({ description: e.target.value })}
-              />
-            </div>
+            ) : null}
           </div>
         ) : null}
         {saveError ? <p className="mt-3 text-sm text-red-400">{saveError}</p> : null}
       </Card>
 
-      {/* Who the page books. Availability follows the answer: an assigned
-          page must never offer a time nobody who could take it is working. */}
-      <Card>
-        <h2 className="text-base font-semibold text-parchment">{t("assignTitle")}</h2>
-        <p className="mt-1 text-sm text-parchment/60">{t("assignSubtitle")}</p>
-        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
-          <div>
-            <label className={label} htmlFor="bp-assign-mode">
-              {t("assignModeLabel")}
-            </label>
-            <select
-              id="bp-assign-mode"
-              className={select}
-              disabled={saving}
-              value={page?.assignment_mode ?? "any"}
-              onChange={(e) => {
-                const mode = e.target.value;
-                // A fixed page needs a name, so default to the first
-                // teammate rather than saving a mode that cannot work.
-                const employeeId =
-                  mode === "fixed" && !page?.employee_id ? (roster[0]?.id ?? null) : undefined;
-                void patch({
-                  assignmentMode: mode,
-                  ...(employeeId === undefined ? {} : { employeeId })
-                });
-              }}
-            >
-              <option value="any">{t("assignModeAny")}</option>
-              <option value="round_robin" disabled={roster.length === 0}>
-                {t("assignModeRoundRobin")}
-              </option>
-              <option value="fixed" disabled={roster.length === 0}>
-                {t("assignModeFixed")}
-              </option>
-            </select>
-          </div>
-          {page?.assignment_mode === "fixed" ? (
-            <div>
-              <label className={label} htmlFor="bp-assign-employee">
-                {t("assignEmployeeLabel")}
-              </label>
-              <select
-                id="bp-assign-employee"
-                className={select}
-                disabled={saving}
-                value={page.employee_id ?? ""}
-                onChange={(e) => void patch({ employeeId: e.target.value || null })}
-              >
-                {roster.map((m) => (
-                  <option key={m.id} value={m.id}>
-                    {m.name}
-                  </option>
-                ))}
-              </select>
-            </div>
-          ) : null}
-        </div>
-        {page && page.assignment_mode !== "any" ? (
-          <label className="mt-4 flex items-center gap-2 text-sm text-parchment/70">
-            <input
-              type="checkbox"
-              checked={page.notify_assignee}
-              disabled={saving}
-              onChange={(e) => void patch({ notifyAssignee: e.target.checked })}
-            />
-            {t("assignNotifyLabel")}
-          </label>
-        ) : null}
-        <p className="mt-3 text-xs text-parchment/40">
-          {roster.length === 0 ? t("assignNoRoster") : t("assignHint")}
-        </p>
-      </Card>
-
-      {/* Confirmations and reminders: what the visitor hears after booking.
-          The confirmation carries what a bare calendar invite cannot (both
-          clocks, the video link, the manage link), and the reminders are the
-          part that actually reduces no-shows. */}
-      <Card>
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h2 className="text-base font-semibold text-parchment">{t("remindersTitle")}</h2>
-            <p className="mt-1 text-sm text-parchment/60">{t("remindersSubtitle")}</p>
-          </div>
-          <label className="flex items-center gap-2 text-sm text-parchment/70">
-            <input
-              type="checkbox"
-              checked={page ? page.reminders_enabled : true}
-              disabled={saving}
-              onChange={(e) => void patch({ remindersEnabled: e.target.checked })}
-            />
-            {t("remindersToggle")}
-          </label>
-        </div>
-        <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
-          <div className="flex items-end">
-            <label className="flex items-center gap-2 text-sm text-parchment/70">
-              <input
-                type="checkbox"
-                checked={page ? page.send_confirmation_email : true}
-                disabled={saving}
-                onChange={(e) => void patch({ sendConfirmationEmail: e.target.checked })}
-              />
-              {t("confirmationEmailLabel")}
-            </label>
-          </div>
-          <div>
-            <label className={label} htmlFor="bp-reminder-email">
-              {t("reminderEmailLabel")}
-            </label>
-            <select
-              id="bp-reminder-email"
-              className={select}
-              disabled={saving || (page ? !page.reminders_enabled : false)}
-              value={page?.reminder_email_hours ?? 24}
-              onChange={(e) => void patch({ reminderEmailHours: Number(e.target.value) })}
-            >
-              {REMINDER_HOUR_CHOICES.map((h) => (
-                <option key={h} value={h}>
-                  {h === 0 ? t("reminderOff") : t("reminderHoursBefore", { hours: h })}
-                </option>
-              ))}
-            </select>
-          </div>
-          <div>
-            <label className={label} htmlFor="bp-reminder-sms">
-              {t("reminderSmsLabel")}
-            </label>
-            <select
-              id="bp-reminder-sms"
-              className={select}
-              disabled={saving || (page ? !page.reminders_enabled : false)}
-              value={page?.reminder_sms_hours ?? 2}
-              onChange={(e) => void patch({ reminderSmsHours: Number(e.target.value) })}
-            >
-              {REMINDER_HOUR_CHOICES.map((h) => (
-                <option key={h} value={h}>
-                  {h === 0 ? t("reminderOff") : t("reminderHoursBefore", { hours: h })}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-        <p className="mt-3 text-xs text-parchment/40">{t("remindersHint")}</p>
-      </Card>
-
-      {/* Meeting types: each one is its own shareable link rendering that
-          meeting alone, with the page's settings underneath it. */}
+      {/* The meetings themselves: each one its own shareable link showing
+          only that meeting. This is what owners came here to manage. */}
       <MeetingTypesCard
         businessId={businessId}
         pageRef={page ? (page.slug ?? page.token) : null}
         roster={roster}
+        inheritedQuestions={page?.intake_questions ?? []}
+        refreshKey={meetingsKey}
       />
 
-      {/* Intake questions: what the visitor answers while booking. Same
-          vocabulary as the white-glove questionnaire; answers travel with
-          the appointment (event notes, booking row, manage page). */}
-      <Card>
-        <h2 className="text-base font-semibold text-parchment">{t("intakeTitle")}</h2>
-        <p className="mt-1 text-sm text-parchment/60">{t("intakeSubtitle")}</p>
-        <IntakeQuestionsEditor
-          questions={page?.intake_questions ?? []}
-          saving={saving}
-          idPrefix="bp"
-          onChange={patchQuestions}
-        />
-      </Card>
+      {/* Everything below applies to EVERY meeting, which is why it is one
+          collapsed section instead of four cards competing with the list
+          above. */}
+      <div className="rounded-lg border border-parchment/15 bg-ink-800/40">
+        <button
+          type="button"
+          className="flex w-full items-center justify-between gap-3 px-5 py-4 text-left"
+          onClick={() => setSharedOpen(!sharedOpen)}
+        >
+          <span>
+            <span className="block text-base font-semibold text-parchment">
+              {t("sharedTitle")}
+            </span>
+            <span className="mt-1 block text-sm text-parchment/60">{t("sharedSubtitle")}</span>
+          </span>
+          <span className="whitespace-nowrap text-xs text-parchment/50">
+            {sharedOpen ? t("sharedHide") : t("sharedShow")}
+          </span>
+        </button>
+        {sharedOpen ? (
+          <div className="space-y-6 px-5 pb-5">
+            {/* When people can book: the window every meeting is offered in. */}
+            <Card>
+              <h2 className="text-base font-semibold text-parchment">{t("rulesTitle")}</h2>
+              <p className="mt-1 text-sm text-parchment/60">{t("rulesSubtitle")}</p>
+              <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                <div>
+                  <label className={label} htmlFor="bp-notice">
+                    {t("noticeLabel")}
+                  </label>
+                  <select
+                    id="bp-notice"
+                    className={select}
+                    disabled={saving}
+                    value={page?.min_notice_minutes ?? 120}
+                    onChange={(e) => void patch({ minNoticeMinutes: Number(e.target.value) })}
+                  >
+                    {NOTICE_CHOICES.map((m) => (
+                      <option key={m} value={m}>
+                        {m === 0
+                          ? t("noticeNone")
+                          : m < 1440
+                            ? t("noticeHours", { hours: m / 60 })
+                            : t("noticeDay")}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className={label} htmlFor="bp-advance">
+                    {t("advanceLabel")}
+                  </label>
+                  <select
+                    id="bp-advance"
+                    className={select}
+                    disabled={saving}
+                    value={page?.max_advance_days ?? 14}
+                    onChange={(e) => void patch({ maxAdvanceDays: Number(e.target.value) })}
+                  >
+                    {ADVANCE_CHOICES.map((d) => (
+                      <option key={d} value={d}>
+                        {t("advanceDays", { days: d })}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className={label} htmlFor="bp-buffer">
+                    {t("bufferLabel")}
+                  </label>
+                  <select
+                    id="bp-buffer"
+                    className={select}
+                    disabled={saving}
+                    value={page?.buffer_minutes ?? 0}
+                    onChange={(e) => void patch({ bufferMinutes: Number(e.target.value) })}
+                  >
+                    {BUFFER_CHOICES.map((m) => (
+                      <option key={m} value={m}>
+                        {m === 0 ? t("bufferNone") : `${m} ${t("minutes")}`}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className={label} htmlFor="bp-cap">
+                    {t("dailyCapLabel")}
+                  </label>
+                  <input
+                    id="bp-cap"
+                    type="number"
+                    min={1}
+                    max={100}
+                    placeholder={t("dailyCapUnlimited")}
+                    // Number inputs get a narrow intrinsic width that clips
+                    // the "Unlimited" placeholder; fill the grid cell.
+                    className={`${select} w-full`}
+                    disabled={saving}
+                    defaultValue={page?.max_daily_bookings ?? ""}
+                    onBlur={(e) => {
+                      const raw = e.target.value.trim();
+                      void patch({ maxDailyBookings: raw === "" ? null : Number(raw) });
+                    }}
+                  />
+                </div>
+                <div className="flex items-end sm:col-span-2">
+                  <label className="flex items-center gap-2 text-sm text-parchment/70">
+                    <input
+                      type="checkbox"
+                      checked={page?.require_staff_on_shift ?? false}
+                      disabled={saving}
+                      onChange={(e) => void patch({ requireStaffOnShift: e.target.checked })}
+                    />
+                    {t("staffGateLabel")}
+                  </label>
+                </div>
+              </div>
+            </Card>
 
-      {/* Cancellation waitlist: independent of the public link, it also
-          covers waitlist entries the AI coworker takes over SMS/voice.
-          A missing settings row reads as the defaults (on, 60 min hold);
-          the first toggle write creates the row. */}
-      <Card>
-        <div className="flex items-center justify-between gap-4">
-          <div>
-            <h2 className="text-base font-semibold text-parchment">{t("waitlistTitle")}</h2>
-            <p className="mt-1 text-sm text-parchment/60">{t("waitlistSubtitle")}</p>
+            {/* Who bookings go to. Availability follows the answer: an
+                assigned page must never offer a time nobody who could take
+                it is working. */}
+            <Card>
+              <h2 className="text-base font-semibold text-parchment">{t("assignTitle")}</h2>
+              <p className="mt-1 text-sm text-parchment/60">{t("assignSubtitle")}</p>
+              <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-2">
+                <div>
+                  <label className={label} htmlFor="bp-assign-mode">
+                    {t("assignModeLabel")}
+                  </label>
+                  <select
+                    id="bp-assign-mode"
+                    className={select}
+                    disabled={saving}
+                    value={page?.assignment_mode ?? "any"}
+                    onChange={(e) => {
+                      const mode = e.target.value;
+                      // A fixed page needs a name, so default to the first
+                      // teammate rather than saving a mode that cannot work.
+                      const employeeId =
+                        mode === "fixed" && !page?.employee_id ? (roster[0]?.id ?? null) : undefined;
+                      void patch({
+                        assignmentMode: mode,
+                        ...(employeeId === undefined ? {} : { employeeId })
+                      });
+                    }}
+                  >
+                    <option value="any">{t("assignModeAny")}</option>
+                    <option value="round_robin" disabled={roster.length === 0}>
+                      {t("assignModeRoundRobin")}
+                    </option>
+                    <option value="fixed" disabled={roster.length === 0}>
+                      {t("assignModeFixed")}
+                    </option>
+                  </select>
+                </div>
+                {page?.assignment_mode === "fixed" ? (
+                  <div>
+                    <label className={label} htmlFor="bp-assign-employee">
+                      {t("assignEmployeeLabel")}
+                    </label>
+                    <select
+                      id="bp-assign-employee"
+                      className={select}
+                      disabled={saving}
+                      value={page.employee_id ?? ""}
+                      onChange={(e) => void patch({ employeeId: e.target.value || null })}
+                    >
+                      {roster.map((m) => (
+                        <option key={m.id} value={m.id}>
+                          {m.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : null}
+              </div>
+              {page && page.assignment_mode !== "any" ? (
+                <label className="mt-4 flex items-center gap-2 text-sm text-parchment/70">
+                  <input
+                    type="checkbox"
+                    checked={page.notify_assignee}
+                    disabled={saving}
+                    onChange={(e) => void patch({ notifyAssignee: e.target.checked })}
+                  />
+                  {t("assignNotifyLabel")}
+                </label>
+              ) : null}
+              <p className="mt-3 text-xs text-parchment/40">
+                {roster.length === 0 ? t("assignNoRoster") : t("assignHint")}
+              </p>
+            </Card>
+
+            {/* Confirmations and reminders: what the visitor hears after booking.
+                The confirmation carries what a bare calendar invite cannot (both
+                clocks, the video link, the manage link), and the reminders are the
+                part that actually reduces no-shows. */}
+            <Card>
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-base font-semibold text-parchment">{t("remindersTitle")}</h2>
+                  <p className="mt-1 text-sm text-parchment/60">{t("remindersSubtitle")}</p>
+                </div>
+                <label className="flex items-center gap-2 text-sm text-parchment/70">
+                  <input
+                    type="checkbox"
+                    checked={page ? page.reminders_enabled : true}
+                    disabled={saving}
+                    onChange={(e) => void patch({ remindersEnabled: e.target.checked })}
+                  />
+                  {t("remindersToggle")}
+                </label>
+              </div>
+              <div className="mt-4 grid grid-cols-1 gap-4 sm:grid-cols-3">
+                <div className="flex items-end">
+                  <label className="flex items-center gap-2 text-sm text-parchment/70">
+                    <input
+                      type="checkbox"
+                      checked={page ? page.send_confirmation_email : true}
+                      disabled={saving}
+                      onChange={(e) => void patch({ sendConfirmationEmail: e.target.checked })}
+                    />
+                    {t("confirmationEmailLabel")}
+                  </label>
+                </div>
+                <div>
+                  <label className={label} htmlFor="bp-reminder-email">
+                    {t("reminderEmailLabel")}
+                  </label>
+                  <select
+                    id="bp-reminder-email"
+                    className={select}
+                    disabled={saving || (page ? !page.reminders_enabled : false)}
+                    value={page?.reminder_email_hours ?? 24}
+                    onChange={(e) => void patch({ reminderEmailHours: Number(e.target.value) })}
+                  >
+                    {REMINDER_HOUR_CHOICES.map((h) => (
+                      <option key={h} value={h}>
+                        {h === 0 ? t("reminderOff") : t("reminderHoursBefore", { hours: h })}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className={label} htmlFor="bp-reminder-sms">
+                    {t("reminderSmsLabel")}
+                  </label>
+                  <select
+                    id="bp-reminder-sms"
+                    className={select}
+                    disabled={saving || (page ? !page.reminders_enabled : false)}
+                    value={page?.reminder_sms_hours ?? 2}
+                    onChange={(e) => void patch({ reminderSmsHours: Number(e.target.value) })}
+                  >
+                    {REMINDER_HOUR_CHOICES.map((h) => (
+                      <option key={h} value={h}>
+                        {h === 0 ? t("reminderOff") : t("reminderHoursBefore", { hours: h })}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+              <p className="mt-3 text-xs text-parchment/40">{t("remindersHint")}</p>
+            </Card>
+
+            {/* Cancellation waitlist: independent of the public link, it also
+                covers waitlist entries the AI coworker takes over SMS/voice.
+                A missing settings row reads as the defaults (on, 60 min hold);
+                the first toggle write creates the row. */}
+            <Card>
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <h2 className="text-base font-semibold text-parchment">{t("waitlistTitle")}</h2>
+                  <p className="mt-1 text-sm text-parchment/60">{t("waitlistSubtitle")}</p>
+                </div>
+                <label className="flex items-center gap-2 text-sm text-parchment/70">
+                  <input
+                    type="checkbox"
+                    checked={page ? page.waitlist_enabled : true}
+                    disabled={saving}
+                    onChange={(e) => void patch({ waitlistEnabled: e.target.checked })}
+                  />
+                  {t("waitlistToggle")}
+                </label>
+              </div>
+              <div className="mt-4">
+                <label className={label} htmlFor="bp-waitlist-ttl">
+                  {t("waitlistTtlLabel")}
+                </label>
+                <select
+                  id="bp-waitlist-ttl"
+                  className={select}
+                  disabled={saving || (page ? !page.waitlist_enabled : false)}
+                  value={page?.waitlist_offer_ttl_minutes ?? 60}
+                  onChange={(e) => void patch({ waitlistOfferTtlMinutes: Number(e.target.value) })}
+                >
+                  {WAITLIST_TTL_CHOICES.map((m) => (
+                    <option key={m} value={m}>
+                      {m < 60 ? `${m} ${t("minutes")}` : t("waitlistTtlHours", { hours: m / 60 })}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-2 text-xs text-parchment/40">{t("waitlistHint")}</p>
+              </div>
+            </Card>
           </div>
-          <label className="flex items-center gap-2 text-sm text-parchment/70">
-            <input
-              type="checkbox"
-              checked={page ? page.waitlist_enabled : true}
-              disabled={saving}
-              onChange={(e) => void patch({ waitlistEnabled: e.target.checked })}
-            />
-            {t("waitlistToggle")}
-          </label>
-        </div>
-        <div className="mt-4">
-          <label className={label} htmlFor="bp-waitlist-ttl">
-            {t("waitlistTtlLabel")}
-          </label>
-          <select
-            id="bp-waitlist-ttl"
-            className={select}
-            disabled={saving || (page ? !page.waitlist_enabled : false)}
-            value={page?.waitlist_offer_ttl_minutes ?? 60}
-            onChange={(e) => void patch({ waitlistOfferTtlMinutes: Number(e.target.value) })}
-          >
-            {WAITLIST_TTL_CHOICES.map((m) => (
-              <option key={m} value={m}>
-                {m < 60 ? `${m} ${t("minutes")}` : t("waitlistTtlHours", { hours: m / 60 })}
-              </option>
-            ))}
-          </select>
-          <p className="mt-2 text-xs text-parchment/40">{t("waitlistHint")}</p>
-        </div>
-      </Card>
+        ) : null}
+      </div>
 
       <Card>
         <h2 className="text-base font-semibold text-parchment">{t("upcomingTitle")}</h2>
