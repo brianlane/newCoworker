@@ -78,20 +78,30 @@ export function MeetingTypesCard({
 
   const api = `/api/dashboard/booking-page/meeting-types?businessId=${encodeURIComponent(businessId)}`;
 
+  // Reads can overlap (the first mount, then the refreshKey bump, then a
+  // save), and the older one is not always the first to answer. Only the
+  // newest read may paint, or an empty pre-provision response could land
+  // last and blank a list that really has meetings in it.
+  const readSeq = useRef(0);
+  const paintedSeq = useRef(0);
   /** Answers the fetched list, since React state is not readable yet. */
   const load = useCallback(async (): Promise<MeetingTypeRow[] | null> => {
+    const seq = ++readSeq.current;
     try {
       const res = await fetch(api);
       const body = await res.json();
       if (!res.ok || !body.ok) {
-        setError(t("saveFailed"));
+        if (seq >= paintedSeq.current) setError(t("saveFailed"));
         return null;
       }
       const fetched = body.data.meetingTypes as MeetingTypeRow[];
-      setTypes(fetched);
+      if (seq >= paintedSeq.current) {
+        paintedSeq.current = seq;
+        setTypes(fetched);
+      }
       return fetched;
     } catch {
-      setError(t("saveFailed"));
+      if (seq >= paintedSeq.current) setError(t("saveFailed"));
       return null;
     }
   }, [api, t]);
