@@ -17,12 +17,21 @@ async function resolveDb(client?: SupabaseClient): Promise<SupabaseClient> {
   return client ?? (await createSupabaseServiceClient());
 }
 
+/**
+ * Where a catalog entry came from: 'community' entries are aggregated from
+ * tenant flows that ran successfully and are PII-scrubbed; 'starter' entries
+ * are the curated, code-defined templates in src/lib/ai-flows/templates.ts,
+ * published verbatim.
+ */
+export type AiFlowLibrarySource = "community" | "starter";
+
 export type AiFlowLibraryRow = {
   id: string;
   template_key: string;
   title: string;
   summary: string;
   category: string | null;
+  source: AiFlowLibrarySource;
   scrubbed_definition: AiFlowDefinition;
   total_successful_runs: number;
   total_runs: number;
@@ -49,7 +58,7 @@ export type AiFlowLibraryCandidate = {
 };
 
 const LIBRARY_COLS =
-  "id,template_key,title,summary,category,scrubbed_definition,total_successful_runs,total_runs,businesses_using,runs_last_7d,download_count,last_run_at,stats,first_published_at,updated_at";
+  "id,template_key,title,summary,category,source,scrubbed_definition,total_successful_runs,total_runs,businesses_using,runs_last_7d,download_count,last_run_at,stats,first_published_at,updated_at";
 
 export async function listAiFlowLibrary(
   options: { category?: string } = {},
@@ -58,7 +67,12 @@ export async function listAiFlowLibrary(
   const db = await resolveDb(client);
   let query = db.from("ai_flow_library").select(LIBRARY_COLS);
   if (options.category) query = query.eq("category", options.category);
-  const { data, error } = await query.order("total_successful_runs", { ascending: false });
+  // Starters lead the catalog: they are the curated entries we stand behind,
+  // and a brand-new tenant's library would otherwise open on whichever
+  // community flow happens to have run the most.
+  const { data, error } = await query
+    .order("source", { ascending: false })
+    .order("total_successful_runs", { ascending: false });
   if (error) throw new Error(`listAiFlowLibrary: ${error.message}`);
   return (data ?? []) as AiFlowLibraryRow[];
 }
@@ -143,6 +157,7 @@ export type UpsertLibraryEntryInput = {
   title: string;
   summary: string;
   category: string | null;
+  source: AiFlowLibrarySource;
   scrubbedDefinition: Record<string, unknown>;
   totalSuccessfulRuns: number;
   totalRuns: number;
@@ -170,6 +185,7 @@ export async function upsertLibraryEntry(
       title: input.title,
       summary: input.summary,
       category: input.category,
+      source: input.source,
       scrubbed_definition: input.scrubbedDefinition,
       total_successful_runs: input.totalSuccessfulRuns,
       total_runs: input.totalRuns,

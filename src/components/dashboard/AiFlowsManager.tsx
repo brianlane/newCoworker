@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { useTranslations } from "next-intl";
 import { Card } from "@/components/ui/Card";
 import { Plus, Trash2, ArrowUp, ArrowDown, Sparkles, Pencil, Copy } from "lucide-react";
 import {
@@ -58,6 +59,7 @@ import {
 import { ReviewRequestCard } from "@/components/dashboard/ReviewRequestCard";
 import { DocumentReceiptCard } from "@/components/dashboard/DocumentReceiptCard";
 import { NewLeadIntakeCard } from "@/components/dashboard/NewLeadIntakeCard";
+import type { DismissibleCardKey } from "@/lib/dashboard/dismissed-cards";
 import {
   ContactRefPicker,
   type PickerPerson,
@@ -981,7 +983,8 @@ export function AiFlowsManager({
   initialFlows,
   initialEditId,
   initialAdaptDraft,
-  webhooksEnabled = true
+  webhooksEnabled = true,
+  initialDismissedCards
 }: {
   businessId: string;
   businessType?: string | null;
@@ -996,9 +999,15 @@ export function AiFlowsManager({
    * upgrade note instead of setup instructions.
    */
   webhooksEnabled?: boolean;
+  /** Starter cards this user has hidden (per user, not per business). */
+  initialDismissedCards?: DismissibleCardKey[];
 }) {
+  const t = useTranslations("dashboard.pages");
   const examples = getAiFlowExampleCopy(businessType);
   const [flows, setFlows] = useState<AiFlowRow[]>(initialFlows);
+  const [dismissedCards, setDismissedCards] = useState<Set<string>>(
+    () => new Set(initialDismissedCards ?? [])
+  );
   const [sort, setSort] = usePersistentSort(
     "dashboard.aiflows.sort",
     { field: "last_run_at", dir: "desc" },
@@ -1403,6 +1412,36 @@ export function AiFlowsManager({
     });
     const json = (await res.json()) as { ok: boolean; data?: AiFlowRow[] };
     if (json.ok && json.data) setFlows(json.data);
+  };
+
+  /**
+   * Hide (or bring back) a starter card for this user. The local set moves
+   * first so the card disappears instantly; a failed write is reverted, since
+   * a card that silently reappears on the next load is worse than one that
+   * never went away.
+   */
+  const setCardDismissed = async (cardKey: DismissibleCardKey, dismissed: boolean) => {
+    setDismissedCards((prev) => {
+      const next = new Set(prev);
+      if (dismissed) next.add(cardKey);
+      else next.delete(cardKey);
+      return next;
+    });
+    try {
+      const res = await fetch("/api/dashboard/dismissed-cards", {
+        method: dismissed ? "POST" : "DELETE",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ cardKey })
+      });
+      if (!res.ok) throw new Error("request failed");
+    } catch {
+      setDismissedCards((prev) => {
+        const next = new Set(prev);
+        if (dismissed) next.delete(cardKey);
+        else next.add(cardKey);
+        return next;
+      });
+    }
   };
 
   const save = async () => {
@@ -2828,59 +2867,83 @@ export function AiFlowsManager({
           {runNotice}
         </p>
       )}
-      {/* Review-request starter installer, driven by the live flow list so
-          installs appear below immediately and deleting the starter
-          re-offers the installer. */}
-      <ReviewRequestCard
-        businessId={businessId}
-        installedFlow={(() => {
-          const row = flows.find((f) => f.name === REVIEW_STARTER_NAME);
-          return row ? { id: row.id, enabled: row.enabled } : null;
-        })()}
-        onInstalled={reload}
-        onEdit={(flowId) => {
-          const row = flows.find((f) => f.id === flowId);
-          if (!row) return;
-          setAiWarnings([]);
-          const opened = editorFromRow(row);
-          setEditor(opened);
-          setEditorBaseline(JSON.stringify(opened));
-        }}
-      />
-      {/* Document-receipt starter installer — same live-list wiring. */}
-      <DocumentReceiptCard
-        businessId={businessId}
-        installedFlow={(() => {
-          const row = flows.find((f) => f.name === DOC_RECEIPT_STARTER_NAME);
-          return row ? { id: row.id, enabled: row.enabled } : null;
-        })()}
-        onInstalled={reload}
-        onEdit={(flowId) => {
-          const row = flows.find((f) => f.id === flowId);
-          if (!row) return;
-          setAiWarnings([]);
-          const opened = editorFromRow(row);
-          setEditor(opened);
-          setEditorBaseline(JSON.stringify(opened));
-        }}
-      />
-      {/* New Lead Intake starter installer, same live-list wiring. */}
-      <NewLeadIntakeCard
-        businessId={businessId}
-        installedFlow={(() => {
-          const row = flows.find((f) => f.name === NEW_LEAD_INTAKE_STARTER_NAME);
-          return row ? { id: row.id, enabled: row.enabled } : null;
-        })()}
-        onInstalled={reload}
-        onEdit={(flowId) => {
-          const row = flows.find((f) => f.id === flowId);
-          if (!row) return;
-          setAiWarnings([]);
-          const opened = editorFromRow(row);
-          setEditor(opened);
-          setEditorBaseline(JSON.stringify(opened));
-        }}
-      />
+      {/* Starter installers, driven by the live flow list so installs appear
+          below immediately and deleting the starter re-offers the installer.
+          Each is hidden once the user dismisses it; every starter stays
+          available from Browse library either way. */}
+      {!dismissedCards.has("aiflows.review_request") && (
+        <ReviewRequestCard
+          businessId={businessId}
+          installedFlow={(() => {
+            const row = flows.find((f) => f.name === REVIEW_STARTER_NAME);
+            return row ? { id: row.id, enabled: row.enabled } : null;
+          })()}
+          onInstalled={reload}
+          onDismiss={() => setCardDismissed("aiflows.review_request", true)}
+          onEdit={(flowId) => {
+            const row = flows.find((f) => f.id === flowId);
+            if (!row) return;
+            setAiWarnings([]);
+            const opened = editorFromRow(row);
+            setEditor(opened);
+            setEditorBaseline(JSON.stringify(opened));
+          }}
+        />
+      )}
+      {!dismissedCards.has("aiflows.document_receipt") && (
+        <DocumentReceiptCard
+          businessId={businessId}
+          installedFlow={(() => {
+            const row = flows.find((f) => f.name === DOC_RECEIPT_STARTER_NAME);
+            return row ? { id: row.id, enabled: row.enabled } : null;
+          })()}
+          onInstalled={reload}
+          onDismiss={() => setCardDismissed("aiflows.document_receipt", true)}
+          onEdit={(flowId) => {
+            const row = flows.find((f) => f.id === flowId);
+            if (!row) return;
+            setAiWarnings([]);
+            const opened = editorFromRow(row);
+            setEditor(opened);
+            setEditorBaseline(JSON.stringify(opened));
+          }}
+        />
+      )}
+      {!dismissedCards.has("aiflows.new_lead_intake") && (
+        <NewLeadIntakeCard
+          businessId={businessId}
+          installedFlow={(() => {
+            const row = flows.find((f) => f.name === NEW_LEAD_INTAKE_STARTER_NAME);
+            return row ? { id: row.id, enabled: row.enabled } : null;
+          })()}
+          onInstalled={reload}
+          onDismiss={() => setCardDismissed("aiflows.new_lead_intake", true)}
+          onEdit={(flowId) => {
+            const row = flows.find((f) => f.id === flowId);
+            if (!row) return;
+            setAiWarnings([]);
+            const opened = editorFromRow(row);
+            setEditor(opened);
+            setEditorBaseline(JSON.stringify(opened));
+          }}
+        />
+      )}
+      {dismissedCards.size > 0 && (
+        <p className="text-xs text-parchment/40">
+          {t("starterHidden", { count: dismissedCards.size })}{" "}
+          <button
+            type="button"
+            onClick={() => {
+              for (const key of [...dismissedCards]) {
+                void setCardDismissed(key as DismissibleCardKey, false);
+              }
+            }}
+            className="text-signal-teal hover:underline"
+          >
+            {t("starterShowAgain")}
+          </button>
+        </p>
+      )}
       {flows.length === 0 ? (
         <Card>
           <p className="py-6 text-center text-sm text-parchment/60">

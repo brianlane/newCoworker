@@ -1,11 +1,15 @@
 /**
  * Curated, code-defined AiFlow templates the dashboard installs with one
- * click (distinct from the ai_flow_library catalog, which is aggregated from
- * real tenant flows and pruned hourly — a curated starter would be deleted by
- * that refresh, so it lives here in code instead).
+ * click. These are authored here rather than aggregated into the
+ * ai_flow_library catalog, which is rebuilt hourly from real tenant flows and
+ * prunes anything it did not just publish.
  *
- * Every template must pass `parseAiFlowDefinition` — enforced by unit test —
- * so the install path (POST /api/aiflows) can never 400 on our own template.
+ * The ones listed in `libraryStarterTemplates()` are ALSO published to the
+ * public library on every refresh (source 'starter'), so they survive that
+ * prune: see src/lib/ai-flows/library-refresh.ts.
+ *
+ * Every template must pass `parseAiFlowDefinition`, enforced by unit test, so
+ * the install path (POST /api/aiflows) can never 400 on our own template.
  */
 import type { AiFlowDefinition } from "@/lib/ai-flows/schema";
 
@@ -14,8 +18,13 @@ export type AiFlowTemplate = {
   key: string;
   /** Flow name the install creates. */
   name: string;
+  /** One-line public description; required to publish to the library. */
+  summary?: string;
   definition: AiFlowDefinition;
 };
+
+/** A template published to the public library: its summary is the catalog copy. */
+export type LibraryStarterTemplate = AiFlowTemplate & { summary: string };
 
 /**
  * Source label every Meta Lead Ads path sends: the direct connection
@@ -32,7 +41,7 @@ export const META_LEAD_ADS_SOURCE = "facebook_lead_ads";
  * DISABLED so the owner reviews the SMS wording before anything fires.
  *
  * Scoped to source "facebook_lead_ads" (every Meta path sends it) so this
- * auto-texting starter can never fire for unrelated webhook events — e.g.
+ * auto-texting starter can never fire for unrelated webhook events, e.g.
  * scraped Instagram prospects (source "instagram_scraper"), who never
  * consented to texts. Backlog imports of Meta leads reach it by setting the
  * importer's source label to "facebook_lead_ads".
@@ -78,13 +87,13 @@ export function metaLeadFollowUpTemplate(): AiFlowTemplate {
           to: "{{vars.lead_phone}}",
           body:
             "Hi {{vars.lead_name}}, thanks for your interest! I got your note and " +
-            "I'm on it — what's the best time to give you a quick call?"
+            "I'm on it. What's the best time to give you a quick call?"
         },
         {
           id: "s_notify_owner",
           type: "notify_owner",
           message:
-            "New Meta ad lead: {{vars.lead_name}} — {{vars.lead_phone}} / " +
+            "New Meta ad lead: {{vars.lead_name}}, {{vars.lead_phone}} / " +
             "{{vars.lead_email}}. Details: {{vars.lead_notes}}. I texted them a hello; " +
             "they're filed in your customers."
         }
@@ -107,8 +116,8 @@ export const INSTAGRAM_SCRAPER_SOURCE = "instagram_scraper";
  * "Instagram prospect intake": the starter flow the Instagram-leads How-To
  * guide installs. A webhook event (a scraped profile forwarded by an
  * Apify/Make/Zapier bridge, or a row from the lead-backlog importer with
- * source "instagram_scraper") is parsed, summarized to the owner, and —
- * when the profile carries a usable phone — filed as a contact tagged
+ * source "instagram_scraper") is parsed, summarized to the owner, and, when
+ * the profile carries a usable phone, filed as a contact tagged
  * `instagram-prospect`.
  *
  * Deliberately NO send_sms / send_email step: scraped prospects never gave
@@ -167,7 +176,7 @@ export function instagramProspectTemplate(): AiFlowTemplate {
           id: "s_notify_owner",
           type: "notify_owner",
           message:
-            "New Instagram prospect: {{vars.lead_name}} (@{{vars.lead_handle}}) — " +
+            "New Instagram prospect: {{vars.lead_name}} (@{{vars.lead_handle}}): " +
             "{{vars.lead_phone}} / {{vars.lead_email}}. Notes: {{vars.lead_notes}}. " +
             "I did NOT contact them (scraped prospects haven't consented to texts or " +
             "marketing email). If their profile has a phone number I'll file them in " +
@@ -216,7 +225,7 @@ export function cleanReviewLink(raw: string): string | null {
  * the platform lock-in): when a calendar appointment ENDS (plus a settle-in
  * hour), read the customer's name + phone off the event, text them the
  * business's review link, and brief the owner. Parameterized on the review
- * link because it's per-business — the installer passes the owner's pasted
+ * link because it's per-business: the installer passes the owner's pasted
  * Google (or Yelp/Facebook) review URL, pre-cleaned by cleanReviewLink.
  * Installed DISABLED so the owner reviews the wording before anything fires.
  *
@@ -279,7 +288,7 @@ export function reviewRequestTemplate(reviewLink: string): AiFlowTemplate {
           type: "notify_owner",
           // {{vars.actions_taken}} is the engine's truthful ledger of what
           // actually went out: "texted +1602… " on a send, "skipped a text
-          // to 'TBD' …" when the extracted phone wasn't usable — so this
+          // to 'TBD' …" when the extracted phone wasn't usable, so this
           // brief can never claim a text that the send step skipped.
           message:
             "Appointment \u201c{{trigger.event_title}}\u201d wrapped up. Review " +
@@ -296,7 +305,7 @@ export function reviewRequestTemplate(reviewLink: string): AiFlowTemplate {
  * an email carrying attachments, email the sender a receipt confirmation
  * (naming the files) and brief the owner. The trigger is a regex anchored
  * to the `[inbound attachments] …` line the inbound path appends to the
- * very END of windowText — a mail with no attachments never fires it, and
+ * very END of windowText, so a mail with no attachments never fires it, and
  * prose that merely says "attachments:" can't false-positive. Installed
  * DISABLED so the owner reviews the wording (and their connected sending
  * mailbox) first.
@@ -304,10 +313,13 @@ export function reviewRequestTemplate(reviewLink: string): AiFlowTemplate {
  * No parameters: {{trigger.attachments}} carries the filenames and
  * {{trigger.from}} the sender, both supplied by the tenant_email scope.
  */
-export function documentReceiptTemplate(): AiFlowTemplate {
+export function documentReceiptTemplate(): LibraryStarterTemplate {
   return {
     key: "document_receipt_confirmation",
     name: "Confirm document receipt",
+    summary:
+      "When someone emails documents to your AI mailbox, your coworker replies confirming " +
+      "exactly which files arrived and briefs you.",
     definition: {
       version: 1,
       trigger: {
@@ -331,7 +343,7 @@ export function documentReceiptTemplate(): AiFlowTemplate {
           type: "notify_owner",
           message:
             "Documents received from {{trigger.from}}: {{trigger.attachments}}. " +
-            "I emailed them a receipt confirmation — the files are on your Emails page."
+            "I emailed them a receipt confirmation, and the files are on your Emails page."
         }
       ]
     }
@@ -342,7 +354,7 @@ export function documentReceiptTemplate(): AiFlowTemplate {
  * "Send new leads your price sheet": when a new lead texts in, extract their
  * details, file them, text them the chosen document as an expiring link, and
  * wait for the reply. Parameterized on the document because documents are
- * per-business — the installer passes the owner's picked doc (id + title),
+ * per-business: the installer passes the owner's picked doc (id + title),
  * and the save-time validator refuses anything that isn't a real, ready,
  * client-facing document of theirs.
  */
@@ -361,10 +373,14 @@ export function documentReceiptTemplate(): AiFlowTemplate {
  * Industry-neutral on purpose: no vertical-specific pitch, no quiet-hours
  * timezone baked in. Owners tailor the copy in the editor after install.
  */
-export function newLeadIntakeTemplate(): AiFlowTemplate {
+export function newLeadIntakeTemplate(): LibraryStarterTemplate {
   return {
     key: "new_lead_intake",
     name: "New Lead Intake",
+    summary:
+      "Text your coworker a lead's name and number in plain words and it takes it from " +
+      "there: the lead is filed, texted an intro (crediting whoever referred them), and " +
+      "offered to your team, pinned to the teammate you name.",
     definition: {
       version: 1,
       trigger: { channel: "manual" },
@@ -689,6 +705,25 @@ export function prospectOutreachTemplate(): AiFlowTemplate {
   };
 }
 
+/**
+ * Category every starter is filed under in the public library, so the browse
+ * page can group them together and filter them out.
+ */
+export const LIBRARY_STARTER_CATEGORY = "Starters";
+
+/**
+ * The curated templates published to the public library on every refresh.
+ *
+ * Only parameterless templates belong here: a library entry is duplicated
+ * verbatim (the "Use this flow" route fills placeholders, it cannot invent a
+ * review link or pick a document), so the ones that take an argument stay
+ * install-only. Their definitions are published as authored, NOT scrubbed:
+ * they contain no tenant data by construction, and the wording is the point.
+ */
+export function libraryStarterTemplates(): LibraryStarterTemplate[] {
+  return [documentReceiptTemplate(), newLeadIntakeTemplate()];
+}
+
 export function priceSheetShareTemplate(documentId: string, documentTitle: string): AiFlowTemplate {
   return {
     key: "price_sheet_share",
@@ -711,7 +746,7 @@ export function priceSheetShareTemplate(documentId: string, documentTitle: strin
           id: "s_notify_owner",
           type: "notify_owner",
           message:
-            "A new texter ({{trigger.from}}) asked about your services — I texted them " +
+            "A new texter ({{trigger.from}}) asked about your services, so I texted them " +
             "the document. Link I shared: {{vars.shared_doc_url}}"
         }
       ]

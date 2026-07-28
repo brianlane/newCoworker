@@ -72,6 +72,7 @@ const ROW = {
   title: "ReferralExchange lead",
   summary: "When SMS: send_sms",
   category: "Real estate",
+  source: "community",
   scrubbed_definition: { version: 1 },
   total_successful_runs: 9,
   total_runs: 12,
@@ -93,6 +94,9 @@ describe("listAiFlowLibrary", () => {
     expect(await listAiFlowLibrary()).toEqual([ROW]);
     expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
     expect(b.eq).not.toHaveBeenCalled();
+    // Starters lead the catalog, then the most-run community flows.
+    expect(b.order).toHaveBeenNthCalledWith(1, "source", { ascending: false });
+    expect(b.order).toHaveBeenNthCalledWith(2, "total_successful_runs", { ascending: false });
   });
 
   it("applies a category filter", async () => {
@@ -235,6 +239,7 @@ describe("upsertLibraryEntry", () => {
     title: "T",
     summary: "S",
     category: "C",
+    source: "community" as const,
     scrubbedDefinition: { version: 1 },
     totalSuccessfulRuns: 1,
     totalRuns: 2,
@@ -247,7 +252,11 @@ describe("upsertLibraryEntry", () => {
     const { db, b } = makeDb({});
     await upsertLibraryEntry({ ...base, stats: { runsPerDay: 3 } }, db as never);
     expect(b.upsert).toHaveBeenCalledWith(
-      expect.objectContaining({ template_key: "k", stats: { runsPerDay: 3 } }),
+      expect.objectContaining({
+        template_key: "k",
+        source: "community",
+        stats: { runsPerDay: 3 }
+      }),
       { onConflict: "template_key" }
     );
   });

@@ -1091,6 +1091,7 @@
       "scopeUse6": "Identify the connected Zoom account (name and email shown on your dashboard card)",
       "scopeUse7": "Fetch a cloud-recorded meeting's transcript, automatically after your meetings while auto-import is on, or when you click Import transcript, to produce meeting minutes in your Documents",
       "scopeUse8": "Translate a meeting ID you paste into its past-meeting instance (Zoom's transcript lookup needs the instance for instant meetings) and keep imports de-duplicated",
+      "scopeUse9": "Required by Zoom for the transcript-ready notification that powers automatic minutes; the app makes no other use of it",
       "privacyNote": "Your Zoom tokens are encrypted at rest (AES-256-GCM) in a row-level-security-protected database, are never exposed to the browser, and are deleted when you disconnect. Meeting content is read only to produce meeting minutes in your document library: automatically after your own cloud-recorded meetings while auto-import is enabled (one switch on the Zoom card turns it off), or when you explicitly import one. Everything else touches only the scheduling data for appointments your coworker manages. See our <privacy>Privacy Policy</privacy> for details. Questions? Reach us any time via <contact>newcoworker.com/contact</contact>."
     },
     "compareGhl": {
@@ -1886,7 +1887,10 @@
       "aiflowsTitle": "AiFlows",
       "aiflowsSubtitle": "Automate multi-step workflows: start from an inbound text or email, on a schedule, or on demand: browse links, extract details, ask for approval, and send texts or emails.",
       "aiflowLibraryTitle": "AiFlow library",
-      "aiflowLibrarySubtitle": "Popular automations other businesses run successfully.",
+      "aiflowLibrarySubtitle": "Starter automations we built, plus the ones other businesses run successfully.",
+      "starterDismiss": "Hide this suggestion",
+      "starterHidden": "{count, plural, one {# starter suggestion hidden.} other {# starter suggestions hidden.}}",
+      "starterShowAgain": "Show them again",
       "aiflowNotFound": "AiFlow not found",
       "aiflowRunsTitle": "AiFlow runs",
       "aiflowRunsTitleFlow": "{name}: runs",

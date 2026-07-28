@@ -16,6 +16,16 @@ function Stat({ icon, value, label }: { icon: React.ReactNode; value: string; la
   );
 }
 
+/**
+ * A curated starter that no tenant has run yet: its run stats are all zero
+ * because nobody has adopted it, not because it stopped working. Community
+ * entries only reach the catalog with >= 1 successful run, so they are never
+ * unproven.
+ */
+function unproven(row: AiFlowLibraryRow): boolean {
+  return row.source === "starter" && row.total_successful_runs === 0;
+}
+
 function runsPerDay(row: AiFlowLibraryRow): string {
   const perDay =
     typeof row.stats?.runsPerDay === "number"
@@ -145,6 +155,11 @@ export function AiFlowLibraryBrowser({
                   >
                     {row.title}
                   </Link>
+                  {row.source === "starter" && (
+                    <span className="shrink-0 rounded-full bg-signal-teal/15 px-2 py-0.5 text-[10px] font-semibold text-signal-teal">
+                      Starter
+                    </span>
+                  )}
                   {row.category && (
                     <span className="shrink-0 rounded-full border border-parchment/15 bg-deep-ink/40 px-2 py-0.5 text-[10px] text-parchment/60">
                       {row.category}
@@ -162,33 +177,44 @@ export function AiFlowLibraryBrowser({
               </button>
             </div>
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-parchment/10 pt-2">
-              <Stat
-                icon={<TrendingUp className="h-3.5 w-3.5" />}
-                value={`${row.total_successful_runs.toLocaleString()} runs`}
-                label="Total successful runs across all businesses"
-              />
-              <Stat
-                icon={<Building2 className="h-3.5 w-3.5" />}
-                value={`${row.businesses_using.toLocaleString()} businesses`}
-                label="Businesses using this flow"
-              />
+              {/* A starter nobody has run yet would otherwise read as a wall of
+                  zeros, which looks like a broken flow rather than a new one. */}
+              {unproven(row) ? (
+                <span className="text-[11px] text-parchment/60">
+                  Built by New Coworker. Installs disabled so you can review the wording
+                  first.
+                </span>
+              ) : (
+                <>
+                  <Stat
+                    icon={<TrendingUp className="h-3.5 w-3.5" />}
+                    value={`${row.total_successful_runs.toLocaleString()} runs`}
+                    label="Total successful runs across all businesses"
+                  />
+                  <Stat
+                    icon={<Building2 className="h-3.5 w-3.5" />}
+                    value={`${row.businesses_using.toLocaleString()} businesses`}
+                    label="Businesses using this flow"
+                  />
+                  <Stat
+                    icon={<TrendingUp className="h-3.5 w-3.5" />}
+                    value={runsPerDay(row)}
+                    label="Successful runs per day (last 7 days)"
+                  />
+                  {row.last_run_at && (
+                    <Stat
+                      icon={<Clock className="h-3.5 w-3.5" />}
+                      value={new Date(row.last_run_at).toLocaleDateString()}
+                      label="Last successful run"
+                    />
+                  )}
+                </>
+              )}
               <Stat
                 icon={<Download className="h-3.5 w-3.5" />}
                 value={`${row.download_count.toLocaleString()} uses`}
                 label="Times duplicated from the library"
               />
-              <Stat
-                icon={<TrendingUp className="h-3.5 w-3.5" />}
-                value={runsPerDay(row)}
-                label="Successful runs per day (last 7 days)"
-              />
-              {row.last_run_at && (
-                <Stat
-                  icon={<Clock className="h-3.5 w-3.5" />}
-                  value={new Date(row.last_run_at).toLocaleDateString()}
-                  label="Last successful run"
-                />
-              )}
             </div>
           </Card>
         ))
