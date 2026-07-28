@@ -249,6 +249,13 @@ export async function getProspect(
 /**
  * The prospect this address belongs to, if any. Used when a reply or an
  * unsubscribe arrives and all we know is who sent it.
+ *
+ * Equality, not ILIKE, and that is not a micro-optimization: ILIKE reads `_`
+ * as a single-character wildcard, and underscores are ordinary in email local
+ * parts, so `john_smith@acme.com` would also match `johnXsmith@acme.com` and
+ * could mark the wrong prospect replied. Addresses are written lowercase (the
+ * probe lowercases what it scrapes), so equality on a lowercased needle is both
+ * exact and an index lookup.
  */
 export async function findProspectByEmail(
   businessId: string,
@@ -262,7 +269,7 @@ export async function findProspectByEmail(
     .from("outreach_prospects")
     .select()
     .eq("business_id", businessId)
-    .ilike("email", normalized)
+    .eq("email", normalized)
     .limit(1)
     .maybeSingle();
   if (error) throw new Error(`findProspectByEmail: ${error.message}`);

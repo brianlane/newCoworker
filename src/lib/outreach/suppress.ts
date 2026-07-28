@@ -48,6 +48,10 @@ export async function suppressProspect(
 /**
  * Stamp the marketing opt-out on any contact of this business holding the
  * address, so campaign audiences exclude them too. Best-effort by contract.
+ *
+ * Equality on a lowercased address, the same convention the rest of the
+ * codebase uses for contact lookups. ILIKE would read an underscore in the
+ * local part as a wildcard and could suppress somebody else entirely.
  */
 export async function suppressContactByEmail(
   businessId: string,
@@ -59,7 +63,7 @@ export async function suppressContactByEmail(
     .from("contacts")
     .update({ marketing_unsubscribed_at: new Date().toISOString() })
     .eq("business_id", businessId)
-    .ilike("email", email.trim().toLowerCase())
+    .eq("email", email.trim().toLowerCase())
     .is("marketing_unsubscribed_at", null);
   if (error) {
     logger.warn("outreach: contact marketing stamp failed", {

@@ -280,7 +280,9 @@ async function discoverForBusiness(
         domain: c.domain,
         business_name: c.businessName,
         website: c.website,
-        phone: c.phone,
+        // Null rather than blank when Places had no number, so "has a phone"
+        // stays a single question downstream.
+        phone: c.phone || null,
         vertical: c.vertical,
         city: c.city
       })),
@@ -692,8 +694,11 @@ async function handOffToFlow(
           prospect_name: prospect.business_name,
           prospect_email: mail.email,
           // Places supplies a phone for most prospects but not all, and the
-          // flow's filing steps are gated on the extractor's 'none' sentinel.
-          prospect_phone: prospect.phone ?? "none",
+          // flow's filing steps are gated on the extractor's literal 'none'
+          // sentinel. A BLANK is the trap here: it is neither null nor 'none',
+          // so it would sail through the gate and file a contact with no phone
+          // into a phone-keyed CRM.
+          prospect_phone: prospect.phone?.trim() || "none",
           prospect_domain: prospect.domain,
           prospect_city: prospect.city,
           prospect_vertical: prospect.vertical,

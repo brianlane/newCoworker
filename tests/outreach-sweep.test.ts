@@ -358,6 +358,24 @@ describe("phase 1: discovery", () => {
     expect(ledger.insertProspects).toHaveBeenCalledWith([], expect.anything());
   });
 
+  it("files a phone-less discovery as null, not as a blank", async () => {
+    const ledger = stubLedger();
+    const searchPlacesImpl = vi.fn(async () => [
+      {
+        displayName: "Acme HVAC",
+        websiteUri: "https://acmehvac.com",
+        nationalPhoneNumber: "",
+        businessStatus: "OPERATIONAL"
+      }
+    ]);
+    await processOutreachSweep(baseDeps({ searchPlacesImpl }));
+    // "Has a phone" stays a single question downstream.
+    expect(ledger.insertProspects).toHaveBeenCalledWith(
+      [expect.objectContaining({ domain: "acmehvac.com", phone: null })],
+      expect.anything()
+    );
+  });
+
   it("notes a missing Places key or empty targeting instead of failing", async () => {
     stubLedger();
     const noKey = await processOutreachSweep(baseDeps({ placesApiKey: "" }));
@@ -910,19 +928,21 @@ describe("phase 3: sending", () => {
   });
 
   it("passes a phone-less prospect to the flow as the extractor's 'none' sentinel", async () => {
-    sendLedger({
-      listProspectsByStatus: vi.fn(async (_b: string, statuses: string[]) =>
-        statuses.includes("drafted") ? [prospect({ phone: null })] : []
-      )
-    });
-    const deps = baseDeps();
-    await processOutreachSweep(deps);
-    const flow = (deps as unknown as { processFlowEventImpl: ReturnType<typeof vi.fn> })
-      .processFlowEventImpl;
-    const payload = flow.mock.calls[0][1] as { data: Record<string, string> };
-    // The flow's filing steps are gated on this literal, so an empty string
-    // would file a contact with no phone into a phone-keyed CRM.
-    expect(payload.data.prospect_phone).toBe("none");
+    // Null AND blank: a blank is the trap, since it is neither null nor 'none'
+    // and would sail through the flow's gate into a phone-keyed CRM.
+    for (const phone of [null, "   "]) {
+      sendLedger({
+        listProspectsByStatus: vi.fn(async (_b: string, statuses: string[]) =>
+          statuses.includes("drafted") ? [prospect({ phone })] : []
+        )
+      });
+      const deps = baseDeps();
+      await processOutreachSweep(deps);
+      const flow = (deps as unknown as { processFlowEventImpl: ReturnType<typeof vi.fn> })
+        .processFlowEventImpl;
+      const payload = flow.mock.calls[0][1] as { data: Record<string, string> };
+      expect(payload.data.prospect_phone).toBe("none");
+    }
   });
 });
 

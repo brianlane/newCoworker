@@ -54,7 +54,10 @@ describe("suppressProspect", () => {
       expect.anything()
     );
     // The contact stamp is the campaign axis: normalized address, idempotent.
-    expect(c.ilike).toHaveBeenCalledWith("email", "owner@acme.com");
+    // Equality rather than ILIKE, or an underscore in the local part would act
+    // as a wildcard and could suppress somebody else.
+    expect(c.eq).toHaveBeenCalledWith("email", "owner@acme.com");
+    expect(c.ilike).not.toHaveBeenCalled();
     expect(c.is).toHaveBeenCalledWith("marketing_unsubscribed_at", null);
   });
 

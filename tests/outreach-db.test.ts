@@ -287,7 +287,11 @@ describe("findProspectByEmail", () => {
     expect(await findProspectByEmail(BIZ, "  Owner@ACME.com ", makeDb(c))).toMatchObject({
       id: PROSPECT
     });
-    expect(c.ilike).toHaveBeenCalledWith("email", "owner@acme.com");
+    // Equality, never ILIKE: an underscore in a local part is a wildcard to
+    // ILIKE, so john_smith@acme.com would also match johnXsmith@acme.com and
+    // could mark the wrong prospect replied.
+    expect(c.eq).toHaveBeenCalledWith("email", "owner@acme.com");
+    expect(c.ilike).not.toHaveBeenCalled();
 
     defaultClientSpy.mockReturnValue(makeDb(singleChain({ data: null, error: null })));
     expect(await findProspectByEmail(BIZ, "nobody@acme.com")).toBeNull();
