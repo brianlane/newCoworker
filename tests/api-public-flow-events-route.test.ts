@@ -103,4 +103,17 @@ describe("POST /api/public/v1/flow-events", () => {
     const res = await POST(req({ data: { a: 1 } }));
     expect(res.status).toBeGreaterThanOrEqual(500);
   });
+
+  it("403s with the upgrade message when the tier gate refuses the event", async () => {
+    vi.mocked(processWebhookFlowEvent).mockResolvedValue({
+      enqueued: 0,
+      flowsEvaluated: 0,
+      flowsMatched: 0,
+      tierBlocked: true
+    });
+    const res = await POST(req({ data: { a: 1 } }));
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error.message).toContain("Standard");
+  });
 });

@@ -368,7 +368,10 @@ export async function sweepDocumentExpirations(
                 assigned_employee: employee?.name ?? ""
               }
             },
-            db
+            db,
+            // Platform-generated renewal event, not an external webhook: the
+            // Standard-tier webhook gate must not block it.
+            { origin: "internal" }
           );
           await patchBusinessDocument(
             doc.business_id,

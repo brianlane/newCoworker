@@ -15,8 +15,14 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn(async () => ({ from: fromMock }))
 }));
 
+vi.mock("@/lib/plans/webhooks", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/plans/webhooks")>();
+  return { ...actual, webhooksAllowedForBusiness: vi.fn() };
+});
+
 import { GET } from "@/app/api/public/v1/events/route";
 import { authenticatePublicApiRequest } from "@/lib/public-api/auth";
+import { webhooksAllowedForBusiness } from "@/lib/plans/webhooks";
 
 const AUTH = { businessId: "biz-1", apiKeyId: "key-1" };
 
@@ -42,6 +48,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   queryResult = { data: [], error: null };
   vi.mocked(authenticatePublicApiRequest).mockResolvedValue(AUTH);
+  vi.mocked(webhooksAllowedForBusiness).mockResolvedValue(true);
   fromMock.mockImplementation(() => makeQueryChain());
 });
 
@@ -55,6 +62,15 @@ describe("GET /api/public/v1/events", () => {
   it("400s on a missing or unknown event type", async () => {
     expect((await GET(req(""))).status).toBe(400);
     expect((await GET(req("?event=sms.deleted"))).status).toBe(400);
+  });
+
+  it("403s on a starter tier (event polling is part of the webhook perk)", async () => {
+    vi.mocked(webhooksAllowedForBusiness).mockResolvedValue(false);
+    const res = await GET(req("?event=sms.inbound"));
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error.message).toContain("Standard");
+    expect(fromMock).not.toHaveBeenCalled();
   });
 
   it("returns dispatcher-shaped payloads for the business", async () => {

@@ -141,6 +141,12 @@ type TickDbOptions = {
   /** Lease-claim outcomes per attempt: false = denied ([]), null = null data. */
   claims?: (boolean | null)[];
   claimError?: { message: string } | null;
+  /**
+   * `businesses` tier rows; defaults to every sub's business on standard so
+   * pre-gate tests keep passing untouched.
+   */
+  biz?: unknown[] | null;
+  bizError?: { message: string } | null;
 };
 
 /**
@@ -159,6 +165,22 @@ function makeTickDb(opts: TickDbOptions) {
 
   const db = {
     from: vi.fn((table: string) => {
+      if (table === "businesses") {
+        const subsRows = (opts.subs ?? []) as Array<{ business_id?: string }>;
+        const defaultBiz = [
+          ...new Set(subsRows.map((s) => s?.business_id).filter(Boolean))
+        ].map((id) => ({ id, tier: "standard" }));
+        return {
+          select: vi.fn(() => ({
+            in: vi.fn(() =>
+              Promise.resolve({
+                data: opts.biz === undefined ? defaultBiz : opts.biz,
+                error: opts.bizError ?? null
+              })
+            )
+          }))
+        };
+      }
       if (table === "webhook_subscriptions") {
         return {
           select: vi.fn(() => ({
@@ -261,7 +283,8 @@ describe("runWebhookDispatchTick", () => {
       subscriptions: 0,
       delivered: 0,
       deactivated: 0,
-      failures: 0
+      failures: 0,
+      skippedTier: 0
     });
 
     const noRows = makeTickDb({ subs: [SUB], rows: [] });
@@ -457,6 +480,15 @@ describe("runWebhookDispatchTick", () => {
     let updateCalls = 0;
     const db = {
       from: vi.fn((table: string) => {
+        if (table === "businesses") {
+          return {
+            select: vi.fn(() => ({
+              in: vi.fn(() =>
+                Promise.resolve({ data: [{ id: "biz-1", tier: "standard" }], error: null })
+              )
+            }))
+          };
+        }
         if (table === "webhook_subscriptions") {
           return {
             select: vi.fn(() => ({
@@ -509,7 +541,8 @@ describe("runWebhookDispatchTick", () => {
       subscriptions: 0,
       delivered: 0,
       deactivated: 0,
-      failures: 0
+      failures: 0,
+      skippedTier: 0
     });
 
     const nullRows = makeTickDb({ subs: [SUB], rows: null });
@@ -559,10 +592,90 @@ describe("runWebhookDispatchTick", () => {
     ]);
   });
 
+  it("skips a starter business's subscription without claiming its lease", async () => {
+    const { db, updates } = makeTickDb({
+      subs: [SUB],
+      rows: [row("a", "2026-07-01T00:01:00Z")],
+      biz: [{ id: "biz-1", tier: "starter" }]
+    });
+    const fetchImpl = fetchReturning(200);
+    const summary = await runWebhookDispatchTick(db, fetchImpl);
+    expect(summary.skippedTier).toBe(1);
+    expect(summary.delivered).toBe(0);
+    expect(summary.failures).toBe(0);
+    // No lease claim, no cursor writes — the subscription row is untouched
+    // so an upgrade resumes delivery from the frozen cursor.
+    expect(updates).toHaveLength(0);
+    expect(vi.mocked(fetchImpl)).not.toHaveBeenCalled();
+  });
+
+  it("fails closed when a business is missing from the tier query result", async () => {
+    const { db, updates } = makeTickDb({
+      subs: [SUB],
+      rows: [row("a", "2026-07-01T00:01:00Z")],
+      biz: []
+    });
+    const summary = await runWebhookDispatchTick(db, fetchReturning(200));
+    expect(summary.skippedTier).toBe(1);
+    expect(summary.delivered).toBe(0);
+    expect(updates).toHaveLength(0);
+  });
+
+  it("treats null tier data as an empty result (all subscriptions skipped)", async () => {
+    const { db } = makeTickDb({
+      subs: [SUB],
+      rows: [row("a", "2026-07-01T00:01:00Z")],
+      biz: null
+    });
+    const summary = await runWebhookDispatchTick(db, fetchReturning(200));
+    expect(summary.skippedTier).toBe(1);
+  });
+
+  it("throws when the tier query fails (cron retries next tick)", async () => {
+    const { db } = makeTickDb({
+      subs: [SUB],
+      rows: [row("a", "2026-07-01T00:01:00Z")],
+      bizError: { message: "tier db down" }
+    });
+    await expect(runWebhookDispatchTick(db, fetchReturning(200))).rejects.toThrow(
+      /tier query failed: tier db down/
+    );
+  });
+
+  it("delivers standard and enterprise subscriptions while skipping the starter one", async () => {
+    const { db, updates } = makeTickDb({
+      subs: [
+        SUB,
+        { ...SUB, id: "hook-2", business_id: "biz-2" },
+        { ...SUB, id: "hook-3", business_id: "biz-3" }
+      ],
+      rows: [row("a", "2026-07-01T00:01:00Z")],
+      biz: [
+        { id: "biz-1", tier: "standard" },
+        { id: "biz-2", tier: "starter" },
+        { id: "biz-3", tier: "enterprise" }
+      ]
+    });
+    const summary = await runWebhookDispatchTick(db, fetchReturning(200, 200));
+    expect(summary.skippedTier).toBe(1);
+    expect(summary.delivered).toBe(2);
+    // Two lease claims (hook-1 and hook-3), none for the starter's hook-2.
+    expect(claimPatches(updates)).toHaveLength(2);
+  });
+
   it("logs a non-Error subscription failure via String(err)", async () => {
     const log = vi.fn();
     const db = {
       from: vi.fn((table: string) => {
+        if (table === "businesses") {
+          return {
+            select: vi.fn(() => ({
+              in: vi.fn(() =>
+                Promise.resolve({ data: [{ id: "biz-1", tier: "standard" }], error: null })
+              )
+            }))
+          };
+        }
         if (table === "webhook_subscriptions") {
           return {
             select: vi.fn(() => ({

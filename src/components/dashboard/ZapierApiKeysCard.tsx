@@ -42,6 +42,12 @@ type Props = {
   businessId: string;
   initialKeys: ApiKeyItem[];
   activeHooks: HookItem[];
+  /**
+   * False on starter: minting is refused server-side (webhooks are a
+   * Standard-tier perk), so the card swaps the create form for an upgrade
+   * note. Existing keys stay listed and revocable.
+   */
+  webhooksEnabled?: boolean;
 };
 
 function formatDate(iso: string): string {
@@ -52,7 +58,12 @@ function formatDate(iso: string): string {
   });
 }
 
-export function ZapierApiKeysCard({ businessId, initialKeys, activeHooks }: Props) {
+export function ZapierApiKeysCard({
+  businessId,
+  initialKeys,
+  activeHooks,
+  webhooksEnabled = true
+}: Props) {
   const [keys, setKeys] = useState<ApiKeyItem[]>(initialKeys);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -215,22 +226,34 @@ export function ZapierApiKeysCard({ businessId, initialKeys, activeHooks }: Prop
         </p>
       )}
 
-      <div className="mt-4 flex items-end gap-2 border-t border-parchment/10 pt-4">
-        <label className="flex flex-col gap-1 flex-1 min-w-0">
-          <span className="text-xs text-parchment/70">Key name</span>
-          <input
-            type="text"
-            maxLength={80}
-            placeholder="Zapier"
-            value={newKeyName}
-            onChange={(e) => setNewKeyName(e.target.value)}
-            className="rounded-md bg-deep-ink/50 border border-parchment/20 px-3 py-2 text-sm text-parchment placeholder-parchment/30 focus:outline-none focus:ring-2 focus:ring-signal-teal"
-          />
-        </label>
-        <Button type="button" variant="primary" size="sm" onClick={mint} loading={busy}>
-          Create key
-        </Button>
-      </div>
+      {webhooksEnabled ? (
+        <div className="mt-4 flex items-end gap-2 border-t border-parchment/10 pt-4">
+          <label className="flex flex-col gap-1 flex-1 min-w-0">
+            <span className="text-xs text-parchment/70">Key name</span>
+            <input
+              type="text"
+              maxLength={80}
+              placeholder="Zapier"
+              value={newKeyName}
+              onChange={(e) => setNewKeyName(e.target.value)}
+              className="rounded-md bg-deep-ink/50 border border-parchment/20 px-3 py-2 text-sm text-parchment placeholder-parchment/30 focus:outline-none focus:ring-2 focus:ring-signal-teal"
+            />
+          </label>
+          <Button type="button" variant="primary" size="sm" onClick={mint} loading={busy}>
+            Create key
+          </Button>
+        </div>
+      ) : (
+        <div className="mt-4 border-t border-parchment/10 pt-4">
+          <p className="text-xs text-amber-400/90">
+            Zapier and webhooks are a Standard plan perk.{" "}
+            <a href="/dashboard/billing" className="text-signal-teal hover:underline">
+              Upgrade your plan
+            </a>{" "}
+            to create API keys and connect outside tools.
+          </p>
+        </div>
+      )}
 
       {error ? (
         <p className="text-xs text-spark-orange mt-2" role="alert">

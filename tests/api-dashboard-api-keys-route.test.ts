@@ -16,9 +16,15 @@ vi.mock("@/lib/db/api-keys", async (importOriginal) => {
   };
 });
 
+vi.mock("@/lib/plans/webhooks", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/plans/webhooks")>();
+  return { ...actual, webhooksAllowedForBusiness: vi.fn() };
+});
+
 import { GET, POST } from "@/app/api/dashboard/api-keys/route";
 import { DELETE } from "@/app/api/dashboard/api-keys/[id]/route";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
+import { webhooksAllowedForBusiness } from "@/lib/plans/webhooks";
 import {
   MAX_ACTIVE_API_KEYS_PER_BUSINESS,
   countActiveApiKeys,
@@ -71,6 +77,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(getAuthUser).mockResolvedValue(OWNER as never);
   vi.mocked(requireBusinessRole).mockResolvedValue(undefined as never);
+  vi.mocked(webhooksAllowedForBusiness).mockResolvedValue(true);
   vi.mocked(listApiKeys).mockResolvedValue([KEY_ROW]);
   vi.mocked(countActiveApiKeys).mockResolvedValue(0);
   vi.mocked(insertApiKey).mockResolvedValue({ ...KEY_ROW, key_hash: "h".repeat(64) });
@@ -123,6 +130,17 @@ describe("POST /api/dashboard/api-keys", () => {
     expect(insertArgs.keyHash).toMatch(/^[0-9a-f]{64}$/);
     // The stored hash must never equal the plaintext.
     expect(insertArgs.keyHash).not.toBe(body.data.plaintext);
+  });
+
+  it("403s minting on a starter tier, while GET keeps listing existing keys", async () => {
+    vi.mocked(webhooksAllowedForBusiness).mockResolvedValue(false);
+    const res = await POST(postReq({ businessId: BIZ, name: "Zapier" }));
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error.message).toContain("Standard");
+    expect(insertApiKey).not.toHaveBeenCalled();
+
+    expect((await GET(getReq())).status).toBe(200);
   });
 
   it("409s at the active-key cap", async () => {

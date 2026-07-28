@@ -15,6 +15,11 @@ vi.mock("@/lib/db/webhook-subscriptions", async (importOriginal) => {
   };
 });
 
+vi.mock("@/lib/plans/webhooks", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/plans/webhooks")>();
+  return { ...actual, webhooksAllowedForBusiness: vi.fn() };
+});
+
 import { GET, POST } from "@/app/api/public/v1/hooks/route";
 import { DELETE } from "@/app/api/public/v1/hooks/[id]/route";
 import { authenticatePublicApiRequest } from "@/lib/public-api/auth";
@@ -25,6 +30,7 @@ import {
   deleteWebhookSubscription,
   listWebhookSubscriptions
 } from "@/lib/db/webhook-subscriptions";
+import { webhooksAllowedForBusiness } from "@/lib/plans/webhooks";
 
 const AUTH = { businessId: "biz-1", apiKeyId: "key-1" };
 const HOOK_ID = "11111111-1111-4111-8111-111111111111";
@@ -60,6 +66,7 @@ function deleteReq(id: string) {
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(authenticatePublicApiRequest).mockResolvedValue(AUTH);
+  vi.mocked(webhooksAllowedForBusiness).mockResolvedValue(true);
   vi.mocked(countActiveWebhookSubscriptions).mockResolvedValue(0);
   vi.mocked(createWebhookSubscription).mockResolvedValue(SUB);
   vi.mocked(listWebhookSubscriptions).mockResolvedValue([SUB]);
@@ -119,6 +126,23 @@ describe("POST /api/public/v1/hooks", () => {
       targetUrl: "https://hooks.zapier.com/abc",
       apiKeyId: "key-1"
     });
+  });
+
+  it("403s subscribing on a starter tier, while GET and DELETE stay open", async () => {
+    vi.mocked(webhooksAllowedForBusiness).mockResolvedValue(false);
+    const res = await POST(
+      postReq({ event: "sms.inbound", target_url: "https://hooks.zapier.com/abc" })
+    );
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error.message).toContain("Standard");
+    expect(createWebhookSubscription).not.toHaveBeenCalled();
+
+    // Listing and cleanup are NOT gated: a downgraded account can still see
+    // and remove its subscriptions.
+    expect((await GET(new Request("http://localhost/api/public/v1/hooks"))).status).toBe(200);
+    const [request, ctx] = deleteReq(HOOK_ID);
+    expect((await DELETE(request, ctx)).status).toBe(200);
   });
 
   it("409s at the per-business hook cap", async () => {

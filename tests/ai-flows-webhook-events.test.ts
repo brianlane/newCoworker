@@ -26,15 +26,33 @@ import {
   webhookEventKey
 } from "@/lib/ai-flows/webhook-events";
 
-/** A db whose ai_flows query resolves to the given flow rows (or error). */
-function flowsDb(result: { data: unknown; error: unknown }) {
+/**
+ * A db whose ai_flows query resolves to the given flow rows (or error), and
+ * whose businesses tier lookup (the Standard-tier webhook gate) resolves to
+ * `tier` (default standard, so pre-gate tests pass untouched).
+ */
+function flowsDb(
+  result: { data: unknown; error: unknown },
+  gate?: { tier?: string | null; tierError?: { message: string } | null }
+) {
   const builder: Record<string, unknown> = {};
   builder.select = vi.fn(() => builder);
   builder.eq = vi.fn(() => builder);
   // loadWebhookFlows chains .select().eq().eq().or(); the .or (which admits
   // flows whose EXTRA triggers include a webhook) is the awaited terminal.
   builder.or = vi.fn(() => Promise.resolve(result));
-  return { from: vi.fn(() => builder) };
+  const bizBuilder: Record<string, unknown> = {};
+  bizBuilder.select = vi.fn(() => bizBuilder);
+  bizBuilder.eq = vi.fn(() => bizBuilder);
+  bizBuilder.maybeSingle = vi.fn(() =>
+    Promise.resolve({
+      data: { tier: gate?.tier === undefined ? "standard" : gate.tier },
+      error: gate?.tierError ?? null
+    })
+  );
+  return {
+    from: vi.fn((table: string) => (table === "businesses" ? bizBuilder : builder))
+  };
 }
 
 const EVENT = {
@@ -288,6 +306,64 @@ describe("processWebhookFlowEvent", () => {
     enqueueAiFlowRun.mockClear();
     await processWebhookFlowEvent("biz-1", EVENT, db as never);
     expect(enqueueAiFlowRun.mock.calls[0][0]).not.toHaveProperty("earliestClaimAt");
+  });
+});
+
+describe("processWebhookFlowEvent tier gate", () => {
+  const FLOW_ROWS = {
+    data: [{ id: "flow-1", definition: { trigger: { channel: "webhook", conditions: [] } } }],
+    error: null
+  };
+
+  it("refuses an external event for a starter business: no record, no enqueue, skip log", async () => {
+    const db = flowsDb(FLOW_ROWS, { tier: "starter" });
+    const res = await processWebhookFlowEvent("biz-1", EVENT, db as never);
+    expect(res).toEqual({ enqueued: 0, flowsEvaluated: 0, flowsMatched: 0, tierBlocked: true });
+    expect(recordLeadSubmission).not.toHaveBeenCalled();
+    expect(enqueueAiFlowRun).not.toHaveBeenCalled();
+    expect(recordSystemLog).toHaveBeenCalledTimes(1);
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "webhook_event_skipped_tier",
+        level: "warn",
+        payload: expect.objectContaining({ source_label: "facebook_lead_ads" })
+      }),
+      db
+    );
+  });
+
+  it("fails closed on an unknown tier (null businesses row shape)", async () => {
+    const db = flowsDb(FLOW_ROWS, { tier: null });
+    const res = await processWebhookFlowEvent("biz-1", EVENT, db as never);
+    expect(res.tierBlocked).toBe(true);
+    expect(enqueueAiFlowRun).not.toHaveBeenCalled();
+  });
+
+  it("lets an internal-origin event through for a starter business without a tier lookup", async () => {
+    const db = flowsDb(FLOW_ROWS, { tier: "starter" });
+    enqueueAiFlowRun.mockResolvedValue({ id: "run-1" });
+    const res = await processWebhookFlowEvent("biz-1", EVENT, db as never, {
+      origin: "internal"
+    });
+    expect(res).toEqual({ enqueued: 1, flowsEvaluated: 1, flowsMatched: 1 });
+    // The gate query never ran — internal producers are exempt by design.
+    expect(vi.mocked(db.from)).not.toHaveBeenCalledWith("businesses");
+  });
+
+  it("processes an explicit external origin for an allowed tier (enterprise)", async () => {
+    const db = flowsDb(FLOW_ROWS, { tier: "enterprise" });
+    enqueueAiFlowRun.mockResolvedValue({ id: "run-1" });
+    const res = await processWebhookFlowEvent("biz-1", EVENT, db as never, {
+      origin: "external"
+    });
+    expect(res).toEqual({ enqueued: 1, flowsEvaluated: 1, flowsMatched: 1 });
+  });
+
+  it("surfaces a tier lookup error (sender retries; never fails open)", async () => {
+    const db = flowsDb(FLOW_ROWS, { tierError: { message: "tier db down" } });
+    await expect(processWebhookFlowEvent("biz-1", EVENT, db as never)).rejects.toThrow(
+      "webhooksAllowedForBusiness: tier db down"
+    );
   });
 });
 

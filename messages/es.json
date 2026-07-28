@@ -585,8 +585,8 @@
       "complianceA": "Las reglas de cumplimiento se aplican en cada conversación, incluidas las normas de la Fair Housing Act para bienes raíces, y los planes Enterprise admiten módulos de cumplimiento a medida para otras industrias reguladas.",
       "billingTitle": "Facturación y planes",
       "costQ": "¿Cuánto cuesta?",
-      "costA": "Los planes comienzan en {starterPrice} con el plan Starter de 24 meses. Standard agrega límites de uso más altos, {standardConcurrent}, Zapier, analítica y más. Enterprise es a medida y agrega mensajería RCS de marca. Todos los planes tienen garantía de devolución de 30 días. Mira el desglose completo en la <link>página de precios</link>.",
-      "costPlain": "Los planes comienzan en {starterPrice} con el plan Starter de 24 meses. Standard agrega límites de uso más altos, {standardConcurrent}, Zapier, analítica y más. Enterprise es a medida y agrega mensajería RCS de marca. Todos los planes tienen garantía de devolución de 30 días.",
+      "costA": "Los planes comienzan en {starterPrice} con el plan Starter de 24 meses. Standard agrega límites de uso más altos, {standardConcurrent}, Zapier, webhooks, analítica y más. Enterprise es a medida y agrega mensajería RCS de marca. Todos los planes tienen garantía de devolución de 30 días. Mira el desglose completo en la <link>página de precios</link>.",
+      "costPlain": "Los planes comienzan en {starterPrice} con el plan Starter de 24 meses. Standard agrega límites de uso más altos, {standardConcurrent}, Zapier, webhooks, analítica y más. Enterprise es a medida y agrega mensajería RCS de marca. Todos los planes tienen garantía de devolución de 30 días.",
       "vsHiringQ": "¿Sale más barato que contratar a alguien de medio tiempo?",
       "vsHiringA": "En costo, por mucho: los planes empiezan en {starterPrice}, frente a unos dos mil dólares al mes por ayuda de medio tiempo que además se va a las cinco. El intercambio honesto es el criterio. Una persona maneja mejor la llamada incómoda, y por eso tu coworker transfiere a una persona cuando quien llama lo pide o la conversación lo necesita.",
       "upfrontQ": "¿Por qué se factura el término completo por adelantado en planes de 12 y 24 meses?",
@@ -949,7 +949,7 @@
       "metaSubtitle": "La mayoría de los negocios tarda horas en responder un lead de anuncio. Tu coworker lo hace en segundos, automáticamente, cada vez, de día o de noche.",
       "captureStep": "1 · Captura",
       "captureTitle": "Un lead envía tu formulario instantáneo",
-      "captureBody": "Tus anuncios de leads de Meta se conectan a tu coworker por un puente simple (una cuenta gratuita de Make.com, Zapier o herramientas de leads como Privyr). Una guía dentro del panel te acompaña en unos 15 minutos.",
+      "captureBody": "Tus anuncios de leads de Meta se conectan a tu coworker por un puente simple (una cuenta gratuita de Make.com, Zapier o herramientas de leads como Privyr). Una guía dentro del panel te acompaña en unos 15 minutos. Disponible en el plan Standard y superiores.",
       "actStep": "2 · Actúa",
       "actTitle": "Tu coworker responde en segundos",
       "actBody": "El lead recibe un texto personal desde tu número de negocio mientras su interés está más caliente, y la conversación bidireccional la atiende el mismo coworker que contesta tu teléfono.",
@@ -993,15 +993,15 @@
       },
       "zapier": {
         "title": "Zapier",
-        "description": "Una conexión desbloquea 8,000+ apps: CRMs, hojas de cálculo, Slack, mesas de ayuda, facturación. Sin código."
+        "description": "Una conexión desbloquea 8,000+ apps: CRMs, hojas de cálculo, Slack, mesas de ayuda, facturación. Sin código. Plan Standard y superiores."
       },
       "api": {
         "title": "API REST pública",
-        "description": "Claves de API por negocio permiten a tus sistemas enviar SMS, leer eventos y gestionar suscripciones por código."
+        "description": "Claves de API por negocio permiten a tus sistemas enviar SMS, leer eventos y gestionar suscripciones por código. Plan Standard y superiores."
       },
       "webhooks": {
         "title": "Webhooks",
-        "description": "Hooks REST en tiempo real envían llamadas, textos y eventos de correo a cualquier endpoint al momento en que ocurren."
+        "description": "Hooks REST en tiempo real envían llamadas, textos y eventos de correo a cualquier endpoint al momento en que ocurren. Plan Standard y superiores."
       },
       "csv": {
         "title": "Importar y exportar CSV",
@@ -1894,6 +1894,7 @@
       "aiflowRunsSubtitleAll": "Historial de ejecuciones de automatización y aprobaciones.",
       "importLeadsTitle": "Importar leads",
       "importLeadsSubtitle": "Sube un backlog de leads en Excel o CSV y ejecuta un AiFlow por cada fila, elige un flujo, o deja que las filas coincidan con tus flujos activados por webhook igual que un lead en vivo de Zapier/Make.",
+      "webhooksUpgradeBanner": "Los webhooks son un beneficio del plan Standard. Puedes explorar esta guía, pero los eventos de webhook entrantes no llegarán a tus flujos hasta que mejores tu plan.",
       "metaLeadsGuideTitle": "Captura leads de anuncios de Meta con tu coworker de IA",
       "metaLeadsGuideSubtitle": "Conecta tus anuncios de leads de Facebook/Instagram para que tu coworker se entere de cada lead nuevo en tiempo real, y les responda por texto, los archive y te informe, por ti.",
       "instagramLeadsGuideTitle": "Convierte listas de prospectos de Instagram en contactos revisados",

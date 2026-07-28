@@ -21,10 +21,16 @@ vi.mock("@/lib/supabase/server", () => ({
   }))
 }));
 
+vi.mock("@/lib/plans/webhooks", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/plans/webhooks")>();
+  return { ...actual, webhooksAllowedForBusiness: vi.fn() };
+});
+
 import { POST } from "@/app/api/public/v1/messages/route";
 import { authenticatePublicApiRequest } from "@/lib/public-api/auth";
 import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
 import { rateLimit } from "@/lib/rate-limit";
+import { webhooksAllowedForBusiness } from "@/lib/plans/webhooks";
 
 const AUTH = { businessId: "biz-1", apiKeyId: "key-1" };
 
@@ -40,6 +46,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(rateLimit).mockReturnValue({ success: true, limit: 60, remaining: 59, reset: 0 });
   vi.mocked(authenticatePublicApiRequest).mockResolvedValue(AUTH);
+  vi.mocked(webhooksAllowedForBusiness).mockResolvedValue(true);
   vi.mocked(getTelnyxMessagingForBusiness).mockResolvedValue({
     fromE164: "+16025550100"
   } as never);
@@ -58,6 +65,15 @@ describe("POST /api/public/v1/messages", () => {
     expect((await POST(req({ to: "not-a-number", text: "hi" }))).status).toBe(400);
     expect((await POST(req({ to: "+16025551234", text: "" }))).status).toBe(400);
     expect((await POST(req(null))).status).toBe(400);
+  });
+
+  it("403s on a starter tier (the API send action is part of the webhook perk)", async () => {
+    vi.mocked(webhooksAllowedForBusiness).mockResolvedValue(false);
+    const res = await POST(req({ to: "+16025551234", text: "hi" }));
+    expect(res.status).toBe(403);
+    const body = await res.json();
+    expect(body.error.message).toContain("Standard");
+    expect(sendTelnyxSms).not.toHaveBeenCalled();
   });
 
   it("429s when the per-business limiter rejects", async () => {

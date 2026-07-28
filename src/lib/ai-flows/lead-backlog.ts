@@ -369,11 +369,13 @@ export async function importLeadBacklog(
         );
         result = { enqueued: run ? 1 : 0, flowsEvaluated: 1, flowsMatched: 1 };
       } else {
+        // Owner-initiated spreadsheet import, not an external webhook: the
+        // Standard-tier webhook gate must not block it.
         result = await processWebhookFlowEvent(
           businessId,
           { source, data, eventId },
           db,
-          earliestClaimAt ? { earliestClaimAt } : undefined
+          { origin: "internal", ...(earliestClaimAt ? { earliestClaimAt } : {}) }
         );
       }
     } catch (e) {

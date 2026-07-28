@@ -52,6 +52,12 @@ describe("tier-display", () => {
       expect(STANDARD_FEATURES.some((f) => f.includes("8,000+"))).toBe(true);
     });
 
+    it("standard advertises full webhook support (Standard-tier gate, Jul 2026)", () => {
+      expect(STANDARD_FEATURES).toContain(
+        "Full webhook support: Meta lead ads, Instagram comments & DMs, and REST API triggers"
+      );
+    });
+
     it("enterprise advertises branded RCS (own verified sender)", () => {
       expect(ENTERPRISE_FEATURES).toContain(
         "Branded RCS messaging (your own Google-verified sender)"

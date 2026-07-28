@@ -715,7 +715,10 @@ async function handOffToFlow(
           pitch_subject: mail.subject
         }
       },
-      r.db
+      r.db,
+      // Platform-generated hand-off after our own outreach send, not an
+      // external webhook: the Standard-tier webhook gate must not block it.
+      { origin: "internal" }
     );
     // Ask the MATCHER, not a flow count: a tenant can have other webhook flows
     // enabled while the prospect follow-through one is missing or switched off,

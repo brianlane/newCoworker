@@ -22,6 +22,7 @@ import {
 import { enqueueAiFlowRun } from "@/lib/ai-flows/db";
 import { recordLeadSubmission } from "@/lib/leads/submissions";
 import { recordSystemLog } from "@/lib/db/system-logs";
+import { webhooksAllowedForBusiness } from "@/lib/plans/webhooks";
 import type { TriggerCondition } from "@/lib/ai-flows/schema";
 import {
   resolveFromMatchesRefValues,
@@ -42,6 +43,12 @@ export type WebhookFlowEventResult = {
    * readout must not report "no flow matched".
    */
   flowsMatched: number;
+  /**
+   * True when the event was refused because external webhooks are not part
+   * of the business's plan (starter). Nothing was recorded or enqueued;
+   * callers that can answer the sender should surface the upgrade message.
+   */
+  tierBlocked?: boolean;
 };
 
 type WebhookFlow = {
@@ -117,6 +124,21 @@ export type ProcessWebhookFlowEventOptions = {
    * import drips a spreadsheet of events out instead of firing all at once.
    */
   earliestClaimAt?: string;
+  /**
+   * Where the event came from, for the Standard-tier webhook gate:
+   *
+   *   "external" (the DEFAULT, so new callers fail closed): the event
+   *   originated outside the platform (Zapier/Make via the public API, Meta
+   *   lead ads, Instagram comments, DM first contact, Vagaro). Starter
+   *   businesses get the event refused with `tierBlocked: true` and a
+   *   `webhook_event_skipped_tier` system log.
+   *
+   *   "internal": a platform feature reusing the webhook trigger channel
+   *   (document renewal events, the lead-backlog import, the outreach
+   *   sweep). Never gated - these are not webhooks from the owner's point
+   *   of view and keep working on every tier.
+   */
+  origin?: "external" | "internal";
 };
 
 export async function processWebhookFlowEvent(
@@ -130,6 +152,27 @@ export async function processWebhookFlowEvent(
   const scope = webhookTriggerScope(event);
   const eventKey = webhookEventKey(event);
   const dedupeKey = `webhook:${eventKey}`;
+
+  const gated =
+    options?.origin !== "internal" && !(await webhooksAllowedForBusiness(businessId, db));
+  if (gated) {
+    // Log the refusal (not the payload) so "why didn't my Zap fire" is
+    // answerable from the dashboard/admin logs, then drop the event
+    // without recording a lead submission or evaluating any flow.
+    await recordSystemLog(
+      {
+        businessId,
+        source: "aiflow",
+        level: "warn",
+        event: "webhook_event_skipped_tier",
+        message: `Webhook event from ${scope.from} skipped: webhooks require the Standard plan`,
+        payload: { source_label: scope.from, event_key: dedupeKey }
+      },
+      db
+    );
+    return { enqueued: 0, flowsEvaluated: 0, flowsMatched: 0, tierBlocked: true };
+  }
+
   // Durable per-lead record for the Tasks Data view + Meta CAPI feedback.
   // Best-effort (never throws) and idempotent per event key.
   await recordLeadSubmission(businessId, {

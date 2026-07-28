@@ -980,7 +980,8 @@ export function AiFlowsManager({
   businessType,
   initialFlows,
   initialEditId,
-  initialAdaptDraft
+  initialAdaptDraft,
+  webhooksEnabled = true
 }: {
   businessId: string;
   businessType?: string | null;
@@ -989,6 +990,12 @@ export function AiFlowsManager({
   initialEditId?: string | null;
   /** When true (`?adapt=1`), load the AI-adapted draft stashed in sessionStorage. */
   initialAdaptDraft?: boolean;
+  /**
+   * False on starter: webhook-triggered flows stay saved/editable but external
+   * events are refused server-side, so the webhook trigger help shows an
+   * upgrade note instead of setup instructions.
+   */
+  webhooksEnabled?: boolean;
 }) {
   const examples = getAiFlowExampleCopy(businessType);
   const [flows, setFlows] = useState<AiFlowRow[]>(initialFlows);
@@ -2045,6 +2052,17 @@ export function AiFlowsManager({
           )}
           {editor.channel === "webhook" && (
             <div className="rounded-md border border-parchment/10 bg-deep-ink/20 p-3 space-y-1.5">
+              {!webhooksEnabled && (
+                <p className="text-[11px] text-amber-400/90">
+                  Webhooks are a Standard plan perk. This flow can be saved, but incoming
+                  webhook events (Zapier, Meta lead ads, and other outside tools) won&apos;t
+                  start it until you{" "}
+                  <Link href="/dashboard/billing" className="text-signal-teal hover:underline">
+                    upgrade your plan
+                  </Link>
+                  .
+                </p>
+              )}
               <p className="text-[11px] text-parchment/60">
                 This runs when an outside tool (Zapier, Make.com, or any API client) sends an
                 event to your coworker&apos;s webhook address. Point the tool at{" "}

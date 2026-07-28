@@ -80,7 +80,8 @@ const CAPABILITY_LINES = [
   "- Automation (AiFlows): multi-step follow-up sequences triggered by a new lead, a missed call, " +
     "a webhook, a calendar event, or an inbound message, with round-robin routing to a staff roster.",
   "- Integrations: Zapier (8,000+ apps), Google Workspace, Microsoft 365, Zoom, Meta Lead Ads, " +
-    "a public REST API, webhooks, and a Claude connector (remote MCP) so Claude can act on the business's behalf.",
+    "a public REST API, and webhooks (Zapier, lead webhooks, the REST API: Standard plan and up), " +
+    "plus a Claude connector (remote MCP) so Claude can act on the business's behalf.",
   "- Languages: the owner dashboard is English or Spanish, and the coworker replies to each customer in the customer's own language."
 ];
 
