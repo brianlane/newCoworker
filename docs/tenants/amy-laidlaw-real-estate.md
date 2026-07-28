@@ -80,7 +80,8 @@ Clever: `seed-clever-lead-accept-aiflow.ts`,
 `seed-clever-update-leads-chris-aiflow.ts`,
 `seed-clever-voice-transfer-rule.ts`, `clever-spoke-check-definition.ts`,
 `patch-clever-accept-followup.ts`, `patch-clever-cue-arm-transfer.ts`,
-`patch-clever-group-reply-name-desc.ts`, `fix-clever-existing-flows.ts`.
+`patch-clever-group-reply-name-desc.ts`, `fix-clever-existing-flows.ts`,
+`clever-start-immediately.ts`.
 
 Other networks: `seed-referralexchange-aiflow.ts`,
 `realtor-retrigger-guard.ts`. HomeLight's are listed in

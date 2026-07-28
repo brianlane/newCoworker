@@ -24,6 +24,7 @@ import {
   type TelnyxInboundImage
 } from "../_shared/telnyx_messaging_payload.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
+import { classifyReplyTarget } from "../_shared/sms_sender.ts";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 import { systemLog } from "../_shared/system_log.ts";
@@ -608,15 +609,42 @@ serve(async (req: Request) => {
       inboundPayloadText(payload).trim() ||
       (inboundImages.length > 0 ? "(The texter sent a photo with no text.)" : "");
 
-    if (!fromE164 || !userText) {
+    const target = classifyReplyTarget({ fromRaw, fromE164, text: userText });
+    // `!fromE164` is implied by a non-reply target, and restating it is what
+    // narrows fromE164 to a string for the rest of this loop body.
+    if (target.kind !== "reply" || !fromE164) {
+      // A short-code blast (ReferralExchange, Realtor.com) is unreplyable by
+      // design and its flows have already run in the webhook, so completing it
+      // is the honest outcome. Only a genuinely unusable sender dead-letters,
+      // which is what keeps that count worth alerting on.
+      const failed = target.kind === "fail";
       await supabase.rpc("complete_sms_inbound_job", {
         p_job_id: job.id,
-        p_status: "dead_letter",
+        p_status: failed ? "dead_letter" : "done",
         p_telnyx_outbound_message_id: null,
         p_rowboat_conversation_id: null,
-        p_last_error: "missing_from_or_text"
+        p_last_error: failed ? "missing_from_or_text" : null
       });
       await clearJobReplyCache(supabase, job.id);
+      // This branch used to be entirely silent, which is why 109 benign
+      // short-code jobs sat in dead_letter for two months unnoticed. Only the
+      // real failure logs, so the admin view means something.
+      if (failed) {
+        await systemLog(supabase, {
+          businessId: job.business_id,
+          source: "sms",
+          level: "error",
+          event: "sms_inbound_dead_letter",
+          message: `Inbound text could not be answered: unusable sender "${fromRaw}"`,
+          payload: { job_id: job.id, reason: "missing_from_or_text", from_raw: fromRaw }
+        });
+      }
+      await telemetryRecord(supabase, "sms_inbound_no_reply", {
+        business_id: job.business_id,
+        // `target` is still the reply variant when the extra !fromE164 guard
+        // above is what brought us here, so read the reason defensively.
+        reason: target.kind === "skip" ? target.reason : "unusable_sender"
+      });
       processed += 1;
       continue;
     }

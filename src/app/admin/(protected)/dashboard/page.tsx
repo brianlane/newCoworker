@@ -23,6 +23,7 @@ import { Card } from "@/components/ui/Card";
 import { Badge } from "@/components/ui/Badge";
 import { StatusDot } from "@/components/ui/StatusDot";
 import { timeAgo } from "@/components/admin/feed-rows";
+import { InboundFailuresCard } from "@/components/admin/InboundFailuresCard";
 
 export const dynamic = "force-dynamic";
 
@@ -468,6 +469,9 @@ export default async function AdminDashboardPage() {
           </div>
         </Card>
       )}
+
+      {/* Renders nothing when no inbound text has failed, so its presence IS the alert. */}
+      <InboundFailuresCard />
     </div>
   );
 }
