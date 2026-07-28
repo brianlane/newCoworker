@@ -1,0 +1,837 @@
+/**
+ * The Prospecting sweep (src/lib/outreach/sweep.ts): one pass over every
+ * business the feature is on for.
+ *
+ * The invariants under test are the ones that cost money or credibility:
+ * paid Places queries are stamped before they are bought, the send is claimed
+ * before the mail leaves, the daily cap and weekday window are obeyed, one
+ * nudge per prospect ever, and nothing that cannot be pitched honestly is
+ * pitched at all.
+ */
+import { beforeEach, describe, expect, it, vi } from "vitest";
+
+const dbSpy = vi.fn();
+vi.mock("@/lib/supabase/server", () => ({
+  createSupabaseServiceClient: vi.fn(async () => dbSpy())
+}));
+
+const recordSystemLogSpy = vi.fn(async () => {});
+vi.mock("@/lib/db/system-logs", () => ({
+  recordSystemLog: (...args: unknown[]) => recordSystemLogSpy(...(args as []))
+}));
+
+import { processOutreachSweep, recordOutreachEmailLog } from "@/lib/outreach/sweep";
+import { PROSPECT_OUTREACH_SOURCE } from "@/lib/ai-flows/templates";
+import * as db from "@/lib/outreach/db";
+import type { OutreachProspectRow, OutreachSettingsRow } from "@/lib/outreach/db";
+
+const BIZ = "11111111-1111-4111-8111-111111111111";
+
+/** Monday 09:00 America/Phoenix, inside the default 8 to 11 window. */
+const MONDAY_MORNING = new Date("2026-07-27T16:00:00Z");
+/** Monday 13:00 Phoenix, past the window. */
+const MONDAY_AFTERNOON = new Date("2026-07-27T20:00:00Z");
+
+function settings(over: Partial<OutreachSettingsRow> = {}): OutreachSettingsRow {
+  return {
+    business_id: BIZ,
+    mode: "auto",
+    search_terms: ["hvac"],
+    cities: ["Phoenix"],
+    daily_cap: 12,
+    send_window_start_hour: 8,
+    send_window_end_hour: 11,
+    from_connection_id: null,
+    postal_address: "1 Example Plaza, Phoenix AZ",
+    value_prop: "We answer every call and text for you.",
+    sender_name: "Brian",
+    last_discovery_at: null,
+    created_at: "2026-07-01T00:00:00Z",
+    updated_at: "2026-07-01T00:00:00Z",
+    ...over
+  };
+}
+
+function prospect(over: Partial<OutreachProspectRow> = {}): OutreachProspectRow {
+  return {
+    id: "22222222-2222-4222-8222-222222222222",
+    business_id: BIZ,
+    domain: "acmehvac.com",
+    business_name: "Acme HVAC",
+    email: "info@acmehvac.com",
+    phone: "(602) 555-0100",
+    website: "https://acmehvac.com",
+    vertical: "hvac",
+    city: "Phoenix",
+    findings: [{ code: "no_online_booking", detail: "No booking link." }],
+    pitch_subject: "Acme HVAC: booking a job without the phone tag",
+    pitch_body: "Hi Acme HVAC,\n\nbody\n\nunsubscribe",
+    status: "drafted",
+    status_detail: null,
+    contact_id: null,
+    drafted_at: "2026-07-27T15:00:00Z",
+    queued_at: null,
+    sent_at: null,
+    nudged_at: null,
+    replied_at: null,
+    created_at: "2026-07-27T14:00:00Z",
+    updated_at: "2026-07-27T15:00:00Z",
+    ...over
+  };
+}
+
+/** Sensible no-op stubs; each test overrides only what it is about. */
+function baseDeps(over: Record<string, unknown> = {}) {
+  return {
+    client: {} as never,
+    now: () => MONDAY_MORNING,
+    placesApiKey: "places-key",
+    appUrl: "https://app.example.com",
+    searchPlacesImpl: vi.fn(async () => []),
+    probeSiteImpl: vi.fn(async () => ({
+      findings: [{ code: "no_online_booking", detail: "No booking link." }],
+      email: "info@acmehvac.com",
+      reachable: true as const
+    })),
+    polishImpl: vi.fn(async (_biz: string, paragraphs: string[]) => paragraphs),
+    sendEmailImpl: vi.fn(async () => ({
+      ok: true as const,
+      provider: "google" as const,
+      messageId: "msg-1",
+      threadId: "thread-1"
+    })),
+    getBusinessImpl: vi.fn(async () => ({
+      id: BIZ,
+      name: "New Coworker",
+      timezone: "America/Phoenix",
+      website_url: "https://www.newcoworker.com"
+    })),
+    schedulingLinkImpl: vi.fn(async () => ({
+      url: "https://app.example.com/book/hq",
+      title: "Book a call",
+      kind: "booking_page" as const
+    })),
+    processFlowEventImpl: vi.fn(async () => ({
+      enqueued: 1,
+      flowsEvaluated: 1,
+      flowsMatched: 1
+    })),
+    countFlowsImpl: vi.fn(async () => 1),
+    recordEmailLogImpl: vi.fn(async () => {}),
+    ...over
+  } as never;
+}
+
+/** Ledger stubs. Each test sets only the calls its phase makes. */
+function stubLedger(over: Record<string, unknown> = {}) {
+  const defaults = {
+    listActiveOutreachSettings: vi.fn(async () => [settings()]),
+    upsertOutreachSettings: vi.fn(async () => settings()),
+    existingProspectDomains: vi.fn(async () => new Set<string>()),
+    insertProspects: vi.fn(async () => []),
+    listProspectsByStatus: vi.fn(async () => []),
+    listProspectsDueForNudge: vi.fn(async () => []),
+    patchProspect: vi.fn(async () => true),
+    transitionProspect: vi.fn(async () => true),
+    countProspectsSentSince: vi.fn(async () => 0),
+    ...over
+  };
+  for (const [name, impl] of Object.entries(defaults)) {
+    // Cast through a function-only view of the module: keyof includes the
+    // exported constants, which vi.spyOn rightly refuses.
+    vi.spyOn(db as unknown as Record<string, () => unknown>, name).mockImplementation(
+      impl as never
+    );
+  }
+  return defaults;
+}
+
+beforeEach(() => {
+  vi.restoreAllMocks();
+  vi.clearAllMocks();
+});
+
+describe("processOutreachSweep: the outer loop", () => {
+  it("counts every active business and never lets one failure stop the rest", async () => {
+    const other = settings({ business_id: "33333333-3333-4333-8333-333333333333" });
+    stubLedger({
+      listActiveOutreachSettings: vi.fn(async () => [settings(), other])
+    });
+    const getBusinessImpl = vi.fn(async (id: string) => {
+      if (id === BIZ) throw new Error("read exploded");
+      return { id, name: "Other", timezone: "UTC", website_url: null };
+    });
+    const result = await processOutreachSweep(baseDeps({ getBusinessImpl }));
+    expect(result.businesses).toBe(2);
+    expect(result.errors).toEqual([{ businessId: BIZ, message: "read exploded" }]);
+    // The failure is recorded where the owner's system log will show it.
+    expect(recordSystemLogSpy).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: BIZ, event: "outreach_sweep_failed" }),
+      expect.anything()
+    );
+  });
+
+  it("does nothing at all when no business has the feature on", async () => {
+    stubLedger({ listActiveOutreachSettings: vi.fn(async () => []) });
+    const result = await processOutreachSweep(baseDeps());
+    expect(result).toMatchObject({ businesses: 0, discovered: 0, drafted: 0, sent: 0 });
+  });
+
+  it("survives a system-log write that itself fails", async () => {
+    stubLedger();
+    recordSystemLogSpy.mockRejectedValueOnce(new Error("log down"));
+    const result = await processOutreachSweep(
+      baseDeps({
+        getBusinessImpl: vi.fn(async () => {
+          throw new Error("boom");
+        })
+      })
+    );
+    expect(result.errors).toHaveLength(1);
+  });
+
+  it("records a non-Error thrown anywhere in a business's pass", async () => {
+    stubLedger();
+    const result = await processOutreachSweep(
+      baseDeps({
+        getBusinessImpl: vi.fn(async () => {
+          throw "the database went away";
+        })
+      })
+    );
+    expect(result.errors).toEqual([{ businessId: BIZ, message: "the database went away" }]);
+  });
+});
+
+describe("tenant resolution", () => {
+  it("reports a missing business, postal address, or value proposition as a note", async () => {
+    stubLedger();
+    const gone = await processOutreachSweep(
+      baseDeps({ getBusinessImpl: vi.fn(async () => null) })
+    );
+    expect(gone.notes).toEqual([{ businessId: BIZ, note: "business row is gone" }]);
+
+    // Blank and absent both count: the DB constraint is the primary gate, this
+    // is the belt-and-braces one.
+    for (const postal_address of ["  ", null]) {
+      stubLedger({
+        listActiveOutreachSettings: vi.fn(async () => [settings({ postal_address })])
+      });
+      const noAddress = await processOutreachSweep(baseDeps());
+      expect(noAddress.notes).toEqual([
+        { businessId: BIZ, note: "no postal address configured" }
+      ]);
+    }
+
+    stubLedger({
+      listActiveOutreachSettings: vi.fn(async () => [settings({ value_prop: null })])
+    });
+    const noValueProp = await processOutreachSweep(baseDeps());
+    expect(noValueProp.notes).toEqual([
+      { businessId: BIZ, note: "no value proposition configured" }
+    ]);
+  });
+
+  it("treats a business with no timezone as UTC for the send window", async () => {
+    // 16:00 UTC on a Monday is outside an 8 to 11 window read in UTC, so the
+    // absent timezone must not silently become the server's own.
+    stubLedger({
+      listProspectsByStatus: vi.fn(async (_b: string, statuses: string[]) =>
+        statuses.includes("drafted") ? [prospect()] : []
+      )
+    });
+    const result = await processOutreachSweep(
+      baseDeps({
+        getBusinessImpl: vi.fn(async () => ({
+          id: BIZ,
+          name: "New Coworker",
+          website_url: null
+        }))
+      })
+    );
+    expect(result.sent).toBe(0);
+    expect(result.notes).toContainEqual({ businessId: BIZ, note: "outside the send window" });
+  });
+
+  it("still runs when the booking-link lookup fails: the pitch just asks for a reply", async () => {
+    const ledger = stubLedger({
+      listProspectsByStatus: vi.fn(async (_b: string, statuses: string[]) =>
+        statuses.includes("discovered") ? [prospect({ status: "discovered" })] : []
+      )
+    });
+    const schedulingLinkImpl = vi.fn(async () => {
+      throw new Error("calendar down");
+    });
+    const result = await processOutreachSweep(baseDeps({ schedulingLinkImpl }));
+    expect(result.drafted).toBe(1);
+    const body = (ledger.patchProspect as ReturnType<typeof vi.fn>).mock.calls.at(-1)?.[2]
+      .pitch_body as string;
+    expect(body).toContain("Just reply if you want to hear more.");
+  });
+});
+
+describe("phase 1: discovery", () => {
+  it("stamps the day BEFORE buying queries, so a crash cannot re-buy them", async () => {
+    const order: string[] = [];
+    const ledger = stubLedger({
+      upsertOutreachSettings: vi.fn(async () => {
+        order.push("stamp");
+        return settings();
+      }),
+      insertProspects: vi.fn(async () => [{ id: "p1" }])
+    });
+    const searchPlacesImpl = vi.fn(async () => {
+      order.push("query");
+      return [
+        {
+          displayName: "Acme HVAC",
+          websiteUri: "https://acmehvac.com",
+          nationalPhoneNumber: "(602) 555-0100",
+          businessStatus: "OPERATIONAL"
+        }
+      ];
+    });
+    const result = await processOutreachSweep(baseDeps({ searchPlacesImpl }));
+    expect(order[0]).toBe("stamp");
+    expect(order).toContain("query");
+    expect(result.discovered).toBe(1);
+    expect(ledger.upsertOutreachSettings).toHaveBeenCalledWith(
+      BIZ,
+      { last_discovery_at: MONDAY_MORNING.toISOString() },
+      expect.anything()
+    );
+  });
+
+  it("skips domains already in the ledger before they cost a probe", async () => {
+    const ledger = stubLedger({
+      existingProspectDomains: vi.fn(async () => new Set(["acmehvac.com"]))
+    });
+    const searchPlacesImpl = vi.fn(async () => [
+      {
+        displayName: "Acme HVAC",
+        websiteUri: "https://acmehvac.com",
+        nationalPhoneNumber: "",
+        businessStatus: "OPERATIONAL"
+      }
+    ]);
+    await processOutreachSweep(baseDeps({ searchPlacesImpl }));
+    expect(ledger.insertProspects).toHaveBeenCalledWith([], expect.anything());
+  });
+
+  it("notes a missing Places key or empty targeting instead of failing", async () => {
+    stubLedger();
+    const noKey = await processOutreachSweep(baseDeps({ placesApiKey: "" }));
+    expect(noKey.notes).toEqual([
+      { businessId: BIZ, note: "no Places API key configured" }
+    ]);
+
+    stubLedger({
+      listActiveOutreachSettings: vi.fn(async () => [settings({ search_terms: [], cities: [] })])
+    });
+    const noTargeting = await processOutreachSweep(baseDeps());
+    expect(noTargeting.notes).toEqual([
+      { businessId: BIZ, note: "no search terms or cities configured" }
+    ]);
+  });
+
+  it("does not discover twice in one UTC day", async () => {
+    const ledger = stubLedger({
+      listActiveOutreachSettings: vi.fn(async () => [
+        settings({ last_discovery_at: "2026-07-27T01:00:00Z" })
+      ])
+    });
+    await processOutreachSweep(baseDeps());
+    expect(ledger.upsertOutreachSettings).not.toHaveBeenCalled();
+  });
+
+  it("reads the Places key from the environment when none is injected", async () => {
+    stubLedger();
+    const previous = process.env.GOOGLE_PLACES_API_KEY;
+    delete process.env.GOOGLE_PLACES_API_KEY;
+    const result = await processOutreachSweep(baseDeps({ placesApiKey: undefined }));
+    expect(result.notes).toEqual([{ businessId: BIZ, note: "no Places API key configured" }]);
+    process.env.GOOGLE_PLACES_API_KEY = previous;
+  });
+});
+
+describe("phase 2: drafting", () => {
+  const discovered = () => [prospect({ status: "discovered", email: null, pitch_body: null })];
+
+  function draftLedger(over: Record<string, unknown> = {}) {
+    return stubLedger({
+      listProspectsByStatus: vi.fn(async (_b: string, statuses: string[]) =>
+        statuses.includes("discovered") ? discovered() : []
+      ),
+      ...over
+    });
+  }
+
+  it("probes, claims the address, and stores a pitch carrying the compliance footer", async () => {
+    const ledger = draftLedger();
+    const result = await processOutreachSweep(baseDeps());
+    expect(result.drafted).toBe(1);
+    const patches = (ledger.patchProspect as ReturnType<typeof vi.fn>).mock.calls;
+    // The address claim comes first, then the drafted patch.
+    expect(patches[0][2]).toMatchObject({ email: "info@acmehvac.com" });
+    const draft = patches[1][2];
+    expect(draft.status).toBe("drafted");
+    expect(draft.pitch_subject).toContain("Acme HVAC");
+    expect(draft.pitch_body).toContain("/api/outreach/unsubscribe?");
+    expect(draft.pitch_body).toContain("1 Example Plaza, Phoenix AZ");
+  });
+
+  it("retires an unreachable site, an address-less one, and one with nothing to say", async () => {
+    for (const [probeResult, expected] of [
+      [
+        { findings: [], email: null, reachable: false as const, failure: "site unreadable" },
+        "site unreadable"
+      ],
+      // Unreachable with no reason given still gets an honest ledger detail.
+      [{ findings: [], email: null, reachable: false as const }, "site unreadable"],
+      [
+        { findings: [{ code: "no_online_booking", detail: "d" }], email: null, reachable: true as const },
+        "no published contact address"
+      ],
+      [
+        { findings: [], email: "info@acmehvac.com", reachable: true as const },
+        "nothing checkable to say about their site"
+      ]
+    ] as const) {
+      const ledger = draftLedger();
+      const result = await processOutreachSweep(
+        baseDeps({ probeSiteImpl: vi.fn(async () => probeResult) })
+      );
+      expect(result.skipped).toBe(1);
+      expect(result.drafted).toBe(0);
+      expect(
+        (ledger.patchProspect as ReturnType<typeof vi.fn>).mock.calls[0][2]
+      ).toMatchObject({ status: "skipped", status_detail: expected });
+    }
+  });
+
+  it("retires a prospect whose address another prospect already owns", async () => {
+    // The partial unique index refuses the claim: a duplicate to retire, not
+    // an error to crash on.
+    const ledger = draftLedger({
+      patchProspect: vi
+        .fn()
+        .mockResolvedValueOnce(false)
+        .mockResolvedValue(true)
+    });
+    const result = await processOutreachSweep(baseDeps());
+    expect(result.skipped).toBe(1);
+    expect(
+      (ledger.patchProspect as ReturnType<typeof vi.fn>).mock.calls[1][2]
+    ).toMatchObject({ status: "skipped", status_detail: "another prospect already uses this address" });
+  });
+
+  it("falls back to the domain when the ledger has no website URL", async () => {
+    const probeSiteImpl = vi.fn(async () => ({
+      findings: [{ code: "no_online_booking", detail: "d" }],
+      email: "info@acmehvac.com",
+      reachable: true as const
+    }));
+    draftLedger({
+      listProspectsByStatus: vi.fn(async (_b: string, statuses: string[]) =>
+        statuses.includes("discovered")
+          ? [prospect({ status: "discovered", website: null, email: null })]
+          : []
+      )
+    });
+    await processOutreachSweep(baseDeps({ probeSiteImpl }));
+    expect(probeSiteImpl).toHaveBeenCalledWith("https://acmehvac.com", "acmehvac.com");
+  });
+
+  it("polishes only the middle paragraphs, never the footer", async () => {
+    const polishImpl = vi.fn(async () => ["Hi Acme HVAC,", "Polished middle."]);
+    const ledger = draftLedger();
+    await processOutreachSweep(baseDeps({ polishImpl }));
+    const polishInput = polishImpl.mock.calls[0] as unknown as [string, string[]];
+    expect(polishInput[1].join("\n")).not.toContain("unsubscribe");
+    const body = (ledger.patchProspect as ReturnType<typeof vi.fn>).mock.calls[1][2]
+      .pitch_body as string;
+    expect(body).toContain("Polished middle.");
+    expect(body).toContain("/api/outreach/unsubscribe?");
+  });
+
+  it("uses the configured app URL, falling back to the environment", async () => {
+    const ledger = draftLedger();
+    const previous = process.env.NEXT_PUBLIC_APP_URL;
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    await processOutreachSweep(baseDeps({ appUrl: undefined }));
+    const body = (ledger.patchProspect as ReturnType<typeof vi.fn>).mock.calls[1][2]
+      .pitch_body as string;
+    expect(body).toContain("http://localhost:3000/api/outreach/unsubscribe?");
+    process.env.NEXT_PUBLIC_APP_URL = previous;
+  });
+});
+
+describe("phase 3: sending", () => {
+  function sendLedger(over: Record<string, unknown> = {}) {
+    return stubLedger({
+      listProspectsByStatus: vi.fn(async (_b: string, statuses: string[]) =>
+        statuses.includes("drafted") ? [prospect()] : []
+      ),
+      ...over
+    });
+  }
+
+  it("claims the prospect BEFORE the mail leaves, then hands off to the tenant's flow", async () => {
+    const ledger = sendLedger();
+    const deps = baseDeps();
+    const result = await processOutreachSweep(deps);
+    expect(result.sent).toBe(1);
+    expect(ledger.transitionProspect).toHaveBeenCalledWith(
+      BIZ,
+      prospect().id,
+      "drafted",
+      { status: "sent", sent_at: MONDAY_MORNING.toISOString() },
+      expect.anything()
+    );
+    const send = (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl;
+    expect(send).toHaveBeenCalledWith(BIZ, {
+      toEmail: "info@acmehvac.com",
+      subject: prospect().pitch_subject,
+      bodyText: prospect().pitch_body
+    });
+    const flow = (deps as unknown as { processFlowEventImpl: ReturnType<typeof vi.fn> })
+      .processFlowEventImpl;
+    expect(flow).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({
+        source: PROSPECT_OUTREACH_SOURCE,
+        eventId: `outreach:${prospect().id}`
+      }),
+      expect.anything()
+    );
+  });
+
+  it("does not send twice when another pass already claimed the prospect", async () => {
+    sendLedger({ transitionProspect: vi.fn(async () => false) });
+    const deps = baseDeps();
+    const result = await processOutreachSweep(deps);
+    expect(result.sent).toBe(0);
+    expect(
+      (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl
+    ).not.toHaveBeenCalled();
+  });
+
+  it("respects the weekday window and the daily cap", async () => {
+    sendLedger();
+    const afternoon = await processOutreachSweep(baseDeps({ now: () => MONDAY_AFTERNOON }));
+    expect(afternoon.sent).toBe(0);
+    expect(afternoon.notes).toContainEqual({
+      businessId: BIZ,
+      note: "outside the send window"
+    });
+
+    sendLedger({ countProspectsSentSince: vi.fn(async () => 12) });
+    const capped = await processOutreachSweep(baseDeps());
+    expect(capped.sent).toBe(0);
+    expect(capped.notes).toContainEqual({ businessId: BIZ, note: "daily cap reached" });
+  });
+
+  it("only asks for as many drafts as the cap still allows", async () => {
+    const ledger = sendLedger({ countProspectsSentSince: vi.fn(async () => 10) });
+    await processOutreachSweep(baseDeps());
+    expect(ledger.listProspectsByStatus).toHaveBeenCalledWith(
+      BIZ,
+      ["drafted"],
+      2,
+      expect.anything()
+    );
+  });
+
+  it("never sends in manual mode: the drafts wait for the owner", async () => {
+    sendLedger({
+      listActiveOutreachSettings: vi.fn(async () => [settings({ mode: "manual" })])
+    });
+    const deps = baseDeps();
+    const result = await processOutreachSweep(deps);
+    expect(result.sent).toBe(0);
+    expect(
+      (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl
+    ).not.toHaveBeenCalled();
+  });
+
+  it("records a refused send as failed and clears the premature sent stamp", async () => {
+    const ledger = sendLedger();
+    const result = await processOutreachSweep(
+      baseDeps({
+        sendEmailImpl: vi.fn(async () => ({ ok: false as const, detail: "email_not_connected" }))
+      })
+    );
+    expect(result.sent).toBe(0);
+    expect(ledger.patchProspect).toHaveBeenCalledWith(
+      BIZ,
+      prospect().id,
+      { status: "failed", status_detail: "email_not_connected", sent_at: null },
+      expect.anything()
+    );
+  });
+
+  it("records a thrown send as failed rather than losing the prospect in 'sent'", async () => {
+    const ledger = sendLedger();
+    const result = await processOutreachSweep(
+      baseDeps({
+        sendEmailImpl: vi.fn(async () => {
+          throw new Error("gmail 500");
+        })
+      })
+    );
+    expect(result.sent).toBe(0);
+    expect(ledger.patchProspect).toHaveBeenCalledWith(
+      BIZ,
+      prospect().id,
+      expect.objectContaining({ status: "failed", status_detail: "gmail 500", sent_at: null }),
+      expect.anything()
+    );
+  });
+
+  it("emails the prospect even with no flow installed, and says so", async () => {
+    sendLedger();
+    const result = await processOutreachSweep(baseDeps({ countFlowsImpl: vi.fn(async () => 0) }));
+    expect(result.sent).toBe(1);
+    expect(result.notes).toContainEqual({
+      businessId: BIZ,
+      note: "no webhook flow enabled, so the prospect was emailed but not filed"
+    });
+  });
+
+  it("keeps the send when the flow hand-off itself fails, however it failed", async () => {
+    for (const thrown of [new Error("queue down"), "queue down"]) {
+      sendLedger();
+      const result = await processOutreachSweep(
+        baseDeps({
+          processFlowEventImpl: vi.fn(async () => {
+            throw thrown;
+          })
+        })
+      );
+      // The mail already went; the hand-off is bookkeeping.
+      expect(result.sent).toBe(1);
+      expect(result.notes).toContainEqual({
+        businessId: BIZ,
+        note: "flow hand-off failed: queue down"
+      });
+    }
+  });
+
+  it("logs the send onto email_log so it shows on the owner's Emails page", async () => {
+    sendLedger();
+    const deps = baseDeps();
+    await processOutreachSweep(deps);
+    expect(
+      (deps as unknown as { recordEmailLogImpl: ReturnType<typeof vi.fn> }).recordEmailLogImpl
+    ).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        businessId: BIZ,
+        to: "info@acmehvac.com",
+        from: "Brian",
+        providerMessageId: "msg-1"
+      })
+    );
+  });
+
+  it("logs the business name when no sender name is configured", async () => {
+    sendLedger({
+      listActiveOutreachSettings: vi.fn(async () => [settings({ sender_name: null })])
+    });
+    const deps = baseDeps();
+    await processOutreachSweep(deps);
+    expect(
+      (deps as unknown as { recordEmailLogImpl: ReturnType<typeof vi.fn> }).recordEmailLogImpl
+    ).toHaveBeenCalledWith(expect.anything(), expect.objectContaining({ from: "New Coworker" }));
+  });
+
+  it("refuses to send a draft missing its address or pitch text", async () => {
+    for (const broken of [
+      prospect({ email: null }),
+      prospect({ pitch_subject: "   " }),
+      prospect({ pitch_body: null })
+    ]) {
+      const ledger = sendLedger({
+        listProspectsByStatus: vi.fn(async (_b: string, statuses: string[]) =>
+          statuses.includes("drafted") ? [broken] : []
+        )
+      });
+      const deps = baseDeps();
+      const result = await processOutreachSweep(deps);
+      expect(result.sent).toBe(0);
+      // A blank cold email is worse than none, and a silent fallback would
+      // hide whatever produced the bad row.
+      expect(ledger.patchProspect).toHaveBeenCalledWith(
+        BIZ,
+        broken.id,
+        {
+          status: "failed",
+          status_detail: "draft is missing its address or pitch text",
+          sent_at: null
+        },
+        expect.anything()
+      );
+      expect(
+        (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl
+      ).not.toHaveBeenCalled();
+    }
+  });
+
+  it("records a non-Error throw from the provider library", async () => {
+    const ledger = sendLedger();
+    const result = await processOutreachSweep(
+      baseDeps({
+        sendEmailImpl: vi.fn(async () => {
+          // Some provider clients reject with a string, not an Error.
+          throw "smtp said no";
+        })
+      })
+    );
+    expect(result.sent).toBe(0);
+    expect(ledger.patchProspect).toHaveBeenCalledWith(
+      BIZ,
+      prospect().id,
+      expect.objectContaining({ status: "failed", status_detail: "smtp said no" }),
+      expect.anything()
+    );
+  });
+
+  it("passes a phone-less prospect to the flow as the extractor's 'none' sentinel", async () => {
+    sendLedger({
+      listProspectsByStatus: vi.fn(async (_b: string, statuses: string[]) =>
+        statuses.includes("drafted") ? [prospect({ phone: null })] : []
+      )
+    });
+    const deps = baseDeps();
+    await processOutreachSweep(deps);
+    const flow = (deps as unknown as { processFlowEventImpl: ReturnType<typeof vi.fn> })
+      .processFlowEventImpl;
+    const payload = flow.mock.calls[0][1] as { data: Record<string, string> };
+    // The flow's filing steps are gated on this literal, so an empty string
+    // would file a contact with no phone into a phone-keyed CRM.
+    expect(payload.data.prospect_phone).toBe("none");
+  });
+});
+
+describe("phase 4: the single nudge", () => {
+  function nudgeLedger(over: Record<string, unknown> = {}) {
+    return stubLedger({
+      listProspectsDueForNudge: vi.fn(async () => [
+        prospect({ status: "sent", sent_at: "2026-07-20T16:00:00Z" })
+      ]),
+      ...over
+    });
+  }
+
+  it("follows up once, on the original subject, with the footer intact", async () => {
+    const ledger = nudgeLedger();
+    const deps = baseDeps();
+    const result = await processOutreachSweep(deps);
+    expect(result.nudged).toBe(1);
+    // The nudge is stamped, which is what makes "one follow-up, ever" true.
+    expect(ledger.transitionProspect).toHaveBeenCalledWith(
+      BIZ,
+      prospect().id,
+      "sent",
+      { nudged_at: MONDAY_MORNING.toISOString() },
+      expect.anything()
+    );
+    const send = (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl;
+    const args = send.mock.calls[0][1] as { subject: string; bodyText: string };
+    expect(args.subject).toBe(prospect().pitch_subject);
+    expect(args.bodyText).toContain("/api/outreach/unsubscribe?");
+    expect(args.bodyText).toContain("1 Example Plaza, Phoenix AZ");
+    expect(args.bodyText).toContain("I wrote last week");
+  });
+
+  it("asks only for prospects inside the patience window", async () => {
+    const ledger = nudgeLedger();
+    await processOutreachSweep(baseDeps());
+    expect(ledger.listProspectsDueForNudge).toHaveBeenCalledWith(
+      BIZ,
+      "2026-07-06T16:00:00.000Z",
+      "2026-07-22T16:00:00.000Z",
+      5,
+      expect.anything()
+    );
+  });
+
+  it("nudges nobody outside the send window", async () => {
+    const ledger = nudgeLedger();
+    await processOutreachSweep(baseDeps({ now: () => MONDAY_AFTERNOON }));
+    expect(ledger.listProspectsDueForNudge).not.toHaveBeenCalled();
+  });
+
+  it("greets a nameless prospect neutrally and keeps a missing subject sane", async () => {
+    nudgeLedger({
+      listProspectsDueForNudge: vi.fn(async () => [
+        prospect({ status: "sent", business_name: "  ", pitch_subject: null })
+      ])
+    });
+    const deps = baseDeps();
+    await processOutreachSweep(deps);
+    const send = (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl;
+    const args = send.mock.calls[0][1] as { subject: string; bodyText: string };
+    expect(args.subject).toBe("Following up");
+    expect(args.bodyText).toContain("Hi there,");
+  });
+
+  it("counts nothing when the nudge claim is lost to another pass", async () => {
+    nudgeLedger({ transitionProspect: vi.fn(async () => false) });
+    const result = await processOutreachSweep(baseDeps());
+    expect(result.nudged).toBe(0);
+  });
+
+  it("skips a nudge-due row with no address rather than burning its one follow-up", async () => {
+    const ledger = nudgeLedger({
+      listProspectsDueForNudge: vi.fn(async () => [prospect({ status: "sent", email: null })])
+    });
+    const deps = baseDeps();
+    const result = await processOutreachSweep(deps);
+    expect(result.nudged).toBe(0);
+    expect(ledger.transitionProspect).not.toHaveBeenCalled();
+    expect(
+      (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl
+    ).not.toHaveBeenCalled();
+  });
+});
+
+describe("recordOutreachEmailLog", () => {
+  it("writes the outbound row", async () => {
+    const insert = vi.fn(async (_row: { body_preview: string }) => ({ error: null }));
+    const client = { from: vi.fn(() => ({ insert })) } as never;
+    await recordOutreachEmailLog(client, {
+      businessId: BIZ,
+      to: "info@acmehvac.com",
+      from: "Brian",
+      subject: "s",
+      body: "b".repeat(600),
+      providerMessageId: "msg-1"
+    });
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        business_id: BIZ,
+        direction: "outbound",
+        source: "owner_mailbox",
+        provider_message_id: "msg-1"
+      })
+    );
+    // Only a preview is logged, matching the flow worker's own email_log write.
+    expect(insert.mock.calls[0][0].body_preview).toHaveLength(500);
+  });
+
+  it("never throws when the log write fails: the mail has already gone", async () => {
+    const insert = vi.fn(async () => ({ error: { message: "log table down" } }));
+    const client = { from: vi.fn(() => ({ insert })) } as never;
+    await expect(
+      recordOutreachEmailLog(client, {
+        businessId: BIZ,
+        to: "a@b.com",
+        from: "Brian",
+        subject: "s",
+        body: "b",
+        providerMessageId: null
+      })
+    ).resolves.toBeUndefined();
+  });
+});
