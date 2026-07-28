@@ -23,6 +23,7 @@ import { DeleteClientButton } from "@/components/admin/DeleteClientButton";
 import { ForceRefundButton } from "@/components/admin/ForceRefundButton";
 import { BillingControlsPanel } from "@/components/admin/BillingControlsPanel";
 import { NudgeOwnerButton } from "@/components/admin/NudgeOwnerButton";
+import { computeOnboardingNudgeItems } from "@/lib/admin/onboarding-nudge";
 import { StripeDiagnosticsPanel } from "@/components/admin/StripeDiagnosticsPanel";
 import { ViewAsButton } from "@/components/admin/ViewAsButton";
 import { DeployButton } from "@/components/dashboard/DeployButton";
@@ -183,6 +184,17 @@ export default async function BusinessDetailPage({
   const systemLogs = [...systemLogById.values()].sort((a, b) => b.id - a.id);
 
   const needsPayment = !subscription || subscription.status === "pending";
+
+  // What the onboarding nudge would ask this owner to finish. Same function
+  // the /api/admin/nudge route runs, so the reasons shown next to the button
+  // are exactly what the email would say.
+  const nudgeItems = computeOnboardingNudgeItems({
+    subscription,
+    websiteMd: config?.website_md,
+    didE164: telnyxRoute?.to_e164,
+    offers: whiteGloveOffers,
+    deals: enterpriseDeals
+  });
 
   return (
     <div className="space-y-6 max-w-4xl">
@@ -604,9 +616,13 @@ export default async function BusinessDetailPage({
             </div>
           )}
         {/* Nudge the owner about unfinished onboarding (checkout, website,
-            unpaid offers) — the API computes the open items server-side. */}
-        <div className="mt-4">
-          <NudgeOwnerButton businessId={businessId} />
+            phone number, unpaid offers). The open items are listed here so
+            the operator sees what the email would say before sending it. */}
+        <div className="mt-4 border-t border-parchment/10 pt-4">
+          <NudgeOwnerButton
+            businessId={businessId}
+            openItems={nudgeItems.map((item) => item.label)}
+          />
         </div>
       </Card>
 
