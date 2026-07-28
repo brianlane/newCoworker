@@ -16,6 +16,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+import { DismissCardButton } from "@/components/dashboard/DismissCardButton";
 import { newLeadIntakeTemplate } from "@/lib/ai-flows/templates";
 
 type Props = {
@@ -26,9 +27,17 @@ type Props = {
   onInstalled: () => Promise<void>;
   /** Open the installed flow in the editor (wording review). */
   onEdit: (flowId: string) => void;
+  /** Hide this card for the signed-in user (the flow itself is untouched). */
+  onDismiss: () => void;
 };
 
-export function NewLeadIntakeCard({ businessId, installedFlow, onInstalled, onEdit }: Props) {
+export function NewLeadIntakeCard({
+  businessId,
+  installedFlow,
+  onInstalled,
+  onEdit,
+  onDismiss
+}: Props) {
   const [installing, setInstalling] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -63,8 +72,9 @@ export function NewLeadIntakeCard({ businessId, installedFlow, onInstalled, onEd
   };
 
   return (
-    <Card>
-      <div className="flex flex-col gap-2">
+    <Card className="relative">
+      <DismissCardButton onDismiss={onDismiss} />
+      <div className="flex flex-col gap-2 pr-6">
         <h2 className="text-sm font-semibold text-parchment">
           Hand your coworker a new lead by text
         </h2>

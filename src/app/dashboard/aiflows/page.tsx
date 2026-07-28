@@ -6,6 +6,7 @@ import { getAuthUser } from "@/lib/auth";
 import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { listAiFlows } from "@/lib/ai-flows/db";
+import { listDismissedCardKeys } from "@/lib/dashboard/dismissed-cards";
 import { Card } from "@/components/ui/Card";
 import { AiFlowsManager } from "@/components/dashboard/AiFlowsManager";
 
@@ -36,6 +37,9 @@ export default async function AiFlowsPage({ searchParams }: Props) {
   const businessType = (businesses?.[0]?.business_type as string | null | undefined) ?? null;
 
   const flows = businessId ? await listAiFlows(businessId) : [];
+  // Dismissals are the signed-in user's own, so an admin in view-as sees the
+  // cards they kept, not the tenant owner's choices.
+  const dismissedCards = await listDismissedCardKeys(user.userId);
 
   return (
     <div className="max-w-4xl space-y-8">
@@ -98,6 +102,7 @@ export default async function AiFlowsPage({ searchParams }: Props) {
           initialFlows={flows}
           initialEditId={edit ?? null}
           initialAdaptDraft={adapt === "1"}
+          initialDismissedCards={dismissedCards}
         />
       )}
     </div>

@@ -19,8 +19,18 @@ import {
   pruneLibraryEntries,
   upsertLibraryEntry
 } from "@/lib/ai-flows/library";
-import { containsLikelyPii } from "@/lib/ai-flows/scrub";
+import { containsLikelyPii, templateKeyFromName } from "@/lib/ai-flows/scrub";
+import { libraryStarterTemplates } from "@/lib/ai-flows/templates";
 import { refreshAiFlowLibrary } from "@/lib/ai-flows/library-refresh";
+
+/** The curated starters every refresh republishes, by catalog slug. */
+const STARTERS = libraryStarterTemplates();
+const STARTER_KEYS = STARTERS.map((t) => templateKeyFromName(t.name));
+
+/** Upsert calls the refresh made, by source. */
+function upsertsBySource(source: "community" | "starter") {
+  return vi.mocked(upsertLibraryEntry).mock.calls.map((c) => c[0]).filter((c) => c.source === source);
+}
 
 const DEF = {
   version: 1,
@@ -61,15 +71,80 @@ function makeNamesDb(tables: Record<string, unknown[]>) {
 beforeEach(() => vi.clearAllMocks());
 
 describe("refreshAiFlowLibrary", () => {
-  it("returns zero counts and skips name lookups when there are no candidates", async () => {
+  it("publishes only the starters when there are no candidates", async () => {
     vi.mocked(aggregateLibraryCandidates).mockResolvedValue([]);
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(makeNamesDb({}));
     const result = await refreshAiFlowLibrary();
-    expect(result).toEqual({ candidates: 0, groups: 0, published: 0, skipped: 0 });
+    expect(result).toEqual({
+      candidates: 0,
+      groups: 0,
+      published: 0,
+      starters: STARTERS.length,
+      skipped: 0
+    });
     expect(createSupabaseServiceClient).toHaveBeenCalledTimes(1);
-    expect(upsertLibraryEntry).not.toHaveBeenCalled();
-    // With no candidates, prune clears the whole catalog (empty keep list).
-    expect(pruneLibraryEntries).toHaveBeenCalledWith([], expect.anything());
+    expect(upsertsBySource("community")).toEqual([]);
+    // A starter nobody has run yet publishes with honest zeros, not stale stats.
+    const starters = upsertsBySource("starter");
+    expect(starters.map((c) => c.templateKey)).toEqual(STARTER_KEYS);
+    expect(starters[0]).toMatchObject({
+      title: STARTERS[0].name,
+      summary: STARTERS[0].summary,
+      category: "Starters",
+      totalSuccessfulRuns: 0,
+      totalRuns: 0,
+      businessesUsing: 0,
+      runsLast7d: 0,
+      lastRunAt: null,
+      stats: { runsPerDay: 0 }
+    });
+    // Published verbatim: no scrub pass, so the wording survives intact.
+    expect(starters[0].scrubbedDefinition).toEqual(STARTERS[0].definition);
+    // The catalog is pruned to what was just published, so the starters have
+    // to be in the keep list or the next hour would delete them.
+    expect(pruneLibraryEntries).toHaveBeenCalledWith(STARTER_KEYS, expect.anything());
+  });
+
+  it("folds a tenant's runs of a starter into the starter entry, never a rival row", async () => {
+    const starter = STARTERS[0];
+    const key = templateKeyFromName(starter.name);
+    vi.mocked(aggregateLibraryCandidates).mockResolvedValue([
+      candidate({ business_id: "biz-1", name: starter.name, done_count: 3, total_count: 4 }),
+      // A copy in another tenant: same key, so its stats join the same entry.
+      candidate({
+        flow_id: "f2",
+        business_id: "biz-2",
+        name: `${starter.name} (copy)`,
+        done_count: 2,
+        total_count: 2,
+        done_last_7d: 7,
+        last_done_at: "2026-06-20T00:00:00Z"
+      })
+    ] as never);
+
+    const result = await refreshAiFlowLibrary(makeNamesDb({}));
+
+    // The group exists, but it is published as the starter, not as a
+    // community entry that would collide with it on template_key.
+    expect(result).toEqual({
+      candidates: 2,
+      groups: 1,
+      published: 0,
+      starters: STARTERS.length,
+      skipped: 0
+    });
+    expect(upsertsBySource("community")).toEqual([]);
+    const entry = upsertsBySource("starter").find((c) => c.templateKey === key)!;
+    expect(entry).toMatchObject({
+      totalSuccessfulRuns: 5,
+      totalRuns: 6,
+      runsLast7d: 9,
+      businessesUsing: 2,
+      lastRunAt: "2026-06-20T00:00:00Z",
+      // Adoption is real, but the published definition stays ours.
+      summary: starter.summary
+    });
+    expect(entry.scrubbedDefinition).toEqual(starter.definition);
   });
 
   it("groups copies, sums stats, scrubs names, and upserts one entry per template", async () => {
@@ -140,7 +215,8 @@ describe("refreshAiFlowLibrary", () => {
     expect(result.published).toBe(3);
     expect(result.skipped).toBe(0);
 
-    const calls = vi.mocked(upsertLibraryEntry).mock.calls.map((c) => c[0]);
+    const calls = upsertsBySource("community");
+    expect(calls).toHaveLength(3);
     const ref = calls.find((c) => c.templateKey === "referralexchange-lead")!;
     expect(ref.title).toBe("ReferralExchange lead");
     expect(ref.totalSuccessfulRuns).toBe(7); // 3 + 4
@@ -160,26 +236,41 @@ describe("refreshAiFlowLibrary", () => {
     const weekly = calls.find((c) => c.templateKey === "weekly-report")!;
     expect(weekly.category).toBe("Unknown Industry"); // unmapped -> title-cased
 
-    // Stale entries are pruned to the surviving template keys.
+    // Stale entries are pruned to the surviving template keys (starters
+    // included, since the prune deletes everything not in the keep list).
     expect(pruneLibraryEntries).toHaveBeenCalledTimes(1);
     const keptKeys = vi.mocked(pruneLibraryEntries).mock.calls[0][0];
-    expect([...keptKeys].sort()).toEqual(["daily-digest", "referralexchange-lead", "weekly-report"]);
+    expect([...keptKeys].sort()).toEqual(
+      ["daily-digest", "referralexchange-lead", "weekly-report", ...STARTER_KEYS].sort()
+    );
   });
 
   it("handles null name-lookup results (no known names)", async () => {
     vi.mocked(aggregateLibraryCandidates).mockResolvedValue([candidate()] as never);
     const result = await refreshAiFlowLibrary(makeNamesDb({}));
-    expect(result).toEqual({ candidates: 1, groups: 1, published: 1, skipped: 0 });
-    expect(upsertLibraryEntry).toHaveBeenCalledTimes(1);
+    expect(result).toEqual({
+      candidates: 1,
+      groups: 1,
+      published: 1,
+      starters: STARTERS.length,
+      skipped: 0
+    });
+    expect(upsertsBySource("community")).toHaveLength(1);
   });
 
   it("withholds a template that still trips the PII gate", async () => {
     vi.mocked(aggregateLibraryCandidates).mockResolvedValue([candidate()] as never);
     vi.mocked(containsLikelyPii).mockReturnValue(true);
     const result = await refreshAiFlowLibrary(makeNamesDb({}));
-    expect(result).toEqual({ candidates: 1, groups: 1, published: 0, skipped: 1 });
-    expect(upsertLibraryEntry).not.toHaveBeenCalled();
-    // Nothing published -> prune clears the catalog.
-    expect(pruneLibraryEntries).toHaveBeenCalledWith([], expect.anything());
+    expect(result).toEqual({
+      candidates: 1,
+      groups: 1,
+      published: 0,
+      starters: STARTERS.length,
+      skipped: 1
+    });
+    // The gate withholds the tenant flow; the curated starters are unaffected.
+    expect(upsertsBySource("community")).toEqual([]);
+    expect(pruneLibraryEntries).toHaveBeenCalledWith(STARTER_KEYS, expect.anything());
   });
 });
