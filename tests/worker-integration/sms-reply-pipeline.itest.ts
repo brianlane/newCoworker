@@ -239,6 +239,11 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
 
   it("an iMessage tapback gets NO AI reply — logged and counted, never answered", async () => {
     const { biz } = await seedLeadWithContext("IT tapback suppress");
+    // The seeded flow message ends in a question, and a reaction to a
+    // question is an ANSWER (see the thumbs-down scenario below). This
+    // scenario is the other case: our last word was a statement, so the Like
+    // is pure noise.
+    await seedPriorAssistantReply(biz, "Great, looking forward to it!");
     // NO scripted Rowboat reply: the suppression must fire before any model
     // call, so an unexpected /chat would fail loudly on the empty script.
     const jobId = await enqueueSmsJob(db, biz, LEAD, "Liked \u201CGreat, looking forward to it!\u201D");
@@ -261,6 +266,114 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
       .eq("customer_e164", LEAD)
       .single();
     expect((contact as { total_interaction_count: number }).total_interaction_count).toBe(1);
+  });
+
+  it("a verbless emoji tapback gets NO AI reply either (KYP Jul 28)", async () => {
+    const { biz } = await seedLeadWithContext("IT tapback verbless");
+    await seedPriorAssistantReply(
+      biz,
+      "I have flagged this directly to James so he can get that email breakdown over to you right away."
+    );
+    // Byte-for-byte the live inbound: hair spaces around the whole thing,
+    // zero-width spaces hugging the heart, padded quotes, and no verb. Three
+    // of these in a row each drew a fresh reply before the fix.
+    const jobId = await enqueueSmsJob(
+      db,
+      biz,
+      LEAD,
+      "\u200A\u200B\u2764\uFE0F\u200B to \u201C\u200AI have flagged this directly to James " +
+        "so he can get that email breakdown over to you right away.\u200A\u201D\u200A"
+    );
+    const callsBefore = rowboat.calls.length;
+    await tickSmsWorker();
+
+    expect(rowboat.calls.length).toBe(callsBefore);
+    const job = await getSmsJob(db, jobId);
+    expect(job.status).toBe("done");
+    expect(job.last_error).toBe("suppressed_tapback");
+  });
+
+  it("a tapback ANSWERING a question is read as the answer, with a note", async () => {
+    const { biz } = await seedLeadWithContext("IT tapback answers question");
+    await seedPriorAssistantReply(biz, "Does noon work for you?");
+    rowboat.scriptReply("No problem, I'll find another time.");
+    const jobId = await enqueueSmsJob(
+      db,
+      biz,
+      LEAD,
+      "\u{1F44E} to \u201CDoes noon work for you?\u201D"
+    );
+    const callsBefore = rowboat.calls.length;
+    await tickSmsWorker();
+
+    // A thumbs down on our question means "no" — swallowing it would strand
+    // the thread waiting on an answer it already got.
+    const job = await getSmsJob(db, jobId);
+    expect(job.last_error).not.toBe("suppressed_tapback");
+    expect(job.last_error).toBe("missing_telnyx_messaging_env");
+    // The reaction alone says nothing, so the note rides inside the user turn.
+    expect(rowboat.calls.length).toBe(callsBefore + 1);
+    const user = rowboat.calls[callsBefore].body.messages.find((m) => m.role === "user");
+    expect(user?.content).toContain("Does noon work for you?");
+    expect(user?.content).toContain("means no");
+  });
+
+  it("un-reacting stays silent even while a question is pending", async () => {
+    const { biz } = await seedLeadWithContext("IT tapback removal");
+    await seedPriorAssistantReply(biz, "Does noon work for you?");
+    const jobId = await enqueueSmsJob(
+      db,
+      biz,
+      LEAD,
+      "Removed a like from \u201CDoes noon work for you?\u201D"
+    );
+    const callsBefore = rowboat.calls.length;
+    await tickSmsWorker();
+
+    expect(rowboat.calls.length).toBe(callsBefore);
+    expect((await getSmsJob(db, jobId)).last_error).toBe("suppressed_tapback");
+  });
+
+  it("a question-mark tapback is always answered, even after a statement", async () => {
+    const { biz } = await seedLeadWithContext("IT tapback questioned");
+    await seedPriorAssistantReply(biz, "We close at 5.");
+    rowboat.scriptReply("Sorry, I mean our office closes at 5:00 PM today.");
+    const jobId = await enqueueSmsJob(db, biz, LEAD, "Questioned \u201CWe close at 5.\u201D");
+    const callsBefore = rowboat.calls.length;
+    await tickSmsWorker();
+
+    expect((await getSmsJob(db, jobId)).last_error).not.toBe("suppressed_tapback");
+    expect(rowboat.calls.length).toBe(callsBefore + 1);
+    const user = rowboat.calls[callsBefore].body.messages.find((m) => m.role === "user");
+    expect(user?.content).toContain("did not understand");
+  });
+
+  it("an emoji-only answer to a question carries the same note", async () => {
+    const { biz } = await seedLeadWithContext("IT emoji-only answers question");
+    await seedPriorAssistantReply(biz, "Does noon work for you?");
+    rowboat.scriptReply("Just to confirm, does noon work for you?");
+    await enqueueSmsJob(db, biz, LEAD, "\u{1F42C}");
+    const callsBefore = rowboat.calls.length;
+    await tickSmsWorker();
+
+    // A dolphin answers nothing. The model is told to ask again rather than
+    // pick a reading.
+    expect(rowboat.calls.length).toBe(callsBefore + 1);
+    const user = rowboat.calls[callsBefore].body.messages.find((m) => m.role === "user");
+    expect(user?.content).toContain("only an emoji");
+    expect(user?.content).toContain("ask it again in plain words");
+  });
+
+  it("a bare thumbs down is never swallowed as an ack", async () => {
+    const { biz } = await seedLeadWithContext("IT thumbs down");
+    await seedPriorAssistantReply(biz, "You're all set for tomorrow at noon.");
+    rowboat.scriptReply("I'm sorry, what would you like me to change?");
+    const jobId = await enqueueSmsJob(db, biz, LEAD, "\u{1F44E}");
+    await tickSmsWorker();
+
+    const job = await getSmsJob(db, jobId);
+    expect(job.last_error).not.toBe("suppressed_ack");
+    expect(job.last_error).toBe("missing_telnyx_messaging_env");
   });
 
   /** A completed prior turn whose reply the ack gate will judge. */
