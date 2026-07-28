@@ -15,7 +15,8 @@ import {
   Newspaper,
   Sparkles,
   Network,
-  Radar
+  Radar,
+  Tag
 } from "lucide-react";
 
 const adminNavItems = [
@@ -24,6 +25,7 @@ const adminNavItems = [
   { labelKey: "webchat", href: "/admin/webchat", icon: MessageSquare },
   { labelKey: "blog", href: "/admin/blog", icon: Newspaper },
   { labelKey: "revenue", href: "/admin/revenue", icon: DollarSign },
+  { labelKey: "promotions", href: "/admin/promotions", icon: Tag },
   { labelKey: "costs", href: "/admin/costs", icon: Receipt },
   { labelKey: "usage", href: "/admin/usage", icon: Gauge },
   { labelKey: "gemini", href: "/admin/gemini", icon: Sparkles },

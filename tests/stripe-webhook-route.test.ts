@@ -108,6 +108,10 @@ vi.mock("@/lib/db/businesses", () => ({
   updateBusinessOwnerEmailIfPending: vi.fn().mockResolvedValue(true)
 }));
 
+vi.mock("@/lib/db/promotions", () => ({
+  recordPromotionRedemption: vi.fn()
+}));
+
 vi.mock("@/lib/db/white-glove-offers", () => ({
   getWhiteGloveOffer: vi.fn(),
   markWhiteGloveOfferPaid: vi.fn().mockResolvedValue("paid"),
@@ -198,6 +202,7 @@ import {
   updateSubscription
 } from "@/lib/db/subscriptions";
 import { getBusiness, recordWhiteGlovePurchase, updateBusinessOwnerEmailIfPending } from "@/lib/db/businesses";
+import { recordPromotionRedemption } from "@/lib/db/promotions";
 import {
   getWhiteGloveOffer,
   markWhiteGloveOfferPaid,
@@ -310,6 +315,120 @@ describe("stripe webhook route", () => {
       billingPeriod: "annual",
       notifyOpsNewSignup: true
     });
+  });
+
+  it("records the promotion redemption with what Stripe actually discounted", async () => {
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_promo",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_promo",
+          metadata: {
+            businessId: "biz_promo",
+            tier: "standard",
+            billingPeriod: "biennial",
+            promotionId: "44444444-4444-4444-8444-444444444444",
+            promotionCode: "SUMMER20"
+          },
+          customer: "cus_promo",
+          subscription: "sub_promo",
+          total_details: { amount_discount: 47520 }
+        }
+      }
+    } as never);
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "local_sub_promo",
+      status: "pending",
+      stripe_subscription_id: null
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(response.status).toBe(200);
+    expect(recordPromotionRedemption).toHaveBeenCalledWith({
+      promotionId: "44444444-4444-4444-8444-444444444444",
+      businessId: "biz_promo",
+      tier: "standard",
+      billingPeriod: "biennial",
+      stripeSessionId: "cs_promo",
+      amountDiscountedCents: 47520
+    });
+  });
+
+  it("does not fail an activation when the redemption row cannot be written", async () => {
+    vi.mocked(recordPromotionRedemption).mockRejectedValue(new Error("no grant"));
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_promo_fail",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_promo_fail",
+          metadata: {
+            businessId: "biz_promo_fail",
+            tier: "starter",
+            billingPeriod: "monthly",
+            promotionId: "44444444-4444-4444-8444-444444444444"
+          },
+          customer: "cus_promo_fail",
+          subscription: "sub_promo_fail"
+        }
+      }
+    } as never);
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "local_sub_promo_fail",
+      status: "pending",
+      stripe_subscription_id: null
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    // The money is already taken; a missing stats row must not 500 the
+    // webhook into an endless Stripe retry loop.
+    expect(response.status).toBe(200);
+    expect(updateSubscription).toHaveBeenCalled();
+  });
+
+  it("records nothing when the session carries no promotion", async () => {
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_no_promo",
+      type: "checkout.session.completed",
+      data: {
+        object: {
+          id: "cs_no_promo",
+          metadata: { businessId: "biz_np", tier: "starter", billingPeriod: "annual" },
+          customer: "cus_np",
+          subscription: "sub_np"
+        }
+      }
+    } as never);
+    vi.mocked(getSubscription).mockResolvedValue({
+      id: "local_sub_np",
+      status: "pending",
+      stripe_subscription_id: null
+    } as never);
+
+    await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+
+    expect(recordPromotionRedemption).not.toHaveBeenCalled();
   });
 
   it("skips the commitment schedule when a FRESH re-read shows auto-renew was just enabled (webhook race)", async () => {
