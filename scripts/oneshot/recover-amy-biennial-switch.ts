@@ -128,18 +128,6 @@ if ((biz.vps_provider ?? "hostinger") !== "hostinger") {
   process.exit(1);
 }
 
-const { data: subRows, error: subErr } = await db
-  .from("subscriptions")
-  .select("*")
-  .eq("business_id", BUSINESS_ID)
-  .order("created_at", { ascending: false })
-  .limit(3);
-if (subErr) {
-  console.error(`[oneshot] subscriptions read failed: ${subErr.message}`);
-  process.exit(1);
-}
-const subs = subRows ?? [];
-
 // ------------------------------------------- locate the paid change-plan session
 // The change-plan checkout stamps lifecycleAction=changePlan + businessId on
 // the session; the newest complete+paid one for this business is the switch
@@ -184,6 +172,31 @@ if (tier !== biz.tier) {
   process.exit(1);
 }
 
+// Load the previous subscription BY ID (not "newest 3") so a business with
+// more than three historical rows still resolves the checkout metadata.
+const { data: oldSubRow, error: oldSubErr } = await db
+  .from("subscriptions")
+  .select("*")
+  .eq("id", previousSubscriptionId)
+  .maybeSingle();
+if (oldSubErr) {
+  console.error(`[oneshot] previous subscription read failed: ${oldSubErr.message}`);
+  process.exit(1);
+}
+const oldSub = oldSubRow;
+
+const { data: existingNewRows, error: existingNewErr } = await db
+  .from("subscriptions")
+  .select("*")
+  .eq("business_id", BUSINESS_ID)
+  .eq("stripe_subscription_id", newStripeSubId)
+  .limit(1);
+if (existingNewErr) {
+  console.error(`[oneshot] new subscription lookup failed: ${existingNewErr.message}`);
+  process.exit(1);
+}
+const existingNew = existingNewRows?.[0] ?? null;
+
 // The new Stripe sub must be CANCELED (the orchestrator's abort path). If it
 // is anything else the webhook actually completed and this recovery is the
 // wrong tool.
@@ -196,22 +209,32 @@ if (newStripeSub.status !== "canceled") {
   process.exit(1);
 }
 
-// Idempotency: the new sub row existing means a previous --apply finished the
-// bookkeeping. Nothing to do.
-const alreadyDone = subs.find((s) => s.stripe_subscription_id === newStripeSubId);
-if (alreadyDone) {
+// Full-done idempotency: new row active AND old row canceled as upgrade_switch.
+// A partial prior --apply (new row inserted, old still active) must resume.
+const recoveryComplete =
+  existingNew?.status === "active" &&
+  oldSub?.status === "canceled" &&
+  oldSub.cancel_reason === "upgrade_switch";
+if (recoveryComplete) {
   console.log(
-    `[oneshot] subscriptions row ${alreadyDone.id} already points at ${newStripeSubId} ` +
-      `(status=${alreadyDone.status}); recovery already applied. Nothing to do.`
+    `[oneshot] recovery already complete (new row ${existingNew.id} active, old row ` +
+      `${oldSub.id} canceled upgrade_switch). Nothing to do.`
   );
   process.exit(0);
 }
 
-const oldSub = subs.find((s) => s.id === previousSubscriptionId);
-if (!oldSub || oldSub.status !== "active") {
+if (!oldSub) {
   console.error(
-    `[oneshot] previous subscription ${previousSubscriptionId} is missing or not active ` +
-      `(status=${oldSub?.status ?? "absent"}); the state has drifted, refusing to act`
+    `[oneshot] previous subscription ${previousSubscriptionId} not found; refusing to act`
+  );
+  process.exit(1);
+}
+// After a partial apply the old row may already be canceled; resume is still
+// allowed when the new row is missing. Refuse only when the old row is wiped
+// or otherwise unusable AND we still need to cancel an active Stripe sub.
+if (oldSub.status !== "active" && oldSub.status !== "canceled") {
+  console.error(
+    `[oneshot] previous subscription ${previousSubscriptionId} has status=${oldSub.status}; refusing to act`
   );
   process.exit(1);
 }
@@ -223,11 +246,19 @@ const adoptVm = await hostinger.getVirtualMachine(ADOPT_VM_ID).catch((err: unkno
   );
   process.exit(1);
 });
-const oldVmIdRaw = biz.hostinger_vps_id;
-const oldVmId = oldVmIdRaw && /^\d+$/.test(oldVmIdRaw) ? Number.parseInt(oldVmIdRaw, 10) : null;
-if (ADOPT_VM_ID === oldVmId) {
-  console.error(`[oneshot] --adopt-vm ${ADOPT_VM_ID} is the business's CURRENT box`);
-  process.exit(1);
+const currentVmIdRaw = biz.hostinger_vps_id;
+const currentVmId =
+  currentVmIdRaw && /^\d+$/.test(currentVmIdRaw) ? Number.parseInt(currentVmIdRaw, 10) : null;
+// A prior --apply may have already swung hostinger_vps_id onto the adopt
+// target. That is RESUME, not an error: skip snapshot/backup/adopt/restore
+// and continue with DB + Stripe bookkeeping.
+const adoptAlreadyDone = currentVmId === ADOPT_VM_ID;
+const oldVmId: number | null = adoptAlreadyDone ? null : currentVmId;
+if (adoptAlreadyDone) {
+  console.log(
+    `[oneshot] hostinger_vps_id already points at adopt target ${ADOPT_VM_ID}; ` +
+      "skipping adopt/migrate and resuming bookkeeping."
+  );
 }
 const expectedSize = resolveDeployedVpsSize(biz.tier, biz.vps_size ?? null);
 const adoptPlan = normalizeHostingerPlan(adoptVm.plan);
@@ -238,11 +269,13 @@ if (adoptPlan !== expectedSize) {
   process.exit(1);
 }
 // The adopt path re-images the target; a co-tenanted box would take a second
-// product down with it.
-const shared = sharedHardwareForVm(ADOPT_VM_ID);
-if (shared) {
-  console.error(`\n${sharedHardwareWarning(shared)}\n[oneshot] REFUSING shared hardware.`);
-  process.exit(1);
+// product down with it. Skip when adopt already landed (no re-image).
+if (!adoptAlreadyDone) {
+  const shared = sharedHardwareForVm(ADOPT_VM_ID);
+  if (shared) {
+    console.error(`\n${sharedHardwareWarning(shared)}\n[oneshot] REFUSING shared hardware.`);
+    process.exit(1);
+  }
 }
 
 // New box billing id: VM detail first (the subscriptions LIST stopped
@@ -287,17 +320,29 @@ console.log(`paid session    : ${session.id} ($${((session.amount_total ?? 0) / 
 console.log(`new Stripe sub  : ${newStripeSubId} (canceled object, payment captured)`);
 console.log(`old Stripe sub  : ${oldSub.stripe_subscription_id ?? "none"} (will be canceled)`);
 console.log(`adopt target    : vm=${ADOPT_VM_ID} state=${adoptVm.state} plan=${adoptVm.plan} billing=${newBillingId ?? "UNKNOWN"}`);
-console.log(`old box         : vm=${oldVmId ?? "none"} ip=${oldVmIp ?? "none"} billing=${oldBillingId ?? "UNKNOWN"}`);
+console.log(
+  `old box         : vm=${oldVmId ?? (adoptAlreadyDone ? "already-cutover" : "none")} ip=${oldVmIp ?? "none"} billing=${oldBillingId ?? "UNKNOWN"}`
+);
 console.log(`renewal_at      : ${renewalAt.toISOString()} (${commitmentMonths} months from payment)`);
+console.log(`resume          : adoptAlreadyDone=${adoptAlreadyDone} existingNewRow=${existingNew?.id ?? "none"}`);
 
 if (!APPLY) {
-  console.log(`\n[dry-run] Would: snapshot + backup old box -> adopt + bootstrap vm ${ADOPT_VM_ID}`);
-  console.log(`[dry-run] -> restore data -> create biennial sub row -> cancel old Stripe sub`);
-  console.log(`[dry-run] -> mark old row canceled (upgrade_switch) -> stop old box, auto-renew off, pool it.`);
+  console.log(
+    adoptAlreadyDone
+      ? `\n[dry-run] Would: skip adopt (already on ${ADOPT_VM_ID}) -> create/confirm biennial sub row -> cancel old Stripe sub -> pool old box.`
+      : `\n[dry-run] Would: snapshot + backup old box -> adopt + bootstrap vm ${ADOPT_VM_ID}`
+  );
+  if (!adoptAlreadyDone) {
+    console.log(`[dry-run] -> restore data -> create biennial sub row -> cancel old Stripe sub`);
+    console.log(`[dry-run] -> mark old row canceled (upgrade_switch) -> stop old box, auto-renew off, pool it.`);
+  }
   console.log(`[dry-run] Re-run with --apply to act.`);
   process.exit(0);
 }
 
+let backupPath: string | null = null;
+
+if (!adoptAlreadyDone) {
 // ------------------------------------------------------------- 1. snapshot
 if (oldVmId !== null) {
   try {
@@ -327,6 +372,7 @@ const backup = await backupBusinessData(
   { businessId: BUSINESS_ID, vpsHost: oldVmIp },
   { sshKeyLookup: async () => oldBoxKey }
 );
+backupPath = backup.storagePath;
 console.log(`[backup] ok: ${backup.storagePath} (${backup.sizeBytes} bytes)`);
 
 // ------------------------------------------------------------- 3. adopt
@@ -400,27 +446,42 @@ try {
   console.error(`[restore] Old box left running (it still has the live data). Fix + re-run.`);
   process.exit(1);
 }
+} else {
+  // Resume path: adopt already swung traffic; resolve new box IP for the summary.
+  try {
+    const vm = await hostinger.getVirtualMachine(ADOPT_VM_ID);
+    console.log(`[resume] serving on ${vm.ipv4?.[0]?.address ?? "ip?"} (adopt already done)`);
+  } catch {
+    /* summary-only */
+  }
+}
 
 // ------------------------------------------------- 5. new subscriptions row
 // Mirrors change-plan step 5. The Stripe sub object is canceled, so
 // ensureCommitmentSchedule is deliberately skipped (nothing to schedule on a
 // canceled sub); renewal handling at term end goes through re-contract.
-const periodCache = stripeSubscriptionPeriodCache(newStripeSub);
-const newRow = await createSubscription({
-  id: randomUUID(),
-  business_id: BUSINESS_ID,
-  stripe_customer_id: stripeCustomerId,
-  stripe_subscription_id: newStripeSubId,
-  tier,
-  status: "active",
-  billing_period: billingPeriod,
-  renewal_at: renewalAt.toISOString(),
-  commitment_months: commitmentMonths,
-  customer_profile_id: customerProfileId,
-  hostinger_billing_subscription_id: newBillingId,
-  ...periodCache
-});
-console.log(`[db] new subscriptions row ${newRow.id} (active, ${billingPeriod})`);
+let newRowId = existingNew?.id ?? null;
+if (!existingNew) {
+  const periodCache = stripeSubscriptionPeriodCache(newStripeSub);
+  const newRow = await createSubscription({
+    id: randomUUID(),
+    business_id: BUSINESS_ID,
+    stripe_customer_id: stripeCustomerId,
+    stripe_subscription_id: newStripeSubId,
+    tier,
+    status: "active",
+    billing_period: billingPeriod,
+    renewal_at: renewalAt.toISOString(),
+    commitment_months: commitmentMonths,
+    customer_profile_id: customerProfileId,
+    hostinger_billing_subscription_id: newBillingId,
+    ...periodCache
+  });
+  newRowId = newRow.id;
+  console.log(`[db] new subscriptions row ${newRow.id} (active, ${billingPeriod})`);
+} else {
+  console.log(`[db] new subscriptions row ${existingNew.id} already exists; skipping insert`);
+}
 
 if (customerProfileId) {
   try {
@@ -439,33 +500,53 @@ if (oldSub.stripe_subscription_id) {
 }
 
 // ------------------------------------------------- 7. mark old row canceled
-const nowIso = new Date().toISOString();
-const { error: cancelErr } = await db
-  .from("subscriptions")
-  .update({
-    status: "canceled",
-    canceled_at: nowIso,
-    cancel_reason: "upgrade_switch",
-    grace_ends_at: null,
-    stripe_current_period_start: null,
-    stripe_current_period_end: null,
-    stripe_subscription_cached_at: nowIso
-  })
-  .eq("id", oldSub.id);
-if (cancelErr) {
-  console.error(`[db] old row cancel FAILED (fix manually): ${cancelErr.message}`);
+if (oldSub.status !== "canceled" || oldSub.cancel_reason !== "upgrade_switch") {
+  const nowIso = new Date().toISOString();
+  const { error: cancelErr } = await db
+    .from("subscriptions")
+    .update({
+      status: "canceled",
+      canceled_at: nowIso,
+      cancel_reason: "upgrade_switch",
+      grace_ends_at: null,
+      stripe_current_period_start: null,
+      stripe_current_period_end: null,
+      stripe_subscription_cached_at: nowIso
+    })
+    .eq("id", oldSub.id);
+  if (cancelErr) {
+    console.error(`[db] old row cancel FAILED (fix manually): ${cancelErr.message}`);
+  } else {
+    console.log(`[db] old subscriptions row ${oldSub.id} marked canceled (upgrade_switch)`);
+  }
 } else {
-  console.log(`[db] old subscriptions row ${oldSub.id} marked canceled (upgrade_switch)`);
+  console.log(`[db] old subscriptions row ${oldSub.id} already canceled upgrade_switch`);
 }
 
 // ------------------------------------------------- 8. old box teardown + pool
-try {
-  await hostinger.stopVirtualMachine(oldVmId);
-  console.log(`[old-box] VM ${oldVmId} stop requested`);
-} catch (err) {
-  console.log(
-    `[old-box] stop failed (may already be stopped): ${err instanceof Error ? err.message : String(err)}`
-  );
+// On resume (adopt already done) oldVmId is null — resolve the retired box
+// from its Hostinger billing subscription id when we still have one.
+let teardownVmId = oldVmId;
+if (teardownVmId === null && oldBillingId) {
+  try {
+    const vms = await hostinger.listVirtualMachines();
+    const match = vms.find((v) => v.subscription_id === oldBillingId);
+    if (match) teardownVmId = match.id;
+  } catch (err) {
+    console.log(
+      `[old-box] could not resolve old VM from billing ${oldBillingId}: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+}
+if (teardownVmId !== null) {
+  try {
+    await hostinger.stopVirtualMachine(teardownVmId);
+    console.log(`[old-box] VM ${teardownVmId} stop requested`);
+  } catch (err) {
+    console.log(
+      `[old-box] stop failed (may already be stopped): ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
 }
 if (oldBillingId) {
   try {
@@ -479,18 +560,22 @@ if (oldBillingId) {
 } else {
   console.log(`[old-box] WARNING: no billing id for the old box; disable auto-renew in hPanel`);
 }
-try {
-  await releaseVpsToPool({
-    vmId: oldVmId,
-    plan: expectedSize,
-    hostingerBillingSubscriptionId: oldBillingId,
-    notes: `returned by change-plan recovery of business ${BUSINESS_ID}; auto-renew off, lapses at period end unless adopted`
-  });
-  console.log(`[old-box] VM ${oldVmId} returned to the reuse pool`);
-} catch (err) {
-  console.log(
-    `[old-box] pool return failed (continuing): ${err instanceof Error ? err.message : String(err)}`
-  );
+if (teardownVmId !== null) {
+  try {
+    await releaseVpsToPool({
+      vmId: teardownVmId,
+      plan: expectedSize,
+      hostingerBillingSubscriptionId: oldBillingId,
+      notes: `returned by change-plan recovery of business ${BUSINESS_ID}; auto-renew off, lapses at period end unless adopted`
+    });
+    console.log(`[old-box] VM ${teardownVmId} returned to the reuse pool`);
+  } catch (err) {
+    console.log(
+      `[old-box] pool return failed (continuing): ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
+} else {
+  console.log(`[old-box] no old VM id to pool (already torn down or unknown)`);
 }
 
 // ---------------------------------------------------------------- ledger
@@ -502,18 +587,21 @@ await recordOneshotApplied(db, {
     newStripeSubscriptionId: newStripeSubId,
     oldStripeSubscriptionId: oldSub.stripe_subscription_id,
     oldSubscriptionRowId: oldSub.id,
-    newSubscriptionRowId: newRow.id,
+    newSubscriptionRowId: newRowId,
     adoptedVmId: ADOPT_VM_ID,
-    oldVmId,
+    oldVmId: teardownVmId,
+    adoptAlreadyDone,
     newHostingerBillingSubscriptionId: newBillingId,
     oldHostingerBillingSubscriptionId: oldBillingId,
     billingPeriod,
     renewalAt: renewalAt.toISOString(),
-    backupPath: backup.storagePath
+    backupPath
   }
 });
 
-console.log(`\nRecovery complete: ${biz.name} is on ${tier}/${billingPeriod} (VM ${newProv.vpsId}, ${newVmIp}).`);
+console.log(
+  `\nRecovery complete: ${biz.name} is on ${tier}/${billingPeriod} (VM ${ADOPT_VM_ID}).`
+);
 console.log(`Post-checks:`);
 console.log(`  npx tsx debug/vps-exec.ts ${BUSINESS_ID} "docker ps --format '{{.Names}} {{.Status}}'"`);
 console.log(`  npx tsx debug/smoke-owner-chat.ts ${BUSINESS_ID} "Are you there?"`);
