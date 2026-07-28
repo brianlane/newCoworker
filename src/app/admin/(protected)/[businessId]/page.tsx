@@ -620,6 +620,22 @@ export default async function BusinessDetailPage({
             the operator sees what the email would say before sending it. */}
         <div className="mt-4 border-t border-parchment/10 pt-4">
           <NudgeOwnerButton
+            // Remount when the open items change so the component drops the
+            // post-send list it pins in state. The offer and deal panels
+            // router.refresh() this page after a create, and without the
+            // remount that pinned list would shadow the newly-open item.
+            //
+            // The key includes each item's LINK, not just its label, because
+            // labels do not identify an item: every open enterprise deal
+            // produces the identical "Complete your enterprise plan payment"
+            // and two offers can share a name. Revoking one deal and creating
+            // another would leave a label-only key unchanged, so the card
+            // would keep claiming the reminder covered a pay link that is
+            // actually new and was never emailed. The links carry the
+            // pay_token, so they change whenever the underlying row does.
+            key={`${businessId}:${nudgeItems
+              .map((item) => `${item.label}@${item.href ?? ""}`)
+              .join("|")}`}
             businessId={businessId}
             openItems={nudgeItems.map((item) => item.label)}
           />

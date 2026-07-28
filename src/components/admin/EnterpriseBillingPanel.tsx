@@ -14,6 +14,7 @@
  */
 
 import { useMemo, useState } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import type { VpsSize } from "@/lib/vps/size";
 import { VPS_SIZES } from "@/lib/vps/size";
@@ -108,6 +109,7 @@ export function EnterpriseBillingPanel({
   }, [vpsSize, sms, voiceMin, extraDids, marginPct, setupLaborUsd]);
 
   // --- Deal state ---
+  const router = useRouter();
   const [deals, setDeals] = useState<EnterpriseDealView[]>(initialDeals);
   const [setupUsd, setSetupUsd] = useState("");
   const [monthlyUsd, setMonthlyUsd] = useState("");
@@ -128,6 +130,10 @@ export function EnterpriseBillingPanel({
     const res = await fetch(`/api/admin/enterprise-deals?businessId=${businessId}`);
     const json = await res.json();
     if (res.ok) setDeals(json.data?.deals ?? []);
+    // Also re-render the server page: an unpaid deal is one of the reasons the
+    // server-rendered onboarding-nudge card lists, so without this that card
+    // keeps showing the page-load answer after a deal is created or revoked.
+    router.refresh();
   }
 
   async function createDeal() {
@@ -150,7 +156,7 @@ export function EnterpriseBillingPanel({
       if (!res.ok) {
         setError(json.error?.message ?? "Creating the deal failed");
       } else {
-        setNotice("Deal created — copy the pay link below and send it to the owner.");
+        setNotice("Deal created. Copy the pay link below and send it to the owner.");
         setSetupUsd("");
         setMonthlyUsd("");
         await refresh();
@@ -187,7 +193,7 @@ export function EnterpriseBillingPanel({
       setCopiedId(deal.id);
       setTimeout(() => setCopiedId(null), 2000);
     } catch {
-      setError("Copy failed — the link is shown below the deal");
+      setError("Copy failed. The link is shown below the deal.");
     }
   }
 
@@ -200,8 +206,8 @@ export function EnterpriseBillingPanel({
       <div className="space-y-3">
         <p className="text-xs text-parchment/40">
           Estimate our monthly cost for this tenant from expected usage, then price the deal at a
-          target margin. The suggestion accounts for Stripe fees; nothing here bills anything —
-          the deal you create below is what the owner pays.
+          target margin. The suggestion accounts for Stripe fees; nothing here bills anything.
+          The deal you create below is what the owner pays.
         </p>
         <div className="flex flex-wrap items-end gap-2">
           <label className="flex flex-col gap-1 text-xs text-parchment/60">
@@ -358,7 +364,7 @@ export function EnterpriseBillingPanel({
         </div>
         {hasLiveDeal && (
           <p className="text-xs text-parchment/40">
-            This business already has an open or active deal — revoke the open one (or wait for
+            This business already has an open or active deal. Revoke the open one (or wait for
             the active subscription to end) before creating a new deal.
           </p>
         )}

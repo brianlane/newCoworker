@@ -17,6 +17,7 @@
  */
 
 import { useState } from "react";
+import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 
 export type OfferView = {
@@ -43,6 +44,7 @@ export function WhiteGloveOffersPanel({
   businessId?: string;
   initialOffers: OfferView[];
 }) {
+  const router = useRouter();
   const [offers, setOffers] = useState<OfferView[]>(initialOffers);
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
@@ -60,6 +62,12 @@ export function WhiteGloveOffersPanel({
     const res = await fetch(`/api/admin/white-glove-offers?${qs}`);
     const json = await res.json();
     if (res.ok) setOffers(json.data?.offers ?? []);
+    // Also re-render the server page. Creating or revoking an offer changes
+    // things this panel does not own: the onboarding-nudge card lists unpaid
+    // offers as reasons to nudge the owner, and it is server-rendered. Without
+    // this, that card keeps showing the page-load answer and can claim
+    // onboarding is complete right after an offer was created.
+    router.refresh();
   }
 
   async function create() {
@@ -95,7 +103,7 @@ export function WhiteGloveOffersPanel({
         setNotice(
           emailedTo
             ? `Offer created and emailed to ${emailedTo} with the payment link.`
-            : "Offer created — the email couldn't be sent automatically, so copy the pay link below and send it yourself."
+            : "Offer created. The email couldn't be sent automatically, so copy the pay link below and send it yourself."
         );
         setName("");
         setDescription("");
