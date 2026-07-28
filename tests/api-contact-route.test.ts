@@ -75,16 +75,23 @@ describe("api/contact route", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({ ok: true });
     expect(sendOwnerEmail).toHaveBeenCalledTimes(1);
-    expect(processWebhookFlowEvent).toHaveBeenCalledWith(SINK, {
-      source: "contact_form",
-      data: {
-        name: "Ada Lovelace",
-        email: "ada@example.com",
-        business_name: "Analytical Engines",
-        subject: "Pricing question",
-        message: "How much for Standard?"
-      }
-    });
+    expect(processWebhookFlowEvent).toHaveBeenCalledWith(
+      SINK,
+      {
+        source: "contact_form",
+        data: {
+          name: "Ada Lovelace",
+          email: "ada@example.com",
+          business_name: "Analytical Engines",
+          subject: "Pricing question",
+          message: "How much for Standard?"
+        }
+      },
+      undefined,
+      // The sink is our own tenant: internal origin, exempt from the
+      // Standard-tier webhook gate even if the sink business is starter.
+      { origin: "internal" }
+    );
   });
 
   it("skips the flow event when no sink is designated (email-only behavior)", async () => {
