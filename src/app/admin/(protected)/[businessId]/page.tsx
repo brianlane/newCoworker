@@ -232,7 +232,7 @@ export default async function BusinessDetailPage({
           <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider mb-4">
             Economics (this month)
           </h2>
-          <div className="grid grid-cols-3 gap-4 mb-4">
+          <div className="grid grid-cols-1 gap-4 mb-4 sm:grid-cols-3">
             <div>
               <p className="text-xs text-parchment/40 mb-0.5">Revenue rate</p>
               <p className="text-xl font-bold text-parchment">

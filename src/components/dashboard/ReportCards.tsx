@@ -50,7 +50,7 @@ export function RenewalPipelineCard({ pipeline }: { pipeline: RenewalPipeline })
         Overdue first, then everything renewing in the next 90 days
         {pipeline.clipped ? " (list capped at the most urgent)" : ""}
       </p>
-      <div className="grid grid-cols-4 gap-2 mb-4">
+      <div className="grid grid-cols-2 gap-2 mb-4 sm:grid-cols-4">
         {(Object.keys(BUCKET_LABELS) as RenewalBucket[]).map((bucket) => (
           <div key={bucket} className="rounded-lg border border-parchment/10 px-2 py-2 text-center">
             <p className={`text-lg font-bold ${BUCKET_TONES[bucket]}`}>

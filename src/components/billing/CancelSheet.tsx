@@ -87,11 +87,13 @@ export function CancelSheet({
 
   return (
     <div
-      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-deep-ink/70 backdrop-blur-sm p-4"
+      className="fixed inset-0 z-50 flex items-end sm:items-center justify-center overflow-y-auto bg-deep-ink/70 backdrop-blur-sm p-4"
       role="dialog"
       aria-modal="true"
     >
-      <div className="w-full max-w-md rounded-xl border border-parchment/10 bg-deep-ink p-6 space-y-4">
+      {/* The two option blocks together are taller than a phone viewport, so
+          the panel scrolls rather than pushing its buttons off-screen. */}
+      <div className="max-h-[90vh] w-full max-w-md space-y-4 overflow-y-auto rounded-xl border border-parchment/10 bg-deep-ink p-5 sm:p-6">
         <div>
           <h2 className="text-lg font-semibold text-parchment">
             {alreadyPeriodEnd ? "Manage cancellation" : "Cancel subscription"}
@@ -119,11 +121,10 @@ export function CancelSheet({
             <p className="text-xs text-parchment/60">
               We refund your last charge, excluding the one-time carrier registration fee
               and any usage charges billed at cost (texts sent and received, call minutes,
-              AI usage) —
-              and, on 12/24-month plans, minus one month of service at the monthly rate for
-              the time you&apos;ve used. We shut down your VPS immediately and keep your data
-              for 30 days so you can reactivate without losing anything. This is your
-              one-time lifetime refund; it can only be used once.
+              AI usage), and, on 12/24-month plans, minus one month of service at the
+              monthly rate for the time you&apos;ve used. We shut down your VPS immediately
+              and keep your data for 30 days so you can reactivate without losing anything.
+              This is your one-time lifetime refund; it can only be used once.
             </p>
             <Button
               size="sm"
