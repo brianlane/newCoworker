@@ -134,6 +134,7 @@ function stubLedger(over: Record<string, unknown> = {}) {
     patchProspect: vi.fn(async () => true),
     transitionProspect: vi.fn(async () => true),
     countProspectsSentSince: vi.fn(async () => 0),
+    countProspectsNudgedSince: vi.fn(async () => 0),
     ...over
   };
   for (const [name, impl] of Object.entries(defaults)) {
@@ -542,6 +543,24 @@ describe("phase 3: sending", () => {
     );
   });
 
+  it("counts today's follow-ups against the same cap as first pitches", async () => {
+    // 8 first pitches plus 4 follow-ups already used the 12-a-day allowance, so
+    // nothing more goes out even though neither count alone reaches the cap.
+    const ledger = sendLedger({
+      countProspectsSentSince: vi.fn(async () => 8),
+      countProspectsNudgedSince: vi.fn(async () => 4)
+    });
+    const result = await processOutreachSweep(baseDeps());
+    expect(result.sent).toBe(0);
+    expect(result.notes).toContainEqual({ businessId: BIZ, note: "daily cap reached" });
+    expect(ledger.listProspectsByStatus).not.toHaveBeenCalledWith(
+      BIZ,
+      ["drafted"],
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
   it("never sends in manual mode: the drafts wait for the owner", async () => {
     sendLedger({
       listActiveOutreachSettings: vi.fn(async () => [settings({ mode: "manual" })])
@@ -754,6 +773,53 @@ describe("phase 4: the single nudge", () => {
       5,
       expect.anything()
     );
+  });
+
+  it("spends only what the cap has left, and stops when first pitches used it", async () => {
+    // 10 of 12 already sent today leaves 2, so the follow-up batch shrinks to
+    // 2 rather than its usual 5.
+    const ledger = nudgeLedger({ countProspectsSentSince: vi.fn(async () => 10) });
+    await processOutreachSweep(baseDeps());
+    expect(ledger.listProspectsDueForNudge).toHaveBeenCalledWith(
+      BIZ,
+      expect.any(String),
+      expect.any(String),
+      2,
+      expect.anything()
+    );
+
+    // And when the first pitches in THIS pass consume the last of the cap,
+    // nothing is left for follow-ups at all.
+    const exhausted = nudgeLedger({
+      countProspectsSentSince: vi.fn(async () => 11),
+      listProspectsByStatus: vi.fn(async (_b: string, statuses: string[]) =>
+        statuses.includes("drafted") ? [prospect()] : []
+      )
+    });
+    const result = await processOutreachSweep(baseDeps());
+    expect(result.sent).toBe(1);
+    expect(result.nudged).toBe(0);
+    expect(exhausted.listProspectsDueForNudge).not.toHaveBeenCalled();
+  });
+
+  it("a failed follow-up keeps the original send and frees the nudge to retry", async () => {
+    // The first pitch really did go out. Marking the row failed and clearing
+    // sent_at would erase a real send, drop the day's count, and burn the one
+    // allowed nudge on an email nobody received.
+    for (const sendEmailImpl of [
+      vi.fn(async () => ({ ok: false as const, detail: "email_not_connected" })),
+      vi.fn(async () => {
+        throw new Error("gmail 500");
+      })
+    ]) {
+      const ledger = nudgeLedger();
+      const result = await processOutreachSweep(baseDeps({ sendEmailImpl }));
+      expect(result.nudged).toBe(0);
+      const patch = (ledger.patchProspect as ReturnType<typeof vi.fn>).mock.calls[0][2];
+      expect(patch).toMatchObject({ nudged_at: null });
+      expect(patch.status).toBeUndefined();
+      expect(patch).not.toHaveProperty("sent_at");
+    }
   });
 
   it("nudges nobody outside the send window", async () => {

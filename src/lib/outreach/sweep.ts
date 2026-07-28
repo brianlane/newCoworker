@@ -37,6 +37,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { logger } from "@/lib/logger";
 import {
+  countProspectsNudgedSince,
   countProspectsSentSince,
   existingProspectDomains,
   insertProspects,
@@ -359,24 +360,19 @@ async function draftForBusiness(
   }
 }
 
-/** Phase 3: send, inside the window and under the cap. Auto mode only. */
+/**
+ * Phase 3: send first pitches, up to `allowance`. Returns how many went out so
+ * the caller can spend what is left of the cap on follow-ups.
+ */
 async function sendForBusiness(
   settings: OutreachSettingsRow,
   tenant: PitchTenant,
   r: Resolved,
-  result: OutreachSweepResult
-): Promise<void> {
-  const sentToday = await countProspectsSentSince(
-    settings.business_id,
-    utcDayStartIso(r.now),
-    r.db
-  );
-  const remaining = settings.daily_cap - sentToday;
-  if (remaining <= 0) {
-    result.notes.push({ businessId: settings.business_id, note: "daily cap reached" });
-    return;
-  }
-  const drafted = await listProspectsByStatus(settings.business_id, ["drafted"], remaining, r.db);
+  result: OutreachSweepResult,
+  allowance: number
+): Promise<number> {
+  const drafted = await listProspectsByStatus(settings.business_id, ["drafted"], allowance, r.db);
+  let sentThisPass = 0;
 
   for (const prospect of drafted) {
     // A drafted row should always carry an address and pitch text. If one
@@ -387,7 +383,13 @@ async function sendForBusiness(
     const subject = prospect.pitch_subject?.trim();
     const body = prospect.pitch_body?.trim();
     if (!to || !subject || !body) {
-      await recordSendFailure(settings, prospect, r, "draft is missing its address or pitch text");
+      await recordSendFailure(
+        settings,
+        prospect,
+        r,
+        "sent_at",
+        "draft is missing its address or pitch text"
+      );
       continue;
     }
     const sent = await deliverPitch(settings, tenant, prospect, r, {
@@ -399,8 +401,10 @@ async function sendForBusiness(
     });
     if (!sent) continue;
     result.sent += 1;
+    sentThisPass += 1;
     await handOffToFlow(settings, prospect, r, result, { email: to, subject });
   }
+  return sentThisPass;
 }
 
 /** Phase 4: the single follow-up, for prospects who went quiet. */
@@ -408,14 +412,15 @@ async function nudgeForBusiness(
   settings: OutreachSettingsRow,
   tenant: PitchTenant,
   r: Resolved,
-  result: OutreachSweepResult
+  result: OutreachSweepResult,
+  allowance: number
 ): Promise<void> {
   const day = 24 * 60 * 60 * 1000;
   const due = await listProspectsDueForNudge(
     settings.business_id,
     new Date(r.now.getTime() - NUDGE_STALE_AFTER_DAYS * day).toISOString(),
     new Date(r.now.getTime() - NUDGE_AFTER_DAYS * day).toISOString(),
-    NUDGE_BATCH,
+    allowance,
     r.db
   );
   for (const prospect of due) {
@@ -488,7 +493,7 @@ async function deliverPitch(
       bodyText: mail.body
     });
     if (!outcome.ok) {
-      await recordSendFailure(settings, prospect, r, outcome.detail);
+      await recordSendFailure(settings, prospect, r, mail.stamp, outcome.detail);
       return false;
     }
     await r.recordEmailLog(r.db, {
@@ -504,27 +509,40 @@ async function deliverPitch(
     return true;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    await recordSendFailure(settings, prospect, r, message.slice(0, 300));
+    await recordSendFailure(settings, prospect, r, mail.stamp, message.slice(0, 300));
     return false;
   }
 }
 
 /**
- * Undo the optimistic claim. The `sent_at` clear matters: a row left stamped
- * would count against the daily cap and read as outreach that never happened,
- * which is exactly the drafted-versus-sent confusion this ledger exists to
+ * Undo the optimistic claim, and undo the RIGHT one.
+ *
+ * A failed FIRST pitch clears `sent_at` and marks the row failed: a row left
+ * stamped would count against the daily cap and read as outreach that never
+ * happened, which is the drafted-versus-sent confusion this ledger exists to
  * avoid.
+ *
+ * A failed FOLLOW-UP is a different situation, and treating it like the first
+ * case corrupts the ledger: the original pitch really did go out, so marking
+ * the row failed and clearing `sent_at` would erase a real send, drop the
+ * day's send count, and burn the prospect's one nudge on an email nobody
+ * received. Only the nudge stamp is released, which leaves the row exactly as
+ * it was before the attempt and lets a later pass retry until the prospect
+ * ages out of the follow-up window.
  */
 async function recordSendFailure(
   settings: OutreachSettingsRow,
   prospect: OutreachProspectRow,
   r: Resolved,
+  stamp: "sent_at" | "nudged_at",
   detail: string
 ): Promise<void> {
   await patchProspect(
     settings.business_id,
     prospect.id,
-    { status: "failed", status_detail: detail, sent_at: null },
+    stamp === "sent_at"
+      ? { status: "failed", status_detail: detail, sent_at: null }
+      : { status_detail: detail, nudged_at: null },
     r.db
   );
 }
@@ -610,8 +628,22 @@ async function sweepBusiness(
     result.notes.push({ businessId: settings.business_id, note: "outside the send window" });
     return;
   }
-  await sendForBusiness(settings, resolved.tenant, r, result);
-  await nudgeForBusiness(settings, resolved.tenant, r, result);
+  // ONE allowance for the day, shared by first pitches and follow-ups: a nudge
+  // is a cold email too, so both have to count against the tenant's limit.
+  const dayStart = utcDayStartIso(r.now);
+  const [sentToday, nudgedToday] = await Promise.all([
+    countProspectsSentSince(settings.business_id, dayStart, r.db),
+    countProspectsNudgedSince(settings.business_id, dayStart, r.db)
+  ]);
+  const allowance = settings.daily_cap - sentToday - nudgedToday;
+  if (allowance <= 0) {
+    result.notes.push({ businessId: settings.business_id, note: "daily cap reached" });
+    return;
+  }
+  const justSent = await sendForBusiness(settings, resolved.tenant, r, result, allowance);
+  const leftForNudges = Math.min(allowance - justSent, NUDGE_BATCH);
+  if (leftForNudges <= 0) return;
+  await nudgeForBusiness(settings, resolved.tenant, r, result, leftForNudges);
 }
 
 /**

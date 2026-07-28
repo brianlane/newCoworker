@@ -358,7 +358,7 @@ export async function transitionProspect(
   return Array.isArray(data) && data.length > 0;
 }
 
-/** Sends already made in the current window — the daily-cap numerator. */
+/** Sends already made in the current window — half the daily-cap numerator. */
 export async function countProspectsSentSince(
   businessId: string,
   sinceIso: string,
@@ -371,6 +371,26 @@ export async function countProspectsSentSince(
     .eq("business_id", businessId)
     .gte("sent_at", sinceIso);
   if (error) throw new Error(`countProspectsSentSince: ${error.message}`);
+  return count ?? 0;
+}
+
+/**
+ * Follow-ups already sent in the current window. The other half of the cap: a
+ * nudge is a cold email too, so the tenant's daily limit has to count it, or a
+ * day at the cap can still emit a batch of follow-ups every tick.
+ */
+export async function countProspectsNudgedSince(
+  businessId: string,
+  sinceIso: string,
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { count, error } = await db
+    .from("outreach_prospects")
+    .select("id", { count: "exact", head: true })
+    .eq("business_id", businessId)
+    .gte("nudged_at", sinceIso);
+  if (error) throw new Error(`countProspectsNudgedSince: ${error.message}`);
   return count ?? 0;
 }
 

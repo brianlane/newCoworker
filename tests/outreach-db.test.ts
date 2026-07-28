@@ -16,6 +16,7 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import {
+  countProspectsNudgedSince,
   countProspectsSentSince,
   existingProspectDomains,
   findProspectByEmail,
@@ -336,21 +337,32 @@ describe("transitionProspect", () => {
   });
 });
 
-describe("countProspectsSentSince", () => {
+describe("countProspectsSentSince / countProspectsNudgedSince", () => {
+  const DAY = "2026-07-27T00:00:00.000Z";
+
   it("counts today's sends, treats a null count as zero, and throws on error", async () => {
     const c = chain({ count: 4, error: null });
-    expect(await countProspectsSentSince(BIZ, "2026-07-27T00:00:00.000Z", makeDb(c))).toBe(4);
-    expect(c.gte).toHaveBeenCalledWith("sent_at", "2026-07-27T00:00:00.000Z");
+    expect(await countProspectsSentSince(BIZ, DAY, makeDb(c))).toBe(4);
+    expect(c.gte).toHaveBeenCalledWith("sent_at", DAY);
 
     defaultClientSpy.mockReturnValue(makeDb(chain({ count: null, error: null })));
-    expect(await countProspectsSentSince(BIZ, "2026-07-27T00:00:00.000Z")).toBe(0);
+    expect(await countProspectsSentSince(BIZ, DAY)).toBe(0);
 
     await expect(
-      countProspectsSentSince(
-        BIZ,
-        "2026-07-27T00:00:00.000Z",
-        makeDb(chain({ count: null, error: { message: "cnt" } }))
-      )
+      countProspectsSentSince(BIZ, DAY, makeDb(chain({ count: null, error: { message: "cnt" } })))
     ).rejects.toThrow(/cnt/);
+  });
+
+  it("counts today's follow-ups separately, since both spend the same cap", async () => {
+    const c = chain({ count: 2, error: null });
+    expect(await countProspectsNudgedSince(BIZ, DAY, makeDb(c))).toBe(2);
+    expect(c.gte).toHaveBeenCalledWith("nudged_at", DAY);
+
+    defaultClientSpy.mockReturnValue(makeDb(chain({ count: null, error: null })));
+    expect(await countProspectsNudgedSince(BIZ, DAY)).toBe(0);
+
+    await expect(
+      countProspectsNudgedSince(BIZ, DAY, makeDb(chain({ count: null, error: { message: "nc" } })))
+    ).rejects.toThrow(/nc/);
   });
 });
