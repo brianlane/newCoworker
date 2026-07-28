@@ -60,6 +60,11 @@ export default async function AiFlowLibraryDetailPage({ params }: Props) {
             <h1 className="min-w-0 break-words text-2xl font-bold text-parchment">
               {entry.title}
             </h1>
+            {entry.source === "starter" && (
+              <span className="mt-1.5 shrink-0 rounded-full bg-signal-teal/15 px-2 py-0.5 text-[10px] font-semibold text-signal-teal">
+                Starter
+              </span>
+            )}
             {entry.category && (
               <span className="mt-1.5 shrink-0 rounded-full border border-parchment/15 bg-deep-ink/40 px-2 py-0.5 text-[10px] text-parchment/60">
                 {entry.category}
@@ -76,22 +81,31 @@ export default async function AiFlowLibraryDetailPage({ params }: Props) {
         </Link>
       </div>
 
-      <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
-        <Stat value={entry.total_successful_runs.toLocaleString()} label="Successful runs" />
-        <Stat value={entry.businesses_using.toLocaleString()} label="Businesses" />
-        <Stat value={entry.download_count.toLocaleString()} label="Uses" />
-        <Stat value={`${perDay}/day`} label="Runs (7-day avg)" />
-        <Stat
-          value={entry.last_run_at ? new Date(entry.last_run_at).toLocaleDateString() : "–"}
-          label="Last run"
-        />
-      </div>
+      {/* A starter nobody has run yet has all-zero run stats because nobody has
+          adopted it, not because it stopped working: show only what is real. */}
+      {entry.source === "starter" && entry.total_successful_runs === 0 ? (
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+          <Stat value={entry.download_count.toLocaleString()} label="Uses" />
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+          <Stat value={entry.total_successful_runs.toLocaleString()} label="Successful runs" />
+          <Stat value={entry.businesses_using.toLocaleString()} label="Businesses" />
+          <Stat value={entry.download_count.toLocaleString()} label="Uses" />
+          <Stat value={`${perDay}/day`} label="Runs (7-day avg)" />
+          <Stat
+            value={entry.last_run_at ? new Date(entry.last_run_at).toLocaleDateString() : "–"}
+            label="Last run"
+          />
+        </div>
+      )}
 
       <Card className="space-y-4">
         <AiFlowLibraryActions businessId={businessId} libraryId={entry.id} />
         <p className="text-[11px] text-parchment/40">
-          Personal details (phone numbers, emails, names) are removed from library flows.
-          When you use one, your own details are filled in automatically.
+          {entry.source === "starter"
+            ? "This flow was built by New Coworker, so its wording is written to be used as is. It installs disabled, and you can edit every message before turning it on."
+            : "Personal details (phone numbers, emails, names) are removed from library flows. When you use one, your own details are filled in automatically."}
         </p>
       </Card>
 

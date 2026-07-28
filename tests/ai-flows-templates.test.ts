@@ -5,6 +5,8 @@ import {
   instagramProspectTemplate,
   INSTAGRAM_PROSPECT_TAG,
   INSTAGRAM_SCRAPER_SOURCE,
+  LIBRARY_STARTER_CATEGORY,
+  libraryStarterTemplates,
   META_LEAD_ADS_SOURCE,
   metaLeadFollowUpTemplate,
   newLeadIntakeTemplate,
@@ -21,6 +23,7 @@ import {
   summarizeDefinition
 } from "@/lib/ai-flows/schema";
 import { evaluateTriggerConditions } from "@/lib/ai-flows/trigger-eval";
+import { containsLikelyPii, templateKeyFromName } from "@/lib/ai-flows/scrub";
 
 describe("metaLeadFollowUpTemplate", () => {
   it("is a valid definition the install route can persist as-is", () => {
@@ -312,6 +315,36 @@ describe("documentReceiptTemplate", () => {
     const notify = def.steps[1];
     if (notify.type === "notify_owner") {
       expect(notify.message).toContain("{{trigger.attachments}}");
+    }
+  });
+});
+
+describe("libraryStarterTemplates", () => {
+  it("publishes the two parameterless starters", () => {
+    expect(libraryStarterTemplates().map((t) => t.key)).toEqual([
+      "document_receipt_confirmation",
+      "new_lead_intake"
+    ]);
+    expect(LIBRARY_STARTER_CATEGORY).toBe("Starters");
+  });
+
+  it("every starter carries library copy and a definition the duplicate route can persist", () => {
+    for (const tpl of libraryStarterTemplates()) {
+      expect(tpl.summary.length).toBeGreaterThan(20);
+      // The catalog is published verbatim, so the definition must already be
+      // valid: there is no scrub/substitution pass to repair it.
+      expect(() => parseAiFlowDefinition(tpl.definition)).not.toThrow();
+      // The catalog slug comes from the NAME, so a tenant who installs the
+      // starter from the card groups onto the same entry.
+      expect(templateKeyFromName(tpl.name).length).toBeGreaterThan(0);
+    }
+  });
+
+  it("carries no personal data and no em dashes: it is published unscrubbed", () => {
+    for (const tpl of libraryStarterTemplates()) {
+      expect(containsLikelyPii(tpl.definition)).toBe(false);
+      expect(containsLikelyPii(tpl.summary)).toBe(false);
+      expect(`${tpl.name} ${tpl.summary}${JSON.stringify(tpl.definition)}`).not.toContain("\u2014");
     }
   });
 });

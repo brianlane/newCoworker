@@ -8,6 +8,11 @@
  *      to that tenant are redacted along with literal phones/emails);
  *   4. upsert one library entry per group with summed stats.
  *
+ * It ALSO republishes the curated starter templates (source 'starter') on
+ * every run. The catalog is pruned down to whatever this job just published,
+ * so a one-time insert of a starter would not survive the next hour; keeping
+ * them in the same pass is what makes them permanent.
+ *
  * Driven hourly by /api/internal/aiflow-library-refresh (the aiflow-library-
  * refresh Edge cron bridge). Idempotent: re-running reconciles the catalog.
  */
@@ -25,6 +30,7 @@ import {
   upsertLibraryEntry,
   type AiFlowLibraryCandidate
 } from "@/lib/ai-flows/library";
+import { LIBRARY_STARTER_CATEGORY, libraryStarterTemplates } from "@/lib/ai-flows/templates";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -135,10 +141,42 @@ async function loadKnownNames(businessIds: string[], db: SupabaseClient): Promis
 export type LibraryRefreshResult = {
   candidates: number;
   groups: number;
-  /** Entries actually upserted (groups minus any blocked by the PII gate). */
+  /** Community entries upserted (groups minus starters and PII-gate skips). */
   published: number;
+  /** Curated starter entries upserted (always the full starter list). */
+  starters: number;
   /** Templates skipped because the scrubbed result still tripped the PII gate. */
   skipped: number;
+};
+
+/** Run stats summed across every tenant copy of one template. */
+type GroupStats = {
+  totalSuccessfulRuns: number;
+  totalRuns: number;
+  runsLast7d: number;
+  businessesUsing: number;
+  lastRunAt: string | null;
+};
+
+function sumGroupStats(members: AiFlowLibraryCandidate[]): GroupStats {
+  return {
+    totalSuccessfulRuns: members.reduce((n, c) => n + Number(c.done_count), 0),
+    totalRuns: members.reduce((n, c) => n + Number(c.total_count), 0),
+    runsLast7d: members.reduce((n, c) => n + Number(c.done_last_7d), 0),
+    businessesUsing: new Set(members.map((c) => c.business_id)).size,
+    lastRunAt: members.reduce<string | null>(
+      (max, c) => ((c.last_done_at ?? "") > (max ?? "") ? c.last_done_at : max),
+      null
+    )
+  };
+}
+
+const EMPTY_STATS: GroupStats = {
+  totalSuccessfulRuns: 0,
+  totalRuns: 0,
+  runsLast7d: 0,
+  businessesUsing: 0,
+  lastRunAt: null
 };
 
 export async function refreshAiFlowLibrary(client?: SupabaseClient): Promise<LibraryRefreshResult> {
@@ -166,23 +204,29 @@ export async function refreshAiFlowLibrary(client?: SupabaseClient): Promise<Lib
     else groups.set(key, [c]);
   }
 
+  // Starters own their template key. A tenant who installed one and ran it
+  // shows up as a community group under the SAME key (the starter's name is
+  // what the install creates), so its stats are folded into the starter entry
+  // rather than published as a rival row that would collide on template_key.
+  const starters = libraryStarterTemplates().map((template) => ({
+    template,
+    templateKey: templateKeyFromName(template.name)
+  }));
+  const starterKeys = new Set(starters.map((s) => s.templateKey));
+
   let published = 0;
   let skipped = 0;
   const publishedKeys: string[] = [];
   for (const [templateKey, members] of groups) {
+    if (starterKeys.has(templateKey)) continue;
+
     // Representative = the most recently successful copy (freshest definition).
     const representative = members.reduce((best, c) =>
       (c.last_done_at ?? "") > (best.last_done_at ?? "") ? c : best
     );
 
-    const totalSuccessfulRuns = members.reduce((n, c) => n + Number(c.done_count), 0);
-    const totalRuns = members.reduce((n, c) => n + Number(c.total_count), 0);
-    const runsLast7d = members.reduce((n, c) => n + Number(c.done_last_7d), 0);
-    const businessesUsing = new Set(members.map((c) => c.business_id)).size;
-    const lastRunAt = members.reduce<string | null>(
-      (max, c) => ((c.last_done_at ?? "") > (max ?? "") ? c.last_done_at : max),
-      null
-    );
+    const { totalSuccessfulRuns, totalRuns, runsLast7d, businessesUsing, lastRunAt } =
+      sumGroupStats(members);
 
     const bid = representative.business_id;
     const scrubbed = scrubDefinition(representative.definition, {
@@ -204,6 +248,7 @@ export async function refreshAiFlowLibrary(client?: SupabaseClient): Promise<Lib
         title: cleanTitle(redactText(representative.name, knownNames.title.get(bid) ?? [])),
         summary: summarizeDefinition(representative.definition),
         category: deriveCategory(representative.business_type),
+        source: "community",
         scrubbedDefinition: scrubbed,
         totalSuccessfulRuns,
         totalRuns,
@@ -218,9 +263,43 @@ export async function refreshAiFlowLibrary(client?: SupabaseClient): Promise<Lib
     publishedKeys.push(templateKey);
   }
 
+  // Starters, published verbatim: no scrub and no PII gate, because the
+  // definition is ours and its wording is exactly what a duplicator wants.
+  // Adoption stats come from the community group sharing its key, when there
+  // is one, so a starter shows real usage once tenants run it.
+  for (const { template, templateKey } of starters) {
+    const stats = groups.has(templateKey)
+      ? sumGroupStats(groups.get(templateKey)!)
+      : EMPTY_STATS;
+    await upsertLibraryEntry(
+      {
+        templateKey,
+        title: template.name,
+        summary: template.summary,
+        category: LIBRARY_STARTER_CATEGORY,
+        source: "starter",
+        scrubbedDefinition: template.definition as unknown as Record<string, unknown>,
+        totalSuccessfulRuns: stats.totalSuccessfulRuns,
+        totalRuns: stats.totalRuns,
+        businessesUsing: stats.businessesUsing,
+        runsLast7d: stats.runsLast7d,
+        lastRunAt: stats.lastRunAt,
+        stats: { runsPerDay: Math.round((stats.runsLast7d / 7) * 100) / 100 }
+      },
+      db
+    );
+    publishedKeys.push(templateKey);
+  }
+
   // Drop catalog entries whose flows no longer qualify (no successful runs) or
   // were withheld by the PII gate — keep only what we actually published.
   await pruneLibraryEntries(publishedKeys, db);
 
-  return { candidates: candidates.length, groups: groups.size, published, skipped };
+  return {
+    candidates: candidates.length,
+    groups: groups.size,
+    published,
+    starters: starters.length,
+    skipped
+  };
 }
