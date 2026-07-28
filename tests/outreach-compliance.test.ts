@@ -7,7 +7,6 @@ import { describe, expect, it } from "vitest";
 
 import {
   buildOutreachUnsubscribeUrl,
-  discoveryDueToday,
   isWithinSendWindow,
   localWeekdayAndHour,
   looksLikeOptOut,
@@ -106,18 +105,10 @@ describe("isWithinSendWindow", () => {
   });
 });
 
-describe("utcDayStartIso / discoveryDueToday", () => {
-  it("anchors the daily cap to the start of the UTC day", () => {
+describe("utcDayStartIso", () => {
+  it("anchors the daily cap, and the once-a-day discovery claim, to the UTC day", () => {
     expect(utcDayStartIso(new Date("2026-07-27T23:59:59Z"))).toBe("2026-07-27T00:00:00.000Z");
-  });
-
-  it("allows one discovery pass per UTC day", () => {
-    const now = new Date("2026-07-27T16:00:00Z");
-    expect(discoveryDueToday(null, now)).toBe(true);
-    expect(discoveryDueToday("2026-07-26T23:00:00Z", now)).toBe(true);
-    expect(discoveryDueToday("2026-07-27T01:00:00Z", now)).toBe(false);
-    // An unparseable stamp must not wedge discovery off forever.
-    expect(discoveryDueToday("not a date", now)).toBe(true);
+    expect(utcDayStartIso(new Date("2026-07-27T00:00:00Z"))).toBe("2026-07-27T00:00:00.000Z");
   });
 });
 

@@ -142,6 +142,7 @@ function baseDeps(over: Record<string, unknown> = {}) {
 function stubLedger(over: Record<string, unknown> = {}) {
   const defaults = {
     listActiveOutreachSettings: vi.fn(async () => [settings()]),
+    claimDiscoveryRun: vi.fn(async () => true),
     getOutreachSettings: vi.fn(async () => settings()),
     getProspect: vi.fn(async () => prospect()),
     upsertOutreachSettings: vi.fn(async () => settings()),
@@ -309,12 +310,12 @@ describe("tenant resolution", () => {
 });
 
 describe("phase 1: discovery", () => {
-  it("stamps the day BEFORE buying queries, so a crash cannot re-buy them", async () => {
+  it("claims the day BEFORE buying queries, so a crash cannot re-buy them", async () => {
     const order: string[] = [];
     const ledger = stubLedger({
-      upsertOutreachSettings: vi.fn(async () => {
+      claimDiscoveryRun: vi.fn(async () => {
         order.push("stamp");
-        return settings();
+        return true;
       }),
       insertProspects: vi.fn(async () => [{ id: "p1" }])
     });
@@ -333,9 +334,10 @@ describe("phase 1: discovery", () => {
     expect(order[0]).toBe("stamp");
     expect(order).toContain("query");
     expect(result.discovered).toBe(1);
-    expect(ledger.upsertOutreachSettings).toHaveBeenCalledWith(
+    expect(ledger.claimDiscoveryRun).toHaveBeenCalledWith(
       BIZ,
-      { last_discovery_at: MONDAY_MORNING.toISOString() },
+      MONDAY_MORNING.toISOString(),
+      "2026-07-27T00:00:00.000Z",
       expect.anything()
     );
   });
@@ -372,14 +374,14 @@ describe("phase 1: discovery", () => {
     ]);
   });
 
-  it("does not discover twice in one UTC day", async () => {
-    const ledger = stubLedger({
-      listActiveOutreachSettings: vi.fn(async () => [
-        settings({ last_discovery_at: "2026-07-27T01:00:00Z" })
-      ])
-    });
-    await processOutreachSweep(baseDeps());
-    expect(ledger.upsertOutreachSettings).not.toHaveBeenCalled();
+  it("buys nothing when another pass already claimed today's discovery", async () => {
+    // The claim is atomic, so the loser skips instead of re-buying the same
+    // paid searches a concurrent pass is already running.
+    stubLedger({ claimDiscoveryRun: vi.fn(async () => false) });
+    const searchPlacesImpl = vi.fn(async () => []);
+    const result = await processOutreachSweep(baseDeps({ searchPlacesImpl }));
+    expect(searchPlacesImpl).not.toHaveBeenCalled();
+    expect(result.discovered).toBe(0);
   });
 
   it("reads the Places key from the environment when none is injected", async () => {

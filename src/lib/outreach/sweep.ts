@@ -41,6 +41,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { logger } from "@/lib/logger";
 import {
+  claimDiscoveryRun,
   claimProspectNudge,
   countProspectsNudgedSince,
   countProspectsSentSince,
@@ -76,12 +77,7 @@ import {
   polishParagraphs,
   type PitchTenant
 } from "./compose";
-import {
-  buildOutreachUnsubscribeUrl,
-  discoveryDueToday,
-  isWithinSendWindow,
-  utcDayStartIso
-} from "./compliance";
+import { buildOutreachUnsubscribeUrl, isWithinSendWindow, utcDayStartIso } from "./compliance";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -257,14 +253,18 @@ async function discoverForBusiness(
     });
     return;
   }
-  // Stamp BEFORE the queries, not after: these calls cost money, and a crash
-  // halfway through must not let the next tick buy the same searches again.
-  // At-most-once beats at-least-once when the retry is billable.
-  await upsertOutreachSettings(
+  // Claim the day BEFORE the queries, in one atomic write. These calls cost
+  // money twice over if this is wrong: a crash halfway through must not let the
+  // next tick re-buy the same searches, and two overlapping passes must not
+  // both buy them either. At-most-once beats at-least-once when the retry is
+  // billable, so the loser of the claim simply skips discovery this pass.
+  const claimed = await claimDiscoveryRun(
     settings.business_id,
-    { last_discovery_at: r.now.toISOString() },
+    r.now.toISOString(),
+    utcDayStartIso(r.now),
     r.db
   );
+  if (!claimed) return;
   for (const slot of rotationWindow(rotation, dayIndexFor(r.now), QUERIES_PER_RUN)) {
     const hits = await r.searchPlaces(r.placesApiKey, slot.query);
     const candidates = prospectsFromHits(hits, slot.vertical, slot.city);
@@ -817,9 +817,7 @@ async function sweepBusiness(
     result.notes.push({ businessId: settings.business_id, note: resolved.missing });
     return;
   }
-  if (discoveryDueToday(settings.last_discovery_at, r.now)) {
-    await discoverForBusiness(settings, r, result);
-  }
+  await discoverForBusiness(settings, r, result);
   await draftForBusiness(settings, resolved.tenant, r, result);
   if (settings.mode !== "auto") return;
   // One window check for both outbound phases: a nudge is cold mail too.

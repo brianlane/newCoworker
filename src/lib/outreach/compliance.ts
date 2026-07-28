@@ -120,14 +120,6 @@ export function utcDayStartIso(now: Date): string {
   ).toISOString();
 }
 
-/** True when the last discovery pass was on an earlier UTC day (or never). */
-export function discoveryDueToday(lastDiscoveryAt: string | null, now: Date): boolean {
-  if (!lastDiscoveryAt) return true;
-  const last = Date.parse(lastDiscoveryAt);
-  if (Number.isNaN(last)) return true;
-  return new Date(last).toISOString().slice(0, 10) < now.toISOString().slice(0, 10);
-}
-
 /**
  * Explicit instructions to stop. Deliberately narrow: every phrase here is a
  * request, not an opinion.

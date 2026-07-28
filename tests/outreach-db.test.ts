@@ -16,6 +16,7 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import {
+  claimDiscoveryRun,
   claimProspectNudge,
   countProspectsNudgedSince,
   countProspectsSentSince,
@@ -55,6 +56,7 @@ function chain(terminal?: unknown): Chain {
     "is",
     "gte",
     "lte",
+    "or",
     "order",
     "range",
     "limit"
@@ -348,6 +350,37 @@ describe("transitionProspect", () => {
         makeDb(chain({ data: null, error: { message: "tp" } }))
       )
     ).rejects.toThrow(/tp/);
+  });
+});
+
+describe("claimDiscoveryRun", () => {
+  it("wins only when today's discovery has not been claimed", async () => {
+    const won = chain({ data: [{ business_id: BIZ }], error: null });
+    expect(
+      await claimDiscoveryRun(BIZ, "2026-07-27T16:00:00Z", "2026-07-27T00:00:00Z", makeDb(won))
+    ).toBe(true);
+    // The condition rides INSIDE the update: a read-then-write would let two
+    // overlapping sweeps both buy the same paid Places searches.
+    expect(won.or).toHaveBeenCalledWith(
+      "last_discovery_at.is.null,last_discovery_at.lt.2026-07-27T00:00:00Z"
+    );
+
+    const lost = chain({ data: [], error: null });
+    expect(
+      await claimDiscoveryRun(BIZ, "2026-07-27T16:00:00Z", "2026-07-27T00:00:00Z", makeDb(lost))
+    ).toBe(false);
+
+    defaultClientSpy.mockReturnValue(makeDb(chain({ data: [{ business_id: BIZ }], error: null })));
+    expect(await claimDiscoveryRun(BIZ, "2026-07-27T16:00:00Z", "2026-07-27T00:00:00Z")).toBe(true);
+
+    await expect(
+      claimDiscoveryRun(
+        BIZ,
+        "2026-07-27T16:00:00Z",
+        "2026-07-27T00:00:00Z",
+        makeDb(chain({ data: null, error: { message: "cd" } }))
+      )
+    ).rejects.toThrow(/cd/);
   });
 });
 

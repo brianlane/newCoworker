@@ -375,6 +375,34 @@ export async function transitionProspect(
 }
 
 /**
+ * Claim today's discovery pass for a business, atomically.
+ *
+ * Discovery buys paid Places queries, so "have we already run today?" cannot be
+ * a read followed by a write: two overlapping sweeps would both read yesterday's
+ * stamp, both decide they are due, and both buy the same searches. The condition
+ * rides inside the UPDATE, so the loser matches zero rows and skips.
+ *
+ * Stamping BEFORE the queries (rather than after) is the same decision in the
+ * other direction: at-most-once beats at-least-once when the retry is billable.
+ */
+export async function claimDiscoveryRun(
+  businessId: string,
+  nowIso: string,
+  dayStartIso: string,
+  client?: SupabaseClient
+): Promise<boolean> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("outreach_settings")
+    .update({ last_discovery_at: nowIso, updated_at: new Date().toISOString() })
+    .eq("business_id", businessId)
+    .or(`last_discovery_at.is.null,last_discovery_at.lt.${dayStartIso}`)
+    .select("business_id");
+  if (error) throw new Error(`claimDiscoveryRun: ${error.message}`);
+  return Array.isArray(data) && data.length > 0;
+}
+
+/**
  * Claim the ONE follow-up a prospect ever gets, atomically.
  *
  * `transitionProspect` guards on status, which is enough for the first pitch
