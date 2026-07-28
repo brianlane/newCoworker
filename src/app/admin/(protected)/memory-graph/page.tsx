@@ -344,7 +344,8 @@ export default async function MemoryGraphAdminPage({
             true counts.
           </p>
         )}
-        <table className="w-full text-sm">
+        <div className="mobile-scroll-x">
+        <table className="w-full min-w-[720px] text-sm">
           <thead>
             <tr className="text-left text-xs text-parchment/40">
               <th className="pb-2 pr-4">Business</th>
@@ -401,6 +402,7 @@ export default async function MemoryGraphAdminPage({
             })}
           </tbody>
         </table>
+        </div>
       </Card>
 
       {selectedBusinessId && (

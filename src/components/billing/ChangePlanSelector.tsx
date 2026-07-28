@@ -132,17 +132,26 @@ export function ChangePlanSelector({
         </p>
       )}
 
-      <div className="grid grid-cols-4 gap-2 text-xs text-parchment/60">
-        <div />
+      {/* Phone: no room for a label column, so the tier name becomes a
+          full-width heading over its own row of three period cards, and each
+          card carries its period label. From sm up it is the original
+          (tier x period) matrix with a shared header row. */}
+      <div className="grid grid-cols-1 gap-2 text-xs text-parchment/60 min-[360px]:grid-cols-3 sm:grid-cols-4">
+        <div className="hidden sm:block" />
         {PERIODS.map((p) => (
-          <div key={p} className="text-center font-semibold uppercase tracking-wider">
+          <div
+            key={p}
+            className="hidden text-center font-semibold uppercase tracking-wider sm:block"
+          >
             {periodLabel(p)}
           </div>
         ))}
 
         {TIERS.map((tier) => (
           <div key={tier} className="contents">
-            <div className="flex items-center font-semibold text-parchment">{tierLabel(tier)}</div>
+            <div className="col-span-full flex items-center font-semibold text-parchment sm:col-span-1">
+              {tierLabel(tier)}
+            </div>
             {PERIODS.map((period) => {
               const current = isCurrent(tier, period);
               const selected = selectedTier === tier && selectedPeriod === period;
@@ -153,7 +162,7 @@ export function ChangePlanSelector({
                   onClick={() => handleChooseCell(tier, period)}
                   disabled={disabled || current}
                   className={[
-                    "rounded-lg border p-3 text-center transition-all",
+                    "min-w-0 rounded-lg border p-2 text-center transition-all sm:p-3",
                     current
                       ? "border-claw-green/60 bg-claw-green/10 text-claw-green cursor-default"
                       : selected
@@ -162,7 +171,12 @@ export function ChangePlanSelector({
                     disabled && !current ? "opacity-50 cursor-not-allowed" : ""
                   ].join(" ")}
                 >
-                  <div className="text-sm font-mono">{monthlyRateLabel(tier, period)}</div>
+                  <div className="text-[10px] uppercase tracking-wide text-parchment/50 sm:hidden">
+                    {periodLabel(period)}
+                  </div>
+                  <div className="font-mono text-xs sm:text-sm">
+                    {monthlyRateLabel(tier, period)}
+                  </div>
                   {period !== "monthly" && (
                     <div className="text-[10px] text-parchment/50 mt-0.5">
                       save {calculateSavingsPercentage(tier, period)}%

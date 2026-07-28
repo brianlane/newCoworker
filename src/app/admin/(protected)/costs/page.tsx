@@ -297,7 +297,8 @@ export default async function AdminCostsPage() {
           {directions.length === 0 ? (
             <p className="text-sm text-parchment/40 text-center py-4">No synced rows this month.</p>
           ) : (
-            <table className="w-full text-xs">
+            <div className="mobile-scroll-x">
+            <table className="w-full min-w-[420px] text-xs">
               <thead>
                 <tr className="text-parchment/40 text-left">
                   <th className="pb-2 font-medium">Type / direction</th>
@@ -327,6 +328,7 @@ export default async function AdminCostsPage() {
                 ))}
               </tbody>
             </table>
+            </div>
           )}
         </Card>
 
