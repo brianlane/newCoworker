@@ -112,6 +112,22 @@ describe("computeOnboardingNudgeItems", () => {
     ]);
   });
 
+  it("emits one item per open deal even though their labels are identical", () => {
+    // Two open deals produce the same label, so anything rendering these as
+    // a list cannot key on the label alone.
+    const items = computeOnboardingNudgeItems(
+      complete({
+        deals: [
+          { status: "open", pay_token: "deal_a" },
+          { status: "open", pay_token: "deal_b" }
+        ]
+      })
+    );
+    expect(items).toHaveLength(2);
+    expect(items[0].label).toBe(items[1].label);
+    expect(items[0].href).not.toBe(items[1].href);
+  });
+
   it("lists a brand-new tenant's items in checkout, website, phone, payment order", () => {
     expect(
       labels({

@@ -44,12 +44,21 @@ export async function POST(request: Request) {
 
     const appUrl = nudgeAppUrl();
 
+    // Every read is unguarded ON PURPOSE. These used to be wrapped in
+    // `.catch(() => null | [])`, which quietly turned a transient failure
+    // into wrong CUSTOMER-FACING copy: an unreadable `telnyx_voice_routes`
+    // row became "your coworker doesn't have a phone number yet" in a real
+    // email, and an unreadable offer list silently dropped a payment
+    // request. There is no honest checklist to send when we cannot read
+    // what is done, so fail the request (the operator retries) instead of
+    // guessing. This also keeps the route in step with the admin page's
+    // preview, which loads the same five inputs unguarded.
     const [config, subscription, didRoute, offers, deals] = await Promise.all([
       getBusinessConfig(businessId),
       getSubscription(businessId),
-      getTelnyxVoiceRouteForBusiness(businessId).catch(() => null),
-      listWhiteGloveOffers(businessId).catch(() => []),
-      listEnterpriseDeals(businessId).catch(() => [])
+      getTelnyxVoiceRouteForBusiness(businessId),
+      listWhiteGloveOffers(businessId),
+      listEnterpriseDeals(businessId)
     ]);
 
     // Same computation the admin page renders as the nudge reasons, so the

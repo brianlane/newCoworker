@@ -82,9 +82,14 @@ export function NudgeOwnerButton({
               ? "At page load, the reminder email would ask them to:"
               : "The reminder covered:"}
           </p>
+          {/* Keyed by position, not by label: two open enterprise deals
+              produce the identical "Complete your enterprise plan payment"
+              line, and two offers can share a name, so labels are not
+              unique. The list is static within a render, so position is a
+              safe key. */}
           <ul className="space-y-0.5">
-            {items.map((item) => (
-              <li key={item} className="text-xs text-spark-orange">
+            {items.map((item, index) => (
+              <li key={`${index}:${item}`} className="text-xs text-spark-orange">
                 • {item}
               </li>
             ))}
