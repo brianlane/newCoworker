@@ -66,6 +66,12 @@ type Props = {
   locale: string;
   /** Owner-defined intake questions, already parsed server-side. */
   intakeQuestions: IntakeQuestionView[];
+  /**
+   * The meeting being booked (/book/<page>/<typeSlug>). When set, the type
+   * owns the length, so the duration picker is gone and every fetch
+   * carries the slug.
+   */
+  meetingTypeSlug?: string | null;
   strings: PublicBookingStrings;
 };
 
@@ -126,6 +132,7 @@ export function PublicBookingPage({
   sendsInvite,
   locale,
   intakeQuestions,
+  meetingTypeSlug,
   strings
 }: Props) {
   const browserZone = useMemo(
@@ -169,7 +176,12 @@ export function PublicBookingPage({
       const res = await fetch("/api/book/slots", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ token, durationMinutes: duration })
+        body: JSON.stringify({
+          token,
+          durationMinutes: duration,
+          ...(meetingTypeSlug ? { meetingTypeSlug } : {}),
+          ...(meetingTypeSlug ? { meetingTypeSlug } : {})
+        })
       });
       const body = await res.json();
       if (!res.ok || !body.ok) throw new Error("slots failed");
@@ -178,7 +190,7 @@ export function PublicBookingPage({
     } catch {
       if (seq === slotsRequestSeq.current) setSlotsError(true);
     }
-  }, [token, duration]);
+  }, [token, duration, meetingTypeSlug]);
 
   useEffect(() => {
     void loadSlots();
@@ -240,6 +252,7 @@ export function PublicBookingPage({
           token,
           startIso: selectedSlot.startIso,
           durationMinutes: duration,
+          ...(meetingTypeSlug ? { meetingTypeSlug } : {}),
           name: form.name,
           phone: form.phone,
           email: form.email,
@@ -277,7 +290,18 @@ export function PublicBookingPage({
     } catch {
       setSubmitState("failed");
     }
-  }, [selectedSlot, token, duration, form, notifyEarlier, timezone, locale, intake, loadSlots]);
+  }, [
+    selectedSlot,
+    token,
+    duration,
+    form,
+    notifyEarlier,
+    timezone,
+    locale,
+    intake,
+    meetingTypeSlug,
+    loadSlots
+  ]);
 
   const panel = "rounded-lg border border-parchment/10 bg-parchment/5";
   const label = "block text-xs uppercase tracking-wider text-parchment/40";
@@ -340,7 +364,7 @@ export function PublicBookingPage({
         <p className="text-xs uppercase tracking-wider text-parchment/40">{businessName}</p>
         <h1 className="mt-2 text-xl font-bold text-parchment">{strings.eventTitle}</h1>
         <div className="mt-4 space-y-2 text-sm text-parchment/60">
-          {allowedDurations.length > 1 ? (
+          {allowedDurations.length > 1 && !meetingTypeSlug ? (
             <div className="flex flex-wrap gap-2">
               {allowedDurations.map((d) => (
                 <button

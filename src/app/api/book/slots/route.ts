@@ -23,7 +23,9 @@ const SLOTS_RATE = { interval: 60 * 1000, maxRequests: 30 };
 
 const bodySchema = z.object({
   token: z.string().max(200),
-  durationMinutes: z.number().int()
+  durationMinutes: z.number().int(),
+  /** The meeting being booked (/book/<page>/<typeSlug>); its length wins. */
+  meetingTypeSlug: z.string().max(60).optional()
 });
 
 export async function POST(request: Request) {
@@ -35,7 +37,12 @@ export async function POST(request: Request) {
     }
 
     const body = bodySchema.parse(await request.json());
-    const result = await listPublicSlots(body.token, body.durationMinutes);
+    const result = await listPublicSlots(
+      body.token,
+      body.durationMinutes,
+      undefined,
+      body.meetingTypeSlug
+    );
     if (!result.ok) {
       if (result.detail === "not_found") {
         return errorResponse("NOT_FOUND", "This booking page is not available.");

@@ -1,0 +1,229 @@
+"use client";
+
+/**
+ * The intake-question builder, shared by the booking page's own questions
+ * and each meeting type's.
+ *
+ * Extracted so a meeting type's questionnaire behaves identically to the
+ * page's, including the two hard-won details:
+ *
+ *  - edits are expressed as MUTATIONS of the latest acknowledged list and
+ *    matched by question id, never by render-time index, so two blur saves
+ *    in flight cannot clobber each other (the owner writes the whole list
+ *    every time);
+ *  - an edit that cannot save (emptied label, fewer than two options)
+ *    reverts the field to what is stored, so the input can never show text
+ *    the public page is not using.
+ *
+ * Serialization itself lives with the caller, which owns the save queue.
+ */
+
+import { useTranslations } from "next-intl";
+
+export type IntakeQuestion = {
+  id: string;
+  label: string;
+  help?: string;
+  type: "choice" | "multi" | "text" | "textarea";
+  options?: string[];
+  required: boolean;
+  /** Absent on rows stored before the flag existed, which means asking. */
+  enabled?: boolean;
+};
+
+/** Booking must stay short, so the builder caps the list. */
+export const MAX_INTAKE_QUESTIONS = 5;
+
+export function IntakeQuestionsEditor({
+  questions,
+  saving,
+  idPrefix,
+  onChange
+}: {
+  questions: IntakeQuestion[];
+  saving: boolean;
+  /** Keeps input ids unique when several editors share one page. */
+  idPrefix: string;
+  /** Receives a mutation of the CURRENT list, applied by the caller's queue. */
+  onChange: (mutate: (questions: IntakeQuestion[]) => IntakeQuestion[]) => void;
+}) {
+  const t = useTranslations("dashboard.bookings");
+  const label = "block text-xs uppercase tracking-wider text-parchment/40";
+  const select =
+    "mt-1 rounded-md border border-parchment/20 bg-deep-ink px-2 py-1.5 text-sm text-parchment";
+
+  return (
+    <>
+      <div className="mt-4 space-y-3">
+        {questions.map((q) => (
+          <div
+            key={q.id}
+            className={`rounded-md border border-parchment/15 bg-deep-ink/60 p-3 ${
+              q.enabled !== false ? "" : "opacity-60"
+            }`}
+          >
+            <div className="flex flex-wrap items-end gap-3">
+              <div className="min-w-48 flex-1">
+                <label className={label} htmlFor={`${idPrefix}-q-label-${q.id}`}>
+                  {t("intakeQuestionLabel")}
+                </label>
+                <input
+                  id={`${idPrefix}-q-label-${q.id}`}
+                  // Keyed on the stored value so a successful save (or a
+                  // reverted one) re-renders the input from what is
+                  // actually persisted.
+                  key={q.label}
+                  className={`${select} w-full`}
+                  maxLength={160}
+                  defaultValue={q.label}
+                  disabled={saving}
+                  onBlur={(e) => {
+                    const next = e.target.value.trim();
+                    if (next && next !== q.label) {
+                      onChange((qs) =>
+                        qs.map((it) => (it.id === q.id ? { ...it, label: next } : it))
+                      );
+                    } else if (!next) {
+                      // An emptied label cannot save; put the stored one back.
+                      e.target.value = q.label;
+                    }
+                  }}
+                />
+              </div>
+              <div>
+                <label className={label} htmlFor={`${idPrefix}-q-type-${q.id}`}>
+                  {t("intakeTypeLabel")}
+                </label>
+                <select
+                  id={`${idPrefix}-q-type-${q.id}`}
+                  className={select}
+                  disabled={saving}
+                  value={q.type}
+                  onChange={(e) => {
+                    const type = e.target.value as IntakeQuestion["type"];
+                    onChange((qs) =>
+                      qs.map((it) =>
+                        it.id === q.id
+                          ? {
+                              ...it,
+                              type,
+                              // A choice needs options to choose from.
+                              options:
+                                type === "choice" || type === "multi"
+                                  ? (it.options?.length ?? 0) >= 2
+                                    ? it.options
+                                    : [t("intakeOptionOne"), t("intakeOptionTwo")]
+                                  : undefined
+                            }
+                          : it
+                      )
+                    );
+                  }}
+                >
+                  <option value="text">{t("intakeTypeText")}</option>
+                  <option value="textarea">{t("intakeTypeTextarea")}</option>
+                  <option value="choice">{t("intakeTypeChoice")}</option>
+                  <option value="multi">{t("intakeTypeMulti")}</option>
+                </select>
+              </div>
+              {/* Pause instead of delete: the question stays saved for the
+                  next time it is wanted, and a paused one never reaches
+                  the public form. */}
+              <label className="flex items-center gap-2 pb-1.5 text-sm text-parchment/70">
+                <input
+                  type="checkbox"
+                  // Same normalization the parser applies: only an explicit
+                  // false is paused, so legacy rows show as asking.
+                  checked={q.enabled !== false}
+                  disabled={saving}
+                  onChange={(e) => {
+                    const enabled = e.target.checked;
+                    onChange((qs) =>
+                      qs.map((it) => (it.id === q.id ? { ...it, enabled } : it))
+                    );
+                  }}
+                />
+                {t("intakeAsk")}
+              </label>
+              <label className="flex items-center gap-2 pb-1.5 text-sm text-parchment/70">
+                <input
+                  type="checkbox"
+                  checked={q.required}
+                  disabled={saving}
+                  onChange={(e) => {
+                    const required = e.target.checked;
+                    onChange((qs) =>
+                      qs.map((it) => (it.id === q.id ? { ...it, required } : it))
+                    );
+                  }}
+                />
+                {t("intakeRequired")}
+              </label>
+              <button
+                type="button"
+                className="pb-1.5 text-sm text-clay-red/80 hover:text-clay-red"
+                disabled={saving}
+                onClick={() => onChange((qs) => qs.filter((it) => it.id !== q.id))}
+              >
+                {t("intakeRemove")}
+              </button>
+            </div>
+            {q.type === "choice" || q.type === "multi" ? (
+              <div className="mt-2">
+                <label className={label} htmlFor={`${idPrefix}-q-options-${q.id}`}>
+                  {t("intakeOptionsLabel")}
+                </label>
+                <input
+                  id={`${idPrefix}-q-options-${q.id}`}
+                  key={(q.options ?? []).join(", ")}
+                  className={`${select} w-full`}
+                  disabled={saving}
+                  defaultValue={(q.options ?? []).join(", ")}
+                  placeholder={t("intakeOptionsPlaceholder")}
+                  onBlur={(e) => {
+                    const options = e.target.value
+                      .split(",")
+                      .map((o) => o.trim())
+                      .filter(Boolean)
+                      .slice(0, 8);
+                    if (options.length >= 2) {
+                      onChange((qs) =>
+                        qs.map((it) => (it.id === q.id ? { ...it, options } : it))
+                      );
+                    } else {
+                      // Fewer than two options is not a choice; revert.
+                      e.target.value = (q.options ?? []).join(", ");
+                    }
+                  }}
+                />
+              </div>
+            ) : null}
+          </div>
+        ))}
+      </div>
+      {questions.length < MAX_INTAKE_QUESTIONS ? (
+        <button
+          type="button"
+          className="mt-3 rounded-md border border-parchment/25 px-3 py-1.5 text-sm text-parchment/80 hover:border-parchment/50"
+          disabled={saving}
+          onClick={() =>
+            onChange((qs) => [
+              ...qs,
+              {
+                id: `q-${Date.now().toString(36)}`,
+                label: t("intakeNewQuestionLabel"),
+                type: "text" as const,
+                required: false,
+                enabled: true
+              }
+            ])
+          }
+        >
+          {t("intakeAdd")}
+        </button>
+      ) : (
+        <p className="mt-3 text-xs text-parchment/40">{t("intakeMax")}</p>
+      )}
+    </>
+  );
+}

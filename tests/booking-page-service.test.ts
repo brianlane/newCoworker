@@ -16,6 +16,12 @@ vi.mock("@/lib/booking-page/confirmation-email", () => ({
   sendBookingConfirmationEmail: vi.fn()
 }));
 vi.mock("@/lib/booking-page/assignee-notify", () => ({ notifyAssigneeOfBooking: vi.fn() }));
+vi.mock("@/lib/booking-page/meeting-types", async (importOriginal) => ({
+  // The resolver is pure and its rules are pinned in its own suite; only
+  // the database read is faked here.
+  ...(await importOriginal<typeof import("@/lib/booking-page/meeting-types")>()),
+  listMeetingTypes: vi.fn()
+}));
 vi.mock("@/lib/voice-tools/connections", () => ({ resolveCalendarConnection: vi.fn() }));
 vi.mock("@/lib/calendar-tools/handlers", () => ({
   bookCalendarAppointment: vi.fn(),
@@ -87,6 +93,7 @@ import {
 } from "@/lib/booking-page/db";
 import { sendBookingConfirmationEmail } from "@/lib/booking-page/confirmation-email";
 import { notifyAssigneeOfBooking } from "@/lib/booking-page/assignee-notify";
+import { listMeetingTypes } from "@/lib/booking-page/meeting-types";
 import { findUpcomingBookingsForAttendee } from "@/lib/calendar-tools/attendee-bookings";
 import { maybeAlertUnassignedBooking } from "@/lib/calendar-tools/unassigned-booking-alert";
 import {
@@ -120,6 +127,30 @@ import { logger } from "@/lib/logger";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const TOKEN = "ncb_" + "a".repeat(64);
+
+/** A meeting type row; overrides express what this meeting owns. */
+function meetingType(over: Record<string, unknown> = {}) {
+  return {
+    id: "mt-discovery",
+    business_id: BIZ,
+    name: "Discovery call",
+    slug: "discovery-call",
+    description: null,
+    duration_minutes: 60,
+    intake_questions: null,
+    assignment_mode: null,
+    employee_id: null,
+    payment_required: false,
+    payment_amount_cents: null,
+    payment_currency: "usd",
+    enabled: true,
+    hidden: false,
+    sort_order: 0,
+    created_at: "2026-01-01T00:00:00Z",
+    updated_at: "2026-01-01T00:00:00Z",
+    ...over
+  } as never;
+}
 // Monday 09:00 in America/Phoenix (UTC-7, no DST).
 const NOW = new Date("2026-01-05T16:00:00Z");
 
@@ -185,6 +216,7 @@ const mockAssigneeCounts = vi.mocked(countUpcomingByAssignee);
 const mockStampAssignee = vi.mocked(stampAssigneeIfUnset);
 const mockConfirmationEmail = vi.mocked(sendBookingConfirmationEmail);
 const mockNotifyAssignee = vi.mocked(notifyAssigneeOfBooking);
+const mockMeetingTypes = vi.mocked(listMeetingTypes);
 const mockPageByBusiness = vi.mocked(getBookingPageForBusiness);
 const mockUpcomingForAttendee = vi.mocked(findUpcomingBookingsForAttendee);
 const mockUnassignedAlert = vi.mocked(maybeAlertUnassignedBooking);
@@ -226,6 +258,7 @@ beforeEach(() => {
   mockMarkOffered.mockResolvedValue(undefined);
   mockConfirmationEmail.mockResolvedValue(true);
   mockNotifyAssignee.mockResolvedValue(true);
+  mockMeetingTypes.mockResolvedValue([]);
   mockUpcomingForAttendee.mockResolvedValue([]);
   mockUnassignedAlert.mockResolvedValue("sent" as never);
   mockZoomCreate.mockResolvedValue({
@@ -452,6 +485,39 @@ describe("listPublicSlots", () => {
   it("passes context failures through and rejects unoffered durations", async () => {
     expect(await listPublicSlots("nope", 30)).toEqual({ ok: false, detail: "not_found" });
     expect(await listPublicSlots(TOKEN, 45)).toEqual({ ok: false, detail: "invalid_duration" });
+  });
+
+  it("a meeting type sets the length, and its slug must resolve", async () => {
+    mockMeetingTypes.mockResolvedValue([meetingType()]);
+
+    // The type's 60 minutes REPLACES the requested 30, and the page's
+    // allowed-duration list does not gate a type's own length.
+    const out = await listPublicSlots(TOKEN, 30, undefined, "discovery-call");
+    expect(out.ok && out.durationMinutes).toBe(60);
+
+    // A slug that is unknown, disabled, or malformed fails closed rather
+    // than quietly listing the page's own availability.
+    expect(await listPublicSlots(TOKEN, 30, undefined, "nope-slug")).toEqual({
+      ok: false,
+      detail: "not_found"
+    });
+    mockMeetingTypes.mockResolvedValue([meetingType({ enabled: false })]);
+    expect(await listPublicSlots(TOKEN, 30, undefined, "discovery-call")).toEqual({
+      ok: false,
+      detail: "not_found"
+    });
+    mockMeetingTypes.mockResolvedValue([meetingType()]);
+    expect(await listPublicSlots(TOKEN, 30, undefined, "NOT A SLUG")).toEqual({
+      ok: false,
+      detail: "not_found"
+    });
+  });
+
+  it("a hidden type still books by its direct link", async () => {
+    // Hidden is off the picker, not off the calendar.
+    mockMeetingTypes.mockResolvedValue([meetingType({ hidden: true })]);
+    const out = await listPublicSlots(TOKEN, 30, undefined, "discovery-call");
+    expect(out.ok && out.durationMinutes).toBe(60);
   });
 
   it("lists workspace slots on the business-hours grid", async () => {
@@ -1073,6 +1139,103 @@ describe("submitPublicBooking", () => {
     });
     expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
     expect(String(mockBook.mock.calls[0][1].notes)).not.toContain("Project?");
+  });
+
+  it("books a meeting type: its length, its name on the event, stamped on the row", async () => {
+    mockMeetingTypes.mockResolvedValue([meetingType()]);
+    const out = await submitPublicBooking(TOKEN, {
+      ...VALID,
+      meetingTypeSlug: "discovery-call"
+    });
+    expect(out.ok).toBe(true);
+    // The type's 60 minutes wins over the 30 the client asked for.
+    if (!out.ok) throw new Error("unreachable");
+    expect(out.endIso).toBe("2026-01-05T17:00:00.000Z");
+    expect(mockBook).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({
+        // The core takes the window, and it spans the type's 60 minutes.
+        startIso: "2026-01-05T16:00:00.000Z",
+        endIso: "2026-01-05T17:00:00.000Z",
+        summary: expect.stringContaining(": Discovery call")
+      }),
+      expect.anything(),
+      expect.anything()
+    );
+    // The dashboard and reminders need to know WHAT was booked.
+    expect(mockStampContact).toHaveBeenCalledWith(
+      BIZ,
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ meetingTypeId: "mt-discovery" })
+    );
+  });
+
+  it("refuses a dead meeting link instead of booking the page's default", async () => {
+    mockMeetingTypes.mockResolvedValue([meetingType({ enabled: false })]);
+    expect(
+      await submitPublicBooking(TOKEN, { ...VALID, meetingTypeSlug: "discovery-call" })
+    ).toEqual({ ok: false, detail: "not_found" });
+    expect(mockBook).not.toHaveBeenCalled();
+  });
+
+  it("asks the TYPE's questions, not the page's", async () => {
+    mockPage.mockResolvedValue({
+      ...PAGE,
+      intake_questions: [
+        { id: "page-q", label: "Page question?", type: "text", required: true }
+      ]
+    });
+    mockMeetingTypes.mockResolvedValue([
+      meetingType({
+        intake_questions: [
+          { id: "topic", label: "Topic?", type: "text", required: true }
+        ]
+      })
+    ]);
+
+    // The page's required question does not apply to this meeting...
+    const out = await submitPublicBooking(TOKEN, {
+      ...VALID,
+      meetingTypeSlug: "discovery-call",
+      intakeAnswers: { topic: "Pricing" }
+    });
+    expect(out.ok).toBe(true);
+    expect(String(mockBook.mock.calls[0][1].notes)).toContain("Topic?: Pricing");
+    expect(String(mockBook.mock.calls[0][1].notes)).not.toContain("Page question?");
+
+    // ...and the type's own required question does.
+    expect(
+      await submitPublicBooking(TOKEN, { ...VALID, meetingTypeSlug: "discovery-call" })
+    ).toEqual({ ok: false, detail: "missing_answers" });
+  });
+
+  it("honors the TYPE's assignment and price over the page's", async () => {
+    mockPage.mockResolvedValue({ ...PAGE, assignment_mode: "any" });
+    mockMembers.mockResolvedValue([
+      { id: "m-ana", active: true, weekly_schedule: null, last_offered_at: null }
+    ] as never);
+    mockTimeOff.mockResolvedValue([]);
+    mockMeetingTypes.mockResolvedValue([
+      meetingType({ assignment_mode: "fixed", employee_id: "m-ana" })
+    ]);
+    expect(
+      (await submitPublicBooking(TOKEN, { ...VALID, meetingTypeSlug: "discovery-call" })).ok
+    ).toBe(true);
+    expect(mockStampContact).toHaveBeenCalledWith(
+      BIZ,
+      expect.any(String),
+      expect.any(String),
+      expect.objectContaining({ assigneeMemberId: "m-ana" })
+    );
+
+    // A paid meeting on a free page still refuses until collection ships.
+    mockMeetingTypes.mockResolvedValue([
+      meetingType({ payment_required: true, payment_amount_cents: 5000 })
+    ]);
+    expect(
+      await submitPublicBooking(TOKEN, { ...VALID, meetingTypeSlug: "discovery-call" })
+    ).toEqual({ ok: false, detail: "payment_required" });
   });
 
   it("refuses a submission missing a required intake answer BEFORE any claim", async () => {

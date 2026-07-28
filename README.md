@@ -777,6 +777,27 @@ durations (15/30/60), minimum notice, max advance, buffer, daily cap, an
 optional "only when an employee is on shift" gate (reuses the AiFlow
 engine's roster evaluators), and the upcoming-bookings list.
 
+- **Meeting types** (`src/lib/booking-page/meeting-types.ts`): the page is
+  the shared policy; a meeting type is what a visitor actually books
+  ("Discovery call, 60 min", "Support call, 30 min, questionnaire, always
+  Ana"). Each type has its own shareable URL, `/book/<page>/<typeSlug>`,
+  rendering that meeting ALONE, no picker and no hint that others exist,
+  exactly like a Calendly event link: sharing a discovery-call link must
+  never expose the catalog. The bare page link is the menu (visible types
+  only; one visible type skips the menu, zero types is the original
+  duration-picker flow), and a `hidden` type is Calendly's "secret event",
+  bookable by direct link but off the menu. An unknown or disabled type
+  slug renders the branded "not available" screen, never the menu.
+  Inheritance is NULL in storage and resolved in one pure place
+  (`effectiveTypeSettings`): a type owns its duration, name, and
+  description, and may override the questionnaire (an explicit `[]` means
+  "this meeting asks nothing", which is why the column is nullable), the
+  assignment (the employee travels WITH the mode, so a type declaring
+  round-robin cannot borrow the page's fixed person), and the price
+  (upward only: a type can charge for a meeting the page gives away, and a
+  page that charges cannot be undercut). The booked type is stamped on the
+  ledger row (`meeting_type_id`, null on AI bookings and pre-types rows);
+  deleting a type never deletes the appointments people hold.
 - Availability = live provider free/busy (Google/Microsoft via
   `getWorkspaceBusyBlocks`, CalDAV) intersected with
   `businesses.business_hours` (no hours set = weekdays 9-5; a partially

@@ -7,6 +7,11 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import {
+  IntakeQuestionsEditor,
+  type IntakeQuestion
+} from "@/components/dashboard/IntakeQuestionsEditor";
+import { MeetingTypesCard } from "@/components/dashboard/MeetingTypesCard";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
 import { Card } from "@/components/ui/Card";
@@ -35,17 +40,7 @@ type PageRow = {
   intake_questions: IntakeQuestion[];
 };
 
-/** Mirror of BookingIntakeQuestion; the API stores it normalized. */
-type IntakeQuestion = {
-  id: string;
-  label: string;
-  help?: string;
-  type: "choice" | "multi" | "text" | "textarea";
-  options?: string[];
-  required: boolean;
-  /** Absent on rows stored before the flag existed, which means asking. */
-  enabled?: boolean;
-};
+
 
 type RosterMember = { id: string; name: string };
 
@@ -633,188 +628,26 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
         <p className="mt-3 text-xs text-parchment/40">{t("remindersHint")}</p>
       </Card>
 
+      {/* Meeting types: each one is its own shareable link rendering that
+          meeting alone, with the page's settings underneath it. */}
+      <MeetingTypesCard
+        businessId={businessId}
+        pageRef={page ? (page.slug ?? page.token) : null}
+        roster={roster}
+      />
+
       {/* Intake questions: what the visitor answers while booking. Same
           vocabulary as the white-glove questionnaire; answers travel with
           the appointment (event notes, booking row, manage page). */}
       <Card>
         <h2 className="text-base font-semibold text-parchment">{t("intakeTitle")}</h2>
         <p className="mt-1 text-sm text-parchment/60">{t("intakeSubtitle")}</p>
-        <div className="mt-4 space-y-3">
-          {(page?.intake_questions ?? []).map((q) => (
-            <div
-              key={q.id}
-              className={`rounded-md border border-parchment/15 bg-deep-ink/60 p-3 ${
-                q.enabled !== false ? "" : "opacity-60"
-              }`}
-            >
-              <div className="flex flex-wrap items-end gap-3">
-                <div className="min-w-48 flex-1">
-                  <label className={label} htmlFor={`bp-q-label-${q.id}`}>
-                    {t("intakeQuestionLabel")}
-                  </label>
-                  <input
-                    id={`bp-q-label-${q.id}`}
-                    // Keyed on the stored value so a successful save (or a
-                    // reverted one) re-renders the input from what is
-                    // actually persisted; the field can never show text the
-                    // public page is not using.
-                    key={q.label}
-                    className={`${select} w-full`}
-                    maxLength={160}
-                    defaultValue={q.label}
-                    disabled={saving}
-                    onBlur={(e) => {
-                      const next = e.target.value.trim();
-                      if (next && next !== q.label) {
-                        // Matched by id, not index: the queued base list can
-                        // differ from what this row rendered from.
-                        void patchQuestions((qs) =>
-                          qs.map((it) => (it.id === q.id ? { ...it, label: next } : it))
-                        );
-                      } else if (!next) {
-                        // An emptied label cannot save; put the stored one
-                        // back rather than showing an edit that never landed.
-                        e.target.value = q.label;
-                      }
-                    }}
-                  />
-                </div>
-                <div>
-                  <label className={label} htmlFor={`bp-q-type-${q.id}`}>
-                    {t("intakeTypeLabel")}
-                  </label>
-                  <select
-                    id={`bp-q-type-${q.id}`}
-                    className={select}
-                    disabled={saving}
-                    value={q.type}
-                    onChange={(e) => {
-                      const type = e.target.value as IntakeQuestion["type"];
-                      void patchQuestions((qs) =>
-                        qs.map((it) =>
-                          it.id === q.id
-                            ? {
-                                ...it,
-                                type,
-                                // A choice needs options to choose from.
-                                options:
-                                  type === "choice" || type === "multi"
-                                    ? (it.options?.length ?? 0) >= 2
-                                      ? it.options
-                                      : [t("intakeOptionOne"), t("intakeOptionTwo")]
-                                    : undefined
-                              }
-                            : it
-                        )
-                      );
-                    }}
-                  >
-                    <option value="text">{t("intakeTypeText")}</option>
-                    <option value="textarea">{t("intakeTypeTextarea")}</option>
-                    <option value="choice">{t("intakeTypeChoice")}</option>
-                    <option value="multi">{t("intakeTypeMulti")}</option>
-                  </select>
-                </div>
-                {/* Pause instead of delete: the question stays saved for
-                    the next time it is wanted, and a paused one never
-                    reaches the public form. */}
-                <label className="flex items-center gap-2 pb-1.5 text-sm text-parchment/70">
-                  <input
-                    type="checkbox"
-                    // Same normalization the parser applies: only an
-                    // explicit false is paused, so legacy rows stored
-                    // before the flag show as asking (which they are).
-                    checked={q.enabled !== false}
-                    disabled={saving}
-                    onChange={(e) => {
-                      const enabled = e.target.checked;
-                      void patchQuestions((qs) =>
-                        qs.map((it) => (it.id === q.id ? { ...it, enabled } : it))
-                      );
-                    }}
-                  />
-                  {t("intakeAsk")}
-                </label>
-                <label className="flex items-center gap-2 pb-1.5 text-sm text-parchment/70">
-                  <input
-                    type="checkbox"
-                    checked={q.required}
-                    disabled={saving}
-                    onChange={(e) => {
-                      const required = e.target.checked;
-                      void patchQuestions((qs) =>
-                        qs.map((it) => (it.id === q.id ? { ...it, required } : it))
-                      );
-                    }}
-                  />
-                  {t("intakeRequired")}
-                </label>
-                <button
-                  type="button"
-                  className="pb-1.5 text-sm text-clay-red/80 hover:text-clay-red"
-                  disabled={saving}
-                  onClick={() => void patchQuestions((qs) => qs.filter((it) => it.id !== q.id))}
-                >
-                  {t("intakeRemove")}
-                </button>
-              </div>
-              {q.type === "choice" || q.type === "multi" ? (
-                <div className="mt-2">
-                  <label className={label} htmlFor={`bp-q-options-${q.id}`}>
-                    {t("intakeOptionsLabel")}
-                  </label>
-                  <input
-                    id={`bp-q-options-${q.id}`}
-                    key={(q.options ?? []).join(", ")}
-                    className={`${select} w-full`}
-                    disabled={saving}
-                    defaultValue={(q.options ?? []).join(", ")}
-                    placeholder={t("intakeOptionsPlaceholder")}
-                    onBlur={(e) => {
-                      const options = e.target.value
-                        .split(",")
-                        .map((o) => o.trim())
-                        .filter(Boolean)
-                        .slice(0, 8);
-                      if (options.length >= 2) {
-                        void patchQuestions((qs) =>
-                          qs.map((it) => (it.id === q.id ? { ...it, options } : it))
-                        );
-                      } else {
-                        // Fewer than two options is not a choice; revert to
-                        // what is stored instead of showing a phantom edit.
-                        e.target.value = (q.options ?? []).join(", ");
-                      }
-                    }}
-                  />
-                </div>
-              ) : null}
-            </div>
-          ))}
-        </div>
-        {(page?.intake_questions ?? []).length < 5 ? (
-          <button
-            type="button"
-            className="mt-3 rounded-md border border-parchment/25 px-3 py-1.5 text-sm text-parchment/80 hover:border-parchment/50"
-            disabled={saving}
-            onClick={() =>
-              void patchQuestions((qs) => [
-                ...qs,
-                {
-                  id: `q-${Date.now().toString(36)}`,
-                  label: t("intakeNewQuestionLabel"),
-                  type: "text" as const,
-                  required: false,
-                  enabled: true
-                }
-              ])
-            }
-          >
-            {t("intakeAdd")}
-          </button>
-        ) : (
-          <p className="mt-3 text-xs text-parchment/40">{t("intakeMax")}</p>
-        )}
+        <IntakeQuestionsEditor
+          questions={page?.intake_questions ?? []}
+          saving={saving}
+          idPrefix="bp"
+          onChange={patchQuestions}
+        />
       </Card>
 
       {/* Cancellation waitlist: independent of the public link, it also
