@@ -469,7 +469,7 @@ async function nudgeForBusiness(
       tenant,
       [
         `Hi ${prospect.business_name.trim() || "there"},`,
-        "I wrote last week about what I noticed on your site. If it is not useful, no problem at all and I will leave it there.",
+        "I wrote last week about what I noticed when I looked you up. If it is not useful, no problem at all and I will leave it there.",
         "If it is, I am happy to walk you through it."
       ],
       unsubscribeUrl

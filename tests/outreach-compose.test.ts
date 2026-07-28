@@ -64,6 +64,23 @@ describe("leadFinding / isPitchable", () => {
     expect(isPitchable([])).toBe(false);
   });
 
+  it("opens the hours findings without naming a source", () => {
+    // The hours evidence comes from EITHER the prospect's markup or their
+    // Google listing, so an opening that says "the site says..." is false
+    // whenever Google supplied the fact. A cold email that opens by getting
+    // something wrong is finished, so neither hours opening may name a source.
+    for (const code of ["closed_weekends", "after_hours_gap"]) {
+      const pitch = composePitch(
+        TENANT,
+        { businessName: "Acme", city: "", findings: [{ code, detail: "either source" }] },
+        UNSUB
+      );
+      expect(pitch).not.toBeNull();
+      const opening = (pitch?.body ?? "").split("\n\n")[1] ?? "";
+      expect(opening).not.toMatch(/site|website|Google|listing/i);
+    }
+  });
+
   it("refuses a finding it has no honest opening for", () => {
     // An unknown code could only produce a vague opener, which is spam.
     expect(isPitchable([{ code: "invented_by_a_future_probe", detail: "d" }])).toBe(false);
