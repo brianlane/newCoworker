@@ -9,6 +9,7 @@
 import { authenticatePublicApiRequest } from "@/lib/public-api/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { webhooksAllowedForTier } from "@/lib/plans/webhooks";
 
 export const dynamic = "force-dynamic";
 
@@ -32,7 +33,10 @@ export async function GET(request: Request) {
       name: data.name,
       tier: data.tier,
       status: data.status,
-      timezone: data.timezone ?? null
+      timezone: data.timezone ?? null,
+      // Zapier's connection test shows this route's output, so a starter
+      // key explains itself before any gated call 403s.
+      webhooks_enabled: webhooksAllowedForTier(data.tier)
     });
   } catch (err) {
     return handleRouteError(err);

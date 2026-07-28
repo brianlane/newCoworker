@@ -17,6 +17,7 @@ import { authenticatePublicApiRequest } from "@/lib/public-api/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import { processWebhookFlowEvent } from "@/lib/ai-flows/webhook-events";
+import { WEBHOOKS_UPGRADE_MESSAGE } from "@/lib/plans/webhooks";
 import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
@@ -55,11 +56,16 @@ export async function POST(request: Request) {
       return errorResponse("CONFLICT", "Rate limit exceeded, retry shortly.", 429);
     }
 
+    // origin stays the default "external", so the Standard-tier webhook gate
+    // applies; a starter key gets a clear 403 the Zap history can surface.
     const result = await processWebhookFlowEvent(businessId, {
       source: body.source?.trim() || "webhook",
       data: body.data,
       eventId: body.event_id
     });
+    if (result.tierBlocked) {
+      return errorResponse("FORBIDDEN", WEBHOOKS_UPGRADE_MESSAGE);
+    }
 
     return successResponse({
       enqueued: result.enqueued,

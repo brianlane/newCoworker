@@ -8,6 +8,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { listAiFlows } from "@/lib/ai-flows/db";
 import { listApiKeys } from "@/lib/db/api-keys";
 import { listSystemLogs } from "@/lib/db/system-logs";
+import { webhooksAllowedForTier } from "@/lib/plans/webhooks";
 import { Card } from "@/components/ui/Card";
 import { InstagramLeadsGuide } from "@/components/dashboard/InstagramLeadsGuide";
 
@@ -39,11 +40,14 @@ export default async function InstagramLeadsGuidePage() {
   const canManageApiKeys = !!ctx.role && can(ctx.role, "manage_billing");
   const { data: businesses } = await db
     .from("businesses")
-    .select("id")
+    .select("id, tier")
     .in("id", activeBusinessId ? [activeBusinessId] : [])
     .order("created_at", { ascending: false })
     .limit(1);
   const businessId = businesses?.[0]?.id ?? null;
+  const webhooksEnabled = webhooksAllowedForTier(
+    (businesses?.[0]?.tier as string | null | undefined) ?? null
+  );
 
   const [flows, apiKeys, recentLogs] = businessId
     ? await Promise.all([
@@ -81,6 +85,17 @@ export default async function InstagramLeadsGuidePage() {
           ← Back to AiFlows
         </Link>
       </div>
+
+      {businessId && !webhooksEnabled && (
+        <Card>
+          <p className="text-sm text-amber-400/90">
+            {t("webhooksUpgradeBanner")}{" "}
+            <Link href="/dashboard/billing" className="text-signal-teal hover:underline">
+              Upgrade →
+            </Link>
+          </p>
+        </Card>
+      )}
 
       {!businessId ? (
         <Card>

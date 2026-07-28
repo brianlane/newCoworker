@@ -260,11 +260,17 @@ export const triggerFlowTool = defineMcpTool({
       throw new McpToolError("Flow-event rate limit exceeded — retry shortly.");
     }
     const { processWebhookFlowEvent } = await import("@/lib/ai-flows/webhook-events");
+    // origin stays the default "external": this tool simulates an external
+    // webhook delivery, so the Standard-tier gate applies to it too.
     const result = await processWebhookFlowEvent(businessId, {
       source: args.source?.trim() || "webhook",
       data: args.data,
       eventId: args.event_id
     });
+    if (result.tierBlocked) {
+      const { WEBHOOKS_UPGRADE_MESSAGE } = await import("@/lib/plans/webhooks");
+      throw new McpToolError(WEBHOOKS_UPGRADE_MESSAGE);
+    }
     return {
       enqueued: result.enqueued,
       flows_evaluated: result.flowsEvaluated,

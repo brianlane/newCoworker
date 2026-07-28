@@ -154,6 +154,9 @@ function buildStandardFeatures(locale: PlanCopyLocale): string[] {
     concurrentCallsLine(TIER_LIMITS.standard.maxConcurrentCalls, locale),
     es ? "Trae tu propio número telefónico (portabilidad)" : "Bring your own phone number (port-in)",
     es ? "Zapier: conecta 8,000+ apps" : "Zapier: connect 8,000+ apps",
+    es
+      ? "Soporte completo de webhooks: anuncios de leads de Meta, comentarios y DMs de Instagram, y disparadores por REST API"
+      : "Full webhook support: Meta lead ads, Instagram comments & DMs, and REST API triggers",
     es ? "Envía textos durante llamadas" : "Send texts during calls",
     es
       ? "Auto-texto a quien llama cuando no se puede contestar"

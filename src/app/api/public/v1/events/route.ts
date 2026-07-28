@@ -14,6 +14,10 @@ import { authenticatePublicApiRequest } from "@/lib/public-api/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
+  WEBHOOKS_UPGRADE_MESSAGE,
+  webhooksAllowedForBusiness
+} from "@/lib/plans/webhooks";
+import {
   WEBHOOK_EVENT_SOURCES,
   WEBHOOK_EVENT_TYPES,
   buildWebhookPayload,
@@ -34,6 +38,12 @@ export async function GET(request: Request) {
   try {
     const auth = await authenticatePublicApiRequest(request);
     if (!auth) return errorResponse("UNAUTHORIZED", "Invalid or missing API key");
+
+    // Event polling feeds Zapier triggers, part of the Standard-tier
+    // webhook perk (same gate as subscribing a hook).
+    if (!(await webhooksAllowedForBusiness(auth.businessId))) {
+      return errorResponse("FORBIDDEN", WEBHOOKS_UPGRADE_MESSAGE);
+    }
 
     const url = new URL(request.url);
     const { event, limit } = querySchema.parse({

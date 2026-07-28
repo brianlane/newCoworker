@@ -21,6 +21,10 @@ import {
   listWebhookSubscriptions
 } from "@/lib/db/webhook-subscriptions";
 import {
+  WEBHOOKS_UPGRADE_MESSAGE,
+  webhooksAllowedForBusiness
+} from "@/lib/plans/webhooks";
+import {
   WEBHOOK_EVENT_TYPES,
   isWebhookEventType
 } from "../../../../../../supabase/functions/_shared/webhook_events";
@@ -70,6 +74,12 @@ export async function POST(request: Request) {
   try {
     const auth = await authenticatePublicApiRequest(request);
     if (!auth) return errorResponse("UNAUTHORIZED", "Invalid or missing API key");
+
+    // Subscribing is Standard+; GET/DELETE stay open so an existing (e.g.
+    // downgraded) account can still see and clean up its subscriptions.
+    if (!(await webhooksAllowedForBusiness(auth.businessId))) {
+      return errorResponse("FORBIDDEN", WEBHOOKS_UPGRADE_MESSAGE);
+    }
 
     const json = (await request.json().catch(() => null)) as unknown;
     const { event, target_url } = createSchema.parse(json);

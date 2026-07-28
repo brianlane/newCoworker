@@ -28,6 +28,7 @@ import {
   type WebhookEventType,
   type WebhookSourceRow
 } from "./webhook_events.ts";
+import { webhooksAllowedForTier } from "./webhook_tier.ts";
 
 /** ~2 hours of failed minute-ticks before a dead endpoint is disabled. */
 export const MAX_CONSECUTIVE_FAILURES = 120;
@@ -131,6 +132,7 @@ type SourceQuery = QueryResult & {
 export type SupabaseLike = {
   from(table: string): {
     select(columns: string): {
+      in(col: string, vals: unknown[]): QueryResult;
       eq(col: string, val: unknown): QueryResult & {
         or(filters: string): {
           order(
@@ -165,6 +167,8 @@ export type DispatchTickSummary = {
   delivered: number;
   deactivated: number;
   failures: number;
+  /** Subscriptions skipped because the business tier lost the webhook perk. */
+  skippedTier: number;
 };
 
 /**
@@ -184,7 +188,8 @@ export async function runWebhookDispatchTick(
     subscriptions: 0,
     delivered: 0,
     deactivated: 0,
-    failures: 0
+    failures: 0,
+    skippedTier: 0
   };
 
   const { data: subsRaw, error: subsErr } = await db
@@ -199,7 +204,33 @@ export async function runWebhookDispatchTick(
   const subs = (subsRaw as DispatchSubscription[] | null) ?? [];
   summary.subscriptions = subs.length;
 
+  // Standard-tier gate, re-checked at delivery time: a downgrade to starter
+  // silently pauses delivery WITHOUT touching the subscription row, and the
+  // cursor stays frozen so an upgrade resumes from where it stopped (capped
+  // at MAX_ROWS_PER_TICK per tick). Fail closed: a business missing from
+  // the tier query result is treated as not allowed.
+  let allowedBusinessIds = new Set<string>();
+  if (subs.length > 0) {
+    const businessIds = [...new Set(subs.map((s) => s.business_id))];
+    const { data: bizRaw, error: bizErr } = await db
+      .from("businesses")
+      .select("id, tier")
+      .in("id", businessIds);
+    if (bizErr) {
+      throw new Error(`webhook dispatch: tier query failed: ${bizErr.message}`);
+    }
+    allowedBusinessIds = new Set(
+      (((bizRaw as { id: string; tier: string | null }[] | null) ?? []))
+        .filter((b) => webhooksAllowedForTier(b.tier))
+        .map((b) => b.id)
+    );
+  }
+
   for (const sub of subs) {
+    if (!allowedBusinessIds.has(sub.business_id)) {
+      summary.skippedTier += 1;
+      continue;
+    }
     // Tracked across the try so the catch can undo a claimed lease and
     // salvage a delivered-but-unpersisted cursor (see the catch block).
     let leaseClaimed = false;

@@ -214,7 +214,9 @@ describe("importLeadBacklog", () => {
         eventId: 'digest({"full_name":"Jane","phone":"+16025551234"})'
       },
       DB,
-      undefined
+      // Owner-initiated import: internal origin, exempt from the webhook
+      // tier gate.
+      { origin: "internal" }
     );
     // Row 2 releases one default interval (60s) after row 1.
     expect(processWebhookFlowEvent).toHaveBeenNthCalledWith(
@@ -222,7 +224,7 @@ describe("importLeadBacklog", () => {
       "biz-1",
       expect.objectContaining({ data: { full_name: "Bob", phone: "+16025555678", notes: "warm" } }),
       DB,
-      { earliestClaimAt: new Date(BASE_MS + 60_000).toISOString() }
+      { origin: "internal", earliestClaimAt: new Date(BASE_MS + 60_000).toISOString() }
     );
     expect(summary).toEqual({
       totalRows: 2,
@@ -300,23 +302,26 @@ describe("importLeadBacklog", () => {
     const rows = [{ a: "1" }, { a: "2" }];
     await importLeadBacklog("biz-1", rows, { dripIntervalSeconds: 999999 }, DB as never);
     expect(processWebhookFlowEvent.mock.calls[1][3]).toEqual({
+      origin: "internal",
       earliestClaimAt: new Date(BASE_MS + 3600_000).toISOString()
     });
 
     processWebhookFlowEvent.mockClear();
     await importLeadBacklog("biz-1", rows, { dripIntervalSeconds: -5 }, DB as never);
-    // Clamped to 0 = all immediate.
-    expect(processWebhookFlowEvent.mock.calls[1][3]).toBeUndefined();
+    // Clamped to 0 = all immediate (no earliestClaimAt rides along).
+    expect(processWebhookFlowEvent.mock.calls[1][3]).toEqual({ origin: "internal" });
 
     processWebhookFlowEvent.mockClear();
     await importLeadBacklog("biz-1", rows, { dripIntervalSeconds: Number.NaN }, DB as never);
     expect(processWebhookFlowEvent.mock.calls[1][3]).toEqual({
+      origin: "internal",
       earliestClaimAt: new Date(BASE_MS + 60_000).toISOString()
     });
 
     processWebhookFlowEvent.mockClear();
     await importLeadBacklog("biz-1", rows, { dripIntervalSeconds: 90.9 }, DB as never);
     expect(processWebhookFlowEvent.mock.calls[1][3]).toEqual({
+      origin: "internal",
       earliestClaimAt: new Date(BASE_MS + 90_000).toISOString()
     });
   });
@@ -353,10 +358,10 @@ describe("importLeadBacklog", () => {
     // Rows 1-3 were all offered slot 0 (immediate); only row 3's enqueue
     // consumed it, so row 4 gets slot 1.
     expect(processWebhookFlowEvent.mock.calls.map((c) => c[3])).toEqual([
-      undefined,
-      undefined,
-      undefined,
-      { earliestClaimAt: new Date(BASE_MS + 60_000).toISOString() }
+      { origin: "internal" },
+      { origin: "internal" },
+      { origin: "internal" },
+      { origin: "internal", earliestClaimAt: new Date(BASE_MS + 60_000).toISOString() }
     ]);
   });
 
@@ -387,10 +392,10 @@ describe("importLeadBacklog", () => {
     // so row 2 enqueued at slot 0; row 3 was offered slot 1 and failed, so
     // row 4 re-used slot 1 instead of drifting to slot 2.
     expect(processWebhookFlowEvent.mock.calls.map((c) => c[3])).toEqual([
-      undefined,
-      undefined,
-      { earliestClaimAt: new Date(BASE_MS + 60_000).toISOString() },
-      { earliestClaimAt: new Date(BASE_MS + 60_000).toISOString() }
+      { origin: "internal" },
+      { origin: "internal" },
+      { origin: "internal", earliestClaimAt: new Date(BASE_MS + 60_000).toISOString() },
+      { origin: "internal", earliestClaimAt: new Date(BASE_MS + 60_000).toISOString() }
     ]);
   });
 
@@ -404,6 +409,7 @@ describe("importLeadBacklog", () => {
     expect(processWebhookFlowEvent).toHaveBeenCalledTimes(2);
     // The row AFTER the skip still gets slot 1 (base + 60s), not slot 2.
     expect(processWebhookFlowEvent.mock.calls[1][3]).toEqual({
+      origin: "internal",
       earliestClaimAt: new Date(BASE_MS + 60_000).toISOString()
     });
     expect(summary.skipped).toBe(1);
@@ -518,7 +524,7 @@ describe("importLeadBacklog", () => {
       "biz-1",
       expect.anything(),
       DB,
-      undefined
+      { origin: "internal" }
     );
   });
 });

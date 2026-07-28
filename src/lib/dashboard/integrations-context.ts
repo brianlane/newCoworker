@@ -27,6 +27,7 @@ import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import { getPublicZoomConnection } from "@/lib/db/zoom-connections";
 import { listApiKeys } from "@/lib/db/api-keys";
 import { listWebhookSubscriptions } from "@/lib/db/webhook-subscriptions";
+import { webhooksAllowedForTier } from "@/lib/plans/webhooks";
 import {
   getMcpConnectorStatus,
   type McpConnectorStatus
@@ -37,6 +38,8 @@ export type IntegrationsContext = {
   businessId: string | null;
   /** API keys are a manage_billing (owner) capability. */
   canManageApiKeys: boolean;
+  /** False on starter: Zapier/API webhooks are a Standard-tier perk. */
+  webhooksEnabled: boolean;
   workspaceConnections: Awaited<ReturnType<typeof listWorkspaceOAuthConnections>>;
   /** Tier cap on Nango workspace connections (max null = unlimited). */
   workspaceConnectionCap: WorkspaceConnectionCapState;
@@ -95,6 +98,7 @@ export async function loadIntegrationsContext(
   return {
     businessId,
     canManageApiKeys,
+    webhooksEnabled: webhooksAllowedForTier(businessRow?.tier),
     workspaceConnections,
     workspaceConnectionCap: workspaceConnectionCapState(
       businessRow?.tier,

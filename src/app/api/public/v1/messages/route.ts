@@ -17,6 +17,10 @@ import { rateLimit } from "@/lib/rate-limit";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getTelnyxMessagingForBusiness, sendTelnyxSms } from "@/lib/telnyx/messaging";
 import { normalizeContactNumber } from "@/lib/telnyx/format";
+import {
+  WEBHOOKS_UPGRADE_MESSAGE,
+  webhooksAllowedForBusiness
+} from "@/lib/plans/webhooks";
 import { logger } from "@/lib/logger";
 
 export const dynamic = "force-dynamic";
@@ -43,6 +47,11 @@ export async function POST(request: Request) {
     const auth = await authenticatePublicApiRequest(request);
     if (!auth) return errorResponse("UNAUTHORIZED", "Invalid or missing API key");
     const { businessId } = auth;
+
+    // The API send action is part of the Standard-tier webhook/Zapier perk.
+    if (!(await webhooksAllowedForBusiness(businessId))) {
+      return errorResponse("FORBIDDEN", WEBHOOKS_UPGRADE_MESSAGE);
+    }
 
     const json = (await request.json().catch(() => null)) as unknown;
     const { to, text } = bodySchema.parse(json);

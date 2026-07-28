@@ -55,8 +55,27 @@ describe("GET /api/public/v1/me", () => {
       name: "Amy's Painting",
       tier: "standard",
       status: "online",
-      timezone: "America/Phoenix"
+      timezone: "America/Phoenix",
+      webhooks_enabled: true
     });
+  });
+
+  it("reports webhooks_enabled false for a starter key (Zapier connection test hint)", async () => {
+    vi.mocked(authenticatePublicApiRequest).mockResolvedValue(AUTH);
+    singleMock.mockResolvedValue({
+      data: {
+        id: "biz-1",
+        name: "Amy's Painting",
+        tier: "starter",
+        status: "online",
+        timezone: null
+      },
+      error: null
+    });
+    const res = await GET(req());
+    expect(res.status).toBe(200);
+    const body = await res.json();
+    expect(body.data.webhooks_enabled).toBe(false);
   });
 
   it("404s when the business row is missing", async () => {

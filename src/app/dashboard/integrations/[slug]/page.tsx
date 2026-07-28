@@ -114,6 +114,7 @@ function IntegrationBody({
             target_url: h.target_url,
             created_at: h.created_at
           }))}
+          webhooksEnabled={ctx.webhooksEnabled}
         />
       );
     case "claude":

@@ -316,6 +316,18 @@ describe("trigger_flow", () => {
     );
     expect(processWebhookFlowEvent).not.toHaveBeenCalled();
   });
+
+  it("surfaces the upgrade message when the tier gate refuses the event", async () => {
+    // trigger_flow simulates an EXTERNAL webhook delivery, so a starter
+    // business gets the same refusal a real bridge would.
+    vi.mocked(processWebhookFlowEvent).mockResolvedValue({
+      enqueued: 0,
+      flowsEvaluated: 0,
+      flowsMatched: 0,
+      tierBlocked: true
+    } as never);
+    await expect(triggerFlowTool.handler({ data: {} }, AUTH)).rejects.toThrow(/Standard plan/);
+  });
 });
 
 /**

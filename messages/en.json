@@ -585,8 +585,8 @@
       "complianceA": "Compliance guardrails are enforced in every conversation, including Fair Housing Act rules for real estate, and Enterprise plans support custom compliance modules for other regulated industries.",
       "billingTitle": "Billing & plans",
       "costQ": "How much does it cost?",
-      "costA": "Plans start at {starterPrice} on the 24-month Starter plan. Standard adds higher usage caps, {standardConcurrent}, Zapier, analytics, and more. Enterprise is custom and adds branded RCS messaging. Every plan has a 30-day money-back guarantee. See the full breakdown on the <link>pricing page</link>.",
-      "costPlain": "Plans start at {starterPrice} on the 24-month Starter plan. Standard adds higher usage caps, {standardConcurrent}, Zapier, analytics, and more. Enterprise is custom and adds branded RCS messaging. Every plan has a 30-day money-back guarantee.",
+      "costA": "Plans start at {starterPrice} on the 24-month Starter plan. Standard adds higher usage caps, {standardConcurrent}, Zapier, webhooks, analytics, and more. Enterprise is custom and adds branded RCS messaging. Every plan has a 30-day money-back guarantee. See the full breakdown on the <link>pricing page</link>.",
+      "costPlain": "Plans start at {starterPrice} on the 24-month Starter plan. Standard adds higher usage caps, {standardConcurrent}, Zapier, webhooks, analytics, and more. Enterprise is custom and adds branded RCS messaging. Every plan has a 30-day money-back guarantee.",
       "vsHiringQ": "Is this cheaper than hiring someone part time?",
       "vsHiringA": "By a wide margin on cost: plans start at {starterPrice}, against roughly a couple of thousand dollars a month for part-time help that still goes home at five. The honest trade is judgment. A person handles the awkward call better, which is why your coworker transfers to one whenever the caller asks or the conversation needs it.",
       "upfrontQ": "Why is the full term billed upfront on 12 and 24-month plans?",
@@ -949,7 +949,7 @@
       "metaSubtitle": "Most businesses take hours to respond to an ad lead. Your coworker does it in seconds performed automatically, every time, day or night.",
       "captureStep": "1 · Capture",
       "captureTitle": "A lead submits your Instant Form",
-      "captureBody": "Your Meta lead ads connect to your coworker through a simple bridge (a free Make.com account, Zapier, or lead tools like Privyr). A guided in-dashboard setup walks you through it in about 15 minutes.",
+      "captureBody": "Your Meta lead ads connect to your coworker through a simple bridge (a free Make.com account, Zapier, or lead tools like Privyr). A guided in-dashboard setup walks you through it in about 15 minutes. Available on the Standard plan and up.",
       "actStep": "2 · Act",
       "actTitle": "Your coworker responds in seconds",
       "actBody": "The lead gets a personal text from your business number while their interest is hottest, and the two-way conversation is handled by the same coworker that answers your phone.",
@@ -993,15 +993,15 @@
       },
       "zapier": {
         "title": "Zapier",
-        "description": "One connection unlocks 8,000+ apps: CRMs, spreadsheets, Slack, help desks, invoicing. No code required."
+        "description": "One connection unlocks 8,000+ apps: CRMs, spreadsheets, Slack, help desks, invoicing. No code required. Standard plan and up."
       },
       "api": {
         "title": "Public REST API",
-        "description": "Per-business API keys let your systems send SMS, read events, and manage subscriptions programmatically."
+        "description": "Per-business API keys let your systems send SMS, read events, and manage subscriptions programmatically. Standard plan and up."
       },
       "webhooks": {
         "title": "Webhooks",
-        "description": "Real-time REST hooks push calls, texts, and email events to any endpoint the moment they happen."
+        "description": "Real-time REST hooks push calls, texts, and email events to any endpoint the moment they happen. Standard plan and up."
       },
       "csv": {
         "title": "CSV Import & Export",
@@ -1898,6 +1898,7 @@
       "aiflowRunsSubtitleAll": "History of automation runs and approvals.",
       "importLeadsTitle": "Import leads",
       "importLeadsSubtitle": "Upload an Excel or CSV backlog of leads and run an AiFlow on each row, pick one flow, or let rows trigger-match your webhook-triggered flows the same way a live Zapier/Make lead arrives.",
+      "webhooksUpgradeBanner": "Webhooks are a Standard plan perk. You can explore this guide, but incoming webhook events won't reach your flows until you upgrade your plan.",
       "metaLeadsGuideTitle": "Capture Meta ad leads with your AI coworker",
       "metaLeadsGuideSubtitle": "Connect your Facebook/Instagram lead ads so your coworker hears about every new lead in real time, and texts them back, files them, and fills you in, on your behalf.",
       "instagramLeadsGuideTitle": "Turn Instagram prospect lists into reviewed contacts",

@@ -14,6 +14,10 @@ import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { mintApiKey } from "@/lib/public-api/keys";
 import {
+  WEBHOOKS_UPGRADE_MESSAGE,
+  webhooksAllowedForBusiness
+} from "@/lib/plans/webhooks";
+import {
   MAX_ACTIVE_API_KEYS_PER_BUSINESS,
   countActiveApiKeys,
   insertApiKey,
@@ -60,6 +64,12 @@ export async function POST(request: Request) {
     const json = (await request.json().catch(() => null)) as unknown;
     const { businessId, name } = createSchema.parse(json);
     if (!user.isAdmin) await requireBusinessRole(businessId, "manage_billing");
+
+    // Minting the Zapier/API credential is Standard+; GET keeps listing
+    // existing keys so a downgraded account still sees what it has.
+    if (!(await webhooksAllowedForBusiness(businessId))) {
+      return errorResponse("FORBIDDEN", WEBHOOKS_UPGRADE_MESSAGE);
+    }
 
     // Friendly pre-check; the api_keys_cap DB trigger is the racy-proof
     // backstop (two concurrent mints can both pass this read).

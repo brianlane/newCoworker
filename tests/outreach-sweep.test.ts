@@ -559,7 +559,10 @@ describe("phase 3: sending", () => {
         source: PROSPECT_OUTREACH_SOURCE,
         eventId: `outreach:${prospect().id}`
       }),
-      expect.anything()
+      expect.anything(),
+      // Platform hand-off after our own send: internal origin, exempt from
+      // the webhook tier gate.
+      { origin: "internal" }
     );
   });
 

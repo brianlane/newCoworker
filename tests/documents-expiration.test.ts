@@ -300,7 +300,10 @@ describe("sweepDocumentExpirations", () => {
           assigned_employee: "Dania"
         }
       },
-      expect.anything()
+      expect.anything(),
+      // Platform-generated renewal event: internal origin, exempt from the
+      // webhook tier gate.
+      { origin: "internal" }
     );
     expect(patch).toHaveBeenNthCalledWith(
       2,
@@ -330,7 +333,8 @@ describe("sweepDocumentExpirations", () => {
       expect.objectContaining({
         data: expect.objectContaining({ contact_email: "", contact_phone: "+16025551234" })
       }),
-      expect.anything()
+      expect.anything(),
+      { origin: "internal" }
     );
   });
 

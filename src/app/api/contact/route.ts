@@ -152,16 +152,24 @@ export async function POST(request: Request) {
   try {
     const sinkBusinessId = await getContactFormSinkBusinessId();
     if (sinkBusinessId) {
-      const result = await processWebhookFlowEvent(sinkBusinessId, {
-        source: "contact_form",
-        data: {
-          name: payload.name,
-          email: payload.email,
-          business_name: payload.businessName,
-          subject: payload.subject,
-          message: payload.message
-        }
-      });
+      // Internal origin: the sink is our own admin-designated tenant, a
+      // platform feature rather than an external webhook, so the
+      // Standard-tier webhook gate must not block it.
+      const result = await processWebhookFlowEvent(
+        sinkBusinessId,
+        {
+          source: "contact_form",
+          data: {
+            name: payload.name,
+            email: payload.email,
+            business_name: payload.businessName,
+            subject: payload.subject,
+            message: payload.message
+          }
+        },
+        undefined,
+        { origin: "internal" }
+      );
       logger.info("contact form flow event enqueued", {
         sinkBusinessId,
         enqueued: result.enqueued,
