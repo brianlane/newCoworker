@@ -82,6 +82,35 @@ export function promotionLifecycle(
 }
 
 /**
+ * The horizon a "forever" promo is judged over on a monthly plan. Forever has
+ * no natural end, and some window is needed to weigh it against the one-time
+ * intro discount it displaces; a year is the natural business unit. Chosen,
+ * not derived: a code that only pays off beyond 12 months is treated as not
+ * worth confusing the customer's first invoice over.
+ */
+export const FOREVER_COMPARISON_MONTHS = 12;
+
+/**
+ * How many billing cycles the not-better comparison runs over: exactly the
+ * span the promo discounts.
+ *
+ * Term plans are a single prepaid invoice (their intro discount is zero and
+ * whatever happens after the term is priced by the commitment schedule, not
+ * this coupon), so they always compare one cycle. Monthly plans compare the
+ * promo's covered months, because that is where its value actually lands:
+ * judging a 3-month code by its first month alone rejected codes that beat
+ * the intro path over their real span.
+ */
+export function comparisonCycles(
+  promotion: Pick<PromotionRow, "duration" | "duration_in_months">,
+  period: BillingPeriod
+): number {
+  if (period !== "monthly" || promotion.duration === "once") return 1;
+  if (promotion.duration === "repeating") return promotion.duration_in_months ?? 1;
+  return FOREVER_COMPARISON_MONTHS;
+}
+
+/**
  * Check a resolved promotion against one checkout, given the redemption count
  * already on it. Split out from the DB lookup so the rules are directly
  * testable and so the admin surface can reuse the same reasoning.
@@ -98,7 +127,10 @@ export function promotionLifecycle(
  * monthly plans, where applying a promo replaces the standard intro coupon
  * (Stripe allows one discount per session): a small percentage off the full
  * rate can be worse than the intro price, and silently charging more for
- * entering a promo code would be indefensible.
+ * entering a promo code would be indefensible. The comparison runs over every
+ * billing cycle the promo covers, not just the first invoice: "20% off every
+ * invoice" loses to the intro price in month one but wins over the year, and
+ * refusing it would reject a genuinely better deal (see comparisonCycles).
  */
 export function evaluatePromotion(
   promotion: PromotionRow,
@@ -127,9 +159,18 @@ export function evaluatePromotion(
     return { ok: false, reason: "exhausted" };
   }
 
+  const listCents = getPlanListPriceCents(params.tier, params.period);
   const discountCents = computePromotionDiscountCents(promotion, params.tier, params.period);
-  const planDueTodayCents = getPlanListPriceCents(params.tier, params.period) - discountCents;
-  if (planDueTodayCents >= getPlanDueTodayCents(params.tier, params.period)) {
+  const planDueTodayCents = listCents - discountCents;
+
+  // Total over the compared window. Every cycle inside the window is
+  // discounted (the window IS the promo's covered span), while the baseline
+  // gets its intro-discounted first cycle and pays the full rate for the rest.
+  const cycles = comparisonCycles(promotion, params.period);
+  const totalWithPromoCents = cycles * planDueTodayCents;
+  const totalWithoutPromoCents =
+    getPlanDueTodayCents(params.tier, params.period) + (cycles - 1) * listCents;
+  if (totalWithPromoCents >= totalWithoutPromoCents) {
     return { ok: false, reason: "not_better" };
   }
 

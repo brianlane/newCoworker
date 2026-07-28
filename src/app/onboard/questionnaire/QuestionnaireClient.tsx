@@ -151,6 +151,8 @@ function QuestionnaireForm() {
   const [promoApplied, setPromoApplied] = useState<{
     code: string;
     discountCents: number;
+    duration?: "once" | "repeating" | "forever";
+    durationInMonths?: number | null;
   } | null>(null);
   const [promoError, setPromoError] = useState<string | null>(null);
   const [promoChecking, setPromoChecking] = useState(false);
@@ -754,7 +756,14 @@ function QuestionnaireForm() {
       });
       const json = await res.json().catch(() => null);
       const data = json?.data as
-        | { valid: boolean; reason?: string; code?: string; discountCents?: number }
+        | {
+            valid: boolean;
+            reason?: string;
+            code?: string;
+            discountCents?: number;
+            duration?: "once" | "repeating" | "forever";
+            durationInMonths?: number | null;
+          }
         | undefined;
       if (!res.ok || !data) throw new Error(t("promoCheckFailed"));
       if (!data.valid || !data.code || typeof data.discountCents !== "number") {
@@ -762,7 +771,12 @@ function QuestionnaireForm() {
         setPromoError(data.reason === "notBetter" ? t("promoNotBetter") : t("promoInvalid"));
         return;
       }
-      setPromoApplied({ code: data.code, discountCents: data.discountCents });
+      setPromoApplied({
+        code: data.code,
+        discountCents: data.discountCents,
+        duration: data.duration,
+        durationInMonths: data.durationInMonths
+      });
     } catch (err) {
       setPromoApplied(null);
       setPromoError(err instanceof Error ? err.message : t("promoCheckFailed"));

@@ -13,6 +13,8 @@ const PROMO = {
   id: "22222222-2222-4222-8222-222222222222",
   code: "SUMMER20",
   name: "Summer 2026",
+  duration: "repeating",
+  duration_in_months: 3,
   stripe_promotion_code_id: "promo_1"
 } as PromotionRow;
 
@@ -46,7 +48,10 @@ describe("api/promotions/validate route", () => {
         code: "SUMMER20",
         name: "Summer 2026",
         discountCents: 47520,
-        planDueTodayCents: 190080
+        planDueTodayCents: 190080,
+        // The order summary's continuation note needs the covered span.
+        duration: "repeating",
+        durationInMonths: 3
       }
     });
     expect(validatePromotionCode).toHaveBeenCalledWith({
