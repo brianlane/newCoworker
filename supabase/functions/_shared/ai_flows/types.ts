@@ -1434,6 +1434,15 @@ export type AiFlowOptions = {
    * start so both senders read it off the session row. Default off.
    */
   starAlerts?: boolean;
+  /**
+   * Start the run the MOMENT the triggering message arrives: the inbound
+   * webhook kicks the worker in the background right after queueing, instead of
+   * leaving the run to the next tick (up to about a minute later). The tick is
+   * still the retry net, so a failed kick costs only the latency it was trying
+   * to save. Default off — a kick per inbound message is a real invocation cost
+   * and a minute is invisible to almost every flow.
+   */
+  startImmediately?: boolean;
 };
 
 /**

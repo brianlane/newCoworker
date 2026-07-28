@@ -53,10 +53,13 @@ a key to accept it. Everything downstream follows from that:
   on `New HomeLight (Referral|Warm Transfer)` and not on a bare
   "HomeLight referral", which also appears in HomeLight's post-call feedback
   text alongside a URL.
-- **The warm-transfer window can be shorter than the worker tick.** One alert
-  was withdrawn after 3 seconds; the batch worker claims a run about once a
-  minute. Firing the flow gets these referrals the full follow-up, but winning
-  the live transfer itself needs the claim to happen on the inbound-SMS path.
+- **The warm-transfer window can be shorter than the worker tick.** Withdrawals
+  landed 46s, 1m34s and 1m54s after the alert, and once after 3s, while the
+  worker claims a run about once a minute. `options.startImmediately` (PR #987,
+  `homelight-start-immediately.ts`) makes the inbound webhook kick the worker on
+  enqueue so the claim starts within seconds. That removes the QUEUE delay, not
+  the work: the claim still needs a credentialed page load, so a single-digit
+  window can still close first.
 - **This flow is live on a real account earning real commissions.** Changes go
   out as ledger-recorded one-shots (`homelight-*` in `scripts/oneshot/`),
   dry-run first, and Amy is told what changed.
@@ -69,11 +72,12 @@ Seeds: `seed-homelight-lead-aiflow.ts`,
 Patches: `homelight-accept-on-prompt.ts`, `homelight-call-end-details.ts`,
 `homelight-late-contact-retry.ts`, `homelight-broadcast-offer.ts`,
 `homelight-ai-call-referral-patch.ts`, `homelight-warm-transfer-trigger.ts`,
-`set-homelight-star-alerts.ts`, `fix-homelight-extraction.ts`.
+`homelight-start-immediately.ts`, `set-homelight-star-alerts.ts`,
+`fix-homelight-extraction.ts`.
 
 All are idempotent and dry-run by default. Read the one you are about to
 re-run: several supersede each other.
 
 ## History
 
-PRs #790, #911, #913, #920, #927, #932, #936, #986.
+PRs #790, #911, #913, #920, #927, #932, #936, #986, #987.

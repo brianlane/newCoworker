@@ -156,6 +156,7 @@ import type {
 import { multiOfferHeadsUpLine, type OfferRouting } from "../_shared/ai_flows/routing.ts";
 import { parseEtaMinutes } from "../_shared/ai_flows/claim_timeframe.ts";
 import { capturedCallVars, capturedSpoken } from "../_shared/ai_flows/call_capture.ts";
+import { isRunsOnlyRequest } from "../_shared/ai_flows/worker_kick.ts";
 
 // The actual createClient(url, key) call infers SupabaseClient<any, "public", any>,
 // but `ReturnType<typeof createClient>` resolves to <unknown, never, GenericSchema>
@@ -355,6 +356,32 @@ serve(async (req: Request): Promise<Response> => {
   if (!supabaseUrl || !serviceKey) return new Response("Server misconfigured", { status: 500 });
 
   const supabase = createClient(supabaseUrl, serviceKey);
+
+  // A KICK from the inbound webhook (options.startImmediately) means "a run is
+  // waiting, claim it now". It skips everything below that is periodic: the
+  // overdue sweeps and the four mailbox/calendar polls are the cron tick's job,
+  // and re-running them on every inbound text of an opted-in flow would multiply
+  // that work by the tenant's message volume for no benefit.
+  const runsOnly = await isRunsOnlyRequest(req);
+  if (runsOnly) {
+    const { data: kickClaimed, error: kickErr } = await supabase.rpc("claim_ai_flow_runs", {
+      p_limit: CLAIM_LIMIT
+    });
+    if (kickErr) {
+      console.error("claim_ai_flow_runs (kick)", kickErr);
+      return new Response("Claim failed", { status: 500 });
+    }
+    let kickProcessed = 0;
+    for (const run of (kickClaimed ?? []) as RunRow[]) {
+      try {
+        await executeRun(supabase, run);
+      } catch (e) {
+        await handleRunThrow(supabase, run, e);
+      }
+      kickProcessed += 1;
+    }
+    return json({ ok: true, processed: kickProcessed, mode: "runs_only" });
+  }
 
   await supabase.rpc("reclaim_stale_ai_flow_runs", { p_stale_minutes: 15 });
   // Re-queue route_to_team runs whose agent offer deadline lapsed so the next

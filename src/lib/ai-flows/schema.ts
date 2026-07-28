@@ -1655,7 +1655,18 @@ export const aiFlowDefinitionSchema = z.object({
       // summary) in a row of asterisks, the same framing the $1M+
       // keep-for-owner alert uses, so a live transfer stands out from
       // routine texts. Message bodies are unchanged. Default off.
-      starAlerts: z.boolean().optional()
+      starAlerts: z.boolean().optional(),
+      // Start the run the MOMENT the triggering message arrives, instead of
+      // waiting for the worker's next tick (up to about a minute of dead time).
+      // The inbound webhook kicks the worker in the background after queueing;
+      // the tick stays the retry net, so a failed kick only costs the latency it
+      // was trying to save.
+      //
+      // Default off deliberately: a kick per inbound message is a real
+      // invocation cost, and a minute is invisible to almost every flow. Turn it
+      // on for a lead source that withdraws the lead if nobody responds fast
+      // (HomeLight pulls a warm transfer back within a couple of minutes).
+      startImmediately: z.boolean().optional()
     })
     .optional()
 });

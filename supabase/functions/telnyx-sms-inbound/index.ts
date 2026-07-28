@@ -42,6 +42,7 @@ import { parseClaimWithTimeframe } from "../_shared/ai_flows/claim_timeframe.ts"
 import { applyGoalEvent } from "../_shared/ai_flows/goal_events.ts";
 import { stopRunsOnResponse } from "../_shared/ai_flows/response_stop.ts";
 import { reentryBlocked } from "../_shared/ai_flows/reentry.ts";
+import { kickAiFlowWorker, wantsImmediateStart } from "../_shared/ai_flows/worker_kick.ts";
 import { parseRouting, type OfferRouting } from "../_shared/ai_flows/routing.ts";
 import { withResumeMarkerVar } from "../_shared/ai_flows/branching.ts";
 import {
@@ -280,6 +281,9 @@ async function evaluateAndEnqueueAiFlows(
   }
 
   let suppressingRunQueued = false;
+  // Definitions we actually queued a run for, so the kick below is decided on
+  // what will really execute rather than on everything that matched.
+  const queuedDefs: Array<{ options?: { startImmediately?: boolean } | null }> = [];
   try {
     for (const m of evalRes.matched) {
       // Re-entry gate: a flow with allowReentry=false never re-enrolls a
@@ -316,6 +320,7 @@ async function evaluateAndEnqueueAiFlows(
       if (runErr && (runErr as { code?: string }).code !== "23505") {
         console.error("ai_flow_runs insert", runErr);
       }
+      if (queued) queuedDefs.push(m.def);
       if (queued && m.def.options?.suppressDefaultReply === true) {
         suppressingRunQueued = true;
       }
@@ -328,6 +333,21 @@ async function evaluateAndEnqueueAiFlows(
     });
   } catch (e) {
     console.error("ai_flow_runs enqueue", e);
+  }
+  // Start it now rather than at the next tick, for a flow whose lead source
+  // withdraws the lead while we wait. One kick per webhook however many runs
+  // were queued: the worker claims a batch. Best-effort by contract, and never
+  // allowed to affect the reply to Telnyx.
+  if (wantsImmediateStart(queuedDefs)) {
+    const kicked = await kickAiFlowWorker({
+      supabaseUrl: Deno.env.get("SUPABASE_URL") ?? "",
+      cronSecret: Deno.env.get("INTERNAL_CRON_SECRET") ?? ""
+    });
+    await telemetryRecord(supabase, "ai_flow_worker_kicked", {
+      business_id: businessId,
+      event_id: ctx.eventId,
+      accepted: kicked
+    });
   }
   return { suppressingRunQueued };
 }
