@@ -2111,7 +2111,8 @@
       "actionFailed": "No funcionó. Inténtalo de nuevo.",
       "sentOne": "Enviado.",
       "skippedOne": "Omitido, y no volverá a aparecer.",
-      "unsavedChanges": "Tienes cambios sin guardar."
+      "unsavedChanges": "Tienes cambios sin guardar.",
+      "clipped": "Lista grande: esto cuenta tus 1.000 prospectos más recientes, así que son cifras mínimas."
     }
   },
   "admin": {

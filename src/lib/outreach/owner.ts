@@ -20,6 +20,7 @@ import {
   upsertOutreachSettings,
   transitionProspect,
   OUTREACH_DEFAULT_DAILY_CAP,
+  OUTREACH_SCAN_LIMIT,
   type OutreachMode,
   type OutreachProspectRow,
   type OutreachSettingsRow
@@ -47,6 +48,12 @@ export type ProspectingView = {
   settings: OutreachSettingsRow | null;
   funnel: OutreachFunnel;
   byVertical: VerticalFunnel[];
+  /**
+   * The outcome scan filled its bound, so the funnel counts are floors rather
+   * than totals. Surfaced instead of quietly under-reporting, the same way the
+   * Marketing page's lead-source summary handles its own bound.
+   */
+  clipped: boolean;
   /** Drafts waiting on the owner, only meaningful in manual mode. */
   queue: OutreachProspectRow[];
   /**
@@ -69,7 +76,14 @@ export async function loadProspectingView(
     listProspectsByStatus(businessId, ["drafted"], REVIEW_QUEUE_LIMIT, db)
   ]);
   const { total, byVertical } = summarizeFunnel(outcomes);
-  return { settings, funnel: total, byVertical, queue, blockers: describeBlockers(settings) };
+  return {
+    settings,
+    funnel: total,
+    byVertical,
+    queue,
+    clipped: outcomes.length >= OUTREACH_SCAN_LIMIT,
+    blockers: describeBlockers(settings)
+  };
 }
 
 /**

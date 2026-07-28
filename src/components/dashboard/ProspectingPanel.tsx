@@ -17,7 +17,7 @@
  * happening?" is answered on the page rather than in a support conversation.
  */
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useTranslations } from "next-intl";
 import { Card } from "@/components/ui/Card";
 import { Button } from "@/components/ui/Button";
@@ -67,6 +67,8 @@ type View = {
   funnel: Funnel;
   byVertical: VerticalFunnel[];
   queue: QueueItem[];
+  /** The outcome scan hit its bound, so the numbers are floors. */
+  clipped: boolean;
   blockers: string[];
 };
 
@@ -100,40 +102,47 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
   /**
    * Unsaved edits in the form. Send and Skip both re-read from the server, so
    * without this a targeting change typed while working through the queue
-   * would be silently overwritten by the refresh that follows.
+   * would be silently overwritten by the refresh that follows. Mirrored into a
+   * ref because refresh reads it from inside a stable callback, including the
+   * one on mount that can land after the owner has already started typing.
    */
   const [dirty, setDirty] = useState(false);
+  const dirtyRef = useRef(false);
 
-  const refresh = useCallback(
-    async (syncForm: boolean) => {
-      try {
-        const res = await fetch(
-          `/api/dashboard/outreach?businessId=${encodeURIComponent(businessId)}`,
-          { cache: "no-store" }
-        );
-        const json = (await res.json()) as { ok: boolean; data?: View };
-        if (!json.ok || !json.data) return;
-        setView(json.data);
-        if (!syncForm) return;
-        const next = json.data.settings ?? DEFAULTS;
-        setForm(next);
-        setTerms(next.search_terms.join(", "));
-        setCities(next.cities.join(", "));
-      } catch {
-        /* keep whatever is on screen */
-      }
-    },
-    [businessId]
-  );
+  const markDirty = () => {
+    dirtyRef.current = true;
+    setDirty(true);
+  };
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch(
+        `/api/dashboard/outreach?businessId=${encodeURIComponent(businessId)}`,
+        { cache: "no-store" }
+      );
+      const json = (await res.json()) as { ok: boolean; data?: View };
+      if (!json.ok || !json.data) return;
+      setView(json.data);
+      // The queue and the numbers always update; a form with unsaved edits
+      // never does.
+      if (dirtyRef.current) return;
+      const next = json.data.settings ?? DEFAULTS;
+      setForm(next);
+      setTerms(next.search_terms.join(", "));
+      setCities(next.cities.join(", "));
+    } catch {
+      /* keep whatever is on screen */
+    }
+  }, [businessId]);
 
   /** Field edits mark the form dirty so a background refresh cannot clobber them. */
   const edit = (patch: Partial<Settings>) => {
-    setDirty(true);
+    markDirty();
     setForm((prev) => ({ ...prev, ...patch }));
   };
 
   useEffect(() => {
-    void refresh(true);
+    void refresh();
   }, [refresh]);
 
   const save = async (mode: Mode) => {
@@ -163,8 +172,9 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
         return;
       }
       setNotice(t("saved"));
+      dirtyRef.current = false;
       setDirty(false);
-      await refresh(true);
+      await refresh();
     } catch {
       setError(t("saveFailed"));
     } finally {
@@ -188,9 +198,9 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
         return;
       }
       setNotice(action === "send" ? t("sentOne") : t("skippedOne"));
-      // Refresh the queue and the numbers, but leave a half-typed settings
-      // form alone: the owner did not ask to discard it by pressing Send.
-      await refresh(!dirty);
+      // Refreshes the queue and the numbers; a half-typed settings form is
+      // left alone, since the owner did not ask to discard it by pressing Send.
+      await refresh();
     } catch {
       setError(t("actionFailed"));
     } finally {
@@ -260,6 +270,9 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
           {t("replyRate", { rate: Math.round(funnel.replyRate * 100) })}
         </p>
       ) : null}
+      {view?.clipped ? (
+        <p className="text-xs text-parchment/45">{t("clipped")}</p>
+      ) : null}
       {funnel && funnel.pending > 0 && mode === "manual" ? (
         <p className="text-xs text-parchment/60">{t("waitingOnYou", { count: funnel.pending })}</p>
       ) : null}
@@ -274,7 +287,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
             className={inputClass}
             value={terms}
             onChange={(e) => {
-              setDirty(true);
+              markDirty();
               setTerms(e.target.value);
             }}
             placeholder={t("placeholders.searchTerms")}
@@ -289,7 +302,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
             className={inputClass}
             value={cities}
             onChange={(e) => {
-              setDirty(true);
+              markDirty();
               setCities(e.target.value);
             }}
             placeholder={t("placeholders.cities")}
@@ -379,19 +392,26 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
         </div>
       </div>
 
+      {/* Nothing is savable until the current settings have loaded. Saving
+          before then would post the placeholder mode and could switch a
+          running Prospecting off by accident. */}
       <div className="flex flex-wrap items-center gap-2">
-        <Button onClick={() => void save("off")} disabled={saving} variant="secondary">
+        <Button onClick={() => void save("off")} disabled={saving || !view} variant="secondary">
           {t("actions.turnOff")}
         </Button>
-        <Button onClick={() => void save("manual")} disabled={saving} variant="secondary">
+        <Button onClick={() => void save("manual")} disabled={saving || !view} variant="secondary">
           {t("actions.reviewFirst")}
         </Button>
-        <Button onClick={() => void save("auto")} disabled={saving}>
+        <Button onClick={() => void save("auto")} disabled={saving || !view}>
           {t("actions.automatic")}
         </Button>
         {/* Saving settings without touching the mode: editing targeting or the
             offer should not require deciding about sending at the same time. */}
-        <Button onClick={() => void save(mode)} disabled={saving || !dirty} variant="secondary">
+        <Button
+          onClick={() => void save(mode)}
+          disabled={saving || !dirty || !view}
+          variant="secondary"
+        >
           {t("actions.saveSettings")}
         </Button>
         {dirty ? <span className="text-xs text-amber-200">{t("unsavedChanges")}</span> : null}

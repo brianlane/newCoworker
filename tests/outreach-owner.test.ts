@@ -40,6 +40,7 @@ vi.mock("@/lib/outreach/db", async (importOriginal) => {
   };
 });
 
+import { OUTREACH_SCAN_LIMIT } from "@/lib/outreach/db";
 import {
   defaultProspectingSettings,
   describeBlockers,
@@ -113,6 +114,7 @@ describe("loadProspectingView", () => {
     expect(view.byVertical.map((v) => v.vertical)).toEqual(["hvac", "roofing"]);
     expect(view.queue).toHaveLength(1);
     expect(view.blockers).toEqual([]);
+    expect(view.clipped).toBe(false);
     // The queue is bounded: a big backlog must not become a huge payload.
     expect(listProspectsByStatusSpy).toHaveBeenCalledWith(
       BIZ,
@@ -120,6 +122,21 @@ describe("loadProspectingView", () => {
       REVIEW_QUEUE_LIMIT,
       expect.anything()
     );
+  });
+
+  it("flags a clipped scan rather than under-reporting the funnel", async () => {
+    // A tenant with more prospects than the scan bound would otherwise see
+    // totals and a reply rate that quietly stop counting.
+    listProspectOutcomesSpy.mockResolvedValue(
+      Array.from({ length: OUTREACH_SCAN_LIMIT }, () => ({
+        status: "sent",
+        vertical: "hvac"
+      })) as never
+    );
+    listProspectsByStatusSpy.mockResolvedValue([] as never);
+    const view = await loadProspectingView(BIZ, {} as never);
+    expect(view.clipped).toBe(true);
+    expect(view.funnel.sent).toBe(OUTREACH_SCAN_LIMIT);
   });
 
   it("works through the default client and reports a never-configured business", async () => {

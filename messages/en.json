@@ -2111,7 +2111,8 @@
       "actionFailed": "That did not work. Try again.",
       "sentOne": "Sent.",
       "skippedOne": "Skipped, and they will not come up again.",
-      "unsavedChanges": "You have unsaved changes."
+      "unsavedChanges": "You have unsaved changes.",
+      "clipped": "Busy list: these count your most recent 1,000 prospects, so they are at-least numbers."
     }
   },
   "admin": {
