@@ -28,8 +28,12 @@ export default async function BookMeetingTypePage({
   params: Promise<{ token: string; typeSlug: string }>;
 }) {
   const { token, typeSlug } = await params;
-  // Both segments fail closed on shape before any DB hit.
-  if (!parseBookingPageRef(token) || !parseBookingPageSlug(typeSlug)) notFound();
+  // Both segments fail closed on shape before any DB hit. The NORMALIZED
+  // slug is what gets matched (and handed to the APIs), so a link that
+  // arrives with stray case or padding resolves the same meeting instead
+  // of reading as missing.
+  const normalizedSlug = parseBookingPageSlug(typeSlug);
+  if (!parseBookingPageRef(token) || !normalizedSlug) notFound();
 
   const resolved = await getBookingPageContext(token);
 
@@ -51,7 +55,9 @@ export default async function BookMeetingTypePage({
   // Hidden types resolve here (that is what hidden means); disabled and
   // unknown ones do not, and both get the same answer so a direct link can
   // never be used to probe what a business offers.
-  const meetingType = context.meetingTypes.find((t) => t.slug === typeSlug && t.enabled);
+  const meetingType = context.meetingTypes.find(
+    (t) => t.slug === normalizedSlug && t.enabled
+  );
   if (!meetingType) return shell(<BookingUnavailable reason="meeting" />);
 
   return shell(
