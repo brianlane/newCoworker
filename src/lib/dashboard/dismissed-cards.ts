@@ -6,8 +6,10 @@
  * own dashboard and never from the tenant's.
  *
  * Dismissing hides the card, nothing else. An installed flow keeps running,
- * and the flow itself stays reachable from the AiFlows list and the public
- * library, so a dismissal can never lose a tenant an automation.
+ * and the starter itself stays reachable from the public library, which is
+ * why there is no un-dismiss: a hidden card costs the tenant nothing, and an
+ * undo affordance would put back the clutter the dismissal asked us to
+ * remove.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -76,22 +78,4 @@ export async function dismissCard(
     .from("user_dismissed_cards")
     .upsert({ user_id: userId, card_key: cardKey }, { onConflict: "user_id,card_key" });
   if (error) throw new Error(`dismissCard: ${error.message}`);
-}
-
-/** Bring a dismissed card back (the undo path). */
-export async function restoreCard(
-  userId: string,
-  cardKey: string,
-  client?: SupabaseClient
-): Promise<void> {
-  if (!isDismissibleCardKey(cardKey)) {
-    throw new Error(`restoreCard: unknown card key "${cardKey}"`);
-  }
-  const db = client ?? (await createSupabaseServiceClient());
-  const { error } = await db
-    .from("user_dismissed_cards")
-    .delete()
-    .eq("user_id", userId)
-    .eq("card_key", cardKey);
-  if (error) throw new Error(`restoreCard: ${error.message}`);
 }
