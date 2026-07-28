@@ -9,6 +9,9 @@ import {
   metaLeadFollowUpTemplate,
   newLeadIntakeTemplate,
   priceSheetShareTemplate,
+  PROSPECT_OUTREACH_SOURCE,
+  PROSPECT_TAG,
+  prospectOutreachTemplate,
   reviewRequestTemplate,
   REVIEW_LINK_MAX_LENGTH
 } from "@/lib/ai-flows/templates";
@@ -127,6 +130,70 @@ describe("instagramProspectTemplate", () => {
       // skip those steps (Bugbot 0d7238c4).
       expect(notify.message).not.toMatch(/filed and tagged/i);
       expect(notify.message).toContain("If their profile has a phone number");
+    }
+  });
+});
+
+describe("prospectOutreachTemplate", () => {
+  it("is a valid definition the install route can persist as-is", () => {
+    const tpl = prospectOutreachTemplate();
+    const def = parseAiFlowDefinition(tpl.definition);
+    expect(def.trigger.channel).toBe("webhook");
+    expect(tpl.key).toBe("prospect_outreach_follow_through");
+    expect(tpl.name.length).toBeGreaterThan(0);
+  });
+
+  it("only fires for the prospect_outreach source label", () => {
+    const def = prospectOutreachTemplate().definition;
+    expect(def.trigger).toMatchObject({
+      channel: "webhook",
+      conditions: [{ type: "from_matches", value: PROSPECT_OUTREACH_SOURCE }]
+    });
+    const conditions = "conditions" in def.trigger ? def.trigger.conditions : [];
+    expect(evaluateTriggerConditions(conditions, "any text", PROSPECT_OUTREACH_SOURCE)).toBe(true);
+    expect(evaluateTriggerConditions(conditions, "any text", INSTAGRAM_SCRAPER_SOURCE)).toBe(false);
+  });
+
+  it("carries NO send step: the pitch and its compliance footer are sent in code", () => {
+    const def = prospectOutreachTemplate().definition;
+    expect(def.steps.map((s) => s.type)).toEqual([
+      "extract_text",
+      "notify_owner",
+      "upsert_customer",
+      "update_contact"
+    ]);
+    // The invariant: a flow step's body is owner-editable copy, and the pitch
+    // carries a legally required unsubscribe link and postal address. Putting
+    // the pitch here would make the footer deletable by accident.
+    expect(def.steps.some((s) => s.type === "send_email" || s.type === "send_sms")).toBe(false);
+  });
+
+  it("briefs the owner about a send that ALREADY happened, without promising one", () => {
+    const def = prospectOutreachTemplate().definition;
+    const notify = def.steps[1];
+    if (notify.type !== "notify_owner") throw new Error("expected the brief second");
+    expect(notify.when).toBeUndefined();
+    expect(notify.message).toMatch(/Cold email sent/);
+    expect(notify.message).toContain("{{vars.prospect_domain}}");
+    expect(notify.message).toContain("one follow-up only");
+  });
+
+  it("gates the phone-keyed file + tag steps on a usable phone", () => {
+    const def = prospectOutreachTemplate().definition;
+    const file = def.steps[2];
+    const tag = def.steps[3];
+    if (file.type !== "upsert_customer" || tag.type !== "update_contact") {
+      throw new Error("expected file then tag");
+    }
+    expect(file.when).toEqual({ var: "prospect_phone", notEquals: "none" });
+    expect(tag.when).toEqual({ var: "prospect_phone", notEquals: "none" });
+    expect(tag.addTags).toEqual([PROSPECT_TAG]);
+    const extract = def.steps[0];
+    if (extract.type === "extract_text") {
+      const phone = extract.fields.find((f) => f.name === "prospect_phone");
+      expect(phone?.description).toContain("'none'");
+      expect(phone?.description).toContain("not an empty string");
+      expect(extract.fields.length).toBeLessThanOrEqual(MAX_EXTRACT_FIELDS);
     }
   });
 });

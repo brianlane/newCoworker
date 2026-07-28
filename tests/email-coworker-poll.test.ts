@@ -24,6 +24,7 @@ vi.mock("@/lib/email-coworker/threads", async (importOriginal) => ({
   recordThreadTurn: vi.fn()
 }));
 vi.mock("@/lib/email-coworker/turn", () => ({ runEmailCoworkerTurn: vi.fn() }));
+vi.mock("@/lib/outreach/reply", () => ({ noteProspectReply: vi.fn() }));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 
 import { pollEmailCoworker } from "@/lib/email-coworker/poll";
@@ -41,6 +42,7 @@ import {
   recordThreadTurn
 } from "@/lib/email-coworker/threads";
 import { runEmailCoworkerTurn } from "@/lib/email-coworker/turn";
+import { noteProspectReply } from "@/lib/outreach/reply";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 /** The dashboard login, which need NOT be the connected mailbox. */
@@ -60,6 +62,7 @@ const mockClaim = vi.mocked(claimMessage);
 const mockHandoff = vi.mocked(markThreadHandedOff);
 const mockRecordTurn = vi.mocked(recordThreadTurn);
 const mockTurn = vi.mocked(runEmailCoworkerTurn);
+const mockNoteReply = vi.mocked(noteProspectReply);
 
 const THREAD = {
   id: "row-1",
@@ -115,6 +118,7 @@ beforeEach(() => {
   mockHandoff.mockResolvedValue(undefined);
   mockRecordTurn.mockResolvedValue(undefined);
   mockTurn.mockResolvedValue({ ok: true, reply: "Booked.", handoff: false, sent: true });
+  mockNoteReply.mockResolvedValue("not_a_prospect");
   mockDispatch.mockResolvedValue({ results: [] } as never);
   mockSystemLog.mockResolvedValue(undefined as never);
 });
@@ -128,6 +132,20 @@ describe("pollEmailCoworker", () => {
     expect(args.thread.threadId).toBe("thread-9");
     expect(args.businessTimezone).toBe("America/Phoenix");
     expect(mockRecordTurn).toHaveBeenCalledWith("row-1", {}, 0, expect.anything());
+  });
+
+  it("tells the outreach ledger about the reply, so no follow-up talks over it", async () => {
+    // A cold-outreach prospect answering has to be recorded before the next
+    // Prospecting sweep, which otherwise chases them purely on silence.
+    await pollEmailCoworker(businessDb());
+    // Both the sender AND the address we originally mailed, because people
+    // answer from a different mailbox than the one on their website.
+    expect(mockNoteReply).toHaveBeenCalledWith(
+      BIZ,
+      ["beth@lizdev.com", "beth@lizdev.com"],
+      "Monday at 12:00 PM EST works.",
+      expect.anything()
+    );
   });
 
   it("is a cheap no-op when no business owns an active thread", async () => {

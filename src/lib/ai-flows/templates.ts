@@ -593,6 +593,102 @@ export function newLeadIntakeTemplate(): AiFlowTemplate {
   };
 }
 
+/**
+ * Source label the Prospecting sweep sends after it has emailed a prospect
+ * (src/lib/outreach/sweep.ts). Scoping the starter to it keeps this flow from
+ * firing on unrelated webhook traffic.
+ */
+export const PROSPECT_OUTREACH_SOURCE = "prospect_outreach";
+
+/** Tag every contacted prospect carries, so the owner can find them as a group. */
+export const PROSPECT_TAG = "prospect";
+
+/**
+ * "Prospect outreach follow-through": what happens AFTER the coworker has
+ * cold-emailed a prospect. The pitch itself is not here on purpose. It is
+ * composed and sent in code (src/lib/outreach/sweep.ts) because it carries a
+ * legally required unsubscribe link and postal address, and a flow step's body
+ * is owner-editable copy that could lose them. What IS here is everything an
+ * owner should be able to change: whether the prospect is filed, how they are
+ * tagged, and what the owner is told.
+ *
+ * So this flow deliberately has NO send step. The email already went out
+ * before the flow ran, and the brief says so rather than promising it.
+ * Installed DISABLED like the other starters.
+ */
+export function prospectOutreachTemplate(): AiFlowTemplate {
+  return {
+    key: "prospect_outreach_follow_through",
+    name: "Prospect outreach follow-through",
+    definition: {
+      version: 1,
+      trigger: {
+        channel: "webhook",
+        conditions: [{ type: "from_matches", value: PROSPECT_OUTREACH_SOURCE }]
+      },
+      steps: [
+        {
+          id: "s_extract",
+          type: "extract_text",
+          fields: [
+            {
+              name: "prospect_name",
+              description: "The prospect business's name. 'there' if unknown."
+            },
+            {
+              name: "prospect_phone",
+              description:
+                "The prospect's phone number, digits and + only. You MUST return exactly " +
+                "'none' (not an empty string) when there is no phone number."
+            },
+            {
+              name: "prospect_email",
+              description: "The prospect's email address. 'none' if there is none."
+            },
+            {
+              name: "prospect_domain",
+              description: "The prospect's website domain. 'none' if there is none."
+            },
+            {
+              name: "prospect_vertical",
+              description: "The trade or category the prospect was discovered under. 'none' if absent."
+            }
+          ]
+        },
+        {
+          // The brief runs FIRST so it always reaches the owner, and it states
+          // what already happened rather than what is about to: the pitch was
+          // sent before this run started.
+          id: "s_notify_owner",
+          type: "notify_owner",
+          message:
+            "Cold email sent to {{vars.prospect_name}} ({{vars.prospect_domain}}) in " +
+            "{{vars.prospect_vertical}}. Reply address on file: {{vars.prospect_email}}. " +
+            "If they reply, your coworker answers in the thread and can book the call. " +
+            "Nothing else goes out unless they go quiet, and then one follow-up only."
+        },
+        {
+          // The CRM is phone-keyed, so a prospect with no phone reaches the
+          // owner in the brief above and files no contact, rather than filing
+          // a broken one.
+          id: "s_file",
+          type: "upsert_customer",
+          phoneVar: "prospect_phone",
+          nameVar: "prospect_name",
+          when: { var: "prospect_phone", notEquals: "none" }
+        },
+        {
+          id: "s_tag",
+          type: "update_contact",
+          phoneVar: "prospect_phone",
+          addTags: [PROSPECT_TAG],
+          when: { var: "prospect_phone", notEquals: "none" }
+        }
+      ]
+    }
+  };
+}
+
 export function priceSheetShareTemplate(documentId: string, documentTitle: string): AiFlowTemplate {
   return {
     key: "price_sheet_share",

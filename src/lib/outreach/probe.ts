@@ -1,0 +1,262 @@
+/**
+ * Prospecting — the site probe: what can we honestly say about this business
+ * before we email them?
+ *
+ * The pitch is only allowed to claim what a finding recorded, so every finding
+ * carries the evidence that produced it (a marker that was missing, or the
+ * text that matched). No adjectives, no inference: "your site has no booking
+ * link" is checkable, "your website is bad" is not.
+ *
+ * Deliberately cheap and forgiving. Two GETs at most (the homepage, then a
+ * contact page if the homepage carried no address), a hard body cap, a short
+ * timeout, and every failure degrades to "we could not read the site" rather
+ * than throwing, because an unreachable prospect should be skipped, not fatal
+ * to the pass.
+ */
+
+import { siteUrl } from "@/lib/marketing/site-url";
+
+/** A checkable observation about a prospect's site. */
+export type ProbeFinding = { code: string; detail: string };
+
+export type ProbeResult = {
+  findings: ProbeFinding[];
+  /** Best contact address found, or null when the site published none. */
+  email: string | null;
+  /** False when the site could not be read at all (findings will be empty). */
+  reachable: boolean;
+  /** Why the read failed, for the ledger's status_detail. */
+  failure?: string;
+};
+
+/** Body bytes read per page — hooks live in the markup, not in megabytes. */
+export const PROBE_MAX_BYTES = 400_000;
+
+/** Per-request timeout. A slow prospect is skipped, not waited on. */
+export const PROBE_TIMEOUT_MS = 8_000;
+
+/**
+ * Markers that prove a capability exists. Absence is what we report, so these
+ * lists are deliberately generous: a false "you have no booking link" is a
+ * credibility loss on first contact, while missing a hook costs nothing.
+ */
+const BOOKING_MARKERS = [
+  "calendly.com",
+  "acuityscheduling",
+  "squareup.com/appointments",
+  "booksy.com",
+  "schedulicity",
+  "vagaro.com",
+  "setmore.com",
+  "simplybook",
+  "mindbodyonline",
+  "housecallpro",
+  "servicetitan",
+  "jobber",
+  "book now",
+  "book online",
+  "book an appointment",
+  "schedule online",
+  "schedule an appointment",
+  "request an appointment",
+  "request appointment"
+];
+
+const CHAT_MARKERS = [
+  "intercom",
+  "drift.com",
+  "tawk.to",
+  "tidio",
+  "crisp.chat",
+  "js.hs-scripts.com",
+  "zdassets",
+  "livechatinc",
+  "podium.com",
+  "olark",
+  "zohopublic",
+  "chatwoot",
+  "live chat",
+  "chat with us"
+];
+
+const SMS_MARKERS = ["sms:", "text us", "text me", "send us a text", "message us"];
+
+const PHONE_MARKERS = ["tel:"];
+
+/** Addresses that are never a real contact address for the business. */
+const EMAIL_NOISE = [
+  "example.com",
+  "example.org",
+  "sentry.io",
+  "wordpress.com",
+  "wordpress.org",
+  "wix.com",
+  "squarespace.com",
+  "godaddy.com",
+  "domain.com",
+  "email.com",
+  "yourdomain",
+  "sentry-next",
+  "no-reply",
+  "noreply",
+  "donotreply"
+];
+
+/** Mailbox names that read as a published contact address rather than a person. */
+const PREFERRED_MAILBOXES = ["info", "contact", "hello", "office", "sales", "admin", "support"];
+
+/** Weekend-closed evidence, e.g. "Closed Sunday" or "closed on weekends". */
+const WEEKEND_CLOSED_RE = /closed\s+(?:on\s+)?(?:sat(?:urday)?|sun(?:day)?|weekends?)/i;
+
+/**
+ * Posted weekday hours with an afternoon close, e.g. "Mon - Fri 8:00 am - 5:00
+ * pm". The em dash and en dash are matched by escape, never typed literally
+ * (repo writing rule).
+ */
+const WEEKDAY_HOURS_RE =
+  /(?:mon|tues?|wed|thur?s?|fri)[a-z.]*\s*(?:[-\u2013\u2014]|to)\s*(?:fri|sat)[a-z.]*[^a-z0-9]{0,16}(\d{1,2})(?::\d{2})?\s*(?:a\.?m\.?)?\s*(?:[-\u2013\u2014]|to)\s*(\d{1,2})(?::\d{2})?\s*p\.?m\.?/i;
+
+/** An afternoon close at or before this hour leaves an after-hours gap. */
+const AFTER_HOURS_CLOSE_AT_OR_BEFORE = 6;
+
+function hasAnyMarker(haystack: string, markers: string[]): boolean {
+  return markers.some((m) => haystack.includes(m));
+}
+
+/**
+ * The conversation hooks this page supports. `html` is expected lowercased by
+ * the caller (probeSite does it once for both pages).
+ */
+export function detectFindings(html: string): ProbeFinding[] {
+  const findings: ProbeFinding[] = [];
+  if (!hasAnyMarker(html, BOOKING_MARKERS)) {
+    findings.push({
+      code: "no_online_booking",
+      detail: "No booking link or scheduler found on the site, so appointments have to be arranged by phone or email."
+    });
+  }
+  if (!hasAnyMarker(html, CHAT_MARKERS)) {
+    findings.push({
+      code: "no_chat_widget",
+      detail: "No chat widget on the site, so a visitor with a question has to call or fill in a form."
+    });
+  }
+  if (!hasAnyMarker(html, SMS_MARKERS)) {
+    findings.push({
+      code: "no_text_option",
+      detail: "No way to text the business from the site."
+    });
+  }
+  if (!hasAnyMarker(html, PHONE_MARKERS)) {
+    findings.push({
+      code: "no_tap_to_call",
+      detail: "No tap-to-call phone link, so a phone visitor has to copy the number by hand."
+    });
+  }
+  const weekend = WEEKEND_CLOSED_RE.exec(html);
+  if (weekend) {
+    findings.push({
+      code: "closed_weekends",
+      detail: `The site states "${weekend[0].trim()}", so weekend enquiries wait until Monday.`
+    });
+  }
+  const hours = WEEKDAY_HOURS_RE.exec(html);
+  if (hours) {
+    const closeHour = Number(hours[2]);
+    if (closeHour <= AFTER_HOURS_CLOSE_AT_OR_BEFORE) {
+      findings.push({
+        code: "after_hours_gap",
+        detail: `Posted hours "${hours[0].trim()}" mean calls after closing go unanswered.`
+      });
+    }
+  }
+  return findings;
+}
+
+/**
+ * Contact addresses published on the page, best first: a mailbox at the
+ * prospect's own domain beats a third-party one, and a published role mailbox
+ * (info@, contact@) beats a personal one. Noise (platform boilerplate,
+ * no-reply senders, image filenames that happen to contain an @) is dropped.
+ */
+export function extractEmails(html: string, domain: string): string[] {
+  // Every quantifier here is BOUNDED, and that is load-bearing rather than
+  // tidy. With an unbounded local part, a long run of word characters (a
+  // minified script with no @ in it, which is most of them) makes the engine
+  // match the whole run, fail to find an @, and backtrack a character at a
+  // time from every starting position: quadratic, and it hung the probe on a
+  // 400KB page. The bounds are the real RFC limits, so nothing valid is lost.
+  const matches = html.match(/[a-z0-9._%+-]{1,64}@[a-z0-9.-]{1,255}\.[a-z]{2,24}/gi) ?? [];
+  const seen = new Set<string>();
+  const candidates: string[] = [];
+  for (const raw of matches) {
+    const email = raw.trim().toLowerCase();
+    if (seen.has(email)) continue;
+    seen.add(email);
+    if (EMAIL_NOISE.some((n) => email.includes(n))) continue;
+    // A filename that swept up an @ is not an address.
+    if (/\.(?:png|jpe?g|gif|svg|webp|css|js)$/.test(email)) continue;
+    candidates.push(email);
+  }
+  const score = (email: string): number => {
+    const [mailbox, host] = email.split("@");
+    const ownDomain = host === domain || host.endsWith(`.${domain}`);
+    const role = PREFERRED_MAILBOXES.includes(mailbox);
+    return (ownDomain ? 2 : 0) + (role ? 1 : 0);
+  };
+  return candidates.sort((a, b) => score(b) - score(a));
+}
+
+export type ProbeDeps = {
+  fetchImpl?: typeof fetch;
+};
+
+/** GET a page, capped and timed out. Returns null when it cannot be read. */
+async function readPage(url: string, deps: ProbeDeps): Promise<string | null> {
+  const fetchImpl = deps.fetchImpl ?? fetch;
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), PROBE_TIMEOUT_MS);
+  try {
+    const res = await fetchImpl(url, {
+      redirect: "follow",
+      signal: controller.signal,
+      headers: {
+        // Identify ourselves honestly: a site owner reading their logs should
+        // be able to tell who looked and why.
+        "User-Agent": `NewCoworkerProspectBot/1.0 (+${siteUrl("/about")})`,
+        Accept: "text/html,application/xhtml+xml"
+      }
+    });
+    if (!res.ok) return null;
+    const body = await res.text();
+    return body.slice(0, PROBE_MAX_BYTES).toLowerCase();
+  } catch {
+    return null;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
+/**
+ * Probe one prospect. The homepage supplies the findings; when it publishes no
+ * address we try one conventional contact path, because an unreachable
+ * prospect is a wasted discovery rather than a send.
+ */
+export async function probeSite(
+  website: string,
+  domain: string,
+  deps: ProbeDeps = {}
+): Promise<ProbeResult> {
+  const home = await readPage(website, deps);
+  if (home === null) {
+    return { findings: [], email: null, reachable: false, failure: "site unreadable" };
+  }
+  const findings = detectFindings(home);
+  let emails = extractEmails(home, domain);
+  if (emails.length === 0) {
+    const contactUrl = new URL("/contact", website).toString();
+    const contact = await readPage(contactUrl, deps);
+    if (contact !== null) emails = extractEmails(contact, domain);
+  }
+  return { findings, email: emails[0] ?? null, reachable: true };
+}
