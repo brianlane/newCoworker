@@ -21,16 +21,22 @@ export type InboundDeadLetterRow = {
   attemptCount: number;
   /** The worker's reason string, e.g. "missing_from_or_text". */
   error: string;
-  /** Sender as it arrived (may be a short code, so not necessarily E.164). */
+  /**
+   * Sender as it arrived. Shown VERBATIM when it is not a recognizable phone or
+   * short code, because an unusable origin is exactly what these rows are about
+   * and "(no sender)" would hide the evidence.
+   */
   from: string;
   /** First part of the message, for recognizing what was lost. */
   preview: string;
 };
 
-/** Per-tenant tally, so one noisy tenant is obvious at a glance. */
+/** Exact per-tenant tally from the database, never a sampled estimate. */
 export type InboundDeadLetterCount = { businessId: string; count: number };
 
 const PREVIEW_CHARS = 160;
+/** Enough to identify a bad origin without letting junk dominate the row. */
+const SENDER_CHARS = 40;
 
 /** Start of the lookback window as an ISO timestamp. */
 function windowStart(sinceDays: number): string {
@@ -38,16 +44,36 @@ function windowStart(sinceDays: number): string {
 }
 
 /**
+ * The sender exactly as stored, whatever shape it took, with no validity filter.
+ * `customerE164FromPayload` deliberately rejects anything that is not a phone or
+ * a short code, which is right for a conversation index and wrong here: a
+ * dead-letter caused by an alphanumeric or garbage origin has to show that
+ * origin.
+ */
+function rawSenderFromPayload(payload: unknown): string {
+  const inner = ((payload ?? {}) as { data?: { payload?: Record<string, unknown> } }).data?.payload;
+  if (!inner) return "";
+  const from = inner["from"];
+  if (typeof from === "string") return from.trim().slice(0, SENDER_CHARS);
+  if (from && typeof from === "object" && !Array.isArray(from)) {
+    const phone = (from as { phone_number?: unknown }).phone_number;
+    if (typeof phone === "string") return phone.trim().slice(0, SENDER_CHARS);
+  }
+  return "";
+}
+
+/**
  * Pull the sender and text out of the stored Telnyx envelope, reusing the Text
  * history parsers rather than a second implementation. Telnyx is inconsistent
  * about all of it: `from` is sometimes a string and sometimes an object, the body
  * is `text` or `body` or a nested RCS object, and a sender can be a short code
- * rather than E.164. Those helpers already handle every one of those shapes.
+ * rather than E.164. Those helpers already handle every one of those shapes; the
+ * raw fallback covers the origins they (correctly) refuse.
  */
 function readEnvelope(payload: unknown): { from: string; preview: string } {
   const row = (payload ?? null) as Record<string, unknown> | null;
   return {
-    from: customerE164FromPayload(row) ?? "",
+    from: customerE164FromPayload(row) ?? rawSenderFromPayload(payload),
     preview: inboundTextFromPayload(row).replace(/\s+/g, " ").trim().slice(0, PREVIEW_CHARS)
   };
 }
@@ -94,58 +120,39 @@ export async function listInboundDeadLetters(
   });
 }
 
-/** Group ids by tenant, most affected first. Pure. */
-export function countByBusiness(
-  businessIds: readonly string[]
-): InboundDeadLetterCount[] {
-  const counts = new Map<string, number>();
-  for (const id of businessIds) counts.set(id, (counts.get(id) ?? 0) + 1);
-  return [...counts]
-    .map(([businessId, count]) => ({ businessId, count }))
-    .sort((a, b) => b.count - a.count || a.businessId.localeCompare(b.businessId));
-}
-
-/**
- * How many rows the tallies are allowed to scan. The TOTAL is an exact count
- * from the database regardless; this only bounds the per-tenant breakdown.
- */
-export const TALLY_SCAN_LIMIT = 500;
-
 export type InboundDeadLetterSummary = {
   /** Exact count for the window, NOT the length of any displayed sample. */
   total: number;
-  /** True when more rows exist than the tallies scanned, so they are a floor. */
-  capped: boolean;
+  /** Exact per-tenant counts, most affected first. */
   byBusiness: InboundDeadLetterCount[];
 };
 
 /**
- * Totals for the window. Separate from `listInboundDeadLetters` because the card
- * shows a short sample of rows but must report the real scale: deriving the count
- * from a 20-row sample would tell an admin there were 20 failures when there were
- * 300.
+ * Exact totals for the window, from a grouped count in SQL
+ * (`inbound_dead_letter_counts`). Separate from `listInboundDeadLetters` because
+ * the card shows a short sample of rows but must report the real scale: a count
+ * taken from that sample would tell an admin there were 20 failures when there
+ * were 300, and would drop any tenant the noisiest one crowded out.
  */
 export async function summarizeInboundDeadLetters(
-  options?: { businessId?: string; sinceDays?: number },
+  options?: { sinceDays?: number },
   client?: SupabaseClient
 ): Promise<InboundDeadLetterSummary> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { businessId, sinceDays } = options ?? {};
-  let q = db
-    .from("sms_inbound_jobs")
-    .select("business_id", { count: "exact" })
-    .eq("status", "dead_letter")
-    .is("deleted_at", null);
-  if (businessId) q = q.eq("business_id", businessId);
-  if (sinceDays && sinceDays > 0) q = q.gte("created_at", windowStart(sinceDays));
-  const { data, error, count } = await q
-    .order("created_at", { ascending: false })
-    .limit(TALLY_SCAN_LIMIT);
+  const sinceDays = options?.sinceDays;
+  const { data, error } = await db.rpc("inbound_dead_letter_counts", {
+    p_since: sinceDays && sinceDays > 0 ? windowStart(sinceDays) : null
+  });
   if (error) {
     console.error("summarizeInboundDeadLetters", error.message);
-    return { total: 0, capped: false, byBusiness: [] };
+    return { total: 0, byBusiness: [] };
   }
-  const ids = ((data ?? []) as Array<{ business_id?: unknown }>).map((r) => String(r.business_id));
-  const total = typeof count === "number" ? count : ids.length;
-  return { total, capped: total > ids.length, byBusiness: countByBusiness(ids) };
+  const byBusiness = ((data ?? []) as Array<Record<string, unknown>>).map((r) => ({
+    businessId: String(r.business_id),
+    count: Number(r.failure_count ?? 0)
+  }));
+  return {
+    total: byBusiness.reduce((sum, b) => sum + b.count, 0),
+    byBusiness
+  };
 }

@@ -52,7 +52,6 @@ export async function InboundFailuresCard() {
             <li key={t.businessId}>
               <Badge variant="neutral">
                 {names.get(t.businessId) ?? t.businessId}: {t.count}
-                {summary.capped ? "+" : ""}
               </Badge>
             </li>
           ))}

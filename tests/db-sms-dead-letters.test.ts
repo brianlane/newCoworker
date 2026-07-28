@@ -7,16 +7,19 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
-  countByBusiness,
   listInboundDeadLetters,
-  summarizeInboundDeadLetters,
-  TALLY_SCAN_LIMIT
+  summarizeInboundDeadLetters
 } from "@/lib/db/sms-dead-letters";
 
 type Row = Record<string, unknown>;
 
 /** Records the filters applied so the query contract can be asserted. */
-function fakeClient(result: { data?: Row[]; error?: { message: string }; count?: number }) {
+function fakeClient(result: {
+  data?: Row[];
+  error?: { message: string };
+  count?: number;
+  rpcData?: Row[];
+}) {
   const calls: Record<string, unknown[]> = {};
   const record = (name: string, ...args: unknown[]) => {
     calls[name] = [...(calls[name] ?? []), args];
@@ -40,6 +43,10 @@ function fakeClient(result: { data?: Row[]; error?: { message: string }; count?:
     from: (table: string) => {
       record("from", table);
       return builder;
+    },
+    rpc: (fn: string, args: unknown) => {
+      record("rpc", fn, args);
+      return Promise.resolve({ data: result.rpcData ?? null, error: result.error ?? null });
     }
   } as unknown as SupabaseClient;
   return { client, calls };
@@ -159,6 +166,23 @@ describe("listInboundDeadLetters", () => {
     expect(rows.map((r) => r.preview)).toEqual(["", ""]);
   });
 
+  it("shows an unusable origin verbatim instead of hiding it", async () => {
+    // These rows exist BECAUSE the sender was unusable, so blanking it would
+    // remove the only evidence. customerE164FromPayload correctly refuses these.
+    const { client } = fakeClient({
+      data: [
+        jobRow({ id: "a", payload: { data: { payload: { from: "SHORTNAME", text: "hi" } } } }),
+        jobRow({
+          id: "b",
+          payload: { data: { payload: { from: { phone_number: "not-a-number" }, text: "hi" } } }
+        }),
+        jobRow({ id: "c", payload: { data: { payload: { from: {}, text: "hi" } } } })
+      ]
+    });
+    const rows = await listInboundDeadLetters(undefined, client);
+    expect(rows.map((r) => r.from)).toEqual(["SHORTNAME", "not-a-number", ""]);
+  });
+
   it("reads every envelope shape Telnyx actually sends", async () => {
     // Telnyx is inconsistent: `from` is sometimes a bare string, the body is
     // `text` or `body`, and RCS nests it under a body object. Parsing only one
@@ -179,106 +203,67 @@ describe("listInboundDeadLetters", () => {
   });
 });
 
-describe("countByBusiness", () => {
-  it("puts the most affected tenant first", () => {
-    expect(countByBusiness(["a", "b", "b", "c", "b"])).toEqual([
-      { businessId: "b", count: 3 },
-      { businessId: "a", count: 1 },
-      { businessId: "c", count: 1 }
-    ]);
-  });
-
-  it("breaks ties predictably, so the card does not reshuffle between loads", () => {
-    expect(countByBusiness(["z", "a"])).toEqual([
-      { businessId: "a", count: 1 },
-      { businessId: "z", count: 1 }
-    ]);
-  });
-
-  it("handles nothing", () => {
-    expect(countByBusiness([])).toEqual([]);
-  });
-});
-
 describe("summarizeInboundDeadLetters", () => {
-  it("reports the EXACT total, not the size of the scanned sample", () => {
-    // The card shows 20 rows; saying "20 failures" when there were 300 is the
-    // bug this exists to avoid.
-    const { client } = fakeClient({ data: [{ business_id: "a" }], count: 300 });
-    return summarizeInboundDeadLetters({ sinceDays: 14 }, client).then((s) => {
-      expect(s.total).toBe(300);
-      expect(s.capped).toBe(true);
-      expect(s.byBusiness).toEqual([{ businessId: "a", count: 1 }]);
-    });
-  });
-
-  it("is not capped when the scan saw everything", async () => {
-    const { client } = fakeClient({ data: [{ business_id: "a" }, { business_id: "b" }], count: 2 });
-    const s = await summarizeInboundDeadLetters(undefined, client);
-    expect(s).toEqual({
-      total: 2,
-      capped: false,
-      byBusiness: [
-        { businessId: "a", count: 1 },
-        { businessId: "b", count: 1 }
+  it("takes exact per-tenant counts from the grouped SQL count", async () => {
+    // Never from the displayed sample: a noisy tenant would crowd others out and
+    // every number would understate the truth without saying so.
+    const { client, calls } = fakeClient({
+      rpcData: [
+        { business_id: "biz-a", failure_count: 300 },
+        { business_id: "biz-b", failure_count: 4 }
       ]
     });
+    const s = await summarizeInboundDeadLetters({ sinceDays: 14 }, client);
+    expect((calls.rpc[0] as unknown[])[0]).toBe("inbound_dead_letter_counts");
+    expect(s.total).toBe(304);
+    expect(s.byBusiness).toEqual([
+      { businessId: "biz-a", count: 300 },
+      { businessId: "biz-b", count: 4 }
+    ]);
   });
 
-  it("applies the same status, deleted and window filters as the row query", async () => {
-    const { client, calls } = fakeClient({ data: [], count: 0 });
-    await summarizeInboundDeadLetters({ businessId: "biz-9", sinceDays: 14 }, client);
-    expect(calls.select[0]).toEqual(["business_id", { count: "exact" }]);
-    expect(calls.eq).toContainEqual(["status", "dead_letter"]);
-    expect(calls.eq).toContainEqual(["business_id", "biz-9"]);
-    expect(calls.is).toContainEqual(["deleted_at", null]);
-    expect(calls.gte?.length).toBe(1);
-    expect(calls.limit[0]).toEqual([TALLY_SCAN_LIMIT]);
+  it("passes the window, and null for all time", async () => {
+    const windowed = fakeClient({ rpcData: [] });
+    await summarizeInboundDeadLetters({ sinceDays: 14 }, windowed.client);
+    const wArgs = windowed.calls.rpc[0] as unknown[];
+    expect(typeof (wArgs[1] as { p_since: string }).p_since).toBe("string");
+
+    for (const options of [undefined, {}, { sinceDays: 0 }]) {
+      const all = fakeClient({ rpcData: [] });
+      await summarizeInboundDeadLetters(options, all.client);
+      const aArgs = all.calls.rpc[0] as unknown[];
+      expect((aArgs[1] as { p_since: string | null }).p_since).toBeNull();
+    }
   });
 
-  it("ignores a zero window", async () => {
-    const { client, calls } = fakeClient({ data: [], count: 0 });
-    await summarizeInboundDeadLetters({ sinceDays: 0 }, client);
-    expect(calls.gte).toBeUndefined();
-  });
-
-  it("falls back to the row count when the driver returns no count", async () => {
-    const { client } = fakeClient({ data: [{ business_id: "a" }, { business_id: "a" }] });
-    const s = await summarizeInboundDeadLetters(undefined, client);
-    expect(s.total).toBe(2);
-    expect(s.capped).toBe(false);
-  });
-
-  it("reports zero rather than throwing when the query fails", async () => {
+  it("reports zero rather than throwing when the count fails", async () => {
     const { client } = fakeClient({ error: { message: "boom" } });
     const spy = vi.spyOn(console, "error").mockImplementation(() => {});
     expect(await summarizeInboundDeadLetters(undefined, client)).toEqual({
       total: 0,
-      capped: false,
       byBusiness: []
     });
     expect(spy).toHaveBeenCalled();
     spy.mockRestore();
   });
 
+  it("handles an empty or malformed count row", async () => {
+    const empty = fakeClient({});
+    expect(await summarizeInboundDeadLetters(undefined, empty.client)).toEqual({
+      total: 0,
+      byBusiness: []
+    });
+    const sparse = fakeClient({ rpcData: [{ business_id: "b" }] });
+    expect(await summarizeInboundDeadLetters(undefined, sparse.client)).toEqual({
+      total: 0,
+      byBusiness: [{ businessId: "b", count: 0 }]
+    });
+  });
+
   it("uses the service client when none is injected", async () => {
-    const { client } = fakeClient({ data: [], count: 0 });
+    const { client } = fakeClient({ rpcData: [] });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
     await summarizeInboundDeadLetters();
     expect(createSupabaseServiceClient).toHaveBeenCalled();
-  });
-
-  it("treats a null result set as empty while still trusting the exact count", async () => {
-    // A count with no rows back is a real driver response; the tallies are then
-    // simply unknown rather than wrong.
-    const { client } = fakeClient({ count: 7 });
-    const s = await summarizeInboundDeadLetters({ businessId: "b" }, client);
-    expect(s).toEqual({ total: 7, capped: true, byBusiness: [] });
-  });
-
-  it("tolerates a row with no business id", async () => {
-    const { client } = fakeClient({ data: [{}], count: 1 });
-    const s = await summarizeInboundDeadLetters(undefined, client);
-    expect(s.byBusiness).toEqual([{ businessId: "undefined", count: 1 }]);
   });
 });
