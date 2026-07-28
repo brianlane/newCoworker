@@ -1,0 +1,201 @@
+/**
+ * Prospecting — what the owner sees and what the owner can change.
+ *
+ * The read model and the three mutations behind the dashboard panel, kept here
+ * rather than in the route handlers so the rules are unit-tested: which
+ * settings are valid, what has to exist before the feature can be switched on,
+ * and what "Send" actually does.
+ *
+ * The reporting vocabulary is deliberate. Drafted and sent are separate
+ * numbers, drafts still waiting are reported as waiting, and the reply rate is
+ * a share of what was SENT. A dashboard that says "contacted: 15" beside an
+ * empty sent folder is the specific failure this vocabulary avoids.
+ */
+
+import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import {
+  getOutreachSettings,
+  listProspectOutcomes,
+  listProspectsByStatus,
+  upsertOutreachSettings,
+  patchProspect,
+  OUTREACH_DEFAULT_DAILY_CAP,
+  type OutreachMode,
+  type OutreachProspectRow,
+  type OutreachSettingsRow
+} from "./db";
+import { summarizeFunnel, type OutreachFunnel, type VerticalFunnel } from "./stats";
+
+type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
+
+/** Drafts shown in the review queue at once. */
+export const REVIEW_QUEUE_LIMIT = 25;
+
+/** Search terms and cities a tenant may configure. Each pair is a paid query. */
+export const MAX_SEARCH_TERMS = 12;
+export const MAX_CITIES = 12;
+
+/** Hard ceiling on the daily cap, mirroring the DB check constraint. */
+export const MAX_DAILY_CAP = 200;
+
+export type ProspectingView = {
+  /** Null when the owner has never opened Prospecting: means mode 'off'. */
+  settings: OutreachSettingsRow | null;
+  funnel: OutreachFunnel;
+  byVertical: VerticalFunnel[];
+  /** Drafts waiting on the owner, only meaningful in manual mode. */
+  queue: OutreachProspectRow[];
+  /**
+   * Why the feature cannot run yet, owner-readable. Empty when it can. Shown
+   * whether the mode is on or off, so "why is nothing happening?" is answered
+   * on the page instead of in a support conversation.
+   */
+  blockers: string[];
+};
+
+/** Everything the panel renders, in one pass. */
+export async function loadProspectingView(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<ProspectingView> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const [settings, outcomes, queue] = await Promise.all([
+    getOutreachSettings(businessId, db),
+    listProspectOutcomes(businessId, db),
+    listProspectsByStatus(businessId, ["drafted"], REVIEW_QUEUE_LIMIT, db)
+  ]);
+  const { total, byVertical } = summarizeFunnel(outcomes);
+  return { settings, funnel: total, byVertical, queue, blockers: describeBlockers(settings) };
+}
+
+/**
+ * What is missing before outreach can go out. Each one is a real precondition
+ * the sweep checks, phrased as the owner action that clears it.
+ */
+export function describeBlockers(settings: OutreachSettingsRow | null): string[] {
+  if (!settings) return [];
+  const blockers: string[] = [];
+  if (!settings.postal_address?.trim()) blockers.push("postalAddress");
+  if (!settings.value_prop?.trim()) blockers.push("valueProp");
+  if (settings.search_terms.length === 0) blockers.push("searchTerms");
+  if (settings.cities.length === 0) blockers.push("cities");
+  return blockers;
+}
+
+export type ProspectingSettingsInput = {
+  mode: OutreachMode;
+  searchTerms: string[];
+  cities: string[];
+  dailyCap: number;
+  sendWindowStartHour: number;
+  sendWindowEndHour: number;
+  postalAddress: string;
+  valueProp: string;
+  senderName: string;
+};
+
+export class ProspectingSettingsError extends Error {}
+
+/**
+ * Save the owner's settings, refusing anything the sweep could not honor.
+ *
+ * The postal-address rule is the important one: CAN-SPAM requires a physical
+ * address in commercial email, so switching the feature on without one is
+ * refused HERE with a readable message, before the database refuses it with a
+ * constraint violation. Both gates exist on purpose, since the DB is what makes
+ * it impossible and this is what makes it understandable.
+ */
+export async function saveProspectingSettings(
+  businessId: string,
+  input: ProspectingSettingsInput,
+  client?: SupabaseClient
+): Promise<OutreachSettingsRow> {
+  const searchTerms = dedupeList(input.searchTerms, MAX_SEARCH_TERMS);
+  const cities = dedupeList(input.cities, MAX_CITIES);
+  const postalAddress = input.postalAddress.trim();
+  const valueProp = input.valueProp.trim();
+
+  if (input.mode !== "off" && !postalAddress) {
+    throw new ProspectingSettingsError(
+      "A postal address is required before outreach can be switched on: every marketing email has to carry one."
+    );
+  }
+  if (input.mode !== "off" && !valueProp) {
+    throw new ProspectingSettingsError(
+      "Say what you want the email to offer before switching outreach on."
+    );
+  }
+  if (input.dailyCap < 0 || input.dailyCap > MAX_DAILY_CAP) {
+    throw new ProspectingSettingsError(`The daily cap has to be between 0 and ${MAX_DAILY_CAP}.`);
+  }
+  if (input.sendWindowEndHour <= input.sendWindowStartHour) {
+    throw new ProspectingSettingsError("The send window has to end after it starts.");
+  }
+
+  const db = client ?? (await createSupabaseServiceClient());
+  return upsertOutreachSettings(
+    businessId,
+    {
+      mode: input.mode,
+      search_terms: searchTerms,
+      cities,
+      daily_cap: input.dailyCap,
+      send_window_start_hour: input.sendWindowStartHour,
+      send_window_end_hour: input.sendWindowEndHour,
+      postal_address: postalAddress || null,
+      value_prop: valueProp || null,
+      sender_name: input.senderName.trim() || null
+    },
+    db
+  );
+}
+
+/** Trim, drop blanks, de-dupe case-insensitively, and cap the length. */
+function dedupeList(values: string[], limit: number): string[] {
+  const seen = new Set<string>();
+  const out: string[] = [];
+  for (const value of values) {
+    const trimmed = value.trim();
+    if (!trimmed) continue;
+    const key = trimmed.toLowerCase();
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(trimmed);
+    if (out.length === limit) break;
+  }
+  return out;
+}
+
+/**
+ * The owner read a draft and passed on it. The row stays in the ledger, which
+ * is what keeps the domain out of future discovery: a skip means "not this
+ * business", not "ask me again next week".
+ */
+export async function skipProspect(
+  businessId: string,
+  prospectId: string,
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  await patchProspect(
+    businessId,
+    prospectId,
+    { status: "skipped", status_detail: "the owner read the draft and passed" },
+    db
+  );
+}
+
+/** Default settings the panel shows a business that has never configured it. */
+export function defaultProspectingSettings(): ProspectingSettingsInput {
+  return {
+    mode: "off",
+    searchTerms: [],
+    cities: [],
+    dailyCap: OUTREACH_DEFAULT_DAILY_CAP,
+    sendWindowStartHour: 8,
+    sendWindowEndHour: 11,
+    postalAddress: "",
+    valueProp: "",
+    senderName: ""
+  };
+}

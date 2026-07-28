@@ -31,6 +31,12 @@ the summary.
   own product.
 - **The e2e / smoke default.** Anything in `debug/` that writes without an
   explicit business id writes here.
+- **Tenant zero for Prospecting.** Our own outbound outreach runs through our
+  own product: Places discovery across Phoenix-metro trades, a pitch built
+  from what each prospect's site is missing, sent from HQ's connected mailbox.
+  Configured by `configure-hq-prospecting.ts` in **manual mode**, so drafts
+  wait on a human until the copy earns automatic sending. See the README's
+  Prospecting section.
 
 ## Flows
 
@@ -44,6 +50,7 @@ the summary.
 | Lead intake & follow-up (Privyr) (TEST COPY of Truly) | on | The AiFlow e2e harness fixture, laid down by `debug/flow-test-setup.ts` |
 | Google review demo reply (email, 2) | off | Reviewer-facing demo |
 | New Contact Greeting (contact_created, 1) | off | |
+| Prospect outreach follow-through (webhook, 4) | off | Files and tags the businesses our outbound outreach emails (PR #972). Installed disabled; the pitch itself is sent in code, not by this flow |
 
 ## Sharp edges
 
@@ -70,7 +77,8 @@ the summary.
 
 `onboard-hq-tenant.ts`, `configure-hq-dogfood.ts`, `setup-hq-dogfood-flows.ts`,
 `setup-hq-inbox-triage-flow.ts`, `enable-hq-booking-page.ts`,
-`patch-hq-booking-offer.ts`, `set-hq-digest-prefs.ts`.
+`patch-hq-booking-offer.ts`, `set-hq-digest-prefs.ts`,
+`configure-hq-prospecting.ts`.
 
 ## History
 
