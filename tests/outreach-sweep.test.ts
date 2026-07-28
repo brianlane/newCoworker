@@ -551,7 +551,7 @@ describe("phase 3: sending", () => {
     }
   });
 
-  it("abandons the send silently when the row vanished under it", async () => {
+  it("undoes its claim even when the row vanished under it", async () => {
     const ledger = sendLedger({ getProspect: vi.fn(async () => null) });
     const deps = baseDeps();
     const result = await processOutreachSweep(deps);
@@ -559,8 +559,14 @@ describe("phase 3: sending", () => {
     expect(
       (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl
     ).not.toHaveBeenCalled();
-    // Nothing to undo: there is no row to write to.
-    expect(ledger.patchProspect).not.toHaveBeenCalled();
+    // The write hits nothing when the row is genuinely gone. It is issued
+    // anyway so that every abort path undoes its own claim by construction.
+    expect(ledger.patchProspect).toHaveBeenCalledWith(
+      BIZ,
+      prospect().id,
+      { sent_at: null, status: "drafted" },
+      expect.anything()
+    );
   });
 
   it("does not send twice when another pass already claimed the prospect", async () => {
@@ -1014,23 +1020,24 @@ describe("phase 4: the single nudge", () => {
     expect(result.nudged).toBe(0);
   });
 
-  it("abandons a claimed nudge when the prospect replied or opted out in the meantime", async () => {
-    const ledger = nudgeLedger({
-      getProspect: vi.fn(async () => prospect({ status: "unsubscribed" }))
-    });
-    const deps = baseDeps();
-    const result = await processOutreachSweep(deps);
-    expect(result.nudged).toBe(0);
-    expect(
-      (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl
-    ).not.toHaveBeenCalled();
-    // The nudge stamp is released, so the follow-up is not burned on nothing.
-    expect(ledger.patchProspect).toHaveBeenCalledWith(
-      BIZ,
-      prospect().id,
-      { nudged_at: null },
-      expect.anything()
-    );
+  it("abandons a claimed nudge when the prospect replied, opted out, or vanished", async () => {
+    for (const current of [prospect({ status: "unsubscribed" }), null]) {
+      const ledger = nudgeLedger({ getProspect: vi.fn(async () => current) });
+      const deps = baseDeps();
+      const result = await processOutreachSweep(deps);
+      expect(result.nudged).toBe(0);
+      expect(
+        (deps as unknown as { sendEmailImpl: ReturnType<typeof vi.fn> }).sendEmailImpl
+      ).not.toHaveBeenCalled();
+      // The nudge stamp is released, so the one follow-up is not burned on
+      // an email that never went out.
+      expect(ledger.patchProspect).toHaveBeenCalledWith(
+        BIZ,
+        prospect().id,
+        { nudged_at: null },
+        expect.anything()
+      );
+    }
   });
 
   it("skips a nudge-due row with no address rather than burning its one follow-up", async () => {

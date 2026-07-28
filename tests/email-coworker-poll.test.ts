@@ -138,9 +138,11 @@ describe("pollEmailCoworker", () => {
     // A cold-outreach prospect answering has to be recorded before the next
     // Prospecting sweep, which otherwise chases them purely on silence.
     await pollEmailCoworker(businessDb());
+    // Both the sender AND the address we originally mailed, because people
+    // answer from a different mailbox than the one on their website.
     expect(mockNoteReply).toHaveBeenCalledWith(
       BIZ,
-      "beth@lizdev.com",
+      ["beth@lizdev.com", "beth@lizdev.com"],
       "Monday at 12:00 PM EST works.",
       expect.anything()
     );

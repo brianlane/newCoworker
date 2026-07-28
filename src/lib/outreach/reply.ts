@@ -34,13 +34,31 @@ export type ProspectReplyOutcome = "not_a_prospect" | "replied" | "unsubscribed"
  */
 export async function noteProspectReply(
   businessId: string,
-  fromEmail: string,
+  /**
+   * Addresses this reply could belong to, best first: who actually sent it,
+   * then the address we originally mailed (which the thread records).
+   *
+   * Both are needed. People answer from a different mailbox than the one on
+   * their website all the time, or hand the mail to a colleague, and matching
+   * only the sender would leave the ledger thinking they never replied and let
+   * the silence-based follow-up chase them anyway. The thread is already proof
+   * this conversation is ours, so trusting its correspondent is safe.
+   */
+  candidateEmails: Array<string | null | undefined>,
   bodyText: string,
   client?: SupabaseClient
 ): Promise<ProspectReplyOutcome> {
   try {
     const db = client ?? (await createSupabaseServiceClient());
-    const prospect = await findProspectByEmail(businessId, fromEmail, db);
+    const tried = new Set<string>();
+    let prospect = null as Awaited<ReturnType<typeof findProspectByEmail>>;
+    for (const candidate of candidateEmails) {
+      const email = candidate?.trim().toLowerCase();
+      if (!email || tried.has(email)) continue;
+      tried.add(email);
+      prospect = await findProspectByEmail(businessId, email, db);
+      if (prospect) break;
+    }
     if (!prospect) return "not_a_prospect";
     // Only a contacted prospect can reply. Anything else (a draft, a skip, an
     // already-suppressed row) is left exactly as it is.

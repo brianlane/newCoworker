@@ -510,7 +510,20 @@ async function deliverPitch(
   // does guarantee is that no LATER send follows, and that the ledger does not
   // claim a send that was abandoned here.
   const current = await getProspect(settings.business_id, prospect.id, r.db);
-  if (!current) return false;
+  if (!current) {
+    // The row went away between the claim and this read (an owner deletion, a
+    // cascade). The undo writes to nothing in that case, and it is issued
+    // anyway so that EVERY abort path undoes its own claim: an invariant that
+    // holds by construction beats one that holds because of an argument about
+    // which reads can return null.
+    await patchProspect(
+      settings.business_id,
+      prospect.id,
+      mail.stamp === "sent_at" ? { sent_at: null, status: "drafted" } : { nudged_at: null },
+      r.db
+    );
+    return false;
+  }
   const optedOut = current.status === "unsubscribed";
   const answered = current.replied_at !== null;
   if (optedOut || answered) {

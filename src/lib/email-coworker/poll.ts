@@ -176,7 +176,12 @@ export async function pollEmailCoworker(
         // already replied reads as a machine talking over them. Also catches
         // "take me off your list", which suppresses rather than just records.
         // Best-effort, and independent of whether we answer below.
-        await noteProspectReply(businessId, message.fromEmail, message.bodyText, db);
+        await noteProspectReply(
+          businessId,
+          [message.fromEmail, thread.correspondentEmail],
+          message.bodyText,
+          db
+        );
 
         // A batch can carry several replies on the SAME thread; once it is
         // handed off, the rest are the human's to answer (and re-alerting
