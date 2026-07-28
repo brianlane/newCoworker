@@ -222,10 +222,10 @@ function createFallbackAssistantQuestion(
     return "What are the top 1-3 recurring questions or requests customers usually send first?";
   }
   if (!topicStatus.inquiryFlowsKnown) {
-    return "Give me one common inbound scenario in cause/effect form: what triggers the conversation, and what outcome should the assistant guide it toward?";
+    return "Give me one common inbound scenario in cause/effect form: what triggers the conversation, and what outcome should the assistant guide it toward, such as booking an appointment or handing the lead to someone?";
   }
   if (!topicStatus.routingRulesKnown) {
-    return "When should the assistant route someone to you or another human instead of handling it alone?";
+    return "When a conversation needs a person instead of your assistant, who should it go to by name, and should the first teammate to respond take it or should it rotate?";
   }
   if (!topicStatus.toneKnown) {
     return "How should the assistant sound in messages? Give 3-5 tone rules and any preferred sign-off.";
