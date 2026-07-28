@@ -31,7 +31,12 @@ export async function InboundFailuresCard() {
 
   const businesses = await listBusinesses();
   const names = new Map(businesses.map((b) => [b.id, b.name]));
-  const hidden = summary.total - rows.length;
+  // The grouped count can be unavailable while rows still load: during the
+  // deploy window before `inbound_dead_letter_counts` exists, or on any RPC
+  // error. Never let the badge read 0 with failures listed underneath, so fall
+  // back to what the sample itself proves.
+  const total = Math.max(summary.total, rows.length);
+  const hidden = total - rows.length;
 
   return (
     <Card>
@@ -39,7 +44,7 @@ export async function InboundFailuresCard() {
         <h2 className="text-xs font-semibold uppercase tracking-wider text-parchment/40">
           Inbound texts that failed
         </h2>
-        <Badge variant="error">{summary.total}</Badge>
+        <Badge variant="error">{total}</Badge>
       </div>
       <p className="mb-3 text-xs text-parchment/50">
         Texts the platform received but could not answer, last {SINCE_DAYS} days. Routine
@@ -81,7 +86,7 @@ export async function InboundFailuresCard() {
       </ul>
       {hidden > 0 && (
         <p className="mt-3 text-xs text-parchment/40">
-          Showing the {rows.length} most recent of {summary.total}.
+          Showing the {rows.length} most recent of {total}.
         </p>
       )}
     </Card>
