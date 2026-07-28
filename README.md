@@ -1253,6 +1253,108 @@ their `Referer`). Without it the rest of this section is unfalsifiable.
   when the row fetch truncates, since the newest N rows cannot prove an
   operator was absent earlier in the window.
 
+## Prospecting (outbound: the coworker finds and emails its own prospects)
+
+Every other channel waits for someone to arrive. Prospecting goes and finds
+them: Google Places discovery across the trades and towns a tenant chooses, a
+probe of each prospect's own site, a short pitch built from what the probe
+actually found, sent from the tenant's own connected mailbox, and then the
+email coworker answering whatever comes back. It is off for every business
+until an owner switches it on, from Dashboard, Marketing.
+
+Ported from the honedtech Prospector, which proved the shape by hand. What
+changed is the last mile: there, a person reads a digest and sends from Gmail.
+Here the product does it, which is the point of running our own outreach
+through our own product.
+
+### The three modes are the owner's switch
+
+`off` (the default) means the sweep never picks the business up at all.
+`manual` discovers and drafts, then waits: the owner reads each draft on the
+Marketing page and presses Send or Skip. `auto` sends inside the window and
+under the cap. The tenant's "Prospect outreach follow-through" AiFlow is a
+second, independent off switch, since disabling it stops the filing half.
+
+### Why the send is NOT a flow step
+
+The obvious design is a `send_email` step in the outreach flow. It is wrong
+here: the pitch carries a legally required unsubscribe link and postal
+address, and a flow step's body is owner-editable copy, so a well-meaning edit
+could delete the footer. The pitch is therefore composed and sent in
+[src/lib/outreach/sweep.ts](src/lib/outreach/sweep.ts), where the footer is
+concatenated after any AI polish, from code the model never sees. It also
+makes `sent_at` evidence (a provider message id came back) rather than an
+inference from a mailbox.
+
+The flow still owns everything after the send, which is what an owner should
+control: filing the contact, tagging it, and the owner brief. It deliberately
+carries no send step at all, and a test pins that.
+
+### Compliance is structural, not aspirational
+
+- A check constraint (`outreach_settings_ready_when_on`) makes any mode but
+  `off` impossible without a postal address and an offer line. You cannot
+  switch this on without the things the email legally needs.
+- Every pitch and every follow-up carries a working prospect-scoped
+  unsubscribe link. Unsubscribing stamps BOTH the ledger row and any contact
+  holding that address, so a later campaign cannot reach them either.
+- Weekdays only, inside a per-tenant window in the tenant's timezone, under a
+  per-tenant daily cap (12 by default) that counts follow-ups too.
+- One follow-up per prospect, ever, and any reply cancels it. Opt-out
+  detection reads only the text ABOVE the quoted history, because our own
+  footer says "unsubscribe" and a quoted reply would otherwise suppress a warm
+  lead.
+- No SMS and no AI calls to prospects: scraped contacts consented to neither,
+  the same line `instagramProspectTemplate` draws.
+- A prospect with nothing checkable to say about them is never emailed. An
+  opening built from a vague compliment is spam whatever the footer says.
+
+### Suppression is wider than sending, on two axes
+
+Any ledger row retires its domain from discovery forever, whatever became of
+it (sent, skipped, failed). A partial unique index on `lower(email)` retires
+the address too, because one address fronts several businesses (a shared
+owner, or one agency running both sites). The address is only discovered at
+probe time, so that claim can lose the index; the sweep treats that as a
+duplicate to retire rather than an error.
+
+### Everything that can be claimed twice, is claimed atomically
+
+The sweep runs every 5 minutes and passes can overlap, so each of these is a
+single guarded UPDATE rather than a read followed by a write:
+
+| Claim | Guard | Why it matters |
+| --- | --- | --- |
+| Today's discovery | `last_discovery_at` older than today | Places queries are billable, so two passes must not both buy them |
+| A first pitch | status still `drafted` | A duplicate cold email is a spam complaint |
+| The one follow-up | `nudged_at` still null | The status stays `sent` either way, so status alone does not gate it |
+
+There is also a last-mile suppression re-check immediately before the provider
+call, mirroring the campaign sweep: an opt-out landing just after the claim
+would otherwise still be mailed.
+
+### Cost
+
+Discovery runs once per business per UTC day and buys at most 6 Places
+queries, stamped before they are bought. The rotation interleaves round-robin
+across search terms and advances a full run per day; the honedtech version
+grouped by vertical and slid one query at a time, which served a single trade
+for weeks and read like a market signal. The optional Gemini tone pass is
+metered per business through the shared AI-spend ledger and degrades to the
+deterministic pitch on any failure. `GOOGLE_PLACES_API_KEY` must be set, or
+the sweep reports "no Places API key configured" per business and does nothing
+else.
+
+### Reading the numbers
+
+Drafted and sent are separate columns, drafts waiting on the owner are
+labelled as waiting, and the reply rate is a share of what was SENT. This is
+the honedtech lesson encoded: a status email once read "Contacted: 15" beside
+an empty sent folder.
+
+HQ is tenant zero (`scripts/oneshot/configure-hq-prospecting.ts`), in manual
+mode until the drafts read like something you would have sent yourself.
+
 ## Platform blog (newcoworker.com/blog)
 
 **Copy rule: no em dashes in blog posts** (now part of the repo-wide writing

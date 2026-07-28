@@ -2047,6 +2047,72 @@
       "stageNoContact": "Sin contacto aún",
       "tagCap": "{name} alcanzó el límite de 25 etiquetas, así que no se pudo añadir la etiqueta de etapa.",
       "moveFailed": "No se pudo mover el lead; inténtalo de nuevo."
+    },
+    "prospecting": {
+      "title": "Prospección",
+      "intro": "Tu compañero de trabajo puede buscar negocios locales que encajen con lo que haces, encontrar algo concreto que decirle a cada uno y enviarles un correo por ti. Está apagado hasta que lo enciendas.",
+      "mode": {
+        "off": "Apagado",
+        "manual": "Reviso cada uno",
+        "auto": "Automático"
+      },
+      "blockersTitle": "Antes de que esto funcione:",
+      "blockers": {
+        "postalAddress": "Agrega la dirección postal que va en el pie de cada correo.",
+        "valueProp": "Di qué quieres que ofrezca el correo.",
+        "searchTerms": "Agrega al menos un tipo de negocio que buscar.",
+        "cities": "Agrega al menos una ciudad donde buscar."
+      },
+      "stats": {
+        "discovered": "Encontrados",
+        "drafted": "Borradores",
+        "waiting": "Esperando por ti",
+        "sent": "Enviados",
+        "replied": "Respondieron",
+        "booked": "Agendaron"
+      },
+      "replyRate": "El {rate}% de los correos que has enviado recibió respuesta.",
+      "waitingOnYou": "{count} borradores están listos para que los leas.",
+      "byVertical": "Por tipo de negocio",
+      "byVerticalHelp": "Qué oficios responden de verdad. Dale a cada oficio de 40 a 50 envíos antes de sacar conclusiones.",
+      "verticalLine": "{drafted} en borrador, {sent} enviados, {replied} respondieron, {booked} agendaron",
+      "queueTitle": "Borradores por revisar ({count})",
+      "fields": {
+        "searchTerms": "Tipos de negocio que buscar",
+        "cities": "Ciudades",
+        "valueProp": "Qué ofrece el correo",
+        "postalAddress": "Dirección postal para el pie del correo",
+        "senderName": "Quién firma el correo",
+        "dailyCap": "Correos por día",
+        "windowStart": "Enviar desde (hora)",
+        "windowEnd": "Enviar hasta (hora)"
+      },
+      "placeholders": {
+        "searchTerms": "plomero, técnico de aire acondicionado, techador",
+        "cities": "Phoenix, Mesa, Tempe",
+        "valueProp": "Una o dos frases sobre lo que haces y por qué vale la pena responder.",
+        "postalAddress": "Nombre del negocio, calle, ciudad, código postal"
+      },
+      "postalHelp": "La ley lo exige en el correo de marketing, y por eso la prospección no se puede encender sin ella.",
+      "capHelp": "De 10 a 25 al día protege la reputación de tu correo. Los seguimientos también cuentan aquí.",
+      "windowHelp": "Mañanas de días laborables en tu zona horaria. Nunca se envía nada el fin de semana.",
+      "actions": {
+        "turnOff": "Apagar",
+        "reviewFirst": "Quiero revisar cada uno",
+        "automatic": "Enviar automáticamente",
+        "read": "Leer",
+        "hide": "Ocultar",
+        "send": "Enviar",
+        "skip": "Omitir",
+        "saveSettings": "Guardar ajustes"
+      },
+      "saved": "Guardado. El cambio se aplica en la siguiente pasada.",
+      "saveFailed": "No se pudo guardar.",
+      "actionFailed": "No funcionó. Inténtalo de nuevo.",
+      "sentOne": "Enviado.",
+      "skippedOne": "Omitido, y no volverá a aparecer.",
+      "unsavedChanges": "Tienes cambios sin guardar.",
+      "clipped": "Lista grande: esto cuenta tus 1.000 prospectos más recientes, así que son cifras mínimas."
     }
   },
   "admin": {

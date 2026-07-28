@@ -2047,6 +2047,72 @@
       "stageNoContact": "No contact yet",
       "tagCap": "{name} is at the 25-tag limit, so the stage tag couldn't be added.",
       "moveFailed": "Couldn't move the lead, try again."
+    },
+    "prospecting": {
+      "title": "Prospecting",
+      "intro": "Your coworker can look for local businesses that fit what you do, work out something specific to say about each one, and email them for you. It stays off until you switch it on.",
+      "mode": {
+        "off": "Off",
+        "manual": "You review each one",
+        "auto": "Automatic"
+      },
+      "blockersTitle": "Before this can run:",
+      "blockers": {
+        "postalAddress": "Add the postal address that goes in the footer of every email.",
+        "valueProp": "Say what you want the email to offer.",
+        "searchTerms": "Add at least one kind of business to look for.",
+        "cities": "Add at least one town or city to look in."
+      },
+      "stats": {
+        "discovered": "Found",
+        "drafted": "Drafted",
+        "waiting": "Waiting on you",
+        "sent": "Sent",
+        "replied": "Replied",
+        "booked": "Booked"
+      },
+      "replyRate": "{rate}% of the emails you have sent got a reply.",
+      "waitingOnYou": "{count} drafts are ready for you to read.",
+      "byVertical": "By kind of business",
+      "byVerticalHelp": "Which trades actually reply. Give a trade 40 to 50 sends before reading much into it.",
+      "verticalLine": "{drafted} drafted, {sent} sent, {replied} replied, {booked} booked",
+      "queueTitle": "Drafts to review ({count})",
+      "fields": {
+        "searchTerms": "Kinds of business to look for",
+        "cities": "Towns and cities",
+        "valueProp": "What the email offers",
+        "postalAddress": "Postal address for the email footer",
+        "senderName": "Who the email is signed by",
+        "dailyCap": "Emails per day",
+        "windowStart": "Send from (hour)",
+        "windowEnd": "Send until (hour)"
+      },
+      "placeholders": {
+        "searchTerms": "plumber, HVAC contractor, roofer",
+        "cities": "Phoenix, Mesa, Tempe",
+        "valueProp": "One or two sentences on what you do and why it is worth a reply.",
+        "postalAddress": "Business name, street, town, postcode"
+      },
+      "postalHelp": "Required by law in marketing email, and it is why outreach cannot be switched on without one.",
+      "capHelp": "10 to 25 a day protects your email reputation. Follow-ups count towards this too.",
+      "windowHelp": "Weekday mornings in your timezone. Nothing is ever sent at the weekend.",
+      "actions": {
+        "turnOff": "Turn off",
+        "reviewFirst": "Let me review each one",
+        "automatic": "Send automatically",
+        "read": "Read",
+        "hide": "Hide",
+        "send": "Send",
+        "skip": "Skip",
+        "saveSettings": "Save settings"
+      },
+      "saved": "Saved. The change takes effect on the next pass.",
+      "saveFailed": "That could not be saved.",
+      "actionFailed": "That did not work. Try again.",
+      "sentOne": "Sent.",
+      "skippedOne": "Skipped, and they will not come up again.",
+      "unsavedChanges": "You have unsaved changes.",
+      "clipped": "Busy list: these count your most recent 1,000 prospects, so they are at-least numbers."
     }
   },
   "admin": {

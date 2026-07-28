@@ -1,0 +1,500 @@
+"use client";
+
+/**
+ * Prospecting panel (Dashboard → Marketing).
+ *
+ * The owner's switch and scoreboard for outbound outreach. Three things live
+ * here, in the order they matter:
+ *
+ *   1. The mode. Off, manual review, or fully automatic. Off is the default and
+ *      the kill switch, and it takes effect on the next sweep pass.
+ *   2. The numbers, in the vocabulary that cannot mislead: drafted and sent are
+ *      separate, drafts waiting on you are called waiting, and the reply rate is
+ *      a share of what was actually sent.
+ *   3. The review queue, in manual mode: read the draft, then Send or Skip.
+ *
+ * Blockers are shown whether the feature is on or off, so "why is nothing
+ * happening?" is answered on the page rather than in a support conversation.
+ */
+
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useTranslations } from "next-intl";
+import { Card } from "@/components/ui/Card";
+import { Button } from "@/components/ui/Button";
+
+type Mode = "off" | "manual" | "auto";
+
+type Settings = {
+  mode: Mode;
+  search_terms: string[];
+  cities: string[];
+  daily_cap: number;
+  send_window_start_hour: number;
+  send_window_end_hour: number;
+  postal_address: string | null;
+  value_prop: string | null;
+  sender_name: string | null;
+};
+
+type Funnel = {
+  discovered: number;
+  drafted: number;
+  pending: number;
+  sent: number;
+  replied: number;
+  booked: number;
+  unsubscribed: number;
+  skipped: number;
+  failed: number;
+  replyRate: number;
+};
+
+type VerticalFunnel = Funnel & { vertical: string };
+
+type QueueItem = {
+  id: string;
+  business_name: string;
+  domain: string;
+  city: string;
+  vertical: string;
+  email: string | null;
+  pitch_subject: string | null;
+  pitch_body: string | null;
+};
+
+type View = {
+  settings: Settings | null;
+  funnel: Funnel;
+  byVertical: VerticalFunnel[];
+  queue: QueueItem[];
+  /** The outcome scan hit its bound, so the numbers are floors. */
+  clipped: boolean;
+  blockers: string[];
+};
+
+const inputClass =
+  "w-full rounded-md border border-parchment/15 bg-deep-ink/40 px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:border-signal-teal focus:outline-none";
+const labelClass = "block text-xs font-medium text-parchment/60 mb-1";
+
+const DEFAULTS: Settings = {
+  mode: "off",
+  search_terms: [],
+  cities: [],
+  daily_cap: 12,
+  send_window_start_hour: 8,
+  send_window_end_hour: 11,
+  postal_address: null,
+  value_prop: null,
+  sender_name: null
+};
+
+export function ProspectingPanel({ businessId }: { businessId: string }) {
+  const t = useTranslations("dashboard.prospecting");
+  const [view, setView] = useState<View | null>(null);
+  const [form, setForm] = useState<Settings>(DEFAULTS);
+  const [terms, setTerms] = useState("");
+  const [cities, setCities] = useState("");
+  const [saving, setSaving] = useState(false);
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [notice, setNotice] = useState<string | null>(null);
+  const [expanded, setExpanded] = useState<string | null>(null);
+  /**
+   * Unsaved edits in the form. Send and Skip both re-read from the server, so
+   * without this a targeting change typed while working through the queue
+   * would be silently overwritten by the refresh that follows. Mirrored into a
+   * ref because refresh reads it from inside a stable callback, including the
+   * one on mount that can land after the owner has already started typing.
+   */
+  const [dirty, setDirty] = useState(false);
+  const dirtyRef = useRef(false);
+
+  const markDirty = () => {
+    dirtyRef.current = true;
+    setDirty(true);
+  };
+
+  const refresh = useCallback(async () => {
+    try {
+      const res = await fetch(
+        `/api/dashboard/outreach?businessId=${encodeURIComponent(businessId)}`,
+        { cache: "no-store" }
+      );
+      const json = (await res.json()) as { ok: boolean; data?: View };
+      if (!json.ok || !json.data) return;
+      setView(json.data);
+      // The queue and the numbers always update; a form with unsaved edits
+      // never does.
+      if (dirtyRef.current) return;
+      const next = json.data.settings ?? DEFAULTS;
+      setForm(next);
+      setTerms(next.search_terms.join(", "));
+      setCities(next.cities.join(", "));
+    } catch {
+      /* keep whatever is on screen */
+    }
+  }, [businessId]);
+
+  /** Field edits mark the form dirty so a background refresh cannot clobber them. */
+  const edit = (patch: Partial<Settings>) => {
+    markDirty();
+    setForm((prev) => ({ ...prev, ...patch }));
+  };
+
+  useEffect(() => {
+    void refresh();
+  }, [refresh]);
+
+  const save = async (mode: Mode) => {
+    setSaving(true);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch("/api/dashboard/outreach", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          businessId,
+          mode,
+          searchTerms: terms.split(",").map((s) => s.trim()).filter(Boolean),
+          cities: cities.split(",").map((s) => s.trim()).filter(Boolean),
+          dailyCap: form.daily_cap,
+          sendWindowStartHour: form.send_window_start_hour,
+          sendWindowEndHour: form.send_window_end_hour,
+          postalAddress: form.postal_address ?? "",
+          valueProp: form.value_prop ?? "",
+          senderName: form.sender_name ?? ""
+        })
+      });
+      const json = (await res.json()) as { ok: boolean; error?: { message?: string } };
+      if (!json.ok) {
+        setError(json.error?.message ?? t("saveFailed"));
+        return;
+      }
+      setNotice(t("saved"));
+      dirtyRef.current = false;
+      setDirty(false);
+      await refresh();
+    } catch {
+      setError(t("saveFailed"));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const act = async (prospectId: string, action: "send" | "skip") => {
+    setBusyId(prospectId);
+    setError(null);
+    setNotice(null);
+    try {
+      const res = await fetch(`/api/dashboard/outreach/prospects/${prospectId}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId, action })
+      });
+      const json = (await res.json()) as { ok: boolean; error?: { message?: string } };
+      if (!json.ok) {
+        setError(json.error?.message ?? t("actionFailed"));
+        return;
+      }
+      setNotice(action === "send" ? t("sentOne") : t("skippedOne"));
+      // Refreshes the queue and the numbers; a half-typed settings form is
+      // left alone, since the owner did not ask to discard it by pressing Send.
+      await refresh();
+    } catch {
+      setError(t("actionFailed"));
+    } finally {
+      setBusyId(null);
+    }
+  };
+
+  const funnel = view?.funnel;
+  const mode = view?.settings?.mode ?? "off";
+
+  return (
+    <Card className="p-5 space-y-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h2 className="text-base font-semibold text-parchment">{t("title")}</h2>
+          <p className="mt-1 max-w-2xl text-sm text-parchment/60">{t("intro")}</p>
+        </div>
+        <span className="rounded-full border border-parchment/20 px-3 py-1 text-xs text-parchment/70">
+          {t(`mode.${mode}`)}
+        </span>
+      </div>
+
+      {error ? (
+        <p className="rounded-md border border-rose-400/40 bg-rose-500/10 px-3 py-2 text-sm text-rose-200">
+          {error}
+        </p>
+      ) : null}
+      {notice ? (
+        <p className="rounded-md border border-claw-green/40 bg-claw-green/10 px-3 py-2 text-sm text-claw-green">
+          {notice}
+        </p>
+      ) : null}
+
+      {view && view.blockers.length > 0 ? (
+        <div className="rounded-md border border-amber-300/40 bg-amber-500/10 px-3 py-2 text-sm text-amber-100">
+          <p className="font-medium">{t("blockersTitle")}</p>
+          <ul className="mt-1 list-disc pl-5">
+            {view.blockers.map((b) => (
+              <li key={b}>{t(`blockers.${b}`)}</li>
+            ))}
+          </ul>
+        </div>
+      ) : null}
+
+      {funnel ? (
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
+          {(
+            [
+              ["discovered", funnel.discovered],
+              ["drafted", funnel.drafted],
+              ["waiting", funnel.pending],
+              ["sent", funnel.sent],
+              ["replied", funnel.replied],
+              ["booked", funnel.booked]
+            ] as const
+          ).map(([key, value]) => (
+            <div key={key} className="rounded-md border border-parchment/10 bg-deep-ink/30 p-3">
+              <p className="text-xs text-parchment/50">{t(`stats.${key}`)}</p>
+              <p className="text-lg font-semibold text-parchment">{value}</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+
+      {funnel && funnel.sent > 0 ? (
+        <p className="text-xs text-parchment/50">
+          {t("replyRate", { rate: Math.round(funnel.replyRate * 100) })}
+        </p>
+      ) : null}
+      {view?.clipped ? (
+        <p className="text-xs text-parchment/45">{t("clipped")}</p>
+      ) : null}
+      {funnel && funnel.pending > 0 && mode === "manual" ? (
+        <p className="text-xs text-parchment/60">{t("waitingOnYou", { count: funnel.pending })}</p>
+      ) : null}
+
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div>
+          <label className={labelClass} htmlFor="prospecting-terms">
+            {t("fields.searchTerms")}
+          </label>
+          <input
+            id="prospecting-terms"
+            className={inputClass}
+            value={terms}
+            onChange={(e) => {
+              markDirty();
+              setTerms(e.target.value);
+            }}
+            placeholder={t("placeholders.searchTerms")}
+          />
+        </div>
+        <div>
+          <label className={labelClass} htmlFor="prospecting-cities">
+            {t("fields.cities")}
+          </label>
+          <input
+            id="prospecting-cities"
+            className={inputClass}
+            value={cities}
+            onChange={(e) => {
+              markDirty();
+              setCities(e.target.value);
+            }}
+            placeholder={t("placeholders.cities")}
+          />
+        </div>
+        <div className="sm:col-span-2">
+          <label className={labelClass} htmlFor="prospecting-offer">
+            {t("fields.valueProp")}
+          </label>
+          <textarea
+            id="prospecting-offer"
+            className={`${inputClass} min-h-20`}
+            value={form.value_prop ?? ""}
+            onChange={(e) => edit({ value_prop: e.target.value })}
+            placeholder={t("placeholders.valueProp")}
+          />
+        </div>
+        <div className="sm:col-span-2">
+          <label className={labelClass} htmlFor="prospecting-postal">
+            {t("fields.postalAddress")}
+          </label>
+          <input
+            id="prospecting-postal"
+            className={inputClass}
+            value={form.postal_address ?? ""}
+            onChange={(e) => edit({ postal_address: e.target.value })}
+            placeholder={t("placeholders.postalAddress")}
+          />
+          <p className="mt-1 text-xs text-parchment/50">{t("postalHelp")}</p>
+        </div>
+        <div>
+          <label className={labelClass} htmlFor="prospecting-sender">
+            {t("fields.senderName")}
+          </label>
+          <input
+            id="prospecting-sender"
+            className={inputClass}
+            value={form.sender_name ?? ""}
+            onChange={(e) => edit({ sender_name: e.target.value })}
+          />
+        </div>
+        <div>
+          <label className={labelClass} htmlFor="prospecting-cap">
+            {t("fields.dailyCap")}
+          </label>
+          <input
+            id="prospecting-cap"
+            type="number"
+            min={0}
+            max={200}
+            className={inputClass}
+            value={form.daily_cap}
+            onChange={(e) => edit({ daily_cap: Number(e.target.value) })}
+          />
+          <p className="mt-1 text-xs text-parchment/50">{t("capHelp")}</p>
+        </div>
+        <div>
+          <label className={labelClass} htmlFor="prospecting-start">
+            {t("fields.windowStart")}
+          </label>
+          <input
+            id="prospecting-start"
+            type="number"
+            min={0}
+            max={23}
+            className={inputClass}
+            value={form.send_window_start_hour}
+            onChange={(e) =>
+              edit({ send_window_start_hour: Number(e.target.value) })
+            }
+          />
+        </div>
+        <div>
+          <label className={labelClass} htmlFor="prospecting-end">
+            {t("fields.windowEnd")}
+          </label>
+          <input
+            id="prospecting-end"
+            type="number"
+            min={1}
+            max={24}
+            className={inputClass}
+            value={form.send_window_end_hour}
+            onChange={(e) => edit({ send_window_end_hour: Number(e.target.value) })}
+          />
+          <p className="mt-1 text-xs text-parchment/50">{t("windowHelp")}</p>
+        </div>
+      </div>
+
+      {/* Nothing is savable until the current settings have loaded. Saving
+          before then would post the placeholder mode and could switch a
+          running Prospecting off by accident. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <Button onClick={() => void save("off")} disabled={saving || !view} variant="secondary">
+          {t("actions.turnOff")}
+        </Button>
+        <Button onClick={() => void save("manual")} disabled={saving || !view} variant="secondary">
+          {t("actions.reviewFirst")}
+        </Button>
+        <Button onClick={() => void save("auto")} disabled={saving || !view}>
+          {t("actions.automatic")}
+        </Button>
+        {/* Saving settings without touching the mode: editing targeting or the
+            offer should not require deciding about sending at the same time. */}
+        <Button
+          onClick={() => void save(mode)}
+          disabled={saving || !dirty || !view}
+          variant="secondary"
+        >
+          {t("actions.saveSettings")}
+        </Button>
+        {dirty ? <span className="text-xs text-amber-200">{t("unsavedChanges")}</span> : null}
+      </div>
+
+      {view && view.byVertical.length > 0 ? (
+        <div>
+          <h3 className="text-sm font-medium text-parchment/80">{t("byVertical")}</h3>
+          <p className="mt-1 text-xs text-parchment/50">{t("byVerticalHelp")}</p>
+          <div className="mt-2 space-y-1">
+            {view.byVertical.map((v) => (
+              <div
+                key={v.vertical}
+                className="flex flex-wrap items-center justify-between gap-2 rounded-md border border-parchment/10 bg-deep-ink/20 px-3 py-2 text-sm"
+              >
+                <span className="text-parchment/80">{v.vertical}</span>
+                <span className="text-xs text-parchment/60">
+                  {t("verticalLine", {
+                    drafted: v.drafted,
+                    sent: v.sent,
+                    replied: v.replied,
+                    booked: v.booked
+                  })}
+                </span>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {view && view.queue.length > 0 ? (
+        <div>
+          <h3 className="text-sm font-medium text-parchment/80">
+            {t("queueTitle", { count: view.queue.length })}
+          </h3>
+          <div className="mt-2 space-y-2">
+            {view.queue.map((item) => (
+              <div
+                key={item.id}
+                className="rounded-md border border-parchment/10 bg-deep-ink/20 p-3"
+              >
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm text-parchment">
+                      {item.business_name || item.domain}
+                    </p>
+                    <p className="truncate text-xs text-parchment/50">
+                      {item.email ?? item.domain}
+                      {item.city ? ` · ${item.city}` : ""}
+                    </p>
+                  </div>
+                  <div className="flex shrink-0 gap-2">
+                    <Button
+                      variant="secondary"
+                      onClick={() => setExpanded(expanded === item.id ? null : item.id)}
+                    >
+                      {expanded === item.id ? t("actions.hide") : t("actions.read")}
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      disabled={busyId === item.id}
+                      onClick={() => void act(item.id, "skip")}
+                    >
+                      {t("actions.skip")}
+                    </Button>
+                    <Button disabled={busyId === item.id} onClick={() => void act(item.id, "send")}>
+                      {t("actions.send")}
+                    </Button>
+                  </div>
+                </div>
+                {expanded === item.id ? (
+                  <div className="mt-2 rounded border border-parchment/10 bg-deep-ink/40 p-3">
+                    <p className="text-xs font-medium text-parchment/70">{item.pitch_subject}</p>
+                    <pre className="mt-2 whitespace-pre-wrap break-words text-xs text-parchment/60">
+                      {item.pitch_body}
+                    </pre>
+                  </div>
+                ) : null}
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+    </Card>
+  );
+}

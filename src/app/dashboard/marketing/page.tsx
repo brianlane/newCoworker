@@ -23,6 +23,7 @@ import {
   type CalendarExtraItem
 } from "@/components/dashboard/CampaignsManager";
 import { SocialPostsManager } from "@/components/dashboard/SocialPostsManager";
+import { ProspectingPanel } from "@/components/dashboard/ProspectingPanel";
 
 export const dynamic = "force-dynamic";
 
@@ -253,6 +254,7 @@ export default async function MarketingPage() {
               </div>
             </div>
           </Card>
+          <ProspectingPanel businessId={business.id} />
           <SocialPostsManager
             businessId={business.id}
             igConnected={igConnected}
