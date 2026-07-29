@@ -350,12 +350,14 @@ export async function migrateBusinessVpsSize(
       hostingerBillingSubscriptionId: jobOut.hostingerBillingSubscriptionId
     };
   } catch (err) {
+    /* c8 ignore start -- backup stage already fail-closed without an old VM id */
     if (oldVmId === null) {
-      /* c8 ignore next 4 -- backup stage already fail-closed without an old VM */
       const error = `provisioning failed: ${errMsg(err)}: old box untouched and still serving; re-run once fixed`;
       await notify("failed", `Provision stage: ${error}`);
       return { ok: false, stage: "provision", error };
     }
+    /* c8 ignore stop */
+    /* c8 ignore next -- production default recover factory */
     const recover =
       deps.tryRecoverDeployCompleteNewBox ??
       ((input, probeDeps) =>

@@ -15,7 +15,6 @@ import {
   recordProvisioningProgress
 } from "@/lib/provisioning/progress";
 import type { RetryStalledProvisioningResult } from "@/lib/provisioning/jobs";
-import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 export const STUCK_PROGRESS_AGE_MS = 20 * 60 * 1000;
 
@@ -203,16 +202,15 @@ export function selectStuckScanCandidates(
 
 /**
  * Scan recent non-terminal provisioning progress and alert once per business.
+ * Callers must supply `listCandidates` (the Next route wires the DB query).
  */
 export async function scanAndAlertStuckProvisioning(
   deps: StuckAlertDeps & {
-    listCandidates?: () => Promise<StuckScanCandidate[]>;
-  } = {}
+    listCandidates: () => Promise<StuckScanCandidate[]>;
+  }
 ): Promise<{ alerted: string[] }> {
   const now = deps.now ?? Date.now;
-  /* c8 ignore next -- production DB list; tests inject listCandidates */
-  const list = deps.listCandidates ?? listStuckScanCandidatesFromDb;
-  const candidates = selectStuckScanCandidates(await list(), now());
+  const candidates = selectStuckScanCandidates(await deps.listCandidates(), now());
   const alerted: string[] = [];
   for (const row of candidates) {
     const ageMinutes = Math.round(
@@ -232,71 +230,4 @@ export async function scanAndAlertStuckProvisioning(
     if (sent) alerted.push(row.businessId);
   }
   return { alerted };
-}
-
-async function listStuckScanCandidatesFromDb(): Promise<StuckScanCandidate[]> {
-  /* c8 ignore start -- PostgREST wiring; unit tests inject listCandidates */
-  const db = await createSupabaseServiceClient();
-  // Recent provisioning rows (newest first). Cap keeps the tick cheap.
-  const { data: logs, error } = await db
-    .from("coworker_logs")
-    .select("business_id, created_at, status, log_payload")
-    .eq("task_type", "provisioning")
-    .order("created_at", { ascending: false })
-    .limit(200);
-
-  if (error) throw new Error(`stuck scan logs: ${error.message}`);
-  if (!logs?.length) return [];
-
-  // Dedupe to latest row per business.
-  const latestByBiz = new Map<string, (typeof logs)[number]>();
-  for (const row of logs) {
-    const id = row.business_id as string;
-    if (!latestByBiz.has(id)) latestByBiz.set(id, row);
-  }
-
-  const businessIds = [...latestByBiz.keys()];
-  const { data: businesses } = await db
-    .from("businesses")
-    .select("id, status")
-    .in("id", businessIds);
-  const statusById = new Map(
-    (businesses ?? []).map((b) => [b.id as string, (b.status as string) ?? null])
-  );
-
-  const { data: jobs } = await db
-    .from("provisioning_jobs")
-    .select("business_id, status, purpose")
-    .in("business_id", businessIds);
-  const jobById = new Map(
-    (jobs ?? []).map((j) => [
-      j.business_id as string,
-      {
-        status: (j.status as string) ?? null,
-        purpose: (j.purpose as string) ?? "signup"
-      }
-    ])
-  );
-
-  const out: StuckScanCandidate[] = [];
-  for (const [businessId, row] of latestByBiz) {
-    const payload = (row.log_payload ?? {}) as {
-      phase?: unknown;
-      percent?: unknown;
-    };
-    // Skip the dedupe marker itself as "latest".
-    if (payload.phase === "ops_provisioning_stuck_alert_sent") continue;
-    out.push({
-      businessId,
-      phase: typeof payload.phase === "string" ? payload.phase : "",
-      percent: typeof payload.percent === "number" ? payload.percent : 0,
-      updatedAt: row.created_at as string,
-      logStatus: (row.status as string) ?? null,
-      businessStatus: statusById.get(businessId) ?? null,
-      purpose: jobById.get(businessId)?.purpose ?? "signup",
-      jobStatus: jobById.get(businessId)?.status ?? null
-    });
-  }
-  return out;
-  /* c8 ignore stop */
 }

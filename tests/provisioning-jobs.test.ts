@@ -498,6 +498,29 @@ describe("retryStalledProvisioningJob", () => {
     expect(orchestrate).not.toHaveBeenCalled();
   });
 
+  it("does not settle on percent 100 without phase complete (cutover pending)", async () => {
+    const markOutcome = vi.fn(async () => undefined);
+    const migrationJob: ProvisioningJobRow = {
+      ...JOB_ROW,
+      purpose: "migrate_size",
+      suppress_owner_notify: true
+    };
+    const result = await retryStalledProvisioningJob({
+      claim: vi.fn(async () => migrationJob),
+      settleExhausted: noExhausted(),
+      getBusinessStatus: vi.fn(async () => "online"),
+      getLatestProgress: vi.fn(async () => ({
+        percent: 100,
+        phase: "deploy_client_complete",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        logStatus: "thinking" as const
+      })),
+      orchestrate: vi.fn(async () => okResult),
+      markOutcome
+    });
+    expect(result.kind).toBe("retry_failed");
+  });
+
   it("re-runs full orchestrate for early migration failures (pre-deploy)", async () => {
     const markOutcome = vi.fn(async () => undefined);
     const orchestrate = vi.fn(async () => okResult);

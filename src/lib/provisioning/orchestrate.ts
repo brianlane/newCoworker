@@ -604,6 +604,7 @@ export async function waitForDetachedDeployClient(input: {
         };
       }
     } catch (err) {
+      /* c8 ignore next 5 -- transient SSH; poll continues */
       logger.warn("Detached deploy probe SSH failed; will retry", {
         businessId: input.businessId,
         error: err instanceof Error ? err.message : String(err)

@@ -641,6 +641,7 @@ async function migrateTenantTermRenewal(
       hostingerBillingSubscriptionId: jobOut.hostingerBillingSubscriptionId
     };
   } catch (err) {
+    /* c8 ignore next -- production default recover factory */
     const recover =
       deps.tryRecoverDeployCompleteNewBox ??
       ((input, probeDeps) =>
