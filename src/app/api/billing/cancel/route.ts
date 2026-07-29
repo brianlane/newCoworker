@@ -23,6 +23,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { planLifecycleAction } from "@/lib/billing/lifecycle";
 import {
+  executeLifecyclePlan,
   executeLifecyclePlanFastPhase,
   executeLifecyclePlanSlowPhase
 } from "@/lib/billing/lifecycle-executor";
@@ -159,15 +160,23 @@ export async function POST(request: Request) {
     };
 
     if (payload.mode === "period_end") {
-      // Stripe + DB first, then Hostinger renewal toggle. Stamping
-      // cancel_at_period_end before disable_billing_auto_renewal closes the
-      // race where a concurrent billing-posture run could heal renewal back
-      // on between the Hostinger call and the DB patch. No SSH work on this
-      // path (VM keeps running until period end), so the "slow" phase is
-      // still HTTP-fast.
+      // Stripe + DB first (fast phase), then Hostinger renewal toggle on the
+      // throwing all-in-one path. Stamping cancel_at_period_end before
+      // disable closes the posture auto-heal race. SlowPhase is wrong here:
+      // it swallows Hostinger errors, which would leave renew ON while
+      // posture skips heal because the DB flag is already set.
       try {
-        const fastResult = await executeLifecyclePlanFastPhase(planRes.plan, extra);
-        await executeLifecyclePlanSlowPhase(planRes.plan, fastResult);
+        await executeLifecyclePlanFastPhase(planRes.plan, extra);
+        await executeLifecyclePlan(
+          {
+            ...planRes.plan,
+            stripeOps: [],
+            dbUpdates: [],
+            sshOps: [],
+            telnyxOps: []
+          },
+          extra
+        );
       } catch (err) {
         logger.error("lifecycle execute failed on /api/billing/cancel", {
           businessId: business.id,

@@ -273,13 +273,30 @@ describe("/api/billing/cancel", () => {
     expect(res.status).toBe(200);
     expect(body.data).toEqual({ mode: "period_end", graceEndsAt: null });
     expect(executeLifecyclePlanFastPhaseMock).toHaveBeenCalledTimes(1);
-    expect(executeLifecyclePlanSlowPhaseMock).toHaveBeenCalledTimes(1);
-    expect(executeLifecyclePlanMock).not.toHaveBeenCalled();
+    expect(executeLifecyclePlanMock).toHaveBeenCalledTimes(1);
+    expect(executeLifecyclePlanMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stripeOps: [],
+        dbUpdates: [],
+        sshOps: [],
+        telnyxOps: []
+      }),
+      expect.any(Object)
+    );
+    expect(executeLifecyclePlanSlowPhaseMock).not.toHaveBeenCalled();
   });
 
   it("period_end path returns 500 if the executor throws", async () => {
     planLifecycleActionMock.mockReturnValueOnce({ ok: true, plan: periodEndPlan() });
     executeLifecyclePlanFastPhaseMock.mockRejectedValueOnce(new Error("stripe 500"));
+    const res = await POST(req({ mode: "period_end" }));
+    expect(res.status).toBe(500);
+  });
+
+  it("period_end path returns 500 if Hostinger renewal disable throws", async () => {
+    planLifecycleActionMock.mockReturnValueOnce({ ok: true, plan: periodEndPlan() });
+    executeLifecyclePlanFastPhaseMock.mockResolvedValueOnce({});
+    executeLifecyclePlanMock.mockRejectedValueOnce(new Error("hostinger 500"));
     const res = await POST(req({ mode: "period_end" }));
     expect(res.status).toBe(500);
   });
