@@ -98,6 +98,22 @@ describe("residency/row-delete", () => {
     );
   });
 
+  it("restoreContentRows clears the stamp and can re-enable via extraSet", async () => {
+    const { db, contentChain } = makeDb("supabase", { data: [{ id: "f1" }], error: null });
+    await restoreContentRows(
+      BIZ,
+      "ai_flows",
+      [{ column: "id", op: "eq", value: "f1" }],
+      { client: db as never },
+      { enabled: true }
+    );
+    expect(contentChain.update).toHaveBeenCalledWith({
+      deleted_at: null,
+      deleted_by: null,
+      enabled: true
+    });
+  });
+
   it("applies `in` filters via .in()", async () => {
     const { db, contentChain } = makeDb("supabase", {
       data: [{ id: "a" }, { id: "b" }],

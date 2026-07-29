@@ -264,7 +264,7 @@ export async function updateAiFlow(
 /**
  * Soft-delete an AiFlow: stamp deleted_at/deleted_by and force enabled=false.
  * Owner list/get hide the row; admin restore clears the stamp (flow stays
- * disabled). Runs stay attached — no hard DELETE / CASCADE.
+ * disabled). Runs stay attached: no hard DELETE / CASCADE.
  */
 export async function deleteAiFlow(
   businessId: string,

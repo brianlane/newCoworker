@@ -148,19 +148,22 @@ export async function softDeleteContentRows(
 
 /**
  * Admin-only restore: clears the soft-delete stamp so the row reappears in
- * every owner-facing read (central + box).
+ * every owner-facing read (central + box). `extraSet` folds additional
+ * columns into the same UPDATE (needs-human re-arm clears the stamp and
+ * re-enables in one shot).
  */
 export async function restoreContentRows(
   businessId: string,
   table: ResidencyMovedTable,
   filters: ContentRowFilter[],
-  deps: ContentRowMutationDeps = {}
+  deps: ContentRowMutationDeps = {},
+  extraSet: Record<string, string | boolean | null> = {}
 ): Promise<ContentRowMutationResult> {
   return await stampContentRows(
     businessId,
     table,
     filters,
-    { deleted_at: null, deleted_by: null },
+    { deleted_at: null, deleted_by: null, ...extraSet },
     deps
   );
 }

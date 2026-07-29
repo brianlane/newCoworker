@@ -372,10 +372,22 @@ describe("deleteAiFlow", () => {
     const { db } = makeDb({ array: null });
     await expect(deleteAiFlow("biz-1", "flow-1", null, db as never)).resolves.toBeUndefined();
   });
+  it("treats a null box count as zero when deciding the no-op", async () => {
+    vi.mocked(softDeleteContentRows).mockResolvedValue({ central: 0, box: null });
+    const { db } = makeDb({ array: null });
+    await expect(deleteAiFlow("biz-1", "flow-1", null, db as never)).resolves.toBeUndefined();
+  });
   it("throws on stamp error", async () => {
     vi.mocked(softDeleteContentRows).mockRejectedValue(new Error("x"));
     const { db } = makeDb({ array: null });
     await expect(deleteAiFlow("biz-1", "flow-1", null, db as never)).rejects.toThrow("deleteAiFlow: x");
+  });
+  it("stringifies a non-Error stamp failure", async () => {
+    vi.mocked(softDeleteContentRows).mockRejectedValue("box unreachable");
+    const { db } = makeDb({ array: null });
+    await expect(deleteAiFlow("biz-1", "flow-1", null, db as never)).rejects.toThrow(
+      "deleteAiFlow: box unreachable"
+    );
   });
 });
 

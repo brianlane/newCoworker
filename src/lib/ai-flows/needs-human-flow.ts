@@ -19,6 +19,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { parseAiFlowDefinition } from "@/lib/ai-flows/schema";
 import { setNeedsHumanTeamFirst } from "@/lib/db/businesses";
+import { restoreContentRows } from "@/lib/residency/row-delete";
 
 /** Seeded name — the toggle's lookup key. */
 export const NEEDS_HUMAN_TEAM_FLOW_NAME = "Human handoff — offer to team first";
@@ -64,25 +65,53 @@ async function resolveDb(client?: SupabaseClient): Promise<SupabaseClient> {
 
 /**
  * Create the seeded flow (enabled) if the business doesn't have one, or
- * re-enable an existing disabled one. Idempotent; throws on any DB error so
- * the toggle save fails loudly instead of silently arming a no-op.
+ * re-enable / un-soft-delete an existing one. Idempotent; throws on any DB
+ * error so the toggle save fails loudly instead of silently arming a no-op.
+ *
+ * Soft-deleted rows with this name are restored (stamp cleared + enabled)
+ * rather than inserting a duplicate — otherwise Admin restore and the
+ * Employees toggle can leave two live handoff flows.
  */
 export async function ensureNeedsHumanTeamFlow(
   businessId: string,
   client?: SupabaseClient
 ): Promise<{ flowId: string; created: boolean }> {
   const db = await resolveDb(client);
+  // Include soft-deleted rows so we can revive them instead of inserting a
+  // second flow with the same seeded name.
   const { data, error } = await db
     .from("ai_flows")
-    .select("id, enabled")
+    .select("id, enabled, deleted_at")
     .eq("business_id", businessId)
     .eq("name", NEEDS_HUMAN_TEAM_FLOW_NAME)
-    .is("deleted_at", null)
+    .order("created_at", { ascending: true })
     .limit(1)
     .maybeSingle();
   if (error) throw new Error(`ensureNeedsHumanTeamFlow: lookup: ${error.message}`);
-  const existing = data as { id: string; enabled: boolean } | null;
+  const existing = data as {
+    id: string;
+    enabled: boolean;
+    deleted_at: string | null;
+  } | null;
   if (existing) {
+    if (existing.deleted_at) {
+      try {
+        await restoreContentRows(
+          businessId,
+          "ai_flows",
+          [{ column: "id", op: "eq", value: existing.id }],
+          { client: db },
+          { enabled: true }
+        );
+      } catch (err) {
+        throw new Error(
+          `ensureNeedsHumanTeamFlow: restore: ${
+            err instanceof Error ? err.message : String(err)
+          }`
+        );
+      }
+      return { flowId: existing.id, created: false };
+    }
     if (!existing.enabled) {
       const { error: enableErr } = await db
         .from("ai_flows")
