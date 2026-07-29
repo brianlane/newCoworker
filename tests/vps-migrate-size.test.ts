@@ -388,6 +388,18 @@ describe("migrateBusinessVpsSize — provision + pin", () => {
       expect.stringContaining("markProvisioningJobOutcome"),
       expect.objectContaining({ error: "ledger down" })
     );
+
+    const deps2 = makeDeps({
+      markProvisioningJobOutcome: vi.fn(async () => {
+        throw "ledger string fail";
+      })
+    });
+    const out2 = await migrateBusinessVpsSize(input, deps2);
+    expect(out2.ok).toBe(true);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("markProvisioningJobOutcome"),
+      expect.objectContaining({ error: "ledger string fail" })
+    );
   });
 });
 

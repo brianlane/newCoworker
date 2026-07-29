@@ -262,6 +262,18 @@ describe("runTermRenewalSweep", () => {
       expect.stringContaining("markProvisioningJobOutcome"),
       expect.objectContaining({ error: "ledger string fail" })
     );
+
+    const deps2 = makeDeps({
+      markProvisioningJobOutcome: vi.fn(async () => {
+        throw new Error("ledger down");
+      })
+    });
+    const result2 = await runTermRenewalSweep(deps2, { now: NOW });
+    expect(result2.migrated).toBe(1);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("markProvisioningJobOutcome"),
+      expect.objectContaining({ error: "ledger down" })
+    );
   });
 
   it("skips when a migration lease is already held", async () => {
