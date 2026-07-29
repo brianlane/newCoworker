@@ -158,7 +158,10 @@ export default async function AdminDashboardPage() {
           <p className="text-xs text-parchment/40 uppercase tracking-wider mb-1">Est. MRR</p>
           <p className="text-3xl font-bold text-parchment">{formatMoney(mrr.totalCents)}</p>
           <p className="text-xs text-parchment/50 mt-0.5">
-            {formatMoney(mrr.committedCents)} ex. refund-window
+            {formatMoney(mrr.committedCents)} committed
+            {mrr.refundExposedCents > 0
+              ? ` · ${formatMoney(mrr.refundExposedCents)} in refund-window`
+              : null}
           </p>
           <p className="text-xs text-parchment/30 mt-1">
             − {formatMoney(platformCost.totalCents)}/mo est. cost ·{" "}
