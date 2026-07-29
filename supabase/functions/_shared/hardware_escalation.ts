@@ -48,6 +48,23 @@ export type AdvisorBusiness = {
   vps_size: string | null;
 };
 
+/**
+ * Fleet-scan gate for the hardware-escalation advisor cron. Paused tenants
+ * cannot generate load; boxless tenants (`hostinger_vps_id` null/empty) have
+ * nothing to escalate: recommending kvmN -> kvmM for them is always wrong
+ * (cancel/handoff grace tenants like Truly after a box cutover).
+ */
+export type AdvisorFleetRow = {
+  is_paused: boolean | null;
+  hostinger_vps_id: string | number | null;
+};
+
+export function isAdvisorFleetCandidate(row: AdvisorFleetRow): boolean {
+  if (row.is_paused) return false;
+  if (row.hostinger_vps_id == null || row.hostinger_vps_id === "") return false;
+  return true;
+}
+
 export type DailyUsageRow = {
   business_id: string;
   usage_date: string;
