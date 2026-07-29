@@ -160,11 +160,23 @@ export async function POST(request: Request) {
     };
 
     if (payload.mode === "period_end") {
-      // cancelAtPeriodEnd has NO SSH/Hostinger ops in its plan (VM keeps
-      // running until the period actually ends), so the all-in-one path
-      // is already fast enough for HTTP. Keep it simple.
+      // Stripe + DB first (fast phase), then Hostinger renewal toggle on the
+      // throwing all-in-one path. Stamping cancel_at_period_end before
+      // disable closes the posture auto-heal race. SlowPhase is wrong here:
+      // it swallows Hostinger errors, which would leave renew ON while
+      // posture skips heal because the DB flag is already set.
       try {
-        await executeLifecyclePlan(planRes.plan, extra);
+        await executeLifecyclePlanFastPhase(planRes.plan, extra);
+        await executeLifecyclePlan(
+          {
+            ...planRes.plan,
+            stripeOps: [],
+            dbUpdates: [],
+            sshOps: [],
+            telnyxOps: []
+          },
+          extra
+        );
       } catch (err) {
         logger.error("lifecycle execute failed on /api/billing/cancel", {
           businessId: business.id,

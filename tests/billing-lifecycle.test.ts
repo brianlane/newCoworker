@@ -383,12 +383,96 @@ describe("planLifecycleAction: cancelAtPeriodEnd", () => {
         cancelAtPeriodEnd: true
       }
     ]);
+    // No hostingerBillingExpiresAt on context → skip disable (fail open).
     expect(res.plan.hostingerOps).toEqual([]);
     expect(res.plan.sshOps).toEqual([]);
     const patch = (res.plan.dbUpdates[0] as { patch: Record<string, unknown> }).patch;
     expect(patch.cancel_at_period_end).toBe(true);
     expect(patch.cancel_reason).toBe("user_period_end");
     expect(res.plan.emailsToSend[0].type).toBe("send_cancel_confirmation");
+  });
+
+  it("disables Hostinger auto-renewal when billing expiration is on/after Stripe period end", () => {
+    const res = planLifecycleAction(
+      { type: "cancelAtPeriodEnd" },
+      makeCtx({ hostingerBillingExpiresAt: "2026-05-01T22:52:18Z" })
+    );
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+    expect(res.plan.hostingerOps).toEqual([
+      {
+        type: "disable_billing_auto_renewal",
+        hostingerBillingSubscriptionId: "hbs-1"
+      }
+    ]);
+  });
+
+  it("disables when Hostinger expiration is after Stripe period end", () => {
+    const res = planLifecycleAction(
+      { type: "cancelAtPeriodEnd" },
+      makeCtx({ hostingerBillingExpiresAt: "2026-05-15T00:00:00Z" })
+    );
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+    expect(res.plan.hostingerOps).toEqual([
+      {
+        type: "disable_billing_auto_renewal",
+        hostingerBillingSubscriptionId: "hbs-1"
+      }
+    ]);
+  });
+
+  it("skips disable when Hostinger expiration is before Stripe period end", () => {
+    const res = planLifecycleAction(
+      { type: "cancelAtPeriodEnd" },
+      makeCtx({ hostingerBillingExpiresAt: "2026-04-20T00:00:00Z" })
+    );
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+    expect(res.plan.hostingerOps).toEqual([]);
+  });
+
+  it("skips disable when either timestamp is not ISO day-prefixed", () => {
+    const res = planLifecycleAction(
+      { type: "cancelAtPeriodEnd" },
+      makeCtx({
+        hostingerBillingExpiresAt: "soon",
+        subscription: makeSub({ stripe_current_period_end: "2026-05-01T00:00:00.000Z" })
+      })
+    );
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+    expect(res.plan.hostingerOps).toEqual([]);
+
+    const res2 = planLifecycleAction(
+      { type: "cancelAtPeriodEnd" },
+      makeCtx({
+        hostingerBillingExpiresAt: "2026-05-01T00:00:00Z",
+        subscription: makeSub({ stripe_current_period_end: "later" })
+      })
+    );
+    if (!res2.ok) throw new Error(`unexpected reject ${res2.reason}`);
+    expect(res2.plan.hostingerOps).toEqual([]);
+  });
+
+  it("skips disable when Hostinger billing id is missing", () => {
+    const res = planLifecycleAction(
+      { type: "cancelAtPeriodEnd" },
+      makeCtx({
+        hostingerBillingExpiresAt: "2026-05-01T00:00:00Z",
+        subscription: makeSub({ hostinger_billing_subscription_id: null })
+      })
+    );
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+    expect(res.plan.hostingerOps).toEqual([]);
+  });
+
+  it("skips disable for non-Hostinger providers", () => {
+    const res = planLifecycleAction(
+      { type: "cancelAtPeriodEnd" },
+      makeCtx({
+        vpsProvider: "byos",
+        hostingerBillingExpiresAt: "2026-05-01T00:00:00Z"
+      })
+    );
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+    expect(res.plan.hostingerOps).toEqual([]);
   });
 
   it("passes the business timezone to the confirmation email op", () => {
@@ -437,7 +521,7 @@ describe("planLifecycleAction: undoCancelAtPeriodEnd / reactivate(undoPeriodEnd)
     });
   });
 
-  it("clears cancel_at_period_end + canceled_at + reason", () => {
+  it("clears cancel_at_period_end + canceled_at + reason and re-enables Hostinger renewal", () => {
     const ctx = makeCtx({
       subscription: makeSub({
         cancel_at_period_end: true,
@@ -454,10 +538,48 @@ describe("planLifecycleAction: undoCancelAtPeriodEnd / reactivate(undoPeriodEnd)
         cancelAtPeriodEnd: false
       }
     ]);
+    expect(res.plan.hostingerOps).toEqual([
+      {
+        type: "enable_billing_auto_renewal",
+        hostingerBillingSubscriptionId: "hbs-1"
+      }
+    ]);
     const patch = (res.plan.dbUpdates[0] as { patch: Record<string, unknown> }).patch;
     expect(patch.cancel_at_period_end).toBe(false);
     expect(patch.cancel_reason).toBeNull();
     expect(patch.canceled_at).toBeNull();
+  });
+
+  it("skips enable when Hostinger billing id is missing", () => {
+    const ctx = makeCtx({
+      subscription: makeSub({
+        cancel_at_period_end: true,
+        hostinger_billing_subscription_id: null
+      })
+    });
+    const res = planLifecycleAction({ type: "undoCancelAtPeriodEnd" }, ctx);
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+    expect(res.plan.hostingerOps).toEqual([]);
+  });
+
+  it("skips enable on never_renew sunk-cost boxes", () => {
+    const ctx = makeCtx({
+      vpsNeverRenew: true,
+      subscription: makeSub({ cancel_at_period_end: true })
+    });
+    const res = planLifecycleAction({ type: "undoCancelAtPeriodEnd" }, ctx);
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+    expect(res.plan.hostingerOps).toEqual([]);
+  });
+
+  it("skips enable for non-Hostinger providers", () => {
+    const ctx = makeCtx({
+      vpsProvider: "ovh",
+      subscription: makeSub({ cancel_at_period_end: true })
+    });
+    const res = planLifecycleAction({ type: "undoCancelAtPeriodEnd" }, ctx);
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+    expect(res.plan.hostingerOps).toEqual([]);
   });
 
   it("reactivate(undoPeriodEnd) behaves identically", () => {
@@ -469,6 +591,13 @@ describe("planLifecycleAction: undoCancelAtPeriodEnd / reactivate(undoPeriodEnd)
     });
     const res = planLifecycleAction({ type: "reactivate", mode: "undoPeriodEnd" }, ctx);
     expect(res.ok).toBe(true);
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+    expect(res.plan.hostingerOps).toEqual([
+      {
+        type: "enable_billing_auto_renewal",
+        hostingerBillingSubscriptionId: "hbs-1"
+      }
+    ]);
   });
 });
 

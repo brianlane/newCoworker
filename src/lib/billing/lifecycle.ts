@@ -100,6 +100,16 @@ export type HostingerOp =
       type: "disable_billing_auto_renewal";
       /** Hostinger billing subscription id (NOT the VM id). */
       hostingerBillingSubscriptionId: string;
+    }
+  | {
+      /**
+       * Mirror of {@link HostingerOp} `disable_billing_auto_renewal` for
+       * undo-cancel / reactivate: turn Hostinger auto-renewal back on so the
+       * still-paying tenant's box keeps living. Idempotent via 404 tolerance
+       * in the executor.
+       */
+      type: "enable_billing_auto_renewal";
+      hostingerBillingSubscriptionId: string;
     };
 
 export type SshOp =
@@ -334,6 +344,21 @@ export type LifecycleContext = {
    * → 0 (non-refund plans never load it).
    */
   billableUsageCents?: number | null;
+  /**
+   * Hostinger billing subscription expiration / next-billing timestamp
+   * (`expires_at ?? next_billing_at`), loaded best-effort by the lifecycle
+   * loader. Used by `cancelAtPeriodEnd` to decide whether disabling
+   * auto-renewal is safe (expiration on/after Stripe period end). Null /
+   * omitted → skip the disable (fail open for tenant uptime).
+   */
+  hostingerBillingExpiresAt?: string | null;
+  /**
+   * True when the tenant's box is flagged `vps_inventory.never_renew`
+   * (sunk-cost wrong-sized hardware that must lapse). Undo-cancel must NOT
+   * re-enable Hostinger auto-renewal for these boxes. Null / omitted /
+   * false → enable on undo as usual.
+   */
+  vpsNeverRenew?: boolean | null;
   /** Now, injected so tests can freeze it. */
   now?: Date;
 };
@@ -433,6 +458,28 @@ function planCancelAtPeriodEnd(ctx: LifecycleContext): LifecyclePlanResult {
   // "End at period end" does NOT destroy the VM; that happens when the
   // period actually ends (handled by webhook -> graceExpiredWipe path, or
   // by the customer.subscription.deleted webhook branching into cancel).
+  //
+  // Hostinger auto-renewal IS disabled here when safe: Hostinger can charge
+  // its renewal BEFORE the Stripe period-end webhook fires when the two
+  // dates collide. Guard: only disable when the box's paid Hostinger time
+  // extends to/past Stripe period end, so a still-paying tenant is never
+  // cut early. Missing expiration → skip (fail open for uptime; terminal
+  // paths still disable later).
+  const hostingerOps: HostingerOp[] = [];
+  const hostingerManaged = providerUsesHostingerLifecycle(
+    resolveVpsProvider(ctx.vpsProvider)
+  );
+  if (
+    hostingerManaged &&
+    sub.hostinger_billing_subscription_id &&
+    shouldDisableHostingerRenewalAtCancel(ctx)
+  ) {
+    hostingerOps.push({
+      type: "disable_billing_auto_renewal",
+      hostingerBillingSubscriptionId: sub.hostinger_billing_subscription_id
+    });
+  }
+
   return {
     ok: true,
     plan: {
@@ -443,7 +490,7 @@ function planCancelAtPeriodEnd(ctx: LifecycleContext): LifecyclePlanResult {
           cancelAtPeriodEnd: true
         }
       ],
-      hostingerOps: [],
+      hostingerOps,
       sshOps: [],
       telnyxOps: [],
       dbUpdates: [
@@ -487,6 +534,24 @@ function planUndoCancelAtPeriodEnd(ctx: LifecycleContext): LifecyclePlanResult {
     return { ok: false, reason: "no_stripe_subscription" };
   }
 
+  // Re-enable Hostinger auto-renewal so the still-paying tenant's box keeps
+  // living — except sunk-cost `never_renew` boxes, which must stay
+  // non-renewing even after undo (posture / adopt honor the same flag).
+  const hostingerOps: HostingerOp[] = [];
+  const hostingerManaged = providerUsesHostingerLifecycle(
+    resolveVpsProvider(ctx.vpsProvider)
+  );
+  if (
+    hostingerManaged &&
+    sub.hostinger_billing_subscription_id &&
+    ctx.vpsNeverRenew !== true
+  ) {
+    hostingerOps.push({
+      type: "enable_billing_auto_renewal",
+      hostingerBillingSubscriptionId: sub.hostinger_billing_subscription_id
+    });
+  }
+
   return {
     ok: true,
     plan: {
@@ -497,7 +562,7 @@ function planUndoCancelAtPeriodEnd(ctx: LifecycleContext): LifecyclePlanResult {
           cancelAtPeriodEnd: false
         }
       ],
-      hostingerOps: [],
+      hostingerOps,
       sshOps: [],
       telnyxOps: [],
       dbUpdates: [
@@ -516,6 +581,24 @@ function planUndoCancelAtPeriodEnd(ctx: LifecycleContext): LifecyclePlanResult {
       emailsToSend: []
     }
   };
+}
+
+/**
+ * True when disabling Hostinger auto-renewal at cancel-at-period-end is
+ * safe: the box's Hostinger paid time reaches or passes the Stripe period
+ * end, so turning renew off cannot kill a still-paid tenant mid-period.
+ * Day-granularity UTC compare; missing either timestamp → false (skip).
+ */
+function shouldDisableHostingerRenewalAtCancel(ctx: LifecycleContext): boolean {
+  const periodEnd = ctx.subscription.stripe_current_period_end;
+  const hostingerExpires = ctx.hostingerBillingExpiresAt;
+  if (!periodEnd || !hostingerExpires) return false;
+  const periodEndDay = periodEnd.slice(0, 10);
+  const expiresDay = hostingerExpires.slice(0, 10);
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(periodEndDay) || !/^\d{4}-\d{2}-\d{2}$/.test(expiresDay)) {
+    return false;
+  }
+  return expiresDay >= periodEndDay;
 }
 
 function planPeriodEndReached(ctx: LifecycleContext): LifecyclePlanResult {

@@ -271,6 +271,12 @@ export type LiveSubscriptionBusinessIds = {
    * rows, internal pilots, skip-payment accounts. Nobody is being charged.
    */
   stripeless: Set<string>;
+  /**
+   * Live subscription that has already scheduled cancel-at-period-end.
+   * Lifecycle disables Hostinger auto-renewal on purpose for these; the
+   * billing-posture cron must NOT auto-heal them back on.
+   */
+  cancelAtPeriodEnd: Set<string>;
 };
 
 /**
@@ -287,16 +293,26 @@ export type LiveSubscriptionBusinessIds = {
  * Pilot's internal subscription, admin-created enterprise accounts — must
  * never trigger an automatic billing change; those are surfaced report-only.
  * A business with both kinds of rows counts as stripeBacked.
+ *
+ * `cancelAtPeriodEnd` is the set of businesses whose live row already has
+ * `cancel_at_period_end = true` — still "live" for Stripe, but Hostinger
+ * renewal was deliberately disabled and must not be healed.
  */
 export async function listBusinessIdsWithLiveSubscription(
   businessIds: string[],
   client?: SupabaseClient
 ): Promise<LiveSubscriptionBusinessIds> {
-  if (businessIds.length === 0) return { stripeBacked: new Set(), stripeless: new Set() };
+  if (businessIds.length === 0) {
+    return {
+      stripeBacked: new Set(),
+      stripeless: new Set(),
+      cancelAtPeriodEnd: new Set()
+    };
+  }
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("subscriptions")
-    .select("business_id, stripe_subscription_id")
+    .select("business_id, stripe_subscription_id, cancel_at_period_end")
     .in("business_id", businessIds)
     .in("status", ["active", "past_due"]);
 
@@ -304,6 +320,7 @@ export async function listBusinessIdsWithLiveSubscription(
   const rows = (data ?? []) as Array<{
     business_id: string;
     stripe_subscription_id: string | null;
+    cancel_at_period_end: boolean | null;
   }>;
   const stripeBacked = new Set(
     rows.filter((r) => r.stripe_subscription_id !== null).map((r) => r.business_id)
@@ -313,7 +330,10 @@ export async function listBusinessIdsWithLiveSubscription(
       .filter((r) => r.stripe_subscription_id === null && !stripeBacked.has(r.business_id))
       .map((r) => r.business_id)
   );
-  return { stripeBacked, stripeless };
+  const cancelAtPeriodEnd = new Set(
+    rows.filter((r) => r.cancel_at_period_end === true).map((r) => r.business_id)
+  );
+  return { stripeBacked, stripeless, cancelAtPeriodEnd };
 }
 
 /**

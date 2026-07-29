@@ -41,7 +41,8 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
       .fn()
       .mockImplementation(async (ids: string[]) => ({
         stripeBacked: new Set(ids),
-        stripeless: new Set<string>()
+        stripeless: new Set<string>(),
+        cancelAtPeriodEnd: new Set<string>()
       })),
     listInventory: vi.fn().mockResolvedValue([]),
     getVirtualMachine: vi
@@ -235,7 +236,11 @@ describe("checkVpsBillingPosture — tenant direction", () => {
       listBusinesses: vi.fn().mockResolvedValue([biz({ id: "pilot", hostinger_vps_id: "1800985" })]),
       listBusinessIdsWithLiveSubscription: vi
         .fn()
-        .mockResolvedValue({ stripeBacked: new Set(), stripeless: new Set(["pilot"]) }),
+        .mockResolvedValue({
+          stripeBacked: new Set(),
+          stripeless: new Set(["pilot"]),
+          cancelAtPeriodEnd: new Set()
+        }),
       getVirtualMachine: vi
         .fn()
         .mockResolvedValue({ id: 1800985, state: "running", subscription_id: "hsub-pilot" }),
@@ -272,7 +277,11 @@ describe("checkVpsBillingPosture — tenant direction", () => {
       ]),
       listBusinessIdsWithLiveSubscription: vi
         .fn()
-        .mockResolvedValue({ stripeBacked: new Set(), stripeless: new Set(["p1", "p2"]) }),
+        .mockResolvedValue({
+          stripeBacked: new Set(),
+          stripeless: new Set(["p1", "p2"]),
+          cancelAtPeriodEnd: new Set()
+        }),
       getVirtualMachine: vi
         .fn()
         .mockResolvedValueOnce({ id: 101, state: "running", subscription_id: "hsub-a" })
@@ -301,7 +310,11 @@ describe("checkVpsBillingPosture — tenant direction", () => {
       listBusinesses: vi.fn().mockResolvedValue([biz({ id: "pilot" })]),
       listBusinessIdsWithLiveSubscription: vi
         .fn()
-        .mockResolvedValue({ stripeBacked: new Set(), stripeless: new Set(["pilot"]) }),
+        .mockResolvedValue({
+          stripeBacked: new Set(),
+          stripeless: new Set(["pilot"]),
+          cancelAtPeriodEnd: new Set()
+        }),
       listBillingSubscriptions: vi
         .fn()
         .mockResolvedValue([{ id: "hsub-1", status: "active", is_auto_renewed: true }])
@@ -331,7 +344,11 @@ describe("checkVpsBillingPosture — tenant direction", () => {
       // tenant with a newer pending resubscribe row still lands in this set.
       listBusinessIdsWithLiveSubscription: vi
         .fn()
-        .mockResolvedValue({ stripeBacked: new Set(["live"]), stripeless: new Set() }),
+        .mockResolvedValue({
+          stripeBacked: new Set(["live"]),
+          stripeless: new Set(),
+          cancelAtPeriodEnd: new Set()
+        }),
       getVirtualMachine: vi
         .fn()
         .mockResolvedValue({ id: 444, state: "running", subscription_id: "hsub-live" }),
@@ -345,6 +362,38 @@ describe("checkVpsBillingPosture — tenant direction", () => {
     // Only the live (past_due counts — still a billing relationship) tenant
     // was checked and healed; the VM detail endpoint was never called for
     // the grace/pending/no-sub rows.
+    expect(result.checkedTenantVms).toBe(1);
+    expect(deps.getVirtualMachine).toHaveBeenCalledTimes(1);
+    expect(deps.getVirtualMachine).toHaveBeenCalledWith(444);
+    expect(deps.enableAutoRenewal).toHaveBeenCalledTimes(1);
+    expect(deps.enableAutoRenewal).toHaveBeenCalledWith("hsub-live");
+  });
+
+  it("never re-enables renewal for cancel_at_period_end tenants", async () => {
+    // Cancel-at-period-end disables Hostinger renewal on purpose so a
+    // colliding Hostinger renewal date cannot charge before Stripe period
+    // end. The tenant is still status=active (stripeBacked), but healing
+    // would re-open the future-eating gap.
+    const deps = makeDeps({
+      listBusinesses: vi.fn().mockResolvedValue([
+        biz({ id: "leaving", hostinger_vps_id: "555" }),
+        biz({ id: "live", hostinger_vps_id: "444" })
+      ]),
+      listBusinessIdsWithLiveSubscription: vi.fn().mockResolvedValue({
+        stripeBacked: new Set(["leaving", "live"]),
+        stripeless: new Set(),
+        cancelAtPeriodEnd: new Set(["leaving"])
+      }),
+      getVirtualMachine: vi
+        .fn()
+        .mockResolvedValue({ id: 444, state: "running", subscription_id: "hsub-live" }),
+      listBillingSubscriptions: vi
+        .fn()
+        .mockResolvedValue([{ id: "hsub-live", status: "non_renewing", is_auto_renewed: false }])
+    });
+
+    const result = await checkVpsBillingPosture(deps);
+
     expect(result.checkedTenantVms).toBe(1);
     expect(deps.getVirtualMachine).toHaveBeenCalledTimes(1);
     expect(deps.getVirtualMachine).toHaveBeenCalledWith(444);

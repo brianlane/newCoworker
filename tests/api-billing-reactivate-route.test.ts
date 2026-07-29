@@ -5,6 +5,7 @@ const {
   supabaseFromMock,
   loadLifecycleContextMock,
   executeLifecyclePlanMock,
+  executeLifecyclePlanFastPhaseMock,
   createCheckoutSessionMock,
   planLifecycleActionMock,
   isCanceledInGraceMock,
@@ -18,6 +19,7 @@ const {
   supabaseFromMock: vi.fn(),
   loadLifecycleContextMock: vi.fn(),
   executeLifecyclePlanMock: vi.fn(),
+  executeLifecyclePlanFastPhaseMock: vi.fn(),
   createCheckoutSessionMock: vi.fn(),
   planLifecycleActionMock: vi.fn(),
   isCanceledInGraceMock: vi.fn(),
@@ -51,7 +53,8 @@ vi.mock("@/lib/billing/lifecycle-loader", () => ({
 }));
 
 vi.mock("@/lib/billing/lifecycle-executor", () => ({
-  executeLifecyclePlan: executeLifecyclePlanMock
+  executeLifecyclePlan: executeLifecyclePlanMock,
+  executeLifecyclePlanFastPhase: executeLifecyclePlanFastPhaseMock
 }));
 
 vi.mock("@/lib/billing/lifecycle", () => ({
@@ -146,6 +149,7 @@ describe("/api/billing/reactivate", () => {
     });
     isCanceledInGraceMock.mockReturnValue(true);
     executeLifecyclePlanMock.mockResolvedValue({});
+    executeLifecyclePlanFastPhaseMock.mockResolvedValue({});
     createCheckoutSessionMock.mockResolvedValue({ url: "https://stripe.example/checkout" });
     upsertCustomerProfileMock.mockResolvedValue("prof_upserted");
     getCustomerProfileByIdMock.mockResolvedValue({
@@ -199,7 +203,7 @@ describe("/api/billing/reactivate", () => {
   });
 
   describe("undoPeriodEnd", () => {
-    it("executes the lifecycle plan and returns success", async () => {
+    it("stamps DB via fast phase before Hostinger renew re-enable", async () => {
       const res = await POST(
         new Request("http://localhost/api/billing/reactivate", {
           method: "POST",
@@ -210,7 +214,17 @@ describe("/api/billing/reactivate", () => {
 
       expect(res.status).toBe(200);
       expect(body.data).toEqual({ mode: "undoPeriodEnd" });
+      expect(executeLifecyclePlanFastPhaseMock).toHaveBeenCalledOnce();
       expect(executeLifecyclePlanMock).toHaveBeenCalledOnce();
+      expect(executeLifecyclePlanMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          stripeOps: [],
+          dbUpdates: [],
+          sshOps: [],
+          telnyxOps: []
+        }),
+        expect.any(Object)
+      );
       expect(createCheckoutSessionMock).not.toHaveBeenCalled();
     });
 
@@ -225,8 +239,20 @@ describe("/api/billing/reactivate", () => {
       expect(res.status).toBe(409);
     });
 
-    it("returns 500 when the executor throws", async () => {
-      executeLifecyclePlanMock.mockRejectedValue(new Error("stripe boom"));
+    it("returns 500 when the fast phase throws", async () => {
+      executeLifecyclePlanFastPhaseMock.mockRejectedValue(new Error("stripe boom"));
+      const res = await POST(
+        new Request("http://localhost/api/billing/reactivate", {
+          method: "POST",
+          body: JSON.stringify({ mode: "undoPeriodEnd" })
+        })
+      );
+      expect(res.status).toBe(500);
+      expect(loggerErrorMock).toHaveBeenCalled();
+    });
+
+    it("returns 500 when Hostinger renew re-enable throws", async () => {
+      executeLifecyclePlanMock.mockRejectedValue(new Error("hostinger boom"));
       const res = await POST(
         new Request("http://localhost/api/billing/reactivate", {
           method: "POST",
