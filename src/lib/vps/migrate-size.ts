@@ -4,14 +4,14 @@
  * Server-side port of debug/migrate-vps-size.ts so the admin panel can move
  * a business between box sizes (kvm1 ↔ kvm2 ↔ kvm4 ↔ kvm8) without an
  * operator shelling into the repo. The tenant keeps their `tier`
- * (entitlements — minutes, SMS caps, concurrency, AI budget, render gate);
+ * (entitlements : minutes, SMS caps, concurrency, AI budget, render gate);
  * only the hardware underneath changes.
  *
  * Sequencing and fail-closed guarantees mirror the debug script:
  *
  *   1. Snapshot the old VM (best-effort; the durable artefact is step 2).
  *   2. SSH-tarball backup of /opt/rowboat/{vault,memory} to Supabase
- *      Storage. FAIL-CLOSED: an elective migration aborts here — unlike a
+ *      Storage. FAIL-CLOSED: an elective migration aborts here : unlike a
  *      paid plan change, it can wait for a healthy old box.
  *   3. orchestrateProvisioning at the target size (pool adopt-first, then
  *      purchase). On failure the old box is untouched and still serving.
@@ -28,7 +28,7 @@
  *      teardown).
  *
  * Every terminal outcome (completed or failed at any stage) emails the ops
- * inbox — this runs unattended behind a 202 response, so email is the
+ * inbox : this runs unattended behind a 202 response, so email is the
  * operator's only progress signal.
  */
 
@@ -40,6 +40,15 @@ import type { HostingerClient } from "@/lib/hostinger/client";
 import type { BusinessRow } from "@/lib/db/businesses";
 import type { SubscriptionRow } from "@/lib/db/subscriptions";
 import type { VpsSshKeyRow } from "@/lib/db/vps-ssh-keys";
+import {
+  enqueueProvisioningJob,
+  runProvisioningJob,
+  type EnqueueProvisioningJobInput,
+  type RunProvisioningJobDeps
+} from "@/lib/provisioning/jobs";
+import { getLatestProvisioningStatus } from "@/lib/provisioning/progress";
+import { tryRecoverDeployCompleteNewBox } from "@/lib/vps/migration-cutover-recovery";
+import { sshExec } from "@/lib/hostinger/ssh";
 
 export type MigrateVpsSizeInput = {
   businessId: string;
@@ -105,6 +114,11 @@ export type MigrateVpsSizeDeps = {
     billingPeriod?: SubscriptionRow["billing_period"];
     suppressOwnerNotify?: boolean;
   }) => Promise<{ vpsId: string; hostingerBillingSubscriptionId: string | null }>;
+  /** Injected so unit tests can skip the real provisioning_jobs ledger. */
+  enqueueProvisioningJob?: (input: EnqueueProvisioningJobInput) => Promise<void>;
+  runProvisioningJob?: typeof runProvisioningJob;
+  /** See term-renewal-sweep: continue cutover when provision throws but new box is healthy. */
+  tryRecoverDeployCompleteNewBox?: typeof tryRecoverDeployCompleteNewBox;
   sendOpsEmail: (input: OpsMigrationEmailInput) => Promise<void>;
 };
 
@@ -130,7 +144,7 @@ export async function migrateBusinessVpsSize(
 
   // Non-hostinger tenants FAIL CLOSED: this flow purchases/adopts a
   // Hostinger replacement box and tears the old one down via the Hostinger
-  // API — neither applies to a customer-owned BYOS box or an OVH Canada
+  // API : neither applies to a customer-owned BYOS box or an OVH Canada
   // box. Hardware changes for those tenants are provider-side operations
   // (customer resizes their own box / OVH plan change) followed by a
   // re-provision, never this migration.
@@ -148,7 +162,7 @@ export async function migrateBusinessVpsSize(
   }
 
   // Residency tenants FAIL CLOSED: this flow backs up and restores
-  // /opt/rowboat/{vault,memory} only — the box-local residency datastore
+  // /opt/rowboat/{vault,memory} only : the box-local residency datastore
   // (the ONLY copy of purged content history) would be left behind on the
   // old box and silently lost at teardown. Until the automated datastore
   // move lands, the runbook is manual: verify a fresh encrypted dump
@@ -201,7 +215,7 @@ export async function migrateBusinessVpsSize(
     try {
       const vm = await deps.hostinger.getVirtualMachine(oldVmId);
       oldVmIp = vm.ipv4?.[0]?.address ?? null;
-      // The VM detail's subscription_id is the reliable billing mapping —
+      // The VM detail's subscription_id is the reliable billing mapping :
       // the subscriptions LIST stopped returning resource_id (Jul 2026).
       if (!oldBillingId && typeof vm.subscription_id === "string" && vm.subscription_id.length > 0) {
         oldBillingId = vm.subscription_id;
@@ -245,11 +259,11 @@ export async function migrateBusinessVpsSize(
   );
 
   // ── 2. Backup (fail-closed) ───────────────────────────────────────────
-  // A business with no (numeric) recorded VM has nothing to back up — the
+  // A business with no (numeric) recorded VM has nothing to back up : the
   // elective flow refuses rather than silently provisioning a fresh box.
   if (oldVmId === null || !oldVmIp) {
     const error =
-      "old VM has no resolvable IP — cannot take the durable backup; aborting (old box untouched)";
+      "old VM has no resolvable IP : cannot take the durable backup; aborting (old box untouched)";
     await notify("failed", `Backup stage: ${error}`);
     return { ok: false, stage: "backup", error };
   }
@@ -258,7 +272,7 @@ export async function migrateBusinessVpsSize(
   // NEW box (that key would be tried against the old box → auth failure).
   const oldBoxKey = await deps.getActiveVpsSshKey(String(oldVmId));
   if (!oldBoxKey || !oldBoxKey.private_key_pem) {
-    const error = `no active SSH key for the old VM ${oldVmId} — aborting (old box untouched)`;
+    const error = `no active SSH key for the old VM ${oldVmId} : aborting (old box untouched)`;
     await notify("failed", `Backup stage: ${error}`);
     return { ok: false, stage: "backup", error };
   }
@@ -267,7 +281,7 @@ export async function migrateBusinessVpsSize(
   try {
     await deps.hostinger.createSnapshot(oldVmId);
   } catch (err) {
-    logger.warn("migrate-size: snapshot failed (continuing — tarball is the durable artefact)", {
+    logger.warn("migrate-size: snapshot failed (continuing : tarball is the durable artefact)", {
       businessId,
       oldVmId,
       error: errMsg(err)
@@ -281,7 +295,7 @@ export async function migrateBusinessVpsSize(
     );
     backupPath = backup.storagePath;
   } catch (err) {
-    const error = `backup failed: ${errMsg(err)} — aborting (old box untouched)`;
+    const error = `backup failed: ${errMsg(err)} : aborting (old box untouched)`;
     await notify("failed", `Backup stage: ${error}`);
     return { ok: false, stage: "backup", error };
   }
@@ -292,17 +306,81 @@ export async function migrateBusinessVpsSize(
   // profile onto the live old box.
   let newProv: { vpsId: string; hostingerBillingSubscriptionId: string | null };
   try {
-    newProv = await deps.orchestrateProvisioning({
+    const enqueue = deps.enqueueProvisioningJob ?? enqueueProvisioningJob;
+    const runJob = deps.runProvisioningJob ?? runProvisioningJob;
+    await enqueue({
       businessId,
       tier,
       vpsSize: targetSize,
       billingPeriod: activeSub?.billing_period ?? null,
-      suppressOwnerNotify: true
+      suppressOwnerNotify: true,
+      purpose: "migrate_size"
     });
+    const jobOut = await runJob(
+      {
+        business_id: businessId,
+        tier,
+        vps_size: targetSize,
+        billing_period: activeSub?.billing_period ?? null,
+        suppress_owner_notify: true,
+        skip_pool_adopt: false,
+        purpose: "migrate_size"
+      },
+      {
+        orchestrate: async (input) => {
+          const out = await deps.orchestrateProvisioning({
+            businessId: input.businessId,
+            tier: input.tier,
+            vpsSize: targetSize,
+            billingPeriod: input.billingPeriod,
+            suppressOwnerNotify: true
+          });
+          return {
+            hostingerBillingSubscriptionId: out.hostingerBillingSubscriptionId,
+            vpsId: out.vpsId
+          };
+        }
+      } satisfies RunProvisioningJobDeps
+    );
+    if (!jobOut.vpsId) {
+      throw new Error("migrate-size provision returned no vpsId");
+    }
+    newProv = {
+      vpsId: jobOut.vpsId,
+      hostingerBillingSubscriptionId: jobOut.hostingerBillingSubscriptionId
+    };
   } catch (err) {
-    const error = `provisioning failed: ${errMsg(err)} — old box untouched and still serving; re-run once fixed`;
-    await notify("failed", `Provision stage: ${error}`);
-    return { ok: false, stage: "provision", error };
+    if (oldVmId === null) {
+      const error = `provisioning failed: ${errMsg(err)}: old box untouched and still serving; re-run once fixed`;
+      await notify("failed", `Provision stage: ${error}`);
+      return { ok: false, stage: "provision", error };
+    }
+    const recover =
+      deps.tryRecoverDeployCompleteNewBox ?? tryRecoverDeployCompleteNewBox;
+    const recovered = await recover(
+      { businessId, oldVmId },
+      {
+        getBusiness: deps.getBusiness,
+        getLatestProvisioningStatus,
+        getVirtualMachine: (id) => deps.hostinger.getVirtualMachine(id),
+        getActiveVpsSshKey: deps.getActiveVpsSshKey,
+        remoteExec: async (args) => {
+          const r = await sshExec(args);
+          return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr };
+        }
+      }
+    );
+    if (recovered) {
+      logger.warn(
+        "migrate-size: provision threw but new box looks deploy-complete; continuing cutover",
+        { businessId, oldVmId, newVpsId: recovered.vpsId, error: errMsg(err) }
+      );
+      newProv = recovered;
+    } else {
+      const error = `provisioning failed: ${errMsg(err)}: old box untouched and still serving; re-run once fixed`;
+      await notify("failed", `Provision stage: ${error}`);
+      return { ok: false, stage: "provision", error };
+    }
   }
 
   // ── 4. Pin the size (now that hostinger_vps_id points at the new box) ─
@@ -319,7 +397,7 @@ export async function migrateBusinessVpsSize(
   }
   if (!newVmIp) {
     const error =
-      `cannot resolve the new VM ${newVmId}'s IP — restore manually (tarball: ${backupPath}); ` +
+      `cannot resolve the new VM ${newVmId}'s IP : restore manually (tarball: ${backupPath}); ` +
       `old box left running + renewing until the restore lands`;
     await notify("failed", `Restore stage: ${error}`);
     return { ok: false, stage: "restore", error };
@@ -328,7 +406,7 @@ export async function migrateBusinessVpsSize(
     await deps.restoreBusinessData({ businessId, vpsHost: newVmIp });
   } catch (err) {
     const error =
-      `restore failed: ${errMsg(err)} — new box is on TEMPLATE state; tarball safe at ${backupPath}; ` +
+      `restore failed: ${errMsg(err)} : new box is on TEMPLATE state; tarball safe at ${backupPath}; ` +
       `old box left running + renewing (it still has the live data)`;
     await notify("failed", `Restore stage: ${error}`);
     return { ok: false, stage: "restore", error };
@@ -367,9 +445,9 @@ export async function migrateBusinessVpsSize(
   }
   if (!billingRepointed) {
     const error =
-      `migration cutover DONE (new box srv${newVmId} serving) but the billing repoint failed — ` +
+      `migration cutover DONE (new box srv${newVmId} serving) but the billing repoint failed : ` +
       `old box left RUNNING + RENEWING. Fix subscriptions.hostinger_billing_subscription_id ` +
-      `(should be ${newBillingId ?? `<unknown — look up resource_id=${newVmId}>`}), then stop ` +
+      `(should be ${newBillingId ?? `<unknown : look up resource_id=${newVmId}>`}), then stop ` +
       `srv${oldVmId} and disable auto-renew on ${oldBillingId ?? "<unknown billing sub>"}.`;
     await notify("failed", `Billing stage: ${error}`);
     return { ok: false, stage: "billing", error };
@@ -407,7 +485,7 @@ export async function migrateBusinessVpsSize(
   const followUp =
     oldBillingHandling === "auto-renew-disable-FAILED" ||
     oldBillingHandling === "billing-id-unknown-still-renewing"
-      ? ` FOLLOW-UP REQUIRED: the old subscription (${oldBillingId ?? "id unknown"}) is still renewing — disable it in hPanel.`
+      ? ` FOLLOW-UP REQUIRED: the old subscription (${oldBillingId ?? "id unknown"}) is still renewing : disable it in hPanel.`
       : "";
   await notify(
     "completed",

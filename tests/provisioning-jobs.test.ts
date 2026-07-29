@@ -43,6 +43,9 @@ const JOB_ROW: ProvisioningJobRow = {
   tier: "standard",
   vps_size: "kvm2",
   billing_period: "monthly",
+  suppress_owner_notify: false,
+  skip_pool_adopt: false,
+  purpose: "signup",
   last_error: null,
   enqueued_at: "2026-07-14T18:00:00Z",
   started_at: "2026-07-14T18:00:05Z",
@@ -389,7 +392,7 @@ describe("retryStalledProvisioningJob", () => {
   });
 
   it.each(["online", "high_load"] as const)(
-    "settles a stale job to succeeded when the business is already %s (manual recovery / finished run)",
+    "settles a stale signup job to succeeded when the business is already %s (manual recovery / finished run)",
     async (status) => {
       const markOutcome = vi.fn(async () => undefined);
       const orchestrate = vi.fn(async () => okResult);
@@ -404,6 +407,52 @@ describe("retryStalledProvisioningJob", () => {
       expect(markOutcome).toHaveBeenCalledWith(BIZ, "succeeded");
     }
   );
+
+  it("re-runs migration jobs even when the business is already online", async () => {
+    const markOutcome = vi.fn(async () => undefined);
+    const orchestrate = vi.fn(async () => okResult);
+    const migrationJob: ProvisioningJobRow = {
+      ...JOB_ROW,
+      purpose: "term_renewal",
+      suppress_owner_notify: true,
+      skip_pool_adopt: true
+    };
+    const result = await retryStalledProvisioningJob({
+      claim: vi.fn(async () => migrationJob),
+      settleExhausted: noExhausted(),
+      getBusinessStatus: vi.fn(async () => "online"),
+      orchestrate,
+      markOutcome
+    });
+    expect(result).toEqual({ kind: "retried", businessId: BIZ, attempts: 2 });
+    expect(orchestrate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: BIZ,
+        suppressOwnerNotify: true,
+        skipPoolAdopt: true
+      })
+    );
+  });
+
+  it("round-trips suppressOwnerNotify and skipPoolAdopt into orchestrate", async () => {
+    const markOutcome = vi.fn(async () => undefined);
+    const orchestrate = vi.fn(async () => okResult);
+    await runProvisioningJob(
+      {
+        ...JOB_ROW,
+        suppress_owner_notify: true,
+        skip_pool_adopt: true,
+        purpose: "migrate_size"
+      },
+      { orchestrate, markOutcome, markRunning: vi.fn(async () => undefined) }
+    );
+    expect(orchestrate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        suppressOwnerNotify: true,
+        skipPoolAdopt: true
+      })
+    );
+  });
 
   it("tolerates a settle failure on the already-online path (Error and string shapes)", async () => {
     const result = await retryStalledProvisioningJob({

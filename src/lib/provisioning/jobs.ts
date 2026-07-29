@@ -1,16 +1,17 @@
 /**
- * Signup-provisioning job ledger + watchdog retry (provisioning_jobs).
+ * Provisioning job ledger + watchdog retry (provisioning_jobs).
  *
  * Why this exists: checkout-triggered provisioning runs inside the Stripe
  * webhook's Vercel function, and the runtime keeps that function alive
  * only up to its maxDuration — twice (Truly Insurance Jul 8 2026, KYP Ads
  * Jul 14 2026) a real signup's orchestrator was torn down mid-provision,
  * leaving the tenant stuck at "Provisioning started 5%" with no error, no
- * retry, and a human doing the recovery by hand.
+ * retry, and a human doing the recovery by hand. The same kill also hit
+ * term-renewal mid-deploy (KYP Ads Jul 29 2026): background migrations now
+ * enqueue here too so the watchdog can finish them.
  *
  * The shape of the fix:
- *   * the webhook ENQUEUES a job row, then still runs the orchestrator
- *     inline (fast path, now via `after()` + a raised maxDuration);
+ *   * callers ENQUEUE a job row, then still run the orchestrator inline;
  *   * every recordProvisioningProgress write bumps the job's heartbeat;
  *   * a pg_cron watchdog (Edge `provisioning-watchdog` →
  *     /api/internal/provisioning-retry) claims ONE stalled job per tick —
@@ -29,6 +30,8 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 export type ProvisioningJobStatus = "queued" | "running" | "succeeded" | "failed";
 
+export type ProvisioningJobPurpose = "signup" | "migrate_size" | "term_renewal";
+
 export type ProvisioningJobRow = {
   business_id: string;
   status: ProvisioningJobStatus;
@@ -37,6 +40,9 @@ export type ProvisioningJobRow = {
   tier: string | null;
   vps_size: string | null;
   billing_period: string | null;
+  suppress_owner_notify: boolean;
+  skip_pool_adopt: boolean;
+  purpose: ProvisioningJobPurpose;
   last_error: string | null;
   enqueued_at: string;
   started_at: string | null;
@@ -58,6 +64,9 @@ export type EnqueueProvisioningJobInput = {
   tier: string | null;
   vpsSize: string | null;
   billingPeriod: string | null;
+  suppressOwnerNotify?: boolean;
+  skipPoolAdopt?: boolean;
+  purpose?: ProvisioningJobPurpose;
 };
 
 /**
@@ -79,6 +88,9 @@ export async function enqueueProvisioningJob(
       tier: input.tier,
       vps_size: input.vpsSize,
       billing_period: input.billingPeriod,
+      suppress_owner_notify: input.suppressOwnerNotify === true,
+      skip_pool_adopt: input.skipPoolAdopt === true,
+      purpose: input.purpose ?? "signup",
       last_error: null,
       enqueued_at: new Date().toISOString(),
       started_at: null,
@@ -211,7 +223,12 @@ export type OrchestrateFn = (input: {
   tier: "starter" | "standard" | "enterprise";
   vpsSize: string | null;
   billingPeriod: "monthly" | "annual" | "biennial" | null;
-}) => Promise<{ hostingerBillingSubscriptionId: string | null }>;
+  suppressOwnerNotify?: boolean;
+  skipPoolAdopt?: boolean;
+}) => Promise<{
+  hostingerBillingSubscriptionId: string | null;
+  vpsId?: string;
+}>;
 
 export type RunProvisioningJobDeps = {
   orchestrate: OrchestrateFn;
@@ -227,6 +244,10 @@ function narrowBillingPeriod(raw: string | null): "monthly" | "annual" | "bienni
   return raw === "monthly" || raw === "annual" || raw === "biennial" ? raw : null;
 }
 
+function narrowPurpose(raw: string | null | undefined): ProvisioningJobPurpose {
+  return raw === "migrate_size" || raw === "term_renewal" ? raw : "signup";
+}
+
 /**
  * Run one provisioning job under the ledger: running → orchestrate →
  * succeeded/failed. Ledger writes are best-effort (a marker failure must
@@ -235,10 +256,13 @@ function narrowBillingPeriod(raw: string | null): "monthly" | "annual" | "bienni
  * working unchanged.
  */
 export async function runProvisioningJob(
-  job: Pick<ProvisioningJobRow, "business_id" | "tier" | "vps_size" | "billing_period">,
+  job: Pick<ProvisioningJobRow, "business_id" | "tier" | "vps_size" | "billing_period"> &
+    Partial<
+      Pick<ProvisioningJobRow, "suppress_owner_notify" | "skip_pool_adopt" | "purpose">
+    >,
   deps: RunProvisioningJobDeps,
   opts: { alreadyClaimed?: boolean } = {}
-): Promise<{ hostingerBillingSubscriptionId: string | null }> {
+): Promise<{ hostingerBillingSubscriptionId: string | null; vpsId?: string }> {
   /* c8 ignore next 2 -- trivial production-default fallbacks; tests inject */
   const markRunning = deps.markRunning ?? markProvisioningJobRunning;
   const markOutcome = deps.markOutcome ?? markProvisioningJobOutcome;
@@ -257,7 +281,9 @@ export async function runProvisioningJob(
       businessId: job.business_id,
       tier: narrowTier(job.tier),
       vpsSize: job.vps_size,
-      billingPeriod: narrowBillingPeriod(job.billing_period)
+      billingPeriod: narrowBillingPeriod(job.billing_period),
+      suppressOwnerNotify: job.suppress_owner_notify === true ? true : undefined,
+      skipPoolAdopt: job.skip_pool_adopt === true ? true : undefined
     });
     await markOutcome(job.business_id, "succeeded").catch((err: unknown) => {
       logger.warn("provisioning job markOutcome(succeeded) failed", {
@@ -299,11 +325,12 @@ export type RetryStalledProvisioningResult = (
 /**
  * One watchdog tick: claim one stalled job and re-run it.
  *
- * The already-online guard is load-bearing: the orchestrator has no
- * internal "tenant already serving" check (its callers guard), so a stale
- * job whose provision actually finished — or that an operator completed
- * by hand, exactly the KYP recovery — must resolve to 'succeeded' without
- * re-provisioning live hardware.
+ * The already-online guard is load-bearing for SIGNUP jobs: the orchestrator
+ * has no internal "tenant already serving" check (its callers guard), so a
+ * stale signup whose provision actually finished — or that an operator
+ * completed by hand — must resolve to 'succeeded' without re-provisioning
+ * live hardware. Background migrations (purpose migrate_size / term_renewal)
+ * are already online by design, so that short-circuit is skipped for them.
  */
 export async function retryStalledProvisioningJob(
   deps: RetryStalledProvisioningDeps
@@ -330,8 +357,9 @@ export async function retryStalledProvisioningJob(
   const job = await claim();
   if (!job) return withExhausted({ kind: "idle" });
 
+  const purpose = narrowPurpose(job.purpose);
   const status = await deps.getBusinessStatus(job.business_id);
-  if (status === "online" || status === "high_load") {
+  if (purpose === "signup" && (status === "online" || status === "high_load")) {
     await markOutcome(job.business_id, "succeeded").catch((err: unknown) => {
       logger.warn("provisioning watchdog: online-job settle failed", {
         businessId: job.business_id,
@@ -343,7 +371,12 @@ export async function retryStalledProvisioningJob(
 
   try {
     await runProvisioningJob(
-      job,
+      {
+        ...job,
+        suppress_owner_notify: job.suppress_owner_notify === true,
+        skip_pool_adopt: job.skip_pool_adopt === true,
+        purpose
+      },
       { orchestrate: deps.orchestrate, markOutcome },
       { alreadyClaimed: true }
     );

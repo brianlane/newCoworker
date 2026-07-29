@@ -16,14 +16,15 @@
  *
  * Response: forwards the Next.js body and status. On any bridge-level
  * failure returns 502 so the pg_cron audit log captures something useful.
- * The forward timeout is shorter than a full provision on purpose — an
- * abort here is harmless because the Next route runs to completion.
+ * The forward timeout matches the Next route's maxDuration (1800s). An
+ * earlier abort is still harmless (Next continues), but aligning the
+ * budget keeps pg_cron audit logs honest for long migration retries.
  */
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 
 const TARGET_PATH = "/api/internal/provisioning-retry";
-const REQUEST_TIMEOUT_MS = 280_000;
+const REQUEST_TIMEOUT_MS = 1_800_000;
 
 serve(async (req: Request) => {
   if (req.method !== "POST") {

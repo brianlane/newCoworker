@@ -187,6 +187,24 @@ export async function hasPriorOpsNewSignupAlert(businessId: string): Promise<boo
   return data != null;
 }
 
+/** True when the ops provisioning-stuck alert was already sent for this business. */
+export async function hasPriorOpsProvisioningStuckAlert(
+  businessId: string
+): Promise<boolean> {
+  const db = await createSupabaseServiceClient();
+  const { data, error } = await db
+    .from("coworker_logs")
+    .select("id")
+    .eq("business_id", businessId)
+    .eq("task_type", "provisioning")
+    .filter("log_payload->>phase", "eq", "ops_provisioning_stuck_alert_sent")
+    .limit(1)
+    .maybeSingle();
+
+  if (error) throw new Error(`hasPriorOpsProvisioningStuckAlert: ${error.message}`);
+  return data != null;
+}
+
 /** Admin: recent provisioning/deploy log rows (newest first). */
 export async function getProvisioningLogs(businessId: string, limit = 50): Promise<LogRow[]> {
   const db = await createSupabaseServiceClient();

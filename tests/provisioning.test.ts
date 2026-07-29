@@ -16,12 +16,23 @@ vi.mock("@/lib/provisioning/progress", () => ({
     status: "thinking",
     log_payload: {}
   }),
-  hasPriorOpsNewSignupAlert: vi.fn().mockResolvedValue(false)
+  hasPriorOpsNewSignupAlert: vi.fn().mockResolvedValue(false),
+  // Detached deploy poll: default to terminal success so hermetic tests that
+  // only stub remoteExec with okExec() still complete without a real exit file.
+  getLatestProvisioningStatus: vi.fn().mockResolvedValue({
+    percent: 100,
+    phase: "deploy_client_complete",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    logStatus: "thinking"
+  })
 }));
 
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
 import { HQ_BUSINESS_ID } from "@/lib/vps/shared-hardware";
-import { recordProvisioningProgress, hasPriorOpsNewSignupAlert } from "@/lib/provisioning/progress";
+import {
+  recordProvisioningProgress,
+  hasPriorOpsNewSignupAlert
+} from "@/lib/provisioning/progress";
 import * as fs from "fs";
 import type { ProvisionVpsForBusinessResult } from "@/lib/hostinger/provision";
 import type { SshExecResult } from "@/lib/hostinger/ssh";

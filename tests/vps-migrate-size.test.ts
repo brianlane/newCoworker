@@ -94,6 +94,28 @@ function makeDeps(overrides: Partial<MigrateVpsSizeDeps> = {}): MigrateVpsSizeDe
       vpsId: "1900001",
       hostingerBillingSubscriptionId: "hbs-new"
     })),
+    enqueueProvisioningJob: vi.fn(async () => undefined),
+    runProvisioningJob: vi.fn(async (job, jobDeps) => {
+      const tier =
+        job.tier === "starter" || job.tier === "enterprise" ? job.tier : "standard";
+      const out = await jobDeps.orchestrate({
+        businessId: job.business_id,
+        tier,
+        vpsSize: (job.vps_size as "kvm1" | "kvm2" | "kvm4" | "kvm8" | null) ?? "kvm4",
+        billingPeriod:
+          job.billing_period === "monthly" ||
+          job.billing_period === "annual" ||
+          job.billing_period === "biennial"
+            ? job.billing_period
+            : null,
+        suppressOwnerNotify: job.suppress_owner_notify === true ? true : undefined,
+        skipPoolAdopt: job.skip_pool_adopt === true ? true : undefined
+      });
+      return {
+        hostingerBillingSubscriptionId: out.hostingerBillingSubscriptionId,
+        vpsId: out.vpsId ?? "1900001"
+      };
+    }),
     sendOpsEmail: vi.fn(async () => undefined),
     ...overrides
   };
@@ -289,7 +311,8 @@ describe("migrateBusinessVpsSize — provision + pin", () => {
     const deps = makeDeps({
       orchestrateProvisioning: vi.fn(async () => {
         throw new Error("hostinger 402");
-      })
+      }),
+      tryRecoverDeployCompleteNewBox: vi.fn(async () => null)
     });
     const out = await migrateBusinessVpsSize(input, deps);
     expect(out.ok).toBe(false);
@@ -299,6 +322,23 @@ describe("migrateBusinessVpsSize — provision + pin", () => {
     }
     expect(deps.updateBusinessVpsSize).not.toHaveBeenCalled();
     expect(deps.hostinger.stopVirtualMachine).not.toHaveBeenCalled();
+  });
+
+  it("continues cutover when provision throws but new box is deploy-complete", async () => {
+    const deps = makeDeps({
+      orchestrateProvisioning: vi.fn(async () => {
+        throw new Error("vercel killed mid-deploy");
+      }),
+      tryRecoverDeployCompleteNewBox: vi.fn(async () => ({
+        vpsId: "1900001",
+        hostingerBillingSubscriptionId: "hbs-new"
+      }))
+    });
+    const out = await migrateBusinessVpsSize(input, deps);
+    expect(out.ok).toBe(true);
+    expect(deps.restoreBusinessData).toHaveBeenCalled();
+    expect(deps.updateBusinessVpsSize).toHaveBeenCalledWith(BIZ, "kvm4");
+    expect(deps.hostinger.stopVirtualMachine).toHaveBeenCalledWith(1800985);
   });
 
   it("pins the size only after provisioning succeeds", async () => {

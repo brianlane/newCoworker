@@ -21,6 +21,10 @@ import { errorResponse, successResponse, handleRouteError } from "@/lib/api-resp
 import { logger } from "@/lib/logger";
 import { retryStalledProvisioningJob } from "@/lib/provisioning/jobs";
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
+import {
+  alertFromWatchdogResult,
+  scanAndAlertStuckProvisioning
+} from "@/lib/provisioning/stuck-alert";
 import { getBusiness } from "@/lib/db/businesses";
 import { getSubscription, updateSubscription } from "@/lib/db/subscriptions";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -28,7 +32,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 // Vercel Pro ceiling: a full adopt/purchase provision runs ~8-12 minutes.
 // The Edge bridge / pg_cron may stop awaiting sooner — harmless, the
 // function runs to completion (same acceptance as vps-billing-posture).
-export const maxDuration = 800;
+export const maxDuration = 1800;
 export const runtime = "nodejs";
 
 export async function POST(request: Request): Promise<Response> {
@@ -44,7 +48,9 @@ export async function POST(request: Request): Promise<Response> {
           tier: input.tier,
           vpsSize: input.vpsSize,
           billingPeriod: input.billingPeriod,
-          notifyOpsNewSignup: true
+          suppressOwnerNotify: input.suppressOwnerNotify,
+          skipPoolAdopt: input.skipPoolAdopt,
+          notifyOpsNewSignup: input.suppressOwnerNotify !== true
         });
         // Same post-success persistence the webhook's inline runner does —
         // without it a watchdog-recovered signup would be missing the
@@ -85,7 +91,27 @@ export async function POST(request: Request): Promise<Response> {
       }
     }
 
-    return successResponse(result);
+    try {
+      await alertFromWatchdogResult(result);
+    } catch (err) {
+      logger.warn("provisioning stuck alert (watchdog result) failed", {
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+
+    let stuckScan: { alerted: string[] } = { alerted: [] };
+    try {
+      stuckScan = await scanAndAlertStuckProvisioning();
+      if (stuckScan.alerted.length > 0) {
+        logger.info("provisioning stuck progress scan alerted", stuckScan);
+      }
+    } catch (err) {
+      logger.warn("provisioning stuck progress scan failed", {
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+
+    return successResponse({ ...result, stuckScan });
   } catch (err) {
     return handleRouteError(err);
   }

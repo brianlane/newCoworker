@@ -75,7 +75,9 @@ import { readFileSync } from "fs";
 import { join } from "path";
 import {
   recordProvisioningProgress,
-  hasPriorOpsNewSignupAlert
+  hasPriorOpsNewSignupAlert,
+  getLatestProvisioningStatus,
+  type LatestProvisioningStatus
 } from "@/lib/provisioning/progress";
 import {
   cloudflareTunnelProvisionerFromEnv,
@@ -507,6 +509,184 @@ function defaultDidProvisioner(): DidProvisioner {
 }
 /* c8 ignore stop */
 
+/* c8 ignore next 3 -- trivial default; tests inject a mock sleep */
+function defaultDeployPollSleep(ms: number): Promise<void> {
+  return new Promise((r) => setTimeout(r, ms));
+}
+
+/** Exit codes from deploy-client.sh when another deploy holds the flock. */
+export const DEPLOY_CLIENT_LOCK_BUSY_EXIT = 75;
+
+const DEPLOY_CLIENT_POLL_DEFAULT_MS = 5_000;
+const DEPLOY_CLIENT_DEADLINE_DEFAULT_MS = 25 * 60 * 1000;
+
+export type DetachedDeployPollResult =
+  | { ok: true; source: "exit_file" | "progress" }
+  | { ok: false; reason: string; exitCode?: number };
+
+/**
+ * Poll until a background `deploy-client.sh` finishes (exit file or
+ * terminal progress phase), or until the deadline.
+ *
+ * Mid-run progress POSTs from the box already heartbeat `provisioning_jobs`;
+ * this loop only decides success/failure for the orchestrator.
+ */
+export async function waitForDetachedDeployClient(input: {
+  businessId: string;
+  host: string;
+  username: string;
+  privateKeyPem: string;
+  sshKeyRow?: HostKeyPinnable;
+  remoteExec: RemoteExecutor;
+  latestProvisioningStatus: (
+    businessId: string
+  ) => Promise<LatestProvisioningStatus>;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+  pollIntervalMs?: number;
+  deadlineMs?: number;
+}): Promise<DetachedDeployPollResult> {
+  const sleep = input.sleep ?? defaultDeployPollSleep;
+  const now = input.now ?? Date.now;
+  const pollIntervalMs = input.pollIntervalMs ?? DEPLOY_CLIENT_POLL_DEFAULT_MS;
+  const deadlineMs = input.deadlineMs ?? DEPLOY_CLIENT_DEADLINE_DEFAULT_MS;
+  const deadline = now() + deadlineMs;
+  const exitFile = `/var/run/nc-deploy-${input.businessId}.exit`;
+  const pidFile = `/var/run/nc-deploy-${input.businessId}.pid`;
+  // One short SSH: print exit code if present, else empty; then whether the
+  // recorded pid is still alive. Keep it tiny so a hung deploy does not
+  // burn the Vercel budget on a long SSH.
+  const probeCmd =
+    `if [ -f ${exitFile} ]; then cat ${exitFile}; else echo MISSING; fi; ` +
+    `if [ -f ${pidFile} ] && kill -0 "$(cat ${pidFile})" 2>/dev/null; then echo RUNNING; else echo STOPPED; fi`;
+
+  while (now() < deadline) {
+    const latest = await input.latestProvisioningStatus(input.businessId);
+    if (latest?.phase === "deploy_client_complete") {
+      return { ok: true, source: "progress" };
+    }
+    if (latest?.phase === "deploy_client_failed") {
+      return {
+        ok: false,
+        reason: latest.phase,
+        exitCode: undefined
+      };
+    }
+
+    try {
+      const probe = await input.remoteExec({
+        host: input.host,
+        username: input.username,
+        privateKeyPem: input.privateKeyPem,
+        command: probeCmd,
+        sshKeyRow: input.sshKeyRow
+      });
+      const lines = (probe.stdout ?? "")
+        .split(/\r?\n/)
+        .map((l) => l.trim())
+        .filter((l) => l.length > 0);
+      const exitLine = lines[0] ?? "MISSING";
+      if (exitLine !== "MISSING" && /^\d+$/.test(exitLine)) {
+        const code = Number(exitLine);
+        if (code === 0) return { ok: true, source: "exit_file" };
+        return {
+          ok: false,
+          reason: `deploy-client.sh exit ${code}`,
+          exitCode: code
+        };
+      }
+    } catch (err) {
+      logger.warn("Detached deploy probe SSH failed; will retry", {
+        businessId: input.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+
+    await sleep(pollIntervalMs);
+  }
+
+  return {
+    ok: false,
+    reason: `deploy-client.sh did not finish within ${deadlineMs}ms`
+  };
+}
+
+/**
+ * Start deploy-client.sh under nohup (script owns flock) and poll to
+ * completion. If flock is busy (exit 75), attach to the in-flight deploy.
+ */
+export async function runDetachedDeployClient(input: {
+  businessId: string;
+  envVars: string;
+  host: string;
+  username: string;
+  privateKeyPem: string;
+  sshKeyRow?: HostKeyPinnable;
+  remoteExec: RemoteExecutor;
+  latestProvisioningStatus: (
+    businessId: string
+  ) => Promise<LatestProvisioningStatus>;
+  sleep?: (ms: number) => Promise<void>;
+  now?: () => number;
+  pollIntervalMs?: number;
+  deadlineMs?: number;
+}): Promise<DetachedDeployPollResult> {
+  const logPath = `/var/log/nc-deploy-${input.businessId}.log`;
+  const lockPath = `/var/lock/nc-deploy-${input.businessId}.lock`;
+  // Pre-check flock so a busy deploy surfaces as exit 75 on this short SSH
+  // (nohup would otherwise mask the script's own flock exit). The script
+  // still acquires the same lock for single-flight when run directly.
+  const startCmd =
+    `if ! flock -n ${lockPath} true; then exit ${DEPLOY_CLIENT_LOCK_BUSY_EXIT}; fi; ` +
+    `${input.envVars} nohup /opt/deploy-client.sh >>${logPath} 2>&1 & echo $!`;
+
+  let started = false;
+  try {
+    const start = await input.remoteExec({
+      host: input.host,
+      username: input.username,
+      privateKeyPem: input.privateKeyPem,
+      command: startCmd,
+      sshKeyRow: input.sshKeyRow
+    });
+    if (start.exitCode === DEPLOY_CLIENT_LOCK_BUSY_EXIT) {
+      logger.info("deploy-client.sh already running; attaching to poll", {
+        businessId: input.businessId
+      });
+      started = true;
+    } else if (start.exitCode !== 0) {
+      return {
+        ok: false,
+        reason: `failed to start deploy-client.sh (exit ${start.exitCode}): ${(start.stderr || start.stdout || "").slice(0, 2000)}`,
+        exitCode: start.exitCode
+      };
+    } else {
+      started = true;
+    }
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return { ok: false, reason: `failed to start deploy-client.sh: ${msg}` };
+  }
+
+  if (!started) {
+    return { ok: false, reason: "failed to start deploy-client.sh" };
+  }
+
+  return waitForDetachedDeployClient({
+    businessId: input.businessId,
+    host: input.host,
+    username: input.username,
+    privateKeyPem: input.privateKeyPem,
+    sshKeyRow: input.sshKeyRow,
+    remoteExec: input.remoteExec,
+    latestProvisioningStatus: input.latestProvisioningStatus,
+    sleep: input.sleep,
+    now: input.now,
+    pollIntervalMs: input.pollIntervalMs,
+    deadlineMs: input.deadlineMs
+  });
+}
+
 export async function orchestrateProvisioning(
   input: ProvisioningInput,
   deps?: {
@@ -550,11 +730,20 @@ export async function orchestrateProvisioning(
      */
     didProvisioner?: DidProvisioner | null;
     /**
-     * Test-injectable sleep used by the SSH-bootstrap connect-retry loop.
-     * Production uses `setTimeout`; tests inject a no-op so retry assertions
-     * run without burning real wall-clock time.
+     * Test-injectable sleep used by the SSH-bootstrap connect-retry loop
+     * and the detached deploy-client poll. Production uses `setTimeout`;
+     * tests inject a no-op so retry assertions run without burning real
+     * wall-clock time.
      */
     sleep?: (ms: number) => Promise<void>;
+    /**
+     * Latest provisioning progress row. Defaults to
+     * {@link getLatestProvisioningStatus}; tests inject a stub so the
+     * detached-deploy poll does not hit Supabase.
+     */
+    latestProvisioningStatus?: (
+      businessId: string
+    ) => Promise<LatestProvisioningStatus>;
     /**
      * Injectable clock for the orphan-scan retry deadline. Production uses
      * `Date.now`; tests inject a controllable clock so the 5-minute budget
@@ -1853,38 +2042,44 @@ async function runOrchestrator(
     businessId,
     phase: "remote_deploy_starting",
     percent: 40,
-    message: "Running deploy-client.sh on VPS (SSH)",
+    message: "Starting deploy-client.sh on VPS (detached SSH + poll)",
     source: "orchestrator"
   });
 
-  // Phase 4: SSH into the freshly-provisioned VPS and run deploy-client.sh.
-  // The private key comes from `provisioned.sshKey.private_key_pem` — we
-  // don't round-trip through the DB because we just wrote it and already
-  // have it in memory.
+  // Phase 4: detach deploy-client.sh under nohup (script owns flock) and
+  // poll the exit file / terminal progress. Survives Vercel killing the
+  // long SSH; watchdog can attach to the same in-flight deploy.
   let deploySucceeded = false;
+  /* c8 ignore next -- production default; tests inject latestProvisioningStatus */
+  const latestStatus =
+    deps?.latestProvisioningStatus ?? getLatestProvisioningStatus;
   try {
-    const result = await remoteExec({
+    const deployResult = await runDetachedDeployClient({
+      businessId,
+      envVars,
       host: provisioned.publicIp,
       username: provisioned.sshUsername,
       privateKeyPem: provisioned.sshKey.private_key_pem,
-      command: `${envVars} /opt/deploy-client.sh`,
       // Verifies strictly against the fingerprint the bootstrap connect
       // captured above (sshExecPinned updates the row object in place).
-      sshKeyRow: provisioned.sshKey
+      sshKeyRow: provisioned.sshKey,
+      remoteExec,
+      latestProvisioningStatus: latestStatus,
+      sleep: deps?.sleep,
+      now: deps?.now
     });
-    if (result.exitCode !== 0) {
+    if (!deployResult.ok) {
       logger.error("deploy-client.sh failed", {
         businessId,
         vpsId,
-        exitCode: result.exitCode,
-        stderr: result.stderr?.slice(0, 2000),
-        stdout: result.stdout?.slice(0, 2000)
+        reason: deployResult.reason,
+        exitCode: deployResult.exitCode
       });
       await recordProvisioningProgress({
         businessId,
         phase: "deploy_failed",
         percent: 95,
-        message: `deploy-client.sh exit ${result.exitCode}: ${(result.stderr || result.stdout || "").slice(0, 2000)}`,
+        message: deployResult.reason.slice(0, 2000),
         source: "orchestrator",
         status: "error"
       });

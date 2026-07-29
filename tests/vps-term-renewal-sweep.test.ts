@@ -142,6 +142,28 @@ function makeDeps(overrides: Partial<TermRenewalSweepDeps> = {}): TermRenewalSwe
       vpsId: "1900001",
       hostingerBillingSubscriptionId: "hbs-new"
     })),
+    enqueueProvisioningJob: vi.fn(async () => undefined),
+    runProvisioningJob: vi.fn(async (job, jobDeps) => {
+      const tier =
+        job.tier === "starter" || job.tier === "enterprise" ? job.tier : "standard";
+      const out = await jobDeps.orchestrate({
+        businessId: job.business_id,
+        tier,
+        vpsSize: (job.vps_size as "kvm1" | "kvm2" | "kvm4" | "kvm8" | null) ?? "kvm2",
+        billingPeriod:
+          job.billing_period === "monthly" ||
+          job.billing_period === "annual" ||
+          job.billing_period === "biennial"
+            ? job.billing_period
+            : null,
+        skipPoolAdopt: job.skip_pool_adopt === true ? true : undefined,
+        suppressOwnerNotify: job.suppress_owner_notify === true ? true : undefined
+      });
+      return {
+        hostingerBillingSubscriptionId: out.hostingerBillingSubscriptionId,
+        vpsId: out.vpsId ?? "1900001"
+      };
+    }),
     releaseVpsToPool: vi.fn(async () => undefined),
     markVpsNeverRenew: vi.fn(async () => undefined),
     sendOpsEmail: vi.fn(async () => undefined),
@@ -387,11 +409,31 @@ describe("runTermRenewalSweep", () => {
     const deps = makeDeps({
       orchestrateProvisioning: vi.fn(async () => {
         throw new Error("purchase failed");
-      })
+      }),
+      tryRecoverDeployCompleteNewBox: vi.fn(async () => null)
     });
     const result = await runTermRenewalSweep(deps, { now: NOW });
     expect(result.findings[0]?.kind).toBe("migration_failed");
     expect(deps.hostinger.disableBillingAutoRenewal).not.toHaveBeenCalled();
+  });
+
+  it("continues cutover when provision throws but new box is deploy-complete", async () => {
+    const deps = makeDeps({
+      orchestrateProvisioning: vi.fn(async () => {
+        throw new Error("vercel killed mid-deploy");
+      }),
+      tryRecoverDeployCompleteNewBox: vi.fn(async () => ({
+        vpsId: "1900001",
+        hostingerBillingSubscriptionId: "hbs-new"
+      }))
+    });
+    const result = await runTermRenewalSweep(deps, { now: NOW });
+    expect(result.migrated).toBe(1);
+    expect(deps.restoreBusinessData).toHaveBeenCalled();
+    expect(deps.hostinger.disableBillingAutoRenewal).toHaveBeenCalledWith("hbs-old");
+    expect(deps.sendOpsEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "completed" })
+    );
   });
 
   it("restore failure leaves the old box renewing", async () => {

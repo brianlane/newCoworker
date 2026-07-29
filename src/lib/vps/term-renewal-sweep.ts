@@ -25,6 +25,15 @@ import { providerUsesHostingerLifecycle, resolveVpsProvider } from "@/lib/vps/pr
 import { sharedHardwareFor } from "@/lib/vps/shared-hardware";
 import { resolveDeployedVpsSize, vpsSizeFromHostingerPlan, type VpsSize } from "@/lib/vps/size";
 import type { OpsHardwareMigrationInput } from "@/lib/email/templates/ops-hardware-migration";
+import {
+  enqueueProvisioningJob,
+  runProvisioningJob,
+  type EnqueueProvisioningJobInput,
+  type RunProvisioningJobDeps
+} from "@/lib/provisioning/jobs";
+import { getLatestProvisioningStatus } from "@/lib/provisioning/progress";
+import { tryRecoverDeployCompleteNewBox } from "@/lib/vps/migration-cutover-recovery";
+import { sshExec } from "@/lib/hostinger/ssh";
 
 const DEFAULT_SAVINGS_THRESHOLD = 0.1;
 const DEFAULT_RENEWAL_WINDOW_DAYS = 30;
@@ -98,6 +107,15 @@ export type TermRenewalSweepDeps = {
     skipPoolAdopt?: boolean;
     suppressOwnerNotify?: boolean;
   }) => Promise<{ vpsId: string; hostingerBillingSubscriptionId: string | null }>;
+  /** Injected so unit tests can skip the real provisioning_jobs ledger. */
+  enqueueProvisioningJob?: (input: EnqueueProvisioningJobInput) => Promise<void>;
+  runProvisioningJob?: typeof runProvisioningJob;
+  /**
+   * When provision throws, probe whether the new box is already deploy-complete
+   * so cutover can continue. Tests inject a stub; production uses the shared
+   * recovery helper.
+   */
+  tryRecoverDeployCompleteNewBox?: typeof tryRecoverDeployCompleteNewBox;
   releaseVpsToPool: (input: {
     vmId: number;
     plan: VpsSize;
@@ -577,18 +595,78 @@ async function migrateTenantTermRenewal(
 
   let newProv: { vpsId: string; hostingerBillingSubscriptionId: string | null };
   try {
-    newProv = await deps.orchestrateProvisioning({
+    const enqueue = deps.enqueueProvisioningJob ?? enqueueProvisioningJob;
+    const runJob = deps.runProvisioningJob ?? runProvisioningJob;
+    await enqueue({
       businessId,
       tier,
       vpsSize,
       billingPeriod: activeSub?.billing_period ?? null,
+      suppressOwnerNotify: true,
       skipPoolAdopt: true,
-      suppressOwnerNotify: true
+      purpose: "term_renewal"
     });
+    const jobOut = await runJob(
+      {
+        business_id: businessId,
+        tier,
+        vps_size: vpsSize,
+        billing_period: activeSub?.billing_period ?? null,
+        suppress_owner_notify: true,
+        skip_pool_adopt: true,
+        purpose: "term_renewal"
+      },
+      {
+        orchestrate: async (input) => {
+          const out = await deps.orchestrateProvisioning({
+            businessId: input.businessId,
+            tier: input.tier,
+            vpsSize,
+            billingPeriod: input.billingPeriod,
+            skipPoolAdopt: true,
+            suppressOwnerNotify: true
+          });
+          return {
+            hostingerBillingSubscriptionId: out.hostingerBillingSubscriptionId,
+            vpsId: out.vpsId
+          };
+        }
+      } satisfies RunProvisioningJobDeps
+    );
+    if (!jobOut.vpsId) {
+      throw new Error("term-renewal provision returned no vpsId");
+    }
+    newProv = {
+      vpsId: jobOut.vpsId,
+      hostingerBillingSubscriptionId: jobOut.hostingerBillingSubscriptionId
+    };
   } catch (err) {
-    const detail = `provisioning failed: ${errMsg(err)}: old box untouched and still renewing`;
-    await notify("failed", detail);
-    return { ok: false, detail };
+    const recover =
+      deps.tryRecoverDeployCompleteNewBox ?? tryRecoverDeployCompleteNewBox;
+    const recovered = await recover(
+      { businessId, oldVmId },
+      {
+        getBusiness: deps.getBusiness,
+        getLatestProvisioningStatus,
+        getVirtualMachine: (id) => deps.hostinger.getVirtualMachine(id),
+        getActiveVpsSshKey: deps.getActiveVpsSshKey,
+        remoteExec: async (args) => {
+          const r = await sshExec(args);
+          return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr };
+        }
+      }
+    );
+    if (recovered) {
+      logger.warn(
+        "term-renewal sweep: provision threw but new box looks deploy-complete; continuing cutover",
+        { businessId, oldVmId, newVpsId: recovered.vpsId, error: errMsg(err) }
+      );
+      newProv = recovered;
+    } else {
+      const detail = `provisioning failed: ${errMsg(err)}: old box untouched and still renewing`;
+      await notify("failed", detail);
+      return { ok: false, detail };
+    }
   }
 
   const newVmId = Number.parseInt(newProv.vpsId, 10);
