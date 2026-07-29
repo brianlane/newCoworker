@@ -8,7 +8,7 @@ written incident review. Calendly is the center of gravity here.
 | | |
 | --- | --- |
 | Business id | `056034a7-e84c-444d-8d15-747eeb1fa899` |
-| Tier / box | standard, VPS `1800985` |
+| Tier / box | standard, VPS `1864812` (term-renewal cutover 2026-07-29 from `1800985`) |
 | DID | `+14388035806` (Canadian) |
 | Owner | James Lee |
 | Onboarded | 2026-07-14 |
@@ -60,6 +60,13 @@ by enabling them.
 - **The box was adopted from a pool**, and the adopted box once served the
   previous tenant's tunnel (`rowboat_http_530`). The adoption-pool checklist
   in the incident doc exists because of this account.
+- **2026-07-29 term-renewal cutover:** overnight sweep bought `1864812`
+  (fail-but-charge orphan) instead of renewing `1800985` (~43% savings).
+  Orchestrator stalled at 40% (`remote_deploy_starting`); cutover was finished
+  manually (restore, billing repoint, old box stop + auto-renew off + pool
+  `never_renew`, provisioning marked 100% without owner SMS). Owner notify
+  on background migrations is now suppressed via `suppressOwnerNotify`
+  (PR #1011).
 
 ## One-shots
 
@@ -78,6 +85,6 @@ Patches: `patch-kyp-offer-branch.ts`, `patch-kyp-business-hours.ts`,
 
 ## History
 
-PRs #617, #641, #693, #715, #756, #768, #770, #795. Diagnostics:
+PRs #617, #641, #693, #715, #756, #768, #770, #795, #1011. Diagnostics:
 `debug/diag-kyp-box.ts`, `debug/fix-kyp-tunnel.ts`,
 `debug/kyp-calendly-zoom-check.ts`.
