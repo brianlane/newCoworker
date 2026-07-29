@@ -4,8 +4,10 @@
 #
 # Rules (schedule only; workflow_dispatch always runs):
 #   1. No previous completed run of this workflow → run (first night).
-#   2. Previous run's "E2E full suite (nightly)" job failed → run (retry;
-#      do not strand a red nightly until the next merge).
+#   2. Previous run's "E2E full suite (nightly)" job did not succeed
+#      (failure, timed_out, startup_failure, cancelled, etc.) → run
+#      (retry; do not strand a red nightly until the next merge). A prior
+#      "skipped" suite (this gate opted out) is not a retry signal.
 #   3. At least one commit on main after the previous run started → run
 #      (all mainline changes arrive via merged PRs in this repo).
 #   4. Otherwise → skip (no paid Gemini calls).
@@ -75,8 +77,15 @@ suite_conclusion=$(jq -rs --arg name "$SUITE_JOB_NAME" '
   | last // empty
 ' <<<"$jobs_json" 2>/dev/null) || fail_open "could not parse jobs for previous run ${prev_id}"
 
-if [ "$suite_conclusion" = "failure" ]; then
-  emit_run true "previous suite job failed (retry even with no merges)"
+# success = green suite; skipped = this gate already opted out. Anything
+# else (failure, timed_out, startup_failure, cancelled, empty) retries so a
+# quiet night cannot leave a red/timeout nightly stranded until a merge.
+if [ -n "$suite_conclusion" ] && [ "$suite_conclusion" != "success" ] && [ "$suite_conclusion" != "skipped" ]; then
+  emit_run true "previous suite job concluded ${suite_conclusion} (retry even with no merges)"
+  exit 0
+fi
+if [ -z "$suite_conclusion" ]; then
+  emit_run true "previous run has no suite job conclusion (retry / fail-open)"
   exit 0
 fi
 
