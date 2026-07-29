@@ -22,6 +22,14 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 export type VpsInventoryState = "available" | "assigned" | "retired";
 
+/**
+ * Minimum remaining paid runway a pooled box must have before adopt-first
+ * will claim it. Shorter than this and the claim skips the candidate
+ * (falling through to purchase) rather than landing a tenant on a box that
+ * dies the next day.
+ */
+export const VPS_POOL_MIN_RUNWAY_MS = 72 * 60 * 60 * 1000;
+
 export type VpsInventoryRow = {
   vm_id: number;
   hostname: string | null;
@@ -41,11 +49,43 @@ export type VpsInventoryRow = {
    * be paid for a kvm2-priced tenant.
    */
   never_renew: boolean;
+  /**
+   * Hostinger paid-through timestamp (`expires_at ?? next_billing_at` from
+   * the billing subscription). Null when unknown / not yet refreshed.
+   * {@link claimAvailableVps} prefers the furthest expiry and skips boxes
+   * with under {@link VPS_POOL_MIN_RUNWAY_MS} of runway.
+   */
+  expires_at: string | null;
   updated_at: string;
 };
 
+/** Paid-through from a Hostinger billing subscription (either field). */
+export function paidThroughFromBillingSub(sub: {
+  expires_at?: string | null;
+  next_billing_at?: string | null;
+}): string | null {
+  return sub.expires_at ?? sub.next_billing_at ?? null;
+}
+
+/** True when the box has unknown expiry OR at least {@link VPS_POOL_MIN_RUNWAY_MS} left. */
+export function hasPoolRunway(
+  expiresAt: string | null | undefined,
+  nowMs: number = Date.now()
+): boolean {
+  if (expiresAt == null || expiresAt === "") return true;
+  const ms = Date.parse(expiresAt);
+  if (!Number.isFinite(ms)) return true;
+  return ms - nowMs >= VPS_POOL_MIN_RUNWAY_MS;
+}
+
 /**
  * Atomically claim one available box of the requested size.
+ *
+ * Preference: furthest {@link VpsInventoryRow.expires_at} first (unknown
+ * expiry sorts last), then oldest `acquired_at` as a tie-break. Candidates
+ * with a known expiry under {@link VPS_POOL_MIN_RUNWAY_MS} are skipped so a
+ * signup is never landed on a box that dies the next day — the caller then
+ * falls through to purchase.
  *
  * Race safety: two concurrent provisions must never adopt the same VM. The
  * conditional UPDATE (`state = 'available'` in the WHERE) is the lock — the
@@ -79,16 +119,31 @@ export async function claimAvailableVps(
   const ownRow = ((own as VpsInventoryRow[] | null) ?? [])[0];
   if (ownRow) return ownRow;
 
+  // Push the 72h runway floor into the query so short-runway boxes never
+  // crowd the LIMIT 20 window ahead of eligible null-expiry inventory
+  // (nulls sort last on expires_at DESC; known near-expiry would otherwise
+  // fill the page and hide usable nulls). Client-side hasPoolRunway remains
+  // as defense in depth. Furthest expiry first; unknown (null) last.
+  const nowMs = Date.now();
+  const minExpiryIso = new Date(nowMs + VPS_POOL_MIN_RUNWAY_MS).toISOString();
+  // Quote the ISO value: PostgREST treats `.` and `:` as reserved in filter
+  // grammar, so an unquoted timestamp would break the or() clause.
   const { data: candidates, error } = await db
     .from("vps_inventory")
-    .select("vm_id")
+    .select("vm_id, expires_at")
     .eq("state", "available")
     .eq("plan", plan)
+    .or(`expires_at.is.null,expires_at.gte."${minExpiryIso}"`)
+    .order("expires_at", { ascending: false, nullsFirst: false })
     .order("acquired_at", { ascending: true })
-    .limit(5);
+    .limit(20);
   if (error) throw new Error(`claimAvailableVps: ${error.message}`);
 
-  for (const candidate of (candidates as { vm_id: number }[] | null) ?? []) {
+  const eligible = ((candidates as { vm_id: number; expires_at: string | null }[] | null) ?? []).filter(
+    (c) => hasPoolRunway(c.expires_at, nowMs)
+  );
+
+  for (const candidate of eligible) {
     const { data: claimed, error: claimErr } = await db
       .from("vps_inventory")
       .update({
@@ -199,6 +254,8 @@ export async function releaseVpsToPool(
     plan: VpsSize;
     hostname?: string | null;
     hostingerBillingSubscriptionId?: string | null;
+    /** Hostinger paid-through; when omitted the existing value is preserved on update. */
+    expiresAt?: string | null;
     notes?: string | null;
   },
   client?: SupabaseClient
@@ -219,16 +276,18 @@ export async function releaseVpsToPool(
     // grace-expired wipe re-running after the cancel already pooled and a
     // failed adopt retired it) must not resurrect it into the adopt pool.
     if ((existing as { state: string }).state === "retired") return;
+    const patch: Record<string, unknown> = {
+      state: "available",
+      assigned_business_id: null,
+      assigned_at: null,
+      hostinger_billing_subscription_id: input.hostingerBillingSubscriptionId ?? null,
+      notes: input.notes ?? null,
+      updated_at: nowIso
+    };
+    if (input.expiresAt !== undefined) patch.expires_at = input.expiresAt;
     const { error } = await db
       .from("vps_inventory")
-      .update({
-        state: "available",
-        assigned_business_id: null,
-        assigned_at: null,
-        hostinger_billing_subscription_id: input.hostingerBillingSubscriptionId ?? null,
-        notes: input.notes ?? null,
-        updated_at: nowIso
-      })
+      .update(patch)
       .eq("vm_id", input.vmId)
       // Guard against a retire racing between our read and this write.
       .neq("state", "retired");
@@ -244,6 +303,7 @@ export async function releaseVpsToPool(
     assigned_at: null,
     hostname: input.hostname ?? `srv${input.vmId}.hstgr.cloud`,
     hostinger_billing_subscription_id: input.hostingerBillingSubscriptionId ?? null,
+    expires_at: input.expiresAt ?? null,
     notes: input.notes ?? null,
     updated_at: nowIso
   });
@@ -313,4 +373,47 @@ export async function listVpsInventory(client?: SupabaseClient): Promise<VpsInve
     .order("acquired_at", { ascending: false });
   if (error) throw new Error(`listVpsInventory: ${error.message}`);
   return (data as VpsInventoryRow[] | null) ?? [];
+}
+
+/**
+ * Refresh `expires_at` on every non-retired inventory row from the live
+ * Hostinger billing subscriptions. Called by the daily billing-posture cron
+ * so adopt-first ranking stays current without a separate job.
+ *
+ * Returns the number of rows whose stored expiry changed (or was filled).
+ */
+export async function refreshVpsInventoryExpiresAt(
+  inventory: ReadonlyArray<
+    Pick<VpsInventoryRow, "vm_id" | "state" | "hostinger_billing_subscription_id" | "expires_at">
+  >,
+  subscriptions: ReadonlyArray<{
+    id: string;
+    expires_at?: string | null;
+    next_billing_at?: string | null;
+  }>,
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const subsById = new Map(subscriptions.map((s) => [s.id, s]));
+  let updated = 0;
+  for (const row of inventory) {
+    if (row.state === "retired") continue;
+    if (!row.hostinger_billing_subscription_id) continue;
+    const sub = subsById.get(row.hostinger_billing_subscription_id);
+    if (!sub) continue;
+    const next = paidThroughFromBillingSub(sub);
+    // Never wipe a known paid-through with null: a transient Hostinger
+    // response missing both expires_at and next_billing_at would otherwise
+    // re-admit a short-runway box (hasPoolRunway treats null as eligible).
+    if (next == null) continue;
+    if (next === row.expires_at) continue;
+    const { error } = await db
+      .from("vps_inventory")
+      .update({ expires_at: next, updated_at: new Date().toISOString() })
+      .eq("vm_id", row.vm_id)
+      .neq("state", "retired");
+    if (error) throw new Error(`refreshVpsInventoryExpiresAt: ${error.message}`);
+    updated += 1;
+  }
+  return updated;
 }

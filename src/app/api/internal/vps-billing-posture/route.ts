@@ -16,7 +16,7 @@ import { errorResponse, successResponse, handleRouteError } from "@/lib/api-resp
 import { logger } from "@/lib/logger";
 import { listBusinesses } from "@/lib/db/businesses";
 import { listBusinessIdsWithLiveSubscription } from "@/lib/db/subscriptions";
-import { listVpsInventory } from "@/lib/db/vps-inventory";
+import { listVpsInventory, refreshVpsInventoryExpiresAt } from "@/lib/db/vps-inventory";
 import { HostingerClient, DEFAULT_HOSTINGER_BASE_URL } from "@/lib/hostinger/client";
 import { checkVpsBillingPosture } from "@/lib/vps/billing-posture";
 import { sendOpsBillingPostureEmail } from "@/lib/email/ops-notify";
@@ -43,12 +43,28 @@ export async function POST(request: Request): Promise<Response> {
       token: process.env.HOSTINGER_API_TOKEN ?? ""
     });
 
+    // Keep vps_inventory.expires_at fresh so adopt-first ranks by furthest
+    // paid-through date. Best-effort: a refresh failure must not skip the
+    // posture heal/report that this cron exists for.
+    const [inventoryForExpiry, billingSubs] = await Promise.all([
+      listVpsInventory(),
+      hostinger.listBillingSubscriptions()
+    ]);
+    let expiresRefreshed = 0;
+    try {
+      expiresRefreshed = await refreshVpsInventoryExpiresAt(inventoryForExpiry, billingSubs);
+    } catch (err) {
+      logger.warn("vps inventory expires_at refresh failed (continuing posture check)", {
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+
     const result = await checkVpsBillingPosture({
       listBusinesses,
       listBusinessIdsWithLiveSubscription,
       listInventory: listVpsInventory,
       getVirtualMachine: (vmId) => hostinger.getVirtualMachine(vmId),
-      listBillingSubscriptions: () => hostinger.listBillingSubscriptions(),
+      listBillingSubscriptions: async () => billingSubs,
       enableAutoRenewal: (subscriptionId) => hostinger.enableBillingAutoRenewal(subscriptionId)
     });
 
@@ -64,13 +80,15 @@ export async function POST(request: Request): Promise<Response> {
       checkedTenantVms: result.checkedTenantVms,
       checkedPoolBoxes: result.checkedPoolBoxes,
       findings: result.findings.length,
-      autoHealed: result.findings.filter((f) => f.autoHealed).length
+      autoHealed: result.findings.filter((f) => f.autoHealed).length,
+      expiresRefreshed
     });
 
     return successResponse({
       checkedTenantVms: result.checkedTenantVms,
       checkedPoolBoxes: result.checkedPoolBoxes,
-      findings: result.findings
+      findings: result.findings,
+      expiresRefreshed
     });
   } catch (err) {
     return handleRouteError(err);

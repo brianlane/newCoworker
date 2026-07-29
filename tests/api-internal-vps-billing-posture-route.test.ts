@@ -10,7 +10,8 @@ vi.mock("@/lib/db/subscriptions", () => ({
   listBusinessIdsWithLiveSubscription: vi.fn()
 }));
 vi.mock("@/lib/db/vps-inventory", () => ({
-  listVpsInventory: vi.fn()
+  listVpsInventory: vi.fn().mockResolvedValue([]),
+  refreshVpsInventoryExpiresAt: vi.fn().mockResolvedValue(0)
 }));
 vi.mock("@/lib/hostinger/client", () => ({
   DEFAULT_HOSTINGER_BASE_URL: "https://developers.hostinger.com",
@@ -34,6 +35,7 @@ import { POST } from "@/app/api/internal/vps-billing-posture/route";
 import { assertCronAuth } from "@/lib/cron-auth";
 import { checkVpsBillingPosture } from "@/lib/vps/billing-posture";
 import { sendOpsBillingPostureEmail } from "@/lib/email/ops-notify";
+import { refreshVpsInventoryExpiresAt } from "@/lib/db/vps-inventory";
 
 function makeRequest(): Request {
   return new Request("http://localhost/api/internal/vps-billing-posture", {
@@ -46,6 +48,7 @@ describe("api/internal/vps-billing-posture route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(assertCronAuth).mockReturnValue(true);
+    vi.mocked(refreshVpsInventoryExpiresAt).mockResolvedValue(0);
     vi.mocked(checkVpsBillingPosture).mockResolvedValue({
       checkedTenantVms: 2,
       checkedPoolBoxes: 1,
@@ -64,7 +67,13 @@ describe("api/internal/vps-billing-posture route", () => {
     const res = await POST(makeRequest());
     expect(res.status).toBe(200);
     const json = await res.json();
-    expect(json.data).toEqual({ checkedTenantVms: 2, checkedPoolBoxes: 1, findings: [] });
+    expect(json.data).toEqual({
+      checkedTenantVms: 2,
+      checkedPoolBoxes: 1,
+      findings: [],
+      expiresRefreshed: 0
+    });
+    expect(refreshVpsInventoryExpiresAt).toHaveBeenCalled();
     expect(sendOpsBillingPostureEmail).not.toHaveBeenCalled();
   });
 
@@ -94,6 +103,13 @@ describe("api/internal/vps-billing-posture route", () => {
       checkedTenantVms: 3,
       checkedPoolBoxes: 0
     });
+  });
+
+  it("continues the posture check when expires_at refresh fails", async () => {
+    vi.mocked(refreshVpsInventoryExpiresAt).mockRejectedValue(new Error("db down"));
+    const res = await POST(makeRequest());
+    expect(res.status).toBe(200);
+    expect(checkVpsBillingPosture).toHaveBeenCalled();
   });
 
   it("surfaces unexpected failures via handleRouteError", async () => {
