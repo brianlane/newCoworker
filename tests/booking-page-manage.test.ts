@@ -115,7 +115,13 @@ function row(over: Record<string, unknown> = {}) {
 beforeEach(() => {
   vi.clearAllMocks();
   mockRow.mockResolvedValue(row());
-  mockPage.mockResolvedValue({ min_notice_minutes: 120, max_daily_bookings: null } as never);
+  mockPage.mockResolvedValue({
+    min_notice_minutes: 120,
+    max_daily_bookings: null,
+    enabled: true,
+    slug: "newcoworker",
+    token: "ncb_" + "b".repeat(64)
+  } as never);
   mockCapReached.mockResolvedValue(false);
   mockBusiness.mockResolvedValue({ name: "New Coworker", timezone: "America/Phoenix" } as never);
   mockCancelCore.mockResolvedValue({ ok: true } as never);
@@ -158,9 +164,51 @@ describe("getManagedBooking", () => {
         zoomJoinUrl: "https://zoom.us/j/93412345678?pwd=secret",
         changeable: true,
         past: false,
-        minNoticeMinutes: 120
+        minNoticeMinutes: 120,
+        bookingPageUrl: "http://localhost:3000/book/newcoworker"
       }
     });
+  });
+
+  it("prefers the vanity slug over the raw page token for the rebook URL", async () => {
+    mockPage.mockResolvedValue({
+      min_notice_minutes: 120,
+      max_daily_bookings: null,
+      enabled: true,
+      slug: "acme",
+      token: "ncb_" + "c".repeat(64)
+    } as never);
+    const out = await getManagedBooking(TOKEN);
+    expect(out.ok && out.view.bookingPageUrl).toBe("http://localhost:3000/book/acme");
+  });
+
+  it("falls back to the page token when no vanity slug is set", async () => {
+    const pageToken = "ncb_" + "d".repeat(64);
+    mockPage.mockResolvedValue({
+      min_notice_minutes: 120,
+      max_daily_bookings: null,
+      enabled: true,
+      slug: null,
+      token: pageToken
+    } as never);
+    const out = await getManagedBooking(TOKEN);
+    expect(out.ok && out.view.bookingPageUrl).toBe(`http://localhost:3000/book/${pageToken}`);
+  });
+
+  it("omits the rebook URL when the page is missing or disabled", async () => {
+    mockPage.mockResolvedValue(null as never);
+    const missing = await getManagedBooking(TOKEN);
+    expect(missing.ok && missing.view.bookingPageUrl).toBeNull();
+
+    mockPage.mockResolvedValue({
+      min_notice_minutes: 120,
+      max_daily_bookings: null,
+      enabled: false,
+      slug: "newcoworker",
+      token: "ncb_" + "e".repeat(64)
+    } as never);
+    const disabled = await getManagedBooking(TOKEN);
+    expect(disabled.ok && disabled.view.bookingPageUrl).toBeNull();
   });
 
   it("assumes a default duration for bookings made before the column existed", async () => {

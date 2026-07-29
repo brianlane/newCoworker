@@ -63,6 +63,7 @@ export default async function ManageBooking({
           zoomJoinUrl={view.zoomJoinUrl}
           changeable={view.changeable}
           past={view.past}
+          bookingPageUrl={view.bookingPageUrl}
           strings={{
             heading: t("manageHeading"),
             withBusiness: t("manageWithBusiness", { business: view.businessName }),
@@ -81,6 +82,7 @@ export default async function ManageBooking({
             needsHuman: t("manageNeedsHuman"),
             canceledHeading: t("manageCanceledHeading"),
             canceledBody: t("manageCanceledBody", { business: view.businessName }),
+            canceledBookAgain: t("manageCanceledBookAgain"),
             movedHeading: t("manageMovedHeading"),
             slotTaken: t("slotTaken"),
             changeFailed: t("manageChangeFailed"),

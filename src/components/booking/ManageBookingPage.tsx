@@ -29,6 +29,7 @@ type Strings = {
   slotsUnavailable: string;
   canceledHeading: string;
   canceledBody: string;
+  canceledBookAgain: string;
   movedHeading: string;
   slotTaken: string;
   changeFailed: string;
@@ -45,6 +46,8 @@ type Props = {
   zoomJoinUrl: string | null;
   changeable: boolean;
   past: boolean;
+  /** Public booking page URL for the rebook link after cancel; null = plain text. */
+  bookingPageUrl: string | null;
   strings: Strings;
 };
 
@@ -58,6 +61,7 @@ export function ManageBookingPage({
   zoomJoinUrl,
   changeable,
   past,
+  bookingPageUrl,
   strings
 }: Props) {
   const [view, setView] = useState<View>("summary");
@@ -200,7 +204,16 @@ export function ManageBookingPage({
     return (
       <div className={card}>
         <h1 className="text-xl font-semibold text-parchment">{strings.canceledHeading}</h1>
-        <p className="mt-2 text-sm text-parchment/70">{strings.canceledBody}</p>
+        <p className="mt-2 text-sm text-parchment/70">
+          {strings.canceledBody}{" "}
+          {bookingPageUrl ? (
+            <a href={bookingPageUrl} className="text-signal-teal hover:underline">
+              {strings.canceledBookAgain}
+            </a>
+          ) : (
+            strings.canceledBookAgain
+          )}
+        </p>
         <p className="mt-6 text-xs text-parchment/35">{strings.poweredBy}</p>
       </div>
     );
