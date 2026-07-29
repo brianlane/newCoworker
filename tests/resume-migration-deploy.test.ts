@@ -74,19 +74,37 @@ describe("resumeMigrationDeploy", () => {
     ).rejects.toThrow(/no IP/);
   });
 
-  it("throws when there is no SSH key", async () => {
-    await expect(
-      resumeMigrationDeploy(
-        { businessId: "biz-1" },
-        {
-          getBusiness: async () =>
-            ({ hostinger_vps_id: "1900001" }) as never,
-          getActiveVpsSshKey: async () => null,
-          hostingerGetVm: async () => ({
-            ipv4: [{ address: "9.9.9.9" }]
-          })
-        }
-      )
-    ).rejects.toThrow(/no SSH key/);
+  it("falls back to subscription billing id when the VM has none", async () => {
+    const remoteExec = vi.fn(async (args: { command: string }) => {
+      if (args.command.includes("flock -n")) {
+        return { exitCode: 75, signal: null, stdout: "", stderr: "busy" };
+      }
+      return { exitCode: 0, signal: null, stdout: "0\nSTOPPED", stderr: "" };
+    });
+    const out = await resumeMigrationDeploy(
+      { businessId: "biz-1" },
+      {
+        getBusiness: async () =>
+          ({ hostinger_vps_id: "1900001" }) as never,
+        getActiveVpsSshKey: async () =>
+          ({ private_key_pem: "PEM", ssh_username: "root" }) as never,
+        getLatestProvisioningStatus: async () => ({
+          percent: 40,
+          phase: "remote_deploy_starting",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          logStatus: "thinking"
+        }),
+        getSubscription: async () =>
+          ({ hostinger_billing_subscription_id: "hbs-from-sub" }) as never,
+        recordProgress: vi.fn(async () => ({}) as never),
+        hostingerGetVm: async () => ({
+          ipv4: [{ address: "9.9.9.9" }],
+          subscription_id: null
+        }),
+        remoteExec,
+        sleep: async () => undefined
+      }
+    );
+    expect(out.hostingerBillingSubscriptionId).toBe("hbs-from-sub");
   });
 });

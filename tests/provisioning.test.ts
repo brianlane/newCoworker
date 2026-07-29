@@ -405,6 +405,26 @@ describe("provisioning/orchestrate", () => {
     expect(markGatewayTokenDeployed).not.toHaveBeenCalled();
   });
 
+  it("records deploy_exception when detached deploy throws", async () => {
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    await orchestrateProvisioning(
+      { businessId: "biz-uuid-1", tier: "standard", ownerEmail: "o@test.com" },
+      {
+        vpsProvisioner,
+        remoteExec,
+        latestProvisioningStatus: async () => {
+          throw new Error("progress db down");
+        },
+        sleep: async () => undefined
+      }
+    );
+    expect(recordProvisioningProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "deploy_exception", status: "error" })
+    );
+    expect(markGatewayTokenDeployed).not.toHaveBeenCalled();
+  });
+
   it("aborts provisioning when the per-tenant token lookup fails", async () => {
     vi.mocked(getActiveGatewayTokenForBusiness).mockRejectedValueOnce(new Error("db down"));
     const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));

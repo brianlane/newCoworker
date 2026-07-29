@@ -165,6 +165,24 @@ describe("runDetachedDeployClient", () => {
     expect(result).toEqual({ ok: true, source: "exit_file" });
   });
 
+  it("returns start failure when remoteExec throws", async () => {
+    const result = await runDetachedDeployClient({
+      businessId: "biz-1",
+      envVars: "TIER=starter",
+      host: "1.2.3.4",
+      username: "root",
+      privateKeyPem: "PEM",
+      remoteExec: vi.fn(async () => {
+        throw new Error("ssh down");
+      }),
+      latestProvisioningStatus: async () => null,
+      sleep: async () => undefined,
+      now: () => 0
+    });
+    expect(result.ok).toBe(false);
+    if (!result.ok) expect(result.reason).toMatch(/ssh down/);
+  });
+
   it("fails immediately when start exits non-zero (not 75)", async () => {
     const result = await runDetachedDeployClient({
       businessId: "biz-1",

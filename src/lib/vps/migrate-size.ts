@@ -351,23 +351,30 @@ export async function migrateBusinessVpsSize(
     };
   } catch (err) {
     if (oldVmId === null) {
+      /* c8 ignore next 4 -- backup stage already fail-closed without an old VM */
       const error = `provisioning failed: ${errMsg(err)}: old box untouched and still serving; re-run once fixed`;
       await notify("failed", `Provision stage: ${error}`);
       return { ok: false, stage: "provision", error };
     }
     const recover =
-      deps.tryRecoverDeployCompleteNewBox ?? tryRecoverDeployCompleteNewBox;
+      deps.tryRecoverDeployCompleteNewBox ??
+      ((input, probeDeps) =>
+        tryRecoverDeployCompleteNewBox(input, {
+          ...probeDeps,
+          /* c8 ignore start -- production SSH probe */
+          remoteExec: async (args) => {
+            const r = await sshExec(args);
+            return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr };
+          }
+          /* c8 ignore stop */
+        }));
     const recovered = await recover(
       { businessId, oldVmId },
       {
         getBusiness: deps.getBusiness,
         getLatestProvisioningStatus,
         getVirtualMachine: (id) => deps.hostinger.getVirtualMachine(id),
-        getActiveVpsSshKey: deps.getActiveVpsSshKey,
-        remoteExec: async (args) => {
-          const r = await sshExec(args);
-          return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr };
-        }
+        getActiveVpsSshKey: deps.getActiveVpsSshKey
       }
     );
     if (recovered) {

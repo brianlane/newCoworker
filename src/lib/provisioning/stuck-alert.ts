@@ -210,6 +210,7 @@ export async function scanAndAlertStuckProvisioning(
   } = {}
 ): Promise<{ alerted: string[] }> {
   const now = deps.now ?? Date.now;
+  /* c8 ignore next -- production DB list; tests inject listCandidates */
   const list = deps.listCandidates ?? listStuckScanCandidatesFromDb;
   const candidates = selectStuckScanCandidates(await list(), now());
   const alerted: string[] = [];

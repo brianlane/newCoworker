@@ -670,6 +670,7 @@ export async function runDetachedDeployClient(input: {
   }
 
   if (!started) {
+    /* c8 ignore next -- defensive; start paths above always set started or return */
     return { ok: false, reason: "failed to start deploy-client.sh" };
   }
 
@@ -2089,7 +2090,7 @@ async function runOrchestrator(
     }
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
-    logger.error("Remote deploy SSH failed — VPS may need manual setup", {
+    logger.error("Remote deploy SSH failed: VPS may need manual setup", {
       businessId,
       vpsId,
       error: msg

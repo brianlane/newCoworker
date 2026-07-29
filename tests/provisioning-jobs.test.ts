@@ -501,6 +501,57 @@ describe("retryStalledProvisioningJob", () => {
     );
   });
 
+  it("settles migration-done even when markOutcome throws", async () => {
+    const migrationJob: ProvisioningJobRow = {
+      ...JOB_ROW,
+      purpose: "term_renewal",
+      suppress_owner_notify: true,
+      skip_pool_adopt: true
+    };
+    const result = await retryStalledProvisioningJob({
+      claim: vi.fn(async () => migrationJob),
+      settleExhausted: noExhausted(),
+      getBusinessStatus: vi.fn(async () => "online"),
+      getLatestProgress: vi.fn(async () => ({
+        percent: 100,
+        phase: "complete",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        logStatus: "success" as const
+      })),
+      orchestrate: vi.fn(async () => okResult),
+      markOutcome: vi.fn(async () => {
+        throw new Error("settle fail");
+      })
+    });
+    expect(result.kind).toBe("already_online");
+  });
+
+  it("resumes mid-deploy even when post-resume markOutcome throws", async () => {
+    const migrationJob: ProvisioningJobRow = {
+      ...JOB_ROW,
+      purpose: "term_renewal",
+      suppress_owner_notify: true,
+      skip_pool_adopt: true
+    };
+    const result = await retryStalledProvisioningJob({
+      claim: vi.fn(async () => migrationJob),
+      settleExhausted: noExhausted(),
+      getBusinessStatus: vi.fn(async () => "online"),
+      getLatestProgress: vi.fn(async () => ({
+        percent: 40,
+        phase: "remote_deploy_starting",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        logStatus: "thinking" as const
+      })),
+      resumeMigrationDeploy: vi.fn(async () => okResult),
+      orchestrate: vi.fn(async () => okResult),
+      markOutcome: vi.fn(async () => {
+        throw "settle string fail";
+      })
+    });
+    expect(result.kind).toBe("retried");
+  });
+
   it("reports retry_failed when mid-deploy resume throws", async () => {
     const markOutcome = vi.fn(async () => undefined);
     const migrationJob: ProvisioningJobRow = {

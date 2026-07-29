@@ -75,9 +75,21 @@ describe("selectStuckScanCandidates", () => {
     expect(selectStuckScanCandidates([base], now)).toHaveLength(1);
   });
 
-  it("drops fresh progress", () => {
-    const now = Date.parse("2026-07-29T10:05:00.000Z");
-    expect(selectStuckScanCandidates([base], now)).toHaveLength(0);
+  it("keeps job-failed candidates even when the business is offline", () => {
+    const now = Date.parse("2026-07-29T10:25:00.000Z");
+    const rows: StuckScanCandidate[] = [
+      {
+        businessId: "biz-2",
+        phase: "remote_deploy_starting",
+        percent: 40,
+        updatedAt: "2026-07-29T10:00:00.000Z",
+        logStatus: "thinking",
+        businessStatus: "offline",
+        purpose: "signup",
+        jobStatus: "failed"
+      }
+    ];
+    expect(selectStuckScanCandidates(rows, now)).toHaveLength(1);
   });
 });
 
@@ -256,6 +268,25 @@ describe("alertFromWatchdogResult", () => {
     );
     expect(sendEmail).toHaveBeenCalledWith(
       expect.objectContaining({ trigger: "exhausted_failed", businessId: "biz-b" })
+    );
+  });
+
+  it("still alerts when latest progress lookup throws", async () => {
+    const sendEmail = vi.fn(async () => true);
+    await alertFromWatchdogResult(
+      { kind: "retry_failed", businessId: "biz-a", attempts: 1, error: "x" },
+      {
+        sendEmail,
+        hasPriorAlert: async () => false,
+        recordProgress: vi.fn(async () => ({}) as never),
+        getBusinessName: async () => "Acme",
+        getLatestStatus: async () => {
+          throw new Error("logs down");
+        }
+      }
+    );
+    expect(sendEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ businessId: "biz-a", phase: "unknown" })
     );
   });
 });

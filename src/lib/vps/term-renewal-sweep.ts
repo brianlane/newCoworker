@@ -642,18 +642,24 @@ async function migrateTenantTermRenewal(
     };
   } catch (err) {
     const recover =
-      deps.tryRecoverDeployCompleteNewBox ?? tryRecoverDeployCompleteNewBox;
+      deps.tryRecoverDeployCompleteNewBox ??
+      ((input, probeDeps) =>
+        tryRecoverDeployCompleteNewBox(input, {
+          ...probeDeps,
+          /* c8 ignore start -- production SSH probe */
+          remoteExec: async (args) => {
+            const r = await sshExec(args);
+            return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr };
+          }
+          /* c8 ignore stop */
+        }));
     const recovered = await recover(
       { businessId, oldVmId },
       {
         getBusiness: deps.getBusiness,
         getLatestProvisioningStatus,
         getVirtualMachine: (id) => deps.hostinger.getVirtualMachine(id),
-        getActiveVpsSshKey: deps.getActiveVpsSshKey,
-        remoteExec: async (args) => {
-          const r = await sshExec(args);
-          return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr };
-        }
+        getActiveVpsSshKey: deps.getActiveVpsSshKey
       }
     );
     if (recovered) {
