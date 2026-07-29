@@ -408,10 +408,38 @@ describe("retryStalledProvisioningJob", () => {
     }
   );
 
-  it("settles migration jobs when deploy already completed (no second purchase)", async () => {
+  it("settles migration jobs when orchestrator phase is complete (no second purchase)", async () => {
     const markOutcome = vi.fn(async () => undefined);
     const orchestrate = vi.fn(async () => okResult);
     const resumeMigrationDeploy = vi.fn(async () => okResult);
+    const migrationJob: ProvisioningJobRow = {
+      ...JOB_ROW,
+      purpose: "term_renewal",
+      suppress_owner_notify: true,
+      skip_pool_adopt: true
+    };
+    const result = await retryStalledProvisioningJob({
+      claim: vi.fn(async () => migrationJob),
+      settleExhausted: noExhausted(),
+      getBusinessStatus: vi.fn(async () => "online"),
+      getLatestProgress: vi.fn(async () => ({
+        percent: 100,
+        phase: "complete",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        logStatus: "success" as const
+      })),
+      resumeMigrationDeploy,
+      orchestrate,
+      markOutcome
+    });
+    expect(result).toEqual({ kind: "already_online", businessId: BIZ });
+    expect(orchestrate).not.toHaveBeenCalled();
+    expect(resumeMigrationDeploy).not.toHaveBeenCalled();
+    expect(markOutcome).toHaveBeenCalledWith(BIZ, "succeeded");
+  });
+
+  it("does not settle on deploy_client_complete alone (cutover still pending)", async () => {
+    const markOutcome = vi.fn(async () => undefined);
     const migrationJob: ProvisioningJobRow = {
       ...JOB_ROW,
       purpose: "term_renewal",
@@ -428,17 +456,17 @@ describe("retryStalledProvisioningJob", () => {
         updatedAt: "2026-01-01T00:00:00.000Z",
         logStatus: "thinking" as const
       })),
-      resumeMigrationDeploy,
-      orchestrate,
+      orchestrate: vi.fn(async () => okResult),
       markOutcome
     });
-    expect(result).toEqual({ kind: "already_online", businessId: BIZ });
-    expect(orchestrate).not.toHaveBeenCalled();
-    expect(resumeMigrationDeploy).not.toHaveBeenCalled();
-    expect(markOutcome).toHaveBeenCalledWith(BIZ, "succeeded");
+    expect(result.kind).toBe("retry_failed");
+    if (result.kind === "retry_failed") {
+      expect(result.error).toMatch(/cutover still pending/);
+    }
+    expect(markOutcome).toHaveBeenCalledWith(BIZ, "failed", expect.stringContaining("cutover"));
   });
 
-  it("resumes mid-deploy migration jobs without re-running full orchestrate", async () => {
+  it("resumes mid-deploy then leaves cutover pending (does not fake success)", async () => {
     const markOutcome = vi.fn(async () => undefined);
     const orchestrate = vi.fn(async () => okResult);
     const resumeMigrationDeploy = vi.fn(async () => okResult);
@@ -462,11 +490,11 @@ describe("retryStalledProvisioningJob", () => {
       orchestrate,
       markOutcome
     });
-    expect(result).toEqual({ kind: "retried", businessId: BIZ, attempts: 2 });
-    expect(resumeMigrationDeploy).toHaveBeenCalledWith({
-      businessId: BIZ,
-      purpose: "term_renewal"
-    });
+    expect(result.kind).toBe("retry_failed");
+    if (result.kind === "retry_failed") {
+      expect(result.error).toMatch(/cutover still pending/);
+    }
+    expect(resumeMigrationDeploy).toHaveBeenCalled();
     expect(orchestrate).not.toHaveBeenCalled();
   });
 
@@ -549,7 +577,7 @@ describe("retryStalledProvisioningJob", () => {
         throw "settle string fail";
       })
     });
-    expect(result.kind).toBe("retried");
+    expect(result.kind).toBe("retry_failed");
   });
 
   it("reports retry_failed when mid-deploy resume throws", async () => {

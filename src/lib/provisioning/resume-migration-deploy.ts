@@ -132,11 +132,10 @@ export async function resumeMigrationDeploy(
 
   await recordProgress({
     businessId: input.businessId,
-    phase: "complete",
+    phase: "deploy_client_complete",
     percent: 100,
-    message: "Coworker provisioning complete (watchdog resume)",
-    source: "orchestrator",
-    status: "success"
+    message: "deploy-client finished via watchdog resume (cutover still pending)",
+    source: "orchestrator"
   });
 
   return { vpsId: vpsIdRaw, hostingerBillingSubscriptionId: billingId };

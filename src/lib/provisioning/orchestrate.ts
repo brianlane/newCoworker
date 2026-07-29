@@ -587,7 +587,14 @@ export async function waitForDetachedDeployClient(input: {
         .map((l) => l.trim())
         .filter((l) => l.length > 0);
       const exitLine = lines[0] ?? "MISSING";
-      if (exitLine !== "MISSING" && /^\d+$/.test(exitLine)) {
+      const pidState = lines[1] ?? "STOPPED";
+      // Ignore a leftover exit file while a deploy PID is still alive (or
+      // between start and the script's rm of the previous exit file).
+      if (
+        exitLine !== "MISSING" &&
+        /^\d+$/.test(exitLine) &&
+        pidState !== "RUNNING"
+      ) {
         const code = Number(exitLine);
         if (code === 0) return { ok: true, source: "exit_file" };
         return {
@@ -634,11 +641,13 @@ export async function runDetachedDeployClient(input: {
 }): Promise<DetachedDeployPollResult> {
   const logPath = `/var/log/nc-deploy-${input.businessId}.log`;
   const lockPath = `/var/lock/nc-deploy-${input.businessId}.lock`;
+  const exitPath = `/var/run/nc-deploy-${input.businessId}.exit`;
   // Pre-check flock so a busy deploy surfaces as exit 75 on this short SSH
-  // (nohup would otherwise mask the script's own flock exit). The script
-  // still acquires the same lock for single-flight when run directly.
+  // (nohup would otherwise mask the script's own flock exit). Clear any
+  // stale exit file only when we are about to start a fresh deploy.
   const startCmd =
     `if ! flock -n ${lockPath} true; then exit ${DEPLOY_CLIENT_LOCK_BUSY_EXIT}; fi; ` +
+    `rm -f ${exitPath}; ` +
     `${input.envVars} nohup /opt/deploy-client.sh >>${logPath} 2>&1 & echo $!`;
 
   let started = false;

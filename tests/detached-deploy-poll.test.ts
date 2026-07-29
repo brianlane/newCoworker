@@ -104,6 +104,39 @@ describe("waitForDetachedDeployClient", () => {
     });
   });
 
+  it("ignores a numeric exit file while the deploy PID is still RUNNING", async () => {
+    let polls = 0;
+    const result = await waitForDetachedDeployClient({
+      businessId: "biz-1",
+      host: "1.2.3.4",
+      username: "root",
+      privateKeyPem: "PEM",
+      remoteExec: vi.fn(async () => ok("0\nRUNNING")),
+      latestProvisioningStatus: async () => {
+        polls += 1;
+        if (polls >= 3) {
+          return {
+            percent: 100,
+            phase: "deploy_client_complete",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            logStatus: "thinking"
+          };
+        }
+        return {
+          percent: 40,
+          phase: "remote_deploy_starting",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          logStatus: "thinking"
+        };
+      },
+      sleep: async () => undefined,
+      now: () => polls * 1000,
+      pollIntervalMs: 1,
+      deadlineMs: 60_000
+    });
+    expect(result).toEqual({ ok: true, source: "progress" });
+  });
+
   it("fails when deadline elapses", async () => {
     let t = 0;
     const result = await waitForDetachedDeployClient({

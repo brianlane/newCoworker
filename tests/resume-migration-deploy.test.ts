@@ -45,7 +45,7 @@ describe("resumeMigrationDeploy", () => {
       expect.objectContaining({ phase: "remote_deploy_resume" })
     );
     expect(recordProgress).toHaveBeenCalledWith(
-      expect.objectContaining({ phase: "complete", percent: 100 })
+      expect.objectContaining({ phase: "deploy_client_complete", percent: 100 })
     );
   });
 

@@ -401,10 +401,7 @@ export async function retryStalledProvisioningJob(
         });
       }
     }
-    const deployDone =
-      latest?.phase === "complete" ||
-      latest?.phase === "deploy_client_complete" ||
-      (latest?.percent === 100 && latest.logStatus === "success");
+    const deployDone = latest?.phase === "complete";
     if (deployDone) {
       await markOutcome(job.business_id, "succeeded").catch((err: unknown) => {
         logger.warn("provisioning watchdog: migration-done settle failed", {
@@ -413,6 +410,25 @@ export async function retryStalledProvisioningJob(
         });
       });
       return withExhausted({ kind: "already_online", businessId: job.business_id });
+    }
+
+    // deploy_client_complete (or percent 100 without phase complete) means the
+    // box finished deploy-client, but migrate/term-renewal cutover (restore,
+    // billing, old-box teardown) still belongs to the original sweep. Do not
+    // settle the job as succeeded here or cutover is skipped forever.
+    if (
+      latest?.phase === "deploy_client_complete" ||
+      (latest?.percent === 100 && latest.logStatus !== "error")
+    ) {
+      const message =
+        "deploy finished but migration cutover still pending (restore/teardown)";
+      await markOutcome(job.business_id, "failed", message).catch(() => undefined);
+      return withExhausted({
+        kind: "retry_failed",
+        businessId: job.business_id,
+        attempts: job.attempts,
+        error: message
+      });
     }
 
     const midDeploy =
@@ -426,16 +442,16 @@ export async function retryStalledProvisioningJob(
           businessId: job.business_id,
           purpose
         });
-        await markOutcome(job.business_id, "succeeded").catch((err: unknown) => {
-          logger.warn("provisioning watchdog: migration-resume settle failed", {
-            businessId: job.business_id,
-            error: err instanceof Error ? err.message : String(err)
-          });
-        });
+        // Deploy only: the dead sweep must still finish cutover. Fail the job
+        // with a clear reason so the stuck alert keeps firing for ops.
+        const message =
+          "deploy resumed by watchdog; migration cutover still pending (restore/teardown)";
+        await markOutcome(job.business_id, "failed", message).catch(() => undefined);
         return withExhausted({
-          kind: "retried",
+          kind: "retry_failed",
           businessId: job.business_id,
-          attempts: job.attempts
+          attempts: job.attempts,
+          error: message
         });
       } catch (err) {
         const message = err instanceof Error ? err.message : String(err);
