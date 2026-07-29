@@ -33,7 +33,7 @@ loadEnv();
 
 const { createClient } = await import("@supabase/supabase-js");
 const { recordOneshotApplied } = await import("./_ledger.ts");
-const { syncVaultToVpsAndLog } = await import("../../src/lib/vps/sync-vault.ts");
+const { syncVaultToVps } = await import("../../src/lib/vps/sync-vault.ts");
 
 const APPLY = process.argv.includes("--apply");
 const bizFlag = process.argv.indexOf("--business-id");
@@ -213,8 +213,18 @@ async function main(): Promise<void> {
 
   if (soulChanged) {
     console.log("Syncing vault to VPS…");
-    await syncVaultToVpsAndLog(BUSINESS_ID);
-    console.log("Vault sync finished (see logs for ok/skip).");
+    const vault = await syncVaultToVps(BUSINESS_ID);
+    if (!vault.ok) {
+      console.error(
+        `Vault sync failed (${vault.reason}${vault.detail ? `: ${vault.detail}` : ""}). ` +
+          "Soul is updated in Supabase but freeform SMS still has the old vault. " +
+          "Fix the VPS/SSH issue and re-run with --apply (idempotent)."
+      );
+      process.exit(1);
+    }
+    console.log(
+      `Vault sync ok (projectId=${vault.projectId}, instructionsLength=${vault.instructionsLength}).`
+    );
   }
 
   await recordOneshotApplied(db, {
