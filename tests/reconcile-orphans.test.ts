@@ -153,6 +153,23 @@ describe("reconcileOrphanedPurchases", () => {
     ]);
   });
 
+  it("stringifies a non-Error billing-list rejection", async () => {
+    const args = makeArgs({
+      listVirtualMachines: vi.fn().mockResolvedValue([vm({ id: 1863857, subscription_id: undefined })]),
+      listBillingSubscriptions: vi.fn().mockRejectedValue("list string boom")
+    });
+
+    const result = await reconcileOrphanedPurchases(args);
+    expect(result).toEqual([
+      {
+        vmId: 1863857,
+        plan: "kvm2",
+        hostingerBillingSubscriptionId: null,
+        createdAtMs: NOW - 5 * 60 * 1000
+      }
+    ]);
+  });
+
   it("skips the billing-list call when every candidate already has subscription_id", async () => {
     const listBillingSubscriptions = vi.fn();
     const args = makeArgs({

@@ -181,7 +181,7 @@ export async function reconcileOrphanedPurchases(args: {
       vmId: vm.id,
       plan,
       hostingerBillingSubscriptionId,
-      createdAtMs: Number.isFinite(createdAtMs) ? createdAtMs : undefined
+      createdAtMs
     });
   }
   return reconciled;
