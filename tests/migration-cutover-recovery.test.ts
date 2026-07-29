@@ -99,7 +99,7 @@ describe("tryRecoverDeployCompleteNewBox", () => {
     expect(remoteExec).toHaveBeenCalledTimes(2);
   });
 
-  it("returns null when getBusiness throws", async () => {
+  it("returns null when getBusiness throws (Error and string)", async () => {
     const out = await tryRecoverDeployCompleteNewBox(
       { businessId: "biz-1", oldVmId: 100 },
       {
@@ -111,5 +111,17 @@ describe("tryRecoverDeployCompleteNewBox", () => {
       }
     );
     expect(out).toBeNull();
+
+    const out2 = await tryRecoverDeployCompleteNewBox(
+      { businessId: "biz-1", oldVmId: 100 },
+      {
+        getBusiness: async () => {
+          throw "biz string fail";
+        },
+        getLatestProvisioningStatus: async () => null,
+        getVirtualMachine: async () => ({ ipv4: [] })
+      }
+    );
+    expect(out2).toBeNull();
   });
 });

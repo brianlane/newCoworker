@@ -38,6 +38,7 @@ export async function resumeMigrationDeploy(
   input: { businessId: string },
   deps: ResumeMigrationDeployDeps = {}
 ): Promise<{ hostingerBillingSubscriptionId: string | null; vpsId: string }> {
+  /* c8 ignore next 5 -- production defaults; tests inject */
   const getBiz = deps.getBusiness ?? getBusiness;
   const getKey = deps.getActiveVpsSshKey ?? getActiveVpsSshKey;
   const getLatest = deps.getLatestProvisioningStatus ?? getLatestProvisioningStatus;

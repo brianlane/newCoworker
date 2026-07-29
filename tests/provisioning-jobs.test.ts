@@ -438,8 +438,52 @@ describe("retryStalledProvisioningJob", () => {
     expect(markOutcome).toHaveBeenCalledWith(BIZ, "succeeded");
   });
 
-  it("does not settle on deploy_client_complete alone (cutover still pending)", async () => {
+  it("settles migration complete under high_load the same way", async () => {
     const markOutcome = vi.fn(async () => undefined);
+    const migrationJob: ProvisioningJobRow = {
+      ...JOB_ROW,
+      purpose: "migrate_size",
+      suppress_owner_notify: true
+    };
+    const result = await retryStalledProvisioningJob({
+      claim: vi.fn(async () => migrationJob),
+      settleExhausted: noExhausted(),
+      getBusinessStatus: vi.fn(async () => "high_load"),
+      getLatestProgress: vi.fn(async () => ({
+        percent: 100,
+        phase: "complete",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        logStatus: "success" as const
+      })),
+      orchestrate: vi.fn(async () => okResult),
+      markOutcome
+    });
+    expect(result.kind).toBe("already_online");
+  });
+
+  it("falls through to orchestrate when online migration has no progress helper", async () => {
+    const orchestrate = vi.fn(async () => okResult);
+    const migrationJob: ProvisioningJobRow = {
+      ...JOB_ROW,
+      purpose: "term_renewal",
+      suppress_owner_notify: true,
+      skip_pool_adopt: true
+    };
+    const result = await retryStalledProvisioningJob({
+      claim: vi.fn(async () => migrationJob),
+      settleExhausted: noExhausted(),
+      getBusinessStatus: vi.fn(async () => "online"),
+      orchestrate,
+      markOutcome: vi.fn(async () => undefined)
+    });
+    expect(result.kind).toBe("retried");
+    expect(orchestrate).toHaveBeenCalled();
+  });
+
+  it("does not settle on deploy_client_complete alone (cutover still pending)", async () => {
+    const markOutcome = vi.fn(async () => {
+      throw new Error("dedupe write fail");
+    });
     const migrationJob: ProvisioningJobRow = {
       ...JOB_ROW,
       purpose: "term_renewal",
@@ -552,7 +596,7 @@ describe("retryStalledProvisioningJob", () => {
     );
   });
 
-  it("settles migration-done even when markOutcome throws", async () => {
+  it("settles migration-done even when markOutcome throws (Error and string)", async () => {
     const migrationJob: ProvisioningJobRow = {
       ...JOB_ROW,
       purpose: "term_renewal",
@@ -575,6 +619,48 @@ describe("retryStalledProvisioningJob", () => {
       })
     });
     expect(result.kind).toBe("already_online");
+
+    const result2 = await retryStalledProvisioningJob({
+      claim: vi.fn(async () => migrationJob),
+      settleExhausted: noExhausted(),
+      getBusinessStatus: vi.fn(async () => "online"),
+      getLatestProgress: vi.fn(async () => ({
+        percent: 100,
+        phase: "complete",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        logStatus: "success" as const
+      })),
+      orchestrate: vi.fn(async () => okResult),
+      markOutcome: vi.fn(async () => {
+        throw "settle string fail";
+      })
+    });
+    expect(result2.kind).toBe("already_online");
+  });
+
+  it("treats percent 100 without phase complete as cutover-pending", async () => {
+    const migrationJob: ProvisioningJobRow = {
+      ...JOB_ROW,
+      purpose: "migrate_size",
+      suppress_owner_notify: true
+    };
+    const result = await retryStalledProvisioningJob({
+      claim: vi.fn(async () => migrationJob),
+      settleExhausted: noExhausted(),
+      getBusinessStatus: vi.fn(async () => "online"),
+      getLatestProgress: vi.fn(async () => ({
+        percent: 100,
+        phase: "remote_deploy_starting",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        logStatus: "thinking" as const
+      })),
+      orchestrate: vi.fn(async () => okResult),
+      markOutcome: vi.fn(async () => undefined)
+    });
+    expect(result).toMatchObject({
+      kind: "retry_failed",
+      error: expect.stringMatching(/cutover still pending/)
+    });
   });
 
   it("resumes mid-deploy even when post-resume markOutcome throws", async () => {
@@ -603,8 +689,10 @@ describe("retryStalledProvisioningJob", () => {
     expect(result.kind).toBe("retry_failed");
   });
 
-  it("reports retry_failed when mid-deploy resume throws", async () => {
-    const markOutcome = vi.fn(async () => undefined);
+  it("reports retry_failed when mid-deploy resume throws (Error and string)", async () => {
+    const markOutcome = vi.fn(async () => {
+      throw new Error("outcome write fail");
+    });
     const migrationJob: ProvisioningJobRow = {
       ...JOB_ROW,
       purpose: "term_renewal",
@@ -633,9 +721,30 @@ describe("retryStalledProvisioningJob", () => {
       attempts: 2,
       error: "resume boom"
     });
+
+    const result2 = await retryStalledProvisioningJob({
+      claim: vi.fn(async () => migrationJob),
+      settleExhausted: noExhausted(),
+      getBusinessStatus: vi.fn(async () => "online"),
+      getLatestProgress: vi.fn(async () => ({
+        percent: 40,
+        phase: "remote_deploy_starting",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        logStatus: "thinking" as const
+      })),
+      resumeMigrationDeploy: vi.fn(async () => {
+        throw "resume string boom";
+      }),
+      orchestrate: vi.fn(async () => okResult),
+      markOutcome
+    });
+    expect(result2).toMatchObject({
+      kind: "retry_failed",
+      error: "resume string boom"
+    });
   });
 
-  it("falls through to orchestrate when migration progress lookup throws", async () => {
+  it("falls through to orchestrate when migration progress lookup throws (Error and string)", async () => {
     const markOutcome = vi.fn(async () => undefined);
     const orchestrate = vi.fn(async () => okResult);
     const migrationJob: ProvisioningJobRow = {
@@ -655,6 +764,20 @@ describe("retryStalledProvisioningJob", () => {
     });
     expect(result.kind).toBe("retried");
     expect(orchestrate).toHaveBeenCalled();
+
+    const orchestrate2 = vi.fn(async () => okResult);
+    const result2 = await retryStalledProvisioningJob({
+      claim: vi.fn(async () => migrationJob),
+      settleExhausted: noExhausted(),
+      getBusinessStatus: vi.fn(async () => "online"),
+      getLatestProgress: vi.fn(async () => {
+        throw "progress string down";
+      }),
+      orchestrate: orchestrate2,
+      markOutcome
+    });
+    expect(result2.kind).toBe("retried");
+    expect(orchestrate2).toHaveBeenCalled();
   });
 
   it("round-trips suppressOwnerNotify and skipPoolAdopt into orchestrate", async () => {

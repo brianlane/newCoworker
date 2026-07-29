@@ -306,8 +306,10 @@ export async function migrateBusinessVpsSize(
   // profile onto the live old box.
   let newProv: { vpsId: string; hostingerBillingSubscriptionId: string | null };
   try {
+    /* c8 ignore start -- production ledger defaults; tests inject */
     const enqueue = deps.enqueueProvisioningJob ?? enqueueProvisioningJob;
     const runJob = deps.runProvisioningJob ?? runProvisioningJob;
+    /* c8 ignore stop */
     await enqueue({
       businessId,
       tier,
@@ -360,15 +362,14 @@ export async function migrateBusinessVpsSize(
     /* c8 ignore next -- production default recover factory */
     const recover =
       deps.tryRecoverDeployCompleteNewBox ??
+      /* c8 ignore next 12 -- production default recover + SSH probe */
       ((input, probeDeps) =>
         tryRecoverDeployCompleteNewBox(input, {
           ...probeDeps,
-          /* c8 ignore start -- production SSH probe */
           remoteExec: async (args) => {
             const r = await sshExec(args);
             return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr };
           }
-          /* c8 ignore stop */
         }));
     const recovered = await recover(
       { businessId, oldVmId },

@@ -422,10 +422,13 @@ describe("runTermRenewalSweep", () => {
       orchestrateProvisioning: vi.fn(async () => {
         throw new Error("vercel killed mid-deploy");
       }),
-      tryRecoverDeployCompleteNewBox: vi.fn(async () => ({
-        vpsId: "1900001",
-        hostingerBillingSubscriptionId: "hbs-new"
-      }))
+      tryRecoverDeployCompleteNewBox: vi.fn(async (_input, probeDeps) => {
+        await probeDeps.getVirtualMachine?.(1900001);
+        return {
+          vpsId: "1900001",
+          hostingerBillingSubscriptionId: "hbs-new"
+        };
+      })
     });
     const result = await runTermRenewalSweep(deps, { now: NOW });
     expect(result.migrated).toBe(1);
@@ -434,6 +437,19 @@ describe("runTermRenewalSweep", () => {
     expect(deps.sendOpsEmail).toHaveBeenCalledWith(
       expect.objectContaining({ phase: "completed" })
     );
+  });
+
+  it("fails when provision returns no vpsId and recovery finds nothing", async () => {
+    const deps = makeDeps({
+      runProvisioningJob: vi.fn(async () => ({
+        hostingerBillingSubscriptionId: "hbs-new",
+        vpsId: ""
+      })),
+      tryRecoverDeployCompleteNewBox: vi.fn(async () => null)
+    });
+    const result = await runTermRenewalSweep(deps, { now: NOW });
+    expect(result.findings[0]?.kind).toBe("migration_failed");
+    expect(deps.hostinger.disableBillingAutoRenewal).not.toHaveBeenCalled();
   });
 
   it("restore failure leaves the old box renewing", async () => {

@@ -137,6 +137,44 @@ describe("waitForDetachedDeployClient", () => {
     expect(result).toEqual({ ok: true, source: "progress" });
   });
 
+  it("ignores empty probe stdout and keeps polling until progress completes", async () => {
+    let polls = 0;
+    const result = await waitForDetachedDeployClient({
+      businessId: "biz-1",
+      host: "1.2.3.4",
+      username: "root",
+      privateKeyPem: "PEM",
+      remoteExec: vi.fn(async () => ({
+        exitCode: 0,
+        signal: null,
+        stdout: "",
+        stderr: ""
+      })),
+      latestProvisioningStatus: async () => {
+        polls += 1;
+        if (polls >= 2) {
+          return {
+            percent: 100,
+            phase: "deploy_client_complete",
+            updatedAt: "2026-01-01T00:00:00.000Z",
+            logStatus: "thinking"
+          };
+        }
+        return {
+          percent: 40,
+          phase: "remote_deploy_starting",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          logStatus: "thinking"
+        };
+      },
+      sleep: async () => undefined,
+      now: () => polls * 1000,
+      pollIntervalMs: 1,
+      deadlineMs: 60_000
+    });
+    expect(result).toEqual({ ok: true, source: "progress" });
+  });
+
   it("fails when deadline elapses", async () => {
     let t = 0;
     const result = await waitForDetachedDeployClient({
@@ -166,6 +204,33 @@ describe("waitForDetachedDeployClient", () => {
 });
 
 describe("runDetachedDeployClient", () => {
+  it("starts a fresh deploy when flock is free (exit 0) and polls to success", async () => {
+    const remoteExec = vi.fn(async (args: { command: string }) => {
+      if (args.command.includes("flock -n")) {
+        return { exitCode: 0, signal: null, stdout: "12345\n", stderr: "" };
+      }
+      return ok("0\nSTOPPED");
+    });
+    const result = await runDetachedDeployClient({
+      businessId: "biz-1",
+      envVars: "TIER=starter",
+      host: "1.2.3.4",
+      username: "root",
+      privateKeyPem: "PEM",
+      remoteExec,
+      latestProvisioningStatus: async () => ({
+        percent: 40,
+        phase: "remote_deploy_starting",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        logStatus: "thinking"
+      }),
+      sleep: async () => undefined,
+      now: () => 0,
+      deadlineMs: 60_000
+    });
+    expect(result).toEqual({ ok: true, source: "exit_file" });
+  });
+
   it("attaches when flock is busy (exit 75) and polls to success", async () => {
     const remoteExec = vi.fn(async (args: { command: string }) => {
       if (args.command.includes("flock -n")) {

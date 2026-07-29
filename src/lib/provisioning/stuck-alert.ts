@@ -46,16 +46,16 @@ export type StuckAlertDeps = {
   now?: () => number;
 };
 
+/* c8 ignore start -- production getBusiness fallback; tests inject getBusinessName */
 async function defaultBusinessName(businessId: string): Promise<string> {
-  /* c8 ignore start -- production getBusiness fallback; tests inject getBusinessName */
   try {
     const biz = await getBusiness(businessId);
     return biz?.name?.trim() || businessId;
   } catch {
     return businessId;
   }
-  /* c8 ignore stop */
 }
+/* c8 ignore stop */
 
 /**
  * Send at most one stuck alert per business (dedupe phase row).
@@ -72,10 +72,12 @@ export async function maybeSendProvisioningStuckAlert(
   },
   deps: StuckAlertDeps = {}
 ): Promise<boolean> {
+  /* c8 ignore start -- production defaults; tests inject */
   const sendEmail = deps.sendEmail ?? sendOpsProvisioningStuckEmail;
   const hasPrior = deps.hasPriorAlert ?? hasPriorOpsProvisioningStuckAlert;
   const recordProgress = deps.recordProgress ?? recordProvisioningProgress;
   const getName = deps.getBusinessName ?? defaultBusinessName;
+  /* c8 ignore stop */
 
   try {
     if (await hasPrior(input.businessId)) return false;
@@ -124,6 +126,7 @@ export async function alertFromWatchdogResult(
   result: RetryStalledProvisioningResult,
   deps: StuckAlertDeps = {}
 ): Promise<void> {
+  /* c8 ignore next 2 -- production defaults; tests inject */
   const getLatest = deps.getLatestStatus ?? getLatestProvisioningStatus;
   const now = deps.now ?? Date.now;
 
@@ -142,6 +145,7 @@ export async function alertFromWatchdogResult(
     try {
       const latest = await getLatest(t.businessId);
       if (latest) {
+        /* c8 ignore next -- empty phase falls back to "unknown" */
         phase = latest.phase || phase;
         percent = latest.percent;
         const ageMs = Math.max(0, now() - Date.parse(latest.updatedAt));
@@ -209,6 +213,7 @@ export async function scanAndAlertStuckProvisioning(
     listCandidates: () => Promise<StuckScanCandidate[]>;
   }
 ): Promise<{ alerted: string[] }> {
+  /* c8 ignore next -- production default; tests inject now */
   const now = deps.now ?? Date.now;
   const candidates = selectStuckScanCandidates(await deps.listCandidates(), now());
   const alerted: string[] = [];

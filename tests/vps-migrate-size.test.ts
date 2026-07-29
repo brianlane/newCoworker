@@ -329,10 +329,13 @@ describe("migrateBusinessVpsSize — provision + pin", () => {
       orchestrateProvisioning: vi.fn(async () => {
         throw new Error("vercel killed mid-deploy");
       }),
-      tryRecoverDeployCompleteNewBox: vi.fn(async () => ({
-        vpsId: "1900001",
-        hostingerBillingSubscriptionId: "hbs-new"
-      }))
+      tryRecoverDeployCompleteNewBox: vi.fn(async (_input, probeDeps) => {
+        await probeDeps.getVirtualMachine?.(1900001);
+        return {
+          vpsId: "1900001",
+          hostingerBillingSubscriptionId: "hbs-new"
+        };
+      })
     });
     const out = await migrateBusinessVpsSize(input, deps);
     expect(out.ok).toBe(true);
@@ -341,6 +344,21 @@ describe("migrateBusinessVpsSize — provision + pin", () => {
     expect(deps.hostinger.stopVirtualMachine).toHaveBeenCalledWith(1800985);
   });
 
+  it("fails when provision returns no vpsId", async () => {
+    const deps = makeDeps({
+      runProvisioningJob: vi.fn(async () => ({
+        hostingerBillingSubscriptionId: "hbs-new",
+        vpsId: ""
+      })),
+      tryRecoverDeployCompleteNewBox: vi.fn(async () => null)
+    });
+    const out = await migrateBusinessVpsSize(input, deps);
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.stage).toBe("provision");
+      expect(out.error).toMatch(/no vpsId/);
+    }
+  });
   it("pins the size only after provisioning succeeds", async () => {
     const deps = makeDeps();
     const out = await migrateBusinessVpsSize(input, deps);

@@ -791,8 +791,26 @@ describe("sendOpsProvisioningStuckEmail", () => {
     expect(sendOwnerEmailMock).not.toHaveBeenCalled();
   });
 
-  it("returns false when send throws", async () => {
+  it("falls back to localhost site URL when NEXT_PUBLIC_APP_URL is unset", async () => {
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    await expect(sendOpsProvisioningStuckEmail(stuckInput)).resolves.toBe(true);
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "team@newcoworker.com",
+      expect.any(String),
+      expect.objectContaining({ html: expect.stringContaining("http://localhost:3000") })
+    );
+  });
+
+  it("returns false when send throws (Error and non-Error)", async () => {
     sendOwnerEmailMock.mockRejectedValueOnce(new Error("smtp down"));
     await expect(sendOpsProvisioningStuckEmail(stuckInput)).resolves.toBe(false);
+
+    sendOwnerEmailMock.mockRejectedValueOnce("smtp string failure");
+    await expect(sendOpsProvisioningStuckEmail(stuckInput)).resolves.toBe(false);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops provisioning-stuck email failed",
+      expect.objectContaining({ error: "smtp string failure" })
+    );
   });
 });
