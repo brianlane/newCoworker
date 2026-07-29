@@ -119,20 +119,24 @@ export async function claimAvailableVps(
   const ownRow = ((own as VpsInventoryRow[] | null) ?? [])[0];
   if (ownRow) return ownRow;
 
-  // Fetch a wider window than we claim so the 72h runway filter still leaves
-  // candidates after short-runway boxes are dropped. Furthest expiry first;
-  // unknown (null) expiry sorts last via nullsFirst: false on a DESC order.
+  // Push the 72h runway floor into the query so short-runway boxes never
+  // crowd the LIMIT 20 window ahead of eligible null-expiry inventory
+  // (nulls sort last on expires_at DESC; known near-expiry would otherwise
+  // fill the page and hide usable nulls). Client-side hasPoolRunway remains
+  // as defense in depth. Furthest expiry first; unknown (null) last.
+  const nowMs = Date.now();
+  const minExpiryIso = new Date(nowMs + VPS_POOL_MIN_RUNWAY_MS).toISOString();
   const { data: candidates, error } = await db
     .from("vps_inventory")
     .select("vm_id, expires_at")
     .eq("state", "available")
     .eq("plan", plan)
+    .or(`expires_at.is.null,expires_at.gte.${minExpiryIso}`)
     .order("expires_at", { ascending: false, nullsFirst: false })
     .order("acquired_at", { ascending: true })
     .limit(20);
   if (error) throw new Error(`claimAvailableVps: ${error.message}`);
 
-  const nowMs = Date.now();
   const eligible = ((candidates as { vm_id: number; expires_at: string | null }[] | null) ?? []).filter(
     (c) => hasPoolRunway(c.expires_at, nowMs)
   );

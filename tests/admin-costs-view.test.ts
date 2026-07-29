@@ -63,6 +63,7 @@ function inventoryRow(overrides: Partial<VpsInventoryRow> = {}): VpsInventoryRow
     assigned_at: null,
     notes: null,
     never_renew: false,
+    expires_at: null,
     updated_at: "2026-07-01T00:00:00.000Z",
     ...overrides
   };

@@ -43,6 +43,7 @@ type MockQB = {
   upsert: ReturnType<typeof vi.fn>;
   eq: ReturnType<typeof vi.fn>;
   neq: ReturnType<typeof vi.fn>;
+  or: ReturnType<typeof vi.fn>;
   order: ReturnType<typeof vi.fn>;
   limit: ReturnType<typeof vi.fn>;
   maybeSingle: ReturnType<typeof vi.fn>;
@@ -56,6 +57,7 @@ function makeChain(): MockQB {
     upsert: vi.fn(),
     eq: vi.fn(() => qb),
     neq: vi.fn(),
+    or: vi.fn(() => qb),
     order: vi.fn(() => qb),
     limit: vi.fn(),
     maybeSingle: vi.fn()
@@ -115,9 +117,14 @@ describe("vps_inventory DB layer", () => {
       expect(row?.vm_id).toBe(1800985);
       expect(row?.state).toBe("assigned");
       expect(db.from).toHaveBeenCalledWith("vps_inventory");
-      // Candidate scan filters on state + plan, furthest expiry first.
+      // Candidate scan filters on state + plan, furthest expiry first,
+      // and pushes the 72h runway floor into the query so short-runway
+      // boxes cannot crowd null-expiry inventory out of the LIMIT window.
       expect(chain.eq).toHaveBeenCalledWith("state", "available");
       expect(chain.eq).toHaveBeenCalledWith("plan", "kvm2");
+      expect(chain.or).toHaveBeenCalledWith(
+        expect.stringMatching(/^expires_at\.is\.null,expires_at\.gte\.\d{4}-/)
+      );
       expect(chain.order).toHaveBeenCalledWith("expires_at", {
         ascending: false,
         nullsFirst: false
@@ -130,18 +137,13 @@ describe("vps_inventory DB layer", () => {
       expect(chain.eq).toHaveBeenCalledWith("vm_id", 1800985);
     });
 
-    it("skips candidates with under 72h of runway and claims the next eligible", async () => {
+    it("pushes the 72h runway floor into the query and claims the next eligible", async () => {
       const chain = makeChain();
       mockNoOwnBox(chain);
-      const soon = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
       const later = new Date(Date.now() + 10 * 24 * 60 * 60 * 1000).toISOString();
       chain.limit.mockResolvedValueOnce({
-        // Ordered furthest-first by the DB; short-runway still appears and
-        // must be filtered client-side.
-        data: [
-          { vm_id: 111, expires_at: soon },
-          { vm_id: 222, expires_at: later }
-        ],
+        // Query already excluded short-runway boxes; only eligible remain.
+        data: [{ vm_id: 222, expires_at: later }],
         error: null
       });
       chain.maybeSingle.mockResolvedValue({
@@ -151,11 +153,26 @@ describe("vps_inventory DB layer", () => {
       const db = makeDb(chain);
       const row = await claimAvailableVps("kvm2", "biz-1", db as never);
       expect(row?.vm_id).toBe(222);
+      expect(chain.or).toHaveBeenCalledWith(
+        expect.stringMatching(/^expires_at\.is\.null,expires_at\.gte\./)
+      );
       expect(chain.eq).toHaveBeenCalledWith("vm_id", 222);
-      expect(chain.eq).not.toHaveBeenCalledWith("vm_id", 111);
     });
 
-    it("returns null when every available box has under 72h of runway", async () => {
+    it("returns null when the runway-filtered query finds no eligible boxes", async () => {
+      const chain = makeChain();
+      mockNoOwnBox(chain);
+      chain.limit.mockResolvedValueOnce({
+        data: [],
+        error: null
+      });
+      const db = makeDb(chain);
+      await expect(claimAvailableVps("kvm2", "biz-1", db as never)).resolves.toBeNull();
+      expect(chain.or).toHaveBeenCalled();
+      expect(chain.update).not.toHaveBeenCalled();
+    });
+
+    it("still drops a short-runway row client-side if the query filter is bypassed", async () => {
       const chain = makeChain();
       mockNoOwnBox(chain);
       const soon = new Date(Date.now() + 12 * 60 * 60 * 1000).toISOString();
@@ -711,6 +728,58 @@ describe("vps_inventory DB layer", () => {
           db as never
         )
       ).rejects.toThrow(/refreshVpsInventoryExpiresAt: refresh boom/);
+    });
+
+    it("skips rows with no billing sub, unknown sub, or unchanged expiry", async () => {
+      const chain = makeChain();
+      chain.neq.mockResolvedValue({ error: null });
+      const db = makeDb(chain);
+      const updated = await refreshVpsInventoryExpiresAt(
+        [
+          {
+            vm_id: 1,
+            state: "available",
+            hostinger_billing_subscription_id: null,
+            expires_at: null
+          },
+          {
+            vm_id: 2,
+            state: "available",
+            hostinger_billing_subscription_id: "missing",
+            expires_at: null
+          },
+          {
+            vm_id: 3,
+            state: "available",
+            hostinger_billing_subscription_id: "sub-same",
+            expires_at: "2026-08-02T00:00:00Z"
+          }
+        ],
+        [{ id: "sub-same", expires_at: "2026-08-02T00:00:00Z" }],
+        db as never
+      );
+      expect(updated).toBe(0);
+      expect(chain.update).not.toHaveBeenCalled();
+    });
+
+    it("builds the default service client when none is passed", async () => {
+      const chain = makeChain();
+      chain.neq.mockResolvedValue({ error: null });
+      defaultClientSpy.mockReturnValueOnce(makeDb(chain));
+      const updated = await refreshVpsInventoryExpiresAt(
+        [
+          {
+            vm_id: 9,
+            state: "available",
+            hostinger_billing_subscription_id: "sub-z",
+            expires_at: null
+          }
+        ],
+        [{ id: "sub-z", next_billing_at: "2026-09-01T00:00:00Z" }]
+      );
+      expect(updated).toBe(1);
+      expect(defaultClientSpy).toHaveBeenCalled();
+      expect(chain.update.mock.calls[0][0].expires_at).toBe("2026-09-01T00:00:00Z");
     });
   });
 });
