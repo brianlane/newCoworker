@@ -6,12 +6,14 @@
 #   1. No previous completed run of this workflow → run (first night).
 #   2. Previous run's "E2E full suite (nightly)" job did not succeed
 #      (failure, timed_out, startup_failure, cancelled, etc.) → run
-#      (retry; do not strand a red nightly until the next merge). A prior
-#      "skipped" suite (this gate opted out) is not a retry signal.
-#   3. At least one commit on main after the previous run started → run
+#      (retry; do not strand a red nightly until the next merge).
+#   3. Previous suite was skipped: only treat that as an intentional opt-out
+#      when the gate job ("Decide whether to run nightly e2e") succeeded.
+#      If the gate itself failed/cancelled, suite is also skipped; retry.
+#   4. At least one commit on main after the previous run started → run
 #      (all mainline changes arrive via merged PRs in this repo).
-#   4. Otherwise → skip (no paid Gemini calls).
-#   5. Any gh/jq/API error → run (fail open; same posture as e2e-scope.sh).
+#   5. Otherwise → skip (no paid Gemini calls).
+#   6. Any gh/jq/API error → run (fail open; same posture as e2e-scope.sh).
 #
 # Expected env: GH_TOKEN, GITHUB_REPOSITORY (or REPO), GITHUB_RUN_ID,
 # GITHUB_EVENT_NAME, GITHUB_OUTPUT.
@@ -21,6 +23,7 @@ REPO="${REPO:-${GITHUB_REPOSITORY:?GITHUB_REPOSITORY or REPO is required}}"
 RUN_ID="${GITHUB_RUN_ID:?GITHUB_RUN_ID is required}"
 EVENT_NAME="${GITHUB_EVENT_NAME:?GITHUB_EVENT_NAME is required}"
 SUITE_JOB_NAME="E2E full suite (nightly)"
+GATE_JOB_NAME="Decide whether to run nightly e2e"
 WORKFLOW_FILE="e2e-nightly.yml"
 
 emit_run() {
@@ -72,20 +75,31 @@ jobs_json=$(gh api \
   "repos/${REPO}/actions/runs/${prev_id}/jobs?filter=latest" \
   --paginate 2>/dev/null) || fail_open "could not list jobs for previous run ${prev_id}"
 
-suite_conclusion=$(jq -rs --arg name "$SUITE_JOB_NAME" '
-  [.[].jobs[]? | select(.name == $name) | .conclusion]
-  | last // empty
-' <<<"$jobs_json" 2>/dev/null) || fail_open "could not parse jobs for previous run ${prev_id}"
+job_conclusion() {
+  local name="$1"
+  jq -rs --arg name "$name" '
+    [.[].jobs[]? | select(.name == $name) | .conclusion]
+    | last // empty
+  ' <<<"$jobs_json" 2>/dev/null
+}
 
-# success = green suite; skipped = this gate already opted out. Anything
-# else (failure, timed_out, startup_failure, cancelled, empty) retries so a
-# quiet night cannot leave a red/timeout nightly stranded until a merge.
-if [ -n "$suite_conclusion" ] && [ "$suite_conclusion" != "success" ] && [ "$suite_conclusion" != "skipped" ]; then
-  emit_run true "previous suite job concluded ${suite_conclusion} (retry even with no merges)"
-  exit 0
-fi
+suite_conclusion=$(job_conclusion "$SUITE_JOB_NAME") || fail_open "could not parse suite job for previous run ${prev_id}"
+gate_conclusion=$(job_conclusion "$GATE_JOB_NAME") || fail_open "could not parse gate job for previous run ${prev_id}"
+
+# success = green suite. skipped = either intentional opt-out (gate success)
+# or cascade from a failed/cancelled gate. Anything else retries so a quiet
+# night cannot leave a red/timeout nightly stranded until a merge.
 if [ -z "$suite_conclusion" ]; then
   emit_run true "previous run has no suite job conclusion (retry / fail-open)"
+  exit 0
+fi
+if [ "$suite_conclusion" = "skipped" ]; then
+  if [ "$gate_conclusion" != "success" ]; then
+    emit_run true "previous suite skipped after gate concluded ${gate_conclusion:-missing} (retry)"
+    exit 0
+  fi
+elif [ "$suite_conclusion" != "success" ]; then
+  emit_run true "previous suite job concluded ${suite_conclusion} (retry even with no merges)"
   exit 0
 fi
 
