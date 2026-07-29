@@ -143,6 +143,9 @@ describe("importZoomTranscriptDocument", () => {
       summary: "Short recap"
     });
     expect(storage.upload).toHaveBeenCalled();
+    expect(storage.upload.mock.calls[0][2]).toEqual({
+      contentType: "text/vtt; charset=utf-8"
+    });
     const d = deps as { patchDocument: ReturnType<typeof vi.fn>; syncVault: ReturnType<typeof vi.fn> };
     expect(d.patchDocument).toHaveBeenCalledWith(BIZ, DOC_ID, {
       content_md: "## Minutes",

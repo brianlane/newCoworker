@@ -15,7 +15,11 @@ vi.mock("@/lib/zoom/client", () => ({
 }));
 
 import {
+  buildZoomTranscriptRefLabel,
+  buildZoomTranscriptTitle,
+  fetchPastMeetingMeta,
   fetchZoomMeetingTranscript,
+  formatZoomMeetingDate,
   normalizeZoomMeetingRef,
   rawZoomMeetingUuid,
   resolvePastMeetingUuid
@@ -102,6 +106,69 @@ describe("rawZoomMeetingUuid", () => {
     expect(rawZoomMeetingUuid("https://[bad")).toBeNull();
     expect(rawZoomMeetingUuid("not a meeting")).toBeNull();
     expect(rawZoomMeetingUuid("   ")).toBeNull();
+  });
+});
+
+describe("buildZoomTranscriptTitle / refLabel", () => {
+  it("prefers topic plus date, then falls back through id and dated generic", () => {
+    expect(
+      buildZoomTranscriptTitle({
+        topic: "New Coworker's Zoom Meeting",
+        startTime: "2026-07-29T16:03:00Z",
+        meetingId: "84948156425"
+      })
+    ).toBe("New Coworker's Zoom Meeting · Jul 29, 2026 (transcript)");
+
+    expect(buildZoomTranscriptTitle({ topic: "Team sync" })).toBe("Team sync (transcript)");
+    expect(
+      buildZoomTranscriptTitle({ meetingId: "1784344402882", startTime: "2026-07-19T12:00:00Z" })
+    ).toBe("Zoom meeting 1784344402882 · Jul 19, 2026 (transcript)");
+    expect(buildZoomTranscriptTitle({ meetingId: "1784344402882" })).toBe(
+      "Zoom meeting 1784344402882 (transcript)"
+    );
+    expect(buildZoomTranscriptTitle({ startTime: "2026-07-29T16:03:00Z" })).toBe(
+      "Zoom meeting · Jul 29, 2026 (transcript)"
+    );
+    expect(buildZoomTranscriptTitle({})).toBe("Zoom meeting recording (transcript)");
+  });
+
+  it("labels storage with the meeting id, else a date stamp, else recording", () => {
+    expect(
+      buildZoomTranscriptRefLabel({ meetingId: "84948156425", startTime: "2026-07-29T16:03:00Z" })
+    ).toBe("84948156425");
+    expect(buildZoomTranscriptRefLabel({ startTime: "2026-07-29T16:03:00Z" })).toBe("2026-07-29");
+    expect(buildZoomTranscriptRefLabel({})).toBe("recording");
+  });
+
+  it("formats Zoom start times as a short UTC calendar date", () => {
+    expect(formatZoomMeetingDate("2026-07-29T16:03:00Z")).toBe("Jul 29, 2026");
+    expect(formatZoomMeetingDate("not-a-date")).toBeNull();
+    expect(formatZoomMeetingDate(null)).toBeNull();
+  });
+});
+
+describe("fetchPastMeetingMeta", () => {
+  it("returns topic, start time, uuid, and numeric id from past_meetings", async () => {
+    const fetchImpl = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        uuid: "jhqVQlf1RyuEX/1TCRs+Jg==",
+        topic: " New Coworker's Zoom Meeting ",
+        start_time: "2026-07-29T16:03:00Z",
+        id: 84948156425
+      })
+    );
+    expect(await fetchPastMeetingMeta(BIZ, MEETING, { fetchImpl })).toEqual({
+      uuid: "jhqVQlf1RyuEX/1TCRs+Jg==",
+      topic: "New Coworker's Zoom Meeting",
+      startTime: "2026-07-29T16:03:00Z",
+      meetingId: "84948156425"
+    });
+  });
+
+  it("fails open on junk refs and non-2xx", async () => {
+    expect(await fetchPastMeetingMeta(BIZ, "not-a-ref", { fetchImpl: vi.fn() })).toBeNull();
+    const denied = vi.fn().mockResolvedValue(jsonResponse(401, {}));
+    expect(await fetchPastMeetingMeta(BIZ, MEETING, { fetchImpl: denied })).toBeNull();
   });
 });
 

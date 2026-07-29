@@ -11,6 +11,7 @@ import type { GeminiGenerateTextParams } from "@/lib/gemini-generate-content";
 import {
   DOCUMENT_ALLOWED_MIME_TYPES,
   DOCUMENT_INGEST_MAX_TEXT_CHARS,
+  clipAtBoundary,
   ingestDocument,
   isSupportedDocumentMime,
   normalizeUploadMime,
@@ -255,12 +256,17 @@ describe("ingestDocument (vtt transcript)", () => {
     if (res.ok) {
       expect(res.contentMd).toContain("## Transcript");
       expect(res.contentMd.length).toBeLessThanOrEqual(DOCUMENT_CONTENT_MD_MAX_CHARS);
+      expect(res.contentMd).toContain("… (transcript truncated)");
+      // Never a raw mid-word stump: the last non-marker character is not
+      // an orphan letter cut from the middle of a word (the "Oh, ye" bug).
+      const beforeMarker = res.contentMd.split("… (transcript truncated)")[0] ?? "";
+      expect(beforeMarker.trimEnd()).toMatch(/(?:[.!?]|[a-z]{2,}|\w:)$/i);
     }
   });
 
-  it("skips the transcript section when the minutes leave no headroom", async () => {
-    // Condensed content that nearly fills the cap: appending would leave
-    // less than the 100-char floor, so the minutes ship without the section.
+  it("clips oversized minutes so the transcript section still fits", async () => {
+    // Condensed content that nearly fills the cap: minutes are clipped to
+    // the reserved headroom so the readable transcript still lands.
     const bigReply = `SUMMARY: Big.\n---\n${"x".repeat(DOCUMENT_CONTENT_MD_MAX_CHARS - 50)}`;
     const generate = generateOk(bigReply);
     const vtt = [
@@ -275,7 +281,12 @@ describe("ingestDocument (vtt transcript)", () => {
       { generate }
     );
     expect(res.ok).toBe(true);
-    if (res.ok) expect(res.contentMd).not.toContain("## Transcript");
+    if (res.ok) {
+      expect(res.contentMd).toContain("## Transcript");
+      expect(res.contentMd).toContain("Dania: We agreed the premium is $1,240 per year.");
+      expect(res.contentMd).toContain("… (truncated)");
+      expect(res.contentMd.length).toBeLessThanOrEqual(DOCUMENT_CONTENT_MD_MAX_CHARS);
+    }
   });
 
   it("treats a payload-free transcript as empty content", async () => {
@@ -291,6 +302,29 @@ describe("ingestDocument (vtt transcript)", () => {
     );
     expect(res).toEqual({ ok: false, error: "empty_content" });
     expect(generate).not.toHaveBeenCalled();
+  });
+});
+
+describe("clipAtBoundary", () => {
+  it("returns the text unchanged when it already fits", () => {
+    expect(clipAtBoundary("hello world", 100)).toBe("hello world");
+  });
+
+  it("cuts at the last newline and appends the marker", () => {
+    const text = "line one\nline two midwordcuthere and more";
+    const out = clipAtBoundary(text, 30, "\n\n… (truncated)");
+    expect(out.length).toBeLessThanOrEqual(30);
+    expect(out).toContain("… (truncated)");
+    expect(out.startsWith("line one")).toBe(true);
+    expect(out).not.toMatch(/midw$/);
+  });
+
+  it("falls back to the last space when there is no usable newline", () => {
+    const text = "alpha bravo charlie delta echo";
+    const out = clipAtBoundary(text, 22, "…");
+    expect(out.length).toBeLessThanOrEqual(22);
+    expect(out.endsWith("…")).toBe(true);
+    expect(out).not.toMatch(/charli$/);
   });
 });
 

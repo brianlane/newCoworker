@@ -35,6 +35,9 @@ import {
 } from "@/lib/db/zoom-transcript-imports";
 import { importZoomTranscriptDocument } from "@/lib/zoom/import-core";
 import {
+  buildZoomTranscriptRefLabel,
+  buildZoomTranscriptTitle,
+  fetchPastMeetingMeta,
   fetchZoomMeetingTranscript,
   rawZoomMeetingUuid,
   resolvePastMeetingUuid
@@ -125,11 +128,16 @@ export async function POST(request: Request) {
         return errorResponse("VALIDATION_ERROR", transcript.detail);
       }
 
-      // The pasted reference may be a UUID or a full recording link, neither
-      // is filename/title material. Label with the digits when it's a plain
-      // meeting ID, else a generic marker.
-      const refLabel = /^\d{9,15}$/.test(digitsRef) ? digitsRef : "recording";
-      const title = parsed.data.title || `Zoom meeting ${refLabel} (transcript)`;
+      // Prefer Zoom's past-meeting topic + start time so imports from a
+      // recording link/UUID do not all land as "Zoom meeting recording".
+      const meta = await fetchPastMeetingMeta(businessId, meetingId);
+      const titleBits = {
+        topic: meta?.topic ?? null,
+        startTime: meta?.startTime ?? null,
+        meetingId: meta?.meetingId ?? (/^\d{9,15}$/.test(digitsRef) ? digitsRef : null)
+      };
+      const title = parsed.data.title || buildZoomTranscriptTitle(titleBits);
+      const refLabel = buildZoomTranscriptRefLabel(titleBits);
 
       const imported = await importZoomTranscriptDocument({
         businessId,
