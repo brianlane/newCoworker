@@ -728,6 +728,30 @@ describe("provisioning/orchestrate", () => {
     );
   });
 
+  it("suppressOwnerNotify skips owner email and SMS even when phone/email are set", async () => {
+    const { sendTelnyxSms } = await import("@/lib/telnyx/messaging");
+    const { sendOwnerEmail } = await import("@/lib/email/client");
+    vi.mocked(sendTelnyxSms).mockClear();
+    vi.mocked(sendOwnerEmail).mockClear();
+    vi.mocked(outboundLogInsert).mockClear();
+    await orchestrateProvisioning(
+      {
+        businessId: "biz-suppress-notify",
+        tier: "starter",
+        ownerPhone: "+15145188192",
+        ownerEmail: "owner@example.com",
+        suppressOwnerNotify: true
+      },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec())
+      }
+    );
+    expect(sendTelnyxSms).not.toHaveBeenCalled();
+    expect(sendOwnerEmail).not.toHaveBeenCalled();
+    expect(outboundLogInsert).not.toHaveBeenCalled();
+  });
+
   it("a failed outbound-log insert never fails provisioning (SMS already went out)", async () => {
     const { sendTelnyxSms } = await import("@/lib/telnyx/messaging");
     vi.mocked(sendTelnyxSms).mockClear();

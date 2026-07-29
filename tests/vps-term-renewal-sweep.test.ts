@@ -347,7 +347,8 @@ describe("runTermRenewalSweep", () => {
       tier: "standard",
       vpsSize: "kvm2",
       billingPeriod: "biennial",
-      skipPoolAdopt: true
+      skipPoolAdopt: true,
+      suppressOwnerNotify: true
     });
     expect(deps.updateSubscription).toHaveBeenCalledWith("sub-1", {
       hostinger_billing_subscription_id: "hbs-new"

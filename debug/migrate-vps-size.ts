@@ -31,8 +31,8 @@
  *      right thing on a future cancel.
  *
  * The owner "your coworker is live" email/SMS is suppressed by default
- * (ownerEmail is NOT passed → orchestrator notifies ADMIN_EMAIL instead);
- * pass --notify-owner for a real communicated maintenance window.
+ * (`suppressOwnerNotify: true`). Pass --notify-owner to send the real
+ * provisioning-complete notice to the owner for a communicated maintenance window.
  *
  * Usage:
  *   npx tsx debug/migrate-vps-size.ts --business <id> --size kvm2         # dry run
@@ -564,7 +564,11 @@ try {
       businessId: BUSINESS_ID,
       tier: biz.tier,
       vpsSize: TARGET_SIZE,
-      ...(NOTIFY_OWNER && biz.owner_email ? { ownerEmail: biz.owner_email } : {})
+      ...(NOTIFY_OWNER
+        ? biz.owner_email
+          ? { ownerEmail: biz.owner_email }
+          : {}
+        : { suppressOwnerNotify: true })
     },
     // --adopt-vm names a SPECIFIC box, so the vps_inventory adopt-first pool
     // must be bypassed (vpsPool: null): the orchestrator checks the pool

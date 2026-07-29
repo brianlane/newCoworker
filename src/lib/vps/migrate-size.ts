@@ -103,6 +103,7 @@ export type MigrateVpsSizeDeps = {
     vpsSize: VpsSize;
     /** Buys the replacement box at the tenant's committed Hostinger term. */
     billingPeriod?: SubscriptionRow["billing_period"];
+    suppressOwnerNotify?: boolean;
   }) => Promise<{ vpsId: string; hostingerBillingSubscriptionId: string | null }>;
   sendOpsEmail: (input: OpsMigrationEmailInput) => Promise<void>;
 };
@@ -295,7 +296,8 @@ export async function migrateBusinessVpsSize(
       businessId,
       tier,
       vpsSize: targetSize,
-      billingPeriod: activeSub?.billing_period ?? null
+      billingPeriod: activeSub?.billing_period ?? null,
+      suppressOwnerNotify: true
     });
   } catch (err) {
     const error = `provisioning failed: ${errMsg(err)} — old box untouched and still serving; re-run once fixed`;

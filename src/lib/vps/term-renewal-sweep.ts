@@ -96,6 +96,7 @@ export type TermRenewalSweepDeps = {
     vpsSize: VpsSize;
     billingPeriod?: SubscriptionRow["billing_period"];
     skipPoolAdopt?: boolean;
+    suppressOwnerNotify?: boolean;
   }) => Promise<{ vpsId: string; hostingerBillingSubscriptionId: string | null }>;
   releaseVpsToPool: (input: {
     vmId: number;
@@ -581,7 +582,8 @@ async function migrateTenantTermRenewal(
       tier,
       vpsSize,
       billingPeriod: activeSub?.billing_period ?? null,
-      skipPoolAdopt: true
+      skipPoolAdopt: true,
+      suppressOwnerNotify: true
     });
   } catch (err) {
     const detail = `provisioning failed: ${errMsg(err)}: old box untouched and still renewing`;
