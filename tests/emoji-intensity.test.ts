@@ -24,7 +24,9 @@ describe("emoji intensity parity (Next.js ↔ edge)", () => {
     expect([...edge.EMOJI_INTENSITY_WORKER_INSTRUCTIONS]).toEqual([
       ...EMOJI_INTENSITY_WORKER_INSTRUCTIONS
     ]);
-    for (const n of [0, 1, 2, 3, 4, 5, null, undefined, "3", 99, -1] as const) {
+    for (const n of [
+      0, 1, 2, 3, 4, 5, null, undefined, "3", 99, -1, 2.5, "", "  ", "nope", "7"
+    ] as const) {
       expect(edge.normalizeEmojiIntensity(n), String(n)).toBe(normalizeEmojiIntensity(n));
       expect(edge.SMS_EMOJI_INTENSITY_LINE(n), String(n)).toBe(SMS_EMOJI_INTENSITY_LINE(n));
     }
