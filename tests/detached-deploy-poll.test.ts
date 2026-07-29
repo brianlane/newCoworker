@@ -137,7 +137,7 @@ describe("waitForDetachedDeployClient", () => {
     expect(result).toEqual({ ok: true, source: "progress" });
   });
 
-  it("ignores empty probe stdout and keeps polling until progress completes", async () => {
+  it("ignores null probe stdout and keeps polling until progress completes", async () => {
     let polls = 0;
     const result = await waitForDetachedDeployClient({
       businessId: "biz-1",
@@ -147,7 +147,7 @@ describe("waitForDetachedDeployClient", () => {
       remoteExec: vi.fn(async () => ({
         exitCode: 0,
         signal: null,
-        stdout: "",
+        stdout: undefined as unknown as string,
         stderr: ""
       })),
       latestProvisioningStatus: async () => {
@@ -173,6 +173,31 @@ describe("waitForDetachedDeployClient", () => {
       deadlineMs: 60_000
     });
     expect(result).toEqual({ ok: true, source: "progress" });
+  });
+
+  it("attaches without starting when envVars omit BUSINESS_ID", async () => {
+    const remoteExec = vi.fn(async () => ok("0\nSTOPPED"));
+    const result = await runDetachedDeployClient({
+      businessId: "biz-1",
+      envVars: "",
+      host: "1.2.3.4",
+      username: "root",
+      privateKeyPem: "PEM",
+      remoteExec,
+      latestProvisioningStatus: async () => ({
+        percent: 40,
+        phase: "remote_deploy_starting",
+        updatedAt: "2026-01-01T00:00:00.000Z",
+        logStatus: "thinking"
+      }),
+      sleep: async () => undefined,
+      now: () => 0,
+      deadlineMs: 60_000
+    });
+    expect(result).toEqual({ ok: true, source: "exit_file" });
+    expect(remoteExec.mock.calls.every((c) => !String(c[0].command).includes("nohup"))).toBe(
+      true
+    );
   });
 
   it("fails when deadline elapses", async () => {
@@ -213,7 +238,7 @@ describe("runDetachedDeployClient", () => {
     });
     const result = await runDetachedDeployClient({
       businessId: "biz-1",
-      envVars: "TIER=starter",
+      envVars: "BUSINESS_ID='biz-1' TIER=starter",
       host: "1.2.3.4",
       username: "root",
       privateKeyPem: "PEM",
@@ -245,7 +270,7 @@ describe("runDetachedDeployClient", () => {
     });
     const result = await runDetachedDeployClient({
       businessId: "biz-1",
-      envVars: "TIER=starter",
+      envVars: "BUSINESS_ID='biz-1' TIER=starter",
       host: "1.2.3.4",
       username: "root",
       privateKeyPem: "PEM",
@@ -266,7 +291,7 @@ describe("runDetachedDeployClient", () => {
   it("returns start failure when remoteExec throws", async () => {
     const result = await runDetachedDeployClient({
       businessId: "biz-1",
-      envVars: "TIER=starter",
+      envVars: "BUSINESS_ID='biz-1' TIER=starter",
       host: "1.2.3.4",
       username: "root",
       privateKeyPem: "PEM",
@@ -284,7 +309,7 @@ describe("runDetachedDeployClient", () => {
   it("fails immediately when start exits non-zero (not 75)", async () => {
     const result = await runDetachedDeployClient({
       businessId: "biz-1",
-      envVars: "TIER=starter",
+      envVars: "BUSINESS_ID='biz-1' TIER=starter",
       host: "1.2.3.4",
       username: "root",
       privateKeyPem: "PEM",

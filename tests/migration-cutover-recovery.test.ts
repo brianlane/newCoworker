@@ -99,6 +99,30 @@ describe("tryRecoverDeployCompleteNewBox", () => {
     expect(remoteExec).toHaveBeenCalledTimes(2);
   });
 
+  it("returns null when SSH probes fail and progress is not complete", async () => {
+    const out = await tryRecoverDeployCompleteNewBox(
+      { businessId: "biz-1", oldVmId: 100 },
+      {
+        getBusiness: async () => ({ hostinger_vps_id: "200" }),
+        getLatestProvisioningStatus: async () => ({
+          percent: 40,
+          phase: "remote_deploy_starting",
+          updatedAt: "2026-01-01T00:00:00.000Z",
+          logStatus: "thinking"
+        }),
+        getVirtualMachine: async () => ({ ipv4: [{ address: "9.9.9.9" }] }),
+        getActiveVpsSshKey: async () => ({
+          private_key_pem: "PEM",
+          ssh_username: null
+        }),
+        remoteExec: async () => {
+          throw new Error("ssh down");
+        }
+      }
+    );
+    expect(out).toBeNull();
+  });
+
   it("returns null when getBusiness throws (Error and string)", async () => {
     const out = await tryRecoverDeployCompleteNewBox(
       { businessId: "biz-1", oldVmId: 100 },

@@ -643,6 +643,29 @@ export async function runDetachedDeployClient(input: {
   const logPath = `/var/log/nc-deploy-${input.businessId}.log`;
   const lockPath = `/var/lock/nc-deploy-${input.businessId}.lock`;
   const exitPath = `/var/run/nc-deploy-${input.businessId}.exit`;
+  const canStartFresh = /\bBUSINESS_ID=/.test(input.envVars);
+
+  // Without BUSINESS_ID we must not spawn deploy-client.sh (script
+  // hard-requires it). Poll an in-flight or already-finished deploy only.
+  if (!canStartFresh) {
+    logger.info("deploy-client.sh start skipped: no BUSINESS_ID in env; attaching to poll", {
+      businessId: input.businessId
+    });
+    return waitForDetachedDeployClient({
+      businessId: input.businessId,
+      host: input.host,
+      username: input.username,
+      privateKeyPem: input.privateKeyPem,
+      sshKeyRow: input.sshKeyRow,
+      remoteExec: input.remoteExec,
+      latestProvisioningStatus: input.latestProvisioningStatus,
+      sleep: input.sleep,
+      now: input.now,
+      pollIntervalMs: input.pollIntervalMs,
+      deadlineMs: input.deadlineMs
+    });
+  }
+
   // Pre-check flock so a busy deploy surfaces as exit 75 on this short SSH
   // (nohup would otherwise mask the script's own flock exit). Clear any
   // stale exit file only when we are about to start a fresh deploy.
@@ -679,10 +702,11 @@ export async function runDetachedDeployClient(input: {
     return { ok: false, reason: `failed to start deploy-client.sh: ${msg}` };
   }
 
+  /* c8 ignore start -- defensive; start paths above always set started or return */
   if (!started) {
-    /* c8 ignore next -- defensive; start paths above always set started or return */
     return { ok: false, reason: "failed to start deploy-client.sh" };
   }
+  /* c8 ignore stop */
 
   return waitForDetachedDeployClient({
     businessId: input.businessId,

@@ -16,6 +16,7 @@ import {
 } from "@/lib/provisioning/progress";
 import {
   runDetachedDeployClient,
+  quoteShellEnvValue,
   type RemoteExecutor
 } from "@/lib/provisioning/orchestrate";
 import { getSubscription } from "@/lib/db/subscriptions";
@@ -66,15 +67,8 @@ export async function resumeMigrationDeploy(
 
   let host: string | null = null;
   let billingId: string | null = null;
-  if (deps.hostingerGetVm) {
-    const vm = await deps.hostingerGetVm(vmId);
-    host = vm.ipv4?.[0]?.address ?? null;
-    billingId =
-      typeof vm.subscription_id === "string" && vm.subscription_id.length > 0
-        ? vm.subscription_id
-        : null;
-  } else {
-    /* c8 ignore start -- production Hostinger path */
+  /* c8 ignore start -- production Hostinger path when hostingerGetVm is omitted */
+  if (!deps.hostingerGetVm) {
     const token = process.env.HOSTINGER_API_TOKEN ?? "";
     const client = new HostingerClient({ token });
     const vm = await client.getVirtualMachine(vmId);
@@ -83,7 +77,14 @@ export async function resumeMigrationDeploy(
       typeof vm.subscription_id === "string" && vm.subscription_id.length > 0
         ? vm.subscription_id
         : null;
+  } else {
     /* c8 ignore stop */
+    const vm = await deps.hostingerGetVm(vmId);
+    host = vm.ipv4?.[0]?.address ?? null;
+    billingId =
+      typeof vm.subscription_id === "string" && vm.subscription_id.length > 0
+        ? vm.subscription_id
+        : null;
   }
   if (!host) {
     throw new Error(`resumeMigrationDeploy: no IP for VM ${vmId}`);
@@ -102,9 +103,23 @@ export async function resumeMigrationDeploy(
     source: "orchestrator"
   });
 
+  // Always pass BUSINESS_ID (deploy-client.sh hard-requires it). Progress
+  // URL/token keep mid-run heartbeats working if we have to start fresh;
+  // other secrets are preserved from the box's existing .env files when blank.
+  const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(
+    /\/$/,
+    ""
+  );
+  const q = quoteShellEnvValue;
+  const envVars = [
+    `BUSINESS_ID=${q(input.businessId)}`,
+    `PROVISIONING_PROGRESS_URL=${q(`${appUrl}/api/provisioning/progress`)}`,
+    `PROVISIONING_PROGRESS_TOKEN=${q(process.env.PROVISIONING_PROGRESS_TOKEN ?? "")}`
+  ].join(" ");
+
   const result = await runDetachedDeployClient({
     businessId: input.businessId,
-    envVars: "",
+    envVars,
     host,
     username: key.ssh_username?.trim() || "root",
     privateKeyPem: key.private_key_pem,

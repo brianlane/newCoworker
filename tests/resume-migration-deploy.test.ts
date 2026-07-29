@@ -47,6 +47,11 @@ describe("resumeMigrationDeploy", () => {
     expect(recordProgress).toHaveBeenCalledWith(
       expect.objectContaining({ phase: "deploy_client_complete", percent: 100 })
     );
+    expect(remoteExec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: expect.stringMatching(/BUSINESS_ID='biz-1'/)
+      })
+    );
   });
 
   it("throws when the business has no VPS id", async () => {
@@ -141,6 +146,11 @@ describe("resumeMigrationDeploy", () => {
     expect(out.hostingerBillingSubscriptionId).toBeNull();
     expect(remoteExec).toHaveBeenCalledWith(
       expect.objectContaining({ username: "root" })
+    );
+    expect(remoteExec).toHaveBeenCalledWith(
+      expect.objectContaining({
+        command: expect.stringContaining("BUSINESS_ID=")
+      })
     );
   });
 

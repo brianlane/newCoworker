@@ -116,11 +116,12 @@ export async function tryRecoverDeployCompleteNewBox(
             const code = (exitProbe.stdout ?? "").trim().split(/\r?\n/)[0]?.trim();
             if (code === "0") exitOk = true;
           } catch (err) {
-            /* c8 ignore next 6 -- best-effort probe logging */
+            /* c8 ignore start -- best-effort probe logging */
             logger.warn("cutover recovery: exit-file probe failed", {
               businessId: input.businessId,
               error: errMsg(err)
             });
+            /* c8 ignore stop */
           }
         }
         if (!progressOk && !exitOk) {
@@ -134,21 +135,23 @@ export async function tryRecoverDeployCompleteNewBox(
             });
             dockerOk = (dockerProbe.stdout ?? "").includes("OK");
           } catch (err) {
-            /* c8 ignore next 6 -- best-effort probe logging */
+            /* c8 ignore start -- best-effort probe logging */
             logger.warn("cutover recovery: docker probe failed", {
               businessId: input.businessId,
               error: errMsg(err)
             });
+            /* c8 ignore stop */
           }
         }
       }
     } catch (err) {
-      /* c8 ignore next 7 -- best-effort probe logging */
+      /* c8 ignore start -- best-effort probe logging */
       logger.warn("cutover recovery: ssh key lookup failed", {
         businessId: input.businessId,
         newVmId,
         error: errMsg(err)
       });
+      /* c8 ignore stop */
     }
   }
 
