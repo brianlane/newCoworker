@@ -35,6 +35,7 @@ import {
   ON_BOX_ERROR_SOURCES,
   buildEscalationAdviceEmail,
   evaluateEscalationSignals,
+  isAdvisorFleetCandidate,
   weeklyPeriodKey,
   type AdvisorBusiness,
   type BusinessAdvice,
@@ -96,25 +97,37 @@ serve(async (req: Request) => {
   const now = new Date();
   const periodKey = weeklyPeriodKey(now);
 
-  // Fleet scan: active tenants only. `wiped` boxes have no hardware; paused
-  // tenants can't generate load.
-  let bizRows: Array<AdvisorBusiness & { status: string; is_paused: boolean | null }>;
+  // Fleet scan: active tenants with a box. `wiped` / offline statuses are
+  // excluded by the query; paused and boxless rows drop in
+  // isAdvisorFleetCandidate (nothing to escalate without hardware).
+  let bizRows: Array<
+    AdvisorBusiness & {
+      status: string;
+      is_paused: boolean | null;
+      hostinger_vps_id: string | number | null;
+    }
+  >;
   try {
-    bizRows = await fetchAllPages<AdvisorBusiness & { status: string; is_paused: boolean | null }>(
-      (from, to) =>
-        supabase
-          .from("businesses")
-          .select("id, name, tier, vps_size, status, is_paused")
-          .in("tier", ["starter", "standard"])
-          .in("status", ["online", "high_load"])
-          .order("id", { ascending: true })
-          .range(from, to)
+    bizRows = await fetchAllPages<
+      AdvisorBusiness & {
+        status: string;
+        is_paused: boolean | null;
+        hostinger_vps_id: string | number | null;
+      }
+    >((from, to) =>
+      supabase
+        .from("businesses")
+        .select("id, name, tier, vps_size, status, is_paused, hostinger_vps_id")
+        .in("tier", ["starter", "standard"])
+        .in("status", ["online", "high_load"])
+        .order("id", { ascending: true })
+        .range(from, to)
     );
   } catch (err) {
     console.error("businesses select failed", err);
     return new Response("select failed", { status: 500 });
   }
-  const businesses = bizRows.filter((b) => !b.is_paused);
+  const businesses = bizRows.filter(isAdvisorFleetCandidate);
 
   if (businesses.length === 0) {
     await telemetryRecord(supabase, "hardware_escalation_advisor", {

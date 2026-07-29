@@ -7,6 +7,7 @@ import {
   buildEscalationAdviceEmail,
   dailyPeakConcurrency,
   evaluateEscalationSignals,
+  isAdvisorFleetCandidate,
   nextSizeUp,
   weeklyPeriodKey,
   type BusinessAdvice,
@@ -37,6 +38,26 @@ function evaluateInput(overrides: Partial<EvaluateInput> = {}): EvaluateInput {
     ...overrides
   };
 }
+
+describe("isAdvisorFleetCandidate", () => {
+  it("keeps an online tenant with a box", () => {
+    expect(
+      isAdvisorFleetCandidate({ is_paused: false, hostinger_vps_id: "1815606" })
+    ).toBe(true);
+    expect(isAdvisorFleetCandidate({ is_paused: null, hostinger_vps_id: 1815606 })).toBe(true);
+  });
+
+  it("skips paused tenants even when they still have a box", () => {
+    expect(
+      isAdvisorFleetCandidate({ is_paused: true, hostinger_vps_id: "1815606" })
+    ).toBe(false);
+  });
+
+  it("skips boxless tenants (null or empty hostinger_vps_id)", () => {
+    expect(isAdvisorFleetCandidate({ is_paused: false, hostinger_vps_id: null })).toBe(false);
+    expect(isAdvisorFleetCandidate({ is_paused: false, hostinger_vps_id: "" })).toBe(false);
+  });
+});
 
 describe("advisorDeployedSize", () => {
   it("honors every valid pin", () => {
