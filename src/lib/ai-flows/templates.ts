@@ -12,6 +12,7 @@
  * the install path (POST /api/aiflows) can never 400 on our own template.
  */
 import type { AiFlowDefinition } from "@/lib/ai-flows/schema";
+import { REVIEW_LINK_PLACEHOLDER } from "@/lib/ai-flows/scrub";
 
 export type AiFlowTemplate = {
   /** Stable key (used by install callers and analytics). */
@@ -233,10 +234,13 @@ export function cleanReviewLink(raw: string): string | null {
  * send_sms planner's empty-recipient skip), so all-day blocks and internal
  * meetings never text anyone.
  */
-export function reviewRequestTemplate(reviewLink: string): AiFlowTemplate {
+export function reviewRequestTemplate(reviewLink: string): LibraryStarterTemplate {
   return {
     key: "review_request_after_appointment",
     name: "Ask for a review after appointments",
+    summary:
+      "An hour after a calendar appointment ends, your coworker texts the customer " +
+      "your review link and briefs you.",
     definition: {
       version: 1,
       trigger: {
@@ -714,14 +718,19 @@ export const LIBRARY_STARTER_CATEGORY = "Starters";
 /**
  * The curated templates published to the public library on every refresh.
  *
- * Only parameterless templates belong here: a library entry is duplicated
- * verbatim (the "Use this flow" route fills placeholders, it cannot invent a
- * review link or pick a document), so the ones that take an argument stay
- * install-only. Their definitions are published as authored, NOT scrubbed:
- * they contain no tenant data by construction, and the wording is the point.
+ * Definitions are published as authored (not scrubbed): they contain no
+ * tenant data by construction, and the wording is the point. Parameterized
+ * starters (today: the review request) ship with a sentinel URL the "Use this
+ * flow" route replaces with an owner-pasted value. Install-only templates that
+ * need a document pick (price sheet) stay out of this list until that path
+ * exists.
  */
 export function libraryStarterTemplates(): LibraryStarterTemplate[] {
-  return [documentReceiptTemplate(), newLeadIntakeTemplate()];
+  return [
+    reviewRequestTemplate(REVIEW_LINK_PLACEHOLDER),
+    documentReceiptTemplate(),
+    newLeadIntakeTemplate()
+  ];
 }
 
 export function priceSheetShareTemplate(documentId: string, documentTitle: string): AiFlowTemplate {

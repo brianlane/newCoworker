@@ -6,6 +6,8 @@ import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/Card";
 import { TrendingUp, Building2, Download, Clock } from "lucide-react";
 import type { AiFlowLibraryRow } from "@/lib/ai-flows/library";
+import { isReviewStarterLibraryKey } from "@/lib/ai-flows/scrub";
+import { REVIEW_LINK_MAX_LENGTH } from "@/lib/ai-flows/templates";
 
 function Stat({ icon, value, label }: { icon: React.ReactNode; value: string; label: string }) {
   return (
@@ -46,6 +48,9 @@ export function AiFlowLibraryBrowser({
   const [category, setCategory] = useState<string | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Card whose "Use" needs a review URL typed in before the POST. */
+  const [pendingReviewId, setPendingReviewId] = useState<string | null>(null);
+  const [reviewLink, setReviewLink] = useState("");
 
   const categories = useMemo(
     () => [...new Set(entries.map((e) => e.category).filter((c): c is string => Boolean(c)))].sort(),
@@ -65,9 +70,16 @@ export function AiFlowLibraryBrowser({
     });
   }, [entries, query, category]);
 
-  const use = async (row: AiFlowLibraryRow) => {
+  const use = async (row: AiFlowLibraryRow, link?: string) => {
     if (!businessId) {
       setError("Provision your coworker first to use a library flow.");
+      return;
+    }
+    if (isReviewStarterLibraryKey(row.template_key) && pendingReviewId !== row.id) {
+      // First click: reveal the link field instead of POSTing a 400.
+      setPendingReviewId(row.id);
+      setReviewLink("");
+      setError(null);
       return;
     }
     setBusyId(row.id);
@@ -76,7 +88,12 @@ export function AiFlowLibraryBrowser({
       const res = await fetch(`/api/aiflows/library/${row.id}/use`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ businessId })
+        body: JSON.stringify({
+          businessId,
+          ...(isReviewStarterLibraryKey(row.template_key)
+            ? { reviewLink: (link ?? reviewLink).trim() }
+            : {})
+        })
       });
       const json = (await res.json()) as {
         ok: boolean;
@@ -87,6 +104,8 @@ export function AiFlowLibraryBrowser({
         setError(json.error?.message ?? "Could not use this flow");
         return;
       }
+      setPendingReviewId(null);
+      setReviewLink("");
       router.push(`/dashboard/aiflows?edit=${json.data.flowId}`);
     } finally {
       setBusyId(null);
@@ -170,12 +189,35 @@ export function AiFlowLibraryBrowser({
               </div>
               <button
                 onClick={() => use(row)}
-                disabled={busyId === row.id}
+                disabled={
+                  busyId === row.id ||
+                  (pendingReviewId === row.id && reviewLink.trim().length === 0)
+                }
                 className="self-start rounded-md bg-signal-teal px-3 py-1.5 text-sm font-semibold text-deep-ink hover:bg-signal-teal/90 disabled:opacity-50 sm:shrink-0"
               >
-                {busyId === row.id ? "Using…" : "Use this flow"}
+                {busyId === row.id
+                  ? "Using…"
+                  : pendingReviewId === row.id
+                    ? "Install with this link"
+                    : "Use this flow"}
               </button>
             </div>
+            {pendingReviewId === row.id && (
+              <div className="space-y-1.5 border-t border-parchment/10 pt-2">
+                <label className="block text-xs text-parchment/60" htmlFor={`review-link-${row.id}`}>
+                  Paste your Google (or Yelp/Facebook) review link
+                </label>
+                <input
+                  id={`review-link-${row.id}`}
+                  className="w-full rounded-md border border-parchment/15 bg-deep-ink/40 px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:border-signal-teal focus:outline-none"
+                  placeholder="https://g.page/r/…/review"
+                  value={reviewLink}
+                  maxLength={REVIEW_LINK_MAX_LENGTH}
+                  onChange={(e) => setReviewLink(e.target.value)}
+                  autoFocus
+                />
+              </div>
+            )}
             <div className="flex flex-wrap items-center gap-x-4 gap-y-1 border-t border-parchment/10 pt-2">
               {/* A starter nobody has run yet would otherwise read as a wall of
                   zeros, which looks like a broken flow rather than a new one. */}

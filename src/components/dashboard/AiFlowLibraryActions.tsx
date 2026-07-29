@@ -3,20 +3,25 @@
 import { useState } from "react";
 import { useRouter } from "next/navigation";
 import { Sparkles } from "lucide-react";
+import { REVIEW_LINK_MAX_LENGTH } from "@/lib/ai-flows/templates";
 
 /**
  * Use / adapt CTA for a single library entry's detail page.
  *   - "Use this flow" duplicates with automatic substitution (phone/email/team)
- *     into a disabled flow and opens it in the editor.
+ *     into a disabled flow and opens it in the editor. When the entry needs a
+ *     review URL (the review-request starter), an input appears first.
  *   - "Adapt with AI" sends the template + the business's details to Gemini and
  *     opens the rewritten draft in the editor for review.
  */
 export function AiFlowLibraryActions({
   businessId,
-  libraryId
+  libraryId,
+  needsReviewLink = false
 }: {
   businessId: string | null;
   libraryId: string;
+  /** True when the catalog entry still carries the review-link sentinel. */
+  needsReviewLink?: boolean;
 }) {
   const router = useRouter();
   const [busy, setBusy] = useState<"use" | "adapt" | null>(null);
@@ -24,6 +29,7 @@ export function AiFlowLibraryActions({
   const [showAdapt, setShowAdapt] = useState(false);
   const [instructions, setInstructions] = useState("");
   const [draft, setDraft] = useState<unknown | null>(null);
+  const [reviewLink, setReviewLink] = useState("");
 
   if (!businessId) {
     return (
@@ -40,7 +46,10 @@ export function AiFlowLibraryActions({
       const res = await fetch(`/api/aiflows/library/${libraryId}/use`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ businessId })
+        body: JSON.stringify({
+          businessId,
+          ...(needsReviewLink ? { reviewLink: reviewLink.trim() } : {})
+        })
       });
       const json = (await res.json()) as {
         ok: boolean;
@@ -113,10 +122,25 @@ export function AiFlowLibraryActions({
           {error}
         </p>
       )}
+      {needsReviewLink && (
+        <div className="space-y-1.5">
+          <label className="block text-xs text-parchment/60" htmlFor="library-review-link">
+            Your Google (or Yelp/Facebook) review link
+          </label>
+          <input
+            id="library-review-link"
+            className="w-full rounded-md border border-parchment/15 bg-deep-ink/40 px-3 py-2 text-sm text-parchment placeholder:text-parchment/30 focus:border-signal-teal focus:outline-none"
+            placeholder="https://g.page/r/…/review"
+            value={reviewLink}
+            maxLength={REVIEW_LINK_MAX_LENGTH}
+            onChange={(e) => setReviewLink(e.target.value)}
+          />
+        </div>
+      )}
       <div className="flex flex-wrap items-center gap-3">
         <button
           onClick={use}
-          disabled={busy !== null}
+          disabled={busy !== null || (needsReviewLink && reviewLink.trim().length === 0)}
           className="rounded-md bg-signal-teal px-4 py-2 text-sm font-semibold text-deep-ink hover:bg-signal-teal/90 disabled:opacity-50"
         >
           {busy === "use" ? "Using…" : "Use this flow"}

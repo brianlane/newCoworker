@@ -320,19 +320,24 @@ describe("documentReceiptTemplate", () => {
 });
 
 describe("libraryStarterTemplates", () => {
-  it("publishes the two parameterless starters", () => {
+  it("publishes the three curated starters, review link as a placeholder", () => {
     expect(libraryStarterTemplates().map((t) => t.key)).toEqual([
+      "review_request_after_appointment",
       "document_receipt_confirmation",
       "new_lead_intake"
     ]);
     expect(LIBRARY_STARTER_CATEGORY).toBe("Starters");
+    const review = libraryStarterTemplates()[0];
+    expect(JSON.stringify(review.definition)).toContain("example.invalid/your-review-link");
   });
 
   it("every starter carries library copy and a definition the duplicate route can persist", () => {
     for (const tpl of libraryStarterTemplates()) {
       expect(tpl.summary.length).toBeGreaterThan(20);
       // The catalog is published verbatim, so the definition must already be
-      // valid: there is no scrub/substitution pass to repair it.
+      // valid: there is no scrub/substitution pass to repair structure. The
+      // review starter ships a sentinel URL that the use route swaps for the
+      // owner's pasted link before createAiFlow.
       expect(() => parseAiFlowDefinition(tpl.definition)).not.toThrow();
       // The catalog slug comes from the NAME, so a tenant who installs the
       // starter from the card groups onto the same entry.

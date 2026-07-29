@@ -2,9 +2,10 @@
  * Duplicate a public library entry into the caller's business.
  *
  * Fills the scrubbed template's placeholders with the owner's own phone / email
- * / first roster member, creates a DISABLED ai_flows row (so nothing fires until
- * reviewed), records the download, and returns the new flow id. Owner-only and
- * rate-limited (download-count inflation guard).
+ * / first roster member (and, for the review starter, a pasted review URL),
+ * creates a DISABLED ai_flows row (so nothing fires until reviewed), records
+ * the download, and returns the new flow id. Owner-only and rate-limited
+ * (download-count inflation guard).
  */
 import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
@@ -14,12 +15,17 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { createAiFlow } from "@/lib/ai-flows/db";
 import { AiFlowValidationError } from "@/lib/ai-flows/schema";
 import { getAiFlowLibraryEntry, recordLibraryDownload } from "@/lib/ai-flows/library";
-import { applyLibrarySubstitutions } from "@/lib/ai-flows/scrub";
+import { applyLibrarySubstitutions, isReviewStarterLibraryKey, REVIEW_LINK_PLACEHOLDER } from "@/lib/ai-flows/scrub";
+import { cleanReviewLink } from "@/lib/ai-flows/templates";
 
 export const runtime = "nodejs";
 
 const idSchema = z.string().uuid();
-const bodySchema = z.object({ businessId: z.string().uuid() });
+const bodySchema = z.object({
+  businessId: z.string().uuid(),
+  /** Required when the library entry still carries the review-link sentinel. */
+  reviewLink: z.string().max(300).optional()
+});
 
 // A duplicate creates one flow + one download row; 10/min/business is ample for
 // real use and stops scripted download-count inflation.
@@ -44,6 +50,31 @@ export async function POST(request: Request, { params }: Ctx) {
     const entry = await getAiFlowLibraryEntry(id);
     if (!entry) return errorResponse("NOT_FOUND", "Library flow not found");
 
+    let reviewLink: string | null = null;
+    if (isReviewStarterLibraryKey(entry.template_key)) {
+      const cleaned = typeof body.reviewLink === "string" ? cleanReviewLink(body.reviewLink) : null;
+      // Refuse the catalog sentinel (and any other example.invalid URL): it
+      // passes cleanReviewLink as a real https URL, but installing it would
+      // text customers a dead link.
+      let refused = !cleaned;
+      if (cleaned) {
+        try {
+          refused =
+            cleaned === REVIEW_LINK_PLACEHOLDER ||
+            new URL(cleaned).hostname === "example.invalid";
+        } catch {
+          refused = true;
+        }
+      }
+      if (refused) {
+        return errorResponse(
+          "VALIDATION_ERROR",
+          "Paste a full review link starting with https:// (e.g. your Google review URL)."
+        );
+      }
+      reviewLink = cleaned;
+    }
+
     const db = await createSupabaseServiceClient();
     const [{ data: business }, { data: members }] = await Promise.all([
       db.from("businesses").select("phone").eq("id", body.businessId).maybeSingle(),
@@ -59,7 +90,8 @@ export async function POST(request: Request, { params }: Ctx) {
     const filled = applyLibrarySubstitutions(entry.scrubbed_definition, {
       ownerPhone: (business?.phone as string | null | undefined) ?? null,
       ownerEmail: user.email,
-      employeeName: (members?.[0]?.name as string | undefined) ?? null
+      employeeName: (members?.[0]?.name as string | undefined) ?? null,
+      reviewLink
     });
 
     let row;
