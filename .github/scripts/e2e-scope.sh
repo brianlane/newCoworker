@@ -44,8 +44,10 @@
 #      blocking.
 #
 # The nightly full run (.github/workflows/e2e-nightly.yml) is the safety
-# net for everything this trades away: live-model drift with no code change
-# still surfaces within a day.
+# net for everything this trades away: it runs the full suite when main has
+# received a merge since the previous nightly (or the previous suite failed).
+# Quiet nights with no merges skip; live-model drift with no code change
+# waits until the next merge night or a manual workflow_dispatch.
 
 set -euo pipefail
 

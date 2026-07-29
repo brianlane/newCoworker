@@ -37,7 +37,7 @@ export function CiE2eModeSettings({ initialMode }: { initialMode: CiE2eMode }) {
       };
       if (!json.ok || !json.data) throw new Error(json.error?.message ?? "Save failed");
       setMode(json.data.mode);
-      setStatus("Saved — applies to the next CI run.");
+      setStatus("Saved: applies to the next CI run.");
     } catch (e) {
       setMode(prev);
       setStatus(e instanceof Error ? e.message : "Save failed");
@@ -84,8 +84,9 @@ export function CiE2eModeSettings({ initialMode }: { initialMode: CiE2eMode }) {
           <>
             <span className="text-spark-orange font-medium">Nightly only:</span> PRs and pushes
             skip ALL paid model calls (the e2e check still gates merges and reports success). The
-            full suite runs once a day on the nightly cron and emails{" "}
-            <span className="text-parchment/60">team@newcoworker.com</span> only when it fails.
+            full suite runs on the nightly cron when main has had a merge since the last run, and
+            emails <span className="text-parchment/60">team@newcoworker.com</span> only when it
+            fails.
           </>
         )}
       </p>
