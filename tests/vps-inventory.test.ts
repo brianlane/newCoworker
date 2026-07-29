@@ -125,7 +125,7 @@ describe("vps_inventory DB layer", () => {
       expect(chain.eq).toHaveBeenCalledWith("state", "available");
       expect(chain.eq).toHaveBeenCalledWith("plan", "kvm2");
       expect(chain.or).toHaveBeenCalledWith(
-        expect.stringMatching(/^expires_at\.is\.null,expires_at\.gte\.\d{4}-/)
+        expect.stringMatching(/^expires_at\.is\.null,expires_at\.gte\."\d{4}-/)
       );
       expect(chain.order).toHaveBeenCalledWith("expires_at", {
         ascending: false,
@@ -156,7 +156,7 @@ describe("vps_inventory DB layer", () => {
       const row = await claimAvailableVps("kvm2", "biz-1", db as never);
       expect(row?.vm_id).toBe(222);
       expect(chain.or).toHaveBeenCalledWith(
-        expect.stringMatching(/^expires_at\.is\.null,expires_at\.gte\./)
+        expect.stringMatching(/^expires_at\.is\.null,expires_at\.gte\."/)
       );
       expect(chain.eq).toHaveBeenCalledWith("vm_id", 222);
     });

@@ -126,12 +126,14 @@ export async function claimAvailableVps(
   // as defense in depth. Furthest expiry first; unknown (null) last.
   const nowMs = Date.now();
   const minExpiryIso = new Date(nowMs + VPS_POOL_MIN_RUNWAY_MS).toISOString();
+  // Quote the ISO value: PostgREST treats `.` and `:` as reserved in filter
+  // grammar, so an unquoted timestamp would break the or() clause.
   const { data: candidates, error } = await db
     .from("vps_inventory")
     .select("vm_id, expires_at")
     .eq("state", "available")
     .eq("plan", plan)
-    .or(`expires_at.is.null,expires_at.gte.${minExpiryIso}`)
+    .or(`expires_at.is.null,expires_at.gte."${minExpiryIso}"`)
     .order("expires_at", { ascending: false, nullsFirst: false })
     .order("acquired_at", { ascending: true })
     .limit(20);
