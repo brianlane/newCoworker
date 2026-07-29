@@ -50,6 +50,8 @@ export type ReconciledOrphan = {
   plan: VpsSize;
   /** Hostinger billing subscription id when known (VM detail or list lookup). */
   hostingerBillingSubscriptionId?: string | null;
+  /** `Date.parse(vm.created_at)` when Hostinger returned a parseable stamp. */
+  createdAtMs?: number;
 };
 
 const KNOWN_PLANS: ReadonlySet<string> = new Set(["kvm1", "kvm2", "kvm4", "kvm8"]);
@@ -175,9 +177,31 @@ export async function reconcileOrphanedPurchases(args: {
       hostingerBillingSubscriptionId,
       createdAt: vm.created_at
     });
-    reconciled.push({ vmId: vm.id, plan, hostingerBillingSubscriptionId });
+    reconciled.push({
+      vmId: vm.id,
+      plan,
+      hostingerBillingSubscriptionId,
+      createdAtMs: Number.isFinite(createdAtMs) ? createdAtMs : undefined
+    });
   }
   return reconciled;
+}
+
+/**
+ * True when an orphan is eligible as the size match for this purchase
+ * attempt. Without `minCreatedAtMs`, any size match counts. With it, only
+ * orphans created at/after that stamp count — so an unrelated recent
+ * fail-but-charge of the same size cannot end the wait before THIS
+ * purchase's VM materializes.
+ */
+export function orphanMatchesPurchaseAttempt(
+  orphan: ReconciledOrphan,
+  vpsSize: VpsSize,
+  minCreatedAtMs?: number
+): boolean {
+  if (orphan.plan !== vpsSize) return false;
+  if (minCreatedAtMs === undefined) return true;
+  return typeof orphan.createdAtMs === "number" && orphan.createdAtMs >= minCreatedAtMs;
 }
 
 /**
@@ -188,6 +212,10 @@ export async function reconcileOrphanedPurchases(args: {
  *
  * Already-pooled orphans from earlier passes stay in the returned list
  * (deduped by vmId) even though later inventory reads will skip them.
+ *
+ * Pass `minCreatedAtMs` (typically just before the purchase call, minus a
+ * small clock-skew slack) so an unrelated older orphan of the same size
+ * does not short-circuit the wait for the box this purchase paid for.
  */
 export async function reconcileUntilSizeMatch(args: {
   reconcile: () => Promise<ReconciledOrphan[]>;
@@ -196,6 +224,8 @@ export async function reconcileUntilSizeMatch(args: {
   now?: () => number;
   intervalMs?: number;
   budgetMs?: number;
+  /** Only count size matches created at/after this epoch ms. */
+  minCreatedAtMs?: number;
 }): Promise<ReconciledOrphan[]> {
   const nowFn = args.now ?? Date.now;
   const intervalMs = args.intervalMs ?? ORPHAN_RECONCILE_RETRY_INTERVAL_MS;
@@ -207,7 +237,13 @@ export async function reconcileUntilSizeMatch(args: {
     const batch = await args.reconcile();
     for (const orphan of batch) byId.set(orphan.vmId, orphan);
     const pooled = [...byId.values()];
-    if (pooled.some((orphan) => orphan.plan === args.vpsSize)) return pooled;
+    if (
+      pooled.some((orphan) =>
+        orphanMatchesPurchaseAttempt(orphan, args.vpsSize, args.minCreatedAtMs)
+      )
+    ) {
+      return pooled;
+    }
     if (nowFn() >= deadline) return pooled;
     await args.sleep(intervalMs);
   }

@@ -4,6 +4,7 @@ import {
   reconcileOrphanedPurchases,
   reconcileUntilSizeMatch,
   resolveOrphanBillingSubscriptionId,
+  orphanMatchesPurchaseAttempt,
   ORPHAN_MAX_AGE_MS,
   ORPHAN_RECONCILE_RETRY_INTERVAL_MS,
   ORPHAN_RECONCILE_RETRY_BUDGET_MS
@@ -91,7 +92,12 @@ describe("reconcileOrphanedPurchases", () => {
     const result = await reconcileOrphanedPurchases(args);
 
     expect(result).toEqual([
-      { vmId: 1815606, plan: "kvm2", hostingerBillingSubscriptionId: "AzywqVVOpCob62ZiY" }
+      {
+        vmId: 1815606,
+        plan: "kvm2",
+        hostingerBillingSubscriptionId: "AzywqVVOpCob62ZiY",
+        createdAtMs: NOW - 5 * 60 * 1000
+      }
     ]);
     expect(args.release).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -117,7 +123,12 @@ describe("reconcileOrphanedPurchases", () => {
 
     expect(listBillingSubscriptions).toHaveBeenCalledTimes(1);
     expect(result).toEqual([
-      { vmId: 1863856, plan: "kvm2", hostingerBillingSubscriptionId: "billing-from-list" }
+      {
+        vmId: 1863856,
+        plan: "kvm2",
+        hostingerBillingSubscriptionId: "billing-from-list",
+        createdAtMs: NOW - 5 * 60 * 1000
+      }
     ]);
     expect(args.release).toHaveBeenCalledWith(
       expect.objectContaining({ hostingerBillingSubscriptionId: "billing-from-list" })
@@ -133,7 +144,12 @@ describe("reconcileOrphanedPurchases", () => {
     const result = await reconcileOrphanedPurchases(args);
 
     expect(result).toEqual([
-      { vmId: 1863856, plan: "kvm2", hostingerBillingSubscriptionId: null }
+      {
+        vmId: 1863856,
+        plan: "kvm2",
+        hostingerBillingSubscriptionId: null,
+        createdAtMs: NOW - 5 * 60 * 1000
+      }
     ]);
   });
 
@@ -277,6 +293,23 @@ describe("reconcileOrphanedPurchases", () => {
   });
 });
 
+describe("orphanMatchesPurchaseAttempt", () => {
+  it("matches any size when minCreatedAtMs is omitted", () => {
+    expect(orphanMatchesPurchaseAttempt({ vmId: 1, plan: "kvm2" }, "kvm2")).toBe(true);
+    expect(orphanMatchesPurchaseAttempt({ vmId: 1, plan: "kvm1" }, "kvm2")).toBe(false);
+  });
+
+  it("requires createdAtMs at/after the purchase stamp", () => {
+    expect(
+      orphanMatchesPurchaseAttempt({ vmId: 1, plan: "kvm2", createdAtMs: 50 }, "kvm2", 100)
+    ).toBe(false);
+    expect(
+      orphanMatchesPurchaseAttempt({ vmId: 1, plan: "kvm2", createdAtMs: 100 }, "kvm2", 100)
+    ).toBe(true);
+    expect(orphanMatchesPurchaseAttempt({ vmId: 1, plan: "kvm2" }, "kvm2", 100)).toBe(false);
+  });
+});
+
 describe("reconcileUntilSizeMatch", () => {
   it("returns immediately when the first scan finds a size match", async () => {
     const sleep = vi.fn();
@@ -364,6 +397,34 @@ describe("reconcileUntilSizeMatch", () => {
       { vmId: 1, plan: "kvm1" },
       { vmId: 2, plan: "kvm2" }
     ]);
+  });
+
+  it("ignores same-size orphans older than minCreatedAtMs and keeps polling", async () => {
+    let t = 1_000_000;
+    const sleep = vi.fn().mockImplementation(async (ms: number) => {
+      t += ms;
+    });
+    const reconcile = vi
+      .fn()
+      .mockResolvedValueOnce([{ vmId: 1, plan: "kvm2", createdAtMs: 100_000 }])
+      .mockResolvedValueOnce([
+        { vmId: 1, plan: "kvm2", createdAtMs: 100_000 },
+        { vmId: 2, plan: "kvm2", createdAtMs: 1_000_000 }
+      ]);
+
+    const result = await reconcileUntilSizeMatch({
+      reconcile,
+      vpsSize: "kvm2",
+      sleep,
+      now: () => t,
+      intervalMs: 1,
+      budgetMs: 10_000,
+      minCreatedAtMs: 940_000
+    });
+
+    expect(result.map((o) => o.vmId)).toEqual([1, 2]);
+    expect(reconcile).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledTimes(1);
   });
 
   it("exposes the production retry constants", () => {

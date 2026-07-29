@@ -7,6 +7,7 @@ import {
 import { adoptVpsForBusiness } from "@/lib/hostinger/adopt";
 import {
   claimAvailableVps,
+  claimSpecificAvailableVps,
   listVpsInventory,
   recordVpsAssigned,
   releaseVpsToPool,
@@ -15,6 +16,7 @@ import {
 import {
   reconcileOrphanedPurchases,
   reconcileUntilSizeMatch,
+  orphanMatchesPurchaseAttempt,
   type ReconciledOrphan
 } from "@/lib/provisioning/reconcile-orphans";
 import { cleanupStaleTenantsForVm } from "@/lib/provisioning/stale-tenant-cleanup";
@@ -399,6 +401,8 @@ export type VpsAdopter = (input: {
  */
 export type VpsPool = {
   claim: typeof claimAvailableVps;
+  /** Atomic claim of one specific VM id (term fail-but-charge orphan adopt). */
+  claimSpecific: typeof claimSpecificAvailableVps;
   record: typeof recordVpsAssigned;
   release: typeof releaseVpsToPool;
   retire: typeof retireVps;
@@ -845,11 +849,11 @@ async function tryAdoptFromPool(args: {
 }
 
 /**
- * Adopt a SPECIFIC Hostinger VM (already pooled by the orphan reconciler)
- * without going through the oldest-available pool claim. Used by the
- * change-plan term-alignment fail-but-charge path: the reconciled orphan
- * IS the term-bought box, and claiming "any kvm2" could hand back a
- * monthly lapser instead.
+ * Adopt a SPECIFIC Hostinger VM after an atomic pool claim on that vm_id.
+ * Used by the change-plan term-alignment fail-but-charge path: the
+ * reconciled orphan IS the term-bought box, and claiming "any kvm2" could
+ * hand back a monthly lapser instead. Claim runs first so a concurrent
+ * adopt-first provision cannot take the same `available` orphan mid-setup.
  */
 async function tryAdoptSpecificVm(args: {
   businessId: string;
@@ -872,6 +876,25 @@ async function tryAdoptSpecificVm(args: {
     notes
   } = args;
 
+  let claimed: Awaited<ReturnType<typeof claimSpecificAvailableVps>>;
+  try {
+    claimed = await vpsPool.claimSpecific(virtualMachineId, businessId);
+  } catch (err) {
+    logger.warn("specific orphan pool claim failed (continuing to surface purchase error)", {
+      businessId,
+      virtualMachineId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
+  }
+  if (!claimed) {
+    logger.warn("specific orphan already claimed by another provision", {
+      businessId,
+      virtualMachineId
+    });
+    return null;
+  }
+
   logger.info("adopting specific reconciled Hostinger VM (term fail-but-charge)", {
     businessId,
     virtualMachineId,
@@ -890,7 +913,9 @@ async function tryAdoptSpecificVm(args: {
         plan: vpsSize,
         businessId,
         hostingerBillingSubscriptionId:
-          adopted.hostingerBillingSubscriptionId ?? hostingerBillingSubscriptionId,
+          adopted.hostingerBillingSubscriptionId ??
+          hostingerBillingSubscriptionId ??
+          claimed.hostinger_billing_subscription_id,
         notes
       });
     } catch (err) {
@@ -1009,6 +1034,13 @@ async function acquireVps(args: {
     if (adopted) return adopted;
   }
 
+  // Stamp before the purchase call so the orphan wait only accepts VMs
+  // created for THIS attempt (minus 60s clock-skew slack). An unrelated
+  // older fail-but-charge of the same size must not end the ~5 min poll
+  // before Hostinger materializes the box we just paid for.
+  const purchaseStartedAt = now();
+  const orphanMinCreatedAtMs = purchaseStartedAt - 60_000;
+
   let purchased: ProvisionVpsForBusinessResult;
   try {
     purchased = await vpsProvisioner({ businessId, tier, vpsSize, billingPeriod });
@@ -1025,14 +1057,21 @@ async function acquireVps(args: {
           reconcile: args.reconcileOrphans,
           vpsSize,
           sleep,
-          now
+          now,
+          minCreatedAtMs: orphanMinCreatedAtMs
         });
-        const sizeMatch = pooled.find((orphan) => orphan.plan === vpsSize);
+        const sizeMatches = pooled.filter((orphan) =>
+          orphanMatchesPurchaseAttempt(orphan, vpsSize, orphanMinCreatedAtMs)
+        );
+        // Prefer the newest matching orphan: when two fail-but-charges race,
+        // the later created_at is more likely THIS purchase's VM.
+        const sizeMatch = sizeMatches
+          .slice()
+          .sort((a, b) => (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0))[0];
         if (sizeMatch) {
           if (skipPoolAdopt) {
-            // Term-alignment path: THIS orphan is the term-bought box. Adopt
-            // it by id (not via the pool claim, which picks the oldest
-            // available of the size and could hand back a monthly lapser).
+            // Term-alignment path: THIS orphan is the term-bought box. Claim
+            // + adopt it by id (not via the oldest-available size claim).
             const adopted = await tryAdoptSpecificVm({
               businessId,
               tier,
@@ -1171,7 +1210,7 @@ async function runOrchestrator(
   const vpsPool: VpsPool | null =
     deps?.vpsPool === undefined
       ? /* c8 ignore next -- production default pool; tests inject vpsPool */
-        { claim: claimAvailableVps, record: recordVpsAssigned, release: releaseVpsToPool, retire: retireVps }
+        { claim: claimAvailableVps, claimSpecific: claimSpecificAvailableVps, record: recordVpsAssigned, release: releaseVpsToPool, retire: retireVps }
       : deps.vpsPool;
   /* c8 ignore next -- defaultRemoteExecutor is the production path; tests inject remoteExec */
   const remoteExec = deps?.remoteExec ?? defaultRemoteExecutor;

@@ -108,6 +108,48 @@ export async function claimAvailableVps(
 }
 
 /**
+ * Atomically claim one specific pooled VM by id (term fail-but-charge
+ * adopt). Unlike {@link claimAvailableVps}, this never substitutes a
+ * different available box of the same size.
+ *
+ * Returns the row when the claim wins (or the VM is already assigned to
+ * this business), otherwise null when another provision claimed it first
+ * or the row is not `available`.
+ */
+export async function claimSpecificAvailableVps(
+  vmId: number,
+  businessId: string,
+  client?: SupabaseClient
+): Promise<VpsInventoryRow | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+
+  const { data: own, error: ownErr } = await db
+    .from("vps_inventory")
+    .select("*")
+    .eq("vm_id", vmId)
+    .eq("state", "assigned")
+    .eq("assigned_business_id", businessId)
+    .maybeSingle();
+  if (ownErr) throw new Error(`claimSpecificAvailableVps: ${ownErr.message}`);
+  if (own) return own as VpsInventoryRow;
+
+  const { data: claimed, error: claimErr } = await db
+    .from("vps_inventory")
+    .update({
+      state: "assigned",
+      assigned_business_id: businessId,
+      assigned_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    })
+    .eq("vm_id", vmId)
+    .eq("state", "available")
+    .select()
+    .maybeSingle();
+  if (claimErr) throw new Error(`claimSpecificAvailableVps: ${claimErr.message}`);
+  return (claimed as VpsInventoryRow | null) ?? null;
+}
+
+/**
  * Record a freshly purchased box as assigned inventory. Upsert so a
  * re-provision of the same VM (idempotent retry) doesn't fail on the PK.
  */

@@ -107,6 +107,7 @@ vi.mock("@/lib/email/tenant-mailbox", () => ({
 // purchase path, the pre-pool behavior) and the bookkeeping writes no-op.
 vi.mock("@/lib/db/vps-inventory", () => ({
   claimAvailableVps: vi.fn().mockResolvedValue(null),
+  claimSpecificAvailableVps: vi.fn().mockResolvedValue(null),
   recordVpsAssigned: vi.fn().mockResolvedValue(undefined),
   releaseVpsToPool: vi.fn().mockResolvedValue(undefined),
   retireVps: vi.fn().mockResolvedValue(undefined),
@@ -2950,6 +2951,7 @@ describe("provisioning/orchestrate", () => {
     function makePool(overrides: Record<string, unknown> = {}) {
       return {
         claim: vi.fn().mockResolvedValue(null),
+        claimSpecific: vi.fn().mockResolvedValue(null),
         record: vi.fn().mockResolvedValue(undefined),
         release: vi.fn().mockResolvedValue(undefined),
         retire: vi.fn().mockResolvedValue(undefined),
@@ -2967,7 +2969,8 @@ describe("provisioning/orchestrate", () => {
       acquired_at: "2026-07-01T00:00:00Z",
       assigned_at: "2026-07-04T00:00:00Z",
       notes: null,
-      updated_at: "2026-07-04T00:00:00Z"
+      updated_at: "2026-07-04T00:00:00Z",
+      never_renew: false
     };
 
     it("adopts a pooled box instead of purchasing and records the assignment", async () => {
@@ -3295,18 +3298,25 @@ describe("provisioning/orchestrate", () => {
     function makePool(overrides: Record<string, unknown> = {}) {
       return {
         claim: vi.fn().mockResolvedValue(null),
+        claimSpecific: vi.fn().mockImplementation(async (vmId: number, businessId: string) => ({
+          vm_id: vmId,
+          hostname: `srv${vmId}.hstgr.cloud`,
+          plan: "kvm1",
+          state: "assigned",
+          hostinger_billing_subscription_id: "hsub-claimed",
+          assigned_business_id: businessId,
+          acquired_at: "2026-07-08T22:52:20Z",
+          assigned_at: "2026-07-08T22:57:37Z",
+          notes: null,
+          updated_at: "2026-07-08T22:57:37Z",
+          never_renew: false
+        })),
         record: vi.fn().mockResolvedValue(undefined),
         release: vi.fn().mockResolvedValue(undefined),
         retire: vi.fn().mockResolvedValue(undefined),
         ...overrides
       };
     }
-
-    /**
-     * The exact failure shape from the Jul 8 2026 Truly Insurance signup:
-     * the PURCHASE endpoint threw 402 "Card payment could not be completed"
-     * while Hostinger charged the card and created VM 1815606 anyway.
-     */
     class FakePurchaseError extends Error {
       readonly endpoint = "/api/vps/v1/virtual-machines";
       readonly status = 402;
@@ -3343,7 +3353,7 @@ describe("provisioning/orchestrate", () => {
       });
       const orphanReconciler = vi
         .fn()
-        .mockResolvedValue([{ vmId: 1815606, plan: "kvm1" }]);
+        .mockResolvedValue([{ vmId: 1815606, plan: "kvm1", createdAtMs: Date.now() }]);
       const remoteExec = vi.fn().mockResolvedValue(okExec());
 
       const result = await orchestrateProvisioning(
@@ -3397,7 +3407,9 @@ describe("provisioning/orchestrate", () => {
       const pool = makePool();
       const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
       // Orphan is a kvm8; the starter provision needs kvm1 — no adopt.
-      const orphanReconciler = vi.fn().mockResolvedValue([{ vmId: 999, plan: "kvm8" }]);
+      const orphanReconciler = vi
+        .fn()
+        .mockResolvedValue([{ vmId: 999, plan: "kvm8", createdAtMs: 0 }]);
       const vpsAdopter = vi.fn();
 
       await expect(
@@ -3456,12 +3468,17 @@ describe("provisioning/orchestrate", () => {
 
     it("skipPoolAdopt: adopts the SPECIFIC term orphan (not an arbitrary pooled box)", async () => {
       // Change-plan term alignment must land on the term-bought box. After a
-      // fail-but-charge, that box IS the reconciled orphan — adopt it by id
-      // rather than aborting or claiming an unrelated monthly lapser.
+      // fail-but-charge, that box IS the reconciled orphan — claim + adopt it
+      // by id rather than aborting or claiming an unrelated monthly lapser.
       const pool = makePool();
       const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
       const orphanReconciler = vi.fn().mockResolvedValue([
-        { vmId: 1863856, plan: "kvm1", hostingerBillingSubscriptionId: "hsub-term" }
+        {
+          vmId: 1863856,
+          plan: "kvm1",
+          hostingerBillingSubscriptionId: "hsub-term",
+          createdAtMs: Date.now()
+        }
       ]);
       const vpsAdopter = vi.fn().mockResolvedValue({
         ...makeVpsStub("1863856"),
@@ -3477,6 +3494,7 @@ describe("provisioning/orchestrate", () => {
 
       expect(result.vpsId).toBe("1863856");
       expect(orphanReconciler).toHaveBeenCalledTimes(1);
+      expect(pool.claimSpecific).toHaveBeenCalledWith(1863856, "biz-orphan-skip");
       expect(vpsAdopter).toHaveBeenCalledWith(
         expect.objectContaining({ virtualMachineId: 1863856 })
       );
@@ -3491,6 +3509,45 @@ describe("provisioning/orchestrate", () => {
       expect(vpsProvisioner).toHaveBeenCalledTimes(1);
     });
 
+    it("skipPoolAdopt: retries past an unrelated older same-size orphan", async () => {
+      // Bugbot: an older fail-but-charge of the same size must not end the
+      // wait before THIS purchase's VM materializes.
+      let t = 1_000_000;
+      const sleep = vi.fn().mockImplementation(async (ms: number) => {
+        t += ms;
+      });
+      const pool = makePool();
+      const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
+      const orphanReconciler = vi
+        .fn()
+        .mockResolvedValueOnce([
+          { vmId: 111, plan: "kvm1", createdAtMs: 100_000 } // older than purchase - 60s
+        ])
+        .mockResolvedValueOnce([
+          { vmId: 111, plan: "kvm1", createdAtMs: 100_000 },
+          { vmId: 1863856, plan: "kvm1", createdAtMs: 1_000_000 }
+        ]);
+      const vpsAdopter = vi.fn().mockResolvedValue(makeVpsStub("1863856"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-orphan-stale", tier: "starter", skipPoolAdopt: true },
+        {
+          vpsProvisioner,
+          vpsAdopter,
+          vpsPool: pool,
+          orphanReconciler,
+          remoteExec,
+          sleep,
+          now: () => t
+        }
+      );
+
+      expect(result.vpsId).toBe("1863856");
+      expect(orphanReconciler).toHaveBeenCalledTimes(2);
+      expect(pool.claimSpecific).toHaveBeenCalledWith(1863856, "biz-orphan-stale");
+    });
+
     it("skipPoolAdopt: retries the orphan scan when the first pass finds nothing", async () => {
       // Amy Laidlaw Jul 28 2026: Hostinger 402'd then materialized the VM ~58s later.
       let t = 0;
@@ -3502,7 +3559,7 @@ describe("provisioning/orchestrate", () => {
       const orphanReconciler = vi
         .fn()
         .mockResolvedValueOnce([])
-        .mockResolvedValueOnce([{ vmId: 1863856, plan: "kvm1" }]);
+        .mockResolvedValueOnce([{ vmId: 1863856, plan: "kvm1", createdAtMs: 30_000 }]);
       const vpsAdopter = vi.fn().mockResolvedValue(makeVpsStub("1863856"));
       const remoteExec = vi.fn().mockResolvedValue(okExec());
 
@@ -3527,7 +3584,9 @@ describe("provisioning/orchestrate", () => {
     it("skipPoolAdopt: rethrows when the specific orphan adopt also fails", async () => {
       const pool = makePool();
       const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
-      const orphanReconciler = vi.fn().mockResolvedValue([{ vmId: 1863856, plan: "kvm1" }]);
+      const orphanReconciler = vi
+        .fn()
+        .mockResolvedValue([{ vmId: 1863856, plan: "kvm1", createdAtMs: Date.now() }]);
       const vpsAdopter = vi.fn().mockRejectedValueOnce(new Error("setup 422"));
       const sleep = vi.fn().mockResolvedValue(undefined);
 
@@ -3537,8 +3596,117 @@ describe("provisioning/orchestrate", () => {
           { vpsProvisioner, vpsAdopter, vpsPool: pool, orphanReconciler, remoteExec: vi.fn(), sleep }
         )
       ).rejects.toThrow(/HTTP 402/);
+      expect(pool.claimSpecific).toHaveBeenCalledWith(1863856, "biz-orphan-skip-fail");
       expect(pool.retire).toHaveBeenCalledWith(1863856, expect.stringContaining("setup 422"));
       expect(vpsProvisioner).toHaveBeenCalledTimes(1);
+    });
+
+    it("skipPoolAdopt: continues when pool record fails after specific adopt", async () => {
+      const pool = makePool({
+        record: vi.fn().mockRejectedValueOnce(new Error("record boom"))
+      });
+      const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
+      const orphanReconciler = vi
+        .fn()
+        .mockResolvedValue([{ vmId: 1863856, plan: "kvm1", createdAtMs: Date.now() }]);
+      const vpsAdopter = vi.fn().mockResolvedValue(makeVpsStub("1863856"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+      const sleep = vi.fn().mockResolvedValue(undefined);
+
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-orphan-record-fail", tier: "starter", skipPoolAdopt: true },
+        { vpsProvisioner, vpsAdopter, vpsPool: pool, orphanReconciler, remoteExec, sleep }
+      );
+      expect(result.vpsId).toBe("1863856");
+    });
+
+    it("skipPoolAdopt: continues when stale-tenant cleanup fails after specific adopt", async () => {
+      vi.mocked(cleanupStaleTenantsForVm).mockRejectedValueOnce(new Error("cleanup boom"));
+      const pool = makePool();
+      const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
+      const orphanReconciler = vi
+        .fn()
+        .mockResolvedValue([{ vmId: 1863856, plan: "kvm1", createdAtMs: Date.now() }]);
+      const vpsAdopter = vi.fn().mockResolvedValue(makeVpsStub("1863856"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+      const sleep = vi.fn().mockResolvedValue(undefined);
+
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-orphan-cleanup-fail", tier: "starter", skipPoolAdopt: true },
+        { vpsProvisioner, vpsAdopter, vpsPool: pool, orphanReconciler, remoteExec, sleep }
+      );
+      expect(result.vpsId).toBe("1863856");
+    });
+
+    it("skipPoolAdopt: continues when retire fails after specific adopt failure", async () => {
+      const pool = makePool({
+        retire: vi.fn().mockRejectedValueOnce(new Error("retire boom"))
+      });
+      const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
+      const orphanReconciler = vi
+        .fn()
+        .mockResolvedValue([{ vmId: 1863856, plan: "kvm1", createdAtMs: Date.now() }]);
+      const vpsAdopter = vi.fn().mockRejectedValueOnce(new Error("setup 422"));
+      const sleep = vi.fn().mockResolvedValue(undefined);
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-orphan-retire-fail", tier: "starter", skipPoolAdopt: true },
+          { vpsProvisioner, vpsAdopter, vpsPool: pool, orphanReconciler, remoteExec: vi.fn(), sleep }
+        )
+      ).rejects.toThrow(/HTTP 402/);
+      expect(pool.retire).toHaveBeenCalled();
+    });
+
+    it("skipPoolAdopt: rethrows when specific claim loses the race", async () => {
+      const pool = makePool({
+        claimSpecific: vi.fn().mockResolvedValue(null)
+      });
+      const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
+      const orphanReconciler = vi
+        .fn()
+        .mockResolvedValue([{ vmId: 1863856, plan: "kvm1", createdAtMs: Date.now() }]);
+      const sleep = vi.fn().mockResolvedValue(undefined);
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-orphan-claim-race", tier: "starter", skipPoolAdopt: true },
+          {
+            vpsProvisioner,
+            vpsAdopter: vi.fn(),
+            vpsPool: pool,
+            orphanReconciler,
+            remoteExec: vi.fn(),
+            sleep
+          }
+        )
+      ).rejects.toThrow(/HTTP 402/);
+      expect(pool.claimSpecific).toHaveBeenCalled();
+    });
+
+    it("skipPoolAdopt: rethrows when specific claim throws", async () => {
+      const pool = makePool({
+        claimSpecific: vi.fn().mockRejectedValueOnce(new Error("claim db down"))
+      });
+      const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
+      const orphanReconciler = vi
+        .fn()
+        .mockResolvedValue([{ vmId: 1863856, plan: "kvm1", createdAtMs: Date.now() }]);
+      const sleep = vi.fn().mockResolvedValue(undefined);
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-orphan-claim-throw", tier: "starter", skipPoolAdopt: true },
+          {
+            vpsProvisioner,
+            vpsAdopter: vi.fn(),
+            vpsPool: pool,
+            orphanReconciler,
+            remoteExec: vi.fn(),
+            sleep
+          }
+        )
+      ).rejects.toThrow(/HTTP 402/);
     });
 
     it("surfaces the original purchase error when the reconciler itself throws", async () => {
@@ -3573,7 +3741,9 @@ describe("provisioning/orchestrate", () => {
       });
       const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
       const vpsAdopter = vi.fn().mockRejectedValueOnce(new Error("setup 422"));
-      const orphanReconciler = vi.fn().mockResolvedValue([{ vmId: 1815606, plan: "kvm1" }]);
+      const orphanReconciler = vi
+        .fn()
+        .mockResolvedValue([{ vmId: 1815606, plan: "kvm1", createdAtMs: Date.now() }]);
 
       await expect(
         orchestrateProvisioning(
@@ -3848,7 +4018,13 @@ describe("provisioning/orchestrate", () => {
       } as never);
       const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("888"));
       const remoteExec = vi.fn().mockResolvedValue(okExec());
-      const vpsPool = { claim: vi.fn(), record: vi.fn(), release: vi.fn(), retire: vi.fn() };
+      const vpsPool = {
+        claim: vi.fn(),
+        claimSpecific: vi.fn(),
+        record: vi.fn(),
+        release: vi.fn(),
+        retire: vi.fn()
+      };
 
       const result = await orchestrateProvisioning(
         { businessId: "biz-ovh-2", tier: "enterprise", ownerEmail: "o@test.com" },
