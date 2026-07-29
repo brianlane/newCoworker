@@ -21,7 +21,7 @@ import {
   planLifecycleAction,
   isCanceledInGrace
 } from "@/lib/billing/lifecycle";
-import { executeLifecyclePlan } from "@/lib/billing/lifecycle-executor";
+import { executeLifecyclePlan, executeLifecyclePlanFastPhase } from "@/lib/billing/lifecycle-executor";
 import { loadLifecycleContextForBusiness } from "@/lib/billing/lifecycle-loader";
 import {
   createCheckoutSession,
@@ -88,12 +88,27 @@ export async function POST(request: Request) {
       if (!planRes.ok) {
         return errorResponse("CONFLICT", planRes.reason, 409);
       }
+      // Stripe + DB first, then Hostinger renew re-enable on the throwing
+      // path. Clearing cancel_at_period_end before enable means a Hostinger
+      // failure leaves posture free to auto-heal renew (tenant is live again)
+      // instead of Stripe/DB disagreeing while posture skips heal.
+      const extra = {
+        businessId: business.id,
+        vpsHost: ctxRes.vpsHost,
+        customerProfileId: ctxRes.context.subscription.customer_profile_id
+      };
       try {
-        await executeLifecyclePlan(planRes.plan, {
-          businessId: business.id,
-          vpsHost: ctxRes.vpsHost,
-          customerProfileId: ctxRes.context.subscription.customer_profile_id
-        });
+        await executeLifecyclePlanFastPhase(planRes.plan, extra);
+        await executeLifecyclePlan(
+          {
+            ...planRes.plan,
+            stripeOps: [],
+            dbUpdates: [],
+            sshOps: [],
+            telnyxOps: []
+          },
+          extra
+        );
       } catch (err) {
         logger.error("lifecycle execute failed on /api/billing/reactivate undoPeriodEnd", {
           businessId: business.id,
