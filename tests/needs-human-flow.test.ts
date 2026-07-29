@@ -157,6 +157,13 @@ describe("ensureNeedsHumanTeamFlow", () => {
     await expect(ensureNeedsHumanTeamFlow(BIZ, restoreFail.db as never)).rejects.toThrow(
       "ensureNeedsHumanTeamFlow: restore"
     );
+    vi.mocked(restoreContentRows).mockRejectedValue("tunnel dead");
+    const restoreFail2 = fakeDb([
+      { data: { id: "flow-soft", enabled: false, deleted_at: "2026-07-28T00:00:00Z" } }
+    ]);
+    await expect(ensureNeedsHumanTeamFlow(BIZ, restoreFail2.db as never)).rejects.toThrow(
+      "ensureNeedsHumanTeamFlow: restore: tunnel dead"
+    );
   });
 
   it("resolves the service client when none is injected", async () => {
