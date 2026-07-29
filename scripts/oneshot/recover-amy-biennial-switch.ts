@@ -115,7 +115,7 @@ const stripe = getStripe();
 // ---------------------------------------------------------------- load state
 const { data: biz, error: bizErr } = await db
   .from("businesses")
-  .select("id, name, tier, hostinger_vps_id, vps_size, vps_provider, owner_email")
+  .select("id, name, tier, hostinger_vps_id, vps_size, vps_provider, owner_email, customer_profile_id")
   .eq("id", BUSINESS_ID)
   .single();
 if (bizErr || !biz) {
@@ -198,7 +198,6 @@ const meta = session.metadata ?? {};
 const tier = meta.tier;
 const billingPeriod = meta.billingPeriod;
 const previousSubscriptionId = meta.previousSubscriptionId ?? null;
-const customerProfileId = meta.customerProfileId ?? null;
 const newStripeSubId =
   typeof session.subscription === "string" ? session.subscription : (session.subscription?.id ?? null);
 const stripeCustomerId =
@@ -232,6 +231,12 @@ if (oldSubErr) {
   process.exit(1);
 }
 const oldSub = oldSubRow;
+
+// Match change-plan: metadata profile first, then old sub, then business.
+const customerProfileId =
+  meta.customerProfileId ??
+  (typeof oldSub?.customer_profile_id === "string" ? oldSub.customer_profile_id : null) ??
+  (typeof biz.customer_profile_id === "string" ? biz.customer_profile_id : null);
 
 const { data: existingNewRows, error: existingNewErr } = await db
   .from("subscriptions")
