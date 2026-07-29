@@ -60,6 +60,10 @@ import {
   SMS_TIMEZONE_LINE
 } from "../_shared/sms_prompt_lines.ts";
 import {
+  normalizeEmojiIntensity,
+  SMS_EMOJI_INTENSITY_LINE
+} from "../_shared/emoji_intensity.ts";
+import {
   customerLanguageLine,
   type CustomerLanguage
 } from "../_shared/customer_language.ts";
@@ -1343,11 +1347,16 @@ serve(async (req: Request) => {
 
     const { data: cfg } = await supabase
       .from("business_configs")
-      .select("rowboat_project_id")
+      .select("rowboat_project_id, emoji_intensity")
       .eq("business_id", job.business_id)
       .maybeSingle();
 
     const rawProjectId = cfg?.rowboat_project_id as string | null | undefined;
+    const emojiIntensityLine = SMS_EMOJI_INTENSITY_LINE(
+      normalizeEmojiIntensity(
+        (cfg as { emoji_intensity?: number | null } | null)?.emoji_intensity
+      )
+    );
     const projectId =
       rawProjectId && String(rawProjectId).length > 0 ? String(rawProjectId) : defaultProjectId;
     const bearer = await bearerFor(job.business_id);
@@ -1430,6 +1439,7 @@ serve(async (req: Request) => {
         // "Let me know when clients text back" flips the toggle instead of
         // becoming an empty promise (KYP, Jul 20 2026).
         SMS_STAFF_NOTIFICATION_SETTINGS_LINE,
+        emojiIntensityLine,
         NO_EM_DASH_PROMPT_LINE,
         dateLine
       ];
@@ -1552,7 +1562,7 @@ serve(async (req: Request) => {
         `(customer_lookup_by_phone, customer_set_display_name, ` +
         `customer_append_pinned_note), pass this exact value as the phone ` +
         `argument unless the texter explicitly refers to a different number.`;
-      const dateAndPhoneLines = [identityLine, groundedActionsLine, conversationQualityLine, SMS_TIMEZONE_LINE, NO_EM_DASH_PROMPT_LINE, dateLine, phoneLine, languageLine]
+      const dateAndPhoneLines = [identityLine, groundedActionsLine, conversationQualityLine, SMS_TIMEZONE_LINE, emojiIntensityLine, NO_EM_DASH_PROMPT_LINE, dateLine, phoneLine, languageLine]
         .filter(Boolean)
         .join("\n\n");
       customerPreamble = [dateAndPhoneLines, memoryPreamble, bookingStatus, agentFlowsBlock, contactTimeline, flowContext]

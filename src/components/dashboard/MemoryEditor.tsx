@@ -1,6 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
+import { useTranslations } from "next-intl";
 import { Card } from "@/components/ui/Card";
 import { Textarea } from "@/components/ui/Textarea";
 import { Input } from "@/components/ui/Input";
@@ -13,6 +14,13 @@ import {
 } from "@/lib/vault/business-config-markdown-limits";
 import { starterVaultBudgetStatus } from "@/lib/vault/starterContextBudget";
 import { websiteIngestErrorMessage } from "@/lib/website-ingest-copy";
+import {
+  EMOJI_INTENSITY_DEFAULT,
+  EMOJI_INTENSITY_MAX,
+  EMOJI_INTENSITY_MIN,
+  normalizeEmojiIntensity,
+  type EmojiIntensity
+} from "@/lib/emoji-intensity";
 import {
   useBusinessConfigSave,
   useUnsavedChangesWarning
@@ -35,6 +43,8 @@ interface MemoryEditorProps {
   initialMemory: string;
   initialWebsiteUrl: string;
   initialWebsiteMd: string;
+  /** Freeform SMS emoji intensity 0–5; defaults to Light when omitted. */
+  initialEmojiIntensity?: number;
   /** Last persisted crawl snapshot, shown under the Website Knowledge card. */
   initialCrawlReport?: WebsiteCrawlReportView | null;
 }
@@ -87,13 +97,18 @@ export function MemoryEditor({
   initialMemory,
   initialWebsiteUrl,
   initialWebsiteMd,
+  initialEmojiIntensity,
   initialCrawlReport
 }: MemoryEditorProps) {
+  const t = useTranslations("dashboard.pages");
   const [soul, setSoul] = useState(initialSoul);
   const [identity, setIdentity] = useState(initialIdentity);
   const [memory, setMemory] = useState(initialMemory);
   const [websiteUrl, setWebsiteUrl] = useState(initialWebsiteUrl);
   const [websiteMd, setWebsiteMd] = useState(initialWebsiteMd);
+  const [emojiIntensity, setEmojiIntensity] = useState<EmojiIntensity>(() =>
+    normalizeEmojiIntensity(initialEmojiIntensity ?? EMOJI_INTENSITY_DEFAULT)
+  );
   const [recrawl, setRecrawl] = useState<RecrawlState>({ status: "idle" });
   const [crawlReport, setCrawlReport] = useState<WebsiteCrawlReportView | null>(
     initialCrawlReport ?? null
@@ -120,14 +135,16 @@ export function MemoryEditor({
     identity: initialIdentity,
     memory: initialMemory,
     websiteUrl: initialWebsiteUrl,
-    websiteMd: initialWebsiteMd
+    websiteMd: initialWebsiteMd,
+    emojiIntensity: normalizeEmojiIntensity(initialEmojiIntensity ?? EMOJI_INTENSITY_DEFAULT)
   });
   const dirty =
     soul !== baseline.soul ||
     identity !== baseline.identity ||
     memory !== baseline.memory ||
     websiteUrl !== baseline.websiteUrl ||
-    websiteMd !== baseline.websiteMd;
+    websiteMd !== baseline.websiteMd ||
+    emojiIntensity !== baseline.emojiIntensity;
   useUnsavedChangesWarning(dirty);
 
   const charLimitIssue = useMemo(() => {
@@ -154,9 +171,10 @@ export function MemoryEditor({
       identityMd: identity,
       memoryMd: memory,
       websiteMd,
-      websiteUrl
+      websiteUrl,
+      emojiIntensity
     });
-    if (ok) setBaseline({ soul, identity, memory, websiteUrl, websiteMd });
+    if (ok) setBaseline({ soul, identity, memory, websiteUrl, websiteMd, emojiIntensity });
   }
 
   interface IngestResultLine {
@@ -388,6 +406,41 @@ export function MemoryEditor({
         <p className="mt-2 text-xs text-parchment/40">
           {soul.length.toLocaleString()} / {BUSINESS_CONFIG_SOUL_MD_MAX_CHARS.toLocaleString()} characters
         </p>
+        <div className="mt-4 border-t border-parchment/10 pt-4">
+          <label
+            htmlFor="emoji-intensity"
+            className="block text-sm font-medium text-parchment mb-2"
+          >
+            {t("emojiIntensityLabel")}
+          </label>
+          <div className="flex items-center gap-3">
+            <input
+              id="emoji-intensity"
+              type="range"
+              min={EMOJI_INTENSITY_MIN}
+              max={EMOJI_INTENSITY_MAX}
+              step={1}
+              value={emojiIntensity}
+              onChange={(e) => {
+                setEmojiIntensity(normalizeEmojiIntensity(Number(e.target.value)));
+                clearSaveError();
+              }}
+              className="w-full accent-claw-green"
+            />
+            <span className="shrink-0 text-sm text-parchment tabular-nums w-28 text-right">
+              {emojiIntensity}:{" "}
+              {t(
+                `emojiIntensity${emojiIntensity}` as
+                  | "emojiIntensity0"
+                  | "emojiIntensity1"
+                  | "emojiIntensity2"
+                  | "emojiIntensity3"
+                  | "emojiIntensity4"
+                  | "emojiIntensity5"
+              )}
+            </span>
+          </div>
+        </div>
       </Card>
 
       <Card>

@@ -153,6 +153,30 @@ describe("api/business/config — compliance module survives soul edits", () => 
       expect.objectContaining({ soul_md: "soul" })
     );
   });
+
+  it("persists emojiIntensity when provided", async () => {
+    const res = await POST(jsonRequest(baseBody({ emojiIntensity: 4 })));
+    expect(res.status).toBe(200);
+    expect(patchBusinessConfig).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ emoji_intensity: 4 })
+    );
+  });
+
+  it("rejects emojiIntensity outside 0–5", async () => {
+    const high = await POST(jsonRequest(baseBody({ emojiIntensity: 6 })));
+    expect(high.status).toBe(400);
+    expect(patchBusinessConfig).not.toHaveBeenCalled();
+    const low = await POST(jsonRequest(baseBody({ emojiIntensity: -1 })));
+    expect(low.status).toBe(400);
+  });
+
+  it("omits emoji_intensity from the patch when the client does not send it", async () => {
+    const res = await POST(jsonRequest(baseBody()));
+    expect(res.status).toBe(200);
+    const patched = vi.mocked(patchBusinessConfig).mock.calls[0][1] as Record<string, unknown>;
+    expect(patched.emoji_intensity).toBeUndefined();
+  });
 });
 
 describe("api/business/config — websiteUrl persistence", () => {

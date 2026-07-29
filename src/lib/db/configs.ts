@@ -49,6 +49,12 @@ export type ConfigRow = {
    * successful ingest after this shipped.
    */
   website_crawl_report?: WebsiteCrawlReport | null;
+  /**
+   * Freeform SMS emoji intensity 0–5 (None … Multiple). Default 2 (Light).
+   * Optional on the type: rows read before the add_emoji_intensity migration
+   * ran won't have it; normalize with normalizeEmojiIntensity.
+   */
+  emoji_intensity?: number;
   rowboat_project_id?: string | null;
   updated_at: string;
 };
@@ -93,6 +99,7 @@ export async function patchBusinessConfig(
     website_md?: string;
     profile_md?: string;
     website_crawl_report?: WebsiteCrawlReport;
+    emoji_intensity?: number;
   },
   client?: SupabaseClient
 ): Promise<void> {
@@ -113,7 +120,7 @@ export async function patchBusinessConfig(
     );
   if (insertError) throw new Error(`patchBusinessConfig(ensure): ${insertError.message}`);
 
-  const updatePayload: Record<string, string | WebsiteCrawlReport> = {
+  const updatePayload: Record<string, string | number | WebsiteCrawlReport> = {
     updated_at: new Date().toISOString()
   };
   if (patch.soul_md !== undefined) updatePayload.soul_md = patch.soul_md;
@@ -129,6 +136,9 @@ export async function patchBusinessConfig(
   if (patch.profile_md !== undefined) updatePayload.profile_md = patch.profile_md;
   if (patch.website_crawl_report !== undefined) {
     updatePayload.website_crawl_report = patch.website_crawl_report;
+  }
+  if (patch.emoji_intensity !== undefined) {
+    updatePayload.emoji_intensity = patch.emoji_intensity;
   }
 
   const { error: updateError } = await db

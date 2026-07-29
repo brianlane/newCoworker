@@ -231,6 +231,17 @@ describe("db/configs", () => {
     expect(updateCall.website_md).toBeUndefined();
   });
 
+  it("patchBusinessConfig forwards emoji_intensity when present", async () => {
+    const { db, updateChain } = raceSafeDb();
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await patchBusinessConfig("biz-uuid-1", { emoji_intensity: 4 });
+
+    const updateCall = updateChain.update.mock.calls[0][0] as Record<string, unknown>;
+    expect(updateCall.emoji_intensity).toBe(4);
+    expect(updateCall.soul_md).toBeUndefined();
+  });
+
   it("patchBusinessConfig with an empty patch still runs the skeleton upsert and a no-op update", async () => {
     // Exercises the false branch of every `patch.* !== undefined` check so the
     // partial-update payload is literally just `{ updated_at }`. This path

@@ -57,6 +57,7 @@ export default async function MemoryPage() {
             initialMemory={config.memory_md}
             initialWebsiteUrl={business?.website_url ?? ""}
             initialWebsiteMd={config.website_md ?? ""}
+            initialEmojiIntensity={config.emoji_intensity}
             initialCrawlReport={config.website_crawl_report ?? null}
           />
           {(config.memory_archive_md ?? "").trim().length > 0 && (
