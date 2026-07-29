@@ -26,11 +26,25 @@ export const EMPLOYEE_NAME_PLACEHOLDER = "{{employee_name}}";
  * Stand-in URL a curated review-request starter ships with in the library.
  * Chosen so the published definition stays schema-valid (a `{{review_link}}`
  * token would fail as an unknown template scope). The use route replaces it
- * with the owner's cleaned Google/Yelp/Facebook URL before createAiFlow.
+ * with the owner's cleaned Google/Yelp/Facebook URL before createAiFlow, and
+ * refuses the sentinel itself so pasting the preview URL cannot "succeed".
  * Host is example.invalid so a forgotten substitution can never text a real
  * customer a working link.
  */
 export const REVIEW_LINK_PLACEHOLDER = "https://example.invalid/your-review-link";
+
+/**
+ * Catalog slug for the review-request starter. Prefer this over scanning the
+ * definition for the sentinel URL: substring checks on URLs trip CodeQL's
+ * incomplete-sanitization rule, and the template_key is the stable identity.
+ */
+export const REVIEW_STARTER_TEMPLATE_KEY = "ask-for-a-review-after-appointments";
+
+/** True when this library entry is the curated review-request starter. */
+export function isReviewStarterLibraryKey(templateKey: string): boolean {
+  return templateKey === REVIEW_STARTER_TEMPLATE_KEY;
+}
+
 /** Replacement for a personal name found in free-text copy (not refilled). */
 export const NAME_PLACEHOLDER = "[name]";
 /** Stand-in for a blanked tenant-specific mailbox connection id (schema-valid). */
@@ -309,11 +323,6 @@ export function hasUnresolvedPlaceholders(value: unknown): boolean {
   ];
   const json = JSON.stringify(value) ?? "";
   return tokens.some((t) => json.includes(t));
-}
-
-/** True when this library definition still needs the owner to paste a review URL. */
-export function needsReviewLink(value: unknown): boolean {
-  return (JSON.stringify(value) ?? "").includes(REVIEW_LINK_PLACEHOLDER);
 }
 
 /**

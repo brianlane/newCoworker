@@ -15,7 +15,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { createAiFlow } from "@/lib/ai-flows/db";
 import { AiFlowValidationError } from "@/lib/ai-flows/schema";
 import { getAiFlowLibraryEntry, recordLibraryDownload } from "@/lib/ai-flows/library";
-import { applyLibrarySubstitutions, needsReviewLink } from "@/lib/ai-flows/scrub";
+import { applyLibrarySubstitutions, isReviewStarterLibraryKey, REVIEW_LINK_PLACEHOLDER } from "@/lib/ai-flows/scrub";
 import { cleanReviewLink } from "@/lib/ai-flows/templates";
 
 export const runtime = "nodejs";
@@ -51,9 +51,22 @@ export async function POST(request: Request, { params }: Ctx) {
     if (!entry) return errorResponse("NOT_FOUND", "Library flow not found");
 
     let reviewLink: string | null = null;
-    if (needsReviewLink(entry.scrubbed_definition)) {
+    if (isReviewStarterLibraryKey(entry.template_key)) {
       const cleaned = typeof body.reviewLink === "string" ? cleanReviewLink(body.reviewLink) : null;
-      if (!cleaned) {
+      // Refuse the catalog sentinel (and any other example.invalid URL): it
+      // passes cleanReviewLink as a real https URL, but installing it would
+      // text customers a dead link.
+      let refused = !cleaned;
+      if (cleaned) {
+        try {
+          refused =
+            cleaned === REVIEW_LINK_PLACEHOLDER ||
+            new URL(cleaned).hostname === "example.invalid";
+        } catch {
+          refused = true;
+        }
+      }
+      if (refused) {
         return errorResponse(
           "VALIDATION_ERROR",
           "Paste a full review link starting with https:// (e.g. your Google review URL)."

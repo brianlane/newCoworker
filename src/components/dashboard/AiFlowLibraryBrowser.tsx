@@ -6,7 +6,7 @@ import { useRouter } from "next/navigation";
 import { Card } from "@/components/ui/Card";
 import { TrendingUp, Building2, Download, Clock } from "lucide-react";
 import type { AiFlowLibraryRow } from "@/lib/ai-flows/library";
-import { needsReviewLink } from "@/lib/ai-flows/scrub";
+import { isReviewStarterLibraryKey } from "@/lib/ai-flows/scrub";
 import { REVIEW_LINK_MAX_LENGTH } from "@/lib/ai-flows/templates";
 
 function Stat({ icon, value, label }: { icon: React.ReactNode; value: string; label: string }) {
@@ -75,7 +75,7 @@ export function AiFlowLibraryBrowser({
       setError("Provision your coworker first to use a library flow.");
       return;
     }
-    if (needsReviewLink(row.scrubbed_definition) && pendingReviewId !== row.id) {
+    if (isReviewStarterLibraryKey(row.template_key) && pendingReviewId !== row.id) {
       // First click: reveal the link field instead of POSTing a 400.
       setPendingReviewId(row.id);
       setReviewLink("");
@@ -90,7 +90,7 @@ export function AiFlowLibraryBrowser({
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           businessId,
-          ...(needsReviewLink(row.scrubbed_definition)
+          ...(isReviewStarterLibraryKey(row.template_key)
             ? { reviewLink: (link ?? reviewLink).trim() }
             : {})
         })

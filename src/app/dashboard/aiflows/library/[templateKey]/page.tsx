@@ -7,8 +7,8 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getAiFlowLibraryEntry } from "@/lib/ai-flows/library";
 import { Card } from "@/components/ui/Card";
 import { AiFlowView } from "@/components/dashboard/AiFlowView";
+import { isReviewStarterLibraryKey } from "@/lib/ai-flows/scrub";
 import { AiFlowLibraryActions } from "@/components/dashboard/AiFlowLibraryActions";
-import { needsReviewLink } from "@/lib/ai-flows/scrub";
 
 export const dynamic = "force-dynamic";
 
@@ -105,7 +105,7 @@ export default async function AiFlowLibraryDetailPage({ params }: Props) {
         <AiFlowLibraryActions
           businessId={businessId}
           libraryId={entry.id}
-          needsReviewLink={needsReviewLink(entry.scrubbed_definition)}
+          needsReviewLink={isReviewStarterLibraryKey(entry.template_key)}
         />
         <p className="text-[11px] text-parchment/40">
           {entry.source === "starter"

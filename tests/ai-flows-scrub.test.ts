@@ -7,10 +7,11 @@ import {
   OWNER_EMAIL_PLACEHOLDER,
   OWNER_PHONE_PLACEHOLDER,
   REVIEW_LINK_PLACEHOLDER,
+  REVIEW_STARTER_TEMPLATE_KEY,
   applyLibrarySubstitutions,
   containsLikelyPii,
   hasUnresolvedPlaceholders,
-  needsReviewLink,
+  isReviewStarterLibraryKey,
   redactText,
   scrubDefinition,
   templateKeyFromName
@@ -442,11 +443,9 @@ describe("applyLibrarySubstitutions", () => {
         }
       ]
     };
-    expect(needsReviewLink(withLink)).toBe(true);
     const filled = applyLibrarySubstitutions(withLink, {
       reviewLink: "https://g.page/r/abc/review"
     });
-    expect(needsReviewLink(filled)).toBe(false);
     expect(hasUnresolvedPlaceholders(filled)).toBe(false);
     expect(JSON.stringify(filled)).toContain("https://g.page/r/abc/review");
     expect(JSON.stringify(filled)).not.toContain(REVIEW_LINK_PLACEHOLDER);
@@ -493,10 +492,13 @@ describe("hasUnresolvedPlaceholders", () => {
   });
 });
 
-describe("needsReviewLink", () => {
-  it("detects the sentinel URL and ignores everything else", () => {
-    expect(needsReviewLink({ body: REVIEW_LINK_PLACEHOLDER })).toBe(true);
-    expect(needsReviewLink({ body: "https://g.page/r/abc/review" })).toBe(false);
-    expect(needsReviewLink(undefined)).toBe(false);
+describe("isReviewStarterLibraryKey", () => {
+  it("matches the curated review starter slug only", () => {
+    expect(templateKeyFromName("Ask for a review after appointments")).toBe(
+      REVIEW_STARTER_TEMPLATE_KEY
+    );
+    expect(isReviewStarterLibraryKey(REVIEW_STARTER_TEMPLATE_KEY)).toBe(true);
+    expect(isReviewStarterLibraryKey("confirm-document-receipt")).toBe(false);
+    expect(isReviewStarterLibraryKey("")).toBe(false);
   });
 });
