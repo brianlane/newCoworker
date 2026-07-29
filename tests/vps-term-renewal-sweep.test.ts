@@ -250,6 +250,20 @@ describe("runTermRenewalSweep", () => {
     expect(deps.markProvisioningJobOutcome).toHaveBeenCalledWith(BIZ, "succeeded");
   });
 
+  it("still counts a migration when the post-cutover ledger mark throws", async () => {
+    const deps = makeDeps({
+      markProvisioningJobOutcome: vi.fn(async () => {
+        throw "ledger string fail";
+      })
+    });
+    const result = await runTermRenewalSweep(deps, { now: NOW });
+    expect(result.migrated).toBe(1);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("markProvisioningJobOutcome"),
+      expect.objectContaining({ error: "ledger string fail" })
+    );
+  });
+
   it("skips when a migration lease is already held", async () => {
     const deps = makeDeps({
       hasActiveVpsMigrationLock: vi.fn(async () => true)

@@ -375,6 +375,20 @@ describe("migrateBusinessVpsSize — provision + pin", () => {
     });
     expect(deps.markProvisioningJobOutcome).toHaveBeenCalledWith(BIZ, "succeeded");
   });
+
+  it("still completes when the post-cutover ledger mark throws", async () => {
+    const deps = makeDeps({
+      markProvisioningJobOutcome: vi.fn(async () => {
+        throw new Error("ledger down");
+      })
+    });
+    const out = await migrateBusinessVpsSize(input, deps);
+    expect(out.ok).toBe(true);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("markProvisioningJobOutcome"),
+      expect.objectContaining({ error: "ledger down" })
+    );
+  });
 });
 
 describe("migrateBusinessVpsSize — restore stage (fail-closed)", () => {
