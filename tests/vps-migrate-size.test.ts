@@ -311,7 +311,8 @@ describe("migrateBusinessVpsSize — provision + pin", () => {
       // The replacement box is bought at the tenant's committed term.
       billingPeriod: "biennial",
       tier: "standard",
-      vpsSize: "kvm4"
+      vpsSize: "kvm4",
+      suppressOwnerNotify: true
     });
   });
 });

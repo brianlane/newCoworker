@@ -440,8 +440,8 @@ const newProv = await orchestrateProvisioning(
     businessId: BUSINESS_ID,
     tier: biz.tier,
     vpsSize: expectedSize,
-    // ownerEmail deliberately omitted: the owner already has a live coworker;
-    // the provisioning-complete notification goes to ADMIN_EMAIL only.
+    // Background recovery: do not text/email the owner "Your New Coworker is live!".
+    suppressOwnerNotify: true,
     billingPeriod
   },
   {

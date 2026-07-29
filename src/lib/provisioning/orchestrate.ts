@@ -120,6 +120,13 @@ type ProvisioningInput = {
   skipPoolAdopt?: boolean;
   ownerEmail?: string;
   ownerPhone?: string;
+  /**
+   * When true, skip the owner "Your New Coworker is live!" email and SMS.
+   * Used by background hardware migrations (term-renewal sweep, size migrate)
+   * so an existing customer is not texted as if they just signed up. Ops
+   * emails are unaffected. New signups and change-plan leave this unset.
+   */
+  suppressOwnerNotify?: boolean;
   /** When true, send the ops "[ops] New signup live" alert after first successful deploy. */
   notifyOpsNewSignup?: boolean;
 };
@@ -565,7 +572,7 @@ export async function orchestrateProvisioning(
     orphanReconciler?: (() => Promise<ReconciledOrphan[]>) | null;
   }
 ): Promise<ProvisioningResult> {
-  const { businessId, ownerEmail, ownerPhone, tier, billingPeriod } = input;
+  const { businessId, ownerEmail, ownerPhone, tier, billingPeriod, suppressOwnerNotify } = input;
   const narrowTier = resolveBoxTier(tier);
   // Size resolution keys on the REAL tier so enterprise gets its kvm8
   // default rather than standard's kvm2; an explicit vps_size pin wins.
@@ -612,6 +619,7 @@ export async function orchestrateProvisioning(
         vpsSize,
         billingPeriod,
         skipPoolAdopt: input.skipPoolAdopt,
+        suppressOwnerNotify,
         notifyOpsNewSignup: input.notifyOpsNewSignup
       },
       deps
@@ -1946,37 +1954,103 @@ async function runOrchestrator(
   logger.info("Business provisioned and online", { businessId, vpsId });
 
   const freshBusiness = await getBusiness(businessId);
-  const notifyEmail = resolveOwnerNotifyEmail(ownerEmail, freshBusiness?.owner_email);
-  // Recipient: the OWNER's phone — the explicit caller override first, then
-  // the phone the owner gave at onboarding (coerced: it's free-form input,
-  // e.g. "5145188192"), then the platform ops phone as the last-resort
-  // fallback (admin-driven provisions with no owner phone on file).
-  const notifyPhone =
-    coerceOwnerPhoneToE164(ownerPhone) ??
-    coerceOwnerPhoneToE164(businessRow?.phone) ??
-    process.env.TELNYX_OWNER_PHONE;
   const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
   const dashboardUrl = `${siteUrl}/dashboard`;
 
-  if (notifyEmail) {
-    try {
-      const ownerLocale = await resolveOwnerUiLocaleForEmail(notifyEmail);
-      const { subject, text, html } = buildProvisioningLiveEmail({
-        dashboardUrl,
-        siteUrl,
-        recipientEmail: notifyEmail,
-        locale: ownerLocale
-      });
-      await sendOwnerEmail(process.env.RESEND_API_KEY ?? "", notifyEmail, subject, { text, html });
-    } catch (err) {
-      logger.warn("Failed to send provisioning email", {
-        error: err instanceof Error ? err.message : String(err)
+  // Background hardware migrations set suppressOwnerNotify so an existing
+  // customer is not emailed/texted "Your New Coworker is live!" as if they
+  // just signed up. Ops alerts below are independent of this flag.
+  let notifyEmail: string | null = null;
+  if (input.suppressOwnerNotify) {
+    logger.info("Skipping provisioning owner email/SMS (suppressOwnerNotify)", { businessId });
+  } else {
+    notifyEmail = resolveOwnerNotifyEmail(ownerEmail, freshBusiness?.owner_email);
+    // Recipient: the OWNER's phone — the explicit caller override first, then
+    // the phone the owner gave at onboarding (coerced: it's free-form input,
+    // e.g. "5145188192"), then the platform ops phone as the last-resort
+    // fallback (admin-driven provisions with no owner phone on file).
+    const notifyPhone =
+      coerceOwnerPhoneToE164(ownerPhone) ??
+      coerceOwnerPhoneToE164(businessRow?.phone) ??
+      process.env.TELNYX_OWNER_PHONE;
+
+    if (notifyEmail) {
+      try {
+        const ownerLocale = await resolveOwnerUiLocaleForEmail(notifyEmail);
+        const { subject, text, html } = buildProvisioningLiveEmail({
+          dashboardUrl,
+          siteUrl,
+          recipientEmail: notifyEmail,
+          locale: ownerLocale
+        });
+        await sendOwnerEmail(process.env.RESEND_API_KEY ?? "", notifyEmail, subject, { text, html });
+      } catch (err) {
+        logger.warn("Failed to send provisioning email", {
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    } else {
+      logger.warn("Skipping provisioning owner email: no reachable owner email on file", {
+        businessId
       });
     }
-  } else {
-    logger.warn("Skipping provisioning owner email: no reachable owner email on file", {
-      businessId
-    });
+
+    if (notifyPhone) {
+      try {
+        // Sender: the tenant's OWN new DID — their first text from their own
+        // business number. The platform owns no sender number, so there is
+        // deliberately NO env fallback here: falling back to
+        // TELNYX_SMS_FROM_E164 once sent this from ANOTHER tenant's business
+        // number (Amy's DID, Jul 14 2026 — the env value was repointed after
+        // the original platform number was released). A tenant whose DID
+        // auto-order failed skips with an honest log instead.
+        const tenantSettings = await getBusinessTelnyxSettings(businessId);
+        const tenantFrom = tenantSettings?.telnyx_sms_from_e164?.trim();
+        if (!tenantFrom) {
+          logger.warn(
+            "Skipping provisioning SMS: tenant has no DID to send from (assign one from admin, no shared sender exists)",
+            { businessId }
+          );
+        } else {
+          const cfg = await getTelnyxMessagingForBusiness(businessId);
+          const liveSmsBody = `Your New Coworker is live! Dashboard: ${dashboardUrl}`;
+          // Metered like every send (nothing is exempt), in operational mode:
+          // counted against the pool but never refused at the cap.
+          const sent = await sendTelnyxSms(
+            { ...cfg, fromE164: tenantFrom },
+            notifyPhone,
+            liveSmsBody,
+            { meterBusinessId: businessId, meterMode: "operational" }
+          );
+          // Durable log so the owner's first text shows in the dashboard Texts
+          // thread like every other owner notice (AiFlow owner_notify does the
+          // same). Best-effort: the SMS already went out, a failed insert must
+          // not fail provisioning.
+          try {
+            const db = await createSupabaseServiceClient();
+            const { error: logErr } = await db.from("sms_outbound_log").insert({
+              business_id: businessId,
+              to_e164: notifyPhone,
+              from_e164: tenantFrom,
+              body: liveSmsBody,
+              source: "owner_notify",
+              telnyx_message_id: sent.id,
+              channel: sent.channel
+            });
+            if (logErr) throw new Error(logErr.message);
+          } catch (logErr) {
+            logger.warn("Provisioning SMS sent but outbound log insert failed", {
+              businessId,
+              error: logErr instanceof Error ? logErr.message : String(logErr)
+            });
+          }
+        }
+      } catch (err) {
+        logger.warn("Failed to send provisioning SMS", {
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    }
   }
 
   if (shouldSendOpsNewSignupAlert && deploySucceeded) {
@@ -2024,63 +2098,6 @@ async function runOrchestrator(
           }
         }
       }
-    }
-  }
-
-  if (notifyPhone) {
-    try {
-      // Sender: the tenant's OWN new DID — their first text from their own
-      // business number. The platform owns no sender number, so there is
-      // deliberately NO env fallback here: falling back to
-      // TELNYX_SMS_FROM_E164 once sent this from ANOTHER tenant's business
-      // number (Amy's DID, Jul 14 2026 — the env value was repointed after
-      // the original platform number was released). A tenant whose DID
-      // auto-order failed skips with an honest log instead.
-      const tenantSettings = await getBusinessTelnyxSettings(businessId);
-      const tenantFrom = tenantSettings?.telnyx_sms_from_e164?.trim();
-      if (!tenantFrom) {
-        logger.warn(
-          "Skipping provisioning SMS: tenant has no DID to send from (assign one from admin, no shared sender exists)",
-          { businessId }
-        );
-      } else {
-        const cfg = await getTelnyxMessagingForBusiness(businessId);
-        const liveSmsBody = `Your New Coworker is live! Dashboard: ${dashboardUrl}`;
-        // Metered like every send (nothing is exempt), in operational mode:
-        // counted against the pool but never refused at the cap.
-        const sent = await sendTelnyxSms(
-          { ...cfg, fromE164: tenantFrom },
-          notifyPhone,
-          liveSmsBody,
-          { meterBusinessId: businessId, meterMode: "operational" }
-        );
-        // Durable log so the owner's first text shows in the dashboard Texts
-        // thread like every other owner notice (AiFlow owner_notify does the
-        // same). Best-effort: the SMS already went out, a failed insert must
-        // not fail provisioning.
-        try {
-          const db = await createSupabaseServiceClient();
-          const { error: logErr } = await db.from("sms_outbound_log").insert({
-            business_id: businessId,
-            to_e164: notifyPhone,
-            from_e164: tenantFrom,
-            body: liveSmsBody,
-            source: "owner_notify",
-            telnyx_message_id: sent.id,
-            channel: sent.channel
-          });
-          if (logErr) throw new Error(logErr.message);
-        } catch (logErr) {
-          logger.warn("Provisioning SMS sent but outbound log insert failed", {
-            businessId,
-            error: logErr instanceof Error ? logErr.message : String(logErr)
-          });
-        }
-      }
-    } catch (err) {
-      logger.warn("Failed to send provisioning SMS", {
-        error: err instanceof Error ? err.message : String(err)
-      });
     }
   }
 
