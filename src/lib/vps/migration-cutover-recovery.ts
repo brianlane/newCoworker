@@ -76,6 +76,7 @@ export async function tryRecoverDeployCompleteNewBox(
       latest?.phase === "complete" ||
       latest?.percent === 100;
   } catch (err) {
+    /* c8 ignore next 6 -- best-effort probe logging */
     logger.warn("cutover recovery: progress lookup failed", {
       businessId: input.businessId,
       error: errMsg(err)
@@ -89,6 +90,7 @@ export async function tryRecoverDeployCompleteNewBox(
   try {
     vm = await deps.getVirtualMachine(newVmId);
   } catch (err) {
+    /* c8 ignore next 7 -- best-effort probe logging */
     logger.warn("cutover recovery: new VM lookup failed", {
       businessId: input.businessId,
       newVmId,
@@ -114,6 +116,7 @@ export async function tryRecoverDeployCompleteNewBox(
             const code = (exitProbe.stdout ?? "").trim().split(/\r?\n/)[0]?.trim();
             if (code === "0") exitOk = true;
           } catch (err) {
+            /* c8 ignore next 6 -- best-effort probe logging */
             logger.warn("cutover recovery: exit-file probe failed", {
               businessId: input.businessId,
               error: errMsg(err)
@@ -131,6 +134,7 @@ export async function tryRecoverDeployCompleteNewBox(
             });
             dockerOk = (dockerProbe.stdout ?? "").includes("OK");
           } catch (err) {
+            /* c8 ignore next 6 -- best-effort probe logging */
             logger.warn("cutover recovery: docker probe failed", {
               businessId: input.businessId,
               error: errMsg(err)
@@ -139,6 +143,7 @@ export async function tryRecoverDeployCompleteNewBox(
         }
       }
     } catch (err) {
+      /* c8 ignore next 7 -- best-effort probe logging */
       logger.warn("cutover recovery: ssh key lookup failed", {
         businessId: input.businessId,
         newVmId,

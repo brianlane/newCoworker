@@ -25,6 +25,7 @@
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
+import type { LatestProvisioningStatus } from "@/lib/provisioning/progress";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -310,6 +311,19 @@ export type RetryStalledProvisioningDeps = {
   getBusinessStatus: (businessId: string) => Promise<string | null>;
   orchestrate: OrchestrateFn;
   markOutcome?: typeof markProvisioningJobOutcome;
+  /**
+   * Latest provisioning progress. Used so migration retries do not buy a
+   * second VPS when deploy already finished (or can be resumed in place).
+   */
+  getLatestProgress?: (businessId: string) => Promise<LatestProvisioningStatus>;
+  /**
+   * Resume an in-flight detached deploy on the CURRENT box (no acquireVps).
+   * Required for safe mid-deploy migration retries while the tenant is online.
+   */
+  resumeMigrationDeploy?: (input: {
+    businessId: string;
+    purpose: ProvisioningJobPurpose;
+  }) => Promise<{ hostingerBillingSubscriptionId: string | null; vpsId?: string }>;
 };
 
 export type RetryStalledProvisioningResult = (
@@ -329,8 +343,14 @@ export type RetryStalledProvisioningResult = (
  * has no internal "tenant already serving" check (its callers guard), so a
  * stale signup whose provision actually finished — or that an operator
  * completed by hand — must resolve to 'succeeded' without re-provisioning
- * live hardware. Background migrations (purpose migrate_size / term_renewal)
- * are already online by design, so that short-circuit is skipped for them.
+ * live hardware.
+ *
+ * Background migrations (purpose migrate_size / term_renewal) are already
+ * online by design, so the signup short-circuit is skipped. Re-running full
+ * orchestrate would buy another VPS, so migrations instead:
+ *   * settle when progress already shows deploy complete, or
+ *   * resume the detached deploy on the current box when mid-deploy, or
+ *   * fall through to full orchestrate only for early/pre-deploy failures.
  */
 export async function retryStalledProvisioningJob(
   deps: RetryStalledProvisioningDeps
@@ -367,6 +387,67 @@ export async function retryStalledProvisioningJob(
       });
     });
     return withExhausted({ kind: "already_online", businessId: job.business_id });
+  }
+
+  if (purpose !== "signup" && (status === "online" || status === "high_load")) {
+    let latest: LatestProvisioningStatus = null;
+    if (deps.getLatestProgress) {
+      try {
+        latest = await deps.getLatestProgress(job.business_id);
+      } catch (err) {
+        logger.warn("provisioning watchdog: migration progress lookup failed", {
+          businessId: job.business_id,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    }
+    const deployDone =
+      latest?.phase === "complete" ||
+      latest?.phase === "deploy_client_complete" ||
+      (latest?.percent === 100 && latest.logStatus === "success");
+    if (deployDone) {
+      await markOutcome(job.business_id, "succeeded").catch((err: unknown) => {
+        logger.warn("provisioning watchdog: migration-done settle failed", {
+          businessId: job.business_id,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      });
+      return withExhausted({ kind: "already_online", businessId: job.business_id });
+    }
+
+    const midDeploy =
+      latest != null &&
+      latest.logStatus !== "error" &&
+      latest.percent >= 40 &&
+      latest.percent < 100;
+    if (midDeploy && deps.resumeMigrationDeploy) {
+      try {
+        await deps.resumeMigrationDeploy({
+          businessId: job.business_id,
+          purpose
+        });
+        await markOutcome(job.business_id, "succeeded").catch((err: unknown) => {
+          logger.warn("provisioning watchdog: migration-resume settle failed", {
+            businessId: job.business_id,
+            error: err instanceof Error ? err.message : String(err)
+          });
+        });
+        return withExhausted({
+          kind: "retried",
+          businessId: job.business_id,
+          attempts: job.attempts
+        });
+      } catch (err) {
+        const message = err instanceof Error ? err.message : String(err);
+        await markOutcome(job.business_id, "failed", message).catch(() => undefined);
+        return withExhausted({
+          kind: "retry_failed",
+          businessId: job.business_id,
+          attempts: job.attempts,
+          error: message
+        });
+      }
+    }
   }
 
   try {

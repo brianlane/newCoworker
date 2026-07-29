@@ -518,7 +518,8 @@ function defaultDeployPollSleep(ms: number): Promise<void> {
 export const DEPLOY_CLIENT_LOCK_BUSY_EXIT = 75;
 
 const DEPLOY_CLIENT_POLL_DEFAULT_MS = 5_000;
-const DEPLOY_CLIENT_DEADLINE_DEFAULT_MS = 25 * 60 * 1000;
+/** Align with Vercel maxDuration (1800s) minus a small buffer for post-deploy work. */
+const DEPLOY_CLIENT_DEADLINE_DEFAULT_MS = 28 * 60 * 1000;
 
 export type DetachedDeployPollResult =
   | { ok: true; source: "exit_file" | "progress" }

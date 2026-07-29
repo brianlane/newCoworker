@@ -25,6 +25,8 @@ import {
   alertFromWatchdogResult,
   scanAndAlertStuckProvisioning
 } from "@/lib/provisioning/stuck-alert";
+import { resumeMigrationDeploy } from "@/lib/provisioning/resume-migration-deploy";
+import { getLatestProvisioningStatus } from "@/lib/provisioning/progress";
 import { getBusiness } from "@/lib/db/businesses";
 import { getSubscription, updateSubscription } from "@/lib/db/subscriptions";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -42,6 +44,8 @@ export async function POST(request: Request): Promise<Response> {
   try {
     const result = await retryStalledProvisioningJob({
       getBusinessStatus: async (businessId) => (await getBusiness(businessId))?.status ?? null,
+      getLatestProgress: getLatestProvisioningStatus,
+      resumeMigrationDeploy: async ({ businessId }) => resumeMigrationDeploy({ businessId }),
       orchestrate: async (input) => {
         const out = await orchestrateProvisioning({
           businessId: input.businessId,

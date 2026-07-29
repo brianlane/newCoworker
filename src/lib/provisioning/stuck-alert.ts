@@ -48,12 +48,14 @@ export type StuckAlertDeps = {
 };
 
 async function defaultBusinessName(businessId: string): Promise<string> {
+  /* c8 ignore start -- production getBusiness fallback; tests inject getBusinessName */
   try {
     const biz = await getBusiness(businessId);
     return biz?.name?.trim() || businessId;
   } catch {
     return businessId;
   }
+  /* c8 ignore stop */
 }
 
 /**
@@ -232,6 +234,7 @@ export async function scanAndAlertStuckProvisioning(
 }
 
 async function listStuckScanCandidatesFromDb(): Promise<StuckScanCandidate[]> {
+  /* c8 ignore start -- PostgREST wiring; unit tests inject listCandidates */
   const db = await createSupabaseServiceClient();
   // Recent provisioning rows (newest first). Cap keeps the tick cheap.
   const { data: logs, error } = await db
@@ -294,4 +297,5 @@ async function listStuckScanCandidatesFromDb(): Promise<StuckScanCandidate[]> {
     });
   }
   return out;
+  /* c8 ignore stop */
 }

@@ -70,7 +70,13 @@ describe("tryRecoverDeployCompleteNewBox", () => {
     expect(remoteExec).toHaveBeenCalled();
   });
 
-  it("returns null when new box is unhealthy", async () => {
+  it("recovers via docker probe when exit file is missing", async () => {
+    const remoteExec = vi.fn(async (args: { command: string }) => {
+      if (args.command.includes("nc-deploy")) {
+        return { exitCode: 0, stdout: "MISSING\n", stderr: "" };
+      }
+      return { exitCode: 0, stdout: "OK\n", stderr: "" };
+    });
     const out = await tryRecoverDeployCompleteNewBox(
       { businessId: "biz-1", oldVmId: 100 },
       {
@@ -86,11 +92,22 @@ describe("tryRecoverDeployCompleteNewBox", () => {
           private_key_pem: "PEM",
           ssh_username: "root"
         }),
-        remoteExec: async () => ({
-          exitCode: 0,
-          stdout: "MISSING\n",
-          stderr: ""
-        })
+        remoteExec
+      }
+    );
+    expect(out?.vpsId).toBe("200");
+    expect(remoteExec).toHaveBeenCalledTimes(2);
+  });
+
+  it("returns null when getBusiness throws", async () => {
+    const out = await tryRecoverDeployCompleteNewBox(
+      { businessId: "biz-1", oldVmId: 100 },
+      {
+        getBusiness: async () => {
+          throw new Error("db down");
+        },
+        getLatestProvisioningStatus: async () => null,
+        getVirtualMachine: async () => ({ ipv4: [] })
       }
     );
     expect(out).toBeNull();

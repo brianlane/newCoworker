@@ -5,6 +5,7 @@ import {
   maybeSendProvisioningStuckAlert,
   selectStuckScanCandidates,
   alertFromWatchdogResult,
+  scanAndAlertStuckProvisioning,
   type StuckScanCandidate
 } from "@/lib/provisioning/stuck-alert";
 
@@ -49,11 +50,11 @@ describe("isStuckProgressBand", () => {
     ).toBe(false);
     expect(
       isStuckProgressBand({
-        phase: "deploy_failed",
-        percent: 95,
-        logStatus: "error"
+        phase: "pulling_images",
+        percent: 55,
+        logStatus: "thinking"
       })
-    ).toBe(false);
+    ).toBe(true);
   });
 });
 
@@ -127,6 +128,100 @@ describe("maybeSendProvisioningStuckAlert", () => {
     );
     expect(again).toBe(false);
     expect(sendEmail).toHaveBeenCalledOnce();
+  });
+});
+
+describe("scanAndAlertStuckProvisioning", () => {
+  it("alerts matching candidates from the injected list", async () => {
+    const sendEmail = vi.fn(async () => true);
+    const now = Date.parse("2026-07-29T10:25:00.000Z");
+    const out = await scanAndAlertStuckProvisioning({
+      sendEmail,
+      hasPriorAlert: async () => false,
+      recordProgress: vi.fn(async () => ({}) as never),
+      getBusinessName: async () => "KYP Ads",
+      now: () => now,
+      listCandidates: async () => [
+        {
+          businessId: "biz-1",
+          phase: "remote_deploy_starting",
+          percent: 40,
+          updatedAt: "2026-07-29T10:00:00.000Z",
+          logStatus: "thinking",
+          businessStatus: "online",
+          purpose: "term_renewal",
+          jobStatus: null
+        }
+      ]
+    });
+    expect(out.alerted).toEqual(["biz-1"]);
+    expect(sendEmail).toHaveBeenCalledOnce();
+  });
+});
+
+describe("maybeSendProvisioningStuckAlert error paths", () => {
+  it("still emails when prior-alert lookup throws", async () => {
+    const sendEmail = vi.fn(async () => true);
+    const sent = await maybeSendProvisioningStuckAlert(
+      {
+        businessId: "biz-1",
+        phase: "remote_deploy_starting",
+        percent: 40,
+        ageMinutes: 25,
+        purpose: "term_renewal",
+        trigger: "stuck_progress_scan"
+      },
+      {
+        sendEmail,
+        hasPriorAlert: async () => {
+          throw new Error("db down");
+        },
+        recordProgress: vi.fn(async () => ({}) as never),
+        getBusinessName: async () => "Acme"
+      }
+    );
+    expect(sent).toBe(true);
+  });
+
+  it("returns false when email is not sent", async () => {
+    const sent = await maybeSendProvisioningStuckAlert(
+      {
+        businessId: "biz-1",
+        phase: "remote_deploy_starting",
+        percent: 40,
+        ageMinutes: 25,
+        purpose: "signup",
+        trigger: "retry_failed"
+      },
+      {
+        sendEmail: async () => false,
+        hasPriorAlert: async () => false,
+        getBusinessName: async () => "Acme"
+      }
+    );
+    expect(sent).toBe(false);
+  });
+
+  it("tolerates dedupe progress write failure after a successful send", async () => {
+    const sent = await maybeSendProvisioningStuckAlert(
+      {
+        businessId: "biz-1",
+        phase: "remote_deploy_starting",
+        percent: 40,
+        ageMinutes: 25,
+        purpose: "term_renewal",
+        trigger: "stuck_progress_scan"
+      },
+      {
+        sendEmail: async () => true,
+        hasPriorAlert: async () => false,
+        recordProgress: async () => {
+          throw new Error("write fail");
+        },
+        getBusinessName: async () => "Acme"
+      }
+    );
+    expect(sent).toBe(true);
   });
 });
 
