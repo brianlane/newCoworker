@@ -764,6 +764,26 @@ describe("vps_inventory DB layer", () => {
       expect(chain.update).not.toHaveBeenCalled();
     });
 
+    it("does not clear a known expires_at when the billing sub has no paid-through", async () => {
+      const chain = makeChain();
+      chain.neq.mockResolvedValue({ error: null });
+      const db = makeDb(chain);
+      const updated = await refreshVpsInventoryExpiresAt(
+        [
+          {
+            vm_id: 4,
+            state: "available",
+            hostinger_billing_subscription_id: "sub-empty",
+            expires_at: "2026-08-02T00:00:00Z"
+          }
+        ],
+        [{ id: "sub-empty" }],
+        db as never
+      );
+      expect(updated).toBe(0);
+      expect(chain.update).not.toHaveBeenCalled();
+    });
+
     it("builds the default service client when none is passed", async () => {
       const chain = makeChain();
       chain.neq.mockResolvedValue({ error: null });

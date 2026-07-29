@@ -400,6 +400,10 @@ export async function refreshVpsInventoryExpiresAt(
     const sub = subsById.get(row.hostinger_billing_subscription_id);
     if (!sub) continue;
     const next = paidThroughFromBillingSub(sub);
+    // Never wipe a known paid-through with null: a transient Hostinger
+    // response missing both expires_at and next_billing_at would otherwise
+    // re-admit a short-runway box (hasPoolRunway treats null as eligible).
+    if (next == null) continue;
     if (next === row.expires_at) continue;
     const { error } = await db
       .from("vps_inventory")
