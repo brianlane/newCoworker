@@ -225,6 +225,7 @@ const { data: oldSubRow, error: oldSubErr } = await db
   .from("subscriptions")
   .select("*")
   .eq("id", previousSubscriptionId)
+  .eq("business_id", BUSINESS_ID)
   .maybeSingle();
 if (oldSubErr) {
   console.error(`[oneshot] previous subscription read failed: ${oldSubErr.message}`);
@@ -546,6 +547,24 @@ if (!existingNew) {
   }
 } else {
   console.log(`[db] new subscriptions row ${existingNew.id} already exists; skipping insert`);
+  // Resume after insert: attempt the lifetime bump if it may have been skipped.
+  // Full-done recoveries exit earlier (upgrade_switch), so this only runs while
+  // the switch is still in flight. A second bump after a successful increment
+  // is accepted for this one-shot over leaving the profile under-counted.
+  if (customerProfileId) {
+    try {
+      await incrementLifetimeSubscriptionCount(customerProfileId);
+      console.log(
+        `[db] lifetime subscription count incremented on resume for profile ${customerProfileId}`
+      );
+    } catch (err) {
+      console.log(
+        `[db] resume incrementLifetimeSubscriptionCount failed (continuing): ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
+  }
 }
 
 if (customerProfileId) {
