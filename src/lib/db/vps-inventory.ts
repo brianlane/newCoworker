@@ -291,6 +291,19 @@ export async function getVpsInventoryByVmId(
   return (data as VpsInventoryRow | null) ?? null;
 }
 
+/**
+ * Flag a pooled box so adopt and billing-posture never re-enable its renewal.
+ * Used after term-renewal sweep returns a sunk-cost box to the pool.
+ */
+export async function markVpsNeverRenew(vmId: number, client?: SupabaseClient): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("vps_inventory")
+    .update({ never_renew: true, updated_at: new Date().toISOString() })
+    .eq("vm_id", vmId);
+  if (error) throw new Error(`markVpsNeverRenew: ${error.message}`);
+}
+
 /** Pool telemetry for the admin dashboard, newest-acquired first. */
 export async function listVpsInventory(client?: SupabaseClient): Promise<VpsInventoryRow[]> {
   const db = client ?? (await createSupabaseServiceClient());
