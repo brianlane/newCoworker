@@ -177,6 +177,61 @@ describe("loadLifecycleContextForBusiness", () => {
       vpsHost: "1.2.3.4",
       context: expect.objectContaining({ hostingerBillingExpiresAt: null })
     });
+
+    listBillingSubscriptionsMock.mockRejectedValueOnce("string failure");
+    const resNonError = await loadLifecycleContextForBusiness("biz-1");
+    expect(resNonError).toEqual({
+      ok: true,
+      vpsHost: "1.2.3.4",
+      context: expect.objectContaining({ hostingerBillingExpiresAt: null })
+    });
+  });
+
+  it("leaves hostingerBillingExpiresAt null when the billing sub is missing or has no dates", async () => {
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub-1",
+      business_id: "biz-1",
+      customer_profile_id: "prof-sub",
+      hostinger_billing_subscription_id: "hbs-1"
+    });
+    listBillingSubscriptionsMock.mockResolvedValueOnce([{ id: "other", expires_at: "2026-08-01T00:00:00Z" }]);
+    const missing = await loadLifecycleContextForBusiness("biz-1");
+    expect(missing).toEqual({
+      ok: true,
+      vpsHost: "1.2.3.4",
+      context: expect.objectContaining({ hostingerBillingExpiresAt: null })
+    });
+
+    listBillingSubscriptionsMock.mockResolvedValueOnce([{ id: "hbs-1" }]);
+    const noDates = await loadLifecycleContextForBusiness("biz-1");
+    expect(noDates).toEqual({
+      ok: true,
+      vpsHost: "1.2.3.4",
+      context: expect.objectContaining({ hostingerBillingExpiresAt: null })
+    });
+  });
+
+  it("falls back to Hostinger client defaults when billing env vars are unset", async () => {
+    delete process.env.HOSTINGER_API_BASE_URL;
+    delete process.env.HOSTINGER_API_TOKEN;
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub-1",
+      business_id: "biz-1",
+      customer_profile_id: "prof-sub",
+      hostinger_billing_subscription_id: "hbs-1"
+    });
+    listBillingSubscriptionsMock.mockResolvedValue([
+      { id: "hbs-1", next_billing_at: "2026-08-08T00:00:00Z" }
+    ]);
+
+    const res = await loadLifecycleContextForBusiness("biz-1");
+    expect(res).toEqual({
+      ok: true,
+      vpsHost: "1.2.3.4",
+      context: expect.objectContaining({
+        hostingerBillingExpiresAt: "2026-08-08T00:00:00Z"
+      })
+    });
   });
 
   it("leaves didE164 null when no route exists or the lookup fails", async () => {

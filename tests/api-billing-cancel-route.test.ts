@@ -260,25 +260,26 @@ describe("/api/billing/cancel", () => {
     expect(body.error.message).toBe("refund_window_closed");
   });
 
-  it("period_end path uses the all-in-one executor and returns graceEndsAt: null", async () => {
+  it("period_end path stamps DB via fast phase before Hostinger renewal toggle", async () => {
     planLifecycleActionMock.mockReturnValueOnce({
       ok: true,
       plan: periodEndPlan()
     } satisfies LifecyclePlanResult);
+    executeLifecyclePlanFastPhaseMock.mockResolvedValueOnce({});
 
     const res = await POST(req({ mode: "period_end" }));
     const body = await res.json();
 
     expect(res.status).toBe(200);
     expect(body.data).toEqual({ mode: "period_end", graceEndsAt: null });
-    expect(executeLifecyclePlanMock).toHaveBeenCalledTimes(1);
-    expect(executeLifecyclePlanFastPhaseMock).not.toHaveBeenCalled();
-    expect(executeLifecyclePlanSlowPhaseMock).not.toHaveBeenCalled();
+    expect(executeLifecyclePlanFastPhaseMock).toHaveBeenCalledTimes(1);
+    expect(executeLifecyclePlanSlowPhaseMock).toHaveBeenCalledTimes(1);
+    expect(executeLifecyclePlanMock).not.toHaveBeenCalled();
   });
 
   it("period_end path returns 500 if the executor throws", async () => {
     planLifecycleActionMock.mockReturnValueOnce({ ok: true, plan: periodEndPlan() });
-    executeLifecyclePlanMock.mockRejectedValueOnce(new Error("stripe 500"));
+    executeLifecyclePlanFastPhaseMock.mockRejectedValueOnce(new Error("stripe 500"));
     const res = await POST(req({ mode: "period_end" }));
     expect(res.status).toBe(500);
   });

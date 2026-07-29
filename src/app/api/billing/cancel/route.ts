@@ -23,7 +23,6 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { planLifecycleAction } from "@/lib/billing/lifecycle";
 import {
-  executeLifecyclePlan,
   executeLifecyclePlanFastPhase,
   executeLifecyclePlanSlowPhase
 } from "@/lib/billing/lifecycle-executor";
@@ -160,11 +159,15 @@ export async function POST(request: Request) {
     };
 
     if (payload.mode === "period_end") {
-      // cancelAtPeriodEnd has NO SSH/Hostinger ops in its plan (VM keeps
-      // running until the period actually ends), so the all-in-one path
-      // is already fast enough for HTTP. Keep it simple.
+      // Stripe + DB first, then Hostinger renewal toggle. Stamping
+      // cancel_at_period_end before disable_billing_auto_renewal closes the
+      // race where a concurrent billing-posture run could heal renewal back
+      // on between the Hostinger call and the DB patch. No SSH work on this
+      // path (VM keeps running until period end), so the "slow" phase is
+      // still HTTP-fast.
       try {
-        await executeLifecyclePlan(planRes.plan, extra);
+        const fastResult = await executeLifecyclePlanFastPhase(planRes.plan, extra);
+        await executeLifecyclePlanSlowPhase(planRes.plan, fastResult);
       } catch (err) {
         logger.error("lifecycle execute failed on /api/billing/cancel", {
           businessId: business.id,

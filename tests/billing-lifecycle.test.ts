@@ -429,6 +429,28 @@ describe("planLifecycleAction: cancelAtPeriodEnd", () => {
     expect(res.plan.hostingerOps).toEqual([]);
   });
 
+  it("skips disable when either timestamp is not ISO day-prefixed", () => {
+    const res = planLifecycleAction(
+      { type: "cancelAtPeriodEnd" },
+      makeCtx({
+        hostingerBillingExpiresAt: "soon",
+        subscription: makeSub({ stripe_current_period_end: "2026-05-01T00:00:00.000Z" })
+      })
+    );
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+    expect(res.plan.hostingerOps).toEqual([]);
+
+    const res2 = planLifecycleAction(
+      { type: "cancelAtPeriodEnd" },
+      makeCtx({
+        hostingerBillingExpiresAt: "2026-05-01T00:00:00Z",
+        subscription: makeSub({ stripe_current_period_end: "later" })
+      })
+    );
+    if (!res2.ok) throw new Error(`unexpected reject ${res2.reason}`);
+    expect(res2.plan.hostingerOps).toEqual([]);
+  });
+
   it("skips disable when Hostinger billing id is missing", () => {
     const res = planLifecycleAction(
       { type: "cancelAtPeriodEnd" },
