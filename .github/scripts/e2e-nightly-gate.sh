@@ -6,7 +6,8 @@
 #   1. No previous completed run of this workflow → run (first night).
 #   2. Previous run's "E2E full suite (nightly)" job failed → run (retry;
 #      do not strand a red nightly until the next merge).
-#   3. At least one PR merged into main after the previous run started → run.
+#   3. At least one commit on main after the previous run started → run
+#      (all mainline changes arrive via merged PRs in this repo).
 #   4. Otherwise → skip (no paid Gemini calls).
 #   5. Any gh/jq/API error → run (fail open; same posture as e2e-scope.sh).
 #
@@ -79,37 +80,24 @@ if [ "$suite_conclusion" = "failure" ]; then
   exit 0
 fi
 
-# Recent closed PRs against main; filter merged_at client-side for second precision.
-# Paginate a modest window: with fewer merges this is plenty, and fail-open
-# covers the pathological "more than N merges since last night" case via the
-# empty-parse path only if jq itself blows up.
-prs_json=$(gh api \
-  "repos/${REPO}/pulls?state=closed&base=main&sort=updated&direction=desc&per_page=50" \
-  2>/dev/null) || fail_open "could not list closed PRs against main"
+# Mainline movement since the previous nightly. Prefer commits-on-main over a
+# closed-PR page: every change reaches main through a PR here, and the commits
+# API is since-filtered server-side so a busy updated-at window cannot hide a
+# merge that landed after prev_since.
+commits_json=$(gh api \
+  "repos/${REPO}/commits?sha=main&since=${prev_since}&per_page=5" \
+  2>/dev/null) || fail_open "could not list main commits since ${prev_since}"
 
-merged_count=$(jq -r --arg since "$prev_since" '
-  [
-    .[]
-    | select(.merged_at != null)
-    | select(.merged_at > $since)
-  ]
-  | length
-' <<<"$prs_json" 2>/dev/null) || fail_open "could not compare PR merged_at timestamps"
+commit_count=$(jq -r 'length' <<<"$commits_json" 2>/dev/null) || fail_open "could not parse main commits since ${prev_since}"
 
-if [ "${merged_count:-0}" -gt 0 ]; then
-  sample=$(jq -r --arg since "$prev_since" '
-    [
-      .[]
-      | select(.merged_at != null)
-      | select(.merged_at > $since)
-      | "#\(.number) merged \(.merged_at)"
-    ]
-    | .[0:5]
-    | join(", ")
-  ' <<<"$prs_json" 2>/dev/null || true)
-  emit_run true "${merged_count} PR(s) merged into main since ${prev_since}${sample:+: ${sample}}"
+if [ "${commit_count:-0}" -gt 0 ]; then
+  sample=$(jq -r '
+    map(.sha[0:7] + " " + ((.commit.message // "") | split("\n")[0]))
+    | join("; ")
+  ' <<<"$commits_json" 2>/dev/null || true)
+  emit_run true "${commit_count}+ commit(s) on main since ${prev_since}${sample:+: ${sample}}"
   exit 0
 fi
 
-emit_run false "no PRs merged into main since previous nightly (${prev_since}); skipping paid suite"
+emit_run false "no commits on main since previous nightly (${prev_since}); skipping paid suite"
 exit 0
