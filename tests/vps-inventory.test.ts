@@ -92,6 +92,8 @@ describe("vps_inventory DB layer", () => {
     it("treats null/unknown expiry as eligible and enforces the 72h floor", () => {
       const now = Date.parse("2026-07-29T00:00:00Z");
       expect(hasPoolRunway(null, now)).toBe(true);
+      expect(hasPoolRunway("", now)).toBe(true);
+      expect(hasPoolRunway("not-a-date", now)).toBe(true);
       expect(hasPoolRunway("2026-08-02T00:00:00Z", now)).toBe(true);
       expect(hasPoolRunway(new Date(now + VPS_POOL_MIN_RUNWAY_MS - 1).toISOString(), now)).toBe(
         false
