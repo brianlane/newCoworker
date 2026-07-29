@@ -216,6 +216,27 @@ describe("fetchPastMeetingMeta", () => {
     );
   });
 
+  it("uses the production token and fetch defaults when deps are omitted", async () => {
+    const previousFetch = globalThis.fetch;
+    globalThis.fetch = vi.fn().mockResolvedValue(
+      jsonResponse(200, {
+        uuid: "jhqVQlf1RyuEX/1TCRs+Jg==",
+        topic: "Default deps",
+        start_time: "2026-07-29T16:03:00Z",
+        id: 84948156425
+      })
+    ) as typeof fetch;
+    try {
+      expect(await fetchPastMeetingMeta(BIZ, MEETING)).toMatchObject({
+        topic: "Default deps",
+        meetingId: "84948156425"
+      });
+      expect(globalThis.fetch).toHaveBeenCalled();
+    } finally {
+      globalThis.fetch = previousFetch;
+    }
+  });
+
   it("fails open on junk refs and non-2xx", async () => {
     expect(await fetchPastMeetingMeta(BIZ, "not-a-ref", { fetchImpl: vi.fn() })).toBeNull();
     const denied = vi.fn().mockResolvedValue(jsonResponse(401, {}));

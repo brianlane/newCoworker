@@ -211,7 +211,6 @@ export async function fetchPastMeetingMeta(
   meetingRef: string,
   deps: TranscriptDeps = {}
 ): Promise<ZoomPastMeetingMeta | null> {
-  /* c8 ignore next 2 -- production defaults; tests inject deps */
   const getToken = deps.getToken ?? getZoomAccessToken;
   const fetchImpl = deps.fetchImpl ?? fetch;
 
