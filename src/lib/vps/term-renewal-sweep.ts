@@ -683,8 +683,10 @@ async function migrateTenantTermRenewal(
     return { ok: false, detail };
   }
 
+  let oldVmStopped = false;
   try {
     await deps.hostinger.stopVirtualMachine(oldVmId);
+    oldVmStopped = true;
   } catch (err) {
     logger.warn("term-renewal sweep: old VM stop failed", { businessId, oldVmId, error: errMsg(err) });
   }
@@ -716,6 +718,8 @@ async function migrateTenantTermRenewal(
     });
   }
 
+  let pooled = false;
+  let neverRenewMarked = false;
   try {
     await deps.releaseVpsToPool({
       vmId: oldVmId,
@@ -723,24 +727,54 @@ async function migrateTenantTermRenewal(
       hostingerBillingSubscriptionId: oldBillingId,
       notes: `term-renewal sweep of business ${businessId}; auto-renew off, never_renew`
     });
-    await deps.markVpsNeverRenew(oldVmId);
+    pooled = true;
   } catch (err) {
-    logger.warn("term-renewal sweep: pool return / never_renew failed", {
+    logger.error("term-renewal sweep: pool return failed", {
       businessId,
       oldVmId,
       error: errMsg(err)
     });
   }
+  if (pooled) {
+    try {
+      await deps.markVpsNeverRenew(oldVmId);
+      neverRenewMarked = true;
+    } catch (err) {
+      logger.error("term-renewal sweep: never_renew mark failed", {
+        businessId,
+        oldVmId,
+        error: errMsg(err)
+      });
+    }
+  }
 
-  const followUp =
+  if (!pooled || !neverRenewMarked) {
+    const detail =
+      `cutover done (new srv${newVmId} serving) but old-box bookkeeping failed: ` +
+      `pooled=${pooled}, never_renew=${neverRenewMarked}. ` +
+      `Mark vps_inventory.never_renew=true for srv${oldVmId} manually before the next adopt.`;
+    await notify("failed", detail);
+    return { ok: false, detail };
+  }
+
+  const followUpParts: string[] = [];
+  if (!oldVmStopped) {
+    followUpParts.push(`old srv${oldVmId} stop failed (may still be running)`);
+  }
+  if (
     oldBillingHandling === "auto-renew-disable-FAILED" ||
     oldBillingHandling === "billing-id-unknown-still-renewing"
-      ? ` FOLLOW-UP: old subscription (${oldBillingId ?? "id unknown"}) may still be renewing.`
-     : "";
+  ) {
+    followUpParts.push(
+      `old subscription (${oldBillingId ?? "id unknown"}) may still be renewing`
+    );
+  }
+  const followUp = followUpParts.length > 0 ? ` FOLLOW-UP: ${followUpParts.join("; ")}.` : "";
 
   const detail =
-    `New box: srv${newVmId} (${newVmIp}). Old srv${oldVmId}: stopped, billing=${oldBillingHandling}, ` +
-    `pooled with never_renew.${followUp} Backup: ${backupPath}.`;
+    `New box: srv${newVmId} (${newVmIp}). Old srv${oldVmId}: ` +
+    `stopped=${oldVmStopped}, billing=${oldBillingHandling}, pooled with never_renew.${followUp} ` +
+    `Backup: ${backupPath}.`;
   await notify("completed", detail);
 
   logger.info("term-renewal sweep: migration complete", {
@@ -749,7 +783,9 @@ async function migrateTenantTermRenewal(
     oldVmId,
     newVmId,
     savingsRatio: input.savingsRatio,
-    oldBillingHandling
+    oldBillingHandling,
+    oldVmStopped,
+    neverRenewMarked
   });
 
   return { ok: true, detail };

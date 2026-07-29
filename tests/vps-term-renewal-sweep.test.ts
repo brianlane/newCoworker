@@ -484,7 +484,17 @@ describe("runTermRenewalSweep", () => {
         { id: "hbs-old", status: "active", renewal_price: 5000, next_billing_at: "2026-08-01T00:00:00.000Z" },
         { id: "hbs-2", status: "active", renewal_price: 5000, next_billing_at: "2026-08-02T00:00:00.000Z" }
       ]),
-      listCatalog: vi.fn(async () => catalogKvm2Biennial(4800, 5000))
+      listCatalog: vi.fn(async () => catalogKvm2Biennial(4800, 5000)),
+      hostinger: {
+        ...makeDeps().hostinger,
+        getVirtualMachine: vi.fn(async (id: number) => ({
+          id,
+          state: "running",
+          plan: "KVM 2",
+          ipv4: [{ id: 1, address: "1.2.3.4" }],
+          subscription_id: id === 1800999 ? "hbs-2" : "hbs-old"
+        }))
+      }
     });
     const result = await runTermRenewalSweep(deps, { now: NOW });
     expect(result.skippedEconomics).toBe(2);
@@ -560,17 +570,40 @@ describe("runTermRenewalSweep", () => {
     expect(result.migrated).toBe(1);
   });
 
-  it("warns but completes when old billing disable or pool return fails", async () => {
+  it("fails the migration when pool return or never_renew marking fails", async () => {
+    const poolFail = makeDeps({
+      releaseVpsToPool: vi.fn(async () => {
+        throw new Error("pool db down");
+      })
+    });
+    const poolFailResult = await runTermRenewalSweep(poolFail, { now: NOW });
+    expect(poolFailResult.migrated).toBe(0);
+    expect(poolFailResult.findings[0]?.kind).toBe("migration_failed");
+    expect(poolFail.sendOpsEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        phase: "failed",
+        detail: expect.stringContaining("old-box bookkeeping failed")
+      })
+    );
+
+    const neverRenewFail = makeDeps({
+      markVpsNeverRenew: vi.fn(async () => {
+        throw new Error("flag write failed");
+      })
+    });
+    const neverRenewResult = await runTermRenewalSweep(neverRenewFail, { now: NOW });
+    expect(neverRenewResult.migrated).toBe(0);
+    expect(neverRenewResult.findings[0]?.kind).toBe("migration_failed");
+  });
+
+  it("completes with FOLLOW-UP when old billing disable fails but pool bookkeeping succeeds", async () => {
     const deps = makeDeps({
       hostinger: {
         ...makeDeps().hostinger,
         disableBillingAutoRenewal: vi.fn(async () => {
           throw new Error("hPanel says no");
         })
-      },
-      releaseVpsToPool: vi.fn(async () => {
-        throw new Error("pool db down");
-      })
+      }
     });
     const result = await runTermRenewalSweep(deps, { now: NOW });
     expect(result.migrated).toBe(1);
@@ -754,7 +787,14 @@ describe("runTermRenewalSweep", () => {
         })
       }
     });
-    expect((await runTermRenewalSweep(deps, { now: NOW })).migrated).toBe(1);
+    const result = await runTermRenewalSweep(deps, { now: NOW });
+    expect(result.migrated).toBe(1);
+    expect(deps.sendOpsEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        phase: "completed",
+        detail: expect.stringContaining("stopped=false")
+      })
+    );
   });
 
   it("uses defaults and alternate billing price fields during the sweep", async () => {
