@@ -1063,11 +1063,13 @@ async function acquireVps(args: {
         const sizeMatches = pooled.filter((orphan) =>
           orphanMatchesPurchaseAttempt(orphan, vpsSize, orphanMinCreatedAtMs)
         );
-        // Prefer the newest matching orphan: when two fail-but-charges race,
-        // the later created_at is more likely THIS purchase's VM.
+        // Prefer the OLDEST matching orphan after the purchase stamp.
+        // Concurrent same-size fail-but-charges: the earlier materialization
+        // belongs to the earlier purchase; taking newest can steal a later
+        // caller's term-priced box.
         const sizeMatch = sizeMatches
           .slice()
-          .sort((a, b) => (b.createdAtMs ?? 0) - (a.createdAtMs ?? 0))[0];
+          .sort((a, b) => (a.createdAtMs ?? 0) - (b.createdAtMs ?? 0))[0];
         if (sizeMatch) {
           if (skipPoolAdopt) {
             // Term-alignment path: THIS orphan is the term-bought box. Claim

@@ -3509,6 +3509,37 @@ describe("provisioning/orchestrate", () => {
       expect(vpsProvisioner).toHaveBeenCalledTimes(1);
     });
 
+    it("skipPoolAdopt: prefers the oldest matching orphan after the purchase stamp", async () => {
+      // Two concurrent same-size fail-but-charges: the earlier materialization
+      // belongs to the earlier purchase.
+      let t = 1_000_000;
+      const sleep = vi.fn().mockResolvedValue(undefined);
+      const pool = makePool();
+      const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
+      const orphanReconciler = vi.fn().mockResolvedValue([
+        { vmId: 222, plan: "kvm1", createdAtMs: 990_000 },
+        { vmId: 111, plan: "kvm1", createdAtMs: 950_000 }
+      ]);
+      const vpsAdopter = vi.fn().mockResolvedValue(makeVpsStub("111"));
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      const result = await orchestrateProvisioning(
+        { businessId: "biz-orphan-oldest", tier: "starter", skipPoolAdopt: true },
+        {
+          vpsProvisioner,
+          vpsAdopter,
+          vpsPool: pool,
+          orphanReconciler,
+          remoteExec,
+          sleep,
+          now: () => t
+        }
+      );
+
+      expect(result.vpsId).toBe("111");
+      expect(pool.claimSpecific).toHaveBeenCalledWith(111, "biz-orphan-oldest");
+    });
+
     it("skipPoolAdopt: retries past an unrelated older same-size orphan", async () => {
       // Bugbot: an older fail-but-charge of the same size must not end the
       // wait before THIS purchase's VM materializes.
@@ -3906,6 +3937,7 @@ describe("provisioning/orchestrate", () => {
       const remoteExec = vi.fn().mockResolvedValue(okExec());
       const vpsPool = {
         claim: vi.fn(),
+        claimSpecific: vi.fn(),
         record: vi.fn(),
         release: vi.fn(),
         retire: vi.fn()
