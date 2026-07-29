@@ -408,7 +408,7 @@ describe("retryStalledProvisioningJob", () => {
     }
   );
 
-  it("settles migration jobs when orchestrator phase is complete (no second purchase)", async () => {
+  it("does not settle migration jobs on orchestrator phase complete (cutover still pending)", async () => {
     const markOutcome = vi.fn(async () => undefined);
     const orchestrate = vi.fn(async () => okResult);
     const resumeMigrationDeploy = vi.fn(async () => okResult);
@@ -432,13 +432,16 @@ describe("retryStalledProvisioningJob", () => {
       orchestrate,
       markOutcome
     });
-    expect(result).toEqual({ kind: "already_online", businessId: BIZ });
+    expect(result.kind).toBe("retry_failed");
+    if (result.kind === "retry_failed") {
+      expect(result.error).toMatch(/cutover still pending/);
+    }
     expect(orchestrate).not.toHaveBeenCalled();
     expect(resumeMigrationDeploy).not.toHaveBeenCalled();
-    expect(markOutcome).toHaveBeenCalledWith(BIZ, "succeeded");
+    expect(markOutcome).toHaveBeenCalledWith(BIZ, "failed", expect.stringContaining("cutover"));
   });
 
-  it("settles migration complete under high_load the same way", async () => {
+  it("treats high_load + phase complete as cutover-pending too", async () => {
     const markOutcome = vi.fn(async () => undefined);
     const migrationJob: ProvisioningJobRow = {
       ...JOB_ROW,
@@ -458,7 +461,7 @@ describe("retryStalledProvisioningJob", () => {
       orchestrate: vi.fn(async () => okResult),
       markOutcome
     });
-    expect(result.kind).toBe("already_online");
+    expect(result.kind).toBe("retry_failed");
   });
 
   it("falls through to orchestrate when online migration has no progress helper", async () => {
@@ -596,7 +599,7 @@ describe("retryStalledProvisioningJob", () => {
     );
   });
 
-  it("settles migration-done even when markOutcome throws (Error and string)", async () => {
+  it("tolerates markOutcome throw on cutover-pending (phase complete)", async () => {
     const migrationJob: ProvisioningJobRow = {
       ...JOB_ROW,
       purpose: "term_renewal",
@@ -618,7 +621,7 @@ describe("retryStalledProvisioningJob", () => {
         throw new Error("settle fail");
       })
     });
-    expect(result.kind).toBe("already_online");
+    expect(result.kind).toBe("retry_failed");
 
     const result2 = await retryStalledProvisioningJob({
       claim: vi.fn(async () => migrationJob),
@@ -635,7 +638,7 @@ describe("retryStalledProvisioningJob", () => {
         throw "settle string fail";
       })
     });
-    expect(result2.kind).toBe("already_online");
+    expect(result2.kind).toBe("retry_failed");
   });
 
   it("treats percent 100 without phase complete as cutover-pending", async () => {
@@ -798,6 +801,8 @@ describe("retryStalledProvisioningJob", () => {
         skipPoolAdopt: true
       })
     );
+    // Cutover still pending: do not mark the ledger succeeded yet.
+    expect(markOutcome).not.toHaveBeenCalledWith(BIZ, "succeeded");
   });
 
   it("tolerates a settle failure on the already-online path (Error and string shapes)", async () => {

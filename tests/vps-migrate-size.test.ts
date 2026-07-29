@@ -116,6 +116,7 @@ function makeDeps(overrides: Partial<MigrateVpsSizeDeps> = {}): MigrateVpsSizeDe
         vpsId: out.vpsId ?? "1900001"
       };
     }),
+    markProvisioningJobOutcome: vi.fn(async () => undefined),
     sendOpsEmail: vi.fn(async () => undefined),
     ...overrides
   };
@@ -372,6 +373,7 @@ describe("migrateBusinessVpsSize — provision + pin", () => {
       vpsSize: "kvm4",
       suppressOwnerNotify: true
     });
+    expect(deps.markProvisioningJobOutcome).toHaveBeenCalledWith(BIZ, "succeeded");
   });
 });
 

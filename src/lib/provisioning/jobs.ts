@@ -286,12 +286,22 @@ export async function runProvisioningJob(
       suppressOwnerNotify: job.suppress_owner_notify === true ? true : undefined,
       skipPoolAdopt: job.skip_pool_adopt === true ? true : undefined
     });
-    await markOutcome(job.business_id, "succeeded").catch((err: unknown) => {
-      logger.warn("provisioning job markOutcome(succeeded) failed", {
-        businessId: job.business_id,
-        error: err instanceof Error ? err.message : String(err)
+    // Background migrations still owe restore/teardown after orchestrate
+    // returns. Leave the job running until the sweep marks succeeded.
+    const purpose = narrowPurpose(job.purpose);
+    if (purpose === "signup") {
+      await markOutcome(job.business_id, "succeeded").catch((err: unknown) => {
+        logger.warn("provisioning job markOutcome(succeeded) failed", {
+          businessId: job.business_id,
+          error: err instanceof Error ? err.message : String(err)
+        });
       });
-    });
+    } else {
+      logger.info("provisioning job: migration deploy done; cutover still pending", {
+        businessId: job.business_id,
+        purpose
+      });
+    }
     return result;
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
@@ -401,22 +411,11 @@ export async function retryStalledProvisioningJob(
         });
       }
     }
-    const deployDone = latest?.phase === "complete";
-    if (deployDone) {
-      await markOutcome(job.business_id, "succeeded").catch((err: unknown) => {
-        logger.warn("provisioning watchdog: migration-done settle failed", {
-          businessId: job.business_id,
-          error: err instanceof Error ? err.message : String(err)
-        });
-      });
-      return withExhausted({ kind: "already_online", businessId: job.business_id });
-    }
-
-    // deploy_client_complete (or percent 100 without phase complete) means the
-    // box finished deploy-client, but migrate/term-renewal cutover (restore,
-    // billing, old-box teardown) still belongs to the original sweep. Do not
-    // settle the job as succeeded here or cutover is skipped forever.
+    // Orchestrator phase "complete" means deploy finished, NOT that
+    // migrate/term-renewal cutover (restore/teardown) finished. Treat it the
+    // same as deploy_client_complete so the stuck alert keeps firing.
     if (
+      latest?.phase === "complete" ||
       latest?.phase === "deploy_client_complete" ||
       (latest?.percent === 100 && latest.logStatus !== "error")
     ) {

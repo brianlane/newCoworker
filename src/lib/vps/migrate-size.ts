@@ -42,6 +42,7 @@ import type { SubscriptionRow } from "@/lib/db/subscriptions";
 import type { VpsSshKeyRow } from "@/lib/db/vps-ssh-keys";
 import {
   enqueueProvisioningJob,
+  markProvisioningJobOutcome,
   runProvisioningJob,
   type EnqueueProvisioningJobInput,
   type RunProvisioningJobDeps
@@ -117,6 +118,8 @@ export type MigrateVpsSizeDeps = {
   /** Injected so unit tests can skip the real provisioning_jobs ledger. */
   enqueueProvisioningJob?: (input: EnqueueProvisioningJobInput) => Promise<void>;
   runProvisioningJob?: typeof runProvisioningJob;
+  /** Marks the ledger succeeded only after cutover finishes. */
+  markProvisioningJobOutcome?: typeof markProvisioningJobOutcome;
   /** See term-renewal-sweep: continue cutover when provision throws but new box is healthy. */
   tryRecoverDeployCompleteNewBox?: typeof tryRecoverDeployCompleteNewBox;
   sendOpsEmail: (input: OpsMigrationEmailInput) => Promise<void>;
@@ -503,6 +506,15 @@ export async function migrateBusinessVpsSize(
       followUp +
       ` Backup tarball: ${backupPath}.`
   );
+
+  /* c8 ignore next -- production ledger default; tests inject */
+  const markOutcome = deps.markProvisioningJobOutcome ?? markProvisioningJobOutcome;
+  await markOutcome(businessId, "succeeded").catch((err: unknown) => {
+    logger.warn("migrate-size: markProvisioningJobOutcome(succeeded) failed", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  });
 
   logger.info("migrate-size: complete", {
     businessId,

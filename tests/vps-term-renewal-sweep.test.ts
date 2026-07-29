@@ -164,6 +164,7 @@ function makeDeps(overrides: Partial<TermRenewalSweepDeps> = {}): TermRenewalSwe
         vpsId: out.vpsId ?? "1900001"
       };
     }),
+    markProvisioningJobOutcome: vi.fn(async () => undefined),
     releaseVpsToPool: vi.fn(async () => undefined),
     markVpsNeverRenew: vi.fn(async () => undefined),
     sendOpsEmail: vi.fn(async () => undefined),
@@ -243,8 +244,10 @@ describe("runTermRenewalSweep", () => {
   it("migrates assigned never_renew boxes (they are the migration signal)", async () => {
     // never_renew on a live tenant box is why billing-posture nags; the sweep
     // must migrate them, not skip them.
-    const result = await runTermRenewalSweep(makeDeps(), { now: NOW });
+    const deps = makeDeps();
+    const result = await runTermRenewalSweep(deps, { now: NOW });
     expect(result.migrated).toBe(1);
+    expect(deps.markProvisioningJobOutcome).toHaveBeenCalledWith(BIZ, "succeeded");
   });
 
   it("skips when a migration lease is already held", async () => {

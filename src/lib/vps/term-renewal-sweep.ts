@@ -27,6 +27,7 @@ import { resolveDeployedVpsSize, vpsSizeFromHostingerPlan, type VpsSize } from "
 import type { OpsHardwareMigrationInput } from "@/lib/email/templates/ops-hardware-migration";
 import {
   enqueueProvisioningJob,
+  markProvisioningJobOutcome,
   runProvisioningJob,
   type EnqueueProvisioningJobInput,
   type RunProvisioningJobDeps
@@ -110,6 +111,8 @@ export type TermRenewalSweepDeps = {
   /** Injected so unit tests can skip the real provisioning_jobs ledger. */
   enqueueProvisioningJob?: (input: EnqueueProvisioningJobInput) => Promise<void>;
   runProvisioningJob?: typeof runProvisioningJob;
+  /** Marks the ledger succeeded only after cutover finishes. */
+  markProvisioningJobOutcome?: typeof markProvisioningJobOutcome;
   /**
    * When provision throws, probe whether the new box is already deploy-complete
    * so cutover can continue. Tests inject a stub; production uses the shared
@@ -835,6 +838,15 @@ async function migrateTenantTermRenewal(
     `stopped=${oldVmStopped}, billing=${oldBillingHandling}, pooled with never_renew.${followUp} ` +
     `Backup: ${backupPath}.`;
   await notify("completed", detail);
+
+  /* c8 ignore next -- production ledger default; tests inject */
+  const markOutcome = deps.markProvisioningJobOutcome ?? markProvisioningJobOutcome;
+  await markOutcome(businessId, "succeeded").catch((err: unknown) => {
+    logger.warn("term-renewal sweep: markProvisioningJobOutcome(succeeded) failed", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  });
 
   logger.info("term-renewal sweep: migration complete", {
     businessId,
