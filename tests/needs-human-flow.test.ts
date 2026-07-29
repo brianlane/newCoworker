@@ -30,7 +30,7 @@ function fakeDb(results: Array<{ data?: unknown; error?: unknown }>) {
   const calls: Array<{ name: string; args: unknown[] }> = [];
   let idx = 0;
   const builder: Record<string, unknown> = {};
-  for (const m of ["select", "insert", "update", "eq", "limit", "maybeSingle", "single"]) {
+  for (const m of ["select", "insert", "update", "eq", "is", "limit", "maybeSingle", "single"]) {
     builder[m] = (...args: unknown[]) => {
       calls.push({ name: m, args });
       return builder;

@@ -17,7 +17,7 @@ function makeDb() {
   const calls: Array<{ table: string; name: string; args: unknown[] }> = [];
   const from = (table: string) => {
     const builder: Record<string, unknown> = {};
-    for (const m of ["select", "insert", "eq", "or", "limit"]) {
+    for (const m of ["select", "insert", "eq", "is", "or", "limit"]) {
       builder[m] = (...args: unknown[]) => {
         calls.push({ table, name: m, args });
         return builder;

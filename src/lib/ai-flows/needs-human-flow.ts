@@ -77,6 +77,7 @@ export async function ensureNeedsHumanTeamFlow(
     .select("id, enabled")
     .eq("business_id", businessId)
     .eq("name", NEEDS_HUMAN_TEAM_FLOW_NAME)
+    .is("deleted_at", null)
     .limit(1)
     .maybeSingle();
   if (error) throw new Error(`ensureNeedsHumanTeamFlow: lookup: ${error.message}`);
@@ -86,7 +87,8 @@ export async function ensureNeedsHumanTeamFlow(
       const { error: enableErr } = await db
         .from("ai_flows")
         .update({ enabled: true })
-        .eq("id", existing.id);
+        .eq("id", existing.id)
+        .is("deleted_at", null);
       if (enableErr) throw new Error(`ensureNeedsHumanTeamFlow: enable: ${enableErr.message}`);
     }
     return { flowId: existing.id, created: false };
@@ -120,7 +122,8 @@ export async function setNeedsHumanTeamFlowEnabled(
     .from("ai_flows")
     .update({ enabled })
     .eq("business_id", businessId)
-    .eq("name", NEEDS_HUMAN_TEAM_FLOW_NAME);
+    .eq("name", NEEDS_HUMAN_TEAM_FLOW_NAME)
+    .is("deleted_at", null);
   if (error) throw new Error(`setNeedsHumanTeamFlowEnabled: ${error.message}`);
 }
 
