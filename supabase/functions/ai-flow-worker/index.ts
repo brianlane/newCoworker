@@ -8909,6 +8909,7 @@ async function enqueueDueScheduledRuns(supabase: Supabase): Promise<void> {
         .from("ai_flows")
         .select("id, business_id, definition")
         .eq("enabled", true)
+        .is("deleted_at", null)
         .or("definition->trigger->>channel.eq.schedule,definition->triggers.not.is.null")
         .order("id", { ascending: true })
         .range(offset, offset + PAGE - 1);
@@ -8997,6 +8998,7 @@ async function enqueueDueBirthdayRuns(supabase: Supabase): Promise<void> {
         .from("ai_flows")
         .select("id, business_id, definition")
         .eq("enabled", true)
+        .is("deleted_at", null)
         .or("definition->trigger->>channel.eq.birthday,definition->triggers.not.is.null")
         .order("id", { ascending: true })
         .range(offset, offset + PAGE - 1);
@@ -9304,6 +9306,7 @@ async function enqueueDueOutboundCalls(
         .from("ai_flows")
         .select("id, business_id, definition")
         .eq("enabled", true)
+        .is("deleted_at", null)
         .eq("definition->trigger->>channel", "voice")
         .eq("definition->trigger->>direction", "outbound")
         .order("id", { ascending: true })

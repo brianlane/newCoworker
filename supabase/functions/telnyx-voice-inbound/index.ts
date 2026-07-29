@@ -1014,6 +1014,7 @@ serve(async (req: Request) => {
         .select("id, definition")
         .eq("business_id", businessId)
         .eq("enabled", true)
+        .is("deleted_at", null)
         .eq("definition->trigger->>channel", "voice")
         .order("created_at", { ascending: false })
         .range(page * pageSize, page * pageSize + pageSize - 1);

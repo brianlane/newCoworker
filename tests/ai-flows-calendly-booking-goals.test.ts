@@ -116,7 +116,7 @@ function fakeDb(queues: Record<string, QueuedResult[]>) {
         return Promise.resolve({ data: r.data ?? null, error: r.error ?? null });
       };
       const chain: Record<string, (...args: unknown[]) => unknown> = {};
-      for (const m of ["select", "eq", "gte", "filter", "order", "in", "or"]) {
+      for (const m of ["select", "eq", "is", "gte", "filter", "order", "in", "or"]) {
         chain[m] = (...args: unknown[]) => {
           rec.calls.push({ name: m, args });
           return chain;

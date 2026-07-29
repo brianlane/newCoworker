@@ -79,6 +79,25 @@ describe("residency/row-delete", () => {
     expect(contentChain.eq).toHaveBeenCalledWith("id", "e1");
   });
 
+  it("folds extraSet into the same stamp UPDATE (AiFlow disable)", async () => {
+    const { db, contentChain } = makeDb("supabase", { data: [{ id: "f1" }], error: null });
+    await softDeleteContentRows(
+      BIZ,
+      "ai_flows",
+      [{ column: "id", op: "eq", value: "f1" }],
+      USER,
+      { client: db as never },
+      { enabled: false }
+    );
+    expect(contentChain.update).toHaveBeenCalledWith(
+      expect.objectContaining({
+        deleted_by: USER,
+        deleted_at: expect.any(String),
+        enabled: false
+      })
+    );
+  });
+
   it("applies `in` filters via .in()", async () => {
     const { db, contentChain } = makeDb("supabase", {
       data: [{ id: "a" }, { id: "b" }],

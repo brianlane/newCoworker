@@ -122,9 +122,10 @@ function systemLogsChain(queue: LogsResult[]) {
  */
 function dbWithRange(range: ReturnType<typeof vi.fn>, logsQueue: LogsResult[] = []) {
   const order = vi.fn(() => ({ range }));
-  // Listing chain: .select().eq(enabled).or(primary-calendar-or-has-extras).order().range()
+  // Listing chain: .select().eq(enabled).is(deleted_at).or(...).order().range()
   const or = vi.fn(() => ({ order }));
-  const eq1 = vi.fn(() => ({ or }));
+  const isDeleted = vi.fn(() => ({ or }));
+  const eq1 = vi.fn(() => ({ is: isDeleted }));
   const flowsSelect = vi.fn(() => ({ eq: eq1 }));
   const logs = systemLogsChain(logsQueue);
   return {
@@ -1826,7 +1827,8 @@ describe("fireCalendarTriggersForPushedEvent", () => {
     });
     const order = vi.fn(() => ({ range }));
     const or = vi.fn(() => ({ order }));
-    const eq2 = vi.fn(() => ({ or }));
+    const isDeleted = vi.fn(() => ({ or }));
+    const eq2 = vi.fn(() => ({ is: isDeleted }));
     const eq1 = vi.fn(() => ({ eq: eq2 }));
     const select = vi.fn(() => ({ eq: eq1 }));
     return { from: vi.fn(() => ({ select })) } as never;

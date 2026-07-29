@@ -13,6 +13,7 @@ import {
   type AiFlowDefinition,
   parseAiFlowDefinition
 } from "@/lib/ai-flows/schema";
+import { softDeleteContentRows } from "@/lib/residency/row-delete";
 import { reentryBlocked } from "../../../supabase/functions/_shared/ai_flows/reentry";
 import { isTestModeTrigger } from "../../../supabase/functions/_shared/ai_flows/test_mode";
 
@@ -144,6 +145,7 @@ export async function listAiFlows(
     .from("ai_flows")
     .select(FLOW_COLS)
     .eq("business_id", businessId)
+    .is("deleted_at", null)
     .order("created_at", { ascending: false });
   if (error) throw new Error(`listAiFlows: ${error.message}`);
   const flows = (data ?? []) as AiFlowRow[];
@@ -186,6 +188,7 @@ export async function getAiFlow(
     .select(FLOW_COLS)
     .eq("business_id", businessId)
     .eq("id", id)
+    .is("deleted_at", null)
     .maybeSingle();
   if (error) throw new Error(`getAiFlow: ${error.message}`);
   return (data as AiFlowRow | null) ?? null;
@@ -251,24 +254,44 @@ export async function updateAiFlow(
     .update(patch)
     .eq("business_id", input.businessId)
     .eq("id", input.id)
+    .is("deleted_at", null)
     .select(FLOW_COLS)
     .single();
   if (error) throw new Error(`updateAiFlow: ${error.message}`);
   return data as AiFlowRow;
 }
 
+/**
+ * Soft-delete an AiFlow: stamp deleted_at/deleted_by and force enabled=false.
+ * Owner list/get hide the row; admin restore clears the stamp (flow stays
+ * disabled). Runs stay attached — no hard DELETE / CASCADE.
+ */
 export async function deleteAiFlow(
   businessId: string,
   id: string,
+  deletedBy: string | null = null,
   client?: SupabaseClient
 ): Promise<void> {
   const db = await resolveDb(client);
-  const { error } = await db
-    .from("ai_flows")
-    .delete()
-    .eq("business_id", businessId)
-    .eq("id", id);
-  if (error) throw new Error(`deleteAiFlow: ${error.message}`);
+  try {
+    const result = await softDeleteContentRows(
+      businessId,
+      "ai_flows",
+      [{ column: "id", op: "eq", value: id }],
+      deletedBy,
+      { client: db },
+      { enabled: false }
+    );
+    if (result.central === 0 && (result.box ?? 0) === 0) {
+      // Idempotent no-op when already gone / never existed — match the old
+      // hard-delete's silent "0 rows" behavior.
+      return;
+    }
+  } catch (err) {
+    throw new Error(
+      `deleteAiFlow: ${err instanceof Error ? err.message : String(err)}`
+    );
+  }
 }
 
 export type EnqueueAiFlowRunInput = {
@@ -313,12 +336,18 @@ export async function enqueueAiFlowRun(
   try {
     const { data: flowRow } = await db
       .from("ai_flows")
-      .select("definition")
+      .select("definition, deleted_at")
       .eq("id", input.flowId)
       .maybeSingle();
-    definition =
-      (flowRow as { definition?: { drip?: { intervalMinutes?: number } } } | null)
-        ?.definition ?? null;
+    const row = flowRow as
+      | { definition?: { drip?: { intervalMinutes?: number } }; deleted_at?: string | null }
+      | null;
+    if (row?.deleted_at) {
+      // Soft-deleted flows must not accept new runs (in-flight worker loads
+      // by id without this gate so already-queued runs can finish).
+      return null;
+    }
+    definition = row?.definition ?? null;
   } catch (e) {
     console.error("enqueueAiFlowRun definition read", e);
   }

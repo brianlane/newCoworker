@@ -38,7 +38,8 @@ function flowsDb(
   const builder: Record<string, unknown> = {};
   builder.select = vi.fn(() => builder);
   builder.eq = vi.fn(() => builder);
-  // loadWebhookFlows chains .select().eq().eq().or(); the .or (which admits
+  builder.is = vi.fn(() => builder);
+  // loadWebhookFlows chains .select().eq().eq().is().or(); the .or (which admits
   // flows whose EXTRA triggers include a webhook) is the awaited terminal.
   builder.or = vi.fn(() => Promise.resolve(result));
   const bizBuilder: Record<string, unknown> = {};

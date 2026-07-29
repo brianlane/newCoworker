@@ -1,8 +1,8 @@
 /**
  * Admin view + restore for owner-soft-deleted content.
  *
- * Owners "delete" notifications, emails, calls, SMS conversations, and chat
- * threads with a `deleted_at` stamp (see src/lib/residency/row-delete.ts);
+ * Owners "delete" notifications, emails, calls, SMS conversations, chat
+ * threads, and AiFlows with a `deleted_at` stamp (see src/lib/residency/row-delete.ts);
  * this module is the ONLY surface that reads those stamped rows back —
  * newest first, summarized enough for an admin to identify — and clears the
  * stamp on request. Restore is deliberately admin-only: the owner-facing
@@ -32,7 +32,8 @@ export type DeletedItemType =
   | "email"
   | "call"
   | "sms_conversation"
-  | "chat_thread";
+  | "chat_thread"
+  | "aiflow";
 
 export type DeletedItem = {
   type: DeletedItemType;
@@ -110,7 +111,7 @@ export async function listDeletedItems(
   const db = deps.client ?? (await createSupabaseServiceClient());
   const vps = await isVpsReadMode(businessId, db);
 
-  const [notifications, emails, calls, threads, outboundSms] = await Promise.all([
+  const [notifications, emails, calls, threads, outboundSms, aiflows] = await Promise.all([
     readDeletedRows(
       businessId,
       "notifications",
@@ -152,6 +153,14 @@ export async function listDeletedItems(
       vps,
       db,
       deps
+    ),
+    readDeletedRows(
+      businessId,
+      "ai_flows",
+      ["id", "name", "enabled", "deleted_at", "deleted_by"],
+      vps,
+      db,
+      deps
     )
   ]);
 
@@ -189,7 +198,7 @@ export async function listDeletedItems(
       id: String(e.id),
       summary: `${e.direction === "inbound" ? "Received" : "Sent"} email: ${
         str(e.subject) ?? "(no subject)"
-      }${other ? ` — ${other}` : ""}`,
+      }${other ? ` - ${other}` : ""}`,
       deletedAt: String(e.deleted_at),
       deletedBy: str(e.deleted_by),
       rowCount: 1
@@ -216,6 +225,16 @@ export async function listDeletedItems(
       summary: `Chat: ${str(t.title) ?? "Untitled conversation"}`,
       deletedAt: String(t.deleted_at),
       deletedBy: str(t.deleted_by),
+      rowCount: 1
+    });
+  }
+  for (const f of aiflows) {
+    items.push({
+      type: "aiflow",
+      id: String(f.id),
+      summary: `AiFlow: ${str(f.name) ?? "(unnamed)"} (restores disabled)`,
+      deletedAt: String(f.deleted_at),
+      deletedBy: str(f.deleted_by),
       rowCount: 1
     });
   }
@@ -296,6 +315,10 @@ export async function restoreDeletedItem(
       return { restored: await byId("voice_call_transcripts") };
     case "chat_thread":
       return { restored: await byId("dashboard_chat_threads") };
+    case "aiflow":
+      // Clears the stamp only; enabled stays false so restore does not
+      // immediately re-arm triggers.
+      return { restored: await byId("ai_flows") };
     case "sms_conversation": {
       // Outbound sends (residency-aware) …
       const outbound = await restoreContentRows(

@@ -19,7 +19,12 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
 }));
 
+vi.mock("@/lib/residency/row-delete", () => ({
+  softDeleteContentRows: vi.fn()
+}));
+
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { softDeleteContentRows } from "@/lib/residency/row-delete";
 
 const VALID_DEF = {
   version: 1,
@@ -143,6 +148,11 @@ describe("resolveDb fallback", () => {
 });
 
 describe("listAiFlows", () => {
+  it("filters soft-deleted flows out of the owner list", async () => {
+    const { db, builder } = makeDb({ array: [FLOW_ROW], runs: [] });
+    await listAiFlows("biz-1", db as never);
+    expect(builder.is).toHaveBeenCalledWith("deleted_at", null);
+  });
   it("attaches last_run_at from the newest run per flow", async () => {
     const { db } = makeDb({
       array: [FLOW_ROW],
@@ -227,6 +237,11 @@ describe("listAiFlows", () => {
 });
 
 describe("getAiFlow", () => {
+  it("filters soft-deleted flows", async () => {
+    const { db, builder } = makeDb({ maybe: FLOW_ROW });
+    await getAiFlow("biz-1", "flow-1", db as never);
+    expect(builder.is).toHaveBeenCalledWith("deleted_at", null);
+  });
   it("returns a row", async () => {
     const { db } = makeDb({ maybe: FLOW_ROW });
      
@@ -320,6 +335,7 @@ describe("updateAiFlow", () => {
     expect(builder.update).toHaveBeenCalledWith(
       expect.objectContaining({ name: "New", enabled: false })
     );
+    expect(builder.is).toHaveBeenCalledWith("deleted_at", null);
   });
   it("throws when nothing to update", async () => {
     const { db } = makeDb({ single: FLOW_ROW });
@@ -338,15 +354,28 @@ describe("updateAiFlow", () => {
 });
 
 describe("deleteAiFlow", () => {
-  it("deletes", async () => {
+  it("soft-deletes via residency stamp and forces enabled=false", async () => {
+    vi.mocked(softDeleteContentRows).mockResolvedValue({ central: 1, box: null });
     const { db } = makeDb({ array: null });
-     
-    await expect(deleteAiFlow("biz-1", "flow-1", db as any)).resolves.toBeUndefined();
+    await expect(deleteAiFlow("biz-1", "flow-1", "user-1", db as never)).resolves.toBeUndefined();
+    expect(softDeleteContentRows).toHaveBeenCalledWith(
+      "biz-1",
+      "ai_flows",
+      [{ column: "id", op: "eq", value: "flow-1" }],
+      "user-1",
+      { client: db },
+      { enabled: false }
+    );
   });
-  it("throws on error", async () => {
-    const { db } = makeDb({ array: null, error: { message: "x" } });
-     
-    await expect(deleteAiFlow("biz-1", "flow-1", db as any)).rejects.toThrow("deleteAiFlow: x");
+  it("is a no-op when nothing was stamped", async () => {
+    vi.mocked(softDeleteContentRows).mockResolvedValue({ central: 0, box: 0 });
+    const { db } = makeDb({ array: null });
+    await expect(deleteAiFlow("biz-1", "flow-1", null, db as never)).resolves.toBeUndefined();
+  });
+  it("throws on stamp error", async () => {
+    vi.mocked(softDeleteContentRows).mockRejectedValue(new Error("x"));
+    const { db } = makeDb({ array: null });
+    await expect(deleteAiFlow("biz-1", "flow-1", null, db as never)).rejects.toThrow("deleteAiFlow: x");
   });
 });
 
@@ -359,7 +388,7 @@ describe("enqueueAiFlowRun", () => {
   };
 
   it("inserts a queued run and returns the row", async () => {
-    const { db, builder } = makeDb({ single: RUN_ROW });
+    const { db, builder } = makeDb({ single: RUN_ROW, maybe: { definition: null, deleted_at: null } });
     expect(await enqueueAiFlowRun(input, db as never)).toEqual(RUN_ROW);
     expect(builder.insert).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -371,6 +400,14 @@ describe("enqueueAiFlowRun", () => {
         dedupe_key: "manual:abc"
       })
     );
+  });
+
+  it("refuses to enqueue when the flow is soft-deleted", async () => {
+    const { db, builder } = makeDb({
+      maybe: { definition: VALID_DEF, deleted_at: "2026-07-28T00:00:00Z" }
+    });
+    expect(await enqueueAiFlowRun(input, db as never)).toBeNull();
+    expect(builder.insert).not.toHaveBeenCalled();
   });
 
   it("defaults a missing dedupeKey to null", async () => {

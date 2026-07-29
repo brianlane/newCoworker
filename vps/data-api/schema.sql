@@ -6,6 +6,7 @@
 -- 20260806000000_soft_delete_user_items): deleted_at/deleted_by soft-delete
 -- columns on dashboard_chat_threads, email_log, voice_call_transcripts,
 -- sms_outbound_log, notifications.
+-- Also mirrors soft_delete_ai_flows: deleted_at/deleted_by on ai_flows.
 --
 -- Single-tenant datastore for the per-VPS data API. RLS is intentionally
 -- absent (one tenant per box; the data-api bearer token is the boundary).
@@ -463,9 +464,12 @@ alter table ai_flows add column if not exists definition jsonb not null default 
 alter table ai_flows add column if not exists created_by uuid;
 alter table ai_flows add column if not exists created_at timestamp with time zone not null default now();
 alter table ai_flows add column if not exists updated_at timestamp with time zone not null default now();
+alter table ai_flows add column if not exists deleted_at timestamp with time zone;
+alter table ai_flows add column if not exists deleted_by uuid;
 
 create index if not exists ai_flows_business_enabled_idx ON public.ai_flows USING btree (business_id) WHERE enabled;
 create index if not exists ai_flows_business_id_idx ON public.ai_flows USING btree (business_id);
+create index if not exists ai_flows_deleted_idx ON public.ai_flows USING btree (business_id, deleted_at DESC) WHERE (deleted_at IS NOT NULL);
 
 -- ── aiflow_url_memory ───────────────────────────────────────────
 create table if not exists aiflow_url_memory (

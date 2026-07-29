@@ -162,6 +162,7 @@ export async function enqueueContactEventRuns(
         .select("id, definition")
         .eq("business_id", businessId)
         .eq("enabled", true)
+        .is("deleted_at", null)
         .or(
           `definition->trigger->>channel.eq.${input.kind},definition->triggers.not.is.null`
         )

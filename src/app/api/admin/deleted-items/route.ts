@@ -26,7 +26,14 @@ const querySchema = z.object({ businessId: z.string().uuid() });
 const restoreSchema = z.object({
   businessId: z.string().uuid(),
   action: z.literal("restore"),
-  type: z.enum(["notification", "email", "call", "sms_conversation", "chat_thread"]),
+  type: z.enum([
+    "notification",
+    "email",
+    "call",
+    "sms_conversation",
+    "chat_thread",
+    "aiflow"
+  ]),
   // Row uuid, or the conversation's E.164/short code for sms_conversation.
   id: z.string().min(1).max(64)
 });

@@ -41,7 +41,8 @@ function flowsDb(result: { data: unknown; error: unknown }) {
   const builder: Record<string, unknown> = {};
   builder.select = vi.fn(() => builder);
   builder.eq = vi.fn(() => builder);
-  // loadTenantEmailFlows chains .select().eq().eq().or(); the .or (which
+  builder.is = vi.fn(() => builder);
+  // loadTenantEmailFlows chains .select().eq().eq().is().or(); the .or (which
   // admits flows whose EXTRA triggers include tenant_email) is the terminal.
   builder.or = vi.fn(() => Promise.resolve(result));
   return { from: vi.fn(() => builder) };

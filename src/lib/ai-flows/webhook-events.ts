@@ -73,6 +73,7 @@ async function loadWebhookFlows(
     .select("id, definition")
     .eq("business_id", businessId)
     .eq("enabled", true)
+    .is("deleted_at", null)
     .or("definition->trigger->>channel.eq.webhook,definition->triggers.not.is.null");
   if (error) throw new Error(`loadWebhookFlows: ${error.message}`);
   const out: WebhookFlow[] = [];

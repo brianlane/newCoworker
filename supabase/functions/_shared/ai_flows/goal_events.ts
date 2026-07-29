@@ -169,7 +169,8 @@ async function loadEnabledDefinitions(
     .from("ai_flows")
     .select("id, definition")
     .in("id", flowIds)
-    .eq("enabled", true);
+    .eq("enabled", true)
+    .is("deleted_at", null);
   if (error) {
     console.error("goal_events: flow lookup", error);
     return out;

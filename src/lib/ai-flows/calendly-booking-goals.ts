@@ -324,6 +324,7 @@ export async function sweepCalendlyBookingGoals(
       .from("ai_flows")
       .select("id, business_id, definition")
       .eq("enabled", true)
+      .is("deleted_at", null)
       .filter("definition->steps", "cs", '[{"type":"goal"}]')
       .order("id", { ascending: true })
       .range(offset, offset + BOOKING_GOAL_FLOW_PAGE - 1);
