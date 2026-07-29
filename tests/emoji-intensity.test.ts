@@ -46,6 +46,11 @@ describe("SMS_EMOJI_INTENSITY_LINE", () => {
     expect(normalizeEmojiIntensity(undefined)).toBe(2);
     expect(normalizeEmojiIntensity(null)).toBe(2);
     expect(normalizeEmojiIntensity(9)).toBe(2);
+    expect(normalizeEmojiIntensity(2.5)).toBe(2);
+    expect(normalizeEmojiIntensity("")).toBe(2);
+    expect(normalizeEmojiIntensity("  ")).toBe(2);
+    expect(normalizeEmojiIntensity("nope")).toBe(2);
+    expect(normalizeEmojiIntensity("7")).toBe(2);
     expect(SMS_EMOJI_INTENSITY_LINE(undefined)).toBe(SMS_EMOJI_INTENSITY_LINE(2));
   });
 });
