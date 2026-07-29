@@ -195,10 +195,12 @@ describe("waitForDetachedDeployClient", () => {
       deadlineMs: 60_000
     });
     expect(result).toEqual({ ok: true, source: "exit_file" });
-    for (const call of remoteExec.mock.calls) {
-      const args = call[0] as { command: string };
-      expect(args.command).not.toContain("nohup");
-    }
+    const commands = remoteExec.mock.calls.map((call) => {
+      const args = call[0] as unknown as { command: string };
+      return args.command;
+    });
+    expect(commands.length).toBeGreaterThan(0);
+    expect(commands.every((cmd) => !cmd.includes("nohup"))).toBe(true);
   });
 
   it("fails when deadline elapses", async () => {
