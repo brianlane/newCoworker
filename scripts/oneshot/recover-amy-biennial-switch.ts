@@ -93,6 +93,9 @@ const {
   createSubscription,
   stripeSubscriptionPeriodCache
 } = await import("../../src/lib/db/subscriptions.ts");
+const { incrementLifetimeSubscriptionCount } = await import(
+  "../../src/lib/db/customer-profiles.ts"
+);
 const { getCommitmentMonths, renewalDateAfterMonths } = await import(
   "../../src/lib/plans/tier.ts"
 );
@@ -129,20 +132,65 @@ if ((biz.vps_provider ?? "hostinger") !== "hostinger") {
 }
 
 // ------------------------------------------- locate the paid change-plan session
-// The change-plan checkout stamps lifecycleAction=changePlan + businessId on
-// the session; the newest complete+paid one for this business is the switch
-// the customer paid for and never received.
-const sessions = await stripe.checkout.sessions.list({ limit: 20 });
-const session = sessions.data.find(
-  (s) =>
+// Scope the Stripe list to this tenant's customer (or paginate filtered by
+// business metadata). An account-wide `limit: 20` can miss the paid session
+// when checkout volume is high.
+const { data: recentSubs } = await db
+  .from("subscriptions")
+  .select("stripe_customer_id")
+  .eq("business_id", BUSINESS_ID)
+  .not("stripe_customer_id", "is", null)
+  .order("created_at", { ascending: false })
+  .limit(5);
+const knownCustomerIds = [
+  ...new Set(
+    (recentSubs ?? [])
+      .map((r) => r.stripe_customer_id)
+      .filter((id): id is string => typeof id === "string" && id.length > 0)
+  )
+];
+
+async function findPaidChangePlanSession() {
+  const matches = (s: {
+    metadata?: Record<string, string> | null;
+    status: string | null;
+    payment_status: string | null;
+  }) =>
     s.metadata?.lifecycleAction === "changePlan" &&
     s.metadata?.businessId === BUSINESS_ID &&
     s.status === "complete" &&
-    s.payment_status === "paid"
-);
+    s.payment_status === "paid";
+
+  for (const customerId of knownCustomerIds) {
+    const listed = await stripe.checkout.sessions.list({
+      customer: customerId,
+      limit: 100
+    });
+    const hit = listed.data.find(matches);
+    if (hit) return hit;
+  }
+
+  // Fallback: paginate account-wide sessions until we find this business's
+  // paid changePlan (or exhaust a hard page budget).
+  let startingAfter: string | undefined;
+  for (let page = 0; page < 10; page++) {
+    const listed = await stripe.checkout.sessions.list({
+      limit: 100,
+      ...(startingAfter ? { starting_after: startingAfter } : {})
+    });
+    const hit = listed.data.find(matches);
+    if (hit) return hit;
+    if (!listed.has_more || listed.data.length === 0) break;
+    startingAfter = listed.data[listed.data.length - 1]?.id;
+  }
+  return null;
+}
+
+const session = await findPaidChangePlanSession();
 if (!session) {
   console.error(
-    "[oneshot] no paid changePlan Checkout Session found for this business in the last 20 sessions"
+    "[oneshot] no paid changePlan Checkout Session found for this business " +
+      `(scoped ${knownCustomerIds.length} customer id(s), then paginated account-wide)`
   );
   process.exit(1);
 }
@@ -479,6 +527,18 @@ if (!existingNew) {
   });
   newRowId = newRow.id;
   console.log(`[db] new subscriptions row ${newRow.id} (active, ${billingPeriod})`);
+  if (customerProfileId) {
+    try {
+      await incrementLifetimeSubscriptionCount(customerProfileId);
+      console.log(`[db] lifetime subscription count incremented for profile ${customerProfileId}`);
+    } catch (err) {
+      console.log(
+        `[db] incrementLifetimeSubscriptionCount failed (continuing): ${
+          err instanceof Error ? err.message : String(err)
+        }`
+      );
+    }
+  }
 } else {
   console.log(`[db] new subscriptions row ${existingNew.id} already exists; skipping insert`);
 }
