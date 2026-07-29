@@ -127,22 +127,102 @@ async function timedFetch(
   }
 }
 
+/** Topic / start time / ids from GET /past_meetings/{id}. */
+export type ZoomPastMeetingMeta = {
+  topic: string | null;
+  /** ISO start time from Zoom, when present. */
+  startTime: string | null;
+  /** Numeric meeting id as a digit string, when present. */
+  meetingId: string | null;
+  /** Raw (unencoded) past-meeting instance UUID, when present. */
+  uuid: string | null;
+};
+
+export type ZoomTranscriptTitleInput = {
+  topic?: string | null;
+  startTime?: string | null;
+  meetingId?: string | null;
+};
+
 /**
- * Resolve a NUMERIC meeting id to its latest past-meeting instance UUID via
- * GET /past_meetings/{meetingId} (`meeting:read:past_meeting`, the scope
- * added in the Jul 2026 Marketplace update). FAIL-OPEN by design: tokens
- * minted before the scope shipped answer 401/403 here, and callers keep the
- * pre-scope behavior (numeric flow, no UUID). Null on ANY failure.
+ * Format a Zoom ISO start time as a short UTC calendar date for titles
+ * ("Jul 29, 2026"). Null when the input is missing or unparseable.
  */
-export async function resolvePastMeetingUuid(
+export function formatZoomMeetingDate(startTime: string | null | undefined): string | null {
+  if (!startTime?.trim()) return null;
+  const ms = Date.parse(startTime);
+  if (!Number.isFinite(ms)) return null;
+  return new Date(ms).toLocaleDateString("en-US", {
+    month: "short",
+    day: "numeric",
+    year: "numeric",
+    timeZone: "UTC"
+  });
+}
+
+/**
+ * Document title for an imported Zoom transcript. Prefer Zoom's topic plus
+ * the meeting date so instant meetings that share a default topic still
+ * produce distinct library rows. Never emit a bare
+ * "Zoom meeting recording (transcript)" when a date is known.
+ */
+export function buildZoomTranscriptTitle(input: ZoomTranscriptTitleInput): string {
+  const topic = input.topic?.trim() || null;
+  const meetingId =
+    input.meetingId && /^\d{9,15}$/.test(input.meetingId.replace(/\s+/g, ""))
+      ? input.meetingId.replace(/\s+/g, "")
+      : null;
+  const date = formatZoomMeetingDate(input.startTime ?? null);
+
+  if (topic && date) return `${topic} · ${date} (transcript)`;
+  if (topic) return `${topic} (transcript)`;
+  if (meetingId && date) return `Zoom meeting ${meetingId} · ${date} (transcript)`;
+  if (meetingId) return `Zoom meeting ${meetingId} (transcript)`;
+  if (date) return `Zoom meeting · ${date} (transcript)`;
+  return "Zoom meeting recording (transcript)";
+}
+
+/**
+ * Filename-safe storage label: numeric meeting id when known, else a UTC
+ * date stamp (2026-07-29), else the literal "recording".
+ */
+export function buildZoomTranscriptRefLabel(input: ZoomTranscriptTitleInput): string {
+  const meetingId =
+    input.meetingId && /^\d{9,15}$/.test(input.meetingId.replace(/\s+/g, ""))
+      ? input.meetingId.replace(/\s+/g, "")
+      : null;
+  if (meetingId) return meetingId;
+  if (input.startTime?.trim()) {
+    const ms = Date.parse(input.startTime);
+    if (!Number.isFinite(ms)) return "recording";
+    return new Date(ms).toISOString().slice(0, 10);
+  }
+  return "recording";
+}
+
+/**
+ * Fetch past-meeting details (topic, start_time, uuid, numeric id) via
+ * GET /past_meetings/{meetingId} (`meeting:read:past_meeting`). Accepts a
+ * numeric id, raw UUID, or any reference normalizeZoomMeetingRef understands.
+ * FAIL-OPEN: null on any failure (pre-scope tokens, transport, missing body).
+ */
+export async function fetchPastMeetingMeta(
   businessId: string,
-  numericMeetingId: string,
+  meetingRef: string,
   deps: TranscriptDeps = {}
-): Promise<string | null> {
+): Promise<ZoomPastMeetingMeta | null> {
   const getToken = deps.getToken ?? getZoomAccessToken;
   const fetchImpl = deps.fetchImpl ?? fetch;
 
-  if (!/^\d{9,15}$/.test(numericMeetingId)) return null;
+  const digits = meetingRef.trim().replace(/\s+/g, "");
+  let segment: string | null = null;
+  if (/^\d{9,15}$/.test(digits)) {
+    segment = digits;
+  } else {
+    const rawUuid = rawZoomMeetingUuid(meetingRef);
+    if (!rawUuid) return null;
+    segment = encodeUuidSegment(rawUuid);
+  }
 
   let token: string | null;
   try {
@@ -156,7 +236,7 @@ export async function resolvePastMeetingUuid(
   try {
     res = await timedFetch(
       fetchImpl,
-      `${ZOOM_API_BASE_URL}/past_meetings/${numericMeetingId}`,
+      `${ZOOM_API_BASE_URL}/past_meetings/${segment}`,
       { Authorization: `Bearer ${token}`, Accept: "application/json" }
     );
   } catch {
@@ -164,10 +244,49 @@ export async function resolvePastMeetingUuid(
   }
   if (!res.ok) return null;
 
-  const body = (await res.json().catch(() => null)) as { uuid?: unknown } | null;
-  return typeof body?.uuid === "string" && body.uuid.trim().length > 0
-    ? body.uuid.trim()
-    : null;
+  const body = (await res.json().catch(() => null)) as {
+    uuid?: unknown;
+    topic?: unknown;
+    start_time?: unknown;
+    id?: unknown;
+  } | null;
+  if (!body) return null;
+
+  const uuid =
+    typeof body.uuid === "string" && body.uuid.trim().length > 0 ? body.uuid.trim() : null;
+  const topic =
+    typeof body.topic === "string" && body.topic.trim().length > 0 ? body.topic.trim() : null;
+  const startTime =
+    typeof body.start_time === "string" && body.start_time.trim().length > 0
+      ? body.start_time.trim()
+      : null;
+  let meetingId: string | null = null;
+  if (typeof body.id === "number" && Number.isFinite(body.id)) {
+    meetingId = String(body.id);
+  } else if (typeof body.id === "string") {
+    const idDigits = body.id.replace(/\s+/g, "");
+    if (/^\d{9,15}$/.test(idDigits)) meetingId = idDigits;
+  }
+
+  if (!uuid && !topic && !startTime && !meetingId) return null;
+  return { topic, startTime, meetingId, uuid };
+}
+
+/**
+ * Resolve a NUMERIC meeting id to its latest past-meeting instance UUID via
+ * GET /past_meetings/{meetingId} (`meeting:read:past_meeting`, the scope
+ * added in the Jul 2026 Marketplace update). FAIL-OPEN by design: tokens
+ * minted before the scope shipped answer 401/403 here, and callers keep the
+ * pre-scope behavior (numeric flow, no UUID). Null on ANY failure.
+ */
+export async function resolvePastMeetingUuid(
+  businessId: string,
+  numericMeetingId: string,
+  deps: TranscriptDeps = {}
+): Promise<string | null> {
+  if (!/^\d{9,15}$/.test(numericMeetingId)) return null;
+  const meta = await fetchPastMeetingMeta(businessId, numericMeetingId, deps);
+  return meta?.uuid ?? null;
 }
 
 /**

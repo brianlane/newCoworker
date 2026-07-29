@@ -25,7 +25,14 @@ vi.mock("@/lib/db/zoom-transcript-imports", () => ({
 }));
 vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
 vi.mock("@/lib/zoom/import-core", () => ({ importZoomTranscriptDocument: vi.fn() }));
-vi.mock("@/lib/zoom/transcript", () => ({ fetchZoomMeetingTranscript: vi.fn() }));
+vi.mock("@/lib/zoom/transcript", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("@/lib/zoom/transcript")>();
+  return {
+    ...actual,
+    fetchZoomMeetingTranscript: vi.fn(),
+    fetchPastMeetingMeta: vi.fn()
+  };
+});
 
 import {
   buildUrlValidationResponse,
@@ -185,10 +192,17 @@ describe("extractTranscriptCompleted", () => {
       hostId: HOST,
       meetingUuid: UUID,
       topic: "Team sync",
+      startTime: null,
       meetingId: "1784344402882",
       downloadUrl: "https://zoom.us/rec/transcript",
       downloadToken: "dl-token"
     });
+  });
+
+  it("reads start_time when Zoom includes it on the payload", () => {
+    expect(
+      extract(transcriptBody({ start_time: "2026-07-29T16:03:00Z" }))?.startTime
+    ).toBe("2026-07-29T16:03:00Z");
   });
 
   it("returns null when host or uuid is missing", () => {
@@ -310,6 +324,7 @@ function makeDeps(overrides: Partial<Record<keyof ZoomWebhookDeps, unknown>> = {
     finalizeImport: vi.fn().mockResolvedValue(true),
     fetchWebhookVtt: vi.fn().mockResolvedValue(VTT),
     fetchConnectionTranscript: vi.fn().mockResolvedValue({ ok: true, vtt: VTT }),
+    fetchMeetingMeta: vi.fn().mockResolvedValue(null),
     importCore: vi.fn().mockResolvedValue({
       ok: true,
       document: { id: DOC_ID },
@@ -521,6 +536,37 @@ describe("processZoomWebhookEvent", () => {
     await processZoomWebhookEvent(transcriptBody({ topic: undefined, id: undefined }), deps2);
     expect(deps2.importCore).toHaveBeenCalledWith(
       expect.objectContaining({ title: "Zoom meeting recording (transcript)", refLabel: "recording" })
+    );
+  });
+
+  it("titles from topic and start_time, and fills gaps from past-meeting meta", async () => {
+    const deps = makeDeps();
+    await processZoomWebhookEvent(
+      transcriptBody({ start_time: "2026-07-29T16:03:00Z" }),
+      deps
+    );
+    expect(deps.importCore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "Team sync · Jul 29, 2026 (transcript)",
+        refLabel: "1784344402882"
+      })
+    );
+    expect(deps.fetchMeetingMeta).not.toHaveBeenCalled();
+
+    const depsMeta = makeDeps({
+      fetchMeetingMeta: vi.fn().mockResolvedValue({
+        topic: "New Coworker's Zoom Meeting",
+        startTime: "2026-07-29T16:03:00Z",
+        meetingId: "84948156425",
+        uuid: UUID
+      })
+    });
+    await processZoomWebhookEvent(transcriptBody({ topic: undefined, id: undefined }), depsMeta);
+    expect(depsMeta.importCore).toHaveBeenCalledWith(
+      expect.objectContaining({
+        title: "New Coworker's Zoom Meeting · Jul 29, 2026 (transcript)",
+        refLabel: "84948156425"
+      })
     );
   });
 

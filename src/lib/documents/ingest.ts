@@ -26,6 +26,45 @@ import { scheduleLongFormGraphExtract } from "@/lib/memory/schedule-longform-ext
 /** Raw text fed to the condenser is clipped to keep the prompt bounded. */
 export const DOCUMENT_INGEST_MAX_TEXT_CHARS = 40_000;
 
+/**
+ * Fraction of the content_md budget reserved for the appended VTT transcript
+ * section so Gemini minutes cannot consume the whole cap and leave only a
+ * mid-word stump of what was said.
+ */
+export const DOCUMENT_VTT_TRANSCRIPT_RESERVE_RATIO = 0.4;
+
+/** Marker appended when transcript (or minutes) are clipped to the char cap. */
+export const DOCUMENT_TRANSCRIPT_TRUNCATION_MARKER = "\n\n… (transcript truncated)";
+/** Shorter marker for non-transcript content_md / summary clips. */
+export const DOCUMENT_CONTENT_TRUNCATION_MARKER = "\n\n… (truncated)";
+
+/**
+ * Clip `text` to `maxChars`, preferring the last full line (or last space)
+ * over a mid-word cut, and append `marker` when anything was dropped.
+ * The returned string is always <= maxChars.
+ */
+export function clipAtBoundary(
+  text: string,
+  maxChars: number,
+  marker: string = DOCUMENT_CONTENT_TRUNCATION_MARKER
+): string {
+  if (maxChars <= 0) return "";
+  if (text.length <= maxChars) return text;
+  const markerBudget = Math.min(marker.length, maxChars);
+  const budget = Math.max(0, maxChars - markerBudget);
+  if (budget === 0) return marker.slice(0, maxChars);
+  let cut = text.slice(0, budget);
+  const lastNl = cut.lastIndexOf("\n");
+  if (lastNl >= Math.floor(budget * 0.5)) {
+    cut = cut.slice(0, lastNl);
+  } else {
+    const lastSpace = cut.lastIndexOf(" ");
+    if (lastSpace >= Math.floor(budget * 0.5)) cut = cut.slice(0, lastSpace);
+  }
+  cut = cut.replace(/\s+$/u, "");
+  return `${cut}${marker.slice(0, maxChars - cut.length)}`;
+}
+
 export const DOCUMENT_TEXT_MIME_TYPES = [
   "text/plain",
   "text/markdown",
@@ -132,15 +171,27 @@ export function parseCondensedReply(reply: string): { contentMd: string; summary
   // at end-of-string) still parses — and correctly yields empty content.
   const match = /^SUMMARY:\s*([\s\S]*?)\n-{3,}(?:\n([\s\S]*))?$/m.exec(reply.trim());
   if (match) {
-    const summary = match[1].replace(/\s+/g, " ").trim().slice(0, DOCUMENT_SUMMARY_MAX_CHARS);
-    const contentMd = (match[2] ?? "").trim().slice(0, DOCUMENT_CONTENT_MD_MAX_CHARS);
+    const summary = clipAtBoundary(
+      match[1].replace(/\s+/g, " ").trim(),
+      DOCUMENT_SUMMARY_MAX_CHARS,
+      "…"
+    );
+    const contentMd = clipAtBoundary(
+      (match[2] ?? "").trim(),
+      DOCUMENT_CONTENT_MD_MAX_CHARS,
+      DOCUMENT_CONTENT_TRUNCATION_MARKER
+    );
     return { contentMd, summary };
   }
   const fallback = reply.trim();
   const firstLine = fallback.split("\n")[0].replace(/^SUMMARY:\s*/i, "").trim();
   return {
-    contentMd: fallback.slice(0, DOCUMENT_CONTENT_MD_MAX_CHARS),
-    summary: firstLine.slice(0, DOCUMENT_SUMMARY_MAX_CHARS)
+    contentMd: clipAtBoundary(
+      fallback,
+      DOCUMENT_CONTENT_MD_MAX_CHARS,
+      DOCUMENT_CONTENT_TRUNCATION_MARKER
+    ),
+    summary: clipAtBoundary(firstLine, DOCUMENT_SUMMARY_MAX_CHARS, "…")
   };
 }
 
@@ -241,15 +292,31 @@ export async function ingestDocument(
     const parsed = parseCondensedReply(result.text);
     if (!parsed.contentMd) return { ok: false, error: "empty_content" };
     if (isVtt) {
-      // Meeting minutes keep the WHOLE readable transcript below the
-      // condensed notes: the owner reads what was actually said without
-      // digging out the .vtt, and the coworker can quote it. The transcript
-      // section is clipped so content_md stays within its cap.
-      const headroom =
-        DOCUMENT_CONTENT_MD_MAX_CHARS - parsed.contentMd.length - "\n\n## Transcript\n\n".length;
-      if (headroom > 100) {
-        parsed.contentMd = `${parsed.contentMd}\n\n## Transcript\n\n${rawText.slice(0, headroom)}`;
-      }
+      // Meeting minutes keep a readable transcript below the condensed
+      // notes. Reserve ~40% of the cap for that section so minutes cannot
+      // starve it, and clip at a line boundary (never mid-word).
+      const transcriptHeader = "\n\n## Transcript\n\n";
+      const minTranscriptBudget = Math.floor(
+        DOCUMENT_CONTENT_MD_MAX_CHARS * DOCUMENT_VTT_TRANSCRIPT_RESERVE_RATIO
+      );
+      const minutesCap = Math.max(
+        100,
+        DOCUMENT_CONTENT_MD_MAX_CHARS - minTranscriptBudget - transcriptHeader.length
+      );
+      const clippedMinutes =
+        parsed.contentMd.length > minutesCap
+          ? clipAtBoundary(parsed.contentMd, minutesCap, DOCUMENT_CONTENT_TRUNCATION_MARKER)
+          : parsed.contentMd;
+      const headroom = Math.max(
+        0,
+        DOCUMENT_CONTENT_MD_MAX_CHARS - clippedMinutes.length - transcriptHeader.length
+      );
+      const transcriptBody = clipAtBoundary(
+        rawText,
+        headroom,
+        DOCUMENT_TRANSCRIPT_TRUNCATION_MARKER
+      );
+      parsed.contentMd = `${clippedMinutes}${transcriptHeader}${transcriptBody}`;
     }
     scheduleGraphExtract(input, parsed.contentMd, deps);
     return { ok: true, ...parsed };

@@ -30,7 +30,12 @@ import {
 } from "@/lib/db/zoom-transcript-imports";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { importZoomTranscriptDocument } from "@/lib/zoom/import-core";
-import { fetchZoomMeetingTranscript } from "@/lib/zoom/transcript";
+import {
+  buildZoomTranscriptRefLabel,
+  buildZoomTranscriptTitle,
+  fetchPastMeetingMeta,
+  fetchZoomMeetingTranscript
+} from "@/lib/zoom/transcript";
 import { logger } from "@/lib/logger";
 
 /** Recording payloads carry file lists; far under this in practice. */
@@ -109,6 +114,8 @@ export type ZoomTranscriptCompleted = {
   /** Raw (unencoded) past-meeting instance UUID, the ledger key. */
   meetingUuid: string;
   topic: string | null;
+  /** Meeting start time from the payload, when present (ISO). */
+  startTime: string | null;
   /** Numeric meeting id, when present (title label). */
   meetingId: string | null;
   /** The transcript file's download URL from the payload, when present. */
@@ -150,6 +157,7 @@ export function extractTranscriptCompleted(
     hostId,
     meetingUuid,
     topic: asString(object.topic),
+    startTime: asString(object.start_time),
     meetingId: meetingId && /^\d{9,15}$/.test(meetingId) ? meetingId : null,
     downloadUrl,
     downloadToken: asString(asRecord(body).download_token)
@@ -236,6 +244,7 @@ export type ZoomWebhookDeps = {
   finalizeImport?: typeof finalizeZoomTranscriptImport;
   fetchWebhookVtt?: typeof fetchWebhookTranscriptVtt;
   fetchConnectionTranscript?: typeof fetchZoomMeetingTranscript;
+  fetchMeetingMeta?: typeof fetchPastMeetingMeta;
   importCore?: typeof importZoomTranscriptDocument;
   deauthorize?: typeof markZoomConnectionDeauthorized;
   logSystem?: typeof recordSystemLog;
@@ -273,6 +282,7 @@ export async function processZoomWebhookEvent(
   const fetchWebhookVtt = deps.fetchWebhookVtt ?? fetchWebhookTranscriptVtt;
   const fetchConnectionTranscript =
     deps.fetchConnectionTranscript ?? fetchZoomMeetingTranscript;
+  const fetchMeetingMeta = deps.fetchMeetingMeta ?? fetchPastMeetingMeta;
   const importCore = deps.importCore ?? importZoomTranscriptDocument;
   const deauthorize = deps.deauthorize ?? markZoomConnectionDeauthorized;
   const logSystem = deps.logSystem ?? recordSystemLog;
@@ -342,13 +352,24 @@ export async function processZoomWebhookEvent(
           return { outcome: "import_failed", businessId };
         }
 
-        const label = extracted.topic ?? `Zoom meeting ${extracted.meetingId ?? "recording"}`;
+        // Payload topic/start_time first; fill gaps from past_meetings so
+        // untitled webhook deliveries still get a dated library title.
+        let topic = extracted.topic;
+        let startTime = extracted.startTime;
+        let meetingId = extracted.meetingId;
+        if (!topic || !startTime || !meetingId) {
+          const meta = await fetchMeetingMeta(businessId, extracted.meetingUuid);
+          topic = topic ?? meta?.topic ?? null;
+          startTime = startTime ?? meta?.startTime ?? null;
+          meetingId = meetingId ?? meta?.meetingId ?? null;
+        }
+        const titleBits = { topic, startTime, meetingId };
         const imported = await importCore({
           businessId,
           business: { name: business.name, tier: business.tier },
           vtt,
-          title: `${label} (transcript)`,
-          refLabel: extracted.meetingId ?? "recording"
+          title: buildZoomTranscriptTitle(titleBits),
+          refLabel: buildZoomTranscriptRefLabel(titleBits)
         });
 
         if (!imported.ok) {
