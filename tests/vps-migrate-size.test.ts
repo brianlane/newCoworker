@@ -323,6 +323,11 @@ describe("migrateBusinessVpsSize — provision + pin", () => {
     }
     expect(deps.updateBusinessVpsSize).not.toHaveBeenCalled();
     expect(deps.hostinger.stopVirtualMachine).not.toHaveBeenCalled();
+    expect(deps.markProvisioningJobOutcome).toHaveBeenCalledWith(
+      BIZ,
+      "failed",
+      expect.stringContaining("hostinger 402")
+    );
   });
 
   it("continues cutover when provision throws but new box is deploy-complete", async () => {
@@ -424,6 +429,11 @@ describe("migrateBusinessVpsSize — restore stage (fail-closed)", () => {
       expect(out.error).toContain("backups/biz.tgz");
     }
     expect(deps.hostinger.stopVirtualMachine).not.toHaveBeenCalled();
+    expect(deps.markProvisioningJobOutcome).toHaveBeenCalledWith(
+      BIZ,
+      "failed",
+      expect.stringContaining("cannot resolve")
+    );
   });
 
   it("fails when the restore throws, keeping the old box running", async () => {
@@ -440,6 +450,43 @@ describe("migrateBusinessVpsSize — restore stage (fail-closed)", () => {
     }
     expect(deps.hostinger.stopVirtualMachine).not.toHaveBeenCalled();
     expect(deps.hostinger.disableBillingAutoRenewal).not.toHaveBeenCalled();
+    expect(deps.markProvisioningJobOutcome).toHaveBeenCalledWith(
+      BIZ,
+      "failed",
+      expect.stringContaining("tar corrupt")
+    );
+  });
+
+  it("still returns restore failure when the failed-ledger mark throws", async () => {
+    const deps = makeDeps({
+      restoreBusinessData: vi.fn(async () => {
+        throw new Error("tar corrupt");
+      }),
+      markProvisioningJobOutcome: vi.fn(async () => {
+        throw new Error("ledger down");
+      })
+    });
+    const out = await migrateBusinessVpsSize(input, deps);
+    expect(out.ok).toBe(false);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("markProvisioningJobOutcome(failed)"),
+      expect.objectContaining({ error: "ledger down" })
+    );
+
+    const deps2 = makeDeps({
+      restoreBusinessData: vi.fn(async () => {
+        throw "tar string fail";
+      }),
+      markProvisioningJobOutcome: vi.fn(async () => {
+        throw "ledger string fail";
+      })
+    });
+    const out2 = await migrateBusinessVpsSize(input, deps2);
+    expect(out2.ok).toBe(false);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("markProvisioningJobOutcome(failed)"),
+      expect.objectContaining({ error: "ledger string fail" })
+    );
   });
 });
 
@@ -460,6 +507,11 @@ describe("migrateBusinessVpsSize — billing repoint (fail-closed)", () => {
     expect(loggerErrorMock).toHaveBeenCalledWith(
       "migrate-size: billing repoint failed",
       expect.objectContaining({ error: "db down" })
+    );
+    expect(deps.markProvisioningJobOutcome).toHaveBeenCalledWith(
+      BIZ,
+      "failed",
+      expect.stringContaining("RUNNING + RENEWING")
     );
   });
 

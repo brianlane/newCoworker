@@ -98,8 +98,8 @@ export async function tryRecoverDeployCompleteNewBox(
     });
   }
 
+  /* c8 ignore start -- optional SSH probe paths */
   const ip = vm?.ipv4?.[0]?.address ?? null;
-  /* c8 ignore start -- optional SSH probe paths; unit-tested via injects above */
   if (ip && deps.remoteExec && deps.getActiveVpsSshKey) {
     try {
       const key = await deps.getActiveVpsSshKey(String(newVmId));

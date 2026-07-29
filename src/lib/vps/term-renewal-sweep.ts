@@ -139,7 +139,22 @@ type SweepCandidate = {
 };
 
 function errMsg(err: unknown): string {
-  return err instanceof Error ? err.message: String(err);
+  return err instanceof Error ? err.message : String(err);
+}
+
+async function markTermRenewalJobFailed(
+  deps: Pick<TermRenewalSweepDeps, "markProvisioningJobOutcome">,
+  businessId: string,
+  message: string
+): Promise<void> {
+  /* c8 ignore next -- production ledger default; tests inject */
+  const mark = deps.markProvisioningJobOutcome ?? markProvisioningJobOutcome;
+  await mark(businessId, "failed", message).catch((err: unknown) => {
+    logger.warn("term-renewal sweep: markProvisioningJobOutcome(failed) failed", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  });
 }
 
 function tenantVmId(business: BusinessRow): number | null {
@@ -676,6 +691,7 @@ async function migrateTenantTermRenewal(
     } else {
       const detail = `provisioning failed: ${errMsg(err)}: old box untouched and still renewing`;
       await notify("failed", detail);
+      await markTermRenewalJobFailed(deps, businessId, detail);
       return { ok: false, detail };
     }
   }
@@ -693,6 +709,7 @@ async function migrateTenantTermRenewal(
       `cannot resolve new VM ${newVmId} IP: restore manually (tarball: ${backupPath}); ` +
       "old box left running + renewing";
     await notify("failed", detail);
+    await markTermRenewalJobFailed(deps, businessId, detail);
     return { ok: false, detail };
   }
 
@@ -703,6 +720,7 @@ async function migrateTenantTermRenewal(
       `restore failed: ${errMsg(err)}: tarball safe at ${backupPath}; ` +
       "old box left running + renewing (it still has the live data)";
     await notify("failed", detail);
+    await markTermRenewalJobFailed(deps, businessId, detail);
     return { ok: false, detail };
   }
 
@@ -742,6 +760,7 @@ async function migrateTenantTermRenewal(
       `cutover done (new srv${newVmId} serving) but billing repoint failed: ` +
       "old box left RUNNING + RENEWING. Fix subscriptions.hostinger_billing_subscription_id manually.";
     await notify("failed", detail);
+    await markTermRenewalJobFailed(deps, businessId, detail);
     return { ok: false, detail };
   }
 
@@ -816,6 +835,7 @@ async function migrateTenantTermRenewal(
       `pooled=${pooled}, never_renew=${neverRenewMarked}. ` +
       `Mark vps_inventory.never_renew=true for srv${oldVmId} manually before the next adopt.`;
     await notify("failed", detail);
+    await markTermRenewalJobFailed(deps, businessId, detail);
     return { ok: false, detail };
   }
 

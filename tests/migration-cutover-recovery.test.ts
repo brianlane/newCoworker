@@ -2,6 +2,48 @@ import { describe, it, expect, vi } from "vitest";
 import { tryRecoverDeployCompleteNewBox } from "@/lib/vps/migration-cutover-recovery";
 
 describe("tryRecoverDeployCompleteNewBox", () => {
+  it("returns null when hostinger_vps_id is missing or non-numeric", async () => {
+    const out = await tryRecoverDeployCompleteNewBox(
+      { businessId: "biz-1", oldVmId: 100 },
+      {
+        getBusiness: async () => ({ hostinger_vps_id: "not-a-number" }),
+        getLatestProvisioningStatus: async () => null,
+        getVirtualMachine: async () => ({ ipv4: [] })
+      }
+    );
+    expect(out).toBeNull();
+
+    const out2 = await tryRecoverDeployCompleteNewBox(
+      { businessId: "biz-1", oldVmId: 100 },
+      {
+        getBusiness: async () => ({ hostinger_vps_id: null }),
+        getLatestProvisioningStatus: async () => null,
+        getVirtualMachine: async () => ({ ipv4: [] })
+      }
+    );
+    expect(out2).toBeNull();
+
+    const out3 = await tryRecoverDeployCompleteNewBox(
+      { businessId: "biz-1", oldVmId: 100 },
+      {
+        getBusiness: async () => null,
+        getLatestProvisioningStatus: async () => null,
+        getVirtualMachine: async () => ({ ipv4: [] })
+      }
+    );
+    expect(out3).toBeNull();
+
+    const out4 = await tryRecoverDeployCompleteNewBox(
+      { businessId: "biz-1", oldVmId: 100 },
+      {
+        getBusiness: async () => ({ hostinger_vps_id: "0" }),
+        getLatestProvisioningStatus: async () => null,
+        getVirtualMachine: async () => ({ ipv4: [] })
+      }
+    );
+    expect(out4).toBeNull();
+  });
+
   it("returns null when hostinger_vps_id still points at the old VM", async () => {
     const out = await tryRecoverDeployCompleteNewBox(
       { businessId: "biz-1", oldVmId: 100 },

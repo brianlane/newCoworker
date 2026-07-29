@@ -444,6 +444,11 @@ describe("runTermRenewalSweep", () => {
     const result = await runTermRenewalSweep(deps, { now: NOW });
     expect(result.findings[0]?.kind).toBe("migration_failed");
     expect(deps.hostinger.disableBillingAutoRenewal).not.toHaveBeenCalled();
+    expect(deps.markProvisioningJobOutcome).toHaveBeenCalledWith(
+      BIZ,
+      "failed",
+      expect.stringContaining("purchase failed")
+    );
   });
 
   it("continues cutover when provision throws but new box is deploy-complete", async () => {
@@ -490,6 +495,43 @@ describe("runTermRenewalSweep", () => {
     const result = await runTermRenewalSweep(deps, { now: NOW });
     expect(result.findings[0]?.kind).toBe("migration_failed");
     expect(deps.hostinger.disableBillingAutoRenewal).not.toHaveBeenCalled();
+    expect(deps.markProvisioningJobOutcome).toHaveBeenCalledWith(
+      BIZ,
+      "failed",
+      expect.stringContaining("restore boom")
+    );
+  });
+
+  it("still records migration_failed when the failed-ledger mark throws", async () => {
+    const deps = makeDeps({
+      restoreBusinessData: vi.fn(async () => {
+        throw new Error("restore boom");
+      }),
+      markProvisioningJobOutcome: vi.fn(async () => {
+        throw new Error("ledger down");
+      })
+    });
+    const result = await runTermRenewalSweep(deps, { now: NOW });
+    expect(result.findings[0]?.kind).toBe("migration_failed");
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("markProvisioningJobOutcome(failed)"),
+      expect.objectContaining({ error: "ledger down" })
+    );
+
+    const deps2 = makeDeps({
+      restoreBusinessData: vi.fn(async () => {
+        throw "restore string";
+      }),
+      markProvisioningJobOutcome: vi.fn(async () => {
+        throw "ledger string";
+      })
+    });
+    const result2 = await runTermRenewalSweep(deps2, { now: NOW });
+    expect(result2.findings[0]?.kind).toBe("migration_failed");
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("markProvisioningJobOutcome(failed)"),
+      expect.objectContaining({ error: "ledger string" })
+    );
   });
 
   it("billing repoint failure leaves the old box renewing", async () => {
@@ -501,6 +543,11 @@ describe("runTermRenewalSweep", () => {
     const result = await runTermRenewalSweep(deps, { now: NOW });
     expect(result.findings[0]?.kind).toBe("migration_failed");
     expect(deps.hostinger.disableBillingAutoRenewal).not.toHaveBeenCalled();
+    expect(deps.markProvisioningJobOutcome).toHaveBeenCalledWith(
+      BIZ,
+      "failed",
+      expect.stringContaining("billing repoint failed")
+    );
   });
 
   it("handles VM lookup failure during candidate scan", async () => {
@@ -667,6 +714,11 @@ describe("runTermRenewalSweep", () => {
         detail: expect.stringContaining("old-box bookkeeping failed")
       })
     );
+    expect(poolFail.markProvisioningJobOutcome).toHaveBeenCalledWith(
+      BIZ,
+      "failed",
+      expect.stringContaining("old-box bookkeeping failed")
+    );
 
     const neverRenewFail = makeDeps({
       markVpsNeverRenew: vi.fn(async () => {
@@ -676,6 +728,11 @@ describe("runTermRenewalSweep", () => {
     const neverRenewResult = await runTermRenewalSweep(neverRenewFail, { now: NOW });
     expect(neverRenewResult.migrated).toBe(0);
     expect(neverRenewResult.findings[0]?.kind).toBe("migration_failed");
+    expect(neverRenewFail.markProvisioningJobOutcome).toHaveBeenCalledWith(
+      BIZ,
+      "failed",
+      expect.stringContaining("old-box bookkeeping failed")
+    );
   });
 
   it("completes with FOLLOW-UP when old billing disable fails but pool bookkeeping succeeds", async () => {

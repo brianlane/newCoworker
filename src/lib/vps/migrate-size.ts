@@ -129,6 +129,21 @@ function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
 
+async function markMigrationJobFailed(
+  deps: Pick<MigrateVpsSizeDeps, "markProvisioningJobOutcome">,
+  businessId: string,
+  message: string
+): Promise<void> {
+  /* c8 ignore next -- production ledger default; tests inject */
+  const mark = deps.markProvisioningJobOutcome ?? markProvisioningJobOutcome;
+  await mark(businessId, "failed", message).catch((err: unknown) => {
+    logger.warn("migrate-size: markProvisioningJobOutcome(failed) failed", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  });
+}
+
 export async function migrateBusinessVpsSize(
   input: MigrateVpsSizeInput,
   deps: MigrateVpsSizeDeps
@@ -359,6 +374,7 @@ export async function migrateBusinessVpsSize(
     if (oldVmId === null) {
       const error = `provisioning failed: ${errMsg(err)}: old box untouched and still serving; re-run once fixed`;
       await notify("failed", `Provision stage: ${error}`);
+      await markMigrationJobFailed(deps, businessId, error);
       return { ok: false, stage: "provision", error };
     }
     /* c8 ignore stop */
@@ -392,6 +408,7 @@ export async function migrateBusinessVpsSize(
     } else {
       const error = `provisioning failed: ${errMsg(err)}: old box untouched and still serving; re-run once fixed`;
       await notify("failed", `Provision stage: ${error}`);
+      await markMigrationJobFailed(deps, businessId, error);
       return { ok: false, stage: "provision", error };
     }
   }
@@ -413,6 +430,7 @@ export async function migrateBusinessVpsSize(
       `cannot resolve the new VM ${newVmId}'s IP : restore manually (tarball: ${backupPath}); ` +
       `old box left running + renewing until the restore lands`;
     await notify("failed", `Restore stage: ${error}`);
+    await markMigrationJobFailed(deps, businessId, error);
     return { ok: false, stage: "restore", error };
   }
   try {
@@ -422,6 +440,7 @@ export async function migrateBusinessVpsSize(
       `restore failed: ${errMsg(err)} : new box is on TEMPLATE state; tarball safe at ${backupPath}; ` +
       `old box left running + renewing (it still has the live data)`;
     await notify("failed", `Restore stage: ${error}`);
+    await markMigrationJobFailed(deps, businessId, error);
     return { ok: false, stage: "restore", error };
   }
 
@@ -463,6 +482,7 @@ export async function migrateBusinessVpsSize(
       `(should be ${newBillingId ?? `<unknown : look up resource_id=${newVmId}>`}), then stop ` +
       `srv${oldVmId} and disable auto-renew on ${oldBillingId ?? "<unknown billing sub>"}.`;
     await notify("failed", `Billing stage: ${error}`);
+    await markMigrationJobFailed(deps, businessId, error);
     return { ok: false, stage: "billing", error };
   }
 
