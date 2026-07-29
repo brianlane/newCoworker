@@ -14,6 +14,22 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
+/** True when an unexpired hardware-migration lease is held for the business. */
+export async function hasActiveVpsMigrationLock(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<boolean> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("vps_migration_locks")
+    .select("locked_until")
+    .eq("business_id", businessId)
+    .maybeSingle();
+  if (error) throw new Error(`hasActiveVpsMigrationLock: ${error.message}`);
+  if (!data) return false;
+  return new Date((data as { locked_until: string }).locked_until).getTime() > Date.now();
+}
+
 /** Returns true when this caller now owns the migration lease. */
 export async function tryClaimVpsMigration(
   businessId: string,

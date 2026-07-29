@@ -5,12 +5,23 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn(async () => defaultClientSpy())
 }));
 
-import { tryClaimVpsMigration, releaseVpsMigrationLock } from "@/lib/db/vps-migration-locks";
+import { tryClaimVpsMigration, releaseVpsMigrationLock, hasActiveVpsMigrationLock } from "@/lib/db/vps-migration-locks";
 
 const BIZ_ID = "11111111-1111-4111-8111-111111111111";
 
-function makeDb(rpcResult: { data?: unknown; error?: { message: string } | null }) {
-  return { rpc: vi.fn(async () => ({ data: null, error: null, ...rpcResult })) };
+function makeDb(
+  rpcResult: { data?: unknown; error?: { message: string } | null },
+  fromResult?: { data?: unknown; error?: { message: string } | null }
+) {
+  const fromChain = {
+    select: vi.fn().mockReturnThis(),
+    eq: vi.fn().mockReturnThis(),
+    maybeSingle: vi.fn(async () => ({ data: null, error: null, ...fromResult }))
+  };
+  return {
+    rpc: vi.fn(async () => ({ data: null, error: null, ...rpcResult })),
+    from: vi.fn(() => fromChain)
+  };
 }
 
 describe("vps-migration-locks", () => {
@@ -48,6 +59,31 @@ describe("vps-migration-locks", () => {
         tryClaimVpsMigration(BIZ_ID, "admin@example.com", "kvm4", db as never)
       ).resolves.toBe(true);
       expect(defaultClientSpy).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("hasActiveVpsMigrationLock", () => {
+    it("returns true when locked_until is in the future", async () => {
+      const db = makeDb({}, { data: { locked_until: new Date(Date.now() + 60_000).toISOString() } });
+      defaultClientSpy.mockReturnValue(db);
+      await expect(hasActiveVpsMigrationLock(BIZ_ID)).resolves.toBe(true);
+    });
+
+    it("returns false when no row exists or the lease expired", async () => {
+      defaultClientSpy.mockReturnValue(makeDb({}, { data: null }));
+      await expect(hasActiveVpsMigrationLock(BIZ_ID)).resolves.toBe(false);
+
+      defaultClientSpy.mockReturnValue(
+        makeDb({}, { data: { locked_until: new Date(Date.now() - 60_000).toISOString() } })
+      );
+      await expect(hasActiveVpsMigrationLock(BIZ_ID)).resolves.toBe(false);
+    });
+
+    it("throws on read error", async () => {
+      defaultClientSpy.mockReturnValue(makeDb({}, { error: { message: "read failed" } }));
+      await expect(hasActiveVpsMigrationLock(BIZ_ID)).rejects.toThrow(
+        "hasActiveVpsMigrationLock: read failed"
+      );
     });
   });
 
