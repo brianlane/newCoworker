@@ -41,6 +41,8 @@ const TENANT_TOKENS: ReadonlyArray<{ token: string; dossiers: string[] }> = [
   { token: "kyp", dossiers: ["kyp-ads.md"] },
   { token: "truly", dossiers: ["truly-insurance.md"] },
   { token: "privyr", dossiers: ["truly-insurance.md"] },
+  { token: "scar", dossiers: ["scar-fairy.md"] },
+  { token: "fairy", dossiers: ["scar-fairy.md"] },
   { token: "hq", dossiers: ["new-coworker-hq.md"] }
 ];
 
@@ -113,6 +115,7 @@ describe("tenant dossiers", () => {
       "+15198006401", // Truly
       "+14388035806", // KYP Ads
       "+16023131823", // New Coworker HQ (also the homepage demo line)
+      "+13054885455", // Scar Fairy
       "+14159851909", // HomeLight live-transfer source
       "+18609926975", // Clever Concierge
       "+19289402447", // Clever Veronica

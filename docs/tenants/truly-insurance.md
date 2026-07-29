@@ -9,17 +9,38 @@ reading Truly's transcripts.
 | | |
 | --- | --- |
 | Business id | `690f85c0-ee16-4ee5-bde5-5829df2e5410` |
-| Tier / box | standard, VPS `1815606` |
-| DID | `+15198006401` |
+| Tier / box | standard, **boxless** (`hostinger_vps_id` null). Former VPS `1815606` was detached 2026-07-29 and adopted by Scar Fairy |
+| DID | `+15198006401` (reserved until the ~Sep 7 grace wipe) |
 | Owner | Muhammad Fahad |
 | Onboarded | 2026-07-08 |
 | Roster | Muhammad Fahad, Dania Shaikh, Awais Chauhan |
+| Billing | `cancel_at_period_end=true`, period ends **2026-08-08**. **Not paused** (`is_paused=false`): we are letting Stripe cancel-at-period-end run, then the automated grace wipe ~**2026-09-07** |
+
+## Lifecycle (lapsing, not paused)
+
+Truly canceled at period end. On 2026-07-29 we backed up their vault/memory,
+nulled `businesses.hostinger_vps_id` and
+`subscriptions.hostinger_billing_subscription_id`, and pooled vm `1815606` so
+Scar Fairy could adopt it. Do **not** set `is_paused` for this account; product
+fixes (hardware-escalation advisor skips boxless tenants, PR #1016) already
+stop the boxless alert email without a pause.
+
+Verification dates:
+
+- **2026-08-08**: Stripe period end stamps `grace_ends_at` (~Sep 7). Must have
+  no VM side effects (pointers already null).
+- **~2026-09-07**: grace wipe releases the DID and wipes data/backups.
+
+Backup artifact: Supabase Storage bucket `business-backups`, path
+`backups/690f85c0-ee16-4ee5-bde5-5829df2e5410/latest.tar.gz` (taken before the
+1815606 re-image).
 
 ## How leads arrive
 
 **Privyr sends lead-alert emails to a tenant mailbox**, which is why the main
 flow's trigger is `tenant_email` rather than a webhook. Renewals, not new
-leads, are the recurring business motion here.
+leads, are the recurring business motion here. Inbound on the DID goes
+unanswered while boxless; that is accepted until wipe.
 
 ## Flows
 
@@ -30,8 +51,8 @@ leads, are the recurring business motion here.
 | Appointment reminder, 24 hours before (calendar, 3) | off | |
 | Post-appointment follow-up (calendar, 4) | off | |
 
-**All four flows are currently disabled.** Confirm with the owner before
-concluding that is a bug; the account has been quiet since late July.
+**All four flows are currently disabled.** That was deliberate before the
+cancel; do not re-enable them while the account is lapsing.
 
 ## Sharp edges
 
@@ -55,6 +76,10 @@ concluding that is a bug; the account has been quiet since late July.
 - **Acknowledging is not acting.** A flow answered a question and then did
   nothing about the answer (PR #613, the Bryan/Amy incident, but the same
   class of bug shows up in Truly's follow-ups).
+- **Never leave Truly's Hostinger billing pointers pointing at 1815606.** The
+  Aug 8 `customer.subscription.deleted` webhook resolves the VM from those
+  fields; left pointing, it would stop Scar Fairy's box. Pointers are null as
+  of 2026-07-29.
 
 ## One-shots
 
@@ -67,3 +92,4 @@ concluding that is a bug; the account has been quiet since late July.
 
 PRs #581, #593, #599, #613, #618, #638, #658, #705, #823. The full Privyr flow
 has recorded e2e coverage (PR #618), so a change here has a test to run.
+Box handoff and cancel-at-period-end lifecycle: PRs #999, #1008, #1011, #1016.
