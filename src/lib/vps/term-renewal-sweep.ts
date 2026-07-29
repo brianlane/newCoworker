@@ -177,29 +177,16 @@ function resolveBillingSub(
   vm: VirtualMachine,
   subsById: Map<string, BillingSubscription>
 ): BillingSubscription | null {
+  // Partial cutover is rejected earlier via isPartialTermCutover; by the time
+  // we resolve, the row and VM billing ids either agree or one side is missing.
   const fromSubRow = subscription.hostinger_billing_subscription_id
     ? subsById.get(subscription.hostinger_billing_subscription_id) ?? null
     : null;
-  const fromVm =
-    typeof vm.subscription_id === "string" && vm.subscription_id.length > 0
-      ? (subsById.get(vm.subscription_id) ?? null)
-      : null;
-
-  // Partial cutover: provisioning already swung hostinger_vps_id but the
-  // subscription row still names the old billing sub. Refuse to treat that
-  // as a normal renewal candidate (would buy yet another box).
-  if (
-    fromSubRow &&
-    fromVm &&
-    subscription.hostinger_billing_subscription_id &&
-    vm.subscription_id &&
-    subscription.hostinger_billing_subscription_id !== vm.subscription_id
-  ) {
-    return null;
-  }
-
   if (fromSubRow) return fromSubRow;
-  return fromVm;
+  if (typeof vm.subscription_id === "string" && vm.subscription_id.length > 0) {
+    return subsById.get(vm.subscription_id) ?? null;
+  }
+  return null;
 }
 
 /** True when the live VM's billing id disagrees with the subscription row. */
