@@ -4,6 +4,7 @@ import {
   getLatestProvisioningStatus,
   getProvisioningLogs,
   hasPriorOpsNewSignupAlert,
+  hasPriorOpsProvisioningStuckAlert,
   hasPriorSuccessfulProvision,
   shouldShowProvisioningProgress,
   shouldMountProvisioningWidget,
@@ -509,6 +510,59 @@ describe("provisioning/progress", () => {
     await expect(
       hasPriorOpsNewSignupAlert("00000000-0000-4000-8000-000000000001")
     ).rejects.toThrow("hasPriorOpsNewSignupAlert");
+  });
+
+  it("hasPriorOpsProvisioningStuckAlert is true when the alert-sent row exists", async () => {
+    const db = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      filter: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: { id: "log-1" }, error: null })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(
+      hasPriorOpsProvisioningStuckAlert("00000000-0000-4000-8000-000000000001")
+    ).resolves.toBe(true);
+    expect(db.filter).toHaveBeenCalledWith(
+      "log_payload->>phase",
+      "eq",
+      "ops_provisioning_stuck_alert_sent"
+    );
+  });
+
+  it("hasPriorOpsProvisioningStuckAlert is false when no alert-sent row exists", async () => {
+    const db = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      filter: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(
+      hasPriorOpsProvisioningStuckAlert("00000000-0000-4000-8000-000000000001")
+    ).resolves.toBe(false);
+  });
+
+  it("hasPriorOpsProvisioningStuckAlert throws on db error", async () => {
+    const db = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      filter: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: "db down" } })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(
+      hasPriorOpsProvisioningStuckAlert("00000000-0000-4000-8000-000000000001")
+    ).rejects.toThrow("hasPriorOpsProvisioningStuckAlert");
   });
 
   it("hasPriorSuccessfulProvision is true when a complete success row exists", async () => {

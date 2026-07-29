@@ -44,6 +44,10 @@ import {
   buildOpsNangoQuotaEmail,
   type OpsNangoQuotaInput
 } from "@/lib/email/templates/ops-nango-quota";
+import {
+  buildOpsProvisioningStuckEmail,
+  type OpsProvisioningStuckInput
+} from "@/lib/email/templates/ops-provisioning-stuck";
 
 /**
  * Prefix ops subjects for ENTERPRISE tenants so SLA-bound incidents jump
@@ -327,6 +331,44 @@ export async function sendOpsNangoQuotaEmail(
     logger.warn("ops Nango quota email failed", {
       used: input.used,
       limit: input.limit,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return false;
+  }
+}
+
+/**
+ * Fire-and-forget "provisioning stuck" ops alert; never throws. Returns true
+ * when sent (caller owns dedupe via ops_provisioning_stuck_alert_sent).
+ */
+export async function sendOpsProvisioningStuckEmail(
+  input: Omit<OpsProvisioningStuckInput, "siteUrl">
+): Promise<boolean> {
+  try {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      logger.warn("ops provisioning-stuck email skipped: RESEND_API_KEY missing", {
+        businessId: input.businessId
+      });
+      return false;
+    }
+    const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+    const toEmail = opsNotificationEmail();
+    const { subject, text, html } = buildOpsProvisioningStuckEmail({ ...input, siteUrl });
+    await sendOwnerEmail(apiKey, toEmail, await tagOpsSubjectForTier(subject, input.businessId), {
+      text,
+      html
+    });
+    logger.info("ops provisioning-stuck email sent", {
+      businessId: input.businessId,
+      phase: input.phase,
+      percent: input.percent,
+      toEmail
+    });
+    return true;
+  } catch (err) {
+    logger.warn("ops provisioning-stuck email failed", {
+      businessId: input.businessId,
       error: err instanceof Error ? err.message : String(err)
     });
     return false;

@@ -25,6 +25,16 @@ import { providerUsesHostingerLifecycle, resolveVpsProvider } from "@/lib/vps/pr
 import { sharedHardwareFor } from "@/lib/vps/shared-hardware";
 import { resolveDeployedVpsSize, vpsSizeFromHostingerPlan, type VpsSize } from "@/lib/vps/size";
 import type { OpsHardwareMigrationInput } from "@/lib/email/templates/ops-hardware-migration";
+import {
+  enqueueProvisioningJob,
+  markProvisioningJobOutcome,
+  runProvisioningJob,
+  type EnqueueProvisioningJobInput,
+  type RunProvisioningJobDeps
+} from "@/lib/provisioning/jobs";
+import { getLatestProvisioningStatus } from "@/lib/provisioning/progress";
+import { tryRecoverDeployCompleteNewBox } from "@/lib/vps/migration-cutover-recovery";
+import { sshExec } from "@/lib/hostinger/ssh";
 
 const DEFAULT_SAVINGS_THRESHOLD = 0.1;
 const DEFAULT_RENEWAL_WINDOW_DAYS = 30;
@@ -98,6 +108,17 @@ export type TermRenewalSweepDeps = {
     skipPoolAdopt?: boolean;
     suppressOwnerNotify?: boolean;
   }) => Promise<{ vpsId: string; hostingerBillingSubscriptionId: string | null }>;
+  /** Injected so unit tests can skip the real provisioning_jobs ledger. */
+  enqueueProvisioningJob?: (input: EnqueueProvisioningJobInput) => Promise<void>;
+  runProvisioningJob?: typeof runProvisioningJob;
+  /** Marks the ledger succeeded only after cutover finishes. */
+  markProvisioningJobOutcome?: typeof markProvisioningJobOutcome;
+  /**
+   * When provision throws, probe whether the new box is already deploy-complete
+   * so cutover can continue. Tests inject a stub; production uses the shared
+   * recovery helper.
+   */
+  tryRecoverDeployCompleteNewBox?: typeof tryRecoverDeployCompleteNewBox;
   releaseVpsToPool: (input: {
     vmId: number;
     plan: VpsSize;
@@ -118,7 +139,22 @@ type SweepCandidate = {
 };
 
 function errMsg(err: unknown): string {
-  return err instanceof Error ? err.message: String(err);
+  return err instanceof Error ? err.message : String(err);
+}
+
+async function markTermRenewalJobFailed(
+  deps: Pick<TermRenewalSweepDeps, "markProvisioningJobOutcome">,
+  businessId: string,
+  message: string
+): Promise<void> {
+  /* c8 ignore next -- production ledger default; tests inject */
+  const mark = deps.markProvisioningJobOutcome ?? markProvisioningJobOutcome;
+  await mark(businessId, "failed", message).catch((err: unknown) => {
+    logger.warn("term-renewal sweep: markProvisioningJobOutcome(failed) failed", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  });
 }
 
 function tenantVmId(business: BusinessRow): number | null {
@@ -577,18 +613,87 @@ async function migrateTenantTermRenewal(
 
   let newProv: { vpsId: string; hostingerBillingSubscriptionId: string | null };
   try {
-    newProv = await deps.orchestrateProvisioning({
+    /* c8 ignore start -- production ledger defaults; tests inject */
+    const enqueue = deps.enqueueProvisioningJob ?? enqueueProvisioningJob;
+    const runJob = deps.runProvisioningJob ?? runProvisioningJob;
+    /* c8 ignore stop */
+    await enqueue({
       businessId,
       tier,
       vpsSize,
       billingPeriod: activeSub?.billing_period ?? null,
+      suppressOwnerNotify: true,
       skipPoolAdopt: true,
-      suppressOwnerNotify: true
+      purpose: "term_renewal"
     });
+    const jobOut = await runJob(
+      {
+        business_id: businessId,
+        tier,
+        vps_size: vpsSize,
+        billing_period: activeSub?.billing_period ?? null,
+        suppress_owner_notify: true,
+        skip_pool_adopt: true,
+        purpose: "term_renewal"
+      },
+      {
+        orchestrate: async (input) => {
+          const out = await deps.orchestrateProvisioning({
+            businessId: input.businessId,
+            tier: input.tier,
+            vpsSize,
+            billingPeriod: input.billingPeriod,
+            skipPoolAdopt: true,
+            suppressOwnerNotify: true
+          });
+          return {
+            hostingerBillingSubscriptionId: out.hostingerBillingSubscriptionId,
+            vpsId: out.vpsId
+          };
+        }
+      } satisfies RunProvisioningJobDeps
+    );
+    if (!jobOut.vpsId) {
+      throw new Error("term-renewal provision returned no vpsId");
+    }
+    newProv = {
+      vpsId: jobOut.vpsId,
+      hostingerBillingSubscriptionId: jobOut.hostingerBillingSubscriptionId
+    };
   } catch (err) {
-    const detail = `provisioning failed: ${errMsg(err)}: old box untouched and still renewing`;
-    await notify("failed", detail);
-    return { ok: false, detail };
+    /* c8 ignore next -- production default recover factory */
+    const recover =
+      deps.tryRecoverDeployCompleteNewBox ??
+      /* c8 ignore next 12 -- production default recover + SSH probe */
+      ((input, probeDeps) =>
+        tryRecoverDeployCompleteNewBox(input, {
+          ...probeDeps,
+          remoteExec: async (args) => {
+            const r = await sshExec(args);
+            return { exitCode: r.exitCode, stdout: r.stdout, stderr: r.stderr };
+          }
+        }));
+    const recovered = await recover(
+      { businessId, oldVmId },
+      {
+        getBusiness: deps.getBusiness,
+        getLatestProvisioningStatus,
+        getVirtualMachine: (id) => deps.hostinger.getVirtualMachine(id),
+        getActiveVpsSshKey: deps.getActiveVpsSshKey
+      }
+    );
+    if (recovered) {
+      logger.warn(
+        "term-renewal sweep: provision threw but new box looks deploy-complete; continuing cutover",
+        { businessId, oldVmId, newVpsId: recovered.vpsId, error: errMsg(err) }
+      );
+      newProv = recovered;
+    } else {
+      const detail = `provisioning failed: ${errMsg(err)}: old box untouched and still renewing`;
+      await notify("failed", detail);
+      await markTermRenewalJobFailed(deps, businessId, detail);
+      return { ok: false, detail };
+    }
   }
 
   const newVmId = Number.parseInt(newProv.vpsId, 10);
@@ -604,6 +709,7 @@ async function migrateTenantTermRenewal(
       `cannot resolve new VM ${newVmId} IP: restore manually (tarball: ${backupPath}); ` +
       "old box left running + renewing";
     await notify("failed", detail);
+    await markTermRenewalJobFailed(deps, businessId, detail);
     return { ok: false, detail };
   }
 
@@ -614,6 +720,7 @@ async function migrateTenantTermRenewal(
       `restore failed: ${errMsg(err)}: tarball safe at ${backupPath}; ` +
       "old box left running + renewing (it still has the live data)";
     await notify("failed", detail);
+    await markTermRenewalJobFailed(deps, businessId, detail);
     return { ok: false, detail };
   }
 
@@ -653,6 +760,7 @@ async function migrateTenantTermRenewal(
       `cutover done (new srv${newVmId} serving) but billing repoint failed: ` +
       "old box left RUNNING + RENEWING. Fix subscriptions.hostinger_billing_subscription_id manually.";
     await notify("failed", detail);
+    await markTermRenewalJobFailed(deps, businessId, detail);
     return { ok: false, detail };
   }
 
@@ -727,6 +835,7 @@ async function migrateTenantTermRenewal(
       `pooled=${pooled}, never_renew=${neverRenewMarked}. ` +
       `Mark vps_inventory.never_renew=true for srv${oldVmId} manually before the next adopt.`;
     await notify("failed", detail);
+    await markTermRenewalJobFailed(deps, businessId, detail);
     return { ok: false, detail };
   }
 
@@ -749,6 +858,15 @@ async function migrateTenantTermRenewal(
     `stopped=${oldVmStopped}, billing=${oldBillingHandling}, pooled with never_renew.${followUp} ` +
     `Backup: ${backupPath}.`;
   await notify("completed", detail);
+
+  /* c8 ignore next -- production ledger default; tests inject */
+  const markOutcome = deps.markProvisioningJobOutcome ?? markProvisioningJobOutcome;
+  await markOutcome(businessId, "succeeded").catch((err: unknown) => {
+    logger.warn("term-renewal sweep: markProvisioningJobOutcome(succeeded) failed", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  });
 
   logger.info("term-renewal sweep: migration complete", {
     businessId,

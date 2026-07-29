@@ -94,6 +94,29 @@ function makeDeps(overrides: Partial<MigrateVpsSizeDeps> = {}): MigrateVpsSizeDe
       vpsId: "1900001",
       hostingerBillingSubscriptionId: "hbs-new"
     })),
+    enqueueProvisioningJob: vi.fn(async () => undefined),
+    runProvisioningJob: vi.fn(async (job, jobDeps) => {
+      const tier =
+        job.tier === "starter" || job.tier === "enterprise" ? job.tier : "standard";
+      const out = await jobDeps.orchestrate({
+        businessId: job.business_id,
+        tier,
+        vpsSize: (job.vps_size as "kvm1" | "kvm2" | "kvm4" | "kvm8" | null) ?? "kvm4",
+        billingPeriod:
+          job.billing_period === "monthly" ||
+          job.billing_period === "annual" ||
+          job.billing_period === "biennial"
+            ? job.billing_period
+            : null,
+        suppressOwnerNotify: job.suppress_owner_notify === true ? true : undefined,
+        skipPoolAdopt: job.skip_pool_adopt === true ? true : undefined
+      });
+      return {
+        hostingerBillingSubscriptionId: out.hostingerBillingSubscriptionId,
+        vpsId: out.vpsId ?? "1900001"
+      };
+    }),
+    markProvisioningJobOutcome: vi.fn(async () => undefined),
     sendOpsEmail: vi.fn(async () => undefined),
     ...overrides
   };
@@ -289,7 +312,8 @@ describe("migrateBusinessVpsSize — provision + pin", () => {
     const deps = makeDeps({
       orchestrateProvisioning: vi.fn(async () => {
         throw new Error("hostinger 402");
-      })
+      }),
+      tryRecoverDeployCompleteNewBox: vi.fn(async () => null)
     });
     const out = await migrateBusinessVpsSize(input, deps);
     expect(out.ok).toBe(false);
@@ -299,8 +323,48 @@ describe("migrateBusinessVpsSize — provision + pin", () => {
     }
     expect(deps.updateBusinessVpsSize).not.toHaveBeenCalled();
     expect(deps.hostinger.stopVirtualMachine).not.toHaveBeenCalled();
+    expect(deps.markProvisioningJobOutcome).toHaveBeenCalledWith(
+      BIZ,
+      "failed",
+      expect.stringContaining("hostinger 402")
+    );
   });
 
+  it("continues cutover when provision throws but new box is deploy-complete", async () => {
+    const deps = makeDeps({
+      orchestrateProvisioning: vi.fn(async () => {
+        throw new Error("vercel killed mid-deploy");
+      }),
+      tryRecoverDeployCompleteNewBox: vi.fn(async (_input, probeDeps) => {
+        await probeDeps.getVirtualMachine?.(1900001);
+        return {
+          vpsId: "1900001",
+          hostingerBillingSubscriptionId: "hbs-new"
+        };
+      })
+    });
+    const out = await migrateBusinessVpsSize(input, deps);
+    expect(out.ok).toBe(true);
+    expect(deps.restoreBusinessData).toHaveBeenCalled();
+    expect(deps.updateBusinessVpsSize).toHaveBeenCalledWith(BIZ, "kvm4");
+    expect(deps.hostinger.stopVirtualMachine).toHaveBeenCalledWith(1800985);
+  });
+
+  it("fails when provision returns no vpsId", async () => {
+    const deps = makeDeps({
+      runProvisioningJob: vi.fn(async () => ({
+        hostingerBillingSubscriptionId: "hbs-new",
+        vpsId: ""
+      })),
+      tryRecoverDeployCompleteNewBox: vi.fn(async () => null)
+    });
+    const out = await migrateBusinessVpsSize(input, deps);
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.stage).toBe("provision");
+      expect(out.error).toMatch(/no vpsId/);
+    }
+  });
   it("pins the size only after provisioning succeeds", async () => {
     const deps = makeDeps();
     const out = await migrateBusinessVpsSize(input, deps);
@@ -314,6 +378,33 @@ describe("migrateBusinessVpsSize — provision + pin", () => {
       vpsSize: "kvm4",
       suppressOwnerNotify: true
     });
+    expect(deps.markProvisioningJobOutcome).toHaveBeenCalledWith(BIZ, "succeeded");
+  });
+
+  it("still completes when the post-cutover ledger mark throws", async () => {
+    const deps = makeDeps({
+      markProvisioningJobOutcome: vi.fn(async () => {
+        throw new Error("ledger down");
+      })
+    });
+    const out = await migrateBusinessVpsSize(input, deps);
+    expect(out.ok).toBe(true);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("markProvisioningJobOutcome"),
+      expect.objectContaining({ error: "ledger down" })
+    );
+
+    const deps2 = makeDeps({
+      markProvisioningJobOutcome: vi.fn(async () => {
+        throw "ledger string fail";
+      })
+    });
+    const out2 = await migrateBusinessVpsSize(input, deps2);
+    expect(out2.ok).toBe(true);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("markProvisioningJobOutcome"),
+      expect.objectContaining({ error: "ledger string fail" })
+    );
   });
 });
 
@@ -338,6 +429,11 @@ describe("migrateBusinessVpsSize — restore stage (fail-closed)", () => {
       expect(out.error).toContain("backups/biz.tgz");
     }
     expect(deps.hostinger.stopVirtualMachine).not.toHaveBeenCalled();
+    expect(deps.markProvisioningJobOutcome).toHaveBeenCalledWith(
+      BIZ,
+      "failed",
+      expect.stringContaining("cannot resolve")
+    );
   });
 
   it("fails when the restore throws, keeping the old box running", async () => {
@@ -354,6 +450,43 @@ describe("migrateBusinessVpsSize — restore stage (fail-closed)", () => {
     }
     expect(deps.hostinger.stopVirtualMachine).not.toHaveBeenCalled();
     expect(deps.hostinger.disableBillingAutoRenewal).not.toHaveBeenCalled();
+    expect(deps.markProvisioningJobOutcome).toHaveBeenCalledWith(
+      BIZ,
+      "failed",
+      expect.stringContaining("tar corrupt")
+    );
+  });
+
+  it("still returns restore failure when the failed-ledger mark throws", async () => {
+    const deps = makeDeps({
+      restoreBusinessData: vi.fn(async () => {
+        throw new Error("tar corrupt");
+      }),
+      markProvisioningJobOutcome: vi.fn(async () => {
+        throw new Error("ledger down");
+      })
+    });
+    const out = await migrateBusinessVpsSize(input, deps);
+    expect(out.ok).toBe(false);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("markProvisioningJobOutcome(failed)"),
+      expect.objectContaining({ error: "ledger down" })
+    );
+
+    const deps2 = makeDeps({
+      restoreBusinessData: vi.fn(async () => {
+        throw "tar string fail";
+      }),
+      markProvisioningJobOutcome: vi.fn(async () => {
+        throw "ledger string fail";
+      })
+    });
+    const out2 = await migrateBusinessVpsSize(input, deps2);
+    expect(out2.ok).toBe(false);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("markProvisioningJobOutcome(failed)"),
+      expect.objectContaining({ error: "ledger string fail" })
+    );
   });
 });
 
@@ -374,6 +507,11 @@ describe("migrateBusinessVpsSize — billing repoint (fail-closed)", () => {
     expect(loggerErrorMock).toHaveBeenCalledWith(
       "migrate-size: billing repoint failed",
       expect.objectContaining({ error: "db down" })
+    );
+    expect(deps.markProvisioningJobOutcome).toHaveBeenCalledWith(
+      BIZ,
+      "failed",
+      expect.stringContaining("RUNNING + RENEWING")
     );
   });
 

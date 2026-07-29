@@ -62,7 +62,7 @@ import {
 // tore it down at 5 minutes with no error row. 800s covers the observed
 // worst case; the provisioning-watchdog cron is the backstop for anything
 // that still dies (see src/lib/provisioning/jobs.ts).
-export const maxDuration = 800;
+export const maxDuration = 1800;
 
 async function fetchSubscriptionPeriodCacheOrEmpty(
   subscriptionId: string,

@@ -33,9 +33,9 @@ import { sendOpsHardwareMigrationEmail } from "@/lib/email/ops-notify";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { logger } from "@/lib/logger";
 
-// Vercel Pro ceiling — the same budget the Stripe webhook's change-plan
-// migration (identical flow) already lives within.
-export const maxDuration = 300;
+// Extended Vercel Pro ceiling (1800s): migrate-size runs the same
+// multi-minute provision path as signup/term-renewal.
+export const maxDuration = 1800;
 
 const paramsSchema = z.object({ businessId: z.string().uuid() });
 const bodySchema = z.object({ size: z.string() });

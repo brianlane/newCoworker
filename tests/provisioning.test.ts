@@ -16,12 +16,23 @@ vi.mock("@/lib/provisioning/progress", () => ({
     status: "thinking",
     log_payload: {}
   }),
-  hasPriorOpsNewSignupAlert: vi.fn().mockResolvedValue(false)
+  hasPriorOpsNewSignupAlert: vi.fn().mockResolvedValue(false),
+  // Detached deploy poll: default to terminal success so hermetic tests that
+  // only stub remoteExec with okExec() still complete without a real exit file.
+  getLatestProvisioningStatus: vi.fn().mockResolvedValue({
+    percent: 100,
+    phase: "deploy_client_complete",
+    updatedAt: "2026-01-01T00:00:00.000Z",
+    logStatus: "thinking"
+  })
 }));
 
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
 import { HQ_BUSINESS_ID } from "@/lib/vps/shared-hardware";
-import { recordProvisioningProgress, hasPriorOpsNewSignupAlert } from "@/lib/provisioning/progress";
+import {
+  recordProvisioningProgress,
+  hasPriorOpsNewSignupAlert
+} from "@/lib/provisioning/progress";
 import * as fs from "fs";
 import type { ProvisionVpsForBusinessResult } from "@/lib/hostinger/provision";
 import type { SshExecResult } from "@/lib/hostinger/ssh";
@@ -392,6 +403,48 @@ describe("provisioning/orchestrate", () => {
     // Token was minted (pending) but never confirmed, so a retry reuses it.
     expect(issueGatewayToken).toHaveBeenCalled();
     expect(markGatewayTokenDeployed).not.toHaveBeenCalled();
+  });
+
+  it("records deploy_exception when detached deploy throws", async () => {
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    await orchestrateProvisioning(
+      { businessId: "biz-uuid-1", tier: "standard", ownerEmail: "o@test.com" },
+      {
+        vpsProvisioner,
+        remoteExec,
+        latestProvisioningStatus: async () => {
+          throw new Error("progress db down");
+        },
+        sleep: async () => undefined
+      }
+    );
+    expect(recordProvisioningProgress).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "deploy_exception", status: "error" })
+    );
+    expect(markGatewayTokenDeployed).not.toHaveBeenCalled();
+  });
+
+  it("records deploy_exception for non-Error throws too", async () => {
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    await orchestrateProvisioning(
+      { businessId: "biz-uuid-1", tier: "standard", ownerEmail: "o@test.com" },
+      {
+        vpsProvisioner,
+        remoteExec,
+        latestProvisioningStatus: async () => {
+          throw "progress string down";
+        },
+        sleep: async () => undefined
+      }
+    );
+    expect(recordProvisioningProgress).toHaveBeenCalledWith(
+      expect.objectContaining({
+        phase: "deploy_exception",
+        message: "progress string down"
+      })
+    );
   });
 
   it("aborts provisioning when the per-tenant token lookup fails", async () => {

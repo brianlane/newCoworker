@@ -32,7 +32,8 @@ import {
   sendOpsBillingPostureEmail,
   sendOpsMarginAlertEmail,
   sendOpsNewSignupEmail,
-  sendOpsNangoQuotaEmail
+  sendOpsNangoQuotaEmail,
+  sendOpsProvisioningStuckEmail
 } from "@/lib/email/ops-notify";
 import { getBusiness } from "@/lib/db/businesses";
 
@@ -748,6 +749,67 @@ describe("sendOpsNangoQuotaEmail", () => {
     await expect(sendOpsNangoQuotaEmail(quotaInput)).resolves.toBe(false);
     expect(loggerWarnMock).toHaveBeenCalledWith(
       "ops Nango quota email failed",
+      expect.objectContaining({ error: "smtp string failure" })
+    );
+  });
+});
+
+describe("sendOpsProvisioningStuckEmail", () => {
+  const stuckInput = {
+    businessId: "biz-1",
+    businessName: "KYP Ads",
+    phase: "remote_deploy_starting",
+    percent: 40,
+    ageMinutes: 25,
+    purpose: "term_renewal",
+    trigger: "stuck_progress_scan"
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.RESEND_API_KEY = "resend_test";
+    process.env.NEXT_PUBLIC_APP_URL = "https://www.example.com";
+    delete process.env.OPS_NOTIFICATION_EMAIL;
+    sendOwnerEmailMock.mockResolvedValue(undefined);
+  });
+
+  it("sends the stuck alert to the ops inbox", async () => {
+    await expect(sendOpsProvisioningStuckEmail(stuckInput)).resolves.toBe(true);
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "team@newcoworker.com",
+      expect.stringContaining("Provisioning stuck"),
+      expect.objectContaining({
+        text: expect.stringContaining("term_renewal")
+      })
+    );
+  });
+
+  it("returns false when RESEND_API_KEY is missing", async () => {
+    delete process.env.RESEND_API_KEY;
+    await expect(sendOpsProvisioningStuckEmail(stuckInput)).resolves.toBe(false);
+    expect(sendOwnerEmailMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back to localhost site URL when NEXT_PUBLIC_APP_URL is unset", async () => {
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    await expect(sendOpsProvisioningStuckEmail(stuckInput)).resolves.toBe(true);
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "team@newcoworker.com",
+      expect.any(String),
+      expect.objectContaining({ html: expect.stringContaining("http://localhost:3000") })
+    );
+  });
+
+  it("returns false when send throws (Error and non-Error)", async () => {
+    sendOwnerEmailMock.mockRejectedValueOnce(new Error("smtp down"));
+    await expect(sendOpsProvisioningStuckEmail(stuckInput)).resolves.toBe(false);
+
+    sendOwnerEmailMock.mockRejectedValueOnce("smtp string failure");
+    await expect(sendOpsProvisioningStuckEmail(stuckInput)).resolves.toBe(false);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops provisioning-stuck email failed",
       expect.objectContaining({ error: "smtp string failure" })
     );
   });

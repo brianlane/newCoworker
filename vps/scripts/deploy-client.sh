@@ -91,7 +91,11 @@ fi
 # local-fallback decision below keys on this flag instead of re-testing the
 # size string.
 if [[ "$VPS_SIZE" == "kvm1" ]]; then HAS_LOCAL_MODEL="false"; else HAS_LOCAL_MODEL="true"; fi
-LOG="/var/log/deploy-client-${BUSINESS_ID:-unknown}.log"
+: "${BUSINESS_ID:?BUSINESS_ID is required}"
+LOG="/var/log/deploy-client-${BUSINESS_ID}.log"
+LOCK_FILE="/var/lock/nc-deploy-${BUSINESS_ID}.lock"
+EXIT_FILE="/var/run/nc-deploy-${BUSINESS_ID}.exit"
+PID_FILE="/var/run/nc-deploy-${BUSINESS_ID}.pid"
 
 log() { echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" | tee -a "$LOG"; }
 
@@ -112,6 +116,32 @@ report_progress() {
     -H "Authorization: Bearer ${PROVISIONING_PROGRESS_TOKEN}" \
     -d "$json" || true
 }
+
+# Single-flight: a second deploy for the same tenant must not stack on top
+# of an in-flight one (watchdog retry while the first nohup is still
+# running). Exit 75 (EX_TEMPFAIL) so the orchestrator can attach-and-poll.
+mkdir -p /var/lock /var/run
+exec 9>"$LOCK_FILE"
+if ! flock -n 9; then
+  log "deploy already running (lock ${LOCK_FILE}); refusing to start a second copy"
+  exit 75
+fi
+echo $$ > "$PID_FILE"
+rm -f "$EXIT_FILE"
+
+finish_deploy() {
+  local code=$?
+  # Always write the exit file before reporting progress so a poller that
+  # races the progress POST still sees a terminal code.
+  echo "$code" > "$EXIT_FILE" || true
+  if [[ "$code" -eq 0 ]]; then
+    report_progress 100 "deploy_client_complete" "deploy-client.sh finished successfully"
+  else
+    report_progress 95 "deploy_client_failed" "deploy-client.sh exited ${code}"
+  fi
+  rm -f "$PID_FILE" || true
+}
+trap finish_deploy EXIT
 
 log "=== Deploying client: ${BUSINESS_ID} (TIER=${TIER}, VPS_SIZE=${VPS_SIZE}) ==="
 

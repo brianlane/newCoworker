@@ -142,6 +142,29 @@ function makeDeps(overrides: Partial<TermRenewalSweepDeps> = {}): TermRenewalSwe
       vpsId: "1900001",
       hostingerBillingSubscriptionId: "hbs-new"
     })),
+    enqueueProvisioningJob: vi.fn(async () => undefined),
+    runProvisioningJob: vi.fn(async (job, jobDeps) => {
+      const tier =
+        job.tier === "starter" || job.tier === "enterprise" ? job.tier : "standard";
+      const out = await jobDeps.orchestrate({
+        businessId: job.business_id,
+        tier,
+        vpsSize: (job.vps_size as "kvm1" | "kvm2" | "kvm4" | "kvm8" | null) ?? "kvm2",
+        billingPeriod:
+          job.billing_period === "monthly" ||
+          job.billing_period === "annual" ||
+          job.billing_period === "biennial"
+            ? job.billing_period
+            : null,
+        skipPoolAdopt: job.skip_pool_adopt === true ? true : undefined,
+        suppressOwnerNotify: job.suppress_owner_notify === true ? true : undefined
+      });
+      return {
+        hostingerBillingSubscriptionId: out.hostingerBillingSubscriptionId,
+        vpsId: out.vpsId ?? "1900001"
+      };
+    }),
+    markProvisioningJobOutcome: vi.fn(async () => undefined),
     releaseVpsToPool: vi.fn(async () => undefined),
     markVpsNeverRenew: vi.fn(async () => undefined),
     sendOpsEmail: vi.fn(async () => undefined),
@@ -221,8 +244,36 @@ describe("runTermRenewalSweep", () => {
   it("migrates assigned never_renew boxes (they are the migration signal)", async () => {
     // never_renew on a live tenant box is why billing-posture nags; the sweep
     // must migrate them, not skip them.
-    const result = await runTermRenewalSweep(makeDeps(), { now: NOW });
+    const deps = makeDeps();
+    const result = await runTermRenewalSweep(deps, { now: NOW });
     expect(result.migrated).toBe(1);
+    expect(deps.markProvisioningJobOutcome).toHaveBeenCalledWith(BIZ, "succeeded");
+  });
+
+  it("still counts a migration when the post-cutover ledger mark throws", async () => {
+    const deps = makeDeps({
+      markProvisioningJobOutcome: vi.fn(async () => {
+        throw "ledger string fail";
+      })
+    });
+    const result = await runTermRenewalSweep(deps, { now: NOW });
+    expect(result.migrated).toBe(1);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("markProvisioningJobOutcome"),
+      expect.objectContaining({ error: "ledger string fail" })
+    );
+
+    const deps2 = makeDeps({
+      markProvisioningJobOutcome: vi.fn(async () => {
+        throw new Error("ledger down");
+      })
+    });
+    const result2 = await runTermRenewalSweep(deps2, { now: NOW });
+    expect(result2.migrated).toBe(1);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("markProvisioningJobOutcome"),
+      expect.objectContaining({ error: "ledger down" })
+    );
   });
 
   it("skips when a migration lease is already held", async () => {
@@ -387,7 +438,48 @@ describe("runTermRenewalSweep", () => {
     const deps = makeDeps({
       orchestrateProvisioning: vi.fn(async () => {
         throw new Error("purchase failed");
+      }),
+      tryRecoverDeployCompleteNewBox: vi.fn(async () => null)
+    });
+    const result = await runTermRenewalSweep(deps, { now: NOW });
+    expect(result.findings[0]?.kind).toBe("migration_failed");
+    expect(deps.hostinger.disableBillingAutoRenewal).not.toHaveBeenCalled();
+    expect(deps.markProvisioningJobOutcome).toHaveBeenCalledWith(
+      BIZ,
+      "failed",
+      expect.stringContaining("purchase failed")
+    );
+  });
+
+  it("continues cutover when provision throws but new box is deploy-complete", async () => {
+    const deps = makeDeps({
+      orchestrateProvisioning: vi.fn(async () => {
+        throw new Error("vercel killed mid-deploy");
+      }),
+      tryRecoverDeployCompleteNewBox: vi.fn(async (_input, probeDeps) => {
+        await probeDeps.getVirtualMachine?.(1900001);
+        return {
+          vpsId: "1900001",
+          hostingerBillingSubscriptionId: "hbs-new"
+        };
       })
+    });
+    const result = await runTermRenewalSweep(deps, { now: NOW });
+    expect(result.migrated).toBe(1);
+    expect(deps.restoreBusinessData).toHaveBeenCalled();
+    expect(deps.hostinger.disableBillingAutoRenewal).toHaveBeenCalledWith("hbs-old");
+    expect(deps.sendOpsEmail).toHaveBeenCalledWith(
+      expect.objectContaining({ phase: "completed" })
+    );
+  });
+
+  it("fails when provision returns no vpsId and recovery finds nothing", async () => {
+    const deps = makeDeps({
+      runProvisioningJob: vi.fn(async () => ({
+        hostingerBillingSubscriptionId: "hbs-new",
+        vpsId: ""
+      })),
+      tryRecoverDeployCompleteNewBox: vi.fn(async () => null)
     });
     const result = await runTermRenewalSweep(deps, { now: NOW });
     expect(result.findings[0]?.kind).toBe("migration_failed");
@@ -403,6 +495,43 @@ describe("runTermRenewalSweep", () => {
     const result = await runTermRenewalSweep(deps, { now: NOW });
     expect(result.findings[0]?.kind).toBe("migration_failed");
     expect(deps.hostinger.disableBillingAutoRenewal).not.toHaveBeenCalled();
+    expect(deps.markProvisioningJobOutcome).toHaveBeenCalledWith(
+      BIZ,
+      "failed",
+      expect.stringContaining("restore boom")
+    );
+  });
+
+  it("still records migration_failed when the failed-ledger mark throws", async () => {
+    const deps = makeDeps({
+      restoreBusinessData: vi.fn(async () => {
+        throw new Error("restore boom");
+      }),
+      markProvisioningJobOutcome: vi.fn(async () => {
+        throw new Error("ledger down");
+      })
+    });
+    const result = await runTermRenewalSweep(deps, { now: NOW });
+    expect(result.findings[0]?.kind).toBe("migration_failed");
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("markProvisioningJobOutcome(failed)"),
+      expect.objectContaining({ error: "ledger down" })
+    );
+
+    const deps2 = makeDeps({
+      restoreBusinessData: vi.fn(async () => {
+        throw "restore string";
+      }),
+      markProvisioningJobOutcome: vi.fn(async () => {
+        throw "ledger string";
+      })
+    });
+    const result2 = await runTermRenewalSweep(deps2, { now: NOW });
+    expect(result2.findings[0]?.kind).toBe("migration_failed");
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      expect.stringContaining("markProvisioningJobOutcome(failed)"),
+      expect.objectContaining({ error: "ledger string" })
+    );
   });
 
   it("billing repoint failure leaves the old box renewing", async () => {
@@ -414,6 +543,11 @@ describe("runTermRenewalSweep", () => {
     const result = await runTermRenewalSweep(deps, { now: NOW });
     expect(result.findings[0]?.kind).toBe("migration_failed");
     expect(deps.hostinger.disableBillingAutoRenewal).not.toHaveBeenCalled();
+    expect(deps.markProvisioningJobOutcome).toHaveBeenCalledWith(
+      BIZ,
+      "failed",
+      expect.stringContaining("billing repoint failed")
+    );
   });
 
   it("handles VM lookup failure during candidate scan", async () => {
@@ -580,6 +714,11 @@ describe("runTermRenewalSweep", () => {
         detail: expect.stringContaining("old-box bookkeeping failed")
       })
     );
+    expect(poolFail.markProvisioningJobOutcome).toHaveBeenCalledWith(
+      BIZ,
+      "failed",
+      expect.stringContaining("old-box bookkeeping failed")
+    );
 
     const neverRenewFail = makeDeps({
       markVpsNeverRenew: vi.fn(async () => {
@@ -589,6 +728,11 @@ describe("runTermRenewalSweep", () => {
     const neverRenewResult = await runTermRenewalSweep(neverRenewFail, { now: NOW });
     expect(neverRenewResult.migrated).toBe(0);
     expect(neverRenewResult.findings[0]?.kind).toBe("migration_failed");
+    expect(neverRenewFail.markProvisioningJobOutcome).toHaveBeenCalledWith(
+      BIZ,
+      "failed",
+      expect.stringContaining("old-box bookkeeping failed")
+    );
   });
 
   it("completes with FOLLOW-UP when old billing disable fails but pool bookkeeping succeeds", async () => {

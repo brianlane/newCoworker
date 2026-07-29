@@ -1418,4 +1418,13 @@ describe("deploy-client.sh cloudflared tunnel step (contract)", () => {
       /already installed with this tunnel token; restarting/
     );
   });
+
+  it("acquires flock, writes exit file, and reports terminal progress", () => {
+    expect(script).toMatch(/nc-deploy-\$\{BUSINESS_ID\}\.lock/);
+    expect(script).toMatch(/nc-deploy-\$\{BUSINESS_ID\}\.exit/);
+    expect(script).toMatch(/flock -n 9/);
+    expect(script).toMatch(/deploy_client_complete/);
+    expect(script).toMatch(/deploy_client_failed/);
+    expect(script).toMatch(/trap finish_deploy EXIT/);
+  });
 });
