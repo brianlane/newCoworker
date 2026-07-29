@@ -1035,11 +1035,10 @@ async function acquireVps(args: {
   }
 
   // Stamp before the purchase call so the orphan wait only accepts VMs
-  // created for THIS attempt (minus 60s clock-skew slack). An unrelated
-  // older fail-but-charge of the same size must not end the ~5 min poll
-  // before Hostinger materializes the box we just paid for.
+  // created for THIS attempt (5s clock-skew slack). A longer lookback can
+  // attribute an unrelated same-size fail-but-charge from seconds earlier.
   const purchaseStartedAt = now();
-  const orphanMinCreatedAtMs = purchaseStartedAt - 60_000;
+  const orphanMinCreatedAtMs = purchaseStartedAt - 5_000;
 
   let purchased: ProvisionVpsForBusinessResult;
   try {

@@ -3517,8 +3517,8 @@ describe("provisioning/orchestrate", () => {
       const pool = makePool();
       const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
       const orphanReconciler = vi.fn().mockResolvedValue([
-        { vmId: 222, plan: "kvm1", createdAtMs: 990_000 },
-        { vmId: 111, plan: "kvm1", createdAtMs: 950_000 }
+        { vmId: 222, plan: "kvm1", createdAtMs: 999_000 },
+        { vmId: 111, plan: "kvm1", createdAtMs: 996_000 }
       ]);
       const vpsAdopter = vi.fn().mockResolvedValue(makeVpsStub("111"));
       const remoteExec = vi.fn().mockResolvedValue(okExec());
@@ -3552,11 +3552,11 @@ describe("provisioning/orchestrate", () => {
       const orphanReconciler = vi
         .fn()
         .mockResolvedValueOnce([
-          { vmId: 111, plan: "kvm1", createdAtMs: 100_000 } // older than purchase - 60s
+          { vmId: 111, plan: "kvm1", createdAtMs: 100_000 } // older than purchase - 5s
         ])
         .mockResolvedValueOnce([
           { vmId: 111, plan: "kvm1", createdAtMs: 100_000 },
-          { vmId: 1863856, plan: "kvm1", createdAtMs: 1_000_000 }
+          { vmId: 1863856, plan: "kvm1", createdAtMs: 999_000 }
         ]);
       const vpsAdopter = vi.fn().mockResolvedValue(makeVpsStub("1863856"));
       const remoteExec = vi.fn().mockResolvedValue(okExec());
