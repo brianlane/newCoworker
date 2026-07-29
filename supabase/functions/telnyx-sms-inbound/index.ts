@@ -102,7 +102,8 @@ async function evaluateAiFlows(
     .from("ai_flows")
     .select("id, definition")
     .eq("business_id", businessId)
-    .eq("enabled", true);
+    .eq("enabled", true)
+    .is("deleted_at", null);
   if (flowErr) {
     console.error("ai_flows load", flowErr);
     return { suppress: false, matched: [] };

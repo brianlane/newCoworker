@@ -12,7 +12,11 @@ import { NEEDS_HUMAN_TAG } from "../supabase/functions/_shared/needs_human";
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
 }));
+vi.mock("@/lib/residency/row-delete", () => ({
+  restoreContentRows: vi.fn()
+}));
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { restoreContentRows } from "@/lib/residency/row-delete";
 
 /**
  * The seeded "Human handoff — offer to team first" flow: created/enabled by
@@ -30,7 +34,7 @@ function fakeDb(results: Array<{ data?: unknown; error?: unknown }>) {
   const calls: Array<{ name: string; args: unknown[] }> = [];
   let idx = 0;
   const builder: Record<string, unknown> = {};
-  for (const m of ["select", "insert", "update", "eq", "limit", "maybeSingle", "single"]) {
+  for (const m of ["select", "insert", "update", "eq", "is", "order", "limit", "maybeSingle", "single"]) {
     builder[m] = (...args: unknown[]) => {
       calls.push({ name: m, args });
       return builder;
@@ -96,7 +100,7 @@ describe("ensureNeedsHumanTeamFlow", () => {
 
   it("re-enables an existing disabled flow instead of duplicating it", async () => {
     const { db, calls } = fakeDb([
-      { data: { id: "flow-1", enabled: false } },
+      { data: { id: "flow-1", enabled: false, deleted_at: null } },
       { data: null } // enable update
     ]);
     const res = await ensureNeedsHumanTeamFlow(BIZ, db as never);
@@ -105,8 +109,26 @@ describe("ensureNeedsHumanTeamFlow", () => {
     expect(update?.args[0]).toEqual({ enabled: true });
   });
 
+  it("restores a soft-deleted handoff flow instead of inserting a duplicate", async () => {
+    vi.mocked(restoreContentRows).mockResolvedValue({ central: 1, box: null });
+    const { db } = fakeDb([
+      { data: { id: "flow-soft", enabled: false, deleted_at: "2026-07-28T00:00:00Z" } }
+    ]);
+    const res = await ensureNeedsHumanTeamFlow(BIZ, db as never);
+    expect(res).toEqual({ flowId: "flow-soft", created: false });
+    expect(restoreContentRows).toHaveBeenCalledWith(
+      BIZ,
+      "ai_flows",
+      [{ column: "id", op: "eq", value: "flow-soft" }],
+      { client: db },
+      { enabled: true }
+    );
+  });
+
   it("an existing enabled flow is left untouched", async () => {
-    const { db, calls } = fakeDb([{ data: { id: "flow-1", enabled: true } }]);
+    const { db, calls } = fakeDb([
+      { data: { id: "flow-1", enabled: true, deleted_at: null } }
+    ]);
     const res = await ensureNeedsHumanTeamFlow(BIZ, db as never);
     expect(res).toEqual({ flowId: "flow-1", created: false });
     expect(calls.some((c) => c.name === "update" || c.name === "insert")).toBe(false);
@@ -122,16 +144,30 @@ describe("ensureNeedsHumanTeamFlow", () => {
       "ensureNeedsHumanTeamFlow"
     );
     const enableFail = fakeDb([
-      { data: { id: "flow-1", enabled: false } },
+      { data: { id: "flow-1", enabled: false, deleted_at: null } },
       { data: null, error: { message: "boom" } }
     ]);
     await expect(ensureNeedsHumanTeamFlow(BIZ, enableFail.db as never)).rejects.toThrow(
       "ensureNeedsHumanTeamFlow"
     );
+    vi.mocked(restoreContentRows).mockRejectedValue(new Error("box down"));
+    const restoreFail = fakeDb([
+      { data: { id: "flow-soft", enabled: false, deleted_at: "2026-07-28T00:00:00Z" } }
+    ]);
+    await expect(ensureNeedsHumanTeamFlow(BIZ, restoreFail.db as never)).rejects.toThrow(
+      "ensureNeedsHumanTeamFlow: restore"
+    );
+    vi.mocked(restoreContentRows).mockRejectedValue("tunnel dead");
+    const restoreFail2 = fakeDb([
+      { data: { id: "flow-soft", enabled: false, deleted_at: "2026-07-28T00:00:00Z" } }
+    ]);
+    await expect(ensureNeedsHumanTeamFlow(BIZ, restoreFail2.db as never)).rejects.toThrow(
+      "ensureNeedsHumanTeamFlow: restore: tunnel dead"
+    );
   });
 
   it("resolves the service client when none is injected", async () => {
-    const { db } = fakeDb([{ data: { id: "flow-1", enabled: true } }]);
+    const { db } = fakeDb([{ data: { id: "flow-1", enabled: true, deleted_at: null } }]);
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
     const res = await ensureNeedsHumanTeamFlow(BIZ);
     expect(res.flowId).toBe("flow-1");
@@ -167,7 +203,7 @@ describe("setNeedsHumanTeamFlowEnabled", () => {
 describe("applyNeedsHumanTeamFirstSetting", () => {
   it("ON: arms the flow, then flips the column", async () => {
     const { db, calls } = fakeDb([
-      { data: { id: "flow-1", enabled: true } }, // flow lookup (already armed)
+      { data: { id: "flow-1", enabled: true, deleted_at: null } }, // flow lookup (already armed)
       { data: null } // businesses column update
     ]);
     await applyNeedsHumanTeamFirstSetting(BIZ, true, db as never);
@@ -196,7 +232,7 @@ describe("applyNeedsHumanTeamFirstSetting", () => {
   it("ON with a failed column write AND a failed disarm: logs, still rethrows the column error", async () => {
     const err = vi.spyOn(console, "error").mockImplementation(() => {});
     const { db } = fakeDb([
-      { data: { id: "flow-1", enabled: true } },
+      { data: { id: "flow-1", enabled: true, deleted_at: null } },
       { data: null, error: { message: "boom" } }, // column write fails
       { data: null, error: { message: "also boom" } } // disarm fails too
     ]);

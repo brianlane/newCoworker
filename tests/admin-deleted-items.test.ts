@@ -120,6 +120,18 @@ describe("listDeletedItems (central mode)", () => {
         ],
         error: null
       }),
+      ai_flows: chain("limit", {
+        data: [
+          {
+            id: "f1",
+            name: "Demo follow-up",
+            enabled: false,
+            deleted_at: "2026-07-14T00:00:00Z",
+            deleted_by: "u1"
+          }
+        ],
+        error: null
+      }),
       sms_inbound_jobs: chain("limit", {
         data: [
           { id: "j1", customer_e164: "+1555", deleted_at: "2026-07-07T00:00:00Z", deleted_by: "u1" },
@@ -141,13 +153,19 @@ describe("listDeletedItems (central mode)", () => {
 
     const items = await listDeletedItems(BIZ, { client: db as never });
     expect(items.map((i) => i.type)).toEqual([
+      "aiflow",
       "sms_conversation",
       "email",
       "call",
       "notification",
       "chat_thread"
     ]);
-    const sms = items[0];
+    expect(items[0]).toMatchObject({
+      type: "aiflow",
+      id: "f1",
+      summary: "AiFlow: Demo follow-up (restores disabled)"
+    });
+    const sms = items[1];
     // 2 outbound + 1 inbound + 1 legacy inbound folded; newest stamp wins
     // the sort key.
     expect(sms).toMatchObject({
@@ -157,10 +175,10 @@ describe("listDeletedItems (central mode)", () => {
       deletedBy: "u2",
       summary: "SMS conversation with +1555 (4 messages)"
     });
-    expect(items[1].summary).toBe("Received email: Quote please — jane@x.com");
-    expect(items[2].summary).toContain("Inbound call with +1555 · completed · 2026-07-01");
-    expect(items[3].summary).toBe("Missed call from +1555");
-    expect(items[4].summary).toBe("Chat: Untitled conversation");
+    expect(items[2].summary).toBe("Received email: Quote please - jane@x.com");
+    expect(items[3].summary).toContain("Inbound call with +1555 · completed · 2026-07-01");
+    expect(items[4].summary).toBe("Missed call from +1555");
+    expect(items[5].summary).toBe("Chat: Untitled conversation");
   });
 
   it("covers the fallback summary arms (kind, outbound email, unknown caller)", async () => {
@@ -213,6 +231,10 @@ describe("listDeletedItems (central mode)", () => {
         data: [{ id: "th1", title: "Named", deleted_at: "2026-07-03T00:00:00Z", deleted_by: null }],
         error: null
       }),
+      ai_flows: chain("limit", {
+        data: [{ id: "f1", name: null, enabled: false, deleted_at: "2026-07-03T00:00:02Z", deleted_by: null }],
+        error: null
+      }),
       sms_outbound_log: emptyList(),
       sms_inbound_jobs: chain("limit", { data: null, error: null })
     });
@@ -221,12 +243,13 @@ describe("listDeletedItems (central mode)", () => {
     const byId = new Map(items.map((i) => [i.id, i]));
     expect(byId.get("n1")?.summary).toBe("digest");
     expect(byId.get("n2")?.summary).toBe("Notification");
-    expect(byId.get("e1")?.summary).toBe("Sent email: (no subject) — lead@x.com");
+    expect(byId.get("e1")?.summary).toBe("Sent email: (no subject) - lead@x.com");
     expect(byId.get("e2")?.summary).toBe("Sent email: s");
     expect(byId.get("t1")?.summary).toBe("Outbound call (unknown caller) · unknown");
     expect(byId.get("th1")?.summary).toBe("Chat: Named");
+    expect(byId.get("f1")?.summary).toBe("AiFlow: (unnamed) (restores disabled)");
     // Two identical-timestamp items exercise the comparator's equal arm.
-    expect(items).toHaveLength(6);
+    expect(items).toHaveLength(7);
   });
 
   it("treats null central data as empty and pluralizes a single-message conversation", async () => {
@@ -239,6 +262,7 @@ describe("listDeletedItems (central mode)", () => {
         data: [{ id: "o1", to_e164: "+1555", deleted_at: "2026-07-01T00:00:00Z", deleted_by: null }],
         error: null
       }),
+      ai_flows: emptyList(),
       sms_inbound_jobs: emptyList()
     });
     const items = await listDeletedItems(BIZ, { client: db as never });
@@ -253,6 +277,7 @@ describe("listDeletedItems (central mode)", () => {
       voice_call_transcripts: emptyList(),
       dashboard_chat_threads: emptyList(),
       sms_outbound_log: emptyList(),
+      ai_flows: emptyList(),
       sms_inbound_jobs: emptyList()
     });
     await expect(listDeletedItems(BIZ, { client: db as never })).rejects.toThrow(
@@ -265,6 +290,7 @@ describe("listDeletedItems (central mode)", () => {
       voice_call_transcripts: emptyList(),
       dashboard_chat_threads: emptyList(),
       sms_outbound_log: emptyList(),
+      ai_flows: emptyList(),
       sms_inbound_jobs: chain("limit", { data: null, error: { message: "jobs down" } })
     });
     await expect(listDeletedItems(BIZ, { client: db2 as never })).rejects.toThrow(
@@ -279,6 +305,7 @@ describe("listDeletedItems (central mode)", () => {
       voice_call_transcripts: emptyList(),
       dashboard_chat_threads: emptyList(),
       sms_outbound_log: emptyList(),
+      ai_flows: emptyList(),
       sms_inbound_jobs: emptyList()
     });
     defaultClientSpy.mockReturnValue(db);
@@ -308,6 +335,7 @@ describe("listDeletedItems (vps mode)", () => {
     });
     const db = dbByTable({
       dashboard_chat_threads: emptyList(),
+      ai_flows: emptyList(),
       sms_inbound_jobs: emptyList()
     });
 
@@ -319,6 +347,7 @@ describe("listDeletedItems (vps mode)", () => {
       (c) => (c[1] as { table: string }).table
     );
     expect(movedTables.sort()).toEqual([
+      "ai_flows",
       "email_log",
       "notifications",
       "sms_outbound_log",
@@ -343,7 +372,8 @@ describe("restoreDeletedItem", () => {
       ["notification", "notifications"],
       ["email", "email_log"],
       ["call", "voice_call_transcripts"],
-      ["chat_thread", "dashboard_chat_threads"]
+      ["chat_thread", "dashboard_chat_threads"],
+      ["aiflow", "ai_flows"]
     ] as const) {
       vi.mocked(restoreContentRows).mockClear();
       const result = await restoreDeletedItem(BIZ, type, "row-1", { client: db as never });

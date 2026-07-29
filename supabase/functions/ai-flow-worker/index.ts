@@ -486,19 +486,30 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
 
   const { data: flowRow, error: flowErr } = await supabase
     .from("ai_flows")
-    .select("definition, enabled")
+    .select("definition, enabled, deleted_at")
     .eq("id", run.flow_id)
     .maybeSingle();
   if (flowErr) throw new Error(`load flow: ${flowErr.message}`);
-  const flow = flowRow as { definition?: unknown; enabled?: boolean } | null;
+  const flow = flowRow as {
+    definition?: unknown;
+    enabled?: boolean;
+    deleted_at?: string | null;
+  } | null;
   // Owner disabled the flow after this run was queued (or mid-flight): stop.
   // Disabling must halt already-queued/approval-resumed runs, not just new
   // triggers, so they can't keep sending SMS / browsing / calling integrations.
   // EXCEPTION: test runs ("Test with a contact") execute on DISABLED flows by
   // design — testing a draft before switching it on is the point, and every
-  // side-effecting action is simulated anyway. A missing flow row (deleted)
-  // still cancels either way.
-  if (!flow || (!flow.enabled && !isTestModeTrigger(asRecord(run.context.trigger)))) {
+  // side-effecting action is simulated anyway. Soft-deleted flows (deleted_at
+  // set) cancel either way, matching the old hard-delete "row missing" path
+  // so a queued Test run cannot keep executing after the owner deleted it.
+  // A missing flow row also cancels either way.
+  const softDeleted = Boolean(flow?.deleted_at);
+  if (
+    !flow ||
+    softDeleted ||
+    (!flow.enabled && !isTestModeTrigger(asRecord(run.context.trigger)))
+  ) {
     try {
       // Free the trigger's dedupe slot before canceling: if the owner
       // re-enables the flow while the scheduled occurrence is still due or
@@ -514,7 +525,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       const dedupeKey = (dkRow as { dedupe_key?: string | null } | null)?.dedupe_key;
       await updateRun(supabase, run.id, {
         status: "canceled",
-        last_error: "flow disabled",
+        last_error: softDeleted ? "flow deleted" : "flow disabled",
         claimed_at: null,
         dedupe_key: null
       });
@@ -537,8 +548,10 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       source: "aiflow",
       level: "info",
       event: "ai_flow_run_canceled_disabled",
-      message: "Run canceled: flow was disabled after the run was queued",
-      payload: { run_id: run.id, flow_id: run.flow_id }
+      message: softDeleted
+        ? "Run canceled: flow was soft-deleted after the run was queued"
+        : "Run canceled: flow was disabled after the run was queued",
+      payload: { run_id: run.id, flow_id: run.flow_id, soft_deleted: softDeleted }
     });
     return;
   }
@@ -8909,6 +8922,7 @@ async function enqueueDueScheduledRuns(supabase: Supabase): Promise<void> {
         .from("ai_flows")
         .select("id, business_id, definition")
         .eq("enabled", true)
+        .is("deleted_at", null)
         .or("definition->trigger->>channel.eq.schedule,definition->triggers.not.is.null")
         .order("id", { ascending: true })
         .range(offset, offset + PAGE - 1);
@@ -8997,6 +9011,7 @@ async function enqueueDueBirthdayRuns(supabase: Supabase): Promise<void> {
         .from("ai_flows")
         .select("id, business_id, definition")
         .eq("enabled", true)
+        .is("deleted_at", null)
         .or("definition->trigger->>channel.eq.birthday,definition->triggers.not.is.null")
         .order("id", { ascending: true })
         .range(offset, offset + PAGE - 1);
@@ -9304,6 +9319,7 @@ async function enqueueDueOutboundCalls(
         .from("ai_flows")
         .select("id, business_id, definition")
         .eq("enabled", true)
+        .is("deleted_at", null)
         .eq("definition->trigger->>channel", "voice")
         .eq("definition->trigger->>direction", "outbound")
         .order("id", { ascending: true })

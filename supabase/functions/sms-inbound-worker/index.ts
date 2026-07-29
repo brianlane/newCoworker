@@ -276,6 +276,7 @@ async function agentInvocableFlowsBlock(
       .select("name, definition")
       .eq("business_id", businessId)
       .eq("enabled", true)
+      .is("deleted_at", null)
       .filter("definition->options->>agentInvocable", "eq", "true")
       .limit(AGENT_INVOCABLE_FLOWS_MAX);
     if (error) throw new Error(error.message);

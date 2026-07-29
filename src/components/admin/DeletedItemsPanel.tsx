@@ -21,7 +21,8 @@ const TYPE_LABEL: Record<DeletedItem["type"], string> = {
   email: "Email",
   call: "Call",
   sms_conversation: "SMS conversation",
-  chat_thread: "Chat thread"
+  chat_thread: "Chat thread",
+  aiflow: "AiFlow"
 };
 
 export function DeletedItemsPanel({ businessId }: { businessId: string }) {
@@ -86,9 +87,9 @@ export function DeletedItemsPanel({ businessId }: { businessId: string }) {
   return (
     <div className="space-y-3">
       <p className="text-xs text-parchment/50">
-        Items the owner deleted from their dashboard (soft-deleted, admin-restorable). Restoring
-        puts the item straight back; rows vanish from this list permanently once retention or a
-        privacy erasure hard-deletes them.
+        Items the owner deleted from their dashboard (soft-deleted, admin-restorable), including
+        AiFlows. Restoring puts the item straight back (AiFlows come back disabled); rows vanish
+        from this list permanently once retention or a privacy erasure hard-deletes them.
       </p>
       {items === null && !error && <p className="text-xs text-parchment/40">Loading…</p>}
       {error && <p className="text-xs text-spark-orange">{error}</p>}

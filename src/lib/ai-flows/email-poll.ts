@@ -407,6 +407,7 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
       .from("ai_flows")
       .select("id, business_id, definition")
       .eq("enabled", true)
+      .is("deleted_at", null)
       .or("definition->trigger->>channel.eq.email,definition->triggers.not.is.null")
       .order("id", { ascending: true })
       .range(offset, offset + EMAIL_POLL_FLOW_PAGE - 1);

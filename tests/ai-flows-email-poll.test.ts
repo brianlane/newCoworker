@@ -64,9 +64,10 @@ type SeenTable = {
  */
 function dbWithRange(range: ReturnType<typeof vi.fn>, seen: SeenTable = {}) {
   const order = vi.fn(() => ({ range }));
-  // Listing chain: .select().eq(enabled).or(primary-email-or-has-extras).order().range()
+  // Listing chain: .select().eq(enabled).is(deleted_at).or(...).order().range()
   const or = vi.fn(() => ({ order }));
-  const eq1 = vi.fn(() => ({ or }));
+  const isDeleted = vi.fn(() => ({ or }));
+  const eq1 = vi.fn(() => ({ is: isDeleted }));
   const flowsSelect = vi.fn(() => ({ eq: eq1 }));
   const seenIn2 = vi.fn(() =>
     Promise.resolve(

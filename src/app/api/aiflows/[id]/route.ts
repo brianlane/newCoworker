@@ -92,7 +92,7 @@ export async function DELETE(request: Request, { params }: Ctx) {
     if (!idSchema.safeParse(id).success) return errorResponse("VALIDATION_ERROR", "id is invalid");
     const body = deleteSchema.parse(await request.json().catch(() => ({})));
     if (!user.isAdmin) await requireBusinessRole(body.businessId, "manage_aiflows");
-    await deleteAiFlow(body.businessId, id);
+    await deleteAiFlow(body.businessId, id, user.userId ?? null);
     return successResponse({ deleted: true });
   } catch (err) {
     return handleRouteError(err);

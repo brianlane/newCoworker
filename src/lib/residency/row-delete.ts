@@ -69,7 +69,7 @@ async function stampContentRows(
   businessId: string,
   table: ResidencyMovedTable,
   filters: ContentRowFilter[],
-  set: Record<string, string | null>,
+  set: Record<string, string | boolean | null>,
   deps: ContentRowMutationDeps
 ): Promise<ContentRowMutationResult> {
   if (filters.length === 0) {
@@ -120,38 +120,50 @@ async function stampContentRows(
  * Soft-delete content rows (central + box). `deletedBy` is the auth user id
  * of the owner/staff member who clicked delete — audit trail only, never
  * shown to the tenant.
+ *
+ * `extraSet` folds additional columns into the same UPDATE (AiFlow delete
+ * also forces `enabled: false` so trigger discovery that only filters
+ * enabled=true stops firing even if a deleted_at filter is missed).
  */
 export async function softDeleteContentRows(
   businessId: string,
   table: ResidencyMovedTable,
   filters: ContentRowFilter[],
   deletedBy: string | null,
-  deps: ContentRowMutationDeps = {}
+  deps: ContentRowMutationDeps = {},
+  extraSet: Record<string, string | boolean | null> = {}
 ): Promise<ContentRowMutationResult> {
   return await stampContentRows(
     businessId,
     table,
     filters,
-    { deleted_at: new Date().toISOString(), deleted_by: deletedBy },
+    {
+      deleted_at: new Date().toISOString(),
+      deleted_by: deletedBy,
+      ...extraSet
+    },
     deps
   );
 }
 
 /**
  * Admin-only restore: clears the soft-delete stamp so the row reappears in
- * every owner-facing read (central + box).
+ * every owner-facing read (central + box). `extraSet` folds additional
+ * columns into the same UPDATE (needs-human re-arm clears the stamp and
+ * re-enables in one shot).
  */
 export async function restoreContentRows(
   businessId: string,
   table: ResidencyMovedTable,
   filters: ContentRowFilter[],
-  deps: ContentRowMutationDeps = {}
+  deps: ContentRowMutationDeps = {},
+  extraSet: Record<string, string | boolean | null> = {}
 ): Promise<ContentRowMutationResult> {
   return await stampContentRows(
     businessId,
     table,
     filters,
-    { deleted_at: null, deleted_by: null },
+    { deleted_at: null, deleted_by: null, ...extraSet },
     deps
   );
 }

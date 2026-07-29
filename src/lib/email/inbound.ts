@@ -97,6 +97,7 @@ async function loadTenantEmailFlows(
     .select("id, definition")
     .eq("business_id", businessId)
     .eq("enabled", true)
+    .is("deleted_at", null)
     .or("definition->trigger->>channel.eq.tenant_email,definition->triggers.not.is.null");
   if (error) throw new Error(`loadTenantEmailFlows: ${error.message}`);
   const out: TenantEmailFlow[] = [];

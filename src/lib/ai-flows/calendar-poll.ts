@@ -802,6 +802,7 @@ export async function fireCalendarTriggersForPushedEvent(
       .select("id, business_id, definition")
       .eq("business_id", businessId)
       .eq("enabled", true)
+      .is("deleted_at", null)
       .or("definition->trigger->>channel.eq.calendar,definition->triggers.not.is.null")
       .order("id", { ascending: true })
       .range(offset, offset + CALENDAR_POLL_FLOW_PAGE - 1);
@@ -946,6 +947,7 @@ export async function pollCalendarTriggers(
       .from("ai_flows")
       .select("id, business_id, definition")
       .eq("enabled", true)
+      .is("deleted_at", null)
       .or("definition->trigger->>channel.eq.calendar,definition->triggers.not.is.null")
       .order("id", { ascending: true })
       .range(offset, offset + CALENDAR_POLL_FLOW_PAGE - 1);

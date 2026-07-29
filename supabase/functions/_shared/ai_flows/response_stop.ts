@@ -136,7 +136,8 @@ async function loadStopOnResponseFlowIds(
     .from("ai_flows")
     .select("id, definition")
     .in("id", flowIds)
-    .eq("enabled", true);
+    .eq("enabled", true)
+    .is("deleted_at", null);
   if (error) {
     console.error("response_stop: flow lookup", error);
     return out;
