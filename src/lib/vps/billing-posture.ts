@@ -18,17 +18,21 @@
  * population: the tenant is paying, so renewing is always the correct state
  * — and if they cancel later, the cancel/wipe lifecycle disables auto-renew
  * again as part of its plan (verified: `disable_billing_auto_renewal` op).
- * Stripe-LESS live rows (internal pilots, admin-created enterprise
- * accounts) are checked but surfaced REPORT-ONLY — an "active" flag with no
- * payment behind it must never trigger automatic platform spend. Businesses
- * whose subscription is `canceled` (grace window — lifecycle just parked
- * the box on purpose), `pending` (never paid), or missing (smoke/test rows)
- * are deliberately OUT of scope; their boxes surface via the pool direction
- * once released. Boxes flagged `never_renew` in vps_inventory are NEVER
- * healed even for paying tenants — they must lapse at period end by design
- * (sunk-cost hardware whose renewal costs more than the tenant pays), so
- * the check instead emits a migration-needed finding every run until ops
- * moves the tenant to its correct size.
+ * Cancel-at-period-end tenants are OUT of this heal: their Hostinger
+ * renewal was already disabled on purpose at cancel time (so Hostinger
+ * cannot charge before the Stripe period-end webhook), and healing them
+ * would re-open the "future eating" gap. Stripe-LESS live rows (internal
+ * pilots, admin-created enterprise accounts) are checked but surfaced
+ * REPORT-ONLY — an "active" flag with no payment behind it must never
+ * trigger automatic platform spend. Businesses whose subscription is
+ * `canceled` (grace window — lifecycle just parked the box on purpose),
+ * `pending` (never paid), or missing (smoke/test rows) are deliberately
+ * OUT of scope; their boxes surface via the pool direction once released.
+ * Boxes flagged `never_renew` in vps_inventory are NEVER healed even for
+ * paying tenants — they must lapse at period end by design (sunk-cost
+ * hardware whose renewal costs more than the tenant pays), so the check
+ * instead emits a migration-needed finding every run until ops moves the
+ * tenant to its correct size.
  *
  * Direction 2 (money leak, REPORT-ONLY): pool boxes in state `available`
  * whose subscription is still auto-renewing cost money while serving nobody.
@@ -81,7 +85,11 @@ export type BillingPostureDeps = {
    */
   listBusinessIdsWithLiveSubscription: (
     businessIds: string[]
-  ) => Promise<{ stripeBacked: Set<string>; stripeless: Set<string> }>;
+  ) => Promise<{
+    stripeBacked: Set<string>;
+    stripeless: Set<string>;
+    cancelAtPeriodEnd: Set<string>;
+  }>;
   listInventory: () => Promise<VpsInventoryRow[]>;
   getVirtualMachine: (vmId: number) => Promise<VirtualMachine>;
   listBillingSubscriptions: () => Promise<BillingSubscription[]>;
@@ -129,21 +137,25 @@ export async function checkVpsBillingPosture(
   // business still points at its VM until the wipe, and the lifecycle just
   // disabled that box's renewal ON PURPOSE — healing it would re-charge the
   // platform for a box whose tenant already left (Bugbot High on this PR).
-  // Pending (never paid) and subscription-less (smoke/test) rows are
-  // equally out of scope. Stripe-LESS live rows (internal pilots like the
-  // Residency Pilot, admin-created enterprise accounts) are checked but
-  // NEVER auto-healed — an "active" flag someone typed into the DB is not
-  // a payment, and the Jul 9 run proved the failure mode: the pilot's box
-  // was deliberately parked non-renewing and the check flipped it back on.
-  // The helper uses any-row semantics so a newer pending row can't shadow
-  // an older active subscription (second Bugbot High).
+  // Cancel-at-period-end is the same deliberate disable, just earlier: the
+  // cancel planner turns Hostinger renew off so a colliding renewal date
+  // cannot charge before Stripe period end. Pending (never paid) and
+  // subscription-less (smoke/test) rows are equally out of scope.
+  // Stripe-LESS live rows (internal pilots like the Residency Pilot,
+  // admin-created enterprise accounts) are checked but NEVER auto-healed —
+  // an "active" flag someone typed into the DB is not a payment, and the
+  // Jul 9 run proved the failure mode: the pilot's box was deliberately
+  // parked non-renewing and the check flipped it back on. The helper uses
+  // any-row semantics so a newer pending row can't shadow an older active
+  // subscription (second Bugbot High).
   const liveBusinessIds = await deps.listBusinessIdsWithLiveSubscription(
     candidates.map((entry) => entry.business.id)
   );
   const tenants = candidates.filter(
     (entry) =>
-      liveBusinessIds.stripeBacked.has(entry.business.id) ||
-      liveBusinessIds.stripeless.has(entry.business.id)
+      !liveBusinessIds.cancelAtPeriodEnd.has(entry.business.id) &&
+      (liveBusinessIds.stripeBacked.has(entry.business.id) ||
+        liveBusinessIds.stripeless.has(entry.business.id))
   );
 
   for (const { business, vmId } of tenants) {

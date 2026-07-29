@@ -112,6 +112,34 @@ export async function loadLifecycleContextForBusiness(
     });
   }
 
+  // Hostinger billing expiration for the cancel-at-period-end renewal
+  // guard: only disable auto-renewal when the box's paid Hostinger time
+  // reaches/passes Stripe period end. Best-effort — a lookup failure leaves
+  // the field null and the planner skips the disable (fail open for uptime).
+  let hostingerBillingExpiresAt: string | null = null;
+  if (hostingerManaged && subscription.hostinger_billing_subscription_id) {
+    try {
+      const client = new HostingerClient({
+        baseUrl: process.env.HOSTINGER_API_BASE_URL ?? DEFAULT_HOSTINGER_BASE_URL,
+        token: process.env.HOSTINGER_API_TOKEN ?? ""
+      });
+      const billingSubs = await client.listBillingSubscriptions();
+      const match = billingSubs.find(
+        (row) => row.id === subscription.hostinger_billing_subscription_id
+      );
+      hostingerBillingExpiresAt = match?.expires_at ?? match?.next_billing_at ?? null;
+    } catch (err) {
+      logger.warn(
+        "loadLifecycleContextForBusiness: Hostinger billing expiration lookup failed; continuing without hostingerBillingExpiresAt",
+        {
+          businessId,
+          hostingerBillingSubscriptionId: subscription.hostinger_billing_subscription_id,
+          error: err instanceof Error ? err.message : String(err)
+        }
+      );
+    }
+  }
+
   const context: LifecycleContext = {
     subscription,
     ownerEmail: business.owner_email,
@@ -126,7 +154,8 @@ export async function loadLifecycleContextForBusiness(
     // it drives the delete-at-expiration op.
     ovhServiceName: vpsProvider === "ovh" ? (business.hostinger_vps_id ?? null) : null,
     vpsHost,
-    didE164
+    didE164,
+    hostingerBillingExpiresAt
   };
   return { ok: true, context, vpsHost };
 }

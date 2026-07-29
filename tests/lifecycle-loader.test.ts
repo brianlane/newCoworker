@@ -5,6 +5,7 @@ const {
   getSubscriptionMock,
   getCustomerProfileByIdMock,
   getVirtualMachineMock,
+  listBillingSubscriptionsMock,
   getTelnyxVoiceRouteForBusinessMock,
   getActiveVpsSshKeyForBusinessMock
 } = vi.hoisted(() => ({
@@ -12,6 +13,7 @@ const {
   getSubscriptionMock: vi.fn(),
   getCustomerProfileByIdMock: vi.fn(),
   getVirtualMachineMock: vi.fn(),
+  listBillingSubscriptionsMock: vi.fn(),
   getTelnyxVoiceRouteForBusinessMock: vi.fn(),
   getActiveVpsSshKeyForBusinessMock: vi.fn()
 }));
@@ -40,6 +42,9 @@ vi.mock("@/lib/hostinger/client", () => {
   class HostingerClient {
     getVirtualMachine(id: number) {
       return getVirtualMachineMock(id);
+    }
+    listBillingSubscriptions() {
+      return listBillingSubscriptionsMock();
     }
   }
   return {
@@ -79,6 +84,7 @@ describe("loadLifecycleContextForBusiness", () => {
     });
     getCustomerProfileByIdMock.mockResolvedValue({ id: "prof-sub" });
     getVirtualMachineMock.mockResolvedValue({ id: 42, ipv4: [{ address: "1.2.3.4" }] });
+    listBillingSubscriptionsMock.mockResolvedValue([]);
     getTelnyxVoiceRouteForBusinessMock.mockResolvedValue({
       to_e164: "+16025550100",
       business_id: "biz-1"
@@ -98,10 +104,79 @@ describe("loadLifecycleContextForBusiness", () => {
         profile: { id: "prof-sub" },
         virtualMachineId: 42,
         vpsHost: "1.2.3.4",
-        didE164: "+16025550100"
+        didE164: "+16025550100",
+        hostingerBillingExpiresAt: null
       })
     });
     expect(getCustomerProfileByIdMock).toHaveBeenCalledWith("prof-sub");
+  });
+
+  it("loads Hostinger billing expiration when a billing subscription id is present", async () => {
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub-1",
+      business_id: "biz-1",
+      customer_profile_id: "prof-sub",
+      hostinger_billing_subscription_id: "hbs-1"
+    });
+    listBillingSubscriptionsMock.mockResolvedValue([
+      {
+        id: "hbs-1",
+        expires_at: null,
+        next_billing_at: "2026-08-08T22:52:18Z"
+      }
+    ]);
+
+    const res = await loadLifecycleContextForBusiness("biz-1");
+    expect(res).toEqual({
+      ok: true,
+      vpsHost: "1.2.3.4",
+      context: expect.objectContaining({
+        hostingerBillingExpiresAt: "2026-08-08T22:52:18Z"
+      })
+    });
+    expect(listBillingSubscriptionsMock).toHaveBeenCalled();
+  });
+
+  it("prefers expires_at over next_billing_at for Hostinger billing expiration", async () => {
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub-1",
+      business_id: "biz-1",
+      customer_profile_id: "prof-sub",
+      hostinger_billing_subscription_id: "hbs-1"
+    });
+    listBillingSubscriptionsMock.mockResolvedValue([
+      {
+        id: "hbs-1",
+        expires_at: "2026-08-01T00:00:00Z",
+        next_billing_at: "2026-08-08T22:52:18Z"
+      }
+    ]);
+
+    const res = await loadLifecycleContextForBusiness("biz-1");
+    expect(res).toEqual({
+      ok: true,
+      vpsHost: "1.2.3.4",
+      context: expect.objectContaining({
+        hostingerBillingExpiresAt: "2026-08-01T00:00:00Z"
+      })
+    });
+  });
+
+  it("continues without hostingerBillingExpiresAt when the billing lookup fails", async () => {
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub-1",
+      business_id: "biz-1",
+      customer_profile_id: "prof-sub",
+      hostinger_billing_subscription_id: "hbs-1"
+    });
+    listBillingSubscriptionsMock.mockRejectedValueOnce(new Error("hostinger billing down"));
+
+    const res = await loadLifecycleContextForBusiness("biz-1");
+    expect(res).toEqual({
+      ok: true,
+      vpsHost: "1.2.3.4",
+      context: expect.objectContaining({ hostingerBillingExpiresAt: null })
+    });
   });
 
   it("leaves didE164 null when no route exists or the lookup fails", async () => {

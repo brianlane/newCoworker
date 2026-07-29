@@ -698,7 +698,8 @@ describe("executeLifecyclePlan refund handling", () => {
       createSnapshot: vi.fn().mockResolvedValue({}),
       deleteSnapshot: vi.fn().mockRejectedValue(notFound),
       stopVirtualMachine: vi.fn().mockResolvedValue({}),
-      disableBillingAutoRenewal: vi.fn().mockResolvedValue({})
+      disableBillingAutoRenewal: vi.fn().mockResolvedValue({}),
+      enableBillingAutoRenewal: vi.fn().mockResolvedValue({})
     };
 
     await executeLifecyclePlan(
@@ -719,7 +720,8 @@ describe("executeLifecyclePlan refund handling", () => {
           { type: "create_snapshot", virtualMachineId: 1 },
           { type: "delete_snapshot", virtualMachineId: 1 },
           { type: "stop_vm", virtualMachineId: 1 },
-          { type: "disable_billing_auto_renewal", hostingerBillingSubscriptionId: "hbs_1" }
+          { type: "disable_billing_auto_renewal", hostingerBillingSubscriptionId: "hbs_1" },
+          { type: "enable_billing_auto_renewal", hostingerBillingSubscriptionId: "hbs_1" }
         ],
         dbUpdates: [
           { type: "update_subscription", subscriptionId: "sub_row", patch: { status: "canceled" } },
@@ -761,6 +763,7 @@ describe("executeLifecyclePlan refund handling", () => {
     expect(hostinger.createSnapshot).toHaveBeenCalledWith(1);
     expect(hostinger.stopVirtualMachine).toHaveBeenCalledWith(1);
     expect(hostinger.disableBillingAutoRenewal).toHaveBeenCalledWith("hbs_1");
+    expect(hostinger.enableBillingAutoRenewal).toHaveBeenCalledWith("hbs_1");
     expect(updateBusinessStatusMock).toHaveBeenCalledWith("biz_1", "wiped");
     // The wipe keeps the business row, so this is the only hook that ever
     // revokes the tenant's Nango workspace connections — and it runs AFTER

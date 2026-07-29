@@ -500,6 +500,15 @@ async function runHostingerOp(op: HostingerOp, client: HostingerClient): Promise
         true
       );
       return;
+    case "enable_billing_auto_renewal":
+      // Undo-cancel / reactivate mirror: turn renewal back on for a
+      // still-paying tenant. Tolerate 404 if the billing sub is already gone.
+      await safeHostinger(
+        () => client.enableBillingAutoRenewal(op.hostingerBillingSubscriptionId),
+        "enable_billing_auto_renewal",
+        true
+      );
+      return;
   }
 }
 

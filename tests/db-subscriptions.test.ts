@@ -195,12 +195,17 @@ describe("db/subscriptions", () => {
       ]);
       expect(result.stripeBacked).toEqual(new Set(["paid-1", "mixed"]));
       expect(result.stripeless).toEqual(new Set(["pilot"]));
+      expect(result.cancelAtPeriodEnd).toEqual(new Set());
       expect(db.in).toHaveBeenCalledWith("business_id", ["paid-1", "pilot", "mixed", "grace-1"]);
     });
 
     it("returns empty sets for empty input without touching the client", async () => {
       const result = await listBusinessIdsWithLiveSubscription([]);
-      expect(result).toEqual({ stripeBacked: new Set(), stripeless: new Set() });
+      expect(result).toEqual({
+        stripeBacked: new Set(),
+        stripeless: new Set(),
+        cancelAtPeriodEnd: new Set()
+      });
       expect(createSupabaseServiceClient).not.toHaveBeenCalled();
     });
 
@@ -214,7 +219,8 @@ describe("db/subscriptions", () => {
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(dbNull as never);
       expect(await listBusinessIdsWithLiveSubscription(["a"])).toEqual({
         stripeBacked: new Set(),
-        stripeless: new Set()
+        stripeless: new Set(),
+        cancelAtPeriodEnd: new Set()
       });
 
       const dbErr = {
@@ -227,6 +233,34 @@ describe("db/subscriptions", () => {
       await expect(listBusinessIdsWithLiveSubscription(["a"])).rejects.toThrow(
         "listBusinessIdsWithLiveSubscription: replica down"
       );
+    });
+
+    it("surfaces cancel_at_period_end businesses separately for posture anti-heal", async () => {
+      const db = {
+        ...mockDb(),
+        in: vi.fn().mockReturnValueOnce({
+          in: vi.fn().mockResolvedValue({
+            data: [
+              {
+                business_id: "leaving",
+                stripe_subscription_id: "sub_a",
+                cancel_at_period_end: true
+              },
+              {
+                business_id: "staying",
+                stripe_subscription_id: "sub_b",
+                cancel_at_period_end: false
+              }
+            ],
+            error: null
+          })
+        })
+      };
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+      const result = await listBusinessIdsWithLiveSubscription(["leaving", "staying"]);
+      expect(result.stripeBacked).toEqual(new Set(["leaving", "staying"]));
+      expect(result.cancelAtPeriodEnd).toEqual(new Set(["leaving"]));
     });
   });
 
