@@ -15,6 +15,12 @@ updates:
       # PR #820). Unignore once mcp-handler ships a release accepting a
       # newer SDK.
       - dependency-name: "@modelcontextprotocol/sdk"
+      # @napi-rs/wasm-runtime 1.2.0 peers @emnapi/core@^2.0.0-alpha.3 while
+      # root optionalDependencies still pin @emnapi/core to the 1.x line, so
+      # grouped minor/patch bumps of both fail `npm ci` with ERESOLVE (see
+      # PR #1007). Unignore once the @emnapi 2.x line is stable and can be
+      # adopted together.
+      - dependency-name: "@napi-rs/wasm-runtime"
 
   - package-ecosystem: npm
     directory: "/cloudflare/email-worker"
