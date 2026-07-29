@@ -10,6 +10,8 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
+import { LinkifiedText } from "@/components/booking/LinkifiedText";
+
 /** The question shape the server passes down (already validated). */
 export type IntakeQuestionView = {
   id: string;
@@ -393,7 +395,9 @@ export function PublicBookingPage({
           )}
           {videoCall ? <p>{strings.videoCallNote}</p> : null}
           {description ? (
-            <p className="pt-2 leading-relaxed text-parchment/70">{description}</p>
+            <p className="pt-2 leading-relaxed text-parchment/70">
+              <LinkifiedText text={description} />
+            </p>
           ) : null}
         </div>
         <p className="mt-8 hidden text-xs text-parchment/30 md:block">{strings.poweredBy}</p>
@@ -498,10 +502,14 @@ export function PublicBookingPage({
               {intakeQuestions.map((q) => (
                 <div key={q.id}>
                   <label className={label} htmlFor={`bk-q-${q.id}`}>
-                    {q.label}
+                    <LinkifiedText text={q.label} />
                     {q.required ? <span className="ml-1 text-clay-red">*</span> : null}
                   </label>
-                  {q.help ? <p className="text-xs text-parchment/45">{q.help}</p> : null}
+                  {q.help ? (
+                    <p className="text-xs text-parchment/45">
+                      <LinkifiedText text={q.help} />
+                    </p>
+                  ) : null}
                   {intakeError === q.id ? (
                     <p className="text-xs text-clay-red">{strings.intakeAnswerRequired}</p>
                   ) : null}
