@@ -1068,7 +1068,7 @@ async function acquireVps(args: {
         // caller's term-priced box.
         const sizeMatch = sizeMatches
           .slice()
-          .sort((a, b) => (a.createdAtMs ?? 0) - (b.createdAtMs ?? 0))[0];
+          .sort((a, b) => Number(a.createdAtMs) - Number(b.createdAtMs))[0];
         if (sizeMatch) {
           if (skipPoolAdopt) {
             // Term-alignment path: THIS orphan is the term-bought box. Claim

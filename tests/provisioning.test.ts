@@ -3740,6 +3740,85 @@ describe("provisioning/orchestrate", () => {
       ).rejects.toThrow(/HTTP 402/);
     });
 
+    it("skipPoolAdopt: stringifies non-Error failures in specific-adopt side paths", async () => {
+      const sleep = vi.fn().mockResolvedValue(undefined);
+      const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+      // claimSpecific throws a string
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-orphan-claim-str", tier: "starter", skipPoolAdopt: true },
+          {
+            vpsProvisioner: vi.fn().mockRejectedValueOnce(new FakePurchaseError()),
+            vpsAdopter: vi.fn(),
+            vpsPool: makePool({
+              claimSpecific: vi.fn().mockRejectedValueOnce("claim string boom")
+            }),
+            orphanReconciler: vi
+              .fn()
+              .mockResolvedValue([{ vmId: 1, plan: "kvm1", createdAtMs: Date.now() }]),
+            remoteExec: vi.fn(),
+            sleep
+          }
+        )
+      ).rejects.toThrow(/HTTP 402/);
+
+      // record throws a string after successful adopt
+      const poolRecord = makePool({
+        record: vi.fn().mockRejectedValueOnce("record string boom")
+      });
+      const r1 = await orchestrateProvisioning(
+        { businessId: "biz-orphan-record-str", tier: "starter", skipPoolAdopt: true },
+        {
+          vpsProvisioner: vi.fn().mockRejectedValueOnce(new FakePurchaseError()),
+          vpsAdopter: vi.fn().mockResolvedValue(makeVpsStub("2")),
+          vpsPool: poolRecord,
+          orphanReconciler: vi
+            .fn()
+            .mockResolvedValue([{ vmId: 2, plan: "kvm1", createdAtMs: Date.now() }]),
+          remoteExec,
+          sleep
+        }
+      );
+      expect(r1.vpsId).toBe("2");
+
+      // cleanup throws a string
+      vi.mocked(cleanupStaleTenantsForVm).mockRejectedValueOnce("cleanup string boom");
+      const r2 = await orchestrateProvisioning(
+        { businessId: "biz-orphan-cleanup-str", tier: "starter", skipPoolAdopt: true },
+        {
+          vpsProvisioner: vi.fn().mockRejectedValueOnce(new FakePurchaseError()),
+          vpsAdopter: vi.fn().mockResolvedValue(makeVpsStub("3")),
+          vpsPool: makePool(),
+          orphanReconciler: vi
+            .fn()
+            .mockResolvedValue([{ vmId: 3, plan: "kvm1", createdAtMs: Date.now() }]),
+          remoteExec,
+          sleep
+        }
+      );
+      expect(r2.vpsId).toBe("3");
+
+      // adopt fails with string; retire also throws string
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-orphan-retire-str", tier: "starter", skipPoolAdopt: true },
+          {
+            vpsProvisioner: vi.fn().mockRejectedValueOnce(new FakePurchaseError()),
+            vpsAdopter: vi.fn().mockRejectedValueOnce("setup string boom"),
+            vpsPool: makePool({
+              retire: vi.fn().mockRejectedValueOnce("retire string boom")
+            }),
+            orphanReconciler: vi
+              .fn()
+              .mockResolvedValue([{ vmId: 4, plan: "kvm1", createdAtMs: Date.now() }]),
+            remoteExec: vi.fn(),
+            sleep
+          }
+        )
+      ).rejects.toThrow(/HTTP 402/);
+    });
+
     it("surfaces the original purchase error when the reconciler itself throws", async () => {
       const pool = makePool();
       const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
