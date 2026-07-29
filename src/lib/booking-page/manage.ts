@@ -95,6 +95,12 @@ export type ManagedBookingView = {
   past: boolean;
   /** Minutes of notice the business requires, for the explain-why copy. */
   minNoticeMinutes: number;
+  /**
+   * Absolute public booking-page URL (vanity slug preferred), or null when
+   * the page is missing or disabled. Captured before cancel deletes the
+   * ledger row so the canceled confirmation can still offer a rebook link.
+   */
+  bookingPageUrl: string | null;
 };
 
 /** Duration to assume for bookings made before the column existed. */
@@ -105,10 +111,22 @@ type Resolved = {
   durationMinutes: number;
   platform: boolean;
   minNoticeMinutes: number;
-  /** Cap knob for the post-claim recount; null page reads as uncapped. */
-  page: Pick<BookingPageRow, "max_daily_bookings">;
+  /**
+   * Cap knob for the post-claim recount plus the fields needed to build the
+   * public rebook URL. Null page reads as uncapped / no rebook link.
+   */
+  page: Pick<BookingPageRow, "max_daily_bookings" | "enabled" | "slug" | "token"> | null;
   timezone: string;
 };
+
+/** Absolute /book/<slug|token> URL when the page is enabled; else null. */
+function publicUrlForPage(
+  page: Pick<BookingPageRow, "enabled" | "slug" | "token"> | null
+): string | null {
+  if (!page?.enabled) return null;
+  const site = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+  return `${site}/book/${page.slug ?? page.token}`;
+}
 
 async function resolve(rawToken: string): Promise<Resolved | null> {
   const token = parseBookingManageToken(rawToken);
@@ -124,7 +142,14 @@ async function resolve(rawToken: string): Promise<Resolved | null> {
     durationMinutes: row.duration_minutes ?? DEFAULT_DURATION_MINUTES,
     platform: (row.event_id ?? "").startsWith(PLATFORM_EVENT_PREFIX),
     minNoticeMinutes: page?.min_notice_minutes ?? 0,
-    page: { max_daily_bookings: page?.max_daily_bookings ?? null },
+    page: page
+      ? {
+          max_daily_bookings: page.max_daily_bookings,
+          enabled: page.enabled,
+          slug: page.slug,
+          token: page.token
+        }
+      : null,
     timezone: business?.timezone || "UTC"
   };
 }
@@ -165,7 +190,8 @@ export async function getManagedBooking(
         : null,
       changeable: withinNotice(resolved.row.start_at, resolved.minNoticeMinutes),
       past: Date.parse(resolved.row.start_at) <= Date.now(),
-      minNoticeMinutes: resolved.minNoticeMinutes
+      minNoticeMinutes: resolved.minNoticeMinutes,
+      bookingPageUrl: publicUrlForPage(resolved.page)
     }
   };
 }
@@ -328,7 +354,7 @@ export async function rescheduleManagedBooking(
       if (
         await dailyCapReached(
           resolved.row.business_id,
-          resolved.page,
+          { max_daily_bookings: resolved.page?.max_daily_bookings ?? null },
           resolved.timezone,
           new Date(startMs),
           resolved.row.start_at
