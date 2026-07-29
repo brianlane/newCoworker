@@ -50,7 +50,7 @@ the summary.
 | Lead intake & follow-up (Privyr) (TEST COPY of Truly) | on | The AiFlow e2e harness fixture, laid down by `debug/flow-test-setup.ts` |
 | Google review demo reply (email, 2) | off | Reviewer-facing demo |
 | New Contact Greeting (contact_created, 1) | off | |
-| Prospect outreach follow-through (webhook, 4) | off | Files and tags the businesses our outbound outreach emails (PR #972). Installed disabled; the pitch itself is sent in code, not by this flow |
+| Prospect outreach follow-through (webhook, 3) | off | Files and tags the businesses our outbound outreach emails (PR #972). Installed disabled; the pitch itself is sent in code, not by this flow, and the per-prospect owner text was removed (it would have been 12 texts a day announcing that strangers got email) |
 
 ## Sharp edges
 
@@ -78,7 +78,7 @@ the summary.
 `onboard-hq-tenant.ts`, `configure-hq-dogfood.ts`, `setup-hq-dogfood-flows.ts`,
 `setup-hq-inbox-triage-flow.ts`, `enable-hq-booking-page.ts`,
 `patch-hq-booking-offer.ts`, `set-hq-digest-prefs.ts`,
-`configure-hq-prospecting.ts`.
+`configure-hq-prospecting.ts`, `quiet-hq-prospect-flow.ts`.
 
 ## History
 

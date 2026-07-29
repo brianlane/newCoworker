@@ -632,8 +632,18 @@ export const PROSPECT_TAG = "prospect";
  * owner should be able to change: whether the prospect is filed, how they are
  * tagged, and what the owner is told.
  *
- * So this flow deliberately has NO send step. The email already went out
- * before the flow ran, and the brief says so rather than promising it.
+ * So this flow deliberately has NO send step. The email already went out before
+ * the flow ran.
+ *
+ * It also has no owner notification, which is a change of mind worth recording.
+ * It began with one, on the reasoning that the owner should hear what their
+ * coworker did. In practice that is a text per prospect against a cap of twelve
+ * a day, telling the owner a stranger received an email, which is the least
+ * interesting moment in the whole sequence. The numbers live on the Marketing
+ * page, the sent mail lives on the Emails page, and the notification an owner
+ * actually wants (somebody REPLIED) already comes from the email coworker.
+ * An owner who wants the running commentary can add a Notify me step here.
+ *
  * Installed DISABLED like the other starters.
  */
 export function prospectOutreachTemplate(): AiFlowTemplate {
@@ -676,21 +686,9 @@ export function prospectOutreachTemplate(): AiFlowTemplate {
           ]
         },
         {
-          // The brief runs FIRST so it always reaches the owner, and it states
-          // what already happened rather than what is about to: the pitch was
-          // sent before this run started.
-          id: "s_notify_owner",
-          type: "notify_owner",
-          message:
-            "Cold email sent to {{vars.prospect_name}} ({{vars.prospect_domain}}) in " +
-            "{{vars.prospect_vertical}}. Reply address on file: {{vars.prospect_email}}. " +
-            "If they reply, your coworker answers in the thread and can book the call. " +
-            "Nothing else goes out unless they go quiet, and then one follow-up only."
-        },
-        {
-          // The CRM is phone-keyed, so a prospect with no phone reaches the
-          // owner in the brief above and files no contact, rather than filing
-          // a broken one.
+          // The CRM is phone-keyed, so a prospect with no phone files no
+          // contact rather than a broken one. They are still in the outreach
+          // ledger and on the Marketing page either way.
           id: "s_file",
           type: "upsert_customer",
           phoneVar: "prospect_phone",
