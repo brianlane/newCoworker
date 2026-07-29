@@ -65,11 +65,19 @@ const bytes = Buffer.from(await blob.arrayBuffer());
 let title = doc.title;
 if (meetingRef) {
   const meta = await fetchPastMeetingMeta(businessId, meetingRef);
-  title = buildZoomTranscriptTitle({
-    topic: meta?.topic ?? null,
-    startTime: meta?.startTime ?? null,
-    meetingId: meta?.meetingId ?? null
-  });
+  const digits = meetingRef.replace(/\s+/g, "");
+  const meetingId =
+    meta?.meetingId ?? (/^\d{9,15}$/.test(digits) ? digits : null);
+  // Only retitle when Zoom (or the pasted numeric id) gave us something to
+  // build from. A null meta must not overwrite a good existing title with
+  // the generic "Zoom meeting recording (transcript)" fallback.
+  if (meta?.topic || meta?.startTime || meetingId) {
+    title = buildZoomTranscriptTitle({
+      topic: meta?.topic ?? null,
+      startTime: meta?.startTime ?? null,
+      meetingId
+    });
+  }
 }
 
 const ingested = await ingestDocument({

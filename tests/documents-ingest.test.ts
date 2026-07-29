@@ -326,6 +326,15 @@ describe("clipAtBoundary", () => {
     expect(out.endsWith("…")).toBe(true);
     expect(out).not.toMatch(/charli$/);
   });
+
+  it("returns empty when the budget is non-positive", () => {
+    expect(clipAtBoundary("hello", 0)).toBe("");
+    expect(clipAtBoundary("hello", -1)).toBe("");
+  });
+
+  it("returns a marker-only slice when the budget is smaller than the marker", () => {
+    expect(clipAtBoundary("hello world forever", 1, "…TRUNC")).toBe("…");
+  });
 });
 
 describe("parseCondensedReply", () => {

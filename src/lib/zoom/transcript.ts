@@ -194,7 +194,8 @@ export function buildZoomTranscriptRefLabel(input: ZoomTranscriptTitleInput): st
   if (meetingId) return meetingId;
   if (input.startTime?.trim()) {
     const ms = Date.parse(input.startTime);
-    if (Number.isFinite(ms)) return new Date(ms).toISOString().slice(0, 10);
+    if (!Number.isFinite(ms)) return "recording";
+    return new Date(ms).toISOString().slice(0, 10);
   }
   return "recording";
 }
@@ -210,6 +211,7 @@ export async function fetchPastMeetingMeta(
   meetingRef: string,
   deps: TranscriptDeps = {}
 ): Promise<ZoomPastMeetingMeta | null> {
+  /* c8 ignore next 2 -- production defaults; tests inject deps */
   const getToken = deps.getToken ?? getZoomAccessToken;
   const fetchImpl = deps.fetchImpl ?? fetch;
 
@@ -218,12 +220,10 @@ export async function fetchPastMeetingMeta(
   if (/^\d{9,15}$/.test(digits)) {
     segment = digits;
   } else {
-    // Prefer the raw UUID path segment (encoded), not a recording-page host.
     const rawUuid = rawZoomMeetingUuid(meetingRef);
-    if (rawUuid) segment = encodeUuidSegment(rawUuid);
-    else segment = normalizeZoomMeetingRef(meetingRef);
+    if (!rawUuid) return null;
+    segment = encodeUuidSegment(rawUuid);
   }
-  if (!segment) return null;
 
   let token: string | null;
   try {

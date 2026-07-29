@@ -62,8 +62,7 @@ export function clipAtBoundary(
     if (lastSpace >= Math.floor(budget * 0.5)) cut = cut.slice(0, lastSpace);
   }
   cut = cut.replace(/\s+$/u, "");
-  const out = `${cut}${marker.slice(0, maxChars - cut.length)}`;
-  return out.length <= maxChars ? out : out.slice(0, maxChars);
+  return `${cut}${marker.slice(0, maxChars - cut.length)}`;
 }
 
 export const DOCUMENT_TEXT_MIME_TYPES = [
@@ -308,18 +307,16 @@ export async function ingestDocument(
         parsed.contentMd.length > minutesCap
           ? clipAtBoundary(parsed.contentMd, minutesCap, DOCUMENT_CONTENT_TRUNCATION_MARKER)
           : parsed.contentMd;
-      const headroom =
-        DOCUMENT_CONTENT_MD_MAX_CHARS - clippedMinutes.length - transcriptHeader.length;
-      if (headroom > 100) {
-        const transcriptBody = clipAtBoundary(
-          rawText,
-          headroom,
-          DOCUMENT_TRANSCRIPT_TRUNCATION_MARKER
-        );
-        parsed.contentMd = `${clippedMinutes}${transcriptHeader}${transcriptBody}`;
-      } else {
-        parsed.contentMd = clippedMinutes;
-      }
+      const headroom = Math.max(
+        0,
+        DOCUMENT_CONTENT_MD_MAX_CHARS - clippedMinutes.length - transcriptHeader.length
+      );
+      const transcriptBody = clipAtBoundary(
+        rawText,
+        headroom,
+        DOCUMENT_TRANSCRIPT_TRUNCATION_MARKER
+      );
+      parsed.contentMd = `${clippedMinutes}${transcriptHeader}${transcriptBody}`;
     }
     scheduleGraphExtract(input, parsed.contentMd, deps);
     return { ok: true, ...parsed };
