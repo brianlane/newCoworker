@@ -15,7 +15,6 @@ import { logger } from "@/lib/logger";
 import { listBusinesses } from "@/lib/db/businesses";
 import { listBusinessIdsWithLiveSubscription, listSubscriptionsByBusinessIds, getSubscription, updateSubscription } from "@/lib/db/subscriptions";
 import {
-  listVpsInventory,
   releaseVpsToPool,
   markVpsNeverRenew
 } from "@/lib/db/vps-inventory";
@@ -50,7 +49,6 @@ export async function POST(request: Request): Promise<Response> {
       listBusinesses,
       listBusinessIdsWithLiveSubscription,
       listSubscriptionsByBusinessIds,
-      listInventory: listVpsInventory,
       listCatalog: () => hostinger.listCatalog("VPS"),
       listBillingSubscriptions: () => hostinger.listBillingSubscriptions(),
       hasActiveVpsMigrationLock,

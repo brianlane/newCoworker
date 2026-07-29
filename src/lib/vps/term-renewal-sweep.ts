@@ -14,7 +14,6 @@
 import { logger } from "@/lib/logger";
 import type { BusinessRow } from "@/lib/db/businesses";
 import type { SubscriptionRow } from "@/lib/db/subscriptions";
-import type { VpsInventoryRow } from "@/lib/db/vps-inventory";
 import type { VpsSshKeyRow } from "@/lib/db/vps-ssh-keys";
 import type { BillingSubscription, CatalogItem, HostingerClient, VirtualMachine } from "@/lib/hostinger/client";
 import {
@@ -36,7 +35,6 @@ export type TermRenewalSweepFinding = {
     | "skipped_economics"
     | "skipped_guard"
     | "skipped_in_flight"
-    | "skipped_never_renew"
     | "migrated"
     | "migration_failed";
   businessId: string;
@@ -67,7 +65,6 @@ export type TermRenewalSweepDeps = {
     businessIds: string[]
   ) => Promise<{ stripeBacked: Set<string>; stripeless: Set<string> }>;
   listSubscriptionsByBusinessIds: (businessIds: string[]) => Promise<Map<string, SubscriptionRow>>;
-  listInventory: () => Promise<VpsInventoryRow[]>;
   listCatalog: () => Promise<CatalogItem[]>;
   listBillingSubscriptions: () => Promise<BillingSubscription[]>;
   hasActiveVpsMigrationLock: (businessId: string) => Promise<boolean>;
@@ -227,16 +224,12 @@ export async function runTermRenewalSweep(
   const savingsThreshold = options.savingsThreshold ?? DEFAULT_SAVINGS_THRESHOLD;
   const renewalWindowDays = options.renewalWindowDays ?? DEFAULT_RENEWAL_WINDOW_DAYS;
 
-  const [businesses, catalog, billingSubs, inventory] = await Promise.all([
+  const [businesses, catalog, billingSubs] = await Promise.all([
     deps.listBusinesses(),
     deps.listCatalog(),
-    deps.listBillingSubscriptions(),
-    deps.listInventory()
+    deps.listBillingSubscriptions()
   ]);
   const subsById = new Map(billingSubs.map((sub) => [sub.id, sub]));
-  const neverRenewVmIds = new Set(
-    inventory.filter((row) => row.never_renew).map((row) => row.vm_id)
-  );
 
   const hostingerCandidates = businesses
     .map((business) => ({ business, vmId: tenantVmId(business) }))
@@ -318,17 +311,8 @@ export async function runTermRenewalSweep(
   for (const candidate of candidates) {
     const { business, vmId, vpsSize, subscription, billingSub, nextBillingAt } = candidate;
 
-    if (neverRenewVmIds.has(vmId)) {
-      findings.push({
-        kind: "skipped_never_renew",
-        businessId: business.id,
-        businessName: business.name,
-        vmId,
-        nextBillingAt,
-        detail: "box is flagged never_renew in vps_inventory"
-      });
-      continue;
-    }
+    // Note: never_renew on an ASSIGNED tenant box is a migration SIGNAL (billing
+    // posture nags until we move them off sunk-cost hardware). Do not skip.
 
     if (await deps.hasActiveVpsMigrationLock(business.id)) {
       findings.push({

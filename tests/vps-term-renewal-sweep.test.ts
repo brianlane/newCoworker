@@ -27,7 +27,6 @@ import {
 } from "@/lib/vps/term-renewal-sweep";
 import type { BusinessRow } from "@/lib/db/businesses";
 import type { SubscriptionRow } from "@/lib/db/subscriptions";
-import type { VpsInventoryRow } from "@/lib/db/vps-inventory";
 import type { CatalogItem } from "@/lib/hostinger/client";
 import { HQ_BUSINESS_ID } from "@/lib/vps/shared-hardware";
 
@@ -91,7 +90,6 @@ function makeDeps(overrides: Partial<TermRenewalSweepDeps> = {}): TermRenewalSwe
       stripeless: new Set<string>()
     })),
     listSubscriptionsByBusinessIds: vi.fn(async () => new Map([[BIZ, sub()]])),
-    listInventory: vi.fn(async () => [] as VpsInventoryRow[]),
     listCatalog: vi.fn(async () => catalogKvm2Biennial(3500, 5000)),
     listBillingSubscriptions: vi.fn(async () => [
       {
@@ -220,15 +218,11 @@ describe("runTermRenewalSweep", () => {
     expect(deps.orchestrateProvisioning).not.toHaveBeenCalled();
   });
 
-  it("skips never_renew boxes", async () => {
-    const deps = makeDeps({
-      listInventory: vi.fn(async () => [
-        { vm_id: 1800985, never_renew: true, state: "assigned" } as VpsInventoryRow
-      ])
-    });
-    const result = await runTermRenewalSweep(deps, { now: NOW });
-    expect(result.findings[0]?.kind).toBe("skipped_never_renew");
-    expect(deps.tryClaimVpsMigration).not.toHaveBeenCalled();
+  it("migrates assigned never_renew boxes (they are the migration signal)", async () => {
+    // never_renew on a live tenant box is why billing-posture nags; the sweep
+    // must migrate them, not skip them.
+    const result = await runTermRenewalSweep(makeDeps(), { now: NOW });
+    expect(result.migrated).toBe(1);
   });
 
   it("skips when a migration lease is already held", async () => {
