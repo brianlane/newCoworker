@@ -75,7 +75,12 @@ const schema = z.object({
    * `updateBusinessWebsiteUrl`. An empty string clears the value so an
    * owner can remove a broken URL without re-crawling.
    */
-  websiteUrl: z.string().optional()
+  websiteUrl: z.string().optional(),
+  /**
+   * Freeform SMS emoji intensity 0–5. Optional so older clients / onboarding
+   * saves that omit it leave the column alone.
+   */
+  emojiIntensity: z.number().int().min(0).max(5).optional()
 });
 
 export async function POST(request: Request) {
@@ -200,12 +205,14 @@ export async function POST(request: Request) {
       identity_md: string;
       memory_md?: string;
       website_md?: string;
+      emoji_intensity?: number;
     } = {
       soul_md: soulMd,
       identity_md: body.identityMd
     };
     if (body.memoryMd !== undefined) patch.memory_md = body.memoryMd;
     if (body.websiteMd !== undefined) patch.website_md = body.websiteMd;
+    if (body.emojiIntensity !== undefined) patch.emoji_intensity = body.emojiIntensity;
 
     await patchBusinessConfig(body.businessId, patch);
 
