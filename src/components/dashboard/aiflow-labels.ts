@@ -122,20 +122,77 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
     "Places a call to a number you choose; when they answer, the AI talks to them, captures the details, and texts you a summary. Use the Place call button to start it (budget is checked first)."
 };
 
+/** "1 rule" / "3 rules", because "1 condition(s)" is nobody's first language. */
+function ruleCount(n: number): string {
+  return `${n} rule${n === 1 ? "" : "s"}`;
+}
+
 /**
- * Owner-facing one-line summary of a flow: the tested trigger prose from
- * `summarizeDefinition`, followed by the steps as their friendly labels
- * instead of raw step types — "When SMS matching 3 condition(s): Read details
- * from the message text → Send a text → Notify me". Display-only; the raw
- * `summarizeDefinition` string (used by scripts/tests) is unchanged.
+ * When this flow runs, in the words an owner would use.
+ *
+ * `summarizeDefinition` in the schema also describes a trigger, and it stays as
+ * it is: it feeds debug CLIs and tests, where "When a webhook event matches 1
+ * condition(s)" is precise and fine. On the dashboard it is jargon plus an
+ * awkward plural, and an owner reading their own flow list should not have to
+ * know what a webhook is. So the owner-facing wording lives here beside the step
+ * labels, which were already written this way.
+ *
+ * The channels this does not re-word (calendar, tags, birthdays, voice) already
+ * read as English in the schema, so they fall through to it rather than being
+ * duplicated and left to drift.
+ */
+export function friendlyTriggerLabel(def: AiFlowDefinition): string {
+  const t = def.trigger;
+  const conditions = "conditions" in t ? t.conditions.length : 0;
+  switch (t.channel) {
+    case "sms":
+      return conditions === 0
+        ? "When anyone texts you"
+        : `When a text matches your ${ruleCount(conditions)}`;
+    case "manual":
+      return "When you ask for it";
+    case "email":
+      return conditions === 0
+        ? "When any email arrives"
+        : `When an email matches your ${ruleCount(conditions)}`;
+    case "tenant_email":
+      return conditions === 0
+        ? "When your coworker's mailbox gets an email"
+        : `When your coworker's mailbox gets an email matching your ${ruleCount(conditions)}`;
+    case "webhook":
+      return conditions === 0
+        ? "When another system sends something in"
+        : `When another system sends something in matching your ${ruleCount(conditions)}`;
+    case "contact_created":
+      return conditions === 0
+        ? "When a new contact is added"
+        : `When a new contact is added matching your ${ruleCount(conditions)}`;
+    default:
+      // Steps and extra triggers are both dropped from the input rather than
+      // trimmed off the output: summarizeDefinition appends its own "(or N
+      // other triggers)" tail, and friendlyFlowSummary adds that itself, so
+      // asking for the bare trigger is what keeps it from appearing twice.
+      // The trailing ": " is what summarizeDefinition leaves with no steps.
+      return summarizeDefinition({ ...def, steps: [], triggers: undefined }).replace(/:\s*$/, "");
+  }
+}
+
+/**
+ * Owner-facing one-line summary of a flow: when it runs, then what it does, as
+ * friendly labels rather than raw step types. "When anyone texts you: Read
+ * details from the message text → Send a text → Notify me".
+ *
+ * Display-only. The stored definition and the `summarizeDefinition` string used
+ * by scripts and tests are both untouched.
  */
 export function friendlyFlowSummary(def: AiFlowDefinition): string {
-  // Summarize with no steps to reuse the trigger wording, then drop the
-  // dangling ": " separator it leaves behind.
-  const trigPart = summarizeDefinition({ ...def, steps: [] }).replace(/:\s*$/, "");
-  if (def.steps.length === 0) return trigPart;
+  const trigPart = friendlyTriggerLabel(def);
+  const extra = def.triggers?.length ?? 0;
+  const withExtras =
+    extra > 0 ? `${trigPart} (or ${extra} other trigger${extra === 1 ? "" : "s"})` : trigPart;
+  if (def.steps.length === 0) return withExtras;
   const stepPart = def.steps.map((s) => STEP_TYPE_LABELS[s.type]).join(" → ");
-  return `${trigPart}: ${stepPart}`;
+  return `${withExtras}: ${stepPart}`;
 }
 
 /** Friendly name for each inbound trigger condition. */
