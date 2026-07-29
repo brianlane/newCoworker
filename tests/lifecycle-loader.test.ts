@@ -6,6 +6,7 @@ const {
   getCustomerProfileByIdMock,
   getVirtualMachineMock,
   listBillingSubscriptionsMock,
+  getVpsInventoryByVmIdMock,
   getTelnyxVoiceRouteForBusinessMock,
   getActiveVpsSshKeyForBusinessMock
 } = vi.hoisted(() => ({
@@ -14,6 +15,7 @@ const {
   getCustomerProfileByIdMock: vi.fn(),
   getVirtualMachineMock: vi.fn(),
   listBillingSubscriptionsMock: vi.fn(),
+  getVpsInventoryByVmIdMock: vi.fn(),
   getTelnyxVoiceRouteForBusinessMock: vi.fn(),
   getActiveVpsSshKeyForBusinessMock: vi.fn()
 }));
@@ -24,6 +26,10 @@ vi.mock("@/lib/db/telnyx-routes", () => ({
 
 vi.mock("@/lib/db/vps-ssh-keys", () => ({
   getActiveVpsSshKeyForBusiness: getActiveVpsSshKeyForBusinessMock
+}));
+
+vi.mock("@/lib/db/vps-inventory", () => ({
+  getVpsInventoryByVmId: getVpsInventoryByVmIdMock
 }));
 
 vi.mock("@/lib/db/businesses", () => ({
@@ -85,6 +91,7 @@ describe("loadLifecycleContextForBusiness", () => {
     getCustomerProfileByIdMock.mockResolvedValue({ id: "prof-sub" });
     getVirtualMachineMock.mockResolvedValue({ id: 42, ipv4: [{ address: "1.2.3.4" }] });
     listBillingSubscriptionsMock.mockResolvedValue([]);
+    getVpsInventoryByVmIdMock.mockResolvedValue({ vm_id: 42, never_renew: false });
     getTelnyxVoiceRouteForBusinessMock.mockResolvedValue({
       to_e164: "+16025550100",
       business_id: "biz-1"
@@ -105,10 +112,37 @@ describe("loadLifecycleContextForBusiness", () => {
         virtualMachineId: 42,
         vpsHost: "1.2.3.4",
         didE164: "+16025550100",
-        hostingerBillingExpiresAt: null
+        hostingerBillingExpiresAt: null,
+        vpsNeverRenew: false
       })
     });
     expect(getCustomerProfileByIdMock).toHaveBeenCalledWith("prof-sub");
+  });
+
+  it("loads vpsNeverRenew from inventory and tolerates lookup failure", async () => {
+    getVpsInventoryByVmIdMock.mockResolvedValueOnce({ vm_id: 42, never_renew: true });
+    const flagged = await loadLifecycleContextForBusiness("biz-1");
+    expect(flagged).toEqual({
+      ok: true,
+      vpsHost: "1.2.3.4",
+      context: expect.objectContaining({ vpsNeverRenew: true })
+    });
+
+    getVpsInventoryByVmIdMock.mockRejectedValueOnce(new Error("inventory down"));
+    const failed = await loadLifecycleContextForBusiness("biz-1");
+    expect(failed).toEqual({
+      ok: true,
+      vpsHost: "1.2.3.4",
+      context: expect.objectContaining({ vpsNeverRenew: null })
+    });
+
+    getVpsInventoryByVmIdMock.mockRejectedValueOnce("string failure");
+    const failedNonError = await loadLifecycleContextForBusiness("biz-1");
+    expect(failedNonError).toEqual({
+      ok: true,
+      vpsHost: "1.2.3.4",
+      context: expect.objectContaining({ vpsNeverRenew: null })
+    });
   });
 
   it("loads Hostinger billing expiration when a billing subscription id is present", async () => {

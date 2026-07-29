@@ -16,6 +16,7 @@ import { getBusiness } from "@/lib/db/businesses";
 import { getCustomerProfileById } from "@/lib/db/customer-profiles";
 import { getTelnyxVoiceRouteForBusiness } from "@/lib/db/telnyx-routes";
 import { getActiveVpsSshKeyForBusiness } from "@/lib/db/vps-ssh-keys";
+import { getVpsInventoryByVmId } from "@/lib/db/vps-inventory";
 import { HostingerClient, DEFAULT_HOSTINGER_BASE_URL } from "@/lib/hostinger/client";
 import { providerUsesHostingerLifecycle, resolveVpsProvider } from "@/lib/vps/provider";
 import { logger } from "@/lib/logger";
@@ -140,6 +141,25 @@ export async function loadLifecycleContextForBusiness(
     }
   }
 
+  // Sunk-cost never_renew flag: undo-cancel must not re-enable Hostinger
+  // renewal for these boxes. Best-effort — lookup failure leaves null and
+  // undo enables renewal (tenant safety; posture nags if the flag was real).
+  let vpsNeverRenew: boolean | null = null;
+  if (virtualMachineId !== null) {
+    try {
+      vpsNeverRenew = (await getVpsInventoryByVmId(virtualMachineId))?.never_renew === true;
+    } catch (err) {
+      logger.warn(
+        "loadLifecycleContextForBusiness: never_renew inventory lookup failed; continuing without vpsNeverRenew",
+        {
+          businessId,
+          virtualMachineId,
+          error: err instanceof Error ? err.message : String(err)
+        }
+      );
+    }
+  }
+
   const context: LifecycleContext = {
     subscription,
     ownerEmail: business.owner_email,
@@ -155,7 +175,8 @@ export async function loadLifecycleContextForBusiness(
     ovhServiceName: vpsProvider === "ovh" ? (business.hostinger_vps_id ?? null) : null,
     vpsHost,
     didE164,
-    hostingerBillingExpiresAt
+    hostingerBillingExpiresAt,
+    vpsNeverRenew
   };
   return { ok: true, context, vpsHost };
 }

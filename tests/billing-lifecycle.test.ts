@@ -562,6 +562,16 @@ describe("planLifecycleAction: undoCancelAtPeriodEnd / reactivate(undoPeriodEnd)
     expect(res.plan.hostingerOps).toEqual([]);
   });
 
+  it("skips enable on never_renew sunk-cost boxes", () => {
+    const ctx = makeCtx({
+      vpsNeverRenew: true,
+      subscription: makeSub({ cancel_at_period_end: true })
+    });
+    const res = planLifecycleAction({ type: "undoCancelAtPeriodEnd" }, ctx);
+    if (!res.ok) throw new Error(`unexpected reject ${res.reason}`);
+    expect(res.plan.hostingerOps).toEqual([]);
+  });
+
   it("skips enable for non-Hostinger providers", () => {
     const ctx = makeCtx({
       vpsProvider: "ovh",

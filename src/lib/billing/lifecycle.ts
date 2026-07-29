@@ -352,6 +352,13 @@ export type LifecycleContext = {
    * omitted → skip the disable (fail open for tenant uptime).
    */
   hostingerBillingExpiresAt?: string | null;
+  /**
+   * True when the tenant's box is flagged `vps_inventory.never_renew`
+   * (sunk-cost wrong-sized hardware that must lapse). Undo-cancel must NOT
+   * re-enable Hostinger auto-renewal for these boxes. Null / omitted /
+   * false → enable on undo as usual.
+   */
+  vpsNeverRenew?: boolean | null;
   /** Now, injected so tests can freeze it. */
   now?: Date;
 };
@@ -528,13 +535,17 @@ function planUndoCancelAtPeriodEnd(ctx: LifecycleContext): LifecyclePlanResult {
   }
 
   // Re-enable Hostinger auto-renewal so the still-paying tenant's box keeps
-  // living. Idempotent; does not touch sunk-cost `never_renew` inventory
-  // flags (those are a separate ops concern).
+  // living — except sunk-cost `never_renew` boxes, which must stay
+  // non-renewing even after undo (posture / adopt honor the same flag).
   const hostingerOps: HostingerOp[] = [];
   const hostingerManaged = providerUsesHostingerLifecycle(
     resolveVpsProvider(ctx.vpsProvider)
   );
-  if (hostingerManaged && sub.hostinger_billing_subscription_id) {
+  if (
+    hostingerManaged &&
+    sub.hostinger_billing_subscription_id &&
+    ctx.vpsNeverRenew !== true
+  ) {
     hostingerOps.push({
       type: "enable_billing_auto_renewal",
       hostingerBillingSubscriptionId: sub.hostinger_billing_subscription_id
