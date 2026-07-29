@@ -7,6 +7,7 @@ import {
 import { adoptVpsForBusiness } from "@/lib/hostinger/adopt";
 import {
   claimAvailableVps,
+  claimSpecificAvailableVps,
   listVpsInventory,
   recordVpsAssigned,
   releaseVpsToPool,
@@ -14,6 +15,8 @@ import {
 } from "@/lib/db/vps-inventory";
 import {
   reconcileOrphanedPurchases,
+  reconcileUntilSizeMatch,
+  orphanMatchesPurchaseAttempt,
   type ReconciledOrphan
 } from "@/lib/provisioning/reconcile-orphans";
 import { cleanupStaleTenantsForVm } from "@/lib/provisioning/stale-tenant-cleanup";
@@ -398,6 +401,8 @@ export type VpsAdopter = (input: {
  */
 export type VpsPool = {
   claim: typeof claimAvailableVps;
+  /** Atomic claim of one specific VM id (term fail-but-charge orphan adopt). */
+  claimSpecific: typeof claimSpecificAvailableVps;
   record: typeof recordVpsAssigned;
   release: typeof releaseVpsToPool;
   retire: typeof retireVps;
@@ -543,6 +548,12 @@ export async function orchestrateProvisioning(
      * run without burning real wall-clock time.
      */
     sleep?: (ms: number) => Promise<void>;
+    /**
+     * Injectable clock for the orphan-scan retry deadline. Production uses
+     * `Date.now`; tests inject a controllable clock so the 5-minute budget
+     * can expire without waiting.
+     */
+    now?: () => number;
     /**
      * Orphan reconciler for Hostinger's fail-but-charge purchases. When the
      * purchase endpoint throws, this lists the account's VMs and pools any
@@ -827,8 +838,118 @@ async function tryAdoptFromPool(args: {
         `adopt failed for ${businessId}: ${err instanceof Error ? err.message : String(err)}`
       );
     } catch (retireErr) {
-      logger.warn("vps pool retire failed (continuing to purchase)", {
+      logger.warn("vps pool retire after adopt failure failed (continuing)", {
+        businessId,
         virtualMachineId: claimed.vm_id,
+        error: retireErr instanceof Error ? retireErr.message : String(retireErr)
+      });
+    }
+    return null;
+  }
+}
+
+/**
+ * Adopt a SPECIFIC Hostinger VM after an atomic pool claim on that vm_id.
+ * Used by the change-plan term-alignment fail-but-charge path: the
+ * reconciled orphan IS the term-bought box, and claiming "any kvm2" could
+ * hand back a monthly lapser instead. Claim runs first so a concurrent
+ * adopt-first provision cannot take the same `available` orphan mid-setup.
+ */
+async function tryAdoptSpecificVm(args: {
+  businessId: string;
+  tier: "starter" | "standard";
+  vpsSize: VpsSize;
+  virtualMachineId: number;
+  hostingerBillingSubscriptionId: string | null;
+  vpsPool: VpsPool;
+  vpsAdopter: VpsAdopter;
+  notes: string;
+}): Promise<ProvisionVpsForBusinessResult | null> {
+  const {
+    businessId,
+    tier,
+    vpsSize,
+    virtualMachineId,
+    hostingerBillingSubscriptionId,
+    vpsPool,
+    vpsAdopter,
+    notes
+  } = args;
+
+  let claimed: Awaited<ReturnType<typeof claimSpecificAvailableVps>>;
+  try {
+    claimed = await vpsPool.claimSpecific(virtualMachineId, businessId);
+  } catch (err) {
+    logger.warn("specific orphan pool claim failed (continuing to surface purchase error)", {
+      businessId,
+      virtualMachineId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
+  }
+  if (!claimed) {
+    logger.warn("specific orphan already claimed by another provision", {
+      businessId,
+      virtualMachineId
+    });
+    return null;
+  }
+
+  logger.info("adopting specific reconciled Hostinger VM (term fail-but-charge)", {
+    businessId,
+    virtualMachineId,
+    vpsSize
+  });
+  try {
+    const adopted = await vpsAdopter({
+      businessId,
+      tier,
+      vpsSize,
+      virtualMachineId
+    });
+    try {
+      await vpsPool.record({
+        vmId: virtualMachineId,
+        plan: vpsSize,
+        businessId,
+        hostingerBillingSubscriptionId:
+          adopted.hostingerBillingSubscriptionId ??
+          hostingerBillingSubscriptionId ??
+          claimed.hostinger_billing_subscription_id,
+        notes
+      });
+    } catch (err) {
+      logger.warn("vps pool bookkeeping failed after specific adopt (continuing)", {
+        businessId,
+        virtualMachineId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+    try {
+      await cleanupStaleTenantsForVm({ vmId: virtualMachineId, newBusinessId: businessId });
+    } catch (err) {
+      logger.error("stale-tenant cleanup after specific adopt failed (continuing)", {
+        businessId,
+        virtualMachineId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+    return adopted;
+  } catch (err) {
+    logger.warn("specific orphan adopt failed — retiring box and surfacing purchase error", {
+      businessId,
+      virtualMachineId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    try {
+      await vpsPool.retire(
+        virtualMachineId,
+        `specific adopt failed for ${businessId}: ${err instanceof Error ? err.message : String(err)}`
+      );
+    } catch (retireErr) {
+      logger.warn("vps pool retire after specific adopt failure failed (continuing)", {
+        businessId,
+        virtualMachineId,
         error: retireErr instanceof Error ? retireErr.message : String(retireErr)
       });
     }
@@ -849,29 +970,33 @@ function isHostingerPurchaseFailure(err: unknown): boolean {
 }
 
 /**
- * Phase 1 of the orchestrator: land on a running VPS.
+ * Acquire a VPS for the business. Prefer adopting a pooled box (fleet
+ * economics Phase B); fall back to purchase. On Hostinger purchase failure,
+ * reconcile fail-but-charge orphans (with retries) and adopt.
  *
- * Adopt-first: claim an available `vps_inventory` box of the right size and
- * run the no-purchase adopt path; fall back to purchase when the pool is
- * empty, the claim fails, or the adopt fails. Bookkeeping rules:
- *
- *   * adopt success → upsert the row with the fresh billing id / hostname;
- *   * adopt failure → retire the row (a box that fails the proven adopt
- *     sequence is not safe to hand to the next signup either) and purchase;
+ * Outcomes:
+ *   * pool hit → adopt (setup/recreate) the claimed box;
  *   * purchase → record the new box as assigned inventory.
+ *   * purchase fails-but-charges → poll/reconcile orphans, then adopt;
+ *     for `skipPoolAdopt` adopt the SPECIFIC term orphan by id.
  *
  * Pool reads/writes are all best-effort: `vps_inventory` is an economics
  * optimization, so a pool outage degrades to "buy a box like before" rather
  * than blocking the signup.
  *
  * Fail-but-charge recovery: Hostinger's purchase endpoint has repeatedly
- * (Jul 5 + Jul 8 2026) returned an error (402 card-declined, 422 hostname)
- * while STILL charging the card and creating the VM. When the purchase call
- * throws, we run the orphan reconciler — it lists the account's VMs and
- * pools any recent box `vps_inventory` doesn't know about — and, if it finds
- * a size-matching orphan, immediately adopts it so the signup completes on
- * the box that was already paid for instead of failing (or worse, buying a
- * second box on retry).
+ * (Jul 5 + Jul 8 + Jul 28 2026) returned an error (402 card-declined, 422
+ * hostname) while STILL charging the card and creating the VM — sometimes
+ * ~a minute AFTER the error response. When the purchase call throws, we
+ * poll the orphan reconciler (up to ~5 min) until a size-matching unpaid
+ * box appears, pool it, and adopt it so the signup / term switch lands on
+ * the box that was already paid for instead of failing (or worse, buying
+ * a second box on retry).
+ *
+ * Term purchases (`skipPoolAdopt`, change-plan term alignment): the paid
+ * orphan IS the term-bought box, so we adopt that specific VM rather than
+ * aborting. Adopting an arbitrary pooled monthly lapser would defeat the
+ * term-pricing goal; adopting THIS orphan preserves it.
  */
 async function acquireVps(args: {
   businessId: string;
@@ -891,52 +1016,105 @@ async function acquireVps(args: {
   vpsProvisioner: VpsProvisioner;
   /** Orphan reconciler for fail-but-charge purchases. Null disables. */
   reconcileOrphans: (() => Promise<ReconciledOrphan[]>) | null;
+  /** Injectable sleep for the orphan-scan retry loop (tests inject a no-op). */
+  sleep?: (ms: number) => Promise<void>;
+  /** Injectable clock for the orphan-scan deadline (tests). */
+  now?: () => number;
 }): Promise<ProvisionVpsForBusinessResult> {
   const { businessId, tier, vpsSize, vpsProvider, billingPeriod, skipPoolAdopt, vpsPool, vpsAdopter, vpsProvisioner } =
     args;
   const hostingerManaged = providerUsesHostingerLifecycle(vpsProvider);
+  /* c8 ignore next -- production default; tests inject sleep */
+  const sleep = args.sleep ?? ((ms: number) => new Promise<void>((r) => setTimeout(r, ms)));
+  /* c8 ignore next -- production default; tests inject now */
+  const now = args.now ?? Date.now;
 
   if (vpsPool && !skipPoolAdopt && hostingerManaged) {
     const adopted = await tryAdoptFromPool({ businessId, tier, vpsSize, vpsPool, vpsAdopter });
     if (adopted) return adopted;
   }
 
+  // Stamp before the purchase call so the orphan wait only accepts VMs
+  // created for THIS attempt (5s clock-skew slack). A longer lookback can
+  // attribute an unrelated same-size fail-but-charge from seconds earlier.
+  const purchaseStartedAt = now();
+  const orphanMinCreatedAtMs = purchaseStartedAt - 5_000;
+
   let purchased: ProvisionVpsForBusinessResult;
   try {
     purchased = await vpsProvisioner({ businessId, tier, vpsSize, billingPeriod });
   } catch (err) {
     // Purchase failed. If this was the Hostinger purchase endpoint, the VM
-    // may exist anyway (fail-but-charge) — reconcile orphans into the pool,
-    // then try to adopt a size match so the provision still lands on the
-    // box that was already paid for. Reconciliation is best-effort: any
-    // failure inside it must never mask the original purchase error.
+    // may exist anyway (fail-but-charge) — reconcile orphans into the pool
+    // (with retries for Hostinger's async materialization), then adopt so
+    // the provision still lands on the box that was already paid for.
+    // Reconciliation is best-effort: any failure inside it must never mask
+    // the original purchase error.
     if (vpsPool && hostingerManaged && args.reconcileOrphans && isHostingerPurchaseFailure(err)) {
       try {
-        const pooled = await args.reconcileOrphans();
-        const sizeMatch = pooled.some((orphan) => orphan.plan === vpsSize);
-        // skipPoolAdopt callers (change-plan term alignment) still get the
-        // orphan POOLED (bookkeeping, no silent money leak) but not adopted:
-        // their entire point is landing on a term-priced purchase, and the
-        // pool claim can't guarantee this specific box.
-        if (sizeMatch && !skipPoolAdopt) {
-          const adopted = await tryAdoptFromPool({ businessId, tier, vpsSize, vpsPool, vpsAdopter });
-          if (adopted) {
-            // Note: the claim takes the OLDEST available box of this size,
-            // which is not necessarily one of the just-reconciled orphans —
-            // either way the signup lands on an already-owned box instead
-            // of failing, and the orphan stays pooled for the next one.
-            logger.warn(
-              "Hostinger purchase failed but a paid VM was reconciled into the pool — adopted a pooled box instead",
-              {
-                businessId,
-                adoptedVirtualMachineId: adopted.virtualMachineId,
-                reconciledVmIds: pooled.map((orphan) => orphan.vmId),
-                // isHostingerPurchaseFailure() gated this block, so `err`
-                // is always an Error here.
-                purchaseError: (err as Error).message
-              }
-            );
-            return adopted;
+        const pooled = await reconcileUntilSizeMatch({
+          reconcile: args.reconcileOrphans,
+          vpsSize,
+          sleep,
+          now,
+          minCreatedAtMs: orphanMinCreatedAtMs
+        });
+        const sizeMatches = pooled.filter((orphan) =>
+          orphanMatchesPurchaseAttempt(orphan, vpsSize, orphanMinCreatedAtMs)
+        );
+        // Prefer the OLDEST matching orphan after the purchase stamp.
+        // Concurrent same-size fail-but-charges: the earlier materialization
+        // belongs to the earlier purchase; taking newest can steal a later
+        // caller's term-priced box.
+        const sizeMatch = sizeMatches
+          .slice()
+          .sort((a, b) => Number(a.createdAtMs) - Number(b.createdAtMs))[0];
+        if (sizeMatch) {
+          if (skipPoolAdopt) {
+            // Term-alignment path: THIS orphan is the term-bought box. Claim
+            // + adopt it by id (not via the oldest-available size claim).
+            const adopted = await tryAdoptSpecificVm({
+              businessId,
+              tier,
+              vpsSize,
+              virtualMachineId: sizeMatch.vmId,
+              hostingerBillingSubscriptionId: sizeMatch.hostingerBillingSubscriptionId ?? null,
+              vpsPool,
+              vpsAdopter,
+              notes: `adopted fail-but-charge term orphan for ${businessId}`
+            });
+            if (adopted) {
+              logger.warn(
+                "Hostinger term purchase failed but the paid VM was reconciled — adopted that specific orphan",
+                {
+                  businessId,
+                  adoptedVirtualMachineId: adopted.virtualMachineId,
+                  reconciledVmIds: pooled.map((orphan) => orphan.vmId),
+                  purchaseError: (err as Error).message
+                }
+              );
+              return adopted;
+            }
+          } else {
+            const adopted = await tryAdoptFromPool({ businessId, tier, vpsSize, vpsPool, vpsAdopter });
+            if (adopted) {
+              // Note: the claim takes the OLDEST available box of this size,
+              // which is not necessarily one of the just-reconciled orphans —
+              // either way the signup lands on an already-owned box instead
+              // of failing, and the orphan stays pooled for the next one.
+              logger.warn(
+                "Hostinger purchase failed but a paid VM was reconciled into the pool — adopted a pooled box instead",
+                {
+                  businessId,
+                  adoptedVirtualMachineId: adopted.virtualMachineId,
+                  reconciledVmIds: pooled.map((orphan) => orphan.vmId),
+                  // isHostingerPurchaseFailure() gated this block, so `err`
+                  // is always an Error here.
+                  purchaseError: (err as Error).message
+                }
+              );
+              return adopted;
+            }
           }
         }
       } catch (reconcileErr) {
@@ -1033,7 +1211,7 @@ async function runOrchestrator(
   const vpsPool: VpsPool | null =
     deps?.vpsPool === undefined
       ? /* c8 ignore next -- production default pool; tests inject vpsPool */
-        { claim: claimAvailableVps, record: recordVpsAssigned, release: releaseVpsToPool, retire: retireVps }
+        { claim: claimAvailableVps, claimSpecific: claimSpecificAvailableVps, record: recordVpsAssigned, release: releaseVpsToPool, retire: retireVps }
       : deps.vpsPool;
   /* c8 ignore next -- defaultRemoteExecutor is the production path; tests inject remoteExec */
   const remoteExec = deps?.remoteExec ?? defaultRemoteExecutor;
@@ -1051,6 +1229,7 @@ async function runOrchestrator(
         businessId,
         listVirtualMachines: () => hostinger.listVirtualMachines(),
         listInventory: () => listVpsInventory(),
+        listBillingSubscriptions: () => hostinger.listBillingSubscriptions(),
         release: releaseVpsToPool
       });
     /* c8 ignore stop */
@@ -1072,7 +1251,9 @@ async function runOrchestrator(
     vpsPool,
     vpsAdopter,
     vpsProvisioner,
-    reconcileOrphans: orphanReconciler
+    reconcileOrphans: orphanReconciler,
+    sleep: deps?.sleep,
+    now: deps?.now
   });
   const vpsId = String(provisioned.virtualMachineId);
   logger.info("VPS provisioned", {

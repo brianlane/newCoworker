@@ -7,6 +7,7 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import {
   claimAvailableVps,
+  claimSpecificAvailableVps,
   recordVpsAssigned,
   releaseVpsToPool,
   retireVps,
@@ -183,6 +184,70 @@ describe("vps_inventory DB layer", () => {
       chain.limit.mockResolvedValue({ data: [], error: null });
       defaultClientSpy.mockReturnValueOnce(makeDb(chain));
       await expect(claimAvailableVps("kvm2", "biz-1")).resolves.toBeNull();
+      expect(defaultClientSpy).toHaveBeenCalled();
+    });
+  });
+
+  describe("claimSpecificAvailableVps", () => {
+    it("claims the named available VM", async () => {
+      const chain = makeChain();
+      chain.maybeSingle
+        .mockResolvedValueOnce({ data: null, error: null })
+        .mockResolvedValueOnce({
+          data: { ...sampleRow, state: "assigned", assigned_business_id: "biz-1" },
+          error: null
+        });
+      const db = makeDb(chain);
+      const row = await claimSpecificAvailableVps(1800985, "biz-1", db as never);
+      expect(row?.vm_id).toBe(1800985);
+      expect(chain.update).toHaveBeenCalled();
+      expect(chain.eq).toHaveBeenCalledWith("vm_id", 1800985);
+      expect(chain.eq).toHaveBeenCalledWith("state", "available");
+    });
+
+    it("returns the row when already assigned to this business", async () => {
+      const chain = makeChain();
+      const own = { ...sampleRow, state: "assigned", assigned_business_id: "biz-1" };
+      chain.maybeSingle.mockResolvedValueOnce({ data: own, error: null });
+      const db = makeDb(chain);
+      await expect(claimSpecificAvailableVps(1800985, "biz-1", db as never)).resolves.toEqual(own);
+      expect(chain.update).not.toHaveBeenCalled();
+    });
+
+    it("returns null when another provision already claimed it", async () => {
+      const chain = makeChain();
+      chain.maybeSingle
+        .mockResolvedValueOnce({ data: null, error: null })
+        .mockResolvedValueOnce({ data: null, error: null });
+      const db = makeDb(chain);
+      await expect(claimSpecificAvailableVps(1800985, "biz-1", db as never)).resolves.toBeNull();
+    });
+
+    it("throws on own-scan error", async () => {
+      const chain = makeChain();
+      chain.maybeSingle.mockResolvedValueOnce({ data: null, error: { message: "own down" } });
+      const db = makeDb(chain);
+      await expect(claimSpecificAvailableVps(1, "biz-1", db as never)).rejects.toThrow(
+        "claimSpecificAvailableVps: own down"
+      );
+    });
+
+    it("throws on claim update error", async () => {
+      const chain = makeChain();
+      chain.maybeSingle
+        .mockResolvedValueOnce({ data: null, error: null })
+        .mockResolvedValueOnce({ data: null, error: { message: "claim boom" } });
+      const db = makeDb(chain);
+      await expect(claimSpecificAvailableVps(1, "biz-1", db as never)).rejects.toThrow(
+        "claimSpecificAvailableVps: claim boom"
+      );
+    });
+
+    it("uses the default service client when none is provided", async () => {
+      const chain = makeChain();
+      chain.maybeSingle.mockResolvedValue({ data: null, error: null });
+      defaultClientSpy.mockReturnValueOnce(makeDb(chain));
+      await expect(claimSpecificAvailableVps(1, "biz-1")).resolves.toBeNull();
       expect(defaultClientSpy).toHaveBeenCalled();
     });
   });

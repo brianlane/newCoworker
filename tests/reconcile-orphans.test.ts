@@ -2,7 +2,12 @@ import { describe, expect, it, vi } from "vitest";
 import {
   normalizeHostingerPlan,
   reconcileOrphanedPurchases,
-  ORPHAN_MAX_AGE_MS
+  reconcileUntilSizeMatch,
+  resolveOrphanBillingSubscriptionId,
+  orphanMatchesPurchaseAttempt,
+  ORPHAN_MAX_AGE_MS,
+  ORPHAN_RECONCILE_RETRY_INTERVAL_MS,
+  ORPHAN_RECONCILE_RETRY_BUDGET_MS
 } from "@/lib/provisioning/reconcile-orphans";
 import type { VirtualMachine } from "@/lib/hostinger/client";
 
@@ -35,6 +40,36 @@ describe("normalizeHostingerPlan", () => {
   });
 });
 
+describe("resolveOrphanBillingSubscriptionId", () => {
+  it("prefers the VM detail subscription_id", () => {
+    expect(
+      resolveOrphanBillingSubscriptionId(
+        { id: 1, subscription_id: "from-vm" },
+        [{ id: "from-list", resource_id: "1" }]
+      )
+    ).toBe("from-vm");
+  });
+
+  it("falls back to the billing list resource_id match when VM omits it", () => {
+    expect(
+      resolveOrphanBillingSubscriptionId({ id: 1863856, subscription_id: undefined }, [
+        { id: "6olQFVQi75HF2es2", resource_id: "1863856" },
+        { id: "other", resource_id: "999" }
+      ])
+    ).toBe("6olQFVQi75HF2es2");
+  });
+
+  it("returns null when neither source has a match", () => {
+    expect(resolveOrphanBillingSubscriptionId({ id: 1 }, null)).toBeNull();
+    expect(resolveOrphanBillingSubscriptionId({ id: 1 }, [])).toBeNull();
+    expect(
+      resolveOrphanBillingSubscriptionId({ id: 1, subscription_id: "" }, [
+        { id: "x", resource_id: "2" }
+      ])
+    ).toBeNull();
+  });
+});
+
 describe("reconcileOrphanedPurchases", () => {
   function makeArgs(overrides: Partial<Parameters<typeof reconcileOrphanedPurchases>[0]> = {}) {
     return {
@@ -56,7 +91,14 @@ describe("reconcileOrphanedPurchases", () => {
 
     const result = await reconcileOrphanedPurchases(args);
 
-    expect(result).toEqual([{ vmId: 1815606, plan: "kvm2" }]);
+    expect(result).toEqual([
+      {
+        vmId: 1815606,
+        plan: "kvm2",
+        hostingerBillingSubscriptionId: "AzywqVVOpCob62ZiY",
+        createdAtMs: NOW - 5 * 60 * 1000
+      }
+    ]);
     expect(args.release).toHaveBeenCalledWith(
       expect.objectContaining({
         vmId: 1815606,
@@ -68,6 +110,79 @@ describe("reconcileOrphanedPurchases", () => {
     );
   });
 
+  it("looks up billing id via listBillingSubscriptions when the VM omits subscription_id", async () => {
+    const listBillingSubscriptions = vi.fn().mockResolvedValue([
+      { id: "billing-from-list", resource_id: "1863856" }
+    ]);
+    const args = makeArgs({
+      listVirtualMachines: vi.fn().mockResolvedValue([vm({ id: 1863856, subscription_id: undefined })]),
+      listBillingSubscriptions
+    });
+
+    const result = await reconcileOrphanedPurchases(args);
+
+    expect(listBillingSubscriptions).toHaveBeenCalledTimes(1);
+    expect(result).toEqual([
+      {
+        vmId: 1863856,
+        plan: "kvm2",
+        hostingerBillingSubscriptionId: "billing-from-list",
+        createdAtMs: NOW - 5 * 60 * 1000
+      }
+    ]);
+    expect(args.release).toHaveBeenCalledWith(
+      expect.objectContaining({ hostingerBillingSubscriptionId: "billing-from-list" })
+    );
+  });
+
+  it("continues without billing linkage when the billing-list lookup throws", async () => {
+    const args = makeArgs({
+      listVirtualMachines: vi.fn().mockResolvedValue([vm({ id: 1863856, subscription_id: undefined })]),
+      listBillingSubscriptions: vi.fn().mockRejectedValue(new Error("list down"))
+    });
+
+    const result = await reconcileOrphanedPurchases(args);
+
+    expect(result).toEqual([
+      {
+        vmId: 1863856,
+        plan: "kvm2",
+        hostingerBillingSubscriptionId: null,
+        createdAtMs: NOW - 5 * 60 * 1000
+      }
+    ]);
+  });
+
+  it("stringifies a non-Error billing-list rejection", async () => {
+    const args = makeArgs({
+      listVirtualMachines: vi.fn().mockResolvedValue([vm({ id: 1863857, subscription_id: undefined })]),
+      listBillingSubscriptions: vi.fn().mockRejectedValue("list string boom")
+    });
+
+    const result = await reconcileOrphanedPurchases(args);
+    expect(result).toEqual([
+      {
+        vmId: 1863857,
+        plan: "kvm2",
+        hostingerBillingSubscriptionId: null,
+        createdAtMs: NOW - 5 * 60 * 1000
+      }
+    ]);
+  });
+
+  it("skips the billing-list call when every candidate already has subscription_id", async () => {
+    const listBillingSubscriptions = vi.fn();
+    const args = makeArgs({
+      listVirtualMachines: vi.fn().mockResolvedValue([
+        vm({ id: 1, subscription_id: "already" })
+      ]),
+      listBillingSubscriptions
+    });
+
+    await reconcileOrphanedPurchases(args);
+    expect(listBillingSubscriptions).not.toHaveBeenCalled();
+  });
+
   it("skips VMs already tracked in vps_inventory (any state, including retired)", async () => {
     const args = makeArgs({
       listVirtualMachines: vi.fn().mockResolvedValue([vm({ id: 100 }), vm({ id: 200 })]),
@@ -76,7 +191,7 @@ describe("reconcileOrphanedPurchases", () => {
 
     const result = await reconcileOrphanedPurchases(args);
 
-    expect(result).toEqual([{ vmId: 200, plan: "kvm2" }]);
+    expect(result.map((r) => r.vmId)).toEqual([200]);
     expect(args.release).toHaveBeenCalledTimes(1);
   });
 
@@ -95,7 +210,7 @@ describe("reconcileOrphanedPurchases", () => {
 
     const result = await reconcileOrphanedPurchases(args);
 
-    expect(result).toEqual([{ vmId: 212, plan: "kvm2" }]);
+    expect(result.map((r) => r.vmId)).toEqual([212]);
     expect(args.release).toHaveBeenCalledTimes(1);
   });
 
@@ -121,7 +236,7 @@ describe("reconcileOrphanedPurchases", () => {
 
     const result = await reconcileOrphanedPurchases(args);
 
-    expect(result).toEqual([{ vmId: 301, plan: "kvm2" }]);
+    expect(result.map((r) => r.vmId)).toEqual([301]);
   });
 
   it("skips VMs with a missing or unparseable created_at", async () => {
@@ -171,7 +286,7 @@ describe("reconcileOrphanedPurchases", () => {
 
     const result = await reconcileOrphanedPurchases(args);
 
-    expect(result).toEqual([{ vmId: 800, plan: "kvm2" }]);
+    expect(result.map((r) => r.vmId)).toEqual([800]);
     expect(args.release).toHaveBeenCalledWith(
       expect.objectContaining({ vmId: 800, hostname: null })
     );
@@ -187,10 +302,158 @@ describe("reconcileOrphanedPurchases", () => {
 
     const result = await reconcileOrphanedPurchases(args);
 
-    expect(result).toEqual([
+    expect(result.map((r) => ({ vmId: r.vmId, plan: r.plan }))).toEqual([
       { vmId: 700, plan: "kvm1" },
       { vmId: 701, plan: "kvm2" }
     ]);
     expect(args.release).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("orphanMatchesPurchaseAttempt", () => {
+  it("matches any size when minCreatedAtMs is omitted", () => {
+    expect(orphanMatchesPurchaseAttempt({ vmId: 1, plan: "kvm2" }, "kvm2")).toBe(true);
+    expect(orphanMatchesPurchaseAttempt({ vmId: 1, plan: "kvm1" }, "kvm2")).toBe(false);
+  });
+
+  it("requires createdAtMs at/after the purchase stamp", () => {
+    expect(
+      orphanMatchesPurchaseAttempt({ vmId: 1, plan: "kvm2", createdAtMs: 50 }, "kvm2", 100)
+    ).toBe(false);
+    expect(
+      orphanMatchesPurchaseAttempt({ vmId: 1, plan: "kvm2", createdAtMs: 100 }, "kvm2", 100)
+    ).toBe(true);
+    expect(orphanMatchesPurchaseAttempt({ vmId: 1, plan: "kvm2" }, "kvm2", 100)).toBe(false);
+  });
+});
+
+describe("reconcileUntilSizeMatch", () => {
+  it("returns immediately when the first scan finds a size match", async () => {
+    const sleep = vi.fn();
+    const reconcile = vi.fn().mockResolvedValue([{ vmId: 1, plan: "kvm2" }]);
+
+    const result = await reconcileUntilSizeMatch({
+      reconcile,
+      vpsSize: "kvm2",
+      sleep,
+      now: () => 0
+    });
+
+    expect(result).toEqual([{ vmId: 1, plan: "kvm2" }]);
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
+  });
+
+  it("retries until a size-matching orphan appears (Hostinger async materialization)", async () => {
+    // Amy Laidlaw Jul 28 2026: first scan found nothing; VM appeared ~58s later.
+    let t = 0;
+    const sleep = vi.fn().mockImplementation(async (ms: number) => {
+      t += ms;
+    });
+    const reconcile = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ vmId: 1863856, plan: "kvm2" }]);
+
+    const result = await reconcileUntilSizeMatch({
+      reconcile,
+      vpsSize: "kvm2",
+      sleep,
+      now: () => t,
+      intervalMs: 30_000,
+      budgetMs: 5 * 60_000
+    });
+
+    expect(result).toEqual([{ vmId: 1863856, plan: "kvm2" }]);
+    expect(reconcile).toHaveBeenCalledTimes(3);
+    expect(sleep).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledWith(30_000);
+  });
+
+  it("stops at the budget when no size match ever appears", async () => {
+    let t = 0;
+    const sleep = vi.fn().mockImplementation(async (ms: number) => {
+      t += ms;
+    });
+    const reconcile = vi.fn().mockResolvedValue([{ vmId: 9, plan: "kvm8" }]);
+
+    const result = await reconcileUntilSizeMatch({
+      reconcile,
+      vpsSize: "kvm2",
+      sleep,
+      now: () => t,
+      intervalMs: 30_000,
+      budgetMs: 90_000
+    });
+
+    expect(result).toEqual([{ vmId: 9, plan: "kvm8" }]);
+    expect(t).toBeGreaterThanOrEqual(90_000);
+  });
+
+  it("keeps earlier orphans across retries (dedupe by vmId)", async () => {
+    let t = 0;
+    const sleep = vi.fn().mockImplementation(async (ms: number) => {
+      t += ms;
+    });
+    const reconcile = vi
+      .fn()
+      .mockResolvedValueOnce([{ vmId: 1, plan: "kvm1" }])
+      .mockResolvedValueOnce([{ vmId: 2, plan: "kvm2" }]);
+
+    const result = await reconcileUntilSizeMatch({
+      reconcile,
+      vpsSize: "kvm2",
+      sleep,
+      now: () => t,
+      intervalMs: 1,
+      budgetMs: 10_000
+    });
+
+    expect(result).toEqual([
+      { vmId: 1, plan: "kvm1" },
+      { vmId: 2, plan: "kvm2" }
+    ]);
+  });
+
+  it("ignores same-size orphans older than minCreatedAtMs and keeps polling", async () => {
+    let t = 1_000_000;
+    const sleep = vi.fn().mockImplementation(async (ms: number) => {
+      t += ms;
+    });
+    const reconcile = vi
+      .fn()
+      .mockResolvedValueOnce([{ vmId: 1, plan: "kvm2", createdAtMs: 100_000 }])
+      .mockResolvedValueOnce([
+        { vmId: 1, plan: "kvm2", createdAtMs: 100_000 },
+        { vmId: 2, plan: "kvm2", createdAtMs: 1_000_000 }
+      ]);
+
+    const result = await reconcileUntilSizeMatch({
+      reconcile,
+      vpsSize: "kvm2",
+      sleep,
+      now: () => t,
+      intervalMs: 1,
+      budgetMs: 10_000,
+      minCreatedAtMs: 940_000
+    });
+
+    expect(result.map((o) => o.vmId)).toEqual([1, 2]);
+    expect(reconcile).toHaveBeenCalledTimes(2);
+    expect(sleep).toHaveBeenCalledTimes(1);
+  });
+
+  it("exposes the production retry constants", () => {
+    expect(ORPHAN_RECONCILE_RETRY_INTERVAL_MS).toBe(30_000);
+    expect(ORPHAN_RECONCILE_RETRY_BUDGET_MS).toBe(5 * 60_000);
+  });
+
+  it("defaults now/interval/budget when omitted", async () => {
+    const sleep = vi.fn();
+    const reconcile = vi.fn().mockResolvedValue([{ vmId: 1, plan: "kvm2" }]);
+    await reconcileUntilSizeMatch({ reconcile, vpsSize: "kvm2", sleep });
+    expect(reconcile).toHaveBeenCalledTimes(1);
+    expect(sleep).not.toHaveBeenCalled();
   });
 });
