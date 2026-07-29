@@ -312,21 +312,29 @@ async function makeAdoptProvisioner(vmId: number): Promise<
     let sshKeyRow: NonNullable<typeof existingKey> | null = null;
     let publicKeyId: number;
     let privateKeyPem: string;
+    // True only when the active key row was minted by a PRIOR ADOPT ATTEMPT
+    // FOR THIS SAME BUSINESS — the one case where a running box with our key
+    // attached is known to be a freshly recreated image (safe to skip the
+    // destructive recreate below). A key row inherited from a previous tenant
+    // must never unlock that fast path: the disk still holds their data
+    // (Scar Fairy cutover Jul 2026 hit this — Truly's key authenticated and
+    // recreate was skipped until deploy/restore overwrote the app stack).
+    let sameBusinessRetry = false;
     if (existingKey?.hostinger_public_key_id && existingKey.private_key_pem) {
       // The keypair follows the BOX, but the row must follow the TENANT:
       // step 5's restore resolves keys via getActiveVpsSshKeyForBusiness, so
       // a row still pointing at the previous owner (e.g. a smoke-clone
       // business) would make the restore try the OLD box's key against the
       // new box → USERAUTH_FAILURE. Mirror adoptVpsForBusiness's reassign.
-      sshKeyRow =
-        existingKey.business_id === input.businessId
-          ? existingKey
-          : await reassignVpsSshKeyBusiness(existingKey.id, input.businessId);
+      sameBusinessRetry = existingKey.business_id === input.businessId;
+      sshKeyRow = sameBusinessRetry
+        ? existingKey
+        : await reassignVpsSshKeyBusiness(existingKey.id, input.businessId);
       publicKeyId = existingKey.hostinger_public_key_id;
       privateKeyPem = existingKey.private_key_pem;
       console.log(
         `  [adopt] reusing existing key row for vm=${vmId} (hostinger key id=${publicKeyId}` +
-          (existingKey.business_id === input.businessId ? ")" : `, reassigned from ${existingKey.business_id})`)
+          (sameBusinessRetry ? ")" : `, reassigned from ${existingKey.business_id})`)
       );
     } else {
       const keypair = await generateSshKeypair(`newcoworker-${input.businessId}`);
@@ -473,14 +481,15 @@ async function makeAdoptProvisioner(vmId: number): Promise<
       }
     };
 
-    // If a previous adopt attempt already attached our key, skip the
-    // destructive recreate — the box is set up, possibly still running its
-    // post-install; the orchestrator's idempotent SSH bootstrap follows.
+    // If a previous adopt attempt FOR THIS SAME BUSINESS already attached
+    // our key, skip the destructive recreate — the box is a freshly
+    // recreated image; the orchestrator's idempotent SSH bootstrap follows.
+    // A key inherited from a previous tenant authenticating is NOT enough.
     const preState = await hostinger.getVirtualMachine(vmId);
     const preIp = preState.ipv4?.[0]?.address ?? null;
     let publicIp: string;
-    if (preState.state === "running" && preIp && (await sshAuthOk(preIp))) {
-      console.log(`  [adopt] key already attached from a previous attempt — skipping recreate`);
+    if (sameBusinessRetry && preState.state === "running" && preIp && (await sshAuthOk(preIp))) {
+      console.log(`  [adopt] key from this business's prior attempt already attached — skipping recreate`);
       publicIp = preIp;
     } else {
       publicIp = await recreateOnce();
