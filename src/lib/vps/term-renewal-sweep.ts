@@ -182,12 +182,37 @@ function resolveBillingSub(
 ): BillingSubscription | null {
   const fromSubRow = subscription.hostinger_billing_subscription_id
     ? subsById.get(subscription.hostinger_billing_subscription_id) ?? null
-   : null;
-  if (fromSubRow) return fromSubRow;
-  if (typeof vm.subscription_id === "string" && vm.subscription_id.length > 0) {
-    return subsById.get(vm.subscription_id) ?? null;
+    : null;
+  const fromVm =
+    typeof vm.subscription_id === "string" && vm.subscription_id.length > 0
+      ? (subsById.get(vm.subscription_id) ?? null)
+      : null;
+
+  // Partial cutover: provisioning already swung hostinger_vps_id but the
+  // subscription row still names the old billing sub. Refuse to treat that
+  // as a normal renewal candidate (would buy yet another box).
+  if (
+    fromSubRow &&
+    fromVm &&
+    subscription.hostinger_billing_subscription_id &&
+    vm.subscription_id &&
+    subscription.hostinger_billing_subscription_id !== vm.subscription_id
+  ) {
+    return null;
   }
-  return null;
+
+  if (fromSubRow) return fromSubRow;
+  return fromVm;
+}
+
+/** True when the live VM's billing id disagrees with the subscription row. */
+export function isPartialTermCutover(
+  subscription: Pick<SubscriptionRow, "hostinger_billing_subscription_id">,
+  vm: Pick<VirtualMachine, "subscription_id">
+): boolean {
+  const rowId = subscription.hostinger_billing_subscription_id;
+  const vmId = typeof vm.subscription_id === "string" ? vm.subscription_id : null;
+  return Boolean(rowId && vmId && rowId !== vmId);
 }
 
 function nextBillingTimestamp(sub: BillingSubscription): string | null {
@@ -231,6 +256,7 @@ export async function runTermRenewalSweep(
     stripeBacked.map((entry) => entry.business.id)
   );
 
+  const findings: TermRenewalSweepFinding[] = [];
   const candidates: SweepCandidate[] = [];
   for (const { business, vmId } of stripeBacked) {
     const subscription = subByBusiness.get(business.id);
@@ -245,6 +271,20 @@ export async function runTermRenewalSweep(
         businessId: business.id,
         vmId,
         error: errMsg(err)
+      });
+      continue;
+    }
+
+    if (isPartialTermCutover(subscription, vm)) {
+      findings.push({
+        kind: "skipped_guard",
+        businessId: business.id,
+        businessName: business.name,
+        vmId,
+        nextBillingAt: null,
+        detail:
+          "partial cutover detected: businesses.hostinger_vps_id billing id differs from " +
+          "subscriptions.hostinger_billing_subscription_id; manual recovery required before retry"
       });
       continue;
     }
@@ -272,7 +312,6 @@ export async function runTermRenewalSweep(
     (a, b) => new Date(a.nextBillingAt).getTime() - new Date(b.nextBillingAt).getTime()
   );
 
-  const findings: TermRenewalSweepFinding[] = [];
   let skippedEconomics = 0;
   let migrated = 0;
 

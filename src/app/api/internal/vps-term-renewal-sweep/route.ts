@@ -32,7 +32,7 @@ import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
 import { runTermRenewalSweep } from "@/lib/vps/term-renewal-sweep";
 import { sendOpsHardwareMigrationEmail } from "@/lib/email/ops-notify";
 
-export const maxDuration = 300;
+export const maxDuration = 800;
 export const runtime = "nodejs";
 
 export async function POST(request: Request): Promise<Response> {

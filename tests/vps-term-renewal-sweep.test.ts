@@ -21,6 +21,7 @@ import {
   meetsRenewalSavingsThreshold,
   findCatalogFirstPeriodCents,
   isWithinRenewalWindow,
+  isPartialTermCutover,
   runTermRenewalSweep,
   type TermRenewalSweepDeps
 } from "@/lib/vps/term-renewal-sweep";
@@ -254,6 +255,48 @@ describe("runTermRenewalSweep", () => {
     });
     const residencyResult = await runTermRenewalSweep(residencyDeps, { now: NOW });
     expect(residencyResult.findings[0]?.kind).toBe("skipped_guard");
+  });
+
+  it("skips partial cutovers where VM billing id disagrees with the subscription row", async () => {
+    expect(
+      isPartialTermCutover(
+        { hostinger_billing_subscription_id: "old-billing" },
+        { subscription_id: "new-billing" }
+      )
+    ).toBe(true);
+    expect(
+      isPartialTermCutover(
+        { hostinger_billing_subscription_id: "same" },
+        { subscription_id: "same" }
+      )
+    ).toBe(false);
+
+    const deps = makeDeps({
+      hostinger: {
+        getVirtualMachine: vi.fn(async () => ({
+          id: 1800985,
+          subscription_id: "billing-on-new-vm",
+          ipv4: [{ address: "1.2.3.4" }]
+        })),
+        listBillingSubscriptions: vi.fn(async () => []),
+        createSnapshot: vi.fn(),
+        stopVirtualMachine: vi.fn(),
+        disableBillingAutoRenewal: vi.fn()
+      } as never,
+      listSubscriptionsByBusinessIds: vi.fn(
+        async () =>
+          new Map([
+            [
+              BIZ,
+              sub({ hostinger_billing_subscription_id: "billing-still-on-old-row" })
+            ]
+          ])
+      )
+    });
+    const result = await runTermRenewalSweep(deps, { now: NOW });
+    expect(result.findings[0]?.kind).toBe("skipped_guard");
+    expect(result.findings[0]?.detail).toMatch(/partial cutover/);
+    expect(deps.tryClaimVpsMigration).not.toHaveBeenCalled();
   });
 
   it("migrates at most one tenant per run (soonest renewal first)", async () => {

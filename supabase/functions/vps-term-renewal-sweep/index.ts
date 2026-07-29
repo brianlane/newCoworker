@@ -19,7 +19,7 @@ import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
 
 const TARGET_PATH = "/api/internal/vps-term-renewal-sweep";
-const REQUEST_TIMEOUT_MS = 90_000;
+const REQUEST_TIMEOUT_MS = 800_000;
 
 serve(async (req: Request) => {
   if (req.method !== "POST") {

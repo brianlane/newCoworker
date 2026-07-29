@@ -37,7 +37,7 @@ select cron.schedule(
       'Authorization', 'Bearer ' || public._cron_vault_read('internal_cron_secret')
     ),
     body := '{}'::jsonb,
-    timeout_milliseconds := 90000
+    timeout_milliseconds := 800000
   );
   $$
 );
