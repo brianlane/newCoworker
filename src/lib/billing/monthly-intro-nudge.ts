@@ -27,8 +27,14 @@ export const MONTHLY_INTRO_NUDGE_BUSINESS_DAYS = 5;
 /** Per-pass ceiling so one busy day cannot starve the rest of the fleet. */
 export const MONTHLY_INTRO_NUDGE_BATCH_LIMIT = 200;
 
-/** First-cycle slack: created_at may slightly precede Stripe period_start. */
-const FIRST_CYCLE_SLACK_MS = 24 * 60 * 60 * 1000;
+/**
+ * First-cycle slack between subscription.created_at and Stripe period_start.
+ * Pending rows are inserted at /api/checkout; period_start is written only when
+ * the Stripe subscription activates, which can lag by days (async/manual
+ * checkout). Renewed monthlies have period_start a full cycle after created_at,
+ * so a ~14 day window still excludes them.
+ */
+const FIRST_CYCLE_SLACK_MS = 14 * 24 * 60 * 60 * 1000;
 
 export type MonthlyIntroNudgeCandidate = {
   id: string;

@@ -114,6 +114,17 @@ describe("isFirstBillingCycle", () => {
     expect(isFirstBillingCycle(CREATED, PERIOD_START, NOW.getTime())).toBe(true);
   });
 
+  it("accepts a pending-checkout delay of several days before activation", () => {
+    // Row created at checkout; Stripe period_start lands 5 days later.
+    expect(
+      isFirstBillingCycle(
+        "2026-07-07T18:00:00.000Z",
+        "2026-07-12T18:00:00.000Z",
+        NOW.getTime()
+      )
+    ).toBe(true);
+  });
+
   it("rejects a renewed period (created long before period_start)", () => {
     expect(
       isFirstBillingCycle("2026-01-01T00:00:00.000Z", "2026-08-01T00:00:00.000Z", NOW.getTime())
@@ -126,8 +137,8 @@ describe("isFirstBillingCycle", () => {
     expect(isFirstBillingCycle(CREATED, "nope")).toBe(false);
   });
 
-  it("rejects a period_start more than a day in the future", () => {
-    const futureStart = new Date(NOW.getTime() + 2 * 24 * 60 * 60 * 1000).toISOString();
+  it("rejects a period_start more than the slack window in the future", () => {
+    const futureStart = new Date(NOW.getTime() + 16 * 24 * 60 * 60 * 1000).toISOString();
     expect(isFirstBillingCycle(futureStart, futureStart, NOW.getTime())).toBe(false);
   });
 });
