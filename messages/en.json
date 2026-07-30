@@ -2498,6 +2498,17 @@
       "line4": "No action is required to stay on month-to-month. To review or change your plan, open Billing in your dashboard.",
       "cta": "Review billing options",
       "openBillingFallback": "Open Billing: {billingUrl}"
+    },
+    "contractTermNudge": {
+      "subject": "A note about your New Coworker contract",
+      "line1": "Hi, we wanted to give you a clear notice before your contract term ends.",
+      "line2": "Your {term} rate of {contractRate} applies through {date}. After that, service continues month-to-month at {renewalRate} unless you renew your contract.",
+      "line3": "Turn on contract auto-renew in Billing to lock in another {term} at {contractRate} ({contractTotal} billed upfront), or start a new contract after the term.",
+      "line4": "No action is required to roll to month-to-month. To review options, open Billing in your dashboard.",
+      "cta": "Review billing options",
+      "openBillingFallback": "Open Billing: {billingUrl}",
+      "termAnnual": "12-month",
+      "termBiennial": "24-month"
     }
   },
   "notFound": {

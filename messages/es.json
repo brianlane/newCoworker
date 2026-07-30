@@ -2498,6 +2498,17 @@
       "line4": "No hace falta hacer nada para seguir mes a mes. Para revisar o cambiar tu plan, abre Facturación en tu panel.",
       "cta": "Revisar opciones de facturación",
       "openBillingFallback": "Abrir facturación: {billingUrl}"
+    },
+    "contractTermNudge": {
+      "subject": "Una nota sobre tu contrato de New Coworker",
+      "line1": "Hola, queríamos avisarte con claridad antes de que termine el plazo de tu contrato.",
+      "line2": "Tu tarifa de {term} de {contractRate} aplica hasta el {date}. Después, el servicio continúa mes a mes a {renewalRate} a menos que renueves tu contrato.",
+      "line3": "Activa la renovación automática del contrato en Facturación para asegurar otro {term} a {contractRate} ({contractTotal} facturados por adelantado), o inicia un contrato nuevo después del plazo.",
+      "line4": "No hace falta hacer nada para pasar a mes a mes. Para revisar opciones, abre Facturación en tu panel.",
+      "cta": "Revisar opciones de facturación",
+      "openBillingFallback": "Abrir facturación: {billingUrl}",
+      "termAnnual": "12 meses",
+      "termBiennial": "24 meses"
     }
   },
   "notFound": {

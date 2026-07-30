@@ -640,16 +640,11 @@ export async function POST(request: Request) {
       }
 
       case "charge.dispute.created": {
-        // Observational only: do NOT clawback at dispute open. Stripe disputes
-        // take days-to-weeks to resolve and can terminate as `won` or
-        // `warning_closed`, both of which leave funds with the merchant. Since
-        // we have no re-grant path for a subsequently-defended dispute, voiding
-        // at open would permanently revoke paid voice seconds from customers
-        // whose merchants successfully defend. `charge.dispute.closed` + status
-        // == "lost" is the single authoritative clawback path; see
-        // `handleVoiceBonusRefund`.
+        // Observational only. Pack grants are non-refundable on customer
+        // disputes (including dispute.lost); New Coworker refunds claw back
+        // via refund metadata / lifecycle executor instead.
         const dispute = event.data.object as Stripe.Dispute;
-        logger.info("Stripe dispute created; deferring clawback to dispute.closed/lost", {
+        logger.info("Stripe dispute created; pack grants are not clawed back on disputes", {
           eventId: event.id,
           disputeId: dispute.id,
           chargeId: typeof dispute.charge === "string" ? dispute.charge : dispute.charge?.id,
@@ -2194,15 +2189,97 @@ export function computeVoiceBonusClawbackSeconds(
 }
 
 /**
- * Customer Stripe refunds / dispute.lost must NOT void usage-pack grants.
- * Packs (membership add-ons and Billing top-ups) are non-refundable from the
- * user side. Operators intentionally claw back via
- * `clawbackUsagePackGrantBySourceId` / POST /api/admin/usage-pack-clawback.
+ * Pack clawback safety net for New Coworker-issued refunds.
+ *
+ * Primary clawback runs in lifecycle `refund_latest_charge` after
+ * `refunds.create`. This path re-runs when `charge.refunded` carries a refund
+ * stamped with `metadata.newcoworker_reason` (idempotent void RPCs).
+ * Customer/Dashboard refunds without that metadata, and all disputes, leave
+ * grants alone (admin `/api/admin/usage-pack-clawback` remains).
  */
 async function handleVoiceBonusRefund(event: Stripe.Event): Promise<void> {
-  logger.info("Usage pack refund/dispute ignored; packs are non-refundable to customers", {
-    eventId: event.id,
-    type: event.type
+  if (event.type === "charge.dispute.closed") {
+    logger.info("Usage pack dispute ignored; packs are non-refundable to customers", {
+      eventId: event.id,
+      type: event.type
+    });
+    return;
+  }
+
+  if (event.type !== "charge.refunded") {
+    logger.info("Usage pack refund/dispute ignored; packs are non-refundable to customers", {
+      eventId: event.id,
+      type: event.type
+    });
+    return;
+  }
+
+  const charge = event.data.object as Stripe.Charge;
+  const {
+    clawbackMembershipPackGrantsForInvoice,
+    clawbackReasonForNewcoworkerRefund
+  } = await import("@/lib/billing/usage-pack-clawback");
+
+  let packReason: "refund" | "admin" | null = null;
+  try {
+    const listed = await getStripe().refunds.list({ charge: charge.id, limit: 100 });
+    for (const refund of listed.data) {
+      const reason = clawbackReasonForNewcoworkerRefund(refund.metadata?.newcoworker_reason);
+      if (reason) {
+        packReason = reason;
+        break;
+      }
+    }
+  } catch (err) {
+    logger.warn("Usage pack refund: listing charge refunds failed", {
+      eventId: event.id,
+      chargeId: charge.id,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return;
+  }
+
+  if (!packReason) {
+    logger.info("Usage pack refund ignored; no New Coworker refund metadata", {
+      eventId: event.id,
+      chargeId: charge.id
+    });
+    return;
+  }
+
+  // Stripe's Charge type omits `invoice` in some API versions; read it defensively.
+  const chargeInvoice = (charge as Stripe.Charge & { invoice?: string | { id?: string } | null })
+    .invoice;
+  const invoiceId =
+    typeof chargeInvoice === "string" ? chargeInvoice : chargeInvoice?.id ?? null;
+  if (!invoiceId) {
+    logger.info("Usage pack NC refund: charge has no invoice; skipping membership clawback", {
+      eventId: event.id,
+      chargeId: charge.id
+    });
+    return;
+  }
+
+  let subscriptionMetadata: Stripe.Metadata | null = null;
+  try {
+    const invoice = await getStripe().invoices.retrieve(invoiceId);
+    const subscriptionId = getInvoiceSubscriptionId(invoice);
+    if (subscriptionId) {
+      const sub = await getStripe().subscriptions.retrieve(subscriptionId);
+      subscriptionMetadata = sub.metadata;
+    }
+  } catch (err) {
+    logger.warn("Usage pack NC refund: subscription metadata lookup failed", {
+      eventId: event.id,
+      invoiceId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+
+  await clawbackMembershipPackGrantsForInvoice({
+    invoiceId,
+    reason: packReason,
+    subscriptionMetadata
   });
 }
 
