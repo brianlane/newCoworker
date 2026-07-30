@@ -112,7 +112,7 @@ export async function importZoomTranscriptDocument(
 
   const { error: uploadError } = await db.storage
     .from(BUSINESS_DOCS_BUCKET)
-    .upload(storagePath, bytes, { contentType: `${VTT_MIME_TYPE}; charset=utf-8` });
+    .upload(storagePath, bytes, { contentType: VTT_MIME_TYPE });
   if (uploadError) {
     logger.warn("zoom import: storage upload failed", {
       businessId,
