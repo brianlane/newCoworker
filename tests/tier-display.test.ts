@@ -64,6 +64,12 @@ describe("tier-display", () => {
       );
     });
 
+    it("standard advertises live translator (Standard-tier gate, Jul 2026)", () => {
+      expect(STANDARD_FEATURES).toContain(
+        "Live translator: your coworker interprets after transferring a call"
+      );
+    });
+
     it("enterprise advertises branded RCS (own verified sender)", () => {
       expect(ENTERPRISE_FEATURES).toContain(
         "Branded RCS messaging (your own Google-verified sender)"

@@ -34,6 +34,7 @@ import { getChatSpendSnapshotForBusiness } from "@/lib/db/chat-usage";
 import { getVoiceBillingSnapshotForBusiness } from "@/lib/db/voice-usage";
 import { getCalendarMonthUsageTotals } from "@/lib/db/usage";
 import { getTierLimits } from "@/lib/plans/limits";
+import { translatorAllowedForTier } from "@/lib/plans/translator";
 
 export const dynamic = "force-dynamic";
 
@@ -179,7 +180,10 @@ export default async function DashboardPage() {
               bridgeHeartbeatAt={telnyxSettings?.bridge_last_heartbeat_at ?? null}
               forwardToE164={telnyxSettings?.forward_to_e164 ?? null}
               transferEnabled={telnyxSettings?.transfer_enabled ?? true}
-              translatorModeEnabled={telnyxSettings?.translator_mode_enabled ?? true}
+              translatorModeEnabled={
+                translatorAllowedForTier(business.tier as PlanTier) &&
+                (telnyxSettings?.translator_mode_enabled ?? true)
+              }
               smsCampaignStatus={telnyxSettings?.telnyx_messaging_campaign_status ?? null}
             />
           </Card>

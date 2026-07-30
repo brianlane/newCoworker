@@ -28,6 +28,7 @@ import { StripeDiagnosticsPanel } from "@/components/admin/StripeDiagnosticsPane
 import { ViewAsButton } from "@/components/admin/ViewAsButton";
 import { DeployButton } from "@/components/dashboard/DeployButton";
 import { AssignDidPanel } from "@/components/admin/AssignDidPanel";
+import { translatorAllowedForTier } from "@/lib/plans/translator";
 import { KillSwitch } from "@/components/dashboard/KillSwitch";
 import { SafeModeToggle } from "@/components/dashboard/SafeModeToggle";
 import { getTierLimits } from "@/lib/plans/limits";
@@ -784,6 +785,7 @@ export default async function BusinessDetailPage({
           smsFallbackEnabled={telnyxSettings?.sms_fallback_enabled ?? true}
           bridgeStaleAlertMuted={telnyxSettings?.bridge_stale_alert_muted ?? false}
           translatorModeEnabled={telnyxSettings?.translator_mode_enabled ?? true}
+          translatorAllowed={translatorAllowedForTier(business.tier)}
           voiceName={telnyxSettings?.voice_name ?? null}
           defaultAreaCode={process.env.TELNYX_DEFAULT_AREA_CODE ?? "602"}
           defaultState={process.env.TELNYX_DEFAULT_STATE ?? "AZ"}

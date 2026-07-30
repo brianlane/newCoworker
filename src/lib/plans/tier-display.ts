@@ -160,6 +160,9 @@ function buildStandardFeatures(locale: PlanCopyLocale): string[] {
     es
       ? "Prospección: tu coworker encuentra negocios locales y les escribe"
       : "Prospecting: your coworker finds local businesses and emails them",
+    es
+      ? "Traductor en vivo: tu coworker interpreta tras transferir la llamada"
+      : "Live translator: your coworker interprets after transferring a call",
     es ? "Envía textos durante llamadas" : "Send texts during calls",
     es
       ? "Auto-texto a quien llama cuando no se puede contestar"
