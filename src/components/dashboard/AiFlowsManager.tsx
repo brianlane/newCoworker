@@ -37,7 +37,7 @@ import {
   varsProducedByStep,
   type StepContainerRef
 } from "@/lib/ai-flows/tree";
-import { flowStepsIncludeBrowseAction } from "@/lib/ai-flows/browse-action-steps";
+import { flowStepsIncludeBrowseAction } from "@/lib/ai-flows/browse-action-tree";
 import type { AiFlowRow } from "@/lib/ai-flows/db";
 import {
   STEP_TYPE_LABELS,
