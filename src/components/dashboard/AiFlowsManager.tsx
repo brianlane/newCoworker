@@ -2341,9 +2341,7 @@ export function AiFlowsManager({
                   }
                 >
                   <option value="inbound">Inbound: a call comes in</option>
-                  {(outboundAiCallsEnabled || editor.voiceDirection === "outbound") && (
-                    <option value="outbound">Outbound: you place a call</option>
-                  )}
+                  <option value="outbound">Outbound: you place a call</option>
                 </select>
               </div>
               {editor.voiceDirection === "inbound" ? (
