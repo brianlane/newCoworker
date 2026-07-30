@@ -117,7 +117,24 @@ describe("commitmentMonthsFromStripeSubscription", () => {
       } as Stripe.Subscription)
     ).toBe(1);
     expect(
-      commitmentMonthsFromStripeSubscription({ items: { data: [] } } as Stripe.Subscription)
+      commitmentMonthsFromStripeSubscription({
+        items: { data: [] }
+      } as unknown as Stripe.Subscription)
+    ).toBe(1);
+    expect(
+      commitmentMonthsFromStripeSubscription({} as unknown as Stripe.Subscription)
+    ).toBe(1);
+    expect(
+      commitmentMonthsFromStripeSubscription({
+        items: { data: [{ price: {} }] }
+      } as unknown as Stripe.Subscription)
+    ).toBe(1);
+    expect(
+      commitmentMonthsFromStripeSubscription({
+        items: {
+          data: [{ price: { recurring: { interval: "month", interval_count: 0 } } }]
+        }
+      } as unknown as Stripe.Subscription)
     ).toBe(1);
   });
 });
@@ -137,6 +154,23 @@ describe("applyMembershipPackAddonsFromInvoice", () => {
     await applyMembershipPackAddonsFromInvoice({
       invoice: makeInvoice(),
       stripeSubscription: makeSub({ businessId: "biz-1" }),
+      businessId: "biz-1",
+      eventId: "evt_1"
+    });
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it("does not grant from legacy one-time pack metadata on renewals", async () => {
+    await applyMembershipPackAddonsFromInvoice({
+      invoice: makeInvoice("in_legacy"),
+      stripeSubscription: makeSub({
+        addonVoicePackId: "min_30",
+        addonVoiceSeconds: "1800",
+        addonSmsPackId: "texts_500",
+        addonSmsTexts: "500",
+        addonChatPackId: "usd_5",
+        addonChatMicros: "5000000"
+      }),
       businessId: "biz-1",
       eventId: "evt_1"
     });
@@ -345,6 +379,19 @@ describe("applyMembershipPackAddonsFromInvoice", () => {
     );
   });
 
+  it("falls back when invoice.created is NaN", async () => {
+    await applyMembershipPackAddonsFromInvoice({
+      invoice: { id: "in_nan", created: Number.NaN } as unknown as Stripe.Invoice,
+      stripeSubscription: makeSub({ addonVoice: "min_30:1:1800" }),
+      businessId: "biz-1",
+      eventId: "evt_1"
+    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "apply_voice_bonus_grant_from_checkout",
+      expect.objectContaining({ p_seconds_purchased: 1800 })
+    );
+  });
+
   it("handles null subscription metadata and null local subscription row", async () => {
     await applyMembershipPackAddonsFromInvoice({
       invoice: makeInvoice(),
@@ -496,6 +543,21 @@ describe("applyMembershipPackAddonsFromCheckout", () => {
       "membership_pack_addon checkout: Stripe subscription retrieve failed",
       expect.objectContaining({ error: "stripe down" })
     );
+
+    stripeRetrieveMock.mockRejectedValue(new Error("stripe err obj"));
+    await applyMembershipPackAddonsFromCheckout(
+      {
+        id: "cs_1b",
+        invoice: "in_from_session",
+        subscription: "sub_live",
+        metadata: { businessId: "biz-1", addonVoice: "min_30:1:1800" }
+      } as unknown as Stripe.Checkout.Session,
+      "evt_1"
+    );
+    expect(loggerErrorMock).toHaveBeenCalledWith(
+      "membership_pack_addon checkout: Stripe subscription retrieve failed",
+      expect.objectContaining({ error: "stripe err obj" })
+    );
   });
 
   it("treats null session metadata as empty and skips blank object ids", async () => {
@@ -534,6 +596,20 @@ describe("applyMembershipPackAddonsFromCheckout", () => {
     expect(loggerWarnMock).toHaveBeenCalledWith(
       "membership_pack_addon: subscription invoices list failed",
       expect.objectContaining({ error: "list fail" })
+    );
+
+    invoicesListMock.mockRejectedValue(new Error("list err obj"));
+    await applyMembershipPackAddonsFromCheckout(
+      {
+        id: "cs_1b",
+        subscription: "sub_live",
+        metadata: { businessId: "biz-1", addonVoice: "min_30:1:1800" }
+      } as unknown as Stripe.Checkout.Session,
+      "evt_1"
+    );
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "membership_pack_addon: subscription invoices list failed",
+      expect.objectContaining({ error: "list err obj" })
     );
   });
 

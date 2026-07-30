@@ -294,23 +294,19 @@ export function resolveMembershipPackAddons(
   };
 }
 
-/** True when subscription/session metadata carries any membership pack add-on. */
+/**
+ * True when metadata carries recurring membership pack add-ons.
+ * Legacy one-time keys (`addonVoicePackId`, etc.) are ignored so renewals
+ * never re-grant packs that were billed once under the prior ship.
+ */
 export function sessionHasMembershipPackAddons(
   metadata: Record<string, string> | null | undefined
 ): boolean {
   if (!metadata) return false;
-  return Boolean(
-    metadata.addonVoice ||
-      metadata.addonSms ||
-      metadata.addonChat ||
-      // Legacy one-time keys from the previous membership-pack ship.
-      metadata.addonVoicePackId ||
-      metadata.addonSmsPackId ||
-      metadata.addonChatPackId
-  );
+  return Boolean(metadata.addonVoice || metadata.addonSms || metadata.addonChat);
 }
 
-/** Parse recurring (or legacy one-shot) metadata into grantable entries. */
+/** Parse compact recurring pack metadata into grantable entries. */
 export function parseMembershipPackAddonMetadata(
   metadata: Record<string, string> | null | undefined
 ): {
@@ -320,31 +316,11 @@ export function parseMembershipPackAddonMetadata(
 } {
   if (!metadata) return { voice: [], sms: [], chat: [] };
 
-  const voice = decodeMembershipPackMeta(metadata.addonVoice);
-  const sms = decodeMembershipPackMeta(metadata.addonSms);
-  const chat = decodeMembershipPackMeta(metadata.addonChat);
-
-  // Legacy single-pack keys (pre-recurring).
-  if (!voice.length && metadata.addonVoicePackId && metadata.addonVoiceSeconds) {
-    const unitSize = Number(metadata.addonVoiceSeconds);
-    if (Number.isInteger(unitSize) && unitSize > 0) {
-      voice.push({ packId: metadata.addonVoicePackId, quantity: 1, unitSize });
-    }
-  }
-  if (!sms.length && metadata.addonSmsPackId && metadata.addonSmsTexts) {
-    const unitSize = Number(metadata.addonSmsTexts);
-    if (Number.isInteger(unitSize) && unitSize > 0) {
-      sms.push({ packId: metadata.addonSmsPackId, quantity: 1, unitSize });
-    }
-  }
-  if (!chat.length && metadata.addonChatPackId && metadata.addonChatMicros) {
-    const unitSize = Number(metadata.addonChatMicros);
-    if (Number.isInteger(unitSize) && unitSize > 0) {
-      chat.push({ packId: metadata.addonChatPackId, quantity: 1, unitSize });
-    }
-  }
-
-  return { voice, sms, chat };
+  return {
+    voice: decodeMembershipPackMeta(metadata.addonVoice),
+    sms: decodeMembershipPackMeta(metadata.addonSms),
+    chat: decodeMembershipPackMeta(metadata.addonChat)
+  };
 }
 
 /** Due-today cents for UI: discounted monthly × months × qty per selected line. */

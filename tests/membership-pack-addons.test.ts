@@ -194,19 +194,20 @@ describe("lib/billing/membership-pack-addons", () => {
     });
   });
 
-  it("detects membership addon metadata including legacy keys", () => {
+  it("detects recurring membership addon metadata only", () => {
     expect(sessionHasMembershipPackAddons(undefined)).toBe(false);
     expect(sessionHasMembershipPackAddons({})).toBe(false);
     expect(sessionHasMembershipPackAddons({ addonVoice: "min_30:1:1800" })).toBe(true);
-    expect(sessionHasMembershipPackAddons({ addonVoicePackId: "min_30" })).toBe(true);
+    // Legacy one-time keys must not count as recurring add-ons.
+    expect(sessionHasMembershipPackAddons({ addonVoicePackId: "min_30" })).toBe(false);
   });
 
-  it("parses legacy single-pack metadata", () => {
+  it("ignores legacy single-pack metadata when parsing grants", () => {
     const parsed = parseMembershipPackAddonMetadata({
       addonVoicePackId: "min_30",
       addonVoiceSeconds: "1800"
     });
-    expect(parsed.voice).toEqual([{ packId: "min_30", quantity: 1, unitSize: 1800 }]);
+    expect(parsed.voice).toEqual([]);
   });
 
   it("computes due-today with term months and quantity", () => {
@@ -264,7 +265,7 @@ describe("lib/billing/membership-pack-addons", () => {
     });
   });
 
-  it("parses null metadata and legacy sms/chat keys", () => {
+  it("parses null metadata and ignores legacy sms/chat keys", () => {
     expect(parseMembershipPackAddonMetadata(null)).toEqual({
       voice: [],
       sms: [],
@@ -277,25 +278,17 @@ describe("lib/billing/membership-pack-addons", () => {
         addonChatPackId: "usd_5",
         addonChatMicros: "5000000"
       })
+    ).toEqual({ voice: [], sms: [], chat: [] });
+    expect(
+      parseMembershipPackAddonMetadata({
+        addonSms: "texts_500:1:500",
+        addonChat: "usd_5:1:5000000"
+      })
     ).toEqual({
       voice: [],
       sms: [{ packId: "texts_500", quantity: 1, unitSize: 500 }],
       chat: [{ packId: "usd_5", quantity: 1, unitSize: 5_000_000 }]
     });
-    expect(
-      parseMembershipPackAddonMetadata({
-        addonSmsPackId: "texts_500",
-        addonSmsTexts: "0",
-        addonChatPackId: "usd_5",
-        addonChatMicros: "nope"
-      })
-    ).toEqual({ voice: [], sms: [], chat: [] });
-    expect(
-      parseMembershipPackAddonMetadata({
-        addonVoicePackId: "min_30",
-        addonVoiceSeconds: "nope"
-      })
-    ).toEqual({ voice: [], sms: [], chat: [] });
   });
 
   it("skips malformed decode segments", () => {
