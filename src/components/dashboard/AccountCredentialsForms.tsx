@@ -103,15 +103,24 @@ export function AccountCredentialsForms({ email }: { email: string }) {
         setPwStatus({ kind: "error", message: updateError.message });
         return;
       }
-      // CASA 2.2.2: revoke other sessions after a successful password change.
-      await terminateOtherSessions(supabase);
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
-      setPwStatus({
-        kind: "success",
-        message: "Password updated. Other signed-in sessions were signed out."
-      });
+      // CASA 2.2.2: revoke other sessions after a successful password change.
+      // Keep success messaging if termination fails; the password already changed.
+      try {
+        await terminateOtherSessions(supabase);
+        setPwStatus({
+          kind: "success",
+          message: "Password updated. Other signed-in sessions were signed out."
+        });
+      } catch {
+        setPwStatus({
+          kind: "success",
+          message:
+            "Password updated, but other sessions could not be signed out automatically. Sign out everywhere from Settings if needed."
+        });
+      }
     } catch {
       setPwStatus({ kind: "error", message: "Network error. Please try again." });
     }

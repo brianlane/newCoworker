@@ -57,6 +57,12 @@ export default function AdminMfaForm({ email }: AdminMfaFormProps) {
           setFactorId(verified[0].id);
           return;
         }
+        // Drop unfinished enrollments before creating a new one. A reload
+        // otherwise stacks unverified factors and can block MFA setup.
+        const unverified = totp.filter((f) => f.status !== "verified");
+        for (const factor of unverified) {
+          await supabase.auth.mfa.unenroll({ factorId: factor.id });
+        }
         const { data: enrollData, error: enrollError } = await supabase.auth.mfa.enroll({
           factorType: "totp",
           friendlyName: "Admin authenticator"

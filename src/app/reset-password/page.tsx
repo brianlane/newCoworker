@@ -68,7 +68,12 @@ export default function ResetPasswordPage() {
         return;
       }
       // CASA 2.2.2: revoke other sessions after a successful password reset.
-      await terminateOtherSessions(supabase);
+      // Password already changed; do not surface termination failures as reset failure.
+      try {
+        await terminateOtherSessions(supabase);
+      } catch {
+        // best-effort; current recovery session remains signed in
+      }
       setDone(true);
       setTimeout(() => {
         router.refresh();
