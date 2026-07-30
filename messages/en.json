@@ -2103,6 +2103,8 @@
     "prospecting": {
       "title": "Prospecting",
       "intro": "Your coworker can look for local businesses that fit what you do, work out something specific to say about each one, and email them for you. It stays off until you switch it on.",
+      "upgradeBody": "Prospecting is available on Standard and Enterprise: your coworker finds local businesses, drafts a specific pitch for each one, and emails them for you.",
+      "upgradeCta": "See plans",
       "mode": {
         "off": "Off",
         "manual": "You review each one",

@@ -157,6 +157,9 @@ function buildStandardFeatures(locale: PlanCopyLocale): string[] {
     es
       ? "Soporte completo de webhooks: anuncios de leads de Meta, comentarios y DMs de Instagram, y disparadores por REST API"
       : "Full webhook support: Meta lead ads, Instagram comments & DMs, and REST API triggers",
+    es
+      ? "Prospección: tu coworker encuentra negocios locales y les escribe"
+      : "Prospecting: your coworker finds local businesses and emails them",
     es ? "Envía textos durante llamadas" : "Send texts during calls",
     es
       ? "Auto-texto a quien llama cuando no se puede contestar"

@@ -23,6 +23,10 @@ import {
   ProspectingSettingsError,
   saveProspectingSettings
 } from "@/lib/outreach/owner";
+import {
+  PROSPECTING_UPGRADE_MESSAGE,
+  prospectingAllowedForBusiness
+} from "@/lib/plans/prospecting";
 
 export const dynamic = "force-dynamic";
 
@@ -74,6 +78,15 @@ export async function PUT(request: Request) {
     const limiter = rateLimit(`outreach-settings:${body.data.businessId}`, WRITE_RATE);
     if (!limiter.success) {
       return errorResponse("CONFLICT", "Too many requests, slow down.", 429);
+    }
+
+    // Turning off always works (Starter may have leftover settings after a
+    // downgrade). Switching on or saving an on-mode config needs Standard+.
+    if (
+      body.data.mode !== "off" &&
+      !(await prospectingAllowedForBusiness(body.data.businessId))
+    ) {
+      return errorResponse("FORBIDDEN", PROSPECTING_UPGRADE_MESSAGE, 403);
     }
 
     const settings = await saveProspectingSettings(body.data.businessId, body.data);
