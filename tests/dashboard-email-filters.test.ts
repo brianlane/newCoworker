@@ -38,7 +38,8 @@ describe("email-filters", () => {
     });
     expect(emailListFiltersFromView({ view: "unread" })).toEqual({
       limit: 100,
-      unreadOnly: true
+      unreadOnly: true,
+      sources: ["tenant_mailbox_inbound", "tenant_mailbox_outbound"]
     });
   });
 
@@ -71,7 +72,8 @@ describe("email-filters", () => {
     expect(emailListFiltersFromView({ view: "unread", folder: "Sales" })).toEqual({
       limit: 100,
       folder: "Sales",
-      unreadOnly: true
+      unreadOnly: true,
+      sources: ["tenant_mailbox_inbound", "tenant_mailbox_outbound"]
     });
     expect(emailListFiltersFromView({ view: "all", folder: "Sales" })).toEqual({
       limit: 100,

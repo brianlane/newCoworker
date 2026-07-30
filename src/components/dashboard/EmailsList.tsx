@@ -810,6 +810,13 @@ export function EmailsList({
   const [labelFilter, setLabelFilter] = useState<string>(initialLabel);
   const selected = rows.find((r) => r.id === selectedId) ?? null;
 
+  // Keep chips in sync when the server re-renders from a new URL (back/forward).
+  useEffect(() => {
+    setViewFilter(initialView);
+    setFolderFilter(initialFolder);
+    setLabelFilter(initialLabel);
+  }, [initialView, initialFolder, initialLabel]);
+
   function navigateFilters(next: {
     view?: ViewFilter;
     folder?: string;

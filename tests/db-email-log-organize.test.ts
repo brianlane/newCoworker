@@ -309,4 +309,22 @@ describe("listEmailLog organize filters", () => {
       })
     );
   });
+
+  it("pushes source in-filter for unread AI-mailbox views", async () => {
+    const api: Record<string, ReturnType<typeof vi.fn>> = {};
+    const self = () => api;
+    for (const m of ["select", "eq", "is", "not", "contains", "in", "order", "limit"]) {
+      api[m] = vi.fn(self);
+    }
+    api.limit = vi.fn().mockResolvedValue({ data: [], error: null });
+    defaultClientSpy.mockResolvedValue({ from: vi.fn(() => api) });
+    await listEmailLog(BIZ, {
+      unreadOnly: true,
+      sources: ["tenant_mailbox_inbound", "tenant_mailbox_outbound"]
+    });
+    expect(api.in).toHaveBeenCalledWith("source", [
+      "tenant_mailbox_inbound",
+      "tenant_mailbox_outbound"
+    ]);
+  });
 });

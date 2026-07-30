@@ -64,6 +64,7 @@ export function emailListFiltersFromView(input: {
       filters.inbox = false;
     } else if (input.view === "unread") {
       filters.unreadOnly = true;
+      filters.sources = ["tenant_mailbox_inbound", "tenant_mailbox_outbound"];
     }
     return filters;
   }
@@ -82,7 +83,9 @@ export function emailListFiltersFromView(input: {
       filters.inbox = false;
       break;
     case "unread":
+      // Unread styling/actions are AI-mailbox-only; keep the fetch aligned.
       filters.unreadOnly = true;
+      filters.sources = ["tenant_mailbox_inbound", "tenant_mailbox_outbound"];
       break;
     default:
       break;

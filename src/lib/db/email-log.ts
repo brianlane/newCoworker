@@ -139,6 +139,8 @@ export type ListEmailLogFilters = {
   folder?: string | null;
   /** Match rows whose labels array contains this value. */
   label?: string | null;
+  /** Restrict to these email_log.source values. */
+  sources?: EmailLogSource[];
 };
 
 function normalizeEmailLogRow(row: EmailLogRow): EmailLogRow {
@@ -193,6 +195,9 @@ export async function listEmailLog(
     if (options.folder) {
       filters.push({ column: "folder", op: "eq", value: options.folder });
     }
+    if (options.sources?.length) {
+      filters.push({ column: "source", op: "in", value: options.sources });
+    }
     // Box path has no contains-array filter; filter labels in JS after fetch.
     const rows = await readMovedRows<EmailLogRow>(businessId, {
       table: "email_log",
@@ -221,6 +226,7 @@ export async function listEmailLog(
   if (options.inbox === false) q = q.not("archived_at", "is", null);
   if (options.unreadOnly) q = q.eq("is_read", false);
   if (options.folder) q = q.eq("folder", options.folder);
+  if (options.sources?.length) q = q.in("source", options.sources);
   if (options.label) q = q.contains("labels", [options.label]);
   const { data, error } = await q.order("created_at", { ascending: false }).limit(limit);
   if (error) throw new Error(`listEmailLog: ${error.message}`);
