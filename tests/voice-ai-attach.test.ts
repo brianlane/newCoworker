@@ -19,8 +19,17 @@ const DID = "+16023131823";
 type Row = Record<string, unknown> | null;
 
 /** Structural Supabase stand-in: one canned row per table, plus insert capture. */
-function fakeDb(rows: { routes?: Row; settings?: Row }, insertError?: { message: string }) {
+function fakeDb(
+  rows: { routes?: Row; settings?: Row; business?: Row },
+  insertError?: { message: string }
+) {
   const inserted: Array<Record<string, unknown>> = [];
+  const byTable: Record<string, Row | undefined> = {
+    telnyx_voice_routes: rows.routes,
+    business_telnyx_settings: rows.settings,
+    // Default Standard so existing tests that arm translator keep working.
+    businesses: rows.business ?? { tier: "standard" }
+  };
   const db = {
     from(table: string) {
       return {
@@ -28,7 +37,7 @@ function fakeDb(rows: { routes?: Row; settings?: Row }, insertError?: { message:
           eq: () => ({
             maybeSingle: () =>
               Promise.resolve({
-                data: table === "telnyx_voice_routes" ? (rows.routes ?? null) : (rows.settings ?? null),
+                data: byTable[table] ?? null,
                 error: null
               })
           })
@@ -46,7 +55,7 @@ function fakeDb(rows: { routes?: Row; settings?: Row }, insertError?: { message:
 const freshHeartbeat = () => new Date().toISOString();
 
 function deps(
-  rows: { routes?: Row; settings?: Row },
+  rows: { routes?: Row; settings?: Row; business?: Row },
   overrides: Partial<VoiceAiAttachDeps> = {},
   insertError?: { message: string }
 ): { deps: VoiceAiAttachDeps; inserted: Array<Record<string, unknown>> } {
@@ -122,6 +131,14 @@ describe("resolveBridgeTarget", () => {
       settings: { bridge_last_heartbeat_at: freshHeartbeat(), translator_mode_enabled: true }
     });
     expect((await resolveBridgeTarget(d, BUSINESS, DID))?.translatorArmed).toBe(true);
+  });
+
+  it("does not arm translator mode on Starter even when the flag is true", async () => {
+    const { deps: d } = deps({
+      settings: { bridge_last_heartbeat_at: freshHeartbeat(), translator_mode_enabled: true },
+      business: { tier: "starter" }
+    });
+    expect((await resolveBridgeTarget(d, BUSINESS, DID))?.translatorArmed).toBe(false);
   });
 
   it("returns null when AI streaming is switched off by the kill switch", async () => {
