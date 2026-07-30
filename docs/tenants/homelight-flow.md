@@ -69,7 +69,8 @@ a key to accept it. Everything downstream follows from that:
 Seeds: `seed-homelight-lead-aiflow.ts`,
 `seed-homelight-ai-call-voice-flow.ts`, `seed-homelight-voice-handoff.ts`.
 
-Patches: `homelight-accept-on-prompt.ts`, `homelight-call-end-details.ts`,
+Patches: `homelight-accept-on-prompt.ts`, `homelight-accept-fallback-20.ts`,
+`homelight-call-end-details.ts`,
 `homelight-late-contact-retry.ts`, `homelight-broadcast-offer.ts`,
 `homelight-ai-call-referral-patch.ts`, `homelight-warm-transfer-trigger.ts`,
 `homelight-start-immediately.ts`, `set-homelight-star-alerts.ts`,
