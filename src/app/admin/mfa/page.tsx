@@ -18,15 +18,20 @@ export default async function AdminMfaPage({
 }: {
   searchParams: Promise<{ next?: string }>;
 }) {
+  const params = await searchParams;
+  const destination = safeAdminNextPath(params.next);
   const user = await getAuthUser();
-  if (!user) redirect(`${ADMIN_LOGIN_PATH}?next=/admin/mfa`);
+  // Send unauthenticated visitors to login with the final destination, not
+  // /admin/mfa itself (safeAdminNextPath would collapse that to dashboard).
+  if (!user) {
+    redirect(`${ADMIN_LOGIN_PATH}?next=${encodeURIComponent(destination)}`);
+  }
   if (!user.isAdmin) redirect(ADMIN_LOGIN_PATH);
 
-  const params = await searchParams;
   const supabase = await createSupabaseServerClient();
   const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
   if (isAal2(data?.currentLevel)) {
-    redirect(safeAdminNextPath(params.next));
+    redirect(destination);
   }
 
   return (

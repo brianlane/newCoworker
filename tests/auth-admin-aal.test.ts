@@ -29,6 +29,9 @@ describe("admin-aal", () => {
 
   it("sanitizes post-MFA next paths", () => {
     expect(safeAdminNextPath("/admin/clients")).toBe("/admin/clients");
+    expect(safeAdminNextPath("/admin/activity?types=calls")).toBe(
+      "/admin/activity?types=calls"
+    );
     expect(safeAdminNextPath("https://evil.example")).toBe("/admin/dashboard");
     expect(safeAdminNextPath("//evil.example")).toBe("/admin/dashboard");
     expect(safeAdminNextPath(ADMIN_MFA_PATH)).toBe("/admin/dashboard");

@@ -426,6 +426,16 @@ describe("proxy", () => {
     expect(res.headers.get("location")).toContain("/admin/mfa");
   });
 
+  it("preserves query string when sending aal1 admin to MFA", async () => {
+    mockSupabaseWithUser({ id: "admin-1", email: "admin@newcoworker.com", aal: "aal1" });
+    const req = makeRequest("/admin/activity?types=calls");
+    const res = await proxy(req);
+    expect(res.status).toBe(307);
+    const location = res.headers.get("location") ?? "";
+    expect(location).toContain("/admin/mfa");
+    expect(decodeURIComponent(location)).toContain("/admin/activity?types=calls");
+  });
+
   it("allows aal1 admin to access /admin/mfa", async () => {
     mockSupabaseWithUser({ id: "admin-1", email: "admin@newcoworker.com", aal: "aal1" });
     const req = makeRequest("/admin/mfa");

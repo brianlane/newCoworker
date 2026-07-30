@@ -315,10 +315,11 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
   }
 
   // --- Supabase session refresh ---
-  // Forward the pathname so RSC admin layouts can preserve deep links when
+  // Forward path+query so RSC admin layouts can preserve deep links when
   // redirecting AAL1 admins to /admin/mfa.
+  const pathWithQuery = `${pathname}${request.nextUrl.search}`;
   const requestHeaders = new Headers(request.headers);
-  requestHeaders.set("x-pathname", pathname);
+  requestHeaders.set("x-pathname", pathWithQuery);
   let response = NextResponse.next({
     request: { headers: requestHeaders }
   });
@@ -364,7 +365,7 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
               request.cookies.set({ name, value, ...(options ?? {}) });
             });
             const refreshedHeaders = new Headers(request.headers);
-            refreshedHeaders.set("x-pathname", pathname);
+            refreshedHeaders.set("x-pathname", pathWithQuery);
             response = NextResponse.next({
               request: { headers: refreshedHeaders }
             });
@@ -410,13 +411,15 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
     if (!isAdminUser) {
       const redirectUrl = request.nextUrl.clone();
       redirectUrl.pathname = "/admin/login";
-      redirectUrl.searchParams.set("next", pathname);
+      redirectUrl.search = "";
+      redirectUrl.searchParams.set("next", pathWithQuery);
       return redirectWithCookies(response, redirectUrl);
     }
     if (!adminHasMfa) {
       const redirectUrl = request.nextUrl.clone();
       redirectUrl.pathname = "/admin/mfa";
-      redirectUrl.searchParams.set("next", pathname);
+      redirectUrl.search = "";
+      redirectUrl.searchParams.set("next", pathWithQuery);
       return redirectWithCookies(response, redirectUrl);
     }
   }
