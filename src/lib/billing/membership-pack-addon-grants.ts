@@ -5,14 +5,18 @@
  * Stripe subscription (stamped at Checkout) and grants through the same
  * RPCs as standalone Billing top-ups. Idempotency key is invoice-scoped so
  * renewals grant fresh allotments without colliding with prior invoices.
+ *
+ * Also callable from Checkout completion (signup / change-plan) once the
+ * local sub is active, using the session's invoice id so a raced
+ * `invoice.paid` and `checkout.session.completed` share the same key.
  */
 
 import type Stripe from "stripe";
 import type { BillingPeriod } from "@/lib/plans/tier";
+import { getStripe } from "@/lib/stripe/client";
 import { getSubscription, stripeSubscriptionPeriodCache } from "@/lib/db/subscriptions";
 import { logger } from "@/lib/logger";
 import {
-  grantAmountForPeriod,
   parseMembershipPackAddonMetadata,
   sessionHasMembershipPackAddons,
   type MembershipPackAddonMetaEntry
@@ -36,14 +40,81 @@ function sourceIdForGrant(
   return `inv_${invoiceId}:${category}:${packId}`;
 }
 
+/**
+ * Months covered by this Stripe subscription's current cadence.
+ * Uses the plan item's recurring interval so term→monthly rollover
+ * (ensureCommitmentSchedule) automatically drops the multiplier to 1.
+ */
+export function commitmentMonthsFromStripeSubscription(
+  stripeSubscription: Stripe.Subscription
+): number {
+  const planItem = stripeSubscription.items?.data?.[0];
+  const recurring = planItem?.price?.recurring;
+  if (!recurring) return 1;
+  if (recurring.interval === "year") {
+    return Math.max(1, (recurring.interval_count ?? 1) * 12);
+  }
+  if (recurring.interval === "month") {
+    return Math.max(1, recurring.interval_count ?? 1);
+  }
+  return 1;
+}
+
 function totalGrant(
   entries: MembershipPackAddonMetaEntry[],
-  period: BillingPeriod
+  months: number
 ): { packId: string; amount: number }[] {
   return entries.map((e) => ({
     packId: e.packId,
-    amount: grantAmountForPeriod(e.unitSize, e.quantity, period)
+    amount: e.unitSize * e.quantity * months
   }));
+}
+
+function stripeRefId(value: unknown): string | null {
+  if (typeof value === "string" && value.trim()) return value;
+  if (value && typeof value === "object" && "id" in value) {
+    const id = (value as { id?: unknown }).id;
+    return typeof id === "string" && id.trim() ? id : null;
+  }
+  return null;
+}
+
+async function resolveInvoiceForSession(
+  session: Stripe.Checkout.Session
+): Promise<Stripe.Invoice | null> {
+  const stripe = getStripe();
+  const invoiceId = stripeRefId(session.invoice);
+  if (invoiceId) {
+    try {
+      return await stripe.invoices.retrieve(invoiceId);
+    } catch (err) {
+      logger.warn("membership_pack_addon: session invoice retrieve failed", {
+        sessionId: session.id,
+        invoiceId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+
+  const subscriptionId = stripeRefId(session.subscription);
+  // Callers validate subscription id first; keep this guard for safety.
+  /* c8 ignore next */
+  if (!subscriptionId) return null;
+
+  try {
+    const listed = await stripe.invoices.list({
+      subscription: subscriptionId,
+      limit: 1
+    });
+    return listed.data[0] ?? null;
+  } catch (err) {
+    logger.warn("membership_pack_addon: subscription invoices list failed", {
+      sessionId: session.id,
+      subscriptionId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
+  }
 }
 
 /**
@@ -54,10 +125,11 @@ export async function applyMembershipPackAddonsFromInvoice(params: {
   invoice: Stripe.Invoice;
   stripeSubscription: Stripe.Subscription;
   businessId: string;
-  billingPeriod: BillingPeriod;
+  /** Ignored for grant sizing; kept for call-site compatibility. */
+  billingPeriod?: BillingPeriod;
   eventId: string;
 }): Promise<void> {
-  const { invoice, stripeSubscription, businessId, billingPeriod, eventId } = params;
+  const { invoice, stripeSubscription, businessId, eventId } = params;
   const metadata = stripeSubscription.metadata ?? {};
   if (!sessionHasMembershipPackAddons(metadata)) return;
 
@@ -74,7 +146,7 @@ export async function applyMembershipPackAddonsFromInvoice(params: {
   }
 
   const subRow = await getSubscription(businessId);
-  if (!subRow?.stripe_subscription_id || subRow.status !== "active") {
+  if (!subRow || subRow.status !== "active") {
     logger.warn("membership_pack_addon invoice: no active local subscription; grant blocked", {
       eventId,
       businessId,
@@ -96,12 +168,13 @@ export async function applyMembershipPackAddonsFromInvoice(params: {
     return;
   }
 
+  const months = commitmentMonthsFromStripeSubscription(stripeSubscription);
   const parsed = parseMembershipPackAddonMetadata(metadata);
   const expiresAt = invoiceExpiresAt(invoice, new Date(endIso)).toISOString();
   const { createSupabaseServiceClient } = await import("@/lib/supabase/server");
   const db = await createSupabaseServiceClient();
 
-  for (const { packId, amount } of totalGrant(parsed.voice, billingPeriod)) {
+  for (const { packId, amount } of totalGrant(parsed.voice, months)) {
     /* c8 ignore next */
     if (amount <= 0) continue;
     const sourceId = sourceIdForGrant(invoice.id, "voice", packId);
@@ -144,7 +217,7 @@ export async function applyMembershipPackAddonsFromInvoice(params: {
     }
   }
 
-  for (const { packId, amount } of totalGrant(parsed.sms, billingPeriod)) {
+  for (const { packId, amount } of totalGrant(parsed.sms, months)) {
     /* c8 ignore next */
     if (amount <= 0) continue;
     const sourceId = sourceIdForGrant(invoice.id, "sms", packId);
@@ -174,7 +247,7 @@ export async function applyMembershipPackAddonsFromInvoice(params: {
     }
   }
 
-  for (const { packId, amount } of totalGrant(parsed.chat, billingPeriod)) {
+  for (const { packId, amount } of totalGrant(parsed.chat, months)) {
     /* c8 ignore next */
     if (amount <= 0) continue;
     const sourceId = sourceIdForGrant(invoice.id, "chat", packId);
@@ -206,13 +279,62 @@ export async function applyMembershipPackAddonsFromInvoice(params: {
 }
 
 /**
- * @deprecated Membership packs grant on invoice.paid. Kept as a no-op so
- * call sites that still import the Checkout-session helper stay safe.
+ * Grant packs after Checkout activates the local subscription.
+ * Resolves the session invoice and delegates to the invoice grant path so
+ * renewals and first-invoice races share the same idempotency keys.
  */
 export async function applyMembershipPackAddonsFromCheckout(
-  _session: Stripe.Checkout.Session,
-  _eventId: string
+  session: Stripe.Checkout.Session,
+  eventId: string
 ): Promise<void> {
-  // Intentionally empty: first invoice + renewals grant via
-  // applyMembershipPackAddonsFromInvoice to avoid double-grants.
+  const metadata = session.metadata ?? {};
+  if (!sessionHasMembershipPackAddons(metadata)) return;
+
+  const businessId = metadata.businessId?.trim();
+  if (!businessId) {
+    logger.warn("membership_pack_addon checkout: missing businessId", {
+      eventId,
+      sessionId: session.id
+    });
+    return;
+  }
+
+  const subscriptionId = stripeRefId(session.subscription);
+  if (!subscriptionId) {
+    logger.warn("membership_pack_addon checkout: missing subscription id", {
+      eventId,
+      sessionId: session.id
+    });
+    return;
+  }
+
+  const invoice = await resolveInvoiceForSession(session);
+  if (!invoice) {
+    logger.info("membership_pack_addon checkout: no invoice yet; invoice.paid will grant", {
+      eventId,
+      sessionId: session.id,
+      subscriptionId
+    });
+    return;
+  }
+
+  let stripeSubscription: Stripe.Subscription;
+  try {
+    stripeSubscription = await getStripe().subscriptions.retrieve(subscriptionId);
+  } catch (err) {
+    logger.error("membership_pack_addon checkout: Stripe subscription retrieve failed", {
+      eventId,
+      businessId,
+      subscriptionId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return;
+  }
+
+  await applyMembershipPackAddonsFromInvoice({
+    invoice,
+    stripeSubscription,
+    businessId,
+    eventId
+  });
 }

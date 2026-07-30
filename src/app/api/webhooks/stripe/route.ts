@@ -664,12 +664,36 @@ export async function POST(request: Request) {
         const subscriptionId = getInvoiceSubscriptionId(invoice);
 
         if (subscriptionId) {
-          const existing = await getSubscriptionByStripeSubscriptionId(subscriptionId);
-          if (existing) {
-            const periodCache = await fetchSubscriptionPeriodCacheOrEmpty(
+          let existing = await getSubscriptionByStripeSubscriptionId(subscriptionId);
+          const stripe = getStripe();
+          let stripeSub: Stripe.Subscription | null = null;
+          try {
+            stripeSub = await stripe.subscriptions.retrieve(subscriptionId);
+          } catch (err) {
+            logger.warn("Stripe subscription retrieve failed on invoice.paid", {
+              eventId: event.id,
               subscriptionId,
-              "Stripe subscription retrieve failed on invoice.paid"
-            );
+              error: err instanceof Error ? err.message : String(err)
+            });
+          }
+
+          // Race: invoice.paid can beat checkout.session.completed (or the
+          // change-plan orchestrator) that plants stripe_subscription_id.
+          // Fall back to businessId on Stripe subscription metadata.
+          if (!existing && stripeSub?.metadata?.businessId) {
+            const byBiz = await getSubscription(stripeSub.metadata.businessId.trim());
+            if (byBiz?.status === "active") {
+              existing = byBiz;
+            }
+          }
+
+          if (existing) {
+            const periodCache = stripeSub
+              ? stripeSubscriptionPeriodCache(stripeSub)
+              : await fetchSubscriptionPeriodCacheOrEmpty(
+                  subscriptionId,
+                  "Stripe subscription retrieve failed on invoice.paid"
+                );
             await updateSubscription(existing.id, { status: "active", ...periodCache });
 
             // Anchor the 30-day lifetime refund window on the very first
@@ -689,37 +713,28 @@ export async function POST(request: Request) {
             }
 
             // Recurring membership pack add-ons: grant on every paid invoice
-            // (first + renewals). Idempotent on invoice id + pack id.
-            try {
-              const stripe = getStripe();
-              const stripeSub = await stripe.subscriptions.retrieve(subscriptionId);
-              const billingPeriod =
-                existing.billing_period === "monthly" ||
-                existing.billing_period === "annual" ||
-                existing.billing_period === "biennial"
-                  ? existing.billing_period
-                  : stripeSub.metadata?.billingPeriod === "monthly" ||
-                      stripeSub.metadata?.billingPeriod === "annual" ||
-                      stripeSub.metadata?.billingPeriod === "biennial"
-                    ? stripeSub.metadata.billingPeriod
-                    : "monthly";
-              const { applyMembershipPackAddonsFromInvoice } = await import(
-                "@/lib/billing/membership-pack-addon-grants"
-              );
-              await applyMembershipPackAddonsFromInvoice({
-                invoice,
-                stripeSubscription: stripeSub,
-                businessId: existing.business_id,
-                billingPeriod,
-                eventId: event.id
-              });
-            } catch (err) {
-              logger.error("membership pack add-on grants failed on invoice.paid", {
-                eventId: event.id,
-                subscriptionId,
-                businessId: existing.business_id,
-                error: err instanceof Error ? err.message : String(err)
-              });
+            // (first + renewals). Idempotent on invoice id + pack id. Grant
+            // months come from the live Stripe plan interval (so term→monthly
+            // rollover does not keep multiplying by 12/24).
+            if (stripeSub) {
+              try {
+                const { applyMembershipPackAddonsFromInvoice } = await import(
+                  "@/lib/billing/membership-pack-addon-grants"
+                );
+                await applyMembershipPackAddonsFromInvoice({
+                  invoice,
+                  stripeSubscription: stripeSub,
+                  businessId: existing.business_id,
+                  eventId: event.id
+                });
+              } catch (err) {
+                logger.error("membership pack add-on grants failed on invoice.paid", {
+                  eventId: event.id,
+                  subscriptionId,
+                  businessId: existing.business_id,
+                  error: err instanceof Error ? err.message : String(err)
+                });
+              }
             }
           }
         }
