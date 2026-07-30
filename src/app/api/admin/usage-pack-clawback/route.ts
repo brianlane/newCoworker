@@ -2,7 +2,7 @@
  * POST /api/admin/usage-pack-clawback
  *
  * Operator-initiated void of a usage-pack grant. Customer Stripe refunds
- * and disputes do not claw back packs (non-refundable from the user side);
+ * without New Coworker metadata, and disputes, do not claw back packs;
  * this route is the intentional manual path when support refunds a pack.
  *
  * Body:

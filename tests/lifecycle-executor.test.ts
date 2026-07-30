@@ -207,6 +207,136 @@ describe("executeLifecyclePlan refund handling", () => {
     );
   });
 
+  it("claws back membership pack grants after a New Coworker refund", async () => {
+    const stripe = {
+      subscriptions: {
+        retrieve: vi.fn().mockResolvedValue({
+          latest_invoice: "in_pack",
+          metadata: { addonVoice: "min_30:1:1800" }
+        })
+      },
+      invoices: {
+        retrieve: vi.fn().mockResolvedValue({
+          id: "in_pack",
+          amount_paid: 2500,
+          payments: { data: [{ payment: { payment_intent: "pi_pack" } }] }
+        })
+      },
+      paymentIntents: {
+        retrieve: vi.fn().mockResolvedValue({ id: "pi_pack", latest_charge: "ch_pack" })
+      },
+      refunds: { create: vi.fn().mockResolvedValue({ id: "re_pack" }) }
+    };
+    const rpc = vi.fn().mockResolvedValue({ data: { ok: true }, error: null });
+    createSupabaseServiceClientMock.mockResolvedValue({
+      auth: { admin: { deleteUser: vi.fn().mockResolvedValue({ error: null }) } },
+      rpc,
+      from: undefined
+    });
+
+    await executeLifecyclePlan(
+      refundPlan(),
+      { businessId: "biz_1", vpsHost: null, customerProfileId: "prof_1" },
+      { stripe: stripe as unknown as ExecutorDeps["stripe"], sendEmail: sendOwnerEmailMock }
+    );
+
+    expect(rpc).toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      expect.objectContaining({
+        p_checkout_session_id: "inv_in_pack:voice:min_30",
+        p_reason: "refund"
+      })
+    );
+  });
+
+  it("claws back packs with admin reason on admin_force refunds", async () => {
+    const stripe = {
+      subscriptions: {
+        retrieve: vi.fn().mockResolvedValue({
+          latest_invoice: "in_admin",
+          metadata: { addonVoice: "min_30:1:1800" }
+        })
+      },
+      invoices: {
+        retrieve: vi.fn().mockResolvedValue({
+          id: "in_admin",
+          amount_paid: 2500,
+          payments: { data: [{ payment: { payment_intent: "pi_admin" } }] }
+        })
+      },
+      paymentIntents: {
+        retrieve: vi.fn().mockResolvedValue({ id: "pi_admin", latest_charge: "ch_admin" })
+      },
+      refunds: { create: vi.fn().mockResolvedValue({ id: "re_admin" }) }
+    };
+    const rpc = vi.fn().mockResolvedValue({ data: { ok: true }, error: null });
+    createSupabaseServiceClientMock.mockResolvedValue({
+      auth: { admin: { deleteUser: vi.fn().mockResolvedValue({ error: null }) } },
+      rpc,
+      from: undefined
+    });
+    const plan = refundPlan();
+    plan.stripeOps[0] = {
+      type: "refund_latest_charge",
+      stripeSubscriptionId: "sub_123",
+      reason: "admin_force",
+      termCarveOutCents: 0,
+      usageCarveOutCents: 0
+    };
+
+    await executeLifecyclePlan(
+      plan,
+      { businessId: "biz_1", vpsHost: null, customerProfileId: "prof_1" },
+      { stripe: stripe as unknown as ExecutorDeps["stripe"], sendEmail: sendOwnerEmailMock }
+    );
+
+    expect(rpc).toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      expect.objectContaining({
+        p_checkout_session_id: "inv_in_admin:voice:min_30",
+        p_reason: "admin"
+      })
+    );
+  });
+
+  it("logs when pack clawback throws after a successful refund", async () => {
+    const { logger } = await import("@/lib/logger");
+    const stripe = {
+      subscriptions: {
+        retrieve: vi.fn().mockResolvedValue({
+          latest_invoice: "in_boom",
+          metadata: { addonVoice: "min_30:1:1800" }
+        })
+      },
+      invoices: {
+        retrieve: vi.fn().mockResolvedValue({
+          id: "in_boom",
+          amount_paid: 2500,
+          payments: { data: [{ payment: { payment_intent: "pi_boom" } }] }
+        })
+      },
+      paymentIntents: {
+        retrieve: vi.fn().mockResolvedValue({ id: "pi_boom", latest_charge: "ch_boom" })
+      },
+      refunds: { create: vi.fn().mockResolvedValue({ id: "re_boom" }) }
+    };
+    createSupabaseServiceClientMock.mockRejectedValueOnce("string db down").mockResolvedValue({
+      auth: { admin: { deleteUser: vi.fn().mockResolvedValue({ error: null }) } }
+    });
+
+    await executeLifecyclePlan(
+      refundPlan(),
+      { businessId: "biz_1", vpsHost: null, customerProfileId: "prof_1" },
+      { stripe: stripe as unknown as ExecutorDeps["stripe"], sendEmail: sendOwnerEmailMock }
+    );
+
+    expect(stripe.refunds.create).toHaveBeenCalled();
+    expect(logger.error).toHaveBeenCalledWith(
+      "refund_latest_charge: pack clawback failed",
+      expect.objectContaining({ invoiceId: "in_boom", error: "string db down" })
+    );
+  });
+
   it("uses localhost base URL for cancel email when NEXT_PUBLIC_APP_URL is unset", async () => {
     const prevPublic = process.env.NEXT_PUBLIC_APP_URL;
     delete process.env.NEXT_PUBLIC_APP_URL;

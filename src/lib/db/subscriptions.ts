@@ -66,6 +66,11 @@ export type SubscriptionRow = {
    * (§ monthly_intro_nudge migration). Null until the daily sweep stamps it.
    */
   monthly_intro_nudge_sent_at: string | null;
+  /**
+   * When the pre-term contract rollover nudge email was claimed/sent
+   * (§ contract_term_nudge migration). Null until the daily sweep stamps it.
+   */
+  contract_term_nudge_sent_at: string | null;
   created_at: string;
 };
 

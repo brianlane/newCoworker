@@ -19,6 +19,11 @@ const { mockCheckoutSessionsList } = vi.hoisted(() => ({
   mockCheckoutSessionsList: vi.fn()
 }));
 
+const { mockRefundsList, mockInvoicesRetrieve } = vi.hoisted(() => ({
+  mockRefundsList: vi.fn().mockResolvedValue({ data: [] }),
+  mockInvoicesRetrieve: vi.fn()
+}));
+
 const {
   mockLoadLifecycleContext,
   mockExecuteLifecyclePlan,
@@ -88,7 +93,9 @@ vi.mock("@/lib/stripe/client", () => ({
   getStripe: vi.fn(() => ({
     subscriptions: { retrieve: mockStripeRetrieve, cancel: mockStripeCancel },
     subscriptionSchedules: { release: mockStripeScheduleRelease },
-    checkout: { sessions: { list: mockCheckoutSessionsList } }
+    checkout: { sessions: { list: mockCheckoutSessionsList } },
+    refunds: { list: mockRefundsList },
+    invoices: { retrieve: mockInvoicesRetrieve }
   }))
 }));
 
@@ -3188,7 +3195,7 @@ describe("stripe webhook route: voice bonus refund / dispute handling", () => {
       expect.anything()
     );
     expect(logger.info).toHaveBeenCalledWith(
-      "Stripe dispute created; deferring clawback to dispute.closed/lost",
+      "Stripe dispute created; pack grants are not clawed back on disputes",
       expect.objectContaining({ disputeId: "dp_created_1" })
     );
   });
@@ -3214,12 +3221,13 @@ describe("stripe webhook route: voice bonus refund / dispute handling", () => {
       expect.anything()
     );
     expect(logger.info).toHaveBeenCalledWith(
-      "Usage pack refund/dispute ignored; packs are non-refundable to customers",
+      "Usage pack dispute ignored; packs are non-refundable to customers",
       expect.objectContaining({ eventId: "evt_dispute_lost", type: "charge.dispute.closed" })
     );
   });
 
-  it("does not void pack grants on charge.refunded (packs are non-refundable to customers)", async () => {
+  it("does not void pack grants on charge.refunded without New Coworker metadata", async () => {
+    mockRefundsList.mockResolvedValueOnce({ data: [{ id: "re_1", metadata: {} }] });
     vi.mocked(verifyWebhook).mockReturnValue({
       id: "evt_refund_1",
       type: "charge.refunded",
@@ -3227,21 +3235,56 @@ describe("stripe webhook route: voice bonus refund / dispute handling", () => {
         object: {
           id: "ch_refund_1",
           amount_refunded: 500,
-          payment_intent: "pi_refund_1"
+          payment_intent: "pi_refund_1",
+          invoice: "in_refund_1"
         }
       }
     } as never);
 
     const res = await postEvent();
     expect(res.status).toBe(200);
-    expect(mockCheckoutSessionsList).not.toHaveBeenCalled();
     expect(mockVoiceBonusRpc).not.toHaveBeenCalledWith(
       "void_voice_bonus_grant_by_checkout_session",
       expect.anything()
     );
     expect(logger.info).toHaveBeenCalledWith(
-      "Usage pack refund/dispute ignored; packs are non-refundable to customers",
-      expect.objectContaining({ eventId: "evt_refund_1", type: "charge.refunded" })
+      "Usage pack refund ignored; no New Coworker refund metadata",
+      expect.objectContaining({ eventId: "evt_refund_1", chargeId: "ch_refund_1" })
+    );
+  });
+
+  it("voids membership pack grants on charge.refunded with New Coworker metadata", async () => {
+    mockRefundsList.mockResolvedValueOnce({
+      data: [{ id: "re_nc", metadata: { newcoworker_reason: "thirty_day_money_back" } }]
+    });
+    mockInvoicesRetrieve.mockResolvedValueOnce({
+      id: "in_refund_1",
+      parent: { subscription_details: { subscription: "sub_live" } }
+    });
+    mockStripeRetrieve.mockResolvedValueOnce({
+      id: "sub_live",
+      metadata: { addonVoice: "min_30:1:1800" }
+    });
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_refund_nc",
+      type: "charge.refunded",
+      data: {
+        object: {
+          id: "ch_refund_nc",
+          amount_refunded: 5000,
+          invoice: "in_refund_1"
+        }
+      }
+    } as never);
+
+    const res = await postEvent();
+    expect(res.status).toBe(200);
+    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      expect.objectContaining({
+        p_checkout_session_id: "inv_in_refund_1:voice:min_30",
+        p_reason: "refund"
+      })
     );
   });
 });

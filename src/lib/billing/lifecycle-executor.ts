@@ -422,6 +422,27 @@ async function runStripeOp(op: StripeOp, stripe: Stripe, result: ExecutorResult)
         stripeChargeId: chargeId,
         amountCents: refundCents
       };
+      // Pack line cents on this invoice are included in the refunded dollars
+      // (no pack carve-out). Void matching membership pack grants so the
+      // customer does not keep credits after a New Coworker refund.
+      try {
+        const { clawbackMembershipPackGrantsForInvoice } = await import(
+          "@/lib/billing/usage-pack-clawback"
+        );
+        // op.reason is always thirty_day_money_back | admin_force here.
+        await clawbackMembershipPackGrantsForInvoice({
+          invoiceId: latestInvoiceId,
+          reason: op.reason === "admin_force" ? "admin" : "refund",
+          subscriptionMetadata: sub.metadata
+        });
+      } catch (err) {
+        logger.error("refund_latest_charge: pack clawback failed", {
+          stripeSubscriptionId: op.stripeSubscriptionId,
+          invoiceId: latestInvoiceId,
+          /* c8 ignore next */
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
       return;
     }
   }
