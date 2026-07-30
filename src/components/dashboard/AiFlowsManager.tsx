@@ -522,6 +522,14 @@ function newStep(type: FlowStep["type"], examples: AiFlowExampleCopy): FlowStep 
       return { id, type, to: `{{vars.${examples.contactVar}}}`, body: "" };
     case "send_email":
       return { id, type, to: "", subject: "", body: "" };
+    case "email_organize":
+      return {
+        id,
+        type,
+        messageIdTemplate: "{{trigger.message_id}}",
+        archive: true,
+        markRead: true
+      };
     case "approval_gate":
       return { id, type, prompt: "Send this message?" };
     case "notify_owner":
@@ -4074,6 +4082,129 @@ function StepFields({
             "sends, just without the attachment."
           }
         />
+      </div>
+    );
+  }
+  if (step.type === "email_organize") {
+    return (
+      <div className="space-y-2">
+        <div>
+          <label className={labelClass}>Mailbox to organize</label>
+          <select
+            className={inputClass}
+            value={step.connectionId ?? ""}
+            onChange={(ev) =>
+              patchStep(index, { connectionId: ev.target.value || undefined })
+            }
+          >
+            <option value="">AI coworker mailbox (in-app folders and labels)</option>
+            {(step.connectionId ?? "") &&
+              !emailConns.some((c) => c.id === step.connectionId) && (
+                <option value={step.connectionId}>connected mailbox (disconnected?)</option>
+              )}
+            {emailConns.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.label}
+              </option>
+            ))}
+          </select>
+          <p className="mt-1 text-[11px] text-parchment/40">
+            Leave blank for the AI mailbox. Pick a connected Gmail/Outlook mailbox to
+            organize there (Outlook needs a reconnect after Mail.ReadWrite is granted).
+          </p>
+        </div>
+        <Field
+          label="Message id template"
+          value={step.messageIdTemplate ?? "{{trigger.message_id}}"}
+          onChange={(v) =>
+            patchStep(index, {
+              messageIdTemplate: v.trim() && v.trim() !== "{{trigger.message_id}}" ? v : undefined
+            })
+          }
+          help="Defaults to the triggering email's provider message id (messageIdTemplate)."
+        />
+        <Field
+          label="Move to folder (optional)"
+          value={step.moveToFolder ?? ""}
+          onChange={(v) => patchStep(index, { moveToFolder: v.trim() ? v.trim() : undefined })}
+          help="Gmail user label, Outlook folder display name, or AI-mailbox folder (moveToFolder)."
+        />
+        <Field
+          label="Add labels (optional, comma-separated)"
+          value={(step.addLabels ?? []).join(", ")}
+          onChange={(v) => {
+            const addLabels = v
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean);
+            patchStep(index, { addLabels: addLabels.length ? addLabels : undefined });
+          }}
+          help="addLabels"
+        />
+        <Field
+          label="Remove labels (optional, comma-separated)"
+          value={(step.removeLabels ?? []).join(", ")}
+          onChange={(v) => {
+            const removeLabels = v
+              .split(",")
+              .map((s) => s.trim())
+              .filter(Boolean);
+            patchStep(index, { removeLabels: removeLabels.length ? removeLabels : undefined });
+          }}
+          help="removeLabels"
+        />
+        <label className="flex items-center gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
+            checked={step.archive ?? false}
+            onChange={(ev) =>
+              patchStep(index, {
+                archive: ev.target.checked ? true : undefined,
+                ...(ev.target.checked ? { unarchive: undefined } : {})
+              })
+            }
+          />
+          Archive
+        </label>
+        <label className="flex items-center gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
+            checked={step.unarchive ?? false}
+            onChange={(ev) =>
+              patchStep(index, {
+                unarchive: ev.target.checked ? true : undefined,
+                ...(ev.target.checked ? { archive: undefined } : {})
+              })
+            }
+          />
+          Unarchive (return to Inbox)
+        </label>
+        <label className="flex items-center gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
+            checked={step.markRead ?? false}
+            onChange={(ev) =>
+              patchStep(index, {
+                markRead: ev.target.checked ? true : undefined,
+                ...(ev.target.checked ? { markUnread: undefined } : {})
+              })
+            }
+          />
+          Mark read
+        </label>
+        <label className="flex items-center gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
+            checked={step.markUnread ?? false}
+            onChange={(ev) =>
+              patchStep(index, {
+                markUnread: ev.target.checked ? true : undefined,
+                ...(ev.target.checked ? { markRead: undefined } : {})
+              })
+            }
+          />
+          Mark unread
+        </label>
       </div>
     );
   }

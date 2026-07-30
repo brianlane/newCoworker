@@ -36,6 +36,7 @@ import {
   Copy,
   FileText,
   Flag,
+  FolderOpen,
   GitBranch,
   Globe,
   HelpCircle,
@@ -87,6 +88,7 @@ const STEP_TONES: Record<StepType, NodeTone> = {
   send_sms: "comm",
   send_whatsapp: "comm",
   send_email: "comm",
+  email_organize: "read",
   approval_gate: "wait",
   notify_owner: "comm",
   notify_lead_owner: "comm",
@@ -133,6 +135,7 @@ const STEP_ICONS: Record<StepType, ReactNode> = {
   send_sms: <MessageSquare className="h-4 w-4" />,
   send_whatsapp: <MessageCircle className="h-4 w-4" />,
   send_email: <Send className="h-4 w-4" />,
+  email_organize: <FolderOpen className="h-4 w-4" />,
   approval_gate: <ShieldCheck className="h-4 w-4" />,
   notify_owner: <Bell className="h-4 w-4" />,
   notify_lead_owner: <Users className="h-4 w-4" />,
@@ -196,6 +199,16 @@ function stepSubtitle(step: FlowStep): string {
               : "";
     case "send_email":
       return `to ${step.to}`;
+    case "email_organize": {
+      const bits: string[] = [];
+      if (step.archive) bits.push("archive");
+      if (step.unarchive) bits.push("unarchive");
+      if (step.markRead) bits.push("mark read");
+      if (step.markUnread) bits.push("mark unread");
+      if (step.moveToFolder) bits.push(`move → ${step.moveToFolder}`);
+      if (step.addLabels?.length) bits.push(`label ${step.addLabels.join(", ")}`);
+      return bits.join(" · ") || "organize";
+    }
     case "notify_owner":
       return step.message;
     case "notify_lead_owner":

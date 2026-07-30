@@ -85,6 +85,14 @@ export function simulateTestAction(
         subject: action.subject,
         body: action.body
       };
+    case "email_organize":
+      return {
+        simulated: "email_organize",
+        messageId: action.messageId,
+        connectionId: action.connectionId ?? null,
+        archive: action.archive === true,
+        markRead: action.markRead === true
+      };
     case "share_document": {
       // Same skip semantics as send_sms: a live run never mints a link for a
       // missing recipient, so the test run must not report one (or stamp the

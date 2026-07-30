@@ -663,6 +663,25 @@ export type FlowStep =
   | {
       id: string;
       /**
+       * Organize a triggering email: label / move / archive / mark read in a
+       * connected mailbox (Nango) or the AI coworker's email_log. The worker
+       * POSTs to /api/aiflows/organize-email.
+       */
+      type: "email_organize";
+      messageIdTemplate?: string;
+      connectionId?: string;
+      markRead?: boolean;
+      markUnread?: boolean;
+      archive?: boolean;
+      unarchive?: boolean;
+      addLabels?: string[];
+      removeLabels?: string[];
+      moveToFolder?: string;
+      when?: StepCondition;
+    }
+  | {
+      id: string;
+      /**
        * Share a business document with the lead: mint an expiring tokenized
        * link (business_document_shares) for `documentId` and deliver it via
        * SMS or email. The worker re-checks at execution that the document is

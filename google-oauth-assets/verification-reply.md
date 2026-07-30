@@ -73,13 +73,15 @@ calendars).
 **gmail.modify.** The owner points automations at their business inbox;
 when a customer email arrives, the AI coworker reads it (messages.list /
 messages.get), sends the reply FROM the owner's own Gmail address so the
-customer sees the business address (messages.send), and marks the original
-message read (messages.modify, removing UNREAD) so the owner's inbox shows
-it was handled. `gmail.readonly` cannot send or mark handled; `gmail.send`
-cannot read the inbound email or mark it handled; combining them still
-cannot update message state. `gmail.modify` is the single narrowest scope
-covering read + send + state update, and we use no other Gmail surface (no
-settings, no deletion, no full mailbox access via mail.google.com).
+customer sees the business address (messages.send), marks the original
+message read (messages.modify, removing UNREAD) when a flow answers it, and
+applies the owner's authored organization (labels, archive by removing
+INBOX, folder-style user labels) when an AiFlow `email_organize` step runs.
+`gmail.readonly` cannot send or mark handled; `gmail.send` cannot read the
+inbound email or update labels; combining them still cannot update message
+state. `gmail.modify` is the single narrowest scope covering read + send +
+label/state update, and we use no other Gmail surface (no settings, no
+deletion, no full mailbox access via mail.google.com).
 
 ## 3. Test credentials (no authentication blockers)
 

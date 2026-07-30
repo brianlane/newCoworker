@@ -203,6 +203,11 @@ export function tenantEmailTriggerScope(
      * what document-receipt flows condition on and confirm back.
      */
     attachmentNames?: string[];
+    /**
+     * email_log row id written before enqueue. email_organize prefers this
+     * over provider_message_id when filing the AI mailbox message.
+     */
+    emailLogId?: string;
   }
 ): TriggerScope {
   const attachmentNames = (msg.attachmentNames ?? [])
@@ -223,6 +228,7 @@ export function tenantEmailTriggerScope(
     message_id: msg.id,
     ...(msg.toEmail ? { to: msg.toEmail } : {}),
     ...(msg.receivedAt ? { received_at: msg.receivedAt } : {}),
+    ...(msg.emailLogId ? { email_log_id: msg.emailLogId } : {}),
     image: msg.imageRef ?? "",
     document: msg.documentRef ?? "",
     document_name: (msg.documentName ?? "").slice(0, 255),

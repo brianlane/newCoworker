@@ -112,6 +112,20 @@ describe("collectMailboxConnectionRefs", () => {
     const definition = def([emailStep(), smsQuietStep()]);
     expect(collectMailboxConnectionRefs(definition)).toEqual([]);
   });
+
+  it("collects email_organize connectionId bindings", () => {
+    const definition = def([
+      {
+        id: "org1",
+        type: "email_organize",
+        connectionId: CONN_OUTLOOK,
+        archive: true
+      } as never
+    ]);
+    expect(collectMailboxConnectionRefs(definition)).toEqual([
+      { stepId: "org1", connectionId: CONN_OUTLOOK, use: "email_organize" }
+    ]);
+  });
 });
 
 describe("validateMailboxConnectionSteps", () => {
@@ -150,6 +164,24 @@ describe("validateMailboxConnectionSteps", () => {
     expect(issues[0]).toContain("no longer connected");
   });
 
+  it("flags a missing email_organize mailbox with organize-specific copy", async () => {
+    const fetchConnections = vi.fn(async () => []);
+    const issues = await validateMailboxConnectionSteps(
+      BIZ,
+      def([
+        {
+          id: "org1",
+          type: "email_organize",
+          connectionId: CONN_GONE,
+          archive: true
+        } as never
+      ]),
+      { fetchConnections }
+    );
+    expect(issues).toHaveLength(1);
+    expect(issues[0]).toContain("organizes a mailbox");
+  });
+
   it("flags a binding that points at a non-email connection (e.g. Zoom)", async () => {
     const fetchConnections = vi.fn(async () => [connRow(CONN_ZOOM, "zoom")]);
     const issues = await validateMailboxConnectionSteps(
@@ -173,6 +205,16 @@ describe("validateMailboxConnectionSteps", () => {
       { fetchConnections }
     );
     expect(issues).toHaveLength(2);
+  });
+});
+
+describe("collectRawWorkspaceConnectionRefs email_organize", () => {
+  it("includes email_organize connectionId", () => {
+    const refs = collectRawWorkspaceConnectionRefs({
+      trigger: { channel: "tenant_email" },
+      steps: [{ type: "email_organize", connectionId: CONN_OUTLOOK, archive: true }]
+    });
+    expect(refs).toContain(CONN_OUTLOOK);
   });
 });
 

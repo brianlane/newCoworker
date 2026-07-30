@@ -71,10 +71,27 @@ describe("email-log vps reads", () => {
   it("listEmailLog routes to the box with the projected columns", async () => {
     const rows = [{ id: "e1", created_at: "2026-07-07T00:00:00Z" }];
     vi.mocked(readMovedRows).mockResolvedValue(rows as never);
-    expect(await listEmailLog(BIZ, { limit: 10 }, centralDb({}))).toEqual(rows);
+    expect(await listEmailLog(BIZ, { limit: 10 }, centralDb({}))).toEqual([
+      {
+        id: "e1",
+        created_at: "2026-07-07T00:00:00Z",
+        is_read: false,
+        archived_at: null,
+        folder: null,
+        labels: []
+      }
+    ]);
     expect(readMovedRows).toHaveBeenCalledWith(BIZ, {
       table: "email_log",
-      columns: expect.arrayContaining(["id", "body_preview", "created_at"]),
+      columns: expect.arrayContaining([
+        "id",
+        "body_preview",
+        "created_at",
+        "is_read",
+        "archived_at",
+        "folder",
+        "labels"
+      ]),
       filters: [
         { column: "business_id", op: "eq", value: BIZ },
         { column: "deleted_at", op: "is", value: null }

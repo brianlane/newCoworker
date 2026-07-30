@@ -44,7 +44,7 @@ the summary.
 | --- | --- | --- |
 | Demo caller follow-up (contact_created, 6) | on | Follows up with people who call the demo line |
 | Webchat lead follow-up (contact_created, 6) | on | |
-| Team inbox triage (email, 5) | on | Routine payment receipts deliberately do not page the owner (PR #792) |
+| Team inbox triage (email, 5) | on | Classifies sales/support/billing, texts Brian, and applies HQ/* Gmail labels via email_organize. Routine payment receipts deliberately do not page the owner (PR #792) |
 | Contact form triage (webhook, 2) | on | Feeds the admin-designated sink business (PR #773) |
 | Meta lead follow-up (webhook, 4) | on | |
 | Lead intake & follow-up (Privyr) (TEST COPY of Truly) | on | The AiFlow e2e harness fixture, laid down by `debug/flow-test-setup.ts` |

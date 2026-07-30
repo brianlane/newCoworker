@@ -45,6 +45,9 @@ export const FLOW_STEP_TYPES = [
   "send_sms",
   "send_whatsapp",
   "send_email",
+  // Organize a triggering email: label / move / archive / mark read in the
+  // connected Gmail/Outlook mailbox or the AI coworker's in-app email_log.
+  "email_organize",
   "approval_gate",
   "notify_owner",
   // Notify whoever the lead BELONGS to: the contact's owning employee
@@ -914,6 +917,59 @@ const nonBranchStepMembers = [
     fromConnectionId: z.string().uuid().optional(),
     when: whenSchema.optional()
   }),
+  // Organize the triggering email (or a templated message id): apply labels,
+  // move to a folder, archive, and/or mark read/unread. Connected mailbox
+  // writes go through Nango (Gmail modify / Graph move); AI-mailbox writes
+  // update email_log. Pair with classify → branch for inbox triage.
+  z
+    .object({
+      id: stepId,
+      type: z.literal("email_organize"),
+      /** Defaults to {{trigger.message_id}} when omitted. */
+      messageIdTemplate: z.string().min(1).max(300).optional(),
+      /**
+       * Connected mailbox (workspace_oauth_connections.id). Omit for
+       * tenant_email (AI mailbox) organization.
+       */
+      connectionId: z.string().uuid().optional(),
+      markRead: z.boolean().optional(),
+      markUnread: z.boolean().optional(),
+      archive: z.boolean().optional(),
+      unarchive: z.boolean().optional(),
+      addLabels: z.array(z.string().min(1).max(120)).max(20).optional(),
+      removeLabels: z.array(z.string().min(1).max(120)).max(20).optional(),
+      /** Folder display name (Gmail user label / Outlook folder / AI folder). */
+      moveToFolder: z.string().min(1).max(120).optional(),
+      when: whenSchema.optional()
+    })
+    .superRefine((step, ctx) => {
+      const hasAction =
+        step.markRead === true ||
+        step.markUnread === true ||
+        step.archive === true ||
+        step.unarchive === true ||
+        (step.addLabels?.length ?? 0) > 0 ||
+        (step.removeLabels?.length ?? 0) > 0 ||
+        Boolean(step.moveToFolder);
+      if (!hasAction) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "email_organize needs at least one action (mark read, archive, labels, or move)"
+        });
+      }
+      if (step.markRead && step.markUnread) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "email_organize cannot mark read and unread at once"
+        });
+      }
+      if (step.archive && step.unarchive) {
+        ctx.addIssue({
+          code: z.ZodIssueCode.custom,
+          message: "email_organize cannot archive and unarchive at once"
+        });
+      }
+    }),
   z.object({
     id: stepId,
     /**
@@ -1741,6 +1797,8 @@ function templateStringsForStep(step: FlowStep): string[] {
         step.body,
         step.attachDocumentTemplate ?? ""
       ];
+    case "email_organize":
+      return [step.messageIdTemplate ?? "", ...(step.addLabels ?? []), ...(step.removeLabels ?? []), step.moveToFolder ?? ""];
     // The {{share_url}} placement token is substituted by the worker after
     // rendering (it is not a scope reference), so strip it before the
     // scope check; everything else in the message is a normal template.

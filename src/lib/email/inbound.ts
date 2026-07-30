@@ -190,6 +190,7 @@ export async function processInboundTenantEmail(
     subject: payload.subject,
     bodyText: payload.text,
     toEmail: payload.to,
+    ...(emailLogId ? { emailLogId } : {}),
     ...(firstImage ? { imageRef: `email-attachments:${firstImage.path}` } : {}),
     // {{trigger.document}} is only exposed when the log row LANDED — the
     // ownership gate trusts email_log.attachments alone, so a ref without

@@ -30,6 +30,7 @@ export const STEP_TYPE_LABELS: Record<StepType, string> = {
   send_sms: "Send a text",
   send_whatsapp: "Send a WhatsApp message",
   send_email: "Send an email",
+  email_organize: "Organize an email (label / move / archive)",
   approval_gate: "Ask me to approve first",
   notify_owner: "Notify me",
   notify_lead_owner: "Notify the lead's owner",
@@ -73,6 +74,8 @@ export const STEP_TYPE_HELP: Record<StepType, string> = {
     "Sends a WhatsApp message from your connected WhatsApp Business number. If the person hasn't messaged you in the last 24 hours, an approved template carries the message (Meta bills per template message).",
   send_email:
     "Sends an email. You can reuse details earlier steps found, and attach a business document - including a PDF a \"Run an agent\" step just generated.",
+  email_organize:
+    "Files the triggering email: apply labels, move it to a folder, archive it, and/or mark it read or unread. Works on a connected Gmail/Outlook mailbox or your AI coworker's in-app mailbox. Pair with Classify + Branch for inbox triage.",
   approval_gate: "Pauses and texts you to approve before continuing.",
   notify_owner: "Sends you a quick update without pausing the workflow.",
   notify_lead_owner:
