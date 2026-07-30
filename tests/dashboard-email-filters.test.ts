@@ -70,5 +70,12 @@ describe("email-filters", () => {
       limit: 100,
       folder: "Sales"
     });
+    expect(
+      emailListFiltersFromView({ view: "received", folder: "Sales" })
+    ).toEqual({
+      limit: 100,
+      folder: "Sales",
+      direction: "inbound"
+    });
   });
 });

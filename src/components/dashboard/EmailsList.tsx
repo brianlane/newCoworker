@@ -997,7 +997,15 @@ export function EmailsList({
                   aria-label="Folder filter"
                   className="rounded-md bg-parchment/5 px-2 py-1 text-[11px] text-parchment/70"
                   value={folderFilter}
-                  onChange={(e) => navigateFilters({ folder: e.target.value })}
+                  onChange={(e) => {
+                    const folder = e.target.value;
+                    // Folder pick leaves the Inbox (folder-null) chip so the
+                    // client filter and server query stay aligned.
+                    navigateFilters({
+                      folder,
+                      view: folder && viewFilter === "inbox" ? "received" : viewFilter
+                    });
+                  }}
                 >
                   <option value="">All folders</option>
                   {knownFolders.map((f) => (

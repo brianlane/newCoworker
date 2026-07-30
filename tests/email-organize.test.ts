@@ -258,6 +258,20 @@ describe("organizeMessage", () => {
       })
     ).resolves.toEqual({ ok: false, detail: "gmail_label_create_failed:Nope" });
 
+    // create call disconnects after a successful list
+    nangoProxy.mockReset();
+    nangoProxy
+      .mockResolvedValueOnce({ status: 200, data: { labels: [] } })
+      .mockResolvedValueOnce(null);
+    await expect(
+      organizeMessage({
+        businessId: BIZ,
+        connectionId: CONN,
+        messageId: "msg-create-disc",
+        actions: { addLabels: ["Nope"] }
+      })
+    ).resolves.toEqual({ ok: false, detail: "email_not_connected" });
+
     // removeLabels name that never resolves → noop (label already gone)
     nangoProxy.mockReset();
     nangoProxy.mockResolvedValueOnce({ status: 200, data: {} });

@@ -168,10 +168,9 @@ async function organizeGmail(
     if (!ensured.ok) return { ok: false, detail: ensured.detail };
     byName = ensured.map;
   }
+  // ensureGmailLabels either maps every createNames entry or returns ok:false.
   for (const name of addNames) {
-    const id = byName.get(name.toLowerCase());
-    if (!id) return { ok: false, detail: `gmail_label_unresolved:${name}` };
-    addLabelIds.push(id);
+    addLabelIds.push(byName.get(name.toLowerCase())!);
   }
   for (const name of removeNames) {
     const id = byName.get(name.toLowerCase());
@@ -179,9 +178,7 @@ async function organizeGmail(
     if (id) removeLabelIds.push(id);
   }
   if (moveFolder) {
-    const id = byName.get(moveFolder.toLowerCase());
-    if (!id) return { ok: false, detail: `gmail_label_unresolved:${moveFolder}` };
-    addLabelIds.push(id);
+    addLabelIds.push(byName.get(moveFolder.toLowerCase())!);
   }
 
   const uniqueAdd = [...new Set(addLabelIds)];
