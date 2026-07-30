@@ -429,16 +429,11 @@ export async function compileAiFlowFromDescription(
         salvaged.definition,
         { fetchConnections }
       ).catch(() => [] as string[]);
-      const salvageBrowseIssues = await validateBrowseActionSteps(
-        args.businessId,
-        salvaged.definition
-      ).catch(() => [] as string[]);
       const warnings = [
         ...salvaged.warnings,
         ...salvageDocumentIssues,
         ...salvageAgentIssues,
-        ...salvageMailboxIssues,
-        ...salvageBrowseIssues
+        ...salvageMailboxIssues
       ];
       void recordSystemLog({
         businessId: args.businessId,
