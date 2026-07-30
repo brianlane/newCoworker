@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
+import { safeAdminNextPath } from "@/lib/auth/admin-aal";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
@@ -40,11 +41,7 @@ export default function AdminLoginForm({
   }, [forceSignOut]);
 
   function getSafeNext(): string {
-    const next = searchParams.get("next") ?? "/admin/dashboard";
-    if (!next.startsWith("/") || next.startsWith("//")) {
-      return "/admin/dashboard";
-    }
-    return next;
+    return safeAdminNextPath(searchParams.get("next"));
   }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
@@ -69,13 +66,15 @@ export default function AdminLoginForm({
       // CASA 3.3.1: password alone is AAL1. Verified MFA factors raise the
       // session to AAL2 before any /admin console route is reachable.
       const { data: aalData } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
-      router.refresh();
+      const next = getSafeNext();
+      // Navigate before refresh so the login RSC cannot race past MFA.
       if (aalData?.currentLevel !== "aal2") {
-        const next = encodeURIComponent(getSafeNext());
-        router.replace(`/admin/mfa?next=${next}`);
+        router.replace(`/admin/mfa?next=${encodeURIComponent(next)}`);
+        router.refresh();
         return;
       }
-      router.replace(getSafeNext());
+      router.replace(next);
+      router.refresh();
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed");
     } finally {

@@ -449,12 +449,21 @@ describe("proxy", () => {
     expect(res.headers.get("location")).toContain("/admin/dashboard");
   });
 
+  it("redirects authenticated aal2 admin from /admin/login to the safe next path", async () => {
+    mockSupabaseWithUser({ id: "admin-1", email: "admin@newcoworker.com", aal: "aal2" });
+    const req = makeRequest("/admin/login?next=%2Fadmin%2Fclients");
+    const res = await proxy(req);
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/admin/clients");
+  });
+
   it("redirects authenticated aal1 admin from /admin/login to /admin/mfa", async () => {
     mockSupabaseWithUser({ id: "admin-1", email: "admin@newcoworker.com", aal: "aal1" });
-    const req = makeRequest("/admin/login");
+    const req = makeRequest("/admin/login?next=%2Fadmin%2Fclients");
     const res = await proxy(req);
     expect(res.status).toBe(307);
     expect(res.headers.get("location")).toContain("/admin/mfa");
+    expect(res.headers.get("location")).toContain("next=");
   });
 
   it("allows unauthenticated access to /admin/login", async () => {

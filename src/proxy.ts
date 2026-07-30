@@ -315,7 +315,13 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
   }
 
   // --- Supabase session refresh ---
-  let response = NextResponse.next({ request });
+  // Forward the pathname so RSC admin layouts can preserve deep links when
+  // redirecting AAL1 admins to /admin/mfa.
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-pathname", pathname);
+  let response = NextResponse.next({
+    request: { headers: requestHeaders }
+  });
 
   response.headers.set("X-RateLimit-Limit", String(rlResult.limit));
   response.headers.set("X-RateLimit-Remaining", String(rlResult.remaining));
@@ -353,15 +359,19 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
         getAll() {
           return request.cookies.getAll().map(({ name, value }) => ({ name, value }));
         },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            request.cookies.set({ name, value, ...(options ?? {}) });
-          });
-          response = NextResponse.next({ request });
-          cookiesToSet.forEach(({ name, value, options }) => {
-            response.cookies.set({ name, value, ...(options ?? {}) });
-          });
-        },
+          setAll(cookiesToSet) {
+            cookiesToSet.forEach(({ name, value, options }) => {
+              request.cookies.set({ name, value, ...(options ?? {}) });
+            });
+            const refreshedHeaders = new Headers(request.headers);
+            refreshedHeaders.set("x-pathname", pathname);
+            response = NextResponse.next({
+              request: { headers: refreshedHeaders }
+            });
+            cookiesToSet.forEach(({ name, value, options }) => {
+              response.cookies.set({ name, value, ...(options ?? {}) });
+            });
+          },
       },
     });
 
@@ -437,7 +447,23 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
   // Redirect authenticated admin away from /admin/login
   if (isAdminLogin && isAdminUser) {
     const redirectUrl = request.nextUrl.clone();
-    redirectUrl.pathname = adminHasMfa ? "/admin/dashboard" : "/admin/mfa";
+    if (adminHasMfa) {
+      const nextParam = request.nextUrl.searchParams.get("next");
+      const next =
+        nextParam &&
+        nextParam.startsWith("/") &&
+        !nextParam.startsWith("//") &&
+        !nextParam.startsWith("/admin/mfa")
+          ? nextParam
+          : "/admin/dashboard";
+      const target = new URL(next, request.nextUrl.origin);
+      redirectUrl.pathname = target.pathname;
+      redirectUrl.search = target.search;
+    } else {
+      redirectUrl.pathname = "/admin/mfa";
+      const nextParam = request.nextUrl.searchParams.get("next");
+      if (nextParam) redirectUrl.searchParams.set("next", nextParam);
+    }
     return redirectWithCookies(response, redirectUrl);
   }
 
