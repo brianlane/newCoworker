@@ -337,6 +337,96 @@ describe("executeLifecyclePlan refund handling", () => {
     );
   });
 
+  it("claws back packs when Stripe amount paid is zero (no refund create)", async () => {
+    const stripe = {
+      subscriptions: {
+        retrieve: vi.fn().mockResolvedValue({
+          latest_invoice: "in_zero_pack",
+          metadata: { addonVoice: "min_30:1:1800" }
+        })
+      },
+      invoices: {
+        retrieve: vi.fn().mockResolvedValue({
+          id: "in_zero_pack",
+          amount_paid: 0,
+          payments: { data: [{ payment: { payment_intent: "pi_zero_pack" } }] }
+        })
+      },
+      paymentIntents: {
+        retrieve: vi.fn().mockResolvedValue({ id: "pi_zero_pack", latest_charge: "ch_zero_pack" })
+      },
+      refunds: { create: vi.fn() }
+    };
+    const rpc = vi.fn().mockResolvedValue({ data: { ok: true }, error: null });
+    createSupabaseServiceClientMock.mockResolvedValue({
+      auth: { admin: { deleteUser: vi.fn().mockResolvedValue({ error: null }) } },
+      rpc,
+      from: undefined
+    });
+
+    await executeLifecyclePlan(
+      refundPlan(0),
+      { businessId: "biz_1", vpsHost: null, customerProfileId: "prof_1" },
+      { stripe: stripe as unknown as ExecutorDeps["stripe"], sendEmail: sendOwnerEmailMock }
+    );
+
+    expect(stripe.refunds.create).not.toHaveBeenCalled();
+    expect(rpc).toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      expect.objectContaining({
+        p_checkout_session_id: "inv_in_zero_pack:voice:min_30",
+        p_reason: "refund"
+      })
+    );
+  });
+
+  it("claws back packs when carve-outs leave nothing to refund", async () => {
+    const stripe = {
+      subscriptions: {
+        retrieve: vi.fn().mockResolvedValue({
+          latest_invoice: "in_carve_pack",
+          metadata: { addonVoice: "min_30:1:1800" }
+        })
+      },
+      invoices: {
+        retrieve: vi.fn().mockResolvedValue({
+          id: "in_carve_pack",
+          amount_paid: 2500,
+          lines: { data: [] },
+          payments: { data: [{ payment: { payment_intent: "pi_carve_pack" } }] }
+        })
+      },
+      paymentIntents: {
+        retrieve: vi.fn().mockResolvedValue({
+          id: "pi_carve_pack",
+          latest_charge: "ch_carve_pack"
+        })
+      },
+      refunds: { create: vi.fn() }
+    };
+    const rpc = vi.fn().mockResolvedValue({ data: { ok: true }, error: null });
+    createSupabaseServiceClientMock.mockResolvedValue({
+      auth: { admin: { deleteUser: vi.fn().mockResolvedValue({ error: null }) } },
+      rpc,
+      from: undefined
+    });
+
+    await executeLifecyclePlan(
+      refundPlan(2500, 2500, 0),
+      { businessId: "biz_1", vpsHost: null, customerProfileId: "prof_1" },
+      { stripe: stripe as unknown as ExecutorDeps["stripe"], sendEmail: sendOwnerEmailMock }
+    );
+
+    expect(stripe.refunds.create).not.toHaveBeenCalled();
+    expect(rpc).toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      expect.objectContaining({
+        p_checkout_session_id: "inv_in_carve_pack:voice:min_30",
+        p_reason: "refund"
+      })
+    );
+  });
+
   it("uses localhost base URL for cancel email when NEXT_PUBLIC_APP_URL is unset", async () => {
     const prevPublic = process.env.NEXT_PUBLIC_APP_URL;
     delete process.env.NEXT_PUBLIC_APP_URL;
