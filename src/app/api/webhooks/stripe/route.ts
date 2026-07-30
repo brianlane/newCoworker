@@ -2264,7 +2264,20 @@ async function handleVoiceBonusRefund(event: Stripe.Event): Promise<void> {
           subscription: subId,
           limit: 5
         });
-        for (const s of bySub.data) sessionsById.set(s.id, s);
+        for (const s of bySub.data) {
+          // Only the Checkout Session that produced THIS invoice. Listing by
+          // subscription alone would also hit later renewal invoices and void
+          // membership pack grants on an unrelated refund.
+          const sessionInvoice =
+            typeof s.invoice === "string"
+              ? s.invoice
+              : s.invoice && typeof s.invoice === "object"
+                ? (s.invoice as { id?: string }).id ?? null
+                : null;
+          if (sessionInvoice && sessionInvoice === chargeInvoice) {
+            sessionsById.set(s.id, s);
+          }
+        }
       }
     } catch (err) {
       logger.warn("Stripe invoice/subscription lookup failed during pack refund handling", {
