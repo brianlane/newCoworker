@@ -290,6 +290,21 @@ export async function runChangePlanFromCheckout(
         stripeSubscriptionId,
         subscriptionRowId: existingByStripe.id
       });
+      // Still (re)attempt pack grants: the first delivery may have created the
+      // active sub then failed mid-RPC. Grant RPCs are idempotent on session id.
+      try {
+        const { applyMembershipPackAddonsFromCheckout } = await import(
+          "@/lib/billing/membership-pack-addon-grants"
+        );
+        await applyMembershipPackAddonsFromCheckout(session, eventId);
+      } catch (err) {
+        logger.error("changePlan: membership pack add-on grants failed on idempotent retry", {
+          businessId,
+          sessionId: session.id,
+          eventId,
+          error: errorMessage(err)
+        });
+      }
       return;
     }
   }
@@ -639,6 +654,23 @@ export async function runChangePlanFromCheckout(
       : oldSub.hostinger_billing_subscription_id,
     ...periodCache
   });
+
+  // Discounted usage packs attached to the change-plan Checkout. The new sub
+  // row is active above, so grant RPCs pass entitlement the same way as
+  // standalone Billing top-ups.
+  try {
+    const { applyMembershipPackAddonsFromCheckout } = await import(
+      "@/lib/billing/membership-pack-addon-grants"
+    );
+    await applyMembershipPackAddonsFromCheckout(session, eventId);
+  } catch (err) {
+    logger.error("changePlan: membership pack add-on grants failed", {
+      businessId,
+      sessionId: session.id,
+      eventId,
+      error: errorMessage(err)
+    });
+  }
 
   if (customerProfileId) {
     try {

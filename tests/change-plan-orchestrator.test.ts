@@ -147,6 +147,14 @@ vi.mock("@/lib/logger", () => ({
   }
 }));
 
+const { applyMembershipPackAddonsFromCheckoutMock } = vi.hoisted(() => ({
+  applyMembershipPackAddonsFromCheckoutMock: vi.fn().mockResolvedValue(undefined)
+}));
+
+vi.mock("@/lib/billing/membership-pack-addon-grants", () => ({
+  applyMembershipPackAddonsFromCheckout: applyMembershipPackAddonsFromCheckoutMock
+}));
+
 const {
   sendOpsVpsDeletionEmailMock,
   sendOpsPlanChangeEmailMock,
@@ -367,6 +375,52 @@ describe("runChangePlanFromCheckout", () => {
         hostingerBillingSubscriptionId: "billing_old"
       })
     );
+
+    expect(applyMembershipPackAddonsFromCheckoutMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "cs_test_123" }),
+      "evt_1"
+    );
+  });
+
+  it("re-attempts pack grants on idempotent webhook retry", async () => {
+    getSubscriptionByStripeSubscriptionIdMock.mockResolvedValue({
+      id: "sub-row-new",
+      business_id: "biz-1",
+      status: "active",
+      stripe_subscription_id: "sub_new"
+    });
+
+    await runChangePlanFromCheckout(makeSession(), "evt_retry");
+
+    expect(applyMembershipPackAddonsFromCheckoutMock).toHaveBeenCalledWith(
+      expect.objectContaining({ id: "cs_test_123" }),
+      "evt_retry"
+    );
+    expect(createSubscriptionMock).not.toHaveBeenCalled();
+    expect(orchestrateProvisioningMock).not.toHaveBeenCalled();
+  });
+
+  it("logs when pack grants fail on an idempotent retry", async () => {
+    getSubscriptionByStripeSubscriptionIdMock.mockResolvedValue({
+      id: "sub-row-new",
+      business_id: "biz-1",
+      status: "active",
+      stripe_subscription_id: "sub_new"
+    });
+    applyMembershipPackAddonsFromCheckoutMock.mockRejectedValueOnce(new Error("grant boom"));
+
+    await runChangePlanFromCheckout(makeSession(), "evt_retry_err");
+
+    expect(applyMembershipPackAddonsFromCheckoutMock).toHaveBeenCalled();
+  });
+
+  it("logs when pack grants fail after creating the new subscription", async () => {
+    applyMembershipPackAddonsFromCheckoutMock.mockRejectedValueOnce(new Error("grant boom mid"));
+
+    await runChangePlanFromCheckout(makeSession(), "evt_grant_fail");
+
+    expect(createSubscriptionMock).toHaveBeenCalled();
+    expect(applyMembershipPackAddonsFromCheckoutMock).toHaveBeenCalled();
   });
 
   describe("old-VPS pool return (fleet economics Phase B)", () => {

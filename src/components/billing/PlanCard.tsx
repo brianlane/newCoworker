@@ -29,6 +29,7 @@ import {
 } from "@/lib/pricing";
 import { CancelSheet } from "./CancelSheet";
 import { ChangePlanSelector } from "./ChangePlanSelector";
+import type { MembershipPackAddonOption } from "@/lib/billing/membership-pack-addons";
 
 type StatusKind =
   | "active"
@@ -58,6 +59,8 @@ export type PlanCardProps = {
    * "Start a new contract" CTA (server re-validates in change-plan).
    */
   commitmentElapsed: boolean;
+  /** Optional usage packs offered as discounted add-ons on plan change. */
+  packAddonOptions?: MembershipPackAddonOption[];
 };
 
 function formatDate(iso: string | null | undefined): string {
@@ -118,7 +121,8 @@ export function PlanCard(props: PlanCardProps) {
     changePlanBlockedReason,
     stripeCustomerId,
     contractAutoRenew,
-    commitmentElapsed
+    commitmentElapsed,
+    packAddonOptions = []
   } = props;
 
   const [showCancel, setShowCancel] = useState(false);
@@ -408,6 +412,7 @@ export function PlanCard(props: PlanCardProps) {
             currentBillingPeriod={billingPeriod}
             disabled={!canChangePlan}
             disabledReason={changePlanBlockedReason}
+            packAddonOptions={packAddonOptions}
           />
         </div>
       )}

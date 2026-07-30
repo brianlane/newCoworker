@@ -55,6 +55,12 @@ export type CheckoutParams = {
    * as Canadian (see isCanadianBusiness); existing tenants are grandfathered.
    */
   canadaFee?: { monthlyCents: number; billingPeriod: BillingPeriod };
+  /**
+   * Optional one-time usage-pack add-ons (voice / SMS / chat) bought with the
+   * membership. Amounts are already term-discounted by the caller; each line
+   * is an inline `price_data` item so no new Stripe Price IDs are required.
+   */
+  packAddonLines?: ReadonlyArray<{ name: string; unitAmountCents: number }>;
 };
 
 export async function createCheckoutSession(params: CheckoutParams): Promise<{
@@ -83,6 +89,17 @@ export async function createCheckoutSession(params: CheckoutParams): Promise<{
         product_data: { name: CANADA_MESSAGING_FEE_NAME },
         unit_amount: params.canadaFee.monthlyCents * months,
         recurring: { interval: "month", interval_count: months }
+      },
+      quantity: 1
+    });
+  }
+  for (const pack of params.packAddonLines ?? []) {
+    if (pack.unitAmountCents <= 0) continue;
+    lineItems.push({
+      price_data: {
+        currency: "usd",
+        product_data: { name: pack.name },
+        unit_amount: pack.unitAmountCents
       },
       quantity: 1
     });

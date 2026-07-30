@@ -200,6 +200,33 @@ describe("stripe/client", () => {
     );
   });
 
+  it("createCheckoutSession adds discounted pack add-on lines and skips zero amounts", async () => {
+    await createCheckoutSession({
+      priceId: "price_mock_starter",
+      successUrl: "https://example.com/ok",
+      cancelUrl: "https://example.com/cancel",
+      packAddonLines: [
+        { name: "Voice top-up: 30 minutes", unitAmountCents: 800 },
+        { name: "skip me", unitAmountCents: 0 }
+      ]
+    });
+    expect(mockSessionCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        line_items: [
+          { price: "price_mock_starter", quantity: 1 },
+          {
+            price_data: {
+              currency: "usd",
+              product_data: { name: "Voice top-up: 30 minutes" },
+              unit_amount: 800
+            },
+            quantity: 1
+          }
+        ]
+      })
+    );
+  });
+
   it("createCheckoutSession adds a one-time carrier fee line item when oneTimeCarrierFeeCents is set", async () => {
     await createCheckoutSession({
       priceId: "price_mock_starter",

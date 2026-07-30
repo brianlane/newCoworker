@@ -32,11 +32,15 @@ import {
   resolvePriceId
 } from "@/lib/stripe/client";
 import { CANADA_MESSAGING_FEE_MONTHLY_CENTS } from "@/lib/plans/canadian-messaging";
+import { resolveMembershipPackAddons } from "@/lib/billing/membership-pack-addons";
 import { logger } from "@/lib/logger";
 
 const bodySchema = z.object({
   tier: z.enum(["starter", "standard"]),
-  billingPeriod: z.enum(["monthly", "annual", "biennial"])
+  billingPeriod: z.enum(["monthly", "annual", "biennial"]),
+  voicePackId: z.string().trim().min(1).max(40).optional(),
+  smsPackId: z.string().trim().min(1).max(40).optional(),
+  chatPackId: z.string().trim().min(1).max(40).optional()
 });
 
 export async function POST(request: Request) {
@@ -208,6 +212,18 @@ export async function POST(request: Request) {
     // downgrade — first-cycle discounts are for brand-new customers only,
     // and granting them on change-plan would let users oscillate plans to
     // harvest the discount.
+    const packAddons = resolveMembershipPackAddons(
+      {
+        voicePackId: payload.voicePackId,
+        smsPackId: payload.smsPackId,
+        chatPackId: payload.chatPackId
+      },
+      payload.billingPeriod
+    );
+    if (!packAddons.ok) {
+      return errorResponse("VALIDATION_ERROR", packAddons.error, 422);
+    }
+
     const session = await createCheckoutSession({
       priceId,
       successUrl: `${appUrl}/dashboard/billing?planChanged=1`,
@@ -221,6 +237,14 @@ export async function POST(request: Request) {
             }
           }
         : {}),
+      ...(packAddons.lines.length > 0
+        ? {
+            packAddonLines: packAddons.lines.map((line) => ({
+              name: line.name,
+              unitAmountCents: line.unitAmountCents
+            }))
+          }
+        : {}),
       metadata: {
         businessId: business.id,
         tier: payload.tier,
@@ -232,7 +256,8 @@ export async function POST(request: Request) {
         // before skipping the lifetime-count increment.
         ...(recontractEligible ? { recontract: "1" } : {}),
         ...(carryCanadaFee ? { canadianMessagingFee: "1" } : {}),
-        ...(changePlanProfileId ? { customerProfileId: changePlanProfileId } : {})
+        ...(changePlanProfileId ? { customerProfileId: changePlanProfileId } : {}),
+        ...packAddons.metadata
       }
     });
 
