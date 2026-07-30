@@ -30,13 +30,21 @@ export function hasAdminMfa(
   return isAdminEmail(email, adminEmail) && isAal2(aal);
 }
 
-export function adminMfaRedirectPath(nextPath?: string | null): string {
-  const next =
-    nextPath && nextPath.startsWith("/") && !nextPath.startsWith("//")
-      ? nextPath
-      : "/admin/dashboard";
-  if (next === ADMIN_MFA_PATH || next.startsWith(`${ADMIN_MFA_PATH}?`)) {
-    return ADMIN_MFA_PATH;
+/** Same-origin admin path only; never returns `/admin/mfa` itself. */
+export function safeAdminNextPath(nextPath?: string | null): string {
+  if (
+    nextPath &&
+    nextPath.startsWith("/") &&
+    !nextPath.startsWith("//") &&
+    nextPath !== ADMIN_MFA_PATH &&
+    !nextPath.startsWith(`${ADMIN_MFA_PATH}?`)
+  ) {
+    return nextPath;
   }
+  return "/admin/dashboard";
+}
+
+export function adminMfaRedirectPath(nextPath?: string | null): string {
+  const next = safeAdminNextPath(nextPath);
   return `${ADMIN_MFA_PATH}?next=${encodeURIComponent(next)}`;
 }

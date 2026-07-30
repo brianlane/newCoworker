@@ -419,7 +419,18 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
 
   if (isAdminMfa && adminHasMfa) {
     const redirectUrl = request.nextUrl.clone();
-    redirectUrl.pathname = "/admin/dashboard";
+    const nextParam = request.nextUrl.searchParams.get("next");
+    const next =
+      nextParam &&
+      nextParam.startsWith("/") &&
+      !nextParam.startsWith("//") &&
+      !nextParam.startsWith("/admin/mfa")
+        ? nextParam
+        : "/admin/dashboard";
+    // Preserve deep links after MFA completes (path may include a query).
+    const target = new URL(next, request.nextUrl.origin);
+    redirectUrl.pathname = target.pathname;
+    redirectUrl.search = target.search;
     return redirectWithCookies(response, redirectUrl);
   }
 

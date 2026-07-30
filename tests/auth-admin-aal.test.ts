@@ -4,7 +4,8 @@ import {
   adminMfaRedirectPath,
   hasAdminMfa,
   isAal2,
-  isAdminEmail
+  isAdminEmail,
+  safeAdminNextPath
 } from "@/lib/auth/admin-aal";
 
 describe("admin-aal", () => {
@@ -26,6 +27,13 @@ describe("admin-aal", () => {
     expect(hasAdminMfa("user@example.com", "aal2", "admin@example.com")).toBe(false);
   });
 
+  it("sanitizes post-MFA next paths", () => {
+    expect(safeAdminNextPath("/admin/clients")).toBe("/admin/clients");
+    expect(safeAdminNextPath("https://evil.example")).toBe("/admin/dashboard");
+    expect(safeAdminNextPath("//evil.example")).toBe("/admin/dashboard");
+    expect(safeAdminNextPath(ADMIN_MFA_PATH)).toBe("/admin/dashboard");
+  });
+
   it("builds a safe MFA redirect with next", () => {
     expect(adminMfaRedirectPath("/admin/clients")).toBe(
       `${ADMIN_MFA_PATH}?next=${encodeURIComponent("/admin/clients")}`
@@ -36,6 +44,8 @@ describe("admin-aal", () => {
     expect(adminMfaRedirectPath("//evil.example")).toBe(
       `${ADMIN_MFA_PATH}?next=${encodeURIComponent("/admin/dashboard")}`
     );
-    expect(adminMfaRedirectPath(ADMIN_MFA_PATH)).toBe(ADMIN_MFA_PATH);
+    expect(adminMfaRedirectPath(ADMIN_MFA_PATH)).toBe(
+      `${ADMIN_MFA_PATH}?next=${encodeURIComponent("/admin/dashboard")}`
+    );
   });
 });

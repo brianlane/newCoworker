@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
+import { safeAdminNextPath } from "@/lib/auth/admin-aal";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
@@ -32,11 +33,7 @@ export default function AdminMfaForm({ email }: AdminMfaFormProps) {
   const [submitting, setSubmitting] = useState(false);
 
   function getSafeNext(): string {
-    const next = searchParams.get("next") ?? "/admin/dashboard";
-    if (!next.startsWith("/") || next.startsWith("//") || next.startsWith("/admin/mfa")) {
-      return "/admin/dashboard";
-    }
-    return next;
+    return safeAdminNextPath(searchParams.get("next"));
   }
 
   useEffect(() => {
@@ -113,8 +110,11 @@ export default function AdminMfaForm({ email }: AdminMfaFormProps) {
         setError(verifyError.message);
         return;
       }
+      // Navigate before refresh so an AAL2 server redirect on this page
+      // cannot beat the intended deep link with /admin/dashboard.
+      const next = getSafeNext();
+      router.replace(next);
       router.refresh();
-      router.replace(getSafeNext());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Verification failed");
     } finally {

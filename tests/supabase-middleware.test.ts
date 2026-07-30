@@ -433,6 +433,14 @@ describe("proxy", () => {
     expect(res.status).toBe(200);
   });
 
+  it("redirects aal2 admin from /admin/mfa to the safe next path", async () => {
+    mockSupabaseWithUser({ id: "admin-1", email: "admin@newcoworker.com", aal: "aal2" });
+    const req = makeRequest("/admin/mfa?next=%2Fadmin%2Fclients");
+    const res = await proxy(req);
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/admin/clients");
+  });
+
   it("redirects authenticated aal2 admin away from /admin/login to /admin", async () => {
     mockSupabaseWithUser({ id: "admin-1", email: "admin@newcoworker.com", aal: "aal2" });
     const req = makeRequest("/admin/login");
