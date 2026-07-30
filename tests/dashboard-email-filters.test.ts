@@ -1,5 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
+  coerceEmailsViewFilter,
   emailListFiltersFromView,
   parseEmailsViewFilter
 } from "@/lib/dashboard/email-filters";
@@ -9,6 +10,12 @@ describe("email-filters", () => {
     expect(parseEmailsViewFilter("inbox")).toBe("inbox");
     expect(parseEmailsViewFilter("nope")).toBe("all");
     expect(parseEmailsViewFilter(undefined)).toBe("all");
+  });
+
+  it("coerces Inbox+folder to Received", () => {
+    expect(coerceEmailsViewFilter("inbox", "Sales")).toBe("received");
+    expect(coerceEmailsViewFilter("inbox", "")).toBe("inbox");
+    expect(coerceEmailsViewFilter("all", "Sales")).toBe("all");
   });
 
   it("maps each view chip onto listEmailLog options", () => {

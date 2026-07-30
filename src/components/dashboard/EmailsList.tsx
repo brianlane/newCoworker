@@ -981,7 +981,13 @@ export function EmailsList({
                 <button
                   key={key}
                   type="button"
-                  onClick={() => navigateFilters({ view: key })}
+                  onClick={() =>
+                    navigateFilters({
+                      view: key,
+                      // Inbox is folder-null; clear any folder query.
+                      folder: key === "inbox" ? "" : folderFilter
+                    })
+                  }
                   className={[
                     "rounded-md px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide transition-colors",
                     viewFilter === key

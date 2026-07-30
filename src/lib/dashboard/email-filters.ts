@@ -25,6 +25,18 @@ export function parseEmailsViewFilter(raw: unknown): EmailsViewFilter {
 }
 
 /**
+ * Inbox means folder-null. A concrete folder query cannot stay on Inbox without
+ * the client filter emptying the list, so coerce to Received.
+ */
+export function coerceEmailsViewFilter(
+  view: EmailsViewFilter,
+  folder: string
+): EmailsViewFilter {
+  if (folder.trim() && view === "inbox") return "received";
+  return view;
+}
+
+/**
  * Map Dashboard → Emails filter chips / query params onto listEmailLog options
  * so the server page loads the matching slice (not just client-side filtering
  * of the newest 100 rows).

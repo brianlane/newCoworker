@@ -308,9 +308,11 @@ async function organizeOutlook(
     }
   }
 
+  // Prefer an explicit folder move over Archive so archive+moveToFolder matches
+  // Gmail (label + leave Inbox) instead of silently dropping the folder.
   let destinationName: string | null = null;
-  if (actions.archive) destinationName = "Archive";
-  else if (actions.moveToFolder?.trim()) destinationName = actions.moveToFolder.trim();
+  if (actions.moveToFolder?.trim()) destinationName = actions.moveToFolder.trim();
+  else if (actions.archive) destinationName = "Archive";
   else if (actions.unarchive) destinationName = "Inbox";
 
   if (destinationName) {

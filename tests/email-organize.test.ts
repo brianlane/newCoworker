@@ -388,6 +388,32 @@ describe("organizeMessage", () => {
     ).resolves.toEqual({ ok: true, provider: "microsoft" });
   });
 
+  it("prefers moveToFolder over Archive when both are set on Outlook", async () => {
+    getConn.mockResolvedValue(outlookConn());
+    nangoProxy
+      .mockResolvedValueOnce({
+        status: 200,
+        data: { value: [{ id: "f-sales", displayName: "Sales" }] }
+      })
+      .mockResolvedValueOnce({ status: 200, data: { id: "moved" } });
+    await expect(
+      organizeMessage({
+        businessId: BIZ,
+        connectionId: CONN,
+        messageId: "AAMkBoth",
+        actions: { archive: true, moveToFolder: "Sales" }
+      })
+    ).resolves.toEqual({ ok: true, provider: "microsoft" });
+    expect(nangoProxy).toHaveBeenLastCalledWith(
+      BIZ,
+      expect.anything(),
+      expect.objectContaining({
+        endpoint: "/v1.0/me/messages/AAMkBoth/move",
+        data: { destinationId: "f-sales" }
+      })
+    );
+  });
+
   it("resolves Outlook folders from the mailFolders list and unarchives to Inbox", async () => {
     getConn.mockResolvedValue(outlookConn());
     nangoProxy

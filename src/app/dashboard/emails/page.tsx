@@ -16,6 +16,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { listEmailLog } from "@/lib/db/email-log";
 import {
+  coerceEmailsViewFilter,
   emailListFiltersFromView,
   parseEmailsViewFilter
 } from "@/lib/dashboard/email-filters";
@@ -37,9 +38,9 @@ export default async function DashboardEmailsPage({
   if (!user?.email) redirect("/login?redirectTo=/dashboard/emails");
 
   const sp = await searchParams;
-  const viewFilter = parseEmailsViewFilter(sp.view);
   const folderFilter = typeof sp.folder === "string" ? sp.folder.trim() : "";
   const labelFilter = typeof sp.label === "string" ? sp.label.trim() : "";
+  const viewFilter = coerceEmailsViewFilter(parseEmailsViewFilter(sp.view), folderFilter);
   const listFilters = emailListFiltersFromView({
     view: viewFilter,
     folder: folderFilter,
