@@ -4,6 +4,8 @@ import type Stripe from "stripe";
 const {
   getSubscriptionMock,
   stripeRetrieveMock,
+  invoicesRetrieveMock,
+  invoicesListMock,
   rpcMock,
   loggerWarnMock,
   loggerErrorMock,
@@ -11,6 +13,8 @@ const {
 } = vi.hoisted(() => ({
   getSubscriptionMock: vi.fn(),
   stripeRetrieveMock: vi.fn(),
+  invoicesRetrieveMock: vi.fn(),
+  invoicesListMock: vi.fn(),
   rpcMock: vi.fn(),
   loggerWarnMock: vi.fn(),
   loggerErrorMock: vi.fn(),
@@ -35,7 +39,8 @@ vi.mock("@/lib/db/subscriptions", async (importOriginal) => {
 
 vi.mock("@/lib/stripe/client", () => ({
   getStripe: () => ({
-    subscriptions: { retrieve: stripeRetrieveMock }
+    subscriptions: { retrieve: stripeRetrieveMock },
+    invoices: { retrieve: invoicesRetrieveMock, list: invoicesListMock }
   })
 }));
 
@@ -54,17 +59,87 @@ vi.mock("@/lib/logger", () => ({
   }
 }));
 
-import { applyMembershipPackAddonsFromCheckout } from "@/lib/billing/membership-pack-addon-grants";
+import {
+  applyMembershipPackAddonsFromCheckout,
+  applyMembershipPackAddonsFromInvoice,
+  commitmentMonthsFromStripeSubscription
+} from "@/lib/billing/membership-pack-addon-grants";
 
-function makeSession(metadata: Record<string, string>): Stripe.Checkout.Session {
-  return {
-    id: "cs_membership_1",
-    created: 1_700_000_000,
-    metadata
-  } as unknown as Stripe.Checkout.Session;
+function makeInvoice(id = "in_1"): Stripe.Invoice {
+  return { id, created: 1_700_000_000 } as unknown as Stripe.Invoice;
 }
 
-describe("applyMembershipPackAddonsFromCheckout", () => {
+function makeSub(
+  metadata: Record<string, string>,
+  intervalCount = 1
+): Stripe.Subscription {
+  return {
+    id: "sub_live",
+    status: "active",
+    current_period_end: 1_700_100_000,
+    metadata,
+    items: {
+      data: [
+        {
+          price: {
+            recurring: { interval: "month", interval_count: intervalCount }
+          }
+        }
+      ]
+    }
+  } as unknown as Stripe.Subscription;
+}
+
+describe("commitmentMonthsFromStripeSubscription", () => {
+  it("reads month and year intervals from the plan item", () => {
+    expect(commitmentMonthsFromStripeSubscription(makeSub({}, 1))).toBe(1);
+    expect(commitmentMonthsFromStripeSubscription(makeSub({}, 12))).toBe(12);
+    expect(
+      commitmentMonthsFromStripeSubscription({
+        items: {
+          data: [{ price: { recurring: { interval: "year", interval_count: 2 } } }]
+        }
+      } as Stripe.Subscription)
+    ).toBe(24);
+    expect(
+      commitmentMonthsFromStripeSubscription({
+        items: { data: [{ price: { recurring: { interval: "year" } } }] }
+      } as Stripe.Subscription)
+    ).toBe(12);
+    expect(
+      commitmentMonthsFromStripeSubscription({
+        items: { data: [{ price: { recurring: { interval: "month" } } }] }
+      } as Stripe.Subscription)
+    ).toBe(1);
+    expect(
+      commitmentMonthsFromStripeSubscription({
+        items: { data: [{ price: { recurring: { interval: "week", interval_count: 1 } } }] }
+      } as Stripe.Subscription)
+    ).toBe(1);
+    expect(
+      commitmentMonthsFromStripeSubscription({
+        items: { data: [] }
+      } as unknown as Stripe.Subscription)
+    ).toBe(1);
+    expect(
+      commitmentMonthsFromStripeSubscription({} as unknown as Stripe.Subscription)
+    ).toBe(1);
+    expect(
+      commitmentMonthsFromStripeSubscription({
+        items: { data: [{ price: {} }] }
+      } as unknown as Stripe.Subscription)
+    ).toBe(1);
+    expect(
+      commitmentMonthsFromStripeSubscription({
+        items: {
+          data: [{ price: { recurring: { interval: "month", interval_count: 0 } } }]
+        }
+      } as unknown as Stripe.Subscription)
+    ).toBe(1);
+  });
+});
+
+describe("applyMembershipPackAddonsFromInvoice", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     getSubscriptionMock.mockResolvedValue({
@@ -72,110 +147,23 @@ describe("applyMembershipPackAddonsFromCheckout", () => {
       status: "active",
       stripe_subscription_id: "sub_live"
     });
-    stripeRetrieveMock.mockResolvedValue({
-      id: "sub_live",
-      status: "active",
-      current_period_end: 1_700_100_000
-    });
     rpcMock.mockResolvedValue({ data: { ok: true }, error: null });
   });
 
   it("no-ops when metadata has no pack add-ons", async () => {
-    await applyMembershipPackAddonsFromCheckout(
-      makeSession({ businessId: "biz-1" }),
-      "evt_1"
-    );
-    expect(getSubscriptionMock).not.toHaveBeenCalled();
-    expect(rpcMock).not.toHaveBeenCalled();
-  });
-
-  it("no-ops when session metadata is null", async () => {
-    const session = {
-      id: "cs_membership_1",
-      created: 1_700_000_000,
-      metadata: null
-    } as unknown as Stripe.Checkout.Session;
-    await applyMembershipPackAddonsFromCheckout(session, "evt_1");
-    expect(rpcMock).not.toHaveBeenCalled();
-  });
-
-  it("warns and returns when businessId is missing", async () => {
-    await applyMembershipPackAddonsFromCheckout(
-      makeSession({ addonVoicePackId: "min_30", addonVoiceSeconds: "1800" }),
-      "evt_1"
-    );
-    expect(loggerWarnMock).toHaveBeenCalledWith(
-      "membership_pack_addon: missing businessId",
-      expect.objectContaining({ sessionId: "cs_membership_1" })
-    );
-    expect(rpcMock).not.toHaveBeenCalled();
-  });
-
-  it("blocks when there is no active subscription", async () => {
-    getSubscriptionMock.mockResolvedValue({
-      id: "sub_row",
-      status: "pending",
-      stripe_subscription_id: "sub_live"
+    await applyMembershipPackAddonsFromInvoice({
+      invoice: makeInvoice(),
+      stripeSubscription: makeSub({ businessId: "biz-1" }),
+      businessId: "biz-1",
+      eventId: "evt_1"
     });
-    await applyMembershipPackAddonsFromCheckout(
-      makeSession({
-        businessId: "biz-1",
-        addonVoicePackId: "min_30",
-        addonVoiceSeconds: "1800"
-      }),
-      "evt_1"
-    );
-    expect(rpcMock).not.toHaveBeenCalled();
-    expect(loggerWarnMock).toHaveBeenCalledWith(
-      expect.stringContaining("no active subscription"),
-      expect.any(Object)
-    );
-  });
-
-  it("blocks when Stripe retrieve fails", async () => {
-    stripeRetrieveMock.mockRejectedValue(new Error("stripe down"));
-    await applyMembershipPackAddonsFromCheckout(
-      makeSession({
-        businessId: "biz-1",
-        addonSmsPackId: "texts_500",
-        addonSmsTexts: "500"
-      }),
-      "evt_1"
-    );
-    expect(rpcMock).not.toHaveBeenCalled();
-    expect(loggerErrorMock).toHaveBeenCalled();
-  });
-
-  it("blocks when Stripe subscription is not entitled", async () => {
-    stripeRetrieveMock.mockResolvedValue({ id: "sub_live", status: "canceled" });
-    await applyMembershipPackAddonsFromCheckout(
-      makeSession({
-        businessId: "biz-1",
-        addonChatPackId: "usd_5",
-        addonChatMicros: "5000000"
-      }),
-      "evt_1"
-    );
     expect(rpcMock).not.toHaveBeenCalled();
   });
 
-  it("blocks when period end is missing", async () => {
-    stripeRetrieveMock.mockResolvedValue({ id: "sub_live", status: "active" });
-    await applyMembershipPackAddonsFromCheckout(
-      makeSession({
-        businessId: "biz-1",
-        addonVoicePackId: "min_30",
-        addonVoiceSeconds: "1800"
-      }),
-      "evt_1"
-    );
-    expect(rpcMock).not.toHaveBeenCalled();
-  });
-
-  it("grants voice, sms, and chat packs and re-arms voice alert", async () => {
-    await applyMembershipPackAddonsFromCheckout(
-      makeSession({
-        businessId: "biz-1",
+  it("does not grant from legacy one-time pack metadata on renewals", async () => {
+    await applyMembershipPackAddonsFromInvoice({
+      invoice: makeInvoice("in_legacy"),
+      stripeSubscription: makeSub({
         addonVoicePackId: "min_30",
         addonVoiceSeconds: "1800",
         addonSmsPackId: "texts_500",
@@ -183,67 +171,100 @@ describe("applyMembershipPackAddonsFromCheckout", () => {
         addonChatPackId: "usd_5",
         addonChatMicros: "5000000"
       }),
-      "evt_1"
-    );
+      businessId: "biz-1",
+      eventId: "evt_1"
+    });
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it("grants qty × unit × Stripe interval months with invoice-keyed source ids", async () => {
+    await applyMembershipPackAddonsFromInvoice({
+      invoice: makeInvoice("in_abc"),
+      stripeSubscription: makeSub(
+        {
+          addonVoice: "min_30:3:1800",
+          addonSms: "texts_500:1:500",
+          addonChat: "usd_5:2:5000000"
+        },
+        1
+      ),
+      businessId: "biz-1",
+      eventId: "evt_1"
+    });
 
     expect(rpcMock).toHaveBeenCalledWith(
       "apply_voice_bonus_grant_from_checkout",
       expect.objectContaining({
-        p_business_id: "biz-1",
-        p_checkout_session_id: "cs_membership_1",
-        p_seconds_purchased: 1800
+        p_checkout_session_id: "inv_in_abc:voice:min_30",
+        p_seconds_purchased: 5400
       })
     );
     expect(rpcMock).toHaveBeenCalledWith(
-      "voice_sync_low_balance_alert_armed_for_business",
-      expect.objectContaining({ p_business_id: "biz-1" })
-    );
-    expect(rpcMock).toHaveBeenCalledWith(
       "apply_sms_bonus_grant_from_checkout",
-      expect.objectContaining({ p_texts_purchased: 500 })
+      expect.objectContaining({
+        p_checkout_session_id: "inv_in_abc:sms:texts_500",
+        p_texts_purchased: 500
+      })
     );
     expect(rpcMock).toHaveBeenCalledWith(
       "apply_chat_credit_grant_from_checkout",
-      expect.objectContaining({ p_credit_micros: 5_000_000 })
+      expect.objectContaining({
+        p_checkout_session_id: "inv_in_abc:chat:usd_5",
+        p_credit_micros: 10_000_000
+      })
     );
   });
 
-  it("logs RPC failures without throwing", async () => {
-    rpcMock.mockResolvedValue({ data: null, error: { message: "rpc boom" } });
-    await applyMembershipPackAddonsFromCheckout(
-      makeSession({
-        businessId: "biz-1",
-        addonVoicePackId: "min_30",
-        addonVoiceSeconds: "1800",
-        addonSmsPackId: "texts_500",
-        addonSmsTexts: "500",
-        addonChatPackId: "usd_5",
-        addonChatMicros: "5000000"
-      }),
-      "evt_1"
-    );
-    expect(loggerErrorMock).toHaveBeenCalled();
-  });
-
-  it("skips voice re-arm when grant RPC returns ok:false", async () => {
-    rpcMock.mockImplementation(async (name: string) => {
-      if (name === "apply_voice_bonus_grant_from_checkout") {
-        return { data: { ok: false, reason: "no_active_subscription" }, error: null };
-      }
-      return { data: { ok: true }, error: null };
+  it("multiplies by Stripe interval_count 12 for term plans", async () => {
+    await applyMembershipPackAddonsFromInvoice({
+      invoice: makeInvoice("in_yr"),
+      stripeSubscription: makeSub({ addonVoice: "min_30:1:1800" }, 12),
+      businessId: "biz-1",
+      billingPeriod: "annual",
+      eventId: "evt_1"
     });
-    await applyMembershipPackAddonsFromCheckout(
-      makeSession({
-        businessId: "biz-1",
-        addonVoicePackId: "min_30",
-        addonVoiceSeconds: "1800"
-      }),
-      "evt_1"
+    expect(rpcMock).toHaveBeenCalledWith(
+      "apply_voice_bonus_grant_from_checkout",
+      expect.objectContaining({ p_seconds_purchased: 1800 * 12 })
     );
-    expect(rpcMock).not.toHaveBeenCalledWith(
-      "voice_sync_low_balance_alert_armed_for_business",
-      expect.anything()
+  });
+
+  it("uses monthly interval after term rollover even if local billing_period is annual", async () => {
+    await applyMembershipPackAddonsFromInvoice({
+      invoice: makeInvoice("in_roll"),
+      stripeSubscription: makeSub({ addonVoice: "min_30:1:1800" }, 1),
+      businessId: "biz-1",
+      billingPeriod: "annual",
+      eventId: "evt_1"
+    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "apply_voice_bonus_grant_from_checkout",
+      expect.objectContaining({ p_seconds_purchased: 1800 })
     );
+  });
+
+  it("blocks when local subscription is not active", async () => {
+    getSubscriptionMock.mockResolvedValue({ status: "canceled", stripe_subscription_id: "sub_live" });
+    await applyMembershipPackAddonsFromInvoice({
+      invoice: makeInvoice(),
+      stripeSubscription: makeSub({ addonVoice: "min_30:1:1800" }),
+      businessId: "biz-1",
+      eventId: "evt_1"
+    });
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks when Stripe subscription is not entitled", async () => {
+    await applyMembershipPackAddonsFromInvoice({
+      invoice: makeInvoice(),
+      stripeSubscription: {
+        ...makeSub({ addonVoice: "min_30:1:1800" }),
+        status: "canceled"
+      } as Stripe.Subscription,
+      businessId: "biz-1",
+      eventId: "evt_1"
+    });
+    expect(rpcMock).not.toHaveBeenCalled();
   });
 
   it("warns when voice re-arm RPC fails", async () => {
@@ -253,122 +274,382 @@ describe("applyMembershipPackAddonsFromCheckout", () => {
       }
       return { data: { ok: true }, error: null };
     });
-    await applyMembershipPackAddonsFromCheckout(
-      makeSession({
-        businessId: "biz-1",
-        addonVoicePackId: "min_30",
-        addonVoiceSeconds: "1800"
-      }),
-      "evt_1"
-    );
+    await applyMembershipPackAddonsFromInvoice({
+      invoice: makeInvoice(),
+      stripeSubscription: makeSub({ addonVoice: "min_30:1:1800" }),
+      businessId: "biz-1",
+      eventId: "evt_1"
+    });
     expect(loggerWarnMock).toHaveBeenCalledWith(
       "membership_pack_addon voice re-arm failed",
       expect.objectContaining({ businessId: "biz-1", error: "arm fail" })
     );
   });
 
-  it("expires at purchased_at+30d when that is later than period end", async () => {
-    stripeRetrieveMock.mockResolvedValue({
-      id: "sub_live",
-      status: "active",
-      current_period_end: 1_700_000_100
+  it("skips voice re-arm when grant RPC returns ok:false", async () => {
+    rpcMock.mockImplementation(async (name: string) => {
+      if (name === "apply_voice_bonus_grant_from_checkout") {
+        return { data: { ok: false, reason: "no_active_subscription" }, error: null };
+      }
+      return { data: { ok: true }, error: null };
     });
-    await applyMembershipPackAddonsFromCheckout(
-      makeSession({
-        businessId: "biz-1",
-        addonSmsPackId: "texts_500",
-        addonSmsTexts: "500"
-      }),
-      "evt_1"
+    await applyMembershipPackAddonsFromInvoice({
+      invoice: makeInvoice(),
+      stripeSubscription: makeSub({ addonVoice: "min_30:1:1800" }),
+      businessId: "biz-1",
+      eventId: "evt_1"
+    });
+    expect(rpcMock).not.toHaveBeenCalledWith(
+      "voice_sync_low_balance_alert_armed_for_business",
+      expect.anything()
     );
-    const call = rpcMock.mock.calls.find(
-      (c) => c[0] === "apply_sms_bonus_grant_from_checkout"
-    );
-    // created 1700000000 + 30d = 1702592000
-    expect(call?.[1].p_expires_at).toBe(new Date(1_702_592_000_000).toISOString());
   });
 
-  it("expires at Stripe period end when that is later than purchased_at+30d", async () => {
-    stripeRetrieveMock.mockResolvedValue({
-      id: "sub_live",
-      status: "active",
-      current_period_end: 1_703_000_000
-    });
-    await applyMembershipPackAddonsFromCheckout(
-      makeSession({
-        businessId: "biz-1",
-        addonSmsPackId: "texts_500",
-        addonSmsTexts: "500"
+  it("logs grant RPC errors without throwing", async () => {
+    rpcMock.mockResolvedValue({ data: null, error: { message: "rpc boom" } });
+    await applyMembershipPackAddonsFromInvoice({
+      invoice: makeInvoice(),
+      stripeSubscription: makeSub({
+        addonVoice: "min_30:1:1800",
+        addonSms: "texts_500:1:500",
+        addonChat: "usd_5:1:5000000"
       }),
-      "evt_1"
-    );
-    const call = rpcMock.mock.calls.find(
-      (c) => c[0] === "apply_sms_bonus_grant_from_checkout"
-    );
+      businessId: "biz-1",
+      eventId: "evt_1"
+    });
+    expect(loggerErrorMock).toHaveBeenCalled();
+  });
+
+  it("expires at period end when later than purchased_at+30d", async () => {
+    await applyMembershipPackAddonsFromInvoice({
+      invoice: makeInvoice(),
+      stripeSubscription: {
+        ...makeSub({ addonSms: "texts_500:1:500" }),
+        current_period_end: 1_703_000_000
+      } as Stripe.Subscription,
+      businessId: "biz-1",
+      eventId: "evt_1"
+    });
+    const call = rpcMock.mock.calls.find((c) => c[0] === "apply_sms_bonus_grant_from_checkout");
     expect(call?.[1].p_expires_at).toBe(new Date(1_703_000_000_000).toISOString());
   });
 
-  it("stringifies non-Error Stripe retrieve failures", async () => {
+  it("expires at purchased_at+30d when later than period end", async () => {
+    await applyMembershipPackAddonsFromInvoice({
+      invoice: makeInvoice(),
+      stripeSubscription: {
+        ...makeSub({ addonSms: "texts_500:1:500" }),
+        current_period_end: 1_700_000_100
+      } as Stripe.Subscription,
+      businessId: "biz-1",
+      eventId: "evt_1"
+    });
+    const call = rpcMock.mock.calls.find((c) => c[0] === "apply_sms_bonus_grant_from_checkout");
+    expect(call?.[1].p_expires_at).toBe(new Date(1_702_592_000_000).toISOString());
+  });
+
+  it("blocks when period end is missing", async () => {
+    await applyMembershipPackAddonsFromInvoice({
+      invoice: makeInvoice(),
+      stripeSubscription: {
+        id: "sub_live",
+        status: "active",
+        metadata: { addonVoice: "min_30:1:1800" },
+        items: { data: [{ price: { recurring: { interval: "month", interval_count: 1 } } }] }
+      } as unknown as Stripe.Subscription,
+      businessId: "biz-1",
+      eventId: "evt_1"
+    });
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it("falls back when invoice.created is missing and accepts trialing status", async () => {
+    await applyMembershipPackAddonsFromInvoice({
+      invoice: { id: "in_trial", created: "nope" } as unknown as Stripe.Invoice,
+      stripeSubscription: {
+        ...makeSub({ addonVoice: "min_30:1:1800" }),
+        status: "trialing"
+      } as Stripe.Subscription,
+      businessId: "biz-1",
+      eventId: "evt_1"
+    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "apply_voice_bonus_grant_from_checkout",
+      expect.objectContaining({ p_seconds_purchased: 1800 })
+    );
+  });
+
+  it("falls back when invoice.created is NaN", async () => {
+    await applyMembershipPackAddonsFromInvoice({
+      invoice: { id: "in_nan", created: Number.NaN } as unknown as Stripe.Invoice,
+      stripeSubscription: makeSub({ addonVoice: "min_30:1:1800" }),
+      businessId: "biz-1",
+      eventId: "evt_1"
+    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "apply_voice_bonus_grant_from_checkout",
+      expect.objectContaining({ p_seconds_purchased: 1800 })
+    );
+  });
+
+  it("handles null subscription metadata and null local subscription row", async () => {
+    await applyMembershipPackAddonsFromInvoice({
+      invoice: makeInvoice(),
+      stripeSubscription: {
+        id: "sub_live",
+        status: "active",
+        current_period_end: 1_700_100_000,
+        metadata: null,
+        items: { data: [{ price: { recurring: { interval: "month", interval_count: 1 } } }] }
+      } as unknown as Stripe.Subscription,
+      businessId: "biz-1",
+      eventId: "evt_1"
+    });
+    expect(rpcMock).not.toHaveBeenCalled();
+
+    getSubscriptionMock.mockResolvedValue(null);
+    await applyMembershipPackAddonsFromInvoice({
+      invoice: makeInvoice(),
+      stripeSubscription: makeSub({ addonVoice: "min_30:1:1800" }),
+      businessId: "biz-1",
+      eventId: "evt_1"
+    });
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "membership_pack_addon invoice: no active local subscription; grant blocked",
+      expect.objectContaining({ status: null })
+    );
+  });
+});
+
+describe("applyMembershipPackAddonsFromCheckout", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    getSubscriptionMock.mockResolvedValue({
+      id: "sub_row",
+      status: "active",
+      stripe_subscription_id: "sub_live"
+    });
+    rpcMock.mockResolvedValue({ data: { ok: true }, error: null });
+    stripeRetrieveMock.mockResolvedValue(makeSub({ addonVoice: "min_30:1:1800" }, 1));
+    invoicesRetrieveMock.mockResolvedValue(makeInvoice("in_from_session"));
+    invoicesListMock.mockResolvedValue({ data: [] });
+  });
+
+  it("grants via the session invoice so it shares keys with invoice.paid", async () => {
+    await applyMembershipPackAddonsFromCheckout(
+      {
+        id: "cs_1",
+        invoice: "in_from_session",
+        subscription: "sub_live",
+        metadata: { businessId: "biz-1", addonVoice: "min_30:1:1800" }
+      } as unknown as Stripe.Checkout.Session,
+      "evt_1"
+    );
+    expect(rpcMock).toHaveBeenCalledWith(
+      "apply_voice_bonus_grant_from_checkout",
+      expect.objectContaining({
+        p_checkout_session_id: "inv_in_from_session:voice:min_30",
+        p_seconds_purchased: 1800
+      })
+    );
+  });
+
+  it("lists subscription invoices when session.invoice is missing", async () => {
+    invoicesListMock.mockResolvedValue({ data: [makeInvoice("in_listed")] });
+    await applyMembershipPackAddonsFromCheckout(
+      {
+        id: "cs_1",
+        subscription: "sub_live",
+        metadata: { businessId: "biz-1", addonVoice: "min_30:1:1800" }
+      } as unknown as Stripe.Checkout.Session,
+      "evt_1"
+    );
+    expect(rpcMock).toHaveBeenCalledWith(
+      "apply_voice_bonus_grant_from_checkout",
+      expect.objectContaining({
+        p_checkout_session_id: "inv_in_listed:voice:min_30"
+      })
+    );
+  });
+
+  it("no-ops when metadata has no packs", async () => {
+    await applyMembershipPackAddonsFromCheckout(
+      {
+        id: "cs_1",
+        metadata: { businessId: "biz-1" }
+      } as unknown as Stripe.Checkout.Session,
+      "evt_1"
+    );
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it("logs and returns when no invoice is available yet", async () => {
+    invoicesRetrieveMock.mockRejectedValue(new Error("missing"));
+    invoicesListMock.mockResolvedValue({ data: [] });
+    await applyMembershipPackAddonsFromCheckout(
+      {
+        id: "cs_1",
+        subscription: "sub_live",
+        invoice: "in_missing",
+        metadata: { businessId: "biz-1", addonVoice: "min_30:1:1800" }
+      } as unknown as Stripe.Checkout.Session,
+      "evt_1"
+    );
+    expect(loggerInfoMock).toHaveBeenCalledWith(
+      "membership_pack_addon checkout: no invoice yet; invoice.paid will grant",
+      expect.objectContaining({ sessionId: "cs_1" })
+    );
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it("warns when businessId or subscription id is missing", async () => {
+    await applyMembershipPackAddonsFromCheckout(
+      {
+        id: "cs_1",
+        metadata: { addonVoice: "min_30:1:1800" }
+      } as unknown as Stripe.Checkout.Session,
+      "evt_1"
+    );
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "membership_pack_addon checkout: missing businessId",
+      expect.objectContaining({ sessionId: "cs_1" })
+    );
+
+    await applyMembershipPackAddonsFromCheckout(
+      {
+        id: "cs_2",
+        metadata: { businessId: "biz-1", addonVoice: "min_30:1:1800" }
+      } as unknown as Stripe.Checkout.Session,
+      "evt_1"
+    );
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "membership_pack_addon checkout: missing subscription id",
+      expect.objectContaining({ sessionId: "cs_2" })
+    );
+  });
+
+  it("logs when Stripe subscription retrieve fails", async () => {
     stripeRetrieveMock.mockRejectedValue("stripe down");
     await applyMembershipPackAddonsFromCheckout(
-      makeSession({
-        businessId: "biz-1",
-        addonVoicePackId: "min_30",
-        addonVoiceSeconds: "1800"
-      }),
+      {
+        id: "cs_1",
+        invoice: "in_from_session",
+        subscription: "sub_live",
+        metadata: { businessId: "biz-1", addonVoice: "min_30:1:1800" }
+      } as unknown as Stripe.Checkout.Session,
       "evt_1"
     );
     expect(loggerErrorMock).toHaveBeenCalledWith(
-      "membership_pack_addon shared: Stripe subscription retrieve failed",
+      "membership_pack_addon checkout: Stripe subscription retrieve failed",
       expect.objectContaining({ error: "stripe down" })
     );
+
+    stripeRetrieveMock.mockRejectedValue(new Error("stripe err obj"));
+    await applyMembershipPackAddonsFromCheckout(
+      {
+        id: "cs_1b",
+        invoice: "in_from_session",
+        subscription: "sub_live",
+        metadata: { businessId: "biz-1", addonVoice: "min_30:1:1800" }
+      } as unknown as Stripe.Checkout.Session,
+      "evt_1"
+    );
+    expect(loggerErrorMock).toHaveBeenCalledWith(
+      "membership_pack_addon checkout: Stripe subscription retrieve failed",
+      expect.objectContaining({ error: "stripe err obj" })
+    );
   });
 
-  it("blocks when subscription has no stripe id", async () => {
-    getSubscriptionMock.mockResolvedValue({ id: "sub_row", status: "active" });
+  it("treats null session metadata as empty and skips blank object ids", async () => {
     await applyMembershipPackAddonsFromCheckout(
-      makeSession({
-        businessId: "biz-1",
-        addonVoicePackId: "min_30",
-        addonVoiceSeconds: "1800"
-      }),
+      {
+        id: "cs_null_meta",
+        metadata: null
+      } as unknown as Stripe.Checkout.Session,
       "evt_1"
     );
     expect(rpcMock).not.toHaveBeenCalled();
-  });
 
-  it("blocks when getSubscription returns null", async () => {
-    getSubscriptionMock.mockResolvedValue(null);
     await applyMembershipPackAddonsFromCheckout(
-      makeSession({
-        businessId: "biz-1",
-        addonChatPackId: "usd_5",
-        addonChatMicros: "5000000"
-      }),
+      {
+        id: "cs_blank_id",
+        invoice: { id: "   " },
+        subscription: { id: "sub_live" },
+        metadata: { businessId: "biz-1", addonVoice: "min_30:1:1800" }
+      } as unknown as Stripe.Checkout.Session,
       "evt_1"
     );
-    expect(rpcMock).not.toHaveBeenCalled();
+    // blank invoice id is ignored; falls through to subscription invoice list
+    expect(invoicesListMock).toHaveBeenCalled();
   });
 
-  it("accepts trialing Stripe status and falls back when session.created is missing", async () => {
-    stripeRetrieveMock.mockResolvedValue({
-      id: "sub_live",
-      status: "trialing",
-      current_period_end: 1_700_100_000
-    });
-    const session = {
-      id: "cs_membership_1",
-      created: "not-a-number",
-      metadata: {
-        businessId: "biz-1",
-        addonSmsPackId: "texts_500",
-        addonSmsTexts: "500"
-      }
-    } as unknown as Stripe.Checkout.Session;
-    await applyMembershipPackAddonsFromCheckout(session, "evt_1");
+  it("warns when subscription invoice list fails", async () => {
+    invoicesListMock.mockRejectedValue("list fail");
+    await applyMembershipPackAddonsFromCheckout(
+      {
+        id: "cs_1",
+        subscription: "sub_live",
+        metadata: { businessId: "biz-1", addonVoice: "min_30:1:1800" }
+      } as unknown as Stripe.Checkout.Session,
+      "evt_1"
+    );
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "membership_pack_addon: subscription invoices list failed",
+      expect.objectContaining({ error: "list fail" })
+    );
+
+    invoicesListMock.mockRejectedValue(new Error("list err obj"));
+    await applyMembershipPackAddonsFromCheckout(
+      {
+        id: "cs_1b",
+        subscription: "sub_live",
+        metadata: { businessId: "biz-1", addonVoice: "min_30:1:1800" }
+      } as unknown as Stripe.Checkout.Session,
+      "evt_1"
+    );
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "membership_pack_addon: subscription invoices list failed",
+      expect.objectContaining({ error: "list err obj" })
+    );
+  });
+
+  it("accepts object-shaped invoice and subscription refs", async () => {
+    await applyMembershipPackAddonsFromCheckout(
+      {
+        id: "cs_obj",
+        invoice: { id: "in_from_session" },
+        subscription: { id: "sub_live" },
+        metadata: { businessId: "biz-1", addonVoice: "min_30:1:1800" }
+      } as unknown as Stripe.Checkout.Session,
+      "evt_1"
+    );
     expect(rpcMock).toHaveBeenCalledWith(
-      "apply_sms_bonus_grant_from_checkout",
-      expect.objectContaining({ p_texts_purchased: 500 })
+      "apply_voice_bonus_grant_from_checkout",
+      expect.objectContaining({
+        p_checkout_session_id: "inv_in_from_session:voice:min_30"
+      })
+    );
+  });
+
+  it("falls through to invoice.paid when invoice retrieve fails and list is empty", async () => {
+    invoicesRetrieveMock.mockRejectedValue("retrieve boom");
+    invoicesListMock.mockResolvedValue({ data: [] });
+    await applyMembershipPackAddonsFromCheckout(
+      {
+        id: "cs_1",
+        invoice: { id: "in_bad" },
+        subscription: { id: "sub_live" },
+        metadata: { businessId: "biz-1", addonVoice: "min_30:1:1800" }
+      } as unknown as Stripe.Checkout.Session,
+      "evt_1"
+    );
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "membership_pack_addon: session invoice retrieve failed",
+      expect.objectContaining({ error: "retrieve boom" })
+    );
+    expect(loggerInfoMock).toHaveBeenCalledWith(
+      "membership_pack_addon checkout: no invoice yet; invoice.paid will grant",
+      expect.objectContaining({ sessionId: "cs_1" })
     );
   });
 });

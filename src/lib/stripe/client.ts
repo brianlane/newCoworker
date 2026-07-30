@@ -56,11 +56,17 @@ export type CheckoutParams = {
    */
   canadaFee?: { monthlyCents: number; billingPeriod: BillingPeriod };
   /**
-   * Optional one-time usage-pack add-ons (voice / SMS / chat) bought with the
-   * membership. Amounts are already term-discounted by the caller; each line
-   * is an inline `price_data` item so no new Stripe Price IDs are required.
+   * Optional recurring usage-pack add-ons (voice / SMS / chat) on the
+   * membership subscription. `unitAmountCents` is already
+   * discountedMonthly × commitment months; `billingPeriod` sets the matching
+   * Stripe recurring interval (same lockstep rule as the Canada fee).
    */
-  packAddonLines?: ReadonlyArray<{ name: string; unitAmountCents: number }>;
+  packAddonLines?: ReadonlyArray<{
+    name: string;
+    unitAmountCents: number;
+    quantity: number;
+    billingPeriod: BillingPeriod;
+  }>;
 };
 
 export async function createCheckoutSession(params: CheckoutParams): Promise<{
@@ -94,14 +100,16 @@ export async function createCheckoutSession(params: CheckoutParams): Promise<{
     });
   }
   for (const pack of params.packAddonLines ?? []) {
-    if (pack.unitAmountCents <= 0) continue;
+    if (pack.unitAmountCents <= 0 || pack.quantity <= 0) continue;
+    const months = getCommitmentMonths(pack.billingPeriod);
     lineItems.push({
       price_data: {
         currency: "usd",
         product_data: { name: pack.name },
-        unit_amount: pack.unitAmountCents
+        unit_amount: pack.unitAmountCents,
+        recurring: { interval: "month", interval_count: months }
       },
-      quantity: 1
+      quantity: pack.quantity
     });
   }
   const session = await stripe.checkout.sessions.create({

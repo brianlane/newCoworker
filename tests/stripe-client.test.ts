@@ -200,14 +200,24 @@ describe("stripe/client", () => {
     );
   });
 
-  it("createCheckoutSession adds discounted pack add-on lines and skips zero amounts", async () => {
+  it("createCheckoutSession adds recurring pack add-on lines with quantity", async () => {
     await createCheckoutSession({
       priceId: "price_mock_starter",
       successUrl: "https://example.com/ok",
       cancelUrl: "https://example.com/cancel",
       packAddonLines: [
-        { name: "Voice top-up: 30 minutes", unitAmountCents: 800 },
-        { name: "skip me", unitAmountCents: 0 }
+        {
+          name: "Voice top-up: 30 minutes",
+          unitAmountCents: 900 * 12,
+          quantity: 3,
+          billingPeriod: "annual"
+        },
+        {
+          name: "skip me",
+          unitAmountCents: 0,
+          quantity: 1,
+          billingPeriod: "monthly"
+        }
       ]
     });
     expect(mockSessionCreate).toHaveBeenCalledWith(
@@ -218,9 +228,10 @@ describe("stripe/client", () => {
             price_data: {
               currency: "usd",
               product_data: { name: "Voice top-up: 30 minutes" },
-              unit_amount: 800
+              unit_amount: 900 * 12,
+              recurring: { interval: "month", interval_count: 12 }
             },
-            quantity: 1
+            quantity: 3
           }
         ]
       })

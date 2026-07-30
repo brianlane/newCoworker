@@ -1,19 +1,23 @@
 /**
- * Optional usage-pack picker for membership signup / plan-change Checkout.
- * Shows catalog list prices with the term discount applied. Selection is
- * at most one pack per category (voice, SMS, chat).
+ * Optional recurring usage-pack picker for membership signup / plan-change.
+ * Quantity steppers per catalog SKU; term discount applied; packs renew with
+ * the membership.
  */
 
 "use client";
 
 import { useTranslations } from "next-intl";
 import type { BillingPeriod } from "@/lib/plans/tier";
+import { getCommitmentMonths } from "@/lib/plans/tier";
 import {
   discountedPackCents,
+  MEMBERSHIP_PACK_MAX_QTY,
+  membershipPackAddOnsDueTodayCents,
   membershipPackDiscountPercent,
   type MembershipPackAddonCategory,
   type MembershipPackAddonOption,
-  type MembershipPackAddonSelection
+  type MembershipPackAddonSelection,
+  type MembershipPackQty
 } from "@/lib/billing/membership-pack-addons";
 import { formatPriceCents } from "@/lib/pricing";
 
@@ -32,6 +36,36 @@ function categoryTitleKey(category: MembershipPackAddonCategory): string {
   return "packCategoryChat";
 }
 
+function listForCategory(
+  selection: MembershipPackAddonSelection,
+  category: MembershipPackAddonCategory
+): MembershipPackQty[] {
+  if (category === "voice") return selection.voicePacks ?? [];
+  if (category === "sms") return selection.smsPacks ?? [];
+  return selection.chatPacks ?? [];
+}
+
+function qtyFor(
+  selection: MembershipPackAddonSelection,
+  category: MembershipPackAddonCategory,
+  packId: string
+): number {
+  return listForCategory(selection, category).find((p) => p.packId === packId)?.quantity ?? 0;
+}
+
+function setQty(
+  selection: MembershipPackAddonSelection,
+  category: MembershipPackAddonCategory,
+  packId: string,
+  quantity: number
+): MembershipPackAddonSelection {
+  const nextList = listForCategory(selection, category).filter((p) => p.packId !== packId);
+  if (quantity > 0) nextList.push({ packId, quantity });
+  if (category === "voice") return { ...selection, voicePacks: nextList };
+  if (category === "sms") return { ...selection, smsPacks: nextList };
+  return { ...selection, chatPacks: nextList };
+}
+
 export function MembershipPackAddOns({
   period,
   options,
@@ -40,26 +74,9 @@ export function MembershipPackAddOns({
 }: MembershipPackAddOnsProps) {
   const t = useTranslations("marketing.orderSummary");
   const discountPct = membershipPackDiscountPercent(period);
+  const months = getCommitmentMonths(period);
 
   if (options.length === 0) return null;
-
-  const selectedId = (category: MembershipPackAddonCategory): string | null => {
-    if (category === "voice") return selection.voicePackId ?? null;
-    if (category === "sms") return selection.smsPackId ?? null;
-    return selection.chatPackId ?? null;
-  };
-
-  function setSelected(category: MembershipPackAddonCategory, packId: string | null) {
-    if (category === "voice") {
-      onChange({ ...selection, voicePackId: packId });
-      return;
-    }
-    if (category === "sms") {
-      onChange({ ...selection, smsPackId: packId });
-      return;
-    }
-    onChange({ ...selection, chatPackId: packId });
-  }
 
   return (
     <div className="space-y-3 rounded-lg border border-parchment/15 bg-parchment/5 p-3">
@@ -68,56 +85,74 @@ export function MembershipPackAddOns({
         <p className="mt-1 text-xs text-parchment/55">
           {t("packAddOnsBody", { percent: discountPct })}
         </p>
+        <p className="mt-1 text-xs text-parchment/45">{t("packAddOnsNonRefundable")}</p>
       </div>
 
       {CATEGORIES.map((category) => {
         const packs = options.filter((o) => o.category === category);
         if (packs.length === 0) return null;
-        const current = selectedId(category);
         return (
           <div key={category} className="space-y-2">
             <div className="text-[11px] font-semibold uppercase tracking-wider text-parchment/50">
               {t(categoryTitleKey(category))}
             </div>
-            <div className="grid grid-cols-1 gap-2 sm:grid-cols-3">
-              <button
-                type="button"
-                onClick={() => setSelected(category, null)}
-                className={[
-                  "rounded-md border px-2 py-2 text-left text-xs transition-colors",
-                  current === null
-                    ? "border-signal-teal/60 bg-signal-teal/10 text-parchment"
-                    : "border-parchment/15 bg-deep-ink/40 text-parchment/70 hover:border-parchment/30"
-                ].join(" ")}
-              >
-                {t("packNone")}
-              </button>
+            <div className="space-y-2">
               {packs.map((pack) => {
-                const discounted = discountedPackCents(pack.listPriceCents, period);
-                const selected = current === pack.id;
+                const qty = qtyFor(selection, category, pack.id);
+                const discountedMonthly = discountedPackCents(pack.listPriceCents, period);
+                const periodUnit = discountedMonthly * months;
                 return (
-                  <button
+                  <div
                     key={pack.id}
-                    type="button"
-                    onClick={() => setSelected(category, pack.id)}
                     className={[
-                      "rounded-md border px-2 py-2 text-left text-xs transition-colors",
-                      selected
-                        ? "border-signal-teal/60 bg-signal-teal/10 text-parchment"
-                        : "border-parchment/15 bg-deep-ink/40 text-parchment/70 hover:border-parchment/30"
+                      "flex flex-wrap items-center justify-between gap-3 rounded-md border px-3 py-2",
+                      qty > 0
+                        ? "border-signal-teal/60 bg-signal-teal/10"
+                        : "border-parchment/15 bg-deep-ink/40"
                     ].join(" ")}
                   >
-                    <div className="font-semibold text-parchment">{pack.label}</div>
-                    <div className="mt-1 flex items-center gap-2 font-mono">
-                      <span className="text-parchment/35 line-through">
-                        {formatPriceCents(pack.listPriceCents)}
-                      </span>
-                      <span>{formatPriceCents(discounted)}</span>
+                    <div className="min-w-0 flex-1">
+                      <div className="text-xs font-semibold text-parchment">{pack.label}</div>
+                      <div className="mt-1 flex items-center gap-2 font-mono text-xs text-parchment/80">
+                        <span className="text-parchment/35 line-through">
+                          {formatPriceCents(pack.listPriceCents * months)}
+                        </span>
+                        <span>{formatPriceCents(periodUnit)}</span>
+                        <span className="text-[10px] text-claw-green">
+                          {t("packSavePercent", { percent: discountPct })}
+                        </span>
+                      </div>
+                      {months > 1 ? (
+                        <div className="mt-0.5 text-[10px] text-parchment/45">
+                          {t("packPerPeriodNote", {
+                            monthly: formatPriceCents(discountedMonthly),
+                            months
+                          })}
+                        </div>
+                      ) : null}
                     </div>
-                    <div className="mt-0.5 text-[10px] text-claw-green">
-                      {t("packSavePercent", { percent: discountPct })}
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        aria-label={t("packQtyDecrease", { label: pack.label })}
+                        disabled={qty <= 0}
+                        onClick={() => onChange(setQty(selection, category, pack.id, qty - 1))}
+                        className="h-8 w-8 rounded border border-parchment/20 text-parchment disabled:opacity-30"
+                      >
+                        −
+                      </button>
+                      <span className="w-6 text-center font-mono text-sm text-parchment">{qty}</span>
+                      <button
+                        type="button"
+                        aria-label={t("packQtyIncrease", { label: pack.label })}
+                        disabled={qty >= MEMBERSHIP_PACK_MAX_QTY}
+                        onClick={() => onChange(setQty(selection, category, pack.id, qty + 1))}
+                        className="h-8 w-8 rounded border border-parchment/20 text-parchment disabled:opacity-30"
+                      >
+                        +
+                      </button>
                     </div>
-                  </button>
+                  </div>
                 );
               })}
             </div>
@@ -128,24 +163,4 @@ export function MembershipPackAddOns({
   );
 }
 
-/** Sum of discounted selected pack prices for due-today. */
-export function membershipPackAddOnsDueTodayCents(
-  selection: MembershipPackAddonSelection,
-  options: MembershipPackAddonOption[],
-  period: BillingPeriod
-): number {
-  let total = 0;
-  const voice = selection.voicePackId
-    ? options.find((o) => o.category === "voice" && o.id === selection.voicePackId)
-    : null;
-  const sms = selection.smsPackId
-    ? options.find((o) => o.category === "sms" && o.id === selection.smsPackId)
-    : null;
-  const chat = selection.chatPackId
-    ? options.find((o) => o.category === "chat" && o.id === selection.chatPackId)
-    : null;
-  if (voice) total += discountedPackCents(voice.listPriceCents, period);
-  if (sms) total += discountedPackCents(sms.listPriceCents, period);
-  if (chat) total += discountedPackCents(chat.listPriceCents, period);
-  return total;
-}
+export { membershipPackAddOnsDueTodayCents };

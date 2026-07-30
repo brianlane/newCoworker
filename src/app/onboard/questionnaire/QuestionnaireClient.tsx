@@ -713,12 +713,14 @@ function QuestionnaireForm({
           // Re-validated server-side against the same rules the preview ran,
           // so the summary and the charge cannot diverge.
           ...(promoApplied ? { promoCode: promoApplied.code } : {}),
-          ...(packAddonSelection.voicePackId
-            ? { voicePackId: packAddonSelection.voicePackId }
+          ...(packAddonSelection.voicePacks?.length
+            ? { voicePacks: packAddonSelection.voicePacks }
             : {}),
-          ...(packAddonSelection.smsPackId ? { smsPackId: packAddonSelection.smsPackId } : {}),
-          ...(packAddonSelection.chatPackId
-            ? { chatPackId: packAddonSelection.chatPackId }
+          ...(packAddonSelection.smsPacks?.length
+            ? { smsPacks: packAddonSelection.smsPacks }
+            : {}),
+          ...(packAddonSelection.chatPacks?.length
+            ? { chatPacks: packAddonSelection.chatPacks }
             : {}),
           // Same browser timezone the order summary's Canada-fee preview
           // used, so the server's fallback detection (only consulted when

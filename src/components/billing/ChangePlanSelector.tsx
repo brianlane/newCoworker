@@ -114,12 +114,14 @@ export function ChangePlanSelector({
         body: JSON.stringify({
           tier: selectedTier,
           billingPeriod: selectedPeriod,
-          ...(packAddonSelection.voicePackId
-            ? { voicePackId: packAddonSelection.voicePackId }
+          ...(packAddonSelection.voicePacks?.length
+            ? { voicePacks: packAddonSelection.voicePacks }
             : {}),
-          ...(packAddonSelection.smsPackId ? { smsPackId: packAddonSelection.smsPackId } : {}),
-          ...(packAddonSelection.chatPackId
-            ? { chatPackId: packAddonSelection.chatPackId }
+          ...(packAddonSelection.smsPacks?.length
+            ? { smsPacks: packAddonSelection.smsPacks }
+            : {}),
+          ...(packAddonSelection.chatPacks?.length
+            ? { chatPacks: packAddonSelection.chatPacks }
             : {})
         })
       });

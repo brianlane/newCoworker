@@ -1,11 +1,9 @@
 /**
- * Membership Checkout usage-pack add-ons.
+ * Membership Checkout usage-pack add-ons (recurring).
  *
- * At signup and plan-change, the customer may optionally buy one voice, one
- * SMS, and/or one chat credit pack as one-time lines on the membership
- * Checkout Session. Prices are the standalone catalog list prices discounted
- * by the selected billing period (buying with the membership, not later from
- * Dashboard → Billing):
+ * At signup and plan-change, the customer may optionally add voice, SMS,
+ * and/or chat credit packs as recurring subscription items. Prices are the
+ * standalone catalog list prices discounted by the selected billing period:
  *
  *   monthly  → 5%
  *   annual   → 10%
@@ -13,10 +11,15 @@
  *
  * Discounts are baked into `price_data.unit_amount` so they do not consume
  * Stripe's one-discount-per-session slot (intro coupon / promo codes).
- * Standalone Billing top-ups keep the full catalog price.
+ * Standalone Billing top-ups keep the full catalog price and stay one-time.
+ *
+ * Quantity is per catalog SKU (1..20). Multiple SKUs in the same category
+ * are allowed. Term plans bill `discountedMonthly × months` per unit with
+ * matching `interval_count`, same as the Canada messaging fee.
  */
 
 import type { BillingPeriod } from "@/lib/plans/tier";
+import { getCommitmentMonths } from "@/lib/plans/tier";
 import { getVoiceBonusPack, listVoiceBonusPacks } from "@/lib/billing/voice-bonus-packs";
 import { getSmsBonusPack, listSmsBonusPacks } from "@/lib/billing/sms-bonus-packs";
 import { getChatCreditPack, listChatCreditPacks } from "@/lib/billing/chat-credit-packs";
@@ -27,21 +30,31 @@ export const MEMBERSHIP_PACK_DISCOUNT_PERCENT: Record<BillingPeriod, number> = {
   biennial: 20
 };
 
+export const MEMBERSHIP_PACK_MAX_QTY = 20;
+
 export type MembershipPackAddonCategory = "voice" | "sms" | "chat";
 
+export type MembershipPackQty = {
+  packId: string;
+  quantity: number;
+};
+
 export type MembershipPackAddonSelection = {
-  voicePackId?: string | null;
-  smsPackId?: string | null;
-  chatPackId?: string | null;
+  voicePacks?: MembershipPackQty[] | null;
+  smsPacks?: MembershipPackQty[] | null;
+  chatPacks?: MembershipPackQty[] | null;
 };
 
 export type MembershipPackAddonLine = {
   category: MembershipPackAddonCategory;
   packId: string;
+  quantity: number;
   name: string;
+  /** Stripe `price_data.unit_amount` = discounted monthly × commitment months. */
   unitAmountCents: number;
+  discountedMonthlyCents: number;
   listPriceCents: number;
-  /** Grant payload fields for webhook / orchestrator. */
+  /** Per-pack unit grant size (before qty × months). */
   voiceSeconds?: number;
   smsTexts?: number;
   creditMicros?: number;
@@ -54,11 +67,18 @@ export type MembershipPackAddonOption = {
   listPriceCents: number;
 };
 
+/** Decoded pack row from subscription / session metadata. */
+export type MembershipPackAddonMetaEntry = {
+  packId: string;
+  quantity: number;
+  unitSize: number;
+};
+
 export type ResolveMembershipPackAddonsResult =
   | { ok: true; lines: MembershipPackAddonLine[]; totalCents: number; metadata: Record<string, string> }
   | { ok: false; error: string };
 
-/** Integer cents after the membership-term discount. */
+/** Integer cents after the membership-term discount (monthly catalog list). */
 export function discountedPackCents(listCents: number, period: BillingPeriod): number {
   if (!Number.isFinite(listCents) || listCents <= 0) return 0;
   const pct = MEMBERSHIP_PACK_DISCOUNT_PERCENT[period];
@@ -99,98 +119,229 @@ export function listMembershipPackAddonOptions(): MembershipPackAddonOption[] {
   return out;
 }
 
+function collapseQtyList(
+  items: MembershipPackQty[] | null | undefined
+): Map<string, number> | { error: string } {
+  const map = new Map<string, number>();
+  if (!items?.length) return map;
+  for (const item of items) {
+    const packId = typeof item.packId === "string" ? item.packId.trim() : "";
+    if (!packId) return { error: "Pack id is required" };
+    const qty = item.quantity;
+    if (!Number.isInteger(qty) || qty < 1 || qty > MEMBERSHIP_PACK_MAX_QTY) {
+      return {
+        error: `Pack quantity must be an integer from 1 to ${MEMBERSHIP_PACK_MAX_QTY}`
+      };
+    }
+    map.set(packId, (map.get(packId) ?? 0) + qty);
+  }
+  for (const [packId, qty] of map) {
+    if (qty > MEMBERSHIP_PACK_MAX_QTY) {
+      return {
+        error: `Pack quantity for ${packId} exceeds max ${MEMBERSHIP_PACK_MAX_QTY}`
+      };
+    }
+  }
+  return map;
+}
+
 /**
- * Resolve client-sent pack IDs against the live catalogs. Unknown or
- * unconfigured IDs fail closed. At most one pack per category.
+ * Compact metadata: `packId:qty:unitSize,packId:qty:unitSize`
+ * (unitSize = per-pack seconds / texts / micros before qty × months).
+ */
+export function encodeMembershipPackMeta(
+  entries: ReadonlyArray<MembershipPackAddonMetaEntry>
+): string {
+  return entries
+    .map((e) => `${e.packId}:${e.quantity}:${e.unitSize}`)
+    .join(",");
+}
+
+export function decodeMembershipPackMeta(
+  raw: string | null | undefined
+): MembershipPackAddonMetaEntry[] {
+  if (!raw?.trim()) return [];
+  const out: MembershipPackAddonMetaEntry[] = [];
+  for (const part of raw.split(",")) {
+    const trimmed = part.trim();
+    if (!trimmed) continue;
+    const bits = trimmed.split(":");
+    if (bits.length !== 3) continue;
+    const packId = bits[0]?.trim();
+    const quantity = Number(bits[1]);
+    const unitSize = Number(bits[2]);
+    if (!packId) continue;
+    if (!Number.isInteger(quantity) || quantity < 1 || quantity > MEMBERSHIP_PACK_MAX_QTY) {
+      continue;
+    }
+    if (!Number.isInteger(unitSize) || unitSize <= 0) continue;
+    out.push({ packId, quantity, unitSize });
+  }
+  return out;
+}
+
+export function grantAmountForPeriod(
+  unitSize: number,
+  quantity: number,
+  period: BillingPeriod
+): number {
+  const months = getCommitmentMonths(period);
+  return unitSize * quantity * months;
+}
+
+/**
+ * Resolve client-sent pack quantities against the live catalogs. Unknown or
+ * unconfigured IDs fail closed. Duplicate SKUs are collapsed by summing qty.
  */
 export function resolveMembershipPackAddons(
   selection: MembershipPackAddonSelection,
   period: BillingPeriod
 ): ResolveMembershipPackAddonsResult {
+  const months = getCommitmentMonths(period);
   const lines: MembershipPackAddonLine[] = [];
 
-  const voiceId = selection.voicePackId?.trim() || null;
-  if (voiceId) {
-    const pack = getVoiceBonusPack(voiceId);
+  const voiceMap = collapseQtyList(selection.voicePacks ?? undefined);
+  if ("error" in voiceMap) return { ok: false, error: voiceMap.error };
+  for (const [packId, quantity] of voiceMap) {
+    const pack = getVoiceBonusPack(packId);
     if (!pack) {
-      return { ok: false, error: `Unknown or unavailable voice pack: ${voiceId}` };
+      return { ok: false, error: `Unknown or unavailable voice pack: ${packId}` };
     }
-    const unitAmountCents = discountedPackCents(pack.priceCents, period);
+    const discountedMonthlyCents = discountedPackCents(pack.priceCents, period);
     lines.push({
       category: "voice",
       packId: pack.id,
+      quantity,
       name: `Voice top-up: ${pack.label}`,
-      unitAmountCents,
+      unitAmountCents: discountedMonthlyCents * months,
+      discountedMonthlyCents,
       listPriceCents: pack.priceCents,
       voiceSeconds: pack.seconds
     });
   }
 
-  const smsId = selection.smsPackId?.trim() || null;
-  if (smsId) {
-    const pack = getSmsBonusPack(smsId);
+  const smsMap = collapseQtyList(selection.smsPacks ?? undefined);
+  if ("error" in smsMap) return { ok: false, error: smsMap.error };
+  for (const [packId, quantity] of smsMap) {
+    const pack = getSmsBonusPack(packId);
     if (!pack) {
-      return { ok: false, error: `Unknown or unavailable SMS pack: ${smsId}` };
+      return { ok: false, error: `Unknown or unavailable SMS pack: ${packId}` };
     }
-    const unitAmountCents = discountedPackCents(pack.priceCents, period);
+    const discountedMonthlyCents = discountedPackCents(pack.priceCents, period);
     lines.push({
       category: "sms",
       packId: pack.id,
+      quantity,
       name: `SMS top-up: ${pack.label}`,
-      unitAmountCents,
+      unitAmountCents: discountedMonthlyCents * months,
+      discountedMonthlyCents,
       listPriceCents: pack.priceCents,
       smsTexts: pack.texts
     });
   }
 
-  const chatId = selection.chatPackId?.trim() || null;
-  if (chatId) {
-    const pack = getChatCreditPack(chatId);
+  const chatMap = collapseQtyList(selection.chatPacks ?? undefined);
+  if ("error" in chatMap) return { ok: false, error: chatMap.error };
+  for (const [packId, quantity] of chatMap) {
+    const pack = getChatCreditPack(packId);
     if (!pack) {
-      return { ok: false, error: `Unknown or unavailable chat credit pack: ${chatId}` };
+      return { ok: false, error: `Unknown or unavailable chat credit pack: ${packId}` };
     }
-    const unitAmountCents = discountedPackCents(pack.priceCents, period);
+    const discountedMonthlyCents = discountedPackCents(pack.priceCents, period);
     lines.push({
       category: "chat",
       packId: pack.id,
+      quantity,
       name: `AI chat credit: ${pack.label}`,
-      unitAmountCents,
+      unitAmountCents: discountedMonthlyCents * months,
+      discountedMonthlyCents,
       listPriceCents: pack.priceCents,
       creditMicros: pack.creditMicros
     });
   }
 
   const metadata: Record<string, string> = {};
-  for (const line of lines) {
-    if (line.category === "voice") {
-      metadata.addonVoicePackId = line.packId;
-      metadata.addonVoiceSeconds = String(line.voiceSeconds);
-      metadata.addonVoiceCents = String(line.unitAmountCents);
-    } else if (line.category === "sms") {
-      metadata.addonSmsPackId = line.packId;
-      metadata.addonSmsTexts = String(line.smsTexts);
-      metadata.addonSmsCents = String(line.unitAmountCents);
-    } else {
-      metadata.addonChatPackId = line.packId;
-      metadata.addonChatMicros = String(line.creditMicros);
-      metadata.addonChatCents = String(line.unitAmountCents);
-    }
-  }
+  const voiceEntries = lines
+    .filter((l) => l.category === "voice")
+    .map((l) => ({
+      packId: l.packId,
+      quantity: l.quantity,
+      unitSize: l.voiceSeconds as number
+    }));
+  const smsEntries = lines
+    .filter((l) => l.category === "sms")
+    .map((l) => ({
+      packId: l.packId,
+      quantity: l.quantity,
+      unitSize: l.smsTexts as number
+    }));
+  const chatEntries = lines
+    .filter((l) => l.category === "chat")
+    .map((l) => ({
+      packId: l.packId,
+      quantity: l.quantity,
+      unitSize: l.creditMicros as number
+    }));
+  if (voiceEntries.length) metadata.addonVoice = encodeMembershipPackMeta(voiceEntries);
+  if (smsEntries.length) metadata.addonSms = encodeMembershipPackMeta(smsEntries);
+  if (chatEntries.length) metadata.addonChat = encodeMembershipPackMeta(chatEntries);
 
   return {
     ok: true,
     lines,
-    totalCents: lines.reduce((sum, line) => sum + line.unitAmountCents, 0),
+    totalCents: lines.reduce((sum, line) => sum + line.unitAmountCents * line.quantity, 0),
     metadata
   };
 }
 
-/** True when Checkout Session metadata carries any membership pack add-on. */
+/**
+ * True when metadata carries recurring membership pack add-ons.
+ * Legacy one-time keys (`addonVoicePackId`, etc.) are ignored so renewals
+ * never re-grant packs that were billed once under the prior ship.
+ */
 export function sessionHasMembershipPackAddons(
   metadata: Record<string, string> | null | undefined
 ): boolean {
   if (!metadata) return false;
-  return Boolean(
-    metadata.addonVoicePackId || metadata.addonSmsPackId || metadata.addonChatPackId
-  );
+  return Boolean(metadata.addonVoice || metadata.addonSms || metadata.addonChat);
+}
+
+/** Parse compact recurring pack metadata into grantable entries. */
+export function parseMembershipPackAddonMetadata(
+  metadata: Record<string, string> | null | undefined
+): {
+  voice: MembershipPackAddonMetaEntry[];
+  sms: MembershipPackAddonMetaEntry[];
+  chat: MembershipPackAddonMetaEntry[];
+} {
+  if (!metadata) return { voice: [], sms: [], chat: [] };
+
+  return {
+    voice: decodeMembershipPackMeta(metadata.addonVoice),
+    sms: decodeMembershipPackMeta(metadata.addonSms),
+    chat: decodeMembershipPackMeta(metadata.addonChat)
+  };
+}
+
+/** Due-today cents for UI: discounted monthly × months × qty per selected line. */
+export function membershipPackAddOnsDueTodayCents(
+  selection: MembershipPackAddonSelection,
+  options: MembershipPackAddonOption[],
+  period: BillingPeriod
+): number {
+  const months = getCommitmentMonths(period);
+  let total = 0;
+  const add = (items: MembershipPackQty[] | null | undefined, category: MembershipPackAddonCategory) => {
+    for (const item of items ?? []) {
+      const opt = options.find((o) => o.category === category && o.id === item.packId);
+      if (!opt) continue;
+      const qty = Number.isInteger(item.quantity) ? item.quantity : 0;
+      if (qty < 1) continue;
+      total += discountedPackCents(opt.listPriceCents, period) * months * qty;
+    }
+  };
+  add(selection.voicePacks, "voice");
+  add(selection.smsPacks, "sms");
+  add(selection.chatPacks, "chat");
+  return total;
 }

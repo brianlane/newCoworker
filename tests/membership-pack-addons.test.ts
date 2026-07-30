@@ -1,8 +1,13 @@
 import { beforeEach, afterEach, describe, expect, it } from "vitest";
 import {
+  decodeMembershipPackMeta,
   discountedPackCents,
+  encodeMembershipPackMeta,
+  grantAmountForPeriod,
   listMembershipPackAddonOptions,
+  membershipPackAddOnsDueTodayCents,
   membershipPackDiscountPercent,
+  parseMembershipPackAddonMetadata,
   resolveMembershipPackAddons,
   sessionHasMembershipPackAddons
 } from "@/lib/billing/membership-pack-addons";
@@ -50,7 +55,26 @@ describe("lib/billing/membership-pack-addons", () => {
     expect(discountedPackCents(0, "monthly")).toBe(0);
   });
 
-  it("resolves configured packs into discounted lines and metadata", () => {
+  it("encodes and decodes compact pack metadata", () => {
+    const encoded = encodeMembershipPackMeta([
+      { packId: "min_30", quantity: 3, unitSize: 1800 },
+      { packId: "min_120", quantity: 1, unitSize: 7200 }
+    ]);
+    expect(encoded).toBe("min_30:3:1800,min_120:1:7200");
+    expect(decodeMembershipPackMeta(encoded)).toEqual([
+      { packId: "min_30", quantity: 3, unitSize: 1800 },
+      { packId: "min_120", quantity: 1, unitSize: 7200 }
+    ]);
+    expect(decodeMembershipPackMeta("bad")).toEqual([]);
+  });
+
+  it("multiplies grant amount by quantity and commitment months", () => {
+    expect(grantAmountForPeriod(1800, 3, "monthly")).toBe(5400);
+    expect(grantAmountForPeriod(1800, 3, "annual")).toBe(5400 * 12);
+    expect(grantAmountForPeriod(1800, 1, "biennial")).toBe(1800 * 24);
+  });
+
+  it("resolves quantities into recurring term lines and metadata", () => {
     process.env.STRIPE_VOICE_BONUS_30MIN_PRICE_ID = "price_voice_30";
     process.env.STRIPE_VOICE_BONUS_30MIN_CENTS = "1399";
     process.env.STRIPE_SMS_BONUS_500_PRICE_ID = "price_sms_500";
@@ -59,7 +83,11 @@ describe("lib/billing/membership-pack-addons", () => {
     process.env.STRIPE_CHAT_CREDIT_5USD_CENTS = "500";
 
     const resolved = resolveMembershipPackAddons(
-      { voicePackId: "min_30", smsPackId: "texts_500", chatPackId: "usd_5" },
+      {
+        voicePacks: [{ packId: "min_30", quantity: 3 }],
+        smsPacks: [{ packId: "texts_500", quantity: 1 }],
+        chatPacks: [{ packId: "usd_5", quantity: 2 }]
+      },
       "biennial"
     );
     expect(resolved.ok).toBe(true);
@@ -69,36 +97,55 @@ describe("lib/billing/membership-pack-addons", () => {
     expect(resolved.lines[0]).toMatchObject({
       category: "voice",
       packId: "min_30",
+      quantity: 3,
       listPriceCents: 1399,
-      unitAmountCents: 1119,
+      discountedMonthlyCents: 1119,
+      unitAmountCents: 1119 * 24,
       voiceSeconds: 1800
     });
-    expect(resolved.lines[1]).toMatchObject({
-      category: "sms",
-      unitAmountCents: 800,
-      smsTexts: 500
-    });
-    expect(resolved.lines[2]).toMatchObject({
-      category: "chat",
-      unitAmountCents: 400,
-      creditMicros: 5_000_000
-    });
-    expect(resolved.totalCents).toBe(1119 + 800 + 400);
-    expect(resolved.metadata).toMatchObject({
-      addonVoicePackId: "min_30",
-      addonVoiceSeconds: "1800",
-      addonVoiceCents: "1119",
-      addonSmsPackId: "texts_500",
-      addonSmsTexts: "500",
-      addonSmsCents: "800",
-      addonChatPackId: "usd_5",
-      addonChatMicros: "5000000",
-      addonChatCents: "400"
+    expect(resolved.totalCents).toBe(1119 * 24 * 3 + 800 * 24 * 1 + 400 * 24 * 2);
+    expect(resolved.metadata).toEqual({
+      addonVoice: "min_30:3:1800",
+      addonSms: "texts_500:1:500",
+      addonChat: "usd_5:2:5000000"
     });
   });
 
+  it("collapses duplicate SKUs and rejects bad quantities", () => {
+    process.env.STRIPE_VOICE_BONUS_30MIN_PRICE_ID = "price_voice_30";
+    process.env.STRIPE_VOICE_BONUS_30MIN_CENTS = "1000";
+
+    const collapsed = resolveMembershipPackAddons(
+      {
+        voicePacks: [
+          { packId: "min_30", quantity: 2 },
+          { packId: "min_30", quantity: 1 }
+        ]
+      },
+      "monthly"
+    );
+    expect(collapsed.ok).toBe(true);
+    if (!collapsed.ok) return;
+    expect(collapsed.lines[0]?.quantity).toBe(3);
+
+    const badQty = resolveMembershipPackAddons(
+      { voicePacks: [{ packId: "min_30", quantity: 0 }] },
+      "monthly"
+    );
+    expect(badQty.ok).toBe(false);
+
+    const tooMany = resolveMembershipPackAddons(
+      { voicePacks: [{ packId: "min_30", quantity: 21 }] },
+      "monthly"
+    );
+    expect(tooMany.ok).toBe(false);
+  });
+
   it("rejects unknown or unconfigured pack ids", () => {
-    const unknown = resolveMembershipPackAddons({ voicePackId: "min_30" }, "monthly");
+    const unknown = resolveMembershipPackAddons(
+      { voicePacks: [{ packId: "min_30", quantity: 1 }] },
+      "monthly"
+    );
     expect(unknown).toEqual({
       ok: false,
       error: "Unknown or unavailable voice pack: min_30"
@@ -106,7 +153,10 @@ describe("lib/billing/membership-pack-addons", () => {
 
     process.env.STRIPE_VOICE_BONUS_30MIN_PRICE_ID = "price_voice_30";
     const badSms = resolveMembershipPackAddons(
-      { voicePackId: "min_30", smsPackId: "texts_nope" },
+      {
+        voicePacks: [{ packId: "min_30", quantity: 1 }],
+        smsPacks: [{ packId: "texts_nope", quantity: 1 }]
+      },
       "monthly"
     );
     expect(badSms.ok).toBe(false);
@@ -134,16 +184,116 @@ describe("lib/billing/membership-pack-addons", () => {
   });
 
   it("rejects an unknown chat pack id", () => {
-    const bad = resolveMembershipPackAddons({ chatPackId: "usd_nope" }, "monthly");
+    const bad = resolveMembershipPackAddons(
+      { chatPacks: [{ packId: "usd_nope", quantity: 1 }] },
+      "monthly"
+    );
     expect(bad).toEqual({
       ok: false,
       error: "Unknown or unavailable chat credit pack: usd_nope"
     });
   });
 
-  it("detects membership addon metadata", () => {
+  it("detects recurring membership addon metadata only", () => {
     expect(sessionHasMembershipPackAddons(undefined)).toBe(false);
     expect(sessionHasMembershipPackAddons({})).toBe(false);
-    expect(sessionHasMembershipPackAddons({ addonVoicePackId: "min_30" })).toBe(true);
+    expect(sessionHasMembershipPackAddons({ addonVoice: "min_30:1:1800" })).toBe(true);
+    // Legacy one-time keys must not count as recurring add-ons.
+    expect(sessionHasMembershipPackAddons({ addonVoicePackId: "min_30" })).toBe(false);
+  });
+
+  it("ignores legacy single-pack metadata when parsing grants", () => {
+    const parsed = parseMembershipPackAddonMetadata({
+      addonVoicePackId: "min_30",
+      addonVoiceSeconds: "1800"
+    });
+    expect(parsed.voice).toEqual([]);
+  });
+
+  it("computes due-today with term months and quantity", () => {
+    const options = [
+      { category: "voice" as const, id: "min_30", label: "30", listPriceCents: 1000 }
+    ];
+    expect(
+      membershipPackAddOnsDueTodayCents(
+        { voicePacks: [{ packId: "min_30", quantity: 2 }] },
+        options,
+        "annual"
+      )
+    ).toBe(900 * 12 * 2);
+    expect(
+      membershipPackAddOnsDueTodayCents(
+        { voicePacks: [{ packId: "missing", quantity: 1 }, { packId: "min_30", quantity: 0.5 as number }] },
+        options,
+        "monthly"
+      )
+    ).toBe(0);
+  });
+
+  it("rejects empty pack ids and collapsed qty over the max", () => {
+    process.env.STRIPE_VOICE_BONUS_30MIN_PRICE_ID = "price_voice_30";
+    process.env.STRIPE_SMS_BONUS_500_PRICE_ID = "price_sms";
+    process.env.STRIPE_CHAT_CREDIT_5USD_PRICE_ID = "price_chat";
+    expect(
+      resolveMembershipPackAddons({ voicePacks: [{ packId: "  ", quantity: 1 }] }, "monthly").ok
+    ).toBe(false);
+    expect(
+      resolveMembershipPackAddons({ smsPacks: [{ packId: "texts_500", quantity: 0 }] }, "monthly")
+    ).toMatchObject({ ok: false });
+    expect(
+      resolveMembershipPackAddons({ chatPacks: [{ packId: "usd_5", quantity: 21 }] }, "monthly")
+    ).toMatchObject({ ok: false });
+    expect(
+      resolveMembershipPackAddons(
+        { voicePacks: [{ packId: 12 as unknown as string, quantity: 1 }] },
+        "monthly"
+      ).ok
+    ).toBe(false);
+    expect(
+      resolveMembershipPackAddons(
+        {
+          voicePacks: [
+            { packId: "min_30", quantity: 12 },
+            { packId: "min_30", quantity: 12 }
+          ]
+        },
+        "monthly"
+      )
+    ).toEqual({
+      ok: false,
+      error: "Pack quantity for min_30 exceeds max 20"
+    });
+  });
+
+  it("parses null metadata and ignores legacy sms/chat keys", () => {
+    expect(parseMembershipPackAddonMetadata(null)).toEqual({
+      voice: [],
+      sms: [],
+      chat: []
+    });
+    expect(
+      parseMembershipPackAddonMetadata({
+        addonSmsPackId: "texts_500",
+        addonSmsTexts: "500",
+        addonChatPackId: "usd_5",
+        addonChatMicros: "5000000"
+      })
+    ).toEqual({ voice: [], sms: [], chat: [] });
+    expect(
+      parseMembershipPackAddonMetadata({
+        addonSms: "texts_500:1:500",
+        addonChat: "usd_5:1:5000000"
+      })
+    ).toEqual({
+      voice: [],
+      sms: [{ packId: "texts_500", quantity: 1, unitSize: 500 }],
+      chat: [{ packId: "usd_5", quantity: 1, unitSize: 5_000_000 }]
+    });
+  });
+
+  it("skips malformed decode segments", () => {
+    expect(decodeMembershipPackMeta("min_30:3:1800,,bad:x:y,min_30:0:1800,min_30:1:0,:1:1800")).toEqual([
+      { packId: "min_30", quantity: 3, unitSize: 1800 }
+    ]);
   });
 });

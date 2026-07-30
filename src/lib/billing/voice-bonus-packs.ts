@@ -7,7 +7,8 @@
  *
  * Grants are applied by `apply_voice_bonus_grant_from_checkout` in the Stripe
  * webhook (`src/app/api/webhooks/stripe/route.ts`). Expiry is `max(period_end,
- * purchased_at + 30d)` and refund/dispute-lost triggers clawback.
+ * purchased_at + 30d)`. Packs are non-refundable to customers; operators can
+ * still claw back via POST /api/admin/usage-pack-clawback.
  *
  * ## Pricing contract (single source of truth)
  *

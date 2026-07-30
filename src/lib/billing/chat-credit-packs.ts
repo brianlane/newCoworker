@@ -9,8 +9,8 @@
  *
  * Grants are applied by `apply_chat_credit_grant_from_checkout` in the Stripe
  * webhook; cap checks read `chat_active_credit_micros(business)` and add it
- * to the base cap. Expiry is `max(period_end, purchased_at + 30d)`;
- * refund/dispute-lost triggers clawback. Same fail-closed env contract as
+ * to the base cap. Expiry is `max(period_end, purchased_at + 30d)`.
+ * Packs are non-refundable to customers; admin clawback remains. Same fail-closed env contract as
  * `src/lib/billing/voice-bonus-packs.ts`: a pack only exists when its
  * `STRIPE_CHAT_CREDIT_<N>USD_PRICE_ID` env var is set, and the charged price
  * defaults to the credit's face value (override via
