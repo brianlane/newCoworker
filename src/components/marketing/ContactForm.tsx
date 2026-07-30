@@ -1,12 +1,9 @@
 "use client";
 
-import { Suspense, useEffect, useMemo, useState } from "react";
+import { Suspense, useEffect, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
-import {
-  CONTACT_TOPIC_DEFS_BY_PARAM,
-  type ContactPrefill
-} from "@/lib/marketing/contact-prefill";
+import { CONTACT_TOPIC_DEFS_BY_PARAM } from "@/lib/marketing/contact-topics";
 
 type Status = "idle" | "sending" | "sent" | "error";
 
@@ -15,12 +12,10 @@ const INPUT_CLASSES =
 
 const LABEL_CLASSES = "mb-2 block text-sm font-medium text-parchment/70";
 
-type FieldProps = {
-  defaultSubject?: string;
-  defaultName?: string;
-  defaultEmail?: string;
-  defaultBusinessName?: string;
-  defaultMessage?: string;
+type Prefill = {
+  name?: string;
+  email?: string;
+  businessName?: string;
 };
 
 /**
@@ -29,11 +24,12 @@ type FieldProps = {
  *
  * Topic query + signed-in prefill load on the client so the /contact RSC
  * stays free of auth and searchParams (anonymous scrapes should not hit
- * Supabase).
+ * Supabase). Topic defaults apply immediately; auth prefill only fills
+ * empty fields so in-progress typing is never wiped.
  */
 export function ContactForm() {
   return (
-    <Suspense fallback={<ContactFormFields />}>
+    <Suspense fallback={<ContactFormFields topic={null} authPrefill={{}} />}>
       <ContactFormAutofill />
     </Suspense>
   );
@@ -42,68 +38,80 @@ export function ContactForm() {
 function ContactFormAutofill() {
   const searchParams = useSearchParams();
   const topic = searchParams.get("topic");
-  const t = useTranslations("marketing.contactPage");
-  const [prefill, setPrefill] = useState<ContactPrefill | null>(null);
+  const [authPrefill, setAuthPrefill] = useState<Prefill>({});
 
   useEffect(() => {
     let cancelled = false;
     fetch("/api/contact/prefill", { credentials: "same-origin" })
       .then(async (res) => {
         if (!res.ok) return {};
-        return (await res.json()) as ContactPrefill;
+        return (await res.json()) as Prefill;
       })
       .then((data) => {
-        if (!cancelled) setPrefill(data ?? {});
+        if (!cancelled) setAuthPrefill(data ?? {});
       })
       .catch(() => {
-        if (!cancelled) setPrefill({});
+        /* anonymous / network blip: leave topic-only defaults */
       });
     return () => {
       cancelled = true;
     };
   }, []);
 
-  const defaults = useMemo((): FieldProps => {
-    const topicDef = topic ? CONTACT_TOPIC_DEFS_BY_PARAM[topic] : undefined;
-    const auth = prefill ?? {};
-    const defaultSubject = topicDef ? t(topicDef.subjectKey) : undefined;
-    const defaultMessage = topicDef
-      ? auth.businessName
-        ? t(topicDef.msgForKey, { businessName: auth.businessName })
-        : t(topicDef.msgKey)
-      : undefined;
-    return {
-      defaultSubject,
-      defaultName: auth.name,
-      defaultEmail: auth.email,
-      defaultBusinessName: auth.businessName,
-      defaultMessage
-    };
-  }, [prefill, t, topic]);
-
-  // Remount when prefill settles so defaultValue picks up auth/topic text.
-  const formKey =
-    prefill === null
-      ? "pending"
-      : `ready:${prefill.email ?? ""}:${topic ?? ""}:${defaults.defaultMessage ?? ""}`;
-
-  if (prefill === null) {
-    return <ContactFormFields />;
-  }
-
-  return <ContactFormFields key={formKey} {...defaults} />;
+  return <ContactFormFields topic={topic} authPrefill={authPrefill} />;
 }
 
 function ContactFormFields({
-  defaultSubject,
-  defaultName,
-  defaultEmail,
-  defaultBusinessName,
-  defaultMessage
-}: FieldProps) {
-  const t = useTranslations("marketing.contactPage.form");
+  topic,
+  authPrefill
+}: {
+  topic: string | null;
+  authPrefill: Prefill;
+}) {
+  const t = useTranslations("marketing.contactPage");
+  const tf = useTranslations("marketing.contactPage.form");
+  const topicDef = topic ? CONTACT_TOPIC_DEFS_BY_PARAM[topic] : undefined;
+
+  const topicSubject = topicDef ? t(topicDef.subjectKey) : "";
+  const topicMessage = topicDef
+    ? authPrefill.businessName
+      ? t(topicDef.msgForKey, { businessName: authPrefill.businessName })
+      : t(topicDef.msgKey)
+    : "";
+
+  const [name, setName] = useState("");
+  const [email, setEmail] = useState("");
+  const [businessName, setBusinessName] = useState("");
+  const [subject, setSubject] = useState(topicSubject);
+  const [message, setMessage] = useState(topicMessage);
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
+
+  // Apply auth / richer topic defaults only into empty fields so a visitor
+  // who already typed is not overwritten when the prefill request returns.
+  useEffect(() => {
+    if (authPrefill.name) {
+      setName((prev) => prev || authPrefill.name || "");
+    }
+    if (authPrefill.email) {
+      setEmail((prev) => prev || authPrefill.email || "");
+    }
+    if (authPrefill.businessName) {
+      setBusinessName((prev) => prev || authPrefill.businessName || "");
+    }
+    if (topicDef) {
+      const nextSubject = t(topicDef.subjectKey);
+      const nextMessage = authPrefill.businessName
+        ? t(topicDef.msgForKey, { businessName: authPrefill.businessName })
+        : t(topicDef.msgKey);
+      setSubject((prev) => (prev === "" || prev === topicSubject ? nextSubject : prev));
+      setMessage((prev) =>
+        prev === "" || prev === topicMessage || prev === t(topicDef.msgKey) ? nextMessage : prev
+      );
+    }
+    // topicSubject/topicMessage are derived; including them would re-run every render.
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional empty-field merge
+  }, [authPrefill.name, authPrefill.email, authPrefill.businessName, topic, t]);
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -127,14 +135,19 @@ function ContactFormFields({
       });
       if (!res.ok) {
         const body = (await res.json().catch(() => null)) as { error?: string } | null;
-        setError(body?.error ?? t("sendFailed"));
+        setError(body?.error ?? tf("sendFailed"));
         setStatus("error");
         return;
       }
       form.reset();
+      setName("");
+      setEmail("");
+      setBusinessName("");
+      setSubject(topicSubject);
+      setMessage(topicDef ? t(topicDef.msgKey) : "");
       setStatus("sent");
     } catch {
-      setError(t("sendFailed"));
+      setError(tf("sendFailed"));
       setStatus("error");
     }
   }
@@ -142,14 +155,14 @@ function ContactFormFields({
   if (status === "sent") {
     return (
       <div className="rounded-xl border border-claw-green/30 bg-claw-green/10 p-8 text-center">
-        <h3 className="text-lg font-semibold text-parchment">{t("sentTitle")}</h3>
-        <p className="mt-2 text-sm leading-relaxed text-parchment/60">{t("sentBody")}</p>
+        <h3 className="text-lg font-semibold text-parchment">{tf("sentTitle")}</h3>
+        <p className="mt-2 text-sm leading-relaxed text-parchment/60">{tf("sentBody")}</p>
         <button
           type="button"
           onClick={() => setStatus("idle")}
           className="mt-6 text-sm font-semibold text-signal-teal hover:underline"
         >
-          {t("sendAnother")}
+          {tf("sendAnother")}
         </button>
       </div>
     );
@@ -163,7 +176,7 @@ function ContactFormFields({
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
         <div>
           <label htmlFor="contact-name" className={LABEL_CLASSES}>
-            {t("name")}
+            {tf("name")}
           </label>
           <input
             id="contact-name"
@@ -172,13 +185,14 @@ function ContactFormFields({
             required
             maxLength={120}
             autoComplete="name"
-            defaultValue={defaultName}
+            value={name}
+            onChange={(ev) => setName(ev.target.value)}
             className={INPUT_CLASSES}
           />
         </div>
         <div>
           <label htmlFor="contact-email" className={LABEL_CLASSES}>
-            {t("email")}
+            {tf("email")}
           </label>
           <input
             id="contact-email"
@@ -187,7 +201,8 @@ function ContactFormFields({
             required
             maxLength={254}
             autoComplete="email"
-            defaultValue={defaultEmail}
+            value={email}
+            onChange={(ev) => setEmail(ev.target.value)}
             className={INPUT_CLASSES}
           />
         </div>
@@ -195,7 +210,7 @@ function ContactFormFields({
 
       <div className="mt-4">
         <label htmlFor="contact-business" className={LABEL_CLASSES}>
-          {t("businessName")}
+          {tf("businessName")}
         </label>
         <input
           id="contact-business"
@@ -203,14 +218,15 @@ function ContactFormFields({
           type="text"
           maxLength={160}
           autoComplete="organization"
-          defaultValue={defaultBusinessName}
+          value={businessName}
+          onChange={(ev) => setBusinessName(ev.target.value)}
           className={INPUT_CLASSES}
         />
       </div>
 
       <div className="mt-4">
         <label htmlFor="contact-subject" className={LABEL_CLASSES}>
-          {t("subject")}
+          {tf("subject")}
         </label>
         <input
           id="contact-subject"
@@ -218,14 +234,15 @@ function ContactFormFields({
           type="text"
           required
           maxLength={200}
-          defaultValue={defaultSubject}
+          value={subject}
+          onChange={(ev) => setSubject(ev.target.value)}
           className={INPUT_CLASSES}
         />
       </div>
 
       <div className="mt-4">
         <label htmlFor="contact-message" className={LABEL_CLASSES}>
-          {t("message")}
+          {tf("message")}
         </label>
         <textarea
           id="contact-message"
@@ -233,8 +250,9 @@ function ContactFormFields({
           required
           rows={4}
           maxLength={5000}
-          defaultValue={defaultMessage}
-          placeholder={t("messagePlaceholder")}
+          value={message}
+          onChange={(ev) => setMessage(ev.target.value)}
+          placeholder={tf("messagePlaceholder")}
           className={`${INPUT_CLASSES} resize-none`}
         />
       </div>
@@ -243,7 +261,7 @@ function ContactFormFields({
           Deliberately NOT named like a real field (website/url/phone), so
           browser autofill heuristics never populate it for real visitors. */}
       <div aria-hidden="true" className="absolute -left-[9999px] h-0 w-0 overflow-hidden">
-        <label htmlFor="contact-extra-field">{t("honeypot")}</label>
+        <label htmlFor="contact-extra-field">{tf("honeypot")}</label>
         <input
           id="contact-extra-field"
           name="extra_field"
@@ -260,7 +278,7 @@ function ContactFormFields({
         disabled={status === "sending"}
         className="mt-6 w-full rounded-lg bg-claw-green px-4 py-3 text-sm font-semibold text-deep-ink transition-colors hover:bg-claw-green/90 disabled:cursor-not-allowed disabled:opacity-60"
       >
-        {status === "sending" ? t("sending") : t("send")}
+        {status === "sending" ? tf("sending") : tf("send")}
       </button>
     </form>
   );

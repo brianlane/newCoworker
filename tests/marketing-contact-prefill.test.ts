@@ -15,10 +15,8 @@ vi.mock("@/lib/supabase/server", () => ({
 import { getAuthUser } from "@/lib/auth";
 import { resolveActiveBusinessId } from "@/lib/dashboard/active-business";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import {
-  CONTACT_TOPIC_DEFS_BY_PARAM,
-  resolveContactPrefill
-} from "@/lib/marketing/contact-prefill";
+import { resolveContactPrefill } from "@/lib/marketing/contact-prefill";
+import { CONTACT_TOPIC_DEFS_BY_PARAM } from "@/lib/marketing/contact-topics";
 
 describe("resolveContactPrefill", () => {
   beforeEach(() => {
@@ -96,6 +94,51 @@ describe("resolveContactPrefill", () => {
     expect(await resolveContactPrefill()).toEqual({
       email: "teammate@example.com",
       businessName: "Analytical Engines"
+    });
+  });
+
+  it("returns {} when auth throws", async () => {
+    vi.mocked(getAuthUser).mockRejectedValue(new Error("auth down"));
+    expect(await resolveContactPrefill()).toEqual({});
+  });
+
+  it("handles a missing business row and blank owner fields", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue({
+      email: "ada@example.com",
+      userId: "u1",
+      isAdmin: false
+    } as never);
+    vi.mocked(resolveActiveBusinessId).mockResolvedValue("biz-1");
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            maybeSingle: async () => ({ data: null })
+          })
+        })
+      })
+    } as never);
+    expect(await resolveContactPrefill()).toEqual({
+      email: "ada@example.com"
+    });
+
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue({
+      from: () => ({
+        select: () => ({
+          eq: () => ({
+            maybeSingle: async () => ({
+              data: {
+                name: "   ",
+                owner_name: "",
+                owner_email: "ada@example.com"
+              }
+            })
+          })
+        })
+      })
+    } as never);
+    expect(await resolveContactPrefill()).toEqual({
+      email: "ada@example.com"
     });
   });
 });
