@@ -111,18 +111,28 @@ console.log("[oneshot] routing: form name contains melasma / vaginal / acne; els
 console.log("[oneshot] quiet hours: lead SMS defers to 09:00-20:00 America/New_York");
 console.log("[oneshot] enabled is NOT changed by this script");
 
+// The placeholder blocks writing, not inspecting. A dry run neither touches the
+// database nor texts anyone, and it is the documented first step, so it has to
+// succeed while the link is still pending: that is exactly when someone reads
+// the diff. Only --apply is refused.
 if (bookingLinkIsPending()) {
-  console.error("");
-  console.error("[oneshot] REFUSING TO APPLY: the Vagaro booking link is still the placeholder");
-  console.error(`[oneshot]   SCAR_FAIRY_BOOKING_LINK = ${SCAR_FAIRY_BOOKING_LINK}`);
-  console.error("[oneshot] Set the real link in scripts/oneshot/scar-fairy-lead-definition.ts,");
-  console.error("[oneshot] then re-run. Applying now would text leads the placeholder string.");
-  process.exit(1);
+  console.warn("");
+  console.warn("[oneshot] WARNING: the Vagaro booking link is still the placeholder");
+  console.warn(`[oneshot]   SCAR_FAIRY_BOOKING_LINK = ${SCAR_FAIRY_BOOKING_LINK}`);
+  console.warn("[oneshot] --apply stays blocked until the real link is set in");
+  console.warn("[oneshot] scripts/oneshot/scar-fairy-lead-definition.ts.");
+  console.warn("");
 }
 
 if (!APPLY) {
   console.log("[oneshot] dry run complete. Re-run with --apply to write.");
   process.exit(0);
+}
+
+if (bookingLinkIsPending()) {
+  console.error("[oneshot] REFUSING TO APPLY: the Vagaro booking link is still the placeholder.");
+  console.error("[oneshot] Applying now would text leads the placeholder string.");
+  process.exit(1);
 }
 
 const { error: updateErr } = await db

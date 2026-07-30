@@ -17,6 +17,7 @@
  * an unscoped webhook trigger that fired on any event, and copy containing em
  * dashes.
  */
+import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 
 import {
@@ -218,6 +219,24 @@ describe("Scar Fairy lead definition", () => {
 
     it("reports a real link as not pending", () => {
       expect(bookingLinkIsPending(LINK)).toBe(false);
+    });
+
+    it("blocks --apply but never the dry run", () => {
+      // The applier's CLI body cannot be imported (top-level await plus a live
+      // Supabase client), so this pins the ordering in source. It shipped the
+      // wrong way round once: the placeholder guard sat above the --apply
+      // check, so the documented dry run exited 1 and nobody could read the
+      // diff while the link was still pending, which is precisely when they
+      // need to. Caught in review on PR #1038.
+      const src = readFileSync(
+        new URL("../scripts/oneshot/patch-scar-fairy-lead-flow.ts", import.meta.url),
+        "utf8"
+      );
+      const dryRunExit = src.indexOf("dry run complete");
+      const applyRefusal = src.indexOf("REFUSING TO APPLY");
+      expect(dryRunExit).toBeGreaterThan(-1);
+      expect(applyRefusal).toBeGreaterThan(-1);
+      expect(applyRefusal).toBeGreaterThan(dryRunExit);
     });
   });
 
