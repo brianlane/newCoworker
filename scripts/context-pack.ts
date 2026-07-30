@@ -11,7 +11,7 @@
  * writes it to `docs/CONTEXT-PACK.md` for the agent to read instead.
  *
  * Everything here is READ-ONLY: git metadata, the README's own headings, the
- * `gh` CLI, the local Cursor transcripts, and (optionally) a few Supabase
+ * `gh` CLI, the local agent transcripts, and (optionally) a few Supabase
  * SELECTs. It writes exactly one file. Every source degrades to a visible
  * "unavailable" note rather than failing the run, so a laptop with no `gh`
  * auth or no `.env` still gets a useful pack.
@@ -27,7 +27,9 @@
  *     read from the repo-root `.env` for the fleet snapshot; without them
  *     that one section is skipped.
  *   CONTEXT_PACK_TRANSCRIPTS_DIR
- *     overrides where the Cursor agent transcripts are found.
+ *     overrides where the agent transcripts are found. Unset, both the Claude
+ *     Code archive (`~/.claude/projects/<slug>/`) and the older Cursor one
+ *     (`~/.cursor/projects/<slug>/agent-transcripts/`) are read.
  *
  * The output is gitignored on purpose. It is derived from local transcripts
  * and live tenant rows, both of which stay on the laptop, and a committed copy
@@ -302,24 +304,91 @@ function renderPullRequests(repoRoot: string, days: number): string {
 /* -------------------------------------------------------------------------- */
 
 /**
- * Find the Cursor agent-transcripts directory for this repo. Cursor keys it by
- * the workspace path with separators flattened, so a worktree resolves to a
- * different (empty) slug: fall back to the main checkout, which is the parent
- * of the shared git common dir.
+ * Find every agent-transcript archive for this repo.
+ *
+ * Two harnesses have written history here: Cursor, under
+ * `~/.cursor/projects/<slug>/agent-transcripts/<id>/<id>.jsonl`, and Claude
+ * Code, under `~/.claude/projects/<slug>/<id>.jsonl`. Both are searched, so
+ * the digest keeps showing sessions from before the switch rather than going
+ * blank the day the tool changed. Newest-first ordering across the merged set
+ * is by mtime, so which archive a session came from does not matter downstream.
+ *
+ * Both key the archive by the workspace path with separators flattened (Claude
+ * Code keeps the leading separator as a dash, Cursor drops it), so a worktree
+ * resolves to a different, empty slug: fall back to the main checkout, which
+ * is the parent of the shared git common dir.
  */
-export function resolveTranscriptsDir(repoRoot: string): string | null {
+export function resolveTranscriptDirs(repoRoot: string): string[] {
   const override = process.env.CONTEXT_PACK_TRANSCRIPTS_DIR;
-  if (override) return fs.existsSync(override) ? override : null;
+  if (override) return fs.existsSync(override) ? [override] : [];
 
+  const found: string[] = [];
   for (const candidate of checkoutRoots(repoRoot)) {
-    const slug = candidate.replace(/^\/+/, "").replace(/\//g, "-");
-    const dir = path.join(os.homedir(), ".cursor", "projects", slug, "agent-transcripts");
-    if (fs.existsSync(dir)) return dir;
+    const flat = candidate.replace(/\//g, "-");
+    const dirs = [
+      path.join(os.homedir(), ".claude", "projects", flat),
+      path.join(os.homedir(), ".cursor", "projects", flat.replace(/^-+/, ""), "agent-transcripts")
+    ];
+    for (const dir of dirs) {
+      if (fs.existsSync(dir) && !found.includes(dir)) found.push(dir);
+    }
   }
-  return null;
+  return found;
 }
 
-type TranscriptTurn = { role?: string; message?: { content?: Array<{ type?: string; text?: string }> } };
+/**
+ * Session files in an archive, covering both on-disk layouts: Claude Code
+ * writes `<id>.jsonl` flat in the project directory, Cursor nests it as
+ * `<id>/<id>.jsonl`. Detecting by layout rather than by archive path means the
+ * `CONTEXT_PACK_TRANSCRIPTS_DIR` override works for either without a flag.
+ */
+export function sessionFiles(dir: string): string[] {
+  const found: string[] = [];
+  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+    if (entry.isDirectory()) {
+      const nested = path.join(dir, entry.name, `${entry.name}.jsonl`);
+      if (fs.existsSync(nested)) found.push(nested);
+    } else if (entry.isFile() && entry.name.endsWith(".jsonl")) {
+      found.push(path.join(dir, entry.name));
+    }
+  }
+  return found;
+}
+
+/**
+ * A line from either archive. Cursor tags the speaker at the top level as
+ * `role`; Claude Code uses `type` and repeats it under `message.role`, mixes
+ * in non-message bookkeeping lines (permission modes, file snapshots), sends
+ * plain-string content for typed user turns, and flags subagent turns with
+ * `isSidechain`.
+ */
+type TranscriptTurn = {
+  role?: string;
+  type?: string;
+  isSidechain?: boolean;
+  message?: { role?: string; content?: string | Array<{ type?: string; text?: string }> };
+};
+
+/** Speaker of a turn, or "" for a bookkeeping line that has no speaker. */
+export function turnRole(turn: TranscriptTurn | null): string {
+  if (!turn || turn.isSidechain) return "";
+  const role = turn.role ?? turn.message?.role ?? turn.type ?? "";
+  return role === "user" || role === "assistant" ? role : "";
+}
+
+/**
+ * Prose of a turn. Tool calls and tool results carry no `text` part and so
+ * come back empty, which is what lets the callers below skip them by testing
+ * for content rather than by enumerating every non-prose line type.
+ */
+export function turnText(turn: TranscriptTurn | null): string {
+  const content = turn?.message?.content;
+  if (typeof content === "string") return content;
+  return (content ?? [])
+    .filter((c) => c.type === "text" && typeof c.text === "string")
+    .map((c) => c.text as string)
+    .join(" ");
+}
 
 /** Pull the user's actual question out of the harness-wrapped first message. */
 export function extractUserQuery(text: string): string {
@@ -411,15 +480,18 @@ function readSession(file: string): ChatSession | null {
       return null;
     }
   };
-  const textOf = (turn: TranscriptTurn | null): string =>
-    (turn?.message?.content ?? [])
-      .filter((c) => c.type === "text" && typeof c.text === "string")
-      .map((c) => c.text as string)
-      .join(" ");
-
-  const first = parse(lines[0]);
-  if (first?.role !== "user") return null;
-  const ask = extractUserQuery(textOf(first));
+  // Walk forwards for the opening ask rather than trusting line 0. A Claude
+  // Code transcript opens with bookkeeping lines (permission mode, file
+  // snapshot) before any turn, and both archives interleave tool-result turns
+  // that are tagged "user" but carry no prose. Anything that reduces to
+  // nothing after the harness wrappers are stripped is one of those.
+  let ask = "";
+  for (const line of lines) {
+    const turn = parse(line);
+    if (turnRole(turn) !== "user") continue;
+    ask = extractUserQuery(turnText(turn));
+    if (ask) break;
+  }
   if (!ask) return null;
 
   // Walk backwards for the last assistant message carrying real prose: the
@@ -429,8 +501,8 @@ function readSession(file: string): ChatSession | null {
   let fallback = "";
   for (let i = lines.length - 1; i >= 0 && !outcome; i -= 1) {
     const turn = parse(lines[i]);
-    if (turn?.role !== "assistant") continue;
-    const text = textOf(turn).trim();
+    if (turnRole(turn) !== "assistant") continue;
+    const text = turnText(turn).trim();
     if (text.length <= 80) continue;
     if (TAIL_NOISE.test(text)) {
       if (!fallback) fallback = text;
@@ -452,18 +524,17 @@ function readSession(file: string): ChatSession | null {
 }
 
 function renderChatDigest(repoRoot: string, days: number): string {
-  const dir = resolveTranscriptsDir(repoRoot);
-  if (!dir) return "_No Cursor agent transcripts found for this workspace._";
+  const dirs = resolveTranscriptDirs(repoRoot);
+  if (dirs.length === 0) return "_No agent transcripts found for this workspace._";
 
   const cutoff = Date.now() - days * 24 * 60 * 60 * 1000;
   const sessions: ChatSession[] = [];
-  for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
-    if (!entry.isDirectory()) continue;
-    const file = path.join(dir, entry.name, `${entry.name}.jsonl`);
-    if (!fs.existsSync(file)) continue;
-    if (fs.statSync(file).mtimeMs < cutoff) continue;
-    const session = readSession(file);
-    if (session) sessions.push(session);
+  for (const dir of dirs) {
+    for (const file of sessionFiles(dir)) {
+      if (fs.statSync(file).mtimeMs < cutoff) continue;
+      const session = readSession(file);
+      if (session) sessions.push(session);
+    }
   }
   if (sessions.length === 0) return `_No agent sessions in the last ${days} days._`;
 

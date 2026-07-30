@@ -189,7 +189,7 @@ scope_file() {
     messages/en.json | messages/es.json) ;;                        # app-UI catalogs (edge-* is unsafe above)
     debug/* | scripts/*) ;;                                        # operator one-shots, not in the app bundle
     tests/*) ;;                                                    # unit tests (tests/e2e/* handled above)
-    .cursor/* | .github/*) ;;                                      # repo meta (own workflow files handled above)
+    .claude/* | .cursor/* | .github/*) ;;                          # repo meta (own workflow files handled above)
 
     # --- Scoped AI surfaces (import-audited, see header rule 2) -----------
     supabase/functions/_shared/ai_flows/*) add "$FLOW_TESTS" ;;
