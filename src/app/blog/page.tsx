@@ -5,18 +5,17 @@ import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 import { PageHero } from "@/components/marketing/sections";
 import { BlogPostCard } from "@/components/marketing/BlogPostCard";
+import { BLOG_CATEGORIES, BLOG_PAGE_SIZE, type BlogCategory } from "@/lib/blog/db";
 import {
-  BLOG_CATEGORIES,
-  BLOG_PAGE_SIZE,
-  countPublishedPosts,
-  listPublishedCategories,
-  listPublishedPosts,
-  type BlogCategory
-} from "@/lib/blog/db";
+  countPublishedPostsIsr,
+  listPublishedCategoriesIsr,
+  listPublishedPostsIsr
+} from "@/lib/blog/public-isr";
 
-// DB-backed at request time: posts appear the moment they publish, and the
-// build stays DB-free (CI builds with mock Supabase env).
-export const dynamic = "force-dynamic";
+// ISR: posts show within a minute of publish without paying a full Node
+// render on every scraper GET. public-isr soft-falls back when the
+// service-role key is absent so CI builds stay DB-free.
+export const revalidate = 60;
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("marketing.blogPage");
@@ -53,9 +52,9 @@ export default async function BlogIndexPage({
   const offset = (page - 1) * BLOG_PAGE_SIZE;
 
   const [posts, total, categories] = await Promise.all([
-    listPublishedPosts({ category, limit: BLOG_PAGE_SIZE, offset }),
-    countPublishedPosts(category),
-    listPublishedCategories()
+    listPublishedPostsIsr({ category, limit: BLOG_PAGE_SIZE, offset }),
+    countPublishedPostsIsr(category),
+    listPublishedCategoriesIsr()
   ]);
   const totalPages = Math.max(1, Math.ceil(total / BLOG_PAGE_SIZE));
 

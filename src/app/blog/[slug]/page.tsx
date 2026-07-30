@@ -8,17 +8,15 @@ import { JsonLd } from "@/components/marketing/JsonLd";
 import { BlogPostCard } from "@/components/marketing/BlogPostCard";
 import { BlogShareButtons } from "@/components/marketing/BlogShareButtons";
 import { BlogSubscribeForm } from "@/components/marketing/BlogSubscribeForm";
-import {
-  blogImagePublicUrl,
-  getPublishedPostBySlug,
-  listRelatedPosts
-} from "@/lib/blog/db";
+import { blogImagePublicUrl } from "@/lib/blog/db";
+import { getPublishedPostBySlugIsr, listRelatedPostsIsr } from "@/lib/blog/public-isr";
 import { renderMarkdown } from "@/lib/blog/markdown";
 import { SITE_URL } from "@/lib/marketing/site-url";
 
-// DB-backed at request time: posts appear the moment they publish, and the
-// build stays DB-free (CI builds with mock Supabase env).
-export const dynamic = "force-dynamic";
+// ISR: posts show within a minute of publish without paying a full Node
+// render on every scraper GET. public-isr soft-falls back when the
+// service-role key is absent so CI builds stay DB-free.
+export const revalidate = 60;
 
 
 export async function generateMetadata({
@@ -27,7 +25,7 @@ export async function generateMetadata({
   params: Promise<{ slug: string }>;
 }): Promise<Metadata> {
   const { slug } = await params;
-  const post = await getPublishedPostBySlug(slug);
+  const post = await getPublishedPostBySlugIsr(slug);
   if (!post) return {};
   const locale = (await getLocale()) === "es" ? "es" : "en";
   const translated = locale === "es" && post.title_es;
@@ -95,7 +93,7 @@ export default async function BlogPostPage({
   params: Promise<{ slug: string }>;
 }) {
   const { slug } = await params;
-  const post = await getPublishedPostBySlug(slug);
+  const post = await getPublishedPostBySlugIsr(slug);
   if (!post) notFound();
 
   const t = await getTranslations("marketing.blogPage");
@@ -114,7 +112,7 @@ export default async function BlogPostPage({
       })
     : null;
 
-  const related = await listRelatedPosts(post.category, post.id, 3);
+  const related = await listRelatedPostsIsr(post.category, post.id, 3);
 
   const jsonLd = {
     "@context": "https://schema.org",

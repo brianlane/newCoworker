@@ -2,13 +2,13 @@
  * RSS 2.0 feed of the 20 most recent published blog posts.
  */
 
-import { listPublishedPosts } from "@/lib/blog/db";
+import { listPublishedPostsIsr } from "@/lib/blog/public-isr";
 import { markdownToPlainText } from "@/lib/blog/markdown";
 import { SITE_URL } from "@/lib/marketing/site-url";
 
-// DB-backed at request time; the Cache-Control header below still lets CDNs
-// hold the feed for 5 minutes. Keeps the build DB-free (CI mock env).
-export const dynamic = "force-dynamic";
+// ISR aligns with the blog index/post pages. Cache-Control below still lets
+// CDNs hold the feed briefly. public-isr keeps CI builds DB-free.
+export const revalidate = 60;
 
 
 function xmlEscape(text: string): string {
@@ -21,7 +21,7 @@ function xmlEscape(text: string): string {
 }
 
 export async function GET(): Promise<Response> {
-  const posts = await listPublishedPosts({ limit: 20, offset: 0 });
+  const posts = await listPublishedPostsIsr({ limit: 20, offset: 0 });
 
   const items = posts
     .map((post) => {
