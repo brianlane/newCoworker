@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/Input";
 import { Card } from "@/components/ui/Card";
 import type { AppLocale } from "@/i18n/routing";
 import { getPasswordRules, getPasswordValidationError } from "@/lib/password";
+import { terminateOtherSessions } from "@/lib/auth/terminate-other-sessions";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 /**
@@ -65,6 +66,13 @@ export default function ResetPasswordPage() {
       if (updateError) {
         setError(updateError.message);
         return;
+      }
+      // CASA 2.2.2: revoke other sessions after a successful password reset.
+      // Password already changed; do not surface termination failures as reset failure.
+      try {
+        await terminateOtherSessions(supabase);
+      } catch {
+        // best-effort; current recovery session remains signed in
       }
       setDone(true);
       setTimeout(() => {

@@ -9,6 +9,8 @@
  */
 import { notFound, redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
+import { adminMfaRedirectPath, isAal2 } from "@/lib/auth/admin-aal";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { getWhiteGloveIntake } from "@/lib/white-glove/intake";
 import {
   intakeAnswersSchema,
@@ -26,8 +28,14 @@ export default async function IntakeDocPage({
 }) {
   const { intakeId } = await params;
   const user = await getAuthUser();
+  const next = `/admin/intake-doc/${intakeId}`;
   if (!user?.isAdmin) {
-    redirect(`/admin/login?next=${encodeURIComponent(`/admin/intake-doc/${intakeId}`)}`);
+    redirect(`/admin/login?next=${encodeURIComponent(next)}`);
+  }
+  const supabase = await createSupabaseServerClient();
+  const { data: aalData } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+  if (!isAal2(aalData?.currentLevel)) {
+    redirect(adminMfaRedirectPath(next));
   }
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(intakeId)) {
     notFound();

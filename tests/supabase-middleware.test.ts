@@ -37,9 +37,20 @@ function makeRequest(
 
 function mockSupabaseWithUser(user: Record<string, unknown> | null) {
   // proxy.ts now gates on getClaims() (local JWT verification, no network hop).
-  // Mirror the user shape into claims so existing expectations hold.
+  // Mirror the user shape into claims so existing expectations hold. Admin
+  // console access also requires JWT aal=aal2; default admin fixtures to aal2
+  // so pre-existing admin-routing tests keep describing the happy path.
   const claims = user
-    ? { sub: user.id as string, email: (user.email as string | undefined) ?? null }
+    ? {
+        sub: user.id as string,
+        email: (user.email as string | undefined) ?? null,
+        aal:
+          (user.aal as string | undefined) ??
+          (typeof user.email === "string" &&
+          user.email.toLowerCase() === "admin@newcoworker.com"
+            ? "aal2"
+            : "aal1")
+      }
     : null;
   const client = {
     auth: {
@@ -400,19 +411,69 @@ describe("proxy", () => {
     expect(res.headers.get("location")).toContain("/admin/login");
   });
 
-  it("allows admin to access /admin", async () => {
-    mockSupabaseWithUser({ id: "admin-1", email: "admin@newcoworker.com" });
+  it("allows aal2 admin to access /admin", async () => {
+    mockSupabaseWithUser({ id: "admin-1", email: "admin@newcoworker.com", aal: "aal2" });
     const req = makeRequest("/admin");
     const res = await proxy(req);
     expect(res.status).toBe(200);
   });
 
-  it("redirects authenticated admin away from /admin/login to /admin", async () => {
-    mockSupabaseWithUser({ id: "admin-1", email: "admin@newcoworker.com" });
+  it("redirects aal1 admin from /admin to /admin/mfa", async () => {
+    mockSupabaseWithUser({ id: "admin-1", email: "admin@newcoworker.com", aal: "aal1" });
+    const req = makeRequest("/admin");
+    const res = await proxy(req);
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/admin/mfa");
+  });
+
+  it("preserves query string when sending aal1 admin to MFA", async () => {
+    mockSupabaseWithUser({ id: "admin-1", email: "admin@newcoworker.com", aal: "aal1" });
+    const req = makeRequest("/admin/activity?types=calls");
+    const res = await proxy(req);
+    expect(res.status).toBe(307);
+    const location = res.headers.get("location") ?? "";
+    expect(location).toContain("/admin/mfa");
+    expect(decodeURIComponent(location)).toContain("/admin/activity?types=calls");
+  });
+
+  it("allows aal1 admin to access /admin/mfa", async () => {
+    mockSupabaseWithUser({ id: "admin-1", email: "admin@newcoworker.com", aal: "aal1" });
+    const req = makeRequest("/admin/mfa");
+    const res = await proxy(req);
+    expect(res.status).toBe(200);
+  });
+
+  it("redirects aal2 admin from /admin/mfa to the safe next path", async () => {
+    mockSupabaseWithUser({ id: "admin-1", email: "admin@newcoworker.com", aal: "aal2" });
+    const req = makeRequest("/admin/mfa?next=%2Fadmin%2Fclients");
+    const res = await proxy(req);
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/admin/clients");
+  });
+
+  it("redirects authenticated aal2 admin away from /admin/login to /admin", async () => {
+    mockSupabaseWithUser({ id: "admin-1", email: "admin@newcoworker.com", aal: "aal2" });
     const req = makeRequest("/admin/login");
     const res = await proxy(req);
     expect(res.status).toBe(307);
-    expect(res.headers.get("location")).toContain("/admin");
+    expect(res.headers.get("location")).toContain("/admin/dashboard");
+  });
+
+  it("redirects authenticated aal2 admin from /admin/login to the safe next path", async () => {
+    mockSupabaseWithUser({ id: "admin-1", email: "admin@newcoworker.com", aal: "aal2" });
+    const req = makeRequest("/admin/login?next=%2Fadmin%2Fclients");
+    const res = await proxy(req);
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/admin/clients");
+  });
+
+  it("redirects authenticated aal1 admin from /admin/login to /admin/mfa", async () => {
+    mockSupabaseWithUser({ id: "admin-1", email: "admin@newcoworker.com", aal: "aal1" });
+    const req = makeRequest("/admin/login?next=%2Fadmin%2Fclients");
+    const res = await proxy(req);
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/admin/mfa");
+    expect(res.headers.get("location")).toContain("next=");
   });
 
   it("allows unauthenticated access to /admin/login", async () => {
@@ -437,6 +498,25 @@ describe("proxy", () => {
     const res = await proxy(req);
     expect(res.status).toBe(307);
     expect(res.headers.get("location")).toContain("/admin");
+  });
+
+  it("does not let aal1 admin bypass MFA via a leftover view-as cookie", async () => {
+    mockSupabaseWithUser({ id: "admin-1", email: "admin@newcoworker.com", aal: "aal1" });
+    const req = makeRequest("/dashboard", {
+      cookies: { admin_view_as: "biz-1" }
+    });
+    const res = await proxy(req);
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/admin/mfa");
+  });
+
+  it("allows aal2 admin with view-as cookie onto /dashboard", async () => {
+    mockSupabaseWithUser({ id: "admin-1", email: "admin@newcoworker.com", aal: "aal2" });
+    const req = makeRequest("/dashboard", {
+      cookies: { admin_view_as: "biz-1" }
+    });
+    const res = await proxy(req);
+    expect(res.status).toBe(200);
   });
 
   it("allows authenticated non-admin to access /dashboard", async () => {

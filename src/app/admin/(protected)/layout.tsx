@@ -1,6 +1,9 @@
 import type { Viewport } from "next";
+import { headers } from "next/headers";
 import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
+import { adminMfaRedirectPath, isAal2, safeAdminNextPath } from "@/lib/auth/admin-aal";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { AdminSidebar } from "@/components/admin/AdminSidebar";
 
 // See dashboard layout: scope `cover` to the h-dvh shell segments only so the
@@ -10,9 +13,17 @@ export const viewport: Viewport = {
 };
 
 export default async function AdminLayout({ children }: { children: React.ReactNode }) {
+  const headerStore = await headers();
+  const requestedPath = safeAdminNextPath(headerStore.get("x-pathname"));
   const user = await getAuthUser();
-  if (!user) redirect("/admin/login?next=/admin/dashboard");
-  if (!user.isAdmin) redirect("/admin/login?next=/admin/dashboard");
+  if (!user) redirect(`/admin/login?next=${encodeURIComponent(requestedPath)}`);
+  if (!user.isAdmin) redirect(`/admin/login?next=${encodeURIComponent(requestedPath)}`);
+
+  const supabase = await createSupabaseServerClient();
+  const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+  if (!isAal2(data?.currentLevel)) {
+    redirect(adminMfaRedirectPath(requestedPath));
+  }
 
   return (
     <div className="flex h-dvh bg-deep-ink">

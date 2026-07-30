@@ -8,6 +8,8 @@ import { classifyAiTraffic, recordAiTrafficEvent } from "@/lib/marketing/ai-traf
 type AuthUser = {
   id: string;
   email: string | null;
+  /** JWT authenticator assurance level (`aal1` / `aal2`). Used for admin MFA. */
+  aal: string | null;
 };
 
 // Routes that require an authenticated session. /onboard/success is
@@ -313,7 +315,14 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
   }
 
   // --- Supabase session refresh ---
-  let response = NextResponse.next({ request });
+  // Forward path+query so RSC admin layouts can preserve deep links when
+  // redirecting AAL1 admins to /admin/mfa.
+  const pathWithQuery = `${pathname}${request.nextUrl.search}`;
+  const requestHeaders = new Headers(request.headers);
+  requestHeaders.set("x-pathname", pathWithQuery);
+  let response = NextResponse.next({
+    request: { headers: requestHeaders }
+  });
 
   response.headers.set("X-RateLimit-Limit", String(rlResult.limit));
   response.headers.set("X-RateLimit-Remaining", String(rlResult.remaining));
@@ -351,15 +360,19 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
         getAll() {
           return request.cookies.getAll().map(({ name, value }) => ({ name, value }));
         },
-        setAll(cookiesToSet) {
-          cookiesToSet.forEach(({ name, value, options }) => {
-            request.cookies.set({ name, value, ...(options ?? {}) });
-          });
-          response = NextResponse.next({ request });
-          cookiesToSet.forEach(({ name, value, options }) => {
-            response.cookies.set({ name, value, ...(options ?? {}) });
-          });
-        },
+          setAll(cookiesToSet) {
+            cookiesToSet.forEach(({ name, value, options }) => {
+              request.cookies.set({ name, value, ...(options ?? {}) });
+            });
+            const refreshedHeaders = new Headers(request.headers);
+            refreshedHeaders.set("x-pathname", pathWithQuery);
+            response = NextResponse.next({
+              request: { headers: refreshedHeaders }
+            });
+            cookiesToSet.forEach(({ name, value, options }) => {
+              response.cookies.set({ name, value, ...(options ?? {}) });
+            });
+          },
       },
     });
 
@@ -369,7 +382,7 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
     // — the single biggest middleware TTFB cost. It still refreshes the
     // session via the cookie setAll above when the token is near expiry. The
     // claims carry the same `sub` (user id) and `email` we need for the
-    // admin / protected-route gates below.
+    // admin / protected-route gates below, plus `aal` for admin MFA.
     const { data, error: claimsError } = await supabase.auth.getClaims();
     if (claimsError) {
       console.error("[proxy] supabase.auth.getClaims failed:", claimsError.message);
@@ -377,36 +390,84 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
     const claims = data?.claims ?? null;
     const claimSub = typeof claims?.sub === "string" ? claims.sub : null;
     const claimEmail = typeof claims?.email === "string" ? claims.email : null;
-    user = claimSub ? { id: claimSub, email: claimEmail } : null;
+    const claimAal = typeof claims?.aal === "string" ? claims.aal : null;
+    user = claimSub ? { id: claimSub, email: claimEmail, aal: claimAal } : null;
   }
 
   // --- Admin route protection ---
+  // CASA 3.3.1: /admin/* (except login + MFA challenge) requires ADMIN_EMAIL
+  // identity AND JWT aal=aal2. AAL1 admins are sent to /admin/mfa.
   const isAdminRoute = pathname.startsWith("/admin");
   const isAdminLogin = pathname.startsWith("/admin/login");
+  const isAdminMfa = pathname.startsWith("/admin/mfa");
+  const adminEmail = process.env.ADMIN_EMAIL;
+  const isAdminUser =
+    !!user?.email &&
+    !!adminEmail &&
+    user.email.toLowerCase() === adminEmail.toLowerCase();
+  const adminHasMfa = isAdminUser && user?.aal === "aal2";
 
-  if (isAdminRoute && !isAdminLogin) {
-    const adminEmail = process.env.ADMIN_EMAIL;
-    const isAdmin =
-      user?.email && adminEmail
-        ? user.email.toLowerCase() === adminEmail.toLowerCase()
-        : false;
-
-    if (!isAdmin) {
+  if (isAdminRoute && !isAdminLogin && !isAdminMfa) {
+    if (!isAdminUser) {
       const redirectUrl = request.nextUrl.clone();
       redirectUrl.pathname = "/admin/login";
-      redirectUrl.searchParams.set("next", pathname);
+      redirectUrl.search = "";
+      redirectUrl.searchParams.set("next", pathWithQuery);
+      return redirectWithCookies(response, redirectUrl);
+    }
+    if (!adminHasMfa) {
+      const redirectUrl = request.nextUrl.clone();
+      redirectUrl.pathname = "/admin/mfa";
+      redirectUrl.search = "";
+      redirectUrl.searchParams.set("next", pathWithQuery);
       return redirectWithCookies(response, redirectUrl);
     }
   }
 
+  if (isAdminMfa && user && !isAdminUser) {
+    const redirectUrl = request.nextUrl.clone();
+    redirectUrl.pathname = "/admin/login";
+    return redirectWithCookies(response, redirectUrl);
+  }
+
+  if (isAdminMfa && adminHasMfa) {
+    const redirectUrl = request.nextUrl.clone();
+    const nextParam = request.nextUrl.searchParams.get("next");
+    const next =
+      nextParam &&
+      nextParam.startsWith("/") &&
+      !nextParam.startsWith("//") &&
+      !nextParam.startsWith("/admin/mfa")
+        ? nextParam
+        : "/admin/dashboard";
+    // Preserve deep links after MFA completes (path may include a query).
+    const target = new URL(next, request.nextUrl.origin);
+    redirectUrl.pathname = target.pathname;
+    redirectUrl.search = target.search;
+    return redirectWithCookies(response, redirectUrl);
+  }
+
   // Redirect authenticated admin away from /admin/login
-  if (isAdminLogin && user) {
-    const adminEmail = process.env.ADMIN_EMAIL;
-    if (adminEmail && user.email?.toLowerCase() === adminEmail.toLowerCase()) {
-      const redirectUrl = request.nextUrl.clone();
-      redirectUrl.pathname = "/admin/dashboard";
-      return redirectWithCookies(response, redirectUrl);
+  if (isAdminLogin && isAdminUser) {
+    const redirectUrl = request.nextUrl.clone();
+    if (adminHasMfa) {
+      const nextParam = request.nextUrl.searchParams.get("next");
+      const next =
+        nextParam &&
+        nextParam.startsWith("/") &&
+        !nextParam.startsWith("//") &&
+        !nextParam.startsWith("/admin/mfa")
+          ? nextParam
+          : "/admin/dashboard";
+      const target = new URL(next, request.nextUrl.origin);
+      redirectUrl.pathname = target.pathname;
+      redirectUrl.search = target.search;
+    } else {
+      redirectUrl.pathname = "/admin/mfa";
+      const nextParam = request.nextUrl.searchParams.get("next");
+      if (nextParam) redirectUrl.searchParams.set("next", nextParam);
     }
+    return redirectWithCookies(response, redirectUrl);
   }
 
   // Redirect admin users away from owner dashboard — UNLESS a view-as
@@ -415,14 +476,12 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
   // themselves re-validate it against isAdmin + a live business row
   // (src/lib/admin/view-as.ts), so a forged value can't impersonate.
   if (isProtectedRoute(pathname) && user) {
-    const adminEmail = process.env.ADMIN_EMAIL;
-    const isAdmin =
-      user.email && adminEmail
-        ? user.email.toLowerCase() === adminEmail.toLowerCase()
-        : false;
-    if (isAdmin && !request.cookies.get("admin_view_as")?.value) {
+    // View-as is only a routing exception for AAL2 admins. A leftover
+    // admin_view_as cookie must not let password-only (AAL1) sessions into
+    // the owner dashboard.
+    if (isAdminUser && !(adminHasMfa && request.cookies.get("admin_view_as")?.value)) {
       const redirectUrl = request.nextUrl.clone();
-      redirectUrl.pathname = "/admin/dashboard";
+      redirectUrl.pathname = adminHasMfa ? "/admin/dashboard" : "/admin/mfa";
       return redirectWithCookies(response, redirectUrl);
     }
   }

@@ -5,6 +5,7 @@ import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
 import { PASSWORD_RULES, getPasswordValidationError } from "@/lib/password";
+import { terminateOtherSessions } from "@/lib/auth/terminate-other-sessions";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 type Status = { kind: "idle" | "saving" | "success" | "error"; message?: string };
@@ -105,7 +106,21 @@ export function AccountCredentialsForms({ email }: { email: string }) {
       setCurrentPassword("");
       setNewPassword("");
       setConfirmPassword("");
-      setPwStatus({ kind: "success", message: "Password updated." });
+      // CASA 2.2.2: revoke other sessions after a successful password change.
+      // Keep success messaging if termination fails; the password already changed.
+      try {
+        await terminateOtherSessions(supabase);
+        setPwStatus({
+          kind: "success",
+          message: "Password updated. Other signed-in sessions were signed out."
+        });
+      } catch {
+        setPwStatus({
+          kind: "success",
+          message:
+            "Password updated, but other sessions could not be signed out automatically. Sign out everywhere from Settings if needed."
+        });
+      }
     } catch {
       setPwStatus({ kind: "error", message: "Network error. Please try again." });
     }

@@ -1,6 +1,12 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
 import { getAuthUser } from "@/lib/auth";
+import {
+  adminMfaRedirectPath,
+  isAal2,
+  safeAdminNextPath
+} from "@/lib/auth/admin-aal";
+import { createSupabaseServerClient } from "@/lib/supabase/server";
 import AdminLoginForm from "./AdminLoginForm";
 
 type AdminLoginPageProps = {
@@ -12,11 +18,16 @@ type AdminLoginPageProps = {
 export default async function AdminLoginPage({ searchParams }: AdminLoginPageProps) {
   const user = await getAuthUser();
   const { next } = await searchParams;
-  const nextPath = next && next.startsWith("/") ? next : "/admin/dashboard";
+  const nextPath = safeAdminNextPath(next);
 
-  // Already an admin — redirect straight in
+  // Already an admin: honor MFA before any console deep link.
   if (user?.isAdmin) {
-    redirect(nextPath);
+    const supabase = await createSupabaseServerClient();
+    const { data } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+    if (isAal2(data?.currentLevel)) {
+      redirect(nextPath);
+    }
+    redirect(adminMfaRedirectPath(nextPath));
   }
 
   const adminEmailMissing = !process.env.ADMIN_EMAIL;
