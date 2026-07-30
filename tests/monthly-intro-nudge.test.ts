@@ -14,6 +14,7 @@ import {
   isFirstBillingCycle,
   isMonthlyIntroNudgeCandidate,
   isMonthlyIntroNudgeDue,
+  shouldRetireNudgeCandidate,
   sweepMonthlyIntroNudges,
   type MonthlyIntroNudgeCandidate
 } from "@/lib/billing/monthly-intro-nudge";
@@ -192,6 +193,22 @@ describe("isMonthlyIntroNudgeCandidate", () => {
   });
 });
 
+describe("shouldRetireNudgeCandidate", () => {
+  it("retires renewed and enterprise rows, but not paused first-cycle ones", () => {
+    expect(
+      shouldRetireNudgeCandidate(
+        candidate({
+          created_at: "2026-01-01T00:00:00.000Z",
+          stripe_current_period_start: PERIOD_START
+        }),
+        NOW
+      )
+    ).toBe(true);
+    expect(shouldRetireNudgeCandidate(candidate({ tier: "enterprise" }), NOW)).toBe(true);
+    expect(shouldRetireNudgeCandidate(candidate({ billing_paused: true }), NOW)).toBe(false);
+  });
+});
+
 describe("claimMonthlyIntroNudge", () => {
   it("returns true when the conditional update matches a row", async () => {
     const { db, updateEq, updateIs } = makeDb({
@@ -350,6 +367,44 @@ describe("sweepMonthlyIntroNudges", () => {
       resendApiKey: "re_test"
     });
     expect(result).toMatchObject({ scanned: 1, sent: 0, skipped: 1 });
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("retires renewed (non-first-cycle) rows so they leave the scan queue", async () => {
+    const renewed = candidate({
+      created_at: "2026-01-01T00:00:00.000Z",
+      stripe_current_period_start: PERIOD_START
+    });
+    const { db } = makeDb({
+      select: { data: [renewed], error: null },
+      update: { data: { id: SUB }, error: null }
+    });
+    const result = await sweepMonthlyIntroNudges({
+      client: db,
+      now: () => NOW,
+      sendEmail,
+      resolveLocale,
+      getBusinessRow,
+      resendApiKey: "re_test"
+    });
+    expect(result).toMatchObject({ scanned: 1, sent: 0, skipped: 1 });
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("retires enterprise rows that slipped into the scan", async () => {
+    const { db } = makeDb({
+      select: { data: [candidate({ tier: "enterprise" })], error: null },
+      update: { data: { id: SUB }, error: null }
+    });
+    const result = await sweepMonthlyIntroNudges({
+      client: db,
+      now: () => NOW,
+      sendEmail,
+      resolveLocale,
+      getBusinessRow,
+      resendApiKey: "re_test"
+    });
+    expect(result.skipped).toBe(1);
     expect(sendEmail).not.toHaveBeenCalled();
   });
 

@@ -28,6 +28,13 @@ export const MONTHLY_INTRO_NUDGE_BUSINESS_DAYS = 5;
 export const MONTHLY_INTRO_NUDGE_BATCH_LIMIT = 200;
 
 /**
+ * Scan only subscriptions created within this many days. Renewed monthlies are
+ * older; keeping them out of the SELECT stops them from filling the batch
+ * limit ahead of true first-month rows.
+ */
+export const MONTHLY_INTRO_NUDGE_MAX_AGE_DAYS = 45;
+
+/**
  * First-cycle slack between subscription.created_at and Stripe period_start.
  * Pending rows are inserted at /api/checkout; period_start is written only when
  * the Stripe subscription activates, which can lag by days (async/manual
@@ -80,11 +87,28 @@ export function isFirstBillingCycle(
   const createdMs = Date.parse(createdAt);
   const startMs = Date.parse(periodStart);
   if (!Number.isFinite(createdMs) || !Number.isFinite(startMs)) return false;
-  // Still in the period that started at signup (or within a day of it).
+  // Still in the period that started near signup (allowing pending→active delay).
   if (createdMs < startMs - FIRST_CYCLE_SLACK_MS) return false;
-  // Period start must not be in the future relative to "now" in a weird way;
-  // a renewed sub has period_start well after created_at.
+  // Period start must not be far in the future; a renewed sub has
+  // period_start well after created_at.
   return startMs <= nowMs + FIRST_CYCLE_SLACK_MS;
+}
+
+/**
+ * Rows that will never become eligible (renewed cycle, wrong tier). Stamp them
+ * so they leave the partial index and stop crowding the scan batch.
+ * Temporary states (paused, cancel-at-period-end, not-yet-in-window) stay
+ * unstamped so a later pass can still send.
+ */
+export function shouldRetireNudgeCandidate(
+  row: MonthlyIntroNudgeCandidate,
+  now: Date
+): boolean {
+  if (row.tier !== "starter" && row.tier !== "standard") return true;
+  if (!isFirstBillingCycle(row.created_at, row.stripe_current_period_start, now.getTime())) {
+    return true;
+  }
+  return false;
 }
 
 /**
@@ -122,12 +146,16 @@ async function loadCandidates(
 ): Promise<MonthlyIntroNudgeCandidate[]> {
   const nowIso = now.toISOString();
   const scanEnd = new Date(now.getTime() + MONTHLY_INTRO_NUDGE_SCAN_DAYS * 24 * 60 * 60 * 1000);
+  const createdAfter = new Date(
+    now.getTime() - MONTHLY_INTRO_NUDGE_MAX_AGE_DAYS * 24 * 60 * 60 * 1000
+  ).toISOString();
   const { data, error } = await db
     .from("subscriptions")
     .select(COLUMNS)
     .eq("billing_period", "monthly")
     .eq("status", "active")
     .is("monthly_intro_nudge_sent_at", null)
+    .gte("created_at", createdAfter)
     .gt("stripe_current_period_end", nowIso)
     .lte("stripe_current_period_end", scanEnd.toISOString())
     .order("stripe_current_period_end", { ascending: true })
@@ -193,6 +221,11 @@ export async function sweepMonthlyIntroNudges(
   for (const row of rows) {
     try {
       if (!isMonthlyIntroNudgeCandidate(row, now)) {
+        if (shouldRetireNudgeCandidate(row, now)) {
+          // Drop renewed / non-intro tiers from the partial index so they
+          // cannot starve first-month rows in later passes.
+          await claimMonthlyIntroNudge(db, row.id, now);
+        }
         result.skipped += 1;
         continue;
       }
