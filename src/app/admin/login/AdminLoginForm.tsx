@@ -66,7 +66,15 @@ export default function AdminLoginForm({
         return;
       }
 
+      // CASA 3.3.1: password alone is AAL1. Verified MFA factors raise the
+      // session to AAL2 before any /admin console route is reachable.
+      const { data: aalData } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
       router.refresh();
+      if (aalData?.currentLevel !== "aal2") {
+        const next = encodeURIComponent(getSafeNext());
+        router.replace(`/admin/mfa?next=${next}`);
+        return;
+      }
       router.replace(getSafeNext());
     } catch (err) {
       setError(err instanceof Error ? err.message : "Authentication failed");

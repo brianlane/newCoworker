@@ -8,10 +8,19 @@ vi.mock("@/lib/supabase/server", () => ({
 import { createSupabaseServerClient, createSupabaseServiceClient } from "@/lib/supabase/server";
 import { authUserExistsByEmail, getAuthUser, requireAuth, requireAdmin, requireOwner, verifySignupIdentity } from "@/lib/auth";
 
-function mockSupabase(user: Record<string, unknown> | null, error: unknown = null) {
+function mockSupabase(
+  user: Record<string, unknown> | null,
+  error: unknown = null,
+  aal: "aal1" | "aal2" = "aal2"
+) {
   return {
     auth: {
-      getUser: vi.fn().mockResolvedValue({ data: { user }, error })
+      getUser: vi.fn().mockResolvedValue({ data: { user }, error }),
+      mfa: {
+        getAuthenticatorAssuranceLevel: vi
+          .fn()
+          .mockResolvedValue({ data: { currentLevel: aal, nextLevel: aal }, error: null })
+      }
     },
     from: vi.fn().mockReturnThis(),
     select: vi.fn().mockReturnThis(),
@@ -137,12 +146,19 @@ describe("auth", () => {
     await expect(requireAdmin()).rejects.toMatchObject({ status: 403 });
   });
 
-  it("requireAdmin succeeds for admin email", async () => {
+  it("requireAdmin succeeds for admin email at aal2", async () => {
     vi.mocked(createSupabaseServerClient).mockResolvedValue(
-      mockSupabase({ id: "admin-1", email: "admin@newcoworker.com" }) as never
+      mockSupabase({ id: "admin-1", email: "admin@newcoworker.com" }, null, "aal2") as never
     );
     const user = await requireAdmin();
     expect(user.isAdmin).toBe(true);
+  });
+
+  it("requireAdmin throws 403 for admin email at aal1", async () => {
+    vi.mocked(createSupabaseServerClient).mockResolvedValue(
+      mockSupabase({ id: "admin-1", email: "admin@newcoworker.com" }, null, "aal1") as never
+    );
+    await expect(requireAdmin()).rejects.toMatchObject({ status: 403 });
   });
 
   it("requireOwner skips DB check for admin", async () => {

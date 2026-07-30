@@ -1,5 +1,6 @@
 import { getTranslations } from "next-intl/server";
 import { Card } from "@/components/ui/Card";
+import { SignOutButton } from "@/components/auth/SignOutButton";
 import { DeleteAccountCard } from "@/components/dashboard/DeleteAccountCard";
 import { loadSettingsContext, SettingsPageShell } from "../_shared";
 
@@ -14,11 +15,9 @@ export default async function DangerZoneSettingsPage() {
       <Card>
         <h2 className="text-sm font-semibold text-parchment mb-2">{t("dangerSessions")}</h2>
         <p className="text-xs text-parchment/40 mb-4">{t("dangerSessionsBody")}</p>
-        <form action="/api/auth/signout" method="POST">
-          <button type="submit" className="text-sm text-spark-orange hover:underline">
-            {t("dangerSignOutAll")}
-          </button>
-        </form>
+        <SignOutButton className="text-sm text-spark-orange hover:underline">
+          {t("dangerSignOutAll")}
+        </SignOutButton>
       </Card>
 
       {/* Shown during admin view-as too — admins see everything the owner

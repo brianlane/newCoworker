@@ -76,6 +76,16 @@ export async function requireAdmin(): Promise<AuthUser> {
     const err = Object.assign(new Error("Admin access required"), { status: 403 });
     throw err;
   }
+  // CASA 3.3.1: admin APIs require a verified MFA factor (AAL2), not just
+  // the ADMIN_EMAIL match from the password / first-factor session.
+  const supabase = await createSupabaseServerClient();
+  const { data, error } = await supabase.auth.mfa.getAuthenticatorAssuranceLevel();
+  if (error || data?.currentLevel !== "aal2") {
+    const err = Object.assign(new Error("Admin multi-factor authentication required"), {
+      status: 403
+    });
+    throw err;
+  }
   return user;
 }
 

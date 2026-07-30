@@ -7,6 +7,7 @@ import { useEffect, useState } from "react";
 import { Menu, X } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { ReactNode } from "react";
+import { SignOutButton } from "@/components/auth/SignOutButton";
 
 interface SidebarItem {
   label: string;
@@ -196,14 +197,9 @@ export function Sidebar({ items, userEmail, renderTrailing, brand }: SidebarProp
         {userEmail && (
           <div className="border-t border-parchment/10 px-4 pt-3 pb-6">
             <p className="text-xs text-parchment/40 truncate mb-2">{userEmail}</p>
-            <form action="/api/auth/signout" method="POST">
-              <button
-                type="submit"
-                className="w-full rounded-lg px-3 py-2 text-xs font-medium text-parchment/60 bg-parchment/5 hover:bg-parchment/10 hover:text-parchment transition-colors text-left border border-parchment/10"
-              >
-                Sign out
-              </button>
-            </form>
+            <SignOutButton className="w-full rounded-lg px-3 py-2 text-xs font-medium text-parchment/60 bg-parchment/5 hover:bg-parchment/10 hover:text-parchment transition-colors text-left border border-parchment/10">
+              Sign out
+            </SignOutButton>
           </div>
         )}
       </aside>
