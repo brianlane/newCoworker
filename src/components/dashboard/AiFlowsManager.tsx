@@ -37,6 +37,7 @@ import {
   varsProducedByStep,
   type StepContainerRef
 } from "@/lib/ai-flows/tree";
+import { flowStepsIncludeBrowseAction } from "@/lib/ai-flows/browse-action-tree";
 import type { AiFlowRow } from "@/lib/ai-flows/db";
 import {
   STEP_TYPE_LABELS,
@@ -992,6 +993,7 @@ export function AiFlowsManager({
   initialAdaptDraft,
   webhooksEnabled = true,
   outboundAiCallsEnabled = true,
+  browseActionEnabled = true,
   initialDismissedCards
 }: {
   businessId: string;
@@ -1012,6 +1014,11 @@ export function AiFlowsManager({
    * Place call; dial paths also refuse server-side.
    */
   outboundAiCallsEnabled?: boolean;
+  /**
+   * False on starter: hide browse_action from step pickers; save/API and
+   * worker also refuse with an upgrade message.
+   */
+  browseActionEnabled?: boolean;
   /** Starter cards this user has hidden (per user, not per business). */
   initialDismissedCards?: DismissibleCardKey[];
 }) {
@@ -1695,6 +1702,11 @@ export function AiFlowsManager({
       mode === "visual" && selectedNode && selectedNode !== "trigger"
         ? findStepById(editor.steps, selectedNode)
         : null;
+    const batchTypes = VISUAL_BATCH_STEP_TYPES.filter(
+      (t) =>
+        (outboundAiCallsEnabled || t !== "place_ai_call") &&
+        (browseActionEnabled || t !== "browse_action")
+    );
     const canvasAddable =
       editor.channel === "voice"
         ? editor.voiceDirection === "outbound"
@@ -1702,9 +1714,7 @@ export function AiFlowsManager({
             ? OUTBOUND_VOICE_STEP_TYPES
             : ([] as const)
           : INBOUND_VOICE_STEP_TYPES
-        : outboundAiCallsEnabled
-          ? VISUAL_BATCH_STEP_TYPES
-          : VISUAL_BATCH_STEP_TYPES.filter((t) => t !== "place_ai_call");
+        : batchTypes;
     return (
       <Card className="space-y-6">
         <div className="flex items-center justify-between gap-3">
@@ -2155,6 +2165,20 @@ export function AiFlowsManager({
                     upgrade your plan
                   </Link>
                   .
+                </p>
+              </div>
+            )}
+          {editor.channel !== "voice" &&
+            !browseActionEnabled &&
+            flowStepsIncludeBrowseAction(editor.steps) && (
+              <div className="rounded-md border border-parchment/10 bg-deep-ink/20 p-3">
+                <p className="text-[11px] text-amber-400/90">
+                  Browser actions (click and fill on websites) are a Standard plan perk. Remove
+                  those steps or{" "}
+                  <Link href="/dashboard/billing" className="text-signal-teal hover:underline">
+                    upgrade your plan
+                  </Link>{" "}
+                  to save and run them.
                 </p>
               </div>
             )}
@@ -2681,9 +2705,11 @@ export function AiFlowsManager({
                   ? OUTBOUND_VOICE_STEP_TYPES
                   : ([] as const)
                 : INBOUND_VOICE_STEP_TYPES
-              : outboundAiCallsEnabled
-                ? NON_VOICE_STEP_TYPES
-                : NON_VOICE_STEP_TYPES.filter((t) => t !== "place_ai_call")
+              : NON_VOICE_STEP_TYPES.filter(
+                  (t) =>
+                    (outboundAiCallsEnabled || t !== "place_ai_call") &&
+                    (browseActionEnabled || t !== "browse_action")
+                )
             ).map((t) => (
               <button
                 key={t}

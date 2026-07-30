@@ -56,10 +56,12 @@ export async function validateFlowDefinition(
   const { validateShareDocumentSteps } = await import("@/lib/ai-flows/document-steps");
   const { validateRunAgentSteps } = await import("@/lib/ai-flows/agent-steps");
   const { validateMailboxConnectionSteps } = await import("@/lib/ai-flows/mailbox-steps");
+  const { validateBrowseActionSteps } = await import("@/lib/ai-flows/browse-action-steps");
   const documentIssues = await validateShareDocumentSteps(businessId, parsed);
   const agentIssues = await validateRunAgentSteps(businessId, parsed);
   const mailboxIssues = await validateMailboxConnectionSteps(businessId, parsed);
-  const issues = [...documentIssues, ...agentIssues, ...mailboxIssues];
+  const browseIssues = await validateBrowseActionSteps(businessId, parsed);
+  const issues = [...documentIssues, ...agentIssues, ...mailboxIssues, ...browseIssues];
   if (issues.length > 0) {
     throw new McpToolError(`Invalid flow definition: ${issues.join("; ")}`);
   }
