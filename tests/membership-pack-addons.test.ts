@@ -121,6 +121,11 @@ describe("lib/billing/membership-pack-addons", () => {
     expect(options.map((o) => o.id)).toEqual(["min_30", "usd_5"]);
   });
 
+  it("resolves an empty selection to zero lines", () => {
+    const resolved = resolveMembershipPackAddons({}, "monthly");
+    expect(resolved).toEqual({ ok: true, lines: [], totalCents: 0, metadata: {} });
+  });
+
   it("detects membership addon metadata", () => {
     expect(sessionHasMembershipPackAddons(undefined)).toBe(false);
     expect(sessionHasMembershipPackAddons({})).toBe(false);
