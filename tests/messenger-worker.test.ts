@@ -212,6 +212,19 @@ describe("processMessengerJobs", () => {
     expect(deps3.updateContact).not.toHaveBeenCalled();
   });
 
+  it("fails terminal with tier_blocked on Starter (no Gemini, no send)", async () => {
+    const starter = makeDeps({ fetchTier: vi.fn(async () => "starter" as const) });
+    expect(await processMessengerJobs({}, starter)).toMatchObject({ failed: 1, replied: 0 });
+    expect(starter.fail).toHaveBeenCalledWith(
+      "job-1",
+      "tier_blocked",
+      "messenger_ai_requires_standard",
+      "2026-07-15T20:05:00Z"
+    );
+    expect(starter.runTurn).not.toHaveBeenCalled();
+    expect(starter.send).not.toHaveBeenCalled();
+  });
+
   it("errors terminal conditions: missing conversation, closed window, no connection", async () => {
     const missing = makeDeps({ getConversation: vi.fn(async () => null) });
     expect(await processMessengerJobs({}, missing)).toMatchObject({ failed: 1, replied: 0 });

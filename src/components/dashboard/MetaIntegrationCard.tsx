@@ -308,7 +308,7 @@ export function MetaIntegrationCard({ businessId, initialConnection }: Props) {
             </Link>{" "}
             with source <code className="text-parchment/60">facebook_lead_ads</code> —
             the same shape as the bridge path, so existing flows keep working.
-            Messenger (and Instagram DM) conversations with your Page are answered
+            On Standard and above, Messenger and Instagram DMs are answered
             automatically and appear under{" "}
             <Link href="/dashboard/messenger" className="text-signal-teal hover:underline">
               Messenger
