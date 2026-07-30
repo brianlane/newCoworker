@@ -21,6 +21,11 @@ import {
 import { readLiveUsage, type GeminiLiveUsage } from "./live-usage.js";
 import { buildVoiceToolDeclarations } from "./tool-declarations.js";
 import { resolveVoiceName } from "./voice-name.js";
+import {
+  decideIvrPress,
+  IVR_REFALLBACK_MS,
+  type IvrPressSource
+} from "./ivr-gate-press.js";
 
 export { readLiveUsage, type GeminiLiveUsage };
 
@@ -928,6 +933,11 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   // alias, which is declared far below: the alias is only safe inside closures.
   const ivrGate = opts.dtmf && opts.intake?.ivrGate ? opts.intake.ivrGate : undefined;
   let acceptPressed = false;
+  let acceptPressInFlight = false;
+  let acceptPressCount = 0;
+  let lastAcceptPressAtMs = 0;
+  let ivrHumanHeard = false;
+  let ivrRefallbackArmed = false;
 
   /** The opening line, shared so no cue can quote a different one. */
   const intakeOpenerText = (): string =>
@@ -973,7 +983,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
         text:
           "[Coordinator, do NOT speak yet] The referral is accepted. Stay completely silent while the line connects. " +
           `The moment you hear a real person speak, say your opening line ONCE ("${intakeOpenerText()}"), never repeat it, ` +
-          "and then begin the intake."
+          "and then begin the intake. If the automated recording is still asking you to press a key, call press_digits again."
       });
       emitDiag("voice_bridge_ivr_gate_accepted");
     } catch (err) {
@@ -981,35 +991,83 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     }
   };
 
-  /** Press the accept digit, from either the model's cue or the backstop timer. */
+  /** One blind re-press if the first Telnyx-OK tone did not connect a human. */
+  const armIvrRefallback = (): void => {
+    if (!ivrGate || ivrRefallbackArmed) return;
+    ivrRefallbackArmed = true;
+    timers.push(
+      setTimeout(() => {
+        if (ended || ivrHumanHeard) return;
+        void pressAcceptDigit(ivrGate.digit, "refallback");
+      }, IVR_REFALLBACK_MS)
+    );
+  };
+
+  /**
+   * Press the accept digit (model cue, first backstop, or pre-human re-press).
+   * Telnyx OK is not treated as "partner accepted forever": while no human has
+   * been heard, model/refallback may send again after a cooldown.
+   */
   const pressAcceptDigit = async (
     digits: string,
-    source: "model" | "fallback"
+    source: IvrPressSource
   ): Promise<boolean> => {
-    if (acceptPressed || ended || !opts.dtmf) return false;
-    // Claim the press BEFORE awaiting so the backstop timer firing mid-request
-    // cannot double-send.
-    acceptPressed = true;
-    const result = await opts.dtmf.execute(digits).catch((err) => ({
-      ok: false,
-      detail: err instanceof Error ? err.message : String(err)
-    }));
-    if (!result.ok) {
-      // Let the other path retry: a refused press with no retry loses the
-      // referral, which is the exact failure this whole gate exists to avoid.
-      acceptPressed = false;
-      console.error("gemini-bridge: accept digit failed", { source, detail: result.detail });
-      emitDiag("voice_bridge_ivr_gate_press_failed", { source, detail: result.detail ?? "" });
-      return false;
-    }
-    console.log("gemini-bridge: accept digit pressed", {
-      callControlId: opts.callControlId,
-      digits,
+    const decision = decideIvrPress({
+      ended,
+      hasDtmf: Boolean(opts.dtmf),
+      inFlight: acceptPressInFlight,
+      acceptPressed,
+      humanHeard: ivrHumanHeard,
+      lastPressAtMs: lastAcceptPressAtMs,
+      nowMs: Date.now(),
       source
     });
-    emitDiag("voice_bridge_ivr_gate_pressed", { digits, source });
-    sendPostAcceptCue();
-    return true;
+    if (decision.action === "deny" || !opts.dtmf) return false;
+
+    // Claim BEFORE awaiting so the backstop timer cannot double-send mid-request.
+    acceptPressInFlight = true;
+    if (!decision.repress) acceptPressed = true;
+    try {
+      const result = await opts.dtmf.execute(digits).catch((err) => ({
+        ok: false,
+        detail: err instanceof Error ? err.message : String(err)
+      }));
+      if (!result.ok) {
+        // First press: unlock so the other path can retry. Re-press: leave
+        // acceptPressed set; cooldown still gates the next attempt.
+        if (!decision.repress) acceptPressed = false;
+        console.error("gemini-bridge: accept digit failed", { source, detail: result.detail });
+        emitDiag("voice_bridge_ivr_gate_press_failed", {
+          source,
+          detail: result.detail ?? "",
+          repress: decision.repress
+        });
+        return false;
+      }
+      acceptPressCount += 1;
+      lastAcceptPressAtMs = Date.now();
+      console.log("gemini-bridge: accept digit pressed", {
+        callControlId: opts.callControlId,
+        digits,
+        source,
+        attempt: acceptPressCount,
+        repress: decision.repress
+      });
+      if (decision.repress) {
+        emitDiag("voice_bridge_ivr_gate_repressed", {
+          digits,
+          source,
+          attempt: acceptPressCount
+        });
+      } else {
+        emitDiag("voice_bridge_ivr_gate_pressed", { digits, source });
+        sendPostAcceptCue();
+        armIvrRefallback();
+      }
+      return true;
+    } finally {
+      acceptPressInFlight = false;
+    }
   };
 
   const sendGreetingCue = (): void => {
@@ -1465,6 +1523,9 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             }
             diag.downlinkFrames += 1;
             diag.downlinkBytesPostHeader += outSamples.byteLength;
+            // Assistant audio after an accept press means a real person was
+            // connected; further IVR re-presses would only confuse the line.
+            if (acceptPressed) ivrHumanHeard = true;
             sendPcmToTelnyx(opts.ws, outSamples, downlinkTelemetry);
           } catch (e) {
             console.error("gemini-bridge: downlink chunk", e);
