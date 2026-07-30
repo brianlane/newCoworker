@@ -151,12 +151,12 @@ describe("email_organize schema + planner", () => {
         }
       ]
     });
-    const scrubbed = scrubDefinition(def);
+    const scrubbed = scrubDefinition(def) as {
+      steps: Array<{ type: string; connectionId?: string }>;
+    };
     const step = scrubbed.steps[0];
     expect(step.type).toBe("email_organize");
-    if (step.type === "email_organize") {
-      expect(step.connectionId).toBeUndefined();
-    }
+    expect(step.connectionId).toBeUndefined();
   });
 
   it("simulates in test mode", () => {

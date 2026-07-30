@@ -18,6 +18,7 @@
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { escapeLikeLiteral, isVpsReadMode, readMovedRows } from "@/lib/residency/read";
+import type { DataApiFilter } from "@/lib/residency/contract";
 import { softDeleteContentRows } from "@/lib/residency/row-delete";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -100,13 +101,13 @@ export type EmailLogRow = {
   provider_message_id: string | null;
   created_at: string;
   /** False until the owner or an organize step marks it read. */
-  is_read?: boolean;
+  is_read: boolean;
   /** Set when archived; null means Inbox (when not deleted). */
-  archived_at?: string | null;
+  archived_at: string | null;
   /** In-app folder name; null means Inbox. */
-  folder?: string | null;
+  folder: string | null;
   /** In-app labels (Gmail-like multi-label). */
-  labels?: string[];
+  labels: string[];
 };
 
 // The list query intentionally omits `body_full`: it loads up to 200 rows and
@@ -164,11 +165,7 @@ export async function listEmailLog(
   );
   const vpsReadMode = await isVpsReadMode(businessId, db);
   if (vpsReadMode) {
-    const filters: Array<{
-      column: string;
-      op: "eq" | "is" | "ilike";
-      value: unknown;
-    }> = [
+    const filters: DataApiFilter[] = [
       { column: "business_id", op: "eq", value: businessId },
       { column: "deleted_at", op: "is", value: null }
     ];
@@ -177,6 +174,14 @@ export async function listEmailLog(
     }
     if (options.inbox === true) {
       filters.push({ column: "archived_at", op: "is", value: null });
+    }
+    if (options.inbox === false) {
+      // Data API has no "is not null"; any real timestamp beats null in gte.
+      filters.push({
+        column: "archived_at",
+        op: "gte",
+        value: "1970-01-01T00:00:00.000Z"
+      });
     }
     if (options.unreadOnly) {
       filters.push({ column: "is_read", op: "eq", value: false });
@@ -193,9 +198,6 @@ export async function listEmailLog(
       limit: options.label ? Math.min(limit * 4, EMAIL_LOG_MAX_LIMIT) : limit
     });
     let out = rows.map(normalizeEmailLogRow);
-    if (options.inbox === false) {
-      out = out.filter((r) => r.archived_at != null);
-    }
     if (options.label) {
       const wanted = options.label.toLowerCase();
       out = out.filter((r) => r.labels.some((l) => l.toLowerCase() === wanted)).slice(0, limit);
@@ -430,7 +432,8 @@ export async function recordInboundTriggerEmail(
     source: "email_trigger",
     run_id: input.runId,
     flow_id: input.flowId,
-    provider_message_id: input.providerMessageId
+    provider_message_id: input.providerMessageId,
+    is_read: true
   });
   if (error) console.error("recordInboundTriggerEmail", error.message);
 }

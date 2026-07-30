@@ -177,7 +177,7 @@ alter table email_log add column if not exists body_html text;
 alter table email_log add column if not exists attachments jsonb not null default '[]'::jsonb;
 alter table email_log add column if not exists deleted_at timestamp with time zone;
 alter table email_log add column if not exists deleted_by uuid;
-alter table email_log add column if not exists is_read boolean not null default false;
+alter table email_log add column if not exists is_read boolean not null default true;
 alter table email_log add column if not exists archived_at timestamp with time zone;
 alter table email_log add column if not exists folder text;
 alter table email_log add column if not exists labels text[] not null default '{}'::text[];

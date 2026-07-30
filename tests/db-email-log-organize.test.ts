@@ -27,20 +27,12 @@ function makeSelectChain(row: unknown, error: { message: string } | null = null)
 
 function makeUpdateChain(error: { message: string } | null = null) {
   const result = { error };
-  const eq2 = vi.fn(() => result);
-  const eq1 = vi.fn(() => ({ eq: eq2 }));
-  // thenable for await db.from().update().eq().eq()
   const thenable = {
-    eq: eq1,
+    ...result,
     then: (resolve: (v: { error: typeof error }) => void) => resolve(result)
   };
-  eq1.mockImplementation(() => ({
-    eq: eq2,
-    then: thenable.then
-  }));
-  eq2.mockImplementation(() => ({
-    then: (resolve: (v: { error: typeof error }) => void) => resolve(result)
-  }));
+  const eq2 = vi.fn(() => thenable);
+  const eq1 = vi.fn(() => ({ eq: eq2, then: thenable.then, error }));
   const update = vi.fn(() => ({ eq: eq1 }));
   return { update, eq1, eq2 };
 }
@@ -292,6 +284,24 @@ describe("listEmailLog organize filters", () => {
       expect.objectContaining({
         filters: expect.arrayContaining([
           { column: "archived_at", op: "is", value: null }
+        ])
+      })
+    );
+  });
+
+  it("pushes archived_at gte on the VPS archived filter", async () => {
+    vi.mocked(isVpsReadMode).mockResolvedValue(true);
+    vi.mocked(readMovedRows).mockResolvedValue([]);
+    await listEmailLog(BIZ, { inbox: false, limit: 5 });
+    expect(readMovedRows).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({
+        filters: expect.arrayContaining([
+          {
+            column: "archived_at",
+            op: "gte",
+            value: "1970-01-01T00:00:00.000Z"
+          }
         ])
       })
     );

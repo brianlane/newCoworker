@@ -814,7 +814,13 @@ export function EmailsList({
       if (viewFilter === "received" && r.direction !== "inbound") return false;
       if (viewFilter === "inbox" && r.archived_at) return false;
       if (viewFilter === "archived" && !r.archived_at) return false;
-      if (viewFilter === "unread" && r.is_read) return false;
+      // Unread is meaningful for AI-mailbox rows; other sources stay "read".
+      if (
+        viewFilter === "unread" &&
+        (r.is_read || !r.source.startsWith("tenant_mailbox"))
+      ) {
+        return false;
+      }
       if (folderFilter && (r.folder ?? "") !== folderFilter) return false;
       if (labelFilter && !(r.labels ?? []).some((l) => l.toLowerCase() === labelFilter.toLowerCase())) {
         return false;
@@ -1017,7 +1023,7 @@ export function EmailsList({
                       >
                         {meta.label}
                       </span>
-                      {!r.is_read && (
+                      {r.source.startsWith("tenant_mailbox") && !r.is_read && (
                         <span
                           className="inline-block h-1.5 w-1.5 rounded-full bg-claw-green shrink-0"
                           aria-label="Unread"
@@ -1026,7 +1032,9 @@ export function EmailsList({
                       <span
                         className={[
                           "text-sm truncate",
-                          r.is_read ? "font-medium text-parchment/85" : "font-semibold text-parchment"
+                          r.source.startsWith("tenant_mailbox") && !r.is_read
+                            ? "font-semibold text-parchment"
+                            : "font-medium text-parchment/85"
                         ].join(" ")}
                       >
                         {r.subject || "(no subject)"}

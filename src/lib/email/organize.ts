@@ -157,26 +157,31 @@ async function organizeGmail(
   }
   if (actions.unarchive) addLabelIds.push("INBOX");
 
-  const needNames = [
-    ...normalizeLabelList(actions.addLabels),
-    ...normalizeLabelList(actions.removeLabels),
-    ...(actions.moveToFolder?.trim() ? [actions.moveToFolder.trim()] : [])
-  ];
+  const addNames = normalizeLabelList(actions.addLabels);
+  const removeNames = normalizeLabelList(actions.removeLabels);
+  const moveFolder = actions.moveToFolder?.trim() || "";
+  // Create-if-missing only for labels we apply; remove targets resolve from list.
+  const createNames = [...addNames, ...(moveFolder ? [moveFolder] : [])];
   let byName = new Map<string, string>();
-  if (needNames.length > 0) {
-    byName = await ensureGmailLabels(businessId, link, needNames);
+  if (createNames.length > 0 || removeNames.length > 0) {
+    const ensured = await ensureGmailLabels(businessId, link, createNames);
+    if (!ensured.ok) return { ok: false, detail: ensured.detail };
+    byName = ensured.map;
   }
-  for (const name of normalizeLabelList(actions.addLabels)) {
+  for (const name of addNames) {
     const id = byName.get(name.toLowerCase());
-    if (id) addLabelIds.push(id);
+    if (!id) return { ok: false, detail: `gmail_label_unresolved:${name}` };
+    addLabelIds.push(id);
   }
-  for (const name of normalizeLabelList(actions.removeLabels)) {
+  for (const name of removeNames) {
     const id = byName.get(name.toLowerCase());
+    // Missing remove target is a no-op (label already gone).
     if (id) removeLabelIds.push(id);
   }
-  if (actions.moveToFolder?.trim()) {
-    const id = byName.get(actions.moveToFolder.trim().toLowerCase());
-    if (id) addLabelIds.push(id);
+  if (moveFolder) {
+    const id = byName.get(moveFolder.toLowerCase());
+    if (!id) return { ok: false, detail: `gmail_label_unresolved:${moveFolder}` };
+    addLabelIds.push(id);
   }
 
   const uniqueAdd = [...new Set(addLabelIds)];
@@ -203,21 +208,24 @@ async function organizeGmail(
 async function ensureGmailLabels(
   businessId: string,
   link: { connectionId: string; providerConfigKey: string },
-  names: string[]
-): Promise<Map<string, string>> {
+  createNames: string[]
+): Promise<{ ok: true; map: Map<string, string> } | { ok: false; detail: string }> {
   const map = new Map<string, string>();
   const listRes = await nangoProxyForBusiness(businessId, link, {
     endpoint: "/gmail/v1/users/me/labels",
     method: "GET"
   });
-  if (!listRes) return map;
+  if (!listRes) return { ok: false, detail: "email_not_connected" };
+  if (listRes.status >= 400) {
+    return { ok: false, detail: `gmail_labels_list_failed:${listRes.status}` };
+  }
   const labels = ((listRes.data as { labels?: GmailLabel[] })?.labels ?? []).filter(
     (l): l is GmailLabel & { id: string; name: string } =>
       typeof l.id === "string" && typeof l.name === "string"
   );
   for (const l of labels) map.set(l.name.toLowerCase(), l.id);
 
-  for (const name of names) {
+  for (const name of createNames) {
     const key = name.toLowerCase();
     if (map.has(key)) continue;
     const created = await nangoProxyForBusiness(businessId, link, {
@@ -229,10 +237,17 @@ async function ensureGmailLabels(
         messageListVisibility: "show"
       }
     });
-    const id = (created?.data as { id?: string } | undefined)?.id;
-    if (typeof id === "string") map.set(key, id);
+    if (!created) return { ok: false, detail: "email_not_connected" };
+    if (created.status >= 400) {
+      return { ok: false, detail: `gmail_label_create_failed:${name}:${created.status}` };
+    }
+    const id = (created.data as { id?: string } | undefined)?.id;
+    if (typeof id !== "string") {
+      return { ok: false, detail: `gmail_label_create_failed:${name}` };
+    }
+    map.set(key, id);
   }
-  return map;
+  return { ok: true, map };
 }
 
 type GraphFolder = { id?: string; displayName?: string };

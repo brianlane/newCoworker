@@ -127,7 +127,7 @@ export async function PATCH(request: Request, ctx: { params: Promise<{ id: strin
       }
     });
     if (!result.ok) {
-      return errorResponse("BAD_REQUEST", result.detail, 400);
+      return errorResponse("VALIDATION_ERROR", result.detail, 400);
     }
     return successResponse({ ok: true, provider: result.provider });
   } catch (err) {

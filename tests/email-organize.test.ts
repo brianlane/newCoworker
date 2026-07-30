@@ -218,25 +218,24 @@ describe("organizeMessage", () => {
     );
   });
 
-  it("returns noop when Gmail modify has nothing to change", async () => {
+  it("fails when Gmail labels cannot be created or resolved", async () => {
     getConn.mockResolvedValue(gmailConn());
-    // addLabels that fail to resolve (list returns empty, create fails)
+    // addLabels: list empty, create fails
     nangoProxy
       .mockResolvedValueOnce({ status: 200, data: { labels: [] } })
       .mockResolvedValueOnce({ status: 500, data: {} });
-    const res = await organizeMessage({
-      businessId: BIZ,
-      connectionId: CONN,
-      messageId: "msg-3",
-      actions: { addLabels: ["Nope"] }
-    });
-    expect(res).toEqual({ ok: true, provider: "google", detail: "noop" });
+    await expect(
+      organizeMessage({
+        businessId: BIZ,
+        connectionId: CONN,
+        messageId: "msg-3",
+        actions: { addLabels: ["Nope"] }
+      })
+    ).resolves.toEqual({ ok: false, detail: "gmail_label_create_failed:Nope:500" });
 
-    // labels key missing on list; removeLabels name that never resolves → noop
+    // removeLabels name that never resolves → noop (label already gone)
     nangoProxy.mockReset();
-    nangoProxy
-      .mockResolvedValueOnce({ status: 200, data: {} })
-      .mockResolvedValueOnce({ status: 500, data: {} });
+    nangoProxy.mockResolvedValueOnce({ status: 200, data: {} });
     await expect(
       organizeMessage({
         businessId: BIZ,
@@ -246,12 +245,11 @@ describe("organizeMessage", () => {
       })
     ).resolves.toEqual({ ok: true, provider: "google", detail: "noop" });
 
-    // moveToFolder that never resolves still archives (remove INBOX)
+    // moveToFolder that never resolves fails (do not silent-archive)
     nangoProxy.mockReset();
     nangoProxy
       .mockResolvedValueOnce({ status: 200, data: { labels: [] } })
-      .mockResolvedValueOnce({ status: 500, data: {} })
-      .mockResolvedValueOnce({ status: 200, data: {} });
+      .mockResolvedValueOnce({ status: 500, data: {} });
     await expect(
       organizeMessage({
         businessId: BIZ,
@@ -259,7 +257,7 @@ describe("organizeMessage", () => {
         messageId: "msg-4b",
         actions: { moveToFolder: "Ghost" }
       })
-    ).resolves.toEqual({ ok: true, provider: "google" });
+    ).resolves.toEqual({ ok: false, detail: "gmail_label_create_failed:Ghost:500" });
 
     // add-only modify (no removeLabelIds branch)
     nangoProxy.mockReset();
@@ -518,13 +516,13 @@ describe("organizeMessage", () => {
   it("covers Gmail label-list disconnect and Outlook folder fallbacks", async () => {
     getConn.mockResolvedValue(gmailConn());
     nangoProxy.mockResolvedValueOnce(null); // labels list
-    const noop = await organizeMessage({
+    const disconnected = await organizeMessage({
       businessId: BIZ,
       connectionId: CONN,
       messageId: "m",
       actions: { addLabels: ["A"] }
     });
-    expect(noop).toEqual({ ok: true, provider: "google", detail: "noop" });
+    expect(disconnected).toEqual({ ok: false, detail: "email_not_connected" });
 
     getConn.mockResolvedValue(outlookConn());
     // well-known Archive miss → list null
