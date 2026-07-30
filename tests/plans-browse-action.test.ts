@@ -162,11 +162,35 @@ describe("validateBrowseActionSteps", () => {
         {
           id: "b2",
           type: "branch",
-          branches: [],
+          branches: [
+            {
+              id: "arm-sms",
+              label: "yes",
+              when: { var: "x", op: "eq", value: "1" },
+              steps: [{ id: "s", type: "send_sms", to: "+1", body: "hi" }]
+            }
+          ],
           else: [{ id: "e", type: "browse_action", url: "https://e.test", actions: [] }]
         } as never
       ])
     ).toBe(true);
+    expect(
+      flowStepsIncludeBrowseAction([
+        {
+          id: "b3",
+          type: "branch",
+          branches: [
+            {
+              id: "arm-sms2",
+              label: "yes",
+              when: { var: "x", op: "eq", value: "1" },
+              steps: [{ id: "s2", type: "send_sms", to: "+1", body: "hi" }]
+            }
+          ],
+          else: [{ id: "s3", type: "send_sms", to: "+1", body: "bye" }]
+        } as never
+      ])
+    ).toBe(false);
     expect(flowStepsIncludeBrowseAction([{ id: "s", type: "send_sms", to: "+1", body: "hi" } as never])).toBe(
       false
     );
