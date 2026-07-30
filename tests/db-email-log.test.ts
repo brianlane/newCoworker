@@ -89,7 +89,15 @@ describe("listEmailLog", () => {
   it("returns rows newest-first with the default limit", async () => {
     const c = listChain({ data: [ROW], error: null });
     const rows = await listEmailLog("biz", {}, makeDb(c) as never);
-    expect(rows).toEqual([ROW]);
+    expect(rows).toEqual([
+      {
+        ...ROW,
+        is_read: false,
+        archived_at: null,
+        folder: null,
+        labels: []
+      }
+    ]);
     expect(c.eq).toHaveBeenCalledWith("business_id", "biz");
     // Soft-deleted mail must never show in the inbox.
     expect(c.is).toHaveBeenCalledWith("deleted_at", null);

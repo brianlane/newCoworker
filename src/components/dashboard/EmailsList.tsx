@@ -200,7 +200,8 @@ function ReadingPane({
   emailContacts,
   onClose,
   onReply,
-  onDeleted
+  onDeleted,
+  onOrganized
 }: {
   row: EmailLogRow;
   businessId: string;
@@ -209,10 +210,62 @@ function ReadingPane({
   onClose: () => void;
   onReply: () => void;
   onDeleted: () => void;
+  onOrganized: () => void;
 }) {
   const meta = sourceMeta(row.source);
   const [state, setState] = useState<BodyState>({ status: "loading" });
   const [deleteState, setDeleteState] = useState<"idle" | "deleting" | "error">("idle");
+  const [orgBusy, setOrgBusy] = useState(false);
+  const [folderDraft, setFolderDraft] = useState(row.folder ?? "");
+  const [labelDraft, setLabelDraft] = useState("");
+  const canOrganize = row.source.startsWith("tenant_mailbox");
+
+  useEffect(() => {
+    setFolderDraft(row.folder ?? "");
+  }, [row.id, row.folder]);
+
+  async function organize(actions: Record<string, unknown>) {
+    setOrgBusy(true);
+    try {
+      const res = await fetch(`/api/dashboard/emails/${row.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ businessId, ...actions })
+      });
+      const json = await res.json().catch(() => null);
+      if (!res.ok || !json?.ok) return;
+      // Remember intentional unread so reopen does not immediately undo it.
+      if (actions.markUnread === true) {
+        try {
+          sessionStorage.setItem(`emails-skip-autoread:${row.id}`, "1");
+        } catch {
+          /* private mode / quota — best-effort */
+        }
+      } else if (actions.markRead === true) {
+        try {
+          sessionStorage.removeItem(`emails-skip-autoread:${row.id}`);
+        } catch {
+          /* ignore */
+        }
+      }
+      onOrganized();
+    } finally {
+      setOrgBusy(false);
+    }
+  }
+
+  // Opening an unread AI-mailbox message marks it read (best-effort), unless
+  // the owner just marked it unread in this browser session.
+  useEffect(() => {
+    if (!canOrganize || row.is_read) return;
+    try {
+      if (sessionStorage.getItem(`emails-skip-autoread:${row.id}`)) return;
+    } catch {
+      /* ignore */
+    }
+    void organize({ markRead: true });
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- once per open of this id
+  }, [row.id]);
 
   async function deleteEmail() {
     if (!window.confirm("Delete this email from your history?")) return;
@@ -289,7 +342,29 @@ function ReadingPane({
             {meta.label}
           </span>
         </div>
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-3 flex-wrap justify-end">
+          {canOrganize && (
+            <>
+              <button
+                type="button"
+                disabled={orgBusy}
+                onClick={() => void organize(row.is_read ? { markUnread: true } : { markRead: true })}
+                className="rounded-lg border border-parchment/25 px-3 py-1 text-xs font-semibold text-parchment/70 transition-colors hover:bg-parchment/5 disabled:opacity-50"
+              >
+                {row.is_read ? "Mark unread" : "Mark read"}
+              </button>
+              <button
+                type="button"
+                disabled={orgBusy}
+                onClick={() =>
+                  void organize(row.archived_at ? { unarchive: true } : { archive: true })
+                }
+                className="rounded-lg border border-parchment/25 px-3 py-1 text-xs font-semibold text-parchment/70 transition-colors hover:bg-parchment/5 disabled:opacity-50"
+              >
+                {row.archived_at ? "Unarchive" : "Archive"}
+              </button>
+            </>
+          )}
           {canReply && (
             <button
               type="button"
@@ -317,6 +392,66 @@ function ReadingPane({
           </button>
         </div>
       </div>
+      {canOrganize && (
+        <div className="mb-4 flex flex-wrap items-end gap-2">
+          <div className="min-w-[10rem]">
+            <label className="block text-[11px] uppercase tracking-wide text-parchment/40 mb-1">
+              Folder
+            </label>
+            <input
+              className="w-full rounded-md border border-parchment/15 bg-transparent px-2 py-1 text-sm text-parchment"
+              value={folderDraft}
+              onChange={(e) => setFolderDraft(e.target.value)}
+              placeholder="Inbox"
+            />
+          </div>
+          <button
+            type="button"
+            disabled={orgBusy}
+            onClick={() =>
+              void organize({ moveToFolder: folderDraft.trim() ? folderDraft.trim() : null })
+            }
+            className="rounded-lg border border-parchment/25 px-3 py-1 text-xs font-semibold text-parchment/70 hover:bg-parchment/5 disabled:opacity-50"
+          >
+            Move
+          </button>
+          <div className="min-w-[10rem]">
+            <label className="block text-[11px] uppercase tracking-wide text-parchment/40 mb-1">
+              Add label
+            </label>
+            <input
+              className="w-full rounded-md border border-parchment/15 bg-transparent px-2 py-1 text-sm text-parchment"
+              value={labelDraft}
+              onChange={(e) => setLabelDraft(e.target.value)}
+              placeholder="Sales"
+            />
+          </div>
+          <button
+            type="button"
+            disabled={orgBusy || !labelDraft.trim()}
+            onClick={() => {
+              const label = labelDraft.trim();
+              if (!label) return;
+              void organize({ addLabels: [label] }).then(() => setLabelDraft(""));
+            }}
+            className="rounded-lg border border-parchment/25 px-3 py-1 text-xs font-semibold text-parchment/70 hover:bg-parchment/5 disabled:opacity-50"
+          >
+            Label
+          </button>
+          {(row.labels ?? []).map((l) => (
+            <button
+              key={l}
+              type="button"
+              disabled={orgBusy}
+              title={`Remove label ${l}`}
+              onClick={() => void organize({ removeLabels: [l] })}
+              className="rounded-md bg-parchment/10 px-2 py-1 text-[11px] text-parchment/60 hover:bg-spark-orange/15 hover:text-spark-orange disabled:opacity-50"
+            >
+              {l} ×
+            </button>
+          ))}
+        </div>
+      )}
       {deleteState === "error" && (
         <p className="mb-3 text-xs text-spark-orange">Couldn&apos;t delete — try again.</p>
       )}
@@ -649,7 +784,10 @@ export function EmailsList({
   businessId,
   fromOptions = [],
   emailContacts = {},
-  replayFlows = []
+  replayFlows = [],
+  initialView = "all",
+  initialFolder = "",
+  initialLabel = ""
 }: {
   rows: EmailLogRow[];
   businessId: string;
@@ -659,6 +797,16 @@ export function EmailsList({
   emailContacts?: EmailContacts;
   /** Enabled tenant_email flows offered as replay targets (built server-side). */
   replayFlows?: ReplayFlowOption[];
+  /** Server-applied view from `/dashboard/emails?view=…`. */
+  initialView?:
+    | "all"
+    | "sent"
+    | "received"
+    | "inbox"
+    | "archived"
+    | "unread";
+  initialFolder?: string;
+  initialLabel?: string;
 }) {
   const router = useRouter();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -670,15 +818,85 @@ export function EmailsList({
     { field: "created_at", dir: "desc" },
     EMAIL_SORT_OPTIONS.map((o) => o.key)
   );
+  type ViewFilter =
+    | "all"
+    | "sent"
+    | "received"
+    | "inbox"
+    | "archived"
+    | "unread";
+  // Filter chips are URL-driven (server props). No local copy: that would
+  // desync on back/forward, and setState-in-effect is lint-blocked.
+  const viewFilter = initialView;
+  const folderFilter = initialFolder;
+  const labelFilter = initialLabel;
   const selected = rows.find((r) => r.id === selectedId) ?? null;
+
+  function navigateFilters(next: {
+    view?: ViewFilter;
+    folder?: string;
+    label?: string;
+  }) {
+    const view = next.view ?? viewFilter;
+    const folder = next.folder ?? folderFilter;
+    const label = next.label ?? labelFilter;
+    const params = new URLSearchParams();
+    if (view !== "all") params.set("view", view);
+    if (folder) params.set("folder", folder);
+    if (label) params.set("label", label);
+    const qs = params.toString();
+    router.push(qs ? `/dashboard/emails?${qs}` : "/dashboard/emails");
+    router.refresh();
+  }
+
+  const knownFolders = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of rows) if (r.folder) set.add(r.folder);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [rows]);
+  const knownLabels = useMemo(() => {
+    const set = new Set<string>();
+    for (const r of rows) for (const l of r.labels ?? []) if (l) set.add(l);
+    return [...set].sort((a, b) => a.localeCompare(b));
+  }, [rows]);
 
   // Filter + sort the already-loaded page in the browser. Selection still
   // resolves against the full `rows`, so an open message stays open even if a
   // later query would hide it from the list.
   const visibleRows = sortRows(
-    rows.filter((r) =>
-      matchesQuery(query, [r.subject, r.from_email, r.to_email, r.body_preview])
-    ),
+    rows.filter((r) => {
+      if (!matchesQuery(query, [r.subject, r.from_email, r.to_email, r.body_preview])) return false;
+      if (viewFilter === "sent" && r.direction !== "outbound") return false;
+      if (viewFilter === "received" && r.direction !== "inbound") return false;
+      if (
+        viewFilter === "inbox" &&
+        (!r.source.startsWith("tenant_mailbox") ||
+          r.direction !== "inbound" ||
+          r.archived_at ||
+          r.folder)
+      ) {
+        return false;
+      }
+      if (
+        viewFilter === "archived" &&
+        (!r.archived_at || !r.source.startsWith("tenant_mailbox"))
+      ) {
+        return false;
+      }
+      if (folderFilter && !r.source.startsWith("tenant_mailbox")) return false;
+      // Unread is meaningful for AI-mailbox rows; other sources stay "read".
+      if (
+        viewFilter === "unread" &&
+        (r.is_read || !r.source.startsWith("tenant_mailbox"))
+      ) {
+        return false;
+      }
+      if (folderFilter && (r.folder ?? "") !== folderFilter) return false;
+      if (labelFilter && !(r.labels ?? []).some((l) => l.toLowerCase() === labelFilter.toLowerCase())) {
+        return false;
+      }
+      return true;
+    }),
     (r) => emailSortValue(r, sort.field),
     sort.dir
   );
@@ -761,20 +979,92 @@ export function EmailsList({
         ].join(" ")}
       >
         {rows.length > 0 && (
-          <div className="mb-2 flex flex-wrap items-center justify-between gap-2">
-            <SearchControl
-              value={query}
-              onChange={setQuery}
-              placeholder="Search subject, sender, or body…"
-              idPrefix="emails-search"
-            />
-            <SortControl
-              options={EMAIL_SORT_OPTIONS}
-              field={sort.field}
-              dir={sort.dir}
-              onChange={setSort}
-              idPrefix="emails-sort"
-            />
+          <div className="mb-2 space-y-2">
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <SearchControl
+                value={query}
+                onChange={setQuery}
+                placeholder="Search subject, sender, or body…"
+                idPrefix="emails-search"
+              />
+              <SortControl
+                options={EMAIL_SORT_OPTIONS}
+                field={sort.field}
+                dir={sort.dir}
+                onChange={setSort}
+                idPrefix="emails-sort"
+              />
+            </div>
+            <div className="flex flex-wrap items-center gap-1.5" role="toolbar" aria-label="Email filters">
+              {(
+                [
+                  ["all", "All"],
+                  ["received", "Received"],
+                  ["sent", "Sent"],
+                  ["inbox", "Inbox"],
+                  ["archived", "Archived"],
+                  ["unread", "Unread"]
+                ] as const
+              ).map(([key, label]) => (
+                <button
+                  key={key}
+                  type="button"
+                  onClick={() =>
+                    navigateFilters({
+                      view: key,
+                      // Inbox is folder-null; clear any folder query.
+                      folder: key === "inbox" ? "" : folderFilter
+                    })
+                  }
+                  className={[
+                    "rounded-md px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide transition-colors",
+                    viewFilter === key
+                      ? "bg-claw-green/20 text-claw-green"
+                      : "bg-parchment/5 text-parchment/55 hover:bg-parchment/10 hover:text-parchment/80"
+                  ].join(" ")}
+                >
+                  {label}
+                </button>
+              ))}
+              {knownFolders.length > 0 && (
+                <select
+                  aria-label="Folder filter"
+                  className="rounded-md bg-parchment/5 px-2 py-1 text-[11px] text-parchment/70"
+                  value={folderFilter}
+                  onChange={(e) => {
+                    const folder = e.target.value;
+                    // Folder pick leaves the Inbox (folder-null) chip so the
+                    // client filter and server query stay aligned.
+                    navigateFilters({
+                      folder,
+                      view: folder && viewFilter === "inbox" ? "received" : viewFilter
+                    });
+                  }}
+                >
+                  <option value="">All folders</option>
+                  {knownFolders.map((f) => (
+                    <option key={f} value={f}>
+                      {f}
+                    </option>
+                  ))}
+                </select>
+              )}
+              {knownLabels.length > 0 && (
+                <select
+                  aria-label="Label filter"
+                  className="rounded-md bg-parchment/5 px-2 py-1 text-[11px] text-parchment/70"
+                  value={labelFilter}
+                  onChange={(e) => navigateFilters({ label: e.target.value })}
+                >
+                  <option value="">All labels</option>
+                  {knownLabels.map((l) => (
+                    <option key={l} value={l}>
+                      {l}
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
           </div>
         )}
         <Card padding="sm">
@@ -789,7 +1079,7 @@ export function EmailsList({
           )}
           {rows.length > 0 && visibleRows.length === 0 && (
             <div className="py-6 text-center text-sm text-parchment/50">
-              No emails match “{query}”.
+              No emails match this filter.
             </div>
           )}
           <ConversationScroll maxHeightClass="max-h-[70vh]" className="pr-1">
@@ -817,9 +1107,35 @@ export function EmailsList({
                       >
                         {meta.label}
                       </span>
-                      <span className="text-sm font-semibold text-parchment truncate">
+                      {r.source.startsWith("tenant_mailbox") && !r.is_read && (
+                        <span
+                          className="inline-block h-1.5 w-1.5 rounded-full bg-claw-green shrink-0"
+                          aria-label="Unread"
+                        />
+                      )}
+                      <span
+                        className={[
+                          "text-sm truncate",
+                          r.source.startsWith("tenant_mailbox") && !r.is_read
+                            ? "font-semibold text-parchment"
+                            : "font-medium text-parchment/85"
+                        ].join(" ")}
+                      >
                         {r.subject || "(no subject)"}
                       </span>
+                      {r.folder && (
+                        <span className="text-[10px] uppercase tracking-wide text-parchment/40">
+                          {r.folder}
+                        </span>
+                      )}
+                      {(r.labels ?? []).slice(0, 3).map((l) => (
+                        <span
+                          key={l}
+                          className="text-[10px] rounded px-1 py-0.5 bg-parchment/10 text-parchment/50"
+                        >
+                          {l}
+                        </span>
+                      ))}
                     </div>
                     <p className="text-xs text-parchment/60 mt-1 truncate">
                       {r.direction === "inbound"
@@ -877,6 +1193,7 @@ export function EmailsList({
               // the list immediately.
               router.refresh();
             }}
+            onOrganized={() => router.refresh()}
           />
         </div>
       )}

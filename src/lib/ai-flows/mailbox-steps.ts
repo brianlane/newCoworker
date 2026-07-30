@@ -25,7 +25,7 @@ export type MailboxConnectionRef = {
   stepId: string;
   connectionId: string;
   /** Which field carried the binding (both resolve through the same send path). */
-  use: "send_email" | "quiet_hours_email";
+  use: "send_email" | "quiet_hours_email" | "email_organize";
 };
 
 /** Every mailbox-bound step in the tree (trunk + branch arms + elses). */
@@ -35,6 +35,12 @@ export function collectMailboxConnectionRefs(def: AiFlowDefinition): MailboxConn
     for (const step of steps) {
       if (step.type === "send_email" && step.fromConnectionId) {
         out.push({ stepId: step.id, connectionId: step.fromConnectionId, use: "send_email" });
+      } else if (step.type === "email_organize" && step.connectionId) {
+        out.push({
+          stepId: step.id,
+          connectionId: step.connectionId,
+          use: "email_organize"
+        });
       } else if (step.type === "send_sms" && step.quietHours?.emailFromConnectionId) {
         out.push({
           stepId: step.id,
@@ -77,13 +83,15 @@ export async function validateMailboxConnectionSteps(
     const conn = byId.get(ref.connectionId);
     if (!conn) {
       issues.push(
-        `Step "${ref.stepId}" sends email from a mailbox that is no longer connected — pick a connected mailbox in the step's From field (or leave it as your AI coworker's email), reconnecting under Settings → Integrations if needed.`
+        ref.use === "email_organize"
+          ? `Step "${ref.stepId}" organizes a mailbox that is no longer connected — pick a connected mailbox (or leave it as your AI coworker's mailbox), reconnecting under Settings → Integrations if needed.`
+          : `Step "${ref.stepId}" sends email from a mailbox that is no longer connected — pick a connected mailbox in the step's From field (or leave it as your AI coworker's email), reconnecting under Settings → Integrations if needed.`
       );
       continue;
     }
     if (!isEmailProviderConfigKey(conn.provider_config_key)) {
       issues.push(
-        `Step "${ref.stepId}" sends email from the "${conn.provider_config_key}" connection, which is not an email mailbox — pick a connected Gmail/Outlook mailbox instead.`
+        `Step "${ref.stepId}" uses the "${conn.provider_config_key}" connection, which is not an email mailbox — pick a connected Gmail/Outlook mailbox instead.`
       );
     }
   }
@@ -135,6 +143,12 @@ export function collectRawWorkspaceConnectionRefs(definition: unknown): string[]
           out.add(qh.emailFromConnectionId);
         }
       } else if (step.type === "email_extract" && typeof step.connectionId === "string" && step.connectionId) {
+        out.add(step.connectionId);
+      } else if (
+        step.type === "email_organize" &&
+        typeof step.connectionId === "string" &&
+        step.connectionId
+      ) {
         out.add(step.connectionId);
       } else if (step.type === "branch") {
         for (const arm of Array.isArray(step.branches) ? step.branches : []) {

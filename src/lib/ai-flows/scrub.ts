@@ -194,6 +194,11 @@ export function scrubDefinition(
           // coworker's own mailbox by dropping the connection binding.
           delete step.fromConnectionId;
           break;
+        case "email_organize":
+          // Connected mailbox id is tenant-specific; default the library copy
+          // to the AI coworker's in-app mailbox.
+          delete step.connectionId;
+          break;
         case "send_sms": {
           const qh = step.quietHours as Record<string, unknown> | undefined;
           if (qh) delete qh.emailFromConnectionId;

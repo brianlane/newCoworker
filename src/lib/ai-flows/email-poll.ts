@@ -554,7 +554,7 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
       // same message, but the mailbox write should happen once.
       const markedHandled = new Set<string>();
       for (const msg of messages) {
-        const scope = emailTriggerScope(msg);
+        const scope = emailTriggerScope(msg, { connectionId });
         for (const flow of group) {
           seenRows.push({ flow_id: flow.id, message_id: msg.id });
           if (

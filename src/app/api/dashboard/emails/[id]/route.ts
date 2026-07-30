@@ -21,6 +21,7 @@ import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getEmailBody, softDeleteEmailLogEntry } from "@/lib/db/email-log";
+import { organizeMessage } from "@/lib/email/organize";
 import { rateLimit } from "@/lib/rate-limit";
 
 export const dynamic = "force-dynamic";
@@ -37,6 +38,18 @@ const paramsSchema = z.object({ id: z.string().uuid() });
 const querySchema = z.object({ businessId: z.string().uuid() });
 
 const DELETE_RATE = { interval: 60 * 1000, maxRequests: 30 };
+const PATCH_RATE = { interval: 60 * 1000, maxRequests: 60 };
+
+const organizeBodySchema = z.object({
+  businessId: z.string().uuid(),
+  markRead: z.boolean().optional(),
+  markUnread: z.boolean().optional(),
+  archive: z.boolean().optional(),
+  unarchive: z.boolean().optional(),
+  addLabels: z.array(z.string().min(1).max(120)).max(20).optional(),
+  removeLabels: z.array(z.string().min(1).max(120)).max(20).optional(),
+  moveToFolder: z.string().max(120).nullable().optional()
+});
 
 export async function GET(request: Request, ctx: { params: Promise<{ id: string }> }) {
   try {
@@ -75,6 +88,48 @@ export async function GET(request: Request, ctx: { params: Promise<{ id: string 
       body_html: body.body_html,
       attachments
     });
+  } catch (err) {
+    return handleRouteError(err);
+  }
+}
+
+/**
+ * PATCH /api/dashboard/emails/:id
+ *   Body: { businessId, markRead?, markUnread?, archive?, unarchive?,
+ *           addLabels?, removeLabels?, moveToFolder? }
+ *   In-app organization for AI-mailbox (and any email_log) rows.
+ */
+export async function PATCH(request: Request, ctx: { params: Promise<{ id: string }> }) {
+  try {
+    const user = await getAuthUser();
+    if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
+
+    const { id } = paramsSchema.parse(await ctx.params);
+    const body = organizeBodySchema.parse(await request.json());
+    if (!user.isAdmin) await requireBusinessRole(body.businessId, "operate_messages");
+
+    const limiter = rateLimit(`email-organize:${body.businessId}`, PATCH_RATE);
+    if (!limiter.success) {
+      return errorResponse("CONFLICT", "Too many updates, slow down.", 429);
+    }
+
+    const result = await organizeMessage({
+      businessId: body.businessId,
+      emailLogId: id,
+      actions: {
+        markRead: body.markRead,
+        markUnread: body.markUnread,
+        archive: body.archive,
+        unarchive: body.unarchive,
+        addLabels: body.addLabels,
+        removeLabels: body.removeLabels,
+        moveToFolder: body.moveToFolder
+      }
+    });
+    if (!result.ok) {
+      return errorResponse("VALIDATION_ERROR", result.detail, 400);
+    }
+    return successResponse({ ok: true, provider: result.provider });
   } catch (err) {
     return handleRouteError(err);
   }

@@ -463,6 +463,35 @@ function StepBody({ step, coworkerEmail }: { step: FlowStep; coworkerEmail?: str
           {step.attachScreenshot && <Chip>Attaches an earlier screenshot</Chip>}
         </>
       );
+    case "email_organize":
+      return (
+        <>
+          <Row
+            label="Mailbox"
+            value={
+              step.connectionId
+                ? "Connected Gmail or Outlook"
+                : "AI coworker mailbox (in-app)"
+            }
+          />
+          <Row
+            label="Message"
+            value={step.messageIdTemplate?.trim() || "{{trigger.message_id}}"}
+            mono
+          />
+          {step.moveToFolder && <Row label="Move to folder" value={step.moveToFolder} />}
+          {step.addLabels && step.addLabels.length > 0 && (
+            <Row label="Add labels" value={step.addLabels.join(", ")} />
+          )}
+          {step.removeLabels && step.removeLabels.length > 0 && (
+            <Row label="Remove labels" value={step.removeLabels.join(", ")} />
+          )}
+          {step.archive && <Chip>Archive</Chip>}
+          {step.unarchive && <Chip>Unarchive</Chip>}
+          {step.markRead && <Chip>Mark read</Chip>}
+          {step.markUnread && <Chip>Mark unread</Chip>}
+        </>
+      );
     case "approval_gate":
       return <Row label="Approval prompt" value={step.prompt} />;
     case "notify_owner":

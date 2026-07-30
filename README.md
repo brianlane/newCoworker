@@ -2047,6 +2047,25 @@ from a new surface without it. Contracts pinned live in
 features in the shared `ai-flow-worker`, not per-tenant tools — they need
 none of this.
 
+## Email organization (AiFlow `email_organize`)
+
+Owners can file inbound mail from AiFlows: label, move to a folder, archive,
+and mark read/unread. One step covers three backends:
+
+- **Connected Gmail** (existing `gmail.modify`): labels, archive (remove
+  `INBOX`), mark read/unread.
+- **Connected Outlook**: Graph move / `isRead` / categories. Requires the
+  Outlook Nango integration to include `Mail.ReadWrite`; owners who connected
+  before that grant must reconnect under Dashboard → Integrations.
+- **AI coworker mailbox** (`*@newcoworker.com`): in-app fields on `email_log`
+  (`is_read`, `archived_at`, `folder`, `labels`), filtered and acted on from
+  Dashboard → Emails. Soft-delete stays separate from archive.
+
+Typical shape: `email` or `tenant_email` trigger → `classify` → `branch` →
+`email_organize` on each arm. Connected-mailbox watching remains the ~1/min
+poll; AI-mailbox inbound remains Cloudflare Email Routing → `/api/email/inbound`.
+No Gmail watch / Graph push subscriptions.
+
 ## Email coworker (replies in threads the assistant started)
 
 Inbound email used to reach AI only as an AiFlow TRIGGER, so a delegate's

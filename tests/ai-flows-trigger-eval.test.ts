@@ -227,6 +227,19 @@ describe("emailTriggerScope", () => {
     expect(scope.windowText.length).toBe(EMAIL_WINDOW_TEXT_MAX);
     expect("received_at" in scope).toBe(false);
   });
+
+  it("carries the watched mailbox connection_id for organize steps", () => {
+    const scope = emailTriggerScope(
+      {
+        id: "m3",
+        fromEmail: "a@b.c",
+        subject: "s",
+        bodyText: "body"
+      },
+      { connectionId: "16cff2b9-b4d3-421c-b25d-b40edd80c9a8" }
+    );
+    expect(scope.connection_id).toBe("16cff2b9-b4d3-421c-b25d-b40edd80c9a8");
+  });
 });
 
 describe("tenantEmailTriggerScope", () => {

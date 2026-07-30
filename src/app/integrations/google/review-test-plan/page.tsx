@@ -128,7 +128,7 @@ export default function GoogleReviewTestPlanPage() {
             </p>
           </Step>
 
-          <Step n={5} title="gmail.modify: read, reply from the owner's address, mark handled">
+          <Step n={5} title="gmail.modify: read, reply, mark handled, and organize">
             <p>
               Open <b>Dashboard → AiFlows</b> and enable the pre-seeded email demo flow, choosing
               the mailbox you connected in Step 2 as its watched mailbox (one dropdown in the
@@ -142,9 +142,11 @@ export default function GoogleReviewTestPlanPage() {
               Expected: the inbound email appears on <b>Dashboard → Emails</b> as the trigger of a
               flow run; the AI&apos;s reply is sent <b>from the connected Gmail address</b> (visible
               in the Gmail account&apos;s Sent folder); and the original message is <b>marked
-              read</b> in the connected inbox, so the owner can see at a glance that their
-              coworker handled it. Reading alone cannot send the reply and sending alone cannot
-              read or mark the message, which is why the combined{" "}
+              read</b> in the connected inbox. When the flow includes an{" "}
+              <code className="text-xs text-claw-green">email_organize</code> step, the same
+              modify API also applies the owner&apos;s labels or archives the message (removes
+              INBOX). Reading alone cannot send the reply and sending alone cannot read, label,
+              or mark the message, which is why the combined{" "}
               <code className="text-xs text-claw-green">gmail.modify</code> scope is requested.
             </p>
           </Step>

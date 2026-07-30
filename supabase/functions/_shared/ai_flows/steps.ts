@@ -361,6 +361,19 @@ export type StepAction =
       fromConnectionId?: string;
     }
   | {
+      kind: "email_organize";
+      messageId: string;
+      emailLogId?: string;
+      connectionId?: string;
+      markRead?: boolean;
+      markUnread?: boolean;
+      archive?: boolean;
+      unarchive?: boolean;
+      addLabels?: string[];
+      removeLabels?: string[];
+      moveToFolder?: string;
+    }
+  | {
       /**
        * Run a saved Agent on flow content: the worker POSTs the rendered
        * input (text or a document ref) to the platform's gateway-guarded
@@ -1206,6 +1219,59 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           attachScreenshot: step.attachScreenshot === true,
           ...(attachDocumentRef ? { attachDocumentRef } : {}),
           ...(step.fromConnectionId ? { fromConnectionId: step.fromConnectionId } : {})
+        }
+      };
+    }
+    case "email_organize": {
+      const messageIdTpl = step.messageIdTemplate?.trim() || "{{trigger.message_id}}";
+      const messageId = renderTemplate(messageIdTpl, scope, { collapseEmpty: true }).trim();
+      // Prefer step.connectionId; on connected `email` triggers fall back to
+      // trigger.connection_id so organize writes the provider mailbox.
+      const triggerConnectionRaw = scope.trigger?.connection_id;
+      const triggerConnectionId =
+        typeof triggerConnectionRaw === "string" && triggerConnectionRaw.trim()
+          ? triggerConnectionRaw.trim()
+          : undefined;
+      const connectionId = step.connectionId?.trim() || triggerConnectionId;
+      if (!messageId && !connectionId) {
+        // Tenant path can still organize via email_log_id alone.
+        const emailLogIdRaw = scope.trigger?.email_log_id;
+        const emailLogId =
+          typeof emailLogIdRaw === "string" ? emailLogIdRaw.trim() : "";
+        if (!emailLogId) {
+          return { ok: false, error: "email_organize: message id is empty after templating" };
+        }
+      } else if (!messageId && connectionId) {
+        return { ok: false, error: "email_organize: message id is empty after templating" };
+      }
+      const emailLogIdRaw = scope.trigger?.email_log_id;
+      const emailLogId =
+        typeof emailLogIdRaw === "string" && emailLogIdRaw.trim()
+          ? emailLogIdRaw.trim()
+          : undefined;
+      const addLabels = (step.addLabels ?? [])
+        .map((l) => renderTemplate(l, scope, { collapseEmpty: true }).trim())
+        .filter(Boolean);
+      const removeLabels = (step.removeLabels ?? [])
+        .map((l) => renderTemplate(l, scope, { collapseEmpty: true }).trim())
+        .filter(Boolean);
+      const moveToFolder = step.moveToFolder
+        ? renderTemplate(step.moveToFolder, scope, { collapseEmpty: true }).trim()
+        : "";
+      return {
+        ok: true,
+        action: {
+          kind: "email_organize",
+          messageId,
+          ...(emailLogId ? { emailLogId } : {}),
+          ...(connectionId ? { connectionId } : {}),
+          ...(step.markRead ? { markRead: true } : {}),
+          ...(step.markUnread ? { markUnread: true } : {}),
+          ...(step.archive ? { archive: true } : {}),
+          ...(step.unarchive ? { unarchive: true } : {}),
+          ...(addLabels.length ? { addLabels } : {}),
+          ...(removeLabels.length ? { removeLabels } : {}),
+          ...(moveToFolder ? { moveToFolder } : {})
         }
       };
     }

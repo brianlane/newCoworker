@@ -15,6 +15,11 @@ import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
 import { listEmailLog } from "@/lib/db/email-log";
+import {
+  coerceEmailsViewFilter,
+  emailListFiltersFromView,
+  parseEmailsViewFilter
+} from "@/lib/dashboard/email-filters";
 import { listSendFromOptions } from "@/lib/email/mailbox-options";
 import { findContactsByEmails, type EmailContactLink } from "@/lib/db/contact-emails";
 import { listAiFlows } from "@/lib/ai-flows/db";
@@ -23,10 +28,25 @@ import { EmailsList } from "@/components/dashboard/EmailsList";
 
 export const dynamic = "force-dynamic";
 
-export default async function DashboardEmailsPage() {
+export default async function DashboardEmailsPage({
+  searchParams
+}: {
+  searchParams: Promise<{ view?: string; folder?: string; label?: string }>;
+}) {
   const t = await getTranslations("dashboard.pages");
   const user = await getAuthUser();
   if (!user?.email) redirect("/login?redirectTo=/dashboard/emails");
+
+  const sp = await searchParams;
+  const folderFilter = typeof sp.folder === "string" ? sp.folder.trim() : "";
+  const labelFilter = typeof sp.label === "string" ? sp.label.trim() : "";
+  const viewFilter = coerceEmailsViewFilter(parseEmailsViewFilter(sp.view), folderFilter);
+  const listFilters = emailListFiltersFromView({
+    view: viewFilter,
+    folder: folderFilter,
+    label: labelFilter,
+    limit: 100
+  });
 
   // Admin view-as swaps in the impersonated tenant's owner email.
   const ownerEmail = (await resolveDashboardOwnerEmail(user)) ?? user.email;
@@ -64,7 +84,7 @@ export default async function DashboardEmailsPage() {
   }
 
   const [rows, fromOptions, flows] = await Promise.all([
-    listEmailLog(business.id, { limit: 100 }),
+    listEmailLog(business.id, listFilters),
     // Best-effort: on any failure the composer falls back to coworker-only send.
     listSendFromOptions(business.id).catch(() => []),
     // Replay targets ("Replay through flow" on unmatched inbox mail): enabled
@@ -113,6 +133,9 @@ export default async function DashboardEmailsPage() {
         fromOptions={fromOptions}
         emailContacts={emailContacts}
         replayFlows={replayFlows}
+        initialView={viewFilter}
+        initialFolder={folderFilter}
+        initialLabel={labelFilter}
       />
     </div>
   );

@@ -1856,6 +1856,8 @@ async function runStep(
       return sendWhatsAppStep(supabase, run, scope, action);
     case "send_email":
       return sendEmailStep(supabase, run, index, scope, action);
+    case "email_organize":
+      return emailOrganizeStep(run, action);
     case "share_document":
       return shareDocumentStep(supabase, run, index, scope, action);
     case "run_agent":
@@ -5549,6 +5551,64 @@ function bytesToBase64(bytes: Uint8Array): string {
     bin += String.fromCharCode(...bytes.subarray(i, i + chunk));
   }
   return btoa(bin);
+}
+
+/**
+ * email_organize: label / move / archive / mark read via the platform
+ * gateway (/api/aiflows/organize-email). No contact outreach — not a COMM step.
+ */
+async function emailOrganizeStep(
+  run: RunRow,
+  action: Extract<StepAction, { kind: "email_organize" }>
+): Promise<StepOutcome> {
+  const base = Deno.env.get("AIFLOW_PLATFORM_URL") ?? "";
+  const token = Deno.env.get("ROWBOAT_GATEWAY_TOKEN") ?? "";
+  if (!base || !token) {
+    return { kind: "fail", error: "email_organize: platform proxy not configured" };
+  }
+  const res = await fetch(`${base}/api/aiflows/organize-email`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    body: JSON.stringify({
+      businessId: run.business_id,
+      ...(action.connectionId ? { connectionId: action.connectionId } : {}),
+      ...(action.messageId ? { messageId: action.messageId } : {}),
+      ...(action.emailLogId ? { emailLogId: action.emailLogId } : {}),
+      actions: {
+        ...(action.markRead ? { markRead: true } : {}),
+        ...(action.markUnread ? { markUnread: true } : {}),
+        ...(action.archive ? { archive: true } : {}),
+        ...(action.unarchive ? { unarchive: true } : {}),
+        ...(action.addLabels?.length ? { addLabels: action.addLabels } : {}),
+        ...(action.removeLabels?.length ? { removeLabels: action.removeLabels } : {}),
+        ...(action.moveToFolder ? { moveToFolder: action.moveToFolder } : {})
+      }
+    })
+  });
+  if (res.status >= 500) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`email_organize: ${res.status}: ${body.slice(0, 200)}`);
+  }
+  let parsed: { ok?: boolean; detail?: string; data?: { provider?: string } };
+  try {
+    parsed = (await res.json()) as typeof parsed;
+  } catch {
+    throw new Error("email_organize: invalid response body");
+  }
+  if (!parsed.ok) {
+    return {
+      kind: "fail",
+      error: `email_organize: ${parsed.detail ?? `http ${res.status}`}`
+    };
+  }
+  return {
+    kind: "ok",
+    result: {
+      organized: true,
+      provider: parsed.data?.provider ?? null,
+      message_id: action.messageId || null
+    }
+  };
 }
 
 /**

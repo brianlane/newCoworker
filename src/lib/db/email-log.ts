@@ -18,6 +18,7 @@
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { escapeLikeLiteral, isVpsReadMode, readMovedRows } from "@/lib/residency/read";
+import type { DataApiFilter } from "@/lib/residency/contract";
 import { softDeleteContentRows } from "@/lib/residency/row-delete";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -37,7 +38,11 @@ const EMAIL_LOG_COLUMNS = [
   "run_id",
   "flow_id",
   "provider_message_id",
-  "created_at"
+  "created_at",
+  "is_read",
+  "archived_at",
+  "folder",
+  "labels"
 ];
 
 export type EmailLogSource =
@@ -95,6 +100,14 @@ export type EmailLogRow = {
   flow_id: string | null;
   provider_message_id: string | null;
   created_at: string;
+  /** False until the owner or an organize step marks it read. */
+  is_read: boolean;
+  /** Set when archived; null means Inbox (when not deleted). */
+  archived_at: string | null;
+  /** In-app folder name; null means Inbox. */
+  folder: string | null;
+  /** In-app labels (Gmail-like multi-label). */
+  labels: string[];
 };
 
 // The list query intentionally omits `body_full`: it loads up to 200 rows and
@@ -102,7 +115,7 @@ export type EmailLogRow = {
 // fetched on demand via getEmailBody when a message is opened in the reading
 // pane — see /api/dashboard/emails/[id].
 const EMAIL_LOG_SELECT =
-  "id, business_id, direction, to_email, from_email, subject, body_preview, cc_email, bcc_email, source, run_id, flow_id, provider_message_id, created_at";
+  "id, business_id, direction, to_email, from_email, subject, body_preview, cc_email, bcc_email, source, run_id, flow_id, provider_message_id, created_at, is_read, archived_at, folder, labels";
 
 /** Join a recipient list into the stored CSV form, or null when empty. */
 function recipientsToCsv(recipients?: string[] | null): string | null {
@@ -113,10 +126,37 @@ function recipientsToCsv(recipients?: string[] | null): string | null {
 export const EMAIL_LOG_DEFAULT_LIMIT = 50;
 export const EMAIL_LOG_MAX_LIMIT = 200;
 
+export type ListEmailLogFilters = {
+  limit?: number;
+  /** inbound | outbound */
+  direction?: "inbound" | "outbound";
+  /**
+   * When true: Inbox view (inbound, not archived, folder null).
+   * When false: only archived rows.
+   */
+  inbox?: boolean;
+  unreadOnly?: boolean;
+  folder?: string | null;
+  /** Match rows whose labels array contains this value. */
+  label?: string | null;
+  /** Restrict to these email_log.source values. */
+  sources?: EmailLogSource[];
+};
+
+function normalizeEmailLogRow(row: EmailLogRow): EmailLogRow {
+  return {
+    ...row,
+    is_read: row.is_read === true,
+    archived_at: row.archived_at ?? null,
+    folder: row.folder ?? null,
+    labels: Array.isArray(row.labels) ? row.labels : []
+  };
+}
+
 /** Most-recent-first email activity for a business. */
 export async function listEmailLog(
   businessId: string,
-  options: { limit?: number } = {},
+  options: ListEmailLogFilters = {},
   client?: SupabaseClient
 ): Promise<EmailLogRow[]> {
   const db = client ?? (await createSupabaseServiceClient());
@@ -128,28 +168,69 @@ export async function listEmailLog(
       EMAIL_LOG_MAX_LIMIT
     )
   );
-    const vpsReadMode = await isVpsReadMode(businessId, db);
+  const vpsReadMode = await isVpsReadMode(businessId, db);
   if (vpsReadMode) {
-    return await readMovedRows<EmailLogRow>(businessId, {
+    const filters: DataApiFilter[] = [
+      { column: "business_id", op: "eq", value: businessId },
+      { column: "deleted_at", op: "is", value: null }
+    ];
+    if (options.inbox === true) {
+      filters.push({ column: "direction", op: "eq", value: "inbound" });
+      filters.push({ column: "archived_at", op: "is", value: null });
+      filters.push({ column: "folder", op: "is", value: null });
+    } else if (options.direction) {
+      filters.push({ column: "direction", op: "eq", value: options.direction });
+    }
+    if (options.inbox === false) {
+      // Data API has no "is not null"; any real timestamp beats null in gte.
+      filters.push({
+        column: "archived_at",
+        op: "gte",
+        value: "1970-01-01T00:00:00.000Z"
+      });
+    }
+    if (options.unreadOnly) {
+      filters.push({ column: "is_read", op: "eq", value: false });
+    }
+    if (options.folder) {
+      filters.push({ column: "folder", op: "eq", value: options.folder });
+    }
+    if (options.sources?.length) {
+      filters.push({ column: "source", op: "in", value: options.sources });
+    }
+    // Box path has no contains-array filter; filter labels in JS after fetch.
+    const rows = await readMovedRows<EmailLogRow>(businessId, {
       table: "email_log",
       columns: EMAIL_LOG_COLUMNS,
-      filters: [
-        { column: "business_id", op: "eq", value: businessId },
-        { column: "deleted_at", op: "is", value: null }
-      ],
+      filters,
       order: [{ column: "created_at", ascending: false }],
-      limit
+      limit: options.label ? Math.min(limit * 4, EMAIL_LOG_MAX_LIMIT) : limit
     });
+    let out = rows.map(normalizeEmailLogRow);
+    if (options.label) {
+      const wanted = options.label.toLowerCase();
+      out = out.filter((r) => r.labels.some((l) => l.toLowerCase() === wanted)).slice(0, limit);
+    }
+    return out.slice(0, limit);
   }
-  const { data, error } = await db
+  let q = db
     .from("email_log")
     .select(EMAIL_LOG_SELECT)
     .eq("business_id", businessId)
-    .is("deleted_at", null)
-    .order("created_at", { ascending: false })
-    .limit(limit);
+    .is("deleted_at", null);
+  if (options.inbox === true) {
+    q = q.eq("direction", "inbound").is("archived_at", null).is("folder", null);
+  } else if (options.direction) {
+    q = q.eq("direction", options.direction);
+  }
+  if (options.inbox === false) q = q.not("archived_at", "is", null);
+  if (options.unreadOnly) q = q.eq("is_read", false);
+  if (options.folder) q = q.eq("folder", options.folder);
+  if (options.sources?.length) q = q.in("source", options.sources);
+  if (options.label) q = q.contains("labels", [options.label]);
+  const { data, error } = await q.order("created_at", { ascending: false }).limit(limit);
   if (error) throw new Error(`listEmailLog: ${error.message}`);
-  return (data as EmailLogRow[] | null) ?? [];
+  return ((data as EmailLogRow[] | null) ?? []).map(normalizeEmailLogRow);
 }
 
 /**
@@ -364,7 +445,8 @@ export async function recordInboundTriggerEmail(
     source: "email_trigger",
     run_id: input.runId,
     flow_id: input.flowId,
-    provider_message_id: input.providerMessageId
+    provider_message_id: input.providerMessageId,
+    is_read: true
   });
   if (error) console.error("recordInboundTriggerEmail", error.message);
 }
@@ -418,7 +500,10 @@ export async function recordTenantMailboxInbound(
         source: "tenant_mailbox_inbound",
         run_id: input.runId ?? null,
         flow_id: input.flowId ?? null,
-        provider_message_id: input.providerMessageId ?? null
+        provider_message_id: input.providerMessageId ?? null,
+        is_read: false,
+        folder: null,
+        labels: []
       })
       .select("id")
       .maybeSingle();
@@ -499,10 +584,100 @@ export async function recordOutboundAssistantEmail(
       source: input.source,
       run_id: null,
       flow_id: null,
-      provider_message_id: input.providerMessageId ?? null
+      provider_message_id: input.providerMessageId ?? null,
+      is_read: true
     });
     if (error) console.error("recordOutboundAssistantEmail", error.message);
   } catch (err) {
     console.error("recordOutboundAssistantEmail", err instanceof Error ? err.message : err);
   }
+}
+
+export type OrganizeTenantEmailInput = {
+  businessId: string;
+  emailLogId?: string | null;
+  providerMessageId?: string | null;
+  markRead?: boolean;
+  markUnread?: boolean;
+  archive?: boolean;
+  unarchive?: boolean;
+  addLabels?: string[];
+  removeLabels?: string[];
+  /** null or "" clears folder back to Inbox. */
+  moveToFolder?: string | null;
+};
+
+/**
+ * Apply in-app organization to one email_log row (AI mailbox). Returns true
+ * when a row was updated.
+ */
+export async function organizeTenantEmailLog(
+  input: OrganizeTenantEmailInput,
+  client?: SupabaseClient
+): Promise<boolean> {
+  if (!input.emailLogId && !input.providerMessageId) return false;
+  const db = client ?? (await createSupabaseServiceClient());
+  let q = db
+    .from("email_log")
+    .select("id, is_read, archived_at, folder, labels")
+    .eq("business_id", input.businessId)
+    .is("deleted_at", null);
+  if (input.emailLogId) q = q.eq("id", input.emailLogId);
+  else q = q.eq("provider_message_id", input.providerMessageId!);
+  const { data, error } = await q.maybeSingle();
+  if (error) throw new Error(`organizeTenantEmailLog: ${error.message}`);
+  if (!data) return false;
+  const row = data as {
+    id: string;
+    is_read: boolean | null;
+    archived_at: string | null;
+    folder: string | null;
+    labels: string[] | null;
+  };
+
+  const patch: Record<string, unknown> = {};
+  if (input.markRead) patch.is_read = true;
+  if (input.markUnread) patch.is_read = false;
+  if (input.archive) {
+    patch.archived_at = new Date().toISOString();
+  }
+  if (input.unarchive) {
+    patch.archived_at = null;
+  }
+  if (input.moveToFolder !== undefined) {
+    const folder = (input.moveToFolder ?? "").trim();
+    patch.folder = folder.length > 0 ? folder.slice(0, 120) : null;
+  }
+  const labels = (Array.isArray(row.labels) ? row.labels : []).filter(
+    (l): l is string => typeof l === "string" && l.length > 0
+  );
+  let labelsChanged = false;
+  for (const add of input.addLabels ?? []) {
+    const t = add.trim().slice(0, 120);
+    if (!t) continue;
+    if (!labels.some((l) => l.toLowerCase() === t.toLowerCase())) {
+      labels.push(t);
+      labelsChanged = true;
+    }
+  }
+  for (const rem of input.removeLabels ?? []) {
+    const t = rem.trim().toLowerCase();
+    if (!t) continue;
+    const next = labels.filter((l) => l.toLowerCase() !== t);
+    if (next.length !== labels.length) {
+      labels.length = 0;
+      labels.push(...next);
+      labelsChanged = true;
+    }
+  }
+  if (labelsChanged) patch.labels = labels.slice(0, 50);
+  if (Object.keys(patch).length === 0) return true;
+
+  const { error: updErr } = await db
+    .from("email_log")
+    .update(patch)
+    .eq("business_id", input.businessId)
+    .eq("id", row.id);
+  if (updErr) throw new Error(`organizeTenantEmailLog update: ${updErr.message}`);
+  return true;
 }

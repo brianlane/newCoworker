@@ -4,10 +4,11 @@
  *
  * Watches the connected newcoworkerteam@gmail.com mailbox (the inbox behind
  * team@ / contact@newcoworker.com) via the `email` trigger channel, classifies
- * each inbound message, and texts Brian for the three human-attention
- * categories (sales lead / support / billing). Automated platform notices,
+ * each inbound message, texts Brian for the three human-attention categories
+ * (sales lead / support / billing), and applies a matching Gmail label via
+ * email_organize so the inbox stays filed. Automated platform notices,
  * contact-form copies (already triaged by the webhook flow), newsletters, and
- * unclassifiable mail stay silent.
+ * unclassifiable mail stay silent (and unlabeled).
  *
  * Idempotent upsert-by-name, validated with parseAiFlowDefinition first.
  *
@@ -100,6 +101,30 @@ const definition = {
       when: { var: "email_kind", equals: "billing" },
       message:
         "Billing email in the team inbox from {{trigger.from}}: {{vars.email_subject}} — {{vars.email_gist}}"
+    },
+    {
+      id: "s_org_sales",
+      type: "email_organize",
+      connectionId: GMAIL_CONNECTION_ROW_ID,
+      when: { var: "email_kind", equals: "sales_lead" },
+      addLabels: ["HQ/Sales"],
+      moveToFolder: "HQ/Sales"
+    },
+    {
+      id: "s_org_support",
+      type: "email_organize",
+      connectionId: GMAIL_CONNECTION_ROW_ID,
+      when: { var: "email_kind", equals: "support" },
+      addLabels: ["HQ/Support"],
+      moveToFolder: "HQ/Support"
+    },
+    {
+      id: "s_org_billing",
+      type: "email_organize",
+      connectionId: GMAIL_CONNECTION_ROW_ID,
+      when: { var: "email_kind", equals: "billing" },
+      addLabels: ["HQ/Billing"],
+      moveToFolder: "HQ/Billing"
     }
   ]
 };

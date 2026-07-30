@@ -69,13 +69,15 @@ justifications are built around this set.
 - **Shot 5, gmail.modify.** Agent sends the staged customer email. Show:
   the email arriving in the connected Gmail inbox (unread); the flow
   picking it up (Dashboard -> Emails shows it as a trigger); the AI reply
-  in the Gmail SENT folder (sent from the owner's own address); and the
-  original message now MARKED READ in the inbox. Narrate: "The coworker
-  reads the customer email, replies from the owner's own address, and
-  marks the original handled. Reading alone cannot send, sending alone
-  cannot read or mark handled; gmail.modify is the single scope that
-  covers this loop. No data is used for ads, sold, or used to train
-  generalized AI models."
+  in the Gmail SENT folder (sent from the owner's own address); the
+  original message now MARKED READ; and, when the flow includes
+  email_organize, a label applied or the message archived out of Inbox.
+  Narrate: "The coworker reads the customer email, replies from the
+  owner's own address, marks the original handled, and can apply the
+  owner's labels or archive as the flow directs. Reading alone cannot
+  send, sending alone cannot read, label, or mark handled; gmail.modify
+  is the single scope that covers this loop. No data is used for ads,
+  sold, or used to train generalized AI models."
 - **Shot 6, ~10s, close.** "One Google Cloud project, one OAuth client,
   owner-only connections, disconnect available in the dashboard."
 
