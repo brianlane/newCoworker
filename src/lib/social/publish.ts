@@ -29,6 +29,8 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { getBusiness } from "@/lib/db/businesses";
+import { marketingAutomationAllowedForTier } from "@/lib/plans/marketing-automation";
 import { getMetaConnection, type MetaConnectionRow } from "@/lib/db/meta-connections";
 import {
   createInstagramMediaContainer,
@@ -451,6 +453,10 @@ export async function processSocialPostSweep(
 
   for (const post of await listDueScheduledPosts(nowIso, db)) {
     try {
+      // Downgrade-safe: leave the row scheduled but do not hit Graph.
+      const business = await getBusiness(post.business_id, db);
+      if (!marketingAutomationAllowedForTier(business?.tier)) continue;
+
       // Claim first (single publisher): the guarded transition is the lock —
       // an overlapping sweep on a stale due-list loses it before any Graph
       // call, and an owner cancel that landed first wins.

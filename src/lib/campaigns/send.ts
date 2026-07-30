@@ -27,6 +27,7 @@ import { sendOwnerEmail } from "@/lib/email/client";
 import { buildBrandedEmailHtml } from "@/lib/email/branded-html";
 import { ensureTenantMailbox, tenantMailboxAddress } from "@/lib/email/tenant-mailbox";
 import { getBusiness } from "@/lib/db/businesses";
+import { marketingAutomationAllowedForTier } from "@/lib/plans/marketing-automation";
 import { logger } from "@/lib/logger";
 import {
   CAMPAIGN_MAX_RECIPIENTS,
@@ -224,6 +225,10 @@ export async function processCampaignSweep(
   const due = await listDueScheduledCampaigns(now.toISOString(), db);
   for (const campaign of due) {
     try {
+      // Downgrade-safe: leave the row scheduled but do not spend Resend.
+      const business = await getBusiness(campaign.business_id, db);
+      if (!marketingAutomationAllowedForTier(business?.tier)) continue;
+
       const moved = await transitionEmailCampaign(
         campaign.business_id,
         campaign.id,
@@ -254,6 +259,9 @@ export async function processCampaignSweep(
   const sending = await listSendingCampaigns(db);
   for (const campaign of sending) {
     try {
+      const business = await getBusiness(campaign.business_id, db);
+      if (!marketingAutomationAllowedForTier(business?.tier)) continue;
+
       // A `sending` campaign without a landed snapshot crashed between its
       // claim and the snapshot — retry the (idempotent) snapshot now so
       // the empty-pending check below can never complete it unsent.
@@ -288,7 +296,6 @@ export async function processCampaignSweep(
         continue;
       }
 
-      const business = await getBusiness(campaign.business_id, db);
       const mailbox = await ensureTenantMailbox(campaign.business_id, db);
       const fromAddress = tenantMailboxAddress(mailbox.local_part);
       const businessName = business?.name?.trim() || "New Coworker";

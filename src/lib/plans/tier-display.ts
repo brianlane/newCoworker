@@ -166,6 +166,9 @@ function buildStandardFeatures(locale: PlanCopyLocale): string[] {
     es
       ? "Respuestas automáticas en Messenger, Instagram y WhatsApp"
       : "Automatic replies on Messenger, Instagram, and WhatsApp",
+    es
+      ? "Campañas de correo e Instagram programadas"
+      : "Scheduled email campaigns and Instagram posts",
     es ? "Envía textos durante llamadas" : "Send texts during calls",
     es
       ? "Auto-texto a quien llama cuando no se puede contestar"
