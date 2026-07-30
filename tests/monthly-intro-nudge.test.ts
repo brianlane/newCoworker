@@ -62,7 +62,7 @@ function makeDb(opts: {
   const updateIs = vi.fn();
 
   const chainSelect: Record<string, unknown> = {};
-  for (const m of ["select", "eq", "is", "gt", "lte", "order", "limit"]) {
+  for (const m of ["select", "eq", "is", "gte", "gt", "lte", "order", "limit"]) {
     chainSelect[m] = vi.fn(() => chainSelect);
   }
   chainSelect.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
