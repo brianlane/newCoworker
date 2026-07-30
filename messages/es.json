@@ -2473,6 +2473,17 @@
       "replyLine": "Responde a este correo y agendamos tu sesión de onboarding.",
       "priorityLine": "Tu línea prioritaria de soporte por llamada y video está abierta hasta el {date}.",
       "ctaBook": "Reservar tu sesión"
+    },
+    "monthlyIntroNudge": {
+      "subject": "Una nota sobre tu próxima factura de New Coworker",
+      "line1": "Hola, queríamos avisarte con claridad antes de tu próxima factura.",
+      "line2": "Tu tarifa del primer mes de {introRate} aplica hasta el {date}. Después, el mes a mes se renueva a {renewalRate} a menos que elijas otro plan.",
+      "line3": "Si un compromiso más largo te conviene más, hay contratos prepago a una tarifa mensual más baja:",
+      "biennialLine": "24 meses: {biennialRate} ({biennialTotal} facturados hoy)",
+      "annualLine": "12 meses: {annualRate} ({annualTotal} facturados hoy)",
+      "line4": "No hace falta hacer nada para seguir mes a mes. Para revisar o cambiar tu plan, abre Facturación en tu panel.",
+      "cta": "Revisar opciones de facturación",
+      "openBillingFallback": "Abrir facturación: {billingUrl}"
     }
   },
   "notFound": {
