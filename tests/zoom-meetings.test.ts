@@ -103,7 +103,9 @@ describe("createZoomMeetingForBooking", () => {
       data: {
         topic: "Estimate call",
         type: 2,
-        start_time: "2026-07-20T17:00:00.000Z",
+        // Zoom rejects/misparses millisecond ISO; send Z-without-ms + UTC.
+        start_time: "2026-07-20T17:00:00Z",
+        timezone: "UTC",
         duration: 30
       }
     });
@@ -184,7 +186,11 @@ describe("updateZoomMeetingForBooking", () => {
     expect(zoomRequestForBusiness).toHaveBeenCalledWith(BIZ, {
       endpoint: "/meetings/zm-1",
       method: "PATCH",
-      data: { start_time: "2026-07-20T17:00:00.000Z", duration: 30 }
+      data: {
+        start_time: "2026-07-20T17:00:00Z",
+        timezone: "UTC",
+        duration: 30
+      }
     });
   });
 

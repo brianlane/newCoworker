@@ -94,6 +94,19 @@ function durationMinutes(startIso: string, endIso: string): number {
 }
 
 /**
+ * Zoom Create/Update Meeting wants `yyyy-MM-ddTHH:mm:ssZ` with no
+ * milliseconds. `Date.toISOString()` emits `.000Z`, and Zoom's API has
+ * been observed to ignore the Z and treat the time digits as the host's
+ * local wall clock when milliseconds are present (e.g. 16:00 UTC for a
+ * Phoenix 9 AM booking becomes 4 PM local). Pairing the Z-form with an
+ * explicit `timezone: "UTC"` keeps display aligned with Google Calendar,
+ * which gets the same instant plus an IANA zone.
+ */
+function zoomStartTimeUtc(iso: string): string {
+  return new Date(iso).toISOString().replace(/\.\d{3}Z$/, "Z");
+}
+
+/**
  * Create the scheduled Zoom meeting for a booking. Null when the business
  * has no Zoom connection or the create didn't yield a usable id + join URL
  * — the booking proceeds without a video link either way.
@@ -112,7 +125,8 @@ export async function createZoomMeetingForBooking(
       data: {
         topic: booking.topic,
         type: 2, // scheduled meeting
-        start_time: new Date(booking.startIso).toISOString(),
+        start_time: zoomStartTimeUtc(booking.startIso),
+        timezone: "UTC",
         duration: durationMinutes(booking.startIso, booking.endIso),
         ...(booking.agenda ? { agenda: booking.agenda } : {})
       }
@@ -159,7 +173,8 @@ export async function updateZoomMeetingForBooking(
       endpoint: `/meetings/${encodeURIComponent(meetingId)}`,
       method: "PATCH",
       data: {
-        start_time: new Date(booking.startIso).toISOString(),
+        start_time: zoomStartTimeUtc(booking.startIso),
+        timezone: "UTC",
         duration: durationMinutes(booking.startIso, booking.endIso)
       }
     });
