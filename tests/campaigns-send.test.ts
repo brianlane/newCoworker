@@ -488,7 +488,7 @@ describe("processCampaignSweep — sending", () => {
     expect(mark).toHaveBeenCalledWith("r1", "failed", "send blip", db);
   });
 
-  it("skips promotion and sends on Starter", async () => {
+  it("skips promotion and closes mid-send campaigns on Starter", async () => {
     vi.mocked(getBusiness).mockResolvedValue({
       name: "Starter Co",
       owner_email: "o@s.test",
@@ -496,13 +496,30 @@ describe("processCampaignSweep — sending", () => {
     } as never);
     listDue.mockResolvedValue([campaign()]);
     listSending.mockResolvedValue([campaign({ status: "sending" })]);
-    listPending.mockResolvedValue([recipient("r1", "jane@x.test")]);
+    listPending
+      .mockResolvedValueOnce([recipient("r1", "jane@x.test")])
+      .mockResolvedValueOnce([]);
+    countByStatus.mockResolvedValue(0);
     const sendEmail = vi.fn();
     const { db } = makeDb([]);
     const result = await processCampaignSweep({ client: db, now: () => NOW, sendEmail });
     expect(result.promoted).toBe(0);
     expect(result.sent).toBe(0);
+    expect(result.completed).toBe(1);
     expect(sendEmail).not.toHaveBeenCalled();
+    expect(mark).toHaveBeenCalledWith(
+      "r1",
+      "skipped",
+      expect.stringMatching(/Standard/),
+      db
+    );
+    expect(transition).toHaveBeenCalledWith(
+      BIZ,
+      "c-1",
+      "sending",
+      expect.objectContaining({ status: "sent" }),
+      db
+    );
   });
 
   it("treats a null snapshot payload as an empty audience and reports string promotion errors", async () => {

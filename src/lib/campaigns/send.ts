@@ -27,7 +27,10 @@ import { sendOwnerEmail } from "@/lib/email/client";
 import { buildBrandedEmailHtml } from "@/lib/email/branded-html";
 import { ensureTenantMailbox, tenantMailboxAddress } from "@/lib/email/tenant-mailbox";
 import { getBusiness } from "@/lib/db/businesses";
-import { marketingAutomationAllowedForTier } from "@/lib/plans/marketing-automation";
+import {
+  MARKETING_AUTOMATION_UPGRADE_MESSAGE,
+  marketingAutomationAllowedForTier
+} from "@/lib/plans/marketing-automation";
 import { logger } from "@/lib/logger";
 import {
   CAMPAIGN_MAX_RECIPIENTS,
@@ -260,7 +263,39 @@ export async function processCampaignSweep(
   for (const campaign of sending) {
     try {
       const business = await getBusiness(campaign.business_id, db);
-      if (!marketingAutomationAllowedForTier(business?.tier)) continue;
+      if (!marketingAutomationAllowedForTier(business?.tier)) {
+        // Mid-send downgrade: skip leftover recipients and close the campaign
+        // so it cannot sit in `sending` forever with no further drain.
+        for (;;) {
+          const leftover = await listPendingRecipients(
+            campaign.id,
+            CAMPAIGN_BATCH_PER_SWEEP,
+            db
+          );
+          if (leftover.length === 0) break;
+          for (const recipient of leftover) {
+            await markRecipient(
+              recipient.id,
+              "skipped",
+              MARKETING_AUTOMATION_UPGRADE_MESSAGE,
+              db
+            );
+          }
+        }
+        const completed = await transitionEmailCampaign(
+          campaign.business_id,
+          campaign.id,
+          "sending",
+          {
+            status: "sent",
+            completed_at: now.toISOString(),
+            ...(await deriveCounters(db, campaign.id))
+          },
+          db
+        );
+        if (completed) result.completed += 1;
+        continue;
+      }
 
       // A `sending` campaign without a landed snapshot crashed between its
       // claim and the snapshot — retry the (idempotent) snapshot now so

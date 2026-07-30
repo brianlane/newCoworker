@@ -84,7 +84,7 @@ export function CampaignsManager({
 }: {
   businessId: string;
   calendarExtras?: CalendarExtraItem[];
-  /** False on Starter: show upgrade card instead of the composer. */
+  /** False on Starter: hide the composer; keep the list so Cancel still works. */
   marketingAllowed?: boolean;
 }) {
   const [campaigns, setCampaigns] = useState<CampaignItem[]>([]);
@@ -250,21 +250,96 @@ export function CampaignsManager({
   }
   const calendarMonths = [...calendar.keys()].sort();
 
+  const campaignsList = (
+    <Card>
+      <h2 className="text-sm font-semibold text-parchment mb-3">Campaigns</h2>
+      {loading ? (
+        <p className="text-sm text-parchment/40">Loading…</p>
+      ) : campaigns.length === 0 ? (
+        <p className="text-sm text-parchment/40">
+          {marketingAllowed
+            ? "No campaigns yet — compose one above."
+            : "No campaigns yet."}
+        </p>
+      ) : (
+        <ul className="divide-y divide-parchment/10">
+          {campaigns.map((c) => {
+            const badge = STATUS_BADGES[c.status];
+            return (
+              <li key={c.id} className="py-2.5 flex flex-wrap items-center gap-2">
+                <span className="text-sm text-parchment/90">{c.subject}</span>
+                <span className={`rounded border px-1.5 py-0.5 text-[11px] ${badge.tone}`}>
+                  {badge.text}
+                </span>
+                {c.audience_tag && (
+                  <span className="rounded border border-parchment/20 px-1.5 py-0.5 text-[11px] text-parchment/50">
+                    #{c.audience_tag}
+                  </span>
+                )}
+                {c.send_at && (
+                  <span className="text-[11px] text-parchment/40">
+                    {new Date(c.send_at).toLocaleString()}
+                  </span>
+                )}
+                {(c.status === "sending" || c.status === "sent") && (
+                  <span className="text-[11px] text-parchment/50">
+                    {c.recipients_sent}/{c.recipients_total} sent
+                    {c.recipients_failed > 0 ? ` · ${c.recipients_failed} failed` : ""}
+                    {c.recipients_skipped > 0 ? ` · ${c.recipients_skipped} unsubscribed` : ""}
+                  </span>
+                )}
+                <span className="ml-auto flex gap-2">
+                  {(c.status === "draft" || c.status === "scheduled") && (
+                    <button
+                      type="button"
+                      onClick={() => void cancel(c.id)}
+                      className="text-[11px] text-parchment/50 hover:text-parchment"
+                    >
+                      Cancel
+                    </button>
+                  )}
+                  {c.status !== "sending" && (
+                    <button
+                      type="button"
+                      onClick={() => void remove(c.id)}
+                      className="text-[11px] text-spark-orange/80 hover:text-spark-orange"
+                    >
+                      Delete
+                    </button>
+                  )}
+                </span>
+              </li>
+            );
+          })}
+        </ul>
+      )}
+      {error && !marketingAllowed ? (
+        <p className="mt-2 text-xs text-spark-orange" role="alert">
+          {error}
+        </p>
+      ) : null}
+    </Card>
+  );
+
   if (!marketingAllowed) {
     return (
-      <Card className="p-5 space-y-3">
-        <h2 className="text-base font-semibold text-parchment">Email campaigns</h2>
-        <p className="text-sm text-parchment/60">
-          Bulk email campaigns are available on Standard and Enterprise. Upgrade to
-          schedule tag-audience sends from your AI mailbox.
-        </p>
-        <a
-          href="/pricing"
-          className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-opacity-90 transition-colors"
-        >
-          See plans
-        </a>
-      </Card>
+      <div className="space-y-4">
+        <Card className="p-5 space-y-3">
+          <h2 className="text-base font-semibold text-parchment">Email campaigns</h2>
+          <p className="text-sm text-parchment/60">
+            Bulk email campaigns are available on Standard and Enterprise. Upgrade to
+            schedule tag-audience sends from your AI mailbox. Existing drafts and
+            scheduled campaigns stay below so you can cancel them.
+          </p>
+          <a
+            href="/pricing"
+            className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-opacity-90 transition-colors"
+          >
+            See plans
+          </a>
+        </Card>
+        {campaignsList}
+      </div>
     );
   }
 
@@ -365,65 +440,7 @@ export function CampaignsManager({
         </div>
       </Card>
 
-      <Card>
-        <h2 className="text-sm font-semibold text-parchment mb-3">Campaigns</h2>
-        {loading ? (
-          <p className="text-sm text-parchment/40">Loading…</p>
-        ) : campaigns.length === 0 ? (
-          <p className="text-sm text-parchment/40">No campaigns yet — compose one above.</p>
-        ) : (
-          <ul className="divide-y divide-parchment/10">
-            {campaigns.map((c) => {
-              const badge = STATUS_BADGES[c.status];
-              return (
-                <li key={c.id} className="py-2.5 flex flex-wrap items-center gap-2">
-                  <span className="text-sm text-parchment/90">{c.subject}</span>
-                  <span className={`rounded border px-1.5 py-0.5 text-[11px] ${badge.tone}`}>
-                    {badge.text}
-                  </span>
-                  {c.audience_tag && (
-                    <span className="rounded border border-parchment/20 px-1.5 py-0.5 text-[11px] text-parchment/50">
-                      #{c.audience_tag}
-                    </span>
-                  )}
-                  {c.send_at && (
-                    <span className="text-[11px] text-parchment/40">
-                      {new Date(c.send_at).toLocaleString()}
-                    </span>
-                  )}
-                  {(c.status === "sending" || c.status === "sent") && (
-                    <span className="text-[11px] text-parchment/50">
-                      {c.recipients_sent}/{c.recipients_total} sent
-                      {c.recipients_failed > 0 ? ` · ${c.recipients_failed} failed` : ""}
-                      {c.recipients_skipped > 0 ? ` · ${c.recipients_skipped} unsubscribed` : ""}
-                    </span>
-                  )}
-                  <span className="ml-auto flex gap-2">
-                    {(c.status === "draft" || c.status === "scheduled") && (
-                      <button
-                        type="button"
-                        onClick={() => void cancel(c.id)}
-                        className="text-[11px] text-parchment/50 hover:text-parchment"
-                      >
-                        Cancel
-                      </button>
-                    )}
-                    {c.status !== "sending" && (
-                      <button
-                        type="button"
-                        onClick={() => void remove(c.id)}
-                        className="text-[11px] text-spark-orange/80 hover:text-spark-orange"
-                      >
-                        Delete
-                      </button>
-                    )}
-                  </span>
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </Card>
+      {campaignsList}
 
       {calendarMonths.length > 0 && (
         <Card>

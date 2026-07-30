@@ -5,7 +5,8 @@
  * the core AI phone coworker. The gate lives server-side (same pattern as
  * src/lib/plans/sms-tools.ts) so create/schedule routes and both sweeps refuse
  * Starter regardless of what the UI shows. Cancelling a leftover scheduled
- * item still works so a downgrade can stop sends.
+ * item still works so a downgrade can stop sends. A campaign already in
+ * `sending` is closed on the next sweep (remaining recipients skipped).
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
