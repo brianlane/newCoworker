@@ -88,6 +88,12 @@ describe("tier-display", () => {
       );
     });
 
+    it("standard advertises full browser skills (browse_action Standard+ gate, Jul 2026)", () => {
+      expect(STANDARD_FEATURES).toContain(
+        "Full browser skills: operates websites like a person"
+      );
+    });
+
     it("enterprise advertises branded RCS (own verified sender)", () => {
       expect(ENTERPRISE_FEATURES).toContain(
         "Branded RCS messaging (your own Google-verified sender)"

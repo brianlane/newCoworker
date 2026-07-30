@@ -54,6 +54,7 @@ import {
 } from "@/lib/ai-flows/schema";
 import { validateShareDocumentSteps } from "@/lib/ai-flows/document-steps";
 import { validateMailboxConnectionSteps } from "@/lib/ai-flows/mailbox-steps";
+import { validateBrowseActionSteps } from "@/lib/ai-flows/browse-action-steps";
 import {
   listWorkspaceOAuthConnections,
   type WorkspaceOAuthConnectionRow
@@ -320,7 +321,8 @@ export async function compileAiFlowFromDescription(
     const mailboxIssues = await validateMailboxConnectionSteps(args.businessId, definition, {
       fetchConnections
     });
-    const bindingIssues = [...documentIssues, ...agentIssues, ...mailboxIssues];
+    const browseIssues = await validateBrowseActionSteps(args.businessId, definition);
+    const bindingIssues = [...documentIssues, ...agentIssues, ...mailboxIssues, ...browseIssues];
     if (bindingIssues.length > 0) {
       throw new AiFlowValidationError("Invalid AiFlow definition", bindingIssues);
     }
@@ -427,11 +429,16 @@ export async function compileAiFlowFromDescription(
         salvaged.definition,
         { fetchConnections }
       ).catch(() => [] as string[]);
+      const salvageBrowseIssues = await validateBrowseActionSteps(
+        args.businessId,
+        salvaged.definition
+      ).catch(() => [] as string[]);
       const warnings = [
         ...salvaged.warnings,
         ...salvageDocumentIssues,
         ...salvageAgentIssues,
-        ...salvageMailboxIssues
+        ...salvageMailboxIssues,
+        ...salvageBrowseIssues
       ];
       void recordSystemLog({
         businessId: args.businessId,
@@ -583,7 +590,8 @@ export async function editAiFlowDefinition(
     const mailboxIssues = await validateMailboxConnectionSteps(args.businessId, definition, {
       fetchConnections
     });
-    const bindingIssues = [...documentIssues, ...agentIssues, ...mailboxIssues];
+    const browseIssues = await validateBrowseActionSteps(args.businessId, definition);
+    const bindingIssues = [...documentIssues, ...agentIssues, ...mailboxIssues, ...browseIssues];
     if (bindingIssues.length > 0) {
       throw new AiFlowValidationError("Invalid AiFlow definition", bindingIssues);
     }

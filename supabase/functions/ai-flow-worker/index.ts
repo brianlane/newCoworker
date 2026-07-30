@@ -137,6 +137,7 @@ import {
   localYearIn
 } from "../_shared/ai_flows/birthday.ts";
 import { outboundAiCallsAllowedForTier } from "../_shared/outbound_ai_call_tier.ts";
+import { browseActionAllowedForTier, BROWSE_ACTION_UPGRADE_MESSAGE } from "../_shared/browse_action_tier.ts";
 import { scheduleDue, type ScheduleConfig } from "../_shared/ai_flows/schedule.ts";
 import {
   capMicrosForTier,
@@ -3426,6 +3427,23 @@ async function browseActionStep(
 ): Promise<StepOutcome> {
   const safe = normalizeBrowseUrl(action.url);
   if (!safe) return { kind: "fail", error: `browse_action: unsafe or invalid URL ${action.url}` };
+
+  // Standard+ gate before the missing-sidecar message so Starter gets a
+  // clear upgrade refuse instead of an opaque render-template error.
+  {
+    const { data: bizRow, error: bizErr } = await supabase
+      .from("businesses")
+      .select("tier")
+      .eq("id", run.business_id)
+      .maybeSingle();
+    if (bizErr) {
+      return { kind: "fail", error: `browse_action: tier lookup failed (${bizErr.message})` };
+    }
+    if (!browseActionAllowedForTier((bizRow as { tier?: string } | null)?.tier)) {
+      return { kind: "fail", error: `browse_action: ${BROWSE_ACTION_UPGRADE_MESSAGE}` };
+    }
+  }
+
   const renderUrl = resolveRenderUrl(run.business_id);
   if (!renderUrl) {
     return {

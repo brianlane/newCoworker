@@ -8,6 +8,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { listAiFlows } from "@/lib/ai-flows/db";
 import { webhooksAllowedForTier } from "@/lib/plans/webhooks";
 import { outboundAiCallsAllowedForTier } from "@/lib/plans/outbound-ai-calls";
+import { browseActionAllowedForTier } from "@/lib/plans/browse-action";
 import { listDismissedCardKeys } from "@/lib/dashboard/dismissed-cards";
 import { Card } from "@/components/ui/Card";
 import { AiFlowsManager } from "@/components/dashboard/AiFlowsManager";
@@ -41,6 +42,9 @@ export default async function AiFlowsPage({ searchParams }: Props) {
     (businesses?.[0]?.tier as string | null | undefined) ?? null
   );
   const outboundAiCallsEnabled = outboundAiCallsAllowedForTier(
+    (businesses?.[0]?.tier as string | null | undefined) ?? null
+  );
+  const browseActionEnabled = browseActionAllowedForTier(
     (businesses?.[0]?.tier as string | null | undefined) ?? null
   );
 
@@ -112,6 +116,7 @@ export default async function AiFlowsPage({ searchParams }: Props) {
           initialAdaptDraft={adapt === "1"}
           webhooksEnabled={webhooksEnabled}
           outboundAiCallsEnabled={outboundAiCallsEnabled}
+          browseActionEnabled={browseActionEnabled}
           initialDismissedCards={dismissedCards}
         />
       )}

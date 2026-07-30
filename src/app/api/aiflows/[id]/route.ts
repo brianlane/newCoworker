@@ -11,6 +11,7 @@ import { deleteAiFlow, getAiFlow, updateAiFlow } from "@/lib/ai-flows/db";
 import { AiFlowValidationError, parseAiFlowDefinition } from "@/lib/ai-flows/schema";
 import { validateShareDocumentSteps } from "@/lib/ai-flows/document-steps";
 import { validateRunAgentSteps } from "@/lib/ai-flows/agent-steps";
+import { validateBrowseActionSteps } from "@/lib/ai-flows/browse-action-steps";
 import { validateMailboxConnectionSteps } from "@/lib/ai-flows/mailbox-steps";
 
 const idSchema = z.string().uuid();
@@ -63,7 +64,8 @@ export async function PATCH(request: Request, { params }: Ctx) {
       const documentIssues = await validateShareDocumentSteps(body.businessId, parsedDefinition);
       const agentIssues = await validateRunAgentSteps(body.businessId, parsedDefinition);
       const mailboxIssues = await validateMailboxConnectionSteps(body.businessId, parsedDefinition);
-      const bindingIssues = [...documentIssues, ...agentIssues, ...mailboxIssues];
+      const browseIssues = await validateBrowseActionSteps(body.businessId, parsedDefinition);
+      const bindingIssues = [...documentIssues, ...agentIssues, ...mailboxIssues, ...browseIssues];
       if (bindingIssues.length > 0) {
         return errorResponse("VALIDATION_ERROR", bindingIssues.join("; "));
       }
