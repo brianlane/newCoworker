@@ -1,3 +1,6 @@
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   escapeTableCell,
@@ -9,17 +12,27 @@ import {
   oneLine,
   parseContextPackArgs,
   redactIdentifiers,
-  stripRitualPrefixes
+  sessionFiles,
+  stripRitualPrefixes,
+  turnRole,
+  turnText
 } from "../scripts/context-pack";
 
 /**
  * Unit coverage for the pure text helpers behind `scripts/context-pack.ts`.
  *
- * The generator's IO (git, gh, Supabase, the transcript archive) is
- * environment-dependent and deliberately untested here; what matters and what
- * can silently rot is the text handling, above all the two rules that keep the
- * pack safe and readable: end-user identifiers never reach the file, and the
- * repeated session preamble is removed BEFORE anything gets truncated.
+ * The generator's environment-dependent IO (git, gh, Supabase, and locating
+ * the real transcript archives under $HOME) is deliberately untested here;
+ * what matters and what can silently rot is the text handling, above all the
+ * two rules that keep the pack safe and readable: end-user identifiers never
+ * reach the file, and the repeated session preamble is removed BEFORE anything
+ * gets truncated.
+ *
+ * The transcript-shape helpers are the exception, and are covered against a
+ * temp directory: two harnesses have written the archive (Claude Code and,
+ * before it, Cursor) with different on-disk layouts and different turn
+ * envelopes, so a regression there empties the session digest silently rather
+ * than failing loudly.
  *
  * `scripts/**` is outside the coverage `include`, so this file adds assertions
  * without moving the 100% thresholds.
@@ -120,6 +133,69 @@ describe("extractPrNumbers", () => {
 
   it("ignores bare hash references, which are ambiguous", () => {
     expect(extractPrNumbers("fixed in #942 per the issue tracker")).toEqual([]);
+  });
+});
+
+describe("turnRole", () => {
+  it("reads Cursor's top-level role", () => {
+    expect(turnRole({ role: "user" })).toBe("user");
+    expect(turnRole({ role: "assistant" })).toBe("assistant");
+  });
+
+  it("reads Claude Code's top-level type", () => {
+    expect(turnRole({ type: "user", message: { role: "user", content: "hi" } })).toBe("user");
+    expect(turnRole({ type: "assistant", message: { role: "assistant", content: [] } })).toBe("assistant");
+  });
+
+  it("returns no speaker for Claude Code's bookkeeping lines", () => {
+    // These sit ahead of the first real turn in every Claude Code transcript,
+    // so treating them as turns would make the opening ask unreadable.
+    expect(turnRole({ type: "permission-mode" })).toBe("");
+    expect(turnRole({ type: "file-history-snapshot" })).toBe("");
+    expect(turnRole({ type: "summary" })).toBe("");
+    expect(turnRole(null)).toBe("");
+  });
+
+  it("ignores subagent turns so the outcome line is the main-loop summary", () => {
+    expect(turnRole({ type: "assistant", isSidechain: true })).toBe("");
+  });
+});
+
+describe("turnText", () => {
+  it("joins the text parts of an array content block", () => {
+    expect(turnText({ message: { content: [{ type: "text", text: "a" }, { type: "text", text: "b" }] } })).toBe("a b");
+  });
+
+  it("accepts the plain string content Claude Code writes for a typed prompt", () => {
+    expect(turnText({ type: "user", message: { role: "user", content: "hi" } })).toBe("hi");
+  });
+
+  it("returns nothing for tool calls and tool results, which carry no prose", () => {
+    expect(turnText({ message: { content: [{ type: "tool_use" }] } })).toBe("");
+    expect(turnText({ type: "user", message: { content: [{ type: "tool_result" }] } })).toBe("");
+    expect(turnText(null)).toBe("");
+  });
+});
+
+describe("sessionFiles", () => {
+  it("finds both archive layouts: Claude Code's flat file and Cursor's nested one", () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), "context-pack-"));
+    try {
+      fs.writeFileSync(path.join(dir, "flat-session.jsonl"), "");
+      fs.mkdirSync(path.join(dir, "nested-session"));
+      fs.writeFileSync(path.join(dir, "nested-session", "nested-session.jsonl"), "");
+      // Neither of these is a session: a stray non-jsonl file, and a directory
+      // whose transcript is missing or misnamed.
+      fs.writeFileSync(path.join(dir, "notes.md"), "");
+      fs.mkdirSync(path.join(dir, "empty-session"));
+
+      expect(sessionFiles(dir).map((f) => path.relative(dir, f)).sort()).toEqual([
+        "flat-session.jsonl",
+        path.join("nested-session", "nested-session.jsonl")
+      ]);
+    } finally {
+      fs.rmSync(dir, { recursive: true, force: true });
+    }
   });
 });
 

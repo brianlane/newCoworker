@@ -95,7 +95,7 @@ if [ -n "$collisions" ]; then
   echo "\"duplicate key value violates unique constraint schema_migrations_pkey\"."
   echo "Restamp YOUR file (never one already applied to production) to a version"
   echo "above the current head of $BASE, then force-push."
-  echo "See .cursor/rules/migration-timestamps.mdc."
+  echo "See supabase/migrations/CLAUDE.md."
   exit 1
 fi
 

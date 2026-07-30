@@ -22,6 +22,10 @@ pnpm-debug.log*
 .cursor/
 .vscode/*
 !.vscode/extensions.json
+# .claude/ IS tracked: CLAUDE.md's companion skills and the shared permission
+# allowlist belong in the repo. Only the per-machine overrides stay out.
+.claude/settings.local.json
+.claude/*.local.json
 *.suo
 *.ntvs*
 *.njsproj

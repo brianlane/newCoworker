@@ -430,8 +430,8 @@ these standards:
   Every migration that creates an object must grant access explicitly in the
   same file (service_role only, unless the table is deliberately
   client-readable via RLS policies); `tests/migration-grants.test.ts`
-  enforces this in CI and `.cursor/rules/migration-grants.mdc` documents the
-  convention. The companion sweep
+  enforces this in CI and [supabase/migrations/CLAUDE.md](supabase/migrations/CLAUDE.md)
+  documents the convention. The companion sweep
   (`…20260820100500_revoke_legacy_deny_all_table_grants.sql`) also revoked
   the legacy anon/authenticated grants on every existing RLS-on/no-policies
   table, so a deny-all table is no longer one accidental
@@ -2203,9 +2203,15 @@ Read it first, then open only the raw sources the task actually needs.
 
 The output is **gitignored and generated**: never hand-edit it, and
 regenerate when the header timestamp is more than a day old. It is derived
-from the local Cursor transcript archive and live tenant rows, neither of
+from the local agent transcript archive and live tenant rows, neither of
 which belongs in git. `--days N` widens the window, `--no-fleet` skips the
 Supabase queries, `--out -` prints to stdout.
+
+The session digest reads both transcript archives: Claude Code's
+(`~/.claude/projects/<slug>/`) and the older Cursor one
+(`~/.cursor/projects/<slug>/agent-transcripts/`), so sessions from before the
+switch stay visible. `CONTEXT_PACK_TRANSCRIPTS_DIR` overrides the search with
+an explicit directory.
 
 The pack orients, it does not replace reading. Go to the source when you are
 changing code, when the task names a tenant (`docs/tenants/<slug>.md` first,
@@ -2273,11 +2279,13 @@ Recent captures, and what each replaced:
 | "What is this tenant's posture, is anything broken?" | `tsx debug/audit-account.ts --business <uuid>` |
 | "They say they never got the text" | `tsx debug/trace-sms.ts --to +1…` |
 
-Multi-step procedures that are judgment, not code, are captured as Cursor
-skills under `.cursor/skills/` (`e2e-bug-hunt`, `dependabot-triage`,
-`oneshot-patch`). `.cursor/` is gitignored, so those are local to the laptop;
-anything that must survive a fresh clone belongs in `debug/`, `docs/`, or this
-README instead.
+Multi-step procedures that are judgment, not code, are captured as agent
+skills under [.claude/skills/](.claude/skills) (`e2e-bug-hunt`,
+`dependabot-triage`, `oneshot-patch`). Those are tracked and survive a fresh
+clone. The standing working agreements live alongside them in
+[CLAUDE.md](CLAUDE.md), with the migration-specific pair in
+[supabase/migrations/CLAUDE.md](supabase/migrations/CLAUDE.md), which loads
+only when you are touching a migration.
 
 ### The same rule, applied to model spend
 
@@ -2406,8 +2414,8 @@ cores and draining the laptop battery. After returning to main:
    A persistent shell left cd'd inside a deleted worktree fails every
    subsequent command — silently no-status, or `spawn /bin/bash ENOENT` —
    which presents as "Execution backend unavailable" and has repeatedly
-   (Jul 17, Jul 22 2026) looked like a dead terminal backend that needed a
-   Cursor restart. It's not the backend; it's the stale cwd.
+   (Jul 17, Jul 22 2026) looked like a dead terminal backend that needed an
+   editor restart. It's not the backend; it's the stale cwd.
 3. **Remove the worktree** from the main repo:
    `git worktree remove /Users/brianlane/newCoworker-wt-<name>` then
    `git worktree prune`. Worktrees live at `/Users/brianlane/newCoworker-wt-*`.

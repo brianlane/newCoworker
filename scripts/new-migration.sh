@@ -131,4 +131,4 @@ fi
 echo ""
 echo "Remember: objects created here get NO Data API grants automatically."
 echo "Grant service_role in this same file, or add a '-- grants: none (<name>): reason'"
-echo "marker. See .cursor/rules/migration-grants.mdc."
+echo "marker. See supabase/migrations/CLAUDE.md."
