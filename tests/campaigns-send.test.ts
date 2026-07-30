@@ -522,6 +522,24 @@ describe("processCampaignSweep — sending", () => {
     );
   });
 
+  it("closes an empty mid-send Starter campaign without counting a lost race", async () => {
+    vi.mocked(getBusiness).mockResolvedValue({
+      name: "Starter Co",
+      owner_email: "o@s.test",
+      tier: "starter"
+    } as never);
+    listDue.mockResolvedValue([]);
+    listSending.mockResolvedValue([campaign({ status: "sending" })]);
+    listPending.mockResolvedValue([]);
+    transition.mockResolvedValue(false);
+    const sendEmail = vi.fn();
+    const { db } = makeDb([]);
+    const result = await processCampaignSweep({ client: db, now: () => NOW, sendEmail });
+    expect(result.completed).toBe(0);
+    expect(mark).not.toHaveBeenCalled();
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
   it("treats a null snapshot payload as an empty audience and reports string promotion errors", async () => {
     const { db } = makeDb(null);
     listDue.mockResolvedValue([campaign()]);
