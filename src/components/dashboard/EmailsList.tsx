@@ -234,15 +234,35 @@ function ReadingPane({
       });
       const json = await res.json().catch(() => null);
       if (!res.ok || !json?.ok) return;
+      // Remember intentional unread so reopen does not immediately undo it.
+      if (actions.markUnread === true) {
+        try {
+          sessionStorage.setItem(`emails-skip-autoread:${row.id}`, "1");
+        } catch {
+          /* private mode / quota — best-effort */
+        }
+      } else if (actions.markRead === true) {
+        try {
+          sessionStorage.removeItem(`emails-skip-autoread:${row.id}`);
+        } catch {
+          /* ignore */
+        }
+      }
       onOrganized();
     } finally {
       setOrgBusy(false);
     }
   }
 
-  // Opening an unread AI-mailbox message marks it read (best-effort).
+  // Opening an unread AI-mailbox message marks it read (best-effort), unless
+  // the owner just marked it unread in this browser session.
   useEffect(() => {
     if (!canOrganize || row.is_read) return;
+    try {
+      if (sessionStorage.getItem(`emails-skip-autoread:${row.id}`)) return;
+    } catch {
+      /* ignore */
+    }
     void organize({ markRead: true });
     // eslint-disable-next-line react-hooks/exhaustive-deps -- once per open of this id
   }, [row.id]);
