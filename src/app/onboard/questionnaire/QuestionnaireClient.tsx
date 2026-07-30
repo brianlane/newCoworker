@@ -10,6 +10,10 @@ import { Button } from "@/components/ui/Button";
 import { ChatMarkdown } from "@/components/ui/ChatMarkdown";
 import { OrderSummaryCard } from "@/components/OrderSummaryCard";
 import { isCanadianBusiness } from "@/lib/plans/canadian-messaging";
+import type {
+  MembershipPackAddonOption,
+  MembershipPackAddonSelection
+} from "@/lib/billing/membership-pack-addons";
 import { coerceOwnerPhoneToE164 } from "@/lib/phone/e164";
 import {
   DRAFT_STORAGE_KEY,
@@ -122,15 +126,23 @@ function toFormData(data: Partial<OnboardingData>): Partial<FormData> {
   };
 }
 
-export default function QuestionnairePage() {
+export default function QuestionnairePage({
+  packAddonOptions
+}: {
+  packAddonOptions: MembershipPackAddonOption[];
+}) {
   return (
     <Suspense>
-      <QuestionnaireForm />
+      <QuestionnaireForm packAddonOptions={packAddonOptions} />
     </Suspense>
   );
 }
 
-function QuestionnaireForm() {
+function QuestionnaireForm({
+  packAddonOptions
+}: {
+  packAddonOptions: MembershipPackAddonOption[];
+}) {
   const t = useTranslations("marketing.questionnaire");
   const searchParams = useSearchParams();
   const tier = (searchParams.get("tier") ?? "starter") as "starter" | "standard";
@@ -156,6 +168,7 @@ function QuestionnaireForm() {
   } | null>(null);
   const [promoError, setPromoError] = useState<string | null>(null);
   const [promoChecking, setPromoChecking] = useState(false);
+  const [packAddonSelection, setPackAddonSelection] = useState<MembershipPackAddonSelection>({});
   const [draftSaving, setDraftSaving] = useState(false);
   const [chatInput, setChatInput] = useState("");
   const [chatLoading, setChatLoading] = useState(false);
@@ -700,6 +713,13 @@ function QuestionnaireForm() {
           // Re-validated server-side against the same rules the preview ran,
           // so the summary and the charge cannot diverge.
           ...(promoApplied ? { promoCode: promoApplied.code } : {}),
+          ...(packAddonSelection.voicePackId
+            ? { voicePackId: packAddonSelection.voicePackId }
+            : {}),
+          ...(packAddonSelection.smsPackId ? { smsPackId: packAddonSelection.smsPackId } : {}),
+          ...(packAddonSelection.chatPackId
+            ? { chatPackId: packAddonSelection.chatPackId }
+            : {}),
           // Same browser timezone the order summary's Canada-fee preview
           // used, so the server's fallback detection (only consulted when
           // the phone isn't NANP and the stored row predates timezones)
@@ -1280,6 +1300,9 @@ function QuestionnaireForm() {
                       timezone: Intl.DateTimeFormat().resolvedOptions().timeZone
                     })}
                     promotion={promoApplied}
+                    packAddonOptions={packAddonOptions}
+                    packAddonSelection={packAddonSelection}
+                    onPackAddonChange={setPackAddonSelection}
                   />
 
                   <div className="space-y-2">

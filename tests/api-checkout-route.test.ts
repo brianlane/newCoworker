@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { beforeEach, afterEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/auth", () => ({
   getAuthUser: vi.fn(),
@@ -921,6 +921,82 @@ describe("api/checkout route", () => {
       // 422 is the client's cue to drop the code and retry at full price,
       // rather than being charged full price on a session it previewed as
       // discounted.
+      expect(response.status).toBe(422);
+      expect(createCheckoutSession).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("membership pack add-ons", () => {
+    const PACK_ENV = [
+      "STRIPE_VOICE_BONUS_30MIN_PRICE_ID",
+      "STRIPE_VOICE_BONUS_30MIN_CENTS"
+    ] as const;
+    const savedPackEnv: Record<string, string | undefined> = {};
+
+    beforeEach(() => {
+      for (const k of PACK_ENV) {
+        savedPackEnv[k] = process.env[k];
+        delete process.env[k];
+      }
+      process.env.STRIPE_VOICE_BONUS_30MIN_PRICE_ID = "price_voice_30";
+      process.env.STRIPE_VOICE_BONUS_30MIN_CENTS = "1000";
+    });
+
+    afterEach(() => {
+      for (const k of PACK_ENV) {
+        if (savedPackEnv[k] === undefined) delete process.env[k];
+        else process.env[k] = savedPackEnv[k];
+      }
+    });
+
+    it("attaches discounted pack lines and metadata for a biennial signup", async () => {
+      vi.mocked(getAuthUser).mockResolvedValue(null);
+      vi.mocked(verifySignupIdentity).mockResolvedValue(true);
+
+      const request = new Request("http://localhost:3000/api/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tier: "standard",
+          businessId,
+          billingPeriod: "biennial",
+          ownerEmail: "owner@example.com",
+          signupUserId,
+          voicePackId: "min_30"
+        })
+      });
+
+      const response = await POST(request);
+      expect(response.status).toBe(200);
+      const call = vi.mocked(createCheckoutSession).mock.calls.at(-1)?.[0];
+      expect(call?.packAddonLines).toEqual([
+        { name: "Voice top-up: 30 minutes", unitAmountCents: 800 }
+      ]);
+      expect(call?.metadata).toMatchObject({
+        addonVoicePackId: "min_30",
+        addonVoiceSeconds: "1800",
+        addonVoiceCents: "800"
+      });
+    });
+
+    it("rejects an unknown pack id with 422", async () => {
+      vi.mocked(getAuthUser).mockResolvedValue(null);
+      vi.mocked(verifySignupIdentity).mockResolvedValue(true);
+
+      const request = new Request("http://localhost:3000/api/checkout", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          tier: "standard",
+          businessId,
+          billingPeriod: "monthly",
+          ownerEmail: "owner@example.com",
+          signupUserId,
+          voicePackId: "min_nope"
+        })
+      });
+
+      const response = await POST(request);
       expect(response.status).toBe(422);
       expect(createCheckoutSession).not.toHaveBeenCalled();
     });

@@ -20,6 +20,14 @@ import {
   getRenewalRateDisplay,
   hasFirstCycleDiscount
 } from "@/lib/pricing";
+import {
+  MembershipPackAddOns,
+  membershipPackAddOnsDueTodayCents
+} from "@/components/billing/MembershipPackAddOns";
+import type {
+  MembershipPackAddonOption,
+  MembershipPackAddonSelection
+} from "@/lib/billing/membership-pack-addons";
 
 type OrderSummaryCardProps = {
   tier: PlanTier;
@@ -52,6 +60,10 @@ type OrderSummaryCardProps = {
     duration?: "once" | "repeating" | "forever";
     durationInMonths?: number | null;
   } | null;
+  /** Env-gated usage-pack catalog for optional membership add-ons. */
+  packAddonOptions?: MembershipPackAddonOption[];
+  packAddonSelection?: MembershipPackAddonSelection;
+  onPackAddonChange?: (next: MembershipPackAddonSelection) => void;
 };
 
 export function OrderSummaryCard({
@@ -60,7 +72,10 @@ export function OrderSummaryCard({
   businessName,
   preferFirstMonthLabel = false,
   canadianFee = false,
-  promotion = null
+  promotion = null,
+  packAddonOptions = [],
+  packAddonSelection = {},
+  onPackAddonChange
 }: OrderSummaryCardProps) {
   const t = useTranslations("marketing.orderSummary");
   const hasIntroDiscount = hasFirstCycleDiscount(tier, period) && promotion === null;
@@ -93,8 +108,16 @@ export function OrderSummaryCard({
   const canadaFeeDueTodayCents = canadianFee
     ? CANADA_MESSAGING_FEE_MONTHLY_CENTS * getCommitmentMonths(period)
     : 0;
+  const packAddOnsDueTodayCents = membershipPackAddOnsDueTodayCents(
+    packAddonSelection,
+    packAddonOptions,
+    period
+  );
   const totalDueToday = formatPriceCents(
-    planDueTodayCents + CARRIER_REGISTRATION_FEE_CENTS + canadaFeeDueTodayCents
+    planDueTodayCents +
+      CARRIER_REGISTRATION_FEE_CENTS +
+      canadaFeeDueTodayCents +
+      packAddOnsDueTodayCents
   );
   // With a promo applied to a monthly plan the intro coupon is gone, so the
   // rate row shows the plan's real rate and the promo line carries the saving.
@@ -189,6 +212,22 @@ export function OrderSummaryCard({
             })}
           </span>
           <span>{formatPriceCents(canadaFeeDueTodayCents)}</span>
+        </div>
+      )}
+      {onPackAddonChange && packAddonOptions.length > 0 && (
+        <div className="pt-2">
+          <MembershipPackAddOns
+            period={period}
+            options={packAddonOptions}
+            selection={packAddonSelection}
+            onChange={onPackAddonChange}
+          />
+        </div>
+      )}
+      {packAddOnsDueTodayCents > 0 && (
+        <div className="flex justify-between text-parchment/70">
+          <span>{t("packAddOnsLine")}</span>
+          <span>{formatPriceCents(packAddOnsDueTodayCents)}</span>
         </div>
       )}
       <div className="flex justify-between text-parchment font-semibold pt-1 border-t border-parchment/10">

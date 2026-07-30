@@ -46,6 +46,11 @@ import { buildWhiteGloveConfirmationEmail } from "@/lib/email/templates/white-gl
 import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import { sendOwnerEmail } from "@/lib/email/client";
 import {
+  parseChatCreditMicrosFromMetadata,
+  parseSmsBonusTextsFromMetadata,
+  parseVoiceBonusSecondsFromMetadata
+} from "@/lib/billing/usage-pack-metadata";
+import {
   cancelStripeSubscriptionSafely,
   runChangePlanFromCheckout,
   runResubscribeFromCheckout
@@ -1184,6 +1189,22 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
     ...stripeMirror
   });
 
+  // Membership Checkout may include discounted one-time usage packs. Grant
+  // only after the local sub is active so the RPCs pass entitlement checks.
+  try {
+    const { applyMembershipPackAddonsFromCheckout } = await import(
+      "@/lib/billing/membership-pack-addon-grants"
+    );
+    await applyMembershipPackAddonsFromCheckout(session, eventId);
+  } catch (err) {
+    logger.error("membership pack add-on grants failed after signup activation", {
+      businessId,
+      sessionId: session.id,
+      eventId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+
   if (customerProfileId) {
     try {
       await setBusinessCustomerProfile(businessId, customerProfileId);
@@ -1373,60 +1394,11 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
   });
 }
 
-/**
- * Strict voice-seconds parser for Stripe metadata. Only accepts positive integer strings,
- * enforces an upper bound (~one year of call minutes), and refuses scientific notation,
- * floats, and leading-zero/negative/hex strings — all of which `Number.parseInt` silently
- * truncates or mis-parses, and which would otherwise mint a bogus bonus grant.
- */
-export function parseVoiceBonusSecondsFromMetadata(raw: unknown): number | null {
-  if (raw === undefined || raw === null) return null;
-  const str = String(raw).trim();
-  if (!/^\d+$/.test(str)) return null;
-  if (str.length > 9) return null;
-  const n = Number(str);
-  if (!Number.isFinite(n) || !Number.isInteger(n)) return null;
-  if (n <= 0) return null;
-  const HARD_MAX_SECONDS = 60 * 60 * 24 * 365;
-  if (n > HARD_MAX_SECONDS) return null;
-  return n;
-}
-
-/**
- * Bonus outbound texts from an SMS pack checkout. Same hardening contract as
- * `parseVoiceBonusSecondsFromMetadata`: digits only, hard upper bound (1M
- * texts ≫ the largest catalog pack), reject floats/scientific/hex.
- */
-export function parseSmsBonusTextsFromMetadata(raw: unknown): number | null {
-  if (raw === undefined || raw === null) return null;
-  const str = String(raw).trim();
-  if (!/^\d+$/.test(str)) return null;
-  if (str.length > 7) return null;
-  const n = Number(str);
-  if (!Number.isFinite(n) || !Number.isInteger(n)) return null;
-  if (n <= 0) return null;
-  const HARD_MAX_TEXTS = 1_000_000;
-  if (n > HARD_MAX_TEXTS) return null;
-  return n;
-}
-
-/**
- * Chat spend credit (micro-USD) from a Gemini pack checkout. Hard cap $1,000
- * of credit per checkout — far above the catalog — so a forged/corrupt
- * metadata value can never mint an unbounded cap raise.
- */
-export function parseChatCreditMicrosFromMetadata(raw: unknown): number | null {
-  if (raw === undefined || raw === null) return null;
-  const str = String(raw).trim();
-  if (!/^\d+$/.test(str)) return null;
-  if (str.length > 10) return null;
-  const n = Number(str);
-  if (!Number.isFinite(n) || !Number.isInteger(n)) return null;
-  if (n <= 0) return null;
-  const HARD_MAX_MICROS = 1_000_000_000;
-  if (n > HARD_MAX_MICROS) return null;
-  return n;
-}
+export {
+  parseVoiceBonusSecondsFromMetadata,
+  parseSmsBonusTextsFromMetadata,
+  parseChatCreditMicrosFromMetadata
+} from "@/lib/billing/usage-pack-metadata";
 
 type UsagePackGrantSpec = {
   /** metadata checkoutKind, used as the log prefix. */
@@ -2243,12 +2215,14 @@ async function handleVoiceBonusRefund(event: Stripe.Event): Promise<void> {
     return;
   }
 
-  let sessions: Stripe.ApiList<Stripe.Checkout.Session>;
+  const stripe = getStripe();
+  const sessionsById = new Map<string, Stripe.Checkout.Session>();
   try {
-    sessions = await getStripe().checkout.sessions.list({
+    const byPi = await stripe.checkout.sessions.list({
       payment_intent: paymentIntentId,
       limit: 5
     });
+    for (const s of byPi.data) sessionsById.set(s.id, s);
   } catch (err) {
     logger.error("Stripe checkout sessions list failed during refund handling", {
       eventId: event.id,
@@ -2258,14 +2232,65 @@ async function handleVoiceBonusRefund(event: Stripe.Event): Promise<void> {
     return;
   }
 
-  // All three pack kinds (voice seconds, SMS texts, chat credit) share the
-  // same clawback semantics: prorated reduce on partial refund, full void on
-  // dispute-lost. Each kind voids through its own RPC.
-  const packSessions = sessions.data.filter((s) => {
+  // Subscription-mode membership Checkout often leaves session.payment_intent
+  // null; the charge hangs off the first invoice. Look up by subscription so
+  // membership pack add-on grants still claw back on refund/dispute.
+  const chargeObj = obj as Stripe.Charge & {
+    invoice?: string | { id?: string } | null;
+  };
+  const chargeInvoice =
+    event.type === "charge.refunded" && typeof chargeObj.invoice === "string"
+      ? chargeObj.invoice
+      : event.type === "charge.refunded" &&
+          chargeObj.invoice &&
+          typeof chargeObj.invoice === "object"
+        ? chargeObj.invoice.id ?? null
+        : null;
+  if (chargeInvoice) {
+    try {
+      const invoice = await stripe.invoices.retrieve(chargeInvoice);
+      const invoiceRecord = invoice as unknown as {
+        subscription?: string | { id?: string } | null;
+        parent?: { subscription_details?: { subscription?: string | { id?: string } | null } | null } | null;
+      };
+      const rawSub =
+        invoiceRecord.subscription ??
+        invoiceRecord.parent?.subscription_details?.subscription ??
+        null;
+      const subId =
+        typeof rawSub === "string" ? rawSub : rawSub && typeof rawSub === "object" ? rawSub.id ?? null : null;
+      if (subId) {
+        const bySub = await stripe.checkout.sessions.list({
+          subscription: subId,
+          limit: 5
+        });
+        for (const s of bySub.data) sessionsById.set(s.id, s);
+      }
+    } catch (err) {
+      logger.warn("Stripe invoice/subscription lookup failed during pack refund handling", {
+        eventId: event.id,
+        invoiceId: chargeInvoice,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+
+  const sessions = [...sessionsById.values()];
+  const { sessionHasMembershipPackAddons } = await import(
+    "@/lib/billing/membership-pack-addons"
+  );
+
+  // Standalone Billing packs (mode=payment) OR membership Checkout add-ons.
+  const packSessions = sessions.filter((s) => {
     const kind = s.metadata?.checkoutKind;
-    return (
-      kind === "voice_bonus_seconds" || kind === "sms_bonus_texts" || kind === "chat_credit_micros"
-    );
+    if (
+      kind === "voice_bonus_seconds" ||
+      kind === "sms_bonus_texts" ||
+      kind === "chat_credit_micros"
+    ) {
+      return true;
+    }
+    return sessionHasMembershipPackAddons(s.metadata);
   });
   if (packSessions.length === 0) {
     logger.debug("Refund not associated with a usage-pack Checkout; ignoring", {
@@ -2281,55 +2306,113 @@ async function handleVoiceBonusRefund(event: Stripe.Event): Promise<void> {
 
   for (const session of packSessions) {
     const kind = session.metadata?.checkoutKind;
-    let rpcName:
-      | "void_voice_bonus_grant_by_checkout_session"
-      | "void_sms_bonus_grant_by_checkout_session"
-      | "void_chat_credit_grant_by_checkout_session";
-    let clawbackParam: "p_clawback_seconds" | "p_clawback_texts" | "p_clawback_micros";
-    let purchased: number | null;
-    if (kind === "sms_bonus_texts") {
-      rpcName = "void_sms_bonus_grant_by_checkout_session";
-      clawbackParam = "p_clawback_texts";
-      purchased = parseSmsBonusTextsFromMetadata(session.metadata?.smsTexts ?? null);
-    } else if (kind === "chat_credit_micros") {
-      rpcName = "void_chat_credit_grant_by_checkout_session";
-      clawbackParam = "p_clawback_micros";
-      purchased = parseChatCreditMicrosFromMetadata(session.metadata?.creditMicros ?? null);
-    } else {
-      rpcName = "void_voice_bonus_grant_by_checkout_session";
-      clawbackParam = "p_clawback_seconds";
-      purchased = parseVoiceBonusSecondsFromMetadata(
-        session.metadata?.voiceSeconds ?? session.metadata?.voice_seconds ?? null
+    const isMembershipAddons = sessionHasMembershipPackAddons(session.metadata);
+
+    // Membership invoices mix plan + fees + packs. Partial prorating against
+    // amount_total would mis-size the clawback, so membership add-ons always
+    // full-void on refund/dispute. Standalone pack checkouts keep prorating.
+    type VoidTarget = {
+      rpcName:
+        | "void_voice_bonus_grant_by_checkout_session"
+        | "void_sms_bonus_grant_by_checkout_session"
+        | "void_chat_credit_grant_by_checkout_session";
+      clawbackParam: "p_clawback_seconds" | "p_clawback_texts" | "p_clawback_micros";
+      purchased: number | null;
+      logKind: string;
+    };
+    const targets: VoidTarget[] = [];
+
+    if (isMembershipAddons) {
+      const voicePurchased = parseVoiceBonusSecondsFromMetadata(
+        session.metadata?.addonVoiceSeconds ?? null
       );
+      if (voicePurchased != null || session.metadata?.addonVoicePackId) {
+        targets.push({
+          rpcName: "void_voice_bonus_grant_by_checkout_session",
+          clawbackParam: "p_clawback_seconds",
+          purchased: voicePurchased,
+          logKind: "membership_addon_voice"
+        });
+      }
+      const smsPurchased = parseSmsBonusTextsFromMetadata(
+        session.metadata?.addonSmsTexts ?? null
+      );
+      if (smsPurchased != null || session.metadata?.addonSmsPackId) {
+        targets.push({
+          rpcName: "void_sms_bonus_grant_by_checkout_session",
+          clawbackParam: "p_clawback_texts",
+          purchased: smsPurchased,
+          logKind: "membership_addon_sms"
+        });
+      }
+      const chatPurchased = parseChatCreditMicrosFromMetadata(
+        session.metadata?.addonChatMicros ?? null
+      );
+      if (chatPurchased != null || session.metadata?.addonChatPackId) {
+        targets.push({
+          rpcName: "void_chat_credit_grant_by_checkout_session",
+          clawbackParam: "p_clawback_micros",
+          purchased: chatPurchased,
+          logKind: "membership_addon_chat"
+        });
+      }
+    } else if (kind === "sms_bonus_texts") {
+      targets.push({
+        rpcName: "void_sms_bonus_grant_by_checkout_session",
+        clawbackParam: "p_clawback_texts",
+        purchased: parseSmsBonusTextsFromMetadata(session.metadata?.smsTexts ?? null),
+        logKind: "sms_bonus_texts"
+      });
+    } else if (kind === "chat_credit_micros") {
+      targets.push({
+        rpcName: "void_chat_credit_grant_by_checkout_session",
+        clawbackParam: "p_clawback_micros",
+        purchased: parseChatCreditMicrosFromMetadata(session.metadata?.creditMicros ?? null),
+        logKind: "chat_credit_micros"
+      });
+    } else {
+      targets.push({
+        rpcName: "void_voice_bonus_grant_by_checkout_session",
+        clawbackParam: "p_clawback_seconds",
+        purchased: parseVoiceBonusSecondsFromMetadata(
+          session.metadata?.voiceSeconds ?? session.metadata?.voice_seconds ?? null
+        ),
+        logKind: "voice_bonus_seconds"
+      });
     }
 
-    // Compute prorated clawback only for refunds: disputes still pass null (full void).
-    let clawback: number | null = null;
-    if (event.type === "charge.refunded") {
-      clawback = computeVoiceBonusClawbackSeconds(originalAmount, refundedAmount, purchased);
-    }
+    for (const target of targets) {
+      let clawback: number | null = null;
+      if (event.type === "charge.refunded" && !isMembershipAddons) {
+        clawback = computeVoiceBonusClawbackSeconds(
+          originalAmount,
+          refundedAmount,
+          target.purchased
+        );
+      }
 
-    const { data, error } = await db.rpc(rpcName, {
-      p_checkout_session_id: session.id,
-      p_reason: reason,
-      [clawbackParam]: clawback
-    });
-    if (error) {
-      logger.error(`${rpcName} failed`, {
+      const { data, error } = await db.rpc(target.rpcName, {
+        p_checkout_session_id: session.id,
+        p_reason: reason,
+        [target.clawbackParam]: clawback
+      });
+      if (error) {
+        logger.error(`${target.rpcName} failed`, {
+          eventId: event.id,
+          sessionId: session.id,
+          error: error.message
+        });
+        continue;
+      }
+      logger.info("Usage pack grant voided", {
         eventId: event.id,
         sessionId: session.id,
-        error: error.message
+        kind: target.logKind,
+        reason,
+        clawback,
+        result: data
       });
-      continue;
     }
-    logger.info("Usage pack grant voided", {
-      eventId: event.id,
-      sessionId: session.id,
-      kind,
-      reason,
-      clawback,
-      result: data
-    });
   }
 }
 

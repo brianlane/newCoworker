@@ -26,6 +26,7 @@ import {
 } from "@/lib/plans/canadian-messaging";
 import { getOnboardingDraft } from "@/lib/db/onboarding-drafts";
 import { validatePromotionCode } from "@/lib/promotions/validate";
+import { resolveMembershipPackAddons } from "@/lib/billing/membership-pack-addons";
 
 const schema = z.object({
   tier: z.enum(["starter", "standard"]),
@@ -47,7 +48,11 @@ const schema = z.object({
    * the same rules the preview ran (`validatePromotionCode`), so the summary
    * and the charge cannot diverge and a forged preview buys nothing.
    */
-  promoCode: z.string().trim().min(1).max(40).optional()
+  promoCode: z.string().trim().min(1).max(40).optional(),
+  /** Optional usage-pack add-ons (at most one per category). */
+  voicePackId: z.string().trim().min(1).max(40).optional(),
+  smsPackId: z.string().trim().min(1).max(40).optional(),
+  chatPackId: z.string().trim().min(1).max(40).optional()
 });
 
 /**
@@ -366,6 +371,18 @@ export async function POST(request: Request) {
       }
     }
 
+    const packAddons = resolveMembershipPackAddons(
+      {
+        voicePackId: body.voicePackId,
+        smsPackId: body.smsPackId,
+        chatPackId: body.chatPackId
+      },
+      body.billingPeriod
+    );
+    if (!packAddons.ok) {
+      return errorResponse("VALIDATION_ERROR", packAddons.error, 422);
+    }
+
     const session = await createCheckoutSession({
       priceId,
       successUrl: `${appUrl}/onboard/success?session_id={CHECKOUT_SESSION_ID}`,
@@ -399,6 +416,14 @@ export async function POST(request: Request) {
             }
           }
         : {}),
+      ...(packAddons.lines.length > 0
+        ? {
+            packAddonLines: packAddons.lines.map((line) => ({
+              name: line.name,
+              unitAmountCents: line.unitAmountCents
+            }))
+          }
+        : {}),
       metadata: {
         businessId: body.businessId,
         tier: body.tier,
@@ -413,7 +438,8 @@ export async function POST(request: Request) {
         ...(promotion?.ok
           ? { promotionId: promotion.promotion.id, promotionCode: promotion.promotion.code }
           : {}),
-        ...(customerProfileId ? { customerProfileId } : {})
+        ...(customerProfileId ? { customerProfileId } : {}),
+        ...packAddons.metadata
       }
     });
 

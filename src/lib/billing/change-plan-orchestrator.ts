@@ -640,6 +640,23 @@ export async function runChangePlanFromCheckout(
     ...periodCache
   });
 
+  // Discounted usage packs attached to the change-plan Checkout. The new sub
+  // row is active above, so grant RPCs pass entitlement the same way as
+  // standalone Billing top-ups.
+  try {
+    const { applyMembershipPackAddonsFromCheckout } = await import(
+      "@/lib/billing/membership-pack-addon-grants"
+    );
+    await applyMembershipPackAddonsFromCheckout(session, eventId);
+  } catch (err) {
+    logger.error("changePlan: membership pack add-on grants failed", {
+      businessId,
+      sessionId: session.id,
+      eventId,
+      error: errorMessage(err)
+    });
+  }
+
   if (customerProfileId) {
     try {
       await setBusinessCustomerProfile(businessId, customerProfileId);

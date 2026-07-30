@@ -333,6 +333,33 @@ describe("/api/billing/change-plan", () => {
     expect("canadianMessagingFee" in call.metadata).toBe(false);
   });
 
+  it("attaches discounted pack add-ons using the NEW billing period", async () => {
+    const prevVoiceId = process.env.STRIPE_VOICE_BONUS_30MIN_PRICE_ID;
+    const prevVoiceCents = process.env.STRIPE_VOICE_BONUS_30MIN_CENTS;
+    process.env.STRIPE_VOICE_BONUS_30MIN_PRICE_ID = "price_voice_30";
+    process.env.STRIPE_VOICE_BONUS_30MIN_CENTS = "1000";
+    try {
+      const res = await POST(
+        makeRequest({ tier: "standard", billingPeriod: "annual", voicePackId: "min_30" })
+      );
+      expect(res.status).toBe(200);
+      const call = createCheckoutSessionMock.mock.calls.at(-1)?.[0];
+      // Annual = 10% off $10.00 → $9.00
+      expect(call.packAddonLines).toEqual([
+        { name: "Voice top-up: 30 minutes", unitAmountCents: 900 }
+      ]);
+      expect(call.metadata).toMatchObject({
+        addonVoicePackId: "min_30",
+        addonVoiceCents: "900"
+      });
+    } finally {
+      if (prevVoiceId === undefined) delete process.env.STRIPE_VOICE_BONUS_30MIN_PRICE_ID;
+      else process.env.STRIPE_VOICE_BONUS_30MIN_PRICE_ID = prevVoiceId;
+      if (prevVoiceCents === undefined) delete process.env.STRIPE_VOICE_BONUS_30MIN_CENTS;
+      else process.env.STRIPE_VOICE_BONUS_30MIN_CENTS = prevVoiceCents;
+    }
+  });
+
   describe("Canadian messaging surcharge carry-forward", () => {
     function ctxWithStripeSub() {
       return makeContext({

@@ -30,7 +30,10 @@ inline copies in `vps/chat-worker/worker.mjs` and `vps/voice-bridge/src/index.ts
 must stay in lockstep). After the term, service rolls month-to-month at the
 higher renewal rate (`*_RENEWAL_PRICE_ID` via `ensureCommitmentSchedule`)
 unless auto-renew is on or the owner starts a new contract at the contract
-rate.
+rate. Membership Checkout (signup and plan change) may optionally include
+discounted one-time usage packs (voice / SMS / chat): 5% month-to-month, 10%
+on 12-month, 20% on 24-month. Standalone top-ups from Dashboard → Billing stay
+at the full catalog price.
 
 **RCS is Enterprise-only** (Jul 2026): each tenant needs their own branded
 Telnyx RCS agent ($600 + $100/mo carrier fees, priced cost-plus per deal) —

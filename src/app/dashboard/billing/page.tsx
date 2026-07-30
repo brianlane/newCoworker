@@ -34,6 +34,7 @@ import {
 } from "@/lib/billing/voice-bonus-packs";
 import { listSmsBonusPacks } from "@/lib/billing/sms-bonus-packs";
 import { listChatCreditPacks } from "@/lib/billing/chat-credit-packs";
+import { listMembershipPackAddonOptions } from "@/lib/billing/membership-pack-addons";
 import {
   getChatSpendSnapshotForBusiness,
   getSmsBonusTextsRemaining
@@ -163,6 +164,7 @@ export default async function BillingPage(props: {
   const usdPerMinute = getVoiceBonusBestUsdPerMinute(packs);
   const smsPacks = listSmsBonusPacks();
   const chatPacks = listChatCreditPacks();
+  const packAddonOptions = listMembershipPackAddonOptions();
 
   const smsMonthlyCap = business?.tier
     ? getTierLimits(
@@ -355,6 +357,7 @@ export default async function BillingPage(props: {
         stripeCustomerId={subscription?.stripe_customer_id ?? null}
         contractAutoRenew={contractAutoRenew}
         commitmentElapsed={commitmentElapsed}
+        packAddonOptions={packAddonOptions}
       />
 
       {business?.tier && (

@@ -23,10 +23,19 @@ import {
   getPeriodPricing
 } from "@/lib/plans/tier";
 import {
+  formatPriceCents,
   getExistingCustomerMonthlyCents,
   getExistingCustomerMonthlyDisplay,
   getRenewalRateDisplay
 } from "@/lib/pricing";
+import {
+  MembershipPackAddOns,
+  membershipPackAddOnsDueTodayCents
+} from "@/components/billing/MembershipPackAddOns";
+import type {
+  MembershipPackAddonOption,
+  MembershipPackAddonSelection
+} from "@/lib/billing/membership-pack-addons";
 
 type ChangeablePlan = Exclude<PlanTier, "enterprise">;
 
@@ -35,6 +44,7 @@ type Props = {
   currentBillingPeriod: BillingPeriod | null;
   disabled?: boolean;
   disabledReason?: string | null;
+  packAddonOptions?: MembershipPackAddonOption[];
 };
 
 const TIERS: ChangeablePlan[] = ["starter", "standard"];
@@ -72,10 +82,12 @@ export function ChangePlanSelector({
   currentTier,
   currentBillingPeriod,
   disabled,
-  disabledReason
+  disabledReason,
+  packAddonOptions = []
 }: Props) {
   const [selectedTier, setSelectedTier] = useState<ChangeablePlan | null>(null);
   const [selectedPeriod, setSelectedPeriod] = useState<BillingPeriod | null>(null);
+  const [packAddonSelection, setPackAddonSelection] = useState<MembershipPackAddonSelection>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -87,6 +99,7 @@ export function ChangePlanSelector({
     if (isCurrent(tier, period)) return;
     setSelectedTier(tier);
     setSelectedPeriod(period);
+    setPackAddonSelection({});
     setError(null);
   }
 
@@ -98,7 +111,17 @@ export function ChangePlanSelector({
       const res = await fetch("/api/billing/change-plan", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ tier: selectedTier, billingPeriod: selectedPeriod })
+        body: JSON.stringify({
+          tier: selectedTier,
+          billingPeriod: selectedPeriod,
+          ...(packAddonSelection.voicePackId
+            ? { voicePackId: packAddonSelection.voicePackId }
+            : {}),
+          ...(packAddonSelection.smsPackId ? { smsPackId: packAddonSelection.smsPackId } : {}),
+          ...(packAddonSelection.chatPackId
+            ? { chatPackId: packAddonSelection.chatPackId }
+            : {})
+        })
       });
       const json = (await res.json().catch(() => null)) as
         | { ok: true; data: { checkoutUrl: string } }
@@ -213,6 +236,33 @@ export function ChangePlanSelector({
               ? "Since your tier isn't changing, your workspace stays exactly where it is; only your billing changes."
               : "We'll migrate your workspace data to a fresh VPS at the new tier."}
           </p>
+          {packAddonOptions.length > 0 && selectedPeriod && (
+            <MembershipPackAddOns
+              period={selectedPeriod}
+              options={packAddonOptions}
+              selection={packAddonSelection}
+              onChange={setPackAddonSelection}
+            />
+          )}
+          {selectedPeriod &&
+            membershipPackAddOnsDueTodayCents(
+              packAddonSelection,
+              packAddonOptions,
+              selectedPeriod
+            ) > 0 && (
+              <p className="text-xs text-parchment/70">
+                Usage pack add-ons today:{" "}
+                <span className="font-mono">
+                  {formatPriceCents(
+                    membershipPackAddOnsDueTodayCents(
+                      packAddonSelection,
+                      packAddonOptions,
+                      selectedPeriod
+                    )
+                  )}
+                </span>
+              </p>
+            )}
           <div className="flex items-center gap-3">
             <Button
               size="sm"
@@ -229,6 +279,7 @@ export function ChangePlanSelector({
               onClick={() => {
                 setSelectedTier(null);
                 setSelectedPeriod(null);
+                setPackAddonSelection({});
               }}
               disabled={submitting}
             >
