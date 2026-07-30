@@ -9,11 +9,13 @@ onto Truly's former KVM 2.
 | | |
 | --- | --- |
 | Business id | `6cc2d7ba-a007-49d4-93a4-586967e147f1` |
-| Tier / box | standard, VPS `1815606` (KVM 2). Adopted 2026-07-29 from Truly; Hostinger billing sub `AzywqVVOpCob62ZiY`, auto-renew ON, next billing ~2026-08-08 |
+| Tier / box | standard. **Live box is `1867409`** as of 2026-07-30. The Jul 29 cutover adopted `1815606` (KVM 2) from Truly with Hostinger billing sub `AzywqVVOpCob62ZiY`, auto-renew ON, next billing ~2026-08-08; the box moved again after that and the change is not yet written up. Read live before trusting either number. |
 | DID | `+13054885455` |
-| Owner | Confirm in admin (owner SMS went to the signup phone; business DID is above) |
+| Owner | Selena Breed |
+| Timezone | `America/New_York` (Coral Gables, FL) |
+| Website | https://scarfairy.com/ |
 | Onboarded | 2026-07-17 |
-| Roster | none recorded yet |
+| Roster | none recorded yet; Selena personally handles all initial inquiries |
 
 Former box: Hostinger vm `1632631` (actual KVM 8 hardware that was mislabeled
 `kvm2` in `businesses.vps_size`). Retired 2026-07-29 with `never_renew=true`;
@@ -21,16 +23,77 @@ Hostinger sub was already `non_renewing` and lapses **2026-07-30**.
 
 ## How leads arrive
 
-Still early. One starter / library flow may exist; treat live flow state as
-source of truth rather than this file until the account grows real traffic.
+Meta lead ads, relayed by the Zapier bridge ("Send Lead to Coworker") to
+`POST /api/public/v1/flow-events` with source `facebook_lead_ads`. Bridge-only:
+there is no `meta_connections` row, same posture as KYP. The bridge forwards
+the Facebook `form_name`, which is what the bundle routing matches on. A switch
+to the direct Meta connection would send `form_id` with no title and drop every
+lead into the general arm, so revisit the routing if that happens.
 
 ## Flows
 
 Read live: `tsx debug/flow-poll.ts 6cc2d7ba-a007-49d4-93a4-586967e147f1`.
-Context-pack snapshot at cutover time was 0 enabled / 1 total.
+
+| Flow | Trigger | State | Note |
+| --- | --- | --- | --- |
+| Lead follow-up (white-glove build) | webhook | **off** | Meta lead nurture. Off until Vagaro is connected, see Sharp edges. |
+
+Shape (canonical builder: `scripts/oneshot/scar-fairy-lead-definition.ts`,
+applied by `scripts/oneshot/patch-scar-fairy-lead-flow.ts`):
+
+1. Extract, file the contact, notify Selena immediately.
+2. `sleep` 3 minutes. This is the self-book window: Meta's thank-you page
+   carries the Vagaro link, so a motivated lead books before we ever text.
+3. Branch on the lead-form name, one arm per bundle, plus a general arm that
+   names all three when the form does not say. Each arm sends one SMS and one
+   email quoting that bundle's price.
+4. Three gated nudges, then flag Selena and tag the contact Inactive.
+5. `s_goal` watching `appointment_booked` and `replied`.
+
+**`s_goal` must stay the last step.** A booking observed during the sleep
+fast-forwards the run to the first goal step ahead of it, skipping every send
+(`goal_events.ts`, `JUMPABLE_STATUSES` includes `queued`, which covers sleep
+deferrals). That skip is the entire "do not text them if they booked"
+requirement. Move the goal above the sends and the requirement breaks silently.
+`tests/oneshot-scar-fairy-definitions.test.ts` pins the position.
+
+Lead SMS is gated 09:00-20:00 America/New_York per step, rather than by a
+flow-level `timeWindow`, so a 2 AM lead still produces an immediate owner
+notification while the text waits for morning. Hours are a starting position
+and still want Selena's confirmation.
 
 ## Sharp edges
 
+- **Vagaro is not connected, and two behaviors depend on it.** There is no
+  `vagaro_connections` row (nor Calendly). Without it nothing observes a
+  booking, so both the goal jump above AND the automatic pre-send check in
+  `src/lib/ai-flows/booking-precheck.ts` are inert, and the flow degrades to
+  "always text and email after 3 minutes". That is the KYP booked-then-enrolled
+  bug (PR #770) waiting to happen. **Do not enable the flow until Selena has
+  connected Vagaro OAuth.**
+- **The booking link is still a placeholder.**
+  `SCAR_FAIRY_BOOKING_LINK` in `scripts/oneshot/scar-fairy-lead-definition.ts`
+  reads `<VAGARO_BOOKING_LINK_PENDING>`, and
+  `patch-scar-fairy-lead-flow.ts` refuses `--apply` while it does, so the
+  placeholder cannot reach a lead's phone. Landing Selena's real link is a
+  one-line diff, a test flip, and a re-run.
+- **A pre-booked lead costs Selena the new-lead alert.** `notify_owner` is a
+  communication step, so the booking precheck, which runs before a run's first
+  comm step, suppresses it along with the sends when the lead already had a
+  future booking. Accepted rather than worked around: that lead is visible in
+  Vagaro anyway. Revisit if Selena says she is missing leads.
+- **Owner-authored config was broken from onboarding and is now repaired.**
+  `soul_md` shipped with FAQ questions under "Response Goals", the literal
+  placeholder greeting "Hi name.  Thanks for contacting us.", a qualification
+  question duplicated mid-sentence, and a handoff rule forbidding any price
+  quote that contradicted the flow. `identity_md` was 447 characters listing
+  two devices with no concerns, packages, or prices. Both are rewritten by
+  `scripts/oneshot/patch-scar-fairy-knowledge.ts` (content in
+  `scripts/oneshot/scar-fairy-knowledge-content.ts`). Prices live in
+  `identity_md` because identity is a knowledge-graph source at trust 3
+  (`src/lib/memory/kg-sources.ts`), the tier a lead's claim cannot supersede.
+  That script rewrites `identity_md` whole, so a dashboard edit made between
+  runs is overwritten. Read the previous value it prints before re-running.
 - **2026-07-29 cutover onto Truly's box.** Order was load-bearing: backup
   Truly → null Truly's Hostinger pointers → fix Scar Fairy's lying
   `vps_size` pin to `kvm8` → `migrate-vps-size --adopt-vm 1815606` → ledger
@@ -48,8 +111,20 @@ Context-pack snapshot at cutover time was 0 enabled / 1 total.
 
 ## One-shots
 
-None tenant-named yet. Cutover was run via `debug/migrate-vps-size.ts` and
-ad-hoc recovery scripts, not a ledgered `scripts/oneshot/` file.
+Pure builders, imported by tests, never executed as scripts:
+
+- `scar-fairy-lead-definition.ts`: the canonical lead-follow-up definition.
+- `scar-fairy-knowledge-content.ts`: the canonical `identity.md` and the
+  `soul.md` repairs.
+
+Appliers, dry-run by default, `--apply` to write, both ledgered:
+
+- `patch-scar-fairy-lead-flow.ts`: writes the flow definition. Leaves `enabled`
+  untouched. Refuses to apply while the booking link is a placeholder.
+- `patch-scar-fairy-knowledge.ts`: writes `identity_md` and `soul_md`.
+
+The 2026-07-29 cutover predates these and was run via
+`debug/migrate-vps-size.ts` and ad-hoc recovery scripts, not a ledgered file.
 
 ## History
 
