@@ -130,7 +130,10 @@ export type ListEmailLogFilters = {
   limit?: number;
   /** inbound | outbound */
   direction?: "inbound" | "outbound";
-  /** When true, only rows with archived_at null (Inbox). When false, only archived. */
+  /**
+   * When true: Inbox view (inbound, not archived, folder null).
+   * When false: only archived rows.
+   */
   inbox?: boolean;
   unreadOnly?: boolean;
   folder?: string | null;
@@ -169,11 +172,12 @@ export async function listEmailLog(
       { column: "business_id", op: "eq", value: businessId },
       { column: "deleted_at", op: "is", value: null }
     ];
-    if (options.direction) {
-      filters.push({ column: "direction", op: "eq", value: options.direction });
-    }
     if (options.inbox === true) {
+      filters.push({ column: "direction", op: "eq", value: "inbound" });
       filters.push({ column: "archived_at", op: "is", value: null });
+      filters.push({ column: "folder", op: "is", value: null });
+    } else if (options.direction) {
+      filters.push({ column: "direction", op: "eq", value: options.direction });
     }
     if (options.inbox === false) {
       // Data API has no "is not null"; any real timestamp beats null in gte.
@@ -209,8 +213,11 @@ export async function listEmailLog(
     .select(EMAIL_LOG_SELECT)
     .eq("business_id", businessId)
     .is("deleted_at", null);
-  if (options.direction) q = q.eq("direction", options.direction);
-  if (options.inbox === true) q = q.is("archived_at", null);
+  if (options.inbox === true) {
+    q = q.eq("direction", "inbound").is("archived_at", null).is("folder", null);
+  } else if (options.direction) {
+    q = q.eq("direction", options.direction);
+  }
   if (options.inbox === false) q = q.not("archived_at", "is", null);
   if (options.unreadOnly) q = q.eq("is_read", false);
   if (options.folder) q = q.eq("folder", options.folder);

@@ -147,8 +147,12 @@ export type InboundEmailMessage = {
 export const EMAIL_WINDOW_TEXT_MAX = 6000;
 
 /** Trigger scope for an inbound email that matched a flow's conditions. */
-export function emailTriggerScope(msg: InboundEmailMessage): TriggerScope {
+export function emailTriggerScope(
+  msg: InboundEmailMessage,
+  opts?: { connectionId?: string }
+): TriggerScope {
   const windowText = `${msg.subject}\n${msg.bodyText}`.slice(0, EMAIL_WINDOW_TEXT_MAX);
+  const connectionId = opts?.connectionId?.trim();
   return {
     channel: "email",
     windowText,
@@ -156,6 +160,7 @@ export function emailTriggerScope(msg: InboundEmailMessage): TriggerScope {
     from: msg.fromEmail,
     subject: msg.subject.slice(0, 300),
     message_id: msg.id,
+    ...(connectionId ? { connection_id: connectionId } : {}),
     ...(msg.receivedAt ? { received_at: msg.receivedAt } : {})
   };
 }

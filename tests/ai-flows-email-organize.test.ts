@@ -89,6 +89,35 @@ describe("email_organize schema + planner", () => {
     });
   });
 
+  it("falls back to trigger.connection_id on connected email triggers", () => {
+    const plan = planStep(
+      {
+        id: "org1",
+        type: "email_organize",
+        archive: true
+      } as FlowStep,
+      {
+        vars: {},
+        trigger: {
+          channel: "email",
+          windowText: "hi",
+          url: null,
+          from: "a@b.com",
+          message_id: "gmail-1",
+          connection_id: CONN
+        }
+      }
+    );
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(plan.action).toMatchObject({
+      kind: "email_organize",
+      messageId: "gmail-1",
+      connectionId: CONN,
+      archive: true
+    });
+  });
+
   it("plans with empty message id when tenant email_log_id is present", () => {
     const plan = planStep(
       {

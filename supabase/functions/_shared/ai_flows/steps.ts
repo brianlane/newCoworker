@@ -1225,7 +1225,15 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
     case "email_organize": {
       const messageIdTpl = step.messageIdTemplate?.trim() || "{{trigger.message_id}}";
       const messageId = renderTemplate(messageIdTpl, scope, { collapseEmpty: true }).trim();
-      if (!messageId && !step.connectionId) {
+      // Prefer step.connectionId; on connected `email` triggers fall back to
+      // trigger.connection_id so organize writes the provider mailbox.
+      const triggerConnectionRaw = scope.trigger?.connection_id;
+      const triggerConnectionId =
+        typeof triggerConnectionRaw === "string" && triggerConnectionRaw.trim()
+          ? triggerConnectionRaw.trim()
+          : undefined;
+      const connectionId = step.connectionId?.trim() || triggerConnectionId;
+      if (!messageId && !connectionId) {
         // Tenant path can still organize via email_log_id alone.
         const emailLogIdRaw = scope.trigger?.email_log_id;
         const emailLogId =
@@ -1233,7 +1241,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         if (!emailLogId) {
           return { ok: false, error: "email_organize: message id is empty after templating" };
         }
-      } else if (!messageId && step.connectionId) {
+      } else if (!messageId && connectionId) {
         return { ok: false, error: "email_organize: message id is empty after templating" };
       }
       const emailLogIdRaw = scope.trigger?.email_log_id;
@@ -1256,7 +1264,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           kind: "email_organize",
           messageId,
           ...(emailLogId ? { emailLogId } : {}),
-          ...(step.connectionId ? { connectionId: step.connectionId } : {}),
+          ...(connectionId ? { connectionId } : {}),
           ...(step.markRead ? { markRead: true } : {}),
           ...(step.markUnread ? { markUnread: true } : {}),
           ...(step.archive ? { archive: true } : {}),

@@ -165,9 +165,10 @@ describe("listEmailLog organize filters", () => {
     }
     api.limit = vi.fn().mockResolvedValue({ data: [], error: null });
     defaultClientSpy.mockResolvedValue({ from: vi.fn(() => api) });
-    await listEmailLog(BIZ, { inbox: true, direction: "outbound" });
+    await listEmailLog(BIZ, { inbox: true });
+    expect(api.eq).toHaveBeenCalledWith("direction", "inbound");
     expect(api.is).toHaveBeenCalledWith("archived_at", null);
-    expect(api.eq).toHaveBeenCalledWith("direction", "outbound");
+    expect(api.is).toHaveBeenCalledWith("folder", null);
   });
 
   it("applies central filters for archived and label", async () => {
@@ -283,7 +284,9 @@ describe("listEmailLog organize filters", () => {
       BIZ,
       expect.objectContaining({
         filters: expect.arrayContaining([
-          { column: "archived_at", op: "is", value: null }
+          { column: "direction", op: "eq", value: "inbound" },
+          { column: "archived_at", op: "is", value: null },
+          { column: "folder", op: "is", value: null }
         ])
       })
     );

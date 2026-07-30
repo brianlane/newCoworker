@@ -220,7 +220,18 @@ describe("organizeMessage", () => {
 
   it("fails when Gmail labels cannot be created or resolved", async () => {
     getConn.mockResolvedValue(gmailConn());
+    nangoProxy.mockResolvedValueOnce({ status: 403, data: {} });
+    await expect(
+      organizeMessage({
+        businessId: BIZ,
+        connectionId: CONN,
+        messageId: "msg-list-fail",
+        actions: { addLabels: ["Nope"] }
+      })
+    ).resolves.toEqual({ ok: false, detail: "gmail_labels_list_failed:403" });
+
     // addLabels: list empty, create fails
+    nangoProxy.mockReset();
     nangoProxy
       .mockResolvedValueOnce({ status: 200, data: { labels: [] } })
       .mockResolvedValueOnce({ status: 500, data: {} });
@@ -232,6 +243,20 @@ describe("organizeMessage", () => {
         actions: { addLabels: ["Nope"] }
       })
     ).resolves.toEqual({ ok: false, detail: "gmail_label_create_failed:Nope:500" });
+
+    // create returns 200 without an id
+    nangoProxy.mockReset();
+    nangoProxy
+      .mockResolvedValueOnce({ status: 200, data: { labels: [] } })
+      .mockResolvedValueOnce({ status: 200, data: {} });
+    await expect(
+      organizeMessage({
+        businessId: BIZ,
+        connectionId: CONN,
+        messageId: "msg-noid",
+        actions: { addLabels: ["Nope"] }
+      })
+    ).resolves.toEqual({ ok: false, detail: "gmail_label_create_failed:Nope" });
 
     // removeLabels name that never resolves → noop (label already gone)
     nangoProxy.mockReset();

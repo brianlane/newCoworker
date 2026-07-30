@@ -220,6 +220,10 @@ function ReadingPane({
   const [labelDraft, setLabelDraft] = useState("");
   const canOrganize = row.source.startsWith("tenant_mailbox");
 
+  useEffect(() => {
+    setFolderDraft(row.folder ?? "");
+  }, [row.id, row.folder]);
+
   async function organize(actions: Record<string, unknown>) {
     setOrgBusy(true);
     try {
@@ -760,7 +764,10 @@ export function EmailsList({
   businessId,
   fromOptions = [],
   emailContacts = {},
-  replayFlows = []
+  replayFlows = [],
+  initialView = "all",
+  initialFolder = "",
+  initialLabel = ""
 }: {
   rows: EmailLogRow[];
   businessId: string;
@@ -770,6 +777,16 @@ export function EmailsList({
   emailContacts?: EmailContacts;
   /** Enabled tenant_email flows offered as replay targets (built server-side). */
   replayFlows?: ReplayFlowOption[];
+  /** Server-applied view from `/dashboard/emails?view=…`. */
+  initialView?:
+    | "all"
+    | "sent"
+    | "received"
+    | "inbox"
+    | "archived"
+    | "unread";
+  initialFolder?: string;
+  initialLabel?: string;
 }) {
   const router = useRouter();
   const [selectedId, setSelectedId] = useState<string | null>(null);
@@ -788,10 +805,30 @@ export function EmailsList({
     | "inbox"
     | "archived"
     | "unread";
-  const [viewFilter, setViewFilter] = useState<ViewFilter>("all");
-  const [folderFilter, setFolderFilter] = useState<string>("");
-  const [labelFilter, setLabelFilter] = useState<string>("");
+  const [viewFilter, setViewFilter] = useState<ViewFilter>(initialView);
+  const [folderFilter, setFolderFilter] = useState<string>(initialFolder);
+  const [labelFilter, setLabelFilter] = useState<string>(initialLabel);
   const selected = rows.find((r) => r.id === selectedId) ?? null;
+
+  function navigateFilters(next: {
+    view?: ViewFilter;
+    folder?: string;
+    label?: string;
+  }) {
+    const view = next.view ?? viewFilter;
+    const folder = next.folder ?? folderFilter;
+    const label = next.label ?? labelFilter;
+    setViewFilter(view);
+    setFolderFilter(folder);
+    setLabelFilter(label);
+    const params = new URLSearchParams();
+    if (view !== "all") params.set("view", view);
+    if (folder) params.set("folder", folder);
+    if (label) params.set("label", label);
+    const qs = params.toString();
+    router.push(qs ? `/dashboard/emails?${qs}` : "/dashboard/emails");
+    router.refresh();
+  }
 
   const knownFolders = useMemo(() => {
     const set = new Set<string>();
@@ -812,7 +849,12 @@ export function EmailsList({
       if (!matchesQuery(query, [r.subject, r.from_email, r.to_email, r.body_preview])) return false;
       if (viewFilter === "sent" && r.direction !== "outbound") return false;
       if (viewFilter === "received" && r.direction !== "inbound") return false;
-      if (viewFilter === "inbox" && r.archived_at) return false;
+      if (
+        viewFilter === "inbox" &&
+        (r.direction !== "inbound" || r.archived_at || r.folder)
+      ) {
+        return false;
+      }
       if (viewFilter === "archived" && !r.archived_at) return false;
       // Unread is meaningful for AI-mailbox rows; other sources stay "read".
       if (
@@ -939,7 +981,7 @@ export function EmailsList({
                 <button
                   key={key}
                   type="button"
-                  onClick={() => setViewFilter(key)}
+                  onClick={() => navigateFilters({ view: key })}
                   className={[
                     "rounded-md px-2.5 py-1 text-[11px] font-semibold uppercase tracking-wide transition-colors",
                     viewFilter === key
@@ -955,7 +997,7 @@ export function EmailsList({
                   aria-label="Folder filter"
                   className="rounded-md bg-parchment/5 px-2 py-1 text-[11px] text-parchment/70"
                   value={folderFilter}
-                  onChange={(e) => setFolderFilter(e.target.value)}
+                  onChange={(e) => navigateFilters({ folder: e.target.value })}
                 >
                   <option value="">All folders</option>
                   {knownFolders.map((f) => (
@@ -970,7 +1012,7 @@ export function EmailsList({
                   aria-label="Label filter"
                   className="rounded-md bg-parchment/5 px-2 py-1 text-[11px] text-parchment/70"
                   value={labelFilter}
-                  onChange={(e) => setLabelFilter(e.target.value)}
+                  onChange={(e) => navigateFilters({ label: e.target.value })}
                 >
                   <option value="">All labels</option>
                   {knownLabels.map((l) => (
