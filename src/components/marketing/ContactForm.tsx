@@ -28,8 +28,17 @@ type Prefill = {
  * empty fields so in-progress typing is never wiped.
  */
 export function ContactForm() {
+  // Suspense fallback is a non-interactive placeholder (not a second form)
+  // so typed input cannot be lost when useSearchParams resolves.
   return (
-    <Suspense fallback={<ContactFormFields topic={null} authPrefill={{}} />}>
+    <Suspense
+      fallback={
+        <div
+          className="min-h-[20rem] rounded-xl border border-parchment/10 bg-parchment/[0.02] p-8"
+          aria-hidden="true"
+        />
+      }
+    >
       <ContactFormAutofill />
     </Suspense>
   );
@@ -73,17 +82,17 @@ function ContactFormFields({
   const topicDef = topic ? CONTACT_TOPIC_DEFS_BY_PARAM[topic] : undefined;
 
   const topicSubject = topicDef ? t(topicDef.subjectKey) : "";
-  const topicMessage = topicDef
-    ? authPrefill.businessName
+  const topicMessageBase = topicDef ? t(topicDef.msgKey) : "";
+  const topicMessageWithBiz =
+    topicDef && authPrefill.businessName
       ? t(topicDef.msgForKey, { businessName: authPrefill.businessName })
-      : t(topicDef.msgKey)
-    : "";
+      : topicMessageBase;
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [businessName, setBusinessName] = useState("");
   const [subject, setSubject] = useState(topicSubject);
-  const [message, setMessage] = useState(topicMessage);
+  const [message, setMessage] = useState(topicMessageBase);
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
 
@@ -100,18 +109,33 @@ function ContactFormFields({
       setBusinessName((prev) => prev || authPrefill.businessName || "");
     }
     if (topicDef) {
-      const nextSubject = t(topicDef.subjectKey);
-      const nextMessage = authPrefill.businessName
-        ? t(topicDef.msgForKey, { businessName: authPrefill.businessName })
-        : t(topicDef.msgKey);
-      setSubject((prev) => (prev === "" || prev === topicSubject ? nextSubject : prev));
+      setSubject((prev) => (prev === "" || prev === topicSubject ? topicSubject : prev));
       setMessage((prev) =>
-        prev === "" || prev === topicMessage || prev === t(topicDef.msgKey) ? nextMessage : prev
+        prev === "" || prev === topicMessageBase || prev === topicMessageWithBiz
+          ? topicMessageWithBiz
+          : prev
       );
     }
-    // topicSubject/topicMessage are derived; including them would re-run every render.
-    // eslint-disable-next-line react-hooks/exhaustive-deps -- intentional empty-field merge
-  }, [authPrefill.name, authPrefill.email, authPrefill.businessName, topic, t]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- merge only when auth/topic inputs change
+  }, [
+    authPrefill.name,
+    authPrefill.email,
+    authPrefill.businessName,
+    topic,
+    topicSubject,
+    topicMessageBase,
+    topicMessageWithBiz
+  ]);
+
+  function resetToDefaults() {
+    setName(authPrefill.name ?? "");
+    setEmail(authPrefill.email ?? "");
+    setBusinessName(authPrefill.businessName ?? "");
+    setSubject(topicSubject);
+    setMessage(topicMessageWithBiz);
+    setError(null);
+    setStatus("idle");
+  }
 
   async function handleSubmit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -139,12 +163,6 @@ function ContactFormFields({
         setStatus("error");
         return;
       }
-      form.reset();
-      setName("");
-      setEmail("");
-      setBusinessName("");
-      setSubject(topicSubject);
-      setMessage(topicDef ? t(topicDef.msgKey) : "");
       setStatus("sent");
     } catch {
       setError(tf("sendFailed"));
@@ -159,7 +177,7 @@ function ContactFormFields({
         <p className="mt-2 text-sm leading-relaxed text-parchment/60">{tf("sentBody")}</p>
         <button
           type="button"
-          onClick={() => setStatus("idle")}
+          onClick={resetToDefaults}
           className="mt-6 text-sm font-semibold text-signal-teal hover:underline"
         >
           {tf("sendAnother")}
