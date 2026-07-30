@@ -936,7 +936,6 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   let acceptPressInFlight = false;
   let acceptPressCount = 0;
   let lastAcceptPressAtMs = 0;
-  let ivrHumanHeard = false;
   let ivrRefallbackArmed = false;
 
   /** The opening line, shared so no cue can quote a different one. */
@@ -997,7 +996,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
     ivrRefallbackArmed = true;
     timers.push(
       setTimeout(() => {
-        if (ended || ivrHumanHeard) return;
+        if (ended) return;
         void pressAcceptDigit(ivrGate.digit, "refallback");
       }, IVR_REFALLBACK_MS)
     );
@@ -1005,8 +1004,9 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
 
   /**
    * Press the accept digit (model cue, first backstop, or pre-human re-press).
-   * Telnyx OK is not treated as "partner accepted forever": while no human has
-   * been heard, model/refallback may send again after a cooldown.
+   * Telnyx OK is not treated as "partner accepted forever": while under the
+   * per-call press cap, model/refallback may send again (model has a cooldown;
+   * the scheduled refallback does not, so a near-timer model press cannot eat it).
    */
   const pressAcceptDigit = async (
     digits: string,
@@ -1017,7 +1017,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       hasDtmf: Boolean(opts.dtmf),
       inFlight: acceptPressInFlight,
       acceptPressed,
-      humanHeard: ivrHumanHeard,
+      acceptPressCount,
       lastPressAtMs: lastAcceptPressAtMs,
       nowMs: Date.now(),
       source
@@ -1034,7 +1034,7 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
       }));
       if (!result.ok) {
         // First press: unlock so the other path can retry. Re-press: leave
-        // acceptPressed set; cooldown still gates the next attempt.
+        // acceptPressed set; cooldown still gates the next model attempt.
         if (!decision.repress) acceptPressed = false;
         console.error("gemini-bridge: accept digit failed", { source, detail: result.detail });
         emitDiag("voice_bridge_ivr_gate_press_failed", {
@@ -1523,9 +1523,6 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
             }
             diag.downlinkFrames += 1;
             diag.downlinkBytesPostHeader += outSamples.byteLength;
-            // Assistant audio after an accept press means a real person was
-            // connected; further IVR re-presses would only confuse the line.
-            if (acceptPressed) ivrHumanHeard = true;
             sendPcmToTelnyx(opts.ws, outSamples, downlinkTelemetry);
           } catch (e) {
             console.error("gemini-bridge: downlink chunk", e);

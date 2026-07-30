@@ -2,7 +2,8 @@ import { describe, it, expect } from "vitest";
 import {
   decideIvrPress,
   IVR_REPRESS_COOLDOWN_MS,
-  IVR_REFALLBACK_MS
+  IVR_REFALLBACK_MS,
+  IVR_MAX_ACCEPT_PRESSES
 } from "../vps/voice-bridge/src/ivr-gate-press";
 
 describe("decideIvrPress", () => {
@@ -11,7 +12,7 @@ describe("decideIvrPress", () => {
     hasDtmf: true,
     inFlight: false,
     acceptPressed: false,
-    humanHeard: false,
+    acceptPressCount: 0,
     lastPressAtMs: 0,
     nowMs: 10_000,
     source: "model" as const
@@ -33,6 +34,7 @@ describe("decideIvrPress", () => {
       decideIvrPress({
         ...base,
         acceptPressed: true,
+        acceptPressCount: 1,
         lastPressAtMs: 10_000 - IVR_REPRESS_COOLDOWN_MS,
         nowMs: 10_000,
         source: "model"
@@ -40,11 +42,25 @@ describe("decideIvrPress", () => {
     ).toEqual({ action: "press", repress: true });
   });
 
-  it("allows a refallback re-press after the cooldown", () => {
+  it("allows a refallback even inside the model cooldown window", () => {
     expect(
       decideIvrPress({
         ...base,
         acceptPressed: true,
+        acceptPressCount: 1,
+        lastPressAtMs: 10_000 - 100,
+        nowMs: 10_000,
+        source: "refallback"
+      })
+    ).toEqual({ action: "press", repress: true });
+  });
+
+  it("allows a spaced refallback after the first OK", () => {
+    expect(
+      decideIvrPress({
+        ...base,
+        acceptPressed: true,
+        acceptPressCount: 1,
         lastPressAtMs: 0,
         nowMs: IVR_REFALLBACK_MS,
         source: "refallback"
@@ -52,11 +68,12 @@ describe("decideIvrPress", () => {
     ).toEqual({ action: "press", repress: true });
   });
 
-  it("suppresses re-presses inside the cooldown window", () => {
+  it("suppresses model re-presses inside the cooldown window", () => {
     expect(
       decideIvrPress({
         ...base,
         acceptPressed: true,
+        acceptPressCount: 1,
         lastPressAtMs: 10_000 - (IVR_REPRESS_COOLDOWN_MS - 1),
         nowMs: 10_000,
         source: "model"
@@ -69,6 +86,7 @@ describe("decideIvrPress", () => {
       decideIvrPress({
         ...base,
         acceptPressed: true,
+        acceptPressCount: 1,
         lastPressAtMs: 0,
         nowMs: 60_000,
         source: "fallback"
@@ -76,24 +94,24 @@ describe("decideIvrPress", () => {
     ).toEqual({ action: "deny", reason: "fallback_already_pressed" });
   });
 
-  it("locks out every press once a human has been heard (assistant spoke)", () => {
+  it("locks out every press once the per-call cap is reached", () => {
     expect(
       decideIvrPress({
         ...base,
         acceptPressed: true,
-        humanHeard: true,
+        acceptPressCount: IVR_MAX_ACCEPT_PRESSES,
         lastPressAtMs: 0,
         nowMs: 60_000,
         source: "model"
       })
-    ).toEqual({ action: "deny", reason: "human_heard" });
+    ).toEqual({ action: "deny", reason: "max_presses" });
     expect(
       decideIvrPress({
         ...base,
-        humanHeard: true,
+        acceptPressCount: IVR_MAX_ACCEPT_PRESSES,
         source: "fallback"
       })
-    ).toEqual({ action: "deny", reason: "human_heard" });
+    ).toEqual({ action: "deny", reason: "max_presses" });
   });
 
   it("denies while a press is in flight, ended, or DTMF is missing", () => {

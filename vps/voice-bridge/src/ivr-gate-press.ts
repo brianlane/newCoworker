@@ -14,7 +14,7 @@ export type IvrPressDenyReason =
   | "ended"
   | "no_dtmf"
   | "in_flight"
-  | "human_heard"
+  | "max_presses"
   | "cooldown"
   | "fallback_already_pressed";
 
@@ -22,14 +22,21 @@ export type IvrPressDecision =
   | { action: "press"; repress: boolean }
   | { action: "deny"; reason: IvrPressDenyReason };
 
-/** Minimum gap between a successful press and another while still pre-human. */
+/** Minimum gap between a successful model re-press and another. */
 export const IVR_REPRESS_COOLDOWN_MS = 2500;
 
 /**
- * After the first Telnyx-OK press, blind-press once more if no human has been
- * heard yet. Covers an early fallback the model never retries.
+ * After the first Telnyx-OK press, blind-press once more if still pre-human.
+ * Covers an early fallback the model never retries.
  */
 export const IVR_REFALLBACK_MS = 9000;
+
+/**
+ * Hard cap on Telnyx-OK accept presses per call. Stops unbounded pressing if the
+ * partner never connects a person; does NOT use assistant downlink as a proxy
+ * for "human heard" (the model can emit accidental audio while still on IVR).
+ */
+export const IVR_MAX_ACCEPT_PRESSES = 5;
 
 export function decideIvrPress(args: {
   ended: boolean;
@@ -37,17 +44,22 @@ export function decideIvrPress(args: {
   inFlight: boolean;
   /** True after at least one Telnyx-OK accept press this call. */
   acceptPressed: boolean;
-  /** True once the assistant has spoken (opener after a real person connected). */
-  humanHeard: boolean;
+  /** How many Telnyx-OK accept presses have already landed. */
+  acceptPressCount: number;
   lastPressAtMs: number;
   nowMs: number;
   cooldownMs?: number;
+  maxPresses?: number;
   source: IvrPressSource;
 }): IvrPressDecision {
   if (args.ended) return { action: "deny", reason: "ended" };
   if (!args.hasDtmf) return { action: "deny", reason: "no_dtmf" };
-  if (args.humanHeard) return { action: "deny", reason: "human_heard" };
   if (args.inFlight) return { action: "deny", reason: "in_flight" };
+
+  const max = args.maxPresses ?? IVR_MAX_ACCEPT_PRESSES;
+  if (args.acceptPressCount >= max) {
+    return { action: "deny", reason: "max_presses" };
+  }
 
   if (!args.acceptPressed) {
     return { action: "press", repress: false };
@@ -59,9 +71,13 @@ export function decideIvrPress(args: {
     return { action: "deny", reason: "fallback_already_pressed" };
   }
 
-  const cooldown = args.cooldownMs ?? IVR_REPRESS_COOLDOWN_MS;
-  if (args.nowMs - args.lastPressAtMs < cooldown) {
-    return { action: "deny", reason: "cooldown" };
+  // The scheduled refallback is already spaced IVR_REFALLBACK_MS after the first
+  // OK press. Do not let a recent model re-press eat it via the spam cooldown.
+  if (args.source !== "refallback") {
+    const cooldown = args.cooldownMs ?? IVR_REPRESS_COOLDOWN_MS;
+    if (args.nowMs - args.lastPressAtMs < cooldown) {
+      return { action: "deny", reason: "cooldown" };
+    }
   }
   return { action: "press", repress: true };
 }
