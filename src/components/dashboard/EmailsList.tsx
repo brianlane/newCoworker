@@ -870,11 +870,20 @@ export function EmailsList({
       if (viewFilter === "received" && r.direction !== "inbound") return false;
       if (
         viewFilter === "inbox" &&
-        (r.direction !== "inbound" || r.archived_at || r.folder)
+        (!r.source.startsWith("tenant_mailbox") ||
+          r.direction !== "inbound" ||
+          r.archived_at ||
+          r.folder)
       ) {
         return false;
       }
-      if (viewFilter === "archived" && !r.archived_at) return false;
+      if (
+        viewFilter === "archived" &&
+        (!r.archived_at || !r.source.startsWith("tenant_mailbox"))
+      ) {
+        return false;
+      }
+      if (folderFilter && !r.source.startsWith("tenant_mailbox")) return false;
       // Unread is meaningful for AI-mailbox rows; other sources stay "read".
       if (
         viewFilter === "unread" &&

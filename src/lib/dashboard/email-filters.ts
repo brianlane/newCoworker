@@ -54,9 +54,15 @@ export function emailListFiltersFromView(input: {
   };
   if (label) filters.label = label;
 
+  const aiMailboxSources: ListEmailLogFilters["sources"] = [
+    "tenant_mailbox_inbound",
+    "tenant_mailbox_outbound"
+  ];
+
   if (folder) {
-    // A concrete folder wins over the Inbox (folder-null) view.
+    // Folders only exist on the AI mailbox; keep the fetch aligned.
     filters.folder = folder;
+    filters.sources = aiMailboxSources;
     if (input.view === "sent") filters.direction = "outbound";
     else if (input.view === "received" || input.view === "inbox") {
       filters.direction = "inbound";
@@ -64,7 +70,6 @@ export function emailListFiltersFromView(input: {
       filters.inbox = false;
     } else if (input.view === "unread") {
       filters.unreadOnly = true;
-      filters.sources = ["tenant_mailbox_inbound", "tenant_mailbox_outbound"];
     }
     return filters;
   }
@@ -77,15 +82,18 @@ export function emailListFiltersFromView(input: {
       filters.direction = "inbound";
       break;
     case "inbox":
+      // Inbox organize view is AI-mailbox-only (same as Unread).
       filters.inbox = true;
+      filters.sources = aiMailboxSources;
       break;
     case "archived":
       filters.inbox = false;
+      filters.sources = aiMailboxSources;
       break;
     case "unread":
       // Unread styling/actions are AI-mailbox-only; keep the fetch aligned.
       filters.unreadOnly = true;
-      filters.sources = ["tenant_mailbox_inbound", "tenant_mailbox_outbound"];
+      filters.sources = aiMailboxSources;
       break;
     default:
       break;

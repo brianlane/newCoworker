@@ -30,11 +30,13 @@ describe("email-filters", () => {
     });
     expect(emailListFiltersFromView({ view: "inbox" })).toEqual({
       limit: 100,
-      inbox: true
+      inbox: true,
+      sources: ["tenant_mailbox_inbound", "tenant_mailbox_outbound"]
     });
     expect(emailListFiltersFromView({ view: "archived" })).toEqual({
       limit: 100,
-      inbox: false
+      inbox: false,
+      sources: ["tenant_mailbox_inbound", "tenant_mailbox_outbound"]
     });
     expect(emailListFiltersFromView({ view: "unread" })).toEqual({
       limit: 100,
@@ -55,19 +57,22 @@ describe("email-filters", () => {
       limit: 50,
       folder: "Sales",
       label: "VIP",
-      direction: "inbound"
+      direction: "inbound",
+      sources: ["tenant_mailbox_inbound", "tenant_mailbox_outbound"]
     });
     expect(
       emailListFiltersFromView({ view: "archived", folder: "Sales" })
     ).toEqual({
       limit: 100,
       folder: "Sales",
-      inbox: false
+      inbox: false,
+      sources: ["tenant_mailbox_inbound", "tenant_mailbox_outbound"]
     });
     expect(emailListFiltersFromView({ view: "sent", folder: "Sales" })).toEqual({
       limit: 100,
       folder: "Sales",
-      direction: "outbound"
+      direction: "outbound",
+      sources: ["tenant_mailbox_inbound", "tenant_mailbox_outbound"]
     });
     expect(emailListFiltersFromView({ view: "unread", folder: "Sales" })).toEqual({
       limit: 100,
@@ -77,14 +82,16 @@ describe("email-filters", () => {
     });
     expect(emailListFiltersFromView({ view: "all", folder: "Sales" })).toEqual({
       limit: 100,
-      folder: "Sales"
+      folder: "Sales",
+      sources: ["tenant_mailbox_inbound", "tenant_mailbox_outbound"]
     });
     expect(
       emailListFiltersFromView({ view: "received", folder: "Sales" })
     ).toEqual({
       limit: 100,
       folder: "Sales",
-      direction: "inbound"
+      direction: "inbound",
+      sources: ["tenant_mailbox_inbound", "tenant_mailbox_outbound"]
     });
   });
 });
