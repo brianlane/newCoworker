@@ -21,6 +21,7 @@ vi.mock("@/lib/campaigns/db", async (importOriginal) => ({
   claimRecipient: vi.fn(),
   countRecipientsByStatus: vi.fn(),
   markRecipient: vi.fn(),
+  skipAllPendingRecipients: vi.fn(),
   patchEmailCampaign: vi.fn(),
   transitionEmailCampaign: vi.fn()
 }));
@@ -53,6 +54,7 @@ import {
   listSendingCampaigns,
   markRecipient,
   patchEmailCampaign,
+  skipAllPendingRecipients,
   transitionEmailCampaign,
   type CampaignRecipientRow,
   type EmailCampaignRow
@@ -70,6 +72,7 @@ const deletePendings = vi.mocked(deletePendingRecipients);
 const claim = vi.mocked(claimRecipient);
 const countByStatus = vi.mocked(countRecipientsByStatus);
 const mark = vi.mocked(markRecipient);
+const skipPending = vi.mocked(skipAllPendingRecipients);
 const patch = vi.mocked(patchEmailCampaign);
 const transition = vi.mocked(transitionEmailCampaign);
 
@@ -149,6 +152,7 @@ beforeEach(() => {
   claim.mockResolvedValue(true);
   countByStatus.mockResolvedValue(0);
   mark.mockResolvedValue(undefined);
+  skipPending.mockResolvedValue(0);
   patch.mockResolvedValue(undefined);
   transition.mockResolvedValue(true);
 });
@@ -496,9 +500,7 @@ describe("processCampaignSweep — sending", () => {
     } as never);
     listDue.mockResolvedValue([campaign()]);
     listSending.mockResolvedValue([campaign({ status: "sending" })]);
-    listPending
-      .mockResolvedValueOnce([recipient("r1", "jane@x.test")])
-      .mockResolvedValueOnce([]);
+    skipPending.mockResolvedValue(1);
     countByStatus.mockResolvedValue(0);
     const sendEmail = vi.fn();
     const { db } = makeDb([]);
@@ -507,9 +509,8 @@ describe("processCampaignSweep — sending", () => {
     expect(result.sent).toBe(0);
     expect(result.completed).toBe(1);
     expect(sendEmail).not.toHaveBeenCalled();
-    expect(mark).toHaveBeenCalledWith(
-      "r1",
-      "skipped",
+    expect(skipPending).toHaveBeenCalledWith(
+      "c-1",
       expect.stringMatching(/Standard/),
       db
     );
@@ -530,13 +531,26 @@ describe("processCampaignSweep — sending", () => {
     } as never);
     listDue.mockResolvedValue([]);
     listSending.mockResolvedValue([campaign({ status: "sending" })]);
-    listPending.mockResolvedValue([]);
     transition.mockResolvedValue(false);
     const sendEmail = vi.fn();
     const { db } = makeDb([]);
     const result = await processCampaignSweep({ client: db, now: () => NOW, sendEmail });
     expect(result.completed).toBe(0);
-    expect(mark).not.toHaveBeenCalled();
+    expect(skipPending).toHaveBeenCalled();
+    expect(sendEmail).not.toHaveBeenCalled();
+  });
+
+  it("does not close a mid-send campaign when business lookup returns null", async () => {
+    vi.mocked(getBusiness).mockResolvedValue(null);
+    listDue.mockResolvedValue([]);
+    listSending.mockResolvedValue([campaign({ status: "sending" })]);
+    listPending.mockResolvedValue([recipient("r1", "jane@x.test")]);
+    const sendEmail = vi.fn();
+    const { db } = makeDb([]);
+    const result = await processCampaignSweep({ client: db, now: () => NOW, sendEmail });
+    expect(result.completed).toBe(0);
+    expect(result.sent).toBe(0);
+    expect(skipPending).not.toHaveBeenCalled();
     expect(sendEmail).not.toHaveBeenCalled();
   });
 

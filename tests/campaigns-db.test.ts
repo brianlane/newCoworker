@@ -24,6 +24,7 @@ import {
   listSendingCampaigns,
   markRecipient,
   patchEmailCampaign,
+  skipAllPendingRecipients,
   transitionEmailCampaign
 } from "@/lib/campaigns/db";
 
@@ -270,5 +271,22 @@ describe("recipients", () => {
     await expect(
       markRecipient("r1", "sent", null, makeDb(chain({ error: { message: "mr" } })))
     ).rejects.toThrow(/mr/);
+
+    const skipped = chain({ data: [{ id: "r1" }, { id: "r2" }], error: null });
+    expect(await skipAllPendingRecipients(CAMPAIGN, "tier blocked", makeDb(skipped))).toBe(2);
+    expect(skipped.update).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "skipped", error_detail: "tier blocked", sent_at: null })
+    );
+    expect(skipped.eq).toHaveBeenCalledWith("status", "pending");
+    expect(await skipAllPendingRecipients(CAMPAIGN, "x", makeDb(chain({ data: null, error: null })))).toBe(
+      0
+    );
+    const viaDefault = chain({ data: [{ id: "r3" }], error: null });
+    defaultClientSpy.mockReturnValue(makeDb(viaDefault));
+    expect(await skipAllPendingRecipients(CAMPAIGN, "default")).toBe(1);
+    expect(defaultClientSpy).toHaveBeenCalled();
+    await expect(
+      skipAllPendingRecipients(CAMPAIGN, "x", makeDb(chain({ error: { message: "sp" } })))
+    ).rejects.toThrow(/sp/);
   });
 });

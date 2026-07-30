@@ -300,6 +300,30 @@ export async function markRecipient(
 }
 
 /**
+ * Skip every still-pending recipient for a campaign (status-guarded so a
+ * concurrent claim/send cannot be overwritten to skipped).
+ */
+export async function skipAllPendingRecipients(
+  campaignId: string,
+  errorDetail: string,
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("email_campaign_recipients")
+    .update({
+      status: "skipped",
+      error_detail: errorDetail,
+      sent_at: null
+    })
+    .eq("campaign_id", campaignId)
+    .eq("status", "pending")
+    .select("id");
+  if (error) throw new Error(`skipAllPendingRecipients: ${error.message}`);
+  return Array.isArray(data) ? data.length : 0;
+}
+
+/**
  * Convergent counters: derive sent/failed from the recipient rows instead
  * of read-modify-write increments on the campaign row (which drift under
  * concurrent sweeps).

@@ -435,8 +435,10 @@ export async function processSocialPostSweep(
     try {
       // Downgrade-safe: never resume Graph for Starter, even inside the
       // resume grace (the owning pass must not finish a gated publish).
+      // A null business lookup is a transient blip — leave the row alone.
       const business = await getBusiness(post.business_id, db);
-      if (!marketingAutomationAllowedForTier(business?.tier)) {
+      if (!business) continue;
+      if (!marketingAutomationAllowedForTier(business.tier)) {
         const won = await transitionSocialPost(
           post.business_id,
           post.id,

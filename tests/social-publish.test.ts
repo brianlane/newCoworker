@@ -205,6 +205,23 @@ describe("processSocialPostSweep — publish", () => {
     expect(result.failed).toBe(0);
   });
 
+  it("leaves in-flight rows alone when business lookup returns null", async () => {
+    vi.mocked(getBusiness).mockResolvedValue(null);
+    listInFlight.mockResolvedValue([
+      post({
+        id: "p-old",
+        status: "publishing",
+        started_at: STARTED_STALE,
+        ig_creation_id: "container-7"
+      })
+    ]);
+    const result = await processSocialPostSweep(deps());
+    expect(result.failed).toBe(0);
+    expect(result.published).toBe(0);
+    expect(transition).not.toHaveBeenCalled();
+    expect(containerStatus).not.toHaveBeenCalled();
+  });
+
   it("claims FIRST (single publisher), runs the Graph two-step, stamps published", async () => {
     listDue.mockResolvedValue([post()]);
     const result = await processSocialPostSweep(deps());

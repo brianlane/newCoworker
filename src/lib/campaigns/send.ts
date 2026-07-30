@@ -43,6 +43,7 @@ import {
   listSendingCampaigns,
   markRecipient,
   patchEmailCampaign,
+  skipAllPendingRecipients,
   transitionEmailCampaign,
   type CampaignRecipientRow,
   type EmailCampaignRow
@@ -263,25 +264,18 @@ export async function processCampaignSweep(
   for (const campaign of sending) {
     try {
       const business = await getBusiness(campaign.business_id, db);
-      if (!marketingAutomationAllowedForTier(business?.tier)) {
-        // Mid-send downgrade: skip leftover recipients and close the campaign
-        // so it cannot sit in `sending` forever with no further drain.
-        for (;;) {
-          const leftover = await listPendingRecipients(
-            campaign.id,
-            CAMPAIGN_BATCH_PER_SWEEP,
-            db
-          );
-          if (leftover.length === 0) break;
-          for (const recipient of leftover) {
-            await markRecipient(
-              recipient.id,
-              "skipped",
-              MARKETING_AUTOMATION_UPGRADE_MESSAGE,
-              db
-            );
-          }
-        }
+      // Only abort when tier is known. A null lookup is a transient DB blip
+      // (getBusiness collapses errors to null) — leave the campaign for the
+      // next pass instead of skipping recipients / closing as sent.
+      if (!business) continue;
+      if (!marketingAutomationAllowedForTier(business.tier)) {
+        // Mid-send downgrade: status-guarded skip of leftover pending rows,
+        // then close so the campaign cannot sit in `sending` forever.
+        await skipAllPendingRecipients(
+          campaign.id,
+          MARKETING_AUTOMATION_UPGRADE_MESSAGE,
+          db
+        );
         const completed = await transitionEmailCampaign(
           campaign.business_id,
           campaign.id,
