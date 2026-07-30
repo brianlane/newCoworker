@@ -805,17 +805,12 @@ export function EmailsList({
     | "inbox"
     | "archived"
     | "unread";
-  const [viewFilter, setViewFilter] = useState<ViewFilter>(initialView);
-  const [folderFilter, setFolderFilter] = useState<string>(initialFolder);
-  const [labelFilter, setLabelFilter] = useState<string>(initialLabel);
+  // Filter chips are URL-driven (server props). No local copy: that would
+  // desync on back/forward, and setState-in-effect is lint-blocked.
+  const viewFilter = initialView;
+  const folderFilter = initialFolder;
+  const labelFilter = initialLabel;
   const selected = rows.find((r) => r.id === selectedId) ?? null;
-
-  // Keep chips in sync when the server re-renders from a new URL (back/forward).
-  useEffect(() => {
-    setViewFilter(initialView);
-    setFolderFilter(initialFolder);
-    setLabelFilter(initialLabel);
-  }, [initialView, initialFolder, initialLabel]);
 
   function navigateFilters(next: {
     view?: ViewFilter;
@@ -825,9 +820,6 @@ export function EmailsList({
     const view = next.view ?? viewFilter;
     const folder = next.folder ?? folderFilter;
     const label = next.label ?? labelFilter;
-    setViewFilter(view);
-    setFolderFilter(folder);
-    setLabelFilter(label);
     const params = new URLSearchParams();
     if (view !== "all") params.set("view", view);
     if (folder) params.set("folder", folder);

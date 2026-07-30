@@ -326,5 +326,25 @@ describe("listEmailLog organize filters", () => {
       "tenant_mailbox_inbound",
       "tenant_mailbox_outbound"
     ]);
+
+    vi.mocked(isVpsReadMode).mockResolvedValue(true);
+    vi.mocked(readMovedRows).mockResolvedValue([]);
+    await listEmailLog(BIZ, {
+      unreadOnly: true,
+      sources: ["tenant_mailbox_inbound", "tenant_mailbox_outbound"],
+      limit: 5
+    });
+    expect(readMovedRows).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({
+        filters: expect.arrayContaining([
+          {
+            column: "source",
+            op: "in",
+            value: ["tenant_mailbox_inbound", "tenant_mailbox_outbound"]
+          }
+        ])
+      })
+    );
   });
 });
