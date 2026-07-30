@@ -169,6 +169,9 @@ function buildStandardFeatures(locale: PlanCopyLocale): string[] {
     es
       ? "Campañas de correo e Instagram programadas"
       : "Scheduled email campaigns and Instagram posts",
+    es
+      ? "Llamadas de IA salientes: tu coworker puede llamar a leads por ti"
+      : "Outbound AI calls: your coworker can call leads for you",
     es ? "Envía textos durante llamadas" : "Send texts during calls",
     es
       ? "Auto-texto a quien llama cuando no se puede contestar"

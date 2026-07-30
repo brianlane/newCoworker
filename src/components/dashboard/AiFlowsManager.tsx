@@ -991,6 +991,7 @@ export function AiFlowsManager({
   initialEditId,
   initialAdaptDraft,
   webhooksEnabled = true,
+  outboundAiCallsEnabled = true,
   initialDismissedCards
 }: {
   businessId: string;
@@ -1006,6 +1007,11 @@ export function AiFlowsManager({
    * upgrade note instead of setup instructions.
    */
   webhooksEnabled?: boolean;
+  /**
+   * False on starter: hide place_ai_call / outbound voice authoring and refuse
+   * Place call; dial paths also refuse server-side.
+   */
+  outboundAiCallsEnabled?: boolean;
   /** Starter cards this user has hidden (per user, not per business). */
   initialDismissedCards?: DismissibleCardKey[];
 }) {
@@ -1692,9 +1698,13 @@ export function AiFlowsManager({
     const canvasAddable =
       editor.channel === "voice"
         ? editor.voiceDirection === "outbound"
-          ? OUTBOUND_VOICE_STEP_TYPES
+          ? outboundAiCallsEnabled
+            ? OUTBOUND_VOICE_STEP_TYPES
+            : ([] as const)
           : INBOUND_VOICE_STEP_TYPES
-        : VISUAL_BATCH_STEP_TYPES;
+        : outboundAiCallsEnabled
+          ? VISUAL_BATCH_STEP_TYPES
+          : VISUAL_BATCH_STEP_TYPES.filter((t) => t !== "place_ai_call");
     return (
       <Card className="space-y-6">
         <div className="flex items-center justify-between gap-3">
@@ -2122,6 +2132,32 @@ export function AiFlowsManager({
               </p>
             </div>
           )}
+          {editor.channel === "voice" && !outboundAiCallsEnabled && (
+            <div className="rounded-md border border-parchment/10 bg-deep-ink/20 p-3">
+              <p className="text-[11px] text-amber-400/90">
+                Outbound AI calls are a Standard plan perk. Inbound voice still works on your
+                plan. Upgrade to{" "}
+                <Link href="/dashboard/billing" className="text-signal-teal hover:underline">
+                  place AI calls
+                </Link>{" "}
+                (and add &ldquo;Call them&rdquo; steps on batch flows).
+              </p>
+            </div>
+          )}
+          {editor.channel !== "voice" &&
+            !outboundAiCallsEnabled &&
+            editor.steps.some((s) => s.type === "place_ai_call") && (
+              <div className="rounded-md border border-parchment/10 bg-deep-ink/20 p-3">
+                <p className="text-[11px] text-amber-400/90">
+                  Outbound AI calls are a Standard plan perk. This flow can be saved, but Call
+                  them steps won&apos;t dial until you{" "}
+                  <Link href="/dashboard/billing" className="text-signal-teal hover:underline">
+                    upgrade your plan
+                  </Link>
+                  .
+                </p>
+              </div>
+            )}
           {editor.channel === "calendar" && (
             <div className="space-y-2">
               <div>
@@ -2641,9 +2677,13 @@ export function AiFlowsManager({
           <div className="flex flex-wrap gap-2">
             {(editor.channel === "voice"
               ? editor.voiceDirection === "outbound"
-                ? OUTBOUND_VOICE_STEP_TYPES
+                ? outboundAiCallsEnabled
+                  ? OUTBOUND_VOICE_STEP_TYPES
+                  : ([] as const)
                 : INBOUND_VOICE_STEP_TYPES
-              : NON_VOICE_STEP_TYPES
+              : outboundAiCallsEnabled
+                ? NON_VOICE_STEP_TYPES
+                : NON_VOICE_STEP_TYPES.filter((t) => t !== "place_ai_call")
             ).map((t) => (
               <button
                 key={t}
@@ -3015,6 +3055,7 @@ export function AiFlowsManager({
                 {/* Outbound voice flows are started on demand here — the call is
                     placed and metered by telnyx-voice-originate. */}
                 {row.enabled &&
+                  outboundAiCallsEnabled &&
                   row.definition.trigger.channel === "voice" &&
                   row.definition.trigger.direction === "outbound" && (
                     <button

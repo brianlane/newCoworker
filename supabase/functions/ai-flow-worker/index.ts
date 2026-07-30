@@ -136,6 +136,7 @@ import {
   contactAge,
   localYearIn
 } from "../_shared/ai_flows/birthday.ts";
+import { outboundAiCallsAllowedForTier } from "../_shared/outbound_ai_call_tier.ts";
 import { scheduleDue, type ScheduleConfig } from "../_shared/ai_flows/schedule.ts";
 import {
   capMicrosForTier,
@@ -6622,6 +6623,26 @@ async function placeAiCallStep(
     return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
   }
 
+  // Standard+ gate before the dial ledger: Starter never rings, and a
+  // skipped step must not leave a terminal ledger row that blocks retries
+  // after upgrade.
+  {
+    const { data: bizRow, error: bizErr } = await supabase
+      .from("businesses")
+      .select("tier")
+      .eq("id", run.business_id)
+      .maybeSingle();
+    if (bizErr) {
+      return { kind: "fail", error: `place_ai_call: tier lookup failed (${bizErr.message})` };
+    }
+    if (!outboundAiCallsAllowedForTier((bizRow as { tier?: string } | null)?.tier)) {
+      scope.vars[action.saveAs] = CALL_NOT_PLACED_SENTINEL;
+      scope.vars[action.marker] = "1";
+      appendActionTaken(scope, "AI call skipped (tier_blocked)");
+      return { kind: "ok", skipped: true, result: { skipped: "tier_blocked" } };
+    }
+  }
+
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
   const bearer = Deno.env.get("INTERNAL_CRON_SECRET") ?? "";
   if (!supabaseUrl || !bearer) {
@@ -9406,6 +9427,20 @@ async function enqueueDueOutboundCalls(
       if (!hasSchedule) continue;
       const due = scheduleDue(nowMs, trig as ScheduleConfig);
       if (!due) continue;
+
+      // Standard+ gate before the dial ledger (same as place_ai_call).
+      const { data: bizRow, error: bizErr } = await supabase
+        .from("businesses")
+        .select("tier")
+        .eq("id", row.business_id)
+        .maybeSingle();
+      if (bizErr) {
+        console.error("outbound sweep tier lookup", bizErr);
+        continue;
+      }
+      if (!outboundAiCallsAllowedForTier((bizRow as { tier?: string } | null)?.tier)) {
+        continue;
+      }
 
       const dedupeKey = `osched:${due.key}`;
       const { error: insErr } = await supabase.from("voice_outbound_dial_log").insert({
