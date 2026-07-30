@@ -2207,45 +2207,81 @@ async function handleVoiceBonusRefund(event: Stripe.Event): Promise<void> {
         ? ((obj as Stripe.Dispute).payment_intent as string)
         : null;
 
-  if (!paymentIntentId) {
-    logger.debug("Stripe refund/dispute event without payment_intent; ignoring", {
+  const stripe = getStripe();
+
+  // Resolve the invoice id for membership Checkout clawbacks. Refunds carry
+  // it on the charge; disputes need a charge retrieve. Prefer this when the
+  // Checkout Session has no payment_intent (common for mode=subscription).
+  let chargeInvoice: string | null = null;
+  if (event.type === "charge.refunded") {
+    const chargeObj = obj as Stripe.Charge & {
+      invoice?: string | { id?: string } | null;
+    };
+    chargeInvoice =
+      typeof chargeObj.invoice === "string"
+        ? chargeObj.invoice
+        : chargeObj.invoice && typeof chargeObj.invoice === "object"
+          ? chargeObj.invoice.id ?? null
+          : null;
+  } else if (event.type === "charge.dispute.closed") {
+    const dispute = obj as Stripe.Dispute & {
+      charge?: string | { id?: string } | null;
+    };
+    const chargeId =
+      typeof dispute.charge === "string"
+        ? dispute.charge
+        : dispute.charge && typeof dispute.charge === "object"
+          ? dispute.charge.id ?? null
+          : null;
+    if (chargeId) {
+      try {
+        const disputedCharge = (await stripe.charges.retrieve(chargeId)) as Stripe.Charge & {
+          invoice?: string | { id?: string } | null;
+        };
+        chargeInvoice =
+          typeof disputedCharge.invoice === "string"
+            ? disputedCharge.invoice
+            : disputedCharge.invoice && typeof disputedCharge.invoice === "object"
+              ? disputedCharge.invoice.id ?? null
+              : null;
+      } catch (err) {
+        logger.warn("Stripe dispute charge retrieve failed during pack refund handling", {
+          eventId: event.id,
+          chargeId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+    }
+  }
+
+  if (!paymentIntentId && !chargeInvoice) {
+    logger.debug("Stripe refund/dispute event without payment_intent or invoice; ignoring", {
       type: event.type,
       eventId: event.id
     });
     return;
   }
 
-  const stripe = getStripe();
   const sessionsById = new Map<string, Stripe.Checkout.Session>();
-  try {
-    const byPi = await stripe.checkout.sessions.list({
-      payment_intent: paymentIntentId,
-      limit: 5
-    });
-    for (const s of byPi.data) sessionsById.set(s.id, s);
-  } catch (err) {
-    logger.error("Stripe checkout sessions list failed during refund handling", {
-      eventId: event.id,
-      paymentIntentId,
-      error: err instanceof Error ? err.message : String(err)
-    });
-    return;
+  if (paymentIntentId) {
+    try {
+      const byPi = await stripe.checkout.sessions.list({
+        payment_intent: paymentIntentId,
+        limit: 5
+      });
+      for (const s of byPi.data) sessionsById.set(s.id, s);
+    } catch (err) {
+      logger.error("Stripe checkout sessions list failed during refund handling", {
+        eventId: event.id,
+        paymentIntentId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      // Continue to invoice fallback when present; membership sessions often
+      // lack payment_intent and only match via the first invoice.
+      if (!chargeInvoice) return;
+    }
   }
 
-  // Subscription-mode membership Checkout often leaves session.payment_intent
-  // null; the charge hangs off the first invoice. Look up by subscription so
-  // membership pack add-on grants still claw back on refund/dispute.
-  const chargeObj = obj as Stripe.Charge & {
-    invoice?: string | { id?: string } | null;
-  };
-  const chargeInvoice =
-    event.type === "charge.refunded" && typeof chargeObj.invoice === "string"
-      ? chargeObj.invoice
-      : event.type === "charge.refunded" &&
-          chargeObj.invoice &&
-          typeof chargeObj.invoice === "object"
-        ? chargeObj.invoice.id ?? null
-        : null;
   if (chargeInvoice) {
     try {
       const invoice = await stripe.invoices.retrieve(chargeInvoice);

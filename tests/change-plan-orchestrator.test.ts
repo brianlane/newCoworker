@@ -414,6 +414,15 @@ describe("runChangePlanFromCheckout", () => {
     expect(applyMembershipPackAddonsFromCheckoutMock).toHaveBeenCalled();
   });
 
+  it("logs when pack grants fail after creating the new subscription", async () => {
+    applyMembershipPackAddonsFromCheckoutMock.mockRejectedValueOnce(new Error("grant boom mid"));
+
+    await runChangePlanFromCheckout(makeSession(), "evt_grant_fail");
+
+    expect(createSubscriptionMock).toHaveBeenCalled();
+    expect(applyMembershipPackAddonsFromCheckoutMock).toHaveBeenCalled();
+  });
+
   describe("old-VPS pool return (fleet economics Phase B)", () => {
     it("labels a non-starter old box kvm8 (old tier default, not the new pin)", async () => {
       // The vps_size pin describes the box being provisioned NOW; the
