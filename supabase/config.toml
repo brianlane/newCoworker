@@ -103,6 +103,9 @@ verify_jwt = false
 [functions.document-expiration-sweep]
 verify_jwt = false
 
+[functions.monthly-intro-nudge-sweep]
+verify_jwt = false
+
 [functions.email-campaign-sweep]
 verify_jwt = false
 

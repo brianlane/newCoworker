@@ -61,6 +61,11 @@ export type SubscriptionRow = {
   billing_paused: boolean;
   /** Mirror of `pause_collection.resumes_at`; null = paused until resumed. */
   billing_pause_resumes_at: string | null;
+  /**
+   * When the first-month month-to-month intro nudge email was claimed/sent
+   * (§ monthly_intro_nudge migration). Null until the daily sweep stamps it.
+   */
+  monthly_intro_nudge_sent_at: string | null;
   created_at: string;
 };
 

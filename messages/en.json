@@ -2473,6 +2473,17 @@
       "replyLine": "Reply to this email and we'll schedule your onboarding session.",
       "priorityLine": "Your priority call & video support line is open through {date}.",
       "ctaBook": "Book your session"
+    },
+    "monthlyIntroNudge": {
+      "subject": "A note about your next New Coworker invoice",
+      "line1": "Hi, we wanted to give you a clear notice before your next invoice.",
+      "line2": "Your first-month rate of {introRate} applies through {date}. After that, month-to-month renews at {renewalRate} unless you choose a different plan.",
+      "line3": "If a longer commitment fits better, prepaid contracts are available at a lower monthly rate:",
+      "biennialLine": "24-month: {biennialRate} ({biennialTotal} billed today)",
+      "annualLine": "12-month: {annualRate} ({annualTotal} billed today)",
+      "line4": "No action is required to stay on month-to-month. To review or change your plan, open Billing in your dashboard.",
+      "cta": "Review billing options",
+      "openBillingFallback": "Open Billing: {billingUrl}"
     }
   },
   "notFound": {
