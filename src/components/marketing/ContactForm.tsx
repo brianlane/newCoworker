@@ -67,7 +67,9 @@ function ContactFormAutofill() {
     };
   }, []);
 
-  return <ContactFormFields topic={topic} authPrefill={authPrefill} />;
+  // Remount when topic changes so subject/message defaults reset to the new
+  // CTA templates instead of keeping the previous topic's copy.
+  return <ContactFormFields key={topic ?? ""} topic={topic} authPrefill={authPrefill} />;
 }
 
 function ContactFormFields({
