@@ -17,7 +17,7 @@ export function parseVoiceBonusSecondsFromMetadata(raw: unknown): number | null 
   const n = Number(str);
   // Digit-only strings are always finite integers; keep the guard for
   // defense-in-depth against future parser changes.
-  /* c8 ignore next */
+  /* c8 ignore next 2 */
   if (!Number.isFinite(n) || !Number.isInteger(n)) return null;
   if (n <= 0) return null;
   const HARD_MAX_SECONDS = 60 * 60 * 24 * 365;
@@ -36,7 +36,7 @@ export function parseSmsBonusTextsFromMetadata(raw: unknown): number | null {
   if (!/^\d+$/.test(str)) return null;
   if (str.length > 7) return null;
   const n = Number(str);
-  /* c8 ignore next */
+  /* c8 ignore next 2 */
   if (!Number.isFinite(n) || !Number.isInteger(n)) return null;
   if (n <= 0) return null;
   const HARD_MAX_TEXTS = 1_000_000;
@@ -55,7 +55,7 @@ export function parseChatCreditMicrosFromMetadata(raw: unknown): number | null {
   if (!/^\d+$/.test(str)) return null;
   if (str.length > 10) return null;
   const n = Number(str);
-  /* c8 ignore next */
+  /* c8 ignore next 2 */
   if (!Number.isFinite(n) || !Number.isInteger(n)) return null;
   if (n <= 0) return null;
   const HARD_MAX_MICROS = 1_000_000_000;

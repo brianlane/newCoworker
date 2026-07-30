@@ -162,15 +162,15 @@ export function resolveMembershipPackAddons(
 
   const metadata: Record<string, string> = {};
   for (const line of lines) {
-    if (line.category === "voice" && line.voiceSeconds != null) {
+    if (line.category === "voice") {
       metadata.addonVoicePackId = line.packId;
       metadata.addonVoiceSeconds = String(line.voiceSeconds);
       metadata.addonVoiceCents = String(line.unitAmountCents);
-    } else if (line.category === "sms" && line.smsTexts != null) {
+    } else if (line.category === "sms") {
       metadata.addonSmsPackId = line.packId;
       metadata.addonSmsTexts = String(line.smsTexts);
       metadata.addonSmsCents = String(line.unitAmountCents);
-    } else if (line.category === "chat" && line.creditMicros != null) {
+    } else {
       metadata.addonChatPackId = line.packId;
       metadata.addonChatMicros = String(line.creditMicros);
       metadata.addonChatCents = String(line.unitAmountCents);

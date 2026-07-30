@@ -89,6 +89,16 @@ describe("applyMembershipPackAddonsFromCheckout", () => {
     expect(rpcMock).not.toHaveBeenCalled();
   });
 
+  it("no-ops when session metadata is null", async () => {
+    const session = {
+      id: "cs_membership_1",
+      created: 1_700_000_000,
+      metadata: null
+    } as unknown as Stripe.Checkout.Session;
+    await applyMembershipPackAddonsFromCheckout(session, "evt_1");
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
   it("warns and returns when businessId is missing", async () => {
     await applyMembershipPackAddonsFromCheckout(
       makeSession({ addonVoicePackId: "min_30", addonVoiceSeconds: "1800" }),
@@ -274,7 +284,44 @@ describe("applyMembershipPackAddonsFromCheckout", () => {
     const call = rpcMock.mock.calls.find(
       (c) => c[0] === "apply_sms_bonus_grant_from_checkout"
     );
-    expect(call?.[1].p_expires_at).toBeTruthy();
+    // created 1700000000 + 30d = 1702592000
+    expect(call?.[1].p_expires_at).toBe(new Date(1_702_592_000_000).toISOString());
+  });
+
+  it("expires at Stripe period end when that is later than purchased_at+30d", async () => {
+    stripeRetrieveMock.mockResolvedValue({
+      id: "sub_live",
+      status: "active",
+      current_period_end: 1_703_000_000
+    });
+    await applyMembershipPackAddonsFromCheckout(
+      makeSession({
+        businessId: "biz-1",
+        addonSmsPackId: "texts_500",
+        addonSmsTexts: "500"
+      }),
+      "evt_1"
+    );
+    const call = rpcMock.mock.calls.find(
+      (c) => c[0] === "apply_sms_bonus_grant_from_checkout"
+    );
+    expect(call?.[1].p_expires_at).toBe(new Date(1_703_000_000_000).toISOString());
+  });
+
+  it("stringifies non-Error Stripe retrieve failures", async () => {
+    stripeRetrieveMock.mockRejectedValue("stripe down");
+    await applyMembershipPackAddonsFromCheckout(
+      makeSession({
+        businessId: "biz-1",
+        addonVoicePackId: "min_30",
+        addonVoiceSeconds: "1800"
+      }),
+      "evt_1"
+    );
+    expect(loggerErrorMock).toHaveBeenCalledWith(
+      "membership_pack_addon shared: Stripe subscription retrieve failed",
+      expect.objectContaining({ error: "stripe down" })
+    );
   });
 
   it("blocks when subscription has no stripe id", async () => {
