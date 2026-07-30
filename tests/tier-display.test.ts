@@ -70,6 +70,12 @@ describe("tier-display", () => {
       );
     });
 
+    it("standard advertises Messenger/IG/WhatsApp AI replies (Standard-tier gate, Jul 2026)", () => {
+      expect(STANDARD_FEATURES).toContain(
+        "Automatic replies on Messenger, Instagram, and WhatsApp"
+      );
+    });
+
     it("enterprise advertises branded RCS (own verified sender)", () => {
       expect(ENTERPRISE_FEATURES).toContain(
         "Branded RCS messaging (your own Google-verified sender)"

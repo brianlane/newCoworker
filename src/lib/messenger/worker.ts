@@ -43,6 +43,7 @@ import {
 } from "@/lib/meta/client";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { PlanTier } from "@/lib/plans/tier";
+import { messengerAllowedForTier } from "@/lib/messenger/tier-gate";
 import { logger } from "@/lib/logger";
 
 export const MESSENGER_WORKER_ID = "platform-messenger-worker";
@@ -250,6 +251,13 @@ export async function processMessengerJobs(
       );
 
       const tier = await fetchTier(job.business_id);
+      // Standard+ only for automatic Gemini replies. Inbox ingest and owner
+      // manual send stay on Starter; fail terminal so reclaim does not loop.
+      if (!messengerAllowedForTier(tier)) {
+        await failJob("tier_blocked", "messenger_ai_requires_standard");
+        continue;
+      }
+
       const turn = await runTurn({
         businessId: job.business_id,
         conversation: conversationForTurn,

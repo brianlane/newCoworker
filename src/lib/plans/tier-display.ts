@@ -163,6 +163,9 @@ function buildStandardFeatures(locale: PlanCopyLocale): string[] {
     es
       ? "Traductor en vivo: tu coworker interpreta tras transferir la llamada"
       : "Live translator: your coworker interprets after transferring a call",
+    es
+      ? "Respuestas automáticas en Messenger, Instagram y WhatsApp"
+      : "Automatic replies on Messenger, Instagram, and WhatsApp",
     es ? "Envía textos durante llamadas" : "Send texts during calls",
     es
       ? "Auto-texto a quien llama cuando no se puede contestar"

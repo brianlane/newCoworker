@@ -18,6 +18,7 @@ import { Card } from "@/components/ui/Card";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
 import { listMessengerConversationsForBusiness } from "@/lib/messenger/db";
 import { getPublicMetaConnection } from "@/lib/db/meta-connections";
+import { messengerAllowedForTier } from "@/lib/messenger/tier-gate";
 
 export const dynamic = "force-dynamic";
 
@@ -31,7 +32,7 @@ export default async function DashboardMessengerPage() {
   const activeBusinessId = await resolveActiveBusinessId(user);
   const { data: businesses } = await db
     .from("businesses")
-    .select("id, name")
+    .select("id, name, tier")
     .in("id", activeBusinessId ? [activeBusinessId] : [])
     .limit(1);
 
@@ -76,8 +77,8 @@ export default async function DashboardMessengerPage() {
               Connect your Facebook Page first to chat with leads on Messenger.
             </p>
             <p className="text-xs text-parchment/40 mb-4">
-              Once connected, every Messenger and Instagram DM lands here and your
-              coworker replies within seconds.
+              Once connected, every Messenger and Instagram DM lands here. On
+              Standard and above, your coworker replies within seconds.
             </p>
             <Link
               href="/dashboard/integrations/meta"
@@ -94,10 +95,32 @@ export default async function DashboardMessengerPage() {
   const conversations = await listMessengerConversationsForBusiness(business.id, {
     limit: 50
   });
+  const aiAllowed = messengerAllowedForTier(
+    (business as { tier?: string | null }).tier
+  );
 
   return (
     <div className="space-y-6 max-w-4xl">
       {header}
+      {!aiAllowed ? (
+        <Card>
+          <div className="py-4 px-1">
+            <p className="text-parchment/70 text-sm mb-1">
+              Automatic replies are a Standard and Enterprise feature.
+            </p>
+            <p className="text-xs text-parchment/40 mb-3">
+              Conversations still land here so you can reply yourself. Upgrade to
+              have your coworker answer Messenger, Instagram, and WhatsApp DMs.
+            </p>
+            <a
+              href="/pricing"
+              className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-opacity-90 transition-colors"
+            >
+              See plans
+            </a>
+          </div>
+        </Card>
+      ) : null}
 
       {conversations.length === 0 ? (
         <Card>
