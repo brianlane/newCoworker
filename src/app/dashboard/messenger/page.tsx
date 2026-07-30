@@ -127,8 +127,9 @@ export default async function DashboardMessengerPage() {
           <div className="text-center py-8">
             <p className="text-parchment/60">No conversations yet.</p>
             <p className="text-xs text-parchment/40 mt-2">
-              When someone messages your Facebook Page (or Instagram account), the
-              conversation appears here and your coworker replies automatically.
+              {aiAllowed
+                ? "When someone messages your Facebook Page (or Instagram account), the conversation appears here and your coworker replies automatically."
+                : "When someone messages your Facebook Page (or Instagram account), the conversation appears here so you can reply. Automatic coworker replies need Standard or Enterprise."}
             </p>
           </div>
         </Card>
