@@ -8,6 +8,20 @@ import {
   browseActionAllowedForBusiness
 } from "@/lib/plans/browse-action";
 
+/** True when any step in the tree (including branch arms) is browse_action. */
+export function flowStepsIncludeBrowseAction(steps: FlowStep[]): boolean {
+  for (const step of steps) {
+    if (step.type === "browse_action") return true;
+    if (step.type === "branch") {
+      for (const arm of step.branches) {
+        if (flowStepsIncludeBrowseAction(arm.steps)) return true;
+      }
+      if (flowStepsIncludeBrowseAction(step.else)) return true;
+    }
+  }
+  return false;
+}
+
 /** Every browse_action step id in the tree (trunk + branch arms + elses). */
 export function collectBrowseActionSteps(def: AiFlowDefinition): string[] {
   const out: string[] = [];
@@ -40,9 +54,9 @@ export async function validateBrowseActionSteps(
 ): Promise<string[]> {
   const ids = collectBrowseActionSteps(def);
   if (ids.length === 0) return [];
-  /* c8 ignore next -- production default; tests inject */
-  const allowed =
-    deps.allowedForBusiness ?? browseActionAllowedForBusiness;
-  if (await allowed(businessId)) return [];
+  const allowed = deps.allowedForBusiness
+    ? await deps.allowedForBusiness(businessId)
+    : await browseActionAllowedForBusiness(businessId);
+  if (allowed) return [];
   return [BROWSE_ACTION_UPGRADE_MESSAGE];
 }

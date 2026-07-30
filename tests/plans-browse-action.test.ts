@@ -11,10 +11,11 @@ import {
 } from "@/lib/plans/browse-action";
 import {
   collectBrowseActionSteps,
+  flowStepsIncludeBrowseAction,
   validateBrowseActionSteps
 } from "@/lib/ai-flows/browse-action-steps";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import type { AiFlowDefinition } from "@/lib/ai-flows/schema";
+import type { AiFlowDefinition, FlowStep } from "@/lib/ai-flows/schema";
 
 function makeDb(result: { data: unknown; error: { message: string } | null }) {
   return {
@@ -129,5 +130,52 @@ describe("validateBrowseActionSteps", () => {
       allowedForBusiness: async () => true
     });
     expect(issues).toEqual([]);
+  });
+
+  it("uses browseActionAllowedForBusiness when no deps are injected", async () => {
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(
+      makeDb({ data: { tier: "starter" }, error: null })
+    );
+    const issues = await validateBrowseActionSteps("biz", defWithBrowse);
+    expect(issues).toEqual([BROWSE_ACTION_UPGRADE_MESSAGE]);
+  });
+
+  it("detects browse_action nested under a branch for the editor banner", () => {
+    const steps = [
+      {
+        id: "b",
+        type: "branch",
+        branches: [
+          {
+            id: "arm1",
+            label: "yes",
+            when: { var: "x", op: "eq", value: "1" },
+            steps: [{ id: "c", type: "browse_action", url: "https://c.test", actions: [] }]
+          }
+        ],
+        else: []
+      }
+    ] as unknown as FlowStep[];
+    expect(flowStepsIncludeBrowseAction(steps)).toBe(true);
+    expect(
+      flowStepsIncludeBrowseAction([
+        {
+          id: "b2",
+          type: "branch",
+          branches: [],
+          else: [{ id: "e", type: "browse_action", url: "https://e.test", actions: [] }]
+        } as never
+      ])
+    ).toBe(true);
+    expect(flowStepsIncludeBrowseAction([{ id: "s", type: "send_sms", to: "+1", body: "hi" } as never])).toBe(
+      false
+    );
+  });
+
+  it("allows via default business lookup on Standard", async () => {
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(
+      makeDb({ data: { tier: "standard" }, error: null })
+    );
+    expect(await validateBrowseActionSteps("biz", defWithBrowse)).toEqual([]);
   });
 });

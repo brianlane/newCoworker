@@ -37,6 +37,7 @@ import {
   varsProducedByStep,
   type StepContainerRef
 } from "@/lib/ai-flows/tree";
+import { flowStepsIncludeBrowseAction } from "@/lib/ai-flows/browse-action-steps";
 import type { AiFlowRow } from "@/lib/ai-flows/db";
 import {
   STEP_TYPE_LABELS,
@@ -2169,7 +2170,7 @@ export function AiFlowsManager({
             )}
           {editor.channel !== "voice" &&
             !browseActionEnabled &&
-            editor.steps.some((s) => s.type === "browse_action") && (
+            flowStepsIncludeBrowseAction(editor.steps) && (
               <div className="rounded-md border border-parchment/10 bg-deep-ink/20 p-3">
                 <p className="text-[11px] text-amber-400/90">
                   Browser actions (click and fill on websites) are a Standard plan perk. Remove
