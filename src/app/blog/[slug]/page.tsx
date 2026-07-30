@@ -16,9 +16,9 @@ import {
 import { renderMarkdown } from "@/lib/blog/markdown";
 import { SITE_URL } from "@/lib/marketing/site-url";
 
-// DB-backed at request time: posts appear the moment they publish, and the
-// build stays DB-free (CI builds with mock Supabase env).
-export const dynamic = "force-dynamic";
+// ISR: posts show within a minute of publish without paying a full Node
+// render on every scraper GET. Build stays DB-free (CI mock Supabase env).
+export const revalidate = 60;
 
 
 export async function generateMetadata({

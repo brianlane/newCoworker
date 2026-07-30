@@ -14,9 +14,9 @@ import {
   type BlogCategory
 } from "@/lib/blog/db";
 
-// DB-backed at request time: posts appear the moment they publish, and the
-// build stays DB-free (CI builds with mock Supabase env).
-export const dynamic = "force-dynamic";
+// ISR: posts show within a minute of publish without paying a full Node
+// render on every scraper GET. Build stays DB-free (CI mock Supabase env).
+export const revalidate = 60;
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("marketing.blogPage");

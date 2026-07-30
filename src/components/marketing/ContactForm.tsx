@@ -1,7 +1,12 @@
 "use client";
 
-import { useState } from "react";
+import { Suspense, useEffect, useMemo, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { useTranslations } from "next-intl";
+import {
+  CONTACT_TOPIC_DEFS_BY_PARAM,
+  type ContactPrefill
+} from "@/lib/marketing/contact-prefill";
 
 type Status = "idle" | "sending" | "sent" | "error";
 
@@ -10,9 +15,8 @@ const INPUT_CLASSES =
 
 const LABEL_CLASSES = "mb-2 block text-sm font-medium text-parchment/70";
 
-type Props = {
+type FieldProps = {
   defaultSubject?: string;
-  /** Prefill for signed-in owners arriving from dashboard CTAs. */
   defaultName?: string;
   defaultEmail?: string;
   defaultBusinessName?: string;
@@ -22,14 +26,81 @@ type Props = {
 /**
  * Client-side contact form that posts to /api/contact. Includes a hidden
  * honeypot field that the API answers 200 for but discards.
+ *
+ * Topic query + signed-in prefill load on the client so the /contact RSC
+ * stays free of auth and searchParams (anonymous scrapes should not hit
+ * Supabase).
  */
-export function ContactForm({
+export function ContactForm() {
+  return (
+    <Suspense fallback={<ContactFormFields />}>
+      <ContactFormAutofill />
+    </Suspense>
+  );
+}
+
+function ContactFormAutofill() {
+  const searchParams = useSearchParams();
+  const topic = searchParams.get("topic");
+  const t = useTranslations("marketing.contactPage");
+  const [prefill, setPrefill] = useState<ContactPrefill | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    fetch("/api/contact/prefill", { credentials: "same-origin" })
+      .then(async (res) => {
+        if (!res.ok) return {};
+        return (await res.json()) as ContactPrefill;
+      })
+      .then((data) => {
+        if (!cancelled) setPrefill(data ?? {});
+      })
+      .catch(() => {
+        if (!cancelled) setPrefill({});
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const defaults = useMemo((): FieldProps => {
+    const topicDef = topic ? CONTACT_TOPIC_DEFS_BY_PARAM[topic] : undefined;
+    const auth = prefill ?? {};
+    const defaultSubject = topicDef ? t(topicDef.subjectKey) : undefined;
+    const defaultMessage = topicDef
+      ? auth.businessName
+        ? t(topicDef.msgForKey, { businessName: auth.businessName })
+        : t(topicDef.msgKey)
+      : undefined;
+    return {
+      defaultSubject,
+      defaultName: auth.name,
+      defaultEmail: auth.email,
+      defaultBusinessName: auth.businessName,
+      defaultMessage
+    };
+  }, [prefill, t, topic]);
+
+  // Remount when prefill settles so defaultValue picks up auth/topic text.
+  const formKey =
+    prefill === null
+      ? "pending"
+      : `ready:${prefill.email ?? ""}:${topic ?? ""}:${defaults.defaultMessage ?? ""}`;
+
+  if (prefill === null) {
+    return <ContactFormFields />;
+  }
+
+  return <ContactFormFields key={formKey} {...defaults} />;
+}
+
+function ContactFormFields({
   defaultSubject,
   defaultName,
   defaultEmail,
   defaultBusinessName,
   defaultMessage
-}: Props) {
+}: FieldProps) {
   const t = useTranslations("marketing.contactPage.form");
   const [status, setStatus] = useState<Status>("idle");
   const [error, setError] = useState<string | null>(null);
