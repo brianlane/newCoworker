@@ -160,6 +160,51 @@ describe("processSocialPostSweep — publish", () => {
     expect(transition).not.toHaveBeenCalled();
   });
 
+  it("fails in-flight publishing rows on Starter without hitting Graph", async () => {
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: BIZ,
+      name: "Starter Co",
+      tier: "starter"
+    } as never);
+    listInFlight.mockResolvedValue([
+      post({
+        id: "p-old",
+        status: "publishing",
+        started_at: new Date(NOW.getTime() - 30_000).toISOString(),
+        ig_creation_id: "container-7"
+      })
+    ]);
+    const result = await processSocialPostSweep(deps());
+    expect(result.failed).toBe(1);
+    expect(result.promoted).toBe(0);
+    expect(containerStatus).not.toHaveBeenCalled();
+    expect(createContainer).not.toHaveBeenCalled();
+    expect(transition).toHaveBeenCalledWith(
+      BIZ,
+      "p-old",
+      "publishing",
+      expect.objectContaining({
+        status: "failed",
+        error_detail: expect.stringMatching(/Standard/)
+      }),
+      db
+    );
+  });
+
+  it("does not count a lost Starter in-flight fail race", async () => {
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: BIZ,
+      name: "Starter Co",
+      tier: "starter"
+    } as never);
+    listInFlight.mockResolvedValue([
+      post({ id: "p-old", status: "publishing", started_at: STARTED_STALE })
+    ]);
+    transition.mockResolvedValue(false);
+    const result = await processSocialPostSweep(deps());
+    expect(result.failed).toBe(0);
+  });
+
   it("claims FIRST (single publisher), runs the Graph two-step, stamps published", async () => {
     listDue.mockResolvedValue([post()]);
     const result = await processSocialPostSweep(deps());

@@ -30,7 +30,10 @@
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getBusiness } from "@/lib/db/businesses";
-import { marketingAutomationAllowedForTier } from "@/lib/plans/marketing-automation";
+import {
+  MARKETING_AUTOMATION_UPGRADE_MESSAGE,
+  marketingAutomationAllowedForTier
+} from "@/lib/plans/marketing-automation";
 import { getMetaConnection, type MetaConnectionRow } from "@/lib/db/meta-connections";
 import {
   createInstagramMediaContainer,
@@ -429,9 +432,27 @@ export async function processSocialPostSweep(
   const graceCutoffMs = now().getTime() - SOCIAL_PUBLISH_RESUME_GRACE_MINUTES * 60 * 1000;
   const staleCutoffMs = now().getTime() - SOCIAL_PUBLISH_STALE_MINUTES * 60 * 1000;
   for (const post of await listPublishingPosts(db)) {
-    const startedMs = post.started_at ? Date.parse(post.started_at) : 0;
-    if (startedMs > graceCutoffMs) continue;
     try {
+      // Downgrade-safe: never resume Graph for Starter, even inside the
+      // resume grace (the owning pass must not finish a gated publish).
+      const business = await getBusiness(post.business_id, db);
+      if (!marketingAutomationAllowedForTier(business?.tier)) {
+        const won = await transitionSocialPost(
+          post.business_id,
+          post.id,
+          "publishing",
+          {
+            status: "failed",
+            error_detail: MARKETING_AUTOMATION_UPGRADE_MESSAGE.slice(0, 500)
+          },
+          db
+        );
+        if (won) result.failed += 1;
+        continue;
+      }
+
+      const startedMs = post.started_at ? Date.parse(post.started_at) : 0;
+      if (startedMs > graceCutoffMs) continue;
       const outcome = await resolveInFlightPost(
         db,
         post,
