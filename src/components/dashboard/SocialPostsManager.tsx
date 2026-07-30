@@ -189,7 +189,11 @@ export function SocialPostsManager({
         body: JSON.stringify({ businessId, action: "cancel" })
       });
       const json = (await res.json()) as { ok: boolean; error?: { message?: string } };
-      if (!json.ok) setError(json.error?.message ?? "Could not cancel");
+      if (!json.ok) {
+        setError(json.error?.message ?? "Could not cancel");
+      } else {
+        setError(null);
+      }
       await refreshEverywhere();
     } catch {
       setError("Could not cancel — try again.");
@@ -204,7 +208,11 @@ export function SocialPostsManager({
         { method: "DELETE" }
       );
       const json = (await res.json()) as { ok: boolean; error?: { message?: string } };
-      if (!json.ok) setError(json.error?.message ?? "Could not delete");
+      if (!json.ok) {
+        setError(json.error?.message ?? "Could not delete");
+      } else {
+        setError(null);
+      }
       await refreshEverywhere();
     } catch {
       setError("Could not delete — try again.");
