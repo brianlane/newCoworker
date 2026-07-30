@@ -476,7 +476,10 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
   // themselves re-validate it against isAdmin + a live business row
   // (src/lib/admin/view-as.ts), so a forged value can't impersonate.
   if (isProtectedRoute(pathname) && user) {
-    if (isAdminUser && !request.cookies.get("admin_view_as")?.value) {
+    // View-as is only a routing exception for AAL2 admins. A leftover
+    // admin_view_as cookie must not let password-only (AAL1) sessions into
+    // the owner dashboard.
+    if (isAdminUser && !(adminHasMfa && request.cookies.get("admin_view_as")?.value)) {
       const redirectUrl = request.nextUrl.clone();
       redirectUrl.pathname = adminHasMfa ? "/admin/dashboard" : "/admin/mfa";
       return redirectWithCookies(response, redirectUrl);

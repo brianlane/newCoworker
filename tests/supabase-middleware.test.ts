@@ -500,6 +500,25 @@ describe("proxy", () => {
     expect(res.headers.get("location")).toContain("/admin");
   });
 
+  it("does not let aal1 admin bypass MFA via a leftover view-as cookie", async () => {
+    mockSupabaseWithUser({ id: "admin-1", email: "admin@newcoworker.com", aal: "aal1" });
+    const req = makeRequest("/dashboard", {
+      cookies: { admin_view_as: "biz-1" }
+    });
+    const res = await proxy(req);
+    expect(res.status).toBe(307);
+    expect(res.headers.get("location")).toContain("/admin/mfa");
+  });
+
+  it("allows aal2 admin with view-as cookie onto /dashboard", async () => {
+    mockSupabaseWithUser({ id: "admin-1", email: "admin@newcoworker.com", aal: "aal2" });
+    const req = makeRequest("/dashboard", {
+      cookies: { admin_view_as: "biz-1" }
+    });
+    const res = await proxy(req);
+    expect(res.status).toBe(200);
+  });
+
   it("allows authenticated non-admin to access /dashboard", async () => {
     mockSupabaseWithUser({ id: "u-1", email: "user@test.com" });
     const req = makeRequest("/dashboard");

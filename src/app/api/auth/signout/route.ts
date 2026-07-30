@@ -1,3 +1,4 @@
+import { VIEW_AS_COOKIE } from "@/lib/admin/view-as";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { NextResponse, type NextRequest } from "next/server";
 
@@ -17,5 +18,9 @@ export async function POST(request: NextRequest) {
   const origin = new URL(request.url).origin;
   const destination = isAdmin ? "/admin/login" : "/login";
 
-  return NextResponse.redirect(new URL(destination, origin), 303);
+  const response = NextResponse.redirect(new URL(destination, origin), 303);
+  // Drop any leftover admin view-as cookie so the next admin login cannot
+  // reuse it as a dashboard routing exception.
+  response.cookies.set(VIEW_AS_COOKIE, "", { path: "/", maxAge: 0 });
+  return response;
 }
