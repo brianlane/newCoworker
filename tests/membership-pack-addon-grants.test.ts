@@ -236,6 +236,47 @@ describe("applyMembershipPackAddonsFromCheckout", () => {
     );
   });
 
+  it("warns when voice re-arm RPC fails", async () => {
+    rpcMock.mockImplementation(async (name: string) => {
+      if (name === "voice_sync_low_balance_alert_armed_for_business") {
+        return { data: null, error: { message: "arm fail" } };
+      }
+      return { data: { ok: true }, error: null };
+    });
+    await applyMembershipPackAddonsFromCheckout(
+      makeSession({
+        businessId: "biz-1",
+        addonVoicePackId: "min_30",
+        addonVoiceSeconds: "1800"
+      }),
+      "evt_1"
+    );
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "membership_pack_addon voice re-arm failed",
+      expect.objectContaining({ businessId: "biz-1", error: "arm fail" })
+    );
+  });
+
+  it("expires at purchased_at+30d when that is later than period end", async () => {
+    stripeRetrieveMock.mockResolvedValue({
+      id: "sub_live",
+      status: "active",
+      current_period_end: 1_700_000_100
+    });
+    await applyMembershipPackAddonsFromCheckout(
+      makeSession({
+        businessId: "biz-1",
+        addonSmsPackId: "texts_500",
+        addonSmsTexts: "500"
+      }),
+      "evt_1"
+    );
+    const call = rpcMock.mock.calls.find(
+      (c) => c[0] === "apply_sms_bonus_grant_from_checkout"
+    );
+    expect(call?.[1].p_expires_at).toBeTruthy();
+  });
+
   it("blocks when subscription has no stripe id", async () => {
     getSubscriptionMock.mockResolvedValue({ id: "sub_row", status: "active" });
     await applyMembershipPackAddonsFromCheckout(

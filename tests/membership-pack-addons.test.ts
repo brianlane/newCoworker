@@ -126,6 +126,21 @@ describe("lib/billing/membership-pack-addons", () => {
     expect(resolved).toEqual({ ok: true, lines: [], totalCents: 0, metadata: {} });
   });
 
+  it("lists sms options when configured", () => {
+    process.env.STRIPE_SMS_BONUS_500_PRICE_ID = "price_sms";
+    process.env.STRIPE_SMS_BONUS_500_CENTS = "1000";
+    const options = listMembershipPackAddonOptions();
+    expect(options.some((o) => o.category === "sms" && o.id === "texts_500")).toBe(true);
+  });
+
+  it("rejects an unknown chat pack id", () => {
+    const bad = resolveMembershipPackAddons({ chatPackId: "usd_nope" }, "monthly");
+    expect(bad).toEqual({
+      ok: false,
+      error: "Unknown or unavailable chat credit pack: usd_nope"
+    });
+  });
+
   it("detects membership addon metadata", () => {
     expect(sessionHasMembershipPackAddons(undefined)).toBe(false);
     expect(sessionHasMembershipPackAddons({})).toBe(false);

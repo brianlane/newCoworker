@@ -2296,23 +2296,30 @@ async function handleVoiceBonusRefund(event: Stripe.Event): Promise<void> {
       const subId =
         typeof rawSub === "string" ? rawSub : rawSub && typeof rawSub === "object" ? rawSub.id ?? null : null;
       if (subId) {
-        const bySub = await stripe.checkout.sessions.list({
-          subscription: subId,
-          limit: 5
-        });
-        for (const s of bySub.data) {
-          // Only the Checkout Session that produced THIS invoice. Listing by
-          // subscription alone would also hit later renewal invoices and void
-          // membership pack grants on an unrelated refund.
-          const sessionInvoice =
-            typeof s.invoice === "string"
-              ? s.invoice
-              : s.invoice && typeof s.invoice === "object"
-                ? (s.invoice as { id?: string }).id ?? null
-                : null;
-          if (sessionInvoice && sessionInvoice === chargeInvoice) {
-            sessionsById.set(s.id, s);
+        // Paginate: a long-lived subscription can have more than one page of
+        // Checkout Sessions (signup, plan changes). Find the session whose
+        // invoice matches THIS charge, not just the first five.
+        let startingAfter: string | undefined;
+        for (let page = 0; page < 20; page += 1) {
+          const bySub = await stripe.checkout.sessions.list({
+            subscription: subId,
+            limit: 100,
+            ...(startingAfter ? { starting_after: startingAfter } : {})
+          });
+          for (const s of bySub.data) {
+            const sessionInvoice =
+              typeof s.invoice === "string"
+                ? s.invoice
+                : s.invoice && typeof s.invoice === "object"
+                  ? (s.invoice as { id?: string }).id ?? null
+                  : null;
+            if (sessionInvoice && sessionInvoice === chargeInvoice) {
+              sessionsById.set(s.id, s);
+            }
           }
+          if (!bySub.has_more || bySub.data.length === 0) break;
+          startingAfter = bySub.data[bySub.data.length - 1]?.id;
+          if (!startingAfter) break;
         }
       }
     } catch (err) {
