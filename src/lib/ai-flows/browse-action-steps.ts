@@ -54,9 +54,7 @@ export async function validateBrowseActionSteps(
 ): Promise<string[]> {
   const ids = collectBrowseActionSteps(def);
   if (ids.length === 0) return [];
-  const allowed = deps.allowedForBusiness
-    ? await deps.allowedForBusiness(businessId)
-    : await browseActionAllowedForBusiness(businessId);
-  if (allowed) return [];
-  return [BROWSE_ACTION_UPGRADE_MESSAGE];
+  const check = deps.allowedForBusiness ?? browseActionAllowedForBusiness;
+  if (!(await check(businessId))) return [BROWSE_ACTION_UPGRADE_MESSAGE];
+  return [];
 }
