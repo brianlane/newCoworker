@@ -76,6 +76,12 @@ describe("tier-display", () => {
       );
     });
 
+    it("standard advertises email campaigns and Instagram posts (Standard-tier gate, Jul 2026)", () => {
+      expect(STANDARD_FEATURES).toContain(
+        "Scheduled email campaigns and Instagram posts"
+      );
+    });
+
     it("enterprise advertises branded RCS (own verified sender)", () => {
       expect(ENTERPRISE_FEATURES).toContain(
         "Branded RCS messaging (your own Google-verified sender)"

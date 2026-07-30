@@ -16,6 +16,10 @@ import { isViewAsActive } from "@/lib/admin/view-as";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { rateLimit } from "@/lib/rate-limit";
 import { insertEmailCampaign, listEmailCampaigns } from "@/lib/campaigns/db";
+import {
+  MARKETING_AUTOMATION_UPGRADE_MESSAGE,
+  marketingAutomationAllowedForBusiness
+} from "@/lib/plans/marketing-automation";
 
 export const dynamic = "force-dynamic";
 
@@ -68,6 +72,10 @@ export async function POST(request: Request) {
 
     if (body.data.sendAt && Date.parse(body.data.sendAt) < Date.now() - 60_000) {
       return errorResponse("VALIDATION_ERROR", "The send time is in the past");
+    }
+
+    if (!(await marketingAutomationAllowedForBusiness(body.data.businessId))) {
+      return errorResponse("FORBIDDEN", MARKETING_AUTOMATION_UPGRADE_MESSAGE, 403);
     }
 
     const campaign = await insertEmailCampaign({

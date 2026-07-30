@@ -24,6 +24,10 @@ import {
   listSocialPosts,
   SOCIAL_CAPTION_MAX_LENGTH
 } from "@/lib/social/db";
+import {
+  MARKETING_AUTOMATION_UPGRADE_MESSAGE,
+  marketingAutomationAllowedForBusiness
+} from "@/lib/plans/marketing-automation";
 
 export const dynamic = "force-dynamic";
 
@@ -81,6 +85,10 @@ export async function POST(request: Request) {
     const limiter = rateLimit(`social-posts-write:${body.data.businessId}`, WRITE_RATE);
     if (!limiter.success) {
       return errorResponse("CONFLICT", "Too many requests, slow down.", 429);
+    }
+
+    if (!(await marketingAutomationAllowedForBusiness(body.data.businessId))) {
+      return errorResponse("FORBIDDEN", MARKETING_AUTOMATION_UPGRADE_MESSAGE, 403);
     }
 
     // The image is an uploaded ref (rebuilt via normalizeImageRef so it can

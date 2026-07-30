@@ -48,9 +48,16 @@ type Props = {
   /** Linked IG professional account (null = publishing unavailable). */
   instagramUsername: string | null;
   igConnected: boolean;
+  /** False on Starter: hide the composer; keep the list so Cancel still works. */
+  marketingAllowed?: boolean;
 };
 
-export function SocialPostsManager({ businessId, instagramUsername, igConnected }: Props) {
+export function SocialPostsManager({
+  businessId,
+  instagramUsername,
+  igConnected,
+  marketingAllowed = true
+}: Props) {
   const router = useRouter();
   const [posts, setPosts] = useState<SocialPostItem[]>([]);
   const [loading, setLoading] = useState(true);
@@ -182,7 +189,11 @@ export function SocialPostsManager({ businessId, instagramUsername, igConnected 
         body: JSON.stringify({ businessId, action: "cancel" })
       });
       const json = (await res.json()) as { ok: boolean; error?: { message?: string } };
-      if (!json.ok) setError(json.error?.message ?? "Could not cancel");
+      if (!json.ok) {
+        setError(json.error?.message ?? "Could not cancel");
+      } else {
+        setError(null);
+      }
       await refreshEverywhere();
     } catch {
       setError("Could not cancel — try again.");
@@ -197,11 +208,119 @@ export function SocialPostsManager({ businessId, instagramUsername, igConnected 
         { method: "DELETE" }
       );
       const json = (await res.json()) as { ok: boolean; error?: { message?: string } };
-      if (!json.ok) setError(json.error?.message ?? "Could not delete");
+      if (!json.ok) {
+        setError(json.error?.message ?? "Could not delete");
+      } else {
+        setError(null);
+      }
       await refreshEverywhere();
     } catch {
       setError("Could not delete — try again.");
     }
+  }
+
+  const postsList = (
+    <div className={marketingAllowed ? "mt-5" : undefined}>
+      {loading ? (
+        <p className="text-sm text-parchment/40">Loading…</p>
+      ) : posts.length === 0 ? (
+        marketingAllowed ? (
+          igConnected ? (
+            <p className="text-sm text-parchment/40">No posts yet — compose one above.</p>
+          ) : null
+        ) : (
+          <p className="text-sm text-parchment/40">No posts yet.</p>
+        )
+      ) : (
+        <ul className="divide-y divide-parchment/10">
+          {posts.map((p) => {
+            const badge = STATUS_BADGES[p.status];
+            return (
+              <li key={p.id} className="py-2.5">
+                <div className="flex flex-wrap items-center gap-2">
+                  {p.ig_permalink ? (
+                    <a
+                      href={p.ig_permalink}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="max-w-[18rem] truncate text-sm text-signal-teal hover:underline"
+                      title="View the post on Instagram"
+                    >
+                      {p.caption.trim() || p.media_url}
+                    </a>
+                  ) : (
+                    <span className="max-w-[18rem] truncate text-sm text-parchment/90">
+                      {p.caption.trim() || p.media_url}
+                    </span>
+                  )}
+                  <span className={`rounded border px-1.5 py-0.5 text-[11px] ${badge.tone}`}>
+                    {badge.text}
+                  </span>
+                  {p.publish_at && (
+                    <span className="text-[11px] text-parchment/40">
+                      {new Date(p.publish_at).toLocaleString()}
+                    </span>
+                  )}
+                  <span className="ml-auto flex gap-2">
+                    {(p.status === "draft" || p.status === "scheduled") && (
+                      <button
+                        type="button"
+                        onClick={() => void cancel(p.id)}
+                        className="text-[11px] text-parchment/50 hover:text-parchment"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                    {p.status !== "publishing" && (
+                      <button
+                        type="button"
+                        onClick={() => void remove(p.id)}
+                        className="text-[11px] text-spark-orange/80 hover:text-spark-orange"
+                      >
+                        Delete
+                      </button>
+                    )}
+                  </span>
+                </div>
+                {p.status === "failed" && p.error_detail ? (
+                  <p className="mt-1 text-[11px] text-spark-orange/90">{p.error_detail}</p>
+                ) : null}
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
+  );
+
+  if (!marketingAllowed) {
+    return (
+      <div className="space-y-4">
+        <Card className="p-5 space-y-3">
+          <h2 className="text-base font-semibold text-parchment">Instagram posts</h2>
+          <p className="text-sm text-parchment/60">
+            Instagram publishing is available on Standard and Enterprise. Upgrade to
+            schedule posts from your Marketing calendar. Existing drafts and scheduled
+            posts stay below so you can cancel them.
+          </p>
+          <a
+            href="/pricing"
+            className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-opacity-90 transition-colors"
+          >
+            See plans
+          </a>
+        </Card>
+        <Card>
+          <h2 className="text-sm font-semibold text-parchment mb-3">Posts</h2>
+          {postsList}
+          {error ? (
+            <p className="mt-2 text-xs text-spark-orange" role="alert">
+              {error}
+            </p>
+          ) : null}
+        </Card>
+      </div>
+    );
   }
 
   return (
@@ -340,73 +459,7 @@ export function SocialPostsManager({ businessId, instagramUsername, igConnected 
         </p>
       )}
 
-      <div className="mt-5">
-        {loading ? (
-          <p className="text-sm text-parchment/40">Loading…</p>
-        ) : posts.length === 0 ? (
-          igConnected ? (
-            <p className="text-sm text-parchment/40">No posts yet — compose one above.</p>
-          ) : null
-        ) : (
-          <ul className="divide-y divide-parchment/10">
-            {posts.map((p) => {
-              const badge = STATUS_BADGES[p.status];
-              return (
-                <li key={p.id} className="py-2.5">
-                  <div className="flex flex-wrap items-center gap-2">
-                    {p.ig_permalink ? (
-                      <a
-                        href={p.ig_permalink}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="max-w-[18rem] truncate text-sm text-signal-teal hover:underline"
-                        title="View the post on Instagram"
-                      >
-                        {p.caption.trim() || p.media_url}
-                      </a>
-                    ) : (
-                      <span className="max-w-[18rem] truncate text-sm text-parchment/90">
-                        {p.caption.trim() || p.media_url}
-                      </span>
-                    )}
-                    <span className={`rounded border px-1.5 py-0.5 text-[11px] ${badge.tone}`}>
-                      {badge.text}
-                    </span>
-                    {p.publish_at && (
-                      <span className="text-[11px] text-parchment/40">
-                        {new Date(p.publish_at).toLocaleString()}
-                      </span>
-                    )}
-                    <span className="ml-auto flex gap-2">
-                      {(p.status === "draft" || p.status === "scheduled") && (
-                        <button
-                          type="button"
-                          onClick={() => void cancel(p.id)}
-                          className="text-[11px] text-parchment/50 hover:text-parchment"
-                        >
-                          Cancel
-                        </button>
-                      )}
-                      {p.status !== "publishing" && (
-                        <button
-                          type="button"
-                          onClick={() => void remove(p.id)}
-                          className="text-[11px] text-spark-orange/80 hover:text-spark-orange"
-                        >
-                          Delete
-                        </button>
-                      )}
-                    </span>
-                  </div>
-                  {p.status === "failed" && p.error_detail ? (
-                    <p className="mt-1 text-[11px] text-spark-orange/90">{p.error_detail}</p>
-                  ) : null}
-                </li>
-              );
-            })}
-          </ul>
-        )}
-      </div>
+      {postsList}
     </Card>
   );
 }

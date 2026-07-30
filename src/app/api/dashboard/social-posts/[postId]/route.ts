@@ -22,6 +22,10 @@ import {
   SOCIAL_CAPTION_MAX_LENGTH,
   type SocialPostPatch
 } from "@/lib/social/db";
+import {
+  MARKETING_AUTOMATION_UPGRADE_MESSAGE,
+  marketingAutomationAllowedForBusiness
+} from "@/lib/plans/marketing-automation";
 
 export const dynamic = "force-dynamic";
 
@@ -83,6 +87,10 @@ export async function PATCH(request: Request, context: RouteContext) {
 
     if (existing.status !== "draft" && existing.status !== "scheduled" && existing.status !== "failed") {
       return errorResponse("VALIDATION_ERROR", "Only draft, scheduled, or failed posts can be edited.");
+    }
+
+    if (!(await marketingAutomationAllowedForBusiness(body.data.businessId))) {
+      return errorResponse("FORBIDDEN", MARKETING_AUTOMATION_UPGRADE_MESSAGE, 403);
     }
 
     const patch: SocialPostPatch = {};

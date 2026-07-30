@@ -22,6 +22,10 @@ import {
   transitionEmailCampaign,
   type EmailCampaignPatch
 } from "@/lib/campaigns/db";
+import {
+  MARKETING_AUTOMATION_UPGRADE_MESSAGE,
+  marketingAutomationAllowedForBusiness
+} from "@/lib/plans/marketing-automation";
 
 export const dynamic = "force-dynamic";
 
@@ -58,6 +62,7 @@ export async function PATCH(request: Request, context: RouteContext) {
     if (!existing) return errorResponse("NOT_FOUND", "Campaign not found", 404);
 
     if (body.data.action === "cancel") {
+      // Cancel always works (including after a downgrade to Starter).
       // Guarded: only a still-scheduled (or draft) campaign can cancel.
       const cancelled =
         (await transitionEmailCampaign(body.data.businessId, campaignId, "scheduled", {
@@ -89,6 +94,10 @@ export async function PATCH(request: Request, context: RouteContext) {
         "VALIDATION_ERROR",
         "Only draft or scheduled campaigns can be edited."
       );
+    }
+
+    if (!(await marketingAutomationAllowedForBusiness(body.data.businessId))) {
+      return errorResponse("FORBIDDEN", MARKETING_AUTOMATION_UPGRADE_MESSAGE, 403);
     }
 
     const patch: EmailCampaignPatch = {};

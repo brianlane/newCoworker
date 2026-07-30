@@ -24,6 +24,7 @@ import {
 } from "@/components/dashboard/CampaignsManager";
 import { SocialPostsManager } from "@/components/dashboard/SocialPostsManager";
 import { ProspectingPanel } from "@/components/dashboard/ProspectingPanel";
+import { marketingAutomationAllowedForTier } from "@/lib/plans/marketing-automation";
 
 export const dynamic = "force-dynamic";
 
@@ -107,11 +108,14 @@ export default async function MarketingPage() {
   const activeBusinessId = await resolveActiveBusinessIdForAction(user, "manage_settings");
   const { data: businesses } = await db
     .from("businesses")
-    .select("id, name")
+    .select("id, name, tier")
     .in("id", activeBusinessId ? [activeBusinessId] : [])
     .order("created_at", { ascending: false });
 
   const business = businesses?.[0] ?? null;
+  const marketingAllowed = marketingAutomationAllowedForTier(
+    (business as { tier?: string | null } | null)?.tier
+  );
 
   // Lead-sources panel + calendar reads, all best-effort: a failed read
   // renders the panel's empty state, never takes down the campaigns surface.
@@ -259,9 +263,11 @@ export default async function MarketingPage() {
             businessId={business.id}
             igConnected={igConnected}
             instagramUsername={metaConnection?.instagram_username ?? null}
+            marketingAllowed={marketingAllowed}
           />
           <CampaignsManager
             businessId={business.id}
+            marketingAllowed={marketingAllowed}
             calendarExtras={socialCalendarExtras(socialPosts, {
               fallbackLabel: t("igPostFallback"),
               published: t("igPostPublished"),
