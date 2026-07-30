@@ -25,6 +25,14 @@ const upsertOutreachSettingsSpy = vi.fn(
   })
 );
 const transitionProspectSpy = vi.fn(async () => true);
+const prospectingAllowedSpy = vi.fn(async () => true);
+vi.mock("@/lib/plans/prospecting", () => ({
+  PROSPECTING_UPGRADE_MESSAGE:
+    "Prospecting is a Standard plan perk. Upgrade to have your coworker find local businesses and email them for you.",
+  prospectingAllowedForBusiness: (...a: unknown[]) => prospectingAllowedSpy(...(a as [])),
+  prospectingAllowedForTier: (tier: string | null | undefined) =>
+    tier === "standard" || tier === "enterprise"
+}));
 vi.mock("@/lib/outreach/db", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
   return {
@@ -97,6 +105,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   getOutreachSettingsSpy.mockResolvedValue(settingsRow());
   transitionProspectSpy.mockResolvedValue(true);
+  prospectingAllowedSpy.mockResolvedValue(true);
 });
 
 describe("loadProspectingView", () => {
@@ -115,6 +124,7 @@ describe("loadProspectingView", () => {
     expect(view.queue).toHaveLength(1);
     expect(view.blockers).toEqual([]);
     expect(view.clipped).toBe(false);
+    expect(view.tierAllowed).toBe(true);
     // The queue is bounded: a big backlog must not become a huge payload.
     expect(listProspectsByStatusSpy).toHaveBeenCalledWith(
       BIZ,
@@ -122,6 +132,14 @@ describe("loadProspectingView", () => {
       REVIEW_QUEUE_LIMIT,
       expect.anything()
     );
+  });
+
+  it("reports tierAllowed false when Prospecting is not on the plan", async () => {
+    prospectingAllowedSpy.mockResolvedValue(false);
+    listProspectOutcomesSpy.mockResolvedValue([] as never);
+    listProspectsByStatusSpy.mockResolvedValue([] as never);
+    const view = await loadProspectingView(BIZ, {} as never);
+    expect(view.tierAllowed).toBe(false);
   });
 
   it("flags a clipped scan rather than under-reporting the funnel", async () => {

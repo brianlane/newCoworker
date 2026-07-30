@@ -70,6 +70,8 @@ type View = {
   /** The outcome scan hit its bound, so the numbers are floors. */
   clipped: boolean;
   blockers: string[];
+  /** False on Starter: show the upgrade card instead of the controls. */
+  tierAllowed: boolean;
 };
 
 const inputClass =
@@ -210,6 +212,23 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
 
   const funnel = view?.funnel;
   const mode = view?.settings?.mode ?? "off";
+
+  if (view && !view.tierAllowed) {
+    return (
+      <Card className="p-5 space-y-4">
+        <div>
+          <h2 className="text-base font-semibold text-parchment">{t("title")}</h2>
+          <p className="mt-1 max-w-2xl text-sm text-parchment/60">{t("upgradeBody")}</p>
+        </div>
+        <a
+          href="/pricing"
+          className="inline-block rounded-lg bg-claw-green text-deep-ink px-5 py-2.5 font-semibold text-sm hover:bg-opacity-90 transition-colors"
+        >
+          {t("upgradeCta")}
+        </a>
+      </Card>
+    );
+  }
 
   return (
     <Card className="p-5 space-y-5">

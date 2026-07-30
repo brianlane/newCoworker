@@ -58,6 +58,12 @@ describe("tier-display", () => {
       );
     });
 
+    it("standard advertises Prospecting (Standard-tier gate, Jul 2026)", () => {
+      expect(STANDARD_FEATURES).toContain(
+        "Prospecting: your coworker finds local businesses and emails them"
+      );
+    });
+
     it("enterprise advertises branded RCS (own verified sender)", () => {
       expect(ENTERPRISE_FEATURES).toContain(
         "Branded RCS messaging (your own Google-verified sender)"

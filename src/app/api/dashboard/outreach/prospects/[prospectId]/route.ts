@@ -20,6 +20,10 @@ import { errorResponse, handleRouteError, successResponse } from "@/lib/api-resp
 import { rateLimit } from "@/lib/rate-limit";
 import { skipProspect } from "@/lib/outreach/owner";
 import { sendProspectNow } from "@/lib/outreach/sweep";
+import {
+  PROSPECTING_UPGRADE_MESSAGE,
+  prospectingAllowedForBusiness
+} from "@/lib/plans/prospecting";
 
 export const dynamic = "force-dynamic";
 
@@ -36,6 +40,7 @@ const SEND_FAILURE_MESSAGE: Record<string, string> = {
   not_drafted: "That draft has already been sent, skipped, or is missing its text.",
   cap_reached: "You have reached today's send limit. Try again tomorrow, or raise the cap.",
   not_configured: "Finish setting up Prospecting first.",
+  tier_blocked: PROSPECTING_UPGRADE_MESSAGE,
   send_failed: "The email could not be sent. Check your connected mailbox and try again."
 };
 
@@ -73,8 +78,15 @@ export async function POST(
       return successResponse({ status: "skipped" });
     }
 
+    if (!(await prospectingAllowedForBusiness(body.data.businessId))) {
+      return errorResponse("FORBIDDEN", PROSPECTING_UPGRADE_MESSAGE, 403);
+    }
+
     const sent = await sendProspectNow(body.data.businessId, id.data);
     if (!sent.ok) {
+      if (sent.reason === "tier_blocked") {
+        return errorResponse("FORBIDDEN", SEND_FAILURE_MESSAGE.tier_blocked, 403);
+      }
       return errorResponse(
         sent.reason === "cap_reached" ? "CONFLICT" : "VALIDATION_ERROR",
         sent.detail

@@ -2103,6 +2103,8 @@
     "prospecting": {
       "title": "Prospección",
       "intro": "Tu compañero de trabajo puede buscar negocios locales que encajen con lo que haces, encontrar algo concreto que decirle a cada uno y enviarles un correo por ti. Está apagado hasta que lo enciendas.",
+      "upgradeBody": "La prospección está disponible en Standard y Enterprise: tu compañero de trabajo encuentra negocios locales, redacta un mensaje específico para cada uno y les escribe por ti.",
+      "upgradeCta": "Ver planes",
       "mode": {
         "off": "Apagado",
         "manual": "Reviso cada uno",

@@ -26,6 +26,7 @@
  */
 
 import { getBusiness } from "@/lib/db/businesses";
+import { prospectingAllowedForTier } from "@/lib/plans/prospecting";
 import { schedulingLink } from "@/lib/booking-page/prompt-line";
 import {
   sendFromMailboxConnection,
@@ -216,6 +217,11 @@ async function resolveTenant(
 ): Promise<{ tenant: PitchTenant; timeZone: string | null } | { missing: string }> {
   const business = await r.getBusiness(settings.business_id, r.db);
   if (!business) return { missing: "business row is gone" };
+  // Downgrade after switching Prospecting on: leave settings alone, but stop
+  // spending Places/AI/Resend until they upgrade again.
+  if (!prospectingAllowedForTier(business.tier)) {
+    return { missing: "prospecting requires the Standard plan" };
+  }
   // The DB constraint guarantees a postal address for any non-off mode, so
   // this is belt-and-braces rather than the primary gate.
   const postalAddress = settings.postal_address?.trim() ?? "";
@@ -749,7 +755,13 @@ export type SendNowResult =
   | { ok: true; notes: string[] }
   | {
       ok: false;
-      reason: "not_found" | "not_drafted" | "cap_reached" | "not_configured" | "send_failed";
+      reason:
+        | "not_found"
+        | "not_drafted"
+        | "cap_reached"
+        | "not_configured"
+        | "tier_blocked"
+        | "send_failed";
       detail?: string;
     };
 
@@ -772,7 +784,12 @@ export async function sendProspectNow(
   const settings = await getOutreachSettings(businessId, r.db);
   if (!settings) return { ok: false, reason: "not_configured" };
   const resolved = await resolveTenant(settings, r);
-  if ("missing" in resolved) return { ok: false, reason: "not_configured", detail: resolved.missing };
+  if ("missing" in resolved) {
+    if (resolved.missing.includes("Standard plan")) {
+      return { ok: false, reason: "tier_blocked", detail: resolved.missing };
+    }
+    return { ok: false, reason: "not_configured", detail: resolved.missing };
+  }
 
   const prospect = await getProspect(businessId, prospectId, r.db);
   if (!prospect) return { ok: false, reason: "not_found" };

@@ -13,6 +13,7 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { prospectingAllowedForBusiness } from "@/lib/plans/prospecting";
 import {
   getOutreachSettings,
   listProspectOutcomes,
@@ -62,6 +63,8 @@ export type ProspectingView = {
    * on the page instead of in a support conversation.
    */
   blockers: string[];
+  /** False on Starter: panel shows an upgrade card; writes refuse when on. */
+  tierAllowed: boolean;
 };
 
 /** Everything the panel renders, in one pass. */
@@ -70,10 +73,11 @@ export async function loadProspectingView(
   client?: SupabaseClient
 ): Promise<ProspectingView> {
   const db = client ?? (await createSupabaseServiceClient());
-  const [settings, outcomes, queue] = await Promise.all([
+  const [settings, outcomes, queue, tierAllowed] = await Promise.all([
     getOutreachSettings(businessId, db),
     listProspectOutcomes(businessId, db),
-    listProspectsByStatus(businessId, ["drafted"], REVIEW_QUEUE_LIMIT, db)
+    listProspectsByStatus(businessId, ["drafted"], REVIEW_QUEUE_LIMIT, db),
+    prospectingAllowedForBusiness(businessId, db)
   ]);
   const { total, byVertical } = summarizeFunnel(outcomes);
   return {
@@ -82,7 +86,8 @@ export async function loadProspectingView(
     byVertical,
     queue,
     clipped: outcomes.length >= OUTREACH_SCAN_LIMIT,
-    blockers: describeBlockers(settings)
+    blockers: describeBlockers(settings),
+    tierAllowed
   };
 }
 
@@ -149,6 +154,9 @@ export async function saveProspectingSettings(
   // in the middle of editing. Off is the one action that must never be blocked
   // by a form error, so the pacing values are sanitized instead of rejected.
   // They are meaningless while off, and the schema still requires a legal pair.
+  // Tier gating for switching ON lives in the dashboard route (and the sweep /
+  // sendProspectNow path), so a Starter tenant can always turn the feature off
+  // after a downgrade without this function needing a businesses lookup.
   const strict = input.mode !== "off";
   if (strict && (input.dailyCap < 0 || input.dailyCap > MAX_DAILY_CAP)) {
     throw new ProspectingSettingsError(`The daily cap has to be between 0 and ${MAX_DAILY_CAP}.`);

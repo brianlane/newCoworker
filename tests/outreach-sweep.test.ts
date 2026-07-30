@@ -124,7 +124,8 @@ function baseDeps(over: Record<string, unknown> = {}) {
       id: BIZ,
       name: "New Coworker",
       timezone: "America/Phoenix",
-      website_url: "https://www.newcoworker.com"
+      website_url: "https://www.newcoworker.com",
+      tier: "standard"
     })),
     schedulingLinkImpl: vi.fn(async () => ({
       url: "https://app.example.com/book/hq",
@@ -248,6 +249,27 @@ describe("processOutreachSweep: the outer loop", () => {
 });
 
 describe("tenant resolution", () => {
+  it("skips Starter businesses without spending Places or sending", async () => {
+    stubLedger();
+    const searchPlacesImpl = vi.fn(async () => []);
+    const result = await processOutreachSweep(
+      baseDeps({
+        searchPlacesImpl,
+        getBusinessImpl: vi.fn(async () => ({
+          id: BIZ,
+          name: "Starter Co",
+          timezone: "America/Phoenix",
+          website_url: null,
+          tier: "starter"
+        }))
+      })
+    );
+    expect(result.notes).toEqual([
+      { businessId: BIZ, note: "prospecting requires the Standard plan" }
+    ]);
+    expect(searchPlacesImpl).not.toHaveBeenCalled();
+  });
+
   it("reports a missing business, postal address, or value proposition as a note", async () => {
     stubLedger();
     const gone = await processOutreachSweep(
@@ -289,7 +311,8 @@ describe("tenant resolution", () => {
         getBusinessImpl: vi.fn(async () => ({
           id: BIZ,
           name: "New Coworker",
-          website_url: null
+          website_url: null,
+          tier: "standard"
         }))
       })
     );
@@ -1169,6 +1192,29 @@ describe("sendProspectNow (the owner pressed Send in manual mode)", () => {
       ok: false,
       reason: "not_configured",
       detail: "no value proposition configured"
+    });
+  });
+
+  it("refuses with tier_blocked on Starter", async () => {
+    nowLedger();
+    expect(
+      await sendProspectNow(
+        BIZ,
+        prospect().id,
+        baseDeps({
+          getBusinessImpl: vi.fn(async () => ({
+            id: BIZ,
+            name: "Starter Co",
+            timezone: "America/Phoenix",
+            website_url: null,
+            tier: "starter"
+          }))
+        })
+      )
+    ).toEqual({
+      ok: false,
+      reason: "tier_blocked",
+      detail: "prospecting requires the Standard plan"
     });
   });
 
