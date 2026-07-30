@@ -949,7 +949,7 @@ describe("api/checkout route", () => {
       }
     });
 
-    it("attaches discounted pack lines and metadata for a biennial signup", async () => {
+    it("attaches recurring pack lines and metadata for a biennial signup", async () => {
       vi.mocked(getAuthUser).mockResolvedValue(null);
       vi.mocked(verifySignupIdentity).mockResolvedValue(true);
 
@@ -962,20 +962,24 @@ describe("api/checkout route", () => {
           billingPeriod: "biennial",
           ownerEmail: "owner@example.com",
           signupUserId,
-          voicePackId: "min_30"
+          voicePacks: [{ packId: "min_30", quantity: 2 }]
         })
       });
 
       const response = await POST(request);
       expect(response.status).toBe(200);
       const call = vi.mocked(createCheckoutSession).mock.calls.at(-1)?.[0];
+      // Biennial = 20% off $10 → $8/mo × 24 months
       expect(call?.packAddonLines).toEqual([
-        { name: "Voice top-up: 30 minutes", unitAmountCents: 800 }
+        {
+          name: "Voice top-up: 30 minutes",
+          unitAmountCents: 800 * 24,
+          quantity: 2,
+          billingPeriod: "biennial"
+        }
       ]);
       expect(call?.metadata).toMatchObject({
-        addonVoicePackId: "min_30",
-        addonVoiceSeconds: "1800",
-        addonVoiceCents: "800"
+        addonVoice: "min_30:2:1800"
       });
     });
 
@@ -992,7 +996,7 @@ describe("api/checkout route", () => {
           billingPeriod: "monthly",
           ownerEmail: "owner@example.com",
           signupUserId,
-          voicePackId: "min_nope"
+          voicePacks: [{ packId: "min_nope", quantity: 1 }]
         })
       });
 

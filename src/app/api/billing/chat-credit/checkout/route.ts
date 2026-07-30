@@ -5,8 +5,9 @@
  * pack. Mirrors /api/billing/voice-bonus/checkout: pick a `packId` from
  * `src/lib/billing/chat-credit-packs.ts`, confirm the caller's business has
  * an active Stripe subscription, then create a `mode=payment` Checkout
- * Session. The Stripe webhook records the grant on success; refund /
- * dispute-lost clawback is wired in the webhook handler.
+ * Session. The Stripe webhook records the grant on success. Packs are
+ * non-refundable to customers; operators claw back via
+ * POST /api/admin/usage-pack-clawback.
  *
  * Returns `{ checkoutUrl }` so the client can `window.location = checkoutUrl`.
  */

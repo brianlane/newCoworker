@@ -35,12 +35,17 @@ import { CANADA_MESSAGING_FEE_MONTHLY_CENTS } from "@/lib/plans/canadian-messagi
 import { resolveMembershipPackAddons } from "@/lib/billing/membership-pack-addons";
 import { logger } from "@/lib/logger";
 
+const packQtySchema = z.object({
+  packId: z.string().trim().min(1).max(40),
+  quantity: z.number().int().min(1).max(20)
+});
+
 const bodySchema = z.object({
   tier: z.enum(["starter", "standard"]),
   billingPeriod: z.enum(["monthly", "annual", "biennial"]),
-  voicePackId: z.string().trim().min(1).max(40).optional(),
-  smsPackId: z.string().trim().min(1).max(40).optional(),
-  chatPackId: z.string().trim().min(1).max(40).optional()
+  voicePacks: z.array(packQtySchema).max(10).optional(),
+  smsPacks: z.array(packQtySchema).max(10).optional(),
+  chatPacks: z.array(packQtySchema).max(10).optional()
 });
 
 export async function POST(request: Request) {
@@ -214,9 +219,9 @@ export async function POST(request: Request) {
     // harvest the discount.
     const packAddons = resolveMembershipPackAddons(
       {
-        voicePackId: payload.voicePackId,
-        smsPackId: payload.smsPackId,
-        chatPackId: payload.chatPackId
+        voicePacks: payload.voicePacks,
+        smsPacks: payload.smsPacks,
+        chatPacks: payload.chatPacks
       },
       payload.billingPeriod
     );
@@ -241,7 +246,9 @@ export async function POST(request: Request) {
         ? {
             packAddonLines: packAddons.lines.map((line) => ({
               name: line.name,
-              unitAmountCents: line.unitAmountCents
+              unitAmountCents: line.unitAmountCents,
+              quantity: line.quantity,
+              billingPeriod: payload.billingPeriod
             }))
           }
         : {}),

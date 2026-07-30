@@ -687,6 +687,40 @@ export async function POST(request: Request) {
                 });
               }
             }
+
+            // Recurring membership pack add-ons: grant on every paid invoice
+            // (first + renewals). Idempotent on invoice id + pack id.
+            try {
+              const stripe = getStripe();
+              const stripeSub = await stripe.subscriptions.retrieve(subscriptionId);
+              const billingPeriod =
+                existing.billing_period === "monthly" ||
+                existing.billing_period === "annual" ||
+                existing.billing_period === "biennial"
+                  ? existing.billing_period
+                  : stripeSub.metadata?.billingPeriod === "monthly" ||
+                      stripeSub.metadata?.billingPeriod === "annual" ||
+                      stripeSub.metadata?.billingPeriod === "biennial"
+                    ? stripeSub.metadata.billingPeriod
+                    : "monthly";
+              const { applyMembershipPackAddonsFromInvoice } = await import(
+                "@/lib/billing/membership-pack-addon-grants"
+              );
+              await applyMembershipPackAddonsFromInvoice({
+                invoice,
+                stripeSubscription: stripeSub,
+                businessId: existing.business_id,
+                billingPeriod,
+                eventId: event.id
+              });
+            } catch (err) {
+              logger.error("membership pack add-on grants failed on invoice.paid", {
+                eventId: event.id,
+                subscriptionId,
+                businessId: existing.business_id,
+                error: err instanceof Error ? err.message : String(err)
+              });
+            }
           }
         }
         break;
@@ -2120,6 +2154,11 @@ async function applyVoiceBonusGrantFromCheckout(session: Stripe.Checkout.Session
  *   unavailable). Rounded to the nearest second; a full refund (amount_refunded ===
  *   original_amount) returns `null` to signal full void and avoid float rounding errors.
  */
+/**
+ * Proration helper kept for unit tests and admin tooling. Customer Stripe
+ * refunds no longer call this automatically (packs are non-refundable from
+ * the user side); operators use POST /api/admin/usage-pack-clawback.
+ */
 export function computeVoiceBonusClawbackSeconds(
   originalAmount: number | null | undefined,
   refundedAmount: number | null | undefined,
@@ -2140,336 +2179,16 @@ export function computeVoiceBonusClawbackSeconds(
 }
 
 /**
- * §4.1 clawback: when a bonus-seconds Checkout is refunded or disputed, reduce (or
- * void) the corresponding voice_bonus_grants row so remaining seconds cannot be
- * consumed. Looks up the Checkout Session via the payment intent on the charge.
- * Idempotent.
- *
- * Dispute semantics (important): only `charge.dispute.closed` with status `lost`
- * drives a clawback here. `charge.dispute.created` is observational (logged by the
- * dispatcher) and explicitly not routed into this function, because the dispute
- * outcome isn't known yet — Stripe disputes can close as `lost` (chargeback),
- * `won` (merchant defended), or `warning_closed` (early warning, no chargeback).
- * Only `lost` actually reverses funds; voiding grants on `created` and then
- * relying on `closed` as a "second void" would permanently revoke paid voice
- * credits from customers whose merchants successfully defended disputes, because
- * this handler has no compensating re-grant path for non-lost outcomes. The
- * merchant accepts the credit-exposure risk during the (typically 1–6 week)
- * dispute window in exchange for correctness on defended disputes.
- *
- * Partial refunds (§4.1 follow-up): for `charge.refunded` we pass a prorated
- * `p_clawback_seconds` to the RPC so a partial refund reduces the grant
- * proportionally instead of voiding it fully. `charge.dispute.closed`/lost
- * passes `null` (full void) because Stripe disputes reverse the full captured
- * amount regardless of `dispute.amount` in practice, and the partial-dispute
- * case is rare and ambiguous.
+ * Customer Stripe refunds / dispute.lost must NOT void usage-pack grants.
+ * Packs (membership add-ons and Billing top-ups) are non-refundable from the
+ * user side. Operators intentionally claw back via
+ * `clawbackUsagePackGrantBySourceId` / POST /api/admin/usage-pack-clawback.
  */
 async function handleVoiceBonusRefund(event: Stripe.Event): Promise<void> {
-  const obj = event.data.object as Stripe.Charge | Stripe.Dispute;
-
-  if (event.type === "charge.dispute.closed") {
-    const dispute = obj as Stripe.Dispute;
-    if (dispute.status !== "lost") {
-      logger.info("Stripe dispute closed without chargeback; not voiding bonus grant", {
-        eventId: event.id,
-        disputeId: dispute.id,
-        status: dispute.status
-      });
-      return;
-    }
-  }
-
-  let refundedAmount: number | null = null;
-  let originalAmount: number | null = null;
-  if (event.type === "charge.refunded") {
-    const charge = obj as Stripe.Charge;
-    // Defensive: `charge.refunded` should always carry amount_refunded > 0, but a
-    // zero-amount refund event (e.g. replayed/malformed) must not clawback a grant.
-    if (!charge.amount_refunded || charge.amount_refunded <= 0) {
-      logger.info("Stripe charge.refunded with no amount refunded; not voiding bonus grant", {
-        eventId: event.id,
-        chargeId: charge.id,
-        amountRefunded: charge.amount_refunded ?? null
-      });
-      return;
-    }
-    refundedAmount = charge.amount_refunded ?? null;
-    originalAmount =
-      (typeof charge.amount_captured === "number" && charge.amount_captured > 0
-        ? charge.amount_captured
-        : null) ?? (typeof charge.amount === "number" && charge.amount > 0 ? charge.amount : null);
-  }
-
-  const paymentIntentId =
-    typeof (obj as Stripe.Charge).payment_intent === "string"
-      ? ((obj as Stripe.Charge).payment_intent as string)
-      : (obj as Stripe.Dispute).payment_intent && typeof (obj as Stripe.Dispute).payment_intent === "string"
-        ? ((obj as Stripe.Dispute).payment_intent as string)
-        : null;
-
-  const stripe = getStripe();
-
-  // Resolve the invoice id for membership Checkout clawbacks. Refunds carry
-  // it on the charge; disputes need a charge retrieve. Prefer this when the
-  // Checkout Session has no payment_intent (common for mode=subscription).
-  let chargeInvoice: string | null = null;
-  if (event.type === "charge.refunded") {
-    const chargeObj = obj as Stripe.Charge & {
-      invoice?: string | { id?: string } | null;
-    };
-    chargeInvoice =
-      typeof chargeObj.invoice === "string"
-        ? chargeObj.invoice
-        : chargeObj.invoice && typeof chargeObj.invoice === "object"
-          ? chargeObj.invoice.id ?? null
-          : null;
-  } else if (event.type === "charge.dispute.closed") {
-    const dispute = obj as Stripe.Dispute & {
-      charge?: string | { id?: string } | null;
-    };
-    const chargeId =
-      typeof dispute.charge === "string"
-        ? dispute.charge
-        : dispute.charge && typeof dispute.charge === "object"
-          ? dispute.charge.id ?? null
-          : null;
-    if (chargeId) {
-      try {
-        const disputedCharge = (await stripe.charges.retrieve(chargeId)) as Stripe.Charge & {
-          invoice?: string | { id?: string } | null;
-        };
-        chargeInvoice =
-          typeof disputedCharge.invoice === "string"
-            ? disputedCharge.invoice
-            : disputedCharge.invoice && typeof disputedCharge.invoice === "object"
-              ? disputedCharge.invoice.id ?? null
-              : null;
-      } catch (err) {
-        logger.warn("Stripe dispute charge retrieve failed during pack refund handling", {
-          eventId: event.id,
-          chargeId,
-          error: err instanceof Error ? err.message : String(err)
-        });
-      }
-    }
-  }
-
-  if (!paymentIntentId && !chargeInvoice) {
-    logger.debug("Stripe refund/dispute event without payment_intent or invoice; ignoring", {
-      type: event.type,
-      eventId: event.id
-    });
-    return;
-  }
-
-  const sessionsById = new Map<string, Stripe.Checkout.Session>();
-  if (paymentIntentId) {
-    try {
-      const byPi = await stripe.checkout.sessions.list({
-        payment_intent: paymentIntentId,
-        limit: 5
-      });
-      for (const s of byPi.data) sessionsById.set(s.id, s);
-    } catch (err) {
-      logger.error("Stripe checkout sessions list failed during refund handling", {
-        eventId: event.id,
-        paymentIntentId,
-        error: err instanceof Error ? err.message : String(err)
-      });
-      // Continue to invoice fallback when present; membership sessions often
-      // lack payment_intent and only match via the first invoice.
-      if (!chargeInvoice) return;
-    }
-  }
-
-  if (chargeInvoice) {
-    try {
-      const invoice = await stripe.invoices.retrieve(chargeInvoice);
-      const invoiceRecord = invoice as unknown as {
-        subscription?: string | { id?: string } | null;
-        parent?: { subscription_details?: { subscription?: string | { id?: string } | null } | null } | null;
-      };
-      const rawSub =
-        invoiceRecord.subscription ??
-        invoiceRecord.parent?.subscription_details?.subscription ??
-        null;
-      const subId =
-        typeof rawSub === "string" ? rawSub : rawSub && typeof rawSub === "object" ? rawSub.id ?? null : null;
-      if (subId) {
-        // Paginate: a long-lived subscription can have more than one page of
-        // Checkout Sessions (signup, plan changes). Find the session whose
-        // invoice matches THIS charge, not just the first five.
-        let startingAfter: string | undefined;
-        for (let page = 0; page < 20; page += 1) {
-          const bySub = await stripe.checkout.sessions.list({
-            subscription: subId,
-            limit: 100,
-            ...(startingAfter ? { starting_after: startingAfter } : {})
-          });
-          for (const s of bySub.data) {
-            const sessionInvoice =
-              typeof s.invoice === "string"
-                ? s.invoice
-                : s.invoice && typeof s.invoice === "object"
-                  ? (s.invoice as { id?: string }).id ?? null
-                  : null;
-            if (sessionInvoice && sessionInvoice === chargeInvoice) {
-              sessionsById.set(s.id, s);
-            }
-          }
-          if (!bySub.has_more || bySub.data.length === 0) break;
-          startingAfter = bySub.data[bySub.data.length - 1]?.id;
-          if (!startingAfter) break;
-        }
-      }
-    } catch (err) {
-      logger.warn("Stripe invoice/subscription lookup failed during pack refund handling", {
-        eventId: event.id,
-        invoiceId: chargeInvoice,
-        error: err instanceof Error ? err.message : String(err)
-      });
-    }
-  }
-
-  const sessions = [...sessionsById.values()];
-  const { sessionHasMembershipPackAddons } = await import(
-    "@/lib/billing/membership-pack-addons"
-  );
-
-  // Standalone Billing packs (mode=payment) OR membership Checkout add-ons.
-  const packSessions = sessions.filter((s) => {
-    const kind = s.metadata?.checkoutKind;
-    if (
-      kind === "voice_bonus_seconds" ||
-      kind === "sms_bonus_texts" ||
-      kind === "chat_credit_micros"
-    ) {
-      return true;
-    }
-    return sessionHasMembershipPackAddons(s.metadata);
+  logger.info("Usage pack refund/dispute ignored; packs are non-refundable to customers", {
+    eventId: event.id,
+    type: event.type
   });
-  if (packSessions.length === 0) {
-    logger.debug("Refund not associated with a usage-pack Checkout; ignoring", {
-      eventId: event.id,
-      paymentIntentId
-    });
-    return;
-  }
-
-  const { createSupabaseServiceClient } = await import("@/lib/supabase/server");
-  const db = await createSupabaseServiceClient();
-  const reason = event.type.startsWith("charge.dispute.") ? "dispute" : "refund";
-
-  for (const session of packSessions) {
-    const kind = session.metadata?.checkoutKind;
-    const isMembershipAddons = sessionHasMembershipPackAddons(session.metadata);
-
-    // Membership invoices mix plan + fees + packs. Partial prorating against
-    // amount_total would mis-size the clawback, so membership add-ons always
-    // full-void on refund/dispute. Standalone pack checkouts keep prorating.
-    type VoidTarget = {
-      rpcName:
-        | "void_voice_bonus_grant_by_checkout_session"
-        | "void_sms_bonus_grant_by_checkout_session"
-        | "void_chat_credit_grant_by_checkout_session";
-      clawbackParam: "p_clawback_seconds" | "p_clawback_texts" | "p_clawback_micros";
-      purchased: number | null;
-      logKind: string;
-    };
-    const targets: VoidTarget[] = [];
-
-    if (isMembershipAddons) {
-      const voicePurchased = parseVoiceBonusSecondsFromMetadata(
-        session.metadata?.addonVoiceSeconds ?? null
-      );
-      if (voicePurchased != null || session.metadata?.addonVoicePackId) {
-        targets.push({
-          rpcName: "void_voice_bonus_grant_by_checkout_session",
-          clawbackParam: "p_clawback_seconds",
-          purchased: voicePurchased,
-          logKind: "membership_addon_voice"
-        });
-      }
-      const smsPurchased = parseSmsBonusTextsFromMetadata(
-        session.metadata?.addonSmsTexts ?? null
-      );
-      if (smsPurchased != null || session.metadata?.addonSmsPackId) {
-        targets.push({
-          rpcName: "void_sms_bonus_grant_by_checkout_session",
-          clawbackParam: "p_clawback_texts",
-          purchased: smsPurchased,
-          logKind: "membership_addon_sms"
-        });
-      }
-      const chatPurchased = parseChatCreditMicrosFromMetadata(
-        session.metadata?.addonChatMicros ?? null
-      );
-      if (chatPurchased != null || session.metadata?.addonChatPackId) {
-        targets.push({
-          rpcName: "void_chat_credit_grant_by_checkout_session",
-          clawbackParam: "p_clawback_micros",
-          purchased: chatPurchased,
-          logKind: "membership_addon_chat"
-        });
-      }
-    } else if (kind === "sms_bonus_texts") {
-      targets.push({
-        rpcName: "void_sms_bonus_grant_by_checkout_session",
-        clawbackParam: "p_clawback_texts",
-        purchased: parseSmsBonusTextsFromMetadata(session.metadata?.smsTexts ?? null),
-        logKind: "sms_bonus_texts"
-      });
-    } else if (kind === "chat_credit_micros") {
-      targets.push({
-        rpcName: "void_chat_credit_grant_by_checkout_session",
-        clawbackParam: "p_clawback_micros",
-        purchased: parseChatCreditMicrosFromMetadata(session.metadata?.creditMicros ?? null),
-        logKind: "chat_credit_micros"
-      });
-    } else {
-      targets.push({
-        rpcName: "void_voice_bonus_grant_by_checkout_session",
-        clawbackParam: "p_clawback_seconds",
-        purchased: parseVoiceBonusSecondsFromMetadata(
-          session.metadata?.voiceSeconds ?? session.metadata?.voice_seconds ?? null
-        ),
-        logKind: "voice_bonus_seconds"
-      });
-    }
-
-    for (const target of targets) {
-      let clawback: number | null = null;
-      if (event.type === "charge.refunded" && !isMembershipAddons) {
-        clawback = computeVoiceBonusClawbackSeconds(
-          originalAmount,
-          refundedAmount,
-          target.purchased
-        );
-      }
-
-      const { data, error } = await db.rpc(target.rpcName, {
-        p_checkout_session_id: session.id,
-        p_reason: reason,
-        [target.clawbackParam]: clawback
-      });
-      if (error) {
-        logger.error(`${target.rpcName} failed`, {
-          eventId: event.id,
-          sessionId: session.id,
-          error: error.message
-        });
-        continue;
-      }
-      logger.info("Usage pack grant voided", {
-        eventId: event.id,
-        sessionId: session.id,
-        kind: target.logKind,
-        reason,
-        clawback,
-        result: data
-      });
-    }
-  }
 }
 
 function getInvoiceSubscriptionId(invoice: Stripe.Invoice): string | null {

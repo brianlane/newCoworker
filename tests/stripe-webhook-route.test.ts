@@ -3153,20 +3153,6 @@ describe("stripe webhook route: voice bonus refund / dispute handling", () => {
     vi.clearAllMocks();
     mockVoiceBonusRpc.mockClear();
     mockCheckoutSessionsList.mockReset();
-    mockCheckoutSessionsList.mockResolvedValue({
-      data: [
-        {
-          id: "cs_test_bonus_for_refund",
-          metadata: { checkoutKind: "voice_bonus_seconds", businessId: "biz_ref_1" }
-        }
-      ]
-    } as never);
-    mockVoiceBonusRpc.mockImplementation((name: string) => {
-      if (name === "void_voice_bonus_grant_by_checkout_session") {
-        return Promise.resolve({ data: { ok: true, voided: 1 }, error: null });
-      }
-      return Promise.resolve({ data: null, error: null });
-    });
   });
 
   async function postEvent() {
@@ -3179,11 +3165,7 @@ describe("stripe webhook route: voice bonus refund / dispute handling", () => {
     );
   }
 
-  it("does NOT void on dispute.created (observational only; dispute outcome unknown)", async () => {
-    // A dispute opened is not a terminal outcome. Stripe disputes can close as
-    // `lost` / `won` / `warning_closed`; only `lost` reverses funds. Voiding at
-    // open would permanently revoke seconds from customers whose merchants
-    // successfully defend — the handler has no re-grant compensation path.
+  it("does NOT void on dispute.created (observational only)", async () => {
     vi.mocked(verifyWebhook).mockReturnValue({
       id: "evt_dispute_created",
       type: "charge.dispute.created",
@@ -3200,73 +3182,18 @@ describe("stripe webhook route: voice bonus refund / dispute handling", () => {
 
     const res = await postEvent();
     expect(res.status).toBe(200);
-    // Must not even look up the Checkout Session.
     expect(mockCheckoutSessionsList).not.toHaveBeenCalled();
     expect(mockVoiceBonusRpc).not.toHaveBeenCalledWith(
       "void_voice_bonus_grant_by_checkout_session",
       expect.anything()
     );
-    // But we should log the open for ops visibility.
     expect(logger.info).toHaveBeenCalledWith(
       "Stripe dispute created; deferring clawback to dispute.closed/lost",
-      expect.objectContaining({
-        disputeId: "dp_created_1",
-        chargeId: "ch_created_1",
-        reason: "fraudulent",
-        amount: 3000
-      })
+      expect.objectContaining({ disputeId: "dp_created_1" })
     );
   });
 
-  it("does NOT void when dispute closed with status=won (merchant defended successfully)", async () => {
-    vi.mocked(verifyWebhook).mockReturnValue({
-      id: "evt_dispute_won",
-      type: "charge.dispute.closed",
-      data: {
-        object: {
-          id: "dp_won_1",
-          status: "won",
-          payment_intent: "pi_won_1"
-        }
-      }
-    } as never);
-
-    const res = await postEvent();
-    expect(res.status).toBe(200);
-    expect(mockCheckoutSessionsList).not.toHaveBeenCalled();
-    expect(mockVoiceBonusRpc).not.toHaveBeenCalledWith(
-      "void_voice_bonus_grant_by_checkout_session",
-      expect.anything()
-    );
-    expect(logger.info).toHaveBeenCalledWith(
-      "Stripe dispute closed without chargeback; not voiding bonus grant",
-      expect.objectContaining({ disputeId: "dp_won_1", status: "won" })
-    );
-  });
-
-  it("does NOT void when dispute closed with status=warning_closed (no chargeback)", async () => {
-    vi.mocked(verifyWebhook).mockReturnValue({
-      id: "evt_dispute_warn_closed",
-      type: "charge.dispute.closed",
-      data: {
-        object: {
-          id: "dp_warn_1",
-          status: "warning_closed",
-          payment_intent: "pi_warn_1"
-        }
-      }
-    } as never);
-
-    const res = await postEvent();
-    expect(res.status).toBe(200);
-    expect(mockCheckoutSessionsList).not.toHaveBeenCalled();
-    expect(mockVoiceBonusRpc).not.toHaveBeenCalledWith(
-      "void_voice_bonus_grant_by_checkout_session",
-      expect.anything()
-    );
-  });
-
-  it("DOES void when dispute closed with status=lost (funds clawed back)", async () => {
+  it("does not void pack grants on dispute.lost (packs are non-refundable to customers)", async () => {
     vi.mocked(verifyWebhook).mockReturnValue({
       id: "evt_dispute_lost",
       type: "charge.dispute.closed",
@@ -3281,21 +3208,18 @@ describe("stripe webhook route: voice bonus refund / dispute handling", () => {
 
     const res = await postEvent();
     expect(res.status).toBe(200);
-    expect(mockCheckoutSessionsList).toHaveBeenCalledWith({
-      payment_intent: "pi_lost_1",
-      limit: 5
-    });
-    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
+    expect(mockCheckoutSessionsList).not.toHaveBeenCalled();
+    expect(mockVoiceBonusRpc).not.toHaveBeenCalledWith(
       "void_voice_bonus_grant_by_checkout_session",
-      {
-        p_checkout_session_id: "cs_test_bonus_for_refund",
-        p_reason: "dispute",
-        p_clawback_seconds: null
-      }
+      expect.anything()
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      "Usage pack refund/dispute ignored; packs are non-refundable to customers",
+      expect.objectContaining({ eventId: "evt_dispute_lost", type: "charge.dispute.closed" })
     );
   });
 
-  it("DOES void on charge.refunded with positive amount_refunded", async () => {
+  it("does not void pack grants on charge.refunded (packs are non-refundable to customers)", async () => {
     vi.mocked(verifyWebhook).mockReturnValue({
       id: "evt_refund_1",
       type: "charge.refunded",
@@ -3310,362 +3234,14 @@ describe("stripe webhook route: voice bonus refund / dispute handling", () => {
 
     const res = await postEvent();
     expect(res.status).toBe(200);
-    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
-      "void_voice_bonus_grant_by_checkout_session",
-      {
-        p_checkout_session_id: "cs_test_bonus_for_refund",
-        p_reason: "refund",
-        p_clawback_seconds: null
-      }
-    );
-  });
-
-  it("does NOT void on charge.refunded with zero amount_refunded (defensive)", async () => {
-    vi.mocked(verifyWebhook).mockReturnValue({
-      id: "evt_refund_zero",
-      type: "charge.refunded",
-      data: {
-        object: {
-          id: "ch_refund_zero",
-          amount_refunded: 0,
-          payment_intent: "pi_refund_zero"
-        }
-      }
-    } as never);
-
-    const res = await postEvent();
-    expect(res.status).toBe(200);
     expect(mockCheckoutSessionsList).not.toHaveBeenCalled();
     expect(mockVoiceBonusRpc).not.toHaveBeenCalledWith(
       "void_voice_bonus_grant_by_checkout_session",
       expect.anything()
     );
-  });
-
-  it("ignores refund events without a payment_intent", async () => {
-    vi.mocked(verifyWebhook).mockReturnValue({
-      id: "evt_no_pi",
-      type: "charge.refunded",
-      data: {
-        object: {
-          id: "ch_no_pi",
-          amount_refunded: 100,
-          payment_intent: null
-        }
-      }
-    } as never);
-
-    const res = await postEvent();
-    expect(res.status).toBe(200);
-    expect(mockCheckoutSessionsList).not.toHaveBeenCalled();
-    expect(mockVoiceBonusRpc).not.toHaveBeenCalledWith(
-      "void_voice_bonus_grant_by_checkout_session",
-      expect.anything()
-    );
-  });
-
-  it("ignores refund events whose Checkout Session is not a voice_bonus_seconds purchase", async () => {
-    mockCheckoutSessionsList.mockResolvedValueOnce({
-      data: [
-        {
-          id: "cs_subscription_not_bonus",
-          metadata: { checkoutKind: "subscription", businessId: "biz_sub" }
-        }
-      ]
-    } as never);
-    vi.mocked(verifyWebhook).mockReturnValue({
-      id: "evt_refund_sub",
-      type: "charge.refunded",
-      data: {
-        object: {
-          id: "ch_sub",
-          amount_refunded: 9900,
-          payment_intent: "pi_sub_refund"
-        }
-      }
-    } as never);
-
-    const res = await postEvent();
-    expect(res.status).toBe(200);
-    expect(mockCheckoutSessionsList).toHaveBeenCalled();
-    expect(mockVoiceBonusRpc).not.toHaveBeenCalledWith(
-      "void_voice_bonus_grant_by_checkout_session",
-      expect.anything()
-    );
-  });
-
-  it("logs and continues when the void RPC errors for one session", async () => {
-    mockCheckoutSessionsList.mockResolvedValueOnce({
-      data: [
-        {
-          id: "cs_err",
-          metadata: { checkoutKind: "voice_bonus_seconds", businessId: "biz_err" }
-        },
-        {
-          id: "cs_ok",
-          metadata: { checkoutKind: "voice_bonus_seconds", businessId: "biz_ok" }
-        }
-      ]
-    } as never);
-    mockVoiceBonusRpc.mockImplementation((_name: string, args: { p_checkout_session_id?: string }) => {
-      if (args?.p_checkout_session_id === "cs_err") {
-        return Promise.resolve({ data: null, error: { message: "boom" } });
-      }
-      return Promise.resolve({ data: { ok: true, voided: 1 }, error: null });
-    });
-    vi.mocked(verifyWebhook).mockReturnValue({
-      id: "evt_partial_err",
-      type: "charge.refunded",
-      data: {
-        object: {
-          id: "ch_err",
-          amount_refunded: 100,
-          payment_intent: "pi_err"
-        }
-      }
-    } as never);
-
-    const res = await postEvent();
-    expect(res.status).toBe(200);
-    expect(logger.error).toHaveBeenCalledWith(
-      "void_voice_bonus_grant_by_checkout_session failed",
-      expect.objectContaining({ sessionId: "cs_err", error: "boom" })
-    );
-    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
-      "void_voice_bonus_grant_by_checkout_session",
-      {
-        p_checkout_session_id: "cs_ok",
-        p_reason: "refund",
-        p_clawback_seconds: null
-      }
-    );
-  });
-
-  it("logs and returns 200 when the Checkout Sessions list call throws", async () => {
-    mockCheckoutSessionsList.mockRejectedValueOnce(new Error("rate limited"));
-    vi.mocked(verifyWebhook).mockReturnValue({
-      id: "evt_list_throw",
-      type: "charge.refunded",
-      data: {
-        object: {
-          id: "ch_list_throw",
-          amount_refunded: 200,
-          payment_intent: "pi_list_throw"
-        }
-      }
-    } as never);
-
-    const res = await postEvent();
-    expect(res.status).toBe(200);
-    expect(logger.error).toHaveBeenCalledWith(
-      "Stripe checkout sessions list failed during refund handling",
-      expect.objectContaining({ paymentIntentId: "pi_list_throw", error: "rate limited" })
-    );
-    expect(mockVoiceBonusRpc).not.toHaveBeenCalledWith(
-      "void_voice_bonus_grant_by_checkout_session",
-      expect.anything()
-    );
-  });
-
-  it("prorates clawback seconds on a partial refund when charge amount and seconds metadata are present", async () => {
-    mockCheckoutSessionsList.mockResolvedValueOnce({
-      data: [
-        {
-          id: "cs_partial",
-          amount_total: 2000,
-          metadata: {
-            checkoutKind: "voice_bonus_seconds",
-            businessId: "biz_partial",
-            voiceSeconds: "1200"
-          }
-        }
-      ]
-    } as never);
-    vi.mocked(verifyWebhook).mockReturnValue({
-      id: "evt_partial_refund",
-      type: "charge.refunded",
-      data: {
-        object: {
-          id: "ch_partial",
-          amount: 2000,
-          amount_captured: 2000,
-          amount_refunded: 500,
-          payment_intent: "pi_partial"
-        }
-      }
-    } as never);
-
-    const res = await postEvent();
-    expect(res.status).toBe(200);
-    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
-      "void_voice_bonus_grant_by_checkout_session",
-      {
-        p_checkout_session_id: "cs_partial",
-        p_reason: "refund",
-        p_clawback_seconds: 300
-      }
-    );
-  });
-
-  it("passes null clawback (full void) when the refund covers the full captured amount", async () => {
-    mockCheckoutSessionsList.mockResolvedValueOnce({
-      data: [
-        {
-          id: "cs_full",
-          amount_total: 2000,
-          metadata: {
-            checkoutKind: "voice_bonus_seconds",
-            businessId: "biz_full",
-            voiceSeconds: "1200"
-          }
-        }
-      ]
-    } as never);
-    vi.mocked(verifyWebhook).mockReturnValue({
-      id: "evt_full_refund",
-      type: "charge.refunded",
-      data: {
-        object: {
-          id: "ch_full",
-          amount: 2000,
-          amount_captured: 2000,
-          amount_refunded: 2000,
-          payment_intent: "pi_full"
-        }
-      }
-    } as never);
-
-    const res = await postEvent();
-    expect(res.status).toBe(200);
-    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
-      "void_voice_bonus_grant_by_checkout_session",
-      {
-        p_checkout_session_id: "cs_full",
-        p_reason: "refund",
-        p_clawback_seconds: null
-      }
-    );
-  });
-
-  it("voids an SMS pack grant with prorated text clawback on partial refund", async () => {
-    mockCheckoutSessionsList.mockResolvedValueOnce({
-      data: [
-        {
-          id: "cs_sms_partial",
-          amount_total: 1000,
-          metadata: {
-            checkoutKind: "sms_bonus_texts",
-            businessId: "biz_sms_partial",
-            smsTexts: "500"
-          }
-        }
-      ]
-    } as never);
-    vi.mocked(verifyWebhook).mockReturnValue({
-      id: "evt_sms_partial_refund",
-      type: "charge.refunded",
-      data: {
-        object: {
-          id: "ch_sms_partial",
-          amount: 1000,
-          amount_captured: 1000,
-          amount_refunded: 250,
-          payment_intent: "pi_sms_partial"
-        }
-      }
-    } as never);
-
-    const res = await postEvent();
-    expect(res.status).toBe(200);
-    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
-      "void_sms_bonus_grant_by_checkout_session",
-      {
-        p_checkout_session_id: "cs_sms_partial",
-        p_reason: "refund",
-        p_clawback_texts: 125
-      }
-    );
-  });
-
-  it("fully voids a chat credit grant on dispute lost", async () => {
-    mockCheckoutSessionsList.mockResolvedValueOnce({
-      data: [
-        {
-          id: "cs_chat_dispute",
-          metadata: {
-            checkoutKind: "chat_credit_micros",
-            businessId: "biz_chat_dispute",
-            creditMicros: "5000000"
-          }
-        }
-      ]
-    } as never);
-    vi.mocked(verifyWebhook).mockReturnValue({
-      id: "evt_chat_dispute_lost",
-      type: "charge.dispute.closed",
-      data: {
-        object: {
-          id: "dp_chat_lost",
-          status: "lost",
-          payment_intent: "pi_chat_lost"
-        }
-      }
-    } as never);
-
-    const res = await postEvent();
-    expect(res.status).toBe(200);
-    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
-      "void_chat_credit_grant_by_checkout_session",
-      {
-        p_checkout_session_id: "cs_chat_dispute",
-        p_reason: "dispute",
-        p_clawback_micros: null
-      }
-    );
-  });
-
-  it("voids each pack kind through its own RPC when one payment covers multiple packs", async () => {
-    mockCheckoutSessionsList.mockResolvedValueOnce({
-      data: [
-        {
-          id: "cs_multi_voice",
-          metadata: { checkoutKind: "voice_bonus_seconds", businessId: "biz_multi" }
-        },
-        {
-          id: "cs_multi_sms",
-          metadata: { checkoutKind: "sms_bonus_texts", businessId: "biz_multi" }
-        },
-        {
-          id: "cs_multi_chat",
-          metadata: { checkoutKind: "chat_credit_micros", businessId: "biz_multi" }
-        }
-      ]
-    } as never);
-    vi.mocked(verifyWebhook).mockReturnValue({
-      id: "evt_multi_refund",
-      type: "charge.refunded",
-      data: {
-        object: {
-          id: "ch_multi",
-          amount_refunded: 100,
-          payment_intent: "pi_multi"
-        }
-      }
-    } as never);
-
-    const res = await postEvent();
-    expect(res.status).toBe(200);
-    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
-      "void_voice_bonus_grant_by_checkout_session",
-      expect.objectContaining({ p_checkout_session_id: "cs_multi_voice" })
-    );
-    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
-      "void_sms_bonus_grant_by_checkout_session",
-      expect.objectContaining({ p_checkout_session_id: "cs_multi_sms" })
-    );
-    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
-      "void_chat_credit_grant_by_checkout_session",
-      expect.objectContaining({ p_checkout_session_id: "cs_multi_chat" })
+    expect(logger.info).toHaveBeenCalledWith(
+      "Usage pack refund/dispute ignored; packs are non-refundable to customers",
+      expect.objectContaining({ eventId: "evt_refund_1", type: "charge.refunded" })
     );
   });
 });

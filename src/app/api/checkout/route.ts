@@ -49,10 +49,34 @@ const schema = z.object({
    * and the charge cannot diverge and a forged preview buys nothing.
    */
   promoCode: z.string().trim().min(1).max(40).optional(),
-  /** Optional usage-pack add-ons (at most one per category). */
-  voicePackId: z.string().trim().min(1).max(40).optional(),
-  smsPackId: z.string().trim().min(1).max(40).optional(),
-  chatPackId: z.string().trim().min(1).max(40).optional()
+  /** Optional recurring usage-pack add-ons (quantity per catalog SKU). */
+  voicePacks: z
+    .array(
+      z.object({
+        packId: z.string().trim().min(1).max(40),
+        quantity: z.number().int().min(1).max(20)
+      })
+    )
+    .max(10)
+    .optional(),
+  smsPacks: z
+    .array(
+      z.object({
+        packId: z.string().trim().min(1).max(40),
+        quantity: z.number().int().min(1).max(20)
+      })
+    )
+    .max(10)
+    .optional(),
+  chatPacks: z
+    .array(
+      z.object({
+        packId: z.string().trim().min(1).max(40),
+        quantity: z.number().int().min(1).max(20)
+      })
+    )
+    .max(10)
+    .optional()
 });
 
 /**
@@ -373,9 +397,9 @@ export async function POST(request: Request) {
 
     const packAddons = resolveMembershipPackAddons(
       {
-        voicePackId: body.voicePackId,
-        smsPackId: body.smsPackId,
-        chatPackId: body.chatPackId
+        voicePacks: body.voicePacks,
+        smsPacks: body.smsPacks,
+        chatPacks: body.chatPacks
       },
       body.billingPeriod
     );
@@ -420,7 +444,9 @@ export async function POST(request: Request) {
         ? {
             packAddonLines: packAddons.lines.map((line) => ({
               name: line.name,
-              unitAmountCents: line.unitAmountCents
+              unitAmountCents: line.unitAmountCents,
+              quantity: line.quantity,
+              billingPeriod: body.billingPeriod
             }))
           }
         : {}),

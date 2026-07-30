@@ -333,24 +333,32 @@ describe("/api/billing/change-plan", () => {
     expect("canadianMessagingFee" in call.metadata).toBe(false);
   });
 
-  it("attaches discounted pack add-ons using the NEW billing period", async () => {
+  it("attaches recurring pack add-ons using the NEW billing period", async () => {
     const prevVoiceId = process.env.STRIPE_VOICE_BONUS_30MIN_PRICE_ID;
     const prevVoiceCents = process.env.STRIPE_VOICE_BONUS_30MIN_CENTS;
     process.env.STRIPE_VOICE_BONUS_30MIN_PRICE_ID = "price_voice_30";
     process.env.STRIPE_VOICE_BONUS_30MIN_CENTS = "1000";
     try {
       const res = await POST(
-        makeRequest({ tier: "standard", billingPeriod: "annual", voicePackId: "min_30" })
+        makeRequest({
+          tier: "standard",
+          billingPeriod: "annual",
+          voicePacks: [{ packId: "min_30", quantity: 3 }]
+        })
       );
       expect(res.status).toBe(200);
       const call = createCheckoutSessionMock.mock.calls.at(-1)?.[0];
-      // Annual = 10% off $10.00 → $9.00
+      // Annual = 10% off $10.00 → $9.00/mo × 12
       expect(call.packAddonLines).toEqual([
-        { name: "Voice top-up: 30 minutes", unitAmountCents: 900 }
+        {
+          name: "Voice top-up: 30 minutes",
+          unitAmountCents: 900 * 12,
+          quantity: 3,
+          billingPeriod: "annual"
+        }
       ]);
       expect(call.metadata).toMatchObject({
-        addonVoicePackId: "min_30",
-        addonVoiceCents: "900"
+        addonVoice: "min_30:3:1800"
       });
     } finally {
       if (prevVoiceId === undefined) delete process.env.STRIPE_VOICE_BONUS_30MIN_PRICE_ID;
