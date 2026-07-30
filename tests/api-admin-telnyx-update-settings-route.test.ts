@@ -27,12 +27,12 @@ function request(body: unknown): Request {
   });
 }
 
-function makeBusiness() {
+function makeBusiness(tier: "starter" | "standard" | "enterprise" = "standard") {
   return {
     id: BIZ,
     name: "Corp",
     owner_email: "o@o.com",
-    tier: "starter",
+    tier,
     status: "online",
     created_at: "2026-01-01T00:00:00Z"
   };
@@ -142,7 +142,7 @@ describe("POST /api/admin/telnyx/update-settings", () => {
     expect(call.bridgeStaleAlertMuted).toBeUndefined();
   });
 
-  it("accepts the translator mode toggle", async () => {
+  it("accepts the translator mode toggle on Standard+", async () => {
     await POST(request({ businessId: BIZ, translatorModeEnabled: true, transferEnabled: true }));
     expect(upsertBusinessTelnyxSettings).toHaveBeenCalledWith(
       expect.objectContaining({ translatorModeEnabled: true })
@@ -160,5 +160,25 @@ describe("POST /api/admin/telnyx/update-settings", () => {
         expect.objectContaining({ translatorModeEnabled: true, transferEnabled: false })
       );
     });
+  });
+
+  it("refuses enabling translator mode on Starter", async () => {
+    vi.mocked(getBusiness).mockResolvedValue(makeBusiness("starter") as never);
+    const res = await POST(
+      request({ businessId: BIZ, translatorModeEnabled: true })
+    );
+    expect(res.status).toBe(403);
+    expect(upsertBusinessTelnyxSettings).not.toHaveBeenCalled();
+  });
+
+  it("still allows turning translator mode OFF on Starter", async () => {
+    vi.mocked(getBusiness).mockResolvedValue(makeBusiness("starter") as never);
+    const res = await POST(
+      request({ businessId: BIZ, translatorModeEnabled: false })
+    );
+    expect(res.status).toBe(200);
+    expect(upsertBusinessTelnyxSettings).toHaveBeenCalledWith(
+      expect.objectContaining({ translatorModeEnabled: false })
+    );
   });
 });

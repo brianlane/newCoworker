@@ -475,13 +475,16 @@ async function loadTenantTelnyxSettings(
   supabase: SupabaseClient,
   businessId: string
 ): Promise<TenantTelnyxSettings> {
-  const { data } = await supabase
-    .from("business_telnyx_settings")
-    .select(
-      "forward_to_e164, transfer_enabled, sms_fallback_enabled, telnyx_sms_from_e164, telnyx_messaging_profile_id, translator_mode_enabled, voice_name"
-    )
-    .eq("business_id", businessId)
-    .maybeSingle();
+  const [{ data }, { data: bizRow }] = await Promise.all([
+    supabase
+      .from("business_telnyx_settings")
+      .select(
+        "forward_to_e164, transfer_enabled, sms_fallback_enabled, telnyx_sms_from_e164, telnyx_messaging_profile_id, translator_mode_enabled, voice_name"
+      )
+      .eq("business_id", businessId)
+      .maybeSingle(),
+    supabase.from("businesses").select("tier").eq("id", businessId).maybeSingle()
+  ]);
   const row = (data ?? null) as null | {
     forward_to_e164: string | null;
     transfer_enabled: boolean | null;
@@ -491,6 +494,10 @@ async function loadTenantTelnyxSettings(
     translator_mode_enabled: boolean | null;
     voice_name: string | null;
   };
+  const tier = (bizRow as { tier?: string | null } | null)?.tier ?? null;
+  // Standard+ only. Mirror the Edge answer-time gate so a leftover settings
+  // flag cannot offer start_translator_mode or stay-on-transfer on Starter.
+  const translatorTierOk = tier === "standard" || tier === "enterprise";
   return {
     forwardToE164: row?.forward_to_e164 ?? null,
     transferEnabled: row?.transfer_enabled ?? true,
@@ -499,7 +506,7 @@ async function loadTenantTelnyxSettings(
     messagingProfileId: row?.telnyx_messaging_profile_id ?? null,
     // Opt-in: a box running an older schema (column absent) reads as false and
     // behaves exactly as it did before translator mode existed.
-    translatorModeEnabled: row?.translator_mode_enabled === true,
+    translatorModeEnabled: row?.translator_mode_enabled === true && translatorTierOk,
     voiceName: row?.voice_name ?? null
   };
 }

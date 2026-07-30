@@ -14,6 +14,7 @@
  */
 import { signStreamUrlMac, type StreamPayloadV2 } from "./stream_url.ts";
 import { telnyxStreamingStart } from "./telnyx_call_actions.ts";
+import { translatorAllowedForTier } from "./translator_tier.ts";
 
 /** Structural client shape: the two callers hold differently-typed clients. */
 type AttachSupabase = {
@@ -78,7 +79,7 @@ export async function resolveBridgeTarget(
     return null;
   }
   const { supabase, defaultBridgeOrigin } = deps;
-  const [routeRes, settingsRes] = await Promise.all([
+  const [routeRes, settingsRes, bizRes] = await Promise.all([
     supabase
       .from("telnyx_voice_routes")
       .select("media_wss_origin, media_path")
@@ -90,7 +91,8 @@ export async function resolveBridgeTarget(
         "bridge_last_heartbeat_at, bridge_media_wss_origin, bridge_media_path, translator_mode_enabled"
       )
       .eq("business_id", businessId)
-      .maybeSingle()
+      .maybeSingle(),
+    supabase.from("businesses").select("tier").eq("id", businessId).maybeSingle()
   ]);
   const route = routeRes.data as { media_wss_origin?: string | null; media_path?: string | null } | null;
   const settings = settingsRes.data as {
@@ -99,6 +101,7 @@ export async function resolveBridgeTarget(
     bridge_media_path?: string | null;
     translator_mode_enabled?: boolean | null;
   } | null;
+  const biz = bizRes.data as { tier?: string | null } | null;
 
   const heartbeatTtlSec = (() => {
     const raw = Number(envValue("BRIDGE_HEARTBEAT_TTL_SEC") ?? "150");
@@ -122,8 +125,11 @@ export async function resolveBridgeTarget(
   const path = pathTrimmed.startsWith("/") ? pathTrimmed : `/${pathTrimmed}`;
   // Translator mode has to be armed when the stream STARTS (Telnyx cannot
   // re-point a running stream's target legs), so every site that attaches the
-  // bridge reads the same tenant column.
-  return { origin, path, translatorArmed: settings?.translator_mode_enabled === true };
+  // bridge reads the same tenant column AND the Standard+ tier gate (AI-first
+  // and answer-time paths must not drift).
+  const translatorArmed =
+    settings?.translator_mode_enabled === true && translatorAllowedForTier(biz?.tier);
+  return { origin, path, translatorArmed };
 }
 
 /**

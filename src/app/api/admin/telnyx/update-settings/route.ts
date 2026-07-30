@@ -4,6 +4,10 @@ import { successResponse, errorResponse, handleRouteError } from "@/lib/api-resp
 import { getBusiness } from "@/lib/db/businesses";
 import { upsertBusinessTelnyxSettings } from "@/lib/db/telnyx-routes";
 import { GEMINI_LIVE_VOICES } from "@/lib/plans/enterprise-models";
+import {
+  TRANSLATOR_UPGRADE_MESSAGE,
+  translatorAllowedForTier
+} from "@/lib/plans/translator";
 import { normalizeE164 } from "@/lib/telnyx/assign-did";
 
 /**
@@ -66,6 +70,9 @@ export async function POST(request: Request) {
     const voiceName =
       body.voiceName === undefined ? undefined : body.voiceName === "" ? null : body.voiceName;
 
+    if (body.translatorModeEnabled === true && !translatorAllowedForTier(business.tier)) {
+      return errorResponse("FORBIDDEN", TRANSLATOR_UPGRADE_MESSAGE, 403);
+    }
 
     const settings = await upsertBusinessTelnyxSettings({
       businessId: body.businessId,

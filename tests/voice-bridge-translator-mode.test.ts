@@ -464,9 +464,11 @@ describe("interpreting can END, so staff get their assistant back", () => {
 });
 
 describe("arming is off by default and read from the tenant column", () => {
-  it("the bridge treats a missing column as off", () => {
+  it("the bridge treats a missing column as off and ANDs the Standard+ tier gate", () => {
     const src = readFileSync(INDEX, "utf8");
-    expect(src).toContain("translatorModeEnabled: row?.translator_mode_enabled === true");
+    expect(src).toContain(
+      "translatorModeEnabled: row?.translator_mode_enabled === true && translatorTierOk"
+    );
   });
 
   it("the bridge passes the tenant setting into the transfer capability", () => {

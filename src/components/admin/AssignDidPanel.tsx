@@ -29,6 +29,11 @@ type AssignDidPanelProps = {
   smsFallbackEnabled: boolean;
   bridgeStaleAlertMuted: boolean;
   translatorModeEnabled: boolean;
+  /**
+   * Live translator is Standard+. When false the checkbox is disabled and saves
+   * cannot turn it on (the API also refuses).
+   */
+  translatorAllowed: boolean;
   /** Tenant's Gemini Live voice; null/empty = platform default. */
   voiceName: string | null;
   defaultAreaCode?: string;
@@ -62,11 +67,12 @@ export function AssignDidPanel(props: AssignDidPanelProps) {
     props.bridgeStaleAlertMuted
   );
   const [translatorModeEnabled, setTranslatorModeEnabled] = useState(
-    props.translatorModeEnabled
+    props.translatorAllowed && props.translatorModeEnabled
   );
   const [voiceName, setVoiceName] = useState(props.voiceName ?? "");
 
   const bridge = ADMIN_HEALTH_COPY[resolveBridgeHealthState(props.bridgeHeartbeatAt)];
+  const translatorAllowed = props.translatorAllowed;
 
   async function handleSearch(e: FormEvent) {
     e.preventDefault();
@@ -186,7 +192,8 @@ export function AssignDidPanel(props: AssignDidPanelProps) {
           transferEnabled,
           smsFallbackEnabled,
           bridgeStaleAlertMuted,
-          translatorModeEnabled,
+          // Starter cannot arm translator; force false so a leftover flag is cleared.
+          translatorModeEnabled: translatorAllowed ? translatorModeEnabled : false,
           voiceName
         })
       });
@@ -320,23 +327,27 @@ export function AssignDidPanel(props: AssignDidPanelProps) {
           />
           Let the AI warm-transfer callers to this number
         </label>
-        <label className="flex items-start gap-2 text-xs text-parchment/70">
+        <label
+          className={`flex items-start gap-2 text-xs ${
+            translatorAllowed ? "text-parchment/70" : "text-parchment/40"
+          }`}
+        >
           <input
             type="checkbox"
             className="mt-0.5"
-            checked={translatorModeEnabled}
+            checked={translatorAllowed && translatorModeEnabled}
+            disabled={!translatorAllowed}
             onChange={(e) => setTranslatorModeEnabled(e.target.checked)}
           />
           <span>
             Stay on the call as a live interpreter after a transfer
             <span className="mt-1 block text-[11px] text-parchment/40">
-              On by default. For callers who do not share a language with whoever
-              picks up: the AI hears both people and speaks to both, translating
-              each side. It only engages when someone actually needs it, so leaving
-              it on costs nothing on ordinary calls. An interpreted call does cost
-              more than a plain transfer: it meters BOTH legs and runs AI for the
-              whole conversation. Applies to the next call, not one in progress.
-              {!transferEnabled ? " Needs warm transfer on to have any effect." : ""}
+              {translatorAllowed
+                ? "On by default on Standard+. For callers who do not share a language with whoever picks up: the AI hears both people and speaks to both, translating each side. It only engages when someone actually needs it, so leaving it on costs nothing on ordinary calls. An interpreted call does cost more than a plain transfer: it meters BOTH legs and runs AI for the whole conversation. Applies to the next call, not one in progress."
+                : "Standard plan and above. Starter cannot arm live interpreter mode (it double-meters voice minutes)."}
+              {translatorAllowed && !transferEnabled
+                ? " Needs warm transfer on to have any effect."
+                : ""}
             </span>
           </span>
         </label>

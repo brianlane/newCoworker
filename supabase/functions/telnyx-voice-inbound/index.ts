@@ -69,6 +69,7 @@ import {
   telnyxWebhookRateAllow
 } from "../_shared/telnyx_edge_guard.ts";
 import { pauseLeadAutomationOnCall } from "../_shared/ai_flows/customer_called.ts";
+import { translatorAllowedForTier } from "../_shared/translator_tier.ts";
 
 const MAX_BODY = 256 * 1024;
 const HANDLER_MS = 8000;
@@ -1260,7 +1261,7 @@ serve(async (req: Request) => {
   // on either branch.
   const { data: gateBizRow } = await supabase
     .from("businesses")
-    .select("is_paused, customer_channels_enabled, default_customer_language")
+    .select("is_paused, customer_channels_enabled, default_customer_language, tier")
     .eq("id", businessId)
     .maybeSingle();
   const gateBiz = gateBizRow as
@@ -1268,6 +1269,7 @@ serve(async (req: Request) => {
         is_paused?: boolean;
         customer_channels_enabled?: boolean;
         default_customer_language?: string | null;
+        tier?: string | null;
       }
     | null;
   // System IVR (no AI stream) speaks the business's default customer language
@@ -1833,9 +1835,11 @@ serve(async (req: Request) => {
   // and restarting the stream would tear down the Live session (transcript,
   // reservation, and everything the caller already said). `both` is inert until
   // a second leg exists, so an armed call that never transfers behaves normally.
+  // Standard+ only: Starter would burn included minutes on double-leg Gemini Live.
   const translatorArmed =
     (settings as { translator_mode_enabled?: boolean | null } | null)
-      ?.translator_mode_enabled === true;
+      ?.translator_mode_enabled === true &&
+    translatorAllowedForTier(gateBiz?.tier);
   const answerRes = await telnyxAnswerWithStream(apiKey, callControlId, {
     streamUrl,
     ...(translatorArmed ? { targetLegs: "both" as const } : {})
