@@ -82,6 +82,12 @@ describe("tier-display", () => {
       );
     });
 
+    it("standard advertises outbound AI calls (Standard-tier gate, Jul 2026)", () => {
+      expect(STANDARD_FEATURES).toContain(
+        "Outbound AI calls: your coworker can call leads for you"
+      );
+    });
+
     it("enterprise advertises branded RCS (own verified sender)", () => {
       expect(ENTERPRISE_FEATURES).toContain(
         "Branded RCS messaging (your own Google-verified sender)"

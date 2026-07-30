@@ -43,6 +43,7 @@
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient } from "npm:@supabase/supabase-js@2.45.0";
 import { assertCronAuth } from "../_shared/cron_auth.ts";
+import { outboundAiCallsAllowedForTier } from "../_shared/outbound_ai_call_tier.ts";
 import { telnyxDialCall, telnyxHangupCall } from "../_shared/telnyx_call_actions.ts";
 import { checkVoiceBudgetAvailable, reserveVoiceBudget } from "../_shared/voice_reserve.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
@@ -121,6 +122,20 @@ serve(async (req: Request) => {
   }
 
   const supabase = createClient(supabaseUrl, serviceKey);
+
+  // Standard+ gate: refuse before any Telnyx dial so Starter never rings.
+  const { data: bizRow, error: bizErr } = await supabase
+    .from("businesses")
+    .select("tier")
+    .eq("id", businessId)
+    .maybeSingle();
+  if (bizErr) {
+    console.error("originate: business tier lookup", bizErr);
+    return json(500, { ok: false, error: "tier_lookup_failed", dialed: false });
+  }
+  if (!outboundAiCallsAllowedForTier((bizRow as { tier?: string } | null)?.tier)) {
+    return json(200, { ok: false, reason: "tier_blocked", error: "tier_blocked", dialed: false });
+  }
 
   // Load the flow. Two caller shapes:
   //   - outbound VOICE flow ("Place call" / schedule sweep): the plan is read

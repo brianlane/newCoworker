@@ -14,6 +14,10 @@ import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { getAiFlow } from "@/lib/ai-flows/db";
+import {
+  OUTBOUND_AI_CALLS_UPGRADE_MESSAGE,
+  outboundAiCallsAllowedForBusiness
+} from "@/lib/plans/outbound-ai-calls";
 
 const idSchema = z.string().uuid();
 
@@ -41,6 +45,10 @@ export async function POST(request: Request, { params }: Ctx) {
     const trigger = flow.definition?.trigger;
     if (trigger?.channel !== "voice" || trigger?.direction !== "outbound") {
       return errorResponse("VALIDATION_ERROR", "This flow is not an outbound voice flow");
+    }
+
+    if (!(await outboundAiCallsAllowedForBusiness(body.businessId))) {
+      return errorResponse("FORBIDDEN", OUTBOUND_AI_CALLS_UPGRADE_MESSAGE, 403);
     }
 
     const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL?.trim();
@@ -73,7 +81,9 @@ export async function POST(request: Request, { params }: Ctx) {
       // Budget refusals come back as 200 { ok:false, reason } from the Edge fn.
       const reason = result?.reason ?? result?.error ?? "place_call_failed";
       const message =
-        reason === "quota_exhausted"
+        reason === "tier_blocked"
+          ? OUTBOUND_AI_CALLS_UPGRADE_MESSAGE
+          : reason === "quota_exhausted"
           ? "Out of voice minutes for this billing period."
           : reason === "concurrent_limit"
             ? "Too many calls in progress right now; try again shortly."
@@ -82,7 +92,11 @@ export async function POST(request: Request, { params }: Ctx) {
               : reason === "no_caller_id" || reason === "no_telnyx_connection"
                 ? "This account has no voice number configured to call from."
                 : "Could not place the call. Please try again.";
-      return errorResponse("VALIDATION_ERROR", message);
+      return errorResponse(
+        reason === "tier_blocked" ? "FORBIDDEN" : "VALIDATION_ERROR",
+        message,
+        reason === "tier_blocked" ? 403 : undefined
+      );
     }
 
     return successResponse({ callControlId: result.callControlId, to: result.to });
