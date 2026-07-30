@@ -261,11 +261,58 @@ async function organizeOutlook(
   };
   const reconnectHint = "outlook_reconnect_required";
 
+  // Prefer an explicit folder move over Archive so archive+moveToFolder matches
+  // Gmail (label + leave Inbox) instead of silently dropping the folder.
+  let destinationName: string | null = null;
+  if (actions.moveToFolder?.trim()) destinationName = actions.moveToFolder.trim();
+  else if (actions.archive) destinationName = "Archive";
+  else if (actions.unarchive) destinationName = "Inbox";
+
+  // Preflight reads first so folder/category lookup failures do not leave a
+  // half-applied mailbox (Graph has no multi-op transaction).
+  let destinationId: string | null = null;
+  if (destinationName) {
+    destinationId = await resolveOutlookFolderId(businessId, link, destinationName);
+    if (!destinationId) {
+      return { ok: false, detail: `outlook_folder_not_found:${destinationName}` };
+    }
+  }
+
+  const addCats = normalizeLabelList(actions.addLabels);
+  const removeCats = new Set(normalizeLabelList(actions.removeLabels).map((c) => c.toLowerCase()));
+  let nextCategories: string[] | null = null;
+  if (addCats.length > 0 || removeCats.size > 0) {
+    const getRes = await nangoProxyForBusiness(businessId, link, {
+      endpoint: `/v1.0/me/messages/${encodeURIComponent(messageId)}?$select=categories`,
+      method: "GET"
+    });
+    if (!getRes) return { ok: false, detail: "email_not_connected" };
+    if (getRes.status === 401 || getRes.status === 403) {
+      return { ok: false, detail: reconnectHint };
+    }
+    if (getRes.status >= 400) {
+      // Fail closed: do not PATCH categories with an empty merge base.
+      return { ok: false, detail: `outlook_categories_get_failed:${getRes.status}` };
+    }
+    const existing = ((getRes.data as { categories?: string[] })?.categories ?? []).filter(
+      (c): c is string => typeof c === "string"
+    );
+    nextCategories = [
+      ...existing.filter((c) => !removeCats.has(c.toLowerCase())),
+      ...addCats.filter((c) => !existing.some((e) => e.toLowerCase() === c.toLowerCase()))
+    ].slice(0, 25);
+  }
+
+  const patchData: Record<string, unknown> = {};
   if (actions.markRead || actions.markUnread) {
+    patchData.isRead = Boolean(actions.markRead);
+  }
+  if (nextCategories) patchData.categories = nextCategories;
+  if (Object.keys(patchData).length > 0) {
     const patch = await nangoProxyForBusiness(businessId, link, {
       endpoint: `/v1.0/me/messages/${encodeURIComponent(messageId)}`,
       method: "PATCH",
-      data: { isRead: Boolean(actions.markRead) }
+      data: patchData
     });
     if (!patch) return { ok: false, detail: "email_not_connected" };
     if (patch.status === 401 || patch.status === 403) {
@@ -276,54 +323,11 @@ async function organizeOutlook(
     }
   }
 
-  const addCats = normalizeLabelList(actions.addLabels);
-  const removeCats = new Set(normalizeLabelList(actions.removeLabels).map((c) => c.toLowerCase()));
-  if (addCats.length > 0 || removeCats.size > 0) {
-    const getRes = await nangoProxyForBusiness(businessId, link, {
-      endpoint: `/v1.0/me/messages/${encodeURIComponent(messageId)}?$select=categories`,
-      method: "GET"
-    });
-    if (!getRes) return { ok: false, detail: "email_not_connected" };
-    if (getRes.status === 401 || getRes.status === 403) {
-      return { ok: false, detail: reconnectHint };
-    }
-    const existing = ((getRes.data as { categories?: string[] })?.categories ?? []).filter(
-      (c): c is string => typeof c === "string"
-    );
-    const next = [
-      ...existing.filter((c) => !removeCats.has(c.toLowerCase())),
-      ...addCats.filter((c) => !existing.some((e) => e.toLowerCase() === c.toLowerCase()))
-    ].slice(0, 25);
-    const catRes = await nangoProxyForBusiness(businessId, link, {
-      endpoint: `/v1.0/me/messages/${encodeURIComponent(messageId)}`,
-      method: "PATCH",
-      data: { categories: next }
-    });
-    if (!catRes) return { ok: false, detail: "email_not_connected" };
-    if (catRes.status === 401 || catRes.status === 403) {
-      return { ok: false, detail: reconnectHint };
-    }
-    if (catRes.status >= 400) {
-      return { ok: false, detail: `outlook_categories_failed:${catRes.status}` };
-    }
-  }
-
-  // Prefer an explicit folder move over Archive so archive+moveToFolder matches
-  // Gmail (label + leave Inbox) instead of silently dropping the folder.
-  let destinationName: string | null = null;
-  if (actions.moveToFolder?.trim()) destinationName = actions.moveToFolder.trim();
-  else if (actions.archive) destinationName = "Archive";
-  else if (actions.unarchive) destinationName = "Inbox";
-
-  if (destinationName) {
-    const folderId = await resolveOutlookFolderId(businessId, link, destinationName);
-    if (!folderId) {
-      return { ok: false, detail: `outlook_folder_not_found:${destinationName}` };
-    }
+  if (destinationId) {
     const moveRes = await nangoProxyForBusiness(businessId, link, {
       endpoint: `/v1.0/me/messages/${encodeURIComponent(messageId)}/move`,
       method: "POST",
-      data: { destinationId: folderId }
+      data: { destinationId }
     });
     if (!moveRes) return { ok: false, detail: "email_not_connected" };
     if (moveRes.status === 401 || moveRes.status === 403) {

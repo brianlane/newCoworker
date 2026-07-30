@@ -354,12 +354,12 @@ describe("organizeMessage", () => {
 
   it("patches Outlook categories and moves into Archive", async () => {
     getConn.mockResolvedValue(outlookConn());
+    // Preflight folder → GET categories → combined PATCH → move
     nangoProxy
-      .mockResolvedValueOnce({ status: 200, data: {} }) // isRead
-      .mockResolvedValueOnce({ status: 200, data: { categories: ["Old", "Drop"] } }) // get cats
-      .mockResolvedValueOnce({ status: 200, data: {} }) // patch cats
-      .mockResolvedValueOnce({ status: 200, data: { id: "folder-archive" } }) // well-known
-      .mockResolvedValueOnce({ status: 200, data: { id: "moved" } }); // move
+      .mockResolvedValueOnce({ status: 200, data: { id: "folder-archive" } })
+      .mockResolvedValueOnce({ status: 200, data: { categories: ["Old", "Drop"] } })
+      .mockResolvedValueOnce({ status: 200, data: {} })
+      .mockResolvedValueOnce({ status: 200, data: { id: "moved" } });
     const res = await organizeMessage({
       businessId: BIZ,
       connectionId: CONN,
@@ -538,6 +538,17 @@ describe("organizeMessage", () => {
     ).resolves.toEqual({ ok: false, detail: "outlook_reconnect_required" });
 
     nangoProxy.mockReset();
+    nangoProxy.mockResolvedValueOnce({ status: 500, data: {} });
+    await expect(
+      organizeMessage({
+        businessId: BIZ,
+        connectionId: CONN,
+        messageId: "AAMk",
+        actions: { addLabels: ["Y"] }
+      })
+    ).resolves.toEqual({ ok: false, detail: "outlook_categories_get_failed:500" });
+
+    nangoProxy.mockReset();
     nangoProxy
       .mockResolvedValueOnce({ status: 200, data: { categories: [] } })
       .mockResolvedValueOnce({ status: 400, data: {} });
@@ -548,7 +559,7 @@ describe("organizeMessage", () => {
         messageId: "AAMk",
         actions: { addLabels: ["Y"] }
       })
-    ).resolves.toEqual({ ok: false, detail: "outlook_categories_failed:400" });
+    ).resolves.toEqual({ ok: false, detail: "outlook_patch_failed:400" });
 
     nangoProxy.mockReset();
     nangoProxy
