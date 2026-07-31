@@ -69,6 +69,16 @@ export const ORPHAN_RECONCILE_RETRY_INTERVAL_MS = 30_000;
 export const ORPHAN_RECONCILE_RETRY_BUDGET_MS = 5 * 60_000;
 
 /**
+ * How many scans in a row may fail before we stop waiting for the paid box.
+ *
+ * Three at the 30s interval tolerates ~90s of Hostinger API flakiness, which
+ * covers the ~58s materialization delay that motivated this loop, without
+ * spending the whole 5-minute budget when the API is genuinely down and the
+ * real purchase error is what the operator needs to see.
+ */
+export const ORPHAN_RECONCILE_MAX_CONSECUTIVE_FAILURES = 3;
+
+/**
  * Normalize Hostinger's human plan label ("KVM 2") to our VpsSize slug
  * ("kvm2"). Returns null for unrecognized plans so callers skip them —
  * pooling a box we can't size-match would poison the adopt-first claim.
@@ -233,8 +243,34 @@ export async function reconcileUntilSizeMatch(args: {
   const deadline = nowFn() + budgetMs;
 
   const byId = new Map<number, ReconciledOrphan>();
+  let consecutiveFailures = 0;
   for (;;) {
-    const batch = await args.reconcile();
+    // A single scan failure must not end the wait. `reconcile` lists the
+    // Hostinger account, and one transient 5xx there used to abort the whole
+    // loop: the caller then rethrew the original purchase error and the paid
+    // box was abandoned (with the watchdog free to buy another). The box we
+    // are polling for typically materializes ~58s in, well inside the budget,
+    // so a blip should cost one poll, not the whole wait.
+    //
+    // Bounded, though: when the API is simply down every scan throws, and
+    // spinning to the full budget would delay surfacing the real purchase
+    // error by minutes for no chance of success. A few consecutive failures
+    // covers the materialization window and then gives up.
+    let batch: ReconciledOrphan[] = [];
+    try {
+      batch = await args.reconcile();
+      consecutiveFailures = 0;
+    } catch (err) {
+      consecutiveFailures += 1;
+      logger.warn("orphan reconcile scan failed", {
+        consecutiveFailures,
+        givingUp: consecutiveFailures >= ORPHAN_RECONCILE_MAX_CONSECUTIVE_FAILURES,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      if (consecutiveFailures >= ORPHAN_RECONCILE_MAX_CONSECUTIVE_FAILURES) {
+        return [...byId.values()];
+      }
+    }
     for (const orphan of batch) byId.set(orphan.vmId, orphan);
     const pooled = [...byId.values()];
     if (

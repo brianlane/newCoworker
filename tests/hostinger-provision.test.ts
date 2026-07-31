@@ -12,7 +12,10 @@ import {
   DEFAULT_TEMPLATE_ID,
   DEFAULT_US_DATA_CENTER_ID,
   DEFAULT_TIER_PRICE_ITEM,
-  VPS_SIZE_PRICE_ITEM
+  VPS_SIZE_PRICE_ITEM,
+  assertPurchasePreconditions,
+  isValidHostingerHostname,
+  truncateBusinessId
 } from "@/lib/hostinger/provision";
 import type { HostingerClient } from "@/lib/hostinger/client";
 
@@ -35,6 +38,10 @@ function makeClientStub<T extends Record<string, unknown> = Record<string, never
     }),
     getVirtualMachine: vi.fn(),
     installMonarx: vi.fn().mockResolvedValue({ id: 1, name: "a", state: "initiated" }),
+    // Pre-charge preconditions. Defaults are the healthy account: every size
+    // at every term present in the catalog, one usable card.
+    listCatalog: vi.fn().mockResolvedValue([fullVpsCatalogItem()]),
+    listPaymentMethods: vi.fn().mockResolvedValue([usablePaymentMethod()]),
     ...overrides
   } as T & {
     createPublicKey: ReturnType<typeof vi.fn>;
@@ -42,6 +49,41 @@ function makeClientStub<T extends Record<string, unknown> = Record<string, never
     purchaseVirtualMachine: ReturnType<typeof vi.fn>;
     getVirtualMachine: ReturnType<typeof vi.fn>;
     installMonarx: ReturnType<typeof vi.fn>;
+    listCatalog: ReturnType<typeof vi.fn>;
+    listPaymentMethods: ReturnType<typeof vi.fn>;
+  };
+}
+
+/** Every VPS SKU we can derive, so precondition checks pass by default. */
+function fullVpsCatalogItem() {
+  return {
+    id: "hostingercom-vps",
+    name: "VPS",
+    category: "VPS",
+    prices: ["kvm1", "kvm2", "kvm4", "kvm8"].flatMap((size) =>
+      ["1m", "1y", "2y"].map((term) => ({
+        id: `hostingercom-vps-${size}-usd-${term}`,
+        name: `${size} ${term}`,
+        price: 2449,
+        first_period_price: 1399,
+        period: 1,
+        period_unit: "month",
+        currency: "USD"
+      }))
+    )
+  };
+}
+
+function usablePaymentMethod(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 1,
+    name: "Visa",
+    identifier: "4242",
+    payment_method: "card",
+    is_default: true,
+    is_expired: false,
+    is_suspended: false,
+    ...overrides
   };
 }
 
@@ -1016,7 +1058,18 @@ describe("provisionVpsForBusiness", () => {
       purchaseVirtualMachine: vi.fn().mockResolvedValue({
         order_id: "o2",
         virtual_machines: [{ id: 99, state: "initial" }]
-      })
+      }),
+      // This test overrides itemId to prove the override reaches the payload,
+      // so the catalog has to contain it or the pre-charge SKU check refuses.
+      listCatalog: vi.fn().mockResolvedValue([
+        {
+          ...fullVpsCatalogItem(),
+          prices: [
+            ...fullVpsCatalogItem().prices,
+            { id: "custom-price", name: "custom", price: 1, first_period_price: 1 }
+          ]
+        }
+      ])
     });
     const dbInsert = vi.fn().mockResolvedValue({
       id: "row",
@@ -1038,7 +1091,9 @@ describe("provisionVpsForBusiness", () => {
         itemId: "custom-price",
         templateId: 7,
         dataCenterId: 29,
-        hostname: "custom-host",
+        // FQDN, not a bare label: Hostinger 422s the latter on the
+        // purchase-embedded setup, and the pre-charge check now refuses it.
+        hostname: "custom-host.example.com",
         pollIntervalMs: 1
       },
       {
@@ -1053,7 +1108,7 @@ describe("provisionVpsForBusiness", () => {
     expect(req.item_id).toBe("custom-price");
     expect(req.setup.template_id).toBe(7);
     expect(req.setup.data_center_id).toBe(29);
-    expect(req.setup.hostname).toBe("custom-host");
+    expect(req.setup.hostname).toBe("custom-host.example.com");
   });
 
   it("accepts pollIntervalMs default when omitted (uses injected sleep)", async () => {
@@ -1426,5 +1481,111 @@ describe("deploy-client.sh cloudflared tunnel step (contract)", () => {
     expect(script).toMatch(/deploy_client_complete/);
     expect(script).toMatch(/deploy_client_failed/);
     expect(script).toMatch(/trap finish_deploy EXIT/);
+  });
+});
+
+describe("pre-charge purchase preconditions", () => {
+  // Hostinger's purchase endpoint charges and provisions in one call and
+  // offers no idempotency key, so the only cheap failures are the ones we can
+  // detect before it. Everything here must throw with the card untouched.
+  function preconditionClient(overrides: Record<string, unknown> = {}) {
+    return {
+      listCatalog: vi.fn().mockResolvedValue([fullVpsCatalogItem()]),
+      listPaymentMethods: vi.fn().mockResolvedValue([usablePaymentMethod()]),
+      ...overrides
+    } as unknown as Pick<HostingerClient, "listCatalog" | "listPaymentMethods">;
+  }
+
+  it("passes for a healthy account", async () => {
+    await expect(
+      assertPurchasePreconditions(preconditionClient(), {
+        itemId: "hostingercom-vps-kvm2-usd-1m",
+        hostname: "nc-056034a7-e84.newcoworker.com"
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it("rejects a bare-label hostname before the charge", async () => {
+    const client = preconditionClient();
+    await expect(
+      assertPurchasePreconditions(client, {
+        itemId: "hostingercom-vps-kvm2-usd-1m",
+        hostname: "nc-056034a7-e84"
+      })
+    ).rejects.toThrow(/is not an FQDN/);
+    // Cheapest check first: we did not even ask Hostinger anything.
+    expect(client.listCatalog).not.toHaveBeenCalled();
+  });
+
+  // The case scripts/hostinger-preflight.ts cannot catch: it only verifies the
+  // two MONTHLY ids, while the term-renewal sweep buys 1y and 2y SKUs.
+  it("rejects a price item that is not in the live catalog", async () => {
+    await expect(
+      assertPurchasePreconditions(preconditionClient(), {
+        itemId: "hostingercom-vps-kvm2-usd-3y",
+        hostname: "nc-056034a7-e84.newcoworker.com"
+      })
+    ).rejects.toThrow(/not in the live VPS catalog/);
+  });
+
+  it("rejects when every payment method is expired or suspended", async () => {
+    const client = preconditionClient({
+      listPaymentMethods: vi
+        .fn()
+        .mockResolvedValue([
+          usablePaymentMethod({ is_expired: true }),
+          usablePaymentMethod({ id: 2, is_suspended: true })
+        ])
+    });
+    await expect(
+      assertPurchasePreconditions(client, {
+        itemId: "hostingercom-vps-kvm2-usd-1m",
+        hostname: "nc-056034a7-e84.newcoworker.com"
+      })
+    ).rejects.toThrow(/no usable payment method/);
+  });
+
+  it("passes when at least one card among several is usable", async () => {
+    const client = preconditionClient({
+      listPaymentMethods: vi
+        .fn()
+        .mockResolvedValue([
+          usablePaymentMethod({ is_expired: true }),
+          usablePaymentMethod({ id: 2 })
+        ])
+    });
+    await expect(
+      assertPurchasePreconditions(client, {
+        itemId: "hostingercom-vps-kvm2-usd-1m",
+        hostname: "nc-056034a7-e84.newcoworker.com"
+      })
+    ).resolves.toBeUndefined();
+  });
+});
+
+describe("isValidHostingerHostname", () => {
+  it("requires a dotted FQDN and rejects the shapes Hostinger 422s", () => {
+    expect(isValidHostingerHostname("nc-056034a7-e84.newcoworker.com")).toBe(true);
+    expect(isValidHostingerHostname(" nc-abc.example.com ")).toBe(true);
+    expect(isValidHostingerHostname("nc-056034a7-e84")).toBe(false);
+    expect(isValidHostingerHostname("")).toBe(false);
+    expect(isValidHostingerHostname("nc-abc-.example.com")).toBe(false);
+    // An IP is a valid box ADDRESS but never a hostname to assign, which is
+    // why this does not just reuse isValidByosHost.
+    expect(isValidHostingerHostname("203.0.113.7")).toBe(false);
+    expect(isValidHostingerHostname(`${"a".repeat(250)}.example.com`)).toBe(false);
+  });
+});
+
+describe("truncateBusinessId", () => {
+  // A canonical UUID is safe by luck: slice(0, 12) lands on hex. Any id whose
+  // 12-char prefix ends in a hyphen would build an invalid label, and
+  // Hostinger answers that with a 422 that still charges us.
+  it("never leaves a trailing hyphen for the hostname label", () => {
+    expect(truncateBusinessId("056034a7-e84c-444d-8d15-747eeb1fa899")).toBe("056034a7-e84");
+    expect(truncateBusinessId("biz-default-")).toBe("biz-default");
+    expect(truncateBusinessId("ab--")).toBe("ab");
+    expect(truncateBusinessId("---")).toBe("unknown");
+    expect(truncateBusinessId("!!!")).toBe("unknown");
   });
 });

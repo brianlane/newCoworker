@@ -7,7 +7,8 @@ import {
   orphanMatchesPurchaseAttempt,
   ORPHAN_MAX_AGE_MS,
   ORPHAN_RECONCILE_RETRY_INTERVAL_MS,
-  ORPHAN_RECONCILE_RETRY_BUDGET_MS
+  ORPHAN_RECONCILE_RETRY_BUDGET_MS,
+  ORPHAN_RECONCILE_MAX_CONSECUTIVE_FAILURES
 } from "@/lib/provisioning/reconcile-orphans";
 import type { VirtualMachine } from "@/lib/hostinger/client";
 
@@ -342,6 +343,87 @@ describe("reconcileUntilSizeMatch", () => {
     expect(result).toEqual([{ vmId: 1, plan: "kvm2" }]);
     expect(reconcile).toHaveBeenCalledTimes(1);
     expect(sleep).not.toHaveBeenCalled();
+  });
+
+  // The whole point of tolerating a throw: one bad scan used to abort the
+  // loop, the caller rethrew the original purchase error, and the box we had
+  // already paid for was abandoned. It materializes ~58s in, so a blip at
+  // second 0 must not cost us the box.
+  it("keeps polling through a transient scan failure and still finds the paid box", async () => {
+    let t = 0;
+    const sleep = vi.fn().mockImplementation(async (ms: number) => {
+      t += ms;
+    });
+    const reconcile = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("hostinger 503"))
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([{ vmId: 1863856, plan: "kvm2" }]);
+
+    const result = await reconcileUntilSizeMatch({
+      reconcile,
+      vpsSize: "kvm2",
+      sleep,
+      now: () => t,
+      intervalMs: 30_000,
+      budgetMs: 5 * 60_000
+    });
+
+    expect(result).toEqual([{ vmId: 1863856, plan: "kvm2" }]);
+    expect(reconcile).toHaveBeenCalledTimes(3);
+  });
+
+  // Bounded, though: when the list API is simply down, spinning to the full
+  // budget only delays the real purchase error reaching the operator.
+  it("gives up after enough consecutive scan failures", async () => {
+    let t = 0;
+    const sleep = vi.fn().mockImplementation(async (ms: number) => {
+      t += ms;
+    });
+    const reconcile = vi.fn().mockRejectedValue(new Error("hostinger down"));
+
+    const result = await reconcileUntilSizeMatch({
+      reconcile,
+      vpsSize: "kvm2",
+      sleep,
+      now: () => t,
+      intervalMs: 30_000,
+      budgetMs: 5 * 60_000
+    });
+
+    expect(result).toEqual([]);
+    expect(reconcile).toHaveBeenCalledTimes(ORPHAN_RECONCILE_MAX_CONSECUTIVE_FAILURES);
+    // Gave up well inside the 5-minute budget.
+    expect(t).toBeLessThan(5 * 60_000);
+  });
+
+  // A failure that is followed by a success is not "consecutive", so a flaky
+  // API that recovers keeps its full budget.
+  it("resets the failure count after a successful scan", async () => {
+    let t = 0;
+    const sleep = vi.fn().mockImplementation(async (ms: number) => {
+      t += ms;
+    });
+    const reconcile = vi
+      .fn()
+      .mockRejectedValueOnce(new Error("blip 1"))
+      .mockRejectedValueOnce(new Error("blip 2"))
+      .mockResolvedValueOnce([])
+      .mockRejectedValueOnce(new Error("blip 3"))
+      .mockRejectedValueOnce(new Error("blip 4"))
+      .mockResolvedValueOnce([{ vmId: 1863856, plan: "kvm2" }]);
+
+    const result = await reconcileUntilSizeMatch({
+      reconcile,
+      vpsSize: "kvm2",
+      sleep,
+      now: () => t,
+      intervalMs: 30_000,
+      budgetMs: 10 * 60_000
+    });
+
+    expect(result).toEqual([{ vmId: 1863856, plan: "kvm2" }]);
+    expect(reconcile).toHaveBeenCalledTimes(6);
   });
 
   it("retries until a size-matching orphan appears (Hostinger async materialization)", async () => {

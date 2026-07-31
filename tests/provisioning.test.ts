@@ -28,10 +28,13 @@ vi.mock("@/lib/provisioning/progress", () => ({
 }));
 
 import {
+  formatFailButChargeRecoveryMessage,
+  formatHostingerErrorBody,
   orchestrateProvisioning,
   remainingDeployDeadlineMs
 } from "@/lib/provisioning/orchestrate";
 import { HQ_BUSINESS_ID } from "@/lib/vps/shared-hardware";
+import { ORPHAN_RECONCILE_MAX_CONSECUTIVE_FAILURES } from "@/lib/provisioning/reconcile-orphans";
 import {
   recordProvisioningProgress,
   hasPriorOpsNewSignupAlert
@@ -3976,6 +3979,72 @@ describe("provisioning/orchestrate", () => {
       ).rejects.toThrow(/HTTP 402/);
     });
 
+    // Defense in depth. Scan failures are handled inside the poll now, so the
+    // outer catch only fires if the wait itself breaks. It still must not mask
+    // the purchase error the operator actually needs to see.
+    it("surfaces the original purchase error when the orphan wait itself breaks", async () => {
+      const pool = makePool();
+      const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
+      const orphanReconciler = vi.fn().mockResolvedValue([]);
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-orphan-wait-broken", tier: "starter" },
+          {
+            vpsProvisioner,
+            vpsAdopter: vi.fn(),
+            vpsPool: pool,
+            orphanReconciler,
+            remoteExec: vi.fn(),
+            sleep: async () => {
+              throw new Error("timer subsystem gone");
+            }
+          }
+        )
+      ).rejects.toThrow(/HTTP 402/);
+    });
+
+    // The recovery row is bookkeeping: if writing it fails, the provision it
+    // describes still succeeded and must not be turned into a failure.
+    it("still returns the adopted box when recording the recovery fails", async () => {
+      const pool = makePool({
+        claim: vi.fn().mockResolvedValueOnce(null).mockResolvedValueOnce(orphanRow)
+      });
+      const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
+      const vpsAdopter = vi.fn().mockResolvedValue(makeVpsStub("1815606"));
+      const orphanReconciler = vi
+        .fn()
+        .mockResolvedValue([{ vmId: 1815606, plan: "kvm1", createdAtMs: Date.now() }]);
+      // Fail only the recovery row, not every progress write, or the provision
+      // dies at its "started" row and proves nothing.
+      const realProgress = vi.mocked(recordProvisioningProgress).getMockImplementation();
+      vi.mocked(recordProvisioningProgress).mockImplementation(async (params) => {
+        if (params.phase === "purchase_fail_but_charge_recovered") throw new Error("logs down");
+        return realProgress
+          ? realProgress(params)
+          : ({} as Awaited<ReturnType<typeof recordProvisioningProgress>>);
+      });
+
+      await expect(
+        orchestrateProvisioning(
+          { businessId: "biz-orphan-record-fail", tier: "starter" },
+          {
+            vpsProvisioner,
+            vpsAdopter,
+            vpsPool: pool,
+            orphanReconciler,
+            remoteExec: vi.fn().mockResolvedValue(okExec()),
+            sleep: async () => undefined
+          }
+        )
+      ).resolves.toBeDefined();
+      expect(vpsProvisioner).toHaveBeenCalledTimes(1);
+    });
+
+    // A scan failure no longer ends the wait on the first throw, so an
+    // always-down list API is retried a bounded number of times before the
+    // original purchase error surfaces. The no-op sleep keeps that bounded
+    // retry from spending its real 30s interval here.
     it("surfaces the original purchase error when the reconciler itself throws", async () => {
       const pool = makePool();
       const vpsProvisioner = vi.fn().mockRejectedValueOnce(new FakePurchaseError());
@@ -3984,9 +4053,20 @@ describe("provisioning/orchestrate", () => {
       await expect(
         orchestrateProvisioning(
           { businessId: "biz-orphan-reconcile-fail", tier: "starter" },
-          { vpsProvisioner, vpsAdopter: vi.fn(), vpsPool: pool, orphanReconciler, remoteExec: vi.fn() }
+          {
+            vpsProvisioner,
+            vpsAdopter: vi.fn(),
+            vpsPool: pool,
+            orphanReconciler,
+            remoteExec: vi.fn(),
+            sleep: async () => undefined
+          }
         )
       ).rejects.toThrow(/HTTP 402/);
+      // Retried, not abandoned on the first failure.
+      expect(orphanReconciler).toHaveBeenCalledTimes(
+        ORPHAN_RECONCILE_MAX_CONSECUTIVE_FAILURES
+      );
     });
 
     it("stringifies a non-Error reconciler rejection and surfaces the original error", async () => {
@@ -3997,7 +4077,14 @@ describe("provisioning/orchestrate", () => {
       await expect(
         orchestrateProvisioning(
           { businessId: "biz-orphan-reconcile-nonerr", tier: "starter" },
-          { vpsProvisioner, vpsAdopter: vi.fn(), vpsPool: pool, orphanReconciler, remoteExec: vi.fn() }
+          {
+            vpsProvisioner,
+            vpsAdopter: vi.fn(),
+            vpsPool: pool,
+            orphanReconciler,
+            remoteExec: vi.fn(),
+            sleep: async () => undefined
+          }
         )
       ).rejects.toThrow(/HTTP 402/);
     });
@@ -4302,5 +4389,73 @@ describe("provisioning/orchestrate", () => {
       expect(vpsPool.claim).not.toHaveBeenCalled();
       expect(vpsPool.record).not.toHaveBeenCalled();
     });
+  });
+});
+
+describe("formatHostingerErrorBody", () => {
+  // The raw body is where the cause actually lives: a status alone does not
+  // tell you WHICH field Hostinger rejected. It used to be captured by
+  // describeProvisioningError and then dropped, surviving only in a
+  // console-only logger call, which is why the Jul 29 KYP fail-but-charge has
+  // no queryable record of whether it was a 402, a 422, or our own timeout.
+  it("renders the body so the cause lands in a queryable log", () => {
+    expect(formatHostingerErrorBody({ errors: { hostname: ["bad FQDN"] } })).toBe(
+      '{"errors":{"hostname":["bad FQDN"]}}'
+    );
+    expect(formatHostingerErrorBody("plain text body")).toBe("plain text body");
+  });
+
+  it("returns null for bodies that carry nothing", () => {
+    expect(formatHostingerErrorBody(null)).toBeNull();
+    expect(formatHostingerErrorBody(undefined)).toBeNull();
+    expect(formatHostingerErrorBody({})).toBeNull();
+    expect(formatHostingerErrorBody("")).toBeNull();
+  });
+
+  // provisioning_jobs.last_error truncates at 1000 chars, so this has to stay
+  // small enough to leave room for the message itself.
+  it("bounds a long body", () => {
+    const rendered = formatHostingerErrorBody({ msg: "x".repeat(5000) });
+    expect(rendered).not.toBeNull();
+    expect(rendered!.length).toBe(303);
+    expect(rendered!.endsWith("...")).toBe(true);
+  });
+
+  // A circular body must not take down the error path that is reporting a
+  // different failure.
+  it("returns null rather than throwing on an unserializable body", () => {
+    const circular: Record<string, unknown> = {};
+    circular.self = circular;
+    expect(formatHostingerErrorBody(circular)).toBeNull();
+  });
+});
+
+describe("formatFailButChargeRecoveryMessage", () => {
+  it("names the endpoint, the adopted box, and the raw cause", () => {
+    expect(
+      formatFailButChargeRecoveryMessage(
+        {
+          message: "Hostinger API HTTP 402: Card payment could not be completed",
+          endpoint: "/api/vps/v1/virtual-machines",
+          status: 402,
+          body: { message: "declined" }
+        },
+        1869876
+      )
+    ).toBe(
+      "Hostinger /api/vps/v1/virtual-machines → HTTP 402 failed but the box was created " +
+        "and charged anyway; adopted VM 1869876 instead of buying another. " +
+        '(Hostinger API HTTP 402: Card payment could not be completed) body={"message":"declined"}'
+    );
+  });
+
+  // A client-side abort has no endpoint/status pair, and that case is the one
+  // we most want on the record: it means WE gave up on a purchase that may
+  // well have succeeded.
+  it("falls back to a generic label when there is no endpoint or status", () => {
+    expect(formatFailButChargeRecoveryMessage({ message: "timed out after 30000ms" }, "1869876")).toBe(
+      "Hostinger purchase failed but the box was created and charged anyway; " +
+        "adopted VM 1869876 instead of buying another. (timed out after 30000ms)"
+    );
   });
 });

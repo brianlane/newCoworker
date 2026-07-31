@@ -84,6 +84,66 @@ export function vpsPriceItemId(size: VpsSize, term: HostingerBillingTerm): strin
 }
 
 /**
+ * Hostinger requires a resolvable-looking FQDN on the purchase-embedded setup:
+ * a bare label returns `422 [VPS:2004] Wrong hostname FQDN format` (observed
+ * Jul 5 2026, and that 422 still charged us). Same shape as `isValidByosHost`
+ * minus its IPv4 arm, which is meaningful for an operator-entered box address
+ * but never valid as a hostname we ask Hostinger to assign.
+ */
+export function isValidHostingerHostname(hostname: string): boolean {
+  const trimmed = hostname.trim();
+  if (trimmed.length === 0 || trimmed.length > 253) return false;
+  return /^([a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/i.test(trimmed);
+}
+
+/**
+ * Fail a purchase before the charge when we can already tell it will 422, or
+ * when the card cannot pay for it.
+ *
+ * Each of these has cost us a real fail-but-charge orphan or is one rename
+ * away from doing so, and none of them needs the purchase endpoint to answer:
+ *
+ * - **Hostname**: see {@link isValidHostingerHostname}.
+ * - **SKU**: `vpsPriceItemId` derives `...-usd-1m|1y|2y` from the customer's
+ *   contract, but `scripts/hostinger-preflight.ts` only checks the two MONTHLY
+ *   ids in `DEFAULT_TIER_PRICE_ITEM`. A renamed annual or biennial SKU passes
+ *   preflight and 422s in production, which is exactly the path the
+ *   term-renewal sweep buys on.
+ * - **Payment method**: the orchestrator never looked at one before charging.
+ *   This cannot catch an issuer-side decline (the Jul 8 and Jul 28 402s), but
+ *   an expired or suspended card is knowable in advance.
+ */
+export async function assertPurchasePreconditions(
+  client: Pick<HostingerClient, "listCatalog" | "listPaymentMethods">,
+  input: { itemId: string; hostname: string }
+): Promise<void> {
+  if (!isValidHostingerHostname(input.hostname)) {
+    throw new Error(
+      `Hostinger purchase precondition: hostname "${input.hostname}" is not an FQDN ` +
+        "(Hostinger 422s bare labels on the purchase-embedded setup)"
+    );
+  }
+
+  const catalog = await client.listCatalog("VPS");
+  const known = catalog.some((item) => item.prices.some((price) => price.id === input.itemId));
+  if (!known) {
+    throw new Error(
+      `Hostinger purchase precondition: price item ${input.itemId} is not in the live VPS ` +
+        "catalog (SKU renamed or retired); re-verify with debug/hostinger-term-prices.ts"
+    );
+  }
+
+  const methods = await client.listPaymentMethods();
+  const usable = methods.some((method) => !method.is_expired && !method.is_suspended);
+  if (!usable) {
+    throw new Error(
+      "Hostinger purchase precondition: no usable payment method on the account " +
+        `(${methods.length} on file, all expired or suspended)`
+    );
+  }
+}
+
+/**
  * Historical monthly-term price-item map. Kept for callers that reason in
  * "size only" terms (preflight script, debug tooling); purchase paths now
  * derive the id from the customer's contract via {@link vpsPriceItemId}.
@@ -387,6 +447,13 @@ export async function provisionVpsForBusiness(
     /* c8 ignore next -- empty-coupons branch is trivial guard */
     ...(input.coupons && input.coupons.length > 0 ? { coupons: input.coupons } : {})
   };
+  // Everything below throws BEFORE the charge. Hostinger's purchase endpoint
+  // both charges and provisions in one call, offers no idempotency key, and
+  // has repeatedly errored while still creating the VM, so the only cheap
+  // failures are the ones we detect on this side of it. Same contract the
+  // post-install-script step already holds: no money moves on a throw here.
+  await assertPurchasePreconditions(client, { itemId, hostname });
+
   onProgress?.("purchase_initiated", {
     itemId,
     hostname,
@@ -782,11 +849,21 @@ function firstIpv4(vm: VirtualMachine): string | undefined {
   return vm.ipv4[0]?.address;
 }
 
-function truncateBusinessId(id: string): string {
+export function truncateBusinessId(id: string): string {
   // Hostinger hostnames must be <= 63 chars per RFC 1035; `nc-` prefix + 12
   // chars of uuid keeps it safely under that and avoids hitting the VM count
   // duplicates on an account since UUID prefixes rarely collide.
-  return id.replace(/[^A-Za-z0-9-]/g, "").slice(0, 12) || "unknown";
+  //
+  // The trailing-hyphen strip matters: a label may not end in one, and
+  // Hostinger answers an invalid hostname with a 422 that STILL charges us. A
+  // canonical UUID is safe by luck (slice(0, 12) lands on hex), but any id
+  // whose 12-char prefix ends in `-` would build `nc-xxxx-.newcoworker.com`
+  // and buy us an orphan. Cheaper to not generate it than to detect it.
+  const truncated = id
+    .replace(/[^A-Za-z0-9-]/g, "")
+    .slice(0, 12)
+    .replace(/-+$/, "");
+  return truncated || "unknown";
 }
 
 /* c8 ignore next 3 -- trivial default; tests inject a mock sleep */
