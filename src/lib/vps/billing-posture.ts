@@ -49,6 +49,7 @@ import type { BusinessRow } from "@/lib/db/businesses";
 import type { VpsInventoryRow } from "@/lib/db/vps-inventory";
 import type { BillingSubscription, VirtualMachine } from "@/lib/hostinger/client";
 import { providerUsesHostingerLifecycle, resolveVpsProvider } from "@/lib/vps/provider";
+import { isBusinessRunningStatus } from "@/lib/provisioning/progress";
 
 export type BillingPostureFinding = {
   kind:
@@ -56,8 +57,13 @@ export type BillingPostureFinding = {
     | "tenant_vm_unreachable"
     | "stripeless_tenant_auto_renew_off"
     | "never_renew_tenant_migration_needed"
-    | "pool_box_auto_renew_on";
-  vmId: number;
+    | "pool_box_auto_renew_on"
+    /** A Hostinger VM the account owns that vps_inventory has never heard of. */
+    | "untracked_vm"
+    /** A live tenant with no hostinger_vps_id at all. */
+    | "online_tenant_no_box";
+  /** Null for findings about a tenant rather than a box. */
+  vmId: number | null;
   businessId: string | null;
   businessName: string | null;
   hostingerBillingSubscriptionId: string | null;
@@ -92,6 +98,13 @@ export type BillingPostureDeps = {
   }>;
   listInventory: () => Promise<VpsInventoryRow[]>;
   getVirtualMachine: (vmId: number) => Promise<VirtualMachine>;
+  /**
+   * Every VM the Hostinger account owns. Used for the untracked-VM check:
+   * reconcileOrphanedPurchases only runs inline inside acquireVps, so a paid
+   * fail-but-charge box it missed stays invisible and the next provision
+   * purchases again.
+   */
+  listVirtualMachines: () => Promise<VirtualMachine[]>;
   listBillingSubscriptions: () => Promise<BillingSubscription[]>;
   enableAutoRenewal: (subscriptionId: string) => Promise<unknown>;
 };
@@ -309,6 +322,68 @@ export async function checkVpsBillingPosture(
       detail:
         `pooled (available) box is still auto-renewing (${sub.status}) — ` +
         "disable renewal in hPanel unless it is being held for adoption on purpose"
+    });
+  }
+
+  // ---- Direction 3: fleet consistency (report only, never auto-healed). ----
+  //
+  // Neither of these is a billing-posture problem in the strict sense, but this
+  // is the one daily pass that already holds the whole picture: every business,
+  // every inventory row, and the Hostinger account. Both states are otherwise
+  // completely silent.
+
+  // A VM the account owns that vps_inventory has never heard of.
+  // reconcileOrphanedPurchases only ever runs inline inside acquireVps, and a
+  // single transient Hostinger error aborts that loop, so a paid
+  // fail-but-charge box can stay untracked indefinitely while the next
+  // provision purchases another one. Report only: auto-pooling on a schedule
+  // is exactly the risk reconcile-orphans.ts:148 warns about, since a box
+  // belonging to a concurrent in-flight provision would be stolen.
+  let untrackedVms: VirtualMachine[] = [];
+  try {
+    const allVms = await deps.listVirtualMachines();
+    const knownVmIds = new Set(inventory.map((row) => Number(row.vm_id)));
+    untrackedVms = allVms.filter((vm) => !knownVmIds.has(vm.id));
+  } catch (err) {
+    logger.warn("billing posture: listVirtualMachines failed; skipping untracked-VM check", {
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+  for (const vm of untrackedVms) {
+    findings.push({
+      kind: "untracked_vm",
+      vmId: vm.id,
+      businessId: null,
+      businessName: null,
+      hostingerBillingSubscriptionId:
+        typeof vm.subscription_id === "string" ? vm.subscription_id : null,
+      expiresAt: null,
+      autoHealed: false,
+      detail:
+        `Hostinger VM ${vm.id} (${vm.plan ?? "unknown plan"}, state ${vm.state}) is absent from ` +
+        "vps_inventory: reconcile it (adopt into the pool or retire it) so a later provision " +
+        "reuses it instead of buying another box"
+    });
+  }
+
+  // A live tenant with no box at all. #1016 correctly stopped the hardware
+  // advisor escalating these, which left the state unmonitored; a failed
+  // migration can produce it.
+  for (const business of businesses) {
+    if (!isBusinessRunningStatus(business.status)) continue;
+    if (!providerUsesHostingerLifecycle(resolveVpsProvider(business.vps_provider))) continue;
+    if (tenantVmId(business) !== null) continue;
+    findings.push({
+      kind: "online_tenant_no_box",
+      vmId: null,
+      businessId: business.id,
+      businessName: business.name,
+      hostingerBillingSubscriptionId: null,
+      expiresAt: null,
+      autoHealed: false,
+      detail:
+        `business is ${business.status} but has no hostinger_vps_id: it is serving from nowhere. ` +
+        "Check for a half-finished migration and re-point or re-provision"
     });
   }
 

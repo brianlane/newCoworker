@@ -48,6 +48,7 @@ function makeDeps(overrides: Record<string, unknown> = {}) {
     getVirtualMachine: vi
       .fn()
       .mockResolvedValue({ id: 1815606, state: "running", subscription_id: "hsub-1" }),
+    listVirtualMachines: vi.fn().mockResolvedValue([]),
     listBillingSubscriptions: vi.fn().mockResolvedValue([]),
     enableAutoRenewal: vi.fn().mockResolvedValue(undefined),
     ...overrides
@@ -537,8 +538,19 @@ describe("checkVpsBillingPosture — tenant direction", () => {
     const result = await checkVpsBillingPosture(deps);
 
     expect(result.checkedTenantVms).toBe(0);
-    expect(result.findings).toEqual([]);
     expect(deps.getVirtualMachine).not.toHaveBeenCalled();
+    // None of them belong to the billing-posture directions.
+    expect(
+      result.findings.filter(
+        (f) => f.kind !== "online_tenant_no_box" && f.kind !== "untracked_vm"
+      )
+    ).toEqual([]);
+    // But `no-vm` and `bad-vm` ARE online Hostinger tenants pointing at no
+    // usable box, which is the state direction 3 exists to surface. The wiped
+    // and BYOS rows are correctly left alone.
+    expect(
+      result.findings.filter((f) => f.kind === "online_tenant_no_box").map((f) => f.businessId)
+    ).toEqual(["no-vm", "bad-vm"]);
   });
 });
 
@@ -619,5 +631,119 @@ describe("checkVpsBillingPosture — pool direction", () => {
     // Only the 3 `available` rows are counted; none produce findings.
     expect(result.checkedPoolBoxes).toBe(3);
     expect(result.findings).toEqual([]);
+  });
+});
+
+/**
+ * Fleet consistency, as distinct from billing posture.
+ *
+ * V10: reconcileOrphanedPurchases only ever runs inline inside acquireVps, so
+ * a paid fail-but-charge box that the inline pass missed (one transient
+ * Hostinger 5xx aborts the loop) stays untracked forever, and the watchdog then
+ * purchases again. vm 1806114 has sat untracked since 2026-07-05.
+ *
+ * V16: #1016 correctly stopped the hardware advisor escalating boxless
+ * tenants, but nothing anywhere fires when a business is `online` with no
+ * hostinger_vps_id at all, and a failed migration can produce exactly that.
+ */
+describe("checkVpsBillingPosture — fleet consistency", () => {
+  it("flags a Hostinger VM that is absent from vps_inventory", async () => {
+    const deps = makeDeps({
+      listBusinesses: vi.fn().mockResolvedValue([]),
+      listInventory: vi.fn().mockResolvedValue([]),
+      listVirtualMachines: vi
+        .fn()
+        .mockResolvedValue([{ id: 1806114, state: "initial", plan: "KVM 1" }])
+    });
+    const res = await checkVpsBillingPosture(deps as never);
+    const finding = res.findings.find((f) => f.kind === "untracked_vm");
+    expect(finding).toBeDefined();
+    expect(finding?.vmId).toBe(1806114);
+  });
+
+  it("does not flag a VM that vps_inventory already knows about", async () => {
+    const deps = makeDeps({
+      listBusinesses: vi.fn().mockResolvedValue([]),
+      listInventory: vi
+        .fn()
+        .mockResolvedValue([{ vm_id: 1806114, plan: "kvm1", state: "available" }]),
+      listVirtualMachines: vi
+        .fn()
+        .mockResolvedValue([{ id: 1806114, state: "initial", plan: "KVM 1" }])
+    });
+    const res = await checkVpsBillingPosture(deps as never);
+    expect(res.findings.some((f) => f.kind === "untracked_vm")).toBe(false);
+  });
+
+  it("flags an online tenant with no box at all", async () => {
+    const deps = makeDeps({
+      listBusinesses: vi
+        .fn()
+        .mockResolvedValue([biz({ id: "b-nobox", hostinger_vps_id: null })]),
+      listVirtualMachines: vi.fn().mockResolvedValue([])
+    });
+    const res = await checkVpsBillingPosture(deps as never);
+    const finding = res.findings.find((f) => f.kind === "online_tenant_no_box");
+    expect(finding).toBeDefined();
+    expect(finding?.businessId).toBe("b-nobox");
+  });
+
+  it("carries the VM's plan and billing subscription onto the untracked finding", async () => {
+    const deps = makeDeps({
+      listBusinesses: vi.fn().mockResolvedValue([]),
+      listInventory: vi.fn().mockResolvedValue([]),
+      listVirtualMachines: vi.fn().mockResolvedValue([
+        { id: 1900002, state: "running", plan: "KVM 2", subscription_id: "hsub-x" }
+      ])
+    });
+    const res = await checkVpsBillingPosture(deps as never);
+    const finding = res.findings.find((f) => f.kind === "untracked_vm");
+    expect(finding?.hostingerBillingSubscriptionId).toBe("hsub-x");
+    expect(finding?.detail).toContain("KVM 2");
+  });
+
+  // Hostinger being briefly unavailable must not lose the billing-posture
+  // findings that were already collected.
+  it("skips the untracked-VM check when Hostinger cannot be listed", async () => {
+    const deps = makeDeps({
+      listBusinesses: vi.fn().mockResolvedValue([]),
+      listInventory: vi.fn().mockResolvedValue([]),
+      listVirtualMachines: vi.fn().mockRejectedValue(new Error("hostinger 503"))
+    });
+    const res = await checkVpsBillingPosture(deps as never);
+    expect(res.findings.some((f) => f.kind === "untracked_vm")).toBe(false);
+  });
+
+  it("tolerates a VM with no plan and a non-Error listing failure", async () => {
+    const noPlan = makeDeps({
+      listBusinesses: vi.fn().mockResolvedValue([]),
+      listInventory: vi.fn().mockResolvedValue([]),
+      listVirtualMachines: vi.fn().mockResolvedValue([{ id: 1900003, state: "initial" }])
+    });
+    const res = await checkVpsBillingPosture(noPlan as never);
+    expect(res.findings.find((f) => f.kind === "untracked_vm")?.detail).toContain(
+      "unknown plan"
+    );
+
+    const stringBoom = makeDeps({
+      listBusinesses: vi.fn().mockResolvedValue([]),
+      listInventory: vi.fn().mockResolvedValue([]),
+      listVirtualMachines: vi.fn().mockRejectedValue("hostinger string boom")
+    });
+    const res2 = await checkVpsBillingPosture(stringBoom as never);
+    expect(res2.findings.some((f) => f.kind === "untracked_vm")).toBe(false);
+  });
+
+  it("does not flag a wiped tenant with no box", async () => {
+    const deps = makeDeps({
+      listBusinesses: vi
+        .fn()
+        .mockResolvedValue([
+          biz({ id: "b-wiped", hostinger_vps_id: null, status: "wiped" })
+        ]),
+      listVirtualMachines: vi.fn().mockResolvedValue([])
+    });
+    const res = await checkVpsBillingPosture(deps as never);
+    expect(res.findings.some((f) => f.kind === "online_tenant_no_box")).toBe(false);
   });
 });

@@ -64,3 +64,27 @@ describe("buildOpsBillingPostureEmail", () => {
     expect(email.text).not.toContain("period ends");
   });
 });
+
+describe("buildOpsBillingPostureEmail — tenant-level findings", () => {
+  // online_tenant_no_box is about a tenant, not a box, so rendering the
+  // shared "VM <id> / ..." prefix would print "VM null".
+  it("omits the VM prefix when the finding has no box", () => {
+    const email = buildOpsBillingPostureEmail({
+      siteUrl: "https://www.newcoworker.com",
+      checkedTenantVms: 1,
+      checkedPoolBoxes: 0,
+      findings: [
+        finding({
+          kind: "online_tenant_no_box",
+          vmId: null,
+          businessName: "Acme Plumbing",
+          businessId: "biz-nobox",
+          expiresAt: null,
+          detail: "business is online but has no hostinger_vps_id"
+        })
+      ]
+    });
+    expect(email.text).not.toContain("VM null");
+    expect(email.text).toContain("Acme Plumbing (biz-nobox):");
+  });
+});

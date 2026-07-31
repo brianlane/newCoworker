@@ -30,7 +30,9 @@ function findingLine(finding: BillingPostureFinding): string {
     : "pool";
   const expires = finding.expiresAt ? `, period ends ${finding.expiresAt}` : "";
   const healed = finding.autoHealed ? " [AUTO-HEALED]" : " [ACTION REQUIRED]";
-  return `VM ${finding.vmId} / ${who}: ${finding.detail}${expires}${healed}`;
+  // online_tenant_no_box is about a tenant, not a box, so there is no VM id.
+  const subject = finding.vmId === null ? who : `VM ${finding.vmId} / ${who}`;
+  return `${subject}: ${finding.detail}${expires}${healed}`;
 }
 
 export function buildOpsBillingPostureEmail(
