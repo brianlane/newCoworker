@@ -1964,6 +1964,76 @@ describe("stripe webhook route", () => {
     );
   });
 
+  // /api/billing/reactivate re-enables Hostinger auto-renew on undoPeriodEnd.
+  // The Stripe customer portal reaches the same state through this webhook,
+  // which only mirrored the flag. billing-posture excludes cancel_at_period_end
+  // tenants from its heal, so the box only got renewal back on the next daily
+  // run: a customer who undoes on their Hostinger renewal day could lose it.
+  it("re-enables Hostinger auto-renew when the portal undoes a scheduled cancel", async () => {
+    const existing = {
+      id: "local_sub_undo",
+      status: "active",
+      business_id: "biz_undo",
+      stripe_subscription_id: "sub_undo",
+      cancel_at_period_end: true,
+      hostinger_billing_subscription_id: "hbs_undo",
+      customer_profile_id: "cus_undo"
+    };
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue(existing as never);
+    mockLoadLifecycleContext.mockResolvedValue({
+      ok: true,
+      vpsHost: "1.2.3.4",
+      context: {
+        subscription: existing,
+        ownerEmail: "owner@example.com",
+        ownerAuthUserId: "user-1",
+        profile: null,
+        virtualMachineId: 42,
+        vpsHost: "1.2.3.4",
+        vpsProvider: "hostinger",
+        vpsNeverRenew: false,
+        now: new Date("2026-05-01T00:00:00.000Z")
+      }
+    });
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_portal_undo",
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "sub_undo",
+          status: "active",
+          cancel_at_period_end: false,
+          metadata: { businessId: "biz_undo" }
+        }
+      }
+    } as never);
+
+    const response = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+    expect(response.status).toBe(200);
+    await Promise.all(afterCallbacks.map((cb) => cb()));
+
+    // The Hostinger half only: no Stripe or DB ops, since the portal already
+    // did those and this webhook already mirrored them.
+    expect(mockExecuteLifecyclePlan).toHaveBeenCalledWith(
+      expect.objectContaining({
+        stripeOps: [],
+        dbUpdates: [],
+        sshOps: [],
+        telnyxOps: [],
+        hostingerOps: [
+          expect.objectContaining({ type: "enable_billing_auto_renewal" })
+        ]
+      }),
+      expect.anything()
+    );
+  });
+
   it("mirrors subscription updates onto the row matching the Stripe subscription id", async () => {
     vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
       id: "old_sub_row",
