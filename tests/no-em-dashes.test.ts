@@ -43,6 +43,10 @@ function guardedFiles(): string[] {
     // The llms.txt brief is copy an AI assistant quotes back to a buyer.
     "src/lib/marketing/llms-content.ts",
     "scripts/oneshot/seed-amy-new-lead-intake.ts",
+    // Seeds the HQ demo-line / webchat follow-up SMS bodies. The live flows
+    // read clean only because patch-hq-booking-offer.ts swept them after the
+    // fact; an unguarded re-run would put the em dashes straight back.
+    "scripts/oneshot/setup-hq-dogfood-flows.ts",
     ...readdirSync(emailTemplatesDir)
       .filter((f) => f.endsWith(".ts"))
       .map((f) => `src/lib/email/templates/${f}`)

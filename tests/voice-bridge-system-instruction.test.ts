@@ -58,6 +58,27 @@ describe("customer persona", () => {
     expect(text).toContain("Current date/time for this business:");
   });
 
+  // Jul 30 2026: a real prospect finished a whole demo-line call unnamed.
+  // Every other name rule in this persona is suppressive and the capture tool
+  // only fires on a volunteered name, so nothing ever asked.
+  it("asks an unrecognized lead for their name, once, without loosening the re-asking rules", () => {
+    const text = build();
+    expect(text).toContain("can I get your name?");
+    // Scoped: lead-shaped callers only, and only when it is not already known.
+    expect(text).toContain("turning into a genuine lead");
+    expect(text).toContain("still don't know their name");
+    expect(text).toContain("only once in the whole call");
+    // The suppressive rules it sits beside must survive intact.
+    expect(text).toContain("don't ask for their name again");
+    expect(text).toContain("Never ask for information you already have");
+  });
+
+  it("tells the capture tool to omit an unknown name rather than invent a placeholder", () => {
+    // The placeholder guards in the filing path are the backstop; this stops
+    // the model producing one in the first place.
+    expect(build({ hasVoiceTools: true })).toContain("never substitute a placeholder");
+  });
+
   it("teaches the customer tool suite only when tools are wired", () => {
     const withTools = build({ hasVoiceTools: true });
     expect(withTools).toContain("capture_caller_details");
@@ -92,6 +113,9 @@ describe("staff persona (owner/team caller)", () => {
     // Staff must never get CRM'd.
     expect(text).toContain("Do NOT use the customer CRM tools");
     expect(text).not.toContain("capture_caller_details` at any point");
+    // The lead name-ask is customer-only: staff are explicitly never asked.
+    expect(text).not.toContain("can I get your name?");
+    expect(text).toContain("never ask them for their name");
   });
 
   it("team members get the team framing, not the owner framing", () => {

@@ -50,7 +50,14 @@ const PAGE = {
 
 /** Enough of a meeting for the label: name, and whether it is listed. */
 function meeting(name: string, over: Record<string, unknown> = {}) {
-  return { id: name, name, enabled: true, hidden: false, ...over } as never;
+  return {
+    id: name,
+    name,
+    enabled: true,
+    hidden: false,
+    duration_minutes: 30,
+    ...over
+  } as never;
 }
 
 beforeEach(() => {
@@ -75,17 +82,23 @@ describe("publicBookingLink", () => {
     expect(await publicBookingLink(BIZ)).toEqual({
       url: "https://www.newcoworker.com/book/new-coworker",
       title: "NC Discovery Call",
-      meetings: ["NC Discovery Call"]
+      meetings: [{ name: "NC Discovery Call", durationMinutes: 30 }]
     });
   });
 
   it("falls back to the token URL, and to the business name when the link opens a choice", async () => {
     mockPage.mockResolvedValue({ ...PAGE, slug: null } as never);
-    mockTypes.mockResolvedValue([meeting("Discovery call"), meeting("Support call")]);
+    mockTypes.mockResolvedValue([
+      meeting("Discovery call", { duration_minutes: 60 }),
+      meeting("Support call")
+    ]);
     expect(await publicBookingLink(BIZ)).toEqual({
       url: "https://www.newcoworker.com/book/ncb_deadbeef",
       title: "Book a call with New Coworker",
-      meetings: ["Discovery call", "Support call"]
+      meetings: [
+        { name: "Discovery call", durationMinutes: 60 },
+        { name: "Support call", durationMinutes: 30 }
+      ]
     });
 
     // A missing business still answers, with nothing to name it after.
@@ -103,7 +116,7 @@ describe("publicBookingLink", () => {
     // visible meeting still names the link outright.
     expect(await publicBookingLink(BIZ)).toMatchObject({
       title: "Discovery call",
-      meetings: ["Discovery call"]
+      meetings: [{ name: "Discovery call", durationMinutes: 30 }]
     });
   });
 
@@ -141,7 +154,7 @@ describe("schedulingLink (provider resolution)", () => {
     expect(await schedulingLink(BIZ)).toEqual({
       url: "https://calendly.com/kyp/intro",
       title: "KYP Intro Call",
-      meetings: ["KYP Intro Call"],
+      meetings: [{ name: "KYP Intro Call", durationMinutes: 30 }],
       kind: "calendly"
     });
     expect(mockCalendly).toHaveBeenCalledWith(BIZ, expect.anything(), 30);
@@ -184,7 +197,7 @@ describe("schedulingLink (provider resolution)", () => {
     expect(await schedulingLink(BIZ)).toEqual({
       url: "https://www.newcoworker.com/book/new-coworker",
       title: "NC Discovery Call",
-      meetings: ["NC Discovery Call"],
+      meetings: [{ name: "NC Discovery Call", durationMinutes: 30 }],
       kind: "booking_page"
     });
     expect(mockUpsert).toHaveBeenCalledWith(BIZ, { enabled: true });
@@ -252,7 +265,7 @@ describe("bookingLinkPromptLine", () => {
   it("names the exact URL and what it books, sends by default, forbids inventing another", async () => {
     const line = await bookingLinkPromptLine(BIZ);
     expect(line).toContain("https://www.newcoworker.com/book/new-coworker");
-    expect(line).toContain('which books "NC Discovery Call"');
+    expect(line).toContain('which books "NC Discovery Call" and runs 30 minutes');
     expect(line).toContain("Never invent a different booking URL");
     // The link is the DEFAULT for a delegation, not a menu option to offer
     // back to the owner; listed times only on an explicit ask, and an
@@ -264,16 +277,74 @@ describe("bookingLinkPromptLine", () => {
       formatBookingLinkPromptLine({
         url: "https://www.newcoworker.com/book/new-coworker",
         title: "NC Discovery Call",
-        meetings: ["NC Discovery Call"],
+        meetings: [{ name: "NC Discovery Call", durationMinutes: 30 }],
         kind: "booking_page"
       })
     );
   });
 
+  // Jul 30 2026: HQ advertised a "15-minute discovery call" for a meeting
+  // configured at 60, while an AI-made booking (which carries no meeting
+  // type) silently used the tool's 30-minute default. The model can only know
+  // the real length if this line states it.
+  it("states each meeting's length and tells the model to book and quote exactly that", async () => {
+    mockTypes.mockResolvedValue([meeting("Discovery Call", { duration_minutes: 60 })]);
+    const line = await bookingLinkPromptLine(BIZ);
+    expect(line).toContain("runs 60 minutes");
+    expect(line).toContain("use that meeting's stated length as the appointment duration");
+    expect(line).toContain("never describe it as shorter than it is");
+  });
+
+  it("omits the duration rule when there is no meeting to state a length for", async () => {
+    mockTypes.mockResolvedValue([]);
+    const line = await bookingLinkPromptLine(BIZ);
+    expect(line).toContain("where the visitor picks a time");
+    expect(line).not.toContain("stated length");
+  });
+
+  it("carries the Calendly event type's own duration", async () => {
+    mockConn.mockResolvedValue({
+      provider: "calendly",
+      providerConfigKey: "calendly",
+      connectionId: "c-2"
+    });
+    mockCalendly.mockResolvedValue({
+      eventType: {
+        uri: "u",
+        name: "KYP Intro Call",
+        duration: 45,
+        schedulingUrl: "https://calendly.com/kyp/intro"
+      }
+    });
+    const line = await bookingLinkPromptLine(BIZ);
+    expect(line).toContain('"KYP Intro Call" and runs 45 minutes');
+    expect(line).toContain("use that meeting's stated length");
+  });
+
+  it("names a Calendly event with no length rather than inventing one", () => {
+    // Defensive: schedulingLink always supplies the event type's duration, but
+    // this function is exported and pure. Saying nothing beats stating a
+    // number nobody configured.
+    const line = formatBookingLinkPromptLine({
+      url: "https://calendly.com/kyp/intro",
+      title: "KYP Intro Call",
+      meetings: [],
+      kind: "calendly"
+    });
+    expect(line).toContain('the event is called "KYP Intro Call").');
+    expect(line).not.toContain("minutes");
+    expect(line).not.toContain("stated length");
+  });
+
   it("lists the meetings when the link opens a choice, and stays vague with none", async () => {
-    mockTypes.mockResolvedValue([meeting("Discovery call"), meeting("Support call")]);
+    mockTypes.mockResolvedValue([
+      meeting("Discovery call", { duration_minutes: 60 }),
+      meeting("Support call")
+    ]);
     const many = await bookingLinkPromptLine(BIZ);
-    expect(many).toContain("chooses one of these meetings and then a time: Discovery call, Support call");
+    expect(many).toContain(
+      "chooses one of these meetings and then a time: Discovery call (60 minutes), Support call (30 minutes)"
+    );
 
     // No meeting to name: the link still works, so the hint stays, minus
     // any claim about what it books.

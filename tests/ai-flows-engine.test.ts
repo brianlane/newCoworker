@@ -80,6 +80,58 @@ describe("extractLeadIdentity", () => {
     expect(extractLeadIdentity({ unrelated: "x" })).toEqual({ name: null, email: null });
   });
 
+  // Jul 30 2026: the HQ demo flow's field description said "'there' when no
+  // name is present", so a nameless caller's contact was filed as a person
+  // literally named "there", and the nightly summarizer then wrote "The
+  // customer is named there" into the rolling summary.
+  it("rejects greeting placeholders an extractor returns in place of a name", () => {
+    for (const placeholder of ["there", "There", "  THERE  ", "none", "unknown", "N/A", "-"]) {
+      expect(extractLeadIdentity({ lead_name: placeholder }), placeholder).toEqual({
+        name: null,
+        email: null
+      });
+    }
+  });
+
+  it("rejects generic role words an extractor reaches for instead of a name", () => {
+    for (const role of ["customer", "caller", "the lead", "prospect", "guest"]) {
+      expect(extractLeadIdentity({ lead_name: role }), role).toEqual({
+        name: null,
+        email: null
+      });
+    }
+  });
+
+  it("skips a placeholder in a higher-priority key to reach a real name below it", () => {
+    // Priority alone is not enough: a flow extracting both keys must not let
+    // "there" in lead_name mask a genuine first_name.
+    expect(extractLeadIdentity({ lead_name: "there", first_name: "Marisol" })).toEqual({
+      name: "Marisol",
+      email: null
+    });
+  });
+
+  it("keeps real names that merely contain a placeholder word", () => {
+    // The guard is whole-value, not substring: these are real people.
+    expect(extractLeadIdentity({ lead_name: "Theresa" })).toEqual({
+      name: "Theresa",
+      email: null
+    });
+    expect(extractLeadIdentity({ lead_name: "Nona Guest" })).toEqual({
+      name: "Nona Guest",
+      email: null
+    });
+  });
+
+  it("leaves the email half of the identity untouched", () => {
+    // Only the name is placeholder-filtered here; email has its own
+    // LEAD_EMAIL_RE guard at the filing site.
+    expect(extractLeadIdentity({ lead_name: "there", lead_email: "real@x.co" })).toEqual({
+      name: null,
+      email: "real@x.co"
+    });
+  });
+
   it("reads the calendar-flow invitee_* keys (KYP pre-call reminder, Jul 24 2026)", () => {
     // The seeded Calendly flows extract the booker as invitee_first_name /
     // invitee_email; these must enrich the contact like lead_* keys do.
@@ -362,6 +414,23 @@ describe("renderTemplate", () => {
     expect(
       renderTemplate("Hi {{vars.lead_name}}!", { vars: { lead_name: "Dwight" } }, { collapseEmpty: true })
     ).toBe("Hi Dwight!");
+  });
+  it("collapseEmpty handles the comma greeting shape the HQ flows actually use", () => {
+    // The live "Demo caller follow-up (HQ)" body is "Hi {{vars.lead_name}},
+    // thanks for calling..." — a comma, not the "!" the round-4 fix was
+    // written against. This is why the extractor never needed a 'there'
+    // placeholder: an empty name already reads naturally.
+    const body = "Hi {{vars.lead_name}}, thanks for calling the New Coworker demo line!";
+    expect(renderTemplate(body, { vars: { lead_name: "" } }, { collapseEmpty: true })).toBe(
+      "Hi, thanks for calling the New Coworker demo line!"
+    );
+    // A missing key renders identically to an empty one.
+    expect(renderTemplate(body, { vars: {} }, { collapseEmpty: true })).toBe(
+      "Hi, thanks for calling the New Coworker demo line!"
+    );
+    expect(renderTemplate(body, { vars: { lead_name: "Marisol" } }, { collapseEmpty: true })).toBe(
+      "Hi Marisol, thanks for calling the New Coworker demo line!"
+    );
   });
   it("collapseEmpty is OFF by default (every non-message caller unchanged)", () => {
     expect(renderTemplate("Hi {{vars.lead_name}}!", { vars: { lead_name: "" } })).toBe("Hi !");

@@ -27,6 +27,10 @@ import {
 } from "@/lib/customer-memory/db";
 import type { CustomerMemoryChannel } from "@/lib/customer-memory/types";
 import { fireContactEvent } from "@/lib/ai-flows/contact-event-hooks";
+// Same placeholder rule the AiFlow filing path uses, imported rather than
+// re-listed so the two can never drift (the plans/limits.ts precedent for
+// reading a constant out of the Deno _shared tree).
+import { isPlaceholderLeadName } from "../../../supabase/functions/_shared/ai_flows/engine";
 import { logger } from "@/lib/logger";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -109,7 +113,13 @@ export async function ensureCapturedContact(
     });
   }
 
-  const name = input.name?.trim() || null;
+  // A capture tool's `name` comes straight from a model, so it can be a
+  // greeting stand-in rather than a name ("there", "unknown"). Filing one
+  // makes every later surface believe the caller is called that, including
+  // the nightly summarizer, which writes it into the rolling summary as
+  // fact. A nameless lead must stay nameless.
+  const rawName = input.name?.trim() || null;
+  const name = rawName && !isPlaceholderLeadName(rawName) ? rawName : null;
   const email = input.email?.trim() || null;
 
   // Create-or-bump: the same rollup the capture surfaces already performed.

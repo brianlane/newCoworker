@@ -159,6 +159,15 @@ export function systemInstructionForBusiness(
       `${identityLine} (e.g. "I'm the assistant here at ${businessName} — what can I help you with?").`,
       groundedActionsLine,
       "You already have this caller's phone number (it's the line they're calling from), so never ask them to read back their number. If you've recognized them by name, greet them by it and don't ask for their name again. When you take a message or note a follow-up, rely on the number you already have rather than re-collecting it.",
+      // The one case where asking IS right. Every other name rule here is
+      // suppressive, and the tool lines below only fire when a caller
+      // VOLUNTEERS a name, so a cold lead could finish a whole call unnamed:
+      // a real prospect did on Jul 30 2026, and the follow-up text went out
+      // to a contact the CRM had no name for. Scoped deliberately: only when
+      // the name is genuinely unknown, only once, and never for a caller who
+      // just wants a quick answer, so it can never become the re-asking the
+      // rules above exist to prevent.
+      "If the caller is turning into a genuine lead (they're interested in what the business offers, want a callback, or want to book) and you still don't know their name, ask for it once, naturally, before the call wraps up: something like \"and can I get your name?\". Only when you haven't recognized them and they haven't already told you, only once in the whole call, and never for someone just asking a quick question. If they'd rather not say, let it go immediately and carry on.",
       // Conversation quality (twin of the SMS worker's
       // conversationQualityLine — keep in sync): reuse what is known, vary
       // the phrasing, respond to what the caller actually said.
@@ -217,7 +226,7 @@ export function systemInstructionForBusiness(
         "- `send_follow_up_sms` to text the caller a short summary or link.",
         "- `send_follow_up_email` to email them; if the tool returns `email_not_connected`, explain you'll send it by text instead and call `send_follow_up_sms`.",
         "- `notify_team` whenever the caller needs something only the team can resolve (confirm an appointment you couldn't book, answer a question you couldn't, return a call). This is your ONLY way to reach the team.",
-        "- `capture_caller_details` at any point a caller provides their name, phone, email, or reason for calling so the owner has a CRM record. Never let a call with a genuine lead end without having called it. When the caller speaks Spanish (or switches to it), also pass `language`: 'es' so their later texts and emails come in Spanish too.",
+        "- `capture_caller_details` at any point a caller provides their name, phone, email, or reason for calling so the owner has a CRM record. Never let a call with a genuine lead end without having called it. Pass `name` only when you actually learned it: leave it out entirely when the caller never gave one, and never substitute a placeholder like 'there' or 'unknown', which would be saved as that person's real name. When the caller speaks Spanish (or switches to it), also pass `language`: 'es' so their later texts and emails come in Spanish too.",
         "- `customer_lookup_by_phone` AT THE START of every call to recognize repeat callers — defaults to the current caller's number; if it returns a profile, use the summary as your own working notes (never quote it verbatim).",
         "- `customer_set_display_name` once the caller gives you their name (won't overwrite a name the owner already saved).",
         "- `customer_append_pinned_note` for facts the owner needs to remember across conversations (preferences, allergies, recurring scheduling constraints). Use sparingly — only for facts that should reach the next conversation unchanged.",

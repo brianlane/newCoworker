@@ -570,6 +570,57 @@ const LEAD_EMAIL_KEYS = [
 
 export type LeadIdentity = { name: string | null; email: string | null };
 
+/**
+ * Stand-ins an extractor returns when the source text names nobody. These are
+ * NOT names, and filing one makes the CRM claim a person is called "there".
+ *
+ * A prompt asking for a greeting-safe default is how they get produced: the HQ
+ * demo flow's field description said "'there' when no name is present", the
+ * model obeyed, and `send_sms`'s filing side effect stamped it onto a real
+ * prospect's contact (Jul 30 2026). The nightly summarizer then read it back
+ * and wrote "The customer is named there" into the rolling summary, so one
+ * placeholder became the AI's durable belief about that person.
+ *
+ * The email half of the same filing path was already immune: enrichCustomerProfile
+ * gates it on LEAD_EMAIL_RE, which is why `lead_email: "none"` was discarded on
+ * that same run while the name landed. This is the missing symmetric guard, and
+ * it belongs HERE rather than in one flow's wording: prompts are per-flow and
+ * owner-editable, so a fix in a field description protects one tenant while a
+ * fix here protects every flow on every tenant.
+ *
+ * Note the greeting never needed the placeholder anyway: `send_sms` renders
+ * with `collapseEmpty`, which eats the whitespace before an empty var, so
+ * "Hi {{vars.lead_name}}, thanks" becomes "Hi, thanks" on its own.
+ */
+const PLACEHOLDER_LEAD_NAMES = new Set([
+  "there",
+  "none",
+  "no name",
+  "not provided",
+  "not given",
+  "unknown",
+  "n/a",
+  "na",
+  "null",
+  "undefined",
+  "-",
+  // Role words: an extractor reaching for a generic label rather than a name.
+  "customer",
+  "caller",
+  "client",
+  "lead",
+  "the lead",
+  "prospect",
+  "contact",
+  "guest",
+  "friend"
+]);
+
+/** True when `value` is a stand-in an extractor used in place of a real name. */
+export function isPlaceholderLeadName(value: string): boolean {
+  return PLACEHOLDER_LEAD_NAMES.has(value.trim().toLowerCase());
+}
+
 /** First non-empty trimmed string value among `keys`, or null. */
 function firstStringValue(
   vars: Record<string, unknown>,
@@ -583,16 +634,32 @@ function firstStringValue(
 }
 
 /**
+ * First real name among `keys`, skipping placeholders. Skipping rather than
+ * stopping matters: a flow can extract both `lead_name` and `first_name`, and
+ * a placeholder in the higher-priority key must not mask a genuine name in the
+ * lower-priority one.
+ */
+function firstLeadName(vars: Record<string, unknown>, keys: readonly string[]): string | null {
+  for (const key of keys) {
+    const value = vars[key];
+    if (typeof value !== "string") continue;
+    const trimmed = value.trim();
+    if (trimmed.length > 0 && !isPlaceholderLeadName(trimmed)) return trimmed;
+  }
+  return null;
+}
+
+/**
  * Pull a lead's display name + email out of a flow's extracted vars, scanning a
  * prioritized set of conventional keys so enrichment works regardless of which
  * key a particular flow used (e.g. `seller_first_name` vs `lead_name`). Name is
- * trimmed; email is trimmed + lowercased. Missing/blank/non-string values yield
- * null.
+ * trimmed and placeholder-filtered; email is trimmed + lowercased.
+ * Missing/blank/placeholder/non-string values yield null.
  */
 export function extractLeadIdentity(vars: Record<string, unknown>): LeadIdentity {
   const email = firstStringValue(vars, LEAD_EMAIL_KEYS);
   return {
-    name: firstStringValue(vars, LEAD_NAME_KEYS),
+    name: firstLeadName(vars, LEAD_NAME_KEYS),
     email: email ? email.toLowerCase() : null
   };
 }

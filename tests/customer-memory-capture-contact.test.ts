@@ -131,6 +131,54 @@ describe("ensureCapturedContact", () => {
     expect(event.contact).toEqual({ e164: PHONE, tags: ["Webchat Lead"] });
   });
 
+  // Jul 30 2026: a demo-line caller who never gave a name was filed as a
+  // person literally named "there", and the nightly summarizer then wrote
+  // "The customer is named there" into their rolling summary. `name` here
+  // comes straight from a model, so it needs the same distrust the AiFlow
+  // filing path applies.
+  it("treats a model's greeting placeholder as no name at all", async () => {
+    for (const placeholder of ["there", " There ", "unknown", "N/A", "the lead"]) {
+      mockRollup.mockClear();
+      mockFire.mockClear();
+      const { client } = fakeDb({ data: null, error: null });
+      mockClientFactory.mockResolvedValue(client);
+
+      const out = await ensureCapturedContact(BIZ, {
+        e164: PHONE,
+        name: placeholder,
+        channel: "voice"
+      });
+
+      expect(out, placeholder).toEqual({ created: true });
+      expect(mockRollup, placeholder).toHaveBeenCalledWith(
+        BIZ,
+        PHONE,
+        "voice",
+        { displayName: null },
+        client
+      );
+      // The event carries no name key at all, so a contact_created flow
+      // cannot template the placeholder back into a greeting either.
+      const [, event] = mockFire.mock.calls[0];
+      expect(event.contact, placeholder).toEqual({ e164: PHONE, tags: ["Voice Capture"] });
+    }
+  });
+
+  it("keeps a real name that merely contains a placeholder word", async () => {
+    const { client } = fakeDb({ data: null, error: null });
+    mockClientFactory.mockResolvedValue(client);
+
+    await ensureCapturedContact(BIZ, { e164: PHONE, name: "Theresa", channel: "voice" });
+
+    expect(mockRollup).toHaveBeenCalledWith(
+      BIZ,
+      PHONE,
+      "voice",
+      { displayName: "Theresa" },
+      client
+    );
+  });
+
   it("survives a source-tag write failure (warn; event still fires with the tag)", async () => {
     const { client } = fakeDb(
       { data: null, error: null },

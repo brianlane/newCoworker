@@ -8,7 +8,13 @@
  * ai-flow-worker (supabase/functions/ai-flow-worker/index.ts) stays a thin IO
  * dispatcher that switches on `action.kind`.
  */
-import { firstUrlInText, isE164, normalizeNanpToE164, renderTemplate } from "./engine.ts";
+import {
+  firstUrlInText,
+  isE164,
+  isPlaceholderLeadName,
+  normalizeNanpToE164,
+  renderTemplate
+} from "./engine.ts";
 import { branchChoiceVar, chooseBranchArm } from "./branching.ts";
 import { goalReachedVar } from "./goal_events.ts";
 import type {
@@ -1665,12 +1671,20 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       // alone instead of writing junk onto the contact.
       const languageRaw = readVar(step.languageVar).toLowerCase();
       const language = languageRaw === "en" || languageRaw === "es" ? languageRaw : "";
+      // Name: same doctrine as language above. An extractor told to default to
+      // a greeting stand-in ("'there' if unknown", the shape several library
+      // templates use) answers with one for every nameless lead, and filing it
+      // makes the CRM claim the person is called "there". An empty name leaves
+      // the stored name alone, which is the correct outcome for a lead who
+      // never gave one.
+      const nameRaw = readVar(step.nameVar);
+      const name = isPlaceholderLeadName(nameRaw) ? "" : nameRaw;
       return {
         ok: true,
         action: {
           kind: "upsert_customer",
           e164,
-          name: readVar(step.nameVar),
+          name,
           email: readVar(step.emailVar),
           ...(language ? { language } : {})
         }
