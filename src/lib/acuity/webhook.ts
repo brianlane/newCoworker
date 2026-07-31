@@ -458,8 +458,11 @@ export async function processAcuityWebhookEvent(
     const flow = await processWebhookFlowEvent(businessId, {
       source: "acuity",
       eventId: `acuity:${event.action}:${event.appointmentId}:${state}`,
-      payload: event.raw
-    } as never);
+      // `data`, not `payload`: this is what trigger matching and lead
+      // recording read. Getting the field name wrong produced flows that
+      // enqueued but saw an empty window text and matched no conditions.
+      data: event.raw
+    });
     flowRunsEnqueued = flow?.enqueued ?? 0;
   } catch (err) {
     logger.warn("acuity webhook: flow trigger dispatch failed", {

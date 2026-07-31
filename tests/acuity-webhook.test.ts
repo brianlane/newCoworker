@@ -482,6 +482,19 @@ describe("processAcuityWebhookEvent", () => {
     expect(canceled.eventId).not.toBe(standing.eventId);
   });
 
+  it("hands the flow channel the body under `data`, which is what matching reads", async () => {
+    // The field name is load-bearing: trigger conditions and lead recording
+    // read `data`. Under any other key the run enqueues but sees an empty
+    // window text and matches nothing.
+    await processAcuityWebhookEvent(BIZ, CONN, EVENT, deps());
+    const passed = vi.mocked(processWebhookFlowEvent).mock.calls[0][1] as {
+      data?: Record<string, string>;
+      source: string;
+    };
+    expect(passed.source).toBe("acuity");
+    expect(passed.data).toEqual(EVENT.raw);
+  });
+
   it("falls back to a stable key when there is no appointment to qualify with", async () => {
     await processAcuityWebhookEvent(
       BIZ,
