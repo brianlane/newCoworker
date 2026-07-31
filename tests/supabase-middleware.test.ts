@@ -11,6 +11,7 @@ vi.mock("@/lib/rate-limit", () => ({
     AUTH: { interval: 900_000, maxRequests: 5 },
     API: { interval: 60_000, maxRequests: 60 },
     WEBHOOK: { interval: 60_000, maxRequests: 100 },
+    CSP_REPORT: { interval: 60_000, maxRequests: 30 },
   }
 }));
 
@@ -192,6 +193,16 @@ describe("proxy", () => {
     expect(res.status).not.toBe(403);
   });
 
+  // The browser posts CSP violation reports itself, not from page script, and
+  // sends no Origin. Without the exemption the report-only bake would collect
+  // nothing while looking like it worked.
+  it("allows POST to /api/security/csp-report without origin (skip CSRF)", async () => {
+    mockSupabaseWithUser(null);
+    const req = makeRequest("/api/security/csp-report", { method: "POST" });
+    const res = await proxy(req);
+    expect(res.status).not.toBe(403);
+  });
+
   it("allows POST to /api/rowboat without origin (token-authed external route)", async () => {
     mockSupabaseWithUser(null);
     const req = makeRequest("/api/rowboat", { method: "POST" });
@@ -308,6 +319,29 @@ describe("proxy", () => {
     const res = await proxy(req);
     expect(res.status).toBe(429);
     expect(res.headers.get("Retry-After")).toBeTruthy();
+  });
+
+  // Reports must not share API's bucket, or a strict report-only policy would
+  // burn a real user's 60/min allowance and start 429ing their dashboard.
+  it("gives CSP reports their own rate-limit bucket", async () => {
+    mockSupabaseWithUser(null);
+    const req = makeRequest("/api/security/csp-report", { method: "POST" });
+    await proxy(req);
+    expect(vi.mocked(rateLimit)).toHaveBeenCalledWith(
+      expect.any(String),
+      expect.objectContaining({ maxRequests: 30 })
+    );
+  });
+
+  it("drops an over-budget CSP report with 204, never 429", async () => {
+    vi.mocked(rateLimit).mockReturnValue({ success: false, limit: 30, remaining: 0, reset: Date.now() + 60000 });
+    mockSupabaseWithUser(null);
+    const req = makeRequest("/api/security/csp-report", { method: "POST" });
+    const res = await proxy(req);
+    // A 429 with Retry-After would make browsers retry, amplifying exactly
+    // the traffic the cap exists to contain.
+    expect(res.status).toBe(204);
+    expect(res.headers.get("Retry-After")).toBeNull();
   });
 
   it("uses AUTH rate limit for POST /login", async () => {

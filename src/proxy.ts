@@ -249,6 +249,12 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
     // and privacy tooling can blank Origin/Referer; CSRF must not 403 a
     // legitimate booking. Same rationale as /api/widget/ above.
     !pathname.startsWith("/api/book/") &&
+    // /api/security/csp-report is the browser's own CSP violation reporter.
+    // The browser posts it directly, not from page script, and sends no
+    // Origin — so CSRF would 403 every report and the report-only bake would
+    // silently collect nothing. It authenticates nothing and mutates nothing;
+    // it only writes a capped log line. Same rationale as /api/book/ above.
+    pathname !== "/api/security/csp-report" &&
     ["POST", "PUT", "DELETE", "PATCH"].includes(method)
   ) {
     const origin = request.headers.get("origin");
@@ -283,6 +289,8 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
   let configKey: keyof typeof RATE_LIMITS = "API";
   if (pathname.includes("/api/webhooks/")) {
     configKey = "WEBHOOK";
+  } else if (pathname === "/api/security/csp-report") {
+    configKey = "CSP_REPORT";
   } else if (
     method === "POST" &&
     (pathname.includes("/login") || pathname.includes("/api/auth"))
@@ -295,6 +303,12 @@ export async function proxy(request: NextRequest, event?: NextFetchEvent) {
   const rlResult = rateLimit(identifier, rlConfig);
 
   if (!rlResult.success) {
+    // A CSP violation reporter is not a caller we can hand an error to: the
+    // browser cannot act on it, and a 429 with Retry-After makes it retry,
+    // amplifying exactly the traffic the cap exists to contain. Drop quietly.
+    if (configKey === "CSP_REPORT") {
+      return new NextResponse(null, { status: 204 });
+    }
     return new NextResponse(
       JSON.stringify({
         error: "TOO_MANY_REQUESTS",

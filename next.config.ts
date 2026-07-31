@@ -19,13 +19,45 @@ const projectRoot = path.dirname(fileURLToPath(import.meta.url));
 // A full script/style CSP is intentionally deferred to a separately tuned,
 // browser-tested rollout (it requires per-integration allowlisting and a
 // Report-Only bake to avoid breaking Stripe Checkout / Supabase auth).
+// The STRICT policy we would like to enforce, shipped Report-Only so it
+// changes nothing for users while telling us exactly what stands in the way.
+//
+// It is strict ON PURPOSE, in particular `script-src 'self'` with no
+// `unsafe-inline`. Production currently serves ~18 inline <script> blocks (the
+// Next hydration payload) with no nonce, so this WILL report on every page
+// view. That is the measurement: a report-only policy that already allowed
+// `unsafe-inline` would report nothing and teach us nothing.
+//
+// Enforcing it needs per-request nonces, which Next threads through its own
+// inline scripts only for dynamically rendered routes. The marketing pages are
+// `force-static` on purpose, so nonces there would trade away static
+// generation. That trade is a separate decision, and this header exists to
+// price it rather than to pre-empt it.
+//
+// Reports go to a hard-capped sink (`/api/security/csp-report`) that never
+// touches the database. See that route for the cost reasoning.
+const cspReportOnly = [
+  "default-src 'self'",
+  "script-src 'self'",
+  "style-src 'self' 'unsafe-inline'",
+  "img-src 'self' data: blob: https:",
+  "font-src 'self' data:",
+  "connect-src 'self' https://*.supabase.co wss://*.supabase.co https://api.nango.dev",
+  "form-action 'self' https://checkout.stripe.com",
+  "frame-ancestors 'none'",
+  "base-uri 'self'",
+  "object-src 'none'",
+  "report-uri /api/security/csp-report"
+].join("; ");
+
 const securityHeaders = [
   { key: "Strict-Transport-Security", value: "max-age=63072000; includeSubDomains; preload" },
   { key: "X-Content-Type-Options", value: "nosniff" },
   { key: "X-Frame-Options", value: "DENY" },
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), browsing-topics=()" },
-  { key: "Content-Security-Policy", value: "frame-ancestors 'none'; base-uri 'self'; object-src 'none'" }
+  { key: "Content-Security-Policy", value: "frame-ancestors 'none'; base-uri 'self'; object-src 'none'" },
+  { key: "Content-Security-Policy-Report-Only", value: cspReportOnly }
 ];
 
 // /widget/frame is the ONE page that must be embeddable in an <iframe> on
