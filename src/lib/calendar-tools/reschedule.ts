@@ -37,6 +37,10 @@ import {
   deleteZoomMeetingForBooking,
   updateZoomMeetingForBooking
 } from "@/lib/zoom/meetings";
+import {
+  moveSharedCalendarMirror,
+  removeSharedCalendarMirror
+} from "@/lib/calendar-tools/shared-calendar";
 import { offerFreedSlot } from "@/lib/calendar-tools/waitlist-fill";
 import {
   cancelWaitlistForAttendee,
@@ -557,6 +561,17 @@ export async function rescheduleCalendarAppointment(
             endIso: args.newEndIso
           });
         }
+        // Move the shared-calendar mirror with it. A mirror left at the old
+        // time is worse than none: the team plans around an appointment that
+        // is no longer there.
+        if (claim.sharedCalendarEventId) {
+          await moveSharedCalendarMirror(
+            businessId,
+            claim.sharedCalendarEventId,
+            args.newStartIso,
+            args.newEndIso
+          );
+        }
         // Waitlist (both best-effort by module contract): the attendee's
         // own live entries resolve against the new start FIRST, then the
         // vacated OLD slot is offered to whoever is waiting, with the
@@ -743,6 +758,12 @@ export async function cancelCalendarAppointment(
         // CalDAV bookings carry one here — Vagaro bookings are Zoom-free).
         if (claim.zoomMeetingId) {
           await deleteZoomMeetingForBooking(businessId, claim.zoomMeetingId);
+        }
+        // Remove the shared-calendar mirror too. This is the half that makes
+        // mirroring safe to ship: a mirror surviving its cancellation shows
+        // the team an appointment that is not happening, and they act on it.
+        if (claim.sharedCalendarEventId) {
+          await removeSharedCalendarMirror(businessId, claim.sharedCalendarEventId);
         }
         // Waitlist (best-effort by module contract): the canceler's own
         // entries are moot and drop FIRST, then the canceled slot is

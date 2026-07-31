@@ -1,7 +1,11 @@
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
 import { getBusinessTimezone } from "@/lib/db/businesses";
-import { ensureSharedCalendar, getSharedCalendar } from "@/lib/calendar-tools/shared-calendar";
+import {
+  ensureSharedCalendar,
+  getSharedCalendar,
+  mirrorBookingToSharedCalendar
+} from "@/lib/calendar-tools/shared-calendar";
 import { createCalendlyBookingLink, findCalendlySlots } from "@/lib/calendar-tools/calendly";
 import { bookVagaroAppointment, findVagaroSlots } from "@/lib/calendar-tools/vagaro";
 import { bookAcuityAppointment, findAcuitySlots } from "@/lib/calendar-tools/acuity";
@@ -688,16 +692,33 @@ export async function bookCalendarAppointment(
 
   if (claim?.kind === "claimed") {
     const booked = result.data as
-      | { eventId?: unknown; zoomMeetingId?: unknown }
+      | { eventId?: unknown; zoomMeetingId?: unknown; provider?: unknown }
       | undefined;
     const bookedEventId = booked?.eventId;
     if (result.ok && typeof bookedEventId === "string" && bookedEventId.length > 0) {
-      // The Zoom meeting id (when the booking got one) rides on the ledger
-      // row so reschedule/cancel can move/delete the meeting with the event.
+      // Put the booking on the shared "NewCoworker" calendar so the whole
+      // team sees it. Only for providers that are NOT the calendar host:
+      // when Google or Microsoft took the booking, bookOnProvider already
+      // wrote it to that very calendar, and mirroring would duplicate it.
+      // Best-effort by contract, and the id rides the ledger row for the
+      // same reason the Zoom meeting id does: without a handle, reschedule
+      // and cancel cannot keep it in step, and a mirror left behind after a
+      // cancellation shows the team an appointment that is not happening.
+      const bookedProvider = typeof booked?.provider === "string" ? booked.provider : "";
+      const mirrorEventId = await mirrorBookingToSharedCalendar(businessId, bookedProvider, {
+        summary: args.summary,
+        startIso: args.startIso,
+        endIso: args.endIso,
+        attendeeName: args.attendeeName,
+        attendeePhone: args.attendeePhone ?? fallbackPhone ?? null,
+        attendeeEmail: args.attendeeEmail ?? null,
+        notes: args.notes ?? null
+      });
       await confirmBookingDedupe(
         claim.id,
         bookedEventId,
-        typeof booked?.zoomMeetingId === "string" ? booked.zoomMeetingId : null
+        typeof booked?.zoomMeetingId === "string" ? booked.zoomMeetingId : null,
+        mirrorEventId
       );
     } else {
       await releaseBookingDedupe(claim.id);

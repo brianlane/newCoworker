@@ -231,6 +231,19 @@ describe("confirmBookingDedupe", () => {
     expect(update?.args[0]).toEqual({ event_id: "evt-9", zoom_meeting_id: "zm-1" });
   });
 
+  it("stamps the shared-calendar mirror id so reschedule and cancel can find it", async () => {
+    // Without a handle here, a mirror survives the cancellation of the
+    // appointment it represents and the team acts on an event that is not
+    // happening.
+    const calls = scriptClient([{ data: null, error: null }]);
+    await confirmBookingDedupe("row-1", "evt-9", null, "mirror-1");
+    const update = calls.find((c) => c.name === "update");
+    expect(update?.args[0]).toEqual({
+      event_id: "evt-9",
+      shared_calendar_event_id: "mirror-1"
+    });
+  });
+
   it("retries a failed confirm and succeeds without escalating", async () => {
     // A lost confirm re-opens the duplicate window after the in-flight TTL
     // (Bugbot High on PR #566) — one transient DB error must not be enough
@@ -311,7 +324,8 @@ describe("findUpcomingBookingClaim (reschedule/cancel event resolution)", () => 
       id: "row-1",
       eventId: "evt-1",
       startAt: "2026-07-14T20:00:00Z",
-      zoomMeetingId: "zm-1"
+      zoomMeetingId: "zm-1",
+      sharedCalendarEventId: null
     });
     // Confirmed rows only (event_id set), upcoming only, soonest first.
     expect(calls.find((c) => c.name === "not")?.args).toEqual(["event_id", "is", null]);
@@ -370,6 +384,7 @@ describe("findUpcomingBookingClaimByPhone (format-tolerant fallback)", () => {
       eventId: "evt-mine",
       startAt: "2026-07-14T20:00:00Z",
       zoomMeetingId: null,
+      sharedCalendarEventId: null,
       attendeeKey: "phone:+15485773546"
     });
     const like = calls.find((c) => c.name === "like");

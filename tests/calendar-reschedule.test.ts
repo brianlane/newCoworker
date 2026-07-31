@@ -2,7 +2,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 
 vi.mock("@/lib/voice-tools/connections", () => ({ resolveCalendarConnection: vi.fn() }));
 vi.mock("@/lib/nango/workspace", () => ({ nangoProxyForBusiness: vi.fn() }));
-vi.mock("@/lib/calendar-tools/shared-calendar", () => ({ getSharedCalendar: vi.fn() }));
+vi.mock("@/lib/calendar-tools/shared-calendar", () => ({
+  moveSharedCalendarMirror: vi.fn(),
+  removeSharedCalendarMirror: vi.fn(), getSharedCalendar: vi.fn() }));
 vi.mock("@/lib/calendar-tools/booking-dedupe", () => ({
   bookingAttendeeKey: vi.fn(() => "phone:+15485773546"),
   findUpcomingBookingClaim: vi.fn(),
@@ -69,6 +71,10 @@ import {
   rescheduleVagaroAppointment
 } from "@/lib/calendar-tools/vagaro";
 import {
+  moveSharedCalendarMirror,
+  removeSharedCalendarMirror
+} from "@/lib/calendar-tools/shared-calendar";
+import {
   cancelAcuityAppointment,
   rescheduleAcuityAppointment
 } from "@/lib/calendar-tools/acuity";
@@ -124,6 +130,7 @@ const CLAIM = {
   zoomMeetingId: null
 };
 const ZOOM_CLAIM = { ...CLAIM, zoomMeetingId: "zm-1" };
+const MIRROR_CLAIM = { ...CLAIM, sharedCalendarEventId: "mirror-1" };
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -295,6 +302,29 @@ describe("rescheduleCalendarAppointment", () => {
     } as never);
     await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS);
     expect(vi.mocked(deleteBookingClaim)).toHaveBeenCalledWith("claim-1");
+  });
+
+  it("moves the shared-calendar mirror with the appointment", async () => {
+    // A mirror left at the old time is worse than none: the team plans
+    // around an appointment that is no longer there.
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(MIRROR_CLAIM);
+    vi.mocked(rescheduleVagaroAppointment).mockResolvedValue({ ok: true, data: {} } as never);
+    await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS);
+    expect(vi.mocked(moveSharedCalendarMirror)).toHaveBeenCalledWith(
+      BIZ,
+      "mirror-1",
+      RESCHEDULE_ARGS.newStartIso,
+      RESCHEDULE_ARGS.newEndIso
+    );
+  });
+
+  it("touches no mirror when the booking never had one", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
+    vi.mocked(rescheduleVagaroAppointment).mockResolvedValue({ ok: true, data: {} } as never);
+    await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS);
+    expect(vi.mocked(moveSharedCalendarMirror)).not.toHaveBeenCalled();
   });
 
   it("Vagaro: keeps the claim in place when the provider move fails", async () => {
@@ -789,6 +819,24 @@ describe("cancelCalendarAppointment", () => {
       "2026-07-13T20:00:00.000Z"
     );
     expect(vi.mocked(deleteBookingClaim)).toHaveBeenCalledWith("claim-1");
+  });
+
+  it("removes the shared-calendar mirror when the appointment is canceled", async () => {
+    // The half that makes mirroring safe: a mirror surviving its
+    // cancellation shows the team an appointment that is not happening.
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(MIRROR_CLAIM);
+    vi.mocked(cancelVagaroAppointment).mockResolvedValue({ ok: true, data: {} } as never);
+    await cancelCalendarAppointment(BIZ, CANCEL_ARGS);
+    expect(vi.mocked(removeSharedCalendarMirror)).toHaveBeenCalledWith(BIZ, "mirror-1");
+  });
+
+  it("removes no mirror when the booking never had one", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
+    vi.mocked(cancelVagaroAppointment).mockResolvedValue({ ok: true, data: {} } as never);
+    await cancelCalendarAppointment(BIZ, CANCEL_ARGS);
+    expect(vi.mocked(removeSharedCalendarMirror)).not.toHaveBeenCalled();
   });
 
   it("Vagaro: keeps the claim when the provider cancel fails", async () => {
