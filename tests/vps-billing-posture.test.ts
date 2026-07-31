@@ -688,6 +688,46 @@ describe("checkVpsBillingPosture — fleet consistency", () => {
     expect(finding?.businessId).toBe("b-nobox");
   });
 
+  // Inventory drift: the box is missing from vps_inventory but a live
+  // business still points at it. Telling ops to retire that would take the
+  // tenant down.
+  it("never tells ops to retire an untracked VM a live tenant still points at", async () => {
+    const deps = makeDeps({
+      listBusinesses: vi
+        .fn()
+        .mockResolvedValue([biz({ id: "b-live", hostinger_vps_id: "1806097" })]),
+      listInventory: vi.fn().mockResolvedValue([]),
+      getVirtualMachine: vi
+        .fn()
+        .mockResolvedValue({ id: 1806097, state: "running", subscription_id: "hsub-live" }),
+      listVirtualMachines: vi
+        .fn()
+        .mockResolvedValue([{ id: 1806097, state: "running", plan: "KVM 1" }])
+    });
+    const res = await checkVpsBillingPosture(deps as never);
+    const finding = res.findings.find((f) => f.kind === "untracked_vm");
+    expect(finding?.businessId).toBe("b-live");
+    expect(finding?.detail).toContain("LIVE TENANT");
+    expect(finding?.detail).toContain("Do NOT pool or retire");
+    expect(finding?.detail).not.toContain("adopt into the pool");
+  });
+
+  it("does treat a VM no business points at as poolable or retirable", async () => {
+    const deps = makeDeps({
+      listBusinesses: vi
+        .fn()
+        .mockResolvedValue([biz({ id: "b-other", hostinger_vps_id: "1815606" })]),
+      listInventory: vi.fn().mockResolvedValue([]),
+      listVirtualMachines: vi
+        .fn()
+        .mockResolvedValue([{ id: 1806114, state: "initial", plan: "KVM 1" }])
+    });
+    const res = await checkVpsBillingPosture(deps as never);
+    const finding = res.findings.find((f) => f.kind === "untracked_vm");
+    expect(finding?.businessId).toBeNull();
+    expect(finding?.detail).toContain("no business points at it");
+  });
+
   it("carries the VM's plan and billing subscription onto the untracked finding", async () => {
     const deps = makeDeps({
       listBusinesses: vi.fn().mockResolvedValue([]),

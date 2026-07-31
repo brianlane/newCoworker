@@ -349,20 +349,34 @@ export async function checkVpsBillingPosture(
       error: err instanceof Error ? err.message : String(err)
     });
   }
+  // A VM can be missing from vps_inventory and STILL be a live tenant's box
+  // (inventory drift: the purchase-time record failed while the business row
+  // was repointed). Telling ops to retire that box would take a tenant down,
+  // so look up the owner before writing the guidance.
+  const tenantByVmId = new Map<number, BusinessRow>();
+  for (const business of businesses) {
+    if (business.status === "wiped") continue;
+    const vmId = tenantVmId(business);
+    if (vmId !== null) tenantByVmId.set(vmId, business);
+  }
   for (const vm of untrackedVms) {
+    const owner = tenantByVmId.get(vm.id) ?? null;
+    const shape = `${vm.plan ?? "unknown plan"}, state ${vm.state}`;
     findings.push({
       kind: "untracked_vm",
       vmId: vm.id,
-      businessId: null,
-      businessName: null,
+      businessId: owner?.id ?? null,
+      businessName: owner?.name ?? null,
       hostingerBillingSubscriptionId:
         typeof vm.subscription_id === "string" ? vm.subscription_id : null,
       expiresAt: null,
       autoHealed: false,
-      detail:
-        `Hostinger VM ${vm.id} (${vm.plan ?? "unknown plan"}, state ${vm.state}) is absent from ` +
-        "vps_inventory: reconcile it (adopt into the pool or retire it) so a later provision " +
-        "reuses it instead of buying another box"
+      detail: owner
+        ? `Hostinger VM ${vm.id} (${shape}) is a LIVE TENANT box but is absent from ` +
+          "vps_inventory: record it as assigned. Do NOT pool or retire it"
+        : `Hostinger VM ${vm.id} (${shape}) is absent from vps_inventory and no business ` +
+          "points at it: reconcile it (adopt into the pool or retire it) so a later provision " +
+          "reuses it instead of buying another box"
     });
   }
 
