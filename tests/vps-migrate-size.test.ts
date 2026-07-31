@@ -405,7 +405,7 @@ describe("migrateBusinessVpsSize — provision + pin", () => {
       // Derived from the wall clock (route budget minus time already spent),
       // so pin the shape, not the value. remainingDeployDeadlineMs is covered
       // exactly in tests/provisioning-deploy-budget.test.ts.
-      deployDeadlineMs: expect.any(Number)
+      deployBudgetStartedAtMs: expect.any(Number)
     });
     expect(deps.markProvisioningJobOutcome).toHaveBeenCalledWith(BIZ, "succeeded");
   });

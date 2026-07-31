@@ -48,7 +48,6 @@ import {
   type RunProvisioningJobDeps
 } from "@/lib/provisioning/jobs";
 import { getLatestProvisioningStatus } from "@/lib/provisioning/progress";
-import { remainingDeployDeadlineMs } from "@/lib/provisioning/orchestrate";
 import { tryRecoverDeployCompleteNewBox } from "@/lib/vps/migration-cutover-recovery";
 import { sshExec } from "@/lib/hostinger/ssh";
 
@@ -115,8 +114,8 @@ export type MigrateVpsSizeDeps = {
     /** Buys the replacement box at the tenant's committed Hostinger term. */
     billingPeriod?: SubscriptionRow["billing_period"];
     suppressOwnerNotify?: boolean;
-    /** What is left of the route budget once pre-deploy work is done. */
-    deployDeadlineMs?: number;
+    /** Date.now() when the caller's route budget began. */
+    deployBudgetStartedAtMs?: number;
   }) => Promise<{
     vpsId: string;
     hostingerBillingSubscriptionId: string | null;
@@ -157,8 +156,9 @@ export async function migrateBusinessVpsSize(
   deps: MigrateVpsSizeDeps
 ): Promise<MigrateVpsSizeOutcome> {
   const { businessId, targetSize, requestedBy } = input;
-  // Phase 4 does not start at t=0 here: snapshot, backup, purchase, boot and
-  // bootstrap run first. The deploy gets what is left, not a flat 28 minutes.
+  // The route's maxDuration budget starts here. Snapshot, backup, purchase,
+  // boot and bootstrap all run before the deploy poll, so the orchestrator
+  // computes the deploy's remaining budget from this timestamp.
   const migrationStartedAt = Date.now();
 
   // ── Load + guards ─────────────────────────────────────────────────────
@@ -365,7 +365,7 @@ export async function migrateBusinessVpsSize(
             vpsSize: targetSize,
             billingPeriod: input.billingPeriod,
             suppressOwnerNotify: true,
-            deployDeadlineMs: remainingDeployDeadlineMs(Date.now() - migrationStartedAt)
+            deployBudgetStartedAtMs: migrationStartedAt
           });
           return {
             hostingerBillingSubscriptionId: out.hostingerBillingSubscriptionId,

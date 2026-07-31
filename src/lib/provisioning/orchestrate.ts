@@ -130,12 +130,17 @@ type ProvisioningInput = {
    */
   suppressOwnerNotify?: boolean;
   /**
-   * How long the detached deploy poll may run, in ms. Migrations pass what is
-   * LEFT of their route budget (see {@link remainingDeployDeadlineMs}) because
-   * phase 4 starts 12 to 18 minutes in, not at t=0. Omitted for signup, which
-   * gets {@link DEPLOY_CLIENT_DEADLINE_DEFAULT_MS}.
+   * `Date.now()` at the moment the caller's route budget started.
+   *
+   * Migrations pass this so the deploy poll gets what is LEFT of the 1800s
+   * route budget rather than a flat 28 minutes. It is a timestamp and not a
+   * precomputed duration on purpose: the orchestrator still has to purchase,
+   * boot and SSH-bootstrap before the poll begins, so the remaining budget can
+   * only be computed correctly at the poll itself.
+   *
+   * Omitted for signup, which gets {@link DEPLOY_CLIENT_DEADLINE_DEFAULT_MS}.
    */
-  deployDeadlineMs?: number;
+  deployBudgetStartedAtMs?: number;
   /** When true, send the ops "[ops] New signup live" alert after first successful deploy. */
   notifyOpsNewSignup?: boolean;
 };
@@ -572,6 +577,20 @@ export function remainingDeployDeadlineMs(elapsedMs: number): number {
     MIGRATION_DEPLOY_MIN_DEADLINE_MS,
     Math.min(DEPLOY_CLIENT_DEADLINE_DEFAULT_MS, left)
   );
+}
+
+/**
+ * Deadline for the deploy poll given the caller's budget start.
+ *
+ * `undefined` (the signup case) means "no caller budget", and the poll falls
+ * back to {@link DEPLOY_CLIENT_DEADLINE_DEFAULT_MS} on its own.
+ */
+export function deployDeadlineForBudget(
+  budgetStartedAtMs: number | undefined,
+  nowMs: () => number
+): number | undefined {
+  if (budgetStartedAtMs === undefined) return undefined;
+  return remainingDeployDeadlineMs(nowMs() - budgetStartedAtMs);
 }
 
 export type DetachedDeployPollResult =
@@ -1502,6 +1521,7 @@ async function runOrchestrator(
       : deps.vpsPool;
   /* c8 ignore next -- defaultRemoteExecutor is the production path; tests inject remoteExec */
   const remoteExec = deps?.remoteExec ?? defaultRemoteExecutor;
+  const nowMs: () => number = deps?.now ?? Date.now;
 
   // Fail-but-charge orphan reconciler (see acquireVps). Built lazily on the
   // same Hostinger client; only ever invoked when the purchase endpoint
@@ -2154,7 +2174,10 @@ async function runOrchestrator(
       sshKeyRow: provisioned.sshKey,
       remoteExec,
       latestProvisioningStatus: latestStatus,
-      deadlineMs: input.deployDeadlineMs,
+      // Computed HERE, not by the caller: purchase, boot and SSH bootstrap all
+      // happen between the caller's start and this poll, and they are the bulk
+      // of the pre-deploy time.
+      deadlineMs: deployDeadlineForBudget(input.deployBudgetStartedAtMs, nowMs),
       sleep: deps?.sleep,
       now: deps?.now
     });

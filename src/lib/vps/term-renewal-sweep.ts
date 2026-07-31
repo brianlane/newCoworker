@@ -33,7 +33,6 @@ import {
   type RunProvisioningJobDeps
 } from "@/lib/provisioning/jobs";
 import { getLatestProvisioningStatus } from "@/lib/provisioning/progress";
-import { remainingDeployDeadlineMs } from "@/lib/provisioning/orchestrate";
 import { tryRecoverDeployCompleteNewBox } from "@/lib/vps/migration-cutover-recovery";
 import { sshExec } from "@/lib/hostinger/ssh";
 
@@ -127,8 +126,8 @@ export type TermRenewalSweepDeps = {
     billingPeriod?: SubscriptionRow["billing_period"];
     skipPoolAdopt?: boolean;
     suppressOwnerNotify?: boolean;
-    /** What is left of the route budget once pre-deploy work is done. */
-    deployDeadlineMs?: number;
+    /** Date.now() when the caller's route budget began. */
+    deployBudgetStartedAtMs?: number;
   }) => Promise<{
     vpsId: string;
     hostingerBillingSubscriptionId: string | null;
@@ -272,6 +271,10 @@ export async function runTermRenewalSweep(
   options: TermRenewalSweepOptions = {}
 ): Promise<TermRenewalSweepResult> {
   const now = options.now ?? new Date();
+  // The route's maxDuration budget starts HERE, not when a candidate's
+  // migration begins: the fleet scan and per-candidate VM lookups below run
+  // under the same ceiling and can take minutes.
+  const sweepStartedAtMs = Date.now();
   const savingsThreshold = options.savingsThreshold ?? DEFAULT_SAVINGS_THRESHOLD;
   const renewalWindowDays = options.renewalWindowDays ?? DEFAULT_RENEWAL_WINDOW_DAYS;
 
@@ -454,7 +457,8 @@ export async function runTermRenewalSweep(
           savingsRatio,
           nextBillingAt,
           renewalCents,
-          firstPeriodCents
+          firstPeriodCents,
+          budgetStartedAtMs: sweepStartedAtMs
         },
         deps
       );
@@ -527,13 +531,16 @@ async function migrateTenantTermRenewal(
     nextBillingAt: string;
     renewalCents: number;
     firstPeriodCents: number;
+    /** Date.now() when the sweep route began, for the deploy budget. */
+    budgetStartedAtMs: number;
   },
   deps: TermRenewalSweepDeps
 ): Promise<MigrateOutcome> {
   const { businessId, vpsSize } = input;
-  // Phase 4 does not start at t=0 here: snapshot, backup, purchase, boot and
-  // bootstrap run first. The deploy gets what is left, not a flat 28 minutes.
-  const migrationStartedAt = Date.now();
+  // The route budget started when the SWEEP did, not when this tenant's
+  // migration did: the fleet scan and per-candidate VM lookups above already
+  // spent some of it under the same maxDuration.
+  const budgetStartedAtMs = input.budgetStartedAtMs;
 
   const biz = await deps.getBusiness(businessId);
   if (!biz) {
@@ -681,7 +688,7 @@ async function migrateTenantTermRenewal(
             billingPeriod: input.billingPeriod,
             skipPoolAdopt: true,
             suppressOwnerNotify: true,
-            deployDeadlineMs: remainingDeployDeadlineMs(Date.now() - migrationStartedAt)
+            deployBudgetStartedAtMs: budgetStartedAtMs
           });
           return {
             hostingerBillingSubscriptionId: out.hostingerBillingSubscriptionId,

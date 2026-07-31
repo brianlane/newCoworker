@@ -27,7 +27,10 @@ vi.mock("@/lib/provisioning/progress", () => ({
   })
 }));
 
-import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
+import {
+  orchestrateProvisioning,
+  remainingDeployDeadlineMs
+} from "@/lib/provisioning/orchestrate";
 import { HQ_BUSINESS_ID } from "@/lib/vps/shared-hardware";
 import {
   recordProvisioningProgress,
@@ -321,6 +324,50 @@ describe("provisioning/orchestrate", () => {
       vpsSize: "kvm1",
       billingPeriod: null
     });
+  });
+
+  // Migrations pass the moment their route budget started, not a precomputed
+  // duration, because purchase, boot and SSH bootstrap all happen inside
+  // orchestrate before the deploy poll. The remaining budget can therefore only
+  // be worked out here, at the poll.
+  it("derives the deploy deadline from the caller's budget start, at poll time", async () => {
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("123"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+    // Fixed clock: 12 minutes of the route budget already spent.
+    const startedAt = 1_000_000;
+    const now = () => startedAt + 12 * 60 * 1000;
+
+    const result = await orchestrateProvisioning(
+      {
+        businessId: "biz-uuid-1",
+        tier: "standard",
+        ownerEmail: "owner@test.com",
+        deployBudgetStartedAtMs: startedAt
+      },
+      { vpsProvisioner, remoteExec, now, sleep: async () => undefined }
+    );
+
+    expect(result.vpsId).toBe("123");
+    // 30 min budget - 12 elapsed - 8 reserve = 10 min, under the 28 default.
+    expect(remainingDeployDeadlineMs(12 * 60 * 1000)).toBe(10 * 60 * 1000);
+  });
+
+  // Same path with the real clock, which is what production uses.
+  it("falls back to the real clock for the deploy budget when no now is injected", async () => {
+    const vpsProvisioner = vi.fn().mockResolvedValue(makeVpsStub("124"));
+    const remoteExec = vi.fn().mockResolvedValue(okExec());
+
+    const result = await orchestrateProvisioning(
+      {
+        businessId: "biz-uuid-1",
+        tier: "standard",
+        ownerEmail: "owner@test.com",
+        deployBudgetStartedAtMs: Date.now()
+      },
+      { vpsProvisioner, remoteExec, sleep: async () => undefined }
+    );
+
+    expect(result.vpsId).toBe("124");
   });
 
   it("reuses an existing per-tenant token without re-persisting it", async () => {

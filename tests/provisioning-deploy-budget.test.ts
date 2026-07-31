@@ -7,6 +7,7 @@ import {
   MIGRATION_CUTOVER_RESERVE_MS,
   MIGRATION_DEPLOY_MIN_DEADLINE_MS,
   MIGRATION_ROUTE_BUDGET_MS,
+  deployDeadlineForBudget,
   remainingDeployDeadlineMs
 } from "@/lib/provisioning/orchestrate";
 
@@ -61,6 +62,21 @@ describe("remainingDeployDeadlineMs", () => {
     );
     expect(remainingDeployDeadlineMs(60 * 60 * 1000)).toBe(
       MIGRATION_DEPLOY_MIN_DEADLINE_MS
+    );
+  });
+});
+
+describe("deployDeadlineForBudget", () => {
+  it("returns undefined for signup, which has no caller budget", () => {
+    expect(deployDeadlineForBudget(undefined, () => 0)).toBeUndefined();
+  });
+
+  it("measures elapsed time at the poll, not when the caller started", () => {
+    const startedAt = 1_000_000;
+    // 12 minutes gone by the time the poll begins.
+    const nowMs = () => startedAt + 12 * 60 * 1000;
+    expect(deployDeadlineForBudget(startedAt, nowMs)).toBe(
+      remainingDeployDeadlineMs(12 * 60 * 1000)
     );
   });
 });
