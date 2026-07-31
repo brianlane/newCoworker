@@ -330,3 +330,44 @@ export async function listActiveVpsSshKeys(
   // array element type without an unreachable null-filter branch.
   return rows.map((row) => migrateRow(row) as VpsSshKeyRow);
 }
+
+/**
+ * Collapse a list of active key rows to ONE row per business: the newest by
+ * `created_at`, which is the same row {@link getActiveVpsSshKeyForBusiness}
+ * resolves for that business.
+ *
+ * Why this exists. `listActiveVpsSshKeys` returns one row per provisioned
+ * BOX, and a tenant that has been re-provisioned or migrated carries several
+ * unrotated rows (nine rows across four tenants at the time of writing). The
+ * chat-worker rollout wants every box, so it iterates that list directly. The
+ * per-tenant sidecar rollouts (voice-bridge, aiflow-render) instead deploy to
+ * the tenant's CURRENT box, so a fleet sweep for them has to pick the same
+ * row the single-tenant path would, or it deploys to a retired box and
+ * reports success (PR #1060 shipped a voice-bridge change; reading the raw
+ * nine rows as "three boxes per tenant" is what made the fleet sweep look
+ * ambiguous).
+ *
+ * Sorts defensively rather than trusting the caller's ordering: the query
+ * above already returns newest-first, but a caller passing a filtered or
+ * re-ordered array must still get the newest per business. Rows with an
+ * unparseable `created_at` sort last, so a real timestamp always wins.
+ *
+ * Pure: no IO, so the selection rule is unit-testable without a database.
+ * Returned in stable business-id order for predictable iteration and logs.
+ */
+export function newestKeyPerBusiness(rows: readonly VpsSshKeyRow[]): VpsSshKeyRow[] {
+  const newest = new Map<string, VpsSshKeyRow>();
+  for (const row of rows) {
+    const current = newest.get(row.business_id);
+    if (!current || createdAtMs(row) > createdAtMs(current)) {
+      newest.set(row.business_id, row);
+    }
+  }
+  return [...newest.values()].sort((a, b) => a.business_id.localeCompare(b.business_id));
+}
+
+/** `created_at` as epoch ms; -Infinity when unparseable, so it sorts last. */
+function createdAtMs(row: VpsSshKeyRow): number {
+  const ms = Date.parse(row.created_at);
+  return Number.isNaN(ms) ? -Infinity : ms;
+}

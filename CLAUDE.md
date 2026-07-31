@@ -112,15 +112,16 @@ The full flow, for every code change, however small:
    | Changed subtree | Script |
    | --- | --- |
    | `vps/chat-worker/` | `tsx debug/update-all-vps.ts` (whole fleet) |
-   | `vps/voice-bridge/` | `tsx debug/redeploy-voice-bridge.ts --business-id <uuid>` (one tenant) |
+   | `vps/voice-bridge/` | `tsx debug/redeploy-voice-bridge.ts --all` (whole fleet) |
    | `vps/aiflow-render/` | `tsx debug/redeploy-aiflow-render.ts --business-id <uuid>` (one tenant) |
 
-   Only the chat-worker has a fleet-wide script. For the other two, loop over
-   the tenants: `getActiveVpsSshKeyForBusiness` resolves each business's
-   current box, so one run per distinct `business_id` in `vps_ssh_keys`
-   (unrotated) covers the fleet. Verify each box after its own redeploy with
-   `tsx debug/box-verify.ts <businessId>`, and check `voice_active_sessions`
-   for calls in flight first: a voice-bridge rebuild drops them.
+   Only aiflow-render still lacks a fleet sweep: loop it one run per distinct
+   unrotated `business_id` in `vps_ssh_keys`, and check `voice_active_sessions`
+   for calls in flight first, since recreating a container drops them.
+   `redeploy-voice-bridge.ts --all` does both of those for you (it skips a
+   tenant that is mid-call and exits non-zero, so a skip never reads as done).
+   Dry-run any sweep first, and verify boxes with
+   `tsx debug/box-verify.ts <businessId>`.
 7. **Remove the worktree. Mandatory.** Kill anything running out of it,
    re-anchor your shell to `/Users/brianlane/newCoworker` FIRST, then
    `git worktree remove`, `git worktree prune`, and delete the branch. A shell
