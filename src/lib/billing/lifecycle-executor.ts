@@ -350,9 +350,10 @@ async function runStripeOp(op: StripeOp, stripe: Stripe, result: ExecutorResult)
       }
       // Always void membership pack grants for this New Coworker refund op,
       // even when carve-outs leave $0 to refund (no charge.refunded webhook).
-      const clawbackPacksForNcRefund = async (
-        amounts?: { originalAmountCents: number; refundedAmountCents: number }
-      ) => {
+      // Only the zero-refund paths call this: no charge.refunded webhook
+      // fires for them, so nothing else would ever void the grants. A real
+      // refund is handled once by that webhook, from charge.amount_refunded.
+      const clawbackPacksForNcRefund = async () => {
         try {
           const { clawbackMembershipPackGrantsForInvoice } = await import(
             "@/lib/billing/usage-pack-clawback"
@@ -360,11 +361,9 @@ async function runStripeOp(op: StripeOp, stripe: Stripe, result: ExecutorResult)
           await clawbackMembershipPackGrantsForInvoice({
             invoiceId: latestInvoiceId,
             reason: op.reason === "admin_force" ? "admin" : "refund",
-            subscriptionMetadata: sub.metadata,
-            // Only a real refund prorates. The zero-refund paths below pass
-            // nothing, which keeps their existing full-void behavior.
-            originalAmountCents: amounts?.originalAmountCents ?? null,
-            refundedAmountCents: amounts?.refundedAmountCents ?? null
+            subscriptionMetadata: sub.metadata
+            // No amounts: nothing was refunded, so this stays a full void,
+            // which is the documented behavior for these paths.
           });
         } catch (err) {
           logger.error("refund_latest_charge: pack clawback failed", {
@@ -452,16 +451,15 @@ async function runStripeOp(op: StripeOp, stripe: Stripe, result: ExecutorResult)
         stripeChargeId: chargeId,
         amountCents: refundCents
       };
-      // Pack line cents on this invoice are included in the refunded dollars
-      // (no pack carve-out). Void matching membership pack grants so the
-      // customer does not keep credits after a New Coworker refund, in
-      // PROPORTION to what actually came back: term and usage carve-outs
-      // routinely refund only part of the invoice, and voiding every
-      // remaining credit there takes value the customer was not refunded for.
-      await clawbackPacksForNcRefund({
-        originalAmountCents: amountPaidCents,
-        refundedAmountCents: refundCents
-      });
+      // Deliberately NO clawback here. This refund carries
+      // newcoworker_reason metadata, so Stripe's charge.refunded webhook
+      // fires and claws back once, from charge.amount_refunded.
+      //
+      // Doing it here as well would DOUBLE-DEDUCT: a partial clawback does
+      // not set voided_at, so the "already_voided" guard that makes full
+      // voids idempotent does not apply, and the second call subtracts the
+      // same units again. The zero-refund paths above still claw back
+      // directly, precisely because no charge.refunded webhook fires there.
       return;
     }
   }

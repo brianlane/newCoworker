@@ -207,7 +207,15 @@ describe("executeLifecyclePlan refund handling", () => {
     );
   });
 
-  it("claws back membership pack grants after a New Coworker refund", async () => {
+  /**
+   * The refund carries newcoworker_reason metadata, so Stripe's
+   * charge.refunded webhook fires and claws back once from
+   * charge.amount_refunded. Doing it here as well would DOUBLE-DEDUCT: a
+   * partial clawback does not set voided_at, so the "already_voided" guard
+   * that makes full voids idempotent does not apply and the second call
+   * subtracts the same units again.
+   */
+  it("leaves the pack clawback to the charge.refunded webhook", async () => {
     const stripe = {
       subscriptions: {
         retrieve: vi.fn().mockResolvedValue({
@@ -240,16 +248,16 @@ describe("executeLifecyclePlan refund handling", () => {
       { stripe: stripe as unknown as ExecutorDeps["stripe"], sendEmail: sendOwnerEmailMock }
     );
 
-    expect(rpc).toHaveBeenCalledWith(
+    expect(rpc).not.toHaveBeenCalledWith(
       "void_voice_bonus_grant_by_checkout_session",
-      expect.objectContaining({
-        p_checkout_session_id: "inv_in_pack:voice:min_30",
-        p_reason: "refund"
-      })
+      expect.anything()
     );
   });
 
-  it("claws back packs with admin reason on admin_force refunds", async () => {
+  // Carve-outs consume the whole invoice, so nothing is refunded and no
+  // charge.refunded webhook fires. That is exactly the case the op-side
+  // clawback still exists for.
+  it("claws back packs with admin reason when carve-outs leave nothing to refund", async () => {
     const stripe = {
       subscriptions: {
         retrieve: vi.fn().mockResolvedValue({
@@ -280,7 +288,7 @@ describe("executeLifecyclePlan refund handling", () => {
       type: "refund_latest_charge",
       stripeSubscriptionId: "sub_123",
       reason: "admin_force",
-      termCarveOutCents: 0,
+      termCarveOutCents: 2500,
       usageCarveOutCents: 0
     };
 
@@ -299,7 +307,7 @@ describe("executeLifecyclePlan refund handling", () => {
     );
   });
 
-  it("logs when pack clawback throws after a successful refund", async () => {
+  it("logs when pack clawback throws on a zero-refund path", async () => {
     const { logger } = await import("@/lib/logger");
     const stripe = {
       subscriptions: {
@@ -324,13 +332,22 @@ describe("executeLifecyclePlan refund handling", () => {
       auth: { admin: { deleteUser: vi.fn().mockResolvedValue({ error: null }) } }
     });
 
+    const boomPlan = refundPlan();
+    boomPlan.stripeOps[0] = {
+      type: "refund_latest_charge",
+      stripeSubscriptionId: "sub_123",
+      reason: "thirty_day_money_back",
+      termCarveOutCents: 2500,
+      usageCarveOutCents: 0
+    };
+
     await executeLifecyclePlan(
-      refundPlan(),
+      boomPlan,
       { businessId: "biz_1", vpsHost: null, customerProfileId: "prof_1" },
       { stripe: stripe as unknown as ExecutorDeps["stripe"], sendEmail: sendOwnerEmailMock }
     );
 
-    expect(stripe.refunds.create).toHaveBeenCalled();
+    expect(stripe.refunds.create).not.toHaveBeenCalled();
     expect(logger.error).toHaveBeenCalledWith(
       "refund_latest_charge: pack clawback failed",
       expect.objectContaining({ invoiceId: "in_boom", error: "string db down" })
