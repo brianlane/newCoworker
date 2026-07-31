@@ -12,7 +12,11 @@ import { recordPromotionRedemption } from "@/lib/db/promotions";
 import { successResponse, errorResponse } from "@/lib/api-response";
 import { logger } from "@/lib/logger";
 import type Stripe from "stripe";
-import { planLifecycleAction, GRACE_WINDOW_MS } from "@/lib/billing/lifecycle";
+import {
+  planLifecycleAction,
+  planEnableHostingerAutoRenewOps,
+  GRACE_WINDOW_MS
+} from "@/lib/billing/lifecycle";
 import {
   executeLifecyclePlan,
   executeLifecyclePlanFastPhase,
@@ -438,6 +442,8 @@ export async function POST(request: Request) {
           // rides along for the same reason, and so an auto-resume Stripe
           // performs on its own (pause_collection.resumes_at elapsing) is
           // reflected without an operator touching the admin page.
+          const wasCancelling =
+            (existing as { cancel_at_period_end?: boolean | null }).cancel_at_period_end === true;
           await updateSubscription(existing.id, {
             status,
             stripe_subscription_id: sub.id,
@@ -445,6 +451,56 @@ export async function POST(request: Request) {
             ...pauseStateFromStripeSubscription(sub),
             ...stripeSubscriptionPeriodCache(sub)
           });
+
+          // Undo-cancel through the Stripe customer portal lands here rather
+          // than on /api/billing/reactivate, which re-enables Hostinger
+          // auto-renew as part of its undoPeriodEnd plan. Mirroring the flag
+          // alone left the box with renewal OFF, and billing-posture excludes
+          // cancel_at_period_end tenants from its heal, so it only recovered
+          // on the next daily run: a customer who undoes on their Hostinger
+          // renewal day could lose the box.
+          //
+          // Hostinger ops only. Stripe and the DB are already where they need
+          // to be (the portal did the former, the mirror above the latter), and
+          // planning through planLifecycleAction keeps the never_renew and
+          // non-Hostinger-provider guards rather than re-deriving them here.
+          if (wasCancelling && !sub.cancel_at_period_end) {
+            after(async () => {
+              try {
+                const ctxRes = await loadLifecycleContextForBusiness(existing.business_id);
+                if (!ctxRes.ok) return;
+                // Deliberately NOT planLifecycleAction("undoPeriodEnd"): the
+                // mirror above already cleared cancel_at_period_end, and that
+                // planner refuses once the flag is false, so it would silently
+                // no-op here. The shared helper is the same guard body it uses.
+                const hostingerOps = planEnableHostingerAutoRenewOps(ctxRes.context);
+                if (hostingerOps.length === 0) return;
+                await executeLifecyclePlan(
+                  {
+                    stripeOps: [],
+                    dbUpdates: [],
+                    sshOps: [],
+                    telnyxOps: [],
+                    emailsToSend: [],
+                    hostingerOps
+                  },
+                  {
+                    businessId: existing.business_id,
+                    vpsHost: ctxRes.vpsHost,
+                    customerProfileId: ctxRes.context.subscription.customer_profile_id
+                  }
+                );
+              } catch (err) {
+                // Best-effort: the daily billing-posture heal is still the
+                // backstop, this just closes the up-to-24h window.
+                logger.warn("portal undo-cancel: Hostinger auto-renew re-enable failed", {
+                  businessId: existing.business_id,
+                  eventId: event.id,
+                  error: err instanceof Error ? err.message : String(err)
+                });
+              }
+            });
+          }
         } else {
           logger.info("customer.subscription mirror skipped: no local subscription row for Stripe sub", {
             stripeSubscriptionId: sub.id,

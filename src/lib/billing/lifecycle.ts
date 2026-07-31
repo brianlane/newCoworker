@@ -519,6 +519,45 @@ function planCancelAtPeriodEnd(ctx: LifecycleContext): LifecyclePlanResult {
   };
 }
 
+/**
+ * Hostinger ops that turn a still-paying tenant's box back on.
+ *
+ * Shared by the `undoPeriodEnd` plan and by the Stripe webhook's
+ * customer-portal undo, which cannot use that plan: the webhook mirrors
+ * `cancel_at_period_end` to false first, and the planner refuses once the flag
+ * is already cleared. Sharing the body keeps one copy of the guards rather
+ * than letting the webhook re-derive them.
+ *
+ * Sunk-cost `never_renew` boxes stay non-renewing even after an undo, which is
+ * the same flag `adoptVps` and the billing-posture heal honor.
+ */
+export function planEnableHostingerAutoRenewOps(ctx: LifecycleContext): HostingerOp[] {
+  const { subscription: sub } = ctx;
+  const hostingerManaged = providerUsesHostingerLifecycle(
+    resolveVpsProvider(ctx.vpsProvider)
+  );
+  if (
+    // Only a still-paying tenant gets their box back. planUndoCancelAtPeriodEnd
+    // checks this before calling in, but the webhook's portal-undo path does
+    // not go through that planner: without this, a
+    // customer.subscription.updated carrying canceled status and a cleared
+    // flag (a failed periodEndReached fallback) would re-enable renewal on a
+    // box we are tearing down.
+    sub.status !== "active" ||
+    !hostingerManaged ||
+    !sub.hostinger_billing_subscription_id ||
+    ctx.vpsNeverRenew === true
+  ) {
+    return [];
+  }
+  return [
+    {
+      type: "enable_billing_auto_renewal",
+      hostingerBillingSubscriptionId: sub.hostinger_billing_subscription_id
+    }
+  ];
+}
+
 function planUndoCancelAtPeriodEnd(ctx: LifecycleContext): LifecyclePlanResult {
   const { subscription: sub } = ctx;
   /* v8 ignore next -- tests use explicit clocks; runtime default is a deterministic fallback. */
@@ -534,23 +573,7 @@ function planUndoCancelAtPeriodEnd(ctx: LifecycleContext): LifecyclePlanResult {
     return { ok: false, reason: "no_stripe_subscription" };
   }
 
-  // Re-enable Hostinger auto-renewal so the still-paying tenant's box keeps
-  // living — except sunk-cost `never_renew` boxes, which must stay
-  // non-renewing even after undo (posture / adopt honor the same flag).
-  const hostingerOps: HostingerOp[] = [];
-  const hostingerManaged = providerUsesHostingerLifecycle(
-    resolveVpsProvider(ctx.vpsProvider)
-  );
-  if (
-    hostingerManaged &&
-    sub.hostinger_billing_subscription_id &&
-    ctx.vpsNeverRenew !== true
-  ) {
-    hostingerOps.push({
-      type: "enable_billing_auto_renewal",
-      hostingerBillingSubscriptionId: sub.hostinger_billing_subscription_id
-    });
-  }
+  const hostingerOps = planEnableHostingerAutoRenewOps(ctx);
 
   return {
     ok: true,
