@@ -206,11 +206,12 @@ export default function ZoomReviewTestPlanPage() {
               documents.
             </p>
             <p>
-              The development app&apos;s event subscription posts to the same endpoint,{" "}
+              The development client&apos;s event subscription posts to the same endpoint,{" "}
               <code className="text-xs text-claw-green">{SITE_URL}/api/webhooks/zoom</code>
-              . Each client signs with its own Secret Token, and the verified signature decides
-              which connections a delivery may touch, so a development delivery can never reach a
-              production tenant.
+              , and every delivery is verified with the app&apos;s Secret Token. Deauthorization
+              events are scoped to the client named in the event payload, and transcript imports
+              are de-duplicated per business, so deliveries for this review cannot disturb
+              production customers.
             </p>
           </Step>
 

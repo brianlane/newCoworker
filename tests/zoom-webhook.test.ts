@@ -431,20 +431,56 @@ describe("processZoomWebhookEvent", () => {
   // The client env is what keeps the two apps from reaching into each
   // other's tenants, so it has to reach BOTH routing lookups, not just the
   // url_validation reply.
-  it("scopes both tenant lookups to the client that signed the delivery", async () => {
-    const deauth = makeDeps({
-      deauthBusinessIdsByZoomUserId: vi.fn().mockResolvedValue([])
-    });
+  // The Secret Token is app-level, so the signature-matched env is NOT an
+  // attribution. Deauthorization scopes by the payload's client_id, and
+  // transcript routing is env-agnostic (the import ledger absorbs the
+  // dev+prod double delivery).
+  it("scopes the deauth wipe by the payload's client_id, not the signature", async () => {
+    vi.stubEnv("ZOOM_CLIENT_ID", "prod-client-id");
+    vi.stubEnv("ZOOM_DEV_CLIENT_ID", "dev-client-id");
+
+    const dev = makeDeps({ deauthBusinessIdsByZoomUserId: vi.fn().mockResolvedValue([]) });
+    await processZoomWebhookEvent(
+      { event: "app_deauthorized", payload: { user_id: HOST, client_id: "dev-client-id" } },
+      "production",
+      dev
+    );
+    expect(dev.deauthBusinessIdsByZoomUserId).toHaveBeenCalledWith(HOST, "development");
+
+    const prod = makeDeps({ deauthBusinessIdsByZoomUserId: vi.fn().mockResolvedValue([]) });
+    await processZoomWebhookEvent(
+      { event: "app_deauthorized", payload: { user_id: HOST, client_id: "prod-client-id" } },
+      "production",
+      prod
+    );
+    expect(prod.deauthBusinessIdsByZoomUserId).toHaveBeenCalledWith(HOST, "production");
+  });
+
+  it("falls back to wiping both clients when client_id is missing or unknown", async () => {
+    vi.stubEnv("ZOOM_CLIENT_ID", "prod-client-id");
+    vi.stubEnv("ZOOM_DEV_CLIENT_ID", "dev-client-id");
+
+    const missing = makeDeps({ deauthBusinessIdsByZoomUserId: vi.fn().mockResolvedValue([]) });
     await processZoomWebhookEvent(
       { event: "app_deauthorized", payload: { user_id: HOST } },
-      "development",
-      deauth
+      "production",
+      missing
     );
-    expect(deauth.deauthBusinessIdsByZoomUserId).toHaveBeenCalledWith(HOST, "development");
+    expect(missing.deauthBusinessIdsByZoomUserId).toHaveBeenCalledWith(HOST, null);
 
+    const unknown = makeDeps({ deauthBusinessIdsByZoomUserId: vi.fn().mockResolvedValue([]) });
+    await processZoomWebhookEvent(
+      { event: "app_deauthorized", payload: { user_id: HOST, client_id: "who-is-this" } },
+      "production",
+      unknown
+    );
+    expect(unknown.deauthBusinessIdsByZoomUserId).toHaveBeenCalledWith(HOST, null);
+  });
+
+  it("routes transcripts by host id alone (env-agnostic)", async () => {
     const transcript = makeDeps({ connectionsByZoomUserId: vi.fn().mockResolvedValue([]) });
     await processZoomWebhookEvent(transcriptBody({}), "development", transcript);
-    expect(transcript.connectionsByZoomUserId).toHaveBeenCalledWith(HOST, "development");
+    expect(transcript.connectionsByZoomUserId).toHaveBeenCalledWith(HOST);
   });
 
   it("deauthorizes every business behind the Zoom user, active or not", async () => {

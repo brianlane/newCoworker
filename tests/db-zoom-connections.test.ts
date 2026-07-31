@@ -429,35 +429,40 @@ describe("getActiveZoomConnectionSummariesByZoomUserId", () => {
       { business_id: "other-biz", auto_import_transcripts: false }
     ];
     const c = chain({ data: rows, error: null });
-    const summaries = await getActiveZoomConnectionSummariesByZoomUserId("zu-1", "production", makeDb(c));
+    const summaries = await getActiveZoomConnectionSummariesByZoomUserId("zu-1", makeDb(c));
     expect(summaries).toEqual(rows);
     expect(c.eq).toHaveBeenCalledWith("zoom_user_id", "zu-1");
     expect(c.eq).toHaveBeenCalledWith("is_active", true);
-    expect(c.eq).toHaveBeenCalledWith("oauth_client_env", "production");
   });
 
-  it("routes a development delivery only to development connections", async () => {
+  // Transcript routing must reach a host's rows under EITHER client: the
+  // app-level Secret Token cannot attribute a delivery, so filtering here
+  // would strand whichever env didn't match the guess.
+  it("does not filter by oauth_client_env", async () => {
     const c = chain({ data: [], error: null });
-    await getActiveZoomConnectionSummariesByZoomUserId("zu-1", "development", makeDb(c));
-    expect(c.eq).toHaveBeenCalledWith("oauth_client_env", "development");
+    await getActiveZoomConnectionSummariesByZoomUserId("zu-1", makeDb(c));
+    const filtered = c.eq.mock.calls.some(
+      (call: unknown[]) => call[0] === "oauth_client_env"
+    );
+    expect(filtered).toBe(false);
   });
 
   it("returns an empty list when no active connection matches", async () => {
     const c = chain({ data: null, error: null });
-    expect(await getActiveZoomConnectionSummariesByZoomUserId("zu-x", "production", makeDb(c))).toEqual([]);
+    expect(await getActiveZoomConnectionSummariesByZoomUserId("zu-x", makeDb(c))).toEqual([]);
   });
 
   it("throws on a query error", async () => {
     const c = chain({ data: null, error: { message: "lookup boom" } });
     await expect(
-      getActiveZoomConnectionSummariesByZoomUserId("zu-1", "production", makeDb(c))
+      getActiveZoomConnectionSummariesByZoomUserId("zu-1", makeDb(c))
     ).rejects.toThrow(/lookup boom/);
   });
 
   it("uses the default service client when none is provided", async () => {
     const c = chain({ data: [], error: null });
     defaultClientSpy.mockReturnValue(makeDb(c));
-    expect(await getActiveZoomConnectionSummariesByZoomUserId("zu-1", "production")).toEqual([]);
+    expect(await getActiveZoomConnectionSummariesByZoomUserId("zu-1")).toEqual([]);
     expect(defaultClientSpy).toHaveBeenCalled();
   });
 });
@@ -476,13 +481,25 @@ describe("getZoomConnectionBusinessIdsByZoomUserId", () => {
     expect(c.eq).not.toHaveBeenCalledWith("is_active", true);
   });
 
-  // Load-bearing: without this filter a deauthorization from the DEVELOPMENT
-  // app would wipe the token pair of a production tenant whose owner uses the
-  // same Zoom account, taking their scheduling down silently.
-  it("scopes the deauth wipe to the client that sent the event", async () => {
+  // Load-bearing: without this filter a deauthorization of the DEVELOPMENT
+  // client would wipe the token pair of a production tenant whose owner uses
+  // the same Zoom account, taking their scheduling down silently.
+  it("scopes the deauth wipe to the client named by the payload", async () => {
     const c = chain({ data: [], error: null });
     await getZoomConnectionBusinessIdsByZoomUserId("zu-1", "development", makeDb(c));
     expect(c.eq).toHaveBeenCalledWith("oauth_client_env", "development");
+  });
+
+  // null = the payload's client id was missing or unrecognized: fall back to
+  // wiping across both clients rather than guessing one and leaving the
+  // other's dead ciphertext stored.
+  it("reaches both clients when the env is null", async () => {
+    const c = chain({ data: [], error: null });
+    await getZoomConnectionBusinessIdsByZoomUserId("zu-1", null, makeDb(c));
+    const filtered = c.eq.mock.calls.some(
+      (call: unknown[]) => call[0] === "oauth_client_env"
+    );
+    expect(filtered).toBe(false);
   });
 
   it("returns an empty list when nothing matches", async () => {
