@@ -71,6 +71,12 @@ export const RATE_LIMITS = {
   AUTH: { interval: 15 * 60 * 1000, maxRequests: 5 },
   API: { interval: 60 * 1000, maxRequests: 60 },
   WEBHOOK: { interval: 60 * 1000, maxRequests: 100 },
+  // CSP violation reports need their own budget rather than sharing API's.
+  // A strict report-only policy makes the browser post one report per blocked
+  // directive per page view, which would otherwise burn a real user's 60/min
+  // API allowance and start 429ing their actual dashboard calls. Sized to
+  // absorb a normal page's worth of reports and no more.
+  CSP_REPORT: { interval: 60 * 1000, maxRequests: 30 },
 } as const;
 
 /**
