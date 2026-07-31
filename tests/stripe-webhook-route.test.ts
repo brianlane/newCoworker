@@ -1984,7 +1984,9 @@ describe("stripe webhook route", () => {
       ok: true,
       vpsHost: "1.2.3.4",
       context: {
-        subscription: existing,
+        // Faithful to production: loadLifecycleContextForBusiness re-reads the
+        // row AFTER the mirror above cleared cancel_at_period_end.
+        subscription: { ...existing, cancel_at_period_end: false },
         ownerEmail: "owner@example.com",
         ownerAuthUserId: "user-1",
         profile: null,
@@ -2032,6 +2034,58 @@ describe("stripe webhook route", () => {
       }),
       expect.anything()
     );
+  });
+
+  // Sunk-cost hardware must lapse even when the tenant stays. Same flag
+  // adoptVps and the billing-posture heal honor.
+  it("leaves a never_renew box non-renewing on a portal undo", async () => {
+    const existing = {
+      id: "local_sub_nr",
+      status: "active",
+      business_id: "biz_nr",
+      stripe_subscription_id: "sub_nr",
+      cancel_at_period_end: true,
+      hostinger_billing_subscription_id: "hbs_nr"
+    };
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue(existing as never);
+    mockLoadLifecycleContext.mockResolvedValue({
+      ok: true,
+      vpsHost: "1.2.3.4",
+      context: {
+        subscription: { ...existing, cancel_at_period_end: false },
+        ownerEmail: "owner@example.com",
+        ownerAuthUserId: "user-1",
+        profile: null,
+        virtualMachineId: 42,
+        vpsHost: "1.2.3.4",
+        vpsProvider: "hostinger",
+        vpsNeverRenew: true,
+        now: new Date("2026-05-01T00:00:00.000Z")
+      }
+    });
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_portal_undo_nr",
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "sub_nr",
+          status: "active",
+          cancel_at_period_end: false,
+          metadata: { businessId: "biz_nr" }
+        }
+      }
+    } as never);
+
+    await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+    await Promise.all(afterCallbacks.map((cb) => cb()));
+
+    expect(mockExecuteLifecyclePlan).not.toHaveBeenCalled();
   });
 
   it("mirrors subscription updates onto the row matching the Stripe subscription id", async () => {

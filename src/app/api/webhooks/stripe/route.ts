@@ -12,7 +12,11 @@ import { recordPromotionRedemption } from "@/lib/db/promotions";
 import { successResponse, errorResponse } from "@/lib/api-response";
 import { logger } from "@/lib/logger";
 import type Stripe from "stripe";
-import { planLifecycleAction, GRACE_WINDOW_MS } from "@/lib/billing/lifecycle";
+import {
+  planLifecycleAction,
+  planEnableHostingerAutoRenewOps,
+  GRACE_WINDOW_MS
+} from "@/lib/billing/lifecycle";
 import {
   executeLifecyclePlan,
   executeLifecyclePlanFastPhase,
@@ -465,18 +469,20 @@ export async function POST(request: Request) {
               try {
                 const ctxRes = await loadLifecycleContextForBusiness(existing.business_id);
                 if (!ctxRes.ok) return;
-                const planRes = planLifecycleAction(
-                  { type: "reactivate", mode: "undoPeriodEnd" },
-                  ctxRes.context
-                );
-                if (!planRes.ok) return;
+                // Deliberately NOT planLifecycleAction("undoPeriodEnd"): the
+                // mirror above already cleared cancel_at_period_end, and that
+                // planner refuses once the flag is false, so it would silently
+                // no-op here. The shared helper is the same guard body it uses.
+                const hostingerOps = planEnableHostingerAutoRenewOps(ctxRes.context);
+                if (hostingerOps.length === 0) return;
                 await executeLifecyclePlan(
                   {
-                    ...planRes.plan,
                     stripeOps: [],
                     dbUpdates: [],
                     sshOps: [],
-                    telnyxOps: []
+                    telnyxOps: [],
+                    emailsToSend: [],
+                    hostingerOps
                   },
                   {
                     businessId: existing.business_id,
