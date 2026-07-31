@@ -52,4 +52,28 @@ describe("logger", () => {
     logger.info("no context");
     expect(consoleLogSpy).toHaveBeenCalledOnce();
   });
+
+  // CASA 6.5.1
+  it("redacts secrets out of the context before writing the line", () => {
+    logger.info("sign-in", { email: "a@b.com", password: "hunter2" });
+    const raw = consoleLogSpy.mock.calls[0][0] as string;
+    expect(raw).not.toContain("hunter2");
+    const parsed = JSON.parse(raw);
+    expect(parsed.password).toBe("[redacted]");
+    expect(parsed.email).toBe("a@b.com");
+  });
+
+  it("redacts nested secrets too", () => {
+    logger.error("stripe webhook", { event: { id: "evt_1", apiKey: "sk_live_x" } });
+    const raw = consoleErrorSpy.mock.calls[0][0] as string;
+    expect(raw).not.toContain("sk_live_x");
+    expect(JSON.parse(raw).event).toEqual({ id: "evt_1", apiKey: "[redacted]" });
+  });
+
+  it("does not let a context key forge the log's own fields", () => {
+    logger.info("real message", { message: "spoofed", level: "debug" });
+    const parsed = JSON.parse(consoleLogSpy.mock.calls[0][0] as string);
+    expect(parsed.message).toBe("real message");
+    expect(parsed.level).toBe("info");
+  });
 });

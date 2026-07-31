@@ -1,12 +1,17 @@
+import { redactContext } from "@/lib/log-redaction";
+
 type Level = "debug" | "info" | "warn" | "error";
 type Context = Record<string, unknown>;
 
 function log(level: Level, message: string, context?: Context): void {
+  // CASA 6.5.1: scrub here rather than trusting every call site. `level`,
+  // `message` and `timestamp` are written after the spread so a context key
+  // called "level" cannot forge the log's own shape.
   const entry = JSON.stringify({
+    ...(context ? redactContext(context) : {}),
     level,
     message,
-    timestamp: new Date().toISOString(),
-    ...context
+    timestamp: new Date().toISOString()
   });
 
   if (level === "error" || level === "warn") {
