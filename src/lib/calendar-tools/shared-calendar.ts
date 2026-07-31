@@ -5,6 +5,13 @@
  * team can see — created lazily via the existing Nango proxy (no new auth),
  * with its id persisted in workspace_oauth_connections.metadata:
  *
+ * The HOST is resolved independently of who takes the bookings
+ * (`resolveSharedCalendarHost`, not `resolveCalendarConnection`). A merchant
+ * who books on Vagaro but runs on Google Workspace used to get no team
+ * calendar at all, because the booking provider won resolution and then
+ * failed the Google/Microsoft check. The calendar is a place to SHOW the team
+ * what is booked, so any connected Google/Microsoft account will do.
+ *
  *   metadata.shared_calendar_id   — provider calendar id
  *   metadata.shared_calendar_acl  — emails already granted read access
  *
@@ -25,9 +32,8 @@ import {
   upsertWorkspaceOAuthConnection
 } from "@/lib/db/workspace-oauth-connections";
 import {
-  isWorkspaceCalendarProvider,
-  resolveCalendarConnection,
-  type ResolvedVoiceConnection
+  resolveSharedCalendarHost,
+  type ResolvedCalendarHost
 } from "@/lib/voice-tools/connections";
 import { listTeamMembers } from "@/lib/db/employees";
 import { logger } from "@/lib/logger";
@@ -36,7 +42,7 @@ export const SHARED_CALENDAR_NAME = "NewCoworker";
 
 export type SharedCalendarInfo = {
   calendarId: string;
-  conn: ResolvedVoiceConnection;
+  conn: ResolvedCalendarHost;
 };
 
 export type SharedCalendarStatus = {
@@ -60,7 +66,7 @@ type ConnectionMeta = {
 /** Read shared-calendar state stored on the connection row's metadata. */
 async function readConnectionMeta(
   businessId: string,
-  conn: ResolvedVoiceConnection
+  conn: ResolvedCalendarHost
 ): Promise<ConnectionMeta> {
   const rows = await listWorkspaceOAuthConnections(businessId);
   const row = rows.find(
@@ -82,7 +88,7 @@ async function readConnectionMeta(
 
 async function writeConnectionMeta(
   businessId: string,
-  conn: ResolvedVoiceConnection,
+  conn: ResolvedCalendarHost,
   metadata: Record<string, unknown>
 ): Promise<void> {
   await upsertWorkspaceOAuthConnection({
@@ -100,10 +106,8 @@ async function writeConnectionMeta(
  */
 export async function getSharedCalendar(businessId: string): Promise<SharedCalendarInfo | null> {
   try {
-    const conn = await resolveCalendarConnection(businessId);
-    // The shared-calendar concept only exists for Google/Microsoft
-    // connections — Calendly/Vagaro have no calendar-create API.
-    if (!conn || !isWorkspaceCalendarProvider(conn.provider)) return null;
+    const conn = await resolveSharedCalendarHost(businessId);
+    if (!conn) return null;
     const meta = await readConnectionMeta(businessId, conn);
     return meta.calendarId ? { calendarId: meta.calendarId, conn } : null;
   } catch (err) {
@@ -124,8 +128,8 @@ export async function ensureSharedCalendar(
   businessId: string
 ): Promise<SharedCalendarInfo | null> {
   try {
-    const conn = await resolveCalendarConnection(businessId);
-    if (!conn || !isWorkspaceCalendarProvider(conn.provider)) return null;
+    const conn = await resolveSharedCalendarHost(businessId);
+    if (!conn) return null;
     const meta = await readConnectionMeta(businessId, conn);
     if (meta.calendarId) return { calendarId: meta.calendarId, conn };
 
@@ -178,7 +182,7 @@ export async function ensureSharedCalendar(
 /** Best-effort delete of a just-created duplicate calendar (race loser). */
 async function deleteProviderCalendar(
   businessId: string,
-  conn: ResolvedVoiceConnection,
+  conn: ResolvedCalendarHost,
   calendarId: string
 ): Promise<void> {
   try {
@@ -200,10 +204,8 @@ async function deleteProviderCalendar(
 /** Current share status for the Employees page ("shared with N employees"). */
 export async function sharedCalendarStatus(businessId: string): Promise<SharedCalendarStatus> {
   try {
-    const conn = await resolveCalendarConnection(businessId);
-    if (!conn || !isWorkspaceCalendarProvider(conn.provider)) {
-      return { calendarId: null, sharedWith: [] };
-    }
+    const conn = await resolveSharedCalendarHost(businessId);
+    if (!conn) return { calendarId: null, sharedWith: [] };
     const meta = await readConnectionMeta(businessId, conn);
     return { calendarId: meta.calendarId, sharedWith: meta.acl };
   } catch (err) {

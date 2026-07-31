@@ -12,9 +12,7 @@ vi.mock("@/lib/db/workspace-oauth-connections", () => ({
   upsertWorkspaceOAuthConnection: vi.fn()
 }));
 vi.mock("@/lib/voice-tools/connections", () => ({
-  resolveCalendarConnection: vi.fn(),
-  // Pure helper — real behavior inline so the guards under test stay honest.
-  isWorkspaceCalendarProvider: (p: string) => p === "google" || p === "microsoft"
+  resolveSharedCalendarHost: vi.fn()
 }));
 vi.mock("@/lib/db/employees", () => ({ listTeamMembers: vi.fn() }));
 
@@ -32,7 +30,7 @@ import {
   listWorkspaceOAuthConnections,
   upsertWorkspaceOAuthConnection
 } from "@/lib/db/workspace-oauth-connections";
-import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
+import { resolveSharedCalendarHost } from "@/lib/voice-tools/connections";
 import { listTeamMembers } from "@/lib/db/employees";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -47,12 +45,6 @@ const MS_CONN = {
   connectionId: "conn-2",
   providerConfigKey: "outlook-calendar"
 } as never;
-const CALENDLY_CONN = {
-  provider: "calendly",
-  connectionId: "conn-3",
-  providerConfigKey: "calendly"
-} as never;
-
 function connRow(overrides: Record<string, unknown> = {}) {
   return {
     id: "row-1",
@@ -84,7 +76,7 @@ function member(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  vi.mocked(resolveCalendarConnection).mockResolvedValue(GOOGLE_CONN);
+  vi.mocked(resolveSharedCalendarHost).mockResolvedValue(GOOGLE_CONN);
   vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([connRow()]);
   vi.mocked(upsertWorkspaceOAuthConnection).mockResolvedValue(connRow());
   vi.mocked(listTeamMembers).mockResolvedValue([]);
@@ -101,12 +93,12 @@ describe("nextDayIsoDate", () => {
 
 describe("getSharedCalendar", () => {
   it("returns null when no calendar connection exists", async () => {
-    vi.mocked(resolveCalendarConnection).mockResolvedValue(null as never);
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(null as never);
     expect(await getSharedCalendar(BIZ)).toBeNull();
   });
 
   it("returns null for a Calendly connection (no shared-calendar concept)", async () => {
-    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALENDLY_CONN);
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(null as never);
     expect(await getSharedCalendar(BIZ)).toBeNull();
     expect(listWorkspaceOAuthConnections).not.toHaveBeenCalled();
   });
@@ -155,13 +147,13 @@ describe("getSharedCalendar", () => {
 
 describe("ensureSharedCalendar", () => {
   it("returns null when no calendar connection exists", async () => {
-    vi.mocked(resolveCalendarConnection).mockResolvedValue(null as never);
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(null as never);
     expect(await ensureSharedCalendar(BIZ)).toBeNull();
     expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
   });
 
   it("returns null for a Calendly connection without creating anything", async () => {
-    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALENDLY_CONN);
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(null as never);
     expect(await ensureSharedCalendar(BIZ)).toBeNull();
     expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
   });
@@ -198,7 +190,7 @@ describe("ensureSharedCalendar", () => {
   });
 
   it("creates a Microsoft calendar via the Graph endpoint", async () => {
-    vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(MS_CONN);
     vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
       connRow({ provider_config_key: "outlook-calendar", connection_id: "conn-2" })
     ]);
@@ -222,7 +214,7 @@ describe("ensureSharedCalendar", () => {
     vi.mocked(nangoProxyForBusiness).mockResolvedValue(null as never);
     expect(await ensureSharedCalendar(BIZ)).toBeNull();
 
-    vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(MS_CONN);
     vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
       connRow({ provider_config_key: "outlook-calendar", connection_id: "conn-2" })
     ]);
@@ -256,7 +248,7 @@ describe("ensureSharedCalendar", () => {
   });
 
   it("race loser: deletes the Microsoft duplicate via the Graph endpoint", async () => {
-    vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(MS_CONN);
     vi.mocked(listWorkspaceOAuthConnections)
       .mockResolvedValueOnce([
         connRow({ provider_config_key: "outlook-calendar", connection_id: "conn-2" })
@@ -313,12 +305,12 @@ describe("ensureSharedCalendar", () => {
 
 describe("sharedCalendarStatus", () => {
   it("reports not-connected as null with an empty share list", async () => {
-    vi.mocked(resolveCalendarConnection).mockResolvedValue(null as never);
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(null as never);
     expect(await sharedCalendarStatus(BIZ)).toEqual({ calendarId: null, sharedWith: [] });
   });
 
   it("reports a Calendly connection as having no shared calendar", async () => {
-    vi.mocked(resolveCalendarConnection).mockResolvedValue(CALENDLY_CONN);
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(null as never);
     expect(await sharedCalendarStatus(BIZ)).toEqual({ calendarId: null, sharedWith: [] });
   });
 
@@ -357,7 +349,7 @@ describe("shareSharedCalendarWithEmployees", () => {
   };
 
   it("fails with calendar_not_connected when the calendar can't be ensured", async () => {
-    vi.mocked(resolveCalendarConnection).mockResolvedValue(null as never);
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(null as never);
     expect(await shareSharedCalendarWithEmployees(BIZ)).toEqual({
       ok: false,
       detail: "calendar_not_connected"
@@ -403,7 +395,7 @@ describe("shareSharedCalendarWithEmployees", () => {
   });
 
   it("grants Microsoft read access via calendarPermissions", async () => {
-    vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(MS_CONN);
     vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
       connRow({
         provider_config_key: "outlook-calendar",
@@ -519,7 +511,7 @@ describe("mirrorTimeOffEvent", () => {
   });
 
   it("creates an all-day Microsoft event", async () => {
-    vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(MS_CONN);
     vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
       connRow({
         provider_config_key: "outlook-calendar",
@@ -546,7 +538,7 @@ describe("mirrorTimeOffEvent", () => {
   });
 
   it("returns null when the Microsoft proxy responds null", async () => {
-    vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(MS_CONN);
     vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
       connRow({
         provider_config_key: "outlook-calendar",
@@ -587,7 +579,7 @@ describe("removeTimeOffEvent", () => {
   });
 
   it("deletes the Microsoft mirror event", async () => {
-    vi.mocked(resolveCalendarConnection).mockResolvedValue(MS_CONN);
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(MS_CONN);
     vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
       connRow({
         provider_config_key: "outlook-calendar",

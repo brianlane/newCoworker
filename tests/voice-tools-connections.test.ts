@@ -29,6 +29,7 @@ import {
   providerFromKey,
   resolveCalendarConnection,
   resolveEmailConnection,
+  resolveSharedCalendarHost,
   resolveVoiceConnection
 } from "@/lib/voice-tools/connections";
 
@@ -261,5 +262,66 @@ describe("isEmailProviderConfigKey / providerFromKey", () => {
     expect(providerFromKey("gmail")).toBe("google");
     expect(providerFromKey("google")).toBe("google");
     expect(providerFromKey("outlook")).toBe("microsoft");
+  });
+});
+
+describe("resolveSharedCalendarHost", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getActiveVagaroConnectionId).mockResolvedValue(null);
+    vi.mocked(getActiveCalendlyConnectionId).mockResolvedValue(null);
+    vi.mocked(getActiveCaldavConnectionId).mockResolvedValue(null);
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([]);
+  });
+
+  it("resolves a Google host for a business whose BOOK lives on Vagaro", async () => {
+    // The headline fix. resolveCalendarConnection answers "who takes the
+    // booking?" and Vagaro wins that, which used to mean the team calendar
+    // silently did not exist for this business at all — even though their
+    // Google Workspace was right there.
+    vi.mocked(getActiveVagaroConnectionId).mockResolvedValue("vagaro-row-1");
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([fakeRow("google-calendar")]);
+
+    expect(await resolveCalendarConnection(businessId)).toMatchObject({ provider: "vagaro" });
+    expect(await resolveSharedCalendarHost(businessId)).toEqual({
+      provider: "google",
+      providerConfigKey: "google-calendar",
+      connectionId: "cx-google-calendar"
+    });
+  });
+
+  it("prefers a dedicated calendar connection over the broad all-in-one one", async () => {
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      fakeRow("google"),
+      fakeRow("outlook-calendar")
+    ]);
+    expect(await resolveSharedCalendarHost(businessId)).toMatchObject({
+      provider: "microsoft",
+      providerConfigKey: "outlook-calendar"
+    });
+  });
+
+  it("falls back to the broad workspace connections", async () => {
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([fakeRow("outlook")]);
+    expect(await resolveSharedCalendarHost(businessId)).toMatchObject({
+      provider: "microsoft",
+      providerConfigKey: "outlook"
+    });
+  });
+
+  it("is null when the business has no Google or Microsoft account", async () => {
+    // Honest answer, not a bug: Vagaro, Acuity and Calendly expose no
+    // calendar-create API, and CalDAV's MKCALENDAR is not dependable.
+    vi.mocked(getActiveCalendlyConnectionId).mockResolvedValue("calendly-row-1");
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([]);
+    expect(await resolveSharedCalendarHost(businessId)).toBeNull();
+  });
+
+  it("never consults the dedicated booking providers at all", async () => {
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([fakeRow("google-calendar")]);
+    await resolveSharedCalendarHost(businessId);
+    expect(getActiveVagaroConnectionId).not.toHaveBeenCalled();
+    expect(getActiveCalendlyConnectionId).not.toHaveBeenCalled();
+    expect(getActiveCaldavConnectionId).not.toHaveBeenCalled();
   });
 });
