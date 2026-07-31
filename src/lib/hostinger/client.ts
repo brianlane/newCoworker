@@ -19,6 +19,17 @@ type FetchLike = typeof fetch;
 
 export const DEFAULT_HOSTINGER_BASE_URL = "https://developers.hostinger.com";
 
+/**
+ * Timeout for the one call that charges the card. Deliberately far above the
+ * 30s default: Hostinger has been observed materializing the VM and its
+ * billing subscription ~58s after returning (Amy Laidlaw, Jul 28 2026), and an
+ * abort at 30s is indistinguishable to us from a real failure, so it sends the
+ * orchestrator down the fail-but-charge recovery path for a purchase that
+ * actually succeeded. Three minutes buys ~3x headroom over the worst observed
+ * materialization.
+ */
+export const PURCHASE_TIMEOUT_MS = 180_000;
+
 export type HostingerClientOptions = {
   baseUrl?: string;
   token: string;
@@ -379,9 +390,18 @@ export class HostingerClient {
    * ⚠️ This *purchases* a new VPS subscription and starts setup. Only invoke
    * after explicit operator / orchestrator intent. The Hostinger default
    * payment method is charged unless {@link VpsPurchaseRequest.payment_method_id} is set.
+   *
+   * Uses a longer timeout than every other call, because this is the one
+   * request where OUR abort costs money. Hostinger has been observed creating
+   * the VM and an active billing subscription ~58s AFTER responding (Amy
+   * Laidlaw, Jul 28 2026), so a client timeout shorter than that turns a slow
+   * success into a fail-but-charge orphan we then have to reconcile. Every
+   * other endpoint keeps the fail-fast default.
    */
   async purchaseVirtualMachine(req: VpsPurchaseRequest): Promise<VirtualMachineOrder> {
-    return this.request<VirtualMachineOrder>("POST", "/api/vps/v1/virtual-machines", req);
+    return this.request<VirtualMachineOrder>("POST", "/api/vps/v1/virtual-machines", req, {
+      timeoutMs: PURCHASE_TIMEOUT_MS
+    });
   }
 
   async setupVirtualMachine(
@@ -585,7 +605,8 @@ export class HostingerClient {
   private async request<T>(
     method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE",
     path: string,
-    body?: unknown
+    body?: unknown,
+    options?: { timeoutMs?: number }
   ): Promise<T> {
     const url = `${this.baseUrl}${path}`;
     const headers: Record<string, string> = {
@@ -601,10 +622,12 @@ export class HostingerClient {
 
     // AbortController gives us per-request timeouts without bolting on a
     // dependency. Hostinger is slow on some endpoints (the catalog routinely
-    // takes 10–15s at wall-clock time) so we default generously.
+    // takes 10–15s at wall-clock time) so we default generously, and the
+    // purchase call overrides higher still (see purchaseVirtualMachine).
     const ac = new AbortController();
     init.signal = ac.signal;
-    const timer = setTimeout(() => ac.abort(), this.timeoutMs);
+    const timeoutMs = options?.timeoutMs ?? this.timeoutMs;
+    const timer = setTimeout(() => ac.abort(), timeoutMs);
     let response: Response;
     try {
       response = await this.fetchImpl(url, init);
@@ -620,7 +643,7 @@ export class HostingerClient {
         path,
         0,
         null,
-        isAbort ? `Hostinger API ${path} timed out after ${this.timeoutMs}ms` : `Hostinger API ${path} network error: ${msg}`
+        isAbort ? `Hostinger API ${path} timed out after ${timeoutMs}ms` : `Hostinger API ${path} network error: ${msg}`
       );
     } finally {
       clearTimeout(timer);

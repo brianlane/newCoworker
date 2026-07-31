@@ -1,5 +1,5 @@
 import { describe, expect, it, vi } from "vitest";
-import { HostingerClient, HostingerApiError } from "@/lib/hostinger/client";
+import { HostingerClient, HostingerApiError, PURCHASE_TIMEOUT_MS } from "@/lib/hostinger/client";
 
 type FetchImpl = typeof fetch;
 
@@ -163,6 +163,45 @@ describe("HostingerClient (real API)", () => {
       const err = e as HostingerApiError;
       expect(err.status).toBe(0);
       expect(err.message).toMatch(/timed out/);
+    }
+  });
+
+  // The one call where OUR abort costs money. Hostinger has been seen creating
+  // the VM and its billing subscription ~58s AFTER responding (Amy Laidlaw,
+  // Jul 28 2026), so a 30s client timeout manufactures the very fail-but-charge
+  // orphan the reconciler then has to clean up.
+  it("gives the purchase call a longer timeout than the fail-fast default", async () => {
+    const timers: number[] = [];
+    const realSetTimeout = globalThis.setTimeout;
+    const spy = vi
+      .spyOn(globalThis, "setTimeout")
+      .mockImplementation(((fn: () => void, ms?: number) => {
+        timers.push(ms ?? 0);
+        return realSetTimeout(fn, 10_000_000);
+      }) as typeof globalThis.setTimeout);
+
+    try {
+      const fetchMock = vi.fn(async () => ok({ order_id: "o1", virtual_machines: [] }));
+      const client = makeClient(fetchMock);
+      await client.purchaseVirtualMachine({
+        item_id: "hostingercom-vps-kvm2-usd-1m",
+        setup: {
+          data_center_id: 24,
+          template_id: 1121,
+          hostname: "nc-abc.newcoworker.com",
+          public_key_ids: [1],
+          install_monarx: false
+        }
+      });
+      expect(timers).toContain(PURCHASE_TIMEOUT_MS);
+      expect(PURCHASE_TIMEOUT_MS).toBeGreaterThan(58_000);
+
+      timers.length = 0;
+      await client.listDataCenters();
+      // Every other endpoint keeps the fail-fast default.
+      expect(timers).toContain(30_000);
+    } finally {
+      spy.mockRestore();
     }
   });
 

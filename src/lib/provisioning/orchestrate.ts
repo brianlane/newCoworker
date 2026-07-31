@@ -480,7 +480,31 @@ function defaultVpsProvisioner(client: HostingerClient): VpsProvisioner {
         // script is idempotent.
         postInstallScript: buildDefaultPostInstallScript({ tier, vpsSize })
       },
-      { client }
+      {
+        client,
+        // Wired so the moment before the charge is on the record. The hook has
+        // existed in provisionVpsForBusiness since it was written but was
+        // never passed here, so a fail-but-charge left no durable trace of the
+        // exact item_id and hostname we sent, which is what you need to tell a
+        // renamed SKU apart from a rejected hostname after the fact.
+        onProgress: (phase, meta) => {
+          if (phase !== "purchase_initiated") return;
+          logger.info("Hostinger purchase initiated", { businessId, ...meta });
+          void recordProvisioningProgress({
+            businessId,
+            phase: "purchase_initiated",
+            percent: 10,
+            message: `Buying Hostinger box: item ${String(meta?.itemId)}, hostname ${String(meta?.hostname)}`,
+            source: "orchestrator",
+            status: "thinking"
+          }).catch((err: unknown) => {
+            logger.warn("failed to record purchase_initiated", {
+              businessId,
+              error: err instanceof Error ? err.message : String(err)
+            });
+          });
+        }
+      }
     );
 }
 /* c8 ignore stop */
@@ -1051,11 +1075,98 @@ export function describeProvisioningError(err: unknown): ProvisioningErrorDetail
   return { message: String(err) };
 }
 
-function formatProvisioningErrorMessage(detail: ProvisioningErrorDetail): string {
-  if (detail.endpoint && typeof detail.status === "number") {
-    return `Provisioning failed: Hostinger ${detail.endpoint} → HTTP ${detail.status} (${detail.message})`;
+/**
+ * Compact, bounded rendering of a Hostinger error body for a log message.
+ *
+ * `describeProvisioningError` has always captured `body`, and it is where the
+ * actual cause lives (`{"errors":{"hostname":["..."]}}` tells you which field
+ * Hostinger rejected, where the status alone does not). It used to be dropped
+ * here and survive only in a console-only `logger.error`, so after the fact
+ * there was no queryable record of whether an incident was a 402, a 422, or
+ * our own timeout. Bounded because this lands in `provisioning_jobs.last_error`,
+ * which truncates at 1000 chars.
+ */
+export function formatHostingerErrorBody(body: unknown, maxLength = 300): string | null {
+  if (body === null || body === undefined) return null;
+  let rendered: string;
+  try {
+    rendered = typeof body === "string" ? body : JSON.stringify(body);
+  } catch {
+    // Circular or otherwise unserializable: the body is not worth failing over.
+    return null;
   }
-  return `Provisioning failed: ${detail.message}`;
+  if (!rendered || rendered === "{}" || rendered === '""') return null;
+  return rendered.length > maxLength ? `${rendered.slice(0, maxLength)}...` : rendered;
+}
+
+function formatProvisioningErrorMessage(detail: ProvisioningErrorDetail): string {
+  const body = formatHostingerErrorBody(detail.body);
+  const bodySuffix = body ? ` body=${body}` : "";
+  if (detail.endpoint && typeof detail.status === "number") {
+    return `Provisioning failed: Hostinger ${detail.endpoint} → HTTP ${detail.status} (${detail.message})${bodySuffix}`;
+  }
+  return `Provisioning failed: ${detail.message}${bodySuffix}`;
+}
+
+/**
+ * Persist a fail-but-charge recovery so the rate is measurable.
+ *
+ * These paths end in a SUCCESSFUL provision on a box we already paid for, and
+ * until now the only trace was a `logger.warn` to the console. That is why the
+ * Jul 29 KYP incident has no queryable record of whether Hostinger returned a
+ * 402, a 422, or whether we aborted on our own timeout.
+ *
+ * Deliberately `status: "thinking"` and not `"error"`: this row is mirrored to
+ * the owner-visible provisioning progress feed, and the provision is in fact
+ * fine. #1045 fixed telling an owner they were live when the deploy failed;
+ * showing a failure on a provision that succeeds is the same bug reversed.
+ * Best-effort, exactly like every other bookkeeping write on this path.
+ */
+/**
+ * Copy for the recovery row. Pulled out as a pure function so each arm is
+ * directly testable, the same reason {@link describeAttachError} exists: v8
+ * cannot always see both arms of a ternary buried in an async body.
+ */
+export function formatFailButChargeRecoveryMessage(
+  detail: ProvisioningErrorDetail,
+  adoptedVirtualMachineId: string | number
+): string {
+  const endpoint =
+    detail.endpoint && typeof detail.status === "number"
+      ? `${detail.endpoint} → HTTP ${detail.status}`
+      : "purchase";
+  const body = formatHostingerErrorBody(detail.body);
+  const bodySuffix = body ? ` body=${body}` : "";
+  return (
+    `Hostinger ${endpoint} failed but the box was created and charged anyway; ` +
+    `adopted VM ${adoptedVirtualMachineId} instead of buying another. ` +
+    `(${detail.message})${bodySuffix}`
+  );
+}
+
+async function recordFailButChargeRecovery(input: {
+  businessId: string;
+  adoptedVirtualMachineId: string | number;
+  purchaseError: unknown;
+}): Promise<void> {
+  try {
+    await recordProvisioningProgress({
+      businessId: input.businessId,
+      phase: "purchase_fail_but_charge_recovered",
+      percent: 12,
+      message: formatFailButChargeRecoveryMessage(
+        describeProvisioningError(input.purchaseError),
+        input.adoptedVirtualMachineId
+      ),
+      source: "orchestrator",
+      status: "thinking"
+    });
+  } catch (logErr) {
+    logger.warn("failed to record fail-but-charge recovery", {
+      businessId: input.businessId,
+      error: describeAttachError(logErr)
+    });
+  }
 }
 
 /**
@@ -1398,6 +1509,11 @@ async function acquireVps(args: {
                   purchaseError: (err as Error).message
                 }
               );
+              await recordFailButChargeRecovery({
+                businessId,
+                adoptedVirtualMachineId: adopted.virtualMachineId,
+                purchaseError: err
+              });
               return adopted;
             }
           } else {
@@ -1419,6 +1535,11 @@ async function acquireVps(args: {
                   purchaseError: (err as Error).message
                 }
               );
+              await recordFailButChargeRecovery({
+                businessId,
+                adoptedVirtualMachineId: adopted.virtualMachineId,
+                purchaseError: err
+              });
               return adopted;
             }
           }
@@ -1426,7 +1547,7 @@ async function acquireVps(args: {
       } catch (reconcileErr) {
         logger.warn("orphaned-purchase reconciliation failed (surfacing original purchase error)", {
           businessId,
-          error: reconcileErr instanceof Error ? reconcileErr.message : String(reconcileErr)
+          error: describeAttachError(reconcileErr)
         });
       }
     }
