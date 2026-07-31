@@ -170,10 +170,13 @@ describe("ensureAcuityWebhooks", () => {
     expect(res.status).toBe("cap_reached");
   });
 
-  it("tolerates a create that returns no id", async () => {
+  it("does NOT claim a registration when every create came back without an id", async () => {
+    // We have just deleted whatever pointed at this target, so recording
+    // "registered" with zero ids would assert a working webhook for an
+    // account that now has none, and the recheck would never revisit it.
     const d = deps({ create: vi.fn().mockResolvedValue(null) });
     const res = await ensureAcuityWebhooks(conn(), TARGET, d);
-    expect(res).toMatchObject({ status: "registered", ids: [] });
+    expect(res).toMatchObject({ status: "unsupported", ids: [], registeredAt: null });
   });
 
   it("never throws when persisting the result fails", async () => {

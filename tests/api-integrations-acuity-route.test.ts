@@ -29,6 +29,7 @@ vi.mock("@/lib/db/vagaro-connections", () => ({ getActiveVagaroConnectionId: vi.
 vi.mock("@/lib/acuity/webhook-registration", () => ({
   acuityWebhookCallbackUrl: vi.fn(() => "https://app/api/webhooks/acuity?business=x&token=y"),
   ensureAcuityWebhooks: vi.fn(),
+  recheckAcuityWebhooks: vi.fn(),
   teardownAcuityWebhooks: vi.fn()
 }));
 vi.mock("@/lib/acuity/client", async () => {
@@ -57,6 +58,7 @@ import {
 import { getActiveVagaroConnectionId } from "@/lib/db/vagaro-connections";
 import {
   ensureAcuityWebhooks,
+  recheckAcuityWebhooks,
   teardownAcuityWebhooks
 } from "@/lib/acuity/webhook-registration";
 import {
@@ -146,6 +148,26 @@ describe("GET", () => {
       await GET(new Request(`https://x/api/integrations/acuity?businessId=${BIZ}&catalog=1`))
     );
     expect(withCatalog.data).toMatchObject({ appointmentTypes: [], catalogError: null });
+  });
+
+  it("rechecks the webhook registration on a dashboard load", async () => {
+    // Acuity disables a webhook after five days of failure and never says
+    // so. The recheck self-limits to once a day, so this is cheap.
+    await GET(new Request(`https://x/api/integrations/acuity?businessId=${BIZ}&catalog=1`));
+    expect(vi.mocked(recheckAcuityWebhooks)).toHaveBeenCalled();
+  });
+
+  it("does not let a failing recheck take down the dashboard read", async () => {
+    vi.mocked(recheckAcuityWebhooks).mockRejectedValue(new Error("acuity down"));
+    const res = await GET(
+      new Request(`https://x/api/integrations/acuity?businessId=${BIZ}&catalog=1`)
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("skips the recheck when the bare state is requested", async () => {
+    await GET(new Request(`https://x/api/integrations/acuity?businessId=${BIZ}`));
+    expect(vi.mocked(recheckAcuityWebhooks)).not.toHaveBeenCalled();
   });
 
   it("reports a catalog read failure without hiding the saved connection", async () => {

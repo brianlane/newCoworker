@@ -39,6 +39,7 @@ import { getActiveVagaroConnectionId } from "@/lib/db/vagaro-connections";
 import {
   acuityWebhookCallbackUrl,
   ensureAcuityWebhooks,
+  recheckAcuityWebhooks,
   teardownAcuityWebhooks
 } from "@/lib/acuity/webhook-registration";
 import {
@@ -122,6 +123,25 @@ export async function GET(request: Request) {
     const otherBookingProviderActive = vagaroId ? "vagaro" : null;
 
     if (url.searchParams.get("catalog") === "1" && row) {
+      // A dashboard load is the cheap moment to notice that Acuity silently
+      // disabled our webhook, which it does after five days of delivery
+      // failure without telling anyone. Best-effort and self-limiting: the
+      // recheck no-ops unless the stored registration is over a day old.
+      try {
+        const conn = await getAcuityConnection(parsed.data);
+        if (conn) {
+          await recheckAcuityWebhooks(
+            conn,
+            acuityWebhookCallbackUrl(appOrigin(request), parsed.data, conn.webhook_verification_token),
+            Date.now()
+          );
+        }
+      } catch (err) {
+        logger.warn("acuity: webhook recheck failed", {
+          businessId: parsed.data,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
       const catalog = await readCatalog(parsed.data);
       return successResponse({ connection: row, otherBookingProviderActive, ...catalog });
     }

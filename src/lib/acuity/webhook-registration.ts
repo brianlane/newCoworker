@@ -122,8 +122,15 @@ export async function ensureAcuityWebhooks(
       const created = await create(conn, event, targetUrl);
       if (created) result.ids.push(created.id);
     }
-    result.status = "registered";
-    result.registeredAt = nowIso;
+    // Only claim a live registration if we actually hold one. Acuity can
+    // answer a create without an id, and we have just deleted whatever was
+    // pointing at this target, so recording "registered" with zero ids would
+    // assert a working webhook for an account that now has none, and the
+    // recheck below would then never revisit it.
+    if (result.ids.length > 0) {
+      result.status = "registered";
+      result.registeredAt = nowIso;
+    }
   } catch (err) {
     // A 400 here is overwhelmingly the 25-per-account ceiling, which the
     // owner can actually do something about, so it gets its own status and
