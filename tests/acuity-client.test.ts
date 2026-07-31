@@ -33,6 +33,7 @@ vi.mock("@/lib/rate-limit", () => ({
 }));
 
 import {
+  ACUITY_FLEET_WAIT_ATTEMPTS,
   ACUITY_MIN_REQUEST_INTERVAL_MS,
   ACUITY_REQUEST_TIMEOUT_MS,
   AcuityApiError,
@@ -393,17 +394,38 @@ describe("rate limiting", () => {
     });
   });
 
-  it("waits out the durable window when the fleet budget is spent", async () => {
+  it("waits out the window and re-checks when the fleet budget is momentarily spent", async () => {
     rateLimitDurableMock.mockResolvedValueOnce({
       success: false,
       limit: 6,
       remaining: 0,
       reset: Date.now() + 30
     });
-    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
-    const started = Date.now();
-    await acuityFetch(CONN, { method: "GET", path: "/me" });
-    expect(Date.now() - started).toBeGreaterThanOrEqual(ACUITY_MIN_REQUEST_INTERVAL_MS);
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, { ok: true }));
+    await expect(acuityFetch(CONN, { method: "GET", path: "/me" })).resolves.toEqual({ ok: true });
+    // Re-checked rather than proceeding on the failed first check.
+    expect(rateLimitDurableMock).toHaveBeenCalledTimes(2);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("REFUSES to call Acuity at all once the fleet budget stays exhausted", async () => {
+    // The whole point of a global bucket is that an over-budget check
+    // prevents the request. Sleeping and then calling anyway would make the
+    // cap decorative and push enforcement onto Acuity's own 429s.
+    rateLimitDurableMock.mockResolvedValue({
+      success: false,
+      limit: 6,
+      remaining: 0,
+      reset: Date.now() + 5
+    });
+    await expect(acuityFetch(CONN, { method: "GET", path: "/me" })).rejects.toMatchObject({
+      code: "rate_limited"
+    });
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(rateLimitDurableMock).toHaveBeenCalledTimes(ACUITY_FLEET_WAIT_ATTEMPTS);
+    expect(recordSystemLogMock.mock.calls[0][0]).toMatchObject({
+      event: "acuity_fleet_budget_exhausted"
+    });
   });
 
   it("serializes concurrent calls instead of bursting", async () => {

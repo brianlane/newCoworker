@@ -50,6 +50,13 @@ export const ACUITY_FLEET_BUDGET_PER_SECOND = 6;
  */
 export const ACUITY_MIN_REQUEST_INTERVAL_MS = 120;
 
+/**
+ * How many times a caller re-checks the fleet bucket before giving up. The
+ * window is one second, so this waits out at most a few windows rather than
+ * queueing unboundedly behind a genuinely saturated fleet.
+ */
+export const ACUITY_FLEET_WAIT_ATTEMPTS = 3;
+
 /** The signature header Acuity sends on webhook deliveries. */
 export const ACUITY_SIGNATURE_HEADER = "x-acuity-signature";
 
@@ -278,6 +285,45 @@ const SLOT_UNAVAILABLE_CODES = new Set([
 ]);
 
 /**
+ * Block until the fleet-wide budget admits this request, or give up.
+ *
+ * The budget only binds if an over-budget check actually PREVENTS the call:
+ * sleeping and then issuing it anyway would leave the cap decorative and push
+ * enforcement onto Acuity's 429s, which is the outcome the global bucket
+ * exists to avoid. So an exhausted budget throws `rate_limited`, which
+ * reaches the model as "let me check again in a moment" rather than a booking
+ * failure.
+ *
+ * `rateLimitDurable` records a hit per check and fails open to the in-memory
+ * limiter on a DB error, so a Postgres blip degrades to per-isolate limiting
+ * rather than blocking every tenant's bookings.
+ */
+async function awaitFleetBudget(conn: AcuityConnectionRow, req: AcuityRequest): Promise<void> {
+  for (let attempt = 0; attempt < ACUITY_FLEET_WAIT_ATTEMPTS; attempt += 1) {
+    const limit = await rateLimitDurable("acuity:global", {
+      interval: 1000,
+      maxRequests: ACUITY_FLEET_BUDGET_PER_SECOND
+    });
+    if (limit.success) return;
+    // Wait out the current window, then re-check: the bucket is fixed-window,
+    // so a fresh window is what actually frees capacity.
+    await sleep(Math.max(0, Math.min(1000, limit.reset - Date.now())));
+  }
+  await recordSystemLog({
+    businessId: conn.business_id,
+    source: "acuity",
+    level: "warn",
+    event: "acuity_fleet_budget_exhausted",
+    message: `Acuity fleet budget exhausted before ${req.method} ${req.path}`,
+    payload: { path: req.path, attempts: ACUITY_FLEET_WAIT_ATTEMPTS }
+  });
+  throw new AcuityApiError(
+    "rate_limited",
+    "Acuity requests are being throttled fleet-wide; try again shortly"
+  );
+}
+
+/**
  * Authenticated JSON call, throttled fleet-wide then process-locally.
  *
  * A 429 gets ONE retry honoring `Retry-After` and is always logged: the
@@ -291,15 +337,7 @@ export async function acuityFetch(
   req: AcuityRequest,
   retrying = false
 ): Promise<unknown> {
-  // Fleet-wide budget first: keyed on the provider, NOT the business, because
-  // Acuity's ceiling is per egress IP and every tenant shares it.
-  const limit = await rateLimitDurable("acuity:global", {
-    interval: 1000,
-    maxRequests: ACUITY_FLEET_BUDGET_PER_SECOND
-  });
-  if (!limit.success && !retrying) {
-    await sleep(Math.max(0, Math.min(2000, limit.reset - Date.now())));
-  }
+  await awaitFleetBudget(conn, req);
 
   const release = await takeRequestSlot();
   let res: Response;
