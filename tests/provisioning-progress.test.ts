@@ -518,6 +518,7 @@ describe("provisioning/progress", () => {
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
       filter: vi.fn().mockReturnThis(),
+      gte: vi.fn().mockReturnThis(),
       limit: vi.fn().mockReturnThis(),
       maybeSingle: vi.fn().mockResolvedValue({ data: { id: "log-1" }, error: null })
     };
@@ -533,12 +534,40 @@ describe("provisioning/progress", () => {
     );
   });
 
+  // The dedupe was lifetime-scoped, copied from hasPriorOpsNewSignupAlert
+  // where once-per-business is correct. For stuck alerts it meant ops was
+  // told about the FIRST incident a tenant ever had and never again, so a
+  // later real freeze (dual-assigned box, both billing) went unannounced.
+  it("hasPriorOpsProvisioningStuckAlert only looks back over the recent window", async () => {
+    const db = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      gte: vi.fn().mockReturnThis(),
+      filter: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await hasPriorOpsProvisioningStuckAlert("00000000-0000-4000-8000-000000000001");
+
+    expect(db.gte).toHaveBeenCalledWith("created_at", expect.any(String));
+    const since = Date.parse(vi.mocked(db.gte).mock.calls[0][1] as string);
+    const windowMs = Date.now() - since;
+    // Long enough to cover one incident (route budget plus watchdog retries),
+    // far short of a tenant's lifetime.
+    expect(windowMs).toBeGreaterThan(60 * 60 * 1000);
+    expect(windowMs).toBeLessThan(48 * 60 * 60 * 1000);
+  });
+
   it("hasPriorOpsProvisioningStuckAlert is false when no alert-sent row exists", async () => {
     const db = {
       from: vi.fn().mockReturnThis(),
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
       filter: vi.fn().mockReturnThis(),
+      gte: vi.fn().mockReturnThis(),
       limit: vi.fn().mockReturnThis(),
       maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null })
     };
@@ -555,6 +584,7 @@ describe("provisioning/progress", () => {
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
       filter: vi.fn().mockReturnThis(),
+      gte: vi.fn().mockReturnThis(),
       limit: vi.fn().mockReturnThis(),
       maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: "db down" } })
     };

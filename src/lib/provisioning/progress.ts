@@ -187,17 +187,38 @@ export async function hasPriorOpsNewSignupAlert(businessId: string): Promise<boo
   return data != null;
 }
 
-/** True when the ops provisioning-stuck alert was already sent for this business. */
+/**
+ * How far back a stuck alert dedupes.
+ *
+ * Long enough to cover one incident end to end: the 1800s route budget plus
+ * the watchdog's three retries at a 5-minute cadence, with slack. Short enough
+ * that a genuinely new incident weeks or months later still pages ops.
+ */
+export const STUCK_ALERT_DEDUPE_WINDOW_MS = 6 * 60 * 60 * 1000;
+
+/**
+ * True when an ops provisioning-stuck alert was already sent for this business
+ * *in the current incident window*.
+ *
+ * This deliberately does NOT match the lifetime semantics of
+ * hasPriorOpsNewSignupAlert. A tenant signs up once, so once-per-business is
+ * right there. A tenant can get stuck many times, and the copy of that helper
+ * meant ops heard about the first incident a tenant ever had and never again:
+ * a later real freeze (dual-assigned box, both boxes billing) was silent.
+ */
 export async function hasPriorOpsProvisioningStuckAlert(
-  businessId: string
+  businessId: string,
+  nowMs: number = Date.now()
 ): Promise<boolean> {
   const db = await createSupabaseServiceClient();
+  const since = new Date(nowMs - STUCK_ALERT_DEDUPE_WINDOW_MS).toISOString();
   const { data, error } = await db
     .from("coworker_logs")
     .select("id")
     .eq("business_id", businessId)
     .eq("task_type", "provisioning")
     .filter("log_payload->>phase", "eq", "ops_provisioning_stuck_alert_sent")
+    .gte("created_at", since)
     .limit(1)
     .maybeSingle();
 
