@@ -41,6 +41,20 @@ a key to accept it. Everything downstream follows from that:
 - **The details can arrive after the call ends.** Do not assume the call-end
   event is the end of the referral (`homelight-call-end-details.ts`,
   `homelight-late-contact-retry.ts`).
+- **A step that dies takes the retry ladder with it.** The late-contact rungs
+  are trunk steps AFTER the post-claim sends, so anything that hard-fails
+  earlier in the run silently cancels roughly 2h15m of patient retrying. That
+  is exactly what happened on Jul 31 2026 (run `abcada1d`): `lead_email` failed
+  on an empty `{{vars.lead_email}}` at step 21 of 60, and rungs 1 and 2 plus the
+  owner wrap-up never ran. PR #1051 made a templated empty recipient SKIP, and
+  `tsx debug/flow-run-autopsy.ts <runId>` now prints what a failure skipped.
+- **`wait_for_call` only attaches to a call already in progress.** Its
+  `withinMinutes` is a lookup filter and `timeoutMinutes` is the ceiling on
+  waiting for a LIVE call to end, so the flow's `timeoutMinutes: 45` was inert:
+  with no session the step resolved `no_call` in zero seconds.
+  `awaitStartMinutes` (set to 3 by `homelight-await-call-start.ts`) polls for a
+  call to begin. Keep it small. Every step after it waits too, and latency is
+  the product here.
 - **HomeLight alerts arrive in two wordings, from two different sender lines**,
   and the flow has to match both. They open with either
   `New HomeLight Referral: <name> - $250K seller in ...` or
@@ -70,7 +84,7 @@ Seeds: `seed-homelight-lead-aiflow.ts`,
 `seed-homelight-ai-call-voice-flow.ts`, `seed-homelight-voice-handoff.ts`.
 
 Patches: `homelight-accept-on-prompt.ts`, `homelight-accept-fallback-20.ts`,
-`homelight-call-end-details.ts`,
+`homelight-await-call-start.ts`, `homelight-call-end-details.ts`,
 `homelight-late-contact-retry.ts`, `homelight-broadcast-offer.ts`,
 `homelight-ai-call-referral-patch.ts`, `homelight-warm-transfer-trigger.ts`,
 `homelight-start-immediately.ts`, `set-homelight-star-alerts.ts`,
