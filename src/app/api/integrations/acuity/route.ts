@@ -143,7 +143,15 @@ export async function GET(request: Request) {
         });
       }
       const catalog = await readCatalog(parsed.data);
-      return successResponse({ connection: row, otherBookingProviderActive, ...catalog });
+      // Re-read AFTER the recheck: it may have just re-registered and
+      // rewritten webhook_registration, and returning the pre-recheck row
+      // would show the owner stale status until they reloaded again.
+      const refreshed = (await getPublicAcuityConnection(parsed.data)) ?? row;
+      return successResponse({
+        connection: refreshed,
+        otherBookingProviderActive,
+        ...catalog
+      });
     }
     return successResponse({ connection: row, otherBookingProviderActive });
   } catch (err) {

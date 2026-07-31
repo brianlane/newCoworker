@@ -157,6 +157,21 @@ describe("GET", () => {
     expect(vi.mocked(recheckAcuityWebhooks)).toHaveBeenCalled();
   });
 
+  it("returns the connection as it stands AFTER the recheck", async () => {
+    // The recheck can rewrite webhook_registration; returning the row read
+    // before it would show stale status until the next load.
+    const after = { ...PUBLIC_ROW, webhook_registration: { status: "registered" } };
+    vi.mocked(getPublicAcuityConnection)
+      .mockResolvedValueOnce(PUBLIC_ROW as never)
+      .mockResolvedValueOnce(after as never);
+    const res = await json(
+      await GET(new Request(`https://x/api/integrations/acuity?businessId=${BIZ}&catalog=1`))
+    );
+    expect((res.data as { connection: typeof after }).connection.webhook_registration).toEqual({
+      status: "registered"
+    });
+  });
+
   it("does not let a failing recheck take down the dashboard read", async () => {
     vi.mocked(recheckAcuityWebhooks).mockRejectedValue(new Error("acuity down"));
     const res = await GET(
