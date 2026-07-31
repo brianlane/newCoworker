@@ -50,11 +50,15 @@ describe("edge cron timeouts cover their route budgets", () => {
     {
       job: "edge-provisioning-watchdog",
       route: "src/app/api/internal/provisioning-retry/route.ts"
+    },
+    {
+      job: "edge-vps-orphan-sweep",
+      route: "src/app/api/internal/vps-orphan-sweep/route.ts"
     }
   ];
 
   for (const { job, route } of cases) {
-    it(`${job} waits at least as long as ${job === "edge-provisioning-watchdog" ? "the watchdog" : "the sweep"} route allows`, () => {
+    it(`${job} waits at least as long as its route allows`, () => {
       const timeouts = effectiveCronTimeouts();
       const timeoutMs = timeouts.get(job);
       expect(timeoutMs, `no timeout_milliseconds found for ${job}`).toBeDefined();

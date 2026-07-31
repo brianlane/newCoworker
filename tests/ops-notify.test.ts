@@ -30,6 +30,7 @@ import {
   sendOpsHardwareMigrationEmail,
   sendOpsTermAlignmentEmail,
   sendOpsBillingPostureEmail,
+  sendOpsOrphanSweepEmail,
   sendOpsMarginAlertEmail,
   sendOpsNewSignupEmail,
   sendOpsNangoQuotaEmail,
@@ -811,6 +812,85 @@ describe("sendOpsProvisioningStuckEmail", () => {
     expect(loggerWarnMock).toHaveBeenCalledWith(
       "ops provisioning-stuck email failed",
       expect.objectContaining({ error: "smtp string failure" })
+    );
+  });
+});
+
+describe("sendOpsOrphanSweepEmail", () => {
+  const sweepInput = {
+    findings: [
+      {
+        kind: "pooled" as const,
+        vmId: 1806114,
+        plan: "KVM 1",
+        state: "initial",
+        createdAt: "2026-07-05T04:41:31Z",
+        hostingerBillingSubscriptionId: "169rR3VOTEcjx7ysQ",
+        expiresAt: "2026-08-05T04:41:30Z",
+        detail: "pooled as available (kvm1), auto-renew already-off"
+      }
+    ],
+    checkedVms: 10,
+    dryRun: false
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.RESEND_API_KEY = "resend_test";
+    process.env.NEXT_PUBLIC_APP_URL = "https://www.example.com";
+    delete process.env.OPS_NOTIFICATION_EMAIL;
+    sendOwnerEmailMock.mockResolvedValue(undefined);
+  });
+
+  it("sends the findings digest to the ops inbox", async () => {
+    await sendOpsOrphanSweepEmail(sweepInput);
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "team@newcoworker.com",
+      expect.stringContaining("Orphan sweep"),
+      expect.objectContaining({ text: expect.stringContaining("VM 1806114") })
+    );
+    expect(loggerInfoMock).toHaveBeenCalledWith(
+      "ops orphan-sweep email sent",
+      expect.objectContaining({ findings: 1, toEmail: "team@newcoworker.com" })
+    );
+  });
+
+  it("skips with a warning when RESEND_API_KEY is missing", async () => {
+    delete process.env.RESEND_API_KEY;
+    await sendOpsOrphanSweepEmail(sweepInput);
+    expect(sendOwnerEmailMock).not.toHaveBeenCalled();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops orphan-sweep email skipped: RESEND_API_KEY missing",
+      expect.objectContaining({ findings: 1 })
+    );
+  });
+
+  it("falls back to localhost site URL when NEXT_PUBLIC_APP_URL is unset", async () => {
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    await sendOpsOrphanSweepEmail(sweepInput);
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "team@newcoworker.com",
+      expect.any(String),
+      expect.objectContaining({ html: expect.stringContaining("http://localhost:3000") })
+    );
+  });
+
+  // A cron digest must never be able to take down the sweep that produced it.
+  it("never throws when the send fails (Error and non-Error rejections)", async () => {
+    sendOwnerEmailMock.mockRejectedValueOnce(new Error("smtp down"));
+    await expect(sendOpsOrphanSweepEmail(sweepInput)).resolves.toBeUndefined();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops orphan-sweep email failed",
+      expect.objectContaining({ error: "smtp down" })
+    );
+
+    sendOwnerEmailMock.mockRejectedValueOnce("plain string boom");
+    await expect(sendOpsOrphanSweepEmail(sweepInput)).resolves.toBeUndefined();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops orphan-sweep email failed",
+      expect.objectContaining({ error: "plain string boom" })
     );
   });
 });
