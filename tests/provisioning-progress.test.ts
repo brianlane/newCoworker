@@ -215,6 +215,7 @@ describe("provisioning/progress", () => {
       from: vi.fn().mockReturnThis(),
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
+      not: vi.fn().mockReturnThis(),
       order: vi.fn().mockReturnThis(),
       limit: vi.fn().mockReturnThis(),
       maybeSingle: vi.fn().mockResolvedValue({ data: null, error: null })
@@ -224,11 +225,51 @@ describe("provisioning/progress", () => {
     await expect(getLatestProvisioningStatus("00000000-0000-4000-8000-000000000001")).resolves.toBeNull();
   });
 
+  // The stuck-alert dedupe row is ops bookkeeping, not tenant progress. It is
+  // written as `thinking` at whatever percent the alert path happened to know,
+  // which is 0 when the latest-status lookup threw. Being the newest
+  // provisioning row, it then became "the latest status" and
+  // shouldShowProvisioningProgress(online, {percent: 0, thinking}) put a 0%
+  // provisioning ring on a live tenant's dashboard. The retry route already
+  // excludes this phase for the same reason.
+  it("getLatestProvisioningStatus ignores the ops stuck-alert marker row", async () => {
+    const db = {
+      from: vi.fn().mockReturnThis(),
+      select: vi.fn().mockReturnThis(),
+      eq: vi.fn().mockReturnThis(),
+      neq: vi.fn().mockReturnThis(),
+      not: vi.fn().mockReturnThis(),
+      filter: vi.fn().mockReturnThis(),
+      order: vi.fn().mockReturnThis(),
+      limit: vi.fn().mockReturnThis(),
+      maybeSingle: vi.fn().mockResolvedValue({
+        data: {
+          log_payload: { percent: 85, phase: "cloudflared" },
+          created_at: "2026-01-01T00:00:00Z",
+          status: "thinking"
+        },
+        error: null
+      })
+    };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    const latest = await getLatestProvisioningStatus("00000000-0000-4000-8000-000000000001");
+    expect(latest?.percent).toBe(85);
+    // The query itself must exclude the marker phase, otherwise the newest row
+    // wins and the real progress is never seen.
+    expect(db.not).toHaveBeenCalledWith(
+      "log_payload->>phase",
+      "eq",
+      "ops_provisioning_stuck_alert_sent"
+    );
+  });
+
   it("getLatestProvisioningStatus throws on db error", async () => {
     const db = {
       from: vi.fn().mockReturnThis(),
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
+      not: vi.fn().mockReturnThis(),
       order: vi.fn().mockReturnThis(),
       limit: vi.fn().mockReturnThis(),
       maybeSingle: vi.fn().mockResolvedValue({ data: null, error: { message: "db fail" } })
@@ -245,6 +286,7 @@ describe("provisioning/progress", () => {
       from: vi.fn().mockReturnThis(),
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
+      not: vi.fn().mockReturnThis(),
       order: vi.fn().mockReturnThis(),
       limit: vi.fn().mockReturnThis(),
       maybeSingle: vi.fn().mockResolvedValue({
@@ -274,6 +316,7 @@ describe("provisioning/progress", () => {
       from: vi.fn().mockReturnThis(),
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
+      not: vi.fn().mockReturnThis(),
       order: vi.fn().mockReturnThis(),
       limit: vi.fn().mockReturnThis(),
       maybeSingle: vi.fn().mockResolvedValue({
@@ -306,6 +349,7 @@ describe("provisioning/progress", () => {
       from: vi.fn().mockReturnThis(),
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
+      not: vi.fn().mockReturnThis(),
       order: vi.fn().mockReturnThis(),
       limit: vi.fn().mockReturnThis(),
       maybeSingle: vi.fn().mockResolvedValue({
@@ -334,6 +378,7 @@ describe("provisioning/progress", () => {
       from: vi.fn().mockReturnThis(),
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
+      not: vi.fn().mockReturnThis(),
       order: vi.fn().mockReturnThis(),
       limit: vi.fn().mockReturnThis(),
       maybeSingle: vi.fn().mockResolvedValue({
@@ -361,6 +406,7 @@ describe("provisioning/progress", () => {
       from: vi.fn().mockReturnThis(),
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
+      not: vi.fn().mockReturnThis(),
       order: vi.fn().mockReturnThis(),
       limit: vi.fn().mockReturnThis(),
       maybeSingle: vi.fn().mockResolvedValue({
@@ -388,6 +434,7 @@ describe("provisioning/progress", () => {
       from: vi.fn().mockReturnThis(),
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
+      not: vi.fn().mockReturnThis(),
       order: vi.fn().mockReturnThis(),
       limit: vi.fn().mockReturnThis(),
       maybeSingle: vi.fn().mockResolvedValue({

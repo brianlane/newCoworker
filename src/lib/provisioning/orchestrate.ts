@@ -2271,6 +2271,17 @@ async function runOrchestrator(
   let notifyEmail: string | null = null;
   if (input.suppressOwnerNotify) {
     logger.info("Skipping provisioning owner email/SMS (suppressOwnerNotify)", { businessId });
+  } else if (!deploySucceeded) {
+    // "Your New Coworker is live!" has to be true when it arrives. The ops
+    // new-signup alert below is already gated on deploySucceeded, so without
+    // this the customer was told they were live while ops heard nothing at
+    // all. Ops still finds this: the business is left online with percent
+    // < 100, which is exactly the hole scanAndAlertStuckProvisioning looks
+    // for.
+    logger.warn("Skipping provisioning owner email/SMS: deploy did not succeed", {
+      businessId,
+      vpsId
+    });
   } else {
     notifyEmail = resolveOwnerNotifyEmail(ownerEmail, freshBusiness?.owner_email);
     // Recipient: the OWNER's phone — the explicit caller override first, then

@@ -138,6 +138,13 @@ export async function getLatestProvisioningStatus(
     .select("log_payload, created_at, status")
     .eq("business_id", businessId)
     .eq("task_type", "provisioning")
+    // The stuck-alert dedupe marker is ops bookkeeping, not tenant progress.
+    // It is written as `thinking` at whatever percent the alert path knew,
+    // which is 0 when the latest-status lookup itself threw. Being the newest
+    // provisioning row it would then become "the latest status" and put a 0%
+    // provisioning ring on a live tenant's dashboard. The retry route's
+    // candidate scan already skips this phase for the same reason.
+    .not("log_payload->>phase", "eq", "ops_provisioning_stuck_alert_sent")
     .order("created_at", { ascending: false })
     .limit(1)
     .maybeSingle();

@@ -852,6 +852,39 @@ describe("provisioning/orchestrate", () => {
     expect(outboundLogInsert).not.toHaveBeenCalled();
   });
 
+  // The ops "[ops] New signup live" alert is gated on deploySucceeded, but the
+  // owner "Your New Coworker is live!" email and SMS were not. On a failed
+  // signup deploy the customer was told they were live and ops was told
+  // nothing. The stuck-alert scan is what pages ops for this case (business
+  // online with percent < 100).
+  it("does not tell the owner they are live when the deploy failed", async () => {
+    const { sendTelnyxSms } = await import("@/lib/telnyx/messaging");
+    const { sendOwnerEmail } = await import("@/lib/email/client");
+    vi.mocked(sendTelnyxSms).mockClear();
+    vi.mocked(sendOwnerEmail).mockClear();
+
+    const result = await orchestrateProvisioning(
+      {
+        businessId: "biz-deploy-failed",
+        tier: "starter",
+        ownerPhone: "+15145188192",
+        ownerEmail: "owner@example.com"
+      },
+      {
+        vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+        remoteExec: vi.fn().mockResolvedValue(okExec()),
+        latestProvisioningStatus: async () => {
+          throw new Error("deploy poll down");
+        },
+        sleep: async () => undefined
+      }
+    );
+
+    expect(result.deploySucceeded).toBe(false);
+    expect(sendOwnerEmail).not.toHaveBeenCalled();
+    expect(sendTelnyxSms).not.toHaveBeenCalled();
+  });
+
   it("a failed outbound-log insert never fails provisioning (SMS already went out)", async () => {
     const { sendTelnyxSms } = await import("@/lib/telnyx/messaging");
     vi.mocked(sendTelnyxSms).mockClear();
