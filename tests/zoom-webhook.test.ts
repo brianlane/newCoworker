@@ -14,6 +14,7 @@ vi.mock("@/lib/logger", () => ({
 // stays hermetic (no supabase module init at test load).
 vi.mock("@/lib/db/businesses", () => ({ getBusiness: vi.fn() }));
 vi.mock("@/lib/db/zoom-connections", () => ({
+  getActiveZoomConnection: vi.fn().mockResolvedValue({ account_name: "Brian Lane" }),
   getActiveZoomConnectionSummariesByZoomUserId: vi.fn(),
   getZoomConnectionBusinessIdsByZoomUserId: vi.fn(),
   markZoomConnectionDeauthorized: vi.fn()
@@ -24,7 +25,15 @@ vi.mock("@/lib/db/zoom-transcript-imports", () => ({
   releaseZoomTranscriptImport: vi.fn()
 }));
 vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
-vi.mock("@/lib/zoom/import-core", () => ({ importZoomTranscriptDocument: vi.fn() }));
+vi.mock("@/lib/zoom/import-core", () => ({
+  importZoomTranscriptDocument: vi.fn(),
+  // Mirrors the real helper closely enough to exercise the caller's loader:
+  // a stub that ignored it would leave the connection lookup unreached.
+  resolveHostNames: async (
+    name: string,
+    load: () => Promise<{ account_name: string | null } | null>
+  ) => [name, (await load())?.account_name ?? ""].filter((n) => n.trim() !== "")
+}));
 vi.mock("@/lib/zoom/transcript", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/zoom/transcript")>();
   return {
@@ -693,3 +702,4 @@ describe("processZoomWebhookEvent", () => {
     });
   });
 });
+

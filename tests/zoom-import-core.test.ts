@@ -29,7 +29,8 @@ vi.mock("@/lib/vps/sync-vault", () => ({
 
 import {
   importZoomTranscriptDocument,
-  MAX_ZOOM_TRANSCRIPT_BYTES
+  MAX_ZOOM_TRANSCRIPT_BYTES,
+  resolveHostNames
 } from "@/lib/zoom/import-core";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -185,5 +186,136 @@ describe("importZoomTranscriptDocument", () => {
     });
     const result = await importZoomTranscriptDocument(PARAMS, deps);
     expect(result).toMatchObject({ ok: true, status: "failed", errorDetail: "model_error" });
+  });
+});
+
+/**
+ * Zoom's default topics collide, so the provisional title (built from that
+ * topic before ingest) is replaced once the minutes exist and reveal who was
+ * on the call and what it was about.
+ */
+describe("importZoomTranscriptDocument — derived title", () => {
+  const GUEST_VTT = [
+    "WEBVTT",
+    "",
+    "1",
+    "00:00:01.000 --> 00:00:03.000",
+    "Brian Lane: Thanks for jumping on.",
+    "",
+    "2",
+    "00:00:04.000 --> 00:00:06.000",
+    "Alexander: Happy to be here."
+  ].join("\n");
+
+  const MINUTES = ["### Platform & Product Overview", "", "- Pricing", "", "## Transcript"].join("\n");
+
+  it("retitles from the guest and the first minutes heading", async () => {
+    const { deps } = makeDeps({
+      ingest: vi.fn().mockResolvedValue({
+        ok: true,
+        contentMd: MINUTES,
+        summary: 'Brian Lane and Alexander ("Bobby") walked the platform.'
+      })
+    });
+    const result = await importZoomTranscriptDocument(
+      {
+        ...PARAMS,
+        vtt: GUEST_VTT,
+        title: "New Coworker's Zoom Meeting (transcript)",
+        hostNames: ["Brian Lane", "New Coworker"]
+      },
+      deps
+    );
+
+    const d = deps as { patchDocument: ReturnType<typeof vi.fn> };
+    expect(d.patchDocument).toHaveBeenCalledWith(
+      BIZ,
+      DOC_ID,
+      expect.objectContaining({
+        title: "Bobby Platform & Product Overview Zoom meeting recording"
+      })
+    );
+    expect(result).toMatchObject({ ok: true, status: "ready" });
+    // The API response and the dashboard render from this row, so it must
+    // carry the title that was actually written, not the insert-time one.
+    expect(result).toMatchObject({
+      ok: true,
+      document: { title: "Bobby Platform & Product Overview Zoom meeting recording" }
+    });
+  });
+
+  it("keeps a title the host actually chose", async () => {
+    const { deps } = makeDeps({
+      ingest: vi
+        .fn()
+        .mockResolvedValue({ ok: true, contentMd: MINUTES, summary: "recap" })
+    });
+    await importZoomTranscriptDocument(
+      {
+        ...PARAMS,
+        vtt: GUEST_VTT,
+        title: "KYP onboarding call (transcript)",
+        hostNames: ["Brian Lane"]
+      },
+      deps
+    );
+    const d = deps as { patchDocument: ReturnType<typeof vi.fn> };
+    expect(d.patchDocument.mock.calls[0][2]).not.toHaveProperty("title");
+  });
+
+  it("returns the insert row unchanged when no title was derived", async () => {
+    const { deps } = makeDeps({
+      ingest: vi.fn().mockResolvedValue({ ok: true, contentMd: "", summary: null })
+    });
+    const result = await importZoomTranscriptDocument(
+      { ...PARAMS, vtt: "WEBVTT\n\n", title: "Team sync (transcript)" },
+      deps
+    );
+    expect(result).toMatchObject({ ok: true, document: { title: DOC_ROW.title } });
+  });
+
+  it("keeps the provisional title when nothing can be derived", async () => {
+    const { deps } = makeDeps({
+      ingest: vi.fn().mockResolvedValue({ ok: true, contentMd: "", summary: null })
+    });
+    await importZoomTranscriptDocument(
+      {
+        ...PARAMS,
+        vtt: "WEBVTT\n\n",
+        title: "Zoom meeting recording (transcript)",
+        hostNames: ["Brian Lane"]
+      },
+      deps
+    );
+    const d = deps as { patchDocument: ReturnType<typeof vi.fn> };
+    expect(d.patchDocument.mock.calls[0][2]).not.toHaveProperty("title");
+  });
+});
+
+describe("resolveHostNames", () => {
+  it("adds the Zoom account display name to the business name", async () => {
+    await expect(
+      resolveHostNames("New Coworker", async () => ({ account_name: "Brian Lane" }))
+    ).resolves.toEqual(["New Coworker", "Brian Lane"]);
+  });
+
+  it("falls back to the business name when there is no connection", async () => {
+    await expect(resolveHostNames("New Coworker", async () => null)).resolves.toEqual([
+      "New Coworker"
+    ]);
+  });
+
+  // A nicer document title is never worth failing an import over.
+  it("never throws when the connection lookup does", async () => {
+    await expect(
+      resolveHostNames("New Coworker", async () => {
+        throw new Error("db down");
+      })
+    ).resolves.toEqual(["New Coworker"]);
+    await expect(
+      resolveHostNames("New Coworker", async () => {
+        throw "string boom";
+      })
+    ).resolves.toEqual(["New Coworker"]);
   });
 });
