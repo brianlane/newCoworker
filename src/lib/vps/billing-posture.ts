@@ -395,9 +395,13 @@ export async function checkVpsBillingPosture(
       hostingerBillingSubscriptionId: null,
       expiresAt: null,
       autoHealed: false,
+      // tenantVmId also rejects non-numeric and non-positive ids, so say which
+      // it is rather than always claiming the column is empty.
       detail:
-        `business is ${business.status} but has no hostinger_vps_id: it is serving from nowhere. ` +
-        "Check for a half-finished migration and re-point or re-provision"
+        `business is ${business.status} but has no usable hostinger_vps_id ` +
+        `(${business.hostinger_vps_id === null || business.hostinger_vps_id === "" ? "unset" : `unusable value ${JSON.stringify(business.hostinger_vps_id)}`}): ` +
+        "it is serving from nowhere. Check for a half-finished migration and " +
+        "re-point or re-provision"
     });
   }
 

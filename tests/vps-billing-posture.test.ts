@@ -686,6 +686,22 @@ describe("checkVpsBillingPosture — fleet consistency", () => {
     const finding = res.findings.find((f) => f.kind === "online_tenant_no_box");
     expect(finding).toBeDefined();
     expect(finding?.businessId).toBe("b-nobox");
+    expect(finding?.detail).toContain("unset");
+  });
+
+  // tenantVmId also rejects non-numeric and non-positive ids, so the message
+  // must not claim the column is empty when ops can see a value in it.
+  it("says an unusable VPS id is unusable, not missing", async () => {
+    const deps = makeDeps({
+      listBusinesses: vi
+        .fn()
+        .mockResolvedValue([biz({ id: "b-bad", hostinger_vps_id: "not-a-number" })]),
+      listVirtualMachines: vi.fn().mockResolvedValue([])
+    });
+    const res = await checkVpsBillingPosture(deps as never);
+    const finding = res.findings.find((f) => f.kind === "online_tenant_no_box");
+    expect(finding?.detail).toContain("unusable value");
+    expect(finding?.detail).toContain("not-a-number");
   });
 
   // Inventory drift: the box is missing from vps_inventory but a live
