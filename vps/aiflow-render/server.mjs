@@ -1107,6 +1107,13 @@ app.post("/render", async (req, res) => {
     page = await session.context.newPage();
     await attachSsrfGuard(page);
     await page.goto(safe, { waitUntil: NAV_WAIT_UNTIL, timeout: NAV_TIMEOUT_MS });
+    // Settle BEFORE judging whether this is a login page. looksLikeLogin takes
+    // an instant locator count with no auto-wait, and goto now returns at
+    // domcontentloaded, so on a login-gated SPA whose form renders client-side
+    // it would see no password field, skip authentication, and hand the
+    // extractor a logged-out shell. Under the old waitUntil: "networkidle" the
+    // page had already painted by this line; settling here is what restores it.
+    await settlePage(page);
 
     if (await looksLikeLogin(page, auth?.login)) {
       // Credential lookup / login-form failures are permanent SETUP errors
@@ -1125,6 +1132,9 @@ app.post("/render", async (req, res) => {
           .json({ error: "auth_config_error", detail: String(e).slice(0, 200) });
       }
       await page.goto(safe, { waitUntil: NAV_WAIT_UNTIL, timeout: NAV_TIMEOUT_MS });
+      // Same reason as above: settle before the second login check, or a slow
+      // re-render reads as "logged in" and the extractor gets the shell.
+      await settlePage(page);
       // Login can still fail (bad creds / MFA / captcha). Surface it AND drop the
       // logged-out session so the next call doesn't reuse a poisoned context and
       // hand the extractor a login page.
@@ -1135,11 +1145,11 @@ app.post("/render", async (req, res) => {
       }
     }
 
-    // Let the (post-login) SPA paint before we screenshot / read / act, so the
-    // lead page's fields and buttons (e.g. "Provide Update") are present and the
-    // debug screenshots aren't blank. Covers both the no-login and post-login
-    // navigations, which converge here.
-    await settlePage(page);
+    // The SPA has already been settled: every path to this line settles right
+    // after its own navigation (that is what makes the login check reliable),
+    // so the lead page's fields and buttons (e.g. "Provide Update") are present
+    // and the debug screenshots aren't blank. Don't re-settle here, it would
+    // just pay the network-quiet wait a third time on a page that never idles.
 
     // ACTION mode runs after any login. An action failure does NOT poison the
     // session — the login is still good; only the page/selectors disagreed.
