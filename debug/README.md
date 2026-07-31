@@ -157,7 +157,7 @@ production secrets, root SSH, and tenant PII all meet.
 | `probe-extraction.ts` | Read-only: runs the current repo extraction prompt through a tenant's live Ollama for a set of scenarios and prints save/bullets + PASS/FAIL vs expectation. |
 | `check-vault-sync.ts` | **Drift check.** Compares Supabase `memory_md` against the VPS Rowboat agent prompt (Mongo `instructions`); reports whether the latest saved bullet reached the live agent. Read-only. |
 | `resync-vault.ts` | **Recovery.** Forces a vault → VPS re-seed for one tenant (`<businessId>`) or `--all`. Use when `check-vault-sync.ts` reports drift. |
-| `redeploy-aiflow-render.ts` | **Targeted aiflow-render rollout.** Refreshes `/opt/aiflow-render` (rsync + `docker compose up --build`) on every render-capable tenant VPS (or one with `--business <uuid>`) without re-running the full `deploy-client.sh` provisioner, so the box's `.env` secrets are preserved. `--ref`, `--json`. Starter boxes have no render `.env` (policy-gated off KVM2) and abort; `--init-env` (with `AIFLOW_RENDER_TOKEN` in the caller env) seeds one for capability experiments like the KVM2 render-contention test. ⚠️ `--seed-token` (with `AIFLOW_RENDER_TOKEN` in the caller env) REPLACES the token line in the box's existing render `.env` — the remediation for bearers blanked by pre-2026-07-21 full redeploys (an empty token leaves `/render` + `/pdf` unauthenticated); the worker must hold the SAME value or its browse calls start 401ing. |
+| `redeploy-aiflow-render.ts` | **Targeted aiflow-render rollout.** Refreshes `/opt/aiflow-render` (rsync + `docker compose up --build`) on **one** tenant VPS (`--business-id <uuid>`, default Amy) without re-running the full `deploy-client.sh` provisioner, so the box's `.env` secrets are preserved. Per box, NOT fleet-wide: it resolves a single box via `getActiveVpsSshKeyForBusiness`, so covering the fleet means one run per tenant. `--ref`, `--json`. Starter boxes have no render `.env` (policy-gated off KVM2) and abort; `--init-env` (with `AIFLOW_RENDER_TOKEN` in the caller env) seeds one for capability experiments like the KVM2 render-contention test. ⚠️ `--seed-token` (with `AIFLOW_RENDER_TOKEN` in the caller env) REPLACES the token line in the box's existing render `.env`, the remediation for bearers blanked by pre-2026-07-21 full redeploys (an empty token leaves `/render` + `/pdf` unauthenticated); the worker must hold the SAME value or its browse calls start 401ing. |
 | `redeploy-voice-bridge.ts` | **Targeted voice-bridge rollout.** Refreshes `/opt/voice-bridge` (rsync `vps/voice-bridge` excluding `.env` + `docker compose up --build` of only that container) on a tenant VPS (`--business-id <uuid>`, default Amy) without re-running `deploy-client.sh`, so the box's `STREAM_URL_SIGNING_SECRET`/`SUPABASE_*` stay intact. Verifies the contacts-aware bridge code landed and health-checks `:8090`. `--dry-run`. |
 | `backfill-sms-customer-e164.ts` | **Data backfill.** Stamps `sms_inbound_jobs.customer_e164` from the Telnyx envelope sender for rows where it's NULL (AiFlow-suppressed / legacy Safe Mode inbounds). Those texts showed in the raw thread view but not on the contact page (which filters by the column). Idempotent — only touches NULL rows. Dry-run by default; `--apply` to write. |
 | `backfill-nango-account-identity.ts` | **Data backfill.** Stamps `provider_account_email` / `provider_account_display_name` onto `workspace_oauth_connections.metadata` by asking each provider (Gmail profile, Graph `/me`, …) whose account the token is for — pre-fix Connect-UI rows were labeled with the dashboard login instead — and pushes the same identity to Nango (`patchConnection` end_user + tags) so Nango's dashboard "Customer" column matches. Idempotent — already-stamped rows skip the probe but still get the Nango push. Dry-run by default; `--apply` to write; `--business <uuid>` to scope. |
@@ -226,6 +226,25 @@ tsx debug/update-all-vps.ts --concurrency=4
 The remote sequence is idempotent (fetch+reset `origin/main`, rsync the worker
 source, reconcile the managed capture-env vars, rebuild/recreate the container)
 and safe to re-run.
+
+⚠️ **This rolls out `vps/chat-worker` ONLY.** It rsyncs `vps/chat-worker/` and
+nothing else, so a `vps/voice-bridge` or `vps/aiflow-render` change shipped
+this way silently does nothing: the run goes green and the box keeps the old
+code. Those two sidecars have their own per-tenant scripts and no fleet-wide
+equivalent. To cover the fleet, loop over the distinct unrotated
+`business_id`s in `vps_ssh_keys` (four tenants today), since
+`getActiveVpsSshKeyForBusiness` resolves each one's current box:
+
+```bash
+# voice-bridge, one tenant at a time (same shape for redeploy-aiflow-render.ts)
+for b in <uuid> <uuid> <uuid>; do
+  tsx debug/redeploy-voice-bridge.ts --business-id "$b"
+  tsx debug/box-verify.ts "$b"
+done
+```
+
+Before a voice-bridge rebuild, check `voice_active_sessions` for rows with
+`ended_at IS NULL`: recreating the container drops any call in progress.
 
 ### Capture-env self-heal
 
