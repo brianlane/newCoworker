@@ -134,6 +134,10 @@ vi.mock("@/lib/email/client", () => ({
   sendOwnerEmail: mockSendOwnerEmail
 }));
 
+const { mockGrantRowsByTable } = vi.hoisted(() => ({
+  mockGrantRowsByTable: {} as Record<string, Array<Record<string, unknown>>>
+}));
+
 const mockVoiceBonusRpc = vi.hoisted(() =>
   vi.fn().mockImplementation((name: string) => {
     if (name === "apply_voice_bonus_grant_from_checkout") {
@@ -148,7 +152,16 @@ const mockVoiceBonusRpc = vi.hoisted(() =>
 
 vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn().mockResolvedValue({
-    rpc: mockVoiceBonusRpc
+    rpc: mockVoiceBonusRpc,
+    // Grant lookup for the membership pack clawback. Empty by default, so
+    // tests that do not care keep taking the subscription-metadata fallback.
+    from: (table: string) => {
+      const rows = mockGrantRowsByTable[table] ?? [];
+      const chain: Record<string, unknown> = {};
+      for (const m of ["select", "like", "is"]) chain[m] = () => chain;
+      chain.then = (resolve: (v: unknown) => unknown) => resolve({ data: rows, error: null });
+      return chain;
+    }
   })
 }));
 
@@ -3463,6 +3476,52 @@ describe("stripe webhook route: voice bonus refund / dispute handling", () => {
         p_reason: "refund"
       })
     );
+  });
+
+  /**
+   * The webhook is the safety net for the refund op, and it ran with no
+   * amounts, so the void RPCs got a null clawback and drained every remaining
+   * credit. That put a partial refund straight back to costing the customer
+   * 100% of their pack, undoing the proration the op had just applied.
+   */
+  it("claws back in proportion on a partial charge.refunded", async () => {
+    // Exercise the DB grant path: the metadata fallback cannot know how many
+    // units were granted, and it only runs once the grants are already voided.
+    mockGrantRowsByTable.voice_bonus_grants = [
+      { stripe_checkout_session_id: "inv_in_part_1:voice:min_30", seconds_purchased: 1800 }
+    ];
+    mockRefundsList.mockResolvedValueOnce({
+      data: [{ id: "re_part", metadata: { newcoworker_reason: "thirty_day_money_back" } }]
+    });
+    mockInvoicesRetrieve.mockResolvedValueOnce({
+      id: "in_part_1",
+      parent: { subscription_details: { subscription: "sub_live" } }
+    });
+    mockStripeRetrieve.mockResolvedValueOnce({
+      id: "sub_live",
+      metadata: { addonVoice: "min_30:1:1800" }
+    });
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_refund_part",
+      type: "charge.refunded",
+      data: {
+        object: {
+          id: "ch_refund_part",
+          amount: 4000,
+          amount_refunded: 1000,
+          invoice: "in_part_1"
+        }
+      }
+    } as never);
+
+    const res = await postEvent();
+    expect(res.status).toBe(200);
+    // A quarter of the charge came back, so a quarter of the pack goes.
+    expect(mockVoiceBonusRpc).toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      expect.objectContaining({ p_clawback_seconds: 450 })
+    );
+    delete mockGrantRowsByTable.voice_bonus_grants;
   });
 });
 

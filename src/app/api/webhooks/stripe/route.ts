@@ -2335,7 +2335,13 @@ async function handleVoiceBonusRefund(event: Stripe.Event): Promise<void> {
   await clawbackMembershipPackGrantsForInvoice({
     invoiceId,
     reason: packReason,
-    subscriptionMetadata
+    subscriptionMetadata,
+    // The charge knows exactly what came back. Without these the void RPCs
+    // get a null clawback and drain every remaining credit, which would undo
+    // the proportional clawback the refund op just performed: a partial
+    // refund would still cost the customer 100% of their pack.
+    originalAmountCents: charge.amount ?? null,
+    refundedAmountCents: charge.amount_refunded ?? null
   });
 }
 
