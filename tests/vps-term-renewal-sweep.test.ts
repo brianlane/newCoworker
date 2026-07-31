@@ -453,7 +453,11 @@ describe("runTermRenewalSweep", () => {
       vpsSize: "kvm2",
       billingPeriod: "biennial",
       skipPoolAdopt: true,
-      suppressOwnerNotify: true
+      suppressOwnerNotify: true,
+      // Derived from the wall clock (route budget minus time already spent),
+      // so pin the shape, not the value. remainingDeployDeadlineMs is covered
+      // exactly in tests/provisioning-deploy-budget.test.ts.
+      deployBudgetStartedAtMs: expect.any(Number)
     });
     expect(deps.updateSubscription).toHaveBeenCalledWith("sub-1", {
       hostinger_billing_subscription_id: "hbs-new"

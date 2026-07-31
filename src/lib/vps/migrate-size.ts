@@ -114,6 +114,8 @@ export type MigrateVpsSizeDeps = {
     /** Buys the replacement box at the tenant's committed Hostinger term. */
     billingPeriod?: SubscriptionRow["billing_period"];
     suppressOwnerNotify?: boolean;
+    /** Date.now() when the caller's route budget began. */
+    deployBudgetStartedAtMs?: number;
   }) => Promise<{
     vpsId: string;
     hostingerBillingSubscriptionId: string | null;
@@ -154,6 +156,10 @@ export async function migrateBusinessVpsSize(
   deps: MigrateVpsSizeDeps
 ): Promise<MigrateVpsSizeOutcome> {
   const { businessId, targetSize, requestedBy } = input;
+  // The route's maxDuration budget starts here. Snapshot, backup, purchase,
+  // boot and bootstrap all run before the deploy poll, so the orchestrator
+  // computes the deploy's remaining budget from this timestamp.
+  const migrationStartedAt = Date.now();
 
   // ── Load + guards ─────────────────────────────────────────────────────
   const biz = await deps.getBusiness(businessId);
@@ -358,7 +364,8 @@ export async function migrateBusinessVpsSize(
             tier: input.tier,
             vpsSize: targetSize,
             billingPeriod: input.billingPeriod,
-            suppressOwnerNotify: true
+            suppressOwnerNotify: true,
+            deployBudgetStartedAtMs: migrationStartedAt
           });
           return {
             hostingerBillingSubscriptionId: out.hostingerBillingSubscriptionId,

@@ -129,6 +129,18 @@ type ProvisioningInput = {
    * emails are unaffected. New signups and change-plan leave this unset.
    */
   suppressOwnerNotify?: boolean;
+  /**
+   * `Date.now()` at the moment the caller's route budget started.
+   *
+   * Migrations pass this so the deploy poll gets what is LEFT of the 1800s
+   * route budget rather than a flat 28 minutes. It is a timestamp and not a
+   * precomputed duration on purpose: the orchestrator still has to purchase,
+   * boot and SSH-bootstrap before the poll begins, so the remaining budget can
+   * only be computed correctly at the poll itself.
+   *
+   * Omitted for signup, which gets {@link DEPLOY_CLIENT_DEADLINE_DEFAULT_MS}.
+   */
+  deployBudgetStartedAtMs?: number;
   /** When true, send the ops "[ops] New signup live" alert after first successful deploy. */
   notifyOpsNewSignup?: boolean;
 };
@@ -530,8 +542,56 @@ function defaultDeployPollSleep(ms: number): Promise<void> {
 export const DEPLOY_CLIENT_LOCK_BUSY_EXIT = 75;
 
 const DEPLOY_CLIENT_POLL_DEFAULT_MS = 5_000;
-/** Align with Vercel maxDuration (1800s) minus a small buffer for post-deploy work. */
-const DEPLOY_CLIENT_DEADLINE_DEFAULT_MS = 28 * 60 * 1000;
+/**
+ * Standalone default: a signup starts phase 4 almost immediately, so aligning
+ * with Vercel maxDuration (1800s) minus a small buffer is right for it.
+ */
+export const DEPLOY_CLIENT_DEADLINE_DEFAULT_MS = 28 * 60 * 1000;
+
+/** The migrate-size / term-renewal route budget (`maxDuration = 1800`). */
+export const MIGRATION_ROUTE_BUDGET_MS = 1800 * 1000;
+/**
+ * Held back for what happens AFTER the deploy on a migration: restore the
+ * tarball, repoint billing, stop the old VM, disable its auto-renewal, pool it.
+ */
+export const MIGRATION_CUTOVER_RESERVE_MS = 8 * 60 * 1000;
+/**
+ * Never hand the deploy less than this. Below it the poll is pointless: better
+ * to let it run, fail cleanly, and leave the old box untouched (the cutover
+ * refuses on a failed deploy) than to give it 30 seconds.
+ */
+export const MIGRATION_DEPLOY_MIN_DEADLINE_MS = 5 * 60 * 1000;
+
+/**
+ * How long the deploy may run given time already spent.
+ *
+ * The 28-minute constant assumed phase 4 starts at t=0. In a migration it does
+ * not: snapshot, SSH tarball backup, purchase, boot and bootstrap run first,
+ * realistically 12 to 18 minutes. A deploy allowed the full 28 minutes finished
+ * around minute 45, past the route ceiling, leaving restore and teardown no
+ * budget at all.
+ */
+export function remainingDeployDeadlineMs(elapsedMs: number): number {
+  const left = MIGRATION_ROUTE_BUDGET_MS - elapsedMs - MIGRATION_CUTOVER_RESERVE_MS;
+  return Math.max(
+    MIGRATION_DEPLOY_MIN_DEADLINE_MS,
+    Math.min(DEPLOY_CLIENT_DEADLINE_DEFAULT_MS, left)
+  );
+}
+
+/**
+ * Deadline for the deploy poll given the caller's budget start.
+ *
+ * `undefined` (the signup case) means "no caller budget", and the poll falls
+ * back to {@link DEPLOY_CLIENT_DEADLINE_DEFAULT_MS} on its own.
+ */
+export function deployDeadlineForBudget(
+  budgetStartedAtMs: number | undefined,
+  nowMs: () => number
+): number | undefined {
+  if (budgetStartedAtMs === undefined) return undefined;
+  return remainingDeployDeadlineMs(nowMs() - budgetStartedAtMs);
+}
 
 export type DetachedDeployPollResult =
   | { ok: true; source: "exit_file" | "progress" }
@@ -1461,6 +1521,7 @@ async function runOrchestrator(
       : deps.vpsPool;
   /* c8 ignore next -- defaultRemoteExecutor is the production path; tests inject remoteExec */
   const remoteExec = deps?.remoteExec ?? defaultRemoteExecutor;
+  const nowMs: () => number = deps?.now ?? Date.now;
 
   // Fail-but-charge orphan reconciler (see acquireVps). Built lazily on the
   // same Hostinger client; only ever invoked when the purchase endpoint
@@ -2113,6 +2174,10 @@ async function runOrchestrator(
       sshKeyRow: provisioned.sshKey,
       remoteExec,
       latestProvisioningStatus: latestStatus,
+      // Computed HERE, not by the caller: purchase, boot and SSH bootstrap all
+      // happen between the caller's start and this poll, and they are the bulk
+      // of the pre-deploy time.
+      deadlineMs: deployDeadlineForBudget(input.deployBudgetStartedAtMs, nowMs),
       sleep: deps?.sleep,
       now: deps?.now
     });

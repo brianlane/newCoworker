@@ -126,6 +126,8 @@ export type TermRenewalSweepDeps = {
     billingPeriod?: SubscriptionRow["billing_period"];
     skipPoolAdopt?: boolean;
     suppressOwnerNotify?: boolean;
+    /** Date.now() when the caller's route budget began. */
+    deployBudgetStartedAtMs?: number;
   }) => Promise<{
     vpsId: string;
     hostingerBillingSubscriptionId: string | null;
@@ -269,6 +271,10 @@ export async function runTermRenewalSweep(
   options: TermRenewalSweepOptions = {}
 ): Promise<TermRenewalSweepResult> {
   const now = options.now ?? new Date();
+  // The route's maxDuration budget starts HERE, not when a candidate's
+  // migration begins: the fleet scan and per-candidate VM lookups below run
+  // under the same ceiling and can take minutes.
+  const sweepStartedAtMs = Date.now();
   const savingsThreshold = options.savingsThreshold ?? DEFAULT_SAVINGS_THRESHOLD;
   const renewalWindowDays = options.renewalWindowDays ?? DEFAULT_RENEWAL_WINDOW_DAYS;
 
@@ -451,7 +457,8 @@ export async function runTermRenewalSweep(
           savingsRatio,
           nextBillingAt,
           renewalCents,
-          firstPeriodCents
+          firstPeriodCents,
+          budgetStartedAtMs: sweepStartedAtMs
         },
         deps
       );
@@ -524,10 +531,16 @@ async function migrateTenantTermRenewal(
     nextBillingAt: string;
     renewalCents: number;
     firstPeriodCents: number;
+    /** Date.now() when the sweep route began, for the deploy budget. */
+    budgetStartedAtMs: number;
   },
   deps: TermRenewalSweepDeps
 ): Promise<MigrateOutcome> {
   const { businessId, vpsSize } = input;
+  // The route budget started when the SWEEP did, not when this tenant's
+  // migration did: the fleet scan and per-candidate VM lookups above already
+  // spent some of it under the same maxDuration.
+  const budgetStartedAtMs = input.budgetStartedAtMs;
 
   const biz = await deps.getBusiness(businessId);
   if (!biz) {
@@ -674,7 +687,8 @@ async function migrateTenantTermRenewal(
             vpsSize,
             billingPeriod: input.billingPeriod,
             skipPoolAdopt: true,
-            suppressOwnerNotify: true
+            suppressOwnerNotify: true,
+            deployBudgetStartedAtMs: budgetStartedAtMs
           });
           return {
             hostingerBillingSubscriptionId: out.hostingerBillingSubscriptionId,
