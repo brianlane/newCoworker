@@ -45,13 +45,23 @@ export function contractTermNudgeAmounts(
   renewalRate: string;
 } {
   const termPricing = getPeriodPricing(tier, billingPeriod);
-  const monthly = getPeriodPricing(tier, "monthly");
   const months = getCommitmentMonths(billingPeriod);
   return {
     term: billingPeriod === "biennial" ? "24-month" : "12-month",
     contractRate: ratePerMonthDisplay(termPricing.monthlyCents),
     contractTotal: formatPriceCents(termPricing.monthlyCents * months),
-    renewalRate: ratePerMonthDisplay(monthly.renewalMonthlyCents)
+    // The TERM's renewal price, not the monthly plan's. contract_auto_renew
+    // = false means "roll to month-to-month at the renewal price" and
+    // /api/billing/auto-renew OFF re-creates the commitment schedule whose
+    // phase 2 is resolveRenewalPriceId(tier, billingPeriod). Reading
+    // getPeriodPricing(tier, "monthly") instead had the email quoting
+    // $279/mo to a biennial Standard tenant whose billing page, and whose
+    // Stripe schedule, both said $189/mo.
+    //
+    // #1021's monthly nudge legitimately uses the monthly plan's renewal
+    // rate, because a monthly plan really does roll to its own ongoing
+    // price. Reusing that shape here is what broke it.
+    renewalRate: ratePerMonthDisplay(termPricing.renewalMonthlyCents)
   };
 }
 

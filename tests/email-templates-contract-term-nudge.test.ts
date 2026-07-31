@@ -3,6 +3,7 @@ import {
   buildContractTermNudgeEmail,
   contractTermNudgeAmounts
 } from "@/lib/email/templates/contract-term-nudge";
+import { getRenewalRateDisplay } from "@/lib/pricing";
 
 const mailCtx = {
   recipientEmail: "owner@example.com",
@@ -17,12 +18,37 @@ describe("contractTermNudgeAmounts", () => {
     expect(annual.term).toBe("12-month");
     expect(annual.contractRate).toBe("$109/mo");
     expect(annual.contractTotal).toBe("$1,308");
-    expect(annual.renewalRate).toBe("$279/mo");
+    expect(annual.renewalRate).toBe("$209/mo");
 
     const biennial = contractTermNudgeAmounts("starter", "biennial");
     expect(biennial.term).toBe("24-month");
     expect(biennial.contractRate).toBe("$9.99/mo");
-    expect(biennial.renewalRate).toBe("$26.99/mo");
+    expect(biennial.renewalRate).toBe("$19.99/mo");
+  });
+
+  /**
+   * The email quotes what the tenant will actually be charged after the term
+   * ends. contract_auto_renew = false means "roll to month-to-month AT THE
+   * RENEWAL PRICE" (src/lib/db/subscriptions.ts), and /api/billing/auto-renew
+   * OFF re-creates the commitment schedule whose phase 2 is
+   * resolveRenewalPriceId(tier, billingPeriod): the TERM's renewal price, not
+   * the monthly plan's.
+   *
+   * Asserted against the module the dashboard renders from rather than a
+   * literal, because a literal is exactly what let the two drift: the email
+   * said $279/mo while PlanCard said $189/mo for the same biennial tenant.
+   */
+  it("quotes the same rollover rate the billing page shows", () => {
+    // The two surfaces format differently ($209/mo vs $209.00/mo), so compare
+    // the amount rather than the string.
+    const amount = (s: string): string => s.replace(/[^0-9.]/g, "").replace(/\.00$/, "");
+    for (const tier of ["starter", "standard"] as const) {
+      for (const period of ["annual", "biennial"] as const) {
+        expect(amount(contractTermNudgeAmounts(tier, period).renewalRate)).toBe(
+          amount(getRenewalRateDisplay(tier, period))
+        );
+      }
+    }
   });
 });
 
@@ -38,7 +64,8 @@ describe("buildContractTermNudgeEmail (Shape B)", () => {
     expect(text).toContain("12-month");
     expect(text).toContain("$109/mo");
     expect(text).toContain("August 12, 2026");
-    expect(text).toContain("$279/mo");
+    // The annual plan rolls to ITS renewal price, not the monthly plan's.
+    expect(text).toContain("$209/mo");
     expect(text).toContain("$1,308");
     expect(text).toMatch(/No action is required to roll to month-to-month/i);
     expect(text).toContain("Open Billing: https://www.newcoworker.com/dashboard/billing");
