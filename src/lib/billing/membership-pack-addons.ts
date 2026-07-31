@@ -345,3 +345,56 @@ export function membershipPackAddOnsDueTodayCents(
   add(selection.chatPacks, "chat");
   return total;
 }
+
+/** The metadata keys that carry recurring pack add-ons. Nothing else is mirrored. */
+const MEMBERSHIP_PACK_METADATA_KEYS = ["addonVoice", "addonSms", "addonChat"] as const;
+
+/** Shape stored in `subscriptions.membership_pack_addons`. */
+export type MembershipPackAddonsRow = Partial<
+  Record<(typeof MEMBERSHIP_PACK_METADATA_KEYS)[number], string>
+>;
+
+/**
+ * Narrow Stripe subscription metadata down to the pack keys for the local
+ * mirror.
+ *
+ * Deliberately stores the SAME encoding Stripe holds rather than a decoded
+ * shape: one format to keep in step instead of two, and
+ * {@link parseMembershipPackAddonMetadata} reads the column unchanged.
+ * Returns null when there are no packs, so "no row yet" and "no packs" look
+ * the same to callers, which is what the UI wants.
+ */
+export function membershipPackAddonsForRow(
+  metadata: Record<string, string> | null | undefined
+): MembershipPackAddonsRow | null {
+  if (!metadata) return null;
+  const out: MembershipPackAddonsRow = {};
+  for (const key of MEMBERSHIP_PACK_METADATA_KEYS) {
+    const value = metadata[key];
+    if (typeof value === "string" && value.trim() !== "") out[key] = value;
+  }
+  return Object.keys(out).length > 0 ? out : null;
+}
+
+/**
+ * The mirrored row as a change-plan selector selection, so switching billing
+ * period starts from what the tenant already has instead of from nothing.
+ *
+ * Tolerant of junk: the column is a read cache, and a malformed value must
+ * degrade to "no packs" rather than break the billing page.
+ */
+export function membershipPackSelectionFromRow(
+  stored: unknown
+): Required<MembershipPackAddonSelection> {
+  const empty = { voicePacks: [], smsPacks: [], chatPacks: [] };
+  if (!stored || typeof stored !== "object" || Array.isArray(stored)) return empty;
+
+  const parsed = parseMembershipPackAddonMetadata(stored as Record<string, string>);
+  const toQty = (entries: MembershipPackAddonMetaEntry[]): MembershipPackQty[] =>
+    entries.map((e) => ({ packId: e.packId, quantity: e.quantity }));
+  return {
+    voicePacks: toQty(parsed.voice),
+    smsPacks: toQty(parsed.sms),
+    chatPacks: toQty(parsed.chat)
+  };
+}

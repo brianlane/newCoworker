@@ -10,6 +10,7 @@ import {
 } from "@/lib/db/subscriptions";
 import { recordPromotionRedemption } from "@/lib/db/promotions";
 import { successResponse, errorResponse } from "@/lib/api-response";
+import { membershipPackAddonsForRow } from "@/lib/billing/membership-pack-addons";
 import { logger } from "@/lib/logger";
 import type Stripe from "stripe";
 import {
@@ -448,6 +449,12 @@ export async function POST(request: Request) {
             status,
             stripe_subscription_id: sub.id,
             cancel_at_period_end: Boolean(sub.cancel_at_period_end),
+            // Mirror the recurring pack add-ons so the dashboard can render
+            // what the tenant already carries without a Stripe call. This is
+            // the one write that runs on signup activation, on change-plan
+            // (which creates a new subscription), and on any Stripe-side
+            // edit, so the cache cannot drift for long.
+            membership_pack_addons: membershipPackAddonsForRow(sub.metadata),
             ...pauseStateFromStripeSubscription(sub),
             ...stripeSubscriptionPeriodCache(sub)
           });

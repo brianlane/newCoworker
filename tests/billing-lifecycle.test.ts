@@ -14,6 +14,7 @@ function makeSub(overrides: Partial<SubscriptionRow> = {}): SubscriptionRow {
     business_id: "biz-1",
     stripe_customer_id: "cus_1",
     stripe_subscription_id: "sub_stripe_1",
+    membership_pack_addons: null,
     tier: "starter",
     status: "active",
     billing_period: "monthly",

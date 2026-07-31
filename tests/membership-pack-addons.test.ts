@@ -9,7 +9,9 @@ import {
   membershipPackDiscountPercent,
   parseMembershipPackAddonMetadata,
   resolveMembershipPackAddons,
-  sessionHasMembershipPackAddons
+  sessionHasMembershipPackAddons,
+  membershipPackAddonsForRow,
+  membershipPackSelectionFromRow
 } from "@/lib/billing/membership-pack-addons";
 
 const ENV_KEYS = [
@@ -295,5 +297,58 @@ describe("lib/billing/membership-pack-addons", () => {
     expect(decodeMembershipPackMeta("min_30:3:1800,,bad:x:y,min_30:0:1800,min_30:1:0,:1:1800")).toEqual([
       { packId: "min_30", quantity: 3, unitSize: 1800 }
     ]);
+  });
+});
+
+/**
+ * The packs a tenant carries live only in Stripe subscription metadata, so
+ * nothing server-rendered could see them and the change-plan selector started
+ * empty every time. Change-plan rebuilds the subscription from the selector's
+ * lines alone, so a tenant switching period without touching the steppers
+ * silently lost their packs from the next invoice.
+ */
+describe("membership pack add-on mirroring", () => {
+  it("keeps only the three pack keys, so one encoding is stored not two", () => {
+    expect(
+      membershipPackAddonsForRow({
+        addonVoice: "min_30:2:1800",
+        addonSms: "texts_500:1:500",
+        unrelated: "keep out",
+        businessId: "biz-1"
+      })
+    ).toEqual({ addonVoice: "min_30:2:1800", addonSms: "texts_500:1:500" });
+  });
+
+  it("is null when the subscription carries no packs", () => {
+    expect(membershipPackAddonsForRow({ businessId: "biz-1" })).toBeNull();
+    expect(membershipPackAddonsForRow(null)).toBeNull();
+  });
+
+  it("round-trips back into a selector selection", () => {
+    const stored = membershipPackAddonsForRow({
+      addonVoice: "min_30:2:1800",
+      addonChat: "usd_5:3:5000000"
+    });
+    expect(membershipPackSelectionFromRow(stored)).toEqual({
+      voicePacks: [{ packId: "min_30", quantity: 2 }],
+      smsPacks: [],
+      chatPacks: [{ packId: "usd_5", quantity: 3 }]
+    });
+  });
+
+  it("reads an empty selection from a row that has none", () => {
+    expect(membershipPackSelectionFromRow(null)).toEqual({
+      voicePacks: [],
+      smsPacks: [],
+      chatPacks: []
+    });
+  });
+
+  it("ignores a stored value that is not an object", () => {
+    expect(membershipPackSelectionFromRow("nonsense")).toEqual({
+      voicePacks: [],
+      smsPacks: [],
+      chatPacks: []
+    });
   });
 });

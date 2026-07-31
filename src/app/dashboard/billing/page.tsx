@@ -34,7 +34,10 @@ import {
 } from "@/lib/billing/voice-bonus-packs";
 import { listSmsBonusPacks } from "@/lib/billing/sms-bonus-packs";
 import { listChatCreditPacks } from "@/lib/billing/chat-credit-packs";
-import { listMembershipPackAddonOptions } from "@/lib/billing/membership-pack-addons";
+import {
+  listMembershipPackAddonOptions,
+  membershipPackSelectionFromRow
+} from "@/lib/billing/membership-pack-addons";
 import {
   getChatSpendSnapshotForBusiness,
   getSmsBonusTextsRemaining
@@ -165,6 +168,11 @@ export default async function BillingPage(props: {
   const smsPacks = listSmsBonusPacks();
   const chatPacks = listChatCreditPacks();
   const packAddonOptions = listMembershipPackAddonOptions();
+  // What the tenant already carries, so change-plan starts from their current
+  // packs instead of an empty selection (which silently dropped them).
+  const currentPackAddons = membershipPackSelectionFromRow(
+    subscription?.membership_pack_addons ?? null
+  );
 
   const smsMonthlyCap = business?.tier
     ? getTierLimits(
@@ -358,6 +366,7 @@ export default async function BillingPage(props: {
         contractAutoRenew={contractAutoRenew}
         commitmentElapsed={commitmentElapsed}
         packAddonOptions={packAddonOptions}
+        currentPackAddons={currentPackAddons}
       />
 
       {business?.tier && (
