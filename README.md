@@ -2322,6 +2322,7 @@ Recent captures, and what each replaced:
 | "Review everything about Amy / KYP / Truly" | [docs/tenants/](docs/tenants/README.md) |
 | "What is this tenant's posture, is anything broken?" | `tsx debug/audit-account.ts --business <uuid>` |
 | "They say they never got the text" | `tsx debug/trace-sms.ts --to +1…` |
+| "Which tenant flows would this phone-field change break?" | `tsx debug/audit-phone-field-names.ts` |
 
 Multi-step procedures that are judgment, not code, are captured as agent
 skills under [.claude/skills/](.claude/skills) (`e2e-bug-hunt`,

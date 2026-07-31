@@ -530,6 +530,34 @@ export function isPhoneFieldName(name: string): boolean {
   return false;
 }
 
+/**
+ * Post-process ONE extracted field value the way every extractor step should:
+ * fill an empty phone-ish field from the source text, then validate it.
+ *
+ * The distinction this exists to keep: `isPhoneFieldName` is a deliberately
+ * loose NAME heuristic whose documented job is driving the empty-value regex
+ * fallback. It is not proof the field HOLDS a phone. It matches on any phone
+ * token anywhere in the name, so gate fields like `phone_lead_type`
+ * ("buyer"/"seller"/"both") and `has_phone` ("yes"/"no") match it too.
+ *
+ * Amy Laidlaw's ReferralExchange flow, Jul 24 2026: sanitizing on the name
+ * alone rewrote `phone_lead_type` from "seller" to "none" on every run, so all
+ * three `route_to_team` steps skipped and 11 leads were texted but never
+ * offered to her team. Requiring a digit before validating keeps
+ * `sanitizeExtractedPhone` pointed at values that are actually a phone attempt,
+ * so the KYP "+492046781" class is still caught and a word-valued gate field is
+ * left alone.
+ */
+export function postProcessExtractedField(
+  name: string,
+  value: string,
+  sourceText: string
+): string {
+  if (!isPhoneFieldName(name)) return value;
+  const filled = value || extractLabeledPhones(sourceText)[0] || "";
+  return /\d/.test(filled) ? sanitizeExtractedPhone(filled, sourceText) : filled;
+}
+
 // Conventional variable keys an extraction step might capture a lead's name /
 // email under, in priority order (specific keys first; the bare "name"/"email"
 // fall back last so a generic var doesn't beat a purpose-named one). Lets the

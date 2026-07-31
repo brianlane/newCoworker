@@ -30,8 +30,7 @@ import {
   buildClassifyPrompt,
   buildExtractionPrompt,
   evaluateStepCondition,
-  extractLabeledPhones,
-  isPhoneFieldName,
+  postProcessExtractedField,
   parseClassifyChoice,
   parseExtractionJson
 } from "../../supabase/functions/_shared/ai_flows/engine";
@@ -129,13 +128,12 @@ export async function walkFlow(
         const extracted = parseExtractionJson(raw, action.fields);
         const out: Record<string, string> = {};
         for (const f of action.fields) {
-          // Mirror the worker's regex fallback for phone fields (labeled
-          // numbers only — see extractLabeledPhones).
-          let val = extracted[f.name] ?? "";
-          if (!val && isPhoneFieldName(f.name)) {
-            val = extractLabeledPhones(action.text)[0] ?? "";
-          }
-          out[f.name] = val;
+          // Share the worker's phone-field post-processing rather than
+          // re-implementing half of it. This harness used to mirror only the
+          // labeled-phone fallback and skip the sanitizer, which is why it
+          // stayed green through the Jul 24 2026 regression that blanked
+          // `phone_lead_type` on every ReferralExchange run.
+          out[f.name] = postProcessExtractedField(f.name, extracted[f.name] ?? "", action.text);
         }
         Object.assign(scope.vars, out);
         record(step, "done", { vars: out });

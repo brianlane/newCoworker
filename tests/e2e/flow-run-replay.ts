@@ -35,8 +35,7 @@ import {
   buildClassifyPrompt,
   buildExtractionPrompt,
   evaluateStepCondition,
-  extractLabeledPhones,
-  isPhoneFieldName,
+  postProcessExtractedField,
   parseClassifyChoice,
   parseExtractionJson
 } from "../../supabase/functions/_shared/ai_flows/engine";
@@ -158,11 +157,9 @@ export async function walkFlowTimed(
         const extracted = parseExtractionJson(raw, action.fields);
         const out: Record<string, string> = {};
         for (const f of action.fields) {
-          let val = extracted[f.name] ?? "";
-          if (!val && isPhoneFieldName(f.name)) {
-            val = extractLabeledPhones(action.text)[0] ?? "";
-          }
-          out[f.name] = val;
+          // Same shared post-processing the worker runs (fallback + phone
+          // validation), so a replay reproduces production exactly.
+          out[f.name] = postProcessExtractedField(f.name, extracted[f.name] ?? "", action.text);
         }
         Object.assign(scope.vars, out);
         record(step, "done", { vars: out });

@@ -40,7 +40,7 @@ touch them:
 | Clever Lead - Group Reply Intro / Connected | Two-step flows reacting inside a group thread. An OLD disabled copy of the Intro flow still exists, do not edit that one |
 | Clever - Spoke Check & Weekly Call Follow-Up (owner_assigned, 15) | Owner-assigned trigger, not lead-driven |
 | Clever Cue Text | Arms an expected-call window so a transfer from a rotating Clever number is recognized (PR #781) |
-| ReferralExchange Lead (sms, 21) | Browse-screenshot steps, gated owner emails, gated MMS routing |
+| ReferralExchange Lead (sms, 31) | Browse-screenshot steps, gated owner emails, gated MMS routing, bad-phone retry tail |
 | Realtor.com Lead + Reply forward | Reply forwarding to the lead owner |
 | New Lead Intake (manual, 10) | Owner hands the AI a lead by name; the AI calls the lead, speaks their language, and can pin the lead to a named teammate |
 | Voice routing - calls from ... | Five per-source voice-routing flows, keyed to each network's caller IDs |
@@ -66,6 +66,15 @@ These are mistakes already made on this account. Do not remake them.
   `scripts/oneshot/`, which is idempotent, dry-run by default, and reviewable.
 - **Amy's flows are the fleet's stress case for step counts.** The
   definition-wide step cap went 50 -> 150 for this account (PR #634).
+- **Never name a gate field so it reads like a phone field.** `phone_lead_type`
+  held buyer/seller/both, but `isPhoneFieldName` matches any phone token in a
+  name, so when the engine began validating phone fields (PR #885, Jul 24 2026)
+  every value became "none". All three ReferralExchange `route_to_team` steps
+  skipped for eight days: 11 leads were texted but never offered to the team,
+  and Amy's owner alert claimed "no phone" while naming the number just texted.
+  The engine no longer rewrites a value that is not a phone attempt, and the
+  fields were renamed (`route_lead_type`, `sms_lead_type`). Audit the fleet for
+  the same shape with `tsx debug/audit-phone-field-names.ts`.
 
 ## One-shots
 
@@ -93,7 +102,9 @@ Account-level: `seed-amy-new-lead-intake.ts`,
 `update-dave-routed-aiflows.ts`, `add-price-band-routing.ts`,
 `add-bad-phone-agent-report.ts`, `enrich-owner-notify.ts`,
 `fix-staff-contact-rows.ts`, `strip-em-dashes-flows.ts`,
-`recover-amy-biennial-switch.ts`.
+`recover-amy-biennial-switch.ts`,
+`rename-phone-named-gate-fields.ts` (also touches KYP; renames the gate fields
+that the phone-field validator was clobbering, see Sharp edges).
 
 ## Billing
 
