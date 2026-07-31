@@ -64,6 +64,14 @@ const LIVE_CREDENTIAL_ENV_VARS = [
   "SLACK_CLIENT_SECRET",
   "ZOOM_CLIENT_ID",
   "ZOOM_CLIENT_SECRET",
+  // Webhook HMAC key: without this the webhook suite would run against the
+  // real Secret Token for anyone with a sourced .env.
+  "ZOOM_SECRET_TOKEN",
+  // Development Marketplace client, live only while an update is in review.
+  "ZOOM_DEV_CLIENT_ID",
+  "ZOOM_DEV_CLIENT_SECRET",
+  "ZOOM_DEV_SECRET_TOKEN",
+  "ZOOM_DEV_OAUTH_BUSINESS_IDS",
   // Admin
   "ADMIN_PASSWORD",
   // Not credentials, but sourced-.env values that flip env-dependent

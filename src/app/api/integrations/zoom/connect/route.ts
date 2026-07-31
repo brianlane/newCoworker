@@ -9,7 +9,12 @@
 import { NextResponse } from "next/server";
 import { z } from "zod";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
-import { buildZoomAuthorizeUrl, createZoomOAuthState, ZoomOAuthError } from "@/lib/zoom/oauth";
+import {
+  buildZoomAuthorizeUrl,
+  createZoomOAuthState,
+  resolveZoomClientEnvForBusiness,
+  ZoomOAuthError
+} from "@/lib/zoom/oauth";
 import { logger } from "@/lib/logger";
 
 const businessIdSchema = z.string().uuid();
@@ -30,16 +35,19 @@ export async function GET(request: Request) {
 
     const user = await getAuthUser();
     if (!user?.email) {
+      // Back to the public authorize landing page, not a dashboard deep link:
+      // it is the one entry point that survives the sign-in round-trip.
       return NextResponse.redirect(
-        new URL("/login?redirectTo=/dashboard/integrations/zoom", request.url)
+        new URL("/login?redirectTo=/integrations/zoom/authorize", request.url)
       );
     }
     if (!user.isAdmin) {
       await requireBusinessRole(parsed.data, "manage_settings");
     }
 
-    const state = createZoomOAuthState(parsed.data);
-    return NextResponse.redirect(buildZoomAuthorizeUrl(state));
+    const clientEnv = resolveZoomClientEnvForBusiness(parsed.data);
+    const state = createZoomOAuthState(parsed.data, clientEnv);
+    return NextResponse.redirect(buildZoomAuthorizeUrl(state, clientEnv));
   } catch (err) {
     // Browser navigation, not fetch: every failure becomes a banner on the
     // integrations page rather than a JSON body.

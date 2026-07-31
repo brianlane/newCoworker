@@ -2,6 +2,7 @@ import type { Metadata } from "next";
 import Link from "next/link";
 import { MarketingNav } from "@/components/marketing/MarketingNav";
 import { MarketingFooter } from "@/components/marketing/MarketingFooter";
+import { SITE_URL } from "@/lib/marketing/site-url";
 
 /**
  * Step-by-step test plan for Zoom Marketplace reviewers ("New Coworker
@@ -11,7 +12,7 @@ import { MarketingFooter } from "@/components/marketing/MarketingFooter";
  */
 
 export const metadata: Metadata = {
-  title: "Zoom App Review — Test Plan",
+  title: "Zoom App Review: Test Plan",
   robots: { index: false, follow: false }
 };
 
@@ -58,23 +59,37 @@ export default function ZoomReviewTestPlanPage() {
         </ul>
 
         <ol className="mt-10 space-y-4">
-          <Step n={1} title="Sign in to the test account">
+          <Step n={1} title="Start at the app's landing URL">
             <p>
               Go to{" "}
-              <Link href="/login" className="text-claw-green hover:underline">
-                newcoworker.com/login
-              </Link>{" "}
-              and sign in with the reviewer credentials from the release notes. You land on the
-              business dashboard.
+              <Link
+                href="/integrations/zoom/authorize"
+                className="text-claw-green hover:underline"
+              >
+                newcoworker.com/integrations/zoom/authorize
+              </Link>
+              , the Direct Landing URL on the listing. Signed out, it sends you to the sign-in
+              page and returns you here after login; signed in, it shows the{" "}
+              <b>Authorize Zoom</b> button for your workspace. Sign in with the reviewer
+              credentials from the release notes.
+            </p>
+            <p>
+              The same authorization is also reachable in-product at{" "}
+              <b>Dashboard → Integrations → Zoom</b>, which is where an existing customer manages
+              or removes the connection.
             </p>
           </Step>
 
           <Step n={2} title="Authorize the Zoom integration (OAuth)">
             <p>
-              Open <b>Dashboard → Integrations</b> and find the <b>Zoom</b> card. Click{" "}
-              <b>Connect</b>. You are redirected to Zoom&apos;s consent page under the app&apos;s{" "}
-              <b>production Client ID</b>; the consent screen lists the meeting and user scopes.
-              Click <b>Allow</b>.
+              Click <b>Authorize Zoom</b>. You are redirected to Zoom&apos;s consent page under
+              the app&apos;s <b>development Client ID</b>{" "}
+              <code className="text-xs text-claw-green">TYtgSqgyRPK9rH_Hj5EH2Q</code>, which you
+              can confirm in the consent URL. The reviewer test account is deliberately routed to
+              the development client so this review exercises the scope and event-subscription
+              changes in this update, which do not exist on the production client until it is
+              approved. Every other tenant continues to use the production client. Click{" "}
+              <b>Allow</b>.
             </p>
             <p>
               Expected: you are returned to Dashboard → Integrations and the Zoom card shows{" "}
@@ -189,6 +204,13 @@ export default function ZoomReviewTestPlanPage() {
               switch off and repeating the recording results in no automatic import (the manual
               import from Step 6 remains available). Redelivered events do not create duplicate
               documents.
+            </p>
+            <p>
+              The development app&apos;s event subscription posts to the same endpoint,{" "}
+              <code className="text-xs text-claw-green">{SITE_URL}/api/webhooks/zoom</code>
+              . Each client signs with its own Secret Token, and the verified signature decides
+              which connections a delivery may touch, so a development delivery can never reach a
+              production tenant.
             </p>
           </Step>
 

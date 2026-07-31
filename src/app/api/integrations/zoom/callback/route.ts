@@ -7,7 +7,7 @@
  *
  * Auth is TWO-factor by design: the signed state proves the flow started
  * from our connect route for this business, AND the browser session must
- * hold manage_settings on that business — a leaked callback URL alone can't
+ * hold manage_settings on that business, a leaked callback URL alone can't
  * attach a Zoom account to someone else's workspace.
  */
 import { NextResponse } from "next/server";
@@ -60,7 +60,11 @@ export async function GET(request: Request) {
       await requireBusinessRole(verified.businessId, "manage_settings");
     }
 
-    const tokens = await exchangeZoomAuthCode(code);
+    // The client env comes from the SIGNED STATE, never from a fresh allow
+    // list read: if ZOOM_DEV_OAUTH_BUSINESS_IDS changed while the owner sat
+    // on Zoom's consent screen, the code still has to be redeemed against the
+    // client that issued it or Zoom answers invalid_client.
+    const tokens = await exchangeZoomAuthCode(code, verified.clientEnv);
     // Identity is best-effort labeling: a users/me hiccup must not strand a
     // successfully-issued grant.
     let profile = null;
@@ -80,7 +84,8 @@ export async function GET(request: Request) {
       expiresAt: tokens.expiresAt,
       zoomUserId: profile?.zoomUserId ?? null,
       accountEmail: profile?.email ?? null,
-      accountName: profile?.displayName ?? null
+      accountName: profile?.displayName ?? null,
+      clientEnv: verified.clientEnv
     });
 
     return dashboardRedirect(request, { workspace: "connected" });

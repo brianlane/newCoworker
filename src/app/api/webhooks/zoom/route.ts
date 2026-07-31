@@ -4,9 +4,12 @@
  * + app_deauthorized).
  *
  * Every delivery is authenticated by the x-zm-signature HMAC (keyed by the
- * app's Secret Token, env ZOOM_SECRET_TOKEN) with a 5-minute timestamp
- * window; the endpoint.url_validation challenge is answered in Zoom's exact
- * shape (unwrapped JSON). Transcript auto-imports run inline, fetch +
+ * app's Secret Token, env ZOOM_SECRET_TOKEN, or ZOOM_DEV_SECRET_TOKEN while a
+ * Marketplace update is under review) with a 5-minute timestamp window. The
+ * verified client env then scopes which tenants the delivery may touch, so
+ * the two apps stay isolated; the endpoint.url_validation challenge is
+ * answered in Zoom's exact shape (unwrapped JSON), signed with whichever
+ * client issued the challenge. Transcript auto-imports run inline, fetch +
  * Gemini condense fit the same budget as the owner-attended manual import.
  * Only a transient import failure answers 5xx (so Zoom redelivers); every
  * skip outcome is a 200 no-op.
@@ -56,7 +59,7 @@ export async function POST(request: Request) {
       return errorResponse("VALIDATION_ERROR", "body must be JSON");
     }
 
-    const result = await processZoomWebhookEvent(json);
+    const result = await processZoomWebhookEvent(json, verified.clientEnv);
 
     if (result.kind === "url_validation") {
       if (!result.response) {

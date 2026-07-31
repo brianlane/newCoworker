@@ -251,7 +251,8 @@ const UPSERT_INPUT = {
   expiresAt: new Date("2026-07-15T01:00:00Z"),
   zoomUserId: "zu-1",
   accountEmail: "owner@acme.com",
-  accountName: "Acme Spa"
+  accountName: "Acme Spa",
+  clientEnv: "production" as const
 };
 
 describe("upsertZoomConnection", () => {
@@ -267,6 +268,28 @@ describe("upsertZoomConnection", () => {
     expect(inserted.refresh_token_encrypted).toBe("enc(new-refresh)");
     expect(inserted.token_expires_at).toBe("2026-07-15T01:00:00.000Z");
     expect(inserted.is_active).toBe(true);
+    expect(inserted.oauth_client_env).toBe("production");
+  });
+
+  // The upsert is also the RECONNECT path: a row that keeps a stale
+  // oauth_client_env would refresh and revoke against credentials the tenant
+  // no longer uses, which fails as an unexplained invalid_client.
+  it("writes the client env on both the insert and the reconnect update", async () => {
+    const insert = chain();
+    insert.maybeSingle.mockResolvedValue({ data: null, error: null });
+    insert.single.mockResolvedValue({ data: STORED, error: null });
+    await upsertZoomConnection({ ...UPSERT_INPUT, clientEnv: "development" }, makeDb(insert));
+    expect(
+      (insert.insert.mock.calls[0][0] as Record<string, unknown>).oauth_client_env
+    ).toBe("development");
+
+    const update = chain();
+    update.maybeSingle.mockResolvedValue({ data: { id: "zc-1" }, error: null });
+    update.single.mockResolvedValue({ data: STORED, error: null });
+    await upsertZoomConnection({ ...UPSERT_INPUT, clientEnv: "production" }, makeDb(update));
+    expect(
+      (update.update.mock.calls[0][0] as Record<string, unknown>).oauth_client_env
+    ).toBe("production");
   });
 
   it("defaults identity fields to null when omitted", async () => {
@@ -278,7 +301,8 @@ describe("upsertZoomConnection", () => {
         businessId: BIZ,
         accessToken: "a",
         refreshToken: "r",
-        expiresAt: new Date("2026-07-15T01:00:00Z")
+        expiresAt: new Date("2026-07-15T01:00:00Z"),
+        clientEnv: "production" as const
       },
       makeDb(c)
     );
@@ -405,28 +429,35 @@ describe("getActiveZoomConnectionSummariesByZoomUserId", () => {
       { business_id: "other-biz", auto_import_transcripts: false }
     ];
     const c = chain({ data: rows, error: null });
-    const summaries = await getActiveZoomConnectionSummariesByZoomUserId("zu-1", makeDb(c));
+    const summaries = await getActiveZoomConnectionSummariesByZoomUserId("zu-1", "production", makeDb(c));
     expect(summaries).toEqual(rows);
     expect(c.eq).toHaveBeenCalledWith("zoom_user_id", "zu-1");
     expect(c.eq).toHaveBeenCalledWith("is_active", true);
+    expect(c.eq).toHaveBeenCalledWith("oauth_client_env", "production");
+  });
+
+  it("routes a development delivery only to development connections", async () => {
+    const c = chain({ data: [], error: null });
+    await getActiveZoomConnectionSummariesByZoomUserId("zu-1", "development", makeDb(c));
+    expect(c.eq).toHaveBeenCalledWith("oauth_client_env", "development");
   });
 
   it("returns an empty list when no active connection matches", async () => {
     const c = chain({ data: null, error: null });
-    expect(await getActiveZoomConnectionSummariesByZoomUserId("zu-x", makeDb(c))).toEqual([]);
+    expect(await getActiveZoomConnectionSummariesByZoomUserId("zu-x", "production", makeDb(c))).toEqual([]);
   });
 
   it("throws on a query error", async () => {
     const c = chain({ data: null, error: { message: "lookup boom" } });
     await expect(
-      getActiveZoomConnectionSummariesByZoomUserId("zu-1", makeDb(c))
+      getActiveZoomConnectionSummariesByZoomUserId("zu-1", "production", makeDb(c))
     ).rejects.toThrow(/lookup boom/);
   });
 
   it("uses the default service client when none is provided", async () => {
     const c = chain({ data: [], error: null });
     defaultClientSpy.mockReturnValue(makeDb(c));
-    expect(await getActiveZoomConnectionSummariesByZoomUserId("zu-1")).toEqual([]);
+    expect(await getActiveZoomConnectionSummariesByZoomUserId("zu-1", "production")).toEqual([]);
     expect(defaultClientSpy).toHaveBeenCalled();
   });
 });
@@ -437,7 +468,7 @@ describe("getZoomConnectionBusinessIdsByZoomUserId", () => {
       data: [{ business_id: BIZ }, { business_id: "other-biz" }],
       error: null
     });
-    expect(await getZoomConnectionBusinessIdsByZoomUserId("zu-1", makeDb(c))).toEqual([
+    expect(await getZoomConnectionBusinessIdsByZoomUserId("zu-1", "production", makeDb(c))).toEqual([
       BIZ,
       "other-biz"
     ]);
@@ -445,22 +476,31 @@ describe("getZoomConnectionBusinessIdsByZoomUserId", () => {
     expect(c.eq).not.toHaveBeenCalledWith("is_active", true);
   });
 
+  // Load-bearing: without this filter a deauthorization from the DEVELOPMENT
+  // app would wipe the token pair of a production tenant whose owner uses the
+  // same Zoom account, taking their scheduling down silently.
+  it("scopes the deauth wipe to the client that sent the event", async () => {
+    const c = chain({ data: [], error: null });
+    await getZoomConnectionBusinessIdsByZoomUserId("zu-1", "development", makeDb(c));
+    expect(c.eq).toHaveBeenCalledWith("oauth_client_env", "development");
+  });
+
   it("returns an empty list when nothing matches", async () => {
     const c = chain({ data: null, error: null });
-    expect(await getZoomConnectionBusinessIdsByZoomUserId("zu-x", makeDb(c))).toEqual([]);
+    expect(await getZoomConnectionBusinessIdsByZoomUserId("zu-x", "production", makeDb(c))).toEqual([]);
   });
 
   it("throws on a query error", async () => {
     const c = chain({ data: null, error: { message: "ids boom" } });
     await expect(
-      getZoomConnectionBusinessIdsByZoomUserId("zu-1", makeDb(c))
+      getZoomConnectionBusinessIdsByZoomUserId("zu-1", "production", makeDb(c))
     ).rejects.toThrow(/ids boom/);
   });
 
   it("uses the default service client when none is provided", async () => {
     const c = chain({ data: [], error: null });
     defaultClientSpy.mockReturnValue(makeDb(c));
-    expect(await getZoomConnectionBusinessIdsByZoomUserId("zu-1")).toEqual([]);
+    expect(await getZoomConnectionBusinessIdsByZoomUserId("zu-1", "production")).toEqual([]);
     expect(defaultClientSpy).toHaveBeenCalled();
   });
 });

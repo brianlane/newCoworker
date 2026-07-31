@@ -80,12 +80,12 @@ describe("verifyZoomWebhookSignature", () => {
   const ts = Math.floor(now / 1000);
 
   it("accepts a fresh, correctly signed delivery", () => {
-    expect(verifyZoomWebhookSignature(body, String(ts), sign(body, ts), now)).toBe(true);
+    expect(verifyZoomWebhookSignature(body, String(ts), sign(body, ts), now)).toEqual({ clientEnv: "production" });
   });
 
   it("rejects when the secret is not configured", () => {
     vi.stubEnv("ZOOM_SECRET_TOKEN", "");
-    expect(verifyZoomWebhookSignature(body, String(ts), sign(body, ts), now)).toBe(false);
+    expect(verifyZoomWebhookSignature(body, String(ts), sign(body, ts), now)).toBeNull();
   });
 
   it("rejects when the secret env var is absent entirely", () => {
@@ -93,42 +93,70 @@ describe("verifyZoomWebhookSignature", () => {
     const prev = process.env.ZOOM_SECRET_TOKEN;
     delete process.env.ZOOM_SECRET_TOKEN;
     try {
-      expect(verifyZoomWebhookSignature(body, String(ts), sign(body, ts), now)).toBe(false);
+      expect(verifyZoomWebhookSignature(body, String(ts), sign(body, ts), now)).toBeNull();
     } finally {
       if (prev !== undefined) process.env.ZOOM_SECRET_TOKEN = prev;
     }
   });
 
   it("rejects missing headers", () => {
-    expect(verifyZoomWebhookSignature(body, null, sign(body, ts), now)).toBe(false);
-    expect(verifyZoomWebhookSignature(body, String(ts), null, now)).toBe(false);
+    expect(verifyZoomWebhookSignature(body, null, sign(body, ts), now)).toBeNull();
+    expect(verifyZoomWebhookSignature(body, String(ts), null, now)).toBeNull();
   });
 
   it("rejects a non-numeric timestamp", () => {
-    expect(verifyZoomWebhookSignature(body, "not-a-ts", sign(body, ts), now)).toBe(false);
+    expect(verifyZoomWebhookSignature(body, "not-a-ts", sign(body, ts), now)).toBeNull();
   });
 
   it("rejects a stale timestamp (replay window)", () => {
     const stale = ts - 6 * 60; // six minutes old
-    expect(verifyZoomWebhookSignature(body, String(stale), sign(body, stale), now)).toBe(
-      false
-    );
+    expect(
+      verifyZoomWebhookSignature(body, String(stale), sign(body, stale), now)
+    ).toBeNull();
   });
 
   it("rejects a tampered signature of the same length", () => {
     const good = sign(body, ts);
     const bad = good.slice(0, -1) + (good.endsWith("0") ? "1" : "0");
-    expect(verifyZoomWebhookSignature(body, String(ts), bad, now)).toBe(false);
+    expect(verifyZoomWebhookSignature(body, String(ts), bad, now)).toBeNull();
   });
 
   it("rejects a signature of a different length", () => {
-    expect(verifyZoomWebhookSignature(body, String(ts), "v0=short", now)).toBe(false);
+    expect(verifyZoomWebhookSignature(body, String(ts), "v0=short", now)).toBeNull();
+  });
+
+  describe("development client (Marketplace update under review)", () => {
+    const DEV_SECRET = "dev-secret-token";
+    const signDev = (b: string, t: number) =>
+      `v0=${createHmac("sha256", DEV_SECRET).update(`v0:${t}:${b}`).digest("hex")}`;
+
+    it("accepts a dev-signed delivery and reports the development env", () => {
+      vi.stubEnv("ZOOM_DEV_SECRET_TOKEN", DEV_SECRET);
+      expect(verifyZoomWebhookSignature(body, String(ts), signDev(body, ts), now)).toEqual({
+        clientEnv: "development"
+      });
+    });
+
+    it("still attributes a production-signed delivery correctly with both set", () => {
+      vi.stubEnv("ZOOM_DEV_SECRET_TOKEN", DEV_SECRET);
+      expect(verifyZoomWebhookSignature(body, String(ts), sign(body, ts), now)).toEqual({
+        clientEnv: "production"
+      });
+    });
+
+    // Clearing ZOOM_DEV_SECRET_TOKEN after approval is how the second door
+    // closes, with no code change. Prove it actually closes.
+    it("rejects a dev-signed delivery once the dev secret is unset", () => {
+      expect(verifyZoomWebhookSignature(body, String(ts), signDev(body, ts), now)).toBeNull();
+      vi.stubEnv("ZOOM_DEV_SECRET_TOKEN", "  ");
+      expect(verifyZoomWebhookSignature(body, String(ts), signDev(body, ts), now)).toBeNull();
+    });
   });
 });
 
 describe("buildUrlValidationResponse", () => {
   it("answers the challenge with the HMAC of the plainToken", () => {
-    const res = buildUrlValidationResponse("abc123");
+    const res = buildUrlValidationResponse("abc123", "production");
     expect(res).toEqual({
       plainToken: "abc123",
       encryptedToken: createHmac("sha256", SECRET).update("abc123").digest("hex")
@@ -137,7 +165,24 @@ describe("buildUrlValidationResponse", () => {
 
   it("returns null when the secret is not configured", () => {
     vi.stubEnv("ZOOM_SECRET_TOKEN", "  ");
-    expect(buildUrlValidationResponse("abc123")).toBeNull();
+    expect(buildUrlValidationResponse("abc123", "production")).toBeNull();
+  });
+
+  // Saving the event subscription on the Development tab fires a challenge
+  // signed with the DEV secret; answering it with the production one fails
+  // the save and the update cannot be tested.
+  it("answers a development challenge with the development secret", () => {
+    vi.stubEnv("ZOOM_DEV_SECRET_TOKEN", "dev-secret-token");
+    expect(buildUrlValidationResponse("abc123", "development")).toEqual({
+      plainToken: "abc123",
+      encryptedToken: createHmac("sha256", "dev-secret-token")
+        .update("abc123")
+        .digest("hex")
+    });
+  });
+
+  it("returns null for a development challenge when the dev secret is absent", () => {
+    expect(buildUrlValidationResponse("abc123", "development")).toBeNull();
   });
 });
 
@@ -351,11 +396,11 @@ function makeDeps(overrides: Partial<Record<keyof ZoomWebhookDeps, unknown>> = {
 describe("processZoomWebhookEvent", () => {
   it("ignores unparseable bodies and unknown events", async () => {
     const deps = makeDeps();
-    expect(await processZoomWebhookEvent(null, deps)).toEqual({
+    expect(await processZoomWebhookEvent(null, "production", deps)).toEqual({
       kind: "ignored",
       event: "unparseable"
     });
-    expect(await processZoomWebhookEvent({ event: "meeting.started" }, deps)).toEqual({
+    expect(await processZoomWebhookEvent({ event: "meeting.started" }, "production", deps)).toEqual({
       kind: "ignored",
       event: "meeting.started"
     });
@@ -365,6 +410,7 @@ describe("processZoomWebhookEvent", () => {
     const deps = makeDeps();
     const result = await processZoomWebhookEvent(
       { event: "endpoint.url_validation", payload: { plainToken: "abc" } },
+      "production",
       deps
     );
     expect(result.kind).toBe("url_validation");
@@ -374,11 +420,31 @@ describe("processZoomWebhookEvent", () => {
 
     const empty = await processZoomWebhookEvent(
       { event: "endpoint.url_validation", payload: {} },
+      "production",
       deps
     );
     if (empty.kind === "url_validation") {
       expect(empty.response?.plainToken).toBe("");
     }
+  });
+
+  // The client env is what keeps the two apps from reaching into each
+  // other's tenants, so it has to reach BOTH routing lookups, not just the
+  // url_validation reply.
+  it("scopes both tenant lookups to the client that signed the delivery", async () => {
+    const deauth = makeDeps({
+      deauthBusinessIdsByZoomUserId: vi.fn().mockResolvedValue([])
+    });
+    await processZoomWebhookEvent(
+      { event: "app_deauthorized", payload: { user_id: HOST } },
+      "development",
+      deauth
+    );
+    expect(deauth.deauthBusinessIdsByZoomUserId).toHaveBeenCalledWith(HOST, "development");
+
+    const transcript = makeDeps({ connectionsByZoomUserId: vi.fn().mockResolvedValue([]) });
+    await processZoomWebhookEvent(transcriptBody({}), "development", transcript);
+    expect(transcript.connectionsByZoomUserId).toHaveBeenCalledWith(HOST, "development");
   });
 
   it("deauthorizes every business behind the Zoom user, active or not", async () => {
@@ -388,6 +454,7 @@ describe("processZoomWebhookEvent", () => {
     });
     const result = await processZoomWebhookEvent(
       { event: "app_deauthorized", payload: { user_id: HOST } },
+      "production",
       deps
     );
     expect(result).toEqual({ kind: "deauthorized", businessIds: [BIZ, OTHER] });
@@ -401,7 +468,7 @@ describe("processZoomWebhookEvent", () => {
   it("no-ops a deauthorization with no user id or no matching tenant", async () => {
     const deps = makeDeps();
     expect(
-      await processZoomWebhookEvent({ event: "app_deauthorized", payload: {} }, deps)
+      await processZoomWebhookEvent({ event: "app_deauthorized", payload: {} }, "production", deps)
     ).toEqual({ kind: "deauthorized", businessIds: [] });
     expect(deps.deauthBusinessIdsByZoomUserId).not.toHaveBeenCalled();
 
@@ -411,6 +478,7 @@ describe("processZoomWebhookEvent", () => {
     expect(
       await processZoomWebhookEvent(
         { event: "app_deauthorized", payload: { user_id: "zu-x" } },
+        "production",
         unknown
       )
     ).toEqual({ kind: "deauthorized", businessIds: [] });
@@ -421,6 +489,7 @@ describe("processZoomWebhookEvent", () => {
     const deps = makeDeps();
     const result = await processZoomWebhookEvent(
       { event: "recording.transcript_completed", payload: { object: {} } },
+      "production",
       deps
     );
     expect(result).toEqual({ kind: "transcript", outcome: "unusable", businessId: null });
@@ -429,7 +498,7 @@ describe("processZoomWebhookEvent", () => {
 
   it("skips hosts with no active connection", async () => {
     const deps = makeDeps({ connectionsByZoomUserId: vi.fn().mockResolvedValue([]) });
-    const result = await processZoomWebhookEvent(transcriptBody(), deps);
+    const result = await processZoomWebhookEvent(transcriptBody(), "production", deps);
     expect(result).toEqual({
       kind: "transcript",
       outcome: "no_connection",
@@ -443,7 +512,7 @@ describe("processZoomWebhookEvent", () => {
         .fn()
         .mockResolvedValue([{ business_id: BIZ, auto_import_transcripts: false }])
     });
-    const result = await processZoomWebhookEvent(transcriptBody(), deps);
+    const result = await processZoomWebhookEvent(transcriptBody(), "production", deps);
     expect(result).toEqual({ kind: "transcript", outcome: "disabled", businessId: BIZ });
     expect(deps.claimImport).not.toHaveBeenCalled();
   });
@@ -456,7 +525,7 @@ describe("processZoomWebhookEvent", () => {
         { business_id: OTHER, auto_import_transcripts: true }
       ])
     });
-    const result = await processZoomWebhookEvent(transcriptBody(), deps);
+    const result = await processZoomWebhookEvent(transcriptBody(), "production", deps);
     expect(result).toEqual({ kind: "transcript", outcome: "imported", businessId: BIZ });
     expect(deps.claimImport).toHaveBeenCalledWith(BIZ, UUID);
     expect(deps.claimImport).toHaveBeenCalledWith(OTHER, UUID);
@@ -481,7 +550,7 @@ describe("processZoomWebhookEvent", () => {
         })
         .mockRejectedValueOnce(new Error("second business boom"))
     });
-    const result = await processZoomWebhookEvent(transcriptBody(), deps);
+    const result = await processZoomWebhookEvent(transcriptBody(), "production", deps);
     expect(result).toEqual({
       kind: "transcript",
       outcome: "import_failed",
@@ -494,14 +563,14 @@ describe("processZoomWebhookEvent", () => {
 
   it("collapses redeliveries through the ledger claim", async () => {
     const deps = makeDeps({ claimImport: vi.fn().mockResolvedValue(false) });
-    const result = await processZoomWebhookEvent(transcriptBody(), deps);
+    const result = await processZoomWebhookEvent(transcriptBody(), "production", deps);
     expect(result).toEqual({ kind: "transcript", outcome: "duplicate", businessId: BIZ });
     expect(deps.importCore).not.toHaveBeenCalled();
   });
 
   it("imports via the webhook download token and finalizes the claim", async () => {
     const deps = makeDeps();
-    const result = await processZoomWebhookEvent(transcriptBody(), deps);
+    const result = await processZoomWebhookEvent(transcriptBody(), "production", deps);
     expect(result).toEqual({ kind: "transcript", outcome: "imported", businessId: BIZ });
     expect(deps.fetchWebhookVtt).toHaveBeenCalledWith(
       "https://zoom.us/rec/transcript",
@@ -520,7 +589,7 @@ describe("processZoomWebhookEvent", () => {
 
   it("falls back to the connection token when the webhook download fails", async () => {
     const deps = makeDeps({ fetchWebhookVtt: vi.fn().mockResolvedValue(null) });
-    const result = await processZoomWebhookEvent(transcriptBody(), deps);
+    const result = await processZoomWebhookEvent(transcriptBody(), "production", deps);
     expect(result).toEqual({ kind: "transcript", outcome: "imported", businessId: BIZ });
     expect(deps.fetchConnectionTranscript).toHaveBeenCalledWith(BIZ, UUID);
   });
@@ -529,20 +598,20 @@ describe("processZoomWebhookEvent", () => {
     const body = transcriptBody();
     delete (body as Record<string, unknown>).download_token;
     const deps = makeDeps();
-    await processZoomWebhookEvent(body, deps);
+    await processZoomWebhookEvent(body, "production", deps);
     expect(deps.fetchWebhookVtt).not.toHaveBeenCalled();
     expect(deps.fetchConnectionTranscript).toHaveBeenCalledWith(BIZ, UUID);
   });
 
   it("titles untitled meetings from the meeting id, else a generic label", async () => {
     const deps = makeDeps();
-    await processZoomWebhookEvent(transcriptBody({ topic: undefined }), deps);
+    await processZoomWebhookEvent(transcriptBody({ topic: undefined }), "production", deps);
     expect(deps.importCore).toHaveBeenCalledWith(
       expect.objectContaining({ title: "Zoom meeting 1784344402882 (transcript)" })
     );
 
     const deps2 = makeDeps();
-    await processZoomWebhookEvent(transcriptBody({ topic: undefined, id: undefined }), deps2);
+    await processZoomWebhookEvent(transcriptBody({ topic: undefined, id: undefined }), "production", deps2);
     expect(deps2.importCore).toHaveBeenCalledWith(
       expect.objectContaining({ title: "Zoom meeting recording (transcript)", refLabel: "recording" })
     );
@@ -552,6 +621,7 @@ describe("processZoomWebhookEvent", () => {
     const deps = makeDeps();
     await processZoomWebhookEvent(
       transcriptBody({ start_time: "2026-07-29T16:03:00Z" }),
+      "production",
       deps
     );
     expect(deps.importCore).toHaveBeenCalledWith(
@@ -570,7 +640,7 @@ describe("processZoomWebhookEvent", () => {
         uuid: UUID
       })
     });
-    await processZoomWebhookEvent(transcriptBody({ topic: undefined, id: undefined }), depsMeta);
+    await processZoomWebhookEvent(transcriptBody({ topic: undefined, id: undefined }), "production", depsMeta);
     expect(depsMeta.importCore).toHaveBeenCalledWith(
       expect.objectContaining({
         title: "New Coworker's Zoom Meeting · Jul 29, 2026 (transcript)",
@@ -586,7 +656,7 @@ describe("processZoomWebhookEvent", () => {
         .fn()
         .mockResolvedValue({ ok: false, error: "not_found", detail: "gone" })
     });
-    const result = await processZoomWebhookEvent(transcriptBody(), deps);
+    const result = await processZoomWebhookEvent(transcriptBody(), "production", deps);
     expect(result).toEqual({
       kind: "transcript",
       outcome: "import_failed",
@@ -597,7 +667,7 @@ describe("processZoomWebhookEvent", () => {
 
   it("releases the claim when the business row is missing", async () => {
     const deps = makeDeps({ getBusinessFn: vi.fn().mockResolvedValue(null) });
-    const result = await processZoomWebhookEvent(transcriptBody(), deps);
+    const result = await processZoomWebhookEvent(transcriptBody(), "production", deps);
     expect(result).toEqual({
       kind: "transcript",
       outcome: "import_failed",
@@ -612,7 +682,7 @@ describe("processZoomWebhookEvent", () => {
         .fn()
         .mockResolvedValue({ ok: false, error: "limit_reached", detail: "cap" })
     });
-    const result = await processZoomWebhookEvent(transcriptBody(), deps);
+    const result = await processZoomWebhookEvent(transcriptBody(), "production", deps);
     expect(result).toEqual({
       kind: "transcript",
       outcome: "skipped_permanent",
@@ -630,7 +700,7 @@ describe("processZoomWebhookEvent", () => {
         .fn()
         .mockResolvedValue({ ok: false, error: "too_large", detail: "10 MB" })
     });
-    const result = await processZoomWebhookEvent(transcriptBody(), deps);
+    const result = await processZoomWebhookEvent(transcriptBody(), "production", deps);
     expect(result).toEqual({
       kind: "transcript",
       outcome: "skipped_permanent",
@@ -647,7 +717,7 @@ describe("processZoomWebhookEvent", () => {
         .fn()
         .mockResolvedValue({ ok: false, error: "storage_failed", detail: "bucket" })
     });
-    const result = await processZoomWebhookEvent(transcriptBody(), deps);
+    const result = await processZoomWebhookEvent(transcriptBody(), "production", deps);
     expect(result).toEqual({
       kind: "transcript",
       outcome: "import_failed",
@@ -660,7 +730,7 @@ describe("processZoomWebhookEvent", () => {
     const deps = makeDeps({
       importCore: vi.fn().mockRejectedValue(new Error("boom"))
     });
-    const result = await processZoomWebhookEvent(transcriptBody(), deps);
+    const result = await processZoomWebhookEvent(transcriptBody(), "production", deps);
     expect(result).toEqual({
       kind: "transcript",
       outcome: "import_failed",
@@ -671,7 +741,7 @@ describe("processZoomWebhookEvent", () => {
 
   it("escalates loudly when the ledger stamp fails twice (claim kept)", async () => {
     const deps = makeDeps({ finalizeImport: vi.fn().mockResolvedValue(false) });
-    const result = await processZoomWebhookEvent(transcriptBody(), deps);
+    const result = await processZoomWebhookEvent(transcriptBody(), "production", deps);
     expect(result).toEqual({ kind: "transcript", outcome: "imported", businessId: BIZ });
     expect(deps.finalizeImport).toHaveBeenCalledTimes(2);
     expect(deps.releaseImport).not.toHaveBeenCalled();
@@ -684,7 +754,7 @@ describe("processZoomWebhookEvent", () => {
     const deps = makeDeps({
       finalizeImport: vi.fn().mockResolvedValueOnce(false).mockResolvedValueOnce(true)
     });
-    const result = await processZoomWebhookEvent(transcriptBody(), deps);
+    const result = await processZoomWebhookEvent(transcriptBody(), "production", deps);
     expect(result).toEqual({ kind: "transcript", outcome: "imported", businessId: BIZ });
     expect(deps.finalizeImport).toHaveBeenCalledTimes(2);
     expect(deps.logSystem).not.toHaveBeenCalled();
@@ -694,7 +764,7 @@ describe("processZoomWebhookEvent", () => {
     const deps = makeDeps({
       importCore: vi.fn().mockRejectedValue("string boom")
     });
-    const result = await processZoomWebhookEvent(transcriptBody(), deps);
+    const result = await processZoomWebhookEvent(transcriptBody(), "production", deps);
     expect(result).toEqual({
       kind: "transcript",
       outcome: "import_failed",

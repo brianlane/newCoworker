@@ -1,5 +1,5 @@
 /**
- * First-party Zoom OAuth (authorization-code flow) — the Nango-free primary
+ * First-party Zoom OAuth (authorization-code flow), the Nango-free primary
  * path for Zoom. This module owns everything that talks to zoom.us/oauth:
  *
  *   - the signed `state` parameter binding an authorize redirect to a
@@ -11,12 +11,21 @@
  * Credentials come from ZOOM_CLIENT_ID / ZOOM_CLIENT_SECRET (the published
  * "New Coworker OAuth" Marketplace app); the redirect URI is derived from
  * NEXT_PUBLIC_APP_URL so dev/prod each register their own callback.
+ *
+ * DUAL CLIENT. The same Marketplace app carries two credential pairs, and a
+ * pending UPDATE (a new scope, a new event subscription) exists only on the
+ * DEVELOPMENT client until Zoom approves it. So a Zoom reviewer testing the
+ * update has to authorize against the development client id, while every real
+ * tenant keeps using production. `resolveZoomClientEnvForBusiness` picks per
+ * business, the choice rides inside the signed state, and it is persisted on
+ * the connection: refresh and revoke MUST present the same pair that minted
+ * the grant or Zoom answers invalid_client.
  */
 import { createHmac, randomBytes, timingSafeEqual } from "crypto";
 
 export const ZOOM_OAUTH_BASE_URL = "https://zoom.us/oauth";
 export const ZOOM_API_BASE_URL = "https://api.zoom.us/v2";
-/** Outbound budget per OAuth/API call — fail fast on a stuck upstream. */
+/** Outbound budget per OAuth/API call: fail fast on a stuck upstream. */
 export const ZOOM_REQUEST_TIMEOUT_MS = 15_000;
 /** Authorize round-trips older than this are refused. */
 export const ZOOM_STATE_TTL_MS = 10 * 60 * 1000;
@@ -37,6 +46,13 @@ export class ZoomOAuthError extends Error {
   }
 }
 
+/**
+ * Which Marketplace credential pair to present. Never defaulted: passing it
+ * explicitly at every call site is the whole point, since "we used the wrong
+ * client id" is exactly the failure this type exists to prevent.
+ */
+export type ZoomClientEnv = "production" | "development";
+
 export type ZoomOAuthConfig = {
   clientId: string;
   clientSecret: string;
@@ -44,21 +60,49 @@ export type ZoomOAuthConfig = {
 };
 
 /** Env-derived OAuth config; throws `not_configured` when incomplete. */
-export function getZoomOAuthConfig(): ZoomOAuthConfig {
-  const clientId = process.env.ZOOM_CLIENT_ID;
-  const clientSecret = process.env.ZOOM_CLIENT_SECRET;
+export function getZoomOAuthConfig(clientEnv: ZoomClientEnv): ZoomOAuthConfig {
+  const development = clientEnv === "development";
+  const clientId = development ? process.env.ZOOM_DEV_CLIENT_ID : process.env.ZOOM_CLIENT_ID;
+  const clientSecret = development
+    ? process.env.ZOOM_DEV_CLIENT_SECRET
+    : process.env.ZOOM_CLIENT_SECRET;
   const appUrl = process.env.NEXT_PUBLIC_APP_URL;
   if (!clientId || !clientSecret || !appUrl) {
+    // Name the pair that is missing: a half-configured dev client is
+    // otherwise indistinguishable from a broken production deploy in the log.
     throw new ZoomOAuthError(
       "not_configured",
-      "Zoom OAuth is not configured (ZOOM_CLIENT_ID / ZOOM_CLIENT_SECRET / NEXT_PUBLIC_APP_URL)"
+      development
+        ? "Zoom development OAuth is not configured (ZOOM_DEV_CLIENT_ID / ZOOM_DEV_CLIENT_SECRET / NEXT_PUBLIC_APP_URL)"
+        : "Zoom OAuth is not configured (ZOOM_CLIENT_ID / ZOOM_CLIENT_SECRET / NEXT_PUBLIC_APP_URL)"
     );
   }
   return {
     clientId,
     clientSecret,
+    // Both clients register the SAME callback, so the reviewer's round-trip
+    // lands on the same route every tenant uses.
     redirectUri: `${appUrl.replace(/\/+$/, "")}/api/integrations/zoom/callback`
   };
+}
+
+/**
+ * Businesses listed in ZOOM_DEV_OAUTH_BUSINESS_IDS (comma separated) connect
+ * against the development client; everyone else gets production. In practice
+ * the list holds exactly one id, the Zoom Review Sandbox tenant, and is
+ * cleared once the update is approved.
+ *
+ * Deliberately no fallback to production when the dev credentials are absent:
+ * silently sending the reviewer to the production authorize URL is the exact
+ * bug this exists to fix, and it should fail loudly at `getZoomOAuthConfig`
+ * instead of looking like it worked.
+ */
+export function resolveZoomClientEnvForBusiness(businessId: string): ZoomClientEnv {
+  const allowList = (process.env.ZOOM_DEV_OAUTH_BUSINESS_IDS ?? "")
+    .split(",")
+    .map((id) => id.trim().toLowerCase())
+    .filter((id) => id.length > 0);
+  return allowList.includes(businessId.trim().toLowerCase()) ? "development" : "production";
 }
 
 function stateKey(): Buffer {
@@ -79,24 +123,36 @@ function signStatePayload(payload: string): string {
   return createHmac("sha256", stateKey()).update(payload).digest("base64url");
 }
 
-/** Opaque, signed state: base64url(JSON{businessId, exp, nonce}) + "." + HMAC. */
-export function createZoomOAuthState(businessId: string, now = Date.now()): string {
+/**
+ * Opaque, signed state: base64url(JSON{businessId, exp, nonce, client}) + "."
+ * + HMAC. The client env rides along so the callback exchanges the code
+ * against whichever client actually minted it, even if the allow list changed
+ * mid-flow. `c` is emitted ONLY for development, which keeps production
+ * states byte-identical to what shipped before and makes any state minted by
+ * the previous build verify as production.
+ */
+export function createZoomOAuthState(
+  businessId: string,
+  clientEnv: ZoomClientEnv,
+  now = Date.now()
+): string {
   const payload = Buffer.from(
     JSON.stringify({
       b: businessId,
       e: now + ZOOM_STATE_TTL_MS,
-      n: randomBytes(8).toString("base64url")
+      n: randomBytes(8).toString("base64url"),
+      ...(clientEnv === "development" ? { c: "d" } : {})
     }),
     "utf8"
   ).toString("base64url");
   return `${payload}.${signStatePayload(payload)}`;
 }
 
-/** Verifies signature + expiry; returns the bound businessId or null. */
+/** Verifies signature + expiry; returns the bound business + client, or null. */
 export function verifyZoomOAuthState(
   state: string,
   now = Date.now()
-): { businessId: string } | null {
+): { businessId: string; clientEnv: ZoomClientEnv } | null {
   const dot = state.indexOf(".");
   if (dot <= 0 || dot === state.length - 1) return null;
   const payload = state.slice(0, dot);
@@ -107,7 +163,7 @@ export function verifyZoomOAuthState(
   if (sigBuf.length !== expectedBuf.length || !timingSafeEqual(sigBuf, expectedBuf)) {
     return null;
   }
-  let parsed: { b?: unknown; e?: unknown };
+  let parsed: { b?: unknown; e?: unknown; c?: unknown };
   try {
     parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
   } catch {
@@ -115,12 +171,18 @@ export function verifyZoomOAuthState(
   }
   if (typeof parsed.b !== "string" || typeof parsed.e !== "number") return null;
   if (parsed.e < now) return null;
-  return { businessId: parsed.b };
+  // Anything other than the development marker (absent, or a value we do not
+  // recognize) means production. The state is signed, so this is a shape
+  // check, not a trust decision.
+  return {
+    businessId: parsed.b,
+    clientEnv: parsed.c === "d" ? "development" : "production"
+  };
 }
 
 /** Where /api/integrations/zoom/connect sends the owner's browser. */
-export function buildZoomAuthorizeUrl(state: string): string {
-  const config = getZoomOAuthConfig();
+export function buildZoomAuthorizeUrl(state: string, clientEnv: ZoomClientEnv): string {
+  const config = getZoomOAuthConfig(clientEnv);
   const url = new URL(`${ZOOM_OAUTH_BASE_URL}/authorize`);
   url.searchParams.set("response_type", "code");
   url.searchParams.set("client_id", config.clientId);
@@ -137,9 +199,10 @@ export type ZoomTokenSet = {
 
 async function tokenEndpointRequest(
   params: URLSearchParams,
+  clientEnv: ZoomClientEnv,
   now: number
 ): Promise<ZoomTokenSet> {
-  const config = getZoomOAuthConfig();
+  const config = getZoomOAuthConfig(clientEnv);
   const basic = Buffer.from(`${config.clientId}:${config.clientSecret}`, "utf8").toString(
     "base64"
   );
@@ -176,7 +239,7 @@ async function tokenEndpointRequest(
   } | null;
 
   if (!res.ok || !body?.access_token || !body.refresh_token) {
-    // Only a genuine dead grant (consumed/revoked code or refresh token —
+    // Only a genuine dead grant (consumed/revoked code or refresh token,
     // Zoom sets `error: "invalid_grant"`) may deactivate a connection.
     // App-level 401s like invalid_client (bad OUR credentials) and unrelated
     // 400s stay `request_failed` so a config mistake on our side never
@@ -199,39 +262,54 @@ async function tokenEndpointRequest(
 /** Authorization-code exchange (the callback route). */
 export async function exchangeZoomAuthCode(
   code: string,
+  clientEnv: ZoomClientEnv,
   now = Date.now()
 ): Promise<ZoomTokenSet> {
-  const config = getZoomOAuthConfig();
+  const config = getZoomOAuthConfig(clientEnv);
   return tokenEndpointRequest(
     new URLSearchParams({
       grant_type: "authorization_code",
       code,
       redirect_uri: config.redirectUri
     }),
+    clientEnv,
     now
   );
 }
 
 /**
  * Refresh-token exchange. Zoom ROTATES the refresh token: the returned set
- * contains a NEW refresh token and the presented one is dead — persist the
+ * contains a NEW refresh token and the presented one is dead, so persist the
  * new pair before using the access token.
+ *
+ * `clientEnv` comes from the connection row, not from the allow list: a grant
+ * keeps refreshing against whichever client issued it.
  */
 export async function refreshZoomTokens(
   refreshToken: string,
+  clientEnv: ZoomClientEnv,
   now = Date.now()
 ): Promise<ZoomTokenSet> {
   return tokenEndpointRequest(
     new URLSearchParams({ grant_type: "refresh_token", refresh_token: refreshToken }),
+    clientEnv,
     now
   );
 }
 
-/** Best-effort revoke on disconnect. Never throws. */
-export async function revokeZoomToken(accessToken: string): Promise<boolean> {
+/**
+ * Best-effort revoke on disconnect. Never throws. Uses the connection's own
+ * client pair: revoking a dev-minted grant with production Basic auth gets a
+ * 401 invalid_client, which this swallows, leaving the grant alive on the
+ * user's Zoom account after they clicked Disconnect.
+ */
+export async function revokeZoomToken(
+  accessToken: string,
+  clientEnv: ZoomClientEnv
+): Promise<boolean> {
   let config: ZoomOAuthConfig;
   try {
-    config = getZoomOAuthConfig();
+    config = getZoomOAuthConfig(clientEnv);
   } catch {
     return false;
   }
@@ -265,7 +343,7 @@ export type ZoomUserProfile = {
 };
 
 /**
- * GET /users/me with a fresh access token — labels the dashboard card.
+ * GET /users/me with a fresh access token, labels the dashboard card.
  * Returns null on 401/403 (token rejected); throws on other failures.
  */
 export async function fetchZoomUserProfile(

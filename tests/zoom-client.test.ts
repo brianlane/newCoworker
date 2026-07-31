@@ -66,6 +66,7 @@ function row(overrides: Record<string, unknown> = {}) {
     account_email: "o@a.com",
     account_name: "Acme",
     is_active: true,
+    oauth_client_env: "production",
     created_at: "2026-07-01T00:00:00Z",
     updated_at: "2026-07-01T00:00:00Z",
     ...overrides
@@ -135,7 +136,7 @@ describe("getZoomAccessToken", () => {
     });
 
     expect(await getZoomAccessToken(BIZ, NOW)).toBe("new-access");
-    expect(refreshZoomTokens).toHaveBeenCalledWith("live-refresh");
+    expect(refreshZoomTokens).toHaveBeenCalledWith("live-refresh", "production");
     expect(updateZoomTokens).toHaveBeenCalledWith(
       BIZ,
       {
@@ -146,6 +147,27 @@ describe("getZoomAccessToken", () => {
       "2026-07-01T00:00:00Z"
     );
     expect(order).toEqual(["refresh", "persist"]);
+  });
+
+  // A dev-minted grant must keep refreshing against the dev credentials for
+  // the life of the connection: presenting the production pair gets an
+  // invalid_client 401, which reads as a dead grant and soft-disables a
+  // perfectly healthy connection.
+  it("refreshes a development-minted row against the development client", async () => {
+    getZoomConnection.mockResolvedValueOnce(
+      row({
+        oauth_client_env: "development",
+        token_expires_at: new Date(NOW + 1000).toISOString()
+      })
+    );
+    refreshZoomTokens.mockResolvedValueOnce({
+      accessToken: "dev-access",
+      refreshToken: "dev-refresh",
+      expiresAt: new Date(NOW + 3_600_000)
+    });
+    updateZoomTokens.mockResolvedValueOnce(true);
+    expect(await getZoomAccessToken(BIZ, NOW)).toBe("dev-access");
+    expect(refreshZoomTokens).toHaveBeenCalledWith("live-refresh", "development");
   });
 
   it("treats an unparseable expiry as expired", async () => {

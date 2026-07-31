@@ -40,6 +40,7 @@ import {
   fetchPastMeetingMeta,
   fetchZoomMeetingTranscript
 } from "@/lib/zoom/transcript";
+import type { ZoomClientEnv } from "@/lib/zoom/oauth";
 import { logger } from "@/lib/logger";
 
 /** Recording payloads carry file lists; far under this in practice. */
@@ -49,8 +50,17 @@ export const ZOOM_WEBHOOK_TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000;
 /** Outbound budget for the webhook's transcript download. */
 export const ZOOM_WEBHOOK_DOWNLOAD_TIMEOUT_MS = 20_000;
 
-function webhookSecret(): string | null {
-  const secret = (process.env.ZOOM_SECRET_TOKEN ?? "").trim();
+/**
+ * The Secret Token for one Marketplace client. The production and
+ * development apps have SEPARATE secret tokens and both post here, so every
+ * delivery has to be attributed to one of them.
+ */
+function webhookSecret(clientEnv: ZoomClientEnv): string | null {
+  const secret = (
+    (clientEnv === "development"
+      ? process.env.ZOOM_DEV_SECRET_TOKEN
+      : process.env.ZOOM_SECRET_TOKEN) ?? ""
+  ).trim();
   return secret.length > 0 ? secret : null;
 }
 
@@ -58,22 +68,12 @@ function hmacHex(secret: string, message: string): string {
   return createHmac("sha256", secret).update(message).digest("hex");
 }
 
-/**
- * Verify `x-zm-signature` ("v0=" + HMAC-SHA256 hex of "v0:{ts}:{rawBody}")
- * and timestamp freshness. False on any missing/malformed input, the
- * route rejects unauthenticated deliveries before parsing.
- */
-export function verifyZoomWebhookSignature(
+function signatureMatches(
+  secret: string,
   rawBody: string,
-  timestampHeader: string | null,
-  signatureHeader: string | null,
-  now = Date.now()
+  timestampHeader: string,
+  signatureHeader: string
 ): boolean {
-  const secret = webhookSecret();
-  if (!secret || !timestampHeader || !signatureHeader) return false;
-  const ts = Number(timestampHeader);
-  if (!Number.isFinite(ts)) return false;
-  if (Math.abs(now - ts * 1000) > ZOOM_WEBHOOK_TIMESTAMP_TOLERANCE_MS) return false;
   const expected = `v0=${hmacHex(secret, `v0:${timestampHeader}:${rawBody}`)}`;
   const a = Buffer.from(signatureHeader, "utf8");
   const b = Buffer.from(expected, "utf8");
@@ -81,11 +81,48 @@ export function verifyZoomWebhookSignature(
   return timingSafeEqual(a, b);
 }
 
-/** The save-time challenge reply. Null when the secret is not configured. */
+/**
+ * Verify `x-zm-signature` ("v0=" + HMAC-SHA256 hex of "v0:{ts}:{rawBody}")
+ * and timestamp freshness, returning WHICH Marketplace client signed it.
+ * Null on any missing/malformed input; the route rejects unauthenticated
+ * deliveries before parsing.
+ *
+ * Production is tried first (the hot path costs one HMAC), and development is
+ * only considered while ZOOM_DEV_SECRET_TOKEN is set, so clearing that env
+ * var after the update is approved closes the second door with no code
+ * change. The env is not cosmetic: it scopes which tenants the delivery is
+ * allowed to touch.
+ */
+export function verifyZoomWebhookSignature(
+  rawBody: string,
+  timestampHeader: string | null,
+  signatureHeader: string | null,
+  now = Date.now()
+): { clientEnv: ZoomClientEnv } | null {
+  if (!timestampHeader || !signatureHeader) return null;
+  const ts = Number(timestampHeader);
+  if (!Number.isFinite(ts)) return null;
+  if (Math.abs(now - ts * 1000) > ZOOM_WEBHOOK_TIMESTAMP_TOLERANCE_MS) return null;
+
+  for (const clientEnv of ["production", "development"] as const) {
+    const secret = webhookSecret(clientEnv);
+    if (!secret) continue;
+    if (signatureMatches(secret, rawBody, timestampHeader, signatureHeader)) {
+      return { clientEnv };
+    }
+  }
+  return null;
+}
+
+/**
+ * The save-time challenge reply, answered with the secret of the client that
+ * issued the challenge. Null when that client's secret is not configured.
+ */
 export function buildUrlValidationResponse(
-  plainToken: string
+  plainToken: string,
+  clientEnv: ZoomClientEnv
 ): { plainToken: string; encryptedToken: string } | null {
-  const secret = webhookSecret();
+  const secret = webhookSecret(clientEnv);
   if (!secret) return null;
   return { plainToken, encryptedToken: hmacHex(secret, plainToken) };
 }
@@ -270,9 +307,15 @@ const TRANSCRIPT_OUTCOME_RANK: Record<ZoomTranscriptWebhookOutcome, number> = {
  * Dispatch one verified delivery. Never throws for event-shaped problems,
  * unknown events and unusable payloads return outcomes the route maps to
  * 200 (Zoom must not retry them).
+ *
+ * `clientEnv` is the Marketplace client the signature attributed the delivery
+ * to, and it is positional (not part of `deps`, which is the test-injection
+ * bag) because it is a required runtime value: every tenant lookup below is
+ * scoped by it so the two apps can never reach into each other's rows.
  */
 export async function processZoomWebhookEvent(
   body: unknown,
+  clientEnv: ZoomClientEnv,
   deps: ZoomWebhookDeps = {}
 ): Promise<ZoomWebhookResult> {
   /* c8 ignore start -- production defaults; tests inject */
@@ -300,14 +343,18 @@ export async function processZoomWebhookEvent(
 
   if (event.event === "endpoint.url_validation") {
     const plainToken = asString(event.payload.plainToken) ?? "";
-    return { kind: "url_validation", response: buildUrlValidationResponse(plainToken) };
+    return {
+      kind: "url_validation",
+      response: buildUrlValidationResponse(plainToken, clientEnv)
+    };
   }
 
   if (event.event === "app_deauthorized") {
     const userId = asString(event.payload.user_id);
-    // ALL rows for the user, active or not: a soft-disabled connection's
-    // ciphertext must not survive a Zoom-side uninstall.
-    const businessIds = userId ? await deauthBusinessIdsByZoomUserId(userId) : [];
+    // ALL rows for the user under THIS client, active or not: a soft-disabled
+    // connection's ciphertext must not survive a Zoom-side uninstall, and a
+    // deauthorization from one app must not wipe the other app's tenants.
+    const businessIds = userId ? await deauthBusinessIdsByZoomUserId(userId, clientEnv) : [];
     for (const businessId of businessIds) {
       await deauthorize(businessId);
       await logSystem({
@@ -325,7 +372,7 @@ export async function processZoomWebhookEvent(
     const extracted = extractTranscriptCompleted(event, body);
     if (!extracted) return { kind: "transcript", outcome: "unusable", businessId: null };
 
-    const conns = await connectionsByZoomUserId(extracted.hostId);
+    const conns = await connectionsByZoomUserId(extracted.hostId, clientEnv);
     if (conns.length === 0) {
       return { kind: "transcript", outcome: "no_connection", businessId: null };
     }
