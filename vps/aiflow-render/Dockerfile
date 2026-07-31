@@ -2,9 +2,13 @@
 # or login-gated; otherwise the worker's static fetch is sufficient.
 #
 # The base image tag MUST match the Playwright version pinned in package-lock.json
-# (currently 1.61.0) so the bundled browsers match the installed library — a
-# mismatch is the classic "Executable doesn't exist" container failure.
-FROM mcr.microsoft.com/playwright:v1.61.0-jammy
+# (currently 1.62.0) so the bundled browsers match the installed library. A
+# mismatch is the classic "Executable doesn't exist" container failure, and it
+# is LATENT: nothing breaks until the next rebuild, which can be weeks after the
+# bump that caused it. It has now bitten twice, PR #226 and again when
+# Dependabot #1005 moved playwright 1.61.0 -> 1.62.0 here without touching this
+# line. Bump BOTH in the same PR, or the next redeploy takes the sidecar down.
+FROM mcr.microsoft.com/playwright:v1.62.0-jammy
 
 WORKDIR /app
 COPY package.json package-lock.json ./
