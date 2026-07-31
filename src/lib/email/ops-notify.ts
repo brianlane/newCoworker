@@ -33,6 +33,10 @@ import {
   type OpsBillingPostureInput
 } from "@/lib/email/templates/ops-billing-posture";
 import {
+  buildOpsOrphanSweepEmail,
+  type OpsOrphanSweepInput
+} from "@/lib/email/templates/ops-orphan-sweep";
+import {
   buildOpsMarginAlertEmail,
   type OpsMarginAlertInput
 } from "@/lib/email/templates/ops-margin-alert";
@@ -163,6 +167,38 @@ export async function sendOpsTermAlignmentEmail(
   } catch (err) {
     logger.warn("ops term-alignment email failed", {
       businessId: input.businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
+
+/**
+ * Fire-and-forget orphan-sweep findings email; never throws. Sent by the
+ * daily sweep when the Hostinger account holds VMs with no `vps_inventory`
+ * row. Not tier-tagged: an orphan belongs to no tenant by definition.
+ */
+export async function sendOpsOrphanSweepEmail(
+  input: Omit<OpsOrphanSweepInput, "siteUrl">
+): Promise<void> {
+  try {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      logger.warn("ops orphan-sweep email skipped: RESEND_API_KEY missing", {
+        findings: input.findings.length
+      });
+      return;
+    }
+    const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+    const toEmail = opsNotificationEmail();
+    const { subject, text, html } = buildOpsOrphanSweepEmail({ ...input, siteUrl });
+    await sendOwnerEmail(apiKey, toEmail, subject, { text, html });
+    logger.info("ops orphan-sweep email sent", {
+      findings: input.findings.length,
+      toEmail
+    });
+  } catch (err) {
+    logger.warn("ops orphan-sweep email failed", {
+      findings: input.findings.length,
       error: err instanceof Error ? err.message : String(err)
     });
   }
