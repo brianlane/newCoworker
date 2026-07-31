@@ -178,47 +178,79 @@ const client = makeHostingerClient();
 const results: Array<{ businessId: string; status: "ok" | "failed" | "skipped"; note?: string }> =
   [];
 
-// Sequential on purpose: each redeploy streams a full docker build to stdout,
-// and interleaving several makes the output unreadable exactly when something
-// has gone wrong. The fleet is small enough that wall-clock is not the
-// constraint.
-for (const key of targets) {
+const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
+
+/**
+ * Redeploy ONE tenant, converting any throw into a recorded failure.
+ *
+ * A fleet sweep must not lose the rest of the fleet to one bad box: an
+ * unhandled Hostinger lookup error or SSH timeout would abort the loop
+ * mid-run, leaving later tenants untouched AND printing no summary, so the
+ * operator cannot tell which boxes were reached. Same containment
+ * `update-all-vps.ts` applies per box.
+ */
+async function redeployOne(key: NonNullable<KeyRow>): Promise<(typeof results)[number]> {
   const businessId = key.business_id;
-  const ip = await resolveVpsIp(client, key);
+
+  let ip: string;
+  try {
+    ip = await resolveVpsIp(client, key);
+  } catch (err) {
+    console.error(`\n========== ${businessId} (vps ${key.hostinger_vps_id}) ==========`);
+    console.error(`[fail] could not resolve the box's IP: ${errText(err)}`);
+    return { businessId, status: "failed", note: `ip-resolve-failed: ${errText(err)}` };
+  }
 
   console.log(`\n========== ${businessId} (vps ${key.hostinger_vps_id} @ ${ip}) ==========`);
   console.log(`User     : ${key.ssh_username || "root"}`);
 
   if (DRY_RUN) {
     console.log("[dry-run] target resolved; not connecting.");
-    results.push({ businessId, status: "skipped", note: "dry-run" });
-    continue;
+    return { businessId, status: "skipped", note: "dry-run" };
   }
 
   if (!FORCE) {
     const live = await liveCallCount(businessId);
     if (live === null || live > 0) {
       const why =
-        live === null
-          ? "could not check for calls in progress"
-          : `${live} call(s) in progress`;
+        live === null ? "could not check for calls in progress" : `${live} call(s) in progress`;
       console.log(`[skip] ${why}. Re-run for this tenant later, or pass --force.`);
-      results.push({ businessId, status: "skipped", note: why });
-      continue;
+      return { businessId, status: "skipped", note: why };
     }
   }
 
-  const res = await sshExec({
-    host: ip,
-    username: key.ssh_username || "root",
-    privateKeyPem: key.private_key_pem,
-    command: REDEPLOY_BRIDGE_REMOTE,
-    timeoutMs: 12 * 60 * 1000,
-    onStdout: (c) => process.stdout.write(c),
-    onStderr: (c) => process.stderr.write(c)
-  });
-  console.log(`\n[redeploy-voice-bridge] exitCode=${res.exitCode} signal=${res.signal ?? "none"}`);
-  results.push({ businessId, status: res.exitCode === 0 ? "ok" : "failed" });
+  try {
+    const res = await sshExec({
+      host: ip,
+      username: key.ssh_username || "root",
+      privateKeyPem: key.private_key_pem,
+      command: REDEPLOY_BRIDGE_REMOTE,
+      timeoutMs: 12 * 60 * 1000,
+      onStdout: (c) => process.stdout.write(c),
+      onStderr: (c) => process.stderr.write(c)
+    });
+    console.log(
+      `\n[redeploy-voice-bridge] exitCode=${res.exitCode} signal=${res.signal ?? "none"}`
+    );
+    return res.exitCode === 0
+      ? { businessId, status: "ok" }
+      : {
+          businessId,
+          status: "failed",
+          note: `exitCode=${res.exitCode} signal=${res.signal ?? "none"}`
+        };
+  } catch (err) {
+    console.error(`\n[fail] ssh failed for ${businessId}: ${errText(err)}`);
+    return { businessId, status: "failed", note: `ssh-failed: ${errText(err)}` };
+  }
+}
+
+// Sequential on purpose: each redeploy streams a full docker build to stdout,
+// and interleaving several makes the output unreadable exactly when something
+// has gone wrong. The fleet is small enough that wall-clock is not the
+// constraint.
+for (const key of targets) {
+  results.push(await redeployOne(key));
 }
 
 if (ALL || results.length > 1) {
