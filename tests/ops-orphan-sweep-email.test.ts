@@ -60,12 +60,49 @@ describe("buildOpsOrphanSweepEmail", () => {
 
   it("marks a dry run so a report is never mistaken for a change", () => {
     const email = buildOpsOrphanSweepEmail({
-      findings: [finding({ kind: "reported", detail: "dry run: would pool as available (kvm1)" })],
+      findings: [
+        finding({ kind: "would_pool", detail: "dry run: would pool as available (kvm1)" })
+      ],
       checkedVms: 10,
       dryRun: true,
       siteUrl: "https://www.example.com"
     });
     expect(email.subject).toContain("[ops][dry run]");
+    expect(email.subject).toContain("would be pooled for reuse");
+  });
+
+  // Bugbot on #1061: a dry run whose boxes are all poolable is a CLEAN result.
+  // Folding those into the action count made it shout ACTION REQUIRED about
+  // boxes the live sweep would have handled by itself, which would have
+  // discredited the dry run the first time anyone ran it.
+  it("does not escalate a dry run whose boxes are all poolable", () => {
+    const email = buildOpsOrphanSweepEmail({
+      findings: [
+        finding({ kind: "would_pool", detail: "dry run: would pool as available (kvm1)" }),
+        finding({ kind: "would_pool", vmId: 1800985, detail: "dry run: would pool" })
+      ],
+      checkedVms: 10,
+      dryRun: true,
+      siteUrl: "https://www.example.com"
+    });
+    expect(email.subject).not.toContain("ACTION REQUIRED");
+    expect(email.subject).toContain("2 untracked paid box(es) would be pooled");
+    expect(email.text).toContain("[WOULD POOL]");
+    expect(email.text).not.toContain("[ACTION REQUIRED]");
+    expect(email.text).toContain("Nothing here needs a human");
+  });
+
+  it("still escalates a dry run that found a genuinely stuck box", () => {
+    const email = buildOpsOrphanSweepEmail({
+      findings: [
+        finding({ kind: "would_pool", detail: "dry run: would pool as available (kvm1)" }),
+        finding({ kind: "reported", vmId: 1863856, state: "running", detail: "still in use" })
+      ],
+      checkedVms: 10,
+      dryRun: true,
+      siteUrl: "https://www.example.com"
+    });
+    expect(email.subject).toContain("[ops][dry run] ACTION REQUIRED: 1 untracked");
   });
 
   it("renders a box with no plan or dates", () => {

@@ -229,15 +229,30 @@ describe("runOrphanSweep", () => {
     expect(deps.releaseVpsToPool).not.toHaveBeenCalled();
   });
 
-  it("changes nothing on a dry run", async () => {
+  // A dry run's poolable boxes are NOT awaiting a human. Counting them as
+  // `reported` made a clean dry run send an ACTION REQUIRED digest about boxes
+  // the live sweep would have handled by itself (Bugbot on #1061).
+  it("changes nothing on a dry run and does not call it an action item", async () => {
     const deps = makeDeps();
     const result = await runOrphanSweep(deps, { now: NOW, dryRun: true });
 
     expect(deps.releaseVpsToPool).not.toHaveBeenCalled();
     expect(deps.disableBillingAutoRenewal).not.toHaveBeenCalled();
-    expect(result).toMatchObject({ pooled: 0, reported: 1 });
+    expect(result).toMatchObject({ pooled: 0, wouldPool: 1, reported: 0 });
+    expect(result.findings[0].kind).toBe("would_pool");
     expect(result.findings[0].detail).toMatch(/dry run: would pool/);
     expect(deps.sendOpsEmail).toHaveBeenCalledWith(expect.objectContaining({ dryRun: true }));
+  });
+
+  // A dry run still has to surface the boxes it would refuse to touch.
+  it("still reports genuinely stuck boxes on a dry run", async () => {
+    const running = vm({ state: "running", template: { name: "Ubuntu 24.04 with Docker" } });
+    const deps = makeDeps({
+      listVirtualMachines: vi.fn(async () => [running]),
+      getVirtualMachine: vi.fn(async () => running)
+    });
+    const result = await runOrphanSweep(deps, { now: NOW, dryRun: true });
+    expect(result).toMatchObject({ pooled: 0, wouldPool: 0, reported: 1 });
   });
 
   it("falls back to the list payload when the detail lookup fails", async () => {
@@ -297,7 +312,14 @@ describe("runOrphanSweep", () => {
   it("sends no email when the account is clean", async () => {
     const deps = makeDeps({ listVirtualMachines: vi.fn(async () => []) });
     const result = await runOrphanSweep(deps, { now: NOW });
-    expect(result).toEqual({ checked: 0, orphaned: 0, pooled: 0, reported: 0, findings: [] });
+    expect(result).toEqual({
+      checked: 0,
+      orphaned: 0,
+      pooled: 0,
+      wouldPool: 0,
+      reported: 0,
+      findings: []
+    });
     expect(deps.sendOpsEmail).not.toHaveBeenCalled();
   });
 

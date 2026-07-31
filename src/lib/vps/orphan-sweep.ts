@@ -61,7 +61,13 @@ import type { OpsOrphanSweepInput } from "@/lib/email/templates/ops-orphan-sweep
 export const ORPHAN_SWEEP_MIN_AGE_MS = 6 * 60 * 60 * 1000;
 
 export type OrphanSweepFinding = {
-  kind: "pooled" | "reported";
+  /**
+   * `would_pool` is distinct from `reported` on purpose. A dry run's poolable
+   * boxes are not awaiting a human, and folding them into `reported` made a
+   * clean dry run send an ACTION REQUIRED digest about boxes the live sweep
+   * would have handled by itself.
+   */
+  kind: "pooled" | "would_pool" | "reported";
   vmId: number;
   plan: string | null;
   state: string;
@@ -77,6 +83,9 @@ export type OrphanSweepResult = {
   /** Untracked VMs old enough to consider. */
   orphaned: number;
   pooled: number;
+  /** Dry run only: boxes a live run would have pooled. */
+  wouldPool: number;
+  /** Boxes deliberately left for a human. */
   reported: number;
   findings: OrphanSweepFinding[];
 };
@@ -248,7 +257,7 @@ export async function runOrphanSweep(
     if (dryRun) {
       findings.push({
         ...base,
-        kind: "reported",
+        kind: "would_pool",
         detail: `dry run: would pool as available (${plan}) with auto-renew off`
       });
       continue;
@@ -315,11 +324,12 @@ export async function runOrphanSweep(
   }
 
   const pooled = findings.filter((f) => f.kind === "pooled").length;
-  const reported = findings.length - pooled;
+  const wouldPool = findings.filter((f) => f.kind === "would_pool").length;
+  const reported = findings.filter((f) => f.kind === "reported").length;
 
   if (findings.length > 0) {
     await deps.sendOpsEmail({ findings, checkedVms: vms.length, dryRun });
   }
 
-  return { checked: vms.length, orphaned, pooled, reported, findings };
+  return { checked: vms.length, orphaned, pooled, wouldPool, reported, findings };
 }

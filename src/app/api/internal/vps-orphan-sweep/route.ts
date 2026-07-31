@@ -54,6 +54,7 @@ export async function POST(request: Request): Promise<Response> {
       checked: result.checked,
       orphaned: result.orphaned,
       pooled: result.pooled,
+      wouldPool: result.wouldPool,
       reported: result.reported,
       dryRun
     });
