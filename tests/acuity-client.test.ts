@@ -489,6 +489,19 @@ describe("appointment types", () => {
     await expect(listAcuityAppointmentTypes(CONN)).resolves.toEqual([]);
   });
 
+  it("clearing caches does NOT reset the request serializer", async () => {
+    // The chain is a concurrency primitive, not a cache. Resetting it while
+    // requests are in flight lets the next caller skip the wait, and two
+    // overlapping requests is the exact burst the serializer prevents
+    // against a per-IP rate limit.
+    fetchMock.mockResolvedValue(jsonResponse(200, {}));
+    const started = Date.now();
+    const inFlight = acuityFetch(CONN, { method: "GET", path: "/me" });
+    clearAcuityCaches();
+    await Promise.all([inFlight, acuityFetch(CONN, { method: "GET", path: "/me" })]);
+    expect(Date.now() - started).toBeGreaterThanOrEqual(ACUITY_MIN_REQUEST_INTERVAL_MS * 2);
+  });
+
   it("caches the catalog per connection and clears on demand", async () => {
     fetchMock.mockResolvedValue(jsonResponse(200, TYPES));
     await listAcuityAppointmentTypes(CONN);

@@ -19,6 +19,7 @@ vi.mock("@/lib/db/workspace-oauth-connections", () => ({
 }));
 vi.mock("@/lib/db/custom-integrations", () => ({ listCustomIntegrations: vi.fn() }));
 vi.mock("@/lib/db/vagaro-connections", () => ({ getPublicVagaroConnection: vi.fn() }));
+vi.mock("@/lib/db/acuity-connections", () => ({ getPublicAcuityConnection: vi.fn() }));
 vi.mock("@/lib/db/calendly-connections", () => ({ getPublicCalendlyConnection: vi.fn() }));
 vi.mock("@/lib/db/caldav-connections", () => ({ getPublicCaldavConnection: vi.fn() }));
 vi.mock("@/lib/db/meta-connections", () => ({ getPublicMetaConnection: vi.fn() }));
@@ -40,6 +41,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
 import { listCustomIntegrations } from "@/lib/db/custom-integrations";
 import { getPublicVagaroConnection } from "@/lib/db/vagaro-connections";
+import { getPublicAcuityConnection } from "@/lib/db/acuity-connections";
 import { getPublicCalendlyConnection } from "@/lib/db/calendly-connections";
 import { getPublicCaldavConnection } from "@/lib/db/caldav-connections";
 import { getPublicMetaConnection } from "@/lib/db/meta-connections";
@@ -257,11 +259,13 @@ describe("computeIntegrationStatuses", () => {
     const s = computeIntegrationStatuses(
       baseCtx({
         vagaroConnection: { id: "v" } as never,
+        acuityConnection: { id: "a" } as never,
         calendlyConnection: { id: "c" } as never,
         caldavConnection: { id: "d" } as never
       })
     );
     expect(s.vagaro).toEqual({ state: "connected", label: "Connected" });
+    expect(s.acuity).toEqual({ state: "connected", label: "Connected" });
     expect(s.calendly).toEqual({ state: "connected", label: "Connected" });
     expect(s.caldav).toEqual({ state: "connected", label: "Connected" });
   });
