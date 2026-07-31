@@ -14,6 +14,7 @@ vi.mock("@/lib/logger", () => ({
 // stays hermetic (no supabase module init at test load).
 vi.mock("@/lib/db/businesses", () => ({ getBusiness: vi.fn() }));
 vi.mock("@/lib/db/zoom-connections", () => ({
+  getActiveZoomConnection: vi.fn().mockResolvedValue({ account_name: "Brian Lane" }),
   getActiveZoomConnectionSummariesByZoomUserId: vi.fn(),
   getZoomConnectionBusinessIdsByZoomUserId: vi.fn(),
   markZoomConnectionDeauthorized: vi.fn()
@@ -41,6 +42,7 @@ import {
   isTrustedZoomDownloadUrl,
   parseZoomWebhookBody,
   processZoomWebhookEvent,
+  resolveHostNames,
   verifyZoomWebhookSignature,
   type ZoomWebhookDeps
 } from "@/lib/zoom/webhook";
@@ -691,5 +693,33 @@ describe("processZoomWebhookEvent", () => {
       outcome: "import_failed",
       businessId: BIZ
     });
+  });
+});
+
+describe("resolveHostNames", () => {
+  it("adds the Zoom account display name to the business name", async () => {
+    await expect(
+      resolveHostNames("New Coworker", async () => ({ account_name: "Brian Lane" }))
+    ).resolves.toEqual(["New Coworker", "Brian Lane"]);
+  });
+
+  it("falls back to the business name when there is no connection", async () => {
+    await expect(resolveHostNames("New Coworker", async () => null)).resolves.toEqual([
+      "New Coworker"
+    ]);
+  });
+
+  // A nicer document title is never worth failing an import over.
+  it("never throws when the connection lookup does", async () => {
+    await expect(
+      resolveHostNames("New Coworker", async () => {
+        throw new Error("db down");
+      })
+    ).resolves.toEqual(["New Coworker"]);
+    await expect(
+      resolveHostNames("New Coworker", async () => {
+        throw "string boom";
+      })
+    ).resolves.toEqual(["New Coworker"]);
   });
 });

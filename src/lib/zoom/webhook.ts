@@ -18,6 +18,7 @@
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { getBusiness } from "@/lib/db/businesses";
 import {
+  getActiveZoomConnection,
   getActiveZoomConnectionSummariesByZoomUserId,
   getZoomConnectionBusinessIdsByZoomUserId,
   markZoomConnectionDeauthorized,
@@ -246,6 +247,7 @@ export type ZoomWebhookDeps = {
   fetchConnectionTranscript?: typeof fetchZoomMeetingTranscript;
   fetchMeetingMeta?: typeof fetchPastMeetingMeta;
   importCore?: typeof importZoomTranscriptDocument;
+  getZoomConnection?: typeof getActiveZoomConnection;
   deauthorize?: typeof markZoomConnectionDeauthorized;
   logSystem?: typeof recordSystemLog;
 };
@@ -284,6 +286,8 @@ export async function processZoomWebhookEvent(
     deps.fetchConnectionTranscript ?? fetchZoomMeetingTranscript;
   const fetchMeetingMeta = deps.fetchMeetingMeta ?? fetchPastMeetingMeta;
   const importCore = deps.importCore ?? importZoomTranscriptDocument;
+  /* c8 ignore next -- production default; tests inject */
+  const getConnection = deps.getZoomConnection ?? getActiveZoomConnection;
   const deauthorize = deps.deauthorize ?? markZoomConnectionDeauthorized;
   const logSystem = deps.logSystem ?? recordSystemLog;
   /* c8 ignore stop */
@@ -364,12 +368,19 @@ export async function processZoomWebhookEvent(
           meetingId = meetingId ?? meta?.meetingId ?? null;
         }
         const titleBits = { topic, startTime, meetingId };
+        // The host speaks under their Zoom display name, not the business
+        // name, so both are needed to tell "us" from the guest. Best-effort:
+        // a nicer title is never worth failing an import over.
+        const hostNames = await resolveHostNames(business.name, () =>
+          getConnection(businessId)
+        );
         const imported = await importCore({
           businessId,
           business: { name: business.name, tier: business.tier },
           vtt,
           title: buildZoomTranscriptTitle(titleBits),
-          refLabel: buildZoomTranscriptRefLabel(titleBits)
+          refLabel: buildZoomTranscriptRefLabel(titleBits),
+          hostNames
         });
 
         if (!imported.ok) {
@@ -446,4 +457,26 @@ export async function processZoomWebhookEvent(
   }
 
   return { kind: "ignored", event: event.event };
+}
+
+/**
+ * Names that count as "us" for guest detection: the business name plus the
+ * connected Zoom account's display name (the host speaks under the latter).
+ *
+ * Never throws. This only affects how nice the document title is, so a
+ * connection lookup blip must not fail the import.
+ */
+export async function resolveHostNames(
+  businessName: string,
+  loadConnection: () => Promise<{ account_name: string | null } | null>
+): Promise<string[]> {
+  let accountName: string | null = null;
+  try {
+    accountName = (await loadConnection())?.account_name ?? null;
+  } catch (err) {
+    logger.warn("zoom: host-name lookup failed; falling back to the business name", {
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+  return [businessName, accountName ?? ""].filter((n) => n.trim() !== "");
 }

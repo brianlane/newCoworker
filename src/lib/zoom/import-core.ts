@@ -24,7 +24,15 @@ import {
 } from "@/lib/documents/db";
 import { BUSINESS_DOCS_BUCKET, documentLimitForTier } from "@/lib/documents/core";
 import { ingestDocument } from "@/lib/documents/ingest";
-import { VTT_MIME_TYPE } from "@/lib/transcripts/vtt";
+import {
+  buildZoomGuestHeadingTitle,
+  extractFirstMinutesHeading,
+  extractVttSpeakers,
+  isGenericZoomTopic,
+  pickZoomGuestName,
+  zoomTopicFromTitle
+} from "@/lib/zoom/document-title";
+import { VTT_MIME_TYPE, vttToPlainText } from "@/lib/transcripts/vtt";
 import { syncVaultToVpsAndLog } from "@/lib/vps/sync-vault";
 import { logger } from "@/lib/logger";
 
@@ -44,6 +52,13 @@ export type ImportZoomTranscriptParams = {
   title: string;
   /** Filename-safe label for the stored object. */
   refLabel: string;
+  /**
+   * Names that count as "us" when picking the guest out of the speaker list:
+   * the Zoom connection's account_name plus the business name. Anyone else who
+   * spoke is the guest the title is named after. Omitted means every speaker
+   * is a candidate.
+   */
+  hostNames?: string[];
 };
 
 export type ImportZoomTranscriptDeps = {
@@ -173,11 +188,23 @@ export async function importZoomTranscriptDocument(
       businessName: business.name
     });
     if (ingested.ok) {
+      // Only now do we know who was on the call and what the minutes call it,
+      // so this is the first point a better title than Zoom's topic exists.
+      // Rides the same patch: a second write would be a second chance to fail
+      // and leave the row half-updated.
+      const derivedTitle = deriveZoomDocumentTitle({
+        provisionalTitle: title,
+        vtt,
+        contentMd: ingested.contentMd,
+        summary: ingested.summary,
+        hostNames: params.hostNames ?? []
+      });
       await patchDocument(businessId, documentId, {
         content_md: ingested.contentMd,
         summary: ingested.summary,
         status: "ready",
-        error_detail: null
+        error_detail: null,
+        ...(derivedTitle ? { title: derivedTitle } : {})
       });
       // Fire-and-forget: the Supabase write is canonical; a slow VPS must
       // not block the import.
@@ -205,4 +232,33 @@ export async function importZoomTranscriptDocument(
     await removeUploadedObject();
     throw err;
   }
+}
+
+/**
+ * A better title than Zoom's topic, or null to keep the provisional one.
+ *
+ * Only overrides a GENERIC topic. A host who bothered to name their meeting
+ * has said something we cannot improve on, and silently renaming it would be
+ * worse than the collision this fixes.
+ */
+function deriveZoomDocumentTitle(input: {
+  provisionalTitle: string;
+  vtt: string;
+  contentMd: string;
+  summary: string | null;
+  hostNames: string[];
+}): string | null {
+  // The provisional title is "<topic> · <date> (transcript)" and friends, so
+  // strip the decoration back to the topic before judging it.
+  if (!isGenericZoomTopic(zoomTopicFromTitle(input.provisionalTitle))) return null;
+
+  const guest = pickZoomGuestName({
+    speakers: extractVttSpeakers(vttToPlainText(input.vtt)),
+    hostNames: input.hostNames,
+    summary: input.summary
+  });
+  const heading = extractFirstMinutesHeading(input.contentMd);
+  const derived = buildZoomGuestHeadingTitle({ guest, heading });
+  if (!derived || derived === input.provisionalTitle) return null;
+  return derived;
 }
