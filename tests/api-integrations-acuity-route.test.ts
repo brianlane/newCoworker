@@ -26,6 +26,11 @@ vi.mock("@/lib/db/acuity-connections", async () => {
   };
 });
 vi.mock("@/lib/db/vagaro-connections", () => ({ getActiveVagaroConnectionId: vi.fn() }));
+vi.mock("@/lib/acuity/webhook-registration", () => ({
+  acuityWebhookCallbackUrl: vi.fn(() => "https://app/api/webhooks/acuity?business=x&token=y"),
+  ensureAcuityWebhooks: vi.fn(),
+  teardownAcuityWebhooks: vi.fn()
+}));
 vi.mock("@/lib/acuity/client", async () => {
   const actual = await vi.importActual<typeof import("@/lib/acuity/client")>(
     "@/lib/acuity/client"
@@ -50,6 +55,10 @@ import {
   upsertAcuityConnection
 } from "@/lib/db/acuity-connections";
 import { getActiveVagaroConnectionId } from "@/lib/db/vagaro-connections";
+import {
+  ensureAcuityWebhooks,
+  teardownAcuityWebhooks
+} from "@/lib/acuity/webhook-registration";
 import {
   AcuityApiError,
   clearAcuityCaches,
@@ -170,6 +179,16 @@ describe("POST", () => {
     });
     // A credential rotation must not serve a catalog cached under the old key.
     expect(vi.mocked(clearAcuityCaches)).toHaveBeenCalled();
+    // Webhooks are registered only once the key is known to work.
+    expect(vi.mocked(ensureAcuityWebhooks)).toHaveBeenCalled();
+  });
+
+  it("does not register webhooks when the key was rejected", async () => {
+    vi.mocked(verifyAcuityCredentials).mockRejectedValue(
+      new AcuityApiError("auth_failed", "nope", 401)
+    );
+    await POST(req({ businessId: BIZ, userId: "12345", apiKey: "bad" }));
+    expect(vi.mocked(ensureAcuityWebhooks)).not.toHaveBeenCalled();
   });
 
   it("KEEPS the row when Acuity rejects the key, and says so", async () => {
@@ -263,11 +282,20 @@ describe("PATCH", () => {
 });
 
 describe("DELETE", () => {
-  it("removes the connection and clears the cache", async () => {
+  it("tears the webhooks down BEFORE the row, then removes it", async () => {
+    // Teardown needs the API key, so it cannot run after the delete.
     const res = await json(await DELETE(req({ businessId: BIZ })));
     expect(res.data).toMatchObject({ deleted: true });
+    expect(vi.mocked(teardownAcuityWebhooks)).toHaveBeenCalled();
     expect(vi.mocked(deleteAcuityConnection)).toHaveBeenCalledWith(BIZ);
     expect(vi.mocked(clearAcuityCaches)).toHaveBeenCalled();
+  });
+
+  it("still deletes when there is no row to tear down", async () => {
+    vi.mocked(getAcuityConnection).mockResolvedValue(null as never);
+    await DELETE(req({ businessId: BIZ }));
+    expect(vi.mocked(teardownAcuityWebhooks)).not.toHaveBeenCalled();
+    expect(vi.mocked(deleteAcuityConnection)).toHaveBeenCalledWith(BIZ);
   });
 
   it("refuses an unauthenticated caller", async () => {

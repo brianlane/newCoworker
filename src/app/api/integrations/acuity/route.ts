@@ -37,6 +37,11 @@ import {
 } from "@/lib/db/acuity-connections";
 import { getActiveVagaroConnectionId } from "@/lib/db/vagaro-connections";
 import {
+  acuityWebhookCallbackUrl,
+  ensureAcuityWebhooks,
+  teardownAcuityWebhooks
+} from "@/lib/acuity/webhook-registration";
+import {
   AcuityApiError,
   clearAcuityCaches,
   listAcuityAppointmentTypes,
@@ -45,6 +50,11 @@ import {
 } from "@/lib/acuity/client";
 
 const businessIdSchema = z.string().uuid();
+
+/** The public origin to build the tenant's callback URL from. */
+function appOrigin(request: Request): string {
+  return process.env.NEXT_PUBLIC_APP_URL?.trim() || new URL(request.url).origin;
+}
 
 const upsertSchema = z.object({
   businessId: z.string().uuid(),
@@ -164,6 +174,14 @@ export async function POST(request: Request) {
             defaultCalendarTimezone: account.timezone
           });
         }
+        // Register the webhooks now that we know the key works. Best-effort
+        // by contract: the poller keeps triggers correct regardless, and the
+        // card explains a cap_reached / unsupported account rather than
+        // failing the connect over it.
+        await ensureAcuityWebhooks(
+          conn,
+          acuityWebhookCallbackUrl(appOrigin(request), body.businessId, conn.webhook_verification_token)
+        );
         refreshed = (await getPublicAcuityConnection(body.businessId)) ?? row;
       } catch (err) {
         logger.warn("acuity connect: post-verification bookkeeping failed", {
@@ -243,6 +261,11 @@ export async function DELETE(request: Request) {
     const body = z.object({ businessId: z.string().uuid() }).parse(await request.json());
     const user = await authorize(body.businessId);
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
+    // Remove our registrations BEFORE the row goes, since teardown needs the
+    // key. Best-effort: a leftover webhook pointing at a deleted tenant is
+    // rejected by the receiver anyway.
+    const existing = await getAcuityConnection(body.businessId);
+    if (existing) await teardownAcuityWebhooks(existing);
     await deleteAcuityConnection(body.businessId);
     clearAcuityCaches();
     return successResponse({ deleted: true });
