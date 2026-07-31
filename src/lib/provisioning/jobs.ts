@@ -355,12 +355,20 @@ export type RetryStalledProvisioningResult = (
  * completed by hand — must resolve to 'succeeded' without re-provisioning
  * live hardware.
  *
- * Background migrations (purpose migrate_size / term_renewal) are already
- * online by design, so the signup short-circuit is skipped. Re-running full
- * orchestrate would buy another VPS, so migrations instead:
+ * Background migrations (purpose migrate_size / term_renewal) take the
+ * progress-based path instead, because re-running full orchestrate would buy
+ * another VPS (the sweep enqueues them with skip_pool_adopt: true, so
+ * acquireVps cannot even fall back to the pool):
  *   * settle when progress already shows deploy complete, or
  *   * resume the detached deploy on the current box when mid-deploy, or
  *   * fall through to full orchestrate only for early/pre-deploy failures.
+ *
+ * That branch is deliberately NOT gated on business status. An earlier version
+ * required status 'online', on the assumption that migrations are "already
+ * online by design". They are not: orchestrateProvisioning writes 'offline' at
+ * 22%, before the deploy phase, and only restores 'online' after it, so for the
+ * entire mid-deploy window (exactly what this recovery is for) the status reads
+ * 'offline' and every migration fell through to a second purchase.
  */
 export async function retryStalledProvisioningJob(
   deps: RetryStalledProvisioningDeps
@@ -399,7 +407,7 @@ export async function retryStalledProvisioningJob(
     return withExhausted({ kind: "already_online", businessId: job.business_id });
   }
 
-  if (purpose !== "signup" && (status === "online" || status === "high_load")) {
+  if (purpose !== "signup") {
     let latest: LatestProvisioningStatus = null;
     if (deps.getLatestProgress) {
       try {
