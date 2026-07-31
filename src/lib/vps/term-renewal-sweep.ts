@@ -37,7 +37,22 @@ import { tryRecoverDeployCompleteNewBox } from "@/lib/vps/migration-cutover-reco
 import { sshExec } from "@/lib/hostinger/ssh";
 
 const DEFAULT_SAVINGS_THRESHOLD = 0.1;
-const DEFAULT_RENEWAL_WINDOW_DAYS = 30;
+/**
+ * How close a Hostinger renewal has to be before migrating is worth it.
+ *
+ * This was 30 days, which is wrong for a monthly Hostinger subscription: its
+ * next bill is never more than ~30 days out, and its renewal price is
+ * permanently above the promotional first-period price, so a box the sweep had
+ * just bought re-qualified a day or two later. That ran in production: KYP was
+ * migrated 2026-07-29 11:01 UTC and Scar Fairy 2026-07-30 11:01 UTC (one
+ * purchase per daily run), and Scar Fairy was moved a second time one day
+ * after their planned cutover, stranding the box they had just been put on.
+ *
+ * Five days keeps the intent (do not pay a renewal price when the same box can
+ * be re-bought at the first-period price) while making a freshly purchased box
+ * ineligible for the rest of its cycle.
+ */
+const DEFAULT_RENEWAL_WINDOW_DAYS = 5;
 const SWEEP_REQUESTED_BY = "term-renewal-sweep";
 
 export type TermRenewalSweepFinding = {
@@ -73,7 +88,11 @@ export type TermRenewalSweepDeps = {
   listBusinesses: () => Promise<BusinessRow[]>;
   listBusinessIdsWithLiveSubscription: (
     businessIds: string[]
-  ) => Promise<{ stripeBacked: Set<string>; stripeless: Set<string> }>;
+  ) => Promise<{
+    stripeBacked: Set<string>;
+    stripeless: Set<string>;
+    cancelAtPeriodEnd: Set<string>;
+  }>;
   listSubscriptionsByBusinessIds: (businessIds: string[]) => Promise<Map<string, SubscriptionRow>>;
   listCatalog: () => Promise<CatalogItem[]>;
   listBillingSubscriptions: () => Promise<BillingSubscription[]>;
@@ -265,8 +284,14 @@ export async function runTermRenewalSweep(
   const liveIds = await deps.listBusinessIdsWithLiveSubscription(
     hostingerCandidates.map((entry) => entry.business.id)
   );
-  const stripeBacked = hostingerCandidates.filter((entry) =>
-    liveIds.stripeBacked.has(entry.business.id)
+  // A tenant who scheduled cancellation had Hostinger auto-renew deliberately
+  // disabled by #999 so the box lapses with them. Buying them a fresh box at
+  // their contract term undoes that, and the new box renews. Mirrors the same
+  // exclusion in billing-posture.ts.
+  const stripeBacked = hostingerCandidates.filter(
+    (entry) =>
+      liveIds.stripeBacked.has(entry.business.id) &&
+      !liveIds.cancelAtPeriodEnd.has(entry.business.id)
   );
 
   const subByBusiness = await deps.listSubscriptionsByBusinessIds(
