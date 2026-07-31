@@ -101,6 +101,25 @@ beforeEach(() => {
   listAcuityAppointmentTypesMock.mockResolvedValue([SERVICE]);
   listAcuityAvailableDatesMock.mockResolvedValue([]);
   listAcuityAvailableTimesMock.mockResolvedValue([]);
+  // A successful reschedule returns the moved appointment; the core treats a
+  // null response as "not moved", so the default here must be a real one.
+  rescheduleAcuityAppointmentTimeMock.mockResolvedValue({
+    id: "500",
+    startIso: "2026-08-05T17:00:00.000Z",
+    endIso: "2026-08-05T17:30:00.000Z",
+    createdIso: null,
+    canceled: false,
+    appointmentTypeId: "1",
+    appointmentTypeName: "Consult",
+    calendarId: "7",
+    calendarName: "Ana",
+    durationMinutes: 30,
+    customerName: "Sam",
+    customerEmail: null,
+    customerPhone: null,
+    notes: null,
+    timezone: "America/New_York"
+  });
   vi.setSystemTime(new Date("2026-08-04T12:00:00Z"));
 });
 
@@ -661,6 +680,19 @@ describe("rescheduleAcuityAppointment", () => {
     expect(rescheduleAcuityAppointmentTimeMock.mock.calls[0][2]).toMatchObject({
       timezone: "America/New_York"
     });
+  });
+
+  it("refuses to report success when Acuity returns no moved appointment", async () => {
+    // A 2xx with no parseable body is anomalous for this endpoint. Claiming
+    // success would let the caller shift the ledger claim to a time Acuity
+    // may never have written, which is the same confirmed-event rule the
+    // booking paths already apply.
+    getAcuityAppointmentMock.mockResolvedValue(EXISTING);
+    listAcuityAvailableTimesMock.mockResolvedValue(["2026-08-05T17:00:00.000Z"]);
+    rescheduleAcuityAppointmentTimeMock.mockResolvedValue(null);
+    await expect(
+      rescheduleAcuityAppointment(BIZ, "500", "2026-08-05T17:00:00Z", "2026-08-05T17:30:00Z")
+    ).resolves.toEqual({ ok: false, detail: "calendar_reschedule_failed" });
   });
 
   it("drops to CLIENT mode when the payload has no appointment type", async () => {

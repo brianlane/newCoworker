@@ -464,12 +464,18 @@ export async function rescheduleAcuityAppointment(
       }
     }
 
-    await rescheduleAcuityAppointmentTime(conn, appointmentId, {
+    const moved = await rescheduleAcuityAppointmentTime(conn, appointmentId, {
       datetime: acuityDateTime(newStartIso, timezone),
       timezone,
       admin: verifiable,
       noEmail: conn.suppress_provider_emails
     });
+    // The same confirmed-event rule the booking paths use: only a response
+    // that actually carries the moved appointment counts as moved. A 2xx with
+    // no parseable body is anomalous for this endpoint, and reporting success
+    // on it would let the caller shift the ledger claim to a time Acuity may
+    // never have written.
+    if (!moved) return { ok: false, detail: "calendar_reschedule_failed" };
 
     return {
       ok: true,

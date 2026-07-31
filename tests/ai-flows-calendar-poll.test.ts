@@ -502,6 +502,26 @@ describe("pollCalendarTriggers", () => {
     );
   });
 
+  it("skips an Acuity connection QUIETLY, without logging a per-tick failure", async () => {
+    // Acuity resolves as a booking provider but has no poller fetcher yet.
+    // Falling through to the not-connected throw would write a
+    // "calendar_not_connected" failure row every minute, forever, for a
+    // calendar that is plainly connected.
+    vi.mocked(resolveCalendarConnection).mockResolvedValueOnce({
+      provider: "acuity",
+      providerConfigKey: "acuity",
+      connectionId: "cx-acuity"
+    } as never);
+    const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
+    expect(res).toEqual({ flows: 1, businesses: 1, events: 0, enqueued: 0 });
+    expect(nangoProxyForBusiness).not.toHaveBeenCalled();
+    expect(fetchCalendlyCandidateEvents).not.toHaveBeenCalled();
+    expect(fetchVagaroCandidateEvents).not.toHaveBeenCalled();
+    expect(recordSystemLog).not.toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_calendar_poll_failed" })
+    );
+  });
+
   it("polls Vagaro connections through the dedicated fetcher and enqueues due events", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue({
       provider: "vagaro",
