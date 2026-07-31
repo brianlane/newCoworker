@@ -78,7 +78,8 @@ IPv6-literal / `*.internal` / metadata hosts.
 | Var | Purpose |
 |-----|---------|
 | `PORT` | Listen port (default `8080`). |
-| `AIFLOW_RENDER_TIMEOUT_MS` | Per-navigation timeout (default `30000`). |
+| `AIFLOW_RENDER_TIMEOUT_MS` | Per-navigation timeout (default `30000`). Navigation waits for `domcontentloaded`, not network-idle, so a page that never goes quiet cannot time out here. |
+| `AIFLOW_SETTLE_IDLE_TIMEOUT_MS` | Best-effort network-quiet wait inside `settlePage` (default `6000`). Never fails a render, it just stops waiting. |
 | `AIFLOW_RENDER_TOKEN` | If set, required as `Authorization: Bearer` on `/render`. Set the same value as the worker's `AIFLOW_RENDER_TOKEN`. |
 | `AIFLOW_PLATFORM_URL` | Platform base URL for credential lookups (auth mode). |
 | `AIFLOW_GATEWAY_TOKEN` | Bearer for the platform credentials endpoint (`ROWBOAT_GATEWAY_TOKEN`). |
