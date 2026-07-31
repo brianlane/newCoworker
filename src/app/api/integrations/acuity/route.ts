@@ -24,6 +24,7 @@
  * connection that silently does nothing.
  */
 import { z } from "zod";
+import { logger } from "@/lib/logger";
 import { getAuthUser, requireBusinessRole } from "@/lib/auth";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import {
@@ -150,16 +151,28 @@ export async function POST(request: Request) {
       }
       const account = await verifyAcuityCredentials(conn);
       const catalog = await readCatalog(body.businessId);
-      // Cache the account timezone so the booking hot path never has to ask
-      // Acuity what zone this merchant is in.
-      if (account.timezone) {
-        await setAcuityBookingDefaults(body.businessId, {
-          defaultCalendarTimezone: account.timezone
+      // Everything past this point is bookkeeping on an ALREADY-VERIFIED
+      // credential, so it gets its own guard: letting a failed timezone
+      // write or row reload fall into the catch below would report
+      // "Acuity rejected your credentials" about a key that just worked.
+      let refreshed = row;
+      try {
+        // Cache the account timezone so the booking hot path never has to
+        // ask Acuity what zone this merchant is in.
+        if (account.timezone) {
+          await setAcuityBookingDefaults(body.businessId, {
+            defaultCalendarTimezone: account.timezone
+          });
+        }
+        refreshed = (await getPublicAcuityConnection(body.businessId)) ?? row;
+      } catch (err) {
+        logger.warn("acuity connect: post-verification bookkeeping failed", {
+          businessId: body.businessId,
+          error: err instanceof Error ? err.message : String(err)
         });
       }
-      const refreshed = await getPublicAcuityConnection(body.businessId);
       return successResponse({
-        connection: refreshed ?? row,
+        connection: refreshed,
         verified: true,
         account,
         ...catalog

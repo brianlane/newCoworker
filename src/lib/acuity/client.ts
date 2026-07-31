@@ -192,9 +192,18 @@ function sleep(ms: number): Promise<void> {
   });
 }
 
-/** Test hook: reset the process-local serializer and catalog caches. */
+/**
+ * Drop cached catalog reads, so a credential rotation cannot serve a
+ * catalog fetched under the old key.
+ *
+ * Deliberately does NOT touch `requestChain`. That chain is a concurrency
+ * primitive, not a cache: replacing it with a settled promise while requests
+ * are still in flight lets the next caller skip the wait entirely, and two
+ * overlapping requests is precisely the burst the serializer exists to stop
+ * against a per-IP rate limit. The chain needs no clearing anyway, since
+ * every link resolves on its own.
+ */
 export function clearAcuityCaches(): void {
-  requestChain = Promise.resolve();
   appointmentTypeCache.clear();
 }
 

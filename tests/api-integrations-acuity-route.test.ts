@@ -189,6 +189,16 @@ describe("POST", () => {
     expect(res.data).toMatchObject({ verified: false, verifyError: "request_failed" });
   });
 
+  it("stays verified when post-verification bookkeeping fails", async () => {
+    // The key already authenticated. Reporting "Acuity rejected the
+    // credentials" because a follow-up write failed would send the owner
+    // hunting a typo that is not there.
+    vi.mocked(setAcuityBookingDefaults).mockRejectedValue(new Error("db down"));
+    const res = await json(await POST(req({ businessId: BIZ, userId: "12345", apiKey: "k" })));
+    expect(res.data).toMatchObject({ verified: true });
+    expect(res.data).not.toHaveProperty("verifyError");
+  });
+
   it("skips the timezone cache when the account reports none", async () => {
     vi.mocked(verifyAcuityCredentials).mockResolvedValue({
       id: "1",
