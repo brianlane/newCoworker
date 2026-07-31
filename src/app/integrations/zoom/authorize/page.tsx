@@ -35,6 +35,13 @@ export default async function ZoomAuthorizePage() {
   if (!user) redirect(`/login?redirectTo=${encodeURIComponent(RETURN_PATH)}`);
 
   const { businessId, accessible } = await resolveActiveBusinessContext(user);
+  // `businessId` can be an admin view-as pin that is not in `accessible`, so
+  // the active workspace is folded in rather than assumed present.
+  const activeName = accessible.find((b) => b.businessId === businessId)?.name ?? null;
+  const choices =
+    businessId && activeName === null
+      ? [{ businessId, name: "Current workspace" }, ...accessible]
+      : accessible;
 
   return (
     <div className="min-h-screen bg-deep-ink text-parchment">
@@ -55,21 +62,53 @@ export default async function ZoomAuthorizePage() {
 
         {businessId ? (
           <div className="mt-10 rounded-2xl border border-parchment/10 bg-parchment/[0.02] p-6">
-            <p className="text-sm text-parchment/60">
-              Authorizing for{" "}
-              <b className="text-parchment">
-                {accessible.find((b) => b.businessId === businessId)?.name ?? "your workspace"}
-              </b>
-              .
-            </p>
-            <a
-              href={`/api/integrations/zoom/connect?businessId=${encodeURIComponent(businessId)}`}
-              className="mt-4 inline-flex items-center rounded-xl bg-claw-green px-5 py-3 font-semibold text-deep-ink transition hover:opacity-90"
-            >
-              Authorize Zoom
-            </a>
+            {choices.length > 1 ? (
+              <>
+                {/* More than one workspace: never pick silently. The active
+                    one is only a cookie, so authorizing it by default would
+                    connect Zoom to a workspace the user did not choose. */}
+                <p className="text-sm text-parchment/60">
+                  This login has access to more than one workspace. Choose which one to connect
+                  Zoom to.
+                </p>
+                <ul className="mt-4 space-y-2">
+                  {choices.map((b) => (
+                    <li
+                      key={b.businessId}
+                      className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-parchment/10 px-4 py-3"
+                    >
+                      <span className="text-parchment">
+                        {b.name}
+                        {b.businessId === businessId ? (
+                          <span className="ml-2 text-xs text-parchment/40">(current)</span>
+                        ) : null}
+                      </span>
+                      <a
+                        href={`/api/integrations/zoom/connect?businessId=${encodeURIComponent(b.businessId)}`}
+                        className="inline-flex items-center rounded-lg bg-claw-green px-4 py-2 text-sm font-semibold text-deep-ink transition hover:opacity-90"
+                      >
+                        Authorize Zoom
+                      </a>
+                    </li>
+                  ))}
+                </ul>
+              </>
+            ) : (
+              <>
+                <p className="text-sm text-parchment/60">
+                  Authorizing for{" "}
+                  <b className="text-parchment">{activeName ?? "your workspace"}</b>.
+                </p>
+                <a
+                  href={`/api/integrations/zoom/connect?businessId=${encodeURIComponent(businessId)}`}
+                  className="mt-4 inline-flex items-center rounded-xl bg-claw-green px-5 py-3 font-semibold text-deep-ink transition hover:opacity-90"
+                >
+                  Authorize Zoom
+                </a>
+              </>
+            )}
             <p className="mt-4 text-sm text-parchment/50">
-              Already connected, or want to switch workspaces?{" "}
+              Already connected, or want to change it later?{" "}
               <Link
                 href="/dashboard/integrations/zoom"
                 className="text-claw-green hover:underline"
