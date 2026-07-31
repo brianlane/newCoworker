@@ -350,7 +350,9 @@ async function runStripeOp(op: StripeOp, stripe: Stripe, result: ExecutorResult)
       }
       // Always void membership pack grants for this New Coworker refund op,
       // even when carve-outs leave $0 to refund (no charge.refunded webhook).
-      const clawbackPacksForNcRefund = async () => {
+      const clawbackPacksForNcRefund = async (
+        amounts?: { originalAmountCents: number; refundedAmountCents: number }
+      ) => {
         try {
           const { clawbackMembershipPackGrantsForInvoice } = await import(
             "@/lib/billing/usage-pack-clawback"
@@ -358,7 +360,11 @@ async function runStripeOp(op: StripeOp, stripe: Stripe, result: ExecutorResult)
           await clawbackMembershipPackGrantsForInvoice({
             invoiceId: latestInvoiceId,
             reason: op.reason === "admin_force" ? "admin" : "refund",
-            subscriptionMetadata: sub.metadata
+            subscriptionMetadata: sub.metadata,
+            // Only a real refund prorates. The zero-refund paths below pass
+            // nothing, which keeps their existing full-void behavior.
+            originalAmountCents: amounts?.originalAmountCents ?? null,
+            refundedAmountCents: amounts?.refundedAmountCents ?? null
           });
         } catch (err) {
           logger.error("refund_latest_charge: pack clawback failed", {
@@ -448,8 +454,14 @@ async function runStripeOp(op: StripeOp, stripe: Stripe, result: ExecutorResult)
       };
       // Pack line cents on this invoice are included in the refunded dollars
       // (no pack carve-out). Void matching membership pack grants so the
-      // customer does not keep credits after a New Coworker refund.
-      await clawbackPacksForNcRefund();
+      // customer does not keep credits after a New Coworker refund, in
+      // PROPORTION to what actually came back: term and usage carve-outs
+      // routinely refund only part of the invoice, and voiding every
+      // remaining credit there takes value the customer was not refunded for.
+      await clawbackPacksForNcRefund({
+        originalAmountCents: amountPaidCents,
+        refundedAmountCents: refundCents
+      });
       return;
     }
   }

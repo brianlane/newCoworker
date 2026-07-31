@@ -147,26 +147,51 @@ function kindFromMembershipSourceId(
   return null;
 }
 
+/** Column holding the originally granted units, per grant table. */
+const PURCHASED_COLUMN: Record<UsagePackClawbackKind, string> = {
+  voice: "seconds_purchased",
+  sms: "texts_purchased",
+  chat: "credit_micros_purchased"
+};
+
 async function listOpenMembershipGrantSourceIds(
   invoiceId: string
-): Promise<Array<{ sourceId: string; kind: UsagePackClawbackKind }>> {
+): Promise<Array<{ sourceId: string; kind: UsagePackClawbackKind; purchased: number | null }>> {
   const { createSupabaseServiceClient } = await import("@/lib/supabase/server");
   const db = await createSupabaseServiceClient();
   if (typeof (db as { from?: unknown }).from !== "function") {
     return [];
   }
   const prefix = `inv_${invoiceId}:%`;
-  const tables: Array<{ table: string; kind: UsagePackClawbackKind }> = [
-    { table: "voice_bonus_grants", kind: "voice" },
-    { table: "sms_bonus_grants", kind: "sms" },
-    { table: "chat_credit_grants", kind: "chat" }
-  ];
-  const out: Array<{ sourceId: string; kind: UsagePackClawbackKind }> = [];
-  for (const { table, kind } of tables) {
+  // Literal selects: the typed client parses these at compile time, so a
+  // template string built from PURCHASED_COLUMN will not type-check.
+  const tables = [
+    {
+      table: "voice_bonus_grants",
+      kind: "voice",
+      select: "stripe_checkout_session_id,seconds_purchased"
+    },
+    { table: "sms_bonus_grants", kind: "sms", select: "stripe_checkout_session_id,texts_purchased" },
+    {
+      table: "chat_credit_grants",
+      kind: "chat",
+      select: "stripe_checkout_session_id,credit_micros_purchased"
+    }
+  ] as const satisfies ReadonlyArray<{
+    table: string;
+    kind: UsagePackClawbackKind;
+    select: string;
+  }>;
+  const out: Array<{
+    sourceId: string;
+    kind: UsagePackClawbackKind;
+    purchased: number | null;
+  }> = [];
+  for (const { table, kind, select } of tables) {
     try {
       const { data, error } = await db
         .from(table)
-        .select("stripe_checkout_session_id")
+        .select(select)
         .like("stripe_checkout_session_id", prefix)
         .is("voided_at", null);
       if (error) {
@@ -177,13 +202,18 @@ async function listOpenMembershipGrantSourceIds(
         });
         continue;
       }
-      for (const row of data ?? []) {
+      for (const row of (data ?? []) as unknown as Array<Record<string, unknown>>) {
         const sourceId =
           typeof row.stripe_checkout_session_id === "string"
             ? row.stripe_checkout_session_id.trim()
             : "";
         if (!sourceId) continue;
-        out.push({ sourceId, kind });
+        const raw = row[PURCHASED_COLUMN[kind]];
+        out.push({
+          sourceId,
+          kind,
+          purchased: typeof raw === "number" && Number.isFinite(raw) ? raw : null
+        });
       }
     } catch (err) {
       logger.warn("usage pack clawback: grant list threw", {
@@ -206,14 +236,27 @@ export async function clawbackMembershipPackGrantsForInvoice(params: {
   reason: "refund" | "admin";
   /** Optional Stripe subscription metadata to resolve pack SKUs if DB list is empty. */
   subscriptionMetadata?: Stripe.Metadata | null;
+  /**
+   * Invoice total and the amount actually refunded. When both are given and
+   * the refund was PARTIAL, each grant is clawed back in proportion instead of
+   * voided outright: term and usage carve-outs routinely leave the customer
+   * paying for most of the invoice, and taking 100% of their remaining pack
+   * credits there is value they were never refunded for.
+   *
+   * Omit both for a full void, which is what an operator clawback means.
+   */
+  originalAmountCents?: number | null;
+  refundedAmountCents?: number | null;
 }): Promise<{ attempted: number; failed: number }> {
   const invoiceId = params.invoiceId.trim();
   if (!invoiceId) return { attempted: 0, failed: 0 };
 
   const fromDb = await listOpenMembershipGrantSourceIds(invoiceId);
   const targets = new Map<string, UsagePackClawbackKind>();
+  const purchasedBySource = new Map<string, number | null>();
   for (const row of fromDb) {
     targets.set(row.sourceId, row.kind);
+    purchasedBySource.set(row.sourceId, row.purchased);
   }
 
   if (targets.size === 0 && params.subscriptionMetadata) {
@@ -232,10 +275,19 @@ export async function clawbackMembershipPackGrantsForInvoice(params: {
   let failed = 0;
   for (const [sourceId, kind] of targets) {
     const resolved = kindFromMembershipSourceId(invoiceId, sourceId) ?? kind;
+    // null = full void. computeUsagePackClawbackAmount already returns null
+    // for a full refund, a missing amount, or an unknown grant size, so the
+    // default stays "void it all" and only a genuine partial prorates.
+    const clawbackAmount = computeUsagePackClawbackAmount(
+      params.originalAmountCents ?? null,
+      params.refundedAmountCents ?? null,
+      purchasedBySource.get(sourceId) ?? null
+    );
     const result = await clawbackUsagePackGrantBySourceId({
       sourceId,
       kind: resolved,
-      reason: params.reason
+      reason: params.reason,
+      clawbackAmount
     });
     if (!result.ok) failed += 1;
   }

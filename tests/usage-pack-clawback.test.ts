@@ -253,3 +253,85 @@ describe("usage-pack-clawback", () => {
     );
   });
 });
+
+/**
+ * A New Coworker refund is often PARTIAL: term and usage carve-outs mean the
+ * customer keeps most of what they paid. Voiding 100% of their remaining pack
+ * credits in that case takes value they were never refunded for.
+ *
+ * computeUsagePackClawbackAmount was written for exactly this and had no
+ * production caller: its only caller was a test.
+ */
+describe("clawbackMembershipPackGrantsForInvoice — partial refunds", () => {
+  it("voids in proportion to what was actually refunded", async () => {
+    fromMock.mockImplementation((table: string) => {
+      if (table === "voice_bonus_grants") {
+        return grantListChain({
+          data: [
+            {
+              stripe_checkout_session_id: "inv_in_part:voice:min_30",
+              seconds_purchased: 1800
+            }
+          ],
+          error: null
+        });
+      }
+      return grantListChain({ data: [], error: null });
+    });
+
+    await clawbackMembershipPackGrantsForInvoice({
+      invoiceId: "in_part",
+      reason: "refund",
+      // A quarter of the invoice came back.
+      originalAmountCents: 4000,
+      refundedAmountCents: 1000
+    });
+
+    expect(rpcMock).toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      expect.objectContaining({ p_clawback_seconds: 450 })
+    );
+  });
+
+  it("still voids in full when the whole invoice was refunded", async () => {
+    fromMock.mockImplementation((table: string) => {
+      if (table === "voice_bonus_grants") {
+        return grantListChain({
+          data: [
+            {
+              stripe_checkout_session_id: "inv_in_full:voice:min_30",
+              seconds_purchased: 1800
+            }
+          ],
+          error: null
+        });
+      }
+      return grantListChain({ data: [], error: null });
+    });
+
+    await clawbackMembershipPackGrantsForInvoice({
+      invoiceId: "in_full",
+      reason: "refund",
+      originalAmountCents: 4000,
+      refundedAmountCents: 4000
+    });
+
+    expect(rpcMock).toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      expect.objectContaining({ p_clawback_seconds: null })
+    );
+  });
+
+  it("voids in full when the caller passes no amounts (admin clawback)", async () => {
+    fromMock.mockImplementation(() => grantListChain({ data: [], error: null }));
+    await clawbackMembershipPackGrantsForInvoice({
+      invoiceId: "in_admin",
+      reason: "admin",
+      subscriptionMetadata: { addonVoice: "min_30:1:1800" }
+    });
+    expect(rpcMock).toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      expect.objectContaining({ p_clawback_seconds: null })
+    );
+  });
+});
