@@ -24,9 +24,14 @@ const EXPIRY_MS = 365 * 24 * 60 * 60 * 1000;
 
 export function GET(): Response {
   const expires = new Date(Date.now() + EXPIRY_MS).toISOString();
+  // Same expression as the sibling legal pages (privacy, terms, and the
+  // disclosure policy this file points at). Hardcoding the fallback here
+  // would silently disagree with the policy page whenever CONTACT_EMAIL is
+  // set, and the policy page tells readers the two addresses are the same.
+  const contactEmail = process.env.CONTACT_EMAIL ?? "team@newcoworker.com";
 
   const body = [
-    "Contact: mailto:team@newcoworker.com",
+    `Contact: mailto:${contactEmail}`,
     `Policy: ${siteUrl("/security/vulnerability-disclosure")}`,
     `Expires: ${expires}`,
     "Preferred-Languages: en, es",

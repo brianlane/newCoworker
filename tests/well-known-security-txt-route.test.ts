@@ -15,6 +15,17 @@ describe("GET /.well-known/security.txt", () => {
     expect(res.headers.get("content-type")).toBe("text/plain; charset=utf-8");
   });
 
+  it("honours CONTACT_EMAIL, so it cannot disagree with the policy page", async () => {
+    const previous = process.env.CONTACT_EMAIL;
+    process.env.CONTACT_EMAIL = "security@example.test";
+    try {
+      expect(await body()).toContain("Contact: mailto:security@example.test");
+    } finally {
+      if (previous === undefined) delete process.env.CONTACT_EMAIL;
+      else process.env.CONTACT_EMAIL = previous;
+    }
+  });
+
   it("carries the required RFC 9116 fields", async () => {
     const text = await body();
     expect(text).toContain("Contact: mailto:team@newcoworker.com");
