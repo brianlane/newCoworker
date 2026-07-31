@@ -1,7 +1,7 @@
 "use strict";
 
 /**
- * "Send Text Message" action — POST /api/public/v1/messages.
+ * "Send Text Message" action: POST /api/public/v1/messages.
  *
  * Sends through the tenant's own number via the same metered path as the
  * dashboard compose box, so monthly SMS caps apply and the message shows
@@ -30,6 +30,9 @@ module.exports = {
     description: "Sends an SMS from your coworker's phone number."
   },
   operation: {
+    // Preserve input exactly as mapped so the API can validate required values
+    // and return its normal field-specific error response.
+    cleanInputData: false,
     perform,
     inputFields: [
       {
