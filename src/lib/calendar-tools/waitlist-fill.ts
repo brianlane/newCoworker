@@ -87,6 +87,8 @@ export type WaitlistFillDeps = {
   findVagaro?: typeof findVagaroSlots;
   /** Injectable Acuity availability search (tests). */
   findAcuity?: typeof findAcuitySlots;
+  /** Injectable timezone resolution (tests). */
+  resolveTimezone?: typeof resolveToolTimezone;
   /** Injectable business read (tests). */
   getBusinessRow?: typeof getBusiness;
   /** Injectable contact-language read (tests). */
@@ -171,11 +173,20 @@ export async function verifyFreedSlotOpen(
         conn.provider === "vagaro"
           ? (deps.findVagaro ?? findVagaroSlots)
           : (deps.findAcuity ?? findAcuitySlots);
+      // The business timezone, NOT a hardcoded UTC. This is load-bearing for
+      // Acuity: its availability is keyed by LOCAL CALENDAR DATE, so asking
+      // in the wrong zone asks about the wrong day for any merchant outside
+      // UTC, the freed slot never appears, and the check fails closed —
+      // silently swallowing a waitlist offer that should have gone out.
+      // Cosmetic for Vagaro (range-scoped search, the zone only labels the
+      // response), but both paths agreeing with findCalendarSlots is the
+      // point. resolveToolTimezone never throws; it degrades to UTC.
+      const timezone = await (deps.resolveTimezone ?? resolveToolTimezone)(businessId, undefined);
       const found = await find(businessId, {
         windowStart,
         windowEnd,
         durationMinutes,
-        timezone: "UTC"
+        timezone
       });
       const slots = ((found.data ?? {}) as { slots?: Array<{ startIso?: string }> }).slots ?? [];
       return found.ok && slots.some((s) => Date.parse(s.startIso ?? "") === startMs);

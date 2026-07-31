@@ -302,6 +302,25 @@ describe("verifyFreedSlotOpen", () => {
     expect(await verifyFreedSlotOpen(BIZ, ACUITY, SLOT_MS, END_MS)).toBe(false);
   });
 
+  it("Acuity: asks in the BUSINESS timezone, never a hardcoded UTC", async () => {
+    // Acuity availability is keyed by local calendar date. Asking in the
+    // wrong zone asks about the wrong DAY for any merchant outside UTC, the
+    // freed slot never appears, and this check fails closed — silently
+    // swallowing a waitlist offer that should have gone out.
+    mockAcuity.mockResolvedValue({
+      ok: true,
+      data: { slots: [{ startIso: new Date(SLOT_MS).toISOString() }] }
+    });
+    await verifyFreedSlotOpen(BIZ, ACUITY, SLOT_MS, END_MS);
+    expect(mockAcuity.mock.calls[0][1]).toMatchObject({ timezone: "America/Phoenix" });
+  });
+
+  it("Vagaro: gets the same resolved timezone, so the two paths cannot drift", async () => {
+    mockVagaro.mockResolvedValue({ ok: true, data: { slots: [] } });
+    await verifyFreedSlotOpen(BIZ, VAGARO, SLOT_MS, END_MS);
+    expect(mockVagaro.mock.calls[0][1]).toMatchObject({ timezone: "America/Phoenix" });
+  });
+
   it("CalDAV: open when no busy block overlaps; refused reads fail closed", async () => {
     mockCaldav.mockResolvedValue({
       ok: true,
