@@ -25,12 +25,18 @@ export type OpsBillingPostureEmail = {
 };
 
 function findingLine(finding: BillingPostureFinding): string {
+  // "pool" is only right for the pool direction. An untracked_vm with no
+  // owner is the opposite of a pool box: nothing in vps_inventory knows it
+  // exists, which is the whole finding.
+  const ownerless = finding.kind === "untracked_vm" ? "untracked" : "pool";
   const who = finding.businessName
     ? `${finding.businessName} (${finding.businessId})`
-    : "pool";
+    : ownerless;
   const expires = finding.expiresAt ? `, period ends ${finding.expiresAt}` : "";
   const healed = finding.autoHealed ? " [AUTO-HEALED]" : " [ACTION REQUIRED]";
-  return `VM ${finding.vmId} / ${who}: ${finding.detail}${expires}${healed}`;
+  // online_tenant_no_box is about a tenant, not a box, so there is no VM id.
+  const subject = finding.vmId === null ? who : `VM ${finding.vmId} / ${who}`;
+  return `${subject}: ${finding.detail}${expires}${healed}`;
 }
 
 export function buildOpsBillingPostureEmail(

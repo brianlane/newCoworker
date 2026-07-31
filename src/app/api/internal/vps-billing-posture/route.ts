@@ -64,6 +64,7 @@ export async function POST(request: Request): Promise<Response> {
       listBusinessIdsWithLiveSubscription,
       listInventory: listVpsInventory,
       getVirtualMachine: (vmId) => hostinger.getVirtualMachine(vmId),
+      listVirtualMachines: () => hostinger.listVirtualMachines(),
       listBillingSubscriptions: async () => billingSubs,
       enableAutoRenewal: (subscriptionId) => hostinger.enableBillingAutoRenewal(subscriptionId)
     });
