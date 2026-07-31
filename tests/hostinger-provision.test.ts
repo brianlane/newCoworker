@@ -838,7 +838,12 @@ describe("provisionVpsForBusiness", () => {
         id: 42,
         state: "running",
         ipv4: [{ id: 1, address: "1.2.3.4" }]
-      })
+      }),
+      // The named method has to actually be on the account: the pre-charge
+      // check refuses an id the purchase would send but Hostinger cannot bill.
+      listPaymentMethods: vi
+        .fn()
+        .mockResolvedValue([usablePaymentMethod({ id: 42333536, is_default: false })])
     });
     const dbInsert = vi.fn().mockResolvedValue({
       id: "r",
@@ -1625,7 +1630,11 @@ describe("pre-charge purchase preconditions", () => {
     ).resolves.toBeUndefined();
   });
 
-  it("falls back to any-usable when the explicit method is not on the account", async () => {
+  // Bugbot follow-up on #1052: this is not ambiguity. The purchase payload
+  // carries that exact payment_method_id, so we know Hostinger is being asked
+  // to bill something that does not exist. Refusing beats falling through to
+  // "some other card looks fine".
+  it("rejects an explicit method that is not on the account", async () => {
     const client = preconditionClient();
     await expect(
       assertPurchasePreconditions(client, {
@@ -1633,7 +1642,7 @@ describe("pre-charge purchase preconditions", () => {
         hostname: "nc-056034a7-e84.newcoworker.com",
         paymentMethodId: 999
       })
-    ).resolves.toBeUndefined();
+    ).rejects.toThrow(/payment method 999 is not on the account/);
   });
 });
 

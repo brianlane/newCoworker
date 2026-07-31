@@ -36,6 +36,7 @@ import {
   type Action,
   type CatalogItem,
   type HostingerClient,
+  type PaymentMethod,
   type PostInstallScript,
   type VirtualMachine,
   type VpsPurchaseRequest,
@@ -138,16 +139,28 @@ export async function assertPurchasePreconditions(
   }
 
   const methods = await client.listPaymentMethods();
-  const charged =
-    input.paymentMethodId !== undefined
-      ? methods.find((m) => m.id === input.paymentMethodId)
-      : methods.find((m) => m.is_default);
 
+  // An explicit id that is not on the account is not ambiguity, it is a known
+  // bad request: the purchase payload carries that exact `payment_method_id`,
+  // so Hostinger is being asked to bill something that does not exist. Refuse
+  // rather than falling through to "some other card looks fine".
+  if (input.paymentMethodId !== undefined) {
+    const named = methods.find((m) => m.id === input.paymentMethodId);
+    if (!named) {
+      throw new Error(
+        `Hostinger purchase precondition: payment method ${input.paymentMethodId} is not on ` +
+          `the account (${methods.length} on file); the purchase would send it anyway`
+      );
+    }
+    assertMethodUsable(named, `method ${named.id}`);
+    return;
+  }
+
+  const charged = methods.find((m) => m.is_default);
   if (!charged) {
-    // Either the explicit id is not on the account, or nothing is flagged
-    // default. Both mean we cannot say which card Hostinger will bill, so fall
-    // back to the weakest useful assertion rather than blocking a purchase we
-    // have no evidence against.
+    // Nothing is flagged default, so we genuinely cannot say which card
+    // Hostinger will bill. Fall back to the weakest useful assertion rather
+    // than blocking a purchase we have no evidence against.
     const anyUsable = methods.some((m) => !m.is_expired && !m.is_suspended);
     if (!anyUsable) {
       throw new Error(
@@ -158,14 +171,17 @@ export async function assertPurchasePreconditions(
     return;
   }
 
-  if (charged.is_expired || charged.is_suspended) {
-    const which = input.paymentMethodId !== undefined ? `method ${charged.id}` : "the default card";
-    throw new Error(
-      `Hostinger purchase precondition: ${which} (${charged.name}) is ` +
-        `${charged.is_expired ? "expired" : "suspended"}; that is the card this purchase ` +
-        "would be billed to, so it would 402 after Hostinger had already created the VM"
-    );
-  }
+  assertMethodUsable(charged, "the default card");
+}
+
+/** Throw when the card this purchase will actually be billed to cannot pay. */
+function assertMethodUsable(method: PaymentMethod, which: string): void {
+  if (!method.is_expired && !method.is_suspended) return;
+  throw new Error(
+    `Hostinger purchase precondition: ${which} (${method.name}) is ` +
+      `${method.is_expired ? "expired" : "suspended"}; that is the card this purchase ` +
+      "would be billed to, so it would 402 after Hostinger had already created the VM"
+  );
 }
 
 /**
