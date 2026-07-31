@@ -68,6 +68,45 @@ describe("buildOpsBillingPostureEmail", () => {
 describe("buildOpsBillingPostureEmail — tenant-level findings", () => {
   // online_tenant_no_box is about a tenant, not a box, so rendering the
   // shared "VM <id> / ..." prefix would print "VM null".
+  // "pool" is the pool direction's label. An orphan VM is the opposite: not
+  // in vps_inventory at all.
+  it("does not label an ownerless untracked VM as a pool box", () => {
+    const email = buildOpsBillingPostureEmail({
+      siteUrl: "https://www.newcoworker.com",
+      checkedTenantVms: 0,
+      checkedPoolBoxes: 0,
+      findings: [
+        finding({
+          kind: "untracked_vm",
+          vmId: 1806114,
+          businessId: null,
+          businessName: null,
+          expiresAt: null,
+          detail: "absent from vps_inventory and no business points at it"
+        })
+      ]
+    });
+    expect(email.text).toContain("VM 1806114 / untracked:");
+    expect(email.text).not.toContain("/ pool");
+  });
+
+  it("still labels a real pool finding as pool", () => {
+    const email = buildOpsBillingPostureEmail({
+      siteUrl: "https://www.newcoworker.com",
+      checkedTenantVms: 0,
+      checkedPoolBoxes: 1,
+      findings: [
+        finding({
+          kind: "pool_box_auto_renew_on",
+          businessId: null,
+          businessName: null,
+          detail: "pooled box is still auto-renewing"
+        })
+      ]
+    });
+    expect(email.text).toContain("/ pool:");
+  });
+
   it("omits the VM prefix when the finding has no box", () => {
     const email = buildOpsBillingPostureEmail({
       siteUrl: "https://www.newcoworker.com",
