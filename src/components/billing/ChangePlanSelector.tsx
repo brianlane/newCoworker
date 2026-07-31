@@ -45,6 +45,8 @@ type Props = {
   disabled?: boolean;
   disabledReason?: string | null;
   packAddonOptions?: MembershipPackAddonOption[];
+  /** Packs the tenant already carries, so the selector does not start empty. */
+  currentPackAddons?: MembershipPackAddonSelection;
 };
 
 const TIERS: ChangeablePlan[] = ["starter", "standard"];
@@ -83,11 +85,18 @@ export function ChangePlanSelector({
   currentBillingPeriod,
   disabled,
   disabledReason,
-  packAddonOptions = []
+  packAddonOptions = [],
+  currentPackAddons
 }: Props) {
   const [selectedTier, setSelectedTier] = useState<ChangeablePlan | null>(null);
   const [selectedPeriod, setSelectedPeriod] = useState<BillingPeriod | null>(null);
-  const [packAddonSelection, setPackAddonSelection] = useState<MembershipPackAddonSelection>({});
+  // Seed from what the tenant already carries. Starting empty meant a tenant
+  // who switched billing period without touching the steppers lost their
+  // packs: change-plan cancels the old Stripe subscription and rebuilds from
+  // these lines alone.
+  const [packAddonSelection, setPackAddonSelection] = useState<MembershipPackAddonSelection>(
+    currentPackAddons ?? {}
+  );
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -99,7 +108,8 @@ export function ChangePlanSelector({
     if (isCurrent(tier, period)) return;
     setSelectedTier(tier);
     setSelectedPeriod(period);
-    setPackAddonSelection({});
+    // Re-seed rather than clear, for the same reason.
+    setPackAddonSelection(currentPackAddons ?? {});
     setError(null);
   }
 

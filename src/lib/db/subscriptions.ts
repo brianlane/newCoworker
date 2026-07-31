@@ -1,5 +1,6 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import type { BillingPeriod } from "@/lib/plans/tier";
+import type { MembershipPackAddonsRow } from "@/lib/billing/membership-pack-addons";
 
 export type { BillingPeriod };
 
@@ -31,6 +32,13 @@ export type SubscriptionRow = {
   stripe_current_period_start: string | null;
   stripe_current_period_end: string | null;
   stripe_subscription_cached_at: string | null;
+  /**
+   * Read cache of the Stripe subscription's addonVoice/addonSms/addonChat
+   * metadata (§20260822034834). Stripe stays authoritative; this exists so the
+   * dashboard can render the packs a tenant already carries without a Stripe
+   * call on every billing-page load.
+   */
+  membership_pack_addons: MembershipPackAddonsRow | null;
   /** Lifecycle bookkeeping (§20260501000000_subscription_lifecycle) */
   customer_profile_id: string | null;
   canceled_at: string | null;
@@ -419,6 +427,7 @@ export async function updateSubscription(
       | "stripe_current_period_end"
       | "stripe_subscription_cached_at"
       | "customer_profile_id"
+      | "membership_pack_addons"
       | "canceled_at"
       | "cancel_reason"
       | "grace_ends_at"

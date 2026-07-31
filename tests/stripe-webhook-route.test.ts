@@ -2141,6 +2141,86 @@ describe("stripe webhook route", () => {
     expect(mockExecuteLifecyclePlan).not.toHaveBeenCalled();
   });
 
+  // The packs a tenant carries live only in Stripe metadata, so nothing
+  // server-rendered could see them and change-plan started from an empty
+  // selection, silently dropping them.
+  it("mirrors the recurring pack add-ons onto the local row", async () => {
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
+      id: "local_sub_packs",
+      status: "active",
+      business_id: "biz_packs",
+      stripe_subscription_id: "sub_packs",
+      cancel_at_period_end: false
+    } as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_packs",
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "sub_packs",
+          status: "active",
+          cancel_at_period_end: false,
+          metadata: {
+            businessId: "biz_packs",
+            addonVoice: "min_30:2:1800",
+            addonSms: "texts_500:1:500"
+          }
+        }
+      }
+    } as never);
+
+    const res = await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+    expect(res.status).toBe(200);
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "local_sub_packs",
+      expect.objectContaining({
+        // Only the pack keys, and in Stripe's own encoding so there is one
+        // format to keep in step rather than two.
+        membership_pack_addons: { addonVoice: "min_30:2:1800", addonSms: "texts_500:1:500" }
+      })
+    );
+  });
+
+  it("clears the mirror when a subscription carries no packs", async () => {
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
+      id: "local_sub_nopacks",
+      status: "active",
+      business_id: "biz_nopacks",
+      stripe_subscription_id: "sub_nopacks",
+      cancel_at_period_end: false
+    } as never);
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_nopacks",
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "sub_nopacks",
+          status: "active",
+          cancel_at_period_end: false,
+          metadata: { businessId: "biz_nopacks" }
+        }
+      }
+    } as never);
+
+    await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+    expect(updateSubscription).toHaveBeenCalledWith(
+      "local_sub_nopacks",
+      expect.objectContaining({ membership_pack_addons: null })
+    );
+  });
+
   it("mirrors subscription updates onto the row matching the Stripe subscription id", async () => {
     vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
       id: "old_sub_row",
