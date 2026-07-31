@@ -98,7 +98,10 @@ export async function DELETE(request: Request) {
     // deletion proceeds regardless (revoke can 4xx on already-dead tokens).
     const row = await getZoomConnection(body.businessId).catch(() => null);
     if (row) {
-      await revokeZoomToken(row.accessToken);
+      // Revoke with the client that minted the grant: the wrong pair gets a
+      // 401 invalid_client, which revokeZoomToken swallows, leaving the app
+      // still authorized on the user's Zoom account after they disconnected.
+      await revokeZoomToken(row.accessToken, row.oauth_client_env);
     }
 
     await deleteZoomConnection(body.businessId);

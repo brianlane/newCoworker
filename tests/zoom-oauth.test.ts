@@ -13,6 +13,7 @@ import {
   fetchZoomUserProfile,
   getZoomOAuthConfig,
   refreshZoomTokens,
+  resolveZoomClientEnvForBusiness,
   revokeZoomToken,
   verifyZoomOAuthState,
   ZOOM_STATE_TTL_MS
@@ -46,13 +47,28 @@ afterEach(() => {
   delete process.env.NEXT_PUBLIC_APP_URL;
   delete process.env.INTEGRATIONS_ENCRYPTION_KEY;
   delete process.env.SUPABASE_SERVICE_ROLE_KEY;
+  delete process.env.ZOOM_DEV_CLIENT_ID;
+  delete process.env.ZOOM_DEV_CLIENT_SECRET;
+  delete process.env.ZOOM_DEV_OAUTH_BUSINESS_IDS;
 });
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
+/** Both credential pairs present, the state during a Marketplace update. */
+function withDevClient() {
+  process.env.ZOOM_DEV_CLIENT_ID = "zoom-dev-client-id";
+  process.env.ZOOM_DEV_CLIENT_SECRET = "zoom-dev-client-secret";
+}
+
+function basicAuthOf(callIndex: number): string {
+  const [, init] = fetchMock.mock.calls[callIndex] as [string, RequestInit];
+  const header = (init.headers as Record<string, string>).Authorization;
+  return Buffer.from(header.replace("Basic ", ""), "base64").toString("utf8");
+}
+
 describe("getZoomOAuthConfig", () => {
   it("derives the callback from the app URL, trimming trailing slashes", () => {
-    expect(getZoomOAuthConfig()).toEqual({
+    expect(getZoomOAuthConfig("production")).toEqual({
       clientId: "zoom-client-id",
       clientSecret: "zoom-client-secret",
       redirectUri: "https://www.newcoworker.com/api/integrations/zoom/callback"
@@ -63,33 +79,92 @@ describe("getZoomOAuthConfig", () => {
     "throws not_configured when %s is missing",
     (name) => {
       delete process.env[name];
-      expect(() => getZoomOAuthConfig()).toThrowError(
+      expect(() => getZoomOAuthConfig("production")).toThrowError(
         expect.objectContaining({ code: "not_configured" })
+      );
+    }
+  );
+
+  it("reads the development pair, on the SAME callback as production", () => {
+    withDevClient();
+    expect(getZoomOAuthConfig("development")).toEqual({
+      clientId: "zoom-dev-client-id",
+      clientSecret: "zoom-dev-client-secret",
+      // Both clients register this one redirect, so the reviewer's round-trip
+      // lands on the route every tenant already uses.
+      redirectUri: "https://www.newcoworker.com/api/integrations/zoom/callback"
+    });
+  });
+
+  it.each(["ZOOM_DEV_CLIENT_ID", "ZOOM_DEV_CLIENT_SECRET"])(
+    "throws not_configured naming the DEV pair when %s is missing",
+    (name) => {
+      withDevClient();
+      delete process.env[name];
+      expect(() => getZoomOAuthConfig("development")).toThrowError(
+        expect.objectContaining({
+          code: "not_configured",
+          message: expect.stringContaining("ZOOM_DEV_CLIENT_ID")
+        })
       );
     }
   );
 });
 
+describe("resolveZoomClientEnvForBusiness", () => {
+  it("is production when the allow list is unset or empty", () => {
+    expect(resolveZoomClientEnvForBusiness(BIZ)).toBe("production");
+    process.env.ZOOM_DEV_OAUTH_BUSINESS_IDS = "";
+    expect(resolveZoomClientEnvForBusiness(BIZ)).toBe("production");
+    process.env.ZOOM_DEV_OAUTH_BUSINESS_IDS = " , ,";
+    expect(resolveZoomClientEnvForBusiness(BIZ)).toBe("production");
+  });
+
+  it("matches a listed id despite whitespace, case, and other entries", () => {
+    process.env.ZOOM_DEV_OAUTH_BUSINESS_IDS = ` other-id , ${BIZ.toUpperCase()} ,`;
+    expect(resolveZoomClientEnvForBusiness(BIZ)).toBe("development");
+    expect(resolveZoomClientEnvForBusiness(` ${BIZ} `)).toBe("development");
+  });
+
+  it("leaves every unlisted business on production", () => {
+    process.env.ZOOM_DEV_OAUTH_BUSINESS_IDS = BIZ;
+    expect(resolveZoomClientEnvForBusiness("22222222-2222-4222-8222-222222222222")).toBe(
+      "production"
+    );
+  });
+
+  // Falling back to production when the dev pair is missing would silently
+  // send the Zoom reviewer to the production authorize URL, which is the
+  // exact bug this selection exists to fix.
+  it("still selects development when the dev credentials are absent", () => {
+    process.env.ZOOM_DEV_OAUTH_BUSINESS_IDS = BIZ;
+    expect(resolveZoomClientEnvForBusiness(BIZ)).toBe("development");
+    expect(() => getZoomOAuthConfig("development")).toThrowError(
+      expect.objectContaining({ code: "not_configured" })
+    );
+  });
+});
+
 describe("state signing", () => {
   it("round-trips a businessId", () => {
-    const state = createZoomOAuthState(BIZ);
-    expect(verifyZoomOAuthState(state)).toEqual({ businessId: BIZ });
+    const state = createZoomOAuthState(BIZ, "production");
+    expect(verifyZoomOAuthState(state)).toEqual({ businessId: BIZ, clientEnv: "production" });
   });
 
   it("rejects an expired state", () => {
-    const state = createZoomOAuthState(BIZ, Date.now() - ZOOM_STATE_TTL_MS - 1000);
+    const state = createZoomOAuthState(BIZ, "production", Date.now() - ZOOM_STATE_TTL_MS - 1000);
     expect(verifyZoomOAuthState(state)).toBeNull();
   });
 
   it("rejects tampered payloads (signature mismatch, same length)", () => {
-    const state = createZoomOAuthState(BIZ);
+    const state = createZoomOAuthState(BIZ, "production");
     const [payload, sig] = state.split(".");
     const flipped = payload[0] === "A" ? "B" : "A";
     expect(verifyZoomOAuthState(`${flipped}${payload.slice(1)}.${sig}`)).toBeNull();
   });
 
   it("rejects a signature of the wrong length", () => {
-    const state = createZoomOAuthState(BIZ);
+    const state = createZoomOAuthState(BIZ, "production");
     const [payload] = state.split(".");
     expect(verifyZoomOAuthState(`${payload}.short`)).toBeNull();
   });
@@ -124,14 +199,48 @@ describe("state signing", () => {
     expect(verifyZoomOAuthState(sign(noE))).toBeNull();
   });
 
+  it("round-trips the development client env", () => {
+    const state = createZoomOAuthState(BIZ, "development");
+    expect(verifyZoomOAuthState(state)).toEqual({
+      businessId: BIZ,
+      clientEnv: "development"
+    });
+  });
+
+  it("omits the client marker for production, so states stay as they were", () => {
+    const [payload] = createZoomOAuthState(BIZ, "production").split(".");
+    const parsed = JSON.parse(Buffer.from(payload, "base64url").toString("utf8"));
+    expect(parsed).not.toHaveProperty("c");
+  });
+
+  it("reads an unrecognized or absent client marker as production", () => {
+    // A state minted by the build that shipped before this column existed
+    // has no `c` at all, and must keep working through the deploy.
+    const legacy = Buffer.from(
+      JSON.stringify({ b: BIZ, e: Date.now() + 60_000, n: "nonce" })
+    ).toString("base64url");
+    expect(verifyZoomOAuthState(signPayload(legacy))).toEqual({
+      businessId: BIZ,
+      clientEnv: "production"
+    });
+
+    const bogus = Buffer.from(
+      JSON.stringify({ b: BIZ, e: Date.now() + 60_000, n: "nonce", c: "x" })
+    ).toString("base64url");
+    expect(verifyZoomOAuthState(signPayload(bogus))).toEqual({
+      businessId: BIZ,
+      clientEnv: "production"
+    });
+  });
+
   it("falls back to the service-role key and throws when no key exists", () => {
     delete process.env.INTEGRATIONS_ENCRYPTION_KEY;
     process.env.SUPABASE_SERVICE_ROLE_KEY = "service-role-key";
-    const state = createZoomOAuthState(BIZ);
-    expect(verifyZoomOAuthState(state)).toEqual({ businessId: BIZ });
+    const state = createZoomOAuthState(BIZ, "production");
+    expect(verifyZoomOAuthState(state)).toEqual({ businessId: BIZ, clientEnv: "production" });
 
     delete process.env.SUPABASE_SERVICE_ROLE_KEY;
-    expect(() => createZoomOAuthState(BIZ)).toThrowError(
+    expect(() => createZoomOAuthState(BIZ, "production")).toThrowError(
       expect.objectContaining({ code: "not_configured" })
     );
   });
@@ -139,7 +248,7 @@ describe("state signing", () => {
 
 describe("buildZoomAuthorizeUrl", () => {
   it("targets zoom.us/oauth/authorize with our client id, callback, and state", () => {
-    const url = new URL(buildZoomAuthorizeUrl("the-state"));
+    const url = new URL(buildZoomAuthorizeUrl("the-state", "production"));
     expect(url.origin + url.pathname).toBe("https://zoom.us/oauth/authorize");
     expect(url.searchParams.get("response_type")).toBe("code");
     expect(url.searchParams.get("client_id")).toBe("zoom-client-id");
@@ -147,6 +256,50 @@ describe("buildZoomAuthorizeUrl", () => {
       "https://www.newcoworker.com/api/integrations/zoom/callback"
     );
     expect(url.searchParams.get("state")).toBe("the-state");
+  });
+
+  // The reviewer's whole complaint: the test account was being sent to the
+  // production client, which does not carry the scopes under review.
+  it("carries the DEVELOPMENT client id when that env is selected", () => {
+    withDevClient();
+    const url = new URL(buildZoomAuthorizeUrl("the-state", "development"));
+    expect(url.searchParams.get("client_id")).toBe("zoom-dev-client-id");
+    expect(url.searchParams.get("redirect_uri")).toBe(
+      "https://www.newcoworker.com/api/integrations/zoom/callback"
+    );
+  });
+});
+
+describe("client env selects the Basic auth pair", () => {
+  it("exchanges, refreshes, and revokes with the development credentials", async () => {
+    withDevClient();
+    const ok = { access_token: "at", refresh_token: "rt", expires_in: 60 };
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, ok));
+    await exchangeZoomAuthCode("c", "development");
+    expect(basicAuthOf(0)).toBe("zoom-dev-client-id:zoom-dev-client-secret");
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, ok));
+    await refreshZoomTokens("rt", "development");
+    expect(basicAuthOf(1)).toBe("zoom-dev-client-id:zoom-dev-client-secret");
+
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, {}));
+    expect(await revokeZoomToken("at", "development")).toBe(true);
+    expect(basicAuthOf(2)).toBe("zoom-dev-client-id:zoom-dev-client-secret");
+  });
+
+  it("keeps production on the production pair while both are configured", async () => {
+    withDevClient();
+    fetchMock.mockResolvedValueOnce(
+      jsonResponse(200, { access_token: "at", refresh_token: "rt", expires_in: 60 })
+    );
+    await refreshZoomTokens("rt", "production");
+    expect(basicAuthOf(0)).toBe("zoom-client-id:zoom-client-secret");
+  });
+
+  it("reports a revoke as false when the dev pair is not configured", async () => {
+    expect(await revokeZoomToken("at", "development")).toBe(false);
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 });
 
@@ -160,7 +313,7 @@ describe("exchangeZoomAuthCode", () => {
       })
     );
     const now = Date.UTC(2026, 6, 15);
-    const tokens = await exchangeZoomAuthCode("the-code", now);
+    const tokens = await exchangeZoomAuthCode("the-code", "production", now);
     expect(tokens).toEqual({
       accessToken: "at-1",
       refreshToken: "rt-1",
@@ -186,7 +339,7 @@ describe("exchangeZoomAuthCode", () => {
       jsonResponse(200, { access_token: "at", refresh_token: "rt" })
     );
     const now = Date.UTC(2026, 6, 15);
-    const tokens = await exchangeZoomAuthCode("c", now);
+    const tokens = await exchangeZoomAuthCode("c", "production", now);
     expect(tokens.expiresAt).toEqual(new Date(now + 3600 * 1000));
   });
 
@@ -194,7 +347,7 @@ describe("exchangeZoomAuthCode", () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(400, { error: "invalid_grant", reason: "Invalid authorization code" })
     );
-    await expect(exchangeZoomAuthCode("bad")).rejects.toMatchObject({
+    await expect(exchangeZoomAuthCode("bad", "production")).rejects.toMatchObject({
       code: "invalid_grant",
       message: expect.stringContaining("Invalid authorization code")
     });
@@ -203,13 +356,13 @@ describe("exchangeZoomAuthCode", () => {
   it("keeps app-level auth failures as request_failed (never deactivates grants)", async () => {
     // invalid_client (bad OUR credentials) must not read as a dead user grant.
     fetchMock.mockResolvedValueOnce(jsonResponse(401, { error: "invalid_client" }));
-    await expect(exchangeZoomAuthCode("c")).rejects.toMatchObject({
+    await expect(exchangeZoomAuthCode("c", "production")).rejects.toMatchObject({
       code: "request_failed",
       status: 401
     });
 
     fetchMock.mockResolvedValueOnce(jsonResponse(400, {}));
-    await expect(exchangeZoomAuthCode("c")).rejects.toMatchObject({
+    await expect(exchangeZoomAuthCode("c", "production")).rejects.toMatchObject({
       code: "request_failed",
       status: 400
     });
@@ -217,7 +370,7 @@ describe("exchangeZoomAuthCode", () => {
 
   it("maps other failures to request_failed, tolerating a non-JSON body", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(500, { error: "boom" }));
-    await expect(exchangeZoomAuthCode("c")).rejects.toMatchObject({
+    await expect(exchangeZoomAuthCode("c", "production")).rejects.toMatchObject({
       code: "request_failed",
       status: 500
     });
@@ -229,7 +382,7 @@ describe("exchangeZoomAuthCode", () => {
         throw new Error("not json");
       }
     } as never);
-    await expect(exchangeZoomAuthCode("c")).rejects.toMatchObject({
+    await expect(exchangeZoomAuthCode("c", "production")).rejects.toMatchObject({
       code: "request_failed",
       status: 200
     });
@@ -237,12 +390,12 @@ describe("exchangeZoomAuthCode", () => {
 
   it("maps aborts to upstream_timeout and network errors to upstream_unreachable", async () => {
     fetchMock.mockRejectedValueOnce(Object.assign(new Error("aborted"), { name: "AbortError" }));
-    await expect(exchangeZoomAuthCode("c")).rejects.toMatchObject({
+    await expect(exchangeZoomAuthCode("c", "production")).rejects.toMatchObject({
       code: "upstream_timeout"
     });
 
     fetchMock.mockRejectedValueOnce(new Error("ECONNREFUSED"));
-    await expect(exchangeZoomAuthCode("c")).rejects.toMatchObject({
+    await expect(exchangeZoomAuthCode("c", "production")).rejects.toMatchObject({
       code: "upstream_unreachable"
     });
   });
@@ -264,7 +417,7 @@ describe("request timeouts", () => {
   it("aborts a hung token exchange at the timeout", async () => {
     vi.useFakeTimers();
     fetchMock.mockImplementationOnce(hangingFetch());
-    const pending = exchangeZoomAuthCode("c");
+    const pending = exchangeZoomAuthCode("c", "production");
     const assertion = expect(pending).rejects.toMatchObject({ code: "upstream_timeout" });
     await vi.advanceTimersByTimeAsync(16_000);
     await assertion;
@@ -273,7 +426,7 @@ describe("request timeouts", () => {
   it("aborts a hung revoke at the timeout (reported as false)", async () => {
     vi.useFakeTimers();
     fetchMock.mockImplementationOnce(hangingFetch());
-    const pending = revokeZoomToken("at");
+    const pending = revokeZoomToken("at", "production");
     await vi.advanceTimersByTimeAsync(16_000);
     expect(await pending).toBe(false);
   });
@@ -298,7 +451,7 @@ describe("refreshZoomTokens", () => {
       })
     );
     const now = Date.UTC(2026, 6, 15);
-    const tokens = await refreshZoomTokens("rt-1", now);
+    const tokens = await refreshZoomTokens("rt-1", "production", now);
     expect(tokens.refreshToken).toBe("rt-2-rotated");
     expect(tokens.expiresAt).toEqual(new Date(now + 1800 * 1000));
 
@@ -312,7 +465,7 @@ describe("refreshZoomTokens", () => {
     fetchMock.mockResolvedValueOnce(
       jsonResponse(401, { error: "invalid_grant", reason: "Invalid Token!" })
     );
-    await expect(refreshZoomTokens("dead")).rejects.toMatchObject({
+    await expect(refreshZoomTokens("dead", "production")).rejects.toMatchObject({
       code: "invalid_grant"
     });
   });
@@ -321,20 +474,20 @@ describe("refreshZoomTokens", () => {
 describe("revokeZoomToken", () => {
   it("returns true on a 2xx revoke", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, { status: "success" }));
-    expect(await revokeZoomToken("at")).toBe(true);
+    expect(await revokeZoomToken("at", "production")).toBe(true);
     const [url] = fetchMock.mock.calls[0] as [string];
     expect(url).toBe("https://zoom.us/oauth/revoke");
   });
 
   it("returns false on a non-2xx revoke, a network error, or missing config", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(400, {}));
-    expect(await revokeZoomToken("at")).toBe(false);
+    expect(await revokeZoomToken("at", "production")).toBe(false);
 
     fetchMock.mockRejectedValueOnce(new Error("down"));
-    expect(await revokeZoomToken("at")).toBe(false);
+    expect(await revokeZoomToken("at", "production")).toBe(false);
 
     delete process.env.ZOOM_CLIENT_ID;
-    expect(await revokeZoomToken("at")).toBe(false);
+    expect(await revokeZoomToken("at", "production")).toBe(false);
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 });

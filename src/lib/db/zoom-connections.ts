@@ -17,6 +17,7 @@ import {
   decryptIntegrationSecret,
   encryptIntegrationSecret
 } from "@/lib/integrations/secrets";
+import type { ZoomClientEnv } from "@/lib/zoom/oauth";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -31,6 +32,8 @@ type StoredZoomConnectionRow = {
   account_name: string | null;
   is_active: boolean;
   auto_import_transcripts: boolean;
+  /** Which Marketplace client minted the pair; refresh/revoke must match it. */
+  oauth_client_env: ZoomClientEnv;
   created_at: string;
   updated_at: string;
 };
@@ -55,7 +58,7 @@ export type PublicZoomConnectionRow = Omit<
 const ALL_COLUMNS =
   "id,business_id,access_token_encrypted,refresh_token_encrypted," +
   "token_expires_at,zoom_user_id,account_email,account_name," +
-  "is_active,auto_import_transcripts,created_at,updated_at";
+  "is_active,auto_import_transcripts,oauth_client_env,created_at,updated_at";
 
 function toDecryptedRow(row: StoredZoomConnectionRow): ZoomConnectionRow {
   const {
@@ -159,6 +162,12 @@ export type UpsertZoomConnectionInput = {
   zoomUserId?: string | null;
   accountEmail?: string | null;
   accountName?: string | null;
+  /**
+   * Which client minted this pair. Required, and written on BOTH branches
+   * below: this is also the reconnect path, so leaving it out would strand a
+   * tenant that moved back to production on dev credentials it no longer has.
+   */
+  clientEnv: ZoomClientEnv;
 };
 
 /**
@@ -177,7 +186,8 @@ export async function upsertZoomConnection(
     zoom_user_id: input.zoomUserId ?? null,
     account_email: input.accountEmail ?? null,
     account_name: input.accountName ?? null,
-    is_active: true
+    is_active: true,
+    oauth_client_env: input.clientEnv
   };
 
   const { data: existing, error: readError } = await db
@@ -280,9 +290,14 @@ export type ZoomConnectionSummary = {
  * account can be connected to multiple businesses (an owner with two
  * tenants), so this returns every ACTIVE match; a deauthorized or
  * soft-disabled connection routes nothing.
+ *
+ * Scoped to the client env that SENT the delivery: the production and
+ * development apps both post to the same endpoint, and a Zoom account can
+ * hold a grant under each.
  */
 export async function getActiveZoomConnectionSummariesByZoomUserId(
   zoomUserId: string,
+  clientEnv: ZoomClientEnv,
   client?: SupabaseClient
 ): Promise<ZoomConnectionSummary[]> {
   const db = client ?? (await createSupabaseServiceClient());
@@ -290,6 +305,7 @@ export async function getActiveZoomConnectionSummariesByZoomUserId(
     .from("zoom_connections")
     .select("business_id,auto_import_transcripts")
     .eq("zoom_user_id", zoomUserId)
+    .eq("oauth_client_env", clientEnv)
     .eq("is_active", true);
   if (error) {
     throw new Error(`getActiveZoomConnectionSummariesByZoomUserId: ${error.message}`);
@@ -298,20 +314,27 @@ export async function getActiveZoomConnectionSummariesByZoomUserId(
 }
 
 /**
- * Every business holding a connection for this Zoom user, ACTIVE OR NOT.
- * The app_deauthorized wipe must reach rows that were already soft-disabled
- * (e.g. after an invalid_grant refresh), or their dead ciphertext would
- * survive the Zoom-side uninstall.
+ * Every business holding a connection for this Zoom user under this client,
+ * ACTIVE OR NOT. The app_deauthorized wipe must reach rows that were already
+ * soft-disabled (e.g. after an invalid_grant refresh), or their dead
+ * ciphertext would survive the Zoom-side uninstall.
+ *
+ * The client-env filter is load-bearing, not tidiness: without it a
+ * deauthorization from the DEVELOPMENT app would wipe the token pair of a
+ * production tenant whose owner happens to use the same Zoom account, taking
+ * their meeting scheduling down until someone noticed and reconnected.
  */
 export async function getZoomConnectionBusinessIdsByZoomUserId(
   zoomUserId: string,
+  clientEnv: ZoomClientEnv,
   client?: SupabaseClient
 ): Promise<string[]> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("zoom_connections")
     .select("business_id")
-    .eq("zoom_user_id", zoomUserId);
+    .eq("zoom_user_id", zoomUserId)
+    .eq("oauth_client_env", clientEnv);
   if (error) {
     throw new Error(`getZoomConnectionBusinessIdsByZoomUserId: ${error.message}`);
   }

@@ -5,7 +5,7 @@
  * for the business's direct connection, refreshing when <60s of validity
  * remain. Zoom ROTATES refresh tokens (the presented token is single-use),
  * so refreshes are single-flighted per business and the new pair is
- * persisted BEFORE the access token is handed out — two concurrent callers
+ * persisted BEFORE the access token is handed out, two concurrent callers
  * racing a rotation would otherwise strand the connection.
  *
  * Cross-instance races (the in-process single-flight can't see other
@@ -16,7 +16,7 @@
  * `zoomApiRequest` mirrors the calendly-direct contract so a future
  * dual-transport resolver can treat Nango-proxied and direct responses
  * interchangeably:
- *   - 401/403 → null (revoked token — "not connected" semantics);
+ *   - 401/403 → null (revoked token, "not connected" semantics);
  *   - other non-2xx → throw ZoomApiError("request_failed");
  *   - timeouts/network failures → throw with a typed code.
  */
@@ -37,7 +37,7 @@ import {
 
 /** Refresh when less than this much validity remains. */
 export const ZOOM_TOKEN_REFRESH_MARGIN_MS = 60_000;
-/** Outbound budget per API call — fail fast on a stuck upstream. */
+/** Outbound budget per API call, fail fast on a stuck upstream. */
 export const ZOOM_API_TIMEOUT_MS = 15_000;
 
 export class ZoomApiError extends Error {
@@ -52,7 +52,7 @@ export class ZoomApiError extends Error {
 }
 
 /**
- * In-flight refreshes keyed by business — every concurrent caller awaits the
+ * In-flight refreshes keyed by business, every concurrent caller awaits the
  * same rotation instead of burning the single-use refresh token twice.
  */
 const inflightRefreshes = new Map<string, Promise<string | null>>();
@@ -68,7 +68,9 @@ async function refreshAndPersist(
 ): Promise<string | null> {
   let tokens;
   try {
-    tokens = await refreshZoomTokens(row.refreshToken);
+    // The row's own client env, never the allow list: a grant refreshes
+    // against whichever Marketplace client issued it.
+    tokens = await refreshZoomTokens(row.refreshToken, row.oauth_client_env);
   } catch (err) {
     if (err instanceof ZoomOAuthError && err.code === "invalid_grant") {
       // Zoom rejected the grant itself. Either the owner revoked access, or
@@ -88,7 +90,7 @@ async function refreshAndPersist(
     }
     throw err;
   }
-  // Persist the rotated pair BEFORE handing the access token out — the old
+  // Persist the rotated pair BEFORE handing the access token out, the old
   // refresh token is already dead on Zoom's side. The updated_at fence keeps
   // a slower concurrent refresher from clobbering a newer rotation.
   const stored = await updateZoomTokens(businessId, tokens, row.updated_at);

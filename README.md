@@ -763,6 +763,49 @@ through the same permission matrix as the dashboard** (`src/lib/authz/policy.ts`
 - Owner-facing setup lives on `/dashboard/integrations` → "Claude connector"
   (paste `https://<app>/api/mcp` into Claude → Settings → Connectors).
 
+## Zoom OAuth: two clients, one app
+
+The published "New Coworker OAuth" Marketplace app carries TWO credential
+pairs, and the difference matters more than it looks. A Marketplace **update**
+(a new scope, a new event subscription) exists only on the **development**
+client until Zoom approves it. So a Zoom reviewer testing an update has to
+authorize against the development client id, while every real tenant keeps
+using production. Sending the reviewer to the production authorize URL is what
+got the July 2026 update bounced back.
+
+- **Selection is per business, at connect time.**
+  `resolveZoomClientEnvForBusiness` ([src/lib/zoom/oauth.ts](src/lib/zoom/oauth.ts))
+  returns `development` for ids listed in `ZOOM_DEV_OAUTH_BUSINESS_IDS`
+  (in practice one, the Zoom Review Sandbox tenant) and `production` for
+  everyone else. It deliberately does NOT fall back to production when
+  `ZOOM_DEV_CLIENT_ID` is unset: a silent fallback is the original bug.
+- **The choice rides inside the signed state** (`c: "d"`, emitted only for
+  development) so the callback redeems the code against the client that
+  minted it even if the allow list changed mid-flow. A state with no marker
+  reads as production, which is what makes the deploy seamless.
+- **It is then persisted** on `zoom_connections.oauth_client_env`, because
+  refresh and revoke must present the SAME pair for the life of the grant.
+  The wrong pair gets a 401 `invalid_client`, which the refresh path reads as
+  a dead grant and soft-disables a healthy connection, and which the revoke
+  path swallows entirely, leaving the app authorized after a Disconnect.
+- **Webhooks are attributed, not just authenticated.**
+  `verifyZoomWebhookSignature` tries `ZOOM_SECRET_TOKEN` then
+  `ZOOM_DEV_SECRET_TOKEN` and returns WHICH client signed; both tenant
+  lookups filter on it. Without that filter an `app_deauthorized` from the
+  development app would wipe the token pair of a production tenant sharing a
+  Zoom account.
+- **Turning it off after approval** is env-only: clear
+  `ZOOM_DEV_OAUTH_BUSINESS_IDS` and `ZOOM_DEV_SECRET_TOKEN`, redeploy, then
+  disconnect and reconnect the sandbox so it moves back to production. Do it
+  before the dev credentials are ever regenerated, or the pinned row refreshes
+  into `invalid_grant` and shows up as "Needs reconnect".
+
+`/integrations/zoom/authorize` is the listing's **Direct Landing URL**: signed
+out it bounces to `/login?redirectTo=...` and comes back, signed in it offers
+the Authorize button. It is a standalone route because the dashboard layout's
+unauthenticated redirect is a fixed `/login?redirectTo=/dashboard` and a
+server layout cannot see the current pathname.
+
 ## Public self-serve booking page (Bookings)
 
 Every business can hand out ONE public booking link, `/book/<ncb_token>`
