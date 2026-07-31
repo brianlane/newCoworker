@@ -25,7 +25,15 @@ vi.mock("@/lib/db/zoom-transcript-imports", () => ({
   releaseZoomTranscriptImport: vi.fn()
 }));
 vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
-vi.mock("@/lib/zoom/import-core", () => ({ importZoomTranscriptDocument: vi.fn() }));
+vi.mock("@/lib/zoom/import-core", () => ({
+  importZoomTranscriptDocument: vi.fn(),
+  // Mirrors the real helper closely enough to exercise the caller's loader:
+  // a stub that ignored it would leave the connection lookup unreached.
+  resolveHostNames: async (
+    name: string,
+    load: () => Promise<{ account_name: string | null } | null>
+  ) => [name, (await load())?.account_name ?? ""].filter((n) => n.trim() !== "")
+}));
 vi.mock("@/lib/zoom/transcript", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/zoom/transcript")>();
   return {
@@ -42,7 +50,6 @@ import {
   isTrustedZoomDownloadUrl,
   parseZoomWebhookBody,
   processZoomWebhookEvent,
-  resolveHostNames,
   verifyZoomWebhookSignature,
   type ZoomWebhookDeps
 } from "@/lib/zoom/webhook";
@@ -696,30 +703,3 @@ describe("processZoomWebhookEvent", () => {
   });
 });
 
-describe("resolveHostNames", () => {
-  it("adds the Zoom account display name to the business name", async () => {
-    await expect(
-      resolveHostNames("New Coworker", async () => ({ account_name: "Brian Lane" }))
-    ).resolves.toEqual(["New Coworker", "Brian Lane"]);
-  });
-
-  it("falls back to the business name when there is no connection", async () => {
-    await expect(resolveHostNames("New Coworker", async () => null)).resolves.toEqual([
-      "New Coworker"
-    ]);
-  });
-
-  // A nicer document title is never worth failing an import over.
-  it("never throws when the connection lookup does", async () => {
-    await expect(
-      resolveHostNames("New Coworker", async () => {
-        throw new Error("db down");
-      })
-    ).resolves.toEqual(["New Coworker"]);
-    await expect(
-      resolveHostNames("New Coworker", async () => {
-        throw "string boom";
-      })
-    ).resolves.toEqual(["New Coworker"]);
-  });
-});

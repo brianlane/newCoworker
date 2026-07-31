@@ -34,7 +34,10 @@ import {
   releaseZoomTranscriptImport
 } from "@/lib/db/zoom-transcript-imports";
 import { getActiveZoomConnection } from "@/lib/db/zoom-connections";
-import { importZoomTranscriptDocument } from "@/lib/zoom/import-core";
+import {
+  importZoomTranscriptDocument,
+  resolveHostNames
+} from "@/lib/zoom/import-core";
 import {
   buildZoomTranscriptRefLabel,
   buildZoomTranscriptTitle,
@@ -141,15 +144,20 @@ export async function POST(request: Request) {
       const refLabel = buildZoomTranscriptRefLabel(titleBits);
 
       // The host speaks under their Zoom display name, not the business
-      // name, so both are needed to tell "us" from the guest.
-      const zoomConn = await getActiveZoomConnection(businessId);
+      // name, so both are needed to tell "us" from the guest. Best-effort:
+      // a nicer title is never worth failing an import over, which is why
+      // this goes through resolveHostNames rather than awaiting the lookup
+      // directly.
+      const hostNames = await resolveHostNames(business.name, () =>
+        getActiveZoomConnection(businessId)
+      );
       const imported = await importZoomTranscriptDocument({
         businessId,
         business: { name: business.name, tier: business.tier },
         vtt: transcript.vtt,
         title,
         refLabel,
-        hostNames: [business.name, zoomConn?.account_name ?? ""].filter((n) => n.trim() !== "")
+        hostNames
       });
 
       if (!imported.ok) {

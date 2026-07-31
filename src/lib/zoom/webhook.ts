@@ -30,7 +30,10 @@ import {
   releaseZoomTranscriptImport
 } from "@/lib/db/zoom-transcript-imports";
 import { recordSystemLog } from "@/lib/db/system-logs";
-import { importZoomTranscriptDocument } from "@/lib/zoom/import-core";
+import {
+  importZoomTranscriptDocument,
+  resolveHostNames
+} from "@/lib/zoom/import-core";
 import {
   buildZoomTranscriptRefLabel,
   buildZoomTranscriptTitle,
@@ -459,24 +462,3 @@ export async function processZoomWebhookEvent(
   return { kind: "ignored", event: event.event };
 }
 
-/**
- * Names that count as "us" for guest detection: the business name plus the
- * connected Zoom account's display name (the host speaks under the latter).
- *
- * Never throws. This only affects how nice the document title is, so a
- * connection lookup blip must not fail the import.
- */
-export async function resolveHostNames(
-  businessName: string,
-  loadConnection: () => Promise<{ account_name: string | null } | null>
-): Promise<string[]> {
-  let accountName: string | null = null;
-  try {
-    accountName = (await loadConnection())?.account_name ?? null;
-  } catch (err) {
-    logger.warn("zoom: host-name lookup failed; falling back to the business name", {
-      error: err instanceof Error ? err.message : String(err)
-    });
-  }
-  return [businessName, accountName ?? ""].filter((n) => n.trim() !== "");
-}

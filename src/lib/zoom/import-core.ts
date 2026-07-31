@@ -211,7 +211,11 @@ export async function importZoomTranscriptDocument(
       void syncVault(businessId);
       return {
         ok: true,
-        document: row,
+        // `row` came from the insert, so it still carries the provisional
+        // title. Returning it as-is made the manual import's API response
+        // show the old generic Zoom title while the DB already held the
+        // derived one, and the dashboard renders straight from this.
+        document: derivedTitle ? { ...row, title: derivedTitle } : row,
         status: "ready",
         errorDetail: null,
         summary: ingested.summary
@@ -261,4 +265,26 @@ function deriveZoomDocumentTitle(input: {
   const derived = buildZoomGuestHeadingTitle({ guest, heading });
   if (!derived || derived === input.provisionalTitle) return null;
   return derived;
+}
+
+/**
+ * Names that count as "us" for guest detection: the business name plus the
+ * connected Zoom account's display name (the host speaks under the latter).
+ *
+ * Never throws. This only affects how nice the document title is, so a
+ * connection lookup blip must not fail the import.
+ */
+export async function resolveHostNames(
+  businessName: string,
+  loadConnection: () => Promise<{ account_name: string | null } | null>
+): Promise<string[]> {
+  let accountName: string | null = null;
+  try {
+    accountName = (await loadConnection())?.account_name ?? null;
+  } catch (err) {
+    logger.warn("zoom: host-name lookup failed; falling back to the business name", {
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+  return [businessName, accountName ?? ""].filter((n) => n.trim() !== "");
 }
