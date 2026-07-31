@@ -143,6 +143,18 @@ export type ProvisioningResult = {
    * Null if Hostinger didn't return it (we couldn't reconcile via list).
    */
   hostingerBillingSubscriptionId: string | null;
+  /**
+   * False when deploy-client.sh did not finish cleanly (non-zero exit, SSH
+   * exception, or the phase-4 deadline elapsing while it was still running).
+   *
+   * The box is still returned, and the business is still flipped back to
+   * "online", because a signup on a half-deployed box is recoverable and the
+   * owner keeps their row. Migrations are the opposite: they must NOT cut over
+   * onto a box with no working stack, because the next steps stop the old VM
+   * and disable its auto-renewal. Callers that tear down a healthy old box
+   * have to check this.
+   */
+  deploySucceeded: boolean;
 };
 
 /**
@@ -2335,6 +2347,7 @@ async function runOrchestrator(
   return {
     vpsId,
     tunnelUrl,
-    hostingerBillingSubscriptionId: provisioned.hostingerBillingSubscriptionId
+    hostingerBillingSubscriptionId: provisioned.hostingerBillingSubscriptionId,
+    deploySucceeded
   };
 }

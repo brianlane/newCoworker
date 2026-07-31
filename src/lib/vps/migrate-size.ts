@@ -114,7 +114,12 @@ export type MigrateVpsSizeDeps = {
     /** Buys the replacement box at the tenant's committed Hostinger term. */
     billingPeriod?: SubscriptionRow["billing_period"];
     suppressOwnerNotify?: boolean;
-  }) => Promise<{ vpsId: string; hostingerBillingSubscriptionId: string | null }>;
+  }) => Promise<{
+    vpsId: string;
+    hostingerBillingSubscriptionId: string | null;
+    /** False when deploy-client.sh did not finish cleanly on the new box. */
+    deploySucceeded?: boolean;
+  }>;
   /** Injected so unit tests can skip the real provisioning_jobs ledger. */
   enqueueProvisioningJob?: (input: EnqueueProvisioningJobInput) => Promise<void>;
   runProvisioningJob?: typeof runProvisioningJob;
@@ -357,13 +362,25 @@ export async function migrateBusinessVpsSize(
           });
           return {
             hostingerBillingSubscriptionId: out.hostingerBillingSubscriptionId,
-            vpsId: out.vpsId
+            vpsId: out.vpsId,
+            deploySucceeded: out.deploySucceeded
           };
         }
       } satisfies RunProvisioningJobDeps
     );
     if (!jobOut.vpsId) {
       throw new Error("migrate-size provision returned no vpsId");
+    }
+    // Step 3 fail-closed, same posture as the header promises: orchestrate
+    // hands back a normal result even when the deploy failed, and cutting over
+    // would restore onto a dead box and then stop the healthy old one.
+    if (jobOut.deploySucceeded === false) {
+      const error =
+        `deploy failed on new box ${jobOut.vpsId}: old box untouched and still serving; ` +
+        "new box left for the stuck-alert path";
+      await notify("failed", `Provision stage: ${error}`);
+      await markMigrationJobFailed(deps, businessId, error);
+      return { ok: false, stage: "provision", error };
     }
     newProv = {
       vpsId: jobOut.vpsId,

@@ -61,7 +61,8 @@ describe("api/admin/skip-payment route", () => {
     vi.mocked(orchestrateProvisioning).mockResolvedValue({
       vpsId: "42",
       tunnelUrl: "https://x.newcoworker.com",
-      hostingerBillingSubscriptionId: null
+      hostingerBillingSubscriptionId: null,
+      deploySucceeded: true
     });
   });
 

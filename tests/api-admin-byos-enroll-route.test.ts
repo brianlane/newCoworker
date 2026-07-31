@@ -104,7 +104,8 @@ describe("api/admin/byos/enroll route", () => {
     vi.mocked(orchestrateProvisioning).mockResolvedValue({
       vpsId: "byos-x",
       tunnelUrl: "https://x",
-      hostingerBillingSubscriptionId: null
+      hostingerBillingSubscriptionId: null,
+      deploySucceeded: true
     });
   });
 
