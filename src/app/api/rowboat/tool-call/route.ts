@@ -289,6 +289,21 @@ function lifecycleFailureGuidance(detail: string, verb: "reschedule" | "cancel")
       "Call notify_team with the request and tell them a team member will handle it."
     );
   }
+  if (detail === "acuity_auth_failed") {
+    return (
+      `The Acuity connection was rejected, so the appointment was NOT ${verb === "cancel" ? "canceled" : "changed"}. ` +
+      "Call notify_team so the owner can reconnect Acuity, and tell the customer a team " +
+      `member will handle the ${verb === "cancel" ? "cancellation" : "change"}. Never book a ` +
+      "duplicate appointment as a workaround."
+    );
+  }
+  if (detail === "acuity_slot_taken") {
+    return (
+      "Acuity refused that time, so nothing changed. Call calendar_find_slots again and " +
+      "offer the customer one of the times it returns. Never book a duplicate appointment " +
+      "as a workaround."
+    );
+  }
   if (detail === "vagaro_auth_failed") {
     return (
       `The Vagaro connection was rejected, so the appointment was NOT ${verb === "cancel" ? "canceled" : "changed"}. ` +

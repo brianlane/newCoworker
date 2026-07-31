@@ -31,6 +31,7 @@ vi.mock("@/lib/db/calendly-connections", () => ({
 }));
 vi.mock("@/lib/db/vagaro-connections", () => ({ getActiveVagaroConnection: vi.fn() }));
 vi.mock("@/lib/vagaro/client", () => ({ listVagaroAppointments: vi.fn() }));
+vi.mock("@/lib/calendar-tools/acuity", () => ({ listAcuityUpcomingForAttendee: vi.fn() }));
 vi.mock("@/lib/calendar-tools/booking-dedupe", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   findUpcomingBookingClaim: vi.fn(),
@@ -53,6 +54,7 @@ import {
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import { getActiveVagaroConnection, } from "@/lib/db/vagaro-connections";
 import { listVagaroAppointments } from "@/lib/vagaro/client";
+import { listAcuityUpcomingForAttendee } from "@/lib/calendar-tools/acuity";
 import { logger } from "@/lib/logger";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -65,6 +67,11 @@ const VAGARO_CONN = {
   provider: "vagaro" as const,
   providerConfigKey: "vagaro",
   connectionId: "vg-1"
+};
+const ACUITY_CONN = {
+  provider: "acuity" as const,
+  providerConfigKey: "acuity",
+  connectionId: "ac-1"
 };
 const MICROSOFT_CONN = {
   provider: "microsoft" as const,
@@ -110,12 +117,74 @@ describe("provider registry parity (the future-integration guard)", () => {
     expect(Object.keys(ATTENDEE_BOOKING_LOOKUPS).sort()).toEqual(declared);
   });
 
-  it("workspace + CalDAV providers are deliberate ledger_only entries; Calendly and Vagaro have adapters", () => {
+  it("workspace + CalDAV providers are deliberate ledger_only entries; Calendly, Vagaro and Acuity have adapters", () => {
     expect(ATTENDEE_BOOKING_LOOKUPS.google).toEqual({ kind: "ledger_only" });
     expect(ATTENDEE_BOOKING_LOOKUPS.microsoft).toEqual({ kind: "ledger_only" });
     expect(ATTENDEE_BOOKING_LOOKUPS.caldav).toEqual({ kind: "ledger_only" });
     expect(ATTENDEE_BOOKING_LOOKUPS.calendly.kind).toBe("adapter");
     expect(ATTENDEE_BOOKING_LOOKUPS.vagaro.kind).toBe("adapter");
+    expect(ATTENDEE_BOOKING_LOOKUPS.acuity.kind).toBe("adapter");
+  });
+});
+
+describe("acuity adapter", () => {
+  it("maps upcoming Acuity appointments into the shared booking shape", async () => {
+    const listAcuityUpcoming = vi.fn().mockResolvedValue({
+      ok: true,
+      bookings: [{ eventId: "500", startIso: FUTURE, name: "Consult" }]
+    });
+    const res = await lookupProviderBookingsForAttendee(
+      BIZ,
+      ACUITY_CONN,
+      { phones: ["+15551234567"], email: "sam@example.org" },
+      deps({ listAcuityUpcoming } as never)
+    );
+    expect(listAcuityUpcoming).toHaveBeenCalledWith(BIZ, {
+      phones: ["+15551234567"],
+      email: "sam@example.org"
+    });
+    expect(res).toEqual({
+      ok: true,
+      bookings: [
+        {
+          provider: "acuity",
+          source: "external",
+          eventId: "500",
+          startIso: FUTURE,
+          name: "Consult",
+          rescheduled: false
+        }
+      ]
+    });
+  });
+
+  it("falls back to the real lookup when no transport is injected", async () => {
+    vi.mocked(listAcuityUpcomingForAttendee).mockResolvedValue({
+      ok: true,
+      bookings: []
+    } as never);
+    const res = await lookupProviderBookingsForAttendee(
+      BIZ,
+      ACUITY_CONN,
+      { phones: [], email: null },
+      deps()
+    );
+    expect(vi.mocked(listAcuityUpcomingForAttendee)).toHaveBeenCalled();
+    expect(res).toEqual({ ok: true, bookings: [] });
+  });
+
+  it("passes a not_connected refusal straight through", async () => {
+    const listAcuityUpcoming = vi.fn().mockResolvedValue({
+      ok: false,
+      reason: "not_connected"
+    });
+    const res = await lookupProviderBookingsForAttendee(
+      BIZ,
+      ACUITY_CONN,
+      { phones: [], email: null },
+      deps({ listAcuityUpcoming } as never)
+    );
+    expect(res).toEqual({ ok: false, reason: "not_connected" });
   });
 });
 

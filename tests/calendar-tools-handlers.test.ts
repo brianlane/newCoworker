@@ -20,6 +20,10 @@ vi.mock("@/lib/calendar-tools/vagaro", () => ({
   findVagaroSlots: vi.fn(),
   bookVagaroAppointment: vi.fn()
 }));
+vi.mock("@/lib/calendar-tools/acuity", () => ({
+  findAcuitySlots: vi.fn(),
+  bookAcuityAppointment: vi.fn()
+}));
 vi.mock("@/lib/calendar-tools/caldav", () => ({
   getCaldavBusyBlocks: vi.fn(),
   bookCaldavAppointment: vi.fn()
@@ -64,6 +68,7 @@ import {
   findCalendlySlots
 } from "@/lib/calendar-tools/calendly";
 import { bookVagaroAppointment, findVagaroSlots } from "@/lib/calendar-tools/vagaro";
+import { bookAcuityAppointment, findAcuitySlots } from "@/lib/calendar-tools/acuity";
 import { bookCaldavAppointment, getCaldavBusyBlocks } from "@/lib/calendar-tools/caldav";
 import {
   bookingAttendeeKey,
@@ -101,6 +106,11 @@ const VAGARO_CONN = {
   provider: "vagaro",
   connectionId: "vagaro-row-1",
   providerConfigKey: "vagaro"
+} as never;
+const ACUITY_CONN = {
+  provider: "acuity",
+  connectionId: "acuity-row-1",
+  providerConfigKey: "acuity"
 } as never;
 const CALDAV_CONN = {
   provider: "caldav",
@@ -362,6 +372,17 @@ describe("findCalendarSlots", () => {
     });
     expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
     expect(vi.mocked(getSharedCalendar)).not.toHaveBeenCalled();
+  });
+
+  it("delegates an Acuity connection to findAcuitySlots with the resolved timezone", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(ACUITY_CONN);
+    const delegated = { ok: true, data: { slots: [], provider: "acuity" } };
+    vi.mocked(findAcuitySlots).mockResolvedValue(delegated as never);
+    const result = await findCalendarSlots(BIZ, { durationMinutes: 30 });
+    expect(result).toBe(delegated);
+    const passed = vi.mocked(findAcuitySlots).mock.calls[0][1];
+    expect(passed).toMatchObject({ durationMinutes: 30, timezone: "UTC" });
+    expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
   });
 
   it("delegates a Calendly connection to findCalendlySlots with the window and resolved timezone", async () => {
@@ -983,6 +1004,45 @@ describe("bookCalendarAppointment", () => {
     vi.mocked(bookVagaroAppointment).mockResolvedValue({
       ok: true,
       data: { provider: "vagaro" }
+    } as never);
+    await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+    expect(vi.mocked(fireGoalEvent)).not.toHaveBeenCalled();
+  });
+
+  it("delegates an Acuity connection to bookAcuityAppointment with a resolved timezone", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(ACUITY_CONN);
+    const delegated = { ok: true, data: { eventId: "appt-9", provider: "acuity" } };
+    vi.mocked(bookAcuityAppointment).mockResolvedValue(delegated as never);
+    const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+    expect(result).toMatchObject({ ok: true, data: { eventId: "appt-9", provider: "acuity" } });
+    expect(vi.mocked(bookAcuityAppointment)).toHaveBeenCalledWith(
+      BIZ,
+      { ...ARGS, timezone: "UTC" },
+      "+15551230000"
+    );
+    expect(vi.mocked(nangoProxyForBusiness)).not.toHaveBeenCalled();
+    // Acuity is in-person scheduling: no shared calendar, no Zoom decoration.
+    expect(vi.mocked(ensureSharedCalendar)).not.toHaveBeenCalled();
+    expect(vi.mocked(fireGoalEvent)).toHaveBeenCalledWith(BIZ, "+15551230000", {
+      kind: "appointment_booked"
+    });
+  });
+
+  it("a failed Acuity booking fires no goal event", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(ACUITY_CONN);
+    vi.mocked(bookAcuityAppointment).mockResolvedValue({
+      ok: false,
+      detail: "acuity_slot_taken"
+    } as never);
+    await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+    expect(vi.mocked(fireGoalEvent)).not.toHaveBeenCalled();
+  });
+
+  it("a success-shaped Acuity response WITHOUT an appointment id fires no goal event", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(ACUITY_CONN);
+    vi.mocked(bookAcuityAppointment).mockResolvedValue({
+      ok: true,
+      data: { provider: "acuity" }
     } as never);
     await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
     expect(vi.mocked(fireGoalEvent)).not.toHaveBeenCalled();

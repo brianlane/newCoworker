@@ -91,11 +91,11 @@ export async function GET(request: Request) {
     // Auto-provision on first view: the link should already exist when the
     // owner lands on Bookings, not sit behind a create button. Enabled from
     // birth is safe because the token is unguessable until the owner shares
-    // it. Vagaro/Calendly tenants are skipped: booking lives on the
+    // it. Vagaro/Acuity/Calendly tenants are skipped: booking lives on the
     // provider's own page and the dashboard card explains that instead.
     const provider = conn?.provider ?? null;
     let page = existingPage;
-    if (!page && provider !== "vagaro" && provider !== "calendly") {
+    if (!page && provider !== "vagaro" && provider !== "acuity" && provider !== "calendly") {
       try {
         page = await upsertBookingPage(businessId, { enabled: true });
       } catch (err) {

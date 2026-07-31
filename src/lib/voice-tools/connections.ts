@@ -1,5 +1,6 @@
 import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
 import { getActiveVagaroConnectionId } from "@/lib/db/vagaro-connections";
+import { getActiveAcuityConnectionId } from "@/lib/db/acuity-connections";
 import { getActiveCalendlyConnectionId } from "@/lib/db/calendly-connections";
 import { getActiveCaldavConnectionId } from "@/lib/db/caldav-connections";
 
@@ -49,7 +50,7 @@ export const EMAIL_PROVIDER_CONFIG_KEYS = ["google-mail", "gmail", "google", "ou
 const EMAIL_KEYS = EMAIL_PROVIDER_CONFIG_KEYS;
 
 export type ResolvedVoiceConnection = {
-  provider: "google" | "microsoft" | "calendly" | "vagaro" | "caldav";
+  provider: "google" | "microsoft" | "calendly" | "vagaro" | "acuity" | "caldav";
   providerConfigKey: string;
   connectionId: string;
 };
@@ -118,6 +119,18 @@ export async function resolveCalendarConnection(
   const vagaroId = await getActiveVagaroConnectionId(businessId);
   if (vagaroId) {
     return { provider: "vagaro", providerConfigKey: "vagaro", connectionId: vagaroId };
+  }
+
+  // Acuity sits in the same tier as Vagaro (a dedicated scheduling platform
+  // holding the merchant's real book, with real availability reads and
+  // writes), so it must beat an incidental all-in-one Google connect. It
+  // sits BEHIND Vagaro purely because Vagaro is the incumbent: a tenant with
+  // both connected must keep resolving to Vagaro, since a silent provider
+  // switch on deploy is the one unacceptable outcome. Id-only probe, so no
+  // secret is decrypted on this hot path.
+  const acuityId = await getActiveAcuityConnectionId(businessId);
+  if (acuityId) {
+    return { provider: "acuity", providerConfigKey: "acuity", connectionId: acuityId };
   }
 
   const rows = await listWorkspaceOAuthConnections(businessId);

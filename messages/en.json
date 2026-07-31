@@ -1635,6 +1635,7 @@
       "connectFirstBody": "The booking page needs a connected Google, Microsoft 365, or CalDAV calendar to read availability and create appointments.",
       "platformModeTitle": "No calendar connected: bookings live here",
       "platformModeBody": "Your booking page works without any calendar integration. Availability comes from your business hours, and every booking is tracked in New Coworker (the Upcoming bookings list below, plus owner alerts and your AI coworker). Connect Google, Microsoft 365, or CalDAV whenever you want bookings on your own calendar too.",
+      "acuityNote": "Acuity Scheduling is your booking system, and it comes with its own online booking page. Share your Acuity page instead.",
       "vagaroNote": "Vagaro is your booking system, and it comes with its own online booking page. Share your Vagaro page instead.",
       "calendlyNote": "Calendly is connected as your calendar, and it has its own booking page. Share your Calendly link instead, or connect a Google, Microsoft 365, or CalDAV calendar to use this page.",
       "goToIntegrations": "Go to Integrations →",

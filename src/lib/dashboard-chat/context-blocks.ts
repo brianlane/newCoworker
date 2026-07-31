@@ -32,6 +32,7 @@ import { logger } from "@/lib/logger";
  */
 const CALENDAR_PROVIDER_LABELS: Record<string, string> = {
   vagaro: "Vagaro (real availability search + direct booking)",
+  acuity: "Acuity Scheduling (real availability search + direct booking)",
   google: "Google Calendar",
   microsoft: "Outlook Calendar",
   caldav: "CalDAV (e.g. iCloud)",

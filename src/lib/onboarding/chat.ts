@@ -205,7 +205,7 @@ export function areAllChatTopicsCovered(topicStatus: OnboardingTopicStatus): boo
  * of the user-facing onboarding vocabulary.
  */
 export const TOOL_SIGNAL_PATTERN =
-  /\b(text|texts|sms|call|calls|phone|phones|gmail|email|emails|calendar|calendly|vagaro|crm|hubspot|pipeline|imessage)\b/i;
+  /\b(text|texts|sms|call|calls|phone|phones|gmail|email|emails|calendar|calendly|vagaro|acuity|crm|hubspot|pipeline|imessage)\b/i;
 
 export function summarizeOnboardingTopicStatus(
   profile: OnboardingAssistantProfile
@@ -277,7 +277,7 @@ export const COWORKER_CAPABILITY_BRIEF = [
   "What the AI coworker will be able to do once it is live:",
   "- Answers phone calls in real time, and warm-transfers a caller to a named person with the context already gathered.",
   "- Handles two-way SMS, WhatsApp, Facebook Messenger, Instagram DMs, and website chat, and gets its own email address. All of them share one memory, so a customer who called Tuesday and texts Friday does not start over.",
-  "- Books appointments on Google Calendar, Microsoft 365, CalDAV, Calendly, or Vagaro, and can reschedule or cancel an existing one. With no calendar tool at all it books on a scheduling page we host, including per-person pages and round robin.",
+  "- Books appointments on Google Calendar, Microsoft 365, CalDAV, Calendly, Vagaro, or Acuity Scheduling, and can reschedule or cancel an existing one. With no calendar tool at all it books on a scheduling page we host, including per-person pages and round robin.",
   "- Sends booking confirmations and reminders, and texts the next customer in line when an earlier slot frees up.",
   "- Routes a new lead to a specific teammate by name, either first-to-claim or on rotation, and pages the owner when nobody claims it.",
   "- Follows the customer's language automatically, Spanish included, on calls and in messages, remembers that preference, and can stay on a transferred call to interpret between the caller and a staff member.",
