@@ -25,6 +25,10 @@ vi.mock("@/lib/calendar-tools/vagaro", () => ({
   cancelVagaroAppointment: vi.fn(),
   rescheduleVagaroAppointment: vi.fn()
 }));
+vi.mock("@/lib/calendar-tools/acuity", () => ({
+  cancelAcuityAppointment: vi.fn(),
+  rescheduleAcuityAppointment: vi.fn()
+}));
 vi.mock("@/lib/calendar-tools/caldav", () => ({
   cancelCaldavAppointment: vi.fn(),
   rescheduleCaldavAppointment: vi.fn()
@@ -65,6 +69,10 @@ import {
   rescheduleVagaroAppointment
 } from "@/lib/calendar-tools/vagaro";
 import {
+  cancelAcuityAppointment,
+  rescheduleAcuityAppointment
+} from "@/lib/calendar-tools/acuity";
+import {
   cancelCaldavAppointment,
   rescheduleCaldavAppointment
 } from "@/lib/calendar-tools/caldav";
@@ -100,6 +108,7 @@ const MS_CONN = {
 } as never;
 const CALENDLY_CONN = { provider: "calendly", connectionId: "c", providerConfigKey: "k" } as never;
 const VAGARO_CONN = { provider: "vagaro", connectionId: "v", providerConfigKey: "vk" } as never;
+const ACUITY_CONN = { provider: "acuity", connectionId: "a", providerConfigKey: "acuity" } as never;
 const CALDAV_CONN = { provider: "caldav", connectionId: "d", providerConfigKey: "dk" } as never;
 
 const RESCHEDULE_ARGS = {
@@ -256,6 +265,36 @@ describe("rescheduleCalendarAppointment", () => {
       "claim-1",
       "2026-07-15T20:00:00.000Z"
     );
+  });
+
+  it("Acuity: moves the ledger-resolved appointment and shifts the claim on success", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(ACUITY_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
+    const moved = {
+      ok: true,
+      data: { eventId: "evt-1", provider: "acuity", rescheduled: true }
+    } as never;
+    vi.mocked(rescheduleAcuityAppointment).mockResolvedValue(moved);
+
+    expect(await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS)).toBe(moved);
+    expect(vi.mocked(rescheduleAcuityAppointment)).toHaveBeenCalledWith(
+      BIZ,
+      "evt-1",
+      RESCHEDULE_ARGS.newStartIso,
+      RESCHEDULE_ARGS.newEndIso
+    );
+    expect(vi.mocked(rescheduleBookingClaim)).toHaveBeenCalled();
+  });
+
+  it("Acuity: drops a stale claim when the provider no longer has the appointment", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(ACUITY_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
+    vi.mocked(rescheduleAcuityAppointment).mockResolvedValue({
+      ok: false,
+      detail: "booking_not_found"
+    } as never);
+    await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS);
+    expect(vi.mocked(deleteBookingClaim)).toHaveBeenCalledWith("claim-1");
   });
 
   it("Vagaro: keeps the claim in place when the provider move fails", async () => {
@@ -729,6 +768,26 @@ describe("cancelCalendarAppointment", () => {
 
     expect(await cancelCalendarAppointment(BIZ, CANCEL_ARGS)).toBe(canceled);
     expect(vi.mocked(cancelVagaroAppointment)).toHaveBeenCalledWith(BIZ, "evt-1");
+    expect(vi.mocked(deleteBookingClaim)).toHaveBeenCalledWith("claim-1");
+  });
+
+  it("Acuity: cancels with the LEDGER START so an irreversible cancel cannot hit the wrong appointment", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(ACUITY_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
+    const canceled = {
+      ok: true,
+      data: { eventId: "evt-1", provider: "acuity", canceled: true }
+    } as never;
+    vi.mocked(cancelAcuityAppointment).mockResolvedValue(canceled);
+
+    expect(await cancelCalendarAppointment(BIZ, CANCEL_ARGS)).toBe(canceled);
+    // The third argument is the guard: the core refuses if the appointment
+    // it finds does not start when the ledger says it should.
+    expect(vi.mocked(cancelAcuityAppointment)).toHaveBeenCalledWith(
+      BIZ,
+      "evt-1",
+      "2026-07-13T20:00:00.000Z"
+    );
     expect(vi.mocked(deleteBookingClaim)).toHaveBeenCalledWith("claim-1");
   });
 

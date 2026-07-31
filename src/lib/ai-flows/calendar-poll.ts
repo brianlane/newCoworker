@@ -998,6 +998,13 @@ export async function pollCalendarTriggers(
     result.businesses += 1;
     try {
       const conn = await resolveCalendarConnection(businessId);
+      // Acuity resolves as a booking provider as of this change, but its
+      // poller fetcher lands in the follow-up. Skip QUIETLY rather than
+      // falling through to the not-connected throw below: that would write a
+      // "calendar_not_connected" failure row on every tick, once a minute,
+      // forever, for a calendar that is plainly connected. Replace this with
+      // the real fetch branch when the Acuity poller lands.
+      if (conn?.provider === "acuity") continue;
       // CalDAV connections have no pollable calendar — not connected for
       // triggers. Calendly and Vagaro ARE pollable (dedicated fetchers
       // below); Google/Microsoft use the Nango fetchers.

@@ -41,6 +41,7 @@ import {
 import { isLedgerSlotOpen } from "@/lib/calendar-tools/booking-dedupe";
 import { getCaldavBusyBlocks } from "@/lib/calendar-tools/caldav";
 import { findVagaroSlots } from "@/lib/calendar-tools/vagaro";
+import { findAcuitySlots } from "@/lib/calendar-tools/acuity";
 import { digitsOf, phoneDigitsMatch } from "@/lib/calendar-tools/phone-match";
 import { cancelWaitlistForAttendee } from "@/lib/calendar-tools/waitlist-resolve";
 import {
@@ -84,6 +85,10 @@ export type WaitlistFillDeps = {
   getCaldavBusy?: typeof getCaldavBusyBlocks;
   /** Injectable Vagaro slot search (tests). */
   findVagaro?: typeof findVagaroSlots;
+  /** Injectable Acuity availability search (tests). */
+  findAcuity?: typeof findAcuitySlots;
+  /** Injectable timezone resolution (tests). */
+  resolveTimezone?: typeof resolveToolTimezone;
   /** Injectable business read (tests). */
   getBusinessRow?: typeof getBusiness;
   /** Injectable contact-language read (tests). */
@@ -162,12 +167,26 @@ export async function verifyFreedSlotOpen(
     if (conn.provider === "calendly") return true;
     const windowStart = new Date(startMs);
     const windowEnd = new Date(endMs);
-    if (conn.provider === "vagaro") {
-      const found = await (deps.findVagaro ?? findVagaroSlots)(businessId, {
+    if (conn.provider === "vagaro" || conn.provider === "acuity") {
+      const durationMinutes = Math.max(1, Math.round((endMs - startMs) / 60_000));
+      const find =
+        conn.provider === "vagaro"
+          ? (deps.findVagaro ?? findVagaroSlots)
+          : (deps.findAcuity ?? findAcuitySlots);
+      // The business timezone, NOT a hardcoded UTC. This is load-bearing for
+      // Acuity: its availability is keyed by LOCAL CALENDAR DATE, so asking
+      // in the wrong zone asks about the wrong day for any merchant outside
+      // UTC, the freed slot never appears, and the check fails closed —
+      // silently swallowing a waitlist offer that should have gone out.
+      // Cosmetic for Vagaro (range-scoped search, the zone only labels the
+      // response), but both paths agreeing with findCalendarSlots is the
+      // point. resolveToolTimezone never throws; it degrades to UTC.
+      const timezone = await (deps.resolveTimezone ?? resolveToolTimezone)(businessId, undefined);
+      const found = await find(businessId, {
         windowStart,
         windowEnd,
-        durationMinutes: Math.max(1, Math.round((endMs - startMs) / 60_000)),
-        timezone: "UTC"
+        durationMinutes,
+        timezone
       });
       const slots = ((found.data ?? {}) as { slots?: Array<{ startIso?: string }> }).slots ?? [];
       return found.ok && slots.some((s) => Date.parse(s.startIso ?? "") === startMs);

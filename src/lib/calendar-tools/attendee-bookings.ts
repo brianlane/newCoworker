@@ -64,6 +64,7 @@ import {
 } from "@/lib/calendar-tools/booking-dedupe";
 import { getActiveVagaroConnection } from "@/lib/db/vagaro-connections";
 import { listVagaroAppointments } from "@/lib/vagaro/client";
+import { listAcuityUpcomingForAttendee } from "@/lib/calendar-tools/acuity";
 import { calendlyEventUuid } from "@/lib/ai-flows/calendly-poll";
 import { logger } from "@/lib/logger";
 
@@ -87,7 +88,7 @@ export type AttendeeIdentifiers = {
 
 export type UpcomingAttendeeBooking = {
   /** Which source reported it ("ledger" = the platform booking ledger). */
-  provider: "ledger" | "calendly" | "vagaro";
+  provider: "ledger" | "calendly" | "vagaro" | "acuity";
   /** Platform-created / ledger-synced vs discovered on the provider. */
   source: "platform" | "external";
   /** Provider event id; null when the source carries no stable id. */
@@ -125,6 +126,8 @@ export type AttendeeBookingDeps = {
   getVagaroConnection?: typeof getActiveVagaroConnection;
   /** Injectable Vagaro appointments listing (tests). */
   listAppointments?: typeof listVagaroAppointments;
+  /** Injectable Acuity upcoming lookup (tests). */
+  listAcuityUpcoming?: typeof listAcuityUpcomingForAttendee;
   /** Injectable ledger reads (tests). */
   findLedgerClaim?: typeof findUpcomingBookingClaim;
   findLedgerClaimByPhone?: typeof findUpcomingBookingClaimByPhone;
@@ -414,6 +417,57 @@ async function vagaroListUpcomingForAttendee(
   return { ok: true, bookings };
 }
 
+/**
+ * Acuity adapter: one bounded upcoming listing, narrowed server-side by the
+ * attendee's email (or phone when we have no email) since Acuity supports
+ * both as query filters. May THROW on transport trouble, per the module's
+ * failure contract.
+ */
+async function acuityListUpcomingForAttendee(
+  businessId: string,
+  _conn: ResolvedVoiceConnection,
+  ids: AttendeeIdentifiers,
+  deps: AttendeeBookingDeps
+): Promise<AttendeeBookingLookupResult> {
+  const list = deps.listAcuityUpcoming ?? listAcuityUpcomingForAttendee;
+  const res = await list(businessId, { phones: ids.phones, email: ids.email });
+  if (!res.ok) return { ok: false, reason: res.reason };
+  return {
+    ok: true,
+    // Acuity's own email/phone filters narrow the listing, but they are the
+    // first line and not the only one: re-verify each row against the
+    // attendee with the same digit-based, country-code-tolerant matcher
+    // Vagaro uses. A booking wrongly attributed here does not just show up
+    // in a summary, it makes the duplicate guard REFUSE a real booking with
+    // attendee_already_booked.
+    bookings: res.bookings
+      .filter((b) =>
+        acuityAppointmentMatchesAttendee(
+          { customerEmail: b.customerEmail, customerPhone: b.customerPhone },
+          ids
+        )
+      )
+      .map(
+      (b): UpcomingAttendeeBooking => ({
+        provider: "acuity",
+        source: "external",
+        eventId: b.eventId,
+        startIso: b.startIso,
+        name: b.name,
+        rescheduled: false
+      })
+    )
+  };
+}
+
+/** Same shape and matcher as the Vagaro equivalent. */
+export function acuityAppointmentMatchesAttendee(
+  item: { customerEmail?: string | null; customerPhone?: string | null },
+  ids: AttendeeIdentifiers
+): boolean {
+  return vagaroAppointmentMatchesAttendee(item, ids);
+}
+
 export type AttendeeBookingLookup =
   | {
       kind: "adapter";
@@ -449,7 +503,8 @@ export const ATTENDEE_BOOKING_LOOKUPS: Record<
   microsoft: { kind: "ledger_only" },
   caldav: { kind: "ledger_only" },
   calendly: { kind: "adapter", listUpcomingForAttendee: calendlyListUpcomingForAttendee },
-  vagaro: { kind: "adapter", listUpcomingForAttendee: vagaroListUpcomingForAttendee }
+  vagaro: { kind: "adapter", listUpcomingForAttendee: vagaroListUpcomingForAttendee },
+  acuity: { kind: "adapter", listUpcomingForAttendee: acuityListUpcomingForAttendee }
 };
 
 /**

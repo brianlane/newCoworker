@@ -1,7 +1,7 @@
 /**
  * Calendar MCP tools — thin adapters over the shared calendar core in
  * src/lib/calendar-tools/handlers.ts (the same code path the voice bridge
- * and Rowboat tool webhook use), so provider resolution (Vagaro > Nango
+ * and Rowboat tool webhook use), so provider resolution (Vagaro > Acuity > Nango
  * Google/Microsoft > Calendly > CalDAV) and booking semantics come free.
  */
 
@@ -33,7 +33,7 @@ export function calendarFailureMessage(detail: string | undefined): string {
 export const calendarFindSlotsTool = defineMcpTool({
   name: "calendar_find_slots",
   description:
-    "Find open appointment slots on the business's connected calendar (Google, Microsoft 365, Calendly, Vagaro, or CalDAV). Returns up to 3 bookable start/end times.",
+    "Find open appointment slots on the business's connected calendar (Google, Microsoft 365, Calendly, Vagaro, Acuity Scheduling, or CalDAV). Returns up to 3 bookable start/end times.",
   schema: {
     business_id: businessIdField,
     durationMinutes: z
@@ -56,7 +56,7 @@ export const calendarFindSlotsTool = defineMcpTool({
       .string()
       .max(120)
       .optional()
-      .describe("Vagaro only: explicit service to search.")
+      .describe("Vagaro/Acuity only: explicit service to search.")
   },
   handler: async (args, auth) => {
     const businessId = await resolveMcpBusinessId(auth, args.business_id);
@@ -93,7 +93,7 @@ export const calendarBookAppointmentTool = defineMcpTool({
       .string()
       .max(120)
       .optional()
-      .describe("Vagaro only: explicit service to book."),
+      .describe("Vagaro/Acuity only: explicit service to book."),
     allowAdditional: z
       .boolean()
       .optional()

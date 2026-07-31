@@ -6,6 +6,9 @@ vi.mock("@/lib/db/workspace-oauth-connections", () => ({
 vi.mock("@/lib/db/vagaro-connections", () => ({
   getActiveVagaroConnectionId: vi.fn()
 }));
+vi.mock("@/lib/db/acuity-connections", () => ({
+  getActiveAcuityConnectionId: vi.fn()
+}));
 vi.mock("@/lib/db/calendly-connections", () => ({
   getActiveCalendlyConnectionId: vi.fn()
 }));
@@ -15,6 +18,7 @@ vi.mock("@/lib/db/caldav-connections", () => ({
 
 import { listWorkspaceOAuthConnections } from "@/lib/db/workspace-oauth-connections";
 import { getActiveVagaroConnectionId } from "@/lib/db/vagaro-connections";
+import { getActiveAcuityConnectionId } from "@/lib/db/acuity-connections";
 import { getActiveCalendlyConnectionId } from "@/lib/db/calendly-connections";
 import { getActiveCaldavConnectionId } from "@/lib/db/caldav-connections";
 import {
@@ -38,6 +42,7 @@ describe("resolveVoiceConnection", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     vi.mocked(getActiveVagaroConnectionId).mockResolvedValue(null);
+    vi.mocked(getActiveAcuityConnectionId).mockResolvedValue(null);
     vi.mocked(getActiveCalendlyConnectionId).mockResolvedValue(null);
     vi.mocked(getActiveCaldavConnectionId).mockResolvedValue(null);
   });
@@ -156,6 +161,32 @@ describe("resolveVoiceConnection", () => {
     });
     // Never even lists Nango connections once Vagaro answers.
     expect(listWorkspaceOAuthConnections).not.toHaveBeenCalled();
+  });
+
+  it("resolveCalendarConnection puts an active Acuity connection ahead of the workspace calendars", async () => {
+    vi.mocked(getActiveAcuityConnectionId).mockResolvedValue("acuity-row-1");
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([fakeRow("google-calendar")]);
+    const res = await resolveCalendarConnection(businessId);
+    expect(res).toEqual({
+      provider: "acuity",
+      providerConfigKey: "acuity",
+      connectionId: "acuity-row-1"
+    });
+    // Acuity holds the merchant's real book, so an incidental all-in-one
+    // Google connect must not win. Never even lists Nango connections.
+    expect(listWorkspaceOAuthConnections).not.toHaveBeenCalled();
+  });
+
+  it("keeps resolving to Vagaro when a tenant has BOTH Vagaro and Acuity", async () => {
+    // Vagaro is the incumbent. A tenant that resolves to Vagaro today must
+    // still resolve to Vagaro after this deploys: a silent provider switch
+    // would move live bookings to a different book.
+    vi.mocked(getActiveVagaroConnectionId).mockResolvedValue("vagaro-row-1");
+    vi.mocked(getActiveAcuityConnectionId).mockResolvedValue("acuity-row-1");
+    const res = await resolveCalendarConnection(businessId);
+    expect(res?.provider).toBe("vagaro");
+    // The Acuity probe is never even reached, so it costs nothing.
+    expect(getActiveAcuityConnectionId).not.toHaveBeenCalled();
   });
 
   it("resolveCalendarConnection resolves a direct CalDAV connection", async () => {

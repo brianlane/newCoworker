@@ -16,9 +16,10 @@
  *     the calendar of record; connecting a real calendar later simply
  *     upgrades the mode.
  *
- * Vagaro and Calendly resolve elsewhere on purpose, Vagaro merchants
- * have their own booking site, and link-mode Calendly cannot book on the
- * invitee's behalf; the dashboard card explains both.
+ * Vagaro, Acuity and Calendly resolve elsewhere on purpose: Vagaro and
+ * Acuity merchants have their own booking site, and link-mode Calendly
+ * cannot book on the invitee's behalf. See PROVIDER_OWNS_BOOKING_PAGE
+ * below; the dashboard card explains it to the owner.
  */
 
 import { randomUUID } from "crypto";
@@ -58,7 +59,10 @@ import { sendBookingConfirmationEmail } from "@/lib/booking-page/confirmation-em
 import { computePublicSlots } from "@/lib/booking-page/slots";
 import type { BusyBlock, PublicSlot } from "@/lib/booking-page/slots";
 import { readBusyCache, saveBusyCache } from "@/lib/booking-page/busy-cache";
-import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
+import {
+  resolveCalendarConnection,
+  type ResolvedVoiceConnection
+} from "@/lib/voice-tools/connections";
 import {
   bookCalendarAppointment,
   formatBookingStartLocal,
@@ -91,6 +95,33 @@ import {
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
 import { localClock } from "../../../supabase/functions/_shared/ai_flows/engine";
 import { logger } from "@/lib/logger";
+
+/**
+ * Providers that run their own public booking site. The native page refuses
+ * for these: they hold the real book, and a ledger-only booking made behind
+ * their back would desynchronize it. Everything else (Google, Microsoft,
+ * CalDAV, and no connection at all) is supported.
+ */
+const PROVIDER_OWNS_BOOKING_PAGE = new Set<ResolvedVoiceConnection["provider"]>([
+  "vagaro",
+  "calendly",
+  "acuity"
+]);
+
+/** The providers whose free/busy this page can actually read. */
+type BookingPageProvider = "google" | "microsoft" | "caldav";
+
+/**
+ * A type predicate rather than a plain boolean: `fetchBusyBlocks` accepts
+ * only the three readable providers, so the compiler has to see the
+ * narrowing. That makes adding a seventh provider a compile error here
+ * instead of a runtime surprise on the public page.
+ */
+function bookingPageSupportsProvider(
+  conn: ResolvedVoiceConnection | null
+): conn is ResolvedVoiceConnection & { provider: BookingPageProvider } {
+  return conn !== null && !PROVIDER_OWNS_BOOKING_PAGE.has(conn.provider);
+}
 
 export const BOOKING_PAGE_SOURCE_TAG = "Booking Page";
 
@@ -175,10 +206,10 @@ export async function getBookingPageContext(
   if (!business) return { ok: false, detail: "not_found" };
 
   const conn = await resolveCalendarConnection(page.business_id);
-  // Vagaro merchants and link-mode Calendly keep their own booking pages;
+  // Vagaro, Acuity and link-mode Calendly keep their own booking pages;
   // ledger-only bookings behind their backs would desynchronize the real
   // book. NO connection at all is fully supported: platform mode.
-  if (conn && (conn.provider === "vagaro" || conn.provider === "calendly")) {
+  if (conn && PROVIDER_OWNS_BOOKING_PAGE.has(conn.provider)) {
     return { ok: false, detail: "calendar_not_connected" };
   }
 
@@ -234,7 +265,7 @@ export async function probeCalendarAvailability(
   try {
     const conn = await resolveCalendarConnection(businessId);
     if (!conn) return "platform";
-    if (conn.provider === "vagaro" || conn.provider === "calendly") return "unsupported";
+    if (!bookingPageSupportsProvider(conn)) return "unsupported";
     const now = new Date();
     const busy = await fetchBusyBlocks(
       businessId,
@@ -377,7 +408,7 @@ async function listSlotsForContext(
     } else {
       const conn = await resolveCalendarConnection(context.businessId);
       /* c8 ignore next 3 -- context resolution above already vetted the connection */
-      if (!conn || conn.provider === "vagaro" || conn.provider === "calendly") {
+      if (!bookingPageSupportsProvider(conn)) {
         return { ok: false, detail: "calendar_not_connected" };
       }
       // A connected provider is ADDITIVE availability signal: when its

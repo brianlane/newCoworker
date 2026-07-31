@@ -26,6 +26,10 @@ import {
   rescheduleVagaroAppointment
 } from "@/lib/calendar-tools/vagaro";
 import {
+  cancelAcuityAppointment,
+  rescheduleAcuityAppointment
+} from "@/lib/calendar-tools/acuity";
+import {
   cancelCaldavAppointment,
   rescheduleCaldavAppointment
 } from "@/lib/calendar-tools/caldav";
@@ -459,8 +463,8 @@ async function mutateGoogleEvent(
 }
 
 /**
- * Ledger resolution for Vagaro and CalDAV (their ONLY resolution path —
- * neither client has a search-by-customer surface): exact attendee key
+ * Ledger resolution for Vagaro, Acuity and CalDAV (their ONLY resolution
+ * path — none has a search-by-customer cancel surface): exact attendee key
  * first, then the phone-tolerant fallback, since the booking may have
  * stored a differently formatted phone than the lifecycle call passes
  * (Bugbot on PR #584).
@@ -501,23 +505,41 @@ export async function rescheduleCalendarAppointment(
       });
     }
 
-    if (conn.provider === "vagaro" || conn.provider === "caldav") {
+    if (
+      conn.provider === "vagaro" ||
+      conn.provider === "acuity" ||
+      conn.provider === "caldav"
+    ) {
       const claim = await findLedgerOnlyClaim(businessId, attendeeKey, phone);
       if (!claim) return { ok: false, detail: "booking_not_found" };
-      const moved =
-        conn.provider === "vagaro"
-          ? await rescheduleVagaroAppointment(
-              businessId,
-              claim.eventId,
-              args.newStartIso,
-              args.newEndIso
-            )
-          : await rescheduleCaldavAppointment(
-              businessId,
-              claim.eventId,
-              args.newStartIso,
-              args.newEndIso
-            );
+      // A switch rather than nested ternaries: this arm gained a third
+      // provider, and the next one should be a one-line addition.
+      let moved: CalendarToolResult;
+      switch (conn.provider) {
+        case "vagaro":
+          moved = await rescheduleVagaroAppointment(
+            businessId,
+            claim.eventId,
+            args.newStartIso,
+            args.newEndIso
+          );
+          break;
+        case "acuity":
+          moved = await rescheduleAcuityAppointment(
+            businessId,
+            claim.eventId,
+            args.newStartIso,
+            args.newEndIso
+          );
+          break;
+        default:
+          moved = await rescheduleCaldavAppointment(
+            businessId,
+            claim.eventId,
+            args.newStartIso,
+            args.newEndIso
+          );
+      }
       if (moved.ok) {
         await rescheduleBookingClaim(
           businessId,
@@ -690,14 +712,30 @@ export async function cancelCalendarAppointment(
       return calendlyCanceled;
     }
 
-    if (conn.provider === "vagaro" || conn.provider === "caldav") {
+    if (
+      conn.provider === "vagaro" ||
+      conn.provider === "acuity" ||
+      conn.provider === "caldav"
+    ) {
       const claim = await findLedgerOnlyClaim(businessId, attendeeKey, phone);
       if (!claim) return { ok: false, detail: "booking_not_found" };
       let canceled: CalendarToolResult;
-      if (conn.provider === "vagaro") {
-        canceled = await cancelVagaroAppointment(businessId, claim.eventId);
-      } else {
-        canceled = await cancelCaldavAppointment(businessId, claim.eventId);
+      switch (conn.provider) {
+        case "vagaro":
+          canceled = await cancelVagaroAppointment(businessId, claim.eventId);
+          break;
+        case "acuity":
+          // The ledger's start goes WITH the id: Acuity cancellation cannot
+          // be undone, so the core refuses when the appointment it finds
+          // does not start when the ledger says it should.
+          canceled = await cancelAcuityAppointment(
+            businessId,
+            claim.eventId,
+            new Date(claim.startAt).toISOString()
+          );
+          break;
+        default:
+          canceled = await cancelCaldavAppointment(businessId, claim.eventId);
       }
       if (canceled.ok) {
         await deleteBookingClaim(claim.id);

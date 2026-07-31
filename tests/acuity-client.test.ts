@@ -788,6 +788,7 @@ describe("appointment reads and writes", () => {
     await rescheduleAcuityAppointmentTime(CONN, "5", {
       datetime: "2026-08-05T13:00:00-04:00",
       timezone: "America/New_York",
+      admin: true,
       noEmail: true
     });
     const url = lastUrl();
@@ -797,6 +798,19 @@ describe("appointment reads and writes", () => {
     expect(body.calendarID).toBeUndefined();
   });
 
+  it("omits admin so Acuity validates when the caller could not verify the slot", async () => {
+    // admin waives availability validation. A caller that could not run the
+    // ignore-aware precheck must NOT also waive Acuity's own check.
+    fetchMock.mockResolvedValueOnce(jsonResponse(200, null));
+    await rescheduleAcuityAppointmentTime(CONN, "5", {
+      datetime: "2026-08-05T13:00:00-04:00",
+      timezone: "UTC",
+      admin: false,
+      noEmail: true
+    });
+    expect(lastUrl().searchParams.has("admin")).toBe(false);
+  });
+
   it("returns null when a reschedule response has no body", async () => {
     fetchMock.mockResolvedValueOnce(jsonResponse(200, null));
     await expect(
@@ -804,6 +818,7 @@ describe("appointment reads and writes", () => {
         datetime: "2026-08-05T13:00:00-04:00",
         timezone: "UTC",
         calendarId: "7",
+        admin: true,
         noEmail: false
       })
     ).resolves.toBeNull();

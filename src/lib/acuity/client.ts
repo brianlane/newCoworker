@@ -781,17 +781,28 @@ export async function createAcuityAppointment(
  * Move an appointment to a new time IN PLACE. `calendarId` omitted keeps the
  * original calendar (Acuity treats an explicit null as "auto-select"), which
  * is what we want: a reschedule should not silently reassign staff.
+ *
+ * `admin` waives Acuity's own availability validation, so it is only safe
+ * when the caller has ALREADY verified the target against an ignore-aware
+ * availability read. A caller that could not run that check must pass
+ * `admin: false` and let Acuity be the one to refuse.
  */
 export async function rescheduleAcuityAppointmentTime(
   conn: AcuityConnectionRow,
   appointmentId: string,
-  args: { datetime: string; timezone: string; calendarId?: string | null; noEmail: boolean }
+  args: {
+    datetime: string;
+    timezone: string;
+    calendarId?: string | null;
+    admin: boolean;
+    noEmail: boolean;
+  }
 ): Promise<AcuityAppointmentItem | null> {
   const payload = await acuityFetch(conn, {
     method: "PUT",
     path: `/appointments/${encodeURIComponent(appointmentId)}/reschedule`,
     query: {
-      admin: "true",
+      ...(args.admin ? { admin: "true" } : {}),
       ...(args.noEmail ? { noEmail: "true" } : {})
     },
     body: {

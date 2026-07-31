@@ -73,7 +73,7 @@ const CAPABILITY_LINES = [
   "- Voice: answers inbound calls in real time, transfers warmly to a human, takes messages, " +
     "follows up by text, and can interpret live between a caller and a staff member who do not share a language.",
   "- Messaging: two-way SMS, Messenger, Instagram DM, WhatsApp, website chat, and a dedicated email address per business.",
-  "- Scheduling: books, reschedules, and cancels on Google Calendar, Microsoft 365, CalDAV, Calendly, or Vagaro, " +
+  "- Scheduling: books, reschedules, and cancels on Google Calendar, Microsoft 365, CalDAV, Calendly, Vagaro, or Acuity Scheduling, " +
     "plus a public self-serve booking page with confirmations and reminders for businesses with no calendar tool at all.",
   "- Memory: a permanent per-business knowledge base plus a customer knowledge graph, so the coworker " +
     "remembers what was said months ago on any channel.",

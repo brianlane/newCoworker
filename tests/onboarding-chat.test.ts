@@ -53,7 +53,9 @@ describe("onboarding chat helpers", () => {
 
     expect(prompt).toContain(COWORKER_CAPABILITY_BRIEF);
     expect(COWORKER_CAPABILITY_BRIEF).toContain("WhatsApp, Facebook Messenger, Instagram DMs, and website chat");
-    expect(COWORKER_CAPABILITY_BRIEF).toContain("Google Calendar, Microsoft 365, CalDAV, Calendly, or Vagaro");
+    expect(COWORKER_CAPABILITY_BRIEF).toContain(
+      "Google Calendar, Microsoft 365, CalDAV, Calendly, Vagaro, or Acuity Scheduling"
+    );
     expect(COWORKER_CAPABILITY_BRIEF).toContain("scheduling page we host");
     expect(COWORKER_CAPABILITY_BRIEF).toContain("first-to-claim or on rotation");
     expect(COWORKER_CAPABILITY_BRIEF).toContain("interpret");

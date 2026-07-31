@@ -9,6 +9,7 @@ vi.mock("@/lib/calendar-tools/handlers", () => ({
 }));
 vi.mock("@/lib/calendar-tools/caldav", () => ({ getCaldavBusyBlocks: vi.fn() }));
 vi.mock("@/lib/calendar-tools/vagaro", () => ({ findVagaroSlots: vi.fn() }));
+vi.mock("@/lib/calendar-tools/acuity", () => ({ findAcuitySlots: vi.fn() }));
 vi.mock("@/lib/db/booking-waitlist", async (importOriginal) => ({
   ...(await importOriginal<Record<string, unknown>>()),
   getWaitlistSettings: vi.fn(),
@@ -48,6 +49,7 @@ import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import { getWorkspaceBusyBlocks } from "@/lib/calendar-tools/handlers";
 import { getCaldavBusyBlocks } from "@/lib/calendar-tools/caldav";
 import { findVagaroSlots } from "@/lib/calendar-tools/vagaro";
+import { findAcuitySlots } from "@/lib/calendar-tools/acuity";
 import {
   findLiveWaitlistEntriesForAttendee,
   getWaitlistSettings,
@@ -80,12 +82,14 @@ const SLOT_MS = Date.parse(SLOT);
 const GOOGLE = { provider: "google", connectionId: "c", providerConfigKey: "g" } as never;
 const CALDAV = { provider: "caldav", connectionId: "d", providerConfigKey: "dk" } as never;
 const VAGARO = { provider: "vagaro", connectionId: "v", providerConfigKey: "vk" } as never;
+const ACUITY = { provider: "acuity", connectionId: "a", providerConfigKey: "acuity" } as never;
 const CALENDLY = { provider: "calendly", connectionId: "y", providerConfigKey: "yk" } as never;
 
 const mockConn = vi.mocked(resolveCalendarConnection);
 const mockBusy = vi.mocked(getWorkspaceBusyBlocks);
 const mockCaldav = vi.mocked(getCaldavBusyBlocks);
 const mockVagaro = vi.mocked(findVagaroSlots);
+const mockAcuity = vi.mocked(findAcuitySlots);
 const mockSettings = vi.mocked(getWaitlistSettings);
 const mockList = vi.mocked(listLiveWaitlistEntries);
 const mockExpired = vi.mocked(listExpiredWaitlistOffers);
@@ -276,6 +280,45 @@ describe("verifyFreedSlotOpen", () => {
     // A result carrying no data at all reads as no slots.
     mockVagaro.mockResolvedValue({ ok: false, detail: "vagaro_auth_failed" });
     expect(await verifyFreedSlotOpen(BIZ, VAGARO, SLOT_MS, END_MS)).toBe(false);
+  });
+
+  it("Acuity: re-reads live availability and only confirms an exact slot match", async () => {
+    mockAcuity.mockResolvedValue({
+      ok: true,
+      data: { slots: [{ startIso: new Date(SLOT_MS).toISOString() }] }
+    });
+    expect(await verifyFreedSlotOpen(BIZ, ACUITY, SLOT_MS, END_MS)).toBe(true);
+    expect(mockAcuity).toHaveBeenCalled();
+    // Vagaro's search must not be consulted for an Acuity tenant.
+    expect(mockVagaro).not.toHaveBeenCalled();
+
+    mockAcuity.mockResolvedValue({
+      ok: true,
+      data: { slots: [{ startIso: new Date(SLOT_MS + 60_000).toISOString() }] }
+    });
+    expect(await verifyFreedSlotOpen(BIZ, ACUITY, SLOT_MS, END_MS)).toBe(false);
+
+    mockAcuity.mockResolvedValue({ ok: false, detail: "acuity_auth_failed" });
+    expect(await verifyFreedSlotOpen(BIZ, ACUITY, SLOT_MS, END_MS)).toBe(false);
+  });
+
+  it("Acuity: asks in the BUSINESS timezone, never a hardcoded UTC", async () => {
+    // Acuity availability is keyed by local calendar date. Asking in the
+    // wrong zone asks about the wrong DAY for any merchant outside UTC, the
+    // freed slot never appears, and this check fails closed — silently
+    // swallowing a waitlist offer that should have gone out.
+    mockAcuity.mockResolvedValue({
+      ok: true,
+      data: { slots: [{ startIso: new Date(SLOT_MS).toISOString() }] }
+    });
+    await verifyFreedSlotOpen(BIZ, ACUITY, SLOT_MS, END_MS);
+    expect(mockAcuity.mock.calls[0][1]).toMatchObject({ timezone: "America/Phoenix" });
+  });
+
+  it("Vagaro: gets the same resolved timezone, so the two paths cannot drift", async () => {
+    mockVagaro.mockResolvedValue({ ok: true, data: { slots: [] } });
+    await verifyFreedSlotOpen(BIZ, VAGARO, SLOT_MS, END_MS);
+    expect(mockVagaro.mock.calls[0][1]).toMatchObject({ timezone: "America/Phoenix" });
   });
 
   it("CalDAV: open when no busy block overlaps; refused reads fail closed", async () => {

@@ -185,7 +185,9 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
   // own pages). NO connection is fully supported: platform mode, where the
   // booking ledger is the calendar of record.
   const unsupportedProvider =
-    state.calendarProvider === "vagaro" || state.calendarProvider === "calendly";
+    state.calendarProvider === "vagaro" ||
+    state.calendarProvider === "acuity" ||
+    state.calendarProvider === "calendly";
   const platformMode = state.calendarProvider === null;
   const page = state.page;
   const roster = state.roster ?? [];
@@ -221,7 +223,11 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
         <Card>
           <h2 className="text-base font-semibold text-parchment">{t("connectFirstTitle")}</h2>
           <p className="mt-2 text-sm text-parchment/60">
-            {state.calendarProvider === "vagaro" ? t("vagaroNote") : t("calendlyNote")}
+            {state.calendarProvider === "vagaro"
+              ? t("vagaroNote")
+              : state.calendarProvider === "acuity"
+                ? t("acuityNote")
+                : t("calendlyNote")}
           </p>
           <Link
             href="/dashboard/integrations"

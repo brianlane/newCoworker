@@ -4,6 +4,7 @@ import { getBusinessTimezone } from "@/lib/db/businesses";
 import { ensureSharedCalendar, getSharedCalendar } from "@/lib/calendar-tools/shared-calendar";
 import { createCalendlyBookingLink, findCalendlySlots } from "@/lib/calendar-tools/calendly";
 import { bookVagaroAppointment, findVagaroSlots } from "@/lib/calendar-tools/vagaro";
+import { bookAcuityAppointment, findAcuitySlots } from "@/lib/calendar-tools/acuity";
 import { bookCaldavAppointment, getCaldavBusyBlocks } from "@/lib/calendar-tools/caldav";
 import {
   bookingAttendeeKey,
@@ -45,9 +46,12 @@ import { logger } from "@/lib/logger";
  * scheduling link (detail `booking_link_created`) because Calendly cannot
  * create bookings on the invitee's behalf. No shared calendar either way.
  *
- * Vagaro connections (vagaro.ts) support REAL booking: availability search +
- * appointment creation on the merchant's book via the direct Vagaro API
- * (per-tenant credentials in vagaro_connections — no Nango involved).
+ * Vagaro (vagaro.ts) and Acuity (acuity.ts) connections support REAL
+ * booking: availability search + appointment creation on the merchant's own
+ * book via each provider's direct API (per-tenant credentials in
+ * vagaro_connections / acuity_connections — no Nango involved). Acuity's
+ * availability is DATE-scoped rather than range-scoped, so its slot search
+ * fans out day by day; see that module for how the fan-out is bounded.
  */
 
 export type CalendarToolResult = {
@@ -67,7 +71,7 @@ export type FindSlotsArgs = {
   latest?: string;
   durationMinutes: number;
   timezone?: string;
-  /** Vagaro only: explicit service to search (defaults to the owner's pick). */
+  /** Vagaro/Acuity only: explicit service to search (defaults to the owner's pick). */
   serviceId?: string;
 };
 
@@ -80,7 +84,7 @@ export type BookAppointmentArgs = {
   attendeePhone?: string;
   notes?: string;
   timezone?: string;
-  /** Vagaro only: explicit service to book (defaults to the owner's pick). */
+  /** Vagaro/Acuity only: explicit service to book (defaults to the owner's pick). */
   serviceId?: string;
   /**
    * Skip the attendee duplicate guard: the customer has EXPLICITLY confirmed
@@ -402,6 +406,18 @@ export async function findCalendarSlots(
     if (conn.provider === "vagaro") {
       const timezone = await resolveToolTimezone(businessId, args.timezone);
       return findVagaroSlots(businessId, {
+        windowStart,
+        windowEnd,
+        durationMinutes: args.durationMinutes,
+        purpose: args.purpose,
+        serviceId: args.serviceId,
+        timezone
+      });
+    }
+
+    if (conn.provider === "acuity") {
+      const timezone = await resolveToolTimezone(businessId, args.timezone);
+      return findAcuitySlots(businessId, {
         windowStart,
         windowEnd,
         durationMinutes: args.durationMinutes,
@@ -758,6 +774,25 @@ async function bookOnProvider(
       return vagaroResult;
     }
 
+    if (conn.provider === "acuity") {
+      // Real booking on the merchant's Acuity book (direct API, no Nango).
+      const timezone = await resolveToolTimezone(businessId, args.timezone);
+      const acuityResult = await bookAcuityAppointment(
+        businessId,
+        { ...args, timezone },
+        fallbackPhone
+      );
+      // Same confirmed-event rule as every other real-booking provider: only
+      // a response carrying an appointment id counts as booked for goals.
+      const acuityEventId = (acuityResult.data as { eventId?: unknown } | undefined)?.eventId;
+      if (acuityResult.ok && acuityEventId) {
+        await fireGoalEvent(businessId, args.attendeePhone ?? fallbackPhone, {
+          kind: "appointment_booked"
+        });
+      }
+      return acuityResult;
+    }
+
     if (conn.provider === "calendly") {
       // Calendly cannot create the booking — hand back a single-use link.
       return createCalendlyBookingLink(businessId, conn, {
@@ -772,8 +807,8 @@ async function bookOnProvider(
     // scheduled Zoom meeting whose join link rides the event body and the
     // tool result (so the agent texts/emails it in the confirmation).
     // Best-effort by contract: null means "no video link", never a failed
-    // booking. Vagaro (in-person services) and Calendly (link-mode, no
-    // confirmed event) stay Zoom-free.
+    // booking. Vagaro and Acuity (in-person services) and Calendly
+    // (link-mode, no confirmed event) stay Zoom-free.
     const zoomMeeting = await createZoomMeetingForBooking(businessId, {
       topic: args.summary,
       startIso: args.startIso,
