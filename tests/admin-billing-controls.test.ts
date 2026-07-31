@@ -62,7 +62,7 @@ describe("buildResumeCollectionParams", () => {
 
 describe("buildNextBillingDateParams", () => {
   it("moves the anchor with no proration", () => {
-    const res = buildNextBillingDateParams("2026-08-15T00:00:00.000Z", NOW);
+    const res = buildNextBillingDateParams("2026-08-15T00:00:00.000Z", NOW, null);
     expect(res).toEqual({
       ok: true,
       value: {
@@ -72,15 +72,50 @@ describe("buildNextBillingDateParams", () => {
     });
   });
 
+  /**
+   * The route header promised this "can extend a cycle (comp the gap) but
+   * never bill earlier". Stripe only requires trial_end > now, not
+   * >= current_period_end, so nothing enforced that: moving a monthly tenant
+   * who paid on Jul 1 (period ending Aug 1) to Jul 6 collapses the period,
+   * pays no proration (proration_behavior: "none"), and charges the full
+   * renewal 26 days early on time the tenant had already bought.
+   */
+  it("refuses a date before the paid period ends", () => {
+    // In the future (NOW is Jul 27) but inside the period the tenant has
+    // already paid for, which ends Aug 1.
+    const res = buildNextBillingDateParams(
+      "2026-07-29T00:00:00.000Z",
+      NOW,
+      "2026-08-01T00:00:00.000Z"
+    );
+    expect(res).toEqual({ ok: false, reason: "date_before_current_period_end" });
+  });
+
+  it("allows a date on or after the paid period ends", () => {
+    expect(
+      buildNextBillingDateParams("2026-08-01T00:00:00.000Z", NOW, "2026-08-01T00:00:00.000Z").ok
+    ).toBe(true);
+    expect(
+      buildNextBillingDateParams("2026-09-01T00:00:00.000Z", NOW, "2026-08-01T00:00:00.000Z").ok
+    ).toBe(true);
+  });
+
+  it("falls back to the future-only check when the period end is unknown", () => {
+    // A subscription with no cached period end must stay movable rather than
+    // become unmanageable from admin.
+    expect(buildNextBillingDateParams("2026-08-15T00:00:00.000Z", NOW, null).ok).toBe(true);
+    expect(buildNextBillingDateParams("2026-08-15T00:00:00.000Z", NOW, "nonsense").ok).toBe(true);
+  });
+
   it("refuses a past date, since Stripe cannot bill backwards", () => {
-    expect(buildNextBillingDateParams("2026-07-01T00:00:00.000Z", NOW)).toEqual({
+    expect(buildNextBillingDateParams("2026-07-01T00:00:00.000Z", NOW, null)).toEqual({
       ok: false,
       reason: "date_must_be_in_the_future"
     });
   });
 
   it("refuses garbage input", () => {
-    expect(buildNextBillingDateParams("", NOW)).toEqual({ ok: false, reason: "invalid_date" });
+    expect(buildNextBillingDateParams("", NOW, null)).toEqual({ ok: false, reason: "invalid_date" });
   });
 });
 

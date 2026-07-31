@@ -133,6 +133,23 @@ export async function applyMembershipPackAddonsFromInvoice(params: {
   const metadata = stripeSubscription.metadata ?? {};
   if (!sessionHasMembershipPackAddons(metadata)) return;
 
+  // Nothing was paid, so nothing is granted. The entitlement check below
+  // accepts `trialing`, and a subscription updated with `trial_end` (the
+  // admin billing-date lever) reports exactly that: an invoice generated in
+  // that state can be $0. The grant is sized from subscription metadata and
+  // keyed on the invoice id, so without this a fresh $0 invoice would mint a
+  // full pack allotment that existing idempotency has no reason to block.
+  const amountPaid = invoice.amount_paid ?? 0;
+  if (amountPaid <= 0) {
+    logger.warn("membership_pack_addon invoice: nothing paid; grant blocked", {
+      eventId,
+      businessId,
+      invoiceId: invoice.id,
+      amountPaid
+    });
+    return;
+  }
+
   const entitled =
     stripeSubscription.status === "active" || stripeSubscription.status === "trialing";
   if (!entitled) {

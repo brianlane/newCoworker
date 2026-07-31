@@ -65,8 +65,8 @@ import {
   commitmentMonthsFromStripeSubscription
 } from "@/lib/billing/membership-pack-addon-grants";
 
-function makeInvoice(id = "in_1"): Stripe.Invoice {
-  return { id, created: 1_700_000_000 } as unknown as Stripe.Invoice;
+function makeInvoice(id = "in_1", amountPaid = 4_320): Stripe.Invoice {
+  return { id, created: 1_700_000_000, amount_paid: amountPaid } as unknown as Stripe.Invoice;
 }
 
 function makeSub(
@@ -254,6 +254,35 @@ describe("applyMembershipPackAddonsFromInvoice", () => {
     expect(rpcMock).not.toHaveBeenCalled();
   });
 
+  /**
+   * The grant is sized from subscription metadata and keyed on the invoice
+   * id, and the entitlement check accepts `trialing`. A subscription updated
+   * with `trial_end` (the admin billing-date lever) reports exactly that, and
+   * an invoice generated in that state can be $0. Without an amount check, a
+   * biennial tenant with 3x a 30-minute voice pack would be handed
+   * 1800 x 3 x 24 = 129,600 seconds of voice credit, keyed to a fresh invoice
+   * id so the existing idempotency does not block it, for nothing.
+   */
+  it("blocks a zero-dollar invoice", async () => {
+    await applyMembershipPackAddonsFromInvoice({
+      invoice: makeInvoice("in_zero", 0),
+      stripeSubscription: makeSub({ addonVoice: "min_30:1:1800" }),
+      businessId: "biz-1",
+      eventId: "evt_1"
+    });
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
+  it("blocks an invoice with no amount at all", async () => {
+    await applyMembershipPackAddonsFromInvoice({
+      invoice: { id: "in_none", created: 1 } as unknown as Stripe.Invoice,
+      stripeSubscription: makeSub({ addonVoice: "min_30:1:1800" }),
+      businessId: "biz-1",
+      eventId: "evt_1"
+    });
+    expect(rpcMock).not.toHaveBeenCalled();
+  });
+
   it("blocks when Stripe subscription is not entitled", async () => {
     await applyMembershipPackAddonsFromInvoice({
       invoice: makeInvoice(),
@@ -365,7 +394,7 @@ describe("applyMembershipPackAddonsFromInvoice", () => {
 
   it("falls back when invoice.created is missing and accepts trialing status", async () => {
     await applyMembershipPackAddonsFromInvoice({
-      invoice: { id: "in_trial", created: "nope" } as unknown as Stripe.Invoice,
+      invoice: { id: "in_trial", created: "nope", amount_paid: 4_320 } as unknown as Stripe.Invoice,
       stripeSubscription: {
         ...makeSub({ addonVoice: "min_30:1:1800" }),
         status: "trialing"
@@ -381,7 +410,7 @@ describe("applyMembershipPackAddonsFromInvoice", () => {
 
   it("falls back when invoice.created is NaN", async () => {
     await applyMembershipPackAddonsFromInvoice({
-      invoice: { id: "in_nan", created: Number.NaN } as unknown as Stripe.Invoice,
+      invoice: { id: "in_nan", created: Number.NaN, amount_paid: 4_320 } as unknown as Stripe.Invoice,
       stripeSubscription: makeSub({ addonVoice: "min_30:1:1800" }),
       businessId: "biz-1",
       eventId: "evt_1"

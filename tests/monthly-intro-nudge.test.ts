@@ -194,18 +194,37 @@ describe("isMonthlyIntroNudgeCandidate", () => {
 });
 
 describe("shouldRetireNudgeCandidate", () => {
-  it("retires renewed and enterprise rows, but not paused first-cycle ones", () => {
+  it("retires rows that can never become eligible", () => {
+    expect(shouldRetireNudgeCandidate(candidate({ tier: "enterprise" }))).toBe(true);
+    expect(shouldRetireNudgeCandidate(candidate({ billing_paused: true }))).toBe(false);
+  });
+
+  /**
+   * Retiring writes monthly_intro_nudge_sent_at, which is permanent and
+   * irreversible: the row leaves the partial index and that tenant can never
+   * be nudged again, even though nothing was sent.
+   *
+   * A period that merely looks renewed is not a permanent state. Moving a
+   * tenant's billing date (the admin comp lever) re-anchors
+   * stripe_current_period_start to the change, so a first-cycle tenant who
+   * gets comped reads as "renewed" and was being silently stamped. They then
+   * hit their real renewal with no warning that the intro price ended.
+   *
+   * Not sending is already handled by the send gate, which checks
+   * isFirstBillingCycle independently. Retiring is only index hygiene, and
+   * the candidate query is bounded (monthly, active, unsent, created within
+   * the max age, period end inside the scan window), so declining to retire
+   * costs a slightly larger batch and nothing else.
+   */
+  it("does not permanently stamp a row whose period merely looks renewed", () => {
     expect(
       shouldRetireNudgeCandidate(
         candidate({
           created_at: "2026-01-01T00:00:00.000Z",
           stripe_current_period_start: PERIOD_START
-        }),
-        NOW
+        })
       )
-    ).toBe(true);
-    expect(shouldRetireNudgeCandidate(candidate({ tier: "enterprise" }), NOW)).toBe(true);
-    expect(shouldRetireNudgeCandidate(candidate({ billing_paused: true }), NOW)).toBe(false);
+    ).toBe(false);
   });
 });
 

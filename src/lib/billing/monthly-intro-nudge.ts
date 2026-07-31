@@ -100,15 +100,26 @@ export function isFirstBillingCycle(
  * Temporary states (paused, cancel-at-period-end, not-yet-in-window) stay
  * unstamped so a later pass can still send.
  */
-export function shouldRetireNudgeCandidate(
-  row: MonthlyIntroNudgeCandidate,
-  now: Date
-): boolean {
-  if (row.tier !== "starter" && row.tier !== "standard") return true;
-  if (!isFirstBillingCycle(row.created_at, row.stripe_current_period_start, now.getTime())) {
-    return true;
-  }
-  return false;
+export function shouldRetireNudgeCandidate(row: MonthlyIntroNudgeCandidate): boolean {
+  // Tier is the only PERMANENT ineligibility: an enterprise row has no intro
+  // price to warn about and never will.
+  //
+  // Deliberately NOT retiring on isFirstBillingCycle. Retiring stamps
+  // monthly_intro_nudge_sent_at, which is irreversible: the row leaves the
+  // partial index and that tenant can never be nudged, even though nothing
+  // was sent. And "looks renewed" is not permanent: moving a tenant's billing
+  // date (the admin comp lever) re-anchors stripe_current_period_start to the
+  // change, so a first-cycle tenant who gets comped read as renewed and was
+  // silently stamped, then hit their real renewal with no warning that the
+  // intro price had ended.
+  //
+  // Not SENDING to those rows is already handled independently by
+  // isMonthlyIntroNudgeCandidate, which runs the same first-cycle check. This
+  // function is only index hygiene, and loadCandidates is bounded (monthly,
+  // active, unsent, created within the max age, period end inside the scan
+  // window), so declining to retire costs a slightly larger batch, nothing
+  // more.
+  return row.tier !== "starter" && row.tier !== "standard";
 }
 
 /**
@@ -221,7 +232,7 @@ export async function sweepMonthlyIntroNudges(
   for (const row of rows) {
     try {
       if (!isMonthlyIntroNudgeCandidate(row, now)) {
-        if (shouldRetireNudgeCandidate(row, now)) {
+        if (shouldRetireNudgeCandidate(row)) {
           // Drop renewed / non-intro tiers from the partial index so they
           // cannot starve first-month rows in later passes.
           await claimMonthlyIntroNudge(db, row.id, now);

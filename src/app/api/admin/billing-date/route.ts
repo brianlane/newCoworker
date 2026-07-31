@@ -65,7 +65,14 @@ export async function POST(request: Request) {
       );
     }
 
-    const params = buildNextBillingDateParams(body.nextBillingAt, new Date());
+    // Pass the paid-through date so the move can only ever push the charge
+    // out (comp), never pull it in. Pulling it in collapses paid time with no
+    // proration credit.
+    const params = buildNextBillingDateParams(
+      body.nextBillingAt,
+      new Date(),
+      subscription.stripe_current_period_end
+    );
     if (!params.ok) return errorResponse("VALIDATION_ERROR", params.reason);
 
     let updated;

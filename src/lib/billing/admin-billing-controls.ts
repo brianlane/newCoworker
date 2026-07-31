@@ -33,7 +33,8 @@ export const MAX_HORIZON_MS = 2 * 365 * 24 * 60 * 60 * 1000;
 export type BillingControlError =
   | "invalid_date"
   | "date_must_be_in_the_future"
-  | "date_too_far_out";
+  | "date_too_far_out"
+  | "date_before_current_period_end";
 
 export type BillingControlResult<T> =
   | { ok: true; value: T }
@@ -95,13 +96,35 @@ export function buildResumeCollectionParams(): ResumeCollectionParams {
   return { pause_collection: null };
 }
 
-/** Move the next charge to `nextBillingAtIso` and re-anchor the cycle there. */
+/**
+ * Move the next charge to `nextBillingAtIso` and re-anchor the cycle there.
+ *
+ * `currentPeriodEndIso` is the paid-through date. Moving the anchor EARLIER
+ * than that collapses the period the tenant already paid for, and because
+ * this is deliberately `proration_behavior: "none"` they get no credit for
+ * the unused days: a monthly tenant who paid $195 on Jul 1 and is moved to
+ * Jul 6 loses 26 paid days and is charged the full renewal on the 6th.
+ *
+ * This tool exists to COMP a tenant (push the date out), which is why the
+ * route documented it as "can extend a cycle but never bill earlier". Stripe
+ * only requires `trial_end > now`, so that promise needs enforcing here.
+ *
+ * An unknown or unparseable period end falls back to the future-only check:
+ * a subscription with no cached period end must stay movable rather than
+ * become unmanageable from admin.
+ */
 export function buildNextBillingDateParams(
   nextBillingAtIso: string,
-  now: Date
+  now: Date,
+  currentPeriodEndIso: string | null | undefined
 ): BillingControlResult<NextBillingDateParams> {
   const trialEnd = toFutureUnixSeconds(nextBillingAtIso, now);
   if (!trialEnd.ok) return trialEnd;
+
+  const periodEnd = currentPeriodEndIso ? Date.parse(currentPeriodEndIso) : NaN;
+  if (Number.isFinite(periodEnd) && new Date(nextBillingAtIso).getTime() < periodEnd) {
+    return { ok: false, reason: "date_before_current_period_end" };
+  }
   return { ok: true, value: { trial_end: trialEnd.value, proration_behavior: "none" } };
 }
 
