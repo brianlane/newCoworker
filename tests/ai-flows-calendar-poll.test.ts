@@ -14,6 +14,9 @@ vi.mock("@/lib/notifications/dispatch", () => ({ dispatchUrgentNotification: vi.
 vi.mock("@/lib/ai-flows/calendly-poll", () => ({
   fetchCalendlyCandidateEvents: vi.fn()
 }));
+vi.mock("@/lib/ai-flows/acuity-poll", () => ({
+  fetchAcuityCandidateEvents: vi.fn()
+}));
 vi.mock("@/lib/ai-flows/vagaro-poll", () => ({
   fetchVagaroCandidateEvents: vi.fn()
 }));
@@ -49,6 +52,7 @@ import { recordSystemLog } from "@/lib/db/system-logs";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { fetchCalendlyCandidateEvents } from "@/lib/ai-flows/calendly-poll";
 import { fetchVagaroCandidateEvents } from "@/lib/ai-flows/vagaro-poll";
+import { fetchAcuityCandidateEvents } from "@/lib/ai-flows/acuity-poll";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 
@@ -502,25 +506,95 @@ describe("pollCalendarTriggers", () => {
     );
   });
 
-  it("skips an Acuity connection QUIETLY, without logging a per-tick failure", async () => {
-    // Acuity resolves as a booking provider but has no poller fetcher yet.
-    // Falling through to the not-connected throw would write a
-    // "calendar_not_connected" failure row every minute, forever, for a
-    // calendar that is plainly connected.
-    vi.mocked(resolveCalendarConnection).mockResolvedValueOnce({
+  it("polls Acuity connections through the dedicated fetcher and enqueues due events", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
       provider: "acuity",
       providerConfigKey: "acuity",
       connectionId: "cx-acuity"
     } as never);
-    const res = await pollCalendarTriggers(dbWith([flowRow("f1", createdTrigger())]));
-    expect(res).toEqual({ flows: 1, businesses: 1, events: 0, enqueued: 0 });
+    vi.mocked(fetchAcuityCandidateEvents).mockResolvedValue({
+      events: [
+        {
+          id: "500",
+          title: "Consult",
+          startIso: isoIn(60),
+          endIso: isoIn(90),
+          attendees: ["Sam <sam@x.co>"],
+          description: "customer phone: +16025550000",
+          calendar: "primary" as const
+        }
+      ],
+      overflowed: false
+    });
+    const res = await pollCalendarTriggers(dbWith([flowRow("f-start", startTrigger(120))]));
+    expect(res).toMatchObject({ flows: 1, businesses: 1, events: 1, enqueued: 1 });
     expect(nangoProxyForBusiness).not.toHaveBeenCalled();
     expect(fetchCalendlyCandidateEvents).not.toHaveBeenCalled();
     expect(fetchVagaroCandidateEvents).not.toHaveBeenCalled();
-    expect(recordSystemLog).not.toHaveBeenCalledWith(
-      expect.objectContaining({ event: "ai_flow_calendar_poll_failed" })
+
+    // Windows derive from the flow group, exactly like the other fetchers.
+    const args = vi.mocked(fetchAcuityCandidateEvents).mock.calls[0][0];
+    expect(args.windows).toEqual({
+      createdScan: false,
+      startHorizonMinutes: 120 + CALENDAR_START_HORIZON_BUFFER_MINUTES,
+      endBackMinutes: null,
+      canceledScan: false
+    });
+  });
+
+  it("derives the Acuity end-mode and canceled windows from the flow group", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "acuity",
+      providerConfigKey: "acuity",
+      connectionId: "cx-acuity"
+    } as never);
+    vi.mocked(fetchAcuityCandidateEvents).mockResolvedValue({ events: [], overflowed: false });
+    await pollCalendarTriggers(
+      dbWith([
+        flowRow("f-end", endTrigger(30)),
+        flowRow("f-cancel", { channel: "calendar", on: "event_canceled", conditions: [] })
+      ])
+    );
+    const args = vi.mocked(fetchAcuityCandidateEvents).mock.calls[0][0];
+    expect(args.windows).toMatchObject({
+      startHorizonMinutes: null,
+      endBackMinutes: 30 + CALENDAR_END_LOOKBACK_MINUTES,
+      canceledScan: true
+    });
+    // The due filter is the poller's own logic, handed to the fetcher.
+    expect(typeof args.dueFilter).toBe("function");
+    expect(args.dueFilter({ id: "x", title: "t", calendar: "primary" } as never)).toBe(false);
+  });
+
+  it("runs no Acuity fetch when every flow watches only the shared calendar", async () => {
+    // Acuity has no shared-calendar concept (Vagaro/Calendly parity), so a
+    // shared-only flow group quietly sees nothing rather than paying for a
+    // listing against a per-IP rate limit.
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "acuity",
+      providerConfigKey: "acuity",
+      connectionId: "cx-acuity"
+    } as never);
+    const res = await pollCalendarTriggers(
+      dbWith([flowRow("f-shared", startTrigger(120, { calendar: "shared" }))])
+    );
+    expect(vi.mocked(fetchAcuityCandidateEvents)).not.toHaveBeenCalled();
+    expect(res).toMatchObject({ events: 0, enqueued: 0 });
+  });
+
+  it("logs an overflow when the Acuity listing hits its cap", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue({
+      provider: "acuity",
+      providerConfigKey: "acuity",
+      connectionId: "cx-acuity"
+    } as never);
+    vi.mocked(fetchAcuityCandidateEvents).mockResolvedValue({ events: [], overflowed: true });
+    await pollCalendarTriggers(dbWith([flowRow("f-start", startTrigger(120))]));
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({ event: "ai_flow_calendar_poll_overflow" })
     );
   });
+
 
   it("polls Vagaro connections through the dedicated fetcher and enqueues due events", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue({

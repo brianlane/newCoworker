@@ -11,6 +11,8 @@
  * below; Calendly connections poll through the dedicated fetcher in
  * calendly-poll.ts (scheduled events + invitee enrichment — Calendly-only
  * tenants like KYP Ads previously had NO working calendar triggers), and
+ * Acuity connections through acuity-poll.ts (appointments listing plus an
+ * observation shadow, since Acuity has no last-modified field), and
  * Vagaro connections through vagaro-poll.ts (appointments listing; the
  * Vagaro webhook receiver also fires created/canceled in real time with
  * the same dedupe keys, so poll/webhook double-observation is a no-op).
@@ -46,6 +48,7 @@ import { getSharedCalendar } from "@/lib/calendar-tools/shared-calendar";
 import { enqueueAiFlowRun } from "@/lib/ai-flows/db";
 import { fetchCalendlyCandidateEvents } from "@/lib/ai-flows/calendly-poll";
 import { fetchVagaroCandidateEvents } from "@/lib/ai-flows/vagaro-poll";
+import { fetchAcuityCandidateEvents } from "@/lib/ai-flows/acuity-poll";
 import {
   calendarTriggerScope,
   evaluateTriggerConditions,
@@ -998,20 +1001,14 @@ export async function pollCalendarTriggers(
     result.businesses += 1;
     try {
       const conn = await resolveCalendarConnection(businessId);
-      // Acuity resolves as a booking provider as of this change, but its
-      // poller fetcher lands in the follow-up. Skip QUIETLY rather than
-      // falling through to the not-connected throw below: that would write a
-      // "calendar_not_connected" failure row on every tick, once a minute,
-      // forever, for a calendar that is plainly connected. Replace this with
-      // the real fetch branch when the Acuity poller lands.
-      if (conn?.provider === "acuity") continue;
       // CalDAV connections have no pollable calendar — not connected for
-      // triggers. Calendly and Vagaro ARE pollable (dedicated fetchers
-      // below); Google/Microsoft use the Nango fetchers.
+      // triggers. Calendly, Vagaro and Acuity ARE pollable (dedicated
+      // fetchers below); Google/Microsoft use the Nango fetchers.
       if (
         !conn ||
         (conn.provider !== "calendly" &&
           conn.provider !== "vagaro" &&
+          conn.provider !== "acuity" &&
           !isWorkspaceCalendarProvider(conn.provider))
       ) {
         throw new Error("calendar_not_connected");
@@ -1101,6 +1098,50 @@ export async function pollCalendarTriggers(
               event: "ai_flow_calendar_poll_overflow",
               message:
                 "Vagaro poll hit a listing cap this tick; remainder deferred to later polls",
+              payload: { calendar: "primary", events_read: fetched.events.length }
+            });
+          }
+          eventsBySource.set("primary", fetched.events);
+          result.events += fetched.events.length;
+        }
+      } else if (conn.provider === "acuity") {
+        // Acuity branch: one "primary" source (no shared-calendar concept,
+        // Vagaro parity). The fetcher also diffs against our own observation
+        // shadow, because Acuity exposes no last-modified field for the
+        // event_canceled window to gate on.
+        const primaryFlows = group.filter((f) => f.sources.includes("primary"));
+        if (primaryFlows.length > 0) {
+          const leads = primaryFlows
+            .filter((f) => f.on === "event_start")
+            .map((f) => f.leadMinutes);
+          const follows = primaryFlows
+            .filter((f) => f.on === "event_end")
+            .map((f) => f.followMinutes);
+          const fetched = await fetchAcuityCandidateEvents({
+            businessId,
+            nowMs,
+            windows: {
+              createdScan: primaryFlows.some((f) => f.on === "event_created"),
+              startHorizonMinutes:
+                leads.length > 0
+                  ? Math.max(...leads) + CALENDAR_START_HORIZON_BUFFER_MINUTES
+                  : null,
+              endBackMinutes:
+                follows.length > 0
+                  ? Math.max(...follows) + CALENDAR_END_LOOKBACK_MINUTES
+                  : null,
+              canceledScan: primaryFlows.some((f) => f.on === "event_canceled")
+            },
+            dueFilter: (ev) => primaryFlows.some((f) => flowDueForEvent(f, ev, nowMs))
+          });
+          if (fetched.overflowed) {
+            await recordSystemLog({
+              businessId,
+              source: "aiflow",
+              level: "warn",
+              event: "ai_flow_calendar_poll_overflow",
+              message:
+                "Acuity poll hit a listing cap this tick; remainder deferred to later polls",
               payload: { calendar: "primary", events_read: fetched.events.length }
             });
           }
