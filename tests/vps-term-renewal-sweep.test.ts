@@ -485,6 +485,29 @@ describe("runTermRenewalSweep", () => {
     expect(deps.releaseVpsMigrationLock).toHaveBeenCalledWith(BIZ);
   });
 
+  // The pooled row's expires_at means paid-through, so it must follow
+  // paidThroughFromBillingSub (expires_at first). nextBillingTimestamp has the
+  // opposite precedence, and using it would record a LATER date than the box
+  // actually has, weakening the 72h runway floor this stamping feeds.
+  it("pools with the paid-through, not the next-billing date, when they differ", async () => {
+    const deps = makeDeps({
+      listBillingSubscriptions: vi.fn(async () => [
+        {
+          id: "hbs-old",
+          status: "active",
+          renewal_price: 5000,
+          next_billing_at: "2026-07-23T12:00:00.000Z",
+          expires_at: "2026-07-21T12:00:00.000Z"
+        }
+      ])
+    });
+    const result = await runTermRenewalSweep(deps, { now: NOW });
+    expect(result.migrated).toBe(1);
+    expect(deps.releaseVpsToPool).toHaveBeenCalledWith(
+      expect.objectContaining({ expiresAt: "2026-07-21T12:00:00.000Z" })
+    );
+  });
+
   it("backup failure leaves the old box renewing", async () => {
     const deps = makeDeps({
       backupBusinessData: vi.fn(async () => {
