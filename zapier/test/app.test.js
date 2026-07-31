@@ -50,7 +50,9 @@ test("samples carry the dispatcher payload envelope", () => {
 });
 
 test("send_sms requires to + text", () => {
-  const fields = app.creates.send_sms.operation.inputFields;
+  const operation = app.creates.send_sms.operation;
+  const fields = operation.inputFields;
+  assert.equal(operation.cleanInputData, false);
   assert.deepEqual(
     fields.map((f) => f.key),
     ["to", "text"]
