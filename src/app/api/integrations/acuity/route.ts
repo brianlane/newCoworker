@@ -193,26 +193,44 @@ export async function POST(request: Request) {
       // credential, so it gets its own guard: letting a failed timezone
       // write or row reload fall into the catch below would report
       // "Acuity rejected your credentials" about a key that just worked.
+      // Each post-verification step gets its OWN guard. Sharing one would
+      // mean a failure in the first silently skipping the rest while the
+      // response still reported verified: true, so an owner could connect
+      // successfully and never learn their webhooks were never registered.
       let refreshed = row;
-      try {
-        // Cache the account timezone so the booking hot path never has to
-        // ask Acuity what zone this merchant is in.
-        if (account.timezone) {
+      // Cache the account timezone so the booking hot path never has to ask
+      // Acuity what zone this merchant is in.
+      if (account.timezone) {
+        try {
           await setAcuityBookingDefaults(body.businessId, {
             defaultCalendarTimezone: account.timezone
           });
+        } catch (err) {
+          logger.warn("acuity connect: caching the account timezone failed", {
+            businessId: body.businessId,
+            error: err instanceof Error ? err.message : String(err)
+          });
         }
-        // Register the webhooks now that we know the key works. Best-effort
-        // by contract: the poller keeps triggers correct regardless, and the
-        // card explains a cap_reached / unsupported account rather than
-        // failing the connect over it.
+      }
+      // Register the webhooks now that we know the key works. Best-effort by
+      // contract: the poller keeps triggers correct regardless, and the card
+      // explains a cap_reached / unsupported account rather than failing the
+      // connect over it.
+      try {
         await ensureAcuityWebhooks(
           conn,
           acuityWebhookCallbackUrl(appOrigin(request), body.businessId, conn.webhook_verification_token)
         );
+      } catch (err) {
+        logger.warn("acuity connect: webhook registration failed", {
+          businessId: body.businessId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+      try {
         refreshed = (await getPublicAcuityConnection(body.businessId)) ?? row;
       } catch (err) {
-        logger.warn("acuity connect: post-verification bookkeeping failed", {
+        logger.warn("acuity connect: re-reading the connection failed", {
           businessId: body.businessId,
           error: err instanceof Error ? err.message : String(err)
         });

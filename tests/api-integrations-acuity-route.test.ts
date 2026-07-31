@@ -245,6 +245,22 @@ describe("POST", () => {
     expect(res.data).toMatchObject({ verified: false, verifyError: "request_failed" });
   });
 
+  it("still registers webhooks when caching the timezone fails", async () => {
+    // One shared try would let the first failure silently skip the rest
+    // while still reporting verified: true, so an owner could connect
+    // successfully and never learn their webhooks were never registered.
+    vi.mocked(setAcuityBookingDefaults).mockRejectedValue(new Error("db down"));
+    const res = await json(await POST(req({ businessId: BIZ, userId: "12345", apiKey: "k" })));
+    expect(res.data).toMatchObject({ verified: true });
+    expect(vi.mocked(ensureAcuityWebhooks)).toHaveBeenCalled();
+  });
+
+  it("stays verified when webhook registration itself throws", async () => {
+    vi.mocked(ensureAcuityWebhooks).mockRejectedValue(new Error("acuity down"));
+    const res = await json(await POST(req({ businessId: BIZ, userId: "12345", apiKey: "k" })));
+    expect(res.data).toMatchObject({ verified: true });
+  });
+
   it("stays verified when post-verification bookkeeping fails", async () => {
     // The key already authenticated. Reporting "Acuity rejected the
     // credentials" because a follow-up write failed would send the owner
