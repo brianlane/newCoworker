@@ -359,6 +359,8 @@ export type StepAction =
       attachDocumentRef?: string;
       /** Send via the owner's connected mailbox instead of platform Resend. */
       fromConnectionId?: string;
+      /** Templated recipient resolved to nothing usable → skip, not fail. */
+      skipReason?: string;
     }
   | {
       kind: "email_organize";
@@ -661,6 +663,28 @@ const MAX_CC_BCC_RECIPIENTS = 10;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
+ * The tokens a field extraction produces when the lead simply has no value:
+ * the prompts say "answer 'none'", and models reach for the other four too.
+ * Kept in one place because every recipient-taking step has to treat them the
+ * same way, and a step that missed one used to fail whole runs.
+ */
+const EMPTYISH_RECIPIENTS = ["none", "n/a", "na", "null", "unknown"];
+
+/**
+ * True when a rendered recipient carries no usable value: blank, or one of the
+ * extraction sentinels above.
+ *
+ * Callers pair this with a `{{` check on the RAW template. A recipient that
+ * came from a template var can legitimately be missing (the lead had no phone
+ * or email, or the scrub cleared a bogus one), which is a lead-data gap and
+ * plans a SKIP. A LITERAL empty recipient is a flow-config bug and stays a
+ * hard plan failure.
+ */
+function isEmptyishRecipient(rendered: string): boolean {
+  return !rendered || EMPTYISH_RECIPIENTS.includes(rendered.toLowerCase());
+}
+
+/**
  * Render each cc/bcc template, then normalize the results the same way every
  * other send path does: split comma/semicolon/whitespace lists, validate each
  * address, lowercase, de-dup, and cap. Keeps the platform (Resend) path in
@@ -938,13 +962,12 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       }
       const toRaw = renderTemplate(step.to ?? "", scope).trim();
       // A recipient that came from a TEMPLATE VAR (extraction output) can
-      // legitimately be missing — the lead had no phone, or the scrub cleared
-      // a bogus one. That's a lead-data gap, not a flow-config bug: plan a
+      // legitimately be missing: the lead had no phone, or the scrub cleared
+      // a bogus one. That's a lead-data gap, not a flow-config bug, so plan a
       // SKIP (the worker notes it in actions_taken) instead of failing the
       // whole run. A LITERAL bad recipient stays a hard plan failure.
       const fromTemplateVar = (step.to ?? "").includes("{{");
-      const emptyish =
-        !toRaw || ["none", "n/a", "na", "null", "unknown"].includes(toRaw.toLowerCase());
+      const emptyish = isEmptyishRecipient(toRaw);
       if (emptyish) {
         if (fromTemplateVar) {
           return {
@@ -1033,8 +1056,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       }
       const waToRaw = renderTemplate(step.to ?? "", scope).trim();
       const waFromTemplateVar = (step.to ?? "").includes("{{");
-      const waEmptyish =
-        !waToRaw || ["none", "n/a", "na", "null", "unknown"].includes(waToRaw.toLowerCase());
+      const waEmptyish = isEmptyishRecipient(waToRaw);
       if (waEmptyish) {
         if (waFromTemplateVar) {
           return {
@@ -1095,8 +1117,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       // resolved to nothing usable plans a SKIP; a literal bad recipient is a
       // hard config failure.
       const fromTemplateVar = step.to.includes("{{");
-      const emptyish =
-        !toRaw || ["none", "n/a", "na", "null", "unknown"].includes(toRaw.toLowerCase());
+      const emptyish = isEmptyishRecipient(toRaw);
       const base = {
         kind: "share_document" as const,
         documentId: step.documentId,
@@ -1189,7 +1210,32 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       const to = renderTemplate(step.to, scope).trim();
       const subject = renderTemplate(step.subject, scope).trim();
       const body = renderTemplate(step.body, scope).trim();
-      if (!to) return { ok: false, error: "send_email: recipient is empty after templating" };
+      // Same lead-data-gap semantics as send_sms / send_whatsapp /
+      // share_document: a TEMPLATED recipient that resolved to nothing usable
+      // plans a SKIP, a literal one is a hard config failure. This step was the
+      // last recipient-taking holdout, and the gap was not theoretical: a
+      // HomeLight referral whose portal had not yet released the client's email
+      // left {{vars.lead_email}} empty and killed the whole run 11 minutes in,
+      // taking the two late-contact retry rungs and the owner wrap-up with it.
+      //
+      // Checked BEFORE subject/body on purpose. If we are not sending, a blank
+      // subject on the mail we are skipping must not fail the run either.
+      if (isEmptyishRecipient(to)) {
+        if (step.to.includes("{{")) {
+          return {
+            ok: true,
+            action: {
+              kind: "send_email",
+              to: "",
+              subject,
+              body,
+              attachScreenshot: step.attachScreenshot === true,
+              skipReason: "no_recipient_email"
+            }
+          };
+        }
+        return { ok: false, error: "send_email: recipient is empty after templating" };
+      }
       if (!subject) return { ok: false, error: "send_email: subject is empty after templating" };
       if (!body) return { ok: false, error: "send_email: body is empty after templating" };
       // Render + normalize cc/bcc (validate, split lists, lowercase, de-dup,
