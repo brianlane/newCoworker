@@ -33,6 +33,7 @@ import {
   type RunProvisioningJobDeps
 } from "@/lib/provisioning/jobs";
 import { getLatestProvisioningStatus } from "@/lib/provisioning/progress";
+import { paidThroughFromBillingSub } from "@/lib/db/vps-inventory";
 import { tryRecoverDeployCompleteNewBox } from "@/lib/vps/migration-cutover-recovery";
 import { sshExec } from "@/lib/hostinger/ssh";
 
@@ -149,6 +150,8 @@ export type TermRenewalSweepDeps = {
     vmId: number;
     plan: VpsSize;
     hostingerBillingSubscriptionId?: string | null;
+    /** Hostinger paid-through, so the pool knows this box's runway immediately. */
+    expiresAt?: string | null;
     notes?: string | null;
   }) => Promise<void>;
   markVpsNeverRenew: (vmId: number) => Promise<void>;
@@ -458,6 +461,7 @@ export async function runTermRenewalSweep(
           nextBillingAt,
           renewalCents,
           firstPeriodCents,
+          paidThroughAt: paidThroughFromBillingSub(billingSub),
           budgetStartedAtMs: sweepStartedAtMs
         },
         deps
@@ -531,6 +535,15 @@ async function migrateTenantTermRenewal(
     nextBillingAt: string;
     renewalCents: number;
     firstPeriodCents: number;
+    /**
+     * Hostinger paid-through for the OLD box, recorded on the pooled row.
+     * Deliberately not nextBillingAt: that helper prefers next_billing_at,
+     * while vps_inventory.expires_at means paid-through and
+     * paidThroughFromBillingSub prefers expires_at. Using the wrong one can
+     * record a later date than the box actually has and weaken the runway
+     * floor this stamping exists to feed.
+     */
+    paidThroughAt: string | null;
     /** Date.now() when the sweep route began, for the deploy budget. */
     budgetStartedAtMs: number;
   },
@@ -864,6 +877,11 @@ async function migrateTenantTermRenewal(
       vmId: oldVmId,
       plan: releasedPlan,
       hostingerBillingSubscriptionId: oldBillingId,
+      // Stamp the paid-through now rather than waiting for the daily
+      // billing-posture cron to backfill it. claimAvailableVps treats a null
+      // expiry as "unknown runway" and will hand the box to a new signup, so
+      // a box pooled and claimed the same day would skip the 72h runway floor.
+      expiresAt: input.paidThroughAt,
       notes: `term-renewal sweep of business ${businessId}; auto-renew off, never_renew`
     });
     pooled = true;
