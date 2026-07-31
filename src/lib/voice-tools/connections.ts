@@ -165,6 +165,42 @@ export async function resolveCalendarConnection(
   return firstMatch(rows, FALLBACK_CALENDAR_KEYS);
 }
 
+/**
+ * A workspace calendar we can CREATE calendars and events on. Always Google
+ * or Microsoft: no other provider exposes a calendar-create API.
+ */
+export type ResolvedCalendarHost = ResolvedVoiceConnection & {
+  provider: "google" | "microsoft";
+};
+
+/**
+ * Where the shared "NewCoworker" calendar should live, resolved INDEPENDENTLY
+ * of which provider owns the business's bookings.
+ *
+ * This is deliberately not `resolveCalendarConnection`. That function answers
+ * "who takes the booking?", and a dedicated scheduling platform wins it — so
+ * a merchant who books on Vagaro but runs the rest of their business on
+ * Google Workspace resolved to Vagaro, `isWorkspaceCalendarProvider` said no,
+ * and they silently got NO team calendar at all. That is backwards: the
+ * calendar is a place to SHOW the team what is booked, and a Google Workspace
+ * account is a perfectly good place to show it no matter who took the
+ * booking.
+ *
+ * So this looks only at `workspace_oauth_connections`, preferring a dedicated
+ * calendar connection over the broad all-in-one one, exactly as calendar
+ * resolution does. Null when the business has neither, which is the honest
+ * answer: Vagaro, Acuity and Calendly have no calendar-create API, and
+ * CalDAV's MKCALENDAR is not dependable (iCloud refuses it).
+ */
+export async function resolveSharedCalendarHost(
+  businessId: string
+): Promise<ResolvedCalendarHost | null> {
+  const rows = await listWorkspaceOAuthConnections(businessId);
+  const host = firstMatch(rows, NATIVE_CALENDAR_KEYS) ?? firstMatch(rows, FALLBACK_CALENDAR_KEYS);
+  // Safe narrow: every workspace-row key is Google or Microsoft (firstMatch).
+  return host as ResolvedCalendarHost | null;
+}
+
 /** A mailbox connection is always Google or Microsoft — never Calendly. */
 export type ResolvedEmailConnection = ResolvedVoiceConnection & {
   provider: "google" | "microsoft";
