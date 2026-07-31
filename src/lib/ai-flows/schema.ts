@@ -1191,6 +1191,20 @@ const nonBranchStepMembers = [
     /** Give up after this long and continue with "no_call". Default 60. */
     timeoutMinutes: z.number().int().min(1).max(1440).optional(),
     /**
+     * How long to wait for the call to START, when none is live yet.
+     *
+     * Default 0, which is the historical behavior: the step only ever attached
+     * to a call that was ALREADY live at the instant it ran, so with no session
+     * it returned "no_call" in zero seconds and `timeoutMinutes` (which is the
+     * ceiling on waiting for a live call to END) never came into play.
+     *
+     * Keep this SHORT. Every minute here is a minute before the steps after it
+     * run, so on a lead flow it delays telling the claimer they own the lead. A
+     * partner that live-transfers does so within a minute or two of the alert
+     * or not at all.
+     */
+    awaitStartMinutes: z.number().int().min(0).max(60).optional(),
+    /**
      * Outcome var, always one of exactly two values: "answered" or "no_call"
      * (a timeout counts as no_call). Default "call_outcome".
      */

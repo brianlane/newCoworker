@@ -1278,6 +1278,12 @@ export type FlowStep =
       withinMinutes?: number;
       /** Give up after this long and continue with "no_call". Default 60. */
       timeoutMinutes?: number;
+      /**
+       * How long to wait for the call to START when none is live yet. Default
+       * 0 (the historical behavior: attach to a live call or return "no_call"
+       * immediately). Keep it short, it delays every step after this one.
+       */
+      awaitStartMinutes?: number;
       /** Outcome var: answered / no_call. Default "call_outcome". */
       saveAs?: string;
       /** Namespace for the captured fields. Default "call_". */

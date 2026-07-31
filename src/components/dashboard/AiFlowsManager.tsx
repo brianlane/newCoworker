@@ -5875,6 +5875,17 @@ function StepFields({
           help="A long call should never strand the follow-up. When this lapses the workflow carries on anyway."
         />
         <Field
+          label="Wait this long for a call to even start (minutes, 0 = don't wait)"
+          value={String(step.awaitStartMinutes ?? 0)}
+          onChange={(v) => {
+            const n = Number(v);
+            patchStep(index, {
+              awaitStartMinutes: Number.isFinite(n) && n > 0 ? Math.round(n) : undefined
+            });
+          }}
+          help="Leave at 0 and this step only attaches to a call already in progress. Set it and the workflow checks once a minute for one to begin. Keep it small (2 to 5): everything after this step waits too, so a big number delays telling your team about the lead."
+        />
+        <Field
           label="Save the outcome as"
           value={step.saveAs ?? "call_outcome"}
           onChange={(v) => patchStep(index, { saveAs: v.trim() ? v.trim() : undefined })}

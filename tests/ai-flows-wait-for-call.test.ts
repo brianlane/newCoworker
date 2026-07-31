@@ -152,7 +152,11 @@ describe("wait_for_call: planning", () => {
       saveAs: "call_outcome",
       capturePrefix: "call_",
       backfill: [],
-      resumed: false
+      resumed: false,
+      // 0 = the historical behavior: attach to a call that is already live, or
+      // return "no_call" immediately. Waiting for one to START is opt-in
+      // because every minute of it delays every step after this one.
+      awaitStartMinutes: 0
     });
   });
 
@@ -171,6 +175,19 @@ describe("wait_for_call: planning", () => {
   it("clamps an out-of-range window and timeout rather than refusing", () => {
     const p = plan({ withinMinutes: 9999, timeoutMinutes: 99999 });
     expect(p.ok && p.action).toMatchObject({ withinMinutes: 120, timeoutMinutes: 1440 });
+  });
+
+  it("carries awaitStartMinutes through, clamped to 0..60", () => {
+    for (const [given, want] of [
+      [3, 3],
+      [0, 0],
+      [-5, 0],
+      [9999, 60],
+      [2.4, 2]
+    ] as Array<[number, number]>) {
+      const p = plan({ awaitStartMinutes: given });
+      expect(p.ok && p.action).toMatchObject({ awaitStartMinutes: want });
+    }
   });
 
   it("reports the return trip so the worker hydrates instead of parking twice", () => {

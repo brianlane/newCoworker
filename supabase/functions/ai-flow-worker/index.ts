@@ -6558,7 +6558,37 @@ async function waitForCallStep(
     }
   }
 
-  if (!sess) return finish("no_call", { waited: false, reason: "no_session" }, null);
+  if (!sess) {
+    // No call on this line at all. Historically this gave up instantly, which
+    // made `timeoutMinutes` dead config: it is the ceiling on waiting for a
+    // LIVE call to end, and nothing ever waited for one to begin. With
+    // `awaitStartMinutes` set, poll for one instead.
+    //
+    // A DEFER, not a park: there is no call_control_id to link yet, so
+    // voice_link_call_run has nothing to attach to and resume_overdue_call_waits
+    // would never fire. The defer path needs no new plumbing (the worker ticks
+    // every minute) and hands the attempt back, so polling never eats the
+    // MAX_ATTEMPTS budget. Same shape as the captured-details settle beat below.
+    if (action.awaitStartMinutes > 0) {
+      const deadlineVar = `${action.marker}_await_until`;
+      const stored = scope.vars[deadlineVar];
+      const parsed = typeof stored === "string" ? Number(stored) : NaN;
+      const deadline = Number.isFinite(parsed)
+        ? parsed
+        : Date.now() + action.awaitStartMinutes * 60_000;
+      if (!Number.isFinite(parsed)) scope.vars[deadlineVar] = String(deadline);
+      if (Date.now() < deadline) {
+        return {
+          kind: "defer",
+          // Never overshoot the deadline: the last hop lands exactly on it.
+          resumeAtMs: Math.min(Date.now() + 60_000, deadline),
+          reason: "waiting for the AI's call to start"
+        };
+      }
+      return finish("no_call", { waited: true, reason: "no_session_timeout" }, null);
+    }
+    return finish("no_call", { waited: false, reason: "no_session" }, null);
+  }
 
   // The call is over. Its captured fields are written by the bridge during
   // teardown, so a call that ended moments ago may not have them yet — give it

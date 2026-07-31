@@ -432,6 +432,8 @@ export type StepAction =
       fromE164: string;
       withinMinutes: number;
       timeoutMinutes: number;
+      /** Poll this long for a call to START before giving up. 0 = don't wait. */
+      awaitStartMinutes: number;
       saveAs: string;
       marker: string;
       capturePrefix: string;
@@ -1817,6 +1819,9 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           fromE164: step.fromE164,
           withinMinutes: Math.min(120, Math.max(1, Math.round(step.withinMinutes ?? 30))),
           timeoutMinutes: Math.min(1440, Math.max(1, Math.round(step.timeoutMinutes ?? 60))),
+          // Default 0 keeps the historical "attach or give up instantly"
+          // behavior for every flow that does not opt in.
+          awaitStartMinutes: Math.min(60, Math.max(0, Math.round(step.awaitStartMinutes ?? 0))),
           saveAs: step.saveAs ?? "call_outcome",
           marker,
           capturePrefix: step.capturePrefix ?? "call_",
