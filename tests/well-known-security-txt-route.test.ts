@@ -1,7 +1,7 @@
 /**
  * GET /.well-known/security.txt — RFC 9116 vulnerability disclosure pointer.
  */
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { GET } from "@/app/.well-known/security.txt/route";
 
@@ -10,20 +10,29 @@ async function body(): Promise<string> {
 }
 
 describe("GET /.well-known/security.txt", () => {
+  // `tests/setup-env.ts` leaves CONTACT_EMAIL alone, so a developer who has it
+  // set in .env would otherwise fail the default-address assertion below even
+  // though the route is behaving correctly. Control it explicitly instead.
+  let previousContactEmail: string | undefined;
+
+  beforeEach(() => {
+    previousContactEmail = process.env.CONTACT_EMAIL;
+    delete process.env.CONTACT_EMAIL;
+  });
+
+  afterEach(() => {
+    if (previousContactEmail === undefined) delete process.env.CONTACT_EMAIL;
+    else process.env.CONTACT_EMAIL = previousContactEmail;
+  });
+
   it("serves plain text", async () => {
     const res = GET();
     expect(res.headers.get("content-type")).toBe("text/plain; charset=utf-8");
   });
 
   it("honours CONTACT_EMAIL, so it cannot disagree with the policy page", async () => {
-    const previous = process.env.CONTACT_EMAIL;
     process.env.CONTACT_EMAIL = "security@example.test";
-    try {
-      expect(await body()).toContain("Contact: mailto:security@example.test");
-    } finally {
-      if (previous === undefined) delete process.env.CONTACT_EMAIL;
-      else process.env.CONTACT_EMAIL = previous;
-    }
+    expect(await body()).toContain("Contact: mailto:security@example.test");
   });
 
   it("carries the required RFC 9116 fields", async () => {
