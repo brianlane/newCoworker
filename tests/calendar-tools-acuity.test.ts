@@ -801,7 +801,7 @@ describe("listAcuityUpcomingForAttendee", () => {
   it("reports not_connected without a connection", async () => {
     getActiveAcuityConnectionMock.mockResolvedValue(null);
     await expect(
-      listAcuityUpcomingForAttendee(BIZ, { phones: [], email: null })
+      listAcuityUpcomingForAttendee(BIZ, { phones: [], email: "sam@example.org" })
     ).resolves.toEqual({ ok: false, reason: "not_connected" });
   });
 
@@ -838,18 +838,27 @@ describe("listAcuityUpcomingForAttendee", () => {
       { id: "late", startIso: "2026-08-09T17:00:00.000Z", canceled: false, appointmentTypeName: "B" },
       { id: "soon", startIso: "2026-08-05T17:00:00.000Z", canceled: false, appointmentTypeName: "A" }
     ]);
-    const res = await listAcuityUpcomingForAttendee(BIZ, { phones: [], email: null });
+    const res = await listAcuityUpcomingForAttendee(BIZ, {
+      phones: [],
+      email: "sam@example.org"
+    });
     expect((res as { bookings: Array<{ eventId: string }> }).bookings.map((b) => b.eventId)).toEqual(
       ["soon", "late"]
     );
   });
 
-  it("sends no identity filter when the attendee has neither", async () => {
-    listAcuityAppointmentsMock.mockResolvedValue([]);
-    await listAcuityUpcomingForAttendee(BIZ, { phones: [], email: null });
-    const q = listAcuityAppointmentsMock.mock.calls[0][1];
-    expect(q.email).toBeUndefined();
-    expect(q.phone).toBeUndefined();
+  it("returns EMPTY without listing at all when the attendee has no identifiers", async () => {
+    // With no email and no phone there is no server-side filter, so the
+    // listing would be the merchant's entire upcoming book. Feeding that to
+    // the duplicate guard would refuse a real booking with
+    // attendee_already_booked just because the business is busy.
+    listAcuityAppointmentsMock.mockResolvedValue([
+      { id: "someone-else", startIso: "2026-08-05T17:00:00.000Z", canceled: false }
+    ]);
+    await expect(
+      listAcuityUpcomingForAttendee(BIZ, { phones: [], email: null })
+    ).resolves.toEqual({ ok: true, bookings: [] });
+    expect(listAcuityAppointmentsMock).not.toHaveBeenCalled();
   });
 
   it("reports a null eventId when the listing omits an id", async () => {
@@ -857,7 +866,7 @@ describe("listAcuityUpcomingForAttendee", () => {
       { id: "", startIso: "2026-08-05T17:00:00.000Z", canceled: false, appointmentTypeName: null }
     ]);
     await expect(
-      listAcuityUpcomingForAttendee(BIZ, { phones: [], email: null })
+      listAcuityUpcomingForAttendee(BIZ, { phones: [], email: "sam@example.org" })
     ).resolves.toMatchObject({ ok: true, bookings: [{ eventId: null, name: null }] });
   });
 
@@ -866,7 +875,7 @@ describe("listAcuityUpcomingForAttendee", () => {
     const listAppointments = vi.fn().mockResolvedValue([]);
     await listAcuityUpcomingForAttendee(
       BIZ,
-      { phones: [], email: null },
+      { phones: [], email: "sam@example.org" },
       { getConnection: getConnection as never, listAppointments: listAppointments as never }
     );
     expect(getConnection).toHaveBeenCalledWith(BIZ);
@@ -877,7 +886,7 @@ describe("listAcuityUpcomingForAttendee", () => {
   it("falls back to UTC dates when the connection has no calendar timezone", async () => {
     getActiveAcuityConnectionMock.mockResolvedValue(conn({ default_calendar_timezone: null }));
     listAcuityAppointmentsMock.mockResolvedValue([]);
-    await listAcuityUpcomingForAttendee(BIZ, { phones: [], email: null });
+    await listAcuityUpcomingForAttendee(BIZ, { phones: [], email: "sam@example.org" });
     expect(listAcuityAppointmentsMock.mock.calls[0][1]).toMatchObject({
       minDate: "2026-08-04"
     });

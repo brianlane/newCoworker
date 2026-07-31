@@ -131,7 +131,15 @@ describe("acuity adapter", () => {
   it("maps upcoming Acuity appointments into the shared booking shape", async () => {
     const listAcuityUpcoming = vi.fn().mockResolvedValue({
       ok: true,
-      bookings: [{ eventId: "500", startIso: FUTURE, name: "Consult" }]
+      bookings: [
+        {
+          eventId: "500",
+          startIso: FUTURE,
+          name: "Consult",
+          customerEmail: "sam@example.org",
+          customerPhone: null
+        }
+      ]
     });
     const res = await lookupProviderBookingsForAttendee(
       BIZ,
@@ -156,6 +164,40 @@ describe("acuity adapter", () => {
         }
       ]
     });
+  });
+
+  it("drops rows that do not actually belong to this attendee", async () => {
+    // Acuity's own filters narrow the listing, but they are the first line
+    // and not the only one. A row wrongly attributed here does not just show
+    // up in a summary: it makes the duplicate guard REFUSE a real booking
+    // with attendee_already_booked.
+    const listAcuityUpcoming = vi.fn().mockResolvedValue({
+      ok: true,
+      bookings: [
+        {
+          eventId: "mine",
+          startIso: FUTURE,
+          name: "Consult",
+          customerEmail: null,
+          customerPhone: "+1 (555) 123-4567"
+        },
+        {
+          eventId: "someone-else",
+          startIso: FUTURE,
+          name: "Consult",
+          customerEmail: "other@example.org",
+          customerPhone: "+15559999999"
+        }
+      ]
+    });
+    const res = await lookupProviderBookingsForAttendee(
+      BIZ,
+      ACUITY_CONN,
+      { phones: ["15551234567"], email: null },
+      deps({ listAcuityUpcoming } as never)
+    );
+    // Matched country-code-tolerantly on digits, exactly like Vagaro.
+    expect(res).toMatchObject({ ok: true, bookings: [{ eventId: "mine" }] });
   });
 
   it("falls back to the real lookup when no transport is injected", async () => {

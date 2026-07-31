@@ -434,7 +434,20 @@ async function acuityListUpcomingForAttendee(
   if (!res.ok) return { ok: false, reason: res.reason };
   return {
     ok: true,
-    bookings: res.bookings.map(
+    // Acuity's own email/phone filters narrow the listing, but they are the
+    // first line and not the only one: re-verify each row against the
+    // attendee with the same digit-based, country-code-tolerant matcher
+    // Vagaro uses. A booking wrongly attributed here does not just show up
+    // in a summary, it makes the duplicate guard REFUSE a real booking with
+    // attendee_already_booked.
+    bookings: res.bookings
+      .filter((b) =>
+        acuityAppointmentMatchesAttendee(
+          { customerEmail: b.customerEmail, customerPhone: b.customerPhone },
+          ids
+        )
+      )
+      .map(
       (b): UpcomingAttendeeBooking => ({
         provider: "acuity",
         source: "external",
@@ -445,6 +458,14 @@ async function acuityListUpcomingForAttendee(
       })
     )
   };
+}
+
+/** Same shape and matcher as the Vagaro equivalent. */
+export function acuityAppointmentMatchesAttendee(
+  item: { customerEmail?: string | null; customerPhone?: string | null },
+  ids: AttendeeIdentifiers
+): boolean {
+  return vagaroAppointmentMatchesAttendee(item, ids);
 }
 
 export type AttendeeBookingLookup =

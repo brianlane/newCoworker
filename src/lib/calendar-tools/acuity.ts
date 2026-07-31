@@ -584,13 +584,30 @@ export async function listAcuityUpcomingForAttendee(
     listAppointments?: typeof listAcuityAppointments;
   } = {}
 ): Promise<
-  | { ok: true; bookings: Array<{ eventId: string | null; startIso: string; name: string | null }> }
+  | {
+      ok: true;
+      bookings: Array<{
+        eventId: string | null;
+        startIso: string;
+        name: string | null;
+        customerEmail: string | null;
+        customerPhone: string | null;
+      }>;
+    }
   | { ok: false; reason: "not_connected" }
 > {
   const getConnection = deps.getConnection ?? getActiveAcuityConnection;
   const listAppointments = deps.listAppointments ?? listAcuityAppointments;
   const conn = await getConnection(businessId);
   if (!conn) return { ok: false, reason: "not_connected" };
+
+  // No identifiers means no server-side filter, and an unfiltered listing is
+  // the merchant's ENTIRE upcoming book. Handing that to the duplicate guard
+  // would attribute every one of those appointments to this caller and refuse
+  // the booking with attendee_already_booked. An empty list is the honest
+  // answer: the module's contract is that empty means "no duplicate visible",
+  // never "proven none".
+  if (!ids.email && !ids.phones[0]) return { ok: true, bookings: [] };
 
   const nowMs = Date.now();
   const items = await listAppointments(conn, {
@@ -609,7 +626,11 @@ export async function listAcuityUpcomingForAttendee(
     .map((i) => ({
       eventId: i.id || null,
       startIso: i.startIso,
-      name: i.appointmentTypeName ?? null
+      name: i.appointmentTypeName ?? null,
+      // Carried so the caller can re-verify identity against the attendee.
+      // Acuity's own filters are the first line, not the only one.
+      customerEmail: i.customerEmail,
+      customerPhone: i.customerPhone
     }));
   return { ok: true, bookings };
 }
