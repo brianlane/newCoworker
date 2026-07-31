@@ -537,6 +537,13 @@ export function planEnableHostingerAutoRenewOps(ctx: LifecycleContext): Hostinge
     resolveVpsProvider(ctx.vpsProvider)
   );
   if (
+    // Only a still-paying tenant gets their box back. planUndoCancelAtPeriodEnd
+    // checks this before calling in, but the webhook's portal-undo path does
+    // not go through that planner: without this, a
+    // customer.subscription.updated carrying canceled status and a cleared
+    // flag (a failed periodEndReached fallback) would re-enable renewal on a
+    // box we are tearing down.
+    sub.status !== "active" ||
     !hostingerManaged ||
     !sub.hostinger_billing_subscription_id ||
     ctx.vpsNeverRenew === true

@@ -2088,6 +2088,59 @@ describe("stripe webhook route", () => {
     expect(mockExecuteLifecyclePlan).not.toHaveBeenCalled();
   });
 
+  // A failed periodEndReached fallback can deliver a canceled subscription
+  // whose cancel_at_period_end has been cleared. That must not hand the box
+  // back its renewal while the mirror writes status canceled.
+  it("does not re-enable renewal when the subscription is no longer active", async () => {
+    const existing = {
+      id: "local_sub_dead",
+      status: "active",
+      business_id: "biz_dead",
+      stripe_subscription_id: "sub_dead",
+      cancel_at_period_end: true,
+      hostinger_billing_subscription_id: "hbs_dead"
+    };
+    vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue(existing as never);
+    mockLoadLifecycleContext.mockResolvedValue({
+      ok: true,
+      vpsHost: "1.2.3.4",
+      context: {
+        subscription: { ...existing, status: "canceled", cancel_at_period_end: false },
+        ownerEmail: "owner@example.com",
+        ownerAuthUserId: "user-1",
+        profile: null,
+        virtualMachineId: 42,
+        vpsHost: "1.2.3.4",
+        vpsProvider: "hostinger",
+        vpsNeverRenew: false,
+        now: new Date("2026-05-01T00:00:00.000Z")
+      }
+    });
+    vi.mocked(verifyWebhook).mockReturnValue({
+      id: "evt_portal_undo_dead",
+      type: "customer.subscription.updated",
+      data: {
+        object: {
+          id: "sub_dead",
+          status: "canceled",
+          cancel_at_period_end: false,
+          metadata: { businessId: "biz_dead" }
+        }
+      }
+    } as never);
+
+    await POST(
+      new Request("http://localhost:3000/api/webhooks/stripe", {
+        method: "POST",
+        headers: { "stripe-signature": "sig" },
+        body: "{}"
+      })
+    );
+    await Promise.all(afterCallbacks.map((cb) => cb()));
+
+    expect(mockExecuteLifecyclePlan).not.toHaveBeenCalled();
+  });
+
   it("mirrors subscription updates onto the row matching the Stripe subscription id", async () => {
     vi.mocked(getSubscriptionByStripeSubscriptionId).mockResolvedValue({
       id: "old_sub_row",
