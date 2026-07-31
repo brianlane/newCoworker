@@ -110,12 +110,16 @@ export function isValidHostingerHostname(hostname: string): boolean {
  *   preflight and 422s in production, which is exactly the path the
  *   term-renewal sweep buys on.
  * - **Payment method**: the orchestrator never looked at one before charging.
- *   This cannot catch an issuer-side decline (the Jul 8 and Jul 28 402s), but
- *   an expired or suspended card is knowable in advance.
+ *   Specifically the card that will ACTUALLY be charged, which is the account
+ *   default unless the caller passes `payment_method_id` (no production caller
+ *   does). Checking "any card is usable" would pass an expired default sitting
+ *   beside a healthy spare and still 402 on the very path this guards. Cannot
+ *   catch an issuer-side decline (the Jul 8 and Jul 28 402s), but an expired
+ *   or suspended card is knowable in advance.
  */
 export async function assertPurchasePreconditions(
   client: Pick<HostingerClient, "listCatalog" | "listPaymentMethods">,
-  input: { itemId: string; hostname: string }
+  input: { itemId: string; hostname: string; paymentMethodId?: number }
 ): Promise<void> {
   if (!isValidHostingerHostname(input.hostname)) {
     throw new Error(
@@ -134,11 +138,32 @@ export async function assertPurchasePreconditions(
   }
 
   const methods = await client.listPaymentMethods();
-  const usable = methods.some((method) => !method.is_expired && !method.is_suspended);
-  if (!usable) {
+  const charged =
+    input.paymentMethodId !== undefined
+      ? methods.find((m) => m.id === input.paymentMethodId)
+      : methods.find((m) => m.is_default);
+
+  if (!charged) {
+    // Either the explicit id is not on the account, or nothing is flagged
+    // default. Both mean we cannot say which card Hostinger will bill, so fall
+    // back to the weakest useful assertion rather than blocking a purchase we
+    // have no evidence against.
+    const anyUsable = methods.some((m) => !m.is_expired && !m.is_suspended);
+    if (!anyUsable) {
+      throw new Error(
+        "Hostinger purchase precondition: no usable payment method on the account " +
+          `(${methods.length} on file, all expired or suspended)`
+      );
+    }
+    return;
+  }
+
+  if (charged.is_expired || charged.is_suspended) {
+    const which = input.paymentMethodId !== undefined ? `method ${charged.id}` : "the default card";
     throw new Error(
-      "Hostinger purchase precondition: no usable payment method on the account " +
-        `(${methods.length} on file, all expired or suspended)`
+      `Hostinger purchase precondition: ${which} (${charged.name}) is ` +
+        `${charged.is_expired ? "expired" : "suspended"}; that is the card this purchase ` +
+        "would be billed to, so it would 402 after Hostinger had already created the VM"
     );
   }
 }
@@ -452,7 +477,13 @@ export async function provisionVpsForBusiness(
   // has repeatedly errored while still creating the VM, so the only cheap
   // failures are the ones we detect on this side of it. Same contract the
   // post-install-script step already holds: no money moves on a throw here.
-  await assertPurchasePreconditions(client, { itemId, hostname });
+  await assertPurchasePreconditions(client, {
+    itemId,
+    hostname,
+    // Same value the purchase payload carries: undefined in production, which
+    // means Hostinger bills the account default and that is what gets checked.
+    paymentMethodId: input.paymentMethodId
+  });
 
   onProgress?.("purchase_initiated", {
     itemId,

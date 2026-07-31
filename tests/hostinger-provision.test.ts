@@ -1533,8 +1533,8 @@ describe("pre-charge purchase preconditions", () => {
       listPaymentMethods: vi
         .fn()
         .mockResolvedValue([
-          usablePaymentMethod({ is_expired: true }),
-          usablePaymentMethod({ id: 2, is_suspended: true })
+          usablePaymentMethod({ is_expired: true, is_default: false }),
+          usablePaymentMethod({ id: 2, is_suspended: true, is_default: false })
         ])
     });
     await expect(
@@ -1545,19 +1545,93 @@ describe("pre-charge purchase preconditions", () => {
     ).rejects.toThrow(/no usable payment method/);
   });
 
-  it("passes when at least one card among several is usable", async () => {
+  // Bugbot on #1052: checking "any card is usable" passes an expired DEFAULT
+  // sitting beside a healthy spare, and since no production caller sends
+  // payment_method_id, the default is exactly what Hostinger bills. The check
+  // has to be about the card that will actually be charged.
+  it("rejects an expired default even when another card is healthy", async () => {
     const client = preconditionClient({
       listPaymentMethods: vi
         .fn()
         .mockResolvedValue([
-          usablePaymentMethod({ is_expired: true }),
-          usablePaymentMethod({ id: 2 })
+          usablePaymentMethod({ id: 1, is_default: true, is_expired: true }),
+          usablePaymentMethod({ id: 2, is_default: false })
         ])
     });
     await expect(
       assertPurchasePreconditions(client, {
         itemId: "hostingercom-vps-kvm2-usd-1m",
         hostname: "nc-056034a7-e84.newcoworker.com"
+      })
+    ).rejects.toThrow(/the default card .* is expired/);
+  });
+
+  it("rejects a suspended default", async () => {
+    const client = preconditionClient({
+      listPaymentMethods: vi
+        .fn()
+        .mockResolvedValue([usablePaymentMethod({ is_default: true, is_suspended: true })])
+    });
+    await expect(
+      assertPurchasePreconditions(client, {
+        itemId: "hostingercom-vps-kvm2-usd-1m",
+        hostname: "nc-056034a7-e84.newcoworker.com"
+      })
+    ).rejects.toThrow(/the default card .* is suspended/);
+  });
+
+  it("checks the explicit method when the caller names one, not the default", async () => {
+    const methods = [
+      usablePaymentMethod({ id: 1, is_default: true }),
+      usablePaymentMethod({ id: 2, is_default: false, is_expired: true })
+    ];
+    const client = preconditionClient({
+      listPaymentMethods: vi.fn().mockResolvedValue(methods)
+    });
+    await expect(
+      assertPurchasePreconditions(client, {
+        itemId: "hostingercom-vps-kvm2-usd-1m",
+        hostname: "nc-056034a7-e84.newcoworker.com",
+        paymentMethodId: 2
+      })
+    ).rejects.toThrow(/method 2 .* is expired/);
+    // ...and the healthy explicit method passes even if the default is bad.
+    await expect(
+      assertPurchasePreconditions(client, {
+        itemId: "hostingercom-vps-kvm2-usd-1m",
+        hostname: "nc-056034a7-e84.newcoworker.com",
+        paymentMethodId: 1
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  // Nothing flagged default and no explicit id: we cannot know which card will
+  // be billed, so fall back to the weak assertion rather than block a purchase
+  // we have no evidence against.
+  it("falls back to any-usable when no card is flagged default", async () => {
+    const client = preconditionClient({
+      listPaymentMethods: vi
+        .fn()
+        .mockResolvedValue([
+          usablePaymentMethod({ id: 1, is_default: false, is_expired: true }),
+          usablePaymentMethod({ id: 2, is_default: false })
+        ])
+    });
+    await expect(
+      assertPurchasePreconditions(client, {
+        itemId: "hostingercom-vps-kvm2-usd-1m",
+        hostname: "nc-056034a7-e84.newcoworker.com"
+      })
+    ).resolves.toBeUndefined();
+  });
+
+  it("falls back to any-usable when the explicit method is not on the account", async () => {
+    const client = preconditionClient();
+    await expect(
+      assertPurchasePreconditions(client, {
+        itemId: "hostingercom-vps-kvm2-usd-1m",
+        hostname: "nc-056034a7-e84.newcoworker.com",
+        paymentMethodId: 999
       })
     ).resolves.toBeUndefined();
   });
