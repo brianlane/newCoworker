@@ -6,6 +6,7 @@ import { IntegrationCard } from "@/components/dashboard/IntegrationCard";
 import { NangoEmailIntegrationActions } from "@/components/dashboard/NangoEmailIntegrationActions";
 import { CustomIntegrationsCard } from "@/components/dashboard/CustomIntegrationsCard";
 import { VagaroIntegrationCard } from "@/components/dashboard/VagaroIntegrationCard";
+import { AcuityIntegrationCard } from "@/components/dashboard/AcuityIntegrationCard";
 import { CalendlyIntegrationCard } from "@/components/dashboard/CalendlyIntegrationCard";
 import { CaldavIntegrationCard } from "@/components/dashboard/CaldavIntegrationCard";
 import { MetaIntegrationCard } from "@/components/dashboard/MetaIntegrationCard";
@@ -61,6 +62,10 @@ function IntegrationBody({
     case "vagaro":
       return (
         <VagaroIntegrationCard businessId={businessId} initialConnection={ctx.vagaroConnection} />
+      );
+    case "acuity":
+      return (
+        <AcuityIntegrationCard businessId={businessId} initialConnection={ctx.acuityConnection} />
       );
     case "calendly":
       return (

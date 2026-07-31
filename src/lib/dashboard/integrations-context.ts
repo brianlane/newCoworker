@@ -20,6 +20,7 @@ import {
 } from "@/lib/nango/connection-cap";
 import { listCustomIntegrations } from "@/lib/db/custom-integrations";
 import { getPublicVagaroConnection } from "@/lib/db/vagaro-connections";
+import { getPublicAcuityConnection } from "@/lib/db/acuity-connections";
 import { getPublicCalendlyConnection } from "@/lib/db/calendly-connections";
 import { getPublicCaldavConnection } from "@/lib/db/caldav-connections";
 import { getPublicMetaConnection } from "@/lib/db/meta-connections";
@@ -45,6 +46,7 @@ export type IntegrationsContext = {
   workspaceConnectionCap: WorkspaceConnectionCapState;
   customIntegrations: Awaited<ReturnType<typeof listCustomIntegrations>>;
   vagaroConnection: Awaited<ReturnType<typeof getPublicVagaroConnection>>;
+  acuityConnection: Awaited<ReturnType<typeof getPublicAcuityConnection>>;
   calendlyConnection: Awaited<ReturnType<typeof getPublicCalendlyConnection>>;
   caldavConnection: Awaited<ReturnType<typeof getPublicCaldavConnection>>;
   metaConnection: Awaited<ReturnType<typeof getPublicMetaConnection>>;
@@ -107,6 +109,7 @@ export async function loadIntegrationsContext(
     ),
     customIntegrations: businessId ? await listCustomIntegrations(businessId) : [],
     vagaroConnection: businessId ? await getPublicVagaroConnection(businessId) : null,
+    acuityConnection: businessId ? await getPublicAcuityConnection(businessId) : null,
     calendlyConnection: businessId ? await getPublicCalendlyConnection(businessId) : null,
     caldavConnection: businessId ? await getPublicCaldavConnection(businessId) : null,
     metaConnection: businessId ? await getPublicMetaConnection(businessId) : null,
@@ -162,6 +165,7 @@ export function computeIntegrationStatuses(
           }
         : disconnected,
     vagaro: ctx.vagaroConnection ? connected : disconnected,
+    acuity: ctx.acuityConnection ? connected : disconnected,
     calendly: ctx.calendlyConnection ? connected : disconnected,
     caldav: ctx.caldavConnection ? connected : disconnected,
     meta: metaStatus,

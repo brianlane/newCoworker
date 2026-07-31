@@ -12,6 +12,7 @@ import type { LucideIcon } from "lucide-react";
 import {
   Blocks,
   Bot,
+  CalendarCheck,
   CalendarClock,
   CalendarDays,
   CalendarRange,
@@ -25,6 +26,7 @@ import {
 export type IntegrationSlug =
   | "workspace"
   | "vagaro"
+  | "acuity"
   | "calendly"
   | "caldav"
   | "meta"
@@ -71,6 +73,14 @@ export const INTEGRATIONS: IntegrationDef[] = [
     benefit:
       "Let your coworker check real availability and book appointments on your Vagaro calendar, and start AiFlows from Vagaro events.",
     icon: CalendarClock
+  },
+  {
+    slug: "acuity",
+    name: "Acuity Scheduling",
+    category: "Workspace",
+    benefit:
+      "Let your coworker check real availability and book appointments on your Acuity calendar, and start AiFlows from Acuity appointments.",
+    icon: CalendarCheck
   },
   {
     slug: "calendly",
