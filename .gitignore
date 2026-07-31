@@ -69,3 +69,4 @@ deno.lock
 supabase/functions/.env.itest
 supabase/.branches
 supabase/.temp
+todoCursorAudit.md
