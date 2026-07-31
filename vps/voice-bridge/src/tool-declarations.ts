@@ -218,7 +218,13 @@ export function buildVoiceToolDeclarations(): VoiceToolDeclaration[] {
       parameters: {
         type: Type.OBJECT,
         properties: {
-          name: { type: Type.STRING },
+          name: {
+            type: Type.STRING,
+            description:
+              "The caller's name, exactly as they gave it. Omit this field entirely when " +
+              "they never gave one: never a placeholder like 'there' or 'unknown', which " +
+              "would be saved as their real name."
+          },
           phone: { type: Type.STRING, description: "Phone, E.164 if known." },
           email: { type: Type.STRING },
           reason: {

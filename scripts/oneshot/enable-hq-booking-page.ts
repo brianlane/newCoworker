@@ -8,8 +8,8 @@
  *      page row does not exist yet, so even the first dry run surfaces a
  *      validation failure before anything is written);
  *   2. on --apply: create-or-update HQ's booking_pages row (enabled,
- *      15/30-minute discovery calls, 60-minute notice, sales-facing
- *      description), print the public /book/<token> link, then append an
+ *      60-minute notice, sales-facing description), print the public
+ *      /book/<token> link, then append an
  *      "Or book a time directly: <link>" line to the s_intro and s_nudge
  *      SMS bodies so a prospect can reply with a time OR click.
  *
@@ -152,6 +152,10 @@ const page = await upsertBookingPage(
   HQ_BUSINESS_ID,
   {
     enabled: true,
+    // Legacy: meeting types own the length a visitor actually books
+    // (effectiveTypeSettings), so this list only matters for a page with zero
+    // meeting types. HQ has several, so what it books is the meeting's
+    // duration_minutes, not anything here.
     allowedDurations: [15, 30],
     minNoticeMinutes: 60,
     description:

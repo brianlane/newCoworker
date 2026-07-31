@@ -26,6 +26,23 @@ import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import { pickCalendlyEventType } from "@/lib/calendar-tools/calendly";
 import { logger } from "@/lib/logger";
 
+/**
+ * One bookable meeting, named AND timed.
+ *
+ * The duration is not decoration. A visitor who clicks the link books the
+ * meeting type's own length, but an AI-made booking carries no
+ * `meeting_type_id` at all (README, "Public self-serve booking page"), so the
+ * coworker's `calendar_find_slots` call falls back to its 30-minute schema
+ * default. That is how HQ ended up advertising a "15-minute discovery call"
+ * for a meeting configured at 60, bookable at 30 by reply: three lengths for
+ * one call (Jul 30 2026). Naming the minutes here is the only channel by
+ * which the model can learn the real one.
+ */
+export type BookingMeeting = {
+  name: string;
+  durationMinutes: number;
+};
+
 export type PublicBookingLink = {
   /** Absolute URL, vanity slug preferred over the raw token. */
   url: string;
@@ -36,7 +53,7 @@ export type PublicBookingLink = {
    * instead of guessing. One entry for a Calendly event type; empty only
    * when a page somehow has no meeting to offer.
    */
-  meetings: string[];
+  meetings: BookingMeeting[];
 };
 
 export type SchedulingLink = PublicBookingLink & {
@@ -85,12 +102,15 @@ export async function publicBookingLink(
   // The meetings name the link, because they are what a visitor actually
   // sees: one meeting IS the page, so the coworker can say "book the
   // discovery call", and several mean the link opens a choice.
-  const meetings = visibleMeetingTypes(meetingTypes).map((t) => t.name);
+  const meetings = visibleMeetingTypes(meetingTypes).map((t) => ({
+    name: t.name,
+    durationMinutes: t.duration_minutes
+  }));
   return {
     url: `${site}/book/${page.slug ?? page.token}`,
     title:
       meetings.length === 1
-        ? meetings[0]
+        ? meetings[0].name
         : `Book a call with ${business?.name?.trim() || "us"}`,
     meetings
   };
@@ -120,7 +140,9 @@ export async function schedulingLink(businessId: string): Promise<SchedulingLink
       return {
         url: picked.eventType.schedulingUrl,
         title: picked.eventType.name,
-        meetings: [picked.eventType.name],
+        meetings: [
+          { name: picked.eventType.name, durationMinutes: picked.eventType.duration }
+        ],
         kind: "calendly"
       };
     }
@@ -140,20 +162,39 @@ export async function schedulingLink(businessId: string): Promise<SchedulingLink
  * The line itself, pure so the live-model e2e can build its system prompt
  * from the REAL string (imported, not paraphrased) without a database.
  */
+/** "Discovery Call (60 minutes)" — how a meeting is named to the model. */
+function describeMeeting(meeting: BookingMeeting): string {
+  return `${meeting.name} (${meeting.durationMinutes} minutes)`;
+}
+
 export function formatBookingLinkPromptLine(link: SchedulingLink): string {
+  // One shared read, so the length is stated the same way whichever surface
+  // takes the booking and no branch needs a made-up default.
+  const [only] = link.meetings;
   const surface =
     link.kind === "calendly"
-      ? `This business schedules through Calendly: ${link.url} (the event is called "${link.title}").`
+      ? `This business schedules through Calendly: ${link.url} (the event is called ` +
+        `"${link.title}"${only ? ` and runs ${only.durationMinutes} minutes` : ""}).`
       : link.meetings.length > 1
         ? `This business has a public self-serve booking page: ${link.url}, where the visitor ` +
-          `chooses one of these meetings and then a time: ${link.meetings.join(", ")}.`
-        : link.meetings.length === 1
+          `chooses one of these meetings and then a time: ` +
+          `${link.meetings.map(describeMeeting).join(", ")}.`
+        : only
           ? `This business has a public self-serve booking page: ${link.url}, which books ` +
-            `"${link.meetings[0]}".`
+            `"${only.name}" and runs ${only.durationMinutes} minutes.`
           : `This business has a public self-serve booking page: ${link.url}, where the ` +
             `visitor picks a time.`;
+  // The length is stated as a booking INSTRUCTION, not trivia: an AI-made
+  // booking carries no meeting type, so without this the model silently books
+  // the tool's 30-minute default and quotes whatever number the flow copy
+  // happened to hardcode.
+  const durationRule = link.meetings.length
+    ? ` When you book one of these yourself, use that meeting's stated length as the ` +
+      `appointment duration, and quote that same length to the person: never guess a ` +
+      `different number and never describe it as shorter than it is.`
+    : "";
   return (
-    `SCHEDULING LINK. ${surface} When you write to someone so THEY choose the time, for ` +
+    `SCHEDULING LINK. ${surface}${durationRule} When you write to someone so THEY choose the time, for ` +
     `example emailing an assistant who books on someone's behalf, send that exact link by ` +
     `default: it always shows live availability, while a list of times goes stale. Do NOT ` +
     `ask the owner whether to send the link or list times; the link IS the default, and ` +

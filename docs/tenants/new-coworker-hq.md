@@ -52,6 +52,35 @@ the summary.
 | New Contact Greeting (contact_created, 1) | off | |
 | Prospect outreach follow-through (webhook, 3) | off | Files and tags the businesses our outbound outreach emails (PR #972). Installed disabled; the pitch itself is sent in code, not by this flow, and the per-prospect owner text was removed (it would have been 12 texts a day announcing that strangers got email) |
 
+## Booking
+
+The public page is `/book/newcoworker` (token `ncb_df13…`), linked from both
+follow-up flows. Calendar is `newcoworkerteam@gmail.com` via Nango; Zoom is
+`team@newcoworker.com`.
+
+| Meeting | Length | Visible |
+| --- | --- | --- |
+| Discovery Call | **60 min** | yes |
+| Support Call | 30 min | yes |
+| White Glove | 60 min | hidden |
+| Honed Tech Audit | 60 min | hidden |
+
+**The discovery call is 60 minutes.** Any copy that names a length must say
+so, which is why `sync-hq-booking-copy.ts` derives it from the meeting type
+instead of hardcoding it. Change the length in the Bookings dashboard, then
+re-run that script and the SMS bodies follow.
+
+Two paths book this call and they used to disagree. A prospect who CLICKS the
+link books the meeting type's own length. A prospect who REPLIES with a time
+gets the coworker's `calendar_find_slots` call, and an AI-made booking carries
+no `meeting_type_id` (README, "Public self-serve booking page"), so it has no
+length to inherit: it took the tool's 30-minute default until the scheduling
+prompt line started stating the real duration. For three weeks in Jul 2026 the
+copy said 15, the click path booked 60, and the reply path booked 30.
+
+`booking_pages.allowed_durations` is legacy here: meeting types own what a
+visitor actually books.
+
 ## Sharp edges
 
 - **The box is shared hardware.** `srv1806097` also hosts **JobArms**, our
@@ -77,8 +106,17 @@ the summary.
 
 `onboard-hq-tenant.ts`, `configure-hq-dogfood.ts`, `setup-hq-dogfood-flows.ts`,
 `setup-hq-inbox-triage-flow.ts`, `enable-hq-booking-page.ts`,
-`patch-hq-booking-offer.ts`, `set-hq-digest-prefs.ts`,
+`patch-hq-booking-offer.ts`, `sync-hq-booking-copy.ts`,
+`fix-hq-placeholder-contact-names.ts`, `set-hq-digest-prefs.ts`,
 `configure-hq-prospecting.ts`, `quiet-hq-prospect-flow.ts`.
+
+**Order matters for the two follow-up flows.** Their live SMS bodies are the
+product of three scripts layered in sequence, so re-running an earlier one
+reverts the later ones: `setup-hq-dogfood-flows.ts` seeds the bodies,
+`patch-hq-booking-offer.ts` adds the discovery-call offer,
+`enable-hq-booking-page.ts` appends the public booking link, and
+`sync-hq-booking-copy.ts` resyncs the quoted call length. Re-run them in that
+order, or just run `sync-hq-booking-copy.ts` when only the length changed.
 
 ## History
 

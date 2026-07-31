@@ -2213,6 +2213,34 @@ describe("planStep: upsert_customer", () => {
       action: { kind: "upsert_customer", e164: "+14804929641", name: "", email: "" }
     });
   });
+  it("DROPS a greeting placeholder name (never files a contact called 'there')", () => {
+    // Several library templates tell the extractor "'there' if unknown" and
+    // then feed lead_name straight into this step, so the placeholder would be
+    // written as a real person's name. Same doctrine as the language var
+    // below: an untrustworthy value leaves the stored field alone.
+    for (const placeholder of ["there", "  There ", "none", "unknown", "N/A", "the lead"]) {
+      const r = planStep(base, {
+        vars: { lead_phone: "+14804929641", lead_name: placeholder, lead_email: "m@example.com" }
+      });
+      expect(r, placeholder).toEqual({
+        ok: true,
+        action: {
+          kind: "upsert_customer",
+          e164: "+14804929641",
+          name: "",
+          email: "m@example.com"
+        }
+      });
+    }
+    // A real name containing a placeholder word is untouched.
+    const real = planStep(base, {
+      vars: { lead_phone: "+14804929641", lead_name: "Theresa", lead_email: "" }
+    });
+    expect(real).toEqual({
+      ok: true,
+      action: { kind: "upsert_customer", e164: "+14804929641", name: "Theresa", email: "" }
+    });
+  });
   it("carries a supported language and DROPS anything else (never junk on the contact)", () => {
     const withLang: FlowStep = { ...base, languageVar: "lead_language" } as FlowStep;
     const es = planStep(withLang, {

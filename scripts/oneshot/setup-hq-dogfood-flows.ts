@@ -1,20 +1,25 @@
 /**
- * setup-hq-dogfood-flows.ts — one-shot: author the HQ tenant's sales-funnel
- * AiFlows (the "HQ works for New Coworker" dogfooding plan):
+ * setup-hq-dogfood-flows.ts: one-shot that authors the HQ tenant's
+ * sales-funnel AiFlows (the "HQ works for New Coworker" dogfooding plan):
  *
- *   1. "Demo caller follow-up (HQ)"  — contact_created, tag "Voice Capture"
+ *   1. "Demo caller follow-up (HQ)",  contact_created, tag "Voice Capture"
  *      (fired by the capture-contact promotion, PR #771): recap SMS with the
  *      pricing/signup pitch (quiet-hours deferred, email fallback), a 2-day
  *      reply wait, owner notify on any reply, one gentle nudge on silence,
  *      and an appointment_booked goal so a booked lead skips the nudge.
- *   2. "Webchat lead follow-up (HQ)" — same shape for tag "Webchat Lead".
- *   3. "Contact form triage (HQ)"    — webhook source "contact_form" (fed by
+ *   2. "Webchat lead follow-up (HQ)", same shape for tag "Webchat Lead".
+ *   3. "Contact form triage (HQ)",    webhook source "contact_form" (fed by
  *      the admin contact-form sink, PR #773): extract + owner notify.
  *
  * Flows are upserted BY NAME (idempotent re-runs refresh the definition) and
- * created ENABLED — they cannot fire until the upstream PRs deploy, and
+ * created ENABLED: they cannot fire until the upstream PRs deploy, and
  * enabling then requires no second pass. Every definition passes
  * parseAiFlowDefinition before any write.
+ *
+ * NOTE: the live bodies have since moved on. patch-hq-booking-offer.ts adds
+ * the discovery-call offer and enable-hq-booking-page.ts appends the public
+ * booking link, so re-running this script REVERTS both. Re-run those two
+ * afterwards (and sync-hq-booking-copy.ts for the call length).
  *
  * Usage:
  *   npx tsx scripts/oneshot/setup-hq-dogfood-flows.ts          # dry-run
@@ -46,7 +51,10 @@ const QUIET_HOURS = {
 const EXTRACT_LEAD_FIELDS = [
   {
     name: "lead_name",
-    description: "The lead's first name only; 'there' when no name is present"
+    description:
+      "The lead's first name only. Return an empty string when no name is present: " +
+      "never a stand-in like 'there', which would be filed as this lead's real name " +
+      "(the greeting collapses cleanly on its own when the name is empty)"
   },
   {
     name: "lead_phone",
@@ -83,7 +91,7 @@ function followUpTail(sourceLabel: string) {
       to: "{{vars.lead_phone}}",
       quietHours: QUIET_HOURS,
       body:
-        "Quick follow-up from New Coworker — if you'd like your own AI coworker " +
+        "Quick follow-up from New Coworker. If you'd like your own AI coworker " +
         "answering your business calls and texts, setup takes about 10 minutes at " +
         "newcoworker.com. Reply here any time and the team will help."
     },
@@ -113,10 +121,10 @@ const FLOWS: FlowSpec[] = [
           to: "{{vars.lead_phone}}",
           quietHours: QUIET_HOURS,
           body:
-            "Hi {{vars.lead_name}} — thanks for calling the New Coworker demo line! " +
+            "Hi {{vars.lead_name}}, thanks for calling the New Coworker demo line! " +
             "You just talked to the product itself: a 24/7 AI coworker that answers " +
             "calls and texts, books appointments, and follows up (like right now). " +
-            "Plans start at $9.99/mo — newcoworker.com. Reply here with any " +
+            "Plans start at $9.99/mo at newcoworker.com. Reply here with any " +
             "questions and I'll pass them straight to the team."
         },
         ...followUpTail("Demo-line")
@@ -140,7 +148,7 @@ const FLOWS: FlowSpec[] = [
           to: "{{vars.lead_phone}}",
           quietHours: QUIET_HOURS,
           body:
-            "Hi {{vars.lead_name}} — thanks for chatting with us at newcoworker.com! " +
+            "Hi {{vars.lead_name}}, thanks for chatting with us at newcoworker.com! " +
             "That chat was the product itself: a 24/7 AI coworker that answers calls " +
             "and texts, books appointments, and follows up (like right now). Plans " +
             "start at $9.99/mo. Reply here with any questions and I'll pass them " +
@@ -182,14 +190,14 @@ const FLOWS: FlowSpec[] = [
           type: "notify_owner",
           message:
             "Contact form: {{vars.sender_name}} ({{vars.sender_email}}, business: " +
-            "{{vars.sender_business}}) — {{vars.sender_topic}}"
+            "{{vars.sender_business}}): {{vars.sender_topic}}"
         }
       ]
     }
   }
 ];
 
-// Validate every definition BEFORE any write — a schema failure aborts the
+// Validate every definition BEFORE any write: a schema failure aborts the
 // whole run, apply or not.
 for (const spec of FLOWS) {
   parseAiFlowDefinition(spec.definition);
@@ -204,7 +212,7 @@ const { data: hqBusiness, error: bizErr } = await db
   .eq("id", HQ_BUSINESS_ID)
   .maybeSingle();
 if (bizErr || !hqBusiness) {
-  console.error("[flows] HQ business not found — aborting", bizErr?.message ?? "");
+  console.error("[flows] HQ business not found, aborting", bizErr?.message ?? "");
   process.exit(1);
 }
 
@@ -230,7 +238,7 @@ const existingByName = new Map(
 for (const spec of FLOWS) {
   const existing = existingByName.get(spec.name);
   console.log(
-    `[flows] "${spec.name}": ${existing ? `exists (id=${existing.id}) — will refresh` : "will create (enabled)"}`
+    `[flows] "${spec.name}": ${existing ? `exists (id=${existing.id}), will refresh` : "will create (enabled)"}`
   );
 }
 

@@ -147,7 +147,10 @@ export function instagramProspectTemplate(): AiFlowTemplate {
           fields: [
             {
               name: "lead_name",
-              description: "The prospect's full name. 'there' if unknown."
+              description:
+                "The prospect's full name. Return an empty string when the content names " +
+                "nobody: never a stand-in like 'there' or 'unknown', which would be filed " +
+                "as this person's real name."
             },
             {
               name: "lead_phone",
@@ -258,7 +261,9 @@ export function reviewRequestTemplate(reviewLink: string): LibraryStarterTemplat
             {
               name: "customer_name",
               description:
-                "The customer/attendee's first name (not the business owner or organizer). 'there' if unknown."
+                "The customer/attendee's first name (not the business owner or organizer). " +
+                "Return an empty string when the event names nobody: never a stand-in like " +
+                "'there' or 'unknown', which would be filed as this person's real name."
             },
             {
               name: "customer_phone",
@@ -663,7 +668,10 @@ export function prospectOutreachTemplate(): AiFlowTemplate {
           fields: [
             {
               name: "prospect_name",
-              description: "The prospect business's name. 'there' if unknown."
+              description:
+                "The prospect business's name. Return an empty string when the profile names " +
+                "nobody: never a stand-in like 'there' or 'unknown', which would be filed as " +
+                "this prospect's real name."
             },
             {
               name: "prospect_phone",

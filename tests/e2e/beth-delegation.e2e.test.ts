@@ -63,7 +63,10 @@ const LIZ_EMAIL = "liz@lizdev.example.com";
 const BOOKING_LINK = {
   url: "https://www.newcoworker.com/book/new-coworker",
   title: "NC Discovery Call",
-  meetings: ["NC Discovery Call"],
+  // 30 minutes matches this scenario's own memory line ("Discovery calls are
+  // 30 minutes over Zoom with Brian"), so the prompt cannot state one length
+  // while the memory states another.
+  meetings: [{ name: "NC Discovery Call", durationMinutes: 30 }],
   kind: "booking_page" as const
 };
 /** HQ runs on America/Phoenix; Beth and Liz are Eastern. */
