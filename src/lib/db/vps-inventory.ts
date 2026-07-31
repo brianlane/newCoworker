@@ -364,6 +364,36 @@ export async function markVpsNeverRenew(vmId: number, client?: SupabaseClient): 
   if (error) throw new Error(`markVpsNeverRenew: ${error.message}`);
 }
 
+/**
+ * When we most recently acquired a box that is still assigned to this
+ * business, or null when none is.
+ *
+ * `acquired_at` is the purchase stamp: `recordVpsAssigned` deliberately omits
+ * it from the upsert payload, so it takes `default now()` on insert and is
+ * preserved on conflict. That makes it the durable answer to "when did we last
+ * buy this tenant a box", including when the migration that bought it never
+ * finished. Reads assigned rows only: a released box has its business linkage
+ * cleared, and its purchase is no longer the one we are cooling down on.
+ */
+export async function getLastAcquiredAtForBusiness(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<Date | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("vps_inventory")
+    .select("acquired_at")
+    .eq("assigned_business_id", businessId)
+    .order("acquired_at", { ascending: false })
+    .limit(1)
+    .maybeSingle();
+  if (error) throw new Error(`getLastAcquiredAtForBusiness: ${error.message}`);
+  const acquiredAt = (data as { acquired_at?: string | null } | null)?.acquired_at;
+  if (!acquiredAt) return null;
+  const at = new Date(acquiredAt);
+  return Number.isNaN(at.getTime()) ? null : at;
+}
+
 /** Pool telemetry for the admin dashboard, newest-acquired first. */
 export async function listVpsInventory(client?: SupabaseClient): Promise<VpsInventoryRow[]> {
   const db = client ?? (await createSupabaseServiceClient());

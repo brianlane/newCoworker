@@ -9,7 +9,7 @@ onto Truly's former KVM 2.
 | | |
 | --- | --- |
 | Business id | `6cc2d7ba-a007-49d4-93a4-586967e147f1` |
-| Tier / box | standard. **Live box is `1867409`** as of 2026-07-30. The Jul 29 cutover adopted `1815606` (KVM 2) from Truly with Hostinger billing sub `AzywqVVOpCob62ZiY`, auto-renew ON, next billing ~2026-08-08; the box moved again after that and the change is not yet written up. Read live before trusting either number. |
+| Tier / box | standard, VPS `1867409` (term-renewal cutover 2026-07-30 from `1815606`, which the Jul 29 cutover had adopted from Truly). Hostinger billing sub `6or6oVQqxWSP17AI`, next billing 2026-08-30 |
 | DID | `+13054885455` |
 | Owner | Selena Breed |
 | Timezone | `America/New_York` (Coral Gables, FL) |
@@ -105,9 +105,21 @@ and still want Selena's confirmation.
   platform now suppresses owner SMS/email on background migrations generally
   (PR #1011). Do not re-send "Your New Coworker is live!" for a size/term
   migration.
-- **Jul 30 check:** confirm 1632631 is gone on Hostinger and Scar Fairy is
-  still healthy on 1815606. **Aug 8 check:** Scar Fairy's box renews at
-  $24.49 as her own; Truly's Stripe period end must not touch this VM.
+- **2026-07-30 term-renewal cutover, one day after the Jul 29 move, and it
+  should not have happened.** The 11:01 UTC sweep bought `1867409` and moved
+  Scar Fairy off `1815606`, the box she had just been put on, then pooled
+  `1815606` with `never_renew`. Cause: the renewal window was 30 days, but a
+  monthly Hostinger box is never more than ~30 days from its next bill, so a
+  freshly adopted box re-qualified at once. KYP was hit by the same bug on
+  Jul 29 and again on Jul 31. Fixed in two parts: PR #1039 narrowed the window
+  (now 36 hours, so the sweep moves a tenant about a day before renewal), and
+  the purchase cooldown means a tenant we bought a box for in the last 7 days
+  is never bought another. The Jul 29 work stands, it was just undone a day
+  later at the cost of a stranded box.
+- **Aug 30 check:** Scar Fairy's box (`1867409`, sub `6or6oVQqxWSP17AI`) is
+  the one that now renews, at $24.49 as her own. Truly's Stripe period end
+  must not touch it. The old Aug 8 date belonged to `1815606`, which she is no
+  longer on; that box is pooled `never_renew` and lapses on its own.
 
 ## One-shots
 

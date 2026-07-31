@@ -8,7 +8,7 @@ written incident review. Calendly is the center of gravity here.
 | | |
 | --- | --- |
 | Business id | `056034a7-e84c-444d-8d15-747eeb1fa899` |
-| Tier / box | standard, VPS `1864812` (term-renewal cutover 2026-07-29 from `1800985`) |
+| Tier / box | standard, VPS `1869876` (term-renewal cutover 2026-07-31 from `1864812`, which had itself replaced `1800985` on 2026-07-29). Hostinger billing sub `169qOAVQwnrcE14n3`, next billing 2026-08-31 |
 | DID | `+14388035806` (Canadian) |
 | Owner | James Lee |
 | Onboarded | 2026-07-14 |
@@ -67,6 +67,18 @@ by enabling them.
   `never_renew`, provisioning marked 100% without owner SMS). Owner notify
   on background migrations is now suppressed via `suppressOwnerNotify`
   (PR #1011).
+- **2026-07-31 term-renewal cutover, two days later, and it should not have
+  happened.** The 11:01 UTC sweep bought `1869876` and moved KYP again, then
+  pooled `1864812` with `never_renew`. Third box in three days for this
+  tenant, and `1864812` was stranded barely two days into a paid month. Cause:
+  the renewal window was 30 days, but a monthly Hostinger box is never more
+  than ~30 days from its next bill, so the box the sweep had just bought
+  re-qualified immediately. Scar Fairy was hit by the same bug on 2026-07-30.
+  Fixed in two parts: PR #1039 narrowed the window (now 36 hours, so the sweep
+  moves a tenant about a day before renewal), and the purchase cooldown means
+  a tenant we bought a box for in the last 7 days is never bought another.
+  **When reading this account's history, do not assume one box per month:
+  check `vps_inventory` for how many boxes carry this business id.**
 
 ## One-shots
 

@@ -130,6 +130,34 @@ export async function markProvisioningJobRunning(
   if (error) throw new Error(`markProvisioningJobRunning: ${error.message}`);
 }
 
+/**
+ * When a term-renewal job was last enqueued for this business, or null when
+ * the current row is for some other purpose (or there is no row).
+ *
+ * `enqueued_at` is stamped BEFORE the Hostinger purchase call, so it survives
+ * a migration that buys a box and then fails, which is exactly the state the
+ * term-renewal sweep's purchase cooldown has to detect. Caveat that keeps this
+ * a two-source check at the call site: `business_id` is the primary key and
+ * enqueue upserts on conflict, so a later signup or migrate_size enqueue
+ * overwrites the row. There is no history here.
+ */
+export async function getLastTermRenewalEnqueuedAt(
+  businessId: string,
+  client?: SupabaseClient
+): Promise<Date | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("provisioning_jobs")
+    .select("purpose, enqueued_at")
+    .eq("business_id", businessId)
+    .maybeSingle();
+  if (error) throw new Error(`getLastTermRenewalEnqueuedAt: ${error.message}`);
+  const row = data as { purpose?: string | null; enqueued_at?: string | null } | null;
+  if (!row || row.purpose !== "term_renewal" || !row.enqueued_at) return null;
+  const at = new Date(row.enqueued_at);
+  return Number.isNaN(at.getTime()) ? null : at;
+}
+
 /** Terminal outcome for the business's job row. Best-effort at call sites. */
 export async function markProvisioningJobOutcome(
   businessId: string,
