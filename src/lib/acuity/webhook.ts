@@ -333,7 +333,13 @@ export async function processAcuityAppointmentEvent(
     // and CAN be absent, so eventCreatedDue gets the same treatment here.
     const ev = acuityAppointmentToCalendarEvent(appt, updatedIso ?? nowIso);
     ev.cancelled = gone;
-    if (!gone && !ev.createdIso) ev.createdIso = nowIso;
+    // Only a `scheduled` delivery may be given a creation moment. Stamping
+    // one on a reschedule or an edit would let eventCreatedDue treat an
+    // existing appointment as brand new and fire event_created flows for it,
+    // texting a customer a booking confirmation for something they made
+    // weeks ago. An absent createdIso simply means event_created cannot
+    // fire, which is the correct outcome for a change.
+    if (created && !gone && !ev.createdIso) ev.createdIso = nowIso;
     const db = await getDb();
     result.triggerRunsEnqueued = await fireTriggers(db, businessId, ev, nowMs);
   } catch (err) {

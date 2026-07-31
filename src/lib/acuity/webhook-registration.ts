@@ -164,11 +164,33 @@ export async function ensureAcuityWebhooks(
  */
 export async function teardownAcuityWebhooks(
   conn: AcuityConnectionRow,
+  targetUrl: string | null,
   deps: EnsureWebhooksDeps = {}
 ): Promise<void> {
-  const { remove } = resolveRegistrationDeps(deps);
+  const { list, remove } = resolveRegistrationDeps(deps);
   const stored = readWebhookRegistration(conn.webhook_registration);
-  for (const id of stored.ids) {
+  const ids = new Set(stored.ids);
+
+  // Reconcile by TARGET as well as by stored id. `ensureAcuityWebhooks`
+  // swallows a persistence failure, so the database can hold the PREVIOUS
+  // set of ids while Acuity holds the new one. Deleting only what we have
+  // stored would then orphan live registrations that keep consuming the
+  // account's 25-webhook ceiling with no way for the owner to find them.
+  const target = targetUrl ?? stored.targetUrl;
+  if (target) {
+    try {
+      for (const hook of await list(conn)) {
+        if (hook.target === target) ids.add(hook.id);
+      }
+    } catch (err) {
+      logger.warn("acuity webhooks: teardown listing failed", {
+        businessId: conn.business_id,
+        error: errorText(err)
+      });
+    }
+  }
+
+  for (const id of ids) {
     try {
       await remove(conn, id);
     } catch (err) {

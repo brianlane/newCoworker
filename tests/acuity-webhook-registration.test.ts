@@ -195,9 +195,9 @@ describe("ensureAcuityWebhooks", () => {
 });
 
 describe("teardownAcuityWebhooks", () => {
-  it("removes exactly the ids we stored", async () => {
+  it("removes the ids we stored", async () => {
     const d = deps();
-    await teardownAcuityWebhooks(conn({ ids: ["a", "b"], status: "registered" }), d);
+    await teardownAcuityWebhooks(conn({ ids: ["a", "b"], status: "registered" }), null, d);
     const removed = (d as never as { remove: { mock: { calls: unknown[][] } } }).remove.mock.calls;
     expect(removed.map((c) => c[1])).toEqual(["a", "b"]);
   });
@@ -205,13 +205,53 @@ describe("teardownAcuityWebhooks", () => {
   it("keeps going when one delete fails", async () => {
     const d = deps({ remove: vi.fn().mockRejectedValue(new Error("gone")) });
     await expect(
-      teardownAcuityWebhooks(conn({ ids: ["a", "b"], status: "registered" }), d)
+      teardownAcuityWebhooks(conn({ ids: ["a", "b"], status: "registered" }), null, d)
     ).resolves.toBeUndefined();
+  });
+
+  it("also removes live hooks the DB never learned about", async () => {
+    // ensureAcuityWebhooks swallows a persistence failure, so the database
+    // can hold the PREVIOUS ids while Acuity holds the new set. Deleting
+    // only what we stored would orphan those, and they keep eating the
+    // account's 25-webhook ceiling with no way for the owner to find them.
+    const d = deps({
+      list: vi.fn().mockResolvedValue([
+        { id: "orphan", event: "appointment.scheduled", target: TARGET },
+        { id: "not-ours", event: "appointment.scheduled", target: "https://other/hook" }
+      ])
+    });
+    await teardownAcuityWebhooks(conn({ ids: ["stored"], status: "registered" }), TARGET, d);
+    const removed = (d as never as { remove: { mock: { calls: unknown[][] } } }).remove.mock.calls
+      .map((c) => c[1])
+      .sort();
+    expect(removed).toEqual(["orphan", "stored"]);
+  });
+
+  it("falls back to the stored target when the caller has none", async () => {
+    const d = deps({
+      list: vi.fn().mockResolvedValue([{ id: "orphan", event: "e", target: TARGET }])
+    });
+    await teardownAcuityWebhooks(
+      conn({ ids: [], targetUrl: TARGET, status: "registered" }),
+      null,
+      d
+    );
+    expect(
+      (d as never as { remove: { mock: { calls: unknown[][] } } }).remove.mock.calls[0][1]
+    ).toBe("orphan");
+  });
+
+  it("still removes the stored ids when the listing fails", async () => {
+    const d = deps({ list: vi.fn().mockRejectedValue(new Error("down")) });
+    await teardownAcuityWebhooks(conn({ ids: ["stored"], status: "registered" }), TARGET, d);
+    expect(
+      (d as never as { remove: { mock: { calls: unknown[][] } } }).remove.mock.calls[0][1]
+    ).toBe("stored");
   });
 
   it("does nothing when nothing was registered", async () => {
     const d = deps();
-    await teardownAcuityWebhooks(conn(), d);
+    await teardownAcuityWebhooks(conn(), null, d);
     expect((d as never as { remove: { mock: { calls: unknown[] } } }).remove.mock.calls).toHaveLength(0);
   });
 });
@@ -304,7 +344,8 @@ describe("default wiring", () => {
 
   it("tears down with its own transport too", async () => {
     removeMock.mockResolvedValue(undefined);
-    await teardownAcuityWebhooks(conn({ ids: ["z"], status: "registered" }));
+    listMock.mockResolvedValue([]);
+    await teardownAcuityWebhooks(conn({ ids: ["z"], status: "registered" }), null);
     expect(removeMock).toHaveBeenCalled();
   });
 

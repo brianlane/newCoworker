@@ -293,7 +293,12 @@ export async function DELETE(request: Request) {
     // key. Best-effort: a leftover webhook pointing at a deleted tenant is
     // rejected by the receiver anyway.
     const existing = await getAcuityConnection(body.businessId);
-    if (existing) await teardownAcuityWebhooks(existing);
+    if (existing) {
+      await teardownAcuityWebhooks(
+        existing,
+        acuityWebhookCallbackUrl(appOrigin(request), body.businessId, existing.webhook_verification_token)
+      );
+    }
     await deleteAcuityConnection(body.businessId);
     clearAcuityCaches();
     return successResponse({ deleted: true });

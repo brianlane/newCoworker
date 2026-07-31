@@ -345,6 +345,20 @@ describe("processAcuityAppointmentEvent", () => {
     expect(ev.updatedIso).toBe(new Date(NOW).toISOString());
   });
 
+  it("does NOT invent a creation moment for a reschedule", async () => {
+    // Stamping one would let eventCreatedDue treat an existing appointment
+    // as brand new and text the customer a booking confirmation for
+    // something they arranged weeks ago.
+    const d = deps({
+      hydrate: vi.fn().mockResolvedValue(appt({ createdIso: null })),
+      recordObservations: vi.fn().mockResolvedValue([])
+    });
+    await processAcuityAppointmentEvent(BIZ, CONN, { ...EVENT, action: "rescheduled" }, d);
+    const ev = (d as never as { fireTriggers: { mock: { calls: unknown[][] } } }).fireTriggers.mock
+      .calls[0][2] as { createdIso?: string };
+    expect(ev.createdIso).toBeUndefined();
+  });
+
   it("stamps a fresh booking's createdIso when the payload has none", async () => {
     const d = deps({
       hydrate: vi.fn().mockResolvedValue(appt({ createdIso: null })),
