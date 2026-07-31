@@ -70,10 +70,13 @@ describe("logger", () => {
     expect(JSON.parse(raw).event).toEqual({ id: "evt_1", apiKey: "[redacted]" });
   });
 
-  it("does not let a context key forge the log's own fields", () => {
-    logger.info("real message", { message: "spoofed", level: "debug" });
-    const parsed = JSON.parse(consoleLogSpy.mock.calls[0][0] as string);
-    expect(parsed.message).toBe("real message");
-    expect(parsed.level).toBe("info");
+  // Call sites such as the admin costs/gemini/usage pages and
+  // platform-cost-sync pass `message: err.message` alongside a static log
+  // string. Redaction must not change which one survives, or the exception
+  // text disappears from the log line.
+  it("keeps a context message overriding the static log string, as before", () => {
+    logger.error("admin/costs: refresh failed", { message: "connection reset" });
+    const parsed = JSON.parse(consoleErrorSpy.mock.calls[0][0] as string);
+    expect(parsed.message).toBe("connection reset");
   });
 });
