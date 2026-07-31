@@ -103,9 +103,24 @@ The full flow, for every code change, however small:
 5. **Merge** (squash), then **watch the push-to-main run to green**: it
    applies migrations and deploys, and a failure there means production did
    not update.
-6. **Post-merge, still manual when the change calls for it:** VPS fleet
-   redeploy if `vps/` changed (`tsx debug/update-all-vps.ts`), and running any
-   new `scripts/oneshot/` script.
+6. **Post-merge, still manual when the change calls for it:** a VPS redeploy
+   if `vps/` changed, and running any new `scripts/oneshot/` script. The
+   redeploy scripts are **not interchangeable**: each one ships a single
+   subtree, so picking the wrong one silently deploys nothing and the change
+   looks live when it is not.
+
+   | Changed subtree | Script |
+   | --- | --- |
+   | `vps/chat-worker/` | `tsx debug/update-all-vps.ts` (whole fleet) |
+   | `vps/voice-bridge/` | `tsx debug/redeploy-voice-bridge.ts --business-id <uuid>` (one tenant) |
+   | `vps/aiflow-render/` | `tsx debug/redeploy-aiflow-render.ts --business-id <uuid>` (one tenant) |
+
+   Only the chat-worker has a fleet-wide script. For the other two, loop over
+   the tenants: `getActiveVpsSshKeyForBusiness` resolves each business's
+   current box, so one run per distinct `business_id` in `vps_ssh_keys`
+   (unrotated) covers the fleet. Verify each box after its own redeploy with
+   `tsx debug/box-verify.ts <businessId>`, and check `voice_active_sessions`
+   for calls in flight first: a voice-bridge rebuild drops them.
 7. **Remove the worktree. Mandatory.** Kill anything running out of it,
    re-anchor your shell to `/Users/brianlane/newCoworker` FIRST, then
    `git worktree remove`, `git worktree prune`, and delete the branch. A shell
