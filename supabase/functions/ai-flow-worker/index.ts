@@ -6573,10 +6573,14 @@ async function waitForCallStep(
       const deadlineVar = `${action.marker}_await_until`;
       const stored = scope.vars[deadlineVar];
       const parsed = typeof stored === "string" ? Number(stored) : NaN;
-      const deadline = Number.isFinite(parsed)
-        ? parsed
-        : Date.now() + action.awaitStartMinutes * 60_000;
-      if (!Number.isFinite(parsed)) scope.vars[deadlineVar] = String(deadline);
+      // Require a POSITIVE finite epoch, not merely a finite one: Number("")
+      // is 0, which would read as a deadline already in the past and silently
+      // turn the whole wait into an instant give-up. Run context is persisted
+      // JSON that outlives flow edits, so a junk value must re-stamp rather
+      // than disable the feature.
+      const restored = Number.isFinite(parsed) && parsed > 0;
+      const deadline = restored ? parsed : Date.now() + action.awaitStartMinutes * 60_000;
+      if (!restored) scope.vars[deadlineVar] = String(deadline);
       if (Date.now() < deadline) {
         return {
           kind: "defer",

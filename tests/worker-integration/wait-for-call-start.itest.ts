@@ -135,6 +135,53 @@ describe("wait_for_call awaitStartMinutes (real worker)", () => {
     expect(await getContactTags(db, biz, LEAD)).toContain("Continued");
   });
 
+  it("re-stamps a junk deadline instead of treating it as already lapsed", async () => {
+    // Number("") is 0, which would read as a deadline in the past and silently
+    // turn the wait into an instant give-up. Run context is persisted JSON that
+    // outlives flow edits, so junk must re-stamp rather than disable the wait.
+    const biz = await seedBusiness(db, "IT await call junk deadline");
+    await seedContact(db, biz, LEAD);
+    const flowId = await createFlow(
+      db,
+      biz,
+      flow([
+        {
+          id: "wait_call",
+          type: "wait_for_call",
+          fromE164: PARTNER,
+          awaitStartMinutes: 5,
+          saveAs: "hl_call_outcome"
+        },
+        { id: "tag_after", type: "update_contact", addTags: ["Continued"], phoneVar: "lead_phone" }
+      ])
+    );
+    const runId = await enqueueRun(db, flowId, biz, TRIGGER);
+
+    await tickWorker();
+    const first = await getRun(db, runId);
+    const deadlineVar = Object.keys(first.context.vars ?? {}).find((k) =>
+      k.endsWith("_await_until")
+    )!;
+
+    // Poison it, then let the step run again.
+    await db
+      .from("ai_flow_runs")
+      .update({
+        context: {
+          ...first.context,
+          vars: { ...(first.context.vars ?? {}), [deadlineVar]: "" }
+        }
+      })
+      .eq("id", runId);
+    await ageRun(db, runId, { earliest_claim_at: minutesAgo(1) });
+    await tickWorker();
+
+    const after = await getRun(db, runId);
+    expect(after.status).toBe("queued");
+    expect(Number((after.context.vars ?? {})[deadlineVar])).toBeGreaterThan(Date.now());
+    expect((await getContactTags(db, biz, LEAD)).includes("Continued")).toBe(false);
+  });
+
   it("without awaitStartMinutes it still resolves no_call on the first pass", async () => {
     const biz = await seedBusiness(db, "IT await call start off");
     await seedContact(db, biz, LEAD);
