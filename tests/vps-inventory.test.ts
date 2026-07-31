@@ -11,6 +11,7 @@ import {
   recordVpsAssigned,
   releaseVpsToPool,
   retireVps,
+  getLastAcquiredAtForBusiness,
   getVpsInventoryByVmId,
   listVpsInventory,
   markVpsNeverRenew,
@@ -607,6 +608,73 @@ describe("vps_inventory DB layer", () => {
       chain.maybeSingle.mockResolvedValueOnce({ data: sampleRow, error: null });
       defaultClientSpy.mockReturnValueOnce(makeDb(chain));
       await expect(getVpsInventoryByVmId(1800985)).resolves.toEqual(sampleRow);
+      expect(defaultClientSpy).toHaveBeenCalled();
+    });
+  });
+
+  describe("getLastAcquiredAtForBusiness", () => {
+    // acquired_at is the purchase stamp (recordVpsAssigned omits it from the
+    // upsert so it takes default now() on insert and survives conflict), which
+    // is what makes it readable after a migration that bought a box and then
+    // failed.
+    it("returns the newest acquired_at for a business's assigned box", async () => {
+      const chain = makeChain();
+      chain.limit.mockReturnValueOnce(chain);
+      chain.maybeSingle.mockResolvedValueOnce({
+        data: { acquired_at: "2026-07-29T11:01:00.000Z" },
+        error: null
+      });
+      const db = makeDb(chain);
+      await expect(getLastAcquiredAtForBusiness("biz-1", db as never)).resolves.toEqual(
+        new Date("2026-07-29T11:01:00.000Z")
+      );
+      expect(db.from).toHaveBeenCalledWith("vps_inventory");
+      expect(chain.eq).toHaveBeenCalledWith("assigned_business_id", "biz-1");
+      expect(chain.order).toHaveBeenCalledWith("acquired_at", { ascending: false });
+    });
+
+    it("returns null when the business has no assigned box", async () => {
+      const chain = makeChain();
+      chain.limit.mockReturnValueOnce(chain);
+      chain.maybeSingle.mockResolvedValueOnce({ data: null, error: null });
+      const db = makeDb(chain);
+      await expect(getLastAcquiredAtForBusiness("biz-1", db as never)).resolves.toBeNull();
+    });
+
+    it("returns null when the row carries no acquired_at", async () => {
+      const chain = makeChain();
+      chain.limit.mockReturnValueOnce(chain);
+      chain.maybeSingle.mockResolvedValueOnce({ data: { acquired_at: null }, error: null });
+      const db = makeDb(chain);
+      await expect(getLastAcquiredAtForBusiness("biz-1", db as never)).resolves.toBeNull();
+    });
+
+    // An unparseable stamp must read as "no record", not as an Invalid Date
+    // that every comparison against it silently answers false.
+    it("returns null when acquired_at will not parse", async () => {
+      const chain = makeChain();
+      chain.limit.mockReturnValueOnce(chain);
+      chain.maybeSingle.mockResolvedValueOnce({ data: { acquired_at: "nope" }, error: null });
+      const db = makeDb(chain);
+      await expect(getLastAcquiredAtForBusiness("biz-1", db as never)).resolves.toBeNull();
+    });
+
+    it("throws on Supabase error", async () => {
+      const chain = makeChain();
+      chain.limit.mockReturnValueOnce(chain);
+      chain.maybeSingle.mockResolvedValueOnce({ data: null, error: { message: "acq boom" } });
+      const db = makeDb(chain);
+      await expect(getLastAcquiredAtForBusiness("biz-1", db as never)).rejects.toThrow(
+        /getLastAcquiredAtForBusiness: acq boom/
+      );
+    });
+
+    it("uses the default service client when none is provided", async () => {
+      const chain = makeChain();
+      chain.limit.mockReturnValueOnce(chain);
+      chain.maybeSingle.mockResolvedValueOnce({ data: null, error: null });
+      defaultClientSpy.mockReturnValueOnce(makeDb(chain));
+      await expect(getLastAcquiredAtForBusiness("biz-1")).resolves.toBeNull();
       expect(defaultClientSpy).toHaveBeenCalled();
     });
   });

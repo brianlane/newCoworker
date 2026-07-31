@@ -23,6 +23,7 @@ vi.mock("@/lib/supabase/server", () => ({
 import {
   claimStalledProvisioningJob,
   enqueueProvisioningJob,
+  getLastTermRenewalEnqueuedAt,
   heartbeatProvisioningJob,
   markProvisioningJobOutcome,
   markProvisioningJobRunning,
@@ -151,6 +152,64 @@ describe("markProvisioningJobOutcome", () => {
     supabaseStub.from.mockReturnValueOnce(makeBuilder({ error: { message: "x" } }));
     await expect(markProvisioningJobOutcome(BIZ, "succeeded")).rejects.toThrow(
       "markProvisioningJobOutcome: x"
+    );
+  });
+});
+
+describe("getLastTermRenewalEnqueuedAt", () => {
+  // enqueued_at is stamped before the Hostinger purchase call, so it is the
+  // stamp that survives a term migration which bought a box and then failed.
+  it("returns the enqueue time for a term-renewal row", async () => {
+    const builder = makeBuilder({
+      data: { purpose: "term_renewal", enqueued_at: "2026-07-31T11:01:00Z" },
+      error: null
+    });
+    supabaseStub.from.mockReturnValueOnce(builder);
+    await expect(getLastTermRenewalEnqueuedAt(BIZ)).resolves.toEqual(
+      new Date("2026-07-31T11:01:00Z")
+    );
+    expect(supabaseStub.from).toHaveBeenCalledWith("provisioning_jobs");
+  });
+
+  // business_id is the primary key and enqueue upserts on conflict, so the row
+  // may well be some other purpose by now. That is not a term purchase.
+  it("returns null when the current row is a signup", async () => {
+    supabaseStub.from.mockReturnValueOnce(
+      makeBuilder({ data: { purpose: "signup", enqueued_at: "2026-07-31T11:01:00Z" }, error: null })
+    );
+    await expect(getLastTermRenewalEnqueuedAt(BIZ)).resolves.toBeNull();
+  });
+
+  it("returns null when there is no row at all", async () => {
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: null }));
+    await expect(getLastTermRenewalEnqueuedAt(BIZ)).resolves.toBeNull();
+  });
+
+  it("returns null when the row has no enqueued_at", async () => {
+    supabaseStub.from.mockReturnValueOnce(
+      makeBuilder({ data: { purpose: "term_renewal", enqueued_at: null }, error: null })
+    );
+    await expect(getLastTermRenewalEnqueuedAt(BIZ)).resolves.toBeNull();
+  });
+
+  it("returns null when enqueued_at will not parse", async () => {
+    supabaseStub.from.mockReturnValueOnce(
+      makeBuilder({ data: { purpose: "term_renewal", enqueued_at: "nope" }, error: null })
+    );
+    await expect(getLastTermRenewalEnqueuedAt(BIZ)).resolves.toBeNull();
+  });
+
+  it("accepts an injected client and throws on error", async () => {
+    supabaseStub.from.mockReturnValueOnce(
+      makeBuilder({ data: { purpose: "term_renewal", enqueued_at: "2026-07-31T11:01:00Z" }, error: null })
+    );
+    await expect(getLastTermRenewalEnqueuedAt(BIZ, injected)).resolves.toEqual(
+      new Date("2026-07-31T11:01:00Z")
+    );
+
+    supabaseStub.from.mockReturnValueOnce(makeBuilder({ data: null, error: { message: "boom" } }));
+    await expect(getLastTermRenewalEnqueuedAt(BIZ)).rejects.toThrow(
+      "getLastTermRenewalEnqueuedAt: boom"
     );
   });
 });

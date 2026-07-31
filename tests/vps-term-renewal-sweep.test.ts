@@ -20,7 +20,9 @@ import {
   renewalSavingsRatio,
   meetsRenewalSavingsThreshold,
   findCatalogFirstPeriodCents,
+  isWithinPurchaseCooldown,
   isWithinRenewalWindow,
+  latestPurchaseStamp,
   isPartialTermCutover,
   runTermRenewalSweep,
   type TermRenewalSweepDeps
@@ -82,8 +84,9 @@ function catalogKvm2Biennial(firstPeriodCents: number, renewalLikePrice = 5000):
 }
 
 function makeDeps(overrides: Partial<TermRenewalSweepDeps> = {}): TermRenewalSweepDeps {
-  // Three days out, i.e. inside the 5-day default window.
-  const nextBillingAt = "2026-07-23T12:00:00.000Z";
+  // 24 hours out, i.e. inside the 36-hour default window and on the run the
+  // cron would actually catch a real box on.
+  const nextBillingAt = "2026-07-21T12:00:00.000Z";
   return {
     listBusinesses: vi.fn(async () => [biz()]),
     listBusinessIdsWithLiveSubscription: vi.fn(async (ids: string[]) => ({
@@ -102,6 +105,9 @@ function makeDeps(overrides: Partial<TermRenewalSweepDeps> = {}): TermRenewalSwe
       }
     ]),
     hasActiveVpsMigrationLock: vi.fn(async () => false),
+    // No prior term purchase on record, so the cooldown never fires unless a
+    // test opts into it.
+    getLastTermPurchaseAt: vi.fn(async () => null),
     tryClaimVpsMigration: vi.fn(async () => true),
     releaseVpsMigrationLock: vi.fn(async () => undefined),
     getBusiness: vi.fn(async () => biz()),
@@ -211,19 +217,67 @@ describe("term-renewal sweep economics helpers", () => {
   });
 
   it("isWithinRenewalWindow respects an explicit horizon", () => {
-    expect(isWithinRenewalWindow("2026-08-01T00:00:00.000Z", NOW, 30)).toBe(true);
+    expect(isWithinRenewalWindow("2026-07-21T12:00:00.000Z", NOW, 30)).toBe(true);
     expect(isWithinRenewalWindow("2026-06-01T00:00:00.000Z", NOW, 30)).toBe(false);
-    expect(isWithinRenewalWindow("2026-09-01T00:00:00.000Z", NOW, 30)).toBe(false);
+    expect(isWithinRenewalWindow("2026-07-21T20:00:00.000Z", NOW, 30)).toBe(false);
     expect(isWithinRenewalWindow("not-a-date", NOW, 30)).toBe(false);
   });
 
   // The default is what the cron actually runs with, so pin it directly: a
   // freshly bought monthly box (~30 days out) must be out of range.
-  it("isWithinRenewalWindow defaults to a 5-day horizon", () => {
-    expect(isWithinRenewalWindow("2026-07-23T12:00:00.000Z", NOW)).toBe(true);
-    expect(isWithinRenewalWindow("2026-07-25T12:00:00.000Z", NOW)).toBe(true);
-    expect(isWithinRenewalWindow("2026-07-26T12:00:00.000Z", NOW)).toBe(false);
+  it("isWithinRenewalWindow defaults to a 36-hour horizon", () => {
+    expect(isWithinRenewalWindow("2026-07-21T00:00:00.000Z", NOW)).toBe(true);
+    expect(isWithinRenewalWindow("2026-07-22T00:00:00.000Z", NOW)).toBe(true);
+    expect(isWithinRenewalWindow("2026-07-22T00:00:01.000Z", NOW)).toBe(false);
     expect(isWithinRenewalWindow("2026-08-18T12:00:00.000Z", NOW)).toBe(false);
+  });
+
+  // The reason the window is 36 hours and not 24. The sweep runs `0 11 * * *`,
+  // and every box it buys is bought BY that cron, so the box's renewal
+  // anniversary is pinned about a minute AFTER the cron fires: KYP's real
+  // next_billing_at is 11:01:08Z. At a 24h window the run one day earlier
+  // lands just outside and the only qualifying run is 68 seconds before the
+  // charge, which cannot finish a 10-30 minute migration. 36 hours catches it
+  // a full day out.
+  it("catches a box whose renewal is pinned just past the 24-hour mark", () => {
+    const cronFireTime = new Date("2026-08-30T11:00:00.000Z");
+    const renewalOneDayLater = "2026-08-31T11:01:08.000Z";
+    expect(isWithinRenewalWindow(renewalOneDayLater, cronFireTime, 24)).toBe(false);
+    expect(isWithinRenewalWindow(renewalOneDayLater, cronFireTime)).toBe(true);
+  });
+
+  it("isWithinPurchaseCooldown gates on how long ago the last box was bought", () => {
+    expect(isWithinPurchaseCooldown(new Date("2026-07-18T12:00:00.000Z"), NOW)).toBe(true);
+    expect(isWithinPurchaseCooldown(new Date("2026-07-13T12:00:00.000Z"), NOW)).toBe(true);
+    expect(isWithinPurchaseCooldown(new Date("2026-07-13T11:00:00.000Z"), NOW)).toBe(false);
+    expect(isWithinPurchaseCooldown(new Date("2026-07-19T12:00:00.000Z"), NOW, 12)).toBe(false);
+  });
+
+  // No record of a purchase must never read as "cooled down", or a first
+  // migration could never start.
+  it("isWithinPurchaseCooldown treats no known purchase as not cooled down", () => {
+    expect(isWithinPurchaseCooldown(null, NOW)).toBe(false);
+  });
+
+  // A stamp in the future is a clock disagreement between us and Hostinger,
+  // not permission to buy. Fail closed.
+  it("isWithinPurchaseCooldown fails closed on a future stamp", () => {
+    expect(isWithinPurchaseCooldown(new Date("2026-07-21T12:00:00.000Z"), NOW)).toBe(true);
+  });
+
+  // The cooldown reads two stamps because each can go missing on its own: the
+  // provisioning_jobs row is overwritten by a later enqueue of a different
+  // purpose, and the vps_inventory write is best-effort after the purchase
+  // returns. One surviving stamp has to be enough.
+  it("latestPurchaseStamp takes whichever stamp survived, or the later of both", () => {
+    const older = new Date("2026-07-18T11:00:00.000Z");
+    const newer = new Date("2026-07-19T11:00:00.000Z");
+    expect(latestPurchaseStamp(older, newer)).toEqual(newer);
+    expect(latestPurchaseStamp(newer, older)).toEqual(newer);
+    expect(latestPurchaseStamp(null, older)).toEqual(older);
+    expect(latestPurchaseStamp(older, null)).toEqual(older);
+    expect(latestPurchaseStamp(null, null)).toBeNull();
+    expect(latestPurchaseStamp(older, older)).toEqual(older);
   });
 });
 
@@ -245,10 +299,11 @@ describe("runTermRenewalSweep", () => {
 
   // A monthly Hostinger box is never more than ~30 days from its next bill, so
   // a 30-day window re-qualified a box the sweep had just bought. Observed in
-  // production: KYP was migrated 2026-07-29 11:01 UTC and Scar Fairy
-  // 2026-07-30 11:01 UTC, one purchase per daily run, and Scar Fairy was moved
-  // a second time one day after their planned cutover. The window is the gate
-  // that has to be narrow: migrate only when the renewal is actually imminent.
+  // production: KYP was migrated 2026-07-29 11:01 UTC, Scar Fairy 2026-07-30,
+  // and KYP again 2026-07-31, one purchase per daily run. The window is the
+  // first of two gates: migrate only when the renewal is actually imminent.
+  // The second is the purchase cooldown below, which covers the case the
+  // window cannot see, a purchase that happened and then failed to cut over.
   it("leaves a box 29 days from renewal alone", async () => {
     const deps = makeDeps({
       listBillingSubscriptions: vi.fn(async () => [
@@ -263,6 +318,45 @@ describe("runTermRenewalSweep", () => {
     const result = await runTermRenewalSweep(deps, { now: NOW });
     expect(result).toEqual({ checked: 0, skippedEconomics: 0, migrated: 0, findings: [] });
     expect(deps.orchestrateProvisioning).not.toHaveBeenCalled();
+  });
+
+  // The hole the window cannot close. A run buys a box and then fails before
+  // orchestrate repoints businesses.hostinger_vps_id, so nothing the sweep
+  // reads has changed: same old box, same renewal date, still inside the
+  // window. #1041 made this concrete by refusing cutover on a failed deploy
+  // and leaving the paid box behind. Without a cooldown the next daily run
+  // buys another, and skipPoolAdopt means it will not reuse the paid one.
+  it("does not buy again for a tenant we bought a box for two days ago", async () => {
+    const deps = makeDeps({
+      getLastTermPurchaseAt: vi.fn(async () => new Date("2026-07-18T11:00:00.000Z"))
+    });
+    const result = await runTermRenewalSweep(deps, { now: NOW });
+    expect(result.migrated).toBe(0);
+    expect(deps.orchestrateProvisioning).not.toHaveBeenCalled();
+    // Checked before the lease claim, so a cooled-down tenant does not burn it.
+    expect(deps.tryClaimVpsMigration).not.toHaveBeenCalled();
+    expect(result.findings).toEqual([
+      expect.objectContaining({
+        kind: "skipped_cooldown",
+        businessId: BIZ,
+        detail: expect.stringContaining("2026-07-18T11:00:00.000Z")
+      })
+    ]);
+  });
+
+  it("buys again once the purchase cooldown has elapsed", async () => {
+    const deps = makeDeps({
+      getLastTermPurchaseAt: vi.fn(async () => new Date("2026-07-12T11:00:00.000Z"))
+    });
+    expect((await runTermRenewalSweep(deps, { now: NOW })).migrated).toBe(1);
+  });
+
+  it("honours an explicit purchase cooldown horizon", async () => {
+    const deps = makeDeps({
+      getLastTermPurchaseAt: vi.fn(async () => new Date("2026-07-18T11:00:00.000Z"))
+    });
+    const result = await runTermRenewalSweep(deps, { now: NOW, purchaseCooldownHours: 12 });
+    expect(result.migrated).toBe(1);
   });
 
   // #999 disabled Hostinger auto-renew for these tenants on purpose so the box
@@ -417,8 +511,8 @@ describe("runTermRenewalSweep", () => {
           ])
       ),
       listBillingSubscriptions: vi.fn(async () => [
-        { id: "hbs-old", status: "active", renewal_price: 5000, next_billing_at: "2026-07-22T00:00:00.000Z" },
-        { id: "hbs-2", status: "active", renewal_price: 5000, next_billing_at: "2026-07-24T00:00:00.000Z" }
+        { id: "hbs-old", status: "active", renewal_price: 5000, next_billing_at: "2026-07-21T00:00:00.000Z" },
+        { id: "hbs-2", status: "active", renewal_price: 5000, next_billing_at: "2026-07-21T18:00:00.000Z" }
       ]),
       hostinger: {
         getVirtualMachine: vi.fn(async (id: number) => ({
@@ -472,7 +566,7 @@ describe("runTermRenewalSweep", () => {
       expect.objectContaining({
         vmId: 1800985,
         plan: "kvm2",
-        expiresAt: "2026-07-23T12:00:00.000Z"
+        expiresAt: "2026-07-21T12:00:00.000Z"
       })
     );
     expect(deps.markVpsNeverRenew).toHaveBeenCalledWith(1800985);
@@ -496,15 +590,15 @@ describe("runTermRenewalSweep", () => {
           id: "hbs-old",
           status: "active",
           renewal_price: 5000,
-          next_billing_at: "2026-07-23T12:00:00.000Z",
-          expires_at: "2026-07-21T12:00:00.000Z"
+          next_billing_at: "2026-07-21T12:00:00.000Z",
+          expires_at: "2026-07-20T18:00:00.000Z"
         }
       ])
     });
     const result = await runTermRenewalSweep(deps, { now: NOW });
     expect(result.migrated).toBe(1);
     expect(deps.releaseVpsToPool).toHaveBeenCalledWith(
-      expect.objectContaining({ expiresAt: "2026-07-21T12:00:00.000Z" })
+      expect.objectContaining({ expiresAt: "2026-07-20T18:00:00.000Z" })
     );
   });
 
@@ -680,7 +774,7 @@ describe("runTermRenewalSweep", () => {
   it("falls back to expires_at when next_billing_at is missing", async () => {
     const deps = makeDeps({
       listBillingSubscriptions: vi.fn(async () => [
-        { id: "hbs-old", status: "active", renewal_price: 5000, expires_at: "2026-07-23T00:00:00.000Z" }
+        { id: "hbs-old", status: "active", renewal_price: 5000, expires_at: "2026-07-21T00:00:00.000Z" }
       ])
     });
     const result = await runTermRenewalSweep(deps, { now: NOW });
@@ -723,8 +817,8 @@ describe("runTermRenewalSweep", () => {
           ])
       ),
       listBillingSubscriptions: vi.fn(async () => [
-        { id: "hbs-old", status: "active", renewal_price: 5000, next_billing_at: "2026-07-23T00:00:00.000Z" },
-        { id: "hbs-2", status: "active", renewal_price: 5000, next_billing_at: "2026-07-24T00:00:00.000Z" }
+        { id: "hbs-old", status: "active", renewal_price: 5000, next_billing_at: "2026-07-21T00:00:00.000Z" },
+        { id: "hbs-2", status: "active", renewal_price: 5000, next_billing_at: "2026-07-21T18:00:00.000Z" }
       ]),
       listCatalog: vi.fn(async () => catalogKvm2Biennial(4800, 5000)),
       hostinger: {
@@ -1052,10 +1146,10 @@ describe("runTermRenewalSweep", () => {
   it("uses defaults and alternate billing price fields during the sweep", async () => {
     // This case deliberately omits `now` to exercise the default clock, so the
     // renewal date has to be relative to the real one, not a fixed literal.
-    const twoDaysOut = new Date(Date.now() + 2 * 24 * 60 * 60 * 1000).toISOString();
+    const oneDayOut = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
     const deps = makeDeps({
       listBillingSubscriptions: vi.fn(async () => [
-        { id: "hbs-old", status: "active", total_price: 5000, next_billing_at: twoDaysOut }
+        { id: "hbs-old", status: "active", total_price: 5000, next_billing_at: oneDayOut }
       ])
     });
     expect((await runTermRenewalSweep(deps)).migrated).toBe(1);
@@ -1231,7 +1325,7 @@ describe("runTermRenewalSweep", () => {
 
     const noPriceDeps = makeDeps({
       listBillingSubscriptions: vi.fn(async () => [
-        { id: "hbs-old", status: "active", next_billing_at: "2026-07-23T00:00:00.000Z" }
+        { id: "hbs-old", status: "active", next_billing_at: "2026-07-21T00:00:00.000Z" }
       ])
     });
     expect((await runTermRenewalSweep(noPriceDeps, { now: NOW })).skippedEconomics).toBe(1);

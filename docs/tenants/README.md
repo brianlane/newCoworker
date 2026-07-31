@@ -24,7 +24,7 @@ solved bugs. Dossiers do it for tenant knowledge.
 | Amy Laidlaw Real Estate | [amy-laidlaw-real-estate.md](amy-laidlaw-real-estate.md) | Heaviest AiFlow user. Referral-network leads (Clever, HomeLight, ReferralExchange, Realtor.com), 4-person roster |
 | KYP Ads | [kyp-ads.md](kyp-ads.md) | White-glove build, Calendly-centric, Canadian DID, has an incident review |
 | Truly Insurance | [truly-insurance.md](truly-insurance.md) | Commercial insurance, Privyr email leads, renewals. Lapsing (cancel-at-period-end Aug 8, not paused), boxless, DID reserved |
-| Scar Fairy | [scar-fairy.md](scar-fairy.md) | Standard signup; Jul 29 cutover from mispriced KVM 8 onto Truly's former KVM 2 (`1815606`) |
+| Scar Fairy | [scar-fairy.md](scar-fairy.md) | Standard signup; Jul 29 cutover from mispriced KVM 8 onto Truly's former KVM 2 (`1815606`), then swept onto `1867409` a day later by the term-renewal bug |
 | New Coworker (HQ) | [new-coworker-hq.md](new-coworker-hq.md) | Our own dogfood tenant. Also the homepage demo line, the site webchat, and every smoke test's default target |
 | HomeLight referral flow | [homelight-flow.md](homelight-flow.md) | Not a tenant: a lead source inside Amy's account, complex enough to own a file |
 

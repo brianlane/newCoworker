@@ -27,13 +27,14 @@ import { resolveDeployedVpsSize, vpsSizeFromHostingerPlan, type VpsSize } from "
 import type { OpsHardwareMigrationInput } from "@/lib/email/templates/ops-hardware-migration";
 import {
   enqueueProvisioningJob,
+  getLastTermRenewalEnqueuedAt,
   markProvisioningJobOutcome,
   runProvisioningJob,
   type EnqueueProvisioningJobInput,
   type RunProvisioningJobDeps
 } from "@/lib/provisioning/jobs";
 import { getLatestProvisioningStatus } from "@/lib/provisioning/progress";
-import { paidThroughFromBillingSub } from "@/lib/db/vps-inventory";
+import { getLastAcquiredAtForBusiness, paidThroughFromBillingSub } from "@/lib/db/vps-inventory";
 import { tryRecoverDeployCompleteNewBox } from "@/lib/vps/migration-cutover-recovery";
 import { sshExec } from "@/lib/hostinger/ssh";
 
@@ -49,11 +50,40 @@ const DEFAULT_SAVINGS_THRESHOLD = 0.1;
  * purchase per daily run), and Scar Fairy was moved a second time one day
  * after their planned cutover, stranding the box they had just been put on.
  *
- * Five days keeps the intent (do not pay a renewal price when the same box can
- * be re-bought at the first-period price) while making a freshly purchased box
- * ineligible for the rest of its cycle.
+ * Measured in HOURS, not days, because the value is coupled to the cron period
+ * and a day-shaped number hides that. The sweep runs `0 11 * * *`, once daily,
+ * and every box it buys is bought BY that cron, so the box's renewal
+ * anniversary is pinned about a minute after the cron fires (KYP's
+ * next_billing_at is 11:01:08Z). A 24h window would therefore straddle its own
+ * boundary: the run 24h+68s before renewal falls just outside, the run 68s
+ * before falls just inside, and a tenant gets one eligible run with under a
+ * minute of runway against a migration that takes 10 to 30 minutes. Half a
+ * minute of cold-start jitter flips that to never eligible at all.
+ *
+ * 36 hours exceeds the 24h cron period, so the run exactly one day before
+ * renewal always catches it, with a full day of runway. In practice this buys
+ * ~24 hours early. A freshly bought box renews ~30 days out, so it still
+ * cannot re-qualify.
  */
-const DEFAULT_RENEWAL_WINDOW_DAYS = 5;
+const DEFAULT_RENEWAL_WINDOW_HOURS = 36;
+/**
+ * How long after buying a term box the same tenant is ineligible for another.
+ *
+ * The window alone cannot prevent a repeat purchase, because nothing it reads
+ * changes when a migration buys a box and then fails. The tenant stays on the
+ * old box, still inside the window, and the next daily run buys again;
+ * `skipPoolAdopt: true` means it will not reuse the paid box either. #1041 made
+ * that path explicit: a failed deploy now refuses cutover and leaves the new
+ * box "for the stuck-alert path", which is exactly the state this cooldown has
+ * to notice.
+ *
+ * Seven days covers the whole eligibility window plus slack and stays far
+ * short of the ~30 day cycle, so the next renewal is unaffected. Combined with
+ * the 36h window a tenant gets exactly one purchase attempt per cycle: the
+ * T-24h run buys, and the T-0h run is cooled down (it had no usable runway
+ * anyway).
+ */
+const DEFAULT_PURCHASE_COOLDOWN_HOURS = 168;
 const SWEEP_REQUESTED_BY = "term-renewal-sweep";
 
 export type TermRenewalSweepFinding = {
@@ -61,6 +91,7 @@ export type TermRenewalSweepFinding = {
     | "skipped_economics"
     | "skipped_guard"
     | "skipped_in_flight"
+    | "skipped_cooldown"
     | "migrated"
     | "migration_failed";
   businessId: string;
@@ -81,7 +112,8 @@ export type TermRenewalSweepResult = {
 
 export type TermRenewalSweepOptions = {
   savingsThreshold?: number;
-  renewalWindowDays?: number;
+  renewalWindowHours?: number;
+  purchaseCooldownHours?: number;
   now?: Date;
 };
 
@@ -135,6 +167,14 @@ export type TermRenewalSweepDeps = {
     /** False when deploy-client.sh did not finish cleanly on the new box. */
     deploySucceeded?: boolean;
   }>;
+  /**
+   * Most recent moment we started buying a term box for this business, or null
+   * when there is no record of one. Backs the purchase cooldown, so it reads
+   * the two stamps that survive a failed migration: the ledger row enqueued
+   * before the money moves, and the inventory row written right after the
+   * purchase returns. Production default reads both; tests inject.
+   */
+  getLastTermPurchaseAt?: (businessId: string) => Promise<Date | null>;
   /** Injected so unit tests can skip the real provisioning_jobs ledger. */
   enqueueProvisioningJob?: (input: EnqueueProvisioningJobInput) => Promise<void>;
   runProvisioningJob?: typeof runProvisioningJob;
@@ -170,6 +210,28 @@ type SweepCandidate = {
 function errMsg(err: unknown): string {
   return err instanceof Error ? err.message : String(err);
 }
+
+/**
+ * Latest of the two stamps that outlive a failed term purchase. Either can be
+ * missing on its own: the ledger row is overwritten by a later enqueue of a
+ * different purpose, and the inventory write is best-effort after the purchase
+ * returns. Taking the max means one surviving stamp is enough to cool down.
+ */
+export function latestPurchaseStamp(a: Date | null, b: Date | null): Date | null {
+  if (!a) return b;
+  if (!b) return a;
+  return a.getTime() >= b.getTime() ? a : b;
+}
+
+/* c8 ignore start -- production wiring for the cooldown reads; tests inject */
+async function defaultGetLastTermPurchaseAt(businessId: string): Promise<Date | null> {
+  const [enqueuedAt, acquiredAt] = await Promise.all([
+    getLastTermRenewalEnqueuedAt(businessId),
+    getLastAcquiredAtForBusiness(businessId)
+  ]);
+  return latestPurchaseStamp(enqueuedAt, acquiredAt);
+}
+/* c8 ignore stop */
 
 async function markTermRenewalJobFailed(
   deps: Pick<TermRenewalSweepDeps, "markProvisioningJobOutcome">,
@@ -225,17 +287,32 @@ export function findCatalogFirstPeriodCents(
   return null;
 }
 
-/** True when `nextBillingAt` falls between `now` and `now + windowDays`. */
+/** True when `nextBillingAt` falls between `now` and `now + windowHours`. */
 export function isWithinRenewalWindow(
   nextBillingAt: string,
   now: Date,
-  windowDays = DEFAULT_RENEWAL_WINDOW_DAYS
+  windowHours = DEFAULT_RENEWAL_WINDOW_HOURS
 ): boolean {
   const next = new Date(nextBillingAt);
   if (Number.isNaN(next.getTime())) return false;
   const diffMs = next.getTime() - now.getTime();
   if (diffMs < 0) return false;
-  return diffMs <= windowDays * 24 * 60 * 60 * 1000;
+  return diffMs <= windowHours * 60 * 60 * 1000;
+}
+
+/**
+ * True when a term box was bought for this business too recently to buy
+ * another. `lastPurchaseAt` is null when we have no record of one.
+ */
+export function isWithinPurchaseCooldown(
+  lastPurchaseAt: Date | null,
+  now: Date,
+  cooldownHours = DEFAULT_PURCHASE_COOLDOWN_HOURS
+): boolean {
+  if (!lastPurchaseAt) return false;
+  const sincePurchaseMs = now.getTime() - lastPurchaseAt.getTime();
+  if (sincePurchaseMs < 0) return true;
+  return sincePurchaseMs <= cooldownHours * 60 * 60 * 1000;
 }
 
 function resolveBillingSub(
@@ -279,7 +356,10 @@ export async function runTermRenewalSweep(
   // under the same ceiling and can take minutes.
   const sweepStartedAtMs = Date.now();
   const savingsThreshold = options.savingsThreshold ?? DEFAULT_SAVINGS_THRESHOLD;
-  const renewalWindowDays = options.renewalWindowDays ?? DEFAULT_RENEWAL_WINDOW_DAYS;
+  const renewalWindowHours = options.renewalWindowHours ?? DEFAULT_RENEWAL_WINDOW_HOURS;
+  const purchaseCooldownHours = options.purchaseCooldownHours ?? DEFAULT_PURCHASE_COOLDOWN_HOURS;
+  /* c8 ignore next -- production cooldown default; tests inject */
+  const getLastTermPurchaseAt = deps.getLastTermPurchaseAt ?? defaultGetLastTermPurchaseAt;
 
   const [businesses, catalog, billingSubs] = await Promise.all([
     deps.listBusinesses(),
@@ -349,7 +429,7 @@ export async function runTermRenewalSweep(
     if (!billingSub) continue;
 
     const nextBillingAt = nextBillingTimestamp(billingSub);
-    if (!nextBillingAt || !isWithinRenewalWindow(nextBillingAt, now, renewalWindowDays)) {
+    if (!nextBillingAt || !isWithinRenewalWindow(nextBillingAt, now, renewalWindowHours)) {
       continue;
     }
 
@@ -398,6 +478,34 @@ export async function runTermRenewalSweep(
         vmId,
         nextBillingAt,
         detail: guard
+      });
+      continue;
+    }
+
+    // Still eligible AND we bought them a term box recently means the earlier
+    // purchase never completed its cutover: the tenant is on the old box, the
+    // paid new one is stranded, and buying again just strands another. Checked
+    // before the lease claim so a cooled-down tenant does not burn it.
+    const lastPurchaseAt = await getLastTermPurchaseAt(business.id);
+    if (lastPurchaseAt && isWithinPurchaseCooldown(lastPurchaseAt, now, purchaseCooldownHours)) {
+      const detail =
+        `a term box was bought for this business at ${lastPurchaseAt.toISOString()}, ` +
+        `inside the ${purchaseCooldownHours}h purchase cooldown, and they are still ` +
+        "eligible: the earlier purchase did not finish cutover. Not buying another; " +
+        "finish or unwind that box first";
+      logger.warn("term-renewal sweep: purchase cooldown", {
+        businessId: business.id,
+        vmId,
+        lastPurchaseAt: lastPurchaseAt.toISOString(),
+        nextBillingAt
+      });
+      findings.push({
+        kind: "skipped_cooldown",
+        businessId: business.id,
+        businessName: business.name,
+        vmId,
+        nextBillingAt,
+        detail
       });
       continue;
     }
