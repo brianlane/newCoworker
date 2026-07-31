@@ -112,6 +112,9 @@ export type AcuityWebhookDeps = {
 
 export type AcuityWebhookIntelligence = {
   hydrated: boolean;
+  /** The hydrated appointment, when we got one. Used to qualify the flow
+   * channel's idempotency key: see processAcuityWebhookEvent. */
+  appointment?: AcuityAppointmentItem | null;
   goalsFired: number;
   jumpedRuns: number;
   triggerRunsEnqueued: number;
@@ -121,6 +124,7 @@ export type AcuityWebhookIntelligence = {
 
 const NO_INTELLIGENCE: AcuityWebhookIntelligence = {
   hydrated: false,
+  appointment: null,
   goalsFired: 0,
   jumpedRuns: 0,
   triggerRunsEnqueued: 0,
@@ -267,6 +271,7 @@ export async function processAcuityAppointmentEvent(
     return result;
   }
   result.hydrated = true;
+  result.appointment = appt;
 
   // Trust the appointment over the action word: `changed` can carry a
   // cancellation, and only the hydrated row actually knows.
@@ -433,13 +438,26 @@ export async function processAcuityWebhookEvent(
   event: AcuityWebhookEvent,
   deps: AcuityWebhookDeps = {}
 ): Promise<AcuityWebhookResult> {
+  // Appointment intelligence FIRST, because it hydrates. Acuity's payload
+  // carries only ids, so `action` plus appointment id is not a usable
+  // idempotency key: two consecutive reschedules of the same appointment
+  // produce byte-identical payloads, and the flow channel would drop the
+  // second as a redelivery even though the customer really did move it
+  // again. The appointment's own current state is what tells a genuine new
+  // change apart from a retry of the same one.
+  //
+  // Ordering costs nothing: a hydration failure throws, the route answers
+  // 5xx, and Acuity retries the whole delivery, so the flow channel loses no
+  // event it would otherwise have had.
+  const intelligence = await processAcuityAppointmentEvent(businessId, conn, event, deps);
+
   let flowRunsEnqueued = 0;
   try {
+    const appt = intelligence.appointment;
+    const state = appt ? `${appt.startIso}:${appt.canceled ? "canceled" : "standing"}` : "unknown";
     const flow = await processWebhookFlowEvent(businessId, {
       source: "acuity",
-      // A redelivery of the same action for the same appointment at the same
-      // time dedupes; a genuine later reschedule does not collapse into it.
-      eventId: `acuity:${event.action}:${event.appointmentId}`,
+      eventId: `acuity:${event.action}:${event.appointmentId}:${state}`,
       payload: event.raw
     } as never);
     flowRunsEnqueued = flow?.enqueued ?? 0;
@@ -451,6 +469,5 @@ export async function processAcuityWebhookEvent(
     });
   }
 
-  const intelligence = await processAcuityAppointmentEvent(businessId, conn, event, deps);
   return { ...intelligence, flowRunsEnqueued };
 }

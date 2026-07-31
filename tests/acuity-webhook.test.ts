@@ -441,14 +441,56 @@ describe("processAcuityWebhookEvent", () => {
     ).rejects.toBeInstanceOf(AcuityHydrationError);
   });
 
-  it("dedupes a redelivery but not a genuine later change", async () => {
+  it("dedupes a true REDELIVERY: identical payload and unchanged appointment", async () => {
     await processAcuityWebhookEvent(BIZ, CONN, EVENT, deps());
     const first = vi.mocked(processWebhookFlowEvent).mock.calls[0][1] as { eventId: string };
     vi.mocked(processWebhookFlowEvent).mockClear();
-    await processAcuityWebhookEvent(BIZ, CONN, { ...EVENT, action: "rescheduled" }, deps());
+    await processAcuityWebhookEvent(BIZ, CONN, EVENT, deps());
+    const again = vi.mocked(processWebhookFlowEvent).mock.calls[0][1] as { eventId: string };
+    expect(again.eventId).toBe(first.eventId);
+  });
+
+  it("does NOT dedupe a second move of the same appointment", async () => {
+    // Acuity's payload is ids only, so two consecutive reschedules are
+    // byte-identical. Without the appointment's own state in the key, the
+    // customer's second move would be dropped as a redelivery.
+    const move = { ...EVENT, action: "rescheduled" };
+    await processAcuityWebhookEvent(BIZ, CONN, move, deps());
+    const first = vi.mocked(processWebhookFlowEvent).mock.calls[0][1] as { eventId: string };
+    vi.mocked(processWebhookFlowEvent).mockClear();
+    await processAcuityWebhookEvent(
+      BIZ,
+      CONN,
+      move,
+      deps({ hydrate: vi.fn().mockResolvedValue(appt({ startIso: "2026-08-09T19:00:00.000Z" })) })
+    );
     const second = vi.mocked(processWebhookFlowEvent).mock.calls[0][1] as { eventId: string };
-    expect(first.eventId).toBe("acuity:scheduled:500");
     expect(second.eventId).not.toBe(first.eventId);
+  });
+
+  it("distinguishes a cancellation from a standing appointment at the same time", async () => {
+    await processAcuityWebhookEvent(BIZ, CONN, EVENT, deps());
+    const standing = vi.mocked(processWebhookFlowEvent).mock.calls[0][1] as { eventId: string };
+    vi.mocked(processWebhookFlowEvent).mockClear();
+    await processAcuityWebhookEvent(
+      BIZ,
+      CONN,
+      EVENT,
+      deps({ hydrate: vi.fn().mockResolvedValue(appt({ canceled: true })) })
+    );
+    const canceled = vi.mocked(processWebhookFlowEvent).mock.calls[0][1] as { eventId: string };
+    expect(canceled.eventId).not.toBe(standing.eventId);
+  });
+
+  it("falls back to a stable key when there is no appointment to qualify with", async () => {
+    await processAcuityWebhookEvent(
+      BIZ,
+      CONN,
+      EVENT,
+      deps({ hydrate: vi.fn().mockResolvedValue(null) })
+    );
+    const ev = vi.mocked(processWebhookFlowEvent).mock.calls[0][1] as { eventId: string };
+    expect(ev.eventId).toBe("acuity:scheduled:500:unknown");
   });
 
   it("tolerates a flow result with no count", async () => {
