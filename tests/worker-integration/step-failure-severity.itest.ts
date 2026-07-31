@@ -29,11 +29,18 @@ import { createFlow, enqueueRun, getRun, seedBusiness, serviceDb, tickWorker } f
  */
 const UNREACHABLE = "https://itest-step-severity.invalid/lead";
 
+/**
+ * `extract_url` first, not a seeded run var: the schema enforces var
+ * provenance (`urlVar "x" which no earlier step produces`), and pulling the
+ * URL off the trigger is both deterministic and how the real HomeLight flow
+ * starts.
+ */
 function browseFlow(): Record<string, unknown> {
   const def = {
     version: 1,
     trigger: { channel: "tenant_email", conditions: [] },
     steps: [
+      { id: "url", type: "extract_url", saveAs: "page_url" },
       {
         id: "read",
         type: "browse_extract",
@@ -50,7 +57,7 @@ const TRIGGER = {
   channel: "tenant_email",
   from: "alerts@example.com",
   subject: "New lead",
-  windowText: "A lead arrived."
+  windowText: `A lead arrived. Portal: ${UNREACHABLE}`
 };
 
 type LogRow = { level: string; event: string; payload: Record<string, unknown> };
@@ -80,7 +87,7 @@ describe("ai_flow_step_failed severity (real worker)", () => {
   it("logs retryable step failures at warn and only the dead-lettering attempt at error", async () => {
     const biz = await seedBusiness(db, "IT step failure severity");
     const flowId = await createFlow(db, biz, browseFlow());
-    const runId = await enqueueRun(db, flowId, biz, TRIGGER, { page_url: UNREACHABLE });
+    const runId = await enqueueRun(db, flowId, biz, TRIGGER);
 
     // MAX_ATTEMPTS is 4, counted on error_retry_count: four re-queues, then the
     // fifth pass dead-letters. Tick past the budget so both sides of the flip
@@ -117,9 +124,12 @@ describe("ai_flow_step_failed severity (real worker)", () => {
 
   it("logs a run-ending PLAN failure at error on the first attempt, with no retries", async () => {
     const biz = await seedBusiness(db, "IT step failure terminal");
-    // A templated subject that renders empty is a hard plan failure: the
-    // planner returns ok:false, the worker fails the run immediately, and
-    // there is no retry to wait for.
+    // A LITERAL "none"-class recipient is a hard plan failure: it is a
+    // flow-config bug rather than a lead-data gap, so unlike a templated one
+    // it does not skip. The planner returns ok:false, the worker fails the run
+    // immediately, and there is no retry to wait for. (A templated empty
+    // recipient cannot be used here: the schema rejects a var no earlier step
+    // produces, and the whole point of this PR is that it now skips anyway.)
     const def = {
       version: 1,
       trigger: { channel: "tenant_email", conditions: [] },
@@ -127,8 +137,8 @@ describe("ai_flow_step_failed severity (real worker)", () => {
         {
           id: "mail",
           type: "send_email",
-          to: "owner@example.com",
-          subject: "{{vars.ghost}}",
+          to: "none",
+          subject: "A lead arrived",
           body: "hello"
         }
       ]
