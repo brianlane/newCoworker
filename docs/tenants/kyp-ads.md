@@ -93,7 +93,15 @@ Patches: `patch-kyp-offer-branch.ts`, `patch-kyp-business-hours.ts`,
 `enable-kyp-reply-alerts.ts`, `set-kyp-booking-email-sender.ts`,
 `reenroll-kyp-canceled-runs.ts`, `backfill-calendly-booking-goals.ts`,
 `fix-kyp-kav-contact.ts`, `mark-lead-spam.ts`, `undo-spam-flag.ts`,
-`strip-em-dashes-flows.ts`.
+`strip-em-dashes-flows.ts`, `rename-phone-named-gate-fields.ts`.
+
+The last one renames the booking flow's `has_phone` gate to `lead_reachable`.
+`has_phone` holds "yes"/"no", but `isPhoneFieldName` matches any phone token in
+a field name, so the phone-field validator added in PR #885 rewrote both values
+to "none" and would have killed the `confirm_sms` and `file_contact` steps on
+the next run. The flow had not fired since Jul 23 2026, so it was caught while
+still latent, unlike the same bug on Amy's ReferralExchange flow. Check for the
+shape with `tsx debug/audit-phone-field-names.ts`.
 
 ## History
 

@@ -24,6 +24,7 @@ import {
   messagesInWindow,
   isE164,
   isPhoneFieldName,
+  postProcessExtractedField,
   normalizeNanpToE164,
   sanitizeExtractedPhone,
   parseExtractionJson,
@@ -803,6 +804,62 @@ describe("isPhoneFieldName", () => {
     ]) {
       expect(isPhoneFieldName(name), name).toBe(false);
     }
+  });
+});
+
+describe("postProcessExtractedField", () => {
+  const PAGE = "Elizabeth Shriver\nBUYING FOR ~$592K IN FOUNTAIN HILLS, AZ\nPhone: +1-480-861-2455";
+
+  it("leaves a non-phone field completely alone", () => {
+    expect(postProcessExtractedField("lead_type", "seller", PAGE)).toBe("seller");
+    expect(postProcessExtractedField("price_band", "under_1m", PAGE)).toBe("under_1m");
+    // No fallback stuffing either: an empty non-phone field stays empty even
+    // though the page has a perfectly good phone number in it.
+    expect(postProcessExtractedField("web_source", "", PAGE)).toBe("");
+  });
+
+  it("does not rewrite a word-valued gate field whose NAME merely contains a phone token", () => {
+    // The Jul 24 2026 regression: `phone_lead_type` holds buyer/seller/both,
+    // never a number, but tokenizes to ["phone","lead","type"]. Sanitizing on
+    // the name alone turned every value into "none", so all three
+    // route_to_team steps skipped and Amy's team never saw the lead.
+    for (const v of ["buyer", "seller", "both", "none"]) {
+      expect(postProcessExtractedField("phone_lead_type", v, PAGE), v).toBe(v);
+    }
+    // KYP's booking flow has the same shape with yes/no.
+    expect(postProcessExtractedField("has_phone", "yes", PAGE)).toBe("yes");
+    expect(postProcessExtractedField("has_phone", "no", PAGE)).toBe("no");
+  });
+
+  it("still validates real phone fields (PR #885 must not regress)", () => {
+    // The model invented the "+" on 9 junk digits; Telnyx rejected it. Every
+    // value of this hazardous class has digits, so it is still sanitized.
+    expect(postProcessExtractedField("lead_phone", "+492046781", "typed 492046781")).toBe("none");
+    expect(postProcessExtractedField("lead_phone", "+0123456", "+0123456")).toBe("none");
+    // An international number the SOURCE shows with its "+" is kept.
+    expect(
+      postProcessExtractedField("lead_phone", "+442071234567", "Phone: +44 20 7123 4567")
+    ).toBe("+442071234567");
+  });
+
+  it("passes a digitless value through, because the send planner already stops it", () => {
+    // Prose in a real phone field is NOT coerced to "none" any more. That is
+    // safe rather than a #885 regression: the value the sanitizer exists to
+    // catch is one that LOOKS dialable (passes isE164) and dead-letters at
+    // Telnyx, and that always contains digits. A digitless value fails both
+    // isE164 and normalizeNanpToE164 in the send_sms planner, which skips the
+    // send as "unparseable_recipient_phone" with an actions_taken note and
+    // never reaches the carrier (supabase/functions/_shared/ai_flows/steps.ts).
+    expect(postProcessExtractedField("lead_phone", "call me maybe", PAGE)).toBe("call me maybe");
+  });
+
+  it("normalizes and back-fills real phone fields as before", () => {
+    expect(postProcessExtractedField("lead_phone", "(480) 562-8688", "")).toBe("+14805628688");
+    // Empty phone-named field falls back to the first labeled phone on the page.
+    expect(postProcessExtractedField("lead_phone", "", PAGE)).toBe("+14808612455");
+    // Nothing to fall back to leaves the extractors' own no-value convention.
+    expect(postProcessExtractedField("lead_phone", "", "no numbers here")).toBe("");
+    expect(postProcessExtractedField("lead_phone", "none", PAGE)).toBe("none");
   });
 });
 

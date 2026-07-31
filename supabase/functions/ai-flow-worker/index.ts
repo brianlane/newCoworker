@@ -47,21 +47,19 @@ import {
   evaluateStepCondition,
   extractLeadIdentity,
   extractLinkByText,
-  extractLabeledPhones,
   filterRosterByAvailability,
   flowTriggers,
   groupLeadPhone,
   htmlToText,
   isE164,
   isExecutableDefinition,
-  isPhoneFieldName,
   localClock,
   normalizeNanpToE164,
   parseExtractionJson,
   parseRoutedAgent,
   pickRosterAgent,
+  postProcessExtractedField,
   renderTemplate,
-  sanitizeExtractedPhone,
   senderPinnedByFromMatches,
   type AvailabilityMode,
   type NowScope,
@@ -3124,15 +3122,7 @@ async function browseStep(
       raw[f.name] = scope.vars[f.name] as string;
       continue;
     }
-    let val = extracted[f.name] ?? "";
-    if (isPhoneFieldName(f.name)) {
-      if (!val) val = extractLabeledPhones(pageText)[0] ?? "";
-      // Undialable values (model-invented "+" prefixes included) become
-      // "none" so the flow's no-phone branch runs instead of a guaranteed
-      // Telnyx rejection (KYP "+492046781", Jul 23 2026).
-      val = sanitizeExtractedPhone(val, pageText);
-    }
-    raw[f.name] = val;
+    raw[f.name] = postProcessExtractedField(f.name, extracted[f.name] ?? "", pageText);
   }
   // Scrub BEFORE the link/screenshot passthroughs join the map, so the
   // actions_taken note only ever names real extraction fields.
@@ -3202,15 +3192,7 @@ async function extractTextStep(
 
   const raw: Record<string, string> = {};
   for (const f of action.fields) {
-    let val = extracted[f.name] ?? "";
-    if (isPhoneFieldName(f.name)) {
-      if (!val) val = extractLabeledPhones(action.text)[0] ?? "";
-      // Undialable values (model-invented "+" prefixes included) become
-      // "none" so the flow's no-phone branch runs instead of a guaranteed
-      // Telnyx rejection (KYP "+492046781", Jul 23 2026).
-      val = sanitizeExtractedPhone(val, action.text);
-    }
-    raw[f.name] = val;
+    raw[f.name] = postProcessExtractedField(f.name, extracted[f.name] ?? "", action.text);
   }
   const out = await scrubExtractedSelfPhones(supabase, run, scope, raw, "extract_text");
 
@@ -3303,15 +3285,7 @@ async function emailExtractStep(
       raw[f.name] = scope.vars[f.name] as string;
       continue;
     }
-    let val = extracted[f.name] ?? "";
-    if (isPhoneFieldName(f.name)) {
-      if (!val) val = extractLabeledPhones(data.bodyText)[0] ?? "";
-      // Undialable values (model-invented "+" prefixes included) become
-      // "none" so the flow's no-phone branch runs instead of a guaranteed
-      // Telnyx rejection (KYP "+492046781", Jul 23 2026).
-      val = sanitizeExtractedPhone(val, data.bodyText);
-    }
-    raw[f.name] = val;
+    raw[f.name] = postProcessExtractedField(f.name, extracted[f.name] ?? "", data.bodyText);
   }
   const out = await scrubExtractedSelfPhones(supabase, run, scope, raw, "email_extract");
   Object.assign(scope.vars, out);
@@ -3720,15 +3694,7 @@ async function browseActionStep(
     }
     const raw: Record<string, string> = {};
     for (const f of action.fields) {
-      let val = extracted[f.name] ?? "";
-      if (isPhoneFieldName(f.name)) {
-        if (!val) val = extractLabeledPhones(pageText)[0] ?? "";
-        // Undialable values (model-invented "+" prefixes included) become
-        // "none" so the flow's no-phone branch runs instead of a guaranteed
-        // Telnyx rejection (KYP "+492046781", Jul 23 2026).
-        val = sanitizeExtractedPhone(val, pageText);
-      }
-      raw[f.name] = val;
+      raw[f.name] = postProcessExtractedField(f.name, extracted[f.name] ?? "", pageText);
     }
     const out = await scrubExtractedSelfPhones(supabase, run, scope, raw, "browse_action");
     Object.assign(scope.vars, out);
