@@ -463,8 +463,17 @@ describe("runTermRenewalSweep", () => {
       hostinger_billing_subscription_id: "hbs-new"
     });
     expect(deps.hostinger.disableBillingAutoRenewal).toHaveBeenCalledWith("hbs-old");
+    // expires_at has to be stamped at pool time, not left for the daily
+    // billing-posture cron to backfill: claimAvailableVps treats a null
+    // expiry as "unknown runway" and will hand the box to a new signup, so a
+    // box pooled and claimed on the same day skips the 72h runway floor
+    // entirely. The sweep already knows the old box's paid-through.
     expect(deps.releaseVpsToPool).toHaveBeenCalledWith(
-      expect.objectContaining({ vmId: 1800985, plan: "kvm2" })
+      expect.objectContaining({
+        vmId: 1800985,
+        plan: "kvm2",
+        expiresAt: "2026-07-23T12:00:00.000Z"
+      })
     );
     expect(deps.markVpsNeverRenew).toHaveBeenCalledWith(1800985);
     expect(deps.sendOpsEmail).toHaveBeenCalledWith(

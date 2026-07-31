@@ -149,6 +149,8 @@ export type TermRenewalSweepDeps = {
     vmId: number;
     plan: VpsSize;
     hostingerBillingSubscriptionId?: string | null;
+    /** Hostinger paid-through, so the pool knows this box's runway immediately. */
+    expiresAt?: string | null;
     notes?: string | null;
   }) => Promise<void>;
   markVpsNeverRenew: (vmId: number) => Promise<void>;
@@ -864,6 +866,11 @@ async function migrateTenantTermRenewal(
       vmId: oldVmId,
       plan: releasedPlan,
       hostingerBillingSubscriptionId: oldBillingId,
+      // Stamp the paid-through now rather than waiting for the daily
+      // billing-posture cron to backfill it. claimAvailableVps treats a null
+      // expiry as "unknown runway" and will hand the box to a new signup, so
+      // a box pooled and claimed the same day would skip the 72h runway floor.
+      expiresAt: input.nextBillingAt,
       notes: `term-renewal sweep of business ${businessId}; auto-renew off, never_renew`
     });
     pooled = true;
