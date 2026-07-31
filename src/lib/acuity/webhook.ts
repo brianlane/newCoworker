@@ -154,7 +154,7 @@ export async function syncAcuityContact(
   // file against, so there is nothing honest to do with it here.
   if (!phone) return false;
   try {
-    const existing = await getCustomerMemory(businessId, phone);
+    let existing = await getCustomerMemory(businessId, phone);
     if (!existing) {
       try {
         await createCustomerMemory(businessId, {
@@ -164,9 +164,13 @@ export async function syncAcuityContact(
         });
         return true;
       } catch (err) {
-        // Two deliveries for the same brand-new customer can race; the
-        // loser just falls through to the fill-only update below.
+        // Two deliveries for the same brand-new customer can race. The loser
+        // falls through to the fill-only update below, but it must RE-READ
+        // first: its `existing` snapshot is the pre-race null, and treating
+        // that as "the row is blank" would overwrite whatever the winner
+        // just wrote.
         if (!(err instanceof CustomerExistsError)) throw err;
+        existing = await getCustomerMemory(businessId, phone);
       }
     }
     // Fill-only: never overwrite what the owner has edited with whatever the

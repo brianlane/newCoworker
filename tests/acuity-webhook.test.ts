@@ -492,6 +492,17 @@ describe("syncAcuityContact", () => {
     expect(vi.mocked(updateCustomerOwnerFields)).not.toHaveBeenCalled();
   });
 
+  it("fills a blank name on an existing contact", async () => {
+    vi.mocked(getCustomerMemory).mockResolvedValue({
+      display_name: null,
+      email: "already@example.org"
+    } as never);
+    await expect(syncAcuityContact(BIZ, appt() as never)).resolves.toBe(true);
+    expect(vi.mocked(updateCustomerOwnerFields)).toHaveBeenCalledWith(BIZ, "+15551234567", {
+      displayName: "Sam Rivera"
+    });
+  });
+
   it("fills only the blanks on an existing contact", async () => {
     vi.mocked(getCustomerMemory).mockResolvedValue({
       display_name: "Kept",
@@ -503,10 +514,28 @@ describe("syncAcuityContact", () => {
     });
   });
 
-  it("falls through to the update when two deliveries race the create", async () => {
+  it("RE-READS after losing the create race, so it cannot clobber the winner", async () => {
+    // The pre-race snapshot says "blank"; the row is not blank any more.
+    vi.mocked(getCustomerMemory)
+      .mockResolvedValueOnce(null as never)
+      .mockResolvedValueOnce({
+        display_name: "Winner's name",
+        email: "winner@example.org"
+      } as never);
+    vi.mocked(createCustomerMemory).mockRejectedValue(new CustomerExistsError("exists"));
+    await expect(syncAcuityContact(BIZ, appt() as never)).resolves.toBe(false);
+    expect(vi.mocked(updateCustomerOwnerFields)).not.toHaveBeenCalled();
+  });
+
+  it("still fills the blanks the race winner left empty", async () => {
+    vi.mocked(getCustomerMemory)
+      .mockResolvedValueOnce(null as never)
+      .mockResolvedValueOnce({ display_name: "Winner", email: null } as never);
     vi.mocked(createCustomerMemory).mockRejectedValue(new CustomerExistsError("exists"));
     await expect(syncAcuityContact(BIZ, appt() as never)).resolves.toBe(true);
-    expect(vi.mocked(updateCustomerOwnerFields)).toHaveBeenCalled();
+    expect(vi.mocked(updateCustomerOwnerFields)).toHaveBeenCalledWith(BIZ, "+15551234567", {
+      email: "sam@example.org"
+    });
   });
 
   it("creates a contact with no email when Acuity has none", async () => {
