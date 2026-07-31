@@ -24,6 +24,30 @@ export type SystemLogInput = {
   payload?: Record<string, unknown>;
 };
 
+/**
+ * Pick the level for one AiFlow step transition.
+ *
+ * The distinction that matters is TERMINAL vs RETRYABLE, not failed vs not.
+ * Most step failures are transient: the worker re-queues the run and the next
+ * attempt succeeds. Logging those at `error` put runs that finished perfectly
+ * well on the fleet-wide "System Errors" dashboard, which selects
+ * `level = 'error'`, and pushed the failures that DID end a run off the list.
+ * A failure earns `error` only when the run actually dies of it.
+ *
+ * `persistFailed` (the `ai_flow_run_steps` upsert itself erroring) always wins:
+ * that is a persistence bug rather than a flow outcome, and it means the
+ * durable trace has diverged from the run table.
+ */
+export function stepLogLevel(
+  status: string,
+  opts: { terminal: boolean; persistFailed: boolean }
+): SystemLogLevel {
+  if (opts.persistFailed) return "error";
+  if (status === "failed") return opts.terminal ? "error" : "warn";
+  if (status === "pending") return "info";
+  return "debug";
+}
+
 export async function systemLog(
   supabase: InsertSupabase,
   input: SystemLogInput

@@ -225,6 +225,19 @@ describe("simulateTestAction", () => {
         scope()
       )
     ).toEqual({ simulated: "send_email", to: "a@b.co", subject: "s", body: "b" });
+    expect(
+      simulateTestAction(
+        {
+          kind: "send_email",
+          to: "",
+          subject: "s",
+          body: "b",
+          attachScreenshot: false,
+          skipReason: "no_recipient_email"
+        } as StepAction,
+        scope()
+      )
+    ).toEqual({ simulated: "send_email", skipped: "no_recipient_email" });
 
     expect(
       simulateTestAction({ kind: "notify_owner", message: "m" } as StepAction, scope())

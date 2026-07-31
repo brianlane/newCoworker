@@ -79,6 +79,10 @@ export function simulateTestAction(
         body: action.body
       };
     case "send_email":
+      // Same skip semantics as send_sms.
+      if (action.skipReason) {
+        return { simulated: "send_email", skipped: action.skipReason };
+      }
       return {
         simulated: "send_email",
         to: action.to,

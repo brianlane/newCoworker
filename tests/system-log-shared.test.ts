@@ -1,5 +1,5 @@
 import { describe, it, expect, vi } from "vitest";
-import { systemLog } from "../supabase/functions/_shared/system_log";
+import { stepLogLevel, systemLog } from "../supabase/functions/_shared/system_log";
 
 function mockSupabase(insertResult: { error: { message: string } | null }) {
   const insert = vi.fn().mockResolvedValue(insertResult);
@@ -70,5 +70,35 @@ describe("systemLog (Edge shared)", () => {
     ).resolves.toBeUndefined();
     expect(spy).toHaveBeenCalled();
     spy.mockRestore();
+  });
+});
+
+describe("stepLogLevel", () => {
+  const base = { terminal: true, persistFailed: false };
+
+  it("logs a RUN-ENDING step failure at error", () => {
+    expect(stepLogLevel("failed", base)).toBe("error");
+  });
+
+  it("logs a RETRYABLE step failure at warn, so the fleet panel only shows real breakage", () => {
+    // The regression this pins: a HomeLight browse step hit a 30s render
+    // navigation timeout twice, the worker retried, the run finished `done` --
+    // and both attempts still sat on the admin "System Errors" dashboard.
+    expect(stepLogLevel("failed", { ...base, terminal: false })).toBe("warn");
+  });
+
+  it("escalates to error when the durable step row failed to persist, retryable or not", () => {
+    // A diverged trace is a persistence bug, not a flow outcome.
+    for (const terminal of [true, false]) {
+      expect(stepLogLevel("failed", { terminal, persistFailed: true })).toBe("error");
+      expect(stepLogLevel("done", { terminal, persistFailed: true })).toBe("error");
+    }
+  });
+
+  it("keeps parked steps at info and every other transition at debug", () => {
+    expect(stepLogLevel("pending", base)).toBe("info");
+    for (const status of ["running", "done", "skipped"]) {
+      expect(stepLogLevel(status, base)).toBe("debug");
+    }
   });
 });

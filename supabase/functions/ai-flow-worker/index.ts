@@ -33,7 +33,7 @@ import {
   scrubSelfPhones,
   withSelfNameRetryHint
 } from "../_shared/ai_flows/extracted_contact.ts";
-import { systemLog } from "../_shared/system_log.ts";
+import { stepLogLevel, systemLog } from "../_shared/system_log.ts";
 import { telnyxSendSms, telnyxSendGroupMms } from "../_shared/telnyx_sms_compliance.ts";
 import { sendOperationalSms } from "../_shared/sms_operational_meter.ts";
 import { resolveRcsAgentId } from "../_shared/channel_settings.ts";
@@ -984,11 +984,16 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       outcome = await runStep(supabase, run, step, index, scope, approval, routing);
     } catch (e) {
       // A THROWN (transient) error otherwise leaves the step row stuck at
-      // "running" — so a dead-lettered run shows a phantom in-progress step.
+      // "running", so a dead-lettered run shows a phantom in-progress step.
       // Finalize the row as "failed" (carrying any diagnostics the step
       // attached, e.g. a screenshot of the page extraction failed on) before
       // re-throwing into the retry/dead-letter handler. On a re-queue the next
       // attempt flips it back to "running" via recordStep at the step's start.
+      //
+      // This path is RETRYABLE unless the budget is already spent, so it only
+      // earns error level on the attempt that will dead-letter. Same predicate
+      // handleRunThrow uses a moment later to decide re-queue vs failRun; keep
+      // the two in step.
       const diag = e instanceof StepDiagnosticError ? e.result : undefined;
       await recordStep(
         supabase,
@@ -997,7 +1002,8 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         step,
         "failed",
         diag,
-        e instanceof Error ? e.message : String(e)
+        e instanceof Error ? e.message : String(e),
+        (run.error_retry_count ?? 0) >= MAX_ATTEMPTS
       );
       throw e;
     }
@@ -5642,14 +5648,21 @@ async function sendEmailStep(
   scope: Scope,
   action: Extract<StepAction, { kind: "send_email" }>
 ): Promise<StepOutcome> {
+  // The planner resolved a TEMPLATED recipient to nothing usable (the lead has
+  // no email on file yet). Mirror the send_sms / send_whatsapp skip path so a
+  // lead-data gap never fails a run that has already claimed the referral.
+  if (action.skipReason) {
+    appendActionTaken(scope, "skipped the email (no recipient address)");
+    return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
+  }
   // Extraction-derived recipients (e.g. a lead-marketing email to
   // {{vars.lead_email}}) commonly resolve to the literal "none" when the lead
   // has no address. A non-deliverable `to` 4xxs at Resend and would fail the
-  // whole run after a successful claim, so skip the send instead — the owner
-  // still learns the outcome via actions_taken / notify_owner. The planner only
-  // rejects an EMPTY `to`, and cc/bcc are already EMAIL_RE-validated there, so
-  // this just adds the address-shape check the send_sms email fallback also
-  // applies (it requires an "@").
+  // whole run after a successful claim, so skip the send instead: the owner
+  // still learns the outcome via actions_taken / notify_owner. cc/bcc are
+  // already EMAIL_RE-validated in the planner, so this is the address-shape
+  // check the send_sms email fallback also applies (it requires an "@"), and
+  // the backstop for a LITERAL bad address the planner lets through.
   if (!LEAD_EMAIL_RE.test(action.to)) {
     appendActionTaken(scope, `skipped email to "${action.to}" (no valid address)`);
     return { kind: "ok", skipped: true, result: { skipped: "invalid_recipient", to: action.to } };
@@ -8817,6 +8830,22 @@ function claimEmailLeadLabel(scope: Scope): string {
 
 // --- persistence helpers -----------------------------------------------------
 
+/**
+ * Persist one step transition to `ai_flow_run_steps` and mirror it to
+ * `system_logs`.
+ *
+ * `terminal` only matters when `status` is "failed", and it is what keeps the
+ * fleet-wide error panel honest. Most step failures are TRANSIENT: the worker
+ * re-queues the run and the next attempt succeeds, so logging them at `error`
+ * filled the admin dashboard with 15 rows about runs that finished fine. A
+ * failure earns `error` only when it actually ends the run: either the planner
+ * returned a hard fail (`outcome.kind === "fail"`, with failRun on the next
+ * line) or the transient-retry budget is spent. Everything else is `warn`,
+ * which the fleet panel filters out (`listSystemLogErrorsAll` selects
+ * level="error") while the per-business admin page still shows it (it fetches
+ * minLevel "warn"). Same shape the sms-inbound-worker already uses, and it
+ * makes this consistent with `ai_flow_run_retry`, which was already `warn`.
+ */
 async function recordStep(
   supabase: Supabase,
   run: RunRow,
@@ -8824,7 +8853,8 @@ async function recordStep(
   step: FlowStep,
   status: string,
   result?: Record<string, unknown>,
-  error?: string
+  error?: string,
+  terminal = true
 ): Promise<void> {
   const { error: upErr } = await supabase.from("ai_flow_run_steps").upsert(
     {
@@ -8841,20 +8871,16 @@ async function recordStep(
   );
   if (upErr) console.error("ai_flow_run_steps upsert", upErr);
   // Every step transition lands in system_logs so the admin view can replay a
-  // run without joining tables: failed steps are errors, parked steps info,
-  // everything else debug-level trace. If the durable ai_flow_run_steps upsert
-  // failed, escalate to error and carry the upsert failure in the payload so
-  // the trace can't silently diverge from what the run table actually shows.
+  // run without joining tables: run-ending failures are errors, retryable ones
+  // warnings, parked steps info, everything else debug-level trace. If the
+  // durable ai_flow_run_steps upsert failed, escalate to error regardless (that
+  // is a persistence bug, not a flow outcome) and carry the upsert failure in
+  // the payload so the trace can't silently diverge from what the run table
+  // actually shows.
   await systemLog(supabase, {
     businessId: run.business_id,
     source: "aiflow",
-    level: upErr
-      ? "error"
-      : status === "failed"
-        ? "error"
-        : status === "pending"
-          ? "info"
-          : "debug",
+    level: stepLogLevel(status, { terminal, persistFailed: Boolean(upErr) }),
     event: `ai_flow_step_${status}`,
     message: error ?? `${step.type} step ${status}`,
     payload: {
@@ -8863,6 +8889,9 @@ async function recordStep(
       step_index: index,
       step_type: step.type,
       attempt: run.attempt_count,
+      // Only meaningful on a failure, and the field the panel's absence of a
+      // row should be readable against: false = the worker is re-queueing.
+      ...(status === "failed" ? { terminal } : {}),
       ...(result ? { result } : {}),
       ...(upErr ? { step_row_persist_error: upErr.message } : {})
     }

@@ -1354,11 +1354,54 @@ describe("planStep: send_email", () => {
     const r = planStep({ ...step, attachScreenshot: true }, { vars: { lead_name: "Jane" } });
     expect(r.ok && r.action.kind === "send_email" && r.action.attachScreenshot).toBe(true);
   });
-  it("fails when the recipient resolves empty", () => {
-    expect(planStep({ ...step, to: "{{vars.owner_email}}" }, { vars: { lead_name: "J" } })).toEqual({
-      ok: false,
-      error: "send_email: recipient is empty after templating"
+  it("plans a SKIP when a templated recipient resolves empty (lead-data gap, not config bug)", () => {
+    // The HomeLight regression: the portal had not released the client's email
+    // yet, so {{vars.lead_email}} rendered "" and the run died at this step,
+    // taking both late-contact retry rungs with it.
+    expect(planStep({ ...step, to: "{{vars.lead_email}}" }, { vars: { lead_name: "J" } })).toEqual({
+      ok: true,
+      action: {
+        kind: "send_email",
+        to: "",
+        subject: "J BS RX",
+        body: "New buyer lead J.",
+        attachScreenshot: false,
+        skipReason: "no_recipient_email"
+      }
     });
+  });
+  it("plans a SKIP for 'none'-class templated recipients (extraction answered 'none')", () => {
+    for (const none of ["none", "N/A", "unknown", "null", "na"]) {
+      const r = planStep(
+        { ...step, to: "{{vars.lead_email}}" },
+        { vars: { lead_name: "J", lead_email: none } }
+      );
+      expect(r.ok && r.action.kind === "send_email" && r.action.skipReason).toBe(
+        "no_recipient_email"
+      );
+    }
+  });
+  it("skips BEFORE validating subject, so a blank subject on a skipped mail is not a failure", () => {
+    const r = planStep(
+      { ...step, to: "{{vars.lead_email}}", subject: "{{vars.ghost}}" },
+      { vars: { lead_name: "J" } }
+    );
+    expect(r.ok && r.action.kind === "send_email" && r.action.skipReason).toBe(
+      "no_recipient_email"
+    );
+  });
+  it("still FAILS when a literal recipient is empty or a sentinel (that is a flow-config bug)", () => {
+    // Deliberately louder than the worker's LEAD_EMAIL_RE net, and matched to
+    // send_sms / send_whatsapp / share_document: nobody types "none" as an
+    // address on purpose, so the author should hear about it rather than have
+    // every run quietly skip the send. Verified against the live fleet as
+    // affecting zero flows at the time of the change.
+    for (const bad of ["   ", "none", "N/A", "unknown"]) {
+      expect(planStep({ ...step, to: bad }, { vars: { lead_name: "J" } })).toEqual({
+        ok: false,
+        error: "send_email: recipient is empty after templating"
+      });
+    }
   });
   it("fails when the subject resolves empty", () => {
     expect(planStep({ ...step, subject: "{{vars.ghost}}" }, { vars: { lead_name: "J" } })).toEqual({
