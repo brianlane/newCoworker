@@ -129,6 +129,13 @@ type ProvisioningInput = {
    * emails are unaffected. New signups and change-plan leave this unset.
    */
   suppressOwnerNotify?: boolean;
+  /**
+   * How long the detached deploy poll may run, in ms. Migrations pass what is
+   * LEFT of their route budget (see {@link remainingDeployDeadlineMs}) because
+   * phase 4 starts 12 to 18 minutes in, not at t=0. Omitted for signup, which
+   * gets {@link DEPLOY_CLIENT_DEADLINE_DEFAULT_MS}.
+   */
+  deployDeadlineMs?: number;
   /** When true, send the ops "[ops] New signup live" alert after first successful deploy. */
   notifyOpsNewSignup?: boolean;
 };
@@ -530,8 +537,42 @@ function defaultDeployPollSleep(ms: number): Promise<void> {
 export const DEPLOY_CLIENT_LOCK_BUSY_EXIT = 75;
 
 const DEPLOY_CLIENT_POLL_DEFAULT_MS = 5_000;
-/** Align with Vercel maxDuration (1800s) minus a small buffer for post-deploy work. */
-const DEPLOY_CLIENT_DEADLINE_DEFAULT_MS = 28 * 60 * 1000;
+/**
+ * Standalone default: a signup starts phase 4 almost immediately, so aligning
+ * with Vercel maxDuration (1800s) minus a small buffer is right for it.
+ */
+export const DEPLOY_CLIENT_DEADLINE_DEFAULT_MS = 28 * 60 * 1000;
+
+/** The migrate-size / term-renewal route budget (`maxDuration = 1800`). */
+export const MIGRATION_ROUTE_BUDGET_MS = 1800 * 1000;
+/**
+ * Held back for what happens AFTER the deploy on a migration: restore the
+ * tarball, repoint billing, stop the old VM, disable its auto-renewal, pool it.
+ */
+export const MIGRATION_CUTOVER_RESERVE_MS = 8 * 60 * 1000;
+/**
+ * Never hand the deploy less than this. Below it the poll is pointless: better
+ * to let it run, fail cleanly, and leave the old box untouched (the cutover
+ * refuses on a failed deploy) than to give it 30 seconds.
+ */
+export const MIGRATION_DEPLOY_MIN_DEADLINE_MS = 5 * 60 * 1000;
+
+/**
+ * How long the deploy may run given time already spent.
+ *
+ * The 28-minute constant assumed phase 4 starts at t=0. In a migration it does
+ * not: snapshot, SSH tarball backup, purchase, boot and bootstrap run first,
+ * realistically 12 to 18 minutes. A deploy allowed the full 28 minutes finished
+ * around minute 45, past the route ceiling, leaving restore and teardown no
+ * budget at all.
+ */
+export function remainingDeployDeadlineMs(elapsedMs: number): number {
+  const left = MIGRATION_ROUTE_BUDGET_MS - elapsedMs - MIGRATION_CUTOVER_RESERVE_MS;
+  return Math.max(
+    MIGRATION_DEPLOY_MIN_DEADLINE_MS,
+    Math.min(DEPLOY_CLIENT_DEADLINE_DEFAULT_MS, left)
+  );
+}
 
 export type DetachedDeployPollResult =
   | { ok: true; source: "exit_file" | "progress" }
@@ -2113,6 +2154,7 @@ async function runOrchestrator(
       sshKeyRow: provisioned.sshKey,
       remoteExec,
       latestProvisioningStatus: latestStatus,
+      deadlineMs: input.deployDeadlineMs,
       sleep: deps?.sleep,
       now: deps?.now
     });

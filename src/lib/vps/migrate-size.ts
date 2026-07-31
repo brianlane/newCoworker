@@ -48,6 +48,7 @@ import {
   type RunProvisioningJobDeps
 } from "@/lib/provisioning/jobs";
 import { getLatestProvisioningStatus } from "@/lib/provisioning/progress";
+import { remainingDeployDeadlineMs } from "@/lib/provisioning/orchestrate";
 import { tryRecoverDeployCompleteNewBox } from "@/lib/vps/migration-cutover-recovery";
 import { sshExec } from "@/lib/hostinger/ssh";
 
@@ -114,6 +115,8 @@ export type MigrateVpsSizeDeps = {
     /** Buys the replacement box at the tenant's committed Hostinger term. */
     billingPeriod?: SubscriptionRow["billing_period"];
     suppressOwnerNotify?: boolean;
+    /** What is left of the route budget once pre-deploy work is done. */
+    deployDeadlineMs?: number;
   }) => Promise<{
     vpsId: string;
     hostingerBillingSubscriptionId: string | null;
@@ -154,6 +157,9 @@ export async function migrateBusinessVpsSize(
   deps: MigrateVpsSizeDeps
 ): Promise<MigrateVpsSizeOutcome> {
   const { businessId, targetSize, requestedBy } = input;
+  // Phase 4 does not start at t=0 here: snapshot, backup, purchase, boot and
+  // bootstrap run first. The deploy gets what is left, not a flat 28 minutes.
+  const migrationStartedAt = Date.now();
 
   // ── Load + guards ─────────────────────────────────────────────────────
   const biz = await deps.getBusiness(businessId);
@@ -358,7 +364,8 @@ export async function migrateBusinessVpsSize(
             tier: input.tier,
             vpsSize: targetSize,
             billingPeriod: input.billingPeriod,
-            suppressOwnerNotify: true
+            suppressOwnerNotify: true,
+            deployDeadlineMs: remainingDeployDeadlineMs(Date.now() - migrationStartedAt)
           });
           return {
             hostingerBillingSubscriptionId: out.hostingerBillingSubscriptionId,

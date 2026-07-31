@@ -33,6 +33,7 @@ import {
   type RunProvisioningJobDeps
 } from "@/lib/provisioning/jobs";
 import { getLatestProvisioningStatus } from "@/lib/provisioning/progress";
+import { remainingDeployDeadlineMs } from "@/lib/provisioning/orchestrate";
 import { tryRecoverDeployCompleteNewBox } from "@/lib/vps/migration-cutover-recovery";
 import { sshExec } from "@/lib/hostinger/ssh";
 
@@ -126,6 +127,8 @@ export type TermRenewalSweepDeps = {
     billingPeriod?: SubscriptionRow["billing_period"];
     skipPoolAdopt?: boolean;
     suppressOwnerNotify?: boolean;
+    /** What is left of the route budget once pre-deploy work is done. */
+    deployDeadlineMs?: number;
   }) => Promise<{
     vpsId: string;
     hostingerBillingSubscriptionId: string | null;
@@ -528,6 +531,9 @@ async function migrateTenantTermRenewal(
   deps: TermRenewalSweepDeps
 ): Promise<MigrateOutcome> {
   const { businessId, vpsSize } = input;
+  // Phase 4 does not start at t=0 here: snapshot, backup, purchase, boot and
+  // bootstrap run first. The deploy gets what is left, not a flat 28 minutes.
+  const migrationStartedAt = Date.now();
 
   const biz = await deps.getBusiness(businessId);
   if (!biz) {
@@ -674,7 +680,8 @@ async function migrateTenantTermRenewal(
             vpsSize,
             billingPeriod: input.billingPeriod,
             skipPoolAdopt: true,
-            suppressOwnerNotify: true
+            suppressOwnerNotify: true,
+            deployDeadlineMs: remainingDeployDeadlineMs(Date.now() - migrationStartedAt)
           });
           return {
             hostingerBillingSubscriptionId: out.hostingerBillingSubscriptionId,

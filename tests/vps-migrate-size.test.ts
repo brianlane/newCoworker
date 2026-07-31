@@ -401,7 +401,11 @@ describe("migrateBusinessVpsSize — provision + pin", () => {
       billingPeriod: "biennial",
       tier: "standard",
       vpsSize: "kvm4",
-      suppressOwnerNotify: true
+      suppressOwnerNotify: true,
+      // Derived from the wall clock (route budget minus time already spent),
+      // so pin the shape, not the value. remainingDeployDeadlineMs is covered
+      // exactly in tests/provisioning-deploy-budget.test.ts.
+      deployDeadlineMs: expect.any(Number)
     });
     expect(deps.markProvisioningJobOutcome).toHaveBeenCalledWith(BIZ, "succeeded");
   });
