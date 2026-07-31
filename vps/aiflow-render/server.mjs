@@ -60,6 +60,7 @@
  *   AIFLOW_GATEWAY_TOKEN       bearer for the platform credentials endpoint
  *   AIFLOW_SESSION_TTL_MS      idle context eviction, default 1800000 (30m)
  *   AIFLOW_MAX_SESSIONS        max cached contexts, default 50
+ *   AIFLOW_SETTLE_IDLE_TIMEOUT_MS  best-effort network-quiet wait, default 6000
  */
 import express from "express";
 import rateLimit from "express-rate-limit";
@@ -67,6 +68,25 @@ import { chromium } from "playwright";
 
 const PORT = Number(process.env.PORT ?? 8080);
 const NAV_TIMEOUT_MS = Number(process.env.AIFLOW_RENDER_TIMEOUT_MS ?? 30000);
+/**
+ * What `page.goto` waits for before returning.
+ *
+ * NOT "networkidle", which is what it used to be, because on a page that polls
+ * (websockets, analytics beacons, an SPA that long-polls) the network never
+ * goes quiet for 500ms and goto THROWS at NAV_TIMEOUT_MS. That is a hard
+ * `render_failed` for a page that was perfectly readable: HomeLight's portal
+ * timed out this way repeatedly on lead reads, retried, and the runs then
+ * completed fine.
+ *
+ * Raising the timeout cannot fix it (a page that never idles never idles, and
+ * three navigations x 30s already sits against a 120s worker abort and a ~100s
+ * Cloudflare 524 ceiling). Instead the network-quiet wait moved into
+ * settlePage() as a best-effort, non-throwing step, so a page that DOES idle
+ * behaves exactly as before and one that never does proceeds with whatever
+ * rendered. settlePage runs immediately after every navigation below, and its
+ * innerText poll was always the real "is this SPA painted" signal anyway.
+ */
+const NAV_WAIT_UNTIL = "domcontentloaded";
 const RENDER_TOKEN = process.env.AIFLOW_RENDER_TOKEN ?? "";
 const PLATFORM_URL = (process.env.AIFLOW_PLATFORM_URL ?? "").replace(/\/+$/, "");
 const GATEWAY_TOKEN = process.env.AIFLOW_GATEWAY_TOKEN ?? "";
@@ -659,11 +679,16 @@ async function runAction(page, a) {
 const SETTLE_TIMEOUT_MS = Number(process.env.AIFLOW_SETTLE_TIMEOUT_MS ?? 8000);
 const SETTLE_MIN_TEXT = Number(process.env.AIFLOW_SETTLE_MIN_TEXT ?? 40);
 const SETTLE_POST_DELAY_MS = Number(process.env.AIFLOW_SETTLE_POST_DELAY_MS ?? 600);
+// The network-quiet wait, moved OFF page.goto and in here. Same signal, but
+// best-effort: see the note on NAV_WAIT_UNTIL. Its own (smaller) budget so
+// three navigations plus three settles still fit inside the caller's ceiling.
+const SETTLE_IDLE_TIMEOUT_MS = Number(process.env.AIFLOW_SETTLE_IDLE_TIMEOUT_MS ?? 6000);
 
 /**
  * Wait for an SPA to finish painting before we capture/read/act. Best-effort
- * and bounded — a page that never fills in still proceeds after the timeout so
+ * and bounded: a page that never fills in still proceeds after the timeout so
  * a slow render degrades to "maybe blank" rather than a hang. Steps:
+ *   0) wait for the network to go quiet (what page.goto used to require), then
  *   1) wait for the `load` event (subresources), then
  *   2) poll until the body has real visible text (> SETTLE_MIN_TEXT chars), then
  *   3) a short fixed delay so late layout/fonts settle before the shot.
@@ -671,6 +696,9 @@ const SETTLE_POST_DELAY_MS = Number(process.env.AIFLOW_SETTLE_POST_DELAY_MS ?? 6
  */
 async function settlePage(page) {
   try {
+    await page
+      .waitForLoadState("networkidle", { timeout: SETTLE_IDLE_TIMEOUT_MS })
+      .catch(() => {});
     await page.waitForLoadState("load", { timeout: SETTLE_TIMEOUT_MS }).catch(() => {});
     await page
       .waitForFunction(
@@ -820,7 +848,7 @@ async function performForEach(page, forEachLink, actions, matchNames) {
   }
   for (const href of hrefs) {
     try {
-      await page.goto(href, { waitUntil: "networkidle", timeout: NAV_TIMEOUT_MS });
+      await page.goto(href, { waitUntil: NAV_WAIT_UNTIL, timeout: NAV_TIMEOUT_MS });
       await settlePage(page);
     } catch (e) {
       failed++;
@@ -1023,7 +1051,7 @@ app.post("/render", async (req, res) => {
       context = await browser.newContext({ userAgent: UA });
       page = await context.newPage();
       await attachSsrfGuard(page);
-      await page.goto(safe, { waitUntil: "networkidle", timeout: NAV_TIMEOUT_MS });
+      await page.goto(safe, { waitUntil: NAV_WAIT_UNTIL, timeout: NAV_TIMEOUT_MS });
       await settlePage(page);
       if (actions)
         return await respondWithActions(
@@ -1078,7 +1106,14 @@ app.post("/render", async (req, res) => {
   try {
     page = await session.context.newPage();
     await attachSsrfGuard(page);
-    await page.goto(safe, { waitUntil: "networkidle", timeout: NAV_TIMEOUT_MS });
+    await page.goto(safe, { waitUntil: NAV_WAIT_UNTIL, timeout: NAV_TIMEOUT_MS });
+    // Settle BEFORE judging whether this is a login page. looksLikeLogin takes
+    // an instant locator count with no auto-wait, and goto now returns at
+    // domcontentloaded, so on a login-gated SPA whose form renders client-side
+    // it would see no password field, skip authentication, and hand the
+    // extractor a logged-out shell. Under the old waitUntil: "networkidle" the
+    // page had already painted by this line; settling here is what restores it.
+    await settlePage(page);
 
     if (await looksLikeLogin(page, auth?.login)) {
       // Credential lookup / login-form failures are permanent SETUP errors
@@ -1096,7 +1131,10 @@ app.post("/render", async (req, res) => {
           .status(200)
           .json({ error: "auth_config_error", detail: String(e).slice(0, 200) });
       }
-      await page.goto(safe, { waitUntil: "networkidle", timeout: NAV_TIMEOUT_MS });
+      await page.goto(safe, { waitUntil: NAV_WAIT_UNTIL, timeout: NAV_TIMEOUT_MS });
+      // Same reason as above: settle before the second login check, or a slow
+      // re-render reads as "logged in" and the extractor gets the shell.
+      await settlePage(page);
       // Login can still fail (bad creds / MFA / captcha). Surface it AND drop the
       // logged-out session so the next call doesn't reuse a poisoned context and
       // hand the extractor a login page.
@@ -1107,11 +1145,11 @@ app.post("/render", async (req, res) => {
       }
     }
 
-    // Let the (post-login) SPA paint before we screenshot / read / act, so the
-    // lead page's fields and buttons (e.g. "Provide Update") are present and the
-    // debug screenshots aren't blank. Covers both the no-login and post-login
-    // navigations, which converge here.
-    await settlePage(page);
+    // The SPA has already been settled: every path to this line settles right
+    // after its own navigation (that is what makes the login check reliable),
+    // so the lead page's fields and buttons (e.g. "Provide Update") are present
+    // and the debug screenshots aren't blank. Don't re-settle here, it would
+    // just pay the network-quiet wait a third time on a page that never idles.
 
     // ACTION mode runs after any login. An action failure does NOT poison the
     // session — the login is still good; only the page/selectors disagreed.

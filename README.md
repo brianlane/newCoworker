@@ -2388,8 +2388,13 @@ automatically, and a second consecutive failure emails
 team@newcoworker.com — production has not updated until that run is green.
 
 **Still manual after merge (when the change calls for it):**
-- VPS fleet redeploys when `vps/` changed (`tsx debug/update-all-vps.ts`,
-  voice-bridge redeploy) — per-box SSH keys never leave the laptop.
+- VPS fleet redeploys when `vps/` changed. Per-box SSH keys never leave the
+  laptop. Which script depends on WHICH subtree changed, they are not
+  interchangeable: `tsx debug/update-all-vps.ts` rolls out `vps/chat-worker`
+  only, `tsx debug/redeploy-aiflow-render.ts --business-id <uuid>` rebuilds a
+  box's `vps/aiflow-render` sidecar (per box, and it deliberately preserves
+  that box's `.env`), and voice-bridge has its own redeploy. A render change
+  shipped via `update-all-vps.ts` silently does nothing.
 - Seeds / one-shot scripts (`scripts/oneshot/`, ledger-recorded).
 - `tsx debug/aeo-crawler-probe.ts` when the change touched hostnames, the
   Cloudflare zone, DNS, or `src/lib/marketing/*`. CI can only assert what we
