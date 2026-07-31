@@ -111,9 +111,12 @@ function makeDeps(overrides: Partial<MigrateVpsSizeDeps> = {}): MigrateVpsSizeDe
         suppressOwnerNotify: job.suppress_owner_notify === true ? true : undefined,
         skipPoolAdopt: job.skip_pool_adopt === true ? true : undefined
       });
+      // Mirrors the real runProvisioningJob, which returns the orchestrate
+      // result unchanged.
       return {
         hostingerBillingSubscriptionId: out.hostingerBillingSubscriptionId,
-        vpsId: out.vpsId ?? "1900001"
+        vpsId: out.vpsId ?? "1900001",
+        deploySucceeded: out.deploySucceeded
       };
     }),
     markProvisioningJobOutcome: vi.fn(async () => undefined),
@@ -365,6 +368,28 @@ describe("migrateBusinessVpsSize — provision + pin", () => {
       expect(out.error).toMatch(/no vpsId/);
     }
   });
+  // Step 3 is documented fail-closed, but orchestrate hands back a normal
+  // result on a failed deploy, so without a success flag the cutover restored
+  // onto a dead box and then stopped the healthy old one.
+  it("fails at provision when the deploy failed, leaving the old box serving", async () => {
+    const deps = makeDeps({
+      orchestrateProvisioning: vi.fn(async () => ({
+        vpsId: "1900001",
+        hostingerBillingSubscriptionId: "hbs-new",
+        deploySucceeded: false
+      }))
+    });
+    const out = await migrateBusinessVpsSize(input, deps);
+    expect(out.ok).toBe(false);
+    if (!out.ok) {
+      expect(out.stage).toBe("provision");
+      expect(out.error).toMatch(/deploy failed/);
+    }
+    expect(deps.hostinger.stopVirtualMachine).not.toHaveBeenCalled();
+    expect(deps.hostinger.disableBillingAutoRenewal).not.toHaveBeenCalled();
+    expect(deps.restoreBusinessData).not.toHaveBeenCalled();
+  });
+
   it("pins the size only after provisioning succeeds", async () => {
     const deps = makeDeps();
     const out = await migrateBusinessVpsSize(input, deps);

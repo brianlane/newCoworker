@@ -161,9 +161,13 @@ function makeDeps(overrides: Partial<TermRenewalSweepDeps> = {}): TermRenewalSwe
         skipPoolAdopt: job.skip_pool_adopt === true ? true : undefined,
         suppressOwnerNotify: job.suppress_owner_notify === true ? true : undefined
       });
+      // Mirrors the real runProvisioningJob, which returns the orchestrate
+      // result unchanged. Dropping deploySucceeded here would hide the very
+      // case the cutover guard exists for.
       return {
         hostingerBillingSubscriptionId: out.hostingerBillingSubscriptionId,
-        vpsId: out.vpsId ?? "1900001"
+        vpsId: out.vpsId ?? "1900001",
+        deploySucceeded: out.deploySucceeded
       };
     }),
     markProvisioningJobOutcome: vi.fn(async () => undefined),
@@ -482,6 +486,29 @@ describe("runTermRenewalSweep", () => {
     expect(deps.sendOpsEmail).toHaveBeenCalledWith(
       expect.objectContaining({ phase: "failed", detail: expect.stringContaining("renew stays ON") })
     );
+  });
+
+  // orchestrateProvisioning records deploy_failed, leaves deploySucceeded
+  // false, and then STILL marks the business online and returns a normal
+  // result. Without a success flag on that result the cutover cannot tell, so
+  // it restored onto a box with no working stack and then stopped and
+  // never-renewed the healthy old one. #1014's 28-minute deploy deadline turns
+  // slow-but-healthy deploys into this case, so it is not rare.
+  it("deploy failure leaves the old box running and renewing", async () => {
+    const deps = makeDeps({
+      orchestrateProvisioning: vi.fn(async () => ({
+        vpsId: "1900001",
+        hostingerBillingSubscriptionId: "hbs-new",
+        deploySucceeded: false
+      }))
+    });
+    const result = await runTermRenewalSweep(deps, { now: NOW });
+    expect(result.findings[0]?.kind).toBe("migration_failed");
+    expect(result.migrated).toBe(0);
+    // The whole point: the old box must survive untouched.
+    expect(deps.hostinger.stopVirtualMachine).not.toHaveBeenCalled();
+    expect(deps.hostinger.disableBillingAutoRenewal).not.toHaveBeenCalled();
+    expect(deps.restoreBusinessData).not.toHaveBeenCalled();
   });
 
   it("provision failure leaves the old box renewing", async () => {

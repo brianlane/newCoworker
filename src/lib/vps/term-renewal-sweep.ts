@@ -126,7 +126,12 @@ export type TermRenewalSweepDeps = {
     billingPeriod?: SubscriptionRow["billing_period"];
     skipPoolAdopt?: boolean;
     suppressOwnerNotify?: boolean;
-  }) => Promise<{ vpsId: string; hostingerBillingSubscriptionId: string | null }>;
+  }) => Promise<{
+    vpsId: string;
+    hostingerBillingSubscriptionId: string | null;
+    /** False when deploy-client.sh did not finish cleanly on the new box. */
+    deploySucceeded?: boolean;
+  }>;
   /** Injected so unit tests can skip the real provisioning_jobs ledger. */
   enqueueProvisioningJob?: (input: EnqueueProvisioningJobInput) => Promise<void>;
   runProvisioningJob?: typeof runProvisioningJob;
@@ -673,13 +678,27 @@ async function migrateTenantTermRenewal(
           });
           return {
             hostingerBillingSubscriptionId: out.hostingerBillingSubscriptionId,
-            vpsId: out.vpsId
+            vpsId: out.vpsId,
+            deploySucceeded: out.deploySucceeded
           };
         }
       } satisfies RunProvisioningJobDeps
     );
     if (!jobOut.vpsId) {
       throw new Error("term-renewal provision returned no vpsId");
+    }
+    // orchestrate returns a normal result on a failed deploy (it records
+    // deploy_failed, flips the tenant back online, and hands the box back).
+    // Cutting over anyway would restore onto a box with no working stack and
+    // then stop and never-renew the healthy old one. Refuse instead, and take
+    // the same abort path as a provision failure: old box untouched.
+    if (jobOut.deploySucceeded === false) {
+      const detail =
+        `deploy failed on new box ${jobOut.vpsId}: old box left running + renewing; ` +
+        "new box left for the stuck-alert path";
+      await notify("failed", detail);
+      await markTermRenewalJobFailed(deps, businessId, detail);
+      return { ok: false, detail };
     }
     newProv = {
       vpsId: jobOut.vpsId,

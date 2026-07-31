@@ -229,6 +229,11 @@ export type OrchestrateFn = (input: {
 }) => Promise<{
   hostingerBillingSubscriptionId: string | null;
   vpsId?: string;
+  /**
+   * False when the deploy did not finish cleanly. Optional so callers that do
+   * not tear anything down can ignore it; migration cutovers must not.
+   */
+  deploySucceeded?: boolean;
 }>;
 
 export type RunProvisioningJobDeps = {
@@ -263,7 +268,11 @@ export async function runProvisioningJob(
     >,
   deps: RunProvisioningJobDeps,
   opts: { alreadyClaimed?: boolean } = {}
-): Promise<{ hostingerBillingSubscriptionId: string | null; vpsId?: string }> {
+): Promise<{
+  hostingerBillingSubscriptionId: string | null;
+  vpsId?: string;
+  deploySucceeded?: boolean;
+}> {
   /* c8 ignore next 2 -- trivial production-default fallbacks; tests inject */
   const markRunning = deps.markRunning ?? markProvisioningJobRunning;
   const markOutcome = deps.markOutcome ?? markProvisioningJobOutcome;
