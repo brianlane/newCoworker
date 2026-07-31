@@ -25,7 +25,6 @@
  * appointment-intelligence failure must not lose the flow event, and vice
  * versa.
  */
-import { timingSafeEqual } from "node:crypto";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { processWebhookFlowEvent } from "@/lib/ai-flows/webhook-events";
 import {
@@ -58,13 +57,12 @@ import { logger } from "@/lib/logger";
 /** Serialized payload ceiling — mirrors /api/public/v1/flow-events. */
 export const VAGARO_WEBHOOK_MAX_BODY_BYTES = 64 * 1024;
 
-/** Constant-time token check (both sides are attacker-observable strings). */
-export function verificationTokenMatches(presented: string, stored: string): boolean {
-  const a = Buffer.from(presented, "utf8");
-  const b = Buffer.from(stored, "utf8");
-  if (a.length !== b.length) return false;
-  return timingSafeEqual(a, b);
-}
+/**
+ * Constant-time token check. Lives in `@/lib/integrations/webhook-token` now
+ * that Acuity needs the same check; re-exported here so every existing
+ * importer of this module keeps working.
+ */
+export { verificationTokenMatches } from "@/lib/integrations/webhook-token";
 
 export type VagaroWebhookEvent = {
   /** Vagaro's event id — the idempotency key when present. */
