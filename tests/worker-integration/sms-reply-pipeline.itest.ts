@@ -578,4 +578,79 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
     expect(await reasoningRows(biz)).toHaveLength(2);
     expect((await notificationRows(biz)).length).toBe(pageCount);
   });
+
+  it("a handoff seconds after notify_team suppresses the transport re-page (recent_team_notify)", async () => {
+    // The Amy Laidlaw Jul 31 double-page: the model called notify_team AND
+    // set handoff in one turn, so the claimed agent got two texts three
+    // seconds apart. The notifications function now reads the just-delivered
+    // team-notify row and records transport skips for the handoff page while
+    // the dashboard row still lands.
+    const { biz } = await seedLeadWithContext("IT escalation teamnotify dedupe");
+    const { error: seedErr } = await db.from("notifications").insert({
+      id: crypto.randomUUID(),
+      business_id: biz,
+      delivery_channel: "sms",
+      status: "sent",
+      kind: "sms_team_notify",
+      summary: "Texter follow-up needed: call Dwight back about the dispute",
+      payload: {
+        logId: crypto.randomUUID(),
+        customerPhone: LEAD,
+        summary: "Texter follow-up needed: call Dwight back about the dispute"
+      }
+    });
+    expect(seedErr).toBeNull();
+
+    const trailer = `${REASONING_MARKER}{"intent":"policy_dispute","why":"Wants a person to take over.","handoff":true}`;
+    rowboat.scriptReply(`A licensed teammate will take this over shortly.\n${trailer}`);
+    await enqueueSmsJob(db, biz, LEAD, "Please have a person call me about this");
+    await tickSmsWorker();
+
+    const pages = (await notificationRows(biz)).filter((n) => n.kind === "urgent_alert");
+    const dashboard = pages.find((n) => n.delivery_channel === "dashboard");
+    expect(dashboard?.status).toBe("sent");
+    // The harness resolves an owner email (seedBusiness) but no phone, so
+    // the email channel is the one that would have re-sent: it must carry
+    // the dedupe skip, and no transport may deliver.
+    const email = pages.find((n) => n.delivery_channel === "email");
+    expect(email?.status).toBe("skipped");
+    expect(email?.payload.reason).toBe("recent_team_notify");
+    const transports = pages.filter((n) => n.delivery_channel !== "dashboard");
+    expect(transports.length).toBeGreaterThanOrEqual(3);
+    expect(transports.every((n) => n.status !== "sent")).toBe(true);
+  });
+
+  it("a voice-side team notify (payload.callerPhone) dedupes the handoff transports too", async () => {
+    // The voice twin's notify_team logPayload stores the contact under
+    // callerPhone, not customerPhone (Bugbot finding on PR #1115): the
+    // dedupe lookup must match either key.
+    const { biz } = await seedLeadWithContext("IT escalation voice teamnotify dedupe");
+    const { error: seedErr } = await db.from("notifications").insert({
+      id: crypto.randomUUID(),
+      business_id: biz,
+      delivery_channel: "sms",
+      status: "sent",
+      kind: "voice_team_notify",
+      summary: "Caller follow-up needed: call Dwight back about the dispute",
+      payload: {
+        logId: crypto.randomUUID(),
+        // Bare national digits, the pre-normalization row shape: the dedupe
+        // must match it against the worker's +1 E.164 (Bugbot round 3).
+        callerPhone: LEAD.replace("+1", ""),
+        summary: "Caller follow-up needed: call Dwight back about the dispute"
+      }
+    });
+    expect(seedErr).toBeNull();
+
+    const trailer = `${REASONING_MARKER}{"intent":"policy_dispute","why":"Wants a person to take over.","handoff":true}`;
+    rowboat.scriptReply(`A licensed teammate will take this over shortly.\n${trailer}`);
+    await enqueueSmsJob(db, biz, LEAD, "Please have a person call me about this");
+    await tickSmsWorker();
+
+    const pages = (await notificationRows(biz)).filter((n) => n.kind === "urgent_alert");
+    expect(pages.find((n) => n.delivery_channel === "dashboard")?.status).toBe("sent");
+    const email = pages.find((n) => n.delivery_channel === "email");
+    expect(email?.status).toBe("skipped");
+    expect(email?.payload.reason).toBe("recent_team_notify");
+  });
 });

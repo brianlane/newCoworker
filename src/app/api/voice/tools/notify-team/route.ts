@@ -11,6 +11,7 @@ import { insertCoworkerLog } from "@/lib/db/logs";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { logger } from "@/lib/logger";
+import { coerceOwnerPhoneToE164 } from "@/lib/phone/e164";
 import { truncateAtWord } from "../../../../../../supabase/functions/_shared/text_truncate";
 
 /**
@@ -61,7 +62,12 @@ export async function POST(request: Request) {
     return voiceToolValidationError(parsed.error.issues[0]?.message ?? "invalid args");
   }
   const args = parsed.data;
-  const callerPhone = args.callerPhone ?? envelope.callerE164 ?? null;
+  // Same normalization as the sms twin (Bugbot, PR #1115): routing and the
+  // needs-human dedupe compare this against worker-normalized E.164 values.
+  const rawCallerPhone = args.callerPhone ?? envelope.callerE164 ?? null;
+  const callerPhone = rawCallerPhone
+    ? (coerceOwnerPhoneToE164(rawCallerPhone) ?? rawCallerPhone)
+    : null;
 
   try {
     // Dashboard call log first, so the request is visible even if every

@@ -795,6 +795,28 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
     );
   });
 
+  it("notify_team normalizes a model-formatted phone before storing and routing", async () => {
+    // The needs-human transport dedupe and contact-owner routing compare
+    // this value against worker-normalized E.164 (Bugbot, PR #1115).
+    vi.mocked(dispatchUrgentNotification).mockResolvedValue({
+      results: [{ channel: "sms", status: "sent" }]
+    } as never);
+    const content = makeContent("notify_team", {
+      message: "Call them back",
+      customerPhone: "612-708-7408"
+    });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    await POST(makeRequest(content));
+    expect(vi.mocked(insertCoworkerLog)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        log_payload: expect.objectContaining({ customerPhone: "+16127087408" })
+      })
+    );
+    expect(vi.mocked(dispatchUrgentNotification)).toHaveBeenCalledWith(
+      expect.objectContaining({ contactE164: "+16127087408" })
+    );
+  });
+
   it("notify_team reports notified=false when dispatch throws (log row already written)", async () => {
     vi.mocked(dispatchUrgentNotification).mockRejectedValue(new Error("channels down"));
     const content = makeContent("notify_team", { message: "Call back the texter" });

@@ -119,6 +119,23 @@ describe("POST /api/voice/tools/notify-team", () => {
     );
   });
 
+  it("normalizes a model-formatted callerPhone before storing and routing", async () => {
+    // Same rationale as the sms twin (Bugbot, PR #1115): dedupe and routing
+    // compare this against worker-normalized E.164 values.
+    const res = await POST(
+      req({ businessId: BIZ, args: { message: "call back", callerPhone: "480.555.0100" } })
+    );
+    expect(res.status).toBe(200);
+    expect(insertCoworkerLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        log_payload: expect.objectContaining({ callerPhone: "+14805550100" })
+      })
+    );
+    expect(dispatchUrgentNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ contactE164: "+14805550100" })
+    );
+  });
+
   it("truncates the summary at a word boundary and keeps the full request in the SMS body", async () => {
     const message =
       "Caller wants a quote for a five bedroom rental near Roosevelt Row with a garage, " +

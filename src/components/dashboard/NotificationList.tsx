@@ -68,6 +68,8 @@ function describeReason(payload: Record<string, unknown>): string | null {
       return "Skipped: WhatsApp isn't connected (connect it under Integrations)";
     case "whatsapp_bridge_unconfigured":
       return "Skipped: WhatsApp service not configured";
+    case "recent_team_notify":
+      return "Skipped: the team was notified about this contact moments earlier";
     case "email_digest_disabled":
       return "Skipped: daily digest disabled";
     case "email_digest_weekly_disabled":

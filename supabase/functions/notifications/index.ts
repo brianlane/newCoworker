@@ -389,6 +389,11 @@ serve(async (req: Request) => {
     record.log_payload?.contact_e164
       ? { contactE164: String(record.log_payload.contact_e164) }
       : {}),
+    // Team-first tenants whose handoff paged directly because no flow
+    // enqueued carry the why on the row (see _shared/needs_human.ts).
+    ...(record.task_type === "sms_needs_human" && record.log_payload?.team_first_fallthrough
+      ? { team_first_fallthrough: true }
+      : {}),
     // AiFlow failure alerts stamp the run so the alert module's per-run
     // dedupe (payload->>runId) can find prior delivered pages — see
     // _shared/aiflow_failure_alert.ts.
@@ -403,6 +408,52 @@ serve(async (req: Request) => {
       : {})
   };
   const errors: string[] = [];
+
+  // Transport-level dedupe (Amy Laidlaw, Jul 31 2026, four leads in one
+  // week): persona-driven turns often call notify_team AND set reasoning
+  // handoff for the same contact, which texted the claimed agent twice
+  // within seconds ("[Coworker] Follow up ..." then "New Coworker Alert:
+  // ... take over ..."). When a team-notify row about this contact was
+  // DELIVERED within the last few minutes, the dashboard row still lands
+  // but the sms/email/whatsapp transports record `recent_team_notify`
+  // skips instead of re-sending. Fail-open: a lookup error never blocks
+  // a page.
+  const RECENT_TEAM_NOTIFY_MINUTES = 5;
+  let suppressTransports = false;
+  if (record.task_type === "sms_needs_human" && scopedContactE164) {
+    const sinceIso = new Date(Date.now() - RECENT_TEAM_NOTIFY_MINUTES * 60_000).toISOString();
+    const { data: recentNotify, error: recentNotifyErr } = await supa
+      .from("notifications")
+      .select("id")
+      .eq("business_id", record.business_id)
+      .eq("status", "sent")
+      .in("kind", ["sms_team_notify", "voice_team_notify"])
+      // The texting twin stores the contact as payload.customerPhone, the
+      // voice twin as payload.callerPhone (their notify_team logPayloads
+      // differ); match either. The notify_team routes normalize on write
+      // now, but rows written before that (or via a non-coercible model
+      // value) may carry bare NANP digits, so match those variants too.
+      .or(
+        [
+          ...new Set(
+            [
+              scopedContactE164,
+              scopedContactE164.replace(/\D/g, ""),
+              /^\+1\d{10}$/.test(scopedContactE164) ? scopedContactE164.slice(2) : ""
+            ].filter(Boolean)
+          )
+        ]
+          .flatMap((c) => [`payload->>customerPhone.eq.${c}`, `payload->>callerPhone.eq.${c}`])
+          .join(",")
+      )
+      .gte("created_at", sinceIso)
+      .limit(1);
+    if (recentNotifyErr) {
+      console.error("notifications: recent team-notify lookup failed", recentNotifyErr);
+    } else {
+      suppressTransports = ((recentNotify ?? []) as unknown[]).length > 0;
+    }
+  }
 
   // 1) Dashboard channel
   if (targets.dashboardAlerts && !targets.unsubscribed) {
@@ -457,6 +508,17 @@ serve(async (req: Request) => {
       kind,
       { ...basePayload, recipient: targets.phone },
       targets.unsubscribed ? "unsubscribed" : "sms_urgent_disabled"
+    );
+  } else if (suppressTransports) {
+    await recordRow(
+      supa,
+      record.business_id,
+      "sms",
+      "skipped",
+      summary,
+      kind,
+      { ...basePayload, recipient: targets.phone },
+      "recent_team_notify"
     );
   } else if (telnyxKey && telnyxProfile) {
     // Owner alerts are METERED against the tenant's monthly pool like all
@@ -591,6 +653,17 @@ serve(async (req: Request) => {
       { ...basePayload, recipient: targets.email },
       targets.unsubscribed ? "unsubscribed" : "email_urgent_disabled"
     );
+  } else if (suppressTransports) {
+    await recordRow(
+      supa,
+      record.business_id,
+      "email",
+      "skipped",
+      summary,
+      kind,
+      { ...basePayload, recipient: targets.email },
+      "recent_team_notify"
+    );
   } else if (resendKey) {
     try {
       const unsubscribeUrl = buildUnsubscribeUrl(record.business_id, appUrl);
@@ -713,6 +786,17 @@ serve(async (req: Request) => {
       kind,
       { ...basePayload, recipient: targets.phone },
       targets.unsubscribed ? "unsubscribed" : "whatsapp_urgent_disabled"
+    );
+  } else if (suppressTransports) {
+    await recordRow(
+      supa,
+      record.business_id,
+      "whatsapp",
+      "skipped",
+      summary,
+      kind,
+      { ...basePayload, recipient: targets.phone },
+      "recent_team_notify"
     );
   } else if (cronSecret && appUrl) {
     try {

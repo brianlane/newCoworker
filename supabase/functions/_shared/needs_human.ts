@@ -232,6 +232,7 @@ export async function escalateToHuman(
     // Untaggable contacts (no row, tag cap) never consult the toggle: the
     // tag is the open/closed state the whole feature hangs off.
     let teamFirstTagWritten = false;
+    let teamFirstFallthrough = false;
     if (canCarryTag && contact?.id && (await teamFirstEnabled(supabase, input.businessId))) {
       const opened = await openNeedsHumanState(
         supabase,
@@ -241,6 +242,19 @@ export async function escalateToHuman(
       );
       teamFirstTagWritten = opened.tagOk;
       if (opened.tagOk && opened.enqueued > 0) return "team_offered";
+      if (opened.tagOk) {
+        // Team-first is ON but no enabled flow listens for the Needs Human
+        // tag, so "the flow owns notification" is an empty promise and this
+        // pages directly. Stamp the why so the notification row explains a
+        // direct page on a team-first tenant (Amy Laidlaw: team-first on
+        // since Jul 28 2026 with no matching flow, every handoff silently
+        // degraded to a page).
+        teamFirstFallthrough = true;
+        console.error(
+          "needs_human: team-first enabled but no flow enqueued; paging directly",
+          input.businessId
+        );
+      }
       // Fall through to the direct page. A FAILED tag write is retried by
       // the post-page block below (Bugbot, PR #801): the write may have
       // failed transiently, and without the tag the open/closed dedupe is
@@ -298,7 +312,8 @@ export async function escalateToHuman(
           contact_label: label,
           intent: input.intent.slice(0, 80),
           reason: input.reason.slice(0, 300),
-          inbound_preview: input.inboundPreview.slice(0, 300)
+          inbound_preview: input.inboundPreview.slice(0, 300),
+          ...(teamFirstFallthrough ? { team_first_fallthrough: true } : {})
         },
         created_at: new Date().toISOString()
       }

@@ -375,6 +375,7 @@ describe("escalateToHuman", () => {
     });
 
     it("toggle ON but NO matching flow enqueued: falls through to the owner page (never silent)", async () => {
+      const err = vi.spyOn(console, "error").mockImplementation(() => {});
       const fetchFn = okFetch();
       const { db, calls } = makeDb([
         { data: contactRow() },
@@ -385,8 +386,21 @@ describe("escalateToHuman", () => {
       ]);
       expect(await escalateToHuman(db, input(fetchFn))).toBe("escalated");
       expect(fetchFn).toHaveBeenCalledTimes(1);
-      // The tag was already written in the team-first attempt — no re-write.
+      // The tag was already written in the team-first attempt, no re-write.
       expect(calls.filter((c) => c.table === "contacts" && c.name === "update")).toHaveLength(1);
+      // The page body says WHY a team-first tenant still got a direct page;
+      // the notifications function surfaces it on the row as
+      // payload.team_first_fallthrough (Amy Laidlaw: team-first on since
+      // Jul 28 2026 with no matching flow, every handoff silently paged).
+      const [, init] = (fetchFn as unknown as ReturnType<typeof vi.fn>).mock.calls[0] as [
+        string,
+        RequestInit
+      ];
+      const posted = JSON.parse(String(init.body)) as {
+        record: { log_payload: Record<string, unknown> };
+      };
+      expect(posted.record.log_payload.team_first_fallthrough).toBe(true);
+      err.mockRestore();
     });
 
     it("toggle ON but the tag write fails: pages the owner, then RETRIES the tag (never tag-less)", async () => {
