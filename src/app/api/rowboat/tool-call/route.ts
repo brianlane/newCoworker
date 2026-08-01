@@ -52,6 +52,7 @@ import {
 import { joinCalendarWaitlist } from "@/lib/calendar-tools/waitlist-join";
 import { insertCoworkerLog } from "@/lib/db/logs";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
+import { truncateAtWord } from "../../../../../supabase/functions/_shared/text_truncate";
 import {
   generateImageForDashboard,
   generateImageForSms,
@@ -596,14 +597,14 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
           // This alert is ABOUT this texter, so it goes to whichever
           // teammate owns them, falling back to the business owner.
           contactE164: customerPhone,
-          summary: `Texter follow-up needed: ${parsed.data.message}`.slice(0, 200),
+          summary: truncateAtWord(`Texter follow-up needed: ${parsed.data.message}`, 200),
           kind: "sms_team_notify",
           payload: { logId, ...logPayload },
           emailSubject: `Follow up with ${who}`,
           emailBody:
             `Your texting coworker was messaging with ${who} and promised the team ` +
             `would follow up.\n\nRequest: ${parsed.data.message}`,
-          smsBody: `[Coworker] Follow up with ${who}: ${parsed.data.message}`.slice(0, 640)
+          smsBody: truncateAtWord(`[Coworker] Follow up with ${who}: ${parsed.data.message}`, 640)
         });
         notified = results.some((r) => r.status === "sent");
       } catch (err) {

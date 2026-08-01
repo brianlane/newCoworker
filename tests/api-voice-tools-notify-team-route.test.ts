@@ -119,6 +119,26 @@ describe("POST /api/voice/tools/notify-team", () => {
     );
   });
 
+  it("truncates the summary at a word boundary and keeps the full request in the SMS body", async () => {
+    const message =
+      "Caller wants a quote for a five bedroom rental near Roosevelt Row with a garage, " +
+      "a pool, updated appliances, and availability for a walkthrough on the weekend, " +
+      "and asked that whoever calls back mention the promotional rate they saw online.";
+    const res = await POST(req({ businessId: BIZ, callerE164: "+15555550100", args: { message } }));
+    expect(res.status).toBe(200);
+    const input = vi.mocked(dispatchUrgentNotification).mock.calls.at(-1)?.[0] as {
+      summary: string;
+      smsBody?: string;
+    };
+    const full = `Caller follow-up needed: ${message}`;
+    expect(input.summary.length).toBeLessThanOrEqual(200);
+    expect(input.summary.endsWith("…")).toBe(true);
+    const kept = input.summary.slice(0, -1);
+    expect(full.startsWith(kept)).toBe(true);
+    expect(/\s/.test(full.charAt(kept.length))).toBe(true);
+    expect(input.smsBody).toContain("promotional rate they saw online.");
+  });
+
   it("still returns ok with notified=false when dispatch fails (log row is the fallback)", async () => {
     vi.mocked(dispatchUrgentNotification).mockRejectedValueOnce(new Error("down"));
     const res = await POST(req({ businessId: BIZ, args: { message: "call back" } }));

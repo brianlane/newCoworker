@@ -30,6 +30,7 @@ import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.45.0";
 import { buildBrandedEmailHtml } from "../_shared/branded_email_html.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
+import { truncateAtWord } from "../_shared/text_truncate.ts";
 import {
   CONTACT_SCOPED_TASK_TYPES,
   resolveContactOwnerTarget,
@@ -307,11 +308,19 @@ serve(async (req: Request) => {
   // coworker hit something it couldn't handle and handed the conversation
   // to the owner — say who and why, not "URGENT sms_needs_human".
   const needsHumanLabel = String(record.log_payload?.contact_label ?? "a texter");
-  const needsHumanReason = String(record.log_payload?.reason ?? "").trim();
+  // The model writes the reason as a full sentence ending in "." and the
+  // summary template below appends its own, which used to yield
+  // "follow-up.. Reply from Messages". Trim trailing periods here (and on
+  // aiflowReason, same interpolation shape).
+  const needsHumanReason = String(record.log_payload?.reason ?? "")
+    .trim()
+    .replace(/\.+$/, "");
   // AiFlow failure alerts (opt-in, _shared/aiflow_failure_alert.ts): a
   // lead-intake automation died — say which lead and why, not a raw task_type.
   const aiflowLeadLabel = String(record.log_payload?.lead_label ?? "a lead");
-  const aiflowReason = String(record.log_payload?.reason ?? "").trim();
+  const aiflowReason = String(record.log_payload?.reason ?? "")
+    .trim()
+    .replace(/\.+$/, "");
   // Customer reply alerts (opt-in, _shared/customer_reply_alert.ts): a
   // client texted back — say who and what they said (KYP, Jul 20 2026).
   const replyLabel = String(record.log_payload?.contact_label ?? "A contact");
@@ -324,11 +333,11 @@ serve(async (req: Request) => {
         : record.task_type === "missed_call_spike"
           ? `${missedToday || "Several"} callers were turned away today (line busy or out of voice minutes). Check Analytics on your dashboard; a plan upgrade or minutes top-up stops the misses.`
           : record.task_type === "sms_needs_human"
-            ? `Your texting coworker needs you to take over with ${needsHumanLabel}${needsHumanReason ? `, ${needsHumanReason}` : ""}. Reply from Messages on your dashboard.`.slice(0, 320)
+            ? truncateAtWord(`Your texting coworker needs you to take over with ${needsHumanLabel}${needsHumanReason ? `, ${needsHumanReason}` : ""}. Reply from Messages on your dashboard.`, 320)
             : record.task_type === "aiflow_run_failed"
-              ? `An AiFlow stopped while handling ${aiflowLeadLabel}${aiflowReason ? `, ${aiflowReason}` : ""}. Follow up with them yourself and check the flow's run history on your dashboard.`.slice(0, 320)
+              ? truncateAtWord(`An AiFlow stopped while handling ${aiflowLeadLabel}${aiflowReason ? `, ${aiflowReason}` : ""}. Follow up with them yourself and check the flow's run history on your dashboard.`, 320)
               : record.task_type === "sms_customer_reply"
-                ? `${replyLabel} texted back${replyPreview ? `: "${replyPreview}"` : ""}. Reply from Messages on your dashboard.`.slice(0, 320)
+                ? truncateAtWord(`${replyLabel} texted back${replyPreview ? `: "${replyPreview}"` : ""}. Reply from Messages on your dashboard.`, 320)
                 : `URGENT ${record.task_type}`;
   const kind = "urgent_alert";
   // Strip trailing slash so dashboardUrl never ends up as
@@ -462,7 +471,9 @@ serve(async (req: Request) => {
     // alert nor release the same slot twice.
     let smsMeterSettled = false;
     try {
-      const smsText = `New Coworker Alert: ${summary}. Details: ${dashboardUrl}`;
+      // Trim trailing periods so a "."-terminated summary can't produce
+      // "dashboard.. Details:" (mirrors dispatch.ts).
+      const smsText = `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`;
       const body: Record<string, string> = {
         to: targets.phone,
         text: smsText,
@@ -712,7 +723,7 @@ serve(async (req: Request) => {
         body: JSON.stringify({
           businessId: record.business_id,
           to: targets.phone,
-          text: `New Coworker Alert: ${summary}. Details: ${dashboardUrl}`,
+          text: `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`,
           audience: "owner"
         })
       });

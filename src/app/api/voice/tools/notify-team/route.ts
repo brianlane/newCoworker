@@ -11,6 +11,7 @@ import { insertCoworkerLog } from "@/lib/db/logs";
 import { recordSystemLog } from "@/lib/db/system-logs";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { logger } from "@/lib/logger";
+import { truncateAtWord } from "../../../../../../supabase/functions/_shared/text_truncate";
 
 /**
  * `notify_team` — relays a caller request to the owner/team through the
@@ -87,7 +88,7 @@ export async function POST(request: Request) {
     const who = args.callerName
       ? `${args.callerName}${callerPhone ? ` (${callerPhone})` : ""}`
       : callerPhone ?? "a caller";
-    const summary = `Caller follow-up needed: ${args.message}`.slice(0, 200);
+    const summary = truncateAtWord(`Caller follow-up needed: ${args.message}`, 200);
     let notified = false;
     try {
       const { results } = await dispatchUrgentNotification({
@@ -100,7 +101,7 @@ export async function POST(request: Request) {
         payload: { logId, ...logPayload },
         emailSubject: `Follow up with ${who}`,
         emailBody: `Your phone coworker took a call from ${who} and promised the team would follow up.\n\nRequest: ${args.message}`,
-        smsBody: `[Coworker] Follow up with ${who}: ${args.message}`.slice(0, 640)
+        smsBody: truncateAtWord(`[Coworker] Follow up with ${who}: ${args.message}`, 640)
       });
       notified = results.some((r) => r.status === "sent");
     } catch (err) {

@@ -746,6 +746,42 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
     );
   });
 
+  it("notify_team truncates the stored summary at a word boundary, never mid-word", async () => {
+    vi.mocked(dispatchUrgentNotification).mockResolvedValue({
+      results: [{ channel: "sms", status: "sent" }]
+    } as never);
+    // Shape of the Amy Laidlaw Jul 31 2026 alert: the old `.slice(0, 200)`
+    // stored a summary ending "(Mesa, AJ, or Gilbert). Bud", cutting
+    // "Budget around $412K" and the claimed agent off mid-word.
+    const message =
+      "New buyer lead Kolton Bottolfson is available today between 10am-2pm MST. " +
+      "Looking for 3+ beds, 2+ baths, 2-3 car carport/garage, in the East Valley " +
+      "(Mesa, AJ, or Gilbert). Budget around $412K. Jason Lane is the claimed agent.";
+    const content = makeContent("notify_team", {
+      message,
+      customerName: "Kolton Bottolfson",
+      customerPhone: "+16127087408"
+    });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    await POST(makeRequest(content));
+    const input = vi.mocked(dispatchUrgentNotification).mock.calls.at(-1)?.[0] as {
+      summary: string;
+      smsBody?: string;
+      payload: Record<string, unknown>;
+    };
+    const full = `Texter follow-up needed: ${message}`;
+    expect(input.summary.length).toBeLessThanOrEqual(200);
+    expect(input.summary.endsWith("…")).toBe(true);
+    const kept = input.summary.slice(0, -1);
+    expect(full.startsWith(kept)).toBe(true);
+    expect(/\s/.test(full.charAt(kept.length))).toBe(true);
+    expect(kept.endsWith("Bud")).toBe(false);
+    // The untruncated request still reaches the payload (dashboard Detail)
+    // and the SMS body, which has room for the whole message.
+    expect(input.payload.message).toBe(message);
+    expect(input.smsBody).toContain("Jason Lane is the claimed agent.");
+  });
+
   it("notify_team passes a null contact when the model supplied no phone", async () => {
     // Nothing to route on, so the alert stays owner-addressed.
     vi.mocked(dispatchUrgentNotification).mockResolvedValue({
