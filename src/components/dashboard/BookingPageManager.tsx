@@ -7,6 +7,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CalendarFeedCard } from "@/components/dashboard/CalendarFeedCard";
 import { type IntakeQuestion } from "@/components/dashboard/IntakeQuestionsEditor";
 import { MeetingTypesCard } from "@/components/dashboard/MeetingTypesCard";
 import Link from "next/link";
@@ -168,9 +169,15 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
 
   if (loadFailed) {
     return (
-      <Card>
-        <p className="text-sm text-red-400">{t("loadFailed")}</p>
-      </Card>
+      <div className="space-y-6">
+        <Card>
+          <p className="text-sm text-red-400">{t("loadFailed")}</p>
+        </Card>
+        {/* The feed is served by its own endpoint; a failed booking-page
+            read must not hide the one bookings surface that works for
+            every tenant. */}
+        <CalendarFeedCard businessId={businessId} />
+      </div>
     );
   }
   if (!state) {
@@ -702,6 +709,11 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
           </ul>
         )}
       </Card>
+
+      {/* Provider-agnostic on purpose: Vagaro/Acuity tenants see the
+          connect-first card above INSTEAD of the page manager, and this
+          subscribable link is exactly what still works for them. */}
+      <CalendarFeedCard businessId={businessId} />
     </div>
   );
 }

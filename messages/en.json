@@ -1741,7 +1741,16 @@
       "rulesTitle": "When people can book",
       "rulesSubtitle": "The window every meeting is offered inside.",
       "intakeNewQuestionPlaceholder": "What should we know before the call?",
-      "intakeNewQuestionHint": "Type your question, then press Enter. Leave it empty to cancel."
+      "intakeNewQuestionHint": "Type your question, then press Enter. Leave it empty to cancel.",
+      "feedTitle": "Team calendar link",
+      "feedBenefit": "Subscribe in Google Calendar, Outlook, or Apple Calendar to see every upcoming booking, whichever tool it was booked on.",
+      "feedCopy": "Copy",
+      "feedCopied": "Copied",
+      "feedRotate": "Rotate link",
+      "feedHint": "Anyone with this link can see booking times and names. Rotating it cuts off every copy you have shared.",
+      "feedLoading": "Preparing your calendar link…",
+      "feedError": "Could not load the calendar link. Refresh to try again.",
+      "feedActionError": "Something went wrong. The link above is still valid; select and copy it manually, or try again."
     },
     "integrationsClaude": {
       "connectedBadge": "Connected",
