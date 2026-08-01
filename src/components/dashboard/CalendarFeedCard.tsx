@@ -31,6 +31,11 @@ export function CalendarFeedCard({ businessId }: { businessId: string }) {
 
   useEffect(() => {
     let cancelled = false;
+    // Reset before fetching: a multi-business owner switching businesses
+    // must never be shown (and copy, or rotate) the PREVIOUS business's
+    // link while the new one loads.
+    setFeedUrl(null);
+    setError(false);
     (async () => {
       try {
         const res = await fetch(

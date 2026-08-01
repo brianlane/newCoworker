@@ -131,6 +131,10 @@ export async function listFeedBookings(
     .from("calendar_booking_dedupe")
     .select("id,start_at,duration_minutes,attendee_name,booking_source")
     .eq("business_id", businessId)
+    // Confirmed bookings only: an in-flight claim has no event_id yet and is
+    // reclaimable after its TTL, so rendering it would show subscribers an
+    // appointment that may never come to exist.
+    .not("event_id", "is", null)
     .gte("start_at", new Date(nowMs).toISOString())
     .lte("start_at", horizon)
     .order("start_at", { ascending: true })

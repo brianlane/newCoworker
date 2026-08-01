@@ -42,6 +42,7 @@ function scriptedDb(steps: Step[]) {
   c.select = vi.fn(self);
   c.eq = vi.fn(self);
   c.gte = vi.fn(self);
+  c.not = vi.fn(self);
   c.lte = vi.fn(self);
   c.order = vi.fn(self);
   c.limit = vi.fn(next);
@@ -159,6 +160,9 @@ describe("listFeedBookings", () => {
     const rows = [{ id: "r1", start_at: "2026-08-05T17:00:00Z" }];
     const { db, chain } = scriptedDb([{ data: rows, error: null }]);
     await expect(listFeedBookings(BIZ, NOW, db)).resolves.toEqual(rows);
+    // Confirmed rows only: an in-flight claim (event_id null) must never
+    // render as an appointment for subscribers.
+    expect(chain.not).toHaveBeenCalledWith("event_id", "is", null);
     expect(chain.gte).toHaveBeenCalledWith("start_at", new Date(NOW).toISOString());
     expect(chain.lte).toHaveBeenCalledWith(
       "start_at",
