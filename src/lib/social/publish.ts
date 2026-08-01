@@ -302,7 +302,16 @@ async function resolveInFlightPost(
   post: SocialPostRow,
   deps: GraphDeps,
   nowIso: string,
-  pastStaleWindow: boolean
+  pastStaleWindow: boolean,
+  /**
+   * False for a tier-blocked tenant: PUBLISHED still settles truthfully
+   * (it already happened; recording it prevents a duplicate re-post after
+   * an upgrade), but a FINISHED container is failed with the upgrade
+   * message instead of published, because publishMedia would put NEW
+   * content live for a tenant the gate refuses. The container expires
+   * inside Meta's 24h window on its own.
+   */
+  allowPublish = true
 ): Promise<"published" | "failed" | "lost" | "waiting"> {
   if (post.ig_creation_id) {
     try {
@@ -316,6 +325,13 @@ async function resolveInFlightPost(
             error_detail: null
           });
           return won ? "published" : "lost";
+        }
+        if (status === "FINISHED" && !allowPublish) {
+          const won = await stampOutcome(db, post, {
+            status: "failed",
+            error_detail: MARKETING_AUTOMATION_UPGRADE_MESSAGE.slice(0, 500)
+          });
+          return won ? "failed" : "lost";
         }
         if (status === "FINISHED" && connection.instagram_account_id) {
           let igMediaId = "";
@@ -433,25 +449,16 @@ export async function processSocialPostSweep(
   const staleCutoffMs = now().getTime() - SOCIAL_PUBLISH_STALE_MINUTES * 60 * 1000;
   for (const post of await listPublishingPosts(db)) {
     try {
-      // Downgrade-safe: never resume Graph for Starter, even inside the
-      // resume grace (the owning pass must not finish a gated publish).
       // A null business lookup is a transient blip — leave the row alone.
       const business = await getBusiness(post.business_id, db);
       if (!business) continue;
-      if (!marketingAutomationAllowedForTier(business.tier)) {
-        const won = await transitionSocialPost(
-          post.business_id,
-          post.id,
-          "publishing",
-          {
-            status: "failed",
-            error_detail: MARKETING_AUTOMATION_UPGRADE_MESSAGE.slice(0, 500)
-          },
-          db
-        );
-        if (won) result.failed += 1;
-        continue;
-      }
+      // Downgrade-safe WITHOUT blind-failing: a `publishing` row may have
+      // already had its publish call land (that is why this resolver
+      // exists), and marking it failed invites the owner to re-post after
+      // upgrading — a duplicate feed post, the worse outcome per the module
+      // header. Resolve with Meta as the authority; allowPublish=false only
+      // refuses the half that would put NEW content live.
+      const tierAllowed = marketingAutomationAllowedForTier(business.tier);
 
       const startedMs = post.started_at ? Date.parse(post.started_at) : 0;
       if (startedMs > graceCutoffMs) continue;
@@ -460,7 +467,8 @@ export async function processSocialPostSweep(
         post,
         graph,
         nowIso,
-        startedMs <= staleCutoffMs
+        startedMs <= staleCutoffMs,
+        tierAllowed
       );
       if (outcome === "published") result.published += 1;
       else if (outcome === "failed") result.staled += 1;
@@ -476,9 +484,27 @@ export async function processSocialPostSweep(
 
   for (const post of await listDueScheduledPosts(nowIso, db)) {
     try {
-      // Downgrade-safe: leave the row scheduled but do not hit Graph.
+      // A null lookup is a transient blip: leave the row for the next pass.
       const business = await getBusiness(post.business_id, db);
-      if (!marketingAutomationAllowedForTier(business?.tier)) continue;
+      if (!business) continue;
+      if (!marketingAutomationAllowedForTier(business.tier)) {
+        // Same head-of-line hole as the campaign sweep: a row left
+        // `scheduled` stays permanently due and crowds the page. Fail it
+        // with the upgrade message so the owner sees why, and re-posting
+        // after an upgrade is a deliberate act on fresh content.
+        const failed = await transitionSocialPost(
+          post.business_id,
+          post.id,
+          "scheduled",
+          {
+            status: "failed",
+            error_detail: MARKETING_AUTOMATION_UPGRADE_MESSAGE.slice(0, 500)
+          },
+          db
+        );
+        if (failed) result.failed += 1;
+        continue;
+      }
 
       // Claim first (single publisher): the guarded transition is the lock —
       // an overlapping sweep on a stale due-list loses it before any Graph
