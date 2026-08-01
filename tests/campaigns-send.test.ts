@@ -575,3 +575,60 @@ describe("processCampaignSweep — sending", () => {
     expect(second.errors).toEqual([{ campaignId: "c-1", message: "promotion blip" }]);
   });
 });
+
+/**
+ * listDueScheduledCampaigns is `.lte(send_at, now) ORDER BY send_at LIMIT 20`
+ * with no lower bound, and the tier abort left blocked rows `scheduled`. One
+ * downgraded tenant holding 20+ past-due campaigns therefore occupied the
+ * whole page on every pass, forever: a cross-tenant outage. And a row left
+ * permanently due detonates months-stale content within a minute of an
+ * upgrade. Unschedule instead: back to draft with send_at cleared.
+ */
+describe("processCampaignSweep — Starter scheduled rows", () => {
+  it("unschedules a blocked campaign back to draft instead of leaving it due", async () => {
+    vi.mocked(getBusiness).mockResolvedValue({
+      name: "Starter Co",
+      owner_email: "o@s.test",
+      tier: "starter"
+    } as never);
+    listDue.mockResolvedValue([campaign()]);
+    listSending.mockResolvedValue([]);
+    const sendEmail = vi.fn();
+    const { db } = makeDb([]);
+    const result = await processCampaignSweep({ client: db, now: () => NOW, sendEmail });
+    expect(result.promoted).toBe(0);
+    expect(sendEmail).not.toHaveBeenCalled();
+    expect(transition).toHaveBeenCalledWith(
+      BIZ,
+      "c-1",
+      "scheduled",
+      { status: "draft", send_at: null },
+      db
+    );
+  });
+
+  it("does not log an unschedule it lost to a concurrent cancel", async () => {
+    vi.mocked(getBusiness).mockResolvedValue({
+      name: "Starter Co",
+      owner_email: "o@s.test",
+      tier: "starter"
+    } as never);
+    listDue.mockResolvedValue([campaign()]);
+    listSending.mockResolvedValue([]);
+    transition.mockResolvedValue(false);
+    const { db } = makeDb([]);
+    const result = await processCampaignSweep({ client: db, now: () => NOW, sendEmail: vi.fn() });
+    expect(result.errors).toEqual([]);
+  });
+
+  it("leaves a scheduled row alone on a transient null business lookup", async () => {
+    // getBusiness collapses read errors to null. That must stay a skip:
+    // unscheduling on a blip would silently unschedule a paying tenant.
+    vi.mocked(getBusiness).mockResolvedValue(null);
+    listDue.mockResolvedValue([campaign()]);
+    listSending.mockResolvedValue([]);
+    const { db } = makeDb([]);
+    await processCampaignSweep({ client: db, now: () => NOW, sendEmail: vi.fn() });
+    expect(transition).not.toHaveBeenCalled();
+  });
+});
