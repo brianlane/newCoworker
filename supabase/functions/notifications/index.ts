@@ -316,6 +316,11 @@ serve(async (req: Request) => {
   const needsHumanReason = String(record.log_payload?.reason ?? "")
     .trim()
     .replace(/\.+$/, "");
+  // Quote what the contact actually wrote (needs_human.ts always records the
+  // preview): a label like "Clever Group Intro" alone tells the owner nothing
+  // about WHO needs them when the contact is a shared vendor line or group
+  // thread (Amy Laidlaw, Jul 31 2026).
+  const needsHumanPreview = String(record.log_payload?.inbound_preview ?? "").trim();
   // AiFlow failure alerts (opt-in, _shared/aiflow_failure_alert.ts): a
   // lead-intake automation died — say which lead and why, not a raw task_type.
   const aiflowLeadLabel = String(record.log_payload?.lead_label ?? "a lead");
@@ -334,7 +339,7 @@ serve(async (req: Request) => {
         : record.task_type === "missed_call_spike"
           ? `${missedToday || "Several"} callers were turned away today (line busy or out of voice minutes). Check Analytics on your dashboard; a plan upgrade or minutes top-up stops the misses.`
           : record.task_type === "sms_needs_human"
-            ? truncateAtWord(`Your texting coworker needs you to take over with ${needsHumanLabel}${needsHumanReason ? `, ${needsHumanReason}` : ""}. Reply from Messages on your dashboard.`, 320)
+            ? truncateAtWord(`Your texting coworker needs you to take over with ${needsHumanLabel}${needsHumanReason ? `, ${needsHumanReason}` : ""}${needsHumanPreview ? `. They said: "${needsHumanPreview}"` : ""}. Reply from Messages on your dashboard.`, 320)
             : record.task_type === "aiflow_run_failed"
               ? truncateAtWord(`An AiFlow stopped while handling ${aiflowLeadLabel}${aiflowReason ? `, ${aiflowReason}` : ""}. Follow up with them yourself and check the flow's run history on your dashboard.`, 320)
               : record.task_type === "sms_customer_reply"

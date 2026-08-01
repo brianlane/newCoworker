@@ -10,12 +10,12 @@ import { geminiJson } from "./gemini";
  * The Pamela replay (Amy Laidlaw Real Estate, 2026-07-22): the "Clever Lead -
  * Group Reply" flow reads the seller's first name off Clever's group intro
  * and templates it into Amy's canned greeting. On Jul 22–23 the extractor
- * answered "Amy" — the tenant's own agent, mentioned four times in the
- * intro — instead of the seller (mentioned twice), so THREE sellers were
+ * answered "Amy", the tenant's own agent, mentioned four times in the
+ * intro, instead of the seller (mentioned twice), so THREE sellers were
  * greeted "Hi Amy." (8/8 correct Jul 13–21, 0/3 after). The break lined up
  * with the Jul 21 model migration (PR #809, gemini-2.5-flash-lite →
  * gemini-3.5-flash-lite), but incident probing on Jul 23 showed CURRENT
- * 2.5-flash-lite failing the identical prompt 4/4 — so pinning the old
+ * 2.5-flash-lite failing the identical prompt 4/4, so pinning the old
  * model back was no mitigation (an upstream serving change is equally
  * plausible), and the durable fix is the prompt/description/retry layers
  * below, which probe correct on BOTH models.
@@ -27,7 +27,7 @@ import { geminiJson } from "./gemini";
  *      (with the flow's ORIGINAL one-line field description);
  *   2. the sharpened field description the one-shot writes to the live flows
  *      (scripts/oneshot/patch-clever-group-reply-name-desc.ts);
- *   3. the worker's self-name retry hint (withSelfNameRetryHint) — the
+ *   3. the worker's self-name retry hint (withSelfNameRetryHint), the
  *      belt-and-suspenders path when a first pass still answers "Amy".
  */
 
@@ -40,7 +40,23 @@ const CLEVER_INTRO =
   "You can reach Amy at: ☎️: +16028053377 📧: amy@amylaidlaw.com Amy, when " +
   "is the earliest you'll be able to give Pamela a call?";
 
-/** The flow's original description — what was live when the greeting broke. */
+/**
+ * Verbatim shape of Clever's SECOND intro template (Donna, Jul 31 2026;
+ * first seen Jul 8, never matched by the live trigger until
+ * scripts/oneshot/patch-clever-group-reply-second-intro.ts added an OR
+ * trigger for it). Same extraction hazard as the classic intro: Amy is
+ * named twice, the seller twice, and the greeting anchor ("Hi Donna") must
+ * win. The en dash after "Amy Laidlaw" is vendor data; do not normalize it.
+ */
+const CLEVER_INTRO_V2 =
+  "Hi Donna, meet your top-rated local Clever agent!\r\n\r\n" +
+  "👤 Amy Laidlaw – Homesmart\r\n" +
+  "📞 +16028053377\r\n" +
+  "📧 amy@amylaidlaw.com\r\n" +
+  "⭐ Top agent rated 4.8 / 5 stars\r\n\r\n" +
+  "Amy, when is the soonest you can give Donna a quick call?";
+
+/** The flow's original description: what was live when the greeting broke. */
 const ORIGINAL_FIELD = {
   name: "seller_first_name",
   description: "The seller's first name from the Clever intro message"
@@ -50,7 +66,7 @@ const ORIGINAL_FIELD = {
 const SHARPENED_FIELD = {
   name: "seller_first_name",
   description:
-    "The seller's first name — the person Clever greets at the START of the " +
+    "The seller's first name, the person Clever greets at the START of the " +
     'message ("Hi <name>") and asks the agent to call. ' +
     'NEVER "Amy" or "Amy Laidlaw": that is our own agent being introduced ' +
     "TO the seller, not the seller."
@@ -59,15 +75,15 @@ const SHARPENED_FIELD = {
 /** Amy's roster (businessSelfNames shape: owner + active team members). */
 const SELF_NAMES = ["Amy Laidlaw", "Dave Lane"];
 
-async function extractSellerFirstName(field: {
-  name: string;
-  description?: string;
-}): Promise<string> {
-  const raw = await geminiJson(buildExtractionPrompt([field], CLEVER_INTRO));
+async function extractSellerFirstName(
+  field: { name: string; description?: string },
+  text: string = CLEVER_INTRO
+): Promise<string> {
+  const raw = await geminiJson(buildExtractionPrompt([field], text));
   return (parseExtractionJson(raw, [field]).seller_first_name ?? "").trim();
 }
 
-describe("Clever seller-name extraction replay — Pamela 2026-07-22", () => {
+describe("Clever seller-name extraction replay: Pamela 2026-07-22", () => {
   it(
     "the hardened prompt extracts the SELLER with the original flow description",
     async () => {
@@ -98,6 +114,31 @@ describe("Clever seller-name extraction replay — Pamela 2026-07-22", () => {
       );
       const name = await extractSellerFirstName(hinted);
       expect(name.toLowerCase()).toBe("pamela");
+    },
+    120_000
+  );
+});
+
+describe("Clever second intro template: Donna 2026-07-31", () => {
+  it(
+    "the sharpened description extracts the seller from the new template",
+    async () => {
+      const name = await extractSellerFirstName(SHARPENED_FIELD, CLEVER_INTRO_V2);
+      expect(name.toLowerCase()).toBe("donna");
+    },
+    120_000
+  );
+
+  it(
+    "the self-name retry hint yields the seller on the new template",
+    async () => {
+      const [hinted] = withSelfNameRetryHint(
+        [ORIGINAL_FIELD],
+        ["seller_first_name"],
+        SELF_NAMES
+      );
+      const name = await extractSellerFirstName(hinted, CLEVER_INTRO_V2);
+      expect(name.toLowerCase()).toBe("donna");
     },
     120_000
   );

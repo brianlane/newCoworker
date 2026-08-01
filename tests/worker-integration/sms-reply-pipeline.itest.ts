@@ -565,6 +565,11 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
     expect(dashboard?.kind).toBe("urgent_alert");
     expect(String(dashboard?.payload.summary)).toContain("needs you to take over");
     expect(String(dashboard?.payload.summary)).toContain("Dwight Colclough");
+    // The page quotes the inbound text: a bare contact label is useless when
+    // the contact is a shared vendor line or group thread.
+    expect(String(dashboard?.payload.summary)).toContain(
+      'They said: "No one will insure me'
+    );
     expect(dashboard?.payload.taskType).toBe("sms_needs_human");
     expect(dashboard?.payload.contactE164).toBe(LEAD);
     const pageCount = pages.length;
