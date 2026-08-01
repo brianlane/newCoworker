@@ -340,12 +340,19 @@ if (!telnyxKey) {
           add(agg.tenant, `${direction}/${month}`);
         }
       }
-      // Don't trust a missing meta.total_pages (defaulting it to 1 would stop
-      // after a full first page): keep paging while pages come back full, and
-      // stop early only when total_pages is present and says we're done.
+      // Telnyx clamps this endpoint to 50 rows per page no matter what
+      // page[size] asks for, so a short page is NOT proof of the last
+      // page. Trust meta.total_pages whenever present; fall back to the
+      // short-page break only when meta is absent (defaulting a missing
+      // total_pages to 1 would stop after a full first page). Same rules
+      // as fetchTelnyxDetailRecords in src/lib/admin/cost-sync.ts.
+      if (rows.length === 0) break;
       const totalPages = body.meta?.total_pages;
-      if (rows.length < pageSize) break;
-      if (typeof totalPages === "number" && page >= totalPages) break;
+      if (typeof totalPages === "number") {
+        if (page >= totalPages) break;
+      } else if (rows.length < pageSize) {
+        break;
+      }
       page += 1;
     }
   }

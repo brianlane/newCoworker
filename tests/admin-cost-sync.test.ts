@@ -116,6 +116,101 @@ describe("fetchTelnyxDetailRecords", () => {
     expect(fetchImpl).toHaveBeenCalledTimes(2);
   });
 
+  it("keeps paging when the server clamps pages below the requested size", async () => {
+    // Telnyx clamps detail_records to 50 rows per page no matter what
+    // page[size] asks for, so a short page must not end the pull while
+    // meta.total_pages says there is more.
+    const clampedPage = Array.from({ length: 50 }, () => ({ cost: "0.01" }));
+    const fetchImpl = vi.fn(async (_input: RequestInfo | URL) =>
+      jsonResponse({ data: clampedPage, meta: { total_pages: 3 } })
+    );
+    const records = await fetchTelnyxDetailRecords({
+      apiKey: "tk",
+      recordType: "messaging",
+      range: "last_90_days",
+      fetchImpl
+    });
+    expect(records).toHaveLength(150);
+    expect(fetchImpl).toHaveBeenCalledTimes(3);
+    expect(String(vi.mocked(fetchImpl).mock.calls[2][0])).toContain("page[number]=3");
+  });
+
+  it("stops on an empty page even when meta promises more", async () => {
+    const fetchImpl = vi.fn(async () => jsonResponse({ data: [], meta: { total_pages: 9 } }));
+    const records = await fetchTelnyxDetailRecords({
+      apiKey: "tk",
+      recordType: "messaging",
+      range: "last_7_days",
+      fetchImpl
+    });
+    expect(records).toHaveLength(0);
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+  });
+
+  it("retries a 429 page with backoff, then succeeds", async () => {
+    const sleepImpl = vi.fn(async () => {});
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("slow down", { status: 429 }))
+      .mockResolvedValueOnce(jsonResponse({ data: [{ cost: "1" }] }));
+    const records = await fetchTelnyxDetailRecords({
+      apiKey: "tk",
+      recordType: "messaging",
+      range: "last_7_days",
+      fetchImpl,
+      sleepImpl
+    });
+    expect(records).toHaveLength(1);
+    expect(fetchImpl).toHaveBeenCalledTimes(2);
+    expect(sleepImpl).toHaveBeenCalledWith(500);
+  });
+
+  it("backs off with the default sleeper when none is injected", async () => {
+    const fetchImpl = vi
+      .fn()
+      .mockResolvedValueOnce(new Response("slow down", { status: 429 }))
+      .mockResolvedValueOnce(jsonResponse({ data: [{ cost: "1" }] }));
+    const records = await fetchTelnyxDetailRecords({
+      apiKey: "tk",
+      recordType: "messaging",
+      range: "last_7_days",
+      fetchImpl
+    });
+    expect(records).toHaveLength(1);
+  }, 10_000);
+
+  it("throws once 429 retries are exhausted", async () => {
+    const sleepImpl = vi.fn(async () => {});
+    const fetchImpl = vi.fn(async () => new Response("slow down", { status: 429 }));
+    await expect(
+      fetchTelnyxDetailRecords({
+        apiKey: "tk",
+        recordType: "messaging",
+        range: "last_7_days",
+        fetchImpl,
+        sleepImpl
+      })
+    ).rejects.toThrow(/HTTP 429/);
+    expect(fetchImpl).toHaveBeenCalledTimes(6);
+    expect(sleepImpl).toHaveBeenCalledTimes(5);
+  });
+
+  it("aborts past the page cap instead of pulling forever", async () => {
+    const clampedPage = Array.from({ length: 50 }, () => ({ cost: "0.01" }));
+    const fetchImpl = vi.fn(async () =>
+      jsonResponse({ data: clampedPage, meta: { total_pages: 500 } })
+    );
+    await expect(
+      fetchTelnyxDetailRecords({
+        apiKey: "tk",
+        recordType: "messaging",
+        range: "last_90_days",
+        fetchImpl
+      })
+    ).rejects.toThrow(/exceeded 400 pages/);
+    expect(fetchImpl).toHaveBeenCalledTimes(400);
+  });
+
   it("treats a missing data array as an empty page", async () => {
     const fetchImpl = vi.fn(async () => jsonResponse({}));
     const records = await fetchTelnyxDetailRecords({
