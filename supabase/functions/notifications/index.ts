@@ -31,6 +31,11 @@ import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.4
 import { buildBrandedEmailHtml } from "../_shared/branded_email_html.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import {
+  CONTACT_SCOPED_TASK_TYPES,
+  resolveContactOwnerTarget,
+  type ContactOwnerTarget
+} from "../_shared/contact_owner_target.ts";
+import {
   meterOperationalSms,
   releaseOperationalSms
 } from "../_shared/sms_operational_meter.ts";
@@ -59,6 +64,11 @@ type ResolvedTargets = {
   emailUrgent: boolean;
   dashboardAlerts: boolean;
   unsubscribed: boolean;
+  /**
+   * How a contact-scoped alert was routed. Null for the business-level
+   * alerts (billing, plan, system health), which never redirect.
+   */
+  routing: ContactOwnerTarget | null;
 };
 
 async function sha256(input: string): Promise<Uint8Array> {
@@ -111,7 +121,19 @@ function buildUnsubscribeUrl(businessId: string, appUrl: string): string {
 // createClient() call, so use a permissive client type for helper params.
 type SupaClient = SupabaseClient<any, any, any>;
 
-async function resolveTargets(supa: SupaClient, businessId: string): Promise<ResolvedTargets> {
+/**
+ * Where this alert goes. Business preferences first, then the business's
+ * onboarding email, then env-level operator fallbacks — and, when the alert
+ * is ABOUT one contact, redirected to whichever teammate owns that contact.
+ * Deno mirror of resolveNotificationTargets in
+ * src/lib/notifications/dispatch.ts; both import the same resolver so the
+ * two pipelines route identically.
+ */
+async function resolveTargets(
+  supa: SupaClient,
+  businessId: string,
+  contactE164?: string | null
+): Promise<ResolvedTargets> {
   const fallbackEmail = (Deno.env.get("ADMIN_EMAIL") ?? "").trim() || null;
   const fallbackPhone = normalizeE164(Deno.env.get("TELNYX_OWNER_PHONE") ?? "");
   let prefsEmail: string | null = null;
@@ -156,14 +178,28 @@ async function resolveTargets(supa: SupaClient, businessId: string): Promise<Res
     ownerEmail = ((business.owner_email as string | null) ?? "").trim() || null;
   }
 
+  const ownerAlertEmail = prefsEmail ?? ownerEmail ?? fallbackEmail;
+  const ownerAlertPhone = prefsPhone ?? fallbackPhone;
+
+  // Contact-scoped alerts belong to whoever owns the lead. Never throws;
+  // every failure resolves back to the business owner.
+  const routing = contactE164
+    ? await resolveContactOwnerTarget(supa, businessId, contactE164)
+    : null;
+  const redirected = routing?.target === "contact_owner";
+
   return {
-    email: prefsEmail ?? ownerEmail ?? fallbackEmail,
-    phone: prefsPhone ?? fallbackPhone,
+    // Email redirects only when the roster row actually has an address;
+    // otherwise it stays with the owner so a redirected alert keeps a second
+    // delivery path.
+    email: routing?.emailTarget === "contact_owner" ? routing.email : ownerAlertEmail,
+    phone: redirected ? routing!.phone : ownerAlertPhone,
     smsUrgent,
     whatsappUrgent,
     emailUrgent,
     dashboardAlerts,
-    unsubscribed
+    unsubscribed,
+    routing
   };
 }
 
@@ -313,11 +349,28 @@ serve(async (req: Request) => {
     );
   }
 
-  const targets = await resolveTargets(supa, record.business_id);
+  // Only alerts ABOUT one contact redirect to that contact's owner; billing,
+  // plan and system-health alerts stay with the business owner.
+  const scopedContactE164 =
+    CONTACT_SCOPED_TASK_TYPES.has(record.task_type) && record.log_payload?.contact_e164
+      ? String(record.log_payload.contact_e164)
+      : null;
+  const targets = await resolveTargets(supa, record.business_id, scopedContactE164);
   const basePayload: Record<string, unknown> = {
     summary,
     logId: record.id,
     taskType: record.task_type,
+    // Why this alert reached whoever it reached — mirrors the
+    // notify_lead_owner step's target/matched_by.
+    ...(targets.routing
+      ? {
+          routed_to: targets.routing.target,
+          routed_member_id: targets.routing.memberId,
+          routed_member_name: targets.routing.memberName,
+          matched_by: targets.routing.matchedBy,
+          routing_reason: targets.routing.reason
+        }
+      : {}),
     // Needs-human escalations and customer-reply alerts stamp the contact so
     // their per-contact dedupe/coalesce lookups (payload->>contactE164) can
     // find prior pages — see _shared/needs_human.ts and

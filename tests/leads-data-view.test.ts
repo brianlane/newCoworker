@@ -32,6 +32,7 @@ function contact(over: Partial<LeadContactRow> = {}): LeadContactRow {
     summary_md: null,
     tags: ["New Lead"],
     owner_employee_id: null,
+    lead_source: null,
     created_at: "2026-07-19T09:00:00.000Z",
     updated_at: "2026-07-20T11:00:00.000Z",
     ...over
@@ -384,5 +385,50 @@ describe("buildLeadDataRows", () => {
     for (let i = 1; i < rows.length; i++) {
       expect(rows[i - 1].createdAt >= rows[i].createdAt).toBe(true);
     }
+  });
+});
+
+describe("SOURCE: contacts.lead_source behind lead_submissions.source", () => {
+  it("surfaces the contact's own stamp when no submission matched", () => {
+    // Amy Laidlaw's shape: leads arrive as referral texts, so
+    // lead_submissions is empty and the flow that filed them names the
+    // source. Before this, every SOURCE cell rendered a dash.
+    const rows = buildLeadDataRows({
+      submissions: [],
+      contacts: [contact({ lead_source: "Clever" })],
+      ...EMPTY_MAPS
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].source).toBe("Clever");
+  });
+
+  it("prefers a matched submission's upstream label", () => {
+    // A webhook lead keeps reporting exactly what the upstream sent.
+    const rows = buildLeadDataRows({
+      submissions: [sub({ phone_e164: "+16025551234", source: "facebook_lead_ads" })],
+      contacts: [contact({ lead_source: "Clever" })],
+      ...EMPTY_MAPS
+    });
+    expect(rows).toHaveLength(1);
+    expect(rows[0].source).toBe("facebook_lead_ads");
+  });
+
+  it("stays null when neither side knows", () => {
+    const rows = buildLeadDataRows({
+      submissions: [],
+      contacts: [contact({ lead_source: null })],
+      ...EMPTY_MAPS
+    });
+    expect(rows[0].source).toBeNull();
+  });
+
+  it("keeps a submission-only lead's source (no contact row to stamp)", () => {
+    const rows = buildLeadDataRows({
+      submissions: [sub({ phone_e164: "+17025559999" })],
+      contacts: [],
+      ...EMPTY_MAPS
+    });
+    expect(rows[0].source).toBe("facebook_lead_ads");
+    expect(rows[0].hasContact).toBe(false);
   });
 });

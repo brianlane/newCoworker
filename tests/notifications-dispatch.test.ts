@@ -32,6 +32,19 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
 }));
 
+// The contact-owner resolver has its own suite (notification-contact-owner);
+// mocking it keeps this one about what the DISPATCHER does with the verdict.
+const resolveContactOwnerTarget = vi.fn();
+vi.mock("../supabase/functions/_shared/contact_owner_target.ts", async (importOriginal) => {
+  const actual = await importOriginal<
+    typeof import("../supabase/functions/_shared/contact_owner_target")
+  >();
+  return {
+    ...actual,
+    resolveContactOwnerTarget: (...args: unknown[]) => resolveContactOwnerTarget(...args)
+  };
+});
+
 import {
   dispatchUrgentNotification,
   resolveNotificationTargets
@@ -59,6 +72,30 @@ const PREFS_ON = {
 };
 
 const BUSINESS = { id: BIZ, owner_email: "owner@example.com" };
+
+/** Dave Lane, the roster member who claimed the lead. */
+const DAVE_PHONE = "+16025245719";
+const LEAD_PHONE = "+16026160662";
+const TO_BUSINESS_OWNER = {
+  target: "business_owner",
+  emailTarget: "business_owner",
+  memberId: null,
+  memberName: null,
+  phone: null,
+  email: null,
+  matchedBy: null,
+  reason: "contact_unowned"
+};
+const TO_DAVE = {
+  target: "contact_owner",
+  emailTarget: "business_owner",
+  memberId: "m1",
+  memberName: "Dave Lane",
+  phone: DAVE_PHONE,
+  email: null,
+  matchedBy: "phone",
+  reason: "employee_no_email"
+};
 
 describe("notifications/dispatch", () => {
   const original = process.env;
@@ -88,6 +125,8 @@ describe("notifications/dispatch", () => {
     // Default success shape ({ id, channel }) — the dispatcher destructures
     // the result to stamp telnyx_message_id on the outbound-log row.
     vi.mocked(sendTelnyxSms).mockResolvedValue({ id: "sms_id", channel: "sms" } as never);
+    // Default: no contact supplied, so nothing redirects.
+    resolveContactOwnerTarget.mockResolvedValue(TO_BUSINESS_OWNER);
   });
   afterEach(() => {
     process.env = original;
@@ -756,6 +795,123 @@ describe("notifications/dispatch", () => {
         status: "failed",
         reason: "send_failed"
       });
+    });
+  });
+
+  describe("contact-owner routing", () => {
+    /**
+     * The bug: a Clever lead that Dave Lane had claimed texted asking for a
+     * callback, and all four notification rows went to the business owner.
+     */
+    const rowsFor = (channel: string) =>
+      vi.mocked(insertNotification).mock.calls
+        .map((c) => c[0] as Record<string, unknown>)
+        .filter((r) => r.delivery_channel === channel);
+
+    it("sends the page to the owning employee, not the business owner", async () => {
+      resolveContactOwnerTarget.mockResolvedValue(TO_DAVE);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Follow up with Donna Robinson",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE
+      });
+      expect(vi.mocked(sendTelnyxSms).mock.calls[0][1]).toBe(DAVE_PHONE);
+      expect(vi.mocked(deliverWhatsApp).mock.calls[0][0]).toMatchObject({
+        to: DAVE_PHONE
+      });
+    });
+
+    it("stamps why each row went where it went", async () => {
+      resolveContactOwnerTarget.mockResolvedValue(TO_DAVE);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Follow up with Donna Robinson",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE
+      });
+      for (const row of vi.mocked(insertNotification).mock.calls.map((c) => c[0])) {
+        expect((row as { payload: Record<string, unknown> }).payload).toMatchObject({
+          routed_to: "contact_owner",
+          routed_member_id: "m1",
+          routed_member_name: "Dave Lane",
+          matched_by: "phone",
+          routing_reason: "employee_no_email"
+        });
+      }
+    });
+
+    it("keeps the email with the business owner when the roster row has none", async () => {
+      // Every one of Amy's employees has a null email. Skipping the email
+      // instead would leave the redirected alert with one delivery path.
+      resolveContactOwnerTarget.mockResolvedValue(TO_DAVE);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Follow up with Donna Robinson",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE
+      });
+      expect(vi.mocked(sendOwnerEmail).mock.calls[0][1]).toBe("owner@example.com");
+      expect(rowsFor("email")[0]).toMatchObject({ status: "sent" });
+    });
+
+    it("redirects the email too when the roster row has an address", async () => {
+      resolveContactOwnerTarget.mockResolvedValue({
+        ...TO_DAVE,
+        emailTarget: "contact_owner",
+        email: "dave@example.com",
+        reason: null
+      });
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Follow up with Donna Robinson",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE
+      });
+      expect(vi.mocked(sendOwnerEmail).mock.calls[0][1]).toBe("dave@example.com");
+    });
+
+    it("logs the redirected send against the employee's number", async () => {
+      resolveContactOwnerTarget.mockResolvedValue(TO_DAVE);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Follow up with Donna Robinson",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE
+      });
+      // Still source "owner_alert": a new source value would need a
+      // CHECK-constraint migration for no behavioural gain.
+      expect(outboundLogInsert).toHaveBeenCalledWith(
+        expect.objectContaining({ to_e164: DAVE_PHONE, source: "owner_alert" })
+      );
+    });
+
+    it("falls back to the business owner for an unowned contact", async () => {
+      resolveContactOwnerTarget.mockResolvedValue(TO_BUSINESS_OWNER);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Follow up with a stranger",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE
+      });
+      expect(vi.mocked(sendTelnyxSms).mock.calls[0][1]).toBe("+15555550100");
+      expect(vi.mocked(sendOwnerEmail).mock.calls[0][1]).toBe("owner@example.com");
+    });
+
+    it("never consults the resolver when no contact is supplied", async () => {
+      // The regression pin for every business-level caller: billing, plan and
+      // system-health alerts must stay owner-addressed and unstamped.
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "SMS cap reached",
+        kind: "sms_cap_reached"
+      });
+      expect(resolveContactOwnerTarget).not.toHaveBeenCalled();
+      expect(vi.mocked(sendTelnyxSms).mock.calls[0][1]).toBe("+15555550100");
+      const payload = (vi.mocked(insertNotification).mock.calls[0][0] as {
+        payload: Record<string, unknown>;
+      }).payload;
+      expect(payload).not.toHaveProperty("routed_to");
     });
   });
 });

@@ -133,6 +133,19 @@ export function notificationDetailFields(n: NotificationLike): NotificationDetai
   }
   const recipient = str(p.recipient);
   if (recipient) fields.push({ label: "Sent to", value: recipient });
+  // Contact-scoped alerts go to whoever owns the lead, so say who that was
+  // and why. Without this the owner sees an alert about their lead land on
+  // someone else's phone with no explanation.
+  const routedTo = str(p.routed_to);
+  if (routedTo) {
+    fields.push({
+      label: "Routed to",
+      value:
+        routedTo === "contact_owner"
+          ? (str(p.routed_member_name) ?? "The lead's owner")
+          : "Business owner"
+    });
+  }
   const activitySummary = str(p.activitySummary);
   if (activitySummary) fields.push({ label: "Activity", value: activitySummary });
   const summary = str(p.summary);

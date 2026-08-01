@@ -87,7 +87,7 @@ export async function GET(request: Request) {
     // 2) Contacts: everyone matching a submission identifier + every tagged
     //    contact (a lead can be on the board with no stored submission).
     const CONTACT_COLUMNS =
-      "customer_e164, alias_e164s, display_name, email, summary_md, tags, owner_employee_id, created_at, updated_at";
+      "customer_e164, alias_e164s, display_name, email, summary_md, tags, owner_employee_id, lead_source, created_at, updated_at";
     const contactsByPrimary = new Map<string, LeadContactRow>();
 
     const phones = [

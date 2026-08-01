@@ -40,6 +40,7 @@ import {
 import { resolveFromMatchesRefValues } from "../_shared/ai_flows/contact_ref.ts";
 import { parseClaimWithTimeframe } from "../_shared/ai_flows/claim_timeframe.ts";
 import { applyGoalEvent } from "../_shared/ai_flows/goal_events.ts";
+import { applyLifecycleStage } from "../_shared/pipelines/lifecycle.ts";
 import { stopRunsOnResponse } from "../_shared/ai_flows/response_stop.ts";
 import { reentryBlocked } from "../_shared/ai_flows/reentry.ts";
 import { kickAiFlowWorker, wantsImmediateStart } from "../_shared/ai_flows/worker_kick.ts";
@@ -2876,6 +2877,12 @@ serve(async (req: Request) => {
           // exempt.) Best-effort — never blocks the forward path.
           if (from) {
             await applyGoalEvent(supabase, businessId, from, { kind: "replied" });
+            // A lead answering is the "Engaged" moment on the pipeline board.
+            // Forward-only inside, so only the FIRST reply transitions; a
+            // teammate's number is dropped by the staff guard.
+            await applyLifecycleStage(supabase, businessId, from, "replied", {
+              dedupeSuffix: eventId
+            });
           }
           // Persist the inbound as an already-`done` job so it still appears in
           // the AiFlow correlation window + audit trail for FUTURE messages
@@ -3011,6 +3018,12 @@ serve(async (req: Request) => {
     // logic, not leapfrog it. Best-effort — never blocks inbound processing.
     if (from) {
       await applyGoalEvent(supabase, businessId, from, { kind: "replied" }, resumedWaitRunIds);
+      // A lead answering is the "Engaged" moment on the pipeline board.
+      // Forward-only inside, so only the FIRST reply transitions; a
+      // teammate's number is dropped by the staff guard.
+      await applyLifecycleStage(supabase, businessId, from, "replied", {
+        dedupeSuffix: eventId
+      });
     }
 
     // Evaluate AiFlow triggers + enqueue runs up front so we only suppress the

@@ -110,6 +110,9 @@ describe("POST /api/voice/tools/notify-team", () => {
       expect.objectContaining({
         businessId: BIZ,
         kind: "voice_team_notify",
+        // The alert is about this caller, so it routes to whichever teammate
+        // owns them rather than always to the business owner.
+        contactE164: "+15555550100",
         summary: expect.stringContaining("Maple St"),
         smsBody: expect.stringContaining("Brian (+15555550100)")
       })

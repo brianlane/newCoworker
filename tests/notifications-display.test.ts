@@ -225,3 +225,35 @@ describe("notifications/display", () => {
     });
   });
 });
+
+describe("notificationDetailFields: contact-owner routing", () => {
+  it("names the teammate a redirected alert reached", () => {
+    const fields = notificationDetailFields({
+      payload: {
+        recipient: "+16025245719",
+        routed_to: "contact_owner",
+        routed_member_name: "Dave Lane"
+      }
+    } as never);
+    expect(fields).toContainEqual({ label: "Routed to", value: "Dave Lane" });
+  });
+
+  it("falls back to a generic label when the roster name is missing", () => {
+    const fields = notificationDetailFields({
+      payload: { routed_to: "contact_owner", routed_member_name: null }
+    } as never);
+    expect(fields).toContainEqual({ label: "Routed to", value: "The lead's owner" });
+  });
+
+  it("says business owner when nothing redirected", () => {
+    const fields = notificationDetailFields({
+      payload: { routed_to: "business_owner", routing_reason: "contact_unowned" }
+    } as never);
+    expect(fields).toContainEqual({ label: "Routed to", value: "Business owner" });
+  });
+
+  it("omits the field entirely for a business-level alert", () => {
+    const fields = notificationDetailFields({ payload: { recipient: "o@x.co" } } as never);
+    expect(fields.some((f) => f.label === "Routed to")).toBe(false);
+  });
+});
