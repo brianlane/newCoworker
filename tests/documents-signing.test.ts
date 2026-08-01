@@ -437,7 +437,12 @@ describe("signDocumentRequest", () => {
       token: "tok",
       viewedContentSha256: VIEWED_SHA,
       signatureName: "Jane",
-      consent: true
+      consent: true,
+      // Pin the clock like every other call here. Omitting it fell back to
+      // the real one, so this assertion quietly depended on today's date
+      // being before the fixture's 2026-08-01 expiry, and it began failing
+      // the moment that date arrived.
+      now: NOW
     });
     expect(res2.ok).toBe(true);
   });
