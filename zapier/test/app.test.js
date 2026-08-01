@@ -49,10 +49,26 @@ test("samples carry the dispatcher payload envelope", () => {
   }
 });
 
+// Zapier's platform "cleans" input data by default (dropping empty strings
+// and unknown keys) before the request runs. Every surface opts out globally
+// via flags.cleanInputData so the API sees exactly what the Zap sent and can
+// return ITS OWN validation error (publishing check D028: per-operation
+// opt-outs on only some surfaces left the four triggers and send_lead
+// flagged; one global flag covers them all).
+test("the whole app opts out of platform input cleaning (D028)", () => {
+  assert.deepEqual(app.flags, { cleanInputData: false });
+  for (const create of Object.values(app.creates)) {
+    assert.notEqual(
+      create.operation.cleanInputData,
+      true,
+      `${create.key} must not re-enable input cleaning`
+    );
+  }
+});
+
 test("send_sms requires to + text", () => {
   const operation = app.creates.send_sms.operation;
   const fields = operation.inputFields;
-  assert.equal(operation.cleanInputData, false);
   assert.deepEqual(
     fields.map((f) => f.key),
     ["to", "text"]
