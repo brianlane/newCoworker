@@ -12,6 +12,7 @@ import {
   getActiveVpsSshKey,
   getActiveVpsSshKeyForBusiness,
   listActiveVpsSshKeys,
+  newestKeyPerBusiness,
   reassignVpsSshKeyBusiness,
   rotateVpsSshKey,
   updateVpsSshKeyPlacement,
@@ -588,5 +589,62 @@ describe("vps_ssh_keys DB layer", () => {
       const row = await getActiveVpsSshKey("42", db as never);
       expect(row!.private_key_pem).toBe("");
     });
+  });
+});
+
+describe("newestKeyPerBusiness", () => {
+  /** Only the fields the selection rule reads. */
+  const key = (id: string, business: string, createdAt: string) =>
+    ({ id, business_id: business, created_at: createdAt }) as never;
+
+  it("keeps one row per business: the newest by created_at", () => {
+    // listActiveVpsSshKeys returns one row per BOX, and a re-provisioned
+    // tenant carries several. The sidecar rollouts deploy to the tenant's
+    // CURRENT box, so the sweep must pick the same row the single-tenant
+    // path resolves, not a retired one.
+    const picked = newestKeyPerBusiness([
+      key("old-a", "biz-a", "2026-01-01T00:00:00Z"),
+      key("new-a", "biz-a", "2026-07-01T00:00:00Z"),
+      key("mid-a", "biz-a", "2026-03-01T00:00:00Z"),
+      key("only-b", "biz-b", "2026-02-01T00:00:00Z")
+    ]);
+    expect(picked.map((r) => r.id)).toEqual(["new-a", "only-b"]);
+  });
+
+  it("picks the newest regardless of input order", () => {
+    // The query orders newest-first, but a caller that filtered or re-sorted
+    // must still get the current box.
+    const oldest = key("old", "biz-a", "2026-01-01T00:00:00Z");
+    const newest = key("new", "biz-a", "2026-07-01T00:00:00Z");
+    expect(newestKeyPerBusiness([oldest, newest])[0].id).toBe("new");
+    expect(newestKeyPerBusiness([newest, oldest])[0].id).toBe("new");
+  });
+
+  it("sorts an unparseable created_at last so a real timestamp always wins", () => {
+    const garbage = key("garbage", "biz-a", "not-a-date");
+    const real = key("real", "biz-a", "2026-01-01T00:00:00Z");
+    expect(newestKeyPerBusiness([garbage, real])[0].id).toBe("real");
+    expect(newestKeyPerBusiness([real, garbage])[0].id).toBe("real");
+  });
+
+  it("still yields a row when every candidate for a business is unparseable", () => {
+    // Never silently drop a tenant: a box with a corrupt timestamp is still
+    // a box that needs the rollout.
+    const picked = newestKeyPerBusiness([
+      key("g1", "biz-a", "not-a-date"),
+      key("g2", "biz-a", "also-bad")
+    ]);
+    expect(picked).toHaveLength(1);
+    expect(picked[0].business_id).toBe("biz-a");
+  });
+
+  it("returns businesses in stable id order, and [] for no rows", () => {
+    const picked = newestKeyPerBusiness([
+      key("c", "biz-c", "2026-01-01T00:00:00Z"),
+      key("a", "biz-a", "2026-01-01T00:00:00Z"),
+      key("b", "biz-b", "2026-01-01T00:00:00Z")
+    ]);
+    expect(picked.map((r) => r.business_id)).toEqual(["biz-a", "biz-b", "biz-c"]);
+    expect(newestKeyPerBusiness([])).toEqual([]);
   });
 });

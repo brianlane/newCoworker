@@ -23,9 +23,23 @@
  * Usage:
  *   tsx debug/redeploy-voice-bridge.ts                       # Amy's business (default)
  *   tsx debug/redeploy-voice-bridge.ts --business-id <uuid>
- *   tsx debug/redeploy-voice-bridge.ts --dry-run             # resolve target only
+ *   tsx debug/redeploy-voice-bridge.ts --all                 # every tenant, sequential
+ *   tsx debug/redeploy-voice-bridge.ts --all --dry-run       # list targets, do nothing
+ *   tsx debug/redeploy-voice-bridge.ts --all --force         # redeploy even mid-call
  *
- * Exit code: 0 on a clean rebuild, 1 otherwise.
+ * `--all` is the fleet sweep. It deploys to each tenant's CURRENT box (the
+ * newest unrotated key), because a re-provisioned tenant has several rows in
+ * `vps_ssh_keys` and deploying to a retired one would report success while
+ * the live box kept the old code. This is the gap that made a voice-bridge
+ * change look like it needed a hand-rolled loop (PR #1060): `update-all-vps.ts`
+ * ships `vps/chat-worker` only and never touches the bridge.
+ *
+ * Before each box it checks `voice_active_sessions` for calls in progress and
+ * SKIPS that tenant if any are live, because the rebuild force-recreates the
+ * container and hangs up on whoever is mid-sentence. `--force` overrides.
+ *
+ * Exit code: 0 only when every targeted tenant rebuilt cleanly. A skipped
+ * tenant exits 1, since it is still running the old bridge.
  */
 import { loadEnv, makeHostingerClient, resolveVpsIp } from "./_shared.ts";
 
@@ -33,6 +47,8 @@ loadEnv();
 
 const DEFAULT_BUSINESS_ID = "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
 const DRY_RUN = process.argv.includes("--dry-run");
+const ALL = process.argv.includes("--all");
+const FORCE = process.argv.includes("--force");
 
 function parseBusinessId(): string {
   const i = process.argv.indexOf("--business-id");
@@ -95,36 +111,160 @@ if [ "$healthy" -ne 1 ]; then
 fi
 `;
 
-const { getActiveVpsSshKeyForBusiness } = await import("../src/lib/db/vps-ssh-keys.ts");
+const { getActiveVpsSshKeyForBusiness, listActiveVpsSshKeys, newestKeyPerBusiness } =
+  await import("../src/lib/db/vps-ssh-keys.ts");
 const { sshExec } = await import("../src/lib/hostinger/ssh.ts");
+const { createSupabaseServiceClient } = await import("../src/lib/supabase/server.ts");
 
-const key = await getActiveVpsSshKeyForBusiness(BUSINESS_ID);
-if (!key) {
-  console.error(`No active VPS SSH key for business ${BUSINESS_ID}`);
-  process.exit(1);
+type KeyRow = Awaited<ReturnType<typeof getActiveVpsSshKeyForBusiness>>;
+
+// Target selection. `--all` sweeps the fleet; without it the behavior is
+// exactly what it always was (one business, default Amy).
+//
+// listActiveVpsSshKeys returns one row per BOX, and a re-provisioned tenant
+// carries several, so the raw list would redeploy retired boxes and report
+// success. newestKeyPerBusiness collapses it to the same row the
+// single-tenant path resolves. That selection rule is pure and unit-tested in
+// tests/vps-ssh-keys.test.ts; this script stays a thin IO wrapper.
+let targets: NonNullable<KeyRow>[];
+if (ALL) {
+  targets = newestKeyPerBusiness(await listActiveVpsSshKeys());
+  if (targets.length === 0) {
+    console.error("No active VPS SSH keys: nothing to redeploy.");
+    process.exit(1);
+  }
+  console.log(`Targets  : ${targets.length} tenant(s) (--all)\n`);
+} else {
+  const one = await getActiveVpsSshKeyForBusiness(BUSINESS_ID);
+  if (!one) {
+    console.error(`No active VPS SSH key for business ${BUSINESS_ID}`);
+    process.exit(1);
+  }
+  targets = [one];
+}
+
+/**
+ * Phone numbers with a call in progress on this tenant right now.
+ *
+ * A bridge redeploy runs `docker compose up --force-recreate`, which kills
+ * the container and every media stream attached to it: a caller mid-sentence
+ * is simply hung up on. `voice_active_sessions` rows are opened when media
+ * starts and stamped with `ended_at` when the call finishes, so an unended
+ * row is a live call.
+ *
+ * Read-only and best-effort: if the check itself fails we report it and treat
+ * the tenant as busy, because "we could not tell" must not be silently
+ * downgraded to "safe to drop calls". `--force` overrides.
+ */
+async function liveCallCount(businessId: string): Promise<number | null> {
+  try {
+    const db = await createSupabaseServiceClient();
+    const { count, error } = await db
+      .from("voice_active_sessions")
+      .select("call_control_id", { count: "exact", head: true })
+      .eq("business_id", businessId)
+      .is("ended_at", null);
+    if (error) throw new Error(error.message);
+    return count ?? 0;
+  } catch (err) {
+    console.error(
+      `  [warn] could not read voice_active_sessions: ${err instanceof Error ? err.message : String(err)}`
+    );
+    return null;
+  }
 }
 
 const client = makeHostingerClient();
-const ip = await resolveVpsIp(client, key);
+const results: Array<{ businessId: string; status: "ok" | "failed" | "skipped"; note?: string }> =
+  [];
 
-console.log(`Business : ${BUSINESS_ID}`);
-console.log(`VPS      : ${key.hostinger_vps_id} @ ${ip}`);
-console.log(`User     : ${key.ssh_username || "root"}`);
+const errText = (err: unknown): string => (err instanceof Error ? err.message : String(err));
 
-if (DRY_RUN) {
-  console.log("\n[dry-run] target resolved; not connecting.");
-  process.exit(0);
+/**
+ * Redeploy ONE tenant, converting any throw into a recorded failure.
+ *
+ * A fleet sweep must not lose the rest of the fleet to one bad box: an
+ * unhandled Hostinger lookup error or SSH timeout would abort the loop
+ * mid-run, leaving later tenants untouched AND printing no summary, so the
+ * operator cannot tell which boxes were reached. Same containment
+ * `update-all-vps.ts` applies per box.
+ */
+async function redeployOne(key: NonNullable<KeyRow>): Promise<(typeof results)[number]> {
+  const businessId = key.business_id;
+
+  let ip: string;
+  try {
+    ip = await resolveVpsIp(client, key);
+  } catch (err) {
+    console.error(`\n========== ${businessId} (vps ${key.hostinger_vps_id}) ==========`);
+    console.error(`[fail] could not resolve the box's IP: ${errText(err)}`);
+    return { businessId, status: "failed", note: `ip-resolve-failed: ${errText(err)}` };
+  }
+
+  console.log(`\n========== ${businessId} (vps ${key.hostinger_vps_id} @ ${ip}) ==========`);
+  console.log(`User     : ${key.ssh_username || "root"}`);
+
+  if (DRY_RUN) {
+    console.log("[dry-run] target resolved; not connecting.");
+    return { businessId, status: "skipped", note: "dry-run" };
+  }
+
+  if (!FORCE) {
+    const live = await liveCallCount(businessId);
+    if (live === null || live > 0) {
+      const why =
+        live === null ? "could not check for calls in progress" : `${live} call(s) in progress`;
+      console.log(`[skip] ${why}. Re-run for this tenant later, or pass --force.`);
+      return { businessId, status: "skipped", note: why };
+    }
+  }
+
+  try {
+    const res = await sshExec({
+      host: ip,
+      username: key.ssh_username || "root",
+      privateKeyPem: key.private_key_pem,
+      command: REDEPLOY_BRIDGE_REMOTE,
+      timeoutMs: 12 * 60 * 1000,
+      onStdout: (c) => process.stdout.write(c),
+      onStderr: (c) => process.stderr.write(c)
+    });
+    console.log(
+      `\n[redeploy-voice-bridge] exitCode=${res.exitCode} signal=${res.signal ?? "none"}`
+    );
+    return res.exitCode === 0
+      ? { businessId, status: "ok" }
+      : {
+          businessId,
+          status: "failed",
+          note: `exitCode=${res.exitCode} signal=${res.signal ?? "none"}`
+        };
+  } catch (err) {
+    console.error(`\n[fail] ssh failed for ${businessId}: ${errText(err)}`);
+    return { businessId, status: "failed", note: `ssh-failed: ${errText(err)}` };
+  }
 }
 
-const res = await sshExec({
-  host: ip,
-  username: key.ssh_username || "root",
-  privateKeyPem: key.private_key_pem,
-  command: REDEPLOY_BRIDGE_REMOTE,
-  timeoutMs: 12 * 60 * 1000,
-  onStdout: (c) => process.stdout.write(c),
-  onStderr: (c) => process.stderr.write(c)
-});
+// Sequential on purpose: each redeploy streams a full docker build to stdout,
+// and interleaving several makes the output unreadable exactly when something
+// has gone wrong. The fleet is small enough that wall-clock is not the
+// constraint.
+for (const key of targets) {
+  results.push(await redeployOne(key));
+}
 
-console.log(`\n[redeploy-voice-bridge] exitCode=${res.exitCode} signal=${res.signal ?? "none"}`);
-process.exit(res.exitCode === 0 ? 0 : 1);
+if (ALL || results.length > 1) {
+  console.log("\n================ SUMMARY ================");
+  for (const r of results) {
+    const label = r.status === "ok" ? "OK  " : r.status === "failed" ? "FAIL" : "SKIP";
+    console.log(`  [${label}] ${r.businessId}${r.note ? `: ${r.note}` : ""}`);
+  }
+  const okCount = results.filter((r) => r.status === "ok").length;
+  console.log(`[redeploy-voice-bridge] ${okCount}/${results.length} redeployed`);
+}
+
+// A skip is not a success: a tenant left on old code must not exit 0, or a
+// scripted fleet sweep would report "done" with boxes still unpatched.
+// Dry-runs are the exception, they intentionally deploy nothing.
+const clean = results.every((r) => r.status === "ok" || r.note === "dry-run");
+process.exit(clean ? 0 : 1);

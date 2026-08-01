@@ -158,7 +158,7 @@ production secrets, root SSH, and tenant PII all meet.
 | `check-vault-sync.ts` | **Drift check.** Compares Supabase `memory_md` against the VPS Rowboat agent prompt (Mongo `instructions`); reports whether the latest saved bullet reached the live agent. Read-only. |
 | `resync-vault.ts` | **Recovery.** Forces a vault → VPS re-seed for one tenant (`<businessId>`) or `--all`. Use when `check-vault-sync.ts` reports drift. |
 | `redeploy-aiflow-render.ts` | **Targeted aiflow-render rollout.** Refreshes `/opt/aiflow-render` (rsync + `docker compose up --build`) on **one** tenant VPS (`--business-id <uuid>`, default Amy) without re-running the full `deploy-client.sh` provisioner, so the box's `.env` secrets are preserved. Per box, NOT fleet-wide: it resolves a single box via `getActiveVpsSshKeyForBusiness`, so covering the fleet means one run per tenant. `--ref`, `--json`. Starter boxes have no render `.env` (policy-gated off KVM2) and abort; `--init-env` (with `AIFLOW_RENDER_TOKEN` in the caller env) seeds one for capability experiments like the KVM2 render-contention test. ⚠️ `--seed-token` (with `AIFLOW_RENDER_TOKEN` in the caller env) REPLACES the token line in the box's existing render `.env`, the remediation for bearers blanked by pre-2026-07-21 full redeploys (an empty token leaves `/render` + `/pdf` unauthenticated); the worker must hold the SAME value or its browse calls start 401ing. |
-| `redeploy-voice-bridge.ts` | **Targeted voice-bridge rollout.** Refreshes `/opt/voice-bridge` (rsync `vps/voice-bridge` excluding `.env` + `docker compose up --build` of only that container) on a tenant VPS (`--business-id <uuid>`, default Amy) without re-running `deploy-client.sh`, so the box's `STREAM_URL_SIGNING_SECRET`/`SUPABASE_*` stay intact. Verifies the contacts-aware bridge code landed and health-checks `:8090`. `--dry-run`. |
+| `redeploy-voice-bridge.ts` | **Targeted voice-bridge rollout.** Refreshes `/opt/voice-bridge` (rsync `vps/voice-bridge` excluding `.env` + `docker compose up --build` of only that container) on a tenant VPS (`--business-id <uuid>`, default Amy) without re-running `deploy-client.sh`, so the box's `STREAM_URL_SIGNING_SECRET`/`SUPABASE_*` stay intact. Verifies the contacts-aware bridge code landed and health-checks `:8090`. **`--all` sweeps the whole fleet** (sequential; one run per tenant, targeting each tenant's CURRENT box via `newestKeyPerBusiness`, so a re-provisioned tenant's retired rows are never deployed to). Before each box it checks `voice_active_sessions` and SKIPS a tenant with a call in progress, since the rebuild force-recreates the container and hangs up on whoever is mid-sentence; `--force` overrides. Exit 0 only when every targeted tenant rebuilt, so a skip is a non-zero exit rather than a silent "done". `--dry-run`. |
 | `backfill-sms-customer-e164.ts` | **Data backfill.** Stamps `sms_inbound_jobs.customer_e164` from the Telnyx envelope sender for rows where it's NULL (AiFlow-suppressed / legacy Safe Mode inbounds). Those texts showed in the raw thread view but not on the contact page (which filters by the column). Idempotent — only touches NULL rows. Dry-run by default; `--apply` to write. |
 | `backfill-nango-account-identity.ts` | **Data backfill.** Stamps `provider_account_email` / `provider_account_display_name` onto `workspace_oauth_connections.metadata` by asking each provider (Gmail profile, Graph `/me`, …) whose account the token is for — pre-fix Connect-UI rows were labeled with the dashboard login instead — and pushes the same identity to Nango (`patchConnection` end_user + tags) so Nango's dashboard "Customer" column matches. Idempotent — already-stamped rows skip the probe but still get the Nango push. Dry-run by default; `--apply` to write; `--business <uuid>` to scope. |
 | `nango-audit.ts` | **Quota audit.** Diffs the platform Nango account against `workspace_oauth_connections` in both directions: Nango-side orphans (connection with no DB row — refused over-cap completes, pre-cleanup tenant deletions) burn the ACCOUNT-WIDE connection quota and are deleted with `--apply`; DB-side stale rows (row with no Nango connection) are report-only — the owner should reconnect or remove them from the dashboard. Dry-run by default. |
@@ -230,21 +230,31 @@ and safe to re-run.
 ⚠️ **This rolls out `vps/chat-worker` ONLY.** It rsyncs `vps/chat-worker/` and
 nothing else, so a `vps/voice-bridge` or `vps/aiflow-render` change shipped
 this way silently does nothing: the run goes green and the box keeps the old
-code. Those two sidecars have their own per-tenant scripts and no fleet-wide
-equivalent. To cover the fleet, loop over the distinct unrotated
-`business_id`s in `vps_ssh_keys` (four tenants today), since
-`getActiveVpsSshKeyForBusiness` resolves each one's current box:
+code. Those two sidecars deploy per tenant. The voice-bridge has its own fleet
+sweep; aiflow-render still needs a loop:
 
 ```bash
-# voice-bridge, one tenant at a time (same shape for redeploy-aiflow-render.ts)
+# voice-bridge: whole fleet, sequential, skips tenants with a live call
+tsx debug/redeploy-voice-bridge.ts --all --dry-run   # list targets first
+tsx debug/redeploy-voice-bridge.ts --all
+
+# aiflow-render: no --all yet, so loop the tenants yourself
 for b in <uuid> <uuid> <uuid>; do
-  tsx debug/redeploy-voice-bridge.ts --business-id "$b"
+  tsx debug/redeploy-aiflow-render.ts --business-id "$b"
   tsx debug/box-verify.ts "$b"
 done
 ```
 
-Before a voice-bridge rebuild, check `voice_active_sessions` for rows with
-`ended_at IS NULL`: recreating the container drops any call in progress.
+`--all` targets each tenant's CURRENT box: `vps_ssh_keys` holds one row per
+BOX and a re-provisioned tenant has several, so the sweep collapses them with
+`newestKeyPerBusiness` (nine rows, four tenants at the time of writing).
+Deploying the raw list would patch retired boxes and report success.
+
+It also skips any tenant with a call in progress (`voice_active_sessions`
+rows where `ended_at IS NULL`), because the rebuild force-recreates the
+container and hangs up on whoever is mid-sentence. A skipped tenant is still
+running old code, so the run exits non-zero rather than reporting done. When
+hand-looping aiflow-render, make that same check yourself.
 
 ### Capture-env self-heal
 
