@@ -129,6 +129,30 @@ describe("ensureAcuityWebhooks", () => {
     expect(removed[0][1]).toBe("stale-1");
   });
 
+  it("also clears registrations left at a PREVIOUS callback URL", async () => {
+    // The origin can drift (a NEXT_PUBLIC_APP_URL change, a different host).
+    // Hooks left at the old URL keep eating the 25-webhook ceiling while
+    // delivering somewhere that no longer serves this tenant.
+    const OLD = "https://old.example.com/api/webhooks/acuity?business=biz-1&token=tok";
+    const d = deps({
+      list: vi.fn().mockResolvedValue([
+        { id: "at-old", event: "appointment.scheduled", target: OLD },
+        { id: "at-new", event: "appointment.scheduled", target: TARGET },
+        { id: "not-ours", event: "appointment.scheduled", target: "https://other/hook" },
+        { id: "no-target", event: "appointment.scheduled", target: null }
+      ])
+    });
+    await ensureAcuityWebhooks(
+      conn({ ids: [], targetUrl: OLD, status: "registered" }),
+      TARGET,
+      d
+    );
+    const removed = (d as never as { remove: { mock: { calls: unknown[][] } } }).remove.mock.calls
+      .map((c) => c[1])
+      .sort();
+    expect(removed).toEqual(["at-new", "at-old"]);
+  });
+
   it("keeps going when a stale registration cannot be deleted", async () => {
     const d = deps({
       list: vi.fn().mockResolvedValue([{ id: "stale", event: "x", target: TARGET }]),

@@ -101,9 +101,16 @@ export async function ensureAcuityWebhooks(
   try {
     // Reconcile by target: anything already pointing at us is ours, whether
     // or not we still have its id.
+    // Match the PREVIOUS callback URL as well as the current one. The origin
+    // can drift (a NEXT_PUBLIC_APP_URL change, a different deployment host),
+    // and registrations left at the old URL keep consuming the account's
+    // 25-webhook ceiling while delivering to somewhere that no longer serves
+    // this tenant.
+    const stored = readWebhookRegistration(conn.webhook_registration);
+    const ourTargets = new Set([targetUrl, ...(stored.targetUrl ? [stored.targetUrl] : [])]);
     const existing = await list(conn);
     for (const hook of existing) {
-      if (hook.target !== targetUrl) continue;
+      if (!hook.target || !ourTargets.has(hook.target)) continue;
       try {
         await remove(conn, hook.id);
       } catch (err) {

@@ -57,14 +57,22 @@ export async function POST(request: Request) {
     }
     const businessId = business.data;
 
+    // Rate limiting answers 2xx, not 429. Acuity counts every non-2xx toward
+    // the five-day window after which it silently disables the webhook, so a
+    // retry burst hitting our own limiter would help kill the very endpoint
+    // the limiter protects. Dropping the delivery is safe: the ~1/min poller
+    // observes the same change anyway.
     const limiter = rateLimit(`acuity-webhook:${businessId}`, ACUITY_WEBHOOK_RATE);
     if (!limiter.success) {
-      return errorResponse("CONFLICT", "Rate limit exceeded, retry shortly.", 429);
+      return successResponse({ ignored: true, reason: "rate_limited" });
     }
 
     // The full row, not the id-only probe: the API key IS the HMAC secret.
     const conn = await getAcuityConnection(businessId);
-    if (!conn || !conn.is_active || !verificationTokenMatches(token, conn.webhook_verification_token)) {
+    // Unauthenticated deliveries get a 401: an attacker must never be able to
+    // tell a wrong token from a right one by the status code, and Acuity is
+    // not the one sending these.
+    if (!conn || !verificationTokenMatches(token, conn.webhook_verification_token)) {
       return errorResponse("UNAUTHORIZED", "Invalid webhook credentials");
     }
 
@@ -77,6 +85,16 @@ export async function POST(request: Request) {
     const signature = request.headers.get(ACUITY_SIGNATURE_HEADER);
     if (!verifyAcuityWebhookSignature(rawBody, signature, conn.apiKey)) {
       return errorResponse("UNAUTHORIZED", "Invalid signature");
+    }
+
+    // A soft-disabled connection is NOT bad credentials: we know exactly who
+    // this is and are choosing not to act. Answering 401 would have Acuity
+    // retry and count those failures toward the five-day disable, so an owner
+    // who paused the integration for a week would find it permanently dead on
+    // return. Checked after the signature so an unsigned request still cannot
+    // learn that a business exists.
+    if (!conn.is_active) {
+      return successResponse({ ignored: true, reason: "inactive" });
     }
 
     const event = parseAcuityWebhookBody(rawBody);

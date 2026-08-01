@@ -93,10 +93,8 @@ describe("authentication", () => {
     expect(vi.mocked(processAcuityWebhookEvent)).not.toHaveBeenCalled();
   });
 
-  it("rejects an unknown or inactive connection", async () => {
+  it("rejects an unknown connection", async () => {
     vi.mocked(getAcuityConnection).mockResolvedValue(null as never);
-    expect((await POST(req())).status).toBe(401);
-    vi.mocked(getAcuityConnection).mockResolvedValue({ ...CONN, is_active: false } as never);
     expect((await POST(req())).status).toBe(401);
   });
 
@@ -141,10 +139,32 @@ describe("response discipline", () => {
     expect(res.status).toBe(500);
   });
 
-  it("rate limits a misconfigured loop", async () => {
+  it("ABSORBS a rate-limited delivery rather than answering 429", async () => {
+    // Acuity counts every non-2xx toward the five-day disable window, so a
+    // retry burst hitting our own limiter would help kill the very endpoint
+    // the limiter protects. The poller sees the change regardless.
     vi.mocked(rateLimit).mockReturnValue({ success: false } as never);
     const res = await POST(req());
-    expect(res.status).toBe(429);
+    expect(res.status).toBe(200);
+    expect(vi.mocked(processAcuityWebhookEvent)).not.toHaveBeenCalled();
+  });
+
+  it("ABSORBS a delivery for a soft-disabled connection", async () => {
+    // Pausing an integration must not permanently kill the webhook: 401s
+    // here would count toward the five-day disable, so an owner who paused
+    // for a week would come back to a dead endpoint.
+    vi.mocked(getAcuityConnection).mockResolvedValue({ ...CONN, is_active: false } as never);
+    const res = await POST(req());
+    expect(res.status).toBe(200);
+    expect(vi.mocked(processAcuityWebhookEvent)).not.toHaveBeenCalled();
+  });
+
+  it("still refuses an UNSIGNED delivery to an inactive connection", async () => {
+    // The pause is checked after the signature, so an unsigned request
+    // cannot learn that a business exists.
+    vi.mocked(getAcuityConnection).mockResolvedValue({ ...CONN, is_active: false } as never);
+    const res = await POST(req(BODY, { signature: sign(BODY, "wrong") }));
+    expect(res.status).toBe(401);
   });
 
   it("refuses an oversized payload", async () => {
