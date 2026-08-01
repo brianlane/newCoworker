@@ -19,9 +19,20 @@ export const PASSWORD_SYMBOLS: readonly string[] = [
 
 const SYMBOL_SET = new Set(PASSWORD_SYMBOLS);
 
+/**
+ * Must stay at or above the Supabase project's "Minimum password length".
+ *
+ * Same reasoning as the symbol set above: if this is looser than the server's
+ * setting, we accept a password in the form and then Supabase rejects it, so
+ * the user is told their password is fine and then that it is not. Raised to
+ * 12 alongside the project setting on 2026-08-01, which also satisfies the
+ * CASA/ASVS 12-character control.
+ */
+export const PASSWORD_MIN_LENGTH = 12;
+
 const RULES: Record<PasswordCopyLocale, readonly string[]> = {
   en: [
-    "At least 8 characters",
+    `At least ${PASSWORD_MIN_LENGTH} characters`,
     "At least 1 lowercase letter",
     "At least 1 uppercase letter",
     "At least 1 number",
@@ -29,7 +40,7 @@ const RULES: Record<PasswordCopyLocale, readonly string[]> = {
     "Must match the confirmation field"
   ],
   es: [
-    "Al menos 8 caracteres",
+    `Al menos ${PASSWORD_MIN_LENGTH} caracteres`,
     "Al menos 1 letra minúscula",
     "Al menos 1 letra mayúscula",
     "Al menos 1 número",
@@ -56,10 +67,10 @@ export function getPasswordValidationError(
   locale: PasswordCopyLocale = "en"
 ): string | null {
   const es = locale === "es";
-  if (password.length < 8) {
+  if (password.length < PASSWORD_MIN_LENGTH) {
     return es
-      ? "La contraseña debe tener al menos 8 caracteres"
-      : "Password must be at least 8 characters";
+      ? `La contraseña debe tener al menos ${PASSWORD_MIN_LENGTH} caracteres`
+      : `Password must be at least ${PASSWORD_MIN_LENGTH} characters`;
   }
 
   if (!/[a-z]/.test(password)) {

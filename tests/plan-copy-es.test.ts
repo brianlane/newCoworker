@@ -69,33 +69,35 @@ describe("usage-copy Spanish variants", () => {
 describe("password rules Spanish variants", () => {
   it("getPasswordRules returns the locale's rule list (en default unchanged)", () => {
     expect(getPasswordRules()).toEqual([
-      "At least 8 characters",
+      "At least 12 characters",
       "At least 1 lowercase letter",
       "At least 1 uppercase letter",
       "At least 1 number",
       "At least 1 symbol, such as ! ? @ # $ %",
       "Must match the confirmation field"
     ]);
-    expect(getPasswordRules("es")[0]).toBe("Al menos 8 caracteres");
+    expect(getPasswordRules("es")[0]).toBe("Al menos 12 caracteres");
   });
 
   it("getPasswordValidationError localizes each failure", () => {
+    // Each fixture is at or above the 12-character minimum so the rule under
+    // test fires rather than the length rule.
     expect(getPasswordValidationError("short", "es")).toBe(
-      "La contraseña debe tener al menos 8 caracteres"
+      "La contraseña debe tener al menos 12 caracteres"
     );
-    expect(getPasswordValidationError("ABCDEFGH1!", "es")).toBe(
+    expect(getPasswordValidationError("ABCDEFGHIJ1!", "es")).toBe(
       "La contraseña debe incluir al menos 1 letra minúscula"
     );
-    expect(getPasswordValidationError("abcdefgh1!", "es")).toBe(
+    expect(getPasswordValidationError("abcdefghij1!", "es")).toBe(
       "La contraseña debe incluir al menos 1 letra mayúscula"
     );
-    expect(getPasswordValidationError("Abcdefghi!", "es")).toBe(
+    expect(getPasswordValidationError("Abcdefghijk!", "es")).toBe(
       "La contraseña debe incluir al menos 1 número"
     );
-    expect(getPasswordValidationError("Abcdefgh1", "es")).toBe(
+    expect(getPasswordValidationError("Abcdefghij12", "es")).toBe(
       "La contraseña debe incluir al menos 1 símbolo, como ! ? @ # $ %"
     );
-    expect(getPasswordValidationError("Abcdefg1!", "es")).toBeNull();
+    expect(getPasswordValidationError("Abcdefghij1!", "es")).toBeNull();
   });
 });
 
