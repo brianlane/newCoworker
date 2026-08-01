@@ -349,16 +349,18 @@ export function archiveSlug(absPath: string): string {
 
 /**
  * Whether an archive directory name belongs to a worktree of the checkout
- * whose flattened slug is `flat`. Worktree paths extend the checkout path
- * (`.claude/worktrees/<name>` inside it, or the manual `<repo>-wt-<name>`
- * sibling convention), so their slugs extend the checkout's slug. Matched by
- * prefix rather than by enumerating live worktrees because transcripts
- * outlive their worktree: the app removes a worktree once its session is
- * done, and that removed worktree's archive is often exactly the history
- * worth keeping in the digest.
+ * whose flattened slug is `flat`. Worktree slugs extend the checkout slug,
+ * but a bare prefix test would also pull in sibling projects that happen to
+ * share the name (`newCoworker-backup`), so only the repo's two worktree
+ * conventions match: the app's `.claude/worktrees/<name>` (whose dot makes
+ * the flattened `--claude-worktrees-` infix unambiguous) and the manual
+ * `<repo>-wt-<name>` siblings. Matched against archive names rather than
+ * live worktrees because transcripts outlive their worktree: the app removes
+ * a worktree once its session is done, and that removed worktree's archive
+ * is often exactly the history worth keeping in the digest.
  */
 export function isWorktreeArchiveOf(name: string, flat: string): boolean {
-  return name.startsWith(`${flat}-`);
+  return name.startsWith(`${flat}--claude-worktrees-`) || name.startsWith(`${flat}-wt-`);
 }
 
 /** Directory entries of `dir`, or nothing when it does not exist. */
@@ -803,8 +805,9 @@ async function main(): Promise<void> {
       skipped.push(root);
     }
   }
+  for (const root of skipped) process.stderr.write(`skipped ${root}: not writable\n`);
+  if (written === 0) throw new Error("could not write the pack into any checkout");
   process.stdout.write(`wrote ${args.out} (${markdown.length} bytes) in ${written} checkout(s)\n`);
-  for (const root of skipped) process.stdout.write(`  skipped ${root}: not writable\n`);
 }
 
 // Only run when invoked directly, so the pure helpers above stay unit-testable.

@@ -257,6 +257,14 @@ describe("isWorktreeArchiveOf", () => {
     expect(isWorktreeArchiveOf("-Users-brianlane-otherRepo", flat)).toBe(false);
     expect(isWorktreeArchiveOf("-Users-brianlane-newCoworkerOld", flat)).toBe(false);
   });
+
+  it("rejects sibling projects that merely share the name prefix", () => {
+    // A bare startsWith(flat + "-") would pull /Users/brianlane/newCoworker-backup
+    // (a copy of the repo, or an unrelated project) into the session digest.
+    // Only the two worktree conventions count.
+    expect(isWorktreeArchiveOf(`${flat}-backup`, flat)).toBe(false);
+    expect(isWorktreeArchiveOf(`${flat}-site-notes`, flat)).toBe(false);
+  });
 });
 
 describe("extractReadmeSections", () => {
