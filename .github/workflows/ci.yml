@@ -349,7 +349,12 @@ jobs:
     timeout-minutes: 30
     needs: [quality, typecheck, test, deno-check, security, worker-integration]
     permissions:
-      contents: read
+      # contents: write is for the push-to-main order heal only
+      # (migration-order-heal.sh, called inside supabase-deploy.sh deploy):
+      # it may push a migration re-stamp commit to main before `db push`.
+      # A GITHUB_TOKEN push triggers no new workflow run, so no recursion.
+      # PR-event runs of this job never push anything.
+      contents: write
       pull-requests: write
       checks: read
       statuses: read
@@ -382,6 +387,10 @@ jobs:
 
       # Order matters: schema first, then functions, then the app build that
       # expects both. `db push` re-runs the same drift guard the PR check did.
+      # Before pushing, migration-order-heal.sh re-stamps any not-yet-applied
+      # migration that another PR's merge pushed below the applied head (the
+      # post-approval merge window), committing the rename to main; that is
+      # what the job's contents: write is for.
       - name: Apply migrations + deploy edge functions
         if: github.event_name == 'push'
         env:

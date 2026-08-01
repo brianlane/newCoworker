@@ -20,7 +20,12 @@
 # merges still cannot see each other, so the first merge can still hand the
 # second a collision. Re-running this check after that merge catches it (the
 # e2e gate's poll is a natural re-run point), and the post-merge worker
-# integration job plus main-failure-watch.yml remain the backstop.
+# integration job plus main-failure-watch.yml remain the backstop. For the
+# ORDERING half of that window (stamp valid at review time, below the applied
+# head by merge time: PR #1066 vs #1064 on 2026-07-31),
+# .github/scripts/migration-order-heal.sh re-stamps the unapplied file at
+# deploy time, so that case self-heals instead of blocking main. Duplicate
+# stamps that reach main still fail the deploy loudly.
 #
 # Usage: migration-stamp-guard.sh [base-branch]   (default: main)
 set -euo pipefail
@@ -97,6 +102,34 @@ if [ -n "$collisions" ]; then
   echo "above the current head of $BASE, then force-push."
   echo "See supabase/migrations/CLAUDE.md."
   exit 1
+fi
+
+# Ordering: a PR-introduced migration that sorts at or below the migration
+# head of the live $BASE tip is guaranteed to fail `supabase db push` once
+# everything ahead of it applies, so fail it at review time too. Same
+# residual window as the duplicate check (both-open PRs cannot see each
+# other); .github/scripts/migration-order-heal.sh closes that at deploy time.
+if [ -n "$base_files" ]; then
+  base_head=$(printf '%s\n' "$base_files" | cut -d_ -f1 | sort | tail -1)
+  stale=$(comm -23 \
+    <(printf '%s\n' "$pr_files" | grep -v '^[[:space:]]*$' | sort -u) \
+    <(printf '%s\n' "$base_files" | grep -v '^[[:space:]]*$' | sort -u) \
+    | awk -v head="$base_head" '{
+        u = index($0, "_")
+        version = (u > 1) ? substr($0, 1, u - 1) : $0
+        if (version <= head) print
+      }')
+  if [ -n "$stale" ]; then
+    echo "::error::Migration(s) in this PR sort at or below the migration head of origin/$BASE ($base_head):"
+    echo ""
+    echo "$stale" | sed 's/^/  /'
+    echo ""
+    echo "Supabase applies migrations in filename order and refuses to insert one"
+    echo "below the already-applied head, so this will fail the push-to-main deploy."
+    echo "Rebase onto the current $BASE and re-stamp with scripts/new-migration.sh"
+    echo "(move your SQL into the new file; the scaffold is empty)."
+    exit 1
+  fi
 fi
 
 echo "Migration stamp guard passed: no version collides between this PR and origin/$BASE."

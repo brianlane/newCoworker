@@ -93,19 +93,31 @@ list.)
 - **Review time:** the `Supabase Drift Check` job runs
   `.github/scripts/migration-stamp-guard.sh`, which fails when the union of
   the PR's migration filenames and the live tip of main puts two different
-  files on one version. This covers the stale-branch race, where your own
-  local check cannot see the migration that merged after you branched.
+  files on one version, AND when a PR-introduced migration sorts at or below
+  the migration head of main's live tip (such a file is guaranteed to fail
+  the deploy once everything ahead of it applies). This covers the
+  stale-branch race, where your own local check cannot see the migration
+  that merged after you branched.
 - **Locally, before pushing:**
 
 ```bash
 ls supabase/migrations | sed 's/_.*//' | sort | uniq -d   # must print nothing
 ```
 
+- **Deploy time (the merge window):** two PRs both open before either merges
+  cannot see each other, so a stamp that was valid at review time can sort
+  below the applied head once the other PR merges first (PR #1066's
+  20260822023338 vs #1064's 20260822025852 on 2026-07-31, repaired by hand
+  in #1068). The push-to-main deploy now heals that case itself:
+  `.github/scripts/migration-order-heal.sh` (run by `supabase-deploy.sh
+  deploy` before `db push`) re-stamps any migration that is NOT in the
+  remote ledger yet sorts at or below the applied head, and commits the
+  rename to main. It never renames an applied file, never touches the
+  ledger, and refuses to guess on duplicate versions or real drift, which
+  still fail the deploy loudly.
 - **Post-merge backstop:** the `Worker Integration (local Supabase)` job runs
   `supabase start`, which fails on any duplicate or misordered version, and
-  `main-failure-watch.yml` retries once then emails on a real failure. Two
-  PRs both open before either merges can still collide on the second merge;
-  that is the window these two cover.
+  `main-failure-watch.yml` retries once then emails on a real failure.
 
 Historical note: invented stamps once put 38 repo files out of step with
 production's ledger, including 9 outright duplicate versions, which broke

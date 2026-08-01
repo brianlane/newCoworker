@@ -2529,9 +2529,19 @@ production ledger to buy a state that arrives by itself.
 A collision is caught at review time by the `Supabase Drift Check` job
 ([.github/scripts/migration-stamp-guard.sh](.github/scripts/migration-stamp-guard.sh),
 which compares the PR against the live tip of main, the case a local
-`uniq -d` cannot see) and post-merge by `supabase start` in the worker
+`uniq -d` cannot see: it fails duplicates AND any PR migration sorting at or
+below main's migration head) and post-merge by `supabase start` in the worker
 integration job. Fix one by rebasing and re-running the helper, never by
 editing a file already applied to production.
+
+The post-approval merge window (your stamp was valid when checks ran, then
+another PR's migration merged first and moved the applied head, so yours
+sorts below it at deploy time: PR #1066 vs #1064 on 2026-07-31) self-heals:
+[.github/scripts/migration-order-heal.sh](.github/scripts/migration-order-heal.sh)
+runs in the push-to-main deploy before `supabase db push`, re-stamps any
+migration absent from the remote ledger that sorts at or below the applied
+head, and commits the rename to main. Applied files and the ledger are never
+touched; duplicates and real drift still fail the deploy loudly.
 
 When you re-stamp, remember the helper creates an EMPTY scaffold: move the
 SQL into the new file and check `wc -c` on it before deleting the old copy.
