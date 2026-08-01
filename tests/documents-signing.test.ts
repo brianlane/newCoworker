@@ -433,17 +433,24 @@ describe("signDocumentRequest", () => {
     expect(res.ok).toBe(true);
     signable();
     vi.mocked(dispatchUrgentNotification).mockRejectedValueOnce("string failure");
-    const res2 = await signDocumentRequest({
-      token: "tok",
-      viewedContentSha256: VIEWED_SHA,
-      signatureName: "Jane",
-      consent: true,
-      // Pin the clock like every other call here. Omitting it fell back to
-      // the real one, so this assertion quietly depended on today's date
-      // being before the fixture's 2026-08-01 expiry, and it began failing
-      // the moment that date arrived.
-      now: NOW
-    });
-    expect(res2.ok).toBe(true);
+    // Fake timers pinned to NOW rather than passing `now` explicitly: this
+    // call deliberately omits it so the `input.now ?? new Date()` default
+    // stays exercised. The previous version omitted `now` against the REAL
+    // clock, which made the assertion depend on today's date being before
+    // the fixture's 2026-08-01 expiry, and it started failing the moment
+    // that date arrived.
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW);
+    try {
+      const res2 = await signDocumentRequest({
+        token: "tok",
+        viewedContentSha256: VIEWED_SHA,
+        signatureName: "Jane",
+        consent: true
+      });
+      expect(res2.ok).toBe(true);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });
