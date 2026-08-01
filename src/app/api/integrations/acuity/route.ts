@@ -37,6 +37,12 @@ import {
 } from "@/lib/db/acuity-connections";
 import { getActiveVagaroConnectionId } from "@/lib/db/vagaro-connections";
 import {
+  acuityWebhookCallbackUrl,
+  ensureAcuityWebhooks,
+  recheckAcuityWebhooks,
+  teardownAcuityWebhooks
+} from "@/lib/acuity/webhook-registration";
+import {
   AcuityApiError,
   clearAcuityCaches,
   listAcuityAppointmentTypes,
@@ -45,6 +51,11 @@ import {
 } from "@/lib/acuity/client";
 
 const businessIdSchema = z.string().uuid();
+
+/** The public origin to build the tenant's callback URL from. */
+function appOrigin(request: Request): string {
+  return process.env.NEXT_PUBLIC_APP_URL?.trim() || new URL(request.url).origin;
+}
 
 const upsertSchema = z.object({
   businessId: z.string().uuid(),
@@ -112,8 +123,35 @@ export async function GET(request: Request) {
     const otherBookingProviderActive = vagaroId ? "vagaro" : null;
 
     if (url.searchParams.get("catalog") === "1" && row) {
+      // A dashboard load is the cheap moment to notice that Acuity silently
+      // disabled our webhook, which it does after five days of delivery
+      // failure without telling anyone. Best-effort and self-limiting: the
+      // recheck no-ops unless the stored registration is over a day old.
+      try {
+        const conn = await getAcuityConnection(parsed.data);
+        if (conn) {
+          await recheckAcuityWebhooks(
+            conn,
+            acuityWebhookCallbackUrl(appOrigin(request), parsed.data, conn.webhook_verification_token),
+            Date.now()
+          );
+        }
+      } catch (err) {
+        logger.warn("acuity: webhook recheck failed", {
+          businessId: parsed.data,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
       const catalog = await readCatalog(parsed.data);
-      return successResponse({ connection: row, otherBookingProviderActive, ...catalog });
+      // Re-read AFTER the recheck: it may have just re-registered and
+      // rewritten webhook_registration, and returning the pre-recheck row
+      // would show the owner stale status until they reloaded again.
+      const refreshed = (await getPublicAcuityConnection(parsed.data)) ?? row;
+      return successResponse({
+        connection: refreshed,
+        otherBookingProviderActive,
+        ...catalog
+      });
     }
     return successResponse({ connection: row, otherBookingProviderActive });
   } catch (err) {
@@ -155,18 +193,44 @@ export async function POST(request: Request) {
       // credential, so it gets its own guard: letting a failed timezone
       // write or row reload fall into the catch below would report
       // "Acuity rejected your credentials" about a key that just worked.
+      // Each post-verification step gets its OWN guard. Sharing one would
+      // mean a failure in the first silently skipping the rest while the
+      // response still reported verified: true, so an owner could connect
+      // successfully and never learn their webhooks were never registered.
       let refreshed = row;
-      try {
-        // Cache the account timezone so the booking hot path never has to
-        // ask Acuity what zone this merchant is in.
-        if (account.timezone) {
+      // Cache the account timezone so the booking hot path never has to ask
+      // Acuity what zone this merchant is in.
+      if (account.timezone) {
+        try {
           await setAcuityBookingDefaults(body.businessId, {
             defaultCalendarTimezone: account.timezone
           });
+        } catch (err) {
+          logger.warn("acuity connect: caching the account timezone failed", {
+            businessId: body.businessId,
+            error: err instanceof Error ? err.message : String(err)
+          });
         }
+      }
+      // Register the webhooks now that we know the key works. Best-effort by
+      // contract: the poller keeps triggers correct regardless, and the card
+      // explains a cap_reached / unsupported account rather than failing the
+      // connect over it.
+      try {
+        await ensureAcuityWebhooks(
+          conn,
+          acuityWebhookCallbackUrl(appOrigin(request), body.businessId, conn.webhook_verification_token)
+        );
+      } catch (err) {
+        logger.warn("acuity connect: webhook registration failed", {
+          businessId: body.businessId,
+          error: err instanceof Error ? err.message : String(err)
+        });
+      }
+      try {
         refreshed = (await getPublicAcuityConnection(body.businessId)) ?? row;
       } catch (err) {
-        logger.warn("acuity connect: post-verification bookkeeping failed", {
+        logger.warn("acuity connect: re-reading the connection failed", {
           businessId: body.businessId,
           error: err instanceof Error ? err.message : String(err)
         });
@@ -243,6 +307,16 @@ export async function DELETE(request: Request) {
     const body = z.object({ businessId: z.string().uuid() }).parse(await request.json());
     const user = await authorize(body.businessId);
     if (!user) return errorResponse("UNAUTHORIZED", "Authentication required");
+    // Remove our registrations BEFORE the row goes, since teardown needs the
+    // key. Best-effort: a leftover webhook pointing at a deleted tenant is
+    // rejected by the receiver anyway.
+    const existing = await getAcuityConnection(body.businessId);
+    if (existing) {
+      await teardownAcuityWebhooks(
+        existing,
+        acuityWebhookCallbackUrl(appOrigin(request), body.businessId, existing.webhook_verification_token)
+      );
+    }
     await deleteAcuityConnection(body.businessId);
     clearAcuityCaches();
     return successResponse({ deleted: true });

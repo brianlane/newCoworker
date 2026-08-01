@@ -26,6 +26,12 @@ vi.mock("@/lib/db/acuity-connections", async () => {
   };
 });
 vi.mock("@/lib/db/vagaro-connections", () => ({ getActiveVagaroConnectionId: vi.fn() }));
+vi.mock("@/lib/acuity/webhook-registration", () => ({
+  acuityWebhookCallbackUrl: vi.fn(() => "https://app/api/webhooks/acuity?business=x&token=y"),
+  ensureAcuityWebhooks: vi.fn(),
+  recheckAcuityWebhooks: vi.fn(),
+  teardownAcuityWebhooks: vi.fn()
+}));
 vi.mock("@/lib/acuity/client", async () => {
   const actual = await vi.importActual<typeof import("@/lib/acuity/client")>(
     "@/lib/acuity/client"
@@ -50,6 +56,11 @@ import {
   upsertAcuityConnection
 } from "@/lib/db/acuity-connections";
 import { getActiveVagaroConnectionId } from "@/lib/db/vagaro-connections";
+import {
+  ensureAcuityWebhooks,
+  recheckAcuityWebhooks,
+  teardownAcuityWebhooks
+} from "@/lib/acuity/webhook-registration";
 import {
   AcuityApiError,
   clearAcuityCaches,
@@ -139,6 +150,41 @@ describe("GET", () => {
     expect(withCatalog.data).toMatchObject({ appointmentTypes: [], catalogError: null });
   });
 
+  it("rechecks the webhook registration on a dashboard load", async () => {
+    // Acuity disables a webhook after five days of failure and never says
+    // so. The recheck self-limits to once a day, so this is cheap.
+    await GET(new Request(`https://x/api/integrations/acuity?businessId=${BIZ}&catalog=1`));
+    expect(vi.mocked(recheckAcuityWebhooks)).toHaveBeenCalled();
+  });
+
+  it("returns the connection as it stands AFTER the recheck", async () => {
+    // The recheck can rewrite webhook_registration; returning the row read
+    // before it would show stale status until the next load.
+    const after = { ...PUBLIC_ROW, webhook_registration: { status: "registered" } };
+    vi.mocked(getPublicAcuityConnection)
+      .mockResolvedValueOnce(PUBLIC_ROW as never)
+      .mockResolvedValueOnce(after as never);
+    const res = await json(
+      await GET(new Request(`https://x/api/integrations/acuity?businessId=${BIZ}&catalog=1`))
+    );
+    expect((res.data as { connection: typeof after }).connection.webhook_registration).toEqual({
+      status: "registered"
+    });
+  });
+
+  it("does not let a failing recheck take down the dashboard read", async () => {
+    vi.mocked(recheckAcuityWebhooks).mockRejectedValue(new Error("acuity down"));
+    const res = await GET(
+      new Request(`https://x/api/integrations/acuity?businessId=${BIZ}&catalog=1`)
+    );
+    expect(res.status).toBe(200);
+  });
+
+  it("skips the recheck when the bare state is requested", async () => {
+    await GET(new Request(`https://x/api/integrations/acuity?businessId=${BIZ}`));
+    expect(vi.mocked(recheckAcuityWebhooks)).not.toHaveBeenCalled();
+  });
+
   it("reports a catalog read failure without hiding the saved connection", async () => {
     vi.mocked(listAcuityAppointmentTypes).mockRejectedValue(
       new AcuityApiError("auth_failed", "nope", 401)
@@ -170,6 +216,16 @@ describe("POST", () => {
     });
     // A credential rotation must not serve a catalog cached under the old key.
     expect(vi.mocked(clearAcuityCaches)).toHaveBeenCalled();
+    // Webhooks are registered only once the key is known to work.
+    expect(vi.mocked(ensureAcuityWebhooks)).toHaveBeenCalled();
+  });
+
+  it("does not register webhooks when the key was rejected", async () => {
+    vi.mocked(verifyAcuityCredentials).mockRejectedValue(
+      new AcuityApiError("auth_failed", "nope", 401)
+    );
+    await POST(req({ businessId: BIZ, userId: "12345", apiKey: "bad" }));
+    expect(vi.mocked(ensureAcuityWebhooks)).not.toHaveBeenCalled();
   });
 
   it("KEEPS the row when Acuity rejects the key, and says so", async () => {
@@ -187,6 +243,22 @@ describe("POST", () => {
     vi.mocked(verifyAcuityCredentials).mockRejectedValue(new Error("boom"));
     const res = await json(await POST(req({ businessId: BIZ, userId: "12345", apiKey: "k" })));
     expect(res.data).toMatchObject({ verified: false, verifyError: "request_failed" });
+  });
+
+  it("still registers webhooks when caching the timezone fails", async () => {
+    // One shared try would let the first failure silently skip the rest
+    // while still reporting verified: true, so an owner could connect
+    // successfully and never learn their webhooks were never registered.
+    vi.mocked(setAcuityBookingDefaults).mockRejectedValue(new Error("db down"));
+    const res = await json(await POST(req({ businessId: BIZ, userId: "12345", apiKey: "k" })));
+    expect(res.data).toMatchObject({ verified: true });
+    expect(vi.mocked(ensureAcuityWebhooks)).toHaveBeenCalled();
+  });
+
+  it("stays verified when webhook registration itself throws", async () => {
+    vi.mocked(ensureAcuityWebhooks).mockRejectedValue(new Error("acuity down"));
+    const res = await json(await POST(req({ businessId: BIZ, userId: "12345", apiKey: "k" })));
+    expect(res.data).toMatchObject({ verified: true });
   });
 
   it("stays verified when post-verification bookkeeping fails", async () => {
@@ -263,11 +335,20 @@ describe("PATCH", () => {
 });
 
 describe("DELETE", () => {
-  it("removes the connection and clears the cache", async () => {
+  it("tears the webhooks down BEFORE the row, then removes it", async () => {
+    // Teardown needs the API key, so it cannot run after the delete.
     const res = await json(await DELETE(req({ businessId: BIZ })));
     expect(res.data).toMatchObject({ deleted: true });
+    expect(vi.mocked(teardownAcuityWebhooks)).toHaveBeenCalled();
     expect(vi.mocked(deleteAcuityConnection)).toHaveBeenCalledWith(BIZ);
     expect(vi.mocked(clearAcuityCaches)).toHaveBeenCalled();
+  });
+
+  it("still deletes when there is no row to tear down", async () => {
+    vi.mocked(getAcuityConnection).mockResolvedValue(null as never);
+    await DELETE(req({ businessId: BIZ }));
+    expect(vi.mocked(teardownAcuityWebhooks)).not.toHaveBeenCalled();
+    expect(vi.mocked(deleteAcuityConnection)).toHaveBeenCalledWith(BIZ);
   });
 
   it("refuses an unauthenticated caller", async () => {
