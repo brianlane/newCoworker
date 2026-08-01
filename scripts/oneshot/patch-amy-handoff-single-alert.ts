@@ -112,27 +112,35 @@ async function main(): Promise<void> {
   const { next: nextSoul, changed: soulChanged } = replaceOrAppendSoulBlock(soulMd);
 
   console.log(`Soul block : ${soulChanged ? "needs update" : "already at target"}`);
-  if (!soulChanged) {
-    console.log("\nAlready at target state. Nothing to do.");
-    return;
-  }
 
   if (!APPLY) {
-    console.log("\n[dry-run] Soul block would become:\n");
-    console.log(SOUL_BLOCK);
+    if (soulChanged) {
+      console.log("\n[dry-run] Soul block would become:\n");
+      console.log(SOUL_BLOCK);
+    } else {
+      console.log("\n[dry-run] Soul already at target; --apply would still re-sync the vault.");
+    }
     console.log("\n[dry-run] Not writing. Re-run with --apply to write.");
     return;
   }
 
-  const { error } = await db
-    .from("business_configs")
-    .update({ soul_md: nextSoul, updated_at: new Date().toISOString() })
-    .eq("business_id", BUSINESS_ID);
-  if (error) {
-    console.error(`Update business_configs: ${error.message}`);
-    process.exit(1);
+  if (soulChanged) {
+    const { error } = await db
+      .from("business_configs")
+      .update({ soul_md: nextSoul, updated_at: new Date().toISOString() })
+      .eq("business_id", BUSINESS_ID);
+    if (error) {
+      console.error(`Update business_configs: ${error.message}`);
+      process.exit(1);
+    }
+    console.log("Updated business_configs.");
+  } else {
+    // A prior --apply may have written the soul and then died on the vault
+    // sync, exiting before the ledger (Bugbot, PR #1115). "Already at
+    // target" therefore never early-returns in apply mode: the sync and
+    // ledger below still run so a re-run converges instead of no-opping.
+    console.log("Soul already at target; re-syncing the vault.");
   }
-  console.log("Updated business_configs.");
 
   console.log("Syncing vault to VPS…");
   const vault = await syncVaultToVps(BUSINESS_ID);
@@ -151,7 +159,7 @@ async function main(): Promise<void> {
   await recordOneshotApplied(db, {
     scriptPath: process.argv[1] ?? "patch-amy-handoff-single-alert.ts",
     businessId: BUSINESS_ID,
-    details: { soulChanged: true, singleAlertHandoff: true }
+    details: { soulChanged, singleAlertHandoff: true }
   });
   console.log("\nApplied and ledgered.");
 }
