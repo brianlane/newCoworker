@@ -19,8 +19,13 @@ import { join } from "node:path";
  * until a routine render redeploy on 2026-07-31 took the sidecar down mid
  * session (Amy Laidlaw, the fleet's only tenant with live browse steps).
  *
- * Dependabot cannot bump a `FROM` line and a package.json together, so nothing
- * else closes this. Assert it here instead.
+ * The green path is automated: the `aiflow-render` multi-ecosystem group in
+ * .github/dependabot.yml has Dependabot bump the npm pin and the Docker FROM
+ * tag in ONE PR, so its PRs pass this guard and automerge normally. This test
+ * stays as the enforcement for that config and for human edits; if a group PR
+ * ever arrives with only one side bumped (the npm and docker releases landed
+ * on opposite sides of the weekly run), it goes red here and Dependabot folds
+ * the other half into the same PR on its next run.
  */
 
 const RENDER_DIR = join(__dirname, "..", "vps", "aiflow-render");
