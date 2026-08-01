@@ -4,27 +4,27 @@
  * Why (Truly Insurance, Jul 21 2026): a Privyr lead arrived after hours, the
  * flow's route_to_team found no eligible broker (`claimed_agent: none`,
  * contact `owner_employee_id` null), and minutes later the texting coworker
- * booked a REAL "12:00 PM tomorrow" broker call — onto a shared Outlook
+ * booked a REAL "12:00 PM tomorrow" broker call, onto a shared Outlook
  * calendar no one was watching. The only human-facing signal ("[AiFlow] No
  * broker claimed … Back to you") predated the booking by three minutes, so
  * the business was set up to no-show its own lead.
  *
  * This core runs after every CONFIRMED booking made on a customer-facing AI
- * surface (voice, texting, webchat — owner-initiated dashboard/MCP bookings
+ * surface (voice, texting, webchat; owner-initiated dashboard/MCP bookings
  * are excluded at the call sites: the owner already knows what they booked):
  *
  *   1. Resolve the attendee's contact (phone alias-aware, else email). A
- *      contact with `owner_employee_id` set is OWNED — no alert, the
+ *      contact with `owner_employee_id` set is OWNED: no alert, the
  *      assignee's own workflow covers it. A missing contact counts as
  *      unowned (a booking is exactly when a lead must stop being nobody's).
- *   2. Honor the `unassigned_booking_alerts` preference — per-business
+ *   2. Honor the `unassigned_booking_alerts` preference, per-business
  *      toggle, ON by default (rows predating the column read as on).
  *   3. Fan out through the standard alert dispatcher (dashboard row + the
  *      owner's SMS/email/WhatsApp channel toggles). The dashboard row also
  *      surfaces the booking in the Recent Activity feed.
  *
  * Best-effort BY CONTRACT: this must never fail, delay semantics, or alter
- * the booking result — the appointment already exists on the provider.
+ * the booking result: the appointment already exists on the provider.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getNotificationPreferences } from "@/lib/db/notification-preferences";
@@ -120,7 +120,7 @@ export async function maybeAlertUnassignedBooking(
     const who = input.attendeePhone
       ? `${input.attendeeName} (${input.attendeePhone})`
       : input.attendeeName;
-    const summary = `Unassigned booking: ${who} — ${input.startLocal}`;
+    const summary = `Unassigned booking: ${who}, ${input.startLocal}`;
     const detailLines = [
       `Your AI coworker booked "${input.summary}" for ${who} at ${input.startLocal}.`,
       "No teammate owns this lead yet, so nobody is on the hook to show up.",
@@ -130,9 +130,9 @@ export async function maybeAlertUnassignedBooking(
       businessId,
       kind: "unassigned_booking",
       summary,
-      emailSubject: `New appointment needs an owner: ${who} — ${input.startLocal}`,
+      emailSubject: `New appointment needs an owner: ${who}, ${input.startLocal}`,
       emailBody: detailLines.join("\n\n"),
-      smsBody: `New Coworker Alert: ${summary}. No teammate owns this lead yet — assign it so the appointment is covered.`,
+      smsBody: `New Coworker Alert: ${summary}. No teammate owns this lead yet. Assign it so the appointment is covered.`,
       payload: {
         attendee_name: input.attendeeName,
         attendee_phone: input.attendeePhone,

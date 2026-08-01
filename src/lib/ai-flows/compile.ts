@@ -23,25 +23,25 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   '  "steps": [ ... ],         // 1-25 ordered steps',
   '  "timeWindow": { "timezone": "America/Phoenix", "start": "09:00", "end": "17:00", "daysOfWeek": [1,2,3,4,5] },  // OPTIONAL business-hours gate: texts/emails/notifications/team offers outside the window wait for the next open slot (daysOfWeek optional, 0=Sun). Only include when the user asks for business hours.',
   '  "drip": { "intervalMinutes": 5 },  // OPTIONAL drip pacing: bulk enrollments (imports, webhook bursts) start this many minutes apart instead of all at once. Only include when the user asks to space/stagger/drip sends.',
-  '  "options": { "suppressDefaultReply": <optional bool>, "captureStepScreenshots": <optional bool>, "stopOnResponse": <optional bool — when the contact texts back, their pending runs of this flow are canceled so remaining follow-ups stop; only include when the user asks to stop/pause the sequence once the lead responds. Never combine with a goal step watching "replied">, "allowReentry": <optional bool — set false ONLY when the user says each contact should go through the flow once / never be re-enrolled>, "starAlerts": <optional bool, VOICE call-routing flows only: frames every alert text the flow sends (missed/answered warm transfer, AI intake summary) in a row of asterisks so a live transfer stands out on the phone; the wording is unchanged. Only include when the user asks for those texts to stand out / be unmissable> }',
+  '  "options": { "suppressDefaultReply": <optional bool>, "captureStepScreenshots": <optional bool>, "stopOnResponse": <optional bool: when the contact texts back, their pending runs of this flow are canceled so remaining follow-ups stop; only include when the user asks to stop/pause the sequence once the lead responds. Never combine with a goal step watching "replied">, "allowReentry": <optional bool: set false ONLY when the user says each contact should go through the flow once / never be re-enrolled>, "starAlerts": <optional bool, VOICE call-routing flows only: frames every alert text the flow sends (missed/answered warm transfer, AI intake summary) in a row of asterisks so a live transfer stands out on the phone; the wording is unchanged. Only include when the user asks for those texts to stand out / be unmissable> }',
   "}",
   "",
   "Trigger channels (pick the one matching how the workflow should start; if the",
-  'owner describes SEVERAL ways it can start — "when a lead texts OR emails" —',
+  'owner describes SEVERAL ways it can start, "when a lead texts OR emails",',
   'put the first in "trigger" and the rest in "triggers"):',
   '  {"channel":"sms","correlationWindowMinutes":<optional int 0-1440>,"conditions":[...]}   // inbound text; [] matches every SMS',
   '  {"channel":"manual"}                                                                    // only via the dashboard Run-now button',
   '  {"channel":"schedule","timezone":"America/Phoenix","time":"08:30","daysOfWeek":[1,2,3,4,5]}  // daily clock (daysOfWeek optional, 0=Sun)',
   '  {"channel":"schedule","everyMinutes":60}                                                // interval clock (min 15)',
   '  {"channel":"tenant_email","conditions":[...]}                                           // inbound email to the AI coworker\'s OWN mailbox (forwarded lead alerts, Privyr/portal notifications, anything sent or forwarded to the coworker\'s address); [] matches every email',
-  '  {"channel":"email","connectionId":"<uuid of a connected mailbox>","conditions":[...]}   // inbound email to the owner\'s CONNECTED Gmail/Outlook inbox — ONLY when the user explicitly says their own connected inbox AND supplies a real connection uuid; NEVER invent or placeholder the uuid — when in doubt use tenant_email instead (it needs no connectionId)',
+  '  {"channel":"email","connectionId":"<uuid of a connected mailbox>","conditions":[...]}   // inbound email to the owner\'s CONNECTED Gmail/Outlook inbox. ONLY when the user explicitly says their own connected inbox AND supplies a real connection uuid; NEVER invent or placeholder the uuid; when in doubt use tenant_email instead (it needs no connectionId)',
   '  {"channel":"webhook","conditions":[...]}                                                // an outside tool posts a lead/event to the coworker\'s webhook (Meta/Facebook lead ads via Zapier or Make, website forms, any API caller); [] matches every event',
   '  {"channel":"calendar","on":"event_created","calendar":"both","conditions":[...]}        // a new event is added to the connected calendar ("primary"), the shared NewCoworker calendar ("shared"), or "both"',
   '  {"channel":"calendar","on":"event_start","leadMinutes":30,"calendar":"both","conditions":[...]}  // N minutes before an event starts (reminders)',
-  '  {"channel":"calendar","on":"event_end","followMinutes":60,"calendar":"both","conditions":[...]}   // N minutes AFTER an event\'s ACTUAL end time (post-appointment follow-ups; followMinutes optional, 0/omitted = right at the end). Prefer this over event_start + sleep for anything that happens after the appointment — it tracks the event\'s real length',
+  '  {"channel":"calendar","on":"event_end","followMinutes":60,"calendar":"both","conditions":[...]}   // N minutes AFTER an event\'s ACTUAL end time (post-appointment follow-ups; followMinutes optional, 0/omitted = right at the end). Prefer this over event_start + sleep for anything that happens after the appointment: it tracks the event\'s real length',
   '  {"channel":"calendar","on":"event_canceled","calendar":"both","conditions":[...]}       // a watched calendar event is canceled/deleted (rebooking nudges)',
   '  {"channel":"contact_created","conditions":[...]}                                        // a NEW contact lands on the Contacts page (added by hand, imported, or filed by another flow); conditions match the contact\'s name/phone/email/tags text',
-  '  {"channel":"tag_changed","tag":"Appointment Scheduled","change":"added","conditions":[...]}   // a tag is added ("added", default) or removed ("removed") on a contact; omit "tag" to match ANY tag — chain flows off lead-status tags (a flow never retriggers itself via its own tag writes)',
+  '  {"channel":"tag_changed","tag":"Appointment Scheduled","change":"added","conditions":[...]}   // a tag is added ("added", default) or removed ("removed") on a contact; omit "tag" to match ANY tag. Chain flows off lead-status tags (a flow never retriggers itself via its own tag writes)',
   '  {"channel":"owner_assigned","conditions":[...]}                                          // a contact gets an owning team member (claim or manual assignment)',
   '  {"channel":"birthday","time":"09:00","timezone":"America/Phoenix","conditions":[...]}    // once a year on each contact\'s stored birthday, at the local send time (time/timezone optional; defaults 09:00 in the business timezone)',
   '  {"channel":"voice","fromE164":"+15551234567"}                                           // a phone CALL comes in from that number (real-time call routing; needs the caller\'s number)',
@@ -57,39 +57,39 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   '  {"id":"s1","type":"extract_url","saveAs":"lead_url"}',
   '  {"id":"s2","type":"browse_extract","urlVar":"lead_url","fields":[{"name":"seller_phone","description":"..."}],"screenshot":true}   // add "fillOnlyEmpty":true when RE-OPENING a page to look for details that were missing the first time, so a still-blank page cannot overwrite what an earlier step already found',
   '  {"id":"s2t","type":"extract_text","fields":[{"name":"lead_name","description":"..."},{"name":"lead_phone","description":"..."}]}   // parse fields straight from the inbound message text',
-  '  {"id":"s2e","type":"email_extract","connectionId":"<uuid of a connected mailbox>","fromContains":"referral","matchTemplates":["{{vars.lead_name}}"],"lookbackMinutes":60,"fields":[{"name":"lead_phone"}],"fillOnlyEmpty":true}   // backfill fields from a recent email in the owner\'s CONNECTED mailbox — ONLY when the user supplies a real connection uuid; NEVER invent it',
-  '  {"id":"s2d","type":"doc_extract","fields":[{"name":"renewal_date","description":"..."},{"name":"premium","description":"..."},{"name":"customer_phone","description":"..."}],"fileAs":{"titleTemplate":"Renewal — {{trigger.document_name}}","audience":"staff","contactPhoneVar":"customer_phone","recordFieldsFromExtraction":true,"renewalDateField":"renewal_date"}}   // read fields out of the DOCUMENT attached to the triggering email (PDFs included; {{trigger.document}} is the default source; an optional "sourceTemplate" overrides it with an earlier var or a business-docs:<id> ref; skipped when no document). fileAs is OPTIONAL: it files the document into the business\'s Documents; its record sinks are each OPTIONAL too — "contactPhoneVar" links the filed copy to that contact as a RECORD (an earlier step\'s var or one of THIS step\'s field names), "recordFieldsFromExtraction":true stamps the extracted fields onto the record, and "renewalDateField" (one of the step\'s field names) sets the record\'s renewal date so the business\'s renewal reminders fire. Use with a tenant_email trigger for document intake ("when the renewal notice arrives, file it on the customer\'s record with the premium and renewal date")',
+  '  {"id":"s2e","type":"email_extract","connectionId":"<uuid of a connected mailbox>","fromContains":"referral","matchTemplates":["{{vars.lead_name}}"],"lookbackMinutes":60,"fields":[{"name":"lead_phone"}],"fillOnlyEmpty":true}   // backfill fields from a recent email in the owner\'s CONNECTED mailbox. ONLY when the user supplies a real connection uuid; NEVER invent it',
+  '  {"id":"s2d","type":"doc_extract","fields":[{"name":"renewal_date","description":"..."},{"name":"premium","description":"..."},{"name":"customer_phone","description":"..."}],"fileAs":{"titleTemplate":"Renewal: {{trigger.document_name}}","audience":"staff","contactPhoneVar":"customer_phone","recordFieldsFromExtraction":true,"renewalDateField":"renewal_date"}}   // read fields out of the DOCUMENT attached to the triggering email (PDFs included; {{trigger.document}} is the default source; an optional "sourceTemplate" overrides it with an earlier var or a business-docs:<id> ref; skipped when no document). fileAs is OPTIONAL: it files the document into the business\'s Documents; its record sinks are each OPTIONAL too: "contactPhoneVar" links the filed copy to that contact as a RECORD (an earlier step\'s var or one of THIS step\'s field names), "recordFieldsFromExtraction":true stamps the extracted fields onto the record, and "renewalDateField" (one of the step\'s field names) sets the record\'s renewal date so the business\'s renewal reminders fire. Use with a tenant_email trigger for document intake ("when the renewal notice arrives, file it on the customer\'s record with the premium and renewal date")',
   '  {"id":"s3","type":"send_sms","to":"{{vars.seller_phone}}","body":"...{{trigger.from}}"}',
   '  {"id":"s3a","type":"send_sms","toAgentNameVar":"claimed_agent","body":"This lead is yours: {{vars.lead_name}} {{vars.lead_phone}}","when":{"var":"claimed_agent","notEquals":"none"}}   // HAND-OFF text to the teammate a var names (here whoever claimed the lead in an earlier route_to_team step), resolved against the live roster at run time; the body may use {{agent.name}} / {{agent.phone}}. Use this rather than "to":"{{vars.claimed_agent_phone}}" so the engine knows the recipient is a teammate, not a lead',
-  '  {"id":"s3w","type":"send_whatsapp","to":"{{vars.seller_phone}}","body":"..."}   // WhatsApp message from the business\'s connected WhatsApp number — ONLY include when the user explicitly asks for WhatsApp (texting is the default). Recipient rules match send_sms ("to" OR "toAgentName" OR "toRef", exactly one; no replyToGroup/mediaUrlVar). Outside the recipient\'s 24h WhatsApp window it goes out via an approved template; if WhatsApp isn\'t connected the step skips with a note',
-  '  {"id":"s3b","type":"send_email","to":"owner@example.com","cc":["manager@example.com"],"bcc":["archive@example.com"],"subject":"{{vars.lead_name}} lead","body":"...","attachScreenshot":true}   // add "attachDocumentTemplate":"business-docs:{{vars.<saveAs>_document_id}}" to attach a business document to the email — typically the document a preceding run_agent step filed via saveDocument (its id lands in that var), or a fixed "business-docs:<document uuid>". AI-coworker email only (not combinable with fromConnectionId); a ref that renders empty sends without the attachment',
+  '  {"id":"s3w","type":"send_whatsapp","to":"{{vars.seller_phone}}","body":"..."}   // WhatsApp message from the business\'s connected WhatsApp number. ONLY include when the user explicitly asks for WhatsApp (texting is the default). Recipient rules match send_sms ("to" OR "toAgentName" OR "toRef", exactly one; no replyToGroup/mediaUrlVar). Outside the recipient\'s 24h WhatsApp window it goes out via an approved template; if WhatsApp isn\'t connected the step skips with a note',
+  '  {"id":"s3b","type":"send_email","to":"owner@example.com","cc":["manager@example.com"],"bcc":["archive@example.com"],"subject":"{{vars.lead_name}} lead","body":"...","attachScreenshot":true}   // add "attachDocumentTemplate":"business-docs:{{vars.<saveAs>_document_id}}" to attach a business document to the email: typically the document a preceding run_agent step filed via saveDocument (its id lands in that var), or a fixed "business-docs:<document uuid>". AI-coworker email only (not combinable with fromConnectionId); a ref that renders empty sends without the attachment',
   '  {"id":"s3o","type":"email_organize","messageIdTemplate":"{{trigger.message_id}}","connectionId":"<uuid of a connected mailbox OR omit for the AI mailbox>","addLabels":["Sales"],"moveToFolder":"Sales","archive":true,"markRead":true,"markUnread":false,"unarchive":false,"removeLabels":[]}   // organize the triggering email: apply labels, move to a folder, archive, and/or mark read/unread. For a CONNECTED Gmail/Outlook mailbox set connectionId to a real AVAILABLE MAILBOXES uuid; for the AI coworker mailbox OMIT connectionId. Pair with classify → branch for inbox triage. At least one of archive/unarchive/markRead/markUnread/addLabels/removeLabels/moveToFolder is required',
   '  {"id":"s4","type":"approval_gate","prompt":"..."}',
   '  {"id":"s5","type":"notify_owner","message":"..."}',
-  '  {"id":"s5b","type":"notify_lead_owner","phoneVar":"lead_phone","nameVar":"lead_name","message":"..."}   // text whoever the lead BELONGS to: the teammate who owns the contact (e.g. because they claimed it via route_to_team), else the business owner. phoneVar/nameVar are OPTIONAL var NAMES that locate the contact (phone preferred; name needs a unique match) — use for forwarding a lead\'s reply to the right person',
+  '  {"id":"s5b","type":"notify_lead_owner","phoneVar":"lead_phone","nameVar":"lead_name","message":"..."}   // text whoever the lead BELONGS to: the teammate who owns the contact (e.g. because they claimed it via route_to_team), else the business owner. phoneVar/nameVar are OPTIONAL var NAMES that locate the contact (phone preferred; name needs a unique match). Use for forwarding a lead\'s reply to the right person',
   '  {"id":"s6","type":"http_call","label":"crm","method":"POST","path":"/x","bodyTemplate":"...","saveAs":"resp"}',
-  '  {"id":"s6a","type":"sleep","minutes":300}                                            // pause then continue (1-43200 min); OR {"untilTime":"08:30","timezone":"America/Toronto"} (a local time of day); OR {"untilDateTemplate":"{{vars.renewal_date}}"} (an extracted date); OR {"relativeToTemplate":"{{trigger.starts_at}}","offsetMinutes":-120} (N minutes before/after a date — negative = before) — exactly ONE mode',
-  '  {"id":"s6m","type":"math","operation":"add","left":"{{vars.lead_score}}","right":"10","saveAs":"lead_score"}   // arithmetic on numbers/dates: add/subtract/multiply/divide/round (round takes only "left"), date_add_minutes (left=ISO date, right=minutes → ISO), date_diff_days (whole days left→right); unparseable operands save "not_a_number" — use the result in later when/branch conditions (lead scoring, "renewal within 30 days")',
+  '  {"id":"s6a","type":"sleep","minutes":300}                                            // pause then continue (1-43200 min); OR {"untilTime":"08:30","timezone":"America/Toronto"} (a local time of day); OR {"untilDateTemplate":"{{vars.renewal_date}}"} (an extracted date); OR {"relativeToTemplate":"{{trigger.starts_at}}","offsetMinutes":-120} (N minutes before/after a date, negative = before). Exactly ONE mode',
+  '  {"id":"s6m","type":"math","operation":"add","left":"{{vars.lead_score}}","right":"10","saveAs":"lead_score"}   // arithmetic on numbers/dates: add/subtract/multiply/divide/round (round takes only "left"), date_add_minutes (left=ISO date, right=minutes → ISO), date_diff_days (whole days left→right); unparseable operands save "not_a_number". Use the result in later when/branch conditions (lead scoring, "renewal within 30 days")',
   '  {"id":"s6b","type":"wait_for_reply","phoneVar":"lead_phone","saveAs":"reply_text","timeoutMinutes":300}   // park until that phone texts back; the reply lands in {{vars.reply_text}} ("no_reply" if they never replied). Optional "timeoutMinutesTemplate":"{{vars.report_wait_minutes}}" computes the wait from an earlier var (e.g. a math step); when it renders to a positive number it wins over timeoutMinutes',
-  '  {"id":"s6p","type":"place_ai_call","toVar":"lead_phone","personaTemplate":"Hi, I\'m calling with Amy\'s office. How are you? We\'re following up — is now a good time to talk?","contextTemplate":"Their name: {{vars.lead_name}}. Address: {{vars.lead_address}}.","notifyOwner":true,"transfer":{"toE164":"+15559876543","preSmsTemplate":"LIVE TRANSFER incoming — {{vars.lead_name}} ({{vars.lead_phone}}). Pick up!"},"saveAs":"call_outcome"}   // place a real AI phone call to a var-held number and PARK until it ends; the outcome lands in {{vars.call_outcome}} ("transferred" when the optional live transfer connected them to a person, "answered", "no_answer", "not_placed", "failed") for later when/branch gating. Uses the account\'s voice minutes — ONLY include when the user explicitly asks for the AI to CALL someone. The post-call summary needs EXACTLY ONE recipient: "notifyOwner":true (texts the owner, the right default) or "notifyE164":"+1..." for a specific number',
+  '  {"id":"s6p","type":"place_ai_call","toVar":"lead_phone","personaTemplate":"Hi, I\'m calling with Amy\'s office. How are you? We\'re following up. Is now a good time to talk?","contextTemplate":"Their name: {{vars.lead_name}}. Address: {{vars.lead_address}}.","notifyOwner":true,"transfer":{"toE164":"+15559876543","preSmsTemplate":"LIVE TRANSFER incoming: {{vars.lead_name}} ({{vars.lead_phone}}). Pick up!"},"saveAs":"call_outcome"}   // place a real AI phone call to a var-held number and PARK until it ends; the outcome lands in {{vars.call_outcome}} ("transferred" when the optional live transfer connected them to a person, "answered", "no_answer", "not_placed", "failed") for later when/branch gating. Uses the account\'s voice minutes. ONLY include when the user explicitly asks for the AI to CALL someone. The post-call summary needs EXACTLY ONE recipient: "notifyOwner":true (texts the owner, the right default) or "notifyE164":"+1..." for a specific number',
   '  {"id":"s6v","type":"voice_brief","fromE164":"+14159851909","noteTemplate":"Client notes: {{vars.lead_notes}}. Property: {{vars.lead_address}}.","withinMinutes":30}   // hand what THIS run just extracted to the AI that is on a call from that number RIGHT NOW: the AI uses the details and tells the customer their information came through instead of asking them to repeat it. Pairs with a voice flow whose voice_ai_intake sets answerFirst (the AI answers seconds after a partner alert, while this flow\'s portal/email read only finishes a minute later). A recorded no-op when no such call is live, which is the normal case, so it never fails a run',
   '  {"id":"s6w","type":"wait_for_call","fromE164":"+14159851909","withinMinutes":30,"timeoutMinutes":60,"saveAs":"call_outcome","capturePrefix":"call_"}   // PARK until the AI\'s call from that number hangs up, then continue with what the AI captured ON it: {{vars.call_phone}}, {{vars.call_name}}, {{vars.call_address}} and so on. The other half of voice_brief: that pushes details INTO a live call, this waits for the call and pulls what it learned back out. Use when the details only exist in the conversation, e.g. a referral partner that withholds the customer\'s phone number until after the call, so the AI simply asks them for it. {{vars.call_outcome}} is "answered" or "no_call"; no call at all just continues, so it never strands a run. Add "backfill":[{"from":"phone","to":"lead_phone"}] so the number the person said fills the flow\'s own var when nothing else supplied one (empty-only, so a value the partner DID send still wins). By default this only attaches to a call that is ALREADY in progress when the step runs; add "awaitStartMinutes":3 to also wait that long for one to BEGIN (it re-checks once a minute). Keep that number small: every step after this one waits too, so a large value delays telling the team about the lead',
   '  {"id":"s6t","type":"arm_voice_transfer","toE164":"+15559876543","windowMinutes":20,"whisper":"Connecting you now"}   // arm a short "expect a live-transfer call" window: for the next windowMinutes (default 20), an inbound CALL that matches no per-caller voice routing is bridged straight to that number instead of the AI answering, then the window is consumed (one arming = one transferred call). Use when a referral service texts a cue and then calls from an unpredictable number minutes later (e.g. reply Y to a live-transfer offer, then a concierge calls). Exactly one of toE164 / toRef; whisper is optional',
-  '  {"id":"s6d","type":"goal","label":"Appointment booked","events":[{"kind":"appointment_booked"},{"kind":"tag_added","tag":"Appointment Scheduled"}]}   // GOAL checkpoint: the moment any watched milestone happens for this lead (kinds: "replied", "appointment_booked", "tag_added" — needs "tag", "claimed"), the run JUMPS here and every step in between is skipped — use it to stop follow-up nudges once the lead converts (e.g. sms nurture: send_sms → sleep → send_sms → goal). Trunk-only: never inside a branch. Reached normally it just passes through',
-  '  {"id":"s6c","type":"branch","question":"Did they reply?","branches":[{"id":"b1","label":"They replied","condition":{"var":"reply_text","notEquals":"no_reply"},"steps":[{"id":"s6c1","type":"send_sms","to":"{{vars.lead_phone}}","body":"Great! Book here: ..."}]}],"else":[{"id":"s6c2","type":"notify_owner","message":"{{vars.lead_name}} never replied — calling them next."}]}   // multi-path if/else: 1-4 branches checked top to bottom (first match wins), each with its OWN nested steps; no match runs the "else" steps; nesting max 3 deep',
-  '  {"id":"s7","type":"route_to_team","offerTemplate":"New lead {{vars.lead_name}}, reply 1 to claim or 2 to pass by {{offer.deadline}}","responseMinutes":10,"ownerFallbackTemplate":"No agent claimed {{vars.lead_name}}","claimedNotifyTemplate":"{{agent.name}} claimed {{vars.lead_name}}","claimedNotifyEmail":"<optional: ALSO email the claim outcome to this address; unlike a later send_email step, it still fires on a LATE claim (a \\"1\\" up to 24h after the window lapsed, which skips post-route steps) and on an \\"86\\" release, so the inbox that heard \\"no one claimed\\" also hears who took the lead>","agentName":"<optional: pin offers to this roster member>","offerWindow":{"timezone":"America/Phoenix","quietStart":"21:00","quietEnd":"08:30","graceMinutes":10},"attachScreenshot":true}   // add "agentNames":["<name>","<name>"] INSTEAD of agentName to offer 2-10 roster members simultaneously (one shared deadline, first "1" wins, "2" retires just that person, everyone passing / the deadline lapsing falls back to the owner) — use it when the user says a lead should go to several people at once; or add "broadcastAll":true INSTEAD of any names to offer EVERYONE on the active roster at once (resolved at run time, capped at 10, same claim semantics) — use it when the user says the whole team should be offered; or add "agentNameVar":"<var name>" INSTEAD of any of those to pin DYNAMICALLY from an extracted teammate name (e.g. the owner wrote "give this to Gabby" and an extract_text field saved it): the value is matched against the active roster at run time (exact name, first name, unique prefix), empty/"none" leaves the step un-pinned, and an unmatched name falls back to the owner — never to an unintended teammate',
+  '  {"id":"s6d","type":"goal","label":"Appointment booked","events":[{"kind":"appointment_booked"},{"kind":"tag_added","tag":"Appointment Scheduled"}]}   // GOAL checkpoint: the moment any watched milestone happens for this lead (kinds: "replied", "appointment_booked", "tag_added" (needs "tag"), "claimed"), the run JUMPS here and every step in between is skipped. Use it to stop follow-up nudges once the lead converts (e.g. sms nurture: send_sms → sleep → send_sms → goal). Trunk-only: never inside a branch. Reached normally it just passes through',
+  '  {"id":"s6c","type":"branch","question":"Did they reply?","branches":[{"id":"b1","label":"They replied","condition":{"var":"reply_text","notEquals":"no_reply"},"steps":[{"id":"s6c1","type":"send_sms","to":"{{vars.lead_phone}}","body":"Great! Book here: ..."}]}],"else":[{"id":"s6c2","type":"notify_owner","message":"{{vars.lead_name}} never replied, calling them next."}]}   // multi-path if/else: 1-4 branches checked top to bottom (first match wins), each with its OWN nested steps; no match runs the "else" steps; nesting max 3 deep',
+  '  {"id":"s7","type":"route_to_team","offerTemplate":"New lead {{vars.lead_name}}, reply 1 to claim or 2 to pass by {{offer.deadline}}","responseMinutes":10,"ownerFallbackTemplate":"No agent claimed {{vars.lead_name}}","claimedNotifyTemplate":"{{agent.name}} claimed {{vars.lead_name}}","claimedNotifyEmail":"<optional: ALSO email the claim outcome to this address; unlike a later send_email step, it still fires on a LATE claim (a \\"1\\" up to 24h after the window lapsed, which skips post-route steps) and on an \\"86\\" release, so the inbox that heard \\"no one claimed\\" also hears who took the lead>","agentName":"<optional: pin offers to this roster member>","offerWindow":{"timezone":"America/Phoenix","quietStart":"21:00","quietEnd":"08:30","graceMinutes":10},"attachScreenshot":true}   // add "agentNames":["<name>","<name>"] INSTEAD of agentName to offer 2-10 roster members simultaneously (one shared deadline, first "1" wins, "2" retires just that person, everyone passing / the deadline lapsing falls back to the owner). Use it when the user says a lead should go to several people at once; or add "broadcastAll":true INSTEAD of any names to offer EVERYONE on the active roster at once (resolved at run time, capped at 10, same claim semantics). Use it when the user says the whole team should be offered; or add "agentNameVar":"<var name>" INSTEAD of any of those to pin DYNAMICALLY from an extracted teammate name (e.g. the owner wrote "give this to Gabby" and an extract_text field saved it): the value is matched against the active roster at run time (exact name, first name, unique prefix), empty/"none" leaves the step un-pinned, and an unmatched name falls back to the owner, never to an unintended teammate',
   '  {"id":"s8","type":"browse_action","urlVar":"lead_url","actions":[{"kind":"click_text","target":"Leave an update"},{"kind":"fill_placeholder","target":"Add an update","valueTemplate":"{{vars.actions_taken}}"}],"screenshot":true,"rememberUrlKeyedByVar":"lead_phone"}',
   '  {"id":"s9","type":"recall_url","keyFromTrigger":"participants","saveAs":"lead_url"}   // recall a link a PRIOR run saved for this same person',
   '  {"id":"s10","type":"upsert_customer","phoneVar":"lead_phone","nameVar":"lead_name","emailVar":"lead_email","when":{"var":"lead_phone","notEquals":"none"}}   // save/update the person on the Contacts page from extracted vars (phoneVar required); add "languageVar":"lead_language" when the flow extracts the language the person speaks ("en"/"es") so their texts and emails go out in it. Include this whenever the flow extracts a person\'s phone and then texts, emails, or calls them: lead forms AND calendar invitees/attendees alike (a texted person who was never filed shows as a bare unnamed number on the Texts page). Keep the "when" guard shown so a missing phone skips the save instead of failing the run',
   '  {"id":"s11","type":"update_contact","phoneVar":"lead_phone","removeTags":["New Lead"],"addTags":["Contacted"]}   // move the contact between lead-status tags on the Contacts page (removals apply before additions; at least one of addTags/removeTags)',
-  '  {"id":"s12","type":"classify","textVar":"reply_text","question":"The lead was asked why they are shopping","categories":[{"value":"wants_a_call","description":"asks to talk/book/call"},{"value":"not_interested","description":"declines or asks to stop"}],"saveAs":"intent"}   // sort a message into EXACTLY ONE category value (2-8, snake_case); nothing-fits lands as "unclear" — pair with a branch step whose arms match each value (and an unclear/else path)',
-  '  {"id":"s13","type":"generate_image","promptTemplate":"A clean flyer for {{vars.listing_address}}...","saveAs":"flyer_url"}   // create an AI-generated image and save a link to it as {{vars.flyer_url}}; ONLY include this step when the user explicitly asks for an image to be created (it is expensive and draws from the shared AI budget). Deliver it with a later send_sms carrying "mediaUrlVar":"flyer_url" (goes out as a picture message) or by templating the URL into a send_email body. To EDIT a photo instead of creating from scratch, add "inputImageTemplate":"{{trigger.image}}" — that is the photo attached to the triggering text (MMS) or coworker-mailbox email — and describe the change in promptTemplate (e.g. "Show this face aged 20 years"); {{trigger.image}} is empty when no photo was attached, in which case the step generates from scratch',
-  '  {"id":"s15","type":"run_agent","agentId":"<uuid copied EXACTLY from the AVAILABLE AGENTS list>","input":"{{trigger.windowText}}","saveAs":"agent_output"}   // run one of the owner\'s saved Agents (a reusable AI instruction set) on flow content — the rendered input text is transformed per the agent\'s instructions and the result lands in {{vars.<saveAs>}} for later steps (a send_email body, notify_owner, ...). To run the agent on the DOCUMENT attached to a triggering tenant_email instead of text (e.g. compare the quotes in an emailed PDF), replace "input" with "documentTemplate":"{{trigger.document}}" (exactly one of input/documentTemplate; no document on the trigger = the step skips gracefully). Add "saveDocument":{"titleTemplate":"Quote comparison — {{trigger.document_name}}"} to also file the result into the owner\'s Documents (staff-only); the filed id/title land in {{vars.<saveAs>_document_id}}/{{vars.<saveAs>_document_title}}. ONLY emit this step when the user message contains an AVAILABLE AGENTS list with a matching agent — copy its agentId EXACTLY; NEVER invent or placeholder the uuid, and when no listed agent matches, leave the step out entirely',
-  '  {"id":"s14","type":"share_document","documentId":"<uuid copied EXACTLY from the AVAILABLE DOCUMENTS list>","to":"{{vars.lead_phone}}","via":"sms","messageTemplate":"Here is our price sheet: {{share_url}}","saveAs":"price_sheet_url"}   // text ("via":"sms", to = a phone) or email ("via":"email", to = an email address) the lead an expiring link to one of the business uploaded documents (price sheet, policy, contract, brochure). Use this — never paste document contents into a send_sms body — whenever the user says to send their price sheet / policy / brochure / packet. The literal token {{share_url}} in messageTemplate marks where the link goes (omit it and the link is appended); optional "saveAs" exposes the link to later steps. ONLY emit this step when the user message contains an AVAILABLE DOCUMENTS list with a matching document — copy its documentId EXACTLY (an optional "documentTitle" carries its display title as an editor hint); NEVER invent or placeholder the uuid, and when no listed document matches, leave the step out entirely',
+  '  {"id":"s12","type":"classify","textVar":"reply_text","question":"The lead was asked why they are shopping","categories":[{"value":"wants_a_call","description":"asks to talk/book/call"},{"value":"not_interested","description":"declines or asks to stop"}],"saveAs":"intent"}   // sort a message into EXACTLY ONE category value (2-8, snake_case); nothing-fits lands as "unclear". Pair with a branch step whose arms match each value (and an unclear/else path)',
+  '  {"id":"s13","type":"generate_image","promptTemplate":"A clean flyer for {{vars.listing_address}}...","saveAs":"flyer_url"}   // create an AI-generated image and save a link to it as {{vars.flyer_url}}; ONLY include this step when the user explicitly asks for an image to be created (it is expensive and draws from the shared AI budget). Deliver it with a later send_sms carrying "mediaUrlVar":"flyer_url" (goes out as a picture message) or by templating the URL into a send_email body. To EDIT a photo instead of creating from scratch, add "inputImageTemplate":"{{trigger.image}}", the photo attached to the triggering text (MMS) or coworker-mailbox email, and describe the change in promptTemplate (e.g. "Show this face aged 20 years"); {{trigger.image}} is empty when no photo was attached, in which case the step generates from scratch',
+  '  {"id":"s15","type":"run_agent","agentId":"<uuid copied EXACTLY from the AVAILABLE AGENTS list>","input":"{{trigger.windowText}}","saveAs":"agent_output"}   // run one of the owner\'s saved Agents (a reusable AI instruction set) on flow content: the rendered input text is transformed per the agent\'s instructions and the result lands in {{vars.<saveAs>}} for later steps (a send_email body, notify_owner, ...). To run the agent on the DOCUMENT attached to a triggering tenant_email instead of text (e.g. compare the quotes in an emailed PDF), replace "input" with "documentTemplate":"{{trigger.document}}" (exactly one of input/documentTemplate; no document on the trigger = the step skips gracefully). Add "saveDocument":{"titleTemplate":"Quote comparison: {{trigger.document_name}}"} to also file the result into the owner\'s Documents (staff-only); the filed id/title land in {{vars.<saveAs>_document_id}}/{{vars.<saveAs>_document_title}}. ONLY emit this step when the user message contains an AVAILABLE AGENTS list with a matching agent: copy its agentId EXACTLY; NEVER invent or placeholder the uuid, and when no listed agent matches, leave the step out entirely',
+  '  {"id":"s14","type":"share_document","documentId":"<uuid copied EXACTLY from the AVAILABLE DOCUMENTS list>","to":"{{vars.lead_phone}}","via":"sms","messageTemplate":"Here is our price sheet: {{share_url}}","saveAs":"price_sheet_url"}   // text ("via":"sms", to = a phone) or email ("via":"email", to = an email address) the lead an expiring link to one of the business uploaded documents (price sheet, policy, contract, brochure). Use this, never paste document contents into a send_sms body, whenever the user says to send their price sheet / policy / brochure / packet. The literal token {{share_url}} in messageTemplate marks where the link goes (omit it and the link is appended); optional "saveAs" exposes the link to later steps. ONLY emit this step when the user message contains an AVAILABLE DOCUMENTS list with a matching document: copy its documentId EXACTLY (an optional "documentTitle" carries its display title as an editor hint); NEVER invent or placeholder the uuid, and when no listed document matches, leave the step out entirely',
   "",
   "Voice steps (ONLY under a voice trigger; a voice flow uses exactly ONE",
-  "trigger and only these steps — never mix them with the steps above):",
-  '  {"id":"v1","type":"ring_handoff","toE164":"+15559876543","ringSeconds":20}             // ring a human; on no-answer the next ring_handoff (or the AI takeover) runs — step order is the ring order',
+  "trigger and only these steps, never mix them with the steps above):",
+  '  {"id":"v1","type":"ring_handoff","toE164":"+15559876543","ringSeconds":20}             // ring a human; on no-answer the next ring_handoff (or the AI takeover) runs: step order is the ring order',
   '  {"id":"v2","type":"voice_ai_intake","notifyE164":"+15559876543","persona":"Amy\'s assistant taking a message","captureFields":["name","phone","reason for calling"]}   // AFTER every ring missed, the AI answers, captures the lead, and texts the summary to notifyE164; at most one, and it must be the LAST step. Add "alsoNotifyE164":"+15550001111" (or "alsoNotifyRef" for a saved teammate) to send a SECOND copy of that summary (e.g. details to the agent working the lead, copy to the owner). Add "answerFirst":true to INVERT the order so the AI answers the call ITSELF and the ring steps become the backup for when it cannot run (no voice minutes, AI offline), for a partner line where accepting ON the call is what wins the lead; with it you may also set "acceptDigits":[{"digit":"1","afterSeconds":3}] (IVR keys pressed in order after answering, so an announcement can finish first), "mediaStartSeconds":2 (pause before the AI speaks, for the partner to connect the customer), and "briefFromSmsContaining":"HomeLight Referral" (the newest text containing this becomes what the AI already knows when it picks up). The keys plus mediaStartSeconds must total 5 seconds or less. When the partner ANNOUNCES the key to press ("press 1 to accept"), prefer "acceptOnPrompt":{"digit":"1","fallbackSeconds":12} INSTEAD of acceptDigits/mediaStartSeconds: the AI listens and presses when it is actually asked, rather than guessing how long the announcement runs',
   '  {"id":"v3","type":"voice_transfer","toE164":"+15559876543","whisper":"Connecting you now"}   // connect the caller straight to one number; must be the flow\'s ONLY step',
   '  {"id":"v4","type":"outbound_call","toE164":"+15551230000","notifyE164":"+15559876543","persona":"...","captureFields":["confirmed appointment"]}   // outbound voice flows only: the AI places the call and texts the summary; must be the ONLY step',
@@ -97,7 +97,7 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   'To ROUTE a conversation on what a reply MEANS ("if they want a call, offer',
   'the team; if they say stop, close out"), chain wait_for_reply → classify on',
   "its saveAs var → branch with one arm per category value plus an else for",
-  '"unclear"/no_reply. Never branch on raw reply text with contains — leads',
+  '"unclear"/no_reply. Never branch on raw reply text with contains: leads',
   "phrase things unpredictably; classify is the decisive router.",
   "",
   'For "wait N hours and follow up if they don\'t respond" style requests, use',
@@ -138,11 +138,11 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   "is engine-provided (a running summary of sends/routing) and always available.",
   "Any string variable holding a full name can be addressed by its parts:",
   "{{vars.lead_name.first}} is the first word and {{vars.lead_name.last}} is the",
-  'rest ("" when the value is a single word) — same for trigger fields, e.g.',
+  'rest ("" when the value is a single word), same for trigger fields, e.g.',
   "{{trigger.full_name.first}}. Use .first for greetings when the user asks to",
   "address people by first name.",
   "{{vars.group_lead_phone}} is engine-provided on group-text triggers: the lead's",
-  "number — the one thread participant besides the sender and the business's own",
+  "number: the one thread participant besides the sender and the business's own",
   "numbers. Only filled when a from_matches condition pins the sender (a known",
   "service), so a lead-sent message never mislabels the service as the lead;",
   "empty when not a group text, the sender is unpinned, or the roster is ambiguous.",
@@ -163,10 +163,10 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   "(2-10 roster names, mutually exclusive with agentName/agentRef): everyone",
   'is texted at once and shares one deadline, the first "1" wins (the others',
   'are told who took it), a "2" retires just that person, and the lead falls',
-  "back to the owner when everyone passed or the deadline lapsed — no",
+  "back to the owner when everyone passed or the deadline lapsed, no",
   'escalation to anyone not listed. Set "broadcastAll":true instead of any',
   "names to offer the WHOLE active roster at once (resolved when the step",
-  "runs, capped at 10 members in rotation order, same claim semantics) — for",
+  "runs, capped at 10 members in rotation order, same claim semantics), for",
   '"offer everyone on the team". Set "agentNameVar":"<var>" instead of any',
   "static pin to route to a teammate NAMED IN THE TRIGGERING MESSAGE: an",
   "extract_text field captures the name as written (answer none when absent)",
@@ -177,11 +177,11 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   "extends overnight offer deadlines to quietEnd + graceMinutes. Optional",
   '"preferContactOwner":true offers a repeat lead to the teammate who already',
   "owns that contact (from an earlier claim or manual assignment) before the",
-  "normal rotation — use it when the owner says leads should go back to",
+  "normal rotation. Use it when the owner says leads should go back to",
   '"their" person. Optional "firstToClaim":false disables the default rule that',
   "lets earlier-offered teammates still grab a live offer with a bare \"1\".",
-  'An optional keep-for-owner pair — "ownerDirectWhen":{"var":"price_band",',
-  '"equals":"over_1m"} with "ownerDirectTemplate":"Kept for you: ..." — sends',
+  'An optional keep-for-owner pair, "ownerDirectWhen":{"var":"price_band",',
+  '"equals":"over_1m"} with "ownerDirectTemplate":"Kept for you: ...", sends',
   "matching leads straight to the owner and never offers the team (use when",
   'the owner says "leads like X come to me"); both fields are required',
   'together, and adding "ownerDirectNudges":true also texts the owner an',
@@ -189,7 +189,7 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   "lead. A send_sms step",
   'has exactly one recipient: a templated "to", "replyToGroup":true (reply into',
   'the inbound group MMS thread), "toAgentName":"<name>" (text one named',
-  "roster member — the engine resolves their current phone, and only then may",
+  "roster member: the engine resolves their current phone, and only then may",
   'the body use {{agent.name}} / {{agent.phone}}), or "toAgentNameVar":"<var>"',
   "(text whichever teammate that var names, resolved against the live roster at",
   "run time by exact name, first name, or unique prefix. It also accepts a var",
@@ -224,11 +224,11 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   "keyed by that phone var, so a LATER run for the same person can recall it. A",
   'browse_action may instead carry "forEachLink":"<css selector>" to loop the',
   "actions over EVERY matching list row (the service visits each row's href and",
-  "runs the actions there) — e.g. apply a status update to every lead in a list;",
+  "runs the actions there), e.g. apply a status update to every lead in a list;",
   "forEachLink can't be combined with fields/screenshot/rememberUrlKeyedByVar. Add",
   '"forEachLinkMatchVar":"<var>" alongside forEachLink to only act on rows whose',
   "text contains one of the names in that earlier var (comma/newline/semicolon",
-  "separated) — e.g. update only the leads named in an inbound text. A",
+  "separated), e.g. update only the leads named in an inbound text. A",
   "recall_url step looks that URL up into {{vars.<saveAs>}} using the inbound",
   'group participants ("keyFromTrigger":"participants") and/or phone vars',
   '("keyVars":[...]); it saves "" on a miss, so guard the consuming step with a',
@@ -239,7 +239,7 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   'another when it notEquals "none"). {{now.today.*}} / {{now.tomorrow.*}} /',
   "{{now.in7Days.*}} expose relative dates in the business timezone (weekday,",
   "month, monthNum, day, dayOrdinal, year, iso) and {{now.afternoonTime}} is",
-  '"14:00" — use these for a "tomorrow afternoon" or "follow up in 7 days" style',
+  '"14:00". Use these for a "tomorrow afternoon" or "follow up in 7 days" style',
   "follow-up instead of hard-coding a date. A",
   'browse_extract with "screenshot":true also captures a screenshot of the page;',
   'a later send_email or route_to_team with "attachScreenshot":true attaches it',
@@ -248,10 +248,10 @@ export const FLOW_COMPILE_SYSTEM_PROMPT = [
   'carry "extractLinks":[{"name":"claim_url","matchText":"Claim"}] to save a',
   'matching link\'s href as a var, "skipWhenText":"already claimed" to end the',
   'run gracefully when the page shows that text, and "auth":{"integrationLabel":',
-  '"<the stored integration\'s label>"} to log in first — only when the user',
+  '"<the stored integration\'s label>"} to log in first, only when the user',
   "names a login/integration they have saved. Saved-person references (toRef/",
   "fromRef/agentRef/notifyRef) are picked in the editor and can NOT be authored",
-  "here — use the literal phone/name fields instead."
+  "here. Use the literal phone/name fields instead."
 ].join("\n");
 
 /** One business document the compiler may bind a share_document step to. */
@@ -265,15 +265,15 @@ export type CompileDocumentOption = {
  * Render the AVAILABLE DOCUMENTS block for the compile/repair user text.
  * Only client-eligible, ready documents belong here (the route filters);
  * an explicit "(none on file)" line tells the model to omit share_document
- * steps rather than invent a uuid — the same NEVER-invent contract as
+ * steps rather than invent a uuid, the same NEVER-invent contract as
  * email connection ids.
  */
 export function buildAvailableDocumentsBlock(documents: CompileDocumentOption[]): string {
   if (documents.length === 0) {
-    return "AVAILABLE DOCUMENTS: (none on file — do not emit share_document steps)";
+    return "AVAILABLE DOCUMENTS: (none on file, do not emit share_document steps)";
   }
   const lines = documents.map(
-    (d) => `- documentId: ${d.id} — "${d.title}"${d.summary ? `: ${d.summary}` : ""}`
+    (d) => `- documentId: ${d.id}, "${d.title}"${d.summary ? `: ${d.summary}` : ""}`
   );
   return ["AVAILABLE DOCUMENTS (for share_document steps; copy documentId exactly):", ...lines].join(
     "\n"
@@ -291,16 +291,16 @@ export type CompileAgentOption = {
 /**
  * Render the AVAILABLE AGENTS block for the compile/repair user text. Only
  * enabled agents belong here (the caller filters); an explicit "(none)"
- * line tells the model to omit run_agent steps rather than invent a uuid —
+ * line tells the model to omit run_agent steps rather than invent a uuid,
  * the same NEVER-invent contract as documents and connection ids.
  */
 export function buildAvailableAgentsBlock(agents: CompileAgentOption[]): string {
   if (agents.length === 0) {
-    return "AVAILABLE AGENTS: (none saved — do not emit run_agent steps)";
+    return "AVAILABLE AGENTS: (none saved, do not emit run_agent steps)";
   }
   const lines = agents.map(
     (a) =>
-      `- agentId: ${a.id} — "${a.name}"${a.instructionsSummary ? `: ${a.instructionsSummary}` : ""}`
+      `- agentId: ${a.id}, "${a.name}"${a.instructionsSummary ? `: ${a.instructionsSummary}` : ""}`
   );
   return ["AVAILABLE AGENTS (for run_agent steps; copy agentId exactly):", ...lines].join("\n");
 }
@@ -318,18 +318,18 @@ export type CompileMailboxOption = {
  * text. Only email-provider connections belong here (the caller filters);
  * an explicit "(none connected)" line tells the model to omit
  * `fromConnectionId` / email triggers / email_extract rather than invent a
- * uuid — the same NEVER-invent contract as documents and agents. The AI
+ * uuid, the same NEVER-invent contract as documents and agents. The AI
  * coworker's own mailbox is always the no-id default sender.
  */
 export function buildAvailableMailboxesBlock(mailboxes: CompileMailboxOption[]): string {
   if (mailboxes.length === 0) {
     return (
-      "AVAILABLE MAILBOXES: (none connected — do not emit send_email fromConnectionId, " +
+      "AVAILABLE MAILBOXES: (none connected, do not emit send_email fromConnectionId, " +
       "email-channel triggers, or email_extract steps; the AI coworker's own mailbox is the " +
       "default sender and needs no id)"
     );
   }
-  const lines = mailboxes.map((m) => `- connectionId: ${m.id} — ${m.label}`);
+  const lines = mailboxes.map((m) => `- connectionId: ${m.id}, ${m.label}`);
   return [
     "AVAILABLE MAILBOXES (for send_email fromConnectionId, email-channel triggers, and email_extract connectionId; copy the uuid exactly):",
     ...lines
@@ -355,7 +355,7 @@ export function buildFlowCompileUserText(
 
 /**
  * Self-repair user text: the first candidate failed validation, so re-prompt
- * with the exact issues and the failing JSON. One repair round only — if the
+ * with the exact issues and the failing JSON. One repair round only: if the
  * model can't fix its own output with the errors in hand, surface the
  * (humanized) failure to the user instead of burning tokens in a loop.
  */
@@ -400,7 +400,7 @@ export function humanizeCompileIssues(issues: string[]): string[] {
     if (/trigger\.connectionId/i.test(issue)) {
       return (
         "The email trigger needs one of your connected inboxes, which the AI can't pick for you. " +
-        'Tip: if the email arrives at your AI coworker\'s own address (forwarded lead alerts, Privyr, portals), choose the "AI coworker\'s mailbox" trigger instead — it needs no connection.'
+        'Tip: if the email arrives at your AI coworker\'s own address (forwarded lead alerts, Privyr, portals), choose the "AI coworker\'s mailbox" trigger instead: it needs no connection.'
       );
     }
     if (/^trigger\./i.test(issue)) {
@@ -409,7 +409,7 @@ export function humanizeCompileIssues(issues: string[]): string[] {
     if (/uses \{\{vars\.(\w+)\}\} before any step produces it/i.test(issue)) {
       return `${issue} Tip: add an earlier "read details" step that extracts that value, or reorder the steps.`;
     }
-    // steps.<n>.<field>: zod path — point at the step number in plain words.
+    // steps.<n>.<field>: zod path: point at the step number in plain words.
     const stepPath = /^steps\.(\d+)\.?(.*?): (.*)$/.exec(issue);
     if (stepPath) {
       return `Step ${Number(stepPath[1]) + 1}${stepPath[2] ? ` (${stepPath[2]})` : ""}: ${stepPath[3]}`;
@@ -437,7 +437,7 @@ export function buildFlowAdaptUserText(input: {
     "business's details below. Output the full adapted definition as JSON.",
     "",
     "Source definition (may contain placeholders like {{owner_phone}},",
-    "{{owner_email}}, {{employee_name}} — replace these):",
+    "{{owner_email}}, {{employee_name}}, replace these):",
     JSON.stringify(input.sourceDefinition),
     "",
     "New business details:"
@@ -459,8 +459,8 @@ export function buildFlowAdaptUserText(input: {
 
 /**
  * User text for editing an EXISTING flow in place (the chat `edit_aiflow`
- * tool). Unlike adapt — which rewrites a library template for a new business
- * — an edit must be surgical: the model gets the current definition plus the
+ * tool). Unlike adapt, which rewrites a library template for a new business,
+ * an edit must be surgical: the model gets the current definition plus the
  * owner's requested change and must return the full updated definition,
  * copying everything the owner did not ask to change verbatim (ids included)
  * so an applied edit never churns untouched steps.
@@ -477,7 +477,7 @@ export function buildFlowEditUserText(input: {
     `Edit the business's EXISTING AiFlow automation named "${input.currentName}".`,
     "Apply ONLY the requested changes below and return the FULL updated JSON",
     "definition (same schema contract; output only the JSON object). Copy every",
-    'part the request does not mention VERBATIM — same step "id" values, same',
+    'part the request does not mention VERBATIM: same step "id" values, same',
     "wording, same order. Never drop, rewrite, or renumber untouched steps, and",
     "never invent connection/document/agent uuids that are not in the current",
     "definition or the lists below.",

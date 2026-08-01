@@ -939,10 +939,10 @@ describe("mailbox bindings (fromConnectionId)", () => {
     expect(res.ok).toBe(true);
     const userText = generate.mock.calls[0][0].userText;
     expect(userText).toContain(
-      "- connectionId: cccccccc-cccc-4ccc-8ccc-cccccccccccc — sam@example.com (outlook)"
+      "- connectionId: cccccccc-cccc-4ccc-8ccc-cccccccccccc, sam@example.com (outlook)"
     );
     // Legacy row without identity metadata falls back to the provider key.
-    expect(userText).toContain("- connectionId: dddddddd-dddd-4ddd-8ddd-dddddddddddd — gmail");
+    expect(userText).toContain("- connectionId: dddddddd-dddd-4ddd-8ddd-dddddddddddd, gmail");
     // Non-email connections never reach the mailbox block.
     expect(userText).not.toContain("eeeeeeee-eeee-4eee-8eee-eeeeeeeeeeee");
   });

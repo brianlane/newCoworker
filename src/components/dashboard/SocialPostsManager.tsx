@@ -3,11 +3,11 @@
 /**
  * Instagram posts manager (Dashboard → Marketing).
  *
- * Compose a post (caption + an image — uploaded from the device, or a
+ * Compose a post (caption + an image, uploaded from the device, or a
  * public image URL for the link-minded), publish it now, schedule it, or
  * leave it as a draft; the per-minute sweep publishes through the
  * Instagram Graph API. Renders a connect prompt when the business has no
- * linked Instagram professional account — publishing rides the same Meta
+ * linked Instagram professional account; publishing rides the same Meta
  * connection as Lead Ads and DMs.
  */
 
@@ -63,7 +63,7 @@ export function SocialPostsManager({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  // Composer. The image is an uploaded ref (preferred) or a pasted URL —
+  // Composer. The image is an uploaded ref (preferred) or a pasted URL;
   // whichever the owner set last wins, and each clears the other.
   const [caption, setCaption] = useState("");
   const [mediaUrl, setMediaUrl] = useState("");
@@ -90,7 +90,7 @@ export function SocialPostsManager({
   }, [businessId]);
 
   /**
-   * Post-mutation refresh: this card's list AND the server components —
+   * Post-mutation refresh: this card's list AND the server components,
    * the unified content calendar's Instagram rows are server-rendered
    * (`calendarExtras`), so without router.refresh() a newly scheduled or
    * cancelled post would leave the calendar stale until a full reload.
@@ -120,14 +120,14 @@ export function SocialPostsManager({
         error?: { message?: string };
       };
       if (!json.ok || !json.data?.imageUrl) {
-        setError(json.error?.message ?? "Could not upload the image — try again.");
+        setError(json.error?.message ?? "Could not upload the image. Try again.");
         return;
       }
       setMediaUrl(json.data.imageUrl);
       setUploadedName(file.name);
       setShowUrlInput(false);
     } catch {
-      setError("Could not upload the image — try again.");
+      setError("Could not upload the image. Try again.");
     } finally {
       setUploading(false);
       // Same-file re-selection must re-fire onChange.
@@ -137,16 +137,16 @@ export function SocialPostsManager({
 
   async function create(mode: "schedule" | "now" | "draft") {
     if (!mediaUrl.trim()) {
-      setError("Add an image — Instagram posts need one.");
+      setError("Add an image: Instagram posts need one.");
       return;
     }
     if (mode === "schedule") {
       if (!publishAt) {
-        setError('Pick a publish time — or use "Publish now" or save a draft.');
+        setError('Pick a publish time, or use "Publish now" or save a draft.');
         return;
       }
       if (new Date(publishAt).getTime() < Date.now() - 60_000) {
-        setError('That time is in the past — pick a future time, or use "Publish now".');
+        setError('That time is in the past. Pick a future time, or use "Publish now".');
         return;
       }
     }
@@ -175,7 +175,7 @@ export function SocialPostsManager({
       setPublishAt("");
       await refreshEverywhere();
     } catch {
-      setError("Could not save the post — try again.");
+      setError("Could not save the post. Try again.");
     } finally {
       setSaving(false);
     }
@@ -196,7 +196,7 @@ export function SocialPostsManager({
       }
       await refreshEverywhere();
     } catch {
-      setError("Could not cancel — try again.");
+      setError("Could not cancel. Try again.");
     }
   }
 
@@ -215,7 +215,7 @@ export function SocialPostsManager({
       }
       await refreshEverywhere();
     } catch {
-      setError("Could not delete — try again.");
+      setError("Could not delete. Try again.");
     }
   }
 
@@ -226,7 +226,7 @@ export function SocialPostsManager({
       ) : posts.length === 0 ? (
         marketingAllowed ? (
           igConnected ? (
-            <p className="text-sm text-parchment/40">No posts yet — compose one above.</p>
+            <p className="text-sm text-parchment/40">No posts yet. Compose one above.</p>
           ) : null
         ) : (
           <p className="text-sm text-parchment/40">No posts yet.</p>
@@ -326,7 +326,7 @@ export function SocialPostsManager({
   return (
     <Card>
       <h2 className="text-sm font-semibold text-parchment">
-        Instagram posts{igConnected && instagramUsername ? ` — @${instagramUsername}` : ""}
+        Instagram posts{igConnected && instagramUsername ? `: @${instagramUsername}` : ""}
       </h2>
       {igConnected ? (
         <div className="mt-3 space-y-3">
@@ -382,7 +382,7 @@ export function SocialPostsManager({
               className={`${inputClass} min-h-24`}
               value={caption}
               onChange={(e) => setCaption(e.target.value)}
-              placeholder="Spring special — book this week and save 20%! #smallbusiness"
+              placeholder="Spring special: book this week and save 20%! #smallbusiness"
               maxLength={2200}
             />
           </div>
@@ -435,7 +435,7 @@ export function SocialPostsManager({
           </p>
         </div>
       ) : (
-        // No composer without a linked IG account — but existing drafts and
+        // No composer without a linked IG account, but existing drafts and
         // scheduled posts stay listed below so they can be cancelled/deleted
         // (nothing will publish while disconnected; the sweep fails them
         // with reconnect guidance).
