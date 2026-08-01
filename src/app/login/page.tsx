@@ -16,9 +16,11 @@ export default async function LoginPage({ searchParams }: LoginPageProps) {
 
   // Already signed in: skip the form and land in the app, mirroring
   // /admin/login and /onboard. Admins reaching /dashboard are forwarded to
-  // /admin/dashboard by the middleware.
+  // /admin/dashboard by the middleware. A redirectTo aimed back at /login
+  // would bounce off this guard again, so those go to the dashboard too.
   if (user) {
-    redirect(safeInternalPath(redirectTo, "/dashboard"));
+    const target = safeInternalPath(redirectTo, "/dashboard");
+    redirect(/^\/login($|[/?#])/.test(target) ? "/dashboard" : target);
   }
 
   return (
