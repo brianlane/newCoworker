@@ -1,10 +1,17 @@
 import { describe, it, expect } from "vitest";
 import {
+  TELNYX_SERIES_OTHER,
+  TELNYX_SERIES_UNATTRIBUTED,
+  TELNYX_USAGE_WINDOW_KEYS,
   buildPoolBoxBurn,
   buildRenewalCalendar,
+  buildTelnyxDailySeries,
+  buildTelnyxTenantWindowBreakdown,
+  resolveTelnyxUsageWindowKey,
   sumMarginLinesByKey,
   telnyxDirectionSummary,
-  telnyxMonthlyTrend
+  telnyxMonthlyTrend,
+  telnyxUsageWindow
 } from "@/lib/admin/costs-view";
 import type { HostingerVpsCostRow, TelnyxCostDailyRow } from "@/lib/db/platform-costs";
 import type { VpsInventoryRow } from "@/lib/db/vps-inventory";
@@ -461,6 +468,316 @@ describe("buildPoolBoxBurn", () => {
     expect(burn.find((b) => b.vmId === 48)).toMatchObject({
       monthlySource: "estimate",
       endsAt: null
+    });
+  });
+});
+
+describe("resolveTelnyxUsageWindowKey", () => {
+  it("accepts every window key", () => {
+    for (const key of TELNYX_USAGE_WINDOW_KEYS) {
+      expect(resolveTelnyxUsageWindowKey(key)).toBe(key);
+    }
+  });
+
+  it("falls back to 14d for missing or unknown values", () => {
+    expect(resolveTelnyxUsageWindowKey(undefined)).toBe("14d");
+    expect(resolveTelnyxUsageWindowKey("")).toBe("14d");
+    expect(resolveTelnyxUsageWindowKey("bogus")).toBe("14d");
+    expect(resolveTelnyxUsageWindowKey("today")).toBe("14d");
+  });
+});
+
+describe("telnyxUsageWindow", () => {
+  it("builds rolling UTC windows ending tomorrow-exclusive", () => {
+    expect(telnyxUsageWindow("7d", NOW)).toEqual({
+      key: "7d",
+      startYmd: "2026-07-06",
+      endYmdExclusive: "2026-07-13"
+    });
+    expect(telnyxUsageWindow("14d", NOW).startYmd).toBe("2026-06-29");
+    expect(telnyxUsageWindow("30d", NOW).startYmd).toBe("2026-06-13");
+    expect(telnyxUsageWindow("90d", NOW).startYmd).toBe("2026-04-14");
+  });
+
+  it("crosses month boundaries in UTC, covering a reload-trace window", () => {
+    expect(telnyxUsageWindow("7d", new Date("2026-08-01T00:30:00.000Z"))).toEqual({
+      key: "7d",
+      startYmd: "2026-07-26",
+      endYmdExclusive: "2026-08-02"
+    });
+  });
+
+  it("crosses year boundaries", () => {
+    expect(telnyxUsageWindow("14d", new Date("2026-01-02T12:00:00.000Z"))).toEqual({
+      key: "14d",
+      startYmd: "2025-12-20",
+      endYmdExclusive: "2026-01-03"
+    });
+  });
+});
+
+describe("buildTelnyxDailySeries", () => {
+  const sevenDayWindow = telnyxUsageWindow("7d", NOW);
+
+  it("zero-fills every window day, oldest first", () => {
+    const series = buildTelnyxDailySeries(
+      [
+        telnyxRow({ day: "2026-07-06", business_id: "biz-2", cost_micros: 40_000 }),
+        telnyxRow({ day: "2026-07-10", cost_micros: 100_000 })
+      ],
+      sevenDayWindow
+    );
+    expect(series.points).toHaveLength(7);
+    expect(series.points.map((p) => p.day)).toEqual([
+      "2026-07-06",
+      "2026-07-07",
+      "2026-07-08",
+      "2026-07-09",
+      "2026-07-10",
+      "2026-07-11",
+      "2026-07-12"
+    ]);
+    expect(series.points[0]).toEqual({
+      day: "2026-07-06",
+      costMicros: 40_000,
+      segments: [{ seriesKey: "biz-2", costMicros: 40_000 }]
+    });
+    expect(series.points[1]).toEqual({ day: "2026-07-07", costMicros: 0, segments: [] });
+  });
+
+  it("ignores rows outside the window on both bounds", () => {
+    const series = buildTelnyxDailySeries(
+      [
+        telnyxRow({ day: "2026-07-05", cost_micros: 999_000 }),
+        telnyxRow({ day: "2026-07-13", cost_micros: 999_000 }),
+        telnyxRow({ day: "2026-07-06", cost_micros: 10_000 }),
+        telnyxRow({ day: "2026-07-12", cost_micros: 5_000 })
+      ],
+      sevenDayWindow
+    );
+    expect(series.totalMicros).toBe(15_000);
+  });
+
+  it("merges a tenant's messaging and voice rows into one segment per day", () => {
+    const series = buildTelnyxDailySeries(
+      [
+        telnyxRow({ day: "2026-07-10", cost_micros: 100_000 }),
+        telnyxRow({
+          day: "2026-07-10",
+          record_type: "sip-trunking",
+          billed_seconds: 300,
+          cost_micros: 50_000
+        })
+      ],
+      sevenDayWindow
+    );
+    const day = series.points.find((p) => p.day === "2026-07-10");
+    expect(day?.segments).toEqual([{ seriesKey: "biz-1", costMicros: 150_000 }]);
+    expect(series.maxMicros).toBe(150_000);
+    expect(series.totalMicros).toBe(150_000);
+  });
+
+  it("keeps segments in fixed series order even when a smaller series spikes", () => {
+    const series = buildTelnyxDailySeries(
+      [
+        telnyxRow({ day: "2026-07-08", business_id: "biz-a", cost_micros: 200_000 }),
+        telnyxRow({ day: "2026-07-09", business_id: "biz-a", cost_micros: 100_000 }),
+        telnyxRow({ day: "2026-07-08", business_id: "biz-b", cost_micros: 50_000 }),
+        telnyxRow({ day: "2026-07-09", business_id: "biz-b", cost_micros: 200_000 })
+      ],
+      sevenDayWindow
+    );
+    expect(series.series.map((s) => s.seriesKey)).toEqual(["biz-a", "biz-b"]);
+    const spikeDay = series.points.find((p) => p.day === "2026-07-09");
+    expect(spikeDay?.segments.map((s) => s.seriesKey)).toEqual(["biz-a", "biz-b"]);
+  });
+
+  it("breaks rank ties by business id for stable colors", () => {
+    const series = buildTelnyxDailySeries(
+      [
+        telnyxRow({ day: "2026-07-08", business_id: "biz-b", cost_micros: 70_000 }),
+        telnyxRow({ day: "2026-07-09", business_id: "biz-a", cost_micros: 70_000 })
+      ],
+      sevenDayWindow
+    );
+    expect(series.series.map((s) => s.seriesKey)).toEqual(["biz-a", "biz-b"]);
+  });
+
+  it("folds tenants past the top seven into other, and puts unattributed last", () => {
+    const rows = Array.from({ length: 9 }, (_, i) =>
+      telnyxRow({
+        day: "2026-07-10",
+        business_id: `biz-${i + 1}`,
+        cost_micros: (9 - i) * 10_000
+      })
+    );
+    rows.push(telnyxRow({ day: "2026-07-11", business_id: null, cost_micros: 5_000 }));
+    const series = buildTelnyxDailySeries(rows, sevenDayWindow);
+    expect(series.series.map((s) => s.seriesKey)).toEqual([
+      "biz-1",
+      "biz-2",
+      "biz-3",
+      "biz-4",
+      "biz-5",
+      "biz-6",
+      "biz-7",
+      TELNYX_SERIES_OTHER,
+      TELNYX_SERIES_UNATTRIBUTED
+    ]);
+    // Ranks 8 + 9 (20k + 10k) merge into one "other" series and segment.
+    expect(series.series[series.series.length - 2]?.totalMicros).toBe(30_000);
+    const day = series.points.find((p) => p.day === "2026-07-10");
+    expect(day?.segments.filter((s) => s.seriesKey === TELNYX_SERIES_OTHER)).toEqual([
+      { seriesKey: TELNYX_SERIES_OTHER, costMicros: 30_000 }
+    ]);
+  });
+
+  it("omits the other bucket when few tenants exist", () => {
+    const series = buildTelnyxDailySeries(
+      [
+        telnyxRow({ day: "2026-07-10", business_id: "biz-a", cost_micros: 10_000 }),
+        telnyxRow({ day: "2026-07-10", business_id: "biz-b", cost_micros: 5_000 })
+      ],
+      sevenDayWindow
+    );
+    expect(series.series.map((s) => s.seriesKey)).toEqual(["biz-a", "biz-b"]);
+  });
+
+  it("charts an only-unattributed window as a single series", () => {
+    const series = buildTelnyxDailySeries(
+      [telnyxRow({ day: "2026-07-10", business_id: null, cost_micros: 42_000 })],
+      sevenDayWindow
+    );
+    expect(series.series).toEqual([
+      { seriesKey: TELNYX_SERIES_UNATTRIBUTED, totalMicros: 42_000 }
+    ]);
+    expect(series.points.find((p) => p.day === "2026-07-10")?.segments).toEqual([
+      { seriesKey: TELNYX_SERIES_UNATTRIBUTED, costMicros: 42_000 }
+    ]);
+  });
+
+  it("returns an empty series for zero-cost rows, still zero-filling days", () => {
+    const series = buildTelnyxDailySeries(
+      [telnyxRow({ day: "2026-07-10", cost_micros: 0, carrier_fee_micros: 0 })],
+      sevenDayWindow
+    );
+    expect(series.series).toEqual([]);
+    expect(series.totalMicros).toBe(0);
+    expect(series.maxMicros).toBe(0);
+    expect(series.points).toHaveLength(7);
+    expect(series.points.every((p) => p.costMicros === 0 && p.segments.length === 0)).toBe(
+      true
+    );
+  });
+});
+
+describe("buildTelnyxTenantWindowBreakdown", () => {
+  const sevenDayWindow = telnyxUsageWindow("7d", NOW);
+
+  it("splits messaging and voice per tenant, summing carrier fees across both", () => {
+    const breakdown = buildTelnyxTenantWindowBreakdown(
+      [
+        telnyxRow({
+          day: "2026-07-10",
+          cost_micros: 159_000,
+          record_count: 10,
+          carrier_fee_micros: 30_000
+        }),
+        telnyxRow({
+          day: "2026-07-11",
+          record_type: "sip-trunking",
+          direction: "inbound",
+          cost_micros: 55_000,
+          record_count: 3,
+          carrier_fee_micros: 5_000,
+          billed_seconds: 300
+        })
+      ],
+      sevenDayWindow
+    );
+    expect(breakdown.totalMicros).toBe(214_000);
+    expect(breakdown.hasRows).toBe(true);
+    expect(breakdown.tenants).toEqual([
+      {
+        businessId: "biz-1",
+        totalMicros: 214_000,
+        carrierFeeMicros: 35_000,
+        messagingMicros: 159_000,
+        messagingCount: 10,
+        voiceMicros: 55_000,
+        voiceMinutes: 5,
+        sharePct: 100
+      }
+    ]);
+  });
+
+  it("keeps the unattributed row and sorts it by spend like any tenant", () => {
+    const breakdown = buildTelnyxTenantWindowBreakdown(
+      [
+        telnyxRow({ day: "2026-07-10", business_id: null, cost_micros: 900_000 }),
+        telnyxRow({ day: "2026-07-10", business_id: "biz-1", cost_micros: 100_000 })
+      ],
+      sevenDayWindow
+    );
+    expect(breakdown.tenants.map((t) => t.businessId)).toEqual([null, "biz-1"]);
+    expect(breakdown.tenants.map((t) => t.sharePct)).toEqual([90, 10]);
+  });
+
+  it("pushes the unattributed row last on ties, whichever side it sorts from", () => {
+    const rows = [
+      telnyxRow({ day: "2026-07-10", business_id: null, cost_micros: 100_000 }),
+      telnyxRow({ day: "2026-07-10", business_id: "biz-1", cost_micros: 100_000 })
+    ];
+    expect(
+      buildTelnyxTenantWindowBreakdown(rows, sevenDayWindow).tenants.map((t) => t.businessId)
+    ).toEqual(["biz-1", null]);
+    expect(
+      buildTelnyxTenantWindowBreakdown([...rows].reverse(), sevenDayWindow).tenants.map(
+        (t) => t.businessId
+      )
+    ).toEqual(["biz-1", null]);
+  });
+
+  it("breaks tenant ties by id", () => {
+    const breakdown = buildTelnyxTenantWindowBreakdown(
+      [
+        telnyxRow({ day: "2026-07-10", business_id: "biz-b", cost_micros: 100_000 }),
+        telnyxRow({ day: "2026-07-10", business_id: "biz-a", cost_micros: 100_000 })
+      ],
+      sevenDayWindow
+    );
+    expect(breakdown.tenants.map((t) => t.businessId)).toEqual(["biz-a", "biz-b"]);
+  });
+
+  it("keeps zero-cost volume visible with null shares", () => {
+    const breakdown = buildTelnyxTenantWindowBreakdown(
+      [telnyxRow({ day: "2026-07-10", cost_micros: 0, carrier_fee_micros: 0, record_count: 15 })],
+      sevenDayWindow
+    );
+    expect(breakdown.totalMicros).toBe(0);
+    expect(breakdown.hasRows).toBe(true);
+    expect(breakdown.tenants[0]?.messagingCount).toBe(15);
+    expect(breakdown.tenants[0]?.sharePct).toBeNull();
+  });
+
+  it("filters rows outside the window", () => {
+    const breakdown = buildTelnyxTenantWindowBreakdown(
+      [
+        telnyxRow({ day: "2026-07-05", cost_micros: 999_000 }),
+        telnyxRow({ day: "2026-07-13", cost_micros: 999_000 }),
+        telnyxRow({ day: "2026-07-10", cost_micros: 10_000 })
+      ],
+      sevenDayWindow
+    );
+    expect(breakdown.totalMicros).toBe(10_000);
+    expect(breakdown.tenants).toHaveLength(1);
+  });
+
+  it("returns an empty breakdown when no rows land in the window", () => {
+    expect(buildTelnyxTenantWindowBreakdown([], sevenDayWindow)).toEqual({
+      tenants: [],
+      totalMicros: 0,
+      hasRows: false
     });
   });
 });

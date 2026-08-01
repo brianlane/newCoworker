@@ -101,6 +101,239 @@ export function telnyxDirectionSummary(rows: TelnyxCostDailyRow[]): TelnyxDirect
   );
 }
 
+export type TelnyxUsageWindowKey = "7d" | "14d" | "30d" | "90d";
+
+export const TELNYX_USAGE_WINDOW_KEYS: TelnyxUsageWindowKey[] = ["7d", "14d", "30d", "90d"];
+
+const TELNYX_USAGE_WINDOW_DAYS: Record<TelnyxUsageWindowKey, number> = {
+  "7d": 7,
+  "14d": 14,
+  "30d": 30,
+  "90d": 90
+};
+
+/** The window a `?window=` query param selects; invalid values fall back to 14d. */
+export function resolveTelnyxUsageWindowKey(raw: string | undefined): TelnyxUsageWindowKey {
+  return (TELNYX_USAGE_WINDOW_KEYS as string[]).includes(raw ?? "")
+    ? (raw as TelnyxUsageWindowKey)
+    : "14d";
+}
+
+export type TelnyxUsageWindow = {
+  key: TelnyxUsageWindowKey;
+  /** Inclusive UTC start day. */
+  startYmd: string;
+  /** Exclusive UTC end day (tomorrow, so today's partial day is included). */
+  endYmdExclusive: string;
+};
+
+function ymd(ms: number): string {
+  return new Date(ms).toISOString().slice(0, 10);
+}
+
+/** Rolling UTC calendar-day window for a key, ending tomorrow (exclusive). */
+export function telnyxUsageWindow(key: TelnyxUsageWindowKey, now: Date): TelnyxUsageWindow {
+  const todayMs = Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate());
+  return {
+    key,
+    startYmd: ymd(todayMs - (TELNYX_USAGE_WINDOW_DAYS[key] - 1) * DAY_MS),
+    endYmdExclusive: ymd(todayMs + DAY_MS)
+  };
+}
+
+function inUsageWindow(day: string, window: TelnyxUsageWindow): boolean {
+  return day >= window.startYmd && day < window.endYmdExclusive;
+}
+
+/**
+ * Series keys for the two non-tenant stack buckets. Business ids are uuids,
+ * so these literals can never collide with a real tenant's key.
+ */
+export const TELNYX_SERIES_OTHER = "other";
+export const TELNYX_SERIES_UNATTRIBUTED = "unattributed";
+
+/** Tenants ranked past this many fold into the "other" series. */
+const TELNYX_TOP_TENANT_SERIES = 7;
+
+export type TelnyxDailySeriesEntry = {
+  /** A business uuid, TELNYX_SERIES_OTHER, or TELNYX_SERIES_UNATTRIBUTED. */
+  seriesKey: string;
+  totalMicros: number;
+};
+
+export type TelnyxDailyPoint = {
+  day: string;
+  costMicros: number;
+  /** Nonzero stack segments, always in fixed series order. */
+  segments: Array<{ seriesKey: string; costMicros: number }>;
+};
+
+export type TelnyxDailySeries = {
+  /** Every day in the window (zero days included), oldest first. */
+  points: TelnyxDailyPoint[];
+  /** Stack + legend order: tenants by window spend, then other, then unattributed. */
+  series: TelnyxDailySeriesEntry[];
+  maxMicros: number;
+  totalMicros: number;
+};
+
+/**
+ * Per-day Telnyx cost stacked per tenant within the window. Unlike the
+ * Gemini chart's per-day size sort, segments keep the series order on every
+ * day, so a tenant holds one color and position across the whole chart and
+ * a burn spike reads as a band growing, not colors trading places.
+ */
+export function buildTelnyxDailySeries(
+  rows: TelnyxCostDailyRow[],
+  window: TelnyxUsageWindow
+): TelnyxDailySeries {
+  const totalsByBusiness = new Map<string, number>();
+  let unattributedTotal = 0;
+  const byDay = new Map<string, Map<string, number>>();
+  for (const row of rows) {
+    if (!inUsageWindow(row.day, window)) continue;
+    const rawKey = row.business_id ?? TELNYX_SERIES_UNATTRIBUTED;
+    if (row.business_id === null) {
+      unattributedTotal += row.cost_micros;
+    } else {
+      totalsByBusiness.set(
+        row.business_id,
+        (totalsByBusiness.get(row.business_id) ?? 0) + row.cost_micros
+      );
+    }
+    let perKey = byDay.get(row.day);
+    if (!perKey) {
+      perKey = new Map();
+      byDay.set(row.day, perKey);
+    }
+    perKey.set(rawKey, (perKey.get(rawKey) ?? 0) + row.cost_micros);
+  }
+
+  // Rank by window spend; ties settle by id so colors stay stable across
+  // reloads. Everything past the top ranks folds into "other".
+  const ranked = [...totalsByBusiness.entries()].sort(
+    (a, b) => b[1] - a[1] || a[0].localeCompare(b[0])
+  );
+  const seriesKeyByBusiness = new Map<string, string>();
+  for (const [index, [businessId]] of ranked.entries()) {
+    seriesKeyByBusiness.set(
+      businessId,
+      index < TELNYX_TOP_TENANT_SERIES ? businessId : TELNYX_SERIES_OTHER
+    );
+  }
+  const otherTotal = ranked
+    .slice(TELNYX_TOP_TENANT_SERIES)
+    .reduce((sum, [, micros]) => sum + micros, 0);
+
+  const series: TelnyxDailySeriesEntry[] = ranked
+    .slice(0, TELNYX_TOP_TENANT_SERIES)
+    .filter(([, micros]) => micros > 0)
+    .map(([businessId, micros]) => ({ seriesKey: businessId, totalMicros: micros }));
+  if (otherTotal > 0) {
+    series.push({ seriesKey: TELNYX_SERIES_OTHER, totalMicros: otherTotal });
+  }
+  if (unattributedTotal > 0) {
+    series.push({ seriesKey: TELNYX_SERIES_UNATTRIBUTED, totalMicros: unattributedTotal });
+  }
+
+  const points: TelnyxDailyPoint[] = [];
+  let maxMicros = 0;
+  let totalMicros = 0;
+  for (let ms = Date.parse(window.startYmd); ymd(ms) < window.endYmdExclusive; ms += DAY_MS) {
+    const day = ymd(ms);
+    const perKey = byDay.get(day) ?? new Map<string, number>();
+    const bySeries = new Map<string, number>();
+    for (const [rawKey, micros] of perKey) {
+      const seriesKey =
+        rawKey === TELNYX_SERIES_UNATTRIBUTED ? rawKey : (seriesKeyByBusiness.get(rawKey) as string);
+      bySeries.set(seriesKey, (bySeries.get(seriesKey) ?? 0) + micros);
+    }
+    const segments = series
+      .map((entry) => ({
+        seriesKey: entry.seriesKey,
+        costMicros: bySeries.get(entry.seriesKey) ?? 0
+      }))
+      .filter((segment) => segment.costMicros > 0);
+    const costMicros = segments.reduce((sum, s) => sum + s.costMicros, 0);
+    maxMicros = Math.max(maxMicros, costMicros);
+    totalMicros += costMicros;
+    points.push({ day, costMicros, segments });
+  }
+  return { points, series, maxMicros, totalMicros };
+}
+
+export type TelnyxTenantWindowRow = {
+  /** null = matched no tenant DID (platform traffic, leak, or deleted tenant). */
+  businessId: string | null;
+  totalMicros: number;
+  carrierFeeMicros: number;
+  messagingMicros: number;
+  messagingCount: number;
+  voiceMicros: number;
+  voiceMinutes: number;
+  /** Integer percent of the window total; null when the window total is 0. */
+  sharePct: number | null;
+};
+
+export type TelnyxTenantWindowBreakdown = {
+  /** Biggest spender first; ties put the unattributed row last, then id order. */
+  tenants: TelnyxTenantWindowRow[];
+  totalMicros: number;
+  /** False when the sync has no rows at all inside the window. */
+  hasRows: boolean;
+};
+
+/** Per-tenant usage + cost rollup within the window, unattributed included. */
+export function buildTelnyxTenantWindowBreakdown(
+  rows: TelnyxCostDailyRow[],
+  window: TelnyxUsageWindow
+): TelnyxTenantWindowBreakdown {
+  const byBusiness = new Map<string | null, TelnyxTenantWindowRow>();
+  let totalMicros = 0;
+  for (const row of rows) {
+    if (!inUsageWindow(row.day, window)) continue;
+    let tenant = byBusiness.get(row.business_id);
+    if (!tenant) {
+      tenant = {
+        businessId: row.business_id,
+        totalMicros: 0,
+        carrierFeeMicros: 0,
+        messagingMicros: 0,
+        messagingCount: 0,
+        voiceMicros: 0,
+        voiceMinutes: 0,
+        sharePct: null
+      };
+      byBusiness.set(row.business_id, tenant);
+    }
+    tenant.totalMicros += row.cost_micros;
+    tenant.carrierFeeMicros += row.carrier_fee_micros;
+    if (row.record_type === "messaging") {
+      tenant.messagingMicros += row.cost_micros;
+      tenant.messagingCount += row.record_count;
+    } else {
+      tenant.voiceMicros += row.cost_micros;
+      tenant.voiceMinutes += row.billed_seconds / 60;
+    }
+    totalMicros += row.cost_micros;
+  }
+  const tenants = [...byBusiness.values()]
+    .map((tenant) => ({
+      ...tenant,
+      sharePct: totalMicros > 0 ? Math.round((tenant.totalMicros / totalMicros) * 100) : null
+    }))
+    .sort(
+      (a, b) =>
+        b.totalMicros - a.totalMicros ||
+        (a.businessId === null
+          ? 1
+          : b.businessId === null
+            ? -1
+            : a.businessId.localeCompare(b.businessId))
+    );
+  return { tenants, totalMicros, hasRows: tenants.length > 0 };
+}
+
 export type RenewalEvent = {
   kind: "hostinger_renewal" | "hostinger_lapse" | "term_rollover";
   at: string;
