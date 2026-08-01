@@ -116,8 +116,17 @@ type MdrRecord = Record<string, unknown>;
 /** Backstop against a runaway pull; 400 clamped pages is 20k records. */
 const MDR_MAX_PAGES = 400;
 
-/** Per-page 429 backoff schedule; the initial request precedes delay [0]. */
-const MDR_429_DELAYS_MS = [500, 1000, 2000, 4000, 8000];
+/**
+ * Per-page 429 backoff schedule; the initial request precedes delay [0].
+ * The Telnyx detail-records limiter is a windowed budget: the first 90-day
+ * backfill after the pagination fix burned through ~40 un-paced pages and
+ * then out-waited a [0.5s..8s] ladder without recovering, so the ladder
+ * has to reach the next window (error 10011).
+ */
+const MDR_429_DELAYS_MS = [1_000, 5_000, 15_000, 30_000, 60_000];
+
+/** Pause between page requests so a long pull stays under the limiter. */
+const MDR_PAGE_PACING_MS = 350;
 
 const defaultSleep = (ms: number): Promise<void> =>
   new Promise((resolve) => setTimeout(resolve, ms));
@@ -182,6 +191,7 @@ export async function fetchTelnyxDetailRecords(params: {
     } else if (rows.length < pageSize) {
       break;
     }
+    await sleepImpl(MDR_PAGE_PACING_MS);
   }
   return all;
 }
