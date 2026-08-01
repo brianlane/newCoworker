@@ -9,6 +9,7 @@ vi.mock("@/lib/voice-tools/connections", () => ({ resolveCalendarConnection: vi.
 vi.mock("@/lib/nango/workspace", () => ({ nangoProxyForBusiness: vi.fn() }));
 vi.mock("@/lib/db/businesses", () => ({ getBusinessTimezone: vi.fn() }));
 vi.mock("@/lib/calendar-tools/shared-calendar", () => ({
+  mirrorBookingToSharedCalendar: vi.fn(async () => null),
   getSharedCalendar: vi.fn(),
   ensureSharedCalendar: vi.fn()
 }));
@@ -62,7 +63,11 @@ import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import { resolveWaitlistAfterBooking } from "@/lib/calendar-tools/waitlist-resolve";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
 import { getBusinessTimezone } from "@/lib/db/businesses";
-import { ensureSharedCalendar, getSharedCalendar } from "@/lib/calendar-tools/shared-calendar";
+import {
+  ensureSharedCalendar,
+  getSharedCalendar,
+  mirrorBookingToSharedCalendar
+} from "@/lib/calendar-tools/shared-calendar";
 import {
   createCalendlyBookingLink,
   findCalendlySlots
@@ -123,6 +128,8 @@ beforeEach(() => {
   vi.mocked(getBusinessTimezone).mockResolvedValue(null);
   // Default: no shared NewCoworker calendar → pre-shared-calendar behavior.
   vi.mocked(getSharedCalendar).mockResolvedValue(null);
+  // Default: nothing mirrored, so the ledger confirm carries a null handle.
+  vi.mocked(mirrorBookingToSharedCalendar).mockResolvedValue(null);
   vi.mocked(ensureSharedCalendar).mockResolvedValue(null);
   // Default: dedupe ledger unavailable (fail-open) — bookings proceed exactly
   // as before the idempotency guard, which is what the pre-guard tests pin.
@@ -989,6 +996,83 @@ describe("bookCalendarAppointment", () => {
     });
   });
 
+  it("mirrors a Vagaro booking onto the team calendar and stores the handle", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(bookVagaroAppointment).mockResolvedValue({
+      ok: true,
+      data: { eventId: "appt-1", provider: "vagaro" }
+    } as never);
+    // The mirror handle lives on the ledger row, so mirroring only happens
+    // when there is a claim to store it against: an unmanageable mirror is
+    // exactly what this feature must not create.
+    vi.mocked(claimBookingDedupe).mockResolvedValue({ kind: "claimed", id: "claim-9" } as never);
+    vi.mocked(mirrorBookingToSharedCalendar).mockResolvedValueOnce("mirror-1" as never);
+    await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+    expect(vi.mocked(mirrorBookingToSharedCalendar)).toHaveBeenCalledWith(
+      BIZ,
+      "vagaro",
+      expect.objectContaining({ summary: ARGS.summary, attendeePhone: "+15551230000" })
+    );
+    // The handle rides the ledger row so reschedule/cancel can keep it in step.
+    expect(vi.mocked(confirmBookingDedupe)).toHaveBeenCalledWith(
+      "claim-9",
+      "appt-1",
+      null,
+      "mirror-1"
+    );
+  });
+
+  it("mirrors with the model's own attendee phone when it supplied one", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(bookVagaroAppointment).mockResolvedValue({
+      ok: true,
+      data: { eventId: "appt-2", provider: "vagaro" }
+    } as never);
+    vi.mocked(claimBookingDedupe).mockResolvedValue({ kind: "claimed", id: "claim-8" } as never);
+    await bookCalendarAppointment(
+      BIZ,
+      { ...ARGS, attendeePhone: "+15559999999", notes: "back entrance" },
+      "+15551230000"
+    );
+    expect(vi.mocked(mirrorBookingToSharedCalendar)).toHaveBeenCalledWith(
+      BIZ,
+      "vagaro",
+      expect.objectContaining({ attendeePhone: "+15559999999", notes: "back entrance" })
+    );
+  });
+
+  it("mirrors with a null phone when neither the model nor the surface has one", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(bookVagaroAppointment).mockResolvedValue({
+      ok: true,
+      data: { eventId: "appt-4", provider: "vagaro" }
+    } as never);
+    vi.mocked(claimBookingDedupe).mockResolvedValue({ kind: "claimed", id: "claim-6" } as never);
+    await bookCalendarAppointment(BIZ, ARGS);
+    expect(vi.mocked(mirrorBookingToSharedCalendar)).toHaveBeenCalledWith(
+      BIZ,
+      "vagaro",
+      expect.objectContaining({ attendeePhone: null })
+    );
+  });
+
+  it("passes an empty provider when the result does not name one", async () => {
+    // bookingNeedsSharedCalendarMirror then answers false, so nothing is
+    // mirrored rather than mirrored against an unknown provider.
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(bookVagaroAppointment).mockResolvedValue({
+      ok: true,
+      data: { eventId: "appt-3" }
+    } as never);
+    vi.mocked(claimBookingDedupe).mockResolvedValue({ kind: "claimed", id: "claim-7" } as never);
+    await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
+    expect(vi.mocked(mirrorBookingToSharedCalendar)).toHaveBeenCalledWith(
+      BIZ,
+      "",
+      expect.anything()
+    );
+  });
+
   it("a failed Vagaro booking fires no goal event", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
     vi.mocked(bookVagaroAppointment).mockResolvedValue({
@@ -1427,7 +1511,7 @@ describe("bookCalendarAppointment — retry idempotency guard (2026-07-13 quadru
     vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "ev-1" } } as never);
     const result = await bookCalendarAppointment(BIZ, ARGS, "+15551230000");
     expect(result.ok).toBe(true);
-    expect(vi.mocked(confirmBookingDedupe)).toHaveBeenCalledWith("claim-1", "ev-1", null);
+    expect(vi.mocked(confirmBookingDedupe)).toHaveBeenCalledWith("claim-1", "ev-1", null, null);
     expect(vi.mocked(releaseBookingDedupe)).not.toHaveBeenCalled();
   });
 
@@ -1499,7 +1583,7 @@ describe("bookCalendarAppointment — Zoom decorator", () => {
       zoomMeetingId: "zm-1",
       zoomJoinUrl: "https://zoom.us/j/123"
     });
-    expect(vi.mocked(confirmBookingDedupe)).toHaveBeenCalledWith("claim-1", "ev-1", "zm-1");
+    expect(vi.mocked(confirmBookingDedupe)).toHaveBeenCalledWith("claim-1", "ev-1", "zm-1", null);
     expect(vi.mocked(deleteZoomMeetingForBooking)).not.toHaveBeenCalled();
   });
 

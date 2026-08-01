@@ -37,6 +37,10 @@ import {
   deleteZoomMeetingForBooking,
   updateZoomMeetingForBooking
 } from "@/lib/zoom/meetings";
+import {
+  moveSharedCalendarMirror,
+  removeSharedCalendarMirror
+} from "@/lib/calendar-tools/shared-calendar";
 import { offerFreedSlot } from "@/lib/calendar-tools/waitlist-fill";
 import {
   cancelWaitlistForAttendee,
@@ -557,6 +561,17 @@ export async function rescheduleCalendarAppointment(
             endIso: args.newEndIso
           });
         }
+        // Move the shared-calendar mirror with it. A mirror left at the old
+        // time is worse than none: the team plans around an appointment that
+        // is no longer there.
+        if (claim.sharedCalendarEventId) {
+          await moveSharedCalendarMirror(
+            businessId,
+            claim.sharedCalendarEventId,
+            args.newStartIso,
+            args.newEndIso
+          );
+        }
         // Waitlist (both best-effort by module contract): the attendee's
         // own live entries resolve against the new start FIRST, then the
         // vacated OLD slot is offered to whoever is waiting, with the
@@ -568,7 +583,12 @@ export async function rescheduleCalendarAppointment(
       } else if (moved.detail === "booking_not_found") {
         // The provider event is gone (deleted upstream) but the ledger row
         // survived — drop it so the stale claim can't shadow the slot or
-        // resolve future lifecycle calls to a dead event.
+        // resolve future lifecycle calls to a dead event. Its mirror goes
+        // with it: the appointment it represents no longer exists, and a
+        // surviving mirror is what the team plans around.
+        if (claim.sharedCalendarEventId) {
+          await removeSharedCalendarMirror(businessId, claim.sharedCalendarEventId);
+        }
         await deleteBookingClaim(claim.id);
       }
       return moved;
@@ -744,6 +764,12 @@ export async function cancelCalendarAppointment(
         if (claim.zoomMeetingId) {
           await deleteZoomMeetingForBooking(businessId, claim.zoomMeetingId);
         }
+        // Remove the shared-calendar mirror too. This is the half that makes
+        // mirroring safe to ship: a mirror surviving its cancellation shows
+        // the team an appointment that is not happening, and they act on it.
+        if (claim.sharedCalendarEventId) {
+          await removeSharedCalendarMirror(businessId, claim.sharedCalendarEventId);
+        }
         // Waitlist (best-effort by module contract): the canceler's own
         // entries are moot and drop FIRST, then the canceled slot is
         // offered to whoever is waiting, with the canceler excluded so a
@@ -752,6 +778,17 @@ export async function cancelCalendarAppointment(
         const attendee = { phones: phone ? [phone] : [], email: args.attendeeEmail ?? null };
         await cancelWaitlistForAttendee(businessId, attendee);
         await offerFreedSlot(businessId, claim.startAt, {}, attendee);
+      } else if (canceled.detail === "booking_not_found") {
+        // The provider no longer has the appointment (deleted upstream, or
+        // the claim's start has drifted from reality). Either way the row is
+        // stale: drop it so it cannot shadow future lifecycle calls, and
+        // take its mirror with it, matching the reschedule path above. A
+        // mirror representing a booking the provider cannot find is showing
+        // the team something that does not exist.
+        if (claim.sharedCalendarEventId) {
+          await removeSharedCalendarMirror(businessId, claim.sharedCalendarEventId);
+        }
+        await deleteBookingClaim(claim.id);
       }
       return canceled;
     }
