@@ -299,7 +299,33 @@ describe("processAcuityAppointmentEvent", () => {
     ).toBe("2026-08-06T19:00:00.000Z");
   });
 
-  it("syncs the contact only while the appointment stands", async () => {
+  it("offers NOTHING to the waitlist when an edit did not move the appointment", async () => {
+    // Acuity sends `changed` for intake edits and notes too. A recorded
+    // start equal to where the appointment still sits was never vacated,
+    // and offering it would tell a waitlisted customer a slot opened while
+    // it is very much still booked.
+    const d = deps({
+      claimStarts: vi.fn().mockResolvedValue(["2026-08-05T17:00:00.000Z"])
+    });
+    await processAcuityAppointmentEvent(BIZ, CONN, { ...EVENT, action: "changed" }, d);
+    expect((d as never as { offerSlot: { mock: { calls: unknown[] } } }).offerSlot.mock.calls)
+      .toHaveLength(0);
+  });
+
+  it("offers only the starts an edit actually vacated", async () => {
+    const d = deps({
+      hydrate: vi.fn().mockResolvedValue(appt({ startIso: "2026-08-06T19:00:00.000Z" })),
+      claimStarts: vi
+        .fn()
+        .mockResolvedValue(["2026-08-05T17:00:00.000Z", "2026-08-06T19:00:00.000Z"])
+    });
+    await processAcuityAppointmentEvent(BIZ, CONN, { ...EVENT, action: "changed" }, d);
+    const offered = (d as never as { offerSlot: { mock: { calls: unknown[][] } } }).offerSlot.mock
+      .calls.map((c) => c[1]);
+    expect(offered).toEqual(["2026-08-05T17:00:00.000Z"]);
+  });
+
+  it("syncs the contact only while the appointment stands", async () =>{
     const standing = deps();
     await processAcuityAppointmentEvent(BIZ, CONN, EVENT, standing);
     expect((standing as never as { syncContact: { mock: { calls: unknown[] } } }).syncContact.mock.calls)

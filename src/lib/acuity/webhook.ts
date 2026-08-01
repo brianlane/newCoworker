@@ -368,7 +368,17 @@ export async function processAcuityAppointmentEvent(
       );
       if (!created) {
         // A move vacates exactly the old slot(s); capture them first.
-        vacatedStarts = await claimStarts(businessId, appt.id);
+        //
+        // But `changed` also fires for edits that do NOT move the
+        // appointment at all (an intake answer, a note), and Acuity sends it
+        // alongside `scheduled`. Any recorded start that equals where the
+        // appointment still sits was never vacated, so drop it: offering it
+        // would text a waitlisted customer that a slot opened while it is
+        // very much still booked.
+        const currentMs = Date.parse(appt.startIso);
+        vacatedStarts = (await claimStarts(businessId, appt.id)).filter(
+          (startIso) => Date.parse(startIso) !== currentMs
+        );
         await deleteClaims(businessId, appt.id);
       }
       await recordClaim(businessId, attendeeKey, appt.startIso, appt.id);
