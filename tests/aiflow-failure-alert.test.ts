@@ -79,7 +79,7 @@ describe("describeLead", () => {
     ).toBe("James Test Six (james@example.com)");
     expect(describeLead({ invitee_name: "James Test Six" })).toBe("James Test Six");
     expect(describeLead({ invitee_email: "james@example.com" })).toBe("james@example.com");
-    // lead_* vars still win over invitee_*; phone still wins over email.
+    // lead_* vars still win over invitee_*; phone and email both render.
     expect(
       describeLead({
         lead_name: "Ada",
@@ -87,10 +87,30 @@ describe("describeLead", () => {
         lead_phone: "+15551234567",
         invitee_email: "bob@example.com"
       })
-    ).toBe("Ada (+15551234567)");
+    ).toBe("Ada (+15551234567, bob@example.com)");
     // The extractor's literal "none"/"NONE" placeholders never surface.
     expect(describeLead({ lead_name: "NONE", invitee_phone: "none" })).toBe(
       "an unidentified lead"
+    );
+  });
+
+  it("names both phone and email when both exist (KYP Aug 1 2026 alert)", () => {
+    // The Aug 1 alert led with the undialable number and dropped the one
+    // working way to reach the lead. Both parts must render together, so a
+    // failing phone still leaves the owner the email.
+    expect(
+      describeLead({
+        lead_name: "Ada",
+        lead_phone: "+16133439985030",
+        lead_email: "lead@example.com"
+      })
+    ).toBe("Ada (+16133439985030, lead@example.com)");
+    // A scrubbed phone ("none") leaves the email alone, as before.
+    expect(describeLead({ lead_name: "Ada", lead_phone: "none", lead_email: "lead@example.com" })).toBe(
+      "Ada (lead@example.com)"
+    );
+    expect(describeLead({ lead_phone: "+15551234567", lead_email: "lead@example.com" })).toBe(
+      "+15551234567, lead@example.com"
     );
   });
 });

@@ -5197,6 +5197,19 @@ async function sendSmsStep(
     ).trim();
     if (!bodyText) return { kind: "fail", error: "send_sms: body is empty after templating" };
   }
+  // NANP backstop for recipients the planner never coerced (roster phones,
+  // saved contact/employee refs, and any legacy contact row filed before
+  // coerceDialableE164 existed): a `+1` number the strict normalizer rejects
+  // is a guaranteed Telnyx 40310, so fail with the same readable permanent
+  // message without the carrier round-trip.
+  if (toE164.startsWith("+1") && !normalizeNanpToE164(toE164)) {
+    return {
+      kind: "fail",
+      error:
+        `send_sms: the carrier would reject the text to ${toE164} and a retry can't fix it, ` +
+        `a +1 number needs exactly 10 more digits so it isn't a real dialable line.`
+    };
+  }
   // An employee recipient (named, var-named, or referenced) is an internal
   // teammate text: never quiet-hours-deferred and never filed as a lead. A
   // contact ref is a lead-side recipient, so it is treated like a plain `to`.

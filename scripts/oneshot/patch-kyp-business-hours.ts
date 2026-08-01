@@ -26,7 +26,7 @@
  *   npx tsx scripts/oneshot/patch-kyp-business-hours.ts --business <uuid> --apply  # write
  */
 import { loadEnv } from "../../debug/_shared.ts";
-import { KYP_FLOW_NAME, KYP_TIME_WINDOW } from "./kyp-offer-definition.ts";
+import { KYP_FLOW_NAME, KYP_TIME_WINDOW } from "./kyp-lead-flow-definition.ts";
 
 loadEnv();
 

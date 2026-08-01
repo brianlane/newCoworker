@@ -6,6 +6,7 @@ import {
   CLASSIFY_UNCLEAR,
   parseClassifyChoice,
   buildNowScope,
+  coerceDialableE164,
   evaluateSmsTrigger,
   evaluateStepCondition,
   extractLeadIdentity,
@@ -842,6 +843,23 @@ describe("postProcessExtractedField", () => {
     ).toBe("+442071234567");
   });
 
+  it("never keeps a +1 value the NANP rules rejected (KYP Ads, Aug 1 2026)", () => {
+    // The lead typed 3 stray digits; Meta's payload carried the "+" itself,
+    // so the source-corroboration arm used to bless it as "international"
+    // and Telnyx returned a guaranteed 40310. Country code 1 is NANP-only.
+    expect(
+      postProcessExtractedField(
+        "lead_phone",
+        "+16133439985030",
+        "full_name: G\nphone_number: +16133439985030\nemail: g@example.com"
+      )
+    ).toBe("none");
+    // The same digits without the bogus tail still normalize as before.
+    expect(
+      postProcessExtractedField("lead_phone", "+16133439985", "phone_number: +16133439985")
+    ).toBe("+16133439985");
+  });
+
   it("passes a digitless value through, because the send planner already stops it", () => {
     // Prose in a real phone field is NOT coerced to "none" any more. That is
     // safe rather than a #885 regression: the value the sanitizer exists to
@@ -1270,6 +1288,34 @@ describe("isE164", () => {
     expect(isE164("+0123456789")).toBe(false);
     expect(isE164("+1")).toBe(false);
     expect(isE164("+1602686667a")).toBe(false);
+  });
+});
+
+describe("coerceDialableE164", () => {
+  it("keeps a valid NANP number, with or without formatting", () => {
+    expect(coerceDialableE164("+16133439985")).toBe("+16133439985");
+    expect(coerceDialableE164("(613) 343-9985")).toBe("+16133439985");
+    expect(coerceDialableE164("16133439985")).toBe("+16133439985");
+    expect(coerceDialableE164(" +16026866672 ")).toBe("+16026866672");
+  });
+  it("keeps a structural international number (non-NANP plans are not encoded)", () => {
+    expect(coerceDialableE164("+447911123456")).toBe("+447911123456");
+    expect(coerceDialableE164("+492046781")).toBe("+492046781");
+  });
+  it("rejects +1 numbers that cannot exist (the KYP Aug 1 2026 lead)", () => {
+    // 13 national digits: passes isE164's structural check, never dialable.
+    expect(coerceDialableE164("+16133439985030")).toBeNull();
+    // The Privyr digest case memorialized in the worker's 4xx comment.
+    expect(coerceDialableE164("+11459337300")).toBeNull();
+    // Too short, and 0/1-leading area or exchange codes.
+    expect(coerceDialableE164("+1613343998")).toBeNull();
+    expect(coerceDialableE164("+10133439985")).toBeNull();
+    expect(coerceDialableE164("+16131439985")).toBeNull();
+  });
+  it("rejects values that are not phone numbers at all", () => {
+    expect(coerceDialableE164("none")).toBeNull();
+    expect(coerceDialableE164("")).toBeNull();
+    expect(coerceDialableE164("call me maybe")).toBeNull();
   });
 });
 

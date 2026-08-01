@@ -9,6 +9,7 @@
  * dispatcher that switches on `action.kind`.
  */
 import {
+  coerceDialableE164,
   firstUrlInText,
   isE164,
   isPlaceholderLeadName,
@@ -989,7 +990,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       // "(840) 275-3158", "840.275.3158" — so coerce NANP shapes to +1XXXXXXXXXX
       // and fail fast (no retries) on anything unparseable instead of burning
       // MAX_ATTEMPTS on a guaranteed Telnyx 40310 "Invalid 'to' address".
-      const to = isE164(toRaw) ? toRaw : normalizeNanpToE164(toRaw);
+      const to = coerceDialableE164(toRaw);
       if (!to) {
         if (fromTemplateVar) {
           return {
@@ -1085,12 +1086,17 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       // E.164, NANP shapes, and any 8-15 digit non-zero-leading run —
       // mirroring the deliver helper's toWaId.
       const waDigits = waToRaw.replace(/\D/g, "");
-      const waTo = isE164(waToRaw)
+      const waToLoose = isE164(waToRaw)
         ? waToRaw
         : (normalizeNanpToE164(waToRaw) ??
           (waDigits.length >= 8 && waDigits.length <= 15 && !waDigits.startsWith("0")
             ? `+${waDigits}`
             : null));
+      // Country code 1 is NANP-only: a `+1` result the strict normalizer
+      // rejects (wrong length, or 0/1-leading area/exchange code) is just as
+      // undialable on WhatsApp, and the digit-run fallback above would
+      // otherwise resurrect exactly the junk coerceDialableE164 stops.
+      const waTo = waToLoose?.startsWith("+1") ? normalizeNanpToE164(waToLoose) : waToLoose;
       if (!waTo) {
         if (waFromTemplateVar) {
           return {
@@ -1141,7 +1147,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         return { ok: false, error: "share_document: recipient is empty after templating" };
       }
       if (via === "sms") {
-        const to = isE164(toRaw) ? toRaw : normalizeNanpToE164(toRaw);
+        const to = coerceDialableE164(toRaw);
         if (!to) {
           if (fromTemplateVar) {
             return {
@@ -1550,7 +1556,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       }
       const raw = scope.vars?.[step.phoneVar];
       const phone = typeof raw === "string" ? raw.trim() : "";
-      const e164 = phone ? (isE164(phone) ? phone : normalizeNanpToE164(phone)) : null;
+      const e164 = phone ? coerceDialableE164(phone) : null;
       if (!e164) {
         // A lead-data gap, not a flow bug: resolve straight to the no-reply
         // branch instead of parking a run that can never be resumed.
@@ -1612,7 +1618,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       };
       const raw = scope.vars?.[step.toVar];
       const phone = typeof raw === "string" ? raw.trim() : "";
-      const e164 = phone ? (isE164(phone) ? phone : normalizeNanpToE164(phone)) : null;
+      const e164 = phone ? coerceDialableE164(phone) : null;
       if (!e164) {
         // A lead-data gap, not a flow bug: skip with the not_placed sentinel
         // instead of failing a run that can still notify/branch usefully.
@@ -1644,7 +1650,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       // Accept an already-E.164 phone or a loose North-American number; the
       // customer record is keyed by E.164, so an unusable value is a recoverable
       // "missing input" (skip-able), not a thrown error.
-      const e164 = phone ? (isE164(phone) ? phone : normalizeNanpToE164(phone)) : null;
+      const e164 = phone ? coerceDialableE164(phone) : null;
       if (!e164) {
         // Skip (with a note), never fail — mirroring update_contact and the
         // send steps. A "none"/empty/scrubbed phone slips past a
@@ -1735,7 +1741,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
     case "update_contact": {
       const raw = scope.vars?.[step.phoneVar];
       const phone = typeof raw === "string" ? raw.trim() : "";
-      const e164 = phone ? (isE164(phone) ? phone : normalizeNanpToE164(phone)) : null;
+      const e164 = phone ? coerceDialableE164(phone) : null;
       const addTags = step.addTags ?? [];
       const removeTags = step.removeTags ?? [];
       if (!e164) {

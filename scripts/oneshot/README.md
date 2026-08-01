@@ -21,11 +21,21 @@ and is **not** part of any automated path.
 
 | Script | What it does |
 | --- | --- |
-| `patch-kyp-offer-branch.ts` | Rewrites KYP Ads' "Lead follow-up (white-glove build)" flow to route by Facebook lead form: form name containing "Simple form setup 5/7/26" or "100/week" → the $100/week greeting/Calendly link, everything else → $200/week. Deterministic branch (no LLM classify); idempotent — re-running `--apply` resets the flow to this known-good shape. `--business <uuid>` (or `KYP_BUSINESS_ID`). Applied 2026-07-17 (ledger-recorded). |
+| `patch-kyp-bad-phone-intake.ts` | Gives KYP Ads' "Lead follow-up (white-glove build)" flow a bad-phone intake arm (Aug 1 2026: an undialable lead number killed the run at the greeting with the owner-notify step behind it): notify_owner + a lead email with the booking link when `lead_phone` extracts as "none", plus `notEquals` guards on `s_notify`/`s_wait_1` so the reply ladder collapses. Transforms the LIVE definition (never a builder overwrite); parked runs re-anchor by `__resume_step_id`, so the apply refuses only when an in-flight run lacks that marker (`--force` overrides). Idempotent, dry-run by default, ledger-recorded. Step copy is shared with `kyp-lead-flow-definition.ts` and pinned equivalent by `tests/oneshot-kyp-definitions.test.ts`. |
 | `recover-amy-biennial-switch.ts` | Completes a change-plan whose Hostinger purchase "failed but charged" (HTTP 402 while the order completed server-side): re-derives the paid checkout from Stripe metadata, backs up the old box, adopts the already-paid VM as the orchestrator's injected provisioner, restores data, creates the new sub row (pointing at the canceled-but-paid Stripe sub), cancels the old monthly Stripe sub, and pools the old box with auto-renew off. `--business <uuid> --adopt-vm <vmId>`; dry-run by default, ledger-recorded. |
 | `fix-staff-contact-rows.ts` | Deletes contact rows a pre-fix AiFlow send filed for a ROSTER MEMBER (the Dave Lane defect, Jul 25 2026: a post-claim hand-off addressed the teammate through a phone var, so the engine filed them as a new customer and stamped the LEAD's name on the row). Audits every roster number for a business, or just the given `--phone` ones (repeatable); deletes only while the row still looks like the untouched artifact (type `customer`, `name_source` auto, no aliases/tags/owner/email/memory) and re-asserts that shape in the DELETE. Idempotent (a deleted row simply reports clean), dry-run by default, ledger-recorded. |
 
 ## Removed
+
+`patch-kyp-offer-branch.ts` (and its builder's old name,
+`kyp-offer-definition.ts`, now `kyp-lead-flow-definition.ts`) was retired
+Aug 1 2026. The in-flow $100/$200 offer branch it applied stopped existing
+between Jul 19 and Jul 24 2026: the live flow was reshaped outside the
+ledger (flat steps, offer selection moved to a webhook trigger condition on
+the Simple-form name, new copy, nudge window widened to 21:00), and the
+decision was that the live flow is the source of truth. Re-applying the
+stale builder would have reverted the tenant, so the applier was deleted and
+the builder was reconciled to the live shape (plus the bad-phone arm).
 
 A previous generation of customer-specific one-shots
 (`finish-provision-stuck-business.ts`, `live-apply-bootstrap.ts`,
