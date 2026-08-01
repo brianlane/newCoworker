@@ -2533,6 +2533,14 @@ which compares the PR against the live tip of main, the case a local
 integration job. Fix one by rebasing and re-running the helper, never by
 editing a file already applied to production.
 
+When you re-stamp, remember the helper creates an EMPTY scaffold: move the
+SQL into the new file and check `wc -c` on it before deleting the old copy.
+PR #1077 shipped a zero-byte migration by deleting the only copy that held
+the DDL (repaired in PR #1091); `tests/migration-not-empty.test.ts` now fails
+a PR carrying an empty migration file. The long form, including the one
+allowlisted historical file, lives in
+[supabase/migrations/CLAUDE.md](supabase/migrations/CLAUDE.md).
+
 ### Post-merge: what CI does vs what you still do
 
 **CI does automatically on every push to main** (the `Vercel Deploy` job, in
