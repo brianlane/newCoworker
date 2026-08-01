@@ -57,6 +57,9 @@ export async function POST(request: Request) {
     // so the dashboard "Recent notifications" list is the source of truth.
     if (urgency.shouldNotify) {
       try {
+        // No contactE164 on purpose: this is a thread-level urgency flag
+        // with no per-contact identity plumbed through, so there is nothing
+        // to route on. Contact-scoped pages go through notify_team.
         await dispatchUrgentNotification({
           businessId: log.businessId,
           summary: urgency.summary,

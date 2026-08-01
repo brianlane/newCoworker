@@ -168,6 +168,9 @@ export async function POST(request: Request) {
         const summary = args.reason
           ? `Urgent call: ${args.reason}`.slice(0, 200)
           : "Urgent caller request";
+        // No contactE164 on purpose: a capture is a brand-new caller, so
+        // by definition no teammate owns them yet and there is nobody to
+        // redirect to. The owner-visible capture feed is the point.
         await dispatchUrgentNotification({
           businessId: envelope.businessId,
           summary,

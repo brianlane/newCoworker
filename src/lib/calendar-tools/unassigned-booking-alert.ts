@@ -132,6 +132,10 @@ export async function maybeAlertUnassignedBooking(
       summary,
       emailSubject: `New appointment needs an owner: ${who}, ${input.startLocal}`,
       emailBody: detailLines.join("\n\n"),
+      // No top-level contactE164 on purpose: this alert only ever fires for
+      // an UNOWNED contact (the owned case returns "skipped_owned" above), so
+      // owner-redirection could never do anything here. The contactE164 in
+      // the payload below is a dedupe key, not a routing input.
       smsBody: `New Coworker Alert: ${summary}. No teammate owns this lead yet. Assign it so the appointment is covered.`,
       payload: {
         attendee_name: input.attendeeName,

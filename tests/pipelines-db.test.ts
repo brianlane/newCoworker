@@ -21,6 +21,7 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { planLifecycleStageWrites } from "../supabase/functions/_shared/pipelines/stages";
 
 type Result = { data: unknown; error: unknown };
 
@@ -575,6 +576,49 @@ describe("updateStage", () => {
     expect(db.chains.contacts[1].update).toHaveBeenCalledWith(
       expect.objectContaining({ tags: ["VIP", "Fresh Lead"] })
     );
+  });
+
+  it("renaming a lifecycle stage carries leads over, then stops auto-tagging it", async () => {
+    // Both halves of one consequence, asserted together because they are easy
+    // to change apart. Renaming "New Lead" to "Fresh Lead" brings the leads
+    // the PLATFORM tagged along with it (no lead falls off the board)...
+    const db = mockDb({
+      pipeline_stages: [
+        { data: S1, error: null },
+        { data: [S1, S2], error: null },
+        { data: { ...S1, name: "Fresh Lead" }, error: null }
+      ],
+      contacts: [
+        { data: [{ id: "c1", tags: ["New Lead", "Clever"] }], error: null },
+        { data: null, error: null }
+      ]
+    });
+    const { retagged } = await updateStage(
+      "biz-1",
+      "p1",
+      "s1",
+      { name: "Fresh Lead" },
+      db as never
+    );
+    expect(retagged).toBe(1);
+    expect(db.chains.contacts[1].update).toHaveBeenCalledWith(
+      expect.objectContaining({ tags: ["Clever", "Fresh Lead"] })
+    );
+
+    // ...and from then on the platform writes nothing for that moment, because
+    // the stage-must-exist gate no longer finds a column called "New Lead".
+    // That is the intended opt-out: the tenant renamed the column, so the
+    // platform stops filling it rather than resurrecting the old tag.
+    const renamedBoard = [
+      { pipelineId: "p1", stages: [{ id: "s1", name: "Fresh Lead", position: 0 }] }
+    ];
+    const plan = planLifecycleStageWrites({
+      event: "lead_filed",
+      currentTags: ["Clever"],
+      pipelines: renamedBoard
+    });
+    expect(plan.changed).toBe(false);
+    expect(plan.nextTags).toEqual(["Clever"]);
   });
 
   it("pages the retag scan through the whole tenant (keyset on id)", async () => {

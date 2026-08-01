@@ -98,6 +98,10 @@ describe("api/rowboat route", () => {
         summary: expect.stringContaining("URGENT")
       })
     );
+    // Deliberately NOT contact-scoped: a thread-level urgency flag carries no
+    // per-contact identity. Contact-scoped pages go through notify_team.
+    const arg = vi.mocked(dispatchUrgentNotification).mock.calls[0][0];
+    expect(arg).not.toHaveProperty("contactE164");
   });
 
   it("returns 200 even if the dispatcher throws (alert is best-effort)", async () => {

@@ -188,6 +188,16 @@ describe("recordLeadSubmission", () => {
     });
   });
 
+  it("never touches contacts.lead_source (the two source paths stay separate)", async () => {
+    // Webhook leads carry their upstream label here; flow-filed leads carry
+    // theirs on the contact row. The Data view prefers this one and falls
+    // back to that one, which only works while each path owns its own field.
+    const { db, upsert } = upsertDb();
+    await recordLeadSubmission("biz-1", INPUT, db as never);
+    expect(upsert.mock.calls[0][0]).not.toHaveProperty("lead_source");
+    expect(db.from).not.toHaveBeenCalledWith("contacts");
+  });
+
   it("bounds source and event_key lengths", async () => {
     const { db, upsert } = upsertDb();
     await recordLeadSubmission(
