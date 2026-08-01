@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { LegalPage, LegalSection } from "@/components/legal/LegalPage";
+import { contactEmail as resolveContactEmail } from "@/lib/marketing/contact-email";
 import { TIER_LIMITS } from "@/lib/plans/limits";
 
 const EFFECTIVE_DATE = "April 2, 2026";
@@ -13,7 +14,7 @@ export const metadata: Metadata = {
 };
 
 export default function TermsPage() {
-  const contactEmail = process.env.CONTACT_EMAIL ?? "team@newcoworker.com";
+  const contactEmail = resolveContactEmail();
 
   return (
     <LegalPage

@@ -1,3 +1,4 @@
+import { contactEmail } from "@/lib/marketing/contact-email";
 import { siteUrl } from "@/lib/marketing/site-url";
 
 /**
@@ -13,8 +14,9 @@ import { siteUrl } from "@/lib/marketing/site-url";
  * because scanners read it as an abandoned policy. One year out, recomputed
  * per request.
  *
- * Origins come from `siteUrl` rather than literals, per the single-home rule
- * for deployment constants in `src/lib/marketing/site-url.ts`.
+ * Origins come from `siteUrl` and the contact address from `contactEmail`,
+ * rather than literals, per the single-home rule for deployment constants in
+ * `src/lib/marketing/site-url.ts`.
  */
 
 export const dynamic = "force-dynamic";
@@ -24,14 +26,12 @@ const EXPIRY_MS = 365 * 24 * 60 * 60 * 1000;
 
 export function GET(): Response {
   const expires = new Date(Date.now() + EXPIRY_MS).toISOString();
-  // Same expression as the sibling legal pages (privacy, terms, and the
-  // disclosure policy this file points at). Hardcoding the fallback here
-  // would silently disagree with the policy page whenever CONTACT_EMAIL is
-  // set, and the policy page tells readers the two addresses are the same.
-  const contactEmail = process.env.CONTACT_EMAIL ?? "team@newcoworker.com";
-
+  // Same accessor as the sibling legal pages (privacy, terms, and the
+  // disclosure policy this file points at), which is the point: the policy
+  // page tells readers the two addresses are the same, so they have to
+  // resolve from one place.
   const body = [
-    `Contact: mailto:${contactEmail}`,
+    `Contact: mailto:${contactEmail()}`,
     `Policy: ${siteUrl("/security/vulnerability-disclosure")}`,
     `Expires: ${expires}`,
     "Preferred-Languages: en, es",

@@ -1,9 +1,10 @@
 /**
- * GET /.well-known/security.txt — RFC 9116 vulnerability disclosure pointer.
+ * GET /.well-known/security.txt: RFC 9116 vulnerability disclosure pointer.
  */
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 
 import { GET } from "@/app/.well-known/security.txt/route";
+import { CONTACT_EMAIL } from "@/lib/marketing/contact-email";
 
 async function body(): Promise<string> {
   return await GET().text();
@@ -37,7 +38,7 @@ describe("GET /.well-known/security.txt", () => {
 
   it("carries the required RFC 9116 fields", async () => {
     const text = await body();
-    expect(text).toContain("Contact: mailto:team@newcoworker.com");
+    expect(text).toContain(`Contact: mailto:${CONTACT_EMAIL}`);
     expect(text).toContain("Policy: https://www.newcoworker.com/security/vulnerability-disclosure");
     expect(text).toContain("Canonical: https://www.newcoworker.com/.well-known/security.txt");
     expect(text).toMatch(/^Expires: /m);
