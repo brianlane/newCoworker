@@ -3,7 +3,7 @@ import { LegalPage, LegalSection } from "@/components/legal/LegalPage";
 import { contactEmail as resolveContactEmail } from "@/lib/marketing/contact-email";
 import { TIER_LIMITS } from "@/lib/plans/limits";
 
-const EFFECTIVE_DATE = "April 2, 2026";
+const EFFECTIVE_DATE = "August 1, 2026";
 
 export const metadata: Metadata = {
   title: "Terms of Service",
@@ -37,9 +37,14 @@ export default function TermsPage() {
 
       <LegalSection title="2. The Service">
         <p>
-          New Coworker provides tools that help businesses configure and operate AI-enabled workflows, including
-          voice, text messaging, email, onboarding automation, memory management, dashboards, and related
-          infrastructure or support services. Features vary by subscription tier and may change over time.
+          New Coworker provides tools that help businesses configure and operate AI-enabled workflows and
+          communications. Depending on your plan and configuration, the service includes inbound and outbound
+          voice calls (including call transfer and live translation assistance), text messaging (SMS, MMS, and
+          RCS), website chat, connected messaging channels (such as WhatsApp, Facebook Messenger, and
+          Instagram), email handling and hosted mailboxes, scheduling and public booking pages, documents and
+          electronic signatures, calendar and other third-party integrations, APIs and webhooks, onboarding
+          automation, memory management, dashboards, and related infrastructure or support services. Features
+          vary by subscription tier and may change over time.
         </p>
       </LegalSection>
 
@@ -59,6 +64,8 @@ export default function TermsPage() {
           <li>Compliance with laws applicable to your business, including consumer protection, privacy, telemarketing, TCPA, anti-spam, call-recording, marketing, sector-specific, and licensing rules.</li>
           <li>Reviewing AI-generated output and configuring the service appropriately for your use case.</li>
           <li>Maintaining a human escalation path where your business or applicable law requires one.</li>
+          <li>Providing any notices and obtaining any consents required where AI participates in, transcribes, or summarizes calls or other conversations with your end users.</li>
+          <li>Lawful use of lead-generation, prospecting, and outreach features, including having a lawful basis to contact each recipient, accurately identifying the sender, and honoring unsubscribe and opt-out requests.</li>
         </ul>
       </LegalSection>
 
@@ -89,6 +96,12 @@ export default function TermsPage() {
           maintain practices consistent with applicable telecom and marketing laws.
         </p>
         <p>
+          Calls handled by the service may be processed by AI in real time and stored as text transcripts and
+          summaries in order to provide the service, and AI assistance (such as live translation) may remain
+          active on a call after it is transferred to a person. You are responsible for providing any recording,
+          transcription, or AI-participation notices to your end users that applicable law requires.
+        </p>
+        <p>
           Standard carrier rules, message and data rates, throughput limits, and third-party platform policies may apply.
         </p>
       </LegalSection>
@@ -108,7 +121,9 @@ export default function TermsPage() {
           Where your plan includes capped SMS, usage is enforced as a strict monthly limit (for
           example, {TIER_LIMITS.starter.smsPerMonth} SMS on Starter and {TIER_LIMITS.standard.smsPerMonth} SMS on
           Standard at the effective date above). Included voice is allocated per Stripe billing period as shown
-          when you subscribe. Enterprise and custom agreements may differ.
+          when you subscribe. Enterprise and custom agreements may differ. We may offer usage packs and other
+          add-ons for additional capacity; add-on purchases are governed by these Terms, including the refund
+          provisions in Section 9.
         </p>
       </LegalSection>
 

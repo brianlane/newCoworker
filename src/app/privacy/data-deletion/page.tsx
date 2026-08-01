@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import { LegalPage, LegalSection } from "@/components/legal/LegalPage";
 import { contactEmail as resolveContactEmail } from "@/lib/marketing/contact-email";
 
-const EFFECTIVE_DATE = "July 14, 2026";
+const EFFECTIVE_DATE = "August 1, 2026";
 
 export const metadata: Metadata = {
   title: "Data Deletion Instructions",
@@ -46,10 +46,13 @@ export default function DataDeletionPage() {
         </p>
         <p>
           We verify each request and then delete the person&apos;s records across every
-          content store we operate (contact profiles, conversation and call history, text
-          and email logs), including tenant-hosted data stores where applicable. The audit
-          trail retains only a cryptographic fingerprint of the deleted identifier, never
-          the identifier itself.
+          content store we operate, including contact profiles, conversation and call
+          history (text messages, call transcripts, email, web chat conversations and
+          associated visitor details, and connected social messaging such as Messenger,
+          Instagram, and WhatsApp), lead form submissions, AI-maintained memory and profile
+          information about the person, and tenant-hosted data stores where applicable. The
+          audit trail retains only a cryptographic fingerprint of the deleted identifier,
+          never the identifier itself.
         </p>
       </LegalSection>
 
