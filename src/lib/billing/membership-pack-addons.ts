@@ -20,6 +20,7 @@
 
 import type { BillingPeriod } from "@/lib/plans/tier";
 import { getCommitmentMonths } from "@/lib/plans/tier";
+import { HARD_MAX_PACK_UNIT } from "@/lib/billing/usage-pack-metadata";
 import { getVoiceBonusPack, listVoiceBonusPacks } from "@/lib/billing/voice-bonus-packs";
 import { getSmsBonusPack, listSmsBonusPacks } from "@/lib/billing/sms-bonus-packs";
 import { getChatCreditPack, listChatCreditPacks } from "@/lib/billing/chat-credit-packs";
@@ -158,7 +159,14 @@ export function encodeMembershipPackMeta(
 }
 
 export function decodeMembershipPackMeta(
-  raw: string | null | undefined
+  raw: string | null | undefined,
+  /**
+   * Per-unit ceiling for this key's kind (HARD_MAX_PACK_UNIT). Same
+   * fail-closed posture as the standalone top-up parsers: an oversized entry
+   * is DROPPED, not clamped, because quantity (<=20) and commitment months
+   * (<=24) then multiply whatever passes here.
+   */
+  maxUnitSize: number = Number.MAX_SAFE_INTEGER
 ): MembershipPackAddonMetaEntry[] {
   if (!raw?.trim()) return [];
   const out: MembershipPackAddonMetaEntry[] = [];
@@ -174,7 +182,7 @@ export function decodeMembershipPackMeta(
     if (!Number.isInteger(quantity) || quantity < 1 || quantity > MEMBERSHIP_PACK_MAX_QTY) {
       continue;
     }
-    if (!Number.isInteger(unitSize) || unitSize <= 0) continue;
+    if (!Number.isInteger(unitSize) || unitSize <= 0 || unitSize > maxUnitSize) continue;
     out.push({ packId, quantity, unitSize });
   }
   return out;
@@ -317,9 +325,9 @@ export function parseMembershipPackAddonMetadata(
   if (!metadata) return { voice: [], sms: [], chat: [] };
 
   return {
-    voice: decodeMembershipPackMeta(metadata.addonVoice),
-    sms: decodeMembershipPackMeta(metadata.addonSms),
-    chat: decodeMembershipPackMeta(metadata.addonChat)
+    voice: decodeMembershipPackMeta(metadata.addonVoice, HARD_MAX_PACK_UNIT.voiceSeconds),
+    sms: decodeMembershipPackMeta(metadata.addonSms, HARD_MAX_PACK_UNIT.smsTexts),
+    chat: decodeMembershipPackMeta(metadata.addonChat, HARD_MAX_PACK_UNIT.chatMicros)
   };
 }
 

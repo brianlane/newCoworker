@@ -352,3 +352,38 @@ describe("membership pack add-on mirroring", () => {
     });
   });
 });
+
+/**
+ * #1023 hardened the standalone top-up parsers with hard unit ceilings so "a
+ * forged/corrupt metadata value can never mint an unbounded cap raise", and
+ * they REJECT above the ceiling rather than clamp. #1026's recurring decoder
+ * accepted any positive integer, so the membership path lost that defense:
+ * unitSize x qty(<=20) x months(<=24) multiplied an unbounded number.
+ */
+describe("parseMembershipPackAddonMetadata — per-kind unit ceilings", () => {
+  it("drops a voice entry whose unit size exceeds a year of seconds", () => {
+    const parsed = parseMembershipPackAddonMetadata({
+      addonVoice: `min_30:1:${60 * 60 * 24 * 365 + 1}`
+    });
+    expect(parsed.voice).toEqual([]);
+  });
+
+  it("drops an sms entry above one million texts", () => {
+    expect(
+      parseMembershipPackAddonMetadata({ addonSms: "texts_500:1:1000001" }).sms
+    ).toEqual([]);
+  });
+
+  it("drops a chat entry above one billion micros", () => {
+    expect(
+      parseMembershipPackAddonMetadata({ addonChat: "usd_5:1:1000000001" }).chat
+    ).toEqual([]);
+  });
+
+  it("keeps entries at the ceiling and drops only the oversized sibling", () => {
+    const parsed = parseMembershipPackAddonMetadata({
+      addonVoice: `min_30:1:1800,min_600:1:${60 * 60 * 24 * 365 + 1}`
+    });
+    expect(parsed.voice).toEqual([{ packId: "min_30", quantity: 1, unitSize: 1800 }]);
+  });
+});
