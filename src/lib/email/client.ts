@@ -1,4 +1,5 @@
 import { Resend } from "resend";
+import { CONTACT_EMAIL } from "@/lib/marketing/contact-email";
 
 export type SendOwnerEmailOptions = {
   /**
@@ -29,7 +30,10 @@ export type SendOwnerEmailOptions = {
   replyTo?: string;
 };
 
-const DEFAULT_FROM = "New Coworker <contact@newcoworker.com>";
+// The literal, not the env-aware accessor: the From address has to stay on a
+// domain Resend has verified, so it must not follow a reconfigured
+// CONTACT_EMAIL onto some other host. MAILER_EMAIL is the supported override.
+const DEFAULT_FROM = `New Coworker <${CONTACT_EMAIL}>`;
 
 function resolveFrom(opts: SendOwnerEmailOptions): string {
   return opts.from ?? process.env.MAILER_EMAIL ?? DEFAULT_FROM;

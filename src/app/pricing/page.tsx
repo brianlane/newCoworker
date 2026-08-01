@@ -18,6 +18,7 @@ import { concurrentCallsLine, imageGenerationLine, voiceMinutesLine } from "@/li
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
 import { CANADA_MESSAGING_FEE_MONTHLY_CENTS } from "@/lib/plans/canadian-messaging";
 import { formatPriceCents, formatPricePerMonth } from "@/lib/pricing";
+import { contactEmail as resolveContactEmail } from "@/lib/marketing/contact-email";
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("marketing.pricing");
@@ -102,7 +103,7 @@ export default async function PricingPage() {
   ];
 
   // Same env-driven address the footer uses, so the two can't diverge.
-  const contactEmail = process.env.CONTACT_EMAIL ?? "team@newcoworker.com";
+  const contactEmail = resolveContactEmail();
   const carrierFee = formatPriceCents(CARRIER_REGISTRATION_FEE_CENTS);
   const canadaFeeMonthly = formatPriceCents(CANADA_MESSAGING_FEE_MONTHLY_CENTS);
   const starterRenewal = formatPricePerMonth(getPeriodPricing("starter", "biennial").renewalMonthlyCents);

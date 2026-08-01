@@ -1223,7 +1223,15 @@ Standing rules, in priority order:
    [src/lib/marketing/site-url.ts](src/lib/marketing/site-url.ts) and nowhere
    else; `tests/site-url.test.ts` fails the build if a hardcoded origin
    reappears in `src/` outside a doc comment. Copy the pattern rather than the
-   value.
+   value. The public contact address is the second instance:
+   [src/lib/marketing/contact-email.ts](src/lib/marketing/contact-email.ts)
+   owns it, `contactEmail()` resolves it, and `tests/contact-email.test.ts`
+   bans both a hardcoded `contact@newcoworker.com` and a re-declared
+   `process.env.CONTACT_EMAIL ?? ...` fallback anywhere else in `src/`. It
+   had been copy-pasted into seven surfaces, all of them naming an address
+   (`team@newcoworker.com`) that deployment had long since replaced. The ops
+   inbox (`OPS_NOTIFICATION_EMAIL`) is a separate constant with its own home
+   and is not covered by that guard.
 3. **Anything only observable from outside needs a probe that runs from
    outside.** Unit tests assert what we *intend* to serve;
    `debug/aeo-crawler-probe.ts` asserts what is *actually* served and fails on

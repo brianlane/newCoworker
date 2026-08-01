@@ -3,6 +3,7 @@ import { logger } from "@/lib/logger";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { getContactFormSinkBusinessId } from "@/lib/db/contact-form-sink";
 import { processWebhookFlowEvent } from "@/lib/ai-flows/webhook-events";
+import { contactEmail } from "@/lib/marketing/contact-email";
 import {
   rateLimitDurable,
   rateLimitIdentifierFromRequest
@@ -13,8 +14,8 @@ export const runtime = "nodejs";
 /**
  * Public contact-form endpoint for /contact. Unauthenticated by design, so
  * it is IP rate-limited and honeypot-protected; the submission is delivered
- * to the CONTACT_EMAIL inbox via Resend, and — when an admin has designated
- * a contact-form sink business (the internal HQ tenant) — ALSO enqueued as
+ * to the CONTACT_EMAIL inbox via Resend, and, when an admin has designated
+ * a contact-form sink business (the internal HQ tenant), ALSO enqueued as
  * a webhook-channel AiFlow event (source "contact_form") so the company's
  * own coworker triages it. The flow event is strictly additive/best-effort:
  * no sink or any failure leaves the email-only behavior untouched.
@@ -109,7 +110,7 @@ export async function POST(request: Request) {
     );
   }
 
-  const toEmail = process.env.CONTACT_EMAIL ?? "team@newcoworker.com";
+  const toEmail = contactEmail();
   const lines = [
     `Name: ${payload.name}`,
     `Email: ${payload.email}`,
@@ -147,7 +148,7 @@ export async function POST(request: Request) {
   // Feed the platform sink tenant's AiFlows (HQ dogfooding). After the email
   // deliberately: the notification mail is the critical path, and a retried
   // submission after an email failure re-digests to the SAME dedupe key, so
-  // this can never double-enqueue. Best-effort — a sink/flow failure never
+  // this can never double-enqueue. Best-effort: a sink/flow failure never
   // turns a delivered submission into a user-facing error.
   try {
     const sinkBusinessId = await getContactFormSinkBusinessId();

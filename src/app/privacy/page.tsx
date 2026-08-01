@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { LegalPage, LegalSection } from "@/components/legal/LegalPage";
+import { contactEmail as resolveContactEmail } from "@/lib/marketing/contact-email";
 
 const EFFECTIVE_DATE = "July 15, 2026";
 
@@ -12,7 +13,7 @@ export const metadata: Metadata = {
 };
 
 export default function PrivacyPolicyPage() {
-  const contactEmail = process.env.CONTACT_EMAIL ?? "team@newcoworker.com";
+  const contactEmail = resolveContactEmail();
 
   return (
     <LegalPage
@@ -124,7 +125,7 @@ export default function PrivacyPolicyPage() {
 
       <LegalSection title="9. Website Chat Widget">
         <p>
-          Our website — and the websites of businesses that embed the New Coworker chat widget — offers a
+          Our website (and the websites of businesses that embed the New Coworker chat widget) offers a
           chat window for talking with an AI assistant. When you use the chat widget, in addition to the
           messages and any contact details you choose to share, we automatically collect technical and usage
           information with your session:
