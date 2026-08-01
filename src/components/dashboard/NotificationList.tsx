@@ -49,6 +49,8 @@ function describeKind(row: NotificationRow): string {
 function describeReason(payload: Record<string, unknown>): string | null {
   const reason = payload?.reason;
   if (typeof reason !== "string" || reason.length === 0) return null;
+  const categoryMatch = /^category_(.+)_disabled$/.exec(reason);
+  if (categoryMatch) return `Skipped: the ${categoryMatch[1]} alerts category is off`;
   switch (reason) {
     case "unsubscribed":
       return "Skipped: you've unsubscribed from all alerts";
@@ -60,6 +62,12 @@ function describeReason(payload: Record<string, unknown>): string | null {
       return "Skipped: urgent email disabled";
     case "sms_urgent_disabled":
       return "Skipped: urgent SMS disabled";
+    case "whatsapp_urgent_disabled":
+      return "Skipped: urgent WhatsApp disabled";
+    case "not_connected":
+      return "Skipped: WhatsApp isn't connected (connect it under Integrations)";
+    case "whatsapp_bridge_unconfigured":
+      return "Skipped: WhatsApp service not configured";
     case "email_digest_disabled":
       return "Skipped: daily digest disabled";
     case "email_digest_weekly_disabled":
@@ -203,7 +211,17 @@ export function NotificationList({ businessId, initial, highlightLogId }: Props)
             <li
               key={n.id}
               ref={n.id === highlightedId ? highlightRef : undefined}
-              className={["py-3 transition-colors", isUnread ? "" : "opacity-60"].join(" ")}
+              className={[
+                "py-3 transition-colors",
+                isUnread ? "" : "opacity-60",
+                // The ?logId= deep link scrolls this row to the center of the
+                // bounded list, which can leave the neighbors half-clipped;
+                // tint the target so a stray wrapped line from the row above
+                // is never read as the linked alert.
+                n.id === highlightedId
+                  ? "rounded-lg bg-signal-teal/5 ring-1 ring-inset ring-signal-teal/25"
+                  : ""
+              ].join(" ")}
             >
               <button
                 type="button"

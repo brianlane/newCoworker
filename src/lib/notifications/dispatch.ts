@@ -436,7 +436,10 @@ export async function dispatchUrgentNotification(
       )
     );
   } else {
-    const text = input.smsBody ?? `New Coworker Alert: ${summary}. Details: ${dashboardUrl}`;
+    // The summary usually ends with "." and the template appends its own;
+    // trim trailing periods so the alert never reads "dashboard.. Details:".
+    const text =
+      input.smsBody ?? `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`;
     try {
       const config = await getTelnyxMessagingForBusiness(input.businessId);
       // Owner alerts are METERED like everything else (nothing is exempt —
@@ -527,7 +530,10 @@ export async function dispatchUrgentNotification(
       )
     );
   } else {
-    const text = input.smsBody ?? `New Coworker Alert: ${summary}. Details: ${dashboardUrl}`;
+    // The summary usually ends with "." and the template appends its own;
+    // trim trailing periods so the alert never reads "dashboard.. Details:".
+    const text =
+      input.smsBody ?? `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`;
     try {
       // Owner alerts follow the owner's saved UI language, keyed to the
       // OWNER login email (a custom alert_email may be someone else's).

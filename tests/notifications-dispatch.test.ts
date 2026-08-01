@@ -195,6 +195,36 @@ describe("notifications/dispatch", () => {
     expect(result.results.find((r) => r.channel === "email")?.status).toBe("sent");
   });
 
+  it("stores one identical summary on every channel row of a dispatch", async () => {
+    // The four rows of one logical event must never drift apart: the UI list
+    // title, the Detail fallback, and the deep-link grouping all assume it.
+    vi.mocked(sendOwnerEmail).mockResolvedValue("email_id" as never);
+    const summary = "Texter follow-up needed: call Kolton back about the East Valley search…";
+    await dispatchUrgentNotification({ businessId: BIZ, summary, kind: "sms_team_notify" });
+    const inserts = vi
+      .mocked(insertNotification)
+      .mock.calls.map((c) => c[0] as Record<string, unknown>);
+    expect(inserts.length).toBeGreaterThanOrEqual(4);
+    for (const row of inserts) {
+      expect(row.summary).toBe(summary);
+      expect((row.payload as Record<string, unknown>).summary).toBe(summary);
+    }
+  });
+
+  it("trims trailing periods from the summary in the fallback SMS template", async () => {
+    vi.mocked(sendOwnerEmail).mockResolvedValue("email_id" as never);
+    await dispatchUrgentNotification({
+      businessId: BIZ,
+      summary: "A contact texted back. Reply from Messages on your dashboard.",
+      kind: "urgent_alert"
+    });
+    const text = vi.mocked(sendTelnyxSms).mock.calls[0]?.[2] as string;
+    expect(text).toBe(
+      "New Coworker Alert: A contact texted back. Reply from Messages on your dashboard. Details: https://app.example.com/dashboard"
+    );
+    expect(text).not.toContain("..");
+  });
+
   it("skips email when email_urgent toggle is off", async () => {
     vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
       ...PREFS_ON,

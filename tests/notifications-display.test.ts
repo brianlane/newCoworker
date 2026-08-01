@@ -116,6 +116,27 @@ describe("notifications/display", () => {
       ]);
     });
 
+    it("prefers the untruncated payload.message over the capped summary for Detail", () => {
+      // notify_team stores the full model-written request as payload.message
+      // and a list-capped headline as payload.summary; the expanded card must
+      // show the whole thing (Amy's Jul 31 2026 alert lost the budget and the
+      // claimed agent to the cap).
+      expect(
+        notificationDetailFields({
+          kind: "sms_team_notify",
+          payload: {
+            summary: "Texter follow-up needed: New buyer lead…",
+            message: "New buyer lead. Budget around $412K. Jason Lane is the claimed agent."
+          }
+        })
+      ).toEqual([
+        {
+          label: "Detail",
+          value: "New buyer lead. Budget around $412K. Jason Lane is the claimed agent."
+        }
+      ]);
+    });
+
     it("skips blank, missing, and non-string values", () => {
       expect(
         notificationDetailFields({

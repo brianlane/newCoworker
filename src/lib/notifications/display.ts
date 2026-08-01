@@ -148,8 +148,11 @@ export function notificationDetailFields(n: NotificationLike): NotificationDetai
   }
   const activitySummary = str(p.activitySummary);
   if (activitySummary) fields.push({ label: "Activity", value: activitySummary });
-  const summary = str(p.summary);
-  if (summary) fields.push({ label: "Detail", value: summary });
+  // Prefer the untruncated original (notify_team stores it as
+  // payload.message) over payload.summary, whose headline copy is capped for
+  // the list title and can end mid-thought.
+  const detail = str(p.message) ?? str(p.summary);
+  if (detail) fields.push({ label: "Detail", value: detail });
   const taskType = str(p.taskType);
   if (taskType) fields.push({ label: "Event", value: taskType.replace(/_/g, " ") });
   const periodKey = str(p.period_key);
