@@ -435,7 +435,14 @@ describe("signDocumentRequest", () => {
       now: NOW
     });
     expect(res.ok).toBe(true);
+    // This call exercises the default clock (no `now`), so the fixture must
+    // not expire in real time: the shared default of 2026-08-01 turned this
+    // into a time bomb that detonated at UTC midnight on Aug 1. Same
+    // far-future convention as the viewed-state test above.
     signable();
+    vi.mocked(getDocumentSignatureRequestByTokenSha).mockResolvedValue(
+      requestRow({ status: "viewed", expires_at: "2999-01-01T00:00:00Z" })
+    );
     vi.mocked(dispatchUrgentNotification).mockRejectedValueOnce("string failure");
     const res2 = await signDocumentRequest({
       token: "tok",
