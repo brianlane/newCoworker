@@ -298,9 +298,12 @@ if (!telnyxKey) {
     const agg = (telnyx[recordType] ??= { account: {}, tenant: {} });
     let page = 1;
     for (;;) {
+      // page[size] must be the real (clamped) 50: the endpoint multiplies
+      // the REQUESTED size into its 10,000-record offset ceiling, so
+      // asking for more walls the pull at page 41 with records unread.
       const url =
         `https://api.telnyx.com/v2/detail_records?filter[record_type]=${recordType}` +
-        `&filter[date_range]=${telnyxRange}&page[number]=${page}&page[size]=250`;
+        `&filter[date_range]=${telnyxRange}&page[number]=${page}&page[size]=50`;
       const res = await fetch(url, { headers: { Authorization: `Bearer ${telnyxKey}` } });
       if (!res.ok) {
         // Record the failure so the JSON output flags the aggregates as
@@ -314,7 +317,7 @@ if (!telnyxKey) {
         data?: Array<Record<string, unknown>>;
         meta?: { total_pages?: number };
       };
-      const pageSize = 250;
+      const pageSize = 50;
       const rows = body.data ?? [];
       for (const r of rows) {
         const num = (v: unknown): number => (typeof v === "string" || typeof v === "number" ? Number(v) || 0 : 0);

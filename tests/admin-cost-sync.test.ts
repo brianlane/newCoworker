@@ -200,8 +200,8 @@ describe("fetchTelnyxDetailRecords", () => {
         fetchImpl,
         sleepImpl
       })
-    ).rejects.toThrow(/exceeded 400 pages/);
-    expect(fetchImpl).toHaveBeenCalledTimes(400);
+    ).rejects.toThrow(/exceeded 200 pages/);
+    expect(fetchImpl).toHaveBeenCalledTimes(200);
   });
 
   it("treats a missing data array as an empty page", async () => {
