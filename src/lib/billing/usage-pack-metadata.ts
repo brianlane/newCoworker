@@ -9,6 +9,19 @@
  * floats, and leading-zero/negative/hex strings — all of which `Number.parseInt` silently
  * truncates or mis-parses, and which would otherwise mint a bogus bonus grant.
  */
+/**
+ * Hard per-unit ceilings, shared with the recurring membership decoder
+ * (membership-pack-addons.ts) so the two parsers cannot drift: a forged or
+ * corrupt metadata value must never mint an unbounded cap raise on EITHER
+ * path. Values sit far above the largest catalog pack.
+ */
+export const HARD_MAX_PACK_UNIT = {
+  /** One year of seconds. */
+  voiceSeconds: 60 * 60 * 24 * 365,
+  smsTexts: 1_000_000,
+  chatMicros: 1_000_000_000
+} as const;
+
 export function parseVoiceBonusSecondsFromMetadata(raw: unknown): number | null {
   if (raw === undefined || raw === null) return null;
   const str = String(raw).trim();
@@ -20,8 +33,7 @@ export function parseVoiceBonusSecondsFromMetadata(raw: unknown): number | null 
   /* c8 ignore next 2 */
   if (!Number.isFinite(n) || !Number.isInteger(n)) return null;
   if (n <= 0) return null;
-  const HARD_MAX_SECONDS = 60 * 60 * 24 * 365;
-  if (n > HARD_MAX_SECONDS) return null;
+  if (n > HARD_MAX_PACK_UNIT.voiceSeconds) return null;
   return n;
 }
 
@@ -39,8 +51,7 @@ export function parseSmsBonusTextsFromMetadata(raw: unknown): number | null {
   /* c8 ignore next 2 */
   if (!Number.isFinite(n) || !Number.isInteger(n)) return null;
   if (n <= 0) return null;
-  const HARD_MAX_TEXTS = 1_000_000;
-  if (n > HARD_MAX_TEXTS) return null;
+  if (n > HARD_MAX_PACK_UNIT.smsTexts) return null;
   return n;
 }
 
@@ -58,7 +69,6 @@ export function parseChatCreditMicrosFromMetadata(raw: unknown): number | null {
   /* c8 ignore next 2 */
   if (!Number.isFinite(n) || !Number.isInteger(n)) return null;
   if (n <= 0) return null;
-  const HARD_MAX_MICROS = 1_000_000_000;
-  if (n > HARD_MAX_MICROS) return null;
+  if (n > HARD_MAX_PACK_UNIT.chatMicros) return null;
   return n;
 }
