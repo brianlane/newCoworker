@@ -71,14 +71,17 @@ function pricingLines(): string[] {
 
 const CAPABILITY_LINES = [
   "- Voice: answers inbound calls in real time, transfers warmly to a human, takes messages, " +
-    "follows up by text, and can interpret live between a caller and a staff member who do not share a language.",
-  "- Messaging: two-way SMS, Messenger, Instagram DM, WhatsApp, website chat, and a dedicated email address per business.",
+    "follows up by text, and can interpret live between a caller and a staff member " +
+    "who do not share a language (live interpretation: Standard plan and up).",
+  "- Messaging: two-way SMS and a dedicated email address per business on every plan; " +
+    "AI replies on Messenger, Instagram DM, WhatsApp, and website chat on Standard and up.",
   "- Scheduling: books, reschedules, and cancels on Google Calendar, Microsoft 365, CalDAV, Calendly, Vagaro, or Acuity Scheduling, " +
     "plus a public self-serve booking page with confirmations and reminders for businesses with no calendar tool at all.",
   "- Memory: a permanent per-business knowledge base plus a customer knowledge graph, so the coworker " +
     "remembers what was said months ago on any channel.",
   "- Automation (AiFlows): multi-step follow-up sequences triggered by a new lead, a missed call, " +
-    "a webhook, a calendar event, or an inbound message, with round-robin routing to a staff roster.",
+    "a webhook (Standard plan and up), a calendar event, or an inbound message, " +
+    "with round-robin routing to a staff roster.",
   "- Integrations: Zapier (8,000+ apps), Google Workspace, Microsoft 365, Zoom, Meta Lead Ads, " +
     "a public REST API, and webhooks (Zapier, lead webhooks, the REST API: Standard plan and up), " +
     "plus a Claude connector (remote MCP) so Claude can act on the business's behalf.",
