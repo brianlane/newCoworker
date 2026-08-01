@@ -47,7 +47,7 @@ touch them:
 | HomeLight Referral (sms, 24 steps) | The biggest flow in the fleet. Own file. |
 | HomeLight Live Transfer (voice) | The AI answers and works the call itself (`answerFirst`) |
 | Clever Lead - Accept (sms, 13) | Accept path for Clever's group-text leads |
-| Clever Lead - Group Reply Intro / Connected | Two-step flows reacting inside a group thread. An OLD disabled copy of the Intro flow still exists, do not edit that one |
+| Clever Lead - Group Reply Intro / Connected | Two-step flows reacting inside a group thread. Clever sends TWO intro wordings; the Intro flow matches both (the second via an extra OR trigger, Aug 2026). Connected is deliberately left unmatched (greet-only decision). An OLD disabled copy of the Intro flow still exists, do not edit that one |
 | Clever - Spoke Check & Weekly Call Follow-Up (owner_assigned, 15) | Owner-assigned trigger, not lead-driven |
 | Clever Cue Text | Arms an expected-call window so a transfer from a rotating Clever number is recognized (PR #781) |
 | ReferralExchange Lead (sms, 31) | Browse-screenshot steps, gated owner emails, gated MMS routing, bad-phone retry tail |
@@ -71,6 +71,16 @@ These are mistakes already made on this account. Do not remake them.
 - **The group-reply greeting once extracted our own agent's name**, producing
   "Hi Amy" to Amy (PR #856). Any greeting-extraction change needs a group-text
   case in its tests.
+- **Clever rewords its intro templates without notice.** A second wording
+  ("meet your top-rated local Clever agent") dropped the phrase "Clever Real
+  Estate", matched no flow for weeks, and fell to the default assistant: the
+  lead got no branded greeting and Amy was paged "needs you to take over"
+  with the group-thread label (Jul 31 2026, fixed by
+  `patch-clever-group-reply-second-intro.ts`). Anchor Clever triggers on the
+  fixed group line plus short stable fragments of the wording, never the full
+  brand name. The Connected flow still requires "Clever Real Estate" and so
+  currently matches nothing; that is the deliberate greet-only decision, not
+  an oversight.
 - **Editing a live flow by hand in the UI is how flows get broken here.** It
   has needed a revert at least once. Prefer a ledger-recorded one-shot in
   `scripts/oneshot/`, which is idempotent, dry-run by default, and reviewable.
@@ -100,7 +110,8 @@ Clever: `seed-clever-lead-accept-aiflow.ts`,
 `seed-clever-voice-transfer-rule.ts`, `clever-spoke-check-definition.ts`,
 `patch-clever-accept-followup.ts`, `patch-clever-cue-arm-transfer.ts`,
 `patch-clever-group-reply-name-desc.ts`, `fix-clever-existing-flows.ts`,
-`clever-start-immediately.ts`.
+`clever-start-immediately.ts`,
+`patch-clever-group-reply-second-intro.ts`.
 
 Other networks: `seed-referralexchange-aiflow.ts`,
 `realtor-retrigger-guard.ts`. HomeLight's are listed in
