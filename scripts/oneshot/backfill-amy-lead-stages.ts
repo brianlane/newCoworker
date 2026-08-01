@@ -247,6 +247,13 @@ for (;;) {
   const { data, error } = await q;
   if (error) {
     console.error(`[oneshot] contacts read failed: ${error.message}`);
+    if (/lead_source/.test(error.message)) {
+      console.error(
+        "          contacts.lead_source is missing, so the migration that adds it\n" +
+          "          has not reached this database yet. Merge first and let the\n" +
+          "          push-to-main run apply migrations, then re-run this."
+      );
+    }
     process.exit(1);
   }
   const rows = (data as ContactRow[] | null) ?? [];
