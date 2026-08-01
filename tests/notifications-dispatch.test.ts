@@ -898,6 +898,31 @@ describe("notifications/dispatch", () => {
       expect(vi.mocked(sendOwnerEmail).mock.calls[0][1]).toBe("owner@example.com");
     });
 
+    it("still delivers to the business owner when the lookup blows up", async () => {
+      // The service client can fail to construct; an alert must never be lost
+      // because we could not work out who to redirect it to.
+      vi.mocked(createSupabaseServiceClient).mockRejectedValueOnce(new Error("no env"));
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Follow up with Donna Robinson",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE
+      });
+      expect(vi.mocked(sendTelnyxSms).mock.calls[0][1]).toBe("+15555550100");
+      expect(vi.mocked(sendOwnerEmail).mock.calls[0][1]).toBe("owner@example.com");
+
+      // ...and again when the failure is not an Error instance.
+      vi.mocked(sendTelnyxSms).mockClear();
+      vi.mocked(createSupabaseServiceClient).mockRejectedValueOnce("string failure");
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Follow up with Donna Robinson",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE
+      });
+      expect(vi.mocked(sendTelnyxSms).mock.calls[0][1]).toBe("+15555550100");
+    });
+
     it("never consults the resolver when no contact is supplied", async () => {
       // The regression pin for every business-level caller: billing, plan and
       // system-health alerts must stay owner-addressed and unstamped.

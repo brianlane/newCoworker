@@ -203,12 +203,21 @@ export async function resolveNotificationTargets(
   const ownerAlertEmail = prefsEmail ?? ownerEmail ?? fallbackEmail;
   const ownerAlertPhone = prefsPhone ?? fallbackPhone;
 
-  // Contact-scoped alerts belong to whoever owns the lead. Never throws;
-  // every failure resolves to the business owner.
+  // Contact-scoped alerts belong to whoever owns the lead. Wrapped like the
+  // two lookups above: resolveContactOwnerTarget never throws, but building
+  // the service client can, and an alert must never be lost because we could
+  // not work out who to redirect it to. Degrades to the business owner.
   let routing: ContactOwnerTarget | null = null;
   if (contactE164) {
-    const db = await createSupabaseServiceClient();
-    routing = await resolveContactOwnerTarget(db, businessId, contactE164);
+    try {
+      const db = await createSupabaseServiceClient();
+      routing = await resolveContactOwnerTarget(db, businessId, contactE164);
+    } catch (err) {
+      logger.warn("resolveNotificationTargets: contact-owner lookup failed", {
+        businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
   }
   const redirected = routing?.target === "contact_owner";
 
