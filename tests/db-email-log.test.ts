@@ -424,6 +424,7 @@ describe("recordOutboundAssistantEmail", () => {
     subject: "Following up",
     bodyText: "y".repeat(600),
     source: "dashboard_chat" as const,
+    fromEmail: "owner@biz.com",
     providerMessageId: "gm-1"
   };
 
@@ -438,7 +439,9 @@ describe("recordOutboundAssistantEmail", () => {
         direction: "outbound",
         source: "dashboard_chat",
         to_email: "lead@example.com",
-        from_email: null,
+        // The sending mailbox address, threaded in from the send result so
+        // the Emails pane can show WHO sent it instead of a dash.
+        from_email: "owner@biz.com",
         subject: "Following up",
         body_preview: "y".repeat(500),
         run_id: null,
@@ -446,6 +449,13 @@ describe("recordOutboundAssistantEmail", () => {
         provider_message_id: "gm-1"
       })
     );
+  });
+
+  it("stores a null from_email when the connection metadata had no address", async () => {
+    const insert = vi.fn().mockResolvedValue({ error: null });
+    const db = { from: vi.fn(() => ({ insert })) };
+    await recordOutboundAssistantEmail({ ...input, fromEmail: null }, db as never);
+    expect(insert).toHaveBeenCalledWith(expect.objectContaining({ from_email: null }));
   });
 
   it("stores cc as CSV and treats an empty bcc array as null", async () => {

@@ -810,7 +810,8 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
     vi.mocked(sendFromOwnerMailbox).mockResolvedValue({
       ok: true,
       messageId: "m-1",
-      provider: "google"
+      provider: "google",
+      fromEmail: "owner@biz.com"
     } as never);
     const content = makeContent("send_email", {
       toEmail: "joe@example.com",
@@ -837,6 +838,7 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
       subject: "Your estimate",
       bodyText: "Here are the details we discussed.",
       source: "sms_assistant",
+      fromEmail: "owner@biz.com",
       providerMessageId: "m-1",
       ccEmails: [],
       bccEmails: []

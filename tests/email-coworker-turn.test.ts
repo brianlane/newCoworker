@@ -82,7 +82,8 @@ beforeEach(() => {
     ok: true,
     provider: "google",
     messageId: "sent-1",
-    threadId: "thread-9"
+    threadId: "thread-9",
+    fromEmail: "amy@newcoworker.com"
   } as never);
   mockRecord.mockResolvedValue(undefined);
 });
@@ -253,7 +254,12 @@ describe("runEmailCoworkerTurn", () => {
       }
     });
     expect(mockRecord).toHaveBeenCalledWith(
-      expect.objectContaining({ source: "email_coworker", providerMessageId: "sent-1" })
+      expect.objectContaining({
+        source: "email_coworker",
+        providerMessageId: "sent-1",
+        // The reply files under the mailbox address it actually left from.
+        fromEmail: "amy@newcoworker.com"
+      })
     );
     // The inbound message reaches the model with its sender and subject.
     expect(String(mockTurn.mock.calls[0][0].userMessage)).toContain("[Email from beth@lizdev.com]");

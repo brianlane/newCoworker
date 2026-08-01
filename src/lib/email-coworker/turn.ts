@@ -246,6 +246,7 @@ export async function runEmailCoworkerTurn(args: {
     subject: replySubject(thread.subject ?? message.subject),
     bodyText: reply,
     source: "email_coworker",
+    fromEmail: sent.fromEmail,
     providerMessageId: sent.messageId
   });
 

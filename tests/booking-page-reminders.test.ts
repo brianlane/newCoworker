@@ -102,7 +102,8 @@ beforeEach(() => {
     ok: true,
     provider: "google",
     messageId: "m-1",
-    threadId: "t-1"
+    threadId: "t-1",
+    fromEmail: "owner@biz.com"
   });
   mockRecord.mockResolvedValue(undefined);
   mockTelnyxConfig.mockResolvedValue({ fromE164: "+16026886672" } as never);

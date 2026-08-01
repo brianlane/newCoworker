@@ -92,6 +92,7 @@ export async function POST(request: Request) {
       subject: args.subject,
       bodyText: args.bodyText,
       source: "dashboard_chat",
+      fromEmail: result.fromEmail,
       providerMessageId: result.messageId,
       ccEmails,
       bccEmails

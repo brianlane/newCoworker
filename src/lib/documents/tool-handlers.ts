@@ -226,6 +226,7 @@ export async function shareDocumentTool(
       subject: `Document: ${title}`,
       bodyText,
       source: EMAIL_LOG_SOURCE[surface],
+      fromEmail: sent.fromEmail,
       providerMessageId: sent.messageId
     });
     delivered = "email";
@@ -388,6 +389,7 @@ export async function requestDocumentSignatureTool(
       subject: `Signature requested: ${title}`,
       bodyText,
       source: EMAIL_LOG_SOURCE[surface],
+      fromEmail: sent.fromEmail,
       providerMessageId: sent.messageId
     });
     delivered = "email";

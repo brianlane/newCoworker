@@ -98,6 +98,7 @@ export async function POST(
       subject,
       bodyText,
       source: "dashboard_chat",
+      fromEmail: result.fromEmail,
       providerMessageId: result.messageId
     });
 

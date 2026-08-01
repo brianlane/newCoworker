@@ -6101,7 +6101,11 @@ async function deliverOwnerMailboxEmail(
     const body = await res.text().catch(() => "");
     throw new Error(`send_email: owner-mailbox send ${res.status}: ${body.slice(0, 200)}`);
   }
-  let parsed: { ok?: boolean; detail?: string; data?: { messageId?: string | null; provider?: string } };
+  let parsed: {
+    ok?: boolean;
+    detail?: string;
+    data?: { messageId?: string | null; provider?: string; fromEmail?: string | null };
+  };
   try {
     parsed = (await res.json()) as typeof parsed;
   } catch {
@@ -6117,7 +6121,10 @@ async function deliverOwnerMailboxEmail(
     to: action.to,
     cc: action.cc,
     bcc: action.bcc,
-    from: parsed.data?.provider ?? "owner mailbox",
+    // The adapter reports the address the mail left from; null (rendered as a
+    // dash) when the connection metadata has none. Never the provider name:
+    // "google" in a FROM column reads as a bug.
+    from: parsed.data?.fromEmail ?? null,
     subject: action.subject,
     body: action.body,
     source: "owner_mailbox",

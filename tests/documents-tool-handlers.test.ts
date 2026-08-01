@@ -131,7 +131,12 @@ beforeEach(() => {
   vi.mocked(mintSignatureRequest).mockResolvedValue(MINTED_SIGNATURE);
   smsConfig.mockResolvedValue({ apiKey: "k" } as never);
   smsSend.mockResolvedValue({ id: "msg-1" } as never);
-  emailSend.mockResolvedValue({ ok: true, messageId: "em-1", provider: "google" } as never);
+  emailSend.mockResolvedValue({
+    ok: true,
+    messageId: "em-1",
+    provider: "google",
+    fromEmail: "owner@biz.com"
+  } as never);
   vi.mocked(recordOutboundAssistantEmail).mockResolvedValue(undefined);
 });
 
@@ -282,7 +287,7 @@ describe("shareDocumentTool", () => {
       })
     );
     expect(recordOutboundAssistantEmail).toHaveBeenCalledWith(
-      expect.objectContaining({ source: "dashboard_chat" })
+      expect.objectContaining({ source: "dashboard_chat", fromEmail: "owner@biz.com" })
     );
   });
 

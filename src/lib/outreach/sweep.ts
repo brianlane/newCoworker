@@ -590,9 +590,10 @@ async function deliverPitch(
     await r.recordEmailLog(r.db, {
       businessId: settings.business_id,
       to,
-      // The provider does not report which address it sent from, so the log
-      // carries who signed the mail: the configured sender, else the business.
-      from: settings.sender_name?.trim() || tenant.name,
+      // The send result reports the mailbox address the mail left from; only
+      // a legacy connection with no address in its metadata falls back to who
+      // signed the mail: the configured sender, else the business.
+      from: outcome.fromEmail ?? (settings.sender_name?.trim() || tenant.name),
       subject: mail.subject,
       body: mail.body,
       providerMessageId: outcome.messageId

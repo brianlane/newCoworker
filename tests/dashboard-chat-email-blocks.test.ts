@@ -230,7 +230,8 @@ describe("fulfillOwnerEmailBlocks", () => {
       ok: true,
       provider: "google",
       messageId: "m-1",
-      threadId: "thread-9"
+      threadId: "thread-9",
+      fromEmail: "owner@biz.com"
     });
     mockRecord.mockResolvedValue(undefined);
     mockRemember.mockResolvedValue(undefined);
@@ -250,7 +251,12 @@ describe("fulfillOwnerEmailBlocks", () => {
       bccEmails: []
     });
     expect(mockRecord).toHaveBeenCalledWith(
-      expect.objectContaining({ source: "sms_assistant", providerMessageId: "m-1" })
+      expect.objectContaining({
+        source: "sms_assistant",
+        providerMessageId: "m-1",
+        // The sending address from the mailbox result, filed on email_log.
+        fromEmail: "owner@biz.com"
+      })
     );
     expect(out.sentCount).toBe(1);
     expect(out.content).not.toContain(EMAIL_SEND_OPEN);
@@ -274,7 +280,8 @@ describe("fulfillOwnerEmailBlocks", () => {
       ok: true,
       provider: "microsoft",
       messageId: null,
-      threadId: null
+      threadId: null,
+      fromEmail: null
     });
     const out = await fulfillOwnerEmailBlocks({
       businessId: BIZ,

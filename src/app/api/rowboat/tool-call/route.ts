@@ -640,6 +640,7 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
         subject: parsed.data.subject,
         bodyText: parsed.data.bodyText,
         source: "sms_assistant",
+        fromEmail: result.fromEmail,
         providerMessageId: result.messageId,
         ccEmails,
         bccEmails

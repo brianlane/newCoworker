@@ -71,6 +71,7 @@ export async function sendBookingConfirmationEmail(
     subject: built.subject,
     bodyText: built.text,
     source: "booking_reminder",
+    fromEmail: sent.fromEmail,
     providerMessageId: sent.messageId
   });
   return true;

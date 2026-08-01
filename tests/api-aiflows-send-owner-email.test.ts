@@ -57,7 +57,8 @@ beforeEach(() => {
     ok: true,
     provider: "google",
     messageId: "gmail-1",
-    threadId: null
+    threadId: null,
+    fromEmail: "owner@biz.com"
   });
 });
 
@@ -97,7 +98,8 @@ describe("POST /api/aiflows/send-owner-email", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       ok: true,
-      data: { messageId: "gmail-1", provider: "google" }
+      // fromEmail rides along so the worker logs the real sending address.
+      data: { messageId: "gmail-1", provider: "google", fromEmail: "owner@biz.com" }
     });
     expect(sendFromMailboxConnection).toHaveBeenCalledWith(
       businessId,
@@ -118,12 +120,13 @@ describe("POST /api/aiflows/send-owner-email", () => {
       ok: true,
       provider: "microsoft",
       messageId: null,
-      threadId: null
+      threadId: null,
+      fromEmail: null
     });
     const res = await POST(makeRequest(validBody));
     expect(await res.json()).toEqual({
       ok: true,
-      data: { messageId: null, provider: "microsoft" }
+      data: { messageId: null, provider: "microsoft", fromEmail: null }
     });
     expect(vi.mocked(sendFromMailboxConnection).mock.calls[0][1].provider).toBe("microsoft");
   });
