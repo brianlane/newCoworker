@@ -394,6 +394,10 @@ describe("formatFlowAnswerNote", () => {
     // named the [SMS] line as the message itself.
     expect(note).toContain("even when it is only a bare date, time, or single word");
     expect(note).toContain("never treat it as blank");
+    // The Kolton clause (Amy 2026-07-31): a stated window already past for
+    // today must move to the next day it applies, never "today".
+    expect(note).toContain("window that has already passed for today");
+    expect(note).toContain("never promise contact inside a window that has already ended");
     expect(note!.endsWith(")")).toBe(true);
   });
 
