@@ -353,3 +353,60 @@ describe("estimateMonthlyPlatformCost", () => {
     expect(result.usageCents).toBe(Math.round(720.4));
   });
 });
+
+describe("computeDayCurrentMrr — recurring pack add-ons", () => {
+  const options = [
+    { category: "voice" as const, id: "min_30", label: "30 minutes", listPriceCents: 6000 },
+    { category: "sms" as const, id: "texts_500", label: "500 texts", listPriceCents: 2000 }
+  ];
+
+  /**
+   * #1026 made packs recurring subscription items that bill every cycle, but
+   * the MRR tile still derived every subscription's rate from
+   * getPeriodPricing alone, so real recurring pack revenue was invisible on
+   * the exact tile #1015 relabeled. The mirror (#1073) put the packs on the
+   * local row; price them at the same discounted monthly the invoice bills.
+   */
+  it("adds mirrored pack revenue at the period's discounted monthly rate", () => {
+    const result = computeDayCurrentMrr({
+      subscriptions: [
+        sub({
+          membership_pack_addons: { addonVoice: "min_30:2:1800", addonSms: "texts_500:1:500" }
+        })
+      ],
+      enterpriseDeals: [],
+      packAddonOptions: options,
+      now: NOW
+    });
+    // Biennial pack discount is 20%: 2 x $48 + 1 x $16 on top of the $99 plan.
+    expect(result.subscriptionCents).toBe(9900 + 2 * 4800 + 1600);
+  });
+
+  it("counts pack revenue as refund-exposed alongside the plan", () => {
+    const result = computeDayCurrentMrr({
+      subscriptions: [
+        sub({
+          refund_exposed: true,
+          membership_pack_addons: { addonVoice: "min_30:1:1800" }
+        })
+      ],
+      enterpriseDeals: [],
+      packAddonOptions: options,
+      now: NOW
+    });
+    expect(result.refundExposedCents).toBe(9900 + 4800);
+  });
+
+  it("ignores junk mirrors and unknown pack ids rather than erroring the tile", () => {
+    const result = computeDayCurrentMrr({
+      subscriptions: [
+        sub({ membership_pack_addons: "nonsense" as never }),
+        sub({ membership_pack_addons: { addonVoice: "retired_pack:3:1800" } })
+      ],
+      enterpriseDeals: [],
+      packAddonOptions: options,
+      now: NOW
+    });
+    expect(result.subscriptionCents).toBe(2 * 9900);
+  });
+});

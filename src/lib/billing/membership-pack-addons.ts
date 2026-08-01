@@ -398,3 +398,37 @@ export function membershipPackSelectionFromRow(
     chatPacks: toQty(parsed.chat)
   };
 }
+
+/**
+ * Monthly-equivalent cents a mirrored pack set adds to a subscription.
+ *
+ * Prices each entry at the SAME discounted monthly the invoice bills
+ * (`discountedPackCents`), so the admin MRR tile and the Stripe line items
+ * cannot disagree. Options come in as a parameter because the catalog is
+ * env-gated (`listMembershipPackAddonOptions`), which also keeps this pure
+ * for tests. Unknown pack ids and junk mirrors price as 0: the column is a
+ * read cache and a bad value must degrade the number, never the page.
+ */
+export function monthlyPackAddonCents(
+  stored: unknown,
+  period: BillingPeriod,
+  options: MembershipPackAddonOption[]
+): number {
+  if (!stored || typeof stored !== "object" || Array.isArray(stored)) return 0;
+  const parsed = parseMembershipPackAddonMetadata(stored as Record<string, string>);
+  const listByKey = new Map(options.map((o) => [`${o.category}:${o.id}`, o.listPriceCents]));
+  const priceEntries = (
+    category: MembershipPackAddonCategory,
+    entries: MembershipPackAddonMetaEntry[]
+  ): number =>
+    entries.reduce((sum, entry) => {
+      const listCents = listByKey.get(`${category}:${entry.packId}`);
+      if (!listCents) return sum;
+      return sum + discountedPackCents(listCents, period) * entry.quantity;
+    }, 0);
+  return (
+    priceEntries("voice", parsed.voice) +
+    priceEntries("sms", parsed.sms) +
+    priceEntries("chat", parsed.chat)
+  );
+}
