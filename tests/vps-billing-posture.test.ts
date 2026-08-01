@@ -689,6 +689,81 @@ describe("checkVpsBillingPosture — fleet consistency", () => {
     expect(finding?.detail).toContain("unset");
   });
 
+  // The marketplace review sandboxes (Zoom, Meta, Google) are seeded status
+  // "online" with NO subscription at all, purely so a reviewer can sign in and
+  // see a dashboard. They have no tenant to serve and no box to lose, so they
+  // were an ACTION REQUIRED line in every daily digest, forever.
+  it("ignores an online business that has no subscription at all", async () => {
+    const deps = makeDeps({
+      listBusinesses: vi
+        .fn()
+        .mockResolvedValue([biz({ id: "sandbox-1", hostinger_vps_id: null })]),
+      listVirtualMachines: vi.fn().mockResolvedValue([]),
+      listBusinessIdsWithLiveSubscription: vi.fn().mockResolvedValue({
+        stripeBacked: new Set<string>(),
+        stripeless: new Set<string>(),
+        cancelAtPeriodEnd: new Set<string>()
+      })
+    });
+    const res = await checkVpsBillingPosture(deps as never);
+    expect(res.findings.some((f) => f.kind === "online_tenant_no_box")).toBe(false);
+  });
+
+  // A tenant cancelling at period end is winding down, and the cancel planner
+  // released its box on purpose. That is not a half-finished migration.
+  it("ignores a boxless tenant that is cancelling at period end", async () => {
+    const deps = makeDeps({
+      listBusinesses: vi
+        .fn()
+        .mockResolvedValue([biz({ id: "truly", hostinger_vps_id: null })]),
+      listVirtualMachines: vi.fn().mockResolvedValue([]),
+      listBusinessIdsWithLiveSubscription: vi.fn().mockResolvedValue({
+        stripeBacked: new Set(["truly"]),
+        stripeless: new Set<string>(),
+        cancelAtPeriodEnd: new Set(["truly"])
+      })
+    });
+    const res = await checkVpsBillingPosture(deps as never);
+    expect(res.findings.some((f) => f.kind === "online_tenant_no_box")).toBe(false);
+  });
+
+  // The liveness lookup used to cover only businesses that HELD a vm, which is
+  // why a boxless one could never be filtered: it was not in the answer.
+  it("asks about boxless businesses too when resolving live tenancy", async () => {
+    const lookup = vi.fn().mockResolvedValue({
+      stripeBacked: new Set(["b-nobox"]),
+      stripeless: new Set<string>(),
+      cancelAtPeriodEnd: new Set<string>()
+    });
+    const deps = makeDeps({
+      listBusinesses: vi
+        .fn()
+        .mockResolvedValue([biz({ id: "b-nobox", hostinger_vps_id: null })]),
+      listVirtualMachines: vi.fn().mockResolvedValue([]),
+      listBusinessIdsWithLiveSubscription: lookup
+    });
+    await checkVpsBillingPosture(deps as never);
+    expect(lookup).toHaveBeenCalledWith(["b-nobox"]);
+  });
+
+  it("still ignores a wiped business when resolving live tenancy", async () => {
+    const lookup = vi.fn().mockResolvedValue({
+      stripeBacked: new Set<string>(),
+      stripeless: new Set<string>(),
+      cancelAtPeriodEnd: new Set<string>()
+    });
+    const deps = makeDeps({
+      listBusinesses: vi.fn().mockResolvedValue([
+        biz({ id: "alive", hostinger_vps_id: null }),
+        biz({ id: "gone", hostinger_vps_id: null, status: "wiped" })
+      ]),
+      listVirtualMachines: vi.fn().mockResolvedValue([]),
+      listBusinessIdsWithLiveSubscription: lookup
+    });
+    await checkVpsBillingPosture(deps as never);
+    expect(lookup).toHaveBeenCalledWith(["alive"]);
+  });
+
   // tenantVmId also rejects non-numeric and non-positive ids, so the message
   // must not claim the column is empty when ops can see a value in it.
   it("says an unusable VPS id is unusable, not missing", async () => {

@@ -109,6 +109,32 @@ export type BillingPostureDeps = {
   enableAutoRenewal: (subscriptionId: string) => Promise<unknown>;
 };
 
+/**
+ * A business the platform genuinely owes a working, renewing box.
+ *
+ * Live means an active or past_due subscription (Stripe-backed or an internal
+ * stripeless row) that is NOT cancelling at period end. Everything else is
+ * out of scope by design: a business with no subscription row at all is not a
+ * tenant (the marketplace review sandboxes are seeded online purely so a
+ * reviewer can sign in), and one cancelling at period end has already had its
+ * box released on purpose.
+ *
+ * Shared by both directions so they cannot drift: the auto-heal loop must not
+ * spend platform money outside this set, and the boxless report must not
+ * escalate outside it either.
+ */
+export function isLiveTenant(
+  liveBusinessIds: {
+    stripeBacked: Set<string>;
+    stripeless: Set<string>;
+    cancelAtPeriodEnd: Set<string>;
+  },
+  businessId: string
+): boolean {
+  if (liveBusinessIds.cancelAtPeriodEnd.has(businessId)) return false;
+  return liveBusinessIds.stripeBacked.has(businessId) || liveBusinessIds.stripeless.has(businessId);
+}
+
 function tenantVmId(business: BusinessRow): number | null {
   if (!providerUsesHostingerLifecycle(resolveVpsProvider(business.vps_provider))) return null;
   const vmId = Number.parseInt(business.hostinger_vps_id ?? "", 10);
@@ -161,15 +187,15 @@ export async function checkVpsBillingPosture(
   // parked non-renewing and the check flipped it back on. The helper uses
   // any-row semantics so a newer pending row can't shadow an older active
   // subscription (second Bugbot High).
+  //
+  // Queried over every non-wiped business, not just the ones holding a VM:
+  // the boxless check at the bottom needs the same answer, and asking only
+  // about box-holders is what let it report every business that has no box
+  // and never will.
   const liveBusinessIds = await deps.listBusinessIdsWithLiveSubscription(
-    candidates.map((entry) => entry.business.id)
+    businesses.filter((business) => business.status !== "wiped").map((business) => business.id)
   );
-  const tenants = candidates.filter(
-    (entry) =>
-      !liveBusinessIds.cancelAtPeriodEnd.has(entry.business.id) &&
-      (liveBusinessIds.stripeBacked.has(entry.business.id) ||
-        liveBusinessIds.stripeless.has(entry.business.id))
-  );
+  const tenants = candidates.filter((entry) => isLiveTenant(liveBusinessIds, entry.business.id));
 
   for (const { business, vmId } of tenants) {
     const stripeBacked = liveBusinessIds.stripeBacked.has(business.id);
@@ -383,10 +409,22 @@ export async function checkVpsBillingPosture(
   // A live tenant with no box at all. #1016 correctly stopped the hardware
   // advisor escalating these, which left the state unmonitored; a failed
   // migration can produce it.
+  //
+  // LIVE is the load-bearing word, and this loop used to ignore it: it walked
+  // every business, so anything online without a box was an ACTION REQUIRED
+  // line forever. Two whole classes of business are boxless on purpose and
+  // always will be. The marketplace review sandboxes (Zoom, Meta, Google) are
+  // seeded status "online" with no subscription at all, purely so a reviewer
+  // can sign in and see a dashboard; they have no tenant to serve and no box
+  // to lose. A tenant cancelling at period end is winding down, and the
+  // cancel planner has already released its box on purpose. Neither is a
+  // half-finished migration, which is what this finding is for, and a digest
+  // that cries wolf every day is one nobody reads on the day it is right.
   for (const business of businesses) {
     if (!isBusinessRunningStatus(business.status)) continue;
     if (!providerUsesHostingerLifecycle(resolveVpsProvider(business.vps_provider))) continue;
     if (tenantVmId(business) !== null) continue;
+    if (!isLiveTenant(liveBusinessIds, business.id)) continue;
     findings.push({
       kind: "online_tenant_no_box",
       vmId: null,
