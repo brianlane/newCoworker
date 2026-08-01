@@ -1,5 +1,5 @@
 /**
- * Prospecting — what the owner sees and what the owner can change.
+ * Prospecting: what the owner sees and what the owner can change.
  *
  * The read model and the three mutations behind the dashboard panel, kept here
  * rather than in the route handlers so the rules are unit-tested: which
@@ -13,6 +13,7 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { logger } from "@/lib/logger";
 import { prospectingAllowedForBusiness } from "@/lib/plans/prospecting";
 import {
   getOutreachSettings,
@@ -77,7 +78,19 @@ export async function loadProspectingView(
     getOutreachSettings(businessId, db),
     listProspectOutcomes(businessId, db),
     listProspectsByStatus(businessId, ["drafted"], REVIEW_QUEUE_LIMIT, db),
-    prospectingAllowedForBusiness(businessId, db)
+    // tierAllowed is display-only (it drives the upgrade card); every write
+    // path re-checks the tier server-side. prospectingAllowedForBusiness
+    // throws on lookup failure, and unhandled here that rejection 500s the
+    // whole Marketing panel. Degrade OPEN instead: a Starter briefly sees
+    // the normal panel while writes still refuse, which beats flashing an
+    // upgrade card at a paying tenant over a transient read blip.
+    prospectingAllowedForBusiness(businessId, db).catch((error) => {
+      logger.warn("outreach: tier lookup failed; rendering the panel ungated", {
+        businessId,
+        error: error instanceof Error ? error.message : String(error)
+      });
+      return true;
+    })
   ]);
   const { total, byVertical } = summarizeFunnel(outcomes);
   return {

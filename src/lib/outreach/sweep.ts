@@ -214,20 +214,24 @@ export async function recordOutreachEmailLog(
 async function resolveTenant(
   settings: OutreachSettingsRow,
   r: Resolved
-): Promise<{ tenant: PitchTenant; timeZone: string | null } | { missing: string }> {
+): Promise<
+  | { tenant: PitchTenant; timeZone: string | null }
+  | { missing: string; blockedBy: "tier" | "config" }
+> {
   const business = await r.getBusiness(settings.business_id, r.db);
-  if (!business) return { missing: "business row is gone" };
+  if (!business) return { missing: "business row is gone", blockedBy: "config" };
   // Downgrade after switching Prospecting on: leave settings alone, but stop
-  // spending Places/AI/Resend until they upgrade again.
+  // spending Places/AI/Resend until they upgrade again. blockedBy carries the
+  // classification so callers never have to infer it from the note's wording.
   if (!prospectingAllowedForTier(business.tier)) {
-    return { missing: "prospecting requires the Standard plan" };
+    return { missing: "prospecting requires the Standard plan", blockedBy: "tier" };
   }
   // The DB constraint guarantees a postal address for any non-off mode, so
   // this is belt-and-braces rather than the primary gate.
   const postalAddress = settings.postal_address?.trim() ?? "";
-  if (!postalAddress) return { missing: "no postal address configured" };
+  if (!postalAddress) return { missing: "no postal address configured", blockedBy: "config" };
   const valueProp = settings.value_prop?.trim() ?? "";
-  if (!valueProp) return { missing: "no value proposition configured" };
+  if (!valueProp) return { missing: "no value proposition configured", blockedBy: "config" };
   const link = await r.schedulingLink(settings.business_id).catch(() => null);
   return {
     tenant: {
@@ -785,7 +789,10 @@ export async function sendProspectNow(
   if (!settings) return { ok: false, reason: "not_configured" };
   const resolved = await resolveTenant(settings, r);
   if ("missing" in resolved) {
-    if (resolved.missing.includes("Standard plan")) {
+    // Classified by the discriminant, not by matching the note's copy: a
+    // wording tweak must never silently turn this 403 into "finish setting
+    // up Prospecting first".
+    if (resolved.blockedBy === "tier") {
       return { ok: false, reason: "tier_blocked", detail: resolved.missing };
     }
     return { ok: false, reason: "not_configured", detail: resolved.missing };

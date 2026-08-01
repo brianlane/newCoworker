@@ -142,6 +142,23 @@ describe("loadProspectingView", () => {
     expect(view.tierAllowed).toBe(false);
   });
 
+  it("degrades rather than 500s the panel when the tier lookup fails", async () => {
+    // tierAllowed is display-only (the upgrade card); every write path
+    // re-checks the tier server-side. A transient businesses read failure
+    // must not take down the whole Marketing panel, and it must not flash
+    // an upgrade card at a paying tenant, so the degraded value is true.
+    prospectingAllowedSpy.mockRejectedValue(new Error("transient read failure"));
+    listProspectOutcomesSpy.mockResolvedValue([] as never);
+    listProspectsByStatusSpy.mockResolvedValue([] as never);
+    const view = await loadProspectingView(BIZ, {} as never);
+    expect(view.tierAllowed).toBe(true);
+
+    // Same degrade when the rejection is not an Error instance.
+    prospectingAllowedSpy.mockRejectedValue("plain string blip");
+    const again = await loadProspectingView(BIZ, {} as never);
+    expect(again.tierAllowed).toBe(true);
+  });
+
   it("flags a clipped scan rather than under-reporting the funnel", async () => {
     // A tenant with more prospects than the scan bound would otherwise see
     // totals and a reply rate that quietly stop counting.
