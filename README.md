@@ -789,14 +789,23 @@ got the July 2026 update bounced back.
   The wrong pair gets a 401 `invalid_client`, which the refresh path reads as
   a dead grant and soft-disables a healthy connection, and which the revoke
   path swallows entirely, leaving the app authorized after a Disconnect.
-- **Webhooks are attributed, not just authenticated.**
-  `verifyZoomWebhookSignature` tries `ZOOM_SECRET_TOKEN` then
-  `ZOOM_DEV_SECRET_TOKEN` and returns WHICH client signed; both tenant
-  lookups filter on it. Without that filter an `app_deauthorized` from the
-  development app would wipe the token pair of a production tenant sharing a
-  Zoom account.
+- **The Secret Token is APP-LEVEL and cannot attribute a delivery.** One
+  value covers both credential pairs (verified July 2026: the token shown on
+  the Development Access page is the exact value production webhook
+  validation has been passing with), so every delivery verifies under
+  `ZOOM_SECRET_TOKEN` and the signature only proves the delivery is ours.
+  Attribution comes from elsewhere: `app_deauthorized` carries the
+  `client_id` in its payload (`resolveZoomClientEnvFromClientId` maps it to
+  an env, unrecognized ids fall back to wiping both), and
+  `recording.transcript_completed` carries nothing, so transcript routing
+  matches the host's connections under either client and lets the
+  per-business import ledger absorb the dev+prod double delivery. Without
+  the payload scoping, deauthorizing the development client would wipe the
+  token pair of a production tenant sharing a Zoom account.
+  `ZOOM_DEV_SECRET_TOKEN` exists only as a hedge against Zoom ever issuing
+  distinct tokens; leave it unset.
 - **Turning it off after approval** is env-only: clear
-  `ZOOM_DEV_OAUTH_BUSINESS_IDS` and `ZOOM_DEV_SECRET_TOKEN`, redeploy, then
+  `ZOOM_DEV_OAUTH_BUSINESS_IDS`, redeploy, then
   disconnect and reconnect the sandbox so it moves back to production. Do it
   before the dev credentials are ever regenerated, or the pinned row refreshes
   into `invalid_grant` and shows up as "Needs reconnect".

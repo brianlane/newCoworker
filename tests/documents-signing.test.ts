@@ -94,7 +94,11 @@ function requestRow(
     signer_user_agent: null,
     content_sha256: null,
     signed_content_md: null,
-    expires_at: "2026-08-01T00:00:00Z",
+    // Far future ON PURPOSE. Two cases below deliberately omit `now` to
+    // exercise the real-clock default, so a near-term date here becomes a
+    // time bomb: the original "2026-08-01" default started failing every
+    // branch's CI the moment the wall clock crossed midnight UTC into Aug 1.
+    expires_at: "2999-01-01T00:00:00Z",
     created_at: "2026-07-01T00:00:00Z",
     ...overrides
   };

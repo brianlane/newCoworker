@@ -14,6 +14,7 @@ import {
   getZoomOAuthConfig,
   refreshZoomTokens,
   resolveZoomClientEnvForBusiness,
+  resolveZoomClientEnvFromClientId,
   revokeZoomToken,
   verifyZoomOAuthState,
   ZOOM_STATE_TTL_MS
@@ -109,6 +110,27 @@ describe("getZoomOAuthConfig", () => {
       );
     }
   );
+});
+
+describe("resolveZoomClientEnvFromClientId", () => {
+  it("maps each configured client id to its env", () => {
+    withDevClient();
+    expect(resolveZoomClientEnvFromClientId("zoom-client-id")).toBe("production");
+    expect(resolveZoomClientEnvFromClientId(" zoom-dev-client-id ")).toBe("development");
+  });
+
+  it("returns null for unknown, empty, or unconfigured ids", () => {
+    withDevClient();
+    expect(resolveZoomClientEnvFromClientId("someone-elses-app")).toBeNull();
+    expect(resolveZoomClientEnvFromClientId("   ")).toBeNull();
+
+    // Dev id unset: a delivery naming it must not silently read as production.
+    delete process.env.ZOOM_DEV_CLIENT_ID;
+    expect(resolveZoomClientEnvFromClientId("zoom-dev-client-id")).toBeNull();
+
+    delete process.env.ZOOM_CLIENT_ID;
+    expect(resolveZoomClientEnvFromClientId("zoom-client-id")).toBeNull();
+  });
 });
 
 describe("resolveZoomClientEnvForBusiness", () => {

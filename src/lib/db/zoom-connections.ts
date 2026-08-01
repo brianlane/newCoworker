@@ -291,13 +291,13 @@ export type ZoomConnectionSummary = {
  * tenants), so this returns every ACTIVE match; a deauthorized or
  * soft-disabled connection routes nothing.
  *
- * Scoped to the client env that SENT the delivery: the production and
- * development apps both post to the same endpoint, and a Zoom account can
- * hold a grant under each.
+ * Deliberately NOT scoped by oauth_client_env: recording payloads carry no
+ * client id and the app-level Secret Token cannot attribute a delivery to a
+ * client, so transcript routing matches connections under either client and
+ * relies on the per-business import ledger to absorb double deliveries.
  */
 export async function getActiveZoomConnectionSummariesByZoomUserId(
   zoomUserId: string,
-  clientEnv: ZoomClientEnv,
   client?: SupabaseClient
 ): Promise<ZoomConnectionSummary[]> {
   const db = client ?? (await createSupabaseServiceClient());
@@ -305,7 +305,6 @@ export async function getActiveZoomConnectionSummariesByZoomUserId(
     .from("zoom_connections")
     .select("business_id,auto_import_transcripts")
     .eq("zoom_user_id", zoomUserId)
-    .eq("oauth_client_env", clientEnv)
     .eq("is_active", true);
   if (error) {
     throw new Error(`getActiveZoomConnectionSummariesByZoomUserId: ${error.message}`);
@@ -320,21 +319,27 @@ export async function getActiveZoomConnectionSummariesByZoomUserId(
  * ciphertext would survive the Zoom-side uninstall.
  *
  * The client-env filter is load-bearing, not tidiness: without it a
- * deauthorization from the DEVELOPMENT app would wipe the token pair of a
+ * deauthorization of the DEVELOPMENT client would wipe the token pair of a
  * production tenant whose owner happens to use the same Zoom account, taking
- * their meeting scheduling down until someone noticed and reconnected.
+ * their meeting scheduling down until someone noticed and reconnected. The
+ * env comes from the deauthorization payload's client_id (the app-level
+ * Secret Token cannot attribute a delivery); `null` means the payload's
+ * client id was missing or unrecognized, and falls back to wiping across
+ * both clients, the pre-dual-client behavior.
  */
 export async function getZoomConnectionBusinessIdsByZoomUserId(
   zoomUserId: string,
-  clientEnv: ZoomClientEnv,
+  clientEnv: ZoomClientEnv | null,
   client?: SupabaseClient
 ): Promise<string[]> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { data, error } = await db
+  const base = db
     .from("zoom_connections")
     .select("business_id")
-    .eq("zoom_user_id", zoomUserId)
-    .eq("oauth_client_env", clientEnv);
+    .eq("zoom_user_id", zoomUserId);
+  const { data, error } = await (clientEnv === null
+    ? base
+    : base.eq("oauth_client_env", clientEnv));
   if (error) {
     throw new Error(`getZoomConnectionBusinessIdsByZoomUserId: ${error.message}`);
   }

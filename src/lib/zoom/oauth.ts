@@ -105,6 +105,24 @@ export function resolveZoomClientEnvForBusiness(businessId: string): ZoomClientE
   return allowList.includes(businessId.trim().toLowerCase()) ? "development" : "production";
 }
 
+/**
+ * Attribute a Zoom-supplied client id to one of our credential pairs, or
+ * null when it matches neither. This is how `app_deauthorized` deliveries
+ * are scoped: the Secret Token is APP-LEVEL (one value covers both the
+ * production and development credentials), so the webhook signature proves
+ * the delivery is ours but cannot say which client it concerns. The
+ * deauthorization payload's `client_id` can.
+ */
+export function resolveZoomClientEnvFromClientId(clientId: string): ZoomClientEnv | null {
+  const id = clientId.trim();
+  if (id.length === 0) return null;
+  const production = (process.env.ZOOM_CLIENT_ID ?? "").trim();
+  const development = (process.env.ZOOM_DEV_CLIENT_ID ?? "").trim();
+  if (production.length > 0 && id === production) return "production";
+  if (development.length > 0 && id === development) return "development";
+  return null;
+}
+
 function stateKey(): Buffer {
   // Same key source as the integration-secret envelope: a dedicated key when
   // set, else the service-role key (always present server-side).

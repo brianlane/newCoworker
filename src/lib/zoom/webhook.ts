@@ -40,7 +40,10 @@ import {
   fetchPastMeetingMeta,
   fetchZoomMeetingTranscript
 } from "@/lib/zoom/transcript";
-import type { ZoomClientEnv } from "@/lib/zoom/oauth";
+import {
+  resolveZoomClientEnvFromClientId,
+  type ZoomClientEnv
+} from "@/lib/zoom/oauth";
 import { logger } from "@/lib/logger";
 
 /** Recording payloads carry file lists; far under this in practice. */
@@ -51,9 +54,11 @@ export const ZOOM_WEBHOOK_TIMESTAMP_TOLERANCE_MS = 5 * 60 * 1000;
 export const ZOOM_WEBHOOK_DOWNLOAD_TIMEOUT_MS = 20_000;
 
 /**
- * The Secret Token for one Marketplace client. The production and
- * development apps have SEPARATE secret tokens and both post here, so every
- * delivery has to be attributed to one of them.
+ * The Secret Token to verify with. Zoom's Secret Token is APP-LEVEL: one
+ * value covers both the production and development credential pairs, so in
+ * practice ZOOM_SECRET_TOKEN verifies every delivery and ZOOM_DEV_SECRET_TOKEN
+ * stays unset. The dev slot exists only as a hedge against Zoom ever issuing
+ * distinct tokens; nothing routes on which one matched.
  */
 function webhookSecret(clientEnv: ZoomClientEnv): string | null {
   const secret = (
@@ -83,15 +88,17 @@ function signatureMatches(
 
 /**
  * Verify `x-zm-signature` ("v0=" + HMAC-SHA256 hex of "v0:{ts}:{rawBody}")
- * and timestamp freshness, returning WHICH Marketplace client signed it.
- * Null on any missing/malformed input; the route rejects unauthenticated
+ * and timestamp freshness, reporting which configured secret matched. Null
+ * on any missing/malformed input; the route rejects unauthenticated
  * deliveries before parsing.
  *
- * Production is tried first (the hot path costs one HMAC), and development is
- * only considered while ZOOM_DEV_SECRET_TOKEN is set, so clearing that env
- * var after the update is approved closes the second door with no code
- * change. The env is not cosmetic: it scopes which tenants the delivery is
- * allowed to touch.
+ * The matched env is used ONLY to answer url_validation challenges with the
+ * same secret. It is NOT an attribution of which Marketplace client sent the
+ * delivery: the Secret Token is app-level, shared by both credential pairs,
+ * so a development delivery verifies under ZOOM_SECRET_TOKEN and reports
+ * "production" here. Tenant routing must never key off this value; the
+ * deauthorization path attributes by the payload's client_id instead, and
+ * transcript routing is deliberately env-agnostic.
  */
 export function verifyZoomWebhookSignature(
   rawBody: string,
@@ -308,10 +315,12 @@ const TRANSCRIPT_OUTCOME_RANK: Record<ZoomTranscriptWebhookOutcome, number> = {
  * unknown events and unusable payloads return outcomes the route maps to
  * 200 (Zoom must not retry them).
  *
- * `clientEnv` is the Marketplace client the signature attributed the delivery
- * to, and it is positional (not part of `deps`, which is the test-injection
- * bag) because it is a required runtime value: every tenant lookup below is
- * scoped by it so the two apps can never reach into each other's rows.
+ * `clientEnv` is which configured secret verified the delivery, and it is
+ * used ONLY to answer url_validation with the same secret. It is not trusted
+ * for tenant routing (the Secret Token is app-level, so it cannot tell the
+ * two clients apart): deauthorization is scoped by the payload's client_id,
+ * and transcript routing matches connections in either env, with the
+ * per-business import ledger absorbing the dev+prod double delivery.
  */
 export async function processZoomWebhookEvent(
   body: unknown,
@@ -351,10 +360,19 @@ export async function processZoomWebhookEvent(
 
   if (event.event === "app_deauthorized") {
     const userId = asString(event.payload.user_id);
-    // ALL rows for the user under THIS client, active or not: a soft-disabled
-    // connection's ciphertext must not survive a Zoom-side uninstall, and a
-    // deauthorization from one app must not wipe the other app's tenants.
-    const businessIds = userId ? await deauthBusinessIdsByZoomUserId(userId, clientEnv) : [];
+    // Which CLIENT the user deauthorized comes from the payload, not the
+    // signature: the shared Secret Token authenticates the delivery but a
+    // dev-client uninstall must not wipe a production tenant that shares the
+    // Zoom account. An unrecognized/missing client_id falls back to wiping
+    // every env's rows, the pre-dual-client behavior: over-wiping shows as
+    // "Needs reconnect", under-wiping leaves dead ciphertext stored.
+    const payloadClientId = asString(event.payload.client_id);
+    const deauthEnv = payloadClientId
+      ? resolveZoomClientEnvFromClientId(payloadClientId)
+      : null;
+    // ALL rows for the user under that client, active or not: a soft-disabled
+    // connection's ciphertext must not survive a Zoom-side uninstall.
+    const businessIds = userId ? await deauthBusinessIdsByZoomUserId(userId, deauthEnv) : [];
     for (const businessId of businessIds) {
       await deauthorize(businessId);
       await logSystem({
@@ -372,7 +390,11 @@ export async function processZoomWebhookEvent(
     const extracted = extractTranscriptCompleted(event, body);
     if (!extracted) return { kind: "transcript", outcome: "unusable", businessId: null };
 
-    const conns = await connectionsByZoomUserId(extracted.hostId, clientEnv);
+    // Env-agnostic on purpose: recording payloads carry no client id, and
+    // when the host is connected under both clients Zoom delivers once per
+    // event subscription anyway; the per-business ledger claim makes the
+    // second delivery a no-op instead of a duplicate document.
+    const conns = await connectionsByZoomUserId(extracted.hostId);
     if (conns.length === 0) {
       return { kind: "transcript", outcome: "no_connection", businessId: null };
     }
