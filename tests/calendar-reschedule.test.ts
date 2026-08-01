@@ -846,6 +846,47 @@ describe("cancelCalendarAppointment", () => {
     expect(vi.mocked(removeSharedCalendarMirror)).toHaveBeenCalledWith(BIZ, "mirror-1");
   });
 
+  it("drops the stale claim AND its mirror when cancel says the appointment is gone", async () => {
+    // The symmetric case to the reschedule path: booking_not_found means the
+    // row points at something the provider cannot find, so both the claim
+    // and the mirror representing it must go.
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(MIRROR_CLAIM);
+    vi.mocked(cancelVagaroAppointment).mockResolvedValue({
+      ok: false,
+      detail: "booking_not_found"
+    } as never);
+    await cancelCalendarAppointment(BIZ, CANCEL_ARGS);
+    expect(vi.mocked(removeSharedCalendarMirror)).toHaveBeenCalledWith(BIZ, "mirror-1");
+    expect(vi.mocked(deleteBookingClaim)).toHaveBeenCalledWith("claim-1");
+  });
+
+  it("drops a mirror-less stale claim without touching the mirror remover", async () => {
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
+    vi.mocked(cancelVagaroAppointment).mockResolvedValue({
+      ok: false,
+      detail: "booking_not_found"
+    } as never);
+    await cancelCalendarAppointment(BIZ, CANCEL_ARGS);
+    expect(vi.mocked(removeSharedCalendarMirror)).not.toHaveBeenCalled();
+    expect(vi.mocked(deleteBookingClaim)).toHaveBeenCalledWith("claim-1");
+  });
+
+  it("keeps the claim and mirror on a mere provider failure", async () => {
+    // auth_failed or transport trouble is not "the appointment is gone";
+    // the claim must survive for a retry to resolve.
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(MIRROR_CLAIM);
+    vi.mocked(cancelVagaroAppointment).mockResolvedValue({
+      ok: false,
+      detail: "vagaro_auth_failed"
+    } as never);
+    await cancelCalendarAppointment(BIZ, CANCEL_ARGS);
+    expect(vi.mocked(removeSharedCalendarMirror)).not.toHaveBeenCalled();
+    expect(vi.mocked(deleteBookingClaim)).not.toHaveBeenCalled();
+  });
+
   it("removes no mirror when the booking never had one", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);

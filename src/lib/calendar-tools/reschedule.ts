@@ -778,6 +778,17 @@ export async function cancelCalendarAppointment(
         const attendee = { phones: phone ? [phone] : [], email: args.attendeeEmail ?? null };
         await cancelWaitlistForAttendee(businessId, attendee);
         await offerFreedSlot(businessId, claim.startAt, {}, attendee);
+      } else if (canceled.detail === "booking_not_found") {
+        // The provider no longer has the appointment (deleted upstream, or
+        // the claim's start has drifted from reality). Either way the row is
+        // stale: drop it so it cannot shadow future lifecycle calls, and
+        // take its mirror with it, matching the reschedule path above. A
+        // mirror representing a booking the provider cannot find is showing
+        // the team something that does not exist.
+        if (claim.sharedCalendarEventId) {
+          await removeSharedCalendarMirror(businessId, claim.sharedCalendarEventId);
+        }
+        await deleteBookingClaim(claim.id);
       }
       return canceled;
     }
