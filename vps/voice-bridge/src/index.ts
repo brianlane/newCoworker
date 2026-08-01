@@ -345,6 +345,16 @@ type TenantTelnyxSettings = {
    */
   translatorModeEnabled: boolean;
   /**
+   * Standard+ tier check on its own, for bridge-local tools that are not
+   * covered by translatorModeEnabled. That flag is the POST-TRANSFER
+   * stay-on-the-line path (owner toggle AND tier); the staff-request
+   * start_translator_mode tool reads only the Coworker-tools row, so without
+   * this a Starter owner could say "be my interpreter" and run full-duplex
+   * Gemini Live with the session cap deferred - the exact cost leak the tier
+   * gate exists to close.
+   */
+  translatorTierAllowed: boolean;
+  /**
    * The tenant's chosen Gemini Live voice, or null for the platform default.
    * Read per call (not baked into box env at provision) so an owner can audition
    * voices from the admin page without a redeploy.
@@ -507,6 +517,7 @@ async function loadTenantTelnyxSettings(
     // Opt-in: a box running an older schema (column absent) reads as false and
     // behaves exactly as it did before translator mode existed.
     translatorModeEnabled: row?.translator_mode_enabled === true && translatorTierOk,
+    translatorTierAllowed: translatorTierOk,
     voiceName: row?.voice_name ?? null
   };
 }
@@ -1674,7 +1685,10 @@ function main(): void {
           // chokepoint, so read the owner's row here or the toggle would be
           // decoration. Only staff callers can reach the tool at all, so skip
           // the read entirely for a customer call.
-          const translatorOnRequestEnabled = callerIsStaff
+          // Tier first: the tool toggle is an owner preference, not an
+          // entitlement, and #1028 gated only the post-transfer path. Reuses
+          // the tier read loadTenantTelnyxSettings already did.
+          const translatorOnRequestEnabled = callerIsStaff && tenantSettings.translatorTierAllowed
             ? await isBridgeToolEnabled(supabase, {
                 businessId,
                 agentKey: "voice",
