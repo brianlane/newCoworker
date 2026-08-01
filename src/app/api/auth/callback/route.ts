@@ -2,6 +2,7 @@ import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { NextResponse, type NextRequest } from "next/server";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { reconcilePendingEmailChange } from "@/lib/account/email-change";
+import { safeInternalPath } from "@/lib/auth/safe-redirect";
 
 /**
  * Fast path for syncing `businesses.owner_email` after a self-serve email
@@ -21,25 +22,6 @@ async function syncPendingEmailChange(ssr: SupabaseClient): Promise<void> {
   }
 }
 
-function getSafeRedirectTarget(request: NextRequest, redirectTo: string): URL {
-  const fallback = new URL("/dashboard", request.nextUrl.origin);
-
-  // Only allow app-relative redirects and reject protocol-relative values.
-  if (!redirectTo.startsWith("/") || redirectTo.startsWith("//")) {
-    return fallback;
-  }
-
-  try {
-    const candidate = new URL(redirectTo, request.nextUrl.origin);
-    if (candidate.origin !== request.nextUrl.origin) {
-      return fallback;
-    }
-    return candidate;
-  } catch {
-    return fallback;
-  }
-}
-
 export async function GET(request: NextRequest) {
   const url = request.nextUrl;
   const code = url.searchParams.get("code");
@@ -51,6 +33,6 @@ export async function GET(request: NextRequest) {
     await syncPendingEmailChange(supabase);
   }
 
-  const target = getSafeRedirectTarget(request, redirectTo);
+  const target = new URL(safeInternalPath(redirectTo, "/dashboard"), url.origin);
   return NextResponse.redirect(target);
 }

@@ -1,5 +1,7 @@
 import { Suspense } from "react";
 import { redirect } from "next/navigation";
+import Image from "next/image";
+import Link from "next/link";
 import { getAuthUser } from "@/lib/auth";
 import {
   adminMfaRedirectPath,
@@ -36,7 +38,10 @@ export default async function AdminLoginPage({ searchParams }: AdminLoginPagePro
   return (
     <div className="min-h-screen bg-deep-ink flex items-center justify-center px-4">
       <div className="w-full max-w-md space-y-6">
-        <div className="text-center">
+        <div className="flex flex-col items-center gap-3">
+          <Link href="/">
+            <Image src="/logo.png" alt="New Coworker" width={56} height={56} className="rounded-full" />
+          </Link>
           <h1 className="text-2xl font-bold text-parchment">Admin Sign In</h1>
         </div>
 

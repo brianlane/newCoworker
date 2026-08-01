@@ -3,9 +3,10 @@
 import Image from "next/image";
 import Link from "next/link";
 import { useTranslations } from "next-intl";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { Menu, X } from "lucide-react";
 import { LanguageSwitcher } from "@/components/i18n/LanguageSwitcher";
+import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
 export type NavLink = { href: string; labelKey: string };
 
@@ -21,6 +22,29 @@ export const MARKETING_NAV_LINKS: NavLink[] = [
 export function MarketingNav() {
   const t = useTranslations("marketing.nav");
   const [open, setOpen] = useState(false);
+  const [authed, setAuthed] = useState(false);
+
+  // Session presence resolves after hydration (the Supabase client reads
+  // browser cookies), so the anonymous CTAs render first and only a signed-in
+  // visitor sees them swap to the Dashboard button. Marketing pages stay free
+  // of server-side auth work on purpose (see src/proxy.ts).
+  useEffect(() => {
+    let active = true;
+    (async () => {
+      try {
+        const supabase = getSupabaseBrowserClient();
+        const {
+          data: { session }
+        } = await supabase.auth.getSession();
+        if (active) setAuthed(Boolean(session));
+      } catch {
+        // Missing env or SDK failure: keep the anonymous CTAs.
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   return (
     <header className="sticky top-0 z-40 border-b border-parchment/10 bg-deep-ink/85 backdrop-blur-md">
@@ -44,15 +68,26 @@ export function MarketingNav() {
 
         <div className="hidden items-center gap-4 md:flex">
           <LanguageSwitcher />
-          <Link href="/login" className="text-sm text-parchment/60 transition-colors hover:text-parchment">
-            {t("signIn")}
-          </Link>
-          <Link
-            href="/onboard"
-            className="rounded-lg bg-claw-green px-4 py-2 text-sm font-semibold text-deep-ink transition-colors hover:bg-opacity-90"
-          >
-            {t("getStarted")}
-          </Link>
+          {authed ? (
+            <Link
+              href="/dashboard"
+              className="rounded-lg bg-claw-green px-4 py-2 text-sm font-semibold text-deep-ink transition-colors hover:bg-opacity-90"
+            >
+              {t("dashboard")}
+            </Link>
+          ) : (
+            <>
+              <Link href="/login" className="text-sm text-parchment/60 transition-colors hover:text-parchment">
+                {t("signIn")}
+              </Link>
+              <Link
+                href="/onboard"
+                className="rounded-lg bg-claw-green px-4 py-2 text-sm font-semibold text-deep-ink transition-colors hover:bg-opacity-90"
+              >
+                {t("getStarted")}
+              </Link>
+            </>
+          )}
         </div>
 
         <button
@@ -82,20 +117,32 @@ export function MarketingNav() {
                 {t(l.labelKey)}
               </Link>
             ))}
-            <Link
-              href="/login"
-              onClick={() => setOpen(false)}
-              className="rounded-lg px-3 py-2.5 text-sm font-medium text-parchment/75 transition-colors hover:bg-parchment/5 hover:text-parchment"
-            >
-              {t("signIn")}
-            </Link>
-            <Link
-              href="/onboard"
-              onClick={() => setOpen(false)}
-              className="mt-2 rounded-lg bg-claw-green px-4 py-2.5 text-center text-sm font-semibold text-deep-ink"
-            >
-              {t("getStarted")}
-            </Link>
+            {authed ? (
+              <Link
+                href="/dashboard"
+                onClick={() => setOpen(false)}
+                className="mt-2 rounded-lg bg-claw-green px-4 py-2.5 text-center text-sm font-semibold text-deep-ink"
+              >
+                {t("dashboard")}
+              </Link>
+            ) : (
+              <>
+                <Link
+                  href="/login"
+                  onClick={() => setOpen(false)}
+                  className="rounded-lg px-3 py-2.5 text-sm font-medium text-parchment/75 transition-colors hover:bg-parchment/5 hover:text-parchment"
+                >
+                  {t("signIn")}
+                </Link>
+                <Link
+                  href="/onboard"
+                  onClick={() => setOpen(false)}
+                  className="mt-2 rounded-lg bg-claw-green px-4 py-2.5 text-center text-sm font-semibold text-deep-ink"
+                >
+                  {t("getStarted")}
+                </Link>
+              </>
+            )}
           </div>
         </div>
       )}
