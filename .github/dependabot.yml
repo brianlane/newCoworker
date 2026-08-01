@@ -1,4 +1,20 @@
 version: 2
+
+# The render sidecar's npm `playwright` pin and its Docker base image
+# (mcr.microsoft.com/playwright:v<x.y.z>-jammy) MUST move in the same PR: the
+# image ships the browser binaries the library looks for, and a mismatch is a
+# LATENT outage that only detonates on the next container rebuild (bit twice:
+# PR #226, then Dependabot #1005 whose mismatch took the render box down on
+# 2026-07-31 during a routine redeploy). This group makes Dependabot bump both
+# in ONE PR so tests/aiflow-render-playwright-pin.test.ts passes and automerge
+# can proceed. Do NOT split these back into separate npm/docker entries: two
+# separate PRs each fail the pin guard until the other lands, which deadlocks
+# automerge.
+multi-ecosystem-groups:
+  aiflow-render:
+    schedule:
+      interval: weekly
+
 updates:
   # Root Next.js app
   - package-ecosystem: npm
@@ -60,13 +76,20 @@ updates:
     # "calls die after the greeting" outage was the odd-length PCM bug, #259,
     # not the SDK major.) Major bumps now flow as their own PRs for review.
 
+  # Both members of the aiflow-render multi-ecosystem group (see the header
+  # comment). The group owns the schedule; `patterns` is required on members
+  # and ["*"] takes every dependency, so majors ride the group PR too, which
+  # is exactly when the base image matters most. The docker side tracks the
+  # FROM tag in vps/aiflow-render/Dockerfile.
   - package-ecosystem: npm
     directory: "/vps/aiflow-render"
-    schedule:
-      interval: weekly
-    groups:
-      minor-and-patch:
-        update-types: ["minor", "patch"]
+    patterns: ["*"]
+    multi-ecosystem-group: "aiflow-render"
+
+  - package-ecosystem: docker
+    directory: "/vps/aiflow-render"
+    patterns: ["*"]
+    multi-ecosystem-group: "aiflow-render"
 
   - package-ecosystem: github-actions
     directory: "/"
