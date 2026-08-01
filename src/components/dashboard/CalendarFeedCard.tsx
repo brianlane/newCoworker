@@ -26,6 +26,9 @@ export function CalendarFeedCard({ businessId }: { businessId: string }) {
   const t = useTranslations("dashboard.bookings");
   const [feedUrl, setFeedUrl] = useState<string | null>(null);
   const [error, setError] = useState(false);
+  /** Copy/rotate failures: shown as a line UNDER the URL, never replacing
+   * it. A denied clipboard must not make a fetched link disappear. */
+  const [actionError, setActionError] = useState(false);
   const [copied, setCopied] = useState(false);
   const [rotating, setRotating] = useState(false);
 
@@ -36,6 +39,7 @@ export function CalendarFeedCard({ businessId }: { businessId: string }) {
     // link while the new one loads.
     setFeedUrl(null);
     setError(false);
+    setActionError(false);
     (async () => {
       try {
         const res = await fetch(
@@ -59,17 +63,20 @@ export function CalendarFeedCard({ businessId }: { businessId: string }) {
 
   async function copy() {
     if (!feedUrl) return;
+    setActionError(false);
     try {
       await navigator.clipboard.writeText(feedUrl);
       setCopied(true);
       setTimeout(() => setCopied(false), 2000);
     } catch {
-      setError(true);
+      // Clipboard denied: the URL stays visible and selectable above.
+      setActionError(true);
     }
   }
 
   async function rotate() {
     setRotating(true);
+    setActionError(false);
     try {
       const res = await fetch("/api/dashboard/calendar-feed", {
         method: "POST",
@@ -80,10 +87,10 @@ export function CalendarFeedCard({ businessId }: { businessId: string }) {
       if (res.ok && json.data?.feedUrl) {
         setFeedUrl(json.data.feedUrl);
       } else {
-        setError(true);
+        setActionError(true);
       }
     } catch {
-      setError(true);
+      setActionError(true);
     } finally {
       setRotating(false);
     }
@@ -103,6 +110,9 @@ export function CalendarFeedCard({ businessId }: { businessId: string }) {
               {copied ? t("feedCopied") : t("feedCopy")}
             </Button>
           </div>
+          {actionError ? (
+            <p className="text-xs text-spark-orange">{t("feedActionError")}</p>
+          ) : null}
           <div className="flex items-center justify-between">
             <p className="text-[11px] text-parchment/40">{t("feedHint")}</p>
             <Button type="button" variant="ghost" size="sm" onClick={rotate} loading={rotating}>

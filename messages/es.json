@@ -1749,7 +1749,8 @@
       "feedRotate": "Rotar enlace",
       "feedHint": "Cualquiera con este enlace puede ver horarios y nombres de las citas. Rotarlo corta el acceso a todas las copias compartidas.",
       "feedLoading": "Preparando tu enlace de calendario…",
-      "feedError": "No se pudo cargar el enlace del calendario. Recarga para intentarlo de nuevo."
+      "feedError": "No se pudo cargar el enlace del calendario. Recarga para intentarlo de nuevo.",
+      "feedActionError": "Algo salió mal. El enlace de arriba sigue siendo válido; selecciónalo y cópialo manualmente, o inténtalo de nuevo."
     },
     "integrationsClaude": {
       "connectedBadge": "Conectado",

@@ -169,9 +169,15 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
 
   if (loadFailed) {
     return (
-      <Card>
-        <p className="text-sm text-red-400">{t("loadFailed")}</p>
-      </Card>
+      <div className="space-y-6">
+        <Card>
+          <p className="text-sm text-red-400">{t("loadFailed")}</p>
+        </Card>
+        {/* The feed is served by its own endpoint; a failed booking-page
+            read must not hide the one bookings surface that works for
+            every tenant. */}
+        <CalendarFeedCard businessId={businessId} />
+      </div>
     );
   }
   if (!state) {

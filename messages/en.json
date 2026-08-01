@@ -1749,7 +1749,8 @@
       "feedRotate": "Rotate link",
       "feedHint": "Anyone with this link can see booking times and names. Rotating it cuts off every copy you have shared.",
       "feedLoading": "Preparing your calendar link…",
-      "feedError": "Could not load the calendar link. Refresh to try again."
+      "feedError": "Could not load the calendar link. Refresh to try again.",
+      "feedActionError": "Something went wrong. The link above is still valid; select and copy it manually, or try again."
     },
     "integrationsClaude": {
       "connectedBadge": "Connected",
