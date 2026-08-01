@@ -593,6 +593,9 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
       try {
         const { results } = await dispatchUrgentNotification({
           businessId,
+          // This alert is ABOUT this texter, so it goes to whichever
+          // teammate owns them, falling back to the business owner.
+          contactE164: customerPhone,
           summary: `Texter follow-up needed: ${parsed.data.message}`.slice(0, 200),
           kind: "sms_team_notify",
           payload: { logId, ...logPayload },

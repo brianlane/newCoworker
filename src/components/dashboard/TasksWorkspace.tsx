@@ -102,6 +102,7 @@ export function TasksWorkspace({
           businessId={businessId}
           defaultScope={defaultScope}
           hasLinkedEmployee={hasLinkedEmployee}
+          canManage={canManagePipelines}
         />
       ) : (
         <TaskCenter

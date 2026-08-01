@@ -738,8 +738,24 @@ describe("POST /api/rowboat/tool-call dispatch", () => {
       expect.objectContaining({
         businessId: BIZ,
         kind: "sms_team_notify",
+        // The alert is about this texter, so it routes to whichever teammate
+        // owns them rather than always to the business owner.
+        contactE164: "+16478096050",
         smsBody: expect.stringContaining("Junaid Awan (+16478096050)")
       })
+    );
+  });
+
+  it("notify_team passes a null contact when the model supplied no phone", async () => {
+    // Nothing to route on, so the alert stays owner-addressed.
+    vi.mocked(dispatchUrgentNotification).mockResolvedValue({
+      results: [{ channel: "sms", status: "sent" }]
+    } as never);
+    const content = makeContent("notify_team", { message: "Call back the texter" });
+    vi.mocked(verifyRowboatWebhookJwt).mockReturnValue(claimsFor(content));
+    await POST(makeRequest(content));
+    expect(vi.mocked(dispatchUrgentNotification)).toHaveBeenCalledWith(
+      expect.objectContaining({ contactE164: null })
     );
   });
 

@@ -41,6 +41,11 @@ export type LeadContactRow = {
   summary_md: string | null;
   tags: string[] | null;
   owner_employee_id: string | null;
+  /**
+   * Where a flow-filed lead came from ("Clever"), stamped at filing time.
+   * The fallback behind a matched submission's own source label.
+   */
+  lead_source: string | null;
   created_at: string;
   updated_at: string;
 };
@@ -54,7 +59,11 @@ export type LeadDataRow = {
   tags: string[];
   ownerEmployeeId: string | null;
   ownerName: string | null;
-  /** Source label of the newest submission ("facebook_lead_ads", ...). */
+  /**
+   * Where the lead came from: the newest matched submission's label
+   * ("facebook_lead_ads", ...), else the contact's own `lead_source` stamped
+   * by the AiFlow that filed them ("Clever"). Null when neither is known.
+   */
   source: string | null;
   /** The newest submission's answers (drives the dynamic columns). */
   fields: Record<string, string>;
@@ -186,7 +195,10 @@ export function buildLeadDataRows(input: {
       tags: contact.tags ?? [],
       ownerEmployeeId: contact.owner_employee_id,
       ownerName,
-      source: sub?.source ?? null,
+      // A matched submission carries the exact upstream label, so it wins;
+      // the contact's own stamp covers every lead that arrived by SMS, voice
+      // or a referral text and therefore has no submission row at all.
+      source: sub?.source ?? contact.lead_source ?? null,
       fields: sub?.fields ?? {},
       createdAt: sub?.created_at ?? contact.created_at,
       hasContact: true

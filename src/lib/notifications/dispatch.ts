@@ -42,6 +42,10 @@ import {
   type CategoryPreferenceFlags
 } from "@/lib/notifications/categories";
 import { deliverWhatsApp } from "@/lib/whatsapp/deliver";
+import {
+  resolveContactOwnerTarget,
+  type ContactOwnerTarget
+} from "../../../supabase/functions/_shared/contact_owner_target";
 import { logger } from "@/lib/logger";
 import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import { emailMessagesForLocale } from "@/lib/i18n/email-copy";
@@ -61,6 +65,13 @@ export type DispatchInput = {
   smsBody?: string;
   /** Optional override of the email subject; defaults to "Urgent: {summary}". */
   emailSubject?: string;
+  /**
+   * The contact this alert is ABOUT, when it is about one. Supplying it
+   * redirects the page to whichever teammate owns that contact, falling back
+   * to the business owner. Omitted by every business-level alert (billing,
+   * plan, system health), which stays owner-addressed.
+   */
+  contactE164?: string | null;
 };
 
 export type DispatchChannelResult = {
@@ -88,18 +99,37 @@ export type ResolvedTargets = {
   unsubscribed: boolean;
   /** Per-event-category filters (see lib/notifications/categories.ts). */
   categories: CategoryPreferenceFlags;
+  /**
+   * How a contact-scoped alert was routed, when a contact was supplied.
+   * Null when the caller passed none (the business-level alerts).
+   */
+  routing: ContactOwnerTarget | null;
 };
 
 /**
  * Resolve "where do owner alerts go?" using per-business preferences first,
  * then the business's onboarding email, then env-level operator fallbacks.
  *
+ * When `contactE164` names the contact the alert is ABOUT, the resolved
+ * phone (and the email, when the roster row has one) is redirected to the
+ * teammate who owns that contact — see
+ * supabase/functions/_shared/contact_owner_target.ts for the ladder and why
+ * it ignores the per-employee availability flags. Business-level alerts pass
+ * no contact and are unaffected.
+ *
  * Falls back gracefully on DB errors — we never want to silently drop an
  * urgent alert because preferences couldn't be read. The caller still gets
  * a result with the operator-level fallbacks active.
+ *
+ * Note the per-business toggles below still apply to a redirected page: the
+ * `notification_preferences` row has no per-employee dimension, so switching
+ * `sms_urgent` off is the BUSINESS's kill switch and silences the teammate's
+ * page too. That is deliberate; do not invent a dimension the table cannot
+ * express.
  */
 export async function resolveNotificationTargets(
-  businessId: string
+  businessId: string,
+  contactE164?: string | null
 ): Promise<ResolvedTargets> {
   const fallbackEmail = process.env.ADMIN_EMAIL?.trim() || null;
   const fallbackPhone = coerceOwnerPhoneToE164(process.env.TELNYX_OWNER_PHONE);
@@ -170,10 +200,36 @@ export async function resolveNotificationTargets(
     });
   }
 
+  const ownerAlertEmail = prefsEmail ?? ownerEmail ?? fallbackEmail;
+  const ownerAlertPhone = prefsPhone ?? fallbackPhone;
+
+  // Contact-scoped alerts belong to whoever owns the lead. Wrapped like the
+  // two lookups above: resolveContactOwnerTarget never throws, but building
+  // the service client can, and an alert must never be lost because we could
+  // not work out who to redirect it to. Degrades to the business owner.
+  let routing: ContactOwnerTarget | null = null;
+  if (contactE164) {
+    try {
+      const db = await createSupabaseServiceClient();
+      routing = await resolveContactOwnerTarget(db, businessId, contactE164);
+    } catch (err) {
+      logger.warn("resolveNotificationTargets: contact-owner lookup failed", {
+        businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+  const redirected = routing?.target === "contact_owner";
+
   return {
-    email: prefsEmail ?? ownerEmail ?? fallbackEmail,
+    // Email redirects only when the roster row actually has an address;
+    // otherwise it stays with the owner so a redirected alert keeps a second
+    // delivery path (see contact_owner_target's emailTarget).
+    email:
+      routing?.emailTarget === "contact_owner" ? routing.email : ownerAlertEmail,
     ownerEmail,
-    phone: prefsPhone ?? fallbackPhone,
+    phone: redirected ? routing!.phone : ownerAlertPhone,
+    routing,
     smsUrgentEnabled: smsUrgent,
     whatsappUrgentEnabled: whatsappUrgent,
     emailUrgentEnabled: emailUrgent,
@@ -222,7 +278,7 @@ async function recordRow(
 export async function dispatchUrgentNotification(
   input: DispatchInput
 ): Promise<DispatchResult> {
-  const targets = await resolveNotificationTargets(input.businessId);
+  const targets = await resolveNotificationTargets(input.businessId, input.contactE164);
   // Strip trailing slash for parity with the Edge-function helpers and to
   // avoid `https://example.com//dashboard` / `//api/...` if the env var was
   // set with a stray slash.
@@ -230,7 +286,22 @@ export async function dispatchUrgentNotification(
   const dashboardUrl = `${appUrl}/dashboard`;
   const summary = input.summary;
   const kind = input.kind;
-  const payload: Record<string, unknown> = { summary, ...(input.payload ?? {}) };
+  const payload: Record<string, unknown> = {
+    summary,
+    ...(input.payload ?? {}),
+    // Why this alert reached whoever it reached — mirrors the
+    // notify_lead_owner step's target/matched_by so run history and the
+    // dashboard can both explain a recipient.
+    ...(targets.routing
+      ? {
+          routed_to: targets.routing.target,
+          routed_member_id: targets.routing.memberId,
+          routed_member_name: targets.routing.memberName,
+          matched_by: targets.routing.matchedBy,
+          routing_reason: targets.routing.reason
+        }
+      : {})
+  };
   const results: DispatchChannelResult[] = [];
 
   // Category gate (BizBlasts-style per-event-type prefs): when the owner

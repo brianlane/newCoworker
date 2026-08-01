@@ -93,6 +93,7 @@ import {
   deleteZoomMeetingForBooking
 } from "@/lib/zoom/meetings";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
+import { fireLifecycleStage } from "@/lib/pipelines/lifecycle-hooks";
 import { localClock } from "../../../supabase/functions/_shared/ai_flows/engine";
 import { logger } from "@/lib/logger";
 
@@ -898,6 +899,9 @@ export async function submitPublicBooking(
     // path gets this inside bookCalendarAppointment), and a booking for a
     // lead nobody owns pages the owner.
     await fireGoalEvent(context.businessId, phone, { kind: "appointment_booked" });
+    await fireLifecycleStage(context.businessId, phone, "booked", {
+      dedupeSuffix: manageToken
+    });
     await resolveWaitlistAfterBooking(
       context.businessId,
       { phones: [phone], email: email.toLowerCase() },

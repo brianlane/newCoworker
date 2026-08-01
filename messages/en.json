@@ -2102,6 +2102,12 @@
       "colAdded": "Added",
       "stageNone": "Off board",
       "stageNoContact": "No contact yet",
+      "stageNoPipeline": "No pipeline",
+      "noPipelineTitle": "No pipeline yet",
+      "noPipelineBody": "A pipeline turns your lead tags into stages, so the Stage column becomes a dropdown you can move leads through. Your AiFlows then move leads across it automatically.",
+      "createPipeline": "Create the default lead pipeline",
+      "noPipelineAskManager": "Ask a manager to create one from this page.",
+      "createPipelineFailed": "Couldn't create the pipeline, try again.",
       "tagCap": "{name} is at the 25-tag limit, so the stage tag couldn't be added.",
       "moveFailed": "Couldn't move the lead, try again."
     },

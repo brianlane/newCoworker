@@ -17,6 +17,7 @@ import { maybeAlertUnassignedBooking } from "@/lib/calendar-tools/unassigned-boo
 import { resolveWaitlistAfterBooking } from "@/lib/calendar-tools/waitlist-resolve";
 import { getCustomerMemory } from "@/lib/customer-memory/db";
 import { fireGoalEvent } from "@/lib/ai-flows/goal-hooks";
+import { fireLifecycleStage } from "@/lib/pipelines/lifecycle-hooks";
 import {
   createZoomMeetingForBooking,
   deleteZoomMeetingForBooking
@@ -770,6 +771,9 @@ async function bookOnProvider(
         await fireGoalEvent(businessId, args.attendeePhone ?? fallbackPhone, {
           kind: "appointment_booked"
         });
+        await fireLifecycleStage(businessId, args.attendeePhone ?? fallbackPhone, "booked", {
+          dedupeSuffix: String(vagaroEventId)
+        });
       }
       return vagaroResult;
     }
@@ -788,6 +792,9 @@ async function bookOnProvider(
       if (acuityResult.ok && acuityEventId) {
         await fireGoalEvent(businessId, args.attendeePhone ?? fallbackPhone, {
           kind: "appointment_booked"
+        });
+        await fireLifecycleStage(businessId, args.attendeePhone ?? fallbackPhone, "booked", {
+          dedupeSuffix: String(acuityEventId)
         });
       }
       return acuityResult;
@@ -846,6 +853,9 @@ async function bookOnProvider(
         orphanZoomMeetingId = null;
         await fireGoalEvent(businessId, args.attendeePhone ?? fallbackPhone, {
           kind: "appointment_booked"
+        });
+        await fireLifecycleStage(businessId, args.attendeePhone ?? fallbackPhone, "booked", {
+          dedupeSuffix: String(caldavEventId)
         });
         return {
           ...caldavResult,
@@ -974,6 +984,9 @@ async function bookOnProvider(
     if (eventId) {
       await fireGoalEvent(businessId, args.attendeePhone ?? fallbackPhone, {
         kind: "appointment_booked"
+      });
+      await fireLifecycleStage(businessId, args.attendeePhone ?? fallbackPhone, "booked", {
+        dedupeSuffix: String(eventId)
       });
     }
 

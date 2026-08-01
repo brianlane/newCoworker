@@ -127,6 +127,8 @@ import { isTestModeTrigger, simulateTestAction } from "../_shared/ai_flows/test_
 import { tenantScreenshotPath } from "../_shared/ai_flows/screenshot_guard.ts";
 import { isBackfillSkipExistingTrigger } from "../_shared/ai_flows/backfill.ts";
 import { enqueueContactEventRuns } from "../_shared/ai_flows/contact_events.ts";
+import { applyLifecycleStage } from "../_shared/pipelines/lifecycle.ts";
+import { leadSourceLabel } from "../_shared/leads/source_label.ts";
 import { duplicateLeadRunExists, flowDedupesLeadRuns } from "../_shared/ai_flows/reentry.ts";
 import {
   birthdayDedupeKey,
@@ -344,6 +346,11 @@ type Scope = {
   // waits resolve instantly. Derived from trigger.test_mode each claim (the
   // trigger scope persists verbatim, so the flag survives parks/resumes).
   testMode?: boolean;
+  // The flow's own name, read each claim. A lead's SOURCE on the Tasks page
+  // is derived from it (see _shared/leads/source_label.ts) because the flow
+  // that files a lead is what names its origin: "Clever Lead - Accept",
+  // "HomeLight Referral". Derived only; buildContext omits it.
+  flowName?: string;
 };
 
 serve(async (req: Request): Promise<Response> => {
@@ -486,11 +493,12 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
 
   const { data: flowRow, error: flowErr } = await supabase
     .from("ai_flows")
-    .select("definition, enabled, deleted_at")
+    .select("name, definition, enabled, deleted_at")
     .eq("id", run.flow_id)
     .maybeSingle();
   if (flowErr) throw new Error(`load flow: ${flowErr.message}`);
   const flow = flowRow as {
+    name?: string | null;
     definition?: unknown;
     enabled?: boolean;
     deleted_at?: string | null;
@@ -573,6 +581,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     ...(def.timeWindow && !testMode ? { timeWindow: def.timeWindow } : {})
   };
   if (testMode) scope.testMode = true;
+  if (typeof flow.name === "string" && flow.name.trim()) scope.flowName = flow.name.trim();
   // Default the claim sentinel to "none" so a claim-gated step
   // (when: { var: "claimed_agent", notEquals: "none" }) stays CLOSED until a
   // route_to_team actually records a claim — an absent var would otherwise trim
@@ -2095,6 +2104,17 @@ async function logFlowEmail(
 const LEAD_EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /**
+ * Which flow run filed a lead. Supplied by the two filing call sites so the
+ * contact can record where it came from (`lead_source`) and advance onto the
+ * pipeline board. Absent for callers that are not filing a fresh lead.
+ */
+type LeadFilingOrigin = {
+  runId: string;
+  flowId: string;
+  flowName?: string;
+};
+
+/**
  * True when this number is not a lead and must never be filed (or renamed) as
  * a customer. Two independent reasons:
  *
@@ -2163,7 +2183,8 @@ async function enrichCustomerProfile(
   businessId: string,
   customerE164: string,
   name: string,
-  email: string
+  email: string,
+  origin?: LeadFilingOrigin
 ): Promise<void> {
   if (await isNonLeadNumber(supabase, businessId, customerE164)) return;
 
@@ -2194,6 +2215,34 @@ async function enrichCustomerProfile(
       .is("email", null);
     if (emailErr) console.error("record lead email (aiflow lead)", emailErr);
   }
+
+  if (!origin) return;
+
+  // Where the lead came from. Fill-only, like the email above and for the
+  // same reason: the FIRST flow to file this lead names its origin, so a
+  // later touch by a different flow ("Clever Cue Text") cannot relabel a
+  // Clever lead. Targets the surviving row after a merge.
+  const source = leadSourceLabel({ flowName: origin.flowName ?? "" });
+  if (source && targetE164) {
+    const { error: sourceErr } = await supabase
+      .from("contacts")
+      .update({ lead_source: source, updated_at: new Date().toISOString() })
+      .eq("business_id", businessId)
+      .eq("customer_e164", targetE164)
+      .is("lead_source", null);
+    if (sourceErr) console.error("record lead source (aiflow lead)", sourceErr);
+  }
+
+  // The lead now exists as a contact, which is the "New Lead" moment on the
+  // pipeline board. Gated on the stage existing for this business, so a
+  // tenant without a board pays one indexed select.
+  await applyLifecycleStage(
+    supabase,
+    businessId,
+    targetE164 ?? customerE164,
+    "lead_filed",
+    { sourceFlowId: origin.flowId, dedupeSuffix: origin.runId }
+  );
 }
 
 /**
@@ -2229,7 +2278,12 @@ async function recordLeadCustomerProfile(
     run.business_id,
     customerE164,
     isLeadNumber ? (identity.name ?? "") : "",
-    isLeadNumber ? (identity.email ?? "") : ""
+    isLeadNumber ? (identity.email ?? "") : "",
+    // Only the LEAD carries the flow's origin: a co-recipient (a teammate,
+    // the owner) must not be labelled or staged as if they came from it.
+    isLeadNumber
+      ? { runId: run.id, flowId: run.flow_id, flowName: scope.flowName }
+      : undefined
   );
 }
 
@@ -2436,7 +2490,16 @@ async function upsertCustomerStep(
   const duplicateOfRunId = isTestModeTrigger(scope.trigger)
     ? null
     : await findDuplicateLeadRun(supabase, run, scope, action.e164);
-  await enrichCustomerProfile(supabase, run.business_id, action.e164, action.name, action.email);
+  // An explicit upsert_customer step IS the lead, so the flow's origin always
+  // applies (no co-recipient gating, unlike recordLeadCustomerProfile).
+  await enrichCustomerProfile(
+    supabase,
+    run.business_id,
+    action.e164,
+    action.name,
+    action.email,
+    { runId: run.id, flowId: run.flow_id, flowName: scope.flowName }
+  );
   if (duplicateOfRunId) {
     const label = action.name ? `${action.name} (${action.e164})` : action.e164;
     appendActionTaken(
@@ -8263,6 +8326,14 @@ async function assignContactOwnerOnClaim(
         ...(claimedName ? { ownerName: claimedName } : {}),
         sourceFlowId: run.flow_id,
         dedupeKey: `ce:owner:${run.id}`
+      });
+      // A teammate taking the lead IS the "Contacted" moment on the pipeline
+      // board. Fired only when ownership actually landed: a later claim on an
+      // already-owned contact never steals, and that contact is already past
+      // this stage anyway.
+      await applyLifecycleStage(supabase, run.business_id, leadPhone, "claimed", {
+        sourceFlowId: run.flow_id,
+        dedupeSuffix: run.id
       });
     }
   } catch (e) {

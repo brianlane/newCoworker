@@ -2102,6 +2102,12 @@
       "colAdded": "Añadido",
       "stageNone": "Fuera del tablero",
       "stageNoContact": "Sin contacto aún",
+      "stageNoPipeline": "Sin pipeline",
+      "noPipelineTitle": "Aún no hay pipeline",
+      "noPipelineBody": "Un pipeline convierte las etiquetas de tus leads en etapas, de modo que la columna Etapa pasa a ser un menú por el que puedes mover los leads. Después tus AiFlows los mueven por él automáticamente.",
+      "createPipeline": "Crear el pipeline de leads predeterminado",
+      "noPipelineAskManager": "Pide a un gerente que cree uno desde esta página.",
+      "createPipelineFailed": "No se pudo crear el pipeline, inténtalo de nuevo.",
       "tagCap": "{name} alcanzó el límite de 25 etiquetas, así que no se pudo añadir la etiqueta de etapa.",
       "moveFailed": "No se pudo mover el lead; inténtalo de nuevo."
     },

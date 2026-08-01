@@ -27,6 +27,16 @@ are not variations on a theme, they are adapters to four different vendors.
 - **ReferralExchange** and **Realtor.com** deliver leads that then need
   routing to whichever teammate is available.
 
+**Lead state is written by the platform, not by these flows.** Stage tags
+(New Lead, Contacted, Engaged, Booked) are applied automatically at the four
+lifecycle moments in
+`supabase/functions/_shared/pipelines/lifecycle.ts`, and `contacts.lead_source`
+is stamped from the filing flow's name, so the Tasks board and its SOURCE
+column populate themselves. Do NOT add `update_contact` stage steps to these
+flows: the platform already covers it, and a hand-authored stage tag would
+fight the forward-only rule. The leads that predate this were backfilled by
+`backfill-amy-lead-stages.ts`.
+
 ## Flows
 
 Roughly 21 flows, 19 enabled. The ones with behavior worth knowing before you
@@ -97,6 +107,7 @@ Other networks: `seed-referralexchange-aiflow.ts`,
 [homelight-flow.md](homelight-flow.md).
 
 Account-level: `seed-amy-new-lead-intake.ts`,
+`backfill-amy-lead-stages.ts`,
 `set-amy-claim-notify-email.ts`, `set-amy-roster-availability.ts`,
 `patch-amy-sms-handoff-and-emoji.ts`,
 `update-dave-routed-aiflows.ts`, `add-price-band-routing.ts`,

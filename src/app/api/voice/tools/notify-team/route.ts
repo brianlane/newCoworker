@@ -92,6 +92,9 @@ export async function POST(request: Request) {
     try {
       const { results } = await dispatchUrgentNotification({
         businessId: envelope.businessId,
+        // This alert is ABOUT this caller, so it goes to whichever teammate
+        // owns them, falling back to the business owner.
+        contactE164: callerPhone,
         summary,
         kind: "voice_team_notify",
         payload: { logId, ...logPayload },

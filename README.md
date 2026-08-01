@@ -1517,6 +1517,74 @@ are RLS-on/no-policies (service-role only); core logic lives in
   `gemini-3.5-flash` / `gemini-3.1-flash-lite-image`); `RESEND_API_KEY`
   gates subscriber email (unset = publish still works, email skipped).
 
+## Lead pipeline: stage tags the platform writes itself
+
+A pipeline stage IS a contact tag: the Tasks board is a view over
+`contacts.tags`, matched case-insensitively against stage names, with no
+opportunities table behind it. That design assumed each tenant would author
+`update_contact` steps to write those tags. Almost nobody did. The fleet's
+heaviest tenant had 21 flows and exactly ONE tag-writing step, so her board
+was empty while the engine knew every lead's state perfectly well, and the
+Data view's SOURCE column was a dash on every row.
+
+So the platform writes lead state itself, at four moments it was already
+instrumented for (each is a sibling call beside an existing `GoalEventKind`
+site, not new instrumentation):
+
+| Moment | Where | Stage |
+| --- | --- | --- |
+| lead filed | `enrichCustomerProfile` (ai-flow-worker) | New Lead |
+| teammate claimed | `assignContactOwnerOnClaim` | Contacted |
+| customer replied | inbound SMS webhook | Engaged |
+| booking landed | every `appointment_booked` goal | Booked |
+
+**Won is never platform-written.** It is a human judgement, and the board's
+own move endpoint already owns it.
+
+The write is an ORDINARY tag write firing the ORDINARY hooks (goal events +
+`tag_changed` contact events), because a stage tag automations cannot see
+would be a second, invisible notion of lead state. Five things keep that from
+looping or surprising a tenant, and all five matter:
+
+1. **`sourceFlowId` loop guard.** `contact_events` already excludes the flow
+   whose own step caused the write, so a flow that files a lead cannot
+   retrigger itself through the "New Lead" tag it caused.
+2. **Forward-only.** A contact at or past the target stage is left alone, so a
+   re-filed lead is never dragged back from Booked and a repeating trigger
+   (every inbound text fires `replied`) transitions exactly ONCE per contact,
+   ever. This is what makes the `replied` hook safe.
+3. **A hard bound** of three forward moves per contact per pipeline.
+4. **Stage-must-exist.** Nothing is written unless a stage with that name
+   already exists for the business. A tenant with no pipeline gets nothing and
+   pays one indexed select; a tenant who renamed "Contacted" to "Working" gets
+   nothing for that moment. Opting in is creating the stage.
+5. **`businesses.auto_lifecycle_stages`**, default true, read FAIL-SAFE OFF
+   (an unreadable toggle writes no tag). Deliberately the opposite direction
+   to `needs_human_team_first`, where the safe direction is "still page
+   someone": here a tag write is an irreversible side effect that can start a
+   tenant's flow.
+
+A teammate is never staged. The applier drops `type` owner/employee and any
+number on the roster, failing SAFE (an unreadable roster is treated as staff),
+which is also what keeps a teammate's "1" reply out of the `replied` hook.
+
+**Where the lead came from.** `contacts.lead_source` is stamped fill-only when
+a flow first files the lead, derived from that flow's name by
+[source_label.ts](supabase/functions/_shared/leads/source_label.ts):
+`Clever Lead - Accept` becomes `Clever`, `HomeLight Referral` becomes
+`HomeLight`. Fill-only means the FIRST flow to file owns the label. The Data
+view prefers a matched `lead_submissions.source` (so webhook leads keep their
+exact upstream label) and falls back to this. An explicit `leadSource` field on
+the `upsert_customer` step is the obvious follow-up and is deliberately not
+built yet: renaming the flow already changes the label.
+
+Pure logic in
+[_shared/pipelines/stages.ts](supabase/functions/_shared/pipelines/stages.ts)
+(shared by the worker and the app, under the same 100% coverage gate), the
+runtime in `_shared/pipelines/lifecycle.ts`, the Next-side wrapper in
+`src/lib/pipelines/lifecycle-hooks.ts`. Existing leads are backfilled per
+tenant by a one-shot, which fires no hooks and edits no flows.
+
 ## AiFlow team routing: claim notices (SMS + optional email)
 
 `route_to_team` offers a lead to the roster (reply "1" to claim, "2" to pass,
@@ -1639,9 +1707,16 @@ messaging, not lead distribution, and every staff-detection read
 (`staffNumberCheck`, `businessSelfNames`, `activeRosterMemberByPhone`) stays
 flag-blind, or a rotation-off teammate would start being filed as a
 customer again, which is the defect two sections up. **Owner notices are
-untouched** by all four: keep-for-owner alerts and their nudges, the
-roster-exhausted fallback, and claim notices all resolve
-`business_telnyx_settings.forward_to_e164` and never read the roster at all.
+untouched** by all four, on both notification pipelines. The `[AiFlow]` one
+(keep-for-owner alerts and their nudges, the roster-exhausted fallback, claim
+notices) resolves `business_telnyx_settings.forward_to_e164` and never reads
+the roster at all. The `[Coworker]` urgent-alert one DOES read the roster
+since Jul 31 2026, but only to answer a different question: an alert about
+one contact goes to whoever owns that contact
+([contact_owner_target.ts](supabase/functions/_shared/contact_owner_target.ts),
+below), and it reads `active` plus a phone, flag-blind, for exactly the reason
+this section gives. Paging the teammate who already claimed a lead is
+stewardship, not distribution.
 
 Editable on the Employees page (per member, under Edit), through the CSV
 import/export (`lead_rotation`, `named_leads`, `named_group_offers`,

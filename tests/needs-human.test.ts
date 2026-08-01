@@ -123,6 +123,10 @@ describe("escalateToHuman", () => {
     expect(body.record.task_type).toBe(NEEDS_HUMAN_TASK_TYPE);
     expect(body.record.status).toBe("urgent_alert");
     expect(body.record.log_payload.contact_label).toBe("Dwight Colclough");
+    // Load-bearing beyond dedupe since Jul 2026: the notifications function
+    // reads this to route the page to whichever teammate owns the contact
+    // (CONTACT_SCOPED_TASK_TYPES in _shared/contact_owner_target.ts). Drop it
+    // and every escalation silently reverts to paging the business owner.
     expect(body.record.log_payload.contact_e164).toBe(LEAD);
     expect(body.record.log_payload.reason).toContain("no-fault accident");
   });

@@ -87,11 +87,14 @@ export function buildLeadsCsv(
 export function LeadDataGrid({
   businessId,
   defaultScope,
-  hasLinkedEmployee
+  hasLinkedEmployee,
+  canManage
 }: {
   businessId: string;
   defaultScope: Scope;
   hasLinkedEmployee: boolean;
+  /** Owner/manager: may create the starter pipeline from the empty state. */
+  canManage: boolean;
 }) {
   const t = useTranslations("dashboard.tasksData");
   const [scope, setScope] = useState<Scope>(defaultScope);
@@ -102,6 +105,7 @@ export function LeadDataGrid({
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [moveError, setMoveError] = useState<string | null>(null);
+  const [seeding, setSeeding] = useState(false);
 
   const load = useCallback(
     async (nextScope: Scope) => {
@@ -147,11 +151,31 @@ export function LeadDataGrid({
 
   const stageNameFor = useCallback(
     (row: LeadDataRow): string => {
-      if (!pipeline) return "";
+      // Three distinct states, so the CSV stops exporting "No contact yet"
+      // for every row of a business that simply has no board.
+      if (!pipeline) return t("stageNoPipeline");
+      if (!row.hasContact || !row.e164) return t("stageNoContact");
       return stageForTags(pipeline.stages, row.tags)?.name ?? "";
     },
-    [pipeline]
+    [pipeline, t]
   );
+
+  const seedDefault = useCallback(async () => {
+    setSeeding(true);
+    setError(null);
+    try {
+      await fetch(`/api/dashboard/pipelines?businessId=${encodeURIComponent(businessId)}`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ seedDefault: true })
+      }).then((r) => readEnvelope<{ pipeline: Pipeline }>(r));
+      await load(scope);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : t("createPipelineFailed"));
+    } finally {
+      setSeeding(false);
+    }
+  }, [businessId, load, scope, t]);
 
   const moveLead = useCallback(
     async (row: LeadDataRow, stageId: string | null) => {
@@ -301,6 +325,32 @@ export function LeadDataGrid({
           </Card>
         )}
 
+      {/*
+        A business with NO pipeline at all used to render "No contact yet" in
+        every Stage cell, which reads as a data problem rather than a setup
+        step. The Board view has always had a proper empty state; this is its
+        counterpart, so the Stage column becomes usable from here too.
+      */}
+      {!error && pipelines !== null && pipelines.length === 0 && (
+        <Card>
+          <div className="space-y-3 py-4 text-center">
+            <p className="text-sm text-parchment/70">{t("noPipelineTitle")}</p>
+            <p className="text-sm text-parchment/60">{t("noPipelineBody")}</p>
+            {canManage ? (
+              <button
+                onClick={() => void seedDefault()}
+                disabled={seeding}
+                className="inline-flex items-center gap-1.5 rounded-lg bg-claw-green px-4 py-2 text-sm font-semibold text-deep-ink transition-colors hover:bg-opacity-90 disabled:opacity-50"
+              >
+                {t("createPipeline")}
+              </button>
+            ) : (
+              <p className="text-xs text-parchment/40">{t("noPipelineAskManager")}</p>
+            )}
+          </div>
+        </Card>
+      )}
+
       {!error && rows && rows.length > 0 && (
         <div className="overflow-x-auto rounded-lg border border-parchment/10">
           <table className="w-full min-w-max text-left text-sm">
@@ -341,7 +391,9 @@ export function LeadDataGrid({
                   <td className="px-3 py-2 text-parchment/70">{row.e164 ?? "—"}</td>
                   <td className="px-3 py-2 text-parchment/70">{row.email ?? "—"}</td>
                   <td className="px-3 py-2">
-                    {pipeline && row.hasContact && row.e164 ? (
+                    {!pipeline ? (
+                      <span className="text-parchment/40">{t("stageNoPipeline")}</span>
+                    ) : row.hasContact && row.e164 ? (
                       <select
                         value={
                           stageForTags(pipeline.stages, row.tags)?.id ?? ""
