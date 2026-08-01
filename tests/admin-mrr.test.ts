@@ -382,7 +382,10 @@ describe("computeDayCurrentMrr — recurring pack add-ons", () => {
     expect(result.subscriptionCents).toBe(9900 + 2 * 4800 + 1600);
   });
 
-  it("counts pack revenue as refund-exposed alongside the plan", () => {
+  it("keeps pack revenue out of refund exposure (packs are non-refundable)", () => {
+    // The refund executor carves pack lines out of the money-back (Aug 2026),
+    // so only the plan rate can actually leave through a refund. Pack cents
+    // still count in the totals: they do recur.
     const result = computeDayCurrentMrr({
       subscriptions: [
         sub({
@@ -394,7 +397,9 @@ describe("computeDayCurrentMrr — recurring pack add-ons", () => {
       packAddonOptions: options,
       now: NOW
     });
-    expect(result.refundExposedCents).toBe(9900 + 4800);
+    expect(result.subscriptionCents).toBe(9900 + 4800);
+    expect(result.refundExposedCents).toBe(9900);
+    expect(result.committedCents).toBe(4800);
   });
 
   it("ignores junk mirrors and unknown pack ids rather than erroring the tile", () => {

@@ -159,7 +159,10 @@ async function listOpenMembershipGrantSourceIds(
   const tables: Array<{ table: string; kind: UsagePackClawbackKind }> = [
     { table: "voice_bonus_grants", kind: "voice" },
     { table: "sms_bonus_grants", kind: "sms" },
-    { table: "chat_credit_grants", kind: "chat" }
+    // NOT "chat_credit_grants": that table does not exist, and the error
+    // branch below swallows a bad name as an empty list (which silently
+    // left chat grants alive on mixed-pack refunds until Aug 2026).
+    { table: "chat_spend_credit_grants", kind: "chat" }
   ];
   const out: Array<{ sourceId: string; kind: UsagePackClawbackKind }> = [];
   for (const { table, kind } of tables) {

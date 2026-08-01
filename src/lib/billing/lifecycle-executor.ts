@@ -90,6 +90,7 @@ import type {
   TelnyxOp
 } from "@/lib/billing/lifecycle";
 import { CARRIER_REGISTRATION_FEE_NAME } from "@/lib/plans/carrier-fee";
+import { MEMBERSHIP_PACK_LINE_NAME_PREFIXES } from "@/lib/billing/membership-pack-addons";
 
 export type ExecutorDeps = {
   stripe?: Stripe;
@@ -401,6 +402,28 @@ async function runStripeOp(op: StripeOp, stripe: Stripe, result: ExecutorResult)
           );
           return sum + Math.max((line.amount ?? 0) - discounted, 0);
         }, 0);
+      // Membership pack policy (Aug 2026): usage packs are non-refundable,
+      // and the purchase UI discloses exactly that. Carve every membership
+      // pack add-on line out of the refund in full, matched by the shared
+      // line-name prefixes (same mechanism as the carrier fee above,
+      // post-discount so the pack's share of an invoice-level coupon stays
+      // refunded). The matching grants are voided below either way. A
+      // negative proration line clamps to 0 per line so it can never
+      // inflate the refund. The vendor cost of pack-funded usage is
+      // excluded from `usageCarveOutCents` by the bonus-funded offset in
+      // usage-charges.ts, so pack money is kept exactly once.
+      const packLinePrefixes = Object.values(MEMBERSHIP_PACK_LINE_NAME_PREFIXES);
+      const packCarveOutCents = (invoice.lines?.data ?? [])
+        .filter((line) =>
+          packLinePrefixes.some((prefix) => (line.description ?? "").includes(prefix))
+        )
+        .reduce((sum, line) => {
+          const discounted = (line.discount_amounts ?? []).reduce(
+            (s, d) => s + (d.amount ?? 0),
+            0
+          );
+          return sum + Math.max((line.amount ?? 0) - discounted, 0);
+        }, 0);
       // Term-plan policy (Jul 2026): the planner additionally withholds one
       // month at the tier's monthly-intro rate on annual/biennial refunds —
       // see `termRefundCarveOutCents` in lifecycle.ts. Zero for monthly.
@@ -411,14 +434,27 @@ async function runStripeOp(op: StripeOp, stripe: Stripe, result: ExecutorResult)
       // and threaded through the op. Zero when the plan never loaded it.
       const usageCarveOutCents = op.usageCarveOutCents;
       const refundCents = Math.min(
-        Math.max(amountPaidCents - carrierFeeCents - termCarveOutCents - usageCarveOutCents, 0),
+        Math.max(
+          amountPaidCents -
+            carrierFeeCents -
+            packCarveOutCents -
+            termCarveOutCents -
+            usageCarveOutCents,
+          0
+        ),
         amountPaidCents
       );
-      if (carrierFeeCents > 0 || termCarveOutCents > 0 || usageCarveOutCents > 0) {
+      if (
+        carrierFeeCents > 0 ||
+        packCarveOutCents > 0 ||
+        termCarveOutCents > 0 ||
+        usageCarveOutCents > 0
+      ) {
         logger.info("refund_latest_charge: carving out non-refundable amounts", {
           stripeSubscriptionId: op.stripeSubscriptionId,
           invoiceId: latestInvoiceId,
           carrierFeeCents,
+          packCarveOutCents,
           termCarveOutCents,
           usageCarveOutCents,
           refundCents
@@ -446,9 +482,9 @@ async function runStripeOp(op: StripeOp, stripe: Stripe, result: ExecutorResult)
         stripeChargeId: chargeId,
         amountCents: refundCents
       };
-      // Pack line cents on this invoice are included in the refunded dollars
-      // (no pack carve-out). Void matching membership pack grants so the
-      // customer does not keep credits after a New Coworker refund.
+      // Pack line cents were carved out of the refund above (packs are
+      // non-refundable), and the matching membership pack grants are voided
+      // here so the credits do not outlive the unwound membership.
       await clawbackPacksForNcRefund();
       return;
     }

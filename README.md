@@ -33,8 +33,11 @@ unless auto-renew is on or the owner starts a new contract at the contract
 rate. Membership Checkout (signup and plan change) may optionally include
 discounted recurring usage packs (voice / SMS / chat) that renew with the
 membership: 5% month-to-month, 10% on 12-month, 20% on 24-month. Quantities
-are allowed per pack. Usage packs are non-refundable to customers. Standalone
-top-ups from Dashboard → Billing stay
+are allowed per pack. Usage packs are non-refundable to customers: a New
+Coworker money-back or admin force refund carves the pack line dollars out of
+the refunded invoice, voids the matching grants, and excludes pack-funded
+usage from the at-cost usage carve-out so those units are never charged
+twice. Standalone top-ups from Dashboard → Billing stay
 at the full catalog price.
 
 **RCS is Enterprise-only** (Jul 2026): each tenant needs their own branded

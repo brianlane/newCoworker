@@ -122,7 +122,9 @@ export function CancelSheet({
               We refund your last charge, excluding the one-time carrier registration fee
               and any usage charges billed at cost (texts sent and received, call minutes,
               AI usage), and, on 12/24-month plans, minus one month of service at the
-              monthly rate for the time you&apos;ve used. We shut down your VPS immediately
+              monthly rate for the time you&apos;ve used. Usage pack add-ons are
+              non-refundable: pack charges are excluded from the refund and any remaining
+              pack credits are removed. We shut down your VPS immediately
               and keep your data for 30 days so you can reactivate without losing anything.
               This is your one-time lifetime refund; it can only be used once.
             </p>

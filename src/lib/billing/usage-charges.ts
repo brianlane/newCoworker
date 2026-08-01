@@ -19,14 +19,33 @@
  * all-in here would double-charge the Gemini Live component.
  *
  * The refund executor subtracts the resulting cents from the Stripe refund
- * alongside the carrier-registration fee and the term carve-out (see
- * `refund_latest_charge` in lifecycle-executor.ts). Loaders here THROW on
- * read errors: the refund routes fail closed (retryable error) rather than
- * refunding money we cannot verify wasn't already spent on usage.
+ * alongside the carrier-registration fee, the membership pack carve-out,
+ * and the term carve-out (see `refund_latest_charge` in
+ * lifecycle-executor.ts). Loaders here THROW on read errors: the refund
+ * routes fail closed (retryable error) rather than refunding money we
+ * cannot verify wasn't already spent on usage.
+ *
+ * Bonus-funded usage is NOT withheld (Aug 2026): usage that drew on pack
+ * credits was already paid for with money New Coworker keeps (membership
+ * pack invoice lines are carved out of the refund in full, and standalone
+ * Checkout top-ups were never customer-refundable), so withholding its
+ * vendor cost again would charge the customer twice for the same units.
+ * `loadBonusFundedUsageOffsets` measures what was actually consumed from
+ * packs and `loadBillableUsageCarveOutCents` subtracts it before pricing.
+ * A customer whose usage never dipped into their packs has zero offsets
+ * and an unchanged carve-out. Accepted approximations (each bounded, and
+ * wrong only in the customer's favor): the SMS offset is grant-lifetime
+ * consumption rather than windowed, and the chat offset attributes spend
+ * above the base tier cap to packs. An offset read error THROWS like every
+ * other loader here: a silent zero offset would quietly reinstate the
+ * double-charge.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { logger } from "@/lib/logger";
 import { ENTERPRISE_UNIT_COSTS } from "@/lib/plans/enterprise-pricing";
+import { chatSpendBaseCapMicrosForTier } from "@/lib/db/chat-usage";
+import type { PlanTier } from "@/lib/plans/tier";
 import {
   isWithinLifetimeRefundWindow,
   type CustomerProfileRow
@@ -59,6 +78,33 @@ export function computeBillableUsageCents(usage: BillableUsage): number {
       (usage.voiceSeconds / 60) * ENTERPRISE_UNIT_COSTS.voiceTelnyxCentsPerMinute +
       usage.aiSpendMicros / 10_000
   );
+}
+
+export type BonusFundedUsageOffsets = {
+  /** AI-settled seconds funded by voice bonus grants (forwarded human legs never are). */
+  voiceSeconds: number;
+  /** Outbound sends funded by SMS bonus grants (inbound never draws bonus). */
+  smsSent: number;
+  /** Window spend above the per-window base cap, clamped to unvoided pack credit. */
+  aiSpendMicros: number;
+};
+
+/**
+ * Remove bonus-funded units from a usage snapshot so only plan-funded usage
+ * gets priced. Every lane clamps at zero: an offset can only shrink the
+ * carve-out, never mint negative usage. Inbound SMS never draws bonus, so
+ * it passes through untouched.
+ */
+export function applyBonusFundedUsageOffsets(
+  usage: BillableUsage,
+  offsets: BonusFundedUsageOffsets
+): BillableUsage {
+  return {
+    smsSent: Math.max(0, usage.smsSent - offsets.smsSent),
+    smsReceived: usage.smsReceived,
+    voiceSeconds: Math.max(0, usage.voiceSeconds - offsets.voiceSeconds),
+    aiSpendMicros: Math.max(0, usage.aiSpendMicros - offsets.aiSpendMicros)
+  };
 }
 
 export type UsageCarveOutWindow = {
@@ -257,12 +303,193 @@ export async function loadBillableUsageSince(
   return { smsSent, smsReceived, voiceSeconds, aiSpendMicros };
 }
 
-/** Load + price in one call — what the refund routes use. */
+/**
+ * Measure how much of the metered usage was funded by pack credits.
+ *
+ * - Voice: per settled call, seconds beyond what the plan reservation
+ *   covered: max(0, settled billable - reserved_included_seconds). This is
+ *   the same invariant the finalize RPC commits (commit_inc =
+ *   least(billable, reserved_included)), read through the settlements join
+ *   so it is windowed, bounded by the settled subtotal (forwarded human
+ *   legs never draw bonus), and immune to grant voiding. Rows with a
+ *   malformed reserved_included contribute 0 (withhold, conservative).
+ * - SMS: consumed texts on unvoided grants (texts_purchased -
+ *   texts_remaining), applied to outbound only. The void RPCs zero
+ *   `texts_remaining`, so a voided grant would read as fully consumed;
+ *   voided also means the pack money went back to the customer, so its
+ *   usage is legitimately withholdable. Grant-lifetime scoped; the apply
+ *   clamp bounds any pre-window leak.
+ * - Chat: packs raise the period cap instead of draining, so attribution
+ *   is per spend window: sum of max(0, spend_micros - base tier cap),
+ *   clamped to the unvoided pack credit total read straight from the
+ *   grant table (NOT the chat_active_credit_micros RPC, which drops
+ *   grants that expired between funding the overage and an admin_force
+ *   refund). No packs means a zero ceiling, so settlement overshoot past
+ *   the base cap stays withheld.
+ *
+ * Documented read order (composed tests depend on it): voice_reservations,
+ * sms_bonus_grants, businesses, owner_chat_model_spend,
+ * chat_spend_credit_grants. Read errors THROW; callers fail closed.
+ */
+export async function loadBonusFundedUsageOffsets(
+  businessId: string,
+  window: UsageCarveOutWindow,
+  client?: SupabaseClient
+): Promise<BonusFundedUsageOffsets> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const pageSize = 1000;
+
+  let voiceSeconds = 0;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await db
+      .from("voice_reservations")
+      .select("reserved_included_seconds, voice_settlements!inner(billable_seconds)")
+      .eq("business_id", businessId)
+      .gte("voice_settlements.created_at", window.sinceIso)
+      .order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) {
+      throw new Error(`loadBonusFundedUsageOffsets(voice_reservations): ${error.message}`);
+    }
+    const rows = data ?? [];
+    for (const row of rows) {
+      const r = row as {
+        reserved_included_seconds?: number | null;
+        voice_settlements?: Array<{ billable_seconds?: number | null }> | null;
+      };
+      // Strict number check: Number(null) is 0, which would misread a
+      // malformed row as "nothing plan-covered" and count the whole call
+      // as bonus. Malformed rows contribute 0 instead (conservative).
+      const included =
+        typeof r.reserved_included_seconds === "number"
+          ? r.reserved_included_seconds
+          : Number.NaN;
+      if (!Number.isFinite(included) || included < 0) continue;
+      let settled = 0;
+      for (const s of r.voice_settlements ?? []) {
+        const n = Number(s?.billable_seconds ?? 0);
+        if (Number.isFinite(n) && n > 0) settled += n;
+      }
+      voiceSeconds += Math.max(0, settled - included);
+    }
+    if (rows.length < pageSize) break;
+  }
+
+  let smsSent = 0;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await db
+      .from("sms_bonus_grants")
+      .select("texts_purchased, texts_remaining")
+      .eq("business_id", businessId)
+      .is("voided_at", null)
+      .order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) {
+      throw new Error(`loadBonusFundedUsageOffsets(sms_bonus_grants): ${error.message}`);
+    }
+    const rows = data ?? [];
+    for (const row of rows) {
+      const r = row as { texts_purchased?: number | null; texts_remaining?: number | null };
+      // Strict number checks, like the voice lane: Number(null) is 0, and a
+      // null texts_remaining would fake a fully consumed grant.
+      const purchased = typeof r.texts_purchased === "number" ? r.texts_purchased : Number.NaN;
+      const remaining = typeof r.texts_remaining === "number" ? r.texts_remaining : Number.NaN;
+      if (!Number.isFinite(purchased) || !Number.isFinite(remaining)) continue;
+      smsSent += Math.max(0, purchased - remaining);
+    }
+    if (rows.length < pageSize) break;
+  }
+
+  const { data: bizRow, error: bizErr } = await db
+    .from("businesses")
+    .select("tier")
+    .eq("id", businessId)
+    .maybeSingle();
+  if (bizErr) {
+    throw new Error(`loadBonusFundedUsageOffsets(businesses): ${bizErr.message}`);
+  }
+  // Missing row/tier prices against the standard (higher) base cap, the
+  // same fallback the live meter uses (ai-spend-meter.ts); a higher cap
+  // can only shrink the offset, never inflate it.
+  const baseCapMicros = chatSpendBaseCapMicrosForTier(
+    (bizRow as { tier?: PlanTier | null } | null)?.tier ?? null
+  );
+
+  let rawChatOverageMicros = 0;
+  for (let from = 0; ; from += pageSize) {
+    let query = db
+      .from("owner_chat_model_spend")
+      .select("spend_micros")
+      .eq("business_id", businessId);
+    if (window.aiSpendSinceIso !== null) {
+      query = query.gte("period_start", window.aiSpendSinceIso);
+    }
+    const { data, error } = await query
+      .order("period_start", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) {
+      throw new Error(`loadBonusFundedUsageOffsets(owner_chat_model_spend): ${error.message}`);
+    }
+    const rows = data ?? [];
+    for (const row of rows) {
+      const n = Number((row as { spend_micros?: number | string | null }).spend_micros ?? 0);
+      if (Number.isFinite(n) && n > baseCapMicros) rawChatOverageMicros += n - baseCapMicros;
+    }
+    if (rows.length < pageSize) break;
+  }
+
+  let packCreditCeilingMicros = 0;
+  for (let from = 0; ; from += pageSize) {
+    const { data, error } = await db
+      .from("chat_spend_credit_grants")
+      .select("credit_micros")
+      .eq("business_id", businessId)
+      .is("voided_at", null)
+      .order("id", { ascending: true })
+      .range(from, from + pageSize - 1);
+    if (error) {
+      throw new Error(`loadBonusFundedUsageOffsets(chat_spend_credit_grants): ${error.message}`);
+    }
+    const rows = data ?? [];
+    for (const row of rows) {
+      const n = Number((row as { credit_micros?: number | string | null }).credit_micros ?? 0);
+      if (Number.isFinite(n) && n > 0) packCreditCeilingMicros += n;
+    }
+    if (rows.length < pageSize) break;
+  }
+
+  return {
+    voiceSeconds,
+    smsSent,
+    aiSpendMicros: Math.min(rawChatOverageMicros, packCreditCeilingMicros)
+  };
+}
+
+/**
+ * Load, offset, and price in one call: what the refund routes use. The
+ * carve-out prices ONLY plan-funded usage (raw metered minus bonus-funded
+ * offsets); both snapshots come back for logging and future admin display.
+ */
 export async function loadBillableUsageCarveOutCents(
   businessId: string,
   window: UsageCarveOutWindow,
   client?: SupabaseClient
-): Promise<{ usage: BillableUsage; cents: number }> {
-  const usage = await loadBillableUsageSince(businessId, window, client);
-  return { usage, cents: computeBillableUsageCents(usage) };
+): Promise<{
+  usage: BillableUsage;
+  offsets: BonusFundedUsageOffsets;
+  adjustedUsage: BillableUsage;
+  cents: number;
+}> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const usage = await loadBillableUsageSince(businessId, window, db);
+  const offsets = await loadBonusFundedUsageOffsets(businessId, window, db);
+  const adjustedUsage = applyBonusFundedUsageOffsets(usage, offsets);
+  const cents = computeBillableUsageCents(adjustedUsage);
+  logger.info("usage carve-out: priced plan-funded usage only", {
+    businessId,
+    usage,
+    offsets,
+    cents
+  });
+  return { usage, offsets, adjustedUsage, cents };
 }

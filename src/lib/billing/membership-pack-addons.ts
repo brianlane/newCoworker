@@ -35,6 +35,19 @@ export const MEMBERSHIP_PACK_MAX_QTY = 20;
 
 export type MembershipPackAddonCategory = "voice" | "sms" | "chat";
 
+/**
+ * Stripe invoice line-name prefixes for membership pack add-ons. The refund
+ * executor identifies pack lines on the refunded invoice by these prefixes
+ * (same mechanism as CARRIER_REGISTRATION_FEE_NAME), so the line builders
+ * below MUST derive their names from this record: a renamed line here
+ * without the matching carve-out match would silently refund pack dollars.
+ */
+export const MEMBERSHIP_PACK_LINE_NAME_PREFIXES: Record<MembershipPackAddonCategory, string> = {
+  voice: "Voice top-up: ",
+  sms: "SMS top-up: ",
+  chat: "AI chat credit: "
+};
+
 export type MembershipPackQty = {
   packId: string;
   quantity: number;
@@ -220,7 +233,7 @@ export function resolveMembershipPackAddons(
       category: "voice",
       packId: pack.id,
       quantity,
-      name: `Voice top-up: ${pack.label}`,
+      name: `${MEMBERSHIP_PACK_LINE_NAME_PREFIXES.voice}${pack.label}`,
       unitAmountCents: discountedMonthlyCents * months,
       discountedMonthlyCents,
       listPriceCents: pack.priceCents,
@@ -240,7 +253,7 @@ export function resolveMembershipPackAddons(
       category: "sms",
       packId: pack.id,
       quantity,
-      name: `SMS top-up: ${pack.label}`,
+      name: `${MEMBERSHIP_PACK_LINE_NAME_PREFIXES.sms}${pack.label}`,
       unitAmountCents: discountedMonthlyCents * months,
       discountedMonthlyCents,
       listPriceCents: pack.priceCents,
@@ -260,7 +273,7 @@ export function resolveMembershipPackAddons(
       category: "chat",
       packId: pack.id,
       quantity,
-      name: `AI chat credit: ${pack.label}`,
+      name: `${MEMBERSHIP_PACK_LINE_NAME_PREFIXES.chat}${pack.label}`,
       unitAmountCents: discountedMonthlyCents * months,
       discountedMonthlyCents,
       listPriceCents: pack.priceCents,
