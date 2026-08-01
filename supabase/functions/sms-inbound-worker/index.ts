@@ -209,11 +209,12 @@ async function callOwnerOperatorTurn(args: {
 }
 
 // --- Booking-status context (customer calendar state in the preamble) ------
-// Calendly bookings/reschedules/cancels happen off-platform, so without this
-// the model confidently denied a reschedule it could not see (KYP / Tim Tsai,
-// Jul 20 2026). Best-effort with a short timeout: any trouble answers null
-// and the reply proceeds with no booking line — never blocks or delays past
-// the cap. Non-Calendly tenants answer none after one cheap lookup.
+// Calendly, Vagaro and Acuity bookings/reschedules/cancels happen
+// off-platform, so without this the model confidently denied a reschedule it
+// could not see (KYP / Tim Tsai, Jul 20 2026). Best-effort with a short
+// timeout: any trouble answers null and the reply proceeds with no booking
+// line, never blocking or delaying past the cap. Tenants without a supported
+// booking provider answer none after one cheap lookup.
 const BOOKING_CONTEXT_TIMEOUT_MS = 5_000;
 
 /** One texter's booking-status preamble line from the platform, or null. */
@@ -1488,8 +1489,8 @@ serve(async (req: Request) => {
         memoryRow == null
           ? null
           : buildCustomerPreambleForEdge(memoryRow as unknown as EdgeCustomerMemoryRow);
-      // Booking-status line: the texter's Calendly state (upcoming booking,
-      // reschedule, recent cancel) so the model can answer "was my
+      // Booking-status line: the texter's booking-provider state (upcoming
+      // booking, reschedule, recent cancel) so the model can answer "was my
       // reschedule received?" honestly instead of denying what it can't see.
       // Best-effort; null when the tenant has no calendar or the lookup
       // refused, which keeps the preamble byte-identical to pre-feature.

@@ -508,6 +508,24 @@ export const ATTENDEE_BOOKING_LOOKUPS: Record<
 };
 
 /**
+ * The adapter-backed providers: bookings can appear off-platform, so the
+ * booking-intelligence consumers (the pre-send precheck, the contact
+ * booking-context preamble) have something to ask. Kept in lockstep with the
+ * registry above by the same parity test; the precheck's per-provider maps
+ * are keyed exhaustively on this type, so registering a future adapter
+ * provider fails typecheck there until every consumer handles it.
+ */
+export const ATTENDEE_ADAPTER_PROVIDERS = ["calendly", "vagaro", "acuity"] as const;
+export type AttendeeAdapterProvider = (typeof ATTENDEE_ADAPTER_PROVIDERS)[number];
+
+/** Narrowing gate for consumers that only operate on adapter providers. */
+export function hasAttendeeBookingAdapter(
+  provider: ResolvedVoiceConnection["provider"]
+): provider is AttendeeAdapterProvider {
+  return (ATTENDEE_ADAPTER_PROVIDERS as readonly string[]).includes(provider);
+}
+
+/**
  * The connected provider's OFF-PLATFORM upcoming bookings for this
  * attendee (adapter layer only — no ledger read). Ledger-only providers
  * answer an empty ok (nothing off-platform can exist for them). May THROW

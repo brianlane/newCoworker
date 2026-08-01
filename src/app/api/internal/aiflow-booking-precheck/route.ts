@@ -1,6 +1,6 @@
 /**
  * Internal endpoint: pre-send booking check for one AiFlow run (Calendly +
- * Vagaro).
+ * Vagaro + Acuity).
  *
  * The ai-flow-worker Edge Function POSTs { businessId, runId } here
  * synchronously before a run's FIRST communication step (only for flows
@@ -13,8 +13,8 @@
  *
  * Auth: `Authorization: Bearer <INTERNAL_CRON_SECRET>` — same shape as the
  * other /api/internal/* endpoints. Everything inside fails open (booked:
- * false) so a provider hiccup can never block a lead's greeting; the
- * young-run booking-goal sweep remains the ~1-min safety net.
+ * false) so a provider hiccup can never block a lead's greeting; on
+ * Calendly the young-run booking-goal sweep remains the ~1-min safety net.
  */
 import { z } from "zod";
 import { assertCronAuth } from "@/lib/cron-auth";

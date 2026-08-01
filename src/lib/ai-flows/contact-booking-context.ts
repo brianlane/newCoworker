@@ -27,14 +27,16 @@
  * wants, and Calendly's canceled-invitee matching is deliberately different
  * (a canceled invitee is exactly what it looks for).
  *
- * Calendly and Vagaro: both providers take bookings OUTSIDE the platform
- * (Calendly on calendly.com, Vagaro on the merchant's own booking page /
- * front desk), so both are invisible to the agent without this lookup; the
- * workspace providers' bookings are platform-created and already reachable
- * through the calendar tools. Vagaro reports `booked` and `canceled` only —
- * its API carries no reschedule lineage (no `old_invitee` equivalent), so a
- * moved appointment reads as `booked` at its new time. Everything here
- * FAILS OPEN to `none` — a provider hiccup must never delay or block a
+ * Calendly, Vagaro and Acuity: all three take bookings OUTSIDE the platform
+ * (Calendly on calendly.com, Vagaro and Acuity on the merchant's own booking
+ * page / front desk), so all three are invisible to the agent without this
+ * lookup; the workspace providers' bookings are platform-created and already
+ * reachable through the calendar tools. Vagaro and Acuity report `booked`
+ * and `canceled` only: neither API carries reschedule lineage (no
+ * `old_invitee` equivalent, and Acuity moves an appointment in place under
+ * the same id), so a moved appointment reads as `booked` at its new time.
+ * Acuity's canceled state comes from its canceled-only listing. Everything
+ * here FAILS OPEN to `none`: a provider hiccup must never delay or block a
  * reply. Consumed by POST /api/internal/contact-booking-context
  * (cron-bearer), which the sms-inbound-worker calls best-effort per
  * customer turn.
@@ -53,6 +55,7 @@ import { digitsOf, phoneDigitsMatch } from "@/lib/calendar-tools/phone-match";
 import {
   lookupProviderBookingsForAttendee,
   resolveCalendlyUserUri,
+  hasAttendeeBookingAdapter,
   ATTENDEE_BOOKING_EVENT_SCAN,
   ATTENDEE_BOOKING_INVITEE_FETCH_CAP,
   ATTENDEE_BOOKING_HORIZON_DAYS,
@@ -63,6 +66,12 @@ import { calendlyEventUuid } from "@/lib/ai-flows/calendly-poll";
 import { getActiveVagaroConnection } from "@/lib/db/vagaro-connections";
 import { listVagaroAppointments, type VagaroAppointmentItem } from "@/lib/vagaro/client";
 import { VAGARO_CANCELED_LIST_STATUS } from "@/lib/ai-flows/vagaro-poll";
+import { getActiveAcuityConnection } from "@/lib/db/acuity-connections";
+import {
+  listAcuityAppointments,
+  acuityLocalDate,
+  type AcuityAppointmentItem
+} from "@/lib/acuity/client";
 import { logger } from "@/lib/logger";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -86,7 +95,12 @@ export type ContactBookingContext = {
   line: string | null;
 };
 
-export type ContactBookingContextDeps = AttendeeBookingDeps;
+export type ContactBookingContextDeps = AttendeeBookingDeps & {
+  /** Injectable Acuity connection lookup (the canceled scan; tests). */
+  getAcuityConnection?: typeof getActiveAcuityConnection;
+  /** Injectable Acuity canceled-appointments listing (tests). */
+  listAcuityCanceled?: typeof listAcuityAppointments;
+};
 
 const NONE: ContactBookingContext = { status: "none", line: null };
 
@@ -155,6 +169,20 @@ export function inviteeMatchesContact(
 /** Whether a Vagaro appointment belongs to this contact (same tolerance). */
 export function vagaroAppointmentMatchesContact(
   item: VagaroAppointmentItem,
+  ids: { phoneDigits: string[]; email: string | null }
+): boolean {
+  return inviteeMatchesContact(
+    {
+      email: item.customerEmail ?? undefined,
+      text_reminder_number: item.customerPhone ?? undefined
+    },
+    ids
+  );
+}
+
+/** Whether an Acuity appointment belongs to this contact (same tolerance). */
+export function acuityAppointmentMatchesContact(
+  item: AcuityAppointmentItem,
   ids: { phoneDigits: string[]; email: string | null }
 ): boolean {
   return inviteeMatchesContact(
@@ -351,8 +379,89 @@ export async function vagaroBookingContextForContact(
 }
 
 /**
- * The texter's booking state on the connected provider (Calendly or
- * Vagaro), as one preamble-ready line. Never throws; every failure mode
+ * The texter's Acuity booking state: the shared adapter's upcoming lookup
+ * for `booked`, then a canceled-only listing for a recent cancel. Acuity
+ * carries no reschedule lineage (a move edits the appointment in place
+ * under the same id), so a moved appointment reads as `booked` at its new
+ * time; transport trouble throws into the caller's fail-open catch.
+ * Exported for the route tests.
+ */
+export async function acuityBookingContextForContact(
+  businessId: string,
+  conn: ResolvedVoiceConnection,
+  ids: { phoneDigits: string[]; email: string | null },
+  deps: ContactBookingContextDeps,
+  timezone: string | null
+): Promise<ContactBookingContext> {
+  const getAcuityConnection = deps.getAcuityConnection ?? getActiveAcuityConnection;
+  const listCanceled = deps.listAcuityCanceled ?? listAcuityAppointments;
+
+  // Upcoming active booking first: the strongest, most actionable state.
+  // The adapter answers soonest-first, so [0] is the contact's next slot.
+  const upcoming = await lookupProviderBookingsForAttendee(
+    businessId,
+    conn,
+    { phones: ids.phoneDigits, email: ids.email },
+    deps,
+    { mode: "detail" }
+  );
+  if (!upcoming.ok) return NONE;
+  const active: UpcomingAttendeeBooking | undefined = upcoming.bookings[0];
+  if (active) {
+    return {
+      status: "booked",
+      line: bookingContextLine(
+        "booked",
+        { name: active.name ?? "Appointment", startIso: active.startIso },
+        { timezone }
+      )
+    };
+  }
+
+  // Unlike the Vagaro arm, this re-read is reachable under injected deps
+  // (the adapter's seam is listAcuityUpcoming, not this connection getter),
+  // so it also guards a row deleted mid-lookup without a coverage carve-out.
+  const acuityConn = await getAcuityConnection(businessId);
+  if (!acuityConn) return NONE;
+
+  const nowMs = Date.now();
+  const dayMs = 24 * 60 * 60_000;
+  const tz = acuityConn.default_calendar_timezone ?? "UTC";
+
+  // No upcoming booking: a recent canceled one is worth telling the agent
+  // about. Acuity's `canceled: true` listing returns ONLY canceled rows
+  // (the flag is stamped from the listing choice), windowed in the
+  // merchant's local dates because the listing is date-granular, narrowed
+  // server-side like the upcoming lookup (email wins, else phone), and
+  // re-verified per row. Most-recent-start first (the cancellation the
+  // preamble should describe).
+  const canceled = (
+    await listCanceled(acuityConn, {
+      minDate: acuityLocalDate(new Date(nowMs - BOOKING_CONTEXT_BACK_DAYS * dayMs), tz),
+      maxDate: acuityLocalDate(new Date(nowMs + BOOKING_CONTEXT_HORIZON_DAYS * dayMs), tz),
+      canceled: true,
+      ...(ids.email ? { email: ids.email } : {}),
+      ...(!ids.email && ids.phoneDigits[0] ? { phone: ids.phoneDigits[0] } : {})
+    })
+  )
+    .filter((i) => i.canceled && acuityAppointmentMatchesContact(i, ids))
+    .sort((a, b) => Date.parse(b.startIso) - Date.parse(a.startIso))[0];
+  if (canceled) {
+    return {
+      status: "canceled",
+      line: bookingContextLine(
+        "canceled",
+        { name: canceled.appointmentTypeName ?? "Appointment", startIso: canceled.startIso },
+        { rescheduledAway: false, timezone }
+      )
+    };
+  }
+  return NONE;
+}
+
+/**
+ * The texter's booking state on the connected provider (Calendly, Vagaro or
+ * Acuity), as one preamble-ready line. Never throws; every failure mode
  * answers `none`.
  */
 export async function contactBookingContextForPhone(
@@ -370,7 +479,7 @@ export async function contactBookingContextForPhone(
 
   try {
     const conn = await resolveConnection(businessId);
-    if (!conn || (conn.provider !== "calendly" && conn.provider !== "vagaro")) return NONE;
+    if (!conn || !hasAttendeeBookingAdapter(conn.provider)) return NONE;
     const db = client ?? (await createSupabaseServiceClient());
     const ids = await contactIdentifiers(db, businessId, phoneE164);
     if (ids.phoneDigits.length === 0 && !ids.email) return NONE;
@@ -378,6 +487,13 @@ export async function contactBookingContextForPhone(
     if (conn.provider === "vagaro") {
       return await vagaroBookingContextForContact(businessId, conn, ids, deps, timezone ?? null);
     }
+    if (conn.provider === "acuity") {
+      return await acuityBookingContextForContact(businessId, conn, ids, deps, timezone ?? null);
+    }
+    // conn.provider is exactly "calendly" past this point: the predicate
+    // gate narrowed to the adapter providers and the two listing-based ones
+    // returned above. A future adapter provider fails typecheck in the
+    // precheck's REFUSED_REASON map before it can silently land here.
 
     const userUri = await resolveCalendlyUserUri(
       businessId,

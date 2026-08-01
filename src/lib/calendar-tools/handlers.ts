@@ -597,7 +597,7 @@ export async function bookCalendarAppointment(
   // "move" an existing one, and the owner's calendar ends up double-booked.
   // The shared attendee-bookings lookup sees every platform booking (any
   // provider, via the dedupe ledger) plus the connected provider's
-  // off-platform bookings (Calendly/Vagaro adapters), so a request for an
+  // off-platform bookings (Calendly/Vagaro/Acuity adapters), so a request for an
   // attendee who already holds a DIFFERENT upcoming slot refuses with
   // reschedule/cancel guidance. The exact same slot falls through to the
   // idempotency ledger below (a timeout retry must keep answering

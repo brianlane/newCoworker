@@ -2,7 +2,8 @@
  * Contact booking context (src/lib/ai-flows/contact-booking-context.ts): the
  * SMS agent's "booking status" line — connection gating, contact-identifier
  * resolution, the active/canceled Calendly scans (email-narrowed, capped,
- * fail-open), the rescheduled/canceled classification, and line wording.
+ * fail-open), the Vagaro and Acuity arms, the rescheduled/canceled
+ * classification, and line wording.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -30,9 +31,11 @@ vi.mock("@/lib/ai-flows/db", () => ({ enqueueAiFlowRun: vi.fn() }));
 vi.mock("@/lib/calendar-tools/shared-calendar", () => ({ getSharedCalendar: vi.fn() }));
 vi.mock("@/lib/db/vagaro-connections", () => ({ getActiveVagaroConnection: vi.fn() }));
 vi.mock("@/lib/vagaro/client", () => ({ listVagaroAppointments: vi.fn() }));
+vi.mock("@/lib/db/acuity-connections", () => ({ getActiveAcuityConnection: vi.fn() }));
 
 import {
   BOOKING_CONTEXT_INVITEE_FETCH_CAP,
+  acuityAppointmentMatchesContact,
   bookingContextLine,
   contactBookingContextForPhone,
   contactIdentifiers,
@@ -494,7 +497,7 @@ describe("contactBookingContextForPhone", () => {
   });
 });
 
-describe("contactBookingContextForPhone — Vagaro arm", () => {
+describe("contactBookingContextForPhone Vagaro arm", () => {
   const VAGARO_CONN = {
     provider: "vagaro" as const,
     providerConfigKey: "vagaro",
@@ -666,5 +669,223 @@ describe("vagaroAppointmentMatchesContact", () => {
       false
     );
     expect(vagaroAppointmentMatchesContact(item(), ids)).toBe(false);
+  });
+});
+
+describe("contactBookingContextForPhone Acuity arm", () => {
+  const ACUITY_CONN = {
+    provider: "acuity" as const,
+    providerConfigKey: "acuity",
+    connectionId: "aq-1"
+  };
+  const AQ_ROW = {
+    id: "aq-1",
+    business_id: BIZ,
+    default_calendar_timezone: "America/Phoenix"
+  } as never;
+
+  function aqUpcoming(overrides: Record<string, unknown> = {}) {
+    return {
+      eventId: "appt-1",
+      startIso: FUTURE,
+      name: "Gel Manicure",
+      customerEmail: null,
+      customerPhone: PHONE,
+      ...overrides
+    };
+  }
+
+  function aqCanceled(overrides: Record<string, unknown> = {}) {
+    return {
+      id: "appt-1",
+      startIso: FUTURE,
+      endIso: null,
+      createdIso: null,
+      canceled: true,
+      appointmentTypeId: null,
+      appointmentTypeName: "Gel Manicure",
+      calendarId: null,
+      calendarName: null,
+      durationMinutes: null,
+      customerName: null,
+      customerEmail: null,
+      customerPhone: PHONE,
+      notes: null,
+      timezone: null,
+      ...overrides
+    };
+  }
+
+  function acuityDeps(overrides: Partial<ContactBookingContextDeps> = {}) {
+    return deps({
+      resolveConnection: vi.fn().mockResolvedValue(ACUITY_CONN),
+      listAcuityUpcoming: vi.fn().mockResolvedValue({ ok: true, bookings: [] }),
+      getAcuityConnection: vi.fn().mockResolvedValue(AQ_ROW),
+      listAcuityCanceled: vi.fn().mockResolvedValue([]),
+      ...overrides
+    });
+  }
+
+  it("reports the adapter's first (soonest) matching appointment as booked", async () => {
+    const d = acuityDeps({
+      listAcuityUpcoming: vi.fn().mockResolvedValue({
+        ok: true,
+        bookings: [
+          // The shared adapter re-verifies identity, so a foreign row ahead
+          // of the contact's own can never win.
+          aqUpcoming({ eventId: "other", customerPhone: "+15550009999" }),
+          aqUpcoming({ eventId: "mine" })
+        ]
+      })
+    });
+    const out = await contactBookingContextForPhone(
+      BIZ,
+      PHONE,
+      d,
+      fakeDb([CONTACT_ROW]),
+      "America/Phoenix"
+    );
+    expect(out.status).toBe("booked");
+    expect(out.line).toContain('"Gel Manicure"');
+    expect(out.line).toContain("upcoming booking");
+    // A booked hit never pays the canceled listing.
+    expect(d.listAcuityCanceled).not.toHaveBeenCalled();
+  });
+
+  it("matches by contact email and falls back to 'Appointment' without a type name", async () => {
+    const d = acuityDeps({
+      listAcuityUpcoming: vi.fn().mockResolvedValue({
+        ok: true,
+        bookings: [
+          aqUpcoming({ name: null, customerPhone: null, customerEmail: "tim@trustyourtalent.ca" })
+        ]
+      })
+    });
+    const out = await contactBookingContextForPhone(BIZ, PHONE, d, fakeDb([CONTACT_ROW]));
+    expect(out.status).toBe("booked");
+    expect(out.line).toContain('"Appointment"');
+  });
+
+  it("reports a recent canceled appointment when nothing upcoming matches", async () => {
+    const recentCancel = new Date(Date.now() - 2 * 60 * 60_000).toISOString();
+    const olderCancel = new Date(Date.now() - 30 * 60 * 60_000).toISOString();
+    const listAcuityCanceled = vi.fn().mockResolvedValue([
+      aqCanceled({ id: "old", startIso: olderCancel }),
+      aqCanceled({ id: "recent", startIso: recentCancel, appointmentTypeName: null }),
+      // Rows the listing failed to stamp canceled, or that belong to someone
+      // else, are never misreported.
+      aqCanceled({ id: "not-canceled", startIso: recentCancel, canceled: false }),
+      aqCanceled({ id: "other", startIso: recentCancel, customerPhone: "+15550009999" })
+    ]);
+    const d = acuityDeps({ listAcuityCanceled });
+    const out = await contactBookingContextForPhone(BIZ, PHONE, d, fakeDb([CONTACT_ROW]));
+    expect(out.status).toBe("canceled");
+    expect(out.line).toContain("CANCELED");
+    expect(out.line).toContain('"Appointment"');
+    // The scan asked Acuity for the canceled-only listing, email-narrowed
+    // (the contact row carries an email), over local calendar dates.
+    const args = listAcuityCanceled.mock.calls[0][1];
+    expect(args).toMatchObject({ canceled: true, email: "tim@trustyourtalent.ca" });
+    expect(args.phone).toBeUndefined();
+    expect(args.minDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+    expect(args.maxDate).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it("narrows the canceled listing by phone when the contact has no email", async () => {
+    const listAcuityCanceled = vi.fn().mockResolvedValue([]);
+    // A connection row with no default timezone also exercises the honest
+    // UTC fallback for the local-date window.
+    const d = acuityDeps({
+      listAcuityCanceled,
+      getAcuityConnection: vi
+        .fn()
+        .mockResolvedValue({ id: "aq-1", business_id: BIZ, default_calendar_timezone: null } as never)
+    });
+    const noEmailRow = { data: { customer_e164: PHONE, alias_e164s: [], email: null } };
+    expect(await contactBookingContextForPhone(BIZ, PHONE, d, fakeDb([noEmailRow]))).toEqual({
+      status: "none",
+      line: null
+    });
+    const args = listAcuityCanceled.mock.calls[0][1];
+    expect(args.email).toBeUndefined();
+    expect(args.phone).toBe("17808039935");
+  });
+
+  it("answers none when the connection row vanishes before the canceled scan", async () => {
+    const d = acuityDeps({ getAcuityConnection: vi.fn().mockResolvedValue(null) });
+    expect(await contactBookingContextForPhone(BIZ, PHONE, d, fakeDb([CONTACT_ROW]))).toEqual({
+      status: "none",
+      line: null
+    });
+    expect(d.listAcuityCanceled).not.toHaveBeenCalled();
+  });
+
+  it("answers none when the adapter reports not_connected", async () => {
+    const d = acuityDeps({
+      listAcuityUpcoming: vi.fn().mockResolvedValue({ ok: false, reason: "not_connected" })
+    });
+    expect(await contactBookingContextForPhone(BIZ, PHONE, d, fakeDb([CONTACT_ROW]))).toEqual({
+      status: "none",
+      line: null
+    });
+    expect(d.getAcuityConnection).not.toHaveBeenCalled();
+  });
+
+  it("fails open to none when the canceled listing throws", async () => {
+    const d = acuityDeps({
+      listAcuityCanceled: vi.fn().mockRejectedValue(new Error("acuity down"))
+    });
+    expect(await contactBookingContextForPhone(BIZ, PHONE, d, fakeDb([CONTACT_ROW]))).toEqual({
+      status: "none",
+      line: null
+    });
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+      "contact booking context: lookup failed (answering none)",
+      expect.objectContaining({ businessId: BIZ, error: "acuity down" })
+    );
+  });
+
+  it("uses the module-level lookups when none are injected (mocked: no row → none)", async () => {
+    const d = deps({ resolveConnection: vi.fn().mockResolvedValue(ACUITY_CONN) });
+    expect(await contactBookingContextForPhone(BIZ, PHONE, d, fakeDb([CONTACT_ROW]))).toEqual({
+      status: "none",
+      line: null
+    });
+  });
+});
+
+describe("acuityAppointmentMatchesContact", () => {
+  const item = (overrides: Record<string, unknown> = {}) =>
+    ({
+      id: "a",
+      startIso: FUTURE,
+      endIso: null,
+      createdIso: null,
+      canceled: false,
+      appointmentTypeId: null,
+      appointmentTypeName: null,
+      calendarId: null,
+      calendarName: null,
+      durationMinutes: null,
+      customerName: null,
+      customerEmail: null,
+      customerPhone: null,
+      notes: null,
+      timezone: null,
+      ...overrides
+    }) as never;
+
+  it("matches on email or country-code-tolerant phone, else not", () => {
+    const ids = { phoneDigits: ["17808039935"], email: "tim@trustyourtalent.ca" };
+    expect(
+      acuityAppointmentMatchesContact(item({ customerEmail: "tim@trustyourtalent.ca" }), ids)
+    ).toBe(true);
+    expect(acuityAppointmentMatchesContact(item({ customerPhone: "780-803-9935" }), ids)).toBe(
+      true
+    );
+    expect(acuityAppointmentMatchesContact(item({ customerPhone: "+15550001111" }), ids)).toBe(
+      false
+    );
+    expect(acuityAppointmentMatchesContact(item(), ids)).toBe(false);
   });
 });
