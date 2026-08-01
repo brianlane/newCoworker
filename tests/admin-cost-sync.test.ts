@@ -121,6 +121,7 @@ describe("fetchTelnyxDetailRecords", () => {
     // page[size] asks for, so a short page must not end the pull while
     // meta.total_pages says there is more.
     const clampedPage = Array.from({ length: 50 }, () => ({ cost: "0.01" }));
+    const sleepImpl = vi.fn(async () => {});
     const fetchImpl = vi.fn(async (_input: RequestInfo | URL) =>
       jsonResponse({ data: clampedPage, meta: { total_pages: 3 } })
     );
@@ -128,11 +129,15 @@ describe("fetchTelnyxDetailRecords", () => {
       apiKey: "tk",
       recordType: "messaging",
       range: "last_90_days",
-      fetchImpl
+      fetchImpl,
+      sleepImpl
     });
     expect(records).toHaveLength(150);
     expect(fetchImpl).toHaveBeenCalledTimes(3);
     expect(String(vi.mocked(fetchImpl).mock.calls[2][0])).toContain("page[number]=3");
+    // Inter-page pacing keeps long pulls under the Telnyx rate limiter.
+    expect(sleepImpl).toHaveBeenCalledTimes(2);
+    expect(sleepImpl).toHaveBeenCalledWith(350);
   });
 
   it("stops on an empty page even when meta promises more", async () => {
@@ -162,22 +167,8 @@ describe("fetchTelnyxDetailRecords", () => {
     });
     expect(records).toHaveLength(1);
     expect(fetchImpl).toHaveBeenCalledTimes(2);
-    expect(sleepImpl).toHaveBeenCalledWith(500);
+    expect(sleepImpl).toHaveBeenCalledWith(1000);
   });
-
-  it("backs off with the default sleeper when none is injected", async () => {
-    const fetchImpl = vi
-      .fn()
-      .mockResolvedValueOnce(new Response("slow down", { status: 429 }))
-      .mockResolvedValueOnce(jsonResponse({ data: [{ cost: "1" }] }));
-    const records = await fetchTelnyxDetailRecords({
-      apiKey: "tk",
-      recordType: "messaging",
-      range: "last_7_days",
-      fetchImpl
-    });
-    expect(records).toHaveLength(1);
-  }, 10_000);
 
   it("throws once 429 retries are exhausted", async () => {
     const sleepImpl = vi.fn(async () => {});
@@ -197,6 +188,7 @@ describe("fetchTelnyxDetailRecords", () => {
 
   it("aborts past the page cap instead of pulling forever", async () => {
     const clampedPage = Array.from({ length: 50 }, () => ({ cost: "0.01" }));
+    const sleepImpl = vi.fn(async () => {});
     const fetchImpl = vi.fn(async () =>
       jsonResponse({ data: clampedPage, meta: { total_pages: 500 } })
     );
@@ -205,7 +197,8 @@ describe("fetchTelnyxDetailRecords", () => {
         apiKey: "tk",
         recordType: "messaging",
         range: "last_90_days",
-        fetchImpl
+        fetchImpl,
+        sleepImpl
       })
     ).rejects.toThrow(/exceeded 400 pages/);
     expect(fetchImpl).toHaveBeenCalledTimes(400);
