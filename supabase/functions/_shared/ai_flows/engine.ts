@@ -317,6 +317,26 @@ export function normalizeNanpToE164(raw: string): string | null {
   return `+1${ten}`;
 }
 
+/**
+ * Coerce a rendered recipient to a DIALABLE E.164 number, or null.
+ *
+ * `isE164` alone is the wrong gate for anything that will be dialed: it is a
+ * structural check (+ then 7-15 digits), so a `+1` value with 11-13 national
+ * digits passes it even though country code 1 (NANP) allows exactly 10.
+ * KYP Ads, Aug 1 2026: a Facebook lead typed `+16133439985030` (a real
+ * Ottawa number plus 3 stray digits) and the `isE164(x) ? x :
+ * normalizeNanpToE164(x)` short-circuit sent it to Telnyx for a guaranteed
+ * 40310 "Invalid 'to' address", killing the run before the owner-notify
+ * step. Any `+1` value must satisfy the NANP rules; other country codes
+ * keep the structural check, since their national plans are not encoded
+ * here.
+ */
+export function coerceDialableE164(raw: string): string | null {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith("+1") || !isE164(trimmed)) return normalizeNanpToE164(trimmed);
+  return trimmed;
+}
+
 /** Extract candidate phone numbers from free text as E.164 (deduped, in order). */
 export function extractPhones(text: string): string[] {
   const out: string[] = [];
@@ -404,7 +424,11 @@ const EMPTY_PHONE_VALUES = new Set(["", "none", "n/a", "na", "null", "unknown"])
  *  - an international `+…` E.164 value is kept ONLY when the source text
  *    itself contains that number WITH the `+` prefix (allowing the usual
  *    separator punctuation between digits). A `+` the model added to bare
- *    digits is not a country code, it is a hallucination;
+ *    digits is not a country code, it is a hallucination. This arm never
+ *    keeps a country-code-1 value: the NANP path above it is the only
+ *    authority for `+1`, so a `+1…` shape it declined (KYP Ads, Aug 1 2026:
+ *    `+16133439985030`, 13 national digits typed into the lead form and
+ *    corroborated by the payload's own `+`) is undialable, not international;
  *  - everything else becomes "none", so the flow's existing no-phone
  *    branch handles the lead instead of a guaranteed carrier rejection.
  */
@@ -417,7 +441,7 @@ export function sanitizeExtractedPhone(value: string, sourceText: string): strin
 
   const digits = trimmed.replace(/[^\d]/g, "");
   const candidate = `+${digits}`;
-  if (trimmed.startsWith("+") && isE164(candidate)) {
+  if (!digits.startsWith("1") && trimmed.startsWith("+") && isE164(candidate)) {
     // Look for the SAME digit sequence in the source, `+`-prefixed, with
     // ordinary separators (space, dot, dash, parens) between digits. Bounded:
     // at most 3 separator chars between consecutive digits.

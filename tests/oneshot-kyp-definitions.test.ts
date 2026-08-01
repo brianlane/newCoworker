@@ -1,104 +1,116 @@
 /**
- * Regression pins for KYP Ads' canonical flow definition
- * (scripts/oneshot/kyp-offer-definition.ts) — the builder
- * patch-kyp-offer-branch.ts re-applies to the live tenant.
+ * Regression pins for KYP Ads' canonical lead-flow definition
+ * (scripts/oneshot/kyp-lead-flow-definition.ts) and the live applier that
+ * carries its bad-phone arm (scripts/oneshot/patch-kyp-bad-phone-intake.ts).
  *
- * Incident (Jul 19 2026): nudges fired at 2:12 AM Toronto because no send
- * step carried quiet hours; James's build notes say "Business hours: 11am to
- * 6pm". These tests fail if the builder ever ships a nudge without the
- * 11:00–18:00 America/Toronto quiet-hours gate — and if the greeting (which
- * must go out within 60 seconds of a new lead, any hour) ever gains one.
+ * Incidents pinned here:
+ *  - Jul 19 2026: nudges fired at 2:12 AM Toronto because no send step
+ *    carried quiet hours. Every nudge must keep the America/Toronto gate
+ *    with the 11:00 morning resume; the evening edge is 21:00, the value
+ *    the live flow has run with since the (unledgered) Jul 19-24 reshape.
+ *    The greeting must stay ungated (60-second first touch, any hour).
+ *  - Aug 1 2026: a lead typed +16133439985030 and the run died at the
+ *    greeting with the owner-notify step behind it. The bad-phone arm must
+ *    stay guarded on lead_phone equals "none", and s_notify / s_wait_1 on
+ *    notEquals, so an unreachable lead is a designed path.
+ *  - Builder drift: the live flow was once reshaped outside the ledger and
+ *    the old builder went stale. The transform in
+ *    patch-kyp-bad-phone-intake.ts and this builder must produce the SAME
+ *    definition, so neither can drift from the other unnoticed.
  */
 import { describe, expect, it } from "vitest";
 
 import {
-  buildKypOfferDefinition,
-  KYP_QUIET_HOURS
-} from "../scripts/oneshot/kyp-offer-definition";
+  BAD_PHONE_EMAIL_ID,
+  BAD_PHONE_NOTIFY_ID,
+  buildKypLeadFollowUpDefinition,
+  KYP_QUIET_HOURS,
+  KYP_TIME_WINDOW
+} from "../scripts/oneshot/kyp-lead-flow-definition";
+import { addBadPhoneIntakeArm } from "../scripts/oneshot/patch-kyp-bad-phone-intake";
 import { parseAiFlowDefinition } from "@/lib/ai-flows/schema";
 import { smsQuietDecision, zonedClock } from "../supabase/functions/_shared/ai_flows/quiet_hours";
 
 type StepJson = {
   id?: string;
   type?: string;
+  to?: string;
+  when?: { var?: string; equals?: string; notEquals?: string };
   quietHours?: { timezone?: string; noSendAfter?: string; resumeAt?: string };
-  steps?: StepJson[];
-  branches?: Array<{ steps?: StepJson[] }>;
-  else?: StepJson[];
 };
 
-/** Every step in the definition, branch arms and else included. */
-function allSteps(definition: Record<string, unknown>): StepJson[] {
-  const out: StepJson[] = [];
-  const walk = (steps: StepJson[] | undefined) => {
-    for (const s of steps ?? []) {
-      out.push(s);
-      for (const arm of s.branches ?? []) walk(arm.steps);
-      walk(s.else);
-    }
-  };
-  walk((definition as { steps?: StepJson[] }).steps);
-  return out;
-}
+const definition = buildKypLeadFollowUpDefinition() as { steps: StepJson[] };
+const steps = definition.steps;
+const byId = (id: string): StepJson | undefined => steps.find((s) => s.id === id);
 
-/** The literal expected gate — kept independent of the exported constant so
- * a missing/typo'd export can never make the nudge assertions pass vacuously. */
+/** Literal expected gate, independent of the exported constant so a typo'd
+ * export can never make the nudge assertions pass vacuously. */
 const EXPECTED_QUIET_HOURS = {
   timezone: "America/Toronto",
-  noSendAfter: "18:00",
+  noSendAfter: "21:00",
   resumeAt: "11:00"
 };
 
-describe("KYP offer definition quiet hours (2 AM nudge regression)", () => {
-  const definition = buildKypOfferDefinition();
-  const steps = allSteps(definition);
-  const smsSteps = steps.filter((s) => s.type === "send_sms");
-  const nudges = smsSteps.filter((s) => /_nudge_\d+$/.test(s.id ?? ""));
-  const greetings = smsSteps.filter((s) => /_greet$/.test(s.id ?? ""));
-
+describe("KYP lead-flow definition", () => {
   it("still validates as a well-formed AiFlow definition", () => {
     expect(() => parseAiFlowDefinition(definition)).not.toThrow();
   });
 
-  it("has the expected shape (3 arms × greeting + 3 nudges)", () => {
-    expect(greetings).toHaveLength(3);
-    expect(nudges).toHaveLength(9);
+  it("keeps the canonical step order (live shape + bad-phone arm)", () => {
+    expect(steps.map((s) => s.id)).toEqual([
+      "s_extract",
+      BAD_PHONE_NOTIFY_ID,
+      BAD_PHONE_EMAIL_ID,
+      "s_file",
+      "s_greet",
+      "s_notify",
+      "s_wait_1",
+      "s_nudge_1",
+      "s_wait_2",
+      "s_nudge_2",
+      "s_wait_3",
+      "s_nudge_3",
+      "s_wait_final",
+      "s_flag_owner",
+      "s_mark_inactive",
+      "s_goal"
+    ]);
   });
 
-  it("exports the canonical 11am–6pm Toronto quiet-hours config", () => {
+  it("keeps offer selection on the webhook trigger (the in-flow branch is gone)", () => {
+    const trigger = (definition as unknown as { trigger: Record<string, unknown> }).trigger;
+    expect(trigger.channel).toBe("webhook");
+    expect(trigger.conditions).toEqual([
+      { type: "contains", value: "Simple form setup 5/7/26", caseInsensitive: true }
+    ]);
+  });
+});
+
+describe("KYP quiet hours (2 AM nudge regression, Jul 19 2026)", () => {
+  const nudges = steps.filter((s) => /^s_nudge_\d+$/.test(s.id ?? ""));
+
+  it("exports the live Toronto quiet-hours config", () => {
     expect(KYP_QUIET_HOURS).toEqual(EXPECTED_QUIET_HOURS);
   });
 
-  it("every nudge carries the 11:00–18:00 America/Toronto quiet-hours gate", () => {
+  it("every nudge carries the gate; the greeting stays ungated", () => {
+    expect(nudges).toHaveLength(3);
     for (const nudge of nudges) {
       expect(nudge.quietHours, `nudge ${nudge.id} is missing quietHours`).toEqual(
         EXPECTED_QUIET_HOURS
       );
     }
-  });
-
-  it("greetings stay ungated (60-second first touch, any hour)", () => {
-    for (const greet of greetings) {
-      expect(greet.quietHours, `greeting ${greet.id} must NOT have quietHours`).toBeUndefined();
-    }
+    expect(byId("s_greet")?.quietHours).toBeUndefined();
   });
 
   it("the gate refuses a 2:12 AM Toronto send and resumes at 11:00", () => {
-    // Reconstruct the incident instant: Jul 19 2026, 2:12 AM in Toronto
-    // (EDT, UTC-4) = 06:12 UTC.
+    // The incident instant: Jul 19 2026, 2:12 AM in Toronto (EDT, UTC-4).
     const nudgeInstantMs = Date.parse("2026-07-19T06:12:00Z");
-    const nudge = nudges[0];
-    expect(nudge.quietHours).toBeDefined();
-    const decision = smsQuietDecision(nudgeInstantMs, {
-      timezone: nudge.quietHours!.timezone!,
-      noSendAfter: nudge.quietHours!.noSendAfter!,
-      resumeAt: nudge.quietHours!.resumeAt!
-    });
+    const decision = smsQuietDecision(nudgeInstantMs, EXPECTED_QUIET_HOURS);
     expect(decision.allowed).toBe(false);
     if (!decision.allowed) {
       const resumeClock = zonedClock(decision.resumeAtMs, "America/Toronto");
       expect(resumeClock?.minutesOfDay).toBe(11 * 60);
-      // Same local day — the deferred nudge goes out that morning.
       expect(decision.resumeAtMs).toBeGreaterThan(nudgeInstantMs);
       expect(decision.resumeAtMs - nudgeInstantMs).toBeLessThanOrEqual(9 * 60 * 60_000);
     }
@@ -106,7 +118,72 @@ describe("KYP offer definition quiet hours (2 AM nudge regression)", () => {
 
   it("allows sends inside business hours (2 PM Toronto)", () => {
     const businessHoursMs = Date.parse("2026-07-19T18:00:00Z"); // 2:00 PM EDT
-    const decision = smsQuietDecision(businessHoursMs, EXPECTED_QUIET_HOURS);
-    expect(decision).toEqual({ allowed: true });
+    expect(smsQuietDecision(businessHoursMs, EXPECTED_QUIET_HOURS)).toEqual({ allowed: true });
+  });
+
+  it("keeps the OTHER flows' 11:00-18:00 window intact for patch-kyp-business-hours", () => {
+    expect(KYP_TIME_WINDOW).toEqual({ timezone: "America/Toronto", start: "11:00", end: "18:00" });
+  });
+});
+
+describe("KYP bad-phone arm (undialable lead, Aug 1 2026)", () => {
+  it("bad-phone steps fire only when lead_phone extracted as none", () => {
+    for (const id of [BAD_PHONE_NOTIFY_ID, BAD_PHONE_EMAIL_ID]) {
+      expect(byId(id)?.when, id).toEqual({ var: "lead_phone", equals: "none" });
+    }
+    // Templated recipient: a lead with no email takes the planner's
+    // no_recipient_email skip instead of failing the run.
+    expect(byId(BAD_PHONE_EMAIL_ID)?.to).toBe("{{vars.lead_email}}");
+  });
+
+  it("s_notify and s_wait_1 are guarded so the ladder collapses without a phone", () => {
+    for (const id of ["s_notify", "s_wait_1"]) {
+      expect(byId(id)?.when, id).toEqual({ var: "lead_phone", notEquals: "none" });
+    }
+  });
+});
+
+describe("builder <-> patch transform equivalence", () => {
+  /** The pre-patch live shape: canonical minus the arm and its guards. */
+  function prePatchDefinition(): { steps: StepJson[] } {
+    const clone = structuredClone(definition);
+    clone.steps = clone.steps.filter(
+      (s) => s.id !== BAD_PHONE_NOTIFY_ID && s.id !== BAD_PHONE_EMAIL_ID
+    );
+    for (const id of ["s_notify", "s_wait_1"]) {
+      const step = clone.steps.find((s) => s.id === id);
+      delete step?.when;
+    }
+    return clone;
+  }
+
+  it("applying the transform to the pre-patch live shape yields the builder exactly", () => {
+    const live = prePatchDefinition();
+    const result = addBadPhoneIntakeArm(live);
+    expect(result.changed).toBe(true);
+    expect(live).toEqual(definition);
+  });
+
+  it("is idempotent: a second application changes nothing", () => {
+    const live = prePatchDefinition();
+    addBadPhoneIntakeArm(live);
+    const second = addBadPhoneIntakeArm(live);
+    expect(second.changed).toBe(false);
+    expect(live).toEqual(definition);
+  });
+
+  it("never clobbers an unexpected when on a guarded step", () => {
+    const live = prePatchDefinition();
+    const notify = live.steps.find((s) => s.id === "s_notify");
+    notify!.when = { var: "reply_1", equals: "no_reply" };
+    const result = addBadPhoneIntakeArm(live);
+    expect(notify!.when).toEqual({ var: "reply_1", equals: "no_reply" });
+    expect(result.notes.join("\n")).toContain("unexpected when");
+  });
+
+  it("reports a wrong flow shape instead of transforming it", () => {
+    const result = addBadPhoneIntakeArm({ steps: [{ id: "other", type: "send_sms" }] });
+    expect(result.changed).toBe(false);
+    expect(result.notes.join("\n")).toContain("wrong flow shape");
   });
 });

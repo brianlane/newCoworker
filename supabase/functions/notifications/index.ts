@@ -29,6 +29,7 @@
 import { serve } from "https://deno.land/std@0.208.0/http/server.ts";
 import { createClient, type SupabaseClient } from "npm:@supabase/supabase-js@2.45.0";
 import { buildBrandedEmailHtml } from "../_shared/branded_email_html.ts";
+import { oneLineSubject } from "../_shared/email_subject.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import {
   CONTACT_SCOPED_TASK_TYPES,
@@ -590,7 +591,11 @@ serve(async (req: Request) => {
         "List-Unsubscribe": `<${unsubscribeUrl}>`,
         "List-Unsubscribe-Post": "List-Unsubscribe=One-Click"
       };
-      const subject = `Urgent: ${summary}`;
+      // Resend rejects subjects containing newlines (422 validation_error),
+      // and alert summaries can embed multiline provider errors: the KYP
+      // Telnyx 40310 alert email died exactly that way (Aug 1 2026). One
+      // line, clipped; the body keeps the full summary.
+      const subject = `Urgent: ${oneLineSubject(summary)}`;
       const baseText = `Your AI Coworker flagged an urgent event.\n\nSummary: ${summary}\nBusiness ID: ${record.business_id}\n\nView details: ${dashboardUrl}`;
       const text = `${baseText}\n\n---\nDon't want these alerts? Unsubscribe: ${unsubscribeUrl}`;
       const html = buildBrandedEmailHtml({

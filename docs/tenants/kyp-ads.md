@@ -27,7 +27,7 @@ problem rather than a messaging problem.
 
 | Flow | State | Note |
 | --- | --- | --- |
-| Lead follow-up (white-glove build, webhook, 14 steps) | on | The main path. Offer routing branches on the Facebook lead form name (one-shot #715) |
+| Lead follow-up (white-glove build, webhook, 16 steps) | on | The main path. Offer selection lives on the webhook trigger condition (payload contains the Simple-form name); the in-flow $100/$200 branch from one-shot #715 was removed in an unledgered Jul 19-24 reshape, and live is canonical (`kyp-lead-flow-definition.ts`). Bad-phone intake arm: an undialable lead number emails the lead and tells James instead of dying at the greeting (`patch-kyp-bad-phone-intake.ts`) |
 | Booking confirmation (SMS + email, webhook, 5) | on | |
 | Pre-call reminder, 1hr before (calendar, 3) | on | |
 | No-show recovery text (calendar, 3) | off | Awaiting James's approval. Fires only for no-shows marked in Calendly within 2h |
@@ -86,16 +86,31 @@ Onboarding: `provision-kyp-ads-retry.ts`, `assign-kyp-ads-did-438.ts`,
 `apply-kyp-intake.ts` (the white-glove intake applied to the tenant),
 `send-kyp-live-sms.ts`.
 
-Flow definitions: `kyp-offer-definition.ts`, `kyp-noshow-definition.ts`.
+Flow definitions: `kyp-lead-flow-definition.ts` (previously named
+kyp-offer-definition.ts), `kyp-noshow-definition.ts`.
 
-Patches: `patch-kyp-offer-branch.ts`, `patch-kyp-business-hours.ts`,
+Patches: `patch-kyp-business-hours.ts`,
 `patch-kyp-noshow-links.ts`, `patch-kyp-calendar-contact-filing.ts`,
 `enable-kyp-reply-alerts.ts`, `set-kyp-booking-email-sender.ts`,
 `reenroll-kyp-canceled-runs.ts`, `backfill-calendly-booking-goals.ts`,
 `fix-kyp-kav-contact.ts`, `mark-lead-spam.ts`, `undo-spam-flag.ts`,
-`strip-em-dashes-flows.ts`, `rename-phone-named-gate-fields.ts`.
+`strip-em-dashes-flows.ts`, `rename-phone-named-gate-fields.ts`,
+`patch-kyp-bad-phone-intake.ts`.
 
-The last one renames the booking flow's `has_phone` gate to `lead_reachable`.
+`patch-kyp-bad-phone-intake.ts` is the Aug 1 2026 undialable-lead fix: a
+Facebook lead typed a `+1` number with three stray extra digits (13 national
+digits, structurally E.164, impossible in NANP) and the greeting send died at
+Telnyx (400/40310) with the owner-notify step behind it. The engine now
+scrubs impossible `+1` numbers to "none" (`coerceDialableE164`), and this
+patch gives the flow a designed no-phone path: notify James, email the lead
+the booking link, skip the reply ladder. The same PR reconciled
+`kyp-lead-flow-definition.ts` to the live shape after an unledgered Jul
+19-24 reshape had made the old builder stale (live is the source of truth;
+the stale applier patch-kyp-offer-branch.ts was retired, see the Removed
+section of scripts/oneshot/README.md).
+
+`rename-phone-named-gate-fields.ts` renames the booking flow's `has_phone`
+gate to `lead_reachable`.
 `has_phone` holds "yes"/"no", but `isPhoneFieldName` matches any phone token in
 a field name, so the phone-field validator added in PR #885 rewrote both values
 to "none" and would have killed the `confirm_sms` and `file_contact` steps on

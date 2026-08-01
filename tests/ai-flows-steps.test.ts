@@ -111,9 +111,12 @@ describe("planStep: send_whatsapp", () => {
   });
 
   it("keeps an already-E.164 recipient as-is", () => {
+    // NANP-plausible on purpose: +1 numbers are now re-checked against the
+    // NANP rules even when already E.164 (a 1-leading exchange like the old
+    // +15551234567 fixture is undialable and no longer passes through).
     expect(
-      planStep({ ...base, to: "+15551234567" } as FlowStep, { vars: { name: "Joe" } })
-    ).toEqual({ ok: true, action: { kind: "send_whatsapp", to: "+15551234567", body: "Hi Joe" } });
+      planStep({ ...base, to: "+15559990000" } as FlowStep, { vars: { name: "Joe" } })
+    ).toEqual({ ok: true, action: { kind: "send_whatsapp", to: "+15559990000", body: "Hi Joe" } });
   });
 
   it("accepts plus-less international digits (wa_id round-trips from inbound vars)", () => {
@@ -138,6 +141,27 @@ describe("planStep: send_whatsapp", () => {
         skipReason: "unparseable_recipient_phone"
       }
     });
+  });
+
+  it("never resurrects an impossible +1 number via the international fallback", () => {
+    // Country code 1 is NANP-only: +1 with 13 national digits is undialable
+    // on WhatsApp too, whether it arrives +-prefixed (structural E.164 pass)
+    // or as a bare digit run the wa_id fallback would otherwise + up.
+    for (const value of ["+16133439985030", "16133439985030"]) {
+      expect(
+        planStep({ ...base, to: "{{vars.lead_phone}}" } as FlowStep, {
+          vars: { lead_phone: value, name: "Joe" }
+        })
+      ).toEqual({
+        ok: true,
+        action: {
+          kind: "send_whatsapp",
+          to: "",
+          body: "Hi Joe",
+          skipReason: "unparseable_recipient_phone"
+        }
+      });
+    }
   });
 
   it("treats a wholly absent `to` as a literal empty recipient (hard failure)", () => {
@@ -328,12 +352,15 @@ describe("planStep: share_document", () => {
   });
 
   it("skips an unparseable templated phone but hard-fails a literal one", () => {
-    const templated = planStep({ ...base, to: "{{vars.lead_phone}}" } as FlowStep, {
-      vars: { lead_phone: "call me maybe" }
-    });
-    expect(
-      templated.ok && templated.action.kind === "share_document" && templated.action.skipReason
-    ).toBe("unparseable_recipient_phone");
+    for (const value of ["call me maybe", "+16133439985030"]) {
+      const templated = planStep({ ...base, to: "{{vars.lead_phone}}" } as FlowStep, {
+        vars: { lead_phone: value }
+      });
+      expect(
+        templated.ok && templated.action.kind === "share_document" && templated.action.skipReason,
+        value
+      ).toBe("unparseable_recipient_phone");
+    }
     const literal = planStep({ ...base, to: "not-a-phone" } as FlowStep, { vars: {} });
     expect(literal.ok).toBe(false);
     if (!literal.ok) expect(literal.error).toContain("not a valid phone number");
@@ -1052,6 +1079,16 @@ describe("planStep: send_sms", () => {
         skipReason: "unparseable_recipient_phone"
       }
     });
+  });
+  it("plans a SKIP for an impossible +1 recipient (KYP Ads, Aug 1 2026)", () => {
+    // +16133439985030 passes the structural isE164 check (14 digits), so it
+    // used to short-circuit past the NANP rules straight into a guaranteed
+    // Telnyx 40310 that killed the run. It is a lead-data gap: skip.
+    const scope: StepScope = { vars: { seller_phone: "+16133439985030" } };
+    const r = planStep(step, scope);
+    expect(r.ok && r.action.kind === "send_sms" && r.action.skipReason).toBe(
+      "unparseable_recipient_phone"
+    );
   });
   it("still HARD-FAILS a literal (non-templated) bad recipient — that's a config bug", () => {
     const literal: FlowStep = { id: "x", type: "send_sms", to: "call the office", body: "hi" };
@@ -2279,6 +2316,18 @@ describe("planStep: upsert_customer", () => {
   });
   it("SKIPS when the phone var is not a usable number", () => {
     const r = planStep(base, { vars: { lead_phone: "call me", lead_name: "X" } });
+    expect(r.ok).toBe(true);
+    if (r.ok) {
+      expect(r.action).toMatchObject({
+        kind: "upsert_customer",
+        skipReason: "no_contact_phone"
+      });
+    }
+  });
+  it("SKIPS an impossible +1 number instead of filing it as customer_e164", () => {
+    // The KYP Aug 1 2026 lead: this exact value was written to the contact
+    // row and every later dial of that contact would have failed at Telnyx.
+    const r = planStep(base, { vars: { lead_phone: "+16133439985030", lead_name: "X" } });
     expect(r.ok).toBe(true);
     if (r.ok) {
       expect(r.action).toMatchObject({

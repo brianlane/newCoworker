@@ -66,7 +66,10 @@ export type AiflowFailureAlertResult =
  * lead's email, so a failed booking-confirmation run says who it was for
  * instead of "an unidentified lead" (the Jul 22 2026 KYP alerts named nobody
  * even though invitee_name was extracted). Extractors write the literal
- * string "none" for absent fields — treated as empty here.
+ * string "none" for absent fields, treated as empty here. Phone and email
+ * are BOTH included when both exist: when the phone itself is the failing
+ * artifact (the Aug 1 2026 KYP alert led with an undialable number), the
+ * email is the one working way the owner can still reach the lead.
  */
 export function describeLead(vars: Record<string, unknown> | null | undefined): string {
   const read = (...keys: string[]): string => {
@@ -78,7 +81,9 @@ export function describeLead(vars: Record<string, unknown> | null | undefined): 
     return "";
   };
   const name = read("lead_name", "invitee_name");
-  const contact = read("lead_phone", "invitee_phone") || read("lead_email", "invitee_email");
+  const phone = read("lead_phone", "invitee_phone");
+  const email = read("lead_email", "invitee_email");
+  const contact = [phone, email].filter(Boolean).join(", ");
   if (name && contact) return `${name} (${contact})`;
   return name || contact || "an unidentified lead";
 }
