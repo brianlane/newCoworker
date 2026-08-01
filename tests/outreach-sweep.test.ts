@@ -428,6 +428,46 @@ describe("phase 1: discovery", () => {
     expect(result.discovered).toBe(0);
   });
 
+  it("buys at most the Standard budget of paid queries per day", async () => {
+    // 2 terms x 7 cities = a 14-slot rotation, far more than one day's budget.
+    stubLedger({
+      listActiveOutreachSettings: vi.fn(async () => [
+        settings({
+          search_terms: ["hvac", "plumber"],
+          cities: ["A", "B", "C", "D", "E", "F", "G"]
+        })
+      ])
+    });
+    const searchPlacesImpl = vi.fn(async () => []);
+    await processOutreachSweep(baseDeps({ searchPlacesImpl }));
+    expect(searchPlacesImpl).toHaveBeenCalledTimes(6);
+  });
+
+  it("doubles the daily query budget for an Enterprise tenant", async () => {
+    stubLedger({
+      listActiveOutreachSettings: vi.fn(async () => [
+        settings({
+          search_terms: ["hvac", "plumber"],
+          cities: ["A", "B", "C", "D", "E", "F", "G"]
+        })
+      ])
+    });
+    const searchPlacesImpl = vi.fn(async () => []);
+    await processOutreachSweep(
+      baseDeps({
+        searchPlacesImpl,
+        getBusinessImpl: vi.fn(async () => ({
+          id: BIZ,
+          name: "New Coworker",
+          timezone: "America/Phoenix",
+          website_url: "https://www.newcoworker.com",
+          tier: "enterprise"
+        }))
+      })
+    );
+    expect(searchPlacesImpl).toHaveBeenCalledTimes(12);
+  });
+
   it("reads the Places key from the environment when none is injected", async () => {
     stubLedger();
     const previous = process.env.GOOGLE_PLACES_API_KEY;

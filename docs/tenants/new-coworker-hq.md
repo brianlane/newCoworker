@@ -32,7 +32,8 @@ the summary.
 - **The e2e / smoke default.** Anything in `debug/` that writes without an
   explicit business id writes here.
 - **Tenant zero for Prospecting.** Our own outbound outreach runs through our
-  own product: Places discovery across Phoenix-metro trades, a pitch built
+  own product: Places discovery across Phoenix-metro trades (12 paid queries
+  a day on the Enterprise budget, double the Standard 6), a pitch built
   from what each prospect's site is missing, sent from HQ's connected mailbox.
   Configured by `configure-hq-prospecting.ts` in **manual mode**, so drafts
   wait on a human until the copy earns automatic sending. See the README's
@@ -50,7 +51,7 @@ the summary.
 | Lead intake & follow-up (Privyr) (TEST COPY of Truly) | on | The AiFlow e2e harness fixture, laid down by `debug/flow-test-setup.ts` |
 | Google review demo reply (email, 2) | off | Reviewer-facing demo |
 | New Contact Greeting (contact_created, 1) | off | |
-| Prospect outreach follow-through (webhook, 3) | off | Files and tags the businesses our outbound outreach emails (PR #972). Installed disabled; the pitch itself is sent in code, not by this flow, and the per-prospect owner text was removed (it would have been 12 texts a day announcing that strangers got email) |
+| Prospect outreach follow-through (webhook, 3) | on | Files and tags the businesses our outbound outreach emails (PR #972). Installed disabled, enabled by Brian once the notify step was gone; the pitch itself is sent in code, not by this flow, and the per-prospect owner text was removed (it would have been 12 texts a day announcing that strangers got email) |
 
 ## Booking
 
