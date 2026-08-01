@@ -5100,6 +5100,17 @@ async function sendWhatsAppStep(
       );
       return { kind: "ok", skipped: true, result: { skipped: reason } };
     }
+    if (reason === "connection_inactive") {
+      // A policy skip like not_connected, NOT a retryable failure: an
+      // inactive/expired connection stays inactive until the owner
+      // reconnects, so retrying the step just burns the retry budget
+      // (Bugbot, PR #1116).
+      appendActionTaken(
+        scope,
+        "skipped the WhatsApp message, the WhatsApp connection is inactive; reconnect it under Integrations"
+      );
+      return { kind: "ok", skipped: true, result: { skipped: reason } };
+    }
     if (reason === "template_not_approved") {
       appendActionTaken(
         scope,
