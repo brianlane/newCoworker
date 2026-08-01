@@ -8,7 +8,7 @@
  * with a readable message, in front of the database constraint that makes it
  * impossible.
  */
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterAll, beforeEach, describe, expect, it, vi } from "vitest";
 
 const defaultClientSpy = vi.fn();
 vi.mock("@/lib/supabase/server", () => ({
@@ -101,11 +101,20 @@ function input(over: Partial<ProspectingSettingsInput> = {}): ProspectingSetting
   };
 }
 
+// loadProspectingView reads the Places key from the process env, so pin it
+// per test rather than inheriting whatever the runner's environment has.
+const ORIGINAL_PLACES_KEY = process.env.GOOGLE_PLACES_API_KEY;
+afterAll(() => {
+  if (ORIGINAL_PLACES_KEY === undefined) delete process.env.GOOGLE_PLACES_API_KEY;
+  else process.env.GOOGLE_PLACES_API_KEY = ORIGINAL_PLACES_KEY;
+});
+
 beforeEach(() => {
   vi.clearAllMocks();
   getOutreachSettingsSpy.mockResolvedValue(settingsRow());
   transitionProspectSpy.mockResolvedValue(true);
   prospectingAllowedSpy.mockResolvedValue(true);
+  process.env.GOOGLE_PLACES_API_KEY = "places-key";
 });
 
 describe("loadProspectingView", () => {
@@ -174,6 +183,24 @@ describe("loadProspectingView", () => {
     expect(view.funnel.sent).toBe(OUTREACH_SCAN_LIMIT);
   });
 
+  it("surfaces a missing platform Places key as the first blocker", async () => {
+    // This exact absence once no-oped discovery silently for days; the page
+    // must say so instead of looking like a quiet day.
+    delete process.env.GOOGLE_PLACES_API_KEY;
+    listProspectOutcomesSpy.mockResolvedValue([] as never);
+    listProspectsByStatusSpy.mockResolvedValue([] as never);
+    const view = await loadProspectingView(BIZ, {} as never);
+    expect(view.blockers).toEqual(["placesKey"]);
+  });
+
+  it("treats a blank platform Places key the same as a missing one", async () => {
+    process.env.GOOGLE_PLACES_API_KEY = "   ";
+    listProspectOutcomesSpy.mockResolvedValue([] as never);
+    listProspectsByStatusSpy.mockResolvedValue([] as never);
+    const view = await loadProspectingView(BIZ, {} as never);
+    expect(view.blockers).toEqual(["placesKey"]);
+  });
+
   it("works through the default client and reports a never-configured business", async () => {
     getOutreachSettingsSpy.mockResolvedValue(null);
     listProspectOutcomesSpy.mockResolvedValue([] as never);
@@ -201,6 +228,23 @@ describe("describeBlockers", () => {
     ).toEqual(["postalAddress", "valueProp", "searchTerms", "cities"]);
     expect(describeBlockers(settingsRow() as never)).toEqual([]);
     expect(describeBlockers(null)).toEqual([]);
+  });
+
+  it("flags the platform Places key only when explicitly reported missing", () => {
+    expect(describeBlockers(settingsRow() as never, { placesKeyConfigured: false })).toEqual([
+      "placesKey"
+    ]);
+    expect(describeBlockers(settingsRow() as never, { placesKeyConfigured: true })).toEqual([]);
+    // Callers that do not assert the key (the default) see no change.
+    expect(describeBlockers(settingsRow() as never, {})).toEqual([]);
+    // Never opened means off, which stays blocker-free whatever the env.
+    expect(describeBlockers(null, { placesKeyConfigured: false })).toEqual([]);
+    // The platform gap outranks the owner's own preconditions.
+    expect(
+      describeBlockers(settingsRow({ postal_address: null }) as never, {
+        placesKeyConfigured: false
+      })
+    ).toEqual(["placesKey", "postalAddress"]);
   });
 });
 

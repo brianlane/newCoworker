@@ -2132,6 +2132,7 @@
       },
       "blockersTitle": "Antes de que esto funcione:",
       "blockers": {
+        "placesKey": "La búsqueda de negocios aún no está configurada en la plataforma, así que no se pueden encontrar negocios nuevos. Contacta a soporte.",
         "postalAddress": "Agrega la dirección postal que va en el pie de cada correo.",
         "valueProp": "Di qué quieres que ofrezca el correo.",
         "searchTerms": "Agrega al menos un tipo de negocio que buscar.",

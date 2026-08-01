@@ -99,18 +99,29 @@ export async function loadProspectingView(
     byVertical,
     queue,
     clipped: outcomes.length >= OUTREACH_SCAN_LIMIT,
-    blockers: describeBlockers(settings),
+    blockers: describeBlockers(settings, {
+      placesKeyConfigured: Boolean((process.env.GOOGLE_PLACES_API_KEY ?? "").trim())
+    }),
     tierAllowed
   };
 }
 
 /**
  * What is missing before outreach can go out. Each one is a real precondition
- * the sweep checks, phrased as the owner action that clears it.
+ * the sweep checks, phrased as the owner action that clears it. The one
+ * exception is `placesKey`: a platform-level precondition (the server's
+ * Places API key), surfaced because its absence once no-oped discovery
+ * silently for days, and "why is nothing happening?" belongs on the page.
  */
-export function describeBlockers(settings: OutreachSettingsRow | null): string[] {
+export function describeBlockers(
+  settings: OutreachSettingsRow | null,
+  env: { placesKeyConfigured?: boolean } = {}
+): string[] {
   if (!settings) return [];
   const blockers: string[] = [];
+  // Platform blocker first: without the key, nothing the owner edits below
+  // can make discovery run.
+  if (env.placesKeyConfigured === false) blockers.push("placesKey");
   if (!settings.postal_address?.trim()) blockers.push("postalAddress");
   if (!settings.value_prop?.trim()) blockers.push("valueProp");
   if (settings.search_terms.length === 0) blockers.push("searchTerms");
