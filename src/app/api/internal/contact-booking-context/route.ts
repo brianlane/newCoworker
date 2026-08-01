@@ -1,13 +1,14 @@
 /**
- * Internal endpoint: one texter's Calendly booking state for the SMS agent.
+ * Internal endpoint: one texter's booking state for the SMS agent
+ * (Calendly, Vagaro or Acuity).
  *
  * The sms-inbound-worker POSTs { businessId, phone } here best-effort before
  * building a customer reply's preamble; the core
  * (src/lib/ai-flows/contact-booking-context.ts) answers with a preformatted
- * "booking status" line — upcoming booking, rescheduled booking, or a recent
- * cancel — so the model stops confidently denying reschedules it cannot see
- * (KYP / Tim Tsai, Jul 20 2026). Non-Calendly tenants answer none after a
- * cheap connection lookup.
+ * "booking status" line (upcoming booking, rescheduled booking, or a recent
+ * cancel) so the model stops confidently denying reschedules it cannot see
+ * (KYP / Tim Tsai, Jul 20 2026). Tenants without a supported booking
+ * provider answer none after a cheap connection lookup.
  *
  * Auth, two accepted callers (mirrors /api/internal/meter-gemini-spend):
  *   - `Authorization: Bearer <INTERNAL_CRON_SECRET>` — the sms-inbound-worker

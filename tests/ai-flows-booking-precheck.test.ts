@@ -2,8 +2,8 @@
  * Pre-send booking check (src/lib/ai-flows/booking-precheck.ts):
  * run/flow/connection gating, lead-identifier extraction, user-URI caching,
  * the Calendly email fast path, the phone-match fallback (country-code
- * tolerant, capped), the Vagaro upcoming-appointments arm, goal firing on a
- * hit, and the fail-open reasons.
+ * tolerant, capped), the Vagaro and Acuity upcoming-appointments arms, goal
+ * firing on a hit, and the fail-open reasons.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
 
@@ -647,5 +647,117 @@ describe("bookingPrecheckForRun Vagaro arm", () => {
       "booking precheck: vagaro lookup refused (failing open)",
       expect.objectContaining({ error: "string sad" })
     );
+  });
+});
+
+describe("bookingPrecheckForRun Acuity arm", () => {
+  const ACUITY_CONN = {
+    provider: "acuity" as const,
+    providerConfigKey: "acuity",
+    connectionId: "aq-1"
+  };
+
+  function acuityBooking(overrides: Record<string, unknown> = {}) {
+    return {
+      eventId: "appt-1",
+      startIso: new Date(Date.now() + 60 * 60_000).toISOString(),
+      name: "Consult",
+      customerEmail: null,
+      customerPhone: null,
+      ...overrides
+    };
+  }
+
+  function acuityDeps(overrides: Partial<BookingPrecheckDeps> = {}): BookingPrecheckDeps {
+    return deps({
+      resolveConnection: vi.fn().mockResolvedValue(ACUITY_CONN),
+      listAcuityUpcoming: vi.fn().mockResolvedValue({ ok: true, bookings: [] }),
+      ...overrides
+    });
+  }
+
+  it("books on a country-code-tolerant customer phone match and logs the Acuity hit", async () => {
+    const d = acuityDeps({
+      listAcuityUpcoming: vi.fn().mockResolvedValue({
+        ok: true,
+        bookings: [acuityBooking({ customerPhone: "780-803-9935" })]
+      })
+    });
+    const result = await bookingPrecheckForRun(BIZ, RUN, d, stdDb());
+    expect(result).toEqual({ booked: true, jumpedRuns: 1, reason: "booked" });
+    expect(d.fireGoals).toHaveBeenCalledWith(expect.anything(), BIZ, [
+      {
+        status: "active",
+        email: "tim@trustyourtalent.ca",
+        text_reminder_number: "+17808039935"
+      }
+    ]);
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        event: "ai_flow_booking_precheck_hit",
+        message: expect.stringContaining("Acuity")
+      })
+    );
+    // The shared adapter got the run's own identities (existence mode).
+    expect(d.listAcuityUpcoming).toHaveBeenCalledWith(BIZ, {
+      phones: ["+17808039935"],
+      email: "tim@trustyourtalent.ca"
+    });
+  });
+
+  it("books on an exact customer email match", async () => {
+    const d = acuityDeps({
+      listAcuityUpcoming: vi.fn().mockResolvedValue({
+        ok: true,
+        bookings: [acuityBooking({ customerEmail: "tim@trustyourtalent.ca" })]
+      })
+    });
+    expect((await bookingPrecheckForRun(BIZ, RUN, d, stdDb())).booked).toBe(true);
+  });
+
+  it("no_booking_found when no listed appointment is the lead's", async () => {
+    const d = acuityDeps({
+      listAcuityUpcoming: vi.fn().mockResolvedValue({
+        ok: true,
+        bookings: [
+          acuityBooking({ customerPhone: "+15550001111" }),
+          acuityBooking({ customerEmail: "someone@else.com" }),
+          acuityBooking() // no identity at all
+        ]
+      })
+    });
+    expect(await bookingPrecheckForRun(BIZ, RUN, d, stdDb())).toEqual({
+      booked: false,
+      jumpedRuns: 0,
+      reason: "no_booking_found"
+    });
+    expect(d.fireGoals).not.toHaveBeenCalled();
+  });
+
+  it("acuity_refused when the lookup answers not_connected or throws (fails open)", async () => {
+    expect(
+      await bookingPrecheckForRun(
+        BIZ,
+        RUN,
+        acuityDeps({
+          listAcuityUpcoming: vi.fn().mockResolvedValue({ ok: false, reason: "not_connected" })
+        }),
+        stdDb()
+      )
+    ).toMatchObject({ reason: "acuity_refused" });
+
+    // Acuity transport trouble surfaces as a throw (AcuityApiError in
+    // production); the precheck fails open like the Vagaro arm.
+    const d = acuityDeps({
+      listAcuityUpcoming: vi.fn().mockRejectedValue(new Error("acuity down"))
+    });
+    expect(await bookingPrecheckForRun(BIZ, RUN, d, stdDb())).toMatchObject({
+      reason: "acuity_refused"
+    });
+    expect(logger.warn).toHaveBeenCalledWith(
+      "booking precheck: acuity lookup refused (failing open)",
+      expect.objectContaining({ businessId: BIZ, error: "acuity down" })
+    );
+    expect(d.fireGoals).not.toHaveBeenCalled();
   });
 });

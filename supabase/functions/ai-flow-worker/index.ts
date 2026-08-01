@@ -855,16 +855,17 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         return;
       }
     }
-    // Pre-send Calendly booking gate (once per run, before the FIRST outward
-    // touch, only in flows watching appointment_booked): a lead who already
-    // holds an upcoming booking must get ZERO texts — greeting included, the
-    // part the ~1/min booking-goal sweep can lose the race on (Tim Tsai,
-    // Jul 18 2026). The platform route answers synchronously; on a hit this
-    // run fast-forwards to its goal step exactly like an external goal jump
-    // (the route already jumped the lead's OTHER parked runs — this claimed
-    // run is `running`, which applyGoalEvent deliberately never touches).
-    // Fails OPEN: any route/transport trouble stamps the marker and sends as
-    // normal — the young-run sweep catches the booking within ~1 min, long
+    // Pre-send booking gate (Calendly, Vagaro or Acuity; once per run,
+    // before the FIRST outward touch, only in flows watching
+    // appointment_booked): a lead who already holds an upcoming booking must
+    // get ZERO texts, greeting included, the part the ~1/min booking-goal
+    // sweep can lose the race on (Tim Tsai, Jul 18 2026). The platform route
+    // answers synchronously; on a hit this run fast-forwards to its goal
+    // step exactly like an external goal jump (the route already jumped the
+    // lead's OTHER parked runs; this claimed run is `running`, which
+    // applyGoalEvent deliberately never touches). Fails OPEN: any
+    // route/transport trouble stamps the marker and sends as normal; on
+    // Calendly the young-run sweep catches the booking within ~1 min, long
     // before the first nudge.
     if (
       COMM_STEP_TYPES.has(step.type) &&
@@ -902,7 +903,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
           level: "info",
           event: "ai_flow_booking_precheck_jumped",
           message:
-            "The lead already had an upcoming Calendly booking, so this run skipped its messages and jumped to its goal",
+            "The lead already had an upcoming booking on the connected calendar, so this run skipped its messages and jumped to its goal",
           payload: { run_id: run.id, flow_id: run.flow_id, from_step: run.current_step, to_step: index }
         });
         continue;
@@ -1454,7 +1455,7 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
 const BYPASS_QUIET_HOURS_VAR = "_bypass_quiet_hours";
 
 /**
- * Once-per-run marker for the pre-send Calendly booking gate. Stamped before
+ * Once-per-run marker for the pre-send booking gate. Stamped before
  * the run's first communication step (success OR fail-open), persisted via
  * buildContext like every other var, so re-claims and later comm steps never
  * re-pay the platform round-trip.
@@ -1632,10 +1633,10 @@ function findBookingGoalAhead(
 
 /**
  * Ask the platform whether this run's lead already holds an active
- * future-start booking on the connected provider — Calendly or Vagaro —
- * (POST /api/internal/aiflow-booking-precheck). Fails OPEN (false) on
- * missing config, timeout, non-2xx, or malformed payload — the young-run
- * booking-goal sweep remains the safety net.
+ * future-start booking on the connected provider (Calendly, Vagaro or
+ * Acuity) via POST /api/internal/aiflow-booking-precheck. Fails OPEN
+ * (false) on missing config, timeout, non-2xx, or malformed payload; on
+ * Calendly the young-run booking-goal sweep remains the safety net.
  */
 async function bookingPrecheckBooked(run: RunRow): Promise<boolean> {
   const base = (

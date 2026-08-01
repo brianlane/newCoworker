@@ -1,14 +1,17 @@
 /**
- * Pre-send booking check for AiFlow runs (Calendly + Vagaro).
+ * Pre-send booking check for AiFlow runs (Calendly, Vagaro and Acuity:
+ * every provider with an attendee-bookings adapter).
  *
- * A lead who ALREADY booked must get zero flow texts — greeting included.
- * The 1/min booking-goal sweep and the provider webhooks only observe
- * bookings made while a run exists; a booking that predates the run (or the
- * observers themselves — Tim Tsai, Jul 18 2026) is invisible to both until
- * the young-run widening catches it ~1 min later, which can lose the race
- * against the run's first send. So the ai-flow-worker calls
- * POST /api/internal/aiflow-booking-precheck synchronously before a run's
- * FIRST communication step; this module is that route's core.
+ * A lead who ALREADY booked must get zero flow texts, greeting included.
+ * The provider webhooks only observe bookings made while a run exists, so a
+ * booking that predates the run (or the observers themselves: Tim Tsai,
+ * Jul 18 2026) is invisible to them. On Calendly the 1/min booking-goal
+ * sweep's young-run widening catches that case ~1 min later, which can
+ * still lose the race against the run's first send; the sweep is
+ * Calendly-only, so on Vagaro and Acuity this check is the only guard. The
+ * ai-flow-worker therefore calls POST /api/internal/aiflow-booking-precheck
+ * synchronously before a run's FIRST communication step; this module is
+ * that route's core.
  *
  * Given a business + run, it answers "does this run's lead have an active
  * booking with a future start on the connected provider?" and, on a hit,
@@ -17,21 +20,24 @@
  * is jumped in-process by the worker when this returns booked).
  *
  * The provider lookup itself lives in the shared attendee-bookings module
- * (`lookupProviderBookingsForAttendee`, existence mode — one adapter per
+ * (`lookupProviderBookingsForAttendee`, existence mode: one adapter per
  * provider, same call pattern this module used before the extraction); this
  * module keeps the run/flow gating, the goal firing, and the fail-open
  * reason mapping.
  *
- * Everything here FAILS OPEN by returning booked:false with a reason — the
- * worker sends as normal and the young-run sweep remains the safety net.
+ * Everything here FAILS OPEN by returning booked:false with a reason: the
+ * worker sends as normal, and on Calendly the young-run sweep remains the
+ * safety net.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { resolveCalendarConnection } from "@/lib/voice-tools/connections";
 import {
   lookupProviderBookingsForAttendee,
+  hasAttendeeBookingAdapter,
   ATTENDEE_BOOKING_EVENT_SCAN,
   ATTENDEE_BOOKING_INVITEE_FETCH_CAP,
   ATTENDEE_BOOKING_HORIZON_DAYS,
+  type AttendeeAdapterProvider,
   type AttendeeBookingDeps
 } from "@/lib/calendar-tools/attendee-bookings";
 import {
@@ -65,8 +71,26 @@ export type BookingPrecheckResult = {
     | "provider_unsupported"
     | "no_lead_identifiers"
     | "calendly_refused"
-    | "vagaro_refused";
+    | "vagaro_refused"
+    | "acuity_refused";
 };
+
+/**
+ * Per-provider fail-open reason and human-facing label, keyed exhaustively
+ * on AttendeeAdapterProvider: registering a future adapter provider fails
+ * typecheck right here until this module decides how it degrades.
+ */
+const REFUSED_REASON = {
+  calendly: "calendly_refused",
+  vagaro: "vagaro_refused",
+  acuity: "acuity_refused"
+} as const satisfies Record<AttendeeAdapterProvider, BookingPrecheckResult["reason"]>;
+
+const PROVIDER_LABEL = {
+  calendly: "Calendly",
+  vagaro: "Vagaro",
+  acuity: "Acuity"
+} as const satisfies Record<AttendeeAdapterProvider, string>;
 
 export type BookingPrecheckDeps = AttendeeBookingDeps & {
   /** Injectable goal-firing helper (tests). */
@@ -100,8 +124,8 @@ export function leadIdentifiersFromContext(context: Record<string, unknown> | nu
 
 /**
  * Does this run's lead hold an active future-start booking on the connected
- * provider (Calendly or Vagaro)? Fires the `appointment_booked` goal
- * machinery on a hit. Never throws for "expected" trouble — a refused
+ * provider (Calendly, Vagaro or Acuity)? Fires the `appointment_booked`
+ * goal machinery on a hit. Never throws for "expected" trouble: a refused
  * transport or missing rows degrade to booked:false so the caller sends as
  * normal.
  */
@@ -143,10 +167,10 @@ export async function bookingPrecheckForRun(
   }
 
   const conn = await resolveConnection(businessId);
-  if (!conn || (conn.provider !== "calendly" && conn.provider !== "vagaro")) {
+  if (!conn || !hasAttendeeBookingAdapter(conn.provider)) {
     return none("provider_unsupported");
   }
-  const refusedReason = conn.provider === "vagaro" ? "vagaro_refused" : "calendly_refused";
+  const refusedReason = REFUSED_REASON[conn.provider];
 
   const { phones, emails } = leadIdentifiersFromContext(run.context);
   if (phones.length === 0 && emails.length === 0) return none("no_lead_identifiers");
@@ -163,13 +187,13 @@ export async function bookingPrecheckForRun(
     if (!res.ok) return none(refusedReason);
     booked = res.bookings.length > 0;
   } catch (err) {
-    // Vagaro transport trouble surfaces as a throw (see the shared module's
-    // failure contract); fail open exactly as before the extraction. A
-    // throwing CALENDLY transport propagates, also as before — its
-    // production transport signals trouble by returning null, so a throw is
-    // an unexpected bug the route's error handling should surface.
-    if (conn.provider !== "vagaro") throw err;
-    logger.warn("booking precheck: vagaro lookup refused (failing open)", {
+    // Vagaro and Acuity transport trouble surfaces as a throw (see the
+    // shared module's failure contract); fail open exactly as before the
+    // extraction. A throwing CALENDLY transport propagates, also as before:
+    // its production transport signals trouble by returning null, so a
+    // throw is an unexpected bug the route's error handling should surface.
+    if (conn.provider === "calendly") throw err;
+    logger.warn(`booking precheck: ${conn.provider} lookup refused (failing open)`, {
       businessId,
       error: err instanceof Error ? err.message : String(err)
     });
@@ -203,7 +227,7 @@ export async function bookingPrecheckForRun(
     level: "info",
     event: "ai_flow_booking_precheck_hit",
     message:
-      `A lead already had an upcoming ${conn.provider === "vagaro" ? "Vagaro" : "Calendly"} ` +
+      `A lead already had an upcoming ${PROVIDER_LABEL[conn.provider]} ` +
       "booking when their flow reached its first message; follow-ups were skipped",
     payload: { run_id: runId, jumped_runs: fired.jumpedRuns }
   });

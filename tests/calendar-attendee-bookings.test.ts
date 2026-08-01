@@ -39,10 +39,12 @@ vi.mock("@/lib/calendar-tools/booking-dedupe", async (importOriginal) => ({
 }));
 
 import {
+  ATTENDEE_ADAPTER_PROVIDERS,
   ATTENDEE_BOOKING_LOOKUPS,
   ATTENDEE_BOOKING_EVENT_SCAN,
   calendlyInviteeMatchesAttendee,
   findUpcomingBookingsForAttendee,
+  hasAttendeeBookingAdapter,
   lookupProviderBookingsForAttendee,
   vagaroAppointmentMatchesAttendee,
   type AttendeeBookingDeps
@@ -124,6 +126,24 @@ describe("provider registry parity (the future-integration guard)", () => {
     expect(ATTENDEE_BOOKING_LOOKUPS.calendly.kind).toBe("adapter");
     expect(ATTENDEE_BOOKING_LOOKUPS.vagaro.kind).toBe("adapter");
     expect(ATTENDEE_BOOKING_LOOKUPS.acuity.kind).toBe("adapter");
+  });
+
+  it("ATTENDEE_ADAPTER_PROVIDERS and the narrowing predicate mirror the registry's adapter entries", () => {
+    // The booking-intelligence consumers (precheck, contact booking context)
+    // gate on this predicate, so the const array must track the registry: a
+    // provider registered as an adapter but missing here would silently fall
+    // through both gates, which is exactly the Acuity gap this pins against.
+    const adapterKeys = Object.entries(ATTENDEE_BOOKING_LOOKUPS)
+      .filter(([, lookup]) => lookup.kind === "adapter")
+      .map(([provider]) => provider)
+      .sort();
+    expect([...ATTENDEE_ADAPTER_PROVIDERS].sort()).toEqual(adapterKeys);
+    for (const provider of ATTENDEE_ADAPTER_PROVIDERS) {
+      expect(hasAttendeeBookingAdapter(provider)).toBe(true);
+    }
+    for (const provider of ["google", "microsoft", "caldav"] as const) {
+      expect(hasAttendeeBookingAdapter(provider)).toBe(false);
+    }
   });
 });
 
