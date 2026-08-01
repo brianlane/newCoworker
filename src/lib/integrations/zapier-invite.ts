@@ -8,4 +8,4 @@
  * (see zapier/README.md). Existing accepted users keep access.
  */
 export const ZAPIER_INVITE_URL =
-  "https://zapier.com/developer/public-invite/243681/504001/f9a0e48914a1b43e1cad8e7e22aa69a4/";
+  "https://zapier.com/developer/public-invite/243681/506906/24d5aa1ef368f83387e80e0d130b5f22/";
