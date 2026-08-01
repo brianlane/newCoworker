@@ -429,9 +429,21 @@ serve(async (req: Request) => {
       .in("kind", ["sms_team_notify", "voice_team_notify"])
       // The texting twin stores the contact as payload.customerPhone, the
       // voice twin as payload.callerPhone (their notify_team logPayloads
-      // differ); match either so a voice-side team notify dedupes too.
+      // differ); match either. The notify_team routes normalize on write
+      // now, but rows written before that (or via a non-coercible model
+      // value) may carry bare NANP digits, so match those variants too.
       .or(
-        `payload->>customerPhone.eq.${scopedContactE164},payload->>callerPhone.eq.${scopedContactE164}`
+        [
+          ...new Set(
+            [
+              scopedContactE164,
+              scopedContactE164.replace(/\D/g, ""),
+              /^\+1\d{10}$/.test(scopedContactE164) ? scopedContactE164.slice(2) : ""
+            ].filter(Boolean)
+          )
+        ]
+          .flatMap((c) => [`payload->>customerPhone.eq.${c}`, `payload->>callerPhone.eq.${c}`])
+          .join(",")
       )
       .gte("created_at", sinceIso)
       .limit(1);

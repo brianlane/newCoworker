@@ -52,6 +52,7 @@ import {
 import { joinCalendarWaitlist } from "@/lib/calendar-tools/waitlist-join";
 import { insertCoworkerLog } from "@/lib/db/logs";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
+import { coerceOwnerPhoneToE164 } from "@/lib/phone/e164";
 import { truncateAtWord } from "../../../../../supabase/functions/_shared/text_truncate";
 import {
   generateImageForDashboard,
@@ -570,7 +571,15 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
       if (!parsed.success) {
         return { ok: false, detail: `invalid_args:${parsed.error.issues[0]?.message}` };
       }
-      const customerPhone = parsed.data.customerPhone ?? null;
+      // Normalize the model-supplied phone before it is stored or
+      // dispatched: contact-owner routing and the needs-human transport
+      // dedupe compare it against worker-normalized E.164 values, and the
+      // model sometimes writes "612-708-7408" shapes (Bugbot, PR #1115).
+      // An uncoercible value passes through raw rather than being dropped.
+      const rawCustomerPhone = parsed.data.customerPhone ?? null;
+      const customerPhone = rawCustomerPhone
+        ? (coerceOwnerPhoneToE164(rawCustomerPhone) ?? rawCustomerPhone)
+        : null;
       // Dashboard log row first, so the request is visible even if every
       // notification channel is disabled or fails (mirrors the voice twin).
       const logId = randomUUID();

@@ -628,7 +628,9 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
       summary: "Caller follow-up needed: call Dwight back about the dispute",
       payload: {
         logId: crypto.randomUUID(),
-        callerPhone: LEAD,
+        // Bare national digits, the pre-normalization row shape: the dedupe
+        // must match it against the worker's +1 E.164 (Bugbot round 3).
+        callerPhone: LEAD.replace("+1", ""),
         summary: "Caller follow-up needed: call Dwight back about the dispute"
       }
     });
