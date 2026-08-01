@@ -98,6 +98,10 @@ export async function ensureAcuityWebhooks(
     status: "unsupported"
   };
 
+  // Read once, up front: the failure path below needs the stored record to
+  // decide whether a degraded status may overwrite it.
+  const stored = readWebhookRegistration(conn.webhook_registration);
+
   try {
     // Reconcile by target: anything already pointing at us is ours, whether
     // or not we still have its id.
@@ -106,7 +110,6 @@ export async function ensureAcuityWebhooks(
     // and registrations left at the old URL keep consuming the account's
     // 25-webhook ceiling while delivering to somewhere that no longer serves
     // this tenant.
-    const stored = readWebhookRegistration(conn.webhook_registration);
     const ourTargets = new Set([targetUrl, ...(stored.targetUrl ? [stored.targetUrl] : [])]);
     const existing = await list(conn);
     for (const hook of existing) {
@@ -153,15 +156,32 @@ export async function ensureAcuityWebhooks(
     });
   }
 
+  // A FAILED reconcile over a previously WORKING registration must not
+  // demote the record: the recheck only revisits `registered` accounts, so
+  // persisting `unsupported` here would freeze a transient blip into a
+  // permanently dead registration nothing ever re-examines. Keep the stored
+  // record, merging any ids this attempt DID create so teardown can still
+  // remove them, and keep its registeredAt: the record stays stale, so the
+  // next recheck retries the reconcile promptly. That is also the self-heal
+  // for the deletes-succeeded-then-create-failed window.
+  const toPersist: AcuityWebhookRegistration =
+    result.status !== "registered" && stored.status === "registered"
+      ? {
+          ids: [...new Set([...stored.ids, ...result.ids])],
+          targetUrl: stored.targetUrl,
+          registeredAt: stored.registeredAt,
+          status: "registered"
+        }
+      : result;
   try {
-    await persist(conn.business_id, result);
+    await persist(conn.business_id, toPersist);
   } catch (err) {
     logger.warn("acuity webhooks: persisting registration failed", {
       businessId: conn.business_id,
       error: errorText(err)
     });
   }
-  return result;
+  return toPersist;
 }
 
 /**
@@ -183,11 +203,16 @@ export async function teardownAcuityWebhooks(
   // set of ids while Acuity holds the new one. Deleting only what we have
   // stored would then orphan live registrations that keep consuming the
   // account's 25-webhook ceiling with no way for the owner to find them.
-  const target = targetUrl ?? stored.targetUrl;
-  if (target) {
+  // Both the caller's target AND the stored previous one, matching the
+  // registration reconcile: after an origin drift, hooks at the old URL are
+  // exactly the ones most likely to be missing from our stored ids.
+  const targets = new Set(
+    [targetUrl, stored.targetUrl].filter((t): t is string => Boolean(t))
+  );
+  if (targets.size > 0) {
     try {
       for (const hook of await list(conn)) {
-        if (hook.target === target) ids.add(hook.id);
+        if (hook.target && targets.has(hook.target)) ids.add(hook.id);
       }
     } catch (err) {
       logger.warn("acuity webhooks: teardown listing failed", {

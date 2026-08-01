@@ -218,6 +218,59 @@ describe("ensureAcuityWebhooks", () => {
   });
 });
 
+  it("never DEMOTES a previously working registration on a transient failure", async () => {
+    // The recheck only revisits `registered` accounts, so persisting
+    // `unsupported` over a working record would freeze one blip into a
+    // permanently dead registration nothing ever re-examines.
+    const d = deps({ list: vi.fn().mockRejectedValue(new Error("acuity down")) });
+    const res = await ensureAcuityWebhooks(
+      conn({
+        ids: ["kept-1"],
+        targetUrl: TARGET,
+        registeredAt: "2026-08-01T00:00:00.000Z",
+        status: "registered"
+      }),
+      TARGET,
+      d
+    );
+    expect(res).toMatchObject({
+      status: "registered",
+      ids: ["kept-1"],
+      // Stale on purpose: the next recheck retries the reconcile promptly.
+      registeredAt: "2026-08-01T00:00:00.000Z"
+    });
+    expect(
+      (d as never as { persist: { mock: { calls: unknown[][] } } }).persist.mock.calls[0][1]
+    ).toMatchObject({ status: "registered" });
+  });
+
+  it("merges ids a failed attempt DID create, so teardown can remove them", async () => {
+    // deletes-succeeded-then-create-failed: the partial creations must not
+    // be orphaned from our stored ids.
+    let calls = 0;
+    const d = deps({
+      create: vi.fn(async (_c: unknown, event: string) => {
+        calls += 1;
+        if (calls > 1) throw new AcuityApiError("request_failed", "boom", 500);
+        return { id: `new-${event}`, event, target: TARGET };
+      })
+    });
+    const res = await ensureAcuityWebhooks(
+      conn({ ids: ["old-1"], targetUrl: TARGET, registeredAt: "2026-08-01T00:00:00.000Z", status: "registered" }),
+      TARGET,
+      d
+    );
+    expect(res.ids.sort()).toEqual(["new-appointment.scheduled", "old-1"]);
+  });
+
+  it("still records a first-connect failure honestly", async () => {
+    // No prior registration to protect: the degraded status is the truth
+    // and is what makes the card show the paste-this-URL fallback.
+    const d = deps({ create: vi.fn().mockRejectedValue(new AcuityApiError("auth_failed", "no", 403)) });
+    const res = await ensureAcuityWebhooks(conn(), TARGET, d);
+    expect(res.status).toBe("unsupported");
+  });
+
 describe("teardownAcuityWebhooks", () => {
   it("removes the ids we stored", async () => {
     const d = deps();
@@ -249,6 +302,25 @@ describe("teardownAcuityWebhooks", () => {
       .map((c) => c[1])
       .sort();
     expect(removed).toEqual(["orphan", "stored"]);
+  });
+
+  it("clears hooks at BOTH the caller's target and the stored previous one", async () => {
+    const OLD = "https://old.example.com/api/webhooks/acuity?business=biz-1&token=tok";
+    const d = deps({
+      list: vi.fn().mockResolvedValue([
+        { id: "at-old", event: "e", target: OLD },
+        { id: "at-new", event: "e", target: TARGET }
+      ])
+    });
+    await teardownAcuityWebhooks(
+      conn({ ids: [], targetUrl: OLD, status: "registered" }),
+      TARGET,
+      d
+    );
+    const removed = (d as never as { remove: { mock: { calls: unknown[][] } } }).remove.mock.calls
+      .map((c) => c[1])
+      .sort();
+    expect(removed).toEqual(["at-new", "at-old"]);
   });
 
   it("falls back to the stored target when the caller has none", async () => {
