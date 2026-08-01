@@ -167,7 +167,9 @@ export type FlowConnectionUsage = { id: string; name: string; enabled: boolean }
 /**
  * The business's flows that reference the given workspace connection row id
  * anywhere (sender bindings, email triggers, email_extract). Disabled flows
- * count too — re-enabling one later would break just as silently.
+ * count too: re-enabling one later would break just as silently. Soft-deleted
+ * flows do NOT count: the dashboard hides them, so a 409 naming one gives the
+ * owner nothing to fix and locks the mailbox to the connection forever.
  */
 export async function flowsReferencingWorkspaceConnection(
   businessId: string,
@@ -178,7 +180,8 @@ export async function flowsReferencingWorkspaceConnection(
   const { data, error } = await db
     .from("ai_flows")
     .select("id, name, enabled, definition")
-    .eq("business_id", businessId);
+    .eq("business_id", businessId)
+    .is("deleted_at", null);
   if (error) throw new Error(`flowsReferencingWorkspaceConnection: ${error.message}`);
   const rows = (data ?? []) as Array<{
     id: string;

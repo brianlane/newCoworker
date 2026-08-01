@@ -293,13 +293,17 @@ describe("flowsReferencingWorkspaceConnection", () => {
       definition: { trigger: { channel: "email", connectionId: "conn-a" } }
     }
   ];
-  const stubDb = (data: unknown, error: { message: string } | null = null) => ({
-    from: vi.fn().mockReturnValue({
-      select: vi.fn().mockReturnValue({
-        eq: vi.fn().mockResolvedValue({ data, error })
+  const stubDb = (data: unknown, error: { message: string } | null = null) => {
+    const is = vi.fn().mockResolvedValue({ data, error });
+    return {
+      is,
+      from: vi.fn().mockReturnValue({
+        select: vi.fn().mockReturnValue({
+          eq: vi.fn().mockReturnValue({ is })
+        })
       })
-    })
-  });
+    };
+  };
 
   it("returns every flow (enabled or not) referencing the connection", async () => {
     const db = stubDb(flowRows);
@@ -308,6 +312,11 @@ describe("flowsReferencingWorkspaceConnection", () => {
       { id: "f1", name: "Booking confirmation", enabled: true },
       { id: "f3", name: "Old outreach", enabled: false }
     ]);
+    // Soft-deleted flows must not hold a mailbox hostage: the dashboard hides
+    // them, so a 409 naming one is unfixable by the owner. The mock can only
+    // pin that the filter is APPLIED; its effect against real Postgres is
+    // tests/worker-integration/mailbox-disconnect-deleted-flow.itest.ts.
+    expect(db.is).toHaveBeenCalledWith("deleted_at", null);
   });
 
   it("returns empty when nothing references it (and when the business has no flows)", async () => {
