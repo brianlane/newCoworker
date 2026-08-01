@@ -17,18 +17,27 @@
  * auth or no `.env` still gets a useful pack.
  *
  * Usage:
- *   tsx scripts/context-pack.ts                 # regenerate docs/CONTEXT-PACK.md
- *   tsx scripts/context-pack.ts --days 30       # widen the PR/chat window
- *   tsx scripts/context-pack.ts --out -         # print to stdout instead
- *   tsx scripts/context-pack.ts --no-fleet      # skip the Supabase queries
+ *   npx tsx scripts/context-pack.ts             # regenerate docs/CONTEXT-PACK.md everywhere
+ *   npx tsx scripts/context-pack.ts --days 30   # widen the PR/chat window
+ *   npx tsx scripts/context-pack.ts --out -     # print to stdout instead
+ *   npx tsx scripts/context-pack.ts --no-fleet  # skip the Supabase queries
+ *
+ * A relative --out (the default included) is written into EVERY checkout of
+ * the repo: the main one and each linked worktree. Claude Code opens every
+ * session in a fresh worktree under .claude/worktrees/, and a gitignored file
+ * is never part of a fresh checkout, so a single-copy pack was unreadable in
+ * exactly the place sessions begin. The SessionStart hook
+ * (scripts/sync-context-pack.sh) covers worktrees created after the last
+ * regeneration. An absolute --out, or "-", stays a single target.
  *
  * Env:
  *   SUPABASE_URL (or NEXT_PUBLIC_SUPABASE_URL) + SUPABASE_SERVICE_ROLE_KEY
  *     read from the repo-root `.env` for the fleet snapshot; without them
  *     that one section is skipped.
  *   CONTEXT_PACK_TRANSCRIPTS_DIR
- *     overrides where the agent transcripts are found. Unset, both the Claude
- *     Code archive (`~/.claude/projects/<slug>/`) and the older Cursor one
+ *     overrides where the agent transcripts are found. Unset, the Claude Code
+ *     archives (`~/.claude/projects/<slug>/`, one per checkout a session has
+ *     run in, worktrees included) and the older Cursor one
  *     (`~/.cursor/projects/<slug>/agent-transcripts/`) are read.
  *
  * The output is gitignored on purpose. It is derived from local transcripts
@@ -62,7 +71,7 @@ export function parseContextPackArgs(argv: string[]): ContextPackArgs {
     else if (a === "--no-fleet") out.fleet = false;
     else if (a === "--help" || a === "-h") {
       process.stdout.write(
-        "Usage: tsx scripts/context-pack.ts [--days 14] [--out docs/CONTEXT-PACK.md|-] [--no-fleet]\n"
+        "Usage: npx tsx scripts/context-pack.ts [--days 14] [--out docs/CONTEXT-PACK.md|-] [--no-fleet]\n"
       );
       process.exit(0);
     }
@@ -99,6 +108,31 @@ function checkoutRoots(repoRoot: string): string[] {
   if (commonDir) {
     const main = path.dirname(commonDir.trim());
     if (main !== repoRoot) roots.push(main);
+  }
+  return roots;
+}
+
+/** Worktree paths out of `git worktree list --porcelain`, main checkout first. */
+export function parseWorktreePaths(porcelain: string): string[] {
+  const out: string[] = [];
+  for (const line of porcelain.split("\n")) {
+    const m = /^worktree (.+)$/.exec(line);
+    if (m) out.push(m[1]);
+  }
+  return out;
+}
+
+/**
+ * Every checkout of this repo: the main one plus each linked worktree. This
+ * is the mirror set for a relative output path. Claude Code opens each
+ * session in a fresh worktree, so a pack that exists only where the generator
+ * last ran is invisible in exactly the place sessions begin.
+ */
+function allCheckouts(repoRoot: string): string[] {
+  const roots = checkoutRoots(repoRoot);
+  const porcelain = tryExec("git", ["worktree", "list", "--porcelain"], { cwd: repoRoot });
+  for (const p of porcelain ? parseWorktreePaths(porcelain) : []) {
+    if (!roots.includes(p)) roots.push(p);
   }
   return roots;
 }
@@ -304,6 +338,39 @@ function renderPullRequests(repoRoot: string, days: number): string {
 /* -------------------------------------------------------------------------- */
 
 /**
+ * How the transcript archives key a workspace path: path separators AND dots
+ * both flatten to dashes, so `/a/b/.claude/x` becomes `-a-b--claude-x`.
+ * Claude Code keeps the leading dash, Cursor drops it; callers strip it for
+ * the Cursor side.
+ */
+export function archiveSlug(absPath: string): string {
+  return absPath.replace(/[/.]/g, "-");
+}
+
+/**
+ * Whether an archive directory name belongs to a worktree of the checkout
+ * whose flattened slug is `flat`. Worktree paths extend the checkout path
+ * (`.claude/worktrees/<name>` inside it, or the manual `<repo>-wt-<name>`
+ * sibling convention), so their slugs extend the checkout's slug. Matched by
+ * prefix rather than by enumerating live worktrees because transcripts
+ * outlive their worktree: the app removes a worktree once its session is
+ * done, and that removed worktree's archive is often exactly the history
+ * worth keeping in the digest.
+ */
+export function isWorktreeArchiveOf(name: string, flat: string): boolean {
+  return name.startsWith(`${flat}-`);
+}
+
+/** Directory entries of `dir`, or nothing when it does not exist. */
+function tryReaddir(dir: string): string[] {
+  try {
+    return fs.readdirSync(dir);
+  } catch {
+    return [];
+  }
+}
+
+/**
  * Find every agent-transcript archive for this repo.
  *
  * Two harnesses have written history here: Cursor, under
@@ -313,24 +380,33 @@ function renderPullRequests(repoRoot: string, days: number): string {
  * blank the day the tool changed. Newest-first ordering across the merged set
  * is by mtime, so which archive a session came from does not matter downstream.
  *
- * Both key the archive by the workspace path with separators flattened (Claude
- * Code keeps the leading separator as a dash, Cursor drops it), so a worktree
- * resolves to a different, empty slug: fall back to the main checkout, which
- * is the parent of the shared git common dir.
+ * The slug is the session's working directory, flattened. Cursor always ran
+ * sessions in the main checkout, so one slug was the whole archive; Claude
+ * Code runs each session in its own worktree, so one repo owns many archive
+ * directories: the main checkout's, plus one per worktree, current or since
+ * removed. Worktree slugs extend the checkout slug, so a prefix scan over the
+ * archive root finds them all, deleted worktrees included.
  */
 export function resolveTranscriptDirs(repoRoot: string): string[] {
   const override = process.env.CONTEXT_PACK_TRANSCRIPTS_DIR;
   if (override) return fs.existsSync(override) ? [override] : [];
 
+  const claudeRoot = path.join(os.homedir(), ".claude", "projects");
+  const cursorRoot = path.join(os.homedir(), ".cursor", "projects");
   const found: string[] = [];
+  const add = (dir: string): void => {
+    if (fs.existsSync(dir) && !found.includes(dir)) found.push(dir);
+  };
   for (const candidate of checkoutRoots(repoRoot)) {
-    const flat = candidate.replace(/\//g, "-");
-    const dirs = [
-      path.join(os.homedir(), ".claude", "projects", flat),
-      path.join(os.homedir(), ".cursor", "projects", flat.replace(/^-+/, ""), "agent-transcripts")
-    ];
-    for (const dir of dirs) {
-      if (fs.existsSync(dir) && !found.includes(dir)) found.push(dir);
+    const flat = archiveSlug(candidate);
+    const cursorFlat = flat.replace(/^-+/, "");
+    add(path.join(claudeRoot, flat));
+    add(path.join(cursorRoot, cursorFlat, "agent-transcripts"));
+    for (const name of tryReaddir(claudeRoot)) {
+      if (isWorktreeArchiveOf(name, flat)) add(path.join(claudeRoot, name));
+    }
+    for (const name of tryReaddir(cursorRoot)) {
+      if (isWorktreeArchiveOf(name, cursorFlat)) add(path.join(cursorRoot, name, "agent-transcripts"));
     }
   }
   return found;
@@ -651,7 +727,7 @@ export async function buildContextPack(repoRoot: string, args: ContextPackArgs):
   return [
     "# Context pack (generated)",
     "",
-    "**Do not edit by hand.** Regenerate with `tsx scripts/context-pack.ts`.",
+    "**Do not edit by hand.** Regenerate with `npx tsx scripts/context-pack.ts`.",
     "",
     `Generated ${generatedAt} UTC-ish (local clock), at \`${head}\`, window ${args.days} days.`,
     "",
@@ -682,6 +758,22 @@ export async function buildContextPack(repoRoot: string, args: ContextPackArgs):
   ].join("\n");
 }
 
+/**
+ * Write via a same-directory temp file and rename, so a session reading the
+ * pack mid-regeneration sees the old copy or the new one, never a torn one.
+ */
+function writeAtomic(outPath: string, content: string): void {
+  fs.mkdirSync(path.dirname(outPath), { recursive: true });
+  const tmp = `${outPath}.tmp-${process.pid}`;
+  try {
+    fs.writeFileSync(tmp, content, "utf8");
+    fs.renameSync(tmp, outPath);
+  } catch (err) {
+    fs.rmSync(tmp, { force: true });
+    throw err;
+  }
+}
+
 async function main(): Promise<void> {
   const args = parseContextPackArgs(process.argv.slice(2));
   const repoRoot = repoRootFromHere();
@@ -691,10 +783,28 @@ async function main(): Promise<void> {
     process.stdout.write(markdown);
     return;
   }
-  const outPath = path.isAbsolute(args.out) ? args.out : path.join(repoRoot, args.out);
-  fs.mkdirSync(path.dirname(outPath), { recursive: true });
-  fs.writeFileSync(outPath, markdown, "utf8");
-  process.stdout.write(`wrote ${path.relative(repoRoot, outPath)} (${markdown.length} bytes)\n`);
+  if (path.isAbsolute(args.out)) {
+    writeAtomic(args.out, markdown);
+    process.stdout.write(`wrote ${args.out} (${markdown.length} bytes)\n`);
+    return;
+  }
+
+  // A relative target is mirrored into every checkout, so the next session
+  // finds the pack no matter which worktree it opens in. A checkout that
+  // cannot be written (say a worktree pruned mid-run) is reported, not fatal.
+  const skipped: string[] = [];
+  let written = 0;
+  for (const root of allCheckouts(repoRoot)) {
+    if (!fs.existsSync(root)) continue;
+    try {
+      writeAtomic(path.join(root, args.out), markdown);
+      written += 1;
+    } catch {
+      skipped.push(root);
+    }
+  }
+  process.stdout.write(`wrote ${args.out} (${markdown.length} bytes) in ${written} checkout(s)\n`);
+  for (const root of skipped) process.stdout.write(`  skipped ${root}: not writable\n`);
 }
 
 // Only run when invoked directly, so the pure helpers above stay unit-testable.

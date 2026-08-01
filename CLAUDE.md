@@ -34,24 +34,35 @@ at the same answer. It is now generated once, mechanically.
 
 Then open only the raw sources the task actually needs.
 
-### Regenerating
+### Where it lives, and why it is already in your worktree
 
-The pack is gitignored and generated, never hand-edited. If it is missing or
-its header timestamp is more than a day old:
+The pack is gitignored and generated, never hand-edited, so a fresh worktree
+starts without it, and Claude Code opens every session in a fresh worktree.
+Two things close that gap: the generator writes the pack into every checkout
+(the main one plus all linked worktrees), and the SessionStart hook
+(`scripts/sync-context-pack.sh`, wired in `.claude/settings.json`) copies the
+main checkout's pack into the session's worktree at startup and prints its
+age into the session context. If the hook reports it stale (more than a day
+old) or missing:
 
 ```bash
-tsx scripts/context-pack.ts
+npx tsx scripts/context-pack.ts
 ```
 
-It is read-only and takes a few seconds. `--days N` widens the window,
-`--no-fleet` skips the Supabase queries, `--out -` prints to stdout.
+It is read-only, takes a few seconds, and refreshes every checkout at once.
+`--days N` widens the window, `--no-fleet` skips the Supabase queries,
+`--out -` prints to stdout instead of writing anywhere.
 
-Run it from the main checkout when you can. It works from a worktree (it
-finds `.env` and the transcript archive through the shared git common dir),
-but the worktree needs `node_modules` for the fleet section.
+Run it from the main checkout or from a worktree under `.claude/worktrees/`:
+`npx` and Node both resolve the main checkout's `node_modules` from above an
+app worktree, and `.env` plus the transcript archive resolve through the
+shared git common dir. A standalone worktree (`newCoworker-wt-<name>`) needs
+its own `node_modules`, same as the rest of the flow.
 
-The session digest reads both the Claude Code transcript archive
-(`~/.claude/projects/<slug>/`) and the older Cursor one
+The session digest reads every transcript archive this repo owns: the Claude
+Code archive of the main checkout (`~/.claude/projects/<slug>/`) and of every
+worktree session, current or since removed (worktree slugs extend the main
+slug), plus the older Cursor one
 (`~/.cursor/projects/<slug>/agent-transcripts/`), so history from before the
 switch stays visible. `CONTEXT_PACK_TRANSCRIPTS_DIR` overrides the search
 with an explicit directory.

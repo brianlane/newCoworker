@@ -43,5 +43,17 @@
       "Bash(tsx scripts/oneshot/*--apply*)",
       "Bash(tsx debug/update-all-vps.ts:*)"
     ]
+  },
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PROJECT_DIR:-.}/scripts/sync-context-pack.sh\""
+          }
+        ]
+      }
+    ]
   }
 }
