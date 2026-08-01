@@ -43,7 +43,7 @@ Live values (flow enable state, roster, DIDs, applied one-shots) are best read
 fresh rather than from prose:
 
 ```bash
-tsx scripts/context-pack.ts            # fleet snapshot: ids, tiers, DIDs, flow counts
+npx tsx scripts/context-pack.ts        # fleet snapshot: ids, tiers, DIDs, flow counts
 tsx debug/audit-account.ts --business <uuid>   # one tenant's live posture and recent activity
 ```
 

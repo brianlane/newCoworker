@@ -2368,7 +2368,7 @@ orientation re-derived from scratch every time, paid for in tokens, arriving
 at the same answer. It is generated once instead, mechanically:
 
 ```bash
-tsx scripts/context-pack.ts        # writes docs/CONTEXT-PACK.md, read-only, a few seconds
+npx tsx scripts/context-pack.ts    # writes docs/CONTEXT-PACK.md into every checkout, a few seconds
 ```
 
 The pack carries a repo map, a line-numbered index of every section in this
@@ -2381,11 +2381,19 @@ Read it first, then open only the raw sources the task actually needs.
 The output is **gitignored and generated**: never hand-edit it, and
 regenerate when the header timestamp is more than a day old. It is derived
 from the local agent transcript archive and live tenant rows, neither of
-which belongs in git. `--days N` widens the window, `--no-fleet` skips the
-Supabase queries, `--out -` prints to stdout.
+which belongs in git. Because it is gitignored, a fresh worktree starts
+without it, and Claude Code opens every session in a fresh worktree under
+`.claude/worktrees/`: the generator therefore mirrors the pack into every
+checkout (main plus all linked worktrees), and the SessionStart hook
+(`scripts/sync-context-pack.sh`, wired in `.claude/settings.json`) copies the
+main checkout's pack into any worktree created since the last run and prints
+its age into the session context. `--days N` widens the window, `--no-fleet`
+skips the Supabase queries, `--out -` prints to stdout.
 
-The session digest reads both transcript archives: Claude Code's
-(`~/.claude/projects/<slug>/`) and the older Cursor one
+The session digest reads every transcript archive this repo owns: the main
+checkout's Claude Code archive (`~/.claude/projects/<slug>/`), one per
+worktree session (worktree slugs extend the main slug, and archives of
+removed worktrees still count), and the older Cursor one
 (`~/.cursor/projects/<slug>/agent-transcripts/`), so sessions from before the
 switch stay visible. `CONTEXT_PACK_TRANSCRIPTS_DIR` overrides the search with
 an explicit directory.
@@ -2451,7 +2459,7 @@ Recent captures, and what each replaced:
 
 | Was re-derived every time | Now |
 | --- | --- |
-| Read the README, the transcripts, the PR list to get oriented | `tsx scripts/context-pack.ts` |
+| Read the README, the transcripts, the PR list to get oriented | `npx tsx scripts/context-pack.ts` |
 | "Review everything about Amy / KYP / Truly" | [docs/tenants/](docs/tenants/README.md) |
 | "What is this tenant's posture, is anything broken?" | `tsx debug/audit-account.ts --business <uuid>` |
 | "They say they never got the text" | `tsx debug/trace-sms.ts --to +1…` |

@@ -3,14 +3,17 @@ import os from "node:os";
 import path from "node:path";
 import { describe, expect, it } from "vitest";
 import {
+  archiveSlug,
   escapeTableCell,
   extractPrNumbers,
   extractReadmeSections,
   extractUserQuery,
   headingAnchor,
+  isWorktreeArchiveOf,
   isoDaysAgo,
   oneLine,
   parseContextPackArgs,
+  parseWorktreePaths,
   redactIdentifiers,
   sessionFiles,
   stripRitualPrefixes,
@@ -196,6 +199,71 @@ describe("sessionFiles", () => {
     } finally {
       fs.rmSync(dir, { recursive: true, force: true });
     }
+  });
+});
+
+describe("parseWorktreePaths", () => {
+  it("reads every checkout path from the porcelain listing, main checkout first", () => {
+    const porcelain = [
+      "worktree /Users/brianlane/newCoworker",
+      "HEAD fc86828a0000000000000000000000000000000000",
+      "branch refs/heads/main",
+      "",
+      "worktree /Users/brianlane/newCoworker/.claude/worktrees/pack-fix-1234",
+      "HEAD 734f3f710000000000000000000000000000000000",
+      "detached",
+      ""
+    ].join("\n");
+    expect(parseWorktreePaths(porcelain)).toEqual([
+      "/Users/brianlane/newCoworker",
+      "/Users/brianlane/newCoworker/.claude/worktrees/pack-fix-1234"
+    ]);
+  });
+
+  it("returns nothing for empty output", () => {
+    expect(parseWorktreePaths("")).toEqual([]);
+  });
+});
+
+describe("archiveSlug", () => {
+  it("flattens separators AND dots, which is how a worktree under .claude gets its slug", () => {
+    // The dot matters: /repo/.claude/worktrees/x archives under
+    // "...-newCoworker--claude-worktrees-x" (double dash), not
+    // "...-newCoworker-.claude-worktrees-x". Flattening only the slashes made
+    // the generator look for archive directories that never exist.
+    expect(archiveSlug("/Users/brianlane/newCoworker")).toBe("-Users-brianlane-newCoworker");
+    expect(archiveSlug("/Users/brianlane/newCoworker/.claude/worktrees/pack-fix-1234")).toBe(
+      "-Users-brianlane-newCoworker--claude-worktrees-pack-fix-1234"
+    );
+  });
+});
+
+describe("isWorktreeArchiveOf", () => {
+  // Claude Code keys the transcript archive by each session's working
+  // directory, and sessions run in per-session worktrees, so the repo owns
+  // many archive directories. They are matched by slug prefix, because
+  // archives outlive their worktrees and a removed worktree's history is
+  // exactly what the digest must keep showing.
+  const flat = "-Users-brianlane-newCoworker";
+
+  it("accepts app worktrees and manual -wt- siblings", () => {
+    expect(isWorktreeArchiveOf(`${flat}--claude-worktrees-pack-fix-1234`, flat)).toBe(true);
+    expect(isWorktreeArchiveOf(`${flat}-wt-clever-second-intro`, flat)).toBe(true);
+  });
+
+  it("rejects the checkout's own slug and unrelated projects", () => {
+    // The exact slug is added separately; matching it here would double-add.
+    expect(isWorktreeArchiveOf(flat, flat)).toBe(false);
+    expect(isWorktreeArchiveOf("-Users-brianlane-otherRepo", flat)).toBe(false);
+    expect(isWorktreeArchiveOf("-Users-brianlane-newCoworkerOld", flat)).toBe(false);
+  });
+
+  it("rejects sibling projects that merely share the name prefix", () => {
+    // A bare startsWith(flat + "-") would pull /Users/brianlane/newCoworker-backup
+    // (a copy of the repo, or an unrelated project) into the session digest.
+    // Only the two worktree conventions count.
+    expect(isWorktreeArchiveOf(`${flat}-backup`, flat)).toBe(false);
+    expect(isWorktreeArchiveOf(`${flat}-site-notes`, flat)).toBe(false);
   });
 });
 
