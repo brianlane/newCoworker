@@ -83,7 +83,7 @@ describe("usage-pack-clawback", () => {
       if (table === "sms_bonus_grants") {
         return grantListChain({ data: null, error: { message: "sms list fail" } });
       }
-      if (table === "chat_credit_grants") {
+      if (table === "chat_spend_credit_grants") {
         return {
           select: () => {
             throw new Error("chat list boom");
@@ -105,6 +105,58 @@ describe("usage-pack-clawback", () => {
     expect(rpcMock).toHaveBeenCalledWith(
       "void_voice_bonus_grant_by_checkout_session",
       expect.objectContaining({ p_checkout_session_id: "inv_in_db:voice:min_30" })
+    );
+  });
+
+  it("lists chat grants from chat_spend_credit_grants and voids all three kinds", async () => {
+    // Regression: the chat leg used to query a nonexistent "chat_credit_grants"
+    // table; PostgREST's error was swallowed by the warn-and-continue branch,
+    // and the metadata fallback only fires when EVERY list is empty, so chat
+    // grants silently survived mixed-pack refunds.
+    const tablesQueried: string[] = [];
+    fromMock.mockImplementation((table: string) => {
+      tablesQueried.push(table);
+      if (table === "voice_bonus_grants") {
+        return grantListChain({
+          data: [{ stripe_checkout_session_id: "inv_in_mix:voice:min_30" }],
+          error: null
+        });
+      }
+      if (table === "sms_bonus_grants") {
+        return grantListChain({
+          data: [{ stripe_checkout_session_id: "inv_in_mix:sms:texts_500" }],
+          error: null
+        });
+      }
+      if (table === "chat_spend_credit_grants") {
+        return grantListChain({
+          data: [{ stripe_checkout_session_id: "inv_in_mix:chat:usd_5" }],
+          error: null
+        });
+      }
+      return grantListChain({ data: [], error: null });
+    });
+
+    const result = await clawbackMembershipPackGrantsForInvoice({
+      invoiceId: "in_mix",
+      reason: "refund"
+    });
+
+    expect(tablesQueried).toContain("chat_spend_credit_grants");
+    expect(tablesQueried).not.toContain("chat_credit_grants");
+    expect(result.attempted).toBe(3);
+    expect(result.failed).toBe(0);
+    expect(rpcMock).toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      expect.objectContaining({ p_checkout_session_id: "inv_in_mix:voice:min_30" })
+    );
+    expect(rpcMock).toHaveBeenCalledWith(
+      "void_sms_bonus_grant_by_checkout_session",
+      expect.objectContaining({ p_checkout_session_id: "inv_in_mix:sms:texts_500" })
+    );
+    expect(rpcMock).toHaveBeenCalledWith(
+      "void_chat_credit_grant_by_checkout_session",
+      expect.objectContaining({ p_checkout_session_id: "inv_in_mix:chat:usd_5" })
     );
   });
 
@@ -141,7 +193,7 @@ describe("usage-pack-clawback", () => {
       if (table === "sms_bonus_grants") {
         return grantListChain({ data: null, error: null });
       }
-      if (table === "chat_credit_grants") {
+      if (table === "chat_spend_credit_grants") {
         return {
           select: () => ({
             like: () => ({

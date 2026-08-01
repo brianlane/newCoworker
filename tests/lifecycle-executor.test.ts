@@ -697,6 +697,199 @@ describe("executeLifecyclePlan refund handling", () => {
     );
   });
 
+  it("carves membership pack add-on lines out of the refund (packs are non-refundable)", async () => {
+    const { logger } = await import("@/lib/logger");
+    const stripe = {
+      subscriptions: { retrieve: vi.fn().mockResolvedValue({ latest_invoice: "in_packs" }) },
+      invoices: {
+        retrieve: vi.fn().mockResolvedValue({
+          id: "in_packs",
+          amount_paid: 25000,
+          lines: {
+            data: [
+              { description: "1 × New Coworker Starter (at $100.00 / month)", amount: 10000 },
+              // Renewal invoices render subscription items with the
+              // "1 × ... (at $X / month)" wrapper; the prefix match must
+              // still hit. Post-discount: 5700 − 700 = 5000.
+              {
+                description: "1 × Voice top-up: 30 min (at $57.00 / month)",
+                amount: 5700,
+                discount_amounts: [{ amount: 700, discount: "di_p" }]
+              },
+              { description: "SMS top-up: 500 texts", amount: 3000, discount_amounts: null },
+              {
+                description: "AI chat credit: $20 AI budget",
+                amount: 2000,
+                discount_amounts: [{ amount: null, discount: "di_p" }]
+              },
+              // Over-discounted pack line clamps to 0, never negative.
+              {
+                description: "Voice top-up: 60 min",
+                amount: 1000,
+                discount_amounts: [{ amount: 1500, discount: "di_comp" }]
+              },
+              // A negative proration/credit pack line contributes 0 and can
+              // never inflate the refund.
+              { description: "Voice top-up: 30 min", amount: -500 },
+              // Stripe types allow a null amount.
+              { description: "SMS top-up: bonus", amount: null }
+            ]
+          },
+          payments: { data: [{ payment: { payment_intent: "pi_packs" } }] }
+        })
+      },
+      paymentIntents: {
+        retrieve: vi.fn().mockResolvedValue({ id: "pi_packs", latest_charge: "ch_packs" })
+      },
+      refunds: { create: vi.fn().mockResolvedValue({ id: "re_packs" }) }
+    };
+
+    await executeLifecyclePlan(
+      refundPlan(25000),
+      { businessId: "biz_1", vpsHost: null, customerProfileId: "prof_1" },
+      { stripe: stripe as unknown as ExecutorDeps["stripe"], sendEmail: sendOwnerEmailMock }
+    );
+
+    // Pack carve-out = 5000 + 3000 + 2000 + 0 + 0 + 0 = 10000.
+    // Refund = 25000 − 10000 = 15000.
+    expect(stripe.refunds.create).toHaveBeenCalledWith(
+      expect.objectContaining({ charge: "ch_packs", amount: 15000 })
+    );
+    expect(recordSubscriptionRefundMock).toHaveBeenCalledWith(
+      expect.objectContaining({ amountCents: 15000 })
+    );
+    expect(logger.info).toHaveBeenCalledWith(
+      "refund_latest_charge: carving out non-refundable amounts",
+      expect.objectContaining({ packCarveOutCents: 10000, refundCents: 15000 })
+    );
+  });
+
+  it("stacks the pack carve-out with carrier fee, term, and usage carve-outs", async () => {
+    const stripe = {
+      subscriptions: { retrieve: vi.fn().mockResolvedValue({ latest_invoice: "in_stack" }) },
+      invoices: {
+        retrieve: vi.fn().mockResolvedValue({
+          id: "in_stack",
+          amount_paid: 40000,
+          lines: {
+            data: [
+              { description: "1 × New Coworker Standard (at $279.00 / month)", amount: 32350 },
+              { description: "Carrier registration (10DLC)", amount: 1950 },
+              { description: "Voice top-up: 30 min", amount: 5700 }
+            ]
+          },
+          payments: { data: [{ payment: { payment_intent: "pi_stack" } }] }
+        })
+      },
+      paymentIntents: {
+        retrieve: vi.fn().mockResolvedValue({ id: "pi_stack", latest_charge: "ch_stack" })
+      },
+      refunds: { create: vi.fn().mockResolvedValue({ id: "re_stack" }) }
+    };
+
+    await executeLifecyclePlan(
+      refundPlan(40000, 9900, 250),
+      { businessId: "biz_1", vpsHost: null, customerProfileId: "prof_1" },
+      { stripe: stripe as unknown as ExecutorDeps["stripe"], sendEmail: sendOwnerEmailMock }
+    );
+
+    // 40000 − 1950 fee − 5700 packs − 9900 term − 250 usage = 22200.
+    expect(stripe.refunds.create).toHaveBeenCalledWith(
+      expect.objectContaining({ charge: "ch_stack", amount: 22200 })
+    );
+  });
+
+  it("still voids grants when the pack carve-out swallows the whole payment", async () => {
+    const stripe = {
+      subscriptions: {
+        retrieve: vi.fn().mockResolvedValue({
+          latest_invoice: "in_all_pack",
+          metadata: { addonVoice: "min_30:1:1800" }
+        })
+      },
+      invoices: {
+        retrieve: vi.fn().mockResolvedValue({
+          id: "in_all_pack",
+          amount_paid: 5700,
+          lines: { data: [{ description: "Voice top-up: 30 min", amount: 5700 }] },
+          payments: { data: [{ payment: { payment_intent: "pi_all_pack" } }] }
+        })
+      },
+      paymentIntents: {
+        retrieve: vi.fn().mockResolvedValue({ id: "pi_all_pack", latest_charge: "ch_all_pack" })
+      },
+      refunds: { create: vi.fn() }
+    };
+    const rpc = vi.fn().mockResolvedValue({ data: { ok: true }, error: null });
+    createSupabaseServiceClientMock.mockResolvedValue({
+      auth: { admin: { deleteUser: vi.fn().mockResolvedValue({ error: null }) } },
+      rpc,
+      from: undefined
+    });
+
+    await executeLifecyclePlan(
+      refundPlan(5700),
+      { businessId: "biz_1", vpsHost: null, customerProfileId: "prof_1" },
+      { stripe: stripe as unknown as ExecutorDeps["stripe"], sendEmail: sendOwnerEmailMock }
+    );
+
+    expect(stripe.refunds.create).not.toHaveBeenCalled();
+    expect(recordSubscriptionRefundMock).not.toHaveBeenCalled();
+    expect(sendOwnerEmailMock).not.toHaveBeenCalled();
+    expect(rpc).toHaveBeenCalledWith(
+      "void_voice_bonus_grant_by_checkout_session",
+      expect.objectContaining({
+        p_checkout_session_id: "inv_in_all_pack:voice:min_30",
+        p_reason: "refund"
+      })
+    );
+  });
+
+  it("carves pack lines identically on admin_force refunds", async () => {
+    const stripe = {
+      subscriptions: { retrieve: vi.fn().mockResolvedValue({ latest_invoice: "in_adm_pack" }) },
+      invoices: {
+        retrieve: vi.fn().mockResolvedValue({
+          id: "in_adm_pack",
+          amount_paid: 15700,
+          lines: {
+            data: [
+              { description: "1 × New Coworker Starter (at $100.00 / month)", amount: 10000 },
+              { description: "Voice top-up: 30 min", amount: 5700 }
+            ]
+          },
+          payments: { data: [{ payment: { payment_intent: "pi_adm_pack" } }] }
+        })
+      },
+      paymentIntents: {
+        retrieve: vi.fn().mockResolvedValue({ id: "pi_adm_pack", latest_charge: "ch_adm_pack" })
+      },
+      refunds: { create: vi.fn().mockResolvedValue({ id: "re_adm_pack" }) }
+    };
+    const plan = refundPlan(15700);
+    plan.stripeOps[0] = {
+      type: "refund_latest_charge",
+      stripeSubscriptionId: "sub_123",
+      reason: "admin_force",
+      termCarveOutCents: 0,
+      usageCarveOutCents: 0
+    };
+
+    await executeLifecyclePlan(
+      plan,
+      { businessId: "biz_1", vpsHost: null, customerProfileId: "prof_1" },
+      { stripe: stripe as unknown as ExecutorDeps["stripe"], sendEmail: sendOwnerEmailMock }
+    );
+
+    expect(stripe.refunds.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        charge: "ch_adm_pack",
+        amount: 10000,
+        metadata: expect.objectContaining({ newcoworker_reason: "admin_force" })
+      })
+    );
+  });
+
   it("withholds the term carve-out (one month at the monthly rate) on term-plan refunds", async () => {
     // Standard biennial: 24 × $99 = $2376 plan + $19.50 fee = $2395.50 paid.
     // Refund = 239550 − 1950 (fee) − 19500 (one month at monthly rate) = 218100.

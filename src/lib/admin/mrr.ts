@@ -152,20 +152,21 @@ export function computeDayCurrentMrr(params: {
     if (sub.status !== "active" || sub.stripe_subscription_id === null) continue;
     if (sub.tier === "enterprise") continue;
     // Plan rate plus the recurring packs the subscription carries: both bill
-    // every cycle, and both are refundable in-window, so they ride together
-    // through the refund-exposure split below.
-    const rateCents =
-      dayCurrentSubscriptionRateCents(
-        sub as MrrSubscriptionInput & { tier: "starter" | "standard" },
-        now
-      ) +
-      monthlyPackAddonCents(
-        sub.membership_pack_addons ?? null,
-        sub.billing_period ?? "monthly",
-        packAddonOptions
-      );
-    subscriptionCents += rateCents;
-    if (sub.refund_exposed === true) refundExposedCents += rateCents;
+    // every cycle, but only the plan rate is refund-exposed. Membership pack
+    // dollars are non-refundable (the refund executor carves pack lines out
+    // of the money-back, Aug 2026), so counting them in refundExposedCents
+    // would overstate the at-risk number the admin cards display.
+    const planRateCents = dayCurrentSubscriptionRateCents(
+      sub as MrrSubscriptionInput & { tier: "starter" | "standard" },
+      now
+    );
+    const packCents = monthlyPackAddonCents(
+      sub.membership_pack_addons ?? null,
+      sub.billing_period ?? "monthly",
+      packAddonOptions
+    );
+    subscriptionCents += planRateCents + packCents;
+    if (sub.refund_exposed === true) refundExposedCents += planRateCents;
     countedSubscriptions += 1;
   }
 

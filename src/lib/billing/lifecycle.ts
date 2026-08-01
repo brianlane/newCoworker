@@ -62,6 +62,13 @@ export type StripeOp =
       stripeSubscriptionId: string;
       /** Lifetime-cap policy (§Q1): refund is issued on the most recent invoice only. */
       reason: "thirty_day_money_back" | "admin_force";
+      /*
+       * Membership pack policy (Aug 2026): usage pack add-on lines on the
+       * refunded invoice are non-refundable and the executor carves them out
+       * in full, derived from the invoice lines themselves (like the carrier
+       * registration fee), so there is no op field for them. The matching
+       * grants are voided by the executor either way.
+       */
       /**
        * Term-plan refund policy (Jul 2026): annual/biennial customers pay the
        * full term upfront, and the Hostinger box bought for that term is

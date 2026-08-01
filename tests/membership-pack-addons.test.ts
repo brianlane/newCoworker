@@ -11,7 +11,8 @@ import {
   resolveMembershipPackAddons,
   sessionHasMembershipPackAddons,
   membershipPackAddonsForRow,
-  membershipPackSelectionFromRow
+  membershipPackSelectionFromRow,
+  MEMBERSHIP_PACK_LINE_NAME_PREFIXES
 } from "@/lib/billing/membership-pack-addons";
 
 const ENV_KEYS = [
@@ -111,6 +112,39 @@ describe("lib/billing/membership-pack-addons", () => {
       addonSms: "texts_500:1:500",
       addonChat: "usd_5:2:5000000"
     });
+  });
+
+  it("keeps every line name on its category's carve-out prefix (lockstep)", () => {
+    // The refund executor identifies pack lines on the refunded invoice by
+    // MEMBERSHIP_PACK_LINE_NAME_PREFIXES; a line built with any other name
+    // would silently refund pack dollars.
+    process.env.STRIPE_VOICE_BONUS_30MIN_PRICE_ID = "price_voice_30";
+    process.env.STRIPE_VOICE_BONUS_30MIN_CENTS = "1399";
+    process.env.STRIPE_SMS_BONUS_500_PRICE_ID = "price_sms_500";
+    process.env.STRIPE_SMS_BONUS_500_CENTS = "1000";
+    process.env.STRIPE_CHAT_CREDIT_5USD_PRICE_ID = "price_chat_5";
+    process.env.STRIPE_CHAT_CREDIT_5USD_CENTS = "500";
+
+    expect(Object.keys(MEMBERSHIP_PACK_LINE_NAME_PREFIXES).sort()).toEqual([
+      "chat",
+      "sms",
+      "voice"
+    ]);
+
+    const resolved = resolveMembershipPackAddons(
+      {
+        voicePacks: [{ packId: "min_30", quantity: 1 }],
+        smsPacks: [{ packId: "texts_500", quantity: 1 }],
+        chatPacks: [{ packId: "usd_5", quantity: 1 }]
+      },
+      "monthly"
+    );
+    expect(resolved.ok).toBe(true);
+    if (!resolved.ok) return;
+    expect(resolved.lines).toHaveLength(3);
+    for (const line of resolved.lines) {
+      expect(line.name.startsWith(MEMBERSHIP_PACK_LINE_NAME_PREFIXES[line.category])).toBe(true);
+    }
   });
 
   it("collapses duplicate SKUs and rejects bad quantities", () => {

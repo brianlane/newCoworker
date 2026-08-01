@@ -4,14 +4,22 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
 }));
 
+vi.mock("@/lib/logger", () => ({
+  logger: { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() }
+}));
+
 import {
+  applyBonusFundedUsageOffsets,
   computeBillableUsageCents,
   loadBillableUsageCarveOutCents,
   loadBillableUsageSince,
+  loadBonusFundedUsageOffsets,
   resolveUsageCarveOutWindow
 } from "@/lib/billing/usage-charges";
 import { ENTERPRISE_UNIT_COSTS } from "@/lib/plans/enterprise-pricing";
+import { chatSpendBaseCapMicrosForTier } from "@/lib/db/chat-usage";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { logger } from "@/lib/logger";
 
 describe("computeBillableUsageCents", () => {
   it("prices SMS both ways, Telnyx-only voice, and AI spend with a single final round", () => {
@@ -117,12 +125,20 @@ describe("resolveUsageCarveOutWindow", () => {
  * calls; `errors[table]` short-circuits the read with an error. Count reads
  * (the inbound-SMS HEAD query) await the builder chain itself, so the chain
  * is thenable and resolves `{ count: counts[table] ?? null, error }`.
+ * Single-row reads resolve `.maybeSingle()` from `singles[table]`.
+ *
+ * Pages are served per TABLE across queries: when a composed call reads the
+ * same table twice (the wrapper reads owner_chat_model_spend for the total
+ * AND for the offset), stack that table's pages in read order and end each
+ * query with a short page.
  */
 function makeUsageClient(opts: {
   /** Page value `null` simulates a null `data` payload (no error). */
   pages?: Record<string, Array<Array<Record<string, unknown>> | null>>;
   /** HEAD-count result per table; missing → null count (loader treats as 0). */
   counts?: Record<string, number>;
+  /** maybeSingle() result per table; missing → null row (no error). */
+  singles?: Record<string, Record<string, unknown> | null>;
   errors?: Record<string, { message: string }>;
 }) {
   const rangeCalls: Record<string, number> = {};
@@ -132,6 +148,7 @@ function makeUsageClient(opts: {
       select: vi.fn().mockReturnThis(),
       eq: vi.fn().mockReturnThis(),
       gte: vi.fn().mockReturnThis(),
+      is: vi.fn().mockReturnThis(),
       order: vi.fn().mockReturnThis(),
       range: vi.fn().mockImplementation(() => {
         const error = opts.errors?.[table];
@@ -145,6 +162,11 @@ function makeUsageClient(opts: {
             ? []
             : pagesForTable[pageIndex];
         return Promise.resolve({ data: page, error: null });
+      }),
+      maybeSingle: vi.fn().mockImplementation(() => {
+        const error = opts.errors?.[table];
+        if (error) return Promise.resolve({ data: null, error });
+        return Promise.resolve({ data: opts.singles?.[table] ?? null, error: null });
       }),
       // Thenable: awaiting the chain (count/HEAD reads) resolves here.
       then: vi.fn().mockImplementation((resolve: (v: unknown) => unknown) => {
@@ -291,7 +313,239 @@ describe("loadBillableUsageSince", () => {
   });
 });
 
+describe("applyBonusFundedUsageOffsets", () => {
+  it("subtracts each lane and leaves inbound SMS untouched", () => {
+    expect(
+      applyBonusFundedUsageOffsets(
+        { smsSent: 10, smsReceived: 5, voiceSeconds: 100, aiSpendMicros: 1_000 },
+        { smsSent: 4, voiceSeconds: 30, aiSpendMicros: 400 }
+      )
+    ).toEqual({ smsSent: 6, smsReceived: 5, voiceSeconds: 70, aiSpendMicros: 600 });
+  });
+
+  it("clamps every lane at zero when an offset exceeds the metered amount", () => {
+    expect(
+      applyBonusFundedUsageOffsets(
+        { smsSent: 2, smsReceived: 9, voiceSeconds: 10, aiSpendMicros: 5 },
+        { smsSent: 5, voiceSeconds: 99, aiSpendMicros: 50 }
+      )
+    ).toEqual({ smsSent: 0, smsReceived: 9, voiceSeconds: 0, aiSpendMicros: 0 });
+  });
+});
+
+describe("loadBonusFundedUsageOffsets", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it("derives voice bonus seconds from settlements beyond the plan reservation", async () => {
+    const { client, chains } = makeUsageClient({
+      pages: {
+        voice_reservations: [
+          [
+            // Spilled into bonus: 160 settled, 100 covered by the plan.
+            { reserved_included_seconds: 100, voice_settlements: [{ billable_seconds: 160 }] },
+            // Fully plan-funded call contributes 0.
+            { reserved_included_seconds: 300, voice_settlements: [{ billable_seconds: 120 }] },
+            // Unfinalized/null settlement contributes 0.
+            { reserved_included_seconds: 0, voice_settlements: [{ billable_seconds: null }] },
+            // Multi-settlement embed sums first (50 + 40 vs 60 included).
+            {
+              reserved_included_seconds: 60,
+              voice_settlements: [{ billable_seconds: 50 }, { billable_seconds: 40 }, null]
+            },
+            // Junk settlement values count 0; missing embed counts 0.
+            { reserved_included_seconds: 10, voice_settlements: [{ billable_seconds: "junk" }] },
+            { reserved_included_seconds: 10, voice_settlements: null },
+            // Malformed or negative reserved_included skips the row entirely.
+            { reserved_included_seconds: null, voice_settlements: [{ billable_seconds: 500 }] },
+            { reserved_included_seconds: -5, voice_settlements: [{ billable_seconds: 500 }] }
+          ]
+        ]
+      }
+    });
+
+    const offsets = await loadBonusFundedUsageOffsets("biz-1", WINDOW, client as never);
+
+    expect(offsets.voiceSeconds).toBe(60 + 0 + 0 + 30 + 0 + 0);
+    expect(chains.voice_reservations.select).toHaveBeenCalledWith(
+      "reserved_included_seconds, voice_settlements!inner(billable_seconds)"
+    );
+    expect(chains.voice_reservations.eq).toHaveBeenCalledWith("business_id", "biz-1");
+    expect(chains.voice_reservations.gte).toHaveBeenCalledWith(
+      "voice_settlements.created_at",
+      SINCE
+    );
+  });
+
+  it("derives SMS bonus texts from unvoided grant consumption", async () => {
+    const { client, chains } = makeUsageClient({
+      pages: {
+        sms_bonus_grants: [
+          [
+            { texts_purchased: 500, texts_remaining: 120 },
+            // Remaining above purchased clamps to 0 rather than going negative.
+            { texts_purchased: 100, texts_remaining: 150 },
+            // Malformed values on either side skip the row.
+            { texts_purchased: null, texts_remaining: 10 },
+            { texts_purchased: "junk", texts_remaining: 0 },
+            { texts_purchased: 5, texts_remaining: "junk" }
+          ]
+        ]
+      }
+    });
+
+    const offsets = await loadBonusFundedUsageOffsets("biz-1", WINDOW, client as never);
+
+    expect(offsets.smsSent).toBe(380);
+    // Voided grants are excluded: the void RPCs zero texts_remaining, which
+    // would fake full consumption (and voided means the money went back).
+    expect(chains.sms_bonus_grants.is).toHaveBeenCalledWith("voided_at", null);
+  });
+
+  it("attributes chat spend above the tier base cap per window, clamped to unvoided credit", async () => {
+    const starterCap = chatSpendBaseCapMicrosForTier("starter");
+    const { client, chains } = makeUsageClient({
+      singles: { businesses: { tier: "starter" } },
+      pages: {
+        owner_chat_model_spend: [
+          [
+            { spend_micros: starterCap + 300_000 },
+            // At/below the cap contributes 0; junk and null count 0.
+            { spend_micros: starterCap - 1 },
+            { spend_micros: "garbage" },
+            { spend_micros: null }
+          ]
+        ],
+        chat_spend_credit_grants: [
+          [
+            { credit_micros: 1_000_000 },
+            { credit_micros: -5 },
+            { credit_micros: "junk" },
+            { credit_micros: null }
+          ]
+        ]
+      }
+    });
+
+    const offsets = await loadBonusFundedUsageOffsets("biz-1", WINDOW, client as never);
+
+    expect(offsets.aiSpendMicros).toBe(300_000);
+    expect(chains.owner_chat_model_spend.gte).toHaveBeenCalledWith("period_start", SINCE);
+    expect(chains.chat_spend_credit_grants.is).toHaveBeenCalledWith("voided_at", null);
+  });
+
+  it("clamps the chat offset to the pack credit ceiling", async () => {
+    const standardCap = chatSpendBaseCapMicrosForTier(null);
+    const { client } = makeUsageClient({
+      // Missing business row falls back to the standard cap like the meter.
+      pages: {
+        owner_chat_model_spend: [[{ spend_micros: standardCap + 2_000_000 }]],
+        chat_spend_credit_grants: [[{ credit_micros: 500_000 }]]
+      }
+    });
+    const offsets = await loadBonusFundedUsageOffsets("biz-1", WINDOW, client as never);
+    expect(offsets.aiSpendMicros).toBe(500_000);
+  });
+
+  it("keeps a zero chat offset when the tenant has no packs, even with overage", async () => {
+    const standardCap = chatSpendBaseCapMicrosForTier(null);
+    const { client } = makeUsageClient({
+      // Live-settle overshoot past the base cap with zero credits must stay
+      // withheld: ceiling 0 clamps the offset to 0.
+      pages: { owner_chat_model_spend: [[{ spend_micros: standardCap + 900_000 }]] }
+    });
+    const offsets = await loadBonusFundedUsageOffsets("biz-1", WINDOW, client as never);
+    expect(offsets.aiSpendMicros).toBe(0);
+  });
+
+  it("sums every chat spend window when the anchor has no period filter", async () => {
+    const standardCap = chatSpendBaseCapMicrosForTier(null);
+    const { client, chains } = makeUsageClient({
+      pages: {
+        owner_chat_model_spend: [
+          [{ spend_micros: standardCap + 100_000 }, { spend_micros: standardCap + 50_000 }]
+        ],
+        chat_spend_credit_grants: [[{ credit_micros: 5_000_000 }]]
+      }
+    });
+    const offsets = await loadBonusFundedUsageOffsets(
+      "biz-1",
+      { sinceIso: SINCE, aiSpendSinceIso: null },
+      client as never
+    );
+    // Per-window attribution: each monthly row is measured against the cap.
+    expect(offsets.aiSpendMicros).toBe(150_000);
+    expect(chains.owner_chat_model_spend.gte).not.toHaveBeenCalled();
+  });
+
+  it("tolerates null data payloads on every offset read", async () => {
+    const { client } = makeUsageClient({
+      pages: {
+        voice_reservations: [null],
+        sms_bonus_grants: [null],
+        owner_chat_model_spend: [null],
+        chat_spend_credit_grants: [null]
+      }
+    });
+    const offsets = await loadBonusFundedUsageOffsets("biz-1", WINDOW, client as never);
+    expect(offsets).toEqual({ voiceSeconds: 0, smsSent: 0, aiSpendMicros: 0 });
+  });
+
+  it("pages past the 1000-row PostgREST cap on every offset table", async () => {
+    const fullPage = (row: Record<string, unknown>) =>
+      Array.from({ length: 1000 }, () => ({ ...row }));
+    const { client } = makeUsageClient({
+      pages: {
+        voice_reservations: [
+          fullPage({ reserved_included_seconds: 0, voice_settlements: [{ billable_seconds: 1 }] }),
+          [{ reserved_included_seconds: 0, voice_settlements: [{ billable_seconds: 5 }] }]
+        ],
+        sms_bonus_grants: [
+          fullPage({ texts_purchased: 2, texts_remaining: 1 }),
+          [{ texts_purchased: 10, texts_remaining: 3 }]
+        ],
+        owner_chat_model_spend: [fullPage({ spend_micros: 1 }), [{ spend_micros: 1 }]],
+        chat_spend_credit_grants: [
+          fullPage({ credit_micros: 10 }),
+          [{ credit_micros: 3 }]
+        ]
+      }
+    });
+    const offsets = await loadBonusFundedUsageOffsets("biz-1", WINDOW, client as never);
+    expect(offsets.voiceSeconds).toBe(1005);
+    expect(offsets.smsSent).toBe(1007);
+    // Every spend row is at/below the cap, so chat attribution stays 0.
+    expect(offsets.aiSpendMicros).toBe(0);
+  });
+
+  it.each([
+    "voice_reservations",
+    "sms_bonus_grants",
+    "businesses",
+    "owner_chat_model_spend",
+    "chat_spend_credit_grants"
+  ])("throws (fail closed) when the %s read errors", async (table) => {
+    const { client } = makeUsageClient({ errors: { [table]: { message: "boom" } } });
+    await expect(loadBonusFundedUsageOffsets("biz-1", WINDOW, client as never)).rejects.toThrow(
+      `loadBonusFundedUsageOffsets(${table}): boom`
+    );
+  });
+
+  it("falls back to the service client when none is passed", async () => {
+    const { client } = makeUsageClient({});
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(client as never);
+    const offsets = await loadBonusFundedUsageOffsets("biz-1", WINDOW);
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
+    expect(offsets).toEqual({ voiceSeconds: 0, smsSent: 0, aiSpendMicros: 0 });
+  });
+});
+
 describe("loadBillableUsageCarveOutCents", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
   it("loads and prices in one call", async () => {
     const { client } = makeUsageClient({
       pages: {
@@ -308,6 +562,10 @@ describe("loadBillableUsageCarveOutCents", () => {
       voiceSeconds: 3000,
       aiSpendMicros: 1_000_000
     });
+    // No grants and no reservations: offsets are all zero and the adjusted
+    // snapshot equals the raw one.
+    expect(result.offsets).toEqual({ voiceSeconds: 0, smsSent: 0, aiSpendMicros: 0 });
+    expect(result.adjustedUsage).toEqual(result.usage);
     expect(result.cents).toBe(
       Math.round(
         100 * ENTERPRISE_UNIT_COSTS.smsOutboundCentsPerMessage +
@@ -316,5 +574,76 @@ describe("loadBillableUsageCarveOutCents", () => {
           100
       )
     );
+  });
+
+  it("prices only plan-funded usage when every lane has a bonus offset", async () => {
+    const starterCap = chatSpendBaseCapMicrosForTier("starter");
+    const { client } = makeUsageClient({
+      singles: { businesses: { tier: "starter" } },
+      pages: {
+        daily_usage: [[{ sms_sent: 100 }]],
+        voice_settlements: [[{ billable_seconds: 600 }]],
+        voice_forwarded_call_meter: [[{ billable_seconds: 60 }]],
+        // Read twice (total, then offset): stack the same row per query.
+        owner_chat_model_spend: [
+          [{ spend_micros: starterCap + 500_000 }],
+          [{ spend_micros: starterCap + 500_000 }]
+        ],
+        voice_reservations: [
+          [{ reserved_included_seconds: 480, voice_settlements: [{ billable_seconds: 600 }] }]
+        ],
+        sms_bonus_grants: [[{ texts_purchased: 50, texts_remaining: 10 }]],
+        chat_spend_credit_grants: [[{ credit_micros: 2_000_000 }]]
+      },
+      counts: { sms_inbound_jobs: 10 }
+    });
+
+    const result = await loadBillableUsageCarveOutCents("biz-1", WINDOW, client as never);
+
+    expect(result.usage).toEqual({
+      smsSent: 100,
+      smsReceived: 10,
+      voiceSeconds: 660,
+      aiSpendMicros: starterCap + 500_000
+    });
+    expect(result.offsets).toEqual({
+      voiceSeconds: 120,
+      smsSent: 40,
+      aiSpendMicros: 500_000
+    });
+    // The forwarded 60 seconds survive: the voice offset is derived from
+    // settled calls only, so it can never eat the human-leg meter.
+    expect(result.adjustedUsage).toEqual({
+      smsSent: 60,
+      smsReceived: 10,
+      voiceSeconds: 540,
+      aiSpendMicros: starterCap
+    });
+    expect(result.cents).toBe(computeBillableUsageCents(result.adjustedUsage));
+    expect(logger.info).toHaveBeenCalledWith(
+      "usage carve-out: priced plan-funded usage only",
+      expect.objectContaining({
+        businessId: "biz-1",
+        offsets: { voiceSeconds: 120, smsSent: 40, aiSpendMicros: 500_000 }
+      })
+    );
+  });
+
+  it("rejects when an offset read fails (fail closed, never a silent zero)", async () => {
+    const { client } = makeUsageClient({
+      pages: { daily_usage: [[{ sms_sent: 1 }]] },
+      errors: { sms_bonus_grants: { message: "boom" } }
+    });
+    await expect(
+      loadBillableUsageCarveOutCents("biz-1", WINDOW, client as never)
+    ).rejects.toThrow("loadBonusFundedUsageOffsets(sms_bonus_grants): boom");
+  });
+
+  it("falls back to the service client when none is passed", async () => {
+    const { client } = makeUsageClient({});
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(client as never);
+    const result = await loadBillableUsageCarveOutCents("biz-1", WINDOW);
+    expect(createSupabaseServiceClient).toHaveBeenCalled();
+    expect(result.cents).toBe(0);
   });
 });
