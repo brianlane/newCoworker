@@ -71,6 +71,8 @@ export type PlatformCostSyncDeps = {
   /** Null/empty skips the Telnyx side with a recorded error (mirrors pull-cost-data). */
   telnyxApiKey: string | null;
   fetchImpl?: typeof fetch;
+  /** Injectable backoff sleeper (tests pass an instant one). */
+  sleepImpl?: (ms: number) => Promise<void>;
   listBillingSubscriptions: () => Promise<BillingSubscription[]>;
   listVirtualMachines: () => Promise<VirtualMachine[]>;
   /** Every tenant DID (messaging from-number + routed voice DIDs). */
@@ -111,30 +113,58 @@ export function windowStartDayUtc(now: Date, days: number): string {
 
 type MdrRecord = Record<string, unknown>;
 
+/** Backstop against a runaway pull; 400 clamped pages is 20k records. */
+const MDR_MAX_PAGES = 400;
+
+/** Per-page 429 backoff schedule; the initial request precedes delay [0]. */
+const MDR_429_DELAYS_MS = [500, 1000, 2000, 4000, 8000];
+
+const defaultSleep = (ms: number): Promise<void> =>
+  new Promise((resolve) => setTimeout(resolve, ms));
+
 /**
- * Drain the Telnyx detail-records API for one record type. Pages of 250,
- * same stopping rules as the canvas pull: keep paging while pages come
- * back full; trust meta.total_pages only when present (a missing value
- * must not stop after a full first page). A non-OK page throws — the
- * caller records a partial-sync error rather than silently persisting
- * partial aggregates.
+ * Drain the Telnyx detail-records API for one record type.
+ *
+ * Two vendor quirks shape the loop:
+ * - The endpoint clamps page size: we ask for 250 but it returns at most
+ *   50 rows per page, so a short page is NOT proof of the last page.
+ *   When meta.total_pages is present it is the only trusted stop signal;
+ *   the short-page break applies only when meta is absent. (The old
+ *   order broke after page 1 of 53 and under-counted July 2026 spend
+ *   70x: $0.42 recorded vs $30.78 invoiced.)
+ * - Long pulls trip per-account rate limits, so each page retries 429s
+ *   with backoff before giving up.
+ *
+ * A non-OK page (or blowing the page cap) throws: the caller records a
+ * partial-sync error rather than silently persisting partial aggregates.
  */
 export async function fetchTelnyxDetailRecords(params: {
   apiKey: string;
   recordType: "messaging" | "sip-trunking";
   range: TelnyxSyncRange;
   fetchImpl?: typeof fetch;
+  sleepImpl?: (ms: number) => Promise<void>;
 }): Promise<MdrRecord[]> {
   const fetchImpl = params.fetchImpl ?? fetch;
+  const sleepImpl = params.sleepImpl ?? defaultSleep;
   const pageSize = 250;
+  const headers = { Authorization: `Bearer ${params.apiKey}` };
   const all: MdrRecord[] = [];
   for (let page = 1; ; page += 1) {
+    if (page > MDR_MAX_PAGES) {
+      throw new Error(
+        `Telnyx ${params.recordType}: exceeded ${MDR_MAX_PAGES} pages, aborting the pull`
+      );
+    }
     const url =
       `https://api.telnyx.com/v2/detail_records?filter[record_type]=${params.recordType}` +
       `&filter[date_range]=${params.range}&page[number]=${page}&page[size]=${pageSize}`;
-    const res = await fetchImpl(url, {
-      headers: { Authorization: `Bearer ${params.apiKey}` }
-    });
+    let res = await fetchImpl(url, { headers });
+    for (const delayMs of MDR_429_DELAYS_MS) {
+      if (res.status !== 429) break;
+      await sleepImpl(delayMs);
+      res = await fetchImpl(url, { headers });
+    }
     if (!res.ok) {
       const body = (await res.text()).slice(0, 300);
       throw new Error(`Telnyx ${params.recordType} page ${page}: HTTP ${res.status} ${body}`);
@@ -145,9 +175,13 @@ export async function fetchTelnyxDetailRecords(params: {
     };
     const rows = parsed.data ?? [];
     all.push(...rows);
+    if (rows.length === 0) break;
     const totalPages = parsed.meta?.total_pages;
-    if (rows.length < pageSize) break;
-    if (typeof totalPages === "number" && page >= totalPages) break;
+    if (typeof totalPages === "number") {
+      if (page >= totalPages) break;
+    } else if (rows.length < pageSize) {
+      break;
+    }
   }
   return all;
 }
@@ -293,7 +327,8 @@ export async function runPlatformCostSync(
           apiKey: deps.telnyxApiKey,
           recordType,
           range,
-          fetchImpl: deps.fetchImpl
+          fetchImpl: deps.fetchImpl,
+          sleepImpl: deps.sleepImpl
         });
         rows.push(
           ...aggregateTelnyxRecords({ records, recordType, didToBusiness, windowStartDay })
