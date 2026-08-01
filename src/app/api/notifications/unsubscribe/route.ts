@@ -36,6 +36,9 @@ async function applyUnsubscribe(bid: string | null): Promise<ApplyResult> {
   try {
     await updateNotificationPreferences(bid, {
       sms_urgent: false,
+      // The dashboard "Unsubscribe from all" clears this too; without it the
+      // toggle rendered ON under the unsubscribed banner.
+      whatsapp_urgent: false,
       email_digest: false,
       email_digest_weekly: false,
       email_urgent: false,

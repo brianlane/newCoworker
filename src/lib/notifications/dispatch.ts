@@ -509,10 +509,14 @@ export async function dispatchUrgentNotification(
     }
   }
 
-  // 4) WhatsApp channel. Fully additive: no connected WhatsApp integration
-  // just writes an honest skip row (deliverWhatsApp's not_connected). Out-
-  // of-window sends ride the owner-alert utility template; a template still
-  // in Meta review is likewise recorded as skipped, never failed.
+  // 4) WhatsApp channel. A business that NEVER connected WhatsApp records
+  // NOTHING here: every alert used to write a `skipped: not_connected` row,
+  // which for the (majority) never-connected tenants was 1-2 rows of pure
+  // noise per event, forever (Amy's Jul 31 list was the trigger). An
+  // INACTIVE/expired connection still records an honest skip row: that one
+  // is owner-actionable. Out-of-window sends ride the owner-alert utility
+  // template; a template still in Meta review is likewise recorded as
+  // skipped, never failed.
   if (!targets.phone) {
     results.push(
       await recordRow(input.businessId, "whatsapp", "skipped", summary, kind, payload, "no_phone")
@@ -555,6 +559,9 @@ export async function dispatchUrgentNotification(
             via: delivered.via
           })
         );
+      } else if (delivered.reason === "not_connected") {
+        // Never connected: the channel is not applicable, no row (see the
+        // section comment above).
       } else {
         results.push(
           await recordRow(

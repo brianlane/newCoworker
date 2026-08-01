@@ -180,6 +180,11 @@ export const sendWhatsAppTool = defineMcpTool({
           "WhatsApp is not connected for this business — connect it under Dashboard → Integrations → WhatsApp Business."
         );
       }
+      if (delivered.reason === "connection_inactive") {
+        throw new McpToolError(
+          "The WhatsApp connection is inactive or expired: reconnect it under Dashboard, Integrations, WhatsApp Business."
+        );
+      }
       if (delivered.reason === "template_not_approved") {
         throw new McpToolError(
           "The recipient hasn't messaged on WhatsApp in the last 24 hours and the message template is still in Meta review — use send_sms instead."

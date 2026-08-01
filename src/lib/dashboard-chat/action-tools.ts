@@ -917,6 +917,13 @@ export async function executeActionTool(
                 "whatsapp_not_connected, WhatsApp isn't connected. Point the owner to /dashboard/integrations/whatsapp."
             };
           }
+          if (delivered.reason === "connection_inactive") {
+            return {
+              ok: false,
+              message:
+                "whatsapp_connection_inactive, the WhatsApp connection is inactive or expired. Point the owner to /dashboard/integrations/whatsapp to reconnect."
+            };
+          }
           if (delivered.reason === "template_not_approved") {
             return {
               ok: false,

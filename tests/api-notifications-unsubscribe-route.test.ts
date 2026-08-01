@@ -36,6 +36,9 @@ describe("api/notifications/unsubscribe route", () => {
       BIZ,
       expect.objectContaining({
         sms_urgent: false,
+        // The dashboard unsubscribe-all clears this too; the email one-click
+        // used to leave it ON under the unsubscribed banner.
+        whatsapp_urgent: false,
         email_digest: false,
         email_urgent: false,
         dashboard_alerts: false,

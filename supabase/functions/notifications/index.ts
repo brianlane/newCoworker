@@ -748,17 +748,23 @@ serve(async (req: Request) => {
           { ...basePayload, recipient: targets.phone, via: waJson.data.via ?? "text" }
         );
       } else if (waRes.ok) {
-        // Structured policy skip (not connected / template in review).
-        await recordRow(
-          supa,
-          record.business_id,
-          "whatsapp",
-          waJson?.data?.reason === "send_failed" ? "failed" : "skipped",
-          summary,
-          kind,
-          { ...basePayload, recipient: targets.phone },
-          waJson?.data?.reason ?? "send_failed"
-        );
+        // Structured policy skip (inactive connection / template in review).
+        // A NEVER-connected business records nothing: the channel is not
+        // applicable, and the skip row was pure noise on every alert
+        // (mirrors src/lib/notifications/dispatch.ts).
+        const waReason = waJson?.data?.reason ?? "send_failed";
+        if (waReason !== "not_connected") {
+          await recordRow(
+            supa,
+            record.business_id,
+            "whatsapp",
+            waReason === "send_failed" ? "failed" : "skipped",
+            summary,
+            kind,
+            { ...basePayload, recipient: targets.phone },
+            waReason
+          );
+        }
       } else {
         errors.push(`WhatsApp failed: ${waRes.status}`);
         await recordRow(
