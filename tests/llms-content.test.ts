@@ -121,4 +121,23 @@ describe("llms copy follows the product rules", () => {
       expect(txt).not.toContain("\u2014");
     }
   });
+
+  it("qualifies every gated capability with its plan, so an assistant cannot promise a Starter buyer a Standard feature", () => {
+    // This file is copy an AI assistant quotes back to prospects. Each claim
+    // about a Standard+ feature must carry a plan qualifier on the SAME line,
+    // mirroring the Integrations line's existing "Standard plan and up".
+    const txt = full();
+    const line = (marker: string) => {
+      const found = txt.split("\n").find((l) => l.includes(marker));
+      expect(found, `no capability line contains "${marker}"`).toBeTruthy();
+      return found as string;
+    };
+    // Live interpretation (#1028), Messenger / IG DM / WhatsApp AI replies
+    // (#1029), the website chat widget (#491), and webhook-triggered
+    // automation (#993) are Standard+.
+    expect(line("interpret live")).toMatch(/Standard/);
+    expect(line("Messenger")).toMatch(/Standard/);
+    expect(line("website chat")).toMatch(/Standard/);
+    expect(line("a webhook")).toMatch(/Standard/);
+  });
 });
