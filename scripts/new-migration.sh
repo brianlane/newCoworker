@@ -129,6 +129,11 @@ else
   echo "  (real UTC stamp: the wall clock is now past the head)"
 fi
 echo ""
+echo "This file is EMPTY. If you are re-stamping a stale migration, MOVE the"
+echo "SQL from the old file into this one and verify with 'wc -c' before"
+echo "deleting the old copy (PR #1077 shipped a zero-byte migration by"
+echo "skipping that; tests/migration-not-empty.test.ts now fails the PR)."
+echo ""
 echo "Remember: objects created here get NO Data API grants automatically."
 echo "Grant service_role in this same file, or add a '-- grants: none (<name>): reason'"
 echo "marker. See supabase/migrations/CLAUDE.md."

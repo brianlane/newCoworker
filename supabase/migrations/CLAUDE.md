@@ -62,6 +62,32 @@ buy a state that arrives on its own.
 3. **A collision on your PR is fixed by rebasing, not by editing main's
    file.** Rebase onto the current main and re-run the helper.
 
+### Re-stamping: the helper's scaffold is EMPTY, move the SQL yourself
+
+`scripts/new-migration.sh` creates a zero-byte file. That is fine on first
+use, when you are about to write the DDL into it. It is a trap when a PR's
+stamp goes stale and you re-stamp: the helper gives you a fresh EMPTY
+scaffold, and your SQL is still sitting in the old file. You must move the
+content into the new file yourself, then verify before deleting the old copy:
+
+```bash
+wc -c supabase/migrations/<newstamp>_<name>.sql   # must NOT be 0
+```
+
+PR #1077 shipped a zero-byte migration exactly this way: the restamp commit
+added only the empty scaffold, and a follow-up commit deleting the
+"superseded" copies removed the only file that held the DDL. At the time no
+guard caught it, because an empty .sql file passes the stamp guard, the
+grants test, and `supabase db push` without complaint; main simply never
+created the column the code depended on (repaired in PR #1091).
+`tests/migration-not-empty.test.ts` now fails the PR instead, but do not
+lean on it: check `wc -c` at the moment you delete the old file.
+
+(One historical zero-byte file, `20260822024605_booking_shared_calendar_event.sql`,
+is allowlisted in that test: production's ledger recorded it as applied, so
+the filename must keep existing to match the ledger row. Never add to that
+list.)
+
 ### What catches a bad stamp
 
 - **Review time:** the `Supabase Drift Check` job runs
