@@ -128,24 +128,26 @@ export function Sidebar({ items, userEmail, renderTrailing, brand }: SidebarProp
         ].join(" ")}
       >
         <div className="flex items-center gap-3 border-b border-parchment/10 px-5 py-5">
-          {brand?.logoUrl ? (
-            // Tenant-hosted logo: a plain <img> because next/image requires
-            // per-domain allow-listing, which can't cover arbitrary tenant CDNs.
-            // eslint-disable-next-line @next/next/no-img-element
-            <img
-              src={brand.logoUrl}
-              alt={brand.productName ?? "Logo"}
-              width={32}
-              height={32}
-              loading="lazy"
-              className="h-8 w-8 rounded-full object-cover"
-            />
-          ) : (
-            <Image src="/logo.png" alt="New Coworker" width={32} height={32} className="rounded-full" />
-          )}
-          <span className="text-sm font-semibold text-parchment">
-            {brand?.productName ?? "New Coworker"}
-          </span>
+          <Link href="/" onClick={() => setOpen(false)} className="flex items-center gap-3">
+            {brand?.logoUrl ? (
+              // Tenant-hosted logo: a plain <img> because next/image requires
+              // per-domain allow-listing, which can't cover arbitrary tenant CDNs.
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={brand.logoUrl}
+                alt={brand.productName ?? "Logo"}
+                width={32}
+                height={32}
+                loading="lazy"
+                className="h-8 w-8 rounded-full object-cover"
+              />
+            ) : (
+              <Image src="/logo.png" alt="New Coworker" width={32} height={32} className="rounded-full" />
+            )}
+            <span className="text-sm font-semibold text-parchment">
+              {brand?.productName ?? "New Coworker"}
+            </span>
+          </Link>
           {/* Close button (mobile only). */}
           <button
             type="button"
