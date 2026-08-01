@@ -23,6 +23,7 @@ import {
   summarizeDefinition
 } from "@/lib/ai-flows/schema";
 import { evaluateTriggerConditions } from "@/lib/ai-flows/trigger-eval";
+import { planStep } from "../supabase/functions/_shared/ai_flows/steps";
 import { containsLikelyPii, templateKeyFromName } from "@/lib/ai-flows/scrub";
 
 describe("metaLeadFollowUpTemplate", () => {
@@ -45,6 +46,30 @@ describe("metaLeadFollowUpTemplate", () => {
       "notify_owner"
     ]);
     expect(summarizeDefinition(def)).toContain("When a webhook event matches 1 condition(s)");
+  });
+
+  it("briefs the owner cleanly even when the lead left phone/email blank", () => {
+    // Live artifact from the Zapier publish test: "New Meta ad lead: Zapier
+    // Publish Test - /. Details: none." Meta lead forms routinely carry a
+    // phone OR an email, not both, and notify_owner renders with
+    // collapseEmpty, which drops whitespace before an empty var but cannot
+    // remove punctuation separators around one. So the brief's separators
+    // must be whitespace, not ", " and " / ".
+    const def = metaLeadFollowUpTemplate().definition;
+    const notify = def.steps.find((s) => s.type === "notify_owner");
+    expect(notify).toBeTruthy();
+    const plan = planStep(notify as never, {
+      vars: { lead_name: "Bobby", lead_phone: "", lead_email: "", lead_notes: "none" }
+    });
+    expect(plan.ok).toBe(true);
+    const message = (plan as { action: { message: string } }).action.message;
+    expect(message).toContain("Bobby");
+    expect(message).toContain("none");
+    for (const dangling of [" / ", "/.", " ,", ",.", ", .", "  ", ": ."]) {
+      expect(message, `dangling separator ${JSON.stringify(dangling)} in: ${message}`).not.toContain(
+        dangling
+      );
+    }
   });
 
   it("only fires for the facebook_lead_ads source — it auto-texts, so scraped prospects must never reach it", () => {

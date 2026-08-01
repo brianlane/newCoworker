@@ -94,7 +94,11 @@ export function metaLeadFollowUpTemplate(): AiFlowTemplate {
           id: "s_notify_owner",
           type: "notify_owner",
           message:
-            "New Meta ad lead: {{vars.lead_name}}, {{vars.lead_phone}} / " +
+            // Whitespace separators only: a Meta lead form routinely carries a
+            // phone OR an email, and notify_owner's collapseEmpty rendering
+            // drops the space before an empty var but cannot remove ", " or
+            // " / " around one (the live "Bobby, /. Details: none." artifact).
+            "New Meta ad lead: {{vars.lead_name}} {{vars.lead_phone}} " +
             "{{vars.lead_email}}. Details: {{vars.lead_notes}}. I texted them a hello; " +
             "they're filed in your customers."
         }
@@ -180,8 +184,11 @@ export function instagramProspectTemplate(): AiFlowTemplate {
           id: "s_notify_owner",
           type: "notify_owner",
           message:
+            // Whitespace separator between phone and email, same reasoning as
+            // the Meta starter's brief. These vars are 'none'-sentineled, but
+            // the copy must not depend on that staying true.
             "New Instagram prospect: {{vars.lead_name}} (@{{vars.lead_handle}}): " +
-            "{{vars.lead_phone}} / {{vars.lead_email}}. Notes: {{vars.lead_notes}}. " +
+            "{{vars.lead_phone}} {{vars.lead_email}}. Notes: {{vars.lead_notes}}. " +
             "I did NOT contact them (scraped prospects haven't consented to texts or " +
             "marketing email). If their profile has a phone number I'll file them in " +
             "your contacts tagged instagram-prospect next; otherwise add them yourself " +
