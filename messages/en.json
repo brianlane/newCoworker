@@ -2132,6 +2132,7 @@
       },
       "blockersTitle": "Before this can run:",
       "blockers": {
+        "placesKey": "Business discovery is not set up on the platform yet, so no new businesses can be found. Contact support.",
         "postalAddress": "Add the postal address that goes in the footer of every email.",
         "valueProp": "Say what you want the email to offer.",
         "searchTerms": "Add at least one kind of business to look for.",
