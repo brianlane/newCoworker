@@ -32,6 +32,7 @@
  * pipelines route identically.
  */
 import { normalizeE164 } from "./normalize_e164.ts";
+import { telemetryRecord } from "./telemetry.ts";
 
 // Minimal structural client (the _shared convention).
 // deno-lint-ignore no-explicit-any
@@ -139,6 +140,32 @@ export function decideOwnerRedirect(
 }
 
 /**
+ * Record which way an alert was routed, so "how often does redirection
+ * actually fire, and why does it fall back?" is a query rather than a
+ * re-audit. Mirrors the `ai_flow_notify_lead_owner` event the AiFlow step
+ * already emits, so the two routing paths are comparable.
+ *
+ * Never throws: telemetry must not be able to break an alert.
+ */
+async function recordRoutingTelemetry(
+  supabase: AnyClient,
+  businessId: string,
+  verdict: ContactOwnerTarget
+): Promise<void> {
+  try {
+    await telemetryRecord(supabase, "notification_contact_owner_routed", {
+      business_id: businessId,
+      target: verdict.target,
+      email_target: verdict.emailTarget,
+      matched_by: verdict.matchedBy,
+      reason: verdict.reason
+    });
+  } catch (e) {
+    console.error("contact_owner_target: telemetry", e);
+  }
+}
+
+/**
  * Resolve the recipient for an alert about `contactE164`. Never throws: any
  * failure returns a business-owner verdict, because an alert must never be
  * dropped because a lookup hiccupped.
@@ -149,8 +176,22 @@ export async function resolveContactOwnerTarget(
   contactE164: string | null | undefined
 ): Promise<ContactOwnerTarget> {
   const phone = normalizeE164((contactE164 ?? "").trim() || undefined);
+  // No telemetry here on purpose: this path touches no database at all (the
+  // caller simply had nothing to route on), and an rpc would be the only IO
+  // the whole call makes.
   if (!phone) return TO_OWNER("no_contact_phone");
 
+  const verdict = await resolveVerdict(supabase, businessId, phone);
+  await recordRoutingTelemetry(supabase, businessId, verdict);
+  return verdict;
+}
+
+/** The two lookups and the decision, without the telemetry wrapper. */
+async function resolveVerdict(
+  supabase: AnyClient,
+  businessId: string,
+  phone: string
+): Promise<ContactOwnerTarget> {
   try {
     const { data: contactData, error: contactErr } = await supabase
       .from("contacts")

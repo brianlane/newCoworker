@@ -168,6 +168,12 @@ describe("api/voice/tools/capture route", () => {
         summary: expect.stringContaining("burst pipe")
       })
     );
+    // Deliberately NOT contact-scoped: a capture is a brand-new caller, so
+    // nobody owns them and there is nothing to redirect to. Pinned because
+    // adding contactE164 here would silently reroute the owner's capture
+    // feed to whichever teammate happened to own a repeat caller.
+    const arg = vi.mocked(dispatchUrgentNotification).mock.calls[0][0];
+    expect(arg).not.toHaveProperty("contactE164");
   });
 
   it("still returns success when dispatch throws (caller is mid-call)", async () => {

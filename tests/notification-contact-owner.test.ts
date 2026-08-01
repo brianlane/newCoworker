@@ -103,8 +103,9 @@ describe("decideOwnerRedirect: every fallback reaches the business owner", () =>
 
 /** Chainable fake client: one scripted result per terminal await. */
 type Scripted = { data?: unknown; error?: unknown; throws?: boolean };
-function makeDb(results: Scripted[]) {
+function makeDb(results: Scripted[], rpcMode: "ok" | "error" | "throws" = "ok") {
   const tables: string[] = [];
+  const rpcCalls: Array<{ fn: string; args: unknown }> = [];
   let idx = 0;
   const from = (table: string) => {
     tables.push(table);
@@ -119,7 +120,12 @@ function makeDb(results: Scripted[]) {
     };
     return builder;
   };
-  return { db: { from }, tables };
+  const rpc = async (fn: string, args: unknown) => {
+    rpcCalls.push({ fn, args });
+    if (rpcMode === "throws") throw new Error("telemetry down");
+    return { error: rpcMode === "error" ? { message: "nope" } : null };
+  };
+  return { db: { from, rpc }, tables, rpcCalls };
 }
 
 describe("resolveContactOwnerTarget", () => {
@@ -179,6 +185,60 @@ describe("resolveContactOwnerTarget", () => {
     const out = await resolveContactOwnerTarget(db, BIZ, "(602) 616-0662");
     expect(out.target).toBe("contact_owner");
     expect(tables).toEqual(["contacts", "ai_flow_team_members"]);
+  });
+});
+
+describe("routing telemetry", () => {
+  const eventOf = (rpcCalls: Array<{ fn: string; args: unknown }>) =>
+    rpcCalls.find((c) => c.fn === "telemetry_record")?.args as
+      | { p_event_type: string; p_payload: Record<string, unknown> }
+      | undefined;
+
+  it("records a redirect with the reason it landed where it did", async () => {
+    const { db, rpcCalls } = makeDb([{ data: owned }, { data: dave() }]);
+    await resolveContactOwnerTarget(db, BIZ, LEAD);
+    const ev = eventOf(rpcCalls);
+    expect(ev?.p_event_type).toBe("notification_contact_owner_routed");
+    expect(ev?.p_payload).toMatchObject({
+      business_id: BIZ,
+      target: "contact_owner",
+      email_target: "business_owner",
+      matched_by: "phone",
+      reason: "employee_no_email"
+    });
+  });
+
+  it("records the fallback too, so the ratio is measurable", async () => {
+    const { db, rpcCalls } = makeDb([{ data: { id: "c1", owner_employee_id: null } }]);
+    await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(eventOf(rpcCalls)?.p_payload).toMatchObject({
+      target: "business_owner",
+      reason: "contact_unowned"
+    });
+  });
+
+  it("records a failed lookup", async () => {
+    const { db, rpcCalls } = makeDb([{ throws: true }]);
+    await resolveContactOwnerTarget(db, BIZ, LEAD);
+    expect(eventOf(rpcCalls)?.p_payload).toMatchObject({ reason: "lookup_failed" });
+  });
+
+  it("stays silent when there was no phone to route on", async () => {
+    // That path touches no database at all; an rpc would be its only IO.
+    const { db, rpcCalls } = makeDb([]);
+    await resolveContactOwnerTarget(db, BIZ, "");
+    expect(rpcCalls).toEqual([]);
+  });
+
+  it("still returns the verdict when telemetry errors", async () => {
+    const { db } = makeDb([{ data: owned }, { data: dave() }], "error");
+    expect((await resolveContactOwnerTarget(db, BIZ, LEAD)).target).toBe("contact_owner");
+  });
+
+  it("still returns the verdict when telemetry throws", async () => {
+    // Telemetry must never be able to break an alert.
+    const { db } = makeDb([{ data: owned }, { data: dave() }], "throws");
+    expect((await resolveContactOwnerTarget(db, BIZ, LEAD)).target).toBe("contact_owner");
   });
 });
 
