@@ -173,7 +173,8 @@ const CONFIRM_RETRY_DELAY_MS = 250;
 export async function confirmBookingDedupe(
   claimId: string,
   eventId: string,
-  zoomMeetingId?: string | null
+  zoomMeetingId?: string | null,
+  sharedCalendarEventId?: string | null
 ): Promise<void> {
   for (let attempt = 1; attempt <= CONFIRM_MAX_ATTEMPTS; attempt += 1) {
     try {
@@ -184,7 +185,13 @@ export async function confirmBookingDedupe(
           event_id: eventId,
           // The booking's Zoom meeting (when one was created) rides on the
           // same row so reschedule/cancel can move/delete it with the event.
-          ...(zoomMeetingId ? { zoom_meeting_id: zoomMeetingId } : {})
+          ...(zoomMeetingId ? { zoom_meeting_id: zoomMeetingId } : {}),
+          // Same reasoning for the shared-calendar mirror: without a handle
+          // here, a mirror survives the cancellation of the appointment it
+          // represents, and the team acts on an event that is not happening.
+          ...(sharedCalendarEventId
+            ? { shared_calendar_event_id: sharedCalendarEventId }
+            : {})
         })
         .eq("id", claimId);
       if (!error) return;
@@ -217,6 +224,11 @@ export type UpcomingBookingClaim = {
   /** Zoom meeting created with this booking; null for non-video bookings. */
   zoomMeetingId: string | null;
   /**
+   * Mirror event on the shared "NewCoworker" calendar; null when the booking
+   * provider IS the calendar host (already on it) or no host is connected.
+   */
+  sharedCalendarEventId?: string | null;
+  /**
    * The row's stored attendee key — set by the phone-tolerant lookup, where
    * it can differ from the caller's key (different phone formatting at
    * booking time). Ledger mutations should prefer it when present.
@@ -238,7 +250,7 @@ export async function findUpcomingBookingClaim(
     const supabase = await createSupabaseServiceClient();
     const { data, error } = await supabase
       .from("calendar_booking_dedupe")
-      .select("id, event_id, start_at, zoom_meeting_id")
+      .select("id, event_id, start_at, zoom_meeting_id, shared_calendar_event_id")
       .eq("business_id", businessId)
       .eq("attendee_key", attendeeKey)
       .not("event_id", "is", null)
@@ -252,12 +264,14 @@ export async function findUpcomingBookingClaim(
       event_id: string;
       start_at: string;
       zoom_meeting_id: string | null;
+      shared_calendar_event_id: string | null;
     };
     return {
       id: row.id,
       eventId: row.event_id,
       startAt: row.start_at,
-      zoomMeetingId: row.zoom_meeting_id ?? null
+      zoomMeetingId: row.zoom_meeting_id ?? null,
+      sharedCalendarEventId: row.shared_calendar_event_id ?? null
     };
   } catch (err) {
     logger.warn("booking-dedupe: upcoming lookup threw", {
@@ -290,7 +304,7 @@ export async function findUpcomingBookingClaimByPhone(
     const supabase = await createSupabaseServiceClient();
     const { data, error } = await supabase
       .from("calendar_booking_dedupe")
-      .select("id, event_id, start_at, attendee_key, zoom_meeting_id")
+      .select("id, event_id, start_at, attendee_key, zoom_meeting_id, shared_calendar_event_id")
       .eq("business_id", businessId)
       .like("attendee_key", "phone:%")
       .not("event_id", "is", null)
@@ -304,6 +318,7 @@ export async function findUpcomingBookingClaimByPhone(
       start_at: string;
       attendee_key: string;
       zoom_meeting_id: string | null;
+      shared_calendar_event_id: string | null;
     }>) {
       const rowDigits = digitsOf(raw.attendee_key.slice("phone:".length));
       if (rowDigits.length > 0 && phoneDigitsMatch(rowDigits, callerDigits)) {
@@ -312,6 +327,7 @@ export async function findUpcomingBookingClaimByPhone(
           eventId: raw.event_id,
           startAt: raw.start_at,
           zoomMeetingId: raw.zoom_meeting_id ?? null,
+          sharedCalendarEventId: raw.shared_calendar_event_id ?? null,
           attendeeKey: raw.attendee_key
         };
       }

@@ -148,7 +148,10 @@ beforeEach(() => {
 });
 
 describe("processSocialPostSweep — publish", () => {
-  it("skips promotion on Starter", async () => {
+  it("fails a blocked scheduled row instead of promoting it", async () => {
+    // Was "skips promotion", which left the row permanently due and let it
+    // crowd the LIMIT page ahead of every other tenant (see the Starter
+    // describe block below for the settle-truthfully half).
     vi.mocked(getBusiness).mockResolvedValueOnce({
       id: BIZ,
       name: "Starter Co",
@@ -157,10 +160,22 @@ describe("processSocialPostSweep — publish", () => {
     listDue.mockResolvedValue([post()]);
     const result = await processSocialPostSweep(deps());
     expect(result.promoted).toBe(0);
-    expect(transition).not.toHaveBeenCalled();
+    expect(createContainer).not.toHaveBeenCalled();
+    expect(transition).toHaveBeenCalledWith(
+      BIZ,
+      "p-1",
+      "scheduled",
+      expect.objectContaining({ status: "failed" }),
+      db
+    );
   });
 
-  it("fails in-flight publishing rows on Starter without hitting Graph", async () => {
+  it("leaves an in-grace Starter row for its owning pass", async () => {
+    // Was "fail immediately, even inside the resume grace". Blind-failing a
+    // row whose publish call may have already landed invites a duplicate
+    // re-post after upgrade; inside the grace the owning pass may still be
+    // working, so the row is left alone and settled truthfully once the
+    // grace lapses (see the Starter describe block below).
     vi.mocked(getBusiness).mockResolvedValue({
       id: BIZ,
       name: "Starter Co",
@@ -175,18 +190,13 @@ describe("processSocialPostSweep — publish", () => {
       })
     ]);
     const result = await processSocialPostSweep(deps());
-    expect(result.failed).toBe(1);
-    expect(result.promoted).toBe(0);
+    expect(result.failed).toBe(0);
     expect(containerStatus).not.toHaveBeenCalled();
-    expect(createContainer).not.toHaveBeenCalled();
-    expect(transition).toHaveBeenCalledWith(
+    expect(transition).not.toHaveBeenCalledWith(
       BIZ,
       "p-old",
       "publishing",
-      expect.objectContaining({
-        status: "failed",
-        error_detail: expect.stringMatching(/Standard/)
-      }),
+      expect.anything(),
       db
     );
   });
@@ -767,5 +777,121 @@ describe("processSocialPostSweep — in-flight resolution", () => {
     transition.mockRejectedValueOnce(new Error("stamp error"));
     const result = await processSocialPostSweep(deps());
     expect(result.errors[0]).toMatchObject({ postId: "p-old", message: "stamp error" });
+  });
+});
+
+/**
+ * The tier abort blind-failed `publishing` rows before asking Meta. A row in
+ * `publishing` may have already had its publish call land (that is the whole
+ * reason resolveInFlightPost exists), so marking it failed invites the owner
+ * to re-post after upgrading: a duplicate feed post, which this module's own
+ * comments call the worse outcome. Settle truthfully instead, and only
+ * refuse the half that would put NEW content live.
+ */
+describe("processSocialPostSweep — Starter in-flight rows settle truthfully", () => {
+  it("stamps published when Meta says the post already went live", async () => {
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: BIZ,
+      name: "Starter Co",
+      tier: "starter"
+    } as never);
+    listInFlight.mockResolvedValue([
+      post({ id: "p-live", status: "publishing", started_at: STARTED_STALE, ig_creation_id: "c-1" })
+    ]);
+    containerStatus.mockResolvedValue("PUBLISHED");
+    const result = await processSocialPostSweep(deps());
+    expect(result.published).toBe(1);
+    expect(publishMedia).not.toHaveBeenCalled();
+    expect(transition).toHaveBeenCalledWith(
+      BIZ,
+      "p-live",
+      "publishing",
+      expect.objectContaining({ status: "published" }),
+      db
+    );
+  });
+
+  it("fails a merely-prepared container without publishing it", async () => {
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: BIZ,
+      name: "Starter Co",
+      tier: "starter"
+    } as never);
+    listInFlight.mockResolvedValue([
+      post({ id: "p-fin", status: "publishing", started_at: STARTED_STALE, ig_creation_id: "c-2" })
+    ]);
+    containerStatus.mockResolvedValue("FINISHED");
+    const result = await processSocialPostSweep(deps());
+    // The one thing a gated tenant must never get: a NEW publish.
+    expect(publishMedia).not.toHaveBeenCalled();
+    expect(result.staled).toBe(1);
+    expect(transition).toHaveBeenCalledWith(
+      BIZ,
+      "p-fin",
+      "publishing",
+      expect.objectContaining({
+        status: "failed",
+        error_detail: expect.stringMatching(/Standard/)
+      }),
+      db
+    );
+  });
+
+  it("does not count a blocked FINISHED settle it lost to a concurrent resolver", async () => {
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: BIZ,
+      name: "Starter Co",
+      tier: "starter"
+    } as never);
+    listInFlight.mockResolvedValue([
+      post({ id: "p-fin2", status: "publishing", started_at: STARTED_STALE, ig_creation_id: "c-3" })
+    ]);
+    containerStatus.mockResolvedValue("FINISHED");
+    transition.mockResolvedValue(false);
+    const result = await processSocialPostSweep(deps());
+    expect(result.staled).toBe(0);
+    expect(publishMedia).not.toHaveBeenCalled();
+  });
+
+  it("leaves a blocked scheduled row alone on a null business lookup", async () => {
+    vi.mocked(getBusiness).mockResolvedValueOnce(null);
+    listDue.mockResolvedValue([post()]);
+    const result = await processSocialPostSweep(deps());
+    expect(result.promoted).toBe(0);
+    expect(transition).not.toHaveBeenCalled();
+  });
+
+  it("does not count a blocked scheduled fail it lost to a concurrent cancel", async () => {
+    vi.mocked(getBusiness).mockResolvedValueOnce({
+      id: BIZ,
+      name: "Starter Co",
+      tier: "starter"
+    } as never);
+    listDue.mockResolvedValue([post()]);
+    transition.mockResolvedValue(false);
+    const result = await processSocialPostSweep(deps());
+    expect(result.failed).toBe(0);
+  });
+
+  it("fails a blocked scheduled row with the upgrade message instead of leaving it due", async () => {
+    vi.mocked(getBusiness).mockResolvedValueOnce({
+      id: BIZ,
+      name: "Starter Co",
+      tier: "starter"
+    } as never);
+    listDue.mockResolvedValue([post()]);
+    const result = await processSocialPostSweep(deps());
+    expect(result.promoted).toBe(0);
+    expect(createContainer).not.toHaveBeenCalled();
+    expect(transition).toHaveBeenCalledWith(
+      BIZ,
+      "p-1",
+      "scheduled",
+      expect.objectContaining({
+        status: "failed",
+        error_detail: expect.stringMatching(/Standard/)
+      }),
+      db
+    );
   });
 });

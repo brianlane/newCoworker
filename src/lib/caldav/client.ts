@@ -20,6 +20,7 @@
  * documents involved are small and highly regular.
  */
 import { isPrivateOrLoopbackHost } from "@/lib/db/custom-integrations";
+import { escapeICalText, icalUtcStamp } from "@/lib/calendar-tools/ics";
 import { logger } from "@/lib/logger";
 
 export const CALDAV_REQUEST_TIMEOUT_MS = 20_000;
@@ -293,9 +294,9 @@ export function unfoldICalLines(ical: string): string[] {
 }
 
 /** `YYYYMMDDTHHMMSSZ` for an instant — the shape CalDAV PUTs use. */
-export function icalUtcStamp(instant: Date): string {
-  return instant.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}Z$/, "Z");
-}
+// Moved to the shared iCal module; imported for local use below and
+// re-exported so existing importers and tests keep working.
+export { icalUtcStamp, escapeICalText } from "@/lib/calendar-tools/ics";
 
 /**
  * One DTSTART/DTEND property value → UTC Date, or null when unparseable.
@@ -435,13 +436,7 @@ export async function fetchCaldavBusy(
 }
 
 /** iCal TEXT escaping (RFC 5545 §3.3.11). */
-export function escapeICalText(value: string): string {
-  return value
-    .replace(/\\/g, "\\\\")
-    .replace(/;/g, "\\;")
-    .replace(/,/g, "\\,")
-    .replace(/\r?\n/g, "\\n");
-}
+
 
 export type CaldavEventInput = {
   uid: string;

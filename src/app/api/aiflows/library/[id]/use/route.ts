@@ -13,7 +13,11 @@ import { errorResponse, handleRouteError, successResponse } from "@/lib/api-resp
 import { rateLimitDurable } from "@/lib/rate-limit";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { createAiFlow } from "@/lib/ai-flows/db";
-import { AiFlowValidationError } from "@/lib/ai-flows/schema";
+import { AiFlowValidationError, parseAiFlowDefinition } from "@/lib/ai-flows/schema";
+import { validateShareDocumentSteps } from "@/lib/ai-flows/document-steps";
+import { validateRunAgentSteps } from "@/lib/ai-flows/agent-steps";
+import { validateMailboxConnectionSteps } from "@/lib/ai-flows/mailbox-steps";
+import { validateBrowseActionSteps } from "@/lib/ai-flows/browse-action-steps";
 import { getAiFlowLibraryEntry, recordLibraryDownload } from "@/lib/ai-flows/library";
 import { applyLibrarySubstitutions, isReviewStarterLibraryKey, REVIEW_LINK_PLACEHOLDER } from "@/lib/ai-flows/scrub";
 import { cleanReviewLink } from "@/lib/ai-flows/templates";
@@ -96,6 +100,23 @@ export async function POST(request: Request, { params }: Ctx) {
 
     let row;
     try {
+      // Same four binding validators as every other save path (POST
+      // /api/aiflows, PATCH /api/aiflows/[id], the MCP tool, both compile
+      // paths). Installing used to skip them, so a Starter owner could
+      // install a flow with a browse_action step: it saved clean and then
+      // failed silently at run time in the worker, the exact outcome the
+      // save-time gate exists to prevent. Validated against the FILLED
+      // definition, i.e. what will actually be saved.
+      const parsedDefinition = parseAiFlowDefinition(filled);
+      const bindingIssues = [
+        ...(await validateShareDocumentSteps(body.businessId, parsedDefinition)),
+        ...(await validateRunAgentSteps(body.businessId, parsedDefinition)),
+        ...(await validateMailboxConnectionSteps(body.businessId, parsedDefinition)),
+        ...(await validateBrowseActionSteps(body.businessId, parsedDefinition))
+      ];
+      if (bindingIssues.length > 0) {
+        return errorResponse("VALIDATION_ERROR", bindingIssues.join("; "));
+      }
       row = await createAiFlow({
         businessId: body.businessId,
         name: `${entry.title}`.slice(0, 120),

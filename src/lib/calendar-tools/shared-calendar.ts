@@ -292,6 +292,157 @@ export async function shareSharedCalendarWithEmployees(businessId: string): Prom
 }
 
 /**
+ * Providers whose bookings live on the merchant's OWN book rather than on
+ * the workspace calendar, and therefore need mirroring for the team to see
+ * them. Google and Microsoft are absent on purpose: when they are the host,
+ * `bookOnProvider` already wrote the event onto this very calendar, and
+ * mirroring would give every one of those tenants duplicate events.
+ */
+const PROVIDERS_NEEDING_MIRROR = new Set([
+  "vagaro",
+  "acuity",
+  "calendly",
+  "caldav"
+]);
+
+/** True when a booking taken on `bookingProvider` needs a mirror event. */
+export function bookingNeedsSharedCalendarMirror(bookingProvider: string): boolean {
+  return PROVIDERS_NEEDING_MIRROR.has(bookingProvider);
+}
+
+export type BookingMirrorInput = {
+  summary: string;
+  startIso: string;
+  endIso: string;
+  attendeeName?: string | null;
+  attendeePhone?: string | null;
+  attendeeEmail?: string | null;
+  notes?: string | null;
+};
+
+/**
+ * Put a booking taken on another provider onto the shared calendar, so the
+ * team sees it alongside everything else.
+ *
+ * Returns the mirror event's provider id, which the caller stores on the
+ * ledger row: without a handle the mirror goes stale the first time the
+ * customer reschedules or cancels, and a lingering event for an appointment
+ * that no longer exists is worse than no mirror, because the team acts on it.
+ *
+ * Read-only about the calendar's existence, deliberately: like the time-off
+ * mirror, this uses `getSharedCalendar` rather than `ensureSharedCalendar`,
+ * so a booking never brings a calendar into being as a side effect. Null on
+ * anything going wrong, always: a display convenience must never fail a real
+ * booking.
+ */
+export async function mirrorBookingToSharedCalendar(
+  businessId: string,
+  bookingProvider: string,
+  booking: BookingMirrorInput
+): Promise<string | null> {
+  try {
+    if (!bookingNeedsSharedCalendarMirror(bookingProvider)) return null;
+    const shared = await getSharedCalendar(businessId);
+    if (!shared) return null;
+    const { calendarId, conn } = shared;
+    const proxyTarget = { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey };
+    const description = [
+      booking.notes ?? "",
+      booking.attendeeName ? `Attendee: ${booking.attendeeName}` : "",
+      booking.attendeePhone ? `Phone: ${booking.attendeePhone}` : "",
+      booking.attendeeEmail ? `Email: ${booking.attendeeEmail}` : "",
+      `Booked on ${bookingProvider}`
+    ]
+      .filter((line) => line.trim().length > 0)
+      .join("\n");
+
+    if (conn.provider === "google") {
+      const res = await nangoProxyForBusiness(businessId, proxyTarget, {
+        endpoint: `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events`,
+        method: "POST",
+        data: {
+          summary: booking.summary,
+          description,
+          start: { dateTime: booking.startIso },
+          end: { dateTime: booking.endIso }
+        }
+      });
+      const data = (res?.data ?? null) as { id?: string } | null;
+      return data?.id ?? null;
+    }
+    const res = await nangoProxyForBusiness(businessId, proxyTarget, {
+      endpoint: `/v1.0/me/calendars/${encodeURIComponent(calendarId)}/events`,
+      method: "POST",
+      data: {
+        subject: booking.summary,
+        body: { contentType: "text", content: description },
+        start: { dateTime: booking.startIso, timeZone: "UTC" },
+        end: { dateTime: booking.endIso, timeZone: "UTC" }
+      }
+    });
+    const data = (res?.data ?? null) as { id?: string } | null;
+    return data?.id ?? null;
+  } catch (err) {
+    logger.warn("shared-calendar: booking mirror failed", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
+  }
+}
+
+/** Move a mirror event when the real appointment moves. Best-effort. */
+export async function moveSharedCalendarMirror(
+  businessId: string,
+  eventId: string,
+  startIso: string,
+  endIso: string
+): Promise<void> {
+  try {
+    const shared = await getSharedCalendar(businessId);
+    if (!shared) return;
+    const { calendarId, conn } = shared;
+    const proxyTarget = { connectionId: conn.connectionId, providerConfigKey: conn.providerConfigKey };
+    if (conn.provider === "google") {
+      await nangoProxyForBusiness(businessId, proxyTarget, {
+        endpoint: `/calendar/v3/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
+        method: "PATCH",
+        data: { start: { dateTime: startIso }, end: { dateTime: endIso } }
+      });
+      return;
+    }
+    await nangoProxyForBusiness(businessId, proxyTarget, {
+      endpoint: `/v1.0/me/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
+      method: "PATCH",
+      data: {
+        start: { dateTime: startIso, timeZone: "UTC" },
+        end: { dateTime: endIso, timeZone: "UTC" }
+      }
+    });
+  } catch (err) {
+    logger.warn("shared-calendar: booking mirror move failed", {
+      businessId,
+      eventId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+}
+
+/**
+ * Remove a mirror event when the real appointment is canceled.
+ *
+ * This is the half that makes mirroring safe to ship at all: a mirror left
+ * behind after a cancellation shows the team an appointment that is not
+ * happening, and they will act on it.
+ */
+export async function removeSharedCalendarMirror(
+  businessId: string,
+  eventId: string
+): Promise<void> {
+  await removeTimeOffEvent(businessId, eventId);
+}
+
+/**
  * Push an all-day "out of office" mirror event for a time-off range. Only
  * mirrors when the shared calendar already exists (adding time off should
  * not create calendars). Returns the provider event id, or null when

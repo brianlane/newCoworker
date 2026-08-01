@@ -17,6 +17,10 @@ vi.mock("@/lib/voice-tools/connections", () => ({
 vi.mock("@/lib/db/employees", () => ({ listTeamMembers: vi.fn() }));
 
 import {
+  bookingNeedsSharedCalendarMirror,
+  mirrorBookingToSharedCalendar,
+  moveSharedCalendarMirror,
+  removeSharedCalendarMirror,
   ensureSharedCalendar,
   getSharedCalendar,
   mirrorTimeOffEvent,
@@ -604,5 +608,195 @@ describe("removeTimeOffEvent", () => {
     await expect(removeTimeOffEvent(BIZ, "ev-1")).resolves.toBeUndefined();
     vi.mocked(nangoProxyForBusiness).mockRejectedValue("string failure");
     await expect(removeTimeOffEvent(BIZ, "ev-1")).resolves.toBeUndefined();
+  });
+});
+
+describe("booking mirror", () => {
+  const BOOKING = {
+    summary: "Consult",
+    startIso: "2026-08-05T17:00:00.000Z",
+    endIso: "2026-08-05T17:30:00.000Z",
+    attendeeName: "Sam Rivera",
+    attendeePhone: "+15551234567",
+    attendeeEmail: "sam@example.org",
+    notes: "prefers mornings"
+  };
+
+  it("mirrors ONLY for providers that are not the calendar host", () => {
+    // Google and Microsoft are absent on purpose: when they host the shared
+    // calendar, bookOnProvider already wrote the event onto it, so mirroring
+    // would give every one of those tenants duplicate events.
+    for (const p of ["vagaro", "acuity", "calendly", "caldav"]) {
+      expect(bookingNeedsSharedCalendarMirror(p)).toBe(true);
+    }
+    for (const p of ["google", "microsoft", "", "platform"]) {
+      expect(bookingNeedsSharedCalendarMirror(p)).toBe(false);
+    }
+  });
+
+  it("writes nothing at all for a host-provider booking", async () => {
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(GOOGLE_CONN);
+    await expect(mirrorBookingToSharedCalendar(BIZ, "google", BOOKING)).resolves.toBeNull();
+    expect(nangoProxyForBusiness).not.toHaveBeenCalled();
+  });
+
+  it("creates a Google mirror carrying the attendee details", async () => {
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      connRow({ metadata: { shared_calendar_id: "cal-1" } })
+    ]);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "mirror-1" } } as never);
+    await expect(mirrorBookingToSharedCalendar(BIZ, "vagaro", BOOKING)).resolves.toBe("mirror-1");
+    const call = vi.mocked(nangoProxyForBusiness).mock.calls.at(-1)?.[2] as {
+      endpoint: string;
+      data: { description: string };
+    };
+    expect(call.endpoint).toContain("/calendar/v3/calendars/cal-1/events");
+    expect(call.data.description).toContain("Phone: +15551234567");
+    expect(call.data.description).toContain("Booked on vagaro");
+  });
+
+  it("creates a Microsoft mirror through the Graph shape", async () => {
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(MS_CONN);
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      connRow({
+        provider_config_key: "outlook-calendar",
+        connection_id: "conn-2",
+        metadata: { shared_calendar_id: "cal-2" }
+      })
+    ]);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "mirror-2" } } as never);
+    await expect(mirrorBookingToSharedCalendar(BIZ, "acuity", BOOKING)).resolves.toBe("mirror-2");
+    const call = vi.mocked(nangoProxyForBusiness).mock.calls.at(-1)?.[2] as {
+      endpoint: string;
+      data: { subject: string };
+    };
+    expect(call.endpoint).toContain("/v1.0/me/calendars/cal-2/events");
+    expect(call.data.subject).toBe("Consult");
+  });
+
+  it("never creates the calendar as a side effect of a booking", async () => {
+    // Same rule as the time-off mirror: a booking must not bring a calendar
+    // into being.
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([connRow({ metadata: {} })]);
+    await expect(mirrorBookingToSharedCalendar(BIZ, "vagaro", BOOKING)).resolves.toBeNull();
+    expect(nangoProxyForBusiness).not.toHaveBeenCalled();
+  });
+
+  it("returns null rather than failing the booking when the proxy errors", async () => {
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      connRow({ metadata: { shared_calendar_id: "cal-1" } })
+    ]);
+    vi.mocked(nangoProxyForBusiness).mockRejectedValue(new Error("nango down"));
+    await expect(mirrorBookingToSharedCalendar(BIZ, "vagaro", BOOKING)).resolves.toBeNull();
+  });
+
+  it("mirrors a bare booking with no notes or attendee details", async () => {
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      connRow({ metadata: { shared_calendar_id: "cal-1" } })
+    ]);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "m" } } as never);
+    await mirrorBookingToSharedCalendar(BIZ, "caldav", {
+      summary: "Visit",
+      startIso: BOOKING.startIso,
+      endIso: BOOKING.endIso
+    });
+    const call = vi.mocked(nangoProxyForBusiness).mock.calls.at(-1)?.[2] as {
+      data: { description: string };
+    };
+    // Only the provenance line survives when nothing else is known.
+    expect(call.data.description).toBe("Booked on caldav");
+  });
+
+  it("returns null when a Microsoft create response carries no id", async () => {
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(MS_CONN);
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      connRow({
+        provider_config_key: "outlook-calendar",
+        connection_id: "conn-2",
+        metadata: { shared_calendar_id: "cal-2" }
+      })
+    ]);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue(null as never);
+    await expect(mirrorBookingToSharedCalendar(BIZ, "acuity", BOOKING)).resolves.toBeNull();
+  });
+
+  it("returns null when the create response carries no id", async () => {
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      connRow({ metadata: { shared_calendar_id: "cal-1" } })
+    ]);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue(null as never);
+    await expect(mirrorBookingToSharedCalendar(BIZ, "vagaro", BOOKING)).resolves.toBeNull();
+  });
+
+  it("moves a mirror on both providers", async () => {
+    for (const [conn, path] of [
+      [GOOGLE_CONN, "/calendar/v3/calendars/cal-1/events/mirror-1"],
+      [MS_CONN, "/v1.0/me/calendars/cal-1/events/mirror-1"]
+    ] as const) {
+      vi.clearAllMocks();
+      vi.mocked(resolveSharedCalendarHost).mockResolvedValue(conn);
+      vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+        connRow({
+          provider_config_key: (conn as { providerConfigKey: string }).providerConfigKey,
+          connection_id: (conn as { connectionId: string }).connectionId,
+          metadata: { shared_calendar_id: "cal-1" }
+        })
+      ]);
+      vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+      await moveSharedCalendarMirror(BIZ, "mirror-1", BOOKING.startIso, BOOKING.endIso);
+      const call = vi.mocked(nangoProxyForBusiness).mock.calls.at(-1)?.[2] as {
+        endpoint: string;
+        method: string;
+      };
+      expect(call.endpoint).toContain(path);
+      expect(call.method).toBe("PATCH");
+    }
+  });
+
+  it("swallows a failed move rather than failing the reschedule", async () => {
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      connRow({ metadata: { shared_calendar_id: "cal-1" } })
+    ]);
+    vi.mocked(nangoProxyForBusiness).mockRejectedValue(new Error("down"));
+    await expect(
+      moveSharedCalendarMirror(BIZ, "mirror-1", BOOKING.startIso, BOOKING.endIso)
+    ).resolves.toBeUndefined();
+  });
+
+  it("survives a non-Error throw from the proxy", async () => {
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      connRow({ metadata: { shared_calendar_id: "cal-1" } })
+    ]);
+    vi.mocked(nangoProxyForBusiness).mockRejectedValue("string throw");
+    await expect(mirrorBookingToSharedCalendar(BIZ, "vagaro", BOOKING)).resolves.toBeNull();
+    await expect(
+      moveSharedCalendarMirror(BIZ, "m", BOOKING.startIso, BOOKING.endIso)
+    ).resolves.toBeUndefined();
+  });
+
+  it("does nothing when there is no shared calendar to move a mirror on", async () => {
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(null as never);
+    await moveSharedCalendarMirror(BIZ, "mirror-1", BOOKING.startIso, BOOKING.endIso);
+    expect(nangoProxyForBusiness).not.toHaveBeenCalled();
+  });
+
+  it("removes a mirror when the appointment is canceled", async () => {
+    // The half that makes mirroring safe: a mirror surviving its
+    // cancellation shows the team an appointment that is not happening.
+    vi.mocked(resolveSharedCalendarHost).mockResolvedValue(GOOGLE_CONN);
+    vi.mocked(listWorkspaceOAuthConnections).mockResolvedValue([
+      connRow({ metadata: { shared_calendar_id: "cal-1" } })
+    ]);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    await removeSharedCalendarMirror(BIZ, "mirror-1");
+    const call = vi.mocked(nangoProxyForBusiness).mock.calls.at(-1)?.[2] as { method: string };
+    expect(call.method).toBe("DELETE");
   });
 });

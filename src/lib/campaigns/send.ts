@@ -229,9 +229,35 @@ export async function processCampaignSweep(
   const due = await listDueScheduledCampaigns(now.toISOString(), db);
   for (const campaign of due) {
     try {
-      // Downgrade-safe: leave the row scheduled but do not spend Resend.
+      // A null lookup is a transient blip (getBusiness collapses errors to
+      // null): leave the row for the next pass. Only a KNOWN Starter tier
+      // may unschedule, or a blip would silently unschedule a paying tenant.
       const business = await getBusiness(campaign.business_id, db);
-      if (!marketingAutomationAllowedForTier(business?.tier)) continue;
+      if (!business) continue;
+      if (!marketingAutomationAllowedForTier(business.tier)) {
+        // Downgrade-safe, and head-of-line-safe. listDueScheduledCampaigns
+        // is `.lte(send_at, now) ORDER BY send_at LIMIT 20` with no lower
+        // bound, so a row left `scheduled` here stayed permanently due: one
+        // downgraded tenant with 20+ past-due campaigns occupied the whole
+        // page on every pass and starved every other tenant. It also
+        // detonated months-stale content within a minute of an upgrade.
+        // Unschedule instead: back to draft with send_at cleared, so
+        // re-sending after an upgrade is a deliberate act.
+        const unscheduled = await transitionEmailCampaign(
+          campaign.business_id,
+          campaign.id,
+          "scheduled",
+          { status: "draft", send_at: null },
+          db
+        );
+        if (unscheduled) {
+          logger.info("email-campaign-sweep: unscheduled tier-blocked campaign", {
+            campaignId: campaign.id,
+            businessId: campaign.business_id
+          });
+        }
+        continue;
+      }
 
       const moved = await transitionEmailCampaign(
         campaign.business_id,
