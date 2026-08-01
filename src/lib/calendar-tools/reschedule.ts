@@ -583,7 +583,12 @@ export async function rescheduleCalendarAppointment(
       } else if (moved.detail === "booking_not_found") {
         // The provider event is gone (deleted upstream) but the ledger row
         // survived — drop it so the stale claim can't shadow the slot or
-        // resolve future lifecycle calls to a dead event.
+        // resolve future lifecycle calls to a dead event. Its mirror goes
+        // with it: the appointment it represents no longer exists, and a
+        // surviving mirror is what the team plans around.
+        if (claim.sharedCalendarEventId) {
+          await removeSharedCalendarMirror(businessId, claim.sharedCalendarEventId);
+        }
         await deleteBookingClaim(claim.id);
       }
       return moved;

@@ -319,6 +319,21 @@ describe("rescheduleCalendarAppointment", () => {
     );
   });
 
+  it("removes the mirror when the provider says the appointment is GONE", async () => {
+    // booking_not_found drops the stale claim; the mirror must go with it,
+    // or the team calendar keeps showing an appointment that no longer
+    // exists anywhere.
+    vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
+    vi.mocked(findUpcomingBookingClaim).mockResolvedValue(MIRROR_CLAIM);
+    vi.mocked(rescheduleVagaroAppointment).mockResolvedValue({
+      ok: false,
+      detail: "booking_not_found"
+    } as never);
+    await rescheduleCalendarAppointment(BIZ, RESCHEDULE_ARGS);
+    expect(vi.mocked(removeSharedCalendarMirror)).toHaveBeenCalledWith(BIZ, "mirror-1");
+    expect(vi.mocked(deleteBookingClaim)).toHaveBeenCalledWith("claim-1");
+  });
+
   it("touches no mirror when the booking never had one", async () => {
     vi.mocked(resolveCalendarConnection).mockResolvedValue(VAGARO_CONN);
     vi.mocked(findUpcomingBookingClaim).mockResolvedValue(CLAIM);
