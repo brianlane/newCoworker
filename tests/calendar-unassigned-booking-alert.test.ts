@@ -3,7 +3,7 @@
  * (src/lib/calendar-tools/unassigned-booking-alert.ts): owned-contact and
  * disabled-preference skips, the missing-contact = unowned rule, the alert
  * content, and the never-throws contract. The production trigger: Truly
- * Insurance, Jul 21 2026 — the AI booked a real broker call for a lead no
+ * Insurance, Jul 21 2026, the AI booked a real broker call for a lead no
  * one owned, and no human was told the meeting existed.
  */
 import { beforeEach, describe, expect, it, vi } from "vitest";
@@ -62,7 +62,7 @@ beforeEach(() => {
 });
 
 describe("maybeAlertUnassignedBooking", () => {
-  it("alerts the owner for an unowned contact — full content and payload", async () => {
+  it("alerts the owner for an unowned contact: full content and payload", async () => {
     const out = await maybeAlertUnassignedBooking(BIZ, INPUT, {
       client: fakeDb([{ data: { owner_employee_id: null } }]),
       getPreferences: vi.fn().mockResolvedValue({ unassigned_booking_alerts: true }) as never
@@ -73,7 +73,7 @@ describe("maybeAlertUnassignedBooking", () => {
         businessId: BIZ,
         kind: "unassigned_booking",
         summary:
-          "Unassigned booking: shabir gulamhussein lukmanji (+16136067906) — Wednesday, July 22, 2026 at 12:00 PM EDT",
+          "Unassigned booking: shabir gulamhussein lukmanji (+16136067906), Wednesday, July 22, 2026 at 12:00 PM EDT",
         payload: expect.objectContaining({
           attendee_phone: "+16136067906",
           start_iso: "2026-07-22T16:00:00.000Z",
@@ -98,7 +98,7 @@ describe("maybeAlertUnassignedBooking", () => {
     expect(dispatchUrgentNotification).not.toHaveBeenCalled();
   });
 
-  it("skips when the toggle is explicitly off — and ONLY then (missing row/column = on)", async () => {
+  it("skips when the toggle is explicitly off, and ONLY then (missing row/column = on)", async () => {
     const disabled = await maybeAlertUnassignedBooking(BIZ, INPUT, {
       client: fakeDb([{ data: { owner_employee_id: null } }]),
       getPreferences: vi.fn().mockResolvedValue({ unassigned_booking_alerts: false }) as never
@@ -149,7 +149,7 @@ describe("maybeAlertUnassignedBooking", () => {
     expect(out).toBe("sent");
     const call = vi.mocked(dispatchUrgentNotification).mock.calls[0][0];
     expect(call.summary).toBe(
-      "Unassigned booking: shabir gulamhussein lukmanji — Wednesday, July 22, 2026 at 12:00 PM EDT"
+      "Unassigned booking: shabir gulamhussein lukmanji, Wednesday, July 22, 2026 at 12:00 PM EDT"
     );
     expect(call.payload).not.toHaveProperty("contactE164");
   });

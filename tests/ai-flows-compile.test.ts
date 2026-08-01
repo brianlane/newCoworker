@@ -79,7 +79,7 @@ describe("buildFlowCompileUserText", () => {
   it("trims and labels the description, with an explicit no-documents line", () => {
     const text = buildFlowCompileUserText("  do a thing  ");
     expect(text).toContain("Automation description:\ndo a thing");
-    expect(text).toContain("AVAILABLE DOCUMENTS: (none on file — do not emit share_document steps)");
+    expect(text).toContain("AVAILABLE DOCUMENTS: (none on file, do not emit share_document steps)");
   });
 
   it("lists shareable documents with their exact ids", () => {
@@ -88,9 +88,9 @@ describe("buildFlowCompileUserText", () => {
       { id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb", title: "Menu", summary: "" }
     ]);
     expect(text).toContain("AVAILABLE DOCUMENTS (for share_document steps");
-    expect(text).toContain('- documentId: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa — "Price sheet": Prices.');
+    expect(text).toContain('- documentId: aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa, "Price sheet": Prices.');
     // Empty summaries render without a trailing colon segment.
-    expect(text).toContain('- documentId: bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb — "Menu"');
+    expect(text).toContain('- documentId: bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb, "Menu"');
     expect(text).not.toContain('"Menu":');
   });
 });
@@ -173,7 +173,7 @@ describe("buildFlowEditUserText", () => {
       mailboxes: [{ id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", label: "sam@example.com (outlook)" }]
     });
     expect(text).toContain("AVAILABLE MAILBOXES (for send_email fromConnectionId");
-    expect(text).toContain("- connectionId: cccccccc-cccc-4ccc-8ccc-cccccccccccc — sam@example.com (outlook)");
+    expect(text).toContain("- connectionId: cccccccc-cccc-4ccc-8ccc-cccccccccccc, sam@example.com (outlook)");
   });
 });
 
@@ -192,7 +192,7 @@ describe("buildAvailableMailboxesBlock", () => {
       [],
       [{ id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc", label: "sam@example.com (outlook)" }]
     );
-    expect(text).toContain("- connectionId: cccccccc-cccc-4ccc-8ccc-cccccccccccc — sam@example.com (outlook)");
+    expect(text).toContain("- connectionId: cccccccc-cccc-4ccc-8ccc-cccccccccccc, sam@example.com (outlook)");
   });
 });
 

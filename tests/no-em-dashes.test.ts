@@ -42,6 +42,15 @@ function guardedFiles(): string[] {
     "supabase/functions/_shared/sms_prompt_lines.ts",
     // The llms.txt brief is copy an AI assistant quotes back to a buyer.
     "src/lib/marketing/llms-content.ts",
+    // The AiFlow compiler prompt: model-facing text is held to the rule the
+    // same as customer copy (rule 4 covers AI prompts), and its validation
+    // messages surface verbatim in the flow editor.
+    "src/lib/ai-flows/compile.ts",
+    // Dashboard panels whose inline JSX and setError strings are owner-facing.
+    "src/components/dashboard/CampaignsManager.tsx",
+    "src/components/dashboard/SocialPostsManager.tsx",
+    // Builds an SMS body (seen live in an unassigned-booking alert text).
+    "src/lib/calendar-tools/unassigned-booking-alert.ts",
     "scripts/oneshot/seed-amy-new-lead-intake.ts",
     // Seeds the HQ demo-line / webchat follow-up SMS bodies. The live flows
     // read clean only because patch-hq-booking-offer.ts swept them after the

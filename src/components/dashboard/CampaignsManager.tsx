@@ -7,7 +7,7 @@
  * or schedule it, and watch the send counters fill in as the per-minute
  * sweep drains the audience. The audience field offers the directory's
  * existing tags and previews the live recipient count (debounced through
- * /api/dashboard/campaigns/audience) so scheduling is never a blind send —
+ * /api/dashboard/campaigns/audience) so scheduling is never a blind send;
  * including a warning when the audience holds Instagram prospects still
  * pending review. The content calendar below groups scheduled and sent
  * campaigns by month so the marketing plan reads at a glance.
@@ -119,7 +119,7 @@ export function CampaignsManager({
   }, [refresh]);
 
   // Debounced live audience preview: re-count as the owner edits the tag.
-  // Best-effort — a failed preview keeps the last count rather than blocking
+  // Best-effort: a failed preview keeps the last count rather than blocking
   // the composer (the sweep re-snapshots authoritatively at send time). The
   // cleanup flag drops out-of-order responses: a slow response for an OLD
   // tag must never overwrite the preview for the tag currently typed.
@@ -179,7 +179,7 @@ export function CampaignsManager({
       setSendAt("");
       await refresh();
     } catch {
-      setError("Could not save the campaign — try again.");
+      setError("Could not save the campaign. Try again.");
     } finally {
       setSaving(false);
     }
@@ -200,7 +200,7 @@ export function CampaignsManager({
       }
       await refresh();
     } catch {
-      setError("Could not cancel — try again.");
+      setError("Could not cancel. Try again.");
     }
   }
 
@@ -219,7 +219,7 @@ export function CampaignsManager({
       }
       await refresh();
     } catch {
-      setError("Could not delete — try again.");
+      setError("Could not delete. Try again.");
     }
   }
 
@@ -266,7 +266,7 @@ export function CampaignsManager({
       ) : campaigns.length === 0 ? (
         <p className="text-sm text-parchment/40">
           {marketingAllowed
-            ? "No campaigns yet — compose one above."
+            ? "No campaigns yet. Compose one above."
             : "No campaigns yet."}
         </p>
       ) : (
@@ -405,9 +405,9 @@ export function CampaignsManager({
                   {preview.needsReview > 0 ? (
                     <span className="text-spark-orange">
                       {" "}
-                      — includes {preview.needsReview} Instagram prospect
+                      , including {preview.needsReview} Instagram prospect
                       {preview.needsReview === 1 ? "" : "s"} pending review (scraped, never
-                      opted in — review them before emailing)
+                      opted in: review them before emailing)
                     </span>
                   ) : null}
                 </p>
@@ -443,7 +443,7 @@ export function CampaignsManager({
             <Link href="/dashboard/aiflows" className="text-signal-teal hover:underline">
               AiFlow
             </Link>{" "}
-            — texts need each contact&apos;s SMS consent.
+            (texts need each contact&apos;s SMS consent).
           </p>
         </div>
       </Card>
