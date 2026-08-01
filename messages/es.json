@@ -1741,7 +1741,15 @@
       "rulesTitle": "Cuándo se puede reservar",
       "rulesSubtitle": "La ventana en la que se ofrece cada reunión.",
       "intakeNewQuestionPlaceholder": "¿Qué deberíamos saber antes de la llamada?",
-      "intakeNewQuestionHint": "Escribe tu pregunta y presiona Enter. Déjala vacía para cancelar."
+      "intakeNewQuestionHint": "Escribe tu pregunta y presiona Enter. Déjala vacía para cancelar.",
+      "feedTitle": "Enlace de calendario del equipo",
+      "feedBenefit": "Suscríbete en Google Calendar, Outlook o Apple Calendar para ver todas las citas próximas, sin importar dónde se reservaron.",
+      "feedCopy": "Copiar",
+      "feedCopied": "Copiado",
+      "feedRotate": "Rotar enlace",
+      "feedHint": "Cualquiera con este enlace puede ver horarios y nombres de las citas. Rotarlo corta el acceso a todas las copias compartidas.",
+      "feedLoading": "Preparando tu enlace de calendario…",
+      "feedError": "No se pudo cargar el enlace del calendario. Recarga para intentarlo de nuevo."
     },
     "integrationsClaude": {
       "connectedBadge": "Conectado",

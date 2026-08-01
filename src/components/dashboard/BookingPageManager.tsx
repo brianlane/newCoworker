@@ -7,6 +7,7 @@
  */
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { CalendarFeedCard } from "@/components/dashboard/CalendarFeedCard";
 import { type IntakeQuestion } from "@/components/dashboard/IntakeQuestionsEditor";
 import { MeetingTypesCard } from "@/components/dashboard/MeetingTypesCard";
 import Link from "next/link";
@@ -702,6 +703,11 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
           </ul>
         )}
       </Card>
+
+      {/* Provider-agnostic on purpose: Vagaro/Acuity tenants see the
+          connect-first card above INSTEAD of the page manager, and this
+          subscribable link is exactly what still works for them. */}
+      <CalendarFeedCard businessId={businessId} />
     </div>
   );
 }

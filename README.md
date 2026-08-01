@@ -1018,6 +1018,40 @@ page.
   untouched. Deliberate v1 exclusions: round robin / pick-a-person,
   routing forms, embeds; payment COLLECTION (the schema hooks are in).
 
+## Team calendar (shared "NewCoworker" calendar + subscribable feed)
+
+Two mechanisms, one goal: the whole team sees what is booked, wherever it
+was booked.
+
+- **The shared "NewCoworker" calendar** (`src/lib/calendar-tools/shared-calendar.ts`)
+  lives on the business's connected Google or Microsoft account, created
+  lazily on first booking, with employee read-access grants and an all-day
+  time-off mirror. Its HOST is resolved independently of who takes the
+  bookings (`resolveSharedCalendarHost`, not `resolveCalendarConnection`):
+  a merchant who books on Vagaro or Acuity but runs on Google Workspace
+  still gets the calendar. Bookings taken on a provider that is NOT the
+  host (Vagaro, Acuity, Calendly, CalDAV) are MIRRORED onto it
+  (`mirrorBookingToSharedCalendar`); Google/Microsoft bookings are never
+  mirrored, because `bookOnProvider` already wrote them there and a mirror
+  would duplicate every event. The mirror's event id rides the
+  `calendar_booking_dedupe` row so reschedule moves it and cancel deletes
+  it: a mirror that outlives its appointment shows the team something
+  that is not happening.
+- **The subscribable feed** (`GET /api/calendar/<ncbf_token>.ics`,
+  `src/lib/calendar-tools/feed.ts`) renders the booking ledger's upcoming
+  rows as ICS for ANY calendar app that can subscribe to a URL. It is the
+  mechanism that works for every tenant: no Google/Microsoft account
+  needed, and none of the dedicated booking tools lets an outside app
+  create a calendar (iCloud also refuses CalDAV MKCALENDAR). The token
+  (`calendar_feed_tokens`, minted on first ask from the Bookings page's
+  "Team calendar link" card) is a plaintext capability like `ncb_`,
+  rotatable to revoke every shared copy at once. The feed carries display
+  names only, never phones or emails, so a forwarded link cannot leak
+  the contact list. Subscription semantics do the lifecycle work: clients
+  re-download and replace, so canceled bookings (deleted ledger rows)
+  disappear on the next sync and rescheduled ones move (stable UID = the
+  ledger row id).
+
 ## Every business text is metered
 
 Two ledgers, one rule: nothing reaches Telnyx uncounted. Customer-facing
