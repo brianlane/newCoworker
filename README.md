@@ -1452,11 +1452,15 @@ would otherwise still be mailed.
 
 ### Cost
 
-Discovery runs once per business per UTC day and buys at most 6 Places
-queries, stamped before they are bought. The rotation interleaves round-robin
-across search terms and advances a full run per day; the honedtech version
-grouped by vertical and slid one query at a time, which served a single trade
-for weeks and read like a market signal. The optional Gemini tone pass is
+Discovery runs once per business per UTC day and buys a tier-bounded number
+of Places queries, stamped before they are bought:
+`placesQueriesPerDayForTier` (src/lib/plans/prospecting.ts) gives Standard the
+base budget of 6 and Enterprise double that, so the fleet-wide worst case is
+always a small known number (today's whole fleet at full adoption is 36
+queries a day). The rotation interleaves round-robin across search terms and
+advances a full run per day; the honedtech version grouped by vertical and
+slid one query at a time, which served a single trade for weeks and read like
+a market signal. The optional Gemini tone pass is
 metered per business through the shared AI-spend ledger and degrades to the
 deterministic pitch on any failure. `GOOGLE_PLACES_API_KEY` must be set, or
 the sweep reports "no Places API key configured" per business and does nothing

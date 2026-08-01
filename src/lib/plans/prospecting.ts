@@ -10,12 +10,24 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { QUERIES_PER_RUN } from "@/lib/outreach/discover";
 
 export const PROSPECTING_UPGRADE_MESSAGE =
   "Prospecting is a Standard plan perk. Upgrade to have your coworker find local businesses and email them for you.";
 
 export function prospectingAllowedForTier(tier: string | null | undefined): boolean {
   return tier === "standard" || tier === "enterprise";
+}
+
+/**
+ * Paid Places queries a tenant's daily discovery pass may buy. Discovery
+ * bills at the Text Search Enterprise tier, so this number is the platform's
+ * per-tenant Places cost lever: Standard gets the base budget, Enterprise
+ * double it. With every tier bounded, the fleet-wide worst case stays a
+ * small known number instead of an open-ended one.
+ */
+export function placesQueriesPerDayForTier(tier: string | null | undefined): number {
+  return tier === "enterprise" ? QUERIES_PER_RUN * 2 : QUERIES_PER_RUN;
 }
 
 /**

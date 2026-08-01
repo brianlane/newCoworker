@@ -26,7 +26,7 @@
  */
 
 import { getBusiness } from "@/lib/db/businesses";
-import { prospectingAllowedForTier } from "@/lib/plans/prospecting";
+import { placesQueriesPerDayForTier, prospectingAllowedForTier } from "@/lib/plans/prospecting";
 import { schedulingLink } from "@/lib/booking-page/prompt-line";
 import {
   sendFromMailboxConnection,
@@ -65,7 +65,6 @@ import {
   buildQueryRotation,
   dayIndexFor,
   prospectsFromHits,
-  QUERIES_PER_RUN,
   rotationWindow,
   searchPlaces
 } from "./discover";
@@ -215,7 +214,7 @@ async function resolveTenant(
   settings: OutreachSettingsRow,
   r: Resolved
 ): Promise<
-  | { tenant: PitchTenant; timeZone: string | null }
+  | { tenant: PitchTenant; timeZone: string | null; placesQueriesPerDay: number }
   | { missing: string; blockedBy: "tier" | "config" }
 > {
   const business = await r.getBusiness(settings.business_id, r.db);
@@ -242,7 +241,10 @@ async function resolveTenant(
       senderName: settings.sender_name?.trim() || null,
       postalAddress
     },
-    timeZone: business.timezone ?? null
+    timeZone: business.timezone ?? null,
+    // The tier sets how many paid Places queries today's discovery may buy,
+    // resolved here because this is the one place the business row is read.
+    placesQueriesPerDay: placesQueriesPerDayForTier(business.tier)
   };
 }
 
@@ -250,7 +252,8 @@ async function resolveTenant(
 async function discoverForBusiness(
   settings: OutreachSettingsRow,
   r: Resolved,
-  result: OutreachSweepResult
+  result: OutreachSweepResult,
+  queriesPerDay: number
 ): Promise<void> {
   if (!r.placesApiKey) {
     result.notes.push({ businessId: settings.business_id, note: "no Places API key configured" });
@@ -276,7 +279,7 @@ async function discoverForBusiness(
     r.db
   );
   if (!claimed) return;
-  for (const slot of rotationWindow(rotation, dayIndexFor(r.now), QUERIES_PER_RUN)) {
+  for (const slot of rotationWindow(rotation, dayIndexFor(r.now), queriesPerDay)) {
     const hits = await r.searchPlaces(r.placesApiKey, slot.query);
     const candidates = prospectsFromHits(hits, slot.vertical, slot.city);
     const suppressed = await existingProspectDomains(
@@ -860,7 +863,7 @@ async function sweepBusiness(
     result.notes.push({ businessId: settings.business_id, note: resolved.missing });
     return;
   }
-  await discoverForBusiness(settings, r, result);
+  await discoverForBusiness(settings, r, result, resolved.placesQueriesPerDay);
   await draftForBusiness(settings, resolved.tenant, r, result);
   if (settings.mode !== "auto") return;
   // One window check for both outbound phases: a nudge is cold mail too.

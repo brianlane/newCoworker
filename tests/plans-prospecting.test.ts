@@ -5,10 +5,12 @@ vi.mock("@/lib/supabase/server", () => ({
 }));
 
 import {
+  placesQueriesPerDayForTier,
   PROSPECTING_UPGRADE_MESSAGE,
   prospectingAllowedForBusiness,
   prospectingAllowedForTier
 } from "@/lib/plans/prospecting";
+import { QUERIES_PER_RUN } from "@/lib/outreach/discover";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 function makeDb(result: { data: unknown; error: { message: string } | null }) {
@@ -64,5 +66,22 @@ describe("prospecting tier gate", () => {
     await expect(prospectingAllowedForBusiness("biz-1", db)).rejects.toThrow(
       "prospectingAllowedForBusiness: db down"
     );
+  });
+});
+
+describe("places query budget by tier", () => {
+  it("gives Standard the base budget and Enterprise double", () => {
+    expect(placesQueriesPerDayForTier("standard")).toBe(QUERIES_PER_RUN);
+    expect(placesQueriesPerDayForTier("enterprise")).toBe(QUERIES_PER_RUN * 2);
+    expect(placesQueriesPerDayForTier("standard")).toBe(6);
+    expect(placesQueriesPerDayForTier("enterprise")).toBe(12);
+  });
+
+  it("falls back to the base budget for unknown or missing tiers", () => {
+    // Starter never reaches discovery (the tier gate refuses it first), so
+    // the base is a safe total-function answer, not a Starter allowance.
+    expect(placesQueriesPerDayForTier("starter")).toBe(QUERIES_PER_RUN);
+    expect(placesQueriesPerDayForTier(null)).toBe(QUERIES_PER_RUN);
+    expect(placesQueriesPerDayForTier(undefined)).toBe(QUERIES_PER_RUN);
   });
 });

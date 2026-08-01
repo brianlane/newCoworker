@@ -112,6 +112,18 @@ verify_jwt = false
 [functions.email-campaign-sweep]
 verify_jwt = false
 
+# Deployed at #972 without an entry here, so the CI bulk deploy left the
+# gateway JWT check ON and every pg_cron tick 401'd (the exact
+# `UNAUTHORIZED_INVALID_JWT_FORMAT` failure this file's header describes)
+# until 2026-08-01. tests/edge-functions-config-parity.test.ts now fails
+# CI whenever a function ships without an entry.
+[functions.outreach-sweep]
+verify_jwt = false
+
+# Same gap as outreach-sweep, shipped 2026-07-31, redeployed 2026-08-01.
+[functions.vps-orphan-sweep]
+verify_jwt = false
+
 [functions.social-post-sweep]
 verify_jwt = false
 
