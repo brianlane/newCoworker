@@ -6,11 +6,19 @@ import {
 } from "@/lib/admin/cost-sync";
 import { loadFleetMargins } from "@/lib/admin/margin-data";
 import {
+  TELNYX_SERIES_OTHER,
+  TELNYX_SERIES_UNATTRIBUTED,
+  TELNYX_USAGE_WINDOW_KEYS,
   buildPoolBoxBurn,
   buildRenewalCalendar,
+  buildTelnyxDailySeries,
+  buildTelnyxTenantWindowBreakdown,
+  resolveTelnyxUsageWindowKey,
   sumMarginLinesByKey,
   telnyxDirectionSummary,
-  telnyxMonthlyTrend
+  telnyxMonthlyTrend,
+  telnyxUsageWindow,
+  type TelnyxUsageWindowKey
 } from "@/lib/admin/costs-view";
 import { listHostingerVpsCosts, listTelnyxCostDaily } from "@/lib/db/platform-costs";
 import { listVpsInventory } from "@/lib/db/vps-inventory";
@@ -45,9 +53,38 @@ function trendWindowStartYmd(now: Date): string {
   return d.toISOString().slice(0, 10);
 }
 
-export default async function AdminCostsPage() {
+const WINDOW_LABELS: Record<TelnyxUsageWindowKey, string> = {
+  "7d": "7 days",
+  "14d": "14 days",
+  "30d": "30 days",
+  "90d": "90 days"
+};
+
+// Tenant stack colors by window-spend rank. Spark-orange stays reserved for
+// the Unattributed bucket so it reads as the same leak signal as the cost
+// split above.
+const TENANT_SEGMENT_CLASSES = [
+  "bg-signal-teal/80",
+  "bg-claw-green/70",
+  "bg-parchment/50",
+  "bg-signal-teal/40",
+  "bg-claw-green/40",
+  "bg-parchment/25",
+  "bg-signal-teal/20"
+];
+const OTHER_SEGMENT_CLASS = "bg-parchment/10";
+const UNATTRIBUTED_SEGMENT_CLASS = "bg-spark-orange/70";
+
+export default async function AdminCostsPage({
+  searchParams
+}: {
+  searchParams: Promise<{ window?: string }>;
+}) {
   const t = await getTranslations("admin.pages");
   const now = new Date();
+  const { window: windowParam } = await searchParams;
+  const windowKey = resolveTelnyxUsageWindowKey(windowParam);
+  const usageWindow = telnyxUsageWindow(windowKey, now);
   const [margins, syncStatusRaw, hostingerRows, telnyxTrendRows, inventory, balance] =
     await Promise.all([
       loadFleetMargins(now),
@@ -58,6 +95,9 @@ export default async function AdminCostsPage() {
         });
         return [];
       }),
+      // One 90d fetch also covers every selectable per-tenant usage window:
+      // trendWindowStartYmd (instant now minus 90d) always starts at or
+      // before the widest window's UTC-floor(now) minus 89 days.
       listTelnyxCostDaily(trendWindowStartYmd(new Date())).catch((err: unknown) => {
         logger.error("admin costs: telnyx trend read failed", {
           message: err instanceof Error ? err.message : String(err)
@@ -98,6 +138,28 @@ export default async function AdminCostsPage() {
   const directions = telnyxDirectionSummary(monthTelnyxRows);
 
   const businessNames = new Map(margins.businesses.map((b) => [b.id, b.name]));
+
+  // Windowed per-tenant Telnyx burn (the "who used it since the reload" view).
+  const usageSeries = buildTelnyxDailySeries(telnyxTrendRows, usageWindow);
+  const usageBreakdown = buildTelnyxTenantWindowBreakdown(telnyxTrendRows, usageWindow);
+  const seriesClassByKey = new Map<string, string>();
+  let tenantRank = 0;
+  for (const entry of usageSeries.series) {
+    seriesClassByKey.set(
+      entry.seriesKey,
+      entry.seriesKey === TELNYX_SERIES_UNATTRIBUTED
+        ? UNATTRIBUTED_SEGMENT_CLASS
+        : entry.seriesKey === TELNYX_SERIES_OTHER
+          ? OTHER_SEGMENT_CLASS
+          : TENANT_SEGMENT_CLASSES[Math.min(tenantRank++, TENANT_SEGMENT_CLASSES.length - 1)]
+    );
+  }
+  const seriesLabel = (key: string): string =>
+    key === TELNYX_SERIES_OTHER
+      ? "Other tenants"
+      : key === TELNYX_SERIES_UNATTRIBUTED
+        ? "Unattributed"
+        : (businessNames.get(key) ?? `${key.slice(0, 8)}…`);
   // The loader's active-preferring subscription map, so a pending
   // resubscribe row can't hide a live contract from the calendar.
   const renewalEvents = buildRenewalCalendar({
@@ -286,6 +348,153 @@ export default async function AdminCostsPage() {
             ))}
           </div>
         )}
+      </Card>
+
+      {/* Telnyx per-tenant burn, windowed */}
+      <Card>
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <div>
+            <h2 className="text-xs font-semibold text-parchment/40 uppercase tracking-wider">
+              Telnyx Usage by Tenant
+            </h2>
+            <p className="text-xs text-parchment/30 mt-1">
+              {usageWindow.startYmd} → {usageWindow.endYmdExclusive} (UTC days) ·{" "}
+              {microsToMoney(usageBreakdown.totalMicros)} total
+            </p>
+          </div>
+          <div className="flex items-center gap-1">
+            {TELNYX_USAGE_WINDOW_KEYS.map((key) => (
+              <a
+                key={key}
+                href={`/admin/costs?window=${key}`}
+                className={`rounded-lg px-3 py-1.5 text-xs font-medium transition-colors ${
+                  key === windowKey
+                    ? "bg-signal-teal/20 text-signal-teal"
+                    : "text-parchment/50 hover:text-parchment border border-parchment/10"
+                }`}
+              >
+                {WINDOW_LABELS[key]}
+              </a>
+            ))}
+          </div>
+        </div>
+        {usageSeries.totalMicros === 0 ? (
+          <p className="text-sm text-parchment/40 text-center py-4">
+            No synced Telnyx spend in this window. Run Sync now, or Backfill 90d to fill history.
+          </p>
+        ) : (
+          <>
+            <div className="flex items-end gap-1 h-36">
+              {usageSeries.points.map((point) => (
+                <div
+                  key={point.day}
+                  className="flex-1 flex flex-col justify-end h-full min-w-0"
+                  title={`${point.day} · ${microsToMoney(point.costMicros)}${point.segments
+                    .map((s) => `\n${seriesLabel(s.seriesKey)}: ${microsToMoney(s.costMicros)}`)
+                    .join("")}`}
+                >
+                  {/* Visibility floor applies ONCE to the whole column, never
+                      per segment (per-segment floors would compound and
+                      inflate days with many small tenants); segments then
+                      split the column exactly proportionally. */}
+                  {point.costMicros > 0 && (
+                    <div
+                      className="w-full flex flex-col"
+                      style={{
+                        height: `${Math.max((point.costMicros / usageSeries.maxMicros) * 100, 1.5)}%`
+                      }}
+                    >
+                      {point.segments.map((segment) => (
+                        <div
+                          key={segment.seriesKey}
+                          className={`w-full ${seriesClassByKey.get(segment.seriesKey) ?? OTHER_SEGMENT_CLASS}`}
+                          style={{
+                            height: `${(segment.costMicros / point.costMicros) * 100}%`
+                          }}
+                        />
+                      ))}
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+            <div className="flex justify-between text-xs text-parchment/30 mt-2">
+              <span>{usageSeries.points[0]?.day}</span>
+              <span>{usageSeries.points[usageSeries.points.length - 1]?.day}</span>
+            </div>
+            <div className="flex flex-wrap gap-x-4 gap-y-1 mt-3">
+              {usageSeries.series.map((entry) => (
+                <span key={entry.seriesKey} className="flex items-center gap-1.5 text-xs">
+                  <span
+                    className={`inline-block h-2 w-2 rounded-sm ${seriesClassByKey.get(entry.seriesKey)}`}
+                  />
+                  <span className="text-parchment/60">{seriesLabel(entry.seriesKey)}</span>
+                </span>
+              ))}
+            </div>
+          </>
+        )}
+        {usageBreakdown.hasRows && (
+          <div className="mobile-scroll-x mt-4">
+            <table className="w-full min-w-[640px] text-xs">
+              <thead>
+                <tr className="text-parchment/40 text-left">
+                  <th className="pb-2 font-medium">Tenant</th>
+                  <th className="pb-2 font-medium text-right">SMS</th>
+                  <th className="pb-2 font-medium text-right">SMS cost</th>
+                  <th className="pb-2 font-medium text-right">Voice</th>
+                  <th className="pb-2 font-medium text-right">Voice cost</th>
+                  <th className="pb-2 font-medium text-right">Carrier fees</th>
+                  <th className="pb-2 font-medium text-right">Total</th>
+                  <th className="pb-2 font-medium text-right">Share</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-parchment/8">
+                {usageBreakdown.tenants.map((row) => (
+                  <tr key={row.businessId ?? "unattributed"}>
+                    <td className="py-2">
+                      {row.businessId !== null ? (
+                        <a
+                          href={`/admin/${row.businessId}`}
+                          className="text-parchment hover:text-signal-teal"
+                        >
+                          {businessNames.get(row.businessId) ?? `${row.businessId.slice(0, 8)}…`}
+                        </a>
+                      ) : (
+                        <span className="text-spark-orange">Unattributed</span>
+                      )}
+                    </td>
+                    <td className="py-2 text-right text-parchment/60">
+                      {row.messagingCount.toLocaleString("en-US")} msgs
+                    </td>
+                    <td className="py-2 text-right text-parchment/60">
+                      {microsToMoney(row.messagingMicros)}
+                    </td>
+                    <td className="py-2 text-right text-parchment/60">
+                      {row.voiceMinutes.toFixed(1)} min
+                    </td>
+                    <td className="py-2 text-right text-parchment/60">
+                      {microsToMoney(row.voiceMicros)}
+                    </td>
+                    <td className="py-2 text-right text-parchment/60">
+                      {microsToMoney(row.carrierFeeMicros)}
+                    </td>
+                    <td className="py-2 text-right text-parchment font-medium">
+                      {microsToMoney(row.totalMicros)}
+                    </td>
+                    <td className="py-2 text-right text-parchment/60">{row.sharePct ?? 0}%</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        <p className="text-xs text-parchment/30 mt-3">
+          Attribution matches each Telnyx record&apos;s number to a tenant DID. Unattributed spend
+          matched no tenant DID: platform traffic, a leaked number, or a deleted tenant. Days sync
+          on a rolling 7-day window; if the sync was down for a stretch, run Backfill 90d to fill
+          gaps.
+        </p>
       </Card>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
