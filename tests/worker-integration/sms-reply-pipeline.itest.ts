@@ -613,4 +613,36 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
     expect(transports.length).toBeGreaterThanOrEqual(3);
     expect(transports.every((n) => n.status !== "sent")).toBe(true);
   });
+
+  it("a voice-side team notify (payload.callerPhone) dedupes the handoff transports too", async () => {
+    // The voice twin's notify_team logPayload stores the contact under
+    // callerPhone, not customerPhone (Bugbot finding on PR #1115): the
+    // dedupe lookup must match either key.
+    const { biz } = await seedLeadWithContext("IT escalation voice teamnotify dedupe");
+    const { error: seedErr } = await db.from("notifications").insert({
+      id: crypto.randomUUID(),
+      business_id: biz,
+      delivery_channel: "sms",
+      status: "sent",
+      kind: "voice_team_notify",
+      summary: "Caller follow-up needed: call Dwight back about the dispute",
+      payload: {
+        logId: crypto.randomUUID(),
+        callerPhone: LEAD,
+        summary: "Caller follow-up needed: call Dwight back about the dispute"
+      }
+    });
+    expect(seedErr).toBeNull();
+
+    const trailer = `${REASONING_MARKER}{"intent":"policy_dispute","why":"Wants a person to take over.","handoff":true}`;
+    rowboat.scriptReply(`A licensed teammate will take this over shortly.\n${trailer}`);
+    await enqueueSmsJob(db, biz, LEAD, "Please have a person call me about this");
+    await tickSmsWorker();
+
+    const pages = (await notificationRows(biz)).filter((n) => n.kind === "urgent_alert");
+    expect(pages.find((n) => n.delivery_channel === "dashboard")?.status).toBe("sent");
+    const email = pages.find((n) => n.delivery_channel === "email");
+    expect(email?.status).toBe("skipped");
+    expect(email?.payload.reason).toBe("recent_team_notify");
+  });
 });

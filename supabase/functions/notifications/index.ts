@@ -427,7 +427,12 @@ serve(async (req: Request) => {
       .eq("business_id", record.business_id)
       .eq("status", "sent")
       .in("kind", ["sms_team_notify", "voice_team_notify"])
-      .eq("payload->>customerPhone", scopedContactE164)
+      // The texting twin stores the contact as payload.customerPhone, the
+      // voice twin as payload.callerPhone (their notify_team logPayloads
+      // differ); match either so a voice-side team notify dedupes too.
+      .or(
+        `payload->>customerPhone.eq.${scopedContactE164},payload->>callerPhone.eq.${scopedContactE164}`
+      )
       .gte("created_at", sinceIso)
       .limit(1);
     if (recentNotifyErr) {
