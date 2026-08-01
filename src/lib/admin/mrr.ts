@@ -36,6 +36,11 @@ import {
 } from "@/lib/plans/enterprise-pricing";
 import { resolveDeployedVpsSize } from "@/lib/vps/size";
 import { addUtcMonthsClamped } from "../../../supabase/functions/_shared/billing_period_window";
+import {
+  listMembershipPackAddonOptions,
+  monthlyPackAddonCents,
+  type MembershipPackAddonOption
+} from "@/lib/billing/membership-pack-addons";
 
 /** The subscription fields the revenue calculation reads (SubscriptionRow-compatible). */
 export type MrrSubscriptionInput = {
@@ -55,6 +60,13 @@ export type MrrSubscriptionInput = {
    * counted as committed revenue.
    */
   refund_exposed?: boolean;
+  /**
+   * Read cache of the Stripe subscription's recurring pack add-ons
+   * (§20260822034834). Priced into the rate so pack revenue, which bills
+   * every cycle since #1026, shows on the tile. `unknown` because it is a
+   * jsonb read the pricer validates itself.
+   */
+  membership_pack_addons?: unknown;
 };
 
 export type DayCurrentMrr = {
@@ -119,9 +131,16 @@ export function computeDayCurrentMrr(params: {
   subscriptions: MrrSubscriptionInput[];
   /** ACTIVE enterprise deals only (see listActiveEnterpriseDeals). */
   enterpriseDeals: Array<{ monthly_cents: number }>;
+  /**
+   * Pack catalog for pricing mirrored add-ons. Defaults to the env-gated
+   * live catalog; tests inject fixtures. A pack id missing from the catalog
+   * prices as 0 (degrade the number, never the page).
+   */
+  packAddonOptions?: MembershipPackAddonOption[];
   now?: Date;
 }): DayCurrentMrr {
   const now = params.now ?? new Date();
+  const packAddonOptions = params.packAddonOptions ?? listMembershipPackAddonOptions();
 
   let subscriptionCents = 0;
   let countedSubscriptions = 0;
@@ -132,10 +151,19 @@ export function computeDayCurrentMrr(params: {
     // its deal row, not the $0 tier table.
     if (sub.status !== "active" || sub.stripe_subscription_id === null) continue;
     if (sub.tier === "enterprise") continue;
-    const rateCents = dayCurrentSubscriptionRateCents(
-      sub as MrrSubscriptionInput & { tier: "starter" | "standard" },
-      now
-    );
+    // Plan rate plus the recurring packs the subscription carries: both bill
+    // every cycle, and both are refundable in-window, so they ride together
+    // through the refund-exposure split below.
+    const rateCents =
+      dayCurrentSubscriptionRateCents(
+        sub as MrrSubscriptionInput & { tier: "starter" | "standard" },
+        now
+      ) +
+      monthlyPackAddonCents(
+        sub.membership_pack_addons ?? null,
+        sub.billing_period ?? "monthly",
+        packAddonOptions
+      );
     subscriptionCents += rateCents;
     if (sub.refund_exposed === true) refundExposedCents += rateCents;
     countedSubscriptions += 1;
