@@ -81,7 +81,9 @@ export async function POST(request: Request) {
     }
     return voiceToolResponse({
       ok: true,
-      data: { messageId: result.messageId, provider: result.provider }
+      // fromEmail rides along so the worker can log the REAL sending address
+      // on email_log instead of the provider name.
+      data: { messageId: result.messageId, provider: result.provider, fromEmail: result.fromEmail }
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);

@@ -884,9 +884,32 @@ describe("phase 3: sending", () => {
       expect.objectContaining({
         businessId: BIZ,
         to: "info@acmehvac.com",
+        // The default mock reports no sending address (a legacy connection
+        // with bare metadata), so the log falls back to who signed the mail.
         from: "Brian",
         providerMessageId: "msg-1"
       })
+    );
+  });
+
+  it("logs the real mailbox address when the send reports one", async () => {
+    sendLedger();
+    const deps = baseDeps({
+      sendEmailImpl: vi.fn(async () => ({
+        ok: true as const,
+        provider: "google" as const,
+        messageId: "msg-1",
+        threadId: "thread-1",
+        fromEmail: "brian@acmehq.com"
+      }))
+    });
+    await processOutreachSweep(deps);
+    // The address beats the signature: it is what replies actually go to.
+    expect(
+      (deps as unknown as { recordEmailLogImpl: ReturnType<typeof vi.fn> }).recordEmailLogImpl
+    ).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ from: "brian@acmehq.com" })
     );
   });
 

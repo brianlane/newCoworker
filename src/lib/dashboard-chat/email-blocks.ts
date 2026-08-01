@@ -275,6 +275,7 @@ export async function fulfillOwnerEmailBlocks(args: {
         subject: req.subject,
         bodyText: req.body,
         source: args.source,
+        fromEmail: sent.fromEmail,
         providerMessageId: sent.messageId,
         ccEmails: req.cc,
         bccEmails: req.bcc

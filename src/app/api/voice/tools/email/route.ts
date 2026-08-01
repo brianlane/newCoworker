@@ -78,6 +78,7 @@ export async function POST(request: Request) {
       subject: args.subject,
       bodyText: args.bodyText,
       source: "voice_assistant",
+      fromEmail: result.fromEmail,
       providerMessageId: result.messageId,
       ccEmails,
       bccEmails

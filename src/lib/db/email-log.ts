@@ -553,6 +553,13 @@ export type RecordOutboundAssistantEmailInput = {
     | "voice_assistant"
     | "email_coworker"
     | "booking_reminder";
+  /**
+   * The mailbox address the mail went out from, as reported by the
+   * owner-mailbox send result (`fromEmail`). Required so no surface can
+   * silently fall back to a dash on the Emails page; null only when the
+   * connection's metadata carries no address.
+   */
+  fromEmail: string | null;
   providerMessageId?: string | null;
   /** Optional cc recipients (already normalized to valid addresses). */
   ccEmails?: string[];
@@ -575,7 +582,7 @@ export async function recordOutboundAssistantEmail(
       business_id: input.businessId,
       direction: "outbound",
       to_email: input.toEmail,
-      from_email: null,
+      from_email: input.fromEmail,
       subject: input.subject,
       body_preview: input.bodyText.slice(0, 500),
       body_full: input.bodyText,

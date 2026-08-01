@@ -31,7 +31,13 @@ const INPUT = {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  mockSend.mockResolvedValue({ ok: true, provider: "google", messageId: "m-1", threadId: "t-1" });
+  mockSend.mockResolvedValue({
+    ok: true,
+    provider: "google",
+    messageId: "m-1",
+    threadId: "t-1",
+    fromEmail: "owner@biz.com"
+  });
   mockRecord.mockResolvedValue(undefined);
 });
 
@@ -47,7 +53,12 @@ describe("sendBookingConfirmationEmail", () => {
     // The relative manage path becomes an absolute URL in the email.
     expect(args.bodyText).toMatch(/https?:\/\/[^\s]+\/book\/manage\/ncbm_abc/);
     expect(mockRecord).toHaveBeenCalledWith(
-      expect.objectContaining({ source: "booking_reminder", providerMessageId: "m-1" })
+      expect.objectContaining({
+        source: "booking_reminder",
+        providerMessageId: "m-1",
+        // The address the mailbox send reported, so the log never shows a dash.
+        fromEmail: "owner@biz.com"
+      })
     );
   });
 

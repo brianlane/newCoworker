@@ -46,7 +46,8 @@ beforeEach(() => {
     ok: true,
     provider: "microsoft",
     messageId: null,
-    threadId: null
+    threadId: null,
+    fromEmail: "owner@biz.com"
   });
 });
 
@@ -104,6 +105,7 @@ describe("POST /api/voice/tools/dashboard-email", () => {
       subject: "Hello",
       bodyText: "Hi",
       source: "dashboard_chat",
+      fromEmail: "owner@biz.com",
       providerMessageId: null,
       ccEmails: [],
       bccEmails: []

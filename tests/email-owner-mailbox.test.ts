@@ -8,15 +8,25 @@ vi.mock("@/lib/nango/workspace", () => ({
   nangoProxyForBusiness: vi.fn()
 }));
 
+vi.mock("@/lib/db/workspace-oauth-connections", () => ({
+  getWorkspaceOAuthConnectionByNangoIds: vi.fn()
+}));
+
 import { sendFromMailboxConnection, sendFromOwnerMailbox } from "@/lib/email/owner-mailbox";
 import { resolveEmailConnection } from "@/lib/voice-tools/connections";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
+import { getWorkspaceOAuthConnectionByNangoIds } from "@/lib/db/workspace-oauth-connections";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
 const ARGS = { toEmail: "lead@example.com", subject: "Hello", bodyText: "Hi there" };
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Every send now resolves the stored row for its metadata, so the result
+  // can report the address the mail left from.
+  vi.mocked(getWorkspaceOAuthConnectionByNangoIds).mockResolvedValue({
+    metadata: { provider_account_email: "owner@biz.com" }
+  } as never);
 });
 
 describe("sendFromOwnerMailbox", () => {
@@ -45,7 +55,9 @@ describe("sendFromOwnerMailbox", () => {
       messageId: "gmail-1",
       // Gmail reports the conversation the message landed in; the email
       // coworker claims ownership of that thread from this value.
-      threadId: "thread-1"
+      threadId: "thread-1",
+      // From the connection row's metadata: what email_log stores as FROM.
+      fromEmail: "owner@biz.com"
     });
     const call = vi.mocked(nangoProxyForBusiness).mock.calls[0];
     expect(call[2]).toMatchObject({ endpoint: "/gmail/v1/users/me/messages/send", method: "POST" });
@@ -115,7 +127,8 @@ describe("sendFromOwnerMailbox", () => {
       ok: true,
       provider: "google",
       messageId: null,
-      threadId: null
+      threadId: null,
+      fromEmail: "owner@biz.com"
     });
   });
 
@@ -146,7 +159,8 @@ describe("sendFromOwnerMailbox", () => {
       messageId: null,
       // Graph's sendMail returns no body, so there is no conversation id to
       // claim: Microsoft mailboxes send fine but cannot seed thread ownership.
-      threadId: null
+      threadId: null,
+      fromEmail: "owner@biz.com"
     });
     const call = vi.mocked(nangoProxyForBusiness).mock.calls[0];
     expect(call[2]).toMatchObject({ endpoint: "/v1.0/me/sendMail", method: "POST" });
@@ -192,11 +206,47 @@ describe("sendFromMailboxConnection", () => {
       ok: true,
       provider: "google",
       messageId: "gmail-2",
-      threadId: null
+      threadId: null,
+      fromEmail: "owner@biz.com"
     });
     expect(resolveEmailConnection).not.toHaveBeenCalled();
+    // The metadata lookup is scoped to the business + exact Nango ids, so it
+    // can only ever describe the mailbox that actually sent.
+    expect(getWorkspaceOAuthConnectionByNangoIds).toHaveBeenCalledWith(BIZ, "gmail", "cx-picked");
     const call = vi.mocked(nangoProxyForBusiness).mock.calls[0];
     expect(call[1]).toMatchObject({ providerConfigKey: "gmail", connectionId: "cx-picked" });
+  });
+
+  it("returns email_not_connected without a provider call when the row is gone", async () => {
+    vi.mocked(getWorkspaceOAuthConnectionByNangoIds).mockResolvedValue(null);
+    await expect(
+      sendFromMailboxConnection(
+        BIZ,
+        { provider: "google", providerConfigKey: "gmail", connectionId: "cx-stale" },
+        ARGS
+      )
+    ).resolves.toEqual({ ok: false, detail: "email_not_connected" });
+    expect(nangoProxyForBusiness).not.toHaveBeenCalled();
+  });
+
+  it("still sends, with a null fromEmail, when the metadata has no address", async () => {
+    vi.mocked(getWorkspaceOAuthConnectionByNangoIds).mockResolvedValue({
+      metadata: {}
+    } as never);
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "gmail-3" } } as never);
+    await expect(
+      sendFromMailboxConnection(
+        BIZ,
+        { provider: "google", providerConfigKey: "gmail", connectionId: "cx-legacy" },
+        ARGS
+      )
+    ).resolves.toEqual({
+      ok: true,
+      provider: "google",
+      messageId: "gmail-3",
+      threadId: null,
+      fromEmail: null
+    });
   });
 });
 

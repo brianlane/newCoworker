@@ -10,6 +10,8 @@
 
 import { resolveEmailConnection } from "@/lib/voice-tools/connections";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
+import { getWorkspaceOAuthConnectionByNangoIds } from "@/lib/db/workspace-oauth-connections";
+import { connectionEmail } from "@/lib/email/mailbox-options";
 
 export type OwnerMailboxSendArgs = {
   toEmail: string;
@@ -50,6 +52,13 @@ export type OwnerMailboxSendResult =
        * there (see the thread-ownership note in the email coworker docs).
        */
       threadId: string | null;
+      /**
+       * The address the mail went out from, resolved from the connection's
+       * metadata (see connectionEmail). Null for legacy connections whose
+       * metadata carries no address. Callers logging to email_log must store
+       * this so the dashboard can show WHO sent the mail instead of a dash.
+       */
+      fromEmail: string | null;
     }
   | { ok: false; detail: "email_not_connected" };
 
@@ -119,6 +128,18 @@ export async function sendFromMailboxConnection(
   conn: MailboxConnectionRef,
   args: OwnerMailboxSendArgs
 ): Promise<OwnerMailboxSendResult> {
+  // Resolve the stored row up front for its metadata: the send result carries
+  // the address the mail leaves from, so every logging caller can record it.
+  // A missing row would make nangoProxyForBusiness refuse anyway; failing
+  // here just skips the provider round-trip.
+  const row = await getWorkspaceOAuthConnectionByNangoIds(
+    businessId,
+    conn.providerConfigKey,
+    conn.connectionId
+  );
+  if (!row) return { ok: false, detail: "email_not_connected" };
+  const fromEmail = connectionEmail(row.metadata);
+
   if (conn.provider === "google") {
     const raw = encodeRfc2822(args);
     const threadId = args.thread?.threadId?.trim();
@@ -139,7 +160,8 @@ export async function sendFromMailboxConnection(
       ok: true,
       provider: "google",
       messageId: data?.id ?? null,
-      threadId: data?.threadId ?? null
+      threadId: data?.threadId ?? null,
+      fromEmail
     };
   }
 
@@ -162,7 +184,7 @@ export async function sendFromMailboxConnection(
       }
     );
     if (!replied) return { ok: false, detail: "email_not_connected" };
-    return { ok: true, provider: "microsoft", messageId: null, threadId: null };
+    return { ok: true, provider: "microsoft", messageId: null, threadId: null, fromEmail };
   }
 
   const res = await nangoProxyForBusiness(
@@ -188,5 +210,5 @@ export async function sendFromMailboxConnection(
     }
   );
   if (!res) return { ok: false, detail: "email_not_connected" };
-  return { ok: true, provider: "microsoft", messageId: null, threadId: null };
+  return { ok: true, provider: "microsoft", messageId: null, threadId: null, fromEmail };
 }

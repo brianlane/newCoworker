@@ -8,6 +8,12 @@ vi.mock("@/lib/nango/workspace", () => ({
   nangoProxyForBusiness: vi.fn()
 }));
 
+// The real owner-mailbox module runs in this suite, and it resolves the
+// connection row for its metadata so the send can report its FROM address.
+vi.mock("@/lib/db/workspace-oauth-connections", () => ({
+  getWorkspaceOAuthConnectionByNangoIds: vi.fn()
+}));
+
 vi.mock("@/lib/rowboat/gateway-token", () => ({
   verifyRowboatGatewayToken: vi.fn().mockReturnValue(true),
   verifyGatewayTokenForBusiness: vi.fn().mockResolvedValue(true)
@@ -27,6 +33,7 @@ import { nangoProxyForBusiness } from "@/lib/nango/workspace";
 import { verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
 import { isAgentToolEnabled } from "@/lib/db/agent-tool-settings";
 import { recordOutboundAssistantEmail } from "@/lib/db/email-log";
+import { getWorkspaceOAuthConnectionByNangoIds } from "@/lib/db/workspace-oauth-connections";
 
 const businessId = "11111111-1111-4111-8111-111111111111";
 
@@ -50,6 +57,9 @@ describe("POST /api/voice/tools/email", () => {
     vi.mocked(verifyGatewayTokenForBusiness).mockResolvedValue(true);
     // Registry default: voice send_follow_up_email is ON unless toggled off.
     vi.mocked(isAgentToolEnabled).mockResolvedValue(true);
+    vi.mocked(getWorkspaceOAuthConnectionByNangoIds).mockResolvedValue({
+      metadata: { provider_account_email: "owner@biz.com" }
+    } as never);
   });
 
   afterEach(() => {
@@ -141,6 +151,7 @@ describe("POST /api/voice/tools/email", () => {
       subject: "Follow-up",
       bodyText: "Thanks.",
       source: "voice_assistant",
+      fromEmail: "owner@biz.com",
       providerMessageId: "gmail-abc",
       ccEmails: [],
       bccEmails: []

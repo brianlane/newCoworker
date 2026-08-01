@@ -192,6 +192,7 @@ async function sendEmailReminder(
     subject: email.subject,
     bodyText: email.text,
     source: "booking_reminder",
+    fromEmail: sent.fromEmail,
     providerMessageId: sent.messageId
   });
   // Deliberately NOT claiming the thread for the email coworker: nobody
