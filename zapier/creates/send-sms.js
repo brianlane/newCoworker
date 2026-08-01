@@ -31,8 +31,6 @@ module.exports = {
   },
   operation: {
     // Preserve input exactly as mapped so the API can validate required values
-    // and return its normal field-specific error response.
-    cleanInputData: false,
     perform,
     inputFields: [
       {

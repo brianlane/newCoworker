@@ -1,7 +1,7 @@
 {
   "name": "newcoworker-zapier",
-  "version": "1.0.0",
-  "description": "Zapier integration for NewCoworker — triggers on texts, calls, and emails; sends SMS.",
+  "version": "1.0.1",
+  "description": "Zapier integration for NewCoworker \u2014 triggers on texts, calls, and emails; sends SMS.",
   "main": "index.js",
   "private": true,
   "scripts": {
@@ -14,7 +14,7 @@
     "npm": ">=9"
   },
   "dependencies": {
-    "zapier-platform-core": "19.0.0"
+    "zapier-platform-core": "19.1.0"
   },
   "overrides": {
     "adm-zip": ">=0.6.0",

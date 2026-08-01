@@ -10,6 +10,11 @@ const sendLead = require("./creates/send-lead");
 module.exports = {
   version,
   platformVersion,
+  // Never let the platform "clean" input data (drop empty strings / unknown
+  // keys) before our API sees it: the API returns its own validation errors,
+  // and predictability beats silent munging on every surface (publishing
+  // check D028). Global so triggers and creates cannot drift apart.
+  flags: { cleanInputData: false },
   authentication: authentication.config,
   beforeRequest: [...authentication.befores],
   afterResponse: [...authentication.afters],
