@@ -57,6 +57,7 @@ import {
   SMS_GROUNDED_ACTIONS_LINE,
   SMS_IDENTITY_LINE,
   SMS_STAFF_NOTIFICATION_SETTINGS_LINE,
+  SMS_TIME_HONESTY_LINE,
   SMS_TIMEZONE_LINE
 } from "../_shared/sms_prompt_lines.ts";
 import {
@@ -1438,6 +1439,9 @@ serve(async (req: Request) => {
         // timezone rule applies here too (the Ayanna "3:00 PM" confirmation
         // was owner-initiated).
         SMS_TIMEZONE_LINE,
+        // Staff-composed texts carry timing too, so the passed-window rule
+        // rides here as well (Amy/Kolton, Jul 31 2026).
+        SMS_TIME_HONESTY_LINE,
         // "Let me know when clients text back" flips the toggle instead of
         // becoming an empty promise (KYP, Jul 20 2026).
         SMS_STAFF_NOTIFICATION_SETTINGS_LINE,
@@ -1564,7 +1568,7 @@ serve(async (req: Request) => {
         `(customer_lookup_by_phone, customer_set_display_name, ` +
         `customer_append_pinned_note), pass this exact value as the phone ` +
         `argument unless the texter explicitly refers to a different number.`;
-      const dateAndPhoneLines = [identityLine, groundedActionsLine, conversationQualityLine, SMS_TIMEZONE_LINE, emojiIntensityLine, NO_EM_DASH_PROMPT_LINE, dateLine, phoneLine, languageLine]
+      const dateAndPhoneLines = [identityLine, groundedActionsLine, conversationQualityLine, SMS_TIMEZONE_LINE, SMS_TIME_HONESTY_LINE, emojiIntensityLine, NO_EM_DASH_PROMPT_LINE, dateLine, phoneLine, languageLine]
         .filter(Boolean)
         .join("\n\n");
       customerPreamble = [dateAndPhoneLines, memoryPreamble, bookingStatus, agentFlowsBlock, contactTimeline, flowContext]

@@ -3,7 +3,10 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import { NEEDS_HUMAN_TAG } from "../../supabase/functions/_shared/needs_human";
 import { formatFlowAnswerNote } from "../../supabase/functions/_shared/ai_flows/run_context";
 import { REASONING_MARKER } from "../../supabase/functions/_shared/reply_reasoning";
-import { SMS_TIMEZONE_LINE } from "../../supabase/functions/_shared/sms_prompt_lines";
+import {
+  SMS_TIME_HONESTY_LINE,
+  SMS_TIMEZONE_LINE
+} from "../../supabase/functions/_shared/sms_prompt_lines";
 import {
   enqueueSmsJob,
   getContactTags,
@@ -170,6 +173,9 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
     // The timezone rule rides EVERY customer preamble (KYP/Ayanna Jul 20
     // 2026: a "3:00 PM" with no timezone no-showed a Central-time lead).
     expect(system?.content).toContain(SMS_TIMEZONE_LINE);
+    // The passed-window rule rides every customer preamble too (Amy/Kolton
+    // Jul 31 2026: "today between 10am-2pm" promised at 8:03 PM).
+    expect(system?.content).toContain(SMS_TIME_HONESTY_LINE);
     // ...cross-channel memory, including the preferred-name addressing rule
     // (Truly Issue 6: the stored display name must outrank lead-form names)...
     expect(system?.content).toContain("Known-customer profile");

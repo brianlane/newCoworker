@@ -193,7 +193,13 @@ export function formatFlowAnswerNote(lastFlowMessage: string): string | null {
     `or re-ask the question they just answered. Their message is the text ` +
     `after "[SMS]" below, even when it is only a bare date, time, or ` +
     `single word, that IS their message and their answer; never treat it ` +
-    `as blank.)`
+    // The Kolton clause (Amy 2026-07-31): "anytime 10am-2pm" answered at
+    // 8:03 PM became a promise of contact "today between 10am-2pm", six
+    // hours after that window had ended for the day.
+    `as blank. If the timing they give is a window that has already passed ` +
+    `for today (check the current date/time line), arrange the NEXT day ` +
+    `that window applies and name that day; never promise contact inside a ` +
+    `window that has already ended.)`
   );
 }
 

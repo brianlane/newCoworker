@@ -91,6 +91,31 @@ export const SMS_TIMEZONE_LINE =
   "they share the business's timezone.";
 
 /**
+ * Promised timing must still be ahead (Amy Laidlaw / Kolton Bottolfson,
+ * 2026-07-31): at 8:03 PM, with a correct "Friday, July 31, 8:03 PM MST"
+ * date line in the prompt, the assistant told a lead "someone will reach
+ * out ... between 10 AM and 2 PM Arizona time today" (a window six hours
+ * gone) and told the team the lead "is available today between 10am-2pm
+ * MST" when the lead had said "anytime from 10am-2pm", a recurring daily
+ * window. Donna Robinson's alert the same day hedged "tomorrow (Friday,
+ * July 31 or Saturday, August 1)" sent ON Friday Jul 31. The voice surface
+ * has carried this rule since PR #613's era (system-instruction.ts "never
+ * say today or tomorrow unless the current date line proves it"); SMS had
+ * nothing. Injected on every SMS turn, customer AND staff (staff ask the
+ * assistant to compose outbound customer texts with timing in them).
+ */
+export const SMS_TIME_HONESTY_LINE =
+  "Timing honesty: before naming a day for anything (a follow-up, a call, " +
+  "an appointment, or a team notification you write), check the current " +
+  'date/time line. Never say "today" about a time window that has already ' +
+  "passed for today; name the next day it actually applies, with the " +
+  'weekday. Resolve "tomorrow" from the current date line and name ONE ' +
+  'day, never a hedge like "Friday or Saturday". When someone states ' +
+  'recurring availability ("anytime 10am-2pm"), relay it as recurring ' +
+  '("daily 10am-2pm"), never as a single day. Promising immediate ' +
+  'follow-up ("shortly", "right away") is always fine.';
+
+/**
  * Staff-turn pointer at the notification-settings tool (KYP, Jul 20 2026:
  * James texted "let me know when clients text back" and the assistant
  * PROMISED alerts no feature backed, an empty promise until an operator

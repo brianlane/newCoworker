@@ -1070,7 +1070,7 @@ WORKFLOW_JSON=$(jq -nc \
     },
     {
       name: "notify_team",
-      description: "Alert the business team (dashboard alert + owner notification) when the texter needs something only a human can resolve — e.g. they asked for a call, a booking could not be completed, or a question you cannot answer. Call this BEFORE telling the texter the team will follow up, so the promise is backed by a real notification.",
+      description: "Alert the business team (dashboard alert + owner notification) when the texter needs something only a human can resolve, e.g. they asked for a call, a booking could not be completed, or a question you cannot answer. Call this BEFORE telling the texter the team will follow up, so the promise is backed by a real notification. When the message mentions timing, check the current date/time line first: never write today for a window that has already passed, name the actual weekday instead, and relay recurring availability (like anytime 10am-2pm) as recurring, never as a single day.",
       isWebhook: $toolsAreReal,
       parameters: {
         type: "object",
