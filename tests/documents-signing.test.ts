@@ -44,6 +44,18 @@ const BIZ = "11111111-1111-4111-8111-111111111111";
 const DOC = "22222222-2222-4222-8222-222222222222";
 const NOW = new Date("2026-07-11T12:00:00Z");
 
+/**
+ * The default expiry for a request fixture that is meant to be VALID.
+ *
+ * It has to outrun the real clock, not just NOW: `signDocumentRequest` falls
+ * back to `new Date()` when a caller omits `now`, and one case here does
+ * exactly that on purpose to cover the default. This used to read
+ * "2026-08-01T00:00:00Z", which passed until that instant arrived and then
+ * failed every run, blocking deploys on main. Tests that WANT an expired row
+ * pass their own past date.
+ */
+const NOT_EXPIRED = "2999-01-01T00:00:00Z";
+
 function doc(overrides: Partial<BusinessDocumentRow> = {}): BusinessDocumentRow {
   return {
     id: DOC,
@@ -94,7 +106,7 @@ function requestRow(
     signer_user_agent: null,
     content_sha256: null,
     signed_content_md: null,
-    expires_at: "2026-08-01T00:00:00Z",
+    expires_at: NOT_EXPIRED,
     created_at: "2026-07-01T00:00:00Z",
     ...overrides
   };
@@ -268,7 +280,7 @@ describe("resolveSignatureRequestByToken", () => {
 
   it("resolves a healthy request (default clock)", async () => {
     vi.mocked(getDocumentSignatureRequestByTokenSha).mockResolvedValue(
-      requestRow({ status: "viewed", expires_at: "2999-01-01T00:00:00Z" })
+      requestRow({ status: "viewed", expires_at: NOT_EXPIRED })
     );
     vi.mocked(getBusinessDocument).mockResolvedValue(doc());
     const res = await resolveSignatureRequestByToken("tok");
