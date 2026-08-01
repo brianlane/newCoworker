@@ -2018,6 +2018,21 @@ function sleepStep(
 }
 
 /**
+ * Telnyx message id from a raw send response body (best-effort). Threaded
+ * into sms_outbound_log on EVERY send path: the agent_offer/owner_notify
+ * sends logged no id for months, which blinded debug/trace-sms.ts carrier
+ * verdicts for exactly the "did the agent really get the offer?" questions
+ * that tool exists to answer.
+ */
+function telnyxMessageIdFromBody(body: string): string | null {
+  try {
+    return (JSON.parse(body) as { data?: { id?: string } })?.data?.id ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Durably log a worker-sent SMS so it shows up in the dashboard Text history
  * (which otherwise only sees inbound conversations). Best-effort: a logging
  * failure must never fail a send that already happened.
@@ -5395,12 +5410,7 @@ async function sendSmsStep(
       }
       throw new Error(detail);
     }
-    let messageId: string | null = null;
-    try {
-      messageId = (JSON.parse(send.body) as { data?: { id?: string } })?.data?.id ?? null;
-    } catch {
-      messageId = null;
-    }
+    const messageId = telnyxMessageIdFromBody(send.body);
     appendActionTaken(scope, `texted ${recipientLabel} at ${toE164}`);
     const outboundLogId = await logOutboundSms(supabase, run, {
       to: toE164,
@@ -5558,12 +5568,7 @@ async function sendGroupSmsStep(
       }
       throw new Error(detail);
     }
-    let messageId: string | null = null;
-    try {
-      messageId = (JSON.parse(send.body) as { data?: { id?: string } })?.data?.id ?? null;
-    } catch {
-      messageId = null;
-    }
+    const messageId = telnyxMessageIdFromBody(send.body);
     appendActionTaken(scope, `replied in the group text to ${recipients.length} recipient(s)`);
     // Log one outbound row per recipient AND record a customer interaction for
     // each, mirroring the 1:1 path so every texted number shows up in Text
@@ -6175,7 +6180,8 @@ async function notifyOwnerStep(
       to: forward,
       from: cfg.from || null,
       body: text,
-      source: "owner_notify"
+      source: "owner_notify",
+      telnyxMessageId: telnyxMessageIdFromBody(send.body)
     });
     return { kind: "ok", result: { notified: forward } };
   }
@@ -6292,7 +6298,8 @@ async function notifyLeadOwnerStep(
         to: member.phone,
         from: cfg.from || null,
         body: text,
-        source: "agent_offer"
+        source: "agent_offer",
+        telnyxMessageId: telnyxMessageIdFromBody(send.body)
       });
     }
     appendActionTaken(
@@ -8628,7 +8635,8 @@ async function sendOfferSms(
       to,
       from: cfg.from || null,
       body,
-      source: "agent_offer"
+      source: "agent_offer",
+      telnyxMessageId: telnyxMessageIdFromBody(send.body)
     });
   } catch (e) {
     const { error } = await supabase.rpc("release_sms_outbound_slot", {
@@ -8816,7 +8824,8 @@ async function sendOwnerSms(
     to: forward,
     from: cfg.from || null,
     body,
-    source: "owner_notify"
+    source: "owner_notify",
+    telnyxMessageId: telnyxMessageIdFromBody(send.body)
   });
 }
 

@@ -123,16 +123,28 @@ describe("deliverWhatsApp", () => {
     expect(deps.getConnection).not.toHaveBeenCalled();
   });
 
-  it("skips when WhatsApp is not connected, paused, or the read fails", async () => {
+  it("distinguishes never-connected from an inactive connection; a failing read stays retryable", async () => {
+    // No connection row at all: the channel is not applicable (alert
+    // dispatch records nothing for this one).
     const none = makeDeps({ getConnection: vi.fn(async () => null) });
     expect(await deliverWhatsApp(INPUT, none)).toEqual({ ok: false, reason: "not_connected" });
 
+    // A row EXISTS but the integration is paused or the token is gone:
+    // owner-actionable (reconnect under Integrations), so it gets its own
+    // reason and an honest skip row downstream.
     const paused = makeDeps({
       getConnection: vi.fn(async () => ({ ...CONNECTION, is_active: false }))
     });
     expect(await deliverWhatsApp(INPUT, paused)).toEqual({
       ok: false,
-      reason: "not_connected"
+      reason: "connection_inactive"
+    });
+    const tokenless = makeDeps({
+      getConnection: vi.fn(async () => ({ ...CONNECTION, accessToken: "" }))
+    });
+    expect(await deliverWhatsApp(INPUT, tokenless)).toEqual({
+      ok: false,
+      reason: "connection_inactive"
     });
 
     // Transient infra failures are RETRYABLE send failures, never a

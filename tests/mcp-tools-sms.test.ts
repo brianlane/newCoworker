@@ -291,6 +291,14 @@ describe("send_whatsapp", () => {
 
     vi.mocked(deliverWhatsApp).mockResolvedValue({
       ok: false,
+      reason: "connection_inactive"
+    } as never);
+    await expect(
+      sendWhatsAppTool.handler({ to: "+15550001111", text: "x" }, AUTH)
+    ).rejects.toThrow(/inactive or expired/i);
+
+    vi.mocked(deliverWhatsApp).mockResolvedValue({
+      ok: false,
       reason: "template_not_approved"
     } as never);
     await expect(

@@ -690,6 +690,14 @@ async function dispatch(businessId: string, name: string, args: unknown): Promis
               "WhatsApp is not connected. Point the owner to Integrations to connect WhatsApp Business."
           };
         }
+        if (delivered.reason === "connection_inactive") {
+          return {
+            ok: false,
+            detail: "whatsapp_connection_inactive",
+            message:
+              "The WhatsApp connection is inactive or expired. Point the owner to Integrations to reconnect WhatsApp Business."
+          };
+        }
         if (delivered.reason === "template_not_approved") {
           return {
             ok: false,

@@ -129,6 +129,19 @@ describe("send_whatsapp", () => {
     expect(notConnected.ok).toBe(false);
     expect(notConnected.message).toContain("whatsapp_not_connected");
 
+    const inactive = (await executeActionTool(
+      BIZ,
+      { name: "send_whatsapp", args: { toE164: "+15551234567", body: "x" } },
+      {
+        sendWhatsApp: vi.fn(async () => ({
+          ok: false as const,
+          reason: "connection_inactive" as const
+        }))
+      }
+    )) as { ok: boolean; message?: string };
+    expect(inactive.ok).toBe(false);
+    expect(inactive.message).toContain("whatsapp_connection_inactive");
+
     const windowClosed = (await executeActionTool(
       BIZ,
       { name: "send_whatsapp", args: { toE164: "+15551234567", body: "x" } },

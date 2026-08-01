@@ -80,6 +80,8 @@ function describeReason(payload: Record<string, unknown>): string | null {
       return "Skipped: email service not configured";
     case "telnyx_unconfigured":
       return "Skipped: SMS service not configured";
+    case "connection_inactive":
+      return "Skipped: the WhatsApp connection is inactive; reconnect it under Integrations";
     default:
       return `Skipped: ${reason}`;
   }

@@ -49,13 +49,19 @@ export type DeliverWhatsAppResult =
   | {
       ok: false;
       /**
-       * `not_connected` strictly means "no active WhatsApp integration"
-       * (callers steer owners to the Integrations page on it); transient
-       * infrastructure failures — connection/conversation reads throwing —
-       * surface as `send_failed` so retry paths treat them as retryable.
+       * `not_connected` strictly means "this business NEVER connected
+       * WhatsApp" (no connection row at all): the channel is not applicable,
+       * and alert dispatch records nothing for it. `connection_inactive`
+       * means a connection row EXISTS but its token is gone/revoked or the
+       * integration is toggled off: that one is owner-actionable signal
+       * (reconnect under Integrations) and alert dispatch records an honest
+       * skip row. Transient infrastructure failures (connection/conversation
+       * reads throwing) surface as `send_failed` so retry paths treat them
+       * as retryable.
        */
       reason:
         | "not_connected"
+        | "connection_inactive"
         | "invalid_recipient"
         | "empty_text"
         | "template_not_approved"
@@ -168,8 +174,11 @@ export async function deliverWhatsApp(
     });
     return { ok: false, reason: "send_failed", detail: "connection_read_failed" };
   }
-  if (!connection?.accessToken || !connection.is_active) {
+  if (!connection) {
     return { ok: false, reason: "not_connected" };
+  }
+  if (!connection.accessToken || !connection.is_active) {
+    return { ok: false, reason: "connection_inactive" };
   }
 
   // Window check: an existing conversation whose last inbound message is

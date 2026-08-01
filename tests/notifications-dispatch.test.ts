@@ -775,6 +775,42 @@ describe("notifications/dispatch", () => {
       });
     });
 
+    it("records NOTHING for a never-connected business, a skip row for an inactive connection", async () => {
+      // Never-connected tenants used to accrue a skipped:not_connected row
+      // on EVERY alert forever (Amy's Jul 31 2026 list); the channel is not
+      // applicable, so no row at all.
+      vi.mocked(sendOwnerEmail).mockResolvedValue("email_id" as never);
+      vi.mocked(deliverWhatsApp).mockResolvedValue({
+        ok: false,
+        reason: "not_connected"
+      } as never);
+      let result = await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "s",
+        kind: "urgent_alert"
+      });
+      expect(result.results.find((r) => r.channel === "whatsapp")).toBeUndefined();
+      const channels = vi
+        .mocked(insertNotification)
+        .mock.calls.map((c) => (c[0] as { delivery_channel: string }).delivery_channel);
+      expect(channels).not.toContain("whatsapp");
+
+      // An inactive/expired connection is signal the owner should see.
+      vi.mocked(deliverWhatsApp).mockResolvedValue({
+        ok: false,
+        reason: "connection_inactive"
+      } as never);
+      result = await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "s",
+        kind: "urgent_alert"
+      });
+      expect(result.results.find((r) => r.channel === "whatsapp")).toMatchObject({
+        status: "skipped",
+        reason: "connection_inactive"
+      });
+    });
+
     it("records policy skips as skipped and hard failures as failed", async () => {
       vi.mocked(deliverWhatsApp).mockResolvedValue({
         ok: false,
