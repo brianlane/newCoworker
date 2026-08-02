@@ -43,6 +43,7 @@ import {
   CLASSIFY_UNCLEAR,
   parseClassifyChoice,
   buildNowScope,
+  coerceDialableE164,
   evaluateSmsTrigger,
   evaluateStepCondition,
   extractLeadIdentity,
@@ -3811,13 +3812,12 @@ async function browseActionStep(
   // extraction above, so a phone THIS step just extracted can be the key.
   // Best-effort: a memory write must never fail a browse that already posted.
   const rememberRaw = action.rememberKeyVar ? scope.vars[action.rememberKeyVar] : undefined;
-  // isE164 first so a non-NANP key (a +52 lead) still gets URL memory; the
-  // NANP normalizer only handles loose North-American formatting.
+  // Same country-aware normalization recall_url's key gathering applies
+  // (steps.ts), so store and recall agree on the key: loose digits follow
+  // the tenant's phone country, +52 leads keep their +52 key.
   const rememberKey =
     typeof rememberRaw === "string"
-      ? isE164(rememberRaw.trim())
-        ? rememberRaw.trim()
-        : normalizeNanpToE164(rememberRaw)
+      ? coerceDialableE164(rememberRaw, { defaultCountry: scope.phoneCountry })
       : null;
   if (rememberKey && parsed.finalUrl) {
     const { error: memErr } = await supabase.from("aiflow_url_memory").upsert(

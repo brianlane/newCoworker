@@ -15,7 +15,7 @@
  * the two modules agree.
  */
 
-import { normalizeNanpToE164, type PhoneCountry } from "./ai_flows/engine.ts";
+import { normalizeMxToE164, normalizeNanpToE164, type PhoneCountry } from "./ai_flows/engine.ts";
 
 /**
  * IANA zones whose canonical location is Mexico, including the pre-2010
@@ -52,6 +52,17 @@ export function businessDefaultPhoneCountry(input: {
   const cleaned = (input.phone ?? "").trim().replace(/[^\d+]/g, "");
   if (cleaned.startsWith("+52")) return "MX";
   if (cleaned && normalizeNanpToE164(cleaned)) return "US";
+  // A plus-less 52/521-prefixed row (legacy hand entry): the same shapes lead
+  // sanitization accepts. Gated on the 12/13-digit lengths so a bare
+  // 10-digit phone can never reach the MX normalizer's national arm.
+  const digits = cleaned.replace(/[^\d]/g, "");
+  if (
+    ((digits.length === 12 && digits.startsWith("52")) ||
+      (digits.length === 13 && digits.startsWith("521"))) &&
+    normalizeMxToE164(cleaned)
+  ) {
+    return "MX";
+  }
   const tz = (input.timezone ?? "").trim();
   return MEXICAN_TIMEZONES.has(tz) ? "MX" : "US";
 }

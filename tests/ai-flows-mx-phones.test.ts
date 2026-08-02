@@ -23,6 +23,8 @@ import {
   businessDefaultPhoneCountry,
   MEXICAN_TIMEZONES
 } from "../supabase/functions/_shared/business_country";
+import { planStep } from "../supabase/functions/_shared/ai_flows/steps";
+import type { FlowStep } from "../supabase/functions/_shared/ai_flows/types";
 
 const MX = { defaultCountry: "MX" as const };
 const US = { defaultCountry: "US" as const };
@@ -264,5 +266,66 @@ describe("businessDefaultPhoneCountry", () => {
     for (const tz of MEXICAN_TIMEZONES) {
       expect(businessDefaultPhoneCountry({ timezone: tz })).toBe("MX");
     }
+  });
+
+  it("classifies a plus-less 52/521-prefixed row as MX (legacy hand entry)", () => {
+    expect(businessDefaultPhoneCountry({ phone: "52 55 1234 5678" })).toBe("MX");
+    expect(businessDefaultPhoneCountry({ phone: "5215512345678" })).toBe("MX");
+  });
+
+  it("never reads a bare 10-digit or junk 52-run as MX from the phone alone", () => {
+    expect(businessDefaultPhoneCountry({ phone: "5512345678" })).toBe("US");
+    expect(businessDefaultPhoneCountry({ phone: "52123", timezone: "America/Phoenix" })).toBe(
+      "US"
+    );
+    expect(businessDefaultPhoneCountry({ phone: "520512345678" })).toBe("US");
+  });
+});
+
+describe("send_whatsapp +52 recipients", () => {
+  it("canonicalizes a plus-less legacy 521 digit run resurrected by the wa fallback", () => {
+    const r = planStep(
+      { id: "w", type: "send_whatsapp", to: "5215512345678", body: "hola" } as FlowStep,
+      { vars: {} }
+    );
+    expect(r).toMatchObject({ ok: true, action: { kind: "send_whatsapp", to: "+525512345678" } });
+  });
+
+  it("under the MX default, a bare 10-digit recipient reads as +52", () => {
+    const r = planStep(
+      { id: "w", type: "send_whatsapp", to: "55 1234 5678", body: "hola" } as FlowStep,
+      { vars: {}, phoneCountry: "MX" }
+    );
+    expect(r).toMatchObject({ ok: true, action: { kind: "send_whatsapp", to: "+525512345678" } });
+  });
+});
+
+describe("recall_url keys agree with the +52 store side", () => {
+  const step: FlowStep = { id: "r", type: "recall_url", keyVars: ["k"], saveAs: "u" } as FlowStep;
+
+  it("keys a loose 10-digit var by the tenant's phone country", () => {
+    expect(planStep(step, { vars: { k: "55 1234 5678" }, phoneCountry: "MX" })).toEqual({
+      ok: true,
+      action: { kind: "recall_url", keys: ["+525512345678"], saveAs: "u" }
+    });
+    expect(planStep(step, { vars: { k: "602-555-0126" } })).toEqual({
+      ok: true,
+      action: { kind: "recall_url", keys: ["+16025550126"], saveAs: "u" }
+    });
+  });
+
+  it("keeps +52 participants as +52 keys, canonicalizing the legacy 521 form", () => {
+    const s: FlowStep = {
+      id: "r",
+      type: "recall_url",
+      keyFromTrigger: "participants",
+      saveAs: "u"
+    } as FlowStep;
+    expect(
+      planStep(s, { trigger: { participants: ["+5215512345678", "+16025550126"] } })
+    ).toEqual({
+      ok: true,
+      action: { kind: "recall_url", keys: ["+525512345678", "+16025550126"], saveAs: "u" }
+    });
   });
 });
