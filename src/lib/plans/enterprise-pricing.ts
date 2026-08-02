@@ -30,16 +30,42 @@ export const ENTERPRISE_UNIT_COSTS = {
   /** Blended outbound SMS incl. 10DLC carrier fees (pessimistic bound). */
   smsOutboundCentsPerMessage: 1.59,
   smsInboundCentsPerMessage: 0.63,
-  /** Telnyx inbound + Voice API. */
-  voiceTelnyxCentsPerMinute: 0.55,
+  /**
+   * Telnyx voice all-in per minute. The June 2026 invoice prices a bridged
+   * AI call minute at ~0.89 cents: origination 0.35 + call control 0.2 per
+   * leg + media streaming 0.35 + call recording 0.2 ($0.32 over 36 min).
+   * The pre-Aug-2026 figure of 0.55 missed the invoice-only adjunct lines
+   * (call control, media streaming, recording never appear in
+   * /v2/detail_records; see TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE).
+   */
+  voiceTelnyxCentsPerMinute: 0.9,
   /** Gemini Live realtime audio. */
   voiceGeminiCentsPerMinute: 2.25,
-  /** Telnyx DID rental per number per month. */
+  /** Telnyx DID rental per number per month ($1.00 DID + $0.10 SMS MRC). */
   didMonthlyCents: 110,
   /** Stripe card fee on every charge. */
   stripePercent: 0.029,
   stripeFixedCentsPerCharge: 30
 } as const;
+
+/**
+ * The shared 10DLC campaign's monthly registration fee: one CUSTOMER_CARE
+ * campaign covers the whole fleet today, billed on the 6th (invoice code
+ * 10DLC-CAMPAIGN-FEE-REGULAR-MRC, auto-renewing). Scale this only if more
+ * campaigns are ever registered; it is a platform fixed cost, never
+ * per-tenant.
+ */
+export const TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS = 1000;
+
+/**
+ * Voice line items that exist ONLY on the Telnyx invoice, never in
+ * /v2/detail_records (call control, media streaming, call recording).
+ * Synced `telnyx_cost_daily` actuals therefore understate voice by about
+ * this much per metered minute; views built on actuals add this top-up so
+ * they mirror the invoice. The rate-estimate paths must NOT add it: the
+ * 0.9 cents/min voiceTelnyxCentsPerMinute above already includes it.
+ */
+export const TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE = 0.5;
 
 /** All-in voice cost per minute (Telnyx + Gemini Live). */
 export const VOICE_ALL_IN_CENTS_PER_MINUTE =
