@@ -286,7 +286,11 @@ export function OrderSummaryCard({
       )}
       {isTermPlan && (
         <p className="text-xs text-parchment/45">
-          {t("guaranteeNote", {
+          {/* The refund carve-out matches invoice LINES by the carrier-fee
+              name, so a signup that was never charged the fee has nothing
+              to deduct. Saying otherwise would promise a smaller refund
+              than they actually get. */}
+          {t(mexicanFee ? "guaranteeNoteNoCarrierFee" : "guaranteeNote", {
             monthlyPrice: formatPriceCents(getPeriodPricing(tier, "monthly").monthlyCents)
           })}
         </p>

@@ -347,6 +347,7 @@
       "packQtyIncrease": "Aumentar {label}",
       "termBilledNote": "El término completo de {period} se factura hoy. Después del término, el servicio continúa mes a mes a {renewalPrice} a menos que renueves tu contrato.",
       "guaranteeNote": "Garantía de devolución de 30 días: cancela dentro de 30 días y reembolsamos tu pago del término menos un mes de servicio a la tarifa mensual ({monthlyPrice}) y la tarifa de registro de operador. Los paquetes de uso adicionales no son reembolsables y se excluyen del reembolso.",
+      "guaranteeNoteNoCarrierFee": "Garantía de devolución de 30 días: cancela dentro de 30 días y reembolsamos tu pago del término menos un mes de servicio a la tarifa mensual ({monthlyPrice}). Los paquetes de uso adicionales no son reembolsables y se excluyen del reembolso.",
       "promoDiscount": "Código promocional {code}",
       "promoOngoingMonths": "{code} descuenta {amount} en cada uno de tus primeros {months} meses",
       "promoOngoingForever": "{code} descuenta {amount} cada mes"
