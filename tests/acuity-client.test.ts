@@ -499,7 +499,13 @@ describe("appointment types", () => {
     const inFlight = acuityFetch(CONN, { method: "GET", path: "/me" });
     clearAcuityCaches();
     await Promise.all([inFlight, acuityFetch(CONN, { method: "GET", path: "/me" })]);
-    expect(Date.now() - started).toBeGreaterThanOrEqual(ACUITY_MIN_REQUEST_INTERVAL_MS * 2);
+    // A few ms of tolerance: each of the two serializer sleeps can fire ~1ms
+    // early on a loaded runner (Node timer granularity; flaked at 239 vs 240
+    // on PR #1127's CI). A real serializer reset would show up as a whole
+    // missing 120ms interval, which this floor still fails loudly. The
+    // three-request test above needs no tolerance: it asserts two intervals
+    // against three paid sleeps, a full interval of slack.
+    expect(Date.now() - started).toBeGreaterThanOrEqual(ACUITY_MIN_REQUEST_INTERVAL_MS * 2 - 5);
   });
 
   it("caches the catalog per connection and clears on demand", async () => {
