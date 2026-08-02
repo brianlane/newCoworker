@@ -2,18 +2,18 @@
  * End-user ("data subject") erasure tooling (security review G6).
  *
  * Deletes one person's data across the tenant's content tables, keyed by
- * their phone number (E.164) and/or email — the two identifiers the
+ * their phone number (E.164) and/or email: the two identifiers the
  * platform ever captures for a tenant's customer. Admin-only: the admin
  * route drives this on a verified privacy request (PIPEDA/Law 25 erasure,
  * CCPA delete, etc.) and logs an audit row with a FINGERPRINT of the
- * identifier (never the identifier itself — the audit trail must not
+ * identifier (never the identifier itself: the audit trail must not
  * re-create the PII it documents removing).
  *
  * Residency interplay:
  *   * Central deletes journal normally (they are real content deletes), so
  *     a dual/vps box receives them as replicated 'delete' ops.
  *   * A vps-mode box also holds history central already purged, which the
- *     journal can't reach — so for dual/vps tenants every table is ALSO
+ *     journal can't reach, so for dual/vps tenants every table is ALSO
  *     deleted directly on the box through the data API. The overlap with
  *     journaled deletes is idempotent.
  *   * An unreachable dual/vps box fails the request loudly: reporting
@@ -28,6 +28,7 @@ import { DataApiClient } from "@/lib/residency/client";
 import type { DataApiFilter } from "@/lib/residency/contract";
 import type { ResidencyMovedTable } from "@/lib/residency/tables";
 import { residencyModeFor } from "@/lib/residency/read";
+import { syncVaultToVps, type VaultSyncResult } from "@/lib/vps/sync-vault";
 import { logger } from "@/lib/logger";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
@@ -55,7 +56,7 @@ export type DeletionTableResult = {
 
 export type DeletionResult = {
   businessId: string;
-  /** sha256 of the normalized identifiers — safe for audit logs. */
+  /** sha256 of the normalized identifiers: safe for audit logs. */
   identifierFingerprint: string;
   tables: DeletionTableResult[];
 };
@@ -64,6 +65,12 @@ export type DeletionDeps = {
   client?: SupabaseClient;
   /** Injectable data-api client factory (tests). */
   dataApiFor?: (businessId: string) => Pick<DataApiClient, "select" | "delete">;
+  /**
+   * Injectable memory-graph box re-projection (tests). The box serves the
+   * graph from files (entity notes + graph.jsonl compiled into graph.db)
+   * that only a vault sync rewrites, so graph deletions must trigger one.
+   */
+  syncVault?: (businessId: string) => Promise<VaultSyncResult>;
 };
 
 const E164_RE = /^\+[1-9]\d{7,14}$/;
@@ -98,7 +105,7 @@ export function fingerprintIdentifier(e164: string | null, email: string | null)
  * Escape LIKE/ILIKE metacharacters so an identifier is matched as a LITERAL
  * (case-insensitively), never as a pattern. Without this, an email whose
  * local part contains `_` or `%` (both legal in email addresses) would
- * wildcard-match and erase OTHER people's rows — the exact opposite of a
+ * wildcard-match and erase OTHER people's rows: the exact opposite of a
  * scoped privacy deletion.
  */
 export function escapeLikeLiteral(value: string): string {
@@ -108,6 +115,10 @@ export function escapeLikeLiteral(value: string): string {
 /* c8 ignore next 2 -- production default; tests inject dataApiFor */
 const defaultDataApiFor = (businessId: string): Pick<DataApiClient, "select" | "delete"> =>
   new DataApiClient(businessId);
+
+/* c8 ignore next 2 -- production default; tests inject syncVault */
+const defaultSyncVault = (businessId: string): Promise<VaultSyncResult> =>
+  syncVaultToVps(businessId);
 
 /**
  * Erase one end user's rows across the tenant's content tables (central +
@@ -123,6 +134,7 @@ export async function deleteEndUserData(
   const emailPattern = email === null ? null : escapeLikeLiteral(email);
   const db = deps.client ?? (await createSupabaseServiceClient());
   const dataApiFor = deps.dataApiFor ?? defaultDataApiFor;
+  const syncVault = deps.syncVault ?? defaultSyncVault;
 
   const mode = await residencyModeFor(businessId, db);
   const boxed = mode === "dual" || mode === "vps";
@@ -155,7 +167,7 @@ export async function deleteEndUserData(
   // reaches the box copy; a direct box delete on the primary identifiers
   // still runs for vps tenants as belt-and-braces.
   // Every number linked to this person (primary + merge aliases), captured
-  // BEFORE the contact rows are deleted — ai_reply_reasoning below is keyed
+  // BEFORE the contact rows are deleted: ai_reply_reasoning below is keyed
   // by whichever number the person texted from, which may be an alias, and
   // an EMAIL-ONLY request still identifies phone-keyed reasoning through the
   // contact row's numbers.
@@ -237,7 +249,7 @@ export async function deleteEndUserData(
         // Alias matches: the data-api filter grammar has no array-contains
         // op, and the journaled central delete can't cover a RETRY (central
         // row already gone, box copy still keyed by alias). Page the box's
-        // contacts and match alias_e164s client-side — collect ids first,
+        // contacts and match alias_e164s client-side: collect ids first,
         // delete after, so deletions never disturb the pagination.
         const aliasIds: string[] = [];
         const PAGE = 500;
@@ -394,6 +406,13 @@ export async function deleteEndUserData(
   }
 
   // ── email-keyed content ─────────────────────────────────────────────────
+  // The delete RETURNING payload carries each row's `attachments` jsonb,
+  // whose storage_path entries are the only pointers to the bytes in the
+  // email-attachments bucket. Collect them from the deleted rows and remove
+  // the objects after: row-first ordering, warn-not-throw on remove failure
+  // (an orphaned object with no row is invisible garbage; the reverse is a
+  // live row pointing at nothing). Same rationale as documents/cleanup.ts.
+  // The bucket is central Supabase Storage, so there is no box equivalent.
   if (email) {
     const central = { sent: 0, received: 0 };
     const [to, from] = await Promise.all([
@@ -402,13 +421,13 @@ export async function deleteEndUserData(
         .delete()
         .eq("business_id", businessId)
         .ilike("to_email", emailPattern!)
-        .select("id"),
+        .select("id, attachments"),
       db
         .from("email_log")
         .delete()
         .eq("business_id", businessId)
         .ilike("from_email", emailPattern!)
-        .select("id")
+        .select("id, attachments")
     ]);
     if (to.error) throw new EndUserDeletionError(`email_log (to): ${to.error.message}`);
     if (from.error) throw new EndUserDeletionError(`email_log (from): ${from.error.message}`);
@@ -421,11 +440,31 @@ export async function deleteEndUserData(
         (await boxDelete("email_log", [{ column: "from_email", op: "ilike", value: emailPattern! }]));
     }
     results.push({ table: "email_log", central: central.sent + central.received, box });
+
+    const paths: string[] = [];
+    for (const rows of [to.data, from.data]) {
+      for (const row of (Array.isArray(rows) ? rows : []) as Array<{ attachments?: unknown }>) {
+        for (const att of Array.isArray(row.attachments) ? row.attachments : []) {
+          const p = (att as { storage_path?: unknown }).storage_path;
+          if (typeof p === "string" && p) paths.push(p);
+        }
+      }
+    }
+    if (paths.length > 0) {
+      const { error: removeError } = await db.storage.from("email-attachments").remove(paths);
+      if (removeError) {
+        logger.warn("deleteEndUserData: email-attachments storage remove failed", {
+          businessId,
+          objectCount: paths.length,
+          error: removeError.message
+        });
+      }
+    }
   }
 
   // ── business_document_shares (document links sent to the person) ────────
   // `shared_with` stores the recipient identifier (phone or email) the link
-  // was delivered to — PII. Deleting the row also kills the live link (the
+  // was delivered to: PII. Deleting the row also kills the live link (the
   // download route 404s on a missing share), which is the correct erasure
   // semantic. Central-only table; spans every linked number like
   // ai_reply_reasoning below.
@@ -458,7 +497,7 @@ export async function deleteEndUserData(
   // Unsigned/void requests are plain PII rows → deleted. SIGNED requests are
   // standalone legal evidence (ESIGN audit record): the signer identifiers
   // are REDACTED but the signed fact, timestamp, and content fingerprint
-  // stay — the same evidence-preserving philosophy as the erasure audit
+  // stay: the same evidence-preserving philosophy as the erasure audit
   // trail itself. Central-only table.
   {
     let central = 0;
@@ -519,7 +558,7 @@ export async function deleteEndUserData(
 
   // ── ai_reply_reasoning (per-reply AI decision records; central-only) ────
   // Keyed by whichever number the person texted from, so the delete spans
-  // every linked number captured pre-delete — the e164 request's primary +
+  // every linked number captured pre-delete: the e164 request's primary +
   // merge aliases, AND the numbers an email-only request's contact rows
   // carried. Runs on either identifier axis.
   if (linkedNumbers.size > 0) {
@@ -552,7 +591,7 @@ export async function deleteEndUserData(
   // Free-text question/answer/context columns can carry the person's phone
   // or email verbatim (a caller stating their number, an answer echoing an
   // email). Substring-ILIKE across the text columns on every identifier
-  // axis — deliberately broad: over-deleting comparison telemetry is always
+  // axis, deliberately broad: over-deleting comparison telemetry is always
   // preferable to retaining an erased person's data.
   {
     let central = 0;
@@ -571,6 +610,607 @@ export async function deleteEndUserData(
       }
     }
     results.push({ table: "kg_retrieval_events", central, box: null });
+  }
+
+  // ── Matching helpers for stores holding RAW phone spellings ─────────────
+  // webchat visitor_phone, messenger contact_phone, memory_entities phones,
+  // coworker_logs payload values, and outreach phone store whatever the
+  // person or tool typed ("(555) 123-4567"), so E.164 equality would miss
+  // them. Candidates compare by digit string: exact digits, or last-10
+  // digits (NANP local forms drop the +1 country code).
+  const digitsOf = (value: string): string => value.replace(/\D+/g, "");
+  const linkedDigitForms = new Set<string>();
+  for (const n of linkedNumbers) {
+    const d = digitsOf(n);
+    linkedDigitForms.add(d);
+    if (d.length >= 10) linkedDigitForms.add(d.slice(-10));
+  }
+  const phoneMatches = (raw: unknown): boolean => {
+    if (typeof raw !== "string") return false;
+    const d = digitsOf(raw);
+    if (d.length < 7) return false;
+    return linkedDigitForms.has(d) || (d.length >= 10 && linkedDigitForms.has(d.slice(-10)));
+  };
+  const emailMatches = (raw: unknown): boolean =>
+    email !== null && typeof raw === "string" && raw.trim().toLowerCase() === email;
+  // Free-form jsonb (lead form answers, AiFlow run context): walk every
+  // value; a string matches when it contains the email or a linked digit
+  // sequence. Deliberately broad, same philosophy as the ledger scrub above.
+  const jsonValueMatches = (value: unknown): boolean => {
+    if (typeof value === "number") return jsonValueMatches(String(value));
+    if (typeof value === "string") {
+      if (email !== null && value.toLowerCase().includes(email)) return true;
+      const d = digitsOf(value);
+      if (d.length < 7) return false;
+      for (const form of linkedDigitForms) {
+        if (form.length >= 7 && d.includes(form)) return true;
+      }
+      return false;
+    }
+    if (Array.isArray(value)) return value.some(jsonValueMatches);
+    if (value !== null && typeof value === "object") {
+      return Object.values(value as Record<string, unknown>).some(jsonValueMatches);
+    }
+    return false;
+  };
+
+  /**
+   * Page a central table ordered by id, filter client-side, return matching
+   * ids. Ids are collected first and deleted by the caller AFTER the scan,
+   * so deletions never disturb the pagination (same pattern as the box
+   * contacts alias scan above).
+   */
+  const pageMatchIds = async (
+    label: string,
+    fetchPage: (
+      offset: number,
+      limit: number
+    ) => PromiseLike<{ data: unknown; error: { message: string } | null }>,
+    matches: (row: Record<string, unknown>) => boolean
+  ): Promise<string[]> => {
+    const ids: string[] = [];
+    const PAGE = 500;
+    for (let offset = 0; ; offset += PAGE) {
+      const { data, error } = await fetchPage(offset, PAGE);
+      if (error) throw new EndUserDeletionError(`${label} (scan): ${error.message}`);
+      const rows = (Array.isArray(data) ? data : []) as Array<Record<string, unknown>>;
+      for (const row of rows) {
+        if (matches(row)) ids.push(String(row.id));
+      }
+      if (rows.length < PAGE) break;
+    }
+    return ids;
+  };
+
+  // ── sms_inbound_jobs (the canonical SMS log) ────────────────────────────
+  // Inbound texts and cached assistant replies. Modern rows carry
+  // customer_e164; legacy rows only have the Telnyx envelope, matched via
+  // the payload's sender path. A legacy row whose `from` is the bare string
+  // variant is unreachable by column filter and is accepted as residual.
+  if (linkedNumbers.size > 0) {
+    const numbers = [...linkedNumbers];
+    let central = 0;
+    {
+      const { data, error } = await db
+        .from("sms_inbound_jobs")
+        .delete()
+        .eq("business_id", businessId)
+        .in("customer_e164", numbers)
+        .select("id");
+      if (error) throw new EndUserDeletionError(`sms_inbound_jobs (customer_e164): ${error.message}`);
+      central += count(data);
+    }
+    {
+      const { data, error } = await db
+        .from("sms_inbound_jobs")
+        .delete()
+        .eq("business_id", businessId)
+        .in("payload->data->payload->from->>phone_number", numbers)
+        .select("id");
+      if (error) throw new EndUserDeletionError(`sms_inbound_jobs (payload): ${error.message}`);
+      central += count(data);
+    }
+    results.push({ table: "sms_inbound_jobs", central, box: null });
+  }
+
+  // ── missed_call_autotexts (auto-text ledger keyed by caller) ────────────
+  if (linkedNumbers.size > 0) {
+    const { data, error } = await db
+      .from("missed_call_autotexts")
+      .delete()
+      .eq("business_id", businessId)
+      .in("caller_e164", [...linkedNumbers])
+      .select("id");
+    if (error) throw new EndUserDeletionError(`missed_call_autotexts: ${error.message}`);
+    results.push({ table: "missed_call_autotexts", central: count(data), box: null });
+  }
+
+  // ── meta_capi_events (pending conversion uploads about the lead) ────────
+  // Dropping queued rows also stops future hashed-identifier uploads to
+  // Meta for the erased person.
+  if (linkedNumbers.size > 0) {
+    const { data, error } = await db
+      .from("meta_capi_events")
+      .delete()
+      .eq("business_id", businessId)
+      .in("contact_e164", [...linkedNumbers])
+      .select("id");
+    if (error) throw new EndUserDeletionError(`meta_capi_events: ${error.message}`);
+    results.push({ table: "meta_capi_events", central: count(data), box: null });
+  }
+
+  // ── voice_handoff_sessions (call-chain state + free-text caller brief) ──
+  // The context jsonb can hold up to 2000 chars about the caller
+  // (ai_takeover.context_note). PK is call_control_id, not id.
+  if (linkedNumbers.size > 0) {
+    const numbers = [...linkedNumbers];
+    let central = 0;
+    {
+      const { data, error } = await db
+        .from("voice_handoff_sessions")
+        .delete()
+        .eq("business_id", businessId)
+        .in("from_e164", numbers)
+        .select("call_control_id");
+      if (error) throw new EndUserDeletionError(`voice_handoff_sessions (from): ${error.message}`);
+      central += count(data);
+    }
+    {
+      const { data, error } = await db
+        .from("voice_handoff_sessions")
+        .delete()
+        .eq("business_id", businessId)
+        .in("chain_from_e164", numbers)
+        .select("call_control_id");
+      if (error) throw new EndUserDeletionError(`voice_handoff_sessions (chain): ${error.message}`);
+      central += count(data);
+    }
+    results.push({ table: "voice_handoff_sessions", central, box: null });
+  }
+
+  // ── contact_overrides (owner-set display names keyed by number) ─────────
+  if (linkedNumbers.size > 0) {
+    const { data, error } = await db
+      .from("contact_overrides")
+      .delete()
+      .eq("business_id", businessId)
+      .in("e164", [...linkedNumbers])
+      .select("e164");
+    if (error) throw new EndUserDeletionError(`contact_overrides: ${error.message}`);
+    results.push({ table: "contact_overrides", central: count(data), box: null });
+  }
+
+  // ── webchat_sessions (cascades webchat_messages + webchat_jobs) ─────────
+  // visitor_phone is stored as typed, so the match is a paged client-side
+  // digit comparison; deleting the session cascades the transcript and the
+  // job rows (both FK on delete cascade).
+  {
+    const ids = await pageMatchIds(
+      "webchat_sessions",
+      (offset, limit) =>
+        db
+          .from("webchat_sessions")
+          .select("id, visitor_phone, visitor_email")
+          .eq("business_id", businessId)
+          .order("id", { ascending: true })
+          .range(offset, offset + limit - 1),
+      (row) => phoneMatches(row.visitor_phone) || emailMatches(row.visitor_email)
+    );
+    let central = 0;
+    if (ids.length > 0) {
+      const { data, error } = await db
+        .from("webchat_sessions")
+        .delete()
+        .eq("business_id", businessId)
+        .in("id", ids)
+        .select("id");
+      if (error) throw new EndUserDeletionError(`webchat_sessions: ${error.message}`);
+      central = count(data);
+    }
+    results.push({ table: "webchat_sessions", central, box: null });
+  }
+
+  // ── messenger_conversations (cascades messages + jobs; covers WhatsApp) ─
+  // WhatsApp reuses these tables with platform 'whatsapp' and psid set to
+  // the customer's wa_id: their phone digits with no plus. Messenger and
+  // Instagram psids are opaque page-scoped ids and never match a phone.
+  // There is no email column; an email-only request reaches these rows only
+  // through the linked numbers captured from the contact.
+  if (linkedNumbers.size > 0) {
+    const waIds = new Set([...linkedNumbers].map((n) => digitsOf(n)));
+    const ids = await pageMatchIds(
+      "messenger_conversations",
+      (offset, limit) =>
+        db
+          .from("messenger_conversations")
+          .select("id, platform, psid, contact_phone")
+          .eq("business_id", businessId)
+          .order("id", { ascending: true })
+          .range(offset, offset + limit - 1),
+      (row) =>
+        phoneMatches(row.contact_phone) ||
+        (row.platform === "whatsapp" && typeof row.psid === "string" && waIds.has(row.psid))
+    );
+    let central = 0;
+    if (ids.length > 0) {
+      const { data, error } = await db
+        .from("messenger_conversations")
+        .delete()
+        .eq("business_id", businessId)
+        .in("id", ids)
+        .select("id");
+      if (error) throw new EndUserDeletionError(`messenger_conversations: ${error.message}`);
+      central = count(data);
+    }
+    results.push({ table: "messenger_conversations", central, box: null });
+  }
+
+  // ── memory_entities (cascades memory_facts as subject AND object) ───────
+  // The graph's phones/emails arrays hold raw extracted spellings, so the
+  // match is a paged client-side scan; customer_e164 and attributed_to are
+  // exact identifier columns.
+  let graphCentral = 0;
+  {
+    const ids = await pageMatchIds(
+      "memory_entities",
+      (offset, limit) =>
+        db
+          .from("memory_entities")
+          .select("id, phones, emails, customer_e164, attributed_to")
+          .eq("business_id", businessId)
+          .order("id", { ascending: true })
+          .range(offset, offset + limit - 1),
+      (row) =>
+        (Array.isArray(row.phones) && row.phones.some(phoneMatches)) ||
+        (Array.isArray(row.emails) && row.emails.some(emailMatches)) ||
+        (typeof row.customer_e164 === "string" && linkedNumbers.has(row.customer_e164)) ||
+        phoneMatches(row.attributed_to) ||
+        emailMatches(row.attributed_to)
+    );
+    let central = 0;
+    if (ids.length > 0) {
+      const { data, error } = await db
+        .from("memory_entities")
+        .delete()
+        .eq("business_id", businessId)
+        .in("id", ids)
+        .select("id");
+      if (error) throw new EndUserDeletionError(`memory_entities: ${error.message}`);
+      central = count(data);
+    }
+    graphCentral += central;
+    results.push({ table: "memory_entities", central, box: null });
+  }
+
+  // ── memory_facts (residual scrub beyond the entity cascade) ─────────────
+  // Facts whose subject or object entity was just deleted are already gone
+  // via FK cascade. What remains: facts ATTRIBUTED to the person (their
+  // claims about other entities survive the entity delete), and facts whose
+  // literal object value or source bullet carries the identifier verbatim.
+  {
+    let central = 0;
+    {
+      const attributedTo = [...linkedNumbers, ...(email === null ? [] : [email])];
+      const { data, error } = await db
+        .from("memory_facts")
+        .delete()
+        .eq("business_id", businessId)
+        .in("attributed_to", attributedTo)
+        .select("id");
+      if (error) throw new EndUserDeletionError(`memory_facts: ${error.message}`);
+      central += count(data);
+    }
+    const patterns = [...linkedNumbers].map((n) => `%${escapeLikeLiteral(n)}%`);
+    if (emailPattern) patterns.push(`%${emailPattern}%`);
+    for (const pattern of patterns) {
+      for (const column of ["source_text", "object_value"]) {
+        const { data, error } = await db
+          .from("memory_facts")
+          .delete()
+          .eq("business_id", businessId)
+          .ilike(column, pattern)
+          .select("id");
+        if (error) throw new EndUserDeletionError(`memory_facts: ${error.message}`);
+        central += count(data);
+      }
+    }
+    graphCentral += central;
+    results.push({ table: "memory_facts", central, box: null });
+  }
+
+  // ── memory graph box re-projection ──────────────────────────────────────
+  // The box serves the graph from projected files (entity notes plus
+  // graph.jsonl compiled into graph.db) and nothing pushes graph deletions
+  // on its own, so without an explicit re-sync the box would keep serving
+  // the erased person's notes indefinitely. Re-project now and fail LOUDLY
+  // on an unreachable box, exactly like box table deletes: reporting
+  // "deleted" while a box copy survives is a false compliance attestation.
+  // A tenant with no box assigned has no projection to wipe; that reason is
+  // the one acceptable non-ok result.
+  if (graphCentral > 0) {
+    const sync = await syncVault(businessId);
+    if (!sync.ok && sync.reason !== "no_vps_assigned") {
+      throw new EndUserDeletionError(
+        `memory graph box re-sync failed: ${sync.reason}${sync.detail ? ` (${sync.detail})` : ""}`
+      );
+    }
+  }
+
+  // ── coworker_logs (lead captures inside log_payload) ────────────────────
+  // No identifier column exists: person data lives in log_payload under
+  // per-writer key vocabularies (webchat: visitorPhone/visitorEmail, the
+  // messenger channels: leadPhone/leadEmail, voice tools: callerPhone/
+  // callerEmail), with phones stored as typed. Page the capture-bearing
+  // task types and match client-side. The erasure audit rows (task_type
+  // 'data_flow') sit outside the paged set by construction.
+  {
+    const LOG_TASK_TYPES = ["webchat", "messenger", "instagram", "whatsapp", "call"];
+    const PHONE_KEYS = ["visitorPhone", "leadPhone", "callerPhone"];
+    const EMAIL_KEYS = ["visitorEmail", "leadEmail", "callerEmail"];
+    const ids = await pageMatchIds(
+      "coworker_logs",
+      (offset, limit) =>
+        db
+          .from("coworker_logs")
+          .select("id, log_payload")
+          .eq("business_id", businessId)
+          .in("task_type", LOG_TASK_TYPES)
+          .order("id", { ascending: true })
+          .range(offset, offset + limit - 1),
+      (row) => {
+        const payload = (row.log_payload ?? {}) as Record<string, unknown>;
+        return (
+          PHONE_KEYS.some((k) => phoneMatches(payload[k])) ||
+          EMAIL_KEYS.some((k) => emailMatches(payload[k]))
+        );
+      }
+    );
+    let central = 0;
+    if (ids.length > 0) {
+      const { data, error } = await db
+        .from("coworker_logs")
+        .delete()
+        .eq("business_id", businessId)
+        .in("id", ids)
+        .select("id");
+      if (error) throw new EndUserDeletionError(`coworker_logs: ${error.message}`);
+      central = count(data);
+    }
+    results.push({ table: "coworker_logs", central, box: null });
+  }
+
+  // ── ai_flow_runs (cascades ai_flow_run_steps) ───────────────────────────
+  // Run context accumulates the trigger payload and every extracted
+  // variable (lead phone, email, names), so runs about the person are
+  // content about them; identifiers can sit under arbitrary variable names,
+  // hence the stringified-context walk. Steps cascade on run delete.
+  {
+    const ids = await pageMatchIds(
+      "ai_flow_runs",
+      (offset, limit) =>
+        db
+          .from("ai_flow_runs")
+          .select("id, context")
+          .eq("business_id", businessId)
+          .order("id", { ascending: true })
+          .range(offset, offset + limit - 1),
+      (row) => jsonValueMatches(row.context)
+    );
+    let central = 0;
+    if (ids.length > 0) {
+      const { data, error } = await db
+        .from("ai_flow_runs")
+        .delete()
+        .eq("business_id", businessId)
+        .in("id", ids)
+        .select("id");
+      if (error) throw new EndUserDeletionError(`ai_flow_runs: ${error.message}`);
+      central = count(data);
+    }
+    results.push({ table: "ai_flow_runs", central, box: null });
+  }
+
+  // ── lead_submissions (webhook lead events) ──────────────────────────────
+  // Indexed deletes on the extracted identifiers first, then a paged
+  // residual scan of the raw fields jsonb: extraction is best-effort, and a
+  // form whose phone key was not recognized leaves the number only inside
+  // `fields` under an arbitrary key.
+  {
+    let central = 0;
+    if (linkedNumbers.size > 0) {
+      const { data, error } = await db
+        .from("lead_submissions")
+        .delete()
+        .eq("business_id", businessId)
+        .in("phone_e164", [...linkedNumbers])
+        .select("id");
+      if (error) throw new EndUserDeletionError(`lead_submissions (phone): ${error.message}`);
+      central += count(data);
+    }
+    if (email) {
+      const { data, error } = await db
+        .from("lead_submissions")
+        .delete()
+        .eq("business_id", businessId)
+        .ilike("email", emailPattern!)
+        .select("id");
+      if (error) throw new EndUserDeletionError(`lead_submissions (email): ${error.message}`);
+      central += count(data);
+    }
+    const ids = await pageMatchIds(
+      "lead_submissions",
+      (offset, limit) =>
+        db
+          .from("lead_submissions")
+          .select("id, fields")
+          .eq("business_id", businessId)
+          .order("id", { ascending: true })
+          .range(offset, offset + limit - 1),
+      (row) => jsonValueMatches(row.fields)
+    );
+    if (ids.length > 0) {
+      const { data, error } = await db
+        .from("lead_submissions")
+        .delete()
+        .eq("business_id", businessId)
+        .in("id", ids)
+        .select("id");
+      if (error) throw new EndUserDeletionError(`lead_submissions (residual): ${error.message}`);
+      central += count(data);
+    }
+    results.push({ table: "lead_submissions", central, box: null });
+  }
+
+  // ── booking_waitlist (queued slot offers keyed to the person) ───────────
+  {
+    let central = 0;
+    if (linkedNumbers.size > 0) {
+      const { data, error } = await db
+        .from("booking_waitlist")
+        .delete()
+        .eq("business_id", businessId)
+        .in("phone", [...linkedNumbers])
+        .select("id");
+      if (error) throw new EndUserDeletionError(`booking_waitlist (phone): ${error.message}`);
+      central += count(data);
+    }
+    if (email) {
+      const { data, error } = await db
+        .from("booking_waitlist")
+        .delete()
+        .eq("business_id", businessId)
+        .ilike("email", emailPattern!)
+        .select("id");
+      if (error) throw new EndUserDeletionError(`booking_waitlist (email): ${error.message}`);
+      central += count(data);
+    }
+    results.push({ table: "booking_waitlist", central, box: null });
+  }
+
+  // ── calendar_booking_dedupe (attendee idempotency ledger) ───────────────
+  // attendee_key is phone when known, else email, else name; attendee_email
+  // rides the reminder columns. Name-keyed rows are unreachable by
+  // identifier and accepted as residual.
+  {
+    let central = 0;
+    if (linkedNumbers.size > 0) {
+      const { data, error } = await db
+        .from("calendar_booking_dedupe")
+        .delete()
+        .eq("business_id", businessId)
+        .in("attendee_key", [...linkedNumbers])
+        .select("id");
+      if (error) throw new EndUserDeletionError(`calendar_booking_dedupe (key): ${error.message}`);
+      central += count(data);
+    }
+    if (email) {
+      const byKey = await db
+        .from("calendar_booking_dedupe")
+        .delete()
+        .eq("business_id", businessId)
+        .ilike("attendee_key", emailPattern!)
+        .select("id");
+      if (byKey.error) {
+        throw new EndUserDeletionError(`calendar_booking_dedupe (key): ${byKey.error.message}`);
+      }
+      central += count(byKey.data);
+      const byEmail = await db
+        .from("calendar_booking_dedupe")
+        .delete()
+        .eq("business_id", businessId)
+        .ilike("attendee_email", emailPattern!)
+        .select("id");
+      if (byEmail.error) {
+        throw new EndUserDeletionError(`calendar_booking_dedupe (email): ${byEmail.error.message}`);
+      }
+      central += count(byEmail.data);
+    }
+    results.push({ table: "calendar_booking_dedupe", central, box: null });
+  }
+
+  // ── email_coworker_threads (AI mailbox thread map) ──────────────────────
+  // One row per correspondent thread; the row exists to describe the
+  // correspondent, so it is deleted outright. email_coworker_seen is a
+  // message-id dedupe set with no person columns and is exempt.
+  if (email) {
+    const { data, error } = await db
+      .from("email_coworker_threads")
+      .delete()
+      .eq("business_id", businessId)
+      .ilike("correspondent_email", emailPattern!)
+      .select("id");
+    if (error) throw new EndUserDeletionError(`email_coworker_threads: ${error.message}`);
+    results.push({ table: "email_coworker_threads", central: count(data), box: null });
+  }
+
+  // ── email_campaign_recipients (campaign send snapshot rows) ─────────────
+  if (email) {
+    const { data, error } = await db
+      .from("email_campaign_recipients")
+      .delete()
+      .eq("business_id", businessId)
+      .ilike("email", emailPattern!)
+      .select("id");
+    if (error) throw new EndUserDeletionError(`email_campaign_recipients: ${error.message}`);
+    results.push({ table: "email_campaign_recipients", central: count(data), box: null });
+  }
+
+  // ── outreach_prospects (REDACT, never delete: suppression must survive) ─
+  // The row is the guarantee nobody is cold-emailed twice: any row for a
+  // domain keeps that domain out of future discovery, so deleting it would
+  // UN-suppress the person. Strip the PII, keep the domain and the
+  // unsubscribed status; the same evidence-preserving shape as the signed
+  // signature redaction above. Email matches use the escaped literal
+  // (the partial unique index is on lower(email), and nulling the address
+  // is safe with respect to it).
+  {
+    const redaction = {
+      business_name: "",
+      email: null,
+      phone: null,
+      website: null,
+      findings: [],
+      pitch_subject: null,
+      pitch_body: null,
+      contact_id: null,
+      status: "unsubscribed",
+      status_detail: "privacy_erasure"
+    };
+    let central = 0;
+    if (email) {
+      const { data, error } = await db
+        .from("outreach_prospects")
+        .update(redaction)
+        .eq("business_id", businessId)
+        .ilike("email", emailPattern!)
+        .select("id");
+      if (error) throw new EndUserDeletionError(`outreach_prospects (email): ${error.message}`);
+      central += count(data);
+    }
+    if (linkedNumbers.size > 0) {
+      const ids = await pageMatchIds(
+        "outreach_prospects",
+        (offset, limit) =>
+          db
+            .from("outreach_prospects")
+            .select("id, phone")
+            .eq("business_id", businessId)
+            .order("id", { ascending: true })
+            .range(offset, offset + limit - 1),
+        (row) => phoneMatches(row.phone)
+      );
+      if (ids.length > 0) {
+        const { data, error } = await db
+          .from("outreach_prospects")
+          .update(redaction)
+          .eq("business_id", businessId)
+          .in("id", ids)
+          .select("id");
+        if (error) throw new EndUserDeletionError(`outreach_prospects (phone): ${error.message}`);
+        central += count(data);
+      }
+    }
+    results.push({ table: "outreach_prospects", central, box: null });
   }
 
   const identifierFingerprint = fingerprintIdentifier(e164, email);

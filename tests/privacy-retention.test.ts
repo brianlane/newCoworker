@@ -13,6 +13,7 @@ vi.mock("@/lib/logger", () => ({
 import { pruneExpiredContent } from "@/lib/privacy/retention";
 import { residencyModeFor } from "@/lib/residency/read";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { logger } from "@/lib/logger";
 
 const BIZ = "biz-1";
 const NOW = new Date("2026-07-10T00:00:00.000Z");
@@ -30,7 +31,14 @@ const PRUNED_TABLES = [
   "business_document_shares",
   "document_signature_requests",
   "sms_links",
-  "sms_owner_reply_prompts"
+  "sms_owner_reply_prompts",
+  "webchat_sessions",
+  "messenger_messages",
+  "sms_inbound_jobs",
+  "lead_submissions",
+  "booking_waitlist",
+  "calendar_booking_dedupe",
+  "voice_handoff_sessions"
 ] as const;
 
 /** Central-only tables (not residency-moved): pruned with box: null. */
@@ -38,7 +46,14 @@ const CENTRAL_ONLY_TABLES = new Set<string>([
   "ai_reply_reasoning",
   "business_document_shares",
   "document_signature_requests",
-  "sms_links"
+  "sms_links",
+  "webchat_sessions",
+  "messenger_messages",
+  "sms_inbound_jobs",
+  "lead_submissions",
+  "booking_waitlist",
+  "calendar_booking_dedupe",
+  "voice_handoff_sessions"
 ]);
 
 /** The subset that also lives on a residency box. */
@@ -50,7 +65,10 @@ type TableResult = { data: unknown; error: { message: string } | null };
  * Chainable central-db stub: every builder method returns the chain and
  * `.select()` resolves with the table's configured result.
  */
-function makeCentralDb(perTable: Partial<Record<string, TableResult>> = {}) {
+function makeCentralDb(
+  perTable: Partial<Record<string, TableResult>> = {},
+  storageRemove = vi.fn().mockResolvedValue({ error: null })
+) {
   const from = vi.fn((table: string) => {
     const result = perTable[table] ?? { data: [], error: null };
     const chain: Record<string, unknown> = {};
@@ -60,7 +78,7 @@ function makeCentralDb(perTable: Partial<Record<string, TableResult>> = {}) {
     chain.select = vi.fn().mockResolvedValue(result);
     return chain;
   });
-  return { from };
+  return { from, storage: { from: vi.fn(() => ({ remove: storageRemove })) }, storageRemove };
 }
 
 function makeApi(overrides: Partial<{ select: unknown; delete: unknown }> = {}) {
@@ -92,8 +110,66 @@ describe("pruneExpiredContent — central-only tenants", () => {
     expect(res.tables.every((t) => t.box === null)).toBe(true);
     expect(res.tables.find((t) => t.table === "email_log")?.central).toBe(2);
     expect(res.tables.find((t) => t.table === "notifications")?.central).toBe(0);
-    // 11 central deletes, no data-api construction.
-    expect(db.from).toHaveBeenCalledTimes(11);
+    // 18 central deletes, no data-api construction.
+    expect(db.from).toHaveBeenCalledTimes(18);
+  });
+
+  it("removes attachment objects for pruned email rows, tolerating malformed shapes", async () => {
+    const db = makeCentralDb({
+      email_log: {
+        data: [
+          {
+            id: "a",
+            attachments: [
+              { storage_path: "inbound/m1/0-file.pdf" },
+              { storage_path: "" },
+              { storage_path: 7 },
+              "junk"
+            ]
+          },
+          { id: "b", attachments: "not-an-array" },
+          { id: "c" }
+        ],
+        error: null
+      }
+    });
+    await pruneExpiredContent(BIZ, 90, { client: db as never, now: () => NOW });
+    expect(db.storage.from).toHaveBeenCalledWith("email-attachments");
+    expect(db.storageRemove).toHaveBeenCalledWith(["inbound/m1/0-file.pdf"]);
+  });
+
+  it("warns but does not throw when the attachment object removal fails", async () => {
+    const storageRemove = vi.fn().mockResolvedValue({ error: { message: "bucket sad" } });
+    const db = makeCentralDb(
+      {
+        email_log: {
+          data: [{ id: "a", attachments: [{ storage_path: "inbound/m1/0-file.pdf" }] }],
+          error: null
+        }
+      },
+      storageRemove
+    );
+    const res = await pruneExpiredContent(BIZ, 90, { client: db as never, now: () => NOW });
+    expect(res.tables.find((t) => t.table === "email_log")?.central).toBe(1);
+    expect(vi.mocked(logger.warn)).toHaveBeenCalledWith(
+      "pruneExpiredContent: email-attachments storage remove failed",
+      expect.objectContaining({ businessId: BIZ, objectCount: 1, error: "bucket sad" })
+    );
+  });
+
+  it("skips the storage round trip when no pruned email row had attachments", async () => {
+    const db = makeCentralDb({
+      email_log: { data: [{ id: "a", attachments: [] }], error: null }
+    });
+    await pruneExpiredContent(BIZ, 90, { client: db as never, now: () => NOW });
+    expect(db.storage.from).not.toHaveBeenCalled();
+  });
+
+  it("treats a null email_log delete payload as zero rows and zero attachments", async () => {
+    const db = makeCentralDb({ email_log: { data: null, error: null } });
+    const res = await pruneExpiredContent(BIZ, 90, { client: db as never, now: () => NOW });
+    expect(res.tables.find((t) => t.table === "email_log")?.central).toBe(0);
+    expect(db.storage.from).not.toHaveBeenCalled();
   });
 
   it.each(PRUNED_TABLES)("throws loudly when the central delete on %s fails", async (table) => {
