@@ -1497,7 +1497,10 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       const seen = new Set<string>();
       const add = (raw: unknown) => {
         if (typeof raw !== "string") return;
-        const norm = normalizeNanpToE164(raw);
+        // isE164 first so a non-NANP key (a +52 participant) still keys the
+        // wait; the NANP normalizer only handles loose North-American shapes.
+        const trimmed = raw.trim();
+        const norm = isE164(trimmed) ? trimmed : normalizeNanpToE164(trimmed);
         if (norm && !seen.has(norm)) {
           seen.add(norm);
           keys.push(norm);
