@@ -15,7 +15,7 @@
  * before merging.
  */
 
-import { describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   createPrivateKey,
   createPublicKey,
@@ -61,6 +61,24 @@ function makeVector(opts?: {
 }
 
 describe("Telnyx webhook verifier parity (Node ↔ Deno)", () => {
+  // Both verifiers read their own Date.now() and reject when the offset
+  // EXCEEDS 300s, while the fixtures build timestamps relative to the test
+  // process clock. With a live clock the +301s case sat one floored second
+  // from flipping to 300 (accepted), so any elapsed time between building
+  // the vector and verifying it made the case pass spuriously. Freezing the
+  // clock removes the race and lets the exact boundary be asserted below.
+  // Same pinning idiom the golden-vector suite in this file already uses.
+  const NOW_EPOCH = 1_800_000_000;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(NOW_EPOCH * 1000);
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
   const cases: Array<{
     name: string;
     opts?: Parameters<typeof makeVector>[0];
@@ -68,6 +86,16 @@ describe("Telnyx webhook verifier parity (Node ↔ Deno)", () => {
   }> = [
     { name: "valid / SPKI-encoded key", opts: { keyEncoding: "spki" }, expected: { ok: true } },
     { name: "valid / raw-32 key", opts: { keyEncoding: "raw32" }, expected: { ok: true } },
+    {
+      name: "stale timestamp exactly at the 300s tolerance edge",
+      opts: { tsOffsetSec: -300 },
+      expected: { ok: true }
+    },
+    {
+      name: "future-dated timestamp exactly at the 300s tolerance edge",
+      opts: { tsOffsetSec: 300 },
+      expected: { ok: true }
+    },
     {
       name: "stale timestamp 301s in the past",
       opts: { tsOffsetSec: -301 },
