@@ -13,8 +13,10 @@ import {
   firstUrlInText,
   isE164,
   isPlaceholderLeadName,
+  normalizeMxToE164,
   normalizeNanpToE164,
-  renderTemplate
+  renderTemplate,
+  type PhoneCountry
 } from "./engine.ts";
 import { branchChoiceVar, chooseBranchArm } from "./branching.ts";
 import { goalReachedVar } from "./goal_events.ts";
@@ -45,6 +47,12 @@ export type StepScope = {
   coworker?: { email?: string };
   /** Relative-date tokens ({{now.*}}); see engine.buildNowScope. Derived, never persisted. */
   now?: unknown;
+  /**
+   * How BARE (unprefixed) phone digits in rendered recipients and memory
+   * keys are read (see engine.PhoneCountry): the worker derives it once per
+   * run from the business row. Absent means "US", the historical behavior.
+   */
+  phoneCountry?: PhoneCountry;
 };
 
 /**
@@ -990,7 +998,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       // "(840) 275-3158", "840.275.3158" — so coerce NANP shapes to +1XXXXXXXXXX
       // and fail fast (no retries) on anything unparseable instead of burning
       // MAX_ATTEMPTS on a guaranteed Telnyx 40310 "Invalid 'to' address".
-      const to = coerceDialableE164(toRaw);
+      const to = coerceDialableE164(toRaw, { defaultCountry: scope.phoneCountry });
       if (!to) {
         if (fromTemplateVar) {
           return {
@@ -1088,15 +1096,20 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       const waDigits = waToRaw.replace(/\D/g, "");
       const waToLoose = isE164(waToRaw)
         ? waToRaw
-        : (normalizeNanpToE164(waToRaw) ??
+        : (coerceDialableE164(waToRaw, { defaultCountry: scope.phoneCountry }) ??
           (waDigits.length >= 8 && waDigits.length <= 15 && !waDigits.startsWith("0")
             ? `+${waDigits}`
             : null));
       // Country code 1 is NANP-only: a `+1` result the strict normalizer
       // rejects (wrong length, or 0/1-leading area/exchange code) is just as
       // undialable on WhatsApp, and the digit-run fallback above would
-      // otherwise resurrect exactly the junk coerceDialableE164 stops.
-      const waTo = waToLoose?.startsWith("+1") ? normalizeNanpToE164(waToLoose) : waToLoose;
+      // otherwise resurrect exactly the junk coerceDialableE164 stops. The
+      // +52 arm applies the same national-plan strictness for Mexico.
+      const waTo = waToLoose?.startsWith("+1")
+        ? normalizeNanpToE164(waToLoose)
+        : waToLoose?.startsWith("+52")
+          ? normalizeMxToE164(waToLoose)
+          : waToLoose;
       if (!waTo) {
         if (waFromTemplateVar) {
           return {
@@ -1147,7 +1160,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         return { ok: false, error: "share_document: recipient is empty after templating" };
       }
       if (via === "sms") {
-        const to = coerceDialableE164(toRaw);
+        const to = coerceDialableE164(toRaw, { defaultCountry: scope.phoneCountry });
         if (!to) {
           if (fromTemplateVar) {
             return {
@@ -1497,7 +1510,11 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       const seen = new Set<string>();
       const add = (raw: unknown) => {
         if (typeof raw !== "string") return;
-        const norm = normalizeNanpToE164(raw);
+        // Same country-aware normalization the WRITE side (the worker's
+        // rememberKey) applies, so a URL stored under +52 is found under
+        // +52: loose digits follow the tenant's phone country, +52/+1 get
+        // their national-plan strictness, other E.164 passes through.
+        const norm = coerceDialableE164(raw, { defaultCountry: scope.phoneCountry });
         if (norm && !seen.has(norm)) {
           seen.add(norm);
           keys.push(norm);
@@ -1556,7 +1573,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       }
       const raw = scope.vars?.[step.phoneVar];
       const phone = typeof raw === "string" ? raw.trim() : "";
-      const e164 = phone ? coerceDialableE164(phone) : null;
+      const e164 = phone ? coerceDialableE164(phone, { defaultCountry: scope.phoneCountry }) : null;
       if (!e164) {
         // A lead-data gap, not a flow bug: resolve straight to the no-reply
         // branch instead of parking a run that can never be resumed.
@@ -1618,7 +1635,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       };
       const raw = scope.vars?.[step.toVar];
       const phone = typeof raw === "string" ? raw.trim() : "";
-      const e164 = phone ? coerceDialableE164(phone) : null;
+      const e164 = phone ? coerceDialableE164(phone, { defaultCountry: scope.phoneCountry }) : null;
       if (!e164) {
         // A lead-data gap, not a flow bug: skip with the not_placed sentinel
         // instead of failing a run that can still notify/branch usefully.
@@ -1650,7 +1667,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       // Accept an already-E.164 phone or a loose North-American number; the
       // customer record is keyed by E.164, so an unusable value is a recoverable
       // "missing input" (skip-able), not a thrown error.
-      const e164 = phone ? coerceDialableE164(phone) : null;
+      const e164 = phone ? coerceDialableE164(phone, { defaultCountry: scope.phoneCountry }) : null;
       if (!e164) {
         // Skip (with a note), never fail — mirroring update_contact and the
         // send steps. A "none"/empty/scrubbed phone slips past a
@@ -1741,7 +1758,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
     case "update_contact": {
       const raw = scope.vars?.[step.phoneVar];
       const phone = typeof raw === "string" ? raw.trim() : "";
-      const e164 = phone ? coerceDialableE164(phone) : null;
+      const e164 = phone ? coerceDialableE164(phone, { defaultCountry: scope.phoneCountry }) : null;
       const addTags = step.addTags ?? [];
       const removeTags = step.removeTags ?? [];
       if (!e164) {

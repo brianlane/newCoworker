@@ -318,6 +318,112 @@ export function normalizeNanpToE164(raw: string): string | null {
 }
 
 /**
+ * Country whose national plan bare (unprefixed) digits are read under.
+ * "US" is the historical NANP treatment (US + Canada share it); "MX" makes a
+ * 10-digit national number read as +52. Explicit prefixes (+1, +52, a leading
+ * 1 on an 11-digit run) always win over the default.
+ */
+export type PhoneCountry = "US" | "MX";
+
+export type PhoneExtractionOpts = { defaultCountry?: PhoneCountry };
+
+// An EXPLICIT Mexican number: `+52`, an optional legacy mobile `1`, then 10
+// national digits with ordinary separators. Runs before PHONE_RE with its
+// matches excluded from the NANP scan, because PHONE_RE's 3-3-4 shape happily
+// matches the trailing 10 digits of "+52 55 1234 5678" and normalizeNanpToE164
+// then mints +15512345678, a REAL New Jersey number the fallback could text
+// (the same stranger-text class as the tracking-number incident above).
+const MX_INTL_RE = /(?<!\d)\+\s?52(?:[-.\s()]{0,3}\d){10,11}(?!\d)/g;
+
+// Bare Mexican national shapes, only consulted under the MX default: the
+// common 2-4-4 grouping (55 1234 5678, CDMX/GDL/MTY two-digit LADAs) that the
+// NANP 3-3-4 regex cannot see, plus 3-3-4 itself. The digit-count looseness
+// (9-11) is deliberate; normalizeMxToE164 accepts exactly 10, so a non-10
+// match drops instead of mis-reading.
+const MX_NATIONAL_RE = /(?<!\d)\(?\d{2,3}\)?[-.\s]?\d{3,4}[-.\s]?\d{4}(?!\d)/g;
+
+/**
+ * Normalize a Mexican phone string to E.164 (+52 + 10 national digits), or
+ * null when it is not a plausible MX number. Accepts 10 bare national digits,
+ * a 52-prefixed 12-digit run, or the legacy 521-prefixed 13-digit mobile form
+ * (still common in WhatsApp wa_ids), always canonicalizing to +52 + 10. A
+ * 0/1-leading national number is never real (no Mexican area code starts
+ * with 0 or 1), so failing fast here beats a guaranteed carrier rejection at
+ * send time, the same posture as normalizeNanpToE164 above.
+ *
+ * Callers must gate the bare-10 arm on MX context themselves: a bare US
+ * number is 10 digits too, and this function cannot tell them apart.
+ */
+export function normalizeMxToE164(raw: string): string | null {
+  const trimmed = raw.trim();
+  const digits = trimmed.replace(/[^\d]/g, "");
+  // A `+` means the digits CARRY the country code, so only the full 52 + 10
+  // (or legacy 521 + 10) shapes qualify; the bare-10 arm is for plus-less
+  // national input only, else "+52 55 1234 56" (10 digits total) would read
+  // its own country code as the start of a national number.
+  const national =
+    digits.length === 12 && digits.startsWith("52")
+      ? digits.slice(2)
+      : digits.length === 13 && digits.startsWith("521")
+        ? digits.slice(3)
+        : !trimmed.startsWith("+") && digits.length === 10
+          ? digits
+          : null;
+  if (!national) return null;
+  if (national[0] === "0" || national[0] === "1") return null;
+  return `+52${national}`;
+}
+
+/**
+ * Does this raw value carry explicit NANP intent (a `+1` prefix, or 11
+ * digits leading 1)? A `+` with a DIFFERENT country code is not NANP intent,
+ * so a +52 value under the MX default stays on the Mexican arm.
+ */
+function hasExplicitNanpShape(raw: string): boolean {
+  const trimmed = raw.trim();
+  if (trimmed.startsWith("+")) return trimmed.startsWith("+1");
+  const digits = trimmed.replace(/[^\d]/g, "");
+  return digits.length === 11 && digits.startsWith("1");
+}
+
+type PhoneMatch = { index: number; length: number; e164: string };
+
+/**
+ * One scan shared by extractPhones / extractLabeledPhones: explicit +52
+ * numbers first, then the NANP shapes, then (under the MX default only) bare
+ * Mexican national shapes. Later passes skip spans an earlier pass consumed,
+ * so the NANP regex can never re-read the tail of a +52 number and a bare
+ * scan can never re-read the tail of a +1 number. Matches come back in text
+ * order regardless of which pass found them.
+ */
+function scanPhoneMatches(text: string, defaultCountry: PhoneCountry): PhoneMatch[] {
+  const matches: PhoneMatch[] = [];
+  const overlapsEarlier = (index: number, length: number) =>
+    matches.some((m) => index < m.index + m.length && index + length > m.index);
+  const run = (re: RegExp, normalize: (raw: string) => string | null) => {
+    re.lastIndex = 0;
+    let m: RegExpExecArray | null;
+    while ((m = re.exec(text)) !== null) {
+      if (overlapsEarlier(m.index, m[0].length)) continue;
+      const e164 = normalize(m[0]);
+      if (!e164) continue;
+      matches.push({ index: m.index, length: m[0].length, e164 });
+    }
+  };
+  run(MX_INTL_RE, normalizeMxToE164);
+  if (defaultCountry === "MX") {
+    // Explicit NANP shapes keep NANP treatment even under the MX default; a
+    // bare 3-3-4 run waits for the MX pass below (returning null here records
+    // no span, so the MX pass still sees it).
+    run(PHONE_RE, (raw) => (hasExplicitNanpShape(raw) ? normalizeNanpToE164(raw) : null));
+    run(MX_NATIONAL_RE, normalizeMxToE164);
+  } else {
+    run(PHONE_RE, normalizeNanpToE164);
+  }
+  return matches.sort((a, b) => a.index - b.index);
+}
+
+/**
  * Coerce a rendered recipient to a DIALABLE E.164 number, or null.
  *
  * `isE164` alone is the wrong gate for anything that will be dialed: it is a
@@ -331,25 +437,29 @@ export function normalizeNanpToE164(raw: string): string | null {
  * keep the structural check, since their national plans are not encoded
  * here.
  */
-export function coerceDialableE164(raw: string): string | null {
+export function coerceDialableE164(raw: string, opts?: PhoneExtractionOpts): string | null {
   const trimmed = raw.trim();
-  if (trimmed.startsWith("+1") || !isE164(trimmed)) return normalizeNanpToE164(trimmed);
+  // Country code 52 gets the same national-plan strictness as +1: exactly 10
+  // national digits (the legacy 521 mobile form canonicalizes down), so a
+  // malformed +52 value fails here instead of at the carrier.
+  if (trimmed.startsWith("+52")) return normalizeMxToE164(trimmed);
+  if (trimmed.startsWith("+1") || !isE164(trimmed)) {
+    if (opts?.defaultCountry === "MX" && !hasExplicitNanpShape(trimmed)) {
+      return normalizeMxToE164(trimmed);
+    }
+    return normalizeNanpToE164(trimmed);
+  }
   return trimmed;
 }
 
-/** Extract candidate phone numbers from free text as E.164 (deduped, in order). */
-export function extractPhones(text: string): string[] {
+/** Extract candidate phone numbers from free text as E.164 (deduped, in text order). */
+export function extractPhones(text: string, opts?: PhoneExtractionOpts): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
-  const matches = text.match(PHONE_RE) ?? [];
-  for (const raw of matches) {
-    const e164 = normalizeNanpToE164(raw);
-    // NANP-invalid shapes (0/1-leading area or exchange code) match the
-    // regex but are not real numbers — drop them.
-    if (!e164) continue;
-    if (seen.has(e164)) continue;
-    seen.add(e164);
-    out.push(e164);
+  for (const m of scanPhoneMatches(text, opts?.defaultCountry ?? "US")) {
+    if (seen.has(m.e164)) continue;
+    seen.add(m.e164);
+    out.push(m.e164);
   }
   return out;
 }
@@ -358,11 +468,15 @@ export function extractPhones(text: string): string[] {
 // "Mobile no.", "call/text me at") or right after it ("602-686-6672 (cell)").
 // Deliberately tight: "Call Privyr support at …" / "our office line …" must
 // NOT qualify — only first-person contact phrasing ("me") or a field-style
-// phone label marks a number as the lead's own.
+// phone label marks a number as the lead's own. Spanish tokens mirror the
+// same tightness for Mexican lead forms (Cel/Celular, Movil, Telefono,
+// WhatsApp, "llamame/marcame/escribeme al"); bare "numero" is deliberately
+// NOT a label, same as bare "number" ("numero de orden" is an order id, not
+// a phone). No bare "wa" either: it reads as Washington in US addresses.
 const LEAD_PHONE_LABEL_BEFORE_RE =
-  /(?:\b(?:ph|phone|mobile|cell(?:phone)?|tel(?:ephone)?)\b(?:\s*(?:number|no\.?|#))?(?:\s+is)?\s*[.:#\-–—)]*\s*|\b(?:call|text|reach)\s+me\s+(?:back\s+)?(?:at|on)\s*[:\-–—]?\s*)$/i;
+  /(?:\b(?:ph|phone|mobile|cell(?:phone)?|tel(?:ephone)?|cel(?:ular)?|m[oó]vil|tel[eé]fono|whatsapp)\b(?:\s*(?:number|no\.?|#))?(?:\s+is|\s+es)?\s*[.:#\-–—)]*\s*|\b(?:call|text|reach)\s+me\s+(?:back\s+)?(?:at|on)\s*[:\-–—]?\s*|\b(?:ll[aá]mame|m[aá]rcame|escr[ií]beme)(?:\s+al?)?\s*[:\-–—]?\s*)$/i;
 const LEAD_PHONE_LABEL_AFTER_RE =
-  /^\s*[(\-–—:]*\s*(?:ph|phone|mobile|cell(?:phone)?|tel(?:ephone)?)\b/i;
+  /^\s*[(\-–—:]*\s*(?:ph|phone|mobile|cell(?:phone)?|tel(?:ephone)?|cel(?:ular)?|m[oó]vil|tel[eé]fono|whatsapp)\b/i;
 
 /** How far back on the number's own line a leading label may sit. */
 const LABEL_BEFORE_WINDOW = 48;
@@ -379,24 +493,21 @@ const LABEL_AFTER_WINDOW = 14;
  * (bug-hunt round 3). A wrong send is far worse than a missed fallback (a
  * skip with an owner note), so an unlabeled number never qualifies.
  */
-export function extractLabeledPhones(text: string): string[] {
+export function extractLabeledPhones(text: string, opts?: PhoneExtractionOpts): string[] {
   const out: string[] = [];
   const seen = new Set<string>();
-  PHONE_RE.lastIndex = 0;
-  let m: RegExpExecArray | null;
-  while ((m = PHONE_RE.exec(text)) !== null) {
-    const e164 = normalizeNanpToE164(m[0]);
-    if (!e164 || seen.has(e164)) continue;
+  for (const m of scanPhoneMatches(text, opts?.defaultCountry ?? "US")) {
+    if (seen.has(m.e164)) continue;
     // The label must sit on the number's own line, directly adjacent.
     const lineStart = text.lastIndexOf("\n", m.index) + 1;
     const before = text.slice(Math.max(lineStart, m.index - LABEL_BEFORE_WINDOW), m.index);
-    const afterEnd = Math.min(text.length, m.index + m[0].length + LABEL_AFTER_WINDOW);
-    const after = text.slice(m.index + m[0].length, afterEnd).split("\n")[0];
+    const afterEnd = Math.min(text.length, m.index + m.length + LABEL_AFTER_WINDOW);
+    const after = text.slice(m.index + m.length, afterEnd).split("\n")[0];
     if (!LEAD_PHONE_LABEL_BEFORE_RE.test(before) && !LEAD_PHONE_LABEL_AFTER_RE.test(after)) {
       continue;
     }
-    seen.add(e164);
-    out.push(e164);
+    seen.add(m.e164);
+    out.push(m.e164);
   }
   return out;
 }
@@ -432,14 +543,47 @@ const EMPTY_PHONE_VALUES = new Set(["", "none", "n/a", "na", "null", "unknown"])
  *  - everything else becomes "none", so the flow's existing no-phone
  *    branch handles the lead instead of a guaranteed carrier rejection.
  */
-export function sanitizeExtractedPhone(value: string, sourceText: string): string {
+export function sanitizeExtractedPhone(
+  value: string,
+  sourceText: string,
+  opts?: PhoneExtractionOpts
+): string {
   const trimmed = value.trim();
   if (EMPTY_PHONE_VALUES.has(trimmed.toLowerCase())) return trimmed;
 
-  const nanp = normalizeNanpToE164(trimmed);
-  if (nanp) return nanp;
-
   const digits = trimmed.replace(/[^\d]/g, "");
+
+  // Under the MX default, bare national digits are Mexican; only an explicit
+  // +1 / leading-1 shape keeps NANP treatment. Under the US default this arm
+  // does not exist and the NANP coercion below is unchanged.
+  if (opts?.defaultCountry === "MX" && !hasExplicitNanpShape(trimmed)) {
+    const mx = normalizeMxToE164(trimmed);
+    if (mx) return mx;
+  } else {
+    const nanp = normalizeNanpToE164(trimmed);
+    if (nanp) return nanp;
+  }
+
+  // A 52/521-prefixed 12-13 digit value is kept when its digit sequence
+  // appears in the source WITH OR WITHOUT the `+`: Mexican lead forms very
+  // often carry the country code plus-less ("52 55 1234 5678"), and a
+  // sequence this specific cannot be minted from junk digits the way a bare
+  // hallucinated `+` can (the KYP "+492046781" class stays caught by the
+  // plus-required arm below). Applies under BOTH country defaults, so a
+  // Mexican lead reaching a US tenant survives too.
+  if (
+    (digits.length === 12 && digits.startsWith("52")) ||
+    (digits.length === 13 && digits.startsWith("521"))
+  ) {
+    const mx = normalizeMxToE164(trimmed);
+    if (mx) {
+      const pattern = new RegExp(
+        `(?<!\\d)\\+?\\s{0,3}${digits.split("").join("[\\s().\\-–]{0,3}")}(?!\\d)`
+      );
+      if (pattern.test(sourceText)) return mx;
+    }
+  }
+
   const candidate = `+${digits}`;
   if (!digits.startsWith("1") && trimmed.startsWith("+") && isE164(candidate)) {
     // Look for the SAME digit sequence in the source, `+`-prefixed, with
@@ -575,11 +719,12 @@ export function isPhoneFieldName(name: string): boolean {
 export function postProcessExtractedField(
   name: string,
   value: string,
-  sourceText: string
+  sourceText: string,
+  opts?: PhoneExtractionOpts
 ): string {
   if (!isPhoneFieldName(name)) return value;
-  const filled = value || extractLabeledPhones(sourceText)[0] || "";
-  return /\d/.test(filled) ? sanitizeExtractedPhone(filled, sourceText) : filled;
+  const filled = value || extractLabeledPhones(sourceText, opts)[0] || "";
+  return /\d/.test(filled) ? sanitizeExtractedPhone(filled, sourceText, opts) : filled;
 }
 
 // Conventional variable keys an extraction step might capture a lead's name /

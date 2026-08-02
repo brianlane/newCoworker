@@ -43,6 +43,7 @@ import {
   CLASSIFY_UNCLEAR,
   parseClassifyChoice,
   buildNowScope,
+  coerceDialableE164,
   evaluateSmsTrigger,
   evaluateStepCondition,
   extractLeadIdentity,
@@ -54,6 +55,7 @@ import {
   isE164,
   isExecutableDefinition,
   localClock,
+  normalizeMxToE164,
   normalizeNanpToE164,
   parseExtractionJson,
   parseRoutedAgent,
@@ -63,8 +65,10 @@ import {
   senderPinnedByFromMatches,
   type AvailabilityMode,
   type NowScope,
+  type PhoneCountry,
   type RoutedAgent
 } from "../_shared/ai_flows/engine.ts";
+import { businessDefaultPhoneCountry } from "../_shared/business_country.ts";
 import { callRowboatChatOnce } from "../_shared/sms_rowboat.ts";
 import { resolveRowboatBearerForBusiness } from "../_shared/gateway_token.ts";
 import {
@@ -351,6 +355,12 @@ type Scope = {
   // that files a lead is what names its origin: "Clever Lead - Accept",
   // "HomeLight Referral". Derived only; buildContext omits it.
   flowName?: string;
+  // How BARE (unprefixed) phone digits in extracted text are read, derived
+  // once per run from the business row's phone + timezone (see
+  // _shared/business_country.ts): "US" keeps the historical NANP coercion,
+  // "MX" makes a Mexican tenant's 10-digit leads read as +52 instead of a
+  // random US number. Derived only; buildContext omits it.
+  phoneCountry?: PhoneCountry;
 };
 
 serve(async (req: Request): Promise<Response> => {
@@ -672,17 +682,26 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
   scope.coworker = { email: mailbox.address };
   // Relative-date tokens ({{now.*}}) in the business timezone, so a step can
   // template a follow-up like "tomorrow afternoon" without hard-coding dates.
+  // The same row read also fixes how bare phone digits are interpreted for
+  // the whole run (scope.phoneCountry): a Mexican tenant's 10-digit leads
+  // must read as +52, not as a random US number. A read failure falls back
+  // to "US", the do-nothing default.
   try {
-    const { data: tzRow } = await supabase
+    const { data: bizRow } = await supabase
       .from("businesses")
-      .select("timezone")
+      .select("timezone, phone")
       .eq("id", run.business_id)
       .maybeSingle();
-    const tz = (tzRow as { timezone?: string | null } | null)?.timezone ?? null;
-    scope.now = buildNowScope(Date.now(), tz);
+    const biz = bizRow as { timezone?: string | null; phone?: string | null } | null;
+    scope.now = buildNowScope(Date.now(), biz?.timezone ?? null);
+    scope.phoneCountry = businessDefaultPhoneCountry({
+      phone: biz?.phone ?? null,
+      timezone: biz?.timezone ?? null
+    });
   } catch (e) {
     console.error("executeRun buildNowScope", e);
     scope.now = buildNowScope(Date.now(), null);
+    scope.phoneCountry = "US";
   }
   const approval = asRecord(run.context.approval);
   // route_to_team state: tried[], the currently-offered agent, and last_event
@@ -3201,7 +3220,9 @@ async function browseStep(
       raw[f.name] = scope.vars[f.name] as string;
       continue;
     }
-    raw[f.name] = postProcessExtractedField(f.name, extracted[f.name] ?? "", pageText);
+    raw[f.name] = postProcessExtractedField(f.name, extracted[f.name] ?? "", pageText, {
+      defaultCountry: scope.phoneCountry
+    });
   }
   // Scrub BEFORE the link/screenshot passthroughs join the map, so the
   // actions_taken note only ever names real extraction fields.
@@ -3271,7 +3292,9 @@ async function extractTextStep(
 
   const raw: Record<string, string> = {};
   for (const f of action.fields) {
-    raw[f.name] = postProcessExtractedField(f.name, extracted[f.name] ?? "", action.text);
+    raw[f.name] = postProcessExtractedField(f.name, extracted[f.name] ?? "", action.text, {
+      defaultCountry: scope.phoneCountry
+    });
   }
   const out = await scrubExtractedSelfPhones(supabase, run, scope, raw, "extract_text");
 
@@ -3364,7 +3387,9 @@ async function emailExtractStep(
       raw[f.name] = scope.vars[f.name] as string;
       continue;
     }
-    raw[f.name] = postProcessExtractedField(f.name, extracted[f.name] ?? "", data.bodyText);
+    raw[f.name] = postProcessExtractedField(f.name, extracted[f.name] ?? "", data.bodyText, {
+      defaultCountry: scope.phoneCountry
+    });
   }
   const out = await scrubExtractedSelfPhones(supabase, run, scope, raw, "email_extract");
   Object.assign(scope.vars, out);
@@ -3773,7 +3798,9 @@ async function browseActionStep(
     }
     const raw: Record<string, string> = {};
     for (const f of action.fields) {
-      raw[f.name] = postProcessExtractedField(f.name, extracted[f.name] ?? "", pageText);
+      raw[f.name] = postProcessExtractedField(f.name, extracted[f.name] ?? "", pageText, {
+      defaultCountry: scope.phoneCountry
+    });
     }
     const out = await scrubExtractedSelfPhones(supabase, run, scope, raw, "browse_action");
     Object.assign(scope.vars, out);
@@ -3785,8 +3812,13 @@ async function browseActionStep(
   // extraction above, so a phone THIS step just extracted can be the key.
   // Best-effort: a memory write must never fail a browse that already posted.
   const rememberRaw = action.rememberKeyVar ? scope.vars[action.rememberKeyVar] : undefined;
+  // Same country-aware normalization recall_url's key gathering applies
+  // (steps.ts), so store and recall agree on the key: loose digits follow
+  // the tenant's phone country, +52 leads keep their +52 key.
   const rememberKey =
-    typeof rememberRaw === "string" ? normalizeNanpToE164(rememberRaw) : null;
+    typeof rememberRaw === "string"
+      ? coerceDialableE164(rememberRaw, { defaultCountry: scope.phoneCountry })
+      : null;
   if (rememberKey && parsed.finalUrl) {
     const { error: memErr } = await supabase.from("aiflow_url_memory").upsert(
       {
@@ -5234,6 +5266,17 @@ async function sendSmsStep(
       error:
         `send_sms: the carrier would reject the text to ${toE164} and a retry can't fix it, ` +
         `a +1 number needs exactly 10 more digits so it isn't a real dialable line.`
+    };
+  }
+  // Same backstop for Mexican numbers: country code 52 allows exactly 10
+  // national digits (legacy 521 mobile forms canonicalize down), so a
+  // malformed +52 recipient fails readably here instead of at the carrier.
+  if (toE164.startsWith("+52") && !normalizeMxToE164(toE164)) {
+    return {
+      kind: "fail",
+      error:
+        `send_sms: the carrier would reject the text to ${toE164} and a retry can't fix it, ` +
+        `a +52 number needs exactly 10 national digits so it isn't a real dialable line.`
     };
   }
   // An employee recipient (named, var-named, or referenced) is an internal
