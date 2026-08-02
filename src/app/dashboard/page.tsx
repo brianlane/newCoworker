@@ -243,7 +243,8 @@ export default async function DashboardPage() {
                   : smsMonthlyLine(
                       business.tier as PlanTier,
                       business.tier === "enterprise" ? business.enterprise_limits : undefined,
-                      locale
+                      locale,
+                      smsCap ?? undefined
                     )}
                 {chatSpend && (
                   <>

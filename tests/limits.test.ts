@@ -250,5 +250,14 @@ describe("tier limits", () => {
       expect(effectiveSmsMonthlyCap("enterprise", undefined, mx)).toBe(Infinity);
       expect(effectiveSmsMonthlyCap("enterprise", { smsPerMonth: 5000 }, mx)).toBe(5000);
     });
+
+    it("smsMonthlyLine renders the per-business override so display matches enforcement", () => {
+      expect(smsMonthlyLine("standard", undefined, "en", 100)).toBe("100 SMS / month");
+      expect(smsMonthlyLine("standard", undefined, "es", 100)).toBe("100 SMS / mes");
+      expect(smsMonthlyLine("standard")).toBe("3000 SMS / month");
+      expect(smsMonthlyLine("enterprise", undefined, "en", Infinity)).toBe(
+        "Unlimited SMS / month"
+      );
+    });
   });
 });

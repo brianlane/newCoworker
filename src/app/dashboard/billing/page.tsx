@@ -383,7 +383,8 @@ export default async function BillingPage(props: {
             {smsMonthlyLine(
               business.tier as PlanTier,
               business.tier === "enterprise" ? business.enterprise_limits : undefined,
-              locale
+              locale,
+              smsMonthlyCap ?? undefined
             )}
           </p>
         </Card>
