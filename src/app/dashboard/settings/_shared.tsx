@@ -28,6 +28,8 @@ export type SettingsBusinessRow = {
   business_type: string | null;
   owner_name: string | null;
   phone: string | null;
+  /** Coworker's opening language with customers when theirs is unknown ("en" default). */
+  default_customer_language: "en" | "es" | null;
 };
 
 export type SettingsContext = {
@@ -52,7 +54,7 @@ export async function loadSettingsContext(): Promise<SettingsContext> {
   const { data: businesses } = await db
     .from("businesses")
     .select(
-      "id, name, tier, enterprise_limits, timezone, branding, aiflow_protect_staff_contacts, address, business_hours, business_type, owner_name, phone"
+      "id, name, tier, enterprise_limits, timezone, branding, aiflow_protect_staff_contacts, address, business_hours, business_type, owner_name, phone, default_customer_language"
     )
     .in("id", activeBusinessId ? [activeBusinessId] : [])
     .order("created_at", { ascending: false })
