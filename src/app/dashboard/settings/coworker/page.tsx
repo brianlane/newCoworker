@@ -50,6 +50,10 @@ export default async function CoworkerSettingsPage() {
 
       {business && (
         <CustomerLanguageSettings
+          // Keyed by business so an admin/business switch remounts the card:
+          // useState(initialLanguage) would otherwise keep the previous
+          // tenant's value while saves target the newly active business.
+          key={business.id}
           initialLanguage={business.default_customer_language === "es" ? "es" : "en"}
         />
       )}
