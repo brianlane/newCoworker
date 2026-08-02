@@ -37,6 +37,13 @@ Reconciled against the June 2026 invoice PDF and a fully paginated 90-day pull:
   per-message ~$0.0150 incl. inbound and MMS, so the $0.0159 outbound bound
   above still holds. DID $1.10/mo confirmed exact ($1.00 DID MRC + $0.10 SMS MRC,
   posts the 1st).
+- **Taxes calibrated (Aug 1)**: Telnyx taxes usage and MRCs at very different
+  effective rates. June invoice: 5.4% on usage (state + county + city sales tax
+  plus USF on voice; $0.389 on $7.16) but only 0.64% on MRCs ($0.071 on $11.10
+  of campaign + DID fees). Encoded as `TELNYX_USAGE_TAX_RATE` /
+  `TELNYX_MRC_TAX_RATE`, applied on the Costs page, the fleet cost estimate,
+  and the enterprise deal calculator. Arizona-address dependent; recalibrate
+  from a newer invoice if the mix or address changes.
 
 Hostinger catalog (live API, Jul 2 2026), effective $/mo:
 

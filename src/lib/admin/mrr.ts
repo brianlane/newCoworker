@@ -34,6 +34,8 @@ import {
   ENTERPRISE_UNIT_COSTS,
   HOSTING_MONTHLY_CENTS_BY_SIZE,
   TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS,
+  TELNYX_MRC_TAX_RATE,
+  TELNYX_USAGE_TAX_RATE,
   TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE
 } from "@/lib/plans/enterprise-pricing";
 import { resolveDeployedVpsSize } from "@/lib/vps/size";
@@ -208,6 +210,8 @@ export type MonthlyPlatformCostEstimate = {
   campaignFeeCents: number;
   /** This calendar month's metered SMS + voice at per-unit rates. */
   usageCents: number;
+  /** Telnyx taxes: usage-rate on usage, MRC-rate on DIDs + campaign fee. */
+  telnyxTaxCents: number;
   /** Gemini AI spend actuals (current period rows), micro-USD → cents. */
   aiSpendCents: number;
   totalCents: number;
@@ -275,14 +279,24 @@ export function estimateMonthlyPlatformCost(params: {
   // 1 cent = 10,000 micro-USD. Includes Gemini Live voice (see above).
   const aiSpendCents = Math.round(params.aiSpendMicros / 10_000);
   const campaignFeeCents = TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS;
+  // Telnyx taxes the two charge families at very different effective
+  // rates (June 2026 invoice calibration; see the rate constants). The
+  // usage estimate's Gemini-free base makes usageCents entirely
+  // Telnyx-taxable in both branches.
+  const telnyxTaxCents = Math.round(
+    usageCents * TELNYX_USAGE_TAX_RATE +
+      (didCents + campaignFeeCents) * TELNYX_MRC_TAX_RATE
+  );
 
   return {
     hostingCents,
     didCents,
     campaignFeeCents,
     usageCents,
+    telnyxTaxCents,
     aiSpendCents,
-    totalCents: hostingCents + didCents + campaignFeeCents + usageCents + aiSpendCents,
+    totalCents:
+      hostingCents + didCents + campaignFeeCents + usageCents + telnyxTaxCents + aiSpendCents,
     boxCount
   };
 }
