@@ -11,6 +11,8 @@ import {
   ENTERPRISE_UNIT_COSTS,
   HOSTING_MONTHLY_CENTS_BY_SIZE,
   TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS,
+  TELNYX_MRC_TAX_RATE,
+  TELNYX_USAGE_TAX_RATE,
   TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE
 } from "@/lib/plans/enterprise-pricing";
 
@@ -270,8 +272,11 @@ describe("estimateMonthlyPlatformCost", () => {
     expect(result.didCents).toBe(2 * ENTERPRISE_UNIT_COSTS.didMonthlyCents);
     expect(result.boxCount).toBe(2);
     expect(result.campaignFeeCents).toBe(TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS);
+    expect(result.telnyxTaxCents).toBe(
+      Math.round((result.didCents + result.campaignFeeCents) * TELNYX_MRC_TAX_RATE)
+    );
     expect(result.totalCents).toBe(
-      result.hostingCents + result.didCents + result.campaignFeeCents
+      result.hostingCents + result.didCents + result.campaignFeeCents + result.telnyxTaxCents
     );
   });
 
@@ -292,8 +297,11 @@ describe("estimateMonthlyPlatformCost", () => {
     });
     expect(result.boxCount).toBe(0);
     // The shared 10DLC campaign fee is account-level overhead: it bills
-    // whether or not any tenant box is live.
-    expect(result.totalCents).toBe(TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS);
+    // (and is taxed) whether or not any tenant box is live.
+    expect(result.totalCents).toBe(
+      TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS +
+        Math.round(TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS * TELNYX_MRC_TAX_RATE)
+    );
   });
 
   it("counts a DID but no hosting for BYOS boxes (customer-owned hardware)", () => {
@@ -323,8 +331,14 @@ describe("estimateMonthlyPlatformCost", () => {
       )
     );
     expect(result.aiSpendCents).toBe(123);
+    expect(result.telnyxTaxCents).toBe(
+      Math.round(
+        result.usageCents * TELNYX_USAGE_TAX_RATE +
+          result.campaignFeeCents * TELNYX_MRC_TAX_RATE
+      )
+    );
     expect(result.totalCents).toBe(
-      result.usageCents + result.aiSpendCents + result.campaignFeeCents
+      result.usageCents + result.aiSpendCents + result.campaignFeeCents + result.telnyxTaxCents
     );
   });
 

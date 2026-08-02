@@ -67,6 +67,18 @@ export const TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS = 1000;
  */
 export const TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE = 0.5;
 
+/**
+ * Effective Telnyx tax rates, calibrated from the June 2026 invoice
+ * (Arizona account address). Telnyx taxes usage and recurring fees very
+ * differently: $0.389 of tax landed on $7.16 of usage (5.4%: state,
+ * county, city sales tax + federal USF on voice) while $0.071 landed on
+ * $11.10 of MRCs (0.64%). Jurisdiction and product-mix dependent, so
+ * recalibrate against a newer invoice if the account address or the
+ * usage mix shifts materially.
+ */
+export const TELNYX_USAGE_TAX_RATE = 0.054;
+export const TELNYX_MRC_TAX_RATE = 0.0064;
+
 /** All-in voice cost per minute (Telnyx + Gemini Live). */
 export const VOICE_ALL_IN_CENTS_PER_MINUTE =
   ENTERPRISE_UNIT_COSTS.voiceTelnyxCentsPerMinute +
@@ -123,6 +135,12 @@ export function estimateEnterpriseMonthlyCost(
   const sms = usage.smsPerMonth * ENTERPRISE_UNIT_COSTS.smsOutboundCentsPerMessage;
   const voice = usage.voiceMinutesPerMonth * VOICE_ALL_IN_CENTS_PER_MINUTE;
   const dids = (1 + extraDids) * ENTERPRISE_UNIT_COSTS.didMonthlyCents;
+  // Tax applies to the Telnyx components only: SMS, the Telnyx share of the
+  // voice minute (Gemini bills through Google untaxed here), and DID MRCs.
+  const telnyxUsageTaxable =
+    sms + usage.voiceMinutesPerMonth * ENTERPRISE_UNIT_COSTS.voiceTelnyxCentsPerMinute;
+  const taxes =
+    telnyxUsageTaxable * TELNYX_USAGE_TAX_RATE + dids * TELNYX_MRC_TAX_RATE;
 
   const items: EnterpriseCostLineItem[] = [
     { label: `Hosting (${usage.vpsSize.toUpperCase()} monthly SKU)`, cents: hosting },
@@ -131,7 +149,8 @@ export function estimateEnterpriseMonthlyCost(
       label: `Voice (${usage.voiceMinutesPerMonth.toLocaleString("en-US")} min/mo, Telnyx + Gemini)`,
       cents: voice
     },
-    { label: `Phone numbers (${1 + extraDids} DID${extraDids > 0 ? "s" : ""})`, cents: dids }
+    { label: `Phone numbers (${1 + extraDids} DID${extraDids > 0 ? "s" : ""})`, cents: dids },
+    { label: "Telnyx taxes (est.)", cents: taxes }
   ];
 
   return {

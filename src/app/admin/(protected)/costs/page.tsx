@@ -22,6 +22,8 @@ import {
 } from "@/lib/admin/costs-view";
 import {
   TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS,
+  TELNYX_MRC_TAX_RATE,
+  TELNYX_USAGE_TAX_RATE,
   TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE
 } from "@/lib/plans/enterprise-pricing";
 import { listHostingerVpsCosts, listTelnyxCostDaily } from "@/lib/db/platform-costs";
@@ -132,22 +134,32 @@ export default async function AdminCostsPage({
   const voiceAdjunctMonthCents = Math.round(
     monthVoiceMinutes * TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE
   );
-  // Leak spend, idle-pool hosting, the shared 10DLC campaign fee, and the
-  // voice adjunct estimate are real platform cost the per-tenant margin
-  // sums never see: fold them into the KPI cost + net figures so they
-  // reconcile with the vendor invoice.
+  // Telnyx taxes, calibrated from the June 2026 invoice: the usage rate
+  // covers everything metered (attributed + leak + adjuncts), the MRC
+  // rate covers number rentals and the campaign fee.
+  const telnyxTaxMonthCents = Math.round(
+    (lineTotals.telnyx_usage + unattributedMonthCents + voiceAdjunctMonthCents) *
+      TELNYX_USAGE_TAX_RATE +
+      (lineTotals.did + TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS) * TELNYX_MRC_TAX_RATE
+  );
+  // Leak spend, idle-pool hosting, the shared 10DLC campaign fee, the
+  // voice adjunct estimate, and Telnyx taxes are real platform cost the
+  // per-tenant margin sums never see: fold them into the KPI cost + net
+  // figures so they reconcile with the vendor invoice.
   const totalCostCents =
     margins.totals.costCents +
     unattributedMonthCents +
     poolBurnMonthlyCents +
     TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS +
-    voiceAdjunctMonthCents;
+    voiceAdjunctMonthCents +
+    telnyxTaxMonthCents;
   const netMarginCents =
     margins.totals.marginCents -
     unattributedMonthCents -
     poolBurnMonthlyCents -
     TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS -
-    voiceAdjunctMonthCents;
+    voiceAdjunctMonthCents -
+    telnyxTaxMonthCents;
   const netMarginPct =
     margins.totals.revenueCents > 0
       ? Math.round((netMarginCents / margins.totals.revenueCents) * 1000) / 10
@@ -306,6 +318,7 @@ export default async function AdminCostsPage({
               ["Stripe fees", lineTotals.stripe_fees],
               ["10DLC campaign fee", TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS],
               ["Voice API adjuncts (est.)", voiceAdjunctMonthCents],
+              ["Telnyx taxes (est.)", telnyxTaxMonthCents],
               ["Idle pool hosting", poolBurnMonthlyCents],
               ["Telnyx unattributed (leak check)", unattributedMonthCents]
             ] as const

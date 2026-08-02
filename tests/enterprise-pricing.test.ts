@@ -3,6 +3,8 @@ import { describe, expect, it } from "vitest";
 import {
   ENTERPRISE_UNIT_COSTS,
   HOSTING_MONTHLY_CENTS_BY_SIZE,
+  TELNYX_MRC_TAX_RATE,
+  TELNYX_USAGE_TAX_RATE,
   VOICE_ALL_IN_CENTS_PER_MINUTE,
   DEFAULT_ENTERPRISE_SETUP_LABOR_CENTS,
   estimateEnterpriseMonthlyCost,
@@ -19,15 +21,24 @@ describe("estimateEnterpriseMonthlyCost", () => {
       extraDids: 2
     });
 
+    const smsCents = 1000 * ENTERPRISE_UNIT_COSTS.smsOutboundCentsPerMessage; // 1590
+    const didCents = 3 * ENTERPRISE_UNIT_COSTS.didMonthlyCents; // 330
+    // Tax hits the Telnyx share only: SMS + the Telnyx voice component at
+    // the usage rate, DID MRCs at the MRC rate. Gemini's share is untaxed.
+    const taxCents =
+      (smsCents + 500 * ENTERPRISE_UNIT_COSTS.voiceTelnyxCentsPerMinute) *
+        TELNYX_USAGE_TAX_RATE +
+      didCents * TELNYX_MRC_TAX_RATE;
     const expected =
       HOSTING_MONTHLY_CENTS_BY_SIZE.kvm8 + // 7399
-      1000 * ENTERPRISE_UNIT_COSTS.smsOutboundCentsPerMessage + // 1590
+      smsCents +
       500 * VOICE_ALL_IN_CENTS_PER_MINUTE + // 1575
-      3 * ENTERPRISE_UNIT_COSTS.didMonthlyCents; // 330
+      didCents +
+      taxCents; // 112.272
 
-    expect(est.items).toHaveLength(4);
+    expect(est.items).toHaveLength(5);
     expect(est.totalCents).toBe(Math.round(expected));
-    expect(est.totalCents).toBe(10_894);
+    expect(est.totalCents).toBe(11_006);
   });
 
   it("defaults extraDids to 0 (one included DID)", () => {
@@ -37,7 +48,10 @@ describe("estimateEnterpriseMonthlyCost", () => {
       voiceMinutesPerMonth: 0
     });
     expect(est.totalCents).toBe(
-      HOSTING_MONTHLY_CENTS_BY_SIZE.kvm2 + ENTERPRISE_UNIT_COSTS.didMonthlyCents
+      Math.round(
+        HOSTING_MONTHLY_CENTS_BY_SIZE.kvm2 +
+          ENTERPRISE_UNIT_COSTS.didMonthlyCents * (1 + TELNYX_MRC_TAX_RATE)
+      )
     );
   });
 
