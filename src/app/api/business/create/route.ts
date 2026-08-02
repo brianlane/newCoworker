@@ -8,6 +8,7 @@ import {
 } from "@/lib/db/businesses";
 import { successResponse, errorResponse, handleRouteError } from "@/lib/api-response";
 import { coerceOwnerPhoneToE164 } from "@/lib/phone/e164";
+import { resolveBusinessCountry } from "@/lib/plans/business-country";
 import { normalizePreferredAreaCode } from "@/lib/telnyx/did-search-plan";
 import { teamSizeBucketToInt } from "@/lib/onboarding/intakeOptions";
 import { createOnboardingToken, createPendingOwnerEmail } from "@/lib/onboarding/token";
@@ -139,11 +140,21 @@ export async function POST(request: Request) {
       if (!coerced) {
         return errorResponse(
           "VALIDATION_ERROR",
-          "Phone number must include the area code, e.g. +1 (555) 123-4567 (10-digit US/Canada numbers are accepted without the +1)."
+          "Phone number must include the area code, e.g. +1 (555) 123-4567 or +52 55 1234 5678 (10-digit US/Canada numbers are accepted without the +1)."
         );
       }
       phone = coerced;
     }
+
+    // Mexican signups open in Spanish with their customers: seed
+    // default_customer_language from the same country resolution billing
+    // and provisioning use (a +52 phone, else a Mexican browser timezone).
+    // Soft default only: the Settings -> Coworker card is the corrective,
+    // and the idempotent existing-row branch above never retro-writes it.
+    const signupCountry = resolveBusinessCountry({
+      phone: phone ?? body.phone ?? null,
+      timezone: body.timezone && isValidIanaTimezone(body.timezone) ? body.timezone : null
+    });
 
     const business = await createBusiness({
       id: body.businessId,
@@ -161,7 +172,8 @@ export async function POST(request: Request) {
       crmUsed: body.crmUsed,
       // Browser-detected; silently dropped when not a real IANA name so a
       // tampered value can never fail business creation.
-      timezone: body.timezone && isValidIanaTimezone(body.timezone) ? body.timezone : undefined
+      timezone: body.timezone && isValidIanaTimezone(body.timezone) ? body.timezone : undefined,
+      defaultCustomerLanguage: signupCountry === "MX" ? "es" : undefined
     });
 
     return successResponse({ businessId: business.id, onboardingToken });

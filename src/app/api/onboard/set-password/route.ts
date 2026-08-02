@@ -5,6 +5,9 @@ import { buildEmailVerificationMessage } from "@/lib/email/templates/email-verif
 import { cookies } from "next/headers";
 import { LOCALE_COOKIE } from "@/i18n/routing";
 import { resolveUiLocale } from "@/lib/i18n/resolve-locale";
+import { setUserUiLocale } from "@/lib/db/user-preferences";
+import { getBusiness } from "@/lib/db/businesses";
+import { resolveBusinessCountry } from "@/lib/plans/business-country";
 import { createEmailVerificationToken } from "@/lib/email/verification-token";
 import { logger } from "@/lib/logger";
 import { getPasswordValidationError } from "@/lib/password";
@@ -198,6 +201,43 @@ export async function POST(request: Request) {
         });
       }
 
+      // The onboarding session's explicit locale cookie (a just-minted
+      // auth user can't have a saved ui_locale yet). Read once for both the
+      // Spanish-default seed and the verification email below. cookies()
+      // throws outside a request scope; treat that as no explicit choice.
+      let cookieLocale: string | null = null;
+      try {
+        cookieLocale = (await cookies()).get(LOCALE_COOKIE)?.value ?? null;
+      } catch {
+        cookieLocale = null;
+      }
+
+      // Mexican signups land in a Spanish dashboard: seed the new user's
+      // ui_locale from the business's country resolution UNLESS the
+      // onboarding session explicitly chose English via the switcher (the
+      // cookie). Best-effort like the rest of this branch; the Settings
+      // language card is the corrective either way.
+      let seededSpanishUi = false;
+      try {
+        const bizRow = await getBusiness(businessId);
+        const mexican =
+          bizRow !== null &&
+          resolveBusinessCountry({
+            phone: bizRow.phone ?? null,
+            timezone: bizRow.timezone ?? null
+          }) === "MX";
+        if (mexican && cookieLocale !== "en") {
+          await setUserUiLocale(created.user.id, "es");
+          seededSpanishUi = true;
+        }
+      } catch (localeErr) {
+        logger.warn("set-password: Spanish ui_locale seed failed (non-fatal)", {
+          businessId,
+          userId: created.user.id,
+          error: localeErr instanceof Error ? localeErr.message : String(localeErr)
+        });
+      }
+
       // Best-effort post-mint email verification dispatch. We deliberately
       // mint the auth user with `email_confirm: true` (above) so the
       // immediate `signInWithPassword` on the client doesn't get gated on
@@ -217,20 +257,13 @@ export async function POST(request: Request) {
         const verificationToken = createEmailVerificationToken(ownerEmail);
         const verificationUrl =
           `${siteUrl}/verify-email?token=${encodeURIComponent(verificationToken)}`;
-        // A just-minted auth user can't have a saved ui_locale yet, so the
-        // onboarding session's explicit locale cookie is the only signal.
-        // cookies() throws outside a request scope; treat that as English.
-        let cookieLocale: string | null = null;
-        try {
-          cookieLocale = (await cookies()).get(LOCALE_COOKIE)?.value ?? null;
-        } catch {
-          cookieLocale = null;
-        }
         const { subject, text, html } = buildEmailVerificationMessage({
           verificationUrl,
           siteUrl,
           recipientEmail: ownerEmail,
-          locale: resolveUiLocale({ cookieLocale })
+          // The Spanish-default seed above wins when it fired; else the
+          // session's explicit cookie choice, else English.
+          locale: seededSpanishUi ? "es" : resolveUiLocale({ cookieLocale })
         });
         await sendOwnerEmail(process.env.RESEND_API_KEY ?? "", ownerEmail, subject, { text, html });
         logger.info("set-password: verification email dispatched", {
@@ -247,7 +280,17 @@ export async function POST(request: Request) {
         });
       }
 
-      return successResponse({ ownerEmail, businessId });
+      const response = successResponse({ ownerEmail, businessId });
+      if (seededSpanishUi) {
+        // Same cookie /api/account/locale sets, so the first dashboard
+        // paint is Spanish without waiting on a user_preferences read.
+        response.cookies.set(LOCALE_COOKIE, "es", {
+          path: "/",
+          sameSite: "lax",
+          maxAge: 60 * 60 * 24 * 365
+        });
+      }
+      return response;
     }
 
     // createUser failed. Disambiguate the cause with a direct lookup:

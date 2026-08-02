@@ -149,6 +149,48 @@ function isMxShapedPhone(cleaned: string): boolean {
 }
 
 /**
+ * Normalize a Mexican phone to E.164 (+52 + 10 national digits), or null.
+ * Accepts +52/52/521-prefixed 12-13 digit shapes; the bare-10 arm applies
+ * only to plus-less input (a `+` means the digits carry a country code).
+ * 0/1-leading nationals are never real. Client-bundle-safe mirror of the
+ * edge engine's normalizeMxToE164 (edge functions cannot import src/).
+ */
+export function normalizeMxPhoneToE164(raw: string | null | undefined): string | null {
+  const trimmed = (raw ?? "").trim();
+  if (!trimmed) return null;
+  const digits = trimmed.replace(/[^\d]/g, "");
+  const national =
+    digits.length === 12 && digits.startsWith("52")
+      ? digits.slice(2)
+      : digits.length === 13 && digits.startsWith("521")
+        ? digits.slice(3)
+        : !trimmed.replace(/[^\d+]/g, "").startsWith("+") && digits.length === 10
+          ? digits
+          : null;
+  if (!national) return null;
+  if (national[0] === "0" || national[0] === "1") return null;
+  return `+52${national}`;
+}
+
+/**
+ * Compose the owner phone the questionnaire submits from the country-prefix
+ * selector + the raw field value. A typed `+` always wins over the selector
+ * (the owner stated their own country code). Under "+52", national digits
+ * compose to a full +52 E.164 so the draft, the order-summary preview,
+ * /api/business/create, and /api/checkout all see the identical value (the
+ * reconciliation invariant). Under "+1" the raw value is returned for the
+ * existing NANP coercion to handle. Null means the value cannot be a valid
+ * number under the selected prefix.
+ */
+export function composeOwnerPhone(prefix: "+1" | "+52", raw: string): string | null {
+  const trimmed = raw.trim();
+  if (!trimmed) return "";
+  if (trimmed.replace(/[^\d+]/g, "").startsWith("+")) return trimmed;
+  if (prefix === "+52") return normalizeMxPhoneToE164(trimmed);
+  return trimmed;
+}
+
+/**
  * Resolve the business country from the owner phone + business timezone,
  * the same signals isCanadianBusiness always used. Billing (the fee), the
  * messaging-profile pick, and the DID search country must all classify

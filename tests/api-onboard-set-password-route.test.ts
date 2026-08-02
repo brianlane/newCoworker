@@ -23,6 +23,12 @@ vi.mock("@/lib/email/client", () => ({
 // Token minting needs an HMAC secret from env (EMAIL_VERIFICATION_TOKEN_SECRET
 // or SUPABASE_SERVICE_ROLE_KEY); mock it so the dispatch path is exercised
 // deterministically regardless of the host environment.
+vi.mock("@/lib/db/businesses", () => ({
+  getBusiness: vi.fn()
+}));
+vi.mock("@/lib/db/user-preferences", () => ({
+  setUserUiLocale: vi.fn()
+}));
 vi.mock("@/lib/email/verification-token", () => ({
   createEmailVerificationToken: vi.fn(() => "test-verification-token")
 }));
@@ -48,6 +54,8 @@ import { recordAcceptance } from "@/lib/legal/acceptance";
 import { rateLimitDurable } from "@/lib/rate-limit";
 import { getStripe } from "@/lib/stripe/client";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { getBusiness } from "@/lib/db/businesses";
+import { setUserUiLocale } from "@/lib/db/user-preferences";
 
 const VALID_PASSWORD = "Hunter2-strong";
 const VALID_BUSINESS_ID = "11111111-1111-4111-8111-111111111111";
@@ -106,6 +114,7 @@ describe("api/onboard/set-password route", () => {
     vi.clearAllMocks();
     mockStripeSession();
     vi.mocked(recordAcceptance).mockResolvedValue();
+    vi.mocked(getBusiness).mockResolvedValue(null);
     vi.mocked(rateLimitDurable).mockResolvedValue({
       success: true,
       limit: 10,
@@ -234,6 +243,64 @@ describe("api/onboard/set-password route", () => {
         html: expect.any(String)
       })
     );
+  });
+
+  it("seeds a Spanish dashboard for a Mexican signup (ui_locale + cookie + email locale)", async () => {
+    const { client } = fakeServiceClient({
+      createUser: vi
+        .fn()
+        .mockResolvedValue({ data: { user: { id: "user-mx" } }, error: null })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: VALID_BUSINESS_ID,
+      phone: "+525512345678",
+      timezone: "America/Mexico_City"
+    } as never);
+
+    const response = await POST(
+      makeRequest({ sessionId: VALID_SESSION_ID, password: VALID_PASSWORD })
+    );
+    expect(response.status).toBe(200);
+    expect(vi.mocked(setUserUiLocale)).toHaveBeenCalledWith("user-mx", "es");
+    // First dashboard paint is Spanish without waiting on a DB read.
+    expect(response.headers.get("set-cookie") ?? "").toContain("NEXT_LOCALE=es");
+    // The verification email follows the seeded locale (Spanish subject).
+    expect(vi.mocked(sendOwnerEmail)).toHaveBeenCalledWith(
+      expect.any(String),
+      VALID_EMAIL,
+      expect.stringContaining("Confirma"),
+      expect.anything()
+    );
+  });
+
+  it("never seeds Spanish for a US signup, and a seed failure stays non-fatal", async () => {
+    const { client } = fakeServiceClient({
+      createUser: vi
+        .fn()
+        .mockResolvedValue({ data: { user: { id: "user-us" } }, error: null })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: VALID_BUSINESS_ID,
+      phone: "+16026951142",
+      timezone: "America/Phoenix"
+    } as never);
+
+    const usResponse = await POST(
+      makeRequest({ sessionId: VALID_SESSION_ID, password: VALID_PASSWORD })
+    );
+    expect(usResponse.status).toBe(200);
+    expect(vi.mocked(setUserUiLocale)).not.toHaveBeenCalled();
+    expect(usResponse.headers.get("set-cookie") ?? "").not.toContain("NEXT_LOCALE=es");
+
+    // A read blip during the seed must never fail the 200 (best-effort
+    // contract, same as the verification email).
+    vi.mocked(getBusiness).mockRejectedValueOnce(new Error("db down"));
+    const blipResponse = await POST(
+      makeRequest({ sessionId: VALID_SESSION_ID, password: VALID_PASSWORD })
+    );
+    expect(blipResponse.status).toBe(200);
   });
 
   it("still returns 200 when the verification email send fails (log-and-continue contract)", async () => {
