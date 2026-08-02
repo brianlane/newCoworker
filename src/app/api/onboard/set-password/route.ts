@@ -8,6 +8,7 @@ import { resolveUiLocale } from "@/lib/i18n/resolve-locale";
 import { createEmailVerificationToken } from "@/lib/email/verification-token";
 import { logger } from "@/lib/logger";
 import { getPasswordValidationError } from "@/lib/password";
+import { recordAcceptance } from "@/lib/legal/acceptance";
 import { rateLimitDurable, rateLimitIdentifierFromRequest } from "@/lib/rate-limit";
 import { getStripe } from "@/lib/stripe/client";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -15,7 +16,10 @@ import { z } from "zod";
 
 const schema = z.object({
   sessionId: z.string().min(1),
-  password: z.string().min(1)
+  password: z.string().min(1),
+  // Clickwrap: the create-password form's checkbox, enforced server-side so
+  // a degraded client cannot mint an account without the agreement.
+  termsAccepted: z.literal(true)
 });
 
 // Durable (cross-isolate) per-IP limit: every call costs a Stripe session
@@ -169,6 +173,30 @@ export async function POST(request: Request) {
         businessId,
         userId: created.user.id
       });
+
+      // Clickwrap ledger row for the account-creation form: the checkbox is
+      // schema-enforced above, so this is the definitive user-linked record
+      // for every paid signup. Log-and-continue on failure: the dashboard
+      // acceptance gate keys off the ABSENCE of a current row, so a missed
+      // write here re-asks on first dashboard load instead of blocking
+      // account creation.
+      try {
+        await recordAcceptance({
+          userId: created.user.id,
+          email: ownerEmail,
+          businessId,
+          source: "signup",
+          ip: rateLimitIdentifierFromRequest(request),
+          userAgent: request.headers.get("user-agent")
+        });
+      } catch (acceptErr) {
+        logger.warn("set-password: acceptance record failed (gate will re-ask)", {
+          sessionId: body.sessionId,
+          businessId,
+          userId: created.user.id,
+          error: acceptErr instanceof Error ? acceptErr.message : String(acceptErr)
+        });
+      }
 
       // Best-effort post-mint email verification dispatch. We deliberately
       // mint the auth user with `email_confirm: true` (above) so the

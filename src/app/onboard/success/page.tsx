@@ -44,6 +44,7 @@ function OnboardSuccessContent() {
   const [signupEmail, setSignupEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
+  const [termsAccepted, setTermsAccepted] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [showRecoveryNotice, setShowRecoveryNotice] = useState(false);
   const [businessId, setBusinessId] = useState<string | null>(null);
@@ -196,6 +197,11 @@ function OnboardSuccessContent() {
       return;
     }
 
+    if (!termsAccepted) {
+      setError(tAuth("termsRequired"));
+      return;
+    }
+
     if (!sessionId) {
       // The Stripe-signed sessionId is the credential the server uses to
       // mint the auth user. Without it, /api/onboard/set-password has no
@@ -228,7 +234,9 @@ function OnboardSuccessContent() {
       const setPasswordRes = await fetch("/api/onboard/set-password", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ sessionId, password })
+        // termsAccepted is schema-enforced server-side (z.literal(true)), so
+        // the clickwrap cannot be skipped by a degraded client.
+        body: JSON.stringify({ sessionId, password, termsAccepted: true })
       });
       const setPasswordJson = await setPasswordRes.json().catch(() => null);
 
@@ -403,6 +411,38 @@ function OnboardSuccessContent() {
                   ))}
                 </ul>
               </div>
+              <label className="flex items-start gap-2 text-xs text-parchment/65">
+                <input
+                  type="checkbox"
+                  checked={termsAccepted}
+                  onChange={(event) => setTermsAccepted(event.target.checked)}
+                  className="mt-0.5"
+                />
+                <span>
+                  {tAuth.rich("signupAgree", {
+                    terms: (chunks) => (
+                      <a
+                        href="/terms"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-signal-teal hover:underline"
+                      >
+                        {chunks}
+                      </a>
+                    ),
+                    privacy: (chunks) => (
+                      <a
+                        href="/privacy"
+                        target="_blank"
+                        rel="noreferrer"
+                        className="text-signal-teal hover:underline"
+                      >
+                        {chunks}
+                      </a>
+                    )
+                  })}
+                </span>
+              </label>
               {error && <p className="text-xs text-spark-orange">{error}</p>}
               <Button type="submit" loading={submitting} className="w-full">
                 {t("createAccountCta")}

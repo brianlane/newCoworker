@@ -9,6 +9,7 @@ import { Input } from "@/components/ui/Input";
 import { Card } from "@/components/ui/Card";
 import type { AppLocale } from "@/i18n/routing";
 import { buildSignupAuthMetadata } from "@/lib/onboarding/auth-metadata";
+import { PRIVACY_EFFECTIVE_DATE, TERMS_EFFECTIVE_DATE } from "@/lib/legal/versions";
 import { ONBOARD_STORAGE_KEY } from "@/lib/onboarding/storage";
 import { getPasswordRules, getPasswordValidationError } from "@/lib/password";
 import { clearStaleSupabaseAuthCookies, getSupabaseBrowserClient } from "@/lib/supabase/browser";
@@ -73,6 +74,7 @@ function SignupForm() {
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
   const [confirmationPending, setConfirmationPending] = useState(false);
+  const [termsAccepted, setTermsAccepted] = useState(false);
 
   async function handleSignup(e: FormEvent) {
     e.preventDefault();
@@ -83,6 +85,10 @@ function SignupForm() {
     }
     if (password !== confirmPassword) {
       setError(t("passwordsDoNotMatch"));
+      return;
+    }
+    if (!termsAccepted) {
+      setError(t("termsRequired"));
       return;
     }
     setLoading(true);
@@ -108,7 +114,14 @@ function SignupForm() {
       email,
       password,
       options: {
-        data: buildSignupAuthMetadata(businessName, onboardingDataWithLatestBusinessName),
+        data: {
+          ...buildSignupAuthMetadata(businessName, onboardingDataWithLatestBusinessName),
+          // Clickwrap stamp: which legal versions the checkbox covered.
+          // Corroborates the email-keyed terms_acceptances row below.
+          terms_version: TERMS_EFFECTIVE_DATE,
+          privacy_version: PRIVACY_EFFECTIVE_DATE,
+          terms_accepted_at: new Date().toISOString()
+        },
         emailRedirectTo: `${window.location.origin}/api/auth/callback?redirectTo=${encodedRedirect}`
       }
     });
@@ -118,6 +131,16 @@ function SignupForm() {
       setError(signUpError.message);
       return;
     }
+
+    // Evidence row for the pre-session click: email confirmation is still
+    // pending, so there is no authenticated session to record against yet.
+    // Best-effort by design; the dashboard acceptance gate is the
+    // authoritative backstop for any account without a current row.
+    fetch("/api/legal/accept", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ email })
+    }).catch(() => {});
 
     if (signUpData.session) {
       router.push(redirectTo);
@@ -247,6 +270,39 @@ function SignupForm() {
                 ))}
               </ul>
             </div>
+
+            <label className="flex items-start gap-2 text-xs text-parchment/65">
+              <input
+                type="checkbox"
+                checked={termsAccepted}
+                onChange={(e) => setTermsAccepted(e.target.checked)}
+                className="mt-0.5"
+              />
+              <span>
+                {t.rich("signupAgree", {
+                  terms: (chunks) => (
+                    <a
+                      href="/terms"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-signal-teal hover:underline"
+                    >
+                      {chunks}
+                    </a>
+                  ),
+                  privacy: (chunks) => (
+                    <a
+                      href="/privacy"
+                      target="_blank"
+                      rel="noreferrer"
+                      className="text-signal-teal hover:underline"
+                    >
+                      {chunks}
+                    </a>
+                  )
+                })}
+              </span>
+            </label>
 
             {error && <p className="text-xs text-spark-orange">{error}</p>}
 

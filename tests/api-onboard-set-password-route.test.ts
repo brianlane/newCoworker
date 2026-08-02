@@ -35,9 +35,16 @@ vi.mock("@/lib/rate-limit", async () => {
   };
 });
 
+// The clickwrap ledger write is log-and-continue; mock it so the happy path
+// is assertable and its failure mode testable.
+vi.mock("@/lib/legal/acceptance", () => ({
+  recordAcceptance: vi.fn()
+}));
+
 import { POST } from "@/app/api/onboard/set-password/route";
 import { findAuthUserIdByEmail } from "@/lib/auth";
 import { sendOwnerEmail } from "@/lib/email/client";
+import { recordAcceptance } from "@/lib/legal/acceptance";
 import { rateLimitDurable } from "@/lib/rate-limit";
 import { getStripe } from "@/lib/stripe/client";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -88,7 +95,9 @@ function makeRequest(body: Record<string, unknown>) {
   return new Request("http://localhost:3000/api/onboard/set-password", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body)
+    // The clickwrap flag is schema-required; individual tests override it
+    // to exercise the refusal path.
+    body: JSON.stringify({ termsAccepted: true, ...body })
   });
 }
 
@@ -96,12 +105,64 @@ describe("api/onboard/set-password route", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockStripeSession();
+    vi.mocked(recordAcceptance).mockResolvedValue();
     vi.mocked(rateLimitDurable).mockResolvedValue({
       success: true,
       limit: 10,
       remaining: 9,
       reset: Date.now() + 900000
     });
+  });
+
+  it("rejects a request without the clickwrap flag before touching Stripe or auth", async () => {
+    const response = await POST(
+      makeRequest({ sessionId: VALID_SESSION_ID, password: VALID_PASSWORD, termsAccepted: false })
+    );
+    expect(response.status).toBe(400);
+    expect(vi.mocked(getStripe)).not.toHaveBeenCalled();
+    expect(vi.mocked(createSupabaseServiceClient)).not.toHaveBeenCalled();
+    expect(vi.mocked(recordAcceptance)).not.toHaveBeenCalled();
+  });
+
+  it("records the user-linked clickwrap row after minting the account", async () => {
+    const { client } = fakeServiceClient({
+      createUser: vi
+        .fn()
+        .mockResolvedValue({ data: { user: { id: "user-new" } }, error: null })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
+
+    const response = await POST(
+      makeRequest({ sessionId: VALID_SESSION_ID, password: VALID_PASSWORD })
+    );
+
+    expect(response.status).toBe(200);
+    expect(vi.mocked(recordAcceptance)).toHaveBeenCalledWith(
+      expect.objectContaining({
+        userId: "user-new",
+        email: VALID_EMAIL,
+        businessId: VALID_BUSINESS_ID,
+        source: "signup"
+      })
+    );
+  });
+
+  it("still returns 200 when the clickwrap write fails (the dashboard gate re-asks)", async () => {
+    const { client } = fakeServiceClient({
+      createUser: vi
+        .fn()
+        .mockResolvedValue({ data: { user: { id: "user-new" } }, error: null })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(client);
+    vi.mocked(recordAcceptance).mockRejectedValueOnce(new Error("ledger down"));
+
+    const response = await POST(
+      makeRequest({ sessionId: VALID_SESSION_ID, password: VALID_PASSWORD })
+    );
+    const body = await response.json();
+
+    expect(response.status).toBe(200);
+    expect(body.ok).toBe(true);
   });
 
   it("returns 429 when the durable per-IP rate limit is exhausted (audit M3)", async () => {

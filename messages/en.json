@@ -1577,6 +1577,8 @@
     "didntReceive": "Didn't receive it? Check your spam folder or <retry>try again</retry>.",
     "createAccountCta": "Create account",
     "alreadyHaveAccount": "Already have an account?",
+    "signupAgree": "I agree to the <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>",
+    "termsRequired": "Please agree to the Terms of Service and Privacy Policy to continue.",
     "verifyConfirmTitle": "Confirm your email",
     "verifyExpiredTitle": "Verification link expired",
     "verifyInvalidTitle": "Invalid verification link",
@@ -1600,6 +1602,14 @@
     "confirmEmail": "Confirm email"
   },
   "dashboard": {
+    "termsGate": {
+      "title": "Before you continue",
+      "body": "Please review and accept the Terms of Service and Privacy Policy to keep using New Coworker.",
+      "checkboxLabel": "I agree to the <terms>Terms of Service</terms> and <privacy>Privacy Policy</privacy>",
+      "accept": "Agree and continue",
+      "checkboxRequired": "Please check the box to continue.",
+      "failed": "Something went wrong. Please try again."
+    },
     "nav": {
       "dashboard": "Dashboard",
       "tasks": "Tasks",

@@ -2,8 +2,9 @@ import type { Metadata } from "next";
 import { LegalPage, LegalSection } from "@/components/legal/LegalPage";
 import { contactEmail as resolveContactEmail } from "@/lib/marketing/contact-email";
 import { TIER_LIMITS } from "@/lib/plans/limits";
+import { TERMS_EFFECTIVE_DATE } from "@/lib/legal/versions";
 
-const EFFECTIVE_DATE = "August 1, 2026";
+const EFFECTIVE_DATE = TERMS_EFFECTIVE_DATE;
 
 export const metadata: Metadata = {
   title: "Terms of Service",
@@ -31,7 +32,9 @@ export default function TermsPage() {
           references to “you” include that entity.
         </p>
         <p>
-          You may use the service only if you can form a binding contract and your use complies with applicable laws.
+          You accept these Terms by clicking to accept them where that option is presented, by creating an
+          account, or by using the service. You may use the service only if you can form a binding contract
+          and your use complies with applicable laws.
         </p>
       </LegalSection>
 
@@ -228,7 +231,9 @@ export default function TermsPage() {
         <p>
           We may modify the service or these Terms from time to time. If we make material changes, we may provide
           notice by posting an updated version on the site, updating the effective date, or using other
-          reasonable means. Continued use of the service after the changes take effect constitutes acceptance.
+          reasonable means, and we may require you to click to accept the updated Terms in your dashboard
+          before continuing to use the service. Continued use of the service after the changes take effect
+          constitutes acceptance.
         </p>
       </LegalSection>
 
