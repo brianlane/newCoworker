@@ -113,8 +113,21 @@ export function windowStartDayUtc(now: Date, days: number): string {
 
 type MdrRecord = Record<string, unknown>;
 
-/** Backstop against a runaway pull; 400 clamped pages is 20k records. */
-const MDR_MAX_PAGES = 400;
+/**
+ * The endpoint refuses to reach past 10,000 records, computed from the
+ * REQUESTED page size times the page number (error 10011, HTTP 400), so
+ * the cap is exactly 10,000 / MDR_PAGE_SIZE pages. A 90-day window that
+ * ever outgrows 10k records must be pulled as narrower ranges instead.
+ */
+const MDR_MAX_PAGES = 200;
+
+/**
+ * Ask for exactly what the endpoint returns. It clamps responses to 50
+ * rows regardless of page[size], but it still multiplies the REQUESTED
+ * size into the 10k offset ceiling: asking for 250 walled the backfill
+ * at page 41 (41 x 250 > 10,000) with 160 records still unread.
+ */
+const MDR_PAGE_SIZE = 50;
 
 /**
  * Per-page 429 backoff schedule; the initial request precedes delay [0].
@@ -134,15 +147,17 @@ const defaultSleep = (ms: number): Promise<void> =>
 /**
  * Drain the Telnyx detail-records API for one record type.
  *
- * Two vendor quirks shape the loop:
- * - The endpoint clamps page size: we ask for 250 but it returns at most
- *   50 rows per page, so a short page is NOT proof of the last page.
- *   When meta.total_pages is present it is the only trusted stop signal;
- *   the short-page break applies only when meta is absent. (The old
- *   order broke after page 1 of 53 and under-counted July 2026 spend
- *   70x: $0.42 recorded vs $30.78 invoiced.)
- * - Long pulls trip per-account rate limits, so each page retries 429s
- *   with backoff before giving up.
+ * Vendor quirks shape the loop (all observed live on 2026-08-01):
+ * - Responses are clamped to 50 rows per page, so a short page is NOT
+ *   proof of the last page. When meta.total_pages is present it is the
+ *   only trusted stop signal; the short-page break applies only when
+ *   meta is absent. (The old order broke after page 1 of 53 and
+ *   under-counted July 2026 spend 70x: $0.42 recorded vs $30.78 real.)
+ * - The requested page[size] multiplies into a 10k offset ceiling even
+ *   though it never changes the response size, so we request the real
+ *   page size; see MDR_PAGE_SIZE.
+ * - Long pulls trip per-account rate limits, so pages are paced and
+ *   429s retry with backoff before giving up.
  *
  * A non-OK page (or blowing the page cap) throws: the caller records a
  * partial-sync error rather than silently persisting partial aggregates.
@@ -156,7 +171,7 @@ export async function fetchTelnyxDetailRecords(params: {
 }): Promise<MdrRecord[]> {
   const fetchImpl = params.fetchImpl ?? fetch;
   const sleepImpl = params.sleepImpl ?? defaultSleep;
-  const pageSize = 250;
+  const pageSize = MDR_PAGE_SIZE;
   const headers = { Authorization: `Bearer ${params.apiKey}` };
   const all: MdrRecord[] = [];
   for (let page = 1; ; page += 1) {
