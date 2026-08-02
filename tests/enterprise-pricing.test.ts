@@ -22,12 +22,12 @@ describe("estimateEnterpriseMonthlyCost", () => {
     const expected =
       HOSTING_MONTHLY_CENTS_BY_SIZE.kvm8 + // 7399
       1000 * ENTERPRISE_UNIT_COSTS.smsOutboundCentsPerMessage + // 1590
-      500 * VOICE_ALL_IN_CENTS_PER_MINUTE + // 1400
+      500 * VOICE_ALL_IN_CENTS_PER_MINUTE + // 1575
       3 * ENTERPRISE_UNIT_COSTS.didMonthlyCents; // 330
 
     expect(est.items).toHaveLength(4);
     expect(est.totalCents).toBe(Math.round(expected));
-    expect(est.totalCents).toBe(10_719);
+    expect(est.totalCents).toBe(10_894);
   });
 
   it("defaults extraDids to 0 (one included DID)", () => {

@@ -9,7 +9,9 @@ import {
 import { getPeriodPricing } from "@/lib/plans/tier";
 import {
   ENTERPRISE_UNIT_COSTS,
-  HOSTING_MONTHLY_CENTS_BY_SIZE
+  HOSTING_MONTHLY_CENTS_BY_SIZE,
+  TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS,
+  TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE
 } from "@/lib/plans/enterprise-pricing";
 
 const NOW = new Date("2026-07-10T12:00:00Z");
@@ -267,7 +269,10 @@ describe("estimateMonthlyPlatformCost", () => {
     );
     expect(result.didCents).toBe(2 * ENTERPRISE_UNIT_COSTS.didMonthlyCents);
     expect(result.boxCount).toBe(2);
-    expect(result.totalCents).toBe(result.hostingCents + result.didCents);
+    expect(result.campaignFeeCents).toBe(TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS);
+    expect(result.totalCents).toBe(
+      result.hostingCents + result.didCents + result.campaignFeeCents
+    );
   });
 
   it("resolves a missing vps_size pin through the deployed-size fallback (legacy standard → kvm8)", () => {
@@ -286,7 +291,9 @@ describe("estimateMonthlyPlatformCost", () => {
       aiSpendMicros: 0
     });
     expect(result.boxCount).toBe(0);
-    expect(result.totalCents).toBe(0);
+    // The shared 10DLC campaign fee is account-level overhead: it bills
+    // whether or not any tenant box is live.
+    expect(result.totalCents).toBe(TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS);
   });
 
   it("counts a DID but no hosting for BYOS boxes (customer-owned hardware)", () => {
@@ -316,7 +323,9 @@ describe("estimateMonthlyPlatformCost", () => {
       )
     );
     expect(result.aiSpendCents).toBe(123);
-    expect(result.totalCents).toBe(result.usageCents + result.aiSpendCents);
+    expect(result.totalCents).toBe(
+      result.usageCents + result.aiSpendCents + result.campaignFeeCents
+    );
   });
 
   it("prefers synced Hostinger prices per business, falling back per box", () => {
@@ -343,14 +352,19 @@ describe("estimateMonthlyPlatformCost", () => {
     expect(result.hostingCents).toBe(HOSTING_MONTHLY_CENTS_BY_SIZE.kvm2);
   });
 
-  it("replaces the usage estimate with the Telnyx invoice actual (no Gemini top-up)", () => {
+  it("replaces the usage estimate with the Telnyx invoice actual plus the voice adjunct top-up", () => {
     const result = estimateMonthlyPlatformCost({
       businesses: [],
       monthUsage: { smsSent: 999, voiceMinutes: 999 },
       aiSpendMicros: 0,
       actuals: { telnyxMonthCostCents: 720.4 }
     });
-    expect(result.usageCents).toBe(Math.round(720.4));
+    // Detail records never carry call control / media streaming / recording,
+    // so the actual gets the per-minute adjunct estimate on top. The SMS
+    // count must NOT re-enter (the actual already covers messaging).
+    expect(result.usageCents).toBe(
+      Math.round(720.4 + 999 * TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE)
+    );
   });
 });
 

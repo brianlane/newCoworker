@@ -32,7 +32,9 @@ import type { BillingPeriod } from "@/lib/plans/tier";
 import { isCommitmentElapsed } from "@/lib/db/subscriptions";
 import {
   ENTERPRISE_UNIT_COSTS,
-  HOSTING_MONTHLY_CENTS_BY_SIZE
+  HOSTING_MONTHLY_CENTS_BY_SIZE,
+  TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS,
+  TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE
 } from "@/lib/plans/enterprise-pricing";
 import { resolveDeployedVpsSize } from "@/lib/vps/size";
 import { addUtcMonthsClamped } from "../../../supabase/functions/_shared/billing_period_window";
@@ -202,6 +204,8 @@ export type MonthlyPlatformCostEstimate = {
   hostingCents: number;
   /** Telnyx DID rental across live tenants. */
   didCents: number;
+  /** The shared 10DLC campaign's monthly registration fee (platform fixed). */
+  campaignFeeCents: number;
   /** This calendar month's metered SMS + voice at per-unit rates. */
   usageCents: number;
   /** Gemini AI spend actuals (current period rows), micro-USD → cents. */
@@ -253,24 +257,32 @@ export function estimateMonthlyPlatformCost(params: {
   // Vendor actual (Telnyx invoice records) wins over the per-unit estimate
   // when the sync has data. Voice is priced TELNYX-ONLY here: the Gemini
   // Live component is settled into `owner_chat_model_spend` at call
-  // teardown, so it already arrives via `aiSpendMicros` below — adding a
-  // rate-estimated Gemini-voice component would double-count it.
+  // teardown, so it already arrives via `aiSpendMicros` below; adding a
+  // rate-estimated Gemini-voice component would double-count it. Actuals
+  // get the invoice-only voice adjunct top-up (call control, media
+  // streaming, recording never reach detail records); the rate estimate
+  // must not, since voiceTelnyxCentsPerMinute already includes it.
   const usageCents =
     params.actuals?.telnyxMonthCostCents !== undefined
-      ? Math.round(params.actuals.telnyxMonthCostCents)
+      ? Math.round(
+          params.actuals.telnyxMonthCostCents +
+            params.monthUsage.voiceMinutes * TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE
+        )
       : Math.round(
           params.monthUsage.smsSent * ENTERPRISE_UNIT_COSTS.smsOutboundCentsPerMessage +
             params.monthUsage.voiceMinutes * ENTERPRISE_UNIT_COSTS.voiceTelnyxCentsPerMinute
         );
   // 1 cent = 10,000 micro-USD. Includes Gemini Live voice (see above).
   const aiSpendCents = Math.round(params.aiSpendMicros / 10_000);
+  const campaignFeeCents = TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS;
 
   return {
     hostingCents,
     didCents,
+    campaignFeeCents,
     usageCents,
     aiSpendCents,
-    totalCents: hostingCents + didCents + usageCents + aiSpendCents,
+    totalCents: hostingCents + didCents + campaignFeeCents + usageCents + aiSpendCents,
     boxCount
   };
 }

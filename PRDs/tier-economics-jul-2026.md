@@ -18,6 +18,26 @@ Stripe 2.9% + $0.30._
 | Phone number rental | $1.10/mo | Telnyx DID |
 | Stripe | 2.9% + $0.30 | biennial plans amortize the $0.30 over 24 months |
 
+### Aug 1 2026 correction (post detail-records pagination fix, PRs #1118/#1120/#1123)
+
+Reconciled against the June 2026 invoice PDF and a fully paginated 90-day pull:
+
+- **Voice (Telnyx) was understated ~1.6x.** True all-in is ~$0.009/min: origination
+  $0.0035 + call control $0.002/leg + media streaming $0.0035 + call recording
+  $0.002 (June invoice: $0.32 over 36 min). The $0.0055 figure missed the
+  invoice-only adjunct lines, which never appear in `/v2/detail_records`.
+  `voiceTelnyxCentsPerMinute` updated 0.55 to 0.9; synced-actuals views add
+  `TELNYX_VOICE_ADJUNCT_CENTS_PER_MINUTE` (0.5 cents/min) on top of MDR cost.
+- **Missing fixed cost: the shared 10DLC campaign bills $10.00/mo** (one
+  CUSTOMER_CARE campaign fleet-wide, invoice code `10DLC-CAMPAIGN-FEE-REGULAR-MRC`,
+  renews the 6th, auto-renewing). Added to the platform cost model as
+  `TELNYX_CAMPAIGN_FEE_MONTHLY_CENTS`; it is platform overhead, not per-tenant.
+- **July 2026 actuals**: usage $30.78 (2,027 msgs + 102 voice min; Amy $20.30,
+  KYP Ads $6.49, Truly $2.88) vs $0.42 recorded by the pre-fix sync. Blended
+  per-message ~$0.0150 incl. inbound and MMS, so the $0.0159 outbound bound
+  above still holds. DID $1.10/mo confirmed exact ($1.00 DID MRC + $0.10 SMS MRC,
+  posts the 1st).
+
 Hostinger catalog (live API, Jul 2 2026), effective $/mo:
 
 | SKU | Monthly | 1-yr term | 2-yr term |
