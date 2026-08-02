@@ -1,5 +1,6 @@
 import { getTranslations } from "next-intl/server";
 import { CoworkerToolsManager } from "@/components/dashboard/CoworkerToolsManager";
+import { CustomerLanguageSettings } from "@/components/dashboard/CustomerLanguageSettings";
 import { FlowSafetySettings } from "@/components/dashboard/FlowSafetySettings";
 import { MailboxSettings } from "@/components/dashboard/MailboxSettings";
 import { resolveAgentTools } from "@/lib/db/agent-tool-settings";
@@ -45,6 +46,12 @@ export default async function CoworkerSettingsPage() {
 
       {business && agents && (
         <CoworkerToolsManager businessId={business.id} initialAgents={agents} />
+      )}
+
+      {business && (
+        <CustomerLanguageSettings
+          initialLanguage={business.default_customer_language === "es" ? "es" : "en"}
+        />
       )}
 
       {business && (

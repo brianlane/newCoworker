@@ -676,6 +676,28 @@ export async function updateBusinessTimezone(
 }
 
 /**
+ * Set the tenant's default customer-facing language ("en" | "es"): what the
+ * coworker opens with when a customer's own language is unknown or
+ * ambiguous. Every consumer (SMS inbound worker, voice IVR, voice-bridge
+ * persona) reads the businesses row live, so the write propagates without a
+ * profile refresh or vault sync; per-contact detected language still
+ * overrides per person. Until the Mexico rollout this column had readers
+ * and no writer (SQL-only), which is exactly what this closes.
+ */
+export async function updateBusinessDefaultCustomerLanguage(
+  id: string,
+  language: "en" | "es",
+  client?: SupabaseClient
+): Promise<void> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db
+    .from("businesses")
+    .update({ default_customer_language: language })
+    .eq("id", id);
+  if (error) throw new Error(`updateBusinessDefaultCustomerLanguage: ${error.message}`);
+}
+
+/**
  * Toggle AiFlow staff-contact tag protection (Settings): when ON (default),
  * update_contact steps skip owner/employee contacts so lead-state tags never
  * land on staff. See migration 20260813000000_aiflow_staff_tag_protection.

@@ -18,6 +18,7 @@ import {
   updateBusinessProfileFields,
   updateBusinessStatus,
   updateBusinessBranding,
+  updateBusinessDefaultCustomerLanguage,
   updateBusinessTimezone,
   updateComplianceModule,
   updateEnterpriseModels,
@@ -793,6 +794,26 @@ describe("db/businesses", () => {
 
     await expect(updateBusinessTimezone("uuid-biz-1", "UTC")).rejects.toThrow(
       "updateBusinessTimezone"
+    );
+  });
+
+  it("updateBusinessDefaultCustomerLanguage writes both languages (provided or fresh client)", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: null }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await updateBusinessDefaultCustomerLanguage("uuid-biz-1", "es");
+    expect(db.update).toHaveBeenCalledWith({ default_customer_language: "es" });
+
+    await updateBusinessDefaultCustomerLanguage("uuid-biz-1", "en", db as never);
+    expect(db.update).toHaveBeenCalledWith({ default_customer_language: "en" });
+  });
+
+  it("updateBusinessDefaultCustomerLanguage throws when Supabase reports an error", async () => {
+    const db = { ...mockDb(), eq: vi.fn().mockResolvedValue({ error: { message: "fail" } }) };
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await expect(updateBusinessDefaultCustomerLanguage("uuid-biz-1", "es")).rejects.toThrow(
+      "updateBusinessDefaultCustomerLanguage"
     );
   });
 
