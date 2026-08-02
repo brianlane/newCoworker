@@ -50,11 +50,12 @@ export function businessDefaultPhoneCountry(input: {
   timezone?: string | null;
 }): PhoneCountry {
   const cleaned = (input.phone ?? "").trim().replace(/[^\d+]/g, "");
-  if (cleaned.startsWith("+52")) return "MX";
-  if (cleaned && normalizeNanpToE164(cleaned)) return "US";
-  // A plus-less 52/521-prefixed row (legacy hand entry): the same shapes lead
-  // sanitization accepts. Gated on the 12/13-digit lengths so a bare
-  // 10-digit phone can never reach the MX normalizer's national arm.
+  // A Mexican-shaped phone: +52-prefixed, or a plus-less 52/521 12/13-digit
+  // run (legacy hand entry), both VALIDATED through the MX normalizer so a
+  // malformed +52 row falls through instead of classifying MX. Gated on the
+  // 12/13-digit lengths so a bare 10-digit phone can never reach the
+  // normalizer's national arm. Keep this predicate in lockstep with
+  // isMxShapedPhone in src/lib/plans/business-country.ts (fixture-tested).
   const digits = cleaned.replace(/[^\d]/g, "");
   if (
     ((digits.length === 12 && digits.startsWith("52")) ||
@@ -63,6 +64,7 @@ export function businessDefaultPhoneCountry(input: {
   ) {
     return "MX";
   }
+  if (cleaned && normalizeNanpToE164(cleaned)) return "US";
   const tz = (input.timezone ?? "").trim();
   return MEXICAN_TIMEZONES.has(tz) ? "MX" : "US";
 }

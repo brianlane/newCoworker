@@ -2279,6 +2279,63 @@ describe("provisioning/orchestrate", () => {
       delete process.env.TELNYX_MESSAGING_PROFILE_ID_CA;
     });
 
+    it("provisions a Mexican tenant on the MX messaging profile with a US number", async () => {
+      process.env.TELNYX_AUTO_PURCHASE_DID = "true";
+      process.env.TELNYX_MESSAGING_PROFILE_ID_MX = "mock_prof_mx";
+      // +52 owner: no NANP area code derivable, so the owner_local tier
+      // silently (and intentionally) drops out of the cascade.
+      const biz = { business_type: "real_estate", phone: "+52 55 1234 5678" } as never;
+      vi.mocked(getBusiness).mockResolvedValueOnce(biz);
+      const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+16025550100" });
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      await orchestrateProvisioning(
+        { businessId: "biz-did-mx", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner
+        }
+      );
+      expect(didProvisioner).toHaveBeenCalledWith(
+        expect.objectContaining({
+          // v1 keeps Mexican tenants on a US +1 DID (no +52 purchase, no
+          // Telnyx regulatory-document plumbing; WhatsApp is the local
+          // channel), but the MX-whitelisted messaging profile is what lets
+          // that US number text +52 without a Telnyx 40309.
+          search: expect.objectContaining({ countryCode: "US" }),
+          platformDefaults: expect.objectContaining({ messagingProfileId: "mock_prof_mx" })
+        })
+      );
+      delete process.env.TELNYX_MESSAGING_PROFILE_ID_MX;
+    });
+
+    it("still provisions a timezone-classified Mexican tenant when TELNYX_MESSAGING_PROFILE_ID_MX is unset (loud warn, default profile)", async () => {
+      process.env.TELNYX_AUTO_PURCHASE_DID = "true";
+      delete process.env.TELNYX_MESSAGING_PROFILE_ID_MX;
+      const biz = {
+        business_type: "real_estate",
+        phone: "+447911123456",
+        timezone: "America/Mexico_City"
+      } as never;
+      vi.mocked(getBusiness).mockResolvedValueOnce(biz);
+      const didProvisioner = vi.fn().mockResolvedValue({ toE164: "+16025550100" });
+      vi.mocked(getTelnyxVoiceRouteForBusiness).mockResolvedValueOnce(null);
+      await orchestrateProvisioning(
+        { businessId: "biz-did-mx-noenv", tier: "starter" },
+        {
+          vpsProvisioner: vi.fn().mockResolvedValue(makeVpsStub("42")),
+          remoteExec: vi.fn().mockResolvedValue(okExec()),
+          didProvisioner
+        }
+      );
+      expect(didProvisioner).toHaveBeenCalledWith(
+        expect.objectContaining({
+          search: expect.objectContaining({ countryCode: "US" }),
+          platformDefaults: expect.objectContaining({ messagingProfileId: "mock_prof" })
+        })
+      );
+    });
+
     it("falls back to TELNYX_DEFAULT_AREA_CODE when the owner phone is not a NANP number", async () => {
       process.env.TELNYX_AUTO_PURCHASE_DID = "true";
       process.env.TELNYX_DEFAULT_AREA_CODE = "212";
