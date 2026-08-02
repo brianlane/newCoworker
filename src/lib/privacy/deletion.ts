@@ -170,16 +170,26 @@ export async function deleteEndUserData(
   // BEFORE the contact rows are deleted: ai_reply_reasoning below is keyed
   // by whichever number the person texted from, which may be an alias, and
   // an EMAIL-ONLY request still identifies phone-keyed reasoning through the
-  // contact row's numbers.
+  // contact row's numbers. The capture is symmetric: a PHONE-ONLY request
+  // also collects the contact rows' email addresses, so email-keyed stores
+  // (email_log, campaign recipients, webchat visitor emails, attributed
+  // graph facts) are reachable from either axis. One hop only, matching the
+  // number capture: collected emails feed the downstream matchers, they do
+  // not re-scan contacts for further twins.
   const linkedNumbers = new Set<string>(e164 ? [e164] : []);
-  const collectLinkedNumbers = (rows: unknown): void => {
+  const linkedEmails = new Set<string>(email ? [email] : []);
+  const collectLinkedIdentifiers = (rows: unknown): void => {
     for (const row of (Array.isArray(rows) ? rows : []) as Array<{
       customer_e164: string;
       alias_e164s?: unknown;
+      email?: unknown;
     }>) {
       linkedNumbers.add(row.customer_e164);
       for (const alias of Array.isArray(row.alias_e164s) ? row.alias_e164s : []) {
         if (typeof alias === "string" && alias) linkedNumbers.add(alias);
+      }
+      if (typeof row.email === "string" && row.email.trim()) {
+        linkedEmails.add(row.email.trim().toLowerCase());
       }
     }
   };
@@ -188,13 +198,13 @@ export async function deleteEndUserData(
     if (e164) {
       const { data: linkedRows, error: linkedErr } = await db
         .from("contacts")
-        .select("customer_e164, alias_e164s")
+        .select("customer_e164, alias_e164s, email")
         .eq("business_id", businessId)
         .or(`customer_e164.eq.${e164},alias_e164s.cs.{${e164}}`);
       if (linkedErr) {
         throw new EndUserDeletionError(`contacts (linked-number scan): ${linkedErr.message}`);
       }
-      collectLinkedNumbers(linkedRows);
+      collectLinkedIdentifiers(linkedRows);
       const [primary, alias] = await Promise.all([
         db
           .from("contacts")
@@ -223,7 +233,7 @@ export async function deleteEndUserData(
       // reasoning delete below.
       const { data: emailLinked, error: emailLinkedErr } = await db
         .from("contacts")
-        .select("customer_e164, alias_e164s")
+        .select("customer_e164, alias_e164s, email")
         .eq("business_id", businessId)
         .ilike("email", emailPattern!);
       if (emailLinkedErr) {
@@ -231,7 +241,7 @@ export async function deleteEndUserData(
           `contacts (linked-number scan, email): ${emailLinkedErr.message}`
         );
       }
-      collectLinkedNumbers(emailLinked);
+      collectLinkedIdentifiers(emailLinked);
       const { data, error } = await db
         .from("contacts")
         .delete()
@@ -413,43 +423,51 @@ export async function deleteEndUserData(
   // (an orphaned object with no row is invisible garbage; the reverse is a
   // live row pointing at nothing). Same rationale as documents/cleanup.ts.
   // The bucket is central Supabase Storage, so there is no box equivalent.
-  if (email) {
-    const central = { sent: 0, received: 0 };
-    const [to, from] = await Promise.all([
-      db
-        .from("email_log")
-        .delete()
-        .eq("business_id", businessId)
-        .ilike("to_email", emailPattern!)
-        .select("id, attachments"),
-      db
-        .from("email_log")
-        .delete()
-        .eq("business_id", businessId)
-        .ilike("from_email", emailPattern!)
-        .select("id, attachments")
-    ]);
-    if (to.error) throw new EndUserDeletionError(`email_log (to): ${to.error.message}`);
-    if (from.error) throw new EndUserDeletionError(`email_log (from): ${from.error.message}`);
-    central.sent = count(to.data);
-    central.received = count(from.data);
-    let box: number | null = null;
-    if (api) {
-      box =
-        (await boxDelete("email_log", [{ column: "to_email", op: "ilike", value: emailPattern! }])) +
-        (await boxDelete("email_log", [{ column: "from_email", op: "ilike", value: emailPattern! }]));
-    }
-    results.push({ table: "email_log", central: central.sent + central.received, box });
-
+  // Runs for every linked email: the request's own, plus the addresses a
+  // phone-only request captured from the person's contact rows.
+  if (linkedEmails.size > 0) {
+    let central = 0;
+    let box: number | null = api ? 0 : null;
     const paths: string[] = [];
-    for (const rows of [to.data, from.data]) {
+    const collectPaths = (rows: unknown): void => {
       for (const row of (Array.isArray(rows) ? rows : []) as Array<{ attachments?: unknown }>) {
         for (const att of Array.isArray(row.attachments) ? row.attachments : []) {
           const p = (att as { storage_path?: unknown }).storage_path;
           if (typeof p === "string" && p) paths.push(p);
         }
       }
+    };
+    for (const em of linkedEmails) {
+      const pattern = escapeLikeLiteral(em);
+      const [to, from] = await Promise.all([
+        db
+          .from("email_log")
+          .delete()
+          .eq("business_id", businessId)
+          .ilike("to_email", pattern)
+          .select("id, attachments"),
+        db
+          .from("email_log")
+          .delete()
+          .eq("business_id", businessId)
+          .ilike("from_email", pattern)
+          .select("id, attachments")
+      ]);
+      if (to.error) throw new EndUserDeletionError(`email_log (to): ${to.error.message}`);
+      if (from.error) throw new EndUserDeletionError(`email_log (from): ${from.error.message}`);
+      central += count(to.data) + count(from.data);
+      collectPaths(to.data);
+      collectPaths(from.data);
+      if (api) {
+        // box was initialized to 0 (not null) whenever api is set.
+        box =
+          (box as number) +
+          (await boxDelete("email_log", [{ column: "to_email", op: "ilike", value: pattern }])) +
+          (await boxDelete("email_log", [{ column: "from_email", op: "ilike", value: pattern }]));
+      }
     }
+    results.push({ table: "email_log", central, box });
+
     if (paths.length > 0) {
       const { error: removeError } = await db.storage.from("email-attachments").remove(paths);
       if (removeError) {
@@ -480,12 +498,12 @@ export async function deleteEndUserData(
       if (error) throw new EndUserDeletionError(`business_document_shares: ${error.message}`);
       central += count(data);
     }
-    if (email) {
+    for (const em of linkedEmails) {
       const { data, error } = await db
         .from("business_document_shares")
         .delete()
         .eq("business_id", businessId)
-        .ilike("shared_with", emailPattern!)
+        .ilike("shared_with", escapeLikeLiteral(em))
         .select("id");
       if (error) throw new EndUserDeletionError(`business_document_shares: ${error.message}`);
       central += count(data);
@@ -531,13 +549,14 @@ export async function deleteEndUserData(
       }
       central += count(redacted);
     }
-    if (email) {
+    for (const em of linkedEmails) {
+      const pattern = escapeLikeLiteral(em);
       const { data, error } = await db
         .from("document_signature_requests")
         .delete()
         .eq("business_id", businessId)
         .neq("status", "signed")
-        .ilike("signer_email", emailPattern!)
+        .ilike("signer_email", pattern)
         .select("id");
       if (error) throw new EndUserDeletionError(`document_signature_requests: ${error.message}`);
       central += count(data);
@@ -546,7 +565,7 @@ export async function deleteEndUserData(
         .update(redaction)
         .eq("business_id", businessId)
         .eq("status", "signed")
-        .ilike("signer_email", emailPattern!)
+        .ilike("signer_email", pattern)
         .select("id");
       if (redactError) {
         throw new EndUserDeletionError(`document_signature_requests: ${redactError.message}`);
@@ -595,8 +614,10 @@ export async function deleteEndUserData(
   // preferable to retaining an erased person's data.
   {
     let central = 0;
-    const patterns = [...linkedNumbers].map((n) => `%${escapeLikeLiteral(n)}%`);
-    if (emailPattern) patterns.push(`%${emailPattern}%`);
+    const patterns = [
+      ...[...linkedNumbers].map((n) => `%${escapeLikeLiteral(n)}%`),
+      ...[...linkedEmails].map((em) => `%${escapeLikeLiteral(em)}%`)
+    ];
     for (const pattern of patterns) {
       for (const column of ["question", "answer", "graph_context", "memory_context"]) {
         const { data, error } = await db
@@ -632,14 +653,20 @@ export async function deleteEndUserData(
     return linkedDigitForms.has(d) || (d.length >= 10 && linkedDigitForms.has(d.slice(-10)));
   };
   const emailMatches = (raw: unknown): boolean =>
-    email !== null && typeof raw === "string" && raw.trim().toLowerCase() === email;
+    linkedEmails.size > 0 &&
+    typeof raw === "string" &&
+    linkedEmails.has(raw.trim().toLowerCase());
   // Free-form jsonb (lead form answers, AiFlow run context): walk every
-  // value; a string matches when it contains the email or a linked digit
-  // sequence. Deliberately broad, same philosophy as the ledger scrub above.
+  // value; a string matches when it contains a linked email or a linked
+  // digit sequence. Deliberately broad, same philosophy as the ledger
+  // scrub above.
   const jsonValueMatches = (value: unknown): boolean => {
     if (typeof value === "number") return jsonValueMatches(String(value));
     if (typeof value === "string") {
-      if (email !== null && value.toLowerCase().includes(email)) return true;
+      const lower = value.toLowerCase();
+      for (const em of linkedEmails) {
+        if (lower.includes(em)) return true;
+      }
       const d = digitsOf(value);
       if (d.length < 7) return false;
       for (const form of linkedDigitForms) {
@@ -889,19 +916,33 @@ export async function deleteEndUserData(
   // literal object value or source bullet carries the identifier verbatim.
   {
     let central = 0;
-    {
-      const attributedTo = [...linkedNumbers, ...(email === null ? [] : [email])];
+    if (linkedNumbers.size > 0) {
       const { data, error } = await db
         .from("memory_facts")
         .delete()
         .eq("business_id", businessId)
-        .in("attributed_to", attributedTo)
+        .in("attributed_to", [...linkedNumbers])
         .select("id");
       if (error) throw new EndUserDeletionError(`memory_facts: ${error.message}`);
       central += count(data);
     }
-    const patterns = [...linkedNumbers].map((n) => `%${escapeLikeLiteral(n)}%`);
-    if (emailPattern) patterns.push(`%${emailPattern}%`);
+    // Email attribution is matched with a case-insensitive EXACT ilike
+    // (escaped literal, no wildcards): conversational ingestion can persist
+    // the raw mailbox casing, which a case-sensitive .in() would miss.
+    for (const em of linkedEmails) {
+      const { data, error } = await db
+        .from("memory_facts")
+        .delete()
+        .eq("business_id", businessId)
+        .ilike("attributed_to", escapeLikeLiteral(em))
+        .select("id");
+      if (error) throw new EndUserDeletionError(`memory_facts: ${error.message}`);
+      central += count(data);
+    }
+    const patterns = [
+      ...[...linkedNumbers].map((n) => `%${escapeLikeLiteral(n)}%`),
+      ...[...linkedEmails].map((em) => `%${escapeLikeLiteral(em)}%`)
+    ];
     for (const pattern of patterns) {
       for (const column of ["source_text", "object_value"]) {
         const { data, error } = await db
@@ -1028,12 +1069,12 @@ export async function deleteEndUserData(
       if (error) throw new EndUserDeletionError(`lead_submissions (phone): ${error.message}`);
       central += count(data);
     }
-    if (email) {
+    for (const em of linkedEmails) {
       const { data, error } = await db
         .from("lead_submissions")
         .delete()
         .eq("business_id", businessId)
-        .ilike("email", emailPattern!)
+        .ilike("email", escapeLikeLiteral(em))
         .select("id");
       if (error) throw new EndUserDeletionError(`lead_submissions (email): ${error.message}`);
       central += count(data);
@@ -1075,12 +1116,12 @@ export async function deleteEndUserData(
       if (error) throw new EndUserDeletionError(`booking_waitlist (phone): ${error.message}`);
       central += count(data);
     }
-    if (email) {
+    for (const em of linkedEmails) {
       const { data, error } = await db
         .from("booking_waitlist")
         .delete()
         .eq("business_id", businessId)
-        .ilike("email", emailPattern!)
+        .ilike("email", escapeLikeLiteral(em))
         .select("id");
       if (error) throw new EndUserDeletionError(`booking_waitlist (email): ${error.message}`);
       central += count(data);
@@ -1104,12 +1145,13 @@ export async function deleteEndUserData(
       if (error) throw new EndUserDeletionError(`calendar_booking_dedupe (key): ${error.message}`);
       central += count(data);
     }
-    if (email) {
+    for (const em of linkedEmails) {
+      const pattern = escapeLikeLiteral(em);
       const byKey = await db
         .from("calendar_booking_dedupe")
         .delete()
         .eq("business_id", businessId)
-        .ilike("attendee_key", emailPattern!)
+        .ilike("attendee_key", pattern)
         .select("id");
       if (byKey.error) {
         throw new EndUserDeletionError(`calendar_booking_dedupe (key): ${byKey.error.message}`);
@@ -1119,7 +1161,7 @@ export async function deleteEndUserData(
         .from("calendar_booking_dedupe")
         .delete()
         .eq("business_id", businessId)
-        .ilike("attendee_email", emailPattern!)
+        .ilike("attendee_email", pattern)
         .select("id");
       if (byEmail.error) {
         throw new EndUserDeletionError(`calendar_booking_dedupe (email): ${byEmail.error.message}`);
@@ -1133,27 +1175,35 @@ export async function deleteEndUserData(
   // One row per correspondent thread; the row exists to describe the
   // correspondent, so it is deleted outright. email_coworker_seen is a
   // message-id dedupe set with no person columns and is exempt.
-  if (email) {
-    const { data, error } = await db
-      .from("email_coworker_threads")
-      .delete()
-      .eq("business_id", businessId)
-      .ilike("correspondent_email", emailPattern!)
-      .select("id");
-    if (error) throw new EndUserDeletionError(`email_coworker_threads: ${error.message}`);
-    results.push({ table: "email_coworker_threads", central: count(data), box: null });
+  if (linkedEmails.size > 0) {
+    let central = 0;
+    for (const em of linkedEmails) {
+      const { data, error } = await db
+        .from("email_coworker_threads")
+        .delete()
+        .eq("business_id", businessId)
+        .ilike("correspondent_email", escapeLikeLiteral(em))
+        .select("id");
+      if (error) throw new EndUserDeletionError(`email_coworker_threads: ${error.message}`);
+      central += count(data);
+    }
+    results.push({ table: "email_coworker_threads", central, box: null });
   }
 
   // ── email_campaign_recipients (campaign send snapshot rows) ─────────────
-  if (email) {
-    const { data, error } = await db
-      .from("email_campaign_recipients")
-      .delete()
-      .eq("business_id", businessId)
-      .ilike("email", emailPattern!)
-      .select("id");
-    if (error) throw new EndUserDeletionError(`email_campaign_recipients: ${error.message}`);
-    results.push({ table: "email_campaign_recipients", central: count(data), box: null });
+  if (linkedEmails.size > 0) {
+    let central = 0;
+    for (const em of linkedEmails) {
+      const { data, error } = await db
+        .from("email_campaign_recipients")
+        .delete()
+        .eq("business_id", businessId)
+        .ilike("email", escapeLikeLiteral(em))
+        .select("id");
+      if (error) throw new EndUserDeletionError(`email_campaign_recipients: ${error.message}`);
+      central += count(data);
+    }
+    results.push({ table: "email_campaign_recipients", central, box: null });
   }
 
   // ── outreach_prospects (REDACT, never delete: suppression must survive) ─
@@ -1178,12 +1228,12 @@ export async function deleteEndUserData(
       status_detail: "privacy_erasure"
     };
     let central = 0;
-    if (email) {
+    for (const em of linkedEmails) {
       const { data, error } = await db
         .from("outreach_prospects")
         .update(redaction)
         .eq("business_id", businessId)
-        .ilike("email", emailPattern!)
+        .ilike("email", escapeLikeLiteral(em))
         .select("id");
       if (error) throw new EndUserDeletionError(`outreach_prospects (email): ${error.message}`);
       central += count(data);

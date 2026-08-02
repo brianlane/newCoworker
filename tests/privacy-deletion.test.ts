@@ -342,6 +342,7 @@ describe("deleteEndUserData — central-only tenants", () => {
     ["memory_entities#1", /memory_entities \(scan\): boom/, { e164: E164 }],
     ["memory_facts#1", /memory_facts: boom/, { e164: E164 }],
     ["memory_facts#2", /memory_facts: boom/, { e164: E164 }],
+    ["memory_facts#2", /memory_facts: boom/, { e164: E164, email: EMAIL }],
     ["coworker_logs#1", /coworker_logs \(scan\): boom/, { e164: E164 }],
     ["ai_flow_runs#1", /ai_flow_runs \(scan\): boom/, { e164: E164 }],
     ["lead_submissions#1", /lead_submissions \(phone\): boom/, { e164: E164 }],
@@ -645,6 +646,53 @@ describe("deleteEndUserData — expanded coverage stores", () => {
     expect(byTable.memory_facts).toEqual({ table: "memory_facts", central: 2, box: null });
     expect(vi.mocked(syncVaultToVps)).toHaveBeenCalledTimes(1);
     expect(vi.mocked(syncVaultToVps)).toHaveBeenCalledWith(BIZ);
+  });
+
+  it("a phone-only erasure follows the contact's email one hop into email-keyed stores", async () => {
+    const db = makeCentralDb({
+      // The linked-number scan also carries the contact's email address.
+      "contacts#1": {
+        data: [{ customer_e164: E164, alias_e164s: [], email: " Linked@Example.com " }],
+        error: null
+      },
+      "email_log#1": { data: [{ id: "e1" }], error: null },
+      "email_log#2": { data: [{ id: "e2" }], error: null },
+      email_coworker_threads: { data: [{ id: "t1" }], error: null },
+      email_campaign_recipients: { data: [{ id: "cr1" }], error: null },
+      "webchat_sessions#1": {
+        data: [{ id: "w1", visitor_phone: null, visitor_email: "linked@example.com" }],
+        error: null
+      },
+      "webchat_sessions#2": { data: [{ id: "w1" }], error: null }
+    });
+    const res = await deleteEndUserData(BIZ, { e164: E164 }, { client: db as never });
+    const byTable = Object.fromEntries(res.tables.map((t) => [t.table, t]));
+    expect(byTable.email_log).toEqual({ table: "email_log", central: 2, box: null });
+    expect(byTable.email_coworker_threads.central).toBe(1);
+    expect(byTable.email_campaign_recipients.central).toBe(1);
+    expect(byTable.webchat_sessions.central).toBe(1);
+  });
+
+  it("attributed_to email matching is a case-insensitive escaped ilike, not a case-sensitive in()", async () => {
+    const db = makeCentralDb({
+      "memory_facts#1": { data: [{ id: "f-num" }], error: null },
+      "memory_facts#2": { data: [{ id: "f-mail" }], error: null }
+    });
+    const res = await deleteEndUserData(
+      BIZ,
+      { e164: E164, email: "Jo_hn@Example.com" },
+      { client: db as never }
+    );
+    const byTable = Object.fromEntries(res.tables.map((t) => [t.table, t]));
+    expect(byTable.memory_facts.central).toBe(2);
+    // Inspect the second memory_facts round trip: the email attribution
+    // delete must use ilike with the ESCAPED lowercased literal.
+    const factChains = db.from.mock.calls
+      .map((c, i) => [c[0], db.from.mock.results[i].value] as const)
+      .filter(([t]) => t === "memory_facts")
+      .map(([, ch]) => ch as { ilike: ReturnType<typeof vi.fn>; in: ReturnType<typeof vi.fn> });
+    expect(factChains[0].in).toHaveBeenCalledWith("attributed_to", [E164]);
+    expect(factChains[1].ilike).toHaveBeenCalledWith("attributed_to", "jo\\_hn@example.com");
   });
 
   it("a null scan page counts as empty and ends the pagination", async () => {
