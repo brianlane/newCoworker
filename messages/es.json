@@ -1577,6 +1577,8 @@
     "didntReceive": "¿No lo recibiste? Revisa tu carpeta de spam o <retry>inténtalo de nuevo</retry>.",
     "createAccountCta": "Crear cuenta",
     "alreadyHaveAccount": "¿Ya tienes una cuenta?",
+    "signupAgree": "Acepto los <terms>Términos de Servicio</terms> y la <privacy>Política de Privacidad</privacy>",
+    "termsRequired": "Debes aceptar los Términos de Servicio y la Política de Privacidad para continuar.",
     "verifyConfirmTitle": "Confirma tu correo",
     "verifyExpiredTitle": "Enlace de verificación expirado",
     "verifyInvalidTitle": "Enlace de verificación inválido",
@@ -1600,6 +1602,14 @@
     "confirmEmail": "Confirmar correo"
   },
   "dashboard": {
+    "termsGate": {
+      "title": "Antes de continuar",
+      "body": "Revisa y acepta los Términos de Servicio y la Política de Privacidad para seguir usando New Coworker.",
+      "checkboxLabel": "Acepto los <terms>Términos de Servicio</terms> y la <privacy>Política de Privacidad</privacy>",
+      "accept": "Aceptar y continuar",
+      "checkboxRequired": "Marca la casilla para continuar.",
+      "failed": "Algo salió mal. Inténtalo de nuevo."
+    },
     "nav": {
       "dashboard": "Panel",
       "tasks": "Tareas",

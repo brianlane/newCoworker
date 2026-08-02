@@ -1,8 +1,9 @@
 import type { Metadata } from "next";
 import { LegalPage, LegalSection } from "@/components/legal/LegalPage";
 import { contactEmail as resolveContactEmail } from "@/lib/marketing/contact-email";
+import { PRIVACY_EFFECTIVE_DATE } from "@/lib/legal/versions";
 
-const EFFECTIVE_DATE = "August 1, 2026";
+const EFFECTIVE_DATE = PRIVACY_EFFECTIVE_DATE;
 
 export const metadata: Metadata = {
   title: "Privacy Policy",

@@ -22,6 +22,8 @@ import { effectiveBranding, type Branding } from "@/lib/plans/branding";
 import { BusinessSwitcher } from "@/components/dashboard/BusinessSwitcher";
 import { resolveViewAsContext } from "@/lib/admin/view-as";
 import { ViewAsBanner } from "@/components/admin/ViewAsBanner";
+import { latestAcceptanceFor, needsAcceptance } from "@/lib/legal/acceptance";
+import { TermsAcceptanceGate } from "@/components/legal/TermsAcceptanceGate";
 
 // `cover` lets the h-dvh shell paint edge-to-edge under the notch / home
 // indicator; the shell's safe-area padding (globals.css) keeps content clear.
@@ -58,6 +60,13 @@ export default async function DashboardLayout({ children }: { children: React.Re
   // Kicked off FIRST so it overlaps every tenant-scoped read below — it only
   // depends on the user id, never on the resolved business.
   const sidebarLayoutPromise = getSidebarLayout(user.userId);
+
+  // Clickwrap gate read: does this user have an acceptance row for the
+  // CURRENT legal versions (src/lib/legal/versions.ts)? Kicked off beside
+  // the sidebar read since it only depends on the user id. Skipped under
+  // view-as: an impersonating admin must never accept the Terms on a
+  // tenant's behalf (the accept endpoint refuses view-as too).
+  const acceptancePromise = viewAs ? null : latestAcceptanceFor(user.userId);
 
   let grace:
     | { graceEndsAt: string; reason: Parameters<typeof GraceBanner>[0]["reason"] }
@@ -174,6 +183,8 @@ export default async function DashboardLayout({ children }: { children: React.Re
     whatsappConnected
   });
 
+  const requireAcceptance = acceptancePromise ? needsAcceptance(await acceptancePromise) : false;
+
   return (
     <div className="flex h-dvh bg-deep-ink">
       <DashboardSidebar
@@ -204,6 +215,7 @@ export default async function DashboardLayout({ children }: { children: React.Re
             <GraceBanner graceEndsAt={grace.graceEndsAt} reason={grace.reason} />
           </div>
         )}
+        {requireAcceptance && <TermsAcceptanceGate />}
         {children}
       </main>
     </div>
