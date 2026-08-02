@@ -27,7 +27,7 @@ describe("fmtEmail", () => {
 describe("whatsappTemplateStateKey", () => {
   it("keeps the bare name for en_US and suffixes other languages", () => {
     expect(whatsappTemplateStateKey("nc_owner_alert", "en_US")).toBe("nc_owner_alert");
-    expect(whatsappTemplateStateKey("nc_owner_alert", "es_US")).toBe("nc_owner_alert:es_US");
+    expect(whatsappTemplateStateKey("nc_owner_alert", "es")).toBe("nc_owner_alert:es");
   });
 });
 

@@ -269,7 +269,7 @@ export function WhatsAppIntegrationCard({
 
   const templates = Object.entries(connection?.templates ?? {});
   // Only the bare-name (en_US) entries gate out-of-window delivery; the
-  // suffixed language variants (name:es_US) are enhancements — sends fall
+  // suffixed language variants (name:es) are enhancements — sends fall
   // back to the approved English template while those are in review.
   const templatesPending = templates.some(
     ([name, t]) => !name.includes(":") && t.status !== "APPROVED"

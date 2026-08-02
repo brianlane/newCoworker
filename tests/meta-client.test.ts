@@ -19,6 +19,8 @@ import {
   exchangeEmbeddedSignupCode,
   fetchWhatsAppTemplateStatuses,
   registerWhatsAppTemplates,
+  WHATSAPP_STOCK_TEMPLATES,
+  WHATSAPP_TEMPLATE_LANGUAGE_ES,
   sendWhatsAppMessage,
   sendWhatsAppTemplate,
   subscribeWabaToApp,
@@ -687,21 +689,21 @@ describe("registerWhatsAppTemplates", () => {
     const results = await registerWhatsAppTemplates("waba-9", "biz-tok");
     expect(results).toEqual([
       { name: "nc_owner_alert", language: "en_US", status: "PENDING" },
-      { name: "nc_owner_alert", language: "es_US", status: "PENDING" },
+      { name: "nc_owner_alert", language: "es", status: "PENDING" },
       { name: "nc_contact_followup", language: "en_US", status: "PENDING" },
-      { name: "nc_contact_followup", language: "es_US", status: "PENDING" }
+      { name: "nc_contact_followup", language: "es", status: "PENDING" }
     ]);
     const [, init] = fetchMock.mock.calls[0] as [string, RequestInit];
     const body = JSON.parse(init.body as string) as { name: string; category: string };
     expect(body.name).toBe("nc_owner_alert");
     expect(body.category).toBe("UTILITY");
-    // The es_US variant registers with a Spanish body + Spanish example.
+    // The Spanish variant registers with a Spanish body + Spanish example.
     const [, esInit] = fetchMock.mock.calls[1] as [string, RequestInit];
     const esBody = JSON.parse(esInit.body as string) as {
       language: string;
       components: Array<{ text: string; example: { body_text: string[][] } }>;
     };
-    expect(esBody.language).toBe("es_US");
+    expect(esBody.language).toBe("es");
     expect(esBody.components[0].text).toContain("Actualización");
     expect(esBody.components[0].example.body_text[0][1]).toContain("lead nuevo");
   });
@@ -714,6 +716,62 @@ describe("registerWhatsAppTemplates", () => {
       .mockResolvedValueOnce(jsonResponse(500, { error: "boom" }));
     const results = await registerWhatsAppTemplates("waba-9", "biz-tok");
     expect(results.map((r) => r.status)).toEqual(["FAILED", "FAILED", "FAILED", "FAILED"]);
+  });
+
+  it("records WHY a registration failed, so an invalid payload is diagnosable from the stored state", async () => {
+    // A bare "FAILED" is what let the invalid `es_US` language sit
+    // unnoticed: the Spanish templates simply never existed on any WABA
+    // and nothing said why.
+    fetchMock
+      .mockResolvedValueOnce(jsonResponse(200, { status: "PENDING" }))
+      .mockResolvedValueOnce(jsonResponse(400, { error: "unsupported language" }))
+      .mockResolvedValueOnce(jsonResponse(200, { status: "PENDING" }))
+      .mockResolvedValueOnce(jsonResponse(200, { status: "PENDING" }));
+    const results = await registerWhatsAppTemplates("waba-10", "biz-tok");
+    const failed = results.find((r) => r.status === "FAILED");
+    expect(failed?.error).toBeTruthy();
+    expect(failed?.error?.length).toBeLessThanOrEqual(300);
+    // Successes carry no error field.
+    expect(results.filter((r) => r.status !== "FAILED").every((r) => r.error === undefined)).toBe(
+      true
+    );
+  });
+
+});
+
+describe("WHATSAPP_TEMPLATE_LANGUAGE_ES", () => {
+  // Meta's supported template languages (Spanish family). `es_US` is NOT
+  // among them — it is an ads locale — which is exactly the bug this
+  // constant exists to prevent recurring: an unsupported code makes every
+  // Spanish registration fail, and an unapproved Spanish variant silently
+  // falls back to the English template.
+  const META_SUPPORTED_SPANISH = new Set([
+    "es",
+    "es_AR",
+    "es_CL",
+    "es_CO",
+    "es_CR",
+    "es_DO",
+    "es_EC",
+    "es_ES",
+    "es_HND",
+    "es_MX",
+    "es_PA",
+    "es_PE",
+    "es_UY"
+  ]);
+
+  it("is a language code Meta actually supports for templates", () => {
+    expect(META_SUPPORTED_SPANISH.has(WHATSAPP_TEMPLATE_LANGUAGE_ES)).toBe(true);
+    expect(WHATSAPP_TEMPLATE_LANGUAGE_ES).not.toBe("es_US");
+  });
+
+  it("is the language every Spanish stock template registers under", () => {
+    const spanish = WHATSAPP_STOCK_TEMPLATES.filter((t) => t.language !== "en_US");
+    expect(spanish.length).toBeGreaterThan(0);
+    for (const t of spanish) {
+      expect(t.language).toBe(WHATSAPP_TEMPLATE_LANGUAGE_ES);
+    }
   });
 });
 

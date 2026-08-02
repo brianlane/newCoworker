@@ -213,13 +213,13 @@ describe("deliverWhatsApp", () => {
     expect(appended.content).toContain("Following up on your quote.");
   });
 
-  it("uses the approved es_US template variant when the contact prefers Spanish", async () => {
+  it("uses the approved Spanish template variant when the contact prefers Spanish", async () => {
     const deps = makeDeps({
       getConnection: vi.fn(async () => ({
         ...CONNECTION,
         templates: {
           ...CONNECTION.templates,
-          "nc_contact_followup:es_US": { status: "APPROVED", language: "es_US" }
+          "nc_contact_followup:es": { status: "APPROVED", language: "es" }
         }
       })),
       getConversation: vi.fn(async () =>
@@ -232,14 +232,14 @@ describe("deliverWhatsApp", () => {
     expect(deps.fetchContactLanguage).toHaveBeenCalledWith(BIZ, "+15551234567");
     expect(deps.sendTemplate).toHaveBeenCalledWith("pn-9", "business-token", "15551234567", {
       name: "nc_contact_followup",
-      language: "es_US",
+      language: "es",
       bodyParams: ["Acme Plumbing", "Following up on your quote."]
     });
     const appended = vi.mocked(deps.appendMessage).mock.calls[0][0];
     expect(appended.content).toContain("Hola de parte de Acme Plumbing");
   });
 
-  it("explicit language wins and falls back to en_US when es_US isn't approved", async () => {
+  it("explicit language wins and falls back to en_US when the Spanish variant isn't approved", async () => {
     const closed = vi.fn(async () =>
       conversation({ last_user_message_at: "2026-07-10T00:00:00Z" })
     );
