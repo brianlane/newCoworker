@@ -173,6 +173,11 @@ export async function createBusiness(
     /** IANA timezone auto-detected from the owner's browser at onboarding. */
     timezone?: string;
     /**
+     * Coworker's opening language with customers. Omitted means the column
+     * default ('en'); Mexican signups pass 'es' (see /api/business/create).
+     */
+    defaultCustomerLanguage?: "en" | "es";
+    /**
      * Optional hardware pin recorded at creation (admin enterprise flow).
      * Null = tier default at provision time (see DEFAULT_TIER_VPS_SIZE).
      */
@@ -199,7 +204,12 @@ export async function createBusiness(
       team_size: data.teamSize ?? null,
       crm_used: data.crmUsed ?? null,
       timezone: data.timezone ?? null,
-      vps_size: data.vpsSize ?? null
+      vps_size: data.vpsSize ?? null,
+      // Only sent when a caller chose one so the column default keeps
+      // governing every other signup.
+      ...(data.defaultCustomerLanguage
+        ? { default_customer_language: data.defaultCustomerLanguage }
+        : {})
     })
     .select()
     .single();

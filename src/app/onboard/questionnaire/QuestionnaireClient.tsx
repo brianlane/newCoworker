@@ -9,7 +9,12 @@ import { RichSelect } from "@/components/ui/RichSelect";
 import { Button } from "@/components/ui/Button";
 import { ChatMarkdown } from "@/components/ui/ChatMarkdown";
 import { OrderSummaryCard } from "@/components/OrderSummaryCard";
-import { resolveBusinessCountry } from "@/lib/plans/business-country";
+import {
+  composeOwnerPhone,
+  MEXICAN_TIMEZONES,
+  normalizeMxPhoneToE164,
+  resolveBusinessCountry
+} from "@/lib/plans/business-country";
 import type {
   MembershipPackAddonOption,
   MembershipPackAddonSelection
@@ -151,6 +156,11 @@ function QuestionnaireForm({
   const [step, setStep] = useState<Step>(1);
   const [form, setForm] = useState<FormData>(EMPTY_FORM);
   const [hydrated, setHydrated] = useState(false);
+  // Country prefix for BARE phone digits ("+1" default; a typed "+" always
+  // wins over it). Seeded after hydration: a +52 draft phone restores "+52",
+  // else a Mexican browser timezone defaults it, so a CDMX owner typing
+  // "55 1234 5678" composes to +52 instead of silently becoming a US number.
+  const [phonePrefix, setPhonePrefix] = useState<"+1" | "+52">("+1");
   const [error, setError] = useState<string | null>(null);
   const [signupEmail, setSignupEmail] = useState("");
   const [signupLoading, setSignupLoading] = useState(false);
@@ -276,6 +286,20 @@ function QuestionnaireForm({
         setSignupEmail(draft.signupEmail);
       }
     } catch { /* ignore corrupt data */ }
+    try {
+      const draftPhone =
+        typeof window !== "undefined"
+          ? (JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY) ?? "null")?.form?.phone ?? "")
+          : "";
+      if (typeof draftPhone === "string" && draftPhone.trim().startsWith("+52")) {
+        setPhonePrefix("+52");
+      } else if (
+        !draftPhone &&
+        MEXICAN_TIMEZONES.has(Intl.DateTimeFormat().resolvedOptions().timeZone)
+      ) {
+        setPhonePrefix("+52");
+      }
+    } catch { /* prefix stays +1 */ }
     setHydrated(true);
   });
 
@@ -839,12 +863,21 @@ function QuestionnaireForm({
       // pre-validation left a real tenant with no forwarding default and no
       // owner-local DID tier (KYP Ads, Jul 14 2026).
       if (form.phone.trim()) {
-        const coercedPhone = coerceOwnerPhoneToE164(form.phone);
+        // Compose bare digits under the selected country prefix first (a
+        // typed "+" wins), then apply each country's strictness: +52 values
+        // must be exactly 10 national digits, everything else keeps the
+        // NANP/structural coercion /api/business/create enforces.
+        const composed = composeOwnerPhone(phonePrefix, form.phone);
+        const coercedPhone = !composed
+          ? null
+          : composed.replace(/[^\d+]/g, "").startsWith("+52")
+            ? normalizeMxPhoneToE164(composed)
+            : coerceOwnerPhoneToE164(composed);
         if (!coercedPhone) {
           setError(t("errPhoneInvalid"));
           return;
         }
-        // Normalize in place so the draft, the Canada-fee preview, and
+        // Normalize in place so the draft, the country-fee preview, and
         // checkout all read the exact value the server will persist.
         if (coercedPhone !== form.phone) {
           update("phone", coercedPhone);
@@ -1039,13 +1072,30 @@ function QuestionnaireForm({
                 placeholder={t("yourNamePlaceholder")}
                 required
               />
-              <Input
-                label={t("phoneNumber")}
-                type="tel"
-                value={form.phone}
-                onChange={(e) => update("phone", e.target.value)}
-                placeholder="+1 (555) 000-0000"
-              />
+              <div className="flex items-end gap-2">
+                <label className="block shrink-0">
+                  <span className="mb-1 block text-xs font-medium text-parchment/60">
+                    {t("phoneCountryLabel")}
+                  </span>
+                  <select
+                    className="h-10 rounded-md border border-parchment/20 bg-transparent px-2 text-sm text-parchment"
+                    value={phonePrefix}
+                    onChange={(e) => setPhonePrefix(e.target.value as "+1" | "+52")}
+                  >
+                    <option value="+1">{t("phoneCountryUsCa")}</option>
+                    <option value="+52">{t("phoneCountryMx")}</option>
+                  </select>
+                </label>
+                <div className="grow">
+                  <Input
+                    label={t("phoneNumber")}
+                    type="tel"
+                    value={form.phone}
+                    onChange={(e) => update("phone", e.target.value)}
+                    placeholder={phonePrefix === "+52" ? "+52 55 1234 5678" : "+1 (555) 000-0000"}
+                  />
+                </div>
+              </div>
               <Input
                 label={t("preferredAreaCode")}
                 type="tel"

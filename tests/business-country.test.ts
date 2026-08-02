@@ -11,7 +11,9 @@ import {
   CANADIAN_AREA_CODES,
   CANADIAN_TIMEZONES,
   MEXICAN_TIMEZONES,
+  composeOwnerPhone,
   nanpNpaFromPhone,
+  normalizeMxPhoneToE164,
   resolveBusinessCountry
 } from "@/lib/plans/business-country";
 import { isCanadianBusiness } from "@/lib/plans/canadian-messaging";
@@ -111,6 +113,42 @@ describe("nanpNpaFromPhone", () => {
     expect(nanpNpaFromPhone("(055) 123-4567")).toBeNull();
     expect(nanpNpaFromPhone("")).toBeNull();
     expect(nanpNpaFromPhone(null)).toBeNull();
+  });
+});
+
+describe("normalizeMxPhoneToE164", () => {
+  it("normalizes +52/52/521-prefixed shapes and plus-less nationals", () => {
+    expect(normalizeMxPhoneToE164("+52 55 1234 5678")).toBe("+525512345678");
+    expect(normalizeMxPhoneToE164("52 55 1234 5678")).toBe("+525512345678");
+    expect(normalizeMxPhoneToE164("+52 1 55 1234 5678")).toBe("+525512345678");
+    expect(normalizeMxPhoneToE164("55 1234 5678")).toBe("+525512345678");
+  });
+
+  it("rejects plus-prefixed bare nationals, wrong lengths, and 0/1-leading nationals", () => {
+    expect(normalizeMxPhoneToE164("+55 1234 5678")).toBeNull();
+    expect(normalizeMxPhoneToE164("+52 55 1234 56")).toBeNull();
+    expect(normalizeMxPhoneToE164("52 05 1234 5678")).toBeNull();
+    expect(normalizeMxPhoneToE164("551234567")).toBeNull();
+    expect(normalizeMxPhoneToE164("")).toBeNull();
+    expect(normalizeMxPhoneToE164(null)).toBeNull();
+  });
+});
+
+describe("composeOwnerPhone", () => {
+  it("composes bare digits under the selected prefix", () => {
+    expect(composeOwnerPhone("+52", "55 1234 5678")).toBe("+525512345678");
+    expect(composeOwnerPhone("+1", "602-686-6672")).toBe("602-686-6672");
+  });
+
+  it("lets a typed + win over the selector, and passes empties through", () => {
+    expect(composeOwnerPhone("+52", "+1 (602) 686-6672")).toBe("+1 (602) 686-6672");
+    expect(composeOwnerPhone("+1", "+52 55 1234 5678")).toBe("+52 55 1234 5678");
+    expect(composeOwnerPhone("+52", "   ")).toBe("");
+  });
+
+  it("returns null for digits that cannot be Mexican under +52", () => {
+    expect(composeOwnerPhone("+52", "05 1234 5678")).toBeNull();
+    expect(composeOwnerPhone("+52", "1234")).toBeNull();
   });
 });
 

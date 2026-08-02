@@ -154,6 +154,32 @@ describe("db/businesses", () => {
     );
   });
 
+  it("createBusiness passes defaultCustomerLanguage through and omits the column otherwise", async () => {
+    const db = mockDb({ single: vi.fn().mockResolvedValue({ data: MOCK_BUSINESS, error: null }) });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+
+    await createBusiness({
+      id: "uuid-biz-1",
+      name: "Tacos El Norte",
+      ownerEmail: "owner@test.com",
+      tier: "starter",
+      defaultCustomerLanguage: "es"
+    });
+    expect(db.insert).toHaveBeenCalledWith(
+      expect.objectContaining({ default_customer_language: "es" })
+    );
+
+    await createBusiness({
+      id: "uuid-biz-2",
+      name: "Sunrise Realty",
+      ownerEmail: "owner@test.com",
+      tier: "starter"
+    });
+    const lastInsert = db.insert.mock.calls.at(-1)?.[0] as Record<string, unknown>;
+    // Omitted, not null: the column default ('en') must govern.
+    expect("default_customer_language" in lastInsert).toBe(false);
+  });
+
   it("createBusiness throws on DB error", async () => {
     const db = mockDb({ single: vi.fn().mockResolvedValue({ data: null, error: { message: "dup" } }) });
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);

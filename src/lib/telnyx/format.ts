@@ -86,7 +86,7 @@ export function normalizeContactNumber(
 
   return {
     ok: false,
-    reason: "Enter a 10-digit US number, a +country-code number, or a short code"
+    reason: "Enter a 10-digit US number, a +country-code number like +52 55 1234 5678, or a short code"
   };
 }
 

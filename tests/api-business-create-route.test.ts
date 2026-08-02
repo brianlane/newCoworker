@@ -23,6 +23,7 @@ import { POST } from "@/app/api/business/create/route";
 import { getAuthUser, verifySignupIdentity } from "@/lib/auth";
 import {
   createBusiness,
+  isValidIanaTimezone,
   getBusiness,
   updateBusinessPreferredAreaCode
 } from "@/lib/db/businesses";
@@ -87,6 +88,32 @@ describe("/api/business/create — anonymous Stripe-first flow", () => {
     expect(createBusiness).toHaveBeenCalledWith(
       expect.objectContaining({ phone: "+16026951142" })
     );
+  });
+
+  it("seeds default_customer_language 'es' for a Mexican signup (+52 phone)", async () => {
+    const res = await POST(jsonRequest(baseBody({ phone: "+52 55 1234 5678" })));
+    expect(res.status).toBe(200);
+    expect(createBusiness).toHaveBeenCalledWith(
+      expect.objectContaining({ phone: "+525512345678", defaultCustomerLanguage: "es" })
+    );
+  });
+
+  it("seeds default_customer_language 'es' for a Mexican-timezone signup with no phone", async () => {
+    // This suite pins isValidIanaTimezone to false by default; the
+    // timezone-classified path needs the real-world true.
+    vi.mocked(isValidIanaTimezone).mockReturnValue(true);
+    const res = await POST(jsonRequest(baseBody({ timezone: "America/Mexico_City" })));
+    expect(res.status).toBe(200);
+    expect(createBusiness).toHaveBeenCalledWith(
+      expect.objectContaining({ defaultCustomerLanguage: "es", timezone: "America/Mexico_City" })
+    );
+  });
+
+  it("leaves default_customer_language unset for US signups (column default 'en' governs)", async () => {
+    const res = await POST(jsonRequest(baseBody({ phone: "(602) 695-1142" })));
+    expect(res.status).toBe(200);
+    const call = vi.mocked(createBusiness).mock.calls.at(-1)?.[0];
+    expect(call?.defaultCustomerLanguage).toBeUndefined();
   });
 
   it("rejects an uncoercible phone with an actionable 400 instead of storing it", async () => {
