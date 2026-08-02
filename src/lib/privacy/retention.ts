@@ -374,11 +374,63 @@ export async function pruneExpiredContent(
     results.push({ table: "webchat_sessions", central: centralCount(data), box: null });
   }
 
+  // ── messenger_conversations (central-only; fully dead threads only) ────
+  // The conversation row itself carries identifiers (contact_phone, the
+  // WhatsApp psid, display_name), so it must age out too, not just its
+  // messages. But neither timestamp column proves the thread is dead on its
+  // own: updated_at and last_user_message_at track INBOUND activity, and an
+  // out-of-window template send can append a recent outbound message
+  // without touching either. So: candidates by both stale timestamps, then
+  // disqualify any candidate that still has an in-window message, and only
+  // the rest are deleted (their remaining messages and jobs cascade).
+  {
+    const { data: candidates, error: candErr } = await db
+      .from("messenger_conversations")
+      .select("id")
+      .eq("business_id", businessId)
+      .lt("updated_at", cutoffIso)
+      .lt("last_user_message_at", cutoffIso);
+    if (candErr) throw new Error(`pruneExpiredContent: messenger_conversations: ${candErr.message}`);
+    const candidateIds = (Array.isArray(candidates) ? candidates : []).map((r) =>
+      String((r as { id: unknown }).id)
+    );
+    let central = 0;
+    if (candidateIds.length > 0) {
+      const { data: recent, error: recentErr } = await db
+        .from("messenger_messages")
+        .select("conversation_id")
+        .eq("business_id", businessId)
+        .gte("created_at", cutoffIso)
+        .in("conversation_id", candidateIds);
+      if (recentErr) {
+        throw new Error(`pruneExpiredContent: messenger_conversations: ${recentErr.message}`);
+      }
+      const alive = new Set(
+        (Array.isArray(recent) ? recent : []).map((r) =>
+          String((r as { conversation_id: unknown }).conversation_id)
+        )
+      );
+      const dead = candidateIds.filter((id) => !alive.has(id));
+      if (dead.length > 0) {
+        const { data, error } = await db
+          .from("messenger_conversations")
+          .delete()
+          .eq("business_id", businessId)
+          .in("id", dead)
+          .select("id");
+        if (error) {
+          throw new Error(`pruneExpiredContent: messenger_conversations: ${error.message}`);
+        }
+        central = centralCount(data);
+      }
+    }
+    results.push({ table: "messenger_conversations", central, box: null });
+  }
+
   // ── messenger_messages (central-only; covers WhatsApp + Instagram) ─────
-  // Conversations are long-lived threads (one row per correspondent), so
-  // the prune unit is the MESSAGE, not the conversation: deleting an old
-  // conversation row would cascade away recent messages too. Job rows
-  // cascade from their user message.
+  // For conversations that stay (recent activity), the prune unit is the
+  // MESSAGE: deleting a live conversation row would cascade away recent
+  // turns too. Job rows cascade from their user message.
   {
     const { data, error } = await db
       .from("messenger_messages")

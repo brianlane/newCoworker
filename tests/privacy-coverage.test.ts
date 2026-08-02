@@ -53,12 +53,23 @@ function businessScopedTables(): Map<string, string> {
 }
 
 /**
+ * Tables whose CREATE TABLE name was later renamed. The guard follows the
+ * rename and requires the CURRENT name to be handled by the privacy
+ * modules, so a rename can never mask dropped coverage of the live table
+ * (Bugbot finding, 2026-08-01: an exemption entry alone would keep CI green
+ * even if deleteEndUserData stopped touching contacts).
+ */
+const RENAMED: Record<string, string> = {
+  // 20260704000000_contacts_unify.sql
+  customer_memories: "contacts"
+};
+
+/**
  * Out-of-scope registry. Grouped by why; each entry is one deliberate
  * decision with its reason.
  */
 const EXEMPT: Record<string, string> = {
   // Covered through another table.
-  customer_memories: "renamed to contacts in 20260704000000; erasure covers the base table",
   webchat_messages: "FK cascade from webchat_sessions (covered)",
   webchat_jobs: "FK cascade from webchat_sessions (covered)",
   messenger_jobs: "FK cascade from messenger_conversations (covered)",
@@ -181,7 +192,10 @@ describe("privacy coverage guard", () => {
 
   it("every business-scoped table is either privacy-handled or explicitly exempted", () => {
     const undecided = [...tables.keys()]
-      .filter((name) => !handled(name) && !(name in EXEMPT))
+      .filter((name) => {
+        const effective = RENAMED[name] ?? name;
+        return !handled(effective) && !(name in EXEMPT);
+      })
       .sort()
       .map((name) => `${name} (created in ${tables.get(name)})`);
     expect(
@@ -200,6 +214,20 @@ describe("privacy coverage guard", () => {
       stale,
       "These EXEMPT entries no longer match any business-scoped table; remove them."
     ).toEqual([]);
+  });
+
+  it("renamed tables stay covered under their LIVE name", () => {
+    for (const [oldName, newName] of Object.entries(RENAMED)) {
+      expect(tables.has(oldName), `expected ${oldName} in the migration scan`).toBe(true);
+      expect(
+        handled(newName),
+        `${oldName} was renamed to ${newName}; the privacy modules must handle ${newName}`
+      ).toBe(true);
+      expect(
+        oldName in EXEMPT,
+        `${oldName} must not ALSO be exempted; the rename mapping is its decision`
+      ).toBe(false);
+    }
   });
 
   it("exempt entries are not simultaneously handled (keep the registry honest)", () => {

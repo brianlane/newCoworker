@@ -33,6 +33,7 @@ const PRUNED_TABLES = [
   "sms_links",
   "sms_owner_reply_prompts",
   "webchat_sessions",
+  "messenger_conversations",
   "messenger_messages",
   "sms_inbound_jobs",
   "lead_submissions",
@@ -48,6 +49,7 @@ const CENTRAL_ONLY_TABLES = new Set<string>([
   "document_signature_requests",
   "sms_links",
   "webchat_sessions",
+  "messenger_conversations",
   "messenger_messages",
   "sms_inbound_jobs",
   "lead_submissions",
@@ -62,20 +64,28 @@ const BOXED_TABLES = PRUNED_TABLES.filter((t) => !CENTRAL_ONLY_TABLES.has(t));
 type TableResult = { data: unknown; error: { message: string } | null };
 
 /**
- * Chainable central-db stub: every builder method returns the chain and
- * `.select()` resolves with the table's configured result.
+ * Chainable central-db stub, same shape as the deletion suite's: every
+ * builder method (including `.select()`) returns the chain, the chain is
+ * THENABLE (one from() = one awaited result), and `perCall` maps
+ * "<table>#<n>" (n = 1-based call index per table) or "<table>" to a
+ * result so multi-round-trip blocks (messenger_conversations) can script
+ * each operation.
  */
 function makeCentralDb(
-  perTable: Partial<Record<string, TableResult>> = {},
+  perCall: Partial<Record<string, TableResult>> = {},
   storageRemove = vi.fn().mockResolvedValue({ error: null })
 ) {
+  const seen = new Map<string, number>();
   const from = vi.fn((table: string) => {
-    const result = perTable[table] ?? { data: [], error: null };
+    const n = (seen.get(table) ?? 0) + 1;
+    seen.set(table, n);
+    const result = perCall[`${table}#${n}`] ?? perCall[table] ?? { data: [], error: null };
     const chain: Record<string, unknown> = {};
-    for (const m of ["delete", "eq", "lt", "in", "not", "neq", "or"]) {
+    for (const m of ["delete", "select", "eq", "lt", "gte", "in", "not", "neq", "or"]) {
       chain[m] = vi.fn().mockReturnValue(chain);
     }
-    chain.select = vi.fn().mockResolvedValue(result);
+    chain.then = (resolve: (v: unknown) => unknown, reject?: (e: unknown) => unknown) =>
+      Promise.resolve(result).then(resolve, reject);
     return chain;
   });
   return { from, storage: { from: vi.fn(() => ({ remove: storageRemove })) }, storageRemove };
@@ -110,8 +120,69 @@ describe("pruneExpiredContent — central-only tenants", () => {
     expect(res.tables.every((t) => t.box === null)).toBe(true);
     expect(res.tables.find((t) => t.table === "email_log")?.central).toBe(2);
     expect(res.tables.find((t) => t.table === "notifications")?.central).toBe(0);
-    // 18 central deletes, no data-api construction.
-    expect(db.from).toHaveBeenCalledTimes(18);
+    // 19 central round trips (the messenger_conversations candidate scan
+    // finds nothing by default, so its disqualify + delete never run), no
+    // data-api construction.
+    expect(db.from).toHaveBeenCalledTimes(19);
+  });
+
+  it("prunes only fully dead messenger conversations (in-window messages disqualify)", async () => {
+    const db = makeCentralDb({
+      // Two stale-timestamp candidates; c2 still has an in-window message
+      // (an out-of-window template send), so only c1 dies.
+      "messenger_conversations#1": { data: [{ id: "c1" }, { id: "c2" }], error: null },
+      "messenger_messages#1": { data: [{ conversation_id: "c2" }], error: null },
+      "messenger_conversations#2": { data: [{ id: "c1" }], error: null }
+    });
+    const res = await pruneExpiredContent(BIZ, 90, { client: db as never, now: () => NOW });
+    expect(res.tables.find((t) => t.table === "messenger_conversations")?.central).toBe(1);
+  });
+
+  it("skips the messenger conversation delete when every candidate is still alive", async () => {
+    const db = makeCentralDb({
+      "messenger_conversations#1": { data: [{ id: "c1" }], error: null },
+      "messenger_messages#1": { data: [{ conversation_id: "c1" }], error: null }
+    });
+    const res = await pruneExpiredContent(BIZ, 90, { client: db as never, now: () => NOW });
+    expect(res.tables.find((t) => t.table === "messenger_conversations")?.central).toBe(0);
+    // One conversation round trip only: the candidate scan; no delete runs.
+    expect(
+      db.from.mock.calls.filter((c) => c[0] === "messenger_conversations")
+    ).toHaveLength(1);
+  });
+
+  it("treats null messenger scan payloads as empty (candidates and disqualify)", async () => {
+    const nullCandidates = makeCentralDb({
+      "messenger_conversations#1": { data: null, error: null }
+    });
+    const res1 = await pruneExpiredContent(BIZ, 90, { client: nullCandidates as never, now: () => NOW });
+    expect(res1.tables.find((t) => t.table === "messenger_conversations")?.central).toBe(0);
+
+    const nullRecent = makeCentralDb({
+      "messenger_conversations#1": { data: [{ id: "c1" }], error: null },
+      "messenger_messages#1": { data: null, error: null },
+      "messenger_conversations#2": { data: [{ id: "c1" }], error: null }
+    });
+    const res2 = await pruneExpiredContent(BIZ, 90, { client: nullRecent as never, now: () => NOW });
+    expect(res2.tables.find((t) => t.table === "messenger_conversations")?.central).toBe(1);
+  });
+
+  it("fails loudly when the messenger disqualify scan or delete errors", async () => {
+    const scanFail = makeCentralDb({
+      "messenger_conversations#1": { data: [{ id: "c1" }], error: null },
+      "messenger_messages#1": { data: null, error: { message: "scan sad" } }
+    });
+    await expect(
+      pruneExpiredContent(BIZ, 90, { client: scanFail as never, now: () => NOW })
+    ).rejects.toThrow(/messenger_conversations: scan sad/);
+    const deleteFail = makeCentralDb({
+      "messenger_conversations#1": { data: [{ id: "c1" }], error: null },
+      "messenger_messages#1": { data: [], error: null },
+      "messenger_conversations#2": { data: null, error: { message: "del sad" } }
+    });
+    await expect(
+      pruneExpiredContent(BIZ, 90, { client: deleteFail as never, now: () => NOW })
+    ).rejects.toThrow(/messenger_conversations: del sad/);
   });
 
   it("removes attachment objects for pruned email rows, tolerating malformed shapes", async () => {
