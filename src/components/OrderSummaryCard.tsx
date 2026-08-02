@@ -11,6 +11,11 @@ import {
   CANADA_MESSAGING_FEE_NAME
 } from "@/lib/plans/canadian-messaging";
 import {
+  MEXICO_MESSAGING_FEE_MONTHLY_CENTS,
+  MEXICO_MESSAGING_FEE_NAME
+} from "@/lib/plans/mexican-messaging";
+import type { BusinessCountry } from "@/lib/plans/business-country";
+import {
   formatCommitmentTotal,
   formatPriceCents,
   getFirstCycleDiscountDisplay,
@@ -35,12 +40,15 @@ type OrderSummaryCardProps = {
   businessName?: string;
   preferFirstMonthLabel?: boolean;
   /**
-   * Canadian signup: shows the labeled monthly messaging surcharge line and
-   * folds it into "due today" (billed at the plan's cadence — × term months
-   * on prepaid plans). Must mirror what /api/checkout actually charges, so
-   * pass isCanadianBusiness() over the same phone/timezone the draft holds.
+   * Signup country: drives the labeled monthly messaging surcharge line (CA
+   * or MX, folded into "due today" at the plan's cadence — × term months on
+   * prepaid plans) and, for MX, hides the US carrier-registration fee that
+   * /api/checkout skips. ONE prop instead of per-country booleans so the
+   * preview can never show two fees or a fee/carrier combination the
+   * checkout would not charge. Must mirror the server: pass
+   * resolveBusinessCountry() over the same phone/timezone the draft holds.
    */
-  canadianFee?: boolean;
+  country?: BusinessCountry;
   /**
    * Applied promo code, as returned by /api/promotions/validate. Stripe allows
    * one discount per Checkout Session, so an applied promo REPLACES the
@@ -71,7 +79,7 @@ export function OrderSummaryCard({
   period,
   businessName,
   preferFirstMonthLabel = false,
-  canadianFee = false,
+  country = "US",
   promotion = null,
   packAddonOptions = [],
   packAddonSelection = {},
@@ -92,6 +100,11 @@ export function OrderSummaryCard({
   // plan's LIST price (on monthly, that is the full renewal rate the Stripe
   // price carries, not the already-discounted intro figure).
   const isTermPlan = period !== "monthly";
+  const canadianFee = country === "CA";
+  const mexicanFee = country === "MX";
+  // Mexican signups skip the US 10DLC carrier fee (their +52 traffic cannot
+  // use a US carrier registration; /api/checkout charges 0).
+  const carrierFeeCents = mexicanFee ? 0 : CARRIER_REGISTRATION_FEE_CENTS;
   // Clamped to the plan line: the discount is priced for one plan, so a value
   // left over from a plan switch must never drive the total negative or eat
   // into the carrier fee.
@@ -108,6 +121,10 @@ export function OrderSummaryCard({
   const canadaFeeDueTodayCents = canadianFee
     ? CANADA_MESSAGING_FEE_MONTHLY_CENTS * getCommitmentMonths(period)
     : 0;
+  // Mexican signups: $9.99/mo surcharge, same cadence rule as the Canadian one.
+  const mexicoFeeDueTodayCents = mexicanFee
+    ? MEXICO_MESSAGING_FEE_MONTHLY_CENTS * getCommitmentMonths(period)
+    : 0;
   const packAddOnsDueTodayCents = membershipPackAddOnsDueTodayCents(
     packAddonSelection,
     packAddonOptions,
@@ -115,8 +132,9 @@ export function OrderSummaryCard({
   );
   const totalDueToday = formatPriceCents(
     planDueTodayCents +
-      CARRIER_REGISTRATION_FEE_CENTS +
+      carrierFeeCents +
       canadaFeeDueTodayCents +
+      mexicoFeeDueTodayCents +
       packAddOnsDueTodayCents
   );
   // With a promo applied to a monthly plan the intro coupon is gone, so the
@@ -196,10 +214,12 @@ export function OrderSummaryCard({
         <span>{t("commitmentTotal")}</span>
         <span>{formatCommitmentTotal(tier, period)}</span>
       </div>
-      <div className="flex justify-between text-parchment/70">
-        <span>{t("carrierRegistration")}</span>
-        <span>{formatPriceCents(CARRIER_REGISTRATION_FEE_CENTS)}</span>
-      </div>
+      {!mexicanFee && (
+        <div className="flex justify-between text-parchment/70">
+          <span>{t("carrierRegistration")}</span>
+          <span>{formatPriceCents(CARRIER_REGISTRATION_FEE_CENTS)}</span>
+        </div>
+      )}
       {canadianFee && (
         <div className="flex justify-between text-parchment/70">
           <span>
@@ -212,6 +232,20 @@ export function OrderSummaryCard({
             })}
           </span>
           <span>{formatPriceCents(canadaFeeDueTodayCents)}</span>
+        </div>
+      )}
+      {mexicanFee && (
+        <div className="flex justify-between text-parchment/70">
+          <span>
+            {t("mexicoFeeLine", {
+              name: MEXICO_MESSAGING_FEE_NAME,
+              monthly: formatPriceCents(MEXICO_MESSAGING_FEE_MONTHLY_CENTS),
+              termSuffix: isTermPlan
+                ? t("mexicoFeeTermSuffix", { months: getCommitmentMonths(period) })
+                : ""
+            })}
+          </span>
+          <span>{formatPriceCents(mexicoFeeDueTodayCents)}</span>
         </div>
       )}
       {onPackAddonChange && packAddonOptions.length > 0 && (
@@ -234,10 +268,15 @@ export function OrderSummaryCard({
         <span>{t("totalDueToday")}</span>
         <span>{totalDueToday}</span>
       </div>
-      <p className="text-xs text-parchment/45">{t("carrierFeeNote")}</p>
+      {!mexicanFee && <p className="text-xs text-parchment/45">{t("carrierFeeNote")}</p>}
       {canadianFee && (
         <p className="text-xs text-parchment/45">
           {t("canadaFeeNote", { name: CANADA_MESSAGING_FEE_NAME.toLowerCase() })}
+        </p>
+      )}
+      {mexicanFee && (
+        <p className="text-xs text-parchment/45">
+          {t("mexicoFeeNote", { name: MEXICO_MESSAGING_FEE_NAME.toLowerCase() })}
         </p>
       )}
       {isTermPlan && (

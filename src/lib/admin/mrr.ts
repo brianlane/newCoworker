@@ -23,8 +23,8 @@
  *
  * Known best-effort drift, deliberately not modeled: grandfathered starter
  * renewal prices (pre-Jul-2026 schedules), the monthly intro coupon, and
- * the Canadian messaging surcharge add-on. Nothing bills from these numbers
- * — they are an operator-facing health metric.
+ * the Canadian and Mexican messaging surcharge add-ons. Nothing bills from
+ * these numbers — they are an operator-facing health metric.
  */
 
 import { getCommitmentMonths, getPeriodPricing } from "@/lib/plans/tier";

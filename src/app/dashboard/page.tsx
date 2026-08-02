@@ -33,7 +33,7 @@ import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import { getChatSpendSnapshotForBusiness } from "@/lib/db/chat-usage";
 import { getVoiceBillingSnapshotForBusiness } from "@/lib/db/voice-usage";
 import { getCalendarMonthUsageTotals } from "@/lib/db/usage";
-import { getTierLimits } from "@/lib/plans/limits";
+import { effectiveSmsMonthlyCap } from "@/lib/plans/limits";
 import { translatorAllowedForTier } from "@/lib/plans/translator";
 
 export const dynamic = "force-dynamic";
@@ -54,7 +54,7 @@ export default async function DashboardPage() {
   const { data: businesses } = await db
     .from("businesses")
     .select(
-      "id, name, owner_email, status, tier, enterprise_limits, is_paused, customer_channels_enabled, created_at"
+      "id, name, owner_email, status, tier, enterprise_limits, is_paused, customer_channels_enabled, created_at, phone, timezone"
     )
     .in("id", activeBusinessId ? [activeBusinessId] : [])
     .order("created_at", { ascending: false });
@@ -97,13 +97,16 @@ export default async function DashboardPage() {
     ]);
   }
 
-  // SMS monthly cap for the tier (Infinity for enterprise → show static copy).
+  // SMS monthly cap for THIS business (Infinity for enterprise → static
+  // copy): the tier cap, clamped for Mexican tenants to mirror the
+  // Postgres enforcement (see effectiveSmsMonthlyCap).
   const smsCap =
     business?.tier
-      ? getTierLimits(
+      ? effectiveSmsMonthlyCap(
           business.tier as PlanTier,
-          business.tier === "enterprise" ? business.enterprise_limits : undefined
-        ).smsPerMonth
+          business.tier === "enterprise" ? business.enterprise_limits : undefined,
+          { phone: business.phone ?? null, timezone: business.timezone ?? null }
+        )
       : null;
 
   // Verification status. The auth user's `email_confirmed_at` is

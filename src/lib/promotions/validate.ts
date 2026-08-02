@@ -45,7 +45,9 @@ export function normalizePromotionCode(code: string): string {
 /**
  * Cents a promotion takes off the plan line for one tier/period, never more
  * than the line itself (a $50 code against a $15.99 monthly plan zeroes the
- * plan rather than crediting the difference against the carrier fee).
+ * plan rather than crediting the difference against the carrier fee or the
+ * Canadian/Mexican messaging surcharges — country fees are excluded from
+ * discounts by this clamp's construction).
  */
 export function computePromotionDiscountCents(
   promotion: Pick<PromotionRow, "percent_off" | "amount_off_cents">,

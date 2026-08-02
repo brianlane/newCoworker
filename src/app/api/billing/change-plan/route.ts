@@ -32,6 +32,7 @@ import {
   resolvePriceId
 } from "@/lib/stripe/client";
 import { CANADA_MESSAGING_FEE_MONTHLY_CENTS } from "@/lib/plans/canadian-messaging";
+import { MEXICO_MESSAGING_FEE_MONTHLY_CENTS } from "@/lib/plans/mexican-messaging";
 import { resolveMembershipPackAddons } from "@/lib/billing/membership-pack-addons";
 import { logger } from "@/lib/logger";
 
@@ -193,23 +194,28 @@ export async function POST(request: Request) {
     const appUrl = process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000";
     const priceId = resolvePriceId(payload.tier, payload.billingPeriod);
 
-    // The Canadian messaging surcharge follows the subscription it was born
-    // on: carry it onto the replacement sub ONLY when the current Stripe sub
-    // carries the flag (stamped by the signup checkout). Grandfathered
-    // pre-fee tenants — and US tenants — never gain it here. A metadata read
-    // failure fails toward NOT charging.
+    // The country messaging surcharges follow the subscription they were
+    // born on: carry one onto the replacement sub ONLY when the current
+    // Stripe sub carries its flag (stamped by the signup checkout).
+    // Grandfathered pre-fee tenants — and US tenants — never gain one here.
+    // A metadata read failure fails toward NOT charging.
     let carryCanadaFee = false;
+    let carryMexicoFee = false;
     if (subscription.stripe_subscription_id) {
       try {
         const stripeSub = await getStripe().subscriptions.retrieve(
           subscription.stripe_subscription_id
         );
         carryCanadaFee = stripeSub.metadata?.canadianMessagingFee === "1";
+        carryMexicoFee = stripeSub.metadata?.mexicanMessagingFee === "1";
       } catch (err) {
-        logger.warn("change-plan: could not read old sub metadata for Canada fee (skipping fee)", {
-          businessId: business.id,
-          error: err instanceof Error ? err.message : String(err)
-        });
+        logger.warn(
+          "change-plan: could not read old sub metadata for country fees (skipping fees)",
+          {
+            businessId: business.id,
+            error: err instanceof Error ? err.message : String(err)
+          }
+        );
       }
     }
 
@@ -242,6 +248,14 @@ export async function POST(request: Request) {
             }
           }
         : {}),
+      ...(carryMexicoFee
+        ? {
+            mexicoFee: {
+              monthlyCents: MEXICO_MESSAGING_FEE_MONTHLY_CENTS,
+              billingPeriod: payload.billingPeriod
+            }
+          }
+        : {}),
       ...(packAddons.lines.length > 0
         ? {
             packAddonLines: packAddons.lines.map((line) => ({
@@ -263,6 +277,7 @@ export async function POST(request: Request) {
         // before skipping the lifetime-count increment.
         ...(recontractEligible ? { recontract: "1" } : {}),
         ...(carryCanadaFee ? { canadianMessagingFee: "1" } : {}),
+        ...(carryMexicoFee ? { mexicanMessagingFee: "1" } : {}),
         ...(changePlanProfileId ? { customerProfileId: changePlanProfileId } : {}),
         ...packAddons.metadata
       }

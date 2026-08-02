@@ -418,9 +418,32 @@ describe("/api/billing/change-plan", () => {
       const call = createCheckoutSessionMock.mock.calls.at(-1)?.[0];
       expect("canadaFee" in call).toBe(false);
       expect(loggerWarnMock).toHaveBeenCalledWith(
-        expect.stringContaining("Canada fee"),
+        expect.stringContaining("country fees"),
         expect.anything()
       );
+    });
+
+    it("carries the Mexican fee onto the new plan when the old Stripe sub is flagged", async () => {
+      loadLifecycleContextMock.mockResolvedValue({
+        ok: true,
+        vpsHost: "1.2.3.4",
+        context: ctxWithStripeSub()
+      });
+      stripeSubscriptionRetrieveMock.mockResolvedValue({
+        metadata: { mexicanMessagingFee: "1" }
+      });
+
+      const res = await POST(makeRequest({ tier: "standard", billingPeriod: "annual" }));
+      expect(res.status).toBe(200);
+      expect(createCheckoutSessionMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          mexicoFee: { monthlyCents: 999, billingPeriod: "annual" },
+          metadata: expect.objectContaining({ mexicanMessagingFee: "1" })
+        })
+      );
+      // One country, one fee: the MX flag never conjures the Canadian one.
+      const call = createCheckoutSessionMock.mock.calls.at(-1)?.[0];
+      expect("canadaFee" in call).toBe(false);
     });
   });
 

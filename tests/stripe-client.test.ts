@@ -317,6 +317,73 @@ describe("stripe/client", () => {
     );
   });
 
+  it("createCheckoutSession adds a recurring Mexico-fee line at the plan's cadence", async () => {
+    // Monthly plan: $9.99 every month.
+    await createCheckoutSession({
+      priceId: "price_mock_starter",
+      successUrl: "https://example.com/ok",
+      cancelUrl: "https://example.com/cancel",
+      mexicoFee: { monthlyCents: 999, billingPeriod: "monthly" }
+    });
+    expect(mockSessionCreate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        line_items: [
+          { price: "price_mock_starter", quantity: 1 },
+          {
+            price_data: {
+              currency: "usd",
+              product_data: { name: "Mexican messaging surcharge" },
+              unit_amount: 999,
+              recurring: { interval: "month", interval_count: 1 }
+            },
+            quantity: 1
+          }
+        ]
+      })
+    );
+
+    // Biennial plan: ×24 upfront on the plan's 24-month interval, and NO
+    // carrier fee line: Mexican signups pass 0 (the checkout route skips
+    // the US 10DLC pass-through for them).
+    await createCheckoutSession({
+      priceId: "price_mock_starter",
+      successUrl: "https://example.com/ok",
+      cancelUrl: "https://example.com/cancel",
+      oneTimeCarrierFeeCents: 0,
+      mexicoFee: { monthlyCents: 999, billingPeriod: "biennial" }
+    });
+    expect(mockSessionCreate).toHaveBeenLastCalledWith(
+      expect.objectContaining({
+        line_items: [
+          { price: "price_mock_starter", quantity: 1 },
+          {
+            price_data: {
+              currency: "usd",
+              product_data: { name: "Mexican messaging surcharge" },
+              unit_amount: 999 * 24,
+              recurring: { interval: "month", interval_count: 24 }
+            },
+            quantity: 1
+          }
+        ]
+      })
+    );
+  });
+
+  it("createCheckoutSession omits the Mexico fee when monthlyCents is zero", async () => {
+    await createCheckoutSession({
+      priceId: "price_mock_starter",
+      successUrl: "https://example.com/ok",
+      cancelUrl: "https://example.com/cancel",
+      mexicoFee: { monthlyCents: 0, billingPeriod: "monthly" }
+    });
+    expect(mockSessionCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        line_items: [{ price: "price_mock_starter", quantity: 1 }]
+      })
+    );
+  });
+
   it("createCheckoutSession omits the Canada fee when monthlyCents is zero", async () => {
     await createCheckoutSession({
       priceId: "price_mock_starter",

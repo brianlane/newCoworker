@@ -20,10 +20,9 @@ import { z } from "zod";
 import { randomUUID } from "crypto";
 import { getCommitmentMonths, renewalDateAfterMonths } from "@/lib/plans/tier";
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
-import {
-  CANADA_MESSAGING_FEE_MONTHLY_CENTS,
-  isCanadianBusiness
-} from "@/lib/plans/canadian-messaging";
+import { CANADA_MESSAGING_FEE_MONTHLY_CENTS } from "@/lib/plans/canadian-messaging";
+import { MEXICO_MESSAGING_FEE_MONTHLY_CENTS } from "@/lib/plans/mexican-messaging";
+import { resolveBusinessCountry } from "@/lib/plans/business-country";
 import { getOnboardingDraft } from "@/lib/db/onboarding-drafts";
 import { validatePromotionCode } from "@/lib/promotions/validate";
 import { resolveMembershipPackAddons } from "@/lib/billing/membership-pack-addons";
@@ -335,7 +334,7 @@ export async function POST(request: Request) {
         syncable = coerceOwnerPhoneToE164(raw);
         candidate = syncable ?? raw;
       } catch (err) {
-        logger.warn("checkout: draft read for Canada-fee detection failed (using business row)", {
+        logger.warn("checkout: draft read for country-fee detection failed (using business row)", {
           businessId: body.businessId,
           error: err instanceof Error ? err.message : String(err)
         });
@@ -359,7 +358,12 @@ export async function POST(request: Request) {
         draftPhone = candidate;
       }
     }
-    const canadian = isCanadianBusiness({
+    // Classified EXACTLY ONCE from exactly these values; provisioning reads
+    // the same row, so the fee, the messaging profile, and the DID country
+    // can never diverge (the four-Bugbot-round lesson from the Canada
+    // rollout). `country` is three-way: CA adds the Canadian surcharge, MX
+    // adds the Mexican surcharge AND skips the US carrier fee.
+    const country = resolveBusinessCountry({
       phone: draftPhone ?? feeBusiness?.phone ?? null,
       // Stored row timezone first; the caller-supplied browser timezone only
       // fills a null (older rows predating the timezone column), so the
@@ -367,6 +371,8 @@ export async function POST(request: Request) {
       // omitting it can only fail toward NOT being charged.
       timezone: feeBusiness?.timezone ?? body.timezone ?? null
     });
+    const canadian = country === "CA";
+    const mexican = country === "MX";
     const now = new Date();
     const renewalAt = renewalDateAfterMonths(now, commitmentMonths);
 
@@ -431,11 +437,24 @@ export async function POST(request: Request) {
       // New signups register a fresh 10DLC campaign — pass the carrier fee
       // through as a one-time line item. Plan changes and reactivations
       // (separate routes) keep the existing campaign and never re-charge it.
-      oneTimeCarrierFeeCents: CARRIER_REGISTRATION_FEE_CENTS,
+      // Mexican signups skip the CHARGE (10DLC/TCR is a US-carrier
+      // registration cost that cannot apply to their +52 traffic) while
+      // their US DID still attaches to the shared campaign, so any texts
+      // they do send to US handsets stay deliverable; that per-number
+      // marginal cost is absorbed into the Mexican surcharge.
+      oneTimeCarrierFeeCents: mexican ? 0 : CARRIER_REGISTRATION_FEE_CENTS,
       ...(canadian
         ? {
             canadaFee: {
               monthlyCents: CANADA_MESSAGING_FEE_MONTHLY_CENTS,
+              billingPeriod: body.billingPeriod
+            }
+          }
+        : {}),
+      ...(mexican
+        ? {
+            mexicoFee: {
+              monthlyCents: MEXICO_MESSAGING_FEE_MONTHLY_CENTS,
               billingPeriod: body.billingPeriod
             }
           }
@@ -459,6 +478,7 @@ export async function POST(request: Request) {
         // the sub it is replacing carried the surcharge (grandfathered
         // pre-fee tenants never get it added on a later plan change).
         ...(canadian ? { canadianMessagingFee: "1" } : {}),
+        ...(mexican ? { mexicanMessagingFee: "1" } : {}),
         // The webhook files the redemption from this id; the code rides along
         // so a Stripe session is legible without a join.
         ...(promotion?.ok
