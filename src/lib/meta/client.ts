@@ -572,11 +572,31 @@ export const WHATSAPP_MAX_TEXT_LENGTH = 4096;
  * review. Sends outside the 24h service window use these; inside it,
  * free-form text goes out instead.
  *
- * Each template name is registered in BOTH en_US and es_US so the
+ * Each template name is registered in BOTH English and Spanish so the
  * out-of-window fallback can follow the recipient's language; Meta treats
  * language variants of the same name as one template with per-language
  * review status.
  */
+
+/**
+ * Language code for the Spanish template variants.
+ *
+ * Generic `es`, NOT a regional code: our contact language model is just
+ * "en"/"es", so one Spanish variant has to serve Mexican, Spanish,
+ * Argentine, and US-Hispanic recipients alike, and WE pick the language at
+ * send time (the recipient's device locale never chooses for us).
+ *
+ * This was `es_US` until Aug 2026, which is NOT in Meta's supported
+ * template-language list (`es`, `es_AR`, `es_ES`, `es_MX`, ... are; `es_US`
+ * is a Meta ads locale, not a WhatsApp template one). Every Spanish
+ * registration therefore failed on every WABA, and because an
+ * unapproved Spanish variant silently falls back to the English template,
+ * Spanish-speaking customers had been getting English out-of-window
+ * messages with nothing surfacing the cause. Keep this a single constant so
+ * the definitions and the send path can never drift apart again.
+ */
+export const WHATSAPP_TEMPLATE_LANGUAGE_ES = "es";
+
 export const WHATSAPP_STOCK_TEMPLATES = [
   {
     name: "nc_owner_alert",
@@ -587,7 +607,7 @@ export const WHATSAPP_STOCK_TEMPLATES = [
   },
   {
     name: "nc_owner_alert",
-    language: "es_US",
+    language: WHATSAPP_TEMPLATE_LANGUAGE_ES,
     category: "UTILITY" as const,
     bodyText: "Actualización de tu asistente de {{1}}: {{2}}",
     exampleParams: ["Acme Plumbing", "Tienes un lead nuevo esperando."]
@@ -601,7 +621,7 @@ export const WHATSAPP_STOCK_TEMPLATES = [
   },
   {
     name: "nc_contact_followup",
-    language: "es_US",
+    language: WHATSAPP_TEMPLATE_LANGUAGE_ES,
     category: "UTILITY" as const,
     bodyText: "Hola de parte de {{1}}: {{2}} Responde aquí y seguimos por WhatsApp.",
     exampleParams: ["Acme Plumbing", "Solo dando seguimiento a tu cita."]
@@ -794,6 +814,13 @@ export type WhatsAppTemplateStatus = {
   name: string;
   language: string;
   status: string;
+  /**
+   * Why a FAILED registration failed (truncated Graph message). Absent on
+   * success. Registration failures used to record a bare "FAILED", which
+   * is what let an invalid language code (`es_US`) sit unnoticed: the
+   * templates simply never existed and nothing said why.
+   */
+  error?: string;
 };
 
 /**
@@ -842,15 +869,20 @@ export async function registerWhatsAppTemplates(
       // templates to their LIVE review status; a template that stays
       // FAILED just falls back to window-only sends instead of posing as
       // pending review forever.
+      // graphRequest always throws an Error (it wraps transport failures),
+      // so no non-Error arm is needed here.
+      const message = (err as Error).message;
       logger.warn("whatsapp template registration failed", {
         wabaId,
         template: template.name,
-        error: (err as Error).message
+        language: template.language,
+        error: message
       });
       results.push({
         name: template.name,
         language: template.language,
-        status: "FAILED"
+        status: "FAILED",
+        error: message.slice(0, 300)
       });
     }
   }
