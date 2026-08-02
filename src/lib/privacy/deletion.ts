@@ -940,13 +940,14 @@ export async function deleteEndUserData(
   // No identifier column exists: person data lives in log_payload under
   // per-writer key vocabularies (webchat: visitorPhone/visitorEmail, the
   // messenger channels: leadPhone/leadEmail, voice tools: callerPhone/
-  // callerEmail), with phones stored as typed. Page the capture-bearing
-  // task types and match client-side. The erasure audit rows (task_type
-  // 'data_flow') sit outside the paged set by construction.
+  // callerEmail, the SMS notify-team twin: customerPhone), with phones
+  // stored as typed. Page the capture-bearing task types and match
+  // client-side. The erasure audit rows (task_type 'data_flow') sit
+  // outside the paged set by construction.
   {
-    const LOG_TASK_TYPES = ["webchat", "messenger", "instagram", "whatsapp", "call"];
-    const PHONE_KEYS = ["visitorPhone", "leadPhone", "callerPhone"];
-    const EMAIL_KEYS = ["visitorEmail", "leadEmail", "callerEmail"];
+    const LOG_TASK_TYPES = ["webchat", "messenger", "instagram", "whatsapp", "call", "sms"];
+    const PHONE_KEYS = ["visitorPhone", "leadPhone", "callerPhone", "customerPhone"];
+    const EMAIL_KEYS = ["visitorEmail", "leadEmail", "callerEmail", "customerEmail"];
     const ids = await pageMatchIds(
       "coworker_logs",
       (offset, limit) =>

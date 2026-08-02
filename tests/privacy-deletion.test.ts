@@ -716,19 +716,30 @@ describe("deleteEndUserData — expanded coverage stores", () => {
           { id: "l-we", log_payload: { visitorEmail: "PERSON@example.com" } },
           { id: "l-le", log_payload: { leadEmail: "person@example.com" } },
           { id: "l-ce", log_payload: { callerEmail: " person@example.com " } },
+          // The SMS notify-team twin (task_type 'sms') stores the texter as
+          // customerPhone, E.164-coerced when possible, raw otherwise.
+          { id: "l-sp", log_payload: { source: "sms_tool_notify_team", customerPhone: "612-555-1234567" } },
           { id: "l-null", log_payload: null },
           { id: "l-none", log_payload: { note: "unrelated", callerPhone: "+19998887777" } }
         ],
         error: null
       },
       "coworker_logs#2": {
-        data: [{ id: "l-wp" }, { id: "l-lp" }, { id: "l-cp" }, { id: "l-we" }, { id: "l-le" }, { id: "l-ce" }],
+        data: [
+          { id: "l-wp" },
+          { id: "l-lp" },
+          { id: "l-cp" },
+          { id: "l-we" },
+          { id: "l-le" },
+          { id: "l-ce" },
+          { id: "l-sp" }
+        ],
         error: null
       }
     });
     const res = await deleteEndUserData(BIZ, { e164: E164, email: EMAIL }, { client: db as never });
     const byTable = Object.fromEntries(res.tables.map((t) => [t.table, t]));
-    expect(byTable.coworker_logs).toEqual({ table: "coworker_logs", central: 6, box: null });
+    expect(byTable.coworker_logs).toEqual({ table: "coworker_logs", central: 7, box: null });
   });
 
   it("ai_flow_runs: nested context values match by digits, email, and number type", async () => {
