@@ -79,6 +79,8 @@ const EXEMPT: Record<string, string> = {
   // Deliberate keeps: suppression must survive erasure.
   sms_opt_outs:
     "STOP suppression must survive erasure; deleting the row would let the platform text the person again",
+  terms_acceptances:
+    "the tenant's own clickwrap evidence (account scope, not end-customer data); like signed signature requests, acceptance proof must survive erasure",
 
   // Tenant/platform configuration: no end-customer person rows.
   agent_tool_settings: "per-tenant tool toggles",
