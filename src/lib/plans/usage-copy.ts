@@ -38,18 +38,24 @@ export function voiceMinutesLine(
   return es ? `${formatted} minutos de voz` : `${formatted} voice minutes`;
 }
 
-/** Strict monthly SMS cap copy. */
+/**
+ * Strict monthly SMS cap copy. `capOverride` carries a per-business
+ * effective cap (effectiveSmsMonthlyCap: the Mexican clamp) so tenant-facing
+ * surfaces never show a number Postgres will not honor; marketing surfaces
+ * omit it and show the tier cap.
+ */
 export function smsMonthlyLine(
   tier: PlanTier,
   enterpriseLimitsOverride?: unknown,
-  locale: UsageCopyLocale = "en"
+  locale: UsageCopyLocale = "en",
+  capOverride?: number
 ): string {
-  const L = getTierLimits(tier, enterpriseLimitsOverride);
+  const cap = capOverride ?? getTierLimits(tier, enterpriseLimitsOverride).smsPerMonth;
   const es = locale === "es";
-  if (L.smsPerMonth === Infinity) {
+  if (cap === Infinity) {
     return es ? "SMS ilimitados / mes" : "Unlimited SMS / month";
   }
-  return es ? `${L.smsPerMonth} SMS / mes` : `${L.smsPerMonth} SMS / month`;
+  return es ? `${cap} SMS / mes` : `${cap} SMS / month`;
 }
 
 /** Marketing / UI line for the concurrent-call cap. */

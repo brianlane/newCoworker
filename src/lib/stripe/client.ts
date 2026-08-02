@@ -3,6 +3,7 @@ import type { BillingPeriod } from "@/lib/plans/tier";
 import { getCommitmentMonths } from "@/lib/plans/tier";
 import { CARRIER_REGISTRATION_FEE_NAME } from "@/lib/plans/carrier-fee";
 import { CANADA_MESSAGING_FEE_NAME } from "@/lib/plans/canadian-messaging";
+import { MEXICO_MESSAGING_FEE_NAME } from "@/lib/plans/mexican-messaging";
 
 export function getStripe(secretKey?: string): Stripe {
   const key = secretKey ?? process.env.STRIPE_SECRET_KEY;
@@ -56,6 +57,15 @@ export type CheckoutParams = {
    */
   canadaFee?: { monthlyCents: number; billingPeriod: BillingPeriod };
   /**
+   * Mexican messaging surcharge — same shape and cadence rules as
+   * `canadaFee` (a Mexican tenant's US +1 number texts and calls +52 at
+   * international rates). Set only when the signup resolves to Mexico (see
+   * isMexicanBusiness); existing tenants are grandfathered. The two fees
+   * are mutually exclusive by construction: resolveBusinessCountry returns
+   * one country.
+   */
+  mexicoFee?: { monthlyCents: number; billingPeriod: BillingPeriod };
+  /**
    * Optional recurring usage-pack add-ons (voice / SMS / chat) on the
    * membership subscription. `unitAmountCents` is already
    * discountedMonthly × commitment months; `billingPeriod` sets the matching
@@ -94,6 +104,18 @@ export async function createCheckoutSession(params: CheckoutParams): Promise<{
         currency: "usd",
         product_data: { name: CANADA_MESSAGING_FEE_NAME },
         unit_amount: params.canadaFee.monthlyCents * months,
+        recurring: { interval: "month", interval_count: months }
+      },
+      quantity: 1
+    });
+  }
+  if ((params.mexicoFee?.monthlyCents ?? 0) > 0 && params.mexicoFee) {
+    const months = getCommitmentMonths(params.mexicoFee.billingPeriod);
+    lineItems.push({
+      price_data: {
+        currency: "usd",
+        product_data: { name: MEXICO_MESSAGING_FEE_NAME },
+        unit_amount: params.mexicoFee.monthlyCents * months,
         recurring: { interval: "month", interval_count: months }
       },
       quantity: 1

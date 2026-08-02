@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import * as limitsModule from "@/lib/plans/limits";
 
-const { TIER_LIMITS, getTierLimits } = limitsModule;
+const { TIER_LIMITS, getTierLimits, effectiveSmsMonthlyCap } = limitsModule;
 import { concurrentCallsLine, smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 
 describe("tier limits", () => {
@@ -210,6 +210,54 @@ describe("tier limits", () => {
       expect(TIER_LIMITS.starter.memoryType).toBe("lossless");
       expect(TIER_LIMITS.standard.memoryType).toBe("lossless");
       expect(TIER_LIMITS.enterprise.memoryType).toBe("lossless");
+    });
+  });
+
+  describe("effectiveSmsMonthlyCap (Mexican clamp mirrors the Postgres enforcement)", () => {
+    const mx = { phone: "+525512345678", timezone: null };
+    const us = { phone: "(602) 555-0100", timezone: null };
+
+    it("clamps Mexican non-enterprise tenants to 100 on every tier", () => {
+      expect(effectiveSmsMonthlyCap("starter", undefined, mx)).toBe(100);
+      expect(effectiveSmsMonthlyCap("standard", undefined, mx)).toBe(100);
+    });
+
+    it("leaves US/CA tenants on the tier cap", () => {
+      expect(effectiveSmsMonthlyCap("starter", undefined, us)).toBe(
+        TIER_LIMITS.starter.smsPerMonth
+      );
+      expect(effectiveSmsMonthlyCap("standard", undefined, us)).toBe(
+        TIER_LIMITS.standard.smsPerMonth
+      );
+      expect(
+        effectiveSmsMonthlyCap("standard", undefined, {
+          phone: "(416) 456-0696",
+          timezone: "America/Toronto"
+        })
+      ).toBe(TIER_LIMITS.standard.smsPerMonth);
+    });
+
+    it("classifies from the timezone when the phone is inconclusive", () => {
+      expect(
+        effectiveSmsMonthlyCap("standard", undefined, {
+          phone: null,
+          timezone: "America/Mexico_City"
+        })
+      ).toBe(100);
+    });
+
+    it("exempts enterprise (per-deal limits govern instead)", () => {
+      expect(effectiveSmsMonthlyCap("enterprise", undefined, mx)).toBe(Infinity);
+      expect(effectiveSmsMonthlyCap("enterprise", { smsPerMonth: 5000 }, mx)).toBe(5000);
+    });
+
+    it("smsMonthlyLine renders the per-business override so display matches enforcement", () => {
+      expect(smsMonthlyLine("standard", undefined, "en", 100)).toBe("100 SMS / month");
+      expect(smsMonthlyLine("standard", undefined, "es", 100)).toBe("100 SMS / mes");
+      expect(smsMonthlyLine("standard")).toBe("3000 SMS / month");
+      expect(smsMonthlyLine("enterprise", undefined, "en", Infinity)).toBe(
+        "Unlimited SMS / month"
+      );
     });
   });
 });

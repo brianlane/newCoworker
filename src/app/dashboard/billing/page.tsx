@@ -43,7 +43,7 @@ import {
   getSmsBonusTextsRemaining
 } from "@/lib/db/chat-usage";
 import { getCalendarMonthUsageTotals } from "@/lib/db/usage";
-import { getTierLimits } from "@/lib/plans/limits";
+import { effectiveSmsMonthlyCap } from "@/lib/plans/limits";
 import {
   getCustomerProfileById,
   isWithinLifetimeRefundWindow,
@@ -94,7 +94,7 @@ export default async function BillingPage(props: {
   const { data: businesses } = await db
     .from("businesses")
     .select(
-      "id, tier, enterprise_limits, name, customer_profile_id, white_glove_package, white_glove_purchased_at, priority_support_until"
+      "id, tier, enterprise_limits, name, customer_profile_id, white_glove_package, white_glove_purchased_at, priority_support_until, phone, timezone"
     )
     .in("id", activeBusinessId ? [activeBusinessId] : [])
     .order("created_at", { ascending: false })
@@ -175,10 +175,11 @@ export default async function BillingPage(props: {
   );
 
   const smsMonthlyCap = business?.tier
-    ? getTierLimits(
+    ? effectiveSmsMonthlyCap(
         business.tier as PlanTier,
-        business.tier === "enterprise" ? business.enterprise_limits : undefined
-      ).smsPerMonth
+        business.tier === "enterprise" ? business.enterprise_limits : undefined,
+        { phone: business.phone ?? null, timezone: business.timezone ?? null }
+      )
     : null;
 
   const canPurchase = Boolean(
@@ -382,7 +383,8 @@ export default async function BillingPage(props: {
             {smsMonthlyLine(
               business.tier as PlanTier,
               business.tier === "enterprise" ? business.enterprise_limits : undefined,
-              locale
+              locale,
+              smsMonthlyCap ?? undefined
             )}
           </p>
         </Card>

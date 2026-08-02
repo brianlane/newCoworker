@@ -17,6 +17,8 @@ import { getPeriodPricing } from "@/lib/plans/tier";
 import { concurrentCallsLine, imageGenerationLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
 import { CANADA_MESSAGING_FEE_MONTHLY_CENTS } from "@/lib/plans/canadian-messaging";
+import { MEXICO_MESSAGING_FEE_MONTHLY_CENTS } from "@/lib/plans/mexican-messaging";
+import { SMS_MONTHLY_CAP_MX } from "../../../supabase/functions/_shared/sms_monthly_limits";
 import { formatPriceCents, formatPricePerMonth } from "@/lib/pricing";
 import { contactEmail as resolveContactEmail } from "@/lib/marketing/contact-email";
 
@@ -106,6 +108,7 @@ export default async function PricingPage() {
   const contactEmail = resolveContactEmail();
   const carrierFee = formatPriceCents(CARRIER_REGISTRATION_FEE_CENTS);
   const canadaFeeMonthly = formatPriceCents(CANADA_MESSAGING_FEE_MONTHLY_CENTS);
+  const mexicoFeeMonthly = formatPriceCents(MEXICO_MESSAGING_FEE_MONTHLY_CENTS);
   const starterRenewal = formatPricePerMonth(getPeriodPricing("starter", "biennial").renewalMonthlyCents);
   const standardRenewal = formatPricePerMonth(getPeriodPricing("standard", "biennial").renewalMonthlyCents);
 
@@ -123,6 +126,10 @@ export default async function PricingPage() {
     {
       question: t("faqCanadaFeeQ", { canadaFeeMonthly }),
       answer: <>{t("faqCanadaFeeA", { canadaFeeMonthly })}</>
+    },
+    {
+      question: t("faqMexicoFeeQ", { mexicoFeeMonthly }),
+      answer: <>{t("faqMexicoFeeA", { mexicoFeeMonthly, mexicoSmsCap: SMS_MONTHLY_CAP_MX })}</>
     },
     { question: t("faqKeepNumberQ"), answer: <>{t("faqKeepNumberA")}</> },
     {

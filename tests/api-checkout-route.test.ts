@@ -214,6 +214,78 @@ describe("api/checkout route", () => {
     );
   });
 
+  it("adds the Mexican surcharge and SKIPS the US carrier fee for a Mexican signup", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue(null);
+    vi.mocked(verifySignupIdentity).mockResolvedValue(true);
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: businessId,
+      owner_email: `pending+${businessId}@onboarding.local`,
+      phone: "+52 55 1234 5678", // CDMX
+      timezone: "America/Mexico_City"
+    } as never);
+
+    const request = new Request("http://localhost:3000/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tier: "standard",
+        businessId,
+        billingPeriod: "biennial",
+        ownerEmail: "owner@example.com",
+        signupUserId
+      })
+    });
+
+    const response = await POST(request);
+    expect(response.status).toBe(200);
+    expect(createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        // The US 10DLC registration cannot apply to +52 traffic: charge 0
+        // (the DID still attaches to the shared campaign for capability).
+        oneTimeCarrierFeeCents: 0,
+        mexicoFee: { monthlyCents: 999, billingPeriod: "biennial" },
+        metadata: expect.objectContaining({ mexicanMessagingFee: "1" })
+      })
+    );
+    // One country, one fee: a Mexican signup never also carries the
+    // Canadian surcharge.
+    const mxCall = vi.mocked(createCheckoutSession).mock.calls.at(-1)?.[0];
+    expect(mxCall && "canadaFee" in mxCall).toBe(false);
+    expect(mxCall?.metadata && "canadianMessagingFee" in mxCall.metadata).toBe(false);
+  });
+
+  it("classifies a Mexican-timezone signup with a non-NANP phone as Mexican", async () => {
+    vi.mocked(getAuthUser).mockResolvedValue(null);
+    vi.mocked(verifySignupIdentity).mockResolvedValue(true);
+    vi.mocked(getBusiness).mockResolvedValue({
+      id: businessId,
+      owner_email: `pending+${businessId}@onboarding.local`,
+      phone: "+447911123456",
+      timezone: "America/Tijuana"
+    } as never);
+
+    const request = new Request("http://localhost:3000/api/checkout", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        tier: "starter",
+        businessId,
+        billingPeriod: "monthly",
+        ownerEmail: "owner@example.com",
+        signupUserId
+      })
+    });
+
+    const response = await POST(request);
+    expect(response.status).toBe(200);
+    expect(createCheckoutSession).toHaveBeenCalledWith(
+      expect.objectContaining({
+        oneTimeCarrierFeeCents: 0,
+        mexicoFee: { monthlyCents: 999, billingPeriod: "monthly" }
+      })
+    );
+  });
+
   it("uses the caller's browser timezone only when the stored row has none (summary/charge lockstep)", async () => {
     vi.mocked(getAuthUser).mockResolvedValue(null);
     vi.mocked(verifySignupIdentity).mockResolvedValue(true);

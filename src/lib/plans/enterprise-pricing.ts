@@ -27,8 +27,25 @@ export const HOSTING_MONTHLY_CENTS_BY_SIZE: Record<VpsSize, number> = {
  * rounded once at the end).
  */
 export const ENTERPRISE_UNIT_COSTS = {
-  /** Blended outbound SMS incl. 10DLC carrier fees (pessimistic bound). */
+  /**
+   * Blended outbound SMS incl. 10DLC carrier fees (pessimistic bound).
+   * US-destination blend: +52 traffic costs smsOutboundCentsPerMessageMx
+   * per PART instead. The fleet aggregates (MRR, margin, usage-charges)
+   * deliberately keep this blend because usage snapshots carry no
+   * per-message destination country; Mexican tenants' delta is offset by
+   * the flat Mexican messaging surcharge plus the 100/month MX cap.
+   * Re-rate per destination when message logs carry the country.
+   */
   smsOutboundCentsPerMessage: 1.59,
+  /**
+   * Telnyx list price per message PART to Mexico (pay-as-you-go, read off
+   * the pricing page country selector Aug 2026; confirm against the
+   * account rate deck in Mission Control). Accented Spanish is UCS-2 at 70
+   * chars/part, so a typical Spanish message is 2+ parts. Consumed by the
+   * Mexican surcharge sizing math (see mexican-messaging.ts), not by the
+   * fleet aggregates.
+   */
+  smsOutboundCentsPerMessageMx: 9.1,
   smsInboundCentsPerMessage: 0.63,
   /**
    * Telnyx voice all-in per minute. The June 2026 invoice prices a bridged

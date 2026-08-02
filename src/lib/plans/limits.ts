@@ -1,7 +1,9 @@
 import type { PlanTier } from "@/lib/plans/tier";
 import { applyEnterpriseLimitsPatch } from "@/lib/plans/enterprise-limits";
+import { resolveBusinessCountry } from "@/lib/plans/business-country";
 import { VOICE_RES_LIMITS } from "../../../supabase/functions/_shared/voice_reservation_limits";
 import {
+  SMS_MONTHLY_CAP_MX,
   SMS_MONTHLY_CAP_STARTER,
   SMS_MONTHLY_CAP_STANDARD
 } from "../../../supabase/functions/_shared/sms_monthly_limits";
@@ -65,6 +67,27 @@ export const TIER_LIMITS: Record<PlanTier, TierLimits> = {
 export function getTierLimits(tier: PlanTier, enterpriseLimitsOverride?: unknown): TierLimits {
   if (tier !== "enterprise") return TIER_LIMITS[tier];
   return applyEnterpriseLimitsPatch(TIER_LIMITS.enterprise, enterpriseLimitsOverride);
+}
+
+/**
+ * The SMS monthly cap a specific business actually gets: the tier cap,
+ * clamped to SMS_MONTHLY_CAP_MX for Mexican non-enterprise tenants (their
+ * US +1 number texts +52 at international rates; see the mx_sms_cap
+ * migration, whose Postgres clamp in try_reserve_sms_outbound_slot is the
+ * enforcement this display mirrors). Pass the same business row fields the
+ * reservation reads (phone + timezone) so the shown allowance can never
+ * disagree with the enforced one.
+ */
+export function effectiveSmsMonthlyCap(
+  tier: PlanTier,
+  enterpriseLimitsOverride: unknown,
+  business: { phone?: string | null; timezone?: string | null }
+): number {
+  const base = getTierLimits(tier, enterpriseLimitsOverride).smsPerMonth;
+  if (tier !== "enterprise" && resolveBusinessCountry(business) === "MX") {
+    return Math.min(base, SMS_MONTHLY_CAP_MX);
+  }
+  return base;
 }
 
 /** Per-conversation image generation cap for a tier (Starter = 3, Standard+ = 10). */
