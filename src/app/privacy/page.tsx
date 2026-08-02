@@ -159,8 +159,7 @@ export default function PrivacyPolicyPage() {
         <p>
           We use this information to provide and improve the chat experience, help the business understand
           and respond to inquiries, and measure how visitors find the website. It is retained with the
-          conversation in accordance with the Data Retention section below, and you can request its deletion
-          through the process described in the Your Rights and Choices section.
+          conversation and is subject to the same retention and deletion controls as other conversation data.
           When the widget runs on a business&apos;s own website, that business is the controller of the
           conversation data and this information is processed on its behalf.
         </p>

@@ -4,22 +4,22 @@
  * Deletes tenant CONTENT rows older than the admin-configured
  * `businesses.data_retention_days` window. The table set and predicates
  * mirror `residency_purge_business()` (20260707192939_residency_purge.sql)
- * — append-only history the engine never re-reads — with the same live-row
+ *, append-only history the engine never re-reads, with the same live-row
  * carve-outs (unread notifications, non-terminal calls/sends). Contacts
  * are deliberately EXEMPT: retention trims history, it does not erase
  * people; full per-person erasure is src/lib/privacy/deletion.ts.
  *
  * Residency interplay (the part that differs from the purge):
- *   * Central deletes here are REAL content deletes, so — unlike the purge
- *     — they must journal: the trigger replicates them to a dual/vps box as
+ *   * Central deletes here are REAL content deletes, so, unlike the purge,
+ *     they must journal: the trigger replicates them to a dual/vps box as
  *     'delete' ops. No mute flag.
  *   * A vps-mode tenant's box holds history that central already purged, so
  *     central deletes alone can't enforce the window there. For dual/vps
  *     tenants the pruner ALSO deletes on the box through the data API. Box
- *     deletes overlap with the journaled ones — both are PK/filter deletes,
+ *     deletes overlap with the journaled ones: both are PK/filter deletes,
  *     idempotent, so the overlap is harmless.
  *   * A dual/vps box that is unreachable fails the tenant's prune loudly
- *     (recorded by the sweep); central rows already deleted stay deleted —
+ *     (recorded by the sweep); central rows already deleted stay deleted;
  *     re-running converges.
  */
 
@@ -71,7 +71,7 @@ const defaultDataApiFor = (businessId: string): Pick<DataApiClient, "select" | "
 
 /**
  * Prune one tenant's expired content history. Throws on the first central
- * or box failure — the sweep records the error and re-runs tomorrow;
+ * or box failure: the sweep records the error and re-runs tomorrow;
  * partial progress is safe because every delete is idempotent.
  */
 export async function pruneExpiredContent(
@@ -108,19 +108,42 @@ export async function pruneExpiredContent(
   };
 
   // ── email_log ──────────────────────────────────────────────────────────
+  // The delete RETURNING payload carries each row's `attachments` jsonb;
+  // the storage_path entries are the only pointers to the bytes in the
+  // email-attachments bucket, so the objects are removed after the rows.
+  // Warn-not-throw on remove failure: an orphaned object with no row is
+  // invisible garbage, the reverse is a live row pointing at nothing. The
+  // bucket is central Supabase Storage; there is no box equivalent.
   {
     const { data, error } = await db
       .from("email_log")
       .delete()
       .eq("business_id", businessId)
       .lt("created_at", cutoffIso)
-      .select("id");
+      .select("id, attachments");
     if (error) throw new Error(`pruneExpiredContent: email_log: ${error.message}`);
     results.push({
       table: "email_log",
       central: centralCount(data),
       box: await boxDelete("email_log", [{ column: "created_at", op: "lt", value: cutoffIso }])
     });
+    const paths: string[] = [];
+    for (const row of (Array.isArray(data) ? data : []) as Array<{ attachments?: unknown }>) {
+      for (const att of Array.isArray(row.attachments) ? row.attachments : []) {
+        const p = (att as { storage_path?: unknown }).storage_path;
+        if (typeof p === "string" && p) paths.push(p);
+      }
+    }
+    if (paths.length > 0) {
+      const { error: removeError } = await db.storage.from("email-attachments").remove(paths);
+      if (removeError) {
+        logger.warn("pruneExpiredContent: email-attachments storage remove failed", {
+          businessId,
+          objectCount: paths.length,
+          error: removeError.message
+        });
+      }
+    }
   }
 
   // ── sms_outbound_log ───────────────────────────────────────────────────
@@ -210,7 +233,7 @@ export async function pruneExpiredContent(
     });
   }
 
-  // ── notifications (read only — unread still drive the dashboard badge) ─
+  // ── notifications (read only: unread still drive the dashboard badge) ─
   {
     const { data, error } = await db
       .from("notifications")
@@ -223,7 +246,7 @@ export async function pruneExpiredContent(
     results.push({
       table: "notifications",
       central: centralCount(data),
-      // `read_at <= now` doubles as the non-null test — the data-api filter
+      // `read_at <= now` doubles as the non-null test: the data-api filter
       // grammar has no "is not null".
       box: await boxDelete("notifications", [
         { column: "created_at", op: "lt", value: cutoffIso },
@@ -265,7 +288,7 @@ export async function pruneExpiredContent(
   }
 
   // ── business_document_shares (dead links only; central-only) ───────────
-  // Share rows carry the recipient identifier (`shared_with` — PII). Only
+  // Share rows carry the recipient identifier (`shared_with`: PII). Only
   // rows whose link can no longer serve (revoked, or past the link's own
   // expiry) are pruned; a still-live link inside the retention window's
   // tail is an active capability the owner can see and revoke, not history.
@@ -284,7 +307,7 @@ export async function pruneExpiredContent(
   // ── document_signature_requests (dead requests only; central-only) ─────
   // Unsigned requests carry signer PII. Only rows that can never be signed
   // (voided, or past the link's own expiry) are pruned; SIGNED requests are
-  // legal evidence and are never retention-pruned — erasure handles them
+  // legal evidence and are never retention-pruned: erasure handles them
   // with targeted redaction instead.
   {
     const { data, error } = await db
@@ -303,7 +326,7 @@ export async function pruneExpiredContent(
 
   // ── sms_links (central-only: tracked short links carry the recipient ───
   // number + original URL; aged links go stale with their texts. Expired
-  // codes then 303 to the homepage — by design). sms_link_clicks rows
+  // codes then 303 to the homepage, by design). sms_link_clicks rows
   // cascade on link delete, so pruning links clears click history too.
   {
     const { data, error } = await db
@@ -334,6 +357,159 @@ export async function pruneExpiredContent(
         { column: "answered_at", op: "lte", value: nowIso }
       ])
     });
+  }
+
+  // ── webchat_sessions (central-only; cascades messages + jobs) ──────────
+  // A session's transcript clusters around its creation (one visit), so the
+  // session row is the retention unit; webchat_messages and webchat_jobs
+  // follow via FK cascade.
+  {
+    const { data, error } = await db
+      .from("webchat_sessions")
+      .delete()
+      .eq("business_id", businessId)
+      .lt("created_at", cutoffIso)
+      .select("id");
+    if (error) throw new Error(`pruneExpiredContent: webchat_sessions: ${error.message}`);
+    results.push({ table: "webchat_sessions", central: centralCount(data), box: null });
+  }
+
+  // ── messenger_conversations (central-only; fully dead threads only) ────
+  // The conversation row itself carries identifiers (contact_phone, the
+  // WhatsApp psid, display_name), so it must age out too, not just its
+  // messages. But neither timestamp column proves the thread is dead on its
+  // own: updated_at and last_user_message_at track INBOUND activity, and an
+  // out-of-window template send can append a recent outbound message
+  // without touching either. So: candidates by both stale timestamps, then
+  // disqualify any candidate that still has an in-window message, and only
+  // the rest are deleted (their remaining messages and jobs cascade).
+  {
+    const { data: candidates, error: candErr } = await db
+      .from("messenger_conversations")
+      .select("id")
+      .eq("business_id", businessId)
+      .lt("updated_at", cutoffIso)
+      .lt("last_user_message_at", cutoffIso);
+    if (candErr) throw new Error(`pruneExpiredContent: messenger_conversations: ${candErr.message}`);
+    const candidateIds = (Array.isArray(candidates) ? candidates : []).map((r) =>
+      String((r as { id: unknown }).id)
+    );
+    let central = 0;
+    if (candidateIds.length > 0) {
+      const { data: recent, error: recentErr } = await db
+        .from("messenger_messages")
+        .select("conversation_id")
+        .eq("business_id", businessId)
+        .gte("created_at", cutoffIso)
+        .in("conversation_id", candidateIds);
+      if (recentErr) {
+        throw new Error(`pruneExpiredContent: messenger_conversations: ${recentErr.message}`);
+      }
+      const alive = new Set(
+        (Array.isArray(recent) ? recent : []).map((r) =>
+          String((r as { conversation_id: unknown }).conversation_id)
+        )
+      );
+      const dead = candidateIds.filter((id) => !alive.has(id));
+      if (dead.length > 0) {
+        const { data, error } = await db
+          .from("messenger_conversations")
+          .delete()
+          .eq("business_id", businessId)
+          .in("id", dead)
+          .select("id");
+        if (error) {
+          throw new Error(`pruneExpiredContent: messenger_conversations: ${error.message}`);
+        }
+        central = centralCount(data);
+      }
+    }
+    results.push({ table: "messenger_conversations", central, box: null });
+  }
+
+  // ── messenger_messages (central-only; covers WhatsApp + Instagram) ─────
+  // For conversations that stay (recent activity), the prune unit is the
+  // MESSAGE: deleting a live conversation row would cascade away recent
+  // turns too. Job rows cascade from their user message.
+  {
+    const { data, error } = await db
+      .from("messenger_messages")
+      .delete()
+      .eq("business_id", businessId)
+      .lt("created_at", cutoffIso)
+      .select("id");
+    if (error) throw new Error(`pruneExpiredContent: messenger_messages: ${error.message}`);
+    results.push({ table: "messenger_messages", central: centralCount(data), box: null });
+  }
+
+  // ── sms_inbound_jobs (central-only; terminal only) ─────────────────────
+  // The canonical SMS log: inbound texts + cached assistant replies. Only
+  // settled jobs are pruned; pending/processing rows are live engine state.
+  {
+    const { data, error } = await db
+      .from("sms_inbound_jobs")
+      .delete()
+      .eq("business_id", businessId)
+      .lt("created_at", cutoffIso)
+      .in("status", ["done", "dead_letter"])
+      .select("id");
+    if (error) throw new Error(`pruneExpiredContent: sms_inbound_jobs: ${error.message}`);
+    results.push({ table: "sms_inbound_jobs", central: centralCount(data), box: null });
+  }
+
+  // ── lead_submissions (central-only) ────────────────────────────────────
+  {
+    const { data, error } = await db
+      .from("lead_submissions")
+      .delete()
+      .eq("business_id", businessId)
+      .lt("created_at", cutoffIso)
+      .select("id");
+    if (error) throw new Error(`pruneExpiredContent: lead_submissions: ${error.message}`);
+    results.push({ table: "lead_submissions", central: centralCount(data), box: null });
+  }
+
+  // ── booking_waitlist (central-only; settled entries only) ──────────────
+  // Waiting/offered rows are live queue state the offer engine still reads.
+  {
+    const { data, error } = await db
+      .from("booking_waitlist")
+      .delete()
+      .eq("business_id", businessId)
+      .lt("created_at", cutoffIso)
+      .in("status", ["fulfilled", "expired", "canceled"])
+      .select("id");
+    if (error) throw new Error(`pruneExpiredContent: booking_waitlist: ${error.message}`);
+    results.push({ table: "booking_waitlist", central: centralCount(data), box: null });
+  }
+
+  // ── calendar_booking_dedupe (central-only) ─────────────────────────────
+  // Idempotency ledger keyed by attendee identity + start time; entries
+  // past the retention window can no longer collide with a live booking.
+  {
+    const { data, error } = await db
+      .from("calendar_booking_dedupe")
+      .delete()
+      .eq("business_id", businessId)
+      .lt("created_at", cutoffIso)
+      .select("id");
+    if (error) throw new Error(`pruneExpiredContent: calendar_booking_dedupe: ${error.message}`);
+    results.push({ table: "calendar_booking_dedupe", central: centralCount(data), box: null });
+  }
+
+  // ── voice_handoff_sessions (central-only; terminal only) ───────────────
+  // Chain state plus the free-text caller brief in context. PK is
+  // call_control_id, not id. Non-done rows are live call state.
+  {
+    const { data, error } = await db
+      .from("voice_handoff_sessions")
+      .delete()
+      .eq("business_id", businessId)
+      .lt("created_at", cutoffIso)
+      .eq("status", "done")
+      .select("call_control_id");
+    if (error) throw new Error(`pruneExpiredContent: voice_handoff_sessions: ${error.message}`);
+    results.push({ table: "voice_handoff_sessions", central: centralCount(data), box: null });
   }
 
   const totalCentral = results.reduce((s, r) => s + r.central, 0);
