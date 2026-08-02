@@ -134,15 +134,21 @@ function SignupForm() {
 
     // Evidence row for the pre-session click: email confirmation is still
     // pending, so there is no authenticated session to record against yet.
-    // Best-effort by design; the dashboard acceptance gate is the
-    // authoritative backstop for any account without a current row.
-    fetch("/api/legal/accept", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email })
-    }).catch(() => {});
+    // Fired ONLY on the branches where a new signup actually happened: the
+    // existing-account error path below must not mint a 'signup' acceptance
+    // row for an email its owner never typed here. Best-effort by design;
+    // the dashboard acceptance gate is the authoritative backstop for any
+    // account without a current row.
+    const recordSignupAcceptance = () => {
+      fetch("/api/legal/accept", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ email })
+      }).catch(() => {});
+    };
 
     if (signUpData.session) {
+      recordSignupAcceptance();
       router.push(redirectTo);
       return;
     }
@@ -153,6 +159,7 @@ function SignupForm() {
       return;
     }
 
+    recordSignupAcceptance();
     setConfirmationPending(true);
   }
 
