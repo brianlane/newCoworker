@@ -287,11 +287,21 @@ function QuestionnaireForm({
       }
     } catch { /* ignore corrupt data */ }
     try {
-      const draftPhone =
+      // Restore the country-prefix selector. The STORED prefix is
+      // authoritative (Bugbot High on this PR: without persisting it, a
+      // reload with bare national digits typed under "+52" silently reset
+      // to "+1" and the digits would compose as a US number). The
+      // +52-phone / Mexican-timezone heuristics only seed first visits and
+      // pre-persistence drafts.
+      const draftRaw =
         typeof window !== "undefined"
-          ? (JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY) ?? "null")?.form?.phone ?? "")
-          : "";
-      if (typeof draftPhone === "string" && draftPhone.trim().startsWith("+52")) {
+          ? JSON.parse(localStorage.getItem(DRAFT_STORAGE_KEY) ?? "null")
+          : null;
+      const storedPrefix = draftRaw?.phonePrefix;
+      const draftPhone = draftRaw?.form?.phone ?? "";
+      if (storedPrefix === "+52" || storedPrefix === "+1") {
+        setPhonePrefix(storedPrefix);
+      } else if (typeof draftPhone === "string" && draftPhone.trim().startsWith("+52")) {
         setPhonePrefix("+52");
       } else if (
         !draftPhone &&
@@ -310,9 +320,12 @@ function QuestionnaireForm({
   useEffect(() => {
     if (!hydrated) return;
     try {
-      localStorage.setItem(DRAFT_STORAGE_KEY, JSON.stringify({ step, form, signupEmail }));
+      localStorage.setItem(
+        DRAFT_STORAGE_KEY,
+        JSON.stringify({ step, form, signupEmail, phonePrefix })
+      );
     } catch { /* quota exceeded — non-critical */ }
-  }, [step, form, signupEmail, hydrated]);
+  }, [step, form, signupEmail, phonePrefix, hydrated]);
 
   function update(field: keyof FormData, value: string | OnboardingAssistantChatDraftState | null) {
     setForm((prev) => ({ ...prev, [field]: value }));
