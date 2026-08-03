@@ -164,9 +164,19 @@ async function main(): Promise<void> {
     );
   }
 
+  // The vault sync is the one step whose failure leaves NO trace in Supabase:
+  // memory_md reads as done while the box still serves the old rule. So on
+  // --apply we re-sync whenever the memory is at target, changed this run or
+  // not, instead of returning early and skipping straight past a sync that
+  // failed on a previous run.
+  const memoryAtTarget = memoryStatus === "replaced" || memoryStatus === "already_applied";
+
   if (toolsToDisable.length === 0 && !memoryChanged) {
-    console.log("\nAlready at target state. Nothing to do.");
-    return;
+    if (!APPLY) {
+      console.log("\nAlready at target state. Nothing to do.");
+      return;
+    }
+    console.log("\nDatabase already at target state; re-syncing the vault to be sure.");
   }
 
   if (!APPLY) {
@@ -208,14 +218,23 @@ async function main(): Promise<void> {
       process.exit(1);
     }
     console.log("Updated business_configs.memory_md.");
+  }
 
+  // Runs whenever the memory is at target, not only when it just changed.
+  // Idempotent, so a redundant sync costs a round trip and heals the case
+  // above.
+  let vaultSynced = true;
+  if (memoryAtTarget) {
     console.log("Syncing vault to VPS…");
     const vault = await syncVaultToVps(BUSINESS_ID);
+    vaultSynced = vault.ok;
     if (!vault.ok) {
       console.error(
         `Vault sync failed (${vault.reason}${vault.detail ? `: ${vault.detail}` : ""}). ` +
-          "memory_md is updated in Supabase but the box still has the old vault. " +
-          "Re-run `npx tsx debug/resync-vault.ts` once the box is reachable."
+          "memory_md is correct in Supabase but the box still has the old vault, " +
+          "so the voice coworker keeps reading the OLD scheduling rule. " +
+          "Re-run this script (it will retry the sync) or `npx tsx debug/resync-vault.ts` " +
+          "once the box is reachable."
       );
     } else {
       console.log("Vault synced.");
@@ -227,9 +246,14 @@ async function main(): Promise<void> {
     businessId: BUSINESS_ID,
     details: {
       voice_calendar_tools_disabled: toolsToDisable,
-      memory_scheduling_rule: memoryStatus
+      memory_scheduling_rule: memoryStatus,
+      vault_synced: vaultSynced
     }
   });
+
+  // Non-zero so a failed sync never reads as a completed apply: the DB half
+  // landed, the box half did not, and only the exit code says so.
+  if (!vaultSynced) process.exit(1);
   console.log("\nDone.");
 }
 
