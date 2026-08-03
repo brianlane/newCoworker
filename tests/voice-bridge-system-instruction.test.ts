@@ -106,6 +106,33 @@ describe("customer persona", () => {
     expect(build({ hasVoiceTools: true })).toContain("never substitute a placeholder");
   });
 
+  // All three from Chris Bartelot's Aug 3 2026 call.
+  describe("Aug 3 2026 call regressions", () => {
+    it("ties a follow-up promise to the notify_team call that keeps it", () => {
+      // It said "I'll have the team follow up with you" and never called the
+      // tool. Nothing reached the team.
+      const text = build({ hasVoiceTools: true });
+      expect(text).toContain("is a PROMISE");
+      expect(text).toContain("I'll have the team follow up");
+      expect(text).toContain("call it in the same turn");
+    });
+
+    it("bans leading with a slot inside the hour, and re-asking over the caller", () => {
+      // It offered "2:30 today, in about fifteen minutes" for an in-person
+      // listing consultation, four times, while he was reading out addresses.
+      const text = build({ hasVoiceTools: true });
+      expect(text).toContain("Do not lead with a slot that starts within the hour");
+      expect(text).toContain("Ask about timing ONCE");
+      expect(text).toContain("never repeat a scheduling question they have not had the chance to answer");
+    });
+
+    it("stops the AI reporting its own just-made booking as a collision", () => {
+      // "It actually looks like that time was already booked for you" — to the
+      // caller who had just chosen it, that sounds like a stranger took it.
+      expect(build()).toContain("Never say the slot was already booked");
+    });
+  });
+
   it("teaches the customer tool suite only when tools are wired", () => {
     const withTools = build({ hasVoiceTools: true });
     expect(withTools).toContain("capture_caller_details");

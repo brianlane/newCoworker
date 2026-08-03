@@ -36,6 +36,10 @@ import {
 import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 import { callSummariesAllowedForTier } from "@/lib/plans/call-summaries";
 import { logger } from "@/lib/logger";
+// Shared line rather than a new phrasing, per the repo-wide em-dash rule: the
+// call summary is user-facing copy on the Calls list and this prompt was
+// missing it entirely.
+import { NO_EM_DASH_PROMPT_LINE } from "../../../supabase/functions/_shared/sms_prompt_lines";
 
 type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
@@ -66,13 +70,26 @@ export const CALL_SUMMARY_GEMINI_TIMEOUT_MS = 25_000;
 export const CALL_SENTIMENTS = ["positive", "neutral", "negative", "mixed"] as const;
 export type CallSentiment = (typeof CALL_SENTIMENTS)[number];
 
+/**
+ * "No speculation beyond the transcript" was already here and was not enough.
+ * Chris Bartelot's Aug 3 2026 call produced "two turnkey RENTAL properties he
+ * owns" from a caller who had said "we're living in the bigger house right
+ * now". One invented adjective, and the owner reads the summary rather than
+ * the transcript, so it becomes the version she acts on. Naming the specific
+ * failure (attributes nobody stated) beats another general instruction to be
+ * accurate.
+ */
 const SYSTEM_INSTRUCTION = `You summarize one phone call between a small business's AI phone assistant and a caller.
 
 Return STRICT JSON: {"summary": string, "sentiment": "positive"|"neutral"|"negative"|"mixed"}.
 
 summary: 1-3 plain sentences (max ~${CALL_SUMMARY_MAX_CHARS} characters) a busy owner can skim: who called (if stated), what they wanted, what was resolved or promised, and any follow-up still owed. No preamble, no speculation beyond the transcript.
 
-sentiment: the CALLER's overall mood — "positive" (satisfied/friendly), "negative" (frustrated/upset), "mixed" (shifted during the call), otherwise "neutral".`;
+Every descriptive word must be traceable to something the caller actually said. Do not add attributes nobody stated: how a property is used (rental, investment, vacant, primary residence), condition, price, urgency, relationships, or job titles. When the caller was vague, stay vague. When they contradicted an earlier statement, follow the later one. If you cannot point to the line that supports a detail, leave the detail out.
+
+sentiment: the CALLER's overall mood: "positive" (satisfied/friendly), "negative" (frustrated/upset), "mixed" (shifted during the call), otherwise "neutral".
+
+${NO_EM_DASH_PROMPT_LINE}`;
 
 export type CallSummaryFailureReason =
   | "not_found"
