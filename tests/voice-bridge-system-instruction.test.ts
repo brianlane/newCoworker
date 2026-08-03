@@ -67,10 +67,33 @@ describe("customer persona", () => {
     // Scoped: lead-shaped callers only, and only when it is not already known.
     expect(text).toContain("turning into a genuine lead");
     expect(text).toContain("still don't know their name");
-    expect(text).toContain("only once in the whole call");
+    expect(text).toContain("Only once in the whole call");
     // The suppressive rules it sits beside must survive intact.
     expect(text).toContain("don't ask for their name again");
     expect(text).toContain("Never ask for information you already have");
+  });
+
+  // Aug 3 2026: Chris Bartelot opened with "this is Chris Bartelot" and was
+  // asked for his "full name" sixteen turns later. The repeat mis-transcribed
+  // as a different surname, the write was refused, and the AI announced it had
+  // updated his name. The ask-once permission above had become the re-asking
+  // the rules beside it exist to prevent.
+  it("blocks the ask when the caller already gave a name earlier in the call", () => {
+    const text = build();
+    expect(text).toContain("already said their name at ANY point in this call");
+    expect(text).toContain("do NOT ask again");
+    // The model escalated a permitted "can I get your name?" into a full-name
+    // request on its own, so that escalation is closed off by name.
+    expect(text).toContain("first name only");
+    expect(text).toContain('never a "full name"');
+    expect(text).toContain("never ask them to repeat or spell a name they have already given");
+  });
+
+  it("tells the model a refused name write is not a success", () => {
+    const text = build({ hasVoiceTools: true });
+    expect(text).toContain("only fills a BLANK name");
+    expect(text).toContain("`updated: false`");
+    expect(text).toContain("never tell the caller their name was updated");
   });
 
   it("tells the capture tool to omit an unknown name rather than invent a placeholder", () => {

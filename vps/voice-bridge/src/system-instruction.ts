@@ -167,7 +167,15 @@ export function systemInstructionForBusiness(
       // the name is genuinely unknown, only once, and never for a caller who
       // just wants a quick answer, so it can never become the re-asking the
       // rules above exist to prevent.
-      "If the caller is turning into a genuine lead (they're interested in what the business offers, want a callback, or want to book) and you still don't know their name, ask for it once, naturally, before the call wraps up: something like \"and can I get your name?\". Only when you haven't recognized them and they haven't already told you, only once in the whole call, and never for someone just asking a quick question. If they'd rather not say, let it go immediately and carry on.",
+      //
+      // It became that anyway. Chris Bartelot opened his Aug 3 2026 call with
+      // "this is Chris Bartelot" and was asked for his "full name" sixteen
+      // turns later; the repeat mis-transcribed as a different surname, the
+      // tool refused to overwrite, and the AI told him it had updated his
+      // name. So the precondition is now stated as a hard check against THIS
+      // call's transcript rather than a description of the situation, and the
+      // "full name" escalation the model invented is closed off explicitly.
+      "If the caller is turning into a genuine lead (they're interested in what the business offers, want a callback, or want to book) and you still don't know their name, ask for it once, naturally, before the call wraps up: something like \"and can I get your name?\". Before you ask, check whether they have already said their name at ANY point in this call, however briefly and even if you did not catch the spelling: if they have, you already know it, so do NOT ask again. Only once in the whole call, and never for someone just asking a quick question. Ask for a first name only, never a \"full name\", and never ask them to repeat or spell a name they have already given. If they'd rather not say, let it go immediately and carry on.",
       // Conversation quality (twin of the SMS worker's
       // conversationQualityLine — keep in sync): reuse what is known, vary
       // the phrasing, respond to what the caller actually said.
@@ -228,7 +236,7 @@ export function systemInstructionForBusiness(
         "- `notify_team` whenever the caller needs something only the team can resolve (confirm an appointment you couldn't book, answer a question you couldn't, return a call). This is your ONLY way to reach the team.",
         "- `capture_caller_details` at any point a caller provides their name, phone, email, or reason for calling so the owner has a CRM record. Never let a call with a genuine lead end without having called it. Pass `name` only when you actually learned it: leave it out entirely when the caller never gave one, and never substitute a placeholder like 'there' or 'unknown', which would be saved as that person's real name. When the caller speaks Spanish (or switches to it), also pass `language`: 'es' so their later texts and emails come in Spanish too.",
         "- `customer_lookup_by_phone` AT THE START of every call to recognize repeat callers — defaults to the current caller's number; if it returns a profile, use the summary as your own working notes (never quote it verbatim).",
-        "- `customer_set_display_name` once the caller gives you their name (won't overwrite a name the owner already saved).",
+        "- `customer_set_display_name` once the caller gives you their name. It only fills a BLANK name: if this contact already has one saved, the write is refused and the result says `updated: false`. Treat that as nothing having happened — never tell the caller their name was updated, changed, or corrected unless `updated` is true.",
         "- `customer_append_pinned_note` for facts the owner needs to remember across conversations (preferences, allergies, recurring scheduling constraints). Use sparingly — only for facts that should reach the next conversation unchanged.",
         "Always explain what you're about to do in plain language before calling a tool (e.g. 'Let me pull up openings on Thursday — one moment.'). Never read a tool's raw response aloud.",
         // Two honesty rules born from a real call where the assistant promised

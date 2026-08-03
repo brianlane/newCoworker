@@ -100,6 +100,24 @@ export async function lookupCustomerByPhone(
 }
 
 /**
+ * Model-facing text for the two no-op branches below.
+ *
+ * `ok: true` alone was read as success. On Chris Bartelot's call (Aug 3 2026)
+ * the voice coworker re-asked for a name it already had, mis-heard the repeat,
+ * called this tool, got `{ ok: true, updated: false }` back, and told the
+ * caller "I've updated your name here" — while the contact row was untouched.
+ * The system instruction already bans announcing an action whose tool call did
+ * not succeed; the result shape is what made a refusal look like a success.
+ *
+ * So the no-op says so in words the model cannot round off, and names the
+ * value that IS saved so it has something true to say instead.
+ */
+export const NAME_UNCHANGED_MESSAGE =
+  "NOT UPDATED. This contact already has a saved name, and customer channels " +
+  "never overwrite one. Do not tell the caller their name was changed, added, " +
+  "corrected, or noted. If the saved name is wrong, say a teammate will fix it.";
+
+/**
  * `customer_set_display_name` core. Customer surfaces (voice/SMS) never
  * overwrite a name that is already set — agent-discovered names only land
  * when display_name is currently null/empty. The DASHBOARD surface is the
@@ -129,10 +147,26 @@ export async function setCustomerDisplayName(
   const current = existing?.display_name?.trim() ?? "";
   if (current) {
     if (current === displayName) {
-      return { ok: true, data: { updated: false, reason: "name_already_set_matches" } };
+      return {
+        ok: true,
+        data: {
+          updated: false,
+          reason: "name_already_set_matches",
+          savedName: current,
+          message: NAME_UNCHANGED_MESSAGE
+        }
+      };
     }
     if (channel !== "dashboard") {
-      return { ok: true, data: { updated: false, reason: "name_already_set" } };
+      return {
+        ok: true,
+        data: {
+          updated: false,
+          reason: "name_already_set",
+          savedName: current,
+          message: NAME_UNCHANGED_MESSAGE
+        }
+      };
     }
     await updateCustomerOwnerFields(businessId, phone, {
       displayName,

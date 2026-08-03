@@ -270,7 +270,14 @@ describe("POST /api/voice/tools/customer-set-display-name", () => {
     const body = await res.json();
     expect(body).toEqual({
       ok: true,
-      data: { updated: false, reason: "name_already_set" }
+      data: {
+        updated: false,
+        reason: "name_already_set",
+        savedName: "Joe Plumber",
+        // The refusal reaches the model in words, not just as a flag it can
+        // round off to success (Chris Bartelot, Aug 3 2026).
+        message: expect.stringContaining("NOT UPDATED")
+      }
     });
     expect(updateCustomerOwnerFields).not.toHaveBeenCalled();
   });
@@ -339,7 +346,12 @@ describe("POST /api/voice/tools/customer-set-display-name", () => {
     expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
       ok: true,
-      data: { updated: false, reason: "name_already_set_matches" }
+      data: {
+        updated: false,
+        reason: "name_already_set_matches",
+        savedName: "Joe",
+        message: expect.stringContaining("NOT UPDATED")
+      }
     });
     expect(updateCustomerOwnerFields).not.toHaveBeenCalled();
   });
