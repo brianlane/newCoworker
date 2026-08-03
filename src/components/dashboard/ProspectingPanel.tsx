@@ -24,6 +24,8 @@ import { Button } from "@/components/ui/Button";
 
 type Mode = "off" | "manual" | "auto";
 
+type QueueAction = "send" | "skip" | "edit" | "regenerate";
+
 type Settings = {
   mode: Mode;
   search_terms: string[];
@@ -59,6 +61,13 @@ type QueueItem = {
   vertical: string;
   email: string | null;
   pitch_subject: string | null;
+  /**
+   * The editable middle of the draft. Null on drafts written before editing
+   * existed: those can be regenerated, but there is nothing safe to hand the
+   * owner to edit, since only the assembled body was ever stored and it
+   * carries the compliance footer.
+   */
+  pitch_paragraphs: string | null;
   pitch_body: string | null;
 };
 
@@ -72,6 +81,8 @@ type View = {
   blockers: string[];
   /** False on Starter: show the upgrade card instead of the controls. */
   tierAllowed: boolean;
+  /** False on Enterprise: the footer address is optional here. */
+  postalAddressRequired: boolean;
 };
 
 const inputClass =
@@ -101,6 +112,12 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
   const [expanded, setExpanded] = useState<string | null>(null);
+  /**
+   * Draft edits in progress, per prospect. Kept out of `view` for the same
+   * reason the settings form is: Send, Skip, and Regenerate all re-read from
+   * the server, and a refresh must not overwrite something half-typed.
+   */
+  const [drafts, setDrafts] = useState<Record<string, { subject: string; paragraphs: string }>>({});
   /**
    * Unsaved edits in the form. Send and Skip both re-read from the server, so
    * without this a targeting change typed while working through the queue
@@ -184,22 +201,44 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
     }
   };
 
-  const act = async (prospectId: string, action: "send" | "skip") => {
+  const NOTICE_BY_ACTION: Record<QueueAction, string> = {
+    send: t("sentOne"),
+    skip: t("skippedOne"),
+    edit: t("editedOne"),
+    regenerate: t("regeneratedOne")
+  };
+
+  const act = async (prospectId: string, action: QueueAction) => {
     setBusyId(prospectId);
     setError(null);
     setNotice(null);
     try {
+      const edit = action === "edit" ? drafts[prospectId] : undefined;
       const res = await fetch(`/api/dashboard/outreach/prospects/${prospectId}`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ businessId, action })
+        body: JSON.stringify({
+          businessId,
+          action,
+          subject: edit?.subject,
+          paragraphs: edit?.paragraphs
+        })
       });
       const json = (await res.json()) as { ok: boolean; error?: { message?: string } };
       if (!json.ok) {
         setError(json.error?.message ?? t("actionFailed"));
         return;
       }
-      setNotice(action === "send" ? t("sentOne") : t("skippedOne"));
+      setNotice(NOTICE_BY_ACTION[action]);
+      // The server now holds this draft's text, so the local copy is dropped
+      // and the refresh below reseeds the editor from what was actually saved.
+      // Regenerate discards it for the same reason: the coworker's new writing
+      // is the answer to pressing that button.
+      setDrafts((prev) => {
+        const next = { ...prev };
+        delete next[prospectId];
+        return next;
+      });
       // Refreshes the queue and the numbers; a half-typed settings form is
       // left alone, since the owner did not ask to discard it by pressing Send.
       await refresh();
@@ -210,8 +249,31 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
     }
   };
 
+  /**
+   * A draft with no stored paragraphs: written before the column existed, or
+   * read back by a build that is briefly ahead of the migration. Both get the
+   * read-only treatment, which is the safe failure: the alternative is an
+   * empty edit box over a pitch the owner can still see underneath it.
+   */
+  const isLegacyDraft = (item: QueueItem) => !item.pitch_paragraphs;
+
+  /** The editor's current text: the owner's unsaved edit, or what is stored. */
+  const draftText = (item: QueueItem) =>
+    drafts[item.id] ?? {
+      subject: item.pitch_subject ?? "",
+      paragraphs: item.pitch_paragraphs ?? ""
+    };
+
+  const editDraft = (item: QueueItem, patch: { subject?: string; paragraphs?: string }) => {
+    const current = draftText(item);
+    setDrafts((prev) => ({ ...prev, [item.id]: { ...current, ...patch } }));
+  };
+
   const funnel = view?.funnel;
   const mode = view?.settings?.mode ?? "off";
+  // Defaults to required until the view loads, so the stricter copy is what a
+  // slow first paint shows.
+  const postalRequired = view?.postalAddressRequired !== false;
 
   if (view && !view.tierAllowed) {
     return (
@@ -341,7 +403,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
         </div>
         <div className="sm:col-span-2">
           <label className={labelClass} htmlFor="prospecting-postal">
-            {t("fields.postalAddress")}
+            {postalRequired ? t("fields.postalAddress") : t("fields.postalAddressOptional")}
           </label>
           <input
             id="prospecting-postal"
@@ -350,7 +412,12 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
             onChange={(e) => edit({ postal_address: e.target.value })}
             placeholder={t("placeholders.postalAddress")}
           />
-          <p className="mt-1 text-xs text-parchment/50">{t("postalHelp")}</p>
+          {/* Enterprise gets the fallback explained rather than a rule stated:
+              they can leave this blank, and what lands in the footer instead
+              is the thing they will want to know. */}
+          <p className="mt-1 text-xs text-parchment/50">
+            {postalRequired ? t("postalHelp") : t("postalHelpOptional")}
+          </p>
         </div>
         <div>
           <label className={labelClass} htmlFor="prospecting-sender">
@@ -496,17 +563,81 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
                     >
                       {t("actions.skip")}
                     </Button>
-                    <Button disabled={busyId === item.id} onClick={() => void act(item.id, "send")}>
+                    {/* Send is blocked while an edit is unsaved: the server
+                        would send the stored draft, and the owner would watch
+                        their rewrite go out as the old text. */}
+                    <Button
+                      disabled={busyId === item.id || Boolean(drafts[item.id])}
+                      onClick={() => void act(item.id, "send")}
+                    >
                       {t("actions.send")}
                     </Button>
                   </div>
                 </div>
                 {expanded === item.id ? (
-                  <div className="mt-2 rounded border border-parchment/10 bg-deep-ink/40 p-3">
-                    <p className="text-xs font-medium text-parchment/70">{item.pitch_subject}</p>
-                    <pre className="mt-2 whitespace-pre-wrap break-words text-xs text-parchment/60">
-                      {item.pitch_body}
-                    </pre>
+                  <div className="mt-2 space-y-2 rounded border border-parchment/10 bg-deep-ink/40 p-3">
+                    {isLegacyDraft(item) ? (
+                      // Drafted before the editor existed: only the assembled
+                      // body was stored, and handing that back would put the
+                      // compliance footer inside an edit box. Regenerate is
+                      // the one click that makes it editable.
+                      <>
+                        <p className="text-xs font-medium text-parchment/70">
+                          {item.pitch_subject}
+                        </p>
+                        <pre className="whitespace-pre-wrap break-words text-xs text-parchment/60">
+                          {item.pitch_body}
+                        </pre>
+                        <p className="text-xs text-parchment/50">{t("legacyDraft")}</p>
+                      </>
+                    ) : (
+                      <>
+                        <div>
+                          <label className={labelClass} htmlFor={`draft-subject-${item.id}`}>
+                            {t("fields.draftSubject")}
+                          </label>
+                          <input
+                            id={`draft-subject-${item.id}`}
+                            className={inputClass}
+                            value={draftText(item).subject}
+                            onChange={(e) => editDraft(item, { subject: e.target.value })}
+                          />
+                        </div>
+                        <div>
+                          <label className={labelClass} htmlFor={`draft-body-${item.id}`}>
+                            {t("fields.draftBody")}
+                          </label>
+                          <textarea
+                            id={`draft-body-${item.id}`}
+                            className={`${inputClass} min-h-40`}
+                            value={draftText(item).paragraphs}
+                            onChange={(e) => editDraft(item, { paragraphs: e.target.value })}
+                          />
+                          <p className="mt-1 text-xs text-parchment/50">{t("draftFooterHelp")}</p>
+                        </div>
+                      </>
+                    )}
+                    <div className="flex flex-wrap items-center gap-2">
+                      {isLegacyDraft(item) ? null : (
+                        <Button
+                          variant="secondary"
+                          disabled={busyId === item.id || !drafts[item.id]}
+                          onClick={() => void act(item.id, "edit")}
+                        >
+                          {t("actions.saveDraft")}
+                        </Button>
+                      )}
+                      <Button
+                        variant="secondary"
+                        disabled={busyId === item.id}
+                        onClick={() => void act(item.id, "regenerate")}
+                      >
+                        {t("actions.regenerate")}
+                      </Button>
+                      {drafts[item.id] ? (
+                        <span className="text-xs text-amber-200">{t("unsavedDraft")}</span>
+                      ) : null}
+                    </div>
                   </div>
                 ) : null}
               </div>

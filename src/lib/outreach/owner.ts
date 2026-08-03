@@ -14,7 +14,12 @@
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { logger } from "@/lib/logger";
-import { prospectingAllowedForBusiness } from "@/lib/plans/prospecting";
+import {
+  postalAddressRequiredForBusiness,
+  postalAddressRequiredForTier,
+  prospectingAllowedForTier,
+  prospectingTierForBusiness
+} from "@/lib/plans/prospecting";
 import {
   getOutreachSettings,
   listProspectOutcomes,
@@ -66,7 +71,40 @@ export type ProspectingView = {
   blockers: string[];
   /** False on Starter: panel shows an upgrade card; writes refuse when on. */
   tierAllowed: boolean;
+  /**
+   * False on Enterprise: the footer address is optional, so the panel drops
+   * the blocker and explains the fallback instead of demanding a field.
+   */
+  postalAddressRequired: boolean;
 };
+
+/** The two tier-derived gates the panel needs, resolved from one lookup. */
+type TierGates = { tierAllowed: boolean; postalAddressRequired: boolean };
+
+/**
+ * tierAllowed is display-only (it drives the upgrade card) and every write
+ * path re-checks the tier server-side, so a failed lookup degrades OPEN
+ * there: a Starter briefly sees the normal panel while writes still refuse,
+ * which beats flashing an upgrade card at a paying tenant over a transient
+ * read blip. The address gate degrades the other way, CLOSED, because the
+ * cost of being wrong is a blocker line an Enterprise tenant does not need
+ * for one render, against a missing legal footer if we guess exempt.
+ */
+async function resolveTierGates(businessId: string, db: SupabaseClient): Promise<TierGates> {
+  try {
+    const tier = await prospectingTierForBusiness(businessId, db);
+    return {
+      tierAllowed: prospectingAllowedForTier(tier),
+      postalAddressRequired: postalAddressRequiredForTier(tier)
+    };
+  } catch (error) {
+    logger.warn("outreach: tier lookup failed; rendering the panel ungated", {
+      businessId,
+      error: error instanceof Error ? error.message : String(error)
+    });
+    return { tierAllowed: true, postalAddressRequired: true };
+  }
+}
 
 /** Everything the panel renders, in one pass. */
 export async function loadProspectingView(
@@ -74,23 +112,11 @@ export async function loadProspectingView(
   client?: SupabaseClient
 ): Promise<ProspectingView> {
   const db = client ?? (await createSupabaseServiceClient());
-  const [settings, outcomes, queue, tierAllowed] = await Promise.all([
+  const [settings, outcomes, queue, gates] = await Promise.all([
     getOutreachSettings(businessId, db),
     listProspectOutcomes(businessId, db),
     listProspectsByStatus(businessId, ["drafted"], REVIEW_QUEUE_LIMIT, db),
-    // tierAllowed is display-only (it drives the upgrade card); every write
-    // path re-checks the tier server-side. prospectingAllowedForBusiness
-    // throws on lookup failure, and unhandled here that rejection 500s the
-    // whole Marketing panel. Degrade OPEN instead: a Starter briefly sees
-    // the normal panel while writes still refuse, which beats flashing an
-    // upgrade card at a paying tenant over a transient read blip.
-    prospectingAllowedForBusiness(businessId, db).catch((error) => {
-      logger.warn("outreach: tier lookup failed; rendering the panel ungated", {
-        businessId,
-        error: error instanceof Error ? error.message : String(error)
-      });
-      return true;
-    })
+    resolveTierGates(businessId, db)
   ]);
   const { total, byVertical } = summarizeFunnel(outcomes);
   return {
@@ -100,9 +126,11 @@ export async function loadProspectingView(
     queue,
     clipped: outcomes.length >= OUTREACH_SCAN_LIMIT,
     blockers: describeBlockers(settings, {
-      placesKeyConfigured: Boolean((process.env.GOOGLE_PLACES_API_KEY ?? "").trim())
+      placesKeyConfigured: Boolean((process.env.GOOGLE_PLACES_API_KEY ?? "").trim()),
+      postalAddressRequired: gates.postalAddressRequired
     }),
-    tierAllowed
+    tierAllowed: gates.tierAllowed,
+    postalAddressRequired: gates.postalAddressRequired
   };
 }
 
@@ -115,14 +143,18 @@ export async function loadProspectingView(
  */
 export function describeBlockers(
   settings: OutreachSettingsRow | null,
-  env: { placesKeyConfigured?: boolean } = {}
+  env: { placesKeyConfigured?: boolean; postalAddressRequired?: boolean } = {}
 ): string[] {
   if (!settings) return [];
   const blockers: string[] = [];
   // Platform blocker first: without the key, nothing the owner edits below
   // can make discovery run.
   if (env.placesKeyConfigured === false) blockers.push("placesKey");
-  if (!settings.postal_address?.trim()) blockers.push("postalAddress");
+  // Defaults to required, so every caller that has not resolved a tier keeps
+  // the old, stricter behavior.
+  if (env.postalAddressRequired !== false && !settings.postal_address?.trim()) {
+    blockers.push("postalAddress");
+  }
   if (!settings.value_prop?.trim()) blockers.push("valueProp");
   if (settings.search_terms.length === 0) blockers.push("searchTerms");
   if (settings.cities.length === 0) blockers.push("cities");
@@ -151,6 +183,14 @@ export class ProspectingSettingsError extends Error {}
  * refused HERE with a readable message, before the database refuses it with a
  * constraint violation. Both gates exist on purpose, since the DB is what makes
  * it impossible and this is what makes it understandable.
+ *
+ * Enterprise is exempt from the typed field (postalAddressRequiredForTier).
+ * The exemption is WRITTEN DOWN, in `postal_address_exempt`, rather than
+ * implied by the tier: the DB check constraint reads that column, so the
+ * schema still refuses a Standard tenant with an empty address, and a later
+ * downgrade cannot silently re-open the gate the constraint used to hold. The
+ * footer still prints the business profile address when there is one; see
+ * resolveTenant in sweep.ts.
  */
 export async function saveProspectingSettings(
   businessId: string,
@@ -162,14 +202,21 @@ export async function saveProspectingSettings(
   const postalAddress = input.postalAddress.trim();
   const valueProp = input.valueProp.trim();
 
-  if (input.mode !== "off" && !postalAddress) {
-    throw new ProspectingSettingsError(
-      "A postal address is required before outreach can be switched on: every marketing email has to carry one."
-    );
-  }
+  // Checked before the tier lookup below, because it needs no I/O.
   if (input.mode !== "off" && !valueProp) {
     throw new ProspectingSettingsError(
       "Say what you want the email to offer before switching outreach on."
+    );
+  }
+  const db = client ?? (await createSupabaseServiceClient());
+  // TURNING OFF NEVER READS THE BUSINESS ROW. Off is exempt by definition (the
+  // constraint ignores it), so the kill switch keeps working even while the
+  // businesses table is unreadable.
+  const postalAddressExempt =
+    input.mode !== "off" && !(await postalAddressRequiredForBusiness(businessId, db));
+  if (input.mode !== "off" && !postalAddress && !postalAddressExempt) {
+    throw new ProspectingSettingsError(
+      "A postal address is required before outreach can be switched on: every marketing email has to carry one."
     );
   }
   // TURNING OFF ALWAYS WORKS. The panel posts the whole form, so validating
@@ -179,8 +226,9 @@ export async function saveProspectingSettings(
   // by a form error, so the pacing values are sanitized instead of rejected.
   // They are meaningless while off, and the schema still requires a legal pair.
   // Tier gating for switching ON lives in the dashboard route (and the sweep /
-  // sendProspectNow path), so a Starter tenant can always turn the feature off
-  // after a downgrade without this function needing a businesses lookup.
+  // sendProspectNow path). The tier lookup above is about the postal-address
+  // waiver only, and it is skipped entirely while off, so a Starter tenant can
+  // always turn the feature off after a downgrade.
   const strict = input.mode !== "off";
   if (strict && (input.dailyCap < 0 || input.dailyCap > MAX_DAILY_CAP)) {
     throw new ProspectingSettingsError(`The daily cap has to be between 0 and ${MAX_DAILY_CAP}.`);
@@ -197,7 +245,6 @@ export async function saveProspectingSettings(
       ? [input.sendWindowStartHour, input.sendWindowEndHour]
       : [DEFAULT_WINDOW_START_HOUR, DEFAULT_WINDOW_END_HOUR];
 
-  const db = client ?? (await createSupabaseServiceClient());
   return upsertOutreachSettings(
     businessId,
     {
@@ -208,6 +255,7 @@ export async function saveProspectingSettings(
       send_window_start_hour: startHour,
       send_window_end_hour: endHour,
       postal_address: postalAddress || null,
+      postal_address_exempt: postalAddressExempt,
       value_prop: valueProp || null,
       sender_name: input.senderName.trim() || null
     },

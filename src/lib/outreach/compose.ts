@@ -1,5 +1,5 @@
 /**
- * Prospecting — composing the pitch.
+ * Prospecting: composing the pitch.
  *
  * Two rules shape this module.
  *
@@ -42,7 +42,12 @@ export type PitchTenant = {
   bookingUrl: string | null;
   /** Who signs the mail. Falls back to the business name. */
   senderName: string | null;
-  /** CAN-SPAM postal address, printed verbatim in the footer. */
+  /**
+   * CAN-SPAM postal address, printed verbatim in the footer. Empty only for a
+   * tier the platform exempts (Enterprise) that has no address on file
+   * anywhere; the footer then prints the unsubscribe line alone rather than a
+   * blank line where an address should be.
+   */
   postalAddress: string;
 };
 
@@ -178,8 +183,25 @@ export function assembleBody(
   const footer = [
     `You can unsubscribe here and I will not email you again: ${unsubscribeUrl}`,
     tenant.postalAddress.trim()
-  ].join("\n");
+  ]
+    // An exempt tenant with no address on file gets the unsubscribe line and
+    // nothing else. Filtering beats printing an empty line, which would look
+    // like a template that failed to render.
+    .filter(Boolean)
+    .join("\n");
   return `${paragraphs.join("\n\n")}\n\n${cta}\n\n${signature}\n\n${footer}\n`;
+}
+
+/**
+ * Owner-edited pitch text back into paragraphs. Blank lines separate them,
+ * which is the same shape `polishParagraphs` returns, so an edited draft and a
+ * machine-written one re-assemble through exactly one code path.
+ */
+export function splitParagraphs(text: string): string[] {
+  return text
+    .split(/\n\s*\n/)
+    .map((p) => p.trim())
+    .filter(Boolean);
 }
 
 export type PolishDeps = {

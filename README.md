@@ -1395,6 +1395,31 @@ Marketing page and presses Send or Skip. `auto` sends inside the window and
 under the cap. The tenant's "Prospect outreach follow-through" AiFlow is a
 second, independent off switch, since disabling it stops the filing half.
 
+### Editing a draft, and having it written again
+
+A draft in the review queue is not take-it-or-leave-it. The owner can rewrite
+it in place (Save draft) or have the coworker write it again from the same
+findings (Write it again), both from the Marketing page, and both only while
+the prospect is still `drafted`: a sent pitch is a thing that happened, and
+rewriting the ledger copy of a mail already in somebody's inbox would make the
+record disagree with reality. Each is a guarded update on that status, the
+same claim Send and Skip use, because the queue can be minutes stale.
+
+**The edit box holds the paragraphs, never the whole email.** That is the same
+rule as "why the send is NOT a flow step" below, applied to the dashboard: the
+CTA, the signature, the unsubscribe link, and the postal address are
+concatenated around whatever the owner submits by `assembleBody`, so an edit
+cannot delete the footer, because the footer was never in the box. The
+paragraphs live in their own column (`outreach_prospects.pitch_paragraphs`),
+written whenever a draft is composed. Rows drafted before that column existed
+have only the assembled body, so the panel offers them Write it again rather
+than an edit box: handing that body back would put the compliance footer
+inside an editable field.
+
+Write it again re-composes from the findings already on the row and does NOT
+re-probe the prospect's site. A probe is a network fetch of someone else's
+server, and a button an owner can press repeatedly must not become one.
+
 ### Why the send is NOT a flow step
 
 The obvious design is a `send_email` step in the outreach flow. It is wrong
@@ -1413,8 +1438,31 @@ carries no send step at all, and a test pins that.
 ### Compliance is structural, not aspirational
 
 - A check constraint (`outreach_settings_ready_when_on`) makes any mode but
-  `off` impossible without a postal address and an offer line. You cannot
-  switch this on without the things the email legally needs.
+  `off` impossible without an offer line, and without a postal address unless
+  the row carries an explicit waiver. You cannot switch this on without the
+  things the email legally needs.
+- **The postal-address waiver is Enterprise-only, and it is recorded rather
+  than inferred.** `postalAddressRequiredForTier`
+  (src/lib/plans/prospecting.ts) exempts Enterprise from typing an address
+  into the panel; the save path writes that decision into
+  `outreach_settings.postal_address_exempt`, which is the column the check
+  constraint reads. So the schema still refuses a Standard tenant with no
+  address, and a row that was allowed on without one says why on its face.
+  The footer line itself is not waived by default: for an exempt tenant,
+  `resolveTenant` falls back to the business profile address
+  (`businesses.address`), and only when they have no address anywhere does the
+  footer print the unsubscribe line alone. **That fallback belongs to the
+  waiver and is not offered to anyone else.** A tier that must type an address
+  is blocked without one even when a profile address exists, because the
+  panel's blocker and the check constraint both name the typed field, and a
+  Marketing page saying outreach cannot run while the sweep sends anyway is
+  the worst behavior on offer. The tier is re-read on every send, so a
+  downgrade that leaves a stale `postal_address_exempt` behind stops rather
+  than riding the profile address. Note the legal position
+  this leaves: CAN-SPAM has no Enterprise exemption, so an exempt tenant with
+  no address on file is sending commercial mail without the physical address
+  the law asks for, on their own compliance judgement rather than the
+  platform's.
 - Every pitch and every follow-up carries a working prospect-scoped
   unsubscribe link. Unsubscribing stamps BOTH the ledger row and any contact
   holding that address, so a later campaign cannot reach them either.
