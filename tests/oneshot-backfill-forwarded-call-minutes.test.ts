@@ -71,6 +71,44 @@ describe("classifyForwardedCall", () => {
       });
     });
 
+    // The live meter runs at hangup, so its Date.now() tracks ended_at. A call
+    // straddling a window boundary must key the same way, or backfilled and
+    // live rows disagree for exactly the calls hardest to reconcile by hand.
+    it("keys a boundary-spanning call by ended_at, matching the live meter", () => {
+      const monthly: BusinessBilling = {
+        tier: "standard",
+        enterpriseLimits: null,
+        periodStartIso: "2026-01-15T00:00:00.000Z"
+      };
+      const result = classifyForwardedCall(
+        call({
+          // Starts 4 minutes before the Feb window opens, ends 6 minutes after.
+          started_at: "2026-02-14T23:56:00.000Z",
+          ended_at: "2026-02-15T00:06:00.000Z"
+        }),
+        monthly
+      );
+      expect(result).toMatchObject({
+        action: "meter",
+        reportedSeconds: 600,
+        stripePeriodStart: "2026-02-15T00:00:00.000Z"
+      });
+    });
+
+    it("meters a call that starts before the period but ends inside it", () => {
+      const result = classifyForwardedCall(
+        call({
+          started_at: "2026-07-28T22:41:00.000Z",
+          ended_at: "2026-07-28T22:43:00.000Z"
+        }),
+        standard
+      );
+      expect(result).toMatchObject({
+        action: "meter",
+        stripePeriodStart: new Date(AMY_PERIOD).toISOString()
+      });
+    });
+
     it("echoes the period start verbatim for a window-0 call", () => {
       const result = classifyForwardedCall(
         call({ started_at: "2026-07-29T00:00:00.000Z", ended_at: "2026-07-29T00:01:00.000Z" }),

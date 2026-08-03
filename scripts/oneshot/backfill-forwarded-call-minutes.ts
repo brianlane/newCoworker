@@ -84,6 +84,13 @@ export type Classification =
  * tenant's current Stripe period start cannot be keyed at all (that period's
  * anchor is gone from `subscriptions`, and re-opening an invoiced period is
  * not this script's call to make). Those are reported, never metered.
+ *
+ * Which of the call's timestamps? `ended_at`, not `started_at`. The live meter
+ * runs from the hangup webhook, so its `Date.now()` is effectively the call's
+ * end. For a call that straddles a month-window boundary the two differ, and
+ * keying off `started_at` would file it in the window BEFORE the one the live
+ * meter would have used — a silent disagreement between backfilled and live
+ * rows for exactly the calls hardest to reconcile by hand.
  */
 export function classifyForwardedCall(
   row: ForwardedCallRow,
@@ -108,11 +115,13 @@ export function classifyForwardedCall(
 
   if (!billing.periodStartIso) return { action: "skip", reason: "no_subscription" };
   const periodStartMs = Date.parse(billing.periodStartIso);
-  if (!Number.isFinite(periodStartMs) || startMs < periodStartMs) {
+  // Compared on `endMs` for the same reason the window below is derived from
+  // it: match the live meter, which runs at hangup.
+  if (!Number.isFinite(periodStartMs) || endMs < periodStartMs) {
     return { action: "skip", reason: "closed_period" };
   }
 
-  const window = deriveMonthlyQuotaWindow(billing.periodStartIso, startMs);
+  const window = deriveMonthlyQuotaWindow(billing.periodStartIso, endMs);
   return {
     action: "meter",
     reportedSeconds: seconds,
