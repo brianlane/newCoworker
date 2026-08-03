@@ -8,6 +8,7 @@ import { JsonLd } from "@/components/marketing/JsonLd";
 import { BlogPostCard } from "@/components/marketing/BlogPostCard";
 import { BlogShareButtons } from "@/components/marketing/BlogShareButtons";
 import { BlogSubscribeForm } from "@/components/marketing/BlogSubscribeForm";
+import { CtaBanner } from "@/components/marketing/sections";
 import { blogImagePublicUrl } from "@/lib/blog/db";
 import { getPublishedPostBySlugIsr, listRelatedPostsIsr } from "@/lib/blog/public-isr";
 import { renderMarkdown } from "@/lib/blog/markdown";
@@ -36,7 +37,9 @@ export async function generateMetadata({
   );
   const imageUrl = blogImagePublicUrl(post.featured_image_path);
   return {
-    title: `${title} — New Coworker`,
+    // Bare title: the root layout's metadata template already appends
+    // " | New Coworker", so a suffix here renders the brand twice.
+    title,
     description,
     alternates: {
       canonical: translated ? `/es/blog/${post.slug}` : `/blog/${post.slug}`,
@@ -170,8 +173,20 @@ export default async function BlogPostPage({
           className={`mt-8 ${ARTICLE_STYLES}`}
           dangerouslySetInnerHTML={{ __html: renderMarkdown(content) }}
         />
+      </article>
 
-        <div className="mt-12 border-t border-parchment/10 pt-8">
+      {/* The product ask comes first, while the reader is still on the post
+          they just finished. Share and subscribe follow as softer asks, and
+          they live outside <article> because neither is post content. */}
+      <CtaBanner
+        title={t("ctaTitle")}
+        subtitle={t("ctaSubtitle")}
+        ctaLabel={t("ctaLabel")}
+        ctaHref="/onboard"
+      />
+
+      <section className="mx-auto max-w-3xl px-6 pb-16">
+        <div className="border-t border-parchment/10 pt-8">
           <h2 className="mb-4 text-sm font-semibold uppercase tracking-wide text-parchment/50">
             {t("sharePost")}
           </h2>
@@ -200,7 +215,7 @@ export default async function BlogPostPage({
             }}
           />
         </div>
-      </article>
+      </section>
 
       {related.length > 0 && (
         <section className="mx-auto max-w-6xl px-6 pb-20">
