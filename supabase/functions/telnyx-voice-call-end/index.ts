@@ -50,6 +50,7 @@ import { sendMissedCallAutotext } from "../_shared/missed_call_autotext.ts";
 import { maybeSendMissedCallSpikeAlert } from "../_shared/missed_call_spike.ts";
 import { systemLog } from "../_shared/system_log.ts";
 import { meterForwardedCallSeconds } from "../_shared/forwarded_call_meter.ts";
+import { parseCallDurationSeconds } from "../_shared/telnyx_call_duration.ts";
 
 const MAX_BODY = 256 * 1024;
 
@@ -1176,18 +1177,6 @@ async function handleWarmTransferLifecycle(
     handled: true,
     response: jsonOk(answered ? "wt_answered_hangup" : "wt_failed")
   };
-}
-
-function parseCallDurationSeconds(payload: Record<string, unknown>): number | null {
-  const v = payload["call_duration"];
-  if (typeof v === "number" && Number.isFinite(v) && v >= 0) {
-    return Math.floor(v);
-  }
-  if (typeof v === "string" && v.trim() !== "") {
-    const n = Number(v);
-    if (Number.isFinite(n) && n >= 0) return Math.floor(n);
-  }
-  return null;
 }
 
 serve(async (req: Request) => {
