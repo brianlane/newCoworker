@@ -1548,6 +1548,35 @@ describe("editProspectDraft and regenerateProspectDraft (the owner reworked a dr
     expect(ledger.transitionProspect).not.toHaveBeenCalled();
   });
 
+  it("counts text made only of blank lines as empty, before it can be split away", async () => {
+    // The failure this guards: text that is truthy on the way in but splits to
+    // no paragraphs would save a pitch that is only CTA, signature, and
+    // footer, and it would still be sendable. The trim runs first, so every
+    // shape of blank line is refused here rather than emptied later.
+    const ledger = draftLedger();
+    for (const paragraphs of ["\n\n", "  \n\n  ", "\n \n \n", "\r\n\r\n", "\t\n\n\t"]) {
+      expect(
+        await editProspectDraft(BIZ, prospect().id, { subject: "s", paragraphs }, baseDeps())
+      ).toEqual({ ok: false, reason: "empty_text" });
+    }
+    expect(ledger.transitionProspect).not.toHaveBeenCalled();
+  });
+
+  it("never writes a draft whose paragraphs are empty", async () => {
+    // The invariant stated as an assertion on the write itself, so it holds
+    // however the text arrived.
+    const ledger = draftLedger();
+    await editProspectDraft(
+      BIZ,
+      prospect().id,
+      { subject: "s", paragraphs: "\n\n  Still something to say.  \n\n" },
+      baseDeps()
+    );
+    const patch = (ledger.transitionProspect as ReturnType<typeof vi.fn>).mock.calls[0][3];
+    expect(patch.pitch_paragraphs).toBe("Still something to say.");
+    expect(patch.pitch_body.startsWith("Still something to say.")).toBe(true);
+  });
+
   it("refuses a prospect that is gone, no longer a draft, or claimed mid-edit", async () => {
     draftLedger({ getProspect: vi.fn(async () => null) });
     expect(

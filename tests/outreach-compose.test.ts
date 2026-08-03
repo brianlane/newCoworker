@@ -172,6 +172,33 @@ describe("splitParagraphs", () => {
     expect(splitParagraphs("One.\n\n\n  \n\n  Two.  \n\n")).toEqual(["One.", "Two."]);
     expect(splitParagraphs("   ")).toEqual([]);
   });
+
+  it("never returns nothing for text that survived a trim", () => {
+    // The invariant editProspectDraft leans on: it refuses empty text after a
+    // trim, then splits. If a trimmed non-empty string could still split to
+    // nothing, an owner could save a pitch that is only CTA, signature, and
+    // footer. It cannot: a trimmed string starts on a non-whitespace
+    // character, and the separator /\n\s*\n/ cannot match at position 0, so
+    // the first chunk always carries that character through filter(Boolean).
+    for (const raw of [
+      "\n\n",
+      "  \n\n  ",
+      "\n \n \n",
+      "\t\n\n\t",
+      "\r\n\r\n",
+      " \n\n ",
+      "﻿\n\n﻿",
+      "   ",
+      ""
+    ]) {
+      const trimmed = raw.trim();
+      // Every one of these is caught by the empty check, never reaching the split.
+      expect(trimmed).toBe("");
+    }
+    for (const raw of [".", "a\n\nb", "  .  ", "\n\n.\n\n", " . "]) {
+      expect(splitParagraphs(raw.trim()).length).toBeGreaterThan(0);
+    }
+  });
 });
 
 describe("polishParagraphs", () => {
