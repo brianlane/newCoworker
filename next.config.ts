@@ -106,6 +106,27 @@ const nextConfig: NextConfig = {
   // stay as a runtime `require()` on the server — it is only reached from
   // server-only routes (orchestrator / provisioning), never from the browser.
   serverExternalPackages: ["ssh2"],
+  // `/api/brand-logo` reads public/logo.png with a path built at runtime, which
+  // the bundler cannot trace on its own, so the file would be missing from the
+  // deployed function. Force it in.
+  outputFileTracingIncludes: {
+    "/api/brand-logo": ["./public/logo.png"]
+  },
+  async rewrites() {
+    return {
+      // beforeFiles runs ahead of the static-file lookup, which is the whole
+      // point: it lets /logo.png be answered by a Next route while the actual
+      // file stays in public/ for the build-time OG card to read.
+      //
+      // Without this, the platform serves public/logo.png directly and
+      // replaces our Access-Control-Allow-Origin with `*` on any request
+      // carrying an Origin header. That wildcard was the last open CASA
+      // finding.
+      beforeFiles: [{ source: "/logo.png", destination: "/api/brand-logo" }],
+      afterFiles: [],
+      fallback: []
+    };
+  },
   async redirects() {
     return [
       // OAuth callback forwarder for LEGACY Nango-brokered connections
