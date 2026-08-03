@@ -621,8 +621,13 @@ describe("sms-inbound-worker reply pipeline (real worker, fake Rowboat wire)", (
     expect(email?.status).toBe("skipped");
     expect(email?.payload.reason).toBe("recent_team_notify");
     const transports = pages.filter((n) => n.delivery_channel !== "dashboard");
-    expect(transports.length).toBeGreaterThanOrEqual(3);
+    // Email and SMS are the applicable transports here. This used to assert
+    // ">= 3", which quietly required a whatsapp row from a business that
+    // never connected WhatsApp — the dedupe branch was one of the four that
+    // wrote whatsapp rows before anything checked for a connection.
+    expect(transports.map((n) => n.delivery_channel).sort()).toEqual(["email", "sms"]);
     expect(transports.every((n) => n.status !== "sent")).toBe(true);
+    expect(pages.some((n) => n.delivery_channel === "whatsapp")).toBe(false);
   });
 
   it("a voice-side team notify (payload.callerPhone) dedupes the handoff transports too", async () => {
