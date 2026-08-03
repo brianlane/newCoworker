@@ -69,7 +69,14 @@ export type ForwardedMeterResult =
         | "no_duration";
     };
 
-function tierCapSecondsFor(tier: string, enterpriseLimitsRaw: unknown): number {
+/**
+ * Included voice seconds per Stripe period for a tier. Exported so the
+ * backfill one-shot (`scripts/oneshot/backfill-forwarded-call-minutes.ts`)
+ * resolves the cap exactly the way the live meter does — a backfill that
+ * bootstrapped a usage row with a different `tier_cap_seconds` than the
+ * reserve gate reads would make the cap disagree with itself.
+ */
+export function tierCapSecondsFor(tier: string, enterpriseLimitsRaw: unknown): number {
   if (tier === "enterprise") {
     return resolveEnterpriseVoiceReservation(enterpriseLimitsRaw).tierCapSeconds;
   }
