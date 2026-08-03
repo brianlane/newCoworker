@@ -1,5 +1,5 @@
 /**
- * Prospecting — the sweep. One pass over every business the feature is on for.
+ * Prospecting: the sweep. One pass over every business the feature is on for.
  *
  * Call chain: pg_cron (every 5 min) -> Edge `outreach-sweep`
  *   -> POST /api/internal/outreach-sweep -> here.
@@ -26,7 +26,11 @@
  */
 
 import { getBusiness } from "@/lib/db/businesses";
-import { placesQueriesPerDayForTier, prospectingAllowedForTier } from "@/lib/plans/prospecting";
+import {
+  placesQueriesPerDayForTier,
+  postalAddressRequiredForTier,
+  prospectingAllowedForTier
+} from "@/lib/plans/prospecting";
 import { schedulingLink } from "@/lib/booking-page/prompt-line";
 import {
   sendFromMailboxConnection,
@@ -76,6 +80,7 @@ import {
   leadFinding,
   pitchParagraphs,
   polishParagraphs,
+  splitParagraphs,
   type PitchTenant
 } from "./compose";
 import { buildOutreachUnsubscribeUrl, isWithinSendWindow, utcDayStartIso } from "./compliance";
@@ -225,10 +230,17 @@ async function resolveTenant(
   if (!prospectingAllowedForTier(business.tier)) {
     return { missing: "prospecting requires the Standard plan", blockedBy: "tier" };
   }
-  // The DB constraint guarantees a postal address for any non-off mode, so
-  // this is belt-and-braces rather than the primary gate.
-  const postalAddress = settings.postal_address?.trim() ?? "";
-  if (!postalAddress) return { missing: "no postal address configured", blockedBy: "config" };
+  // Where the footer address comes from, in order: what the owner typed into
+  // the Prospecting panel, then the address on their business profile. The DB
+  // constraint guarantees the first for every tier that must type one, so for
+  // those this stays belt-and-braces. For an exempt tier (Enterprise) the
+  // fallback is the point: they never had to type it, and most of them already
+  // have an address on file.
+  const postalAddress =
+    settings.postal_address?.trim() || (business.address ?? "").trim() || "";
+  if (!postalAddress && postalAddressRequiredForTier(business.tier)) {
+    return { missing: "no postal address configured", blockedBy: "config" };
+  }
   const valueProp = settings.value_prop?.trim() ?? "";
   if (!valueProp) return { missing: "no value proposition configured", blockedBy: "config" };
   const link = await r.schedulingLink(settings.business_id).catch(() => null);
@@ -398,6 +410,9 @@ async function draftForBusiness(
         status_detail: null,
         drafted_at: r.now.toISOString(),
         pitch_subject: deterministic.subject,
+        // Stored apart from the body so the owner can edit the writing without
+        // ever holding the footer: see editProspectDraft.
+        pitch_paragraphs: polished.join("\n\n"),
         pitch_body: assembleBody(tenant, polished, unsubscribeUrl)
       },
       r.db
@@ -850,6 +865,155 @@ export async function sendProspectNow(
   if (!sent) return { ok: false, reason: "send_failed" };
   await handOffToFlow(settings, prospect, r, result, { email: to, subject });
   return { ok: true, notes: result.notes.map((n) => n.note) };
+}
+
+/** Ceiling on an owner-written pitch, so one paste cannot become an essay. */
+export const MAX_EDITED_SUBJECT_CHARS = 200;
+export const MAX_EDITED_BODY_CHARS = 4000;
+
+export type DraftUpdateResult =
+  | { ok: true; prospect: { pitch_subject: string; pitch_paragraphs: string; pitch_body: string } }
+  | {
+      ok: false;
+      reason:
+        | "not_found"
+        | "not_drafted"
+        | "not_configured"
+        | "tier_blocked"
+        | "empty_text"
+        | "too_long"
+        | "not_pitchable";
+      detail?: string;
+    };
+
+/**
+ * Everything an owner draft action needs: the tenant identity the footer is
+ * built from, the prospect row, and the prospect's own unsubscribe link.
+ * Shared by edit and regenerate so both refuse the same things for the same
+ * reasons, in the same order the Send button does.
+ */
+async function loadDraftContext(
+  businessId: string,
+  prospectId: string,
+  r: Resolved
+): Promise<
+  | { tenant: PitchTenant; prospect: OutreachProspectRow; unsubscribeUrl: string }
+  | { failure: DraftUpdateResult }
+> {
+  const settings = await getOutreachSettings(businessId, r.db);
+  if (!settings) return { failure: { ok: false, reason: "not_configured" } };
+  const resolved = await resolveTenant(settings, r);
+  if ("missing" in resolved) {
+    return {
+      failure: {
+        ok: false,
+        reason: resolved.blockedBy === "tier" ? "tier_blocked" : "not_configured",
+        detail: resolved.missing
+      }
+    };
+  }
+  const prospect = await getProspect(businessId, prospectId, r.db);
+  if (!prospect) return { failure: { ok: false, reason: "not_found" } };
+  // Only a draft is editable. A sent pitch is a thing that happened, and
+  // rewriting the ledger copy of an email already in someone's inbox would
+  // make the record disagree with reality.
+  if (prospect.status !== "drafted") return { failure: { ok: false, reason: "not_drafted" } };
+  return {
+    tenant: resolved.tenant,
+    prospect,
+    unsubscribeUrl: buildOutreachUnsubscribeUrl(r.appUrl, businessId, prospectId)
+  };
+}
+
+/**
+ * The owner rewrote a draft. Their text becomes the PARAGRAPHS; the CTA, the
+ * signature, the unsubscribe link, and the postal address are re-assembled
+ * around it by `assembleBody`, exactly as they are for a machine-written
+ * draft.
+ *
+ * That split is the whole design. The README's rule for why the send is not a
+ * flow step ("a flow step's body is owner-editable copy, so a well-meaning
+ * edit could delete the footer") applies just as hard to an edit box on the
+ * dashboard, so the edit box never contains the footer in the first place: it
+ * holds the middle, and the compliance lines are concatenated after it in code
+ * the owner cannot reach.
+ *
+ * Guarded on the prospect still being a draft, like Send and Skip beside it:
+ * the review queue can be minutes stale, and an unguarded write would rewrite
+ * the stored copy of a pitch the sweep has already sent.
+ */
+export async function editProspectDraft(
+  businessId: string,
+  prospectId: string,
+  edit: { subject: string; paragraphs: string },
+  deps: OutreachSweepDeps = {}
+): Promise<DraftUpdateResult> {
+  const subject = edit.subject.trim();
+  const text = edit.paragraphs.trim();
+  if (!subject || !text) return { ok: false, reason: "empty_text" };
+  if (subject.length > MAX_EDITED_SUBJECT_CHARS || text.length > MAX_EDITED_BODY_CHARS) {
+    return { ok: false, reason: "too_long" };
+  }
+
+  const r = await resolveDeps(deps);
+  const context = await loadDraftContext(businessId, prospectId, r);
+  if ("failure" in context) return context.failure;
+
+  const paragraphs = splitParagraphs(text);
+  const patch = {
+    pitch_subject: subject,
+    pitch_paragraphs: paragraphs.join("\n\n"),
+    pitch_body: assembleBody(context.tenant, paragraphs, context.unsubscribeUrl)
+  };
+  const saved = await transitionProspect(businessId, prospectId, "drafted", patch, r.db);
+  if (!saved) return { ok: false, reason: "not_drafted" };
+  return { ok: true, prospect: patch };
+}
+
+/**
+ * Write the draft again from scratch: the same deterministic pitch the sweep
+ * composes, through the same optional tone pass, so a second attempt reads
+ * like a different email rather than a rearrangement of the first.
+ *
+ * It re-composes from the findings ALREADY on the row rather than re-probing
+ * the prospect's site. A probe is a network fetch of somebody else's server,
+ * and a button an owner can press repeatedly must not turn into one. Anything
+ * the owner changed by hand is discarded, which is what "regenerate" means.
+ */
+export async function regenerateProspectDraft(
+  businessId: string,
+  prospectId: string,
+  deps: OutreachSweepDeps = {}
+): Promise<DraftUpdateResult> {
+  const r = await resolveDeps(deps);
+  const context = await loadDraftContext(businessId, prospectId, r);
+  if ("failure" in context) return context.failure;
+  const { tenant, prospect, unsubscribeUrl } = context;
+
+  const findings = prospect.findings ?? [];
+  // The row was drafted, so it was pitchable once. Re-checked anyway: the
+  // finding vocabulary can change under a stored row, and composePitch coming
+  // back null here would otherwise be an unexplained failure.
+  if (!isPitchable(findings)) return { ok: false, reason: "not_pitchable" };
+  const pitchProspect = {
+    businessName: prospect.business_name,
+    city: prospect.city,
+    findings
+  };
+  const deterministic = composePitch(tenant, pitchProspect, unsubscribeUrl) as {
+    subject: string;
+    body: string;
+  };
+  const lead = leadFinding(findings) as { code: string; detail: string };
+  const polished = await r.polish(businessId, pitchParagraphs(tenant, pitchProspect, lead));
+  const patch = {
+    pitch_subject: deterministic.subject,
+    pitch_paragraphs: polished.join("\n\n"),
+    pitch_body: assembleBody(tenant, polished, unsubscribeUrl)
+  };
+  const saved = await transitionProspect(businessId, prospectId, "drafted", patch, r.db);
+  if (!saved) return { ok: false, reason: "not_drafted" };
+  return { ok: true, prospect: patch };
 }
 
 /** Everything one business gets in one pass. */

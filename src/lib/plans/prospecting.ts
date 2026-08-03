@@ -20,6 +20,23 @@ export function prospectingAllowedForTier(tier: string | null | undefined): bool
 }
 
 /**
+ * Whether the plan makes the owner type a postal address into the Prospecting
+ * panel before outreach can be switched on.
+ *
+ * Enterprise is exempt. That is a change to WHERE the footer address comes
+ * from, not a claim that cold mail stopped needing one: an exempt tenant's
+ * footer falls back to the address on their business profile
+ * (`businesses.address`), and only prints nothing when they have no address
+ * anywhere. Enterprise tenants run their own compliance footer decisions with
+ * their own counsel, so the platform stops making the panel a hard gate for
+ * them and keeps it a hard gate for everyone else, where the DB check
+ * constraint still makes it structural.
+ */
+export function postalAddressRequiredForTier(tier: string | null | undefined): boolean {
+  return tier !== "enterprise";
+}
+
+/**
  * Paid Places queries a tenant's daily discovery pass may buy. Discovery
  * bills at the Text Search Enterprise tier, so this number is the platform's
  * per-tenant Places cost lever: Standard gets the base budget, Enterprise
@@ -31,20 +48,37 @@ export function placesQueriesPerDayForTier(tier: string | null | undefined): num
 }
 
 /**
- * Resolve whether the business's tier allows Prospecting. Throws on lookup
- * failure (routes surface it via handleRouteError as a 500; the sweep treats
- * it as a per-business failure and continues).
+ * The business's tier, for the gates above. Throws on lookup failure (routes
+ * surface it via handleRouteError as a 500; the sweep treats it as a
+ * per-business failure and continues), because a failed read must never read
+ * as "no tier" and quietly downgrade a paying tenant.
  */
-export async function prospectingAllowedForBusiness(
+export async function prospectingTierForBusiness(
   businessId: string,
   client?: Awaited<ReturnType<typeof createSupabaseServiceClient>>
-): Promise<boolean> {
+): Promise<string | null> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("businesses")
     .select("tier")
     .eq("id", businessId)
     .maybeSingle();
-  if (error) throw new Error(`prospectingAllowedForBusiness: ${error.message}`);
-  return prospectingAllowedForTier((data as { tier?: string } | null)?.tier);
+  if (error) throw new Error(`prospectingTierForBusiness: ${error.message}`);
+  return (data as { tier?: string | null } | null)?.tier ?? null;
+}
+
+/** Resolve whether the business's tier allows Prospecting at all. */
+export async function prospectingAllowedForBusiness(
+  businessId: string,
+  client?: Awaited<ReturnType<typeof createSupabaseServiceClient>>
+): Promise<boolean> {
+  return prospectingAllowedForTier(await prospectingTierForBusiness(businessId, client));
+}
+
+/** Resolve whether this business must type a footer postal address. */
+export async function postalAddressRequiredForBusiness(
+  businessId: string,
+  client?: Awaited<ReturnType<typeof createSupabaseServiceClient>>
+): Promise<boolean> {
+  return postalAddressRequiredForTier(await prospectingTierForBusiness(businessId, client));
 }

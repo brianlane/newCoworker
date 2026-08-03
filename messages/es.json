@@ -2187,7 +2187,10 @@
         "senderName": "Quién firma el correo",
         "dailyCap": "Correos por día",
         "windowStart": "Enviar desde (hora)",
-        "windowEnd": "Enviar hasta (hora)"
+        "windowEnd": "Enviar hasta (hora)",
+        "postalAddressOptional": "Dirección postal para el pie del correo (opcional)",
+        "draftSubject": "Asunto",
+        "draftBody": "Lo que dice el correo"
       },
       "placeholders": {
         "searchTerms": "plomero, técnico de aire acondicionado, techador",
@@ -2206,7 +2209,9 @@
         "hide": "Ocultar",
         "send": "Enviar",
         "skip": "Omitir",
-        "saveSettings": "Guardar ajustes"
+        "saveSettings": "Guardar ajustes",
+        "saveDraft": "Guardar borrador",
+        "regenerate": "Escribirlo otra vez"
       },
       "saved": "Guardado. El cambio se aplica en la siguiente pasada.",
       "saveFailed": "No se pudo guardar.",
@@ -2214,7 +2219,13 @@
       "sentOne": "Enviado.",
       "skippedOne": "Omitido, y no volverá a aparecer.",
       "unsavedChanges": "Tienes cambios sin guardar.",
-      "clipped": "Lista grande: esto cuenta tus 1.000 prospectos más recientes, así que son cifras mínimas."
+      "clipped": "Lista grande: esto cuenta tus 1.000 prospectos más recientes, así que son cifras mínimas.",
+      "postalHelpOptional": "Opcional en tu plan. Si lo dejas en blanco usamos la dirección del perfil de tu negocio; si no tienes ninguna guardada, el pie no la incluye.",
+      "draftFooterHelp": "La despedida, el enlace para darse de baja y la dirección del pie se añaden debajo automáticamente, así que nunca tienes que escribirlos y no puedes borrarlos sin querer.",
+      "legacyDraft": "Este borrador se escribió antes de que se pudieran editar. Vuelve a escribirlo para poder editarlo.",
+      "unsavedDraft": "Cambios sin guardar. Guarda el borrador antes de enviarlo.",
+      "editedOne": "Borrador guardado.",
+      "regeneratedOne": "Escrito otra vez. Léelo antes de enviarlo."
     }
   },
   "admin": {

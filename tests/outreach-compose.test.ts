@@ -26,6 +26,7 @@ import {
   PITCH_POLISH_SURFACE,
   pitchParagraphs,
   polishParagraphs,
+  splitParagraphs,
   type PitchTenant
 } from "@/lib/outreach/compose";
 
@@ -144,6 +145,15 @@ describe("assembleBody", () => {
     expect(body).toContain(UNSUB);
   });
 
+  it("prints the unsubscribe line alone when the tenant has no address at all", () => {
+    // Only reachable for a tier the platform exempts from the typed address
+    // (Enterprise) that also has none on its business profile. An empty line
+    // where an address should be reads as a template that failed to render.
+    const body = assembleBody({ ...TENANT, postalAddress: "  " }, ["Hi there,", "True."], UNSUB);
+    expect(body).toContain(UNSUB);
+    expect(body.trimEnd().split("\n").pop()).toContain(UNSUB);
+  });
+
   it("signs with the business name when no sender is configured", () => {
     const body = assembleBody(
       { ...TENANT, senderName: null, website: null },
@@ -152,6 +162,15 @@ describe("assembleBody", () => {
     );
     expect(body).toContain("New Coworker");
     expect(body).not.toContain("Brian");
+  });
+});
+
+describe("splitParagraphs", () => {
+  it("turns owner-typed text into the same shape the polish pass returns", () => {
+    // One shape in, one assembly path out: an edited draft and a
+    // machine-written one must not diverge here.
+    expect(splitParagraphs("One.\n\n\n  \n\n  Two.  \n\n")).toEqual(["One.", "Two."]);
+    expect(splitParagraphs("   ")).toEqual([]);
   });
 });
 

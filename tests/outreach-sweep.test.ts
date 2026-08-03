@@ -21,8 +21,12 @@ vi.mock("@/lib/db/system-logs", () => ({
 }));
 
 import {
+  editProspectDraft,
+  MAX_EDITED_BODY_CHARS,
+  MAX_EDITED_SUBJECT_CHARS,
   processOutreachSweep,
   recordOutreachEmailLog,
+  regenerateProspectDraft,
   sendProspectNow
 } from "@/lib/outreach/sweep";
 import { PROSPECT_OUTREACH_SOURCE } from "@/lib/ai-flows/templates";
@@ -48,6 +52,7 @@ function settings(over: Partial<OutreachSettingsRow> = {}): OutreachSettingsRow 
     send_window_end_hour: 11,
     from_connection_id: null,
     postal_address: "1 Example Plaza, Phoenix AZ",
+    postal_address_exempt: false,
     value_prop: "We answer every call and text for you.",
     sender_name: "Brian",
     last_discovery_at: null,
@@ -73,6 +78,7 @@ function prospect(over: Partial<OutreachProspectRow> = {}): OutreachProspectRow 
     review_count: null,
     findings: [{ code: "no_online_booking", detail: "No booking link." }],
     pitch_subject: "Acme HVAC: booking a job without the phone tag",
+    pitch_paragraphs: "Hi Acme HVAC,\n\nbody",
     pitch_body: "Hi Acme HVAC,\n\nbody\n\nunsubscribe",
     status: "drafted",
     status_detail: null,
@@ -500,6 +506,89 @@ describe("phase 2: drafting", () => {
     expect(draft.pitch_subject).toContain("Acme HVAC");
     expect(draft.pitch_body).toContain("/api/outreach/unsubscribe?");
     expect(draft.pitch_body).toContain("1 Example Plaza, Phoenix AZ");
+  });
+
+  it("stores the editable middle beside the assembled body", async () => {
+    // The two must agree, because the owner edits the first and the prospect
+    // reads the second. Storing only the body is what would force an edit box
+    // to contain the compliance footer.
+    const ledger = draftLedger();
+    await processOutreachSweep(baseDeps());
+    const draft = (ledger.patchProspect as ReturnType<typeof vi.fn>).mock.calls[1][2];
+    expect(draft.pitch_paragraphs).toContain("Hi Acme HVAC,");
+    expect(draft.pitch_paragraphs).not.toContain("unsubscribe");
+    expect(draft.pitch_body).toContain(draft.pitch_paragraphs);
+  });
+
+  it("falls back to the business profile address when none was typed in", async () => {
+    // The Enterprise waiver removed the typed field, not the footer line: an
+    // address already on the business profile is the next best source.
+    const ledger = draftLedger({
+      listActiveOutreachSettings: vi.fn(async () => [settings({ postal_address: null })])
+    });
+    const result = await processOutreachSweep(
+      baseDeps({
+        getBusinessImpl: vi.fn(async () => ({
+          id: BIZ,
+          name: "New Coworker",
+          timezone: "America/Phoenix",
+          website_url: "https://www.newcoworker.com",
+          address: "9 Profile Street, Phoenix AZ",
+          tier: "enterprise"
+        }))
+      })
+    );
+    expect(result.drafted).toBe(1);
+    const body = (ledger.patchProspect as ReturnType<typeof vi.fn>).mock.calls[1][2]
+      .pitch_body as string;
+    expect(body).toContain("9 Profile Street, Phoenix AZ");
+  });
+
+  it("drafts for an exempt tier with no address anywhere, and prints no blank line", async () => {
+    const ledger = draftLedger({
+      listActiveOutreachSettings: vi.fn(async () => [settings({ postal_address: null })])
+    });
+    const result = await processOutreachSweep(
+      baseDeps({
+        getBusinessImpl: vi.fn(async () => ({
+          id: BIZ,
+          name: "New Coworker",
+          timezone: "America/Phoenix",
+          website_url: "https://www.newcoworker.com",
+          address: "   ",
+          tier: "enterprise"
+        }))
+      })
+    );
+    expect(result.drafted).toBe(1);
+    expect(result.notes).toEqual([]);
+    const body = (ledger.patchProspect as ReturnType<typeof vi.fn>).mock.calls[1][2]
+      .pitch_body as string;
+    // The unsubscribe link is never waived, and the mail ends on it rather
+    // than on a blank line where an address should have been.
+    expect(body).toContain("/api/outreach/unsubscribe?");
+    expect(body.trimEnd().split("\n").pop()).toContain("/api/outreach/unsubscribe?");
+  });
+
+  it("still refuses a tier that must type an address and has none", async () => {
+    // The waiver is per tier, so Standard keeps the hard stop even when the
+    // business profile has no address either.
+    stubLedger({
+      listActiveOutreachSettings: vi.fn(async () => [settings({ postal_address: null })])
+    });
+    const result = await processOutreachSweep(
+      baseDeps({
+        getBusinessImpl: vi.fn(async () => ({
+          id: BIZ,
+          name: "New Coworker",
+          timezone: "America/Phoenix",
+          website_url: null,
+          address: null,
+          tier: "standard"
+        }))
+      })
+    );
+    expect(result.notes).toEqual([{ businessId: BIZ, note: "no postal address configured" }]);
   });
 
   it("retires an unreachable site, an address-less one, and one with nothing to say", async () => {
@@ -1350,6 +1439,189 @@ describe("sendProspectNow (the owner pressed Send in manual mode)", () => {
     expect(await sendProspectNow(BIZ, prospect().id, baseDeps())).toEqual({
       ok: false,
       reason: "send_failed"
+    });
+  });
+});
+
+describe("editProspectDraft and regenerateProspectDraft (the owner reworked a draft)", () => {
+  function draftLedger(over: Record<string, unknown> = {}) {
+    return stubLedger({
+      getOutreachSettings: vi.fn(async () => settings({ mode: "manual" })),
+      getProspect: vi.fn(async () => prospect()),
+      ...over
+    });
+  }
+
+  it("keeps the owner's words and re-assembles the footer around them", async () => {
+    // The point of the whole split: an edit box that cannot delete the
+    // unsubscribe link or the postal address, because it never held them.
+    const ledger = draftLedger();
+    const result = await editProspectDraft(
+      BIZ,
+      prospect().id,
+      { subject: "  A subject the owner wrote  ", paragraphs: "Hi there,\n\nMy own pitch." },
+      baseDeps()
+    );
+    expect(result.ok).toBe(true);
+    const patch = (ledger.transitionProspect as ReturnType<typeof vi.fn>).mock.calls[0][3];
+    expect(patch.pitch_subject).toBe("A subject the owner wrote");
+    expect(patch.pitch_paragraphs).toBe("Hi there,\n\nMy own pitch.");
+    expect(patch.pitch_body).toContain("My own pitch.");
+    expect(patch.pitch_body).toContain("/api/outreach/unsubscribe?");
+    expect(patch.pitch_body).toContain("1 Example Plaza, Phoenix AZ");
+    // Guarded on it still being a draft, exactly like Send and Skip.
+    expect((ledger.transitionProspect as ReturnType<typeof vi.fn>).mock.calls[0][2]).toBe("drafted");
+  });
+
+  it("normalizes ragged spacing into paragraphs", async () => {
+    const ledger = draftLedger();
+    await editProspectDraft(
+      BIZ,
+      prospect().id,
+      { subject: "s", paragraphs: "One.\n\n\n   \n\nTwo.   \n\n" },
+      baseDeps()
+    );
+    const patch = (ledger.transitionProspect as ReturnType<typeof vi.fn>).mock.calls[0][3];
+    expect(patch.pitch_paragraphs).toBe("One.\n\nTwo.");
+  });
+
+  it("refuses an empty draft or one longer than a cold email should be", async () => {
+    const ledger = draftLedger();
+    for (const edit of [
+      { subject: "  ", paragraphs: "text" },
+      { subject: "s", paragraphs: "   " }
+    ]) {
+      expect(await editProspectDraft(BIZ, prospect().id, edit, baseDeps())).toEqual({
+        ok: false,
+        reason: "empty_text"
+      });
+    }
+    expect(
+      await editProspectDraft(
+        BIZ,
+        prospect().id,
+        { subject: "s", paragraphs: "x".repeat(MAX_EDITED_BODY_CHARS + 1) },
+        baseDeps()
+      )
+    ).toEqual({ ok: false, reason: "too_long" });
+    expect(
+      await editProspectDraft(
+        BIZ,
+        prospect().id,
+        { subject: "s".repeat(MAX_EDITED_SUBJECT_CHARS + 1), paragraphs: "text" },
+        baseDeps()
+      )
+    ).toEqual({ ok: false, reason: "too_long" });
+    // Refused before any write: a bad edit must not touch the ledger.
+    expect(ledger.transitionProspect).not.toHaveBeenCalled();
+  });
+
+  it("refuses a prospect that is gone, no longer a draft, or claimed mid-edit", async () => {
+    draftLedger({ getProspect: vi.fn(async () => null) });
+    expect(
+      await editProspectDraft(BIZ, prospect().id, { subject: "s", paragraphs: "p" }, baseDeps())
+    ).toEqual({ ok: false, reason: "not_found" });
+
+    draftLedger({ getProspect: vi.fn(async () => prospect({ status: "sent" })) });
+    expect(
+      await editProspectDraft(BIZ, prospect().id, { subject: "s", paragraphs: "p" }, baseDeps())
+    ).toEqual({ ok: false, reason: "not_drafted" });
+
+    // The queue can be minutes stale: the sweep may have sent this prospect
+    // between the read and the write, and the guarded update is what catches
+    // it. Rewriting the stored copy of a mail already in someone's inbox
+    // would make the ledger disagree with reality.
+    draftLedger({ transitionProspect: vi.fn(async () => false) });
+    expect(
+      await editProspectDraft(BIZ, prospect().id, { subject: "s", paragraphs: "p" }, baseDeps())
+    ).toEqual({ ok: false, reason: "not_drafted" });
+  });
+
+  it("refuses an unconfigured or downgraded tenant, and says which", async () => {
+    draftLedger({ getOutreachSettings: vi.fn(async () => null) });
+    expect(await regenerateProspectDraft(BIZ, prospect().id, baseDeps())).toEqual({
+      ok: false,
+      reason: "not_configured"
+    });
+
+    draftLedger();
+    expect(
+      await regenerateProspectDraft(
+        BIZ,
+        prospect().id,
+        baseDeps({ getBusinessImpl: vi.fn(async () => null) })
+      )
+    ).toEqual({ ok: false, reason: "not_configured", detail: "business row is gone" });
+
+    draftLedger();
+    expect(
+      await regenerateProspectDraft(
+        BIZ,
+        prospect().id,
+        baseDeps({
+          getBusinessImpl: vi.fn(async () => ({
+            id: BIZ,
+            name: "Starter Co",
+            timezone: "America/Phoenix",
+            website_url: null,
+            tier: "starter"
+          }))
+        })
+      )
+    ).toEqual({
+      ok: false,
+      reason: "tier_blocked",
+      detail: "prospecting requires the Standard plan"
+    });
+  });
+
+  it("writes the pitch again from the stored findings, without re-probing", async () => {
+    const probeSiteImpl = vi.fn(async () => {
+      throw new Error("regenerate must not fetch the prospect's site");
+    });
+    const polishImpl = vi.fn(async () => ["Hi Acme HVAC,", "A second attempt."]);
+    const ledger = draftLedger();
+    const result = await regenerateProspectDraft(
+      BIZ,
+      prospect().id,
+      baseDeps({ polishImpl, probeSiteImpl })
+    );
+    expect(result.ok).toBe(true);
+    expect(probeSiteImpl).not.toHaveBeenCalled();
+    const patch = (ledger.transitionProspect as ReturnType<typeof vi.fn>).mock.calls[0][3];
+    expect(patch.pitch_paragraphs).toBe("Hi Acme HVAC,\n\nA second attempt.");
+    expect(patch.pitch_body).toContain("A second attempt.");
+    expect(patch.pitch_body).toContain("/api/outreach/unsubscribe?");
+    // The polish pass never sees the footer, on this path either.
+    expect((polishImpl.mock.calls[0] as unknown as [string, string[]])[1].join("\n")).not.toContain(
+      "unsubscribe"
+    );
+  });
+
+  it("refuses to rewrite a draft with nothing checkable left to say", async () => {
+    // The row was pitchable when it was drafted, but the finding vocabulary
+    // can change under a stored row, and a vague compliment is spam whatever
+    // the footer says.
+    draftLedger({ getProspect: vi.fn(async () => prospect({ findings: [] })) });
+    expect(await regenerateProspectDraft(BIZ, prospect().id, baseDeps())).toEqual({
+      ok: false,
+      reason: "not_pitchable"
+    });
+
+    draftLedger({
+      getProspect: vi.fn(async () => prospect({ findings: null as never }))
+    });
+    expect(await regenerateProspectDraft(BIZ, prospect().id, baseDeps())).toEqual({
+      ok: false,
+      reason: "not_pitchable"
+    });
+  });
+
+  it("cannot be lost to a claim race either", async () => {
+    draftLedger({ transitionProspect: vi.fn(async () => false) });
+    expect(await regenerateProspectDraft(BIZ, prospect().id, baseDeps())).toEqual({
+      ok: false,
+      reason: "not_drafted"
     });
   });
 });

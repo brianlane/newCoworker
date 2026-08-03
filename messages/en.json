@@ -2187,7 +2187,10 @@
         "senderName": "Who the email is signed by",
         "dailyCap": "Emails per day",
         "windowStart": "Send from (hour)",
-        "windowEnd": "Send until (hour)"
+        "windowEnd": "Send until (hour)",
+        "postalAddressOptional": "Postal address for the email footer (optional)",
+        "draftSubject": "Subject",
+        "draftBody": "What the email says"
       },
       "placeholders": {
         "searchTerms": "plumber, HVAC contractor, roofer",
@@ -2206,7 +2209,9 @@
         "hide": "Hide",
         "send": "Send",
         "skip": "Skip",
-        "saveSettings": "Save settings"
+        "saveSettings": "Save settings",
+        "saveDraft": "Save draft",
+        "regenerate": "Write it again"
       },
       "saved": "Saved. The change takes effect on the next pass.",
       "saveFailed": "That could not be saved.",
@@ -2214,7 +2219,13 @@
       "sentOne": "Sent.",
       "skippedOne": "Skipped, and they will not come up again.",
       "unsavedChanges": "You have unsaved changes.",
-      "clipped": "Busy list: these count your most recent 1,000 prospects, so they are at-least numbers."
+      "clipped": "Busy list: these count your most recent 1,000 prospects, so they are at-least numbers.",
+      "postalHelpOptional": "Optional on your plan. Leave it blank and we use the address on your business profile; if you have none saved, the footer leaves it out.",
+      "draftFooterHelp": "The sign-off, the unsubscribe link, and the footer address are added underneath automatically, so you never have to type them and cannot delete them by accident.",
+      "legacyDraft": "This draft was written before you could edit them. Regenerate it to make it editable.",
+      "unsavedDraft": "Unsaved changes. Save the draft before you send it.",
+      "editedOne": "Draft saved.",
+      "regeneratedOne": "Written again. Read it before you send."
     }
   },
   "admin": {
