@@ -193,7 +193,8 @@
       "ctaLabel": "Elige tu plan"
     },
     "onboard": {
-      "metaTitle": "Elige tu plan | New Coworker",
+      "metaTitle": "Elige tu plan",
+      "ogTitle": "Elige tu plan | New Coworker",
       "metaDescription": "Elige el plan perfecto para tu coworker de voz con IA. Atiende llamadas, textos, correos y más para que tú te enfoques en tu negocio.",
       "planTitle": "Elige tu plan",
       "planSubtitle": "Tu nuevo coworker atenderá llamadas, textos, correos y más, para que tú te enfoques en tu negocio.",
@@ -525,7 +526,8 @@
       "ctaLabel": "Comenzar"
     },
     "blogPage": {
-      "metaTitle": "Blog | New Coworker",
+      "metaTitle": "Blog",
+      "ogTitle": "Blog | New Coworker",
       "metaDescription": "Lo nuevo de New Coworker: anuncios de funciones, tutoriales y consejos para que tu coworker de IA te consiga más negocio.",
       "heroEyebrow": "Blog",
       "heroTitle": "El blog de New Coworker",

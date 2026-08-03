@@ -193,7 +193,8 @@
       "ctaLabel": "Choose your plan"
     },
     "onboard": {
-      "metaTitle": "Choose Your Plan | New Coworker",
+      "metaTitle": "Choose Your Plan",
+      "ogTitle": "Choose Your Plan | New Coworker",
       "metaDescription": "Choose the perfect plan for your AI voice coworker. Handle calls, texts, emails, and more so you can focus on your business.",
       "planTitle": "Choose your plan",
       "planSubtitle": "Your new coworker will handle calls, texts, emails, and more, so you can focus on your business.",
@@ -525,7 +526,8 @@
       "ctaLabel": "Get Started"
     },
     "blogPage": {
-      "metaTitle": "Blog | New Coworker",
+      "metaTitle": "Blog",
+      "ogTitle": "Blog | New Coworker",
       "metaDescription": "What's new with New Coworker: feature announcements, tutorials, and tips to help your AI coworker win you more business.",
       "heroEyebrow": "Blog",
       "heroTitle": "The New Coworker blog",

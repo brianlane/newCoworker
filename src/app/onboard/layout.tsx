@@ -6,14 +6,16 @@ export async function generateMetadata(): Promise<Metadata> {
   return {
     title: t("metaTitle"),
     description: t("metaDescription"),
+    // og:title and twitter:title are not templated by the root layout, so
+    // they carry the brand themselves. `metaTitle` deliberately does not.
     openGraph: {
-      title: t("metaTitle"),
+      title: t("ogTitle"),
       description: t("metaDescription"),
       type: "website",
     },
     twitter: {
       card: "summary_large_image",
-      title: t("metaTitle"),
+      title: t("ogTitle"),
       description: t("metaDescription"),
     },
   };

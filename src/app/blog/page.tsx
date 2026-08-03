@@ -28,7 +28,9 @@ export async function generateMetadata(): Promise<Metadata> {
       types: { "application/rss+xml": "/blog/feed.xml" }
     },
     openGraph: {
-      title: t("metaTitle"),
+      // og:title is not templated by the root layout, so it carries the
+      // brand itself. `metaTitle` deliberately does not.
+      title: t("ogTitle"),
       description: t("metaDescription"),
       url: "/blog"
     }
@@ -58,7 +60,7 @@ export default async function BlogIndexPage({
   ]);
   const totalPages = Math.max(1, Math.ceil(total / BLOG_PAGE_SIZE));
 
-  // Spanish visitors stay on the /es mirror when filtering and paging —
+  // Spanish visitors stay on the /es mirror when filtering and paging:
   // an unprefixed link would bounce them back to the English URLs.
   const basePath = locale === "es" ? "/es/blog" : "/blog";
   const pageHref = (p: number) => {

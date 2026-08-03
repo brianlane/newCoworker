@@ -23,7 +23,7 @@ import { MarketingFooter } from "@/components/marketing/MarketingFooter";
 export const dynamic = "force-dynamic";
 
 export const metadata: Metadata = {
-  title: "Authorize Zoom - New Coworker",
+  title: "Authorize Zoom",
   // Reachable only from the Marketplace listing, not a marketing surface.
   robots: { index: false, follow: false }
 };
