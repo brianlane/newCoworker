@@ -227,46 +227,64 @@ export function NotificationList({ businessId, initial, highlightLogId }: Props)
                   : ""
               ].join(" ")}
             >
-              <button
-                type="button"
-                data-testid="notification-row"
-                aria-expanded={isExpanded}
-                onClick={() => {
-                  setExpandedId(isExpanded ? null : n.id);
-                  // Viewing the detail counts as reading it.
-                  if (!isExpanded && isUnread) void markOne(n.id);
-                }}
-                className="flex w-full flex-wrap items-center justify-between gap-3 text-left cursor-pointer"
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2 flex-wrap">
-                    <span className="text-sm font-medium text-parchment">
-                      {n.summary ?? describeKind(n)}
-                    </span>
-                    {isUnread && (
-                      <span
-                        className="inline-block h-2 w-2 rounded-full bg-signal-teal"
-                        aria-label="unread"
-                      />
-                    )}
+              {/* The row is a stretched background button with the headline
+                  link riding on top: an <a> cannot legally nest inside a
+                  <button>. Clicking the headline navigates to the source,
+                  clicking anywhere else still toggles the detail. */}
+              <div className="relative">
+                <button
+                  type="button"
+                  data-testid="notification-row"
+                  aria-expanded={isExpanded}
+                  aria-label={isExpanded ? "Hide notification detail" : "Show notification detail"}
+                  onClick={() => {
+                    setExpandedId(isExpanded ? null : n.id);
+                    // Viewing the detail counts as reading it.
+                    if (!isExpanded && isUnread) void markOne(n.id);
+                  }}
+                  className="absolute inset-0 h-full w-full cursor-pointer"
+                />
+                <div className="pointer-events-none relative flex flex-wrap items-center justify-between gap-3 text-left">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <Link
+                        href={link.href}
+                        data-testid="notification-source-link"
+                        title={`${link.label} →`}
+                        onClick={() => {
+                          // Navigating away counts as reading it, same as
+                          // expanding does.
+                          if (isUnread) void markOne(n.id);
+                        }}
+                        className="pointer-events-auto text-sm font-medium text-parchment underline decoration-transparent underline-offset-2 transition-colors hover:text-signal-teal hover:decoration-signal-teal"
+                      >
+                        {n.summary ?? describeKind(n)}
+                      </Link>
+                      {isUnread && (
+                        <span
+                          className="inline-block h-2 w-2 rounded-full bg-signal-teal"
+                          aria-label="unread"
+                        />
+                      )}
+                    </div>
+                    <p className="text-xs text-parchment/45 mt-1">
+                      {describeKind(n)} • {n.delivery_channel} •{" "}
+                      {new Date(n.created_at).toLocaleString()}
+                    </p>
+                    {reason && <p className="text-xs text-parchment/35 mt-1 italic">{reason}</p>}
                   </div>
-                  <p className="text-xs text-parchment/45 mt-1">
-                    {describeKind(n)} • {n.delivery_channel} •{" "}
-                    {new Date(n.created_at).toLocaleString()}
-                  </p>
-                  {reason && <p className="text-xs text-parchment/35 mt-1 italic">{reason}</p>}
+                  <div className="flex items-center gap-2">
+                    <Badge variant={statusVariant(n.status)}>{n.status}</Badge>
+                    <span className="text-xs text-parchment/40">{isExpanded ? "▾" : "▸"}</span>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Badge variant={statusVariant(n.status)}>{n.status}</Badge>
-                  <span className="text-xs text-parchment/40">{isExpanded ? "▾" : "▸"}</span>
-                </div>
-              </button>
+              </div>
               {isExpanded && (
                 <div
                   data-testid="notification-detail"
                   className="mt-3 rounded-lg border border-parchment/10 bg-deep-ink/40 px-4 py-3 space-y-2"
                 >
-                  {detailFields.length === 0 && eventLinks.length === 0 && !link && (
+                  {detailFields.length === 0 && eventLinks.length === 0 && (
                     <p className="text-xs text-parchment/40">No additional detail recorded.</p>
                   )}
                   {detailFields.map((f) => (
@@ -297,14 +315,15 @@ export function NotificationList({ businessId, initial, highlightLogId }: Props)
                       </ul>
                     </div>
                   )}
-                  {link && (
-                    <Link
-                      href={link.href}
-                      className="inline-block text-xs font-medium text-signal-teal hover:underline"
-                    >
-                      {link.label} →
-                    </Link>
-                  )}
+                  <Link
+                    href={link.href}
+                    onClick={() => {
+                      if (isUnread) void markOne(n.id);
+                    }}
+                    className="inline-block text-xs font-medium text-signal-teal hover:underline"
+                  >
+                    {link.label} →
+                  </Link>
                   <div className="pt-1">
                     <button
                       type="button"

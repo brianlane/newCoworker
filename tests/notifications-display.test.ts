@@ -9,63 +9,211 @@ import {
 
 describe("notifications/display", () => {
   describe("notificationLink", () => {
-    it("routes SMS cap alerts to Billing", () => {
+    const UUID = "163bee63-4175-4782-b5a8-01bcb7ea57f6";
+    const FLOW_UUID = "94f2156f-90c9-479d-b795-992f0561294a";
+
+    it("prefers an href the producer already stamped", () => {
       expect(
-        notificationLink({ kind: "urgent_alert", payload: { taskType: "sms_cap_reached" } })
-      ).toEqual({ href: "/dashboard/billing", label: "Open Billing" });
+        notificationLink({
+          kind: "link_click",
+          payload: { thread_href: "/dashboard/messages/%2B14805551212" }
+        })
+      ).toEqual({ href: "/dashboard/messages/%2B14805551212", label: "Open thread" });
     });
 
-    it("routes chat spend cap alerts to Billing", () => {
+    it("ignores a stamped href that would leave the dashboard", () => {
+      // Protocol-relative: browsers resolve "//evil.example.com" off-site. A
+      // link click is still a text-thread event, so it stays on Messages.
+      expect(
+        notificationLink({ kind: "link_click", payload: { thread_href: "//evil.example.com" } })
+      ).toEqual({ href: "/dashboard/messages", label: "Open thread" });
+      expect(
+        notificationLink({
+          kind: "link_click",
+          payload: { thread_href: "https://evil.example.com" }
+        })
+      ).toEqual({ href: "/dashboard/messages", label: "Open thread" });
+    });
+
+    it("uses the clicked recipient's thread when no href was stamped", () => {
+      expect(
+        notificationLink({ kind: "link_click", payload: { to_e164: "+14805551212" } })
+      ).toEqual({ href: "/dashboard/messages/%2B14805551212", label: "Open text thread" });
+    });
+
+    it("opens the texter's thread for a notify_team alert", () => {
+      // The live shape: src/app/api/rowboat/tool-call stamps customerPhone.
+      expect(
+        notificationLink({
+          kind: "sms_team_notify",
+          payload: { customerPhone: "+14803386269", customerName: "Stacey Riggs" }
+        })
+      ).toEqual({ href: "/dashboard/messages/%2B14803386269", label: "Open text thread" });
+    });
+
+    it("opens the contact's thread for needs-human and customer-reply alerts", () => {
+      for (const taskType of ["sms_needs_human", "sms_customer_reply"]) {
+        expect(
+          notificationLink({ kind: "urgent_alert", payload: { taskType, contactE164: "+12546305870" } })
+        ).toEqual({ href: "/dashboard/messages/%2B12546305870", label: "Open text thread" });
+      }
+    });
+
+    it("addresses short-code threads too", () => {
+      expect(
+        notificationLink({ kind: "sms_team_notify", payload: { customerPhone: "62240" } })
+      ).toEqual({ href: "/dashboard/messages/62240", label: "Open text thread" });
+    });
+
+    it("drops a malformed phone rather than linking somewhere broken", () => {
+      expect(
+        notificationLink({ kind: "sms_team_notify", payload: { customerPhone: "602-695-1142" } })
+      ).toEqual({ href: "/dashboard/activity", label: "Open Activity" });
+      expect(
+        notificationLink({ kind: "sms_team_notify", payload: { customerPhone: 42 } })
+      ).toEqual({ href: "/dashboard/activity", label: "Open Activity" });
+      expect(
+        notificationLink({ kind: "sms_team_notify", payload: { customerPhone: "   " } })
+      ).toEqual({ href: "/dashboard/activity", label: "Open Activity" });
+    });
+
+    it("opens the call transcript the page resolved for voice alerts", () => {
+      for (const kind of ["voice_capture", "voice_team_notify"]) {
+        expect(
+          notificationLink({ kind, payload: { transcriptId: UUID, callerPhone: "+14805551212" } })
+        ).toEqual({ href: `/dashboard/calls/${UUID}`, label: "Open call" });
+      }
+    });
+
+    it("falls back to the caller's profile when no transcript resolved", () => {
+      expect(
+        notificationLink({ kind: "voice_team_notify", payload: { callerPhone: "+14805551212" } })
+      ).toEqual({ href: "/dashboard/customers/%2B14805551212", label: "Open contact" });
+    });
+
+    it("falls back to the calls list when a voice alert names nobody", () => {
+      expect(notificationLink({ kind: "voice_capture", payload: {} })).toEqual({
+        href: "/dashboard/calls",
+        label: "Open Calls"
+      });
+      // A tampered (non-UUID) transcript id must not reach the URL.
+      expect(
+        notificationLink({ kind: "voice_capture", payload: { transcriptId: "../../etc" } })
+      ).toEqual({ href: "/dashboard/calls", label: "Open Calls" });
+    });
+
+    it("opens the document for signed/expired/expiring alerts", () => {
+      for (const kind of ["document_signed", "document_expired", "document_expiring"]) {
+        expect(notificationLink({ kind, payload: { documentId: UUID } })).toEqual({
+          href: `/dashboard/documents/${UUID}`,
+          label: "Open document"
+        });
+      }
+    });
+
+    it("falls back to the documents list without a usable document id", () => {
+      expect(notificationLink({ kind: "document_signed", payload: {} })).toEqual({
+        href: "/dashboard/documents",
+        label: "Open Documents"
+      });
+    });
+
+    it("opens the texter's thread for an SMS image cap", () => {
+      // On the SMS surface the session key IS the texter's number.
+      expect(
+        notificationLink({
+          kind: "image_limit",
+          payload: { surface: "sms", sessionKey: "+14805551212" }
+        })
+      ).toEqual({ href: "/dashboard/messages/%2B14805551212", label: "Open text thread" });
+    });
+
+    it("opens dashboard chat for a dashboard image cap", () => {
+      expect(
+        notificationLink({
+          kind: "image_limit",
+          payload: { surface: "dashboard", sessionKey: "session-123" }
+        })
+      ).toEqual({ href: "/dashboard/chat", label: "Open Chat" });
+    });
+
+    it("routes email handoffs to Emails", () => {
+      expect(
+        notificationLink({ kind: "email_coworker_handoff", payload: { thread_id: "abc" } })
+      ).toEqual({ href: "/dashboard/emails", label: "Open Emails" });
+    });
+
+    it("routes connection alerts to Integrations", () => {
+      for (const kind of ["byon_port", "byon_activation", "calendar_connection_broken"]) {
+        expect(notificationLink({ kind, payload: {} })).toEqual({
+          href: "/dashboard/integrations",
+          label: "Open Integrations"
+        });
+      }
+    });
+
+    it("routes spend cap alerts to Billing", () => {
+      for (const taskType of ["sms_cap_reached", "chat_spend_cap_reached"]) {
+        expect(notificationLink({ kind: "urgent_alert", payload: { taskType } })).toEqual({
+          href: "/dashboard/billing",
+          label: "Open Billing"
+        });
+      }
+    });
+
+    it("opens the failing run for a flow alert", () => {
       expect(
         notificationLink({
           kind: "urgent_alert",
-          payload: { taskType: "chat_spend_cap_reached" }
+          payload: { taskType: "aiflow_run_failed", runId: UUID, flowId: FLOW_UUID }
         })
-      ).toEqual({ href: "/dashboard/billing", label: "Open Billing" });
+      ).toEqual({
+        href: `/dashboard/aiflows/runs?flowId=${FLOW_UUID}&run=${UUID}`,
+        label: "Open flow run"
+      });
     });
 
-    it("routes flow task types to AiFlows", () => {
+    it("opens the run without a flow id on older alerts", () => {
+      // Rows dispatched before the edge function stamped flowId.
+      expect(
+        notificationLink({
+          kind: "urgent_alert",
+          payload: { taskType: "aiflow_run_failed", runId: UUID }
+        })
+      ).toEqual({ href: `/dashboard/aiflows/runs?run=${UUID}`, label: "Open flow run" });
+    });
+
+    it("falls back to AiFlows for a flow alert with no run", () => {
       expect(
         notificationLink({ kind: "urgent_alert", payload: { taskType: "ai_flow_failed" } })
       ).toEqual({ href: "/dashboard/aiflows", label: "Open AiFlows" });
     });
 
-    it("routes voice captures to Calls by kind", () => {
-      expect(notificationLink({ kind: "voice_capture", payload: {} })).toEqual({
-        href: "/dashboard/calls",
-        label: "Open Calls"
-      });
-    });
-
     it("routes call/voice task types to Calls", () => {
-      expect(
-        notificationLink({ kind: "urgent_alert", payload: { taskType: "call_capture" } })
-      ).toEqual({ href: "/dashboard/calls", label: "Open Calls" });
-      expect(
-        notificationLink({ kind: "urgent_alert", payload: { taskType: "voice_bridge_down" } })
-      ).toEqual({ href: "/dashboard/calls", label: "Open Calls" });
+      for (const taskType of ["call_capture", "voice_bridge_down", "missed_call_spike"]) {
+        expect(notificationLink({ kind: "urgent_alert", payload: { taskType } })).toEqual({
+          href: "/dashboard/calls",
+          label: "Open Calls"
+        });
+      }
     });
 
-    it("falls back to the dashboard for other urgent alerts", () => {
+    it("falls back to the activity feed for digests and anything unrecognized", () => {
+      expect(notificationLink({ kind: "digest", payload: { window: "daily" } })).toEqual({
+        href: "/dashboard/activity",
+        label: "Open Activity"
+      });
+      expect(notificationLink({ kind: null, payload: null })).toEqual({
+        href: "/dashboard/activity",
+        label: "Open Activity"
+      });
       expect(
         notificationLink({ kind: "urgent_alert", payload: { taskType: "something_else" } })
-      ).toEqual({ href: "/dashboard", label: "Open Dashboard" });
-    });
-
-    it("handles urgent alerts with a missing/non-string taskType", () => {
-      expect(notificationLink({ kind: "urgent_alert", payload: {} })).toEqual({
-        href: "/dashboard",
-        label: "Open Dashboard"
-      });
+      ).toEqual({ href: "/dashboard/activity", label: "Open Activity" });
       expect(notificationLink({ kind: "urgent_alert", payload: { taskType: 42 } })).toEqual({
-        href: "/dashboard",
-        label: "Open Dashboard"
+        href: "/dashboard/activity",
+        label: "Open Activity"
       });
-    });
-
-    it("returns null for digests and unknown kinds", () => {
-      expect(notificationLink({ kind: "digest", payload: { window: "daily" } })).toBeNull();
-      expect(notificationLink({ kind: null, payload: null })).toBeNull();
     });
   });
 

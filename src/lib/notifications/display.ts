@@ -13,32 +13,154 @@ export type NotificationLike = {
 export type NotificationLink = { href: string; label: string };
 
 /**
- * Deep-link target for a notification, derived from its kind + payload.
- * Returns null when there is no obviously better place than the list itself
- * (e.g. digests, which expand in place instead).
+ * Same shape the SMS thread route validates its segment against
+ * (`/dashboard/messages/[customerE164]`), short codes included. Applied
+ * BEFORE building an href so a malformed payload can never produce a link
+ * that 404s.
  */
-export function notificationLink(n: NotificationLike): NotificationLink | null {
-  const taskType = typeof n.payload?.taskType === "string" ? n.payload.taskType : "";
+const E164_RE = /^(\+[1-9]\d{6,15}|\d{3,8})$/;
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+
+function readString(payload: Record<string, unknown>, key: string): string | null {
+  const v = payload[key];
+  return typeof v === "string" && v.trim().length > 0 ? v.trim() : null;
+}
+
+function readE164(payload: Record<string, unknown>, key: string): string | null {
+  const v = readString(payload, key);
+  return v && E164_RE.test(v) ? v : null;
+}
+
+function readUuid(payload: Record<string, unknown>, key: string): string | null {
+  const v = readString(payload, key);
+  return v && UUID_RE.test(v) ? v : null;
+}
+
+/**
+ * An href is safe to render only when it stays inside the dashboard. "Starts
+ * with /" alone is NOT enough — "//evil.example.com" is a protocol-relative
+ * URL browsers resolve off-site, so a second leading slash is rejected (same
+ * rule the redirect helpers apply).
+ */
+function isInternalHref(href: string): boolean {
+  return href.startsWith("/") && !href.startsWith("//");
+}
+
+function messagesHref(e164: string): string {
+  return `/dashboard/messages/${encodeURIComponent(e164)}`;
+}
+
+/**
+ * Where a notification actually happened, derived from its kind + payload.
+ *
+ * Every row on the notifications page gets a destination: the owner clicks
+ * the headline to land on the text thread, call, flow run or document the
+ * alert is about, rather than on a list page they then have to search. When
+ * the payload carries no usable id (or carries a malformed one), this falls
+ * back to the closest surface instead of returning a broken link, so the
+ * headline is never a dead end.
+ *
+ * Ids are shape-checked before they reach an href because `payload` is
+ * free-form jsonb written by many producers.
+ */
+export function notificationLink(n: NotificationLike): NotificationLink {
+  const p = n.payload ?? {};
+  const kind = n.kind ?? "";
+  const taskType = readString(p, "taskType") ?? "";
+
+  // A producer that already computed the destination wins (link_click
+  // stamps thread_href at dispatch time).
+  const stamped = readString(p, "thread_href");
+  if (stamped && isInternalHref(stamped)) {
+    return { href: stamped, label: "Open thread" };
+  }
+
+  // A link click is always a text-thread event, so it stays on Messages even
+  // when the stamped href is missing or was tampered with. The recipient
+  // number is on the payload for the per-contact throttle, so use it.
+  if (kind === "link_click") {
+    const clicked = readE164(p, "to_e164");
+    return clicked
+      ? { href: messagesHref(clicked), label: "Open text thread" }
+      : { href: "/dashboard/messages", label: "Open thread" };
+  }
+
+  // Voice alerts point at the transcript, which the notifications page
+  // resolves server-side and stamps as `transcriptId`: the call detail route
+  // keys on the transcript row UUID, NOT Telnyx's call_control_id, whose
+  // literal ":" gets mangled in the routing layer (see
+  // lib/db/voice-transcripts.getTranscriptById).
+  if (kind === "voice_capture" || kind === "voice_team_notify") {
+    const transcriptId = readUuid(p, "transcriptId");
+    if (transcriptId) {
+      return { href: `/dashboard/calls/${transcriptId}`, label: "Open call" };
+    }
+    // No transcript row (yet): the caller's profile still lists their calls.
+    const caller = readE164(p, "callerPhone");
+    if (caller) {
+      return {
+        href: `/dashboard/customers/${encodeURIComponent(caller)}`,
+        label: "Open contact"
+      };
+    }
+    return { href: "/dashboard/calls", label: "Open Calls" };
+  }
+
+  if (kind === "document_signed" || kind === "document_expired" || kind === "document_expiring") {
+    const documentId = readUuid(p, "documentId");
+    if (documentId) {
+      return { href: `/dashboard/documents/${documentId}`, label: "Open document" };
+    }
+    return { href: "/dashboard/documents", label: "Open Documents" };
+  }
+
+  // Image cap: on the SMS surface the session key IS the texter's number.
+  if (kind === "image_limit") {
+    const sessionE164 = readString(p, "surface") === "sms" ? readE164(p, "sessionKey") : null;
+    if (sessionE164) {
+      return { href: messagesHref(sessionE164), label: "Open text thread" };
+    }
+    return { href: "/dashboard/chat", label: "Open Chat" };
+  }
+
+  if (kind === "email_coworker_handoff") {
+    return { href: "/dashboard/emails", label: "Open Emails" };
+  }
+  if (kind === "byon_port" || kind === "byon_activation" || kind === "calendar_connection_broken") {
+    return { href: "/dashboard/integrations", label: "Open Integrations" };
+  }
   if (taskType === "sms_cap_reached" || taskType === "chat_spend_cap_reached") {
     return { href: "/dashboard/billing", label: "Open Billing" };
   }
+
+  // Flow failures stamp the run (and, since this change, its flow) so the
+  // runs page can expand that run's group instead of the whole log.
   if (taskType.includes("flow")) {
+    const runId = readUuid(p, "runId");
+    const flowId = readUuid(p, "flowId");
+    if (runId) {
+      const query = flowId ? `?flowId=${flowId}&run=${runId}` : `?run=${runId}`;
+      return { href: `/dashboard/aiflows/runs${query}`, label: "Open flow run" };
+    }
     return { href: "/dashboard/aiflows", label: "Open AiFlows" };
   }
-  if (n.kind === "voice_capture" || taskType.includes("call") || taskType.includes("voice")) {
+
+  // Anything scoped to one texter: their thread. `customerPhone` comes from
+  // the notify_team tool, `contactE164` from the needs-human and
+  // customer-reply escalations.
+  const threadE164 = readE164(p, "customerPhone") ?? readE164(p, "contactE164");
+  if (threadE164) {
+    return { href: messagesHref(threadE164), label: "Open text thread" };
+  }
+
+  if (taskType.includes("call") || taskType.includes("voice")) {
     return { href: "/dashboard/calls", label: "Open Calls" };
   }
-  if (n.kind === "link_click") {
-    const href =
-      typeof n.payload?.thread_href === "string" && n.payload.thread_href.startsWith("/")
-        ? n.payload.thread_href
-        : "/dashboard/messages";
-    return { href, label: "Open thread" };
-  }
-  if (n.kind === "urgent_alert") {
-    return { href: "/dashboard", label: "Open Dashboard" };
-  }
-  return null;
+
+  // Digests (their per-event links stay in the expanded detail) and anything
+  // whose kind arrived after this function was written: the unified feed is
+  // the closest thing to "where it happened".
+  return { href: "/dashboard/activity", label: "Open Activity" };
 }
 
 export type NotificationDetailField = { label: string; value: string };
@@ -49,10 +171,8 @@ export type NotificationEventLink = { label: string; href: string; at?: string }
  * Per-event deep links stored on digest notifications (payload.events,
  * written by the notifications-digest function). Validated defensively:
  * only objects with a non-empty label and a DASHBOARD-RELATIVE href are
- * returned, so a malformed or tampered payload can never render an external
- * link. "Starts with /" alone is NOT enough — "//evil.example.com" is a
- * protocol-relative URL browsers resolve off-site, so a second leading slash
- * is rejected (same rule the redirect helpers apply).
+ * returned (see isInternalHref), so a malformed or tampered payload can
+ * never render an external link.
  */
 export function notificationEventLinks(n: NotificationLike): NotificationEventLink[] {
   const raw = n.payload?.events;
@@ -62,7 +182,7 @@ export function notificationEventLinks(n: NotificationLike): NotificationEventLi
     if (!item || typeof item !== "object") continue;
     const { label, href, at } = item as Record<string, unknown>;
     if (typeof label !== "string" || label.trim().length === 0) continue;
-    if (typeof href !== "string" || !href.startsWith("/") || href.startsWith("//")) continue;
+    if (typeof href !== "string" || !isInternalHref(href)) continue;
     out.push({
       label: label.trim(),
       href,
