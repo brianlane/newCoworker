@@ -545,8 +545,46 @@ describe("phase 2: drafting", () => {
   });
 
   it("drafts for an exempt tier with no address anywhere, and prints no blank line", async () => {
-    const ledger = draftLedger({
-      listActiveOutreachSettings: vi.fn(async () => [settings({ postal_address: null })])
+    // Blank and absent both count as no address on the profile, the same way
+    // the settings field treats them.
+    for (const address of [null, "   ", undefined]) {
+      const ledger = draftLedger({
+        listActiveOutreachSettings: vi.fn(async () => [settings({ postal_address: null })])
+      });
+      const result = await processOutreachSweep(
+        baseDeps({
+          getBusinessImpl: vi.fn(async () => ({
+            id: BIZ,
+            name: "New Coworker",
+            timezone: "America/Phoenix",
+            website_url: "https://www.newcoworker.com",
+            address,
+            tier: "enterprise"
+          }))
+        })
+      );
+      expect(result.drafted).toBe(1);
+      expect(result.notes).toEqual([]);
+      const body = (ledger.patchProspect as ReturnType<typeof vi.fn>).mock.calls[1][2]
+        .pitch_body as string;
+      // The unsubscribe link is never waived, and the mail ends on it rather
+      // than on a blank line where an address should have been.
+      expect(body).toContain("/api/outreach/unsubscribe?");
+      expect(body.trimEnd().split("\n").pop()).toContain("/api/outreach/unsubscribe?");
+    }
+  });
+
+  it("never lends the profile address to a tier that must type one", async () => {
+    // The page and the sender have to agree. describeBlockers names the typed
+    // field and the check constraint requires it, so a Standard tenant with a
+    // profile address but a blank panel field must NOT send: a Marketing page
+    // saying outreach cannot run while mail goes out is the worst outcome
+    // available. This is also the downgrade case, since Enterprise to Standard
+    // leaves a stale postal_address_exempt behind and the tier is re-read here.
+    stubLedger({
+      listActiveOutreachSettings: vi.fn(async () => [
+        settings({ postal_address: null, postal_address_exempt: true })
+      ])
     });
     const result = await processOutreachSweep(
       baseDeps({
@@ -554,20 +592,14 @@ describe("phase 2: drafting", () => {
           id: BIZ,
           name: "New Coworker",
           timezone: "America/Phoenix",
-          website_url: "https://www.newcoworker.com",
-          address: "   ",
-          tier: "enterprise"
+          website_url: null,
+          address: "9 Profile Street, Phoenix AZ",
+          tier: "standard"
         }))
       })
     );
-    expect(result.drafted).toBe(1);
-    expect(result.notes).toEqual([]);
-    const body = (ledger.patchProspect as ReturnType<typeof vi.fn>).mock.calls[1][2]
-      .pitch_body as string;
-    // The unsubscribe link is never waived, and the mail ends on it rather
-    // than on a blank line where an address should have been.
-    expect(body).toContain("/api/outreach/unsubscribe?");
-    expect(body.trimEnd().split("\n").pop()).toContain("/api/outreach/unsubscribe?");
+    expect(result.notes).toEqual([{ businessId: BIZ, note: "no postal address configured" }]);
+    expect(result.drafted).toBe(0);
   });
 
   it("still refuses a tier that must type an address and has none", async () => {

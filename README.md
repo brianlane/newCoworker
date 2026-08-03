@@ -1448,11 +1448,17 @@ carries no send step at all, and a test pins that.
   `outreach_settings.postal_address_exempt`, which is the column the check
   constraint reads. So the schema still refuses a Standard tenant with no
   address, and a row that was allowed on without one says why on its face.
-  The footer line itself is not waived by default: `resolveTenant` falls back
-  to the business profile address (`businesses.address`), and only when a
-  tenant has no address anywhere does the footer print the unsubscribe line
-  alone. Both the sweep and the manual Send re-check the tier, so a downgrade
-  stops the sends rather than grandfathering them. Note the legal position
+  The footer line itself is not waived by default: for an exempt tenant,
+  `resolveTenant` falls back to the business profile address
+  (`businesses.address`), and only when they have no address anywhere does the
+  footer print the unsubscribe line alone. **That fallback belongs to the
+  waiver and is not offered to anyone else.** A tier that must type an address
+  is blocked without one even when a profile address exists, because the
+  panel's blocker and the check constraint both name the typed field, and a
+  Marketing page saying outreach cannot run while the sweep sends anyway is
+  the worst behavior on offer. The tier is re-read on every send, so a
+  downgrade that leaves a stale `postal_address_exempt` behind stops rather
+  than riding the profile address. Note the legal position
   this leaves: CAN-SPAM has no Enterprise exemption, so an exempt tenant with
   no address on file is sending commercial mail without the physical address
   the law asks for, on their own compliance judgement rather than the

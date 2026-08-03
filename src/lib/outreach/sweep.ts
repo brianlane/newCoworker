@@ -230,15 +230,20 @@ async function resolveTenant(
   if (!prospectingAllowedForTier(business.tier)) {
     return { missing: "prospecting requires the Standard plan", blockedBy: "tier" };
   }
-  // Where the footer address comes from, in order: what the owner typed into
-  // the Prospecting panel, then the address on their business profile. The DB
-  // constraint guarantees the first for every tier that must type one, so for
-  // those this stays belt-and-braces. For an exempt tier (Enterprise) the
-  // fallback is the point: they never had to type it, and most of them already
-  // have an address on file.
-  const postalAddress =
-    settings.postal_address?.trim() || (business.address ?? "").trim() || "";
-  if (!postalAddress && postalAddressRequiredForTier(business.tier)) {
+  // The footer address: what the owner typed into the Prospecting panel, then
+  // the business profile address, but the FALLBACK BELONGS TO THE WAIVER, not
+  // to everyone. A tier that must type one is blocked without it even when a
+  // profile address exists, for three reasons that are really one: the panel's
+  // blocker (describeBlockers) names the typed field, the DB check constraint
+  // requires the typed field, and a page that says outreach cannot run while
+  // the sweep sends anyway is the worst of the available behaviors. It also
+  // catches the downgrade: Enterprise to Standard leaves a stale
+  // postal_address_exempt behind, and the tier is re-read here, so those sends
+  // stop instead of quietly riding the profile address.
+  const typedAddress = settings.postal_address?.trim() ?? "";
+  const exempt = !postalAddressRequiredForTier(business.tier);
+  const postalAddress = typedAddress || (exempt ? (business.address ?? "").trim() : "");
+  if (!postalAddress && !exempt) {
     return { missing: "no postal address configured", blockedBy: "config" };
   }
   const valueProp = settings.value_prop?.trim() ?? "";
