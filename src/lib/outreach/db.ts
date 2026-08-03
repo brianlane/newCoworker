@@ -1,10 +1,10 @@
 /**
- * Prospecting — DB access for the settings row and the outreach ledger.
+ * Prospecting: DB access for the settings row and the outreach ledger.
  *
  * `outreach_settings` holds one row per business (mode, targeting, cap, send
  * window, sending mailbox); `outreach_prospects` is the permanent ledger of
  * every domain we have discovered for that business. Both tables are
- * service-role-only (RLS on, no policies) — every access flows through the
+ * service-role-only (RLS on, no policies), so every access flows through the
  * Next.js server after its own auth checks, matching email_campaigns.
  *
  * The ledger is append-and-advance, never delete: a row's existence is what
@@ -44,8 +44,14 @@ export type OutreachSettingsRow = {
   send_window_start_hour: number;
   send_window_end_hour: number;
   from_connection_id: string | null;
-  /** CAN-SPAM postal address. The DB refuses a non-off mode without one. */
+  /**
+   * CAN-SPAM postal address. The DB refuses a non-off mode without one unless
+   * `postal_address_exempt` is set, in which case the footer falls back to the
+   * business profile address.
+   */
   postal_address: string | null;
+  /** The plan waives the typed footer address (Enterprise). Set from the tier. */
+  postal_address_exempt: boolean;
   value_prop: string | null;
   sender_name: string | null;
   last_discovery_at: string | null;
@@ -70,6 +76,13 @@ export type OutreachProspectRow = {
   review_count: number | null;
   findings: Array<{ code: string; detail: string }>;
   pitch_subject: string | null;
+  /**
+   * The editable middle of the draft, blank-line separated. `pitch_body` is
+   * this plus the CTA, signature, and compliance footer, assembled in code.
+   * Null on rows drafted before the column existed: those can be regenerated
+   * but not edited, since there is no owner-safe text to hand back.
+   */
+  pitch_paragraphs: string | null;
   pitch_body: string | null;
   status: OutreachProspectStatus;
   status_detail: string | null;
@@ -115,6 +128,7 @@ export type OutreachSettingsPatch = Partial<
     | "send_window_end_hour"
     | "from_connection_id"
     | "postal_address"
+    | "postal_address_exempt"
     | "value_prop"
     | "sender_name"
     | "last_discovery_at"
@@ -361,6 +375,7 @@ export type OutreachProspectPatch = Partial<
     | "vertical"
     | "findings"
     | "pitch_subject"
+    | "pitch_paragraphs"
     | "pitch_body"
     | "status"
     | "status_detail"
@@ -399,7 +414,7 @@ export async function patchProspect(
 
 /**
  * Guarded status transition: applies `patch` only while the prospect is still
- * in `fromStatus`. Returns whether a row actually moved — this is the claim
+ * in `fromStatus`. Returns whether a row actually moved, which is the claim
  * that keeps two overlapping sweeps (or a sweep racing an owner's Send press)
  * from queueing one prospect twice. Same shape as transitionEmailCampaign,
  * and for the same reason: at-most-once is the right bias for cold mail.
@@ -479,7 +494,7 @@ export async function claimProspectNudge(
   return Array.isArray(data) && data.length > 0;
 }
 
-/** Sends already made in the current window — half the daily-cap numerator. */
+/** Sends already made in the current window: half the daily-cap numerator. */
 export async function countProspectsSentSince(
   businessId: string,
   sinceIso: string,

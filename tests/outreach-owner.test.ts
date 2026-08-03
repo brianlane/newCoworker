@@ -25,13 +25,25 @@ const upsertOutreachSettingsSpy = vi.fn(
   })
 );
 const transitionProspectSpy = vi.fn(async () => true);
-const prospectingAllowedSpy = vi.fn(async () => true);
+/**
+ * One tier lookup backs both plan gates, so the fake is the tier itself:
+ * a test picks a plan and the two predicates fall out of it, exactly as they
+ * do in production.
+ */
+const prospectingTierSpy = vi.fn(async (): Promise<string | null> => "standard");
+const allowedForTier = (tier: string | null | undefined) =>
+  tier === "standard" || tier === "enterprise";
+const postalRequiredForTier = (tier: string | null | undefined) => tier !== "enterprise";
 vi.mock("@/lib/plans/prospecting", () => ({
   PROSPECTING_UPGRADE_MESSAGE:
     "Prospecting is a Standard plan perk. Upgrade to have your coworker find local businesses and email them for you.",
-  prospectingAllowedForBusiness: (...a: unknown[]) => prospectingAllowedSpy(...(a as [])),
-  prospectingAllowedForTier: (tier: string | null | undefined) =>
-    tier === "standard" || tier === "enterprise"
+  prospectingTierForBusiness: (...a: unknown[]) => prospectingTierSpy(...(a as [])),
+  prospectingAllowedForBusiness: async (...a: unknown[]) =>
+    allowedForTier(await prospectingTierSpy(...(a as []))),
+  postalAddressRequiredForBusiness: async (...a: unknown[]) =>
+    postalRequiredForTier(await prospectingTierSpy(...(a as []))),
+  prospectingAllowedForTier: (tier: string | null | undefined) => allowedForTier(tier),
+  postalAddressRequiredForTier: (tier: string | null | undefined) => postalRequiredForTier(tier)
 }));
 vi.mock("@/lib/outreach/db", async (importOriginal) => {
   const actual = (await importOriginal()) as Record<string, unknown>;
@@ -113,7 +125,7 @@ beforeEach(() => {
   vi.clearAllMocks();
   getOutreachSettingsSpy.mockResolvedValue(settingsRow());
   transitionProspectSpy.mockResolvedValue(true);
-  prospectingAllowedSpy.mockResolvedValue(true);
+  prospectingTierSpy.mockResolvedValue("standard");
   process.env.GOOGLE_PLACES_API_KEY = "places-key";
 });
 
@@ -144,7 +156,7 @@ describe("loadProspectingView", () => {
   });
 
   it("reports tierAllowed false when Prospecting is not on the plan", async () => {
-    prospectingAllowedSpy.mockResolvedValue(false);
+    prospectingTierSpy.mockResolvedValue("starter");
     listProspectOutcomesSpy.mockResolvedValue([] as never);
     listProspectsByStatusSpy.mockResolvedValue([] as never);
     const view = await loadProspectingView(BIZ, {} as never);
@@ -156,14 +168,17 @@ describe("loadProspectingView", () => {
     // re-checks the tier server-side. A transient businesses read failure
     // must not take down the whole Marketing panel, and it must not flash
     // an upgrade card at a paying tenant, so the degraded value is true.
-    prospectingAllowedSpy.mockRejectedValue(new Error("transient read failure"));
+    prospectingTierSpy.mockRejectedValue(new Error("transient read failure"));
     listProspectOutcomesSpy.mockResolvedValue([] as never);
     listProspectsByStatusSpy.mockResolvedValue([] as never);
     const view = await loadProspectingView(BIZ, {} as never);
     expect(view.tierAllowed).toBe(true);
+    // The address gate degrades the OTHER way: a blocker an Enterprise tenant
+    // does not need for one render beats guessing them exempt.
+    expect(view.postalAddressRequired).toBe(true);
 
     // Same degrade when the rejection is not an Error instance.
-    prospectingAllowedSpy.mockRejectedValue("plain string blip");
+    prospectingTierSpy.mockRejectedValue("plain string blip");
     const again = await loadProspectingView(BIZ, {} as never);
     expect(again.tierAllowed).toBe(true);
   });
@@ -378,6 +393,78 @@ describe("saveProspectingSettings", () => {
     defaultClientSpy.mockReturnValue({});
     await saveProspectingSettings(BIZ, input());
     expect(upsertOutreachSettingsSpy).toHaveBeenCalled();
+  });
+});
+
+describe("the Enterprise postal-address waiver", () => {
+  it("lets Enterprise switch on with no address, and records the exemption", async () => {
+    // Recorded rather than implied: the DB check constraint reads the column,
+    // so a row that was allowed on without an address says WHY on its face.
+    prospectingTierSpy.mockResolvedValue("enterprise");
+    await saveProspectingSettings(BIZ, input({ postalAddress: "  " }), {} as never);
+    expect(upsertOutreachSettingsSpy).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({
+        mode: "auto",
+        postal_address: null,
+        postal_address_exempt: true
+      }),
+      expect.anything()
+    );
+  });
+
+  it("still refuses Standard, and still records it as not exempt", async () => {
+    await expect(
+      saveProspectingSettings(BIZ, input({ postalAddress: "" }), {} as never)
+    ).rejects.toThrow(/postal address is required/);
+
+    await saveProspectingSettings(BIZ, input(), {} as never);
+    expect(upsertOutreachSettingsSpy).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ postal_address: "1 Example Plaza", postal_address_exempt: false }),
+      expect.anything()
+    );
+  });
+
+  it("never reads the business row to turn the feature OFF", async () => {
+    // The kill switch has to work while the businesses table is unreadable,
+    // so 'off' takes no tier lookup at all.
+    await saveProspectingSettings(BIZ, input({ mode: "off", postalAddress: "" }), {} as never);
+    expect(prospectingTierSpy).not.toHaveBeenCalled();
+    expect(upsertOutreachSettingsSpy).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ mode: "off", postal_address_exempt: false }),
+      expect.anything()
+    );
+  });
+
+  it("drops the panel blocker for an exempt tier and keeps it for everyone else", async () => {
+    expect(
+      describeBlockers(settingsRow({ postal_address: null }) as never, {
+        postalAddressRequired: false
+      })
+    ).toEqual([]);
+    expect(
+      describeBlockers(settingsRow({ postal_address: null }) as never, {
+        postalAddressRequired: true
+      })
+    ).toEqual(["postalAddress"]);
+  });
+
+  it("tells the panel which copy to show", async () => {
+    listProspectOutcomesSpy.mockResolvedValue([] as never);
+    listProspectsByStatusSpy.mockResolvedValue([] as never);
+    getOutreachSettingsSpy.mockResolvedValue(settingsRow({ postal_address: null }));
+
+    prospectingTierSpy.mockResolvedValue("enterprise");
+    const enterprise = await loadProspectingView(BIZ, {} as never);
+    expect(enterprise.postalAddressRequired).toBe(false);
+    expect(enterprise.blockers).toEqual([]);
+
+    prospectingTierSpy.mockResolvedValue("standard");
+    const standard = await loadProspectingView(BIZ, {} as never);
+    expect(standard.postalAddressRequired).toBe(true);
+    expect(standard.blockers).toEqual(["postalAddress"]);
   });
 });
 
