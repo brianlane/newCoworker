@@ -7,7 +7,7 @@ import { ADMIN_LOGIN_PATH, isAal2, safeAdminNextPath } from "@/lib/auth/admin-aa
 import AdminMfaForm from "./AdminMfaForm";
 
 export const metadata: Metadata = {
-  title: "Admin MFA | New Coworker",
+  title: "Admin MFA",
   robots: { index: false, follow: false }
 };
 

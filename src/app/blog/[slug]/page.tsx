@@ -36,7 +36,9 @@ export async function generateMetadata({
   );
   const imageUrl = blogImagePublicUrl(post.featured_image_path);
   return {
-    title: `${title} — New Coworker`,
+    // Bare title: the root layout's metadata template already appends
+    // " | New Coworker", so a suffix here renders the brand twice.
+    title,
     description,
     alternates: {
       canonical: translated ? `/es/blog/${post.slug}` : `/blog/${post.slug}`,
