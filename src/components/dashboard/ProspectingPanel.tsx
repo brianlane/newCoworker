@@ -249,6 +249,14 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
     }
   };
 
+  /**
+   * A draft with no stored paragraphs: written before the column existed, or
+   * read back by a build that is briefly ahead of the migration. Both get the
+   * read-only treatment, which is the safe failure: the alternative is an
+   * empty edit box over a pitch the owner can still see underneath it.
+   */
+  const isLegacyDraft = (item: QueueItem) => !item.pitch_paragraphs;
+
   /** The editor's current text: the owner's unsaved edit, or what is stored. */
   const draftText = (item: QueueItem) =>
     drafts[item.id] ?? {
@@ -568,7 +576,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
                 </div>
                 {expanded === item.id ? (
                   <div className="mt-2 space-y-2 rounded border border-parchment/10 bg-deep-ink/40 p-3">
-                    {item.pitch_paragraphs === null ? (
+                    {isLegacyDraft(item) ? (
                       // Drafted before the editor existed: only the assembled
                       // body was stored, and handing that back would put the
                       // compliance footer inside an edit box. Regenerate is
@@ -610,7 +618,7 @@ export function ProspectingPanel({ businessId }: { businessId: string }) {
                       </>
                     )}
                     <div className="flex flex-wrap items-center gap-2">
-                      {item.pitch_paragraphs === null ? null : (
+                      {isLegacyDraft(item) ? null : (
                         <Button
                           variant="secondary"
                           disabled={busyId === item.id || !drafts[item.id]}
