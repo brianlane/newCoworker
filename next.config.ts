@@ -2,6 +2,9 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import type { NextConfig } from "next";
 import createNextIntlPlugin from "next-intl/plugin";
+// Imported rather than re-declared, per the single-home rule this constant
+// documents. It has no dependencies, so it is safe to pull into the config.
+import { SITE_URL } from "./src/lib/marketing/site-url";
 
 const withNextIntl = createNextIntlPlugin("./src/i18n/request.ts");
 
@@ -57,7 +60,23 @@ const securityHeaders = [
   { key: "Referrer-Policy", value: "strict-origin-when-cross-origin" },
   { key: "Permissions-Policy", value: "camera=(), microphone=(), geolocation=(), browsing-topics=()" },
   { key: "Content-Security-Policy", value: "frame-ancestors 'none'; base-uri 'self'; object-src 'none'" },
-  { key: "Content-Security-Policy-Report-Only", value: cspReportOnly }
+  { key: "Content-Security-Policy-Report-Only", value: cspReportOnly },
+  // Overrides the `Access-Control-Allow-Origin: *` that the hosting platform
+  // adds to statically served assets. We never set that header in application
+  // code, but it was going out on /robots.txt, /llms.txt and files under
+  // public/ (verified in production), which a scanner reads as a wildcard CORS
+  // misconfiguration.
+  //
+  // Naming our own origin rather than removing the header, because a headers()
+  // rule can set a value but cannot delete one. The practical effect is the
+  // same as having no header: a cross-origin browser read is refused either
+  // way. Nothing depends on the wildcard, since no authenticated surface
+  // returns this header at all and `Access-Control-Allow-Credentials` is never
+  // sent anywhere.
+  //
+  // Crawlers are unaffected: CORS is a browser policy, and server-side
+  // fetchers (which is what reads robots.txt and llms.txt) ignore it entirely.
+  { key: "Access-Control-Allow-Origin", value: SITE_URL }
 ];
 
 // /widget/frame is the ONE page that must be embeddable in an <iframe> on
