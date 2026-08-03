@@ -42,6 +42,7 @@ import {
   type CategoryPreferenceFlags
 } from "@/lib/notifications/categories";
 import { deliverWhatsApp } from "@/lib/whatsapp/deliver";
+import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import {
   resolveContactOwnerTarget,
   type ContactOwnerTarget
@@ -93,6 +94,14 @@ export type ResolvedTargets = {
   smsUrgentEnabled: boolean;
   /** WhatsApp channel toggle (delivery still requires a connected integration). */
   whatsappUrgentEnabled: boolean;
+  /**
+   * Whether this business has ever connected WhatsApp. False means the
+   * channel is not applicable to them and NO whatsapp row is written at all,
+   * on any branch. Fails toward true on a read error, so a blip degrades to
+   * the old (noisy but honest) behavior rather than silencing a tenant who
+   * really is connected.
+   */
+  whatsappConnected: boolean;
   emailUrgentEnabled: boolean;
   emailDigestEnabled: boolean;
   dashboardEnabled: boolean;
@@ -200,6 +209,18 @@ export async function resolveNotificationTargets(
     });
   }
 
+  // "Has this business ever connected WhatsApp?" — the public read, because
+  // this is an existence check and never needs the encrypted access token.
+  let whatsappConnected = true;
+  try {
+    whatsappConnected = (await getPublicWhatsAppConnection(businessId)) !== null;
+  } catch (err) {
+    logger.warn("resolveNotificationTargets: whatsapp connection lookup failed", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+  }
+
   const ownerAlertEmail = prefsEmail ?? ownerEmail ?? fallbackEmail;
   const ownerAlertPhone = prefsPhone ?? fallbackPhone;
 
@@ -232,6 +253,7 @@ export async function resolveNotificationTargets(
     routing,
     smsUrgentEnabled: smsUrgent,
     whatsappUrgentEnabled: whatsappUrgent,
+    whatsappConnected,
     emailUrgentEnabled: emailUrgent,
     emailDigestEnabled: emailDigest,
     dashboardEnabled: dashboardAlerts,
@@ -307,11 +329,16 @@ export async function dispatchUrgentNotification(
   // Category gate (BizBlasts-style per-event-type prefs): when the owner
   // switched this event's category off, no channel fires — but every channel
   // still gets a `skipped` history row so the dashboard list reflects what
-  // was suppressed and why. "general" is never gated.
+  // was suppressed and why. "general" is never gated. WhatsApp is excluded
+  // for a business that never connected it: an unavailable channel has
+  // nothing to report about a suppressed alert.
   const category = resolveNotificationCategory(kind);
   if (!notificationCategoryEnabled(category, targets.categories)) {
     const reason = `category_${category}_disabled`;
-    for (const channel of ["dashboard", "email", "sms", "whatsapp"] as const) {
+    const gatedChannels = (["dashboard", "email", "sms", "whatsapp"] as const).filter(
+      (channel) => channel !== "whatsapp" || targets.whatsappConnected
+    );
+    for (const channel of gatedChannels) {
       results.push(
         await recordRow(input.businessId, channel, "skipped", summary, kind, payload, reason)
       );
@@ -517,7 +544,14 @@ export async function dispatchUrgentNotification(
   // is owner-actionable. Out-of-window sends ride the owner-alert utility
   // template; a template still in Meta review is likewise recorded as
   // skipped, never failed.
-  if (!targets.phone) {
+  //
+  // The connection check is the OUTERMOST gate on purpose. It used to sit
+  // below the no-phone / toggle-off branches, so a never-connected tenant
+  // still collected `no_phone` and `whatsapp_urgent_disabled` rows — the
+  // same noise, arriving through a different door.
+  if (!targets.whatsappConnected) {
+    // Not applicable to this business: no row, no delivery attempt.
+  } else if (!targets.phone) {
     results.push(
       await recordRow(input.businessId, "whatsapp", "skipped", summary, kind, payload, "no_phone")
     );

@@ -12,6 +12,7 @@ import {
 } from "@/lib/db/notification-preferences";
 import { getNotifications } from "@/lib/db/notifications";
 import { resolveContactNames, type ContactName } from "@/lib/db/contact-names";
+import { getTranscriptByCallControlId } from "@/lib/db/voice-transcripts";
 import {
   applyContactNamesToEventLinks,
   eventLinkE164,
@@ -111,12 +112,46 @@ export default async function NotificationsPage(props: {
       : new Map<string, ContactName>();
   const nameMap = new Map<string, string>();
   for (const [e164, c] of contactNames) nameMap.set(e164, c.name);
+
+  // Voice alerts stamp Telnyx's `callControlId`, but the call detail route
+  // keys on the transcript row UUID (the raw id starts with "v3:" and the
+  // literal ":" gets mangled in the routing layer). Resolve the handful on
+  // this page to transcript ids so the headline can link to the actual call;
+  // a miss just leaves the row pointing at the calls list. Bounded by the
+  // page size, and de-duplicated because one dispatch writes a row per
+  // channel with the same payload.
+  const callControlIds = [
+    ...new Set(
+      recent
+        .map((n) => (n.payload as Record<string, unknown>)?.callControlId)
+        .filter((v): v is string => typeof v === "string" && v.length > 0)
+    )
+  ];
+  const transcriptIds = new Map<string, string>();
+  if (businessId && callControlIds.length > 0) {
+    await Promise.all(
+      callControlIds.map(async (ccid) => {
+        const row = await getTranscriptByCallControlId(businessId, ccid, db).catch(() => null);
+        if (row) transcriptIds.set(ccid, row.id);
+      })
+    );
+  }
+
   const recentWithNames = recent.map((n) => {
+    const payload = (n.payload ?? {}) as Record<string, unknown>;
     const events = notificationEventLinks(n);
-    if (events.length === 0) return n;
+    const ccid = typeof payload.callControlId === "string" ? payload.callControlId : null;
+    const transcriptId = ccid ? transcriptIds.get(ccid) : undefined;
+    if (events.length === 0 && !transcriptId) return n;
     return {
       ...n,
-      payload: { ...(n.payload ?? {}), events: applyContactNamesToEventLinks(events, nameMap) }
+      payload: {
+        ...payload,
+        ...(events.length > 0
+          ? { events: applyContactNamesToEventLinks(events, nameMap) }
+          : {}),
+        ...(transcriptId ? { transcriptId } : {})
+      }
     };
   });
 

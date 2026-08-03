@@ -401,9 +401,14 @@ serve(async (req: Request) => {
       : {}),
     // AiFlow failure alerts stamp the run so the alert module's per-run
     // dedupe (payload->>runId) can find prior delivered pages — see
-    // _shared/aiflow_failure_alert.ts.
+    // _shared/aiflow_failure_alert.ts. The flow id rides along so the
+    // notifications list can deep-link to that run's group on the runs page,
+    // which needs flowId server-side to load it.
     ...(record.task_type === "aiflow_run_failed" && record.log_payload?.run_id
       ? { runId: String(record.log_payload.run_id) }
+      : {}),
+    ...(record.task_type === "aiflow_run_failed" && record.log_payload?.flow_id
+      ? { flowId: String(record.log_payload.flow_id) }
       : {}),
     // Customer reply alerts stamp the inbound job so a RETRY claim of the
     // same job never re-pages (payload->>jobId) — see
@@ -769,8 +774,27 @@ serve(async (req: Request) => {
   // endpoint (Cloud API client, tenant token decryption, 24h-window +
   // template routing live there). Fully additive: no connected WhatsApp
   // integration comes back as a structured not_connected skip.
+  //
+  // A business that never connected WhatsApp records NOTHING here, and the
+  // check is the OUTERMOST gate: it used to be reachable only on the
+  // delivery path, so the no-phone, toggle-off and transport-dedupe branches
+  // below kept writing whatsapp rows for tenants with no WhatsApp at all.
+  // Fails toward true so a read blip degrades to the old behavior rather
+  // than silencing a connected tenant. Mirrors resolveNotificationTargets in
+  // src/lib/notifications/dispatch.ts.
+  let whatsappConnected = true;
+  {
+    const { data: waConn, error: waConnErr } = await supa
+      .from("whatsapp_connections")
+      .select("business_id")
+      .eq("business_id", record.business_id)
+      .maybeSingle();
+    if (!waConnErr) whatsappConnected = waConn !== null;
+  }
   const cronSecret = (Deno.env.get("INTERNAL_CRON_SECRET") ?? "").trim();
-  if (!targets.phone) {
+  if (!whatsappConnected) {
+    // Not applicable to this business: no row, no delivery attempt.
+  } else if (!targets.phone) {
     await recordRow(
       supa,
       record.business_id,

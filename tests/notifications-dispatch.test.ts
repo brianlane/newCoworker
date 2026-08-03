@@ -20,6 +20,10 @@ vi.mock("@/lib/whatsapp/deliver", () => ({
   deliverWhatsApp: vi.fn()
 }));
 
+vi.mock("@/lib/db/whatsapp-connections", () => ({
+  getPublicWhatsAppConnection: vi.fn()
+}));
+
 vi.mock("@/lib/telnyx/messaging", () => ({
   sendTelnyxSms: vi.fn(),
   getTelnyxMessagingForBusiness: vi.fn(async () => ({
@@ -55,6 +59,7 @@ import { insertNotification } from "@/lib/db/notifications";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messaging";
 import { deliverWhatsApp } from "@/lib/whatsapp/deliver";
+import { getPublicWhatsAppConnection } from "@/lib/db/whatsapp-connections";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 
 const BIZ = "11111111-1111-4111-8111-111111111111";
@@ -115,6 +120,14 @@ describe("notifications/dispatch", () => {
       ok: true,
       via: "text",
       messageId: "wamid-1"
+    } as never);
+    // Default: WhatsApp IS connected, so the channel is applicable and the
+    // existing per-branch expectations below still hold. The never-connected
+    // case is asserted on its own further down.
+    vi.mocked(getPublicWhatsAppConnection).mockResolvedValue({
+      business_id: BIZ,
+      phone_number_id: "pn-1",
+      is_active: true
     } as never);
     // Service client used ONLY for the best-effort owner_alert outbound-log
     // row after a successful SMS send.
@@ -678,6 +691,106 @@ describe("notifications/dispatch", () => {
         (r) => (r.payload as Record<string, unknown>).reason === "category_system_disabled"
       )
     ).toBe(true);
+  });
+
+  // A business that never connected WhatsApp has no WhatsApp channel to
+  // report on, so NO whatsapp row is written on ANY branch. The check used
+  // to sit on the delivery path only, so the branches below still wrote
+  // rows: live, 4 businesses had 87 whatsapp rows between them and not one
+  // of them had a connection.
+  describe("never-connected WhatsApp writes no rows", () => {
+    beforeEach(() => {
+      vi.mocked(getPublicWhatsAppConnection).mockResolvedValue(null as never);
+    });
+
+    const whatsappRows = () =>
+      vi
+        .mocked(insertNotification)
+        .mock.calls.map((c) => c[0] as Record<string, unknown>)
+        .filter((r) => r.delivery_channel === "whatsapp");
+
+    it("writes none on the delivery path, and never calls the sender", async () => {
+      vi.mocked(sendOwnerEmail).mockResolvedValue("ok" as never);
+      const result = await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      expect(whatsappRows()).toHaveLength(0);
+      expect(deliverWhatsApp).not.toHaveBeenCalled();
+      expect(result.results.some((r) => r.channel === "whatsapp")).toBe(false);
+    });
+
+    it("writes none when the event's category is off", async () => {
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        category_leads: false
+      } as never);
+      const result = await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "New lead captured",
+        kind: "voice_capture"
+      });
+      expect(whatsappRows()).toHaveLength(0);
+      expect(result.results.map((r) => r.channel).sort()).toEqual(["dashboard", "email", "sms"]);
+    });
+
+    it("writes none when there is no owner phone", async () => {
+      delete process.env.TELNYX_OWNER_PHONE;
+      vi.mocked(sendOwnerEmail).mockResolvedValue("ok" as never);
+      await dispatchUrgentNotification({ businessId: BIZ, summary: "URGENT", kind: "urgent_alert" });
+      expect(whatsappRows()).toHaveLength(0);
+    });
+
+    it("writes none when the WhatsApp toggle is off", async () => {
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        whatsapp_urgent: false
+      } as never);
+      vi.mocked(sendOwnerEmail).mockResolvedValue("ok" as never);
+      await dispatchUrgentNotification({ businessId: BIZ, summary: "URGENT", kind: "urgent_alert" });
+      expect(whatsappRows()).toHaveLength(0);
+    });
+
+    it("writes none when the owner unsubscribed from everything", async () => {
+      vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+        ...PREFS_ON,
+        unsubscribed_at: "2026-08-01T00:00:00Z"
+      } as never);
+      await dispatchUrgentNotification({ businessId: BIZ, summary: "URGENT", kind: "urgent_alert" });
+      expect(whatsappRows()).toHaveLength(0);
+    });
+  });
+
+  it("still records a skip for a connection that exists but is inactive", async () => {
+    // Owner-actionable: they connected WhatsApp and it lapsed, so the honest
+    // skip row stays. Only never-connected goes silent.
+    vi.mocked(deliverWhatsApp).mockResolvedValue({
+      ok: false,
+      reason: "connection_inactive"
+    } as never);
+    vi.mocked(sendOwnerEmail).mockResolvedValue("ok" as never);
+    await dispatchUrgentNotification({ businessId: BIZ, summary: "URGENT", kind: "urgent_alert" });
+    const wa = vi
+      .mocked(insertNotification)
+      .mock.calls.map((c) => c[0] as Record<string, unknown>)
+      .filter((r) => r.delivery_channel === "whatsapp");
+    expect(wa).toHaveLength(1);
+    expect((wa[0].payload as Record<string, unknown>).reason).toBe("connection_inactive");
+  });
+
+  it("treats a failing connection read as connected, so an alert is never silenced", async () => {
+    vi.mocked(getPublicWhatsAppConnection).mockRejectedValue(new Error("boom"));
+    vi.mocked(sendOwnerEmail).mockResolvedValue("ok" as never);
+    await dispatchUrgentNotification({ businessId: BIZ, summary: "URGENT", kind: "urgent_alert" });
+    expect(deliverWhatsApp).toHaveBeenCalled();
+  });
+
+  it("survives a connection read that rejects with a non-Error", async () => {
+    vi.mocked(getPublicWhatsAppConnection).mockRejectedValue("nope" as never);
+    vi.mocked(sendOwnerEmail).mockResolvedValue("ok" as never);
+    await dispatchUrgentNotification({ businessId: BIZ, summary: "URGENT", kind: "urgent_alert" });
+    expect(deliverWhatsApp).toHaveBeenCalled();
   });
 
   it("uses fallback dashboardUrl + empty RESEND_API_KEY when env vars unset", async () => {
