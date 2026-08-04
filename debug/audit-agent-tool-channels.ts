@@ -47,20 +47,24 @@ const db = createClient(url, key, { auth: { persistSession: false } });
  * while the gap is still there. Same discipline as
  * `loadBillableUsageSince` in src/lib/billing/usage-charges.ts, and reads
  * THROW rather than degrade, so a partial answer never prints as a clean one.
+ *
+ * `orderColumns` must be a UNIQUE key, not just any sort column. Range paging
+ * re-runs the query per page, and Postgres does not promise a stable order for
+ * rows that tie on the sort key, so a non-unique ORDER BY can skip a row on one
+ * page and repeat another on the next. A skipped row here is a lost explicit
+ * OFF, which is the same silent all-clear the paging was added to prevent.
  */
 const PAGE_SIZE = 1000;
 async function readAll<Row>(
   table: string,
   columns: string,
-  orderColumn: string
+  orderColumns: readonly string[]
 ): Promise<Row[]> {
   const rows: Row[] = [];
   for (let from = 0; ; from += PAGE_SIZE) {
-    let q = db
-      .from(table)
-      .select(columns)
-      .order(orderColumn, { ascending: true })
-      .range(from, from + PAGE_SIZE - 1);
+    let q = db.from(table).select(columns);
+    for (const column of orderColumns) q = q.order(column, { ascending: true });
+    q = q.range(from, from + PAGE_SIZE - 1);
     if (ONLY_BUSINESS) {
       q = q.eq(table === "businesses" ? "id" : "business_id", ONLY_BUSINESS);
     }
@@ -80,12 +84,15 @@ let settings: Array<{
   enabled: boolean;
 }>;
 try {
-  businesses = await readAll("businesses", "id, name", "name");
-  settings = await readAll(
-    "agent_tool_settings",
-    "business_id, agent_key, tool_key, enabled",
-    "business_id"
-  );
+  // `name` alone is not unique (nor non-null); `id` is the primary key, so the
+  // pair is deterministic while still reading alphabetically.
+  businesses = await readAll("businesses", "id, name", ["name", "id"]);
+  // The full primary key of agent_tool_settings.
+  settings = await readAll("agent_tool_settings", "business_id, agent_key, tool_key, enabled", [
+    "business_id",
+    "agent_key",
+    "tool_key"
+  ]);
 } catch (err) {
   console.error(err instanceof Error ? err.message : String(err));
   process.exit(1);
