@@ -18,12 +18,14 @@ vi.mock("@/lib/stripe/client", () => ({
 }));
 
 const listCandidates = vi.fn();
+const listFlagged = vi.fn();
 const resumeStale = vi.fn();
 const claim = vi.fn();
 const settle = vi.fn();
 
 vi.mock("@/lib/db/auto-reload", () => ({
   listAutoReloadCandidates: (...a: unknown[]) => listCandidates(...a),
+  listFlaggedAutoReloadCandidates: (...a: unknown[]) => listFlagged(...a),
   resumeStaleAutoReload: (...a: unknown[]) => resumeStale(...a),
   claimAutoReload: (...a: unknown[]) => claim(...a),
   settleAutoReload: (...a: unknown[]) => settle(...a)
@@ -128,6 +130,33 @@ beforeEach(() => {
 
 afterEach(() => {
   process.env = OLD_ENV;
+});
+
+describe("candidate source by mode", () => {
+  it("rescans everything by default", async () => {
+    listCandidates.mockResolvedValue([candidate()]);
+    await sweepUsagePackAutoReloads(deps());
+    expect(listCandidates).toHaveBeenCalled();
+    expect(listFlagged).not.toHaveBeenCalled();
+  });
+
+  it("reads only stamped rules in flagged mode", async () => {
+    // This is what makes an every-minute pass affordable: normally there is
+    // nothing stamped, so the frequent job does no balance math at all.
+    listFlagged.mockResolvedValue([candidate()]);
+    const res = await sweepUsagePackAutoReloads(deps({ mode: "flagged" }));
+    expect(listFlagged).toHaveBeenCalled();
+    expect(listCandidates).not.toHaveBeenCalled();
+    expect(res.charged).toBe(1);
+  });
+
+  it("goes through the same claim in both modes", async () => {
+    // The fast path must not be a way around the cooldown or the attempt key,
+    // or the two jobs could charge the same tenant twice.
+    listFlagged.mockResolvedValue([candidate()]);
+    await sweepUsagePackAutoReloads(deps({ mode: "flagged" }));
+    expect(claim).toHaveBeenCalledTimes(1);
+  });
 });
 
 describe("the platform kill switch", () => {
