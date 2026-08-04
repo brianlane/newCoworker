@@ -225,6 +225,17 @@ Run unit tests with:
 npm test
 ```
 
+Run the worker-integration suite (the REAL edge workers and Node-side cores
+against a REAL local Postgres) with:
+
+```bash
+npm run test:worker-integration
+```
+
+It needs a local stack first (`supabase start`, then `supabase functions
+serve`); the header of `vitest.worker-integration.config.ts` carries the exact
+setup, and CI runs it as its own job.
+
 Run Docker integration correctness with:
 
 ```bash
@@ -856,10 +867,15 @@ Every business can hand out ONE public booking link, `/book/<ncb_token>`
 no account). Visitors pick a duration and a slot on a Calendly-style
 two-panel page (EN/ES, visitor-timezone rendering) and book; the write rides
 `bookCalendarAppointment`, so Zoom decoration, the `calendar_booking_dedupe`
-ledger, `appointment_booked` goal fan-out, the unassigned-booking owner
-alert, and contact filing (tag `Booking Page`, fires `contact_created` so
-round-robin lead assignment picks an on-shift employee) behave exactly like
-AI-made bookings. Owner management lives on the **Bookings** sidebar page
+ledger, `appointment_booked` goal fan-out, and contact filing (tag `Booking
+Page`, fires `contact_created` so round-robin lead assignment picks an
+on-shift employee) behave exactly like AI-made bookings. The **owner alert is
+the exception** and is fired by the page itself rather than by the booking
+core, for two reasons: a page booking was made by the VISITOR, so the copy
+must not credit the AI coworker for it, and the alert reports who is on the
+hook, which is not known until the contact is filed and the assignee is
+stamped. See "What the owner is told when a booking lands" below.
+Owner management lives on the **Bookings** sidebar page
 (`/dashboard/bookings`, below Employees). The page auto-provisions, enabled,
 the first time the owner opens Bookings (safe because the token is
 unguessable until shared; Vagaro/Calendly tenants are skipped since booking
@@ -1001,7 +1017,35 @@ page.
   anyone else's, and a failed text is logged, never surfaced (the booking
   and the visitor's confirmation are already durable). A retry that fills
   a missing assignment sends the text then, the first moment the booking
-  has an owner to tell.
+  has an owner to tell. The OWNER's own alert names that person rather than
+  reporting the lead as unowned, which is what it used to do while the
+  platform was texting the assignee seconds later.
+- **What the owner is told when a booking lands**
+  (`src/lib/calendar-tools/unassigned-booking-alert.ts`, copy in
+  `src/lib/email/templates/booking-owner-alert.ts`): one alert, three states,
+  because "who is on the hook" has three real answers and the alert used to
+  express only one of them.
+
+  | State | When | What it says |
+  | --- | --- | --- |
+  | `solo` | no ACTIVE `ai_flow_team_members` row | just the booking. No "owner", "assign", or "teammate" anywhere: there is nobody to assign to and the owner is on the hook by definition |
+  | `covered` | the booking's `assignee_member_id`, else `contacts.owner_employee_id` | names that person, and drops the warning |
+  | `unowned` | a roster exists and nobody holds this lead | the original warning, plus the one action that fixes it |
+
+  The assignee outranks the contact owner: the question is who shows up to
+  THIS meeting. The button deep-links to `/dashboard/customers/<e164>`, where
+  the owner picker is, rather than to a bare `/dashboard`. Two fail
+  directions are deliberate: an unreadable roster count assumes a team (a
+  solo owner seeing team copy is a wording miss, a team losing the warning is
+  a no-show), and a holder whose name will not resolve degrades to the
+  warning rather than emailing a blank name. Gated on
+  `notification_preferences.unassigned_booking_alerts`, ON by default, which
+  covers all three states.
+
+  One race remains and is known: flow-driven lead assignment runs in the
+  AiFlow worker, so `contacts.owner_employee_id` can land after the booking
+  returns. The booking page's own assignee is resolved synchronously and is
+  fully covered; a delayed re-check before sending would close the rest.
 - **Intake questions** (`src/lib/booking-page/intake.ts`): up to five
   owner-defined questions in the white-glove questionnaire's vocabulary
   (choice, multi, text, textarea), answered inside the booking form. Two

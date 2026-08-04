@@ -2,15 +2,30 @@ import { NextResponse } from "next/server";
 import { updateNotificationPreferences } from "@/lib/db/notification-preferences";
 import { logger } from "@/lib/logger";
 import { SITE_URL } from "@/lib/marketing/site-url";
+// The bid is UUID-validated before it reaches the form, so this is a second
+// line rather than the only one. Reuse the shared escaper regardless: a
+// hand-built page interpolating a query parameter should never be the place
+// someone has to reason about that.
+import { escapeHtml } from "@/lib/email/branded-html";
 
 /**
  * Unauthenticated one-click unsubscribe endpoint linked from operator emails.
  *
- * GET  → human-friendly HTML confirmation page (clicked from an email).
- * POST → RFC 8058 List-Unsubscribe-Post target. Mail clients (Gmail, Apple
- *        Mail, Outlook iOS) hit this with `List-Unsubscribe=One-Click` in the
- *        body when the user taps the native "Unsubscribe" UI. Plain 200 text
- *        response is what they expect.
+ * GET  → asks. Renders a confirmation page whose button POSTs back here.
+ *        It does NOT write, and that is the point: a GET that unsubscribed
+ *        on sight meant any corporate mail scanner, security sandbox, or
+ *        link prefetcher that follows links in a message could switch off
+ *        email, SMS, WhatsApp, dashboard, and warm-transfer alerts for a
+ *        business, with nobody told it had happened. Following a link is
+ *        not a decision; pressing the button is.
+ * POST → the write. Two callers, one handler:
+ *        - RFC 8058 List-Unsubscribe-Post. Mail clients (Gmail, Apple Mail,
+ *          Outlook iOS) hit this with `List-Unsubscribe=One-Click` in the
+ *          body when the user taps the native "Unsubscribe" UI. They expect
+ *          a plain 200. This path is a real user action in the client's own
+ *          UI, so acting immediately is correct.
+ *        - the confirmation page's form, which sends `ui=1` and gets a
+ *          rendered page back instead of one bare word.
  *
  * The endpoint identifies the business via the `bid` query/form parameter,
  * which is the business UUID. UUID v4 has 122 bits of entropy and isn't
@@ -89,10 +104,32 @@ function appUrl(): string {
   return (process.env.NEXT_PUBLIC_APP_URL ?? SITE_URL).replace(/\/$/, "");
 }
 
-export async function GET(request: Request) {
-  const bid = new URL(request.url).searchParams.get("bid");
-  const result = await applyUnsubscribe(bid);
+/** The page the GET renders: what will happen, and a button that does it. */
+function confirmPage(bid: string): NextResponse {
+  return htmlPage(
+    "Unsubscribe from New Coworker alerts?",
+    `<p>This turns off every notification for this business: urgent email and
+      text alerts, WhatsApp, the daily and weekly digests, dashboard alerts,
+      and warm-transfer texts.</p>
+     <form method="post" action="/api/notifications/unsubscribe">
+       <input type="hidden" name="bid" value="${escapeHtml(bid)}" />
+       <input type="hidden" name="ui" value="1" />
+       <button type="submit" style="background:#2EC4B6;color:#0d0f12;border:0;border-radius:8px;padding:12px 20px;font-size:15px;font-weight:600;cursor:pointer;">Yes, unsubscribe</button>
+     </form>
+     <p style="margin-top:16px;">Or <a href="${appUrl()}/dashboard/notifications">choose which alerts to keep</a>.</p>`,
+    200
+  );
+}
 
+function invalidPage(): NextResponse {
+  return htmlPage(
+    "Invalid link",
+    `<p>This unsubscribe link is missing or invalid. Please <a href="${appUrl()}/dashboard/notifications">manage your preferences in the dashboard</a>.</p>`,
+    400
+  );
+}
+
+function donePage(result: ApplyResult): NextResponse {
   if (result === "ok") {
     return htmlPage(
       "You've been unsubscribed",
@@ -108,24 +145,30 @@ export async function GET(request: Request) {
       500
     );
   }
-  return htmlPage(
-    "Invalid link",
-    `<p>This unsubscribe link is missing or invalid. Please <a href="${appUrl()}/dashboard/notifications">manage your preferences in the dashboard</a>.</p>`,
-    400
-  );
+  return invalidPage();
+}
+
+export async function GET(request: Request) {
+  const bid = new URL(request.url).searchParams.get("bid");
+  // Deliberately no write here. Validate the link and ask.
+  if (!bid || !UUID_RE.test(bid)) return invalidPage();
+  return confirmPage(bid);
 }
 
 export async function POST(request: Request) {
   // RFC 8058 one-click flow: bid may come from the query string or the
-  // `List-Unsubscribe-Post` form body. Accept both.
+  // `List-Unsubscribe-Post` form body. Accept both. `ui=1` marks the
+  // confirmation page's own form, which wants a page back.
   let bid = new URL(request.url).searchParams.get("bid");
-  if (!bid) {
+  let fromConfirmPage = new URL(request.url).searchParams.get("ui") === "1";
+  if (!bid || !fromConfirmPage) {
     try {
       const ct = request.headers.get("content-type") ?? "";
       if (ct.includes("application/x-www-form-urlencoded")) {
         const body = await request.text();
         const params = new URLSearchParams(body);
-        bid = params.get("bid");
+        bid = bid ?? params.get("bid");
+        fromConfirmPage = fromConfirmPage || params.get("ui") === "1";
       }
     } catch {
       // If body parsing throws, fall through to the "no bid" branch.
@@ -133,8 +176,11 @@ export async function POST(request: Request) {
   }
 
   const result = await applyUnsubscribe(bid);
+  // A person who just pressed a button gets a page; a mail client that
+  // ignores HTML entirely gets the bare text it expects.
+  if (fromConfirmPage) return donePage(result);
+
   const ok = result === "ok";
-  // Mail clients ignore HTML for the POST flow; reply with bare text.
   return new NextResponse(ok ? "Unsubscribed" : `Failed: ${result}`, {
     status: ok ? 200 : result === "error" ? 500 : 400,
     headers: { "Content-Type": "text/plain; charset=utf-8" }

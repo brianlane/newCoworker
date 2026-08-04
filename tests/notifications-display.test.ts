@@ -12,6 +12,27 @@ describe("notifications/display", () => {
     const UUID = "163bee63-4175-4782-b5a8-01bcb7ea57f6";
     const FLOW_UUID = "94f2156f-90c9-479d-b795-992f0561294a";
 
+    it("sends a booking alert to the contact page, where the owner picker is", () => {
+      // The generic contactE164 branch would send these to the text thread,
+      // which is not where you assign a lead. Both booking kinds must match
+      // the email's own button.
+      for (const kind of ["unassigned_booking", "assigned_booking"]) {
+        expect(
+          notificationLink({ kind, payload: { contactE164: "+12187702372" } })
+        ).toEqual({
+          href: "/dashboard/customers/%2B12187702372",
+          label: "Open contact"
+        });
+      }
+    });
+
+    it("falls back to the bookings list when a booking alert carried no phone", () => {
+      expect(notificationLink({ kind: "unassigned_booking", payload: {} })).toEqual({
+        href: "/dashboard/bookings",
+        label: "Open Bookings"
+      });
+    });
+
     it("prefers an href the producer already stamped", () => {
       expect(
         notificationLink({

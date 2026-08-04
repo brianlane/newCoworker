@@ -24,6 +24,10 @@ describe("resolveNotificationCategory", () => {
     expect(resolveNotificationCategory("urgent_alert")).toBe("general");
     expect(resolveNotificationCategory("digest")).toBe("general");
     expect(resolveNotificationCategory("some_future_kind")).toBe("general");
+    // Both booking alerts are deliberately ungated: an appointment nobody is
+    // on the hook for is the escalation path, not a lead-marketing event.
+    expect(resolveNotificationCategory("unassigned_booking")).toBe("general");
+    expect(resolveNotificationCategory("assigned_booking")).toBe("general");
   });
 });
 

@@ -1455,7 +1455,10 @@ describe("submitPublicBooking", () => {
         notes: expect.stringContaining("Note: Referred by James")
       }),
       "+14805550100",
-      { alertSurface: "webchat", trustProvidedName: true }
+      // No alertSurface: the page fires its own owner alert once, after the
+      // contact and the assignee exist. Letting the booking core fire it
+      // would put it back before both writes.
+      { trustProvidedName: true }
     );
     expect(mockCapture).toHaveBeenCalledWith(BIZ, {
       e164: "+14805550100",
@@ -1556,12 +1559,43 @@ describe("submitPublicBooking", () => {
         BIZ,
         expect.objectContaining({
           attendeePhone: "+14805550100",
-          surface: "webchat",
-          eventId: "platform"
+          // The visitor booked this themselves, and the alert names the real
+          // ledger row rather than a literal "platform".
+          surface: "booking_page",
+          eventId: expect.stringMatching(/^platform:/),
+          // Context the owner needs in order to show up.
+          durationMinutes: 30,
+          joinUrl: "https://zoom.example/j/9",
+          note: "Referred by James"
         })
       );
       expect(mockCapture).toHaveBeenCalledTimes(1);
       expect(mockSlotRelease).not.toHaveBeenCalled();
+    });
+
+    it("alerts the owner only AFTER the contact is filed and the assignee is stamped", async () => {
+      // The defect this pins (HQ internal, Aug 3 2026): the alert reports who
+      // is on the hook, and it used to run inside the booking write, before
+      // either fact existed. Order is the assertion, so a future refactor
+      // that moves the call back earlier fails here rather than in
+      // production.
+      const order: string[] = [];
+      mockCapture.mockImplementation(async () => {
+        order.push("capture");
+        return undefined as never;
+      });
+      mockStampContact.mockImplementation(async () => {
+        order.push("stamp");
+        return true;
+      });
+      mockUnassignedAlert.mockImplementation(async () => {
+        order.push("alert");
+        return "sent_solo";
+      });
+
+      await submitPublicBooking(TOKEN, VALID);
+
+      expect(order).toEqual(["capture", "stamp", "alert"]);
     });
 
     it("books without Zoom when none is connected (note omitted too)", async () => {

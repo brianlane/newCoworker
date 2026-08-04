@@ -833,6 +833,10 @@ export async function submitPublicBooking(
 
   let startLocal: string | null = null;
   let zoomJoinUrl: string | null = null;
+  // The booking's identity, whichever mode wrote it: the provider's event id,
+  // or the ledger's synthetic `platform:<uuid>`. Carried out of the branch so
+  // the owner alert can name the real booking instead of a literal.
+  let bookedEventId: string | null = null;
   // Minted before either write so both modes stamp the SAME token, and the
   // confirmation can hand the visitor a link that manages this booking.
   const manageToken = mintBookingManageToken();
@@ -871,11 +875,12 @@ export async function submitPublicBooking(
       return { ok: false, detail: "already_booked" };
     }
 
+    const platformEventId = `platform:${randomUUID()}`;
     const record = await recordPlatformBooking(
       context.businessId,
       bookingAttendeeKey(phone, email, name),
       start.toISOString(),
-      `platform:${randomUUID()}`,
+      platformEventId,
       zoomMeeting?.meetingId ?? null,
       undefined,
       { token: manageToken, durationMinutes }
@@ -892,12 +897,17 @@ export async function submitPublicBooking(
 
     startLocal = formatBookingStartLocal(start.toISOString(), context.timezone);
     zoomJoinUrl = zoomMeeting?.joinUrl ?? null;
+    bookedEventId = platformEventId;
 
     // Same post-booking fan-out the provider core runs: a confirmed
-    // booking may fast-forward parked AiFlow runs, the visitor's live
+    // booking may fast-forward parked AiFlow runs, and the visitor's live
     // waitlist entries resolve against what they now hold (the provider
-    // path gets this inside bookCalendarAppointment), and a booking for a
-    // lead nobody owns pages the owner.
+    // path gets this inside bookCalendarAppointment).
+    //
+    // The owner alert is NOT here. It reports who is on the hook, and at
+    // this point the contact row does not exist and no assignee has been
+    // picked, so every answer it could give would be wrong. It fires once,
+    // for both modes, after those writes land.
     await fireGoalEvent(context.businessId, phone, { kind: "appointment_booked" });
     await fireLifecycleStage(context.businessId, phone, "booked", {
       dedupeSuffix: manageToken
@@ -907,16 +917,6 @@ export async function submitPublicBooking(
       { phones: [phone], email: email.toLowerCase() },
       start.toISOString()
     );
-    await maybeAlertUnassignedBooking(context.businessId, {
-      attendeeName: name,
-      attendeePhone: phone,
-      attendeeEmail: email,
-      startIso: start.toISOString(),
-      startLocal,
-      summary,
-      eventId: "platform",
-      surface: "webchat"
-    });
   } else {
     const noteLines = [
       `Booked via the public booking page.`,
@@ -940,11 +940,12 @@ export async function submitPublicBooking(
         notes: noteLines.join("\n")
       },
       phone,
-      // Customer-initiated surface: a booking for a lead nobody owns should
-      // page the owner exactly like an AI-made webchat booking would. The
-      // visitor typed their own name seconds ago, so it wins over any stale
-      // stored display name (trustProvidedName).
-      { alertSurface: "webchat", trustProvidedName: true }
+      // No alertSurface: the page owns its own owner alert and fires it
+      // after contact filing and assignment, which the booking core knows
+      // nothing about. Opting out here is the same thing dashboard and MCP
+      // bookings do. The visitor typed their own name seconds ago, so it
+      // wins over any stale stored display name (trustProvidedName).
+      { trustProvidedName: true }
     );
 
     if (!booked.ok) {
@@ -968,6 +969,7 @@ export async function submitPublicBooking(
     const data = (booked.data ?? {}) as Record<string, unknown>;
     startLocal = typeof data.startLocal === "string" ? data.startLocal : null;
     zoomJoinUrl = typeof data.zoomJoinUrl === "string" ? data.zoomJoinUrl : null;
+    bookedEventId = typeof data.eventId === "string" ? data.eventId : null;
 
     // The booking core owns the ledger write in this mode and knows nothing
     // about manage links, so the token is stamped onto the row it just
@@ -1087,6 +1089,33 @@ export async function submitPublicBooking(
       summary
     });
   }
+
+  // Now the owner hears about it, and only now: this alert reports WHO is on
+  // the hook, and until the contact is filed (above) and the assignee is
+  // stamped (above) there is no true answer to give. Firing it inside the
+  // booking write, as this used to, meant every first-time visitor was
+  // reported as owned by nobody even on a round-robin page that had just
+  // picked somebody and texted them.
+  //
+  // Both modes, one call. Best-effort by contract: the appointment is
+  // already durable and this must never change the visitor's result.
+  await maybeAlertUnassignedBooking(context.businessId, {
+    attendeeName: name,
+    attendeePhone: phone,
+    attendeeEmail: email,
+    startIso: start.toISOString(),
+    startLocal: startLocal ?? formatBookingStartLocal(start.toISOString(), context.timezone),
+    summary,
+    eventId: bookedEventId,
+    // The visitor booked this themselves. Crediting the AI coworker for it
+    // was simply false, and reusing the webchat tag hid that in the payload.
+    surface: "booking_page",
+    bookingAssigneeMemberId: assignee,
+    durationMinutes,
+    joinUrl: zoomJoinUrl,
+    note: note || null,
+    intakeLines
+  });
 
   if (context.page.send_confirmation_email) {
     await sendBookingConfirmationEmail({

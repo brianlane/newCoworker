@@ -395,6 +395,114 @@ describe("notifications/dispatch", () => {
     expect(opts.html).not.toContain("//dashboard");
   });
 
+  describe("per-alert heading, CTA, and locale-aware copy", () => {
+    it("emailHeading replaces the H1 so the subject is not repeated as a heading", async () => {
+      vi.mocked(sendOwnerEmail).mockResolvedValue("ok" as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert",
+        emailSubject: "A very long subject line that should not become the heading",
+        emailHeading: "Short heading"
+      });
+      const opts = vi.mocked(sendOwnerEmail).mock.calls[0][3] as { html?: string };
+      const h1 = /<h1[^>]*>([\s\S]*?)<\/h1>/.exec(opts.html ?? "")?.[1] ?? "";
+      expect(h1).toContain("Short heading");
+      // The subject still belongs in <title>; what must not repeat is the H1.
+      expect(h1).not.toContain("A very long subject line");
+    });
+
+    it("without emailHeading the subject stays the heading, as before", async () => {
+      vi.mocked(sendOwnerEmail).mockResolvedValue("ok" as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert",
+        emailSubject: "Still the heading"
+      });
+      const opts = vi.mocked(sendOwnerEmail).mock.calls[0][3] as { html?: string };
+      expect(opts.html).toContain("Still the heading");
+    });
+
+    it("ctaPath moves the button, the fallback link, and the SMS link together", async () => {
+      vi.mocked(sendOwnerEmail).mockResolvedValue("ok" as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert",
+        ctaPath: "/dashboard/customers/%2B12187702372",
+        ctaLabel: "Assign this contact"
+      });
+      const opts = vi.mocked(sendOwnerEmail).mock.calls[0][3] as { html?: string };
+      expect(opts.html).toContain("https://app.example.com/dashboard/customers/%2B12187702372");
+      expect(opts.html).toContain("Assign this contact");
+      // A button pointing one place and a text link pointing another is the
+      // bug this guards: all three must agree.
+      const smsBody = vi.mocked(sendTelnyxSms).mock.calls[0][2] as string;
+      expect(smsBody).toContain("https://app.example.com/dashboard/customers/%2B12187702372");
+    });
+
+    it("defaults stay the bare dashboard and the localized Open dashboard label", async () => {
+      vi.mocked(sendOwnerEmail).mockResolvedValue("ok" as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      const opts = vi.mocked(sendOwnerEmail).mock.calls[0][3] as { html?: string };
+      expect(opts.html).toContain("https://app.example.com/dashboard");
+      expect(opts.html).toContain("Open dashboard");
+    });
+
+    it("emailTemplate is handed the resolved locale and supplies every piece of copy", async () => {
+      vi.mocked(sendOwnerEmail).mockResolvedValue("ok" as never);
+      const seenLocales: string[] = [];
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert",
+        emailTemplate: (locale) => {
+          seenLocales.push(locale);
+          return {
+            subject: "Templated subject",
+            heading: "Templated heading",
+            body: "First block.\n\nSecond block.",
+            ctaLabel: "Templated CTA",
+            ctaPath: "/dashboard/bookings"
+          };
+        }
+      });
+      // English is the hard default; the resolver is keyed on the recipient.
+      expect(seenLocales).toEqual(["en"]);
+      const call = vi.mocked(sendOwnerEmail).mock.calls[0];
+      expect(call[2]).toBe("Templated subject");
+      const opts = call[3] as { html?: string; text?: string };
+      expect(opts.html).toContain("Templated heading");
+      expect(opts.html).toContain("Templated CTA");
+      expect(opts.html).toContain("https://app.example.com/dashboard/bookings");
+      expect(opts.text).toContain("First block.");
+      expect(opts.text).toContain("Second block.");
+    });
+
+    it("an explicit emailSubject still wins over the template, so callers can override", async () => {
+      vi.mocked(sendOwnerEmail).mockResolvedValue("ok" as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert",
+        emailSubject: "Explicit wins",
+        emailTemplate: () => ({
+          subject: "Templated subject",
+          heading: "Templated heading",
+          body: "Body.",
+          ctaLabel: "CTA",
+          ctaPath: "/dashboard"
+        })
+      });
+      expect(vi.mocked(sendOwnerEmail).mock.calls[0][2]).toBe("Explicit wins");
+    });
+  });
+
   it("does not crash when prefs lookup throws — falls through to env defaults", async () => {
     vi.mocked(getOrCreateNotificationPreferences).mockRejectedValue(new Error("db blip"));
     await dispatchUrgentNotification({

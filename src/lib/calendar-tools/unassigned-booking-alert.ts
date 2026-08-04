@@ -1,34 +1,44 @@
 /**
- * Owner alert for AI bookings NOBODY on the team owns.
+ * Owner alert for a booking that just landed, and who is on the hook for it.
  *
- * Why (Truly Insurance, Jul 21 2026): a Privyr lead arrived after hours, the
- * flow's route_to_team found no eligible broker (`claimed_agent: none`,
- * contact `owner_employee_id` null), and minutes later the texting coworker
- * booked a REAL "12:00 PM tomorrow" broker call, onto a shared Outlook
- * calendar no one was watching. The only human-facing signal ("[AiFlow] No
- * broker claimed … Back to you") predated the booking by three minutes, so
- * the business was set up to no-show its own lead.
+ * Why it exists (Truly Insurance, Jul 21 2026): a Privyr lead arrived after
+ * hours, the flow's route_to_team found no eligible broker (`claimed_agent:
+ * none`, contact `owner_employee_id` null), and minutes later the texting
+ * coworker booked a REAL "12:00 PM tomorrow" broker call, onto a shared
+ * Outlook calendar no one was watching. The only human-facing signal
+ * ("[AiFlow] No broker claimed ... Back to you") predated the booking by
+ * three minutes, so the business was set up to no-show its own lead.
  *
- * This core runs after every CONFIRMED booking made on a customer-facing AI
- * surface (voice, texting, webchat; owner-initiated dashboard/MCP bookings
- * are excluded at the call sites: the owner already knows what they booked):
+ * Why it was reworked (HQ internal, Aug 3 2026): the alert had exactly one
+ * thing to say, and said it to everyone. A business with NO employees was
+ * told to "assign the contact to a teammate" when there is no teammate to
+ * assign to and the owner is on the hook by definition; a booking-page
+ * booking that had just been round-robined to a named person was still
+ * reported as owned by nobody; and a booking the visitor made themselves was
+ * credited to the AI coworker. So ownership is now RESOLVED into one of
+ * three states and the copy follows it:
  *
- *   1. Resolve the attendee's contact (phone alias-aware, else email). A
- *      contact with `owner_employee_id` set is OWNED: no alert, the
- *      assignee's own workflow covers it. A missing contact counts as
- *      unowned (a booking is exactly when a lead must stop being nobody's).
- *   2. Honor the `unassigned_booking_alerts` preference, per-business
- *      toggle, ON by default (rows predating the column read as on).
- *   3. Fan out through the standard alert dispatcher (dashboard row + the
- *      owner's SMS/email/WhatsApp channel toggles). The dashboard row also
- *      surfaces the booking in the Recent Activity feed.
+ *   1. `solo`    - no active roster member exists. Nobody to assign to.
+ *   2. `covered` - the booking's assignee, else the contact's owner.
+ *   3. `unowned` - a roster exists and nobody holds this lead. The warning.
+ *
+ * The alert runs after every CONFIRMED booking on a customer-facing surface
+ * (voice, texting, webchat, and the public booking page; owner-initiated
+ * dashboard/MCP bookings are excluded at the call sites, since the owner
+ * already knows what they booked).
  *
  * Best-effort BY CONTRACT: this must never fail, delay semantics, or alter
- * the booking result: the appointment already exists on the provider.
+ * the booking result. The appointment already exists on the provider.
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getNotificationPreferences } from "@/lib/db/notification-preferences";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
+import { getTeamMember } from "@/lib/db/employees";
+import {
+  buildBookingOwnerAlert,
+  type BookingOwnerAlertState,
+  type BookingOwnerAlertSurface
+} from "@/lib/email/templates/booking-owner-alert";
 import { logger } from "@/lib/logger";
 
 export type UnassignedBookingAlertInput = {
@@ -43,13 +53,26 @@ export type UnassignedBookingAlertInput = {
   summary: string;
   /** Provider event id (diagnostics payload only). */
   eventId: string | null;
-  /** Which AI surface booked it. */
-  surface: "voice" | "sms" | "webchat";
+  /** Which surface booked it. Only `booking_page` is visitor-made. */
+  surface: BookingOwnerAlertSurface;
+  /**
+   * Who holds the APPOINTMENT, when the surface has its own assignment
+   * (`calendar_booking_dedupe.assignee_member_id`, set by the booking page's
+   * round-robin). Outranks the contact's owner: the question this alert
+   * answers is who shows up to THIS meeting.
+   */
+  bookingAssigneeMemberId?: string | null;
+  /** Context a person needs in order to actually show up. */
+  durationMinutes?: number | null;
+  joinUrl?: string | null;
+  note?: string | null;
+  intakeLines?: string[];
 };
 
 export type UnassignedBookingAlertOutcome =
-  | "sent"
-  | "skipped_owned"
+  | "sent_unowned"
+  | "sent_covered"
+  | "sent_solo"
   | "skipped_disabled"
   | "failed";
 
@@ -60,9 +83,54 @@ export type UnassignedBookingAlertDeps = {
   getPreferences?: typeof getNotificationPreferences;
   /** Injectable dispatcher (tests). */
   dispatch?: typeof dispatchUrgentNotification;
+  /** Injectable roster read (tests). */
+  getMember?: typeof getTeamMember;
 };
 
-/** The stored contact's owner, looked up phone-first (alias-aware), then email. */
+/**
+ * Does this business have anyone to assign work to?
+ *
+ * Only ACTIVE members count: a roster of people who have all left is the
+ * same situation as no roster at all.
+ *
+ * Deliberately fails toward "yes, there is a roster". This read only chooses
+ * the WORDING, so an error must not be allowed to reach the catch and
+ * suppress the alert outright. Of the two wrong answers, telling a solo
+ * owner to assign the lead is a wording miss they can ignore; telling a real
+ * team that nobody needs to show up is the no-show this alert exists to
+ * prevent.
+ */
+async function hasActiveRoster(
+  db: Awaited<ReturnType<typeof createSupabaseServiceClient>>,
+  businessId: string
+): Promise<boolean> {
+  try {
+    const { count, error } = await db
+      .from("ai_flow_team_members")
+      .select("id", { count: "exact", head: true })
+      .eq("business_id", businessId)
+      .eq("active", true);
+    if (error) throw new Error(error.message);
+    return (count ?? 0) > 0;
+  } catch (err) {
+    logger.warn("unassigned-booking alert: roster count unreadable, assuming a team", {
+      businessId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return true;
+  }
+}
+
+/**
+ * The stored contact's owner, looked up phone-first (alias-aware), then email.
+ *
+ * Ordered and limited rather than `maybeSingle()`: one number legitimately
+ * matches TWO contacts (a merge leaves the number on one row's
+ * `customer_e164` and another row's `alias_e164s`), and `maybeSingle` errors
+ * on multiple rows. That error used to reach the catch below, so the owner
+ * was told NOTHING about a real booking. The exact match wins, since an
+ * alias is the weaker claim on a number.
+ */
 async function contactOwnerEmployeeId(
   db: Awaited<ReturnType<typeof createSupabaseServiceClient>>,
   businessId: string,
@@ -72,12 +140,19 @@ async function contactOwnerEmployeeId(
   if (phone) {
     const { data, error } = await db
       .from("contacts")
-      .select("owner_employee_id")
+      .select("owner_employee_id, customer_e164")
       .eq("business_id", businessId)
       .or(`customer_e164.eq.${phone},alias_e164s.cs.{${phone}}`)
-      .maybeSingle();
+      .limit(5);
     if (error) throw new Error(`contact lookup (phone): ${error.message}`);
-    if (data) return (data as { owner_employee_id: string | null }).owner_employee_id;
+    const rows = (data ?? []) as Array<{
+      owner_employee_id: string | null;
+      customer_e164: string | null;
+    }>;
+    if (rows.length > 0) {
+      const exact = rows.find((r) => r.customer_e164 === phone);
+      return (exact ?? rows[0]).owner_employee_id;
+    }
   }
   if (email) {
     const { data, error } = await db
@@ -103,40 +178,81 @@ export async function maybeAlertUnassignedBooking(
     const db = deps.client ?? (await createSupabaseServiceClient());
     const getPreferences = deps.getPreferences ?? getNotificationPreferences;
     const dispatch = deps.dispatch ?? dispatchUrgentNotification;
-
-    const ownerEmployeeId = await contactOwnerEmployeeId(
-      db,
-      businessId,
-      input.attendeePhone,
-      input.attendeeEmail
-    );
-    if (ownerEmployeeId) return "skipped_owned";
+    const getMember = deps.getMember ?? getTeamMember;
 
     // Missing prefs row = defaults = enabled; rows predating the column
-    // read undefined = enabled. Only an explicit false disables.
+    // read undefined = enabled. Only an explicit false disables. Checked
+    // before any other read so a switched-off tenant costs one query.
     const prefs = await getPreferences(businessId, db);
     if (prefs?.unassigned_booking_alerts === false) return "skipped_disabled";
 
-    const who = input.attendeePhone
-      ? `${input.attendeeName} (${input.attendeePhone})`
-      : input.attendeeName;
-    const summary = `Unassigned booking: ${who}, ${input.startLocal}`;
-    const detailLines = [
-      `Your AI coworker booked "${input.summary}" for ${who} at ${input.startLocal}.`,
-      "No teammate owns this lead yet, so nobody is on the hook to show up.",
-      "Assign the contact to a teammate (or handle it yourself) so the appointment is covered."
-    ];
+    const rostered = await hasActiveRoster(db, businessId);
+
+    // Whoever holds the appointment outranks whoever owns the lead.
+    const holderId =
+      input.bookingAssigneeMemberId ??
+      (await contactOwnerEmployeeId(db, businessId, input.attendeePhone, input.attendeeEmail));
+
+    let assigneeName: string | null = null;
+    if (holderId) {
+      const member = await getMember(businessId, holderId);
+      assigneeName = member?.name?.trim() || null;
+    }
+
+    // A solo business is never "unowned": there is no one to assign to.
+    const state: BookingOwnerAlertState = !rostered
+      ? "solo"
+      : assigneeName
+        ? "covered"
+        : "unowned";
+
+    const copyFor = (locale: Parameters<typeof buildBookingOwnerAlert>[0]["locale"]) =>
+      buildBookingOwnerAlert({
+        state,
+        assigneeName,
+        attendeeName: input.attendeeName,
+        attendeePhone: input.attendeePhone,
+        attendeeEmail: input.attendeeEmail,
+        startLocal: input.startLocal,
+        summary: input.summary,
+        surface: input.surface,
+        durationMinutes: input.durationMinutes,
+        joinUrl: input.joinUrl,
+        note: input.note,
+        intakeLines: input.intakeLines,
+        locale
+      });
+
+    // English for the dashboard row and the SMS, which resolve no locale;
+    // the email re-renders in the owner's locale inside the dispatcher.
+    const base = copyFor(undefined);
+
     await dispatch({
       businessId,
-      kind: "unassigned_booking",
-      summary,
-      emailSubject: `New appointment needs an owner: ${who}, ${input.startLocal}`,
-      emailBody: detailLines.join("\n\n"),
-      // No top-level contactE164 on purpose: this alert only ever fires for
-      // an UNOWNED contact (the owned case returns "skipped_owned" above), so
-      // owner-redirection could never do anything here. The contactE164 in
-      // the payload below is a dedupe key, not a routing input.
-      smsBody: `New Coworker Alert: ${summary}. No teammate owns this lead yet. Assign it so the appointment is covered.`,
+      kind: state === "unowned" ? "unassigned_booking" : "assigned_booking",
+      summary: base.summaryLine,
+      emailHeading: base.heading,
+      emailSubject: base.subject,
+      emailBody: base.body,
+      ctaPath: base.ctaPath,
+      ctaLabel: base.ctaLabel,
+      emailTemplate: (locale) => {
+        const localized = copyFor(locale);
+        return {
+          subject: localized.subject,
+          heading: localized.heading,
+          body: localized.body,
+          ctaLabel: localized.ctaLabel,
+          ctaPath: localized.ctaPath
+        };
+      },
+      // No top-level contactE164 on purpose: this alert is addressed to the
+      // business owner on every branch. Redirecting a "nobody owns this"
+      // page to a contact owner would send it to the person the covered
+      // branch already names, and send the solo branch nowhere new. The
+      // contactE164 in the payload below is a dedupe key and the dashboard
+      // row's deep link, not a routing input.
+      smsBody: base.smsBody,
       payload: {
         attendee_name: input.attendeeName,
         attendee_phone: input.attendeePhone,
@@ -146,10 +262,13 @@ export async function maybeAlertUnassignedBooking(
         event_summary: input.summary,
         event_id: input.eventId,
         surface: input.surface,
+        ownership_state: state,
+        assignee_member_id: holderId ?? null,
+        assignee_name: assigneeName,
         ...(input.attendeePhone ? { contactE164: input.attendeePhone } : {})
       }
     });
-    return "sent";
+    return state === "unowned" ? "sent_unowned" : state === "covered" ? "sent_covered" : "sent_solo";
   } catch (err) {
     logger.warn("unassigned-booking alert failed (booking unaffected)", {
       businessId,
