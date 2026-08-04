@@ -114,13 +114,47 @@ describe("buildBookingOwnerAlert: who booked it", () => {
   it("a public-page booking was made by the visitor, not by the AI", () => {
     const page = buildBookingOwnerAlert(input({ surface: "booking_page" }));
     expect(page.body).not.toContain("Your AI coworker booked");
-    expect(page.body).toContain('Brett Douglas booked "Brett Douglas + New Coworker: Discovery Call" on your booking page');
+    // The page builds its titles as "<visitor> + <business>: <meeting>", so
+    // quoting the whole thing after the visitor's name says the name twice:
+    // `Brett Douglas booked "Brett Douglas + New Coworker: Discovery Call"`.
+    // Only the meeting is quoted.
+    expect(page.body).toContain('Brett Douglas booked "Discovery Call" on your booking page');
+    expect(page.body).not.toContain('"Brett Douglas +');
   });
 
-  it("an AI-surface booking still credits the AI", () => {
+  it("drops the visitor prefix even when the page has no meeting types", () => {
+    // The other title shape the page produces, with a duration instead of a
+    // meeting name and no colon to split on.
+    const page = buildBookingOwnerAlert(
+      input({ surface: "booking_page", summary: "Brett Douglas + Acme Plumbing (30 min)" })
+    );
+    expect(page.body).toContain('booked "Acme Plumbing (30 min)" on your booking page');
+    expect(page.body).not.toContain('"Brett Douglas +');
+  });
+
+  it("keeps the original title when stripping would leave nothing", () => {
+    // A degenerate title (the business name never rendered) must not reduce
+    // the sentence to `booked ""`.
+    const page = buildBookingOwnerAlert(
+      input({ surface: "booking_page", summary: "Brett Douglas + " })
+    );
+    expect(page.body).toContain('booked "Brett Douglas + " on your booking page');
+  });
+
+  it("leaves a title that does not carry the visitor's name alone", () => {
+    const page = buildBookingOwnerAlert(
+      input({ surface: "booking_page", summary: "Roof inspection" })
+    );
+    expect(page.body).toContain('booked "Roof inspection" on your booking page');
+  });
+
+  it("an AI-surface booking still credits the AI, and its title is left untouched", () => {
     for (const surface of ["voice", "sms", "webchat"] as const) {
       const ai = buildBookingOwnerAlert(input({ surface }));
-      expect(ai.body).toContain('Your AI coworker booked "Brett Douglas + New Coworker: Discovery Call"');
+      // Model-written summaries have no fixed shape, so nothing is stripped.
+      expect(ai.body).toContain(
+        'Your AI coworker booked "Brett Douglas + New Coworker: Discovery Call"'
+      );
     }
   });
 });

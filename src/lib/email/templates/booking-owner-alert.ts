@@ -84,6 +84,29 @@ export function formatAttendeePhone(e164: string): string {
   return match ? `(${match[1]}) ${match[2]}-${match[3]}` : e164;
 }
 
+/**
+ * The meeting, without the visitor's name repeated back at the reader.
+ *
+ * The booking page titles its events `"<visitor> + <business>: <meeting>"`
+ * (or `"<visitor> + <business> (<n> min)"` when the page has no meeting
+ * types), so quoting the whole title inside a sentence that already names
+ * the visitor produces `Brett Douglas booked "Brett Douglas + New Coworker:
+ * Discovery Call"`. Strip the part the sentence already said.
+ *
+ * Page titles ONLY. An AI-surface summary is whatever the model passed and
+ * has no fixed shape, so nothing is stripped from it.
+ */
+function meetingLabel(summary: string, attendeeName: string): string {
+  const prefix = `${attendeeName} + `;
+  if (!summary.startsWith(prefix)) return summary;
+  const withoutVisitor = summary.slice(prefix.length);
+  // "New Coworker: Discovery Call" -> "Discovery Call". No colon means the
+  // no-meeting-type shape, which has nothing further to drop.
+  const colon = withoutVisitor.indexOf(": ");
+  const label = colon >= 0 ? withoutVisitor.slice(colon + 2) : withoutVisitor;
+  return label.trim() || summary;
+}
+
 export function buildBookingOwnerAlert(input: BookingOwnerAlertInput): BookingOwnerAlertCopy {
   const locale = input.locale ?? defaultLocale;
   const copy = emailMessagesForLocale(locale).bookingOwnerAlert;
@@ -110,7 +133,10 @@ export function buildBookingOwnerAlert(input: BookingOwnerAlertInput): BookingOw
 
   const bookedLine =
     input.surface === "booking_page"
-      ? fmtEmail(copy.bookedByVisitor, vars)
+      ? fmtEmail(copy.bookedByVisitor, {
+          ...vars,
+          summary: meetingLabel(input.summary, input.attendeeName)
+        })
       : fmtEmail(copy.bookedByAi, vars);
 
   // Everything a person needs in order to actually show up. Each line is
