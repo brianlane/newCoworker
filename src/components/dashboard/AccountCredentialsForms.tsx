@@ -4,7 +4,8 @@ import { useState, type FormEvent } from "react";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
-import { PASSWORD_RULES, getPasswordValidationError } from "@/lib/password";
+import { PASSWORD_RULES, PASSWORD_MIN_LENGTH, getPasswordValidationError } from "@/lib/password";
+import { changeAccountPassword } from "@/lib/account/password-change";
 import { terminateOtherSessions } from "@/lib/auth/terminate-other-sessions";
 import { getSupabaseBrowserClient } from "@/lib/supabase/browser";
 
@@ -31,7 +32,7 @@ function StatusLine({ status }: { status: Status }) {
 
 /**
  * Settings → Account: the login email and password cards (split out of the
- * old AccountSettingsForms when Settings became a multi-page hub — the
+ * old AccountSettingsForms when Settings became a multi-page hub; the
  * business name/timezone cards live in BusinessBasicsForms on the Business
  * page).
  */
@@ -88,19 +89,13 @@ export function AccountCredentialsForms({ email }: { email: string }) {
     setPwStatus({ kind: "saving" });
     try {
       const supabase = getSupabaseBrowserClient();
-      // Re-authenticate with the current password before allowing a change, so a
-      // hijacked-but-logged-in session can't silently rotate the password.
-      const { error: reauthError } = await supabase.auth.signInWithPassword({
+      const result = await changeAccountPassword(supabase.auth, {
         email,
-        password: currentPassword
+        currentPassword,
+        newPassword
       });
-      if (reauthError) {
-        setPwStatus({ kind: "error", message: "Current password is incorrect." });
-        return;
-      }
-      const { error: updateError } = await supabase.auth.updateUser({ password: newPassword });
-      if (updateError) {
-        setPwStatus({ kind: "error", message: updateError.message });
+      if (!result.ok) {
+        setPwStatus({ kind: "error", message: result.message });
         return;
       }
       setCurrentPassword("");
@@ -171,7 +166,7 @@ export function AccountCredentialsForms({ email }: { email: string }) {
             value={newPassword}
             onChange={(e) => setNewPassword(e.target.value)}
             autoComplete="new-password"
-            placeholder="8+ chars, upper, lower, number, symbol"
+            placeholder={`${PASSWORD_MIN_LENGTH}+ chars, upper, lower, number, symbol`}
           />
           <Input
             label="Confirm new password"
