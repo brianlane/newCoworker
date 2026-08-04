@@ -81,6 +81,20 @@ These are mistakes already made on this account. Do not remake them.
   brand name. The Connected flow still requires "Clever Real Estate" and so
   currently matches nothing; that is the deliberate greet-only decision, not
   an oversight.
+- **A channel policy set with tool toggles reaches only the channel you set
+  it on.** `patch-amy-sms-handoff-and-emoji.ts` decided this account nurtures
+  and hands off rather than books, and enforced it by disabling the five
+  calendar tools for `agent_key = 'sms'` (Jul 29 2026). Voice was never given
+  the same rows, and a MISSING `agent_tool_settings` row means "registry
+  default", which for the calendar tools is enabled. So the phone coworker went
+  on booking for five more days, correctly following this account's own
+  voice-side rule in `memory_md` ("Use the team calendar to schedule
+  consultations/showings by default") while `soul_md` told SMS the opposite.
+  Chris Bartelot's Aug 3 call surfaced it: a listing consultation offered
+  fifteen minutes out, pushed four times, then booked. Closed by
+  `disable-amy-voice-booking.ts`. When you set a channel policy here, check
+  every channel: nothing in the product flags a tool that is off on one surface
+  and on for another.
 - **Editing a live flow by hand in the UI is how flows get broken here.** It
   has needed a revert at least once. Prefer a ledger-recorded one-shot in
   `scripts/oneshot/`, which is idempotent, dry-run by default, and reviewable.
@@ -119,6 +133,8 @@ Other networks: `seed-referralexchange-aiflow.ts`,
 
 Account-level: `seed-amy-new-lead-intake.ts`,
 `backfill-amy-lead-stages.ts`,
+`disable-amy-voice-booking.ts` (Aug 3 2026: voice stops booking, see Sharp
+edges),
 `set-amy-claim-notify-email.ts`, `set-amy-roster-availability.ts`,
 `patch-amy-sms-handoff-and-emoji.ts`,
 `patch-amy-handoff-single-alert.ts` (step 3 rewrite: notify_team OR reasoning
