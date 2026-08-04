@@ -108,6 +108,19 @@ These are mistakes already made on this account. Do not remake them.
   enabled booking there herself on Jun 14 2026. The audit compares
   customer-facing surfaces only for exactly this reason, so dashboard does not
   keep her on every run; `--include-dashboard` shows it when you want it.
+- **A browse step that "fails" may have already succeeded.** On Aug 4 2026 the
+  Clever Lead - Accept flow walked the portal's accept wizard to completion, the
+  referral WAS accepted (the stored failure page reads "You just accepted your
+  204th Clever Referral"), and the run was dead-lettered anyway: the finished
+  wizard left its Next button visible but inert, and the render service's click
+  loop was probing for VISIBLE while the click it guarded needs ACTIONABLE. 19
+  steps never ran, so a $225K seller was accepted on Clever and never reached
+  the QT email or Dave. The engine no longer fails a wizard that advanced and
+  then went inert, and step 1 now carries `continueWhenText`, which records the
+  step skipped and CARRIES ON (unlike `skipWhenText`, which ends the run and is
+  the right answer only when another agent owns the lead). That marker also
+  makes the accept step idempotent, so the flow is now safe to re-run for a lead
+  it already accepted. Applied by `patch-clever-accept-idempotent.ts`.
 - **Editing a live flow by hand in the UI is how flows get broken here.** It
   has needed a revert at least once. Prefer a ledger-recorded one-shot in
   `scripts/oneshot/`, which is idempotent, dry-run by default, and reviewable.
@@ -138,7 +151,9 @@ Clever: `seed-clever-lead-accept-aiflow.ts`,
 `patch-clever-accept-followup.ts`, `patch-clever-cue-arm-transfer.ts`,
 `patch-clever-group-reply-name-desc.ts`, `fix-clever-existing-flows.ts`,
 `clever-start-immediately.ts`,
-`patch-clever-group-reply-second-intro.ts`.
+`patch-clever-group-reply-second-intro.ts`,
+`patch-clever-accept-idempotent.ts` (Aug 4 2026: `continueWhenText` on the
+accept step, see Sharp edges).
 
 Other networks: `seed-referralexchange-aiflow.ts`,
 `realtor-retrigger-guard.ts`. HomeLight's are listed in

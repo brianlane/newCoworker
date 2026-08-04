@@ -91,6 +91,7 @@ import {
   renderErrorFields,
   renderErrorKind
 } from "../_shared/ai_flows/browse.ts";
+import { classifyPageMarkers } from "../_shared/ai_flows/page_markers.ts";
 import {
   isRecipientOptedOut,
   prepareSmsBody
@@ -3145,37 +3146,39 @@ async function browseStep(
   }
   const pageText = page.text || htmlToText(page.html);
 
-  // Terminal-state guard (mirrors browse_action.skipWhenText): when the fetched
-  // page carries the configured marker (e.g. Clever's "already been claimed"
-  // banner) there is nothing to read — the contact card isn't on the page — so
-  // end the run gracefully BEFORE spending Gemini extraction on a page that can
-  // only yield empty fields (which would fail a downstream upsert_customer).
-  // Checked against both the visible text and the raw HTML.
-  if (action.skipWhenText) {
-    const marker = action.skipWhenText.toLowerCase();
-    if (pageText.toLowerCase().includes(marker) || page.html.toLowerCase().includes(marker)) {
-      // Persist the page we already fetched so the investigate view shows WHY
-      // the run ended (best-effort; a storage failure must not fail the skip).
-      const shotPath = await storeScreenshotBestEffort(supabase, run, index, page.screenshotBase64);
-      const srcPath = await storeSourceBestEffort(supabase, run, index, page.html);
-      const diag: Record<string, unknown> = {};
-      if (shotPath) diag.screenshot_path = shotPath;
-      if (srcPath) diag.source_path = srcPath;
-      await systemLog(supabase, {
-        businessId: run.business_id,
-        source: "aiflow",
-        level: "info",
-        event: "ai_flow_browse_skipped_terminal",
-        message: `browse skipped: page already in terminal state ("${action.skipWhenText}")`,
-        payload: { run_id: run.id, flow_id: run.flow_id, step_index: index }
-      });
-      return {
-        kind: "ok",
-        skipped: true,
-        endRun: true,
-        result: { skipped: "already_done", marker: action.skipWhenText, ...diag }
-      };
-    }
+  // Page-marker guards, BEFORE the (AI-budgeted) extraction, so a page that can
+  // only yield empty fields never costs a Gemini call and never feeds a
+  // downstream upsert_customer nothing. Both markers are matched against the
+  // visible text AND the raw HTML; skipWhenText wins when both fire. See
+  // classifyPageMarkers for the two meanings and why the precedence runs that
+  // way.
+  const browseVerdict = classifyPageMarkers([pageText, page.html], action);
+  if (browseVerdict !== "none") {
+    const ending = browseVerdict === "end_run";
+    const marker = (ending ? action.skipWhenText : action.continueWhenText) ?? "";
+    // Persist the page we already fetched so the investigate view shows WHY the
+    // read was skipped (best-effort; a storage failure must not fail the skip).
+    const shotPath = await storeScreenshotBestEffort(supabase, run, index, page.screenshotBase64);
+    const srcPath = await storeSourceBestEffort(supabase, run, index, page.html);
+    const diag: Record<string, unknown> = {};
+    if (shotPath) diag.screenshot_path = shotPath;
+    if (srcPath) diag.source_path = srcPath;
+    await systemLog(supabase, {
+      businessId: run.business_id,
+      source: "aiflow",
+      level: "info",
+      event: ending ? "ai_flow_browse_skipped_terminal" : "ai_flow_browse_already_satisfied",
+      message: ending
+        ? `browse skipped: page already in terminal state ("${marker}")`
+        : `browse read skipped: nothing to read ("${marker}"), continuing the run`,
+      payload: { run_id: run.id, flow_id: run.flow_id, step_index: index }
+    });
+    return {
+      kind: "ok",
+      skipped: true,
+      ...(ending ? { endRun: true } : {}),
+      result: { skipped: ending ? "already_done" : "already_satisfied", marker, ...diag }
+    };
   }
 
   let extracted: Record<string, string> = {};
@@ -3621,35 +3624,46 @@ async function browseActionStep(
         if (beforeShot) diag.screenshot_before_path = beforeShot;
         if (failSrc) diag.source_path = failSrc;
         if (beforeSrc) diag.source_before_path = beforeSrc;
-        // Terminal-state guard: if the action failed only because the page is
-        // already in the desired end-state (e.g. a lead another agent claimed,
-        // so there's no "Accept" button), end the run gracefully — recorded as a
-        // "skipped" step on a done run — instead of dead-lettering it as a
-        // failure. Match the configured marker against the page source captured
-        // at the failure (and the before-source as a fallback).
-        if (action.skipWhenText) {
-          const marker = action.skipWhenText.toLowerCase();
-          // Match ONLY the FAILURE-page source (the stuck page captured after the
-          // action failed) — never the debug-only "before actions" page. A marker
-          // present only on the pre-action page must not skip a run that then
-          // failed for an unrelated reason without reaching the terminal state.
-          const pageText = (readPageSource(parsedBody) ?? "").toLowerCase();
-          if (pageText.includes(marker)) {
-            await systemLog(supabase, {
-              businessId: run.business_id,
-              source: "aiflow",
-              level: "info",
-              event: "ai_flow_browse_action_skipped_terminal",
-              message: `browse_action skipped: page already in terminal state ("${action.skipWhenText}")`,
-              payload: { run_id: run.id, flow_id: run.flow_id, step_index: index }
-            });
-            return {
-              kind: "ok",
-              skipped: true,
-              endRun: true,
-              result: { skipped: "already_done", marker: action.skipWhenText, ...diag }
-            };
-          }
+        // Page-marker guards. Both are matched ONLY against the FAILURE-page
+        // source (the stuck page captured after the action failed), never the
+        // debug-only "before actions" page: a marker present on the pre-action
+        // page must not excuse a step that then failed for an unrelated reason.
+        //
+        //   skipWhenText     the page is in the desired END state and there is
+        //                    nothing left to do anywhere (a lead another agent
+        //                    claimed, so there is no "Accept" button) -> end the
+        //                    run gracefully instead of dead-lettering it.
+        //   continueWhenText the actions failed but THIS STEP's goal is met, and
+        //                    later steps still matter -> carry on. The case that
+        //                    motivated it: an accept wizard that finished,
+        //                    leaving the lead accepted, while its last click
+        //                    timed out on a button that had gone inert. Ending
+        //                    there loses the filing, the owner email and the
+        //                    teammate hand-off for a lead we now own.
+        //
+        // skipWhenText wins when both fire; see classifyPageMarkers.
+        const actionVerdict = classifyPageMarkers([readPageSource(parsedBody)], action);
+        if (actionVerdict !== "none") {
+          const ending = actionVerdict === "end_run";
+          const marker = (ending ? action.skipWhenText : action.continueWhenText) ?? "";
+          await systemLog(supabase, {
+            businessId: run.business_id,
+            source: "aiflow",
+            level: "info",
+            event: ending
+              ? "ai_flow_browse_action_skipped_terminal"
+              : "ai_flow_browse_action_already_satisfied",
+            message: ending
+              ? `browse_action skipped: page already in terminal state ("${marker}")`
+              : `browse_action skipped: page already in the desired state ("${marker}"), continuing the run`,
+            payload: { run_id: run.id, flow_id: run.flow_id, step_index: index }
+          });
+          return {
+            kind: "ok",
+            skipped: true,
+            ...(ending ? { endRun: true } : {}),
+            result: { skipped: ending ? "already_done" : "already_satisfied", marker, ...diag }
+          };
         }
         return {
           kind: "fail",
