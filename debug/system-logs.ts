@@ -11,6 +11,7 @@
  *   tsx debug/system-logs.ts <businessId> --level=error     # errors only
  *   tsx debug/system-logs.ts --min-level=warn               # warn + error
  *   tsx debug/system-logs.ts --source=aiflow --grep=telnyx  # filter source + text
+ *   tsx debug/system-logs.ts --grep=ai_flow_run_failed      # event names work
  *   tsx debug/system-logs.ts --since=2h --limit=200         # time window (m/h/d)
  *   tsx debug/system-logs.ts <businessId> --follow          # poll for new rows (5s)
  *   tsx debug/system-logs.ts --json                         # raw JSON lines
@@ -19,6 +20,10 @@
  */
 import { createClient } from "@supabase/supabase-js";
 import { loadEnv } from "./_shared.ts";
+// Shared with the admin SystemLogViewer so the CLI and the UI cannot drift into
+// searching differently. See buildLogSearchFilter for why the escaping is what
+// it is.
+import { buildLogSearchFilter } from "../src/lib/db/system-logs.ts";
 
 loadEnv();
 
@@ -93,8 +98,8 @@ async function fetchRows(afterId: number | null): Promise<LogRow[]> {
   }
   if (source) q = q.eq("source", source);
   if (grep) {
-    const safe = grep.replace(/[%_,()]/g, "");
-    if (safe) q = q.or(`event.ilike.%${safe}%,message.ilike.%${safe}%`);
+    const filter = buildLogSearchFilter(grep);
+    if (filter) q = q.or(filter);
   }
   if (sinceIso) q = q.gte("created_at", sinceIso);
   if (afterId !== null) {
