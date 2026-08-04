@@ -96,12 +96,16 @@ These are mistakes already made on this account. Do not remake them.
   every channel: `tsx debug/audit-agent-tool-channels.ts` lists every tool that
   is off on one surface and still on for another, fleet-wide.
 
-  **That audit says this account is still not consistent.** The calendar tools
-  are off for `voice` and `sms` but remain default-on for `webchat` and
-  `email`, both customer-facing, so those two coworkers can still book. The
-  `dashboard` row is deliberately on (that surface is Amy asking her own
-  assistant, not the AI acting at a customer). Closing webchat/email is a
-  pending decision, not an oversight.
+  That audit's first run showed the policy was still only three quarters
+  applied: `webchat` and `email` were left default-on, so both could still
+  book. Closed by `disable-amy-customer-booking.ts`, which drives off the tool
+  registry rather than a hardcoded list, because the channels do not carry the
+  same tools (webchat has 2 of the 5, voice 3, sms and email 5). The audit is
+  silent for this tenant now.
+
+  `dashboard` is deliberately still ON, and should stay: that surface is Amy
+  asking her own assistant, not the AI acting at a customer unsupervised. She
+  enabled booking there herself on Jun 14 2026.
 - **Editing a live flow by hand in the UI is how flows get broken here.** It
   has needed a revert at least once. Prefer a ledger-recorded one-shot in
   `scripts/oneshot/`, which is idempotent, dry-run by default, and reviewable.
@@ -141,7 +145,8 @@ Other networks: `seed-referralexchange-aiflow.ts`,
 Account-level: `seed-amy-new-lead-intake.ts`,
 `backfill-amy-lead-stages.ts`,
 `disable-amy-voice-booking.ts` (Aug 3 2026: voice stops booking, see Sharp
-edges),
+edges), `disable-amy-customer-booking.ts` (Aug 3 2026: finishes the same
+policy on webchat + email; dashboard stays on by design),
 `set-amy-claim-notify-email.ts`, `set-amy-roster-availability.ts`,
 `patch-amy-sms-handoff-and-emoji.ts`,
 `patch-amy-handoff-single-alert.ts` (step 3 rewrite: notify_team OR reasoning
