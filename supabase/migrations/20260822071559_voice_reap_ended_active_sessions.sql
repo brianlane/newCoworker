@@ -73,7 +73,7 @@ begin
 end;
 $$;
 
-comment on function voice_reap_ended_active_sessions is
+comment on function voice_reap_ended_active_sessions(interval, interval) is
   'Deletes voice_active_sessions rows whose call ended and settled. Runs on the '
   '5-minute maintenance sweep; returns the deleted-row count.';
 
@@ -182,18 +182,19 @@ begin
 end;
 $$;
 
-comment on function voice_sweep_zombie_active_sessions is
+-- Drop the superseded one-arg signature from 20260420100000 FIRST. Until it is
+-- gone the name has two overloads, and any statement that names the function
+-- without an argument list is ambiguous ("function name is not unique",
+-- SQLSTATE 42725) — including the COMMENT below, and including the one-arg
+-- call in voice_run_maintenance_sweeps further down this file.
+drop function if exists voice_sweep_zombie_active_sessions(interval);
+
+comment on function voice_sweep_zombie_active_sessions(interval, interval) is
   'Settles and removes unended voice_active_sessions rows gone silent past '
   'p_stale. Per-row failures are warned and skipped; rows silent past p_hard '
   'are deleted regardless so a leak cannot wedge redeploy safety checks.';
 
 grant execute on function voice_sweep_zombie_active_sessions(interval, interval) to service_role;
-
--- The one-arg signature still exists from 20260420100000 and is what
--- voice_run_maintenance_sweeps called before this migration. Drop it so there
--- is exactly one definition to reason about and no chance of a caller pinning
--- the un-hardened version.
-drop function if exists voice_sweep_zombie_active_sessions(interval);
 
 -- ---------------------------------------------------------------------------
 -- 3. Wire the reaper into the 5-minute maintenance sweep.

@@ -329,6 +329,35 @@ describe("voice_active_sessions: ended-row reaper and un-wedgeable zombie sweep"
     );
   });
 
+  it("drops the old overload BEFORE anything names the function without arguments", () => {
+    // While both overloads exist, every statement that names
+    // voice_sweep_zombie_active_sessions with no argument list fails with
+    // "function name is not unique" (SQLSTATE 42725). That is not theoretical:
+    // it broke the Worker Integration job on this PR's first push, on the
+    // COMMENT statement. So the DROP must come first, and the COMMENT must
+    // carry an explicit signature anyway.
+    const dropAt = reapEndedSessionsMigration.indexOf(
+      "drop function if exists voice_sweep_zombie_active_sessions(interval)"
+    );
+    const commentAt = reapEndedSessionsMigration.indexOf(
+      "comment on function voice_sweep_zombie_active_sessions"
+    );
+    const oneArgCallAt = reapEndedSessionsMigration.indexOf(
+      "voice_sweep_zombie_active_sessions(v_sess)"
+    );
+    expect(dropAt).toBeGreaterThan(0);
+    expect(commentAt).toBeGreaterThan(dropAt);
+    expect(oneArgCallAt).toBeGreaterThan(dropAt);
+
+    // Every COMMENT in this file carries its signature, so a future overload
+    // cannot reintroduce the same ambiguity.
+    for (const match of reapEndedSessionsMigration.matchAll(/comment on function ([^\s]+)/g)) {
+      expect(match[1], `comment on function ${match[1]} needs an explicit argument list`).toContain(
+        "("
+      );
+    }
+  });
+
   it("reaper runs on the 5-minute maintenance sweep and reports its count", () => {
     expect(reapEndedSessionsMigration).toMatch(
       /v_reaped := voice_reap_ended_active_sessions\(\)/
