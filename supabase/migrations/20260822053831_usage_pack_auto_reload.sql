@@ -130,6 +130,11 @@ create table if not exists public.usage_pack_auto_reload_events (
   category text not null check (category in ('voice', 'sms', 'chat')),
   pack_id text not null,
   amount_cents integer not null check (amount_cents >= 0),
+  -- Charge currency, from the Stripe Price. Stored (not re-derived) because a
+  -- resumed attempt must replay the ORIGINAL parameters: the Stripe
+  -- idempotency key is derived from this row, and Stripe rejects a reused key
+  -- whose parameters changed.
+  currency text not null default 'usd',
   -- Grant size actually applied, in canonical units. Null until settled.
   units_granted bigint,
   balance_units_at_trigger bigint not null,
@@ -301,7 +306,8 @@ begin
     'ok', true,
     'event_id', e.id,
     'pack_id', e.pack_id,
-    'amount_cents', e.amount_cents
+    'amount_cents', e.amount_cents,
+    'currency', e.currency
   );
 end;
 $$;
@@ -322,7 +328,8 @@ create or replace function public.usage_pack_auto_reload_claim(
   p_amount_cents integer,
   p_balance_units bigint,
   p_threshold_units bigint,
-  p_platform_max_cents integer default null
+  p_platform_max_cents integer default null,
+  p_currency text default 'usd'
 )
 returns jsonb
 language plpgsql
@@ -382,11 +389,11 @@ begin
     floor(extract(epoch from v_now) / greatest(1, r.cooldown_minutes * 60))::bigint::text;
 
   insert into public.usage_pack_auto_reload_events (
-    business_id, category, pack_id, amount_cents,
+    business_id, category, pack_id, amount_cents, currency,
     balance_units_at_trigger, threshold_units, status, attempt_key
   )
   values (
-    p_business_id, p_category, p_pack_id, p_amount_cents,
+    p_business_id, p_category, p_pack_id, p_amount_cents, coalesce(p_currency, 'usd'),
     p_balance_units, p_threshold_units, 'pending', v_key
   )
   on conflict (attempt_key) do nothing
@@ -413,10 +420,10 @@ end;
 $$;
 
 revoke execute on function public.usage_pack_auto_reload_claim(
-  uuid, text, text, integer, bigint, bigint, integer
+  uuid, text, text, integer, bigint, bigint, integer, text
 ) from public;
 grant execute on function public.usage_pack_auto_reload_claim(
-  uuid, text, text, integer, bigint, bigint, integer
+  uuid, text, text, integer, bigint, bigint, integer, text
 ) to service_role;
 
 -- ---------------------------------------------------------------------------

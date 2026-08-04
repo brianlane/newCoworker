@@ -409,11 +409,12 @@ describe("claimAutoReload", () => {
     amountCents: 1_000,
     balanceUnits: 40,
     thresholdUnits: 100,
-    platformMaxCents: 50_000
+    platformMaxCents: 50_000,
+    currency: "usd"
   };
 
-  it("returns the claimed event id", async () => {
-    const { client } = fakeDb([
+  it("returns the claimed event id and stores the charge currency", async () => {
+    const { client, calls } = fakeDb([
       { data: { ok: true, event_id: 7, attempt_key: "biz-1:sms:9" }, error: null }
     ]);
     expect(await claimAutoReload(params, client)).toEqual({
@@ -421,6 +422,9 @@ describe("claimAutoReload", () => {
       eventId: 7,
       attemptKey: "biz-1:sms:9"
     });
+    // Stored on the event so a resumed retry replays identical parameters.
+    const args = calls.find((c) => c.method === "rpc")!.args[1] as Record<string, unknown>;
+    expect(args.p_currency).toBe("usd");
   });
 
   it("surfaces the refusal reason", async () => {
@@ -446,15 +450,36 @@ describe("claimAutoReload", () => {
 
 describe("resumeStaleAutoReload", () => {
   it("returns the resumed attempt so the same idempotency key is reused", async () => {
+    // Pack and currency come back from the EVENT, not the rule: a resumed
+    // charge has to replay the original parameters, or Stripe rejects the
+    // reused idempotency key and the grant could disagree with the charge.
     const { client } = fakeDb([
-      { data: { ok: true, event_id: 4, pack_id: "min_30", amount_cents: 1_290 }, error: null }
+      {
+        data: {
+          ok: true,
+          event_id: 4,
+          pack_id: "min_30",
+          amount_cents: 1_290,
+          currency: "cad"
+        },
+        error: null
+      }
     ]);
     expect(await resumeStaleAutoReload("biz-1", "voice", client)).toEqual({
       ok: true,
       eventId: 4,
       packId: "min_30",
-      amountCents: 1_290
+      amountCents: 1_290,
+      currency: "cad"
     });
+  });
+
+  it("falls back to USD when an older pending row has no currency", async () => {
+    const { client } = fakeDb([
+      { data: { ok: true, event_id: 5, pack_id: "min_30", amount_cents: 1_290 }, error: null }
+    ]);
+    const res = await resumeStaleAutoReload("biz-1", "voice", client);
+    expect(res).toMatchObject({ ok: true, currency: "usd" });
   });
 
   it("reports no stale attempt, and an abandoned one", async () => {

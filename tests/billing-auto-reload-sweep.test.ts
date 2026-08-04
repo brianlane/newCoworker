@@ -151,6 +151,11 @@ describe("the happy path", () => {
       expect.objectContaining({ status: "succeeded", unitsGranted: 500 }),
       expect.anything()
     );
+    // The claim records the currency the charge will actually use.
+    expect(claim).toHaveBeenCalledWith(
+      expect.objectContaining({ currency: "usd" }),
+      expect.anything()
+    );
   });
 
   it("uses the default charge path when none is injected", async () => {
@@ -295,7 +300,13 @@ describe("resuming a stale attempt", () => {
   it("reuses the same event id, so the Stripe idempotency key is unchanged", async () => {
     // A new event row would mean a new key, and Stripe would create a second
     // PaymentIntent for a charge that may already have succeeded.
-    resumeStale.mockResolvedValue({ ok: true, eventId: 99, packId: "texts_500", amountCents: 1000 });
+    resumeStale.mockResolvedValue({
+      ok: true,
+      eventId: 99,
+      packId: "texts_500",
+      amountCents: 1000,
+      currency: "usd"
+    });
     listCandidates.mockResolvedValue([candidate()]);
     const res = await sweepUsagePackAutoReloads(deps());
 
@@ -304,6 +315,67 @@ describe("resuming a stale attempt", () => {
       expect.objectContaining({ eventId: 99 })
     );
     expect(res.charged).toBe(1);
+  });
+
+  it("replays the EVENT's pack, not whatever the rule says now", async () => {
+    // If the tenant switched packs between the claim and the retry, using the
+    // rule's current pack would charge the stored amount while granting a
+    // different size, and would change the request behind an already-used
+    // Stripe idempotency key.
+    resumeStale.mockResolvedValue({
+      ok: true,
+      eventId: 99,
+      packId: "texts_500",
+      amountCents: 1000,
+      currency: "usd"
+    });
+    listCandidates.mockResolvedValue([candidate({ packId: "texts_2000" })]);
+
+    await sweepUsagePackAutoReloads(deps());
+
+    expect(createOffSessionPackCharge).toHaveBeenCalledWith(
+      expect.objectContaining({ packId: "texts_500", unitValue: 500, amountCents: 1000 })
+    );
+    expect(rpc).toHaveBeenCalledWith(
+      "apply_sms_bonus_grant_from_checkout",
+      expect.objectContaining({ p_texts_purchased: 500 })
+    );
+  });
+
+  it("replays the EVENT's currency rather than assuming USD", async () => {
+    resumeStale.mockResolvedValue({
+      ok: true,
+      eventId: 99,
+      packId: "texts_500",
+      amountCents: 1000,
+      currency: "cad"
+    });
+    listCandidates.mockResolvedValue([candidate()]);
+
+    await sweepUsagePackAutoReloads(deps());
+
+    expect(createOffSessionPackCharge).toHaveBeenCalledWith(
+      expect.objectContaining({ currency: "cad" })
+    );
+  });
+
+  it("skips when the resumed event points at a pack that no longer exists", async () => {
+    delete process.env.STRIPE_SMS_BONUS_500_PRICE_ID;
+    resumeStale.mockResolvedValue({
+      ok: true,
+      eventId: 99,
+      packId: "texts_500",
+      amountCents: 1000,
+      currency: "usd"
+    });
+    listCandidates.mockResolvedValue([candidate({ packId: "texts_2000" })]);
+
+    const res = await sweepUsagePackAutoReloads(deps());
+    expect(res.skipped).toBe(1);
+    expect(settle).toHaveBeenCalledWith(
+      expect.objectContaining({ eventId: 99, status: "skipped_pack_unavailable" }),
+      expect.anything()
+    );
   });
 });
 

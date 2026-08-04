@@ -336,7 +336,14 @@ async function processCandidate(ctx: {
   // second PaymentIntent for a charge that may already have succeeded.
   const resumed = await resumeStaleAutoReload(candidate.businessId, candidate.category, db);
 
-  const pack = resolveAutoReloadPack(candidate.category, candidate.packId);
+  // A resumed attempt must replay the ORIGINAL parameters, so the pack comes
+  // from the pending event rather than the rule. If the tenant switched packs
+  // between the claim and the retry, using the rule's current pack would
+  // charge the stored amount while granting a different size and sending
+  // mismatched Stripe metadata. It would also change the request behind an
+  // already-used idempotency key.
+  const effectivePackId = resumed.ok ? resumed.packId : candidate.packId;
+  const pack = resolveAutoReloadPack(candidate.category, effectivePackId);
   if (!pack) {
     // The pack's Stripe price env is unset, so the pack does not exist.
     if (resumed.ok) {
@@ -349,7 +356,7 @@ async function processCandidate(ctx: {
     logger.warn("auto_reload: pack unavailable", {
       businessId: candidate.businessId,
       category: candidate.category,
-      packId: candidate.packId
+      packId: effectivePackId
     });
     return;
   }
@@ -379,6 +386,10 @@ async function processCandidate(ctx: {
   if (resumed.ok) {
     eventId = resumed.eventId;
     amountCents = resumed.amountCents;
+    // Stored on the event for the same reason as the pack: Stripe rejects a
+    // reused idempotency key whose parameters changed, and a non-USD pack
+    // must not be retried as USD.
+    currency = resumed.currency;
   } else {
     const balance = await readRemainingUnits(candidate, db);
     if (balance === null) {
@@ -429,7 +440,8 @@ async function processCandidate(ctx: {
         amountCents,
         balanceUnits: balance,
         thresholdUnits: candidate.thresholdUnits,
-        platformMaxCents: autoReloadPlatformMaxMonthlyCents()
+        platformMaxCents: autoReloadPlatformMaxMonthlyCents(),
+        currency
       },
       db
     );

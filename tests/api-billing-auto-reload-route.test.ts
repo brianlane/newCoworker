@@ -9,6 +9,7 @@ vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }
 vi.mock("@/lib/db/subscriptions", () => ({ getSubscription: vi.fn() }));
 vi.mock("@/lib/db/auto-reload", () => ({
   getAutoReloadCard: vi.fn(),
+  listAutoReloadRules: vi.fn(),
   upsertAutoReloadRule: vi.fn()
 }));
 vi.mock("@/lib/stripe/client", () => ({ createAutoReloadSetupSession: vi.fn() }));
@@ -18,7 +19,11 @@ import { isViewAsActive } from "@/lib/admin/view-as";
 import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { getSubscription } from "@/lib/db/subscriptions";
-import { getAutoReloadCard, upsertAutoReloadRule } from "@/lib/db/auto-reload";
+import {
+  getAutoReloadCard,
+  listAutoReloadRules,
+  upsertAutoReloadRule
+} from "@/lib/db/auto-reload";
 import { createAutoReloadSetupSession } from "@/lib/stripe/client";
 import { POST } from "@/app/api/billing/auto-reload/route";
 
@@ -77,6 +82,7 @@ beforeEach(() => {
     consentAt: "2026-08-01T00:00:00Z",
     revokedAt: null
   });
+  vi.mocked(listAutoReloadRules).mockResolvedValue([]);
   vi.mocked(upsertAutoReloadRule).mockResolvedValue({ category: "sms" } as never);
   vi.mocked(createAutoReloadSetupSession).mockResolvedValue({
     id: "cs_setup",
@@ -253,5 +259,39 @@ describe("persistence", () => {
       expect.objectContaining({ monthlyLimitCents: null }),
       expect.anything()
     );
+  });
+});
+
+describe("re-arming after a system disable", () => {
+  it("refuses to re-arm a rule blocked by a dispute", async () => {
+    // A chargeback is the customer saying they did not expect the charge, so
+    // turning auto-charging back on is a support decision, not a toggle.
+    vi.mocked(listAutoReloadRules).mockResolvedValue([
+      { category: "sms", disabledReason: "dispute" }
+    ] as never);
+    const res = await POST(post(VALID));
+    expect(res.status).toBe(409);
+    expect(upsertAutoReloadRule).not.toHaveBeenCalled();
+  });
+
+  it("allows re-arming after declines, which the save clears", async () => {
+    vi.mocked(listAutoReloadRules).mockResolvedValue([
+      { category: "sms", disabledReason: "payment_failures" }
+    ] as never);
+    expect((await POST(post(VALID))).status).toBe(200);
+  });
+
+  it("ignores a dispute on a different family", async () => {
+    vi.mocked(listAutoReloadRules).mockResolvedValue([
+      { category: "voice", disabledReason: "dispute" }
+    ] as never);
+    expect((await POST(post(VALID))).status).toBe(200);
+  });
+
+  it("does not check the dispute state when turning auto-reload off", async () => {
+    vi.mocked(listAutoReloadRules).mockResolvedValue([
+      { category: "sms", disabledReason: "dispute" }
+    ] as never);
+    expect((await POST(post({ ...VALID, enabled: false }))).status).toBe(200);
   });
 });

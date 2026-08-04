@@ -24,7 +24,11 @@ import {
   AUTO_RELOAD_MAX_MONTHLY_LIMIT_CENTS,
   validateAutoReload
 } from "@/lib/billing/auto-reload";
-import { getAutoReloadCard, upsertAutoReloadRule } from "@/lib/db/auto-reload";
+import {
+  getAutoReloadCard,
+  listAutoReloadRules,
+  upsertAutoReloadRule
+} from "@/lib/db/auto-reload";
 import { logger } from "@/lib/logger";
 
 const bodySchema = z.object({
@@ -90,6 +94,22 @@ export async function POST(request: Request) {
     // subscription; only arming it needs a live membership.
     if (payload.enabled && (!sub || sub.status !== "active" || !sub.stripe_subscription_id)) {
       return errorResponse("CONFLICT", "No active subscription to configure", 409);
+    }
+
+    // A chargeback is the customer saying they did not expect the charge.
+    // Everything else clears on save, but re-arming after a dispute is a
+    // support decision, and the billing page copy says so.
+    if (payload.enabled) {
+      const existing = (await listAutoReloadRules(businessId, db)).find(
+        (r) => r.category === payload.category
+      );
+      if (existing?.disabledReason === "dispute") {
+        return errorResponse(
+          "CONFLICT",
+          "Auto-reload is blocked after a disputed charge; contact support",
+          409
+        );
+      }
     }
 
     const rule = await upsertAutoReloadRule(

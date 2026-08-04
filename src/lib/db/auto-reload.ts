@@ -141,14 +141,19 @@ export async function upsertAutoReloadRule(
         threshold_units: input.thresholdUnits,
         monthly_limit_cents: input.monthlyLimitCents,
         cooldown_minutes: input.cooldownMinutes,
-        // Saving settings clears a recoverable pause: the tenant has just
-        // looked at the card and made a decision, which is exactly the
-        // acknowledgement a 3DS or budget pause was waiting for. A rule
-        // disabled for repeated declines or a dispute is NOT re-armed here,
-        // because `enabled` comes from the request and the route refuses to
-        // enable without a live authorized card.
+        // Saving clears a recoverable pause: the tenant has just looked at
+        // the card and made a decision, which is the acknowledgement a 3DS or
+        // budget pause was waiting for.
         paused_at: null,
         paused_reason: null,
+        // An explicit enable also clears the system-disable state. Leaving
+        // `disabled_reason` set would make the billing page say "turned off
+        // after three declines" next to a toggle that is on, and leaving the
+        // counter at its ceiling would re-disable on the very next decline
+        // instead of giving the new card three chances. A dispute is the one
+        // reason that cannot be cleared this way; the settings route refuses
+        // to enable in that state.
+        ...(input.enabled ? { disabled_reason: null, consecutive_failures: 0 } : {}),
         updated_at: new Date().toISOString()
       },
       { onConflict: "business_id,category" }
@@ -369,6 +374,7 @@ export async function claimAutoReload(
     balanceUnits: number;
     thresholdUnits: number;
     platformMaxCents: number | null;
+    currency: string;
   },
   db?: SupabaseClient
 ): Promise<AutoReloadClaimResult> {
@@ -380,7 +386,8 @@ export async function claimAutoReload(
     p_amount_cents: params.amountCents,
     p_balance_units: params.balanceUnits,
     p_threshold_units: params.thresholdUnits,
-    p_platform_max_cents: params.platformMaxCents
+    p_platform_max_cents: params.platformMaxCents,
+    p_currency: params.currency
   });
   if (error) throw new Error(`claimAutoReload: ${error.message}`);
   const payload = (data ?? {}) as { ok?: boolean; event_id?: number; attempt_key?: string; reason?: string };
@@ -391,7 +398,7 @@ export async function claimAutoReload(
 }
 
 export type AutoReloadResumeResult =
-  | { ok: true; eventId: number; packId: string; amountCents: number }
+  | { ok: true; eventId: number; packId: string; amountCents: number; currency: string }
   | { ok: false; reason: string };
 
 export async function resumeStaleAutoReload(
@@ -410,6 +417,7 @@ export async function resumeStaleAutoReload(
     event_id?: number;
     pack_id?: string;
     amount_cents?: number;
+    currency?: string;
     reason?: string;
   };
   if (payload.ok === true) {
@@ -417,7 +425,8 @@ export async function resumeStaleAutoReload(
       ok: true,
       eventId: Number(payload.event_id),
       packId: String(payload.pack_id),
-      amountCents: Number(payload.amount_cents)
+      amountCents: Number(payload.amount_cents),
+      currency: payload.currency ?? "usd"
     };
   }
   return { ok: false, reason: payload.reason ?? "unknown" };
