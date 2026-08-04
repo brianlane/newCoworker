@@ -37,7 +37,8 @@ import { getCalendarMonthUsageTotals } from "@/lib/db/usage";
 import { effectiveSmsMonthlyCap } from "@/lib/plans/limits";
 import { createOffSessionPackCharge, getStripe } from "@/lib/stripe/client";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
-import { sendOwnerEmail } from "@/lib/email/client";
+import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
+import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import {
   buildAutoReloadAlertEmail,
   type AutoReloadAlertKind
@@ -236,24 +237,62 @@ async function applyGrant(params: {
  * declines are deliberately silent: those are visible in the billing ledger
  * and do not warrant an interruption.
  */
+/** Task type per alert, so the dashboard can label and link each one. */
+const ALERT_TASK_TYPE: Record<AutoReloadAlertKind, string> = {
+  disabled: "auto_reload_disabled",
+  disabled_no_card: "auto_reload_no_card",
+  paused_authentication: "auto_reload_action_required",
+  monthly_limit: "auto_reload_limit_reached"
+};
+
 async function defaultNotify(params: {
   candidate: AutoReloadCandidate;
   kind: AutoReloadAlertKind;
   attempts?: number;
 }): Promise<void> {
-  const apiKey = process.env.RESEND_API_KEY;
   const to = params.candidate.ownerEmail;
-  if (!apiKey || !to) return;
+  if (!to) return;
 
+  // The template has always accepted a locale; nothing was passing one, so a
+  // Spanish-speaking owner got English.
+  const locale = await resolveOwnerUiLocaleForEmail(to);
   const email = buildAutoReloadAlertEmail({
     kind: params.kind,
     category: params.candidate.category,
     businessName: params.candidate.businessName ?? "your account",
     recipientEmail: to,
     siteUrl: process.env.NEXT_PUBLIC_APP_URL ?? "",
-    attempts: params.attempts
+    attempts: params.attempts,
+    locale
   });
-  await sendOwnerEmail(apiKey, to, email.subject, { text: email.text, html: email.html });
+
+  // Goes through the shared dispatcher rather than sending mail directly, so
+  // the same alert also lands in the dashboard notification list and honours
+  // the owner's channel preferences. The rich template is passed through as
+  // the email override, so switching to the dispatcher costs nothing in copy.
+  await dispatchUrgentNotification({
+    businessId: params.candidate.businessId,
+    summary: email.subject,
+    kind: ALERT_TASK_TYPE[params.kind],
+    emailSubject: email.subject,
+    emailBody: email.text,
+    // `taskType`, camelCase: that is the key `notificationLink` reads. Writing
+    // the snake_case column name here looked right and silently sent every
+    // one of these alerts to Activity instead of Billing.
+    payload: {
+      taskType: ALERT_TASK_TYPE[params.kind],
+      category: params.candidate.category,
+      autoReloadKind: params.kind
+    },
+    // Every auto-reload alert is fixed on the billing page, so the email
+    // button has to go there. Without this the dispatcher renders its generic
+    // "open dashboard" CTA and the tenant has to find Billing themselves.
+    // Every auto-reload alert is fixed on the billing page, so all three
+    // destinations have to point there: the email button, its copy-paste
+    // fallback link, and the SMS link. `ctaPath` drives all of them at once.
+    ctaPath: "/dashboard/billing",
+    ctaLabel: email.ctaLabel
+  });
 }
 
 function chunk<T>(items: T[], size: number): T[][] {

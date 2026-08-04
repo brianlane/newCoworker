@@ -377,13 +377,15 @@ describe("classifyChargeFailure", () => {
 });
 
 describe("platform kill switch", () => {
-  it("is off unless explicitly enabled", () => {
+  it("is ON unless explicitly switched off", () => {
+    // It shipped fail-closed so the feature could land dormant while the
+    // money path was verified. Now unset means enabled, and only "0" stops it.
     delete process.env.USAGE_PACK_AUTO_RELOAD_ENABLED;
-    expect(autoReloadPlatformEnabled()).toBe(false);
-    process.env.USAGE_PACK_AUTO_RELOAD_ENABLED = "0";
-    expect(autoReloadPlatformEnabled()).toBe(false);
+    expect(autoReloadPlatformEnabled()).toBe(true);
     process.env.USAGE_PACK_AUTO_RELOAD_ENABLED = "1";
     expect(autoReloadPlatformEnabled()).toBe(true);
+    process.env.USAGE_PACK_AUTO_RELOAD_ENABLED = "0";
+    expect(autoReloadPlatformEnabled()).toBe(false);
   });
 });
 

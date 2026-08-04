@@ -103,6 +103,13 @@ export function AutoReloadSettings({
         )}
       </div>
 
+      {!card?.last4 && (
+        <div className="mt-4 rounded-md border border-parchment/20 p-3 space-y-1">
+          <h3 className="text-sm font-semibold text-parchment">{t("consentHeading")}</h3>
+          <p className="text-xs text-parchment/60">{t("consentBody")}</p>
+        </div>
+      )}
+
       <div className="mt-6 space-y-6">
         {categories.map((view) => (
           <CategorySection key={view.category} view={view} />

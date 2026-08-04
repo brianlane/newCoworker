@@ -144,7 +144,14 @@ export function notificationLink(n: NotificationLike): NotificationLink {
   if (kind === "byon_port" || kind === "byon_activation" || kind === "calendar_connection_broken") {
     return { href: "/dashboard/integrations", label: "Open Integrations" };
   }
-  if (taskType === "sms_cap_reached" || taskType === "chat_spend_cap_reached") {
+  if (
+    taskType === "sms_cap_reached" ||
+    taskType === "chat_spend_cap_reached" ||
+    // Auto-reload stopped for some reason the tenant has to act on. Every one
+    // of these is fixed from the billing page (new card, raise the limit,
+    // turn it back on), so they all land there.
+    taskType.startsWith("auto_reload_")
+  ) {
     return { href: "/dashboard/billing", label: "Open Billing" };
   }
 

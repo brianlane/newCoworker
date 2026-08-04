@@ -325,9 +325,20 @@ export function classifyChargeFailure(err: unknown): {
 /** Consecutive hard failures before a rule is switched off entirely. */
 export const AUTO_RELOAD_MAX_CONSECUTIVE_FAILURES = 3;
 
-/** Platform kill switch. Unset means off, matching the catalogs' posture. */
+/**
+ * Platform kill switch, ON by default.
+ *
+ * It shipped fail-closed so the feature could land dormant while the money
+ * path was verified. That is done, so an unset variable now means enabled:
+ * a flag nobody sets is a feature nobody has.
+ *
+ * Only the literal string "0" turns it off. That is the emergency brake:
+ * auto-reload charges cards with nobody watching, so being able to stop the
+ * whole fleet with one environment variable, without waiting for a deploy, is
+ * worth keeping.
+ */
 export function autoReloadPlatformEnabled(): boolean {
-  return process.env.USAGE_PACK_AUTO_RELOAD_ENABLED === "1";
+  return process.env.USAGE_PACK_AUTO_RELOAD_ENABLED !== "0";
 }
 
 /**

@@ -563,6 +563,21 @@ export async function createAutoReloadSetupSession(params: {
   userId: string;
   successUrl: string;
   cancelUrl: string;
+  /**
+   * One line shown on Stripe's own page saying what this card will be used
+   * for. Stripe's default setup-mode text says only that the card is being
+   * saved, which is not what the tenant is actually agreeing to.
+   *
+   * Goes in `custom_text.submit`, which Stripe documents as displayed
+   * ALONGSIDE the confirmation button, so it is read before authorizing.
+   * `after_submit` renders below the button and is the weaker slot for
+   * something the tenant is supposed to agree to first.
+   *
+   * Belt and braces only: the same consent renders in our own UI before the
+   * redirect, so a tenant has read it even if Stripe changes how this field
+   * displays.
+   */
+  consentNote?: string;
 }): Promise<{ id: string; url: string }> {
   const stripe = getStripe();
   const metadata: Record<string, string> = {
@@ -577,7 +592,11 @@ export async function createAutoReloadSetupSession(params: {
     success_url: params.successUrl,
     cancel_url: params.cancelUrl,
     metadata,
-    setup_intent_data: { metadata }
+    setup_intent_data: { metadata },
+    // Stripe caps this at 1200 characters and rejects longer ones.
+    custom_text: params.consentNote
+      ? { submit: { message: params.consentNote.slice(0, 1200) } }
+      : {}
   });
   if (!session.url) throw new Error("Stripe setup session URL is null");
   return { id: session.id, url: session.url };
