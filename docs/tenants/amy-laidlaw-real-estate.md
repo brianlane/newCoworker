@@ -93,8 +93,15 @@ These are mistakes already made on this account. Do not remake them.
   Chris Bartelot's Aug 3 call surfaced it: a listing consultation offered
   fifteen minutes out, pushed four times, then booked. Closed by
   `disable-amy-voice-booking.ts`. When you set a channel policy here, check
-  every channel: nothing in the product flags a tool that is off on one surface
-  and on for another.
+  every channel: `tsx debug/audit-agent-tool-channels.ts` lists every tool that
+  is off on one surface and still on for another, fleet-wide.
+
+  **That audit says this account is still not consistent.** The calendar tools
+  are off for `voice` and `sms` but remain default-on for `webchat` and
+  `email`, both customer-facing, so those two coworkers can still book. The
+  `dashboard` row is deliberately on (that surface is Amy asking her own
+  assistant, not the AI acting at a customer). Closing webchat/email is a
+  pending decision, not an oversight.
 - **Editing a live flow by hand in the UI is how flows get broken here.** It
   has needed a revert at least once. Prefer a ledger-recorded one-shot in
   `scripts/oneshot/`, which is idempotent, dry-run by default, and reviewable.
