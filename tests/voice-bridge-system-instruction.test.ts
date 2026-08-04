@@ -92,8 +92,12 @@ describe("customer persona", () => {
   it("tells the model a refused name write is not a success", () => {
     const text = build({ hasVoiceTools: true });
     expect(text).toContain("only fills a BLANK name");
-    expect(text).toContain("`updated: false`");
-    expect(text).toContain("never tell the caller their name was updated");
+    // Keyed on the result's message rather than on `ok`, because
+    // `updated: false` covers both a refusal and a name that is already
+    // correctly on file.
+    expect(text).toContain('Do not read `ok: true` as "the name was changed"');
+    expect(text).toContain("read the result's `message`");
+    expect(text).toContain("never claim you updated or corrected a name");
   });
 
   it("tells the capture tool to omit an unknown name rather than invent a placeholder", () => {

@@ -350,7 +350,9 @@ describe("POST /api/voice/tools/customer-set-display-name", () => {
         updated: false,
         reason: "name_already_set_matches",
         savedName: "Joe",
-        message: expect.stringContaining("NOT UPDATED")
+        // Not the refusal text: the saved name already IS the requested one,
+        // which on a first-time caller means the RPC just stored it.
+        message: expect.stringContaining("No change needed")
       }
     });
     expect(updateCustomerOwnerFields).not.toHaveBeenCalled();

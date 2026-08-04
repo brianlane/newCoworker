@@ -31,10 +31,15 @@ import {
   appendCustomerPinnedNote,
   lookupCustomerByPhone,
   setCustomerDisplayName,
+  NAME_ALREADY_MATCHES_MESSAGE,
   NAME_UNCHANGED_MESSAGE,
   PINNED_MAX_CHARS
 } from "@/lib/customer-tools/handlers";
-import { getCustomerMemory, updateCustomerOwnerFields } from "@/lib/customer-memory/db";
+import {
+  getCustomerMemory,
+  recordInteractionAndIncrement,
+  updateCustomerOwnerFields
+} from "@/lib/customer-memory/db";
 import { summarizeCustomerMemoryAndLog } from "@/lib/customer-memory/summarizer";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { loadContactTimeline } from "../supabase/functions/_shared/contact_context";
@@ -162,7 +167,7 @@ describe("setCustomerDisplayName (dashboard rename semantics)", () => {
         updated: false,
         reason: "name_already_set_matches",
         savedName: "Juhu",
-        message: NAME_UNCHANGED_MESSAGE
+        message: NAME_ALREADY_MATCHES_MESSAGE
       }
     });
     expect(vi.mocked(updateCustomerOwnerFields)).not.toHaveBeenCalled();
@@ -225,6 +230,37 @@ describe("setCustomerDisplayName (dashboard rename semantics)", () => {
 
       expect((result.data as { reason: string }).reason).toBe("name_already_set");
       expect(vi.mocked(updateCustomerOwnerFields)).not.toHaveBeenCalled();
+    });
+
+    // The two `updated: false` branches are NOT the same situation, and an
+    // early version of this change gave both the refusal text. When no row
+    // exists, recordInteractionAndIncrement force-creates it WITH this name,
+    // the re-read matches, and we land in name_already_set_matches — so a
+    // first-time caller who just gave their name would have been told the tool
+    // saved nothing.
+    it("does not deny the save for a first-time caller the RPC just created", async () => {
+      // No row, then the force-create returns one carrying the new name.
+      vi.mocked(getCustomerMemory)
+        .mockResolvedValueOnce(null)
+        .mockResolvedValueOnce(memory({ display_name: "Chris Bartelot" }));
+      vi.mocked(recordInteractionAndIncrement).mockResolvedValueOnce(
+        memory({ display_name: "Chris Bartelot" })
+      );
+
+      const result = await setCustomerDisplayName(BIZ, PHONE, "Chris Bartelot", "voice");
+      const data = result.data as { message: string; reason: string };
+
+      expect(data.reason).toBe("name_already_set_matches");
+      expect(data.message).toBe(NAME_ALREADY_MATCHES_MESSAGE);
+      // The name IS stored. Denying it is the regression.
+      expect(data.message).not.toContain("NOT UPDATED");
+      expect(data.message).toContain("IS on file");
+      expect(vi.mocked(recordInteractionAndIncrement)).toHaveBeenCalled();
+    });
+
+    it("only the different-name branch carries the refusal text", async () => {
+      expect(NAME_UNCHANGED_MESSAGE).toContain("DIFFERENT saved name");
+      expect(NAME_ALREADY_MATCHES_MESSAGE).not.toContain("NOT UPDATED");
     });
 
     it("a successful fill carries no unchanged-message to misread", async () => {

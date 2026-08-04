@@ -288,7 +288,7 @@ export function buildVoiceToolDeclarations(): VoiceToolDeclaration[] {
     {
       name: "customer_set_display_name",
       description:
-        "Persist the caller's name on their customer profile so future calls/SMS recognize them. Call this when the caller gives their name on the call. It only ever fills a name that is BLANK: if this contact already has any saved name, from the owner or from an earlier moment in this same call, the write is REFUSED and the result comes back with `updated: false`. That result is a no-op, not a success — never tell the caller their name was updated, changed, corrected, or noted unless `updated` is true. Read the result's `message` and follow it.",
+        "Persist the caller's name on their customer profile so future calls/SMS recognize them. Call this when the caller gives their name on the call. It only ever fills a name that is BLANK: if this contact already has a DIFFERENT saved name, from the owner or from an earlier moment in this same call, the write is REFUSED. Never tell the caller their name was changed, corrected, or updated on the strength of `ok: true` alone: read the result's `message`, which says whether the name was stored, was already on file unchanged, or was refused, and say only what it supports.",
       parameters: {
         type: Type.OBJECT,
         properties: {

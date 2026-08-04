@@ -113,9 +113,28 @@ export async function lookupCustomerByPhone(
  * value that IS saved so it has something true to say instead.
  */
 export const NAME_UNCHANGED_MESSAGE =
-  "NOT UPDATED. This contact already has a saved name, and customer channels " +
-  "never overwrite one. Do not tell the caller their name was changed, added, " +
-  "corrected, or noted. If the saved name is wrong, say a teammate will fix it.";
+  "NOT UPDATED. This contact already has a DIFFERENT saved name, and customer " +
+  "channels never overwrite one. Do not tell the caller their name was changed, " +
+  "added, corrected, or noted. If the saved name is wrong, say a teammate will fix it.";
+
+/**
+ * The other no-op, and emphatically NOT a refusal.
+ *
+ * `updated: false` covers two different situations, and the first version of
+ * this change gave both the refusal text above. That was wrong for the common
+ * one: when no row exists, `recordInteractionAndIncrement` force-creates it
+ * WITH this name, the re-read then matches, and the code lands here — so on a
+ * first-time caller who just gave their name, the tool would have told the
+ * model to deny that anything was saved.
+ *
+ * What is true in both paths that reach here is the outcome the caller cares
+ * about: the name on file is exactly the one requested. Nothing was
+ * overwritten and nothing needs correcting, so the model may speak normally.
+ */
+export const NAME_ALREADY_MATCHES_MESSAGE =
+  "No change needed: this contact's saved name is already exactly this, so " +
+  "nothing was overwritten. The name IS on file. Acknowledging that you have " +
+  "it is fine; just do not claim you changed or corrected it.";
 
 /**
  * `customer_set_display_name` core. Customer surfaces (voice/SMS) never
@@ -153,7 +172,7 @@ export async function setCustomerDisplayName(
           updated: false,
           reason: "name_already_set_matches",
           savedName: current,
-          message: NAME_UNCHANGED_MESSAGE
+          message: NAME_ALREADY_MATCHES_MESSAGE
         }
       };
     }
