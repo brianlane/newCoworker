@@ -1792,6 +1792,11 @@ serve(async (req: Request) => {
             ? await loadRecentSmsTranscript(supabase, job.business_id, fromE164, job.id)
             : null;
 
+        // One reading, used for both clamps below, so they cannot disagree.
+        const modelBudgetMs = smsInboundModelBudgetMs(
+          Date.now() - jobStartedAt,
+          ROWBOAT_RETRY_BUDGET_MS
+        );
         const parsed = await callSmsRowboatWithStatelessFallback({
           chatUrl,
           bearer,
@@ -1801,13 +1806,20 @@ serve(async (req: Request) => {
           conversationId: turnPlan.stateless ? null : existingConv,
           state: turnPlan.stateless ? null : (thread?.rowboat_state ?? null),
           startAgent: turnPlan.startAgent,
-          timeoutMs: ROWBOAT_CHAT_TIMEOUT_MS,
-          // Combined initial+retry wall time, capped at whatever is left of
-          // this job's own budget. A fresh ROWBOAT_RETRY_BUDGET_MS here is
-          // only correct when the job reached this line quickly, which is the
-          // normal customer path; after an owner turn has already spent up to
-          // 75s it would put a single job past the 150s Edge ceiling.
-          budgetMs: smsInboundModelBudgetMs(Date.now() - jobStartedAt, ROWBOAT_RETRY_BUDGET_MS),
+          // BOTH numbers are clamped to what is left of this job.
+          //
+          // budgetMs alone is not enough: it bounds the combined wall time,
+          // but callSmsRowboatWithStatelessFallback only derives the RETRY's
+          // timeout from it. The first /chat attempt runs on timeoutMs as
+          // given, so leaving that at a flat ROWBOAT_CHAT_TIMEOUT_MS would let
+          // a job that already spent 75s on an owner turn add another 60s and
+          // land back over the 150s Edge ceiling.
+          //
+          // A fresh job is unaffected: it reaches this line in milliseconds,
+          // so the clamps are no-ops and the customer path keeps the 60s
+          // attempt and 80s combined budget it has today.
+          timeoutMs: Math.min(ROWBOAT_CHAT_TIMEOUT_MS, modelBudgetMs),
+          budgetMs: modelBudgetMs,
           customerPreamble,
           statelessContextExtra,
           // Fresh-thread anchor for a contact an automation just texted —

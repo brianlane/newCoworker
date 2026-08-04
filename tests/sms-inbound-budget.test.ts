@@ -12,6 +12,7 @@ import {
 /** Mirrors the worker's own constants, which the Edge runtime cannot export. */
 const OWNER_SMS_TURN_TIMEOUT_MS = 75_000;
 const ROWBOAT_RETRY_BUDGET_MS = 80_000;
+const ROWBOAT_CHAT_TIMEOUT_MS = 60_000;
 
 /**
  * The numbers here are the whole point of the module, so they are asserted
@@ -49,6 +50,28 @@ describe("sms inbound batch budget sizing", () => {
       OWNER_SMS_TURN_TIMEOUT_MS + afterOwnerTurn + SMS_INBOUND_JOB_TAIL_RESERVE_MS;
     expect(worstOwnerJob).toBeLessThanOrEqual(SMS_INBOUND_WORST_CASE_JOB_MS);
     expect(SMS_INBOUND_BATCH_BUDGET_MS + worstOwnerJob).toBeLessThan(EDGE_REQUEST_CEILING_MS);
+  });
+
+  /**
+   * The follow-on Bugbot caught after the first attempt at the fix above.
+   * callSmsRowboatWithStatelessFallback derives only the RETRY's timeout from
+   * budgetMs; the first /chat attempt runs on timeoutMs exactly as passed. So
+   * clamping budgetMs alone left a 60s first attempt on top of a 75s owner
+   * turn. The worker clamps both, which is what this models.
+   */
+  it("clamps the first Rowboat attempt too, not just the retry", () => {
+    const budget = smsInboundModelBudgetMs(OWNER_SMS_TURN_TIMEOUT_MS, ROWBOAT_RETRY_BUDGET_MS);
+    const firstAttemptMs = Math.min(ROWBOAT_CHAT_TIMEOUT_MS, budget);
+    expect(firstAttemptMs).toBeLessThanOrEqual(budget);
+
+    const worstOwnerJob =
+      OWNER_SMS_TURN_TIMEOUT_MS + firstAttemptMs + SMS_INBOUND_JOB_TAIL_RESERVE_MS;
+    expect(SMS_INBOUND_BATCH_BUDGET_MS + worstOwnerJob).toBeLessThan(EDGE_REQUEST_CEILING_MS);
+  });
+
+  it("leaves a fresh customer job's first attempt at the full chat timeout", () => {
+    const budget = smsInboundModelBudgetMs(0, ROWBOAT_RETRY_BUDGET_MS);
+    expect(Math.min(ROWBOAT_CHAT_TIMEOUT_MS, budget)).toBe(ROWBOAT_CHAT_TIMEOUT_MS);
   });
 });
 
