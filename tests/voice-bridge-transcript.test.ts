@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi, type MockInstance } from "vitest";
 import {
   createTranscriptRecorder,
+  stripEmDashes,
   type LiveTranscriptMessage,
   type TranscriptAdapter
 } from "../vps/voice-bridge/src/voice-transcript";
@@ -416,5 +417,76 @@ describe("voice-bridge transcript recorder", () => {
     await r.ingest(frame({ caller: "hello", turnComplete: true }));
     await r.finalize();
     expect(warnSpy).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The repo bans em dashes in everything it produces, and every model prompt
+ * carries the no-em-dash line. This is the one surface that cannot reach:
+ * `outputTranscription` is Gemini transcribing its OWN audio, so the
+ * punctuation is the transcriber's, not the model following our instruction.
+ * Chris Bartelot's Aug 3 2026 transcript has two, e.g. "Got that one.— And
+ * the other place?".
+ */
+describe("stripEmDashes", () => {
+  it("replaces an em dash with a space rather than deleting it", () => {
+    // Deleting would weld the words together: "one.And the other place?".
+    expect(stripEmDashes("Got that one.— And the other place?")).toBe(
+      "Got that one. And the other place?"
+    );
+  });
+
+  it("does not leave a double space when the dash already had spaces", () => {
+    expect(stripEmDashes("Yes, I'm still here — were you saying something?")).toBe(
+      "Yes, I'm still here were you saying something?"
+    );
+  });
+
+  it("handles several dashes in one turn", () => {
+    expect(stripEmDashes("a—b—c")).toBe("a b c");
+  });
+
+  it("trims a leading or trailing dash to nothing", () => {
+    expect(stripEmDashes("—hello")).toBe("hello");
+    expect(stripEmDashes("hello—")).toBe("hello");
+  });
+
+  it("leaves text without an em dash byte-identical", () => {
+    const clean = "Perfect, I can book that for Thursday at 4 00 p m";
+    expect(stripEmDashes(clean)).toBe(clean);
+  });
+
+  it("leaves hyphens and en dashes alone", () => {
+    expect(stripEmDashes("a well-known 9–5 job")).toBe("a well-known 9–5 job");
+  });
+
+  it("handles an empty string", () => {
+    expect(stripEmDashes("")).toBe("");
+  });
+});
+
+describe("em dashes in persisted turns", () => {
+  it("strips them from OUR speech", async () => {
+    const { adapter, turns } = makeAdapter();
+    const r = createTranscriptRecorder(adapter, INIT);
+    await r.ingest(
+      frame({ assistant: "Got that one.— And the other place?", turnComplete: true })
+    );
+    await r.finalize();
+    const assistant = turns.find((t) => t.role === "assistant");
+    expect(assistant?.content).toBe("Got that one. And the other place?");
+    expect(assistant?.content).not.toContain("—");
+  });
+
+  // A transcript of what someone else said is a record, not our copy. The
+  // style rule governs what we write.
+  it("leaves the caller's words exactly as transcribed", async () => {
+    const { adapter, turns } = makeAdapter();
+    const r = createTranscriptRecorder(adapter, INIT);
+    await r.ingest(frame({ caller: "It's 5889 — East Monroe Place", turnComplete: true }));
+    await r.finalize();
+    expect(turns.find((t) => t.role === "caller")?.content).toBe(
+      "It's 5889 — East Monroe Place"
+    );
   });
 });

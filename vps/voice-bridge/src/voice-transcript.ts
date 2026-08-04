@@ -27,6 +27,32 @@ export type LiveTranscriptMessage = {
 
 export type TranscriptRole = "caller" | "assistant";
 
+/**
+ * Remove em dashes from OUR OWN transcribed speech before it is persisted.
+ *
+ * The repo bans em dashes in everything it produces, and every model prompt
+ * carries the no-em-dash line. That governs generated text; this is the one
+ * surface it cannot reach. `outputTranscription` is Gemini's transcription of
+ * its own audio, and the punctuation is chosen by the transcriber, not by the
+ * model following our instruction. Chris Bartelot's Aug 3 2026 call has two:
+ * "Got that one.— And the other place?".
+ *
+ * Inaudible on the call, visible in the dashboard transcript, so the fix
+ * belongs on write rather than in yet another prompt line.
+ *
+ * A dash is replaced with a space, not deleted, because it usually sits where
+ * two transcribed segments were joined ("still here.— Were you"); dropping it
+ * outright would weld the words together. Runs of whitespace are then
+ * collapsed so a dash that already had spaces around it does not leave two.
+ *
+ * Caller speech is left ALONE: it is a record of what someone else said, and
+ * the style rule is about what we write, not about editing a transcript of
+ * another person.
+ */
+export function stripEmDashes(text: string): string {
+  return text.replace(/—/g, " ").replace(/[ \t]{2,}/g, " ").trim();
+}
+
 export type TranscriptDirection = "inbound" | "outbound";
 
 export type TranscriptAdapter = {
@@ -129,7 +155,7 @@ export function createTranscriptRecorder(
     // match the synchronous order flushTurn was invoked in, which is the
     // order the turnComplete events arrived.
     const caller = callerBuf.trim();
-    const assistant = assistantBuf.trim();
+    const assistant = stripEmDashes(assistantBuf.trim());
     callerBuf = "";
     assistantBuf = "";
     if (!caller && !assistant) return;

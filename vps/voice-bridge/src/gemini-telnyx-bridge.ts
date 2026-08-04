@@ -21,6 +21,7 @@ import {
 import { readLiveUsage, type GeminiLiveUsage } from "./live-usage.js";
 import { buildVoiceToolDeclarations } from "./tool-declarations.js";
 import { resolveVoiceName } from "./voice-name.js";
+import { inputAudioTranscriptionConfig } from "./asr-language-hints.js";
 import {
   decideIvrPress,
   IVR_REFALLBACK_MS,
@@ -1370,9 +1371,25 @@ export async function createGeminiTelnyxBridge(opts: GeminiBridgeOptions): Promi
   // Live API fields that turn on caller + assistant transcripts delivered on
   // the `serverContent` channel. We only set them when the recorder is wired
   // so a VPS without the feature flag runs the same shape as before.
+  //
+  // The INPUT side carries language hints rather than the empty object it used
+  // to send. An empty config means auto-detect across every language the model
+  // knows, and on a noisy segment it guesses: Chris Bartelot's Aug 3 2026 call
+  // was English throughout, yet one turn transcribed as Portuguese and another
+  // as Korean. Hints narrow it to the languages this tenant actually serves
+  // without pinning (Spanish callers must keep working) — see
+  // asr-language-hints.ts.
+  //
+  // The OUTPUT side stays unhinted on purpose: it transcribes our own speech,
+  // whose language the model is already choosing deliberately, and constraining
+  // it would fight the prompt's instruction to follow a caller who switches
+  // language mid-call.
   const transcriptionConfig = transcriptRecorder
     ? {
-        inputAudioTranscription: {},
+        inputAudioTranscription: inputAudioTranscriptionConfig({
+          established: opts.languagePrefs?.established,
+          defaultLang: opts.languagePrefs?.defaultLang
+        }),
         outputAudioTranscription: {}
       }
     : {};

@@ -31,6 +31,7 @@ import {
 } from "@/lib/gemini-generate-content";
 import { meterGeminiSpendForBusiness } from "@/lib/billing/ai-spend-meter";
 import { logger } from "@/lib/logger";
+import { NO_EM_DASH_PROMPT_LINE } from "../supabase/functions/_shared/sms_prompt_lines";
 
 type DbResult = { data: unknown; error: { message: string } | null };
 
@@ -465,6 +466,43 @@ describe("summarizeCallTranscript", () => {
     });
     expect(result).toEqual({ ok: false, reason: "db_failed", detail: "persist down" });
     expect(updates[2]).toEqual({ summary_error: "persist:persist down" });
+  });
+
+  // Aug 3 2026: a summary read "two turnkey RENTAL properties he owns" from a
+  // caller who said "we're living in the bigger house right now". The owner
+  // reads the summary rather than the transcript, so the invented adjective is
+  // the version she acts on. "No speculation beyond the transcript" was
+  // already in the prompt and did not cover it.
+  describe("system instruction", () => {
+    async function systemInstruction(): Promise<string> {
+      const generate = generateOk();
+      const { db } = makeDb({});
+      await summarizeCallTranscript(BIZ, TID, { client: db, generate, meter: meterMock });
+      // generateOk() is cast `as never` for the injected-dep signature, so
+      // reach the spy's recorded args through an explicit cast.
+      const spy = generate as unknown as { mock: { calls: Array<[{ systemInstruction?: string }]> } };
+      return spy.mock.calls[0]?.[0]?.systemInstruction ?? "";
+    }
+
+    it("requires every descriptor to be traceable to the caller's words", async () => {
+      const text = await systemInstruction();
+      expect(text).toContain("traceable to something the caller actually said");
+      expect(text).toContain("Do not add attributes nobody stated");
+      // The exact word that went wrong, plus its neighbours.
+      expect(text).toContain("rental");
+    });
+
+    it("tells it to follow a later statement that contradicts an earlier one", async () => {
+      // The caller said "selling" first and "we're living in it" later.
+      expect(await systemInstruction()).toContain("follow the later one");
+    });
+
+    it("carries the shared no-em-dash line, which it was missing entirely", async () => {
+      const text = await systemInstruction();
+      expect(text).toContain(NO_EM_DASH_PROMPT_LINE);
+      // And the instruction itself must not contain one.
+      expect(text).not.toContain("—");
+    });
   });
 
   it("persists summary + sentiment and meters the spend on success", async () => {
