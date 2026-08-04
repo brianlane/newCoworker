@@ -111,6 +111,10 @@ import {
   tenantHasLocalModel
 } from "../_shared/chat_spend_cap.ts";
 import { sendCapAlertOnce, smsCapPeriodKey } from "../_shared/cap_alerts.ts";
+import {
+  smsInboundBatchHasRoom,
+  smsInboundDeferredIds
+} from "../_shared/sms_inbound_budget.ts";
 
 const MAX_ATTEMPTS = 8;
 const NCW_IDEM_TAG_PREFIX = "ncw_idem:";
@@ -579,6 +583,13 @@ serve(async (req: Request) => {
 
   const list = (jobs ?? []) as JobRow[];
   let processed = 0;
+  // Wall-clock guard for the batch. Every per-job timeout below was sized
+  // against the pg_cron cap as if one job ran per invocation, but this loop
+  // works up to 8 sequentially, so a slow batch used to run past the 150s
+  // Supabase request ceiling and get killed mid-job. See
+  // ../_shared/sms_inbound_budget.ts.
+  const batchStartedAt = Date.now();
+  let deferredIds: string[] = [];
 
   const template =
     Deno.env.get("ROWBOAT_CHAT_URL_TEMPLATE") ??
@@ -603,7 +614,14 @@ serve(async (req: Request) => {
     return b;
   };
 
-  for (const job of list) {
+  for (const [jobIndex, job] of list.entries()) {
+    // Checked BEFORE starting the job, because what matters is whether the
+    // next one can still finish inside the ceiling. Index 0 always runs, so a
+    // run can never claim rows and hand every one of them straight back.
+    if (!smsInboundBatchHasRoom(jobIndex, Date.now() - batchStartedAt)) {
+      deferredIds = smsInboundDeferredIds(list, jobIndex);
+      break;
+    }
     const envelope = job.payload as { data?: { payload?: Record<string, unknown> } };
     const payload = envelope?.data?.payload ?? {};
     const fromRaw = telnyxMessagingPhoneString(payload, "from");
@@ -2426,9 +2444,42 @@ serve(async (req: Request) => {
     processed += 1;
   }
 
-  await telemetryRecord(supabase, "sms_inbound_worker_batch", { claimed: list.length, processed });
+  // Hand back every row this run claimed but never touched. Without this they
+  // sit at 'processing' and block their contact's queue (claim_sms_inbound_jobs
+  // will not claim a newer job for a contact that already has one in flight)
+  // until the stale-claim recovery sweep resets them, and each recovery burns
+  // one of the job's MAX_ATTEMPTS retries. The RPC restores attempt_count, so a
+  // deferral is free: the next tick is 30s away.
+  let deferred = 0;
+  if (deferredIds.length > 0) {
+    const { data: released, error: releaseErr } = await supabase.rpc(
+      "release_sms_inbound_jobs",
+      { p_ids: deferredIds }
+    );
+    if (releaseErr) {
+      // Recoverable: the stale-claim sweep still requeues these, just later
+      // and at the cost of one attempt each. Worth an error line because it
+      // means customers are waiting longer than they should.
+      console.error("release_sms_inbound_jobs", releaseErr);
+    } else {
+      deferred = typeof released === "number" ? released : deferredIds.length;
+    }
+    await systemLog(supabase, {
+      businessId: null,
+      level: "warn",
+      event: "sms_inbound_batch_deferred",
+      message: `Inbound SMS batch ran out of wall-clock budget: ${deferredIds.length} job(s) returned to the queue for the next tick`,
+      payload: { claimed: list.length, processed, deferred: deferredIds.length }
+    });
+  }
 
-  return new Response(JSON.stringify({ ok: true, claimed: list.length, processed }), {
+  await telemetryRecord(supabase, "sms_inbound_worker_batch", {
+    claimed: list.length,
+    processed,
+    deferred
+  });
+
+  return new Response(JSON.stringify({ ok: true, claimed: list.length, processed, deferred }), {
     status: 200,
     headers: { "Content-Type": "application/json" }
   });
