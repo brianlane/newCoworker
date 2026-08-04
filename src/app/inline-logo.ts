@@ -1,0 +1,10 @@
+// GENERATED FILE. Do not edit by hand.
+// Regenerate with: npx tsx scripts/generate-inline-logo.ts
+// Source: public/logo.png. See that script for why the 404 inlines its logo.
+
+/** Intrinsic pixel width/height of the encoded image. */
+export const INLINE_LOGO_PX = 96;
+
+/** The brand mark as a self-contained data URI, so rendering it costs no request. */
+export const INLINE_LOGO_DATA_URI =
+  "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAGAAAABgAgMAAACf9p+rAAAADFBMVEUSJDTv7OJ2radYa3AWi3vXAAAACXBIWXMAAAsSAAALEgHS3X78AAACPElEQVRIid2VsY7TQBCGJ7ZcuFhT5RFc8AAuUkD8CBT57SOOiBuagyINBRJCFu+wNNRXZE8iabnikpfwI7ggfQpOkKC1nTt7d9wjtnF2P2V35t+Zf4n+u/Hs9wB4jvc8CIEVC8ZAOvQPFEMgHwJXHIgwcIgHIOGAD7wF0dTKcwS8xj4AtgZwgQxFCSR7g5RI5RcAWFhhJeUaTAgOcNTrgLlXhV9IbhjgHiZQks0mnP8EMLOB/K6PeGWtizTQILZ3yh1eMBRUgbl6kRIF0lKEKDK1uIySrxJyrYzbMeKrZ3o+sqUwGSgFp5Z7a4MQmz/MpRLJz7sTPlqXSk5yUmvcVZZMYnlQ60SdpJlitFQabCpzr/FSqZtEqXszYmSHGmykmUX6UIPbqh+wmMv7Gqhjv6e8PHynZA3ift6xn+yarVY9UO4dLNVcqZ2RSKLFuv52Pv3ot6czIwqA+fnB6FuxaC8E+NADXj3TVZu96IGwiXGqNiR6dTt+Slf0QCOQv7JAI2moQxC5Ea0GVyYYLQaAaPb188tBl1GvELl7E3idideVPYqHQMH/pu4k7IGYVYfI68hQdtbJ71T51y5wOt6ddgFVj+XvGv4iZm3mjtGGrt5BbB/1fBr6TF1rvmnuZUGBfgois3HG13e1G4UF8xJoNyrNto3aVk6MdYre3Or1kWWT3qf641t93oYZWobV1oO0Hq8mY2H7ZyNexBgWautb8T454Twxyugl+woK3Wfcg+rKgWeTJsgGXPdfGn8BUtvQ3D43eGsAAAAASUVORK5CYII=";
