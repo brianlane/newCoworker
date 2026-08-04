@@ -2652,6 +2652,62 @@ a PR carrying an empty migration file. The long form, including the one
 allowlisted historical file, lives in
 [supabase/migrations/CLAUDE.md](supabase/migrations/CLAUDE.md).
 
+### The cron chain has three timeouts, and a hard ceiling under all of them
+
+A scheduled sweep is not one timeout, it is three, and each layer can hang up
+on the one below it:
+
+| Layer | Where the number lives | Reached by |
+| --- | --- | --- |
+| pg_cron `timeout_milliseconds` | the `cron.schedule` body in a migration | `net.http_post` |
+| Edge `REQUEST_TIMEOUT_MS` | `supabase/functions/<fn>/index.ts` | `AbortController` on the forward `fetch` |
+| route `maxDuration` | `src/app/api/internal/<route>/route.ts` | Vercel |
+
+**Underneath all three sits a platform ceiling you cannot raise: Supabase
+returns 504 to the caller of an Edge function that has not responded within
+150 seconds.** That is the request idle timeout and it applies on every plan
+including Pro. The 400s figure in
+[Supabase's limits](https://supabase.com/docs/guides/functions/limits) is the
+worker's total wall clock across background tasks, not how long it may take to
+answer the request that started it. Every cron bridge in this repo `await`s its
+route and returns the body, so **no cron chain can run longer than 150s**, no
+matter what the three numbers say.
+
+Consequences worth knowing before you touch any of them:
+
+- **Raising `REQUEST_TIMEOUT_MS` above 150_000 does nothing.** Most bridges sit
+  at `290_000`, which is unreachable. PR #1014 raised a route to
+  `maxDuration = 1800` and both layers above it to `1_800_000`; that 30-minute
+  budget was never real either.
+- **A route may legitimately declare more than 150s.** When the bridge 504s,
+  Vercel keeps running the route to completion in the background, so the work
+  still finishes. What is lost is the *result*: pg_cron records a 504 instead
+  of the route's own outcome. Eighteen routes are in this position today and
+  are recorded in `KNOWN_ABOVE_EDGE_CEILING` in
+  `tests/cron-timeout-parity.test.ts`. Lowering them to 150 would truncate work
+  that completes today, and for a daily sweep the remainder would wait 24
+  hours, so they are documented rather than clipped.
+- **The rule pg_cron must actually satisfy** is therefore
+  `timeout_milliseconds >= min(maxDuration * 1000, REQUEST_TIMEOUT_MS, 150_000)`.
+  Below that, a healthy run is written into `cron.job_run_details` as a
+  timeout, and a genuine timeout becomes impossible to spot.
+
+`tests/cron-timeout-parity.test.ts` enforces this in CI. It **discovers** the
+chains by parsing the migrations, the Edge functions and the routes, so a new
+cron job is covered the day it lands. There is no list to remember to update:
+the earlier hand-written version checked 4 of the 22 chains that existed and
+had missed 14 mismatches.
+
+A job whose Edge function calls a route **once per claimed row** (currently
+`edge-ai-flow-worker`, `edge-customer-memory-summarize-sweep`,
+`edge-sms-inbound-worker`) is exempt from the parity rule, because
+`maxDuration` there is the budget of one call and not of the run. Those need a
+wall-clock budget on the dispatch loop instead, sized so the worst case fits
+inside both the cron timeout and the 150s ceiling. `CALL_SUMMARY_TIME_BUDGET_MS`
+in `supabase/functions/_shared/call_summary_sweep.ts` is the worked example.
+The test asserts the exempt set exactly, so a new dispatcher cannot quietly
+skip the check.
+
 ### Post-merge: what CI does vs what you still do
 
 **CI does automatically on every push to main** (the `Vercel Deploy` job, in
