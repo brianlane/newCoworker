@@ -741,8 +741,29 @@ export async function submitPublicBooking(
       }
     }
 
-    // Tell the BUSINESS owner, if nobody has yet. Two different gaps close
-    // here, and both need this resubmit:
+    await stampAttendeeContact(
+      context.businessId,
+      bookingAttendeeKey(phone, email, name),
+      start.toISOString(),
+      // Answers included: the first request may have booked and died before
+      // its final stamp, and the retry is the last chance for them to land.
+      {
+        email,
+        name,
+        intakeAnswers: intakeLines.length > 0 ? intakeAnswers : null,
+        meetingTypeId: meetingType?.id ?? null
+      }
+    ).catch((err: unknown) => {
+      logger.warn("booking-page: attendee contact re-stamp failed", {
+        businessId: context.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    });
+
+    // Tell the BUSINESS owner, if nobody has yet. AFTER the re-stamp above,
+    // for the same reason the primary path alerts last: this reports who is
+    // on the hook, so it must not run before the writes that decide the
+    // answer. Two different gaps close here, and both need this resubmit:
     //
     //   - the original request persisted the booking and then died before
     //     alerting, so an appointment exists that no human was told about;
@@ -788,24 +809,6 @@ export async function submitPublicBooking(
         intakeLines
       });
     }
-    await stampAttendeeContact(
-      context.businessId,
-      bookingAttendeeKey(phone, email, name),
-      start.toISOString(),
-      // Answers included: the first request may have booked and died before
-      // its final stamp, and the retry is the last chance for them to land.
-      {
-        email,
-        name,
-        intakeAnswers: intakeLines.length > 0 ? intakeAnswers : null,
-        meetingTypeId: meetingType?.id ?? null
-      }
-    ).catch((err: unknown) => {
-      logger.warn("booking-page: attendee contact re-stamp failed", {
-        businessId: context.businessId,
-        error: err instanceof Error ? err.message : String(err)
-      });
-    });
     return {
       ok: true,
       startIso: start.toISOString(),

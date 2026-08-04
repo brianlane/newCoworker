@@ -1676,6 +1676,30 @@ describe("submitPublicBooking", () => {
       expect(order).toEqual(["capture", "stamp", "alert"]);
     });
 
+    it("a resubmit alerts only AFTER its contact re-stamp, like the primary path", async () => {
+      // The retry branch had the same inversion this PR removes from the
+      // primary path: the alert reports who is on the hook, so it must not
+      // run before the stamp that can change the answer.
+      const order: string[] = [];
+      mockStampContact.mockImplementation(async () => {
+        order.push("stamp");
+        return true;
+      });
+      mockUnassignedAlert.mockImplementation(async () => {
+        order.push("alert");
+        return "sent_solo";
+      });
+      mockUpcomingForAttendee.mockResolvedValueOnce([
+        { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
+      ] as never);
+      mockStampAssignee.mockResolvedValueOnce(false);
+      mockClaimAlert.mockResolvedValueOnce({ claimed: true, assigneeMemberId: null });
+
+      expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+
+      expect(order).toEqual(["stamp", "alert"]);
+    });
+
     it("stays silent when another request already claimed the alert", async () => {
       // Two requests racing for one booking: whichever wins the claim pages
       // the owner, and the loser must not page them again.
