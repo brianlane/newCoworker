@@ -588,8 +588,13 @@ begin
       paused_reason = p_reason,
       in_flight_at = null,
       updated_at = now()
+  -- ONLY rules that were actually on. Stamping a reason onto a rule the
+  -- tenant deliberately switched off is not just noise: the card-detached
+  -- path is reversed when a new card is authorized, and re-enabling an
+  -- off-by-choice family would start unattended charging the tenant never
+  -- asked for. A rule already off for its own reason keeps that reason.
   where business_id = p_business_id
-    and (enabled or disabled_reason is distinct from p_reason);
+    and enabled;
   get diagnostics v_count = row_count;
 
   if p_reason = 'dispute' then

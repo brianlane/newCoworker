@@ -32,7 +32,9 @@ vi.mock("@/lib/stripe/client", () => ({
 }));
 
 const { sweepUsagePackAutoReloads } = await import("@/lib/billing/auto-reload-sweep");
-const { listAutoReloadCandidates } = await import("@/lib/db/auto-reload");
+const { listAutoReloadCandidates, reenableAutoReloadAfterCardAuthorized } = await import(
+  "@/lib/db/auto-reload"
+);
 
 /** The SMS 500 pack at the documented $0.02/text default. */
 const PACK_PRICE_CENTS = 1_000;
@@ -515,6 +517,78 @@ describe("auto-reload sweep against real Postgres", () => {
   });
 
   describe("disable for a business", () => {
+    it("never touches a family the tenant deliberately switched off", async () => {
+      // The card-detached disable is REVERSED when a new card is authorized.
+      // If it stamped its reason onto an off-by-choice family, that family
+      // would come back on and start charging money the tenant never
+      // authorized for it.
+      const businessId = await seedTenant(db, "Auto-reload sweep itest (off by choice)");
+      const { error } = await db.from("usage_pack_auto_reload_rules").insert({
+        business_id: businessId,
+        category: "voice",
+        enabled: false,
+        pack_id: "min_30",
+        threshold_units: 900
+      });
+      if (error) throw new Error(`seed voice rule: ${error.message}`);
+
+      const { data: count } = await db.rpc("usage_pack_auto_reload_disable_for_business", {
+        p_business_id: businessId,
+        p_reason: "card_detached"
+      });
+      // Only the enabled SMS rule was affected.
+      expect(Number(count)).toBe(1);
+
+      const { data: rows } = await db
+        .from("usage_pack_auto_reload_rules")
+        .select("category, enabled, disabled_reason")
+        .eq("business_id", businessId);
+      const byCategory = new Map(
+        (rows as Array<{ category: string; enabled: boolean; disabled_reason: string | null }>).map(
+          (r) => [r.category, r]
+        )
+      );
+      expect(byCategory.get("sms")).toMatchObject({
+        enabled: false,
+        disabled_reason: "card_detached"
+      });
+      expect(byCategory.get("voice")).toMatchObject({
+        enabled: false,
+        disabled_reason: null
+      });
+
+      // Authorizing a new card brings back only the family that was on.
+      const restored = await reenableAutoReloadAfterCardAuthorized(businessId, db as never);
+      expect(restored).toBe(1);
+
+      const { data: after } = await db
+        .from("usage_pack_auto_reload_rules")
+        .select("category, enabled")
+        .eq("business_id", businessId);
+      const enabledAfter = new Map(
+        (after as Array<{ category: string; enabled: boolean }>).map((r) => [r.category, r.enabled])
+      );
+      expect(enabledAfter.get("sms")).toBe(true);
+      expect(enabledAfter.get("voice")).toBe(false);
+    });
+
+    it("leaves a rule disabled for its own reason alone", async () => {
+      const businessId = await seedTenant(db, "Auto-reload sweep itest (prior reason)");
+      await db
+        .from("usage_pack_auto_reload_rules")
+        .update({ enabled: false, disabled_reason: "payment_failures" })
+        .eq("business_id", businessId);
+
+      await db.rpc("usage_pack_auto_reload_disable_for_business", {
+        p_business_id: businessId,
+        p_reason: "card_detached"
+      });
+      const r = await rule(db, businessId);
+      // Not re-stamped, so a later card authorization cannot resurrect it.
+      expect(r.disabled_reason).toBe("payment_failures");
+      expect(await reenableAutoReloadAfterCardAuthorized(businessId, db as never)).toBe(0);
+    });
+
     it("stops every rule and revokes the card on a dispute", async () => {
       const businessId = await seedTenant(db, "Auto-reload sweep itest (dispute)");
       const { data } = await db.rpc("usage_pack_auto_reload_disable_for_business", {
