@@ -36,6 +36,13 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
 }));
 
+// The locale resolver has its own suite; mocking it lets this one assert what
+// the dispatcher DOES with a non-English owner. Defaults to "en" so every
+// existing expectation is unchanged.
+vi.mock("@/lib/i18n/owner-locale", () => ({
+  resolveOwnerUiLocaleForEmail: vi.fn(async () => "en")
+}));
+
 // The contact-owner resolver has its own suite (notification-contact-owner);
 // mocking it keeps this one about what the DISPATCHER does with the verdict.
 const resolveContactOwnerTarget = vi.fn();
@@ -54,6 +61,8 @@ import {
   resolveNotificationTargets
 } from "@/lib/notifications/dispatch";
 import { getBusiness } from "@/lib/db/businesses";
+import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
+import { buildBookingOwnerAlert } from "@/lib/email/templates/booking-owner-alert";
 import { getOrCreateNotificationPreferences } from "@/lib/db/notification-preferences";
 import { insertNotification } from "@/lib/db/notifications";
 import { sendOwnerEmail } from "@/lib/email/client";
@@ -140,6 +149,9 @@ describe("notifications/dispatch", () => {
     vi.mocked(sendTelnyxSms).mockResolvedValue({ id: "sms_id", channel: "sms" } as never);
     // Default: no contact supplied, so nothing redirects.
     resolveContactOwnerTarget.mockResolvedValue(TO_BUSINESS_OWNER);
+    // English unless a test says otherwise: clearAllMocks clears calls, not
+    // implementations, so a locale set by one test would leak into the next.
+    vi.mocked(resolveOwnerUiLocaleForEmail).mockResolvedValue("en" as never);
   });
   afterEach(() => {
     process.env = original;
@@ -482,6 +494,46 @@ describe("notifications/dispatch", () => {
       expect(opts.html).toContain("https://app.example.com/dashboard/bookings");
       expect(opts.text).toContain("First block.");
       expect(opts.text).toContain("Second block.");
+    });
+
+    it("a Spanish owner actually RECEIVES the Spanish copy, not just a Spanish-capable callback", async () => {
+      // The bug this pins: supplying both an explicit emailSubject/emailBody
+      // and a template meant the explicit English always won, so locale
+      // resolution ran and its result was thrown away. Asserting the callback
+      // returns Spanish is not enough; assert the SENT message.
+      vi.mocked(resolveOwnerUiLocaleForEmail).mockResolvedValue("es" as never);
+      vi.mocked(sendOwnerEmail).mockResolvedValue("ok" as never);
+
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "assigned_booking",
+        emailTemplate: (locale) => {
+          const copy = buildBookingOwnerAlert({
+            state: "unowned",
+            attendeeName: "Brett Douglas",
+            attendeePhone: "+12187702372",
+            startLocal: "viernes, 14 de agosto de 2026",
+            summary: "Discovery Call",
+            surface: "booking_page",
+            locale
+          });
+          return {
+            subject: copy.subject,
+            heading: copy.heading,
+            body: copy.body,
+            ctaLabel: copy.ctaLabel,
+            ctaPath: copy.ctaPath
+          };
+        }
+      });
+
+      const call = vi.mocked(sendOwnerEmail).mock.calls[0];
+      expect(call[2]).toContain("necesita responsable");
+      const opts = call[3] as { html?: string; text?: string };
+      expect(opts.text).toContain("agendó");
+      expect(opts.html).toContain("Asignar este contacto");
+      expect(opts.text).not.toContain("needs an owner");
     });
 
     it("an explicit emailSubject still wins over the template, so callers can override", async () => {

@@ -833,8 +833,11 @@ describe("submitPublicBooking", () => {
     ] as never);
     mockStampAssignee.mockResolvedValueOnce(false);
     mockMarkOffered.mockClear();
+    mockUnassignedAlert.mockClear();
     expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
     expect(mockMarkOffered).not.toHaveBeenCalled();
+    // A repair that repaired nothing is not news.
+    expect(mockUnassignedAlert).not.toHaveBeenCalled();
 
     // And when the retry genuinely fills the gap, the tiebreak advances
     // and the member finally hears about the booking (the gap-fill is the
@@ -849,6 +852,32 @@ describe("submitPublicBooking", () => {
     expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
     expect(mockMarkOffered).toHaveBeenCalledWith("m-ana");
     expect(mockNotifyAssignee).toHaveBeenCalledWith(BIZ, "m-ana", expect.anything());
+    // The OWNER hears about it too, and only here: this is the first moment
+    // the booking has somebody to name. A resubmit that fills nothing stays
+    // silent (asserted above by the absence of a call), so this cannot
+    // become a second alert for the same booking.
+    expect(mockUnassignedAlert).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({
+        bookingAssigneeMemberId: "m-ana",
+        surface: "booking_page"
+      })
+    );
+
+    // A gap-fill on a note-less booking carries no note, rather than an
+    // empty string that would render a dangling "Their note:" line.
+    mockUpcomingForAttendee.mockResolvedValueOnce([
+      { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
+    ] as never);
+    mockStampAssignee.mockResolvedValueOnce(true);
+    mockUnassignedAlert.mockClear();
+    const { note: _noteless, ...withoutNote } = VALID;
+    void _noteless;
+    expect((await submitPublicBooking(TOKEN, withoutNote)).ok).toBe(true);
+    expect(mockUnassignedAlert).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ note: null })
+    );
 
     // The toggle silences the retry path too.
     mockPage.mockResolvedValue({

@@ -733,6 +733,29 @@ export async function submitPublicBooking(
             summary
           });
         }
+        // Same reasoning for the BUSINESS owner: the original booking landed
+        // with nobody named, so this is the first moment there is somebody to
+        // report. Only on an actual fill, so a harmless resubmit stays silent
+        // and this can never become a second alert for one booking.
+        await maybeAlertUnassignedBooking(context.businessId, {
+          attendeeName: name,
+          attendeePhone: phone,
+          attendeeEmail: email,
+          startIso: start.toISOString(),
+          startLocal: formatBookingStartLocal(start.toISOString(), context.timezone),
+          summary,
+          // The retry cannot reconstruct the provider event id from the
+          // ledger, and the alert only carries it for diagnostics.
+          eventId: null,
+          surface: "booking_page",
+          bookingAssigneeMemberId: retryAssignee,
+          durationMinutes,
+          // A retry cannot rebuild the join link either (the ledger keeps the
+          // meeting id, not the URL), and the note belongs to this submit.
+          joinUrl: null,
+          note: note || null,
+          intakeLines
+        });
       }
     }
     await stampAttendeeContact(

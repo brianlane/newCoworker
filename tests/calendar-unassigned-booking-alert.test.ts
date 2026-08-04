@@ -104,6 +104,17 @@ function dispatched() {
   return vi.mocked(dispatchUrgentNotification).mock.calls[0][0];
 }
 
+/**
+ * The email copy as the dispatcher will render it. It lives in the template
+ * callback rather than in explicit fields, because explicit fields would
+ * outrank the template and defeat the owner's locale.
+ */
+function emailCopy(locale: "en" | "es" = "en") {
+  const templated = dispatched().emailTemplate?.(locale);
+  if (!templated) throw new Error("no emailTemplate was supplied");
+  return templated;
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   vi.mocked(dispatchUrgentNotification).mockResolvedValue({ results: [] });
@@ -119,13 +130,14 @@ describe("maybeAlertUnassignedBooking: a business with no employees", () => {
 
     expect(out).toBe("sent_solo");
     const call = dispatched();
-    const whole = `${call.emailSubject}\n${call.emailBody}\n${call.smsBody}`.toLowerCase();
+    const copy = emailCopy();
+    const whole = `${copy.subject}\n${copy.body}\n${call.smsBody}`.toLowerCase();
     expect(whole).not.toContain("assign");
     expect(whole).not.toContain("teammate");
     expect(whole).not.toContain("nobody is on the hook");
     // Still a useful notice, and filed under the handled kind.
     expect(call.kind).toBe("assigned_booking");
-    expect(call.emailBody).toContain("Brett Douglas");
+    expect(emailCopy().body).toContain("Brett Douglas");
   });
 
   it("does not run the roster query as a proxy for ownership: a solo business with an owned contact is still solo", async () => {
@@ -148,7 +160,7 @@ describe("maybeAlertUnassignedBooking: who holds the appointment", () => {
     });
 
     expect(out).toBe("sent_covered");
-    expect(dispatched().emailBody).toContain("Dana Reyes is assigned to this appointment.");
+    expect(emailCopy().body).toContain("Dana Reyes is assigned to this appointment.");
     expect(dispatched().kind).toBe("assigned_booking");
   });
 
@@ -162,7 +174,7 @@ describe("maybeAlertUnassignedBooking: who holds the appointment", () => {
 
     expect(out).toBe("sent_covered");
     expect(getTeamMember).toHaveBeenCalledWith(BIZ, "emp-9");
-    expect(dispatched().emailBody).toContain("Sam Okafor");
+    expect(emailCopy().body).toContain("Sam Okafor");
     expect(dispatched().payload).toMatchObject({
       assignee_member_id: "emp-9",
       assignee_name: "Sam Okafor",
@@ -179,8 +191,8 @@ describe("maybeAlertUnassignedBooking: who holds the appointment", () => {
     );
 
     expect(out).toBe("sent_unowned");
-    expect(dispatched().emailBody).toContain("nobody is on the hook");
-    expect(dispatched().emailBody).not.toContain("undefined");
+    expect(emailCopy().body).toContain("nobody is on the hook");
+    expect(emailCopy().body).not.toContain("undefined");
   });
 
   it("a roster with nobody holding the lead keeps the original warning", async () => {
@@ -190,7 +202,7 @@ describe("maybeAlertUnassignedBooking: who holds the appointment", () => {
 
     expect(out).toBe("sent_unowned");
     expect(dispatched().kind).toBe("unassigned_booking");
-    expect(dispatched().emailSubject).toContain("needs an owner");
+    expect(emailCopy().subject).toContain("needs an owner");
   });
 
   it("falls back to the email lookup when the phone matches nothing", async () => {
@@ -285,14 +297,15 @@ describe("maybeAlertUnassignedBooking: what reaches the dispatcher", () => {
 
     const call = dispatched();
     expect(call.ctaPath).toBe(`/dashboard/customers/${encodeURIComponent("+12187702372")}`);
-    expect(call.ctaLabel).toBe("Assign this contact");
-    expect(call.emailHeading).toBe("New appointment needs an owner");
+    expect(emailCopy().ctaLabel).toBe("Assign this contact");
+    const copy = emailCopy();
+    expect(copy.heading).toBe("New appointment needs an owner");
     // Said once: the heading is not a copy of the subject.
-    expect(call.emailHeading).not.toBe(call.emailSubject);
-    expect(call.emailBody).toContain("Length: 30 minutes");
-    expect(call.emailBody).toContain("Video link: https://zoom.us/j/123");
-    expect(call.emailBody).toContain("Their note: Wants to talk pricing");
-    expect(call.emailBody).toContain("Company: Acme");
+    expect(copy.heading).not.toBe(copy.subject);
+    expect(copy.body).toContain("Length: 30 minutes");
+    expect(copy.body).toContain("Video link: https://zoom.us/j/123");
+    expect(copy.body).toContain("Their note: Wants to talk pricing");
+    expect(copy.body).toContain("Company: Acme");
     expect(call.payload).toMatchObject({
       surface: "booking_page",
       ownership_state: "unowned",
@@ -307,18 +320,40 @@ describe("maybeAlertUnassignedBooking: what reaches the dispatcher", () => {
     expect(dispatched().contactE164).toBeUndefined();
   });
 
-  it("re-renders the copy in the owner's locale through the template callback", async () => {
+  it("hands the EMAIL copy to the template and does not also send English overrides", async () => {
     await maybeAlertUnassignedBooking(BIZ, INPUT, { client: fakeDb({ contacts: NO_CONTACT }) });
-    const es = dispatched().emailTemplate?.("es");
+    const call = dispatched();
+
+    // The bug this pins: passing an explicit English emailSubject/emailBody
+    // ALONGSIDE the template meant the explicit copy always won in the
+    // dispatcher, so the owner's locale was resolved and then thrown away.
+    // Asserting the callback can speak Spanish is not enough, because the
+    // callback's output was never the thing that got sent.
+    expect(call.emailSubject).toBeUndefined();
+    expect(call.emailBody).toBeUndefined();
+    expect(call.emailHeading).toBeUndefined();
+    expect(call.ctaLabel).toBeUndefined();
+
+    // The channels that resolve NO locale keep their English copy, since
+    // there is nothing to render them in.
+    expect(call.summary).toContain("Unassigned booking");
+    expect(call.smsBody).toContain("No teammate owns this lead yet");
+
+    const en = call.emailTemplate?.("en");
+    expect(en?.subject).toContain("needs an owner");
+    expect(en?.heading).toBe("New appointment needs an owner");
+    expect(en?.ctaLabel).toBe("Assign this contact");
+
+    const es = call.emailTemplate?.("es");
     expect(es?.subject).toContain("necesita responsable");
     expect(es?.ctaLabel).toBe("Asignar este contacto");
     // The path is locale-independent, so it must not move.
-    expect(es?.ctaPath).toBe(dispatched().ctaPath);
+    expect(es?.ctaPath).toBe(call.ctaPath);
   });
 
   it("credits the visitor for a page booking and the AI for an AI booking", async () => {
     await maybeAlertUnassignedBooking(BIZ, INPUT, { client: fakeDb({ contacts: NO_CONTACT }) });
-    expect(dispatched().emailBody).not.toContain("Your AI coworker booked");
+    expect(emailCopy().body).not.toContain("Your AI coworker booked");
 
     vi.clearAllMocks();
     vi.mocked(dispatchUrgentNotification).mockResolvedValue({ results: [] });
@@ -328,7 +363,7 @@ describe("maybeAlertUnassignedBooking: what reaches the dispatcher", () => {
       { ...INPUT, surface: "voice" },
       { client: fakeDb({ contacts: NO_CONTACT }) }
     );
-    expect(dispatched().emailBody).toContain("Your AI coworker booked");
+    expect(emailCopy().body).toContain("Your AI coworker booked");
   });
 });
 

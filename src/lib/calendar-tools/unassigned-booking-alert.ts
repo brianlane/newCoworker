@@ -223,19 +223,22 @@ export async function maybeAlertUnassignedBooking(
         locale
       });
 
-    // English for the dashboard row and the SMS, which resolve no locale;
-    // the email re-renders in the owner's locale inside the dispatcher.
+    // English for the dashboard row and the SMS: neither resolves a locale,
+    // so there is nothing to render them in.
     const base = copyFor(undefined);
 
     await dispatch({
       businessId,
       kind: state === "unowned" ? "unassigned_booking" : "assigned_booking",
       summary: base.summaryLine,
-      emailHeading: base.heading,
-      emailSubject: base.subject,
-      emailBody: base.body,
+      // The path is locale-independent, so it is safe (and useful) to set:
+      // the SMS link uses it too, and all three links must agree.
       ctaPath: base.ctaPath,
-      ctaLabel: base.ctaLabel,
+      // No emailSubject / emailBody / emailHeading / ctaLabel here on
+      // purpose. Explicit fields outrank the template in the dispatcher, so
+      // supplying English ones would resolve the owner's locale and then
+      // throw the result away. The email's copy comes from the template and
+      // only from the template.
       emailTemplate: (locale) => {
         const localized = copyFor(locale);
         return {

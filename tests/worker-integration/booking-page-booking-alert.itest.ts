@@ -155,11 +155,18 @@ async function submit(token: string, over: Record<string, unknown> = {}) {
   });
 }
 
+/**
+ * One row per ALERT, not per row written: a dispatch writes a `notifications`
+ * row for every channel it attempted (dashboard, email, sms, whatsapp), so
+ * counting rows would count channels. The email row is written exactly once
+ * per dispatch and these businesses all have an owner_email.
+ */
 async function ownerAlerts(businessId: string) {
   const { data, error } = await db
     .from("notifications")
     .select("delivery_channel, status, kind, summary, payload")
     .eq("business_id", businessId)
+    .eq("delivery_channel", "email")
     .in("kind", ["unassigned_booking", "assigned_booking"]);
   if (error) throw new Error(`ownerAlerts: ${error.message}`);
   return (data ?? []) as Array<{
@@ -273,6 +280,36 @@ describe("public booking page: what the owner is told", () => {
 
     await submit(token);
     expect((await ownerAlerts(biz)).length).toBe(first);
+  });
+
+  it("a resubmit that FILLS a missing assignment is the first moment there is somebody to name", async () => {
+    const biz = await seedBusinessUtc("Gap fill shop");
+    const dana = await addMember(biz, "Dana Reyes");
+    // `any` records no assignee, which is how a booking ends up with nobody
+    // named while a roster exists.
+    const token = await seedPage(biz, { assignment_mode: "any" });
+
+    expect((await submit(token)).ok).toBe(true);
+    expect((await ledgerRow(biz))?.assignee_member_id).toBeNull();
+    const afterFirst = await ownerAlerts(biz);
+    expect(afterFirst).toHaveLength(1);
+    expect(afterFirst[0].kind).toBe("unassigned_booking");
+
+    // The owner switches the page to round robin. The retry repairs the
+    // assignment, and the owner hears who has it, which they could not have
+    // been told before now.
+    await db
+      .from("booking_pages")
+      .update({ assignment_mode: "round_robin" })
+      .eq("business_id", biz);
+    sentEmails = [];
+    expect((await submit(token)).ok).toBe(true);
+    expect((await ledgerRow(biz))?.assignee_member_id).toBe(dana);
+
+    const afterRetry = await ownerAlerts(biz);
+    expect(afterRetry).toHaveLength(2);
+    expect(afterRetry.filter((a) => a.kind === "assigned_booking")).toHaveLength(1);
+    expect(ownerEmail(await ownerAddress(biz)).text).toContain("Dana Reyes");
   });
 
   it("the owner email links to the contact page, not to a bare dashboard", async () => {
