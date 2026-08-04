@@ -16,10 +16,22 @@ import { errorResponse, successResponse } from "@/lib/api-response";
 import { logger } from "@/lib/logger";
 import { runResidencyReplay } from "@/lib/residency/replay";
 
-// Bounded by perBusinessLimit/businessLimit inside the replayer; 300s is the
-// Vercel Pro ceiling and a pure safety net (each batch is one HTTP call to a
-// box with a 10s client timeout).
-export const maxDuration = 300;
+// Bounded by perBusinessLimit/businessLimit inside the replayer (each batch is
+// one HTTP call to a box with a 10s client timeout), so this is a safety net,
+// not an expected runtime.
+//
+// It is 50, not the 300s Vercel Pro ceiling, to match the job's pg_cron
+// timeout_milliseconds := 50000 (20260804000000_residency_write_journal.sql).
+// The job runs every minute and the replayer takes no claim or advisory lock
+// while draining strictly in `seq` order per business, so the sub-cadence
+// budget is what keeps two replays off the same journal rows. Raising this
+// (or the cron timeout) to 300 would let up to five runs overlap and apply a
+// tenant's journal twice or out of order. A run cut short here is safe by
+// design: the next tick resumes from the same seq.
+//
+// tests/cron-timeout-parity.test.ts pins maxDuration * 1000 <= the cron
+// timeout, so the two numbers cannot drift apart again.
+export const maxDuration = 50;
 
 export const runtime = "nodejs";
 
