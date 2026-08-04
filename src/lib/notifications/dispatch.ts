@@ -449,13 +449,11 @@ export async function dispatchUrgentNotification(
       templated?.body ??
       `${emailCopy.common.urgentBody.replace("{summary}", summary)}\n\nView details: ${dashboardUrl}`;
     const bodyParagraphs = body.split(/\n\n+/).filter(Boolean);
-    // A template may carry its own destination; an explicit ctaPath (which
-    // the SMS link also uses) outranks it so the channels cannot disagree.
-    const ctaHref = input.ctaPath
-      ? dashboardUrl
-      : templated?.ctaPath
-        ? `${appUrl}${templated.ctaPath}`
-        : dashboardUrl;
+    // A template may carry its own destination, but an explicit ctaPath wins:
+    // it is the one the SMS link and the fallback link already used, and a
+    // button pointing somewhere the other two do not is worse than either.
+    const ctaHref =
+      !input.ctaPath && templated?.ctaPath ? `${appUrl}${templated.ctaPath}` : dashboardUrl;
     const html = buildBrandedEmailHtml({
       siteUrl: appUrl,
       documentTitle: subject,
