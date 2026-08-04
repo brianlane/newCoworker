@@ -1042,6 +1042,17 @@ page.
   `notification_preferences.unassigned_booking_alerts`, ON by default, which
   covers all three states.
 
+  Running late costs a wider crash window, so the alert is **claimed on the
+  booking row** before it goes out (`calendar_booking_dedupe.owner_alerted_at`,
+  the same conditional-update shape `assignee_member_id` uses). A request that
+  persists the booking and then dies leaves the claim open, so the visitor's
+  idempotent resubmit sends the alert nobody sent; an ordinary resubmit finds
+  it taken and stays quiet. A claim that cannot be WRITTEN alerts anyway on
+  the first pass (a possible duplicate beats an appointment nobody knows
+  about) and stays silent on a resubmit (where "already told" is the
+  overwhelming case). A gap-fill retry alerts even when the claim is gone,
+  because who has it is genuinely new.
+
   One race remains and is known: flow-driven lead assignment runs in the
   AiFlow worker, so `contacts.owner_employee_id` can land after the booking
   returns. The booking page's own assignee is resolved synchronously and is

@@ -271,6 +271,36 @@ describe("public booking page: what the owner is told", () => {
     expect(ownerEmail(await ownerAddress(biz)).text).toContain("Dana Reyes");
   });
 
+  it("a resubmit still pages the owner when the first request died before alerting", async () => {
+    const biz = await seedBusinessUtc("Crashed mid-booking");
+    const token = await seedPage(biz);
+
+    expect((await submit(token)).ok).toBe(true);
+    expect(await ownerAlerts(biz)).toHaveLength(1);
+
+    // Reproduce the crash window: the booking is durable, but the request
+    // died before the alert, so the claim was never taken and nobody was
+    // told. The appointment exists and no human knows about it.
+    await db
+      .from("calendar_booking_dedupe")
+      .update({ owner_alerted_at: null })
+      .eq("business_id", biz)
+      .eq("attendee_key", `phone:${VISITOR_PHONE}`);
+    await db.from("notifications").delete().eq("business_id", biz);
+    guard.reset();
+
+    // The visitor retries. This is the only thing that will ever tell the
+    // owner the appointment is there.
+    expect((await submit(token)).ok).toBe(true);
+    expect(await ownerAlerts(biz)).toHaveLength(1);
+    expect(ownerEmail(await ownerAddress(biz)).text).toContain("Brett Douglas");
+
+    // And a further resubmit, with the claim now taken, stays quiet.
+    guard.reset();
+    expect((await submit(token)).ok).toBe(true);
+    expect(await ownerAlerts(biz)).toHaveLength(1);
+  });
+
   it("the owner email links to the contact page, not to a bare dashboard", async () => {
     const biz = await seedBusinessUtc("CTA shop");
     const token = await seedPage(biz);

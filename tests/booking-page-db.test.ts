@@ -17,6 +17,7 @@ import {
   rotateBookingPageToken,
   countUpcomingByAssignee,
   stampAssigneeIfUnset,
+  claimOwnerBookingAlert,
   stampAttendeeContact,
   stampManageToken,
   upsertBookingPage
@@ -652,6 +653,57 @@ describe("reminder settings and attendee contact", () => {
       reminder_email_hours: 48,
       reminder_sms_hours: 4
     });
+  });
+
+  it("claims the owner alert once, and reports who holds the booking", async () => {
+    const { client, calls } = fakeDb([
+      { data: [{ id: "row-1", assignee_member_id: "m-ana" }], error: null }
+    ]);
+    expect(
+      await claimOwnerBookingAlert(BIZ, "phone:+14805550100", "2026-07-27T16:00:00Z", client)
+    ).toEqual({ claimed: true, assigneeMemberId: "m-ana" });
+    // Conditional on nobody having claimed it, which is what makes a
+    // resubmit able to close the "booking landed, owner never told" gap
+    // without ever being able to alert twice.
+    expect(calls.filter((c) => c.method === "is").map((c) => c.args)).toContainEqual([
+      "owner_alerted_at",
+      null
+    ]);
+    expect(Object.keys(calls.find((c) => c.method === "update")?.args[0] as object)).toEqual([
+      "owner_alerted_at"
+    ]);
+
+    // Already claimed: the owner has been told, so this caller stays quiet.
+    const { client: taken } = fakeDb([{ data: [], error: null }]);
+    expect(await claimOwnerBookingAlert(BIZ, "k", "2026-07-27T16:00:00Z", taken)).toEqual({
+      claimed: false,
+      assigneeMemberId: null
+    });
+
+    // A claimed row with nobody assigned yet.
+    const { client: unassigned } = fakeDb([
+      { data: [{ id: "row-2", assignee_member_id: null }], error: null }
+    ]);
+    expect(await claimOwnerBookingAlert(BIZ, "k", "2026-07-27T16:00:00Z", unassigned)).toEqual({
+      claimed: true,
+      assigneeMemberId: null
+    });
+
+    const { client: nullData } = fakeDb([{ data: null, error: null }]);
+    expect(await claimOwnerBookingAlert(BIZ, "k", "2026-07-27T16:00:00Z", nullData)).toEqual({
+      claimed: false,
+      assigneeMemberId: null
+    });
+
+    const { client: failing } = fakeDb([{ data: null, error: { message: "denied" } }]);
+    await expect(
+      claimOwnerBookingAlert(BIZ, "k", "2026-07-27T16:00:00Z", failing)
+    ).rejects.toThrow("claimOwnerBookingAlert: denied");
+
+    const { client: fallback } = fakeDb([{ data: [], error: null }]);
+    mockClientFactory.mockResolvedValue(fallback);
+    await claimOwnerBookingAlert(BIZ, "k", "2026-07-27T16:00:00Z");
+    expect(mockClientFactory).toHaveBeenCalled();
   });
 
   it("fills a missing assignee without overwriting one that exists", async () => {
