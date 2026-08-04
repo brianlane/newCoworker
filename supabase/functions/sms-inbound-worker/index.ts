@@ -555,6 +555,12 @@ async function finalizeDeliveredReply(
 }
 
 serve(async (req: Request) => {
+  // Stamped before auth and before claim_sms_inbound_jobs, not at the top of
+  // the dispatch loop: the 150s Supabase ceiling starts when the invocation
+  // does, so a slow auth or a slow claim eats into the same budget the jobs
+  // do. Measuring from the loop instead would let a 20s claim plus a 49s
+  // first job start a second job that runs to 140s and blows the ceiling.
+  const invocationStartedAt = Date.now();
   if (req.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
   }
@@ -586,9 +592,9 @@ serve(async (req: Request) => {
   // Wall-clock guard for the batch. Every per-job timeout below was sized
   // against the pg_cron cap as if one job ran per invocation, but this loop
   // works up to 8 sequentially, so a slow batch used to run past the 150s
-  // Supabase request ceiling and get killed mid-job. See
+  // Supabase request ceiling and get killed mid-job. Measured from
+  // `invocationStartedAt` so auth and the claim count against it too. See
   // ../_shared/sms_inbound_budget.ts.
-  const batchStartedAt = Date.now();
   let deferredIds: string[] = [];
 
   const template =
@@ -618,7 +624,7 @@ serve(async (req: Request) => {
     // Checked BEFORE starting the job, because what matters is whether the
     // next one can still finish inside the ceiling. Index 0 always runs, so a
     // run can never claim rows and hand every one of them straight back.
-    if (!smsInboundBatchHasRoom(jobIndex, Date.now() - batchStartedAt)) {
+    if (!smsInboundBatchHasRoom(jobIndex, Date.now() - invocationStartedAt)) {
       deferredIds = smsInboundDeferredIds(list, jobIndex);
       break;
     }
@@ -2457,31 +2463,42 @@ serve(async (req: Request) => {
       { p_ids: deferredIds }
     );
     if (releaseErr) {
-      // Recoverable: the stale-claim sweep still requeues these, just later
-      // and at the cost of one attempt each. Worth an error line because it
-      // means customers are waiting longer than they should.
       console.error("release_sms_inbound_jobs", releaseErr);
     } else {
       deferred = typeof released === "number" ? released : deferredIds.length;
     }
+    // Anything the RPC did not release is still sitting at 'processing', so it
+    // keeps blocking its contact's queue until stale-claim recovery. That is a
+    // materially worse outcome than a clean deferral and it must not be logged
+    // as one: a release failure is an error with its own event, not a warn
+    // saying the jobs went back to the queue.
+    const stranded = deferredIds.length - deferred;
     await systemLog(supabase, {
       businessId: null,
       source: "sms_worker",
-      level: "warn",
-      event: "sms_inbound_batch_deferred",
-      message: `Inbound SMS batch ran out of wall-clock budget: ${deferredIds.length} job(s) returned to the queue for the next tick`,
-      payload: { claimed: list.length, processed, deferred: deferredIds.length }
+      level: stranded > 0 ? "error" : "warn",
+      event: stranded > 0 ? "sms_inbound_batch_release_failed" : "sms_inbound_batch_deferred",
+      message:
+        stranded > 0
+          ? `Inbound SMS batch ran out of wall-clock budget and ${stranded} job(s) could NOT be returned to the queue: they stay 'processing' and block their contact until stale-claim recovery`
+          : `Inbound SMS batch ran out of wall-clock budget: ${deferred} job(s) returned to the queue for the next tick`,
+      payload: { claimed: list.length, processed, requested: deferredIds.length, deferred, stranded }
     });
   }
 
+  const stranded = deferredIds.length - deferred;
   await telemetryRecord(supabase, "sms_inbound_worker_batch", {
     claimed: list.length,
     processed,
-    deferred
+    deferred,
+    stranded
   });
 
-  return new Response(JSON.stringify({ ok: true, claimed: list.length, processed, deferred }), {
-    status: 200,
-    headers: { "Content-Type": "application/json" }
-  });
+  return new Response(
+    JSON.stringify({ ok: true, claimed: list.length, processed, deferred, stranded }),
+    {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    }
+  );
 });

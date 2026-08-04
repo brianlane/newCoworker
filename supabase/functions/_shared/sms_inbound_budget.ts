@@ -59,6 +59,12 @@ export const SMS_INBOUND_BATCH_BUDGET_MS = 50_000;
  * re-claiming and re-releasing the same rows every 30s and never draining the
  * queue. Guaranteeing one job per run guarantees forward progress even if the
  * claim itself was slow.
+ *
+ * `elapsedMs` must be measured from the START OF THE INVOCATION, not from the
+ * top of the dispatch loop. The 150s ceiling starts when Supabase begins the
+ * request, so the bearer check and claim_sms_inbound_jobs spend the same
+ * budget the jobs do. Timing from the loop instead would let a 20s claim plus
+ * a 49s first job green-light a second job that runs to 140s and overruns.
  */
 export function smsInboundBatchHasRoom(
   startedIndex: number,
