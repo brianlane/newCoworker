@@ -29,6 +29,7 @@ import {
   listAutoReloadRules,
   upsertAutoReloadRule
 } from "@/lib/db/auto-reload";
+import { getTranslations } from "next-intl/server";
 import { logger } from "@/lib/logger";
 
 const bodySchema = z.object({
@@ -69,6 +70,7 @@ export async function POST(request: Request) {
     const payload = bodySchema.parse(await request.json());
     const monthlyLimitCents = payload.monthlyLimitCents ?? null;
 
+    const t = await getTranslations("dashboard.billing.autoReload");
     const businessId = await resolveActiveBusinessIdForAction(user, "manage_billing");
     if (!businessId) return errorResponse("NOT_FOUND", "Business not found", 404);
 
@@ -143,7 +145,9 @@ export async function POST(request: Request) {
           businessId,
           userId: user.userId,
           successUrl: `${appUrl}/dashboard/billing?autoReload=ready`,
-          cancelUrl: `${appUrl}/dashboard/billing?autoReload=canceled`
+          cancelUrl: `${appUrl}/dashboard/billing?autoReload=canceled`,
+          consentNote: t("consentStripeNote"),
+          submitLabel: t("consentSubmit")
         });
         setupUrl = session.url;
       }

@@ -1376,6 +1376,36 @@ describe("stripe/client", () => {
       });
     });
 
+    it("puts our own consent wording on Stripe's page", async () => {
+      // Stripe's default setup-mode text only says the card is being saved,
+      // which is not what the tenant is actually agreeing to.
+      mockSessionCreate.mockResolvedValue({ id: "cs_setup_3", url: "https://stripe.test/setup" });
+      await createAutoReloadSetupSession({
+        customerId: "cus_1",
+        businessId: "biz-1",
+        userId: "user-1",
+        successUrl: "https://app.test/ok",
+        cancelUrl: "https://app.test/no",
+        consentNote: "We charge the pack you chose when your balance falls below your threshold.",
+        submitLabel: "Authorize automatic top-ups"
+      });
+      const args = mockSessionCreate.mock.calls[0][0];
+      expect(args.custom_text.after_submit.message).toContain("balance falls below");
+      expect(args.custom_text.submit.message).toBe("Authorize automatic top-ups");
+    });
+
+    it("omits custom text entirely when none is supplied", async () => {
+      mockSessionCreate.mockResolvedValue({ id: "cs_setup_4", url: "https://stripe.test/setup" });
+      await createAutoReloadSetupSession({
+        customerId: "cus_1",
+        businessId: "biz-1",
+        userId: "user-1",
+        successUrl: "https://app.test/ok",
+        cancelUrl: "https://app.test/no"
+      });
+      expect(mockSessionCreate.mock.calls[0][0].custom_text).toEqual({});
+    });
+
     it("throws when Stripe returns no URL", async () => {
       mockSessionCreate.mockResolvedValue({ id: "cs_setup_2", url: null });
       await expect(
