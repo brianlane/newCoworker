@@ -276,11 +276,22 @@ async function defaultNotify(params: {
     kind: ALERT_TASK_TYPE[params.kind],
     emailSubject: email.subject,
     emailBody: email.text,
+    // `taskType`, camelCase: that is the key `notificationLink` reads. Writing
+    // the snake_case column name here looked right and silently sent every
+    // one of these alerts to Activity instead of Billing.
     payload: {
-      task_type: ALERT_TASK_TYPE[params.kind],
+      taskType: ALERT_TASK_TYPE[params.kind],
       category: params.candidate.category,
-      auto_reload_kind: params.kind
-    }
+      autoReloadKind: params.kind
+    },
+    // Every auto-reload alert is fixed on the billing page, so the email
+    // button has to go there. Without this the dispatcher renders its generic
+    // "open dashboard" CTA and the tenant has to find Billing themselves.
+    // Every auto-reload alert is fixed on the billing page, so all three
+    // destinations have to point there: the email button, its copy-paste
+    // fallback link, and the SMS link. `ctaPath` drives all of them at once.
+    ctaPath: "/dashboard/billing",
+    ctaLabel: email.ctaLabel
   });
 }
 

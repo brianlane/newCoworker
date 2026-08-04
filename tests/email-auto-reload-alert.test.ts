@@ -21,7 +21,12 @@ describe("buildAutoReloadAlertEmail", () => {
     expect(email.text).toContain("3");
     expect(email.text).toContain("text messages");
     expect(email.text).toContain("https://app.example.com/dashboard/billing");
-    expect(email.html).toContain("/dashboard/billing");
+    // The CTA is returned rather than rendered here: dispatchUrgentNotification
+    // owns the branded HTML (and its unsubscribe footer), so a second renderer
+    // in the template would be dead code that quietly diverged from what
+    // actually gets sent.
+    expect(email.billingUrl).toBe("https://app.example.com/dashboard/billing");
+    expect(email.ctaLabel).toBeTruthy();
   });
 
   it("defaults the attempt count when the caller omits it", () => {

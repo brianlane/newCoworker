@@ -683,7 +683,14 @@ describe("owner notifications", () => {
         kind: "auto_reload_disabled",
         emailSubject: expect.stringContaining("Acme Plumbing"),
         emailBody: expect.stringContaining("text messages"),
-        payload: expect.objectContaining({ task_type: "auto_reload_disabled" })
+        // camelCase `taskType` is the key notificationLink actually reads.
+        // The snake_case column name looked right and silently sent every one
+        // of these alerts to Activity instead of Billing.
+        payload: expect.objectContaining({ taskType: "auto_reload_disabled" }),
+        // Every auto-reload alert is fixed on the billing page, so all three
+        // destinations point there: the email button, its fallback link, and
+        // the SMS link. One `ctaPath` drives all of them.
+        ctaPath: "/dashboard/billing"
       })
     );
   });
