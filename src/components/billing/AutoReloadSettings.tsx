@@ -122,11 +122,7 @@ export function AutoReloadSettings({
             {t("cardOnFile", { brand: card.brand ?? "card", last4: card.last4 })}
           </p>
         ) : null}
-        <form action="/api/billing/portal" method="POST">
-          <button type="submit" className="text-xs underline text-parchment/60">
-            {t("updateCard")}
-          </button>
-        </form>
+        <UpdateCardButton label={t("updateCard")} />
       </div>
 
       <div className="mt-6 pt-6 border-t border-parchment/10">
@@ -150,6 +146,44 @@ export function AutoReloadSettings({
         )}
       </div>
     </Card>
+  );
+}
+
+/**
+ * Re-authorizes the auto-reload card through a fresh setup Checkout.
+ *
+ * Deliberately NOT the Stripe billing portal: the portal changes the card on
+ * the membership subscription, which is a different payment method from the
+ * one auto-reload charges. Sending the tenant there would look like it
+ * worked while the sweep kept charging the old card.
+ */
+function UpdateCardButton({ label }: { label: string }) {
+  const [busy, setBusy] = useState(false);
+
+  async function start() {
+    setBusy(true);
+    try {
+      const res = await fetch("/api/billing/auto-reload/card", { method: "POST" });
+      const body = (await res.json()) as { data?: { setupUrl?: string } };
+      if (res.ok && body.data?.setupUrl) {
+        window.location.assign(body.data.setupUrl);
+        return;
+      }
+    } catch {
+      // Fall through to re-enable the button.
+    }
+    setBusy(false);
+  }
+
+  return (
+    <button
+      type="button"
+      onClick={() => void start()}
+      disabled={busy}
+      className="text-xs underline text-parchment/60 disabled:cursor-wait"
+    >
+      {label}
+    </button>
   );
 }
 

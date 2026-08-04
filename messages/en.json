@@ -2613,6 +2613,22 @@
       "openBillingFallback": "Open Billing: {billingUrl}",
       "termAnnual": "12-month",
       "termBiennial": "24-month"
+    },
+    "autoReload": {
+      "disabledSubject": "Auto-reload was turned off for {business}",
+      "disabledLine1": "Hi, we could not charge your card for an automatic top-up, so auto-reload has been turned off.",
+      "disabledLine2": "Your card was declined {attempts} times in a row for {familyName}. Nothing was charged.",
+      "disabledLine3": "Update your card and turn auto-reload back on from your billing page, and we will pick up where we left off.",
+      "pausedSubject": "Your bank needs to confirm a top-up for {business}",
+      "pausedLine1": "Hi, your bank asked to confirm the last automatic top-up, which we cannot do without you present.",
+      "pausedLine2": "Auto-reload for {familyName} is paused until then. Buy that pack once by hand and auto-reload will resume on its own.",
+      "limitSubject": "Auto-reload hit your monthly limit for {business}",
+      "limitLine1": "Hi, auto-reload reached the monthly limit you set, so it is paused for the rest of this month.",
+      "limitLine2": "This affects {familyName}. Raise the limit on your billing page if you want top-ups to continue.",
+      "cta": "Open billing",
+      "familyVoice": "voice minutes",
+      "familySms": "text messages",
+      "familyChat": "AI credit"
     }
   },
   "notFound": {

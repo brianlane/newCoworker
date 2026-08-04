@@ -231,6 +231,41 @@ export async function saveAutoReloadCard(
   if (error) throw new Error(`saveAutoReloadCard: ${error.message}`);
 }
 
+/**
+ * Restore rules we switched off ONLY because the card went away.
+ *
+ * Replacing a card can emit `payment_method.detached` for the old method
+ * before the setup Checkout completes for the new one, so a tenant who did
+ * exactly the right thing would otherwise end up with auto-reload silently
+ * off and no signal saying so.
+ *
+ * Scoped to `disabled_reason = 'card_detached'`, which only the detach
+ * handler sets. A rule switched off for repeated declines, a dispute, or a
+ * cancelled subscription stays off: those need a deliberate decision from the
+ * tenant, not a card swap.
+ */
+export async function reenableAutoReloadAfterCardAuthorized(
+  businessId: string,
+  db?: SupabaseClient
+): Promise<number> {
+  const supabase = await client(db);
+  const { data, error } = await supabase
+    .from("usage_pack_auto_reload_rules")
+    .update({
+      enabled: true,
+      disabled_reason: null,
+      paused_at: null,
+      paused_reason: null,
+      consecutive_failures: 0,
+      updated_at: new Date().toISOString()
+    })
+    .eq("business_id", businessId)
+    .eq("disabled_reason", "card_detached")
+    .select("category");
+  if (error) throw new Error(`reenableAutoReloadAfterCardAuthorized: ${error.message}`);
+  return ((data ?? []) as unknown[]).length;
+}
+
 export async function revokeAutoReloadCard(
   businessId: string,
   db?: SupabaseClient
@@ -281,6 +316,7 @@ export type AutoReloadCandidate = {
   monthlyLimitCents: number | null;
   cooldownMinutes: number;
   ownerEmail: string | null;
+  businessName: string | null;
   tier: string | null;
   enterpriseLimits: unknown;
   phone: string | null;
@@ -308,6 +344,7 @@ export async function listAutoReloadCandidates(
     monthlyLimitCents: row.monthly_limit_cents === null ? null : Number(row.monthly_limit_cents),
     cooldownMinutes: Number(row.cooldown_minutes),
     ownerEmail: (row.owner_email as string | null) ?? null,
+    businessName: (row.business_name as string | null) ?? null,
     tier: (row.tier as string | null) ?? null,
     enterpriseLimits: row.enterprise_limits ?? null,
     phone: (row.phone as string | null) ?? null,

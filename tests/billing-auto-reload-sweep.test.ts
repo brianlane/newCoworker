@@ -45,8 +45,11 @@ vi.mock("@/lib/db/usage", () => ({
   getCalendarMonthUsageTotals: (...a: unknown[]) => monthUsage(...a)
 }));
 
+vi.mock("@/lib/email/client", () => ({ sendOwnerEmail: vi.fn(async () => "msg_1") }));
+
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { createOffSessionPackCharge } from "@/lib/stripe/client";
+import { sendOwnerEmail } from "@/lib/email/client";
 import { readRemainingUnits, sweepUsagePackAutoReloads } from "@/lib/billing/auto-reload-sweep";
 import type { AutoReloadCandidate } from "@/lib/db/auto-reload";
 
@@ -69,6 +72,7 @@ function candidate(over: Partial<AutoReloadCandidate> = {}): AutoReloadCandidate
     monthlyLimitCents: null,
     cooldownMinutes: 120,
     ownerEmail: "owner@example.com",
+    businessName: "Acme Plumbing",
     tier: "standard",
     enterpriseLimits: null,
     phone: "+14165550100",
@@ -481,5 +485,169 @@ describe("readRemainingUnits", () => {
     smsBonus.mockResolvedValue(0);
     // Starter cap (100/month) applies when the tier is unknown.
     expect(await readRemainingUnits(candidate({ category: "sms", tier: null }), db)).toBe(100);
+  });
+});
+
+describe("owner notifications", () => {
+  it("emails when a rule disables itself, which is otherwise invisible", async () => {
+    // Auto-reload runs unattended: a tenant whose rule just switched off
+    // would not find out until their texts start failing.
+    settle.mockResolvedValue({ ok: true, disabled: true });
+    listCandidates.mockResolvedValue([candidate()]);
+    const notify = vi.fn(async () => {});
+    await sweepUsagePackAutoReloads(
+      deps({
+        notify,
+        charge: async () => ({ ok: false, error: { code: "expired_card", message: "expired" } })
+      })
+    );
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "disabled", attempts: 3 })
+    );
+  });
+
+  it("emails when the bank wants the cardholder present", async () => {
+    listCandidates.mockResolvedValue([candidate()]);
+    const notify = vi.fn(async () => {});
+    await sweepUsagePackAutoReloads(
+      deps({
+        notify,
+        charge: async () => ({
+          ok: false,
+          error: { code: "authentication_required", message: "3DS" }
+        })
+      })
+    );
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "paused_authentication" })
+    );
+  });
+
+  it("stays silent on a soft decline, which retries on its own", async () => {
+    listCandidates.mockResolvedValue([candidate()]);
+    const notify = vi.fn(async () => {});
+    await sweepUsagePackAutoReloads(
+      deps({
+        notify,
+        charge: async () => ({
+          ok: false,
+          error: { code: "card_declined", decline_code: "insufficient_funds" }
+        })
+      })
+    );
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("emails when the monthly budget stops top-ups", async () => {
+    claim.mockResolvedValue({ ok: false, reason: "monthly_limit" });
+    listCandidates.mockResolvedValue([candidate()]);
+    const notify = vi.fn(async () => {});
+    await sweepUsagePackAutoReloads(deps({ notify }));
+    expect(notify).toHaveBeenCalledWith(expect.objectContaining({ kind: "monthly_limit" }));
+  });
+
+  it("stays silent when another sweep already owns the bucket", async () => {
+    claim.mockResolvedValue({ ok: false, reason: "already_claimed" });
+    listCandidates.mockResolvedValue([candidate()]);
+    const notify = vi.fn(async () => {});
+    await sweepUsagePackAutoReloads(deps({ notify }));
+    expect(notify).not.toHaveBeenCalled();
+  });
+
+  it("never lets a failed email break the sweep", async () => {
+    settle.mockResolvedValue({ ok: true, disabled: true });
+    listCandidates.mockResolvedValue([candidate()]);
+    const notify = vi.fn(async () => {
+      throw new Error("resend down");
+    });
+    const res = await sweepUsagePackAutoReloads(
+      deps({
+        notify,
+        charge: async () => ({ ok: false, error: { code: "expired_card" } })
+      })
+    );
+    expect(res.failed).toBe(1);
+    expect(res.errors).toEqual([]);
+  });
+
+  it("sends nothing when Resend is not configured", async () => {
+    // The default notify path, exercised without an API key.
+    delete process.env.RESEND_API_KEY;
+    settle.mockResolvedValue({ ok: true, disabled: true });
+    listCandidates.mockResolvedValue([candidate()]);
+    const res = await sweepUsagePackAutoReloads(
+      deps({ charge: async () => ({ ok: false, error: { code: "expired_card" } }) })
+    );
+    expect(res.failed).toBe(1);
+  });
+
+  it("sends nothing when the tenant has no owner email", async () => {
+    process.env.RESEND_API_KEY = "re_test";
+    settle.mockResolvedValue({ ok: true, disabled: true });
+    listCandidates.mockResolvedValue([candidate({ ownerEmail: null })]);
+    const res = await sweepUsagePackAutoReloads(
+      deps({ charge: async () => ({ ok: false, error: { code: "expired_card" } }) })
+    );
+    expect(res.failed).toBe(1);
+  });
+  it("actually sends the owner email through the default path", async () => {
+    // Covers the real defaultNotify body, not just its early returns.
+    process.env.RESEND_API_KEY = "re_test";
+    process.env.NEXT_PUBLIC_APP_URL = "https://app.example.com";
+    settle.mockResolvedValue({ ok: true, disabled: true });
+    listCandidates.mockResolvedValue([candidate()]);
+
+    await sweepUsagePackAutoReloads(
+      deps({ charge: async () => ({ ok: false, error: { code: "expired_card" } }) })
+    );
+
+    expect(sendOwnerEmail).toHaveBeenCalledWith(
+      "re_test",
+      "owner@example.com",
+      expect.stringContaining("Acme Plumbing"),
+      expect.objectContaining({ text: expect.stringContaining("text messages") })
+    );
+  });
+  it("falls back gracefully when the tenant row has no name or app URL", async () => {
+    process.env.RESEND_API_KEY = "re_test";
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    settle.mockResolvedValue({ ok: true, disabled: true });
+    listCandidates.mockResolvedValue([candidate({ businessName: null })]);
+
+    await sweepUsagePackAutoReloads(
+      deps({ charge: async () => ({ ok: false, error: { code: "expired_card" } }) })
+    );
+
+    expect(sendOwnerEmail).toHaveBeenCalledWith(
+      "re_test",
+      "owner@example.com",
+      expect.stringContaining("your account"),
+      expect.anything()
+    );
+  });
+
+  it("swallows a notify failure on the 3DS path too", async () => {
+    listCandidates.mockResolvedValue([candidate()]);
+    const notify = vi.fn(async () => {
+      throw new Error("resend down");
+    });
+    const res = await sweepUsagePackAutoReloads(
+      deps({
+        notify,
+        charge: async () => ({ ok: false, error: { code: "authentication_required" } })
+      })
+    );
+    expect(res.errors).toEqual([]);
+  });
+
+  it("swallows a notify failure on the budget path too", async () => {
+    claim.mockResolvedValue({ ok: false, reason: "monthly_limit" });
+    listCandidates.mockResolvedValue([candidate()]);
+    const notify = vi.fn(async () => {
+      throw new Error("resend down");
+    });
+    const res = await sweepUsagePackAutoReloads(deps({ notify }));
+    expect(res.errors).toEqual([]);
+    expect(res.skipped).toBe(1);
   });
 });

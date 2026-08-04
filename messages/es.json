@@ -2613,6 +2613,22 @@
       "openBillingFallback": "Abrir facturación: {billingUrl}",
       "termAnnual": "12 meses",
       "termBiennial": "24 meses"
+    },
+    "autoReload": {
+      "disabledSubject": "Se desactivo la recarga automatica de {business}",
+      "disabledLine1": "Hola, no pudimos cobrar tu tarjeta para una recarga automatica, asi que la desactivamos.",
+      "disabledLine2": "Tu tarjeta fue rechazada {attempts} veces seguidas para {familyName}. No se cobro nada.",
+      "disabledLine3": "Actualiza tu tarjeta y vuelve a activar la recarga automatica desde tu pagina de facturacion, y continuaremos donde lo dejamos.",
+      "pausedSubject": "Tu banco necesita confirmar una recarga de {business}",
+      "pausedLine1": "Hola, tu banco pidio confirmar la ultima recarga automatica, algo que no podemos hacer sin ti.",
+      "pausedLine2": "La recarga automatica de {familyName} esta pausada hasta entonces. Compra ese paquete una vez a mano y la recarga automatica continuara sola.",
+      "limitSubject": "La recarga automatica alcanzo tu limite mensual en {business}",
+      "limitLine1": "Hola, la recarga automatica alcanzo el limite mensual que fijaste, asi que esta pausada el resto del mes.",
+      "limitLine2": "Esto afecta a {familyName}. Aumenta el limite en tu pagina de facturacion si quieres que las recargas continuen.",
+      "cta": "Abrir facturacion",
+      "familyVoice": "minutos de voz",
+      "familySms": "mensajes de texto",
+      "familyChat": "credito de IA"
     }
   },
   "notFound": {

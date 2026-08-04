@@ -15,6 +15,7 @@
  */
 import {
   AUTO_RELOAD_CATEGORIES,
+  AUTO_RELOAD_MAX_CONSECUTIVE_FAILURES,
   autoReloadPlatformEnabled,
   autoReloadPlatformMaxMonthlyCents,
   classifyChargeFailure,
@@ -36,6 +37,11 @@ import { getCalendarMonthUsageTotals } from "@/lib/db/usage";
 import { effectiveSmsMonthlyCap } from "@/lib/plans/limits";
 import { createOffSessionPackCharge, getStripe } from "@/lib/stripe/client";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { sendOwnerEmail } from "@/lib/email/client";
+import {
+  buildAutoReloadAlertEmail,
+  type AutoReloadAlertKind
+} from "@/lib/email/templates/auto-reload-alert";
 import { logger } from "@/lib/logger";
 import type { PlanTier } from "@/lib/plans/tier";
 
@@ -98,6 +104,11 @@ export type AutoReloadSweepDeps = {
    * and a sweep that picked up a neighbouring test's tenant would charge it.
    */
   listCandidates?: (limit: number, db: SupabaseClient) => Promise<AutoReloadCandidate[]>;
+  notify?: (params: {
+    candidate: AutoReloadCandidate;
+    kind: AutoReloadAlertKind;
+    attempts?: number;
+  }) => Promise<void>;
 };
 
 export type AutoReloadSweepResult = {
@@ -217,6 +228,34 @@ async function applyGrant(params: {
   return { ok: payload.ok !== false, sourceId, reason: payload.reason };
 }
 
+/**
+ * Tell the owner about the states they cannot discover on their own.
+ *
+ * Auto-reload runs unattended, so a rule that quietly switched itself off is
+ * invisible until the tenant's texts start failing. Successes and soft
+ * declines are deliberately silent: those are visible in the billing ledger
+ * and do not warrant an interruption.
+ */
+async function defaultNotify(params: {
+  candidate: AutoReloadCandidate;
+  kind: AutoReloadAlertKind;
+  attempts?: number;
+}): Promise<void> {
+  const apiKey = process.env.RESEND_API_KEY;
+  const to = params.candidate.ownerEmail;
+  if (!apiKey || !to) return;
+
+  const email = buildAutoReloadAlertEmail({
+    kind: params.kind,
+    category: params.candidate.category,
+    businessName: params.candidate.businessName ?? "your account",
+    recipientEmail: to,
+    siteUrl: process.env.NEXT_PUBLIC_APP_URL ?? "",
+    attempts: params.attempts
+  });
+  await sendOwnerEmail(apiKey, to, email.subject, { text: email.text, html: email.html });
+}
+
 function chunk<T>(items: T[], size: number): T[][] {
   const out: T[][] = [];
   for (let i = 0; i < items.length; i += size) out.push(items.slice(i, i + size));
@@ -245,6 +284,7 @@ export async function sweepUsagePackAutoReloads(
   const resolvePrice = deps.resolvePrice ?? resolvePackChargeAmount;
   const limit = deps.limit ?? AUTO_RELOAD_BATCH_LIMIT;
   const readCandidates = deps.listCandidates ?? listAutoReloadCandidates;
+  const notify = deps.notify ?? defaultNotify;
 
   const candidates = await readCandidates(limit, db);
   result.scanned = candidates.length;
@@ -253,7 +293,7 @@ export async function sweepUsagePackAutoReloads(
     await Promise.all(
       batch.map(async (candidate) => {
         try {
-          await processCandidate({ candidate, db, now, charge, resolvePrice, result });
+          await processCandidate({ candidate, db, now, charge, resolvePrice, notify, result });
         } catch (err) {
           // One tenant's failure must never stall the batch.
           result.errors.push({
@@ -280,9 +320,10 @@ async function processCandidate(ctx: {
   now: () => Date;
   charge: NonNullable<AutoReloadSweepDeps["charge"]>;
   resolvePrice: typeof resolvePackChargeAmount;
+  notify: NonNullable<AutoReloadSweepDeps["notify"]>;
   result: AutoReloadSweepResult;
 }): Promise<void> {
-  const { candidate, db, now, charge, resolvePrice, result } = ctx;
+  const { candidate, db, now, charge, resolvePrice, notify, result } = ctx;
 
   if (!AUTO_RELOAD_CATEGORIES.includes(candidate.category)) {
     result.skipped += 1;
@@ -394,7 +435,12 @@ async function processCandidate(ctx: {
     );
     if (!claim.ok) {
       // `already_claimed` is the concurrent-sweep case: another tick owns
-      // this cooldown bucket, so this one charges nothing.
+      // this cooldown bucket, so this one charges nothing, and is not worth
+      // an email. A budget ceiling IS worth one: the tenant set that number
+      // and top-ups have now stopped for the month.
+      if (claim.reason === "monthly_limit") {
+        await notify({ candidate, kind: "monthly_limit" }).catch(() => {});
+      }
       result.skipped += 1;
       return;
     }
@@ -412,7 +458,7 @@ async function processCandidate(ctx: {
 
   if (!outcome.ok) {
     const failure = classifyChargeFailure(outcome.error);
-    await settleAutoReload(
+    const settled = await settleAutoReload(
       {
         eventId,
         status: failure.kind === "requires_action" ? "requires_action" : "failed",
@@ -422,6 +468,18 @@ async function processCandidate(ctx: {
       },
       db
     );
+    // Auto-reload runs unattended, so a rule that just switched itself off is
+    // invisible until the tenant's texts start failing. A soft decline stays
+    // silent: it retries next cooldown and the ledger already shows it.
+    if (settled.disabled) {
+      await notify({
+        candidate,
+        kind: "disabled",
+        attempts: AUTO_RELOAD_MAX_CONSECUTIVE_FAILURES
+      }).catch(() => {});
+    } else if (failure.kind === "requires_action") {
+      await notify({ candidate, kind: "paused_authentication" }).catch(() => {});
+    }
     result.failed += 1;
     logger.warn("auto_reload: charge failed", {
       businessId: candidate.businessId,

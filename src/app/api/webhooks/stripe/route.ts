@@ -2500,7 +2500,9 @@ async function applyAutoReloadSetupFromCheckout(
     return;
   }
 
-  const { saveAutoReloadCard } = await import("@/lib/db/auto-reload");
+  const { saveAutoReloadCard, reenableAutoReloadAfterCardAuthorized } = await import(
+    "@/lib/db/auto-reload"
+  );
   await saveAutoReloadCard(businessId, {
     stripePaymentMethodId: paymentMethodId,
     cardBrand: card?.brand ?? null,
@@ -2530,7 +2532,19 @@ async function applyAutoReloadSetupFromCheckout(
     }
   }
 
-  logger.info("auto_reload setup: card authorized", { eventId, businessId, paymentMethodId });
+  // Replacing a card can emit payment_method.detached for the OLD method
+  // before this handler saves the new one, which would have left the tenant
+  // switched off after doing exactly the right thing. Only rules disabled by
+  // that specific path come back; declines, disputes, and cancellations still
+  // need a deliberate decision.
+  const restored = await reenableAutoReloadAfterCardAuthorized(businessId);
+
+  logger.info("auto_reload setup: card authorized", {
+    eventId,
+    businessId,
+    paymentMethodId,
+    rulesRestored: restored
+  });
 }
 
 /**

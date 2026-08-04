@@ -9,6 +9,7 @@ import {
   disableAutoReloadForBusinessesByPaymentMethod,
   getAutoReloadCard,
   listAutoReloadCandidates,
+  reenableAutoReloadAfterCardAuthorized,
   listAutoReloadEvents,
   listAutoReloadRules,
   resumeStaleAutoReload,
@@ -589,6 +590,43 @@ describe("disableAutoReloadForBusiness", () => {
     const { client } = fakeDb([{ data: null, error: { message: "denied" } }]);
     await expect(disableAutoReloadForBusiness("biz-1", "dispute", client)).rejects.toThrow(
       /disableAutoReloadForBusiness: denied/
+    );
+  });
+});
+
+describe("reenableAutoReloadAfterCardAuthorized", () => {
+  it("restores only rules switched off because the card went away", async () => {
+    // Replacing a card can emit payment_method.detached for the OLD method
+    // before setup Checkout completes for the new one. Without this a tenant
+    // who did exactly the right thing ends up silently switched off.
+    const { client, calls } = fakeDb([{ data: [{ category: "sms" }], error: null }]);
+    expect(await reenableAutoReloadAfterCardAuthorized("biz-1", client)).toBe(1);
+
+    const eqArgs = calls.filter((c) => c.method === "eq").map((c) => c.args);
+    // Scoped to the marker only the detach handler sets, so a rule disabled
+    // for declines, a dispute, or a cancellation stays off.
+    expect(eqArgs).toContainEqual(["disabled_reason", "card_detached"]);
+
+    const payload = calls.find((c) => c.method === "update")!.args[0] as Record<string, unknown>;
+    expect(payload).toMatchObject({
+      enabled: true,
+      disabled_reason: null,
+      paused_reason: null,
+      consecutive_failures: 0
+    });
+  });
+
+  it("returns zero when nothing was disabled that way", async () => {
+    const { client } = fakeDb([{ data: [], error: null }]);
+    expect(await reenableAutoReloadAfterCardAuthorized("biz-1", client)).toBe(0);
+    const nullish = fakeDb([{ data: null, error: null }]);
+    expect(await reenableAutoReloadAfterCardAuthorized("biz-1", nullish.client)).toBe(0);
+  });
+
+  it("throws on error", async () => {
+    const { client } = fakeDb([{ data: null, error: { message: "denied" } }]);
+    await expect(reenableAutoReloadAfterCardAuthorized("biz-1", client)).rejects.toThrow(
+      /reenableAutoReloadAfterCardAuthorized: denied/
     );
   });
 });
