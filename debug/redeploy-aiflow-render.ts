@@ -140,11 +140,19 @@ ${SEED_TOKEN ? buildSeedTokenBlock() : ""}
 echo "== rsync aiflow-render (preserve .env + node_modules) =="
 rsync -a --delete --exclude .env --exclude node_modules "$REPO/vps/aiflow-render/" "$DEST/"
 echo "== verify Clever-engine code landed =="
-if ! grep -q click_text_while_present "$DEST/server.mjs"; then
-  echo "ERROR: click_text_while_present not found in synced server.mjs" >&2
+# The ACTION-mode engine moved out of server.mjs into actions.mjs so it could be
+# unit-tested. Check BOTH: actions.mjs must exist and carry the verb, and
+# server.mjs must import it, so a partial rsync (or a box still on the old
+# single-file build) fails loudly instead of silently serving stale code.
+if ! grep -q click_text_while_present "$DEST/actions.mjs"; then
+  echo "ERROR: click_text_while_present not found in synced actions.mjs" >&2
   exit 1
 fi
-echo "click_text_while_present present"
+if ! grep -q 'from "./actions.mjs"' "$DEST/server.mjs"; then
+  echo "ERROR: server.mjs does not import ./actions.mjs — stale build?" >&2
+  exit 1
+fi
+echo "click_text_while_present present in actions.mjs, server.mjs imports it"
 echo "== confirm render token (redacted; len=0 means the auth gate is OFF) =="
 awk -F= '/^AIFLOW_RENDER_TOKEN=/{print "AIFLOW_RENDER_TOKEN len=" length($2); found=1} END{if(!found) print "WARN: AIFLOW_RENDER_TOKEN line missing in .env — auth gate OFF"}' "$DEST/.env" || true
 echo "== rebuild aiflow-render container only =="

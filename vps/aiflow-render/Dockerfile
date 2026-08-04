@@ -13,7 +13,7 @@ FROM mcr.microsoft.com/playwright:v1.62.0-jammy
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
-COPY server.mjs ./
+COPY server.mjs actions.mjs ./
 
 ENV PORT=8080
 EXPOSE 8080
