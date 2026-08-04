@@ -1966,8 +1966,7 @@
         "disabledNoPaymentMethod": "Auto-reload was turned off because your card could not be used. Authorize a card and turn it back on.",
         "consentHeading": "Let New Coworker charge this card automatically",
         "consentBody": "You are authorizing New Coworker to charge this card, without asking you first, when a balance you chose drops below the amount you set. We only ever charge for the pack you picked, at the price shown on your billing page. You set a monthly ceiling, and we never go past it. You can turn this off at any time from Billing, and every charge shows up there with the date and amount.",
-        "consentStripeNote": "Auto-reload only. We charge the pack you chose, only when your balance falls below your threshold, never past your monthly limit.",
-        "consentSubmit": "Authorize automatic top-ups"
+        "consentStripeNote": "Auto-reload only. We charge the pack you chose, only when your balance falls below your threshold, never past your monthly limit."
       }
     },
     "pages": {

@@ -146,8 +146,7 @@ export async function POST(request: Request) {
           userId: user.userId,
           successUrl: `${appUrl}/dashboard/billing?autoReload=ready`,
           cancelUrl: `${appUrl}/dashboard/billing?autoReload=canceled`,
-          consentNote: t("consentStripeNote"),
-          submitLabel: t("consentSubmit")
+          consentNote: t("consentStripeNote")
         });
         setupUrl = session.url;
       }

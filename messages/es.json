@@ -1966,8 +1966,7 @@
         "disabledNoPaymentMethod": "La recarga automatica se desactivo porque no se pudo usar tu tarjeta. Autoriza una tarjeta y vuelve a activarla.",
         "consentHeading": "Autoriza a New Coworker a cobrar esta tarjeta automaticamente",
         "consentBody": "Autorizas a New Coworker a cobrar esta tarjeta, sin preguntarte antes, cuando un saldo que tu elijas baje del monto que fijaste. Solo cobramos el paquete que elegiste, al precio que aparece en tu pagina de facturacion. Tu fijas un limite mensual y nunca lo superamos. Puedes desactivarlo cuando quieras desde Facturacion, y cada cobro aparece ahi con su fecha y monto.",
-        "consentStripeNote": "Solo para recarga automatica. Cobramos el paquete que elegiste, solo cuando tu saldo baje de tu umbral, y nunca mas alla de tu limite mensual.",
-        "consentSubmit": "Autorizar recargas automaticas"
+        "consentStripeNote": "Solo para recarga automatica. Cobramos el paquete que elegiste, solo cuando tu saldo baje de tu umbral, y nunca mas alla de tu limite mensual."
       }
     },
     "pages": {
