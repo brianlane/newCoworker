@@ -19,14 +19,14 @@
  *      copy is to catch the outbound send.
  *
  * Safety: this process loads no `.env` (verified), so nothing here can reach
- * production. `guardedFetch` below makes that structural rather than lucky: it
+ * production. The shared fetch guard makes that structural rather than lucky: it
  * passes localhost through to the real stack, captures the Resend and Telnyx
  * calls, and THROWS on any other host.
  */
-import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
-import { randomUUID } from "node:crypto";
 import { seedBusiness, seedContact, serviceDb, SUPABASE_URL } from "./harness";
+import { createFetchGuard, useLocalStackEnv } from "./guarded-fetch";
 
 import {
   maybeAlertUnassignedBooking,
@@ -35,79 +35,22 @@ import {
 
 let db: SupabaseClient;
 
-/** Outbound sends captured instead of made. */
-type SentEmail = { to: string; subject: string; text: string; html: string };
-let sentEmails: SentEmail[] = [];
-let sentSms: string[] = [];
-
-const realFetch = globalThis.fetch;
-
-/**
- * Everything local goes to the real stack; the two external transports are
- * captured; anything else is a bug and fails loudly rather than escaping.
- */
-async function guardedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-
-  if (url.startsWith("http://127.0.0.1") || url.startsWith("http://localhost")) {
-    return realFetch(input, init);
-  }
-
-  if (url.startsWith("https://api.resend.com")) {
-    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
-    sentEmails.push({
-      to: String(body.to ?? ""),
-      subject: String(body.subject ?? ""),
-      text: String(body.text ?? ""),
-      html: String(body.html ?? "")
-    });
-    return new Response(JSON.stringify({ data: { id: `itest-${randomUUID()}` }, error: null }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" }
-    });
-  }
-
-  if (url.startsWith("https://api.telnyx.com")) {
-    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
-    sentSms.push(String(body.text ?? ""));
-    return new Response(JSON.stringify({ data: { id: `itest-sms-${randomUUID()}` } }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" }
-    });
-  }
-
-  throw new Error(`itest tried to reach an unexpected host: ${url}`);
-}
+/** Outbound sends captured instead of made; anything unexpected throws. */
+const guard = createFetchGuard();
+let restoreFetch: () => void;
 
 beforeAll(() => {
-  // Point the code under test at the LOCAL stack. Asserted, not assumed: if a
-  // future change starts loading .env into this process, these must still be
-  // local or the suite refuses to run rather than paging real owners.
-  process.env.NEXT_PUBLIC_SUPABASE_URL = SUPABASE_URL;
-  process.env.SUPABASE_SERVICE_ROLE_KEY =
-    process.env.ITEST_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
-  process.env.NEXT_PUBLIC_APP_URL = "https://ncw.example";
-  process.env.RESEND_API_KEY = "itest-resend-key";
-
-  expect(process.env.NEXT_PUBLIC_SUPABASE_URL).toMatch(/^http:\/\/(127\.0\.0\.1|localhost)/);
-  expect(process.env.SUPABASE_SERVICE_ROLE_KEY).not.toBe("");
-
-  globalThis.fetch = guardedFetch as typeof fetch;
+  useLocalStackEnv(SUPABASE_URL);
+  restoreFetch = guard.install();
   db = serviceDb();
 });
 
 afterAll(() => {
-  globalThis.fetch = realFetch;
+  restoreFetch();
 });
 
 beforeEach(() => {
-  sentEmails = [];
-  sentSms = [];
-});
-
-afterEach(async () => {
-  // Nothing to undo: every scenario seeds its own business and the rows are
-  // scoped to it.
+  guard.reset();
 });
 
 const LEAD = "+12187702372";
@@ -161,10 +104,44 @@ async function notificationsFor(businessId: string) {
 }
 
 /** The one email the dispatcher actually sent, subject plus text body. */
-function onlyEmail(): SentEmail {
-  expect(sentEmails).toHaveLength(1);
-  return sentEmails[0];
+function onlyEmail() {
+  expect(guard.emails).toHaveLength(1);
+  return guard.emails[0];
 }
+
+describe("the fetch guard itself", () => {
+  it("matches on hostname, so a lookalike suffix host cannot slip past it", async () => {
+    // CodeQL flagged the original prefix check, correctly: a URL starting
+    // with "https://api.resend.com" can continue ".evil.example". A guard
+    // that can be walked past with a suffix is not a guard, and this one is
+    // the only thing standing between an in-process integration test and a
+    // real send.
+    const probe = createFetchGuard();
+    const restore = probe.install();
+    try {
+      await expect(fetch("https://api.resend.com.evil.example/emails")).rejects.toThrow(
+        /unexpected host/
+      );
+      await expect(fetch("https://api.telnyx.com.evil.example/v2/messages")).rejects.toThrow(
+        /unexpected host/
+      );
+      await expect(fetch("http://127.0.0.1.evil.example/rest/v1/")).rejects.toThrow(
+        /unexpected host/
+      );
+      expect(probe.emails).toHaveLength(0);
+      expect(probe.sms).toHaveLength(0);
+
+      // The real hosts are still captured rather than sent.
+      await fetch("https://api.resend.com/emails", {
+        method: "POST",
+        body: JSON.stringify({ to: "owner@example.com", subject: "s", text: "t", html: "h" })
+      });
+      expect(probe.emails).toHaveLength(1);
+    } finally {
+      restore();
+    }
+  });
+});
 
 describe("maybeAlertUnassignedBooking against real Postgres", () => {
   it("a business with NO employees is never told to assign the lead to a teammate", async () => {
@@ -286,7 +263,7 @@ describe("maybeAlertUnassignedBooking against real Postgres", () => {
     // The failure this pins: `.maybeSingle()` errors on multiple rows, the
     // catch swallows it, and the owner hears NOTHING about a real booking.
     expect(outcome).not.toBe("failed");
-    expect(sentEmails.length).toBeGreaterThan(0);
+    expect(guard.emails.length).toBeGreaterThan(0);
     // The exact-number match is the authoritative one.
     expect(outcome).toBe("sent_covered");
     expect(onlyEmail().text).toContain("Dana Reyes");
@@ -303,7 +280,7 @@ describe("maybeAlertUnassignedBooking against real Postgres", () => {
     const outcome = await maybeAlertUnassignedBooking(biz, bookingInput());
 
     expect(outcome).toBe("skipped_disabled");
-    expect(sentEmails).toHaveLength(0);
+    expect(guard.emails).toHaveLength(0);
     expect(await notificationsFor(biz)).toHaveLength(0);
   });
 
@@ -326,7 +303,7 @@ describe("maybeAlertUnassignedBooking against real Postgres", () => {
     await maybeAlertUnassignedBooking(biz, bookingInput({ surface: "sms" }));
     expect(onlyEmail().text).toContain("Your AI coworker booked");
 
-    sentEmails = [];
+    guard.reset();
     const biz2 = await seedBusiness(db, "Attribution page");
     await addMember(biz2, "Dana Reyes");
     await seedContact(db, biz2, LEAD, { display_name: "Brett Douglas" });

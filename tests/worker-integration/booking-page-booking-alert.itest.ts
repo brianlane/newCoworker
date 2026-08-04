@@ -19,76 +19,35 @@
  * the calendar of record, so the whole path runs with no provider and no Zoom
  * (`createZoomMeetingForBooking` returns null without a connection).
  *
- * Safety: same guarded fetch as unassigned-booking-alert.itest.ts. Localhost
- * reaches the real stack, Resend and Telnyx are captured, everything else
- * throws.
+ * Safety: the shared fetch guard. Localhost reaches the real stack, Resend
+ * and Telnyx are captured, and every other host throws.
  */
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import type { SupabaseClient } from "@supabase/supabase-js";
 import { randomUUID } from "node:crypto";
 import { seedBusiness, serviceDb, SUPABASE_URL } from "./harness";
+import { createFetchGuard, useLocalStackEnv } from "./guarded-fetch";
 
 import { submitPublicBooking } from "@/lib/booking-page/service";
 
 let db: SupabaseClient;
 
-type SentEmail = { to: string; subject: string; text: string; html: string };
-let sentEmails: SentEmail[] = [];
-let sentSms: Array<{ to: string; text: string }> = [];
-
-const realFetch = globalThis.fetch;
-
-async function guardedFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
-  const url = typeof input === "string" ? input : input instanceof URL ? input.href : input.url;
-
-  if (url.startsWith("http://127.0.0.1") || url.startsWith("http://localhost")) {
-    return realFetch(input, init);
-  }
-  if (url.startsWith("https://api.resend.com")) {
-    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
-    sentEmails.push({
-      to: String(body.to ?? ""),
-      subject: String(body.subject ?? ""),
-      text: String(body.text ?? ""),
-      html: String(body.html ?? "")
-    });
-    return new Response(JSON.stringify({ data: { id: `itest-${randomUUID()}` }, error: null }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" }
-    });
-  }
-  if (url.startsWith("https://api.telnyx.com")) {
-    const body = JSON.parse(String(init?.body ?? "{}")) as Record<string, unknown>;
-    sentSms.push({ to: String(body.to ?? ""), text: String(body.text ?? "") });
-    return new Response(JSON.stringify({ data: { id: `itest-sms-${randomUUID()}` } }), {
-      status: 200,
-      headers: { "Content-Type": "application/json" }
-    });
-  }
-  throw new Error(`itest tried to reach an unexpected host: ${url}`);
-}
+/** Outbound sends captured instead of made; anything unexpected throws. */
+const guard = createFetchGuard();
+let restoreFetch: () => void;
 
 beforeAll(() => {
-  process.env.NEXT_PUBLIC_SUPABASE_URL = SUPABASE_URL;
-  process.env.SUPABASE_SERVICE_ROLE_KEY =
-    process.env.ITEST_SERVICE_ROLE_KEY ?? process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
-  process.env.NEXT_PUBLIC_APP_URL = "https://ncw.example";
-  process.env.RESEND_API_KEY = "itest-resend-key";
-
-  expect(process.env.NEXT_PUBLIC_SUPABASE_URL).toMatch(/^http:\/\/(127\.0\.0\.1|localhost)/);
-  expect(process.env.SUPABASE_SERVICE_ROLE_KEY).not.toBe("");
-
-  globalThis.fetch = guardedFetch as typeof fetch;
+  useLocalStackEnv(SUPABASE_URL);
+  restoreFetch = guard.install();
   db = serviceDb();
 });
 
 afterAll(() => {
-  globalThis.fetch = realFetch;
+  restoreFetch();
 });
 
 beforeEach(() => {
-  sentEmails = [];
-  sentSms = [];
+  guard.reset();
 });
 
 /**
@@ -206,8 +165,8 @@ async function contactRow(businessId: string) {
 }
 
 /** The owner-facing alert email, isolated from the visitor's confirmation. */
-function ownerEmail(ownerAddress: string): SentEmail {
-  const mine = sentEmails.filter((e) => e.to === ownerAddress);
+function ownerEmail(ownerAddress: string) {
+  const mine = guard.emails.filter((e) => e.to === ownerAddress);
   expect(mine).toHaveLength(1);
   return mine[0];
 }
@@ -302,7 +261,7 @@ describe("public booking page: what the owner is told", () => {
       .from("booking_pages")
       .update({ assignment_mode: "round_robin" })
       .eq("business_id", biz);
-    sentEmails = [];
+    guard.reset();
     expect((await submit(token)).ok).toBe(true);
     expect((await ledgerRow(biz))?.assignee_member_id).toBe(dana);
 
