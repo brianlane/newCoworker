@@ -37,6 +37,9 @@
  * Before each box it checks `voice_active_sessions` for calls in progress and
  * SKIPS that tenant if any are live, because the rebuild force-recreates the
  * container and hangs up on whoever is mid-sentence. `--force` overrides.
+ * A row that is unended but has not heartbeated in over two hours is a leaked
+ * row, not a call: it is warned about and ignored, so a crashed bridge cannot
+ * wedge this check into skipping a tenant forever.
  *
  * Exit code: 0 only when every targeted tenant rebuilt cleanly. A skipped
  * tenant exits 1, since it is still running the old bridge.
@@ -115,6 +118,9 @@ const { getActiveVpsSshKeyForBusiness, listActiveVpsSshKeys, newestKeyPerBusines
   await import("../src/lib/db/vps-ssh-keys.ts");
 const { sshExec } = await import("../src/lib/hostinger/ssh.ts");
 const { createSupabaseServiceClient } = await import("../src/lib/supabase/server.ts");
+const { VOICE_SESSION_MAX_AGE_MS, partitionVoiceSessions } = await import(
+  "../src/lib/telnyx/active-session.ts"
+);
 
 type KeyRow = Awaited<ReturnType<typeof getActiveVpsSshKeyForBusiness>>;
 
@@ -144,13 +150,22 @@ if (ALL) {
 }
 
 /**
- * Phone numbers with a call in progress on this tenant right now.
+ * Calls actually in progress on this tenant right now.
  *
  * A bridge redeploy runs `docker compose up --force-recreate`, which kills
  * the container and every media stream attached to it: a caller mid-sentence
  * is simply hung up on. `voice_active_sessions` rows are opened when media
  * starts and stamped with `ended_at` when the call finishes, so an unended
  * row is a live call.
+ *
+ * But "unended" alone is not proof of life. A bridge that is SIGKILLed never
+ * runs its close handler, so the row keeps `ended_at = null` forever, and a
+ * permanently unended row would block this tenant's redeploys with no error
+ * to look at: every run reports a skip, which reads as the safety check
+ * working rather than a leak. So we age the rows out through the shared
+ * classifier: anything silent past VOICE_SESSION_MAX_AGE_MS (2h, 8x the
+ * server-side zombie sweep's window) is reported as leaked and does NOT
+ * block. No real call runs two hours.
  *
  * Read-only and best-effort: if the check itself fails we report it and treat
  * the tenant as busy, because "we could not tell" must not be silently
@@ -159,13 +174,22 @@ if (ALL) {
 async function liveCallCount(businessId: string): Promise<number | null> {
   try {
     const db = await createSupabaseServiceClient();
-    const { count, error } = await db
+    const { data, error } = await db
       .from("voice_active_sessions")
-      .select("call_control_id", { count: "exact", head: true })
+      .select("call_control_id, ended_at, last_seen_at, media_started_at")
       .eq("business_id", businessId)
       .is("ended_at", null);
     if (error) throw new Error(error.message);
-    return count ?? 0;
+    const { live, stale } = partitionVoiceSessions(data ?? []);
+    if (stale.length > 0) {
+      console.warn(
+        `  [warn] ignoring ${stale.length} leaked voice_active_sessions row(s) with no heartbeat ` +
+          `for over ${Math.round(VOICE_SESSION_MAX_AGE_MS / 60_000)} minutes ` +
+          `(e.g. ${stale[0].call_control_id}). The 5-minute maintenance sweep should have ` +
+          `reaped these: check the voice_maintenance_sweep telemetry event.`
+      );
+    }
+    return live.length;
   } catch (err) {
     console.error(
       `  [warn] could not read voice_active_sessions: ${err instanceof Error ? err.message : String(err)}`
