@@ -38,7 +38,16 @@ serve(async (req: Request) => {
     );
   }
 
-  const target = new URL(TARGET_PATH, appUrl).toString();
+  // Two pg_cron jobs share this bridge: the every-minute pass sends
+  // ?mode=flagged, the 15 minute pass sends nothing. Forward it through so the
+  // route knows which candidate set to read. Only the one recognised value is
+  // passed on, so this cannot be used to smuggle arbitrary query params to an
+  // internal endpoint.
+  const mode = new URL(req.url).searchParams.get("mode");
+  const target = new URL(
+    mode === "flagged" ? `${TARGET_PATH}?mode=flagged` : TARGET_PATH,
+    appUrl
+  ).toString();
 
   const controller = new AbortController();
   const timeout = setTimeout(() => controller.abort(), REQUEST_TIMEOUT_MS);

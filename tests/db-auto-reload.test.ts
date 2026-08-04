@@ -9,6 +9,7 @@ import {
   disableAutoReloadForBusinessesByPaymentMethod,
   getAutoReloadCard,
   listAutoReloadCandidates,
+  listFlaggedAutoReloadCandidates,
   reenableAutoReloadAfterCardAuthorized,
   listAutoReloadEvents,
   listAutoReloadRules,
@@ -397,6 +398,57 @@ describe("listAutoReloadCandidates", () => {
     const bad = fakeDb([{ data: null, error: { message: "rpc down" } }]);
     await expect(listAutoReloadCandidates(10, bad.client)).rejects.toThrow(
       /listAutoReloadCandidates: rpc down/
+    );
+  });
+});
+
+describe("listFlaggedAutoReloadCandidates", () => {
+  it("reads the queue RPC and maps rows the same way as the full scan", async () => {
+    // Same mapper as listAutoReloadCandidates, so the fast path and the full
+    // scan can never disagree about what a candidate is.
+    const { client, calls } = fakeDb([
+      {
+        data: [
+          {
+            business_id: "biz-1",
+            category: "sms",
+            pack_id: "texts_500",
+            threshold_units: "100",
+            monthly_limit_cents: null,
+            cooldown_minutes: 120,
+            owner_email: "o@example.com",
+            business_name: "Acme",
+            tier: "standard",
+            enterprise_limits: null,
+            phone: null,
+            timezone: null,
+            stripe_customer_id: "cus_1",
+            stripe_subscription_id: "sub_1",
+            stripe_period_start: null,
+            stripe_payment_method_id: "pm_1"
+          }
+        ],
+        error: null
+      }
+    ]);
+    const rows = await listFlaggedAutoReloadCandidates(50, client);
+    expect(rows[0]).toMatchObject({
+      businessId: "biz-1",
+      thresholdUnits: 100,
+      businessName: "Acme",
+      stripePaymentMethodId: "pm_1"
+    });
+    expect(calls.find((c) => c.method === "rpc")!.args[0]).toBe(
+      "usage_pack_auto_reload_flagged_candidates"
+    );
+  });
+
+  it("returns empty and throws on error", async () => {
+    const empty = fakeDb([{ data: null, error: null }]);
+    expect(await listFlaggedAutoReloadCandidates(50, empty.client)).toEqual([]);
+    const bad = fakeDb([{ data: null, error: { message: "rpc down" } }]);
+    await expect(listFlaggedAutoReloadCandidates(50, bad.client)).rejects.toThrow(
+      /listFlaggedAutoReloadCandidates: rpc down/
     );
   });
 });

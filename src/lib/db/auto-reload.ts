@@ -332,6 +332,26 @@ export type AutoReloadCandidate = {
   stripePaymentMethodId: string;
 };
 
+/**
+ * Rules a consume path stamped since the last fast tick.
+ *
+ * The RPC clears the stamp as it returns rows, so this behaves like a queue:
+ * two concurrent fast ticks cannot both work the same rule. A stamp lost to a
+ * failed evaluation is acceptable, because the 15 minute full scan re-checks
+ * every armed rule regardless.
+ */
+export async function listFlaggedAutoReloadCandidates(
+  limit: number,
+  db?: SupabaseClient
+): Promise<AutoReloadCandidate[]> {
+  const supabase = await client(db);
+  const { data, error } = await supabase.rpc("usage_pack_auto_reload_flagged_candidates", {
+    p_limit: limit
+  });
+  if (error) throw new Error(`listFlaggedAutoReloadCandidates: ${error.message}`);
+  return mapCandidates(data);
+}
+
 export async function listAutoReloadCandidates(
   limit: number,
   db?: SupabaseClient
@@ -341,6 +361,10 @@ export async function listAutoReloadCandidates(
     p_limit: limit
   });
   if (error) throw new Error(`listAutoReloadCandidates: ${error.message}`);
+  return mapCandidates(data);
+}
+
+function mapCandidates(data: unknown): AutoReloadCandidate[] {
   return ((data ?? []) as Array<Record<string, unknown>>).map((row) => ({
     businessId: String(row.business_id),
     category: row.category as AutoReloadCategory,

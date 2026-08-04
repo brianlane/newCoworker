@@ -27,6 +27,7 @@ import { resolvePackChargeAmount } from "@/lib/billing/auto-reload-pricing";
 import {
   claimAutoReload,
   listAutoReloadCandidates,
+  listFlaggedAutoReloadCandidates,
   resumeStaleAutoReload,
   settleAutoReload,
   type AutoReloadCandidate
@@ -105,6 +106,19 @@ export type AutoReloadSweepDeps = {
    * and a sweep that picked up a neighbouring test's tenant would charge it.
    */
   listCandidates?: (limit: number, db: SupabaseClient) => Promise<AutoReloadCandidate[]>;
+  /**
+   * "full" rescans every armed rule; "flagged" looks only at rules a consume
+   * path stamped since the last tick.
+   *
+   * Two jobs share this function. The flagged pass runs every minute and is
+   * normally a no-op, which is what makes a near-real-time reaction cheap. The
+   * full pass keeps running every 15 minutes as the backstop for anything the
+   * stamps miss, so a missed stamp costs latency, never a missed top-up.
+   *
+   * Both go through the same claim, so the cooldown and the unique attempt key
+   * still prevent the two from charging the same tenant twice.
+   */
+  mode?: "full" | "flagged";
   notify?: (params: {
     candidate: AutoReloadCandidate;
     kind: AutoReloadAlertKind;
@@ -322,7 +336,9 @@ export async function sweepUsagePackAutoReloads(
   const charge = deps.charge ?? defaultCharge;
   const resolvePrice = deps.resolvePrice ?? resolvePackChargeAmount;
   const limit = deps.limit ?? AUTO_RELOAD_BATCH_LIMIT;
-  const readCandidates = deps.listCandidates ?? listAutoReloadCandidates;
+  const readCandidates =
+    deps.listCandidates ??
+    (deps.mode === "flagged" ? listFlaggedAutoReloadCandidates : listAutoReloadCandidates);
   const notify = deps.notify ?? defaultNotify;
 
   const candidates = await readCandidates(limit, db);
