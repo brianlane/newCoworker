@@ -105,7 +105,9 @@ These are mistakes already made on this account. Do not remake them.
 
   `dashboard` is deliberately still ON, and should stay: that surface is Amy
   asking her own assistant, not the AI acting at a customer unsupervised. She
-  enabled booking there herself on Jun 14 2026.
+  enabled booking there herself on Jun 14 2026. The audit compares
+  customer-facing surfaces only for exactly this reason, so dashboard does not
+  keep her on every run; `--include-dashboard` shows it when you want it.
 - **Editing a live flow by hand in the UI is how flows get broken here.** It
   has needed a revert at least once. Prefer a ledger-recorded one-shot in
   `scripts/oneshot/`, which is idempotent, dry-run by default, and reviewable.
