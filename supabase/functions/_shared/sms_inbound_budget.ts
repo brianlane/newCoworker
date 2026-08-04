@@ -27,20 +27,58 @@
  */
 
 /**
- * Worst case for a single job, measured from the constants in the worker:
- * ROWBOAT_RETRY_BUDGET_MS (80_000) covers the Rowboat call plus its stateless
- * retry, and the worker reserves ~10s after that for the Telnyx send, the DB
- * writes and telemetry. The owner-operator path is bounded lower, at
- * OWNER_SMS_TURN_TIMEOUT_MS = 75_000, so this is the binding number.
+ * Reserve after the model call for the Telnyx send, the DB writes and the
+ * telemetry that follow it.
  */
-export const SMS_INBOUND_WORST_CASE_JOB_MS = 90_000;
+export const SMS_INBOUND_JOB_TAIL_RESERVE_MS = 10_000;
+
+/**
+ * Floor for the model call. Below this the call cannot plausibly return
+ * anything, but it is still cheaper to attempt it than to add a new skip
+ * branch to the reply path.
+ */
+export const SMS_INBOUND_MIN_MODEL_BUDGET_MS = 5_000;
+
+/**
+ * Worst case for a single job.
+ *
+ * The owner-operator path is NOT bounded by OWNER_SMS_TURN_TIMEOUT_MS alone,
+ * which is what an earlier version of this file assumed. An owner turn can
+ * burn its full 75_000 and return null, and the caller then falls through to
+ * the Rowboat staff path so the owner is never silenced by a platform hiccup.
+ * With a fresh ROWBOAT_RETRY_BUDGET_MS (80_000) that is 75 + 80 + 10 = 165s
+ * for ONE job, over the 150s ceiling on its own and long before any batching.
+ *
+ * smsInboundModelBudgetMs closes that by handing the Rowboat call whatever is
+ * left of this budget rather than a fresh window, so the composition is
+ * 75_000 (owner turn) + 5_000 (model floor) + 10_000 (tail) = 90_000, and the
+ * remaining headroom absorbs the DB reads between those steps.
+ */
+export const SMS_INBOUND_WORST_CASE_JOB_MS = 100_000;
+
+/**
+ * How long the model call may run, given how much of the job is already gone.
+ *
+ * `requestedMs` is what the caller would use if the job were fresh
+ * (ROWBOAT_RETRY_BUDGET_MS). This only ever LOWERS it, so a plain customer
+ * job, which reaches the model call within a few hundred ms, is unaffected and
+ * keeps the full 80s it has today. It bites only after an owner turn has
+ * already spent most of the job.
+ */
+export function smsInboundModelBudgetMs(elapsedInJobMs: number, requestedMs: number): number {
+  const remaining =
+    SMS_INBOUND_WORST_CASE_JOB_MS - SMS_INBOUND_JOB_TAIL_RESERVE_MS - elapsedInJobMs;
+  // The floor lifts the remaining-time clamp, it does not override the caller:
+  // asking for less than the floor still gets what was asked for.
+  return Math.min(requestedMs, Math.max(SMS_INBOUND_MIN_MODEL_BUDGET_MS, remaining));
+}
 
 /**
  * Stop starting new jobs once this much of the run is gone.
  *
  * Sized so the worst case still lands inside the 150s Edge request ceiling:
- * a job started at 49.9s can run to SMS_INBOUND_WORST_CASE_JOB_MS, giving
- * 50_000 + 90_000 = 140_000, which leaves a 10s reserve against the ceiling.
+ * a job started at 39.9s can run to SMS_INBOUND_WORST_CASE_JOB_MS, giving
+ * 40_000 + 100_000 = 140_000, which leaves a 10s reserve against the ceiling.
  * The same shape as CALL_SUMMARY_TIME_BUDGET_MS in call_summary_sweep.ts.
  *
  * The cron job's timeout_milliseconds must cover that 140s worst case, which
@@ -48,7 +86,7 @@ export const SMS_INBOUND_WORST_CASE_JOB_MS = 90_000;
  * 90000 to 150000. See the README section "The cron chain has three timeouts,
  * and a hard ceiling under all of them".
  */
-export const SMS_INBOUND_BATCH_BUDGET_MS = 50_000;
+export const SMS_INBOUND_BATCH_BUDGET_MS = 40_000;
 
 /**
  * Whether there is room to START another job. Checked before each job rather

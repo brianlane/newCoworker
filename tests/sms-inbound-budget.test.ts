@@ -1,10 +1,17 @@
 import { describe, expect, it } from "vitest";
 import {
   SMS_INBOUND_BATCH_BUDGET_MS,
+  SMS_INBOUND_JOB_TAIL_RESERVE_MS,
+  SMS_INBOUND_MIN_MODEL_BUDGET_MS,
   SMS_INBOUND_WORST_CASE_JOB_MS,
   smsInboundBatchHasRoom,
-  smsInboundDeferredIds
+  smsInboundDeferredIds,
+  smsInboundModelBudgetMs
 } from "../supabase/functions/_shared/sms_inbound_budget";
+
+/** Mirrors the worker's own constants, which the Edge runtime cannot export. */
+const OWNER_SMS_TURN_TIMEOUT_MS = 75_000;
+const ROWBOAT_RETRY_BUDGET_MS = 80_000;
 
 /**
  * The numbers here are the whole point of the module, so they are asserted
@@ -25,6 +32,49 @@ describe("sms inbound batch budget sizing", () => {
     expect(SMS_INBOUND_BATCH_BUDGET_MS + SMS_INBOUND_WORST_CASE_JOB_MS).toBeLessThanOrEqual(
       150_000
     );
+  });
+
+  /**
+   * The regression Bugbot caught on this PR. An owner turn can burn its full
+   * timeout and return null, and the caller then falls through to the Rowboat
+   * staff path. With a fresh ROWBOAT_RETRY_BUDGET_MS that was 75 + 80 + 10 =
+   * 165s for one job, past the 150s ceiling before any batching.
+   */
+  it("keeps an owner turn plus its Rowboat fallback inside one job's budget", () => {
+    const afterOwnerTurn = smsInboundModelBudgetMs(
+      OWNER_SMS_TURN_TIMEOUT_MS,
+      ROWBOAT_RETRY_BUDGET_MS
+    );
+    const worstOwnerJob =
+      OWNER_SMS_TURN_TIMEOUT_MS + afterOwnerTurn + SMS_INBOUND_JOB_TAIL_RESERVE_MS;
+    expect(worstOwnerJob).toBeLessThanOrEqual(SMS_INBOUND_WORST_CASE_JOB_MS);
+    expect(SMS_INBOUND_BATCH_BUDGET_MS + worstOwnerJob).toBeLessThan(EDGE_REQUEST_CEILING_MS);
+  });
+});
+
+describe("smsInboundModelBudgetMs", () => {
+  it("leaves a fresh customer job with the full budget it has today", () => {
+    expect(smsInboundModelBudgetMs(0, ROWBOAT_RETRY_BUDGET_MS)).toBe(ROWBOAT_RETRY_BUDGET_MS);
+    expect(smsInboundModelBudgetMs(500, ROWBOAT_RETRY_BUDGET_MS)).toBe(ROWBOAT_RETRY_BUDGET_MS);
+  });
+
+  it("shrinks the budget once the job has already spent time", () => {
+    expect(smsInboundModelBudgetMs(50_000, ROWBOAT_RETRY_BUDGET_MS)).toBe(
+      SMS_INBOUND_WORST_CASE_JOB_MS - SMS_INBOUND_JOB_TAIL_RESERVE_MS - 50_000
+    );
+  });
+
+  it("never returns less than the floor, even past the whole budget", () => {
+    expect(smsInboundModelBudgetMs(SMS_INBOUND_WORST_CASE_JOB_MS, ROWBOAT_RETRY_BUDGET_MS)).toBe(
+      SMS_INBOUND_MIN_MODEL_BUDGET_MS
+    );
+    expect(smsInboundModelBudgetMs(10_000_000, ROWBOAT_RETRY_BUDGET_MS)).toBe(
+      SMS_INBOUND_MIN_MODEL_BUDGET_MS
+    );
+  });
+
+  it("never returns more than the caller asked for", () => {
+    expect(smsInboundModelBudgetMs(0, 1_000)).toBe(1_000);
   });
 });
 

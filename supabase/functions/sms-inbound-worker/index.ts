@@ -113,7 +113,8 @@ import {
 import { sendCapAlertOnce, smsCapPeriodKey } from "../_shared/cap_alerts.ts";
 import {
   smsInboundBatchHasRoom,
-  smsInboundDeferredIds
+  smsInboundDeferredIds,
+  smsInboundModelBudgetMs
 } from "../_shared/sms_inbound_budget.ts";
 
 const MAX_ATTEMPTS = 8;
@@ -628,6 +629,12 @@ serve(async (req: Request) => {
       deferredIds = smsInboundDeferredIds(list, jobIndex);
       break;
     }
+    // Per-job clock, used to cap the model call at whatever is left of
+    // SMS_INBOUND_WORST_CASE_JOB_MS. An owner turn that burns its full 75s and
+    // returns null falls through to the Rowboat path below, and handing that
+    // path a fresh ROWBOAT_RETRY_BUDGET_MS made ONE job able to reach ~165s,
+    // over the 150s ceiling by itself.
+    const jobStartedAt = Date.now();
     const envelope = job.payload as { data?: { payload?: Record<string, unknown> } };
     const payload = envelope?.data?.payload ?? {};
     const fromRaw = telnyxMessagingPhoneString(payload, "from");
@@ -1795,9 +1802,12 @@ serve(async (req: Request) => {
           state: turnPlan.stateless ? null : (thread?.rowboat_state ?? null),
           startAgent: turnPlan.startAgent,
           timeoutMs: ROWBOAT_CHAT_TIMEOUT_MS,
-          // Cap the combined initial+retry wall time under the 90s
-          // pg_cron HTTP timeout (see ROWBOAT_RETRY_BUDGET_MS).
-          budgetMs: ROWBOAT_RETRY_BUDGET_MS,
+          // Combined initial+retry wall time, capped at whatever is left of
+          // this job's own budget. A fresh ROWBOAT_RETRY_BUDGET_MS here is
+          // only correct when the job reached this line quickly, which is the
+          // normal customer path; after an owner turn has already spent up to
+          // 75s it would put a single job past the 150s Edge ceiling.
+          budgetMs: smsInboundModelBudgetMs(Date.now() - jobStartedAt, ROWBOAT_RETRY_BUDGET_MS),
           customerPreamble,
           statelessContextExtra,
           // Fresh-thread anchor for a contact an automation just texted —
