@@ -50,6 +50,14 @@ describe("FLOW_COMPILE_SYSTEM_PROMPT", () => {
     expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("can NOT be authored");
   });
 
+  it("teaches continueWhenText and how it differs from skipWhenText", () => {
+    // The builder can only author the guard that saves a half-finished lead
+    // pipeline if the prompt explains that one ends the run and one does not.
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("continueWhenText");
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("skipWhenText ends the");
+    expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain("continueWhenText does not");
+  });
+
   it("teaches the wait steps and the no-reply branching pattern", () => {
     expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain('"type":"sleep"');
     expect(FLOW_COMPILE_SYSTEM_PROMPT).toContain('"type":"wait_for_reply"');

@@ -136,6 +136,27 @@ describe("parseAiFlowDefinition", () => {
     expect(() => parseAiFlowDefinition(bad)).toThrow(AiFlowValidationError);
   });
 
+  it("accepts an optional browse_extract continueWhenText marker", () => {
+    const withContinue = JSON.parse(JSON.stringify(validInput));
+    withContinue.steps[1].continueWhenText = "details pending";
+    const def = parseAiFlowDefinition(withContinue);
+    const browse = def.steps[1];
+    expect(browse.type === "browse_extract" && browse.continueWhenText).toBe("details pending");
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("rejects an empty browse_extract continueWhenText", () => {
+    const bad = JSON.parse(JSON.stringify(validInput));
+    bad.steps[1].continueWhenText = "";
+    expect(() => parseAiFlowDefinition(bad)).toThrow(AiFlowValidationError);
+  });
+
+  it("rejects a browse_extract continueWhenText over the length cap", () => {
+    const bad = JSON.parse(JSON.stringify(validInput));
+    bad.steps[1].continueWhenText = "x".repeat(201);
+    expect(() => parseAiFlowDefinition(bad)).toThrow(AiFlowValidationError);
+  });
+
   it("accepts an extract_text step whose fields feed a later step (no URL needed)", () => {
     const def = parseAiFlowDefinition({
       version: 1,
@@ -1581,6 +1602,37 @@ describe("browse_action step", () => {
   it("rejects an empty skipWhenText", () => {
     const bad = JSON.parse(JSON.stringify(actionInput));
     bad.steps[1].skipWhenText = "";
+    expect(() => aiFlowDefinitionSchema.parse(bad)).toThrow();
+  });
+
+  it("accepts an optional continueWhenText already-satisfied marker", () => {
+    const withContinue = JSON.parse(JSON.stringify(actionInput));
+    withContinue.steps[1].continueWhenText = "you just accepted your";
+    const def = parseAiFlowDefinition(withContinue);
+    const step = def.steps[1];
+    expect(step.type === "browse_action" && step.continueWhenText).toBe("you just accepted your");
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("accepts both markers on one browse_action step", () => {
+    // They answer different questions: "someone else owns this" ends the run,
+    // "we already did this bit" does not.
+    const both = JSON.parse(JSON.stringify(actionInput));
+    both.steps[1].skipWhenText = "already been claimed";
+    both.steps[1].continueWhenText = "you just accepted your";
+    const def = parseAiFlowDefinition(both);
+    expect(validateDefinitionSemantics(def)).toEqual([]);
+  });
+
+  it("rejects an empty continueWhenText", () => {
+    const bad = JSON.parse(JSON.stringify(actionInput));
+    bad.steps[1].continueWhenText = "";
+    expect(() => aiFlowDefinitionSchema.parse(bad)).toThrow();
+  });
+
+  it("rejects a continueWhenText over the length cap", () => {
+    const bad = JSON.parse(JSON.stringify(actionInput));
+    bad.steps[1].continueWhenText = "x".repeat(201);
     expect(() => aiFlowDefinitionSchema.parse(bad)).toThrow();
   });
 

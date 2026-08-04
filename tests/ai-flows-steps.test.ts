@@ -877,6 +877,32 @@ describe("planStep: browse_extract", () => {
     const r = planStep(blank, { vars: { lead_url: "https://rfrl.to/x" } });
     expect(r.ok && r.action.kind === "browse" && "skipWhenText" in r.action).toBe(false);
   });
+  it("carries a trimmed continueWhenText marker into the browse action", () => {
+    const withContinue: FlowStep = {
+      id: "b",
+      type: "browse_extract",
+      urlVar: "lead_url",
+      fields: [{ name: "seller_phone" }],
+      continueWhenText: "  details pending  "
+    };
+    const r = planStep(withContinue, { vars: { lead_url: "https://rfrl.to/x" } });
+    expect(r.ok && r.action.kind === "browse" && r.action.continueWhenText).toBe("details pending");
+  });
+  it("omits continueWhenText when unset", () => {
+    const r = planStep(step, { vars: { lead_url: "https://rfrl.to/x" } });
+    expect(r.ok && r.action.kind === "browse" && "continueWhenText" in r.action).toBe(false);
+  });
+  it("omits continueWhenText when blank after trim", () => {
+    const blank: FlowStep = {
+      id: "b",
+      type: "browse_extract",
+      urlVar: "lead_url",
+      fields: [{ name: "seller_phone" }],
+      continueWhenText: "   "
+    };
+    const r = planStep(blank, { vars: { lead_url: "https://rfrl.to/x" } });
+    expect(r.ok && r.action.kind === "browse" && "continueWhenText" in r.action).toBe(false);
+  });
   it("carries an auth config into the browse action", () => {
     const authed: FlowStep = {
       id: "b",
@@ -2148,6 +2174,45 @@ describe("planStep: browse_action skipWhenText", () => {
     const step: FlowStep = { ...base, skipWhenText: "   " };
     const r = planStep(step, { vars: { lead_url: "https://x" } });
     expect(r.ok && r.action.kind === "browse_action" && "skipWhenText" in r.action).toBe(false);
+  });
+});
+
+describe("planStep: browse_action continueWhenText", () => {
+  const base: FlowStep = {
+    id: "acc",
+    type: "browse_action",
+    urlVar: "lead_url",
+    actions: [{ kind: "click_text", target: "Accept" }]
+  };
+  it("carries a trimmed continueWhenText marker through to the action", () => {
+    const step: FlowStep = { ...base, continueWhenText: "  you just accepted your  " };
+    const r = planStep(step, { vars: { lead_url: "https://x" } });
+    expect(r.ok && r.action.kind === "browse_action" && r.action.continueWhenText).toBe(
+      "you just accepted your"
+    );
+  });
+  it("omits continueWhenText when unset", () => {
+    const r = planStep(base, { vars: { lead_url: "https://x" } });
+    expect(r.ok && r.action.kind === "browse_action" && "continueWhenText" in r.action).toBe(false);
+  });
+  it("omits continueWhenText when blank after trim", () => {
+    const step: FlowStep = { ...base, continueWhenText: "   " };
+    const r = planStep(step, { vars: { lead_url: "https://x" } });
+    expect(r.ok && r.action.kind === "browse_action" && "continueWhenText" in r.action).toBe(false);
+  });
+  it("carries both markers when both are set", () => {
+    const step: FlowStep = {
+      ...base,
+      skipWhenText: "already been claimed",
+      continueWhenText: "you just accepted your"
+    };
+    const r = planStep(step, { vars: { lead_url: "https://x" } });
+    expect(r.ok && r.action.kind === "browse_action" && r.action.skipWhenText).toBe(
+      "already been claimed"
+    );
+    expect(r.ok && r.action.kind === "browse_action" && r.action.continueWhenText).toBe(
+      "you just accepted your"
+    );
   });
 });
 

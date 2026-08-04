@@ -948,6 +948,7 @@ function sanitizeStepForSave(step: FlowStep): FlowStep {
       forEachLink: step.forEachLink,
       ...(step.forEachLinkMatchVar ? { forEachLinkMatchVar: step.forEachLinkMatchVar } : {}),
       ...(step.skipWhenText ? { skipWhenText: step.skipWhenText } : {}),
+      ...(step.continueWhenText ? { continueWhenText: step.continueWhenText } : {}),
       ...(step.auth ? { auth: step.auth } : {}),
       ...(step.when ? { when: step.when } : {})
     };
@@ -3428,6 +3429,12 @@ function StepFields({
           onChange={(v) => patchStep(index, { skipWhenText: v.trim() ? v : undefined })}
           help='When the page contains this text (e.g. "already claimed"), there is nothing to read: the step is skipped and the run ends as done instead of failing.'
         />
+        <Field
+          label="Skip the read but keep going when the page says (optional)"
+          value={step.continueWhenText ?? ""}
+          onChange={(v) => patchStep(index, { continueWhenText: v.trim() ? v : undefined })}
+          help='Like the box above, but the rest of the flow KEEPS RUNNING. Use it when the page just is not ready yet (e.g. "details pending") and a later step tries again.'
+        />
         <label className="flex items-center gap-2 text-xs text-parchment/70">
           <input
             type="checkbox"
@@ -4645,6 +4652,12 @@ function StepFields({
           value={step.skipWhenText ?? ""}
           onChange={(v) => patchStep(index, { skipWhenText: v.trim() ? v : undefined })}
           help='When an action fails AND the page contains this text (e.g. "already claimed"), the goal is already met: the step is skipped and the run ends as done instead of failing.'
+        />
+        <Field
+          label="Treat this step as already done when the page says (optional)"
+          value={step.continueWhenText ?? ""}
+          onChange={(v) => patchStep(index, { continueWhenText: v.trim() ? v : undefined })}
+          help='Like the box above, but the rest of the flow KEEPS RUNNING. Use it when the page proves this step already worked (e.g. "you just accepted"), so the later steps that file the lead and tell your team still happen.'
         />
         <label className={labelClass}>
           Page actions, in order (use {"{{vars.actions_taken}}"} in a fill value to describe what this flow did)
