@@ -38,21 +38,56 @@ if (!url || !key) {
 }
 const db = createClient(url, key, { auth: { persistSession: false } });
 
-let bizQuery = db.from("businesses").select("id, name").order("name");
-if (ONLY_BUSINESS) bizQuery = bizQuery.eq("id", ONLY_BUSINESS);
-const { data: businesses, error: bizErr } = await bizQuery;
-if (bizErr) {
-  console.error(`Read businesses: ${bizErr.message}`);
-  process.exit(1);
+/**
+ * Page through a table in 1000-row chunks.
+ *
+ * PostgREST silently caps a single response at 1000 rows. For an audit that is
+ * the worst possible failure: dropped `agent_tool_settings` rows mean missing
+ * explicit OFFs, which means `findChannelDivergences` reports a clean fleet
+ * while the gap is still there. Same discipline as
+ * `loadBillableUsageSince` in src/lib/billing/usage-charges.ts, and reads
+ * THROW rather than degrade, so a partial answer never prints as a clean one.
+ */
+const PAGE_SIZE = 1000;
+async function readAll<Row>(
+  table: string,
+  columns: string,
+  orderColumn: string
+): Promise<Row[]> {
+  const rows: Row[] = [];
+  for (let from = 0; ; from += PAGE_SIZE) {
+    let q = db
+      .from(table)
+      .select(columns)
+      .order(orderColumn, { ascending: true })
+      .range(from, from + PAGE_SIZE - 1);
+    if (ONLY_BUSINESS) {
+      q = q.eq(table === "businesses" ? "id" : "business_id", ONLY_BUSINESS);
+    }
+    const { data, error } = await q;
+    if (error) throw new Error(`Read ${table}: ${error.message}`);
+    const page = (data ?? []) as Row[];
+    rows.push(...page);
+    if (page.length < PAGE_SIZE) return rows;
+  }
 }
 
-let settingsQuery = db
-  .from("agent_tool_settings")
-  .select("business_id, agent_key, tool_key, enabled");
-if (ONLY_BUSINESS) settingsQuery = settingsQuery.eq("business_id", ONLY_BUSINESS);
-const { data: settings, error: settingsErr } = await settingsQuery;
-if (settingsErr) {
-  console.error(`Read agent_tool_settings: ${settingsErr.message}`);
+let businesses: Array<{ id: string; name: string }>;
+let settings: Array<{
+  business_id: string;
+  agent_key: string;
+  tool_key: string;
+  enabled: boolean;
+}>;
+try {
+  businesses = await readAll("businesses", "id, name", "name");
+  settings = await readAll(
+    "agent_tool_settings",
+    "business_id, agent_key, tool_key, enabled",
+    "business_id"
+  );
+} catch (err) {
+  console.error(err instanceof Error ? err.message : String(err));
   process.exit(1);
 }
 
@@ -60,20 +95,14 @@ const byBusiness = new Map<
   string,
   Array<{ agent_key: string; tool_key: string; enabled: boolean }>
 >();
-for (const row of settings ?? []) {
-  const r = row as {
-    business_id: string;
-    agent_key: string;
-    tool_key: string;
-    enabled: boolean;
-  };
+for (const r of settings) {
   const list = byBusiness.get(r.business_id) ?? [];
   list.push({ agent_key: r.agent_key, tool_key: r.tool_key, enabled: r.enabled });
   byBusiness.set(r.business_id, list);
 }
 
 let flagged = 0;
-for (const biz of (businesses ?? []) as Array<{ id: string; name: string }>) {
+for (const biz of businesses) {
   const overrides = byBusiness.get(biz.id) ?? [];
   const divergences = findChannelDivergences(overrides);
   if (divergences.length === 0) continue;
@@ -82,7 +111,7 @@ for (const biz of (businesses ?? []) as Array<{ id: string; name: string }>) {
   for (const d of divergences) console.log(`  ${describeDivergence(d)}`);
 }
 
-const scanned = (businesses ?? []).length;
+const scanned = businesses.length;
 if (flagged === 0) {
   console.log(`\nNo channel divergence across ${scanned} business(es).`);
   process.exit(0);
