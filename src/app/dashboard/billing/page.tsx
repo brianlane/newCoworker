@@ -45,6 +45,15 @@ import {
 import { getCalendarMonthUsageTotals } from "@/lib/db/usage";
 import { effectiveSmsMonthlyCap } from "@/lib/plans/limits";
 import {
+  getAutoReloadCard,
+  listAutoReloadEvents,
+  listAutoReloadRules
+} from "@/lib/db/auto-reload";
+import {
+  AutoReloadSettings,
+  type AutoReloadCategoryView
+} from "@/components/billing/AutoReloadSettings";
+import {
   getCustomerProfileById,
   isWithinLifetimeRefundWindow,
   LIFETIME_SUBSCRIPTION_CAP
@@ -107,31 +116,48 @@ export default async function BillingPage(props: {
   // snapshot → … → offers was 4+ serial round-trips). The SMS + Gemini usage
   // meters are read-only display (enforcement lives in the workers / RPCs)
   // and are individually non-fatal for the page.
-  const [subscription, snapshot, smsMonthUsed, smsBonusRemaining, chatSpend, allCustomOffers] =
-    business
-      ? await Promise.all([
-          getSubscription(business.id),
-          getVoiceBillingSnapshotForBusiness(business.id),
-          getCalendarMonthUsageTotals(business.id, db)
-            .then((t) => t.sms_sent)
-            .catch(() => null),
-          getSmsBonusTextsRemaining(business.id, db),
-          getChatSpendSnapshotForBusiness(
-            business.id,
-            db,
-            (business.tier ?? null) as PlanTier | null
-          ).catch(() => null),
-          // Custom admin-authored offers (bespoke price, single business).
-          listWhiteGloveOffers(business.id, db)
-        ])
-      : [
-          null,
-          null,
-          null,
-          0,
-          null,
-          [] as Awaited<ReturnType<typeof listWhiteGloveOffers>>
-        ];
+  const [
+    subscription,
+    snapshot,
+    smsMonthUsed,
+    smsBonusRemaining,
+    chatSpend,
+    allCustomOffers,
+    autoReloadRules,
+    autoReloadCard,
+    autoReloadEvents
+  ] = business
+    ? await Promise.all([
+        getSubscription(business.id),
+        getVoiceBillingSnapshotForBusiness(business.id),
+        getCalendarMonthUsageTotals(business.id, db)
+          .then((t) => t.sms_sent)
+          .catch(() => null),
+        getSmsBonusTextsRemaining(business.id, db),
+        getChatSpendSnapshotForBusiness(
+          business.id,
+          db,
+          (business.tier ?? null) as PlanTier | null
+        ).catch(() => null),
+        // Custom admin-authored offers (bespoke price, single business).
+        listWhiteGloveOffers(business.id, db),
+        // Auto-reload reads are individually non-fatal: a failure here must
+        // not blank the whole billing page.
+        listAutoReloadRules(business.id, db).catch(() => []),
+        getAutoReloadCard(business.id, db).catch(() => null),
+        listAutoReloadEvents(business.id, 5, db).catch(() => [])
+      ])
+    : [
+        null,
+        null,
+        null,
+        0,
+        null,
+        [] as Awaited<ReturnType<typeof listWhiteGloveOffers>>,
+        [] as Awaited<ReturnType<typeof listAutoReloadRules>>,
+        null,
+        [] as Awaited<ReturnType<typeof listAutoReloadEvents>>
+      ];
 
   // Prefer `business.customer_profile_id` over `subscription.customer_profile_id`
   // when the subscription is in a terminal state (canceled or wiped),
@@ -185,6 +211,79 @@ export default async function BillingPage(props: {
   const canPurchase = Boolean(
     subscription?.stripe_subscription_id && subscription.status === "active"
   );
+
+  // One auto-reload section per family. Thresholds and balances stay in
+  // canonical units here; the component converts for display.
+  const autoReloadByCategory = new Map(autoReloadRules.map((r) => [r.category, r]));
+  const autoReloadViews: AutoReloadCategoryView[] = (
+    [
+      {
+        category: "voice" as const,
+        packs: packs.map((p) => ({
+          id: p.id,
+          label: p.label,
+          priceUsd: p.priceUsd,
+          grantUnits: p.seconds
+        })),
+        currentUnits: snapshot
+          ? snapshot.includedHeadroomSeconds + snapshot.bonusSecondsAvailable
+          : null,
+        unavailable: null
+      },
+      {
+        category: "sms" as const,
+        packs: smsPacks.map((p) => ({
+          id: p.id,
+          label: p.label,
+          priceUsd: p.priceUsd,
+          grantUnits: p.texts
+        })),
+        currentUnits:
+          smsMonthlyCap !== null && Number.isFinite(smsMonthlyCap)
+            ? Math.max(0, smsMonthlyCap - (smsMonthUsed ?? 0)) + smsBonusRemaining
+            : null,
+        // An infinite plan cap can never be crossed, so a remaining-capacity
+        // threshold is meaningless rather than merely large.
+        unavailable:
+          smsMonthlyCap !== null && !Number.isFinite(smsMonthlyCap)
+            ? ("uncapped_sms" as const)
+            : null
+      },
+      {
+        category: "chat" as const,
+        packs: chatPacks.map((p) => ({
+          id: p.id,
+          label: p.label,
+          priceUsd: p.priceUsd,
+          grantUnits: p.creditMicros
+        })),
+        // Chat credit raises the cap rather than being consumed, so the
+        // meaningful number is headroom under the effective cap.
+        currentUnits: chatSpend
+          ? Math.max(0, chatSpend.effectiveCapMicros - chatSpend.spendMicros)
+          : null,
+        unavailable: null
+      }
+    ] as const
+  ).map((base) => {
+    const rule = autoReloadByCategory.get(base.category);
+    return {
+      category: base.category,
+      enabled: rule?.enabled ?? false,
+      packId: rule?.packId ?? null,
+      thresholdUnits: rule?.thresholdUnits ?? null,
+      monthlyLimitCents: rule?.monthlyLimitCents ?? null,
+      packs: base.packs,
+      currentUnits: base.currentUnits,
+      unavailableReason: !canPurchase
+        ? ("no_subscription" as const)
+        : base.packs.length === 0
+          ? ("no_packs" as const)
+          : base.unavailable,
+      pausedReason: rule?.pausedReason ?? null,
+      disabledReason: rule?.disabledReason ?? null
+    };
+  });
   let disabledReason: string | null = null;
   if (!canPurchase) {
     disabledReason = business ? t("requiresActive") : t("noBusiness");
@@ -506,6 +605,29 @@ export default async function BillingPage(props: {
         }))}
         canPurchase={canPurchase}
         disabledReason={disabledReason}
+      />
+
+      <AutoReloadSettings
+        categories={autoReloadViews}
+        recentEvents={autoReloadEvents.map((e) => ({
+          id: e.id,
+          category: e.category,
+          createdAt: e.createdAt,
+          status: e.status,
+          amountCents: e.amountCents,
+          packLabel: e.packId,
+          failureMessage: e.failureMessage
+        }))}
+        card={
+          autoReloadCard && !autoReloadCard.revokedAt
+            ? { brand: autoReloadCard.cardBrand, last4: autoReloadCard.cardLast4 }
+            : null
+        }
+        hasRecurringPacks={Boolean(
+          currentPackAddons.voicePacks?.length ||
+            currentPackAddons.smsPacks?.length ||
+            currentPackAddons.chatPacks?.length
+        )}
       />
 
       <Card>

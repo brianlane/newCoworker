@@ -162,6 +162,11 @@ const EXEMPT: Record<string, string> = {
   subscriptions: "billing",
   telnyx_cost_daily: "cost aggregates",
   usage_cap_alerts: "alert dedupe state",
+  usage_pack_auto_reload_rules: "the tenant's own top-up thresholds and spend caps",
+  usage_pack_auto_reload_events:
+    "auto-reload charge ledger (amounts, Stripe intent ids); billing evidence for an unattended charge, no end-customer identifiers",
+  usage_pack_auto_reload_cards:
+    "the tenant's own card authorization for auto-charging: a Stripe payment method id plus the consent record (who, when, which copy version). Deliberately survives erasure like terms_acceptances, because it is the evidence we produce if the tenant disputes a charge we made. Holds no end-customer data, and the card itself lives at Stripe.",
   voice_billing_period_usage: "usage counters",
   voice_bonus_grants: "billing",
   voice_forwarded_call_meter: "metering",

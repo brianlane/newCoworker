@@ -541,6 +541,18 @@ export async function POST(request: Request) {
         const existing = await getSubscriptionByStripeSubscriptionId(sub.id);
         if (existing) {
           const businessId = existing.business_id;
+          // No membership, no auto-reload. The grant RPCs would refuse anyway,
+          // so leaving rules armed would only burn failed charges.
+          try {
+            const { disableAutoReloadForBusiness } = await import("@/lib/db/auto-reload");
+            await disableAutoReloadForBusiness(businessId, "subscription_canceled");
+          } catch (err) {
+            logger.warn("auto_reload: disable on subscription delete failed (non-fatal)", {
+              businessId,
+              eventId: event.id,
+              error: err instanceof Error ? err.message : String(err)
+            });
+          }
           const now = new Date();
           if (existing.cancel_at_period_end) {
             const ctxRes = await loadLifecycleContextForBusiness(businessId, {
@@ -703,17 +715,66 @@ export async function POST(request: Request) {
       }
 
       case "charge.dispute.created": {
-        // Observational only. Pack grants are non-refundable on customer
-        // disputes (including dispute.lost); New Coworker refunds claw back
-        // via refund metadata / lifecycle executor instead.
+        // Manual pack grants are non-refundable on customer disputes
+        // (including dispute.lost); New Coworker refunds claw back via refund
+        // metadata / lifecycle executor instead. AUTO-RELOAD charges are the
+        // exception: they are merchant-initiated, so a dispute both claws the
+        // credit back and stops all future auto-charging for that business.
         const dispute = event.data.object as Stripe.Dispute;
-        logger.info("Stripe dispute created; pack grants are not clawed back on disputes", {
+        const disputedCharge = await resolveDisputedCharge(dispute);
+        const handled = disputedCharge
+          ? await clawbackAutoReloadGrantForCharge(disputedCharge, "dispute", event.id)
+          : false;
+        logger.info("Stripe dispute created", {
           eventId: event.id,
           disputeId: dispute.id,
           chargeId: typeof dispute.charge === "string" ? dispute.charge : dispute.charge?.id,
           reason: dispute.reason,
-          amount: dispute.amount
+          amount: dispute.amount,
+          autoReloadClawedBack: handled
         });
+        break;
+      }
+
+      case "payment_intent.succeeded": {
+        // Backstop only; the sweep grants synchronously. Gated on the
+        // autoReload marker so an ordinary manual pack purchase, which also
+        // emits this event with checkoutKind metadata, is a no-op here.
+        await applyAutoReloadGrantFromPaymentIntent(
+          event.data.object as Stripe.PaymentIntent,
+          event.id
+        );
+        break;
+      }
+
+      case "payment_intent.payment_failed": {
+        const intent = event.data.object as Stripe.PaymentIntent;
+        if (intent.metadata?.autoReload === "1") {
+          logger.warn("auto_reload: payment intent failed", {
+            eventId: event.id,
+            businessId: intent.metadata?.businessId,
+            paymentIntentId: intent.id,
+            code: intent.last_payment_error?.code ?? null
+          });
+        }
+        break;
+      }
+
+      case "payment_method.detached": {
+        // The authorized card is gone, so every rule for that business has to
+        // stop rather than fail a charge on every tick.
+        const pm = event.data.object as Stripe.PaymentMethod;
+        const { disableAutoReloadForBusinessesByPaymentMethod } = await import(
+          "@/lib/db/auto-reload"
+        );
+        const affected = await disableAutoReloadForBusinessesByPaymentMethod(pm.id);
+        if (affected > 0) {
+          logger.info("auto_reload: authorized card detached; rules disabled", {
+            eventId: event.id,
+            paymentMethodId: pm.id,
+            businesses: affected
+          });
+        }
         break;
       }
 
@@ -953,6 +1014,11 @@ async function activateCheckoutSession(session: Stripe.Checkout.Session, eventId
   // already exist).
   if (session.metadata?.checkoutKind === "enterprise_deal") {
     await applyEnterpriseDealFromCheckout(session, eventId);
+    return;
+  }
+  // Card authorization for auto-reload: no charge, just a stored mandate.
+  if (session.mode === "setup" && session.metadata?.checkoutKind === "auto_reload_setup") {
+    await applyAutoReloadSetupFromCheckout(session, eventId);
     return;
   }
   if (
@@ -2260,7 +2326,294 @@ export function computeVoiceBonusClawbackSeconds(
  * Customer/Dashboard refunds without that metadata, and all disputes, leave
  * grants alone (admin `/api/admin/usage-pack-clawback` remains).
  */
+const AUTO_RELOAD_KIND_MAP: Record<string, { kind: "voice" | "sms" | "chat"; unitKey: string }> = {
+  voice_bonus_seconds: { kind: "voice", unitKey: "voiceSeconds" },
+  sms_bonus_texts: { kind: "sms", unitKey: "smsTexts" },
+  chat_credit_micros: { kind: "chat", unitKey: "creditMicros" }
+};
+
+/**
+ * Is this charge an auto-reload charge?
+ *
+ * Resolves the PaymentIntent and checks the `autoReload` marker. The marker
+ * matters because manual pack Checkouts mirror `checkoutKind` onto the
+ * PaymentIntent too, so `checkoutKind` alone cannot tell the two apart.
+ */
+async function autoReloadIntentForCharge(
+  charge: Stripe.Charge
+): Promise<Stripe.PaymentIntent | null> {
+  const piId = typeof charge.payment_intent === "string"
+    ? charge.payment_intent
+    : charge.payment_intent?.id;
+  if (!piId) return null;
+  try {
+    const intent = await getStripe().paymentIntents.retrieve(piId);
+    return intent.metadata?.autoReload === "1" ? intent : null;
+  } catch (err) {
+    logger.warn("auto_reload: payment intent retrieve failed", {
+      chargeId: charge.id,
+      paymentIntentId: piId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
+  }
+}
+
+/**
+ * The charge behind a dispute, expanded when Stripe sent only an id.
+ *
+ * Fully guarded: a dispute on a charge we cannot read is still a dispute, and
+ * failing the webhook would make Stripe retry an event we can never process.
+ */
+async function resolveDisputedCharge(dispute: Stripe.Dispute): Promise<Stripe.Charge | null> {
+  if (dispute.charge && typeof dispute.charge !== "string") return dispute.charge;
+  if (typeof dispute.charge !== "string") return null;
+  try {
+    return await getStripe().charges.retrieve(dispute.charge);
+  } catch (err) {
+    logger.warn("dispute: charge retrieve failed", {
+      disputeId: dispute.id,
+      chargeId: dispute.charge,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return null;
+  }
+}
+
+/**
+ * Claw back an auto-reload grant on a refund or dispute.
+ *
+ * Deliberately stricter than the manual-pack policy. Manual packs are
+ * non-refundable to customers and disputes leave grants alone, but an
+ * auto-reload charge is merchant-initiated, so any refund takes the credit
+ * with the money, and a dispute takes it AND stops future charging: a
+ * chargeback on an unattended charge is the customer saying they did not
+ * expect it, and continuing to charge them is how this becomes a Stripe risk
+ * review.
+ *
+ * Returns true when it handled the charge, so the caller stops.
+ */
+async function clawbackAutoReloadGrantForCharge(
+  charge: Stripe.Charge,
+  reason: "refund" | "dispute",
+  eventId: string
+): Promise<boolean> {
+  const intent = await autoReloadIntentForCharge(charge);
+  if (!intent) return false;
+
+  const businessId = intent.metadata?.businessId?.trim();
+  const spec = AUTO_RELOAD_KIND_MAP[intent.metadata?.checkoutKind ?? ""];
+  if (!businessId || !spec) {
+    logger.warn("auto_reload clawback: intent metadata incomplete", {
+      eventId,
+      paymentIntentId: intent.id
+    });
+    return true;
+  }
+
+  const { clawbackUsagePackGrantBySourceId, computeUsagePackClawbackAmount } = await import(
+    "@/lib/billing/usage-pack-clawback"
+  );
+  const purchased = Number(intent.metadata?.[spec.unitKey] ?? NaN);
+  const clawbackAmount =
+    reason === "dispute"
+      ? null // full void
+      : computeUsagePackClawbackAmount(
+          charge.amount ?? null,
+          charge.amount_refunded ?? null,
+          Number.isFinite(purchased) ? purchased : null
+        );
+
+  const res = await clawbackUsagePackGrantBySourceId({
+    sourceId: `pi_${intent.id}`,
+    kind: spec.kind,
+    reason,
+    clawbackAmount
+  });
+  logger.info("auto_reload clawback applied", {
+    eventId,
+    businessId,
+    paymentIntentId: intent.id,
+    reason,
+    clawbackAmount,
+    ok: res.ok
+  });
+
+  if (reason === "dispute") {
+    const { disableAutoReloadForBusiness } = await import("@/lib/db/auto-reload");
+    await disableAutoReloadForBusiness(businessId, "dispute");
+  }
+  return true;
+}
+
+/**
+ * Store the card a tenant authorized for auto-reload.
+ *
+ * Reached from `checkout.session.completed` in `mode: "setup"`. Until this
+ * row exists the sweep skips the tenant entirely, so a rule can be saved as
+ * enabled while the authorization is still outstanding and the UI can say so.
+ */
+async function applyAutoReloadSetupFromCheckout(
+  session: Stripe.Checkout.Session,
+  eventId: string
+): Promise<void> {
+  const businessId = session.metadata?.businessId?.trim();
+  const setupIntentId =
+    typeof session.setup_intent === "string" ? session.setup_intent : session.setup_intent?.id;
+  if (!businessId || !setupIntentId) {
+    logger.warn("auto_reload setup: missing businessId or setup intent", {
+      eventId,
+      sessionId: session.id
+    });
+    return;
+  }
+
+  const stripe = getStripe();
+  let paymentMethodId: string | null = null;
+  let card: Stripe.PaymentMethod.Card | null = null;
+  try {
+    const setupIntent = await stripe.setupIntents.retrieve(setupIntentId);
+    paymentMethodId =
+      typeof setupIntent.payment_method === "string"
+        ? setupIntent.payment_method
+        : (setupIntent.payment_method?.id ?? null);
+    if (paymentMethodId) {
+      const pm = await stripe.paymentMethods.retrieve(paymentMethodId);
+      card = pm.card ?? null;
+    }
+  } catch (err) {
+    logger.error("auto_reload setup: Stripe lookup failed", {
+      eventId,
+      businessId,
+      setupIntentId,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return;
+  }
+
+  if (!paymentMethodId) {
+    logger.error("auto_reload setup: setup intent has no payment method", {
+      eventId,
+      businessId,
+      setupIntentId
+    });
+    return;
+  }
+
+  const { saveAutoReloadCard } = await import("@/lib/db/auto-reload");
+  await saveAutoReloadCard(businessId, {
+    stripePaymentMethodId: paymentMethodId,
+    cardBrand: card?.brand ?? null,
+    cardLast4: card?.last4 ?? null,
+    cardExpMonth: card?.exp_month ?? null,
+    cardExpYear: card?.exp_year ?? null,
+    consentUserId: session.metadata?.userId?.trim() || null,
+    consentIp: null,
+    consentTextVersion: "v1"
+  });
+
+  // Make the same card the customer's invoice default, so a tenant who
+  // authorized a fresh card for top-ups is not left with a stale card on the
+  // membership itself.
+  const customerId = typeof session.customer === "string" ? session.customer : session.customer?.id;
+  if (customerId) {
+    try {
+      await stripe.customers.update(customerId, {
+        invoice_settings: { default_payment_method: paymentMethodId }
+      });
+    } catch (err) {
+      logger.warn("auto_reload setup: could not set customer default payment method", {
+        eventId,
+        businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+  }
+
+  logger.info("auto_reload setup: card authorized", { eventId, businessId, paymentMethodId });
+}
+
+/**
+ * Backstop grant for an auto-reload PaymentIntent.
+ *
+ * The sweep grants synchronously right after charging, because taking money
+ * and silently not granting is the worst outcome this feature can produce.
+ * This exists only for the crash window between those two steps. Both write
+ * `pi_<id>` through the same idempotent RPC, so running both is free.
+ *
+ * The `autoReload === "1"` gate is NOT optional: manual pack Checkouts set
+ * `payment_intent_data.metadata`, so an ordinary purchase already emits this
+ * event carrying `checkoutKind` and the unit count. Gating on `checkoutKind`
+ * alone would grant twice for every manual purchase, once under `cs_` and
+ * once under `pi_`, and the two distinct keys mean the RPC's idempotency
+ * cannot catch it.
+ */
+async function applyAutoReloadGrantFromPaymentIntent(
+  intent: Stripe.PaymentIntent,
+  eventId: string
+): Promise<void> {
+  if (intent.metadata?.autoReload !== "1") return;
+
+  const businessId = intent.metadata?.businessId?.trim();
+  const spec = AUTO_RELOAD_KIND_MAP[intent.metadata?.checkoutKind ?? ""];
+  if (!businessId || !spec) return;
+
+  const units = Number(intent.metadata?.[spec.unitKey] ?? NaN);
+  if (!Number.isFinite(units) || units <= 0) {
+    logger.warn("auto_reload backstop: invalid unit count", {
+      eventId,
+      paymentIntentId: intent.id
+    });
+    return;
+  }
+
+  const rpcName =
+    spec.kind === "voice"
+      ? "apply_voice_bonus_grant_from_checkout"
+      : spec.kind === "sms"
+        ? "apply_sms_bonus_grant_from_checkout"
+        : "apply_chat_credit_grant_from_checkout";
+  const amountParam =
+    spec.kind === "voice"
+      ? "p_seconds_purchased"
+      : spec.kind === "sms"
+        ? "p_texts_purchased"
+        : "p_credit_micros";
+
+  const { createSupabaseServiceClient } = await import("@/lib/supabase/server");
+  const db = await createSupabaseServiceClient();
+  const expiresAt = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString();
+  const { data, error } = await db.rpc(rpcName, {
+    p_business_id: businessId,
+    p_checkout_session_id: `pi_${intent.id}`,
+    [amountParam]: units,
+    p_expires_at: expiresAt
+  });
+  if (error) {
+    logger.error("auto_reload backstop grant failed", {
+      eventId,
+      paymentIntentId: intent.id,
+      error: error.message
+    });
+    return;
+  }
+  logger.info("auto_reload backstop grant recorded", {
+    eventId,
+    businessId,
+    paymentIntentId: intent.id,
+    result: data
+  });
+}
+
 async function handleVoiceBonusRefund(event: Stripe.Event): Promise<void> {
+  // Auto-reload charges are handled before the manual-pack policy below,
+  // because they follow the opposite refund rule (see
+  // clawbackAutoReloadGrantForCharge) and have no invoice to look up.
+  if (event.type === "charge.refunded") {
+    const charge = event.data.object as Stripe.Charge;
+    if (await clawbackAutoReloadGrantForCharge(charge, "refund", event.id)) return;
+  }
+
   if (event.type === "charge.dispute.closed") {
     logger.info("Usage pack dispute ignored; packs are non-refundable to customers", {
       eventId: event.id,

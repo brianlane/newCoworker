@@ -54,6 +54,10 @@ describe("edge cron timeouts cover their route budgets", () => {
     {
       job: "edge-vps-orphan-sweep",
       route: "src/app/api/internal/vps-orphan-sweep/route.ts"
+    },
+    {
+      job: "edge-usage-pack-auto-reload-sweep",
+      route: "src/app/api/internal/usage-pack-auto-reload-sweep/route.ts"
     }
   ];
 

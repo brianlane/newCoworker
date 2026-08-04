@@ -1,0 +1,37 @@
+/**
+ * Internal, cron-triggered usage-pack auto-reload sweep.
+ *
+ * Call chain: pg_cron -> Edge `usage-pack-auto-reload-sweep` -> this route.
+ * Bearer: `Authorization: Bearer <INTERNAL_CRON_SECRET>`.
+ *
+ * Lives in the Next app rather than the edge function because the balance
+ * math needs contracts that only exist here (the tier-and-env chat base cap,
+ * the Mexico SMS clamp) and the charge needs the Stripe Node SDK.
+ */
+
+import { assertCronAuth } from "@/lib/cron-auth";
+import { errorResponse, successResponse } from "@/lib/api-response";
+import { logger } from "@/lib/logger";
+import { sweepUsagePackAutoReloads } from "@/lib/billing/auto-reload-sweep";
+
+export const maxDuration = 300;
+export const runtime = "nodejs";
+
+export async function POST(request: Request): Promise<Response> {
+  if (!assertCronAuth(request)) {
+    return errorResponse("FORBIDDEN", "Invalid cron bearer", 403);
+  }
+
+  const startedAt = Date.now();
+  try {
+    const result = await sweepUsagePackAutoReloads();
+    const durationMs = Date.now() - startedAt;
+    logger.info("usage-pack-auto-reload-sweep: summary", { ...result, durationMs });
+    return successResponse({ ...result, durationMs });
+  } catch (err) {
+    logger.error("usage-pack-auto-reload-sweep: failed", {
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return errorResponse("INTERNAL_SERVER_ERROR", "Sweep failed", 500);
+  }
+}

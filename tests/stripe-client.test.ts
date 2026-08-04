@@ -2,8 +2,10 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import {
   getStripe,
   verifyWebhook,
+  createAutoReloadSetupSession,
   createCheckoutSession,
   createChatCreditCheckoutSession,
+  createOffSessionPackCharge,
   createCustomerPortalSession,
   createEnterpriseDealCheckoutSession,
   createSmsBonusCheckoutSession,
@@ -24,6 +26,7 @@ const mockScheduleCreate = vi.fn();
 const mockScheduleRetrieve = vi.fn();
 const mockScheduleUpdate = vi.fn();
 const mockScheduleRelease = vi.fn();
+const mockPaymentIntentCreate = vi.fn();
 
 vi.mock("stripe", () => {
   class MockStripe {
@@ -45,6 +48,9 @@ vi.mock("stripe", () => {
       retrieve: mockScheduleRetrieve,
       update: mockScheduleUpdate,
       release: mockScheduleRelease
+    };
+    paymentIntents = {
+      create: mockPaymentIntentCreate
     };
     webhooks = {
       constructEvent: mockConstructEvent
@@ -1339,6 +1345,102 @@ describe("stripe/client", () => {
       await expect(createWhiteGloveCheckoutSession(baseParams)).rejects.toThrow(
         "Stripe checkout session URL is null"
       );
+    });
+  });
+  describe("createAutoReloadSetupSession", () => {
+    it("creates a card-authorization session with no charge", async () => {
+      // The membership card was collected under a subscription mandate, which
+      // does not cover ad-hoc merchant-initiated top-ups, so auto-reload asks
+      // for its own authorization. Setup mode charges nothing.
+      mockSessionCreate.mockResolvedValue({ id: "cs_setup_1", url: "https://stripe.test/setup" });
+      const res = await createAutoReloadSetupSession({
+        customerId: "cus_1",
+        businessId: "biz-1",
+        userId: "user-1",
+        successUrl: "https://app.test/ok",
+        cancelUrl: "https://app.test/no"
+      });
+
+      expect(res).toEqual({ id: "cs_setup_1", url: "https://stripe.test/setup" });
+      const args = mockSessionCreate.mock.calls[0][0];
+      expect(args.mode).toBe("setup");
+      expect(args.customer).toBe("cus_1");
+      expect(args.payment_method_types).toEqual(["card"]);
+      expect(args.metadata).toMatchObject({
+        checkoutKind: "auto_reload_setup",
+        businessId: "biz-1"
+      });
+      // Mirrored onto the SetupIntent so the webhook can identify it there.
+      expect(args.setup_intent_data.metadata).toMatchObject({
+        checkoutKind: "auto_reload_setup"
+      });
+    });
+
+    it("throws when Stripe returns no URL", async () => {
+      mockSessionCreate.mockResolvedValue({ id: "cs_setup_2", url: null });
+      await expect(
+        createAutoReloadSetupSession({
+          customerId: "cus_1",
+          businessId: "biz-1",
+          userId: "user-1",
+          successUrl: "https://app.test/ok",
+          cancelUrl: "https://app.test/no"
+        })
+      ).rejects.toThrow("Stripe setup session URL is null");
+    });
+  });
+
+  describe("createOffSessionPackCharge", () => {
+    const params = {
+      customerId: "cus_1",
+      paymentMethodId: "pm_1",
+      amountCents: 1000,
+      currency: "usd",
+      businessId: "biz-1",
+      checkoutKind: "sms_bonus_texts" as const,
+      unitKey: "smsTexts" as const,
+      unitValue: 500,
+      packId: "texts_500",
+      eventId: 42,
+      receiptEmail: "owner@example.com"
+    };
+
+    it("marks the intent as auto-reload, which is what stops a double grant", async () => {
+      // Manual pack Checkouts mirror checkoutKind onto their PaymentIntent
+      // too, so a listener keyed on checkoutKind alone would grant twice for
+      // every ordinary purchase. This marker is the only thing separating them.
+      mockPaymentIntentCreate.mockResolvedValue({ id: "pi_1", status: "succeeded" });
+      const intent = await createOffSessionPackCharge(params);
+
+      expect(intent.id).toBe("pi_1");
+      const [body, options] = mockPaymentIntentCreate.mock.calls[0];
+      expect(body.metadata).toMatchObject({
+        autoReload: "1",
+        checkoutKind: "sms_bonus_texts",
+        businessId: "biz-1",
+        smsTexts: "500",
+        packId: "texts_500",
+        autoReloadEventId: "42"
+      });
+      expect(body.confirm).toBe(true);
+      expect(body.off_session).toBe(true);
+      expect(body.amount).toBe(1000);
+      expect(body.currency).toBe("usd");
+      expect(body.receipt_email).toBe("owner@example.com");
+      // Nobody is at the keyboard, so a redirect-based method would strand it.
+      expect(body.automatic_payment_methods).toEqual({
+        enabled: true,
+        allow_redirects: "never"
+      });
+      // Derived from the ledger row: a resumed attempt reuses the same key so
+      // Stripe replays the original intent instead of charging twice.
+      expect(options).toEqual({ idempotencyKey: "auto_reload:42" });
+    });
+
+    it("omits the receipt email when there is none", async () => {
+      mockPaymentIntentCreate.mockResolvedValue({ id: "pi_2", status: "succeeded" });
+      await createOffSessionPackCharge({ ...params, receiptEmail: undefined });
+      expect(mockPaymentIntentCreate.mock.calls[0][0].receipt_email).toBeUndefined();
     });
   });
 });
