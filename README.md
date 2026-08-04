@@ -40,6 +40,36 @@ usage from the at-cost usage carve-out so those units are never charged
 twice. Standalone top-ups from Dashboard → Billing stay
 at the full catalog price.
 
+**Auto-reload** (Dashboard → Billing) buys another pack automatically when a
+tenant's remaining capacity falls below a threshold they set, the same shape
+Telnyx and Google AI Studio use on our own vendor accounts. Three things are
+worth knowing before touching it:
+
+- It measures **plan-included remaining plus pack remaining**, not pack-only.
+  A pack-only threshold would charge a first-time user the moment they flip
+  the toggle, while their included allowance sits untouched.
+- It charges a card the tenant authorizes **separately** from the membership
+  card, through a hosted `mode: "setup"` Checkout, because the membership card
+  was collected under a subscription mandate that does not cover ad-hoc
+  merchant-initiated top-ups. The consent record (user, timestamp, IP, copy
+  version) lives in `usage_pack_auto_reload_cards` and is what we produce if a
+  tenant disputes an unattended charge.
+- Grants are keyed `pi_<paymentIntentId>`, joining `cs_<sessionId>` (manual
+  Checkout) and `inv_<invoiceId>:<category>:<packId>` (recurring add-ons) on
+  the same unique column. **The manual pack Checkouts mirror `checkoutKind`
+  onto their PaymentIntent**, so any listener on `payment_intent.succeeded`
+  must gate on `metadata.autoReload === "1"` or every manual purchase grants
+  twice under two different keys that DB idempotency cannot reconcile.
+
+Guardrails, tightest first: a unique `attempt_key` per cooldown bucket (two
+concurrent sweeps cannot both charge), a per-family cooldown, a monthly dollar
+ceiling (mandatory for chat credit, which raises the cap rather than being
+consumed), and auto-disable after three hard declines. A 3DS challenge pauses
+without counting as a decline. A dispute claws the grant back, disables every
+rule, and revokes the card. Fail-closed on
+`USAGE_PACK_AUTO_RELOAD_ENABLED`; the pg_cron sweep runs every 15 minutes and
+is a no-op until that is set.
+
 **RCS is Enterprise-only** (Jul 2026): each tenant needs their own branded
 Telnyx RCS agent ($600 + $100/mo carrier fees, priced cost-plus per deal) —
 a shared agent cannot route inbound replies for more than one tenant. Before

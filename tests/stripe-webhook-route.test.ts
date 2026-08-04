@@ -3429,7 +3429,7 @@ describe("stripe webhook route: voice bonus refund / dispute handling", () => {
     );
   }
 
-  it("does NOT void on dispute.created (observational only)", async () => {
+  it("does NOT void a MANUAL pack grant on dispute.created", async () => {
     vi.mocked(verifyWebhook).mockReturnValue({
       id: "evt_dispute_created",
       type: "charge.dispute.created",
@@ -3451,9 +3451,12 @@ describe("stripe webhook route: voice bonus refund / dispute handling", () => {
       "void_voice_bonus_grant_by_checkout_session",
       expect.anything()
     );
+    // Manual packs stay non-refundable on dispute. Auto-reload charges are
+    // the deliberate exception (they are merchant-initiated) and are covered
+    // in tests/worker-integration/auto-reload-sweep.itest.ts.
     expect(logger.info).toHaveBeenCalledWith(
-      "Stripe dispute created; pack grants are not clawed back on disputes",
-      expect.objectContaining({ disputeId: "dp_created_1" })
+      "Stripe dispute created",
+      expect.objectContaining({ disputeId: "dp_created_1", autoReloadClawedBack: false })
     );
   });
 

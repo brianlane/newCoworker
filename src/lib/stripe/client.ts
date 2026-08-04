@@ -544,6 +544,113 @@ export async function createEnterpriseDealCheckoutSession(
   return { id: session.id, url: session.url };
 }
 
+/**
+ * Card authorization for auto-reload, as a hosted `mode: "setup"` Checkout.
+ *
+ * The membership card on file was collected under a SUBSCRIPTION mandate,
+ * which does not cover ad-hoc merchant-initiated top-ups. Rather than reuse it
+ * implicitly, auto-reload asks the tenant to authorize a card explicitly.
+ * Setup-mode Checkout creates a SetupIntent whose `usage` already defaults to
+ * `off_session`, which is the mandate we need, so we do not set it here (the
+ * pinned API version does not accept it on `setup_intent_data` anyway).
+ *
+ * Hosted Checkout rather than Elements: no card form, no Stripe.js, and no new
+ * PCI surface in this app, matching every other payment path in the repo.
+ */
+export async function createAutoReloadSetupSession(params: {
+  customerId: string;
+  businessId: string;
+  userId: string;
+  successUrl: string;
+  cancelUrl: string;
+}): Promise<{ id: string; url: string }> {
+  const stripe = getStripe();
+  const metadata: Record<string, string> = {
+    checkoutKind: "auto_reload_setup",
+    businessId: params.businessId,
+    userId: params.userId
+  };
+  const session = await stripe.checkout.sessions.create({
+    mode: "setup",
+    customer: params.customerId,
+    payment_method_types: ["card"],
+    success_url: params.successUrl,
+    cancel_url: params.cancelUrl,
+    metadata,
+    setup_intent_data: { metadata }
+  });
+  if (!session.url) throw new Error("Stripe setup session URL is null");
+  return { id: session.id, url: session.url };
+}
+
+export type OffSessionPackChargeParams = {
+  customerId: string;
+  paymentMethodId: string;
+  amountCents: number;
+  /** From the Stripe Price, never hardcoded: tenants are not all in USD. */
+  currency: string;
+  businessId: string;
+  checkoutKind: "voice_bonus_seconds" | "sms_bonus_texts" | "chat_credit_micros";
+  /** Metadata key matching checkoutKind: voiceSeconds / smsTexts / creditMicros. */
+  unitKey: "voiceSeconds" | "smsTexts" | "creditMicros";
+  unitValue: number;
+  packId: string;
+  /** Our ledger row id. Becomes the Stripe idempotency key. */
+  eventId: number;
+  receiptEmail?: string;
+};
+
+/**
+ * Charge the authorized card without the tenant present.
+ *
+ * Two details are load-bearing:
+ *
+ * 1. `autoReload: "1"`. The manual pack Checkouts mirror their metadata onto
+ *    `payment_intent_data`, so an ordinary purchase ALREADY emits a
+ *    `payment_intent.succeeded` carrying `checkoutKind` and the unit count.
+ *    Any listener keyed on `checkoutKind` alone would grant twice for every
+ *    manual purchase, once under `cs_` and once under `pi_`, and the two
+ *    distinct keys mean the grant RPC's idempotency cannot catch it. This
+ *    marker is what separates the two.
+ *
+ * 2. `idempotencyKey`. This is what prevents a double charge when we crash
+ *    after Stripe accepted the request but before we recorded the intent id.
+ *    It is derived from the ledger row, and a stale attempt is RESUMED (same
+ *    row, same key) rather than re-claimed, so Stripe replays the original
+ *    PaymentIntent instead of creating a second one.
+ *
+ * `allow_redirects: "never"` because nobody is at the keyboard to complete a
+ * redirect-based method.
+ */
+export async function createOffSessionPackCharge(
+  params: OffSessionPackChargeParams
+): Promise<Stripe.PaymentIntent> {
+  const stripe = getStripe();
+  const metadata: Record<string, string> = {
+    checkoutKind: params.checkoutKind,
+    businessId: params.businessId,
+    [params.unitKey]: String(params.unitValue),
+    autoReload: "1",
+    packId: params.packId,
+    autoReloadEventId: String(params.eventId)
+  };
+  return stripe.paymentIntents.create(
+    {
+      customer: params.customerId,
+      payment_method: params.paymentMethodId,
+      amount: params.amountCents,
+      currency: params.currency,
+      confirm: true,
+      off_session: true,
+      automatic_payment_methods: { enabled: true, allow_redirects: "never" },
+      description: `Auto-reload: ${params.packId}`,
+      receipt_email: params.receiptEmail,
+      metadata
+    },
+    { idempotencyKey: `auto_reload:${params.eventId}` }
+  );
+}
+
 export async function createCustomerPortalSession(params: {
   customerId: string;
   returnUrl: string;
