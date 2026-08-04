@@ -1,157 +1,226 @@
 import { describe, expect, it } from "vitest";
-import { readFileSync, readdirSync } from "node:fs";
+import { existsSync, readFileSync, readdirSync } from "node:fs";
 import { join } from "node:path";
 
 /**
- * A pg_cron job's HTTP timeout must not hang up before the Next route it calls
- * is allowed to finish.
+ * A pg_cron job's HTTP timeout must not hang up before the request it makes
+ * can possibly finish, or every healthy run is recorded as a timeout in
+ * cron.job_run_details and a real timeout becomes impossible to spot.
  *
- * #1014 raised several routes to maxDuration = 1800 and rescheduled
- * edge-provisioning-watchdog to match, but left edge-vps-term-renewal-sweep at
- * 800000. pg_cron then disconnected roughly 16 minutes early on every run. The
- * Next function keeps going, so nothing broke, but every sweep was recorded as
- * a timeout in cron.job_run_details, which makes a real timeout invisible.
+ * This used to be a hand-written list of job/route pairs, which covered 4 of
+ * the 22 chains that existed and silently missed every job added after it.
+ * It now discovers the chains by reading the migrations, the Edge functions
+ * and the routes, so a new cron job is covered the day it lands.
+ *
+ * THE CHAIN HAS THREE LAYERS, and each can hang up on the one below it:
+ *
+ *   pg_cron `timeout_milliseconds`    (supabase/migrations/*.sql)
+ *     -> Edge fn `REQUEST_TIMEOUT_MS` (supabase/functions/<fn>/index.ts)
+ *       -> route `maxDuration`        (src/app/api/internal/<route>/route.ts)
+ *
+ * #1014 is the cautionary tale: it raised a route to maxDuration = 1800 and
+ * the two layers above it to 1_800_000, but the platform ceiling below still
+ * caps that chain at 150s, so the 30-minute budget was never real.
  */
-const MIGRATIONS_DIR = join(process.cwd(), "supabase", "migrations");
 
-/** jobname -> timeout_milliseconds, last definition winning (apply order). */
-function effectiveCronTimeouts(): Map<string, number> {
-  const out = new Map<string, number>();
+const ROOT = process.cwd();
+const MIGRATIONS_DIR = join(ROOT, "supabase", "migrations");
+const FUNCTIONS_DIR = join(ROOT, "supabase", "functions");
+const ROUTES_DIR = join(ROOT, "src", "app", "api", "internal");
+
+/**
+ * Supabase hangs up on an Edge function that has not responded within 150s
+ * and returns 504 to its caller. This is the request idle timeout and it
+ * applies on every plan, including Pro: the 400s figure in Supabase's docs is
+ * the worker's total wall clock across background tasks, not how long it may
+ * take to answer the request that started it.
+ * https://supabase.com/docs/guides/functions/limits
+ *
+ * Every bridge here awaits its route and returns the body, so no chain can
+ * outlast this no matter what the numbers above it say.
+ */
+const EDGE_REQUEST_CEILING_MS = 150_000;
+
+type CronJob = { job: string; fn: string | null; timeoutMs: number | null };
+
+/** Last definition of each job wins, matching migration apply order. */
+function discoverCronJobs(): CronJob[] {
+  const byName = new Map<string, CronJob>();
   const files = readdirSync(MIGRATIONS_DIR)
     .filter((f) => f.endsWith(".sql"))
     .sort();
   for (const file of files) {
     const sql = readFileSync(join(MIGRATIONS_DIR, file), "utf8");
     // Each cron.schedule('<name>', '<cron>', $$ ... $$) block, in file order.
-    const blocks = sql.split(/cron\.schedule\s*\(/).slice(1);
-    for (const block of blocks) {
-      const name = block.match(/^\s*'([^']+)'/)?.[1];
-      if (!name) continue;
+    for (const block of sql.split(/cron\.schedule\s*\(/).slice(1)) {
+      const job = block.match(/^\s*'([^']+)'/)?.[1];
+      if (!job) continue;
+      const fn = block.match(/\/functions\/v1\/([A-Za-z0-9_-]+)/)?.[1] ?? null;
       const timeout = block.match(/timeout_milliseconds\s*:=\s*(\d+)/)?.[1];
-      if (timeout) out.set(name, Number(timeout));
+      const prev = byName.get(job);
+      byName.set(job, {
+        job,
+        fn: fn ?? prev?.fn ?? null,
+        timeoutMs: timeout ? Number(timeout) : (prev?.timeoutMs ?? null)
+      });
     }
   }
-  return out;
+  return [...byName.values()].sort((a, b) => a.job.localeCompare(b.job));
 }
 
-function routeMaxDurationSeconds(relPath: string): number {
-  const src = readFileSync(join(process.cwd(), relPath), "utf8");
-  const m = src.match(/export const maxDuration\s*=\s*(\d+)/);
-  if (!m) throw new Error(`no maxDuration in ${relPath}`);
-  return Number(m[1]);
+type Bridge = { routes: string[]; requestTimeoutMs: number | null };
+
+function readBridge(fn: string): Bridge | null {
+  const path = join(FUNCTIONS_DIR, fn, "index.ts");
+  if (!existsSync(path)) return null;
+  const src = readFileSync(path, "utf8");
+  // Matches both the "/api/internal/x" literal and the `${base}/api/internal/x`
+  // template form. Order-independent: only the distinct set matters.
+  const routes = [
+    ...new Set([...src.matchAll(/\/api\/internal\/([A-Za-z0-9_-]+)/g)].map((m) => m[1]))
+  ].sort();
+  const raw = src.match(/REQUEST_TIMEOUT_MS\s*=\s*([0-9_]+)/)?.[1];
+  return { routes, requestTimeoutMs: raw ? Number(raw.replace(/_/g, "")) : null };
 }
 
-describe("edge cron timeouts cover their route budgets", () => {
-  /**
-   * Every pg_cron job whose body posts to /functions/v1/<name> where a
-   * src/app/api/internal/<name>/route.ts exists, plus the one pair whose Edge
-   * function forwards to a differently named route (provisioning-watchdog ->
-   * provisioning-retry).
-   *
-   * Deliberately absent: jobs whose Edge function forwards under a different
-   * name AND whose cron budget is not 1:1 with a single request, because the
-   * bridge fans out per row. Those are edge-ai-flow-worker (-> aiflow-email-poll),
-   * edge-customer-memory-summarize-sweep (-> summarize-customer),
-   * edge-messenger-jobs-sweep (-> messenger-worker) and edge-sms-inbound-worker
-   * (-> owner-sms-turn and contact-booking-context). The last two sit below
-   * their route's maxDuration today; whether that is a defect depends on the
-   * per-row budget, so it is not asserted here.
-   */
-  const cases: Array<{ job: string; route: string }> = [
-    {
-      job: "edge-aiflow-library-refresh",
-      route: "src/app/api/internal/aiflow-library-refresh/route.ts"
-    },
-    {
-      job: "edge-analytics-snapshot-sweep",
-      route: "src/app/api/internal/analytics-snapshot-sweep/route.ts"
-    },
-    {
-      job: "edge-blog-publish-sweep",
-      route: "src/app/api/internal/blog-publish-sweep/route.ts"
-    },
-    {
-      job: "edge-blog-weekly-digest",
-      route: "src/app/api/internal/blog-weekly-digest/route.ts"
-    },
-    {
-      job: "edge-contract-term-nudge-sweep",
-      route: "src/app/api/internal/contract-term-nudge-sweep/route.ts"
-    },
-    {
-      job: "edge-data-retention-sweep",
-      route: "src/app/api/internal/data-retention-sweep/route.ts"
-    },
-    {
-      job: "edge-document-expiration-sweep",
-      route: "src/app/api/internal/document-expiration-sweep/route.ts"
-    },
-    {
-      job: "edge-email-campaign-sweep",
-      route: "src/app/api/internal/email-campaign-sweep/route.ts"
-    },
-    {
-      job: "edge-meta-capi-drain",
-      route: "src/app/api/internal/meta-capi-drain/route.ts"
-    },
-    {
-      job: "edge-monthly-intro-nudge-sweep",
-      route: "src/app/api/internal/monthly-intro-nudge-sweep/route.ts"
-    },
-    {
-      job: "edge-outreach-sweep",
-      route: "src/app/api/internal/outreach-sweep/route.ts"
-    },
-    {
-      job: "edge-platform-cost-sync",
-      route: "src/app/api/internal/platform-cost-sync/route.ts"
-    },
-    {
-      job: "edge-provisioning-watchdog",
-      route: "src/app/api/internal/provisioning-retry/route.ts"
-    },
-    {
-      job: "edge-residency-replay",
-      route: "src/app/api/internal/residency-replay/route.ts"
-    },
-    {
-      job: "edge-social-post-sweep",
-      route: "src/app/api/internal/social-post-sweep/route.ts"
-    },
-    {
-      job: "edge-subscription-grace-sweep",
-      route: "src/app/api/internal/subscription-grace-sweep/route.ts"
-    },
-    {
-      job: "edge-tendlc-attach-retry",
-      route: "src/app/api/internal/tendlc-attach-retry/route.ts"
-    },
-    {
-      job: "edge-vps-billing-posture",
-      route: "src/app/api/internal/vps-billing-posture/route.ts"
-    },
-    {
-      job: "edge-vps-orphan-sweep",
-      route: "src/app/api/internal/vps-orphan-sweep/route.ts"
-    },
-    {
-      job: "edge-usage-pack-auto-reload-sweep",
-      route: "src/app/api/internal/usage-pack-auto-reload-sweep/route.ts"
-    },
-    {
-      job: "edge-vps-term-renewal-sweep",
-      route: "src/app/api/internal/vps-term-renewal-sweep/route.ts"
+function routeMaxDurationMs(route: string): number | null {
+  const path = join(ROUTES_DIR, route, "route.ts");
+  if (!existsSync(path)) return null;
+  const m = readFileSync(path, "utf8").match(/export const maxDuration\s*=\s*(\d+)/);
+  return m ? Number(m[1]) * 1000 : null;
+}
+
+type Chain = {
+  job: string;
+  fn: string;
+  route: string;
+  cronMs: number | null;
+  bridgeMs: number;
+  routeMs: number | null;
+};
+
+/**
+ * Three shapes of job, and only one of them can be checked for parity:
+ *
+ * - `passthrough`: forwards to exactly one route and bounds it with
+ *   REQUEST_TIMEOUT_MS. One cron run is one HTTP request, so the budgets
+ *   compose and the assertion below applies.
+ * - `dispatchers`: call routes in a loop, once per claimed row, each with its
+ *   own per-call budget. `maxDuration` is the budget of ONE call, not of the
+ *   run, so comparing it to the cron timeout would be meaningless. Tracked by
+ *   name so a new one cannot quietly appear and skip the parity check.
+ * - self-contained: never touches a Next route. Irrelevant here, ignored.
+ */
+function discoverChains(): { passthrough: Chain[]; dispatchers: string[] } {
+  const passthrough: Chain[] = [];
+  const dispatchers: string[] = [];
+  for (const { job, fn, timeoutMs } of discoverCronJobs()) {
+    if (!fn) continue;
+    const bridge = readBridge(fn);
+    if (!bridge || bridge.routes.length === 0) continue;
+    if (bridge.routes.length === 1 && bridge.requestTimeoutMs !== null) {
+      const route = bridge.routes[0];
+      passthrough.push({
+        job,
+        fn,
+        route,
+        cronMs: timeoutMs,
+        bridgeMs: bridge.requestTimeoutMs,
+        routeMs: routeMaxDurationMs(route)
+      });
+    } else {
+      dispatchers.push(job);
     }
-  ];
+  }
+  return { passthrough, dispatchers: dispatchers.sort() };
+}
 
-  for (const { job, route } of cases) {
-    it(`${job} waits at least as long as its route allows`, () => {
-      const timeouts = effectiveCronTimeouts();
-      const timeoutMs = timeouts.get(job);
-      expect(timeoutMs, `no timeout_milliseconds found for ${job}`).toBeDefined();
-      expect(timeoutMs as number).toBeGreaterThanOrEqual(
-        routeMaxDurationSeconds(route) * 1000
+const { passthrough, dispatchers } = discoverChains();
+
+describe("edge cron timeouts cover the budget their chain can actually use", () => {
+  it("discovers the pass-through chains (a broken parser must not pass silently)", () => {
+    expect(passthrough.length).toBeGreaterThanOrEqual(20);
+  });
+
+  for (const chain of passthrough) {
+    it(`${chain.job} waits at least as long as its chain can run`, () => {
+      expect(chain.cronMs, `no timeout_milliseconds for ${chain.job}`).not.toBeNull();
+      expect(
+        chain.routeMs,
+        `no maxDuration in src/app/api/internal/${chain.route}/route.ts`
+      ).not.toBeNull();
+
+      // The request cannot outlast the smallest ceiling in the chain, so that
+      // is the only number pg_cron has to cover. Comparing against the route's
+      // maxDuration alone would demand 1800000 for a chain the platform cuts
+      // off at 150000.
+      const reachableMs = Math.min(
+        chain.routeMs as number,
+        chain.bridgeMs,
+        EDGE_REQUEST_CEILING_MS
       );
+      expect(chain.cronMs as number).toBeGreaterThanOrEqual(reachableMs);
     });
   }
+});
+
+/**
+ * Routes that declare more time than their chain can ever hand them. Supabase
+ * 504s the bridge at EDGE_REQUEST_CEILING_MS; Vercel keeps running the route
+ * to completion in the background, so the work still finishes and the sweeps
+ * are unharmed. What is lost is the result: pg_cron records a 504 instead of
+ * the route's own outcome.
+ *
+ * This is recorded rather than fixed: lowering these to 150 would truncate
+ * work that completes today, and a daily sweep would leave the remainder for
+ * 24 hours. See the README's "The cron chain has three timeouts" section.
+ *
+ * The assertion is an exact match in both directions, so a new over-declared
+ * route has to be added here deliberately, and one that gets fixed has to be
+ * removed. Shrinking this list is the goal.
+ */
+const KNOWN_ABOVE_EDGE_CEILING = [
+  "analytics-snapshot-sweep",
+  "blog-publish-sweep",
+  "blog-weekly-digest",
+  "contract-term-nudge-sweep",
+  "data-retention-sweep",
+  "document-expiration-sweep",
+  "email-campaign-sweep",
+  "messenger-worker",
+  "monthly-intro-nudge-sweep",
+  "outreach-sweep",
+  "platform-cost-sync",
+  "provisioning-retry",
+  "social-post-sweep",
+  "subscription-grace-sweep",
+  "usage-pack-auto-reload-sweep",
+  "vps-billing-posture",
+  "vps-orphan-sweep",
+  "vps-term-renewal-sweep"
+];
+
+/**
+ * Cron jobs whose Edge function calls routes once per claimed row. Their
+ * per-call budgets live in the function itself, so parity with the cron
+ * timeout is not the right contract for them.
+ */
+const KNOWN_DISPATCHERS = [
+  "edge-ai-flow-worker",
+  "edge-customer-memory-summarize-sweep",
+  "edge-sms-inbound-worker"
+];
+
+describe("the shape of the cron fleet is what the contract above assumes", () => {
+  it("only the recorded routes declare more than the Edge ceiling", () => {
+    const above = passthrough
+      .filter((c) => (c.routeMs ?? 0) > EDGE_REQUEST_CEILING_MS)
+      .map((c) => c.route)
+      .sort();
+    expect([...new Set(above)]).toEqual(KNOWN_ABOVE_EDGE_CEILING);
+  });
+
+  it("only the recorded jobs dispatch per row instead of forwarding once", () => {
+    expect(dispatchers).toEqual(KNOWN_DISPATCHERS);
+  });
 });
