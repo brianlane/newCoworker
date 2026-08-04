@@ -484,9 +484,11 @@ async function processCandidate(ctx: {
     // invisible until the tenant's texts start failing. A soft decline stays
     // silent: it retries next cooldown and the ledger already shows it.
     if (settled.disabled) {
+      // A missing or unusable card disables after ONE failure, so it must not
+      // borrow the "declined three times in a row" copy.
       await notify({
         candidate,
-        kind: "disabled",
+        kind: failure.kind === "no_payment_method" ? "disabled_no_card" : "disabled",
         attempts: AUTO_RELOAD_MAX_CONSECUTIVE_FAILURES
       }).catch(() => {});
     } else if (failure.kind === "requires_action") {

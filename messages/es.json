@@ -1962,7 +1962,8 @@
         "statusSkippedMonthlyLimit": "Omitido: limite mensual alcanzado",
         "statusSkippedPackUnavailable": "Omitido: paquete no disponible",
         "statusSkippedNoCard": "Omitido: sin tarjeta autorizada",
-        "statusPending": "En curso"
+        "statusPending": "En curso",
+        "disabledNoPaymentMethod": "La recarga automatica se desactivo porque no se pudo usar tu tarjeta. Autoriza una tarjeta y vuelve a activarla."
       }
     },
     "pages": {
@@ -2628,7 +2629,11 @@
       "cta": "Abrir facturacion",
       "familyVoice": "minutos de voz",
       "familySms": "mensajes de texto",
-      "familyChat": "credito de IA"
+      "familyChat": "credito de IA",
+      "noCardSubject": "Se desactivo la recarga automatica de {business}",
+      "noCardLine1": "Hola, no pudimos usar tu tarjeta para una recarga automatica, asi que la desactivamos.",
+      "noCardLine2": "Esto afecta a {familyName}. No se cobro nada.",
+      "noCardLine3": "Autoriza una tarjeta en tu pagina de facturacion y vuelve a activar la recarga automatica."
     }
   },
   "notFound": {

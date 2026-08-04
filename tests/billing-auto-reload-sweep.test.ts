@@ -722,4 +722,18 @@ describe("owner notifications", () => {
     expect(res.errors).toEqual([]);
     expect(res.skipped).toBe(1);
   });
+  it("uses the no-card copy when the card itself was the problem", async () => {
+    settle.mockResolvedValue({ ok: true, disabled: true });
+    listCandidates.mockResolvedValue([candidate()]);
+    const notify = vi.fn(async () => {});
+    await sweepUsagePackAutoReloads(
+      deps({
+        notify,
+        charge: async () => ({ ok: false, error: { code: "payment_method_unactivated" } })
+      })
+    );
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "disabled_no_card" })
+    );
+  });
 });

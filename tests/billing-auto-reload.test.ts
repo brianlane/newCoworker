@@ -227,6 +227,20 @@ describe("unit conversion", () => {
     expect(fromDisplayUnits("chat", 2.5)).toBe(2_500_000);
     expect(fromDisplayUnits("sms", 100.6)).toBe(101);
   });
+
+  it("never rounds on the way OUT, so a no-edit save cannot move the trigger", () => {
+    // The billing card seeds its inputs from these values and posts them back.
+    // A rounding display direction rewrote a $2.50 threshold as $3.00 just
+    // for opening the card and pressing Save.
+    for (const units of [2_500_000, 1_250_000, 49_999_999]) {
+      expect(fromDisplayUnits("chat", toDisplayUnits("chat", units))).toBe(units);
+    }
+    for (const units of [930, 305, 35_999]) {
+      expect(fromDisplayUnits("voice", toDisplayUnits("voice", units))).toBe(units);
+    }
+    expect(toDisplayUnits("chat", 2_500_000)).toBe(2.5);
+    expect(toDisplayUnits("voice", 930)).toBe(15.5);
+  });
 });
 
 describe("isBelowThreshold", () => {

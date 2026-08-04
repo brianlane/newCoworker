@@ -20,6 +20,9 @@
 import { getVoiceBonusPack } from "@/lib/billing/voice-bonus-packs";
 import { getSmsBonusPack } from "@/lib/billing/sms-bonus-packs";
 import { getChatCreditPack } from "@/lib/billing/chat-credit-packs";
+// Re-exported from a dependency-free module so the client component can use
+// the exact same conversion (a second copy is what drifted before).
+export { fromDisplayUnits, toDisplayUnits } from "@/lib/billing/auto-reload-units";
 
 export const AUTO_RELOAD_CATEGORIES = ["voice", "sms", "chat"] as const;
 
@@ -212,20 +215,6 @@ export function validateAutoReload(input: AutoReloadSettingsInput): AutoReloadVa
   }
 
   return { ok: true, pack };
-}
-
-/** Canonical units to the number the tenant reads (minutes / texts / dollars). */
-export function toDisplayUnits(category: AutoReloadCategory, units: number): number {
-  if (category === "voice") return units / 60;
-  if (category === "chat") return units / 1_000_000;
-  return units;
-}
-
-/** The tenant's number back to canonical units. Rounds to a whole unit. */
-export function fromDisplayUnits(category: AutoReloadCategory, display: number): number {
-  if (category === "voice") return Math.round(display * 60);
-  if (category === "chat") return Math.round(display * 1_000_000);
-  return Math.round(display);
 }
 
 /**

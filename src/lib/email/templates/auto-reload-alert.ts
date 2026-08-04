@@ -17,7 +17,11 @@ import type { AppLocale } from "@/i18n/routing";
 import { defaultLocale } from "@/i18n/routing";
 import { emailMessagesForLocale, fmtEmail } from "@/lib/i18n/email-copy";
 
-export type AutoReloadAlertKind = "disabled" | "paused_authentication" | "monthly_limit";
+export type AutoReloadAlertKind =
+  | "disabled"
+  | "disabled_no_card"
+  | "paused_authentication"
+  | "monthly_limit";
 
 export type AutoReloadAlertInput = {
   kind: AutoReloadAlertKind;
@@ -63,6 +67,15 @@ export function buildAutoReloadAlertEmail(input: AutoReloadAlertInput): AutoRelo
         familyName
       }),
       copy.disabledLine3
+    ];
+  } else if (input.kind === "disabled_no_card") {
+    // Deliberately separate copy: this path disables after a SINGLE failure,
+    // so the "declined three times in a row" line would be a lie.
+    subject = fmtEmail(copy.noCardSubject, { business: input.businessName });
+    textLines = [
+      copy.noCardLine1,
+      fmtEmail(copy.noCardLine2, { familyName }),
+      copy.noCardLine3
     ];
   } else if (input.kind === "paused_authentication") {
     subject = fmtEmail(copy.pausedSubject, { business: input.businessName });

@@ -589,6 +589,47 @@ describe("auto-reload sweep against real Postgres", () => {
       expect(await reenableAutoReloadAfterCardAuthorized(businessId, db as never)).toBe(0);
     });
 
+    it("closes an in-flight attempt and refunds its reserved budget", async () => {
+      // The claim debits month_spent_cents BEFORE charging. Disabling
+      // mid-attempt without settling would leave a tenant's monthly allowance
+      // consumed by a charge that never completed, plus a `pending` ledger
+      // row nothing would ever close.
+      const businessId = await seedTenant(db, "Auto-reload sweep itest (mid-flight)", {
+        monthly_limit_cents: 5_000
+      });
+      const claim = await db.rpc("usage_pack_auto_reload_claim", {
+        p_business_id: businessId,
+        p_category: "sms",
+        p_pack_id: "texts_500",
+        p_amount_cents: PACK_PRICE_CENTS,
+        p_balance_units: 0,
+        p_threshold_units: 100,
+        p_platform_max_cents: null,
+        p_currency: "usd"
+      });
+      expect((claim.data as { ok: boolean }).ok).toBe(true);
+      expect((await rule(db, businessId)).month_spent_cents).toBe(PACK_PRICE_CENTS);
+
+      await db.rpc("usage_pack_auto_reload_disable_for_business", {
+        p_business_id: businessId,
+        p_reason: "subscription_canceled"
+      });
+
+      const r = await rule(db, businessId);
+      expect(r.month_spent_cents).toBe(0);
+      expect(r.month_charges).toBe(0);
+      expect(r.enabled).toBe(false);
+
+      const ledger = await events(db, businessId);
+      expect(ledger).toHaveLength(1);
+      // Closed, not left dangling.
+      expect(ledger[0]).toMatchObject({
+        status: "abandoned",
+        failure_code: "subscription_canceled"
+      });
+      expect(ledger[0]!.settled_at).not.toBeNull();
+    });
+
     it("stops every rule and revokes the card on a dispute", async () => {
       const businessId = await seedTenant(db, "Auto-reload sweep itest (dispute)");
       const { data } = await db.rpc("usage_pack_auto_reload_disable_for_business", {

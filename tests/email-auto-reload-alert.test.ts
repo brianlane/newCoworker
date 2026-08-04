@@ -64,4 +64,12 @@ describe("buildAutoReloadAlertEmail", () => {
     expect(email.text).toContain("https://app.example.com/dashboard/billing");
     expect(email.text).not.toContain("com//dashboard");
   });
+  it("does not claim three declines when the card simply could not be used", async () => {
+    // That path disables after a SINGLE failure, so the "declined three times
+    // in a row" line would be a lie.
+    const email = buildAutoReloadAlertEmail({ ...BASE, kind: "disabled_no_card", attempts: 3 });
+    expect(email.text).not.toContain("3 times");
+    expect(email.text.toLowerCase()).toContain("could not use your card");
+    expect(email.text).toContain("text messages");
+  });
 });

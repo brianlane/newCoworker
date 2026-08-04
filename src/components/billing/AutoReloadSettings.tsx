@@ -18,6 +18,12 @@ import { useState } from "react";
 import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
+// The SAME conversion the server uses. A local copy here rounded on the
+// display side, so a no-edit Save rewrote a $2.50 threshold as $3.00.
+import {
+  fromDisplayUnits as fromDisplay,
+  toDisplayUnits as toDisplay
+} from "@/lib/billing/auto-reload-units";
 
 export type AutoReloadCategory = "voice" | "sms" | "chat";
 
@@ -74,19 +80,6 @@ const currency = new Intl.NumberFormat("en-US", {
   minimumFractionDigits: 2,
   maximumFractionDigits: 2
 });
-
-/** Canonical units to the number the tenant reads. */
-function toDisplay(category: AutoReloadCategory, units: number): number {
-  if (category === "voice") return Math.round(units / 60);
-  if (category === "chat") return Math.round(units / 1_000_000);
-  return units;
-}
-
-function fromDisplay(category: AutoReloadCategory, display: number): number {
-  if (category === "voice") return Math.round(display * 60);
-  if (category === "chat") return Math.round(display * 1_000_000);
-  return Math.round(display);
-}
 
 function formatBalance(category: AutoReloadCategory, units: number, unitWord: string): string {
   return `${toDisplay(category, units).toLocaleString("en-US")} ${unitWord}`;
@@ -344,6 +337,11 @@ function CategorySection({ view }: { view: AutoReloadCategoryView }) {
       {view.disabledReason === "card_detached" && (
         <p className="text-xs text-spark-orange" role="alert">
           {t("disabledCardDetached")}
+        </p>
+      )}
+      {view.disabledReason === "no_payment_method" && (
+        <p className="text-xs text-spark-orange" role="alert">
+          {t("disabledNoPaymentMethod")}
         </p>
       )}
       {view.disabledReason === "subscription_canceled" && (

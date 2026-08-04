@@ -581,6 +581,32 @@ as $$
 declare
   v_count integer;
 begin
+  -- Settle any attempt still in flight FIRST, and give its reserved budget
+  -- back. The claim debits month_spent_cents before charging, so disabling
+  -- mid-attempt without this leaves a tenant's monthly allowance consumed by
+  -- a charge that never completed, and the ledger showing a `pending` row
+  -- that nothing will ever close.
+  --
+  -- If the charge did reach Stripe, the payment_intent.succeeded backstop
+  -- still grants on its own key, so this refund is the safe direction: it
+  -- can under-count spend, never over-charge.
+  with abandoned as (
+    update public.usage_pack_auto_reload_events e
+    set status = 'abandoned',
+        failure_code = coalesce(e.failure_code, p_reason),
+        settled_at = now()
+    where e.business_id = p_business_id
+      and e.status = 'pending'
+    returning e.category, e.amount_cents
+  )
+  update public.usage_pack_auto_reload_rules r
+  set month_spent_cents = greatest(0, r.month_spent_cents - a.amount_cents),
+      month_charges = greatest(0, r.month_charges - 1),
+      updated_at = now()
+  from abandoned a
+  where r.business_id = p_business_id
+    and r.category = a.category;
+
   update public.usage_pack_auto_reload_rules
   set enabled = false,
       disabled_reason = p_reason,
