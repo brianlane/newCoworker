@@ -735,3 +735,39 @@ export async function stampAssigneeIfUnset(
   if (error) throw new Error(`stampAssigneeIfUnset: ${error.message}`);
   return (data ?? []).length > 0;
 }
+
+/**
+ * Win the right to tell the owner about this booking, exactly once.
+ *
+ * The owner alert reports who is on the hook, so it runs late, after contact
+ * filing and assignment. That leaves a window: a request that persists the
+ * booking and then dies has an appointment nobody was told about, and the
+ * visitor's idempotent resubmit would return success without paging anyone.
+ * Claiming lets the resubmit close that gap while making a double alert
+ * impossible, the same conditional-update shape `stampAssigneeIfUnset` uses.
+ *
+ * Returns the assignee as it stands at claim time, so the caller does not
+ * need a second read to say who has it.
+ */
+export async function claimOwnerBookingAlert(
+  businessId: string,
+  attendeeKey: string,
+  startIso: string,
+  client?: SupabaseClient
+): Promise<{ claimed: boolean; assigneeMemberId: string | null }> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("calendar_booking_dedupe")
+    .update({ owner_alerted_at: new Date().toISOString() })
+    .eq("business_id", businessId)
+    .eq("attendee_key", attendeeKey)
+    .eq("start_at", startIso)
+    .is("owner_alerted_at", null)
+    .select("id, assignee_member_id");
+  if (error) throw new Error(`claimOwnerBookingAlert: ${error.message}`);
+  const rows = (data ?? []) as Array<{ assignee_member_id: string | null }>;
+  return {
+    claimed: rows.length > 0,
+    assigneeMemberId: rows[0]?.assignee_member_id ?? null
+  };
+}

@@ -123,6 +123,21 @@ export function notificationLink(n: NotificationLike): NotificationLink {
     return { href: "/dashboard/chat", label: "Open Chat" };
   }
 
+  // A booking alert asks the owner to look at (or assign) the person who
+  // booked, so it lands on the contact, not on their text thread. Placed
+  // above the generic contactE164 branch, and matching the email's own
+  // button: the two must not point at different screens.
+  if (kind === "unassigned_booking" || kind === "assigned_booking") {
+    const bookingE164 = readE164(p, "contactE164");
+    if (bookingE164) {
+      return {
+        href: `/dashboard/customers/${encodeURIComponent(bookingE164)}`,
+        label: "Open contact"
+      };
+    }
+    return { href: "/dashboard/bookings", label: "Open Bookings" };
+  }
+
   if (kind === "email_coworker_handoff") {
     return { href: "/dashboard/emails", label: "Open Emails" };
   }

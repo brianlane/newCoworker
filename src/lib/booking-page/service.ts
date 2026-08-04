@@ -27,6 +27,7 @@ import {
   countBookingsBetween,
   countUpcomingByAssignee,
   stampAssigneeIfUnset,
+  claimOwnerBookingAlert,
   getBookingPageForBusiness,
   stampAttendeeContact,
   getEnabledBookingPageBySlug,
@@ -708,6 +709,9 @@ export async function submitPublicBooking(
     // NOT re-sent: it either went out already or the visitor is holding an
     // appointment they can see, and a duplicate is worse than a missing one.
     const retryAssignee = await resolveAssignee(context, start, effective).catch(() => null);
+    // Set only when THIS retry filled a genuine gap, so the owner alert below
+    // can tell a repair from a no-op.
+    let retryFilledAssignment: string | null = null;
     if (retryAssignee) {
       // Only fills a genuine gap: the original assignment is the right
       // answer, and re-resolving can name someone else as loads move, so
@@ -721,6 +725,7 @@ export async function submitPublicBooking(
         retryAssignee
       ).catch(() => false);
       if (filled) {
+        retryFilledAssignment = retryAssignee;
         await markMemberOffered(retryAssignee).catch(() => {});
         // The gap-fill is the first time this booking had an owner, so the
         // owner has never heard about it either.
@@ -735,6 +740,7 @@ export async function submitPublicBooking(
         }
       }
     }
+
     await stampAttendeeContact(
       context.businessId,
       bookingAttendeeKey(phone, email, name),
@@ -753,6 +759,56 @@ export async function submitPublicBooking(
         error: err instanceof Error ? err.message : String(err)
       });
     });
+
+    // Tell the BUSINESS owner, if nobody has yet. AFTER the re-stamp above,
+    // for the same reason the primary path alerts last: this reports who is
+    // on the hook, so it must not run before the writes that decide the
+    // answer. Two different gaps close here, and both need this resubmit:
+    //
+    //   - the original request persisted the booking and then died before
+    //     alerting, so an appointment exists that no human was told about;
+    //   - the booking landed with nobody named and this retry just filled
+    //     it, which is the first moment there is somebody to report.
+    //
+    // The claim is what makes that safe: an ordinary resubmit of a booking
+    // already alerted finds it taken and stays silent, so this can never
+    // become a second alert for one booking. A gap-fill alerts even when the
+    // claim is gone, since the news (who has it) is genuinely new.
+    const alertClaim = await claimOwnerBookingAlert(
+      context.businessId,
+      bookingAttendeeKey(phone, email, name),
+      start.toISOString()
+    ).catch((err: unknown) => {
+      logger.warn("booking-page: owner alert claim failed on resubmit", {
+        businessId: context.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      // Fail SILENT, not double: the common case by far is a booking that
+      // was already alerted, and a duplicate page is worse than a missed
+      // repeat of news the owner already has.
+      return { claimed: false, assigneeMemberId: null };
+    });
+    if (alertClaim.claimed || retryFilledAssignment) {
+      await maybeAlertUnassignedBooking(context.businessId, {
+        attendeeName: name,
+        attendeePhone: phone,
+        attendeeEmail: email,
+        startIso: start.toISOString(),
+        startLocal: formatBookingStartLocal(start.toISOString(), context.timezone),
+        summary,
+        // The retry cannot reconstruct the provider event id from the
+        // ledger, and the alert only carries it for diagnostics.
+        eventId: null,
+        surface: "booking_page",
+        bookingAssigneeMemberId: retryFilledAssignment ?? alertClaim.assigneeMemberId,
+        durationMinutes,
+        // A retry cannot rebuild the join link either (the ledger keeps the
+        // meeting id, not the URL), and the note belongs to this submit.
+        joinUrl: null,
+        note: note || null,
+        intakeLines
+      });
+    }
     return {
       ok: true,
       startIso: start.toISOString(),
@@ -833,6 +889,10 @@ export async function submitPublicBooking(
 
   let startLocal: string | null = null;
   let zoomJoinUrl: string | null = null;
+  // The booking's identity, whichever mode wrote it: the provider's event id,
+  // or the ledger's synthetic `platform:<uuid>`. Carried out of the branch so
+  // the owner alert can name the real booking instead of a literal.
+  let bookedEventId: string | null = null;
   // Minted before either write so both modes stamp the SAME token, and the
   // confirmation can hand the visitor a link that manages this booking.
   const manageToken = mintBookingManageToken();
@@ -871,11 +931,12 @@ export async function submitPublicBooking(
       return { ok: false, detail: "already_booked" };
     }
 
+    const platformEventId = `platform:${randomUUID()}`;
     const record = await recordPlatformBooking(
       context.businessId,
       bookingAttendeeKey(phone, email, name),
       start.toISOString(),
-      `platform:${randomUUID()}`,
+      platformEventId,
       zoomMeeting?.meetingId ?? null,
       undefined,
       { token: manageToken, durationMinutes }
@@ -892,12 +953,17 @@ export async function submitPublicBooking(
 
     startLocal = formatBookingStartLocal(start.toISOString(), context.timezone);
     zoomJoinUrl = zoomMeeting?.joinUrl ?? null;
+    bookedEventId = platformEventId;
 
     // Same post-booking fan-out the provider core runs: a confirmed
-    // booking may fast-forward parked AiFlow runs, the visitor's live
+    // booking may fast-forward parked AiFlow runs, and the visitor's live
     // waitlist entries resolve against what they now hold (the provider
-    // path gets this inside bookCalendarAppointment), and a booking for a
-    // lead nobody owns pages the owner.
+    // path gets this inside bookCalendarAppointment).
+    //
+    // The owner alert is NOT here. It reports who is on the hook, and at
+    // this point the contact row does not exist and no assignee has been
+    // picked, so every answer it could give would be wrong. It fires once,
+    // for both modes, after those writes land.
     await fireGoalEvent(context.businessId, phone, { kind: "appointment_booked" });
     await fireLifecycleStage(context.businessId, phone, "booked", {
       dedupeSuffix: manageToken
@@ -907,16 +973,6 @@ export async function submitPublicBooking(
       { phones: [phone], email: email.toLowerCase() },
       start.toISOString()
     );
-    await maybeAlertUnassignedBooking(context.businessId, {
-      attendeeName: name,
-      attendeePhone: phone,
-      attendeeEmail: email,
-      startIso: start.toISOString(),
-      startLocal,
-      summary,
-      eventId: "platform",
-      surface: "webchat"
-    });
   } else {
     const noteLines = [
       `Booked via the public booking page.`,
@@ -940,11 +996,12 @@ export async function submitPublicBooking(
         notes: noteLines.join("\n")
       },
       phone,
-      // Customer-initiated surface: a booking for a lead nobody owns should
-      // page the owner exactly like an AI-made webchat booking would. The
-      // visitor typed their own name seconds ago, so it wins over any stale
-      // stored display name (trustProvidedName).
-      { alertSurface: "webchat", trustProvidedName: true }
+      // No alertSurface: the page owns its own owner alert and fires it
+      // after contact filing and assignment, which the booking core knows
+      // nothing about. Opting out here is the same thing dashboard and MCP
+      // bookings do. The visitor typed their own name seconds ago, so it
+      // wins over any stale stored display name (trustProvidedName).
+      { trustProvidedName: true }
     );
 
     if (!booked.ok) {
@@ -968,6 +1025,7 @@ export async function submitPublicBooking(
     const data = (booked.data ?? {}) as Record<string, unknown>;
     startLocal = typeof data.startLocal === "string" ? data.startLocal : null;
     zoomJoinUrl = typeof data.zoomJoinUrl === "string" ? data.zoomJoinUrl : null;
+    bookedEventId = typeof data.eventId === "string" ? data.eventId : null;
 
     // The booking core owns the ledger write in this mode and knows nothing
     // about manage links, so the token is stamped onto the row it just
@@ -1085,6 +1143,54 @@ export async function submitPublicBooking(
       startLocal: startLocal ?? formatBookingStartLocal(start.toISOString(), context.timezone),
       durationMinutes,
       summary
+    });
+  }
+
+  // Now the owner hears about it, and only now: this alert reports WHO is on
+  // the hook, and until the contact is filed (above) and the assignee is
+  // stamped (above) there is no true answer to give. Firing it inside the
+  // booking write, as this used to, meant every first-time visitor was
+  // reported as owned by nobody even on a round-robin page that had just
+  // picked somebody and texted them.
+  //
+  // Both modes, one call. Best-effort by contract: the appointment is
+  // already durable and this must never change the visitor's result.
+  //
+  // Claimed on the row first, so a resubmit can tell "already told them"
+  // from "nobody was ever told" (this request could still die between the
+  // booking write and here). A claim that cannot be written alerts anyway:
+  // an owner who might hear about a booking twice is a far better failure
+  // than an appointment nobody knows about.
+  const alertClaimed = await claimOwnerBookingAlert(
+    context.businessId,
+    bookingAttendeeKey(phone, email, name),
+    start.toISOString()
+  )
+    .then((r) => r.claimed)
+    .catch((err: unknown) => {
+      logger.warn("booking-page: owner alert claim failed", {
+        businessId: context.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+      return true;
+    });
+  if (alertClaimed) {
+    await maybeAlertUnassignedBooking(context.businessId, {
+      attendeeName: name,
+      attendeePhone: phone,
+      attendeeEmail: email,
+      startIso: start.toISOString(),
+      startLocal: startLocal ?? formatBookingStartLocal(start.toISOString(), context.timezone),
+      summary,
+      eventId: bookedEventId,
+      // The visitor booked this themselves. Crediting the AI coworker for it
+      // was simply false, and reusing the webchat tag hid that in the payload.
+      surface: "booking_page",
+      bookingAssigneeMemberId: assignee,
+      durationMinutes,
+      joinUrl: zoomJoinUrl,
+      note: note || null,
+      intakeLines
     });
   }
 

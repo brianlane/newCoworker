@@ -10,7 +10,8 @@ vi.mock("@/lib/booking-page/db", () => ({
   stampManageToken: vi.fn(),
   stampAttendeeContact: vi.fn(),
   countUpcomingByAssignee: vi.fn(),
-  stampAssigneeIfUnset: vi.fn()
+  stampAssigneeIfUnset: vi.fn(),
+  claimOwnerBookingAlert: vi.fn()
 }));
 vi.mock("@/lib/booking-page/confirmation-email", () => ({
   sendBookingConfirmationEmail: vi.fn()
@@ -88,6 +89,7 @@ import {
   recordPlatformBooking,
   countUpcomingByAssignee,
   stampAssigneeIfUnset,
+  claimOwnerBookingAlert,
   stampAttendeeContact,
   stampManageToken
 } from "@/lib/booking-page/db";
@@ -214,6 +216,7 @@ const mockStampManage = vi.mocked(stampManageToken);
 const mockStampContact = vi.mocked(stampAttendeeContact);
 const mockAssigneeCounts = vi.mocked(countUpcomingByAssignee);
 const mockStampAssignee = vi.mocked(stampAssigneeIfUnset);
+const mockClaimAlert = vi.mocked(claimOwnerBookingAlert);
 const mockConfirmationEmail = vi.mocked(sendBookingConfirmationEmail);
 const mockNotifyAssignee = vi.mocked(notifyAssigneeOfBooking);
 const mockMeetingTypes = vi.mocked(listMeetingTypes);
@@ -255,6 +258,8 @@ beforeEach(() => {
   mockStampContact.mockResolvedValue(true);
   mockAssigneeCounts.mockResolvedValue(new Map());
   mockStampAssignee.mockResolvedValue(true);
+  // Default: this request is the first to reach the owner alert.
+  mockClaimAlert.mockResolvedValue({ claimed: true, assigneeMemberId: null });
   mockMarkOffered.mockResolvedValue(undefined);
   mockConfirmationEmail.mockResolvedValue(true);
   mockNotifyAssignee.mockResolvedValue(true);
@@ -833,8 +838,53 @@ describe("submitPublicBooking", () => {
     ] as never);
     mockStampAssignee.mockResolvedValueOnce(false);
     mockMarkOffered.mockClear();
+    mockUnassignedAlert.mockClear();
+    // The owner was already told when the booking landed, so the claim is
+    // gone: a repair that repaired nothing is not news.
+    mockClaimAlert.mockResolvedValueOnce({ claimed: false, assigneeMemberId: "m-ana" });
     expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
     expect(mockMarkOffered).not.toHaveBeenCalled();
+    expect(mockUnassignedAlert).not.toHaveBeenCalled();
+
+    // A claim that throws on the RESUBMIT path fails silent instead: the
+    // overwhelmingly likely case there is a booking already alerted, and a
+    // duplicate page is worse than not repeating news the owner has.
+    mockUpcomingForAttendee.mockResolvedValueOnce([
+      { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
+    ] as never);
+    mockStampAssignee.mockResolvedValueOnce(false);
+    mockUnassignedAlert.mockClear();
+    mockClaimAlert.mockRejectedValueOnce(new Error("claim read failed"));
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    expect(mockUnassignedAlert).not.toHaveBeenCalled();
+
+    // Non-Error rejection, same silence.
+    mockUpcomingForAttendee.mockResolvedValueOnce([
+      { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
+    ] as never);
+    mockStampAssignee.mockResolvedValueOnce(false);
+    mockClaimAlert.mockRejectedValueOnce("resubmit claim string sad");
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    expect(mockUnassignedAlert).not.toHaveBeenCalled();
+
+    // But if the FIRST request persisted the booking and died before
+    // alerting, the claim is still open and this resubmit is the only thing
+    // that will ever tell the owner the appointment exists.
+    mockUpcomingForAttendee.mockResolvedValueOnce([
+      { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
+    ] as never);
+    mockStampAssignee.mockResolvedValueOnce(false);
+    mockUnassignedAlert.mockClear();
+    mockClaimAlert.mockResolvedValueOnce({ claimed: true, assigneeMemberId: "m-ana" });
+    expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+    expect(mockUnassignedAlert).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({
+        surface: "booking_page",
+        // Whoever the row says holds it, since this retry filled nothing.
+        bookingAssigneeMemberId: "m-ana"
+      })
+    );
 
     // And when the retry genuinely fills the gap, the tiebreak advances
     // and the member finally hears about the booking (the gap-fill is the
@@ -849,6 +899,34 @@ describe("submitPublicBooking", () => {
     expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
     expect(mockMarkOffered).toHaveBeenCalledWith("m-ana");
     expect(mockNotifyAssignee).toHaveBeenCalledWith(BIZ, "m-ana", expect.anything());
+    // The OWNER hears about it too, and only here: this is the first moment
+    // the booking has somebody to name. A resubmit that fills nothing stays
+    // silent (asserted above by the absence of a call), so this cannot
+    // become a second alert for the same booking.
+    // A gap-fill is news even when the owner was already told about the
+    // booking: WHO has it is what changed.
+    expect(mockUnassignedAlert).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({
+        bookingAssigneeMemberId: "m-ana",
+        surface: "booking_page"
+      })
+    );
+
+    // A gap-fill on a note-less booking carries no note, rather than an
+    // empty string that would render a dangling "Their note:" line.
+    mockUpcomingForAttendee.mockResolvedValueOnce([
+      { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
+    ] as never);
+    mockStampAssignee.mockResolvedValueOnce(true);
+    mockUnassignedAlert.mockClear();
+    const { note: _noteless, ...withoutNote } = VALID;
+    void _noteless;
+    expect((await submitPublicBooking(TOKEN, withoutNote)).ok).toBe(true);
+    expect(mockUnassignedAlert).toHaveBeenCalledWith(
+      BIZ,
+      expect.objectContaining({ note: null })
+    );
 
     // The toggle silences the retry path too.
     mockPage.mockResolvedValue({
@@ -1455,7 +1533,10 @@ describe("submitPublicBooking", () => {
         notes: expect.stringContaining("Note: Referred by James")
       }),
       "+14805550100",
-      { alertSurface: "webchat", trustProvidedName: true }
+      // No alertSurface: the page fires its own owner alert once, after the
+      // contact and the assignee exist. Letting the booking core fire it
+      // would put it back before both writes.
+      { trustProvidedName: true }
     );
     expect(mockCapture).toHaveBeenCalledWith(BIZ, {
       e164: "+14805550100",
@@ -1556,12 +1637,92 @@ describe("submitPublicBooking", () => {
         BIZ,
         expect.objectContaining({
           attendeePhone: "+14805550100",
-          surface: "webchat",
-          eventId: "platform"
+          // The visitor booked this themselves, and the alert names the real
+          // ledger row rather than a literal "platform".
+          surface: "booking_page",
+          eventId: expect.stringMatching(/^platform:/),
+          // Context the owner needs in order to show up.
+          durationMinutes: 30,
+          joinUrl: "https://zoom.example/j/9",
+          note: "Referred by James"
         })
       );
       expect(mockCapture).toHaveBeenCalledTimes(1);
       expect(mockSlotRelease).not.toHaveBeenCalled();
+    });
+
+    it("alerts the owner only AFTER the contact is filed and the assignee is stamped", async () => {
+      // The defect this pins (HQ internal, Aug 3 2026): the alert reports who
+      // is on the hook, and it used to run inside the booking write, before
+      // either fact existed. Order is the assertion, so a future refactor
+      // that moves the call back earlier fails here rather than in
+      // production.
+      const order: string[] = [];
+      mockCapture.mockImplementation(async () => {
+        order.push("capture");
+        return undefined as never;
+      });
+      mockStampContact.mockImplementation(async () => {
+        order.push("stamp");
+        return true;
+      });
+      mockUnassignedAlert.mockImplementation(async () => {
+        order.push("alert");
+        return "sent_solo";
+      });
+
+      await submitPublicBooking(TOKEN, VALID);
+
+      expect(order).toEqual(["capture", "stamp", "alert"]);
+    });
+
+    it("a resubmit alerts only AFTER its contact re-stamp, like the primary path", async () => {
+      // The retry branch had the same inversion this PR removes from the
+      // primary path: the alert reports who is on the hook, so it must not
+      // run before the stamp that can change the answer.
+      const order: string[] = [];
+      mockStampContact.mockImplementation(async () => {
+        order.push("stamp");
+        return true;
+      });
+      mockUnassignedAlert.mockImplementation(async () => {
+        order.push("alert");
+        return "sent_solo";
+      });
+      mockUpcomingForAttendee.mockResolvedValueOnce([
+        { startIso: "2026-01-05T16:00:00.000Z", eventId: "evt-1" }
+      ] as never);
+      mockStampAssignee.mockResolvedValueOnce(false);
+      mockClaimAlert.mockResolvedValueOnce({ claimed: true, assigneeMemberId: null });
+
+      expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+
+      expect(order).toEqual(["stamp", "alert"]);
+    });
+
+    it("stays silent when another request already claimed the alert", async () => {
+      // Two requests racing for one booking: whichever wins the claim pages
+      // the owner, and the loser must not page them again.
+      mockClaimAlert.mockResolvedValueOnce({ claimed: false, assigneeMemberId: null });
+      mockUnassignedAlert.mockClear();
+      expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+      expect(mockUnassignedAlert).not.toHaveBeenCalled();
+    });
+
+    it("alerts anyway when the claim itself cannot be written", async () => {
+      // The claim exists to prevent a DOUBLE alert. If it cannot be written
+      // we still send: an owner who might hear about a booking twice is a
+      // far better failure than an appointment nobody knows about.
+      mockClaimAlert.mockRejectedValueOnce(new Error("claim column missing"));
+      mockUnassignedAlert.mockClear();
+      expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+      expect(mockUnassignedAlert).toHaveBeenCalled();
+
+      // Same for a non-Error rejection, which a driver can throw.
+      mockClaimAlert.mockRejectedValueOnce("claim string sad");
+      mockUnassignedAlert.mockClear();
+      expect((await submitPublicBooking(TOKEN, VALID)).ok).toBe(true);
+      expect(mockUnassignedAlert).toHaveBeenCalled();
     });
 
     it("books without Zoom when none is connected (note omitted too)", async () => {

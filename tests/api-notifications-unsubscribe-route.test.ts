@@ -24,14 +24,38 @@ describe("api/notifications/unsubscribe route", () => {
     process.env = original;
   });
 
-  it("GET with a valid bid flips every channel toggle off and stamps unsubscribed_at", async () => {
+  it("GET NEVER unsubscribes: it asks first, so a link scanner cannot silence a tenant", async () => {
+    // The defect: any corporate mail scanner or link prefetcher that follows
+    // links would switch off email, SMS, WhatsApp, dashboard, and
+    // warm-transfer alerts for the business, with nobody told it happened.
     const res = await GET(
       new Request(`http://localhost/api/notifications/unsubscribe?bid=${BIZ}`)
     );
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toContain("text/html");
+    expect(updateNotificationPreferences).not.toHaveBeenCalled();
+
     const body = await res.text();
-    expect(body).toContain("You've been unsubscribed");
+    // A real form POSTing back to this same endpoint, carrying the bid.
+    expect(body).toContain('method="post"');
+    expect(body).toContain(`value="${BIZ}"`);
+    expect(body).toContain('name="ui"');
+    expect(body).not.toContain("You've been unsubscribed");
+  });
+
+  it("the confirming POST is what actually writes, and reports back in HTML", async () => {
+    const body = new URLSearchParams({ bid: BIZ, ui: "1" }).toString();
+    const res = await POST(
+      new Request("http://localhost/api/notifications/unsubscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body
+      })
+    );
+    expect(res.status).toBe(200);
+    // A person who just clicked a button gets a page, not a bare word.
+    expect(res.headers.get("content-type")).toContain("text/html");
+    expect(await res.text()).toContain("You've been unsubscribed");
     expect(updateNotificationPreferences).toHaveBeenCalledWith(
       BIZ,
       expect.objectContaining({
@@ -45,6 +69,20 @@ describe("api/notifications/unsubscribe route", () => {
         unsubscribed_at: expect.any(String)
       })
     );
+  });
+
+  it("a ui=1 POST that fails renders the error as a page, not as plain text", async () => {
+    vi.mocked(updateNotificationPreferences).mockRejectedValue(new Error("db down"));
+    const body = new URLSearchParams({ bid: BIZ, ui: "1" }).toString();
+    const res = await POST(
+      new Request("http://localhost/api/notifications/unsubscribe", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body
+      })
+    );
+    expect(res.status).toBe(500);
+    expect(res.headers.get("content-type")).toContain("text/html");
   });
 
   it("GET without a bid returns the 'invalid' page and does not write", async () => {
@@ -61,18 +99,12 @@ describe("api/notifications/unsubscribe route", () => {
     expect(updateNotificationPreferences).not.toHaveBeenCalled();
   });
 
-  it("GET surfaces a 500 page when the DB write throws", async () => {
-    vi.mocked(updateNotificationPreferences).mockRejectedValue(new Error("db down"));
-    const res = await GET(
-      new Request(`http://localhost/api/notifications/unsubscribe?bid=${BIZ}`)
-    );
-    expect(res.status).toBe(500);
-  });
-
-  it("GET surfaces a 500 page when the DB write throws a non-Error value", async () => {
+  it("POST surfaces a 500 when the DB write throws a non-Error value", async () => {
     vi.mocked(updateNotificationPreferences).mockRejectedValue("plain string");
-    const res = await GET(
-      new Request(`http://localhost/api/notifications/unsubscribe?bid=${BIZ}`)
+    const res = await POST(
+      new Request(`http://localhost/api/notifications/unsubscribe?bid=${BIZ}`, {
+        method: "POST"
+      })
     );
     expect(res.status).toBe(500);
   });

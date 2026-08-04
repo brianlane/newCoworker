@@ -139,7 +139,7 @@ beforeEach(() => {
   // guard passes through and bookings behave exactly as the pre-guard
   // tests pin.
   vi.mocked(findUpcomingBookingsForAttendee).mockResolvedValue([]);
-  vi.mocked(maybeAlertUnassignedBooking).mockResolvedValue("sent");
+  vi.mocked(maybeAlertUnassignedBooking).mockResolvedValue("sent_unowned");
   // Default: no stored contact — the model-supplied attendeeName is used, as
   // pre-preferred-name tests pin.
   vi.mocked(getCustomerMemory).mockResolvedValue(null);
