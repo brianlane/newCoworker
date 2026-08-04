@@ -2466,6 +2466,7 @@ serve(async (req: Request) => {
     }
     await systemLog(supabase, {
       businessId: null,
+      source: "sms_worker",
       level: "warn",
       event: "sms_inbound_batch_deferred",
       message: `Inbound SMS batch ran out of wall-clock budget: ${deferredIds.length} job(s) returned to the queue for the next tick`,
