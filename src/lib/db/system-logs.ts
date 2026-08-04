@@ -29,6 +29,49 @@ export type SystemLogRow = {
 
 const LOG_COLS = "id,business_id,source,level,event,message,payload,created_at";
 
+/**
+ * Build the PostgREST `or=(...)` filter that searches `event` and `message` for
+ * a literal substring.
+ *
+ * This used to be `search.replace(/[%_,()]/g, "")` — the five characters that
+ * are dangerous here were simply DELETED. Every event name in this system is
+ * snake_case, so that quietly broke the search for the exact strings an operator
+ * is most likely to paste: `ai_flow_run_failed` became `aiflowrunfailed` and
+ * returned zero rows with no warning, which reads identically to "there were no
+ * such failures". It cost real time during the Aug 4 2026 Clever incident.
+ *
+ * The five characters are dangerous for two unrelated reasons, so they get two
+ * different treatments:
+ *
+ *   `%` `_`      SQL LIKE wildcards. Escaped with a backslash (PostgreSQL's
+ *                default LIKE escape character) so they match literally. Leaving
+ *                them raw would "work" for the snake_case case, since `_` also
+ *                matches a literal underscore, but it over-matches: a search for
+ *                `ai_flow_run_faile_` would happily return `ai_flow_run_failed`.
+ *   `,` `(` `)`  PostgREST `or=(...)` logic-tree delimiters. An unescaped comma
+ *                does not narrow the search, it makes the whole request fail
+ *                with PGRST100. Handled by double-quoting the value, which
+ *                PostgREST accepts for values containing reserved characters.
+ *
+ * The two interact, and the interaction is easy to get wrong: inside a
+ * double-quoted PostgREST value the quote parser consumes one level of
+ * backslash, so a LIKE escape must arrive as `\\_` to survive as `\_`. Written
+ * with a single backslash the escape is silently eaten and the underscore goes
+ * back to being a wildcard, with no error to notice. Hence the two passes below,
+ * in this order.
+ */
+export function buildLogSearchFilter(search: string): string | null {
+  const raw = search.trim();
+  if (!raw) return null;
+  // 1. LIKE-escape: make %, _ and backslash literal for the pattern engine.
+  const likeSafe = raw.replace(/[\\%_]/g, (c) => `\\${c}`);
+  // 2. PostgREST-quote-escape: backslash and double quote both need doubling
+  //    inside a quoted value. This is what turns `\_` into the `\\_` the parser
+  //    must see.
+  const quoted = likeSafe.replace(/["\\]/g, (c) => `\\${c}`);
+  return `event.ilike."%${quoted}%",message.ilike."%${quoted}%"`;
+}
+
 export type SystemLogInput = {
   businessId?: string | null;
   source: string;
@@ -113,9 +156,9 @@ export async function listSystemLogs(
   }
   if (options.source) q = q.eq("source", options.source);
   if (options.search) {
-    const escaped = options.search.replace(/[%_,()]/g, "");
-    if (escaped) {
-      q = q.or(`event.ilike.%${escaped}%,message.ilike.%${escaped}%`);
+    const filter = buildLogSearchFilter(options.search);
+    if (filter) {
+      q = q.or(filter);
     }
   }
   if (options.before) q = q.lt("created_at", options.before);

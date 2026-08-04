@@ -3,7 +3,8 @@ import {
   insertSystemLog,
   recordSystemLog,
   listSystemLogs,
-  listSystemLogErrorsAll
+  listSystemLogErrorsAll,
+  buildLogSearchFilter
 } from "@/lib/db/system-logs";
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -143,10 +144,18 @@ describe("db/system-logs", () => {
     expect(db.eq).toHaveBeenCalledTimes(1); // business_id only
   });
 
-  it("listSystemLogs skips the search clause when it sanitizes to nothing", async () => {
+  it("listSystemLogs skips the search clause for a whitespace-only search", async () => {
+    const db = mockDb();
+    await listSystemLogs("biz-uuid-1", { search: "   " }, db as never);
+    expect(db.or).not.toHaveBeenCalled();
+  });
+
+  it("listSystemLogs still searches when the term is ALL reserved characters", async () => {
+    // This used to sanitize to "" and quietly search for nothing. Every one of
+    // these characters is now escaped rather than deleted.
     const db = mockDb();
     await listSystemLogs("biz-uuid-1", { search: "%_,()" }, db as never);
-    expect(db.or).not.toHaveBeenCalled();
+    expect(db.or).toHaveBeenCalledTimes(1);
   });
 
   it("listSystemLogs falls back to the service client when none is passed", async () => {
@@ -157,7 +166,7 @@ describe("db/system-logs", () => {
     expect(rows).toEqual([MOCK_ROW]);
   });
 
-  it("listSystemLogs applies source, sanitized search, and before", async () => {
+  it("listSystemLogs applies source, escaped search, and before", async () => {
     const db = mockDb();
     await listSystemLogs(
       "biz-uuid-1",
@@ -165,8 +174,23 @@ describe("db/system-logs", () => {
       db as never
     );
     expect(db.eq).toHaveBeenCalledWith("source", "aiflow");
-    expect(db.or).toHaveBeenCalledWith("event.ilike.%telnyx%,message.ilike.%telnyx%");
+    // The % is escaped to a literal instead of being deleted, so this no longer
+    // silently searches for "telnyx".
+    expect(db.or).toHaveBeenCalledWith(
+      String.raw`event.ilike."%tel\\%nyx%",message.ilike."%tel\\%nyx%"`
+    );
     expect(db.lt).toHaveBeenCalledWith("created_at", "2026-06-09T00:00:00Z");
+  });
+
+  it("listSystemLogs finds a snake_case event name", async () => {
+    // The bug this closes: `ai_flow_run_failed` used to become
+    // `aiflowrunfailed` and return zero rows with no warning, which reads
+    // exactly like "there were no such failures".
+    const db = mockDb();
+    await listSystemLogs("biz-uuid-1", { search: "ai_flow_run_failed" }, db as never);
+    expect(db.or).toHaveBeenCalledWith(
+      String.raw`event.ilike."%ai\\_flow\\_run\\_failed%",message.ilike."%ai\\_flow\\_run\\_failed%"`
+    );
   });
 
   it("listSystemLogs returns [] when the query yields null data", async () => {
@@ -229,5 +253,81 @@ describe("db/system-logs", () => {
     await expect(listSystemLogErrorsAll(10, db as never)).rejects.toThrow(
       "listSystemLogErrorsAll"
     );
+  });
+});
+
+/**
+ * The escaping in buildLogSearchFilter is not guessable from the docs, so these
+ * pin the exact shapes that were verified against the live PostgREST instance
+ * on 2026-08-04 by comparing row counts:
+ *
+ *   or=(event.ilike.*ai_flow_run_failed*)          -> 28 rows, but `_` is a
+ *                                                     WILDCARD, so the pattern
+ *                                                     `ai_flow_run_faile_` also
+ *                                                     returned all 28.
+ *   or=(event.ilike."*ai\_flow\_run\_faile\_*")    -> 28 rows. Wrong: inside a
+ *                                                     quoted value PostgREST
+ *                                                     eats one backslash, so the
+ *                                                     escape vanished silently.
+ *   or=(event.ilike."*ai\\_flow\\_run\\_faile\\_*") -> 0 rows. Correct: the
+ *                                                     escape survived and `_`
+ *                                                     matched literally.
+ *
+ * If someone "simplifies" the double backslash away, these go red instead of
+ * the search quietly going back to over-matching.
+ */
+describe("buildLogSearchFilter", () => {
+  it("returns null for an empty or whitespace-only search", () => {
+    expect(buildLogSearchFilter("")).toBeNull();
+    expect(buildLogSearchFilter("   ")).toBeNull();
+  });
+
+  it("leaves an ordinary term alone apart from quoting", () => {
+    expect(buildLogSearchFilter("telnyx")).toBe(
+      'event.ilike."%telnyx%",message.ilike."%telnyx%"'
+    );
+  });
+
+  it("trims the search term", () => {
+    expect(buildLogSearchFilter("  telnyx  ")).toBe(
+      'event.ilike."%telnyx%",message.ilike."%telnyx%"'
+    );
+  });
+
+  it("escapes underscores with a DOUBLE backslash so the escape survives quoting", () => {
+    expect(buildLogSearchFilter("ai_flow_run_failed")).toBe(
+      String.raw`event.ilike."%ai\\_flow\\_run\\_failed%",message.ilike."%ai\\_flow\\_run\\_failed%"`
+    );
+  });
+
+  it("escapes percent signs the same way", () => {
+    expect(buildLogSearchFilter("100%")).toBe(
+      String.raw`event.ilike."%100\\%%",message.ilike."%100\\%%"`
+    );
+  });
+
+  it("quotes the value so commas and parens cannot break the logic tree", () => {
+    // Unquoted, this exact input made PostgREST reject the whole request with
+    // PGRST100 rather than just narrowing the search.
+    const out = buildLogSearchFilter("a,b()");
+    expect(out).toBe('event.ilike."%a,b()%",message.ilike."%a,b()%"');
+    expect(out?.startsWith('event.ilike."')).toBe(true);
+  });
+
+  it("escapes a literal backslash", () => {
+    expect(buildLogSearchFilter("a\\b")).toBe(
+      String.raw`event.ilike."%a\\\\b%",message.ilike."%a\\\\b%"`
+    );
+  });
+
+  it("escapes a double quote so it cannot close the quoted value early", () => {
+    expect(buildLogSearchFilter('say "hi"')).toBe(
+      String.raw`event.ilike."%say \"hi\"%",message.ilike."%say \"hi\"%"`
+    );
+  });
+
+  it("keeps searching when the term is nothing but reserved characters", () => {
+    // The old sanitizer deleted all five and produced an empty term.
+    expect(buildLogSearchFilter("%_,()")).not.toBeNull();
   });
 });
