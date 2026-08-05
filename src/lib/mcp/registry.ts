@@ -5,10 +5,19 @@
  * The route handler (src/app/api/mcp/route.ts) authenticates the bearer
  * BEFORE the server runs (withMcpAuth, required) and stashes the verified
  * identity in AuthInfo.extra; each tool callback re-reads it from
- * `extra.authInfo` so tools always run as a concrete (userId, email).
+ * `ctx.http.authInfo` so tools always run as a concrete (userId, email).
+ *
+ * Note on the auth path: under @modelcontextprotocol/sdk 1.x the verified
+ * token sat at the TOP level of the handler's second argument
+ * (`extra.authInfo`). @modelcontextprotocol/server 2.x nests it under the
+ * transport that carried it (`ctx.http.authInfo`), because a stdio server
+ * has no such thing. The read below is deliberately written against the 2.x
+ * shape; getting it wrong does not fail the build (the context is narrowed
+ * from `unknown`), it silently fails every tool call closed.
  */
 
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { z } from "zod";
+import type { McpServer } from "@modelcontextprotocol/server";
 import type { McpAuthUser } from "@/lib/mcp/auth";
 import {
   errorResult,
@@ -37,13 +46,15 @@ export const allMcpTools: McpToolDef[] = [
 ];
 
 /**
- * Extract the verified caller from the SDK's per-request extra. Returns
- * null when absent/malformed — unreachable behind `withMcpAuth({ required:
- * true })`, but the tool must fail closed rather than run unauthenticated.
+ * Extract the verified caller from the server's per-request context
+ * (`ctx.http.authInfo.extra`). Returns null when absent/malformed —
+ * unreachable behind `withMcpAuth({ required: true })`, but the tool must
+ * fail closed rather than run unauthenticated.
  */
-export function authFromExtra(extra: unknown): McpAuthUser | null {
-  const info = (extra as { authInfo?: { extra?: Record<string, unknown> } } | null)
-    ?.authInfo?.extra;
+export function authFromContext(ctx: unknown): McpAuthUser | null {
+  const info = (
+    ctx as { http?: { authInfo?: { extra?: Record<string, unknown> } } } | null
+  )?.http?.authInfo?.extra;
   const userId = typeof info?.userId === "string" ? info.userId : "";
   const email = typeof info?.email === "string" ? info.email : "";
   return userId && email ? { userId, email } : null;
@@ -53,9 +64,9 @@ export function registerMcpTools(server: McpServer): void {
   for (const def of allMcpTools) {
     server.registerTool(
       def.name,
-      { description: def.description, inputSchema: def.schema },
-      async (args: Record<string, unknown>, extra: unknown): Promise<McpTextResult> => {
-        const auth = authFromExtra(extra);
+      { description: def.description, inputSchema: z.object(def.schema) },
+      async (args: Record<string, unknown>, ctx: unknown): Promise<McpTextResult> => {
+        const auth = authFromContext(ctx);
         if (!auth) return errorResult("Unauthenticated — reconnect the New Coworker connector.");
         return runMcpTool(def, args, auth);
       }
