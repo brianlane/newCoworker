@@ -2,6 +2,10 @@ import type { Metadata, Viewport } from "next";
 import { SpeedInsights } from "@vercel/speed-insights/next";
 import { NextIntlClientProvider } from "next-intl";
 import { getLocale, getMessages } from "next-intl/server";
+import {
+  GLOBAL_CLIENT_MESSAGE_PATHS,
+  pickMessages
+} from "@/i18n/client-messages";
 import { JsonLd } from "@/components/marketing/JsonLd";
 import "./globals.css";
 import { SITE_URL } from "@/lib/marketing/site-url";
@@ -96,7 +100,17 @@ export default async function RootLayout({
   return (
     <html lang={locale}>
       <body>
-        <NextIntlClientProvider locale={locale} messages={messages}>
+        {/*
+          Only the global client subset (~465 bytes) ships from here. Handing
+          this provider the full `messages` catalog would serialize all ~165KB
+          of it into every page's HTML, which is exactly what it used to do.
+          Sections layer their own subsets in nested layouts; the mapping and
+          its guard test live in src/i18n/client-messages.ts.
+        */}
+        <NextIntlClientProvider
+          locale={locale}
+          messages={pickMessages(messages, GLOBAL_CLIENT_MESSAGE_PATHS)}
+        >
           <JsonLd data={ORGANIZATION_JSON_LD} />
           <JsonLd data={WEBSITE_JSON_LD} />
           {children}

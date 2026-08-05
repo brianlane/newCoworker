@@ -5,7 +5,7 @@ import {
   COMPARE_ROW_COUNT,
   COMPARISONS,
   getComparison
-} from "../src/app/compare/data";
+} from "../src/app/(marketing)/compare/data";
 
 type Catalog = Record<string, unknown>;
 

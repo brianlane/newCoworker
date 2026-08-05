@@ -18,7 +18,7 @@ import { concurrentCallsLine, imageGenerationLine, voiceMinutesLine } from "@/li
 import { CARRIER_REGISTRATION_FEE_CENTS } from "@/lib/plans/carrier-fee";
 import { CANADA_MESSAGING_FEE_MONTHLY_CENTS } from "@/lib/plans/canadian-messaging";
 import { MEXICO_MESSAGING_FEE_MONTHLY_CENTS } from "@/lib/plans/mexican-messaging";
-import { SMS_MONTHLY_CAP_MX } from "../../../supabase/functions/_shared/sms_monthly_limits";
+import { SMS_MONTHLY_CAP_MX } from "../../../../supabase/functions/_shared/sms_monthly_limits";
 import { formatPriceCents, formatPricePerMonth } from "@/lib/pricing";
 import { contactEmail as resolveContactEmail } from "@/lib/marketing/contact-email";
 

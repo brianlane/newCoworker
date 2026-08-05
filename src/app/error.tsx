@@ -7,7 +7,7 @@
  * screen, unbranded and dead-ended. Client component by Next's contract,
  * with the reset() retry it hands us wired to the button.
  */
-import Image from "next/image";
+import { INLINE_LOGO_DATA_URI } from "@/app/inline-logo";
 import { useEffect } from "react";
 import { useTranslations } from "next-intl";
 
@@ -28,8 +28,16 @@ export default function ErrorPage({
   return (
     <main className="flex min-h-screen items-center justify-center bg-deep-ink px-4">
       <div className="w-full max-w-md text-center">
-        <Image
-          src="/logo.png"
+        {/*
+          Inlined for the same reason as not-found.tsx, plus one more: this
+          page renders when something is already broken, and a logo that
+          depends on the image optimizer working is a bad bet at that moment.
+          The data URI rides in the client bundle (~900 chars, cached with the
+          chunk). Regenerate with `npx tsx scripts/generate-inline-logo.ts`.
+        */}
+        {/* eslint-disable-next-line @next/next/no-img-element -- a data URI has nothing for next/image to optimize; that is the point. */}
+        <img
+          src={INLINE_LOGO_DATA_URI}
           alt="New Coworker"
           width={48}
           height={48}

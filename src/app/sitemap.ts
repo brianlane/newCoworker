@@ -1,6 +1,6 @@
 import type { MetadataRoute } from "next";
-import { INDUSTRIES } from "./industries/data";
-import { COMPARISONS } from "./compare/data";
+import { INDUSTRIES } from "./(marketing)/industries/data";
+import { COMPARISONS } from "./(marketing)/compare/data";
 import { listPublishedPosts } from "@/lib/blog/db";
 import { SITE_URL } from "@/lib/marketing/site-url";
 

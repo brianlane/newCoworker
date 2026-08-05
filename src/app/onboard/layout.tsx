@@ -1,5 +1,6 @@
 import type { Metadata } from "next";
 import { getTranslations } from "next-intl/server";
+import { SectionMessages } from "@/components/i18n/SectionMessages";
 
 export async function generateMetadata(): Promise<Metadata> {
   const t = await getTranslations("marketing.onboard");
@@ -26,5 +27,8 @@ export default function OnboardLayout({
 }: {
   children: React.ReactNode;
 }) {
-  return <>{children}</>;
+  // Ships the onboarding flow's client translation subset (questionnaire,
+  // plan cards, order summary, plus `auth` for the success page's password
+  // setup). Mapping and guard test: src/i18n/client-messages.ts.
+  return <SectionMessages section="onboard">{children}</SectionMessages>;
 }

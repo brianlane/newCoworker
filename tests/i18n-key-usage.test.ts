@@ -171,7 +171,7 @@ describe("translation keys referenced in src/ exist in the catalogs", () => {
     // deliberately skips. A card added to the array but missed in the
     // catalog renders the raw key string to every visitor, which is the
     // same class of bug as the #777 footer label.
-    const source = readFileSync(join(SRC, "app/page.tsx"), "utf8");
+    const source = readFileSync(join(SRC, "app/(marketing)/page.tsx"), "utf8");
     const keys = [...source.matchAll(/\{\s*key:\s*["'](\w+)["'],\s*Icon:/g)].map((m) => m[1]);
     expect(keys.length).toBeGreaterThan(0);
     for (const key of keys) {
@@ -186,7 +186,7 @@ describe("translation keys referenced in src/ exist in the catalogs", () => {
   });
 
   it("industry i18nKeys exist under marketing.industries", () => {
-    const source = readFileSync(join(SRC, "app/industries/data.tsx"), "utf8");
+    const source = readFileSync(join(SRC, "app/(marketing)/industries/data.tsx"), "utf8");
     const i18nKeys = [...source.matchAll(/\bi18nKey:\s*["'](\w+)["']/g)].map((m) => m[1]);
     expect(i18nKeys.length).toBeGreaterThan(0);
     for (const key of i18nKeys) {

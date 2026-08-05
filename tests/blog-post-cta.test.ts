@@ -18,7 +18,7 @@ import en from "../messages/en.json";
 import es from "../messages/es.json";
 
 const ROOT = join(import.meta.dirname, "..");
-const POST_PAGE = readFileSync(join(ROOT, "src/app/blog/[slug]/page.tsx"), "utf8");
+const POST_PAGE = readFileSync(join(ROOT, "src/app/(marketing)/blog/[slug]/page.tsx"), "utf8");
 
 const CTA_KEYS = ["ctaTitle", "ctaSubtitle", "ctaLabel"] as const;
 
