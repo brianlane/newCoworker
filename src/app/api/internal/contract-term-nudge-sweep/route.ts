@@ -26,7 +26,10 @@ export async function POST(request: Request): Promise<Response> {
     const result = await sweepContractTermNudges();
     const durationMs = Date.now() - startedAt;
     logger.info("contract-term-nudge-sweep: summary", { ...result, durationMs });
-    return successResponse({ ...result, durationMs });
+    // `sweep` self-identifies this response for debug/cron-http-stats.ts:
+    // the other nudge sweep returns the identical key set, and the stats
+    // tool's shape-based grouping would blend the two without it.
+    return successResponse({ ...result, durationMs, sweep: "contract-term-nudge-sweep" });
   } catch (err) {
     logger.error("contract-term-nudge-sweep: failed", {
       error: err instanceof Error ? err.message : String(err)
