@@ -2213,7 +2213,17 @@ serve(async (req: Request) => {
     // send → meter pattern, which was TOCTOU: two workers could each see
     // "allowed" simultaneously and both blow through the cap.
     // try_reserve_sms_outbound_slot holds a row lock on businesses.
-    const replyUnits = smsTextUnits(reply.slice(0, 1600));
+    //
+    // Units are computed on the longest leg this send can actually put on
+    // the wire: the RCS path's SMS-fallback leg carries up to 3,072 chars
+    // (and Telnyx picks the delivered channel per handset after accept),
+    // while the plain path slices to 1,600. Resolving the RCS agent here,
+    // before the reserve, keeps the metered bound and the sent payload in
+    // agreement; the resolution is read-only and fail-safe (null → plain).
+    const rcsAgentIdForUnits = platformFrom
+      ? await resolveRcsAgentId(supabase, job.business_id, businessTier)
+      : null;
+    const replyUnits = smsTextUnits(reply.slice(0, rcsAgentIdForUnits ? 3072 : 1600));
     const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
       "try_reserve_sms_outbound_slot",
       { p_business_id: job.business_id, p_text_units: replyUnits }
@@ -2297,11 +2307,10 @@ serve(async (req: Request) => {
 
     // RCS-first for eligible tenants (Enterprise, approved + enabled agent):
     // verified-brand reply with Telnyx-side SMS fallback from the tenant's
-    // existing number. Resolution is fail-safe (any error → null → plain SMS)
-    // and requires a concrete from-number for the fallback leg.
-    const rcsAgentId = platformFrom
-      ? await resolveRcsAgentId(supabase, job.business_id, businessTier)
-      : null;
+    // existing number. Resolved once above the quota reserve so the metered
+    // units match the leg actually sent; requires a concrete from-number for
+    // the fallback leg.
+    const rcsAgentId = rcsAgentIdForUnits;
     let replyChannel: "sms" | "rcs" = "sms";
     // Hoisted so the catch-side reconciliation can reuse a message id from a
     // send that SUCCEEDED before a later step (e.g. the completion RPC) threw.
