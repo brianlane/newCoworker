@@ -270,8 +270,9 @@ function assertCoherent(
 }
 
 /**
- * The name the backfill and the first-view provision both use, so a page
- * with no title reads the same in the dashboard as on the public page.
+ * The name the backfill and the first-view provision both use, so a
+ * freshly provisioned meeting reads the same in the dashboard as on the
+ * public page.
  */
 export const DEFAULT_MEETING_NAME = "Book a call";
 export const DEFAULT_MEETING_SLUG = "book-a-call";
@@ -305,7 +306,7 @@ export type EnsureDefaultMeetingResult = {
 export async function ensureDefaultMeetingType(
   page: Pick<
     BookingPageRow,
-    "business_id" | "title" | "description" | "allowed_durations" | "intake_questions"
+    "business_id" | "description" | "allowed_durations" | "intake_questions"
   >,
   client?: SupabaseClient
 ): Promise<EnsureDefaultMeetingResult> {
@@ -324,7 +325,12 @@ export async function ensureDefaultMeetingType(
         await createMeetingType(
           page.business_id,
           {
-            name: page.title?.trim() || DEFAULT_MEETING_NAME,
+            // Always the default name. The page-level heading this used to
+            // read (booking_pages.title) lost its editor in PR #985 and its
+            // public render in #971, but this line kept it alive: deleting
+            // your last meeting re-provisioned one named from a field you
+            // could no longer see. The column is gone now.
+            name: DEFAULT_MEETING_NAME,
             slug: DEFAULT_MEETING_SLUG,
             description: page.description,
             durationMinutes,

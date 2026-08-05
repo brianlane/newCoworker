@@ -30,13 +30,6 @@ export type BookingPageRow = {
   waitlist_offer_ttl_minutes: number;
   /** Vanity /book/<slug> URL; null = token URL only. */
   slug: string | null;
-  /**
-   * Dormant relic of the page-level heading. Nothing renders it and nothing
-   * writes it: a visitor reads the business name plus the meeting's own
-   * name, so the column survives only for the meetings the backfill named
-   * from it.
-   */
-  title: string | null;
   /** Branded confirmation email at booking time (needs an attendee email). */
   send_confirmation_email: boolean;
   /** Master switch for both reminders. */
@@ -68,7 +61,7 @@ export type BookingPageRow = {
 const ALL_COLUMNS =
   "id,business_id,token,enabled,allowed_durations,min_notice_minutes," +
   "max_advance_days,buffer_minutes,max_daily_bookings,require_staff_on_shift," +
-  "description,waitlist_enabled,waitlist_offer_ttl_minutes,slug,title," +
+  "description,waitlist_enabled,waitlist_offer_ttl_minutes,slug," +
   "send_confirmation_email,reminders_enabled,reminder_email_hours,reminder_sms_hours," +
   "assignment_mode,employee_id,notify_assignee,intake_questions," +
   "payment_required,payment_amount_cents,payment_currency," +
