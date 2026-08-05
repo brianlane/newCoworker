@@ -127,12 +127,19 @@ export async function POST(request: Request) {
     // A column pointing at a DIFFERENT real number was set on purpose and
     // is never touched. Clearing the phone never clears the linked columns:
     // blanking forward_to_e164 would silently disable Safe Mode.
+    //
+    // The whole block is gated on the phone actually CHANGING in this save:
+    // a name-only edit or idempotent resave must not refill a forwarding
+    // number the owner deliberately cleared via the forwarding-phone API
+    // (that clear also auto-disabled Safe Mode; resurrecting it from an
+    // unrelated profile save would be surprising).
     let syncedAlertPhone = false;
     let syncedForwardingPhone = false;
     if (
       body.syncLinkedNumbers === true &&
       writeError === null &&
-      typeof resolvedPhone === "string"
+      typeof resolvedPhone === "string" &&
+      resolvedPhone !== previousPhone
     ) {
       const [prefsRes, telnyxRes] = await Promise.all([
         db

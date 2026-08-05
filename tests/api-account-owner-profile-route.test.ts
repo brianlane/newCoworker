@@ -197,6 +197,25 @@ describe("api/account/owner-profile route", () => {
     expect(body.data).toMatchObject({ syncedAlertPhone: true, syncedForwardingPhone: false });
   });
 
+  it("an unchanged-phone resave never refills a cleared forwarding number", async () => {
+    // Bugbot: the owner cleared forwarding via the forwarding-phone API
+    // (which also auto-disabled Safe Mode); a later name-only or idempotent
+    // profile save with the default-on checkbox must not resurrect it.
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(
+      makeDb({
+        business: { id: BIZ, phone: "+15145188192" },
+        prefsPhone: null,
+        forwardPhone: null
+      }) as never
+    );
+    const res = await POST(
+      request({ ownerName: "James", phone: "+15145188192", syncLinkedNumbers: true })
+    );
+    expect(res.status).toBe(200);
+    expect(setForwardToE164).not.toHaveBeenCalled();
+    expect(updateNotificationPreferences).not.toHaveBeenCalled();
+  });
+
   it("skips a linked column already holding the new number (no pointless write)", async () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(
       makeDb({
