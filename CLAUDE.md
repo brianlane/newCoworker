@@ -164,6 +164,9 @@ If you are in plan mode, the plan should say so.
   dossier in `docs/tenants/`, which CI enforces.
 - **New coworker tools** must satisfy the parity contract, and **new content
   surfaces** must register in the KG source registry. Both are CI-guarded.
+- **`package.json` overrides** each have a documented reason in
+  `docs/DEPENDENCY-OVERRIDES.md`. Adding, changing, or removing an override
+  means updating that file in the same PR.
 
 ---
 
@@ -187,6 +190,27 @@ Never merge a pull request until ALL of the following hold:
 
 When the user asks to merge and a check is skipped or a thread is unresolved,
 say so and finish the checklist first instead of merging.
+
+### Checks appear in waves: "all green" can be a false green
+
+`ci.yml` gates jobs on earlier jobs (`vercel-deploy` needs the six core jobs,
+`e2e` and `indexnow-ping` need `vercel-deploy`), and GitHub creates a check
+only when its job is created. A check that does not exist yet cannot show as
+pending, so `gh pr checks` can read all-pass while later jobs have not been
+born. Observed twice on PR #1181: the list was fully green before
+`Vercel Deploy` existed, and again before `E2E (live AI + AiFlows)` existed.
+
+Since Aug 2026 a GitHub ruleset ("main: PRs with all checks green") makes
+this structural for the 20 stable check contexts: they are required, so an
+uncreated one blocks the merge as "expected", and squash is the only allowed
+merge method. Unresolved-thread blocking is enforced by the same ruleset. Two
+things it deliberately does NOT cover, so the manual policy above still
+applies: the Cursor Bugbot conclusion (Bugbot does not run on Dependabot PRs,
+so requiring it would deadlock automerge), and anything on a repo where the
+ruleset is disabled. Before merging, still confirm zero checks pending on two
+consecutive polls about 30s apart, `mergeStateStatus` is `CLEAN` (it reads
+`UNSTABLE` while any check is pending or expected), and Bugbot is literally
+`SUCCESS`.
 
 ### Reading the Cursor Bugbot check conclusion
 
