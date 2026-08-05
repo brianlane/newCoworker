@@ -85,24 +85,28 @@ jobs:
           # change in the group, so a single major holds the whole group back.
           # That is intended: a group lands as one commit, so it is only as
           # safe to auto-merge as its riskiest member.
+          # Only patch/minor earns the auto-merge label. Everything else, a
+          # major OR an update-type we could not read, takes the same
+          # fail-closed path, so the two cannot drift apart: an earlier
+          # version of this file flagged unknown types for review but forgot
+          # to strip an already-applied auto-merge label, leaving them
+          # eligible for the merger anyway.
           case "${UPDATE_TYPE:-}" in
-            version-update:semver-major)
-              echo "Major update: withholding auto-merge, flagging for human review."
-              gh pr edit "$PR_URL" --add-label "dependabot-major-review"
-              # Clear the auto-merge label in case an earlier run applied it
-              # (this workflow re-runs on synchronize, and the PR may predate
-              # this policy). Removing an absent label is not an error worth
-              # failing the job over.
-              gh pr edit "$PR_URL" --remove-label "dependabot-automerge" || true
-              ;;
             version-update:semver-minor|version-update:semver-patch)
               echo "Patch/minor update: eligible for auto-merge (the merger still requires all checks green)."
               gh pr edit "$PR_URL" --add-label "dependabot-automerge"
               ;;
             *)
-              # Unknown or empty update-type: fail closed. An unlabelled PR just
-              # gets merged by hand, which is the safe direction to err.
-              echo "Unrecognised update type '${UPDATE_TYPE:-<none>}'; withholding auto-merge."
+              if [ "${UPDATE_TYPE:-}" = "version-update:semver-major" ]; then
+                echo "Major update: withholding auto-merge, flagging for human review."
+              else
+                echo "Unrecognised update type '${UPDATE_TYPE:-<none>}'; withholding auto-merge."
+              fi
               gh pr edit "$PR_URL" --add-label "dependabot-major-review"
+              # Strip the auto-merge label in case an earlier run applied it:
+              # this workflow re-runs on synchronize, and a PR may predate this
+              # policy or have been labelled before its type became readable.
+              # Removing an absent label is not worth failing the job over.
+              gh pr edit "$PR_URL" --remove-label "dependabot-automerge" || true
               ;;
           esac

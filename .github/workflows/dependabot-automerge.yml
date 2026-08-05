@@ -111,11 +111,22 @@ jobs:
               esac
 
               # Someone else may have merged or closed it while we backed off.
+              # Only a DEFINITE non-open state ends the loop successfully: if
+              # this read fails we must keep retrying rather than report a
+              # merge that never happened. A skip must never read as done.
               state=$(gh pr view "$pr" --repo "$REPO" --json state --jq '.state' 2>/dev/null || echo "UNKNOWN")
-              if [ "$state" != "OPEN" ]; then
-                echo "PR #$pr is now $state; nothing left to retry."
-                return 0
-              fi
+              case "$state" in
+                MERGED|CLOSED)
+                  echo "PR #$pr is now $state; nothing left to retry."
+                  return 0
+                  ;;
+                OPEN)
+                  : # still ours to merge
+                  ;;
+                *)
+                  echo "Could not read PR #$pr state (got '${state:-<empty>}'); assuming still open and retrying."
+                  ;;
+              esac
 
               sleep $(( attempt * 5 ))
               attempt=$(( attempt + 1 ))
