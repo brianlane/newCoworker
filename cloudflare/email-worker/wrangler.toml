@@ -31,6 +31,13 @@ PLATFORM_EMAIL_DOMAIN = "newcoworker.com"
 # 20260626130000_email_attachments.sql.
 SUPABASE_URL = "https://glwmorjxzkzpcfffwvkk.supabase.co"
 ATTACHMENTS_BUCKET = "email-attachments"
+# Where mail that matches NO tenant goes, instead of being silently dropped.
+# Must be a VERIFIED Email Routing destination address or the forward fails.
+# This catches typos, plus-aliases (Cloudflare does not strip +tags, so
+# team+vendor@ never matches the team@ rule), and vendor confirmations. It
+# forwards spam too, so point it somewhere that expects the noise. Remove the
+# line to go back to dropping them.
+FALLBACK_FORWARD_ADDRESS = "newcoworkerteam@gmail.com"
 
 # SECRETS (set with `wrangler secret put`, never here):
 #   EMAIL_INBOUND_SECRET       — bearer for the app webhook
