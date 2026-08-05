@@ -117,19 +117,22 @@ export async function POST(request: Request) {
       }
     }
 
-    // Move the linked owner-phone columns with the change, but ONLY the ones
-    // still holding the previous number (compared post-coercion, since the
-    // three columns historically stored different formats of one number).
-    // Clearing the phone never clears the linked columns: blanking
-    // forward_to_e164 would silently disable Safe Mode.
+    // Move the linked owner-phone columns with the change. A column moves
+    // when it provably TRACKED the primary (it equals the previous number,
+    // compared post-coercion since the three columns historically stored
+    // different formats of one number) or when it is EMPTY / legacy junk
+    // that coerces to nothing (there is no deliberate value to preserve,
+    // and both columns are already seeded from businesses.phone elsewhere:
+    // notification-prefs on first insert, forward_to_e164 at provisioning).
+    // A column pointing at a DIFFERENT real number was set on purpose and
+    // is never touched. Clearing the phone never clears the linked columns:
+    // blanking forward_to_e164 would silently disable Safe Mode.
     let syncedAlertPhone = false;
     let syncedForwardingPhone = false;
     if (
       body.syncLinkedNumbers === true &&
       writeError === null &&
-      typeof resolvedPhone === "string" &&
-      previousPhone !== null &&
-      resolvedPhone !== previousPhone
+      typeof resolvedPhone === "string"
     ) {
       const [prefsRes, telnyxRes] = await Promise.all([
         db
@@ -149,10 +152,13 @@ export async function POST(request: Request) {
       const forwardPhone = coerceOwnerPhoneToE164(
         (telnyxRes.data as { forward_to_e164?: string | null } | null)?.forward_to_e164
       );
+      const shouldMove = (current: string | null): boolean =>
+        current !== resolvedPhone &&
+        (current === null || (previousPhone !== null && current === previousPhone));
       // Best-effort per column: a failed sync must not roll back the
       // committed primary write, but it must be visible in the response
       // (the flags stay false) and in the logs.
-      if (alertPhone === previousPhone) {
+      if (shouldMove(alertPhone)) {
         try {
           await updateNotificationPreferences(businessId, { phone_number: resolvedPhone });
           syncedAlertPhone = true;
@@ -163,7 +169,7 @@ export async function POST(request: Request) {
           });
         }
       }
-      if (forwardPhone === previousPhone) {
+      if (shouldMove(forwardPhone)) {
         try {
           await setForwardToE164(businessId, resolvedPhone);
           syncedForwardingPhone = true;

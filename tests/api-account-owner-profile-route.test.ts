@@ -174,6 +174,46 @@ describe("api/account/owner-profile route", () => {
     expect(updateNotificationPreferences).not.toHaveBeenCalled();
   });
 
+  it("fills EMPTY linked columns even when the old primary was cleared or junk", async () => {
+    // Bugbot: a null baseline (businesses.phone cleared, or legacy
+    // uncoercible data) must not strand empty linked columns. Empty has
+    // nothing deliberate to preserve, so it fills; a column holding a
+    // DIFFERENT real number still does not move (unprovable tracking).
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(
+      makeDb({
+        business: { id: BIZ, phone: "junk-not-a-phone" },
+        prefsPhone: null,
+        forwardPhone: "+16995550000"
+      }) as never
+    );
+    const res = await POST(request({ phone: "+16025550147", syncLinkedNumbers: true }));
+    const body = (await res.json()) as {
+      data: { syncedAlertPhone: boolean; syncedForwardingPhone: boolean };
+    };
+    expect(updateNotificationPreferences).toHaveBeenCalledWith(BIZ, {
+      phone_number: "+16025550147"
+    });
+    expect(setForwardToE164).not.toHaveBeenCalled();
+    expect(body.data).toMatchObject({ syncedAlertPhone: true, syncedForwardingPhone: false });
+  });
+
+  it("skips a linked column already holding the new number (no pointless write)", async () => {
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(
+      makeDb({
+        business: { id: BIZ, phone: "+15145188192" },
+        prefsPhone: "+16025550147",
+        forwardPhone: "+15145188192"
+      }) as never
+    );
+    const res = await POST(request({ phone: "+16025550147", syncLinkedNumbers: true }));
+    const body = (await res.json()) as {
+      data: { syncedAlertPhone: boolean; syncedForwardingPhone: boolean };
+    };
+    expect(updateNotificationPreferences).not.toHaveBeenCalled();
+    expect(setForwardToE164).toHaveBeenCalledWith(BIZ, "+16025550147");
+    expect(body.data).toMatchObject({ syncedAlertPhone: false, syncedForwardingPhone: true });
+  });
+
   it("a failed linked-number sync stays visible but never fails the save", async () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(
       makeDb({
