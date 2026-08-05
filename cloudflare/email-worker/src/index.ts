@@ -17,11 +17,18 @@
  */
 import PostalMime from "postal-mime";
 import { htmlToText, looksLikeStrippedTemplate } from "./html-text";
+import { recipientWasUnmatched } from "./unmatched";
 
 interface Env {
   APP_INBOUND_URL: string;
   PLATFORM_EMAIL_DOMAIN: string;
   EMAIL_INBOUND_SECRET: string;
+  /**
+   * Verified Email Routing destination that receives mail no tenant claimed.
+   * Unset means keep the old behavior and drop it, so a deploy that predates
+   * the routing config still behaves predictably.
+   */
+  FALLBACK_FORWARD_ADDRESS?: string;
   // Optional: when both are set the worker uploads attachments to Storage.
   SUPABASE_URL?: string;
   SUPABASE_SERVICE_ROLE_KEY?: string;
@@ -90,12 +97,25 @@ async function uploadAttachment(
   };
 }
 
+/**
+ * Local, hand-written subset of the runtime's ForwardableEmailMessage.
+ *
+ * It SHADOWS the global from `@cloudflare/workers-types` (this file is a
+ * module, so the declaration is file-scoped), which means a member missing
+ * here reads as "the runtime cannot do this" even when it can. `forward` was
+ * the case in point: it exists at runtime and is typed in workers-types, but
+ * omitting it here made the compiler reject a call that works in production.
+ * Add members as they are used rather than assuming absence means unsupported.
+ */
 interface ForwardableEmailMessage {
   readonly from: string;
   readonly to: string;
   readonly headers: Headers;
   readonly raw: ReadableStream<Uint8Array>;
+  readonly rawSize: number;
   setReject(reason: string): void;
+  /** Forward to a VERIFIED Email Routing destination address. */
+  forward(rcptTo: string, headers?: Headers): Promise<void>;
 }
 
 function domainOf(address: string): string {
@@ -169,6 +189,36 @@ export default {
       // Surface a temporary failure so the sender retries; the app webhook is
       // idempotent (dedupe_key on messageId), so a retry can't double-trigger.
       throw new Error(`inbound webhook returned ${res.status}`);
+    }
+
+    // Mail addressed to something that is not a tenant (a typo, a plus-alias
+    // like team+vendor@, a signup confirmation) used to stop here and vanish:
+    // the app accepts-and-ignores unknown recipients, and Email Routing has
+    // only one catch-all, which this worker already occupies. Hand those to a
+    // human instead of dropping them.
+    //
+    // NOTE this forwards EVERY unmatched message, spam included, so the
+    // destination should be an address whose owner expects that.
+    //
+    // forward() after PostalMime consumed message.raw is safe: verified in
+    // production on 2026-08-05 with a throwaway worker. The second read of
+    // message.raw failed ("ReadableStream is disturbed") while forward()
+    // succeeded and the mail arrived, so forward() does not use the JS stream.
+    if (env.FALLBACK_FORWARD_ADDRESS) {
+      const body = await res.json().catch(() => null);
+      if (recipientWasUnmatched(body)) {
+        try {
+          await message.forward(env.FALLBACK_FORWARD_ADDRESS);
+        } catch (err) {
+          // Last step, after delivery already succeeded. Losing the safety net
+          // must never turn into a retry of mail a tenant has already received.
+          console.error(
+            `fallback forward to ${env.FALLBACK_FORWARD_ADDRESS} failed: ${
+              err instanceof Error ? err.message : String(err)
+            }`
+          );
+        }
+      }
     }
   }
 };
