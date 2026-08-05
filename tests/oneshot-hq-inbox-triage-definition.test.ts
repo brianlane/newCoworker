@@ -33,6 +33,8 @@ import {
   buildHqInboxTriageDefinition
 } from "../scripts/oneshot/hq-inbox-triage-definition";
 import { parseAiFlowDefinition } from "@/lib/ai-flows/schema";
+import { renderTemplate } from "../supabase/functions/_shared/ai_flows/engine";
+import { prepareSmsBody } from "../supabase/functions/_shared/ai_flows/compliance";
 
 type StepJson = {
   id?: string;
@@ -151,6 +153,82 @@ describe("HQ inbox triage: the alert is actionable", () => {
       expect(step.message, step.id).toContain("{{trigger.from}}");
       expect(step.message, step.id).toContain("{{vars.email_sender}}");
     });
+  });
+});
+
+describe("HQ inbox triage: the text a phone actually receives", () => {
+  /** Render like the worker does: collapseEmpty, then the outbound pipeline. */
+  const renderAlert = (id: string, vars: Record<string, string>, trigger: Record<string, string>) =>
+    prepareSmsBody(
+      `[AiFlow] ${renderTemplate(
+        steps.find((s) => s.id === id)?.message ?? "",
+        { vars, trigger },
+        { collapseEmpty: true }
+      ).trim()}`
+    );
+
+  const TRIGGER = {
+    from: "james@kypads.com",
+    subject: "Introductions",
+    message_id: "199abc4d5e6f7890",
+    thread_id: "199abc4d5e6f7890"
+  };
+
+  it("reads cleanly with everything populated", () => {
+    expect(
+      renderAlert(
+        "s_notify_sales",
+        {
+          email_sender: "James (KYP Ads)",
+          email_gist: "Wants to introduce King to discuss automation for a clinic lead flow."
+        },
+        TRIGGER
+      )
+    ).toBe(
+      "[AiFlow] Sales email from james@kypads.com James (KYP Ads). Subject: Introductions. " +
+        "Wants to introduce King to discuss automation for a clinic lead flow. " +
+        "https://mail.google.com/mail/u/0/#all/199abc4d5e6f7890"
+    );
+  });
+
+  it("leaves NO dangling separator when both extracted fields come back empty", () => {
+    // This is the exact failure Brian saw. The old template rendered
+    // "...from James@kypads.com: - James is introducing..." because an empty
+    // subject collapsed and left its separator stranded. Whatever the model
+    // returns, the text must still read as a sentence.
+    const out = renderAlert("s_notify_sales", { email_sender: "", email_gist: "" }, TRIGGER);
+    expect(out).toBe(
+      "[AiFlow] Sales email from james@kypads.com. Subject: Introductions. " +
+        "https://mail.google.com/mail/u/0/#all/199abc4d5e6f7890"
+    );
+    expect(out).not.toMatch(/[.:]\s*[-.]\s/);
+    expect(out).not.toMatch(/\s{2}/);
+  });
+
+  it("survives every combination of missing extracted fields", () => {
+    for (const email_sender of ["", "James (KYP Ads)"]) {
+      for (const email_gist of ["", "Wants pricing."]) {
+        const out = renderAlert("s_notify_sales", { email_sender, email_gist }, TRIGGER);
+        const label = JSON.stringify({ email_sender, email_gist });
+        expect(out, label).not.toMatch(/\s{2}/); // no gap where a value was
+        expect(out, label).not.toMatch(/[.:]\s*[-.]\s/); // no orphaned separator
+        expect(out.endsWith(TRIGGER.message_id), label).toBe(true);
+      }
+    }
+  });
+
+  it("fits in one or two segments with a realistic payload", () => {
+    // Operational SMS is metered per segment; an alert that routinely ran to
+    // four parts would be a cost regression, not just an ugly one.
+    const out = renderAlert(
+      "s_notify_sales",
+      {
+        email_sender: "James (KYP Ads)",
+        email_gist: "Wants a demo of the voice coworker for a 12-clinic group by Friday."
+      },
+      { ...TRIGGER, subject: "Re: Introductions and next steps for the clinic rollout" }
+    );
+    expect(out.length).toBeLessThanOrEqual(306); // 2 GSM segments
   });
 });
 
