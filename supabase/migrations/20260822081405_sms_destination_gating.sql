@@ -203,23 +203,11 @@ begin
             and e.country = v_dest_country
         );
       end if;
-      insert into public.sms_destination_events (business_id, country)
-      values (p_business_id, v_dest_country);
-      -- Operator alert, written HERE so every caller is covered by one
-      -- site: a tenant's first send to a new international country lands in
-      -- the admin system-log feed (warn level). SMS-pumping abuse looks
-      -- exactly like this the moment it starts.
-      if v_new_country then
-        insert into public.system_logs (business_id, source, level, event, message, payload)
-        values (
-          p_business_id,
-          'sms_meter',
-          'warn',
-          'sms_first_send_to_country',
-          'First outbound SMS to a new destination country: ' || v_dest_country,
-          jsonb_build_object('country', v_dest_country)
-        );
-      end if;
+      -- The event insert and the first-country alert are deferred to just
+      -- before the SUCCESS return: a normal (non-raising) plpgsql return
+      -- COMMITS earlier writes, so recording here would let cap-refused or
+      -- no-business reserves inflate velocity counts and fire false
+      -- first-country alerts for sends that never happened.
     end if;
   end if;
 
@@ -296,6 +284,30 @@ begin
     sms_sent = public.daily_usage.sms_sent + 1,
     sms_text_units = public.daily_usage.sms_text_units + excluded.sms_text_units,
     updated_at = now();
+
+  -- Record the destination history ONLY for a reserve that succeeded (see
+  -- the gate block above for why not earlier). Domestic US/CA traffic is
+  -- never recorded; the table exists for the velocity brake and the
+  -- first-country alert, both international-only.
+  if v_dest_country is not null and v_dest_country not in ('US', 'CA') then
+    insert into public.sms_destination_events (business_id, country)
+    values (p_business_id, v_dest_country);
+    -- Operator alert, written HERE so every caller is covered by one site:
+    -- a tenant's first send to a new international country lands in the
+    -- admin system-log feed (warn level). SMS-pumping abuse looks exactly
+    -- like this the moment it starts.
+    if v_new_country then
+      insert into public.system_logs (business_id, source, level, event, message, payload)
+      values (
+        p_business_id,
+        'sms_meter',
+        'warn',
+        'sms_first_send_to_country',
+        'First outbound SMS to a new destination country: ' || v_dest_country,
+        jsonb_build_object('country', v_dest_country)
+      );
+    end if;
+  end if;
 
   return jsonb_build_object(
     'ok', true,
