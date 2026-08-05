@@ -64,6 +64,18 @@ const REEM_WINDOW_TEXT = [
     "cancel link: https://calendly.example.com/cancellations/78022060"
 ].join("\n");
 
+/**
+ * The same booking as the payload looks AFTER the platform fix, which adds an
+ * `invitee timezone label:` line (formatInviteeZoneLabel). Worth its own case:
+ * the confirmation flow extracts `invitee_timezone_iana` and must still copy
+ * the IANA id off the `invitee timezone:` line rather than being pulled to the
+ * neighbouring short label, which is the obvious way this could go wrong.
+ */
+const REEM_WINDOW_TEXT_WITH_LABEL = REEM_WINDOW_TEXT.replace(
+  "invitee timezone: Europe/London",
+  "invitee timezone: Europe/London invitee timezone label: GMT+1"
+);
+
 const REMINDER_TRIGGER = {
   channel: "calendar",
   calendar: "primary",
@@ -180,6 +192,35 @@ describe("KYP invitee timezone label: a Europe/London booking (live model)", () 
       }
       expect(verdict.answers.states_north_american_zone).toBe(false);
       expect(verdict.answers.states_wrong_hour).toBe(false);
+    }
+  );
+
+  it(
+    "copies the IANA zone for the owner, unmoved by the new short-label line",
+    { retry: 1, timeout: 120_000 },
+    async () => {
+      const result = await walkFlow(steps(buildKypBookingConfirmationDefinition()), {
+        trigger: {
+          ...REMINDER_TRIGGER,
+          channel: "webhook",
+          windowText: REEM_WINDOW_TEXT_WITH_LABEL
+        },
+        ai: AI
+      });
+
+      // James needs whose 2:00 PM this is. The IANA id is unambiguous; the
+      // short label is not (GMT+1 is also Berlin in winter, Lagos, Algiers).
+      expect(
+        String(result.vars.invitee_timezone_iana),
+        `invitee_timezone_iana = ${JSON.stringify(result.vars.invitee_timezone_iana)}; ` +
+          "it must copy the 'invitee timezone:' line, not the short label beside it"
+      ).toBe("Europe/London");
+
+      // And the customer copy is still zone-free even with a zone label now
+      // sitting in the payload inviting one.
+      const body = renderedText(result.sends);
+      expect(NORTH_AMERICAN_ZONE_RE.exec(body)?.[0] ?? null, body).toBeNull();
+      expect(body).not.toContain("GMT+1");
     }
   );
 });
