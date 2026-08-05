@@ -115,13 +115,57 @@ export function stripGuessedTimezone(input: unknown): TransformResult {
   // needs no zone variable whatsoever.
   const hasOwnerNotify = steps.some((s) => s.type === "notify_owner");
 
+  // Copy is rewritten BEFORE the field is dropped, and the field is dropped
+  // only if nothing still references it. Dropping first would let an
+  // unrecognized phrasing survive as a dangling {{vars.invitee_tz_plain}},
+  // which renders as empty text in front of a customer: strictly worse than
+  // the wrong zone this patch exists to remove.
+  for (const step of steps) {
+    if (step.type === "notify_owner" && typeof step.message === "string") {
+      if (step.message.includes(TZ_PLAIN_VAR)) {
+        step.message = step.message.split(` ${TZ_PLAIN_VAR}`).join(OWNER_ZONE_REPLACEMENT);
+        changed = true;
+        notes.push(`${step.id}: owner notify now names the invitee's zone verbatim`);
+      }
+      continue;
+    }
+    for (const key of ["body", "message"] as const) {
+      const text = step[key];
+      if (typeof text !== "string" || !text.includes(TZ_PLAIN_VAR)) continue;
+      if (!text.includes(CUSTOMER_ZONE_PHRASE)) {
+        notes.push(
+          `${step.id}: ${key} references ${TZ_PLAIN} but not in the expected phrase; ` +
+            "left untouched, resolve by hand"
+        );
+        continue;
+      }
+      step[key] = text.split(CUSTOMER_ZONE_PHRASE).join(CUSTOMER_ZONE_REPLACEMENT);
+      changed = true;
+      notes.push(`${step.id}: ${key} now says "your time" and names no zone`);
+    }
+  }
+
+  const stillReferenced = steps.filter(
+    (s) =>
+      (typeof s.body === "string" && s.body.includes(TZ_PLAIN_VAR)) ||
+      (typeof s.message === "string" && s.message.includes(TZ_PLAIN_VAR))
+  );
+
   for (const step of steps) {
     if (step.type === "extract_text" && Array.isArray(step.fields)) {
-      const before = step.fields.length;
-      step.fields = step.fields.filter((f) => f.name !== TZ_PLAIN);
-      if (step.fields.length !== before) {
-        changed = true;
-        notes.push(`${step.id}: dropped the ${TZ_PLAIN} field`);
+      if (stillReferenced.length > 0) {
+        notes.push(
+          `${step.id}: KEEPING ${TZ_PLAIN} because ${stillReferenced
+            .map((s) => s.id)
+            .join(", ")} still reference it. Rewrite that copy by hand, then re-run.`
+        );
+      } else {
+        const before = step.fields.length;
+        step.fields = step.fields.filter((f) => f.name !== TZ_PLAIN);
+        if (step.fields.length !== before) {
+          changed = true;
+          notes.push(`${step.id}: dropped the ${TZ_PLAIN} field`);
+        }
       }
 
       const localTime = step.fields.find((f) => f.name === INVITEE_LOCAL_TIME_FIELD.name);

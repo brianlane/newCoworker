@@ -228,6 +228,12 @@ describe("KYP calendar flows: invitee timezone (Reem, Aug 5 2026)", () => {
   /** Zone words that only make sense in North America. */
   const NA_ZONE_WORDS = ["eastern", "central", "mountain", "pacific", "atlantic"];
 
+  /** Minimal stand-in for the local-time field in hand-built fixtures. */
+  const INVITEE_LOCAL_TIME_FIELD_SHAPE = {
+    name: "invitee_local_time",
+    description: "The clock time, copied verbatim, like '10:00 AM'."
+  };
+
   const extractFields = (def: { steps: StepJson[] }): Array<{ name: string; description: string }> => {
     const step = def.steps.find((s) => s.type === "extract_text") as
       | { fields?: Array<{ name?: string; description?: string }> }
@@ -343,6 +349,43 @@ describe("KYP calendar flows: invitee timezone (Reem, Aug 5 2026)", () => {
         expected
       );
     }
+  });
+
+  /**
+   * If a body references the zone variable in wording the patch does not
+   * recognize, dropping the field anyway would leave a dangling
+   * {{vars.invitee_tz_plain}} that renders as EMPTY text to a customer. That
+   * is strictly worse than the wrong zone this patch removes, so the field
+   * has to survive and the operator has to be told.
+   */
+  it("keeps the field when copy it does not recognize still references it", () => {
+    const odd = {
+      steps: [
+        {
+          id: "extract_invitee",
+          type: "extract_text",
+          fields: [
+            { ...INVITEE_LOCAL_TIME_FIELD_SHAPE },
+            { name: "invitee_tz_plain", description: "Invitee's timezone: 'Eastern' or 'Pacific'." }
+          ]
+        },
+        {
+          id: "odd_sms",
+          type: "send_sms",
+          body: "See you at {{vars.invitee_local_time}} ({{vars.invitee_tz_plain}}), talk soon!"
+        }
+      ]
+    };
+    const result = stripGuessedTimezone(odd);
+    const fields = result.definition.steps![0].fields!;
+    expect(
+      fields.some((f) => f.name === "invitee_tz_plain"),
+      "the field must survive while copy still references it"
+    ).toBe(true);
+    expect(result.notes.join("\n")).toContain("KEEPING invitee_tz_plain");
+    expect(result.notes.join("\n")).toContain("odd_sms");
+    // And the unrecognized copy is left exactly as it was, not half-rewritten.
+    expect(result.definition.steps![1].body).toBe(odd.steps[1].body);
   });
 
   it("the one-shot is idempotent on an already-patched flow", () => {
