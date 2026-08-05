@@ -5,7 +5,7 @@
  *
  * Owners mint the `nck_…` API key here and paste it into Zapier (or any
  * other client of the public REST API). The plaintext is shown EXACTLY
- * once — the server stores only a SHA-256 hash — so the card keeps the
+ * once (the server stores only a SHA-256 hash), so the card keeps the
  * fresh key on screen with a copy button until the owner dismisses it.
  *
  * Also renders a read-only list of active webhook subscriptions (the REST
@@ -21,7 +21,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
-import { ZAPIER_INVITE_URL } from "@/lib/integrations/zapier-invite";
+import { ZAPIER_APP_URL } from "@/lib/integrations/zapier-app";
 
 type ApiKeyItem = {
   id: string;
@@ -150,17 +150,16 @@ export function ZapierApiKeysCard({
             texts from other tools, or forward in leads.
           </p>
           <p className="text-xs text-parchment/50 mt-1.5">
-            First,{" "}
+            Search for &ldquo;New Coworker&rdquo; in Zapier when you add a step, or open{" "}
             <a
-              href={ZAPIER_INVITE_URL}
+              href={ZAPIER_APP_URL}
               target="_blank"
               rel="noreferrer"
               className="text-signal-teal hover:underline"
             >
-              accept the New Coworker invite on Zapier
-            </a>{" "}
-            (one time per Zapier account) — the app is invite-only until it&apos;s listed in
-            Zapier&apos;s public directory, so it won&apos;t appear in their app search without it.
+              our Zapier listing
+            </a>
+            . Zapier asks for an API key the first time you connect; paste one from below.
           </p>
         </div>
       </div>
