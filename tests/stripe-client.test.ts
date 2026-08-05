@@ -1376,6 +1376,55 @@ describe("stripe/client", () => {
       });
     });
 
+    it("puts our own consent wording beside Stripe's confirm button", async () => {
+      // Stripe's default setup-mode text only says the card is being saved,
+      // which is not what the tenant is actually agreeing to.
+      //
+      // `submit` deliberately, not `after_submit`: Stripe documents `submit`
+      // as displayed ALONGSIDE the confirmation button, so it is read before
+      // authorizing. `after_submit` renders below it, which is the wrong slot
+      // for something the tenant is agreeing to first.
+      mockSessionCreate.mockResolvedValue({ id: "cs_setup_3", url: "https://stripe.test/setup" });
+      await createAutoReloadSetupSession({
+        customerId: "cus_1",
+        businessId: "biz-1",
+        userId: "user-1",
+        successUrl: "https://app.test/ok",
+        cancelUrl: "https://app.test/no",
+        consentNote: "We charge the pack you chose when your balance falls below your threshold."
+      });
+      const args = mockSessionCreate.mock.calls[0][0];
+      expect(args.custom_text.submit.message).toContain("balance falls below");
+      expect(args.custom_text.after_submit).toBeUndefined();
+    });
+
+    it("truncates a consent note to Stripe's 1200 character ceiling", async () => {
+      mockSessionCreate.mockResolvedValue({ id: "cs_setup_5", url: "https://stripe.test/setup" });
+      await createAutoReloadSetupSession({
+        customerId: "cus_1",
+        businessId: "biz-1",
+        userId: "user-1",
+        successUrl: "https://app.test/ok",
+        cancelUrl: "https://app.test/no",
+        consentNote: "x".repeat(1500)
+      });
+      // Stripe rejects the whole request over the limit, which would leave the
+      // tenant unable to authorize a card at all.
+      expect(mockSessionCreate.mock.calls[0][0].custom_text.submit.message).toHaveLength(1200);
+    });
+
+    it("omits custom text entirely when none is supplied", async () => {
+      mockSessionCreate.mockResolvedValue({ id: "cs_setup_4", url: "https://stripe.test/setup" });
+      await createAutoReloadSetupSession({
+        customerId: "cus_1",
+        businessId: "biz-1",
+        userId: "user-1",
+        successUrl: "https://app.test/ok",
+        cancelUrl: "https://app.test/no"
+      });
+      expect(mockSessionCreate.mock.calls[0][0].custom_text).toEqual({});
+    });
+
     it("throws when Stripe returns no URL", async () => {
       mockSessionCreate.mockResolvedValue({ id: "cs_setup_2", url: null });
       await expect(

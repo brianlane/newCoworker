@@ -3,6 +3,7 @@ import {
   channelStatesForTool,
   describeDivergence,
   findChannelDivergences,
+  OWNER_OPERATED_AGENT_KEYS,
   type AgentToolOverrideRow
 } from "@/lib/agent-tools/channel-divergence";
 import { AGENT_TOOL_REGISTRY } from "@/lib/agent-tools/registry";
@@ -76,17 +77,57 @@ describe("findChannelDivergences", () => {
     const channels = new Set(remaining.flatMap((d) => d.stillEnabledOn.map((s) => s.agentKey)));
     expect(channels.has("sms")).toBe(false);
     expect(channels.has("voice")).toBe(false);
+    // The two that disable-amy-customer-booking.ts then closed.
+    expect(channels.has("webchat") || channels.has("email")).toBe(true);
   });
 
-  it("goes quiet only once every channel offering the tool is disabled", () => {
-    const everywhere: AgentToolOverrideRow[] = [];
+  it("goes quiet once every CUSTOMER channel offering the tool is disabled", () => {
+    // Amy's real end state: the four customer surfaces closed, dashboard left
+    // deliberately on. The audit must be silent here, or she appears on every
+    // future run and the report earns its way into being ignored.
+    const customerChannelsClosed: AgentToolOverrideRow[] = [];
     for (const tool_key of AMY_CALENDAR_TOOLS) {
       for (const agent of AGENT_TOOL_REGISTRY) {
+        if (OWNER_OPERATED_AGENT_KEYS.includes(agent.key)) continue;
         if (!agent.tools.some((t) => t.toolKey === tool_key)) continue;
-        everywhere.push({ agent_key: agent.key, tool_key, enabled: false });
+        customerChannelsClosed.push({ agent_key: agent.key, tool_key, enabled: false });
       }
     }
-    expect(findChannelDivergences(everywhere)).toEqual([]);
+    customerChannelsClosed.push({
+      agent_key: "dashboard",
+      tool_key: "calendar_book_appointment",
+      enabled: true
+    });
+    expect(findChannelDivergences(customerChannelsClosed)).toEqual([]);
+  });
+
+  it("--include-dashboard surfaces the owner surface that the default hides", () => {
+    const customerChannelsClosed: AgentToolOverrideRow[] = [];
+    for (const tool_key of AMY_CALENDAR_TOOLS) {
+      for (const agent of AGENT_TOOL_REGISTRY) {
+        if (OWNER_OPERATED_AGENT_KEYS.includes(agent.key)) continue;
+        if (!agent.tools.some((t) => t.toolKey === tool_key)) continue;
+        customerChannelsClosed.push({ agent_key: agent.key, tool_key, enabled: false });
+      }
+    }
+    const widened = findChannelDivergences(customerChannelsClosed, {
+      includeOwnerOperated: true
+    });
+    expect(widened.length).toBeGreaterThan(0);
+    const channels = new Set(widened.flatMap((d) => d.stillEnabledOn.map((s) => s.agentKey)));
+    expect([...channels]).toEqual(["dashboard"]);
+  });
+
+  it("never treats dashboard as a customer-facing gap by default", () => {
+    // A tool live ONLY on the owner's own assistant is not a divergence.
+    const onlyDashboardOn: AgentToolOverrideRow[] = [
+      { agent_key: "sms", tool_key: "calendar_book_appointment", enabled: false },
+      { agent_key: "voice", tool_key: "calendar_book_appointment", enabled: false },
+      { agent_key: "webchat", tool_key: "calendar_book_appointment", enabled: false },
+      { agent_key: "email", tool_key: "calendar_book_appointment", enabled: false },
+      { agent_key: "dashboard", tool_key: "calendar_book_appointment", enabled: true }
+    ];
+    expect(findChannelDivergences(onlyDashboardOn)).toEqual([]);
   });
 
   it("reports nothing for a business with no overrides at all", () => {

@@ -225,6 +225,17 @@ Run unit tests with:
 npm test
 ```
 
+Run the worker-integration suite (the REAL edge workers and Node-side cores
+against a REAL local Postgres) with:
+
+```bash
+npm run test:worker-integration
+```
+
+It needs a local stack first (`supabase start`, then `supabase functions
+serve`); the header of `vitest.worker-integration.config.ts` carries the exact
+setup, and CI runs it as its own job.
+
 Run Docker integration correctness with:
 
 ```bash
@@ -738,7 +749,7 @@ callable surfaces go through service-role clients, never `anon`/`authenticated` 
 
 ## Production checklist (high level)
 
-- Set **`INTERNAL_CRON_SECRET`** for scheduled invocations of Edge functions that use `assertCronAuth` (e.g. `sms-inbound-worker`, **`voice-settlement-sweep`** — runs **`voice_run_maintenance_sweeps`** for stale settlements, zombie **`voice_active_sessions`**, stale **`voice_reservations`**, stuck **`sms_inbound_jobs`**, and expired **`stream_url_nonces`** — **`voice-low-balance-alerts`**, **`telnyx-voice-failover`**). Do **not** set **`CRON_ALLOW_SERVICE_ROLE_BEARER`** in production — that flag exists only so local dev can reuse the service role as the bearer when no dedicated cron secret is configured.
+- Set **`INTERNAL_CRON_SECRET`** for scheduled invocations of Edge functions that use `assertCronAuth` (e.g. `sms-inbound-worker`, **`voice-settlement-sweep`** — runs **`voice_run_maintenance_sweeps`** for stale settlements, zombie **`voice_active_sessions`**, ended-and-settled **`voice_active_sessions`** (the `ended_sessions_reaped` counter: rows whose call finished normally, which nothing deleted before migration `20260822071559`), stale **`voice_reservations`**, stuck **`sms_inbound_jobs`**, and expired **`stream_url_nonces`** — **`voice-low-balance-alerts`**, **`telnyx-voice-failover`**). Do **not** set **`CRON_ALLOW_SERVICE_ROLE_BEARER`** in production — that flag exists only so local dev can reuse the service role as the bearer when no dedicated cron secret is configured.
 - Schedule **`voice-low-balance-alerts`** with the same cron auth; set Edge secrets **`RESEND_API_KEY`**, **`MAILER_EMAIL`**, **`CONTACT_EMAIL`** (optional reply-to) so owners get email when included voice headroom drops below **300s** (`low_balance_alert_armed` is cleared after send).
 - New-signup ops alerts (first-time provisioning complete) require app env **`RESEND_API_KEY`** and **`OPS_NOTIFICATION_EMAIL`** (defaults to `team@newcoworker.com` when unset).
 - **`telnyx-voice-failover`**: default **`mode: "speak"`** (or omit `mode`) runs §8 **maintenance `answer` + `speak`** with optional **`VOICE_FAILOVER_MAINTENANCE_MESSAGE`**. **`mode: "transfer"`** + **`TELNYX_FAILOVER_CONNECTION_ID`** (or body `connection_id`) moves the call to a backup Connection. POST JSON `{ "call_control_id": "…", "mode"?: "speak" | "transfer" }`.
@@ -856,10 +867,15 @@ Every business can hand out ONE public booking link, `/book/<ncb_token>`
 no account). Visitors pick a duration and a slot on a Calendly-style
 two-panel page (EN/ES, visitor-timezone rendering) and book; the write rides
 `bookCalendarAppointment`, so Zoom decoration, the `calendar_booking_dedupe`
-ledger, `appointment_booked` goal fan-out, the unassigned-booking owner
-alert, and contact filing (tag `Booking Page`, fires `contact_created` so
-round-robin lead assignment picks an on-shift employee) behave exactly like
-AI-made bookings. Owner management lives on the **Bookings** sidebar page
+ledger, `appointment_booked` goal fan-out, and contact filing (tag `Booking
+Page`, fires `contact_created` so round-robin lead assignment picks an
+on-shift employee) behave exactly like AI-made bookings. The **owner alert is
+the exception** and is fired by the page itself rather than by the booking
+core, for two reasons: a page booking was made by the VISITOR, so the copy
+must not credit the AI coworker for it, and the alert reports who is on the
+hook, which is not known until the contact is filed and the assignee is
+stamped. See "What the owner is told when a booking lands" below.
+Owner management lives on the **Bookings** sidebar page
 (`/dashboard/bookings`, below Employees). The page auto-provisions, enabled,
 the first time the owner opens Bookings (safe because the token is
 unguessable until shared; Vagaro/Calendly tenants are skipped since booking
@@ -1001,7 +1017,46 @@ page.
   anyone else's, and a failed text is logged, never surfaced (the booking
   and the visitor's confirmation are already durable). A retry that fills
   a missing assignment sends the text then, the first moment the booking
-  has an owner to tell.
+  has an owner to tell. The OWNER's own alert names that person rather than
+  reporting the lead as unowned, which is what it used to do while the
+  platform was texting the assignee seconds later.
+- **What the owner is told when a booking lands**
+  (`src/lib/calendar-tools/unassigned-booking-alert.ts`, copy in
+  `src/lib/email/templates/booking-owner-alert.ts`): one alert, three states,
+  because "who is on the hook" has three real answers and the alert used to
+  express only one of them.
+
+  | State | When | What it says |
+  | --- | --- | --- |
+  | `solo` | no ACTIVE `ai_flow_team_members` row | just the booking. No "owner", "assign", or "teammate" anywhere: there is nobody to assign to and the owner is on the hook by definition |
+  | `covered` | the booking's `assignee_member_id`, else `contacts.owner_employee_id` | names that person, and drops the warning |
+  | `unowned` | a roster exists and nobody holds this lead | the original warning, plus the one action that fixes it |
+
+  The assignee outranks the contact owner: the question is who shows up to
+  THIS meeting. The button deep-links to `/dashboard/customers/<e164>`, where
+  the owner picker is, rather than to a bare `/dashboard`. Two fail
+  directions are deliberate: an unreadable roster count assumes a team (a
+  solo owner seeing team copy is a wording miss, a team losing the warning is
+  a no-show), and a holder whose name will not resolve degrades to the
+  warning rather than emailing a blank name. Gated on
+  `notification_preferences.unassigned_booking_alerts`, ON by default, which
+  covers all three states.
+
+  Running late costs a wider crash window, so the alert is **claimed on the
+  booking row** before it goes out (`calendar_booking_dedupe.owner_alerted_at`,
+  the same conditional-update shape `assignee_member_id` uses). A request that
+  persists the booking and then dies leaves the claim open, so the visitor's
+  idempotent resubmit sends the alert nobody sent; an ordinary resubmit finds
+  it taken and stays quiet. A claim that cannot be WRITTEN alerts anyway on
+  the first pass (a possible duplicate beats an appointment nobody knows
+  about) and stays silent on a resubmit (where "already told" is the
+  overwhelming case). A gap-fill retry alerts even when the claim is gone,
+  because who has it is genuinely new.
+
+  One race remains and is known: flow-driven lead assignment runs in the
+  AiFlow worker, so `contacts.owner_employee_id` can land after the booking
+  returns. The booking page's own assignee is resolved synchronously and is
+  fully covered; a delayed re-check before sending would close the rest.
 - **Intake questions** (`src/lib/booking-page/intake.ts`): up to five
   owner-defined questions in the white-glove questionnaire's vocabulary
   (choice, multi, text, textarea), answered inside the booking form. Two
@@ -2651,6 +2706,62 @@ the DDL (repaired in PR #1091); `tests/migration-not-empty.test.ts` now fails
 a PR carrying an empty migration file. The long form, including the one
 allowlisted historical file, lives in
 [supabase/migrations/CLAUDE.md](supabase/migrations/CLAUDE.md).
+
+### The cron chain has three timeouts, and a hard ceiling under all of them
+
+A scheduled sweep is not one timeout, it is three, and each layer can hang up
+on the one below it:
+
+| Layer | Where the number lives | Reached by |
+| --- | --- | --- |
+| pg_cron `timeout_milliseconds` | the `cron.schedule` body in a migration | `net.http_post` |
+| Edge `REQUEST_TIMEOUT_MS` | `supabase/functions/<fn>/index.ts` | `AbortController` on the forward `fetch` |
+| route `maxDuration` | `src/app/api/internal/<route>/route.ts` | Vercel |
+
+**Underneath all three sits a platform ceiling you cannot raise: Supabase
+returns 504 to the caller of an Edge function that has not responded within
+150 seconds.** That is the request idle timeout and it applies on every plan
+including Pro. The 400s figure in
+[Supabase's limits](https://supabase.com/docs/guides/functions/limits) is the
+worker's total wall clock across background tasks, not how long it may take to
+answer the request that started it. Every cron bridge in this repo `await`s its
+route and returns the body, so **no cron chain can run longer than 150s**, no
+matter what the three numbers say.
+
+Consequences worth knowing before you touch any of them:
+
+- **Raising `REQUEST_TIMEOUT_MS` above 150_000 does nothing.** Most bridges sit
+  at `290_000`, which is unreachable. PR #1014 raised a route to
+  `maxDuration = 1800` and both layers above it to `1_800_000`; that 30-minute
+  budget was never real either.
+- **A route may legitimately declare more than 150s.** When the bridge 504s,
+  Vercel keeps running the route to completion in the background, so the work
+  still finishes. What is lost is the *result*: pg_cron records a 504 instead
+  of the route's own outcome. Eighteen routes are in this position today and
+  are recorded in `KNOWN_ABOVE_EDGE_CEILING` in
+  `tests/cron-timeout-parity.test.ts`. Lowering them to 150 would truncate work
+  that completes today, and for a daily sweep the remainder would wait 24
+  hours, so they are documented rather than clipped.
+- **The rule pg_cron must actually satisfy** is therefore
+  `timeout_milliseconds >= min(maxDuration * 1000, REQUEST_TIMEOUT_MS, 150_000)`.
+  Below that, a healthy run is written into `cron.job_run_details` as a
+  timeout, and a genuine timeout becomes impossible to spot.
+
+`tests/cron-timeout-parity.test.ts` enforces this in CI. It **discovers** the
+chains by parsing the migrations, the Edge functions and the routes, so a new
+cron job is covered the day it lands. There is no list to remember to update:
+the earlier hand-written version checked 4 of the 22 chains that existed and
+had missed 14 mismatches.
+
+A job whose Edge function calls a route **once per claimed row** (currently
+`edge-ai-flow-worker`, `edge-customer-memory-summarize-sweep`,
+`edge-sms-inbound-worker`) is exempt from the parity rule, because
+`maxDuration` there is the budget of one call and not of the run. Those need a
+wall-clock budget on the dispatch loop instead, sized so the worst case fits
+inside both the cron timeout and the 150s ceiling. `CALL_SUMMARY_TIME_BUDGET_MS`
+in `supabase/functions/_shared/call_summary_sweep.ts` is the worked example.
+The test asserts the exempt set exactly, so a new dispatcher cannot quietly
+skip the check.
 
 ### Post-merge: what CI does vs what you still do
 

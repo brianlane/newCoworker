@@ -17,6 +17,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { errorResponse, handleRouteError, successResponse } from "@/lib/api-response";
 import { getSubscription } from "@/lib/db/subscriptions";
 import { createAutoReloadSetupSession } from "@/lib/stripe/client";
+import { getTranslations } from "next-intl/server";
 import { logger } from "@/lib/logger";
 
 export async function POST() {
@@ -29,6 +30,7 @@ export async function POST() {
       return errorResponse("FORBIDDEN", "Authentication required", 403);
     }
 
+    const t = await getTranslations("dashboard.billing.autoReload");
     const businessId = await resolveActiveBusinessIdForAction(user, "manage_billing");
     if (!businessId) return errorResponse("NOT_FOUND", "Business not found", 404);
 
@@ -44,7 +46,8 @@ export async function POST() {
       businessId,
       userId: user.userId,
       successUrl: `${appUrl}/dashboard/billing?autoReload=ready`,
-      cancelUrl: `${appUrl}/dashboard/billing?autoReload=canceled`
+      cancelUrl: `${appUrl}/dashboard/billing?autoReload=canceled`,
+      consentNote: t("consentStripeNote")
     });
 
     logger.info("auto-reload card re-authorization started", { businessId });

@@ -8,12 +8,12 @@
 # bump that caused it. It has now bitten twice, PR #226 and again when
 # Dependabot #1005 moved playwright 1.61.0 -> 1.62.0 here without touching this
 # line. Bump BOTH in the same PR, or the next redeploy takes the sidecar down.
-FROM mcr.microsoft.com/playwright:v1.62.0-jammy
+FROM mcr.microsoft.com/playwright:v1.62.1-jammy
 
 WORKDIR /app
 COPY package.json package-lock.json ./
 RUN npm ci --omit=dev
-COPY server.mjs ./
+COPY server.mjs actions.mjs ./
 
 ENV PORT=8080
 EXPOSE 8080

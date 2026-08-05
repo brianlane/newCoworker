@@ -50,6 +50,7 @@ import {
 import { logger } from "@/lib/logger";
 import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import { emailMessagesForLocale } from "@/lib/i18n/email-copy";
+import type { AppLocale } from "@/i18n/routing";
 
 export type NotificationKind = "urgent_alert" | "voice_capture" | "digest" | string;
 
@@ -66,6 +67,39 @@ export type DispatchInput = {
   smsBody?: string;
   /** Optional override of the email subject; defaults to "Urgent: {summary}". */
   emailSubject?: string;
+  /**
+   * Optional H1. Defaults to the subject, which is right for a short generic
+   * alert and wrong for a long specific one: an alert whose subject already
+   * names the person, the phone, and the time repeated all three as a
+   * heading and then a third time in the first body line.
+   */
+  emailHeading?: string;
+  /**
+   * Where the alert's button, its copy-and-paste fallback link, and the SMS
+   * link all point, app-relative (e.g. `/dashboard/customers/%2B1555...`).
+   * Defaults to `/dashboard`. Locale-independent by design, so it is settable
+   * without going through the template.
+   */
+  ctaPath?: string;
+  /** Optional button label; defaults to the localized "Open dashboard". */
+  ctaLabel?: string;
+  /**
+   * Locale-aware copy for alerts whose wording is more than one line.
+   *
+   * The owner's locale is resolved HERE, from the recipient address, so a
+   * caller cannot know it in advance. Handing the caller a callback keeps the
+   * copy in its own template module (the README's rule for owner
+   * transactional email) while the locale stays where it is resolved.
+   * Explicit `emailSubject` / `emailBody` / `emailHeading` still win, so an
+   * override is always available.
+   */
+  emailTemplate?: (locale: AppLocale) => {
+    subject: string;
+    heading: string;
+    body: string;
+    ctaLabel: string;
+    ctaPath: string;
+  };
   /**
    * The contact this alert is ABOUT, when it is about one. Supplying it
    * redirects the page to whichever teammate owns that contact, falling back
@@ -305,7 +339,11 @@ export async function dispatchUrgentNotification(
   // avoid `https://example.com//dashboard` / `//api/...` if the env var was
   // set with a stray slash.
   const appUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
-  const dashboardUrl = `${appUrl}/dashboard`;
+  // Where this alert's links point. `/dashboard` unless the caller named a
+  // deeper destination: an alert that asks for one specific action should
+  // land on the screen that performs it, and the button, the fallback link,
+  // and the SMS link must not disagree about where that is.
+  const dashboardUrl = `${appUrl}${input.ctaPath ?? "/dashboard"}`;
   const summary = input.summary;
   const kind = input.kind;
   const payload: Record<string, unknown> = {
@@ -399,18 +437,33 @@ export async function dispatchUrgentNotification(
     const unsubscribeUrl = `${appUrl}/api/notifications/unsubscribe?bid=${encodeURIComponent(
       input.businessId
     )}`;
+    // Rendered here, not by the caller, because the locale is only known
+    // once the recipient is resolved. Explicit fields still win over it.
+    const templated = input.emailTemplate?.(ownerLocale);
     const subject =
-      input.emailSubject ?? emailCopy.common.urgentSubject.replace("{summary}", summary);
+      input.emailSubject ??
+      templated?.subject ??
+      emailCopy.common.urgentSubject.replace("{summary}", summary);
     const body =
       input.emailBody ??
+      templated?.body ??
       `${emailCopy.common.urgentBody.replace("{summary}", summary)}\n\nView details: ${dashboardUrl}`;
     const bodyParagraphs = body.split(/\n\n+/).filter(Boolean);
+    // A template may carry its own destination, but an explicit ctaPath wins:
+    // it is the one the SMS link and the fallback link already used, and a
+    // button pointing somewhere the other two do not is worse than either.
+    const ctaHref =
+      !input.ctaPath && templated?.ctaPath ? `${appUrl}${templated.ctaPath}` : dashboardUrl;
     const html = buildBrandedEmailHtml({
       siteUrl: appUrl,
       documentTitle: subject,
-      heading: subject,
+      // Falling back to the subject keeps every existing alert byte-identical.
+      heading: input.emailHeading ?? templated?.heading ?? subject,
       bodyBlocks: bodyParagraphs.map((t) => ({ kind: "text" as const, text: t })),
-      cta: { label: emailCopy.common.openDashboard, href: dashboardUrl },
+      cta: {
+        label: input.ctaLabel ?? templated?.ctaLabel ?? emailCopy.common.openDashboard,
+        href: ctaHref
+      },
       unsubscribeUrl,
       recipientEmail: targets.email
     });

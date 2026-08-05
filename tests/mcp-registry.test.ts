@@ -5,9 +5,10 @@ vi.mock("@/lib/mcp/tooling", async (importOriginal) => {
   return { ...actual, runMcpTool: vi.fn() };
 });
 
-import { allMcpTools, authFromExtra, registerMcpTools } from "@/lib/mcp/registry";
+import { z } from "zod";
+import { allMcpTools, authFromContext, registerMcpTools } from "@/lib/mcp/registry";
 import { runMcpTool } from "@/lib/mcp/tooling";
-import type { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import type { McpServer } from "@modelcontextprotocol/server";
 
 beforeEach(() => {
   vi.clearAllMocks();
@@ -54,20 +55,37 @@ describe("allMcpTools", () => {
   });
 });
 
-describe("authFromExtra", () => {
-  it("extracts the verified identity", () => {
+describe("authFromContext", () => {
+  it("extracts the verified identity from ctx.http.authInfo", () => {
     expect(
-      authFromExtra({ authInfo: { extra: { userId: "u1", email: "a@b.c" } } })
+      authFromContext({ http: { authInfo: { extra: { userId: "u1", email: "a@b.c" } } } })
     ).toEqual({ userId: "u1", email: "a@b.c" });
   });
 
+  // Regression guard for the mcp-handler 1.x -> 2.x migration. 1.x handed the
+  // verified token to tools at the top level (`extra.authInfo`); 2.x nests it
+  // under the transport (`ctx.http.authInfo`). Reading the 1.x path against a
+  // 2.x server still COMPILES (the context is narrowed from `unknown`) and
+  // silently fails every tool call closed, so the old shape must stay
+  // explicitly unauthenticated here rather than merely untested.
+  it("does not accept the pre-2.x top-level authInfo shape", () => {
+    expect(authFromContext({ authInfo: { extra: { userId: "u1", email: "a@b.c" } } })).toBeNull();
+  });
+
   it("returns null for missing or malformed identities", () => {
-    expect(authFromExtra(null)).toBeNull();
-    expect(authFromExtra({})).toBeNull();
-    expect(authFromExtra({ authInfo: {} })).toBeNull();
-    expect(authFromExtra({ authInfo: { extra: { userId: 5, email: "a@b.c" } } })).toBeNull();
-    expect(authFromExtra({ authInfo: { extra: { userId: "u1", email: 5 } } })).toBeNull();
-    expect(authFromExtra({ authInfo: { extra: { userId: "u1", email: "" } } })).toBeNull();
+    expect(authFromContext(null)).toBeNull();
+    expect(authFromContext({})).toBeNull();
+    expect(authFromContext({ http: {} })).toBeNull();
+    expect(authFromContext({ http: { authInfo: {} } })).toBeNull();
+    expect(
+      authFromContext({ http: { authInfo: { extra: { userId: 5, email: "a@b.c" } } } })
+    ).toBeNull();
+    expect(
+      authFromContext({ http: { authInfo: { extra: { userId: "u1", email: 5 } } } })
+    ).toBeNull();
+    expect(
+      authFromContext({ http: { authInfo: { extra: { userId: "u1", email: "" } } } })
+    ).toBeNull();
   });
 });
 
@@ -95,6 +113,22 @@ describe("registerMcpTools", () => {
     expect(registered[0].config.description).toBe(allMcpTools[0].description);
   });
 
+  // 2.x takes a Standard Schema (a `z.object(...)`) and only still accepts the
+  // bare `{ field: z.string() }` record through a deprecated overload. Assert
+  // the wrapped form so a future revert to the raw shape fails here rather
+  // than when that overload is eventually dropped.
+  it("wraps each tool's raw zod shape in a z.object for the 2.x API", () => {
+    const { server, registered } = fakeServer();
+    registerMcpTools(server);
+    for (const entry of registered) {
+      expect(entry.config.inputSchema).toBeInstanceOf(z.ZodObject);
+    }
+    const first = z.object(allMcpTools[0].schema);
+    expect(Object.keys((registered[0].config.inputSchema as typeof first).shape)).toEqual(
+      Object.keys(allMcpTools[0].schema)
+    );
+  });
+
   it("runs the tool as the verified caller from authInfo", async () => {
     const { server, registered } = fakeServer();
     registerMcpTools(server);
@@ -104,7 +138,7 @@ describe("registerMcpTools", () => {
     const first = registered[0];
     const result = await first.cb(
       { a: 1 },
-      { authInfo: { extra: { userId: "u1", email: "a@b.c" } } }
+      { http: { authInfo: { extra: { userId: "u1", email: "a@b.c" } } } }
     );
     expect(runMcpTool).toHaveBeenCalledWith(
       allMcpTools[0],

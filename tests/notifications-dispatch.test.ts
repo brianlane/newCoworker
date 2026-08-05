@@ -36,6 +36,13 @@ vi.mock("@/lib/supabase/server", () => ({
   createSupabaseServiceClient: vi.fn()
 }));
 
+// The locale resolver has its own suite; mocking it lets this one assert what
+// the dispatcher DOES with a non-English owner. Defaults to "en" so every
+// existing expectation is unchanged.
+vi.mock("@/lib/i18n/owner-locale", () => ({
+  resolveOwnerUiLocaleForEmail: vi.fn(async () => "en")
+}));
+
 // The contact-owner resolver has its own suite (notification-contact-owner);
 // mocking it keeps this one about what the DISPATCHER does with the verdict.
 const resolveContactOwnerTarget = vi.fn();
@@ -54,6 +61,8 @@ import {
   resolveNotificationTargets
 } from "@/lib/notifications/dispatch";
 import { getBusiness } from "@/lib/db/businesses";
+import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
+import { buildBookingOwnerAlert } from "@/lib/email/templates/booking-owner-alert";
 import { getOrCreateNotificationPreferences } from "@/lib/db/notification-preferences";
 import { insertNotification } from "@/lib/db/notifications";
 import { sendOwnerEmail } from "@/lib/email/client";
@@ -140,6 +149,9 @@ describe("notifications/dispatch", () => {
     vi.mocked(sendTelnyxSms).mockResolvedValue({ id: "sms_id", channel: "sms" } as never);
     // Default: no contact supplied, so nothing redirects.
     resolveContactOwnerTarget.mockResolvedValue(TO_BUSINESS_OWNER);
+    // English unless a test says otherwise: clearAllMocks clears calls, not
+    // implementations, so a locale set by one test would leak into the next.
+    vi.mocked(resolveOwnerUiLocaleForEmail).mockResolvedValue("en" as never);
   });
   afterEach(() => {
     process.env = original;
@@ -393,6 +405,154 @@ describe("notifications/dispatch", () => {
     expect(opts.unsubscribeUrl).not.toContain("/dashboard/api/");
     expect(opts.html).toContain("https://app.example.com/dashboard");
     expect(opts.html).not.toContain("//dashboard");
+  });
+
+  describe("per-alert heading, CTA, and locale-aware copy", () => {
+    it("emailHeading replaces the H1 so the subject is not repeated as a heading", async () => {
+      vi.mocked(sendOwnerEmail).mockResolvedValue("ok" as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert",
+        emailSubject: "A very long subject line that should not become the heading",
+        emailHeading: "Short heading"
+      });
+      const opts = vi.mocked(sendOwnerEmail).mock.calls[0][3] as { html?: string };
+      const h1 = /<h1[^>]*>([\s\S]*?)<\/h1>/.exec(opts.html ?? "")?.[1] ?? "";
+      expect(h1).toContain("Short heading");
+      // The subject still belongs in <title>; what must not repeat is the H1.
+      expect(h1).not.toContain("A very long subject line");
+    });
+
+    it("without emailHeading the subject stays the heading, as before", async () => {
+      vi.mocked(sendOwnerEmail).mockResolvedValue("ok" as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert",
+        emailSubject: "Still the heading"
+      });
+      const opts = vi.mocked(sendOwnerEmail).mock.calls[0][3] as { html?: string };
+      expect(opts.html).toContain("Still the heading");
+    });
+
+    it("ctaPath moves the button, the fallback link, and the SMS link together", async () => {
+      vi.mocked(sendOwnerEmail).mockResolvedValue("ok" as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert",
+        ctaPath: "/dashboard/customers/%2B12187702372",
+        ctaLabel: "Assign this contact"
+      });
+      const opts = vi.mocked(sendOwnerEmail).mock.calls[0][3] as { html?: string };
+      expect(opts.html).toContain("https://app.example.com/dashboard/customers/%2B12187702372");
+      expect(opts.html).toContain("Assign this contact");
+      // A button pointing one place and a text link pointing another is the
+      // bug this guards: all three must agree.
+      const smsBody = vi.mocked(sendTelnyxSms).mock.calls[0][2] as string;
+      expect(smsBody).toContain("https://app.example.com/dashboard/customers/%2B12187702372");
+    });
+
+    it("defaults stay the bare dashboard and the localized Open dashboard label", async () => {
+      vi.mocked(sendOwnerEmail).mockResolvedValue("ok" as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert"
+      });
+      const opts = vi.mocked(sendOwnerEmail).mock.calls[0][3] as { html?: string };
+      expect(opts.html).toContain("https://app.example.com/dashboard");
+      expect(opts.html).toContain("Open dashboard");
+    });
+
+    it("emailTemplate is handed the resolved locale and supplies every piece of copy", async () => {
+      vi.mocked(sendOwnerEmail).mockResolvedValue("ok" as never);
+      const seenLocales: string[] = [];
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert",
+        emailTemplate: (locale) => {
+          seenLocales.push(locale);
+          return {
+            subject: "Templated subject",
+            heading: "Templated heading",
+            body: "First block.\n\nSecond block.",
+            ctaLabel: "Templated CTA",
+            ctaPath: "/dashboard/bookings"
+          };
+        }
+      });
+      // English is the hard default; the resolver is keyed on the recipient.
+      expect(seenLocales).toEqual(["en"]);
+      const call = vi.mocked(sendOwnerEmail).mock.calls[0];
+      expect(call[2]).toBe("Templated subject");
+      const opts = call[3] as { html?: string; text?: string };
+      expect(opts.html).toContain("Templated heading");
+      expect(opts.html).toContain("Templated CTA");
+      expect(opts.html).toContain("https://app.example.com/dashboard/bookings");
+      expect(opts.text).toContain("First block.");
+      expect(opts.text).toContain("Second block.");
+    });
+
+    it("a Spanish owner actually RECEIVES the Spanish copy, not just a Spanish-capable callback", async () => {
+      // The bug this pins: supplying both an explicit emailSubject/emailBody
+      // and a template meant the explicit English always won, so locale
+      // resolution ran and its result was thrown away. Asserting the callback
+      // returns Spanish is not enough; assert the SENT message.
+      vi.mocked(resolveOwnerUiLocaleForEmail).mockResolvedValue("es" as never);
+      vi.mocked(sendOwnerEmail).mockResolvedValue("ok" as never);
+
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "assigned_booking",
+        emailTemplate: (locale) => {
+          const copy = buildBookingOwnerAlert({
+            state: "unowned",
+            attendeeName: "Brett Douglas",
+            attendeePhone: "+12187702372",
+            startLocal: "viernes, 14 de agosto de 2026",
+            summary: "Discovery Call",
+            surface: "booking_page",
+            locale
+          });
+          return {
+            subject: copy.subject,
+            heading: copy.heading,
+            body: copy.body,
+            ctaLabel: copy.ctaLabel,
+            ctaPath: copy.ctaPath
+          };
+        }
+      });
+
+      const call = vi.mocked(sendOwnerEmail).mock.calls[0];
+      expect(call[2]).toContain("necesita responsable");
+      const opts = call[3] as { html?: string; text?: string };
+      expect(opts.text).toContain("agendó");
+      expect(opts.html).toContain("Asignar este contacto");
+      expect(opts.text).not.toContain("needs an owner");
+    });
+
+    it("an explicit emailSubject still wins over the template, so callers can override", async () => {
+      vi.mocked(sendOwnerEmail).mockResolvedValue("ok" as never);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "URGENT",
+        kind: "urgent_alert",
+        emailSubject: "Explicit wins",
+        emailTemplate: () => ({
+          subject: "Templated subject",
+          heading: "Templated heading",
+          body: "Body.",
+          ctaLabel: "CTA",
+          ctaPath: "/dashboard"
+        })
+      });
+      expect(vi.mocked(sendOwnerEmail).mock.calls[0][2]).toBe("Explicit wins");
+    });
   });
 
   it("does not crash when prefs lookup throws — falls through to env defaults", async () => {

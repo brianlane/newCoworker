@@ -744,6 +744,17 @@ const nonBranchStepMembers = [
       // step is recorded "skipped" and the run finishes as done; instead of
       // extracting empty fields and failing downstream.
       skipWhenText: z.string().min(1).max(200).optional(),
+      // Already-satisfied guard (mirrors browse_action.continueWhenText): the
+      // page carries this marker, so there is nothing worth reading HERE, but
+      // the rest of the run still matters. Step recorded "skipped", run CARRIES
+      // ON, and the AI extraction is skipped entirely rather than spending the
+      // budget on a page that can only yield empty fields.
+      // This is the shape a RETRY LADDER needs: a rung that re-reads a page
+      // whose details have not landed yet ("details pending") should fall
+      // through to the next rung, not end the run. Ending it is what
+      // skipWhenText is for. skipWhenText is evaluated FIRST and wins when both
+      // markers match.
+      continueWhenText: z.string().min(1).max(200).optional(),
       when: whenSchema.optional()
     })
     .refine((s) => (s.fields?.length ?? 0) > 0 || (s.extractLinks?.length ?? 0) > 0, {
@@ -1361,6 +1372,20 @@ const nonBranchStepMembers = [
     // another agent already claimed) so the run ENDS gracefully; the step is
     // recorded "skipped" and the run finishes as done; instead of failing.
     skipWhenText: z.string().min(1).max(200).optional(),
+    // Already-satisfied guard. Same trigger as skipWhenText (an action failed
+    // and the failure page carries this marker) but the OPPOSITE conclusion
+    // about the rest of the run:
+    //   skipWhenText     "there is nothing left to do ANYWHERE" -> run ends
+    //   continueWhenText "THIS STEP's goal is met, later steps still matter"
+    //                    -> step recorded "skipped", run CARRIES ON
+    // The distinction is not academic. A lead-accept step whose wizard finished
+    // but whose last click timed out has already accepted the lead: ending the
+    // run there loses the filing, the owner email and the teammate hand-off for
+    // a lead we now own (Amy / Clever, Aug 4 2026). Pointing this at a fragment
+    // of the post-accept confirmation also makes such a step idempotent, so the
+    // flow can be safely re-run for the same lead.
+    // skipWhenText is evaluated FIRST and wins when both markers match.
+    continueWhenText: z.string().min(1).max(200).optional(),
     when: whenSchema.optional()
   }),
   // Recall a URL a PRIOR run persisted (browse_action.rememberUrlKeyedByVar) for

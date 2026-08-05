@@ -12,11 +12,20 @@
  * appointments for five more days until a customer call surfaced it. This
  * turns "we would have caught that in a minute" into a command.
  *
+ * Only CUSTOMER-facing surfaces are compared by default. The dashboard coworker
+ * is the owner driving their own assistant, so a tool live there and off for
+ * customers is normal, not a gap. Amy again: after her calendar tools were
+ * closed on voice, sms, webchat and email, dashboard stayed deliberately on,
+ * and counting that as a divergence would have put her on every future run,
+ * which is how a report earns its way into being ignored.
+ * `--include-dashboard` widens it to "where is this tool live at all?".
+ *
  * Read-only. Exits 1 when anything diverges, so it can gate a check.
  *
  * Usage:
  *   npx tsx debug/audit-agent-tool-channels.ts
  *   npx tsx debug/audit-agent-tool-channels.ts --business-id <uuid>
+ *   npx tsx debug/audit-agent-tool-channels.ts --include-dashboard
  */
 import { loadEnv } from "./_shared.ts";
 
@@ -29,6 +38,7 @@ const { findChannelDivergences, describeDivergence } = await import(
 
 const bizFlag = process.argv.indexOf("--business-id");
 const ONLY_BUSINESS = bizFlag >= 0 ? process.argv[bizFlag + 1] : null;
+const INCLUDE_OWNER_OPERATED = process.argv.includes("--include-dashboard");
 
 const url = process.env.NEXT_PUBLIC_SUPABASE_URL ?? process.env.SUPABASE_URL ?? "";
 const key = process.env.SUPABASE_SERVICE_ROLE_KEY ?? "";
@@ -111,7 +121,9 @@ for (const r of settings) {
 let flagged = 0;
 for (const biz of businesses) {
   const overrides = byBusiness.get(biz.id) ?? [];
-  const divergences = findChannelDivergences(overrides);
+  const divergences = findChannelDivergences(overrides, {
+    includeOwnerOperated: INCLUDE_OWNER_OPERATED
+  });
   if (divergences.length === 0) continue;
   flagged += 1;
   console.log(`\n${biz.name}  (${biz.id})`);
@@ -119,13 +131,16 @@ for (const biz of businesses) {
 }
 
 const scanned = businesses.length;
+const scope = INCLUDE_OWNER_OPERATED
+  ? "all surfaces including dashboard"
+  : "customer-facing surfaces";
 if (flagged === 0) {
-  console.log(`\nNo channel divergence across ${scanned} business(es).`);
+  console.log(`\nNo channel divergence across ${scanned} business(es) (${scope}).`);
   process.exit(0);
 }
 console.log(
   `\n${flagged} of ${scanned} business(es) have a tool turned off on one ` +
-    `channel and still on for another.\n` +
+    `channel and still on for another (${scope}).\n` +
     `A missing agent_tool_settings row means the REGISTRY DEFAULT, not off, ` +
     `so the fix is usually to write the same disabled rows for the other channel.`
 );

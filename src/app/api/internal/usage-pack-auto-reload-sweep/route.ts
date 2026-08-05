@@ -22,12 +22,18 @@ export async function POST(request: Request): Promise<Response> {
     return errorResponse("FORBIDDEN", "Invalid cron bearer", 403);
   }
 
+  // Two jobs hit this route. `?mode=flagged` runs every minute over only the
+  // rules a consume path stamped; anything else is the 15 minute full rescan.
+  // Unrecognised values fall back to the full scan, which is the safe default:
+  // it can only do more work, never less.
+  const mode = new URL(request.url).searchParams.get("mode") === "flagged" ? "flagged" : "full";
+
   const startedAt = Date.now();
   try {
-    const result = await sweepUsagePackAutoReloads();
+    const result = await sweepUsagePackAutoReloads({ mode });
     const durationMs = Date.now() - startedAt;
-    logger.info("usage-pack-auto-reload-sweep: summary", { ...result, durationMs });
-    return successResponse({ ...result, durationMs });
+    logger.info("usage-pack-auto-reload-sweep: summary", { ...result, mode, durationMs });
+    return successResponse({ ...result, mode, durationMs });
   } catch (err) {
     logger.error("usage-pack-auto-reload-sweep: failed", {
       error: err instanceof Error ? err.message : String(err)

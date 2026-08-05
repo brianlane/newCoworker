@@ -22,6 +22,28 @@
  */
 import { AGENT_TOOL_REGISTRY, type AgentKey } from "./registry";
 
+/**
+ * Surfaces the OWNER drives, as opposed to ones where the AI faces a customer
+ * on its own.
+ *
+ * These are a different trust class, and conflating them makes the audit
+ * useless. Amy Laidlaw is the worked example: after her calendar tools were
+ * disabled on voice, sms, webchat and email, `dashboard` stayed deliberately
+ * on, because that surface is Amy asking her own assistant to book something,
+ * not the AI booking at a customer unprompted. Counting that as a divergence
+ * put her on every run of the audit forever, which is how a report earns its
+ * way into being ignored.
+ *
+ * So they are excluded by default and `includeOwnerOperated` brings them back
+ * for the rarer question "where is this tool live at all?".
+ */
+export const OWNER_OPERATED_AGENT_KEYS: readonly AgentKey[] = ["dashboard"];
+
+export type DivergenceOptions = {
+  /** Include owner-driven surfaces (dashboard). Default false. */
+  includeOwnerOperated?: boolean;
+};
+
 /** One `agent_tool_settings` row, as read from the database. */
 export type AgentToolOverrideRow = {
   agent_key: string;
@@ -52,10 +74,14 @@ export type ToolChannelDivergence = {
  */
 export function channelStatesForTool(
   toolKey: string,
-  overrides: readonly AgentToolOverrideRow[]
+  overrides: readonly AgentToolOverrideRow[],
+  options: DivergenceOptions = {}
 ): ChannelToolState[] {
   const states: ChannelToolState[] = [];
   for (const agent of AGENT_TOOL_REGISTRY) {
+    if (!options.includeOwnerOperated && OWNER_OPERATED_AGENT_KEYS.includes(agent.key)) {
+      continue;
+    }
     const tool = agent.tools.find((t) => t.toolKey === toolKey);
     // `configurable: false` tools have no platform chokepoint, so their
     // stored value is not enforced and a mismatch means nothing.
@@ -77,7 +103,8 @@ export function channelStatesForTool(
  * reached another channel that offers the same tool. Empty means consistent.
  */
 export function findChannelDivergences(
-  overrides: readonly AgentToolOverrideRow[]
+  overrides: readonly AgentToolOverrideRow[],
+  options: DivergenceOptions = {}
 ): ToolChannelDivergence[] {
   // Only tools the owner has touched somewhere can diverge in the sense we
   // care about: an untouched tool is at its registry defaults everywhere.
@@ -85,7 +112,7 @@ export function findChannelDivergences(
 
   const divergences: ToolChannelDivergence[] = [];
   for (const toolKey of touchedToolKeys) {
-    const states = channelStatesForTool(toolKey, overrides);
+    const states = channelStatesForTool(toolKey, overrides, options);
     const disabledOn = states.filter((s) => s.explicit && !s.enabled);
     if (disabledOn.length === 0) continue;
     const stillEnabledOn = states.filter((s) => s.enabled);

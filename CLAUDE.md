@@ -128,9 +128,14 @@ The full flow, for every code change, however small:
 
    Only aiflow-render still lacks a fleet sweep: loop it one run per distinct
    unrotated `business_id` in `vps_ssh_keys`, and check `voice_active_sessions`
-   for calls in flight first, since recreating a container drops them.
+   for calls in flight first, since recreating a container drops them. A row
+   counts as a live call only when `ended_at is null` AND `last_seen_at` is
+   recent: the bridge heartbeats it every 15s, so anything quiet for more than
+   a couple of minutes is a leaked row, not a caller.
    `redeploy-voice-bridge.ts --all` does both of those for you (it skips a
-   tenant that is mid-call and exits non-zero, so a skip never reads as done).
+   tenant that is mid-call and exits non-zero, so a skip never reads as done,
+   and it ages out rows silent for over two hours with a warning rather than
+   letting a leak block redeploys forever).
    Dry-run any sweep first, and verify boxes with
    `tsx debug/box-verify.ts <businessId>`.
 7. **Remove the worktree. Mandatory.** Kill anything running out of it,

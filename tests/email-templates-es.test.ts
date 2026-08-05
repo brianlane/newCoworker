@@ -12,6 +12,7 @@ import { buildTeamInviteEmail } from "@/lib/email/templates/team-invite";
 import { buildWhiteGloveOfferEmail } from "@/lib/email/templates/white-glove-offer";
 import { buildWhiteGloveIntakeEmail } from "@/lib/email/templates/white-glove-intake";
 import { buildWhiteGloveConfirmationEmail } from "@/lib/email/templates/white-glove-confirmation";
+import { buildBookingOwnerAlert } from "@/lib/email/templates/booking-owner-alert";
 import { emailDate, fmtEmail } from "@/lib/i18n/email-copy";
 import { whatsappTemplateStateKey } from "@/lib/meta/client";
 
@@ -168,5 +169,62 @@ describe("Spanish email variants", () => {
     });
     expect(noBooking.text).toContain("Responde a este correo");
     expect(noBooking.html).toContain("Abrir panel");
+  });
+});
+
+describe("booking owner alert in Spanish", () => {
+  const base = {
+    attendeeName: "Brett Douglas",
+    attendeePhone: "+12187702372",
+    attendeeEmail: "brett@example.com",
+    startLocal: "viernes, 14 de agosto de 2026, 12:00 p.m. MST",
+    summary: "Brett Douglas + New Coworker: Discovery Call",
+    locale: "es" as const
+  };
+
+  it("localizes all three ownership states", () => {
+    const unowned = buildBookingOwnerAlert({
+      ...base,
+      state: "unowned",
+      surface: "booking_page"
+    });
+    expect(unowned.subject).toContain("necesita responsable");
+    expect(unowned.heading).toBe("Una cita nueva necesita responsable");
+    expect(unowned.body).toContain("agendó");
+    expect(unowned.body).toContain("nadie está a cargo de asistir");
+    expect(unowned.ctaLabel).toBe("Asignar este contacto");
+
+    const covered = buildBookingOwnerAlert({
+      ...base,
+      state: "covered",
+      assigneeName: "Dana Reyes",
+      surface: "booking_page"
+    });
+    expect(covered.body).toContain("Dana Reyes está asignado a esta cita.");
+    expect(covered.ctaLabel).toBe("Abrir contacto");
+
+    const solo = buildBookingOwnerAlert({ ...base, state: "solo", surface: "booking_page" });
+    expect(solo.heading).toBe("Cita nueva agendada");
+    // The solo rule holds in Spanish too: nothing about assigning or owners.
+    const whole = `${solo.subject}\n${solo.body}`.toLowerCase();
+    expect(whole).not.toContain("asigna");
+    expect(whole).not.toContain("responsable");
+  });
+
+  it("localizes the AI attribution and the detail block", () => {
+    const ai = buildBookingOwnerAlert({
+      ...base,
+      state: "solo",
+      surface: "sms",
+      durationMinutes: 30,
+      joinUrl: "https://zoom.us/j/123",
+      note: "Quiere hablar de precios"
+    });
+    expect(ai.body).toContain("Tu Coworker de IA agendó");
+    expect(ai.body).toContain("Teléfono: (218) 770-2372");
+    expect(ai.body).toContain("Correo: brett@example.com");
+    expect(ai.body).toContain("Duración: 30 minutos");
+    expect(ai.body).toContain("Enlace de video: https://zoom.us/j/123");
+    expect(ai.body).toContain("Su nota: Quiere hablar de precios");
   });
 });

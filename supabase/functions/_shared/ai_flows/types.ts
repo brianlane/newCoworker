@@ -486,6 +486,19 @@ export type FlowStep =
        * fields and failing a downstream step.
        */
       skipWhenText?: string;
+      /**
+       * Already-satisfied guard (mirrors browse_action.continueWhenText): the
+       * page carries this marker, so there is nothing worth reading HERE, but
+       * the rest of the run still matters. The step is recorded "skipped", the
+       * AI extraction is skipped entirely (no budget spent on a page that can
+       * only yield empty fields), and the run CARRIES ON.
+       * This is the shape a retry ladder needs: a rung that re-reads a page
+       * whose details have not landed yet ("details pending") should fall
+       * through to the next rung rather than end the run, which is what
+       * skipWhenText would do. skipWhenText is checked FIRST and wins when both
+       * markers match.
+       */
+      continueWhenText?: string;
       when?: StepCondition;
     }
   | {
@@ -914,6 +927,20 @@ export type FlowStep =
        * no-op (e.g. Clever's "this referral opportunity has already been claimed").
        */
       skipWhenText?: string;
+      /**
+       * Already-satisfied guard. Same trigger as skipWhenText (an action failed
+       * and the failure page carries this marker) but the OPPOSITE verdict on
+       * the rest of the run: the step is recorded "skipped" and the run CARRIES
+       * ON, because only THIS STEP's goal is met.
+       * The case it exists for: an accept wizard that finished, leaving the lead
+       * accepted, while its last click timed out on a button that had gone
+       * inert. Ending the run there (what skipWhenText does) loses the filing,
+       * the owner email and the teammate hand-off for a lead we now own.
+       * Pointing this at a fragment of the post-action confirmation also makes
+       * the step idempotent, so the flow can be safely re-run for the same lead.
+       * skipWhenText is checked FIRST and wins when both markers match.
+       */
+      continueWhenText?: string;
       when?: StepCondition;
     }
   | {

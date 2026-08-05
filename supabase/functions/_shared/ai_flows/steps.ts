@@ -234,6 +234,13 @@ export type StepAction =
        * nothing to read — see FlowStep (browse_extract).skipWhenText.
        */
       skipWhenText?: string;
+      /**
+       * Already-satisfied marker: same trigger, but the worker records the step
+       * "skipped" and CARRIES ON with the rest of the run instead of ending it
+       * — see FlowStep (browse_extract).continueWhenText. skipWhenText wins when
+       * both match.
+       */
+      continueWhenText?: string;
     }
   | { kind: "extract_text"; text: string; fields: ExtractField[] }
   | {
@@ -540,6 +547,12 @@ export type StepAction =
        * "skipped", run "done") instead of failing — see FlowStep.skipWhenText.
        */
       skipWhenText?: string;
+      /**
+       * Already-satisfied marker: same trigger, but the worker records the step
+       * "skipped" and CARRIES ON with the rest of the run instead of ending it
+       * — see FlowStep.continueWhenText. skipWhenText wins when both match.
+       */
+      continueWhenText?: string;
     }
   | {
       kind: "recall_url";
@@ -758,6 +771,9 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           ...(step.fillOnlyEmpty === true ? { fillOnlyEmpty: true } : {}),
           ...(step.skipWhenText && step.skipWhenText.trim()
             ? { skipWhenText: step.skipWhenText.trim() }
+            : {}),
+          ...(step.continueWhenText && step.continueWhenText.trim()
+            ? { continueWhenText: step.continueWhenText.trim() }
             : {})
         }
       };
@@ -1499,6 +1515,9 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           ...(forEachMatch !== undefined ? { forEachMatch } : {}),
           ...(step.skipWhenText && step.skipWhenText.trim()
             ? { skipWhenText: step.skipWhenText.trim() }
+            : {}),
+          ...(step.continueWhenText && step.continueWhenText.trim()
+            ? { continueWhenText: step.continueWhenText.trim() }
             : {})
         }
       };

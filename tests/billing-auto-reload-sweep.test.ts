@@ -18,12 +18,14 @@ vi.mock("@/lib/stripe/client", () => ({
 }));
 
 const listCandidates = vi.fn();
+const listFlagged = vi.fn();
 const resumeStale = vi.fn();
 const claim = vi.fn();
 const settle = vi.fn();
 
 vi.mock("@/lib/db/auto-reload", () => ({
   listAutoReloadCandidates: (...a: unknown[]) => listCandidates(...a),
+  listFlaggedAutoReloadCandidates: (...a: unknown[]) => listFlagged(...a),
   resumeStaleAutoReload: (...a: unknown[]) => resumeStale(...a),
   claimAutoReload: (...a: unknown[]) => claim(...a),
   settleAutoReload: (...a: unknown[]) => settle(...a)
@@ -45,11 +47,16 @@ vi.mock("@/lib/db/usage", () => ({
   getCalendarMonthUsageTotals: (...a: unknown[]) => monthUsage(...a)
 }));
 
-vi.mock("@/lib/email/client", () => ({ sendOwnerEmail: vi.fn(async () => "msg_1") }));
+vi.mock("@/lib/notifications/dispatch", () => ({
+  dispatchUrgentNotification: vi.fn(async () => ({ ok: true, results: [] }))
+}));
+vi.mock("@/lib/i18n/owner-locale", () => ({
+  resolveOwnerUiLocaleForEmail: vi.fn(async () => "en")
+}));
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { createOffSessionPackCharge } from "@/lib/stripe/client";
-import { sendOwnerEmail } from "@/lib/email/client";
+import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
 import { readRemainingUnits, sweepUsagePackAutoReloads } from "@/lib/billing/auto-reload-sweep";
 import type { AutoReloadCandidate } from "@/lib/db/auto-reload";
 
@@ -125,9 +132,45 @@ afterEach(() => {
   process.env = OLD_ENV;
 });
 
+describe("candidate source by mode", () => {
+  it("rescans everything by default", async () => {
+    listCandidates.mockResolvedValue([candidate()]);
+    await sweepUsagePackAutoReloads(deps());
+    expect(listCandidates).toHaveBeenCalled();
+    expect(listFlagged).not.toHaveBeenCalled();
+  });
+
+  it("reads only stamped rules in flagged mode", async () => {
+    // This is what makes an every-minute pass affordable: normally there is
+    // nothing stamped, so the frequent job does no balance math at all.
+    listFlagged.mockResolvedValue([candidate()]);
+    const res = await sweepUsagePackAutoReloads(deps({ mode: "flagged" }));
+    expect(listFlagged).toHaveBeenCalled();
+    expect(listCandidates).not.toHaveBeenCalled();
+    expect(res.charged).toBe(1);
+  });
+
+  it("goes through the same claim in both modes", async () => {
+    // The fast path must not be a way around the cooldown or the attempt key,
+    // or the two jobs could charge the same tenant twice.
+    listFlagged.mockResolvedValue([candidate()]);
+    await sweepUsagePackAutoReloads(deps({ mode: "flagged" }));
+    expect(claim).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe("the platform kill switch", () => {
-  it("does nothing at all when auto-reload is not enabled", async () => {
+  it("runs by default, because a flag nobody sets is a feature nobody has", async () => {
     delete process.env.USAGE_PACK_AUTO_RELOAD_ENABLED;
+    listCandidates.mockResolvedValue([candidate()]);
+    const res = await sweepUsagePackAutoReloads(deps());
+    expect(res).toMatchObject({ charged: 1 });
+  });
+
+  it('stops the whole fleet when set to "0"', async () => {
+    // The emergency brake: auto-reload charges cards unattended, so stopping
+    // it must not require a deploy.
+    process.env.USAGE_PACK_AUTO_RELOAD_ENABLED = "0";
     const res = await sweepUsagePackAutoReloads(deps());
     expect(res).toMatchObject({ scanned: 0, charged: 0 });
     expect(listCandidates).not.toHaveBeenCalled();
@@ -642,19 +685,7 @@ describe("owner notifications", () => {
     expect(res.errors).toEqual([]);
   });
 
-  it("sends nothing when Resend is not configured", async () => {
-    // The default notify path, exercised without an API key.
-    delete process.env.RESEND_API_KEY;
-    settle.mockResolvedValue({ ok: true, disabled: true });
-    listCandidates.mockResolvedValue([candidate()]);
-    const res = await sweepUsagePackAutoReloads(
-      deps({ charge: async () => ({ ok: false, error: { code: "expired_card" } }) })
-    );
-    expect(res.failed).toBe(1);
-  });
-
   it("sends nothing when the tenant has no owner email", async () => {
-    process.env.RESEND_API_KEY = "re_test";
     settle.mockResolvedValue({ ok: true, disabled: true });
     listCandidates.mockResolvedValue([candidate({ ownerEmail: null })]);
     const res = await sweepUsagePackAutoReloads(
@@ -664,7 +695,6 @@ describe("owner notifications", () => {
   });
   it("actually sends the owner email through the default path", async () => {
     // Covers the real defaultNotify body, not just its early returns.
-    process.env.RESEND_API_KEY = "re_test";
     process.env.NEXT_PUBLIC_APP_URL = "https://app.example.com";
     settle.mockResolvedValue({ ok: true, disabled: true });
     listCandidates.mockResolvedValue([candidate()]);
@@ -673,15 +703,27 @@ describe("owner notifications", () => {
       deps({ charge: async () => ({ ok: false, error: { code: "expired_card" } }) })
     );
 
-    expect(sendOwnerEmail).toHaveBeenCalledWith(
-      "re_test",
-      "owner@example.com",
-      expect.stringContaining("Acme Plumbing"),
-      expect.objectContaining({ text: expect.stringContaining("text messages") })
+    // Through the shared dispatcher, so this ALSO becomes a dashboard
+    // notification and respects the owner's channel preferences, rather than
+    // only landing in their inbox.
+    expect(dispatchUrgentNotification).toHaveBeenCalledWith(
+      expect.objectContaining({
+        businessId: "biz-1",
+        kind: "auto_reload_disabled",
+        emailSubject: expect.stringContaining("Acme Plumbing"),
+        emailBody: expect.stringContaining("text messages"),
+        // camelCase `taskType` is the key notificationLink actually reads.
+        // The snake_case column name looked right and silently sent every one
+        // of these alerts to Activity instead of Billing.
+        payload: expect.objectContaining({ taskType: "auto_reload_disabled" }),
+        // Every auto-reload alert is fixed on the billing page, so all three
+        // destinations point there: the email button, its fallback link, and
+        // the SMS link. One `ctaPath` drives all of them.
+        ctaPath: "/dashboard/billing"
+      })
     );
   });
   it("falls back gracefully when the tenant row has no name or app URL", async () => {
-    process.env.RESEND_API_KEY = "re_test";
     delete process.env.NEXT_PUBLIC_APP_URL;
     settle.mockResolvedValue({ ok: true, disabled: true });
     listCandidates.mockResolvedValue([candidate({ businessName: null })]);
@@ -690,11 +732,8 @@ describe("owner notifications", () => {
       deps({ charge: async () => ({ ok: false, error: { code: "expired_card" } }) })
     );
 
-    expect(sendOwnerEmail).toHaveBeenCalledWith(
-      "re_test",
-      "owner@example.com",
-      expect.stringContaining("your account"),
-      expect.anything()
+    expect(dispatchUrgentNotification).toHaveBeenCalledWith(
+      expect.objectContaining({ emailSubject: expect.stringContaining("your account") })
     );
   });
 

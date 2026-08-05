@@ -1963,7 +1963,10 @@
         "statusSkippedPackUnavailable": "Omitido: paquete no disponible",
         "statusSkippedNoCard": "Omitido: sin tarjeta autorizada",
         "statusPending": "En curso",
-        "disabledNoPaymentMethod": "La recarga automatica se desactivo porque no se pudo usar tu tarjeta. Autoriza una tarjeta y vuelve a activarla."
+        "disabledNoPaymentMethod": "La recarga automatica se desactivo porque no se pudo usar tu tarjeta. Autoriza una tarjeta y vuelve a activarla.",
+        "consentHeading": "Autoriza a New Coworker a cobrar esta tarjeta automaticamente",
+        "consentBody": "Autorizas a New Coworker a cobrar esta tarjeta, sin preguntarte antes, cuando un saldo que tu elijas baje del monto que fijaste. Solo cobramos el paquete que elegiste, al precio que aparece en tu pagina de facturacion. Tu fijas un limite mensual y nunca lo superamos. Puedes desactivarlo cuando quieras desde Facturacion, y cada cobro aparece ahi con su fecha y monto.",
+        "consentStripeNote": "Solo para recarga automatica. Cobramos el paquete que elegiste, solo cuando tu saldo baje de tu umbral, y nunca mas alla de tu limite mensual."
       }
     },
     "pages": {
@@ -2511,6 +2514,31 @@
       "joinCta": "Entrar a la videollamada",
       "manageCta": "Reprogramar o cancelar",
       "signoff": "Nos vemos."
+    },
+    "bookingOwnerAlert": {
+      "unownedSubject": "Una cita nueva necesita responsable: {name}, {when}",
+      "unownedHeading": "Una cita nueva necesita responsable",
+      "bookedSubject": "Cita nueva: {name}, {when}",
+      "bookedHeading": "Cita nueva agendada",
+      "coveredSubject": "Cita nueva para {assignee}: {name}, {when}",
+      "bookedByVisitor": "{name} agendó \"{summary}\" en tu página de reservas para {when}.",
+      "bookedByAi": "Tu Coworker de IA agendó \"{summary}\" para {who} el {when}.",
+      "phoneLine": "Teléfono: {phone}",
+      "emailLine": "Correo: {email}",
+      "durationLine": "Duración: {minutes} minutos",
+      "joinLine": "Enlace de video: {url}",
+      "noteLine": "Su nota: {note}",
+      "unownedWarning": "Todavía nadie del equipo tiene este prospecto, así que nadie está a cargo de asistir.",
+      "unownedAction": "Asigna el contacto a alguien del equipo (o encárgate tú) para que la cita quede cubierta.",
+      "coveredLine": "{assignee} está asignado a esta cita.",
+      "assignCta": "Asignar este contacto",
+      "openContactCta": "Abrir contacto",
+      "summaryUnowned": "Reserva sin asignar: {who}, {when}",
+      "summaryCovered": "Reserva nueva para {assignee}: {who}, {when}",
+      "summarySolo": "Cita nueva: {who}, {when}",
+      "smsUnowned": "Alerta de New Coworker: {summary}. Todavía nadie del equipo tiene este prospecto. Asígnalo para que la cita quede cubierta.",
+      "smsCovered": "Alerta de New Coworker: {summary}.",
+      "smsSolo": "Alerta de New Coworker: {summary}."
     },
     "ncSignoff": "- El equipo de NewCoworker\nnewcoworker.com | 602.313.1823 (contesta nuestro coworker de IA)",
     "questionsReply": "¿Preguntas? Solo responde a este correo.",

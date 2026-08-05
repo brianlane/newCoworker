@@ -1963,7 +1963,10 @@
         "statusSkippedPackUnavailable": "Skipped: pack unavailable",
         "statusSkippedNoCard": "Skipped: no authorized card",
         "statusPending": "In progress",
-        "disabledNoPaymentMethod": "Auto-reload was turned off because your card could not be used. Authorize a card and turn it back on."
+        "disabledNoPaymentMethod": "Auto-reload was turned off because your card could not be used. Authorize a card and turn it back on.",
+        "consentHeading": "Let New Coworker charge this card automatically",
+        "consentBody": "You are authorizing New Coworker to charge this card, without asking you first, when a balance you chose drops below the amount you set. We only ever charge for the pack you picked, at the price shown on your billing page. You set a monthly ceiling, and we never go past it. You can turn this off at any time from Billing, and every charge shows up there with the date and amount.",
+        "consentStripeNote": "Auto-reload only. We charge the pack you chose, only when your balance falls below your threshold, never past your monthly limit."
       }
     },
     "pages": {
@@ -2511,6 +2514,31 @@
       "joinCta": "Join the video call",
       "manageCta": "Reschedule or cancel",
       "signoff": "See you then."
+    },
+    "bookingOwnerAlert": {
+      "unownedSubject": "New appointment needs an owner: {name}, {when}",
+      "unownedHeading": "New appointment needs an owner",
+      "bookedSubject": "New appointment: {name}, {when}",
+      "bookedHeading": "New appointment booked",
+      "coveredSubject": "New appointment for {assignee}: {name}, {when}",
+      "bookedByVisitor": "{name} booked \"{summary}\" on your booking page for {when}.",
+      "bookedByAi": "Your AI coworker booked \"{summary}\" for {who} at {when}.",
+      "phoneLine": "Phone: {phone}",
+      "emailLine": "Email: {email}",
+      "durationLine": "Length: {minutes} minutes",
+      "joinLine": "Video link: {url}",
+      "noteLine": "Their note: {note}",
+      "unownedWarning": "No teammate owns this lead yet, so nobody is on the hook to show up.",
+      "unownedAction": "Assign the contact to a teammate (or handle it yourself) so the appointment is covered.",
+      "coveredLine": "{assignee} is assigned to this appointment.",
+      "assignCta": "Assign this contact",
+      "openContactCta": "Open contact",
+      "summaryUnowned": "Unassigned booking: {who}, {when}",
+      "summaryCovered": "New booking for {assignee}: {who}, {when}",
+      "summarySolo": "New appointment: {who}, {when}",
+      "smsUnowned": "New Coworker Alert: {summary}. No teammate owns this lead yet. Assign it so the appointment is covered.",
+      "smsCovered": "New Coworker Alert: {summary}.",
+      "smsSolo": "New Coworker Alert: {summary}."
     },
     "ncSignoff": "- The NewCoworker Team\nnewcoworker.com | 602.313.1823 (our AI coworker answers)",
     "questionsReply": "Questions? Just reply to this email.",

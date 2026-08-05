@@ -123,13 +123,35 @@ export function notificationLink(n: NotificationLike): NotificationLink {
     return { href: "/dashboard/chat", label: "Open Chat" };
   }
 
+  // A booking alert asks the owner to look at (or assign) the person who
+  // booked, so it lands on the contact, not on their text thread. Placed
+  // above the generic contactE164 branch, and matching the email's own
+  // button: the two must not point at different screens.
+  if (kind === "unassigned_booking" || kind === "assigned_booking") {
+    const bookingE164 = readE164(p, "contactE164");
+    if (bookingE164) {
+      return {
+        href: `/dashboard/customers/${encodeURIComponent(bookingE164)}`,
+        label: "Open contact"
+      };
+    }
+    return { href: "/dashboard/bookings", label: "Open Bookings" };
+  }
+
   if (kind === "email_coworker_handoff") {
     return { href: "/dashboard/emails", label: "Open Emails" };
   }
   if (kind === "byon_port" || kind === "byon_activation" || kind === "calendar_connection_broken") {
     return { href: "/dashboard/integrations", label: "Open Integrations" };
   }
-  if (taskType === "sms_cap_reached" || taskType === "chat_spend_cap_reached") {
+  if (
+    taskType === "sms_cap_reached" ||
+    taskType === "chat_spend_cap_reached" ||
+    // Auto-reload stopped for some reason the tenant has to act on. Every one
+    // of these is fixed from the billing page (new card, raise the limit,
+    // turn it back on), so they all land there.
+    taskType.startsWith("auto_reload_")
+  ) {
     return { href: "/dashboard/billing", label: "Open Billing" };
   }
 

@@ -8,6 +8,11 @@ vi.mock("@/lib/dashboard/active-business", () => ({
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }));
 vi.mock("@/lib/db/subscriptions", () => ({ getSubscription: vi.fn() }));
 vi.mock("@/lib/stripe/client", () => ({ createAutoReloadSetupSession: vi.fn() }));
+// The route reads the consent copy for Stripe's own page; next-intl needs a
+// request context that a unit test does not have.
+vi.mock("next-intl/server", () => ({
+  getTranslations: vi.fn(async () => (key: string) => `t:${key}`)
+}));
 
 import { getAuthUser } from "@/lib/auth";
 import { isViewAsActive } from "@/lib/admin/view-as";

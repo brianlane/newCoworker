@@ -12,7 +12,6 @@
  * Deterministic and input-pure: no DB reads, no Date.now(), no env lookups.
  */
 
-import { buildBrandedEmailHtml } from "@/lib/email/branded-html";
 import type { AppLocale } from "@/i18n/routing";
 import { defaultLocale } from "@/i18n/routing";
 import { emailMessagesForLocale, fmtEmail } from "@/lib/i18n/email-copy";
@@ -27,6 +26,10 @@ export type AutoReloadAlertInput = {
   kind: AutoReloadAlertKind;
   category: "voice" | "sms" | "chat";
   businessName: string;
+  /**
+   * Present so the caller cannot build an alert for nobody. Not used in the
+   * body: the dispatcher addresses and renders the message.
+   */
   recipientEmail: string;
   /** App origin without a trailing slash. */
   siteUrl: string;
@@ -38,7 +41,16 @@ export type AutoReloadAlertInput = {
 export type AutoReloadAlertEmail = {
   subject: string;
   text: string;
-  html: string;
+  /**
+   * Where the reader has to go to fix this, and what to call the button.
+   *
+   * No `html` here on purpose. `dispatchUrgentNotification` renders the
+   * branded HTML for every alert, including the unsubscribe footer, so a
+   * second renderer in this file would be dead code that silently diverged
+   * from what actually gets sent.
+   */
+  ctaLabel: string;
+  billingUrl: string;
 };
 
 export function buildAutoReloadAlertEmail(input: AutoReloadAlertInput): AutoReloadAlertEmail {
@@ -87,15 +99,5 @@ export function buildAutoReloadAlertEmail(input: AutoReloadAlertInput): AutoRelo
 
   const text = [...textLines, billingUrl, messages.ncSignoff].join("\n\n");
 
-  const html = buildBrandedEmailHtml({
-    siteUrl: normalizedSite,
-    documentTitle: subject,
-    heading: subject,
-    bodyBlocks: textLines.map((t) => ({ kind: "text" as const, text: t })),
-    cta: { label: copy.cta, href: billingUrl },
-    includeFallbackLink: true,
-    recipientEmail: input.recipientEmail
-  });
-
-  return { subject, text, html };
+  return { subject, text, ctaLabel: copy.cta, billingUrl };
 }

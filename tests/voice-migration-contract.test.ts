@@ -270,3 +270,116 @@ describe("voice_meter_forwarded_call migration (contract)", () => {
     expect(forwardedMeterMigration).not.toMatch(/quota_exhausted|refused/);
   });
 });
+
+const reapEndedSessionsMigration = readFileSync(
+  join(
+    repoRoot,
+    "supabase/migrations/20260822071559_voice_reap_ended_active_sessions.sql"
+  ),
+  "utf8"
+);
+
+describe("voice_active_sessions: ended-row reaper and un-wedgeable zombie sweep", () => {
+  it("reaper deletes only ended rows, past the grace period", () => {
+    // The whole point: before this migration NOTHING deleted a row whose
+    // call finished normally, because the only DELETE was gated on
+    // `ended_at is null`. The reaper is the missing half.
+    expect(reapEndedSessionsMigration).toMatch(
+      /create or replace function voice_reap_ended_active_sessions\(\s*p_retain interval default interval '1 hour',\s*p_hard_retain interval default interval '24 hours'/s
+    );
+    expect(reapEndedSessionsMigration).toMatch(
+      /delete from voice_active_sessions s\s+where s\.ended_at is not null\s+and s\.ended_at < now\(\) - p_retain/s
+    );
+  });
+
+  it("reaper never deletes a session an unfinalized settlement still needs", () => {
+    // voice_try_finalize_settlement reads media_started_at off this row to
+    // derive the billing start. Deleting early would silently fall back to
+    // an EARLIER timestamp and over-bill the customer.
+    expect(reapEndedSessionsMigration).toMatch(
+      /not exists \(\s*select 1\s+from voice_settlements st\s+where st\.call_control_id = s\.call_control_id\s+and st\.finalized_at is null\s*\)/s
+    );
+    // ...unless the row is past the hard ceiling, or a permanently stuck
+    // settlement would recreate the leak this migration exists to fix.
+    expect(reapEndedSessionsMigration).toMatch(/s\.ended_at < now\(\) - p_hard_retain\s*\n\s*or not exists/s);
+  });
+
+  it("zombie sweep contains per-row failures instead of aborting the whole loop", () => {
+    // One unsettleable call used to abort the function, so nothing was swept
+    // and every later row stayed `ended_at is null` forever — the exact shape
+    // that wedges the redeploy safety check into skipping a tenant with no
+    // error to look at.
+    expect(reapEndedSessionsMigration).toMatch(
+      /j := voice_try_finalize_settlement\(rec\.call_control_id, true\);[\s\S]*?exception\s+when others then/s
+    );
+    expect(reapEndedSessionsMigration).toMatch(/n_failed := n_failed \+ 1/);
+  });
+
+  it("zombie sweep hard-deletes rows silent past the ceiling, settled or not", () => {
+    expect(reapEndedSessionsMigration).toMatch(
+      /create or replace function voice_sweep_zombie_active_sessions\(\s*p_stale interval default interval '15 minutes',\s*p_hard interval default interval '24 hours'/s
+    );
+    expect(reapEndedSessionsMigration).toMatch(
+      /delete from voice_active_sessions\s+where ended_at is null\s+and last_seen_at < now\(\) - p_hard/s
+    );
+    // The superseded one-arg signature must go, or a one-arg call is
+    // ambiguous between the two overloads and errors at runtime.
+    expect(reapEndedSessionsMigration).toMatch(
+      /drop function if exists voice_sweep_zombie_active_sessions\(interval\)/
+    );
+  });
+
+  it("drops the old overload BEFORE anything names the function without arguments", () => {
+    // While both overloads exist, every statement that names
+    // voice_sweep_zombie_active_sessions with no argument list fails with
+    // "function name is not unique" (SQLSTATE 42725). That is not theoretical:
+    // it broke the Worker Integration job on this PR's first push, on the
+    // COMMENT statement. So the DROP must come first, and the COMMENT must
+    // carry an explicit signature anyway.
+    const dropAt = reapEndedSessionsMigration.indexOf(
+      "drop function if exists voice_sweep_zombie_active_sessions(interval)"
+    );
+    const commentAt = reapEndedSessionsMigration.indexOf(
+      "comment on function voice_sweep_zombie_active_sessions"
+    );
+    const oneArgCallAt = reapEndedSessionsMigration.indexOf(
+      "voice_sweep_zombie_active_sessions(v_sess)"
+    );
+    expect(dropAt).toBeGreaterThan(0);
+    expect(commentAt).toBeGreaterThan(dropAt);
+    expect(oneArgCallAt).toBeGreaterThan(dropAt);
+
+    // Every COMMENT in this file carries its signature, so a future overload
+    // cannot reintroduce the same ambiguity.
+    for (const match of reapEndedSessionsMigration.matchAll(/comment on function ([^\s]+)/g)) {
+      expect(match[1], `comment on function ${match[1]} needs an explicit argument list`).toContain(
+        "("
+      );
+    }
+  });
+
+  it("reaper runs on the 5-minute maintenance sweep and reports its count", () => {
+    expect(reapEndedSessionsMigration).toMatch(
+      /v_reaped := voice_reap_ended_active_sessions\(\)/
+    );
+    expect(reapEndedSessionsMigration).toMatch(/'ended_sessions_reaped', v_reaped/);
+    // Signature unchanged, so the voice-settlement-sweep Edge function keeps
+    // working untouched.
+    expect(reapEndedSessionsMigration).toMatch(
+      /create or replace function voice_run_maintenance_sweeps\(\s*p_settlement_min_age text default '15 minutes',\s*p_session_stale text default '15 minutes',\s*p_res_unanswered text default '3 minutes',\s*p_res_no_ws text default '10 minutes',\s*p_sms_stale text default '15 minutes'\s*\)/s
+    );
+  });
+
+  it("re-pins service_role grants on every replaced function", () => {
+    // fn_grants_lockdown strips grants on create-or-replace.
+    expect(reapEndedSessionsMigration).toMatch(
+      /grant execute on function voice_reap_ended_active_sessions\(interval, interval\) to service_role/
+    );
+    expect(reapEndedSessionsMigration).toMatch(
+      /grant execute on function voice_sweep_zombie_active_sessions\(interval, interval\) to service_role/
+    );
+    expect(reapEndedSessionsMigration).toMatch(
+      /grant execute on function voice_run_maintenance_sweeps\(text, text, text, text, text\) to service_role/
+    );
+  });
+});

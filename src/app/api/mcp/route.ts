@@ -12,7 +12,7 @@
  * the coverage gate — this file is glue.
  */
 
-import type { AuthInfo } from "@modelcontextprotocol/sdk/server/auth/types.js";
+import type { AuthInfo } from "@modelcontextprotocol/server";
 import { createMcpHandler, withMcpAuth } from "mcp-handler";
 import { verifySupabaseAccessToken } from "@/lib/mcp/auth";
 import { recordMcpConnectorSeen } from "@/lib/mcp/connector-status";
@@ -22,11 +22,16 @@ export const dynamic = "force-dynamic";
 // Claude's client-side tool timeout is 300s; let long tool calls finish.
 export const maxDuration = 300;
 
-const handler = createMcpHandler(
-  (server) => registerMcpTools(server),
-  { serverInfo: { name: "new-coworker", version: "1.0.0" } },
-  { basePath: "/api", disableSse: true, maxDuration: 300 }
-);
+// mcp-handler 2.x takes (initializeServer, options) — the old third argument
+// is gone, and each of its keys is now either a default or handled above:
+//   basePath   — the handler no longer routes; it serves whatever request the
+//                host framework hands it, so this file's own path IS the mount.
+//   disableSse — 2.x is stateless Streamable HTTP only; the SSE transport it
+//                switched off no longer exists.
+//   maxDuration — a Vercel concern, carried by the `maxDuration` export above.
+const handler = createMcpHandler((server) => registerMcpTools(server), {
+  serverInfo: { name: "new-coworker", version: "1.0.0" }
+});
 
 const verifyToken = async (
   _req: Request,

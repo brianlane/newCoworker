@@ -111,6 +111,11 @@ import {
   tenantHasLocalModel
 } from "../_shared/chat_spend_cap.ts";
 import { sendCapAlertOnce, smsCapPeriodKey } from "../_shared/cap_alerts.ts";
+import {
+  smsInboundBatchHasRoom,
+  smsInboundDeferredIds,
+  smsInboundModelBudgetMs
+} from "../_shared/sms_inbound_budget.ts";
 
 const MAX_ATTEMPTS = 8;
 const NCW_IDEM_TAG_PREFIX = "ncw_idem:";
@@ -551,6 +556,12 @@ async function finalizeDeliveredReply(
 }
 
 serve(async (req: Request) => {
+  // Stamped before auth and before claim_sms_inbound_jobs, not at the top of
+  // the dispatch loop: the 150s Supabase ceiling starts when the invocation
+  // does, so a slow auth or a slow claim eats into the same budget the jobs
+  // do. Measuring from the loop instead would let a 20s claim plus a 49s
+  // first job start a second job that runs to 140s and blows the ceiling.
+  const invocationStartedAt = Date.now();
   if (req.method !== "POST") {
     return new Response("Method not allowed", { status: 405 });
   }
@@ -579,6 +590,13 @@ serve(async (req: Request) => {
 
   const list = (jobs ?? []) as JobRow[];
   let processed = 0;
+  // Wall-clock guard for the batch. Every per-job timeout below was sized
+  // against the pg_cron cap as if one job ran per invocation, but this loop
+  // works up to 8 sequentially, so a slow batch used to run past the 150s
+  // Supabase request ceiling and get killed mid-job. Measured from
+  // `invocationStartedAt` so auth and the claim count against it too. See
+  // ../_shared/sms_inbound_budget.ts.
+  let deferredIds: string[] = [];
 
   const template =
     Deno.env.get("ROWBOAT_CHAT_URL_TEMPLATE") ??
@@ -603,7 +621,20 @@ serve(async (req: Request) => {
     return b;
   };
 
-  for (const job of list) {
+  for (const [jobIndex, job] of list.entries()) {
+    // Checked BEFORE starting the job, because what matters is whether the
+    // next one can still finish inside the ceiling. Index 0 always runs, so a
+    // run can never claim rows and hand every one of them straight back.
+    if (!smsInboundBatchHasRoom(jobIndex, Date.now() - invocationStartedAt)) {
+      deferredIds = smsInboundDeferredIds(list, jobIndex);
+      break;
+    }
+    // Per-job clock, used to cap the model call at whatever is left of
+    // SMS_INBOUND_WORST_CASE_JOB_MS. An owner turn that burns its full 75s and
+    // returns null falls through to the Rowboat path below, and handing that
+    // path a fresh ROWBOAT_RETRY_BUDGET_MS made ONE job able to reach ~165s,
+    // over the 150s ceiling by itself.
+    const jobStartedAt = Date.now();
     const envelope = job.payload as { data?: { payload?: Record<string, unknown> } };
     const payload = envelope?.data?.payload ?? {};
     const fromRaw = telnyxMessagingPhoneString(payload, "from");
@@ -1761,6 +1792,11 @@ serve(async (req: Request) => {
             ? await loadRecentSmsTranscript(supabase, job.business_id, fromE164, job.id)
             : null;
 
+        // One reading, used for both clamps below, so they cannot disagree.
+        const modelBudgetMs = smsInboundModelBudgetMs(
+          Date.now() - jobStartedAt,
+          ROWBOAT_RETRY_BUDGET_MS
+        );
         const parsed = await callSmsRowboatWithStatelessFallback({
           chatUrl,
           bearer,
@@ -1770,10 +1806,20 @@ serve(async (req: Request) => {
           conversationId: turnPlan.stateless ? null : existingConv,
           state: turnPlan.stateless ? null : (thread?.rowboat_state ?? null),
           startAgent: turnPlan.startAgent,
-          timeoutMs: ROWBOAT_CHAT_TIMEOUT_MS,
-          // Cap the combined initial+retry wall time under the 90s
-          // pg_cron HTTP timeout (see ROWBOAT_RETRY_BUDGET_MS).
-          budgetMs: ROWBOAT_RETRY_BUDGET_MS,
+          // BOTH numbers are clamped to what is left of this job.
+          //
+          // budgetMs alone is not enough: it bounds the combined wall time,
+          // but callSmsRowboatWithStatelessFallback only derives the RETRY's
+          // timeout from it. The first /chat attempt runs on timeoutMs as
+          // given, so leaving that at a flat ROWBOAT_CHAT_TIMEOUT_MS would let
+          // a job that already spent 75s on an owner turn add another 60s and
+          // land back over the 150s Edge ceiling.
+          //
+          // A fresh job is unaffected: it reaches this line in milliseconds,
+          // so the clamps are no-ops and the customer path keeps the 60s
+          // attempt and 80s combined budget it has today.
+          timeoutMs: Math.min(ROWBOAT_CHAT_TIMEOUT_MS, modelBudgetMs),
+          budgetMs: modelBudgetMs,
           customerPreamble,
           statelessContextExtra,
           // Fresh-thread anchor for a contact an automation just texted —
@@ -2426,10 +2472,55 @@ serve(async (req: Request) => {
     processed += 1;
   }
 
-  await telemetryRecord(supabase, "sms_inbound_worker_batch", { claimed: list.length, processed });
+  // Hand back every row this run claimed but never touched. Without this they
+  // sit at 'processing' and block their contact's queue (claim_sms_inbound_jobs
+  // will not claim a newer job for a contact that already has one in flight)
+  // until the stale-claim recovery sweep resets them, and each recovery burns
+  // one of the job's MAX_ATTEMPTS retries. The RPC restores attempt_count, so a
+  // deferral is free: the next tick is 30s away.
+  let deferred = 0;
+  if (deferredIds.length > 0) {
+    const { data: released, error: releaseErr } = await supabase.rpc(
+      "release_sms_inbound_jobs",
+      { p_ids: deferredIds }
+    );
+    if (releaseErr) {
+      console.error("release_sms_inbound_jobs", releaseErr);
+    } else {
+      deferred = typeof released === "number" ? released : deferredIds.length;
+    }
+    // Anything the RPC did not release is still sitting at 'processing', so it
+    // keeps blocking its contact's queue until stale-claim recovery. That is a
+    // materially worse outcome than a clean deferral and it must not be logged
+    // as one: a release failure is an error with its own event, not a warn
+    // saying the jobs went back to the queue.
+    const stranded = deferredIds.length - deferred;
+    await systemLog(supabase, {
+      businessId: null,
+      source: "sms_worker",
+      level: stranded > 0 ? "error" : "warn",
+      event: stranded > 0 ? "sms_inbound_batch_release_failed" : "sms_inbound_batch_deferred",
+      message:
+        stranded > 0
+          ? `Inbound SMS batch ran out of wall-clock budget and ${stranded} job(s) could NOT be returned to the queue: they stay 'processing' and block their contact until stale-claim recovery`
+          : `Inbound SMS batch ran out of wall-clock budget: ${deferred} job(s) returned to the queue for the next tick`,
+      payload: { claimed: list.length, processed, requested: deferredIds.length, deferred, stranded }
+    });
+  }
 
-  return new Response(JSON.stringify({ ok: true, claimed: list.length, processed }), {
-    status: 200,
-    headers: { "Content-Type": "application/json" }
+  const stranded = deferredIds.length - deferred;
+  await telemetryRecord(supabase, "sms_inbound_worker_batch", {
+    claimed: list.length,
+    processed,
+    deferred,
+    stranded
   });
+
+  return new Response(
+    JSON.stringify({ ok: true, claimed: list.length, processed, deferred, stranded }),
+    {
+      status: 200,
+      headers: { "Content-Type": "application/json" }
+    }
+  );
 });
