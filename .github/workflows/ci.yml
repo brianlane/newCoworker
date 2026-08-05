@@ -42,6 +42,16 @@ jobs:
       - name: Lint
         run: npm run lint
 
+      # Dependency hygiene: fails on packages that are declared but never
+      # imported, and on packages that are imported but never declared (the
+      # two gaps behind PR #1181: an SDK nobody imported shipped for a full
+      # release cycle, and @modelcontextprotocol/server was imported by three
+      # files while resolving only as another package's peer). Scope and
+      # ignores live in knip.json; sub-trees (vps/, cloudflare/, zapier/,
+      # supabase Deno functions) are out of scope.
+      - name: Dependency hygiene (knip)
+        run: npm run knip
+
       - name: Build
         run: npm run build
 

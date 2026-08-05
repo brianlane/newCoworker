@@ -1,0 +1,11 @@
+{
+  "$schema": "https://unpkg.com/knip@6/schema.json",
+  "entry": ["debug/**/*.ts", "scripts/**/*.ts"],
+  "ignore": [
+    "supabase/**",
+    "vps/**",
+    "cloudflare/**",
+    "zapier/**"
+  ],
+  "ignoreBinaries": ["jq", "openssl"]
+}
