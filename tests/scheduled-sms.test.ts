@@ -144,7 +144,8 @@ describe("scheduled SMS dispatch", () => {
     });
     expect(rpc).toHaveBeenCalledWith("try_reserve_sms_outbound_slot", {
       p_business_id: "biz-1",
-      p_text_units: 1
+      p_text_units: 1,
+      p_destination_e164: "+15551234567"
     });
     const [url, init] = (fetchFn as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(url).toBe("https://api.telnyx.com/v2/messages");

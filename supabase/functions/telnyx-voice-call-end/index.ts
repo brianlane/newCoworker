@@ -24,6 +24,10 @@ import {
 import { attachAiStream, resolveBridgeTarget } from "../_shared/voice_ai_attach.ts";
 import { reserveVoiceBudget } from "../_shared/voice_reserve.ts";
 import { smsTextUnits } from "../_shared/sms_text_units.ts";
+import {
+  smsDestinationCountry,
+  smsDestinationMultiplier
+} from "../_shared/sms_destination_rates.ts";
 import { parseOutboundClientState } from "../_shared/voice_outbound.ts";
 import {
   resumeFlowRunWithCallOutcome,
@@ -790,10 +794,11 @@ async function meteredWarmTransferSend(
   businessId: string,
   msg: { messagingProfileId: string; fromE164?: string; toE164: string; text: string }
 ): Promise<{ ok: true } | { ok: false; reason: "quota" | "send_failed" | "reserve_error" }> {
-  const sendUnits = smsTextUnits(msg.text);
+  const sendUnits =
+    smsTextUnits(msg.text) * smsDestinationMultiplier(smsDestinationCountry(msg.toE164));
   const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
     "try_reserve_sms_outbound_slot",
-    { p_business_id: businessId, p_text_units: sendUnits }
+    { p_business_id: businessId, p_text_units: sendUnits, p_destination_e164: msg.toE164 }
   );
   if (reserveErr) {
     console.error("warm-transfer notify: reserve slot failed", reserveErr);

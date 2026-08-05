@@ -1,5 +1,6 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { smsTextUnits } from "@/lib/sms/segment-info";
+import { smsDestinationCountry, smsDestinationMultiplier } from "@/lib/sms/destination-rates";
 import { sendCapAlertOnce, smsCapPeriodKey } from "../../../supabase/functions/_shared/cap_alerts";
 
 export type TelnyxMessagingConfig = {
@@ -204,6 +205,10 @@ export function reserveSlotFailureMessage(result: ReserveSlotResult | null): str
   if (r === "monthly_sms_limit") return "Monthly SMS limit reached";
   if (r === "no_business") return "Business not found";
   if (r === "throttled") return "SMS throughput throttled (please retry in a moment)";
+  if (r === "destination_blocked") return "Texting this destination is not supported";
+  if (r === "destination_unknown") return "Unrecognized destination country for this number";
+  if (r === "destination_velocity")
+    return "Too many texts to this country in the last hour (limit resets shortly)";
   if (r && r.length > 0) return `SMS quota blocked: ${r}`;
   return "SMS quota blocked";
 }
@@ -247,9 +252,17 @@ export async function sendTelnyxSms(
   // conservative and consistent; in practice RCS is enterprise-only
   // (rcsTierAllowed), where smsPerMonth is Infinity unless a deal sets an
   // explicit enterprise_limits override.
-  const textUnits = smsTextUnits(text, {
-    mediaCount: (options?.mediaUrls ?? []).filter((u) => u.length > 0).length
-  });
+  //
+  // International destinations multiply the units by their cost ratio over
+  // the blended US per-part rate (destination-rates.ts): a Danish message
+  // costs ~18x, so it consumes ~18x the allowance. That is the whole
+  // support-every-country model: no separate caps, the cap just charges
+  // what the destination costs.
+  const destinationCountry = smsDestinationCountry(toE164);
+  const textUnits =
+    smsTextUnits(text, {
+      mediaCount: (options?.mediaUrls ?? []).filter((u) => u.length > 0).length
+    }) * smsDestinationMultiplier(destinationCountry);
 
   if (businessId && meterMode === "operational") {
     // Owner/platform/compliance traffic: ALWAYS counted, never refused and
@@ -296,7 +309,12 @@ export async function sendTelnyxSms(
 
     const { data: res, error } = await meterClient.rpc("try_reserve_sms_outbound_slot", {
       p_business_id: businessId,
-      p_text_units: textUnits
+      p_text_units: textUnits,
+      // Destination gate: SQL refuses denylisted/unknown-country/velocity-
+      // capped destinations atomically with the reserve, records the
+      // per-country history, and writes the first-new-country operator
+      // alert into system_logs itself.
+      p_destination_e164: toE164
     });
     if (error) {
       throw new Error(`sendTelnyxSms: quota reserve failed: ${error.message}`);

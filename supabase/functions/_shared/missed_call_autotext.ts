@@ -23,6 +23,7 @@
  */
 
 import { smsTextUnits } from "./sms_text_units.ts";
+import { smsDestinationCountry, smsDestinationMultiplier } from "./sms_destination_rates.ts";
 
 type Row = { data: unknown; error: { message: string } | null };
 
@@ -175,10 +176,11 @@ export async function sendMissedCallAutotext(
     // other outbound (see README "SMS hard stop" policy). Units computed on
     // the exact body sent below.
     const autotextBody = buildMissedCallAutotextMessage(biz?.name ?? null);
-    const autotextUnits = smsTextUnits(autotextBody);
+    const autotextUnits =
+      smsTextUnits(autotextBody) * smsDestinationMultiplier(smsDestinationCountry(caller));
     const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
       "try_reserve_sms_outbound_slot",
-      { p_business_id: opts.businessId, p_text_units: autotextUnits }
+      { p_business_id: opts.businessId, p_text_units: autotextUnits, p_destination_e164: caller }
     );
     if (reserveErr) {
       await releaseLedger();

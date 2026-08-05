@@ -99,6 +99,10 @@ import {
   sendOperationalSms
 } from "../_shared/sms_operational_meter.ts";
 import { smsTextUnits } from "../_shared/sms_text_units.ts";
+import {
+  smsDestinationCountry,
+  smsDestinationMultiplier
+} from "../_shared/sms_destination_rates.ts";
 import { resolveRcsAgentId } from "../_shared/channel_settings.ts";
 import {
   buildOwnerReplyPromptSms,
@@ -2223,10 +2227,12 @@ serve(async (req: Request) => {
     const rcsAgentIdForUnits = platformFrom
       ? await resolveRcsAgentId(supabase, job.business_id, businessTier)
       : null;
-    const replyUnits = smsTextUnits(reply.slice(0, rcsAgentIdForUnits ? 3072 : 1600));
+    const replyUnits =
+      smsTextUnits(reply.slice(0, rcsAgentIdForUnits ? 3072 : 1600)) *
+      smsDestinationMultiplier(smsDestinationCountry(fromE164));
     const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
       "try_reserve_sms_outbound_slot",
-      { p_business_id: job.business_id, p_text_units: replyUnits }
+      { p_business_id: job.business_id, p_text_units: replyUnits, p_destination_e164: fromE164 }
     );
     if (reserveErr) {
       console.error("try_reserve_sms_outbound_slot", reserveErr);

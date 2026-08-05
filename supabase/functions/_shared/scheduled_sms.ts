@@ -25,6 +25,7 @@ import { telnyxSendSms } from "./telnyx_sms_compliance.ts";
 import { resolveRcsAgentId } from "./channel_settings.ts";
 import { sendCapAlertOnce, smsCapPeriodKey } from "./cap_alerts.ts";
 import { smsTextUnits } from "./sms_text_units.ts";
+import { smsDestinationCountry, smsDestinationMultiplier } from "./sms_destination_rates.ts";
 
 type Row = { data: unknown; error: { message: string } | null };
 
@@ -180,10 +181,11 @@ async function dispatchOne(
         : opts.defaultFromE164;
     if (!opts.telnyxApiKey || !messagingProfileId) return await fail("no_messaging");
 
-    const scheduledUnits = smsTextUnits(row.body);
+    const scheduledUnits =
+      smsTextUnits(row.body) * smsDestinationMultiplier(smsDestinationCountry(row.to_e164));
     const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
       "try_reserve_sms_outbound_slot",
-      { p_business_id: row.business_id, p_text_units: scheduledUnits }
+      { p_business_id: row.business_id, p_text_units: scheduledUnits, p_destination_e164: row.to_e164 }
     );
     if (reserveErr) return await fail(`sms_reserve:${reserveErr.message}`);
     const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string } | null;
