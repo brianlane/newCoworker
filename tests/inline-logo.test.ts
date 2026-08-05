@@ -21,7 +21,10 @@ import { describe, expect, it } from "vitest";
 import { INLINE_LOGO_DATA_URI, INLINE_LOGO_PX } from "@/app/inline-logo";
 
 const SOURCE_LOGO = path.join(process.cwd(), "public/logo.png");
-const NOT_FOUND_PAGE = path.join(process.cwd(), "src/app/not-found.tsx");
+const INLINED_PAGES = [
+  "src/app/not-found.tsx",
+  "src/app/error.tsx"
+].map((p) => path.join(process.cwd(), p));
 
 const PREFIX = "data:image/png;base64,";
 
@@ -87,9 +90,14 @@ describe("inline 404 logo", () => {
     expect(diff).toBeGreaterThan(10);
   });
 
-  it("keeps the 404 page off the image optimizer", () => {
-    const page = readFileSync(NOT_FOUND_PAGE, "utf8");
-    expect(page).not.toMatch(/from "next\/image"/);
-    expect(page).toContain("INLINE_LOGO_DATA_URI");
+  it("keeps the 404 and error pages off the image optimizer", () => {
+    // Both render when something is already wrong (a junk URL, a crash), so
+    // neither may depend on `/_next/image` or `/api/brand-logo`; that was the
+    // fan-out behind the Aug 3 2026 usage-anomaly alert.
+    for (const pagePath of INLINED_PAGES) {
+      const page = readFileSync(pagePath, "utf8");
+      expect(page, pagePath).not.toMatch(/from "next\/image"/);
+      expect(page, pagePath).toContain("INLINE_LOGO_DATA_URI");
+    }
   });
 });
