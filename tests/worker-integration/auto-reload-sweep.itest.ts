@@ -96,7 +96,8 @@ async function seedTenant(
     const { error } = await db.from("daily_usage").insert({
       business_id: businessId,
       usage_date: utcToday(),
-      sms_sent: PLAN_CAP_BLOWOUT_TEXTS
+      sms_sent: PLAN_CAP_BLOWOUT_TEXTS,
+      sms_text_units: PLAN_CAP_BLOWOUT_TEXTS
     });
     if (error) throw new Error(`seed daily_usage: ${error.message}`);
   }

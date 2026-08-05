@@ -351,7 +351,8 @@ describe("usage-pack grant RPCs against real Postgres", () => {
       const { error } = await db.from("daily_usage").insert({
         business_id: spillover,
         usage_date: utcToday(),
-        sms_sent: PLAN_CAP_BLOWOUT_TEXTS
+        sms_sent: PLAN_CAP_BLOWOUT_TEXTS,
+        sms_text_units: PLAN_CAP_BLOWOUT_TEXTS
       });
       if (error) throw new Error(`seed daily_usage: ${error.message}`);
     });
@@ -401,7 +402,8 @@ describe("usage-pack grant RPCs against real Postgres", () => {
       const { error } = await db.from("daily_usage").insert({
         business_id: fifo,
         usage_date: utcToday(),
-        sms_sent: PLAN_CAP_BLOWOUT_TEXTS
+        sms_sent: PLAN_CAP_BLOWOUT_TEXTS,
+        sms_text_units: PLAN_CAP_BLOWOUT_TEXTS
       });
       if (error) throw new Error(`seed daily_usage: ${error.message}`);
 
