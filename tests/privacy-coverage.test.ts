@@ -75,6 +75,8 @@ const EXEMPT: Record<string, string> = {
   messenger_jobs: "FK cascade from messenger_conversations (covered)",
   ai_flow_run_steps: "FK cascade from ai_flow_runs (covered)",
   sms_link_clicks: "FK cascade from sms_links (covered); rows carry no person columns",
+  sms_destination_events:
+    "destination-gate counters (business_id + ISO country + timestamp, no person columns); powers the velocity brake and first-country alert, cascades with the business",
 
   // Deliberate keeps: suppression must survive erasure.
   sms_opt_outs:

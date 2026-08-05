@@ -36,6 +36,10 @@ import {
 import { stepLogLevel, systemLog } from "../_shared/system_log.ts";
 import { telnyxSendSms, telnyxSendGroupMms } from "../_shared/telnyx_sms_compliance.ts";
 import { smsTextUnits, MMS_TEXT_UNITS } from "../_shared/sms_text_units.ts";
+import {
+  smsDestinationCountry,
+  smsDestinationMultiplier
+} from "../_shared/sms_destination_rates.ts";
 import { sendOperationalSms } from "../_shared/sms_operational_meter.ts";
 import { resolveRcsAgentId } from "../_shared/channel_settings.ts";
 import {
@@ -5403,12 +5407,13 @@ async function sendSmsStep(
   // shortening only ever shrinks the body, so this is a tight upper bound
   // of what Telnyx bills). Passed to release below so a failed send refunds
   // exactly what was reserved.
-  const reserveUnits = smsTextUnits(prepareSmsBody(bodyText), {
-    mediaCount: action.mediaUrl ? 1 : 0
-  });
+  const reserveUnits =
+    smsTextUnits(prepareSmsBody(bodyText), {
+      mediaCount: action.mediaUrl ? 1 : 0
+    }) * smsDestinationMultiplier(smsDestinationCountry(toE164));
   const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
     "try_reserve_sms_outbound_slot",
-    { p_business_id: run.business_id, p_text_units: reserveUnits }
+    { p_business_id: run.business_id, p_text_units: reserveUnits, p_destination_e164: toE164 }
   );
   if (reserveErr) throw new Error(`reserve slot: ${reserveErr.message}`);
   const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string } | null;
@@ -5583,14 +5588,25 @@ async function sendGroupSmsStep(
   // (one slot for the whole group) was the single largest per-slot leverage
   // in the metering system: 8 recipients billed 8 MMS legs on 1 slot. The
   // degenerate 1:1 fallback is a plain SMS and meters as its parts.
+  // Group legs price per recipient's own destination country; the gate is
+  // checked against the first recipient (group replies are thread
+  // participants, overwhelmingly domestic; per-leg gating would need one
+  // reserve per recipient and lose atomicity).
   const reserveUnits = isGroup
-    ? MMS_TEXT_UNITS * recipients.length
+    ? recipients.reduce(
+        (sum, r) => sum + MMS_TEXT_UNITS * smsDestinationMultiplier(smsDestinationCountry(r)),
+        0
+      )
     : smsTextUnits(prepareSmsBody(action.body), {
         mediaCount: action.mediaUrl ? 1 : 0
-      });
+      }) * smsDestinationMultiplier(smsDestinationCountry(recipients[0]));
   const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
     "try_reserve_sms_outbound_slot",
-    { p_business_id: run.business_id, p_text_units: reserveUnits }
+    {
+      p_business_id: run.business_id,
+      p_text_units: reserveUnits,
+      p_destination_e164: recipients[0]
+    }
   );
   if (reserveErr) throw new Error(`reserve slot: ${reserveErr.message}`);
   const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string } | null;
@@ -8850,10 +8866,12 @@ async function sendOfferSms(
   const body = prepareSmsBody(text);
   // Units for the exact body/media Telnyx bills; the release below refunds
   // the same number.
-  const reserveUnits = smsTextUnits(body, { mediaCount: mediaUrls?.length ?? 0 });
+  const reserveUnits =
+    smsTextUnits(body, { mediaCount: mediaUrls?.length ?? 0 }) *
+    smsDestinationMultiplier(smsDestinationCountry(to));
   const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
     "try_reserve_sms_outbound_slot",
-    { p_business_id: run.business_id, p_text_units: reserveUnits }
+    { p_business_id: run.business_id, p_text_units: reserveUnits, p_destination_e164: to }
   );
   if (reserveErr) throw new Error(`reserve slot: ${reserveErr.message}`);
   const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string } | null;

@@ -18,6 +18,15 @@ describe("reserveSlotFailureMessage", () => {
     expect(reserveSlotFailureMessage({ ok: false, reason: "throttled" })).toBe(
       "SMS throughput throttled (please retry in a moment)"
     );
+    expect(reserveSlotFailureMessage({ ok: false, reason: "destination_blocked" })).toBe(
+      "Texting this destination is not supported"
+    );
+    expect(reserveSlotFailureMessage({ ok: false, reason: "destination_unknown" })).toBe(
+      "Unrecognized destination country for this number"
+    );
+    expect(reserveSlotFailureMessage({ ok: false, reason: "destination_velocity" })).toBe(
+      "Too many texts to this country in the last hour (limit resets shortly)"
+    );
   });
 
   it("falls back for unknown reason and empty", () => {
@@ -161,7 +170,11 @@ describe("sendTelnyxSms meterBusinessId (atomic reserve)", () => {
       { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1" }
     );
     expect(id).toBe("m1");
-    expect(rpc).toHaveBeenCalledWith("try_reserve_sms_outbound_slot", { p_business_id: "biz-1", p_text_units: 1 });
+    expect(rpc).toHaveBeenCalledWith("try_reserve_sms_outbound_slot", {
+      p_business_id: "biz-1",
+      p_text_units: 1,
+      p_destination_e164: "+15550001111"
+    });
     expect(rpc).not.toHaveBeenCalledWith("release_sms_outbound_slot", expect.anything());
   });
 
@@ -183,7 +196,8 @@ describe("sendTelnyxSms meterBusinessId (atomic reserve)", () => {
     ).rejects.toThrow("Telnyx SMS error");
     expect(rpc).toHaveBeenCalledWith("try_reserve_sms_outbound_slot", {
       p_business_id: "biz-1",
-      p_text_units: 9
+      p_text_units: 9,
+      p_destination_e164: "+15550001111"
     });
     // The failed send must refund exactly what the reserve charged.
     expect(rpc).toHaveBeenCalledWith("release_sms_outbound_slot", {
@@ -191,6 +205,42 @@ describe("sendTelnyxSms meterBusinessId (atomic reserve)", () => {
       p_refund_bonus: false,
       p_text_units: 9
     });
+  });
+
+  it("multiplies units by the destination country's cost ratio", async () => {
+    // Denmark is the deck's most expensive long-code destination: 18.3x the
+    // blended US per-part rate, so one single-part message reserves 18.3
+    // units. That is the whole support-every-country model.
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { id: "m3" } })
+    });
+    await sendTelnyxSms({ apiKey: "k", messagingProfileId: "p" }, "+4520123456", "Hej", {
+      fetchImpl: fetchMock as typeof fetch,
+      meterBusinessId: "biz-1"
+    });
+    expect(rpc).toHaveBeenCalledWith("try_reserve_sms_outbound_slot", {
+      p_business_id: "biz-1",
+      p_text_units: 18.3,
+      p_destination_e164: "+4520123456"
+    });
+  });
+
+  it("surfaces the destination-gate refusal reasons", async () => {
+    rpc.mockImplementation((name: string) => {
+      if (name === "try_reserve_sms_outbound_slot") {
+        return Promise.resolve({ data: { ok: false, reason: "destination_blocked" }, error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+    const fetchMock = vi.fn();
+    await expect(
+      sendTelnyxSms({ apiKey: "k", messagingProfileId: "p" }, "+5355512345", "Hi", {
+        fetchImpl: fetchMock as typeof fetch,
+        meterBusinessId: "biz-1"
+      })
+    ).rejects.toThrow("Texting this destination is not supported");
+    expect(fetchMock).not.toHaveBeenCalled();
   });
 
   it("meters an MMS as flat MMS_TEXT_UNITS regardless of caption length", async () => {
@@ -210,7 +260,8 @@ describe("sendTelnyxSms meterBusinessId (atomic reserve)", () => {
     );
     expect(rpc).toHaveBeenCalledWith("try_reserve_sms_outbound_slot", {
       p_business_id: "biz-1",
-      p_text_units: MMS_TEXT_UNITS
+      p_text_units: MMS_TEXT_UNITS,
+      p_destination_e164: "+15550001111"
     });
   });
 
@@ -538,7 +589,11 @@ describe("sendTelnyxSms meterBusinessId (atomic reserve)", () => {
       "sendTelnyxSms: sms_outbound_rate_check failed (fail-open)",
       "db offline"
     );
-    expect(rpc).toHaveBeenCalledWith("try_reserve_sms_outbound_slot", { p_business_id: "biz-1", p_text_units: 1 });
+    expect(rpc).toHaveBeenCalledWith("try_reserve_sms_outbound_slot", {
+      p_business_id: "biz-1",
+      p_text_units: 1,
+      p_destination_e164: "+15550001111"
+    });
     warnSpy.mockRestore();
   });
 
@@ -558,7 +613,11 @@ describe("sendTelnyxSms meterBusinessId (atomic reserve)", () => {
       }
     );
     expect(rpc).not.toHaveBeenCalledWith("sms_outbound_rate_check", expect.anything());
-    expect(rpc).toHaveBeenCalledWith("try_reserve_sms_outbound_slot", { p_business_id: "biz-1", p_text_units: 1 });
+    expect(rpc).toHaveBeenCalledWith("try_reserve_sms_outbound_slot", {
+      p_business_id: "biz-1",
+      p_text_units: 1,
+      p_destination_e164: "+15550001111"
+    });
   });
 
   it("includes Idempotency-Key and from when metering", async () => {
