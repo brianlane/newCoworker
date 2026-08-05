@@ -23,9 +23,12 @@
 #      below the applied head: exactly the merge-window casualties.
 #   4. Renames them (git mv, content preserved) to fresh stamps above
 #      max(applied head, local head, real UTC), commits that rename onto the
-#      fetched tip in a temporary worktree, and pushes it to main. A
-#      GITHUB_TOKEN push triggers no new workflow run, so there is no
-#      recursion; THIS run then applies the healed files and deploys.
+#      fetched tip in a temporary worktree, and pushes it to main. The
+#      commit message carries [skip ci] so the push starts no new workflow
+#      run regardless of auth (a GITHUB_TOKEN push never does; a deploy-key
+#      push WOULD, and cancel-in-progress would let that new run cancel this
+#      deploy mid-flight); THIS run then applies the healed files and
+#      deploys.
 #   5. Mirrors the renames into the run's checkout so the `db push` that
 #      follows sees the healed names.
 #
@@ -227,7 +230,13 @@ for line in sys.stdin:
     echo "  $old -> $new"
   done <<< "$renames"
 
-  msg="Re-stamp unapplied migration(s) above the applied ledger head [order heal]
+  # [skip ci] matters on the deploy-key path: unlike a GITHUB_TOKEN push,
+  # a deploy-key push DOES start a new push-event workflow run, and CI's
+  # cancel-in-progress concurrency group would let that new run cancel the
+  # very deploy performing this heal before db push finishes. Suppressing
+  # the run restores the old GITHUB_TOKEN behavior: the heal commit rides
+  # to main with no run of its own, and THIS run completes the deploy.
+  msg="Re-stamp unapplied migration(s) above the applied ledger head [order heal] [skip ci]
 
 $(printf '%s\n' "$renames" | sed 's/ / -> /')
 

@@ -222,6 +222,12 @@ describe("migration-order-heal.sh", () => {
     // origin/main tracking ref, so refresh it before reading.
     sh(sb.run, "git fetch -q origin");
     const tip = originMainFiles(sb);
+
+    // The heal commit must carry [skip ci]: on the deploy-key path the push
+    // starts a real push-event workflow run, and without the marker that
+    // run would cancel (cancel-in-progress) the deploy performing the heal.
+    const subject = sh(sb.run, "git log -1 --format=%s origin/main").trim();
+    expect(subject).toContain("[skip ci]");
     expect(tip).not.toContain("20260822025000_merge_window_casualty.sql");
     const healed = tip.find((f) => f.endsWith("_merge_window_casualty.sql"));
     expect(healed).toBeDefined();
