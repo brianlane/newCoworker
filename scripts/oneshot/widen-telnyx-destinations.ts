@@ -120,11 +120,19 @@ async function main(): Promise<void> {
   // Enumerate EVERY messaging profile from the account instead of the three
   // platform env ids: per-tenant custom profiles exist (Truly Insurance has
   // its own), and the first run of this script missed one exactly because it
-  // trusted the env list. The account is the source of truth.
-  const list = await telnyx("/messaging_profiles?page[size]=50");
-  const profiles: Array<{ id: string; name: string }> = (list.body?.data ?? []).map(
-    (p: { id: string; name: string }) => ({ id: p.id, name: p.name })
-  );
+  // trusted the env list. The account is the source of truth. Paginated via
+  // meta.total_pages (Telnyx clamps pages; trusting one page would recreate
+  // the missed-profile gap at scale).
+  const profiles: Array<{ id: string; name: string }> = [];
+  for (let page = 1; page <= 50; page += 1) {
+    const list = await telnyx(`/messaging_profiles?page[size]=50&page[number]=${page}`);
+    if (list.status !== 200) {
+      throw new Error(`GET /messaging_profiles page ${page}: HTTP ${list.status}`);
+    }
+    for (const p of list.body?.data ?? []) profiles.push({ id: p.id, name: p.name });
+    const totalPages = Number(list.body?.meta?.total_pages ?? 1);
+    if (page >= totalPages) break;
+  }
   if (profiles.length === 0) throw new Error("no messaging profiles returned; refusing to no-op");
   for (const p of profiles) {
     await widenMessagingProfile(p.name, p.id, allowed);
