@@ -606,6 +606,24 @@ export async function deleteEndUserData(
     results.push({ table: "sms_links", central: count(data), box: null });
   }
 
+  // ── ai_flow_notify_cooldowns (open notify_owner windows) ───────────────
+  // The cooldown key is whatever the flow author templated. Usually an email
+  // thread id, but "{{vars.lead_phone}}" is an equally natural choice, and
+  // then the row IS keyed to the person. Delete on exact key match across
+  // every linked identifier; a row keyed on anything else is untouched.
+  // Unconditional: normalizeEndUserIdentifier guarantees at least one
+  // identifier, so this set is never empty.
+  {
+    const { data, error } = await db
+      .from("ai_flow_notify_cooldowns")
+      .delete()
+      .eq("business_id", businessId)
+      .in("cooldown_key", [...linkedNumbers, ...linkedEmails])
+      .select("business_id");
+    if (error) throw new EndUserDeletionError(`ai_flow_notify_cooldowns: ${error.message}`);
+    results.push({ table: "ai_flow_notify_cooldowns", central: count(data), box: null });
+  }
+
   // ── kg_retrieval_events (KG comparison ledger; central-only) ───────────
   // Free-text question/answer/context columns can carry the person's phone
   // or email verbatim (a caller stating their number, an answer echoing an

@@ -217,6 +217,7 @@ async function fetchGmailMessages(
     const msg = res.data as {
       payload?: GmailPart & { headers?: GmailHeader[] };
       internalDate?: string;
+      threadId?: string;
     };
     const headers = msg.payload?.headers;
     // internalDate is epoch-ms-as-string; a malformed value must degrade to
@@ -227,6 +228,12 @@ async function fetchGmailMessages(
       fromEmail: parseFromAddress(gmailHeader(headers, "From")),
       subject: gmailHeader(headers, "Subject"),
       bodyText: gmailBodyText(msg.payload),
+      // Gmail groups a conversation under one threadId, which every reply
+      // shares. Carried through to {{trigger.thread_id}} so a notify step can
+      // cool down per CONVERSATION instead of texting once per reply.
+      ...(typeof msg.threadId === "string" && msg.threadId.trim()
+        ? { threadId: msg.threadId.trim() }
+        : {}),
       receivedAt:
         msg.internalDate && Number.isFinite(internalMs)
           ? new Date(internalMs).toISOString()

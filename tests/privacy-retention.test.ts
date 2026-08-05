@@ -31,6 +31,7 @@ const PRUNED_TABLES = [
   "business_document_shares",
   "document_signature_requests",
   "sms_links",
+  "ai_flow_notify_cooldowns",
   "sms_owner_reply_prompts",
   "webchat_sessions",
   "messenger_conversations",
@@ -48,6 +49,7 @@ const CENTRAL_ONLY_TABLES = new Set<string>([
   "business_document_shares",
   "document_signature_requests",
   "sms_links",
+  "ai_flow_notify_cooldowns",
   "webchat_sessions",
   "messenger_conversations",
   "messenger_messages",
@@ -120,10 +122,10 @@ describe("pruneExpiredContent — central-only tenants", () => {
     expect(res.tables.every((t) => t.box === null)).toBe(true);
     expect(res.tables.find((t) => t.table === "email_log")?.central).toBe(2);
     expect(res.tables.find((t) => t.table === "notifications")?.central).toBe(0);
-    // 19 central round trips (the messenger_conversations candidate scan
+    // 20 central round trips (the messenger_conversations candidate scan
     // finds nothing by default, so its disqualify + delete never run), no
     // data-api construction.
-    expect(db.from).toHaveBeenCalledTimes(19);
+    expect(db.from).toHaveBeenCalledTimes(20);
   });
 
   it("prunes only fully dead messenger conversations (in-window messages disqualify)", async () => {

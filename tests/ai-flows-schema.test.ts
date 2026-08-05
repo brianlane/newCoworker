@@ -223,6 +223,34 @@ describe("parseAiFlowDefinition", () => {
     };
     expect(() => parseAiFlowDefinition(bad)).toThrow(AiFlowValidationError);
   });
+
+  it("accepts a notify_owner cooldown and bounds its window", () => {
+    const withCooldown = (cooldown: unknown) => ({
+      ...validInput,
+      steps: [{ id: "s1", type: "notify_owner", message: "Sales email", cooldown }]
+    });
+    expect(
+      parseAiFlowDefinition(withCooldown({ key: "{{trigger.from}}", minutes: 720 })).steps[0]
+    ).toMatchObject({ cooldown: { minutes: 720 } });
+    // Optional: every flow authored before this field stays valid.
+    expect(() =>
+      parseAiFlowDefinition({
+        ...validInput,
+        steps: [{ id: "s1", type: "notify_owner", message: "Sales email" }]
+      })
+    ).not.toThrow();
+    for (const bad of [
+      { key: "{{trigger.from}}", minutes: 0 },
+      { key: "{{trigger.from}}", minutes: 10081 },
+      { key: "{{trigger.from}}", minutes: 1.5 },
+      { key: "", minutes: 720 },
+      { key: "{{trigger.from}}" }
+    ]) {
+      expect(() => parseAiFlowDefinition(withCooldown(bad)), JSON.stringify(bad)).toThrow(
+        AiFlowValidationError
+      );
+    }
+  });
 });
 
 describe("validateDefinitionSemantics", () => {
@@ -243,6 +271,49 @@ describe("validateDefinitionSemantics", () => {
     expect(
       validateDefinitionSemantics(def).some((i) => i.includes("unknown trigger field"))
     ).toBe(true);
+  });
+
+  it("accepts the email trigger fields the scopes actually emit", () => {
+    // These were emitted at run time but missing from the allowlist, so a
+    // flow templating a subject it already had was rejected at authoring.
+    // That is why the HQ inbox-triage flow paid a model call to re-extract
+    // the subject, and shipped an empty one when the model came up dry.
+    for (const field of [
+      "subject",
+      "message_id",
+      "thread_id",
+      "email_log_id",
+      "received_at",
+      "connection_id"
+    ]) {
+      const def: AiFlowDefinition = {
+        version: 1,
+        trigger: { channel: "email", connectionId: "c1", conditions: [] },
+        steps: [{ id: "a", type: "notify_owner", message: `Mail: {{trigger.${field}}}` }]
+      };
+      expect(
+        validateDefinitionSemantics(def).filter((i) => i.includes("unknown trigger field")),
+        `{{trigger.${field}}} must be authorable`
+      ).toEqual([]);
+    }
+  });
+
+  it("validates a notify_owner cooldown key like any other template", () => {
+    const def: AiFlowDefinition = {
+      version: 1,
+      trigger: { channel: "email", connectionId: "c1", conditions: [] },
+      steps: [
+        {
+          id: "a",
+          type: "notify_owner",
+          message: "Sales email",
+          cooldown: { key: "{{trigger.nope}}", minutes: 720 }
+        }
+      ]
+    };
+    expect(validateDefinitionSemantics(def).some((i) => i.includes("unknown trigger field"))).toBe(
+      true
+    );
   });
 
   it("flags a var used before it is produced", () => {

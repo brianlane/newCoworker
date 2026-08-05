@@ -204,6 +204,23 @@ export const TRIGGER_SCOPE_KEYS = [
   "windowText",
   "from",
   "to",
+  // Email channels (email / tenant_email). These were emitted by the trigger
+  // scopes from the start but never listed here, so a flow that templated the
+  // subject it already had was rejected at authoring for referencing an
+  // "unknown trigger field" — which is why the HQ inbox-triage flow paid a
+  // model call to re-extract a subject sitting in scope verbatim, and got an
+  // empty string back. `subject` is the verbatim subject line; `message_id`
+  // the provider message id (also email_organize's messageIdTemplate default);
+  // `thread_id` the conversation id every reply shares (connected mailboxes
+  // only, absent elsewhere); `email_log_id` the email_log row on the
+  // tenant-mailbox path; `received_at` an ISO timestamp; `connection_id` the
+  // watched mailbox's connection row.
+  "subject",
+  "message_id",
+  "thread_id",
+  "email_log_id",
+  "received_at",
+  "connection_id",
   "participants",
   "event_id",
   "event_title",
@@ -1017,6 +1034,23 @@ const nonBranchStepMembers = [
     id: stepId,
     type: z.literal("notify_owner"),
     message: z.string().min(1).max(1000),
+    /**
+     * Collapse repeat alerts that share a key into one text per window. The
+     * key is templated: `{{trigger.thread_id}}` is one text per email
+     * conversation instead of one per reply (the HQ team-inbox case, where an
+     * intro and its "Re:" produced two identical-looking alerts minutes
+     * apart). A key that renders empty disables the cooldown for that run, so
+     * a mailbox with no conversation id keeps today's per-message behavior
+     * rather than collapsing onto a shared empty key.
+     */
+    cooldown: z
+      .object({
+        key: z.string().min(1).max(200),
+        // One minute floor (anything shorter is the Telnyx idempotency key's
+        // job) up to one week, matching the drip/offer bounds elsewhere.
+        minutes: z.number().int().min(1).max(10080)
+      })
+      .optional(),
     when: whenSchema.optional()
   }),
   // Text whoever the lead BELONGS to (e.g. forward a realtor.com reply relay):
@@ -1844,7 +1878,7 @@ function templateStringsForStep(step: FlowStep): string[] {
     case "share_document":
       return [step.to, (step.messageTemplate ?? "").replace(SHARE_URL_TOKEN_RE, "")];
     case "notify_owner":
-      return [step.message];
+      return [step.message, step.cooldown?.key ?? ""];
     case "notify_lead_owner":
       return [step.message];
     case "approval_gate":

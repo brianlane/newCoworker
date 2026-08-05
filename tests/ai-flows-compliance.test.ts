@@ -106,6 +106,28 @@ describe("prepareSmsBody", () => {
     expect(out.length).toBeLessThanOrEqual(SMS_MAX_BODY_CHARS);
     expect(out.endsWith(STOP_SUFFIX)).toBe(true);
   });
+  it("cuts an over-long body on a word boundary and marks the cut", () => {
+    // "Budget around $412K" must not ship as "Bud" (the text_truncate.ts
+    // case): the last surviving word is whole and the cut is visible.
+    const out = prepareSmsBody(`${"word ".repeat(SMS_MAX_BODY_CHARS)}tail`);
+    expect(out.length).toBeLessThanOrEqual(SMS_MAX_BODY_CHARS);
+    expect(out.endsWith("word...")).toBe(true);
+  });
+  it("keeps the cap after the ellipsis expands from one character to three", () => {
+    // truncateAtWord marks the cut with "…", which gsmSafeSmsText turns into
+    // "..."; without reserving those two characters the cut body lands back
+    // OVER the cap it was supposed to enforce.
+    for (const extra of [1, 2, 3, 200]) {
+      const out = prepareSmsBody(`${"ab ".repeat(SMS_MAX_BODY_CHARS)}`.slice(0, SMS_MAX_BODY_CHARS + extra));
+      expect(out.length).toBeLessThanOrEqual(SMS_MAX_BODY_CHARS);
+    }
+  });
+  it("still fits the STOP suffix when the truncated body ends in an ellipsis", () => {
+    const out = prepareSmsBody(`${"word ".repeat(SMS_MAX_BODY_CHARS)}tail`, { requireStop: true });
+    expect(out.length).toBeLessThanOrEqual(SMS_MAX_BODY_CHARS);
+    expect(out.endsWith(STOP_SUFFIX)).toBe(true);
+    expect(out).toContain("...");
+  });
 });
 
 describe("isRecipientOptedOut", () => {

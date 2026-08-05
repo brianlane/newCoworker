@@ -8,6 +8,7 @@
  * (supabase/functions/ai-flow-worker/index.ts), which calls these helpers to
  * decide what to do and to transform fetched page text.
  */
+import { NO_EM_DASH_PROMPT_LINE } from "../sms_prompt_lines.ts";
 import { AI_FLOW_DEFINITION_VERSION } from "./types.ts";
 import type {
   AiFlowDefinition,
@@ -924,6 +925,10 @@ export function buildExtractionPrompt(
     "introduction or referral message, the seller/customer is usually the",
     'person the message ADDRESSES directly (greeted by name or called "you"),',
     "and the person being introduced to them is an agent, not the subject.",
+    // Extracted values are pasted verbatim into owner SMS and send_email
+    // bodies. SMS is normalized by gsmSafeSmsText on the way out, but email
+    // never is, so an em dash the model wrote here ships as-is.
+    NO_EM_DASH_PROMPT_LINE,
     "",
     "Fields:",
     fieldLines,

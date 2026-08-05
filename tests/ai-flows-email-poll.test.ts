@@ -310,6 +310,38 @@ describe("pollEmailTriggers", () => {
     expect(enqueueAiFlowRun).not.toHaveBeenCalled();
   });
 
+  it("carries Gmail's threadId into the run trigger", async () => {
+    // The conversation id every reply on a thread shares. It rides on the
+    // messages.get response and used to be read past; without it a notify
+    // step cannot tell an intro from its own "Re:" reply.
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
+      .mockResolvedValueOnce({
+        data: {
+          internalDate: "1760000000000",
+          threadId: "199abc4d5e6f7890",
+          payload: {
+            headers: [
+              { name: "From", value: "james@kypads.com" },
+              { name: "Subject", value: "Re: Introductions" }
+            ],
+            mimeType: "text/plain",
+            body: { data: b64url("hello") }
+          }
+        }
+      } as never);
+    await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
+    expect(enqueueAiFlowRun).toHaveBeenCalledWith(
+      expect.objectContaining({
+        trigger: expect.objectContaining({
+          thread_id: "199abc4d5e6f7890",
+          subject: "Re: Introductions"
+        })
+      }),
+      expect.anything()
+    );
+  });
+
   it("claims nothing when the coworker owns no messages in the window", async () => {
     vi.mocked(nangoProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
@@ -409,6 +441,8 @@ describe("pollEmailTriggers", () => {
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({ event: "ai_flow_run_enqueued_email" })
     );
+    // No threadId on this fixture's response: the key is omitted, not blank.
+    expect(vi.mocked(enqueueAiFlowRun).mock.calls[0][0].trigger).not.toHaveProperty("thread_id");
     // The triggering email is recorded for the dashboard Emails page.
     expect(recordInboundTriggerEmail).toHaveBeenCalledTimes(1);
     expect(recordInboundTriggerEmail).toHaveBeenCalledWith(

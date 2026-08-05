@@ -240,6 +240,32 @@ describe("emailTriggerScope", () => {
     );
     expect(scope.connection_id).toBe("16cff2b9-b4d3-421c-b25d-b40edd80c9a8");
   });
+
+  it("carries the provider thread id so a notify step can cool down per conversation", () => {
+    const scope = emailTriggerScope({
+      id: "m4",
+      fromEmail: "james@kypads.com",
+      subject: "Re: Introductions",
+      bodyText: "body",
+      threadId: "199abc4d5e6f7890"
+    });
+    expect(scope.thread_id).toBe("199abc4d5e6f7890");
+  });
+
+  it("OMITS thread_id rather than emitting an empty one", () => {
+    // A blank key must not become a shared cooldown bucket that silences
+    // every alert after the first; absent means "no cooldown for this run".
+    for (const threadId of [undefined, ""]) {
+      const scope = emailTriggerScope({
+        id: "m5",
+        fromEmail: "a@b.c",
+        subject: "s",
+        bodyText: "body",
+        ...(threadId === undefined ? {} : { threadId })
+      });
+      expect("thread_id" in scope).toBe(false);
+    }
+  });
 });
 
 describe("tenantEmailTriggerScope", () => {

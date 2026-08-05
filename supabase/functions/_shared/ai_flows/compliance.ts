@@ -15,6 +15,15 @@
  * flow can't silently spam or message an opted-out number.
  */
 
+import { truncateAtWord } from "../text_truncate.ts";
+
+/**
+ * How many characters `truncateAtWord`'s "…" marker grows by once
+ * `gsmSafeSmsText` expands it to ASCII "...". Reserved from the truncation
+ * budget so the expansion cannot push a capped body back over the cap.
+ */
+const ELLIPSIS_GROWTH = 2;
+
 /** Structural Supabase client (RPC only) — see _shared/chat_spend_cap.ts. */
 export interface ComplianceRpcClient {
   // PromiseLike (not Promise) so supabase-js's thenable PostgrestFilterBuilder
@@ -112,9 +121,15 @@ export function prepareSmsBody(
   // re-running the guard strips the non-GSM chars in that case.
   body = gsmSafeSmsText(body);
   if (body.length > SMS_MAX_BODY_CHARS) {
-    body = opts.requireStop
-      ? ensureStopLanguage(body.slice(0, SMS_MAX_BODY_CHARS - suffix.length - 1), suffix)
-      : body.slice(0, SMS_MAX_BODY_CHARS);
+    // Word-boundary cut with a visible "..." marker, not a bare mid-word
+    // slice (the Amy Laidlaw case in text_truncate.ts, where an alert ended
+    // "Bud" and the budget figure vanished with no sign anything was
+    // dropped). truncateAtWord marks the cut with a "…", which gsmSafeSmsText
+    // then expands to three ASCII characters, so the budget has to reserve
+    // the two it grows by or this re-overflows the very cap it enforces.
+    const budget = opts.requireStop ? SMS_MAX_BODY_CHARS - suffix.length - 1 : SMS_MAX_BODY_CHARS;
+    body = gsmSafeSmsText(truncateAtWord(body, budget - ELLIPSIS_GROWTH));
+    if (opts.requireStop) body = ensureStopLanguage(body, suffix);
   }
   return body;
 }
