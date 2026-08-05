@@ -18,7 +18,7 @@ import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { metaLeadFollowUpTemplate } from "@/lib/ai-flows/templates";
-import { ZAPIER_INVITE_URL } from "@/lib/integrations/zapier-invite";
+import { ZAPIER_APP_URL } from "@/lib/integrations/zapier-app";
 
 type WebhookFlowItem = { id: string; name: string; enabled: boolean };
 
@@ -98,7 +98,7 @@ export function MetaLeadsGuide({
   const [refreshing, setRefreshing] = useState(false);
 
   const template = metaLeadFollowUpTemplate();
-  // Only a flow that IS this starter counts as installed — a tenant with some
+  // Only a flow that IS this starter counts as installed: a tenant with some
   // other webhook flow still gets the one-click install (Bugbot fe7aebd1).
   const existingFlow = webhookFlows.find((f) => f.name === template.name) ?? null;
   const otherWebhookFlow = existingFlow ? null : (webhookFlows[0] ?? null);
@@ -203,7 +203,7 @@ export function MetaLeadsGuide({
               </Button>
               {otherWebhookFlow ? (
                 <span className="text-xs text-parchment/50">
-                  Your existing webhook flow “{otherWebhookFlow.name}” keeps working — this adds
+                  Your existing webhook flow “{otherWebhookFlow.name}” keeps working; this adds
                   a separate starter for Meta leads.
                 </span>
               ) : null}
@@ -251,13 +251,13 @@ export function MetaLeadsGuide({
             >
               Meta Lead Ads integration page
             </Link>
-            , connect your Facebook Page to your coworker in two clicks — log into Facebook, pick your Page, done. Leads arrive
+            , connect your Facebook Page to your coworker in two clicks: log into Facebook, pick your Page, done. Leads arrive
             the moment they&apos;re submitted, with no Make.com or Zapier account and no
             field mapping. Your flow from step 1 works unchanged.
           </p>
           <p className="mt-2 text-xs text-parchment/55">
             While our Meta app finishes Meta&apos;s review process, the direct connection
-            requires your Facebook account to be added as a tester on our app — contact us
+            requires your Facebook account to be added as a tester on our app. Contact us
             and we&apos;ll set it up same-day. If you&apos;d rather not wait, the bridge
             path below works for everyone right now; you can switch to the direct
             connection later without touching your flows.
@@ -270,13 +270,13 @@ export function MetaLeadsGuide({
         <StepHeading n={4} title="Bridge path: create your connection key" />
         <p className="mt-2 text-sm text-parchment/60">
           Using the bridge path instead? The bridge tool (next step) proves it&apos;s yours
-          with an API key. Create one here — it&apos;s shown once, so copy it somewhere safe
+          with an API key. Create one here. It&apos;s shown once, so copy it somewhere safe
           before you leave this page.
         </p>
         {freshKey ? (
           <div className="mt-3 rounded-md border border-signal-teal/40 bg-signal-teal/5 p-3 space-y-2">
             <p className="text-xs text-parchment/80">
-              Your key is ready — copy it now, it won&apos;t be shown again:
+              Your key is ready. Copy it now, it won&apos;t be shown again:
             </p>
             <CopyField value={freshKey} label="API key" />
           </div>
@@ -358,7 +358,7 @@ export function MetaLeadsGuide({
                   {`{"source": "facebook_lead_ads", "event_id": "{{Lead ID}}", "data": {"full_name": "{{Full name}}", "phone_number": "{{Phone number}}", "email": "{{Email}}"}}`}
                 </code>
                 <span className="text-xs">
-                  — clicking into each {"{{…}}"} spot lets you pick the matching lead field from the
+                  Clicking into each {"{{…}}"} spot lets you pick the matching lead field from the
                   Facebook module. Add any custom form questions the same way.
                 </span>
               </li>
@@ -368,21 +368,21 @@ export function MetaLeadsGuide({
         </ol>
         <div className="mt-4 rounded-md border border-parchment/10 bg-deep-ink/20 p-3">
           <p className="text-xs text-parchment/60">
-            <strong>Already pay for Zapier?</strong> Use it instead: first{" "}
+            <strong>Already pay for Zapier?</strong> Use it instead. Build the Zap with
+            trigger <em>Facebook Lead Ads → New Lead</em> and action{" "}
+            <em>New Coworker → Send Lead to Coworker</em>, which you can find by searching
+            Zapier for{" "}
             <a
-              href={ZAPIER_INVITE_URL}
+              href={ZAPIER_APP_URL}
               target="_blank"
               rel="noreferrer"
               className="text-signal-teal hover:underline"
             >
-              accept the New Coworker invite
+              New Coworker
             </a>{" "}
-            (one time — the app is invite-only until publicly listed), then build the Zap:
-            trigger <em>Facebook Lead Ads → New Lead</em>, action{" "}
-            <em>New Coworker → Send Lead to Coworker</em> (connect with the same API key, map
-            the lead fields — no URL or headers needed). Note Facebook Lead Ads is a premium
-            Zapier app and needs a paid Zapier plan; Make.com&apos;s free tier is why we
-            recommend it.
+            (connect with the same API key, map the lead fields, no URL or headers needed).
+            Note Facebook Lead Ads is a premium Zapier app and needs a paid Zapier plan;
+            Make.com&apos;s free tier is why we recommend it.
           </p>
         </div>
       </Card>
@@ -390,14 +390,14 @@ export function MetaLeadsGuide({
       {/* ── Step 5: the CRM-access gotcha ────────────────────────────── */}
       <Card>
         <div className="rounded-md border border-spark-orange/40 bg-spark-orange/5 p-3">
-          <StepHeading n={6} title="Bridge path — don't skip: grant the bridge Lead Access in Facebook" />
+          <StepHeading n={6} title="Bridge path, don't skip: grant the bridge Lead Access in Facebook" />
           <p className="mt-2 text-sm text-parchment/70">
             This is the #1 reason lead capture <em>silently</em> fails: test leads work, then real
             ad leads never arrive. In{" "}
             <strong>
               Facebook Business Settings → Integrations → Lead Access
             </strong>
-            , make sure your bridge (Make or Zapier) is listed with CRM access for your Page — if
+            , make sure your bridge (Make or Zapier) is listed with CRM access for your Page. If
             it isn&apos;t, click <strong>Add CRMs</strong> and add it.
           </p>
         </div>
@@ -428,7 +428,7 @@ export function MetaLeadsGuide({
         </div>
         {recentEvents.length === 0 ? (
           <p className="mt-2 rounded-md border border-dashed border-parchment/15 p-4 text-center text-xs text-parchment/45">
-            Nothing yet — events appear here the moment your bridge delivers one.
+            Nothing yet. Events appear here the moment your bridge delivers one.
           </p>
         ) : (
           <ul className="mt-2 divide-y divide-parchment/10">
