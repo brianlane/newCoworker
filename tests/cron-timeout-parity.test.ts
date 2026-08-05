@@ -4,8 +4,15 @@ import { join } from "node:path";
 
 /**
  * A pg_cron job's HTTP timeout must not hang up before the request it makes
- * can possibly finish, or every healthy run is recorded as a timeout in
- * cron.job_run_details and a real timeout becomes impossible to spot.
+ * can possibly finish, or healthy runs are cut off early and logged as
+ * timeouts, and a real timeout becomes impossible to spot.
+ *
+ * Mechanics note (verified against production, 2026-08-05): pg_net's
+ * http_post is ASYNCHRONOUS. The cron run only enqueues the request and
+ * finishes in milliseconds, so timeout_milliseconds is enforced by pg_net's
+ * background worker and an early hang-up lands as timed_out=true in
+ * net._http_response (retained ~6h), NOT in cron.job_run_details as this
+ * header used to claim. `tsx debug/cron-http-stats.ts` reads those outcomes.
  *
  * This used to be a hand-written list of job/route pairs, which covered 4 of
  * the 22 chains that existed and silently missed every job added after it.
