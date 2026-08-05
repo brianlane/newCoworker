@@ -1,5 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { smsSegmentInfo, UCS2_MAX_SENDABLE_CHARS } from "@/lib/sms/segment-info";
+import { smsSegmentInfo, smsTextUnits, MMS_TEXT_UNITS, UCS2_MAX_SENDABLE_CHARS } from "@/lib/sms/segment-info";
+import {
+  smsTextUnits as edgeSmsTextUnits,
+  MMS_TEXT_UNITS as EDGE_MMS_TEXT_UNITS
+} from "../supabase/functions/_shared/sms_text_units";
 
 describe("smsSegmentInfo", () => {
   it("treats plain ASCII as GSM", () => {
@@ -82,5 +86,50 @@ describe("smsSegmentInfo", () => {
     it("measures length after normalization (ellipsis expands to three dots)", () => {
       expect(smsSegmentInfo("\u2026", { normalizeSmartPunctuation: true }).length).toBe(3);
     });
+  });
+});
+
+describe("smsTextUnits", () => {
+  it("charges one unit per GSM part, minimum 1", () => {
+    expect(smsTextUnits("")).toBe(1);
+    expect(smsTextUnits("Hi")).toBe(1);
+    expect(smsTextUnits("a".repeat(160))).toBe(1);
+    expect(smsTextUnits("a".repeat(161))).toBe(2);
+    expect(smsTextUnits("a".repeat(307))).toBe(3);
+  });
+
+  it("charges UCS-2 parts when the body carries emoji", () => {
+    // The emoji is a surrogate pair: JS length 2, same as the worker's check.
+    expect(smsTextUnits(`\u{1F60A}${"a".repeat(68)}`)).toBe(1);
+    expect(smsTextUnits(`\u{1F60A}${"a".repeat(69)}`)).toBe(2);
+  });
+
+  it("regression: a 1,342-char ai_flow body reserves 9 units, not 1", () => {
+    // Amy's real 10-part-era message length; under the old meter this
+    // counted as ONE message while Telnyx billed every part.
+    expect(smsTextUnits("a".repeat(1342))).toBe(9);
+  });
+
+  it("any media makes the send a flat-rate MMS regardless of caption length", () => {
+    expect(smsTextUnits("", { mediaCount: 1 })).toBe(MMS_TEXT_UNITS);
+    expect(smsTextUnits("a".repeat(1600), { mediaCount: 2 })).toBe(MMS_TEXT_UNITS);
+    expect(MMS_TEXT_UNITS).toBeCloseTo(2.2);
+  });
+
+  it("stays in lockstep with the Edge copy across a boundary matrix", () => {
+    const cases: Array<[string, number]> = [
+      ["", 0],
+      ["hi", 0],
+      ["a".repeat(160), 0],
+      ["a".repeat(161), 0],
+      ["a".repeat(1342), 0],
+      [`\u{1F60A}${"a".repeat(70)}`, 0],
+      ["a".repeat(500), 1],
+      ["", 3]
+    ];
+    for (const [text, mediaCount] of cases) {
+      expect(edgeSmsTextUnits(text, { mediaCount })).toBe(smsTextUnits(text, { mediaCount }));
+    }
+    expect(EDGE_MMS_TEXT_UNITS).toBe(MMS_TEXT_UNITS);
   });
 });

@@ -1,4 +1,5 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { smsTextUnits } from "@/lib/sms/segment-info";
 import { sendCapAlertOnce, smsCapPeriodKey } from "../../../supabase/functions/_shared/cap_alerts";
 
 export type TelnyxMessagingConfig = {
@@ -131,9 +132,11 @@ export type SendTelnyxSmsOptions = {
   /** Telnyx supports Idempotency-Key for at-most-once sends (§10). */
   idempotencyKey?: string;
   /**
-   * When set, meters one outbound SMS against this business's monthly pool
-   * before calling Telnyx. If the HTTP request fails after metering, the
-   * slot is released so quota is not consumed.
+   * When set, meters this send against the business's monthly pool of text
+   * units before calling Telnyx: one unit per carrier part for SMS (GSM-7
+   * 160/153 chars, UCS-2 70/67), flat 2.2 for MMS. If the HTTP request
+   * fails after metering, the same units are released so quota is not
+   * consumed.
    *
    * NOTHING is exempt from metering (Jul 14 2026 policy) — the difference
    * between traffic classes is only what happens AT the cap, via
@@ -164,8 +167,9 @@ export type SendTelnyxSmsOptions = {
   /**
    * Publicly fetchable media URLs to attach (MMS). When set, the send skips
    * the RCS-first branch (RCS rich media is not wired) and goes out as plain
-   * MMS via `/v2/messages` `media_urls`. Metering is unchanged — an MMS
-   * consumes one monthly SMS slot like any other outbound message.
+   * MMS via `/v2/messages` `media_urls`. An MMS meters as a flat 2.2 text
+   * units (MMS_TEXT_UNITS): Telnyx bills the whole MMS as one message
+   * regardless of media size, at ~2.2x the blended per-part SMS cost.
    */
   mediaUrls?: string[];
   /**
@@ -231,6 +235,13 @@ export async function sendTelnyxSms(
   let reservedFromBonus = false;
   const businessId = options?.meterBusinessId;
   const meterMode = options?.meterMode ?? "reserve";
+  // Billable units this send costs against the monthly cap: one per carrier
+  // part for SMS, flat 2.2 for MMS. Computed on the exact body Telnyx bills
+  // and reused verbatim by the release below so a failed send refunds what
+  // the reserve charged.
+  const textUnits = smsTextUnits(text, {
+    mediaCount: (options?.mediaUrls ?? []).filter((u) => u.length > 0).length
+  });
 
   if (businessId && meterMode === "operational") {
     // Owner/platform/compliance traffic: ALWAYS counted, never refused and
@@ -238,7 +249,8 @@ export async function sendTelnyxSms(
     // Metering failures log-and-continue for the same reason.
     meterClient = await createSupabaseServiceClient();
     const { data: res, error } = await meterClient.rpc("meter_sms_operational_send", {
-      p_business_id: businessId
+      p_business_id: businessId,
+      p_text_units: textUnits
     });
     if (error) {
       console.warn("sendTelnyxSms: operational meter failed (send continues)", error.message);
@@ -275,7 +287,8 @@ export async function sendTelnyxSms(
     }
 
     const { data: res, error } = await meterClient.rpc("try_reserve_sms_outbound_slot", {
-      p_business_id: businessId
+      p_business_id: businessId,
+      p_text_units: textUnits
     });
     if (error) {
       throw new Error(`sendTelnyxSms: quota reserve failed: ${error.message}`);
@@ -305,8 +318,10 @@ export async function sendTelnyxSms(
     if (!reservedSlot || !businessId || !meterClient) return;
     const { error: relErr } = await meterClient.rpc("release_sms_outbound_slot", {
       p_business_id: businessId,
-      // Bonus-sourced reserves consumed a purchased text; refund it to the grant.
-      p_refund_bonus: reservedFromBonus
+      // Bonus-sourced reserves consumed purchased texts; refund them to the grant.
+      p_refund_bonus: reservedFromBonus,
+      // Refund exactly what the reserve charged (same computed units).
+      p_text_units: textUnits
     });
     if (relErr) {
       // Leave reservedSlot=true so any retry on this path (or an upstream wrapper calling

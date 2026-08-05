@@ -22,6 +22,8 @@
  * cap_alerts.ts / channel_settings.ts.
  */
 
+import { smsTextUnits } from "./sms_text_units.ts";
+
 type Row = { data: unknown; error: { message: string } | null };
 
 export interface AutotextSupabase {
@@ -170,10 +172,13 @@ export async function sendMissedCallAutotext(
     }
 
     // Customer-facing send → metered against the monthly SMS pool like every
-    // other outbound (see README "SMS hard stop" policy).
+    // other outbound (see README "SMS hard stop" policy). Units computed on
+    // the exact body sent below.
+    const autotextBody = buildMissedCallAutotextMessage(biz?.name ?? null);
+    const autotextUnits = smsTextUnits(autotextBody);
     const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
       "try_reserve_sms_outbound_slot",
-      { p_business_id: opts.businessId }
+      { p_business_id: opts.businessId, p_text_units: autotextUnits }
     );
     if (reserveErr) {
       await releaseLedger();
@@ -197,7 +202,7 @@ export async function sendMissedCallAutotext(
         body: JSON.stringify({
           to: caller,
           from: fromE164,
-          text: buildMissedCallAutotextMessage(biz?.name ?? null),
+          text: autotextBody,
           messaging_profile_id: messagingProfileId
         })
       });
@@ -206,7 +211,8 @@ export async function sendMissedCallAutotext(
       // back before surfacing the error.
       await supabase.rpc("release_sms_outbound_slot", {
         p_business_id: opts.businessId,
-        p_refund_bonus: reserve.source === "bonus"
+        p_refund_bonus: reserve.source === "bonus",
+        p_text_units: autotextUnits
       });
       return {
         status: "failed",
@@ -219,7 +225,8 @@ export async function sendMissedCallAutotext(
       // missed call within the window would just fail again and spam logs.
       await supabase.rpc("release_sms_outbound_slot", {
         p_business_id: opts.businessId,
-        p_refund_bonus: reserve.source === "bonus"
+        p_refund_bonus: reserve.source === "bonus",
+        p_text_units: autotextUnits
       });
       return { status: "failed", reason: `telnyx_${res.status}` };
     }

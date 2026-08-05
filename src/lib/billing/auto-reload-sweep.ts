@@ -169,7 +169,9 @@ export async function readRemainingUnits(
       getCalendarMonthUsageTotals(candidate.businessId, db),
       getSmsBonusTextsRemaining(candidate.businessId, db)
     ]);
-    return Math.max(0, cap - usage.sms_sent) + bonus;
+    // Balance in text units — the ledger the reserve RPC actually enforces —
+    // so the reload threshold trips on the same number Postgres refuses at.
+    return Math.max(0, cap - usage.sms_text_units) + bonus;
   }
 
   // Chat credit raises the spend cap and is never decremented by usage, so

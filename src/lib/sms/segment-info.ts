@@ -85,3 +85,38 @@ export function smsSegmentInfo(text: string, opts: SmsSegmentInfoOptions = {}): 
     exceedsUcs2SendableLimit: hasNonGsmChars && length > UCS2_MAX_SENDABLE_CHARS
   };
 }
+
+/**
+ * Billable text units an MMS consumes against the monthly cap.
+ *
+ * Telnyx bills an MMS as ONE message regardless of media size or caption
+ * length (every outbound MMS MDR carries `parts: 1`), at ~2.2x the blended
+ * per-part SMS cost measured Aug 2026 ($0.0192/MMS vs $0.008787/part). The
+ * weight makes an all-MMS month cost the same dollars as an all-SMS month,
+ * so media is never the cheap way past the cap. Keep in lockstep with
+ * `supabase/functions/_shared/sms_text_units.ts` and the rationale in the
+ * `weighted_sms_metering` migration.
+ */
+export const MMS_TEXT_UNITS = 2.2;
+
+/**
+ * Billable text units for one outbound message: the number the SMS meter
+ * (`try_reserve_sms_outbound_slot` / `meter_sms_operational_send`) charges
+ * against the tenant's monthly cap, and the number a matching release must
+ * refund.
+ *
+ * SMS: one unit per carrier part (GSM-7 160/153, UCS-2 70/67), minimum 1 so
+ * an empty or whitespace body still costs a slot like it always has.
+ * MMS (any media attached): flat MMS_TEXT_UNITS; the caption does not add
+ * parts because Telnyx bills the whole MMS as one message.
+ *
+ * Compute this on the FINAL body handed to Telnyx (after any worker-side
+ * emoji/punctuation normalization), matching what the carrier actually
+ * bills. Mirror of `smsTextUnits` in
+ * `supabase/functions/_shared/sms_text_units.ts` (edge functions cannot
+ * import src/).
+ */
+export function smsTextUnits(text: string, opts?: { mediaCount?: number }): number {
+  if ((opts?.mediaCount ?? 0) > 0) return MMS_TEXT_UNITS;
+  return Math.max(1, smsSegmentInfo(text).segments);
+}

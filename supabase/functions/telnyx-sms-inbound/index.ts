@@ -31,6 +31,7 @@ import {
 // against the tenant's monthly pool like all traffic (Jul 14 2026 policy)
 // but never refused — see _shared/sms_operational_meter.ts.
 import { sendOperationalSms } from "../_shared/sms_operational_meter.ts";
+import { smsTextUnits } from "../_shared/sms_text_units.ts";
 import { evaluateCustomerChannelGate } from "../_shared/customer_channel_gate.ts";
 import {
   evaluateSmsTrigger,
@@ -2590,11 +2591,12 @@ serve(async (req: Request) => {
         (labelRow as { display_name?: string | null } | null)?.display_name?.trim() ||
         prompt.customer_e164;
 
-      // The relay IS a customer-facing outbound: reserve a monthly slot
+      // The relay IS a customer-facing outbound: reserve its billable units
       // exactly like the worker's default reply (hard stop at the cap).
+      const relayUnits = smsTextUnits(ownerReplyBody.slice(0, 1600));
       const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
         "try_reserve_sms_outbound_slot",
-        { p_business_id: businessId }
+        { p_business_id: businessId, p_text_units: relayUnits }
       );
       const reserve = reserveRaw as { ok?: boolean; source?: string } | null;
       if (reserveErr || !reserve?.ok) {
@@ -2645,11 +2647,12 @@ serve(async (req: Request) => {
         .is("answered_at", null)
         .select("id");
       if (!claimed || (claimed as unknown[]).length === 0) {
-        // Raced by another delivery — give the reserved slot back and
+        // Raced by another delivery — give the reserved units back and
         // fall through to the normal staff path.
         await supabase.rpc("release_sms_outbound_slot", {
           p_business_id: businessId,
-          p_refund_bonus: reserve.source === "bonus"
+          p_refund_bonus: reserve.source === "bonus",
+          p_text_units: relayUnits
         });
         return null;
       }
@@ -2671,7 +2674,8 @@ serve(async (req: Request) => {
           .eq("id", prompt.id);
         await supabase.rpc("release_sms_outbound_slot", {
           p_business_id: businessId,
-          p_refund_bonus: reserve.source === "bonus"
+          p_refund_bonus: reserve.source === "bonus",
+          p_text_units: relayUnits
         });
         return new Response(
           JSON.stringify({ ok: false, error: "owner_relay_send_failed" }),

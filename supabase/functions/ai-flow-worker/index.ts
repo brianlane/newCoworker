@@ -35,6 +35,7 @@ import {
 } from "../_shared/ai_flows/extracted_contact.ts";
 import { stepLogLevel, systemLog } from "../_shared/system_log.ts";
 import { telnyxSendSms, telnyxSendGroupMms } from "../_shared/telnyx_sms_compliance.ts";
+import { smsTextUnits, MMS_TEXT_UNITS } from "../_shared/sms_text_units.ts";
 import { sendOperationalSms } from "../_shared/sms_operational_meter.ts";
 import { resolveRcsAgentId } from "../_shared/channel_settings.ts";
 import {
@@ -5397,9 +5398,17 @@ async function sendSmsStep(
     };
   }
 
+  // Billable units for this send, computed on the prepared body BEFORE link
+  // shortening (the reserve deliberately precedes link minting, and
+  // shortening only ever shrinks the body, so this is a tight upper bound
+  // of what Telnyx bills). Passed to release below so a failed send refunds
+  // exactly what was reserved.
+  const reserveUnits = smsTextUnits(prepareSmsBody(bodyText), {
+    mediaCount: action.mediaUrl ? 1 : 0
+  });
   const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
     "try_reserve_sms_outbound_slot",
-    { p_business_id: run.business_id }
+    { p_business_id: run.business_id, p_text_units: reserveUnits }
   );
   if (reserveErr) throw new Error(`reserve slot: ${reserveErr.message}`);
   const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string } | null;
@@ -5413,7 +5422,8 @@ async function sendSmsStep(
   const release = async () => {
     const { error } = await supabase.rpc("release_sms_outbound_slot", {
       p_business_id: run.business_id,
-      p_refund_bonus: reserve.source === "bonus"
+      p_refund_bonus: reserve.source === "bonus",
+      p_text_units: reserveUnits
     });
     if (error) console.error("release_sms_outbound_slot", error);
   };
@@ -5522,8 +5532,9 @@ async function sendSmsStep(
 /**
  * send_sms with replyToGroup: post one reply into the inbound thread. The
  * planner supplied every participant except our own DID; here we additionally
- * drop our own number (defensive) and any opted-out recipient, then reserve a
- * SINGLE outbound slot. With 2+ recipients we send a Telnyx group MMS (its
+ * drop our own number (defensive) and any opted-out recipient, then reserve
+ * units for every recipient leg in one atomic call (Telnyx bills group MMS
+ * per recipient). With 2+ recipients we send a Telnyx group MMS (its
  * dedicated /messages/group_mms endpoint — the standard endpoint rejects a
  * multi-destination SMS `to`); with exactly one we fall back to a normal 1:1
  * SMS so a degenerate "group" of one still delivers.
@@ -5566,9 +5577,20 @@ async function sendGroupSmsStep(
     };
   }
 
+  // Billable units: Telnyx bills a group MMS PER RECIPIENT LEG (and the
+  // group_mms endpoint bills as MMS even when text-only), so the reserve
+  // charges recipients x MMS units in one atomic call. The old behavior
+  // (one slot for the whole group) was the single largest per-slot leverage
+  // in the metering system: 8 recipients billed 8 MMS legs on 1 slot. The
+  // degenerate 1:1 fallback is a plain SMS and meters as its parts.
+  const reserveUnits = isGroup
+    ? MMS_TEXT_UNITS * recipients.length
+    : smsTextUnits(prepareSmsBody(action.body), {
+        mediaCount: action.mediaUrl ? 1 : 0
+      });
   const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
     "try_reserve_sms_outbound_slot",
-    { p_business_id: run.business_id }
+    { p_business_id: run.business_id, p_text_units: reserveUnits }
   );
   if (reserveErr) throw new Error(`reserve slot: ${reserveErr.message}`);
   const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string } | null;
@@ -5597,7 +5619,8 @@ async function sendGroupSmsStep(
   const release = async () => {
     const { error } = await supabase.rpc("release_sms_outbound_slot", {
       p_business_id: run.business_id,
-      p_refund_bonus: reserve.source === "bonus"
+      p_refund_bonus: reserve.source === "bonus",
+      p_text_units: reserveUnits
     });
     if (error) console.error("release_sms_outbound_slot", error);
   };
@@ -8825,9 +8848,12 @@ async function sendOfferSms(
   const cfg = await messagingConfig(supabase, run.business_id);
   if (!cfg) throw new Error("route_to_team: Telnyx messaging is not configured");
   const body = prepareSmsBody(text);
+  // Units for the exact body/media Telnyx bills; the release below refunds
+  // the same number.
+  const reserveUnits = smsTextUnits(body, { mediaCount: mediaUrls?.length ?? 0 });
   const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
     "try_reserve_sms_outbound_slot",
-    { p_business_id: run.business_id }
+    { p_business_id: run.business_id, p_text_units: reserveUnits }
   );
   if (reserveErr) throw new Error(`reserve slot: ${reserveErr.message}`);
   const reserve = reserveRaw as { ok?: boolean; reason?: string; source?: string } | null;
@@ -8858,7 +8884,8 @@ async function sendOfferSms(
   } catch (e) {
     const { error } = await supabase.rpc("release_sms_outbound_slot", {
       p_business_id: run.business_id,
-      p_refund_bonus: reserve.source === "bonus"
+      p_refund_bonus: reserve.source === "bonus",
+      p_text_units: reserveUnits
     });
     if (error) console.error("release_sms_outbound_slot", error);
     throw e;

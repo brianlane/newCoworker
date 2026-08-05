@@ -98,6 +98,7 @@ import {
   meterOperationalSms,
   sendOperationalSms
 } from "../_shared/sms_operational_meter.ts";
+import { smsTextUnits } from "../_shared/sms_text_units.ts";
 import { resolveRcsAgentId } from "../_shared/channel_settings.ts";
 import {
   buildOwnerReplyPromptSms,
@@ -888,7 +889,11 @@ serve(async (req: Request) => {
             // (metering up front would count every retry for one delivered
             // forward). A meter failure here under-counts one message
             // (logged inside the helper) rather than risking double-charge.
-            await meterOperationalSms(supabase, job.business_id);
+            await meterOperationalSms(
+              supabase,
+              job.business_id,
+              smsTextUnits(forwardText.slice(0, 1600))
+            );
             await clearJobReplyCache(supabase, job.id);
             // A forward_owner contact keeps their reply relay in Safe Mode:
             // the Safe-Mode forward above already put the text on the owner's
@@ -2203,13 +2208,15 @@ serve(async (req: Request) => {
       continue;
     }
 
-    // Atomically reserve one outbound slot (row-locked monthly cap + pre-increment).
-    // This replaces the previous check_sms_monthly_limit → send → meter pattern, which
-    // was TOCTOU: two workers could each see "allowed" simultaneously and both blow
-    // through the cap. try_reserve_sms_outbound_slot holds a row lock on businesses.
+    // Atomically reserve the send's billable units (row-locked monthly cap +
+    // pre-increment). This replaces the previous check_sms_monthly_limit →
+    // send → meter pattern, which was TOCTOU: two workers could each see
+    // "allowed" simultaneously and both blow through the cap.
+    // try_reserve_sms_outbound_slot holds a row lock on businesses.
+    const replyUnits = smsTextUnits(reply.slice(0, 1600));
     const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
       "try_reserve_sms_outbound_slot",
-      { p_business_id: job.business_id }
+      { p_business_id: job.business_id, p_text_units: replyUnits }
     );
     if (reserveErr) {
       console.error("try_reserve_sms_outbound_slot", reserveErr);
@@ -2263,9 +2270,10 @@ serve(async (req: Request) => {
     const releaseReservedSlot = async (): Promise<void> => {
       const { error: relErr } = await supabase.rpc("release_sms_outbound_slot", {
         p_business_id: job.business_id,
-        // A bonus-sourced reserve consumed a purchased text; give it back when
+        // A bonus-sourced reserve consumed purchased texts; give them back when
         // the Telnyx send failed after the reserve.
-        p_refund_bonus: reserve.source === "bonus"
+        p_refund_bonus: reserve.source === "bonus",
+        p_text_units: replyUnits
       });
       if (relErr) console.error("release_sms_outbound_slot", relErr);
     };
