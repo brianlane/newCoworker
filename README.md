@@ -2763,6 +2763,30 @@ in `supabase/functions/_shared/call_summary_sweep.ts` is the worked example.
 The test asserts the exempt set exactly, so a new dispatcher cannot quietly
 skip the check.
 
+**Verifying production, not just the migration.** The test and a green
+push-to-main run prove the migration file is right and that it executed. They
+do NOT prove the live `cron.job` rows carry the new numbers: an `unschedule`
+guard that matched nothing, a job renamed out from under a migration, or a
+dashboard hand-edit all leave CI green and production stale. After merging any
+cron change, look at the live rows:
+
+```bash
+tsx debug/read-cron-jobs.ts
+```
+
+Read-only (the session is forced `default_transaction_read_only=on`); diffs
+every live job's schedule and `timeout_milliseconds` against the migrations'
+effective values, replaying `cron.schedule` AND `cron.unschedule` in apply
+order, and exits 1 on any drift. First full sweep (2026-08-05, after PRs
+#1159/#1162/#1164): all 38 live jobs matched, zero drift.
+
+One deliberate live-vs-migrations divergence to know about:
+`edge-residency-replay` is defined by `20260804000000_residency_write_journal.sql`
+but is NOT in the live `cron.job`: `20260812000200_unschedule_residency_replay.sql`
+unscheduled it while zero tenants use residency. The script replays the
+unschedule and reports this as clean; a tool that only reads schedules will
+wrongly call it drift.
+
 ### Post-merge: what CI does vs what you still do
 
 **CI does automatically on every push to main** (the `Vercel Deploy` job, in
@@ -2789,6 +2813,11 @@ team@newcoworker.com — production has not updated until that run is green.
   that box's `.env`), and voice-bridge has its own redeploy. A render change
   shipped via `update-all-vps.ts` silently does nothing.
 - Seeds / one-shot scripts (`scripts/oneshot/`, ledger-recorded).
+- `tsx debug/read-cron-jobs.ts` when the change touched any `cron.schedule` /
+  `cron.unschedule`. The green main run proves the migration executed, not
+  that the live `cron.job` rows changed; this reads them. Read-only, exit 1
+  on drift. See
+  [the cron chain has three timeouts](#the-cron-chain-has-three-timeouts-and-a-hard-ceiling-under-all-of-them).
 - `tsx debug/aeo-crawler-probe.ts` when the change touched hostnames, the
   Cloudflare zone, DNS, or `src/lib/marketing/*`. CI can only assert what we
   intend to serve; this asserts what is actually served, and the drift it
