@@ -8,7 +8,7 @@ work. If a flow feature exists, Amy probably asked for it first.
 | | |
 | --- | --- |
 | Business id | `621a5b0d-c2ad-449f-9d74-9d50e7b27fa3` |
-| Tier / box | standard, VPS `1800980` |
+| Tier / box | standard, VPS `1863856` (biennial cutover 2026-07-28 from `1800980`, see Billing). Term box, Hostinger billing sub `6olQFVQi75HF2es2`, expires 2028-07-14 |
 | DID | `+16028053377` |
 | Owner | Amy Laidlaw |
 | Onboarded | 2026-04-29 |
@@ -183,6 +183,26 @@ purchase "failed but charged" (HTTP 402 while the order completed server-side
 about a minute later), the orchestrator aborted, and the recovery was applied
 by `scripts/oneshot/recover-amy-biennial-switch.ts`: the paid 2-year box was
 adopted directly and the plan bookkeeping completed manually.
+
+**The switch changed her box id**, which is the part that catches people out
+later. A term change buys a NEW machine rather than re-terming the old one, so
+`1800980` (monthly, provisioned Jul 5) became `1863856` (biennial, adopted Jul
+28). Same cutover shape as KYP and Scar Fairy; Amy's was the first, which is
+how her Identity row went a week pointing at the wrong box. Read
+`businesses.hostinger_vps_id` rather than this file when it matters.
+
+The old box was returned cleanly: `vps_inventory` has `1800980` as
+`state=available` with no assigned business, and Hostinger has it `suspended`
+with its subscription `cancelled`, `is_auto_renewed=false`, `next_billing_at`
+null. Nothing is still being charged for it.
+
+One wrinkle it leaves behind: its `vps_ssh_keys` row is still unrotated under
+Amy's `business_id`, so tooling that iterates BOXES rather than tenants still
+lists it under her name. `debug/update-all-vps.ts` (chat-worker) is the one
+that does, deliberately, and it will now fail to SSH a suspended box and report
+that per box. The per-tenant sidecar sweeps are unaffected: they resolve
+through `getActiveVpsSshKeyForBusiness` / `newestKeyPerBusiness`, which pick
+the newest row per business and so land on `1863856`.
 
 One durable caveat: the Stripe subscription OBJECT backing the biennial
 contract is canceled (the abort path canceled it; the $2,376 payment itself
