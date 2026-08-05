@@ -123,7 +123,8 @@ same failure mode: there was nothing to grep, review, or test. Captured from
 live and verified byte-for-byte against the `ai_flows` rows, so any future
 change belongs in the builder and reaches the tenant through a one-shot.
 
-Patches: `patch-kyp-business-hours.ts`,
+Patches: `patch-kyp-timezone-labels.ts`, `patch-kyp-noshow-event-title.ts`,
+`patch-kyp-cancel-tool-policy.ts`, `patch-kyp-business-hours.ts`,
 `patch-kyp-noshow-links.ts`, `patch-kyp-calendar-contact-filing.ts`,
 `enable-kyp-reply-alerts.ts`, `set-kyp-booking-email-sender.ts`,
 `reenroll-kyp-canceled-runs.ts`, `backfill-calendly-booking-goals.ts`,

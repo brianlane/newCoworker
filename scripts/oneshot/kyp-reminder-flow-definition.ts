@@ -40,9 +40,11 @@
  * ledger-recorded one-shot, so the builder and the tenant cannot drift.
  */
 
-export const KYP_REMINDER_FLOW_ID = "8e4e1c35-911b-42a1-953d-33c4d7737159";
-export const KYP_BOOKING_CONFIRMATION_FLOW_ID = "b19af4e3-17f9-49f8-ad16-608f90cf3ea3";
-
+/**
+ * Flows are resolved by NAME plus the business id passed on argv, per the
+ * scripts/oneshot convention, so no row id is load-bearing here and none can
+ * go stale.
+ */
 export const KYP_REMINDER_FLOW_NAME =
   "Pre-call reminder (1hr before) — confirm attendance";
 export const KYP_BOOKING_CONFIRMATION_FLOW_NAME =

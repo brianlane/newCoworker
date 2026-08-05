@@ -32,6 +32,18 @@ import {
   buildKypPreCallReminderDefinition
 } from "../scripts/oneshot/kyp-reminder-flow-definition";
 import { addBadPhoneIntakeArm } from "../scripts/oneshot/patch-kyp-bad-phone-intake";
+import { stripGuessedTimezone } from "../scripts/oneshot/patch-kyp-timezone-labels";
+import { customerFacingCancelSurfaces } from "../scripts/oneshot/patch-kyp-cancel-tool-policy";
+import {
+  CURRENT_PREMIUM_TITLE,
+  retargetPremiumArm,
+  STALE_PREMIUM_TITLE
+} from "../scripts/oneshot/patch-kyp-noshow-event-title";
+import { OWNER_OPERATED_AGENT_KEYS } from "@/lib/agent-tools/channel-divergence";
+import {
+  KYP_BOOKING_CONFIRMATION_PRE_FIX,
+  KYP_PRE_CALL_REMINDER_PRE_FIX
+} from "./kyp-calendar-flows-pre-fix.fixture";
 import { parseAiFlowDefinition } from "@/lib/ai-flows/schema";
 import { smsQuietDecision, zonedClock } from "../supabase/functions/_shared/ai_flows/quiet_hours";
 
@@ -308,6 +320,89 @@ describe("KYP calendar flows: invitee timezone (Reem, Aug 5 2026)", () => {
    * exactly the ambiguity that started this incident. Removing the zone from
    * customer copy without keeping it here would trade one bug for another.
    */
+  /**
+   * The equivalence that makes the one-shot trustworthy: running the patch
+   * on the REAL pre-fix live shape must produce exactly the canonical
+   * builder. Without this, the builder and the applier could disagree and
+   * the tenant would end up in a third shape neither file describes. Same
+   * guarantee the bad-phone patch carries above.
+   */
+  it("the one-shot turns the real pre-fix live shape into the builder", () => {
+    const cases: Array<[string, unknown, Record<string, unknown>]> = [
+      ["pre-call reminder", KYP_PRE_CALL_REMINDER_PRE_FIX, buildKypPreCallReminderDefinition()],
+      [
+        "booking confirmation",
+        KYP_BOOKING_CONFIRMATION_PRE_FIX,
+        buildKypBookingConfirmationDefinition()
+      ]
+    ];
+    for (const [label, live, expected] of cases) {
+      const result = stripGuessedTimezone(live);
+      expect(result.changed, `${label}: the pre-fix shape must need patching`).toBe(true);
+      expect(result.definition, `${label}: patch output must equal the canonical builder`).toEqual(
+        expected
+      );
+    }
+  });
+
+  it("the one-shot is idempotent on an already-patched flow", () => {
+    const already = stripGuessedTimezone(buildKypPreCallReminderDefinition());
+    expect(already.changed).toBe(false);
+    expect(already.notes.join("\n")).toContain("already patched");
+    expect(already.definition).toEqual(buildKypPreCallReminderDefinition());
+  });
+
+  /**
+   * The $200 arm tested for "free strategy call | 2", but that event type was
+   * renamed to "| Client" in Calendly, so the arm could never fire and every
+   * $200 no-show was texted the $100 link.
+   */
+  it("retargets the no-show $200 arm at the renamed event type", () => {
+    const live = {
+      steps: [
+        {
+          id: "route_recovery",
+          type: "branch",
+          branches: [
+            {
+              id: "arm_200",
+              label: "$200/week",
+              condition: { var: "event_title", contains: STALE_PREMIUM_TITLE, caseInsensitive: true }
+            },
+            {
+              id: "arm_100",
+              label: "$100/week",
+              condition: { var: "event_title", contains: "free strategy call", caseInsensitive: true }
+            }
+          ]
+        }
+      ]
+    };
+    const result = retargetPremiumArm(live);
+    expect(result.changed).toBe(true);
+    const arms = result.definition.steps![0].branches!;
+    expect(arms[0].condition!.contains).toBe(CURRENT_PREMIUM_TITLE);
+    // The $100 arm must keep its broader match, which still catches the
+    // cheaper event type once arm_200 has been evaluated first.
+    expect(arms[1].condition!.contains).toBe("free strategy call");
+
+    const again = retargetPremiumArm(result.definition);
+    expect(again.changed, "re-running must be a no-op").toBe(false);
+  });
+
+  it("the cancel-tool policy targets customer surfaces and spares the owner's", () => {
+    const surfaces = customerFacingCancelSurfaces();
+    // Derived from the registry, not hard-coded, so a surface that gains the
+    // tool later cannot be silently missed the way voice was on Amy's account.
+    expect(surfaces).toContain("sms");
+    expect(surfaces).toContain("email");
+    expect(
+      surfaces,
+      "dashboard is James asking his own assistant to cancel, not the AI canceling at a customer"
+    ).not.toContain("dashboard");
+    for (const key of OWNER_OPERATED_AGENT_KEYS) expect(surfaces).not.toContain(key);
+  });
+
   it("keeps the invitee's zone in the owner notify, copied verbatim", () => {
     const notify = confirmation.steps.find((s) => s.type === "notify_owner") as
       | { message?: string }
