@@ -131,7 +131,9 @@ export default async function BillingPage(props: {
         getSubscription(business.id),
         getVoiceBillingSnapshotForBusiness(business.id),
         getCalendarMonthUsageTotals(business.id, db)
-          .then((t) => t.sms_sent)
+          // Cap surface: text UNITS, ceiled (matches the reserve RPC's ledger;
+          // analytics keeps message counts via sms_sent elsewhere).
+          .then((t) => Math.ceil(t.sms_text_units))
           .catch(() => null),
         getSmsBonusTextsRemaining(business.id, db),
         getChatSpendSnapshotForBusiness(

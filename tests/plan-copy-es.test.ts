@@ -49,7 +49,7 @@ describe("usage-copy Spanish variants", () => {
   });
 
   it("smsMonthlyLine renders Spanish caps and unlimited copy", () => {
-    expect(smsMonthlyLine("starter", undefined, "es")).toBe("100 SMS / mes");
+    expect(smsMonthlyLine("starter", undefined, "es")).toBe("150 textos / mes");
     expect(smsMonthlyLine("enterprise", undefined, "es")).toBe("SMS ilimitados / mes");
   });
 

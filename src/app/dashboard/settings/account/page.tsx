@@ -6,6 +6,7 @@ import { getSubscription } from "@/lib/db/subscriptions";
 import { resolveActiveRenewalDate } from "@/lib/billing/renewal";
 import type { PlanTier } from "@/lib/plans/tier";
 import { smsMonthlyLine, voiceMinutesLine } from "@/lib/plans/usage-copy";
+import { effectiveSmsMonthlyCap } from "@/lib/plans/limits";
 import { AccountCredentialsForms } from "@/components/dashboard/AccountCredentialsForms";
 import { PasskeysCard } from "@/components/dashboard/PasskeysCard";
 import { LocalDateTime } from "@/components/dashboard/LocalDateTime";
@@ -60,7 +61,15 @@ export default async function AccountSettingsPage() {
                 {smsMonthlyLine(
                   business.tier as PlanTier,
                   business.tier === "enterprise" ? business.enterprise_limits : undefined,
-                  locale
+                  locale,
+                  // Effective cap (MX clamp included) so this page can never
+                  // show an allowance Postgres will not honor; dashboard and
+                  // billing already pass the same override.
+                  effectiveSmsMonthlyCap(
+                    business.tier as PlanTier,
+                    business.tier === "enterprise" ? business.enterprise_limits : undefined,
+                    { phone: business.phone, timezone: business.timezone }
+                  )
                 )}
               </dd>
             </div>

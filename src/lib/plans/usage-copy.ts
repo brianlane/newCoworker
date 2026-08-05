@@ -55,7 +55,10 @@ export function smsMonthlyLine(
   if (cap === Infinity) {
     return es ? "SMS ilimitados / mes" : "Unlimited SMS / month";
   }
-  return es ? `${cap} SMS / mes` : `${cap} SMS / month`;
+  // "texts", not "SMS messages": the cap is denominated in text units (one
+  // per 160-char part, 70 with emoji; ~2 per MMS), the same arithmetic phone
+  // carriers have always billed long messages with.
+  return es ? `${cap} textos / mes` : `${cap} texts / month`;
 }
 
 /** Marketing / UI line for the concurrent-call cap. */

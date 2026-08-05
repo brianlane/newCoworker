@@ -92,7 +92,9 @@ export default async function DashboardPage() {
       ).catch(() => null),
       getVoiceBillingSnapshotForBusiness(business.id).catch(() => null),
       getCalendarMonthUsageTotals(business.id, db)
-        .then((t) => t.sms_sent)
+        // Cap surface: show text UNITS (the number the reserve RPC enforces),
+        // ceiled so the displayed remainder is never more than Postgres allows.
+        .then((t) => Math.ceil(t.sms_text_units))
         .catch(() => null)
     ]);
   }

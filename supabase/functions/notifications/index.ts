@@ -41,6 +41,7 @@ import {
   meterOperationalSms,
   releaseOperationalSms
 } from "../_shared/sms_operational_meter.ts";
+import { smsTextUnits } from "../_shared/sms_text_units.ts";
 
 interface WebhookPayload {
   type: "INSERT" | "UPDATE" | "DELETE";
@@ -531,12 +532,16 @@ serve(async (req: Request) => {
       "recent_team_notify"
     );
   } else if (telnyxKey && telnyxProfile) {
+    // Trim trailing periods so a "."-terminated summary can't produce
+    // "dashboard.. Details:" (mirrors dispatch.ts). Built before the meter
+    // so the counted units match the exact body sent.
+    const smsText = `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`;
     // Owner alerts are METERED against the tenant's monthly pool like all
     // traffic (Jul 14 2026 policy: nothing is exempt) but never REFUSED —
     // the "you hit your SMS cap" alert must outrun the cap it reports.
     // Declared OUTSIDE the try so the catch can release the counted slot
     // when the fetch itself throws (network error — nothing left Telnyx).
-    const smsMeter = await meterOperationalSms(supa, record.business_id);
+    const smsMeter = await meterOperationalSms(supa, record.business_id, smsTextUnits(smsText));
     // Slot lifecycle guard: set once the counted slot is SETTLED — either
     // kept (Telnyx accepted the alert) or already released (Telnyx
     // rejected it). A later throw in the same try (recordRow, error-body
@@ -544,9 +549,6 @@ serve(async (req: Request) => {
     // alert nor release the same slot twice.
     let smsMeterSettled = false;
     try {
-      // Trim trailing periods so a "."-terminated summary can't produce
-      // "dashboard.. Details:" (mirrors dispatch.ts).
-      const smsText = `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`;
       const body: Record<string, string> = {
         to: targets.phone,
         text: smsText,

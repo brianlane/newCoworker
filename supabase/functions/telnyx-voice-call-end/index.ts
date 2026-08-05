@@ -23,6 +23,7 @@ import {
 } from "../_shared/voice_handoff.ts";
 import { attachAiStream, resolveBridgeTarget } from "../_shared/voice_ai_attach.ts";
 import { reserveVoiceBudget } from "../_shared/voice_reserve.ts";
+import { smsTextUnits } from "../_shared/sms_text_units.ts";
 import { parseOutboundClientState } from "../_shared/voice_outbound.ts";
 import {
   resumeFlowRunWithCallOutcome,
@@ -789,9 +790,10 @@ async function meteredWarmTransferSend(
   businessId: string,
   msg: { messagingProfileId: string; fromE164?: string; toE164: string; text: string }
 ): Promise<{ ok: true } | { ok: false; reason: "quota" | "send_failed" | "reserve_error" }> {
+  const sendUnits = smsTextUnits(msg.text);
   const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
     "try_reserve_sms_outbound_slot",
-    { p_business_id: businessId }
+    { p_business_id: businessId, p_text_units: sendUnits }
   );
   if (reserveErr) {
     console.error("warm-transfer notify: reserve slot failed", reserveErr);
@@ -826,11 +828,12 @@ async function meteredWarmTransferSend(
   });
   if (!res.ok) {
     console.error("warm-transfer notify: SMS failed", res.status, res.body);
-    // Telnyx rejected the send — give the reserved slot back so the tenant isn't
-    // billed for a message that never went out.
+    // Telnyx rejected the send: give the reserved units back so the tenant
+    // isn't billed for a message that never went out.
     const { error: relErr } = await supabase.rpc("release_sms_outbound_slot", {
       p_business_id: businessId,
-      p_refund_bonus: reserve.source === "bonus"
+      p_refund_bonus: reserve.source === "bonus",
+      p_text_units: sendUnits
     });
     if (relErr) console.error("warm-transfer notify: release slot failed", relErr);
     return { ok: false, reason: "send_failed" };

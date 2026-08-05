@@ -120,7 +120,8 @@ describe("missed-call auto-text helper", () => {
       p_window_seconds: MISSED_CALL_AUTOTEXT_WINDOW_SECONDS
     });
     expect(rpc).toHaveBeenCalledWith("try_reserve_sms_outbound_slot", {
-      p_business_id: "biz-1"
+      p_business_id: "biz-1",
+      p_text_units: 1
     });
     const [url, init] = (fetchFn as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(url).toBe("https://api.telnyx.com/v2/messages");
@@ -377,7 +378,7 @@ describe("missed-call auto-text helper", () => {
 
     const outcome = await sendMissedCallAutotext(supabase, { ...baseOpts, fetchFn });
     expect(outcome).toEqual({ status: "failed", reason: "telnyx_422" });
-    expect(releaseCalls).toEqual([{ p_business_id: "biz-1", p_refund_bonus: true }]);
+    expect(releaseCalls).toEqual([{ p_business_id: "biz-1", p_refund_bonus: true, p_text_units: 1 }]);
   });
 
   it("releases the metered slot but keeps the dedup row when fetch itself throws", async () => {
@@ -400,7 +401,7 @@ describe("missed-call auto-text helper", () => {
 
     const outcome = await sendMissedCallAutotext(supabase, { ...baseOpts, fetchFn });
     expect(outcome).toEqual({ status: "failed", reason: "network down" });
-    expect(releaseCalls).toEqual([{ p_business_id: "biz-1", p_refund_bonus: false }]);
+    expect(releaseCalls).toEqual([{ p_business_id: "biz-1", p_refund_bonus: false, p_text_units: 1 }]);
     expect(deleteFn).not.toHaveBeenCalled();
   });
 

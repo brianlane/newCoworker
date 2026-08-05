@@ -15,6 +15,7 @@
  */
 
 import { telnyxSendSms } from "./telnyx_sms_compliance.ts";
+import { smsTextUnits } from "./sms_text_units.ts";
 
 type RpcResult = { data: unknown; error: { message: string } | null };
 
@@ -26,40 +27,47 @@ export type OperationalMeterOutcome = {
   counted: boolean;
   /** 'plan' | 'bonus' | 'overage' when counted; error/reason detail otherwise. */
   detail: string;
+  /** Units the meter charged; a matching release must refund the same. */
+  textUnits: number;
 };
 
 /**
- * Count one operational send against the tenant's pool. Never throws,
- * never refuses — the returned outcome is for logging/telemetry only.
+ * Count one operational send against the tenant's pool, charging its
+ * billable text units (one per carrier part for SMS, flat 2.2 for MMS).
+ * Never throws, never refuses; the returned outcome is for
+ * logging/telemetry and the matching release.
  */
 export async function meterOperationalSms(
   supabase: OperationalMeterSupabase,
-  businessId: string
+  businessId: string,
+  textUnits = 1
 ): Promise<OperationalMeterOutcome> {
   try {
     const { data, error } = await supabase.rpc("meter_sms_operational_send", {
-      p_business_id: businessId
+      p_business_id: businessId,
+      p_text_units: textUnits
     });
     if (error) {
       console.warn(`meterOperationalSms(${businessId}): ${error.message}`);
-      return { counted: false, detail: `rpc_error:${error.message}` };
+      return { counted: false, detail: `rpc_error:${error.message}`, textUnits };
     }
     const row = data as { counted?: boolean; source?: string; reason?: string } | null;
     if (row?.counted === true) {
-      return { counted: true, detail: row.source ?? "plan" };
+      return { counted: true, detail: row.source ?? "plan", textUnits };
     }
-    return { counted: false, detail: row?.reason ?? "not_counted" };
+    return { counted: false, detail: row?.reason ?? "not_counted", textUnits };
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
     console.warn(`meterOperationalSms(${businessId}): ${message}`);
-    return { counted: false, detail: `error:${message}` };
+    return { counted: false, detail: `error:${message}`, textUnits };
   }
 }
 
 /**
- * Give a counted slot back after a send that never left Telnyx (network
- * error / non-2xx). Reuses release_sms_outbound_slot, refunding the bonus
- * text when the meter consumed one. Best-effort like the meter itself.
+ * Give counted units back after a send that never left Telnyx (network
+ * error / non-2xx). Reuses release_sms_outbound_slot with the units the
+ * meter charged, refunding the bonus texts when the meter consumed them.
+ * Best-effort like the meter itself.
  */
 export async function releaseOperationalSms(
   supabase: OperationalMeterSupabase,
@@ -70,7 +78,8 @@ export async function releaseOperationalSms(
   try {
     const { error } = await supabase.rpc("release_sms_outbound_slot", {
       p_business_id: businessId,
-      p_refund_bonus: outcome.detail === "bonus"
+      p_refund_bonus: outcome.detail === "bonus",
+      p_text_units: outcome.textUnits
     });
     if (error) {
       console.warn(`releaseOperationalSms(${businessId}): ${error.message}`);
@@ -98,8 +107,12 @@ export async function sendOperationalSms(
   params: Parameters<typeof telnyxSendSms>[0]
 ): Promise<Awaited<ReturnType<typeof telnyxSendSms>>> {
   const outcome = businessId
-    ? await meterOperationalSms(supabase, businessId)
-    : { counted: false, detail: "no_business" };
+    ? await meterOperationalSms(
+        supabase,
+        businessId,
+        smsTextUnits(params.text, { mediaCount: params.mediaUrls?.length ?? 0 })
+      )
+    : { counted: false, detail: "no_business", textUnits: 0 };
   let send: Awaited<ReturnType<typeof telnyxSendSms>>;
   try {
     send = await telnyxSendSms(params);

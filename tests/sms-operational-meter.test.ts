@@ -15,28 +15,29 @@ function supa(rpcImpl: (fn: string, args: Record<string, unknown>) => Promise<{ 
 describe("meterOperationalSms", () => {
   it("counts and surfaces the ledger source", async () => {
     const s = supa(async () => ({ data: { counted: true, source: "overage" }, error: null }));
-    expect(await meterOperationalSms(s, BIZ)).toEqual({ counted: true, detail: "overage" });
-    expect(s.rpc).toHaveBeenCalledWith("meter_sms_operational_send", { p_business_id: BIZ });
+    expect(await meterOperationalSms(s, BIZ)).toEqual({ counted: true, detail: "overage", textUnits: 1 });
+    expect(s.rpc).toHaveBeenCalledWith("meter_sms_operational_send", { p_business_id: BIZ, p_text_units: 1 });
   });
 
   it("defaults the source to plan when the RPC omits it", async () => {
     const s = supa(async () => ({ data: { counted: true }, error: null }));
-    expect(await meterOperationalSms(s, BIZ)).toEqual({ counted: true, detail: "plan" });
+    expect(await meterOperationalSms(s, BIZ)).toEqual({ counted: true, detail: "plan", textUnits: 1 });
   });
 
   it("reports not-counted reasons without throwing", async () => {
     const s = supa(async () => ({ data: { counted: false, reason: "no_business" }, error: null }));
-    expect(await meterOperationalSms(s, BIZ)).toEqual({ counted: false, detail: "no_business" });
+    expect(await meterOperationalSms(s, BIZ)).toEqual({ counted: false, detail: "no_business", textUnits: 1 });
 
     const empty = supa(async () => ({ data: null, error: null }));
-    expect(await meterOperationalSms(empty, BIZ)).toEqual({ counted: false, detail: "not_counted" });
+    expect(await meterOperationalSms(empty, BIZ)).toEqual({ counted: false, detail: "not_counted", textUnits: 1 });
   });
 
   it("never throws: RPC errors and thrown shapes become outcomes", async () => {
     const rpcErr = supa(async () => ({ data: null, error: { message: "db down" } }));
     expect(await meterOperationalSms(rpcErr, BIZ)).toEqual({
       counted: false,
-      detail: "rpc_error:db down"
+      detail: "rpc_error:db down",
+      textUnits: 1
     });
 
     const throwing = supa(async () => {
@@ -44,7 +45,8 @@ describe("meterOperationalSms", () => {
     });
     expect(await meterOperationalSms(throwing, BIZ)).toEqual({
       counted: false,
-      detail: "error:boom"
+      detail: "error:boom",
+      textUnits: 1
     });
 
     const throwingString = supa(async () => {
@@ -52,7 +54,8 @@ describe("meterOperationalSms", () => {
     });
     expect(await meterOperationalSms(throwingString, BIZ)).toEqual({
       counted: false,
-      detail: "error:plain"
+      detail: "error:plain",
+      textUnits: 1
     });
   });
 });
@@ -60,43 +63,45 @@ describe("meterOperationalSms", () => {
 describe("releaseOperationalSms", () => {
   it("skips entirely when nothing was counted", async () => {
     const s = supa(async () => ({ data: null, error: null }));
-    await releaseOperationalSms(s, BIZ, { counted: false, detail: "no_business" });
+    await releaseOperationalSms(s, BIZ, { counted: false, detail: "no_business", textUnits: 0 });
     expect(s.rpc).not.toHaveBeenCalled();
   });
 
   it("releases with a bonus refund when the meter consumed a bonus text", async () => {
     const s = supa(async () => ({ data: null, error: null }));
-    await releaseOperationalSms(s, BIZ, { counted: true, detail: "bonus" });
+    await releaseOperationalSms(s, BIZ, { counted: true, detail: "bonus", textUnits: 1 });
     expect(s.rpc).toHaveBeenCalledWith("release_sms_outbound_slot", {
       p_business_id: BIZ,
-      p_refund_bonus: true
+      p_refund_bonus: true,
+      p_text_units: 1
     });
 
-    await releaseOperationalSms(s, BIZ, { counted: true, detail: "plan" });
+    await releaseOperationalSms(s, BIZ, { counted: true, detail: "plan", textUnits: 1 });
     expect(s.rpc).toHaveBeenLastCalledWith("release_sms_outbound_slot", {
       p_business_id: BIZ,
-      p_refund_bonus: false
+      p_refund_bonus: false,
+      p_text_units: 1
     });
   });
 
   it("never throws on release failures (Error, string, rpc error)", async () => {
     const rpcErr = supa(async () => ({ data: null, error: { message: "x" } }));
     await expect(
-      releaseOperationalSms(rpcErr, BIZ, { counted: true, detail: "plan" })
+      releaseOperationalSms(rpcErr, BIZ, { counted: true, detail: "plan", textUnits: 1 })
     ).resolves.toBeUndefined();
 
     const throwing = supa(async () => {
       throw new Error("boom");
     });
     await expect(
-      releaseOperationalSms(throwing, BIZ, { counted: true, detail: "plan" })
+      releaseOperationalSms(throwing, BIZ, { counted: true, detail: "plan", textUnits: 1 })
     ).resolves.toBeUndefined();
 
     const throwingString = supa(async () => {
       throw "plain";
     });
     await expect(
-      releaseOperationalSms(throwingString, BIZ, { counted: true, detail: "plan" })
+      releaseOperationalSms(throwingString, BIZ, { counted: true, detail: "plan", textUnits: 1 })
     ).resolves.toBeUndefined();
   });
 });
@@ -123,7 +128,7 @@ describe("sendOperationalSms", () => {
     );
     const res = await sendOperationalSms(s, BIZ, sendParams(okFetch() as unknown as typeof fetch));
     expect(res.ok).toBe(true);
-    expect(s.rpc).toHaveBeenCalledWith("meter_sms_operational_send", { p_business_id: BIZ });
+    expect(s.rpc).toHaveBeenCalledWith("meter_sms_operational_send", { p_business_id: BIZ, p_text_units: 1 });
     expect(s.rpc).not.toHaveBeenCalledWith("release_sms_outbound_slot", expect.anything());
   });
 
@@ -137,7 +142,8 @@ describe("sendOperationalSms", () => {
     expect(res.ok).toBe(false);
     expect(s.rpc).toHaveBeenCalledWith("release_sms_outbound_slot", {
       p_business_id: BIZ,
-      p_refund_bonus: true
+      p_refund_bonus: true,
+      p_text_units: 1
     });
   });
 
@@ -164,7 +170,8 @@ describe("sendOperationalSms", () => {
     ).rejects.toThrow("fetch failed");
     expect(s.rpc).toHaveBeenCalledWith("release_sms_outbound_slot", {
       p_business_id: BIZ,
-      p_refund_bonus: false
+      p_refund_bonus: false,
+      p_text_units: 1
     });
   });
 

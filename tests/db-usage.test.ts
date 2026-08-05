@@ -47,7 +47,7 @@ function mockDb(overrides: Record<string, unknown> = {}) {
 /** Supports `getTodayUsage` (.single) and monthly totals (.gte → thenable). */
 function mockLimitClient(opts: {
   today?: typeof MOCK_USAGE | null;
-  monthRows?: Array<{ sms_sent?: number; calls_made?: number }>;
+  monthRows?: Array<{ sms_sent?: number; sms_text_units?: number; calls_made?: number }>;
   monthError?: { message: string };
 }) {
   const today = opts.today !== undefined ? opts.today : MOCK_USAGE;
@@ -145,8 +145,8 @@ describe("db/usage", () => {
         then(onFulfilled, onRejected) {
           return Promise.resolve({
             data: [
-              { sms_sent: 3, calls_made: 1 },
-              { sms_sent: 2, calls_made: 4 }
+              { sms_sent: 3, sms_text_units: 7, calls_made: 1 },
+              { sms_sent: 2, sms_text_units: 2.2, calls_made: 4 }
             ],
             error: null
           }).then(onFulfilled, onRejected);
@@ -159,7 +159,7 @@ describe("db/usage", () => {
       chain.gte = vi.fn(() => monthThenable);
 
       const result = await getCalendarMonthUsageTotals("biz-uuid-1", chain as never);
-      expect(result).toEqual({ sms_sent: 5, calls_made: 5 });
+      expect(result).toEqual({ sms_sent: 5, sms_text_units: 9.2, calls_made: 5 });
     });
 
     it("treats null data as empty and null row fields as zero", async () => {
@@ -178,7 +178,7 @@ describe("db/usage", () => {
       chain.gte = vi.fn(() => monthThenable);
 
       const empty = await getCalendarMonthUsageTotals("biz-uuid-1", chain as never);
-      expect(empty).toEqual({ sms_sent: 0, calls_made: 0 });
+      expect(empty).toEqual({ sms_sent: 0, sms_text_units: 0, calls_made: 0 });
 
       const sparseThenable: PromiseLike<{
         data: Array<{ sms_sent?: number | null; calls_made?: number | null }>;
@@ -193,7 +193,7 @@ describe("db/usage", () => {
       };
       chain.gte = vi.fn(() => sparseThenable);
       const sparse = await getCalendarMonthUsageTotals("biz-uuid-1", chain as never);
-      expect(sparse).toEqual({ sms_sent: 0, calls_made: 0 });
+      expect(sparse).toEqual({ sms_sent: 0, sms_text_units: 0, calls_made: 0 });
     });
   });
 
@@ -727,8 +727,9 @@ describe("db/usage", () => {
 
     it("blocks starter when monthly SMS limit reached", async () => {
       const cap = TIER_LIMITS.starter.smsPerMonth;
+      // The cap trips on text UNITS (fewer messages, each multi-part).
       const db = mockLimitClient({
-        monthRows: [{ sms_sent: cap, calls_made: 0 }]
+        monthRows: [{ sms_sent: Math.ceil(cap / 10), sms_text_units: cap, calls_made: 0 }]
       });
       vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
 
@@ -736,7 +737,7 @@ describe("db/usage", () => {
       expect(result.allowed).toBe(false);
       expect(result.field).toBe("sms_sent");
       expect(result.reason).toContain(String(cap));
-      expect(result.reason).toContain("SMS/month");
+      expect(result.reason).toContain("texts/month");
     });
 
     it("allows starter when there is no usage yet this month", async () => {

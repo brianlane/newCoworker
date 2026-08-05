@@ -65,12 +65,17 @@ describe("mx sms cap (SQL)", () => {
       .slice(0, 10);
     const { data } = await dbc
       .from("daily_usage")
-      .select("sms_sent")
+      .select("sms_text_units")
       .eq("business_id", businessId)
       .gte("usage_date", start);
-    return (data ?? []).reduce((n, r) => n + ((r as { sms_sent: number }).sms_sent ?? 0), 0);
+    return (data ?? []).reduce(
+      (n, r) => n + Number((r as { sms_text_units: number }).sms_text_units ?? 0),
+      0
+    );
   }
 
+  // The cap is enforced against sms_text_units (weighted_sms_metering
+  // migration); seed both columns like the backfill does (1 unit/message).
   async function seedUsage(dbc: SupabaseClient, businessId: string, smsSent: number) {
     const today = new Date().toISOString().slice(0, 10);
     const { error } = await dbc.from("daily_usage").upsert(
@@ -79,6 +84,7 @@ describe("mx sms cap (SQL)", () => {
         usage_date: today,
         voice_minutes_used: 0,
         sms_sent: smsSent,
+        sms_text_units: smsSent,
         calls_made: 0,
         peak_concurrent_calls: 0,
         updated_at: new Date().toISOString()

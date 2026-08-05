@@ -121,9 +121,11 @@ export default function TermsPage() {
           updated prospectively.
         </p>
         <p>
-          Where your plan includes capped SMS, usage is enforced as a strict monthly limit (for
-          example, {TIER_LIMITS.starter.smsPerMonth} SMS on Starter and {TIER_LIMITS.standard.smsPerMonth} SMS on
-          Standard at the effective date above). Included voice is allocated per Stripe billing period as shown
+          Where your plan includes capped SMS, usage is enforced as a strict monthly limit measured
+          in texts: a long message counts as one text per 160 characters (70 with emoji), and a
+          picture message counts as about two (for example, {TIER_LIMITS.starter.smsPerMonth} texts
+          on Starter and {TIER_LIMITS.standard.smsPerMonth} texts on Standard at the effective date
+          above). Included voice is allocated per Stripe billing period as shown
           when you subscribe. Enterprise and custom agreements may differ. We may offer usage packs and other
           add-ons for additional capacity; add-on purchases are governed by these Terms, including the refund
           provisions in Section 9.

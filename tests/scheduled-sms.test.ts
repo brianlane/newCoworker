@@ -143,7 +143,8 @@ describe("scheduled SMS dispatch", () => {
       p_limit: SCHEDULED_SMS_BATCH_SIZE
     });
     expect(rpc).toHaveBeenCalledWith("try_reserve_sms_outbound_slot", {
-      p_business_id: "biz-1"
+      p_business_id: "biz-1",
+      p_text_units: 1
     });
     const [url, init] = (fetchFn as ReturnType<typeof vi.fn>).mock.calls[0];
     expect(url).toBe("https://api.telnyx.com/v2/messages");
@@ -498,7 +499,7 @@ describe("scheduled SMS dispatch", () => {
     expect(
       (await processDueScheduledSms(supabase, { ...baseOpts, fetchFn })).outcomes[0]
     ).toEqual({ id: "sched-1", status: "failed", detail: "telnyx_422" });
-    expect(releaseCalls).toEqual([{ p_business_id: "biz-1", p_refund_bonus: true }]);
+    expect(releaseCalls).toEqual([{ p_business_id: "biz-1", p_refund_bonus: true, p_text_units: 1 }]);
   });
 
   it("releases the slot when fetch itself throws and logs release failures", async () => {
@@ -522,7 +523,7 @@ describe("scheduled SMS dispatch", () => {
     expect(
       (await processDueScheduledSms(supabase, { ...baseOpts, fetchFn })).outcomes[0]
     ).toEqual({ id: "sched-1", status: "failed", detail: "network down" });
-    expect(releaseCalls).toEqual([{ p_business_id: "biz-1", p_refund_bonus: false }]);
+    expect(releaseCalls).toEqual([{ p_business_id: "biz-1", p_refund_bonus: false, p_text_units: 1 }]);
     expect(errSpy).toHaveBeenCalledWith("release_sms_outbound_slot", "sched-1", "release down");
     errSpy.mockRestore();
   });

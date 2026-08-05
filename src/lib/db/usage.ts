@@ -61,16 +61,22 @@ export async function getTodayUsage(
   return data as DailyUsageRow;
 }
 
-/** Sum SMS and outbound calls for the current UTC calendar month from `daily_usage`. */
+/**
+ * Sum SMS and outbound calls for the current UTC calendar month from
+ * `daily_usage`. `sms_sent` counts MESSAGES (analytics surfaces);
+ * `sms_text_units` is the billable-unit total the monthly cap is enforced
+ * against (one unit per SMS part, 2.2 per MMS; see
+ * src/lib/sms/segment-info.ts). Cap/allowance surfaces must read the units.
+ */
 export async function getCalendarMonthUsageTotals(
   businessId: string,
   client?: SupabaseClient
-): Promise<{ sms_sent: number; calls_made: number }> {
+): Promise<{ sms_sent: number; sms_text_units: number; calls_made: number }> {
   const db = client ?? (await createSupabaseServiceClient());
   const monthStart = calendarMonthStartUtcYmd();
   const { data, error } = await db
     .from("daily_usage")
-    .select("sms_sent, calls_made")
+    .select("sms_sent, sms_text_units, calls_made")
     .eq("business_id", businessId)
     .gte("usage_date", monthStart);
 
@@ -80,13 +86,19 @@ export async function getCalendarMonthUsageTotals(
   }
 
   let sms = 0;
+  let units = 0;
   let calls = 0;
   for (const row of data ?? []) {
-    const r = row as { sms_sent?: number | null; calls_made?: number | null };
+    const r = row as {
+      sms_sent?: number | null;
+      sms_text_units?: number | null;
+      calls_made?: number | null;
+    };
     sms += Number(r.sms_sent ?? 0);
+    units += Number(r.sms_text_units ?? 0);
     calls += Number(r.calls_made ?? 0);
   }
-  return { sms_sent: sms, calls_made: calls };
+  return { sms_sent: sms, sms_text_units: units, calls_made: calls };
 }
 
 /**
@@ -362,7 +374,7 @@ export async function checkLimitReached(
   }
 
   if (limits.smsPerMonth !== Infinity) {
-    let month: { sms_sent: number; calls_made: number };
+    let month: { sms_sent: number; sms_text_units: number; calls_made: number };
     try {
       month = await getCalendarMonthUsageTotals(businessId, client);
     } catch (e) {
@@ -373,10 +385,12 @@ export async function checkLimitReached(
         field: "sms_sent"
       };
     }
-    if (month.sms_sent >= limits.smsPerMonth) {
+    // Compare in text units, the same ledger the reserve RPC enforces,
+    // so this advisory check can never disagree with Postgres.
+    if (month.sms_text_units >= limits.smsPerMonth) {
       return {
         allowed: false,
-        reason: `Monthly SMS limit reached (${limits.smsPerMonth} SMS/month)`,
+        reason: `Monthly SMS limit reached (${limits.smsPerMonth} texts/month)`,
         field: "sms_sent"
       };
     }
