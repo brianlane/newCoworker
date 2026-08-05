@@ -4,7 +4,7 @@ import { describe, expect, it } from "vitest";
 
 describe("contact page SSR surface", () => {
   it("does not call getAuthUser or read searchParams in the RSC", () => {
-    const src = readFileSync(join(import.meta.dirname, "../src/app/contact/page.tsx"), "utf8");
+    const src = readFileSync(join(import.meta.dirname, "../src/app/(marketing)/contact/page.tsx"), "utf8");
     expect(src).not.toMatch(/getAuthUser/);
     expect(src).not.toMatch(/searchParams/);
     expect(src).not.toMatch(/resolveContactPrefill|resolvePrefill/);

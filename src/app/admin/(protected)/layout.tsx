@@ -5,6 +5,7 @@ import { getAuthUser } from "@/lib/auth";
 import { adminMfaRedirectPath, isAal2, safeAdminNextPath } from "@/lib/auth/admin-aal";
 import { createSupabaseServerClient } from "@/lib/supabase/server";
 import { AdminSidebar } from "@/components/admin/AdminSidebar";
+import { SectionMessages } from "@/components/i18n/SectionMessages";
 
 // See dashboard layout: scope `cover` to the h-dvh shell segments only so the
 // safe-area padding can keep the nav + content clear of the notch.
@@ -26,11 +27,16 @@ export default async function AdminLayout({ children }: { children: React.ReactN
   }
 
   return (
-    <div className="flex h-dvh bg-deep-ink">
-      <AdminSidebar userEmail={user.email} />
-      <main data-app-main className="flex-1 overflow-y-auto p-4 pt-16 lg:p-6">
-        {children}
-      </main>
-    </div>
+    // SectionMessages ships the admin client translation subset (including
+    // `marketing.contactPage` for the white-glove intake's ContactForm);
+    // mapping and guard test live in src/i18n/client-messages.ts.
+    <SectionMessages section="admin">
+      <div className="flex h-dvh bg-deep-ink">
+        <AdminSidebar userEmail={user.email} />
+        <main data-app-main className="flex-1 overflow-y-auto p-4 pt-16 lg:p-6">
+          {children}
+        </main>
+      </div>
+    </SectionMessages>
   );
 }

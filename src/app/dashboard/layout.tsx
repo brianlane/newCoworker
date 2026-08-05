@@ -24,6 +24,7 @@ import { resolveViewAsContext } from "@/lib/admin/view-as";
 import { ViewAsBanner } from "@/components/admin/ViewAsBanner";
 import { latestAcceptanceFor, needsAcceptance } from "@/lib/legal/acceptance";
 import { TermsAcceptanceGate } from "@/components/legal/TermsAcceptanceGate";
+import { SectionMessages } from "@/components/i18n/SectionMessages";
 
 // `cover` lets the h-dvh shell paint edge-to-edge under the notch / home
 // indicator; the shell's safe-area padding (globals.css) keeps content clear.
@@ -186,6 +187,9 @@ export default async function DashboardLayout({ children }: { children: React.Re
   const requireAcceptance = acceptancePromise ? needsAcceptance(await acceptancePromise) : false;
 
   return (
+    // SectionMessages ships the dashboard's client translation subset;
+    // mapping and guard test live in src/i18n/client-messages.ts.
+    <SectionMessages section="dashboard">
     <div className="flex h-dvh bg-deep-ink">
       <DashboardSidebar
         userEmail={viewAs ? ownerEmail : user.email}
@@ -219,5 +223,6 @@ export default async function DashboardLayout({ children }: { children: React.Re
         {children}
       </main>
     </div>
+    </SectionMessages>
   );
 }

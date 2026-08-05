@@ -1,6 +1,6 @@
 import en from "../../../messages/en.json";
 import { buildLlmsFullTxt, type LlmsBlogPost } from "@/lib/marketing/llms-content";
-import { INDUSTRIES } from "@/app/industries/data";
+import { INDUSTRIES } from "@/app/(marketing)/industries/data";
 import { listPublishedPosts } from "@/lib/blog/db";
 
 // Rendered per request so newly published posts appear without a redeploy,

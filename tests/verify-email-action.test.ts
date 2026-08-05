@@ -21,7 +21,7 @@ vi.mock("@/lib/logger", () => ({
   logger: { error: vi.fn(), warn: vi.fn(), info: vi.fn(), debug: vi.fn() }
 }));
 
-import { confirmEmailVerificationAction } from "@/app/verify-email/actions";
+import { confirmEmailVerificationAction } from "@/app/(auth)/verify-email/actions";
 import { createEmailVerificationToken } from "@/lib/email/verification-token";
 
 function makeFormData(entries: Record<string, FormDataEntryValue> = {}): FormData {

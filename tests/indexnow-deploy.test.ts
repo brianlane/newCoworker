@@ -9,10 +9,10 @@ import {
 describe("deployTouchesPublicPages", () => {
   it("trips on marketing pages and the code they share", () => {
     for (const path of [
-      "src/app/page.tsx",
-      "src/app/pricing/page.tsx",
-      "src/app/compare/zinng/page.tsx",
-      "src/app/industries/[slug]/page.tsx",
+      "src/app/(marketing)/page.tsx",
+      "src/app/(marketing)/pricing/page.tsx",
+      "src/app/(marketing)/compare/zinng/page.tsx",
+      "src/app/(marketing)/industries/[slug]/page.tsx",
       "src/components/marketing/MarketingFooter.tsx",
       "src/lib/marketing/llms-content.ts",
       "src/lib/blog/publish.ts",
@@ -82,7 +82,7 @@ describe("deployTouchesPublicPages", () => {
   });
 
   it("tolerates surrounding whitespace from a piped file list", () => {
-    expect(deployTouchesPublicPages(["  src/app/pricing/page.tsx  "])).toBe(true);
+    expect(deployTouchesPublicPages(["  src/app/(marketing)/pricing/page.tsx  "])).toBe(true);
   });
 });
 
