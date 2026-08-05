@@ -117,7 +117,7 @@ function writeLedger(sb: Sandbox, applied: string[]) {
   );
 }
 
-function runHeal(sb: Sandbox) {
+function runHeal(sb: Sandbox, extraEnv: Record<string, string> = {}) {
   return spawnSync("bash", [HEAL_SCRIPT], {
     cwd: sb.run,
     encoding: "utf8",
@@ -125,6 +125,7 @@ function runHeal(sb: Sandbox) {
       ...process.env,
       PATH: `${sb.stubBin}:${process.env.PATH}`,
       SUPABASE_MIGRATION_TABLE: sb.tablePath,
+      ...extraEnv,
     },
   });
 }
@@ -194,6 +195,43 @@ describe("migration-order-heal.sh", () => {
     expect(
       readFileSync(join(sb.run, MIG_DIR, healed as string), "utf8")
     ).toBe("select 'survivor';");
+  }, 30_000);
+
+  it("pushes via the deploy-key path when MIGRATION_HEAL_SSH_KEY and _PUSH_URL are set", () => {
+    // The ruleset on main exempts deploy keys, not the Actions app, so in CI
+    // the re-stamp push authenticates with MIGRATION_HEAL_SSH_KEY against
+    // MIGRATION_HEAL_PUSH_URL (see the script header). A file:// remote never
+    // invokes ssh, so a dummy key exercises the code path (key file written,
+    // push aimed at the URL instead of origin, key file cleaned up) without
+    // needing a live ssh endpoint.
+    const sb = makeSandbox({
+      [APPLIED_A]: "select 1;",
+      [APPLIED_B]: "select 2;",
+      "20260822025000_merge_window_casualty.sql": "select 'survivor';",
+    });
+    writeLedger(sb, ["20260822020000", "20260822030000"]);
+
+    const res = runHeal(sb, {
+      MIGRATION_HEAL_SSH_KEY: "dummy-key-material-never-used-by-file-remotes",
+      MIGRATION_HEAL_PUSH_URL: sb.origin,
+    });
+    expect(res.status, res.stdout + res.stderr).toBe(0);
+
+    // The rename landed on origin main through the URL push. Unlike a push
+    // to the named remote, a direct-URL push does not move the clone's
+    // origin/main tracking ref, so refresh it before reading.
+    sh(sb.run, "git fetch -q origin");
+    const tip = originMainFiles(sb);
+
+    // The heal commit must carry [skip ci]: on the deploy-key path the push
+    // starts a real push-event workflow run, and without the marker that
+    // run would cancel (cancel-in-progress) the deploy performing the heal.
+    const subject = sh(sb.run, "git log -1 --format=%s origin/main").trim();
+    expect(subject).toContain("[skip ci]");
+    expect(tip).not.toContain("20260822025000_merge_window_casualty.sql");
+    const healed = tip.find((f) => f.endsWith("_merge_window_casualty.sql"));
+    expect(healed).toBeDefined();
+    expect((healed as string).split("_")[0] > "20260822030000").toBe(true);
   }, 30_000);
 
   it("re-stamps multiple casualties above the head preserving their relative order", () => {

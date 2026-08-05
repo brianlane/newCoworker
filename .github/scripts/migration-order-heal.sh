@@ -23,9 +23,12 @@
 #      below the applied head: exactly the merge-window casualties.
 #   4. Renames them (git mv, content preserved) to fresh stamps above
 #      max(applied head, local head, real UTC), commits that rename onto the
-#      fetched tip in a temporary worktree, and pushes it to main. A
-#      GITHUB_TOKEN push triggers no new workflow run, so there is no
-#      recursion; THIS run then applies the healed files and deploys.
+#      fetched tip in a temporary worktree, and pushes it to main. The
+#      commit message carries [skip ci] so the push starts no new workflow
+#      run regardless of auth (a GITHUB_TOKEN push never does; a deploy-key
+#      push WOULD, and cancel-in-progress would let that new run cancel this
+#      deploy mid-flight); THIS run then applies the healed files and
+#      deploys.
 #   5. Mirrors the renames into the run's checkout so the `db push` that
 #      follows sees the healed names.
 #
@@ -42,12 +45,42 @@
 # Expected env: SUPABASE_ACCESS_TOKEN, SUPABASE_DB_PASSWORD (for the ledger
 # read; the CLI is already linked by supabase-deploy.sh), plus the
 # actions/checkout git credentials for the push (persist-credentials).
+#
+# Push auth vs the main ruleset: the branch ruleset "main: PRs with all
+# checks green" (Aug 2026) blocks direct pushes to main, and GitHub will not
+# accept its own Actions app as a bypass actor on a user-owned repo, so a
+# GITHUB_TOKEN push here would be rejected. The bypass list instead exempts
+# DEPLOY KEYS, and ci.yml passes this script MIGRATION_HEAL_SSH_KEY (an
+# Actions secret holding the private half of the write deploy key titled
+# "migration-order-heal"; the key id changes on rotation, and the local
+# .env keeps a base64 copy as MIGRATION_HEAL_SSH_KEY_B64) plus
+# MIGRATION_HEAL_PUSH_URL (the repo's SSH URL). When both are set, the re-stamp push authenticates with that key
+# and sails through the bypass; when unset (local runs, the vitest sandbox),
+# the push falls back to plain `origin`, same as before the ruleset existed.
 set -euo pipefail
 
 MIGRATIONS_DIR="supabase/migrations"
 MAX_ATTEMPTS=3
 BOT_NAME="github-actions[bot]"
 BOT_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+
+# Push the healed tip to main, choosing auth by environment (see header).
+# Usage: push_main <worktree>. Returns git push's own exit code.
+push_main() {
+  local wt="$1"
+  if [ -n "${MIGRATION_HEAL_SSH_KEY:-}" ] && [ -n "${MIGRATION_HEAL_PUSH_URL:-}" ]; then
+    local key_file rc
+    key_file=$(mktemp)
+    printf '%s\n' "$MIGRATION_HEAL_SSH_KEY" > "$key_file"
+    chmod 600 "$key_file"
+    rc=0
+    GIT_SSH_COMMAND="ssh -i $key_file -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
+      git -C "$wt" push "$MIGRATION_HEAL_PUSH_URL" HEAD:refs/heads/main --quiet || rc=$?
+    rm -f "$key_file"
+    return "$rc"
+  fi
+  git -C "$wt" push origin HEAD:refs/heads/main --quiet
+}
 
 if [ ! -d "$MIGRATIONS_DIR" ]; then
   echo "::error::$MIGRATIONS_DIR not found. Run this from the repo root."
@@ -198,7 +231,13 @@ for line in sys.stdin:
     echo "  $old -> $new"
   done <<< "$renames"
 
-  msg="Re-stamp unapplied migration(s) above the applied ledger head [order heal]
+  # [skip ci] matters on the deploy-key path: unlike a GITHUB_TOKEN push,
+  # a deploy-key push DOES start a new push-event workflow run, and CI's
+  # cancel-in-progress concurrency group would let that new run cancel the
+  # very deploy performing this heal before db push finishes. Suppressing
+  # the run restores the old GITHUB_TOKEN behavior: the heal commit rides
+  # to main with no run of its own, and THIS run completes the deploy.
+  msg="Re-stamp unapplied migration(s) above the applied ledger head [order heal] [skip ci]
 
 $(printf '%s\n' "$renames" | sed 's/ / -> /')
 
@@ -210,7 +249,7 @@ renamed; the ledger itself is never touched."
 
   git -C "$WT" -c user.name="$BOT_NAME" -c user.email="$BOT_EMAIL" commit -m "$msg" --quiet
 
-  if git -C "$WT" push origin HEAD:refs/heads/main --quiet; then
+  if push_main "$WT"; then
     cleanup_wt
     # Mirror into the run's checkout (already synced to the pre-heal tip
     # above) so the db push that follows applies the healed names.
