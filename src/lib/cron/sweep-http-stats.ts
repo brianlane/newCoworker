@@ -28,6 +28,12 @@ export type HttpResponseRow = {
  * envelope when there is one (prefixed "data:"), else of the top level.
  * durationMs is dropped so the timing field never splits a group. Non-JSON
  * and non-object bodies get fixed labels rather than vanishing.
+ *
+ * A keys-only signature cannot separate two sweeps that share a shape
+ * (contract-term-nudge and monthly-intro-nudge both return
+ * {scanned,sent,skipped,errors}). A route that carries a string `sweep`
+ * field self-identifies, and that VALUE wins over the shape. Any sweep whose
+ * shape collides with another must add one.
  */
 export function bodySignature(content: string | null): string {
   if (content === null || content === "") return "(empty)";
@@ -43,9 +49,12 @@ export function bodySignature(content: string | null): string {
   const root = parsed as Record<string, unknown>;
   const data = root.data;
   if (typeof data === "object" && data !== null && !Array.isArray(data)) {
-    const keys = Object.keys(data).filter((k) => k !== "durationMs").sort();
+    const envelope = data as Record<string, unknown>;
+    if (typeof envelope.sweep === "string") return `sweep:${envelope.sweep}`;
+    const keys = Object.keys(envelope).filter((k) => k !== "durationMs").sort();
     return `data:{${keys.join(",")}}`;
   }
+  if (typeof root.sweep === "string") return `sweep:${root.sweep}`;
   const keys = Object.keys(root).filter((k) => k !== "durationMs").sort();
   return `{${keys.join(",")}}`;
 }

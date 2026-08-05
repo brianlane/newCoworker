@@ -36,6 +36,23 @@ describe("bodySignature", () => {
     );
   });
 
+  /**
+   * Two sweeps can share a key set (contract-term-nudge and
+   * monthly-intro-nudge both return {scanned,sent,skipped,errors}), and a
+   * keys-only signature blends them into one group. A route that carries a
+   * string `sweep` field self-identifies, and that VALUE wins over the shape.
+   */
+  it("prefers a self-identifying sweep field over the key shape", () => {
+    expect(
+      bodySignature('{"ok":true,"data":{"sweep":"contract-term-nudge-sweep","sent":1}}')
+    ).toBe("sweep:contract-term-nudge-sweep");
+    expect(bodySignature('{"sweep":"top-level-sweep","sent":1}')).toBe("sweep:top-level-sweep");
+  });
+
+  it("ignores a non-string sweep field", () => {
+    expect(bodySignature('{"sweep":7,"sent":1}')).toBe("{sent,sweep}");
+  });
+
   it("uses sorted top-level keys when there is no data envelope", () => {
     expect(bodySignature('{"ok":true,"claimed":0,"processed":0,"deferred":0,"stranded":0}')).toBe(
       "{claimed,deferred,ok,processed,stranded}"
