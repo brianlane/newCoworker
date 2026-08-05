@@ -184,35 +184,21 @@ export function stripGuessedTimezone(input: unknown): TransformResult {
         changed = true;
         notes.push(`${step.id}: added ${INVITEE_TIMEZONE_IANA_FIELD.name} for the owner notify`);
       }
-      continue;
-    }
-
-    if (step.type === "notify_owner" && typeof step.message === "string") {
-      if (step.message.includes(TZ_PLAIN_VAR)) {
-        step.message = step.message.replace(` ${TZ_PLAIN_VAR}`, OWNER_ZONE_REPLACEMENT);
-        changed = true;
-        notes.push(`${step.id}: owner notify now names the invitee's zone verbatim`);
-      }
-      continue;
-    }
-
-    for (const key of ["body", "message"] as const) {
-      const text = step[key];
-      if (typeof text !== "string" || !text.includes(TZ_PLAIN_VAR)) continue;
-      if (!text.includes(CUSTOMER_ZONE_PHRASE)) {
-        notes.push(
-          `${step.id}: ${key} references ${TZ_PLAIN} but not in the expected phrase; ` +
-            "left untouched, resolve by hand"
-        );
-        continue;
-      }
-      step[key] = text.split(CUSTOMER_ZONE_PHRASE).join(CUSTOMER_ZONE_REPLACEMENT);
-      changed = true;
-      notes.push(`${step.id}: ${key} now says "your time" and names no zone`);
     }
   }
 
-  if (!changed) notes.push("already patched (nothing referenced the guessed zone)");
+  // Only truly-nothing-to-do earns "already patched". A flow that still
+  // references the field through copy this patch could not rewrite has work
+  // outstanding, and saying otherwise would make a dry-run read as clean while
+  // a customer-facing string is still wrong.
+  if (!changed) {
+    notes.push(
+      stillReferenced.length > 0
+        ? `NOT patched: ${stillReferenced.map((s) => s.id).join(", ")} still reference ` +
+            `${TZ_PLAIN} in copy this patch does not recognize. Rewrite it by hand, then re-run.`
+        : "already patched (nothing referenced the guessed zone)"
+    );
+  }
   return { definition, changed, notes };
 }
 

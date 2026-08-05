@@ -29,7 +29,8 @@ import {
 } from "../scripts/oneshot/kyp-lead-flow-definition";
 import {
   buildKypBookingConfirmationDefinition,
-  buildKypPreCallReminderDefinition
+  buildKypPreCallReminderDefinition,
+  INVITEE_LOCAL_TIME_FIELD
 } from "../scripts/oneshot/kyp-reminder-flow-definition";
 import { addBadPhoneIntakeArm } from "../scripts/oneshot/patch-kyp-bad-phone-intake";
 import { stripGuessedTimezone } from "../scripts/oneshot/patch-kyp-timezone-labels";
@@ -386,6 +387,42 @@ describe("KYP calendar flows: invitee timezone (Reem, Aug 5 2026)", () => {
     expect(result.notes.join("\n")).toContain("odd_sms");
     // And the unrecognized copy is left exactly as it was, not half-rewritten.
     expect(result.definition.steps![1].body).toBe(odd.steps[1].body);
+    // Each unrecognized reference is reported ONCE. A second rewrite pass over
+    // the same copy used to double every note.
+    const leftUntouched = result.notes.filter((n) => n.includes("left untouched"));
+    expect(leftUntouched).toHaveLength(1);
+  });
+
+  /**
+   * The dangerous combination: nothing else needs changing, so `changed` is
+   * false, but copy the patch cannot rewrite still references the field.
+   * Reporting "already patched" there would make a dry-run read as clean while
+   * a customer-facing string is still wrong.
+   */
+  it("never says 'already patched' while copy still needs a hand rewrite", () => {
+    const stuck = {
+      steps: [
+        {
+          id: "extract_invitee",
+          type: "extract_text",
+          fields: [
+            { ...INVITEE_LOCAL_TIME_FIELD },
+            { name: "invitee_tz_plain", description: "Invitee's timezone: 'Eastern' or 'Pacific'." }
+          ]
+        },
+        {
+          id: "odd_sms",
+          type: "send_sms",
+          body: "See you at {{vars.invitee_local_time}} ({{vars.invitee_tz_plain}})!"
+        }
+      ]
+    };
+    const result = stripGuessedTimezone(stuck);
+    expect(result.changed).toBe(false);
+    const joined = result.notes.join("\n");
+    expect(joined).toContain("NOT patched");
+    expect(joined).toContain("odd_sms");
+    expect(joined).not.toContain("already patched");
   });
 
   it("the one-shot is idempotent on an already-patched flow", () => {
