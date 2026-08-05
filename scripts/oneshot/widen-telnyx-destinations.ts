@@ -117,17 +117,25 @@ async function main(): Promise<void> {
   console.log(`Allowlist: ${allowed.length} countries (dial table minus denylist ${[...SMS_DESTINATION_DENYLIST].sort().join(",")})`);
   console.log(APPLY ? "MODE: APPLY" : "MODE: dry-run (pass --apply to execute)");
 
-  const profiles: Array<[string, string | undefined]> = [
-    ["US default", process.env.TELNYX_MESSAGING_PROFILE_ID],
-    ["CA", process.env.TELNYX_MESSAGING_PROFILE_ID_CA],
-    ["MX", process.env.TELNYX_MESSAGING_PROFILE_ID_MX]
-  ];
-  for (const [label, id] of profiles) {
-    if (!id) {
-      console.log(`\n[${label}] env id unset; skipping`);
-      continue;
+  // Enumerate EVERY messaging profile from the account instead of the three
+  // platform env ids: per-tenant custom profiles exist (Truly Insurance has
+  // its own), and the first run of this script missed one exactly because it
+  // trusted the env list. The account is the source of truth. Paginated via
+  // meta.total_pages (Telnyx clamps pages; trusting one page would recreate
+  // the missed-profile gap at scale).
+  const profiles: Array<{ id: string; name: string }> = [];
+  for (let page = 1; page <= 50; page += 1) {
+    const list = await telnyx(`/messaging_profiles?page[size]=50&page[number]=${page}`);
+    if (list.status !== 200) {
+      throw new Error(`GET /messaging_profiles page ${page}: HTTP ${list.status}`);
     }
-    await widenMessagingProfile(label, id, allowed);
+    for (const p of list.body?.data ?? []) profiles.push({ id: p.id, name: p.name });
+    const totalPages = Number(list.body?.meta?.total_pages ?? 1);
+    if (page >= totalPages) break;
+  }
+  if (profiles.length === 0) throw new Error("no messaging profiles returned; refusing to no-op");
+  for (const p of profiles) {
+    await widenMessagingProfile(p.name, p.id, allowed);
   }
   await widenVoiceProfiles(allowed);
   await reportDidFlags();
