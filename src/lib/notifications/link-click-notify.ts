@@ -31,6 +31,13 @@ export type LinkClickRpcResult = {
   is_first_click: boolean;
   is_prefetch: boolean;
   should_notify: boolean;
+  /**
+   * False for an owner/teammate notification link: the RPC resolved it
+   * without recording anything, so the stats fields above are absent and
+   * there is nothing to alert about. Optional because rows predating the
+   * column, and the tracked branch of the RPC, simply say true.
+   */
+  tracked?: boolean;
 };
 
 /** At most one link_click alert per contact per hour. */
@@ -69,6 +76,10 @@ function linkDestinationLabel(url: string): string {
 }
 
 export async function notifyLinkClick(result: LinkClickRpcResult): Promise<void> {
+  // An owner/teammate link records no clicks at all, so there is no
+  // engagement to report. Checked ahead of should_notify so the guarantee is
+  // stated here too, not left resting on the RPC's flag alone.
+  if (result.tracked === false) return;
   if (!result.should_notify) return;
 
   const db = await createSupabaseServiceClient();

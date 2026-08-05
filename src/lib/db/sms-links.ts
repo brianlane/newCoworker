@@ -4,6 +4,12 @@
  * `sms_links` and `sms_link_clicks` are central-only (service-role reads).
  * Outbound log pairing uses `sms_outbound_log_id` when set; older rows fall
  * back to `run_id` + timestamp heuristics in the UI.
+ *
+ * Every read here is an ENGAGEMENT read, so every one of them filters on
+ * `tracked` (see ONLY_TRACKED). Owner and teammate notification links are
+ * shortened purely for length and their clicks are never recorded, so an
+ * untracked row can only ever report a truthful-looking zero, which would
+ * read as "the lead ignored it" and drag every click-through rate down.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
@@ -15,6 +21,12 @@ type SupabaseClient = Awaited<ReturnType<typeof createSupabaseServiceClient>>;
 
 const SMS_LINK_SELECT =
   "id, business_id, short_code, original_url, to_e164, source, flow_id, run_id, sms_outbound_log_id, click_count, first_clicked_at, last_clicked_at, created_at";
+
+/**
+ * The engagement filter, named so a new read here is an obvious omission if it
+ * leaves it out. Applied as `.eq(...ONLY_TRACKED)`.
+ */
+const ONLY_TRACKED = ["tracked", true] as const;
 
 export type SmsLinkRow = {
   id: string;
@@ -172,6 +184,7 @@ export async function listSmsLinksByOutboundLogIds(
     .select(SMS_LINK_SELECT)
     .eq("business_id", businessId)
     .in("sms_outbound_log_id", ids)
+    .eq(...ONLY_TRACKED)
     .order("created_at", { ascending: false });
   if (error) throw new Error(`listSmsLinksByOutboundLogIds: ${error.message}`);
   return enrichLinks(businessId, (data as SmsLinkRow[] | null) ?? [], db, opts);
@@ -197,6 +210,7 @@ export async function listSmsLinksForContact(
     .select(SMS_LINK_SELECT)
     .eq("business_id", businessId)
     .in("to_e164", numbers)
+    .eq(...ONLY_TRACKED)
     .gte("created_at", daysCutoff(days, opts.now))
     .order("created_at", { ascending: false })
     .limit(100);
@@ -215,6 +229,7 @@ export async function listSmsLinksForRun(
     .select(SMS_LINK_SELECT)
     .eq("business_id", businessId)
     .eq("run_id", runId)
+    .eq(...ONLY_TRACKED)
     .order("created_at", { ascending: false });
   if (error) throw new Error(`listSmsLinksForRun: ${error.message}`);
   return enrichLinks(businessId, (data as SmsLinkRow[] | null) ?? [], db, opts);
@@ -232,6 +247,7 @@ export async function listSmsLinksForFlow(
     .select(SMS_LINK_SELECT)
     .eq("business_id", businessId)
     .eq("flow_id", flowId)
+    .eq(...ONLY_TRACKED)
     .gte("created_at", daysCutoff(days, opts.now))
     .order("created_at", { ascending: false })
     .limit(500);
@@ -257,6 +273,7 @@ export async function listSmsLinksForBusiness(
     .from("sms_links")
     .select(SMS_LINK_SELECT)
     .eq("business_id", businessId)
+    .eq(...ONLY_TRACKED)
     .gte("created_at", daysCutoff(days, opts.now));
   if (opts.flowId) query = query.eq("flow_id", opts.flowId);
   const { data, error } = await query

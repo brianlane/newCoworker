@@ -155,6 +155,10 @@ export async function getFlowFunnels(
       .select("flow_id, click_count")
       .eq("business_id", businessId)
       .not("flow_id", "is", null)
+      // Lead engagement only. An owner-notification link's click is never
+      // recorded, so it would enter this funnel as a permanent zero and read
+      // as a lead who ignored the text.
+      .eq("tracked", true)
       .gte("created_at", cutoffIso)
       // Newest-first for the same capped-scan honesty as the sends read.
       .order("created_at", { ascending: false })

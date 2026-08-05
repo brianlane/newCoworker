@@ -339,6 +339,25 @@ export async function pruneExpiredContent(
     results.push({ table: "sms_links", central: centralCount(data), box: null });
   }
 
+  // ── ai_flow_notify_cooldowns (open notify_owner windows) ───────────────
+  // The schema caps a cooldown at one week, so any row this far past its last
+  // send can no longer suppress anything; it is dead weight that may still be
+  // holding an identifier as its key. Pruned on last_notified_at, not
+  // created_at: the column is refreshed on every send, so an actively
+  // repeating key stays.
+  {
+    const { data, error } = await db
+      .from("ai_flow_notify_cooldowns")
+      .delete()
+      .eq("business_id", businessId)
+      .lt("last_notified_at", cutoffIso)
+      .select("business_id");
+    if (error) {
+      throw new Error(`pruneExpiredContent: ai_flow_notify_cooldowns: ${error.message}`);
+    }
+    results.push({ table: "ai_flow_notify_cooldowns", central: centralCount(data), box: null });
+  }
+
   // ── sms_owner_reply_prompts (answered only) ────────────────────────────
   {
     const { data, error } = await db

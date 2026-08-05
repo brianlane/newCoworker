@@ -1570,6 +1570,37 @@ describe("planStep: notify_owner", () => {
       error: "notify_owner: message is empty after templating"
     });
   });
+  it("renders the cooldown key and carries the step id with it", () => {
+    const step: FlowStep = {
+      id: "s_notify_sales",
+      type: "notify_owner",
+      message: "Sales email",
+      cooldown: { key: "{{trigger.thread_id}}", minutes: 720 }
+    };
+    expect(planStep(step, { vars: {}, trigger: { thread_id: "199abc" } })).toEqual({
+      ok: true,
+      action: {
+        kind: "notify_owner",
+        message: "Sales email",
+        cooldown: { stepId: "s_notify_sales", key: "199abc", minutes: 720 }
+      }
+    });
+  });
+  it("DROPS the cooldown when its key renders empty, rather than sharing a blank key", () => {
+    // A mailbox with no conversation id must fall back to per-message alerts.
+    // Keying them all on "" would silence every alert after the first, which
+    // is the opposite of failing safe for a lead notification.
+    const step: FlowStep = {
+      id: "n",
+      type: "notify_owner",
+      message: "Sales email",
+      cooldown: { key: "{{trigger.thread_id}}", minutes: 720 }
+    };
+    expect(planStep(step, { vars: {}, trigger: {} })).toEqual({
+      ok: true,
+      action: { kind: "notify_owner", message: "Sales email" }
+    });
+  });
 });
 
 describe("planStep: notify_lead_owner", () => {

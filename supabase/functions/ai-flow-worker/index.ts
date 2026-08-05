@@ -1899,9 +1899,9 @@ async function runStep(
     case "run_agent":
       return runAgentStep(scope, run, action);
     case "notify_owner":
-      return notifyOwnerStep(supabase, run, action);
+      return notifyOwnerStep(supabase, run, index, action);
     case "notify_lead_owner":
-      return notifyLeadOwnerStep(supabase, run, scope, action);
+      return notifyLeadOwnerStep(supabase, run, index, scope, action);
     case "arm_voice_transfer":
       return armVoiceTransferStep(supabase, run, scope, action);
     case "voice_brief":
@@ -6230,6 +6230,7 @@ async function deliverOwnerMailboxEmail(
 async function notifyOwnerStep(
   supabase: Supabase,
   run: RunRow,
+  index: number,
   action: Extract<StepAction, { kind: "notify_owner" }>
 ): Promise<StepOutcome> {
   await telemetryRecord(supabase, "ai_flow_notify_owner", {
@@ -6246,7 +6247,52 @@ async function notifyOwnerStep(
   const forward = (settingsRow as { forward_to_e164?: string | null } | null)?.forward_to_e164 ?? "";
   const cfg = await messagingConfig(supabase, run.business_id);
   if (forward && cfg) {
-    const text = prepareSmsBody(`[AiFlow] ${action.message}`);
+    // Cooldown claim BEFORE any work that costs money or mints rows. The RPC
+    // decides atomically (see the migration): true means send, false means an
+    // alert for this key already went out inside the window. An RPC error
+    // fails OPEN and sends — a duplicate text is a nuisance, a swallowed lead
+    // alert is a lost lead.
+    if (action.cooldown) {
+      const { data: claimed, error: claimErr } = await supabase.rpc(
+        "ai_flow_claim_notify_cooldown",
+        {
+          p_business_id: run.business_id,
+          p_flow_id: run.flow_id,
+          p_step_id: action.cooldown.stepId,
+          p_cooldown_key: action.cooldown.key,
+          p_minutes: action.cooldown.minutes
+        }
+      );
+      if (claimErr) {
+        console.warn("notify_owner: cooldown claim failed, sending anyway", claimErr.message);
+      } else if (claimed === false) {
+        await telemetryRecord(supabase, "ai_flow_notify_owner_cooldown_skip", {
+          run_id: run.id,
+          business_id: run.business_id,
+          step_id: action.cooldown.stepId,
+          minutes: action.cooldown.minutes
+        });
+        return { kind: "ok", skipped: true, result: { notified: null, skipped: "cooldown" } };
+      }
+    }
+    // Owner links are shortened for length but NOT tracked: this is Brian's
+    // own tap on his own alert, and counting it would inflate the lead
+    // click-through numbers the flow funnels report. `tracked: false` marks
+    // the row so the click RPC redirects without logging and the analytics
+    // reads skip it. Fail-safe like the lead path: any error leaves the URL
+    // long, and a failed send deletes the rows so no live redirect survives
+    // for a text nobody received.
+    const shortened = await shortenSmsBodyUrls(supabase, {
+      businessId: run.business_id,
+      text: action.message,
+      source: "owner_notify",
+      baseUrl: Deno.env.get("NEXT_PUBLIC_APP_URL"),
+      toE164: forward,
+      flowId: run.flow_id,
+      runId: run.id,
+      tracked: false
+    });
+    const text = prepareSmsBody(`[AiFlow] ${shortened.text}`);
     // Metered (never refused) owner traffic — Jul 14 2026 policy.
     const send = await sendOperationalSms(supabase, run.business_id, {
       apiKey: cfg.apiKey,
@@ -6254,16 +6300,27 @@ async function notifyOwnerStep(
       fromE164: cfg.from,
       toE164: forward,
       text,
-      idempotencyKey: `aiflow-notify:${run.id}`
+      // Step-indexed, like send_sms: a run whose branches fire two
+      // notify_owner steps must not have the second one swallowed by Telnyx
+      // as a replay of the first.
+      idempotencyKey: `aiflow-notify:${run.id}:${index}`
     });
-    if (!send.ok) throw new Error(`notify_owner telnyx ${send.status}`);
-    await logOutboundSms(supabase, run, {
+    if (!send.ok) {
+      await deleteShortLinks(supabase, shortened.links);
+      throw new Error(`notify_owner telnyx ${send.status}`);
+    }
+    const outboundLogId = await logOutboundSms(supabase, run, {
       to: forward,
       from: cfg.from || null,
       body: text,
       source: "owner_notify",
       telnyxMessageId: telnyxMessageIdFromBody(send.body)
     });
+    await linkSmsLinksToOutboundLog(
+      supabase,
+      shortened.links.map((l) => l.shortCode),
+      outboundLogId
+    );
     return { kind: "ok", result: { notified: forward } };
   }
   return { kind: "ok", result: { notified: null } };
@@ -6284,6 +6341,7 @@ async function notifyOwnerStep(
 async function notifyLeadOwnerStep(
   supabase: Supabase,
   run: RunRow,
+  index: number,
   scope: Scope,
   action: Extract<StepAction, { kind: "notify_lead_owner" }>
 ): Promise<StepOutcome> {
@@ -6363,7 +6421,23 @@ async function notifyLeadOwnerStep(
   if (member) {
     const cfg = await messagingConfig(supabase, run.business_id);
     if (cfg) {
-      const text = prepareSmsBody(action.message);
+      // Same untracked shortening as notify_owner: a teammate's tap on their
+      // own alert is not lead engagement.
+      const shortened = await shortenSmsBodyUrls(supabase, {
+        businessId: run.business_id,
+        text: action.message,
+        source: "owner_notify",
+        baseUrl: Deno.env.get("NEXT_PUBLIC_APP_URL"),
+        toE164: member.phone,
+        flowId: run.flow_id,
+        runId: run.id,
+        tracked: false
+      });
+      // Prefixed like notify_owner. This step's own business-owner fallback
+      // below routes through notifyOwnerStep and comes out prefixed, so
+      // without this the SAME alert looked different depending on whether a
+      // teammate happened to own the contact.
+      const text = prepareSmsBody(`[AiFlow] ${shortened.text}`);
       // Operational teammate traffic, like owner notices: metered, never
       // refused — a forwarded lead reply must not be dropped at the cap.
       const send = await sendOperationalSms(supabase, run.business_id, {
@@ -6372,16 +6446,27 @@ async function notifyLeadOwnerStep(
         fromE164: cfg.from,
         toE164: member.phone,
         text,
-        idempotencyKey: `aiflow-lead-owner:${run.id}`
+        idempotencyKey: `aiflow-lead-owner:${run.id}:${index}`
       });
-      if (!send.ok) throw new Error(`notify_lead_owner telnyx ${send.status}`);
-      await logOutboundSms(supabase, run, {
+      if (!send.ok) {
+        await deleteShortLinks(supabase, shortened.links);
+        throw new Error(`notify_lead_owner telnyx ${send.status}`);
+      }
+      const outboundLogId = await logOutboundSms(supabase, run, {
         to: member.phone,
         from: cfg.from || null,
         body: text,
-        source: "agent_offer",
+        // This is an owner/teammate notice, not a route_to_team claim offer:
+        // "agent_offer" here made forwarded-lead texts indistinguishable from
+        // offers in sms_outbound_log and in the per-source reporting.
+        source: "owner_notify",
         telnyxMessageId: telnyxMessageIdFromBody(send.body)
       });
+      await linkSmsLinksToOutboundLog(
+        supabase,
+        shortened.links.map((l) => l.shortCode),
+        outboundLogId
+      );
     }
     appendActionTaken(
       scope,
@@ -6400,7 +6485,7 @@ async function notifyLeadOwnerStep(
   }
 
   // Business-owner fallback: same delivery as notify_owner.
-  const outcome = await notifyOwnerStep(supabase, run, {
+  const outcome = await notifyOwnerStep(supabase, run, index, {
     kind: "notify_owner",
     message: action.message
   });

@@ -42,6 +42,10 @@ export async function getSmsLinkStats(
     .from("sms_links")
     .select("id")
     .eq("business_id", businessId)
+    // Engagement only. Owner/teammate notification links are shortened but
+    // never counted, so including them here would inflate the scan (and the
+    // "clipped" verdict) with rows the list below deliberately drops.
+    .eq("tracked", true)
     .gte("created_at", cutoffIso);
   if (opts.flowId) query = query.eq("flow_id", opts.flowId);
   const { data: scan, error: scanErr } = await query

@@ -420,7 +420,16 @@ export type StepAction =
       /** Templated input resolved to nothing usable → skip, not fail. */
       skipReason?: string;
     }
-  | { kind: "notify_owner"; message: string }
+  // `cooldown.key` is the RENDERED key. The whole object is absent when the
+  // step declared no cooldown OR its key template resolved to nothing, so the
+  // worker's "no cooldown object means send unconditionally" branch covers
+  // both. stepId scopes the window to this step, so reordering a flow's steps
+  // cannot reset a live cooldown the way a positional index would.
+  | {
+      kind: "notify_owner";
+      message: string;
+      cooldown?: { stepId: string; key: string; minutes: number };
+    }
   // Text whoever the lead belongs to: the contact's owning employee when one
   // is on record, else the business owner. phone/name are the RESOLVED var
   // values (not var names) the worker locates the contact with.
@@ -1367,7 +1376,29 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
     case "notify_owner": {
       const message = renderTemplate(step.message, scope, { collapseEmpty: true }).trim();
       if (!message) return { ok: false, error: "notify_owner: message is empty after templating" };
-      return { ok: true, action: { kind: "notify_owner", message } };
+      // An unrenderable cooldown key (no thread id on this provider, a var the
+      // run never set) drops the cooldown rather than falling back to a shared
+      // empty key, which would silence every alert from the step after the
+      // first one.
+      const cooldownKey = step.cooldown
+        ? renderTemplate(step.cooldown.key, scope, { collapseEmpty: true }).trim()
+        : "";
+      return {
+        ok: true,
+        action: {
+          kind: "notify_owner",
+          message,
+          ...(step.cooldown && cooldownKey
+            ? {
+                cooldown: {
+                  stepId: step.id,
+                  key: cooldownKey,
+                  minutes: step.cooldown.minutes
+                }
+              }
+            : {})
+        }
+      };
     }
     case "notify_lead_owner": {
       const message = renderTemplate(step.message, scope, { collapseEmpty: true }).trim();

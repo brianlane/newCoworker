@@ -4288,13 +4288,55 @@ function StepFields({
     );
   }
   if (step.type === "notify_owner") {
+    const cd = step.cooldown;
     return (
-      <Field
-        label="Owner message"
-        value={step.message}
-        onChange={(v) => patchStep(index, { message: v })}
-        textarea
-      />
+      <div className="space-y-2">
+        <Field
+          label="Owner message"
+          value={step.message}
+          onChange={(v) => patchStep(index, { message: v })}
+          textarea
+        />
+        <div className="rounded-md border border-parchment/10 bg-deep-ink/30 px-3 py-2 space-y-2">
+          <label className="flex items-center gap-2 text-xs text-parchment/70">
+            <input
+              type="checkbox"
+              checked={Boolean(cd)}
+              onChange={(ev) =>
+                patchStep(index, {
+                  cooldown: ev.target.checked
+                    ? { key: "{{trigger.thread_id}}", minutes: 720 }
+                    : undefined
+                })
+              }
+            />
+            Only text me once about the same thing
+          </label>
+          {cd && (
+            <div className="flex flex-wrap gap-2">
+              <Field
+                label="What counts as the same thing"
+                value={cd.key}
+                onChange={(v) => patchStep(index, { cooldown: { ...cd, key: v } })}
+                help="Use {{trigger.thread_id}} for one text per email conversation, so a reply on a thread you were already told about stays quiet. {{vars.lead_phone}} does the same per lead."
+              />
+              <Field
+                label="Stay quiet for (minutes)"
+                value={String(cd.minutes)}
+                onChange={(v) => {
+                  const n = Number(v);
+                  patchStep(index, {
+                    cooldown: {
+                      ...cd,
+                      minutes: Number.isFinite(n) && n > 0 ? Math.min(Math.round(n), 10080) : 720
+                    }
+                  });
+                }}
+              />
+            </div>
+          )}
+        </div>
+      </div>
     );
   }
   if (step.type === "route_to_team") {

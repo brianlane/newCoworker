@@ -113,6 +113,16 @@ describe("notifyLinkClick", () => {
     expect(hasRecentNotificationForContact).not.toHaveBeenCalled();
   });
 
+  it("never alerts on an untracked owner/teammate link, even if should_notify says true", async () => {
+    // The owner tapping his own AiFlow alert is not lead engagement. Asserted
+    // against a should_notify:true payload on purpose: the guarantee must not
+    // depend on the RPC also getting that flag right.
+    const { notifyLinkClick } = await import("@/lib/notifications/link-click-notify");
+    await notifyLinkClick(rpcResult({ tracked: false, should_notify: true }));
+    expect(dispatchUrgentNotification).not.toHaveBeenCalled();
+    expect(hasRecentNotificationForContact).not.toHaveBeenCalled();
+  });
+
   it("collapses per contact: a recent link_click alert suppresses this one and releases the stamp", async () => {
     hasRecentNotificationForContact.mockResolvedValue(true);
     const { notifyLinkClick, LINK_CLICK_CONTACT_THROTTLE_MS } = await import(

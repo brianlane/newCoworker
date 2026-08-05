@@ -752,7 +752,26 @@ export type FlowStep =
       when?: StepCondition;
     }
   | { id: string; type: "approval_gate"; prompt: string; when?: StepCondition }
-  | { id: string; type: "notify_owner"; message: string; when?: StepCondition }
+  | {
+      id: string;
+      type: "notify_owner";
+      message: string;
+      /**
+       * Suppress repeat alerts that share a key. The key is TEMPLATED, so
+       * "{{trigger.thread_id}}" collapses every reply on one email thread to a
+       * single text per window, and "{{vars.lead_phone}}" would do the same
+       * per lead. A key that renders empty means no cooldown at all (the step
+       * behaves exactly as it did before this option existed), so a provider
+       * that exposes no thread id degrades to per-message alerts rather than
+       * collapsing everything onto one shared empty key.
+       *
+       * The window is stamped only when a text actually goes out, so a thread
+       * whose first message did not match the notify step's `when` still
+       * alerts on the later reply that does.
+       */
+      cooldown?: { key: string; minutes: number };
+      when?: StepCondition;
+    }
   // Text whoever the lead BELONGS to: the contact's owning employee
   // (contacts.owner_employee_id — set when a teammate claims) when one is on
   // record, else the business owner. phoneVar (preferred) / nameVar locate

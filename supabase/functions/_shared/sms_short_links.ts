@@ -167,6 +167,14 @@ export type ShortenSmsBodyOptions = {
   toE164?: string | null;
   flowId?: string | null;
   runId?: string | null;
+  /**
+   * False for owner / teammate notifications: the link is shortened purely to
+   * keep the text short, and the click is never counted. Their taps are not
+   * lead engagement, so counting them would inflate the click-through numbers
+   * the flow funnels report on. Defaults to true, so every existing
+   * lead-facing caller is unchanged.
+   */
+  tracked?: boolean;
   randomBytes?: RandomBytes;
 };
 
@@ -192,7 +200,8 @@ async function insertShortLink(
         to_e164: opts.toE164 ?? null,
         source: opts.source,
         flow_id: opts.flowId ?? null,
-        run_id: opts.runId ?? null
+        run_id: opts.runId ?? null,
+        tracked: opts.tracked ?? true
       });
       if (!error) return code;
       if (error.code !== UNIQUE_VIOLATION) {

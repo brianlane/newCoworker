@@ -140,6 +140,12 @@ export type InboundEmailMessage = {
   fromEmail: string;
   subject: string;
   bodyText: string;
+  /**
+   * Provider conversation id (Gmail threadId), shared by every reply on the
+   * thread. Optional: only the connected-mailbox poller can supply one, and a
+   * step keyed on it degrades to per-message behavior when it is absent.
+   */
+  threadId?: string;
   receivedAt?: string;
 };
 
@@ -160,6 +166,10 @@ export function emailTriggerScope(
     from: msg.fromEmail,
     subject: msg.subject.slice(0, 300),
     message_id: msg.id,
+    // Absent for providers that expose no conversation id: the key is omitted
+    // rather than emitted empty, so a cooldown keyed on it falls back to
+    // per-message behavior instead of collapsing every message onto "".
+    ...(msg.threadId ? { thread_id: msg.threadId } : {}),
     ...(connectionId ? { connection_id: connectionId } : {}),
     ...(msg.receivedAt ? { received_at: msg.receivedAt } : {})
   };

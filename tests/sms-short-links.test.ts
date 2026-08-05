@@ -224,9 +224,25 @@ describe("shortenSmsBodyUrls", () => {
         to_e164: "+16025550147",
         source: "ai_flow",
         flow_id: "flow-1",
-        run_id: "run-1"
+        run_id: "run-1",
+        tracked: true
       }
     ]);
+  });
+
+  it("marks an owner notification's link untracked so its click is never counted", async () => {
+    const { db, inserts } = stubDb([ok]);
+    const res = await shortenSmsBodyUrls(db, {
+      ...staticOpts,
+      randomBytes: bytes(0),
+      text: `Sales email in the team inbox: ${longUrl}.`,
+      source: "owner_notify",
+      toE164: "+16025550147",
+      tracked: false
+    });
+    // Still shortened: the point is a text that fits, not a click that counts.
+    expect(res.text).toBe(`Sales email in the team inbox: ${BASE}/s/abcdefgh.`);
+    expect(inserts[0]).toMatchObject({ source: "owner_notify", tracked: false });
   });
 
   it("shortens a bare-domain URL and stores it scheme-prefixed for the redirect", async () => {
