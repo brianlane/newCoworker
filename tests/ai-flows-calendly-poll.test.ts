@@ -29,6 +29,7 @@ import {
   calendlyEventUuid,
   fetchCalendlyCandidateEvents,
   formatInviteeLocalTime,
+  formatInviteeZoneLabel,
   normalizeCalendlyEvent
 } from "@/lib/ai-flows/calendly-poll";
 import type { CalendarEventInput } from "@/lib/ai-flows/trigger-eval";
@@ -107,6 +108,42 @@ describe("formatInviteeLocalTime", () => {
     expect(formatInviteeLocalTime("2026-07-16T18:00:00Z", undefined)).toBeNull();
     expect(formatInviteeLocalTime("not-a-date", "America/Toronto")).toBeNull();
     expect(formatInviteeLocalTime("2026-07-16T18:00:00Z", "Fake/Zone")).toBeNull();
+  });
+
+  it("still carries NO zone of its own, so flows keep extracting a bare time", () => {
+    // Load-bearing: KYP's extractor asks for "formatted like '10:00 AM'".
+    // Appending a zone here would silently change that for every tenant,
+    // which is why the label rides on its own line instead.
+    const out = formatInviteeLocalTime("2026-08-05T13:00:00Z", "Europe/London")!;
+    expect(out).toContain("2:00 PM");
+    expect(out).not.toMatch(/GMT|BST|UTC|EDT|EST/);
+  });
+});
+
+describe("formatInviteeZoneLabel", () => {
+  it("labels a North American zone the way the rest of the platform does", () => {
+    // July, so Toronto is on daylight time.
+    expect(formatInviteeZoneLabel("2026-07-16T18:00:00Z", "America/Toronto")).toBe("EDT");
+  });
+
+  it("labels a non-North-American zone correctly rather than guessing", () => {
+    // The Reem case (2026-08-05, Europe/London). The old flow field had no
+    // correct answer available for this invitee and fell back to 'Eastern'.
+    const label = formatInviteeZoneLabel("2026-08-05T13:00:00Z", "Europe/London");
+    expect(label).toBe("GMT+1");
+    expect(label).not.toMatch(/eastern/i);
+  });
+
+  it("tracks daylight saving rather than pinning one label per zone", () => {
+    expect(formatInviteeZoneLabel("2026-01-15T18:00:00Z", "America/Toronto")).toBe("EST");
+    expect(formatInviteeZoneLabel("2026-01-15T18:00:00Z", "Europe/London")).toBe("GMT");
+  });
+
+  it("returns null for missing/unparseable inputs and bad timezones", () => {
+    expect(formatInviteeZoneLabel(undefined, "America/Toronto")).toBeNull();
+    expect(formatInviteeZoneLabel("2026-07-16T18:00:00Z", undefined)).toBeNull();
+    expect(formatInviteeZoneLabel("not-a-date", "America/Toronto")).toBeNull();
+    expect(formatInviteeZoneLabel("2026-07-16T18:00:00Z", "Fake/Zone")).toBeNull();
   });
 });
 

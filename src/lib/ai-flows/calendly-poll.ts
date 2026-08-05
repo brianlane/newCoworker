@@ -185,6 +185,57 @@ export function formatInviteeLocalTime(
 }
 
 /**
+ * The invitee's zone as a short label ("EDT", "GMT+1"), derived rather than
+ * guessed. Null on the same unusable inputs as `formatInviteeLocalTime`.
+ *
+ * Why this line exists at all: the local-time line above deliberately carries
+ * NO zone, on the reasoning that a reminder quoting the invitee's own wall
+ * clock never needs to name one. That reasoning is sound right up until a
+ * flow decides it wants to say "2:00 PM Eastern", at which point the payload
+ * offers only a raw IANA id and the flow author has to invent the rest.
+ *
+ * KYP Ads did exactly that: an extract field enumerating five NORTH AMERICAN
+ * zones, defaulting to 'Eastern' when unclear. On 2026-08-05 it told a
+ * `Europe/London` lead her 2:00 PM UK call was "2:00 PM Eastern time (your
+ * local time)", then that no call was starting while hers was seven minutes
+ * away, and she canceled.
+ *
+ * Same mechanism the rest of the platform settled on for this after the
+ * KYP/Ayanna no-show on 2026-07-20: `timeZoneName: "short"` in
+ * `calendar-tools/handlers.ts` and `contact-booking-context.ts`. This surface
+ * was simply never brought along.
+ *
+ * ADDED as a separate line rather than folded into the local-time line, which
+ * flows in the wild already extract expecting a bare "2:00 PM". Appending a
+ * zone there would silently change what every tenant's extractor returns.
+ */
+export function formatInviteeZoneLabel(
+  startIso: string | undefined,
+  timezone: string | undefined
+): string | null {
+  if (!startIso || !timezone) return null;
+  const ms = Date.parse(startIso);
+  if (!Number.isFinite(ms)) return null;
+  try {
+    const parts = new Intl.DateTimeFormat("en-US", {
+      timeZone: timezone,
+      timeZoneName: "short"
+    }).formatToParts(new Date(ms));
+    const label = parts
+      .filter((p) => p.type === "timeZoneName")
+      .map((p) => p.value)
+      .join("");
+    /* c8 ignore next -- `timeZoneName: "short"` always yields that part when
+       the format itself succeeds, so an empty label is unreachable in
+       practice; the guard exists so a future option change degrades to
+       omitting the line rather than emitting "invitee timezone label: ". */
+    return label.length > 0 ? label : null;
+  } catch {
+    return null;
+  }
+}
+
+/**
  * Fold one event's invitees into its normalized shape: attendee display
  * strings plus a description block of invitee context lines. Cancelled
  * invitees are skipped on active events but INCLUDED on a cancelled event
@@ -210,6 +261,8 @@ export function applyInviteeContext(ev: CalendarEventInput, invitees: RawInvitee
     }
     if (typeof invitee.timezone === "string" && invitee.timezone) {
       lines.push(`invitee timezone: ${invitee.timezone}`);
+      const zoneLabel = formatInviteeZoneLabel(ev.startIso, invitee.timezone);
+      if (zoneLabel) lines.push(`invitee timezone label: ${zoneLabel}`);
       const local = formatInviteeLocalTime(ev.startIso, invitee.timezone);
       if (local) lines.push(`starts (invitee local time): ${local}`);
     }

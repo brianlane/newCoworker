@@ -69,6 +69,7 @@ tests/e2e/amy-act-now.e2e.test.ts
 tests/e2e/bad-phone-classify.e2e.test.ts
 tests/e2e/bug-hunt.e2e.test.ts
 tests/e2e/bug-hunt-3.e2e.test.ts
+tests/e2e/kyp-invitee-timezone-label.e2e.test.ts
 tests/e2e/preferred-name-and-lifecycle.e2e.test.ts
 tests/e2e/sms-duplicate-replies.e2e.test.ts
 tests/e2e/truly-branch-matrix.e2e.test.ts
@@ -179,6 +180,14 @@ scope_file() {
 
     # --- the bad-phone one-shot exports the prompts its e2e test pins -----
     scripts/oneshot/add-bad-phone-agent-report*) add "tests/e2e/bad-phone-classify.e2e.test.ts" ;;
+
+    # --- likewise, the KYP calendar builder IS the definition its e2e test
+    #     walks: the suite drives these exact extract fields and copy through
+    #     the live model. Without this, editing the builder to re-add a
+    #     guessed timezone would fall into the scripts/* skip below and the
+    #     Aug 5 2026 regression guard would never run. -------------------
+    scripts/oneshot/kyp-reminder-flow-definition*) \
+      add "tests/e2e/kyp-invitee-timezone-label.e2e.test.ts" ;;
 
     # --- Safe: provably cannot change what the live suite exercises -------
     docs/* | PRDs/* | *.md) ;;                                     # documentation
