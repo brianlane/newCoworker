@@ -42,12 +42,41 @@
 # Expected env: SUPABASE_ACCESS_TOKEN, SUPABASE_DB_PASSWORD (for the ledger
 # read; the CLI is already linked by supabase-deploy.sh), plus the
 # actions/checkout git credentials for the push (persist-credentials).
+#
+# Push auth vs the main ruleset: the branch ruleset "main: PRs with all
+# checks green" (Aug 2026) blocks direct pushes to main, and GitHub will not
+# accept its own Actions app as a bypass actor on a user-owned repo, so a
+# GITHUB_TOKEN push here would be rejected. The bypass list instead exempts
+# DEPLOY KEYS, and ci.yml passes this script MIGRATION_HEAL_SSH_KEY (an
+# Actions secret holding the private half of write deploy key 159407001,
+# titled "migration-order-heal") plus MIGRATION_HEAL_PUSH_URL (the repo's
+# SSH URL). When both are set, the re-stamp push authenticates with that key
+# and sails through the bypass; when unset (local runs, the vitest sandbox),
+# the push falls back to plain `origin`, same as before the ruleset existed.
 set -euo pipefail
 
 MIGRATIONS_DIR="supabase/migrations"
 MAX_ATTEMPTS=3
 BOT_NAME="github-actions[bot]"
 BOT_EMAIL="41898282+github-actions[bot]@users.noreply.github.com"
+
+# Push the healed tip to main, choosing auth by environment (see header).
+# Usage: push_main <worktree>. Returns git push's own exit code.
+push_main() {
+  local wt="$1"
+  if [ -n "${MIGRATION_HEAL_SSH_KEY:-}" ] && [ -n "${MIGRATION_HEAL_PUSH_URL:-}" ]; then
+    local key_file rc
+    key_file=$(mktemp)
+    printf '%s\n' "$MIGRATION_HEAL_SSH_KEY" > "$key_file"
+    chmod 600 "$key_file"
+    rc=0
+    GIT_SSH_COMMAND="ssh -i $key_file -o IdentitiesOnly=yes -o StrictHostKeyChecking=accept-new" \
+      git -C "$wt" push "$MIGRATION_HEAL_PUSH_URL" HEAD:refs/heads/main --quiet || rc=$?
+    rm -f "$key_file"
+    return "$rc"
+  fi
+  git -C "$wt" push origin HEAD:refs/heads/main --quiet
+}
 
 if [ ! -d "$MIGRATIONS_DIR" ]; then
   echo "::error::$MIGRATIONS_DIR not found. Run this from the repo root."
@@ -210,7 +239,7 @@ renamed; the ledger itself is never touched."
 
   git -C "$WT" -c user.name="$BOT_NAME" -c user.email="$BOT_EMAIL" commit -m "$msg" --quiet
 
-  if git -C "$WT" push origin HEAD:refs/heads/main --quiet; then
+  if push_main "$WT"; then
     cleanup_wt
     # Mirror into the run's checkout (already synced to the pre-heal tip
     # above) so the db push that follows applies the healed names.

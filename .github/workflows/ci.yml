@@ -396,6 +396,12 @@ jobs:
         env:
           SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
+          # The order-heal re-stamp push authenticates with a write deploy
+          # key: the main ruleset blocks direct pushes and exempts deploy
+          # keys (GitHub refuses its own Actions app as a bypass actor on a
+          # user-owned repo). See migration-order-heal.sh's header.
+          MIGRATION_HEAL_SSH_KEY: ${{ secrets.MIGRATION_HEAL_SSH_KEY }}
+          MIGRATION_HEAL_PUSH_URL: git@github.com:${{ github.repository }}.git
         run: bash .github/scripts/supabase-deploy.sh deploy
 
       - name: Deploy to Vercel
