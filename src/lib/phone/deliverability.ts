@@ -6,7 +6,7 @@
  * profile US+CA, the MX profile US+CA+MX, and every DID additionally has
  * international outbound disabled. A number outside the tenant's profile
  * coverage saves cleanly everywhere and then every SMS to it fails at
- * Telnyx with 40309 — the silent outage the July KYP incident documented.
+ * Telnyx with 40309, the silent outage the July KYP incident documented.
  * This helper turns that into a visible warning at the moment the owner
  * types the number.
  *
