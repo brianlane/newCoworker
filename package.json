@@ -45,7 +45,7 @@
   },
   "homepage": "https://github.com/brianlane/newCoworker#readme",
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.26.0",
+    "@modelcontextprotocol/server": "^2.0.0",
     "@nangohq/frontend": "^0.71.2",
     "@nangohq/node": "^0.71.2",
     "@supabase/ssr": "^0.12.4",
