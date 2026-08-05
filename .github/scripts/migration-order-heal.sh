@@ -51,9 +51,10 @@
 # accept its own Actions app as a bypass actor on a user-owned repo, so a
 # GITHUB_TOKEN push here would be rejected. The bypass list instead exempts
 # DEPLOY KEYS, and ci.yml passes this script MIGRATION_HEAL_SSH_KEY (an
-# Actions secret holding the private half of write deploy key 159407001,
-# titled "migration-order-heal") plus MIGRATION_HEAL_PUSH_URL (the repo's
-# SSH URL). When both are set, the re-stamp push authenticates with that key
+# Actions secret holding the private half of the write deploy key titled
+# "migration-order-heal"; the key id changes on rotation, and the local
+# .env keeps a base64 copy as MIGRATION_HEAL_SSH_KEY_B64) plus
+# MIGRATION_HEAL_PUSH_URL (the repo's SSH URL). When both are set, the re-stamp push authenticates with that key
 # and sails through the bypass; when unset (local runs, the vitest sandbox),
 # the push falls back to plain `origin`, same as before the ruleset existed.
 set -euo pipefail
