@@ -239,6 +239,14 @@ export async function sendTelnyxSms(
   // part for SMS, flat 2.2 for MMS. Computed on the exact body Telnyx bills
   // and reused verbatim by the release below so a failed send refunds what
   // the reserve charged.
+  //
+  // RCS-first sends deliberately charge the SMS-fallback bound: even after
+  // the RCS API accepts, Telnyx decides PER HANDSET whether each delivery
+  // goes out as RCS or as the multi-part SMS fallback, so the delivered
+  // channel is unknowable at reserve time. Charging the fallback bound is
+  // conservative and consistent; in practice RCS is enterprise-only
+  // (rcsTierAllowed), where smsPerMonth is Infinity unless a deal sets an
+  // explicit enterprise_limits override.
   const textUnits = smsTextUnits(text, {
     mediaCount: (options?.mediaUrls ?? []).filter((u) => u.length > 0).length
   });
