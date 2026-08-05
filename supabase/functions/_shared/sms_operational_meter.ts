@@ -34,7 +34,7 @@ export type OperationalMeterOutcome = {
 /**
  * Count one operational send against the tenant's pool, charging its
  * billable text units (one per carrier part for SMS, flat 2.2 for MMS).
- * Never throws, never refuses — the returned outcome is for
+ * Never throws, never refuses; the returned outcome is for
  * logging/telemetry and the matching release.
  */
 export async function meterOperationalSms(
@@ -110,7 +110,7 @@ export async function sendOperationalSms(
     ? await meterOperationalSms(
         supabase,
         businessId,
-        smsTextUnits(params.text ?? "", { mediaCount: params.mediaUrls?.length ?? 0 })
+        smsTextUnits(params.text, { mediaCount: params.mediaUrls?.length ?? 0 })
       )
     : { counted: false, detail: "no_business", textUnits: 0 };
   let send: Awaited<ReturnType<typeof telnyxSendSms>>;

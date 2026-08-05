@@ -70,6 +70,11 @@ $$;
 -- Keep in sync with SMS_MONTHLY_CAP_STARTER / SMS_MONTHLY_CAP_STANDARD in
 -- supabase/functions/_shared/sms_monthly_limits.ts.
 
+-- Re-grant after CREATE OR REPLACE (only ever called inside the SECURITY
+-- DEFINER meter functions, but the grant keeps parity with the original
+-- definition and the grants convention).
+grant execute on function public.nonenterprise_monthly_sms_cap(text) to service_role;
+
 -- ---------------------------------------------------------------------------
 -- Reserve (customer-facing, hard stop at the cap)
 -- ---------------------------------------------------------------------------

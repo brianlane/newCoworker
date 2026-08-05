@@ -65,7 +65,7 @@ export async function getTodayUsage(
  * Sum SMS and outbound calls for the current UTC calendar month from
  * `daily_usage`. `sms_sent` counts MESSAGES (analytics surfaces);
  * `sms_text_units` is the billable-unit total the monthly cap is enforced
- * against (one unit per SMS part, 2.2 per MMS — see
+ * against (one unit per SMS part, 2.2 per MMS; see
  * src/lib/sms/segment-info.ts). Cap/allowance surfaces must read the units.
  */
 export async function getCalendarMonthUsageTotals(
@@ -385,7 +385,7 @@ export async function checkLimitReached(
         field: "sms_sent"
       };
     }
-    // Compare in text units — the same ledger the reserve RPC enforces —
+    // Compare in text units, the same ledger the reserve RPC enforces,
     // so this advisory check can never disagree with Postgres.
     if (month.sms_text_units >= limits.smsPerMonth) {
       return {

@@ -124,7 +124,7 @@ beforeEach(() => {
   rpc.mockResolvedValue({ data: { ok: true }, error: null });
   vi.mocked(createOffSessionPackCharge).mockResolvedValue({ id: "pi_1" } as never);
   // Below threshold by default: 40 bonus texts, plan cap fully used.
-  monthUsage.mockResolvedValue({ sms_sent: 999_999, calls_made: 0 });
+  monthUsage.mockResolvedValue({ sms_sent: 999_999, sms_text_units: 999_999, calls_made: 0 });
   smsBonus.mockResolvedValue(40);
 });
 
@@ -558,14 +558,14 @@ describe("readRemainingUnits", () => {
   });
 
   it("adds plan remaining to the SMS pack balance", async () => {
-    monthUsage.mockResolvedValue({ sms_sent: 100, calls_made: 0 });
+    monthUsage.mockResolvedValue({ sms_sent: 100, sms_text_units: 100, calls_made: 0 });
     smsBonus.mockResolvedValue(40);
-    // Standard cap is 3000: 2900 plan remaining plus 40 purchased.
-    expect(await readRemainingUnits(candidate({ category: "sms" }), db)).toBe(2_940);
+    // Standard cap is 5000 units: 4900 plan remaining plus 40 purchased.
+    expect(await readRemainingUnits(candidate({ category: "sms" }), db)).toBe(4_940);
   });
 
   it("floors plan remaining at zero when usage overshot the cap", async () => {
-    monthUsage.mockResolvedValue({ sms_sent: 999_999, calls_made: 0 });
+    monthUsage.mockResolvedValue({ sms_sent: 999_999, sms_text_units: 999_999, calls_made: 0 });
     smsBonus.mockResolvedValue(40);
     expect(await readRemainingUnits(candidate({ category: "sms" }), db)).toBe(40);
   });
@@ -596,10 +596,10 @@ describe("readRemainingUnits", () => {
     expect(await readRemainingUnits(candidate({ category: "chat", tier: null }), db)).toBe(
       5_000_000
     );
-    monthUsage.mockResolvedValue({ sms_sent: 0, calls_made: 0 });
+    monthUsage.mockResolvedValue({ sms_sent: 0, sms_text_units: 0, calls_made: 0 });
     smsBonus.mockResolvedValue(0);
-    // Starter cap (100/month) applies when the tier is unknown.
-    expect(await readRemainingUnits(candidate({ category: "sms", tier: null }), db)).toBe(100);
+    // Starter cap (150 units/month) applies when the tier is unknown.
+    expect(await readRemainingUnits(candidate({ category: "sms", tier: null }), db)).toBe(150);
   });
 });
 

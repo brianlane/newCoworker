@@ -63,7 +63,7 @@ export default async function AccountSettingsPage() {
                   business.tier === "enterprise" ? business.enterprise_limits : undefined,
                   locale,
                   // Effective cap (MX clamp included) so this page can never
-                  // show an allowance Postgres will not honor — dashboard and
+                  // show an allowance Postgres will not honor; dashboard and
                   // billing already pass the same override.
                   effectiveSmsMonthlyCap(
                     business.tier as PlanTier,

@@ -27,11 +27,11 @@ type Props = {
  *
  * Two jobs, layered:
  *  1. COST (new with weighted metering): once a message needs 2+ parts, say
- *     how many texts it counts as against the monthly allowance — at the one
+ *     how many texts it counts as against the monthly allowance, at the one
  *     moment the author can still shorten it. Carriers have always billed
  *     long messages as several texts; this makes the arithmetic visible where
  *     the expensive messages are actually written (thread composer, new-
- *     message composer, and the AiFlow editor — the 10-part flow bodies that
+ *     message composer, and the AiFlow editor, where the 10-part flow bodies that
  *     motivated this were authored blind).
  *  2. DELIVERABILITY (pre-existing): emoji/non-GSM text over the 670-char
  *     UCS-2 sendable cap either fails outright (verbatim) or gets its emoji

@@ -2647,7 +2647,7 @@ serve(async (req: Request) => {
         .is("answered_at", null)
         .select("id");
       if (!claimed || (claimed as unknown[]).length === 0) {
-        // Raced by another delivery — give the reserved units back and
+        // Raced by another delivery: give the reserved units back and
         // fall through to the normal staff path.
         await supabase.rpc("release_sms_outbound_slot", {
           p_business_id: businessId,

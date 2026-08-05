@@ -15,7 +15,7 @@ describe("tier limits", () => {
     });
 
     it("starter has strict monthly SMS cap (UTC month)", () => {
-      expect(TIER_LIMITS.starter.smsPerMonth).toBe(100);
+      expect(TIER_LIMITS.starter.smsPerMonth).toBe(150);
     });
 
     it("starter has 1 concurrent call max", () => {
@@ -41,7 +41,7 @@ describe("tier limits", () => {
     });
 
     it("standard has strict monthly SMS cap", () => {
-      expect(TIER_LIMITS.standard.smsPerMonth).toBe(3000);
+      expect(TIER_LIMITS.standard.smsPerMonth).toBe(5000);
     });
 
     it("standard has 10 concurrent calls max (tier relaunch)", () => {
@@ -90,9 +90,9 @@ describe("tier limits", () => {
 
     it("voice and SMS lines match tier defaults", () => {
       expect(voiceMinutesLine("starter")).toBe("25 voice minutes");
-      expect(smsMonthlyLine("starter")).toBe("100 SMS / month");
+      expect(smsMonthlyLine("starter")).toBe("150 texts / month");
       expect(voiceMinutesLine("standard")).toBe("250 voice minutes");
-      expect(smsMonthlyLine("standard")).toBe("3000 SMS / month");
+      expect(smsMonthlyLine("standard")).toBe("5000 texts / month");
       expect(voiceMinutesLine("enterprise")).toBe("2,500 voice minutes");
       expect(smsMonthlyLine("enterprise")).toBe("Unlimited SMS / month");
     });
@@ -104,7 +104,7 @@ describe("tier limits", () => {
     });
 
     it("respects enterprise overrides in copy helpers", () => {
-      expect(smsMonthlyLine("enterprise", { smsPerMonth: 999 })).toBe("999 SMS / month");
+      expect(smsMonthlyLine("enterprise", { smsPerMonth: 999 })).toBe("999 texts / month");
       expect(voiceMinutesLine("enterprise", { voiceIncludedSecondsPerStripePeriod: 120 })).toBe(
         "2 voice minutes"
       );
@@ -252,9 +252,9 @@ describe("tier limits", () => {
     });
 
     it("smsMonthlyLine renders the per-business override so display matches enforcement", () => {
-      expect(smsMonthlyLine("standard", undefined, "en", 100)).toBe("100 SMS / month");
-      expect(smsMonthlyLine("standard", undefined, "es", 100)).toBe("100 SMS / mes");
-      expect(smsMonthlyLine("standard")).toBe("3000 SMS / month");
+      expect(smsMonthlyLine("standard", undefined, "en", 100)).toBe("100 texts / month");
+      expect(smsMonthlyLine("standard", undefined, "es", 100)).toBe("100 textos / mes");
+      expect(smsMonthlyLine("standard")).toBe("5000 texts / month");
       expect(smsMonthlyLine("enterprise", undefined, "en", Infinity)).toBe(
         "Unlimited SMS / month"
       );

@@ -169,7 +169,7 @@ export async function readRemainingUnits(
       getCalendarMonthUsageTotals(candidate.businessId, db),
       getSmsBonusTextsRemaining(candidate.businessId, db)
     ]);
-    // Balance in text units — the ledger the reserve RPC actually enforces —
+    // Balance in text units, the ledger the reserve RPC actually enforces,
     // so the reload threshold trips on the same number Postgres refuses at.
     return Math.max(0, cap - usage.sms_text_units) + bonus;
   }

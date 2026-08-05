@@ -167,8 +167,8 @@ describe("sendTelnyxSms meterBusinessId (atomic reserve)", () => {
 
   it("reserves one unit per part for a long body and refunds the same on failure", async () => {
     // Amy's real ai_flow message length: 1,342 GSM chars = 9 parts. Under the
-    // old message-denominated meter this was the $390/mo hole — billed 9
-    // parts, counted 1.
+    // old message-denominated meter this billed 9 parts and counted 1, the
+    // overspend hole this change closes.
     const longBody = "a".repeat(1342);
     const fetchMock = vi.fn().mockResolvedValue({
       ok: false,

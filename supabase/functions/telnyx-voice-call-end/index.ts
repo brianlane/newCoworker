@@ -828,7 +828,7 @@ async function meteredWarmTransferSend(
   });
   if (!res.ok) {
     console.error("warm-transfer notify: SMS failed", res.status, res.body);
-    // Telnyx rejected the send — give the reserved units back so the tenant
+    // Telnyx rejected the send: give the reserved units back so the tenant
     // isn't billed for a message that never went out.
     const { error: relErr } = await supabase.rpc("release_sms_outbound_slot", {
       p_business_id: businessId,
