@@ -891,10 +891,12 @@ reminders, waitlist), then the upcoming-bookings list. Meeting types are
 the ONLY way to define what gets booked: the page carries the shared
 policy, never a competing duration, questionnaire, or heading of its own.
 A visitor reads the business name plus the meeting's own name, which is why
-there is no page-level heading field (`booking_pages.title` survives as a
-dormant column nothing renders or writes). Any page with no meetings gets
-one automatically, carrying the page's title,
-description, shortest duration, and questions across
+there is no page-level heading field at all: `booking_pages.title` is gone,
+column included. It had lost its editor and its public render in two earlier
+passes but kept naming provisioned meetings, so deleting your last meeting
+resurrected a heading you could no longer see. Any page with no meetings
+still gets one automatically, now always named "Book a call", carrying the
+page's description, shortest duration, and questions across
 (`ensureDefaultMeetingType`, plus a backfill migration for pages that
 predate this), so an owner always lands on a list rather than an empty
 page.

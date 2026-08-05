@@ -66,7 +66,6 @@ function pageRow(over: Partial<BookingPageRow> = {}): BookingPageRow {
     waitlist_enabled: true,
     waitlist_offer_ttl_minutes: 60,
     slug: "new-coworker",
-    title: "Book a call",
     send_confirmation_email: true,
     reminders_enabled: true,
     reminder_email_hours: 24,
@@ -206,12 +205,12 @@ describe("ensureDefaultMeetingType", () => {
       { data: [], error: null },
       { data: typeRow({ intake_questions: PAGE_QUESTIONS }), error: null }
     ]);
-    const result = await ensureDefaultMeetingType(pageRow({ title: "Free strategy call" }), client);
+    const result = await ensureDefaultMeetingType(pageRow(), client);
     expect(result.pageQuestionsCleared).toBe(true);
     const insert = calls.find((c) => c.method === "insert")?.args[0] as Record<string, unknown>;
     expect(insert).toMatchObject({
       business_id: BIZ,
-      name: "Free strategy call",
+      name: DEFAULT_MEETING_NAME,
       slug: DEFAULT_MEETING_SLUG,
       description: "Page blurb",
       // The shortest offered duration is what the picker defaulted to.
@@ -235,6 +234,30 @@ describe("ensureDefaultMeetingType", () => {
     expect(calls.some((c) => c.method === "update")).toBe(false);
   });
 
+  /**
+   * Regression guard, not a behavior test. `booking_pages.title` was the
+   * page-level heading: its editor went in PR #985 and its public render in
+   * #971, but THIS provisioning line kept reading it, so deleting your last
+   * meeting re-provisioned one named from a field you could no longer see or
+   * edit (HQ's said "**Header&&"). The column is dropped now.
+   *
+   * The stray property is passed deliberately, past the type, because the
+   * failure being guarded is someone reintroducing `page.title ?? DEFAULT`.
+   * A test that simply omitted the title would still pass in that world.
+   */
+  it("never names a meeting from a page-level title, even if a row carries one", async () => {
+    const { client, calls } = fakeDb([
+      { data: [], error: null },
+      { data: [], error: null },
+      { data: typeRow(), error: null }
+    ]);
+    const legacyRow = { ...pageRow({ intake_questions: [] }), title: "Free strategy call" };
+    await ensureDefaultMeetingType(legacyRow as never, client);
+    const insert = calls.find((c) => c.method === "insert")?.args[0] as Record<string, unknown>;
+    expect(insert.name).toBe(DEFAULT_MEETING_NAME);
+    expect(JSON.stringify(insert)).not.toContain("Free strategy call");
+  });
+
   it("falls back to the default name and duration on a bare page", async () => {
     const { client, calls } = fakeDb([
       { data: [], error: null },
@@ -242,7 +265,7 @@ describe("ensureDefaultMeetingType", () => {
       { data: typeRow(), error: null }
     ]);
     await ensureDefaultMeetingType(
-      pageRow({ title: "   ", allowed_durations: [], description: null, intake_questions: [] }),
+      pageRow({ allowed_durations: [], description: null, intake_questions: [] }),
       client
     );
     expect(calls.find((c) => c.method === "insert")?.args[0]).toMatchObject({

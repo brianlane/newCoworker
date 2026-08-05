@@ -27,7 +27,6 @@ type PageRow = {
   waitlist_enabled: boolean;
   waitlist_offer_ttl_minutes: number;
   slug: string | null;
-  title: string | null;
   send_confirmation_email: boolean;
   reminders_enabled: boolean;
   reminder_email_hours: number;
@@ -259,8 +258,8 @@ export function BookingPageManager({ businessId }: { businessId: string }) {
       ) : null}
 
       {/* The scheduling link itself, on one line: the meetings below are
-          what owners actually manage. Slug, title, blurb, and the rotate
-          button sit behind Customize so they stop competing with them. */}
+          what owners actually manage. Slug, blurb, and the rotate button sit
+          behind Customize so they stop competing with them. */}
       <Card>
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
