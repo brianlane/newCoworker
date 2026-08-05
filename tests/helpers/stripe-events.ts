@@ -227,7 +227,7 @@ export function makeEvent<T>(
     id: `evt_test_${eventSeq}`,
     object: "event",
     type,
-    api_version: "2026-06-24.dahlia",
+    api_version: "2026-07-29.dahlia",
     created: nowSec(),
     livemode: false,
     data: { object },

@@ -8,7 +8,7 @@ import { MEXICO_MESSAGING_FEE_NAME } from "@/lib/plans/mexican-messaging";
 export function getStripe(secretKey?: string): Stripe {
   const key = secretKey ?? process.env.STRIPE_SECRET_KEY;
   if (!key) throw new Error("STRIPE_SECRET_KEY is not configured");
-  return new Stripe(key, { apiVersion: "2026-06-24.dahlia" });
+  return new Stripe(key, { apiVersion: "2026-07-29.dahlia" });
 }
 
 export function verifyWebhook(payload: string, signature: string, secret?: string): Stripe.Event {
