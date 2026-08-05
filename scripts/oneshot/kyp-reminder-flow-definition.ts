@@ -14,13 +14,12 @@
  * the Jul 19-24 unledgered reshape that established the rule), so the
  * reconcile direction is live -> builder, never the reverse.
  *
- * THE DEFECT, kept here deliberately so a test can prove it:
- * `invitee_tz_plain` asks the extractor for a timezone from a five-item
- * NORTH AMERICAN list and instructs it to return 'Eastern' when unclear. On
- * 2026-08-05 a lead in `Europe/London` (Reem, +19134399078) was therefore
- * told her 13:00Z call was "2:00 PM Eastern time (your local time)". It was
- * 2:00 PM UK. She was later told there was no call starting while it was
- * seven minutes away, and she canceled.
+ * THE INCIDENT THAT SHAPED THIS FILE (Reem, +19134399078, 2026-08-05):
+ * `invitee_tz_plain` asked the extractor for a timezone from a five-item
+ * NORTH AMERICAN list and told it to return 'Eastern' when unclear. A lead in
+ * `Europe/London` was therefore told her 13:00Z call was "2:00 PM Eastern
+ * time (your local time)". It was 2:00 PM UK. She was later told there was no
+ * call starting while it was seven minutes away, and she canceled.
  *
  * The trigger payload was never wrong. It carried both
  * `invitee timezone: Europe/London` and
@@ -30,6 +29,12 @@
  * Same defect class as KYP/Ayanna on 2026-07-20, whose fix (PRs #810/#814/
  * #824) added `timeZoneName: "short"` to `calendar-tools` and
  * `contact-booking-context` but never reached this surface.
+ *
+ * THE RULE THIS FILE NOW KEEPS: never state a timezone the flow had to guess.
+ * Customer copy quotes `invitee_local_time`, which IS the invitee's own wall
+ * clock, and says "your time" without naming a zone. The owner notify, which
+ * goes to James and not to a customer, carries the zone verbatim from the
+ * payload so he can tell whose 2:00 PM it is.
  *
  * Any change to these two flows belongs HERE, applied through a
  * ledger-recorded one-shot, so the builder and the tenant cannot drift.
@@ -61,35 +66,53 @@ type FlowStepJson = Record<string, unknown>;
 export const INVITEE_LOCAL_TIME_FIELD: FlowFieldJson = {
   name: "invitee_local_time",
   description:
-    "The call start time in the INVITEE's own local timezone, formatted like '10:00 AM'. Convert using their booking timezone. Never return 'none'."
+    "The clock time from the 'starts (invitee local time):' line, copied verbatim, like '10:00 AM'. It is ALREADY in the invitee's own timezone: never convert or shift it, and never infer it from another line. Never return 'none'."
 };
 
 /**
- * The defect. A closed North American list plus a guessing fallback, applied
- * to a payload that already names the zone. Any invitee outside these five
- * zones is silently relabeled 'Eastern'.
+ * The invitee's zone, copied rather than named.
+ *
+ * This replaced `invitee_tz_plain`, which offered a closed North American
+ * list and a 'Eastern' fallback, so a Europe/London invitee had no correct
+ * answer available. An IANA identifier is stated verbatim on the payload's
+ * `invitee timezone:` line, so it can be copied and cannot be invented.
+ *
+ * It is used ONLY in the owner notify. Customer copy names no zone at all.
  */
-export const INVITEE_TZ_PLAIN_FIELD: FlowFieldJson = {
-  name: "invitee_tz_plain",
+export const INVITEE_TIMEZONE_IANA_FIELD: FlowFieldJson = {
+  name: "invitee_timezone_iana",
   description:
-    "Invitee's timezone in plain words: 'Eastern', 'Central', 'Mountain', 'Pacific', or 'Atlantic'. NEVER return 'none' or blank. If unclear, return 'Eastern'."
+    "The invitee's timezone exactly as written on the 'invitee timezone:' line, e.g. 'America/Toronto' or 'Europe/London'. Copy it verbatim. Never translate it into a zone name or abbreviation, and never substitute another zone. Return 'none' if that line is absent."
 };
 
-/** Live body of the 1-hour reminder text. */
+/**
+ * Body of the 1-hour reminder text.
+ *
+ * "your time" rather than a named zone: `invitee_local_time` is already the
+ * invitee's own wall clock, so the sentence is true for every invitee on
+ * earth and there is nothing left to guess wrong.
+ */
 export const KYP_REMINDER_SMS_BODY =
-  "Hi {{vars.invitee_first_name}}, it's Samantha again, James's assistant at KYP Ads. Just a heads up that your call with James is coming up today at {{vars.invitee_local_time}} {{vars.invitee_tz_plain}} time (your local time). \n\nCould you quickly confirm you're still good to hop on the Zoom? James has had a lot of demand lately so I want to make sure we hold your spot. Here's your link: {{vars.zoom_link}} \n\nJust reply and let me know, talk soon! \nSam";
+  "Hi {{vars.invitee_first_name}}, it's Samantha again, James's assistant at KYP Ads. Just a heads up that your call with James is coming up today at {{vars.invitee_local_time}} your time. \n\nCould you quickly confirm you're still good to hop on the Zoom? James has had a lot of demand lately so I want to make sure we hold your spot. Here's your link: {{vars.zoom_link}} \n\nJust reply and let me know, talk soon! \nSam";
 
-/** Live body of the booking-confirmation text. */
+/** Body of the booking-confirmation text. */
 export const KYP_BOOKING_CONFIRMATION_SMS_BODY =
-  "Hi {{vars.invitee_name.first}}, this is Samantha, James's assistant at KYP Ads. You're all set for your free strategy call on {{vars.invitee_day_date}} at {{vars.invitee_local_time}} {{vars.invitee_tz_plain}} time (your local time). It's a relaxed Zoom, James will get to know your business and map out how he'd bring you more leads, and you can see if it's a fit. Here's your link for when it's time: {{vars.zoom_link}} If anything comes up just reply here and I'll take care of it. Talk soon, Sam";
+  "Hi {{vars.invitee_name.first}}, this is Samantha, James's assistant at KYP Ads. You're all set for your free strategy call on {{vars.invitee_day_date}} at {{vars.invitee_local_time}} your time. It's a relaxed Zoom, James will get to know your business and map out how he'd bring you more leads, and you can see if it's a fit. Here's your link for when it's time: {{vars.zoom_link}} If anything comes up just reply here and I'll take care of it. Talk soon, Sam";
 
-/** Live body of the booking-confirmation email. */
+/** Body of the booking-confirmation email. */
 export const KYP_BOOKING_CONFIRMATION_EMAIL_BODY =
-  "Hi {{vars.invitee_name.first}},\n\nThis is Samantha, James's assistant at KYP Ads. Just wanted to reach out personally and let you know you're all set for your free strategy call on {{vars.invitee_day_date}} at {{vars.invitee_local_time}} {{vars.invitee_tz_plain}} time (your local time).\n\nIt's a relaxed Zoom call. James will get to know your business, walk through how he'd bring you more leads, and you can get a feel for whether it's the right fit. No pressure at all.\n\nHere's your link to join when it's time: {{vars.zoom_link}}\n\nIf anything comes up or you need to move the time, just reply here or text the number that messaged you and I'll take care of it.\n\nLooking forward to having you on,\n\nSam\nKYP Ads\nkypads.com\n+14388035806";
+  "Hi {{vars.invitee_name.first}},\n\nThis is Samantha, James's assistant at KYP Ads. Just wanted to reach out personally and let you know you're all set for your free strategy call on {{vars.invitee_day_date}} at {{vars.invitee_local_time}} your time.\n\nIt's a relaxed Zoom call. James will get to know your business, walk through how he'd bring you more leads, and you can get a feel for whether it's the right fit. No pressure at all.\n\nHere's your link to join when it's time: {{vars.zoom_link}}\n\nIf anything comes up or you need to move the time, just reply here or text the number that messaged you and I'll take care of it.\n\nLooking forward to having you on,\n\nSam\nKYP Ads\nkypads.com\n+14388035806";
 
-/** Live owner-notify line for a new booking. */
+/**
+ * Owner-notify line for a new booking.
+ *
+ * This one goes to James, so it MUST keep the zone: the time is the
+ * invitee's wall clock, and "2:00 PM" with no zone is the ambiguity that
+ * started this whole incident. The zone is the verbatim IANA identifier from
+ * the payload, so it is copied rather than guessed.
+ */
 export const KYP_BOOKING_CONFIRMATION_NOTIFY =
-  "New booking: {{vars.invitee_name}} for {{vars.invitee_day_date}} at {{vars.invitee_local_time}} {{vars.invitee_tz_plain}}. Email: {{vars.invitee_email}}. Phone: {{vars.invitee_phone}}.";
+  "New booking: {{vars.invitee_name}} for {{vars.invitee_day_date}} at {{vars.invitee_local_time}} invitee local time ({{vars.invitee_timezone_iana}}). Email: {{vars.invitee_email}}. Phone: {{vars.invitee_phone}}.";
 
 /**
  * "Pre-call reminder (1hr before) confirm attendance", flow `8e4e1c35`.
@@ -114,7 +137,6 @@ export function buildKypPreCallReminderDefinition(): Record<string, unknown> {
           description: "The invitee's phone number, digits and + only. 'none' when absent."
         },
         INVITEE_LOCAL_TIME_FIELD,
-        INVITEE_TZ_PLAIN_FIELD,
         {
           name: "zoom_link",
           description:
@@ -185,7 +207,7 @@ export function buildKypBookingConfirmationDefinition(): Record<string, unknown>
         },
         { name: "invitee_email", description: "The invitee's email address. 'none' when absent." },
         INVITEE_LOCAL_TIME_FIELD,
-        INVITEE_TZ_PLAIN_FIELD,
+        INVITEE_TIMEZONE_IANA_FIELD,
         {
           name: "invitee_day_date",
           description:

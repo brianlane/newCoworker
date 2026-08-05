@@ -226,13 +226,18 @@ describe("KYP calendar flows: invitee timezone (Reem, Aug 5 2026)", () => {
     }));
   };
 
-  /** Everything the flow could put in front of a customer or the owner. */
-  const renderedStrings = (def: { steps: StepJson[] }): string[] =>
-    def.steps.flatMap((s) =>
-      [(s as { body?: string }).body, (s as { message?: string }).message, (s as { subject?: string }).subject].filter(
-        (v): v is string => typeof v === "string"
-      )
-    );
+  /** Only what a CUSTOMER receives: send_sms and send_email copy. */
+  const customerFacingStrings = (def: { steps: StepJson[] }): string[] =>
+    def.steps
+      .filter((s) => s.type === "send_sms" || s.type === "send_email")
+      .flatMap((s) =>
+        [(s as { body?: string }).body, (s as { subject?: string }).subject].filter(
+          (v): v is string => typeof v === "string"
+        )
+      );
+
+  /** Any variable whose name suggests a timezone, however spelled. */
+  const ZONE_VAR_RE = /\{\{vars\.[a-z_]*(tz|time_?zone)[a-z_]*\}\}/i;
 
   const cases: Array<[string, { steps: StepJson[] }]> = [
     ["pre-call reminder", reminder],
@@ -266,13 +271,13 @@ describe("KYP calendar flows: invitee timezone (Reem, Aug 5 2026)", () => {
       }
     });
 
-    it(`${label} never renders a bare timezone variable next to the time`, () => {
-      for (const text of renderedStrings(def)) {
+    it(`${label} names no timezone in anything the customer receives`, () => {
+      for (const text of customerFacingStrings(def)) {
         expect(
-          /\{\{vars\.[a-z_]*tz[a-z_]*\}\}/i.test(text),
-          `this copy templates a timezone variable: ${JSON.stringify(text.slice(0, 120))}. ` +
-            "invitee_local_time is ALREADY the invitee's own wall clock, so naming a zone " +
-            "beside it adds a claim the flow cannot verify."
+          ZONE_VAR_RE.test(text),
+          `customer copy templates a timezone variable: ${JSON.stringify(text.slice(0, 120))}. ` +
+            "invitee_local_time is ALREADY the invitee's own wall clock, so 'your time' is " +
+            "true for every invitee and naming a zone can only introduce a wrong claim."
         ).toBe(false);
       }
     });
@@ -281,10 +286,44 @@ describe("KYP calendar flows: invitee timezone (Reem, Aug 5 2026)", () => {
       const field = extractFields(def).find((f) => f.name === "invitee_local_time");
       expect(field, "invitee_local_time is the value every reminder quotes").toBeDefined();
       expect(
-        /convert/i.test(field!.description),
-        "the payload already states the answer verbatim on the 'starts (invitee local time):' " +
-          "line, so asking the model to convert re-derives it for no gain."
+        field!.description,
+        "the payload states the answer outright on the 'starts (invitee local time):' line"
+      ).toMatch(/verbatim/i);
+      // Strip the NEGATED forms first, so "never convert or shift it" reads as
+      // the instruction it is rather than tripping a bare /convert/ match.
+      const affirmative = field!.description
+        .replace(/\b(never|do not|don't|do NOT)\s+convert\b/gi, "")
+        .replace(/\bwithout\s+converting\b/gi, "");
+      expect(
+        /\bconvert/i.test(affirmative),
+        "asking the model to convert re-derives an answer the payload already contains, " +
+          "which is how a Europe/London booking became '2:00 PM Eastern'."
       ).toBe(false);
     });
   }
+
+  /**
+   * The owner notify is the one place a zone MUST survive. It goes to James,
+   * the time in it is the invitee's wall clock, and a bare "2:00 PM" is
+   * exactly the ambiguity that started this incident. Removing the zone from
+   * customer copy without keeping it here would trade one bug for another.
+   */
+  it("keeps the invitee's zone in the owner notify, copied verbatim", () => {
+    const notify = confirmation.steps.find((s) => s.type === "notify_owner") as
+      | { message?: string }
+      | undefined;
+    expect(notify?.message, "the booking confirmation notifies James").toBeTruthy();
+    expect(
+      notify!.message,
+      "James needs to know whose 2:00 PM this is; the invitee's local time alone is ambiguous"
+    ).toContain("{{vars.invitee_timezone_iana}}");
+
+    const field = extractFields(confirmation).find((f) => f.name === "invitee_timezone_iana");
+    expect(field, "the zone the owner notify renders must actually be extracted").toBeDefined();
+    expect(
+      /verbatim/i.test(field!.description),
+      "an IANA zone is stated outright on the payload's 'invitee timezone:' line, so it must " +
+        "be copied. The moment it is named or translated instead, it can be guessed wrong again."
+    ).toBe(true);
+  });
 });

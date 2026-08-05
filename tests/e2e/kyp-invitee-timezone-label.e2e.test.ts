@@ -110,7 +110,7 @@ async function judgeZone(message: string): Promise<JudgeVerdict> {
   );
 }
 
-describe("KYP invitee timezone label — a Europe/London booking (live model)", () => {
+describe("KYP invitee timezone label: a Europe/London booking (live model)", () => {
   it(
     "the 1hr reminder never tells a London invitee her call is Eastern",
     { retry: 1, timeout: 120_000 },
