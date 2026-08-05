@@ -27,6 +27,10 @@ import {
   KYP_QUIET_HOURS,
   KYP_TIME_WINDOW
 } from "../scripts/oneshot/kyp-lead-flow-definition";
+import {
+  buildKypBookingConfirmationDefinition,
+  buildKypPreCallReminderDefinition
+} from "../scripts/oneshot/kyp-reminder-flow-definition";
 import { addBadPhoneIntakeArm } from "../scripts/oneshot/patch-kyp-bad-phone-intake";
 import { parseAiFlowDefinition } from "@/lib/ai-flows/schema";
 import { smsQuietDecision, zonedClock } from "../supabase/functions/_shared/ai_flows/quiet_hours";
@@ -186,4 +190,101 @@ describe("builder <-> patch transform equivalence", () => {
     expect(result.changed).toBe(false);
     expect(result.notes.join("\n")).toContain("wrong flow shape");
   });
+});
+
+/**
+ * Aug 5 2026, Reem (+19134399078, Europe/London): the pre-call reminder told
+ * her a 13:00Z call was "2:00 PM Eastern time (your local time)". It was
+ * 2:00 PM UK. She was later told no call was starting while hers was seven
+ * minutes away, and she canceled.
+ *
+ * Cause: `invitee_tz_plain` asked the extractor for a zone from a five-item
+ * NORTH AMERICAN list and told it to return 'Eastern' when unclear, so a
+ * London invitee had no correct answer available. The trigger payload was
+ * fine throughout: it states `invitee timezone: Europe/London` and
+ * `starts (invitee local time): ... at 2:00 PM`.
+ *
+ * `tests/e2e/kyp-invitee-timezone-label.e2e.test.ts` proves the BEHAVIOR
+ * against the live model, but that suite is a gated CI job that runs only
+ * after everything else passes. These pins are hermetic and run on every
+ * `npm test`, so the shape cannot come back cheaply.
+ */
+describe("KYP calendar flows: invitee timezone (Reem, Aug 5 2026)", () => {
+  const reminder = buildKypPreCallReminderDefinition() as { steps: StepJson[] };
+  const confirmation = buildKypBookingConfirmationDefinition() as { steps: StepJson[] };
+
+  /** Zone words that only make sense in North America. */
+  const NA_ZONE_WORDS = ["eastern", "central", "mountain", "pacific", "atlantic"];
+
+  const extractFields = (def: { steps: StepJson[] }): Array<{ name: string; description: string }> => {
+    const step = def.steps.find((s) => s.type === "extract_text") as
+      | { fields?: Array<{ name?: string; description?: string }> }
+      | undefined;
+    return (step?.fields ?? []).map((f) => ({
+      name: String(f.name ?? ""),
+      description: String(f.description ?? "")
+    }));
+  };
+
+  /** Everything the flow could put in front of a customer or the owner. */
+  const renderedStrings = (def: { steps: StepJson[] }): string[] =>
+    def.steps.flatMap((s) =>
+      [(s as { body?: string }).body, (s as { message?: string }).message, (s as { subject?: string }).subject].filter(
+        (v): v is string => typeof v === "string"
+      )
+    );
+
+  const cases: Array<[string, { steps: StepJson[] }]> = [
+    ["pre-call reminder", reminder],
+    ["booking confirmation", confirmation]
+  ];
+
+  for (const [label, def] of cases) {
+    it(`${label} still validates as a well-formed AiFlow definition`, () => {
+      expect(() => parseAiFlowDefinition(def)).not.toThrow();
+    });
+
+    it(`${label} has no extract field offering a closed North American zone list`, () => {
+      for (const field of extractFields(def)) {
+        const hits = NA_ZONE_WORDS.filter((w) => field.description.toLowerCase().includes(w));
+        expect(
+          hits,
+          `field "${field.name}" enumerates ${hits.join("/")} in its description. A closed ` +
+            "North American list has no correct answer for a Europe/London invitee, which is " +
+            "how Reem was told her 2:00 PM UK call was 2:00 PM Eastern."
+        ).toEqual([]);
+      }
+    });
+
+    it(`${label} has no extract field that guesses a zone when unclear`, () => {
+      for (const field of extractFields(def)) {
+        expect(
+          /if\s+unclear[^.]*return/i.test(field.description),
+          `field "${field.name}" instructs the model to fall back to a fixed value when ` +
+            "unclear. For a timezone that turns 'I do not know' into a confident wrong answer."
+        ).toBe(false);
+      }
+    });
+
+    it(`${label} never renders a bare timezone variable next to the time`, () => {
+      for (const text of renderedStrings(def)) {
+        expect(
+          /\{\{vars\.[a-z_]*tz[a-z_]*\}\}/i.test(text),
+          `this copy templates a timezone variable: ${JSON.stringify(text.slice(0, 120))}. ` +
+            "invitee_local_time is ALREADY the invitee's own wall clock, so naming a zone " +
+            "beside it adds a claim the flow cannot verify."
+        ).toBe(false);
+      }
+    });
+
+    it(`${label} tells the extractor to copy the local time, not convert it`, () => {
+      const field = extractFields(def).find((f) => f.name === "invitee_local_time");
+      expect(field, "invitee_local_time is the value every reminder quotes").toBeDefined();
+      expect(
+        /convert/i.test(field!.description),
+        "the payload already states the answer verbatim on the 'starts (invitee local time):' " +
+          "line, so asking the model to convert re-derives it for no gain."
+      ).toBe(false);
+    });
+  }
 });
