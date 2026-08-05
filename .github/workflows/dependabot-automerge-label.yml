@@ -1,10 +1,32 @@
 name: Dependabot automerge label
 
-# Tags every Dependabot PR as eligible for auto-merge (patch, minor, AND major).
-# Safety comes from the merger: dependabot-automerge.yml only merges once EVERY
-# CI check for the head commit is green and there are no unresolved review
-# threads, so a major bump that breaks CI can never be auto-merged. Split into
-# two workflows because:
+# Tags a Dependabot PR as eligible for auto-merge, for patch and minor updates
+# ONLY. Majors are deliberately left unlabelled so a human merges them.
+#
+# This used to label everything, majors included, on the theory that the merger
+# is the real gate: dependabot-automerge.yml only merges once EVERY CI check is
+# green with no unresolved review threads, so "a major bump that breaks CI can
+# never be auto-merged". That reasoning has a hole. It assumes a breaking major
+# always breaks CI, and a major is precisely the bump where that assumption
+# fails.
+#
+# The case that exposed it: mcp-handler 1.1.0 -> 2.1.0 (PR #1178) did not merely
+# bump a version, it swapped the underlying implementation, moving the peer
+# dependency from @modelcontextprotocol/sdk to @modelcontextprotocol/server.
+# Among other things that relocated the verified OAuth caller from
+# `extra.authInfo` to `ctx.http.authInfo`. Our code read the old path through an
+# `unknown` cast, so that specific break type-checks clean and merely fails
+# every MCP tool call closed at runtime. CI happened to catch a DIFFERENT error
+# in the same PR (a changed createMcpHandler arity). Had the arity been
+# unchanged, a green CI would have auto-merged a silently broken production
+# OAuth endpoint with no human ever reading the diff.
+#
+# So: CI is necessary but not sufficient for a major. Majors now get a
+# `dependabot-major-review` label for visibility and wait for a person. This
+# also makes the merger's own "lacks the label (major update)" branch true,
+# which it had not been since this workflow started labelling everything.
+#
+# Split into two workflows because:
 #   - This one needs write access to label, which requires pull_request_target
 #     (Dependabot's pull_request token is read-only).
 #   - The strict "all checks green" evaluation must run AFTER CI finishes, which
@@ -34,7 +56,7 @@ jobs:
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Add the automerge label
+      - name: Apply the label this update type earns
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           # Without a checkout there is no git context, so gh cannot infer the
@@ -47,12 +69,44 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Ensure the label exists (idempotent).
+          # Ensure both labels exist (idempotent).
           gh label create dependabot-automerge \
             --color 0e8a16 \
             --description "Dependabot PR eligible for strict auto-merge" \
             --force
+          gh label create dependabot-major-review \
+            --color d93f0b \
+            --description "Major Dependabot update: needs a human review before merge" \
+            --force
 
           echo "Dependabot update type: ${UPDATE_TYPE:-<none>}"
-          echo "Marking eligible for auto-merge (the merger still requires all checks green)."
-          gh pr edit "$PR_URL" --add-label "dependabot-automerge"
+
+          # For a grouped update, fetch-metadata reports the HIGHEST semver
+          # change in the group, so a single major holds the whole group back.
+          # That is intended: a group lands as one commit, so it is only as
+          # safe to auto-merge as its riskiest member.
+          # Only patch/minor earns the auto-merge label. Everything else, a
+          # major OR an update-type we could not read, takes the same
+          # fail-closed path, so the two cannot drift apart: an earlier
+          # version of this file flagged unknown types for review but forgot
+          # to strip an already-applied auto-merge label, leaving them
+          # eligible for the merger anyway.
+          case "${UPDATE_TYPE:-}" in
+            version-update:semver-minor|version-update:semver-patch)
+              echo "Patch/minor update: eligible for auto-merge (the merger still requires all checks green)."
+              gh pr edit "$PR_URL" --add-label "dependabot-automerge"
+              ;;
+            *)
+              if [ "${UPDATE_TYPE:-}" = "version-update:semver-major" ]; then
+                echo "Major update: withholding auto-merge, flagging for human review."
+              else
+                echo "Unrecognised update type '${UPDATE_TYPE:-<none>}'; withholding auto-merge."
+              fi
+              gh pr edit "$PR_URL" --add-label "dependabot-major-review"
+              # Strip the auto-merge label in case an earlier run applied it:
+              # this workflow re-runs on synchronize, and a PR may predate this
+              # policy or have been labelled before its type became readable.
+              # Removing an absent label is not worth failing the job over.
+              gh pr edit "$PR_URL" --remove-label "dependabot-automerge" || true
+              ;;
+          esac
