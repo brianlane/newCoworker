@@ -45,7 +45,7 @@ the summary.
 | --- | --- | --- |
 | Demo caller follow-up (contact_created, 6) | on | Follows up with people who call the demo line |
 | Webchat lead follow-up (contact_created, 6) | on | |
-| Team inbox triage (email, 5) | on | Classifies sales/support/billing, texts Brian, and applies HQ/* Gmail labels via email_organize. Routine payment receipts deliberately do not page the owner (PR #792) |
+| Team inbox triage (email, 8) | on | Classifies sales/support/billing, texts Brian, and applies HQ/* Gmail labels via email_organize. Routine payment receipts deliberately do not page the owner (PR #792). Each alert names the real subject from `{{trigger.subject}}`, ends in a shortened (untracked) Gmail deep link, and cools down 12h per `{{trigger.thread_id}}`, so a reply on a thread Brian was already told about does not text him twice; filing still runs on the quiet reply |
 | Contact form triage (webhook, 2) | on | Feeds the admin-designated sink business (PR #773) |
 | Meta lead follow-up (webhook, 4) | on | |
 | Lead intake & follow-up (Privyr) (TEST COPY of Truly) | on | The AiFlow e2e harness fixture, laid down by `debug/flow-test-setup.ts` |
@@ -102,11 +102,23 @@ visitor actually books.
   credential of ours lives outside this repo, an explicit decision, this
   internal box only. Rotating the keypair means the JobArms deploy needs the
   new one.
+- **The inbox-triage builder had drifted from live for two weeks.** Until Aug
+  5 2026 the live flow ran 5 steps while
+  `scripts/oneshot/setup-hq-inbox-triage-flow.ts` defined 8: the three
+  `email_organize` steps were in the repo but had never been applied, so no
+  HQ/* label was ever written even though this file claimed otherwise. The
+  builder is not the source of truth, the `ai_flows` row is. That one-shot's
+  dry run now prints a per-step add/change/remove diff against live, so the
+  next divergence shows up before `--apply` rather than after.
 
 ## One-shots
 
 `onboard-hq-tenant.ts`, `configure-hq-dogfood.ts`, `setup-hq-dogfood-flows.ts`,
-`setup-hq-inbox-triage-flow.ts`, `enable-hq-booking-page.ts`,
+`setup-hq-inbox-triage-flow.ts` (its definition lives beside it in
+`hq-inbox-triage-definition.ts`, split out so
+`tests/oneshot-hq-inbox-triage-definition.test.ts` can pin the alert copy
+without the applier's Supabase connection running),
+`enable-hq-booking-page.ts`,
 `patch-hq-booking-offer.ts`, `sync-hq-booking-copy.ts`,
 `fix-hq-placeholder-contact-names.ts`, `set-hq-digest-prefs.ts`,
 `configure-hq-prospecting.ts`, `quiet-hq-prospect-flow.ts`.

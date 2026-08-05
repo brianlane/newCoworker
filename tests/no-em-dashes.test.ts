@@ -56,6 +56,13 @@ function guardedFiles(): string[] {
     // read clean only because patch-hq-booking-offer.ts swept them after the
     // fact; an unguarded re-run would put the em dashes straight back.
     "scripts/oneshot/setup-hq-dogfood-flows.ts",
+    // The HQ team-inbox alerts. Its em dash shipped as a bare "-" in a live
+    // text (gsmSafeSmsText rewrites the character on the way out), which is
+    // how the rule got broken in production copy without anyone noticing.
+    // The definition module holds the SMS bodies and the model prompts; the
+    // applier beside it is guarded too so its prose cannot drift back.
+    "scripts/oneshot/hq-inbox-triage-definition.ts",
+    "scripts/oneshot/setup-hq-inbox-triage-flow.ts",
     ...readdirSync(emailTemplatesDir)
       .filter((f) => f.endsWith(".ts"))
       .map((f) => `src/lib/email/templates/${f}`)

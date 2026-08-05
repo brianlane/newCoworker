@@ -1,5 +1,5 @@
 /**
- * setup-hq-inbox-triage-flow.ts — one-shot: author the HQ tenant's team-inbox
+ * setup-hq-inbox-triage-flow.ts: one-shot to author the HQ tenant's team-inbox
  * triage AiFlow (dogfooding plan, email phase).
  *
  * Watches the connected newcoworkerteam@gmail.com mailbox (the inbox behind
@@ -12,6 +12,36 @@
  *
  * Idempotent upsert-by-name, validated with parseAiFlowDefinition first.
  *
+ * ---------------------------------------------------------------------------
+ * Aug 5 2026 rewrite. Two texts arrived minutes apart about ONE Gmail thread
+ * (an intro, then its "Re:"), the first with an empty subject slot and a bare
+ * hyphen where the separator was, the second summarizing thread mechanics
+ * rather than an ask. Four things changed:
+ *
+ *   1. The subject is {{trigger.subject}}, not an extracted field. It was
+ *      always in scope verbatim; the extractor had to guess it out of an
+ *      unlabeled subject+body blob and returned "". (The authoring validator
+ *      used to reject {{trigger.subject}} as an unknown field, which is why
+ *      the flow paid for a model call to re-derive it. Fixed in PR #1185.)
+ *   2. email_gist is prompted for an ASK, not a narration, and returns "" when
+ *      a message has no new ask at all.
+ *   3. Each notify carries a cooldown on {{trigger.thread_id}}, so a reply on
+ *      a thread Brian was already told about stays quiet for the working day.
+ *      The email_organize steps still run, so the mail is filed either way.
+ *   4. Each alert ends in a Gmail deep link, shortened at send time and
+ *      deliberately untracked.
+ *
+ * The em dashes this file used to carry are gone too (rule 4). They were the
+ * literal source of the bare "-" in the live text, since gsmSafeSmsText
+ * rewrites them on the way out. tests/no-em-dashes.test.ts now guards it.
+ *
+ * NOTE ON DRIFT: before this rewrite the LIVE flow had only the 5 steps up to
+ * the notifies. The three email_organize steps existed here but had never been
+ * applied, so HQ/* labeling had never actually run despite the dossier saying
+ * it did. Applying this version turns labeling AND folder-moving on for the
+ * first time (confirmed with Brian, Aug 5 2026).
+ * ---------------------------------------------------------------------------
+ *
  * Usage:
  *   npx tsx scripts/oneshot/setup-hq-inbox-triage-flow.ts          # dry-run
  *   npx tsx scripts/oneshot/setup-hq-inbox-triage-flow.ts --apply  # write
@@ -22,119 +52,24 @@ loadEnv();
 
 const APPLY = process.argv.includes("--apply");
 
-const HQ_BUSINESS_ID = "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d";
-const FLOW_NAME = "Team inbox triage (HQ)";
-/** workspace_oauth_connections.id of the HQ Google (Gmail) connection. */
-const GMAIL_CONNECTION_ROW_ID = "16cff2b9-b4d3-421c-b25d-b40edd80c9a8";
-
+const {
+  HQ_BUSINESS_ID,
+  FLOW_NAME,
+  GMAIL_CONNECTION_ROW_ID,
+  buildHqInboxTriageDefinition
+} = await import("./hq-inbox-triage-definition.ts");
 const { parseAiFlowDefinition } = await import("../../src/lib/ai-flows/schema.ts");
 const { createSupabaseServiceClient } = await import("../../src/lib/supabase/server.ts");
 const { recordOneshotApplied } = await import("./_ledger.ts");
 
-const definition = {
-  version: 1,
-  trigger: {
-    channel: "email",
-    connectionId: GMAIL_CONNECTION_ROW_ID,
-    conditions: []
-  },
-  steps: [
-    {
-      id: "s_extract",
-      type: "extract_text",
-      fields: [
-        {
-          name: "email_subject",
-          description: "The email's subject line, verbatim"
-        },
-        {
-          name: "email_gist",
-          description: "One sentence: what the sender wants"
-        }
-      ]
-    },
-    {
-      id: "s_classify",
-      type: "classify",
-      question: "What kind of email did the business just receive?",
-      categories: [
-        {
-          value: "sales_lead",
-          description:
-            "A prospect asking about New Coworker: pricing, features, a demo, setup, or buying interest"
-        },
-        {
-          value: "support",
-          description:
-            "An existing customer or user needing help, reporting a problem, or asking an account question"
-        },
-        {
-          value: "billing",
-          description:
-            "Billing that needs a human: an invoice we must pay, a failed or declined payment, a dispute or chargeback, or a subscription problem. NOT routine receipts or confirmations of successful payments."
-        },
-        {
-          value: "automated_notice",
-          description:
-            "Automated notifications, our own platform's alert/contact-form copies, calendar invites, newsletters, or marketing blasts — including receipts and payment confirmations for successful charges"
-        }
-      ],
-      saveAs: "email_kind"
-    },
-    {
-      id: "s_notify_sales",
-      type: "notify_owner",
-      when: { var: "email_kind", equals: "sales_lead" },
-      message:
-        "Sales email in the team inbox from {{trigger.from}}: {{vars.email_subject}} — {{vars.email_gist}}"
-    },
-    {
-      id: "s_notify_support",
-      type: "notify_owner",
-      when: { var: "email_kind", equals: "support" },
-      message:
-        "Support email in the team inbox from {{trigger.from}}: {{vars.email_subject}} — {{vars.email_gist}}"
-    },
-    {
-      id: "s_notify_billing",
-      type: "notify_owner",
-      when: { var: "email_kind", equals: "billing" },
-      message:
-        "Billing email in the team inbox from {{trigger.from}}: {{vars.email_subject}} — {{vars.email_gist}}"
-    },
-    {
-      id: "s_org_sales",
-      type: "email_organize",
-      connectionId: GMAIL_CONNECTION_ROW_ID,
-      when: { var: "email_kind", equals: "sales_lead" },
-      addLabels: ["HQ/Sales"],
-      moveToFolder: "HQ/Sales"
-    },
-    {
-      id: "s_org_support",
-      type: "email_organize",
-      connectionId: GMAIL_CONNECTION_ROW_ID,
-      when: { var: "email_kind", equals: "support" },
-      addLabels: ["HQ/Support"],
-      moveToFolder: "HQ/Support"
-    },
-    {
-      id: "s_org_billing",
-      type: "email_organize",
-      connectionId: GMAIL_CONNECTION_ROW_ID,
-      when: { var: "email_kind", equals: "billing" },
-      addLabels: ["HQ/Billing"],
-      moveToFolder: "HQ/Billing"
-    }
-  ]
-};
+const definition = buildHqInboxTriageDefinition();
 
 parseAiFlowDefinition(definition);
 console.log(`[inbox-triage] "${FLOW_NAME}" definition valid`);
 
 const db = await createSupabaseServiceClient();
 
-// The email poller resolves the trigger's connection row at poll time —
+// The email poller resolves the trigger's connection row at poll time, so
 // verify it exists and is an email-capable provider before authoring.
 const { data: conn, error: connErr } = await db
   .from("workspace_oauth_connections")
@@ -143,14 +78,14 @@ const { data: conn, error: connErr } = await db
   .eq("id", GMAIL_CONNECTION_ROW_ID)
   .maybeSingle();
 if (connErr || !conn) {
-  console.error("[inbox-triage] Gmail connection row not found — aborting", connErr?.message ?? "");
+  console.error("[inbox-triage] Gmail connection row not found, aborting", connErr?.message ?? "");
   process.exit(1);
 }
 console.log("[inbox-triage] mailbox connection:", conn.provider_config_key, (conn.metadata as { provider_account_email?: string } | null)?.provider_account_email);
 
 const { data: existing, error: listErr } = await db
   .from("ai_flows")
-  .select("id, enabled")
+  .select("id, enabled, definition")
   .eq("business_id", HQ_BUSINESS_ID)
   .eq("name", FLOW_NAME)
   .maybeSingle();
@@ -159,8 +94,45 @@ if (listErr) {
   process.exit(1);
 }
 console.log(
-  `[inbox-triage] "${FLOW_NAME}": ${existing ? `exists (id=${(existing as { id: string }).id}) — will refresh` : "will create (enabled)"}`
+  `[inbox-triage] "${FLOW_NAME}": ${existing ? `exists (id=${(existing as { id: string }).id}), will refresh` : "will create (enabled)"}`
 );
+
+/**
+ * Print what this run would actually change, step by step.
+ *
+ * The live row is the source of truth, not this file, and the two had silently
+ * diverged: live carried 5 steps while this builder defined 9, so the three
+ * email_organize steps had never run even though the tenant dossier said they
+ * had. A dry run that only printed "will refresh" could not surface that. This
+ * one names every added, removed, and modified step, so the drift is visible
+ * BEFORE --apply rather than after.
+ */
+function reportDiff(live: unknown): void {
+  const liveSteps = ((live as { steps?: { id?: string }[] } | null)?.steps ?? []).filter(
+    (s): s is { id: string } => typeof s?.id === "string"
+  );
+  const liveById = new Map(liveSteps.map((s) => [s.id, s]));
+  const nextById = new Map(definition.steps.map((s) => [s.id, s]));
+
+  console.log(`[inbox-triage] live has ${liveSteps.length} step(s), this file has ${definition.steps.length}`);
+  for (const step of definition.steps) {
+    const before = liveById.get(step.id);
+    if (!before) {
+      console.log(`[inbox-triage]   + ADD     ${step.id} (${step.type})`);
+    } else if (JSON.stringify(before) !== JSON.stringify(step)) {
+      console.log(`[inbox-triage]   ~ CHANGE  ${step.id} (${step.type})`);
+      console.log(`[inbox-triage]       live: ${JSON.stringify(before)}`);
+      console.log(`[inbox-triage]       next: ${JSON.stringify(step)}`);
+    }
+  }
+  for (const step of liveSteps) {
+    if (!nextById.has(step.id)) {
+      console.log(`[inbox-triage]   - REMOVE  ${step.id}  <-- this DELETES live behavior, is that intended?`);
+    }
+  }
+}
+
+if (existing) reportDiff((existing as { definition?: unknown }).definition);
 
 if (!APPLY) {
   console.log("[inbox-triage] dry run complete. Re-run with --apply to write.");
