@@ -3432,7 +3432,7 @@ async function emailExtractStep(
   try {
     res = await fetch(`${base}/api/internal/aiflow-email-fetch`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      headers: platformCallHeaders(base, token),
       body: JSON.stringify({
         businessId: run.business_id,
         connectionId: action.connectionId,
@@ -3522,7 +3522,7 @@ async function docExtractStep(
   try {
     res = await fetch(`${base}/api/internal/aiflow-doc-extract`, {
       method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+      headers: platformCallHeaders(base, token),
       body: JSON.stringify({
         businessId: run.business_id,
         sourceRef: action.sourceRef,
@@ -5870,7 +5870,7 @@ async function emailOrganizeStep(
   }
   const res = await fetch(`${base}/api/aiflows/organize-email`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    headers: platformCallHeaders(base, token),
     body: JSON.stringify({
       businessId: run.business_id,
       ...(action.connectionId ? { connectionId: action.connectionId } : {}),
@@ -6237,6 +6237,36 @@ async function deliverFlowEmail(
  * artifact — stamped here into {{vars.<saveAs>}} (plus
  * {{vars.<saveAs>_document_id}} / _document_title when filed).
  */
+/**
+ * Headers for a worker to platform callback.
+ *
+ * The Origin is load-bearing, not decoration. Vercel rejects an origin-less
+ * cross-site POST to several of these routes with
+ * `{"error":"FORBIDDEN","message":"CSRF validation failed"}` BEFORE the
+ * handler runs, and a server-to-server `fetch` sends no Origin at all. That
+ * silently blocked every `run_agent` and connected-mailbox `email_organize`
+ * call a flow ever made: `agent_runs` had zero rows with `source = 'flow'`
+ * across the whole history of the feature.
+ *
+ * The bearer token remains the actual authentication (gatewayBusinessGuard
+ * binds it to the business); this only satisfies a browser-shaped check that
+ * a token-authenticated backend call should never have been subject to.
+ * Same-origin by construction: it names the platform we are calling.
+ */
+function platformCallHeaders(base: string, token: string): Record<string, string> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+    Authorization: `Bearer ${token}`
+  };
+  try {
+    headers.Origin = new URL(base).origin;
+  } catch {
+    // A malformed AIFLOW_PLATFORM_URL fails later at fetch with a clearer
+    // error than anything we could add here.
+  }
+  return headers;
+}
+
 async function runAgentStep(
   scope: Scope,
   run: RunRow,
@@ -6259,7 +6289,7 @@ async function runAgentStep(
   }
   const res = await fetch(`${base}/api/aiflows/run-agent`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    headers: platformCallHeaders(base, token),
     body: JSON.stringify({
       businessId: run.business_id,
       agentId: action.agentId,
@@ -6336,7 +6366,7 @@ async function deliverOwnerMailboxEmail(
   }
   const res = await fetch(`${base}/api/aiflows/send-owner-email`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    headers: platformCallHeaders(base, token),
     body: JSON.stringify({
       businessId: run.business_id,
       connectionId: action.fromConnectionId,
@@ -7055,7 +7085,7 @@ async function httpCallStep(
   if (!base || !token) return { kind: "fail", error: "http_call: platform proxy not configured" };
   const res = await fetch(`${base}/api/integrations/custom/call`, {
     method: "POST",
-    headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+    headers: platformCallHeaders(base, token),
     body: JSON.stringify({
       businessId,
       label: action.label,
