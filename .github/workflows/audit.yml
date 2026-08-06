@@ -20,7 +20,7 @@ jobs:
   # the sub-trees were invisible to CI, which is how the zapier/ adm-zip
   # advisory sat unnoticed until Dependabot flagged it).
   #
-  # - Root (`.`) audits prod deps only (`--omit=dev`) — unchanged behavior;
+  # - Root (`.`) audits prod deps only (`--omit=dev`), unchanged behavior;
   #   the app's dev tree is huge and only prod deps ship to Vercel.
   # - Sub-trees audit dev deps too: the VPS trees run on tenant boxes and
   #   have no meaningful dev/prod split, and the tool trees (zapier/,

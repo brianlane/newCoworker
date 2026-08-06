@@ -248,7 +248,9 @@ new phrasing.
 
 `tests/no-em-dashes.test.ts` enforces the rule in CI for the guarded
 user-facing surfaces (message catalogs, email templates, prompt-line modules,
-one-shot flow copy). Legacy instances elsewhere are cleaned opportunistically:
+one-shot flow copy, and all of `.github/workflows/`, which composes the deploy
+failure email and the PR preview comment). Legacy instances elsewhere are
+cleaned opportunistically:
 never add new ones, and sweep a file you are already editing when it is cheap
 to do so.
 

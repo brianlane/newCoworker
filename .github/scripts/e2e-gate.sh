@@ -71,7 +71,7 @@ while true; do
         | ["failure", "cancelled", "timed_out", "action_required", "skipped"] | index($c)))
     | .[] | .name' <<<"$check_runs")
   if [ -n "$hard_failed" ]; then
-    echo "::error::e2e gate: check(s) failed — $(tr '\n' ' ' <<<"$hard_failed")"
+    echo "::error::e2e gate: check(s) failed, $(tr '\n' ' ' <<<"$hard_failed")"
     exit 1
   fi
   [ -n "$not_green" ] && blockers+="checks not green:"$'\n'"$not_green"$'\n'

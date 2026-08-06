@@ -1216,8 +1216,10 @@ Three layers hold this in place:
   `stripEmDashes`, which also runs on admin editor saves).
 - **CI guard**: `tests/no-em-dashes.test.ts` fails when an em dash appears in
   the guarded user-facing surfaces (message catalogs, email templates,
-  prompt-line modules, notification copy, one-shot flow templates). Widen its
-  file set as more areas are cleaned; never shrink it.
+  prompt-line modules, notification copy, one-shot flow templates, and every
+  file in `.github/workflows/`, which composes the deploy-failure email body
+  and subject plus the PR preview-URL comment). Widen its file set as more
+  areas are cleaned; never shrink it.
 - **Legacy instances** in comments/docs (thousands, pre-rule) are cleaned
   opportunistically: never add a new one, and sweep a file you are already
   editing when cheap. Live tenant flow copy was scrubbed via

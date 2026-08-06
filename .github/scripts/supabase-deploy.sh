@@ -17,7 +17,19 @@
 # Drift is never auto-repaired here: `supabase migration repair` rewrites the
 # production ledger and must stay a deliberate human/agent action.
 #
-# Expected env: SUPABASE_ACCESS_TOKEN, SUPABASE_DB_PASSWORD.
+# Every DDL connection is pinned to the IPv4 SESSION POOLER, never the direct
+# database host. `db.<ref>.supabase.co` publishes ONLY an AAAA record and
+# GitHub's hosted runners have no IPv6 route, so any CLI code path that
+# reaches for the direct connection dies with "dial tcp [2600:...]:5432:
+# connect: network is unreachable" (run 31068979036, 2026-08-06: the deploy
+# failed, the retry failed on an unrelated Supabase 502, and the watcher
+# emailed that production had not updated). Port 5432 is the SESSION pooler
+# and is required: the transaction pooler on 6543 cannot run migrations.
+#
+# Expected env: SUPABASE_ACCESS_TOKEN, SUPABASE_DB_PASSWORD. SUPABASE_REGION
+# overrides the pooler region, which is otherwise a fixed property of the
+# project (verified against the live pooler: us-east-1 answers "tenant/user
+# not found" for this ref, us-east-2 serves it).
 set -euo pipefail
 
 MODE="${1:?usage: supabase-deploy.sh check|deploy}"
@@ -33,12 +45,32 @@ if [ -z "$PROJECT_REF" ]; then
   exit 1
 fi
 
+# The CLI documents --db-url as "must be percent-encoded", so the password is
+# encoded rather than interpolated raw: a rotation that introduces an @ or a /
+# would otherwise silently produce a malformed URL. Mask the encoded form too,
+# since Actions only masks the secret's literal value and an encoded password
+# would sail through the scrubber into any error text.
+DB_PASSWORD_ENCODED=$(jq -rn --arg s "$SUPABASE_DB_PASSWORD" '$s|@uri')
+# Only inside Actions, where the runner CONSUMES this line. Anywhere else it
+# is just an echo that would print the password to the local terminal.
+if [ -n "${GITHUB_ACTIONS:-}" ]; then
+  echo "::add-mask::$DB_PASSWORD_ENCODED"
+fi
+
+SUPABASE_REGION="${SUPABASE_REGION:-us-east-2}"
+# Exported so migration-order-heal.sh reads the ledger over the same pooler.
+# Percent-encoding guarantees the URL contains no whitespace, which is what
+# makes the unquoted ${SUPABASE_DB_URL:+...} expansion there safe.
+export SUPABASE_DB_URL="postgresql://postgres.${PROJECT_REF}:${DB_PASSWORD_ENCODED}@aws-1-${SUPABASE_REGION}.pooler.supabase.com:5432/postgres?sslmode=require"
+
+# Still needed for `functions deploy`, which talks to the management API
+# rather than Postgres and so has no --db-url of its own.
 # Non-interactive: SUPABASE_DB_PASSWORD is picked up from the environment.
 supabase link --project-ref "$PROJECT_REF"
 
 case "$MODE" in
   check)
-    supabase db push --dry-run
+    supabase db push --dry-run --db-url "$SUPABASE_DB_URL"
     echo "Drift check passed: every remote ledger entry exists in supabase/migrations/."
     ;;
   deploy)
@@ -50,7 +82,7 @@ case "$MODE" in
     # the ledger itself are never touched, so "drift is never auto-repaired
     # here" still holds.
     bash "$(dirname "${BASH_SOURCE[0]}")/migration-order-heal.sh"
-    supabase db push
+    supabase db push --db-url "$SUPABASE_DB_URL"
     echo "Migrations applied (or already up to date). Deploying all edge functions..."
     supabase functions deploy
     echo "All edge functions deployed from this commit."

@@ -43,7 +43,8 @@
 #     its own error text.
 #
 # Expected env: SUPABASE_ACCESS_TOKEN, SUPABASE_DB_PASSWORD (for the ledger
-# read; the CLI is already linked by supabase-deploy.sh), plus the
+# read; the CLI is already linked by supabase-deploy.sh), SUPABASE_DB_URL (the
+# pooler connection that same script exports, see read_applied below), plus the
 # actions/checkout git credentials for the push (persist-credentials).
 #
 # Push auth vs the main ruleset: the branch ruleset "main: PRs with all
@@ -105,8 +106,17 @@ fi
 # is deliberately strict (exactly 14 digits after stripping spaces) so a
 # format change in an unpinned future CLI yields an empty set, which skips
 # the heal rather than renaming on bad data.
+#
+# The ledger read goes over the same IPv4 session pooler as the db push that
+# follows (SUPABASE_DB_URL, exported by supabase-deploy.sh; see its header for
+# why the direct host is unreachable from GitHub runners). Without it this
+# read hit the IPv6-only direct host and returned nothing, which this script
+# cannot tell apart from "no ledger" and so silently skipped the heal on
+# 2026-08-06. The variable is absent for local runs and the vitest sandbox,
+# where the stubbed CLI ignores the flag anyway; percent-encoding guarantees
+# the URL holds no whitespace, so the unquoted expansion cannot word-split.
 read_applied() {
-  supabase migration list 2>/dev/null \
+  supabase migration list ${SUPABASE_DB_URL:+--db-url "$SUPABASE_DB_URL"} 2>/dev/null \
     | awk -F'|' 'NF >= 2 { v = $2; gsub(/[[:space:]]/, "", v); if (v ~ /^[0-9]{14}$/) print v }' \
     | sort -u
 }
