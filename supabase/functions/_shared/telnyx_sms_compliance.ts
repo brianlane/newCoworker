@@ -3,6 +3,18 @@
  * https://www.ctia.org/the-wireless-association/industry-resources/messaging-principles-and-best-practices
  */
 
+import { smsDestinationCountry } from "./sms_destination_rates.ts";
+import {
+  isInternationalSmsDestination,
+  internationalGatewayFrom
+} from "./sms_international_gateway.ts";
+
+/** Gateway from-number for an international destination, else null. */
+function resolveInternationalGatewayFrom(toE164: string): string | null {
+  if (!isInternationalSmsDestination(smsDestinationCountry(toE164))) return null;
+  return internationalGatewayFrom();
+}
+
 export function inboundSmsBody(payload: Record<string, unknown>): string {
   const t = payload["text"];
   if (typeof t === "string") return t;
@@ -137,11 +149,22 @@ export async function telnyxSendSms(params: {
   if (params.idempotencyKey) {
     headers["Idempotency-Key"] = params.idempotencyKey;
   }
-  const fromTrimmed = (params.fromE164 ?? "").trim();
+  // International destinations ride the dedicated P2P gateway as the
+  // visible from-number (tenant A2P long codes cannot originate
+  // international; see _shared/sms_international_gateway.ts). Group sends
+  // (array `to`) are MMS-billed and stay domestic: their recipients are
+  // partitioned by the caller, never rerouted here.
+  const gatewayFrom =
+    typeof params.toE164 === "string" ? resolveInternationalGatewayFrom(params.toE164) : null;
+  const fromTrimmed = (gatewayFrom ?? params.fromE164 ?? "").trim();
   const agentId = (params.rcsAgentId ?? "").trim();
   const hasMedia = Boolean(params.mediaUrls && params.mediaUrls.length > 0);
   const useRcs =
-    agentId.length > 0 && typeof params.toE164 === "string" && !hasMedia && fromTrimmed.length > 0;
+    agentId.length > 0 &&
+    typeof params.toE164 === "string" &&
+    gatewayFrom === null &&
+    !hasMedia &&
+    fromTrimmed.length > 0;
 
   if (useRcs) {
     const rcsBody: Record<string, unknown> = {

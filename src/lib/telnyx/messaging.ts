@@ -1,6 +1,11 @@
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { smsTextUnits } from "@/lib/sms/segment-info";
 import { smsDestinationCountry, smsDestinationMultiplier } from "@/lib/sms/destination-rates";
+import {
+  isInternationalSmsDestination,
+  internationalGatewayFrom,
+  INTERNATIONAL_MMS_ERROR
+} from "@/lib/telnyx/international-gateway";
 import { sendCapAlertOnce, smsCapPeriodKey } from "../../../supabase/functions/_shared/cap_alerts";
 
 export type TelnyxMessagingConfig = {
@@ -238,6 +243,10 @@ export async function sendTelnyxSms(
   let meterClient: Awaited<ReturnType<typeof createSupabaseServiceClient>> | undefined;
   let reservedSlot = false;
   let reservedFromBonus = false;
+  // Set the moment Telnyx ACCEPTS a request (2xx). From then on a charge
+  // may exist, so the units are never refunded (refund policy: only
+  // provable non-charges are released).
+  let telnyxAccepted = false;
   const businessId = options?.meterBusinessId;
   const meterMode = options?.meterMode ?? "reserve";
   // Billable units this send costs against the monthly cap: one per carrier
@@ -259,10 +268,28 @@ export async function sendTelnyxSms(
   // support-every-country model: no separate caps, the cap just charges
   // what the destination costs.
   const destinationCountry = smsDestinationCountry(toE164);
+  const isInternational = isInternationalSmsDestination(destinationCountry);
+  const mediaCount = (options?.mediaUrls ?? []).filter((u) => u.length > 0).length;
+
+  // International + media is refused BEFORE any metering: the P2P gateway
+  // cannot carry MMS and the tenant's A2P number cannot reach the
+  // destination. Refusing up front costs the tenant zero units and never
+  // touches Telnyx, per the refund policy (only provable non-charges are
+  // free; this send provably never happens).
+  if (isInternational && mediaCount > 0) {
+    throw new Error(INTERNATIONAL_MMS_ERROR);
+  }
+
+  // International sends substitute the dedicated P2P gateway as the visible
+  // from-number (tenant A2P long codes cannot originate international).
+  // With no gateway configured, behavior is unchanged: the send keeps the
+  // tenant number and fails at Telnyx as before, so env rollout order is
+  // safe. Metering below stays keyed to the TENANT either way.
+  const gatewayFrom = isInternational ? internationalGatewayFrom() : null;
+  const effectiveFrom = gatewayFrom ?? config.fromE164;
+
   const textUnits =
-    smsTextUnits(text, {
-      mediaCount: (options?.mediaUrls ?? []).filter((u) => u.length > 0).length
-    }) * smsDestinationMultiplier(destinationCountry);
+    smsTextUnits(text, { mediaCount }) * smsDestinationMultiplier(destinationCountry);
 
   if (businessId && meterMode === "operational") {
     // Owner/platform/compliance traffic: ALWAYS counted, never refused and
@@ -342,6 +369,14 @@ export async function sendTelnyxSms(
 
   const releaseIfNeeded = async (): Promise<void> => {
     if (!reservedSlot || !businessId || !meterClient) return;
+    if (telnyxAccepted) {
+      // Telnyx took the request; refunding here could hand back units for a
+      // message that was (or will be) delivered and billed.
+      console.error(
+        "sendTelnyxSms: keeping metered units after Telnyx accepted (charge may exist)"
+      );
+      return;
+    }
     const { error: relErr } = await meterClient.rpc("release_sms_outbound_slot", {
       p_business_id: businessId,
       // Bonus-sourced reserves consumed purchased texts; refund them to the grant.
@@ -378,6 +413,7 @@ export async function sendTelnyxSms(
     // per-message opt-out (composer toggle).
     if (
       options?.forceChannel !== "sms" &&
+      !isInternational &&
       mediaUrls.length === 0 &&
       rcsAgentId &&
       config.fromE164
@@ -422,8 +458,8 @@ export async function sendTelnyxSms(
       text,
       messaging_profile_id: config.messagingProfileId
     };
-    if (config.fromE164) {
-      body.from = config.fromE164;
+    if (effectiveFrom) {
+      body.from = effectiveFrom;
     }
     if (mediaUrls.length > 0) {
       body.media_urls = mediaUrls;
@@ -443,6 +479,15 @@ export async function sendTelnyxSms(
     const json = (await res.json()) as TelnyxMessageResponse;
     const id = json.data?.id;
     if (!id) {
+      // Refund policy: units come back ONLY when Telnyx provably did not
+      // charge (a rejection before acceptance). A 2xx without an id means
+      // Telnyx ACCEPTED the request, so a charge may exist; keep the units
+      // and surface the anomaly loudly instead of refunding a possibly
+      // delivered message.
+      telnyxAccepted = true;
+      console.error(
+        "sendTelnyxSms: 2xx without message id; keeping metered units (charge may exist)"
+      );
       throw new Error("Telnyx SMS: missing message id in response");
     }
 

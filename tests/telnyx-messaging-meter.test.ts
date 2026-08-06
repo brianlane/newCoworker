@@ -8,6 +8,7 @@ vi.mock("@/lib/supabase/server", () => ({
 
 import { sendTelnyxSms, reserveSlotFailureMessage } from "@/lib/telnyx/messaging";
 import { MMS_TEXT_UNITS } from "@/lib/sms/segment-info";
+import { INTERNATIONAL_MMS_ERROR } from "@/lib/telnyx/international-gateway";
 
 describe("reserveSlotFailureMessage", () => {
   it("maps known reasons", () => {
@@ -243,6 +244,82 @@ describe("sendTelnyxSms meterBusinessId (atomic reserve)", () => {
     expect(fetchMock).not.toHaveBeenCalled();
   });
 
+  it("routes an international send through the gateway from-number", async () => {
+    vi.stubEnv("TELNYX_INTL_GATEWAY_E164", "+16028384497");
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { id: "m4" } })
+    });
+    await sendTelnyxSms(
+      { apiKey: "k", messagingProfileId: "p", fromE164: "+14388035806" },
+      "+85261234567",
+      "Hello James",
+      { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1" }
+    );
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
+    // The tenant's own A2P number cannot originate international; the P2P
+    // gateway substitutes as the visible sender. Metering stays on the
+    // tenant regardless of the from-number.
+    expect(body.from).toBe("+16028384497");
+    expect(rpc).toHaveBeenCalledWith("try_reserve_sms_outbound_slot", {
+      p_business_id: "biz-1",
+      p_text_units: 1,
+      p_destination_e164: "+85261234567"
+    });
+    vi.unstubAllEnvs();
+  });
+
+  it("keeps the tenant from-number for domestic sends even with a gateway configured", async () => {
+    vi.stubEnv("TELNYX_INTL_GATEWAY_E164", "+16028384497");
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { id: "m5" } })
+    });
+    await sendTelnyxSms(
+      { apiKey: "k", messagingProfileId: "p", fromE164: "+14388035806" },
+      "+16025550100",
+      "Hi",
+      { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1" }
+    );
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
+    expect(body.from).toBe("+14388035806");
+    vi.unstubAllEnvs();
+  });
+
+  it("refuses international MMS before metering: zero units, zero Telnyx calls", async () => {
+    vi.stubEnv("TELNYX_INTL_GATEWAY_E164", "+16028384497");
+    const fetchMock = vi.fn();
+    await expect(
+      sendTelnyxSms({ apiKey: "k", messagingProfileId: "p" }, "+85261234567", "photo", {
+        fetchImpl: fetchMock as typeof fetch,
+        meterBusinessId: "biz-1",
+        mediaUrls: ["https://example.com/img.png"]
+      })
+    ).rejects.toThrow(INTERNATIONAL_MMS_ERROR);
+    // Refused up front: the P2P gateway cannot carry MMS and the tenant's
+    // A2P number cannot reach the destination, so nothing may be charged.
+    expect(rpc).not.toHaveBeenCalled();
+    expect(fetchMock).not.toHaveBeenCalled();
+    vi.unstubAllEnvs();
+  });
+
+  it("keeps the units when Telnyx returns 2xx without a message id (may have charged)", async () => {
+    // Refund policy: units are refunded ONLY when Telnyx provably did not
+    // charge (a rejection). A 2xx without an id is ambiguous: Telnyx
+    // accepted the request, so the charge may exist and the units stay.
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: {} })
+    });
+    await expect(
+      sendTelnyxSms({ apiKey: "k", messagingProfileId: "p" }, "+15550001111", "Hi", {
+        fetchImpl: fetchMock as typeof fetch,
+        meterBusinessId: "biz-1"
+      })
+    ).rejects.toThrow("missing message id");
+    expect(rpc).not.toHaveBeenCalledWith("release_sms_outbound_slot", expect.anything());
+  });
+
   it("meters an MMS as flat MMS_TEXT_UNITS regardless of caption length", async () => {
     const fetchMock = vi.fn().mockResolvedValue({
       ok: true,
@@ -314,26 +391,6 @@ describe("sendTelnyxSms meterBusinessId (atomic reserve)", () => {
         { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1" }
       )
     ).rejects.toThrow("Telnyx SMS error");
-    expect(rpc).toHaveBeenCalledWith("release_sms_outbound_slot", {
-      p_business_id: "biz-1",
-      p_refund_bonus: false,
-      p_text_units: 1
-    });
-  });
-
-  it("releases slot when response has no message id", async () => {
-    const fetchMock = vi.fn().mockResolvedValue({
-      ok: true,
-      json: () => Promise.resolve({ data: {} })
-    });
-    await expect(
-      sendTelnyxSms(
-        { apiKey: "k", messagingProfileId: "p" },
-        "+15550001111",
-        "Hi",
-        { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1" }
-      )
-    ).rejects.toThrow("missing message id");
     expect(rpc).toHaveBeenCalledWith("release_sms_outbound_slot", {
       p_business_id: "biz-1",
       p_refund_bonus: false,

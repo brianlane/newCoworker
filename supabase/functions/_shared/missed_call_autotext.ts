@@ -24,6 +24,7 @@
 
 import { smsTextUnits } from "./sms_text_units.ts";
 import { smsDestinationCountry, smsDestinationMultiplier } from "./sms_destination_rates.ts";
+import { resolveInternationalFrom } from "./sms_international_gateway.ts";
 
 type Row = { data: unknown; error: { message: string } | null };
 
@@ -203,7 +204,9 @@ export async function sendMissedCallAutotext(
         },
         body: JSON.stringify({
           to: caller,
-          from: fromE164,
+          // An international missed caller can only be texted from the P2P
+          // gateway; domestic callers keep the tenant's own number.
+          from: resolveInternationalFrom(caller, fromE164) as string,
           text: autotextBody,
           messaging_profile_id: messagingProfileId
         })

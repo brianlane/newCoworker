@@ -42,6 +42,7 @@ import {
   releaseOperationalSms
 } from "../_shared/sms_operational_meter.ts";
 import { smsTextUnits } from "../_shared/sms_text_units.ts";
+import { resolveInternationalFrom } from "../_shared/sms_international_gateway.ts";
 
 interface WebhookPayload {
   type: "INSERT" | "UPDATE" | "DELETE";
@@ -554,7 +555,10 @@ serve(async (req: Request) => {
         text: smsText,
         messaging_profile_id: telnyxProfile
       };
-      if (telnyxFrom) body.from = telnyxFrom;
+      // An international alert phone (owner abroad) is only reachable via
+      // the P2P gateway from-number.
+      const alertFrom = resolveInternationalFrom(targets.phone, telnyxFrom || null);
+      if (alertFrom) body.from = alertFrom;
       const smsRes = await fetch("https://api.telnyx.com/v2/messages", {
         method: "POST",
         headers: {

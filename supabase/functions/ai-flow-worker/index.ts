@@ -40,6 +40,11 @@ import {
   smsDestinationCountry,
   smsDestinationMultiplier
 } from "../_shared/sms_destination_rates.ts";
+import {
+  isInternationalSmsDestination,
+  partitionInternationalSmsRecipients,
+  INTERNATIONAL_MMS_SKIP_REASON
+} from "../_shared/sms_international_gateway.ts";
 import { sendOperationalSms } from "../_shared/sms_operational_meter.ts";
 import { resolveRcsAgentId } from "../_shared/channel_settings.ts";
 import {
@@ -5402,6 +5407,14 @@ async function sendSmsStep(
     };
   }
 
+  // Media to an international destination is refused BEFORE the reserve:
+  // the P2P gateway cannot carry MMS and A2P numbers cannot reach the
+  // destination, so the step skips with a designed reason at zero units
+  // instead of bouncing off Telnyx.
+  if (action.mediaUrl && isInternationalSmsDestination(smsDestinationCountry(toE164))) {
+    return { kind: "ok", skipped: true, result: { skipped: INTERNATIONAL_MMS_SKIP_REASON } };
+  }
+
   // Billable units for this send, computed on the prepared body BEFORE link
   // shortening (the reserve deliberately precedes link minting, and
   // shortening only ever shrinks the body, so this is a tight upper bound
@@ -5567,6 +5580,22 @@ async function sendGroupSmsStep(
   if (recipients.length === 0) {
     return { kind: "ok", skipped: true, result: { skipped: "group_no_recipients" } };
   }
+
+  // Group sends are MMS-billed and the P2P gateway is text-only, so
+  // international participants cannot ride a group leg. Drop them (recorded
+  // in the step result) rather than letting one leg poison the whole send;
+  // if nobody domestic remains, skip the step with a designed reason.
+  const partitioned = partitionInternationalSmsRecipients(recipients);
+  const droppedInternational = partitioned.international;
+  if (partitioned.domestic.length === 0) {
+    return {
+      kind: "ok",
+      skipped: true,
+      result: { skipped: INTERNATIONAL_MMS_SKIP_REASON, dropped: droppedInternational }
+    };
+  }
+  recipients.length = 0;
+  recipients.push(...partitioned.domestic);
 
   // 2+ recipients must go out as a Telnyx group MMS (the standard /messages
   // endpoint rejects a multi-destination `to`). Group MMS requires an explicit
@@ -8864,10 +8893,17 @@ async function sendOfferSms(
   const cfg = await messagingConfig(supabase, run.business_id);
   if (!cfg) throw new Error("route_to_team: Telnyx messaging is not configured");
   const body = prepareSmsBody(text);
+  // An international teammate is reachable only through the text-only P2P
+  // gateway, so an attached screenshot is dropped (the offer TEXT is the
+  // actionable part; the screenshot is auxiliary context). Domestic
+  // teammates keep the MMS.
+  const effectiveMediaUrls = isInternationalSmsDestination(smsDestinationCountry(to))
+    ? undefined
+    : mediaUrls;
   // Units for the exact body/media Telnyx bills; the release below refunds
   // the same number.
   const reserveUnits =
-    smsTextUnits(body, { mediaCount: mediaUrls?.length ?? 0 }) *
+    smsTextUnits(body, { mediaCount: effectiveMediaUrls?.length ?? 0 }) *
     smsDestinationMultiplier(smsDestinationCountry(to));
   const { data: reserveRaw, error: reserveErr } = await supabase.rpc(
     "try_reserve_sms_outbound_slot",
@@ -8888,7 +8924,7 @@ async function sendOfferSms(
       fromE164: cfg.from,
       toE164: to,
       text: body,
-      mediaUrls,
+      mediaUrls: effectiveMediaUrls,
       idempotencyKey
     });
     if (!send.ok) throw new Error(`telnyx ${send.status}: ${send.body.slice(0, 200)}`);

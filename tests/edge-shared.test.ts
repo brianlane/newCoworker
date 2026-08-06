@@ -271,6 +271,46 @@ describe("_shared/telnyx_sms_compliance", () => {
     expect(init.headers).not.toHaveProperty("Idempotency-Key");
   });
 
+  it("telnyxSendSms substitutes the gateway from-number for international destinations", async () => {
+    vi.stubEnv("TELNYX_INTL_GATEWAY_E164", "+16028384497");
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "{}"
+    });
+    await telnyxSendSms({
+      apiKey: "KEY",
+      messagingProfileId: "mp",
+      fromE164: "+14388035806",
+      toE164: "+85261234567",
+      text: "hello",
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toMatchObject({ from: "+16028384497" });
+    vi.unstubAllEnvs();
+  });
+
+  it("telnyxSendSms keeps the tenant from-number for domestic sends with a gateway set", async () => {
+    vi.stubEnv("TELNYX_INTL_GATEWAY_E164", "+16028384497");
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "{}"
+    });
+    await telnyxSendSms({
+      apiKey: "KEY",
+      messagingProfileId: "mp",
+      fromE164: "+15550001111",
+      toE164: "+15550002222",
+      text: "hi",
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toMatchObject({ from: "+15550001111" });
+    vi.unstubAllEnvs();
+  });
+
   it("telnyxSendSms includes media_urls when mediaUrls is non-empty (MMS)", async () => {
     const fetchImpl = vi.fn().mockResolvedValue({
       ok: true,
