@@ -86,8 +86,15 @@ import {
   MAX_WAIT_MINUTES,
   SHARE_URL_TOKEN,
   planStep,
+  stepOverridesFlowTimeWindow,
   type StepAction
 } from "../_shared/ai_flows/steps.ts";
+import {
+  CALL_REASON,
+  callOutcomeCompanionVars,
+  callOutcomeLabel
+} from "../_shared/ai_flows/call_outcome_meta.ts";
+import { callDialGuard } from "../_shared/ai_flows/call_guards.ts";
 import { resolveContactRef, resolveFromMatchesRefValues } from "../_shared/ai_flows/contact_ref.ts";
 import { matchRosterName } from "../_shared/ai_flows/roster_match.ts";
 import {
@@ -1919,7 +1926,17 @@ async function runStep(
   // earliest_claim_at mechanics as send_sms quiet hours, which still apply on
   // top per step. Checked AFTER the `when` guard so a step that would skip
   // anyway never parks the run, and before recording "running".
-  if (scope.timeWindow && COMM_STEP_TYPES.has(step.type)) {
+  //
+  // A place_ai_call carrying its OWN callWindow is exempt (see
+  // stepOverridesFlowTimeWindow): letting the flow window run first would
+  // defer the whole run before the step's `outside: "skip"` could drop just
+  // the dial, which is the entire point of that setting. The step's own
+  // window is then enforced inside placeAiCallStep.
+  if (
+    scope.timeWindow &&
+    !stepOverridesFlowTimeWindow(step) &&
+    COMM_STEP_TYPES.has(step.type)
+  ) {
     const decision = timeWindowDecision(Date.now(), scope.timeWindow);
     if (!decision.allowed) {
       return { kind: "defer", resumeAtMs: decision.resumeAtMs, reason: "flow_time_window" };
@@ -6947,6 +6964,17 @@ async function waitForCallStep(
       filled.push(to);
     }
     scope.vars[action.saveAs] = outcome;
+    // Keep the outcome's companion vars in step with it. This step does not
+    // DECLARE them (only place_ai_call does), but it shares both the
+    // awaiting_call park status and the timeout sweep with that step, and the
+    // sweep writes companions for every run it resumes. Left alone, a
+    // wait_for_call that timed out would carry the outbound phrase "no answer
+    // yet" beside its own "no_call" outcome. The two also default to the same
+    // `call_outcome` var name, so a flow using both steps would otherwise
+    // strand the earlier call's label next to this step's outcome.
+    const [waitReasonVar, waitLabelVar] = callOutcomeCompanionVars(action.saveAs);
+    scope.vars[waitReasonVar] = "";
+    scope.vars[waitLabelVar] = callOutcomeLabel(outcome);
     scope.vars[action.marker] = "1";
     // The standard fields are always published (as "none"), so count only the
     // ones the AI genuinely came away with.
@@ -7141,14 +7169,32 @@ async function placeAiCallStep(
   scope: Scope,
   action: Extract<StepAction, { kind: "place_ai_call" }>
 ): Promise<StepOutcome> {
+  // Every path that resolves this call writes all three vars through here, so
+  // the outcome, the reason, and the human label can never disagree about the
+  // same call. Reason tokens come from CALL_REASON; a raw string still works
+  // (the label falls back to the outcome's own phrase).
+  const setOutcome = (outcome: string, reason: string): void => {
+    const [reasonVar, labelVar] = callOutcomeCompanionVars(action.saveAs);
+    scope.vars[action.saveAs] = outcome;
+    scope.vars[reasonVar] = reason;
+    scope.vars[labelVar] = callOutcomeLabel(outcome, reason);
+    scope.vars[action.marker] = "1";
+  };
+
+  /**
+   * Refused BEFORE anything was dialed. Recorded as a skip because the step
+   * genuinely never acted, which is what makes it read correctly in the run
+   * history next to a `when`-unmet step.
+   */
+  const skipNotPlaced = (reason: string): StepOutcome => {
+    setOutcome(CALL_NOT_PLACED_SENTINEL, reason);
+    appendActionTaken(scope, `AI call skipped (${reason})`);
+    return { kind: "ok", skipped: true, result: { skipped: reason } };
+  };
+
   // Lead-data gap (no usable callee phone): resolve to the not_placed
   // sentinel and continue — mirrors send_sms's skip semantics.
-  if (action.skipReason) {
-    scope.vars[action.saveAs] = CALL_NOT_PLACED_SENTINEL;
-    scope.vars[action.marker] = "1";
-    appendActionTaken(scope, `AI call skipped (${action.skipReason})`);
-    return { kind: "ok", skipped: true, result: { skipped: action.skipReason } };
-  }
+  if (action.skipReason) return skipNotPlaced(action.skipReason);
 
   // Standard+ gate before the dial ledger: Starter never rings, and a
   // skipped step must not leave a terminal ledger row that blocks retries
@@ -7163,11 +7209,48 @@ async function placeAiCallStep(
       return { kind: "fail", error: `place_ai_call: tier lookup failed (${bizErr.message})` };
     }
     if (!outboundAiCallsAllowedForTier((bizRow as { tier?: string } | null)?.tier)) {
-      scope.vars[action.saveAs] = CALL_NOT_PLACED_SENTINEL;
-      scope.vars[action.marker] = "1";
-      appendActionTaken(scope, "AI call skipped (tier_blocked)");
-      return { kind: "ok", skipped: true, result: { skipped: "tier_blocked" } };
+      return skipNotPlaced(CALL_REASON.TIER_BLOCKED);
     }
+  }
+
+  // Per-step calling window. Unlike the flow-level window (which defers the
+  // whole run), a step can choose to SKIP outside its hours: on a lead flow
+  // the intro text, the owner email, and the team offer must still go out on
+  // time for a lead that arrives at 22:40, even though the call cannot.
+  if (action.callWindow) {
+    const decision = timeWindowDecision(Date.now(), action.callWindow);
+    if (!decision.allowed) {
+      if (action.callWindow.outside === "skip") {
+        return skipNotPlaced(CALL_REASON.OUTSIDE_CALL_WINDOW);
+      }
+      return {
+        kind: "defer",
+        resumeAtMs: decision.resumeAtMs,
+        reason: "call_window"
+      };
+    }
+  }
+
+  // Consent and volume, checked AFTER the tier gate (so a plan refusal does
+  // not spend an opt-out RPC) and BEFORE the dial ledger (so a refusal never
+  // leaves a row claiming this occurrence already dialed). Throws on an
+  // unanswerable opt-out lookup rather than dialing someone who may have
+  // asked us to stop.
+  {
+    let verdict;
+    try {
+      verdict = await callDialGuard(supabase, {
+        businessId: run.business_id,
+        toE164: action.to,
+        nowMs: Date.now()
+      });
+    } catch (err) {
+      return {
+        kind: "fail",
+        error: `place_ai_call: opt-out check failed (${err instanceof Error ? err.message : String(err)})`
+      };
+    }
+    if (!verdict.allowed) return skipNotPlaced(verdict.reason);
   }
 
   const supabaseUrl = Deno.env.get("SUPABASE_URL") ?? "";
@@ -7228,10 +7311,16 @@ async function placeAiCallStep(
     };
   }
 
+  // The park ceiling is the LOST-WEBHOOK backstop only: a call that ends
+  // normally resumes on hangup and a transferred one resumes the moment the
+  // bridge connects. A step lowers it when something time-sensitive waits
+  // behind the call (a team offer), since this is the worst case that step
+  // can be delayed by.
+  const waitMinutes = action.waitMinutes ?? PLACE_CALL_WAIT_CEILING_MINUTES;
   const pause = (callControlId: string): StepOutcome => ({
     kind: "pause_call",
     e164: action.to,
-    respondByMs: PLACE_CALL_WAIT_CEILING_MINUTES * 60_000,
+    respondByMs: waitMinutes * 60_000,
     saveAs: action.saveAs,
     marker: action.marker,
     callControlId
@@ -7242,6 +7331,8 @@ async function placeAiCallStep(
     flow_id: run.flow_id,
     business_id: run.business_id,
     dedupe_key: dedupeKey,
+    // Counted by the per-lead dial cap on later calls to this same number.
+    to_e164: action.to,
     status: "placed"
   });
   if (insErr) {
@@ -7307,13 +7398,14 @@ async function placeAiCallStep(
     }
     // Config/validation refusal (no Telnyx connection, invalid callee, ...):
     // record the not_placed outcome and continue so notify/branch steps
-    // still run and the owner can see why in the run history.
-    scope.vars[action.saveAs] = CALL_NOT_PLACED_SENTINEL;
-    scope.vars[action.marker] = "1";
-    appendActionTaken(scope, `AI call not placed (${result.reason ?? "refused"})`);
+    // still run and the owner can see why in the run history. NOT a skip: the
+    // step ran and origination answered, unlike the pre-dial refusals above.
+    const reason = result.reason ?? "refused";
+    setOutcome(CALL_NOT_PLACED_SENTINEL, reason);
+    appendActionTaken(scope, `AI call not placed (${reason})`);
     return {
       kind: "ok",
-      result: { outcome: CALL_NOT_PLACED_SENTINEL, reason: result.reason ?? null }
+      result: { outcome: CALL_NOT_PLACED_SENTINEL, reason }
     };
   }
 
@@ -7328,10 +7420,10 @@ async function placeAiCallStep(
     .eq("flow_id", run.flow_id)
     .eq("dedupe_key", dedupeKey);
   if (failUpdErr) console.error("place_ai_call ledger fail-update", failUpdErr);
-  scope.vars[action.saveAs] = "failed";
-  scope.vars[action.marker] = "1";
-  appendActionTaken(scope, `AI call failed (${result.reason ?? "error"})`);
-  return { kind: "ok", result: { outcome: "failed", reason: result.reason ?? null } };
+  const failReason = result.reason ?? "error";
+  setOutcome("failed", failReason);
+  appendActionTaken(scope, `AI call failed (${failReason})`);
+  return { kind: "ok", result: { outcome: "failed", reason: failReason } };
 }
 
 function approvalStep(

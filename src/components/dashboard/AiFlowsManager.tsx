@@ -19,6 +19,7 @@ import {
   type AiFlowDefinition,
   type BranchStep,
   type FlowStep,
+  type CallWindow,
   type FlowTimeWindow,
   type FlowTrigger,
   type StepCondition,
@@ -5607,6 +5608,21 @@ function StepFields({
             />
           </div>
         )}
+        <CallWindowFields
+          value={step.callWindow ?? null}
+          onChange={(cw) => patchStep(index, { callWindow: cw ?? undefined })}
+        />
+        <Field
+          label="Give up waiting for the outcome after (minutes, optional)"
+          value={step.waitMinutes === undefined ? "" : String(step.waitMinutes)}
+          onChange={(v) => {
+            const n = Number(v.trim());
+            patchStep(index, {
+              waitMinutes: v.trim() && Number.isFinite(n) ? n : undefined
+            });
+          }}
+          help="Default 45. Only a safety net for a lost hangup notification: a call that ends normally continues the workflow right away. Lower it (e.g. 20) when a later step, like offering the lead to your team, should not wait long."
+        />
         <Field
           label="Save the call outcome as"
           value={step.saveAs ?? "call_outcome"}
@@ -6456,6 +6472,106 @@ function ArmConditionEditor({
 }
 
 const WEEKDAY_LABELS = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+
+/**
+ * Per-step calling window on a place_ai_call step.
+ *
+ * Separate from TimeWindowFields because the interesting choice here is the
+ * one the flow-level window cannot express: what happens OUTSIDE the hours.
+ * Skipping only the call keeps the rest of the workflow on time, which is what
+ * a follow-up attempt wants; deferring holds everything, which is what a
+ * single-call workflow usually wants.
+ */
+function CallWindowFields({
+  value,
+  onChange
+}: {
+  value: CallWindow | null;
+  onChange: (v: CallWindow | null) => void;
+}) {
+  return (
+    <section className="space-y-2">
+      <label className="flex items-center gap-2 text-xs text-parchment/70">
+        <input
+          type="checkbox"
+          checked={Boolean(value)}
+          onChange={(ev) =>
+            onChange(
+              ev.target.checked
+                ? {
+                    timezone: browserTimezone(),
+                    start: "08:30",
+                    end: "21:00",
+                    outside: "skip"
+                  }
+                : null
+            )
+          }
+        />
+        Only place this call during certain hours
+      </label>
+      {value && (
+        <div className="space-y-2 rounded border border-parchment/10 p-2">
+          <div className="grid grid-cols-2 gap-2 sm:grid-cols-3">
+            <Field
+              label="Can call from (24h HH:MM)"
+              value={value.start}
+              onChange={(v) => onChange({ ...value, start: v })}
+            />
+            <Field
+              label="Until (24h HH:MM)"
+              value={value.end}
+              onChange={(v) => onChange({ ...value, end: v })}
+            />
+            <Field
+              label="Time zone"
+              value={value.timezone}
+              onChange={(v) => onChange({ ...value, timezone: v })}
+            />
+          </div>
+          <div>
+            <label className={labelClass}>Days (default: every day)</label>
+            <div className="flex flex-wrap gap-2">
+              {WEEKDAY_LABELS.map((d, di) => (
+                <label key={d} className="flex items-center gap-1 text-xs text-parchment/70">
+                  <input
+                    type="checkbox"
+                    checked={(value.daysOfWeek ?? []).includes(di)}
+                    onChange={(ev) => {
+                      const days = ev.target.checked
+                        ? [...(value.daysOfWeek ?? []), di].sort()
+                        : (value.daysOfWeek ?? []).filter((x) => x !== di);
+                      onChange({ ...value, daysOfWeek: days.length > 0 ? days : undefined });
+                    }}
+                  />
+                  {d}
+                </label>
+              ))}
+            </div>
+          </div>
+          <div>
+            <label className={labelClass}>Outside those hours</label>
+            <select
+              className={inputClass}
+              value={value.outside ?? "defer"}
+              onChange={(ev) =>
+                onChange({ ...value, outside: ev.target.value as "defer" | "skip" })
+              }
+            >
+              <option value="skip">Skip the call, keep the rest of the workflow moving</option>
+              <option value="defer">Hold the whole workflow until the hours open</option>
+            </select>
+            <p className="mt-1 text-[11px] text-parchment/40">
+              Skip suits a follow-up attempt: a lead that arrives at 10:40pm still gets their
+              text and still reaches your team tonight, and only the call is dropped. Hold
+              suits a workflow whose whole point is the call.
+            </p>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
 
 /** Flow-level business-hours window (definition.timeWindow), both editor modes. */
 function TimeWindowFields({

@@ -22,6 +22,7 @@ import { branchChoiceVar, chooseBranchArm } from "./branching.ts";
 import { goalReachedVar } from "./goal_events.ts";
 import type {
   BrowseAuth,
+  CallWindow,
   ContactRef,
   ExtractField,
   ExtractLink,
@@ -39,6 +40,26 @@ export const CALL_NOT_PLACED_SENTINEL = "not_placed";
 
 /** Timeout sentinel for a place_ai_call whose end webhook never arrived. */
 export const CALL_NO_ANSWER_SENTINEL = "no_answer";
+
+/**
+ * Does this step's OWN window replace the flow-level `timeWindow` for it?
+ *
+ * The flow-level window is a blunt instrument: outside its hours it defers the
+ * whole run. That is right for most communication steps, but it cannot express
+ * "drop just this call and let the rest of the run continue", which is exactly
+ * what a retry attempt in a first-contact ladder needs. A place_ai_call
+ * carrying its own `callWindow` has declared both its hours AND what to do
+ * outside them, so the flow window must stand aside: otherwise the run defers
+ * before the step's `outside: "skip"` can ever be read, and the setting
+ * silently does nothing on any flow that also has business hours.
+ *
+ * The rule is deliberately narrow and stated as "hours set on the call itself
+ * win for that call". A step with no `callWindow` is unaffected and keeps
+ * obeying the flow window exactly as before.
+ */
+export function stepOverridesFlowTimeWindow(step: FlowStep): boolean {
+  return step.type === "place_ai_call" && step.callWindow !== undefined;
+}
 
 export type StepScope = {
   vars?: Record<string, unknown>;
@@ -676,6 +697,10 @@ export type StepAction =
       /** Rendered pre-alert SMS body ("" = none configured). */
       preSmsBody: string;
       captureFields?: string[];
+      /** Per-step calling window, passed through for the worker to evaluate. */
+      callWindow?: CallWindow;
+      /** Park ceiling override in minutes (see FlowStep.waitMinutes). */
+      waitMinutes?: number;
       saveAs: string;
       marker: string;
       skipReason?: string;
@@ -1694,6 +1719,8 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         ...(step.captureFields && step.captureFields.length > 0
           ? { captureFields: step.captureFields }
           : {}),
+        ...(step.callWindow ? { callWindow: step.callWindow } : {}),
+        ...(typeof step.waitMinutes === "number" ? { waitMinutes: step.waitMinutes } : {}),
         saveAs,
         marker
       };

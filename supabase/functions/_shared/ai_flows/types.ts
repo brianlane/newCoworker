@@ -436,6 +436,27 @@ export type GoalEvent = {
  * (rendered `preSmsTemplate`) and warm-transfers the live call to them.
  * Exactly one of toE164 / toRef (validated at author time).
  */
+/**
+ * Per-step calling window on a `place_ai_call` step.
+ *
+ * Same shape as the flow-level `timeWindow`, plus the thing that window
+ * cannot express: what to do OUTSIDE it. The flow-level window always defers,
+ * which parks the WHOLE run, so on a lead flow a 22:40 arrival would have its
+ * intro text, owner email, and team offer all held until morning just because
+ * the call cannot go out. `outside: "skip"` resolves the call to the
+ * not-placed sentinel and lets every later step run on time.
+ *
+ * Absent `outside` means "defer", so anything that does not explicitly opt in
+ * keeps the conservative behavior.
+ */
+export type CallWindow = {
+  timezone: string;
+  start: string;
+  end: string;
+  daysOfWeek?: number[];
+  outside?: "defer" | "skip";
+};
+
 export type PlaceCallTransfer = {
   toE164?: string;
   /** Dynamic transfer target (usually an employee) resolved at run time. */
@@ -1282,6 +1303,16 @@ export type FlowStep =
       transfer?: PlaceCallTransfer;
       /** Optional lead fields the AI captures during the call. */
       captureFields?: string[];
+      /** Per-step calling window (see CallWindow). Absent = dial any time. */
+      callWindow?: CallWindow;
+      /**
+       * Minutes to hold the run parked waiting for this call's outcome. Tunes
+       * only the LOST-WEBHOOK backstop: a normal hangup resumes the run right
+       * away and a transfer resumes it the moment the bridge connects. Lower
+       * it when a later step is time-sensitive, since this is the worst case
+       * that step can be delayed by. Default 45.
+       */
+      waitMinutes?: number;
       /** Outcome var name. Default "call_outcome". */
       saveAs?: string;
       when?: StepCondition;

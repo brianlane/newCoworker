@@ -19,6 +19,8 @@
  * run-detail audit view, revision-gated optimistic write. Never throws.
  */
 
+import { callOutcomeCompanionVars, callOutcomeLabel } from "./call_outcome_meta.ts";
+
 /** Outcomes a voice-path resume can deliver (sweep adds "no_answer" on timeout). */
 export type PlaceCallOutcome = "transferred" | "answered" | "no_answer";
 
@@ -39,11 +41,18 @@ export type FlowRunLink = {
  * resumed the run (false: no/invalid link, run not awaiting this call's step,
  * a racing writer won, or a read/write error — all safe to ignore because
  * the timeout sweep backstops a never-resumed run).
+ *
+ * `reason` sharpens the coarse outcome (a machine answering rides `no_answer`
+ * with a voicemail reason, for instance). It is written alongside the outcome
+ * as the two companion vars every place_ai_call step declares, so a template
+ * reading `{{vars.call_outcome_label}}` after a call that completed NORMALLY
+ * sees the same thing it would after a refusal, rather than an empty string.
  */
 export async function resumeFlowRunWithCallOutcome(
   supabase: AnyClient,
   link: FlowRunLink | null | undefined,
-  outcome: PlaceCallOutcome
+  outcome: PlaceCallOutcome,
+  reason?: string | null
 ): Promise<boolean> {
   const runId = typeof link?.run_id === "string" ? link.run_id : "";
   if (!runId) return false;
@@ -82,9 +91,19 @@ export async function resumeFlowRunWithCallOutcome(
       run.context?.vars && typeof run.context.vars === "object"
         ? (run.context.vars as Record<string, unknown>)
         : {};
+    const [reasonVar, labelVar] = callOutcomeCompanionVars(saveAs);
     const nextContext = {
       ...(run.context ?? {}),
-      vars: { ...prevVars, [saveAs]: outcome, [marker]: "1" },
+      vars: {
+        ...prevVars,
+        [saveAs]: outcome,
+        // Always overwritten, never merged: a retry ladder can reuse one
+        // outcome var across attempts, and a stale reason from the previous
+        // attempt would be worse than none.
+        [reasonVar]: reason ?? "",
+        [labelVar]: callOutcomeLabel(outcome, reason),
+        [marker]: "1"
+      },
       waiting_call: {
         ...(run.context?.waiting_call as Record<string, unknown>),
         result: outcome
