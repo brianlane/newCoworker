@@ -319,3 +319,27 @@ describe("HQ inbox triage: moving the paging did not lose the cooldown", () => {
     }
   });
 });
+
+describe("HQ inbox triage: nothing sends without a human saying so", () => {
+  it("puts the send DIRECTLY after the gate it is guarded by", () => {
+    // approval_gate's skip semantics guard "the step directly after it", and
+    // a cooling gate uses that same path. If anything were inserted between
+    // the gate and the send, a skip or a cooldown would skip the WRONG step
+    // and the draft would go out unapproved. Adjacency is load-bearing here,
+    // so it is pinned rather than left to reading order.
+    const arm = (
+      definition.steps.find((s) => s.type === "branch") as {
+        branches?: { id: string; steps: { id: string; type: string }[] }[];
+      }
+    ).branches?.find((b) => b.id === "b_sales");
+    const ids = (arm?.steps ?? []).map((s) => s.id);
+    expect(ids.indexOf("s_send")).toBe(ids.indexOf("s_gate") + 1);
+  });
+
+  it("has exactly one step that can send mail, and it sits behind the gate", () => {
+    // A second send anywhere in the flow would not be covered by the gate,
+    // and this is email to a stranger from Brian's own address.
+    const sends = steps.filter((s) => s.type === "send_email");
+    expect(sends.map((s) => s.id)).toEqual(["s_send"]);
+  });
+});

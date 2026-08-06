@@ -1118,7 +1118,26 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
               business_id: run.business_id,
               step_id: gateStep.id
             });
+            // A cooling gate must ALSO skip the step it guards. Merely
+            // advancing past the gate would let the very next step send an
+            // UNAPPROVED draft, which is the one thing this gate exists to
+            // prevent: nothing reaches a stranger from the owner's address
+            // without a human saying so. "Not asking again" has to mean "and
+            // not sending either", which is exactly the gate's own `skip`
+            // decision, so it takes that path rather than a new one. The
+            // steps after the guarded one still run, so the mail is still
+            // filed.
+            await recordStep(supabase, run, index, gateStep, "skipped", {
+              skipped: "approval_cooldown"
+            });
             index += 1;
+            if (index < flat.length) {
+              await recordStep(supabase, run, index, flat[index].step, "skipped", {
+                skipped: "approval_cooldown_gated_step"
+              });
+              index += 1;
+            }
+            stampResumeMarker(index);
             continue;
           }
         }
