@@ -58,16 +58,71 @@ const {
   GMAIL_CONNECTION_ROW_ID,
   buildHqInboxTriageDefinition
 } = await import("./hq-inbox-triage-definition.ts");
+const { HQ_REPLY_DRAFTER_AGENT_NAME, HQ_REPLY_DRAFTER_INSTRUCTIONS } = await import(
+  "./hq-inbox-reply-drafter.ts"
+);
 const { parseAiFlowDefinition } = await import("../../src/lib/ai-flows/schema.ts");
 const { createSupabaseServiceClient } = await import("../../src/lib/supabase/server.ts");
 const { recordOneshotApplied } = await import("./_ledger.ts");
 
-const definition = buildHqInboxTriageDefinition();
+const db = await createSupabaseServiceClient();
 
+/**
+ * The reply drafter, upserted BY NAME before the flow is authored: the flow
+ * references it by uuid, so the agent has to exist first and the flow has to
+ * learn the id the upsert settled on. Editing the instructions in the
+ * dashboard is expected and safe; re-running this resets them to the repo
+ * copy, which is the whole point of pinning them in a test.
+ */
+async function ensureReplyDrafter(): Promise<string> {
+  const { data: existing, error } = await db
+    .from("business_agents")
+    .select("id, instructions")
+    .eq("business_id", HQ_BUSINESS_ID)
+    .eq("name", HQ_REPLY_DRAFTER_AGENT_NAME)
+    .maybeSingle();
+  if (error) {
+    console.error("[inbox-triage] agent lookup failed:", error.message);
+    process.exit(1);
+  }
+  const row = existing as { id: string; instructions: string } | null;
+  if (row) {
+    const drifted = row.instructions !== HQ_REPLY_DRAFTER_INSTRUCTIONS;
+    console.log(
+      `[inbox-triage] agent "${HQ_REPLY_DRAFTER_AGENT_NAME}": exists (id=${row.id})` +
+        (drifted ? ", instructions DIFFER from the repo copy and will be reset" : ", instructions match")
+    );
+    if (APPLY && drifted) {
+      const { error: updErr } = await db
+        .from("business_agents")
+        .update({ instructions: HQ_REPLY_DRAFTER_INSTRUCTIONS, updated_at: new Date().toISOString() })
+        .eq("business_id", HQ_BUSINESS_ID)
+        .eq("id", row.id);
+      if (updErr) throw new Error(`agent update: ${updErr.message}`);
+    }
+    return row.id;
+  }
+  console.log(`[inbox-triage] agent "${HQ_REPLY_DRAFTER_AGENT_NAME}": will create`);
+  if (!APPLY) return "00000000-0000-4000-8000-000000000000";
+  const { data: created, error: insErr } = await db
+    .from("business_agents")
+    .insert({
+      business_id: HQ_BUSINESS_ID,
+      name: HQ_REPLY_DRAFTER_AGENT_NAME,
+      instructions: HQ_REPLY_DRAFTER_INSTRUCTIONS,
+      // Plain text in, plain text out: an email body, never markdown.
+      output_format: "same_as_input"
+    })
+    .select("id")
+    .single();
+  if (insErr) throw new Error(`agent insert: ${insErr.message}`);
+  return (created as { id: string }).id;
+}
+
+const replyDrafterAgentId = await ensureReplyDrafter();
+const definition = buildHqInboxTriageDefinition(replyDrafterAgentId);
 parseAiFlowDefinition(definition);
 console.log(`[inbox-triage] "${FLOW_NAME}" definition valid`);
-
-const db = await createSupabaseServiceClient();
 
 // The email poller resolves the trigger's connection row at poll time, so
 // verify it exists and is an email-capable provider before authoring.
@@ -107,15 +162,38 @@ console.log(
  * one names every added, removed, and modified step, so the drift is visible
  * BEFORE --apply rather than after.
  */
-function reportDiff(live: unknown): void {
-  const liveSteps = ((live as { steps?: { id?: string }[] } | null)?.steps ?? []).filter(
-    (s): s is { id: string } => typeof s?.id === "string"
-  );
-  const liveById = new Map(liveSteps.map((s) => [s.id, s]));
-  const nextById = new Map(definition.steps.map((s) => [s.id, s]));
+type DiffStep = { id: string; type?: string };
 
-  console.log(`[inbox-triage] live has ${liveSteps.length} step(s), this file has ${definition.steps.length}`);
-  for (const step of definition.steps) {
+/**
+ * Every step in display order, branch arms included.
+ *
+ * Without this a step that MOVED into a branch arm reads as a deletion: the
+ * first run of this flow's branch rewrite reported three phantom "REMOVE"
+ * warnings for notify steps that had simply moved inside an arm. Worse than
+ * the noise, a genuine removal could hide among the false ones.
+ */
+function flattenForDiff(steps: unknown): DiffStep[] {
+  const out: DiffStep[] = [];
+  for (const raw of Array.isArray(steps) ? steps : []) {
+    const step = raw as DiffStep & { branches?: { steps?: unknown }[]; else?: unknown };
+    if (typeof step?.id !== "string") continue;
+    out.push(step);
+    for (const arm of step.branches ?? []) out.push(...flattenForDiff(arm?.steps));
+    out.push(...flattenForDiff(step.else));
+  }
+  return out;
+}
+
+function reportDiff(live: unknown): void {
+  const liveSteps = flattenForDiff((live as { steps?: unknown } | null)?.steps);
+  const nextSteps = flattenForDiff(definition.steps);
+  const liveById = new Map(liveSteps.map((s) => [s.id, s]));
+  const nextById = new Map(nextSteps.map((s) => [s.id, s]));
+
+  console.log(
+    `[inbox-triage] live has ${liveSteps.length} step(s), this file has ${nextSteps.length} (branch arms included)`
+  );
+  for (const step of nextSteps) {
     const before = liveById.get(step.id);
     if (!before) {
       console.log(`[inbox-triage]   + ADD     ${step.id} (${step.type})`);
