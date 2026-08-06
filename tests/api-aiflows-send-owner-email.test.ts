@@ -165,7 +165,8 @@ describe("replying inside an existing conversation", () => {
     vi.mocked(getEmailLogThreadIdentity).mockResolvedValue({
       threadId: "199abc4d5e6f7890",
       inReplyToMessageRef: "<CAJ=intro@mail.gmail.com>",
-      providerMessageId: "m1"
+      providerMessageId: "m1",
+      replyAllRecipients: ["king@clinic.example.com"]
     });
     vi.mocked(sendFromMailboxConnection).mockResolvedValue({
       ok: true,
@@ -188,6 +189,10 @@ describe("replying inside an existing conversation", () => {
         providerMessageId: "m1"
       }
     });
+    // Reply-all: the introduced prospect was on the original's To/Cc while
+    // the INTRODUCER sat in From. Answering only From would reach the person
+    // who did the favor and never the lead, which is the exemplar case.
+    expect(sendArgs).toMatchObject({ ccEmails: ["king@clinic.example.com"] });
     // And the coworker owns it, or turn two goes back to paging a human.
     expect(rememberSentThread).toHaveBeenCalledWith(
       expect.objectContaining({ threadId: "199abc4d5e6f7890", correspondentEmail: "lead@example.com" })
@@ -202,7 +207,8 @@ describe("replying inside an existing conversation", () => {
     vi.mocked(getWorkspaceOAuthConnection).mockResolvedValue(connRow("outlook"));
     vi.mocked(getEmailLogThreadIdentity).mockResolvedValue({
       threadId: "graph-conversation-1",
-      providerMessageId: "m9"
+      providerMessageId: "m9",
+      replyAllRecipients: []
     });
     vi.mocked(sendFromMailboxConnection).mockResolvedValue({
       ok: true,
@@ -242,7 +248,7 @@ describe("replying inside an existing conversation", () => {
   it("still returns ok when the thread claim throws", async () => {
     // Losing ownership costs an autonomous follow-up, never the email that
     // already went out.
-    vi.mocked(getEmailLogThreadIdentity).mockResolvedValue({ threadId: "t1" });
+    vi.mocked(getEmailLogThreadIdentity).mockResolvedValue({ threadId: "t1", replyAllRecipients: [] });
     vi.mocked(sendFromMailboxConnection).mockResolvedValue({
       ok: true,
       provider: "google",

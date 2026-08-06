@@ -150,6 +150,11 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
                 type: "approval_gate",
                 when: { var: "email_draft", notEquals: NO_REPLY_SENTINEL },
                 allowModify: { redraftStepId: "s_draft" },
+                // Parking this gate IS the alert for a sales lead, so it
+                // carries the same one-text-per-conversation guarantee the
+                // notify steps do. Without it, moving the paging from
+                // notify_owner to the gate would have quietly undone #1191.
+                cooldown: THREAD_COOLDOWN,
                 prompt: `Sales email from {{trigger.from}} {{vars.email_sender}}. {{vars.email_gist}} ${GMAIL_LINK}\n\nDraft reply:\n{{vars.email_draft}}`
               },
               {

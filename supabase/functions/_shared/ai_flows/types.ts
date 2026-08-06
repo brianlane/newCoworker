@@ -772,6 +772,12 @@ export type FlowStep =
        * a run is parked. The target is validated to exist at authoring time.
        */
       allowModify?: { redraftStepId: string };
+      /**
+       * Per-key page suppression, identical to notify_owner's. Parking this
+       * gate texts the owner, so a flow that alerts THROUGH a gate needs the
+       * same one-ping-per-thread guarantee a notify step has.
+       */
+      cooldown?: { key: string; minutes: number };
       when?: StepCondition;
     }
   | {

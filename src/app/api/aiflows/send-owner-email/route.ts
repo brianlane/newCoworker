@@ -76,6 +76,22 @@ export async function POST(request: Request) {
       ? await getEmailLogThreadIdentity(body.businessId, body.replyToEmailLogId)
       : null;
 
+    // Reply-all, minus ourselves and the person already in To. An
+    // introduction puts the PROSPECT on the original's To/Cc while the
+    // INTRODUCER sits in From, so answering only From reaches the person who
+    // did the favor and never the lead. Deliberately additive to any cc the
+    // step declared, and only on a threaded reply: a fresh send has no
+    // conversation to include.
+    const ownAddresses = new Set(
+      [row.metadata?.provider_account_email, body.toEmail]
+        .map((a) => (typeof a === "string" ? a.trim().toLowerCase() : ""))
+        .filter(Boolean)
+    );
+    const replyAllCc = [
+      ...normalizeRecipients(body.cc),
+      ...(thread?.replyAllRecipients ?? []).filter((a) => !ownAddresses.has(a))
+    ];
+
     const result = await sendFromMailboxConnection(
       body.businessId,
       {
@@ -87,7 +103,7 @@ export async function POST(request: Request) {
         toEmail: body.toEmail,
         subject: body.subject,
         bodyText: body.bodyText,
-        ccEmails: normalizeRecipients(body.cc),
+        ccEmails: replyAllCc,
         bccEmails: normalizeRecipients(body.bcc),
         ...(thread ? { thread } : {})
       }

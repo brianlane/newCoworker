@@ -241,6 +241,11 @@ async function fetchGmailMessages(
       ...(gmailHeader(headers, "Message-Id").trim()
         ? { messageRef: gmailHeader(headers, "Message-Id").trim() }
         : {}),
+      // Who else was on the message. An introduction puts the PROSPECT here
+      // and the introducer in From, so a reply addressed only to From reaches
+      // the person doing the favor and never the lead.
+      ...(gmailHeader(headers, "To").trim() ? { toRecipients: gmailHeader(headers, "To") } : {}),
+      ...(gmailHeader(headers, "Cc").trim() ? { ccRecipients: gmailHeader(headers, "Cc") } : {}),
       receivedAt:
         msg.internalDate && Number.isFinite(internalMs)
           ? new Date(internalMs).toISOString()
@@ -613,7 +618,9 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
               // conversation: {{trigger.email_log_id}} resolves to this row,
               // and the send path reads these two off it.
               ...(msg.threadId ? { threadId: msg.threadId } : {}),
-              ...(msg.messageRef ? { messageRef: msg.messageRef } : {})
+              ...(msg.messageRef ? { messageRef: msg.messageRef } : {}),
+              ...(msg.toRecipients ? { toRecipients: msg.toRecipients } : {}),
+              ...(msg.ccRecipients ? { ccRecipients: msg.ccRecipients } : {})
             },
             db
           );

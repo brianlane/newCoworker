@@ -298,3 +298,24 @@ describe("HQ inbox triage: a sales lead gets answered, not just announced", () =
     expect(inArm("s_send_billing")).toBeUndefined();
   });
 });
+
+describe("HQ inbox triage: moving the paging did not lose the cooldown", () => {
+  it("cools the approval gate on the same thread key as the alerts", () => {
+    // For a sales lead the GATE is what texts Brian, so it needs the
+    // guarantee #1191 gave notify_owner. Without this, a second message on a
+    // thread he is already deciding about would text him again, and the
+    // regression would be invisible: the first text still looks right.
+    const gate = steps.find((s) => s.id === "s_gate") as Record<string, unknown> | undefined;
+    expect(gate?.cooldown).toEqual(THREAD_COOLDOWN);
+  });
+
+  it("leaves every owner-paging step in this flow cooled down", () => {
+    // Whole-flow sweep rather than a per-step list, so a future step that
+    // texts the owner cannot be added without a cooldown decision.
+    const paging = steps.filter((s) => s.type === "notify_owner" || s.type === "approval_gate");
+    expect(paging.length).toBeGreaterThanOrEqual(4);
+    for (const step of paging) {
+      expect((step as Record<string, unknown>).cooldown, step.id).toEqual(THREAD_COOLDOWN);
+    }
+  });
+});

@@ -153,6 +153,13 @@ export type InboundEmailMessage = {
    * threadId.
    */
   messageRef?: string;
+  /**
+   * The raw To / Cc header values. An introduction email names the PROSPECT
+   * here while the introducer sits in From, so answering only From reaches
+   * the wrong person. Raw strings, normalized where they are used.
+   */
+  toRecipients?: string;
+  ccRecipients?: string;
   receivedAt?: string;
 };
 

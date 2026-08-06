@@ -110,7 +110,8 @@ describe("the reply target resolves to a threadable identity", () => {
     expect(identity).toEqual({
       threadId: "199abc4d5e6f7890",
       inReplyToMessageRef: "<CAJ=intro@mail.gmail.com>",
-      providerMessageId: "m1"
+      providerMessageId: "m1",
+      replyAllRecipients: []
     });
   });
 
@@ -147,6 +148,45 @@ describe("the reply target resolves to a threadable identity", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(fakeDb({}, row));
     // A row with only a thread id still threads: Gmail files by threadId, and
     // the other two fields are additive.
-    expect(await getEmailLogThreadIdentity(BIZ, "e4")).toEqual({ threadId: "t4" });
+    expect(await getEmailLogThreadIdentity(BIZ, "e4")).toEqual({
+      threadId: "t4",
+      replyAllRecipients: []
+    });
+  });
+});
+
+describe("a reply reaches everyone who was on the original", () => {
+  it("returns the To and Cc addresses, deduped and without display names", () => {
+    // The exemplar: James introduces Brian and King. James is From; King is
+    // only on To. A reply addressed to From alone reaches the person who did
+    // the favor and never the lead.
+    const row = {
+      id: "e5",
+      thread_id: "t5",
+      message_ref: null,
+      provider_message_id: null,
+      to_email: "Brian Lane <brian@newcoworker.com>, King <king@clinic.example.com>",
+      cc_email: "king@clinic.example.com"
+    };
+    return getEmailLogThreadIdentity(BIZ, "e5", fakeDb({}, row)).then((identity) => {
+      expect(identity?.replyAllRecipients).toEqual([
+        "brian@newcoworker.com",
+        "king@clinic.example.com"
+      ]);
+    });
+  });
+
+  it("ignores header junk that is not an address", () => {
+    const row = {
+      id: "e6",
+      thread_id: "t6",
+      message_ref: null,
+      provider_message_id: null,
+      to_email: "undisclosed-recipients:;, , real@example.com",
+      cc_email: null
+    };
+    return getEmailLogThreadIdentity(BIZ, "e6", fakeDb({}, row)).then((identity) => {
+      expect(identity?.replyAllRecipients).toEqual(["real@example.com"]);
+    });
   });
 });
