@@ -72,7 +72,9 @@ import {
 import {
   APPROVAL_OPTION_DECISIONS,
   approvalOptionForReply,
-  parseStoredApprovalOptions
+  parseStoredApprovalOptions,
+  parseStoredRedraftStepIndex,
+  approvalModifyForReply
 } from "../_shared/ai_flows/approval_options.ts";
 import type {
   AiFlowDefinition,
@@ -2176,6 +2178,39 @@ serve(async (req: Request) => {
           );
         }
 
+        /**
+         * Both a parked approval gate and a pending "what would you like me to
+         * say?" relay prompt are answered by free text, so when both are open
+         * one has to yield. Newest wins, which is the same rule this handler
+         * already applies to multiple pending approvals, and it matches what
+         * an owner means: they are answering the last thing that was asked.
+         *
+         * Compared against the approval's own `decided_at`-less park time, so
+         * the run's `updated_at` stands in for when the gate asked.
+         */
+        const ownerReplyPromptIsNewer = async (
+          db: typeof supabase,
+          bizId: string,
+          appr: { updated_at?: string | null }
+        ): Promise<boolean> => {
+          const { data } = await db
+            .from("sms_owner_reply_prompts")
+            .select("created_at")
+            .eq("business_id", bizId)
+            .is("answered_at", null)
+            .order("created_at", { ascending: false })
+            .limit(1)
+            .maybeSingle();
+          const promptAt = (data as { created_at?: string } | null)?.created_at;
+          if (!promptAt || !isPromptFresh(promptAt, Date.now())) return false;
+          const parkedAt = appr.updated_at ? Date.parse(appr.updated_at) : NaN;
+          const asked = Date.parse(promptAt);
+          if (!Number.isFinite(asked)) return false;
+          // An unparseable park time yields to the relay: a customer waiting on
+          // a verbatim answer is the worse thing to strand.
+          return !Number.isFinite(parkedAt) || asked > parkedAt;
+        };
+
         // Owner approval via SMS: the digit maps against the option list the
         // worker STORED on the pending run when it parked (approve and skip
         // lead, optional extras like "bypass quiet hours" in between, cancel
@@ -2191,14 +2226,14 @@ serve(async (req: Request) => {
           if (ownerForward && from === ownerForward) {
             const { data: apprRow } = await supabase
               .from("ai_flow_runs")
-              .select("id, context")
+              .select("id, context, updated_at")
               .eq("business_id", businessId)
               .eq("status", "awaiting_approval")
               .order("updated_at", { ascending: false })
               .limit(1)
               .maybeSingle();
             const appr = apprRow as
-              | { id: string; context: Record<string, unknown> | null }
+              | { id: string; context: Record<string, unknown> | null; updated_at?: string | null }
               | null;
             const approvalCtx =
               appr?.context?.approval && typeof appr.context.approval === "object"
@@ -2286,6 +2321,105 @@ serve(async (req: Request) => {
               });
               return new Response(
                 JSON.stringify({ ok: true, approval: applied ? decision : "noop" }),
+                { status: 200, headers: { "Content-Type": "application/json" } }
+              );
+            }
+
+            // Not a digit: a modify-capable gate also takes the answer an
+            // owner actually sends ("shorter, drop the second paragraph").
+            // Runs immediately after the digit branch and BEFORE the
+            // owner-reply relay below, because a parked approval is the more
+            // specific pending question; a relay prompt raised more recently
+            // still wins, on the same most-recent rule this handler already
+            // uses for multiple approvals.
+            const modify = appr
+              ? approvalModifyForReply(
+                  parseStoredRedraftStepIndex(approvalCtx?.redraft_step_index),
+                  replyBody
+                )
+              : null;
+            if (appr && modify && !(await ownerReplyPromptIsNewer(supabase, businessId, appr))) {
+              // Re-point the resume marker at the step we are rewinding TO.
+              // The run parked on the gate, so vars.__resume_step_id still
+              // names the gate; resolveResumeIndex follows the marker over
+              // current_step, so leaving it would land the resume right back
+              // on the gate and silently drop the redraft. This is the same
+              // external-writer case withResumeMarkerVar documents, and the
+              // same call the route-claim and goal rewinds above already make.
+              const redraftStepId =
+                typeof approvalCtx?.redraft_step_id === "string"
+                  ? approvalCtx.redraft_step_id
+                  : null;
+              const nextContext = withResumeMarkerVar(
+                {
+                  ...(appr.context ?? {}),
+                  approval: {
+                    decision: "modify",
+                    decided_by: `sms:${from}`,
+                    note: modify.note,
+                    decided_at: new Date().toISOString()
+                  }
+                },
+                redraftStepId
+              );
+              const { data: rewound, error: modErr } = await supabase
+                .from("ai_flow_runs")
+                .update({
+                  status: "queued",
+                  // Rewind: the run re-runs the drafting step with the note in
+                  // scope, then parks at this same gate with the new draft.
+                  current_step: modify.redraftStepIndex,
+                  context: nextContext,
+                  claimed_at: null,
+                  updated_at: new Date().toISOString()
+                })
+                .eq("id", appr.id)
+                .eq("status", "awaiting_approval")
+                .select("id");
+              if (modErr) {
+                console.error("ai_flow_runs modify from owner sms", modErr);
+                return new Response(
+                  JSON.stringify({ ok: false, error: "approval_modify_failed" }),
+                  { status: 503, headers: { "Content-Type": "application/json" } }
+                );
+              }
+              const applied = (rewound ?? []).length > 0;
+              const ack = applied
+                ? "Got it, redoing that with your changes. I'll send it over."
+                : "That request was already handled, no change made.";
+              let ackSent: string | null = null;
+              if (canAck) {
+                const send = await sendOperationalSms(supabase, businessId, {
+                  apiKey: telnyxApiKey,
+                  messagingProfileId: ackProfile,
+                  fromE164: ackFrom,
+                  toE164: from,
+                  text: ack,
+                  idempotencyKey: `${eventId}:approval-modify-ack`
+                });
+                if (!send.ok) {
+                  console.error("approval modify ack", send.status, send.body.slice(0, 300));
+                } else {
+                  ackSent = ack;
+                }
+              }
+              await persistOfferReplyJob({
+                supabase,
+                businessId,
+                eventId,
+                envelope,
+                from,
+                staffKind: "owner",
+                ackSent
+              });
+              await telemetryRecord(supabase, "ai_flow_approval_sms_modify", {
+                business_id: businessId,
+                run_id: appr.id,
+                event_id: eventId,
+                applied
+              });
+              return new Response(
+                JSON.stringify({ ok: true, approval: applied ? "modify" : "noop" }),
                 { status: 200, headers: { "Content-Type": "application/json" } }
               );
             }
