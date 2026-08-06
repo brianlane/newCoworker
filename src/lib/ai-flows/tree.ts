@@ -14,6 +14,7 @@
  * branch step first, then every arm's steps in arm order, then the else steps.
  */
 import type { BranchStep, FlowStep } from "@/lib/ai-flows/schema";
+import { callOutcomeCompanionVars } from "../../../supabase/functions/_shared/ai_flows/call_outcome_meta";
 
 /** Where a step list lives: the trunk, one branch arm, or a branch's else. */
 export type StepContainerRef =
@@ -193,7 +194,10 @@ export function varsProducedByStep(step: FlowStep): string[] {
   if (step.type === "http_call" && step.saveAs) return [step.saveAs];
   if (step.type === "recall_url") return [step.saveAs];
   if (step.type === "wait_for_reply") return [step.saveAs ?? "reply_text"];
-  if (step.type === "place_ai_call") return [step.saveAs ?? "call_outcome"];
+  if (step.type === "place_ai_call") {
+    const outcomeVar = step.saveAs ?? "call_outcome";
+    return [outcomeVar, ...callOutcomeCompanionVars(outcomeVar)];
+  }
   if (step.type === "classify") return [step.saveAs];
   if (step.type === "generate_image") return [step.saveAs];
   if (step.type === "share_document" && step.saveAs) return [step.saveAs];

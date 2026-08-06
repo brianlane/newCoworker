@@ -22,6 +22,7 @@ import { branchChoiceVar, chooseBranchArm } from "./branching.ts";
 import { goalReachedVar } from "./goal_events.ts";
 import type {
   BrowseAuth,
+  CallWindow,
   ContactRef,
   ExtractField,
   ExtractLink,
@@ -676,6 +677,10 @@ export type StepAction =
       /** Rendered pre-alert SMS body ("" = none configured). */
       preSmsBody: string;
       captureFields?: string[];
+      /** Per-step calling window, passed through for the worker to evaluate. */
+      callWindow?: CallWindow;
+      /** Park ceiling override in minutes (see FlowStep.waitMinutes). */
+      waitMinutes?: number;
       saveAs: string;
       marker: string;
       skipReason?: string;
@@ -1694,6 +1699,8 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         ...(step.captureFields && step.captureFields.length > 0
           ? { captureFields: step.captureFields }
           : {}),
+        ...(step.callWindow ? { callWindow: step.callWindow } : {}),
+        ...(typeof step.waitMinutes === "number" ? { waitMinutes: step.waitMinutes } : {}),
         saveAs,
         marker
       };

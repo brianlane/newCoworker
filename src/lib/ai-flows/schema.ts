@@ -24,6 +24,10 @@ import {
   AI_FIRST_MAX_DELAY_SECONDS,
   aiFirstDelaySeconds
 } from "../../../supabase/functions/_shared/voice_handoff";
+// Same reasoning: the outcome/reason/label vocabulary is written by the worker
+// and the call-end webhook, so it lives with them and is imported here rather
+// than duplicated into the authoring layer.
+import { callOutcomeCompanionVars } from "../../../supabase/functions/_shared/ai_flows/call_outcome_meta";
 
 export const TRIGGER_CONDITION_TYPES = [
   "contains",
@@ -730,15 +734,42 @@ export const MAX_TOTAL_STEPS = 150;
  * defers to the next open slot (same earliest_claim_at machinery as send_sms
  * quiet hours, which still apply on top per step).
  */
+const timeWindowShape = {
+  timezone,
+  start: hhmm,
+  end: hhmm,
+  daysOfWeek: z.array(z.number().int().min(0).max(6)).min(1).max(7).optional()
+};
+
 const flowTimeWindowSchema = z
-  .object({
-    timezone,
-    start: hhmm,
-    end: hhmm,
-    daysOfWeek: z.array(z.number().int().min(0).max(6)).min(1).max(7).optional()
-  })
+  .object(timeWindowShape)
   .refine((w) => w.start !== w.end, {
     message: "the time window can't start and end at the same time"
+  });
+
+/**
+ * Per-step calling window on a `place_ai_call` step. Same fields as the
+ * flow-level window, plus the one thing that window cannot express: what to do
+ * OUTSIDE it.
+ *
+ * The flow-level window always defers, which parks the WHOLE run. On a lead
+ * flow that is wrong: a lead arriving at 22:40 would have its intro text, its
+ * owner email, and its team offer held until morning just because the call
+ * cannot go out. `outside: "skip"` resolves the call to the not-placed
+ * sentinel and lets every later step run on time, which is what a retry rung
+ * in a first-contact ladder needs.
+ *
+ * Defaults to "defer" so a curated template or another tenant keeps the
+ * conservative behavior; only a step that explicitly opts into "skip" trades
+ * the call away to keep the rest of the run moving.
+ */
+const callWindowSchema = z
+  .object({
+    ...timeWindowShape,
+    outside: z.enum(["defer", "skip"]).optional()
+  })
+  .refine((w) => w.start !== w.end, {
+    message: "the calling window can't start and end at the same time"
   });
 
 /**
@@ -1226,6 +1257,21 @@ const nonBranchStepMembers = [
       .optional(),
     /** Optional lead fields the AI captures during the call. */
     captureFields: z.array(z.string().min(1).max(60)).min(1).max(15).optional(),
+    /**
+     * Calling window for THIS step (see callWindowSchema). Absent means dial
+     * whenever the step is reached, which is what a first-contact attempt
+     * wants; a retry rung sets it so a redial cannot land overnight.
+     */
+    callWindow: callWindowSchema.optional(),
+    /**
+     * How long to hold the run parked waiting for this call's outcome, in
+     * minutes. Only the LOST-WEBHOOK backstop is being tuned here: a call that
+     * ends normally resumes the run on hangup, and a transferred one resumes
+     * the moment the bridge connects. Lower it when a later step is
+     * time-sensitive (a team offer waiting behind the call), since this is the
+     * worst case that offer can be delayed by. Default 45.
+     */
+    waitMinutes: z.number().int().min(5).max(45).optional(),
     /** Outcome var name. Default "call_outcome". */
     saveAs: varName.optional(),
     when: whenSchema.optional()
@@ -1855,6 +1901,8 @@ export const aiFlowDefinitionSchema = z.object({
 export type TriggerCondition = z.infer<typeof conditionSchema>;
 export type FlowTrigger = z.infer<typeof triggerSchema>;
 export type FlowTimeWindow = z.infer<typeof flowTimeWindowSchema>;
+/** Per-step calling window on a place_ai_call step (see callWindowSchema). */
+export type CallWindow = z.infer<typeof callWindowSchema>;
 export type AiFlowDefinition = z.infer<typeof aiFlowDefinitionSchema>;
 
 /** The trigger channels the builder offers. */
@@ -1966,7 +2014,11 @@ function templateStringsForStep(step: FlowStep): string[] {
     // The call script, known-details note, and transfer pre-alert all render
     // against run vars.
     case "place_ai_call":
-      return [step.personaTemplate, step.contextTemplate ?? "", step.transfer?.preSmsTemplate ?? ""];
+      return [
+        step.personaTemplate,
+        step.contextTemplate ?? "",
+        step.transfer?.preSmsTemplate ?? ""
+      ];
     // wait_for_reply's dynamic timeout template references vars (e.g. a math
     // step's output), so it gets the same scope checking as any other template.
     case "wait_for_reply":
@@ -2949,8 +3001,11 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       vars.add(step.saveAs ?? "reply_text");
     } else if (step.type === "place_ai_call") {
       // The call outcome (transferred/answered/no_answer/not_placed/failed)
-      // becomes a var for later `when` branches.
-      vars.add(step.saveAs ?? "call_outcome");
+      // becomes a var for later `when` branches, alongside the two companion
+      // vars every call also produces (see callOutcomeCompanionVars).
+      const outcomeVar = step.saveAs ?? "call_outcome";
+      vars.add(outcomeVar);
+      for (const v of callOutcomeCompanionVars(outcomeVar)) vars.add(v);
     } else if (step.type === "wait_for_call") {
       vars.add(step.saveAs ?? "call_outcome");
       // What the AI captured on the call. The exact set depends on the voice

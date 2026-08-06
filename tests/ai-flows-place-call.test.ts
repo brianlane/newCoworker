@@ -201,13 +201,22 @@ describe("tree: varsProducedByStep for place_ai_call", () => {
     personaTemplate: "Hi",
     notifyE164: "+16025245719"
   } as unknown as UiFlowStep;
-  it("registers the custom saveAs", () => {
+  // The reason/label companions are derived from the outcome var, so a step
+  // with a custom saveAs gets its own pair rather than colliding with another
+  // call step's in the same flow.
+  it("registers the custom saveAs and its companions", () => {
     expect(varsProducedByStep({ ...base, saveAs: "attempt_1" } as UiFlowStep)).toEqual([
-      "attempt_1"
+      "attempt_1",
+      "attempt_1_reason",
+      "attempt_1_label"
     ]);
   });
-  it("defaults to call_outcome", () => {
-    expect(varsProducedByStep(base)).toEqual(["call_outcome"]);
+  it("defaults to call_outcome and its companions", () => {
+    expect(varsProducedByStep(base)).toEqual([
+      "call_outcome",
+      "call_outcome_reason",
+      "call_outcome_label"
+    ]);
   });
 });
 
@@ -520,5 +529,116 @@ describe("resumeFlowRunWithCallOutcome", () => {
     };
     expect(await resumeFlowRunWithCallOutcome(db, LINK, "answered")).toBe(false);
     err.mockRestore();
+  });
+});
+
+/**
+ * The per-step calling window and the park-ceiling override, both added when
+ * `place_ai_call` became a first-contact step that dials on lead arrival and
+ * retries rather than a manual/weekly one.
+ */
+describe("schema: place_ai_call calling window", () => {
+  const withWindow = (callWindow: Record<string, unknown>) =>
+    defWith({
+      toVar: "lead_phone",
+      personaTemplate: "Hi",
+      notifyE164: "+16025245719",
+      callWindow
+    });
+
+  it("accepts a window and round-trips outside/daysOfWeek", () => {
+    const def = parseAiFlowDefinition(
+      withWindow({
+        timezone: "America/Phoenix",
+        start: "08:30",
+        end: "21:00",
+        daysOfWeek: [1, 2, 3, 4, 5],
+        outside: "skip"
+      })
+    );
+    const step = def.steps[1] as Extract<UiFlowStep, { type: "place_ai_call" }>;
+    expect(step.callWindow?.outside).toBe("skip");
+    expect(step.callWindow?.daysOfWeek).toEqual([1, 2, 3, 4, 5]);
+  });
+
+  // Absent `outside` must mean defer: anything that has not explicitly opted
+  // into trading the call away keeps the conservative behavior.
+  it("leaves outside unset rather than defaulting it into the definition", () => {
+    const def = parseAiFlowDefinition(
+      withWindow({ timezone: "America/Phoenix", start: "08:30", end: "21:00" })
+    );
+    const step = def.steps[1] as Extract<UiFlowStep, { type: "place_ai_call" }>;
+    expect(step.callWindow?.outside).toBeUndefined();
+  });
+
+  it("rejects a zero-length window", () => {
+    expect(
+      issuesOf(withWindow({ timezone: "America/Phoenix", start: "09:00", end: "09:00" })).join(" ")
+    ).toMatch(/start and end at the same time/);
+  });
+
+  it("rejects a malformed time and an unknown outside mode", () => {
+    expect(
+      issuesOf(withWindow({ timezone: "America/Phoenix", start: "8:30", end: "21:00" })).length
+    ).toBeGreaterThan(0);
+    expect(
+      issuesOf({
+        ...withWindow({
+          timezone: "America/Phoenix",
+          start: "08:30",
+          end: "21:00",
+          outside: "email"
+        })
+      }).length
+    ).toBeGreaterThan(0);
+  });
+});
+
+describe("schema: place_ai_call waitMinutes", () => {
+  const withExtras = (extra: Record<string, unknown>) =>
+    defWith({
+      toVar: "lead_phone",
+      personaTemplate: "Hi",
+      notifyE164: "+16025245719",
+      ...extra
+    });
+
+  it("clamps waitMinutes to the supported range", () => {
+    expect(parseAiFlowDefinition(withExtras({ waitMinutes: 20 }))).toBeTruthy();
+    expect(issuesOf(withExtras({ waitMinutes: 4 })).length).toBeGreaterThan(0);
+    expect(issuesOf(withExtras({ waitMinutes: 46 })).length).toBeGreaterThan(0);
+  });
+});
+
+describe("planStep: place_ai_call passes the window and wait through", () => {
+  const step = (extra: Record<string, unknown> = {}): FlowStep =>
+    ({
+      id: "call1",
+      type: "place_ai_call",
+      toVar: "lead_phone",
+      personaTemplate: "Hi {{vars.lead_name}}",
+      notifyE164: "+16025245719",
+      ...extra
+    }) as FlowStep;
+  const scope = { vars: { lead_phone: "+16025550123", lead_name: "Sarah" } };
+
+  it("passes callWindow and waitMinutes through to the worker", () => {
+    const callWindow = {
+      timezone: "America/Phoenix",
+      start: "08:30",
+      end: "21:00",
+      outside: "skip" as const
+    };
+    const plan = planStep(step({ callWindow, waitMinutes: 20 }), scope);
+    if (!plan.ok || plan.action.kind !== "place_ai_call") throw new Error("expected a call plan");
+    expect(plan.action.callWindow).toEqual(callWindow);
+    expect(plan.action.waitMinutes).toBe(20);
+  });
+
+  it("omits both when unset, so the worker keeps its defaults", () => {
+    const plan = planStep(step(), scope);
+    if (!plan.ok || plan.action.kind !== "place_ai_call") throw new Error("expected a call plan");
+    expect(plan.action.callWindow).toBeUndefined();
+    expect(plan.action.waitMinutes).toBeUndefined();
   });
 });
