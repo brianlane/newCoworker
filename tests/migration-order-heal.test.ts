@@ -96,6 +96,13 @@ function makeSandbox(files: Record<string, string>): Sandbox {
     stub,
     '#!/usr/bin/env bash\n' +
       'if [ "$1" = "migration" ] && [ "$2" = "list" ]; then\n' +
+      // SUPABASE_MIGRATION_LIST_FAIL makes the stub fail the way the real CLI
+      // does when it cannot reach the database: a message on stderr and a
+      // non-zero exit, with nothing on stdout.
+      '  if [ -n "${SUPABASE_MIGRATION_LIST_FAIL:-}" ]; then\n' +
+      '    echo "failed to connect to postgres: network is unreachable" >&2\n' +
+      '    exit "$SUPABASE_MIGRATION_LIST_FAIL"\n' +
+      '  fi\n' +
       '  cat "$SUPABASE_MIGRATION_TABLE"\n  exit 0\nfi\n' +
       'echo "unexpected supabase invocation: $*" >&2\nexit 1\n'
   );
@@ -280,6 +287,42 @@ describe("migration-order-heal.sh", () => {
     expect(originMainSha(sb)).toBe(before);
     const local = readdirSync(join(sb.run, MIG_DIR)).sort();
     expect(local).toContain("20260822025000_would_be_casualty.sql");
+  }, 30_000);
+
+  // Regression for 2026-08-06 (run 31068979036): the ledger read could not
+  // reach the IPv6-only direct host, came back empty, and the script reported
+  // it as "could not read the applied ledger" and skipped, which is the same
+  // thing it said for a genuinely empty ledger. Only `db push` failing on the
+  // same connection a moment later kept a real casualty from slipping past.
+  it("fails the deploy when the ledger READ fails, instead of skipping quietly", () => {
+    const sb = makeSandbox({
+      [APPLIED_A]: "select 1;",
+      "20260822025000_would_be_casualty.sql": "select 'pending';",
+    });
+    writeLedger(sb, ["20260822020000", "20260822030000"]);
+    const before = originMainSha(sb);
+
+    const res = runHeal(sb, { SUPABASE_MIGRATION_LIST_FAIL: "1" });
+    const out = res.stdout + res.stderr;
+    expect(res.status, out).toBe(1);
+    // The CLI's own words survive instead of being swallowed by 2>/dev/null.
+    expect(out).toContain("network is unreachable");
+    expect(out).toContain("could not read the applied migration ledger");
+    // And it must not be mistaken for the benign empty-ledger case.
+    expect(out).not.toContain("the applied ledger is empty");
+    expect(originMainSha(sb)).toBe(before);
+  }, 30_000);
+
+  it("skips softly when the ledger is genuinely empty (nothing applied yet)", () => {
+    const sb = makeSandbox({ "20260822025000_first_ever.sql": "select 1;" });
+    writeLedger(sb, []);
+    const before = originMainSha(sb);
+
+    const res = runHeal(sb);
+    const out = res.stdout + res.stderr;
+    expect(res.status, out).toBe(0);
+    expect(out).toContain("the applied ledger is empty");
+    expect(originMainSha(sb)).toBe(before);
   }, 30_000);
 
   it("refuses to re-stamp an empty pending file", () => {

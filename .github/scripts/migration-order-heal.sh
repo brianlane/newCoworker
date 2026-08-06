@@ -115,8 +115,29 @@ fi
 # 2026-08-06. The variable is absent for local runs and the vitest sandbox,
 # where the stubbed CLI ignores the flag anyway; percent-encoding guarantees
 # the URL holds no whitespace, so the unquoted expansion cannot word-split.
+#
+# A FAILED read and an EMPTY ledger are reported differently, because they used
+# to be the same thing. The old version discarded stderr and the exit status,
+# so any CLI failure came back as an empty set and the caller skipped the heal
+# with a soft warning. That is exactly what happened on 2026-08-06: the call
+# could not reach the IPv6-only direct host, and the run reported "could not
+# read the applied ledger" as if the ledger were simply empty. Pinning the
+# pooler removed that particular cause, but not the blindness. Any future
+# failure (a 502, an expired token, a revoked password) would land the same
+# way, so the failure is now propagated to the caller and the CLI's own
+# message is printed instead of being swallowed.
 read_applied() {
-  supabase migration list ${SUPABASE_DB_URL:+--db-url "$SUPABASE_DB_URL"} 2>/dev/null \
+  local out err status=0
+  err=$(mktemp)
+  out=$(supabase migration list ${SUPABASE_DB_URL:+--db-url "$SUPABASE_DB_URL"} 2>"$err") || status=$?
+  if [ "$status" -ne 0 ]; then
+    echo "supabase migration list failed (exit $status). Its output:" >&2
+    cat "$err" >&2
+    rm -f "$err"
+    return "$status"
+  fi
+  rm -f "$err"
+  printf '%s\n' "$out" \
     | awk -F'|' 'NF >= 2 { v = $2; gsub(/[[:space:]]/, "", v); if (v ~ /^[0-9]{14}$/) print v }' \
     | sort -u
 }
@@ -146,9 +167,18 @@ while :; do
   rm -f "$MIGRATIONS_DIR"/*.sql
   git checkout FETCH_HEAD -- "$MIGRATIONS_DIR"
 
-  applied=$(read_applied || true)
+  # A failed read fails the deploy rather than skipping quietly. `db push` runs
+  # against the same database moments later, so a read that cannot reach the
+  # ledger is a deploy that was going to fail anyway; stopping here reports the
+  # real reason instead of letting a confusing push error stand in for it. The
+  # genuinely empty ledger (a project with no migrations applied yet) keeps the
+  # old soft skip, since there is no head to sort against and nothing to heal.
+  if ! applied=$(read_applied); then
+    echo "::error::could not read the applied migration ledger (the CLI output is above). Refusing to continue: a failed read cannot be told apart from an empty one, and skipping the heal here is how a merge-window collision reaches db push unhealed."
+    exit 1
+  fi
   if [ -z "$applied" ]; then
-    echo "::warning::could not read the applied ledger; skipping the order heal (db push still guards)."
+    echo "::warning::the applied ledger is empty; skipping the order heal (db push still guards)."
     exit 0
   fi
   applied_head=$(printf '%s\n' "$applied" | tail -1)
