@@ -38,7 +38,13 @@ export type ReachClientState = {
   attempt: number;
 };
 
-/** `rt:<businessId>:<aLegCallControlId>:<attempt>` */
+/**
+ * `rt:<businessId>:<aLegCallControlId>:<attempt>`
+ *
+ * The leg id sits in the middle deliberately: Telnyx call ids contain colons,
+ * so only the uuid and the numeric attempt can be parsed as fixed segments,
+ * and the attempt has to anchor the end for the leg id to be recoverable.
+ */
 export function encodeReachClientState(state: ReachClientState): string {
   return [
     REACH_CS_PREFIX,
@@ -68,9 +74,12 @@ export function parseReachClientState(
       return null;
     }
   }
-  // businessId and call_control_id carry no colon, so a strict 4-part match is
-  // unambiguous. Empty segments are rejected.
-  const m = /^rt:([^:]+):([^:]+):(\d+)$/.exec(text);
+  // A Telnyx call_control_id CONTAINS colons (they look like `v3:abc...`), so
+  // the leg id cannot be matched as a colon-free segment. Only the businessId
+  // (a uuid) and the trailing attempt are colon-free, so the leg is matched
+  // greedily between them and the digits anchor the end. Empty segments are
+  // still rejected.
+  const m = /^rt:([^:]+):(.+):(\d+)$/.exec(text);
   if (!m) return null;
   const attempt = Number(m[3]);
   if (!Number.isSafeInteger(attempt) || attempt < 0) return null;

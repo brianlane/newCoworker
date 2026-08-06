@@ -21,6 +21,26 @@ describe("reach client_state", () => {
     expect(parseReachClientState(encodeReachClientState(state))).toEqual(state);
   });
 
+  // A real Telnyx call_control_id CONTAINS colons ("v3:abc..."), so a codec
+  // that treats the leg id as a colon-free segment parses nothing on a live
+  // webhook and every B leg becomes uncorrelatable. This is the shape that
+  // actually ships.
+  it("round-trips a REAL Telnyx call id, which contains colons", () => {
+    const state = { businessId: BIZ, aLegCallControlId: A_LEG, attempt: 2 };
+    const encoded = encodeReachClientState(state);
+    expect(encoded).toContain("v3:abc123");
+    expect(parseReachClientState(encoded)).toEqual(state);
+    const b64 = Buffer.from(encoded).toString("base64");
+    expect(parseReachClientState(b64)).toEqual(state);
+  });
+
+  // A leg id whose own tail looks numeric must not be mistaken for the
+  // attempt: the attempt is whatever follows the FINAL colon.
+  it("keeps a numeric-looking leg id intact", () => {
+    const state = { businessId: BIZ, aLegCallControlId: "v3:9f2:1234", attempt: 0 };
+    expect(parseReachClientState(encodeReachClientState(state))).toEqual(state);
+  });
+
   it("round-trips through base64, which is how Telnyx returns it", () => {
     const state = { businessId: BIZ, aLegCallControlId: "abc", attempt: 0 };
     const encoded = Buffer.from(encodeReachClientState(state)).toString("base64");
@@ -192,7 +212,10 @@ describe("telnyxBridgeCall", () => {
       full as unknown as typeof fetch
     );
     const fullBody = JSON.parse(full.mock.calls[0][1].body as string);
-    expect(fullBody.park_after_unbridge).toBe(true);
+    // Telnyx expects the STRING "self", naming which leg to park. A boolean is
+    // silently ignored, and the failure stays invisible until a teammate
+    // actually drops and the caller gets hung up on.
+    expect(fullBody.park_after_unbridge).toBe("self");
     // Telnyx ignores a repeat of the same command_id on the same leg, so this
     // is what stops a retried bridge from double-joining.
     expect(fullBody.command_id).toBe("cmd-1");

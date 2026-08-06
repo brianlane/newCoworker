@@ -371,9 +371,13 @@ export async function telnyxDialCall(
  * is the leg it is joined TO.
  *
  * `parkAfterUnbridge` decides what happens to this leg when the bridge later
- * ends. True parks it on hold instead of hanging it up, which is what a
+ * ends. Parking it holds the leg instead of hanging it up, which is what a
  * caller's leg wants: if the teammate drops, the caller is still connected and
  * something can come back to them rather than leaving them with dead air.
+ *
+ * Telnyx expects the STRING "self" here, not a boolean: the wire value names
+ * which leg to park. A boolean is silently ignored, and the failure is
+ * invisible until a teammate actually drops and the caller is hung up on.
  *
  * `commandId` is Telnyx's own idempotency key. It ignores a repeat of the same
  * command_id on the same leg, so a retried bridge cannot double-join.
@@ -391,7 +395,7 @@ export async function telnyxBridgeCall(
 ): Promise<Response> {
   const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/bridge`;
   const body: Record<string, unknown> = { call_control_id: opts.otherCallControlId };
-  if (opts.parkAfterUnbridge === true) body.park_after_unbridge = true;
+  if (opts.parkAfterUnbridge === true) body.park_after_unbridge = "self";
   if (opts.clientState) body.client_state = encodeClientState(opts.clientState);
   if (opts.commandId) body.command_id = opts.commandId;
   return fetchImpl(url, {
