@@ -4315,7 +4315,10 @@ function StepFields({
             <input
               type="checkbox"
               checked={Boolean(modify)}
-              disabled={earlier.length === 0}
+              // Only block TURNING IT ON with no target. Disabling an already
+              // checked box would trap the setting: reorder the gate to the
+              // front of the flow and the owner could never switch it off.
+              disabled={earlier.length === 0 && !modify}
               onChange={(ev) =>
                 patchStep(index, {
                   allowModify: ev.target.checked ? { redraftStepId: earlier[earlier.length - 1] } : undefined

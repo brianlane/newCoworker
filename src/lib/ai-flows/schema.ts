@@ -218,6 +218,11 @@ export const TRIGGER_SCOPE_KEYS = [
   "subject",
   "message_id",
   "thread_id",
+  // The RFC Message-Id, what In-Reply-To and References carry. Listed here
+  // for the same reason as the keys above it: emitting a field at run time
+  // without allowlisting it means any flow that templates it is rejected at
+  // authoring for referencing an "unknown trigger field".
+  "message_ref",
   "email_log_id",
   "received_at",
   "connection_id",

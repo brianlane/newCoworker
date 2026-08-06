@@ -47,6 +47,24 @@ describe("inbound email keeps the identity a reply needs", () => {
     expect(scope.message_ref).toBe("<CAJ=intro@mail.gmail.com>");
   });
 
+  it("lets a flow actually TEMPLATE the fields it emits", () => {
+    // Emitting a trigger field at run time without allowlisting it in
+    // TRIGGER_SCOPE_KEYS means every flow that references it is rejected at
+    // authoring. That gap is exactly why the HQ flow paid a model call to
+    // re-derive a subject already in scope (fixed in #1185), and the first
+    // draft of THIS change reintroduced it for message_ref. Asserting the
+    // emission alone does not catch it; authoring a flow that uses it does.
+    for (const field of ["message_ref", "thread_id", "message_id", "email_log_id"]) {
+      expect(() =>
+        parseAiFlowDefinition({
+          version: 1,
+          trigger: { channel: "email", connectionId: CONNECTION, conditions: [] },
+          steps: [{ id: "a", type: "notify_owner", message: `Mail: {{trigger.${field}}}` }]
+        })
+      , `{{trigger.${field}}} must be authorable`).not.toThrow();
+    }
+  });
+
   it("OMITS message_ref rather than emitting an empty one", () => {
     // Same rule as thread_id: a blank identifier must not look like a real
     // one, or a reply would be threaded against nothing.
