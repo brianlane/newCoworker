@@ -135,6 +135,40 @@ These are mistakes already made on this account. Do not remake them.
   The engine no longer rewrites a value that is not a phone attempt, and the
   fields were renamed (`route_lead_type`, `sms_lead_type`). Audit the fleet for
   the same shape with `tsx debug/audit-phone-field-names.ts`.
+- **Every team-facing notice carries `Address: {{vars.lead_address}}`, one
+  wording, one placement.** Amy asked in Aug 2026 why only some flows texted
+  her the property address. There was no single bug: each flow was authored per
+  vendor at a different time with no shared lead-summary block, so the address
+  existed only where somebody typed it. Closed by
+  `set-amy-lead-address-in-notices.ts`. Three things to keep in mind before
+  adding or editing a notice here:
+  - **`route_to_team`'s offer / fallback / claim templates do NOT collapse
+    empty vars** (the worker renders them with plain `renderTemplate`, no
+    `collapseEmpty`), so an address that can be ABSENT must be branch-gated,
+    never templated unconditionally, or the team gets a bare "Address:" line.
+    That is why ReferralExchange's owner recap is now three `when`-gated
+    `notify_owner` steps: a buyer is shopping, not selling, and their referral
+    page has no Address row at all.
+  - **HomeLight publishes only city/ZIP** ("85205, AZ"), before and after the
+    claim. Its Address line is coarse by vendor limitation, not by defect. The
+    read was moved to the PRE-claim `open` step because `route_to_team` parks
+    before the portal card is ever read.
+  - **`lead_address` is not just display text**: it feeds the duplicate-lead
+    gate (`duplicateLeadRunExists` in `_shared/ai_flows/reentry.ts`), where two
+    runs for the same person at DIFFERENT addresses are treated as different
+    leads. Only `Realtor.com Lead` sets `options.dedupeLeadRuns`, so nothing
+    moved when the other flows gained the field. New Lead Intake is the one to
+    watch: Amy is the source there, so its field returns the literal
+    `not given` when she omits an address. Do NOT turn on `dedupeLeadRuns` for
+    that flow without changing the field first, or "not given" starts acting
+    like a property that differs from a real one.
+- **Never delete or rename a step id on a live flow.** A parked run stores the
+  step id its cursor pointed at, and `resolveResumeIndex`
+  (`_shared/ai_flows/branching.ts`) returns null when that id is gone, which
+  STOPS the run rather than guessing. This is why the ReferralExchange notify
+  split reuses the existing `notify` id for the seller variant and only ADDS
+  `notify_both` / `notify_buyer` beside it. The three sit consecutively, so a
+  run resuming at `notify` still walks all of them and exactly one gate fires.
 
 ## One-shots
 
@@ -165,6 +199,8 @@ Account-level: `seed-amy-new-lead-intake.ts`,
 edges), `disable-amy-customer-booking.ts` (Aug 3 2026: finishes the same
 policy on webchat + email; dashboard stays on by design),
 `set-amy-claim-notify-email.ts`, `set-amy-roster-availability.ts`,
+`set-amy-lead-address-in-notices.ts` (Aug 5 2026: the property address in every
+team-facing notice on all six lead flows, see Sharp edges),
 `patch-amy-sms-handoff-and-emoji.ts`,
 `patch-amy-handoff-single-alert.ts` (step 3 rewrite: notify_team OR reasoning
 handoff, never both for one request; the Jul 28 block's "and/or" double-paged
