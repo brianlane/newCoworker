@@ -74,6 +74,24 @@ a key to accept it. Everything downstream follows from that:
   enqueue so the claim starts within seconds. That removes the QUEUE delay, not
   the work: the claim still needs a credentialed page load, so a single-digit
   window can still close first.
+- **HomeLight has TWO claim mechanics, and the newer one has no call.** A
+  text-preferred referral opens with a "This client prefers texting" modal and
+  says outright "You don't need to call and enter a PIN to accept these types of
+  referrals". That page has no call-to-claim button at all: the only actions are
+  "Send message" and "Decline referral", and HomeLight's own markup names the
+  first one `data-test="submit-claim-referral"`, so sending the message IS the
+  claim. HomeLight pre-fills that message in Amy's name, so the flow sends it
+  rather than composing one. The flow picks a path with the `claim_mode`
+  extraction field (call, text, or none, defaulting to call when the page is
+  ambiguous). Applied by `homelight-text-referral-claim.ts`. Before it, the
+  first such referral (Aug 5 2026, run `0e9b52d2`) died at `claim_click` with
+  "no matching control on the page" and took 57 steps with it, so a Mesa seller
+  never reached the team.
+  Two follow-on rules: match the claim button on its `data-test`, never its
+  visible text, since the text is exactly what changed; and never use its
+  `sc-*` classes, which are styled-components build hashes. The `route` step's
+  offer still says "answered HomeLight's call and is talking to them now", which
+  is wrong on the text path and needs its own fix.
 - **This flow is live on a real account earning real commissions.** Changes go
   out as ledger-recorded one-shots (`homelight-*` in `scripts/oneshot/`),
   dry-run first, and Amy is told what changed.
@@ -88,7 +106,7 @@ Patches: `homelight-accept-on-prompt.ts`, `homelight-accept-fallback-20.ts`,
 `homelight-late-contact-retry.ts`, `homelight-broadcast-offer.ts`,
 `homelight-ai-call-referral-patch.ts`, `homelight-warm-transfer-trigger.ts`,
 `homelight-start-immediately.ts`, `set-homelight-star-alerts.ts`,
-`fix-homelight-extraction.ts`.
+`fix-homelight-extraction.ts`, `homelight-text-referral-claim.ts`.
 
 All are idempotent and dry-run by default. Read the one you are about to
 re-run: several supersede each other.
