@@ -234,6 +234,13 @@ async function fetchGmailMessages(
       ...(typeof msg.threadId === "string" && msg.threadId.trim()
         ? { threadId: msg.threadId.trim() }
         : {}),
+      // The RFC Message-Id, which In-Reply-To and References carry. Same
+      // header read the email coworker's own fetcher does
+      // (src/lib/email-coworker/mailbox.ts); a reply into this thread needs
+      // it alongside the threadId.
+      ...(gmailHeader(headers, "Message-Id").trim()
+        ? { messageRef: gmailHeader(headers, "Message-Id").trim() }
+        : {}),
       receivedAt:
         msg.internalDate && Number.isFinite(internalMs)
           ? new Date(internalMs).toISOString()

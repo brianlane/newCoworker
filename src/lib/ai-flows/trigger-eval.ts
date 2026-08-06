@@ -146,6 +146,13 @@ export type InboundEmailMessage = {
    * step keyed on it degrades to per-message behavior when it is absent.
    */
   threadId?: string;
+  /**
+   * The message's RFC 5322 `Message-Id` header. threadId is how Gmail FILES a
+   * conversation; this is what In-Reply-To and References carry, so a reply
+   * needs both to nest correctly in a strict client. Same optionality rule as
+   * threadId.
+   */
+  messageRef?: string;
   receivedAt?: string;
 };
 
@@ -170,6 +177,9 @@ export function emailTriggerScope(
     // rather than emitted empty, so a cooldown keyed on it falls back to
     // per-message behavior instead of collapsing every message onto "".
     ...(msg.threadId ? { thread_id: msg.threadId } : {}),
+    // Same rule: a blank Message-Id must not look like a real one, or a reply
+    // would be threaded against nothing.
+    ...(msg.messageRef ? { message_ref: msg.messageRef } : {}),
     ...(connectionId ? { connection_id: connectionId } : {}),
     ...(msg.receivedAt ? { received_at: msg.receivedAt } : {})
   };

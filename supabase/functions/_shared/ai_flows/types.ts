@@ -665,6 +665,14 @@ export type FlowStep =
        */
       attachDocumentTemplate?: string;
       /**
+       * Send as a REPLY on an existing conversation rather than opening a new
+       * one. Template resolving to an `email_log` row id (normally
+       * `{{trigger.email_log_id}}`); the worker loads that row's provider
+       * thread id and RFC Message-Id and threads the send against them. A
+       * blank render sends unthreaded rather than failing.
+       */
+      replyToEmailLogId?: string;
+      /**
        * Send from the owner's connected mailbox (workspace_oauth_connections.id,
        * via Nango Gmail/Outlook) instead of the platform Resend sender. The
        * worker calls back into the app's /api/aiflows/send-owner-email, which
@@ -751,7 +759,21 @@ export type FlowStep =
       saveAs: string;
       when?: StepCondition;
     }
-  | { id: string; type: "approval_gate"; prompt: string; when?: StepCondition }
+  | {
+      id: string;
+      type: "approval_gate";
+      prompt: string;
+      /**
+       * Accept a free-text answer as well as a digit, rewinding to
+       * `redraftStepId` with what the owner said. The numbered options cannot
+       * express a pick PLUS a change ("yes but shorter, drop the pricing
+       * line"), which is how an owner actually answers; without this such a
+       * reply falls past the gate into the operator turn, which does not know
+       * a run is parked. The target is validated to exist at authoring time.
+       */
+      allowModify?: { redraftStepId: string };
+      when?: StepCondition;
+    }
   | {
       id: string;
       type: "notify_owner";

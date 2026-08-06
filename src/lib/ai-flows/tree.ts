@@ -225,6 +225,23 @@ export function varsInScopeBefore(steps: FlowStep[], id: string): string[] {
   return out;
 }
 
+/**
+ * Ids of every step displayed BEFORE `id`, in display order.
+ *
+ * The approval gate's redraft picker offers these: the gate rewinds to its
+ * target and re-runs forward, so a target after the gate would skip the work
+ * the rewind exists to redo. Same flattened walk as `varsInScopeBefore`, so
+ * the two pickers on one step can never disagree about what "earlier" means.
+ */
+export function stepIdsBefore(steps: FlowStep[], id: string): string[] {
+  const out: string[] = [];
+  for (const entry of flattenForDisplay(steps)) {
+    if (entry.step.id === id) break;
+    out.push(entry.step.id);
+  }
+  return out;
+}
+
 /** True when any step in the tree is a branch (classic form can't author it). */
 export function hasBranchStep(steps: FlowStep[]): boolean {
   return flattenForDisplay(steps).some((e) => e.step.type === "branch");

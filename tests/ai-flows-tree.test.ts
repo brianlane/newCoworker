@@ -10,6 +10,7 @@ import {
   patchStepById,
   removeStepById,
   statsByStepIdFromRunSteps,
+  stepIdsBefore,
   varsInScopeBefore,
   varsProducedByStep
 } from "@/lib/ai-flows/tree";
@@ -276,6 +277,24 @@ describe("varsProducedByStep", () => {
         actions: [{ kind: "click_text", target: "Go" }]
       })
     ).toEqual([]);
+  });
+});
+
+describe("stepIdsBefore", () => {
+  it("lists the display-order ids up to the target, and nothing after it", () => {
+    const steps = tree();
+    // The approval gate's redraft picker offers exactly these: a target AFTER
+    // the gate would skip the work the rewind exists to redo.
+    const beforeBranch = stepIdsBefore(steps, "br");
+    expect(beforeBranch).not.toContain("br");
+    expect(beforeBranch.length).toBeGreaterThan(0);
+    // Same flattened walk as varsInScopeBefore, so the two pickers on one
+    // step can never disagree about what "earlier" means.
+    expect(stepIdsBefore(steps, "home_sms")).toContain("br");
+    // The first step has nothing before it, so the gate offers no target.
+    expect(stepIdsBefore(steps, "s1")).toEqual([]);
+    // An id that is not in the tree walks the whole list rather than throwing.
+    expect(stepIdsBefore(steps, "nope").length).toBeGreaterThan(0);
   });
 });
 

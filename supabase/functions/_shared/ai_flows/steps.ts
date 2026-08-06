@@ -379,6 +379,13 @@ export type StepAction =
        * without an attachment.
        */
       attachDocumentRef?: string;
+      /**
+       * RESOLVED email_log row id to thread this send against (the worker
+       * loads its provider thread id + Message-Id). Absent when the step
+       * declared no reply target or the template rendered blank, in which
+       * case the send opens a new conversation as it always did.
+       */
+      replyToEmailLogId?: string;
       /** Send via the owner's connected mailbox instead of platform Resend. */
       fromConnectionId?: string;
       /** Templated recipient resolved to nothing usable → skip, not fail. */
@@ -1305,6 +1312,12 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         ? renderTemplate(step.attachDocumentTemplate, scope, { collapseEmpty: true }).trim()
         : "";
       const attachDocumentRef = renderedAttachRef === "business-docs:" ? "" : renderedAttachRef;
+      // A reply target that rendered blank sends UNTHREADED rather than
+      // failing, same degrade as the attachment above: the mail is still
+      // worth sending, it just opens its own conversation.
+      const replyToEmailLogId = step.replyToEmailLogId
+        ? renderTemplate(step.replyToEmailLogId, scope, { collapseEmpty: true }).trim()
+        : "";
       return {
         ok: true,
         action: {
@@ -1316,6 +1329,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           body,
           attachScreenshot: step.attachScreenshot === true,
           ...(attachDocumentRef ? { attachDocumentRef } : {}),
+          ...(replyToEmailLogId ? { replyToEmailLogId } : {}),
           ...(step.fromConnectionId ? { fromConnectionId: step.fromConnectionId } : {})
         }
       };

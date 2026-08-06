@@ -218,6 +218,11 @@ export const TRIGGER_SCOPE_KEYS = [
   "subject",
   "message_id",
   "thread_id",
+  // The RFC Message-Id, what In-Reply-To and References carry. Listed here
+  // for the same reason as the keys above it: emitting a field at run time
+  // without allowlisting it means any flow that templates it is rejected at
+  // authoring for referencing an "unknown trigger field".
+  "message_ref",
   "email_log_id",
   "received_at",
   "connection_id",
@@ -942,6 +947,18 @@ const nonBranchStepMembers = [
      * loudly. Resend-path only, like attachScreenshot.
      */
     attachDocumentTemplate: z.string().min(1).max(300).optional(),
+    /**
+     * Send this as a REPLY on an existing conversation instead of starting a
+     * new one. Template resolving to an `email_log` row id, normally
+     * `{{trigger.email_log_id}}`: the worker loads that row's provider thread
+     * id and RFC Message-Id and threads the send against them.
+     *
+     * Without it every assistant email opens a fresh conversation, which is
+     * why an answered sales email used to land beside the original rather
+     * than inside it. A blank rendered id sends unthreaded rather than
+     * failing, matching how the other optional templates here degrade.
+     */
+    replyToEmailLogId: z.string().min(1).max(300).optional(),
     fromConnectionId: z.string().uuid().optional(),
     when: whenSchema.optional()
   }),
@@ -1028,6 +1045,21 @@ const nonBranchStepMembers = [
     id: stepId,
     type: z.literal("approval_gate"),
     prompt: z.string().min(1).max(500),
+    /**
+     * Let the owner answer with free text instead of only a digit, and rewind
+     * to `redraftStepId` with what they said.
+     *
+     * The gate's options are numbered ("1 approve, 2 skip, 3 cancel"), which
+     * cannot express how an owner actually answers. Real example, from the
+     * session that produced this feature: "yes but shortened, and don't track
+     * link clicks for owner/employees" is a pick AND a modification. Without
+     * this, that text falls past the gate entirely and lands in the owner's
+     * operator turn, which has no idea a run is parked.
+     *
+     * `redraftStepId` must name a step in the same flow (validated below), or
+     * the rewind would park the run forever.
+     */
+    allowModify: z.object({ redraftStepId: stepId }).optional(),
     when: whenSchema.optional()
   }),
   z.object({
@@ -2164,6 +2196,8 @@ export function validateVoiceFlow(def: AiFlowDefinition): string[] {
 export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
   const issues: string[] = [];
   const seenIds = new Set<string>();
+  /** approval_gate id -> its allowModify rewind target, checked after the walk. */
+  const redraftTargets: Array<[string, string]> = [];
 
   // A from_matches trigger condition needs EXACTLY ONE sender source: a
   // literal `value` or a saved-contact `ref` (the discriminatedUnion member
@@ -2229,6 +2263,10 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       issues.push(`Duplicate step id "${step.id}".`);
     }
     seenIds.add(step.id);
+
+    if (step.type === "approval_gate" && step.allowModify) {
+      redraftTargets.push([step.id, step.allowModify.redraftStepId]);
+    }
 
     // A voice step under a non-voice trigger can never execute (the batch
     // worker has no handler for it); reject rather than silently no-op.
@@ -2929,6 +2967,19 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
   };
 
   walkSteps(def.steps, 0);
+
+  // approval_gate.allowModify.redraftStepId must name a real step. Checked
+  // AFTER the walk against the full id set, not during it: the normal shape
+  // is draft-then-gate (a backward reference), but a branch can legitimately
+  // put the gate ahead of its redraft target, and a rewind to a step that
+  // does not exist would park the run with nothing able to resume it.
+  for (const [gateId, target] of redraftTargets) {
+    if (!seenIds.has(target)) {
+      issues.push(
+        `Step "${gateId}" can be modified back to step "${target}", which this flow does not contain.`
+      );
+    }
+  }
 
   if (totalSteps > MAX_TOTAL_STEPS) {
     issues.push(
