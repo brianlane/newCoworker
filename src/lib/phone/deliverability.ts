@@ -36,19 +36,47 @@
  */
 
 /**
+ * Where the platform's SMS can and cannot deliver, as a category the UI can
+ * map to localized copy. "nanp" means no warning: either the input is a +1
+ * destination our long codes originate to, or it is not (yet) a complete
+ * international-format number, which covers local-format input the save
+ * path coerces to +1 and partial input mid-keystroke. "mx" and
+ * "international" are both unreachable by SMS; Mexico is split out so its
+ * copy can point at WhatsApp, the only working MX customer channel.
+ */
+export type SmsReachability = "nanp" | "mx" | "international";
+
+/**
+ * Tolerant of raw user input: formatting characters are stripped, and only
+ * a string that is a full international-format number (+ followed by 7 to
+ * 15 digits) can classify as unreachable, so as-you-type surfaces never
+ * flash a warning on a half-typed prefix.
+ */
+export function smsReachability(rawPhone: string): SmsReachability {
+  const cleaned = rawPhone.replace(/[^+0-9]/g, "");
+  if (!/^\+[0-9]{7,15}$/.test(cleaned)) return "nanp";
+  if (cleaned.startsWith("+1")) return "nanp";
+  if (cleaned.startsWith("+52")) return "mx";
+  return "international";
+}
+
+/**
  * Null when SMS to `e164` can deliver from the platform's long-code
  * numbers (any NANP +1 destination); otherwise a short user-facing
  * warning naming the SMS gap. Number-level: the tenant's messaging
- * profile plays no part (see module doc).
+ * profile plays no part (see module doc). English-only: this string rides
+ * the API response; the dashboard renders its own localized equivalent
+ * from the same smsReachability classification.
  */
 export function ownerPhoneDeliverabilityWarning(e164: string): string | null {
-  if (e164.startsWith("+1")) return null;
+  const reachability = smsReachability(e164);
+  if (reachability === "nanp") return null;
 
-  if (e164.startsWith("+52")) {
+  if (reachability === "mx") {
     return (
       "This looks like a Mexican number. Our texting lines can only send " +
       "SMS to +1 (US and Canada) numbers, so SMS alerts will not reach it. " +
-      "Email and dashboard alerts keep working."
+      "WhatsApp, email, and dashboard alerts keep working."
     );
   }
 
