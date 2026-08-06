@@ -180,3 +180,39 @@ describe("the approval gate takes the answer Brian actually sends", () => {
     ).toThrow();
   });
 });
+
+describe("the modify loop is authorable end to end", () => {
+  it("lets the redraft step read the owner's own words", () => {
+    // The whole point of rewinding is that the drafting step acts on what the
+    // owner said. {{vars.approval_note}} is engine-provided, so the flow can
+    // reference it without an earlier step producing it.
+    const def = parseAiFlowDefinition({
+      version: 1,
+      trigger: { channel: "email", connectionId: CONNECTION, conditions: [] },
+      steps: [
+        {
+          id: "s_draft",
+          type: "run_agent",
+          agentId: "3f7a1c90-1111-4111-8111-2c4e8b1f6a37",
+          input: "{{trigger.windowText}}\n\nOwner's changes: {{vars.approval_note}}",
+          saveAs: "email_draft"
+        },
+        {
+          id: "s_gate",
+          type: "approval_gate",
+          prompt: "Send this reply?",
+          allowModify: { redraftStepId: "s_draft" }
+        },
+        {
+          id: "s_send",
+          type: "send_email",
+          to: "{{trigger.from}}",
+          subject: "Re: {{trigger.subject}}",
+          body: "{{vars.email_draft}}",
+          replyToEmailLogId: "{{trigger.email_log_id}}"
+        }
+      ]
+    });
+    expect(def.steps).toHaveLength(3);
+  });
+});

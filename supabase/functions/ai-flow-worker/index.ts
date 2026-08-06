@@ -597,6 +597,16 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
     ...(def.timeWindow && !testMode ? { timeWindow: def.timeWindow } : {})
   };
   if (testMode) scope.testMode = true;
+  // The owner's free-text answer to a modify-capable approval gate, so the
+  // step we rewound to can act on it (a drafting run_agent reads it as
+  // {{vars.approval_note}}). Reflected from context on every claim rather
+  // than written once, so it is present for the redraft pass and empty again
+  // on a plain approve.
+  {
+    const appr = asRecord(run.context.approval);
+    const note = typeof appr.note === "string" ? appr.note.trim() : "";
+    scope.vars[APPROVAL_NOTE_VAR] = note;
+  }
   if (typeof flow.name === "string" && flow.name.trim()) scope.flowName = flow.name.trim();
   // Default the claim sentinel to "none" so a claim-gated step
   // (when: { var: "claimed_agent", notEquals: "none" }) stays CLOSED until a
@@ -1070,6 +1080,16 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
           )
       });
       approval.options = gateOptions;
+      // Resolve allowModify's step ID to its INDEX in the flattened plan and
+      // persist it, so the inbound webhook can rewind without loading the
+      // definition. Stored for the same reason the option list is: the reply
+      // must be read against what the owner was actually offered, not against
+      // whatever today's code would build.
+      const gateStep = flat[index]?.step;
+      const redraftId =
+        gateStep?.type === "approval_gate" ? gateStep.allowModify?.redraftStepId : undefined;
+      const redraftIndex = redraftId ? flat.findIndex((e) => e.step.id === redraftId) : -1;
+      if (redraftIndex >= 0) approval.redraft_step_index = redraftIndex;
       stampResumeMarker(index);
       const parked = await updateRun(supabase, run.id, {
         status: "awaiting_approval",
@@ -1478,6 +1498,12 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
  * other engine-internal vars (e.g. the after-hours email markers).
  */
 const BYPASS_QUIET_HOURS_VAR = "_bypass_quiet_hours";
+/**
+ * The owner's instruction when they answered an approval gate with free
+ * text instead of a digit. Templatable (listed in ENGINE_PROVIDED_VARS),
+ * because the point is for the rewound drafting step to read it.
+ */
+const APPROVAL_NOTE_VAR = "approval_note";
 
 /**
  * Once-per-run marker for the pre-send booking gate. Stamped before

@@ -115,3 +115,48 @@ export function approvalOptionForReply(
 
 /** Highest digit any gate can currently offer (webhook fast-path guard). */
 export const APPROVAL_MAX_REPLY_DIGIT = Object.keys(APPROVAL_OPTION_INSTRUCTIONS).length;
+
+/**
+ * Read back the rewind target the worker stored on `context.approval` when a
+ * modify-capable gate parked, or null when this gate offered no modification.
+ *
+ * A step INDEX, not the authored step id: the webhook re-queues the run by
+ * setting `current_step`, and resolving the id would mean loading the flow
+ * definition on the inbound path. Persisting it at park time also keeps the
+ * same invariant the option list has, that the webhook acts on what the owner
+ * was ACTUALLY offered rather than on what today's code would build.
+ *
+ * Anything that is not a non-negative integer disables modification instead of
+ * rewinding somewhere invented: a bad index would park the run at a step that
+ * cannot resume it.
+ */
+export function parseStoredRedraftStepIndex(raw: unknown): number | null {
+  return typeof raw === "number" && Number.isInteger(raw) && raw >= 0 ? raw : null;
+}
+
+/** What an owner's free-text answer to a modify-capable gate resolves to. */
+export type ApprovalModify = { redraftStepIndex: number; note: string };
+
+/**
+ * Decide whether an owner's reply is a MODIFICATION rather than a numbered
+ * choice, and carry the instruction along with where to rewind to.
+ *
+ * Returns null when the gate offered no modification, when the reply is a bare
+ * digit (that belongs to `approvalOptionForReply`, and the digit vocabulary is
+ * globally ordered across claim/pass/unclaim/approve, so a modify branch that
+ * ate one would break every existing approval), or when there is nothing to
+ * act on.
+ */
+export function approvalModifyForReply(
+  redraftStepIndex: number | null,
+  reply: string
+): ApprovalModify | null {
+  if (redraftStepIndex === null) return null;
+  const note = reply.trim();
+  if (!note) return null;
+  // Same digit rule the owner-reply relay uses (_shared/contact_reply_mode.ts
+  // isRelayableOwnerReply), stated here too because this module is imported by
+  // the worker as well as the webhook.
+  if (/^\d{1,2}$/.test(note)) return null;
+  return { redraftStepIndex, note };
+}

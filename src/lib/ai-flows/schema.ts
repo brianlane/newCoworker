@@ -152,6 +152,13 @@ export const OFFER_SCOPE_KEYS = ["deadline"] as const;
  */
 export const ENGINE_PROVIDED_VARS = [
   "actions_taken",
+  /**
+   * The owner's own words when they answered an approval gate with free
+   * text instead of a digit ("shorter, drop the second paragraph").
+   * Empty on a plain approve. A modify-capable gate rewinds to an
+   * earlier step, and that step reads this to redo its work.
+   */
+  "approval_note",
   "claimed_agent",
   "claimed_agent_phone",
   "claimed_agent_eta_minutes",
