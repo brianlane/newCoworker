@@ -48,8 +48,16 @@ type StepJson = {
   moveToFolder?: string;
 };
 
-const definition = buildHqInboxTriageDefinition() as { steps: StepJson[] };
-const steps = definition.steps;
+/** Any uuid: the applier supplies the real one after upserting the agent. */
+const AGENT_ID = "3f7a1c90-1111-4111-8111-2c4e8b1f6a37";
+
+const definition = buildHqInboxTriageDefinition(AGENT_ID) as { steps: StepJson[] };
+/** The branch arms hold the real work now, so flatten before asserting. */
+const steps: StepJson[] = definition.steps.flatMap((s) =>
+  s.type === "branch"
+    ? [s, ...((s as { branches?: { steps: StepJson[] }[] }).branches ?? []).flatMap((b) => b.steps)]
+    : [s]
+);
 const notifySteps = steps.filter((s) => s.type === "notify_owner");
 const NOTIFY_IDS = ["s_notify_sales", "s_notify_support", "s_notify_billing"];
 
@@ -58,7 +66,7 @@ describe("HQ inbox triage: the definition is valid and authorable", () => {
     // Not a formality: this is what rejected {{trigger.subject}} as an
     // "unknown trigger field" before PR #1185 widened TRIGGER_SCOPE_KEYS, and
     // it is what caps the field/category description lengths.
-    expect(() => parseAiFlowDefinition(buildHqInboxTriageDefinition())).not.toThrow();
+    expect(() => parseAiFlowDefinition(buildHqInboxTriageDefinition(AGENT_ID))).not.toThrow();
   });
 
   it("keeps the upsert key and the watched mailbox", () => {
@@ -243,5 +251,95 @@ describe("HQ inbox triage: writing rules hold in the shipped copy", () => {
 
   it("never calls the product an AI receptionist", () => {
     expect(JSON.stringify(definition)).not.toMatch(/ai receptionist/i);
+  });
+});
+
+describe("HQ inbox triage: a sales lead gets answered, not just announced", () => {
+  const inArm = (id: string) => steps.find((s) => s.id === id) as Record<string, unknown> | undefined;
+
+  it("drafts, asks, then replies inside the original thread", () => {
+    expect(inArm("s_draft")).toMatchObject({ type: "run_agent", agentId: AGENT_ID });
+    expect(inArm("s_gate")).toMatchObject({ type: "approval_gate" });
+    // The reply threads against the row the trigger came from. Without this it
+    // opens a new conversation beside the original, which is the whole
+    // complaint about the dashboard Reply button.
+    expect(inArm("s_send")).toMatchObject({
+      type: "send_email",
+      replyToEmailLogId: "{{trigger.email_log_id}}"
+    });
+  });
+
+  it("lets Brian answer the gate with changes, and rewinds to the drafter", () => {
+    // His actual reply shape is a pick PLUS a change, which a digit cannot
+    // express. The rewind target must be the DRAFTING step or the redo is a
+    // no-op.
+    expect(inArm("s_gate")).toMatchObject({ allowModify: { redraftStepId: "s_draft" } });
+  });
+
+  it("feeds his words back into the redraft", () => {
+    // The rewind only does something if the drafter reads what he said.
+    expect(String(inArm("s_draft")?.input)).toContain("{{vars.approval_note}}");
+  });
+
+  it("still tells him when the drafter declines to answer", () => {
+    // A real sales lead must never resolve to silence just because the model
+    // had nothing to say. The gate and the send skip; the plain alert fires.
+    expect(inArm("s_gate")).toMatchObject({ when: { notEquals: "NO_REPLY" } });
+    expect(inArm("s_send")).toMatchObject({ when: { notEquals: "NO_REPLY" } });
+    expect(inArm("s_notify_sales")).toMatchObject({ when: { equals: "NO_REPLY" } });
+  });
+
+  it("leaves support and billing on the alert-only path", () => {
+    // Deliberate first rollout: only sales leads are answered automatically.
+    for (const id of ["s_notify_support", "s_notify_billing"]) {
+      expect(inArm(id), id).toMatchObject({ type: "notify_owner" });
+    }
+    expect(inArm("s_send_support")).toBeUndefined();
+    expect(inArm("s_send_billing")).toBeUndefined();
+  });
+});
+
+describe("HQ inbox triage: moving the paging did not lose the cooldown", () => {
+  it("cools the approval gate on the same thread key as the alerts", () => {
+    // For a sales lead the GATE is what texts Brian, so it needs the
+    // guarantee #1191 gave notify_owner. Without this, a second message on a
+    // thread he is already deciding about would text him again, and the
+    // regression would be invisible: the first text still looks right.
+    const gate = steps.find((s) => s.id === "s_gate") as Record<string, unknown> | undefined;
+    expect(gate?.cooldown).toEqual(THREAD_COOLDOWN);
+  });
+
+  it("leaves every owner-paging step in this flow cooled down", () => {
+    // Whole-flow sweep rather than a per-step list, so a future step that
+    // texts the owner cannot be added without a cooldown decision.
+    const paging = steps.filter((s) => s.type === "notify_owner" || s.type === "approval_gate");
+    expect(paging.length).toBeGreaterThanOrEqual(4);
+    for (const step of paging) {
+      expect((step as Record<string, unknown>).cooldown, step.id).toEqual(THREAD_COOLDOWN);
+    }
+  });
+});
+
+describe("HQ inbox triage: nothing sends without a human saying so", () => {
+  it("puts the send DIRECTLY after the gate it is guarded by", () => {
+    // approval_gate's skip semantics guard "the step directly after it", and
+    // a cooling gate uses that same path. If anything were inserted between
+    // the gate and the send, a skip or a cooldown would skip the WRONG step
+    // and the draft would go out unapproved. Adjacency is load-bearing here,
+    // so it is pinned rather than left to reading order.
+    const arm = (
+      definition.steps.find((s) => s.type === "branch") as {
+        branches?: { id: string; steps: { id: string; type: string }[] }[];
+      }
+    ).branches?.find((b) => b.id === "b_sales");
+    const ids = (arm?.steps ?? []).map((s) => s.id);
+    expect(ids.indexOf("s_send")).toBe(ids.indexOf("s_gate") + 1);
+  });
+
+  it("has exactly one step that can send mail, and it sits behind the gate", () => {
+    // A second send anywhere in the flow would not be covered by the gate,
+    // and this is email to a stranger from Brian's own address.
+    const sends = steps.filter((s) => s.type === "send_email");
+    expect(sends.map((s) => s.id)).toEqual(["s_send"]);
   });
 });

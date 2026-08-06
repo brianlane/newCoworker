@@ -346,7 +346,9 @@ describe("pollEmailTriggers", () => {
             headers: [
               { name: "From", value: "james@kypads.com" },
               { name: "Subject", value: "Re: Introductions" },
-              { name: "Message-Id", value: "<CAJ=intro@mail.gmail.com>" }
+              { name: "Message-Id", value: "<CAJ=intro@mail.gmail.com>" },
+              { name: "To", value: "Brian <brian@newcoworker.com>, king@clinic.example.com" },
+              { name: "Cc", value: "assistant@kypads.com" }
             ],
             mimeType: "text/plain",
             body: { data: b64url("hello") }
@@ -369,7 +371,11 @@ describe("pollEmailTriggers", () => {
     expect(recordInboundTriggerEmail).toHaveBeenCalledWith(
       expect.objectContaining({
         threadId: "199abc4d5e6f7890",
-        messageRef: "<CAJ=intro@mail.gmail.com>"
+        messageRef: "<CAJ=intro@mail.gmail.com>",
+        // Kept so an approved reply reaches the PROSPECT, who on an
+        // introduction is on To while the introducer is in From.
+        toRecipients: "Brian <brian@newcoworker.com>, king@clinic.example.com",
+        ccRecipients: "assistant@kypads.com"
       }),
       expect.anything()
     );
@@ -493,6 +499,9 @@ describe("pollEmailTriggers", () => {
     const logged = vi.mocked(recordInboundTriggerEmail).mock.calls[0][0];
     expect(logged).not.toHaveProperty("threadId");
     expect(logged).not.toHaveProperty("messageRef");
+    // Nor the recipients: this fixture's headers carry no To or Cc.
+    expect(logged).not.toHaveProperty("toRecipients");
+    expect(logged).not.toHaveProperty("ccRecipients");
   });
 
   it("marks a triggering Gmail message read ONCE even when several flows match it", async () => {

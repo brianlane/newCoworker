@@ -15,6 +15,8 @@
  * how to apply).
  */
 
+import { NO_REPLY_SENTINEL } from "./hq-inbox-reply-drafter.ts";
+
 /** The HQ tenant (New Coworker, internal). */
 export const HQ_BUSINESS_ID = "8f3a5c21-7e94-4b6a-9d02-c4e8b1f6a37d";
 
@@ -46,7 +48,14 @@ export const GMAIL_LINK = `https://mail.google.com/mail/u/${GMAIL_ACCOUNT_INDEX}
  */
 export const THREAD_COOLDOWN = { key: "{{trigger.thread_id}}", minutes: 720 } as const;
 
-export function buildHqInboxTriageDefinition() {
+/**
+ * @param replyDrafterAgentId `business_agents.id` of the reply drafter the
+ *   applier upserts before authoring. Passed in rather than hardcoded because
+ *   the agent is created by the same one-shot: a literal uuid here would be a
+ *   promise the seeding step has to keep, and the two would drift the first
+ *   time the agent was recreated.
+ */
+export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
   return {
     version: 1,
     trigger: {
@@ -103,30 +112,105 @@ export function buildHqInboxTriageDefinition() {
         ],
         saveAs: "email_kind"
       },
-      // The three alerts share one shape: KIND, who, the real subject, the ask,
-      // then a tap-through. {{vars.email_sender}} and {{vars.email_gist}} can
-      // each render empty (collapseEmpty eats the gap), so the worst case is a
-      // shorter but still correct text, never a dangling separator.
+      /**
+       * Sales leads get answered, not just announced.
+       *
+       * A branch rather than three `when` guards because a step's `when` takes
+       * exactly ONE condition, and this arm needs both "it is a sales lead"
+       * and "the drafter produced something". The arm supplies the first, so
+       * the steps inside only have to test the second.
+       *
+       * The gate's own park text IS the alert here: one message carrying the
+       * gist, the draft and the options, instead of an alert followed by a
+       * separate approval prompt.
+       */
       {
-        id: "s_notify_sales",
-        type: "notify_owner",
-        when: { var: "email_kind", equals: "sales_lead" },
-        cooldown: THREAD_COOLDOWN,
-        message: `Sales email from {{trigger.from}} {{vars.email_sender}}. Subject: {{trigger.subject}}. {{vars.email_gist}} ${GMAIL_LINK}`
-      },
-      {
-        id: "s_notify_support",
-        type: "notify_owner",
-        when: { var: "email_kind", equals: "support" },
-        cooldown: THREAD_COOLDOWN,
-        message: `Support email from {{trigger.from}} {{vars.email_sender}}. Subject: {{trigger.subject}}. {{vars.email_gist}} ${GMAIL_LINK}`
-      },
-      {
-        id: "s_notify_billing",
-        type: "notify_owner",
-        when: { var: "email_kind", equals: "billing" },
-        cooldown: THREAD_COOLDOWN,
-        message: `Billing email from {{trigger.from}} {{vars.email_sender}}. Subject: {{trigger.subject}}. {{vars.email_gist}} ${GMAIL_LINK}`
+        id: "s_route",
+        type: "branch",
+        question: "How should this email be handled?",
+        branches: [
+          {
+            id: "b_sales",
+            label: "Sales lead: draft a reply and ask",
+            condition: { var: "email_kind", equals: "sales_lead" },
+            steps: [
+              {
+                id: "s_draft",
+                type: "run_agent",
+                agentId: replyDrafterAgentId,
+                // {{vars.approval_note}} is empty on the first pass and carries
+                // Brian's words after he answers the gate with changes, which is
+                // what makes the rewind do anything.
+                input:
+                  "From: {{trigger.from}}\nSubject: {{trigger.subject}}\n\n{{trigger.windowText}}\n\nOwner's requested changes (empty on the first draft): {{vars.approval_note}}",
+                saveAs: "email_draft"
+              },
+              {
+                id: "s_gate",
+                type: "approval_gate",
+                when: { var: "email_draft", notEquals: NO_REPLY_SENTINEL },
+                allowModify: { redraftStepId: "s_draft" },
+                // Parking this gate IS the alert for a sales lead, so it
+                // carries the same one-text-per-conversation guarantee the
+                // notify steps do. Without it, moving the paging from
+                // notify_owner to the gate would have quietly undone #1191.
+                cooldown: THREAD_COOLDOWN,
+                prompt: `Sales email from {{trigger.from}} {{vars.email_sender}}. {{vars.email_gist}} ${GMAIL_LINK}\n\nDraft reply:\n{{vars.email_draft}}`
+              },
+              {
+                id: "s_send",
+                type: "send_email",
+                when: { var: "email_draft", notEquals: NO_REPLY_SENTINEL },
+                to: "{{trigger.from}}",
+                subject: "Re: {{trigger.subject}}",
+                body: "{{vars.email_draft}}",
+                // Answers INSIDE the thread, and claims it, so every later
+                // message on the conversation is handled autonomously.
+                replyToEmailLogId: "{{trigger.email_log_id}}",
+                fromConnectionId: GMAIL_CONNECTION_ROW_ID
+              },
+              {
+                // The drafter declined (no new ask it could act on). Still tell
+                // Brian: a real sales lead must never resolve to silence just
+                // because the model had nothing to say.
+                id: "s_notify_sales",
+                type: "notify_owner",
+                when: { var: "email_draft", equals: NO_REPLY_SENTINEL },
+                cooldown: THREAD_COOLDOWN,
+                message: `Sales email from {{trigger.from}} {{vars.email_sender}}. Subject: {{trigger.subject}}. {{vars.email_gist}} ${GMAIL_LINK}`
+              }
+            ]
+          },
+          {
+            id: "b_support",
+            label: "Support: alert only",
+            condition: { var: "email_kind", equals: "support" },
+            steps: [
+              {
+                id: "s_notify_support",
+                type: "notify_owner",
+                cooldown: THREAD_COOLDOWN,
+                message: `Support email from {{trigger.from}} {{vars.email_sender}}. Subject: {{trigger.subject}}. {{vars.email_gist}} ${GMAIL_LINK}`
+              }
+            ]
+          },
+          {
+            id: "b_billing",
+            label: "Billing: alert only",
+            condition: { var: "email_kind", equals: "billing" },
+            steps: [
+              {
+                id: "s_notify_billing",
+                type: "notify_owner",
+                cooldown: THREAD_COOLDOWN,
+                message: `Billing email from {{trigger.from}} {{vars.email_sender}}. Subject: {{trigger.subject}}. {{vars.email_gist}} ${GMAIL_LINK}`
+              }
+            ]
+          }
+        ],
+        // automated_notice and the reserved "unclear" land here: filed by the
+        // organize steps below, and silent.
+        else: []
       },
       {
         id: "s_org_sales",

@@ -427,6 +427,9 @@ export type RecordInboundTriggerEmailInput = {
   threadId?: string;
   /** RFC Message-Id header, what In-Reply-To/References carry on a reply. */
   messageRef?: string;
+  /** Raw To / Cc headers, so a reply can reach everyone who was on it. */
+  toRecipients?: string;
+  ccRecipients?: string;
 };
 
 /**
@@ -441,7 +444,8 @@ export async function recordInboundTriggerEmail(
   const { error } = await db.from("email_log").insert({
     business_id: input.businessId,
     direction: "inbound",
-    to_email: null,
+    to_email: input.toRecipients?.trim() || null,
+    cc_email: input.ccRecipients?.trim() || null,
     from_email: input.fromEmail,
     subject: input.subject,
     body_preview: input.bodyText.slice(0, 500),
@@ -719,11 +723,17 @@ export async function getEmailLogThreadIdentity(
   threadId: string;
   inReplyToMessageRef?: string;
   providerMessageId?: string;
+  /**
+   * Everyone else who was on the original, so a reply reaches them too. An
+   * introduction names the PROSPECT here while the introducer sits in From,
+   * and answering only From reaches the person doing the favor.
+   */
+  replyAllRecipients: string[];
 } | null> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("email_log")
-    .select("id, thread_id, message_ref, provider_message_id")
+    .select("id, thread_id, message_ref, provider_message_id, to_email, cc_email")
     .eq("business_id", businessId)
     .eq("id", emailLogId)
     .maybeSingle();
@@ -735,14 +745,26 @@ export async function getEmailLogThreadIdentity(
     thread_id?: string | null;
     message_ref?: string | null;
     provider_message_id?: string | null;
+    to_email?: string | null;
+    cc_email?: string | null;
   } | null;
   const threadId = row?.thread_id?.trim();
   if (!threadId) return null;
   const messageRef = row?.message_ref?.trim();
   const providerMessageId = row?.provider_message_id?.trim();
+  // Split the raw headers into addresses. Display names are dropped: the
+  // send path wants bare addresses, and "Name <a@b.c>" would fail its
+  // validation.
+  const replyAllRecipients = [...(row?.to_email ?? "").split(","), ...(row?.cc_email ?? "").split(",")]
+    .map((raw) => {
+      const m = /<([^<>]+)>/.exec(raw);
+      return (m ? m[1] : raw).trim().toLowerCase();
+    })
+    .filter((a) => a.includes("@"));
   return {
     threadId,
     ...(messageRef ? { inReplyToMessageRef: messageRef } : {}),
-    ...(providerMessageId ? { providerMessageId } : {})
+    ...(providerMessageId ? { providerMessageId } : {}),
+    replyAllRecipients: [...new Set(replyAllRecipients)]
   };
 }

@@ -1091,6 +1091,57 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       // must be read against what the owner was actually offered, not against
       // whatever today's code would build.
       const gateStep = flat[index]?.step;
+      // Parking this gate texts the owner, so it honors the same per-key
+      // cooldown a notify_owner step does, through the same claim RPC. A gate
+      // that is cooling down skips silently: the run continues past it
+      // WITHOUT sending, which for a draft-and-approve flow means the second
+      // message on a thread the owner is already deciding about does not text
+      // them again.
+      if (gateStep?.type === "approval_gate" && gateStep.cooldown) {
+        const key = renderTemplate(gateStep.cooldown.key, scope, { collapseEmpty: true }).trim();
+        if (key) {
+          const { data: claimed, error: claimErr } = await supabase.rpc(
+            "ai_flow_claim_notify_cooldown",
+            {
+              p_business_id: run.business_id,
+              p_flow_id: run.flow_id,
+              p_step_id: gateStep.id,
+              p_cooldown_key: key,
+              p_minutes: gateStep.cooldown.minutes
+            }
+          );
+          if (claimErr) {
+            console.warn("approval_gate: cooldown claim failed, parking anyway", claimErr.message);
+          } else if (claimed === false) {
+            await telemetryRecord(supabase, "ai_flow_approval_cooldown_skip", {
+              run_id: run.id,
+              business_id: run.business_id,
+              step_id: gateStep.id
+            });
+            // A cooling gate must ALSO skip the step it guards. Merely
+            // advancing past the gate would let the very next step send an
+            // UNAPPROVED draft, which is the one thing this gate exists to
+            // prevent: nothing reaches a stranger from the owner's address
+            // without a human saying so. "Not asking again" has to mean "and
+            // not sending either", which is exactly the gate's own `skip`
+            // decision, so it takes that path rather than a new one. The
+            // steps after the guarded one still run, so the mail is still
+            // filed.
+            await recordStep(supabase, run, index, gateStep, "skipped", {
+              skipped: "approval_cooldown"
+            });
+            index += 1;
+            if (index < flat.length) {
+              await recordStep(supabase, run, index, flat[index].step, "skipped", {
+                skipped: "approval_cooldown_gated_step"
+              });
+              index += 1;
+            }
+            stampResumeMarker(index);
+            continue;
+          }
+        }
+      }
       const redraftId =
         gateStep?.type === "approval_gate" ? gateStep.allowModify?.redraftStepId : undefined;
       const redraftIndex = redraftId ? flat.findIndex((e) => e.step.id === redraftId) : -1;

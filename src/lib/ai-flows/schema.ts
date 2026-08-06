@@ -1067,6 +1067,19 @@ const nonBranchStepMembers = [
      * the rewind would park the run forever.
      */
     allowModify: z.object({ redraftStepId: stepId }).optional(),
+    /**
+     * Same per-key suppression `notify_owner` has, because parking this gate
+     * TEXTS the owner and is therefore a page like any other. Without it, a
+     * flow that moved its alerting from notify_owner to a gate silently loses
+     * the one-ping-per-thread guarantee: a second message on a conversation
+     * the owner is already deciding about would text them again.
+     */
+    cooldown: z
+      .object({
+        key: z.string().min(1).max(200),
+        minutes: z.number().int().min(1).max(10080)
+      })
+      .optional(),
     when: whenSchema.optional()
   }),
   z.object({
@@ -1918,10 +1931,10 @@ function templateStringsForStep(step: FlowStep): string[] {
       return [step.to, (step.messageTemplate ?? "").replace(SHARE_URL_TOKEN_RE, "")];
     case "notify_owner":
       return [step.message, step.cooldown?.key ?? ""];
+    case "approval_gate":
+      return [step.prompt, step.cooldown?.key ?? ""];
     case "notify_lead_owner":
       return [step.message];
-    case "approval_gate":
-      return [step.prompt];
     case "http_call":
       return [step.path ?? "", step.bodyTemplate ?? ""];
     case "route_to_team":

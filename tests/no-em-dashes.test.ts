@@ -61,6 +61,7 @@ function guardedFiles(): string[] {
     // how the rule got broken in production copy without anyone noticing.
     // The definition module holds the SMS bodies and the model prompts; the
     // applier beside it is guarded too so its prose cannot drift back.
+    "scripts/oneshot/hq-inbox-reply-drafter.ts",
     "scripts/oneshot/hq-inbox-triage-definition.ts",
     "scripts/oneshot/setup-hq-inbox-triage-flow.ts",
     ...readdirSync(emailTemplatesDir)
