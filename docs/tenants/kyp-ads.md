@@ -110,8 +110,8 @@ owner approval**. Do not "fix" them by enabling them.
   contain CA (bare +1 maps to US), so all SMS to Canadian numbers failed
   with Telnyx 40309 from Aug 5 ~15:00 UTC until the profiles were
   re-patched Aug 6 ~20:30 UTC. Only KYP was hit: 22 errors, all Aug 6
-  15:03 to 19:51 UTC, being notify_owner alerts to James (+1514) and the
-  lead follow-up to H Eve (+14168489229), which never sent. The widen
+  15:03 to 19:51 UTC, being notify_owner alerts to James's forwarding
+  number and the lead follow-up to lead H Eve, which never sent. The widen
   script now unions instead of replacing and refuses a list without
   US/CA/MX (`scripts/oneshot/widen-telnyx-allowlist.ts`). If a Canadian
   send fails with "Invalid destination region 'CA'" again, check the
