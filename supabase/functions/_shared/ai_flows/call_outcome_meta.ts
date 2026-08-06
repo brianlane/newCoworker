@@ -92,6 +92,13 @@ export function callOutcomeLabel(
       return "spoke with them";
     case "no_answer":
       return "no answer yet";
+    // wait_for_call's own timeout outcome. It shares the awaiting_call park
+    // status and the timeout sweep with place_ai_call, so its outcome reaches
+    // this map even though that step waits for a call rather than placing one.
+    // Phrased from the waiter's side: nothing was dialed, so "no answer" would
+    // describe a call that never happened.
+    case "no_call":
+      return "no call came in";
     case "not_placed":
       return "could not place the call";
     case "failed":

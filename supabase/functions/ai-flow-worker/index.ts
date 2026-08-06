@@ -6934,6 +6934,17 @@ async function waitForCallStep(
       filled.push(to);
     }
     scope.vars[action.saveAs] = outcome;
+    // Keep the outcome's companion vars in step with it. This step does not
+    // DECLARE them (only place_ai_call does), but it shares both the
+    // awaiting_call park status and the timeout sweep with that step, and the
+    // sweep writes companions for every run it resumes. Left alone, a
+    // wait_for_call that timed out would carry the outbound phrase "no answer
+    // yet" beside its own "no_call" outcome. The two also default to the same
+    // `call_outcome` var name, so a flow using both steps would otherwise
+    // strand the earlier call's label next to this step's outcome.
+    const [waitReasonVar, waitLabelVar] = callOutcomeCompanionVars(action.saveAs);
+    scope.vars[waitReasonVar] = "";
+    scope.vars[waitLabelVar] = callOutcomeLabel(outcome);
     scope.vars[action.marker] = "1";
     // The standard fields are always published (as "none"), so count only the
     // ones the AI genuinely came away with.

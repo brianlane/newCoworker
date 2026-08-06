@@ -63,6 +63,9 @@ describe("callOutcomeLabel", () => {
     ["transferred", "connected you live"],
     ["answered", "spoke with them"],
     ["no_answer", "no answer yet"],
+    // wait_for_call shares the park status and timeout sweep with
+    // place_ai_call, so its outcome reaches this map too.
+    ["no_call", "no call came in"],
     ["not_placed", "could not place the call"],
     ["failed", "the call failed"]
   ])("falls back to the outcome phrase for %s", (outcome, expected) => {
