@@ -123,6 +123,10 @@ Onboarding: `provision-kyp-ads-retry.ts`, `assign-kyp-ads-did-438.ts`,
 `apply-kyp-intake.ts` (the white-glove intake applied to the tenant),
 `send-kyp-live-sms.ts`.
 
+Recovery: `requeue-failed-flow-run.ts` (generic; applied here Aug 6 2026 to
+re-run the lead flow for H Eve after the Canada-whitelist outage killed run
+4e9fdf3c at its first customer text).
+
 Flow definitions: `kyp-lead-flow-definition.ts` (previously named
 kyp-offer-definition.ts), `kyp-noshow-definition.ts`,
 `kyp-reminder-flow-definition.ts`.
