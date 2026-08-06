@@ -444,6 +444,43 @@ describe("telnyx call-control", () => {
     }
   });
 
+  it("telnyxDialCall omits answering_machine_detection unless asked", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({ data: {} }) });
+    await telnyxDialCall(
+      "key",
+      { connectionId: "conn-1", to: "+15551234567", from: "+16025550100" },
+      fetchMock as typeof fetch
+    );
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    // AMD is billed per call, so it must never ride along by default.
+    expect(body).not.toHaveProperty("answering_machine_detection");
+  });
+
+  it("telnyxDialCall sends the AMD mode it is given", async () => {
+    const fetchMock = vi
+      .fn()
+      .mockResolvedValue({ ok: true, status: 200, json: () => Promise.resolve({ data: {} }) });
+    await telnyxDialCall(
+      "key",
+      {
+        connectionId: "conn-1",
+        to: "+15551234567",
+        from: "+16025550100",
+        answeringMachineDetection: "premium"
+      },
+      fetchMock as typeof fetch
+    );
+    const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
+    // "premium" specifically: it is the only mode that also reports when the
+    // outgoing greeting has finished, which a voicemail message depends on.
+    expect(body.answering_machine_detection).toBe("premium");
+    // It goes on the DIAL, not on a transfer: the two functions share a
+    // timeout_secs block and the option was once added to the wrong one.
+    expect(fetchMock.mock.calls[0][0]).toBe("https://api.telnyx.com/v2/calls");
+  });
+
   it("telnyxDialCall posts /v2/calls with connection_id/to/from", async () => {
     const fetchMock = vi
       .fn()

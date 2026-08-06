@@ -307,6 +307,21 @@ export type TelnyxDialOptions = {
    */
   timeoutSecs?: number;
   /**
+   * Answering-machine detection mode. Omit to leave it off, which is the
+   * historical behavior for every caller that does not ask.
+   *
+   * Why it matters: without AMD a voicemail PICKING UP looks identical to a
+   * person picking up. Telnyx answers the leg either way, so the outcome we
+   * derive from `answer_issued_at` reads "answered", and a follow-up ladder
+   * written to retry until someone is reached stops on a lead who never heard
+   * a word.
+   *
+   * "premium" is the mode that also reports when the outgoing greeting has
+   * finished, which is the only safe moment to start speaking into a
+   * voicemail. "detect" answers human-or-machine and nothing more.
+   */
+  answeringMachineDetection?: "detect" | "detect_beep" | "detect_words" | "greeting_end" | "premium";
+  /**
    * Opaque state echoed back on THIS call's webhooks (call.answered / hangup).
    * The origination flow packs the outbound session id here so the webhook can
    * correlate the answered leg back to its reserved budget + plan. base64 per
@@ -341,6 +356,9 @@ export async function telnyxDialCall(
   };
   if (typeof opts.timeoutSecs === "number" && opts.timeoutSecs > 0) {
     body.timeout_secs = Math.floor(opts.timeoutSecs);
+  }
+  if (opts.answeringMachineDetection) {
+    body.answering_machine_detection = opts.answeringMachineDetection;
   }
   if (opts.clientState) {
     body.client_state = encodeClientState(opts.clientState);
