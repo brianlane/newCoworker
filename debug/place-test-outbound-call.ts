@@ -39,10 +39,19 @@
  *
  * What to check afterwards, in order of what is most likely to be wrong:
  *   1. the phone actually rang, and the AI spoke first;
- *   2. `voice_outbound_dial_log` gained exactly ONE row for this call;
- *   3. the session's outcome matches what really happened (in particular, a
- *      call you sent to voicemail must NOT come back "answered");
- *   4. voice minutes were reserved and settled rather than leaked.
+ *   2. the session's recorded outcome matches what really happened (in
+ *      particular, a call you sent to voicemail must NOT come back
+ *      "answered");
+ *   3. voice minutes were reserved and settled rather than leaked.
+ *
+ * SCOPE. This calls originate DIRECTLY, so it does not exercise the worker
+ * step that wraps it. In particular the exactly-once dial ledger
+ * (`voice_outbound_dial_log`) is written by the worker's place_ai_call step,
+ * NOT by originate, so no ledger row appears here and this script cannot tell
+ * you whether that guard works. Covering it needs a call driven by a real flow
+ * run. Likewise the answering-machine `--voicemail` check only means anything
+ * once AMD is both shipped and enabled as premium on the Call Control
+ * Application; before that it reads false for every call.
  */
 import { loadEnv } from "./_shared.ts";
 
@@ -139,11 +148,6 @@ if (!apply) {
   process.exit(0);
 }
 
-const before = await db
-  .from("voice_outbound_dial_log")
-  .select("id", { count: "exact", head: true })
-  .eq("business_id", businessId);
-
 console.log("\nDialing through telnyx-voice-originate ...");
 const res = await fetch(`${supabaseUrl}/functions/v1/telnyx-voice-originate`, {
   method: "POST",
@@ -163,11 +167,31 @@ try {
   // Non-JSON body already printed above.
 }
 if (!callControlId) {
-  console.error(
-    "\nNo call_control_id came back, so nothing was dialed. The response above " +
-      "carries the reason; `dialed:false` means the callee was never rung and " +
-      "the attempt is safe to retry."
-  );
+  // A missing id does NOT prove the phone stayed silent. Originate refuses in
+  // two very different places: BEFORE the dial (auth, config, pre-dial budget),
+  // which it marks `dialed:false`, and AFTER it (post-dial budget refusal,
+  // session_persist_failed), where Telnyx already created a leg and the callee
+  // may well have rung. Only the explicit flag can tell them apart.
+  let neverDialed = false;
+  try {
+    neverDialed = (JSON.parse(bodyText) as { dialed?: unknown }).dialed === false;
+  } catch {
+    // Non-JSON body; stay in the cautious branch below.
+  }
+  if (neverDialed) {
+    console.error(
+      "\nRefused BEFORE dialing (dialed:false). The callee was never rung and " +
+        "this attempt is safe to retry once the reason above is fixed."
+    );
+  } else {
+    console.error(
+      "\nNo call_control_id came back, and the response does NOT say " +
+        "dialed:false. Originate can fail AFTER Telnyx created the leg " +
+        "(post-dial budget refusal, session_persist_failed), so the callee may " +
+        "have rung. Check the phone before retrying, and do not assume this " +
+        "was a no-op."
+    );
+  }
   process.exit(1);
 }
 
@@ -197,28 +221,23 @@ while (Date.now() < deadline) {
   await new Promise((r) => setTimeout(r, 3000));
 }
 
-const after = await db
-  .from("voice_outbound_dial_log")
-  .select("id,status,reason,to_e164,created_at", { count: "exact" })
-  .eq("business_id", businessId)
-  .order("created_at", { ascending: false })
-  .limit(3);
-
-console.log("\n=== dial ledger (newest 3 for this business) ===");
-for (const r of (after.data ?? []) as Array<Record<string, unknown>>) {
-  console.log(`  ${String(r.created_at).slice(0, 19)}  ${r.status}  to=${r.to_e164 ?? "-"}  ${r.reason ?? ""}`);
-}
+console.log("\n=== what this run did and did NOT prove ===");
 console.log(
-  `\nLedger rows for this business: ${before.count ?? 0} before -> ${after.count ?? 0} after.`
+  "PROVED: origination, caller-id selection, budget reserve, the session row, " +
+    "and whatever the AI did once the callee answered."
 );
 console.log(
-  "Exactly one new row is correct. Two would mean the exactly-once dial guard " +
-    "failed, which is the failure that rings a lead twice."
+  "NOT proved: the exactly-once dial guard. voice_outbound_dial_log is written " +
+    "by the WORKER's place_ai_call step, not by originate, so calling originate " +
+    "directly writes no ledger row at all. Covering that guard needs a call " +
+    "driven by a real flow run, not this script."
 );
 if (voicemailMode) {
   console.log(
-    "\nVoicemail check: if you sent this to voicemail, machine_detected above " +
-      "must be true. False means answering-machine detection is not actually on " +
-      "for this connection, and a voicemail will be reported as an answered call."
+    "\nVoicemail check: machine_detected above is only ever true once " +
+      "answering-machine detection is BOTH shipped (the AMD handler that writes " +
+      "that key) and enabled as premium on the Telnyx Call Control Application. " +
+      "Until then it reads false for every call, including real voicemails, and " +
+      "says nothing either way."
   );
 }
