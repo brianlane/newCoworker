@@ -1,6 +1,14 @@
 import { describe, it, expect } from "vitest";
-// @ts-expect-error plain .mjs sidecar module, no type declarations
-import { runAction, condenseError, parseActions } from "../vps/aiflow-render/actions.mjs";
+import {
+  runAction,
+  condenseError,
+  parseActions,
+  dismissBlockingOverlays,
+  CLOSE_NAME_RE,
+  AGREE_NAME_RE,
+  CLOSE_ATTR_RE,
+  CLOSE_ICON_RE
+} from "../vps/aiflow-render/actions.mjs";
 
 /**
  * ACTION-mode engine tests for the per-tenant render sidecar.
@@ -222,5 +230,130 @@ describe("parseActions", () => {
       { kind: "click_text", target: "Accept", value: "" },
       { kind: "click_text_while_present", target: "Next", value: "" }
     ]);
+  });
+});
+
+/**
+ * Overlay dismissal safelists.
+ *
+ * These are the whole security surface of `dismissBlockingOverlays`: they decide
+ * which control inside a full-viewport modal the render service is allowed to
+ * click on a live tenant portal. The strings below are taken verbatim from the
+ * page HomeLight served on 2026-08-05, captured by the failed run and stored in
+ * the aiflow-screenshots bucket.
+ *
+ * The bug they pin: HomeLight's "This client prefers texting" modal closes via
+ *   <div role="button" data-test="modal__close-button">
+ *     <svg aria-hidden="true" data-icon="times">
+ * whose accessible name (`aria-label || textContent`) is the EMPTY STRING. The
+ * name-based list never matched, nothing was picked, and the dismisser reported
+ * "no blocking modal" while a full-screen modal covered the claim button.
+ */
+describe("overlay dismissal safelists", () => {
+  it("does not match an empty accessible name by name alone", () => {
+    // The heart of the failure: an unnamed control is invisible to these.
+    expect(CLOSE_NAME_RE.test("")).toBe(false);
+    expect(AGREE_NAME_RE.test("")).toBe(false);
+  });
+
+  it("still matches the named close controls it always did", () => {
+    for (const n of ["Close", "close", "Dismiss", "Got it", "Not now", "Skip", "x", "×"]) {
+      expect(CLOSE_NAME_RE.test(n)).toBe(true);
+    }
+  });
+
+  it("still matches the agreement controls", () => {
+    for (const n of ["Agree and close", "Agree & continue", "I understand", "Scroll to continue"]) {
+      expect(AGREE_NAME_RE.test(n)).toBe(true);
+    }
+  });
+
+  it("recognises HomeLight's close control by its data-test token", () => {
+    expect(CLOSE_ATTR_RE.test("modal__close-button")).toBe(true);
+  });
+
+  it("recognises an X glyph by its data-icon", () => {
+    // HomeLight's svg carries data-icon="times".
+    for (const i of ["times", "xmark", "close", "x", "times-circle"]) {
+      expect(CLOSE_ICON_RE.test(i)).toBe(true);
+    }
+  });
+
+  it("does not fire on HomeLight's hashed styled-components classes", () => {
+    // The same element's class attribute, verbatim. Nothing close-like in it,
+    // so the data-test token is what has to carry the match.
+    expect(CLOSE_ATTR_RE.test("sc-76434326-0 lnNLtN")).toBe(false);
+  });
+
+  it("does not treat words that merely CONTAIN close as a close button", () => {
+    // "closest" and "disclosure" would make the dismisser click arbitrary
+    // controls inside a modal, which is exactly what the safelist exists to
+    // prevent.
+    expect(CLOSE_ATTR_RE.test("closest-match")).toBe(false);
+    expect(CLOSE_ATTR_RE.test("disclosure-panel")).toBe(false);
+    expect(CLOSE_ATTR_RE.test("enclosure")).toBe(false);
+  });
+
+  it("does not treat a consequential icon as a close icon", () => {
+    for (const i of ["check", "arrow-right", "paper-plane", "trash"]) {
+      expect(CLOSE_ICON_RE.test(i)).toBe(false);
+    }
+  });
+
+  it("leaves Continue OFF the safelists", () => {
+    // Deliberate: HomeLight's modal also has a "Continue" button, but a bare
+    // Continue elsewhere can advance a consequential wizard rather than dismiss
+    // a layer. The X is the safe affordance.
+    expect(CLOSE_NAME_RE.test("Continue")).toBe(false);
+    expect(AGREE_NAME_RE.test("Continue")).toBe(false);
+  });
+});
+
+describe("dismissBlockingOverlays", () => {
+  it("hands the page the SAME patterns this file asserts on", async () => {
+    // page.evaluate cannot call an outer function, so the browser gets the
+    // pattern sources. If someone edits the in-page copy instead of the module
+    // constants, this goes red rather than the two silently diverging.
+    let received: { protect: string; cfg: Record<string, string> } | null = null;
+    const page = {
+      evaluate: async (_fn: unknown, arg: { protect: string; cfg: Record<string, string> }) => {
+        received = arg;
+        return "";
+      },
+      waitForTimeout: async () => {},
+      waitForLoadState: async () => {}
+    };
+
+    await dismissBlockingOverlays(page, "Send message");
+
+    expect(received).not.toBeNull();
+    expect(received!.protect).toBe("Send message");
+    expect(received!.cfg.closeName).toBe(CLOSE_NAME_RE.source);
+    expect(received!.cfg.agreeName).toBe(AGREE_NAME_RE.source);
+    expect(received!.cfg.closeAttr).toBe(CLOSE_ATTR_RE.source);
+    expect(received!.cfg.closeIcon).toBe(CLOSE_ICON_RE.source);
+  });
+
+  it("reports nothing dismissed when the page finds no safelisted control", async () => {
+    const page = {
+      evaluate: async () => "",
+      waitForTimeout: async () => {},
+      waitForLoadState: async () => {}
+    };
+    expect(await dismissBlockingOverlays(page, "x")).toBe(0);
+  });
+
+  it("stops immediately when the overlay hosts the control we are after", async () => {
+    let calls = 0;
+    const page = {
+      evaluate: async () => {
+        calls++;
+        return "__protected__";
+      },
+      waitForTimeout: async () => {},
+      waitForLoadState: async () => {}
+    };
+    expect(await dismissBlockingOverlays(page, "Submit Update")).toBe(0);
+    expect(calls).toBe(1);
   });
 });
