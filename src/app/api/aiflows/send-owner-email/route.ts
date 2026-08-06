@@ -102,12 +102,18 @@ export async function POST(request: Request) {
     // back to paging a human. Best-effort, exactly like the other three
     // callers of rememberSentThread: a failed claim costs autonomy on later
     // messages, never the send that already succeeded.
-    if (result.threadId) {
+    // Graph's /reply returns no ids at all (owner-mailbox.ts), so a Microsoft
+    // reply would register no ownership and its follow-ups would go back to
+    // paging a human. But when we THREADED the send we already know the
+    // conversation, because we just read it off the email_log row: prefer the
+    // provider's echo, fall back to the id we replied into.
+    const ownedThreadId = result.threadId ?? thread?.threadId ?? null;
+    if (ownedThreadId) {
       try {
         await rememberSentThread({
           businessId: body.businessId,
           provider: providerFromKey(row.provider_config_key) === "microsoft" ? "microsoft" : "google",
-          threadId: result.threadId,
+          threadId: ownedThreadId,
           subject: body.subject,
           correspondentEmail: body.toEmail,
           sentMessageRef: result.messageId ?? null
