@@ -100,6 +100,10 @@ import {
 } from "../_shared/sms_operational_meter.ts";
 import { smsTextUnits } from "../_shared/sms_text_units.ts";
 import {
+  resolveInternationalFrom,
+  isInternationalSmsDestination
+} from "../_shared/sms_international_gateway.ts";
+import {
   smsDestinationCountry,
   smsDestinationMultiplier
 } from "../_shared/sms_destination_rates.ts";
@@ -857,7 +861,10 @@ serve(async (req: Request) => {
             text: forwardText.slice(0, 1600),
             messaging_profile_id: fwdProfile
           };
-          if (fwdFrom) fwdBody.from = fwdFrom;
+          // An international owner (Safe Mode forward target abroad) is only
+          // reachable via the P2P gateway.
+          const fwdFromResolved = resolveInternationalFrom(gate.forwardToE164, fwdFrom || null);
+          if (fwdFromResolved) fwdBody.from = fwdFromResolved;
           if (idem) fwdBody.tags = [`${NCW_IDEM_TAG_PREFIX}${idem}`];
 
           const fwdHeaders: Record<string, string> = {
@@ -2224,9 +2231,13 @@ serve(async (req: Request) => {
     // while the plain path slices to 1,600. Resolving the RCS agent here,
     // before the reserve, keeps the metered bound and the sent payload in
     // agreement; the resolution is read-only and fail-safe (null → plain).
-    const rcsAgentIdForUnits = platformFrom
-      ? await resolveRcsAgentId(supabase, job.business_id, businessTier)
-      : null;
+    // RCS never applies to an international customer: the agent identity
+    // and its SMS-fallback leg are domestic; international replies go plain
+    // SMS through the P2P gateway.
+    const rcsAgentIdForUnits =
+      platformFrom && !isInternationalSmsDestination(smsDestinationCountry(fromE164))
+        ? await resolveRcsAgentId(supabase, job.business_id, businessTier)
+        : null;
     const replyUnits =
       smsTextUnits(reply.slice(0, rcsAgentIdForUnits ? 3072 : 1600)) *
       smsDestinationMultiplier(smsDestinationCountry(fromE164));
@@ -2299,7 +2310,10 @@ serve(async (req: Request) => {
       text: reply.slice(0, 1600),
       messaging_profile_id: messagingProfileId
     };
-    if (platformFrom) msgBody.from = platformFrom;
+    // International customers get replies from the P2P gateway (their
+    // conversation lives there; A2P long codes cannot reach them).
+    const replyFrom = resolveInternationalFrom(fromE164, platformFrom || null);
+    if (replyFrom) msgBody.from = replyFrom;
     const idem = job.outbound_idempotency_key;
     if (idem) {
       msgBody.tags = [`${NCW_IDEM_TAG_PREFIX}${idem}`];

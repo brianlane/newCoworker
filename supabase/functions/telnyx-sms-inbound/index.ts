@@ -33,6 +33,10 @@ import {
 import { sendOperationalSms } from "../_shared/sms_operational_meter.ts";
 import { smsTextUnits } from "../_shared/sms_text_units.ts";
 import {
+  internationalGatewayFrom,
+  resolveGatewayInboundBusiness
+} from "../_shared/sms_international_gateway.ts";
+import {
   smsDestinationCountry,
   smsDestinationMultiplier
 } from "../_shared/sms_destination_rates.ts";
@@ -1667,6 +1671,47 @@ serve(async (req: Request) => {
         .eq("to_e164", toDid)
         .maybeSingle();
       businessId = (route?.business_id as string | undefined) ?? null;
+
+      // Shared international gateway: a reply from an international owner
+      // (or lead) arrives AT the gateway number, which has no per-tenant
+      // route row. Resolve the tenant from the SENDER instead: owner-phone
+      // columns first, then the most recent outbound conversation. An
+      // unmatched message is parked loudly (system log + telemetry), never
+      // guessed.
+      // Both sides normalized: toDid is already E.164-normalized upstream,
+      // and the env value may carry formatting (Bugbot High).
+      if (
+        !businessId &&
+        toDid &&
+        from &&
+        normalizeE164(internationalGatewayFrom() ?? "") === toDid
+      ) {
+        const match = await resolveGatewayInboundBusiness(supabase, from);
+        if (match) {
+          businessId = match.businessId;
+          await telemetryRecord(supabase, "sms_gateway_inbound_routed", {
+            event_id: eventId,
+            matched_by: match.matchedBy,
+            business_id: match.businessId
+          });
+        } else {
+          await supabase.from("system_logs").insert({
+            business_id: null,
+            source: "sms_gateway",
+            level: "warn",
+            event: "gateway_inbound_unrouted",
+            message: `Inbound at the international gateway from ${from} matched no tenant; parked`,
+            payload: { event_id: eventId, from }
+          });
+          await telemetryRecord(supabase, "sms_gateway_inbound_unrouted", {
+            event_id: eventId
+          });
+          return new Response(JSON.stringify({ ok: true, skip: "gateway_unrouted" }), {
+            status: 200,
+            headers: { "Content-Type": "application/json" }
+          });
+        }
+      }
     }
 
     const to = toDid ?? rcsTenantDid;
@@ -2611,9 +2656,11 @@ serve(async (req: Request) => {
       const reserve = reserveRaw as { ok?: boolean; source?: string } | null;
       if (reserveErr || !reserve?.ok) {
         // Over cap (or reserve error): never silently drop — tell the
-        // owner why nothing went out. The prompt stays pending. This
-        // ack is owner traffic (exempt from the customer SMS pool).
-        await telnyxSendSms({
+        // owner why nothing went out. The prompt stays pending. This ack
+        // is a REAL Telnyx send, so it is METERED like everything else
+        // (operational mode: counted as plan, bonus, or visible overage,
+        // but never refused; a failure notice must always deliver).
+        await sendOperationalSms(supabase, businessId, {
           apiKey: telnyxApiKey,
           messagingProfileId: relayProfile,
           fromE164: relayFrom,
