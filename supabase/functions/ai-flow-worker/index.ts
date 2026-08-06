@@ -86,6 +86,7 @@ import {
   MAX_WAIT_MINUTES,
   SHARE_URL_TOKEN,
   planStep,
+  stepOverridesFlowTimeWindow,
   type StepAction
 } from "../_shared/ai_flows/steps.ts";
 import {
@@ -1925,7 +1926,17 @@ async function runStep(
   // earliest_claim_at mechanics as send_sms quiet hours, which still apply on
   // top per step. Checked AFTER the `when` guard so a step that would skip
   // anyway never parks the run, and before recording "running".
-  if (scope.timeWindow && COMM_STEP_TYPES.has(step.type)) {
+  //
+  // A place_ai_call carrying its OWN callWindow is exempt (see
+  // stepOverridesFlowTimeWindow): letting the flow window run first would
+  // defer the whole run before the step's `outside: "skip"` could drop just
+  // the dial, which is the entire point of that setting. The step's own
+  // window is then enforced inside placeAiCallStep.
+  if (
+    scope.timeWindow &&
+    !stepOverridesFlowTimeWindow(step) &&
+    COMM_STEP_TYPES.has(step.type)
+  ) {
     const decision = timeWindowDecision(Date.now(), scope.timeWindow);
     if (!decision.allowed) {
       return { kind: "defer", resumeAtMs: decision.resumeAtMs, reason: "flow_time_window" };

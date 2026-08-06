@@ -8,7 +8,8 @@ import { varsProducedByStep } from "@/lib/ai-flows/tree";
 import type { FlowStep as UiFlowStep } from "@/lib/ai-flows/schema";
 import {
   CALL_NOT_PLACED_SENTINEL,
-  planStep
+  planStep,
+  stepOverridesFlowTimeWindow
 } from "../supabase/functions/_shared/ai_flows/steps";
 import { simulateTestAction } from "../supabase/functions/_shared/ai_flows/test_mode";
 import { resumeFlowRunWithCallOutcome } from "../supabase/functions/_shared/ai_flows/call_outcome";
@@ -442,6 +443,11 @@ describe("resumeFlowRunWithCallOutcome", () => {
     expect(ctx.vars.__called_c1).toBe("1");
     expect(ctx.vars.lead_phone).toBe("+17572390150");
     expect(ctx.waiting_call.result).toBe("transferred");
+    // A call that ends NORMALLY must set the same companion vars a refusal
+    // does, or a template reading the label renders empty on the happy path.
+    // Companions follow the step's own saveAs, not a fixed name.
+    expect(ctx.vars.attempt_1_label).toBe("connected you live");
+    expect(ctx.vars.attempt_1_reason).toBe("");
     // Revision + status guarded write (first writer wins).
     const eqs = calls.filter((c) => c.name === "eq").map((c) => c.args);
     expect(eqs).toContainEqual(["revision", 7]);
@@ -459,6 +465,39 @@ describe("resumeFlowRunWithCallOutcome", () => {
     const ctx = update.context as { vars: Record<string, unknown> };
     expect(ctx.vars.call_outcome).toBe("no_answer");
     expect(ctx.vars.__called_unknown).toBe("1");
+    expect(ctx.vars.call_outcome_label).toBe("no answer yet");
+  });
+
+  // A machine answering rides a no_answer outcome so ladders written before
+  // AMD keep retrying; the REASON is what tells the owner it was a voicemail.
+  it("sharpens the label from a reason when the caller supplies one", async () => {
+    const { db, calls } = makeDb([
+      { data: parkedRun(), error: null },
+      { data: [{ id: "run-1" }], error: null }
+    ]);
+    await resumeFlowRunWithCallOutcome(db, LINK, "no_answer", "voicemail_left");
+    const update = calls.find((c) => c.name === "update")!.args[0] as Record<string, unknown>;
+    const ctx = update.context as { vars: Record<string, unknown> };
+    expect(ctx.vars.attempt_1).toBe("no_answer");
+    expect(ctx.vars.attempt_1_reason).toBe("voicemail_left");
+    expect(ctx.vars.attempt_1_label).toBe("left them a voicemail");
+  });
+
+  // A retry ladder can reuse one outcome var across attempts, so a later
+  // attempt must never inherit the previous attempt's reason.
+  it("overwrites a previous attempt's reason rather than leaving it stale", async () => {
+    const stale = parkedRun();
+    (stale.context as { vars: Record<string, unknown> }).vars.attempt_1_reason =
+      "voicemail_left";
+    const { db, calls } = makeDb([
+      { data: stale, error: null },
+      { data: [{ id: "run-1" }], error: null }
+    ]);
+    await resumeFlowRunWithCallOutcome(db, LINK, "answered");
+    const update = calls.find((c) => c.name === "update")!.args[0] as Record<string, unknown>;
+    const ctx = update.context as { vars: Record<string, unknown> };
+    expect(ctx.vars.attempt_1_reason).toBe("");
+    expect(ctx.vars.attempt_1_label).toBe("spoke with them");
   });
 
   it("returns false without a run id", async () => {
@@ -640,5 +679,49 @@ describe("planStep: place_ai_call passes the window and wait through", () => {
     if (!plan.ok || plan.action.kind !== "place_ai_call") throw new Error("expected a call plan");
     expect(plan.action.callWindow).toBeUndefined();
     expect(plan.action.waitMinutes).toBeUndefined();
+  });
+});
+
+/**
+ * Precedence between the flow-level `timeWindow` and a step's own
+ * `callWindow`. Without this rule the per-step "skip" mode is dead code on any
+ * flow that also has business hours: the flow window defers the whole run
+ * first, and the step never gets to decide.
+ */
+describe("stepOverridesFlowTimeWindow", () => {
+  const call = (extra: Record<string, unknown> = {}): FlowStep =>
+    ({
+      id: "call1",
+      type: "place_ai_call",
+      toVar: "lead_phone",
+      personaTemplate: "Hi",
+      notifyE164: "+16025245719",
+      ...extra
+    }) as FlowStep;
+  const WINDOW = { timezone: "America/Phoenix", start: "08:30", end: "21:00" };
+
+  it("stands the flow window aside for a call that sets its own hours", () => {
+    expect(stepOverridesFlowTimeWindow(call({ callWindow: WINDOW }))).toBe(true);
+    expect(
+      stepOverridesFlowTimeWindow(call({ callWindow: { ...WINDOW, outside: "skip" } }))
+    ).toBe(true);
+    // "defer" is still an override: the STEP's hours are the ones that apply,
+    // even though the effect happens to match the flow window's behavior.
+    expect(
+      stepOverridesFlowTimeWindow(call({ callWindow: { ...WINDOW, outside: "defer" } }))
+    ).toBe(true);
+  });
+
+  it("leaves a call with no window of its own fully under the flow window", () => {
+    expect(stepOverridesFlowTimeWindow(call())).toBe(false);
+  });
+
+  // Narrow by design: no other step type gains an exemption from this.
+  it("never exempts another step type", () => {
+    for (const type of ["send_sms", "send_email", "notify_owner", "route_to_team"]) {
+      expect(
+        stepOverridesFlowTimeWindow({ id: "s", type, callWindow: WINDOW } as unknown as FlowStep)
+      ).toBe(false);
+    }
   });
 });

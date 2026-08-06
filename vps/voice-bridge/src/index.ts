@@ -838,6 +838,22 @@ async function stampTransferInitiated(
  * only the first writer lands; a miss is backstopped by call-end and the
  * timeout sweep. Never throws.
  */
+/**
+ * The human phrase for an outcome, mirroring callOutcomeLabel() in
+ * supabase/functions/_shared/ai_flows/call_outcome_meta.ts. Only the outcomes
+ * this bridge can deliver are covered: it never has a REASON to report (a
+ * machine verdict comes from the call-end webhook, not from here), so the
+ * reason-specific phrases stay in the Deno copy. Keep the shared phrases
+ * identical to that module.
+ */
+function callOutcomeLabelMirror(
+  outcome: "transferred" | "answered" | "no_answer"
+): string {
+  if (outcome === "transferred") return "connected you live";
+  if (outcome === "answered") return "spoke with them";
+  return "no answer yet";
+}
+
 async function resumeFlowRunWithCallOutcome(
   supabase: SupabaseClient,
   link: FlowRunLink,
@@ -880,7 +896,18 @@ async function resumeFlowRunWithCallOutcome(
         : {};
     const nextContext = {
       ...(run.context ?? {}),
-      vars: { ...prevVars, [saveAs]: outcome, [marker]: "1" },
+      vars: {
+        ...prevVars,
+        [saveAs]: outcome,
+        // The two companion vars every place_ai_call step declares. Written
+        // here too, or a template reading {{vars.<saveAs>_label}} after a call
+        // that ENDED NORMALLY would render empty while the same template after
+        // a refusal reads fine. Always overwritten, never merged: a retry
+        // ladder can reuse one outcome var across attempts.
+        [`${saveAs}_reason`]: "",
+        [`${saveAs}_label`]: callOutcomeLabelMirror(outcome),
+        [marker]: "1"
+      },
       waiting_call: {
         ...(run.context?.waiting_call as Record<string, unknown>),
         result: outcome
