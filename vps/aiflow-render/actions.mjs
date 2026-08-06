@@ -147,6 +147,43 @@ export const MAX_OVERLAY_DISMISS_ROUNDS = Number(
 );
 
 /**
+ * The safelists that decide which control inside a blocking overlay may be
+ * clicked. They live here, at module scope, for two reasons: they are the whole
+ * security surface of the dismisser, and `page.evaluate` cannot call an outer
+ * function, so passing their `source` into the page is what stops the browser
+ * copy from drifting away from the copy under test.
+ */
+/** Dismissal by accessible name / exact text. */
+export const CLOSE_NAME_RE = /^(close|dismiss|got it|no thanks|not now|maybe later|skip|x|×)$/i;
+/** Agreement-style, only tried after every close-style candidate fails. */
+export const AGREE_NAME_RE =
+  /^(agree (and|&) (close|continue)|i understand|acknowledge|scroll to continue)$/i;
+/**
+ * Icon-only close buttons, which carry NO accessible name at all.
+ *
+ * HomeLight's "This client prefers texting" modal (Aug 2026) is the case that
+ * forced this: its close control is
+ *   <div role="button" data-test="modal__close-button">
+ *     <svg aria-hidden="true" data-icon="times">
+ * so `aria-label || textContent` is the EMPTY STRING, CLOSE_NAME_RE never
+ * matched, `pick()` returned nothing, and the dismisser reported "no blocking
+ * modal" while a full-screen modal sat over the page. The referral's claim
+ * button was underneath it.
+ *
+ * Deliberately NOT solved by adding "continue" to the name list: that modal's
+ * other button says "Continue", and a bare "Continue" on some other portal can
+ * advance a consequential wizard rather than dismiss a layer. An X is an X.
+ *
+ * Both patterns are matched only when the control has NO accessible name, so a
+ * labelled button always goes through the name lists above and can never be
+ * caught by a stray class name.
+ */
+/** Attribute tokens that self-identify a close affordance (data-test, class, id, title). */
+export const CLOSE_ATTR_RE = /(^|[^a-z])(close|dismiss)([^a-z]|$)/i;
+/** `data-icon` values used for an X glyph (FontAwesome and friends). */
+export const CLOSE_ICON_RE = /^(times|xmark|close|x|times-circle|circle-xmark)$/i;
+
+/**
  * Interception recovery for ACTION mode: portals (e.g. Clever, July 2026) began
  * stacking full-viewport announcement / scroll-gated agreement modals over lead
  * pages, so every authored click times out — Playwright refuses to click an
@@ -156,14 +193,20 @@ export const MAX_OVERLAY_DISMISS_ROUNDS = Number(
  * Find the topmost fixed, full-viewport element currently covering the
  * viewport center (the layer intercepting our pointer events) and click ONE
  * dismissal control inside it, repeating for stacked modals up to
- * MAX_OVERLAY_DISMISS_ROUNDS. Only SAFELISTED controls are ever clicked:
- *   - close-style: "Close" / "Dismiss" / "Got it" / "Not now" / "Skip" / "×"
- *     (by accessible name or exact text), else
+ * MAX_OVERLAY_DISMISS_ROUNDS. Only SAFELISTED controls are ever clicked, in
+ * this order (see CLOSE_NAME_RE / CLOSE_ATTR_RE / AGREE_NAME_RE):
+ *   - close-style BY NAME: "Close" / "Dismiss" / "Got it" / "Not now" /
+ *     "Skip" / "×" (accessible name or exact text), else
+ *   - close-style BY ICON: a control with NO accessible name that carries an X
+ *     glyph or a close/dismiss token in its own attributes. HomeLight's modal
+ *     close is a div[role=button][data-test=modal__close-button] around an
+ *     aria-hidden svg, so it has no name and the list above skipped it, else
  *   - agreement-style: "Agree and close" / "I understand" / "Acknowledge" /
  *     "Scroll to continue". When it's disabled behind a scroll gate, the
  *     modal's inner scrollers are scrolled to the bottom first and the button
  *     re-picked (Clever's "Scroll to continue" re-renders into an enabled
  *     "Agree and close").
+ * Closing is tried before agreeing because closing commits to less.
  * Candidates must be <button>/[role="button"] INSIDE the overlay — never
  * anchors (navigation) and never consequential labels like "Accept"/"Submit"/
  * "OK" — so a wizard dialog the actions opened on purpose can never be
@@ -187,7 +230,7 @@ export async function dismissBlockingOverlays(page, protectTarget = "") {
   for (let round = 0; round < MAX_OVERLAY_DISMISS_ROUNDS; round++) {
     let clicked = "";
     try {
-      clicked = await page.evaluate(async (protect) => {
+      clicked = await page.evaluate(async ({ protect, cfg }) => {
         const isVisible = (el) => {
           const r = el.getBoundingClientRect();
           return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== "hidden";
@@ -233,11 +276,32 @@ export async function dismissBlockingOverlays(page, protectTarget = "") {
         const name = (el) => (el.getAttribute("aria-label") || el.textContent || "").trim();
         const buttons = () =>
           [...overlay.querySelectorAll('button, [role="button"]')].filter(isVisible);
-        const CLOSE_RE = /^(close|dismiss|got it|no thanks|not now|maybe later|skip|x|×)$/i;
-        const AGREE_RE =
-          /^(agree (and|&) (close|continue)|i understand|acknowledge|scroll to continue)$/i;
+        const CLOSE_RE = new RegExp(cfg.closeName, "i");
+        const AGREE_RE = new RegExp(cfg.agreeName, "i");
+        const CLOSE_ATTR = new RegExp(cfg.closeAttr, "i");
+        const CLOSE_ICON = new RegExp(cfg.closeIcon, "i");
+        // An icon-only close button (empty accessible name, X glyph or a
+        // close/dismiss token in its own attributes). Only ever consulted when
+        // the control has NO name, so a labelled button cannot be caught by a
+        // stray class.
+        const isIconClose = (el) => {
+          if (name(el)) return false;
+          const attrs = [
+            el.getAttribute("data-test"),
+            el.getAttribute("data-testid"),
+            el.getAttribute("title"),
+            el.getAttribute("class"),
+            el.id
+          ]
+            .filter(Boolean)
+            .join(" ");
+          if (CLOSE_ATTR.test(attrs)) return true;
+          const icon = el.querySelector("svg[data-icon]");
+          return CLOSE_ICON.test(icon?.getAttribute("data-icon") ?? "");
+        };
         const pick = () =>
           buttons().find((b) => CLOSE_RE.test(name(b))) ??
+          buttons().find((b) => isIconClose(b)) ??
           buttons().find((b) => AGREE_RE.test(name(b)));
         let btn = pick();
         if (!btn) return "";
@@ -256,7 +320,17 @@ export async function dismissBlockingOverlays(page, protectTarget = "") {
         const desc = name(btn) || "(unlabeled close)";
         btn.click();
         return desc;
-      }, protectTarget);
+      }, {
+        protect: protectTarget,
+        // Patterns crossed into the page as sources, so the browser copy is
+        // literally the module-level one the tests exercise.
+        cfg: {
+          closeName: CLOSE_NAME_RE.source,
+          agreeName: AGREE_NAME_RE.source,
+          closeAttr: CLOSE_ATTR_RE.source,
+          closeIcon: CLOSE_ICON_RE.source
+        }
+      });
     } catch {
       break; // page navigated/closed mid-probe — nothing left to dismiss
     }
