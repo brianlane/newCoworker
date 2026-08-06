@@ -248,10 +248,16 @@ describe("recordInboundTriggerEmail", () => {
     providerMessageId: "m1"
   };
 
-  it("inserts an inbound row with a capped body preview", async () => {
-    const insert = vi.fn().mockResolvedValue({ error: null });
+  /** insert().select().single() — the id is returned for the trigger scope. */
+  const insertReturning = (result: { data?: unknown; error?: { message: string } | null }) =>
+    vi.fn(() => ({ select: () => ({ single: () => Promise.resolve(result) }) }));
+
+  it("inserts an inbound row with a capped body preview, and answers its id", async () => {
+    const insert = insertReturning({ data: { id: "elog-9" }, error: null });
     const db = { from: vi.fn(() => ({ insert })) };
-    await recordInboundTriggerEmail(input, db as never);
+    // The id is the whole point: {{trigger.email_log_id}} is what a reply
+    // resolves its thread from, and returning void left it empty in the scope.
+    expect(await recordInboundTriggerEmail(input, db as never)).toBe("elog-9");
     expect(db.from).toHaveBeenCalledWith("email_log");
     expect(insert).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -270,15 +276,26 @@ describe("recordInboundTriggerEmail", () => {
 
   it("only logs on insert error (best-effort)", async () => {
     const errSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-    const insert = vi.fn().mockResolvedValue({ error: { message: "down" } });
+    const insert = insertReturning({ data: null, error: { message: "down" } });
     const db = { from: vi.fn(() => ({ insert })) };
-    await expect(recordInboundTriggerEmail(input, db as never)).resolves.toBeUndefined();
+    // Null, not a throw: a logging failure costs the reply its threading,
+    // never the run.
+    await expect(recordInboundTriggerEmail(input, db as never)).resolves.toBeNull();
     expect(errSpy).toHaveBeenCalledWith("recordInboundTriggerEmail", "down");
     errSpy.mockRestore();
   });
 
+  it("answers null when the insert reports success but returns no row", async () => {
+    // A driver that resolves { data: null, error: null } must not produce an
+    // undefined id, which would render as the string "undefined" in
+    // {{trigger.email_log_id}} and resolve to no thread at all.
+    const insert = insertReturning({ data: null, error: null });
+    const db = { from: vi.fn(() => ({ insert })) };
+    expect(await recordInboundTriggerEmail(input, db as never)).toBeNull();
+  });
+
   it("uses the default service client when none is injected", async () => {
-    const insert = vi.fn().mockResolvedValue({ error: null });
+    const insert = insertReturning({ data: { id: "elog-1" }, error: null });
     defaultClientSpy.mockResolvedValueOnce({ from: vi.fn(() => ({ insert })) });
     await recordInboundTriggerEmail(input);
     expect(insert).toHaveBeenCalled();

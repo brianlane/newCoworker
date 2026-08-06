@@ -56,6 +56,9 @@ type SeenTable = {
   /** email_coworker_seen rows: messages the email coworker has claimed. */
   coworkerRows?: Array<{ message_id: string }> | null;
   coworkerError?: { message: string };
+  /** email_log write failures (run-id link / dedupe cleanup). */
+  logUpdateError?: { message: string };
+  logDeleteError?: { message: string };
 };
 
 /**
@@ -97,13 +100,24 @@ function dbWithRange(range: ReturnType<typeof vi.fn>, seen: SeenTable = {}) {
   );
   const coworkerEq = vi.fn(() => ({ in: coworkerIn }));
   const coworkerSelect = vi.fn(() => ({ eq: coworkerEq }));
+  // email_log: the run_id link after a successful enqueue, and the cleanup
+  // delete when a dedupe collision means another tick logged its own row.
+  const logChain = (err: { message: string } | null) => {
+    const eq2 = vi.fn(() => Promise.resolve({ error: err }));
+    const eq1 = vi.fn(() => ({ eq: eq2 }));
+    return vi.fn(() => ({ eq: eq1 }));
+  };
+  const logUpdate = logChain(seen.logUpdateError ?? null);
+  const logDelete = logChain(seen.logDeleteError ?? null);
   return {
     from: vi.fn((table: string) =>
       table === "ai_flow_email_seen"
         ? { select: seenSelect, upsert: seenUpsert, delete: seenDelete }
         : table === "email_coworker_seen"
           ? { select: coworkerSelect }
-          : { select: flowsSelect }
+          : table === "email_log"
+            ? { update: logUpdate, delete: logDelete }
+            : { select: flowsSelect }
     )
   } as never;
 }
@@ -330,6 +344,64 @@ describe("pollEmailTriggers", () => {
     const trigger = vi.mocked(enqueueAiFlowRun).mock.calls[0][0].trigger;
     expect(trigger).not.toHaveProperty("message_ref");
     expect(trigger).toHaveProperty("thread_id", "199abc4d5e6f7890");
+  });
+
+  it("puts the email_log row id in the trigger scope, and links the run back", async () => {
+    /**
+     * The gap that shipped a broken reply. {{trigger.email_log_id}} is what a
+     * send_email step resolves its thread from, but the scope was built BEFORE
+     * the email_log row existed, so on the connected-mailbox channel it
+     * rendered empty: the reply went out as a new conversation with a "Re:"
+     * subject, un-cc'd and unclaimed, while looking right in the sent folder.
+     *
+     * Asserting the SCOPE, not a hand-fed fixture. The earlier plumbing test
+     * supplied email_log_id itself and passed while production had none.
+     */
+    vi.mocked(recordInboundTriggerEmail).mockResolvedValue("elog-1" as never);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
+      .mockResolvedValueOnce({
+        data: {
+          internalDate: "1760000000000",
+          threadId: "t-1",
+          payload: {
+            headers: [{ name: "From", value: "james@kypads.com" }],
+            mimeType: "text/plain",
+            body: { data: b64url("hello") }
+          }
+        }
+      } as never);
+    await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
+    expect(vi.mocked(enqueueAiFlowRun).mock.calls[0][0].trigger).toMatchObject({
+      email_log_id: "elog-1"
+    });
+    // Logged BEFORE the enqueue, or the id could not have been in the scope.
+    expect(vi.mocked(recordInboundTriggerEmail).mock.invocationCallOrder[0]).toBeLessThan(
+      vi.mocked(enqueueAiFlowRun).mock.invocationCallOrder[0]
+    );
+    // And the row still gets its run_id, so the Emails page links correctly.
+    expect(vi.mocked(recordInboundTriggerEmail).mock.calls[0][0]).toMatchObject({ runId: null });
+  });
+
+  it("still enqueues when the email could not be logged", async () => {
+    // Logging is best-effort: a failed insert must not cost the run. The
+    // reply then opens its own thread rather than failing the step.
+    vi.mocked(recordInboundTriggerEmail).mockResolvedValue(null as never);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
+      .mockResolvedValueOnce({
+        data: {
+          internalDate: "1760000000000",
+          payload: {
+            headers: [{ name: "From", value: "a@b.c" }],
+            mimeType: "text/plain",
+            body: { data: b64url("hello") }
+          }
+        }
+      } as never);
+    const res = await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
+    expect(res.enqueued).toBe(1);
+    expect(vi.mocked(enqueueAiFlowRun).mock.calls[0][0].trigger).not.toHaveProperty("email_log_id");
   });
 
   it("carries Gmail's threadId into the run trigger", async () => {
@@ -594,14 +666,24 @@ describe("pollEmailTriggers", () => {
     expect(modifyCalls).toHaveLength(0);
   });
 
-  it("counts a send_email step nested in a branch arm as reply-capable (marks read)", async () => {
+  it("does NOT mark read when the send sits behind a branch (it might never run)", async () => {
+    /**
+     * Inverted deliberately. This used to assert that a send_email ANYWHERE
+     * in the tree made the flow "reply-capable", and that is the bug Brian
+     * hit: the HQ inbox triage grew a reply arm for sales leads and started
+     * marking Zapier newsletters read on the way past, because a branch arm
+     * counted as "this flow answers email".
+     *
+     * A conditional send might never run, and the poll cannot know at enqueue
+     * time whether it will. Leaving mail unread that we answered is a shrug;
+     * hiding mail nobody looked at is the failure this module's header
+     * comment warns about.
+     */
     vi.mocked(nangoProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
-      } as never)
-      // users.messages.modify
-      .mockResolvedValueOnce({ data: {} } as never);
+      } as never);
     const res = await pollEmailTriggers(
       dbWith([
         flowRow("f-branch", emailTrigger(), undefined, [
@@ -622,40 +704,32 @@ describe("pollEmailTriggers", () => {
       ])
     );
     expect(res.enqueued).toBe(1);
-    expect(nangoProxyForBusiness).toHaveBeenCalledWith(
+    expect(nangoProxyForBusiness).not.toHaveBeenCalledWith(
       BIZ,
       expect.anything(),
-      expect.objectContaining({ endpoint: "/gmail/v1/users/me/messages/m1/modify" })
+      expect.objectContaining({ data: { removeLabelIds: ["UNREAD"] } })
     );
   });
 
-  it("counts a send_email step nested in a branch ELSE as reply-capable (marks read)", async () => {
+  it("does NOT mark read when the trunk send carries a when guard", async () => {
+    // Same reasoning one level down: a guarded trunk send is still a maybe.
     vi.mocked(nangoProxyForBusiness)
       .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
       .mockResolvedValueOnce({
         data: { payload: { mimeType: "text/plain", body: { data: b64url("hello") } } }
-      } as never)
-      // users.messages.modify
-      .mockResolvedValueOnce({ data: {} } as never);
+      } as never);
     const res = await pollEmailTriggers(
       dbWith([
-        flowRow("f-else", emailTrigger(), undefined, [
-          {
-            id: "b",
-            type: "branch",
-            branches: [
-              { id: "arm-quiet", label: "quiet", steps: [{ id: "s_n", type: "notify_owner" }] }
-            ],
-            else: [sendEmailStep]
-          }
+        flowRow("f-guarded", emailTrigger(), undefined, [
+          { ...sendEmailStep, when: { var: "kind", equals: "sales" } }
         ])
       ])
     );
     expect(res.enqueued).toBe(1);
-    expect(nangoProxyForBusiness).toHaveBeenCalledWith(
+    expect(nangoProxyForBusiness).not.toHaveBeenCalledWith(
       BIZ,
       expect.anything(),
-      expect.objectContaining({ endpoint: "/gmail/v1/users/me/messages/m1/modify" })
+      expect.objectContaining({ data: { removeLabelIds: ["UNREAD"] } })
     );
   });
 
@@ -772,7 +846,9 @@ describe("pollEmailTriggers", () => {
     const res = await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())], null, { rows: null }));
     expect(res.enqueued).toBe(0);
     expect(recordSystemLog).not.toHaveBeenCalled();
-    expect(recordInboundTriggerEmail).not.toHaveBeenCalled();
+    // Logging now happens BEFORE the enqueue (the scope needs the row id), so
+    // a lost race logs and then cleans up rather than never logging.
+    expect(recordInboundTriggerEmail).toHaveBeenCalledTimes(1);
   });
 
   it("throws into the per-mailbox error path when the Gmail link is dead", async () => {
@@ -1275,5 +1351,68 @@ describe("pollEmailTriggers", () => {
     vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({ data: {} } as never);
     const res = await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
     expect(res.messages).toBe(0);
+  });
+});
+
+describe("email_log bookkeeping around the enqueue", () => {
+  // Own setup: this block sits outside the suite that owns the shared
+  // beforeEach, so without it the poll bails before reaching the mailbox.
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(getWorkspaceOAuthConnection).mockResolvedValue(googleConn as never);
+    vi.mocked(enqueueAiFlowRun).mockResolvedValue({ id: "run-1" } as never);
+  });
+
+  it("deletes its own row when another tick won the dedupe race", async () => {
+    // Logging moved AHEAD of the enqueue so the row id can ride in the scope.
+    // The cost is that a lost race has already written a row, and leaving it
+    // would double-list the message on the Emails page.
+    vi.mocked(recordInboundTriggerEmail).mockResolvedValue("elog-dupe" as never);
+    vi.mocked(enqueueAiFlowRun).mockResolvedValue(null);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
+      .mockResolvedValueOnce({
+        data: { payload: { mimeType: "text/plain", body: { data: b64url("hi") } } }
+      } as never);
+    const db = dbWith([flowRow("f1", emailTrigger())]);
+    const res = await pollEmailTriggers(db);
+    expect(res.enqueued).toBe(0);
+    expect((db as unknown as { from: ReturnType<typeof vi.fn> }).from).toHaveBeenCalledWith(
+      "email_log"
+    );
+  });
+
+  it("logs, but does not fail the poll, when the bookkeeping writes error", async () => {
+    // Neither the run-id link nor the cleanup is worth losing a run over.
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(recordInboundTriggerEmail).mockResolvedValue("elog-1" as never);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
+      .mockResolvedValueOnce({
+        data: { payload: { mimeType: "text/plain", body: { data: b64url("hi") } } }
+      } as never);
+    const res = await pollEmailTriggers(
+      dbWith([flowRow("f1", emailTrigger())], null, { logUpdateError: { message: "boom" } })
+    );
+    expect(res.enqueued).toBe(1);
+    expect(err).toHaveBeenCalledWith("email_log run link", "boom");
+    err.mockRestore();
+  });
+
+  it("logs a failed dedupe cleanup without throwing", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+    vi.mocked(recordInboundTriggerEmail).mockResolvedValue("elog-2" as never);
+    vi.mocked(enqueueAiFlowRun).mockResolvedValue(null);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
+      .mockResolvedValueOnce({
+        data: { payload: { mimeType: "text/plain", body: { data: b64url("hi") } } }
+      } as never);
+    const res = await pollEmailTriggers(
+      dbWith([flowRow("f1", emailTrigger())], null, { logDeleteError: { message: "nope" } })
+    );
+    expect(res.enqueued).toBe(0);
+    expect(err).toHaveBeenCalledWith("email_log dedupe cleanup", "nope");
+    err.mockRestore();
   });
 });

@@ -30,15 +30,15 @@ describe("buildApprovalGateOptions", () => {
 describe("approvalSmsInstruction", () => {
   it("renders the 3-option legacy offer", () => {
     expect(approvalSmsInstruction(["approve", "skip", "cancel"])).toBe(
-      "Reply 1 to approve, 2 to skip this step, or 3 to cancel the workflow."
+      "Reply 1 to approve, 2 to skip just this step and let the rest of the workflow finish, or 3 to stop the whole workflow."
     );
   });
   it("renders the 4-option offer with cancel as the last digit", () => {
     expect(
       approvalSmsInstruction(["approve", "skip", "bypass_quiet_hours", "cancel"])
     ).toBe(
-      "Reply 1 to approve, 2 to skip this step, 3 to approve and skip quiet hours " +
-        "for the rest of this workflow, or 4 to cancel the workflow."
+      "Reply 1 to approve, 2 to skip just this step and let the rest of the workflow finish, 3 to approve and skip quiet hours " +
+        "for the rest of this workflow, or 4 to stop the whole workflow."
     );
   });
   it("renders a single option without a trailing 'or'", () => {

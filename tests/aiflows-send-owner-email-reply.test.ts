@@ -44,7 +44,11 @@ function fakeDb(captured: Captured, selectRow: Record<string, unknown> | null = 
   }
   builder.insert = vi.fn((row: Record<string, unknown>) => {
     captured.insert = row;
-    return Promise.resolve({ error: null });
+    // recordInboundTriggerEmail now returns the new row id, so the insert
+    // chain continues into .select().single().
+    return {
+      select: () => ({ single: () => Promise.resolve({ data: { id: "elog-1" }, error: null }) })
+    };
   });
   builder.maybeSingle = vi.fn(() => Promise.resolve({ data: selectRow, error: null }));
   return { from: vi.fn(() => builder) } as never;
