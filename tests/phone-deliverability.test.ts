@@ -1,71 +1,40 @@
 import { describe, expect, it } from "vitest";
 import { ownerPhoneDeliverabilityWarning } from "@/lib/phone/deliverability";
 
-const PLATFORM = { us: "prof-us", ca: "prof-ca", mx: "prof-mx" };
-
 describe("ownerPhoneDeliverabilityWarning", () => {
-  it("passes a US number on every profile", () => {
-    for (const profile of ["prof-us", "prof-ca", "prof-mx", "custom", null, ""]) {
-      expect(ownerPhoneDeliverabilityWarning("+16025550100", profile, PLATFORM)).toBeNull();
-    }
+  it("passes a US number", () => {
+    expect(ownerPhoneDeliverabilityWarning("+16025550100")).toBeNull();
   });
 
-  it("warns for a Canadian number on the US-only profile, passes on CA/MX", () => {
-    // 514 = Montreal; the US-only whitelist rejects it exactly like an
-    // international destination (Telnyx 40309).
-    expect(ownerPhoneDeliverabilityWarning("+15145188192", "prof-us", PLATFORM)).toMatch(
-      /Canadian number/
-    );
-    // Missing/blank tenant profile falls back to the default (US-only).
-    expect(ownerPhoneDeliverabilityWarning("+15145188192", null, PLATFORM)).toMatch(
-      /Canadian number/
-    );
-    expect(ownerPhoneDeliverabilityWarning("+15145188192", "prof-ca", PLATFORM)).toBeNull();
-    expect(ownerPhoneDeliverabilityWarning("+15145188192", "prof-mx", PLATFORM)).toBeNull();
+  it("passes a Canadian number (the old US-only-profile warning is gone)", () => {
+    // 514 = Montreal. Pre-Aug-2026 this warned on the default profile;
+    // since widen-telnyx-destinations.ts every profile whitelists CA, and
+    // the long codes originate NANP fine, so it must save silently.
+    expect(ownerPhoneDeliverabilityWarning("+15145188192")).toBeNull();
   });
 
-  it("gives an unknown/custom profile the benefit of the doubt for NANP", () => {
-    expect(ownerPhoneDeliverabilityWarning("+15145188192", "enterprise-custom", PLATFORM)).toBeNull();
+  it("passes a Caribbean NANP number (NANP is the boundary, not US/CA)", () => {
+    // +1876 = Jamaica: still a +1 long-code destination our numbers can
+    // originate to, so no warning.
+    expect(ownerPhoneDeliverabilityWarning("+18765550123")).toBeNull();
   });
 
-  it("passes a Mexican number only on the MX profile", () => {
-    expect(ownerPhoneDeliverabilityWarning("+525512345678", "prof-mx", PLATFORM)).toBeNull();
-    for (const profile of ["prof-us", "prof-ca", "custom", null]) {
-      expect(ownerPhoneDeliverabilityWarning("+525512345678", profile, PLATFORM)).toMatch(
-        /Mexican number/
-      );
-    }
+  it("passes a structurally odd +1 number (send-side coercion guards dialability)", () => {
+    expect(ownerPhoneDeliverabilityWarning("+1234")).toBeNull();
   });
 
-  it("warns for any other country code on every profile (none cover it today)", () => {
-    // Hong Kong: the request that started all of this.
-    for (const profile of ["prof-us", "prof-ca", "prof-mx", "custom", null]) {
-      expect(ownerPhoneDeliverabilityWarning("+85261234567", profile, PLATFORM)).toMatch(
-        /not covered/
-      );
-    }
+  it("warns for a Mexican number: the number-level block includes +52", () => {
+    // Zero +52 sends exist in the account MDRs; Mexico v1 priced this
+    // traffic but the long codes cannot originate it (Telnyx, Aug 6 2026).
+    expect(ownerPhoneDeliverabilityWarning("+525512345678")).toMatch(/Mexican number/);
   });
 
-  it("treats a structurally odd +1 number as US (no NPA extractable, no CA warn)", () => {
-    // 15 digits after +1 is not NANP; nanpNpaFromPhone returns null and the
-    // number passes as generic +1 (the send-side coercion guards dialability).
-    expect(ownerPhoneDeliverabilityWarning("+1234", "prof-us", PLATFORM)).toBeNull();
-  });
-
-  it("handles unset platform env ids without false matches", () => {
-    // With no MX env id configured, an empty tenant profile must not
-    // accidentally equal an empty platform id and read as MX coverage.
-    expect(
-      ownerPhoneDeliverabilityWarning("+525512345678", "", { us: undefined, ca: null, mx: "" })
-    ).toMatch(/Mexican number/);
-    // A concrete tenant profile against fully-unset platform ids: nothing
-    // matches, NANP gets the custom-profile benefit of the doubt.
-    expect(
-      ownerPhoneDeliverabilityWarning("+15145188192", "prof-x", {
-        us: undefined,
-        ca: undefined,
-        mx: undefined
-      })
-    ).toBeNull();
+  it("warns for any other non-NANP country", () => {
+    // Hong Kong: the request that started all of this (and +852 also
+    // requires a registered alpha sender, which is one-way only).
+    expect(ownerPhoneDeliverabilityWarning("+85261234567")).toMatch(/not reachable by SMS/);
+    // A floor-priced, fully-whitelisted country warns the same: the block
+    // is the number type, not the destination.
+    expect(ownerPhoneDeliverabilityWarning("+447700900123")).toMatch(/not reachable by SMS/);
   });
 });
