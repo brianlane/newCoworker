@@ -608,7 +608,12 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
               bodyText: msg.bodyText,
               flowId: flow.id,
               runId: run.id,
-              providerMessageId: msg.id
+              providerMessageId: msg.id,
+              // Kept so a later send_email step can answer INSIDE this
+              // conversation: {{trigger.email_log_id}} resolves to this row,
+              // and the send path reads these two off it.
+              ...(msg.threadId ? { threadId: msg.threadId } : {}),
+              ...(msg.messageRef ? { messageRef: msg.messageRef } : {})
             },
             db
           );

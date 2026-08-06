@@ -2386,11 +2386,16 @@ died in the owner's inbox. The email coworker is the conversational half,
 the email sibling of the owner-over-SMS operator turn: same inline engine
 (`runInlineChatTurn`), different audience.
 
-- **Safety model, the whole design**: it answers ONLY inside a thread the
-  assistant itself started. Ownership is recorded in `email_coworker_threads`
-  when an owner surface sends through the EMAIL_SEND protocol, so receipts,
-  newsletters, and the owner's real correspondence are never candidates and
-  there is no allowlist to curate. Deleting a row ends its involvement.
+- **Safety model, the whole design**: it answers ONLY inside a thread this
+  ledger owns, and ownership is never inferred. `email_coworker_threads` gets
+  a row only when the assistant itself put a message into the conversation:
+  an owner surface sending through the EMAIL_SEND protocol, a cold-outreach
+  pitch, or a flow's `send_email` reply that the owner APPROVED at an
+  approval gate. That last case is the only one where somebody else opened
+  the conversation, and it is still not a widening: a human read the draft
+  and said send. Receipts, newsletters, and the owner's real correspondence
+  are never candidates and there is no allowlist to curate. Deleting a row
+  ends its involvement.
 - **Narrow tools**: a new `email` surface in
   [the registry](src/lib/agent-tools/registry.ts) (its own Settings toggles)
   carrying calendar lifecycle plus knowledge lookup. `send_sms`,

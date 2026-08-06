@@ -21,11 +21,16 @@ vi.mock("@/lib/db/system-logs", () => ({
   recordSystemLog: vi.fn().mockResolvedValue(undefined)
 }));
 
+vi.mock("@/lib/db/email-log", () => ({ getEmailLogThreadIdentity: vi.fn() }));
+vi.mock("@/lib/email-coworker/threads", () => ({ rememberSentThread: vi.fn() }));
+
 import { POST } from "@/app/api/aiflows/send-owner-email/route";
 import { verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
 import { getWorkspaceOAuthConnection } from "@/lib/db/workspace-oauth-connections";
 import { sendFromMailboxConnection } from "@/lib/email/owner-mailbox";
 import { recordSystemLog } from "@/lib/db/system-logs";
+import { getEmailLogThreadIdentity } from "@/lib/db/email-log";
+import { rememberSentThread } from "@/lib/email-coworker/threads";
 
 const businessId = "11111111-1111-4111-8111-111111111111";
 const connectionId = "22222222-2222-4222-8222-222222222222";
@@ -149,5 +154,106 @@ describe("POST /api/aiflows/send-owner-email", () => {
     expect(recordSystemLog).toHaveBeenCalledWith(
       expect.objectContaining({ event: "ai_flow_owner_email_failed", level: "error" })
     );
+  });
+});
+
+describe("replying inside an existing conversation", () => {
+  const emailLogId = "33333333-3333-4333-8333-333333333333";
+  const REPLY_BODY = { ...validBody, replyToEmailLogId: emailLogId };
+
+  it("threads the send against the row's identity and claims the conversation", async () => {
+    vi.mocked(getEmailLogThreadIdentity).mockResolvedValue({
+      threadId: "199abc4d5e6f7890",
+      inReplyToMessageRef: "<CAJ=intro@mail.gmail.com>",
+      providerMessageId: "m1"
+    });
+    vi.mocked(sendFromMailboxConnection).mockResolvedValue({
+      ok: true,
+      provider: "google",
+      messageId: "gmail-2",
+      threadId: "199abc4d5e6f7890",
+      fromEmail: "team@newcoworker.com"
+    } as never);
+
+    const res = await POST(makeRequest(REPLY_BODY));
+    expect(res.status).toBe(200);
+
+    // The thread argument reaches the transport, or the reply lands beside
+    // the original instead of inside it.
+    const sendArgs = vi.mocked(sendFromMailboxConnection).mock.calls[0][2];
+    expect(sendArgs).toMatchObject({
+      thread: {
+        threadId: "199abc4d5e6f7890",
+        inReplyToMessageRef: "<CAJ=intro@mail.gmail.com>",
+        providerMessageId: "m1"
+      }
+    });
+    // And the coworker owns it, or turn two goes back to paging a human.
+    expect(rememberSentThread).toHaveBeenCalledWith(
+      expect.objectContaining({ threadId: "199abc4d5e6f7890", correspondentEmail: "lead@example.com" })
+    );
+  });
+
+  it("claims the conversation even when the provider echoes no thread id", async () => {
+    // Graph's /reply returns { messageId: null, threadId: null } even for a
+    // threaded send. Keying the claim on the RESPONSE registers no ownership
+    // on Microsoft, and the failure is silent: the reply itself lands fine,
+    // so only the missing follow-ups would ever show it.
+    vi.mocked(getWorkspaceOAuthConnection).mockResolvedValue(connRow("outlook"));
+    vi.mocked(getEmailLogThreadIdentity).mockResolvedValue({
+      threadId: "graph-conversation-1",
+      providerMessageId: "m9"
+    });
+    vi.mocked(sendFromMailboxConnection).mockResolvedValue({
+      ok: true,
+      provider: "microsoft",
+      messageId: null,
+      threadId: null,
+      fromEmail: "team@newcoworker.com"
+    } as never);
+
+    await POST(makeRequest(REPLY_BODY));
+    expect(rememberSentThread).toHaveBeenCalledWith(
+      expect.objectContaining({ provider: "microsoft", threadId: "graph-conversation-1" })
+    );
+  });
+
+  it("sends unthreaded, and claims nothing, when the row has no stored thread", async () => {
+    vi.mocked(getEmailLogThreadIdentity).mockResolvedValue(null);
+    vi.mocked(sendFromMailboxConnection).mockResolvedValue({
+      ok: true,
+      provider: "google",
+      messageId: "gmail-3",
+      threadId: null,
+      fromEmail: "team@newcoworker.com"
+    } as never);
+
+    const res = await POST(makeRequest(REPLY_BODY));
+    expect(res.status).toBe(200);
+    expect(vi.mocked(sendFromMailboxConnection).mock.calls[0][2]).not.toHaveProperty("thread");
+    expect(rememberSentThread).not.toHaveBeenCalled();
+  });
+
+  it("does not resolve a reply target when the step declared none", async () => {
+    await POST(makeRequest(validBody));
+    expect(getEmailLogThreadIdentity).not.toHaveBeenCalled();
+  });
+
+  it("still returns ok when the thread claim throws", async () => {
+    // Losing ownership costs an autonomous follow-up, never the email that
+    // already went out.
+    vi.mocked(getEmailLogThreadIdentity).mockResolvedValue({ threadId: "t1" });
+    vi.mocked(sendFromMailboxConnection).mockResolvedValue({
+      ok: true,
+      provider: "google",
+      messageId: "gmail-4",
+      threadId: "t1",
+      fromEmail: "team@newcoworker.com"
+    } as never);
+    vi.mocked(rememberSentThread).mockRejectedValue(new Error("boom"));
+
+    const res = await POST(makeRequest(REPLY_BODY));
+    expect(res.status).toBe(200);
+    expect(await res.json()).toMatchObject({ ok: true });
   });
 });
