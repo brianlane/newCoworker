@@ -549,6 +549,41 @@ describe("hydrateContactEventContact", () => {
     ).toEqual({ e164: PHONE, name: "Fresh", email: "stale@x.com", tags: ["New"] });
   });
 
+  it("an explicitly EMPTY value is the caller's answer, not a gap to fill", async () => {
+    // A tag_changed site passes the post-write list, which is `[]` once the
+    // last tag is removed. Reading over that would put the tags back on the
+    // very event that cleared them.
+    const cleared = makeDb([{ data: { tags: ["Clever", "VIP"] }, error: null }]);
+    const out = await hydrateContactEventContact(cleared.db, BIZ, {
+      e164: PHONE,
+      name: "Joe",
+      email: "joe@x.com",
+      tags: []
+    });
+    expect(out.tags).toEqual([]);
+    expect(cleared.calls).toHaveLength(0);
+
+    // Same rule for the strings: supplied-but-blank is still supplied.
+    const blank = makeDb([{ data: { display_name: "Row Name", email: "row@x.com" }, error: null }]);
+    expect(
+      await hydrateContactEventContact(blank.db, BIZ, {
+        e164: PHONE,
+        name: "",
+        email: "",
+        tags: []
+      })
+    ).toEqual({ e164: PHONE, name: "", email: "", tags: [] });
+    expect(blank.calls).toHaveLength(0);
+
+    // An empty list still leaves name/email open to hydration.
+    const partial = makeDb([{ data: { display_name: "Row Name" }, error: null }]);
+    expect(await hydrateContactEventContact(partial.db, BIZ, { e164: PHONE, tags: [] })).toEqual({
+      e164: PHONE,
+      name: "Row Name",
+      tags: []
+    });
+  });
+
   it("reads nothing when the caller already carries all three fields", async () => {
     const { db, calls } = makeDb([]);
     const full: ContactEventContact = {

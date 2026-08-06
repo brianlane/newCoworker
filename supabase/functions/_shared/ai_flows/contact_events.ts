@@ -134,7 +134,8 @@ type EventTrigger = {
  *
  * One indexed read closes the gap for every site at once. Caller-supplied
  * values always win: a tag_changed site passes the POST-write tag list,
- * which is fresher than anything this read can return.
+ * which is fresher than anything this read can return. Only a field the
+ * caller left UNDEFINED is looked up.
  *
  * Best-effort by contract. Every caller is a write that already happened
  * (a claim, a tag edit, an import row) and must not be undone by a trigger
@@ -146,9 +147,13 @@ export async function hydrateContactEventContact(
   businessId: string,
   contact: ContactEventContact
 ): Promise<ContactEventContact> {
-  const needsName = !contact.name;
-  const needsEmail = !contact.email;
-  const needsTags = (contact.tags ?? []).length === 0;
+  // Absent means UNDEFINED, never "empty". A caller that passes `tags: []`
+  // is stating the contact has no tags (a tag_changed site does exactly that
+  // after the last tag is removed), and that answer is the caller's to give.
+  // Reading over it would put tags back on an event that just cleared them.
+  const needsName = contact.name === undefined;
+  const needsEmail = contact.email === undefined;
+  const needsTags = contact.tags === undefined;
   if (!needsName && !needsEmail && !needsTags) return contact;
   // The phone is interpolated into a PostgREST `or` filter, where a stray
   // comma or paren would change what the filter means. Anything that is not
