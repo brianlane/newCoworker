@@ -32,6 +32,7 @@ import { parseOutboundClientState } from "../_shared/voice_outbound.ts";
 import {
   AMD_DETECTION_EVENTS,
   classifyAmdResult,
+  greetingImpliesMachine,
   isAmdEvent
 } from "../_shared/voice_amd.ts";
 import { CALL_REASON } from "../_shared/ai_flows/call_outcome_meta.ts";
@@ -573,12 +574,26 @@ async function handleMachineDetection(
   if (!outbound || !callControlId) {
     return jsonOk("amd_not_outbound");
   }
-  // Nothing speaks into a voicemail yet, so the greeting-ended events are
-  // acknowledged and dropped. They are routed already so the wiring is in
-  // place, and so an unrouted event can never be the reason a later voicemail
-  // feature appears not to work.
+  // Greeting events. Nothing speaks into a voicemail yet, so their only job
+  // here is as a BACKSTOP: Telnyx documents detection.ended as always
+  // preceding greeting.ended, but a beep is its own proof of a voicemail, and
+  // relying on that ordering is not worth re-introducing the exact bug this
+  // handler exists to prevent. A beep with no verdict recorded yet is treated
+  // as a machine; anything else is acknowledged and dropped.
   if (!AMD_DETECTION_EVENTS.has(eventType)) {
-    return jsonOk("amd_greeting_noted");
+    if (!greetingImpliesMachine(payload["result"])) {
+      return jsonOk("amd_greeting_noted");
+    }
+    const already = await machineAlreadyStamped(supabase, callControlId);
+    if (already) return jsonOk("amd_greeting_after_verdict");
+    await telemetryRecord(supabase, "voice_amd_verdict", {
+      call_control_id: callControlId,
+      business_id: outbound.businessId,
+      event_type: eventType,
+      result: typeof payload["result"] === "string" ? payload["result"] : null,
+      verdict: "machine_from_beep"
+    });
+    return await stampMachineAndHangUp(supabase, callControlId);
   }
 
   const verdict = classifyAmdResult(payload["result"]);
@@ -596,6 +611,34 @@ async function handleMachineDetection(
     return jsonOk(`amd_${verdict}`);
   }
 
+  return await stampMachineAndHangUp(supabase, callControlId);
+}
+
+/** Has a machine verdict already been recorded for this leg? */
+async function machineAlreadyStamped(
+  supabase: SupabaseClient,
+  callControlId: string
+): Promise<boolean> {
+  const { data } = await supabase
+    .from("voice_handoff_sessions")
+    .select("context")
+    .eq("call_control_id", callControlId)
+    .maybeSingle();
+  const ctx = ((data as { context?: Record<string, unknown> } | null)?.context ??
+    {}) as Record<string, unknown>;
+  return ctx.machine_detected === true;
+}
+
+/**
+ * Record the machine verdict on the session and end the leg. The hangup this
+ * triggers flows through the outbound path, which reads the stamp and resumes
+ * the parked run; this function deliberately does not resume it itself, so
+ * there is exactly one writer.
+ */
+async function stampMachineAndHangUp(
+  supabase: SupabaseClient,
+  callControlId: string
+): Promise<Response> {
   const { data: sessRow } = await supabase
     .from("voice_handoff_sessions")
     .select("context")
@@ -608,10 +651,10 @@ async function handleMachineDetection(
     .update({ context: { ...ctx, machine_detected: true } })
     .eq("call_control_id", callControlId);
   if (stampErr) {
-    // Without the stamp the hangup below would derive "answered" and a
-    // follow-up ladder would stop on a lead who heard nothing. Leave the call
-    // up rather than hang up AND mis-report it: the AI talking to a voicemail
-    // wastes minutes, which is the cheaper of the two failures.
+    // Without the stamp the hangup would derive "answered" and a follow-up
+    // ladder would stop on a lead who heard nothing. Leave the call up rather
+    // than hang up AND mis-report it: the AI talking to a voicemail wastes
+    // minutes, which is the cheaper of the two failures.
     console.error("amd: machine stamp failed, leaving the call up", stampErr);
     return jsonOk("amd_stamp_failed");
   }

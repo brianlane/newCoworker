@@ -70,3 +70,28 @@ export const AMD_GREETING_EVENTS: ReadonlySet<string> = new Set([
 export function isAmdEvent(eventType: string): boolean {
   return AMD_DETECTION_EVENTS.has(eventType) || AMD_GREETING_EVENTS.has(eventType);
 }
+
+/**
+ * Greeting results that are, on their own, evidence a MACHINE answered.
+ *
+ * Telnyx documents `detection.ended` as always preceding `greeting.ended`, so
+ * in principle the verdict is known by the time a greeting event arrives and
+ * this is redundant. It exists anyway because the cost of that ordering
+ * guarantee not holding is precisely the bug this module was written to fix:
+ * a voicemail silently reported as an answered call. Treating a beep as its
+ * own evidence removes the dependency on the ordering entirely.
+ *
+ * `beep_detected` only: a recorded greeting ending in a beep is a voicemail.
+ * `prompt_ended` is deliberately EXCLUDED, since it belongs to iOS call
+ * screening, where a live person is deciding whether to take the call.
+ */
+const MACHINE_GREETING_RESULTS = new Set(["beep_detected"]);
+
+/**
+ * Does this greeting event, by itself, prove a machine answered? Used as a
+ * backstop when no detection verdict has been recorded for the call yet.
+ */
+export function greetingImpliesMachine(result: unknown): boolean {
+  const value = typeof result === "string" ? result.trim().toLowerCase() : "";
+  return MACHINE_GREETING_RESULTS.has(value);
+}

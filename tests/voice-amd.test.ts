@@ -3,6 +3,7 @@ import {
   AMD_DETECTION_EVENTS,
   AMD_GREETING_EVENTS,
   classifyAmdResult,
+  greetingImpliesMachine,
   isAmdEvent
 } from "../supabase/functions/_shared/voice_amd";
 import { TELNYX_VOICE_ROUTES } from "../supabase/functions/_shared/telnyx_voice_dispatch";
@@ -86,5 +87,37 @@ describe("AMD event vocabulary", () => {
     for (const e of [...AMD_DETECTION_EVENTS, ...AMD_GREETING_EVENTS]) {
       expect(TELNYX_VOICE_ROUTES[e], `${e} must be routed`).toBe("telnyx-voice-call-end");
     }
+  });
+});
+
+describe("greetingImpliesMachine", () => {
+  // Telnyx documents detection.ended as always preceding greeting.ended, so in
+  // principle this is redundant. It exists so correctness does not DEPEND on
+  // that ordering: a beep is its own proof of a voicemail, and being wrong
+  // about the ordering would silently re-introduce the exact bug this module
+  // was written to fix.
+  it("treats a detected beep as proof of a machine", () => {
+    expect(greetingImpliesMachine("beep_detected")).toBe(true);
+    expect(greetingImpliesMachine("  BEEP_DETECTED ")).toBe(true);
+  });
+
+  // prompt_ended belongs to iOS call screening, where a live PERSON is
+  // deciding whether to take the call. Treating it as a machine would hang up
+  // on them.
+  it("never infers a machine from an iOS screening prompt", () => {
+    expect(greetingImpliesMachine("prompt_ended")).toBe(false);
+  });
+
+  it.each(["ended", "no_beep_detected", "not_sure", "", "something_new"])(
+    "does not infer a machine from %s",
+    (result) => {
+      expect(greetingImpliesMachine(result)).toBe(false);
+    }
+  );
+
+  it("tolerates a non-string result", () => {
+    expect(greetingImpliesMachine(undefined)).toBe(false);
+    expect(greetingImpliesMachine(null)).toBe(false);
+    expect(greetingImpliesMachine(7)).toBe(false);
   });
 });
