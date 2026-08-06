@@ -1164,8 +1164,11 @@ The single most important deliverability fact on the platform, confirmed
 by Telnyx support in ticket #557577 (Aug 2026): **our long-code numbers
 cannot originate SMS to any destination outside NANP (+1), at all.** This
 is a property of the number type, not configuration. Every messaging
-profile whitelists 222 countries (via
-`scripts/oneshot/widen-telnyx-destinations.ts`), every DID still reports
+profile whitelists 223 countries (via
+`scripts/oneshot/widen-telnyx-destinations.ts`; Canada must be added
+explicitly there, since it shares bare +1 and the dial table cannot
+represent it, which is exactly how the Aug 6 2026 CA-whitelist outage
+happened), every DID still reports
 `features.sms.international_outbound: false`, and no profile setting,
 API call, or support escalation changes it: "US long codes are for
 domestic traffic only." A text to +52, +852, or +44 fails at Telnyx with
@@ -1192,7 +1195,7 @@ What this means channel by channel:
   Mexico v1 SMS surcharge pricing predates this finding and needs review
   before any MX tenant goes live.
 - **Voice: works internationally.** The shared outbound voice profile
-  whitelists the same 222 countries, so forwarding legs, warm transfers,
+  whitelists the same 223 countries, so forwarding legs, warm transfers,
   and owner-notify calls reach international owner phones (for example a
   +852 forwarding number behind a +1 DID). Guardrail: the profile
   carries a fleet-wide **$25/day spend limit** (raised from $10 in Aug
