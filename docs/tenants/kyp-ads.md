@@ -104,6 +104,18 @@ owner approval**. Do not "fix" them by enabling them.
   a tenant we bought a box for in the last 7 days is never bought another.
   **When reading this account's history, do not assume one box per month:
   check `vps_inventory` for how many boxes carry this business id.**
+- **2026-08-06 Canada-whitelist outage: this tenant is the fleet's canary
+  for Canadian traffic.** The Aug 5 profile-widening one-shot replaced
+  every Telnyx whitelist with a dial-table-derived list that cannot
+  contain CA (bare +1 maps to US), so all SMS to Canadian numbers failed
+  with Telnyx 40309 from Aug 5 ~15:00 UTC until the profiles were
+  re-patched Aug 6 ~20:30 UTC. Only KYP was hit: 22 errors, all Aug 6
+  15:03 to 19:51 UTC, being notify_owner alerts to James (+1514) and the
+  lead follow-up to H Eve (+14168489229), which never sent. The widen
+  script now unions instead of replacing and refuses a list without
+  US/CA/MX (`scripts/oneshot/widen-telnyx-allowlist.ts`). If a Canadian
+  send fails with "Invalid destination region 'CA'" again, check the
+  profile whitelists first.
 
 ## One-shots
 
