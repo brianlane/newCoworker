@@ -2294,15 +2294,29 @@ serve(async (req: Request) => {
                 )
               : null;
             if (appr && modify && !(await ownerReplyPromptIsNewer(supabase, businessId, appr))) {
-              const nextContext = {
-                ...(appr.context ?? {}),
-                approval: {
-                  decision: "modify",
-                  decided_by: `sms:${from}`,
-                  note: modify.note,
-                  decided_at: new Date().toISOString()
-                }
-              };
+              // Re-point the resume marker at the step we are rewinding TO.
+              // The run parked on the gate, so vars.__resume_step_id still
+              // names the gate; resolveResumeIndex follows the marker over
+              // current_step, so leaving it would land the resume right back
+              // on the gate and silently drop the redraft. This is the same
+              // external-writer case withResumeMarkerVar documents, and the
+              // same call the route-claim and goal rewinds above already make.
+              const redraftStepId =
+                typeof approvalCtx?.redraft_step_id === "string"
+                  ? approvalCtx.redraft_step_id
+                  : null;
+              const nextContext = withResumeMarkerVar(
+                {
+                  ...(appr.context ?? {}),
+                  approval: {
+                    decision: "modify",
+                    decided_by: `sms:${from}`,
+                    note: modify.note,
+                    decided_at: new Date().toISOString()
+                  }
+                },
+                redraftStepId
+              );
               const { data: rewound, error: modErr } = await supabase
                 .from("ai_flow_runs")
                 .update({

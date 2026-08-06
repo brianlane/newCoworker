@@ -25,6 +25,12 @@
 import { describe, expect, it } from "vitest";
 
 import {
+  RESUME_STEP_ID_VAR,
+  resolveResumeIndex,
+  withResumeMarkerVar
+} from "../supabase/functions/_shared/ai_flows/branching";
+
+import {
   approvalModifyForReply,
   approvalOptionForReply,
   parseStoredApprovalOptions,
@@ -94,5 +100,41 @@ describe("the rewind target survives the round trip through the run", () => {
     // context object, and the digit path must keep resolving exactly as before.
     expect(parseStoredApprovalOptions(["approve", "skip", "cancel"])).toEqual(OFFERED);
     expect(approvalOptionForReply(parseStoredApprovalOptions(undefined), "1")).toBe("approve");
+  });
+});
+
+describe("the rewind actually relocates the run", () => {
+  /**
+   * The gate parked, so `vars.__resume_step_id` names the GATE.
+   * `resolveResumeIndex` follows that marker in preference to the stored
+   * index, so a rewind that only moves `current_step` resumes straight back
+   * onto the gate: the drafting step never re-runs and the owner's note is
+   * ignored, while the ack still says "redoing that with your changes".
+   *
+   * Silent, and the reason `withResumeMarkerVar` exists for external writers
+   * (goal jumps, route-claim rewinds). This pins that the modify rewind is
+   * one of them.
+   */
+  const FLAT = [
+    { step: { id: "s_draft", type: "run_agent" } },
+    { step: { id: "s_gate", type: "approval_gate" } },
+    { step: { id: "s_send", type: "send_email" } }
+  ] as never;
+
+  it("follows a re-pointed marker to the redraft step, not back to the gate", () => {
+    const parked = { vars: { [RESUME_STEP_ID_VAR]: "s_gate" } };
+    // Before: current_step says 0, but the marker still says the gate.
+    expect(resolveResumeIndex(FLAT, 0, "s_gate")).toBe(1);
+    // After withResumeMarkerVar re-points it, the rewind lands on the drafter.
+    const rewound = withResumeMarkerVar(parked, "s_draft");
+    const marker = (rewound.vars as Record<string, unknown>)[RESUME_STEP_ID_VAR];
+    expect(resolveResumeIndex(FLAT, 0, marker as string)).toBe(0);
+  });
+
+  it("relocates by ID, so the rewind survives a reordered flow", () => {
+    // The marker is why parked runs tolerate step insertions. A rewind that
+    // cleared it instead of re-pointing would give that up.
+    const shifted = [{ step: { id: "s_new", type: "notify_owner" } }, ...FLAT] as never;
+    expect(resolveResumeIndex(shifted, 0, "s_draft")).toBe(1);
   });
 });

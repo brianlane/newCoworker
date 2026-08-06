@@ -1089,7 +1089,12 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
       const redraftId =
         gateStep?.type === "approval_gate" ? gateStep.allowModify?.redraftStepId : undefined;
       const redraftIndex = redraftId ? flat.findIndex((e) => e.step.id === redraftId) : -1;
-      if (redraftIndex >= 0) approval.redraft_step_index = redraftIndex;
+      if (redraftIndex >= 0 && redraftId) {
+        approval.redraft_step_index = redraftIndex;
+        // The ID too, because the inbound rewind must re-point the resume
+        // marker (withResumeMarkerVar) and the marker is keyed by step id.
+        approval.redraft_step_id = redraftId;
+      }
       stampResumeMarker(index);
       const parked = await updateRun(supabase, run.id, {
         status: "awaiting_approval",
