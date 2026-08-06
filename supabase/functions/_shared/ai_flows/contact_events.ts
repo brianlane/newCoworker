@@ -14,6 +14,12 @@
  * work unchanged); `from` is the contact's phone so `from_matches` can scope
  * a flow to a person.
  *
+ * Callers only have to supply the phone. Whatever name/email/tags they leave
+ * out is read from the contact row here (see `hydrateContactEventContact`),
+ * so the event text always has the shape flows are written against no matter
+ * which write site produced it. That read happens only once a flow watching
+ * this event has actually been found.
+ *
  * Loop guard: `sourceFlowId` (the flow whose own update_contact step wrote
  * the tag) is excluded, so a flow can never retrigger itself through its own
  * tag writes. Cross-flow chains are allowed by design — they are the
@@ -23,7 +29,7 @@
  * Best-effort: a failure here never breaks the contact write that observed
  * the event.
  */
-import { evaluateSmsTrigger } from "./engine.ts";
+import { evaluateSmsTrigger, isE164 } from "./engine.ts";
 import {
   resolveFromMatchesRefValues,
   type ContactRefSupabase
@@ -115,6 +121,77 @@ type EventTrigger = {
   conditions?: unknown;
 };
 
+/**
+ * Fill in the identity fields the write site did not have in hand.
+ *
+ * `contactEventText` documents a `name: / phone: / email: / tags: …` shape,
+ * and flows are written against it: a condition asking "does this lead carry
+ * the Clever tag?", an extract_text step reading the name line. But most
+ * write sites only know the phone: a route_to_team claim has the lead's
+ * number and nothing else, so its owner_assigned event rendered as just
+ * `event: / phone: / owner:` and no tag condition could ever match. That is
+ * not a flow that fires rarely, it is a flow that can never fire.
+ *
+ * One indexed read closes the gap for every site at once. Caller-supplied
+ * values always win: a tag_changed site passes the POST-write tag list,
+ * which is fresher than anything this read can return. Only a field the
+ * caller left UNDEFINED is looked up.
+ *
+ * Best-effort by contract. Every caller is a write that already happened
+ * (a claim, a tag edit, an import row) and must not be undone by a trigger
+ * lookup, so a read failure returns the contact untouched and the event
+ * still fires with whatever the caller had.
+ */
+export async function hydrateContactEventContact(
+  supabase: AnyClient,
+  businessId: string,
+  contact: ContactEventContact
+): Promise<ContactEventContact> {
+  // Absent means UNDEFINED, never "empty". A caller that passes `tags: []`
+  // is stating the contact has no tags (a tag_changed site does exactly that
+  // after the last tag is removed), and that answer is the caller's to give.
+  // Reading over it would put tags back on an event that just cleared them.
+  const needsName = contact.name === undefined;
+  const needsEmail = contact.email === undefined;
+  const needsTags = contact.tags === undefined;
+  if (!needsName && !needsEmail && !needsTags) return contact;
+  // The phone is interpolated into a PostgREST `or` filter, where a stray
+  // comma or paren would change what the filter means. Anything that is not
+  // a clean E.164 number simply skips hydration (the pre-fix behavior).
+  const e164 = typeof contact.e164 === "string" ? contact.e164.trim() : "";
+  if (!isE164(e164)) return contact;
+  try {
+    const { data, error } = await supabase
+      .from("contacts")
+      .select("display_name, email, tags")
+      .eq("business_id", businessId)
+      .or(`customer_e164.eq.${e164},alias_e164s.cs.{${e164}}`)
+      .maybeSingle();
+    if (error) {
+      console.error("contact_events: hydrate", error);
+      return contact;
+    }
+    const row = (data ?? null) as {
+      display_name?: string | null;
+      email?: string | null;
+      tags?: string[] | null;
+    } | null;
+    if (!row) return contact;
+    const rowTags = (Array.isArray(row.tags) ? row.tags : []).filter(
+      (t): t is string => typeof t === "string" && t.trim().length > 0
+    );
+    return {
+      ...contact,
+      ...(needsName && row.display_name ? { name: row.display_name } : {}),
+      ...(needsEmail && row.email ? { email: row.email } : {}),
+      ...(needsTags && rowTags.length > 0 ? { tags: rowTags } : {})
+    };
+  } catch (e) {
+    console.error("contact_events: hydrate", e);
+    return contact;
+  }
+}
+
 /** Does one trigger of the flow match this event (channel + tag/change narrowing)? */
 export function contactEventTriggerMatches(trig: EventTrigger, input: ContactEventInput): boolean {
   if (trig.channel !== input.kind) return false;
@@ -177,25 +254,42 @@ export async function enqueueContactEventRuns(
       rows.push(...batch);
       if (batch.length < FLOW_PAGE) break;
     }
-    const scope = contactEventTriggerScope(input);
-    const windowText = String(scope.windowText);
-    let enqueued = 0;
-
+    // Narrow to the flows whose trigger actually watches this event BEFORE
+    // spending a read on hydration: most tenants have no flow on this
+    // channel at all, and then the identity fields cost nothing.
+    type Candidate = {
+      id: string;
+      def: {
+        trigger?: EventTrigger;
+        triggers?: EventTrigger[];
+        drip?: { intervalMinutes?: number };
+      } | null;
+      matching: EventTrigger[];
+    };
+    const candidates: Candidate[] = [];
     for (const row of rows) {
       if (input.sourceFlowId && row.id === input.sourceFlowId) continue; // loop guard
-      const def = row.definition as
-        | {
-            trigger?: EventTrigger;
-            triggers?: EventTrigger[];
-            drip?: { intervalMinutes?: number };
-          }
-        | null;
+      const def = row.definition as Candidate["def"];
       const triggers = [def?.trigger, ...(def?.triggers ?? [])];
       const matching = triggers.filter(
         (t): t is EventTrigger => !!t && contactEventTriggerMatches(t, input)
       );
       if (matching.length === 0) continue;
+      candidates.push({ id: row.id, def, matching });
+    }
+    if (candidates.length === 0) return 0;
 
+    // Something is listening, so give it the documented event shape: fill in
+    // whatever name/email/tags the write site could not supply.
+    const hydrated: ContactEventInput = {
+      ...input,
+      contact: await hydrateContactEventContact(supabase, businessId, input.contact)
+    };
+    const scope = contactEventTriggerScope(hydrated);
+    const windowText = String(scope.windowText);
+    let enqueued = 0;
+
+    for (const { id: rowId, def, matching } of candidates) {
       // ANY matching trigger's condition list may fire the flow (OR set).
       let matched = false;
       for (const trig of matching) {
@@ -219,7 +313,7 @@ export async function enqueueContactEventRuns(
         }
         const res = evaluateSmsTrigger(
           { channel: "sms", conditions },
-          { messages: [{ text: windowText, from: input.contact.e164, atMs: Date.now() }] },
+          { messages: [{ text: windowText, from: hydrated.contact.e164, atMs: Date.now() }] },
           refValues
         );
         if (res.matched) {
@@ -233,9 +327,9 @@ export async function enqueueContactEventRuns(
       // contact who already has a (non-test) run of it. Both identities are
       // passed so a prior email-channel enrollment blocks too.
       if (
-        await reentryBlocked(supabase, businessId, row.id, def, [
-          input.contact.e164,
-          input.contact.email
+        await reentryBlocked(supabase, businessId, rowId, def, [
+          hydrated.contact.e164,
+          hydrated.contact.email
         ])
       ) {
         continue;
@@ -253,7 +347,7 @@ export async function enqueueContactEventRuns(
           const { data: lastRow } = await supabase
             .from("ai_flow_runs")
             .select("earliest_claim_at")
-            .eq("flow_id", row.id)
+            .eq("flow_id", rowId)
             .eq("status", "queued")
             .not("earliest_claim_at", "is", null)
             .order("earliest_claim_at", { ascending: false })
@@ -273,7 +367,7 @@ export async function enqueueContactEventRuns(
       }
 
       const { error: runErr } = await supabase.from("ai_flow_runs").insert({
-        flow_id: row.id,
+        flow_id: rowId,
         business_id: businessId,
         status: "queued",
         context: { trigger: scope },

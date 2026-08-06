@@ -14,6 +14,8 @@ import {
   contactEventTriggerMatches,
   contactEventTriggerScope,
   enqueueContactEventRuns,
+  hydrateContactEventContact,
+  type ContactEventContact,
   type ContactEventInput
 } from "../supabase/functions/_shared/ai_flows/contact_events";
 
@@ -492,5 +494,227 @@ describe("enqueueContactEventRuns", () => {
     ]);
     expect(await enqueueContactEventRuns(db, BIZ, input())).toBe(0);
     err.mockRestore();
+  });
+});
+
+// ── hydrateContactEventContact ──────────────────────────────────────────────
+
+/**
+ * Write sites mostly know the phone and nothing else, but flows are written
+ * against the documented `name: / phone: / email: / tags: …` text. The gap
+ * was not theoretical: Amy Laidlaw's "Clever - Spoke Check" flow triggers on
+ * owner_assigned with a `contains "clever"` condition that reads the tags
+ * line, and the route_to_team claim that assigns the owner passes only
+ * `{ e164 }`. The flow was enabled for weeks and had zero runs.
+ */
+describe("hydrateContactEventContact", () => {
+  const PHONE = "+16025550111";
+
+  it("fills in the fields the caller left out, and never overwrites one it supplied", async () => {
+    const { db, calls } = makeDb([
+      {
+        data: {
+          display_name: "Joe Seller",
+          email: "joe@x.com",
+          tags: ["Clever", "  ", "VIP", 7]
+        },
+        error: null
+      }
+    ]);
+    const out = await hydrateContactEventContact(db, BIZ, { e164: PHONE });
+    // Blank and non-string stored tags are dropped, like every other reader.
+    expect(out).toEqual({
+      e164: PHONE,
+      name: "Joe Seller",
+      email: "joe@x.com",
+      tags: ["Clever", "VIP"]
+    });
+    // Scoped to the tenant, and matched on the primary number OR an alias.
+    expect(calls.find((c) => c.name === "eq")!.args).toEqual(["business_id", BIZ]);
+    expect(calls.find((c) => c.name === "or")!.args[0]).toBe(
+      `customer_e164.eq.${PHONE},alias_e164s.cs.{${PHONE}}`
+    );
+
+    // The caller's own values win: a tag_changed site passes the POST-write
+    // tag list, which is fresher than the row.
+    const supplied = makeDb([
+      { data: { display_name: "Stale", email: "stale@x.com", tags: ["Old"] }, error: null }
+    ]);
+    expect(
+      await hydrateContactEventContact(supplied.db, BIZ, {
+        e164: PHONE,
+        name: "Fresh",
+        tags: ["New"]
+      })
+    ).toEqual({ e164: PHONE, name: "Fresh", email: "stale@x.com", tags: ["New"] });
+  });
+
+  it("an explicitly EMPTY value is the caller's answer, not a gap to fill", async () => {
+    // A tag_changed site passes the post-write list, which is `[]` once the
+    // last tag is removed. Reading over that would put the tags back on the
+    // very event that cleared them.
+    const cleared = makeDb([{ data: { tags: ["Clever", "VIP"] }, error: null }]);
+    const out = await hydrateContactEventContact(cleared.db, BIZ, {
+      e164: PHONE,
+      name: "Joe",
+      email: "joe@x.com",
+      tags: []
+    });
+    expect(out.tags).toEqual([]);
+    expect(cleared.calls).toHaveLength(0);
+
+    // Same rule for the strings: supplied-but-blank is still supplied.
+    const blank = makeDb([{ data: { display_name: "Row Name", email: "row@x.com" }, error: null }]);
+    expect(
+      await hydrateContactEventContact(blank.db, BIZ, {
+        e164: PHONE,
+        name: "",
+        email: "",
+        tags: []
+      })
+    ).toEqual({ e164: PHONE, name: "", email: "", tags: [] });
+    expect(blank.calls).toHaveLength(0);
+
+    // An empty list still leaves name/email open to hydration.
+    const partial = makeDb([{ data: { display_name: "Row Name" }, error: null }]);
+    expect(await hydrateContactEventContact(partial.db, BIZ, { e164: PHONE, tags: [] })).toEqual({
+      e164: PHONE,
+      name: "Row Name",
+      tags: []
+    });
+  });
+
+  it("reads nothing when the caller already carries all three fields", async () => {
+    const { db, calls } = makeDb([]);
+    const full: ContactEventContact = {
+      e164: PHONE,
+      name: "Joe",
+      email: "joe@x.com",
+      tags: ["VIP"]
+    };
+    expect(await hydrateContactEventContact(db, BIZ, full)).toBe(full);
+    expect(calls).toHaveLength(0);
+  });
+
+  it("skips the read for a phone that cannot be interpolated into the filter", async () => {
+    // A stray comma or paren would change what the `or` filter means, so
+    // anything that is not clean E.164 keeps the pre-hydration behavior.
+    for (const e164 of ["", "not-a-phone", "+1416555010,junk", "  "]) {
+      const { db, calls } = makeDb([]);
+      expect(await hydrateContactEventContact(db, BIZ, { e164 })).toEqual({ e164 });
+      expect(calls).toHaveLength(0);
+    }
+    const missing = makeDb([]);
+    const noPhone = { e164: undefined } as unknown as ContactEventContact;
+    expect(await hydrateContactEventContact(missing.db, BIZ, noPhone)).toBe(noPhone);
+    expect(missing.calls).toHaveLength(0);
+
+    // Surrounding whitespace is tolerated (the read still happens).
+    const padded = makeDb([{ data: { display_name: "Joe" }, error: null }]);
+    expect(await hydrateContactEventContact(padded.db, BIZ, { e164: ` ${PHONE} ` })).toEqual({
+      e164: ` ${PHONE} `,
+      name: "Joe"
+    });
+  });
+
+  it("a read failure, a missing row, or empty columns leave the contact untouched", async () => {
+    const err = vi.spyOn(console, "error").mockImplementation(() => {});
+
+    const failed = makeDb([{ data: null, error: { message: "contacts down" } }]);
+    expect(await hydrateContactEventContact(failed.db, BIZ, { e164: PHONE })).toEqual({
+      e164: PHONE
+    });
+    expect(err).toHaveBeenCalled();
+
+    const absent = makeDb([{ data: null, error: null }]);
+    expect(await hydrateContactEventContact(absent.db, BIZ, { e164: PHONE })).toEqual({
+      e164: PHONE
+    });
+
+    // Row exists but every field is null/blank/not a list: nothing to add.
+    const bare = makeDb([
+      { data: { display_name: null, email: null, tags: null }, error: null }
+    ]);
+    expect(await hydrateContactEventContact(bare.db, BIZ, { e164: PHONE })).toEqual({
+      e164: PHONE
+    });
+    const blankTags = makeDb([{ data: { tags: ["", "   "] }, error: null }]);
+    expect(await hydrateContactEventContact(blankTags.db, BIZ, { e164: PHONE })).toEqual({
+      e164: PHONE
+    });
+
+    // Never throws: the write that observed the event already happened.
+    const thrown = {
+      from: () => {
+        throw new Error("boom");
+      }
+    };
+    expect(await hydrateContactEventContact(thrown, BIZ, { e164: PHONE })).toEqual({
+      e164: PHONE
+    });
+    err.mockRestore();
+  });
+});
+
+describe("enqueueContactEventRuns hydration", () => {
+  const PHONE = "+16025550111";
+
+  it("an owner_assigned event carrying only a phone still matches a tag condition", async () => {
+    // The exact Clever regression: the claim path knows the lead's number
+    // and nothing else, and the flow keys on the tags line.
+    const { db, calls } = makeDb([
+      {
+        data: [
+          flowRow("f-clever", {
+            channel: "owner_assigned",
+            conditions: [{ type: "contains", value: "clever", caseInsensitive: true }]
+          })
+        ],
+        error: null
+      },
+      { data: { display_name: "Joe Seller", email: "joe@x.com", tags: ["Clever"] }, error: null },
+      { data: null, error: null } // run insert
+    ]);
+    expect(
+      await enqueueContactEventRuns(db, BIZ, {
+        kind: "owner_assigned",
+        contact: { e164: PHONE },
+        ownerName: "Dave Lane",
+        dedupeKey: "ce:owner:run-1"
+      })
+    ).toBe(1);
+
+    const insert = calls.find((c) => c.name === "insert")!.args[0] as Record<string, unknown>;
+    const trigger = (insert.context as { trigger: Record<string, unknown> }).trigger;
+    // The full documented shape, so the flow's extract_text can read the
+    // name line and templates can render {{trigger.contact_name}}.
+    expect(trigger.windowText).toBe(
+      [
+        "event: owner_assigned",
+        "name: Joe Seller",
+        `phone: ${PHONE}`,
+        "email: joe@x.com",
+        "tags: Clever",
+        "owner: Dave Lane"
+      ].join("\n")
+    );
+    expect(trigger.contact_name).toBe("Joe Seller");
+    expect(trigger.contact_email).toBe("joe@x.com");
+  });
+
+  it("spends no read when nothing is watching this event", async () => {
+    // Hydration is gated behind a matching flow, so the common case (a
+    // tenant with no flow on this channel) costs exactly the flow listing.
+    const { db, calls } = makeDb([
+      { data: [flowRow("f-sms", { channel: "sms", conditions: [] })], error: null }
+    ]);
+    expect(
+      await enqueueContactEventRuns(db, BIZ, {
+        kind: "owner_assigned",
+        contact: { e164: PHONE },
+        dedupeKey: "ce:owner:run-2"
+      })
+    ).toBe(0);
+    expect(calls.filter((c) => c.table === "contacts")).toHaveLength(0);
   });
 });

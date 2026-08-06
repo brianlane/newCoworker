@@ -121,6 +121,20 @@ These are mistakes already made on this account. Do not remake them.
   the right answer only when another agent owns the lead). That marker also
   makes the accept step idempotent, so the flow is now safe to re-run for a lead
   it already accepted. Applied by `patch-clever-accept-idempotent.ts`.
+- **The spoke-check flow was enabled and had NEVER run (fixed Aug 6 2026).**
+  "Clever - Spoke Check & Weekly Call Follow-Up" triggers on `owner_assigned`
+  with a `contains "clever"` condition, which reads the `tags: …` line of the
+  contact-event text. But the route_to_team claim that assigns the owner only
+  knew the lead's phone, so the event rendered as three lines (event / phone /
+  owner) with no tags line at all, and the condition could never match:
+  `ai_flow_runs` held zero rows for the flow while 34 contacts carried the
+  exact `Clever` tag. Fixed at the shared chokepoint, not here, so every
+  contact-event write site gets the documented shape:
+  `enqueueContactEventRuns` now reads the contact's name/email/tags before
+  evaluating conditions. The flow definition was correct all along and needed
+  no patch. Two HQ flows ("Demo caller follow-up", "Webchat lead follow-up")
+  had the same dependency. If you are counting on this flow as the safety net
+  that keeps calling unclaimed leads, note it provided none before this date.
 - **Editing a live flow by hand in the UI is how flows get broken here.** It
   has needed a revert at least once. Prefer a ledger-recorded one-shot in
   `scripts/oneshot/`, which is idempotent, dry-run by default, and reviewable.
