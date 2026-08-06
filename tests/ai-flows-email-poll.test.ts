@@ -310,6 +310,28 @@ describe("pollEmailTriggers", () => {
     expect(enqueueAiFlowRun).not.toHaveBeenCalled();
   });
 
+  it("omits message_ref when Gmail returns no Message-Id header", async () => {
+    // Fails open the same way thread_id does: a blank identifier must not
+    // reach the trigger scope, or a reply would thread against nothing.
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { messages: [{ id: "m1" }] } } as never)
+      .mockResolvedValueOnce({
+        data: {
+          internalDate: "1760000000000",
+          threadId: "199abc4d5e6f7890",
+          payload: {
+            headers: [{ name: "From", value: "a@b.c" }],
+            mimeType: "text/plain",
+            body: { data: b64url("hello") }
+          }
+        }
+      } as never);
+    await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
+    const trigger = vi.mocked(enqueueAiFlowRun).mock.calls[0][0].trigger;
+    expect(trigger).not.toHaveProperty("message_ref");
+    expect(trigger).toHaveProperty("thread_id", "199abc4d5e6f7890");
+  });
+
   it("carries Gmail's threadId into the run trigger", async () => {
     // The conversation id every reply on a thread shares. It rides on the
     // messages.get response and used to be read past; without it a notify
@@ -323,7 +345,8 @@ describe("pollEmailTriggers", () => {
           payload: {
             headers: [
               { name: "From", value: "james@kypads.com" },
-              { name: "Subject", value: "Re: Introductions" }
+              { name: "Subject", value: "Re: Introductions" },
+              { name: "Message-Id", value: "<CAJ=intro@mail.gmail.com>" }
             ],
             mimeType: "text/plain",
             body: { data: b64url("hello") }
@@ -335,6 +358,7 @@ describe("pollEmailTriggers", () => {
       expect.objectContaining({
         trigger: expect.objectContaining({
           thread_id: "199abc4d5e6f7890",
+          message_ref: "<CAJ=intro@mail.gmail.com>",
           subject: "Re: Introductions"
         })
       }),

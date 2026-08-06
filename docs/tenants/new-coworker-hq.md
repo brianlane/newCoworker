@@ -118,6 +118,10 @@ visitor actually books.
 `hq-inbox-triage-definition.ts`, split out so
 `tests/oneshot-hq-inbox-triage-definition.test.ts` can pin the alert copy
 without the applier's Supabase connection running),
+`hq-inbox-reply-drafter.ts` (the saved-Agent instructions that draft the reply
+in Brian's voice, pinned against a live model by
+`tests/e2e/hq-intro-reply.e2e.test.ts`; the booking link lives in these
+instructions because a `run_agent` step never sees `bookingLinkPromptLine`),
 `enable-hq-booking-page.ts`,
 `patch-hq-booking-offer.ts`, `sync-hq-booking-copy.ts`,
 `fix-hq-placeholder-contact-names.ts`, `set-hq-digest-prefs.ts`,

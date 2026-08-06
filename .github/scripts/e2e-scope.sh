@@ -99,6 +99,14 @@ OPERATOR_TESTS="
 tests/e2e/kyp-owner-sms-operator.e2e.test.ts
 "
 
+# The email surfaces: the autonomous email coworker (its turn/poll/mailbox
+# modules) and the saved-Agent drafter its replies come from.
+EMAIL_TESTS="
+tests/e2e/beth-delegation.e2e.test.ts
+tests/e2e/beth-email-loop.e2e.test.ts
+tests/e2e/hq-intro-reply.e2e.test.ts
+"
+
 # Messenger/Instagram/WhatsApp + webchat customer engine.
 MESSENGER_TESTS="
 tests/e2e/messenger-engine.e2e.test.ts
@@ -180,6 +188,8 @@ scope_file() {
 
     # --- the bad-phone one-shot exports the prompts its e2e test pins -----
     scripts/oneshot/add-bad-phone-agent-report*) add "tests/e2e/bad-phone-classify.e2e.test.ts" ;;
+    # --- the HQ drafter one-shot exports the instructions its e2e pins -----
+    scripts/oneshot/hq-inbox-reply-drafter*) add "tests/e2e/hq-intro-reply.e2e.test.ts" ;;
 
     # --- likewise, the KYP calendar builder IS the definition its e2e test
     #     walks: the suite drives these exact extract fields and copy through
@@ -210,6 +220,7 @@ scope_file() {
     supabase/functions/_shared/sms_transcript* | \
     supabase/functions/_shared/datetime_line*) add "$SMS_TESTS" ;;
     supabase/functions/sms-inbound-worker/*) add "$SMS_TESTS" ;;
+    src/lib/email-coworker/* | src/lib/agents/*) add "$EMAIL_TESTS" ;;
     src/lib/messenger/* | src/lib/webchat/*) add "$MESSENGER_TESTS" ;;
     src/lib/dashboard-chat/* | src/app/api/dashboard/chat/* | \
     src/app/api/internal/owner-sms-turn/*) add "$OPERATOR_TESTS" ;;

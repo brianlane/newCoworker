@@ -29,6 +29,7 @@ import {
   findStepById,
   flattenForDisplay,
   hasBranchStep,
+  stepIdsBefore,
   insertStepAt,
   moveStepById,
   patchStepById,
@@ -1890,6 +1891,7 @@ export function AiFlowsManager({
                     step={selectedStep}
                     index={0}
                     patchStep={(_i, p) => patchNodeById(selectedStep.id, p)}
+                    earlierStepIds={stepIdsBefore(editor.steps, selectedStep.id)}
                     emailConns={emailConns}
                     employees={employees}
                     people={pickerPeople}
@@ -2679,6 +2681,7 @@ export function AiFlowsManager({
                 step={step}
                 index={i}
                 patchStep={patchStep}
+                earlierStepIds={editor.steps.slice(0, i).map((s) => s.id)}
                 emailConns={emailConns}
                 employees={employees}
                 people={pickerPeople}
@@ -3382,6 +3385,7 @@ function StepFields({
   step,
   index,
   patchStep,
+  earlierStepIds,
   emailConns,
   employees,
   people,
@@ -3392,6 +3396,12 @@ function StepFields({
   step: FlowStep;
   index: number;
   patchStep: (index: number, patch: Record<string, unknown>) => void;
+  /**
+   * Ids of the steps BEFORE this one, for approval_gate's redraft picker. A
+   * gate re-runs from its target, so pointing forward would skip the work it
+   * is meant to redo.
+   */
+  earlierStepIds: string[];
   emailConns: EmailConnectionOption[];
   employees: EmployeeEmailOption[];
   /** Saved employees + contacts for the dynamic-number pickers. */
@@ -4156,6 +4166,16 @@ function StepFields({
             "sends, just without the attachment."
           }
         />
+        <Field
+          label="Reply on the triggering conversation (optional)"
+          value={step.replyToEmailLogId ?? ""}
+          onChange={(v) => patchStep(index, { replyToEmailLogId: v.trim() ? v : undefined })}
+          help={
+            "Use {{trigger.email_log_id}} to send this as a reply inside the original email thread " +
+            "instead of starting a new conversation. Leave it empty and the email opens its own " +
+            "thread, which is what happens today."
+          }
+        />
       </div>
     );
   }
@@ -4283,8 +4303,51 @@ function StepFields({
     );
   }
   if (step.type === "approval_gate") {
+    const modify = step.allowModify;
+    // Only an EARLIER step is a sane rewind target: the gate re-runs from
+    // there, so pointing forward would skip the work it is meant to redo.
+    const earlier = earlierStepIds;
     return (
-      <Field label="Approval prompt" value={step.prompt} onChange={(v) => patchStep(index, { prompt: v })} />
+      <div className="space-y-2">
+        <Field label="Approval prompt" value={step.prompt} onChange={(v) => patchStep(index, { prompt: v })} />
+        <div className="rounded-md border border-parchment/10 bg-deep-ink/30 px-3 py-2 space-y-2">
+          <label className="flex items-center gap-2 text-xs text-parchment/70">
+            <input
+              type="checkbox"
+              checked={Boolean(modify)}
+              disabled={earlier.length === 0}
+              onChange={(ev) =>
+                patchStep(index, {
+                  allowModify: ev.target.checked ? { redraftStepId: earlier[earlier.length - 1] } : undefined
+                })
+              }
+            />
+            Let me reply with changes, not just a number
+          </label>
+          {modify && (
+            <label className="block text-xs text-parchment/70">
+              Redo this step with my changes
+              <select
+                className="mt-1 w-full rounded border border-parchment/15 bg-deep-ink px-2 py-1 text-sm text-parchment"
+                value={modify.redraftStepId}
+                onChange={(ev) =>
+                  patchStep(index, { allowModify: { redraftStepId: ev.target.value } })
+                }
+              >
+                {earlier.map((id) => (
+                  <option key={id} value={id}>
+                    {id}
+                  </option>
+                ))}
+              </select>
+              <span className="mt-1 block text-parchment/50">
+                Texting back &quot;shorter, drop the second paragraph&quot; re-runs that step with
+                what you said and asks again, instead of only accepting a number.
+              </span>
+            </label>
+          )}
+        </div>
+      </div>
     );
   }
   if (step.type === "notify_owner") {
