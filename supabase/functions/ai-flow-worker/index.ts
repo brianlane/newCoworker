@@ -5836,6 +5836,12 @@ type FlowEmailArgs = {
   attachScreenshot: boolean;
   /** Rendered `business-docs:<documentId>` ref to attach (Resend path only). */
   attachDocumentRef?: string;
+  /**
+   * Resolved email_log row id to answer inside. Owner-mailbox path only: the
+   * platform route turns it into the provider thread id + Message-Id and
+   * claims the conversation for the email coworker.
+   */
+  replyToEmailLogId?: string;
   fromConnectionId?: string;
 };
 
@@ -6216,7 +6222,11 @@ async function deliverOwnerMailboxEmail(
       ...(action.cc && action.cc.length > 0 ? { cc: action.cc } : {}),
       ...(action.bcc && action.bcc.length > 0 ? { bcc: action.bcc } : {}),
       subject: action.subject,
-      bodyText: action.body
+      bodyText: action.body,
+      // The route resolves this to the row's provider thread id + Message-Id
+      // and threads the send, then claims the conversation for the email
+      // coworker. Forwarded raw: the worker holds no email_log access.
+      ...(action.replyToEmailLogId ? { replyToEmailLogId: action.replyToEmailLogId } : {})
     })
   });
   // 5xx = provider/transport fault → throw so the run retries. 2xx/4xx carry a

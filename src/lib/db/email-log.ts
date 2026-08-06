@@ -423,6 +423,10 @@ export type RecordInboundTriggerEmailInput = {
   flowId: string;
   runId: string | null;
   providerMessageId: string;
+  /** Provider conversation id (Gmail threadId), when the provider has one. */
+  threadId?: string;
+  /** RFC Message-Id header, what In-Reply-To/References carry on a reply. */
+  messageRef?: string;
 };
 
 /**
@@ -446,6 +450,10 @@ export async function recordInboundTriggerEmail(
     run_id: input.runId,
     flow_id: input.flowId,
     provider_message_id: input.providerMessageId,
+    // Normalized to null, never "": a blank identifier reads as real and
+    // would thread a reply against nothing.
+    thread_id: input.threadId?.trim() || null,
+    message_ref: input.messageRef?.trim() || null,
     is_read: true
   });
   if (error) console.error("recordInboundTriggerEmail", error.message);
@@ -687,4 +695,54 @@ export async function organizeTenantEmailLog(
     .eq("id", row.id);
   if (updErr) throw new Error(`organizeTenantEmailLog update: ${updErr.message}`);
   return true;
+}
+
+/**
+ * The identity needed to answer INSIDE an existing conversation, or null when
+ * this row cannot be replied into.
+ *
+ * Shaped to drop straight into `sendFromMailboxConnection`'s `thread`
+ * argument. Null (rather than a partial object) when the row predates the
+ * reply feature, came from a provider that exposes no conversation id, or
+ * does not exist: the caller then sends unthreaded, which still delivers the
+ * mail instead of failing the step over a missing header.
+ *
+ * `thread_id` is the load-bearing one. Gmail files by it, and without it a
+ * `References` header alone will not put the reply in the right conversation,
+ * so a row holding only a message_ref is treated as unthreadable.
+ */
+export async function getEmailLogThreadIdentity(
+  businessId: string,
+  emailLogId: string,
+  client?: SupabaseClient
+): Promise<{
+  threadId: string;
+  inReplyToMessageRef?: string;
+  providerMessageId?: string;
+} | null> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { data, error } = await db
+    .from("email_log")
+    .select("id, thread_id, message_ref, provider_message_id")
+    .eq("business_id", businessId)
+    .eq("id", emailLogId)
+    .maybeSingle();
+  if (error) {
+    console.error("getEmailLogThreadIdentity", error.message);
+    return null;
+  }
+  const row = data as {
+    thread_id?: string | null;
+    message_ref?: string | null;
+    provider_message_id?: string | null;
+  } | null;
+  const threadId = row?.thread_id?.trim();
+  if (!threadId) return null;
+  const messageRef = row?.message_ref?.trim();
+  const providerMessageId = row?.provider_message_id?.trim();
+  return {
+    threadId,
+    ...(messageRef ? { inReplyToMessageRef: messageRef } : {}),
+    ...(providerMessageId ? { providerMessageId } : {})
+  };
 }

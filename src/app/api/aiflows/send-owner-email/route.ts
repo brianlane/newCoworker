@@ -28,6 +28,8 @@ import { sendFromMailboxConnection } from "@/lib/email/owner-mailbox";
 import { normalizeRecipients } from "@/lib/email/recipients";
 import { logger } from "@/lib/logger";
 import { recordSystemLog } from "@/lib/db/system-logs";
+import { getEmailLogThreadIdentity } from "@/lib/db/email-log";
+import { rememberSentThread } from "@/lib/email-coworker/threads";
 
 const recipientList = z.union([z.string(), z.array(z.string())]).optional();
 
@@ -38,7 +40,13 @@ const bodySchema = z.object({
   subject: z.string().min(1).max(300),
   bodyText: z.string().min(1).max(8000),
   cc: recipientList,
-  bcc: recipientList
+  bcc: recipientList,
+  /**
+   * email_log row to answer INSIDE, from a send_email step's
+   * replyToEmailLogId. Absent (or a row with no stored thread) sends a new
+   * conversation, exactly as before.
+   */
+  replyToEmailLogId: z.string().uuid().optional()
 });
 
 export async function POST(request: Request) {
@@ -61,6 +69,13 @@ export async function POST(request: Request) {
       return voiceToolResponse({ ok: false, detail: "not_email_connection" });
     }
 
+    // A reply target whose row never stored a thread id resolves to null and
+    // sends unthreaded: the mail is still worth delivering, it just opens its
+    // own conversation rather than failing the step over a missing header.
+    const thread = body.replyToEmailLogId
+      ? await getEmailLogThreadIdentity(body.businessId, body.replyToEmailLogId)
+      : null;
+
     const result = await sendFromMailboxConnection(
       body.businessId,
       {
@@ -73,11 +88,36 @@ export async function POST(request: Request) {
         subject: body.subject,
         bodyText: body.bodyText,
         ccEmails: normalizeRecipients(body.cc),
-        bccEmails: normalizeRecipients(body.bcc)
+        bccEmails: normalizeRecipients(body.bcc),
+        ...(thread ? { thread } : {})
       }
     );
     if (!result.ok) {
       return voiceToolResponse({ ok: false, detail: result.detail });
+    }
+
+    // Claim the conversation for the autonomous email coworker. This is the
+    // hinge of the whole feature: its poll filters strictly to threads the
+    // assistant owns, so without this the reply goes out and turn two is
+    // back to paging a human. Best-effort, exactly like the other three
+    // callers of rememberSentThread: a failed claim costs autonomy on later
+    // messages, never the send that already succeeded.
+    if (result.threadId) {
+      try {
+        await rememberSentThread({
+          businessId: body.businessId,
+          provider: providerFromKey(row.provider_config_key) === "microsoft" ? "microsoft" : "google",
+          threadId: result.threadId,
+          subject: body.subject,
+          correspondentEmail: body.toEmail,
+          sentMessageRef: result.messageId ?? null
+        });
+      } catch (claimErr) {
+        logger.warn("aiflows/send-owner-email: thread claim failed", {
+          businessId: body.businessId,
+          error: claimErr instanceof Error ? claimErr.message : String(claimErr)
+        });
+      }
     }
     return voiceToolResponse({
       ok: true,

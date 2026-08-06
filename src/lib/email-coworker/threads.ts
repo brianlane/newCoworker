@@ -2,15 +2,25 @@
  * The email coworker's thread ledger: which conversations it owns, and
  * which inbound messages it has already evaluated.
  *
- * SAFETY MODEL. The coworker answers inbound email ONLY inside a thread it
- * started itself. A row here is created when an owner surface sends mail
- * through the EMAIL_SEND protocol (dashboard chat or the owner-over-SMS
- * operator turn), so the candidate set is exactly "conversations the
- * business opened through the assistant". Receipts, newsletters, and the
- * owner's own correspondence are never candidates, and no allowlist has to
- * be curated. Every function here is best-effort where a failure would
- * otherwise break the SEND that triggered it: losing thread ownership
- * costs an autonomous follow-up, never the email itself.
+ * SAFETY MODEL. The coworker answers inbound email ONLY inside a thread this
+ * ledger owns. Ownership is never inferred; a row is created only when the
+ * assistant itself put a message into the conversation, from one of:
+ *
+ *   - an owner surface sending through the EMAIL_SEND protocol (dashboard
+ *     chat, the owner-over-SMS operator turn, the voice send route);
+ *   - a cold-outreach pitch (src/lib/outreach/sweep.ts);
+ *   - a flow's `send_email` reply that the OWNER APPROVED at an
+ *     approval_gate (/api/aiflows/send-owner-email).
+ *
+ * That last one is the only case where the conversation was opened by
+ * somebody else, and it is still not a widening of the filter: the thread
+ * becomes ours because a human read the draft and said send. Receipts,
+ * newsletters, and the owner's own correspondence remain non-candidates,
+ * and no allowlist has to be curated.
+ *
+ * Every function here is best-effort where a failure would otherwise break
+ * the SEND that triggered it: losing thread ownership costs an autonomous
+ * follow-up, never the email itself.
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";

@@ -364,6 +364,15 @@ describe("pollEmailTriggers", () => {
       }),
       expect.anything()
     );
+    // And onto the email_log row, so {{trigger.email_log_id}} resolves to
+    // something a reply can actually be threaded against.
+    expect(recordInboundTriggerEmail).toHaveBeenCalledWith(
+      expect.objectContaining({
+        threadId: "199abc4d5e6f7890",
+        messageRef: "<CAJ=intro@mail.gmail.com>"
+      }),
+      expect.anything()
+    );
   });
 
   it("claims nothing when the coworker owns no messages in the window", async () => {
@@ -479,6 +488,11 @@ describe("pollEmailTriggers", () => {
       }),
       expect.anything()
     );
+    // This fixture's response carries neither identifier, so neither key is
+    // written: a reply against this row would go out unthreaded.
+    const logged = vi.mocked(recordInboundTriggerEmail).mock.calls[0][0];
+    expect(logged).not.toHaveProperty("threadId");
+    expect(logged).not.toHaveProperty("messageRef");
   });
 
   it("marks a triggering Gmail message read ONCE even when several flows match it", async () => {
