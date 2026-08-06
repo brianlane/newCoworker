@@ -115,6 +115,14 @@ ls supabase/migrations | sed 's/_.*//' | sort | uniq -d   # must print nothing
   rename to main. It never renames an applied file, never touches the
   ledger, and refuses to guess on duplicate versions or real drift, which
   still fail the deploy loudly.
+- **Connection:** every DDL command in CI (`db push`, the dry-run drift check,
+  and the heal's ledger read) goes over the IPv4 session pooler on port 5432,
+  never `db.<ref>.supabase.co`. That host publishes only an IPv6 address and
+  GitHub runners cannot route to it, which failed a deploy on 2026-08-06 and,
+  worse, made the heal's ledger read come back empty, a result it cannot tell
+  apart from "no ledger" and so skips on. `supabase-deploy.sh` builds the URL
+  and exports it as `SUPABASE_DB_URL`; the transaction pooler on 6543 would
+  not work here, since it cannot run migrations.
 - **Post-merge backstop:** the `Worker Integration (local Supabase)` job runs
   `supabase start`, which fails on any duplicate or misordered version, and
   `main-failure-watch.yml` retries once then emails on a real failure.

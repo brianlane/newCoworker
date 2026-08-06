@@ -34,6 +34,7 @@ const ALLOWED_LITERALS = [`Human handoff ${EM_DASH} offer to team first`];
 
 function guardedFiles(): string[] {
   const emailTemplatesDir = join(ROOT, "src/lib/email/templates");
+  const workflowsDir = join(ROOT, ".github/workflows");
   return [
     "messages/en.json",
     "messages/es.json",
@@ -66,7 +67,18 @@ function guardedFiles(): string[] {
     "scripts/oneshot/setup-hq-inbox-triage-flow.ts",
     ...readdirSync(emailTemplatesDir)
       .filter((f) => f.endsWith(".ts"))
-      .map((f) => `src/lib/email/templates/${f}`)
+      .map((f) => `src/lib/email/templates/${f}`),
+    // Workflows compose text that leaves the repo: main-failure-watch.yml
+    // builds the deploy-failure EMAIL body and subject, and ci.yml posts a
+    // preview-URL comment on the PR. Rule 4 already covered those surfaces,
+    // but nothing enforced it here, so the alert email shipped four em
+    // dashes (subject included) until the 2026-08-06 deploy investigation
+    // read one in an inbox. The whole directory is guarded, not just the
+    // emailing file, so the next workflow that sends mail is covered the
+    // day it lands rather than the day someone notices.
+    ...readdirSync(workflowsDir)
+      .filter((f) => f.endsWith(".yml") || f.endsWith(".yaml"))
+      .map((f) => `.github/workflows/${f}`)
   ];
 }
 
