@@ -5744,7 +5744,18 @@ async function sendGroupSmsStep(
       groupShortened.links.map((l) => l.shortCode),
       groupOutboundLogId
     );
-    return { kind: "ok", result: { to: recipients, group: true, messageId } };
+    return {
+      kind: "ok",
+      result: {
+        to: recipients,
+        group: true,
+        messageId,
+        // Partial international drops must be visible on SUCCESS too, or a
+        // flow autopsy shows a clean send while some participants never got
+        // the message (Bugbot).
+        ...(droppedInternational.length > 0 ? { droppedInternational } : {})
+      }
+    };
   } catch (e) {
     await release();
     await deleteShortLinks(supabase, groupShortened.links);

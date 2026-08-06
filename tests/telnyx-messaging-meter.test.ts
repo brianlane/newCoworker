@@ -703,3 +703,32 @@ describe("sendTelnyxSms meterBusinessId (atomic reserve)", () => {
     expect(body.from).toBe("+15550009999");
   });
 });
+
+describe("refund boundary is Telnyx acceptance", () => {
+  const rpc = vi.fn();
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    rpc.mockImplementation((name: string) => {
+      if (name === "try_reserve_sms_outbound_slot") {
+        return Promise.resolve({ data: { ok: true }, error: null });
+      }
+      return Promise.resolve({ data: null, error: null });
+    });
+    createSupabaseServiceClient.mockResolvedValue({ rpc } as never);
+  });
+
+  it("keeps the units when the 2xx body fails to parse (charge may exist)", async () => {
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.reject(new Error("bad json"))
+    });
+    await expect(
+      sendTelnyxSms({ apiKey: "k", messagingProfileId: "p" }, "+15550001111", "Hi", {
+        fetchImpl: fetchMock as typeof fetch,
+        meterBusinessId: "biz-1"
+      })
+    ).rejects.toThrow("bad json");
+    expect(rpc).not.toHaveBeenCalledWith("release_sms_outbound_slot", expect.anything());
+  });
+});

@@ -476,15 +476,18 @@ export async function sendTelnyxSms(
       throw new Error(`Telnyx SMS error: ${res.status} ${errText.slice(0, 500)}`);
     }
 
+    // Refund policy: units come back ONLY when Telnyx provably did not
+    // charge (a rejection before acceptance). The 2xx is the acceptance
+    // boundary, so the flag is set BEFORE body parsing: a JSON parse throw
+    // after a 2xx must also keep the units (Bugbot).
+    telnyxAccepted = true;
+
     const json = (await res.json()) as TelnyxMessageResponse;
     const id = json.data?.id;
     if (!id) {
-      // Refund policy: units come back ONLY when Telnyx provably did not
-      // charge (a rejection before acceptance). A 2xx without an id means
-      // Telnyx ACCEPTED the request, so a charge may exist; keep the units
-      // and surface the anomaly loudly instead of refunding a possibly
-      // delivered message.
-      telnyxAccepted = true;
+      // A 2xx without an id means Telnyx ACCEPTED the request, so a charge
+      // may exist; keep the units and surface the anomaly loudly instead of
+      // refunding a possibly delivered message.
       console.error(
         "sendTelnyxSms: 2xx without message id; keeping metered units (charge may exist)"
       );

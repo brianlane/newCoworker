@@ -1678,7 +1678,14 @@ serve(async (req: Request) => {
       // columns first, then the most recent outbound conversation. An
       // unmatched message is parked loudly (system log + telemetry), never
       // guessed.
-      if (!businessId && toDid && from && internationalGatewayFrom() === toDid) {
+      // Both sides normalized: toDid is already E.164-normalized upstream,
+      // and the env value may carry formatting (Bugbot High).
+      if (
+        !businessId &&
+        toDid &&
+        from &&
+        normalizeE164(internationalGatewayFrom() ?? "") === toDid
+      ) {
         const match = await resolveGatewayInboundBusiness(supabase, from);
         if (match) {
           businessId = match.businessId;
