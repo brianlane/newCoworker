@@ -50,7 +50,6 @@ function makeDb(rows: {
   business?: { id: string; phone: string | null } | null;
   prefsPhone?: string | null;
   forwardPhone?: string | null;
-  tenantProfileId?: string | null;
 }) {
   const from = vi.fn((table: string) => {
     const result =
@@ -58,13 +57,7 @@ function makeDb(rows: {
         ? { data: rows.business ?? null, error: null }
         : table === "notification_preferences"
           ? { data: { phone_number: rows.prefsPhone ?? null }, error: null }
-          : {
-              data: {
-                forward_to_e164: rows.forwardPhone ?? null,
-                telnyx_messaging_profile_id: rows.tenantProfileId ?? null
-              },
-              error: null
-            };
+          : { data: { forward_to_e164: rows.forwardPhone ?? null }, error: null };
     const chain: Record<string, unknown> = {};
     chain.select = vi.fn(() => chain);
     chain.update = vi.fn(() => chain);
@@ -100,9 +93,6 @@ describe("api/account/owner-profile route", () => {
     vi.mocked(setForwardToE164).mockResolvedValue(undefined as never);
     vi.mocked(refreshBusinessProfileMdAndLog).mockResolvedValue(undefined as never);
     vi.mocked(syncVaultToVpsAndLog).mockResolvedValue(undefined as never);
-    process.env.TELNYX_MESSAGING_PROFILE_ID = "prof-us";
-    process.env.TELNYX_MESSAGING_PROFILE_ID_CA = "prof-ca";
-    process.env.TELNYX_MESSAGING_PROFILE_ID_MX = "prof-mx";
   });
 
   it("coerces a bare NANP number to E.164 before persisting", async () => {
@@ -250,22 +240,17 @@ describe("api/account/owner-profile route", () => {
     expect(body.data).toMatchObject({ syncedAlertPhone: true, syncedForwardingPhone: false });
   });
 
-  it("returns a deliverability warning for a number outside profile coverage", async () => {
-    // Hong Kong: saves fine, then every SMS would fail at Telnyx. The save
-    // succeeds and the response says so.
+  it("returns a deliverability warning for a non-NANP number", async () => {
+    // Hong Kong: saves fine, then every SMS would fail at Telnyx (the long
+    // codes cannot originate non-NANP SMS). The save succeeds and the
+    // response says so.
     const res = await POST(request({ phone: "+85261234567" }));
     expect(res.status).toBe(200);
     const body = (await res.json()) as { data: { warning: string | null } };
-    expect(body.data.warning).toMatch(/not covered/);
+    expect(body.data.warning).toMatch(/not reachable by SMS/);
   });
 
-  it("returns no warning for a number the tenant profile covers", async () => {
-    vi.mocked(createSupabaseServiceClient).mockResolvedValue(
-      makeDb({
-        business: { id: BIZ, phone: "+15145188192" },
-        tenantProfileId: "prof-ca"
-      }) as never
-    );
+  it("returns no warning for a Canadian number (every profile covers NANP now)", async () => {
     const res = await POST(request({ phone: "+15145188192" }));
     const body = (await res.json()) as { data: { warning: string | null } };
     expect(body.data.warning).toBeNull();

@@ -16,8 +16,8 @@
  * The phone is coerced to E.164 before persisting (previously a loose
  * character-class check let a bare local "6123 4567" save verbatim and get
  * dialed as-is), and the response carries a deliverability warning when the
- * number's country is outside the tenant's Telnyx profile coverage, so a
- * silent SMS outage becomes visible at save time.
+ * number is outside NANP (+1), which the platform's long-code numbers
+ * cannot text at all, so a silent SMS outage becomes visible at save time.
  */
 import { z } from "zod";
 import { resolveActiveBusinessIdForAction } from "@/lib/dashboard/active-business";
@@ -199,27 +199,12 @@ export async function POST(request: Request) {
     }
     if (writeError) throw writeError;
 
-    // Deliverability: a number outside the tenant's Telnyx profile coverage
-    // saves fine and then every SMS to it fails with 40309. Surface that at
-    // save time instead of letting alerts go silently dark.
-    let warning: string | null = null;
-    if (typeof resolvedPhone === "string") {
-      const { data: tset } = await db
-        .from("business_telnyx_settings")
-        .select("telnyx_messaging_profile_id")
-        .eq("business_id", businessId)
-        .maybeSingle();
-      warning = ownerPhoneDeliverabilityWarning(
-        resolvedPhone,
-        (tset as { telnyx_messaging_profile_id?: string | null } | null)
-          ?.telnyx_messaging_profile_id,
-        {
-          us: process.env.TELNYX_MESSAGING_PROFILE_ID,
-          ca: process.env.TELNYX_MESSAGING_PROFILE_ID_CA,
-          mx: process.env.TELNYX_MESSAGING_PROFILE_ID_MX
-        }
-      );
-    }
+    // Deliverability: a non-NANP number saves fine and then every SMS to it
+    // fails with 40309 (our long codes cannot originate international SMS,
+    // see src/lib/phone/deliverability.ts). Surface that at save time
+    // instead of letting alerts go silently dark.
+    const warning =
+      typeof resolvedPhone === "string" ? ownerPhoneDeliverabilityWarning(resolvedPhone) : null;
 
     return successResponse({
       ok: true,
