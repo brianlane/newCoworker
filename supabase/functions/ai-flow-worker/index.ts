@@ -35,6 +35,7 @@ import {
 } from "../_shared/ai_flows/extracted_contact.ts";
 import { stepLogLevel, systemLog } from "../_shared/system_log.ts";
 import { isPermanentTelnyxSmsFailure } from "../_shared/telnyx_permanent_failure.ts";
+import { alphaOwnerAlertProfile, withAlphaNoReplyLine } from "../_shared/alpha_sender.ts";
 import {
   sendOwnerNotifyFallback,
   type OwnerNotifyFallbackReason,
@@ -6574,13 +6575,50 @@ async function notifyOwnerStep(
   // fell through to a silent `notified: null`, which is precisely the loss
   // the fallback exists to end.
   if (isInternationalSmsDestination(smsDestinationCountry(forward))) {
-    // The forwarding number cannot receive our SMS at all (platform long
-    // codes are domestic-only: Telnyx ticket #557577, Aug 2026). Never
-    // attempt the text; the content goes by email with fix-it guidance,
-    // since this state is the owner's own configured number and the
-    // dashboard warned about it at save time. If even the email post
-    // fails, throw so the run retries: SMS being impossible, the retry is
-    // the email's second chance.
+    // With the platform alpha sender configured (post-registration,
+    // TELNYX_INTL_ALPHA_PROFILE_ID set), the notify rides the one-way
+    // NEWCOWORKER identity with its no-reply line: an international owner
+    // still gets the text, on their actual phone. Any failure (an
+    // unregistered destination country, a carrier reject) falls through to
+    // the email fallback below, so the owner never gets less than today.
+    const alphaProfile = alphaOwnerAlertProfile(smsDestinationCountry(forward));
+    const alphaApiKey = cfg?.apiKey ?? Deno.env.get("TELNYX_API_KEY") ?? "";
+    if (alphaProfile && alphaApiKey) {
+      const alphaText = prepareSmsBody(withAlphaNoReplyLine(`[AiFlow] ${action.message}`));
+      const alphaSend = await sendOperationalSms(supabase, run.business_id, {
+        apiKey: alphaApiKey,
+        messagingProfileId: alphaProfile,
+        toE164: forward,
+        text: alphaText,
+        idempotencyKey: `aiflow-notify-alpha:${run.id}:${index}`
+      });
+      if (alphaSend.ok) {
+        await logOutboundSms(supabase, run, {
+          to: forward,
+          from: null,
+          body: alphaText,
+          source: "owner_notify",
+          telnyxMessageId: telnyxMessageIdFromBody(alphaSend.body)
+        });
+        await telemetryRecord(supabase, "ai_flow_notify_owner_alpha_sms", {
+          run_id: run.id,
+          business_id: run.business_id
+        });
+        return { kind: "ok", result: { notified: forward, channel: "alpha_sms" } };
+      }
+      await telemetryRecord(supabase, "ai_flow_notify_owner_alpha_sms_failed", {
+        run_id: run.id,
+        business_id: run.business_id,
+        status: alphaSend.status
+      });
+    }
+    // The forwarding number cannot receive our SMS from long codes
+    // (domestic-only: Telnyx ticket #557577, Aug 2026), and either no alpha
+    // sender is configured or its send just failed. The content goes by
+    // email with fix-it guidance, since this state is the owner's own
+    // configured number and the dashboard warned about it at save time. If
+    // even the email post fails, throw so the run retries: SMS being
+    // impossible, the retry is the email's second chance.
     const fb = await emailFallback("sms_unreachable");
     if (fb === "post_failed") {
       await releaseClaim();
