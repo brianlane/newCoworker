@@ -1,0 +1,16 @@
+[
+  {
+    "advisory": "GHSA-w3rx-r6r6-pgpr",
+    "package": "image-size",
+    "dir": ".",
+    "reason": "No patched release exists (affected <=2.0.2, patched: none). Reached only through pptxgenjs deck generation (src/lib/pptx/from-markdown.ts), which parses tenant-authored images, not anonymous request input.",
+    "expires": "2026-09-07"
+  },
+  {
+    "advisory": "GHSA-5p2g-fcmc-qvqq",
+    "package": "image-size",
+    "dir": ".",
+    "reason": "Same exposure as GHSA-w3rx-r6r6-pgpr: no patched release exists; tenant-authored images only.",
+    "expires": "2026-09-07"
+  }
+]

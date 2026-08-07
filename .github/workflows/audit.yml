@@ -54,6 +54,12 @@ jobs:
         with:
           node-version: ${{ env.NODE_VERSION }}
 
-      - name: npm audit (high+)
+      # Raw `npm audit` has no exception mechanism, so an advisory with NO
+      # patched release (image-size, Aug 2026) would block every PR in the
+      # repo without making anything safer. The wrapper fails on any high+
+      # advisory except those explicitly allowlisted per tree in
+      # .github/audit-allowlist.json, where every entry expires and a fixed
+      # advisory's leftover entry fails the run.
+      - name: npm audit (high+, allowlist-aware)
         working-directory: ${{ matrix.dir }}
-        run: npm audit ${{ matrix.flags }} --audit-level=high
+        run: node "$GITHUB_WORKSPACE/scripts/audit-with-allowlist.mjs" ${{ matrix.flags }}
