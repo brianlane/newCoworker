@@ -89,6 +89,70 @@ describe("email_organize schema + planner", () => {
     });
   });
 
+  it("carries `trash` from the authored step into the planned action", () => {
+    /**
+     * The producer end of the trash plumbing. A `trash` that validates at
+     * authoring but never reaches the action is the exact shape that let
+     * `message_ref` ship emitted-but-unreferenceable: the schema accepts it,
+     * the gateway handles it, and the planner in between quietly drops it, so
+     * the flow files the mail and never bins it.
+     */
+    const plan = planStep(
+      {
+        id: "org1",
+        type: "email_organize",
+        markRead: true,
+        addLabels: ["HQ/Automated"],
+        trash: true
+      } as FlowStep,
+      {
+        vars: {},
+        trigger: {
+          channel: "email",
+          windowText: "hi",
+          url: null,
+          from: "noreply@zapier.com",
+          message_id: "rfc-zap"
+        }
+      }
+    );
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(plan.action).toMatchObject({
+      kind: "email_organize",
+      messageId: "rfc-zap",
+      markRead: true,
+      addLabels: ["HQ/Automated"],
+      trash: true
+    });
+  });
+
+  it("omits `trash` entirely when the step did not ask for it", () => {
+    // Never a literal false: the gateway treats presence as intent, and a
+    // stray `trash: false` on every organize action is one refactor away from
+    // binning mail nobody asked to bin.
+    const plan = planStep(
+      { id: "org1", type: "email_organize", archive: true } as FlowStep,
+      {
+        vars: {},
+        trigger: { channel: "email", windowText: "hi", url: null, from: "a@b.com", message_id: "m" }
+      }
+    );
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(plan.action).not.toHaveProperty("trash");
+  });
+
+  it("accepts a trash-only step at authoring, since trash IS an action", () => {
+    expect(() =>
+      parseAiFlowDefinition({
+        version: 1,
+        trigger: { channel: "tenant_email", conditions: [] },
+        steps: [{ id: "org1", type: "email_organize", trash: true }]
+      })
+    ).not.toThrow();
+  });
+
   it("falls back to trigger.connection_id on connected email triggers", () => {
     const plan = planStep(
       {
