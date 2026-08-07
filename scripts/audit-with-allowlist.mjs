@@ -82,8 +82,16 @@ for (const [pkg, vuln] of Object.entries(report.vulnerabilities ?? {})) {
     // transitive chain); only the objects carry the advisory itself.
     if (typeof via !== "object" || via === null) continue;
     if (!FAIL_LEVELS.has(via.severity)) continue;
-    const id = String(via.url ?? "").split("/").pop() ?? "";
-    if (!id.startsWith("GHSA-")) continue;
+    // Prefer the GHSA id, but an advisory published under a numeric npm URL
+    // (or none at all) must still FAIL rather than slip past the gate: fall
+    // back to the whole URL, then to source/package. Only entries whose
+    // derived id is allowlisted are excused, whatever shape the id takes.
+    const tail = String(via.url ?? "").split("/").pop() ?? "";
+    const id =
+      tail.startsWith("GHSA-")
+        ? tail
+        : String(via.url ?? "").trim() ||
+          (via.source !== undefined ? `advisory-${via.source}` : `package-${via.name ?? pkg}`);
     if (!found.has(id)) {
       found.set(id, { id, package: via.name ?? pkg, title: via.title ?? "" });
     }
