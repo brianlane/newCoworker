@@ -20,14 +20,16 @@
  *   tsx debug/read-cron-jobs.ts            # diff, exit 1 on any drift
  *   tsx debug/read-cron-jobs.ts --json     # machine-readable dump, same exit
  *
- * Connects via DIRECT_DATABASE_URL (falls back to DATABASE_URL). The pooler
- * URL works too; direct is preferred because the cron schema always exists
- * there.
+ * Connects via DIRECT_DATABASE_URL, the SESSION pooler on port 5432. It falls
+ * back to DATABASE_URL only when that is also a session connection: the
+ * transaction pooler (6543) drops the read-only session setting above without
+ * reporting anything, so accepting it would hand a writable session to a
+ * script that advertises itself as read-only. See sessionDbUrl in _shared.ts.
  */
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
 import { Client } from "pg";
-import { loadEnv } from "./_shared.ts";
+import { loadEnv, sessionDbUrl } from "./_shared.ts";
 
 loadEnv();
 
@@ -81,12 +83,10 @@ function repoJobs(): Map<string, JobNumbers> {
 }
 
 async function main(): Promise<void> {
-  const rawUrl = process.env.DIRECT_DATABASE_URL ?? process.env.DATABASE_URL ?? "";
-  if (!rawUrl) throw new Error("DIRECT_DATABASE_URL / DATABASE_URL not set (run from a checkout that resolves .env)");
-  // An sslmode= in the URL overrides the ssl option below (pg treats it as
-  // verify-full and rejects Supabase's self-signed chain). Strip it so the
-  // explicit setting wins.
-  const url = rawUrl.replace(/([?&])sslmode=[^&]*&?/, "$1").replace(/[?&]$/, "");
+  // Session connection, sslmode stripped, transaction pooler refused: the
+  // read-only guard below is a session setting the transaction pooler drops
+  // without telling anyone. See sessionDbUrl in _shared.ts.
+  const url = sessionDbUrl();
 
   const client = new Client({
     connectionString: url,

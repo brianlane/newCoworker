@@ -24,7 +24,7 @@
  * Read-only: the session is opened default_transaction_read_only=on.
  */
 import { Client } from "pg";
-import { loadEnv } from "./_shared.ts";
+import { loadEnv, sessionDbUrl } from "./_shared.ts";
 import {
   summarizeResponses,
   type HttpResponseRow
@@ -35,12 +35,10 @@ loadEnv();
 const AS_JSON = process.argv.includes("--json");
 
 async function main(): Promise<void> {
-  const rawUrl = process.env.DIRECT_DATABASE_URL ?? process.env.DATABASE_URL ?? "";
-  if (!rawUrl) throw new Error("DIRECT_DATABASE_URL / DATABASE_URL not set (run from a checkout that resolves .env)");
-  // An sslmode= in the URL overrides the ssl option below (pg treats it as
-  // verify-full and rejects Supabase's self-signed chain). Strip it so the
-  // explicit setting wins. Same handling as read-cron-jobs.ts.
-  const url = rawUrl.replace(/([?&])sslmode=[^&]*&?/, "$1").replace(/[?&]$/, "");
+  // Session connection, sslmode stripped, transaction pooler refused: the
+  // read-only guard below is a session setting the transaction pooler drops
+  // without telling anyone. See sessionDbUrl in _shared.ts.
+  const url = sessionDbUrl();
 
   const client = new Client({
     connectionString: url,
