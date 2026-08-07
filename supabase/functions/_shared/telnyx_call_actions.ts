@@ -376,6 +376,56 @@ export async function telnyxDialCall(
   });
 }
 
+/**
+ * Bridge two ALREADY-ESTABLISHED legs together.
+ *
+ * Distinct from `telnyxTransferCall`, which takes a leg AWAY from whatever it
+ * was doing and dials a number on it. Bridging joins a leg that is already in
+ * a conversation to a second leg that was dialed separately, which is what
+ * lets an assistant keep talking to a caller while a teammate's phone rings
+ * and only hand over once that teammate genuinely answers.
+ *
+ * `callControlId` is the leg the command is issued ON; `otherCallControlId`
+ * is the leg it is joined TO.
+ *
+ * `parkAfterUnbridge` decides what happens to this leg when the bridge later
+ * ends. Parking it holds the leg instead of hanging it up, which is what a
+ * caller's leg wants: if the teammate drops, the caller is still connected and
+ * something can come back to them rather than leaving them with dead air.
+ *
+ * Telnyx expects the STRING "self" here, not a boolean: the wire value names
+ * which leg to park. A boolean is silently ignored, and the failure is
+ * invisible until a teammate actually drops and the caller is hung up on.
+ *
+ * `commandId` is Telnyx's own idempotency key. It ignores a repeat of the same
+ * command_id on the same leg, so a retried bridge cannot double-join.
+ */
+export async function telnyxBridgeCall(
+  apiKey: string,
+  callControlId: string,
+  opts: {
+    otherCallControlId: string;
+    parkAfterUnbridge?: boolean;
+    clientState?: string;
+    commandId?: string;
+  },
+  fetchImpl: typeof fetch = fetch
+): Promise<Response> {
+  const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/bridge`;
+  const body: Record<string, unknown> = { call_control_id: opts.otherCallControlId };
+  if (opts.parkAfterUnbridge === true) body.park_after_unbridge = "self";
+  if (opts.clientState) body.client_state = encodeClientState(opts.clientState);
+  if (opts.commandId) body.command_id = opts.commandId;
+  return fetchImpl(url, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json"
+    },
+    body: JSON.stringify(body)
+  });
+}
+
 /** Reject without answering so carrier/PBX can apply busy treatment (e.g. voicemail). */
 export async function rejectIncomingCall(
   apiKey: string,
