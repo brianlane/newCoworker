@@ -118,11 +118,17 @@ ls supabase/migrations | sed 's/_.*//' | sort | uniq -d   # must print nothing
 - **Connection:** every DDL command in CI (`db push`, the dry-run drift check,
   and the heal's ledger read) goes over the IPv4 session pooler on port 5432,
   never `db.<ref>.supabase.co`. That host publishes only an IPv6 address and
-  GitHub runners cannot route to it, which failed a deploy on 2026-08-06 and,
-  worse, made the heal's ledger read come back empty, a result it cannot tell
-  apart from "no ledger" and so skips on. `supabase-deploy.sh` builds the URL
-  and exports it as `SUPABASE_DB_URL`; the transaction pooler on 6543 would
-  not work here, since it cannot run migrations.
+  GitHub runners cannot route to it, which failed a deploy on 2026-08-06.
+  `supabase-deploy.sh` builds the URL and exports it as `SUPABASE_DB_URL`; the
+  transaction pooler on 6543 would not work here, since it cannot run
+  migrations.
+- **A failed ledger read now fails the deploy.** It used to come back as an
+  empty set, indistinguishable from "nothing applied yet", so the heal skipped
+  with a soft warning; that is how the 2026-08-06 connectivity failure showed
+  up. `read_applied` propagates the CLI's exit status and prints its message,
+  and only a genuinely empty ledger still skips softly. If you see
+  `could not read the applied migration ledger`, treat it as connectivity or
+  credentials, never as an empty database.
 - **Post-merge backstop:** the `Worker Integration (local Supabase)` job runs
   `supabase start`, which fails on any duplicate or misordered version, and
   `main-failure-watch.yml` retries once then emails on a real failure.
