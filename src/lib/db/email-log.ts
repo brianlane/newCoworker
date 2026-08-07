@@ -439,9 +439,9 @@ export type RecordInboundTriggerEmailInput = {
 export async function recordInboundTriggerEmail(
   input: RecordInboundTriggerEmailInput,
   client?: SupabaseClient
-): Promise<void> {
+): Promise<string | null> {
   const db = client ?? (await createSupabaseServiceClient());
-  const { error } = await db.from("email_log").insert({
+  const { data, error } = await db.from("email_log").insert({
     business_id: input.businessId,
     direction: "inbound",
     to_email: input.toRecipients?.trim() || null,
@@ -459,8 +459,18 @@ export async function recordInboundTriggerEmail(
     thread_id: input.threadId?.trim() || null,
     message_ref: input.messageRef?.trim() || null,
     is_read: true
-  });
-  if (error) console.error("recordInboundTriggerEmail", error.message);
+  })
+    .select("id")
+    .single();
+  if (error) {
+    console.error("recordInboundTriggerEmail", error.message);
+    return null;
+  }
+  // The row id, so the poller can put it in the trigger scope as
+  // {{trigger.email_log_id}}. A send_email step answering this conversation
+  // resolves the thread off this row, so a null here degrades to a reply that
+  // opens its own thread rather than one that fails.
+  return (data as { id?: string } | null)?.id ?? null;
 }
 
 export type RecordTenantMailboxInboundInput = {

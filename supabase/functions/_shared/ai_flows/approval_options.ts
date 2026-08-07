@@ -22,12 +22,21 @@
 
 export type ApprovalGateOption = "approve" | "skip" | "bypass_quiet_hours" | "cancel";
 
-/** Owner-facing instruction fragment per option ("Reply N to <this>"). */
+/**
+ * Owner-facing instruction fragment per option ("Reply N to <this>").
+ *
+ * `skip` and `cancel` read as near-synonyms to an owner deciding in five
+ * seconds on a phone, and the difference is real: skip drops ONLY the step
+ * this gate guards and lets the rest of the workflow finish (on the HQ inbox
+ * flow that means the reply is not sent but the email is still filed), while
+ * cancel stops the whole run. Say which, rather than leaving the owner to
+ * infer it.
+ */
 export const APPROVAL_OPTION_INSTRUCTIONS: Record<ApprovalGateOption, string> = {
   approve: "approve",
-  skip: "skip this step",
+  skip: "skip just this step and let the rest of the workflow finish",
   bypass_quiet_hours: "approve and skip quiet hours for the rest of this workflow",
-  cancel: "cancel the workflow"
+  cancel: "stop the whole workflow"
 };
 
 /** Dashboard button label per option. */
@@ -72,14 +81,23 @@ export function buildApprovalGateOptions(opts: {
 }
 
 /**
- * "Reply 1 to approve, 2 to skip this step, … or N to cancel the workflow."
+ * "Reply 1 to approve, 2 to skip just this step, … or N to stop the whole
+ * workflow." When the gate accepts a modification, the text says so: the
+ * capability shipped invisible otherwise, since an owner has no way to guess
+ * that free text does anything from a list of numbers.
  */
-export function approvalSmsInstruction(options: ApprovalGateOption[]): string {
+export function approvalSmsInstruction(
+  options: ApprovalGateOption[],
+  opts: { allowModify?: boolean } = {}
+): string {
   const parts = options.map(
     (opt, i) => `${i + 1} to ${APPROVAL_OPTION_INSTRUCTIONS[opt]}`
   );
-  if (parts.length === 1) return `Reply ${parts[0]}.`;
-  return `Reply ${parts.slice(0, -1).join(", ")}, or ${parts[parts.length - 1]}.`;
+  const numbered =
+    parts.length === 1
+      ? `Reply ${parts[0]}.`
+      : `Reply ${parts.slice(0, -1).join(", ")}, or ${parts[parts.length - 1]}.`;
+  return opts.allowModify ? `${numbered} Or just tell me what to change.` : numbered;
 }
 
 /**

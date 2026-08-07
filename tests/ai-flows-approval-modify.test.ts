@@ -33,6 +33,7 @@ import {
 import {
   approvalModifyForReply,
   approvalOptionForReply,
+  approvalSmsInstruction,
   parseStoredApprovalOptions,
   parseStoredRedraftStepIndex,
   type ApprovalGateOption
@@ -136,5 +137,29 @@ describe("the rewind actually relocates the run", () => {
     // cleared it instead of re-pointing would give that up.
     const shifted = [{ step: { id: "s_new", type: "notify_owner" } }, ...FLAT] as never;
     expect(resolveResumeIndex(shifted, 0, "s_draft")).toBe(1);
+  });
+});
+
+describe("the gate says what it accepts", () => {
+  it("advertises free text only when the gate actually takes it", () => {
+    // The modify branch shipped live and INVISIBLE: the text listed three
+    // numbers and never mentioned that "shorter, drop the last line" works.
+    // An owner has no way to guess that from a list of digits.
+    const opts: ApprovalGateOption[] = ["approve", "skip", "cancel"];
+    expect(approvalSmsInstruction(opts)).toBe(
+      "Reply 1 to approve, 2 to skip just this step and let the rest of the workflow finish, " +
+        "or 3 to stop the whole workflow."
+    );
+    expect(approvalSmsInstruction(opts, { allowModify: true })).toContain(
+      "Or just tell me what to change."
+    );
+  });
+
+  it("distinguishes skip from cancel in the owner's own words", () => {
+    // "skip this step" and "cancel the workflow" read as synonyms on a phone,
+    // and the difference is real: skip still files the email, cancel does not.
+    const text = approvalSmsInstruction(["approve", "skip", "cancel"]);
+    expect(text).toContain("skip just this step and let the rest of the workflow finish");
+    expect(text).toContain("stop the whole workflow");
   });
 });

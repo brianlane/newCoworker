@@ -361,26 +361,37 @@ async function fetchMicrosoftMessages(
 }
 
 /**
- * Whether a raw stored step tree contains a send_email step ANYWHERE (trunk,
- * branch arms, branch elses). Deliberately schema-tolerant, like
- * collectRawWorkspaceConnectionRefs: stored definitions can predate the
- * current schema, and unknown shapes contribute nothing.
+ * Whether a stored step tree ALWAYS answers the email: an unconditional
+ * `send_email` on the trunk.
+ *
+ * This used to accept a send_email ANYWHERE, including inside a branch arm or
+ * behind a `when` guard. That held while a flow was either a responder or a
+ * notifier, and broke the moment one flow became both: the HQ inbox triage
+ * grew a reply arm for sales leads, flipped to "answers email", and started
+ * marking Zapier newsletters read on the way past. The header comment on this
+ * module already warned that "a triage flow silently marking them read makes
+ * the inbox lie about what needs attention" — the predicate was just too
+ * generous to honor it.
+ *
+ * Deliberately conservative. A `when`, a branch arm, or an approval gate all
+ * mean the send MIGHT not happen, and the poll cannot know at enqueue time
+ * whether it will. Guessing wrong in this direction leaves a message unread
+ * that we answered, which the owner notices and shrugs at; guessing wrong the
+ * other way hides mail nobody has looked at.
+ *
+ * A flow that wants a conditionally-answered message marked read should say
+ * so where it knows the answer: an `email_organize` step with
+ * `markRead: true` on the arm that did the replying.
+ *
+ * Schema-tolerant like collectRawWorkspaceConnectionRefs: stored definitions
+ * can predate the current schema, and unknown shapes contribute nothing.
  */
 function rawStepsSendEmail(steps: unknown[]): boolean {
   for (const raw of steps) {
     if (!raw || typeof raw !== "object") continue;
-    const step = raw as {
-      type?: unknown;
-      branches?: Array<{ steps?: unknown[] }>;
-      else?: unknown[];
-    };
-    if (step.type === "send_email") return true;
-    if (step.type === "branch") {
-      for (const arm of Array.isArray(step.branches) ? step.branches : []) {
-        if (Array.isArray(arm?.steps) && rawStepsSendEmail(arm.steps)) return true;
-      }
-      if (Array.isArray(step.else) && rawStepsSendEmail(step.else)) return true;
-    }
+    const step = raw as { type?: unknown; when?: unknown };
+    // Trunk only, and unguarded: nested arms are conditional by construction.
+    if (step.type === "send_email" && step.when === undefined) return true;
   }
   return false;
 }
@@ -587,36 +598,26 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
             )
           )
             continue;
-          const run = await enqueueAiFlowRun(
-            {
-              businessId,
-              flowId: flow.id,
-              trigger: scope,
-              dedupeKey: `email:${msg.id}`
-            },
-            db
-          );
-          if (!run) continue; // already enqueued by an earlier tick
-          result.enqueued += 1;
-          // Only a flow that answers the email itself may mark it read; a
-          // notify-only run leaves the message for the owner to read.
-          if (isGoogleMailbox && flow.handlesEmail && !markedHandled.has(msg.id)) {
-            markedHandled.add(msg.id);
-            await markGmailMessageHandled(businessId, link, msg.id);
-          }
-          // Surface the triggering email on the dashboard Emails page.
-          await recordInboundTriggerEmail(
+          // Log the email BEFORE enqueuing, so its row id can ride in the
+          // trigger scope. A send_email step answering this conversation
+          // resolves the thread off that row, and a scope built before the
+          // row existed carried an empty {{trigger.email_log_id}}: the reply
+          // went out as a NEW conversation with a "Re:" subject, un-cc'd and
+          // unclaimed, while looking correct in the sent folder.
+          //
+          // run_id is stamped after the enqueue below. An enqueue that then
+          // no-ops (an earlier tick already claimed this message) leaves one
+          // run-less row on the Emails page, which is the honest record: the
+          // mail did arrive.
+          const emailLogId = await recordInboundTriggerEmail(
             {
               businessId,
               fromEmail: msg.fromEmail,
               subject: msg.subject,
               bodyText: msg.bodyText,
               flowId: flow.id,
-              runId: run.id,
+              runId: null,
               providerMessageId: msg.id,
-              // Kept so a later send_email step can answer INSIDE this
-              // conversation: {{trigger.email_log_id}} resolves to this row,
-              // and the send path reads these two off it.
               ...(msg.threadId ? { threadId: msg.threadId } : {}),
               ...(msg.messageRef ? { messageRef: msg.messageRef } : {}),
               ...(msg.toRecipients ? { toRecipients: msg.toRecipients } : {}),
@@ -624,6 +625,45 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
             },
             db
           );
+          const run = await enqueueAiFlowRun(
+            {
+              businessId,
+              flowId: flow.id,
+              trigger: emailLogId ? { ...scope, email_log_id: emailLogId } : scope,
+              dedupeKey: `email:${msg.id}`
+            },
+            db
+          );
+          if (!run) {
+            // Another tick claimed this message first and logged its own row.
+            // Drop ours rather than leaving a duplicate on the Emails page:
+            // logging moved ahead of the enqueue for the scope's sake, and a
+            // lost race must not become visible clutter.
+            if (emailLogId) {
+              const { error: delErr } = await db
+                .from("email_log")
+                .delete()
+                .eq("business_id", businessId)
+                .eq("id", emailLogId);
+              if (delErr) console.error("email_log dedupe cleanup", delErr.message);
+            }
+            continue;
+          }
+          result.enqueued += 1;
+          if (emailLogId) {
+            const { error: linkErr } = await db
+              .from("email_log")
+              .update({ run_id: run.id })
+              .eq("business_id", businessId)
+              .eq("id", emailLogId);
+            if (linkErr) console.error("email_log run link", linkErr.message);
+          }
+          // Only a flow that answers the email itself may mark it read; a
+          // notify-only run leaves the message for the owner to read.
+          if (isGoogleMailbox && flow.handlesEmail && !markedHandled.has(msg.id)) {
+            markedHandled.add(msg.id);
+            await markGmailMessageHandled(businessId, link, msg.id);
+          }
           await recordSystemLog({
             businessId,
             source: "aiflow",

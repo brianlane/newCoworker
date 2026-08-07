@@ -1184,7 +1184,9 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
         await sendOwnerSms(
           supabase,
           run,
-          `${approvalPrompt}\n\n${approvalSmsInstruction(gateOptions)}`,
+          `${approvalPrompt}\n\n${approvalSmsInstruction(gateOptions, {
+            allowModify: redraftIndex >= 0
+          })}`,
           `aiflow-approval:${run.id}:${index}`
         );
       } catch (e) {
