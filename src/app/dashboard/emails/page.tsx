@@ -18,7 +18,8 @@ import { getEmailLogRow, listEmailLog } from "@/lib/db/email-log";
 import {
   coerceEmailsViewFilter,
   emailListFiltersFromView,
-  parseEmailsViewFilter
+  parseEmailsViewFilter,
+  withLinkedEmailRow
 } from "@/lib/dashboard/email-filters";
 import { listSendFromOptions } from "@/lib/email/mailbox-options";
 import { findContactsByEmails, type EmailContactLink } from "@/lib/db/contact-emails";
@@ -105,12 +106,7 @@ export default async function DashboardEmailsPage({
     // a bad or foreign id just opens the page normally.
     selectedId ? getEmailLogRow(business.id, selectedId).catch(() => null) : null
   ]);
-  // Prepend when the linked row fell outside the list query (age, or a view
-  // filter that excludes its source). Never duplicate one already present.
-  const rows =
-    linkedRow && !listRows.some((r) => r.id === linkedRow.id)
-      ? [linkedRow, ...listRows]
-      : listRows;
+  const rows = withLinkedEmailRow(listRows, linkedRow);
   // Same gate as the replay route: only flows that file the lead before any
   // outreach can guarantee a replay never re-texts an existing contact.
   const replayFlows = flows

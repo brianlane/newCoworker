@@ -100,3 +100,23 @@ export function emailListFiltersFromView(input: {
   }
   return filters;
 }
+
+/**
+ * Merge the row a deep link named into the list the page fetched.
+ *
+ * The Emails page lists only the newest 100 rows and the reading pane resolves
+ * its selection against that array, so an SMS alert link tapped days later, or
+ * on a busy mailbox, would open the page to nothing. The linked row is fetched
+ * separately and prepended here when the list query missed it, whether that is
+ * because of age or because the active view filters out its source.
+ *
+ * Never duplicates: a row already in the list is left exactly where it is, so
+ * the ordering the query chose is preserved and React keys stay unique.
+ */
+export function withLinkedEmailRow<T extends { id: string }>(
+  rows: T[],
+  linked: T | null | undefined
+): T[] {
+  if (!linked) return rows;
+  return rows.some((r) => r.id === linked.id) ? rows : [linked, ...rows];
+}

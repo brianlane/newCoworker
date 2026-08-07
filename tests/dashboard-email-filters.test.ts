@@ -2,7 +2,8 @@ import { describe, expect, it } from "vitest";
 import {
   coerceEmailsViewFilter,
   emailListFiltersFromView,
-  parseEmailsViewFilter
+  parseEmailsViewFilter,
+  withLinkedEmailRow
 } from "@/lib/dashboard/email-filters";
 
 describe("email-filters", () => {
@@ -93,5 +94,39 @@ describe("email-filters", () => {
       direction: "inbound",
       sources: ["tenant_mailbox_inbound", "tenant_mailbox_outbound"]
     });
+  });
+});
+
+describe("withLinkedEmailRow", () => {
+  /**
+   * The SMS alert links to one message by id. The page lists only the newest
+   * 100 rows and the reading pane resolves its selection against that array,
+   * so without this a link tapped days later opens the page to nothing.
+   */
+  const row = (id: string) => ({ id });
+
+  it("prepends a linked row the list query missed", () => {
+    // Age, or a view whose source filter excludes it: either way it is absent.
+    expect(withLinkedEmailRow([row("a"), row("b")], row("z"))).toEqual([
+      row("z"),
+      row("a"),
+      row("b")
+    ]);
+  });
+
+  it("leaves a row already in the list exactly where it is", () => {
+    // Prepending a duplicate would reorder the list and collide React keys.
+    const rows = [row("a"), row("b"), row("c")];
+    expect(withLinkedEmailRow(rows, row("b"))).toEqual(rows);
+  });
+
+  it("returns the list untouched when nothing was linked", () => {
+    const rows = [row("a")];
+    expect(withLinkedEmailRow(rows, null)).toBe(rows);
+    expect(withLinkedEmailRow(rows, undefined)).toBe(rows);
+  });
+
+  it("handles an empty list, which is the case the deep link exists for", () => {
+    expect(withLinkedEmailRow([], row("z"))).toEqual([row("z")]);
   });
 });
