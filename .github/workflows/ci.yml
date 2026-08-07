@@ -160,8 +160,9 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
-      - name: npm audit (prod deps, high+)
-        run: npm audit --omit=dev --audit-level=high
+      - name: npm audit (prod deps, high+, allowlist-aware)
+        # Same allowlist-aware wrapper as audit.yml; see scripts/audit-with-allowlist.mjs.
+        run: node scripts/audit-with-allowlist.mjs --omit=dev
 
   # The REAL ai-flow-worker against a REAL local Postgres: `supabase start`
   # applies every migration (which keeps the migration ledger honest: the

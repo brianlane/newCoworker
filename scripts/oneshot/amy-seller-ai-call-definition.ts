@@ -184,12 +184,15 @@ export function withAiCallLines(template: string, outcomeVar = "call_outcome"): 
  */
 export type Ref = { id: string; label: string; source: "employee" };
 
+/** How long each teammate's phone rings before the ladder moves on. */
+export const REACH_RING_SECONDS = 20;
+
 /** Build the immediate first-contact call step. No calling window: a lead at
  *  22:40 still gets called, which is the entire point of first contact. */
 export function buildCallStep(
   id: string,
   variant: SellerCallVariant,
-  refs: { dave: Ref },
+  refs: { dave: Ref; amy: Ref },
   opts: { attempt: 1 | 2 | 3 }
 ): Step {
   const step: Record<string, unknown> = {
@@ -198,7 +201,14 @@ export function buildCallStep(
     toVar: "lead_phone",
     personaTemplate: variant === "clever" ? PITCH_CLEVER : PITCH_REFERRAL_EXCHANGE,
     contextTemplate: PITCH_CONTEXT,
-    transfer: { toRef: refs.dave, preSmsTemplate: CALLBACK_REQUEST_SMS },
+    // The second-leg ladder: Dave first, Amy as the fallback, while the AI
+    // keeps the seller engaged. Amy's ask, verbatim: try Dave then Amy
+    // "while still on the call with the lead engaging them".
+    reachTeammate: {
+      refs: [refs.dave, refs.amy],
+      ringSeconds: REACH_RING_SECONDS,
+      preSmsTemplate: CALLBACK_REQUEST_SMS
+    },
     notifyRef: refs.dave,
     waitMinutes: CALL_WAIT_MINUTES,
     saveAs: "call_outcome"
@@ -243,7 +253,7 @@ export function hasSellerCallLadder(def: Definition): boolean {
  */
 function buildFollowups(
   variant: SellerCallVariant,
-  refs: { dave: Ref },
+  refs: { dave: Ref; amy: Ref },
   gate?: { var: string; equals: string }
 ): Step {
   const retry3: Record<string, unknown> = {
@@ -366,7 +376,7 @@ function buildFollowups(
 export function addSellerCallLadder(
   def: Definition,
   variant: SellerCallVariant,
-  refs: { dave: Ref },
+  refs: { dave: Ref; amy: Ref },
   opts: {
     routeStepId: string;
     /**
@@ -482,6 +492,42 @@ export function removeBestTimeCaptureField(def: Definition): boolean {
         const next = cap.filter((f) => f !== BEST_TIME_CAPTURE_FIELD);
         if (next.length > 0) st.captureFields = next;
         else delete st.captureFields;
+        changed = true;
+      }
+      if (st.type === "branch") {
+        for (const arm of (st.branches as { steps: Step[] }[]) ?? []) walk(arm.steps);
+        walk((st.else as Step[]) ?? []);
+      }
+    }
+  };
+  walk(def.steps as Step[]);
+  return changed;
+}
+
+/**
+ * Upgrade an ALREADY-APPLIED ladder from the single-target transfer to the
+ * reach ladder, in place. The Clever flow went live with `transfer` (the
+ * only shipped mechanism at the time); once reach_teammate deployed, this
+ * swap points its three call steps at the Dave-then-Amy second leg. False
+ * when every call step already carries the ladder, so re-running is a
+ * no-op.
+ */
+export function upgradeCallsToReachLadder(def: Definition, refs: { dave: Ref; amy: Ref }): boolean {
+  let changed = false;
+  const walk = (steps: readonly Step[]): void => {
+    for (const st of steps as unknown as Record<string, unknown>[]) {
+      if (
+        st.type === "place_ai_call" &&
+        typeof st.id === "string" &&
+        /^ai_call_[123]$/.test(st.id) &&
+        !st.reachTeammate
+      ) {
+        st.reachTeammate = {
+          refs: [refs.dave, refs.amy],
+          ringSeconds: REACH_RING_SECONDS,
+          preSmsTemplate: CALLBACK_REQUEST_SMS
+        };
+        delete st.transfer;
         changed = true;
       }
       if (st.type === "branch") {
