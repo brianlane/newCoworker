@@ -320,6 +320,19 @@ describe("reach ladder payload and context", () => {
     });
   });
 
+  it("stamps a minimal ladder without ring seconds or pre-SMS keys", () => {
+    const plan = parsePlaceCallPayload({
+      ...BASE,
+      // A rung whose name is not a string keeps its number and gets "".
+      reach: { targets: [{ name: 7, e164: "+16025245719" }] }
+    });
+    expect(plan?.reach).toEqual({ targets: [{ name: "", e164: "+16025245719" }] });
+    const ctx = outboundSessionContext(plan!);
+    expect(ctx.reach_targets).toEqual({ targets: [{ name: "", e164: "+16025245719" }] });
+    expect(ctx.reach_targets).not.toHaveProperty("ring_seconds");
+    expect(ctx.reach_targets).not.toHaveProperty("pre_sms_body");
+  });
+
   it("omits reach_targets entirely when the plan has no ladder", () => {
     const plan = parsePlaceCallPayload(BASE);
     expect(outboundSessionContext(plan!)).not.toHaveProperty("reach_targets");
