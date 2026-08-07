@@ -54,6 +54,37 @@ function spokeCheckFlow(): Record<string, unknown> {
   return def;
 }
 
+/**
+ * The real spoke-check shape: the same owner_assigned trigger, plus a goal
+ * watching `claimed` — which is the same event class that starts it.
+ */
+function spokeCheckWithClaimedGoal(): Record<string, unknown> {
+  const def = {
+    version: 1,
+    trigger: {
+      channel: "owner_assigned",
+      conditions: [{ type: "contains", value: "clever", caseInsensitive: true }]
+    },
+    steps: [
+      {
+        id: "read_contact",
+        type: "extract_text",
+        fields: [{ name: "lead_name", description: "The contact's full name" }]
+      },
+      { id: "week_1_sleep", type: "sleep", minutes: 10080 },
+      {
+        id: "converted",
+        type: "goal",
+        label: "Lead reached / converted",
+        events: [{ kind: "replied" }, { kind: "claimed" }]
+      },
+      { id: "wrap_up", type: "notify_owner", message: "Follow-up finished for {{vars.lead_name}}." }
+    ]
+  };
+  parseAiFlowDefinition(def);
+  return def;
+}
+
 let db: SupabaseClient;
 
 async function seedRoster(biz: string): Promise<string> {
@@ -78,13 +109,14 @@ async function runsFor(
 /** One business set up to claim LEAD on the next tick. */
 async function seedClaimScenario(
   name: string,
-  contactOver: Record<string, unknown>
+  contactOver: Record<string, unknown>,
+  watcher: Record<string, unknown> = spokeCheckFlow()
 ): Promise<{ biz: string; watcherId: string }> {
   const biz = await seedBusiness(db, name);
   await db.from("businesses").update({ lead_auto_assign: true }).eq("id", biz);
   await seedRoster(biz);
   await seedContact(db, biz, LEAD, contactOver);
-  const watcherId = await createFlow(db, biz, spokeCheckFlow());
+  const watcherId = await createFlow(db, biz, watcher);
   const claimId = await createFlow(db, biz, claimingFlow());
   // No extract_text step: leadContactPhone falls back to the trigger's
   // `from`, which keeps this test off the AI path entirely.
@@ -135,5 +167,47 @@ describe("owner_assigned event shape (real worker)", () => {
     await tickWorker();
 
     expect(await runsFor(watcherId)).toHaveLength(0);
+  });
+});
+
+
+/**
+ * A flow started BY a claim must not be jumped to its goal by that same claim.
+ *
+ * Amy Laidlaw's weekly Clever follow-up did exactly that the first time it ever
+ * fired (2026-08-06). It triggers on owner_assigned, which a claim emits, and
+ * watches a `claimed` goal. The claim assigned ownership, that enqueued this
+ * run, and the goal event fired a moment later and found it sitting queued, so
+ * the run jumped straight to its goal and finished having executed nothing.
+ * The owner got "follow-up finished for ()." with every field blank, because
+ * the extraction step that fills them was one of the steps skipped.
+ *
+ * The fix is ordering: fire the goal event BEFORE assigning ownership, so it
+ * only ever reaches runs that already existed. That is what the code comment
+ * ("the lead's OTHER parked/queued runs") always meant.
+ */
+describe("a claim does not jump the run it just created", () => {
+  it("leaves the new owner_assigned run to actually execute", async () => {
+    const { watcherId } = await seedClaimScenario(
+      "IT claim self jump",
+      { display_name: "Joe Seller", tags: ["Clever", "Seller"] },
+      spokeCheckWithClaimedGoal()
+    );
+
+    await tickWorker();
+
+    const { data, error } = await db
+      .from("ai_flow_runs")
+      .select("id, context")
+      .eq("flow_id", watcherId);
+    if (error) throw new Error(`runs: ${error.message}`);
+    const runs = (data ?? []) as Array<{ id: string; context: Record<string, unknown> }>;
+    expect(runs).toHaveLength(1);
+
+    const vars = (runs[0].context.vars ?? {}) as Record<string, unknown>;
+    // The tell-tale of the bug: the goal marker stamped on a run that never
+    // ran a step, with actions_taken reading only "jumped to goal".
+    expect(vars.__goal_converted).toBeUndefined();
+    expect(String(vars.actions_taken ?? "")).not.toContain("jumped to goal");
   });
 });
