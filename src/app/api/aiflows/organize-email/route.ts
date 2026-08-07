@@ -26,6 +26,7 @@ const bodySchema = z.object({
     markUnread: z.boolean().optional(),
     archive: z.boolean().optional(),
     unarchive: z.boolean().optional(),
+    trash: z.boolean().optional(),
     addLabels: z.array(z.string().min(1).max(120)).max(20).optional(),
     removeLabels: z.array(z.string().min(1).max(120)).max(20).optional(),
     moveToFolder: z.string().min(1).max(120).optional()

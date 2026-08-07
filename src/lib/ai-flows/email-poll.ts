@@ -31,6 +31,8 @@
  */
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { nangoProxyForBusiness } from "@/lib/nango/workspace";
+import { connectionEmail } from "@/lib/email/mailbox-options";
+import { tenantEmailDomain } from "@/lib/email/tenant-mailbox";
 import { getWorkspaceOAuthConnection } from "@/lib/db/workspace-oauth-connections";
 import { isEmailProviderConfigKey, providerFromKey } from "@/lib/voice-tools/connections";
 import { enqueueAiFlowRun } from "@/lib/ai-flows/db";
@@ -172,7 +174,20 @@ async function fetchGmailMessages(
   sinceMs: number,
   alreadyHandled: HandledLookup
 ): Promise<MailboxFetch> {
-  const q = encodeURIComponent(`in:inbox after:${Math.floor(sinceMs / 1000)}`);
+  // `-from:me` is the loop breaker, and it has to be the PROVIDER's idea of
+  // "me", not ours. Live, Aug 7 2026: the sales arm replied-all, which cc'd
+  // team@newcoworker.com (our own alias, since the Cloudflare catch-all
+  // forwards it into this very mailbox). The reply came straight back as
+  // genuinely RECEIVED mail, matched the flow again, drafted another reply,
+  // and went round six times before Brian stopped it.
+  //
+  // `in:inbox` does not help: a self-addressed message really is delivered to
+  // the inbox. Nor does an address list of ours, because the send went out as
+  // a send-as ALIAS (team@) rather than the account (newcoworkerteam@). Gmail
+  // resolves `me` to the account AND every configured send-as alias, which is
+  // exactly the set we cannot enumerate ourselves. Verified against the live
+  // HQ mailbox: it drops all seven self-sent copies and keeps the real lead.
+  const q = encodeURIComponent(`in:inbox after:${Math.floor(sinceMs / 1000)} -from:me`);
   // List the whole lookback window first (id-only pages are cheap) — Gmail's
   // list order is NOT guaranteed, so capping mid-listing could repeatedly
   // keep the same arbitrary subset and starve the rest across ticks.
@@ -425,6 +440,32 @@ function emailFlowsFrom(
   return out;
 }
 
+/**
+ * Is this message one of OURS coming back at us?
+ *
+ * The second layer of the self-reply guard. `-from:me` handles Gmail using the
+ * provider's own alias list, but Outlook has no equivalent in its filter and a
+ * forwarded self-send lands in the inbox there too. This catches what we can
+ * name without the provider's help: the account behind the OAuth grant, and
+ * anything on the tenant email domain, which is where the AI mailbox and the
+ * catch-all aliases (team@, contact@) live.
+ *
+ * It is deliberately not the only guard. It cannot know a send-as alias on an
+ * unrelated domain, which is why the Gmail query carries `-from:me` as well.
+ */
+export function isOwnOutboundSender(
+  fromEmail: string,
+  accountEmail: string | null | undefined,
+  tenantDomain: string
+): boolean {
+  const from = fromEmail.trim().toLowerCase();
+  if (!from) return false;
+  const account = (accountEmail ?? "").trim().toLowerCase();
+  if (account && from === account) return true;
+  const at = from.lastIndexOf("@");
+  return at !== -1 && from.slice(at + 1) === tenantDomain.trim().toLowerCase();
+}
+
 /** Page size for the flow listing — paged so no flow is silently skipped. */
 export const EMAIL_POLL_FLOW_PAGE = 100;
 
@@ -555,7 +596,33 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
           payload: { connection_id: connectionId, messages_read: messages.length }
         });
       }
-      result.messages += messages.length;
+      // Drop anything we sent before it can match a flow. See
+      // isOwnOutboundSender: this is the provider-agnostic half of the guard.
+      const accountEmail = connectionEmail(conn.metadata ?? {});
+      const tenantDomain = tenantEmailDomain();
+      const ownSent = messages.filter((m) =>
+        isOwnOutboundSender(m.fromEmail, accountEmail, tenantDomain)
+      );
+      if (ownSent.length > 0) {
+        // Loud, because reaching here means the query-level guard let one
+        // through and something is cc'ing us onto our own conversations.
+        await recordSystemLog({
+          businessId,
+          source: "aiflow",
+          level: "warn",
+          event: "ai_flow_email_poll_self_sent_skipped",
+          message: "Skipped inbound mail sent from one of our own addresses",
+          payload: {
+            connection_id: connectionId,
+            count: ownSent.length,
+            from: [...new Set(ownSent.map((m) => m.fromEmail))].slice(0, 5)
+          }
+        });
+      }
+      const inbound = messages.filter(
+        (m) => !isOwnOutboundSender(m.fromEmail, accountEmail, tenantDomain)
+      );
+      result.messages += inbound.length;
       // Pre-resolve each flow's from_matches saved-contact refs ONCE for this
       // poll (not per message) to live identity values (phones + emails). A
       // resolution failure fails CLOSED for that flow only.
@@ -583,7 +650,7 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
       // Messages already marked read this poll: several flows can match the
       // same message, but the mailbox write should happen once.
       const markedHandled = new Set<string>();
-      for (const msg of messages) {
+      for (const msg of inbound) {
         const scope = emailTriggerScope(msg, { connectionId });
         for (const flow of group) {
           seenRows.push({ flow_id: flow.id, message_id: msg.id });

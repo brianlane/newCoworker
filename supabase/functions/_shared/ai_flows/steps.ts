@@ -421,6 +421,12 @@ export type StepAction =
       markUnread?: boolean;
       archive?: boolean;
       unarchive?: boolean;
+      /**
+       * Move to the provider's trash. Recoverable (Gmail keeps it 30 days);
+       * there is no hard-delete counterpart anywhere in the engine, because
+       * the caller is usually an AI classification.
+       */
+      trash?: boolean;
       addLabels?: string[];
       removeLabels?: string[];
       moveToFolder?: string;
@@ -1406,6 +1412,7 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           ...(step.markUnread ? { markUnread: true } : {}),
           ...(step.archive ? { archive: true } : {}),
           ...(step.unarchive ? { unarchive: true } : {}),
+          ...(step.trash ? { trash: true } : {}),
           ...(addLabels.length ? { addLabels } : {}),
           ...(removeLabels.length ? { removeLabels } : {}),
           ...(moveToFolder ? { moveToFolder } : {})

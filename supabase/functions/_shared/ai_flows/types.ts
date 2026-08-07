@@ -716,6 +716,16 @@ export type FlowStep =
       markUnread?: boolean;
       archive?: boolean;
       unarchive?: boolean;
+      /**
+       * Move the message to the provider's trash (Gmail Bin / Outlook Deleted
+       * Items), or soft-delete the AI mailbox row. Recoverable: Gmail keeps a
+       * trashed message for 30 days, so this is not a permanent delete and
+       * there is deliberately no hard-delete action.
+       *
+       * Runs LAST, after any labelling, so a message can be filed and binned
+       * in one step and still be findable by label in the bin.
+       */
+      trash?: boolean;
       addLabels?: string[];
       removeLabels?: string[];
       moveToFolder?: string;

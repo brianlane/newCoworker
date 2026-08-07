@@ -22,6 +22,7 @@ import {
   voiceToolResponse,
   voiceToolValidationError
 } from "@/lib/voice-tools/common";
+import { tenantEmailDomain } from "@/lib/email/tenant-mailbox";
 import { getWorkspaceOAuthConnection } from "@/lib/db/workspace-oauth-connections";
 import { isEmailProviderConfigKey, providerFromKey } from "@/lib/voice-tools/connections";
 import { sendFromMailboxConnection } from "@/lib/email/owner-mailbox";
@@ -87,9 +88,25 @@ export async function POST(request: Request) {
         .map((a) => (typeof a === "string" ? a.trim().toLowerCase() : ""))
         .filter(Boolean)
     );
+    // Our OWN alias domain has to go too, or the reply cc's us and comes
+    // straight back in. Live, Aug 7 2026: the original was addressed to
+    // team@newcoworker.com, the Cloudflare catch-all forwards that into the
+    // connected mailbox, and the account behind the grant is
+    // newcoworkerteam@gmail.com. So `provider_account_email` did not match
+    // team@ and we cc'd ourselves, the reply arrived as genuinely received
+    // mail, and the flow answered it six times.
+    //
+    // The poller now refuses self-sent mail as well, which is what actually
+    // stops a loop. This is the other half: not generating the copy at all,
+    // so the owner's inbox stays clean rather than quietly filtered.
+    const ownDomain = tenantEmailDomain();
+    const isOurs = (a: string): boolean => {
+      const at = a.lastIndexOf("@");
+      return ownAddresses.has(a) || (at !== -1 && a.slice(at + 1) === ownDomain);
+    };
     const replyAllCc = [
       ...normalizeRecipients(body.cc),
-      ...(thread?.replyAllRecipients ?? []).filter((a) => !ownAddresses.has(a))
+      ...(thread?.replyAllRecipients ?? []).filter((a) => !isOurs(a))
     ];
 
     const result = await sendFromMailboxConnection(

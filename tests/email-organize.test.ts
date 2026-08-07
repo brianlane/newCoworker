@@ -13,11 +13,13 @@ vi.mock("@/lib/nango/workspace", () => ({
 vi.mock("@/lib/db/workspace-oauth-connections", () => ({
   getWorkspaceOAuthConnection: getConn
 }));
+const softDelete = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/db/email-log", async (importOriginal) => {
   const actual = await importOriginal<typeof import("@/lib/db/email-log")>();
   return {
     ...actual,
-    organizeTenantEmailLog: organizeTenant
+    organizeTenantEmailLog: organizeTenant,
+    softDeleteEmailLogEntry: softDelete
   };
 });
 
@@ -48,6 +50,7 @@ describe("organizeMessage", () => {
     nangoProxy.mockReset();
     getConn.mockReset();
     organizeTenant.mockReset();
+    softDelete.mockReset();
   });
 
   it("rejects when no actions are provided", async () => {
@@ -678,5 +681,213 @@ describe("organizeMessage", () => {
         actions: { unarchive: true }
       })
     ).resolves.toEqual({ ok: false, detail: "email_not_connected" });
+  });
+});
+
+describe("organizeMessage: trash", () => {
+  /**
+   * Added Aug 7 2026 so the HQ triage flow can BIN the unsubscribable Zapier
+   * mail it already recognises. Deliberately reversible: Gmail keeps a
+   * trashed message for 30 days and this never calls messages.delete, because
+   * the caller is an AI classification and that has to be undoable.
+   */
+  beforeEach(() => {
+    nangoProxy.mockReset();
+    getConn.mockReset();
+    organizeTenant.mockReset();
+    softDelete.mockReset();
+  });
+
+  it("counts as an action on its own, so a trash-only step is valid", async () => {
+    getConn.mockResolvedValue(gmailConn());
+    nangoProxy.mockResolvedValue({ status: 200, data: {} });
+    const res = await organizeMessage({
+      businessId: BIZ,
+      connectionId: CONN,
+      messageId: "m-only",
+      actions: { trash: true }
+    });
+    expect(res).toEqual({ ok: true, provider: "google" });
+    // No labels to change, so modify is skipped entirely and trash is the
+    // single call. The old code would have short-circuited to "noop" here.
+    expect(nangoProxy).toHaveBeenCalledTimes(1);
+    expect(nangoProxy).toHaveBeenCalledWith(
+      BIZ,
+      expect.anything(),
+      expect.objectContaining({ endpoint: "/gmail/v1/users/me/messages/m-only/trash", method: "POST" })
+    );
+  });
+
+  it("labels FIRST and bins second, so the message stays findable in the bin", async () => {
+    getConn.mockResolvedValue(gmailConn());
+    nangoProxy
+      .mockResolvedValueOnce({ status: 200, data: { labels: [{ id: "L9", name: "HQ/Automated" }] } })
+      .mockResolvedValueOnce({ status: 200, data: {} })
+      .mockResolvedValueOnce({ status: 200, data: {} });
+    const res = await organizeMessage({
+      businessId: BIZ,
+      connectionId: CONN,
+      messageId: "m-z",
+      actions: { markRead: true, addLabels: ["HQ/Automated"], trash: true }
+    });
+    expect(res).toEqual({ ok: true, provider: "google" });
+    const endpoints = nangoProxy.mock.calls.map((c) => (c[2] as { endpoint: string }).endpoint);
+    expect(endpoints).toEqual([
+      "/gmail/v1/users/me/labels",
+      "/gmail/v1/users/me/messages/m-z/modify",
+      "/gmail/v1/users/me/messages/m-z/trash"
+    ]);
+  });
+
+  it("never calls messages.delete, which is the permanent one", async () => {
+    getConn.mockResolvedValue(gmailConn());
+    nangoProxy.mockResolvedValue({ status: 200, data: {} });
+    await organizeMessage({
+      businessId: BIZ,
+      connectionId: CONN,
+      messageId: "m-d",
+      actions: { trash: true }
+    });
+    for (const call of nangoProxy.mock.calls) {
+      const { endpoint, method } = call[2] as { endpoint: string; method: string };
+      expect(`${method} ${endpoint}`).not.toMatch(/DELETE /);
+      expect(endpoint).not.toMatch(/\/delete$/);
+    }
+  });
+
+  it("surfaces a failed trash instead of reporting success", async () => {
+    getConn.mockResolvedValue(gmailConn());
+    nangoProxy.mockResolvedValue({ status: 403, data: {} });
+    await expect(
+      organizeMessage({ businessId: BIZ, connectionId: CONN, messageId: "m-f", actions: { trash: true } })
+    ).resolves.toEqual({ ok: false, detail: "gmail_trash_failed:403" });
+  });
+
+  it("reports a disconnected mailbox on the trash call", async () => {
+    getConn.mockResolvedValue(gmailConn());
+    nangoProxy.mockResolvedValue(null);
+    await expect(
+      organizeMessage({ businessId: BIZ, connectionId: CONN, messageId: "m-n", actions: { trash: true } })
+    ).resolves.toEqual({ ok: false, detail: "email_not_connected" });
+  });
+
+  it("refuses to bin and restore in the same step", async () => {
+    // An authoring mistake, not a sequence: picking a winner would silently do
+    // half of what the author asked.
+    for (const conflicting of [{ unarchive: true }, { markUnread: true }]) {
+      await expect(
+        organizeMessage({
+          businessId: BIZ,
+          connectionId: CONN,
+          messageId: "m1",
+          actions: { trash: true, ...conflicting }
+        })
+      ).resolves.toEqual({ ok: false, detail: "trash_and_restore_conflict" });
+    }
+  });
+
+  it("soft-deletes the AI mailbox row, after applying the other actions", async () => {
+    organizeTenant.mockResolvedValue(true);
+    softDelete.mockResolvedValue(1);
+    const res = await organizeMessage({
+      businessId: BIZ,
+      emailLogId: LOG,
+      actions: { markRead: true, trash: true }
+    });
+    expect(res).toEqual({ ok: true, provider: "tenant" });
+    expect(organizeTenant).toHaveBeenCalledTimes(1);
+    expect(softDelete).toHaveBeenCalledWith(BIZ, LOG, "ai_flow");
+  });
+
+  it("trashes a tenant row with no other action, skipping the organize write", async () => {
+    softDelete.mockResolvedValue(1);
+    const res = await organizeMessage({ businessId: BIZ, emailLogId: LOG, actions: { trash: true } });
+    expect(res).toEqual({ ok: true, provider: "tenant" });
+    // organizeTenantEmailLog needs a field of its own; a trash-only request
+    // has none, so calling it would fail on an empty patch.
+    expect(organizeTenant).not.toHaveBeenCalled();
+  });
+
+  it("bins an Outlook message into deleteditems, not just the Gmail path", async () => {
+    /**
+     * Caught by Bugbot on the first push: `trash` was documented for Outlook
+     * and organizeMessage routes connected mailboxes to organizeOutlook, but
+     * that function never read the flag. It returned { ok: true } and left the
+     * mail in the inbox, so a flow would believe it had binned something it
+     * had not. Exactly the silent-success shape this codebase keeps hitting.
+     */
+    getConn.mockResolvedValue(outlookConn());
+    // No preflight folder lookup: deleteditems is a well-known id.
+    nangoProxy.mockResolvedValueOnce({ status: 200, data: { id: "moved" } });
+    const res = await organizeMessage({
+      businessId: BIZ,
+      connectionId: CONN,
+      messageId: "AAMkTrash",
+      actions: { trash: true }
+    });
+    expect(res).toEqual({ ok: true, provider: "microsoft" });
+    expect(nangoProxy).toHaveBeenCalledWith(
+      BIZ,
+      expect.anything(),
+      expect.objectContaining({
+        endpoint: "/v1.0/me/messages/AAMkTrash/move",
+        method: "POST",
+        data: { destinationId: "deleteditems" }
+      })
+    );
+    // Resolved by well-known id, never by display name: "Deleted Items" is
+    // localised, so a name lookup would fail on a non-English mailbox.
+    for (const call of nangoProxy.mock.calls) {
+      expect((call[2] as { endpoint: string }).endpoint).not.toMatch(/mailFolders\?/);
+    }
+  });
+
+  it("bins rather than files when a step asks for both", async () => {
+    // Graph has no delete verb: a bin IS a move, and a message cannot be in
+    // deleteditems and a filing folder at once. Trash has to win, or the
+    // message quietly stays put in the folder instead.
+    getConn.mockResolvedValue(outlookConn());
+    nangoProxy.mockResolvedValueOnce({ status: 200, data: { id: "moved" } });
+    const res = await organizeMessage({
+      businessId: BIZ,
+      connectionId: CONN,
+      messageId: "AAMkBoth",
+      actions: { trash: true, archive: true, moveToFolder: "HQ/Automated" }
+    });
+    expect(res).toEqual({ ok: true, provider: "microsoft" });
+    const move = nangoProxy.mock.calls.find((c) =>
+      (c[2] as { endpoint: string }).endpoint.endsWith("/move")
+    );
+    expect((move?.[2] as { data: { destinationId: string } }).data.destinationId).toBe(
+      "deleteditems"
+    );
+  });
+
+  it("surfaces a failed Outlook bin instead of reporting success", async () => {
+    getConn.mockResolvedValue(outlookConn());
+    nangoProxy.mockResolvedValueOnce({ status: 500, data: {} });
+    await expect(
+      organizeMessage({
+        businessId: BIZ,
+        connectionId: CONN,
+        messageId: "AAMkFail",
+        actions: { trash: true }
+      })
+    ).resolves.toEqual({ ok: false, detail: "outlook_move_failed:500" });
+  });
+
+  it("needs the row id to trash a tenant message", async () => {
+    // The soft delete is keyed by id, and a provider message id cannot resolve
+    // one here, so say so rather than silently skipping the delete.
+    await expect(
+      organizeMessage({ businessId: BIZ, messageId: "<rfc@id>", actions: { trash: true } })
+    ).resolves.toEqual({ ok: false, detail: "email_log_id_required_for_trash" });
+  });
+
+  it("reports a tenant row that was already gone", async () => {
+    softDelete.mockResolvedValue(0);
+    await expect(
+      organizeMessage({ businessId: BIZ, emailLogId: LOG, actions: { trash: true } })
+    ).resolves.toEqual({ ok: false, detail: "email_log_not_found" });
   });
 });

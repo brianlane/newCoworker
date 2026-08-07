@@ -15,6 +15,7 @@ import {
 import { isEmailProviderConfigKey, providerFromKey } from "@/lib/voice-tools/connections";
 import {
   organizeTenantEmailLog,
+  softDeleteEmailLogEntry,
   type OrganizeTenantEmailInput
 } from "@/lib/db/email-log";
 
@@ -23,6 +24,13 @@ export type OrganizeEmailActions = {
   markUnread?: boolean;
   archive?: boolean;
   unarchive?: boolean;
+  /**
+   * Move to the provider's trash (Gmail Bin / Outlook Deleted Items), or
+   * soft-delete the AI mailbox row. Recoverable by design: Gmail keeps a
+   * trashed message for 30 days. There is no hard-delete counterpart, because
+   * the caller is often an AI classification and that must always be undoable.
+   */
+  trash?: boolean;
   addLabels?: string[];
   removeLabels?: string[];
   /** Folder display name (null/empty clears to Inbox for tenant; provider move for Outlook/Gmail). */
@@ -63,6 +71,7 @@ function hasAnyAction(actions: OrganizeEmailActions): boolean {
       actions.markUnread ||
       actions.archive ||
       actions.unarchive ||
+      actions.trash ||
       (actions.addLabels && actions.addLabels.length > 0) ||
       (actions.removeLabels && actions.removeLabels.length > 0) ||
       actions.moveToFolder !== undefined
@@ -82,6 +91,11 @@ export async function organizeMessage(req: OrganizeEmailRequest): Promise<Organi
   }
   if (req.actions.archive && req.actions.unarchive) {
     return { ok: false, detail: "archive_and_unarchive_conflict" };
+  }
+  // Binning something and asking for it back in the inbox in one step is a
+  // authoring mistake, not a sequence: refuse rather than pick a winner.
+  if (req.actions.trash && (req.actions.unarchive || req.actions.markUnread)) {
+    return { ok: false, detail: "trash_and_restore_conflict" };
   }
 
   const actions: OrganizeEmailActions = {
@@ -130,8 +144,31 @@ async function organizeTenant(
   if (!input.emailLogId && !input.providerMessageId) {
     return { ok: false, detail: "email_log_id_or_message_id_required" };
   }
-  const updated = await organizeTenantEmailLog(input);
-  if (!updated) return { ok: false, detail: "email_log_not_found" };
+  // markRead/labels first so the row is filed the way the caller asked, then
+  // the soft delete. organizeTenantEmailLog needs at least one field of its
+  // own, so a trash-only request skips straight to the delete.
+  const wantsOrganize = Boolean(
+    input.markRead ||
+      input.markUnread ||
+      input.archive ||
+      input.unarchive ||
+      input.addLabels?.length ||
+      input.removeLabels?.length ||
+      input.moveToFolder !== undefined
+  );
+  if (wantsOrganize) {
+    const updated = await organizeTenantEmailLog(input);
+    if (!updated) return { ok: false, detail: "email_log_not_found" };
+  }
+  if (actions.trash) {
+    // The soft delete is keyed by row id, and organizeTenantEmailLog reports
+    // only whether it matched, so a trash on this path needs the id up front.
+    // Every AiFlow caller has it: email_organize prefers {{trigger.email_log_id}}.
+    const rowId = emailLogId?.trim() || null;
+    if (!rowId) return { ok: false, detail: "email_log_id_required_for_trash" };
+    const removed = await softDeleteEmailLogEntry(businessId, rowId, "ai_flow");
+    if (removed === 0) return { ok: false, detail: "email_log_not_found" };
+  }
   return { ok: true, provider: "tenant" };
 }
 
@@ -183,21 +220,39 @@ async function organizeGmail(
 
   const uniqueAdd = [...new Set(addLabelIds)];
   const uniqueRemove = [...new Set(removeLabelIds)].filter((id) => !uniqueAdd.includes(id));
-  if (uniqueAdd.length === 0 && uniqueRemove.length === 0) {
+  if (uniqueAdd.length === 0 && uniqueRemove.length === 0 && !actions.trash) {
     return { ok: true, provider: "google", detail: "noop" };
   }
 
-  const res = await nangoProxyForBusiness(businessId, link, {
-    endpoint: `/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}/modify`,
-    method: "POST",
-    data: {
-      ...(uniqueAdd.length ? { addLabelIds: uniqueAdd } : {}),
-      ...(uniqueRemove.length ? { removeLabelIds: uniqueRemove } : {})
+  if (uniqueAdd.length > 0 || uniqueRemove.length > 0) {
+    const res = await nangoProxyForBusiness(businessId, link, {
+      endpoint: `/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}/modify`,
+      method: "POST",
+      data: {
+        ...(uniqueAdd.length ? { addLabelIds: uniqueAdd } : {}),
+        ...(uniqueRemove.length ? { removeLabelIds: uniqueRemove } : {})
+      }
+    });
+    if (!res) return { ok: false, detail: "email_not_connected" };
+    if (res.status >= 400) {
+      return { ok: false, detail: `gmail_modify_failed:${res.status}` };
     }
-  });
-  if (!res) return { ok: false, detail: "email_not_connected" };
-  if (res.status >= 400) {
-    return { ok: false, detail: `gmail_modify_failed:${res.status}` };
+  }
+
+  // Trash LAST, so labels applied above survive on the binned message and it
+  // is still findable by label in the Bin. messages.trash is reversible
+  // (untrash, 30-day retention) and is NOT messages.delete, which is
+  // permanent and deliberately never called anywhere in this codebase.
+  if (actions.trash) {
+    const res = await nangoProxyForBusiness(businessId, link, {
+      endpoint: `/gmail/v1/users/me/messages/${encodeURIComponent(messageId)}/trash`,
+      method: "POST",
+      data: {}
+    });
+    if (!res) return { ok: false, detail: "email_not_connected" };
+    if (res.status >= 400) {
+      return { ok: false, detail: `gmail_trash_failed:${res.status}` };
+    }
   }
   return { ok: true, provider: "google" };
 }
@@ -263,14 +318,20 @@ async function organizeOutlook(
 
   // Prefer an explicit folder move over Archive so archive+moveToFolder matches
   // Gmail (label + leave Inbox) instead of silently dropping the folder.
+  //
+  // Trash outranks everything: Graph has no separate delete-to-bin verb, so a
+  // bin IS a move to the well-known deleteditems folder, and a message cannot
+  // sit in both there and a filing folder. Resolved by well-known id rather
+  // than display name because "Deleted Items" is localised.
   let destinationName: string | null = null;
-  if (actions.moveToFolder?.trim()) destinationName = actions.moveToFolder.trim();
+  let destinationId: string | null = null;
+  if (actions.trash) destinationId = "deleteditems";
+  else if (actions.moveToFolder?.trim()) destinationName = actions.moveToFolder.trim();
   else if (actions.archive) destinationName = "Archive";
   else if (actions.unarchive) destinationName = "Inbox";
 
   // Preflight reads first so folder/category lookup failures do not leave a
   // half-applied mailbox (Graph has no multi-op transaction).
-  let destinationId: string | null = null;
   if (destinationName) {
     destinationId = await resolveOutlookFolderId(businessId, link, destinationName);
     if (!destinationId) {

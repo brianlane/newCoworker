@@ -17,6 +17,7 @@ import {
   EMAIL_POLL_MAX_LIST_PAGES,
   gmailBodyText,
   gmailHeader,
+  isOwnOutboundSender,
   parseFromAddress,
   pollEmailTriggers
 } from "@/lib/ai-flows/email-poll";
@@ -457,6 +458,62 @@ describe("pollEmailTriggers", () => {
       }),
       expect.anything()
     );
+  });
+
+  it("never enqueues a run for mail sent from one of our own addresses", async () => {
+    // The Aug 7 2026 loop, end to end through the real poller. The sales arm
+    // replied-all onto team@newcoworker.com, our own catch-all alias, so the
+    // reply arrived as genuinely RECEIVED mail and matched the flow again.
+    // Six drafts went out before Brian stopped it.
+    //
+    // Driven from the raw Gmail payload rather than by calling the predicate,
+    // because the bug was never in the predicate: it was that nothing
+    // consulted one. `connectionEmail` reads newcoworkerteam@gmail.com off the
+    // connection, which is exactly why a plain equality check missed team@.
+    vi.mocked(getWorkspaceOAuthConnection).mockResolvedValue({
+      ...googleConn,
+      metadata: { provider_account_email: "newcoworkerteam@gmail.com" }
+    } as never);
+    vi.mocked(nangoProxyForBusiness)
+      .mockResolvedValueOnce({ data: { messages: [{ id: "m-self" }] } } as never)
+      .mockResolvedValueOnce({
+        data: {
+          internalDate: "1760000000000",
+          payload: {
+            headers: [
+              { name: "From", value: "Brian <team@newcoworker.com>" },
+              { name: "Subject", value: "Re: Referral for Bobby" }
+            ],
+            mimeType: "text/plain",
+            body: { data: b64url("Thanks for thinking of us, James!") }
+          }
+        }
+      } as never);
+    const res = await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
+    expect(enqueueAiFlowRun).not.toHaveBeenCalled();
+    // Not merely unenqueued: it never counts as a message this poll handled.
+    expect(res.enqueued).toBe(0);
+    expect(res.messages).toBe(0);
+    // Loud, because reaching here means -from:me let one through.
+    expect(recordSystemLog).toHaveBeenCalledWith(
+      expect.objectContaining({
+        level: "warn",
+        event: "ai_flow_email_poll_self_sent_skipped",
+        payload: expect.objectContaining({ count: 1, from: ["team@newcoworker.com"] })
+      })
+    );
+  });
+
+  it("asks Gmail to exclude our own sends, using the provider's alias list", async () => {
+    // `-from:me` is the first guard and the only one that knows about send-as
+    // aliases on domains we cannot enumerate. Verified against the live HQ
+    // mailbox: it drops the self-sent copies and keeps the real lead.
+    vi.mocked(nangoProxyForBusiness).mockResolvedValueOnce({ data: { messages: [] } } as never);
+    await pollEmailTriggers(dbWith([flowRow("f1", emailTrigger())]));
+    const endpoint = (vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as { endpoint: string })
+      .endpoint;
+    expect(decodeURIComponent(endpoint)).toContain("-from:me");
+    expect(decodeURIComponent(endpoint)).toContain("in:inbox");
   });
 
   it("claims nothing when the coworker owns no messages in the window", async () => {
@@ -1424,5 +1481,53 @@ describe("email_log bookkeeping around the enqueue", () => {
     expect(res.enqueued).toBe(0);
     expect(err).toHaveBeenCalledWith("email_log dedupe cleanup", "nope");
     err.mockRestore();
+  });
+});
+
+describe("isOwnOutboundSender: the flow must never answer its own mail", () => {
+  /**
+   * Live, Aug 7 2026. The sales arm replied-all, which cc'd
+   * team@newcoworker.com. That is our OWN alias: the Cloudflare catch-all
+   * forwards it into the very mailbox this poller reads, so the reply came
+   * back as genuinely RECEIVED mail, matched the flow again, and drafted
+   * another reply. It went round six times before Brian stopped it.
+   *
+   * `in:inbox` does not help, because a self-addressed message really is
+   * delivered to the inbox.
+   */
+  const DOMAIN = "newcoworker.com";
+  const ACCOUNT = "newcoworkerteam@gmail.com";
+
+  it("catches the account behind the OAuth grant", () => {
+    expect(isOwnOutboundSender(ACCOUNT, ACCOUNT, DOMAIN)).toBe(true);
+    expect(isOwnOutboundSender("  NewCoworkerTeam@Gmail.com ", ACCOUNT, DOMAIN)).toBe(true);
+  });
+
+  it("catches the catch-all aliases the account email never matches", () => {
+    // The exact loop: provider_account_email is the gmail.com address, so a
+    // plain equality check let team@ straight through.
+    expect(isOwnOutboundSender("team@newcoworker.com", ACCOUNT, DOMAIN)).toBe(true);
+    expect(isOwnOutboundSender("contact@newcoworker.com", ACCOUNT, DOMAIN)).toBe(true);
+    // The caller passes a bare address: parseFromAddress has already unwrapped
+    // the "Brian <team@newcoworker.com>" display form by this point.
+    expect(isOwnOutboundSender(parseFromAddress("Brian <team@newcoworker.com>"), ACCOUNT, DOMAIN)).toBe(true);
+  });
+
+  it("lets real inbound mail through, which is the half that matters most", () => {
+    // Over-matching here silently drops leads, which is worse than the loop.
+    expect(isOwnOutboundSender("fullvanair@gmail.com", ACCOUNT, DOMAIN)).toBe(false);
+    expect(isOwnOutboundSender("james@kypads.com", ACCOUNT, DOMAIN)).toBe(false);
+    // A lookalike domain is NOT ours: suffix matching would be a real bug.
+    expect(isOwnOutboundSender("someone@notnewcoworker.com", ACCOUNT, DOMAIN)).toBe(false);
+    expect(isOwnOutboundSender("someone@newcoworker.com.evil.test", ACCOUNT, DOMAIN)).toBe(false);
+  });
+
+  it("degrades safely on junk", () => {
+    expect(isOwnOutboundSender("", ACCOUNT, DOMAIN)).toBe(false);
+    expect(isOwnOutboundSender("   ", ACCOUNT, DOMAIN)).toBe(false);
+    expect(isOwnOutboundSender("not-an-address", ACCOUNT, DOMAIN)).toBe(false);
+    // No account on the connection row still leaves the domain rule working.
+    expect(isOwnOutboundSender("team@newcoworker.com", null, DOMAIN)).toBe(true);
+    expect(isOwnOutboundSender("james@kypads.com", null, DOMAIN)).toBe(false);
   });
 });
