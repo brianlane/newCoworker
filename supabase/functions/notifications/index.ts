@@ -333,6 +333,21 @@ serve(async (req: Request) => {
   // client texted back — say who and what they said (KYP, Jul 20 2026).
   const replyLabel = String(record.log_payload?.contact_label ?? "A contact");
   const replyPreview = String(record.log_payload?.inbound_preview ?? "").trim();
+  // Owner-notify SMS fallback (_shared/owner_notify_fallback.ts): a
+  // notify_owner text could not go by SMS, so the CONTENT arrives here and
+  // the email carries a reason-matched explanation. Blame follows fault:
+  // an unreachable (non-NANP) number the owner chose gets fix-it guidance;
+  // a carrier rejection of a reachable number stays neutral, because that
+  // can be our fault (the Aug 6 2026 Canada-whitelist outage) and "update
+  // your number" would send the owner chasing a problem they don't have.
+  const fallbackMessage = String(record.log_payload?.message ?? "").trim();
+  const fallbackReason = String(record.log_payload?.reason ?? "");
+  const fallbackNote =
+    fallbackReason === "sms_unreachable"
+      ? "This came by email because texts cannot reach your phone number: our texting lines only deliver to +1 (US and Canada) numbers. Update your forwarding number, or connect WhatsApp, to get alerts on your phone."
+      : fallbackReason === "no_phone"
+        ? "This came by email because no forwarding phone number is set. Add one on your dashboard to get alerts by text."
+        : "This came by email because we could not deliver it to your phone by text.";
   const summary =
     record.task_type === "sms_cap_reached"
       ? "Monthly SMS limit reached; outbound texting is paused. Buy an SMS pack from Billing to resume."
@@ -346,7 +361,9 @@ serve(async (req: Request) => {
               ? truncateAtWord(`An AiFlow stopped while handling ${aiflowLeadLabel}${aiflowReason ? `, ${aiflowReason}` : ""}. Follow up with them yourself and check the flow's run history on your dashboard.`, 320)
               : record.task_type === "sms_customer_reply"
                 ? truncateAtWord(`${replyLabel} texted back${replyPreview ? `: "${replyPreview}"` : ""}. Reply from Messages on your dashboard.`, 320)
-                : `URGENT ${record.task_type}`;
+                : record.task_type === "owner_notify_fallback"
+                  ? truncateAtWord(fallbackMessage || "Your AI coworker has an update for you.", 320)
+                  : `URGENT ${record.task_type}`;
   const kind = "urgent_alert";
   // Strip trailing slash so dashboardUrl never ends up as
   // `https://example.com//dashboard` if the env var was set with one.
@@ -417,6 +434,17 @@ serve(async (req: Request) => {
     // _shared/customer_reply_alert.ts.
     ...(record.task_type === "sms_customer_reply" && record.log_payload?.job_id
       ? { jobId: String(record.log_payload.job_id) }
+      : {}),
+    // Owner-notify fallbacks stamp run + step so the module's per-step
+    // dedupe (payload->>runId + payload->>stepIndex) can find prior
+    // delivered pages; see _shared/owner_notify_fallback.ts. The reason
+    // rides along for the audit trail.
+    ...(record.task_type === "owner_notify_fallback"
+      ? {
+          runId: String(record.log_payload?.run_id ?? ""),
+          stepIndex: String(record.log_payload?.step_index ?? ""),
+          fallbackReason
+        }
       : {})
   };
   const errors: string[] = [];
@@ -499,7 +527,21 @@ serve(async (req: Request) => {
   }
 
   const telnyxKey = Deno.env.get("TELNYX_API_KEY");
-  if (!targets.phone) {
+  if (record.task_type === "owner_notify_fallback") {
+    // The SMS path is exactly what failed (or cannot work) for this
+    // record; attempting it again here would re-fail, or worse, double
+    // text the owner. Email and dashboard are the point.
+    await recordRow(
+      supa,
+      record.business_id,
+      "sms",
+      "skipped",
+      summary,
+      kind,
+      basePayload,
+      "sms_fallback_source"
+    );
+  } else if (!targets.phone) {
     await recordRow(
       supa,
       record.business_id,
@@ -696,7 +738,12 @@ serve(async (req: Request) => {
       // Telnyx 40310 alert email died exactly that way (Aug 1 2026). One
       // line, clipped; the body keeps the full summary.
       const subject = `Urgent: ${oneLineSubject(summary)}`;
-      const baseText = `Your AI Coworker flagged an urgent event.\n\nSummary: ${summary}\nBusiness ID: ${record.business_id}\n\nView details: ${dashboardUrl}`;
+      // Fallback records append the delivery explanation so the owner
+      // knows why this arrived by email and (only when it is their number
+      // that cannot work) what to change.
+      const noteSuffix =
+        record.task_type === "owner_notify_fallback" ? `\n\n${fallbackNote}` : "";
+      const baseText = `Your AI Coworker flagged an urgent event.\n\nSummary: ${summary}\nBusiness ID: ${record.business_id}${noteSuffix}\n\nView details: ${dashboardUrl}`;
       const text = `${baseText}\n\n---\nDon't want these alerts? Unsubscribe: ${unsubscribeUrl}`;
       const html = buildBrandedEmailHtml({
         siteUrl: appUrl,
@@ -705,7 +752,10 @@ serve(async (req: Request) => {
         bodyBlocks: [
           { kind: "text", text: "Your AI Coworker flagged an urgent event." },
           { kind: "text", text: `Summary: ${summary}` },
-          { kind: "text", text: `Business ID: ${record.business_id}` }
+          { kind: "text", text: `Business ID: ${record.business_id}` },
+          ...(record.task_type === "owner_notify_fallback"
+            ? [{ kind: "text" as const, text: fallbackNote }]
+            : [])
         ],
         cta: { label: "Open dashboard", href: dashboardUrl },
         unsubscribeUrl,

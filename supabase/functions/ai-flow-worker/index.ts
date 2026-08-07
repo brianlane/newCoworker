@@ -34,6 +34,12 @@ import {
   withSelfNameRetryHint
 } from "../_shared/ai_flows/extracted_contact.ts";
 import { stepLogLevel, systemLog } from "../_shared/system_log.ts";
+import { isPermanentTelnyxSmsFailure } from "../_shared/telnyx_permanent_failure.ts";
+import {
+  sendOwnerNotifyFallback,
+  type OwnerNotifyFallbackReason,
+  type OwnerNotifyFallbackResult
+} from "../_shared/owner_notify_fallback.ts";
 import { telnyxSendSms, telnyxSendGroupMms } from "../_shared/telnyx_sms_compliance.ts";
 import { smsTextUnits, MMS_TEXT_UNITS } from "../_shared/sms_text_units.ts";
 import {
@@ -5602,15 +5608,11 @@ async function sendSmsStep(
       // /s/<code> redirect survives for a message nobody received.
       await deleteShortLinks(supabase, shortenedLinks);
       const detail = `telnyx ${send.status}: ${send.body.slice(0, 200)}`;
-      // A Telnyx 4xx is PERMANENT for this exact payload (invalid 'to'
-      // number, blocked destination, rejected content) — retrying resends
-      // the same rejected request. Fail the step readably instead of
-      // burning the whole retry budget: a Privyr digest email once yielded
-      // lead_phone "+11459337300" (not a dialable NANP number) and the run
-      // spent five retries on guaranteed 40310s before dying with a raw
-      // error blob. 408 (timeout) and 429 (rate limit) are transient and
-      // keep the retry path, as do 5xx/network errors.
-      if (send.status >= 400 && send.status < 500 && send.status !== 408 && send.status !== 429) {
+      // Permanent for this exact payload, since retrying resends the same
+      // rejected request (rule + rationale in
+      // _shared/telnyx_permanent_failure.ts). Fail the step readably
+      // instead of burning the whole retry budget.
+      if (isPermanentTelnyxSmsFailure(send.status)) {
         return {
           kind: "fail",
           error:
@@ -6466,128 +6468,222 @@ async function notifyOwnerStep(
     .maybeSingle();
   const forward = (settingsRow as { forward_to_e164?: string | null } | null)?.forward_to_e164 ?? "";
   const cfg = await messagingConfig(supabase, run.business_id);
-  if (forward && cfg) {
-    // Cooldown claim BEFORE any work that costs money or mints rows. The RPC
-    // decides atomically (see the migration): true means send, false means an
-    // alert for this key already went out inside the window. An RPC error
-    // fails OPEN and sends — a duplicate text is a nuisance, a swallowed lead
-    // alert is a lost lead.
-    //
-    // The claim STAMPS the window, so every path that ends without a text
-    // having gone out has to give it back (`releaseClaim` below), or a
-    // carrier error would silence the retry with the failed attempt's own
-    // stamp. Same shape as link-click-notify.ts releasing `notified_at`.
-    let claimHeld = false;
-    if (action.cooldown) {
-      const { data: claimed, error: claimErr } = await supabase.rpc(
-        "ai_flow_claim_notify_cooldown",
-        {
-          p_business_id: run.business_id,
-          p_flow_id: run.flow_id,
-          p_step_id: action.cooldown.stepId,
-          p_cooldown_key: action.cooldown.key,
-          p_minutes: action.cooldown.minutes
-        }
-      );
-      if (claimErr) {
-        console.warn("notify_owner: cooldown claim failed, sending anyway", claimErr.message);
-      } else if (claimed === false) {
-        await telemetryRecord(supabase, "ai_flow_notify_owner_cooldown_skip", {
-          run_id: run.id,
-          business_id: run.business_id,
-          step_id: action.cooldown.stepId,
-          minutes: action.cooldown.minutes
-        });
-        return { kind: "ok", skipped: true, result: { notified: null, skipped: "cooldown" } };
-      } else {
-        claimHeld = true;
+  // Email-fallback plumbing (owner_notify_fallback.ts): the notify CONTENT
+  // still reaches the owner when SMS cannot carry it.
+  const fallbackNotifyUrl = `${Deno.env.get("SUPABASE_URL") ?? ""}/functions/v1/notifications`;
+  const fallbackBearer = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY") ?? "";
+  const emailFallback = (
+    reason: OwnerNotifyFallbackReason,
+    detail?: string | null
+  ): Promise<OwnerNotifyFallbackResult> =>
+    sendOwnerNotifyFallback(supabase, {
+      businessId: run.business_id,
+      runId: run.id,
+      stepIndex: index,
+      message: action.message,
+      reason,
+      phone: forward || null,
+      detail: detail ?? null,
+      notifyUrl: fallbackNotifyUrl,
+      bearer: fallbackBearer
+    });
+  // Cooldown claim BEFORE any work that costs money or mints rows, and
+  // BEFORE the channel choice: the window rate-limits the NOTIFICATION,
+  // however it travels, so the email fallback honors it exactly like the
+  // text. The RPC decides atomically (see the migration): true means send,
+  // false means an alert for this key already went out inside the window.
+  // An RPC error fails OPEN and sends: a duplicate text is a nuisance, a
+  // swallowed lead alert is a lost lead.
+  //
+  // The claim STAMPS the window, so every path that ends without a
+  // notification having gone out has to give it back (`releaseClaim`
+  // below), or a carrier error would silence the retry with the failed
+  // attempt's own stamp. Same shape as link-click-notify.ts releasing
+  // `notified_at`.
+  let claimHeld = false;
+  if (action.cooldown) {
+    const { data: claimed, error: claimErr } = await supabase.rpc(
+      "ai_flow_claim_notify_cooldown",
+      {
+        p_business_id: run.business_id,
+        p_flow_id: run.flow_id,
+        p_step_id: action.cooldown.stepId,
+        p_cooldown_key: action.cooldown.key,
+        p_minutes: action.cooldown.minutes
       }
-    }
-    // Deleting the row (rather than restoring a previous timestamp) is the
-    // correct undo: a claim only succeeds when the window was ABSENT or
-    // already EXPIRED, and to every future claim those two states are the
-    // same thing. Best-effort, like the rest of this teardown: a failed
-    // release costs one suppressed alert, never a crash on the error path.
-    const releaseClaim = async (): Promise<void> => {
-      if (!claimHeld || !action.cooldown) return;
-      claimHeld = false;
-      try {
-        const { error } = await supabase
-          .from("ai_flow_notify_cooldowns")
-          .delete()
-          .eq("business_id", run.business_id)
-          .eq("flow_id", run.flow_id)
-          .eq("step_id", action.cooldown.stepId)
-          .eq("cooldown_key", action.cooldown.key);
-        if (error) console.warn("notify_owner: cooldown release failed", error.message);
-      } catch (e) {
-        console.warn("notify_owner: cooldown release threw", e instanceof Error ? e.message : e);
-      }
-    };
-    // Owner links are shortened for length but NOT tracked: this is Brian's
-    // own tap on his own alert, and counting it would inflate the lead
-    // click-through numbers the flow funnels report. `tracked: false` marks
-    // the row so the click RPC redirects without logging and the analytics
-    // reads skip it. Fail-safe like the lead path: any error leaves the URL
-    // long, and a failed send deletes the rows so no live redirect survives
-    // for a text nobody received.
-    let shortened: Awaited<ReturnType<typeof shortenSmsBodyUrls>> = { text: action.message, links: [] };
-    // Flipped the instant Telnyx accepts the message. Everything after that
-    // point (the outbound log, the link pairing) is bookkeeping: if THAT
-    // throws, the owner has the text in hand, so the teardown below must not
-    // run or the retry would send a duplicate and kill a live short link.
-    let sent = false;
-    try {
-      shortened = await shortenSmsBodyUrls(supabase, {
-        businessId: run.business_id,
-        text: action.message,
-        source: "owner_notify",
-        baseUrl: Deno.env.get("NEXT_PUBLIC_APP_URL"),
-        toE164: forward,
-        flowId: run.flow_id,
-        runId: run.id,
-        tracked: false
+    );
+    if (claimErr) {
+      console.warn("notify_owner: cooldown claim failed, sending anyway", claimErr.message);
+    } else if (claimed === false) {
+      await telemetryRecord(supabase, "ai_flow_notify_owner_cooldown_skip", {
+        run_id: run.id,
+        business_id: run.business_id,
+        step_id: action.cooldown.stepId,
+        minutes: action.cooldown.minutes
       });
-      const text = prepareSmsBody(`[AiFlow] ${shortened.text}`);
-      // Metered (never refused) owner traffic — Jul 14 2026 policy.
-      const send = await sendOperationalSms(supabase, run.business_id, {
-        apiKey: cfg.apiKey,
-        messagingProfileId: cfg.profile,
-        fromE164: cfg.from,
-        toE164: forward,
-        text,
-        // Step-indexed, like send_sms: a run whose branches fire two
-        // notify_owner steps must not have the second one swallowed by Telnyx
-        // as a replay of the first.
-        idempotencyKey: `aiflow-notify:${run.id}:${index}`
-      });
-      if (!send.ok) throw new Error(`notify_owner telnyx ${send.status}`);
-      sent = true;
-      const outboundLogId = await logOutboundSms(supabase, run, {
-        to: forward,
-        from: cfg.from || null,
-        body: text,
-        source: "owner_notify",
-        telnyxMessageId: telnyxMessageIdFromBody(send.body)
-      });
-      await linkSmsLinksToOutboundLog(
-        supabase,
-        shortened.links.map((l) => l.shortCode),
-        outboundLogId
-      );
-      return { kind: "ok", result: { notified: forward } };
-    } catch (e) {
-      if (!sent) {
-        // No text went out: give the cooldown window back so the retry is not
-        // silenced by this attempt's own stamp, and drop the tracked-link rows
-        // so no live /s/ redirect survives for a message nobody received.
-        await releaseClaim();
-        await deleteShortLinks(supabase, shortened.links);
-      }
-      throw e;
+      return { kind: "ok", skipped: true, result: { notified: null, skipped: "cooldown" } };
+    } else {
+      claimHeld = true;
     }
   }
-  return { kind: "ok", result: { notified: null } };
+  // Deleting the row (rather than restoring a previous timestamp) is the
+  // correct undo: a claim only succeeds when the window was ABSENT or
+  // already EXPIRED, and to every future claim those two states are the
+  // same thing. Best-effort, like the rest of this teardown: a failed
+  // release costs one suppressed alert, never a crash on the error path.
+  const releaseClaim = async (): Promise<void> => {
+    if (!claimHeld || !action.cooldown) return;
+    claimHeld = false;
+    try {
+      const { error } = await supabase
+        .from("ai_flow_notify_cooldowns")
+        .delete()
+        .eq("business_id", run.business_id)
+        .eq("flow_id", run.flow_id)
+        .eq("step_id", action.cooldown.stepId)
+        .eq("cooldown_key", action.cooldown.key);
+      if (error) console.warn("notify_owner: cooldown release failed", error.message);
+    } catch (e) {
+      console.warn("notify_owner: cooldown release threw", e instanceof Error ? e.message : e);
+    }
+  };
+  if (!forward) {
+    // Previously a SILENT success: no forwarding number meant the owner
+    // simply never learned the flow wanted them. The content now goes by
+    // email, with a note inviting them to add a number. A failed post
+    // reverts to the old silent outcome rather than failing the run over
+    // a bonus channel.
+    const fb = await emailFallback("no_phone");
+    if (fb === "post_failed") {
+      await releaseClaim();
+      return { kind: "ok", result: { notified: null } };
+    }
+    await telemetryRecord(supabase, "ai_flow_notify_owner_email_fallback", {
+      run_id: run.id,
+      business_id: run.business_id,
+      reason: "no_phone"
+    });
+    return { kind: "ok", result: { notified: "email", fallback: "no_phone" } };
+  }
+  if (!cfg) {
+    await releaseClaim();
+    return { kind: "ok", result: { notified: null } };
+  }
+  if (isInternationalSmsDestination(smsDestinationCountry(forward))) {
+    // The forwarding number cannot receive our SMS at all (platform long
+    // codes are domestic-only: Telnyx ticket #557577, Aug 2026). Never
+    // attempt the text; the content goes by email with fix-it guidance,
+    // since this state is the owner's own configured number and the
+    // dashboard warned about it at save time. If even the email post
+    // fails, throw so the run retries: SMS being impossible, the retry is
+    // the email's second chance.
+    const fb = await emailFallback("sms_unreachable");
+    if (fb === "post_failed") {
+      await releaseClaim();
+      throw new Error("notify_owner email fallback post failed (sms_unreachable)");
+    }
+    await telemetryRecord(supabase, "ai_flow_notify_owner_email_fallback", {
+      run_id: run.id,
+      business_id: run.business_id,
+      reason: "sms_unreachable"
+    });
+    return { kind: "ok", result: { notified: "email", fallback: "sms_unreachable" } };
+  }
+  // Owner links are shortened for length but NOT tracked: this is Brian's
+  // own tap on his own alert, and counting it would inflate the lead
+  // click-through numbers the flow funnels report. `tracked: false` marks
+  // the row so the click RPC redirects without logging and the analytics
+  // reads skip it. Fail-safe like the lead path: any error leaves the URL
+  // long, and a failed send deletes the rows so no live redirect survives
+  // for a text nobody received.
+  let shortened: Awaited<ReturnType<typeof shortenSmsBodyUrls>> = { text: action.message, links: [] };
+  // Flipped the instant Telnyx accepts the message. Everything after that
+  // point (the outbound log, the link pairing) is bookkeeping: if THAT
+  // throws, the owner has the text in hand, so the teardown below must not
+  // run or the retry would send a duplicate and kill a live short link.
+  let sent = false;
+  try {
+    shortened = await shortenSmsBodyUrls(supabase, {
+      businessId: run.business_id,
+      text: action.message,
+      source: "owner_notify",
+      baseUrl: Deno.env.get("NEXT_PUBLIC_APP_URL"),
+      toE164: forward,
+      flowId: run.flow_id,
+      runId: run.id,
+      tracked: false
+    });
+    const text = prepareSmsBody(`[AiFlow] ${shortened.text}`);
+    // Metered (never refused) owner traffic, Jul 14 2026 policy.
+    const send = await sendOperationalSms(supabase, run.business_id, {
+      apiKey: cfg.apiKey,
+      messagingProfileId: cfg.profile,
+      fromE164: cfg.from,
+      toE164: forward,
+      text,
+      // Step-indexed, like send_sms: a run whose branches fire two
+      // notify_owner steps must not have the second one swallowed by Telnyx
+      // as a replay of the first.
+      idempotencyKey: `aiflow-notify:${run.id}:${index}`
+    });
+    if (!send.ok) {
+      // A permanent carrier rejection (4xx, not 408/429) cannot change on
+      // retry, so the content falls back to email NOW, with neutral
+      // wording: a rejection of a reachable number can be OUR fault (the
+      // Aug 6 2026 Canada-whitelist outage rejected James's +1514 with
+      // 40309), so the owner is never told to fix their number here. Loud
+      // for operators via system log: a burst of these is a platform
+      // incident, and the fallback must not make it invisible.
+      if (isPermanentTelnyxSmsFailure(send.status)) {
+        const detail = `telnyx ${send.status}: ${send.body.slice(0, 200)}`;
+        const fb = await emailFallback("sms_rejected", detail);
+        if (fb !== "post_failed") {
+          await deleteShortLinks(supabase, shortened.links);
+          await systemLog(supabase, {
+            businessId: run.business_id,
+            source: "aiflow",
+            level: "warn",
+            event: "notify_owner_sms_failed_email_fallback",
+            message: `notify_owner SMS rejected (${send.status}); content delivered by email`,
+            payload: { run_id: run.id, flow_id: run.flow_id, to: forward, detail }
+          });
+          await telemetryRecord(supabase, "ai_flow_notify_owner_email_fallback", {
+            run_id: run.id,
+            business_id: run.business_id,
+            reason: "sms_rejected",
+            status: send.status
+          });
+          // The notification went out (by email), so the cooldown claim
+          // stays. `sent` remains false but we return before the catch.
+          return { kind: "ok", result: { notified: "email", fallback: "sms_rejected" } };
+        }
+      }
+      throw new Error(`notify_owner telnyx ${send.status}`);
+    }
+    sent = true;
+    const outboundLogId = await logOutboundSms(supabase, run, {
+      to: forward,
+      from: cfg.from || null,
+      body: text,
+      source: "owner_notify",
+      telnyxMessageId: telnyxMessageIdFromBody(send.body)
+    });
+    await linkSmsLinksToOutboundLog(
+      supabase,
+      shortened.links.map((l) => l.shortCode),
+      outboundLogId
+    );
+    return { kind: "ok", result: { notified: forward } };
+  } catch (e) {
+    if (!sent) {
+      // No text went out: give the cooldown window back so the retry is not
+      // silenced by this attempt's own stamp, and drop the tracked-link rows
+      // so no live /s/ redirect survives for a message nobody received.
+      await releaseClaim();
+      await deleteShortLinks(supabase, shortened.links);
+    }
+    throw e;
+  }
 }
 
 /**
