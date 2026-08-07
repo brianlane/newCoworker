@@ -393,6 +393,15 @@ describe("db/notifications", () => {
     vi.mocked(createSupabaseServiceClient).mockResolvedValue(empty as never);
     expect(await countRecentNotificationsAbout("b", "k", "+1", 1000)).toBe(0);
 
+    // PostgREST can return null data with no error; that is zero events.
+    const nullData = mockDb({
+      gte: vi.fn().mockImplementation(function (this: unknown) {
+        return { limit: vi.fn().mockResolvedValue({ data: null, error: null }) };
+      })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(nullData as never);
+    expect(await countRecentNotificationsAbout("b", "k", "+1", 1000)).toBe(0);
+
     const failing = mockDb({
       gte: vi.fn().mockImplementation(function (this: unknown) {
         return { limit: vi.fn().mockResolvedValue({ data: null, error: { message: "boom" } }) };

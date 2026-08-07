@@ -1338,6 +1338,18 @@ describe("notifications/dispatch", () => {
       expect(vi.mocked(sendTelnyxSms)).toHaveBeenCalled();
     });
 
+    it("fails OPEN on a non-Error rejection too (String(err) branch)", async () => {
+      resolveContactOwnerTarget.mockResolvedValue(TO_DAVE);
+      vi.mocked(countRecentNotificationsAbout).mockRejectedValueOnce("plain string failure");
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Follow up with Aaron",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE
+      });
+      expect(vi.mocked(sendTelnyxSms)).toHaveBeenCalled();
+    });
+
     it("never counts for a business-level alert with no contact", async () => {
       await dispatchUrgentNotification({
         businessId: BIZ,
