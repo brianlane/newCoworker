@@ -19,10 +19,12 @@ import {
   listTurns
 } from "@/lib/db/voice-transcripts";
 import {
+  AnsweringMachineBadge,
   CallDirectionBadge,
   ForwardedBadge,
   SentimentBadge,
   StatusBadge,
+  VerbatimScoreBadge,
   callerLabel,
   formatDuration
 } from "@/components/dashboard/voice-transcript-helpers";
@@ -162,6 +164,13 @@ export default async function CallTranscriptPage({
           </span>
           {transcript.call_kind === "forwarded" && <ForwardedBadge />}
           <StatusBadge status={transcript.status} />
+          {/* Only ever renders for a machine answer, so an ordinary call keeps
+              the header it has today. */}
+          <AnsweringMachineBadge
+            result={transcript.answering_machine_result}
+            voicemailLeft={transcript.voicemail_left}
+          />
+          <VerbatimScoreBadge score={transcript.voicemail_verbatim_score} />
         </div>
       </div>
 

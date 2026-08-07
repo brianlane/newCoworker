@@ -7,6 +7,7 @@
  */
 
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
+import { VERBATIM_ALERT_THRESHOLD } from "../../../supabase/functions/_shared/voice_verbatim";
 import { isVpsReadMode, readMovedRows } from "@/lib/residency/read";
 import { softDeleteContentRows } from "@/lib/residency/row-delete";
 
@@ -26,6 +27,54 @@ export type VoiceCallKind = "ai" | "forwarded";
 export type VoiceTranscriptTurnRole = "caller" | "assistant";
 
 export type VoiceCallSentiment = "positive" | "neutral" | "negative" | "mixed";
+
+/**
+ * Answering-machine detection verdict for an outbound leg.
+ *
+ * Normalized on the way in: premium AMD reports `human_residence` /
+ * `human_business` and never a bare "human", so storing the raw Telnyx value
+ * would make every reader repeat that translation (see _shared/voice_amd.ts).
+ * NULL means AMD was not requested, which is true of every inbound call and of
+ * outbound calls placed before it existed.
+ */
+export type VoiceAnsweringMachineResult = "human" | "machine" | "unknown";
+
+/**
+ * What the answering-machine pill should say, or null to render nothing.
+ *
+ * Nothing renders for a human answer or when detection was not requested,
+ * which is the overwhelming majority of calls: a badge on every ordinary row
+ * would be noise, and the interesting fact here is always the exception.
+ *
+ * The two machine labels are deliberately different. Reaching a voicemail and
+ * hanging up is a different thing to have happened to the person on the other
+ * end than being left a message, and an owner reviewing what their assistant
+ * did on their behalf has to be able to tell those apart.
+ */
+export function answeringMachineBadgeLabel(
+  result: VoiceAnsweringMachineResult | null | undefined,
+  voicemailLeft: boolean | null | undefined
+): string | null {
+  if (result !== "machine") return null;
+  return voicemailLeft === true ? "Voicemail" : "No answer, machine";
+}
+
+/**
+ * How to present a voicemail's verbatim score, or null to render nothing.
+ *
+ * Coloured only when the read drifted from the approved script: a close read
+ * is the expected case and does not need attention drawn to it, while a low
+ * score is the owner's cue to go read what was actually said on their behalf.
+ */
+export function verbatimBadgeState(
+  score: number | null | undefined
+): { percent: number; drifted: boolean } | null {
+  if (typeof score !== "number" || !Number.isFinite(score)) return null;
+  return {
+    percent: Math.round(Math.max(0, Math.min(1, score)) * 100),
+    drifted: score < VERBATIM_ALERT_THRESHOLD
+  };
+}
 
 export type VoiceCallTranscriptRow = {
   id: string;
@@ -48,6 +97,17 @@ export type VoiceCallTranscriptRow = {
   summary: string | null;
   sentiment: VoiceCallSentiment | null;
   summarized_at: string | null;
+  /** AMD verdict, or NULL when detection was not requested for this call. */
+  answering_machine_result: VoiceAnsweringMachineResult | null;
+  /**
+   * True when the assistant SPOKE its scripted message into a voicemail.
+   * Deliberately separate from `answering_machine_result === "machine"`:
+   * reaching a machine and hanging up is a different thing to have happened to
+   * the person on the other end than leaving them a message.
+   */
+  voicemail_left: boolean;
+  /** 0-1 closeness of the spoken voicemail to its script; NULL when none left. */
+  voicemail_verbatim_score: number | null;
 };
 
 export type VoiceCallTranscriptTurnRow = {

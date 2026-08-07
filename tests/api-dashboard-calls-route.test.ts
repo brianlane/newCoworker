@@ -46,7 +46,12 @@ const TRANSCRIPT = {
   updated_at: "2026-04-23T00:03:00Z",
   summary: null,
   sentiment: null,
-  summarized_at: null
+  summarized_at: null,
+  // An inbound call: answering-machine detection is never requested for one,
+  // so the verdict stays null and no voicemail can have been left.
+  answering_machine_result: null,
+  voicemail_left: false,
+  voicemail_verbatim_score: null
 };
 
 function urlFor(cci: string, businessId: string | null = BIZ): string {

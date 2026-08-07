@@ -717,6 +717,16 @@ async function stampMachineAndHangUp(
     console.error("amd: machine stamp failed, leaving the call up", stampErr);
     return jsonOk("amd_stamp_failed");
   }
+  // Surface the verdict on the call itself, not just in flow vars. Without
+  // this an owner reviewing the call cannot tell a voicemail from a person
+  // answering, which is exactly the confusion AMD exists to remove.
+  // Best-effort: a transcript row may not exist yet for a leg that was hung up
+  // this early, and failing to decorate the record must never keep a call up.
+  const { error: markErr } = await supabase
+    .from("voice_call_transcripts")
+    .update({ answering_machine_result: "machine" })
+    .eq("call_control_id", callControlId);
+  if (markErr) console.error("amd: transcript mark failed", markErr);
   await telnyxHangupCall(Deno.env.get("TELNYX_API_KEY") ?? "", callControlId);
   return jsonOk("amd_machine_hangup");
 }
