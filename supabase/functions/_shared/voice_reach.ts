@@ -153,3 +153,32 @@ export function clampReachRingSeconds(value: unknown): number {
   if (n > MAX_REACH_RING_SECONDS) return MAX_REACH_RING_SECONDS;
   return n;
 }
+
+
+/** What a reach attempt's outcome looks like on the caller's session row. */
+export type ReachOutcomeStamp = {
+  attempt: number;
+  status: "answered" | "no_answer";
+  b_leg: string;
+};
+
+/**
+ * Should this B-leg event overwrite what is already recorded for the attempt?
+ *
+ * Only the FIRST outcome for an attempt counts. A teammate who answers and then
+ * hangs up produces an answer followed by a hangup on the same leg, and letting
+ * the second one land would rewrite a real conversation into a missed call and
+ * send the assistant off to ring the next person mid-handover.
+ *
+ * A hangup for a DIFFERENT attempt is still recorded: that is the previous
+ * teammate's leg being torn down as the ladder moves on, and it is the signal
+ * the ladder is waiting for.
+ */
+export function reachOutcomeShouldApply(
+  prior: { attempt?: unknown; status?: unknown } | null | undefined,
+  incoming: { attempt: number; status: "answered" | "no_answer" }
+): boolean {
+  if (!prior) return true;
+  if (prior.attempt !== incoming.attempt) return true;
+  return !(prior.status === "answered" && incoming.status === "no_answer");
+}

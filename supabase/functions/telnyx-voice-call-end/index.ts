@@ -36,6 +36,7 @@ import {
   isAmdEvent
 } from "../_shared/voice_amd.ts";
 import { CALL_REASON } from "../_shared/ai_flows/call_outcome_meta.ts";
+import { parseReachClientState, reachOutcomeShouldApply } from "../_shared/voice_reach.ts";
 import {
   resumeFlowRunWithCallOutcome,
   type FlowRunLink
@@ -612,6 +613,67 @@ async function handleMachineDetection(
   }
 
   return await stampMachineAndHangUp(supabase, callControlId);
+}
+
+/**
+ * Record what happened to a "reach a teammate" B leg.
+ *
+ * The assistant dials a teammate on a SEPARATE leg while the caller keeps
+ * talking to it, so the caller never hears ringback and the assistant is still
+ * there to explain if nobody picks up. The bridge that placed that leg runs on
+ * a VPS and receives no webhooks, and Telnyx's call-status endpoint reports
+ * only `is_alive`, which is equally true of a phone that is merely ringing. So
+ * the one place that learns "they actually answered" is this webhook, and it
+ * writes that onto the CALLER's session where the bridge is already polling.
+ *
+ * Returns null for any leg that is not a reach attempt, so every other handler
+ * downstream is untouched.
+ */
+async function handleReachLeg(
+  supabase: SupabaseClient,
+  eventType: string,
+  payload: Record<string, unknown>
+): Promise<Response | null> {
+  const state = parseReachClientState(payload["client_state"] as string | undefined);
+  if (!state) return null;
+  const bLeg = String(payload["call_control_id"] ?? "");
+
+  const { data: sessRow } = await supabase
+    .from("voice_handoff_sessions")
+    .select("context")
+    .eq("call_control_id", state.aLegCallControlId)
+    .maybeSingle();
+  const ctx = ((sessRow as { context?: Record<string, unknown> } | null)?.context ??
+    {}) as Record<string, unknown>;
+  const prior = (ctx.reach ?? {}) as { attempt?: unknown; status?: unknown };
+
+  // A hangup on the leg that already answered is the teammate ending a real
+  // conversation, not a missed call. Only the FIRST outcome for an attempt is
+  // recorded, so a late hangup cannot rewrite an answer into a miss.
+  const status = eventType === "call.answered" ? "answered" : "no_answer";
+  if (!reachOutcomeShouldApply(prior, { attempt: state.attempt, status })) {
+    return jsonOk("reach_hangup_after_answer");
+  }
+  const { error } = await supabase
+    .from("voice_handoff_sessions")
+    .update({
+      context: { ...ctx, reach: { attempt: state.attempt, status, b_leg: bLeg } }
+    })
+    .eq("call_control_id", state.aLegCallControlId);
+  if (error) {
+    // The bridge falls back to its own ring timeout, so a lost stamp costs a
+    // slower move to the next teammate rather than a stuck call.
+    console.error("reach: outcome stamp failed", error);
+    return jsonOk("reach_stamp_failed");
+  }
+  await telemetryRecord(supabase, "voice_reach_leg", {
+    business_id: state.businessId,
+    a_leg: state.aLegCallControlId,
+    b_leg: bLeg,
+    attempt: state.attempt,
+    status
+  });
+  return jsonOk(`reach_${status}`);
 }
 
 /** Has a machine verdict already been recorded for this leg? */
@@ -1454,6 +1516,14 @@ serve(async (req: Request) => {
   // lead who never heard a word.
   if (isAmdEvent(eventType)) {
     return await handleMachineDetection(supabase, eventType, data?.payload ?? {});
+  }
+
+  // A "reach a teammate" B leg. Recorded before the outbound handler so a leg
+  // the assistant dialed to FIND someone is never mistaken for the callee's own
+  // leg and handed an AI bridge.
+  if (eventType === "call.answered" || eventType === "call.hangup") {
+    const reach = await handleReachLeg(supabase, eventType, data?.payload ?? {});
+    if (reach) return reach;
   }
 
   // Outbound origination: a callee answered an AiFlow-placed call. Attach the AI

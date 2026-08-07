@@ -7,6 +7,7 @@ import {
   encodeReachClientState,
   nextReachDecision,
   parseReachClientState,
+  reachOutcomeShouldApply,
   type ReachTarget
 } from "../supabase/functions/_shared/voice_reach";
 import { parseOutboundClientState } from "../supabase/functions/_shared/voice_outbound";
@@ -231,5 +232,46 @@ describe("telnyxBridgeCall", () => {
     );
     const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
     expect(Buffer.from(body.client_state as string, "base64").toString()).toBe("rt:biz:abc:0");
+  });
+});
+
+
+/**
+ * Only the FIRST outcome for an attempt counts. The webhook that records these
+ * sees a teammate who answers and then hangs up as TWO events on one leg, and
+ * letting the second land would rewrite a real conversation into a missed call
+ * and send the assistant off to ring the next person mid-handover.
+ */
+describe("reachOutcomeShouldApply", () => {
+  it("records the first outcome for an attempt", () => {
+    expect(reachOutcomeShouldApply(null, { attempt: 0, status: "answered" })).toBe(true);
+    expect(reachOutcomeShouldApply(undefined, { attempt: 0, status: "no_answer" })).toBe(true);
+    expect(reachOutcomeShouldApply({}, { attempt: 0, status: "answered" })).toBe(true);
+  });
+
+  // The case that matters: a teammate picked up and later hung up.
+  it("refuses to turn an answer into a miss on the same attempt", () => {
+    expect(
+      reachOutcomeShouldApply({ attempt: 1, status: "answered" }, { attempt: 1, status: "no_answer" })
+    ).toBe(false);
+  });
+
+  it("still lets a later attempt record its own outcome", () => {
+    // The previous teammate's leg being torn down as the ladder moves on is
+    // exactly the signal the ladder is waiting for.
+    expect(
+      reachOutcomeShouldApply({ attempt: 0, status: "answered" }, { attempt: 1, status: "no_answer" })
+    ).toBe(true);
+    expect(
+      reachOutcomeShouldApply({ attempt: 0, status: "no_answer" }, { attempt: 1, status: "answered" })
+    ).toBe(true);
+  });
+
+  it("lets a miss be upgraded to an answer on the same attempt", () => {
+    // Webhook ordering is not guaranteed; an answer is the more specific fact
+    // and should win over a miss recorded for the same attempt.
+    expect(
+      reachOutcomeShouldApply({ attempt: 2, status: "no_answer" }, { attempt: 2, status: "answered" })
+    ).toBe(true);
   });
 });
