@@ -14,6 +14,7 @@ import {
   hasSellerCallLadder,
   nextStepsLine,
   removeBestTimeCaptureField,
+  upgradeCallsToReachLadder,
   withAiCallLines,
   type Ref
 } from "../scripts/oneshot/amy-seller-ai-call-definition";
@@ -35,6 +36,12 @@ const DAVE: Ref = {
   label: "Dave Lane",
   source: "employee"
 };
+const AMY: Ref = {
+  id: "bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb",
+  label: "Amy Laidlaw",
+  source: "employee"
+};
+const REFS = { dave: DAVE, amy: AMY };
 
 type Step = AiFlowDefinition["steps"][number];
 
@@ -110,7 +117,7 @@ describe("addSellerCallLadder (Clever shape)", () => {
   const patched = () => {
     const def = cleverBase() as unknown as AiFlowDefinition;
     addCashOffersField(def);
-    const changed = addSellerCallLadder(def, "clever", { dave: DAVE }, { routeStepId: "route" });
+    const changed = addSellerCallLadder(def, "clever", REFS, { routeStepId: "route" });
     return { def, changed };
   };
 
@@ -132,7 +139,7 @@ describe("addSellerCallLadder (Clever shape)", () => {
   it("is a genuine no-op the second time", () => {
     const { def } = patched();
     expect(hasSellerCallLadder(def)).toBe(true);
-    expect(addSellerCallLadder(def, "clever", { dave: DAVE }, { routeStepId: "route" })).toBe(
+    expect(addSellerCallLadder(def, "clever", REFS, { routeStepId: "route" })).toBe(
       false
     );
   });
@@ -140,7 +147,7 @@ describe("addSellerCallLadder (Clever shape)", () => {
   it("refuses a flow whose route step vanished", () => {
     const def = cleverBase() as unknown as AiFlowDefinition;
     expect(() =>
-      addSellerCallLadder(def, "clever", { dave: DAVE }, { routeStepId: "gone" })
+      addSellerCallLadder(def, "clever", REFS, { routeStepId: "gone" })
     ).toThrow(/re-read it before patching/);
   });
 
@@ -155,18 +162,45 @@ describe("addSellerCallLadder (Clever shape)", () => {
     }
   });
 
-  it("every call: Dave's ref (never a name string), shared outcome var, no captureFields", () => {
+  it("every call: the Dave-then-Amy reach ladder (refs, never name strings), shared outcome var, no captureFields", () => {
     const { def } = patched();
     for (const c of collectCalls(parseAiFlowDefinition(def))) {
       expect(c.toVar).toBe("lead_phone");
       expect(c.saveAs).toBe("call_outcome");
-      expect(c.transfer?.toRef).toEqual(DAVE);
+      // Amy's ask, verbatim: try Dave then Amy "while still on the call
+      // with the lead engaging them". Order is the feature.
+      expect(c.reachTeammate?.refs).toEqual([DAVE, AMY]);
+      expect(c.reachTeammate?.ringSeconds).toBe(20);
+      expect(c.reachTeammate?.preSmsTemplate).toContain("Seller on the line NOW");
+      expect(c.transfer).toBeUndefined();
       expect(c.notifyRef).toEqual(DAVE);
       expect(c.waitMinutes).toBe(20);
       // Decision 9: a pitch, not an interview. captureFields is what turns
       // one into the other.
       expect(c.captureFields).toBeUndefined();
     }
+  });
+
+  it("upgrades a live transfer-era ladder to the reach ladder, once", () => {
+    // The Clever flow went to production carrying transfer (the only shipped
+    // mechanism at the time). The upgrade swaps every ai_call_* step to the
+    // reach ladder in place and is a no-op the second time and on a ladder
+    // that was built with reachTeammate from the start.
+    const def = cleverBase() as unknown as AiFlowDefinition;
+    addCashOffersField(def);
+    addSellerCallLadder(def, "clever", REFS, { routeStepId: "route" });
+    const calls = collectCalls(def);
+    for (const c of calls as unknown as Record<string, unknown>[]) {
+      c.transfer = { toRef: DAVE, preSmsTemplate: "old pre-alert" };
+      delete c.reachTeammate;
+    }
+    expect(upgradeCallsToReachLadder(def, REFS)).toBe(true);
+    const parsed = parseAiFlowDefinition(def);
+    for (const c of collectCalls(parsed)) {
+      expect(c.reachTeammate?.refs).toEqual([DAVE, AMY]);
+      expect(c.transfer).toBeUndefined();
+    }
+    expect(upgradeCallsToReachLadder(def, REFS)).toBe(false);
   });
 
   it("gates fail the safe way: dial paths on positive equals, stop arms on notEquals", () => {
@@ -273,7 +307,7 @@ describe("addSellerCallLadder (ReferralExchange shape)", () => {
     const changed = addSellerCallLadder(
       def,
       "referral_exchange",
-      { dave: DAVE },
+      REFS,
       { routeStepId: "route_seller", callGate: { var: "route_lead_type", equals: "seller" } }
     );
     return { def, changed };

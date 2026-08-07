@@ -43,6 +43,7 @@ import {
   addCashOffersField,
   addSellerCallLadder,
   removeBestTimeCaptureField,
+  upgradeCallsToReachLadder,
   type Ref
 } from "./amy-seller-ai-call-definition";
 import { loadEnv } from "../../debug/_shared.ts";
@@ -118,9 +119,8 @@ async function main(): Promise<void> {
   }
 
   const dave = await resolveEmployeeRef(db, businessId, DAVE_NAME);
-  // Amy is not dialed by any step yet (reach_teammate lands later), but
-  // resolving her now fails fast if the roster changed under us.
-  await resolveEmployeeRef(db, businessId, AMY_NAME);
+  const amy = await resolveEmployeeRef(db, businessId, AMY_NAME);
+  const refs = { dave, amy };
 
   const plans: {
     flowName: string;
@@ -130,7 +130,12 @@ async function main(): Promise<void> {
       flowName: "Clever Lead - Accept",
       patch: (def) => ({
         cash_offers_field: addCashOffersField(def),
-        ladder: addSellerCallLadder(def, "clever", { dave }, { routeStepId: "route" })
+        ladder: addSellerCallLadder(def, "clever", refs, { routeStepId: "route" }),
+        // The flow went live before reach_teammate deployed, with the
+        // single-target transfer; this swap points its call steps at the
+        // Dave-then-Amy second leg. A no-op on a freshly-added ladder,
+        // which already carries reachTeammate.
+        reach_ladder: upgradeCallsToReachLadder(def, refs)
       })
     },
     {
@@ -139,7 +144,7 @@ async function main(): Promise<void> {
         ladder: addSellerCallLadder(
           def,
           "referral_exchange",
-          { dave },
+          refs,
           {
             routeStepId: "route_seller",
             callGate: { var: "route_lead_type", equals: "seller" }

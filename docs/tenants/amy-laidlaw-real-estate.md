@@ -221,7 +221,12 @@ follow-up. Misses redial at +2h and next morning at 08:30, both inside
 the run, and every rung stops the moment anyone claims the lead or the
 seller replies or books (`lead_reached` goal). The same patch sweeps the
 "best time to reach them" capture field out of New Lead Intake: Amy's rule
-is that nobody ever asks a lead when to call back. Team offers now say what
+is that nobody ever asks a lead when to call back. Since Aug 7 2026 the
+call steps carry `reachTeammate` (Dave, then Amy, 20s each) instead of the
+single-target transfer: the AI keeps the seller talking while each phone
+rings on a second leg and bridges only a genuine answer
+(`upgradeCallsToReachLadder` swapped the already-live Clever flow in
+place). Team offers now say what
 the AI already did (`actions_taken`), how the call went
 (`call_outcome_label`), and what the ladder does next, with the schedule
 sentence generated from the same constants as the sleeps so copy and
