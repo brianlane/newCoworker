@@ -27,6 +27,17 @@ export type VoiceTranscriptTurnRole = "caller" | "assistant";
 
 export type VoiceCallSentiment = "positive" | "neutral" | "negative" | "mixed";
 
+/**
+ * Answering-machine detection verdict for an outbound leg.
+ *
+ * Normalized on the way in: premium AMD reports `human_residence` /
+ * `human_business` and never a bare "human", so storing the raw Telnyx value
+ * would make every reader repeat that translation (see _shared/voice_amd.ts).
+ * NULL means AMD was not requested, which is true of every inbound call and of
+ * outbound calls placed before it existed.
+ */
+export type VoiceAnsweringMachineResult = "human" | "machine" | "unknown";
+
 export type VoiceCallTranscriptRow = {
   id: string;
   business_id: string;
@@ -48,6 +59,22 @@ export type VoiceCallTranscriptRow = {
   summary: string | null;
   sentiment: VoiceCallSentiment | null;
   summarized_at: string | null;
+  /** AMD verdict, or NULL when detection was not requested for this call. */
+  answering_machine_result: VoiceAnsweringMachineResult | null;
+  /**
+   * True when the assistant SPOKE its scripted message into a voicemail.
+   * Deliberately separate from `answering_machine_result === "machine"`:
+   * reaching a machine and hanging up is a different thing to have happened to
+   * the person on the other end than leaving them a message.
+   */
+  voicemail_left: boolean;
+  /**
+   * 0-1 closeness of the spoken voicemail to its script; NULL when none left.
+   * Stored as double precision specifically so this arrives as a JSON number:
+   * PostgREST serializes `numeric` as a string, which a typeof check would
+   * silently reject.
+   */
+  voicemail_verbatim_score: number | null;
 };
 
 export type VoiceCallTranscriptTurnRow = {

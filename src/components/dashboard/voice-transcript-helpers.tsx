@@ -8,9 +8,11 @@
  */
 
 import { Badge } from "@/components/ui/Badge";
+import { answeringMachineBadgeLabel, verbatimBadgeState } from "@/lib/voice/transcript-badges";
 import type {
   VoiceCallSentiment,
   VoiceTranscriptDirection,
+  VoiceAnsweringMachineResult,
   VoiceTranscriptStatus
 } from "@/lib/db/voice-transcripts";
 
@@ -118,6 +120,62 @@ export function SentimentBadge({ sentiment }: { sentiment: VoiceCallSentiment })
       ].join(" ")}
     >
       {sentiment}
+    </span>
+  );
+}
+
+/**
+ * Answering-machine pill for an outbound call.
+ *
+ * Renders NOTHING for a human answer or when detection was not requested,
+ * which is the overwhelming majority of calls: a badge on every ordinary row
+ * would be noise, and the interesting fact here is always the exception.
+ *
+ * "Voicemail" and "No answer, machine" are deliberately different labels.
+ * Reaching a machine and hanging up is a different thing to have happened to
+ * the person on the other end than being left a message, and an owner
+ * reviewing what their assistant did on their behalf needs to tell them apart.
+ */
+export function AnsweringMachineBadge({
+  result,
+  voicemailLeft
+}: {
+  result: VoiceAnsweringMachineResult | null;
+  voicemailLeft?: boolean;
+}) {
+  const label = answeringMachineBadgeLabel(result, voicemailLeft);
+  if (!label) return null;
+  return (
+    <span className="text-[10px] uppercase tracking-wide font-semibold rounded px-1.5 py-0.5 bg-amber-300/15 text-amber-300">
+      {label}
+    </span>
+  );
+}
+
+/**
+ * How closely a spoken voicemail matched its approved script.
+ *
+ * Shown only when a message was actually left, and coloured only when it drifted:
+ * a near-verbatim read is the expected case and does not need attention drawn
+ * to it, while a low score is the owner's cue to read what was actually said.
+ */
+export function VerbatimScoreBadge({ score }: { score: number | null }) {
+  const state = verbatimBadgeState(score);
+  if (!state) return null;
+  const { percent: pct, drifted } = state;
+  return (
+    <span
+      className={[
+        "text-[10px] uppercase tracking-wide font-semibold rounded px-1.5 py-0.5",
+        drifted ? "bg-red-400/15 text-red-300" : "bg-parchment/10 text-parchment/50"
+      ].join(" ")}
+      title={
+        drifted
+          ? "The assistant's wording drifted from the approved script. Read the transcript."
+          : "The assistant read the approved script closely."
+      }
+    >
+      script {pct}%
     </span>
   );
 }
