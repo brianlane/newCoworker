@@ -1022,6 +1022,12 @@ const nonBranchStepMembers = [
       markUnread: z.boolean().optional(),
       archive: z.boolean().optional(),
       unarchive: z.boolean().optional(),
+      /**
+       * Move to the provider's trash. Recoverable (Gmail keeps it 30 days),
+       * which is why there is no hard-delete counterpart: a classifier
+       * deciding what to bin must always be undoable.
+       */
+      trash: z.boolean().optional(),
       addLabels: z.array(z.string().min(1).max(120)).max(20).optional(),
       removeLabels: z.array(z.string().min(1).max(120)).max(20).optional(),
       /** Folder display name (Gmail user label / Outlook folder / AI folder). */
@@ -1033,6 +1039,7 @@ const nonBranchStepMembers = [
         step.markRead === true ||
         step.markUnread === true ||
         step.archive === true ||
+        step.trash === true ||
         step.unarchive === true ||
         (step.addLabels?.length ?? 0) > 0 ||
         (step.removeLabels?.length ?? 0) > 0 ||

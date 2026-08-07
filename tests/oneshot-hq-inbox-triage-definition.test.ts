@@ -28,7 +28,6 @@ import { describe, expect, it } from "vitest";
 import {
   FLOW_NAME,
   GMAIL_CONNECTION_ROW_ID,
-  EMAIL_LINK,
   THREAD_COOLDOWN,
   buildHqInboxTriageDefinition
 } from "../scripts/oneshot/hq-inbox-triage-definition";
@@ -48,6 +47,7 @@ type StepJson = {
   categories?: { value?: string; description?: string }[];
   addLabels?: string[];
   moveToFolder?: string;
+  trash?: boolean;
   /** email_organize: the filing actions taken on the triggering message. */
   markRead?: boolean;
   markUnread?: boolean;
@@ -163,22 +163,29 @@ describe("HQ inbox triage: one alert per conversation", () => {
 });
 
 describe("HQ inbox triage: the alert is actionable", () => {
-  it("ends every alert with the Gmail deep link", () => {
+  /**
+   * NO LINK, deliberately, after trying two of them.
+   *
+   * The Gmail deep link opened Gmail on the WEB from a phone, so Brian had to
+   * sign in and hunt for the message his own text had just summarized.
+   * Swapping it for our own /dashboard/emails?id= only moved the login wall.
+   * The text now carries what it takes to act (sender, subject, ask, and the
+   * full draft) and approval is a digit reply, which needs no browser at all.
+   * Re-adding a link should mean re-litigating that, not a quiet edit.
+   */
+  it("sends no link at all, in any alert or the approval gate", () => {
     for (const step of notifySteps) {
-      expect(step.message, step.id).toContain(EMAIL_LINK);
-      expect(step.message?.trimEnd().endsWith(EMAIL_LINK), step.id).toBe(true);
+      expect(step.message, step.id).not.toMatch(/https?:\/\//);
     }
+    const gate = steps.find((x) => x.id === "s_gate") as { prompt?: string } | undefined;
+    expect(gate?.prompt).toBeDefined();
+    expect(gate?.prompt).not.toMatch(/https?:\/\//);
   });
 
-  it("points the deep link at all mail, not the inbox", () => {
-    // The email_organize steps move the message OUT of the inbox in the same
-    // run, so an "#inbox/<id>" link would break on the mail it was minted for.
-    // Our dashboard, never Gmail web: a phone tap on a mail.google.com link
-    // opens the browser, not the Gmail app, so the owner had to sign in and
-    // search for the message his own alert had just summarized.
-    expect(EMAIL_LINK).not.toContain("mail.google.com");
-    expect(EMAIL_LINK).toContain("/dashboard/emails?id=");
-    expect(EMAIL_LINK).toContain("{{trigger.email_log_id}}");
+  it("never reaches for Gmail web or the dashboard again", () => {
+    const json = JSON.stringify(definition);
+    expect(json).not.toContain("mail.google.com");
+    expect(json).not.toContain("/dashboard/emails");
   });
 
   it("asks the gist for an ask, and for silence when there is none", () => {
@@ -241,15 +248,16 @@ describe("HQ inbox triage: automated mail is split by consequence", () => {
     expect(category("automated_notice")?.description).toMatch(/no consequence if ignored/i);
   });
 
-  it("reads, archives and labels routine automated mail, and never texts about it", () => {
+  it("reads, labels and BINS routine automated mail, and never texts about it", () => {
     const step = steps.find((s) => s.id === "s_org_automated");
     expect(step?.when).toEqual({ var: "email_kind", equals: "automated_notice" });
     expect(step?.markRead).toBe(true);
-    expect(step?.archive).toBe(true);
+    expect(step?.trash).toBe(true);
     expect(step?.addLabels).toEqual(["HQ/Automated"]);
-    // Archived, never destroyed: the engine has no trash action, and giving a
-    // classifier one deserves its own review.
-    expect(step).not.toHaveProperty("trash");
+    // Labelled AND binned: Gmail keeps a trashed message 30 days and the label
+    // rides along, so a misclassification is findable and recoverable. Archive
+    // is redundant once it is in the bin.
+    expect(step?.archive).toBeUndefined();
     expect(notifySteps.some((n) => n.when?.equals === "automated_notice")).toBe(false);
   });
 
@@ -301,8 +309,7 @@ describe("HQ inbox triage: the text a phone actually receives", () => {
       )
     ).toBe(
       "[AiFlow] Sales email from james@kypads.com James (KYP Ads). Subject: Introductions. " +
-        "Wants to introduce King to discuss automation for a clinic lead flow. " +
-        DASH
+        "Wants to introduce King to discuss automation for a clinic lead flow."
     );
   });
 
@@ -312,9 +319,7 @@ describe("HQ inbox triage: the text a phone actually receives", () => {
     // subject collapsed and left its separator stranded. Whatever the model
     // returns, the text must still read as a sentence.
     const out = renderAlert("s_notify_sales", { email_sender: "", email_gist: "" }, TRIGGER);
-    expect(out).toBe(
-      "[AiFlow] Sales email from james@kypads.com. Subject: Introductions. " + DASH
-    );
+    expect(out).toBe("[AiFlow] Sales email from james@kypads.com. Subject: Introductions.");
     expect(out).not.toMatch(/[.:]\s*[-.]\s/);
     expect(out).not.toMatch(/\s{2}/);
   });
@@ -326,29 +331,25 @@ describe("HQ inbox triage: the text a phone actually receives", () => {
         const label = JSON.stringify({ email_sender, email_gist });
         expect(out, label).not.toMatch(/\s{2}/); // no gap where a value was
         expect(out, label).not.toMatch(/[.:]\s*[-.]\s/); // no orphaned separator
-        expect(out.endsWith(EMAIL_LOG_ID), label).toBe(true);
+        expect(out, label).not.toMatch(/https?:\/\//);
       }
     }
   });
 
-  it("degrades to the plain Emails page when the log id is missing", () => {
-    // {{trigger.email_log_id}} is written before the run is enqueued on this
-    // trigger, so it is present in practice (pinned in
-    // tests/ai-flows-email-poll.test.ts). If it ever is not, the alert still
-    // has to end in a link that OPENS something.
-    //
-    // It renders as a trailing "?id=", which collapseEmpty cannot strip: the
-    // query is part of one URL token, not a separate template field. That is
-    // cosmetic only. The page trims a blank id and renders the normal list, so
-    // the owner lands on their mail either way rather than on an error.
+  it("still ends as a clean sentence now that no link trails it", () => {
+    // The link used to be the last token, so removing it exposed whatever
+    // separator sat in front of it. A trailing space, period-space, or bare
+    // hyphen is exactly the class of defect that started this whole thread.
     const out = renderAlert(
       "s_notify_sales",
       { email_sender: "James (KYP Ads)", email_gist: "Wants pricing." },
-      { ...TRIGGER, email_log_id: "" }
+      TRIGGER
     );
-    expect(out).toContain("https://www.newcoworker.com/dashboard/emails");
-    // Whatever trails it, the path is intact: no truncation, no bare domain.
-    expect(out).not.toMatch(/newcoworker\.com\/dashboard\/emails[^?]/);
+    expect(out).not.toMatch(/https?:\/\//);
+    expect(out).toBe(out.trimEnd());
+    expect(out).toMatch(/[.!?]$/);
+    expect(out).not.toMatch(/[.:]\s*[-.]\s*$/);
+    expect(out).not.toMatch(/\s{2}/);
   });
 
   it("fits in one or two segments with a realistic payload", () => {

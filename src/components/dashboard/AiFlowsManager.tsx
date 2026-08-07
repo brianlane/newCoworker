@@ -4264,6 +4264,21 @@ function StepFields({
         <label className="flex items-center gap-2 text-xs text-parchment/70">
           <input
             type="checkbox"
+            checked={step.trash ?? false}
+            onChange={(ev) =>
+              patchStep(index, {
+                trash: ev.target.checked ? true : undefined,
+                // Binning and restoring in one step is an authoring mistake,
+                // so ticking this clears the two that undo it.
+                ...(ev.target.checked ? { unarchive: undefined, markUnread: undefined } : {})
+              })
+            }
+          />
+          Move to trash (recoverable for 30 days)
+        </label>
+        <label className="flex items-center gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
             checked={step.unarchive ?? false}
             onChange={(ev) =>
               patchStep(index, {

@@ -5903,6 +5903,7 @@ async function emailOrganizeStep(
         ...(action.markUnread ? { markUnread: true } : {}),
         ...(action.archive ? { archive: true } : {}),
         ...(action.unarchive ? { unarchive: true } : {}),
+        ...(action.trash ? { trash: true } : {}),
         ...(action.addLabels?.length ? { addLabels: action.addLabels } : {}),
         ...(action.removeLabels?.length ? { removeLabels: action.removeLabels } : {}),
         ...(action.moveToFolder ? { moveToFolder: action.moveToFolder } : {})

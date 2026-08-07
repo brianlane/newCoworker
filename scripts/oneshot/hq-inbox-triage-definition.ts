@@ -27,27 +27,19 @@ export const FLOW_NAME = "Team inbox triage (HQ)";
 export const GMAIL_CONNECTION_ROW_ID = "16cff2b9-b4d3-421c-b25d-b40edd80c9a8";
 
 /**
- * Deep link to the triggering message, in OUR dashboard rather than Gmail.
+ * NO LINK IN THE ALERT. Deliberate, after trying two.
  *
- * It used to point at `mail.google.com/mail/u/0/#all/<id>`, which is close to
- * useless on the device the alert actually arrives on. A phone tap opened
- * Gmail on the WEB, not the Gmail app: Brian had to sign in, then find the
- * message again by hand, to read the mail his own text had just summarized.
- * There is no reliable Gmail-app URL scheme to switch to, so the fix is to
- * stop sending people to Gmail at all.
+ * `mail.google.com/#all/<id>` opened Gmail on the WEB from a phone, so Brian
+ * had to sign in and hunt for the message his own text had just summarized.
+ * Swapping it for our own /dashboard/emails?id=<uuid> moved the login wall
+ * rather than removing it: the dashboard still wants a session on a phone that
+ * usually does not have one.
  *
- * `/dashboard/emails?id=<uuid>` opens the message in the reading pane, which
- * collapses the list and goes full width below 768px. The session is a normal
- * cookie, so an already-signed-in phone lands directly on the mail, and the
- * page carries the id across the login bounce when it is not.
- *
- * `{{trigger.email_log_id}}` is written before the run is enqueued, so it is
- * populated for this trigger. An empty value degrades to the plain Emails
- * page, never a broken link. Shortened to /s/<code> at send time and
- * deliberately untracked: Brian tapping his own alert is not lead engagement.
+ * So the text carries everything needed to act instead of a pointer to it: who
+ * sent it, the subject, the ask, and the full draft. Approval is a digit
+ * reply, which needs no browser at all. The mail is labelled and filed in
+ * Gmail either way, so it is one search from the inbox when he does want it.
  */
-export const EMAIL_LINK =
-  "https://www.newcoworker.com/dashboard/emails?id={{trigger.email_log_id}}";
 
 /**
  * One text per Gmail conversation per working day. Brian got an intro AND its
@@ -192,7 +184,7 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
                 // notify steps do. Without it, moving the paging from
                 // notify_owner to the gate would have quietly undone #1191.
                 cooldown: THREAD_COOLDOWN,
-                prompt: `Sales email from {{trigger.from}} {{vars.email_sender}}. {{vars.email_gist}} ${EMAIL_LINK}\n\nDraft reply:\n{{vars.email_draft}}`
+                prompt: `Sales email from {{trigger.from}} {{vars.email_sender}}. {{vars.email_gist}}\n\nDraft reply:\n{{vars.email_draft}}`
               },
               {
                 id: "s_send",
@@ -214,7 +206,7 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
                 type: "notify_owner",
                 when: { var: "email_draft", equals: NO_REPLY_SENTINEL },
                 cooldown: THREAD_COOLDOWN,
-                message: `Sales email from {{trigger.from}} {{vars.email_sender}}. Subject: {{trigger.subject}}. {{vars.email_gist}} ${EMAIL_LINK}`
+                message: `Sales email from {{trigger.from}} {{vars.email_sender}}. Subject: {{trigger.subject}}. {{vars.email_gist}}`
               }
             ]
           },
@@ -227,7 +219,7 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
                 id: "s_notify_support",
                 type: "notify_owner",
                 cooldown: THREAD_COOLDOWN,
-                message: `Support email from {{trigger.from}} {{vars.email_sender}}. Subject: {{trigger.subject}}. {{vars.email_gist}} ${EMAIL_LINK}`
+                message: `Support email from {{trigger.from}} {{vars.email_sender}}. Subject: {{trigger.subject}}. {{vars.email_gist}}`
               }
             ]
           },
@@ -240,7 +232,7 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
                 id: "s_notify_billing",
                 type: "notify_owner",
                 cooldown: THREAD_COOLDOWN,
-                message: `Billing email from {{trigger.from}} {{vars.email_sender}}. Subject: {{trigger.subject}}. {{vars.email_gist}} ${EMAIL_LINK}`
+                message: `Billing email from {{trigger.from}} {{vars.email_sender}}. Subject: {{trigger.subject}}. {{vars.email_gist}}`
               }
             ]
           }
@@ -282,10 +274,10 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
        * nothing happened to it, which is the worst of both: the run did the
        * work of recognising the mail and left it exactly where it was.
        *
-       * Archived, not deleted. The engine has no trash action, and adding one
-       * so an AI classification can bin mail is a change that deserves its own
-       * review. Archiving already achieves the ask (out of the inbox, still
-       * searchable in All Mail), and it is reversible.
+       * Binned, not archived. Gmail's trash is reversible and holds a message
+       * for 30 days, so a misclassification is recoverable for a month; there
+       * is no hard delete anywhere in the engine. Labelled first so the
+       * message is still findable by label while it sits in the Bin.
        */
       {
         id: "s_org_automated",
@@ -293,8 +285,8 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
         connectionId: GMAIL_CONNECTION_ROW_ID,
         when: { var: "email_kind", equals: "automated_notice" },
         markRead: true,
-        archive: true,
-        addLabels: ["HQ/Automated"]
+        addLabels: ["HQ/Automated"],
+        trash: true
       },
       /**
        * The automated mail that DOES matter: an outage, a security alert, a
@@ -307,7 +299,7 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
         type: "notify_owner",
         when: { var: "email_kind", equals: "automated_important" },
         cooldown: THREAD_COOLDOWN,
-        message: `Automated alert from {{trigger.from}} {{vars.email_sender}}. Subject: {{trigger.subject}}. {{vars.email_gist}} ${EMAIL_LINK}`
+        message: `Automated alert from {{trigger.from}} {{vars.email_sender}}. Subject: {{trigger.subject}}. {{vars.email_gist}}`
       },
       {
         id: "s_org_automated_important",
