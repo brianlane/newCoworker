@@ -7926,17 +7926,27 @@ async function routeToTeamStep(
       `lead ${lateClaim ? "claimed late by" : "claimed by"} ${claimedName || claimedBy}` +
         (claimTimeframe ? ` (ETA: ${claimTimeframe})` : "")
     );
-    // Claim-driven ownership: the claimer becomes the contact's owner if the
-    // contact is currently unowned (never steals). Best-effort by design.
-    if (claimedBy) await assignContactOwnerOnClaim(supabase, run, scope, claimedBy);
     // Goal Events: a claim may jump the lead's OTHER parked/queued runs (e.g.
     // a nurture flow) to a "claimed" goal. This run continues normally.
+    //
+    // Ordered BEFORE the ownership write on purpose. Assigning an owner
+    // enqueues owner_assigned runs, and a flow triggered by that event which
+    // also watches a "claimed" goal would be jumped to its own goal by the very
+    // claim that created it, finishing before a single step ran. Amy Laidlaw's
+    // weekly Clever follow-up did exactly that the first time it ever fired: it
+    // reported "finished" with every variable empty, because the extraction
+    // step that fills them was skipped by the jump. Firing first means this
+    // only ever reaches runs that already existed, which is what "OTHER runs"
+    // above was always meant to say.
     {
       const leadPhone = leadContactPhone(scope);
       if (leadPhone) {
         await applyGoalEvent(supabase, run.business_id, leadPhone, { kind: "claimed" });
       }
     }
+    // Claim-driven ownership: the claimer becomes the contact's owner if the
+    // contact is currently unowned (never steals). Best-effort by design.
+    if (claimedBy) await assignContactOwnerOnClaim(supabase, run, scope, claimedBy);
     return {
       kind: "ok",
       result: { routed: lateClaim ? "late_claimed" : "claimed", claimed_by: claimedBy },
@@ -8117,13 +8127,17 @@ async function routeToTeamStep(
         });
       }
       appendActionTaken(scope, `lead auto-assigned to ${agent.name || agent.phone} (round robin)`);
-      await assignContactOwnerOnClaim(supabase, run, scope, agent.phone);
+      // Same ordering rule as the claim path above: jump the runs that already
+      // existed BEFORE assigning ownership creates new ones, so an
+      // owner_assigned flow watching a "claimed" goal is not jumped to its own
+      // goal by the assignment that started it.
       {
         const assignedLeadPhone = leadContactPhone(scope);
         if (assignedLeadPhone) {
           await applyGoalEvent(supabase, run.business_id, assignedLeadPhone, { kind: "claimed" });
         }
       }
+      await assignContactOwnerOnClaim(supabase, run, scope, agent.phone);
       await telemetryRecord(supabase, "ai_flow_route_auto_assigned", {
         run_id: run.id,
         business_id: run.business_id,
