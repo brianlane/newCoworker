@@ -32,6 +32,11 @@ import {
 type LocatorScript = {
   /** How many elements the locator resolves to. */
   count?: number;
+  /**
+   * Counts answered one per `.count()` call, last value repeating. Models a
+   * control that is not in the DOM yet and mounts a moment later.
+   */
+  counts?: number[];
   /** Reject `waitFor({state:"visible"})`, i.e. hidden or detached. */
   invisible?: boolean;
   /** `isEnabled()` answers. Consumed one per probe; the last value repeats. */
@@ -52,18 +57,22 @@ function timeoutError(): Error {
 }
 
 /** Records what the engine actually did, so assertions can check clicks. */
-type StubRun = { clicks: number; probes: number };
+type StubRun = { clicks: number; probes: number; waits: number };
 
 function makeStubPage(script: LocatorScript): { page: unknown; run: StubRun } {
-  const run: StubRun = { clicks: 0, probes: 0 };
+  const run: StubRun = { clicks: 0, probes: 0, waits: 0 };
   const enabled = [...(script.enabled ?? [true])];
   const clickErrors = [...(script.clickErrors ?? [])];
+  const counts = [...(script.counts ?? [])];
 
   const locator = {
     first: () => locator,
     or: () => locator,
     and: () => locator,
-    count: async () => script.count ?? 1,
+    count: async () => {
+      if (counts.length > 0) return counts.length > 1 ? counts.shift()! : counts[0]!;
+      return script.count ?? 1;
+    },
     waitFor: async () => {
       run.probes++;
       if (script.invisible) throw new Error("waiting for locator to be visible");
@@ -82,7 +91,9 @@ function makeStubPage(script: LocatorScript): { page: unknown; run: StubRun } {
     getByPlaceholder: () => locator,
     locator: () => locator,
     waitForLoadState: async () => {},
-    waitForTimeout: async () => {},
+    waitForTimeout: async () => {
+      run.waits++;
+    },
     evaluate: async () => "",
     url: () => "https://portal.example.com/lead/1"
   };
@@ -168,8 +179,12 @@ describe("click_text", () => {
   it("fails when nothing on the page matches", async () => {
     const { page } = makeStubPage({ count: 0 });
 
+    // appearTimeoutMs 0 skips the hydration wait a single click_text now does.
+    // This assertion is about the outcome when a control genuinely never
+    // exists, and paying the real wait to prove it would put five seconds into
+    // the unit suite for nothing. The wait itself is covered separately.
     await expect(
-      runAction(page, { kind: "click_text", target: "Accept", value: "" })
+      runAction(page, { kind: "click_text", target: "Accept", value: "" }, { appearTimeoutMs: 0 })
     ).rejects.toThrow("no matching control on the page");
   });
 
@@ -355,5 +370,52 @@ describe("dismissBlockingOverlays", () => {
     };
     expect(await dismissBlockingOverlays(page, "Submit Update")).toBe(0);
     expect(calls).toBe(1);
+  });
+});
+
+
+/**
+ * The 2026-08-06 Clever incident. Amy Laidlaw's accept step dead-lettered at
+ * step 1 with `click_text "Accept": no matching control on the page`, and the
+ * page artifact the engine saved alongside that error shows the Accept button
+ * plainly present, next to Reject, on a normal invitation page.
+ *
+ * Every match strategy asks `.count()`, which reads the DOM as it stands right
+ * now. On a client-rendered portal the shell can paint and the network go quiet
+ * before hydration mounts the control, so the action concluded "no such
+ * control" against a page that was about to have one.
+ */
+describe("click_text waits for a control that has not hydrated yet", () => {
+  const ACCEPT = { kind: "click_text", target: "Accept", value: "" };
+
+  it("clicks a control that mounts after the first look", async () => {
+    // Five strategies each ask once per pass, so a whole pass sees 0 before the
+    // control appears on the next.
+    const { page, run } = makeStubPage({ counts: [0, 0, 0, 0, 0, 1] });
+
+    await expect(runAction(page, ACCEPT, { appearTimeoutMs: 2_000 })).resolves.toBeUndefined();
+    expect(run.clicks).toBe(1);
+    // It genuinely waited rather than getting lucky on a retry-free path.
+    expect(run.waits).toBeGreaterThan(0);
+  });
+
+  it("still fails when the control never appears", async () => {
+    const { page } = makeStubPage({ count: 0 });
+    // appearTimeoutMs 0 keeps this assertion about the OUTCOME rather than
+    // spending the real wait proving it.
+    await expect(
+      runAction(page, ACCEPT, { appearTimeoutMs: 0 })
+    ).rejects.toThrow(/no matching control/);
+  });
+
+  // The whole point of scoping the wait to a single click: for the loop, zero
+  // matches is how it knows the wizard is finished. Waiting there would add the
+  // timeout to the end of every successful run.
+  it("does not make the while-present loop wait for absence", async () => {
+    const { page, run } = makeStubPage({ count: 0 });
+    await expect(
+      runAction(page, { kind: "click_text_while_present", target: "Next", value: "" })
+    ).resolves.toBeUndefined();
+    expect(run.waits).toBe(0);
   });
 });
