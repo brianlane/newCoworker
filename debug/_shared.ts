@@ -55,6 +55,58 @@ export function loadEnv(): void {
   }
 }
 
+/**
+ * The Postgres URL for a script that needs a SESSION connection, with the
+ * `sslmode=` stripped.
+ *
+ * Two traps this closes, both found on 2026-08-06:
+ *
+ * 1. The transaction pooler silently drops session settings. Callers connect
+ *    with `options: "-c default_transaction_read_only=on"`, which is the only
+ *    thing standing between a debug script and a write against production.
+ *    Supavisor in transaction mode (port 6543, `pgbouncer=true`) does not
+ *    carry that startup parameter, so the connection SUCCEEDS with the guard
+ *    quietly missing. `DIRECT_DATABASE_URL` is the session pooler (5432) and
+ *    is correct; `DATABASE_URL` is the transaction pooler and is not, yet it
+ *    was the fallback both readers used. Refuse it by name instead.
+ *
+ * 2. The region drifts. Several local `.env` entries pointed at
+ *    `aws-1-us-east-1` while this project lives in `us-east-2`. That one is
+ *    self-announcing (the pooler answers "Tenant or user not found"), so it
+ *    needs no guard here, but it is why the fallback above was reachable at
+ *    all: whoever fixes a broken DIRECT_DATABASE_URL by deleting it lands
+ *    straight on the unsafe one.
+ *
+ * `sslmode=` is stripped because pg treats it as verify-full and rejects
+ * Supabase's self-signed chain, so callers pass an explicit `ssl` option and
+ * need it to win.
+ */
+export function sessionDbUrl(): string {
+  const direct = process.env.DIRECT_DATABASE_URL ?? "";
+  const raw = direct || process.env.DATABASE_URL || "";
+  if (!raw) {
+    throw new Error(
+      "DIRECT_DATABASE_URL not set (run from a checkout that resolves .env). " +
+        "It is the SESSION pooler on port 5432, e.g. " +
+        "postgresql://postgres.<ref>:<pw>@aws-1-us-east-2.pooler.supabase.com:5432/postgres"
+    );
+  }
+  if (!direct) {
+    // Only reachable when DIRECT_DATABASE_URL is missing and DATABASE_URL is
+    // standing in. Allowed only when it is genuinely a session connection.
+    const isTransactionPooler = /:6543\b/.test(raw) || /[?&]pgbouncer=true\b/.test(raw);
+    if (isTransactionPooler) {
+      throw new Error(
+        "DIRECT_DATABASE_URL is not set and DATABASE_URL is the TRANSACTION pooler " +
+          "(port 6543 / pgbouncer=true), which silently ignores the read-only session " +
+          "guard this script relies on. Set DIRECT_DATABASE_URL to the session pooler " +
+          "on port 5432 (aws-1-us-east-2 for this project)."
+      );
+    }
+  }
+  return raw.replace(/([?&])sslmode=[^&]*&?/, "$1").replace(/[?&]$/, "");
+}
+
 /** A Hostinger API client built from the env (HOSTINGER_API_TOKEN, optional base URL). */
 export function makeHostingerClient(): HostingerClient {
   return new HostingerClient({
