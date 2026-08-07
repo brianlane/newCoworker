@@ -207,6 +207,15 @@ Other networks: `seed-referralexchange-aiflow.ts`,
 `realtor-retrigger-guard.ts`. HomeLight's are listed in
 [homelight-flow.md](homelight-flow.md).
 
+Notice content: `set-amy-lead-address-in-notices.ts`,
+`amy-lead-price-in-notices.ts` (Aug 7 2026: Clever never extracted a price at
+all, only the over/under-$1M routing token, so no Clever notice could show
+one; Realtor.com had the figure but only on some of its notices. Both were the
+same shape as the address gap #1202 closed. Watch the collapseEmpty trap
+documented in both scripts: route_to_team templates render with no
+collapseEmpty, so any price var must extract with a "none" fallback or a
+teammate gets a bare "Price:" label).
+
 Account-level: `seed-amy-new-lead-intake.ts`,
 `backfill-amy-lead-stages.ts`,
 `disable-amy-voice-booking.ts` (Aug 3 2026: voice stops booking, see Sharp
