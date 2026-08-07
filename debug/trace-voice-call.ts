@@ -68,11 +68,16 @@ async function resolveCallControlId(): Promise<string | null> {
 
   const runId = arg("run");
   if (runId) {
-    const { data } = await db
+    const { data, error } = await db
       .from("ai_flow_runs")
       .select("context")
       .eq("id", runId)
       .maybeSingle();
+    if (error) {
+      console.error(`ai_flow_runs lookup FAILED: ${error.message}`);
+      console.error("This is a query error, not an empty result. Nothing was ruled out.");
+      return null;
+    }
     const cci = (data as Row | null)?.context as Row | undefined;
     const waiting = (cci?.waiting_call ?? {}) as Row;
     if (typeof waiting.call_control_id === "string") return waiting.call_control_id;
@@ -84,13 +89,22 @@ async function resolveCallControlId(): Promise<string | null> {
   // `to_e164` here. On an inbound call that is the caller; on an outbound one
   // it is the person we dialled, which is what `--peer` matches.
   const peer = arg("peer") ?? arg("to");
-  const q = db
+  let q = db
     .from("voice_handoff_sessions")
     .select("call_control_id, created_at, from_e164, context")
     .eq("business_id", businessId)
     .order("created_at", { ascending: false })
     .limit(1);
-  const { data, error } = peer ? await q.eq("from_e164", peer) : await q;
+  if (peer) {
+    q = q.eq("from_e164", peer);
+  } else {
+    // The header promises "the newest OUTBOUND AI call" for the no-selector
+    // form, so keep that promise: without this filter the newest row is
+    // usually an inbound receptionist session, which silently traces the
+    // wrong call. --peer intentionally matches either direction.
+    q = q.eq("context->>outbound", "true");
+  }
+  const { data, error } = await q;
   // A failed query must never read as "nothing found". That is the single
   // worst failure mode for a debugging tool: it sends the person looking in
   // the wrong place while insisting there is nothing to see.
@@ -104,7 +118,7 @@ async function resolveCallControlId(): Promise<string | null> {
     console.error(
       peer
         ? `No voice session found with from_e164 ${peer} on ${businessId}.`
-        : `No voice sessions at all on ${businessId}.`
+        : `No OUTBOUND voice sessions on ${businessId}. (Inbound ones may exist; pass --peer or --call to trace one.)`
     );
     return null;
   }
@@ -149,19 +163,31 @@ if (!sess) {
 }
 
 // --- the dial ledger: exactly-once, and whether it was released ----------
-const { data: dialData, error: dialErr } = await db
+// This call's own ledger row first (the ledger stamps call_control_id once
+// originate returns one), then recent business rows for context, so tracing
+// one call can never hide that call's row behind five unrelated dials.
+const { data: ownDialData, error: ownDialErr } = await db
   .from("voice_outbound_dial_log")
   .select("dedupe_key,status,reason,to_e164,created_at")
+  .eq("call_control_id", callControlId)
+  .maybeSingle();
+if (ownDialErr) console.error(`dial ledger (this call) LOOKUP FAILED: ${ownDialErr.message}`);
+const ownDial = ownDialData as Row | null;
+const { data: dialData, error: dialErr } = await db
+  .from("voice_outbound_dial_log")
+  .select("dedupe_key,status,reason,to_e164,created_at,call_control_id")
   .eq("business_id", businessId)
   .order("created_at", { ascending: false })
   .limit(5);
 if (dialErr) console.error(`dial ledger LOOKUP FAILED: ${dialErr.message}`);
 const dials = (dialData ?? []) as Row[];
-console.log(`\ndial ledger  : ${dialErr ? "LOOKUP FAILED" : `${dials.length} recent row(s)`}`);
+console.log(`\ndial ledger  : ${ownDialErr ? "LOOKUP FAILED" : ownDial ? `this call: ${ownDial.status}  to=${ownDial.to_e164 ?? "-"}  ${ownDial.reason ?? ""}` : "(no row for THIS call)"}`);
+console.log(`  recent for business: ${dialErr ? "LOOKUP FAILED" : `${dials.length} row(s)`}`);
 for (const d of dials) {
-  console.log(`  ${day(d.created_at)} ${ts(d.created_at)}  ${d.status}  to=${d.to_e164 ?? "-"}  ${d.reason ?? ""}`);
+  const marker = d.call_control_id === callControlId ? "  <-- this call" : "";
+  console.log(`  ${day(d.created_at)} ${ts(d.created_at)}  ${d.status}  to=${d.to_e164 ?? "-"}  ${d.reason ?? ""}${marker}`);
 }
-if (dials.length === 0 && !dialErr) {
+if (dials.length === 0 && !dialErr && !ownDial) {
   console.log(
     "  Empty is EXPECTED for a call placed straight through originate\n" +
       "  (debug/place-test-outbound-call.ts). Only the worker's place_ai_call\n" +
@@ -245,7 +271,7 @@ console.log("\n=== consistency ===");
 const machine = ((sess?.context ?? {}) as Row).machine_detected === true;
 const answered = Boolean(resv?.answer_issued_at);
 const amd = tr?.answering_machine_result;
-if (machine && !trErr && amd !== "machine") {
+if (machine && !trErr && tr && amd !== "machine") {
   console.log("  MISMATCH: session says a machine answered, the transcript row does not.");
   console.log("            The call view will show this as an ordinary call.");
 }
@@ -261,7 +287,7 @@ if (resv && sess?.status === "done" && resv.state !== "settled") {
   console.log(`  MISMATCH: the call is done but its reservation is "${resv.state}".`);
   console.log("            A leaked reservation holds a concurrency slot.");
 }
-if (resvErr || trErr || dialErr) {
+if (sessErr || resvErr || trErr || dialErr || ownDialErr) {
   console.log("  NOTE: at least one lookup FAILED above, so this section is incomplete.");
   console.log("        A failed query is not an absence of evidence.");
 }
