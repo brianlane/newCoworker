@@ -56,11 +56,11 @@ describe("schema: place_ai_call", () => {
       defWith(
         {
           toVar: "lead_phone",
-          personaTemplate: "Hi {{vars.lead_name}}, calling with Amy's office — good time?",
+          personaTemplate: "Hi {{vars.lead_name}}, calling with Amy's office: good time?",
           notifyE164: "+16025245719",
           transfer: {
             toE164: "+16025245719",
-            preSmsTemplate: "LIVE TRANSFER — {{vars.lead_name}} incoming, pick up!"
+            preSmsTemplate: "LIVE TRANSFER: {{vars.lead_name}} incoming, pick up!"
           },
           captureFields: ["best time to call"],
           saveAs: "call_outcome"
@@ -251,7 +251,7 @@ describe("planStep: place_ai_call", () => {
         contextTemplate: "Their name: {{vars.lead_name}}.",
         transfer: {
           toRef: EMP_REF,
-          preSmsTemplate: "LIVE TRANSFER — {{vars.lead_name}} ({{vars.lead_phone}})"
+          preSmsTemplate: "LIVE TRANSFER: {{vars.lead_name}} ({{vars.lead_phone}})"
         },
         captureFields: ["best time"],
         saveAs: "attempt_1"
@@ -267,7 +267,7 @@ describe("planStep: place_ai_call", () => {
         contextNote: "Their name: Bryan.",
         notifyE164: "+16025245719",
         transferToRef: EMP_REF,
-        preSmsBody: "LIVE TRANSFER — Bryan ((757) 239-0150)",
+        preSmsBody: "LIVE TRANSFER: Bryan ((757) 239-0150)",
         captureFields: ["best time"],
         saveAs: "attempt_1",
         marker: "__called_call1"
