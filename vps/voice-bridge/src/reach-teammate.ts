@@ -26,6 +26,10 @@ export type ReachLadderConfig = {
   targets: ReachTarget[];
   ringSeconds: number;
   preSmsBody: string;
+  /** Telnyx connection the B legs dial through (stamped by originate). */
+  connectionId: string;
+  /** Caller id presented to the teammates: the tenant DID. */
+  fromE164: string;
 };
 
 /** `rt:<businessId>:<aLegCallControlId>:<attempt>` (see voice_reach.ts). */
@@ -62,11 +66,125 @@ export function parseReachLadderConfig(raw: unknown): ReachLadderConfig | null {
     targets.push({ name: typeof t!.name === "string" ? t!.name.trim() : "", e164 });
   }
   if (targets.length === 0) return null;
+  const connectionId = typeof r.connection_id === "string" ? r.connection_id.trim() : "";
+  const fromE164 = typeof r.from_e164 === "string" ? r.from_e164.trim() : "";
+  // Originate stamps both alongside the targets; a ladder without them
+  // cannot dial and registering the tool anyway would let the model promise
+  // a transfer that can only fail.
+  if (!connectionId || !fromE164) return null;
   return {
     targets,
     ringSeconds: clampReachRingSeconds(r.ring_seconds),
-    preSmsBody: typeof r.pre_sms_body === "string" ? r.pre_sms_body.trim() : ""
+    preSmsBody: typeof r.pre_sms_body === "string" ? r.pre_sms_body.trim() : "",
+    connectionId,
+    fromE164
   };
+}
+
+/** The Telnyx surface the ladder needs, injectable so tests run without wire. */
+export type ReachTelnyxDeps = {
+  dial: (opts: {
+    connectionId: string;
+    to: string;
+    from: string;
+    timeoutSecs?: number;
+    clientState?: string;
+  }) => Promise<{ ok: boolean; status: number; body?: string; callControlId?: string }>;
+  bridge: (
+    callControlId: string,
+    opts: { otherCallControlId: string; parkAfterUnbridge?: boolean; commandId?: string }
+  ) => Promise<{ ok: boolean; status: number; body?: string }>;
+  hangup: (callControlId: string) => Promise<{ ok: boolean; status: number; body?: string }>;
+  /** Best-effort pre-alert SMS; a failure must never block the dial. */
+  sendPreSms?: (toE164: string, body: string) => Promise<void>;
+};
+
+export type ReachLadderResult =
+  | { ok: true; connectedName: string; bLeg: string }
+  | { ok: false; detail: string };
+
+/**
+ * Walk the ladder: for each target in order, text the pre-alert, dial a B
+ * leg tagged with the reach client_state, wait for the webhook-stamped
+ * outcome on the A leg's session, and either bridge (done) or hang the B
+ * leg up and try the next person.
+ *
+ * The B leg is ALWAYS hung up before the next target is dialed: without
+ * that, a teammate whose voicemail answered late holds a zombie leg while
+ * the next teammate's phone is already ringing, and the caller can end up
+ * bridged to two places.
+ *
+ * The A leg's bridge command carries park_after_unbridge, so if the teammate
+ * later drops, the caller is parked rather than hung up on.
+ */
+export async function runReachLadder(
+  supabase: SupabaseClient,
+  telnyx: ReachTelnyxDeps,
+  args: {
+    businessId: string;
+    aLegCallControlId: string;
+    config: ReachLadderConfig;
+    log?: (msg: string, extra?: Record<string, unknown>) => void;
+  }
+): Promise<ReachLadderResult> {
+  const { businessId, aLegCallControlId, config } = args;
+  const log = args.log ?? (() => undefined);
+  for (let attempt = 0; attempt < config.targets.length; attempt += 1) {
+    const target = config.targets[attempt]!;
+    if (config.preSmsBody && telnyx.sendPreSms) {
+      try {
+        await telnyx.sendPreSms(target.e164, config.preSmsBody);
+      } catch {
+        // Best-effort by contract.
+      }
+    }
+    const dialRes = await telnyx.dial({
+      connectionId: config.connectionId,
+      to: target.e164,
+      from: config.fromE164,
+      // Telnyx enforces the ring window server-side too, so a lost webhook
+      // still ends the attempt instead of ringing a phone forever.
+      timeoutSecs: config.ringSeconds,
+      clientState: encodeReachClientState(businessId, aLegCallControlId, attempt)
+    });
+    if (!dialRes.ok || !dialRes.callControlId) {
+      log("reach: dial refused, next target", {
+        attempt,
+        status: dialRes.status,
+        body: dialRes.body?.slice(0, 120)
+      });
+      continue;
+    }
+    const outcome = await pollReachOutcome(
+      supabase,
+      aLegCallControlId,
+      attempt,
+      config.ringSeconds
+    );
+    if (outcome.status === "answered") {
+      const bLeg = outcome.bLeg || dialRes.callControlId;
+      const bridgeRes = await telnyx.bridge(aLegCallControlId, {
+        otherCallControlId: bLeg,
+        parkAfterUnbridge: true,
+        commandId: `reach-bridge-${aLegCallControlId}-${attempt}`
+      });
+      if (bridgeRes.ok) {
+        return { ok: true, connectedName: target.name || "a teammate", bLeg };
+      }
+      // The teammate answered but the join failed: release them so they are
+      // not left holding a silent line, then keep trying the ladder rather
+      // than reporting a success the caller never experienced.
+      log("reach: bridge failed after answer", { attempt, status: bridgeRes.status });
+      await telnyx.hangup(bLeg);
+      continue;
+    }
+    // Rang out (or the window elapsed silently): tear the B leg down before
+    // the next dial. A late voicemail answer on it after this point is
+    // handled by record_reach_outcome's attempt precedence.
+    await telnyx.hangup(dialRes.callControlId);
+    log("reach: no answer, next target", { attempt });
+  }
+  return { ok: false, detail: "nobody_answered" };
 }
 
 /**

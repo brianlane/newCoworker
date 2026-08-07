@@ -171,6 +171,13 @@ export type OutboundSessionContext = {
     targets: { name: string; e164: string }[];
     ring_seconds?: number;
     pre_sms_body?: string;
+    /**
+     * Stamped by ORIGINATE (not the plan): the Telnyx connection and the
+     * tenant DID it already resolved for the A leg, so the bridge can dial
+     * the B legs without re-reading tenant settings mid-call.
+     */
+    connection_id?: string;
+    from_e164?: string;
   };
 };
 
