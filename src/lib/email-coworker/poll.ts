@@ -17,6 +17,7 @@
  *      the thread to a human and alerts the owner once.
  */
 
+import { tenantEmailDomain } from "@/lib/email/tenant-mailbox";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { resolveEmailConnection } from "@/lib/voice-tools/connections";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
@@ -56,6 +57,27 @@ export type EmailCoworkerPollResult = {
  * correspond from a shared one), with the dashboard login kept as a weaker
  * fallback for when the provider will not report a profile.
  */
+/**
+ * Is this message from us?
+ *
+ * Set membership alone is not enough. `selfAddresses` collects the Gmail
+ * profile address and the dashboard login, and for a shared mailbox BOTH can
+ * be the account (HQ: newcoworkerteam@gmail.com) while the correspondence
+ * address is a send-as alias on the tenant domain (team@newcoworker.com). The
+ * Cloudflare catch-all forwards that alias back into this very mailbox, so a
+ * reply arrives as genuinely received mail and the coworker answers itself.
+ *
+ * Anything on the tenant email domain is therefore ours by construction: that
+ * domain is where the AI mailbox and the catch-all aliases live.
+ */
+export function isSelfSender(fromEmail: string, ourAddresses: Set<string>): boolean {
+  const from = fromEmail.trim().toLowerCase();
+  if (!from) return false;
+  if (ourAddresses.has(from)) return true;
+  const at = from.lastIndexOf("@");
+  return at !== -1 && from.slice(at + 1) === tenantEmailDomain();
+}
+
 async function selfAddresses(
   businessId: string,
   provider: "google" | "microsoft",
@@ -141,7 +163,7 @@ export async function pollEmailCoworker(
         if (!m.threadId || !ownedByThreadId.has(m.threadId)) return false;
         // Our own sent copy can appear in some mailbox views; answering it
         // would be an infinite conversation with ourselves.
-        if (ourAddresses.has(m.fromEmail.trim().toLowerCase())) return false;
+        if (isSelfSender(m.fromEmail, ourAddresses)) return false;
         return true;
       });
       if (candidates.length === 0) continue;

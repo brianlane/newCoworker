@@ -27,7 +27,9 @@ vi.mock("@/lib/email-coworker/turn", () => ({ runEmailCoworkerTurn: vi.fn() }));
 vi.mock("@/lib/outreach/reply", () => ({ noteProspectReply: vi.fn() }));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 
-import { pollEmailCoworker } from "@/lib/email-coworker/poll";
+import { pollEmailCoworker,
+  isSelfSender
+} from "@/lib/email-coworker/poll";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { resolveEmailConnection } from "@/lib/voice-tools/connections";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
@@ -447,5 +449,46 @@ describe("pollEmailCoworker", () => {
     mockList.mockResolvedValue([]);
     await pollEmailCoworker();
     expect(mockClientFactory).toHaveBeenCalled();
+  });
+});
+
+describe("isSelfSender: the coworker must not answer its own mail", () => {
+  /**
+   * Live, Aug 7 2026. HQ signs in as newcoworkerteam@gmail.com and
+   * corresponds from the send-as alias team@newcoworker.com. The Cloudflare
+   * catch-all forwards that alias back into the same mailbox, so a reply
+   * arrives as genuinely RECEIVED mail on a thread the coworker owns, and it
+   * answered itself.
+   *
+   * Both sources feeding `selfAddresses` return the ACCOUNT address here (the
+   * Gmail profile and businesses.owner_email, verified against production),
+   * so plain set membership could never have caught the alias.
+   */
+  const OURS = new Set(["newcoworkerteam@gmail.com"]);
+
+  it("catches the send-as alias that neither self-address source reports", () => {
+    expect(isSelfSender("team@newcoworker.com", OURS)).toBe(true);
+    expect(isSelfSender("contact@newcoworker.com", OURS)).toBe(true);
+    expect(isSelfSender("  Team@NewCoworker.com  ", OURS)).toBe(true);
+  });
+
+  it("still catches the addresses the set does know", () => {
+    expect(isSelfSender("newcoworkerteam@gmail.com", OURS)).toBe(true);
+  });
+
+  it("never swallows a real correspondent, which is the worse failure", () => {
+    expect(isSelfSender("james@kypads.com", OURS)).toBe(false);
+    expect(isSelfSender("fullvanair@gmail.com", OURS)).toBe(false);
+    // Suffix matching would be a real bug: these are not our domain.
+    expect(isSelfSender("someone@notnewcoworker.com", OURS)).toBe(false);
+    expect(isSelfSender("someone@newcoworker.com.evil.test", OURS)).toBe(false);
+  });
+
+  it("degrades safely on junk", () => {
+    expect(isSelfSender("", OURS)).toBe(false);
+    expect(isSelfSender("   ", OURS)).toBe(false);
+    expect(isSelfSender("not-an-address", OURS)).toBe(false);
+    // An empty set still leaves the domain rule working.
+    expect(isSelfSender("team@newcoworker.com", new Set())).toBe(true);
   });
 });
