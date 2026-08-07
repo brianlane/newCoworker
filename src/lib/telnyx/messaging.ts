@@ -6,6 +6,7 @@ import {
   internationalGatewayFrom,
   INTERNATIONAL_MMS_ERROR
 } from "@/lib/telnyx/international-gateway";
+import { intlAlphaProfileId } from "@/lib/telnyx/alpha-sender";
 import { sendCapAlertOnce, smsCapPeriodKey } from "../../../supabase/functions/_shared/cap_alerts";
 
 export type TelnyxMessagingConfig = {
@@ -280,13 +281,22 @@ export async function sendTelnyxSms(
     throw new Error(INTERNATIONAL_MMS_ERROR);
   }
 
+  // A send on the alpha-sender profile must carry NO from-number at all:
+  // the profile's registered alphanumeric identity IS the sender, and any
+  // phone-number `from` (the tenant's, or the gateway substitution below)
+  // would override it at Telnyx. Enforced here at the seam so every
+  // caller is protected, not just the ones that remembered to clear
+  // `fromE164` (Bugbot on PR #1229: gateway + alpha env both set would
+  // have stamped the P2P number over the alpha identity).
+  const alphaProfile = intlAlphaProfileId();
+  const isAlphaProfileSend = alphaProfile !== null && config.messagingProfileId === alphaProfile;
   // International sends substitute the dedicated P2P gateway as the visible
   // from-number (tenant A2P long codes cannot originate international).
   // With no gateway configured, behavior is unchanged: the send keeps the
   // tenant number and fails at Telnyx as before, so env rollout order is
   // safe. Metering below stays keyed to the TENANT either way.
-  const gatewayFrom = isInternational ? internationalGatewayFrom() : null;
-  const effectiveFrom = gatewayFrom ?? config.fromE164;
+  const gatewayFrom = isInternational && !isAlphaProfileSend ? internationalGatewayFrom() : null;
+  const effectiveFrom = isAlphaProfileSend ? undefined : (gatewayFrom ?? config.fromE164);
 
   const textUnits =
     smsTextUnits(text, { mediaCount }) * smsDestinationMultiplier(destinationCountry);

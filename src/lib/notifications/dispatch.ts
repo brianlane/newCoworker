@@ -35,6 +35,8 @@ import { sendOwnerEmail } from "@/lib/email/client";
 import { buildBrandedEmailHtml } from "@/lib/email/branded-html";
 import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messaging";
 import { coerceOwnerPhoneToE164 } from "@/lib/telnyx/assign-did";
+import { alphaOwnerAlertProfile, withAlphaNoReplyLine } from "@/lib/telnyx/alpha-sender";
+import { smsDestinationCountry } from "@/lib/sms/destination-rates";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import {
   notificationCategoryEnabled,
@@ -516,12 +518,27 @@ export async function dispatchUrgentNotification(
       )
     );
   } else {
+    // An international owner phone with the alpha profile configured rides
+    // the platform's one-way NEWCOWORKER sender (long codes cannot
+    // originate international SMS: Telnyx ticket #557577), no-reply line
+    // appended since that sender has no inbound path. Env unset = null =
+    // today's behavior. Owner alerts only, mirroring the notifications
+    // Edge function.
+    const alphaProfile = alphaOwnerAlertProfile(smsDestinationCountry(targets.phone));
     // The summary usually ends with "." and the template appends its own;
     // trim trailing periods so the alert never reads "dashboard.. Details:".
-    const text =
+    const alertLine =
       input.smsBody ?? `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`;
+    const text = alphaProfile ? withAlphaNoReplyLine(alertLine) : alertLine;
     try {
-      const config = await getTelnyxMessagingForBusiness(input.businessId);
+      const tenantConfig = await getTelnyxMessagingForBusiness(input.businessId);
+      // On the alpha profile the sender IS the profile's alpha identity:
+      // swap the profile in and drop the tenant from-number.
+      const config = alphaProfile
+        ? // rcsAgentId nulled explicitly: the branded RCS agent must never
+          // be the sender identity for an alpha-routed alert.
+          { ...tenantConfig, messagingProfileId: alphaProfile, fromE164: undefined, rcsAgentId: null }
+        : tenantConfig;
       // Owner alerts are METERED like everything else (nothing is exempt —
       // Jul 14 2026 policy) but never REFUSED: "operational" mode counts
       // the send (plan/bonus/overage) without the hard stop, so the cap

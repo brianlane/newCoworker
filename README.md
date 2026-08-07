@@ -1182,11 +1182,17 @@ What this means channel by channel:
   `src/lib/sms/destination-rates.ts`) exists so metering and guardrails
   are ready if a capable sender type ever ships, but today every
   non-NANP send dies at Telnyx regardless.
-- **Alphanumeric sender (pending): one-way only.** The supported Telnyx
-  path for international notifications is a registered alphanumeric
-  sender ID (platform-branded, e.g. NEWCOWORKER). It has no inbound
-  path, so it can carry owner alerts but never customer conversations,
-  and per the RCS precedent it must never carry customer-facing traffic.
+- **Alphanumeric sender (registration pending): one-way only.** The
+  supported Telnyx path for international notifications is the
+  registered alphanumeric sender NEWCOWORKER. It has no inbound path, so
+  it carries owner alerts but never customer conversations, per the RCS
+  precedent. Everything is staged behind `TELNYX_INTL_ALPHA_PROFILE_ID`
+  (unset = dormant): the dedicated profile exists
+  ("New Coworker International Alerts",
+  `scripts/oneshot/create-intl-alpha-profile.ts`), the owner-alert
+  senders route through it when set, and
+  `PRDs/alpha-sender-rollout.md` is the activation runbook, gated on
+  Telnyx's registration approval AND written fee confirmation.
 - **Mexico: WhatsApp only.** Mexican carriers overwrite ALL alphanumeric
   senders to random local numbers, domestic MX long codes allow
   automated traffic for one-time passcodes only, and a branded two-way

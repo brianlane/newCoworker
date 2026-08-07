@@ -286,6 +286,47 @@ describe("sendTelnyxSms meterBusinessId (atomic reserve)", () => {
     vi.unstubAllEnvs();
   });
 
+  it("never puts ANY from-number on an alpha-profile send, even with the gateway configured", async () => {
+    // Bugbot on PR #1229: with TELNYX_INTL_GATEWAY_E164 and the alpha
+    // profile both set, the gateway substitution would have stamped a P2P
+    // phone number over the profile's registered alpha identity. The seam
+    // must omit `from` entirely for alpha-profile sends.
+    vi.stubEnv("TELNYX_INTL_GATEWAY_E164", "+16028384497");
+    vi.stubEnv("TELNYX_INTL_ALPHA_PROFILE_ID", "alpha-prof");
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { id: "m4a" } })
+    });
+    await sendTelnyxSms(
+      { apiKey: "k", messagingProfileId: "alpha-prof", fromE164: "+14388035806" },
+      "+85261234567",
+      "Owner alert",
+      { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1", meterMode: "operational" }
+    );
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
+    expect(body.from).toBeUndefined();
+    expect(body.messaging_profile_id).toBe("alpha-prof");
+    vi.unstubAllEnvs();
+  });
+
+  it("keeps the gateway substitution for non-alpha profiles when both envs are set", async () => {
+    vi.stubEnv("TELNYX_INTL_GATEWAY_E164", "+16028384497");
+    vi.stubEnv("TELNYX_INTL_ALPHA_PROFILE_ID", "alpha-prof");
+    const fetchMock = vi.fn().mockResolvedValue({
+      ok: true,
+      json: () => Promise.resolve({ data: { id: "m4b" } })
+    });
+    await sendTelnyxSms(
+      { apiKey: "k", messagingProfileId: "tenant-prof", fromE164: "+14388035806" },
+      "+85261234567",
+      "Hello James",
+      { fetchImpl: fetchMock as typeof fetch, meterBusinessId: "biz-1" }
+    );
+    const body = JSON.parse((fetchMock.mock.calls[0][1] as { body: string }).body);
+    expect(body.from).toBe("+16028384497");
+    vi.unstubAllEnvs();
+  });
+
   it("refuses international MMS before metering: zero units, zero Telnyx calls", async () => {
     vi.stubEnv("TELNYX_INTL_GATEWAY_E164", "+16028384497");
     const fetchMock = vi.fn();

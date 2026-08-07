@@ -43,6 +43,8 @@ import {
 } from "../_shared/sms_operational_meter.ts";
 import { smsTextUnits } from "../_shared/sms_text_units.ts";
 import { resolveInternationalFrom } from "../_shared/sms_international_gateway.ts";
+import { smsDestinationCountry } from "../_shared/sms_destination_rates.ts";
+import { alphaOwnerAlertProfile, withAlphaNoReplyLine } from "../_shared/alpha_sender.ts";
 
 interface WebhookPayload {
   type: "INSERT" | "UPDATE" | "DELETE";
@@ -575,10 +577,18 @@ serve(async (req: Request) => {
       "recent_team_notify"
     );
   } else if (telnyxKey && telnyxProfile) {
+    // An international owner phone with the alpha profile configured rides
+    // the platform's one-way NEWCOWORKER sender (long codes cannot
+    // originate international SMS: ticket #557577), with the no-reply line
+    // appended because that sender has no inbound path. Env unset = null =
+    // today's behavior. Owner alerts only by design (the RCS rule:
+    // platform-branded senders never carry customer traffic).
+    const alphaProfile = alphaOwnerAlertProfile(smsDestinationCountry(targets.phone));
     // Trim trailing periods so a "."-terminated summary can't produce
     // "dashboard.. Details:" (mirrors dispatch.ts). Built before the meter
     // so the counted units match the exact body sent.
-    const smsText = `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`;
+    const alertLine = `New Coworker Alert: ${summary.replace(/\.+$/, "")}. Details: ${dashboardUrl}`;
+    const smsText = alphaProfile ? withAlphaNoReplyLine(alertLine) : alertLine;
     // Owner alerts are METERED against the tenant's monthly pool like all
     // traffic (Jul 14 2026 policy: nothing is exempt) but never REFUSED —
     // the "you hit your SMS cap" alert must outrun the cap it reports.
@@ -595,11 +605,15 @@ serve(async (req: Request) => {
       const body: Record<string, string> = {
         to: targets.phone,
         text: smsText,
-        messaging_profile_id: telnyxProfile
+        messaging_profile_id: alphaProfile ?? telnyxProfile
       };
       // An international alert phone (owner abroad) is only reachable via
       // the P2P gateway from-number.
-      const alertFrom = resolveInternationalFrom(targets.phone, telnyxFrom || null);
+      // On the alpha profile the sender IS the profile's alpha identity, so
+      // no from-number rides along; otherwise the gateway/tenant rules apply.
+      const alertFrom = alphaProfile
+        ? null
+        : resolveInternationalFrom(targets.phone, telnyxFrom || null);
       if (alertFrom) body.from = alertFrom;
       const smsRes = await fetch("https://api.telnyx.com/v2/messages", {
         method: "POST",

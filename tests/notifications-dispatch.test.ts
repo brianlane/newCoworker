@@ -202,6 +202,72 @@ describe("notifications/dispatch", () => {
     expect(t.email).toBe("admin@example.com");
   });
 
+  it("routes an international alert phone through the alpha profile when configured", async () => {
+    process.env.TELNYX_INTL_ALPHA_PROFILE_ID = "alpha-prof";
+    vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+      ...PREFS_ON,
+      phone_number: "+85261234567"
+    } as never);
+    vi.mocked(sendOwnerEmail).mockResolvedValue("email_id" as never);
+    await dispatchUrgentNotification({
+      businessId: BIZ,
+      summary: "URGENT call",
+      kind: "urgent_alert"
+    });
+    expect(sendTelnyxSms).toHaveBeenCalledTimes(1);
+    const [config, to, text] = vi.mocked(sendTelnyxSms).mock.calls[0] as unknown as [
+      { messagingProfileId: string; fromE164?: string; rcsAgentId?: string | null },
+      string,
+      string
+    ];
+    expect(to).toBe("+85261234567");
+    expect(config.messagingProfileId).toBe("alpha-prof");
+    // The profile's alpha identity is the sender: no from-number, and the
+    // branded RCS agent must never ride an alpha-routed alert.
+    expect(config.fromE164).toBeUndefined();
+    expect(config.rcsAgentId).toBeNull();
+    // One-way sender: the alert must say replies are not received.
+    expect(text).toMatch(/Replies to this text are not received/);
+  });
+
+  it("keeps the tenant profile for a domestic alert phone even with the alpha profile configured", async () => {
+    process.env.TELNYX_INTL_ALPHA_PROFILE_ID = "alpha-prof";
+    vi.mocked(sendOwnerEmail).mockResolvedValue("email_id" as never);
+    await dispatchUrgentNotification({
+      businessId: BIZ,
+      summary: "URGENT call",
+      kind: "urgent_alert"
+    });
+    const [config, , text] = vi.mocked(sendTelnyxSms).mock.calls[0] as unknown as [
+      { messagingProfileId: string },
+      string,
+      string
+    ];
+    expect(config.messagingProfileId).not.toBe("alpha-prof");
+    expect(text).not.toMatch(/Replies to this text are not received/);
+  });
+
+  it("stays dormant for an international phone while the alpha env is unset", async () => {
+    delete process.env.TELNYX_INTL_ALPHA_PROFILE_ID;
+    vi.mocked(getOrCreateNotificationPreferences).mockResolvedValue({
+      ...PREFS_ON,
+      phone_number: "+85261234567"
+    } as never);
+    vi.mocked(sendOwnerEmail).mockResolvedValue("email_id" as never);
+    await dispatchUrgentNotification({
+      businessId: BIZ,
+      summary: "URGENT call",
+      kind: "urgent_alert"
+    });
+    const [config, , text] = vi.mocked(sendTelnyxSms).mock.calls[0] as unknown as [
+      { messagingProfileId: string },
+      string,
+      string
+    ];
+    expect(config.messagingProfileId).not.toBe("alpha-prof");
+    expect(text).not.toMatch(/Replies to this text are not received/);
+  });
+
   it("dispatchUrgentNotification writes 3 sent rows and calls senders when toggles on", async () => {
     vi.mocked(sendOwnerEmail).mockResolvedValue("email_id" as never);
     const result = await dispatchUrgentNotification({

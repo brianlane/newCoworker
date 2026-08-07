@@ -291,6 +291,53 @@ describe("_shared/telnyx_sms_compliance", () => {
     vi.unstubAllEnvs();
   });
 
+  it("telnyxSendSms omits from entirely on an alpha-profile send, gateway configured or not", async () => {
+    // Bugbot on PR #1229: gateway + alpha env both set would have stamped
+    // the P2P number over the profile's registered alpha identity. The
+    // seam must drop every phone-number `from` for alpha-profile sends.
+    vi.stubEnv("TELNYX_INTL_GATEWAY_E164", "+16028384497");
+    vi.stubEnv("TELNYX_INTL_ALPHA_PROFILE_ID", "alpha-prof");
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "{}"
+    });
+    await telnyxSendSms({
+      apiKey: "KEY",
+      messagingProfileId: "alpha-prof",
+      fromE164: "+14388035806",
+      toE164: "+85261234567",
+      text: "owner alert",
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    const body = JSON.parse(init.body as string);
+    expect(body.from).toBeUndefined();
+    expect(body.messaging_profile_id).toBe("alpha-prof");
+    vi.unstubAllEnvs();
+  });
+
+  it("telnyxSendSms keeps the gateway substitution for non-alpha profiles when both envs are set", async () => {
+    vi.stubEnv("TELNYX_INTL_GATEWAY_E164", "+16028384497");
+    vi.stubEnv("TELNYX_INTL_ALPHA_PROFILE_ID", "alpha-prof");
+    const fetchImpl = vi.fn().mockResolvedValue({
+      ok: true,
+      status: 200,
+      text: async () => "{}"
+    });
+    await telnyxSendSms({
+      apiKey: "KEY",
+      messagingProfileId: "mp",
+      fromE164: "+14388035806",
+      toE164: "+85261234567",
+      text: "hello",
+      fetchImpl: fetchImpl as unknown as typeof fetch
+    });
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toMatchObject({ from: "+16028384497" });
+    vi.unstubAllEnvs();
+  });
+
   it("telnyxSendSms keeps the tenant from-number for domestic sends with a gateway set", async () => {
     vi.stubEnv("TELNYX_INTL_GATEWAY_E164", "+16028384497");
     const fetchImpl = vi.fn().mockResolvedValue({
