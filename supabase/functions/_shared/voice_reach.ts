@@ -163,22 +163,38 @@ export type ReachOutcomeStamp = {
 };
 
 /**
- * Should this B-leg event overwrite what is already recorded for the attempt?
+ * Should this B-leg event overwrite what is already recorded?
  *
- * Only the FIRST outcome for an attempt counts. A teammate who answers and then
- * hangs up produces an answer followed by a hangup on the same leg, and letting
- * the second one land would rewrite a real conversation into a missed call and
- * send the assistant off to ring the next person mid-handover.
+ * Losing an outcome costs a real caller. If an `answered` is dropped the bridge
+ * never learns the teammate picked up, so it apologizes to somebody who
+ * actually got through and leaves the teammate holding a dead line. Two ways
+ * that can happen:
  *
- * A hangup for a DIFFERENT attempt is still recorded: that is the previous
- * teammate's leg being torn down as the ladder moves on, and it is the signal
- * the ladder is waiting for.
+ *   1. SAME attempt, answer then hangup. A teammate who picks up and later
+ *      hangs up produces both events on one leg, and the hangup must not
+ *      rewrite a real conversation into a missed call.
+ *   2. An OLDER attempt reporting late. The ladder hangs up the previous leg as
+ *      it moves on, so that hangup can land after the next teammate has already
+ *      answered. An older attempt never overwrites a newer one.
+ *
+ * A NEWER attempt always wins: the ladder has moved on and its outcome is the
+ * current truth.
+ *
+ * This function is the SPECIFICATION of the rule. Under concurrent webhooks it
+ * is enforced by the `record_reach_outcome` SQL function, which evaluates the
+ * same three clauses inside a single statement so two events cannot both read
+ * the same prior and race. Keep the two in step.
  */
 export function reachOutcomeShouldApply(
   prior: { attempt?: unknown; status?: unknown } | null | undefined,
   incoming: { attempt: number; status: "answered" | "no_answer" }
 ): boolean {
   if (!prior) return true;
-  if (prior.attempt !== incoming.attempt) return true;
+  const priorAttempt = typeof prior.attempt === "number" ? prior.attempt : -1;
+  // A late event from an attempt the ladder has already left behind. The
+  // previous leg is hung up as the ladder moves on, so its hangup can easily
+  // land AFTER the next teammate has answered.
+  if (priorAttempt > incoming.attempt) return false;
+  if (priorAttempt < incoming.attempt) return true;
   return !(prior.status === "answered" && incoming.status === "no_answer");
 }

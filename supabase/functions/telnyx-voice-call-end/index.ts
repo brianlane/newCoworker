@@ -36,7 +36,7 @@ import {
   isAmdEvent
 } from "../_shared/voice_amd.ts";
 import { CALL_REASON } from "../_shared/ai_flows/call_outcome_meta.ts";
-import { parseReachClientState, reachOutcomeShouldApply } from "../_shared/voice_reach.ts";
+import { parseReachClientState } from "../_shared/voice_reach.ts";
 import {
   resumeFlowRunWithCallOutcome,
   type FlowRunLink
@@ -637,35 +637,32 @@ async function handleReachLeg(
   const state = parseReachClientState(payload["client_state"] as string | undefined);
   if (!state) return null;
   const bLeg = String(payload["call_control_id"] ?? "");
-
-  const { data: sessRow } = await supabase
-    .from("voice_handoff_sessions")
-    .select("context")
-    .eq("call_control_id", state.aLegCallControlId)
-    .maybeSingle();
-  const ctx = ((sessRow as { context?: Record<string, unknown> } | null)?.context ??
-    {}) as Record<string, unknown>;
-  const prior = (ctx.reach ?? {}) as { attempt?: unknown; status?: unknown };
-
-  // A hangup on the leg that already answered is the teammate ending a real
-  // conversation, not a missed call. Only the FIRST outcome for an attempt is
-  // recorded, so a late hangup cannot rewrite an answer into a miss.
   const status = eventType === "call.answered" ? "answered" : "no_answer";
-  if (!reachOutcomeShouldApply(prior, { attempt: state.attempt, status })) {
-    return jsonOk("reach_hangup_after_answer");
-  }
-  const { error } = await supabase
-    .from("voice_handoff_sessions")
-    .update({
-      context: { ...ctx, reach: { attempt: state.attempt, status, b_leg: bLeg } }
-    })
-    .eq("call_control_id", state.aLegCallControlId);
+
+  // One statement, not read-modify-write. `call.answered` and `call.hangup`
+  // are separate deliveries and can be in flight together, so reading the
+  // prior state here and writing it back would let both decide they may write
+  // and let the later one win. If the loser is the `answered`, the bridge
+  // never learns the teammate picked up: it apologizes to a caller who
+  // actually got through and leaves the teammate holding a dead line.
+  //
+  // The precedence lives in record_reach_outcome, mirroring
+  // reachOutcomeShouldApply, which is the readable rule with the unit tests.
+  const { data: wrote, error } = await supabase.rpc("record_reach_outcome", {
+    p_a_leg: state.aLegCallControlId,
+    p_attempt: state.attempt,
+    p_status: status,
+    p_b_leg: bLeg
+  });
   if (error) {
     // The bridge falls back to its own ring timeout, so a lost stamp costs a
     // slower move to the next teammate rather than a stuck call.
     console.error("reach: outcome stamp failed", error);
     return jsonOk("reach_stamp_failed");
   }
+  // A superseded event (an older attempt reporting late, or a hangup after the
+  // same attempt answered) is a normal, expected delivery, not a failure.
+  if (wrote !== true) return jsonOk("reach_superseded");
   await telemetryRecord(supabase, "voice_reach_leg", {
     business_id: state.businessId,
     a_leg: state.aLegCallControlId,

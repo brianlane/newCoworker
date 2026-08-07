@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_REACH_RING_SECONDS,
@@ -256,14 +258,32 @@ describe("reachOutcomeShouldApply", () => {
     ).toBe(false);
   });
 
-  it("still lets a later attempt record its own outcome", () => {
-    // The previous teammate's leg being torn down as the ladder moves on is
-    // exactly the signal the ladder is waiting for.
+  it("lets a NEWER attempt record its own outcome", () => {
+    // The ladder has moved on, so its outcome is the current truth.
     expect(
       reachOutcomeShouldApply({ attempt: 0, status: "answered" }, { attempt: 1, status: "no_answer" })
     ).toBe(true);
     expect(
       reachOutcomeShouldApply({ attempt: 0, status: "no_answer" }, { attempt: 1, status: "answered" })
+    ).toBe(true);
+  });
+
+  // The ladder hangs up the previous leg as it moves on, so that leg's hangup
+  // can easily land AFTER the next teammate has answered. Letting it through
+  // would erase the pickup the bridge is polling for, and the assistant would
+  // apologize to a caller who actually got connected.
+  it("ignores an OLDER attempt reporting late", () => {
+    expect(
+      reachOutcomeShouldApply({ attempt: 1, status: "answered" }, { attempt: 0, status: "no_answer" })
+    ).toBe(false);
+    expect(
+      reachOutcomeShouldApply({ attempt: 2, status: "no_answer" }, { attempt: 0, status: "answered" })
+    ).toBe(false);
+  });
+
+  it("treats a malformed stored attempt as nothing recorded", () => {
+    expect(
+      reachOutcomeShouldApply({ attempt: "x", status: "answered" }, { attempt: 0, status: "no_answer" })
     ).toBe(true);
   });
 
@@ -273,5 +293,42 @@ describe("reachOutcomeShouldApply", () => {
     expect(
       reachOutcomeShouldApply({ attempt: 2, status: "no_answer" }, { attempt: 2, status: "answered" })
     ).toBe(true);
+  });
+});
+
+/**
+ * The precedence rule exists twice on purpose: once readable and unit-tested
+ * here, and once inside `record_reach_outcome` so two concurrent webhooks
+ * cannot both read the same prior state and race, which is how an `answered`
+ * gets dropped. Duplication is the cost of atomicity, so this pins that the
+ * SQL still expresses the same three clauses.
+ */
+describe("record_reach_outcome mirrors the rule", () => {
+  const sql = readFileSync(
+    join(__dirname, "../supabase/migrations/20260822095141_record_reach_outcome.sql"),
+    "utf8"
+  );
+
+  it("writes when nothing is recorded yet", () => {
+    expect(sql).toContain("context -> 'reach' is null");
+  });
+
+  it("lets a newer attempt win and an older one fall through", () => {
+    expect(sql).toContain("(context -> 'reach' ->> 'attempt')::int < p_attempt");
+    // No clause admits a lower attempt, which is what makes a late event from
+    // an abandoned leg a no-op rather than an erasure.
+    expect(sql).not.toContain("> p_attempt");
+  });
+
+  it("refuses to downgrade an answer to a miss on the same attempt", () => {
+    expect(sql).toContain("context -> 'reach' ->> 'status' = 'answered'");
+    expect(sql).toContain("p_status = 'no_answer'");
+  });
+
+  // Returning whether THIS call wrote is what lets the webhook tell a
+  // superseded delivery from a failed one.
+  it("reports whether it was the writer", () => {
+    expect(sql).toContain("get diagnostics v_rows = row_count");
+    expect(sql).toContain("return v_rows > 0");
   });
 });
