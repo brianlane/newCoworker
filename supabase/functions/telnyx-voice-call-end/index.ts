@@ -30,6 +30,13 @@ import {
 } from "../_shared/sms_destination_rates.ts";
 import { parseOutboundClientState } from "../_shared/voice_outbound.ts";
 import {
+  AMD_DETECTION_EVENTS,
+  classifyAmdResult,
+  greetingImpliesMachine,
+  isAmdEvent
+} from "../_shared/voice_amd.ts";
+import { CALL_REASON } from "../_shared/ai_flows/call_outcome_meta.ts";
+import {
   resumeFlowRunWithCallOutcome,
   type FlowRunLink
 } from "../_shared/ai_flows/call_outcome.ts";
@@ -546,6 +553,115 @@ async function advanceHandoff(deps: HandoffDeps, sess: HandoffSession): Promise<
  * `handled:false` for events that belong to a normal (non-handoff) call so the
  * caller can fall through to settlement.
  */
+/**
+ * Answering-machine detection on an AiFlow-placed outbound call.
+ *
+ * Records the verdict on the session and, for a machine, hangs the leg up.
+ * It does NOT resume the parked run itself: the hangup it triggers already
+ * flows through the outbound path below, which reads the stamp and derives
+ * the outcome. One writer, no race between this handler and the hangup.
+ *
+ * Only outbound AiFlow legs are touched (`vob:` client_state). An inbound
+ * call with AMD configured on the connection is left entirely alone.
+ */
+async function handleMachineDetection(
+  supabase: SupabaseClient,
+  eventType: string,
+  payload: Record<string, unknown>
+): Promise<Response> {
+  const callControlId = String(payload["call_control_id"] ?? "");
+  const outbound = parseOutboundClientState(payload["client_state"] as string | undefined);
+  if (!outbound || !callControlId) {
+    return jsonOk("amd_not_outbound");
+  }
+  // Greeting events. Nothing speaks into a voicemail yet, so their only job
+  // here is as a BACKSTOP: Telnyx documents detection.ended as always
+  // preceding greeting.ended, but a beep is its own proof of a voicemail, and
+  // relying on that ordering is not worth re-introducing the exact bug this
+  // handler exists to prevent. A beep with no verdict recorded yet is treated
+  // as a machine; anything else is acknowledged and dropped.
+  if (!AMD_DETECTION_EVENTS.has(eventType)) {
+    if (!greetingImpliesMachine(payload["result"])) {
+      return jsonOk("amd_greeting_noted");
+    }
+    const already = await machineAlreadyStamped(supabase, callControlId);
+    if (already) return jsonOk("amd_greeting_after_verdict");
+    await telemetryRecord(supabase, "voice_amd_verdict", {
+      call_control_id: callControlId,
+      business_id: outbound.businessId,
+      event_type: eventType,
+      result: typeof payload["result"] === "string" ? payload["result"] : null,
+      verdict: "machine_from_beep"
+    });
+    return await stampMachineAndHangUp(supabase, callControlId);
+  }
+
+  const verdict = classifyAmdResult(payload["result"]);
+  await telemetryRecord(supabase, "voice_amd_verdict", {
+    call_control_id: callControlId,
+    business_id: outbound.businessId,
+    event_type: eventType,
+    result: typeof payload["result"] === "string" ? payload["result"] : null,
+    verdict
+  });
+  // A person, or a verdict Telnyx could not commit to (silence, fax tone,
+  // not_sure). Carry on with the call: hanging up on a maybe-person to save a
+  // few voice minutes is the wrong trade.
+  if (verdict !== "machine") {
+    return jsonOk(`amd_${verdict}`);
+  }
+
+  return await stampMachineAndHangUp(supabase, callControlId);
+}
+
+/** Has a machine verdict already been recorded for this leg? */
+async function machineAlreadyStamped(
+  supabase: SupabaseClient,
+  callControlId: string
+): Promise<boolean> {
+  const { data } = await supabase
+    .from("voice_handoff_sessions")
+    .select("context")
+    .eq("call_control_id", callControlId)
+    .maybeSingle();
+  const ctx = ((data as { context?: Record<string, unknown> } | null)?.context ??
+    {}) as Record<string, unknown>;
+  return ctx.machine_detected === true;
+}
+
+/**
+ * Record the machine verdict on the session and end the leg. The hangup this
+ * triggers flows through the outbound path, which reads the stamp and resumes
+ * the parked run; this function deliberately does not resume it itself, so
+ * there is exactly one writer.
+ */
+async function stampMachineAndHangUp(
+  supabase: SupabaseClient,
+  callControlId: string
+): Promise<Response> {
+  const { data: sessRow } = await supabase
+    .from("voice_handoff_sessions")
+    .select("context")
+    .eq("call_control_id", callControlId)
+    .maybeSingle();
+  const ctx = ((sessRow as { context?: Record<string, unknown> } | null)?.context ??
+    {}) as Record<string, unknown>;
+  const { error: stampErr } = await supabase
+    .from("voice_handoff_sessions")
+    .update({ context: { ...ctx, machine_detected: true } })
+    .eq("call_control_id", callControlId);
+  if (stampErr) {
+    // Without the stamp the hangup would derive "answered" and a follow-up
+    // ladder would stop on a lead who heard nothing. Leave the call up rather
+    // than hang up AND mis-report it: the AI talking to a voicemail wastes
+    // minutes, which is the cheaper of the two failures.
+    console.error("amd: machine stamp failed, leaving the call up", stampErr);
+    return jsonOk("amd_stamp_failed");
+  }
+  await telnyxHangupCall(Deno.env.get("TELNYX_API_KEY") ?? "", callControlId);
+  return jsonOk("amd_machine_hangup");
+}
+
 async function handleHandoffLifecycle(
   deps: HandoffDeps,
   eventType: string,
@@ -610,7 +726,7 @@ async function handleHandoffLifecycle(
       .eq("call_control_id", callControlId)
       .maybeSingle();
     const obCtx = ((obSessRow as { context?: Record<string, unknown> } | null)?.context ??
-      {}) as { transfer_initiated?: unknown; flow_run?: FlowRunLink };
+      {}) as { transfer_initiated?: unknown; flow_run?: FlowRunLink; machine_detected?: unknown };
     await supabase
       .from("voice_handoff_sessions")
       .update({ status: "done" })
@@ -628,9 +744,26 @@ async function handleHandoffLifecycle(
     // transfer time, this write is a no-op. Best-effort — a miss is
     // backstopped by the resume_overdue_call_waits sweep.
     if (obCtx.flow_run) {
-      const outcome =
-        obCtx.transfer_initiated === true ? "transferred" : answered ? "answered" : "no_answer";
-      await resumeFlowRunWithCallOutcome(supabase, obCtx.flow_run, outcome);
+      // A machine picking up ANSWERS the leg, so answer_issued_at is set and
+      // the plain derivation below would report "answered" for a call the lead
+      // never heard. The AMD stamp is what tells the two apart. It rides a
+      // no_answer outcome on purpose: for retry purposes reaching a voicemail
+      // is the same as nobody picking up, so a ladder written before AMD
+      // existed keeps working unchanged, and the REASON carries the detail.
+      const machine = obCtx.machine_detected === true;
+      const outcome = obCtx.transfer_initiated === true
+        ? "transferred"
+        : machine
+          ? "no_answer"
+          : answered
+            ? "answered"
+            : "no_answer";
+      await resumeFlowRunWithCallOutcome(
+        supabase,
+        obCtx.flow_run,
+        outcome,
+        machine ? CALL_REASON.VOICEMAIL_NO_MESSAGE : undefined
+      );
     }
     if (!answered) {
       const { error: relErr } = await supabase.rpc("voice_release_reservation_on_answer_fail", {
@@ -1314,6 +1447,15 @@ serve(async (req: Request) => {
   }
 
   const response = await (async (): Promise<Response> => {
+  // Answering-machine detection on an AiFlow-placed call. Runs before the
+  // handlers below because a machine verdict SHORTENS the call: without it the
+  // AI would hold a conversation with a voicemail for the full session and the
+  // hangup would then report "answered", stopping any follow-up ladder on a
+  // lead who never heard a word.
+  if (isAmdEvent(eventType)) {
+    return await handleMachineDetection(supabase, eventType, data?.payload ?? {});
+  }
+
   // Outbound origination: a callee answered an AiFlow-placed call. Attach the AI
   // bridge to the already-reserved leg. (Inbound answers carry no vob state and
   // are ignored inside the handler.)

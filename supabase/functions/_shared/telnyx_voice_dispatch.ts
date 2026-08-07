@@ -30,7 +30,21 @@ export const TELNYX_VOICE_ROUTES: Readonly<Record<string, string>> = Object.free
   // ignored there, so routing them here is safe.
   "call.answered": "telnyx-voice-call-end",
   "call.hangup": "telnyx-voice-call-end",
-  "call.ended": "telnyx-voice-call-end"
+  "call.ended": "telnyx-voice-call-end",
+  // Answering-machine detection on an AiFlow-placed call. Without these, a
+  // voicemail picking up is indistinguishable from a person picking up: the
+  // leg is answered either way, so the outcome reads "answered" and a
+  // follow-up ladder stops on a lead who never heard a word.
+  //
+  // Both tiers are routed. Premium is what flow-placed calls request (it also
+  // reports when the outgoing greeting has finished), but standard's events
+  // arrive under different names, and routing only the premium pair would
+  // silently drop every verdict if the connection were ever configured for
+  // the cheaper mode.
+  "call.machine.detection.ended": "telnyx-voice-call-end",
+  "call.machine.premium.detection.ended": "telnyx-voice-call-end",
+  "call.machine.greeting.ended": "telnyx-voice-call-end",
+  "call.machine.premium.greeting.ended": "telnyx-voice-call-end"
 });
 
 export type DispatchDecision =

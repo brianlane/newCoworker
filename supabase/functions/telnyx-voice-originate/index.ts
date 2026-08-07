@@ -252,6 +252,17 @@ serve(async (req: Request) => {
     to: callee,
     from: fromDid,
     timeoutSecs: 30,
+    // Answering-machine detection, on FLOW-placed calls only (plan.flowRun is
+    // the parked place_ai_call run). Those are the calls whose outcome drives
+    // a follow-up decision, and without AMD a voicemail picking up is
+    // indistinguishable from a person: the leg is answered either way, so the
+    // run would resume "answered" and any retry ladder would stop on a lead
+    // who never heard a word.
+    //
+    // Left OFF for the owner's manual Place-call button and for scheduled
+    // outbound flows: a person is already deciding what to do about those, AMD
+    // is billed per call, and its verdict is not free of false positives.
+    ...(plan.flowRun ? { answeringMachineDetection: "premium" as const } : {}),
     clientState,
     commandId: sessionId
   });
