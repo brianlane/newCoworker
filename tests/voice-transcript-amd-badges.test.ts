@@ -60,6 +60,17 @@ describe("verbatimBadgeState", () => {
     expect(verbatimBadgeState(0)?.drifted).toBe(true);
   });
 
+  // PostgREST serializes a `numeric` column as a STRING. The column is double
+  // precision so that should not happen, but a reader that rejected a string
+  // would respond by silently never rendering, and a badge that never appears
+  // is not a failure anyone notices.
+  it("accepts a numeric string, which is how PostgREST returns numeric columns", () => {
+    expect(verbatimBadgeState("0.92")).toEqual({ percent: 92, drifted: false });
+    expect(verbatimBadgeState("0.10")).toEqual({ percent: 10, drifted: true });
+    expect(verbatimBadgeState("not a number")).toBeNull();
+    expect(verbatimBadgeState("")).toBeNull();
+  });
+
   // A stored value outside 0-1 would otherwise render "script 130%".
   it("clamps a nonsensical stored score into range", () => {
     expect(verbatimBadgeState(1.3)?.percent).toBe(100);

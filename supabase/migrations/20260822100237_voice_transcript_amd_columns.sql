@@ -19,6 +19,12 @@
 --   voicemail_verbatim_score  how closely the spoken message matched the
 --                             approved script (see _shared/voice_verbatim.ts).
 --                             NULL until a voicemail is actually left.
+--                             double precision, NOT numeric: PostgREST
+--                             serializes numeric as a STRING to preserve
+--                             arbitrary precision, so a reader doing a
+--                             typeof === "number" check would silently never
+--                             see a score. A 0-1 ratio has no need of that
+--                             precision.
 --
 -- grants: none (voice_call_transcripts): existing table with its own policies;
 -- adding columns does not change its Data API exposure.
@@ -26,7 +32,7 @@
 alter table public.voice_call_transcripts
   add column if not exists answering_machine_result text,
   add column if not exists voicemail_left boolean not null default false,
-  add column if not exists voicemail_verbatim_score numeric;
+  add column if not exists voicemail_verbatim_score double precision;
 
 comment on column public.voice_call_transcripts.answering_machine_result is
   'Answering-machine detection verdict for this leg (human / machine / unknown), or NULL when AMD was not requested. Premium AMD reports human_residence / human_business rather than a bare "human", so the raw value is normalized before it is stored; see _shared/voice_amd.ts.';

@@ -68,7 +68,12 @@ export type VoiceCallTranscriptRow = {
    * the person on the other end than leaving them a message.
    */
   voicemail_left: boolean;
-  /** 0-1 closeness of the spoken voicemail to its script; NULL when none left. */
+  /**
+   * 0-1 closeness of the spoken voicemail to its script; NULL when none left.
+   * Stored as double precision specifically so this arrives as a JSON number:
+   * PostgREST serializes `numeric` as a string, which a typeof check would
+   * silently reject.
+   */
   voicemail_verbatim_score: number | null;
 };
 

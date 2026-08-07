@@ -38,11 +38,21 @@ export function answeringMachineBadgeLabel(
  * score is the owner's cue to go read what was actually said on their behalf.
  */
 export function verbatimBadgeState(
-  score: number | null | undefined
+  score: number | string | null | undefined
 ): { percent: number; drifted: boolean } | null {
-  if (typeof score !== "number" || !Number.isFinite(score)) return null;
+  // A string is accepted deliberately. The column is double precision so
+  // PostgREST hands back a real JSON number, but `numeric` columns come back
+  // as STRINGS to preserve precision, and a reader that only accepted numbers
+  // would respond to that by silently never rendering, which is the hardest
+  // kind of bug to notice in a badge.
+  // An empty or blank string is "no score", NOT zero. Number("") is 0, so a
+  // naive coercion would render "script 0%" and claim the assistant read none
+  // of its script, which is a worse lie than showing nothing.
+  const n =
+    typeof score === "string" ? (score.trim() === "" ? NaN : Number(score)) : score;
+  if (typeof n !== "number" || !Number.isFinite(n)) return null;
   return {
-    percent: Math.round(Math.max(0, Math.min(1, score)) * 100),
-    drifted: score < VERBATIM_ALERT_THRESHOLD
+    percent: Math.round(Math.max(0, Math.min(1, n)) * 100),
+    drifted: n < VERBATIM_ALERT_THRESHOLD
   };
 }
