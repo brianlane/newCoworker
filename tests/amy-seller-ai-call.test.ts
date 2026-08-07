@@ -198,6 +198,30 @@ describe("addSellerCallLadder (Clever shape)", () => {
     });
   });
 
+  it("a window-skipped second attempt still gets the morning call", () => {
+    // Bugbot on PR #1240: attempt 2 outside the calling window resolves
+    // not_placed, and a notEquals-no_answer stop arm read that as "reached",
+    // silently cancelling attempt 3 for every evening lead. The stop arms
+    // must name the reached outcomes explicitly.
+    const { def } = patched();
+    const parsed = parseAiFlowDefinition(def);
+    let retry3: Extract<Step, { type: "branch" }> | undefined;
+    walk(parsed.steps, (s) => {
+      if (s.type === "branch" && s.id === "retry_3") retry3 = s;
+    });
+    expect(retry3).toBeDefined();
+    const conditions = retry3!.branches.map((a) => a.condition);
+    expect(conditions).toContainEqual({ var: "call_outcome", equals: "transferred" });
+    expect(conditions).toContainEqual({ var: "call_outcome", equals: "answered" });
+    // No arm may match not_placed or failed: both fall to the else, whose
+    // morning dial re-runs every guard itself.
+    for (const c of conditions) {
+      expect(c).not.toEqual({ var: "call_outcome", notEquals: "no_answer" });
+      expect(c.equals === "not_placed" || c.equals === "failed").toBe(false);
+    }
+    expect(retry3!.else.map((s) => s.id)).toEqual(["retry_3_sleep", "ai_call_3"]);
+  });
+
   it("the ladder schedule matches the constants the offer copy is generated from", () => {
     const { def } = patched();
     const parsed = parseAiFlowDefinition(def);

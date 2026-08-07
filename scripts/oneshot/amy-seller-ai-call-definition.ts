@@ -257,10 +257,23 @@ function buildFollowups(
         condition: { var: "claimed_agent", notEquals: "none" },
         steps: []
       },
+      // Only an attempt that actually REACHED someone stops the ladder here.
+      // "notEquals no_answer" would be wrong: a redial outside the calling
+      // window resolves to not_placed, and reading that as "reached" would
+      // silently cancel the morning attempt for every evening lead, which is
+      // the exact case the window skip exists to serve. not_placed and
+      // failed fall through to the morning dial, whose own guards (opt-out,
+      // cap, window) re-run and fail closed.
       {
-        id: "retry_3_reached",
-        label: "The second call landed",
-        condition: { var: "call_outcome", notEquals: "no_answer" },
+        id: "retry_3_transferred",
+        label: "The second call connected them live",
+        condition: { var: "call_outcome", equals: "transferred" },
+        steps: []
+      },
+      {
+        id: "retry_3_answered",
+        label: "The second call reached them",
+        condition: { var: "call_outcome", equals: "answered" },
         steps: []
       }
     ],
