@@ -808,6 +808,74 @@ describe("organizeMessage: trash", () => {
     expect(organizeTenant).not.toHaveBeenCalled();
   });
 
+  it("bins an Outlook message into deleteditems, not just the Gmail path", async () => {
+    /**
+     * Caught by Bugbot on the first push: `trash` was documented for Outlook
+     * and organizeMessage routes connected mailboxes to organizeOutlook, but
+     * that function never read the flag. It returned { ok: true } and left the
+     * mail in the inbox, so a flow would believe it had binned something it
+     * had not. Exactly the silent-success shape this codebase keeps hitting.
+     */
+    getConn.mockResolvedValue(outlookConn());
+    // No preflight folder lookup: deleteditems is a well-known id.
+    nangoProxy.mockResolvedValueOnce({ status: 200, data: { id: "moved" } });
+    const res = await organizeMessage({
+      businessId: BIZ,
+      connectionId: CONN,
+      messageId: "AAMkTrash",
+      actions: { trash: true }
+    });
+    expect(res).toEqual({ ok: true, provider: "microsoft" });
+    expect(nangoProxy).toHaveBeenCalledWith(
+      BIZ,
+      expect.anything(),
+      expect.objectContaining({
+        endpoint: "/v1.0/me/messages/AAMkTrash/move",
+        method: "POST",
+        data: { destinationId: "deleteditems" }
+      })
+    );
+    // Resolved by well-known id, never by display name: "Deleted Items" is
+    // localised, so a name lookup would fail on a non-English mailbox.
+    for (const call of nangoProxy.mock.calls) {
+      expect((call[2] as { endpoint: string }).endpoint).not.toMatch(/mailFolders\?/);
+    }
+  });
+
+  it("bins rather than files when a step asks for both", async () => {
+    // Graph has no delete verb: a bin IS a move, and a message cannot be in
+    // deleteditems and a filing folder at once. Trash has to win, or the
+    // message quietly stays put in the folder instead.
+    getConn.mockResolvedValue(outlookConn());
+    nangoProxy.mockResolvedValueOnce({ status: 200, data: { id: "moved" } });
+    const res = await organizeMessage({
+      businessId: BIZ,
+      connectionId: CONN,
+      messageId: "AAMkBoth",
+      actions: { trash: true, archive: true, moveToFolder: "HQ/Automated" }
+    });
+    expect(res).toEqual({ ok: true, provider: "microsoft" });
+    const move = nangoProxy.mock.calls.find((c) =>
+      (c[2] as { endpoint: string }).endpoint.endsWith("/move")
+    );
+    expect((move?.[2] as { data: { destinationId: string } }).data.destinationId).toBe(
+      "deleteditems"
+    );
+  });
+
+  it("surfaces a failed Outlook bin instead of reporting success", async () => {
+    getConn.mockResolvedValue(outlookConn());
+    nangoProxy.mockResolvedValueOnce({ status: 500, data: {} });
+    await expect(
+      organizeMessage({
+        businessId: BIZ,
+        connectionId: CONN,
+        messageId: "AAMkFail",
+        actions: { trash: true }
+      })
+    ).resolves.toEqual({ ok: false, detail: "outlook_move_failed:500" });
+  });
+
   it("needs the row id to trash a tenant message", async () => {
     // The soft delete is keyed by id, and a provider message id cannot resolve
     // one here, so say so rather than silently skipping the delete.

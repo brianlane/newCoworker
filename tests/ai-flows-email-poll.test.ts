@@ -1508,7 +1508,9 @@ describe("isOwnOutboundSender: the flow must never answer its own mail", () => {
     // plain equality check let team@ straight through.
     expect(isOwnOutboundSender("team@newcoworker.com", ACCOUNT, DOMAIN)).toBe(true);
     expect(isOwnOutboundSender("contact@newcoworker.com", ACCOUNT, DOMAIN)).toBe(true);
-    expect(isOwnOutboundSender("Brian <team@newcoworker.com>".replace(/.*</, "").replace(">", ""), ACCOUNT, DOMAIN)).toBe(true);
+    // The caller passes a bare address: parseFromAddress has already unwrapped
+    // the "Brian <team@newcoworker.com>" display form by this point.
+    expect(isOwnOutboundSender(parseFromAddress("Brian <team@newcoworker.com>"), ACCOUNT, DOMAIN)).toBe(true);
   });
 
   it("lets real inbound mail through, which is the half that matters most", () => {

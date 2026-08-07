@@ -318,14 +318,20 @@ async function organizeOutlook(
 
   // Prefer an explicit folder move over Archive so archive+moveToFolder matches
   // Gmail (label + leave Inbox) instead of silently dropping the folder.
+  //
+  // Trash outranks everything: Graph has no separate delete-to-bin verb, so a
+  // bin IS a move to the well-known deleteditems folder, and a message cannot
+  // sit in both there and a filing folder. Resolved by well-known id rather
+  // than display name because "Deleted Items" is localised.
   let destinationName: string | null = null;
-  if (actions.moveToFolder?.trim()) destinationName = actions.moveToFolder.trim();
+  let destinationId: string | null = null;
+  if (actions.trash) destinationId = "deleteditems";
+  else if (actions.moveToFolder?.trim()) destinationName = actions.moveToFolder.trim();
   else if (actions.archive) destinationName = "Archive";
   else if (actions.unarchive) destinationName = "Inbox";
 
   // Preflight reads first so folder/category lookup failures do not leave a
   // half-applied mailbox (Graph has no multi-op transaction).
-  let destinationId: string | null = null;
   if (destinationName) {
     destinationId = await resolveOutlookFolderId(businessId, link, destinationName);
     if (!destinationId) {
