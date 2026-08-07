@@ -70,12 +70,30 @@ async function fallbackRows(biz: string, runId: string) {
   }>;
 }
 
+/**
+ * Seed the SMS config the same way the other worker itests do
+ * (bad-phone-backstop.itest.ts). Without a messaging profile,
+ * `messagingConfig` returns null and notify_owner returns early at its
+ * `if (!cfg)` guard, so every assertion below would read a null `notified`
+ * and the fallback logic under test would never be reached. The insert
+ * error is checked rather than discarded, because a silently rejected seed
+ * looks exactly like that same early return.
+ */
+async function seedSmsConfig(biz: string, forward?: string) {
+  const row: Record<string, unknown> = {
+    business_id: biz,
+    telnyx_messaging_profile_id: "itest-profile",
+    telnyx_sms_from_e164: "+16025550100"
+  };
+  if (forward) row.forward_to_e164 = forward;
+  const { error } = await db.from("business_telnyx_settings").upsert(row);
+  if (error) throw new Error(`telnyx settings: ${error.message}`);
+}
+
 describe("notify_owner email fallback (real worker)", () => {
   it("routes an unreachable (non-NANP) forwarding number to email, never attempting SMS", async () => {
     const biz = await seedBusiness(db, "IT notify fallback HK");
-    await db
-      .from("business_telnyx_settings")
-      .upsert({ business_id: biz, forward_to_e164: "+85261234567" });
+    await seedSmsConfig(biz, "+85261234567");
     const flowId = await createFlow(db, biz, notifyFlow());
 
     const runId = await enqueueRun(db, flowId, biz, TRIGGER, {});
@@ -110,6 +128,11 @@ describe("notify_owner email fallback (real worker)", () => {
 
   it("a business with NO forwarding number gets the content by email instead of silence", async () => {
     const biz = await seedBusiness(db, "IT notify fallback no phone");
+    // SMS is fully configured here and only the forwarding number is
+    // missing, so this exercises the no_phone branch on its own merit. With
+    // no settings row at all it would pass for the wrong reason: the
+    // `if (!cfg)` early return sits just below the no_phone branch.
+    await seedSmsConfig(biz);
     const flowId = await createFlow(db, biz, notifyFlow());
 
     const runId = await enqueueRun(db, flowId, biz, TRIGGER, {});
@@ -128,9 +151,7 @@ describe("notify_owner email fallback (real worker)", () => {
 
   it("a reachable NANP forwarding number still goes by SMS, no fallback rows", async () => {
     const biz = await seedBusiness(db, "IT notify fallback nanp");
-    await db
-      .from("business_telnyx_settings")
-      .upsert({ business_id: biz, forward_to_e164: "+16025550188" });
+    await seedSmsConfig(biz, "+16025550188");
     const flowId = await createFlow(db, biz, notifyFlow());
 
     const runId = await enqueueRun(db, flowId, biz, TRIGGER, {});
