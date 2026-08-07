@@ -8,7 +8,7 @@
  */
 
 import { Badge } from "@/components/ui/Badge";
-import { answeringMachineBadgeLabel, verbatimBadgeState } from "@/lib/db/voice-transcripts";
+import { answeringMachineBadgeLabel, verbatimBadgeState } from "@/lib/voice/transcript-badges";
 import type {
   VoiceCallSentiment,
   VoiceTranscriptDirection,

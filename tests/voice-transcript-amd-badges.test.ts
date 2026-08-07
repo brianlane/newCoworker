@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   answeringMachineBadgeLabel,
   verbatimBadgeState
-} from "@/lib/db/voice-transcripts";
+} from "@/lib/voice/transcript-badges";
 import { VERBATIM_ALERT_THRESHOLD } from "../supabase/functions/_shared/voice_verbatim";
 
 /**
