@@ -8,6 +8,7 @@ import {
   isInternationalSmsDestination,
   internationalGatewayFrom
 } from "./sms_international_gateway.ts";
+import { intlAlphaProfileId } from "./alpha_sender.ts";
 
 /** Gateway from-number for an international destination, else null. */
 function resolveInternationalGatewayFrom(toE164: string): string | null {
@@ -154,9 +155,20 @@ export async function telnyxSendSms(params: {
   // international; see _shared/sms_international_gateway.ts). Group sends
   // (array `to`) are MMS-billed and stay domestic: their recipients are
   // partitioned by the caller, never rerouted here.
+  // A send on the alpha-sender profile must carry NO from-number at all:
+  // the profile's registered alphanumeric identity IS the sender, and any
+  // phone-number `from` (the caller's, or the gateway substitution) would
+  // override it at Telnyx. Enforced here at the seam so every caller is
+  // protected (Bugbot on PR #1229: gateway + alpha env both set would
+  // have stamped the P2P number over the alpha identity).
+  const alphaProfileId = intlAlphaProfileId();
+  const isAlphaProfileSend =
+    alphaProfileId !== null && params.messagingProfileId === alphaProfileId;
   const gatewayFrom =
-    typeof params.toE164 === "string" ? resolveInternationalGatewayFrom(params.toE164) : null;
-  const fromTrimmed = (gatewayFrom ?? params.fromE164 ?? "").trim();
+    !isAlphaProfileSend && typeof params.toE164 === "string"
+      ? resolveInternationalGatewayFrom(params.toE164)
+      : null;
+  const fromTrimmed = isAlphaProfileSend ? "" : (gatewayFrom ?? params.fromE164 ?? "").trim();
   const agentId = (params.rcsAgentId ?? "").trim();
   const hasMedia = Boolean(params.mediaUrls && params.mediaUrls.length > 0);
   const useRcs =
