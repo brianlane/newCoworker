@@ -90,6 +90,14 @@ async function seedSmsConfig(biz: string, forward?: string) {
   if (error) throw new Error(`telnyx settings: ${error.message}`);
 }
 
+/** A forwarding number and deliberately NO messaging profile. */
+async function seedForwardOnly(biz: string, forward: string) {
+  const { error } = await db
+    .from("business_telnyx_settings")
+    .upsert({ business_id: biz, forward_to_e164: forward });
+  if (error) throw new Error(`telnyx settings: ${error.message}`);
+}
+
 describe("notify_owner email fallback (real worker)", () => {
   it("routes an unreachable (non-NANP) forwarding number to email, never attempting SMS", async () => {
     const biz = await seedBusiness(db, "IT notify fallback HK");
@@ -147,6 +155,30 @@ describe("notify_owner email fallback (real worker)", () => {
     const rows = await fallbackRows(biz, runId);
     expect(rows.length).toBeGreaterThan(0);
     expect(rows.every((r) => r.payload.fallbackReason === "no_phone")).toBe(true);
+  });
+
+  // Pins the CHECK ORDER, not just the outcome. An unreachable number cannot
+  // receive our SMS whether or not we hold a messaging profile, so the email
+  // has to win over the `if (!cfg)` guard. With the two the other way round
+  // this exact tenant went silent, and no other case in this file catches it:
+  // every other one seeds a profile.
+  it("emails an unreachable number even with NO messaging profile configured", async () => {
+    const biz = await seedBusiness(db, "IT notify fallback HK no profile");
+    await seedForwardOnly(biz, "+85261234567");
+    const flowId = await createFlow(db, biz, notifyFlow());
+
+    const runId = await enqueueRun(db, flowId, biz, TRIGGER, {});
+    await tickWorker();
+
+    expect((await getRun(db, runId)).status).toBe("done");
+    const notify = (await getSteps(db, runId)).find((s) => s.step_type === "notify_owner");
+    expect(notify?.status).toBe("done");
+    expect((notify?.result as { notified?: string }).notified).toBe("email");
+    expect((notify?.result as { fallback?: string }).fallback).toBe("sms_unreachable");
+
+    const rows = await fallbackRows(biz, runId);
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((r) => r.payload.fallbackReason === "sms_unreachable")).toBe(true);
   });
 
   it("a reachable NANP forwarding number still goes by SMS, no fallback rows", async () => {

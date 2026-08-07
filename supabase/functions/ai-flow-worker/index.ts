@@ -6565,10 +6565,14 @@ async function notifyOwnerStep(
     });
     return { kind: "ok", result: { notified: "email", fallback: "no_phone" } };
   }
-  if (!cfg) {
-    await releaseClaim();
-    return { kind: "ok", result: { notified: null } };
-  }
+  // ORDER MATTERS: this sits ABOVE the `!cfg` guard on purpose. Whether we
+  // hold a messaging profile has no bearing on a number that cannot receive
+  // our SMS in the first place, so the email is the right answer either way.
+  // With the checks the other way round (as they were until this change, a
+  // leftover of the single `if (forward && cfg)` guard this branch was split
+  // out of), a tenant with no messaging profile AND an unreachable number
+  // fell through to a silent `notified: null`, which is precisely the loss
+  // the fallback exists to end.
   if (isInternationalSmsDestination(smsDestinationCountry(forward))) {
     // The forwarding number cannot receive our SMS at all (platform long
     // codes are domestic-only: Telnyx ticket #557577, Aug 2026). Never
@@ -6588,6 +6592,15 @@ async function notifyOwnerStep(
       reason: "sms_unreachable"
     });
     return { kind: "ok", result: { notified: "email", fallback: "sms_unreachable" } };
+  }
+  // Reachable number, but this tenant has no messaging profile so no text can
+  // be built. Left as the historical silent no-op rather than widened into a
+  // fourth fallback: the three reasons each explain something the owner can
+  // act on, and "our own SMS setup is incomplete" is neither their doing nor
+  // theirs to fix. Worth revisiting if it ever shows up in telemetry.
+  if (!cfg) {
+    await releaseClaim();
+    return { kind: "ok", result: { notified: null } };
   }
   // Owner links are shortened for length but NOT tracked: this is Brian's
   // own tap on his own alert, and counting it would inflate the lead
