@@ -159,6 +159,19 @@ describe("schema: place_ai_call", () => {
         })
       ).join("\n")
     ).toContain("both transfer.toE164 and transfer.toRef");
+    // One handoff style per step: the two are different call topologies, and
+    // a step carrying both is ambiguous about what the transfer tool does.
+    expect(
+      issuesOf(
+        defWith({
+          toVar: "lead_phone",
+          personaTemplate: "Hi",
+          notifyE164: "+16025245719",
+          transfer: { toE164: "+16025245719" },
+          reachTeammate: { refs: [EMP_REF] }
+        })
+      ).join("\n")
+    ).toContain("one handoff style per call step");
   });
 
   it("scope-checks the persona, known-details, and pre-alert templates", () => {
@@ -260,6 +273,34 @@ describe("planStep: place_ai_call", () => {
         marker: "__called_call1"
       }
     });
+  });
+
+  it("carries the reach ladder through with a rendered pre-alert", () => {
+    const plan = planStep(
+      step({
+        reachTeammate: {
+          refs: [EMP_REF],
+          ringSeconds: 15,
+          preSmsTemplate: "Seller on the line NOW: {{vars.lead_name}}. Pick up!"
+        }
+      }),
+      { vars: { lead_phone: "+17572390150", lead_name: "Bryan" } }
+    );
+    expect(plan.ok && plan.action.kind === "place_ai_call" ? plan.action : null).toMatchObject({
+      reachRefs: [EMP_REF],
+      reachRingSeconds: 15,
+      reachPreSmsBody: "Seller on the line NOW: Bryan. Pick up!"
+    });
+  });
+
+  it("a minimal reach ladder omits the optional keys and renders no pre-alert", () => {
+    const plan = planStep(
+      step({ reachTeammate: { refs: [EMP_REF] } }),
+      { vars: { lead_phone: "+17572390150", lead_name: "Bryan" } }
+    );
+    const action = plan.ok && plan.action.kind === "place_ai_call" ? plan.action : null;
+    expect(action).toMatchObject({ reachRefs: [EMP_REF], reachPreSmsBody: "" });
+    expect(action).not.toHaveProperty("reachRingSeconds");
   });
 
   it("carries notifyOwner through to the action (the worker resolves the number)", () => {
