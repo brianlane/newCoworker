@@ -95,7 +95,12 @@ async function fetchGmail(
   sinceMs: number,
   limit: number
 ): Promise<InboxMessage[]> {
-  const q = encodeURIComponent(`in:inbox after:${Math.floor(sinceMs / 1000)}`);
+  // `-from:me` covers what fetchMailboxAddress cannot: Gmail's profile returns
+  // the ACCOUNT address, while a shared mailbox corresponds from a send-as
+  // ALIAS, and only the provider knows the alias list. HQ is exactly that
+  // shape (signs in as newcoworkerteam@gmail.com, writes as team@), so its own
+  // replies came back through the catch-all and the coworker answered them.
+  const q = encodeURIComponent(`in:inbox after:${Math.floor(sinceMs / 1000)} -from:me`);
   const list = await nangoProxyForBusiness(businessId, link, {
     endpoint: `/gmail/v1/users/me/messages?maxResults=${limit}&q=${q}`,
     method: "GET"

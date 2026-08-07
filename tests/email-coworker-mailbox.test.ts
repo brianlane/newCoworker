@@ -103,6 +103,27 @@ describe("fetchInboxWithThreads: Gmail", () => {
   });
 });
 
+describe("fetchInboxWithThreads: Gmail excludes our own sends", () => {
+  it("asks Gmail itself for -from:me, driving the real fetcher", () => {
+    /**
+     * Not asserted on a locally built string: the whole point is what the
+     * FETCHER sends. fetchMailboxAddress returns the ACCOUNT address and never
+     * the send-as aliases, so the code-side self set cannot be complete on a
+     * shared mailbox. HQ signs in as newcoworkerteam@gmail.com and writes as
+     * team@newcoworker.com, whose catch-all forwards back into this mailbox,
+     * so its own replies arrived as received mail on a thread it owned and it
+     * answered itself. Only the provider knows the alias list.
+     */
+    mockProxy.mockResolvedValueOnce({ data: { messages: [] } } as never);
+    return fetchInboxWithThreads(BIZ, "google", LINK, SINCE).then(() => {
+      const endpoint = (mockProxy.mock.calls[0][2] as { endpoint: string }).endpoint;
+      const decoded = decodeURIComponent(endpoint);
+      expect(decoded).toContain("-from:me");
+      expect(decoded).toContain("in:inbox");
+    });
+  });
+});
+
 describe("fetchInboxWithThreads: Microsoft Graph", () => {
   const GRAPH_LINK = { connectionId: "c-2", providerConfigKey: "outlook" };
 
