@@ -28,7 +28,7 @@ import { describe, expect, it } from "vitest";
 import {
   FLOW_NAME,
   GMAIL_CONNECTION_ROW_ID,
-  GMAIL_LINK,
+  EMAIL_LINK,
   THREAD_COOLDOWN,
   buildHqInboxTriageDefinition
 } from "../scripts/oneshot/hq-inbox-triage-definition";
@@ -40,12 +40,18 @@ type StepJson = {
   id?: string;
   type?: string;
   message?: string;
+  /** run_agent: the rendered text handed to the saved agent instructions. */
+  input?: string;
   cooldown?: { key?: string; minutes?: number };
   when?: { var?: string; equals?: string };
   fields?: { name?: string; description?: string }[];
   categories?: { value?: string; description?: string }[];
   addLabels?: string[];
   moveToFolder?: string;
+  /** email_organize: the filing actions taken on the triggering message. */
+  markRead?: boolean;
+  markUnread?: boolean;
+  archive?: boolean;
 };
 
 /** Any uuid: the applier supplies the real one after upserting the agent. */
@@ -59,7 +65,12 @@ const steps: StepJson[] = definition.steps.flatMap((s) =>
     : [s]
 );
 const notifySteps = steps.filter((s) => s.type === "notify_owner");
-const NOTIFY_IDS = ["s_notify_sales", "s_notify_support", "s_notify_billing"];
+const NOTIFY_IDS = [
+  "s_notify_sales",
+  "s_notify_support",
+  "s_notify_billing",
+  "s_notify_automated"
+];
 
 describe("HQ inbox triage: the definition is valid and authorable", () => {
   it("passes the real authoring validator", () => {
@@ -77,6 +88,36 @@ describe("HQ inbox triage: the definition is valid and authorable", () => {
   });
 });
 
+describe("HQ inbox triage: the drafter is told who will receive the reply", () => {
+  /**
+   * Live, Aug 6 2026. James referred a client named Bobby without putting him
+   * on the email, and the draft opened "Bobby, please reach out with any
+   * questions", so the sentence written for the prospect reached only the
+   * introducer. The drafter could not have known: the input carried From and
+   * the body, never the recipient list.
+   *
+   * Both halves have to hold together, which is why they are asserted here
+   * rather than at either end. The scope emitting `to`/`cc` buys nothing if
+   * the step never templates them, and templating them throws at authoring
+   * time if the keys are not allowlisted. That second half is not hypothetical:
+   * {{trigger.message_ref}} shipped emitted-but-unreferenceable for exactly
+   * this reason.
+   */
+  it("feeds the recipient headers into the draft input", () => {
+    const draft = steps.find((s) => s.id === "s_draft");
+    expect(draft?.input).toContain("To: {{trigger.to}}");
+    expect(draft?.input).toContain("Cc: {{trigger.cc}}");
+    // And the sender, which decides who gets thanked.
+    expect(draft?.input).toContain("From: {{trigger.from}}");
+  });
+
+  it("accepts those refs through the real authoring validator", () => {
+    // parseAiFlowDefinition is what rejects an unknown trigger field, so this
+    // is the assertion that `to` and `cc` are in TRIGGER_SCOPE_KEYS.
+    expect(() => parseAiFlowDefinition(buildHqInboxTriageDefinition(AGENT_ID))).not.toThrow();
+  });
+});
+
 describe("HQ inbox triage: the subject comes from the trigger, never a model", () => {
   it("has no extracted subject field", () => {
     const extract = steps.find((s) => s.id === "s_extract");
@@ -85,7 +126,8 @@ describe("HQ inbox triage: the subject comes from the trigger, never a model", (
   });
 
   it("templates the verbatim trigger subject in every alert", () => {
-    expect(notifySteps).toHaveLength(3);
+    // Sales, support, billing, and the automated mail that actually matters.
+    expect(notifySteps).toHaveLength(4);
     for (const step of notifySteps) {
       expect(step.message, step.id).toContain("{{trigger.subject}}");
       expect(step.message, step.id).not.toContain("{{vars.email_subject}}");
@@ -112,7 +154,7 @@ describe("HQ inbox triage: one alert per conversation", () => {
     // The cooldown silences notify_owner only. If filing ever became
     // conditional on the alert, a quiet reply would sit unlabeled forever.
     const organize = steps.filter((s) => s.type === "email_organize");
-    expect(organize).toHaveLength(3);
+    expect(organize).toHaveLength(5);
     for (const step of organize) {
       expect(step.cooldown, step.id).toBeUndefined();
       expect(step.addLabels?.[0], step.id).toMatch(/^HQ\//);
@@ -123,16 +165,20 @@ describe("HQ inbox triage: one alert per conversation", () => {
 describe("HQ inbox triage: the alert is actionable", () => {
   it("ends every alert with the Gmail deep link", () => {
     for (const step of notifySteps) {
-      expect(step.message, step.id).toContain(GMAIL_LINK);
-      expect(step.message?.trimEnd().endsWith(GMAIL_LINK), step.id).toBe(true);
+      expect(step.message, step.id).toContain(EMAIL_LINK);
+      expect(step.message?.trimEnd().endsWith(EMAIL_LINK), step.id).toBe(true);
     }
   });
 
   it("points the deep link at all mail, not the inbox", () => {
     // The email_organize steps move the message OUT of the inbox in the same
     // run, so an "#inbox/<id>" link would break on the mail it was minted for.
-    expect(GMAIL_LINK).toContain("#all/");
-    expect(GMAIL_LINK).toContain("{{trigger.message_id}}");
+    // Our dashboard, never Gmail web: a phone tap on a mail.google.com link
+    // opens the browser, not the Gmail app, so the owner had to sign in and
+    // search for the message his own alert had just summarized.
+    expect(EMAIL_LINK).not.toContain("mail.google.com");
+    expect(EMAIL_LINK).toContain("/dashboard/emails?id=");
+    expect(EMAIL_LINK).toContain("{{trigger.email_log_id}}");
   });
 
   it("asks the gist for an ask, and for silence when there is none", () => {
@@ -155,12 +201,70 @@ describe("HQ inbox triage: the alert is actionable", () => {
   });
 
   it("labels each alert with its kind and names the sender", () => {
-    const kinds = ["Sales", "Support", "Billing"];
-    notifySteps.forEach((step, i) => {
-      expect(step.message?.startsWith(`${kinds[i]} email from `), step.id).toBe(true);
+    // The first two words say what arrived, so the text is triageable from a
+    // lock screen. "alert" rather than "email" on the automated one: that arm
+    // only fires for mail with a real consequence if ignored.
+    const openings: Record<string, string> = {
+      s_notify_sales: "Sales email from ",
+      s_notify_support: "Support email from ",
+      s_notify_billing: "Billing email from ",
+      s_notify_automated: "Automated alert from "
+    };
+    expect(notifySteps.map((s) => s.id).sort()).toEqual(Object.keys(openings).sort());
+    for (const step of notifySteps) {
+      expect(step.message?.startsWith(openings[step.id ?? ""]), step.id).toBe(true);
       expect(step.message, step.id).toContain("{{trigger.from}}");
       expect(step.message, step.id).toContain("{{vars.email_sender}}");
-    });
+    }
+  });
+});
+
+describe("HQ inbox triage: automated mail is split by consequence", () => {
+  /**
+   * Zapier and friends send mail with no working unsubscribe. It piled up
+   * unread in the team inbox and every real message had to be picked out of
+   * it. `automated_notice` was already a classify category, but NOTHING acted
+   * on it: the run recognised the mail and then left it exactly where it was.
+   *
+   * The split is by consequence, not by sender. A Zapier outage notice and a
+   * Zapier newsletter arrive from the same place and want opposite handling.
+   */
+  const category = (value: string) =>
+    steps.find((s) => s.id === "s_classify")?.categories?.find((c) => c.value === value);
+
+  it("offers both an important and a routine automated category", () => {
+    expect(category("automated_important")?.description).toMatch(
+      /outage|security|suspension|integration/i
+    );
+    expect(category("automated_notice")?.description).toMatch(/newsletter|marketing|receipt/i);
+    // Judged by what happens if it is ignored, never by who sent it.
+    expect(category("automated_notice")?.description).toMatch(/no consequence if ignored/i);
+  });
+
+  it("reads, archives and labels routine automated mail, and never texts about it", () => {
+    const step = steps.find((s) => s.id === "s_org_automated");
+    expect(step?.when).toEqual({ var: "email_kind", equals: "automated_notice" });
+    expect(step?.markRead).toBe(true);
+    expect(step?.archive).toBe(true);
+    expect(step?.addLabels).toEqual(["HQ/Automated"]);
+    // Archived, never destroyed: the engine has no trash action, and giving a
+    // classifier one deserves its own review.
+    expect(step).not.toHaveProperty("trash");
+    expect(notifySteps.some((n) => n.when?.equals === "automated_notice")).toBe(false);
+  });
+
+  it("texts about important automated mail and leaves it unread in the inbox", () => {
+    const notify = steps.find((s) => s.id === "s_notify_automated");
+    expect(notify?.type).toBe("notify_owner");
+    expect(notify?.when).toEqual({ var: "email_kind", equals: "automated_important" });
+
+    const organize = steps.find((s) => s.id === "s_org_automated_important");
+    // Unread and in the inbox ON PURPOSE: the owner's own inbox has to keep
+    // showing the thing that needs action, so this one is never archived.
+    expect(organize?.markUnread).toBe(true);
+    expect(organize?.archive).toBeUndefined();
+    expect(organize?.markRead).toBeUndefined();
+    expect(organize?.addLabels).toEqual(["HQ/Automated"]);
   });
 });
 
@@ -175,12 +279,15 @@ describe("HQ inbox triage: the text a phone actually receives", () => {
       ).trim()}`
     );
 
+  const EMAIL_LOG_ID = "7c1f2ab4-3d5e-4f60-9a81-2b3c4d5e6f70";
   const TRIGGER = {
     from: "james@kypads.com",
     subject: "Introductions",
     message_id: "199abc4d5e6f7890",
-    thread_id: "199abc4d5e6f7890"
+    thread_id: "199abc4d5e6f7890",
+    email_log_id: EMAIL_LOG_ID
   };
+  const DASH = `https://www.newcoworker.com/dashboard/emails?id=${EMAIL_LOG_ID}`;
 
   it("reads cleanly with everything populated", () => {
     expect(
@@ -195,7 +302,7 @@ describe("HQ inbox triage: the text a phone actually receives", () => {
     ).toBe(
       "[AiFlow] Sales email from james@kypads.com James (KYP Ads). Subject: Introductions. " +
         "Wants to introduce King to discuss automation for a clinic lead flow. " +
-        "https://mail.google.com/mail/u/0/#all/199abc4d5e6f7890"
+        DASH
     );
   });
 
@@ -206,8 +313,7 @@ describe("HQ inbox triage: the text a phone actually receives", () => {
     // returns, the text must still read as a sentence.
     const out = renderAlert("s_notify_sales", { email_sender: "", email_gist: "" }, TRIGGER);
     expect(out).toBe(
-      "[AiFlow] Sales email from james@kypads.com. Subject: Introductions. " +
-        "https://mail.google.com/mail/u/0/#all/199abc4d5e6f7890"
+      "[AiFlow] Sales email from james@kypads.com. Subject: Introductions. " + DASH
     );
     expect(out).not.toMatch(/[.:]\s*[-.]\s/);
     expect(out).not.toMatch(/\s{2}/);
@@ -220,9 +326,29 @@ describe("HQ inbox triage: the text a phone actually receives", () => {
         const label = JSON.stringify({ email_sender, email_gist });
         expect(out, label).not.toMatch(/\s{2}/); // no gap where a value was
         expect(out, label).not.toMatch(/[.:]\s*[-.]\s/); // no orphaned separator
-        expect(out.endsWith(TRIGGER.message_id), label).toBe(true);
+        expect(out.endsWith(EMAIL_LOG_ID), label).toBe(true);
       }
     }
+  });
+
+  it("degrades to the plain Emails page when the log id is missing", () => {
+    // {{trigger.email_log_id}} is written before the run is enqueued on this
+    // trigger, so it is present in practice (pinned in
+    // tests/ai-flows-email-poll.test.ts). If it ever is not, the alert still
+    // has to end in a link that OPENS something.
+    //
+    // It renders as a trailing "?id=", which collapseEmpty cannot strip: the
+    // query is part of one URL token, not a separate template field. That is
+    // cosmetic only. The page trims a blank id and renders the normal list, so
+    // the owner lands on their mail either way rather than on an error.
+    const out = renderAlert(
+      "s_notify_sales",
+      { email_sender: "James (KYP Ads)", email_gist: "Wants pricing." },
+      { ...TRIGGER, email_log_id: "" }
+    );
+    expect(out).toContain("https://www.newcoworker.com/dashboard/emails");
+    // Whatever trails it, the path is intact: no truncation, no bare domain.
+    expect(out).not.toMatch(/newcoworker\.com\/dashboard\/emails[^?]/);
   });
 
   it("fits in one or two segments with a realistic payload", () => {

@@ -27,19 +27,27 @@ export const FLOW_NAME = "Team inbox triage (HQ)";
 export const GMAIL_CONNECTION_ROW_ID = "16cff2b9-b4d3-421c-b25d-b40edd80c9a8";
 
 /**
- * Gmail's multi-account index in the deep link. `u/0` is the FIRST account
- * signed in to the browser, not a stable id for this mailbox, so if the alert
- * link ever opens the wrong inbox this is the one character to change.
+ * Deep link to the triggering message, in OUR dashboard rather than Gmail.
+ *
+ * It used to point at `mail.google.com/mail/u/0/#all/<id>`, which is close to
+ * useless on the device the alert actually arrives on. A phone tap opened
+ * Gmail on the WEB, not the Gmail app: Brian had to sign in, then find the
+ * message again by hand, to read the mail his own text had just summarized.
+ * There is no reliable Gmail-app URL scheme to switch to, so the fix is to
+ * stop sending people to Gmail at all.
+ *
+ * `/dashboard/emails?id=<uuid>` opens the message in the reading pane, which
+ * collapses the list and goes full width below 768px. The session is a normal
+ * cookie, so an already-signed-in phone lands directly on the mail, and the
+ * page carries the id across the login bounce when it is not.
+ *
+ * `{{trigger.email_log_id}}` is written before the run is enqueued, so it is
+ * populated for this trigger. An empty value degrades to the plain Emails
+ * page, never a broken link. Shortened to /s/<code> at send time and
+ * deliberately untracked: Brian tapping his own alert is not lead engagement.
  */
-export const GMAIL_ACCOUNT_INDEX = 0;
-
-/**
- * Deep link to the triggering message. `#all/<id>` searches every folder, so
- * it still resolves after the email_organize steps move the mail out of the
- * inbox. Shortened to /s/<code> at send time, and deliberately untracked:
- * Brian tapping his own alert is not lead engagement.
- */
-export const GMAIL_LINK = `https://mail.google.com/mail/u/${GMAIL_ACCOUNT_INDEX}/#all/{{trigger.message_id}}`;
+export const EMAIL_LINK =
+  "https://www.newcoworker.com/dashboard/emails?id={{trigger.email_log_id}}";
 
 /**
  * One text per Gmail conversation per working day. Brian got an intro AND its
@@ -86,6 +94,26 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
       },
       {
         id: "s_classify",
+        /**
+         * Hosting renewal and expiry notices are deliberately ROUTINE, not
+         * billing and not important.
+         *
+         * `src/lib/vps/billing-posture.ts` is the system of record for fleet
+         * renewals: it runs on cron, resolves every VM's billing subscription,
+         * auto-heals auto-renew for boxes a paying tenant depends on, reports
+         * pool boxes that are leaking money, and honours an explicit
+         * `never_renew` flag for boxes that MUST lapse at period end by design.
+         *
+         * This classifier can see none of that. It cannot tell a box we are
+         * about to lose from one we chose to let go, so every such alert is a
+         * coin flip and the wrong half is pure noise. Live example, Aug 6 2026:
+         * Hostinger mailed that the KVM 2 plan on srv1800985 had expired and
+         * the flow texted Brian about it. That was the retired residency-pilot
+         * box (scripts/oneshot/retire-residency-pilot.ts): lapsing was the plan.
+         *
+         * A real payment problem (a declined card, a dispute, an invoice we
+         * owe) is still `billing`, because no cron owns those.
+         */
         type: "classify",
         question: "What kind of email did the business just receive?",
         categories: [
@@ -102,12 +130,17 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
           {
             value: "billing",
             description:
-              "Billing that needs a human: an invoice we must pay, a failed or declined payment, a dispute or chargeback, or a subscription problem. NOT routine receipts or confirmations of successful payments."
+              "Billing needing a human: an invoice we owe, a failed or declined payment, a dispute or chargeback. NOT receipts, successful charges, or server and hosting renewal or expiry notices"
+          },
+          {
+            value: "automated_important",
+            description:
+              "Automated mail a human must act on: an outage, a security or login alert, an account suspension, a broken integration, a hit quota, an expiring credential, or a legal notice"
           },
           {
             value: "automated_notice",
             description:
-              "Automated notifications, our own platform's alert/contact-form copies, calendar invites, newsletters, or marketing blasts, including receipts and payment confirmations for successful charges"
+              "Routine automated mail with no consequence if ignored: our own alert and contact-form copies, calendar invites, newsletters, marketing, digests, receipts, and hosting renewal or expiry notices"
           }
         ],
         saveAs: "email_kind"
@@ -141,8 +174,12 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
                 // {{vars.approval_note}} is empty on the first pass and carries
                 // Brian's words after he answers the gate with changes, which is
                 // what makes the rewind do anything.
+                // The recipient lines are load-bearing, not context padding:
+                // without them the drafter addressed a prospect who was named
+                // in the body but never on the email, so the reply reached
+                // the introducer and nobody else.
                 input:
-                  "From: {{trigger.from}}\nSubject: {{trigger.subject}}\n\n{{trigger.windowText}}\n\nOwner's requested changes (empty on the first draft): {{vars.approval_note}}",
+                  "From: {{trigger.from}}\nTo: {{trigger.to}}\nCc: {{trigger.cc}}\nSubject: {{trigger.subject}}\n\n{{trigger.windowText}}\n\nOwner's requested changes (empty on the first draft): {{vars.approval_note}}",
                 saveAs: "email_draft"
               },
               {
@@ -155,7 +192,7 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
                 // notify steps do. Without it, moving the paging from
                 // notify_owner to the gate would have quietly undone #1191.
                 cooldown: THREAD_COOLDOWN,
-                prompt: `Sales email from {{trigger.from}} {{vars.email_sender}}. {{vars.email_gist}} ${GMAIL_LINK}\n\nDraft reply:\n{{vars.email_draft}}`
+                prompt: `Sales email from {{trigger.from}} {{vars.email_sender}}. {{vars.email_gist}} ${EMAIL_LINK}\n\nDraft reply:\n{{vars.email_draft}}`
               },
               {
                 id: "s_send",
@@ -177,7 +214,7 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
                 type: "notify_owner",
                 when: { var: "email_draft", equals: NO_REPLY_SENTINEL },
                 cooldown: THREAD_COOLDOWN,
-                message: `Sales email from {{trigger.from}} {{vars.email_sender}}. Subject: {{trigger.subject}}. {{vars.email_gist}} ${GMAIL_LINK}`
+                message: `Sales email from {{trigger.from}} {{vars.email_sender}}. Subject: {{trigger.subject}}. {{vars.email_gist}} ${EMAIL_LINK}`
               }
             ]
           },
@@ -190,7 +227,7 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
                 id: "s_notify_support",
                 type: "notify_owner",
                 cooldown: THREAD_COOLDOWN,
-                message: `Support email from {{trigger.from}} {{vars.email_sender}}. Subject: {{trigger.subject}}. {{vars.email_gist}} ${GMAIL_LINK}`
+                message: `Support email from {{trigger.from}} {{vars.email_sender}}. Subject: {{trigger.subject}}. {{vars.email_gist}} ${EMAIL_LINK}`
               }
             ]
           },
@@ -203,7 +240,7 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
                 id: "s_notify_billing",
                 type: "notify_owner",
                 cooldown: THREAD_COOLDOWN,
-                message: `Billing email from {{trigger.from}} {{vars.email_sender}}. Subject: {{trigger.subject}}. {{vars.email_gist}} ${GMAIL_LINK}`
+                message: `Billing email from {{trigger.from}} {{vars.email_sender}}. Subject: {{trigger.subject}}. {{vars.email_gist}} ${EMAIL_LINK}`
               }
             ]
           }
@@ -235,6 +272,50 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
         when: { var: "email_kind", equals: "billing" },
         addLabels: ["HQ/Billing"],
         moveToFolder: "HQ/Billing"
+      },
+      /**
+       * Routine automated mail: read it, file it, never mention it.
+       *
+       * Zapier and friends send mail with no working unsubscribe, so it
+       * accumulated unread in the team inbox and every real message had to be
+       * picked out of it. Until now `automated_notice` was classified and then
+       * nothing happened to it, which is the worst of both: the run did the
+       * work of recognising the mail and left it exactly where it was.
+       *
+       * Archived, not deleted. The engine has no trash action, and adding one
+       * so an AI classification can bin mail is a change that deserves its own
+       * review. Archiving already achieves the ask (out of the inbox, still
+       * searchable in All Mail), and it is reversible.
+       */
+      {
+        id: "s_org_automated",
+        type: "email_organize",
+        connectionId: GMAIL_CONNECTION_ROW_ID,
+        when: { var: "email_kind", equals: "automated_notice" },
+        markRead: true,
+        archive: true,
+        addLabels: ["HQ/Automated"]
+      },
+      /**
+       * The automated mail that DOES matter: an outage, a security alert, a
+       * lapsing plan, a broken integration. One text, and the mail is left
+       * UNREAD and in the inbox on purpose, so the owner's own inbox still
+       * shows the thing needing action. Labelled but never archived.
+       */
+      {
+        id: "s_notify_automated",
+        type: "notify_owner",
+        when: { var: "email_kind", equals: "automated_important" },
+        cooldown: THREAD_COOLDOWN,
+        message: `Automated alert from {{trigger.from}} {{vars.email_sender}}. Subject: {{trigger.subject}}. {{vars.email_gist}} ${EMAIL_LINK}`
+      },
+      {
+        id: "s_org_automated_important",
+        type: "email_organize",
+        connectionId: GMAIL_CONNECTION_ROW_ID,
+        when: { var: "email_kind", equals: "automated_important" },
+        markUnread: true,
+        addLabels: ["HQ/Automated"]
       }
     ]
   };

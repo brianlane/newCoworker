@@ -234,6 +234,9 @@ export const TRIGGER_SCOPE_KEYS = [
   // without allowlisting it means any flow that templates it is rejected at
   // authoring for referencing an "unknown trigger field".
   "message_ref",
+  // Who else was on the message, so a step can tell whether the person it is
+  // about to address will actually receive it.
+  "cc",
   "email_log_id",
   "received_at",
   "connection_id",

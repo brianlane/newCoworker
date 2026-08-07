@@ -234,6 +234,52 @@ export async function listEmailLog(
 }
 
 /**
+ * One email_log row by id, scoped by business so a guessed uuid can never read
+ * another tenant's mail. Returns null when the id does not belong to the
+ * business, is soft-deleted, or does not exist.
+ *
+ * Why this exists: the Emails page renders only the newest 100 rows, and the
+ * reading pane resolves its selection against that array. An owner tapping a
+ * deep link from an SMS alert days later, or on a busy mailbox, would open the
+ * page to nothing. This fetches the one row the link names so it can be merged
+ * into the list regardless of age.
+ */
+export async function getEmailLogRow(
+  businessId: string,
+  id: string,
+  client?: SupabaseClient
+): Promise<EmailLogRow | null> {
+  const rowId = id.trim();
+  if (!rowId) return null;
+  const db = client ?? (await createSupabaseServiceClient());
+  const vpsReadMode = await isVpsReadMode(businessId, db);
+  if (vpsReadMode) {
+    const rows = await readMovedRows<EmailLogRow>(businessId, {
+      table: "email_log",
+      columns: EMAIL_LOG_COLUMNS,
+      filters: [
+        { column: "business_id", op: "eq", value: businessId },
+        { column: "deleted_at", op: "is", value: null },
+        { column: "id", op: "eq", value: rowId }
+      ],
+      order: [{ column: "created_at", ascending: false }],
+      limit: 1
+    });
+    const row = rows[0];
+    return row ? normalizeEmailLogRow(row) : null;
+  }
+  const { data, error } = await db
+    .from("email_log")
+    .select(EMAIL_LOG_SELECT)
+    .eq("business_id", businessId)
+    .eq("id", rowId)
+    .is("deleted_at", null)
+    .maybeSingle();
+  if (error) throw new Error(`getEmailLogRow: ${error.message}`);
+  return data ? normalizeEmailLogRow(data as unknown as EmailLogRow) : null;
+}
+
+/**
  * Email activity to/from a specific address, newest-first. Powers the
  * "Email history" rollup on a customer/contact profile: a profile carries an
  * optional `email`, and this returns every logged message that came FROM that

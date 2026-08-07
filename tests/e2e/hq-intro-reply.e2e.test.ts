@@ -56,6 +56,8 @@ const FLOW_INPUT_MIME = "text/plain";
 /** The intro, as the flow renders it into the agent's input. */
 const INTRO_EMAIL = [
   "From: james@kypads.com",
+  "To: team@newcoworker.com, king@brightstepspediatrics.example.com",
+  "Cc: ",
   "Subject: Introductions",
   "",
   "Brian, King - connecting you two.",
@@ -77,6 +79,11 @@ const WRONG_PERSON_FOLLOW_UP = [
   "",
   "James"
 ].join("\n");
+
+/** The recipient lines the flow now feeds in, so the drafter can check them. */
+function withRecipients(from: string, to: string, cc: string, body: string): string {
+  return `From: ${from}\nTo: ${to}\nCc: ${cc}\n${body}`;
+}
 
 function draftPromptFor(emailText: string): string {
   const target = resolveOutputTarget("same_as_input", FLOW_INPUT_MIME);
@@ -174,6 +181,127 @@ describe("HQ team inbox: the intro reply Brian would have written", () => {
       const reply = await draftReply(WRONG_PERSON_FOLLOW_UP);
       console.error("live draft (follow-up):\n", reply);
       expect(reply.trim()).toBe(NO_REPLY_SENTINEL);
+    }
+  );
+});
+
+describe("HQ team inbox: it does not write to people who will never see it", () => {
+  /**
+   * Live, Aug 6 2026. James referred a client named Bobby and never put Bobby
+   * on the email. The draft opened "Bobby, please reach out with any
+   * questions" and went to James alone, so the sentence aimed at the prospect
+   * reached the one person it was not for.
+   *
+   * Being named in the body is not the same as being a recipient, and only
+   * the recipient list can tell the two apart.
+   */
+  const REFERRAL_BOBBY_NOT_ON_IT = [
+    "Subject: Referral for Bobby",
+    "",
+    "Hi Brian,",
+    "",
+    "Hope all is well!",
+    "",
+    "I wanted to refer you to my client Bobby. He is in the job space and is",
+    "looking for automations, more specifically for texting/ AI coworker to",
+    "manage his lead flow.",
+    "",
+    'I told him I got a "guy" so please take care of Bobby for me!',
+    "",
+    "Thanks,",
+    "James"
+  ].join("\n");
+
+  it(
+    "asks the introducer to connect them when the prospect is not a recipient",
+    { retry: 1, timeout: 300_000 },
+    async () => {
+      const reply = await draftReply(
+        withRecipients(
+          "james@kypads.com",
+          "team@newcoworker.com, jobarmsteam@gmail.com",
+          "",
+          REFERRAL_BOBBY_NOT_ON_IT
+        )
+      );
+      console.error("live draft (prospect absent):\n", reply);
+
+      expect(reply.trim()).not.toBe(NO_REPLY_SENTINEL);
+      expect(reply).toContain(HQ_DISCOVERY_CALL_URL);
+
+      const verdict: JudgeVerdict = await judgeReply(
+        "a reply from Brian to James, who referred his client Bobby by email. " +
+          "Bobby's address is NOT on the email: the only recipients are Brian's own " +
+          "team address and another of Brian's addresses. Only James will read this.",
+        reply,
+        {
+          addresses_the_absent_person:
+            "Does the message speak TO Bobby in the second person, or greet him as if he " +
+            "were reading it (for example 'Bobby, please reach out' or 'Hi Bobby')? " +
+            "Merely mentioning Bobby in the third person while writing to James is false.",
+          fails_to_ask_for_the_connection:
+            "Does the message NEGLECT to ask James to pass this on, forward it, or share " +
+            "Bobby's contact details? Asking him to connect them in any wording is false."
+        }
+      );
+      expect(verdict.answers.addresses_the_absent_person).toBe(false);
+      expect(verdict.answers.fails_to_ask_for_the_connection).toBe(false);
+    }
+  );
+
+  it(
+    "still speaks directly to the prospect when they ARE on the email",
+    { retry: 1, timeout: 300_000 },
+    async () => {
+      // The guard must not overcorrect into never addressing anyone.
+      const reply = await draftReply(
+        withRecipients(
+          "james@kypads.com",
+          "team@newcoworker.com, bobby@bobbyjobs.example.com",
+          "",
+          REFERRAL_BOBBY_NOT_ON_IT
+        )
+      );
+      console.error("live draft (prospect present):\n", reply);
+      const verdict: JudgeVerdict = await judgeReply(
+        "a reply from Brian to James, who referred his client Bobby. Bobby IS a " +
+          "recipient of this email and will read it.",
+        reply,
+        {
+          ignores_the_prospect:
+            "Does the message fail to address Bobby directly, speaking only to James " +
+            "about him? Addressing Bobby by name in the second person is false."
+        }
+      );
+      expect(verdict.answers.ignores_the_prospect).toBe(false);
+    }
+  );
+});
+
+/**
+ * The recipient guard must fail SAFE. `emailTriggerScope` omits `to`/`cc` when
+ * the headers were not captured, and the flow templates them unconditionally,
+ * so a capture miss renders blank lines rather than dropping them. Read blank
+ * as "nobody is here" and every intro reply stops speaking to the prospect,
+ * which breaks the common case to protect the rare one. Blank means unknown.
+ */
+describe("HQ team inbox: a blank recipient list means unknown, not absent", () => {
+  it(
+    "still speaks to the prospect when the headers were never captured",
+    { retry: 1, timeout: 300_000 },
+    async () => {
+      const reply = await draftReply(
+        // Exactly what the flow renders when both headers are missing.
+        withRecipients("james@kypads.com", "", "", INTRO_EMAIL.split("\n").slice(3).join("\n"))
+      );
+      console.error("live draft (blank recipients):\n", reply);
+      expect(reply.trim()).not.toBe(NO_REPLY_SENTINEL);
+      const verdict: JudgeVerdict = await judgeReply(INTRO_SCENARIO, reply, {
+        pitches_the_introducer:
+          "Is the invitation to get in touch or to book a meeting directed at JAMES rather " +
+          "than at King? Aimed at King, the prospect, is false."
+      });
+      expect(verdict.answers.pitches_the_introducer).toBe(false);
     }
   );
 });
