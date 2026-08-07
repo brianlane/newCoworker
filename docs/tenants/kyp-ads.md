@@ -56,6 +56,20 @@ owner approval**. Do not "fix" them by enabling them.
   `tests/e2e/kyp-invitee-timezone-label.e2e.test.ts` (live) and the hermetic
   block in `tests/oneshot-kyp-definitions.test.ts`. James is relocating to
   Hong Kong, so assume international invitees are normal here.
+- **If James switches his owner phone to a Hong Kong (+852) number, every
+  SMS to him goes dark and stays dark.** Telnyx confirmed (ticket #557577,
+  Aug 2026) that our long codes cannot originate SMS outside NANP at all,
+  and Telnyx sells no SMS-capable HK numbers, so two-way SMS to +852 is
+  unachievable on this account (README, "International reachability").
+  What still works: voice forwarding and warm transfer to a +852 number
+  (the outbound voice profile whitelists HK; watch the fleet-wide $25/day
+  voice spend limit), email, dashboard alerts, and WhatsApp, which KYP has
+  NOT connected yet (no `whatsapp_connections` row). Before or when he
+  switches: get his WhatsApp connected so owner alerts have a two-way
+  channel, and expect the dashboard's deliverability warnings on the
+  profile, alert-phone, and forwarding surfaces, which are correct, not a
+  bug. A registered one-way alphanumeric sender (application drafted Aug
+  2026) may later restore outbound-only SMS alerts to HK.
 - **Calendly event-type names carry the price tier, and renaming one breaks a
   flow silently.** `my-free-scale-plan` is titled "KYP Ads | Free Strategy
   Call" ($100/wk); `kyp-ads-free-strategy-2` is titled "KYP Ads | Free

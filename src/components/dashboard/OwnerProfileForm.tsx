@@ -2,9 +2,11 @@
 
 import { useState, type FormEvent } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Button } from "@/components/ui/Button";
+import { smsReachability } from "@/lib/phone/deliverability";
 
 type Status = { kind: "idle" | "saving" | "success" | "error"; message?: string };
 
@@ -29,11 +31,23 @@ export function OwnerProfileForm({
   initialPhone: string | null;
 }) {
   const router = useRouter();
+  const tDeliverability = useTranslations("dashboard.phoneDeliverability");
   const [ownerName, setOwnerName] = useState(initialOwnerName ?? "");
   const [phone, setPhone] = useState(initialPhone ?? "");
   const [syncLinked, setSyncLinked] = useState(true);
   const [status, setStatus] = useState<Status>({ kind: "idle" });
   const [warning, setWarning] = useState<string | null>(null);
+
+  // As-you-type deliverability check, so a number SMS cannot reach warns
+  // before the save instead of only in the save response. Localized here;
+  // the server's `warning` string stays as an English fallback.
+  const reachability = smsReachability(phone);
+  const liveWarning =
+    reachability === "mx"
+      ? tDeliverability("smsUnreachableMx")
+      : reachability === "international"
+        ? tDeliverability("smsUnreachable")
+        : null;
 
   async function save(e: FormEvent) {
     e.preventDefault();
@@ -134,9 +148,9 @@ export function OwnerProfileForm({
             <p className="text-xs text-spark-orange">{status.message}</p>
           )}
         </div>
-        {warning && (
+        {(liveWarning ?? warning) && (
           <p className="text-xs text-spark-orange" role="alert">
-            {warning}
+            {liveWarning ?? warning}
           </p>
         )}
       </form>

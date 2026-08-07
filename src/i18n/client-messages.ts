@@ -87,6 +87,7 @@ export const SECTION_CLIENT_MESSAGES = {
       "dashboard.integrationsZoom",
       "dashboard.nav",
       "dashboard.pages",
+      "dashboard.phoneDeliverability",
       "dashboard.planCard",
       "dashboard.prospecting",
       "dashboard.settings",
@@ -99,7 +100,9 @@ export const SECTION_CLIENT_MESSAGES = {
   },
   admin: {
     appDir: "admin/(protected)",
-    paths: ["admin"]
+    // SafeModeToggle renders on the admin business page too, so its
+    // deliverability warning namespace ships with the admin section.
+    paths: ["admin", "dashboard.phoneDeliverability"]
   }
 } as const;
 

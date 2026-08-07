@@ -1,9 +1,11 @@
 "use client";
 
 import { useState, useEffect } from "react";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/Button";
 import { Input } from "@/components/ui/Input";
 import type { NotificationPreferencesRow } from "@/lib/db/notification-preferences";
+import { smsReachability } from "@/lib/phone/deliverability";
 
 type Props = {
   businessId: string;
@@ -73,6 +75,18 @@ export function NotificationPreferences({ businessId, initial }: Props) {
   const [unsubscribing, setUnsubscribing] = useState(false);
   const [confirmingUnsub, setConfirmingUnsub] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+  const tDeliverability = useTranslations("dashboard.phoneDeliverability");
+
+  // The alert phone is exactly the number that silently goes dark when it
+  // is outside NANP (our long codes cannot originate international SMS),
+  // so warn as the owner types instead of letting the save succeed quietly.
+  const phoneReachability = smsReachability(phone);
+  const phoneWarning =
+    phoneReachability === "mx"
+      ? tDeliverability("smsUnreachableMx")
+      : phoneReachability === "international"
+        ? tDeliverability("smsUnreachable")
+        : null;
 
   useEffect(() => {
     setSmsUrgent(initial.sms_urgent);
@@ -334,14 +348,21 @@ export function NotificationPreferences({ businessId, initial }: Props) {
       </div>
 
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-        <Input
-          label="Alert phone (SMS)"
-          type="tel"
-          value={phone}
-          onChange={(e) => setPhone(e.target.value)}
-          placeholder="+1…"
-          disabled={loading || unsubscribing}
-        />
+        <div>
+          <Input
+            label="Alert phone (SMS)"
+            type="tel"
+            value={phone}
+            onChange={(e) => setPhone(e.target.value)}
+            placeholder="+1…"
+            disabled={loading || unsubscribing}
+          />
+          {phoneWarning && (
+            <p className="text-xs text-spark-orange mt-1" role="alert">
+              {phoneWarning}
+            </p>
+          )}
+        </div>
         <Input
           label="Alert email"
           type="email"

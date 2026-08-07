@@ -2094,6 +2094,11 @@
       "preferences": "Preferencias",
       "recent": "Notificaciones recientes"
     },
+    "phoneDeliverability": {
+      "smsUnreachableMx": "Parece un número mexicano. Nuestras líneas de texto solo pueden entregar SMS a números +1 (EE. UU. y Canadá), así que los mensajes y las alertas por SMS no le llegarán. WhatsApp, el correo y las alertas del panel siguen funcionando.",
+      "smsUnreachable": "Los SMS no pueden llegar a este número: nuestras líneas de texto solo entregan a números +1 (EE. UU. y Canadá). El correo y las alertas del panel siguen funcionando.",
+      "forwardVoiceOnly": "Las llamadas sí se desviarán a este número, pero los mensajes de texto no: nuestras líneas solo entregan SMS a números +1 (EE. UU. y Canadá)."
+    },
     "settings": {
       "accountTitle": "Cuenta",
       "accountBlurb": "Plan, facturación, correo de acceso y contraseña",

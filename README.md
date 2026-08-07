@@ -759,7 +759,7 @@ callable surfaces go through service-role clients, never `anon`/`authenticated` 
 - Rollout / kill switches: Edge secret **`VOICE_AI_STREAM_ENABLED=false`** → `telnyx-voice-inbound` answers with speak-only (no stream). Bridge env **`GEMINI_LIVE_ENABLED=false`** → media WebSocket stays up but Gemini Live audio is off.
 - Voice bridge deploy: `deploy-client.sh` rsyncs **`${VOICE_BRIDGE_SRC:-/opt/newcoworker-repo/vps/voice-bridge}`** → `/opt/voice-bridge`, rewrites `.env` (so rotated secrets land), runs `docker compose up -d --build --force-recreate`, and polls `http://127.0.0.1:8090/` for up to 40s before marking the deploy healthy. Operators are responsible for staging the repo at `VOICE_BRIDGE_SRC` (bootstrap-time git clone, rsync from orchestrator, or gold-image bake). If no source is present the script logs and skips, matching the pre-Telnyx behavior.
 - Telnyx Call Control has **one** webhook URL per Application, but voice events are split across two handlers (`telnyx-voice-inbound` for `call.initiated`, `telnyx-voice-call-end` for `call.hangup`/`call.ended`). Point Mission Control at **`telnyx-voice-dispatch`**; it extracts `data.event_type`, forwards the raw body + Telnyx signature headers to the matching function on the same Supabase project, and returns the upstream response unchanged. The target functions verify the signature themselves — the dispatcher is a routing layer only. Optional env **`DISPATCH_FORWARD_BEARER`** injects an `Authorization` header if the targets were deployed with JWT verification enabled.
-- SMS keyword auto-replies (**STOP** / **HELP** / **START**) need **`TELNYX_API_KEY`**, **`TELNYX_MESSAGING_PROFILE_ID`**, and **`TELNYX_SMS_FROM_E164`** and, for international destinations, **`TELNYX_INTL_GATEWAY_E164`** (the dedicated P2P gateway long code; unset disables international routing and such sends fail at Telnyx as before) on the `telnyx-sms-inbound` function; without them the handler still returns **200** but logs a warning.
+- SMS keyword auto-replies (**STOP** / **HELP** / **START**) need **`TELNYX_API_KEY`**, **`TELNYX_MESSAGING_PROFILE_ID`**, and **`TELNYX_SMS_FROM_E164`** on the `telnyx-sms-inbound` function; without them the handler still returns **200** but logs a warning. **`TELNYX_INTL_GATEWAY_E164`** exists in the same code paths but is deliberately UNSET everywhere: it was built for a dedicated international from-number before Telnyx's verdict that US long codes are domestic-only (see "International reachability" below), so today no number can fill it. The code stays dormant and future-proof; do not set the variable unless a sender type with international outbound actually ships.
 - After first-time deploy (or any time you reset the cache columns), backfill `subscriptions.stripe_current_period_{start,end}` from Stripe so voice quota gating works before the next subscription lifecycle webhook runs: `npx tsx scripts/backfill-stripe-subscription-periods.ts` (dry-run), then re-run with `--apply`. Requires `STRIPE_SECRET_KEY`, `SUPABASE_SERVICE_ROLE_KEY`, `NEXT_PUBLIC_SUPABASE_URL`.
 
 ## Claude connector (remote MCP)
@@ -1157,6 +1157,60 @@ exactly one leak, the three voice-bridge sends, whose comments claimed
 telemetry-only; the bridge now meters each successful send itself
 (`meterBridgeOperationalSms`). If you add a sender, it meters through one
 of those two paths or it does not ship.
+
+## International reachability: SMS is NANP-only, voice is not
+
+The single most important deliverability fact on the platform, confirmed
+by Telnyx support in ticket #557577 (Aug 2026): **our long-code numbers
+cannot originate SMS to any destination outside NANP (+1), at all.** This
+is a property of the number type, not configuration. Every messaging
+profile whitelists 223 countries (via
+`scripts/oneshot/widen-telnyx-destinations.ts`; Canada must be added
+explicitly there, since it shares bare +1 and the dial table cannot
+represent it, which is exactly how the Aug 6 2026 CA-whitelist outage
+happened), every DID still reports
+`features.sms.international_outbound: false`, and no profile setting,
+API call, or support escalation changes it: "US long codes are for
+domestic traffic only." A text to +52, +852, or +44 fails at Telnyx with
+error 40309 no matter what.
+
+What this means channel by channel:
+
+- **SMS: +1 only.** The destination gate inside
+  `try_reserve_sms_outbound_slot` (denylist, unknown-prefix refusal,
+  per-country velocity, per-destination text-unit multipliers from
+  `src/lib/sms/destination-rates.ts`) exists so metering and guardrails
+  are ready if a capable sender type ever ships, but today every
+  non-NANP send dies at Telnyx regardless.
+- **Alphanumeric sender (pending): one-way only.** The supported Telnyx
+  path for international notifications is a registered alphanumeric
+  sender ID (platform-branded, e.g. NEWCOWORKER). It has no inbound
+  path, so it can carry owner alerts but never customer conversations,
+  and per the RCS precedent it must never carry customer-facing traffic.
+- **Mexico: WhatsApp only.** Mexican carriers overwrite ALL alphanumeric
+  senders to random local numbers, domestic MX long codes allow
+  automated traffic for one-time passcodes only, and a branded two-way
+  short code costs $500 to $1,000+ per month with months of carrier lead
+  time. Customer messaging for MX tenants is WhatsApp, full stop; the
+  Mexico v1 SMS surcharge pricing predates this finding and needs review
+  before any MX tenant goes live.
+- **Voice: works internationally.** The shared outbound voice profile
+  whitelists the same 223 countries, so forwarding legs, warm transfers,
+  and owner-notify calls reach international owner phones (for example a
+  +852 forwarding number behind a +1 DID). Guardrail: the profile
+  carries a fleet-wide **$25/day spend limit** (raised from $10 in Aug
+  2026); one marathon international call can exhaust it and block every
+  tenant's outbound legs until midnight UTC, so raise it deliberately,
+  not reactively, if international forwarding becomes routine.
+- **Email, WhatsApp, dashboard: unaffected** by any of this.
+
+The UI keeps owners out of the trap: `src/lib/phone/deliverability.ts`
+classifies any typed number (`smsReachability`), and the owner profile
+card, the notifications alert phone, and the Safe Mode forwarding cell
+all warn as-you-type when a number is outside SMS reach (the forwarding
+warning says calls still forward, texts do not). The warnings never block
+the save: an international forwarding number is a legitimate,
+voice-only setup.
 
 ## Cancellation waitlist ("I'll let you know if a spot opens")
 
@@ -2018,6 +2072,12 @@ outbound send is appended to the conversation transcript so replies thread
 into the inbox. Meta app config steps live in
 `PRDs/whatsapp-meta-app-config.md`.
 
+For Mexican tenants WhatsApp is not one channel among several, it is the
+ONLY two-way customer messaging channel: SMS cannot leave NANP at all and
+Mexican carriers strip alphanumeric senders (see "International
+reachability" above). Any MX onboarding or feature work should treat the
+WhatsApp connection as required, not optional.
+
 ## Voice call routing: the AI answers the call itself (`answerFirst`)
 
 A `voice_ai_intake` step normally takes over only after every `ring_handoff`
@@ -2257,7 +2317,13 @@ System-level, per-business budget gates apply to ALL relevant traffic regardless
   unanswered legs. Like operational SMS, this meter counts but NEVER refuses:
   the call already happened; once the pool is spent the reserve gate and the
   safe-mode pre-check refuse the NEXT call.
-- **SMS (hard stop at the monthly cap):** every customer-facing outbound SMS atomically reserves a slot via `try_reserve_sms_outbound_slot` (row-locked monthly cap + pre-increment) before hitting Telnyx; on `monthly_sms_limit` the send is refused (the reply is suppressed and the owner gets a one-time cap alert). This is parity with voice — a hard stop on the actual SMS limit, independent of how the reply text was generated. Enforced at every customer-facing send site:
+- **Voice, carrier-side backstop:** the shared outbound voice profile also
+  carries a Telnyx-side **$25/day fleet-wide spend limit** (raised from $10
+  Aug 2026 for international forwarding). It is an account-protection fuse,
+  not a tenant meter: when it trips, EVERY tenant's outbound leg fails until
+  midnight UTC. If it ever trips organically, raise it deliberately rather
+  than treating the failures as a code bug.
+- **SMS (hard stop at the monthly cap):** every customer-facing outbound SMS atomically reserves a slot via `try_reserve_sms_outbound_slot` (row-locked monthly cap + pre-increment) before hitting Telnyx; on `monthly_sms_limit` the send is refused (the reply is suppressed and the owner gets a one-time cap alert). The same RPC applies the destination gate and per-destination text-unit multipliers (see "International reachability"), so a blocked or unknown destination refuses here too. This is parity with voice — a hard stop on the actual SMS limit, independent of how the reply text was generated. Enforced at every customer-facing send site:
   - Node: `sendTelnyxSms(..., { meterBusinessId })` — `app/api/dashboard/messages/send`, `app/api/voice/tools/sms`, `app/api/rowboat/tool-call`.
   - Edge: `sms-inbound-worker` (AI reply) and `ai-flow-worker` (`send_sms` / group SMS to the lead, and team-offer SMS) reserve via the `try_reserve_sms_outbound_slot` RPC.
 - **AI chat spend (graceful degrade, NOT a hard stop):** when a business is over its AI token budget, the SMS/chat reply degrades to the local model ([supabase/functions/_shared/chat_spend_cap.ts](supabase/functions/_shared/chat_spend_cap.ts)) rather than refusing. The SMS SEND that carries that reply is still hard-gated by the SMS cap above.

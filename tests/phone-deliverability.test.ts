@@ -1,5 +1,41 @@
 import { describe, expect, it } from "vitest";
-import { ownerPhoneDeliverabilityWarning } from "@/lib/phone/deliverability";
+import {
+  ownerPhoneDeliverabilityWarning,
+  smsReachability
+} from "@/lib/phone/deliverability";
+
+describe("smsReachability", () => {
+  it("classifies NANP numbers as reachable, Canada and Caribbean included", () => {
+    expect(smsReachability("+16025550100")).toBe("nanp");
+    expect(smsReachability("+15145188192")).toBe("nanp");
+    expect(smsReachability("+18765550123")).toBe("nanp");
+  });
+
+  it("treats local-format input as NANP: the save path coerces it to +1", () => {
+    expect(smsReachability("602 555 0147")).toBe("nanp");
+    expect(smsReachability("(602) 555-0147")).toBe("nanp");
+    expect(smsReachability("")).toBe("nanp");
+  });
+
+  it("stays quiet on a partial international prefix while the user is typing", () => {
+    // Fewer than 7 digits is not yet a number; warning early would flicker
+    // on every keystroke of a +1 number's country code.
+    expect(smsReachability("+8")).toBe("nanp");
+    expect(smsReachability("+852")).toBe("nanp");
+    expect(smsReachability("+52 55")).toBe("nanp");
+  });
+
+  it("classifies Mexico separately once the number is plausibly complete", () => {
+    expect(smsReachability("+525512345678")).toBe("mx");
+    expect(smsReachability("+52 55 1234 5678")).toBe("mx");
+  });
+
+  it("classifies every other non-NANP destination as international", () => {
+    expect(smsReachability("+85261234567")).toBe("international");
+    expect(smsReachability("+447700900123")).toBe("international");
+    expect(smsReachability("+45 12 34 56 78")).toBe("international");
+  });
+});
 
 describe("ownerPhoneDeliverabilityWarning", () => {
   it("passes a US number", () => {

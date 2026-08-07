@@ -11,11 +11,13 @@
 
 import { useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import { useTranslations } from "next-intl";
 import { Button } from "@/components/ui/Button";
 import { Card } from "@/components/ui/Card";
 import { Input } from "@/components/ui/Input";
 import { Badge } from "@/components/ui/Badge";
 import { parseEnvelope } from "@/lib/client/api-envelope";
+import { smsReachability } from "@/lib/phone/deliverability";
 
 type Props = {
   businessId: string;
@@ -43,8 +45,17 @@ export function SafeModeToggle({
   const [forwardError, setForwardError] = useState<string | null>(null);
   const [modeError, setModeError] = useState<string | null>(null);
   const phoneInputRef = useRef<HTMLInputElement | null>(null);
+  const tDeliverability = useTranslations("dashboard.phoneDeliverability");
 
   const hasForward = forwardTo.trim().length > 0;
+
+  // A non-NANP forwarding number half-works: the voice leg forwards fine
+  // (the outbound voice profile covers international destinations), but
+  // our long codes cannot deliver SMS to it, so the SMS half of Safe Mode
+  // and missed-call texts go dark. Warn without blocking the save.
+  const forwardReachability = smsReachability(editingForward ? forwardDraft : forwardTo);
+  const voiceOnlyWarning =
+    forwardReachability === "nanp" ? null : tDeliverability("forwardVoiceOnly");
 
   async function saveForwarding() {
     setForwardError(null);
@@ -203,6 +214,11 @@ export function SafeModeToggle({
           </div>
           {!editingForward && forwardError && (
             <p className="text-xs text-spark-orange mt-2">{forwardError}</p>
+          )}
+          {voiceOnlyWarning && (
+            <p className="text-xs text-spark-orange mt-2" role="alert">
+              {voiceOnlyWarning}
+            </p>
           )}
         </div>
 
