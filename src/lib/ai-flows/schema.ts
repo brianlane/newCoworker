@@ -1821,7 +1821,7 @@ export type BranchStep = {
 export type FlowStep = NonBranchStep | BranchStep;
 
 /** Lazy, explicitly-typed recursion point: a nested step list inside a branch. */
-const nestedStepListSchema: z.ZodType<FlowStep[]> = z.lazy(() => z.array(stepSchema).max(25));
+const nestedStepListSchema: z.ZodType<FlowStep[]> = z.lazy(() => z.array(stepSchema).max(30));
 
 const branchArmSchema: z.ZodType<BranchArm> = z.object({
   id: stepId,
@@ -1851,7 +1851,11 @@ export const aiFlowDefinitionSchema = z.object({
   // [trigger, ...triggers] fires. Capped at 4 extras (5 total). Voice is
   // excluded from the set (single-trigger; enforced in semantics).
   triggers: z.array(triggerSchema).max(4).optional(),
-  steps: z.array(stepSchema).min(1).max(25),
+  // Raised 25 -> 30 on 2026-08-07: the fleet reached the old cap for real
+  // (HomeLight Referral sits at exactly 25 trunk steps, and adding the
+  // seller call ladder to ReferralExchange Lead needs 26). Still a sanity
+  // cap, not a promise: keep flows as small as their job allows.
+  steps: z.array(stepSchema).min(1).max(30),
   timeWindow: flowTimeWindowSchema.optional(),
   // Drip pacing for bulk enqueues: consecutive runs start at least
   // intervalMinutes apart (earliest_claim_at stagger at enqueue time).

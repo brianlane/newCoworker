@@ -207,6 +207,26 @@ Other networks: `seed-referralexchange-aiflow.ts`,
 `realtor-retrigger-guard.ts`. HomeLight's are listed in
 [homelight-flow.md](homelight-flow.md).
 
+Seller auto-call (Aug 7 2026): `amy-seller-ai-call-definition.ts` (pure
+builders) driven by `amy-seller-ai-call-patch.ts` (idempotent, dry-run by
+default, `--revert` restores the exact previous definition from the ledger).
+The AI now owns FIRST contact on both seller sources: it dials the seller
+within a minute of the lead landing (skipping $1M+ leads, which stay with
+Amy), pitches the listing with Amy's approved script (the Clever variant
+carries the cash-offer angle and a new `cash_offers` extraction field copied
+verbatim from the spoke check; ReferralExchange does not), then the flow
+continues to the unchanged `route_to_team` chain so Dave still owns the
+follow-up. Misses redial at +2h and next morning at 08:30, both inside
+08:30-21:00 Phoenix with `outside: "skip"` so an overnight lead never parks
+the run, and every rung stops the moment anyone claims the lead or the
+seller replies or books (`lead_reached` goal). The same patch sweeps the
+"best time to reach them" capture field out of New Lead Intake: Amy's rule
+is that nobody ever asks a lead when to call back. Team offers now say what
+the AI already did (`actions_taken`), how the call went
+(`call_outcome_label`), and what the ladder does next, with the schedule
+sentence generated from the same constants as the sleeps so copy and
+behavior cannot drift apart.
+
 Notice content: `set-amy-lead-address-in-notices.ts`,
 `amy-lead-price-in-notices.ts` (Aug 7 2026: Clever never extracted a price at
 all, only the over/under-$1M routing token, so no Clever notice could show
