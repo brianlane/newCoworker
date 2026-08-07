@@ -187,7 +187,7 @@ for (const d of dials) {
   const marker = d.call_control_id === callControlId ? "  <-- this call" : "";
   console.log(`  ${day(d.created_at)} ${ts(d.created_at)}  ${d.status}  to=${d.to_e164 ?? "-"}  ${d.reason ?? ""}${marker}`);
 }
-if (dials.length === 0 && !dialErr && !ownDial) {
+if (dials.length === 0 && !dialErr && !ownDial && !ownDialErr) {
   console.log(
     "  Empty is EXPECTED for a call placed straight through originate\n" +
       "  (debug/place-test-outbound-call.ts). Only the worker's place_ai_call\n" +
