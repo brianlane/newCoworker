@@ -142,4 +142,55 @@ describe("sendOwnerNotifyFallback", () => {
     }) as unknown as typeof fetch;
     expect(await sendOwnerNotifyFallback(db, baseInput(fetchFn))).toBe("post_failed");
   });
+
+  // PostgREST returns data:null (not []) for an empty result on some client
+  // versions. Treating that as "a prior page exists" would silently swallow
+  // every fallback, so the null case must read as "nothing sent yet".
+  it("treats a null dedupe result as no prior page and still sends", async () => {
+    const { db } = makeDb([{ data: null, error: null }]);
+    const fetchFn = okFetch();
+    const result = await sendOwnerNotifyFallback(db, baseInput(fetchFn));
+    expect(result).toBe("sent");
+    expect(fetchFn).toHaveBeenCalledTimes(1);
+  });
+
+  // fetchFn is injected only by tests. In the Edge runtime the module takes
+  // the global fetch, so that default has to actually work.
+  it("uses the global fetch when no fetchFn is injected", async () => {
+    const { db } = makeDb([NO_PRIOR]);
+    const globalFetch = vi.fn(
+      async (..._args: Parameters<typeof fetch>) => new Response("{}", { status: 200 })
+    );
+    vi.stubGlobal("fetch", globalFetch);
+    try {
+      const result = await sendOwnerNotifyFallback(
+        db,
+        baseInput(undefined as unknown as typeof fetch, { fetchFn: undefined })
+      );
+      expect(result).toBe("sent");
+      expect(globalFetch).toHaveBeenCalledTimes(1);
+      expect(globalFetch.mock.calls[0][0]).toBe(NOTIFY_URL);
+    } finally {
+      vi.unstubAllGlobals();
+    }
+  });
+
+  // The "no_phone" reason exists precisely for an owner with no number on
+  // file, so phone is absent rather than empty. The audit payload has to
+  // carry an explicit null instead of dropping the key.
+  it("records an explicit null phone when the owner has no number on file", async () => {
+    const { db } = makeDb([NO_PRIOR]);
+    const fetchFn = okFetch();
+    const result = await sendOwnerNotifyFallback(
+      db,
+      baseInput(fetchFn, { reason: "no_phone", phone: undefined })
+    );
+    expect(result).toBe("sent");
+    const body = JSON.parse(
+      (fetchFn as unknown as ReturnType<typeof vi.fn>).mock.calls[0][1].body as string
+    );
+    expect(body.record.log_payload.phone).toBeNull();
+    expect(body.record.log_payload.reason).toBe("no_phone");
+    expect(body.record.task_type).toBe(OWNER_NOTIFY_FALLBACK_TASK_TYPE);
+  });
 });
