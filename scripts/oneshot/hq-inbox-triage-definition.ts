@@ -94,6 +94,26 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
       },
       {
         id: "s_classify",
+        /**
+         * Hosting renewal and expiry notices are deliberately ROUTINE, not
+         * billing and not important.
+         *
+         * `src/lib/vps/billing-posture.ts` is the system of record for fleet
+         * renewals: it runs on cron, resolves every VM's billing subscription,
+         * auto-heals auto-renew for boxes a paying tenant depends on, reports
+         * pool boxes that are leaking money, and honours an explicit
+         * `never_renew` flag for boxes that MUST lapse at period end by design.
+         *
+         * This classifier can see none of that. It cannot tell a box we are
+         * about to lose from one we chose to let go, so every such alert is a
+         * coin flip and the wrong half is pure noise. Live example, Aug 6 2026:
+         * Hostinger mailed that the KVM 2 plan on srv1800985 had expired and
+         * the flow texted Brian about it. That was the retired residency-pilot
+         * box (scripts/oneshot/retire-residency-pilot.ts): lapsing was the plan.
+         *
+         * A real payment problem (a declined card, a dispute, an invoice we
+         * owe) is still `billing`, because no cron owns those.
+         */
         type: "classify",
         question: "What kind of email did the business just receive?",
         categories: [
@@ -110,17 +130,17 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
           {
             value: "billing",
             description:
-              "Billing that needs a human: an invoice we must pay, a failed or declined payment, a dispute or chargeback, or a subscription problem. NOT routine receipts or confirmations of successful payments."
+              "Billing needing a human: an invoice we owe, a failed or declined payment, a dispute or chargeback. NOT receipts, successful charges, or server and hosting renewal or expiry notices"
           },
           {
             value: "automated_important",
             description:
-              "Automated mail a human must act on: an outage, a security or login alert, a suspension or lapsing plan, a broken integration, a hit quota, an expiring credential, or a legal notice"
+              "Automated mail a human must act on: an outage, a security or login alert, an account suspension, a broken integration, a hit quota, an expiring credential, or a legal notice"
           },
           {
             value: "automated_notice",
             description:
-              "Routine automated mail with no consequence if ignored: our own alert and contact-form copies, calendar invites, newsletters, marketing, digests, and receipts for successful charges"
+              "Routine automated mail with no consequence if ignored: our own alert and contact-form copies, calendar invites, newsletters, marketing, digests, receipts, and hosting renewal or expiry notices"
           }
         ],
         saveAs: "email_kind"

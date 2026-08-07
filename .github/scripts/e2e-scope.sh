@@ -105,6 +105,7 @@ EMAIL_TESTS="
 tests/e2e/beth-delegation.e2e.test.ts
 tests/e2e/beth-email-loop.e2e.test.ts
 tests/e2e/hq-intro-reply.e2e.test.ts
+tests/e2e/hq-inbox-classify.e2e.test.ts
 "
 
 # Messenger/Instagram/WhatsApp + webchat customer engine.
@@ -190,6 +191,12 @@ scope_file() {
     scripts/oneshot/add-bad-phone-agent-report*) add "tests/e2e/bad-phone-classify.e2e.test.ts" ;;
     # --- the HQ drafter one-shot exports the instructions its e2e pins -----
     scripts/oneshot/hq-inbox-reply-drafter*) add "tests/e2e/hq-intro-reply.e2e.test.ts" ;;
+    # --- the HQ triage definition IS the category set its classify e2e runs
+    #     against: the suite reads s_classify straight out of the builder, so
+    #     an edit to a category description that misroutes real mail has to
+    #     re-run it. Without this the file falls into the scripts/* skip. ---
+    scripts/oneshot/hq-inbox-triage-definition*) \
+      add "tests/e2e/hq-inbox-classify.e2e.test.ts" ;;
 
     # --- likewise, the KYP calendar builder IS the definition its e2e test
     #     walks: the suite drives these exact extract fields and copy through
