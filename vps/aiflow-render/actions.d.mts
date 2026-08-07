@@ -32,6 +32,8 @@ export const MAX_ACTIONS: number;
 export const MAX_WHILE_PRESENT_CLICKS: number;
 export const WHILE_PRESENT_PROBE_MS: number;
 export const MAX_FOREACH_ITEMS: number;
+export const CLICK_TEXT_APPEAR_MS: number;
+export const CLICK_TEXT_APPEAR_POLL_MS: number;
 export const MAX_OVERLAY_DISMISS_ROUNDS: number;
 export const ACTION_KINDS: Set<string>;
 export const ERROR_DETAIL_MAX: number;
@@ -47,11 +49,15 @@ export function parseActions(raw: unknown): RenderAction[] | null;
 export function resolveClickTarget(
   page: RenderPage,
   target: string,
-  opts?: { allowExactTextAnywhere?: boolean }
+  opts?: { allowExactTextAnywhere?: boolean; appearTimeoutMs?: number }
 ): Promise<unknown>;
 export function dismissBlockingOverlays(page: RenderPage, protectTarget?: string): Promise<number>;
 export function performActions(
   page: RenderPage,
   actions: readonly RenderAction[]
 ): Promise<{ completed: number; error?: string }>;
-export function runAction(page: RenderPage, action: RenderAction): Promise<void>;
+export function runAction(
+  page: RenderPage,
+  action: RenderAction,
+  opts?: { appearTimeoutMs?: number }
+): Promise<void>;

@@ -30,6 +30,27 @@ export const WHILE_PRESENT_PROBE_MS = Number(process.env.AIFLOW_WHILE_PRESENT_PR
 // Hard cap on forEachLink list items so one request can't enumerate an unbounded
 // page of links and run the action sequence hundreds of times.
 export const MAX_FOREACH_ITEMS = Number(process.env.AIFLOW_MAX_FOREACH_ITEMS ?? 25);
+/**
+ * How long a SINGLE `click_text` waits for its control to turn up before
+ * concluding the page does not have one.
+ *
+ * Every match strategy below asks `.count()`, which resolves against the DOM as
+ * it stands right now. On a client-rendered portal that is a race: the shell
+ * paints, the settle wait sees the network go quiet, and the button the action
+ * is looking for is mounted a moment later by hydration. The action then failed
+ * with "no matching control on the page" while the saved page artifact shows
+ * the control plainly there, which is what made the failure so confusing to
+ * diagnose. Amy Laidlaw's Clever accept step hit this on 2026-08-06: the run
+ * dead-lettered at step 1 with the Accept button present in its own artifact.
+ *
+ * Deliberately NOT applied to `click_text_while_present`, where zero matches is
+ * how the loop knows it is finished.
+ */
+export const CLICK_TEXT_APPEAR_MS = Number(process.env.AIFLOW_CLICK_TEXT_APPEAR_MS ?? 5_000);
+/** Gap between re-checks while waiting for a control to mount. */
+export const CLICK_TEXT_APPEAR_POLL_MS = Number(
+  process.env.AIFLOW_CLICK_TEXT_APPEAR_POLL_MS ?? 250
+);
 export const ACTION_KINDS = new Set([
   "click_text",
   "click_selector",
@@ -107,7 +128,24 @@ export function parseActions(raw) {
  *
  * Returns a Locator (callers .click()/.waitFor() it) or null.
  */
-export async function resolveClickTarget(page, target, { allowExactTextAnywhere = true } = {}) {
+export async function resolveClickTarget(
+  page,
+  target,
+  { allowExactTextAnywhere = true, appearTimeoutMs = CLICK_TEXT_APPEAR_MS } = {}
+) {
+  const deadline = Date.now() + Math.max(0, appearTimeoutMs);
+  for (;;) {
+    const hit = await resolveClickTargetOnce(page, target, { allowExactTextAnywhere });
+    if (hit) return hit;
+    // Only a SINGLE click waits. For the while-present loop zero matches is the
+    // success condition, so waiting here would add this timeout to the end of
+    // every loop rather than catching anything.
+    if (!allowExactTextAnywhere || Date.now() >= deadline) return null;
+    await page.waitForTimeout(CLICK_TEXT_APPEAR_POLL_MS);
+  }
+}
+
+async function resolveClickTargetOnce(page, target, { allowExactTextAnywhere }) {
   // 1) A real control whose ACCESSIBLE NAME is exactly the target.
   const byRoleExact = page
     .getByRole("button", { name: target, exact: true })
@@ -429,13 +467,18 @@ async function probeClickable(page, target) {
 }
 
 /** Execute ONE parsed action (see performActions for retry/error semantics). */
-export async function runAction(page, a) {
+export async function runAction(page, a, opts = {}) {
   if (a.kind === "click_text") {
     // Prefer a real button/link (or exact-text element); substring matches
     // resolve ONLY to interactive controls so body copy that merely
     // contains the word (e.g. "…then accept or reject.") can never be
     // "clicked" into a phantom success.
-    const loc = await resolveClickTarget(page, a.target, { allowExactTextAnywhere: true });
+    const loc = await resolveClickTarget(page, a.target, {
+      allowExactTextAnywhere: true,
+      ...(typeof opts.appearTimeoutMs === "number"
+        ? { appearTimeoutMs: opts.appearTimeoutMs }
+        : {})
+    });
     if (!loc) throw new Error("no matching control on the page");
     await loc.click({ timeout: ACTION_TIMEOUT_MS });
   } else if (a.kind === "click_text_while_present") {
