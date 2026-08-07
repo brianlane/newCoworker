@@ -20,6 +20,8 @@ import {
 } from "./gemini-telnyx-bridge.js";
 import { loadVaultForPrompt } from "./vault-loader.js";
 import {
+  telnyxDialCall,
+  telnyxBridgeCall,
   telnyxTransferCall,
   telnyxSendPlainSms,
   meterBridgeOperationalSms,
@@ -27,6 +29,11 @@ import {
   telnyxSendDtmf,
   telnyxStreamingStop
 } from "./telnyx-call-actions.js";
+import {
+  parseReachLadderConfig,
+  runReachLadder,
+  type ReachLadderConfig
+} from "./reach-teammate.js";
 import { composeIntakeLeadSms } from "./intake.js";
 import { loadVoiceFlowContext } from "./flow-run-context.js";
 import { loadVoiceContactTimeline } from "./contact-context.js";
@@ -1201,6 +1208,9 @@ function main(): void {
       let intakeTransferConfig:
         | { toE164: string; preSmsBody: string; agentName: string }
         | undefined;
+      // place_ai_call reach ladder (reachTeammate): parsed from the same
+      // session context. Supersedes both transfer capabilities below.
+      let intakeReachConfig: ReachLadderConfig | undefined;
       let intakeFlowRun: FlowRunLink | undefined;
       // Outbound AiFlow legs are placed by telnyx-voice-originate, which writes
       // the handoff session context with `outbound: true`. Everything else is a
@@ -1254,6 +1264,7 @@ function main(): void {
               pre_sms_body?: string;
               agent_name?: string;
             } | null;
+            reach_targets?: Record<string, unknown> | null;
             flow_run?: FlowRunLink | null;
             star_alerts?: boolean;
           };
@@ -1318,6 +1329,20 @@ function main(): void {
             };
             intake.allowTransfer = true;
             intake.transferAgentName = intakeTransferConfig.agentName || undefined;
+          }
+          if (ctx.reach_targets) {
+            const parsed = parseReachLadderConfig(ctx.reach_targets);
+            if (parsed) {
+              intakeReachConfig = parsed;
+              intake.allowTransfer = true;
+              intake.transferAgentName = parsed.targets[0]?.name || undefined;
+            } else {
+              // A ladder that cannot dial must not register the tool: the
+              // model would promise a transfer that can only fail.
+              console.error("voice-bridge: reach_targets present but unusable", {
+                callControlId
+              });
+            }
           }
           if (ctx.flow_run && typeof ctx.flow_run.run_id === "string") {
             intakeFlowRun = ctx.flow_run;
@@ -1530,6 +1555,93 @@ function main(): void {
               return { ok: false, detail: `telnyx ${result.status}` };
             }
             console.log("voice-bridge: flow transfer detach (streaming_stop)", { callControlId });
+            return { ok: true, detail: "streaming stopped" };
+          }
+        };
+      }
+
+      // reach_teammate: the second-leg warm-transfer ladder. SUPERSEDES both
+      // transfer capabilities above (the flow author picked the ladder, so
+      // neither the tenant forward target nor a single-target transfer
+      // applies). The model still calls the same `transfer_to_owner` tool;
+      // what changes is the topology underneath: the caller stays on the A
+      // leg with the assistant while each teammate's phone rings on a fresh
+      // B leg, and only a teammate who genuinely ANSWERS is bridged in. The
+      // pre-alert SMS goes out per target as their phone starts ringing, so
+      // when nobody answers, the assistant's "I've let the team know" line
+      // is already true.
+      if (intake && intakeReachConfig) {
+        const telnyxApiKey = process.env.TELNYX_API_KEY ?? "";
+        const reachConfig = intakeReachConfig;
+        transfer = {
+          toE164: reachConfig.targets[0]!.e164,
+          execute: async ({ reason }) => {
+            if (!telnyxApiKey) {
+              console.warn("voice-bridge: reach requested but TELNYX_API_KEY missing");
+              return { ok: false, detail: "transfer not configured" };
+            }
+            const result = await runReachLadder(
+              supabase,
+              {
+                dial: (opts) => telnyxDialCall(telnyxApiKey, opts),
+                bridge: (leg, opts) => telnyxBridgeCall(telnyxApiKey, leg, opts),
+                hangup: (leg) => telnyxHangupCall(telnyxApiKey, leg),
+                sendPreSms: async (toE164, body) => {
+                  await sendTransferPreAlertSms({
+                    supabase,
+                    businessId,
+                    settings: tenantSettings,
+                    toE164,
+                    body,
+                    callControlId
+                  });
+                }
+              },
+              {
+                businessId,
+                aLegCallControlId: callControlId,
+                config: reachConfig,
+                log: (msg, extra) => console.log(`voice-bridge: ${msg}`, extra ?? {})
+              }
+            );
+            if (!result.ok) {
+              console.log("voice-bridge: reach ladder exhausted", {
+                callControlId,
+                reason: reason ?? ""
+              });
+              // The honest failure the persona's script depends on: the
+              // model tells the caller nobody could pick up right now and
+              // that the team has been texted (the pre-alerts already went).
+              return { ok: false, detail: "nobody answered; the team was texted the heads-up" };
+            }
+            console.log("voice-bridge: reach ladder bridged", {
+              callControlId,
+              connected: result.connectedName,
+              reason: reason ?? ""
+            });
+            // Same outcome bookkeeping as the single-target flow transfer:
+            // stamp the session and resume the parked run NOW, because a
+            // bridged human conversation can outlive the run's wait ceiling.
+            await stampTransferInitiated(supabase, callControlId);
+            if (intakeFlowRun) {
+              await resumeFlowRunWithCallOutcome(supabase, intakeFlowRun, "transferred");
+            }
+            return { ok: true, detail: `connected to ${result.connectedName}` };
+          },
+          translatorMode: tenantSettings.translatorModeEnabled,
+          humanName: reachConfig.targets[0]?.name || undefined,
+          detach: async () => {
+            if (!telnyxApiKey) return { ok: false, detail: "transfer not configured" };
+            const result = await telnyxStreamingStop(telnyxApiKey, callControlId);
+            if (!result.ok) {
+              console.error(
+                "voice-bridge: telnyx streaming_stop failed",
+                result.status,
+                result.body
+              );
+              return { ok: false, detail: `telnyx ${result.status}` };
+            }
+            console.log("voice-bridge: reach detach (streaming_stop)", { callControlId });
             return { ok: true, detail: "streaming stopped" };
           }
         };
