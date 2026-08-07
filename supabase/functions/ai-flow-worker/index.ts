@@ -6631,12 +6631,30 @@ async function notifyOwnerStep(
     });
     return { kind: "ok", result: { notified: "email", fallback: "sms_unreachable" } };
   }
-  // Reachable number, but this tenant has no messaging profile so no text can
-  // be built. Left as the historical silent no-op rather than widened into a
-  // fourth fallback: the three reasons each explain something the owner can
-  // act on, and "our own SMS setup is incomplete" is neither their doing nor
-  // theirs to fix. Worth revisiting if it ever shows up in telemetry.
+  // Reachable number, but no messaging profile resolved, so no text can be
+  // built. This is NOT an onboarding state. messagingConfig starts from the
+  // platform-wide TELNYX_MESSAGING_PROFILE_ID and a business row only
+  // OVERRIDES it, so getting here means that platform secret is missing, which
+  // breaks SMS for every tenant at once rather than for one. Checked
+  // 2026-08-07: both platform secrets are set, all five configured tenants
+  // resolve a profile, and the three without a settings row have no forwarding
+  // number either, so they leave through the no_phone branch above.
+  //
+  // Still a silent no-op for the OWNER, deliberately: a fourth fallback reason
+  // would have to say "our own SMS setup is incomplete", which is neither
+  // their doing nor theirs to fix, and the other three all name something they
+  // can act on. It is no longer silent for US, which is the part that matters.
+  // Unrecorded, the one scenario that reaches this line would drop every
+  // notify_owner across the fleet with no signal anywhere, and we would hear
+  // about it from a customer.
   if (!cfg) {
+    console.error(
+      "notify_owner: no messaging profile resolved (check the TELNYX_MESSAGING_PROFILE_ID platform secret)"
+    );
+    await telemetryRecord(supabase, "ai_flow_notify_owner_no_messaging_config", {
+      run_id: run.id,
+      business_id: run.business_id
+    });
     await releaseClaim();
     return { kind: "ok", result: { notified: null } };
   }

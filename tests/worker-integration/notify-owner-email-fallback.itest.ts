@@ -181,6 +181,36 @@ describe("notify_owner email fallback (real worker)", () => {
     expect(rows.every((r) => r.payload.fallbackReason === "sms_unreachable")).toBe(true);
   });
 
+  // A reachable number with no profile anywhere. In production the platform
+  // secret TELNYX_MESSAGING_PROFILE_ID makes this unreachable, which is why it
+  // stays a silent no-op for the owner rather than a fourth fallback reason.
+  // This suite is the one place it CAN be reached, because ci.yml deliberately
+  // sets no global profile, so it is the only place the telemetry can be
+  // proven. Without that record, the single scenario that reaches this line
+  // (someone removing the platform secret) would drop every notify_owner in
+  // the fleet with no signal anywhere.
+  it("records telemetry rather than vanishing when no messaging profile resolves", async () => {
+    const biz = await seedBusiness(db, "IT notify no messaging profile");
+    await seedForwardOnly(biz, "+16025550199");
+    const flowId = await createFlow(db, biz, notifyFlow());
+
+    const runId = await enqueueRun(db, flowId, biz, TRIGGER, {});
+    await tickWorker();
+
+    expect((await getRun(db, runId)).status).toBe("done");
+    const notify = (await getSteps(db, runId)).find((s) => s.step_type === "notify_owner");
+    expect(notify?.status).toBe("done");
+    // Silent for the owner, on purpose.
+    expect((notify?.result as { notified?: string | null }).notified).toBeNull();
+    // Never silent for us.
+    const { data } = await db
+      .from("telemetry_events")
+      .select("event_type, payload")
+      .eq("event_type", "ai_flow_notify_owner_no_messaging_config");
+    const events = (data ?? []) as Array<{ payload: Record<string, unknown> }>;
+    expect(events.some((e) => e.payload?.run_id === runId)).toBe(true);
+  });
+
   it("a reachable NANP forwarding number still goes by SMS, no fallback rows", async () => {
     const biz = await seedBusiness(db, "IT notify fallback nanp");
     await seedSmsConfig(biz, "+16025550188");
