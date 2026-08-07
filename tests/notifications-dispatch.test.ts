@@ -9,7 +9,8 @@ vi.mock("@/lib/db/notification-preferences", () => ({
 }));
 
 vi.mock("@/lib/db/notifications", () => ({
-  insertNotification: vi.fn(async () => ({ id: "x" }))
+  insertNotification: vi.fn(async () => ({ id: "x" })),
+  countRecentNotificationsAbout: vi.fn(async () => 0)
 }));
 
 vi.mock("@/lib/email/client", () => ({
@@ -64,7 +65,7 @@ import { getBusiness } from "@/lib/db/businesses";
 import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import { buildBookingOwnerAlert } from "@/lib/email/templates/booking-owner-alert";
 import { getOrCreateNotificationPreferences } from "@/lib/db/notification-preferences";
-import { insertNotification } from "@/lib/db/notifications";
+import { countRecentNotificationsAbout, insertNotification } from "@/lib/db/notifications";
 import { sendOwnerEmail } from "@/lib/email/client";
 import { sendTelnyxSms, getTelnyxMessagingForBusiness } from "@/lib/telnyx/messaging";
 import { deliverWhatsApp } from "@/lib/whatsapp/deliver";
@@ -1276,6 +1277,75 @@ describe("notifications/dispatch", () => {
         payload: Record<string, unknown>;
       }).payload;
       expect(payload).not.toHaveProperty("routed_to");
+    });
+  });
+
+  describe("per-contact flood cooldown", () => {
+    /**
+     * The incident (Amy Laidlaw, 2026-08-07): a bot-vs-bot SMS loop fired
+     * notify_team once per lap, seventeen alerts about the same contact in
+     * ten minutes, each by SMS and email. The cooldown caps alert EVENTS
+     * about one contact per window.
+     */
+    it("skips every channel once the cap is reached, with the reason stamped", async () => {
+      resolveContactOwnerTarget.mockResolvedValue(TO_DAVE);
+      vi.mocked(countRecentNotificationsAbout).mockResolvedValueOnce(2);
+      const { results } = await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Follow up with Aaron",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE
+      });
+      expect(vi.mocked(sendTelnyxSms)).not.toHaveBeenCalled();
+      expect(vi.mocked(sendOwnerEmail)).not.toHaveBeenCalled();
+      expect(results.every((r) => r.status === "skipped")).toBe(true);
+      for (const row of vi.mocked(insertNotification).mock.calls.map((c) => c[0])) {
+        expect((row as { payload: Record<string, unknown> }).payload).toMatchObject({
+          reason: "contact_alert_cooldown",
+          about_e164: LEAD_PHONE
+        });
+      }
+    });
+
+    it("still delivers below the cap and stamps about_e164 plus a dispatch id", async () => {
+      resolveContactOwnerTarget.mockResolvedValue(TO_DAVE);
+      vi.mocked(countRecentNotificationsAbout).mockResolvedValueOnce(1);
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Follow up with Aaron",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE
+      });
+      expect(vi.mocked(sendTelnyxSms)).toHaveBeenCalled();
+      const payload = (vi.mocked(insertNotification).mock.calls[0][0] as {
+        payload: Record<string, unknown>;
+      }).payload;
+      expect(payload.about_e164).toBe(LEAD_PHONE);
+      expect(typeof payload.dispatch_id).toBe("string");
+      expect((payload.dispatch_id as string).length).toBeGreaterThan(0);
+    });
+
+    it("fails OPEN when the count read throws: the alert still goes out", async () => {
+      // This gate must never be the reason an owner missed a real emergency.
+      resolveContactOwnerTarget.mockResolvedValue(TO_DAVE);
+      vi.mocked(countRecentNotificationsAbout).mockRejectedValueOnce(new Error("db down"));
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "Follow up with Aaron",
+        kind: "sms_team_notify",
+        contactE164: LEAD_PHONE
+      });
+      expect(vi.mocked(sendTelnyxSms)).toHaveBeenCalled();
+    });
+
+    it("never counts for a business-level alert with no contact", async () => {
+      await dispatchUrgentNotification({
+        businessId: BIZ,
+        summary: "SMS cap reached",
+        kind: "sms_cap_reached"
+      });
+      expect(vi.mocked(countRecentNotificationsAbout)).not.toHaveBeenCalled();
+      expect(vi.mocked(sendTelnyxSms)).toHaveBeenCalled();
     });
   });
 });

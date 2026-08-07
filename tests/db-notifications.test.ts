@@ -1,5 +1,6 @@
 import { describe, it, expect, vi, beforeEach } from "vitest";
 import {
+  countRecentNotificationsAbout,
   insertNotification,
   getNotifications,
   getUnreadNotificationCount,
@@ -358,6 +359,48 @@ describe("db/notifications", () => {
       [{ column: "id", op: "eq", value: "n1" }],
       null,
       {}
+    );
+  });
+
+  it("countRecentNotificationsAbout counts distinct dispatch events, not channel rows", async () => {
+    // One dispatch writes a row per channel. Three rows sharing a
+    // dispatch_id are ONE alert event; a pre-stamp row with none counts as
+    // its own event (over-counting is the safe direction for a flood cap).
+    const rows = [
+      { dispatch_id: "d1" },
+      { dispatch_id: "d1" },
+      { dispatch_id: "d1" },
+      { dispatch_id: "d2" },
+      { dispatch_id: null }
+    ];
+    const db = mockDb({
+      limit: vi.fn().mockReturnThis(),
+      gte: vi.fn().mockImplementation(function (this: unknown) {
+        return { limit: vi.fn().mockResolvedValue({ data: rows, error: null }) };
+      })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+    const count = await countRecentNotificationsAbout("biz-uuid-1", "sms_team_notify", "+16025550000", 1800000);
+    expect(count).toBe(3);
+  });
+
+  it("countRecentNotificationsAbout returns 0 on empty and throws on error", async () => {
+    const empty = mockDb({
+      gte: vi.fn().mockImplementation(function (this: unknown) {
+        return { limit: vi.fn().mockResolvedValue({ data: [], error: null }) };
+      })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(empty as never);
+    expect(await countRecentNotificationsAbout("b", "k", "+1", 1000)).toBe(0);
+
+    const failing = mockDb({
+      gte: vi.fn().mockImplementation(function (this: unknown) {
+        return { limit: vi.fn().mockResolvedValue({ data: null, error: { message: "boom" } }) };
+      })
+    });
+    vi.mocked(createSupabaseServiceClient).mockResolvedValue(failing as never);
+    await expect(countRecentNotificationsAbout("b", "k", "+1", 1000)).rejects.toThrow(
+      "countRecentNotificationsAbout: boom"
     );
   });
 });
