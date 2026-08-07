@@ -25,7 +25,7 @@ import {
   isVpsReadMode,
   readMovedRows
 } from "@/lib/residency/read";
-import { listEmailLog, listEmailLogForAddress, getEmailBody } from "@/lib/db/email-log";
+import { listEmailLog, listEmailLogForAddress, getEmailBody, getEmailLogRow } from "@/lib/db/email-log";
 import { getNotifications, getUnreadNotificationCount } from "@/lib/db/notifications";
 import {
   getTranscriptByCallControlId,
@@ -156,6 +156,30 @@ describe("email-log vps reads", () => {
     expect(e2?.body_html).toBeNull();
     vi.mocked(readMovedRows).mockResolvedValueOnce([] as never);
     expect(await getEmailBody(BIZ, "e404", centralDb({}))).toBeNull();
+  });
+});
+
+describe("email-log single-row vps reads", () => {
+  it("getEmailLogRow routes to the box, scoped and limited to one", async () => {
+    vi.mocked(readMovedRows).mockResolvedValue([{ id: "e9", labels: null }] as never);
+    const row = await getEmailLogRow(BIZ, "e9", centralDb({}));
+    expect(row).toMatchObject({ id: "e9", is_read: false, labels: [] });
+    expect(readMovedRows).toHaveBeenCalledWith(BIZ, {
+      table: "email_log",
+      columns: expect.any(Array),
+      filters: [
+        { column: "business_id", op: "eq", value: BIZ },
+        { column: "deleted_at", op: "is", value: null },
+        { column: "id", op: "eq", value: "e9" }
+      ],
+      order: [{ column: "created_at", ascending: false }],
+      limit: 1
+    });
+  });
+
+  it("getEmailLogRow returns null when the box has no such row", async () => {
+    vi.mocked(readMovedRows).mockResolvedValueOnce([] as never);
+    expect(await getEmailLogRow(BIZ, "gone", centralDb({}))).toBeNull();
   });
 });
 

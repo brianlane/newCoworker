@@ -21,6 +21,7 @@ import {
   EMAIL_LOG_DEFAULT_LIMIT,
   EMAIL_LOG_MAX_LIMIT,
   getEmailBody,
+  getEmailLogRow,
   listEmailLog,
   listEmailLogForAddress,
   recordInboundTriggerEmail,
@@ -185,6 +186,54 @@ describe("listEmailLogForAddress", () => {
     const c = addressChain({ data: [], error: null });
     defaultClientSpy.mockResolvedValueOnce(makeDb(c));
     await expect(listEmailLogForAddress("biz", "a@x.com")).resolves.toEqual([]);
+  });
+});
+
+describe("getEmailLogRow", () => {
+  /**
+   * The deep link in the HQ alert names one row by id. The Emails page renders
+   * only the newest 100, and the reading pane resolves its selection against
+   * that array, so without this fetcher a link tapped days later opens the
+   * page to nothing.
+   */
+  it("returns the normalized row for an id inside the business", async () => {
+    const c = singleChain({ data: ROW, error: null });
+    expect(await getEmailLogRow("biz", "e1", makeDb(c) as never)).toEqual({
+      ...ROW,
+      is_read: false,
+      archived_at: null,
+      folder: null,
+      labels: []
+    });
+    // Scoped by business AND excluding soft-deleted rows: a guessed uuid must
+    // never read another tenant's mail.
+    expect(c.eqBiz).toHaveBeenCalledWith("business_id", "biz");
+    expect(c.eqId).toHaveBeenCalledWith("id", "e1");
+    expect(c.is).toHaveBeenCalledWith("deleted_at", null);
+  });
+
+  it("returns null for an id that is missing or belongs to someone else", async () => {
+    const c = singleChain({ data: null, error: null });
+    expect(await getEmailLogRow("biz", "nope", makeDb(c) as never)).toBeNull();
+  });
+
+  it("returns null for a blank id without touching the database", async () => {
+    const c = singleChain({ data: ROW, error: null });
+    expect(await getEmailLogRow("biz", "   ", makeDb(c) as never)).toBeNull();
+    expect(c.select).not.toHaveBeenCalled();
+  });
+
+  it("throws on a query error rather than pretending the row is gone", async () => {
+    const c = singleChain({ data: null, error: { message: "boom" } });
+    await expect(getEmailLogRow("biz", "e1", makeDb(c) as never)).rejects.toThrow(
+      "getEmailLogRow: boom"
+    );
+  });
+
+  it("falls back to the default service client when none is passed", async () => {
+    const c = singleChain({ data: ROW, error: null });
+    defaultClientSpy.mockResolvedValue(makeDb(c));
+    expect((await getEmailLogRow("biz", "e1"))?.id).toBe(ROW.id);
   });
 });
 

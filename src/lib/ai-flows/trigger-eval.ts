@@ -187,6 +187,13 @@ export function emailTriggerScope(
     // Same rule: a blank Message-Id must not look like a real one, or a reply
     // would be threaded against nothing.
     ...(msg.messageRef ? { message_ref: msg.messageRef } : {}),
+    // WHO ELSE IS ON THIS. An introduction names the prospect in the body but
+    // puts them on To or Cc, and a drafter that cannot see the recipient list
+    // writes "Bobby, please reach out" to an email Bobby never receives (live,
+    // Aug 6 2026: James referred Bobby and never included his address). A step
+    // can now check before addressing anyone.
+    ...(msg.toRecipients ? { to: msg.toRecipients } : {}),
+    ...(msg.ccRecipients ? { cc: msg.ccRecipients } : {}),
     ...(connectionId ? { connection_id: connectionId } : {}),
     ...(msg.receivedAt ? { received_at: msg.receivedAt } : {})
   };

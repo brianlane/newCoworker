@@ -787,7 +787,8 @@ export function EmailsList({
   replayFlows = [],
   initialView = "all",
   initialFolder = "",
-  initialLabel = ""
+  initialLabel = "",
+  initialSelectedId = ""
 }: {
   rows: EmailLogRow[];
   businessId: string;
@@ -807,9 +808,16 @@ export function EmailsList({
     | "unread";
   initialFolder?: string;
   initialLabel?: string;
+  /**
+   * Row to open on load, from `/dashboard/emails?id=…`. This is what the SMS
+   * alert links to: the owner taps it on a phone and lands on the message
+   * itself. Seeded straight into state rather than synced by an effect, so
+   * closing the pane stays closed (the URL is not rewritten on close).
+   */
+  initialSelectedId?: string;
 }) {
   const router = useRouter();
-  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(initialSelectedId || null);
   const [composer, setComposer] = useState<ComposerState | null>(null);
   const unmatchedIds = rows.filter(isUnmatchedInbound).map((r) => r.id);
   const [query, setQuery] = useState("");

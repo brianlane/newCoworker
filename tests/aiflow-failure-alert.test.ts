@@ -178,6 +178,21 @@ describe("sendAiflowFailureAlert", () => {
     expect(fetchFn).not.toHaveBeenCalled();
   });
 
+  it("covers every lead-intake channel, including the connected mailbox", async () => {
+    // `email` is the CONNECTED-mailbox poller, the twin of tenant_email's AI
+    // mailbox, and it was NOT in the guarded class until Aug 7 2026. That gap
+    // is why the HQ team-inbox reply drafter failed silently on a real
+    // introduction: the run dead-lettered, nothing paged Brian, and the
+    // prospect never heard back.
+    for (const channel of ["tenant_email", "email", "webhook"]) {
+      const fetchFn = okFetch();
+      const { db } = makeDb([OPTED_IN, NO_PRIOR]);
+      const result = await sendAiflowFailureAlert(db, baseInput(fetchFn, { trigger: { channel } }));
+      expect(result, channel).toBe("sent");
+      expect(fetchFn, channel).toHaveBeenCalledTimes(1);
+    }
+  });
+
   it("simulated test runs never alert (boolean or stringly-typed marker)", async () => {
     const fetchFn = okFetch();
     const { db, calls } = makeDb([]);

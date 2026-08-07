@@ -433,7 +433,13 @@ describe("pollEmailTriggers", () => {
         trigger: expect.objectContaining({
           thread_id: "199abc4d5e6f7890",
           message_ref: "<CAJ=intro@mail.gmail.com>",
-          subject: "Re: Introductions"
+          subject: "Re: Introductions",
+          // The recipient list, on the SCOPE and not merely on the email_log
+          // row. A drafter that cannot see who is on the mail writes "Bobby,
+          // please reach out" to an email Bobby never receives. Asserting only
+          // the log row is how message_ref reached production unreferenceable.
+          to: "Brian <brian@newcoworker.com>, king@clinic.example.com",
+          cc: "assistant@kypads.com"
         })
       }),
       expect.anything()
@@ -554,6 +560,10 @@ describe("pollEmailTriggers", () => {
     );
     // No threadId on this fixture's response: the key is omitted, not blank.
     expect(vi.mocked(enqueueAiFlowRun).mock.calls[0][0].trigger).not.toHaveProperty("thread_id");
+    // Same for the recipients: omitted, never blank, so step 1 of the drafter's
+    // check ("is the To line blank?") sees a genuinely empty line.
+    expect(vi.mocked(enqueueAiFlowRun).mock.calls[0][0].trigger).not.toHaveProperty("to");
+    expect(vi.mocked(enqueueAiFlowRun).mock.calls[0][0].trigger).not.toHaveProperty("cc");
     // The triggering email is recorded for the dashboard Emails page.
     expect(recordInboundTriggerEmail).toHaveBeenCalledTimes(1);
     expect(recordInboundTriggerEmail).toHaveBeenCalledWith(

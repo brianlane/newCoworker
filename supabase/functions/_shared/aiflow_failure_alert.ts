@@ -2,8 +2,8 @@
  * Opt-in owner alert for permanently failed (dead-lettered) lead-intake
  * AiFlow runs — Truly Insurance feedback, 2026-07-13.
  *
- * A failed `tenant_email` / `webhook` run means a lead form arrived and the
- * automation died: previously the only trace was an error-level system log
+ * A failed `tenant_email` / `email` / `webhook` run means a lead reached us and
+ * the automation died: previously the only trace was an error-level system log
  * nobody watches (PR #558 gave dead-lettered customer TEXTS an owner page;
  * flow runs never got the same treatment). This module notifies the owner
  * through the notifications Edge function (SMS / email / dashboard per
@@ -11,7 +11,7 @@
  * in via `notification_preferences.aiflow_failure_alerts` (default false).
  *
  * Guard rails, in order:
- *   1. lead-intake triggers only (tenant_email / webhook) — contact-event,
+ *   1. lead-intake triggers only (tenant_email / email / webhook): contact-event,
  *      manual, and scheduled runs re-run routinely and have their own
  *      surfaces;
  *   2. never for simulated test runs (trigger.test_mode);
@@ -28,8 +28,16 @@
 /** coworker_logs-shaped task_type routed through the notifications function. */
 export const AIFLOW_FAILURE_TASK_TYPE = "aiflow_run_failed";
 
-/** Trigger channels that represent an inbound lead (the guarded class). */
-const LEAD_INTAKE_CHANNELS = ["tenant_email", "webhook"];
+/**
+ * Trigger channels that represent an inbound lead (the guarded class).
+ *
+ * `email` is the CONNECTED-mailbox poller, the twin of `tenant_email`'s AI
+ * mailbox, and it was missing here until Aug 7 2026. That gap is what made the
+ * HQ team-inbox drafter fail silently: a run died on an introduction from a
+ * real prospect, and the only trace was a system log nobody reads. Both
+ * channels carry a stranger's first contact, so both page the owner.
+ */
+const LEAD_INTAKE_CHANNELS = ["tenant_email", "email", "webhook"];
 
 // Minimal structural client (the _shared convention).
 // deno-lint-ignore no-explicit-any

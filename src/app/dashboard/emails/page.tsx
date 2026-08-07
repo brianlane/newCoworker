@@ -14,7 +14,7 @@ import { getAuthUser } from "@/lib/auth";
 import { resolveDashboardOwnerEmail } from "@/lib/admin/view-as";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { Card } from "@/components/ui/Card";
-import { listEmailLog } from "@/lib/db/email-log";
+import { getEmailLogRow, listEmailLog } from "@/lib/db/email-log";
 import {
   coerceEmailsViewFilter,
   emailListFiltersFromView,
@@ -31,13 +31,21 @@ export const dynamic = "force-dynamic";
 export default async function DashboardEmailsPage({
   searchParams
 }: {
-  searchParams: Promise<{ view?: string; folder?: string; label?: string }>;
+  searchParams: Promise<{ view?: string; folder?: string; label?: string; id?: string }>;
 }) {
   const t = await getTranslations("dashboard.pages");
   const user = await getAuthUser();
-  if (!user?.email) redirect("/login?redirectTo=/dashboard/emails");
-
   const sp = await searchParams;
+  const selectedId = typeof sp.id === "string" ? sp.id.trim() : "";
+  if (!user?.email) {
+    // Keep the id across the login bounce, or the owner lands on the right
+    // page with the wrong message open (which is the whole point of the link).
+    const back = selectedId
+      ? `/dashboard/emails?id=${encodeURIComponent(selectedId)}`
+      : "/dashboard/emails";
+    redirect(`/login?redirectTo=${encodeURIComponent(back)}`);
+  }
+
   const folderFilter = typeof sp.folder === "string" ? sp.folder.trim() : "";
   const labelFilter = typeof sp.label === "string" ? sp.label.trim() : "";
   const viewFilter = coerceEmailsViewFilter(parseEmailsViewFilter(sp.view), folderFilter);
@@ -83,15 +91,26 @@ export default async function DashboardEmailsPage({
     );
   }
 
-  const [rows, fromOptions, flows] = await Promise.all([
+  const [listRows, fromOptions, flows, linkedRow] = await Promise.all([
     listEmailLog(business.id, listFilters),
     // Best-effort: on any failure the composer falls back to coworker-only send.
     listSendFromOptions(business.id).catch(() => []),
     // Replay targets ("Replay through flow" on unmatched inbox mail): enabled
     // flows that read the AI mailbox. Best-effort — no flows just hides the
     // action.
-    listAiFlows(business.id).catch(() => [])
+    listAiFlows(business.id).catch(() => []),
+    // The row a deep link names, fetched separately so a link tapped days
+    // later still opens: the list above is capped at the newest 100, and the
+    // reading pane resolves its selection against that array. Best-effort, so
+    // a bad or foreign id just opens the page normally.
+    selectedId ? getEmailLogRow(business.id, selectedId).catch(() => null) : null
   ]);
+  // Prepend when the linked row fell outside the list query (age, or a view
+  // filter that excludes its source). Never duplicate one already present.
+  const rows =
+    linkedRow && !listRows.some((r) => r.id === linkedRow.id)
+      ? [linkedRow, ...listRows]
+      : listRows;
   // Same gate as the replay route: only flows that file the lead before any
   // outreach can guarantee a replay never re-texts an existing contact.
   const replayFlows = flows
@@ -136,6 +155,7 @@ export default async function DashboardEmailsPage({
         initialView={viewFilter}
         initialFolder={folderFilter}
         initialLabel={labelFilter}
+        initialSelectedId={selectedId}
       />
     </div>
   );
