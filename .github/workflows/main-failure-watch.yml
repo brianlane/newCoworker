@@ -7,14 +7,23 @@ name: Main Failure Watch
 # ("error running container: exit 135") that sat unnoticed until a human
 # happened to look at the Actions tab.
 #
-# Policy, mirroring the nightly e2e's noise discipline:
-#   - attempt 1 fails  → re-run ONLY the failed jobs automatically (plus
-#     their dependents, GitHub re-runs the skipped downstream chain).
-#     Transient runner/CLI blips self-heal with zero human involvement.
-#   - attempt 2+ fails → the failure is real (it reproduced back-to-back on
-#     fresh runners): email the admin with the run link. No further
-#     auto-retries: retrying a real failure just delays the human.
+# Policy, mirroring the nightly e2e's noise discipline. The decision lives in
+# .github/scripts/main-failure-triage.sh, which is covered by
+# tests/main-failure-triage.test.ts:
+#   - attempt 1 fails → re-run ONLY the failed jobs automatically (plus their
+#     dependents, GitHub re-runs the skipped downstream chain). Transient
+#     runner/CLI blips self-heal with zero human involvement.
+#   - attempt 2 fails the SAME way → real: email the admin with the run link,
+#     no extra delay.
+#   - attempt 2 fails a DIFFERENT way → two unrelated blips, not one bug:
+#     re-run once more before waking anyone.
+#   - attempt 3+ fails → email whatever the causes.
 #   - success at any point → silence.
+#
+# The old rule stopped at "failed twice, therefore real", which assumes the
+# same cause reproduced. On 2026-08-06 two unrelated transient Supabase
+# failures 30 seconds apart were reported as one real bug, and a human ran the
+# attempt 3 that went green. See the script header for the full case.
 #
 # Scope: push-to-main runs of the CI workflow only. PR-run failures are
 # excluded on purpose: they are watched by whoever is babysitting the PR
@@ -27,11 +36,19 @@ on:
     branches: [main]
 
 permissions:
+  # actions: write to re-run the failed jobs. contents: read is what lets
+  # actions/checkout fetch the triage script: an explicit permissions block
+  # DENIES every scope it omits, so leaving it out does not fall back to a
+  # default, it fails the checkout and the job never gets as far as retrying
+  # or alerting. This workflow needed no checkout until the logic moved into
+  # .github/scripts/main-failure-triage.sh, which is why it is the only
+  # workflow here that was missing it.
   actions: write
+  contents: read
 
 jobs:
   triage:
-    name: Retry once, then alert
+    name: Retry, then alert
     # Only failed PUSH runs on main; everything else is out of scope.
     if: >-
       github.event.workflow_run.conclusion == 'failure' &&
@@ -39,7 +56,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
-      - name: Re-run failed jobs (attempt 1) or email the admin (attempt 2+)
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Retry or alert, based on whether the failures match
         env:
           GH_TOKEN: ${{ github.token }}
           RESEND_API_KEY: ${{ secrets.RESEND_API_KEY }}
@@ -48,45 +68,4 @@ jobs:
           RUN_URL: ${{ github.event.workflow_run.html_url }}
           RUN_TITLE: ${{ github.event.workflow_run.display_title }}
           REPO: ${{ github.repository }}
-        run: |
-          if [ "$RUN_ATTEMPT" -lt 2 ]; then
-            echo "push-to-main run $RUN_ID failed on attempt $RUN_ATTEMPT, re-running failed jobs (transient-blip policy)."
-            gh api -X POST "repos/$REPO/actions/runs/$RUN_ID/rerun-failed-jobs"
-            exit 0
-          fi
-          echo "push-to-main run $RUN_ID failed on attempt $RUN_ATTEMPT: real failure, emailing the admin."
-          if [ -z "$RESEND_API_KEY" ]; then
-            echo "::warning::RESEND_API_KEY secret is not set: cannot email the admin. Set it (gh secret set RESEND_API_KEY) or watch the Actions tab."
-            exit 0
-          fi
-          # The wording must match what ACTUALLY happened (Bugbot on PR
-          # #864, twice): the e2e job runs AFTER Vercel Deploy on push
-          # runs, so a run can fail with production fully updated, but a
-          # run can ALSO fail upstream, leaving Vercel Deploy SKIPPED (not
-          # failed), in which case production did NOT update either. The
-          # only state that earns the calmer wording is the Vercel Deploy
-          # job concluding literally "success"; every other shape,
-          # failure, skipped, cancelled, missing, or an error listing the
-          # jobs, reads as a blocked deploy (the scarier reading is the
-          # safe default for a human to verify).
-          jobs_json=$(gh api "repos/$REPO/actions/runs/$RUN_ID/jobs?filter=latest" --paginate 2>/dev/null) || jobs_json=""
-          deploy_conclusion=$(jq -rs '[.[].jobs[] | select(.name == "Vercel Deploy")] | last | .conclusion // "unknown"' <<<"$jobs_json" 2>/dev/null) || deploy_conclusion="unknown"
-          failed_jobs=$(jq -rs '[.[].jobs[] | select(.conclusion == "failure") | .name] | unique | join(", ")' <<<"$jobs_json" 2>/dev/null) || failed_jobs=""
-          if [ "$deploy_conclusion" = "success" ]; then
-            SUBJECT="Main CI FAILED twice after deploy: $RUN_TITLE"
-            DETAIL="The Vercel Deploy job succeeded, production IS updated, but a post-deploy job failed twice: ${failed_jobs:-unknown}. Treat a failed live e2e here as a possible AI regression that just shipped."
-          else
-            SUBJECT="Main deploy FAILED twice, production did not update: $RUN_TITLE"
-            DETAIL="Until this run is green, production has NOT received this merge: pending migrations, edge functions, and the Vercel app deploy are all blocked (they ride the Vercel Deploy job, whose conclusion on this run is: ${deploy_conclusion}). Failed jobs: ${failed_jobs:-unknown}."
-          fi
-          BODY=$(jq -n --arg url "$RUN_URL" --arg subject "$SUBJECT" --arg detail "$DETAIL" '{
-            from: "New Coworker <contact@newcoworker.com>",
-            to: ["team@newcoworker.com"],
-            subject: $subject,
-            text: ("The push-to-main CI run failed, was automatically re-run once, and failed again. This is a real failure, not a runner blip.\n\nRun: " + $url + "\n\n" + $detail + " Read the failed job log, fix or revert, and re-run.\n\nCI (main-failure-watch.yml)")
-          }')
-          curl -fsS https://api.resend.com/emails \
-            -H "Authorization: Bearer $RESEND_API_KEY" \
-            -H "Content-Type: application/json" \
-            -d "$BODY" > /dev/null && echo "Failure email sent to team@newcoworker.com" || \
-            echo "::warning::Failure email could not be sent (Resend API error): check the Actions tab."
+        run: bash .github/scripts/main-failure-triage.sh
