@@ -36,7 +36,15 @@ on:
     branches: [main]
 
 permissions:
+  # actions: write to re-run the failed jobs. contents: read is what lets
+  # actions/checkout fetch the triage script: an explicit permissions block
+  # DENIES every scope it omits, so leaving it out does not fall back to a
+  # default, it fails the checkout and the job never gets as far as retrying
+  # or alerting. This workflow needed no checkout until the logic moved into
+  # .github/scripts/main-failure-triage.sh, which is why it is the only
+  # workflow here that was missing it.
   actions: write
+  contents: read
 
 jobs:
   triage:
