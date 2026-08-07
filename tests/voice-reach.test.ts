@@ -1,3 +1,5 @@
+import { readFileSync } from "node:fs";
+import { join } from "node:path";
 import { describe, expect, it, vi } from "vitest";
 import {
   DEFAULT_REACH_RING_SECONDS,
@@ -7,6 +9,7 @@ import {
   encodeReachClientState,
   nextReachDecision,
   parseReachClientState,
+  reachOutcomeShouldApply,
   type ReachTarget
 } from "../supabase/functions/_shared/voice_reach";
 import { parseOutboundClientState } from "../supabase/functions/_shared/voice_outbound";
@@ -231,5 +234,101 @@ describe("telnyxBridgeCall", () => {
     );
     const body = JSON.parse(fetchMock.mock.calls[0][1].body as string);
     expect(Buffer.from(body.client_state as string, "base64").toString()).toBe("rt:biz:abc:0");
+  });
+});
+
+
+/**
+ * Only the FIRST outcome for an attempt counts. The webhook that records these
+ * sees a teammate who answers and then hangs up as TWO events on one leg, and
+ * letting the second land would rewrite a real conversation into a missed call
+ * and send the assistant off to ring the next person mid-handover.
+ */
+describe("reachOutcomeShouldApply", () => {
+  it("records the first outcome for an attempt", () => {
+    expect(reachOutcomeShouldApply(null, { attempt: 0, status: "answered" })).toBe(true);
+    expect(reachOutcomeShouldApply(undefined, { attempt: 0, status: "no_answer" })).toBe(true);
+    expect(reachOutcomeShouldApply({}, { attempt: 0, status: "answered" })).toBe(true);
+  });
+
+  // The case that matters: a teammate picked up and later hung up.
+  it("refuses to turn an answer into a miss on the same attempt", () => {
+    expect(
+      reachOutcomeShouldApply({ attempt: 1, status: "answered" }, { attempt: 1, status: "no_answer" })
+    ).toBe(false);
+  });
+
+  it("lets a NEWER attempt record its own outcome", () => {
+    // The ladder has moved on, so its outcome is the current truth.
+    expect(
+      reachOutcomeShouldApply({ attempt: 0, status: "answered" }, { attempt: 1, status: "no_answer" })
+    ).toBe(true);
+    expect(
+      reachOutcomeShouldApply({ attempt: 0, status: "no_answer" }, { attempt: 1, status: "answered" })
+    ).toBe(true);
+  });
+
+  // The ladder hangs up the previous leg as it moves on, so that leg's hangup
+  // can easily land AFTER the next teammate has answered. Letting it through
+  // would erase the pickup the bridge is polling for, and the assistant would
+  // apologize to a caller who actually got connected.
+  it("ignores an OLDER attempt reporting late", () => {
+    expect(
+      reachOutcomeShouldApply({ attempt: 1, status: "answered" }, { attempt: 0, status: "no_answer" })
+    ).toBe(false);
+    expect(
+      reachOutcomeShouldApply({ attempt: 2, status: "no_answer" }, { attempt: 0, status: "answered" })
+    ).toBe(false);
+  });
+
+  it("treats a malformed stored attempt as nothing recorded", () => {
+    expect(
+      reachOutcomeShouldApply({ attempt: "x", status: "answered" }, { attempt: 0, status: "no_answer" })
+    ).toBe(true);
+  });
+
+  it("lets a miss be upgraded to an answer on the same attempt", () => {
+    // Webhook ordering is not guaranteed; an answer is the more specific fact
+    // and should win over a miss recorded for the same attempt.
+    expect(
+      reachOutcomeShouldApply({ attempt: 2, status: "no_answer" }, { attempt: 2, status: "answered" })
+    ).toBe(true);
+  });
+});
+
+/**
+ * The precedence rule exists twice on purpose: once readable and unit-tested
+ * here, and once inside `record_reach_outcome` so two concurrent webhooks
+ * cannot both read the same prior state and race, which is how an `answered`
+ * gets dropped. Duplication is the cost of atomicity, so this pins that the
+ * SQL still expresses the same three clauses.
+ */
+describe("record_reach_outcome mirrors the rule", () => {
+  const sql = readFileSync(
+    join(__dirname, "../supabase/migrations/20260822095141_record_reach_outcome.sql"),
+    "utf8"
+  );
+
+  it("writes when nothing is recorded yet", () => {
+    expect(sql).toContain("context -> 'reach' is null");
+  });
+
+  it("lets a newer attempt win and an older one fall through", () => {
+    expect(sql).toContain("(context -> 'reach' ->> 'attempt')::int < p_attempt");
+    // No clause admits a lower attempt, which is what makes a late event from
+    // an abandoned leg a no-op rather than an erasure.
+    expect(sql).not.toContain("> p_attempt");
+  });
+
+  it("refuses to downgrade an answer to a miss on the same attempt", () => {
+    expect(sql).toContain("context -> 'reach' ->> 'status' = 'answered'");
+    expect(sql).toContain("p_status = 'no_answer'");
+  });
+
+  // Returning whether THIS call wrote is what lets the webhook tell a
+  // superseded delivery from a failed one.
+  it("reports whether it was the writer", () => {
+    expect(sql).toContain("get diagnostics v_rows = row_count");
+    expect(sql).toContain("return v_rows > 0");
   });
 });

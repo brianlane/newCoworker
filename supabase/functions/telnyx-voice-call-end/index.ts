@@ -36,6 +36,7 @@ import {
   isAmdEvent
 } from "../_shared/voice_amd.ts";
 import { CALL_REASON } from "../_shared/ai_flows/call_outcome_meta.ts";
+import { parseReachClientState } from "../_shared/voice_reach.ts";
 import {
   resumeFlowRunWithCallOutcome,
   type FlowRunLink
@@ -612,6 +613,64 @@ async function handleMachineDetection(
   }
 
   return await stampMachineAndHangUp(supabase, callControlId);
+}
+
+/**
+ * Record what happened to a "reach a teammate" B leg.
+ *
+ * The assistant dials a teammate on a SEPARATE leg while the caller keeps
+ * talking to it, so the caller never hears ringback and the assistant is still
+ * there to explain if nobody picks up. The bridge that placed that leg runs on
+ * a VPS and receives no webhooks, and Telnyx's call-status endpoint reports
+ * only `is_alive`, which is equally true of a phone that is merely ringing. So
+ * the one place that learns "they actually answered" is this webhook, and it
+ * writes that onto the CALLER's session where the bridge is already polling.
+ *
+ * Returns null for any leg that is not a reach attempt, so every other handler
+ * downstream is untouched.
+ */
+async function handleReachLeg(
+  supabase: SupabaseClient,
+  eventType: string,
+  payload: Record<string, unknown>
+): Promise<Response | null> {
+  const state = parseReachClientState(payload["client_state"] as string | undefined);
+  if (!state) return null;
+  const bLeg = String(payload["call_control_id"] ?? "");
+  const status = eventType === "call.answered" ? "answered" : "no_answer";
+
+  // One statement, not read-modify-write. `call.answered` and `call.hangup`
+  // are separate deliveries and can be in flight together, so reading the
+  // prior state here and writing it back would let both decide they may write
+  // and let the later one win. If the loser is the `answered`, the bridge
+  // never learns the teammate picked up: it apologizes to a caller who
+  // actually got through and leaves the teammate holding a dead line.
+  //
+  // The precedence lives in record_reach_outcome, mirroring
+  // reachOutcomeShouldApply, which is the readable rule with the unit tests.
+  const { data: wrote, error } = await supabase.rpc("record_reach_outcome", {
+    p_a_leg: state.aLegCallControlId,
+    p_attempt: state.attempt,
+    p_status: status,
+    p_b_leg: bLeg
+  });
+  if (error) {
+    // The bridge falls back to its own ring timeout, so a lost stamp costs a
+    // slower move to the next teammate rather than a stuck call.
+    console.error("reach: outcome stamp failed", error);
+    return jsonOk("reach_stamp_failed");
+  }
+  // A superseded event (an older attempt reporting late, or a hangup after the
+  // same attempt answered) is a normal, expected delivery, not a failure.
+  if (wrote !== true) return jsonOk("reach_superseded");
+  await telemetryRecord(supabase, "voice_reach_leg", {
+    business_id: state.businessId,
+    a_leg: state.aLegCallControlId,
+    b_leg: bLeg,
+    attempt: state.attempt,
+    status
+  });
+  return jsonOk(`reach_${status}`);
 }
 
 /** Has a machine verdict already been recorded for this leg? */
@@ -1454,6 +1513,14 @@ serve(async (req: Request) => {
   // lead who never heard a word.
   if (isAmdEvent(eventType)) {
     return await handleMachineDetection(supabase, eventType, data?.payload ?? {});
+  }
+
+  // A "reach a teammate" B leg. Recorded before the outbound handler so a leg
+  // the assistant dialed to FIND someone is never mistaken for the callee's own
+  // leg and handed an AI bridge.
+  if (eventType === "call.answered" || eventType === "call.hangup") {
+    const reach = await handleReachLeg(supabase, eventType, data?.payload ?? {});
+    if (reach) return reach;
   }
 
   // Outbound origination: a callee answered an AiFlow-placed call. Attach the AI

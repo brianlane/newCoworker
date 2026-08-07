@@ -153,3 +153,48 @@ export function clampReachRingSeconds(value: unknown): number {
   if (n > MAX_REACH_RING_SECONDS) return MAX_REACH_RING_SECONDS;
   return n;
 }
+
+
+/** What a reach attempt's outcome looks like on the caller's session row. */
+export type ReachOutcomeStamp = {
+  attempt: number;
+  status: "answered" | "no_answer";
+  b_leg: string;
+};
+
+/**
+ * Should this B-leg event overwrite what is already recorded?
+ *
+ * Losing an outcome costs a real caller. If an `answered` is dropped the bridge
+ * never learns the teammate picked up, so it apologizes to somebody who
+ * actually got through and leaves the teammate holding a dead line. Two ways
+ * that can happen:
+ *
+ *   1. SAME attempt, answer then hangup. A teammate who picks up and later
+ *      hangs up produces both events on one leg, and the hangup must not
+ *      rewrite a real conversation into a missed call.
+ *   2. An OLDER attempt reporting late. The ladder hangs up the previous leg as
+ *      it moves on, so that hangup can land after the next teammate has already
+ *      answered. An older attempt never overwrites a newer one.
+ *
+ * A NEWER attempt always wins: the ladder has moved on and its outcome is the
+ * current truth.
+ *
+ * This function is the SPECIFICATION of the rule. Under concurrent webhooks it
+ * is enforced by the `record_reach_outcome` SQL function, which evaluates the
+ * same three clauses inside a single statement so two events cannot both read
+ * the same prior and race. Keep the two in step.
+ */
+export function reachOutcomeShouldApply(
+  prior: { attempt?: unknown; status?: unknown } | null | undefined,
+  incoming: { attempt: number; status: "answered" | "no_answer" }
+): boolean {
+  if (!prior) return true;
+  const priorAttempt = typeof prior.attempt === "number" ? prior.attempt : -1;
+  // A late event from an attempt the ladder has already left behind. The
+  // previous leg is hung up as the ladder moves on, so its hangup can easily
+  // land AFTER the next teammate has answered.
+  if (priorAttempt > incoming.attempt) return false;
+  if (priorAttempt < incoming.attempt) return true;
+  return !(prior.status === "answered" && incoming.status === "no_answer");
+}
