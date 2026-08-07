@@ -159,6 +159,52 @@ export async function hasRecentNotificationForContact(
   return (count ?? 0) > 0;
 }
 
+/**
+ * How many notifications of this kind were SENT about this contact within
+ * the window. Powers the urgent-alert cooldown: the bot-vs-bot loop on
+ * 2026-08-07 fired seventeen "[Coworker] Follow up with Aaron" alerts in ten
+ * minutes, one per loop lap, each by SMS and email. `payload->>about_e164`
+ * is the contact the alert concerns (stamped by dispatchUrgentNotification),
+ * not the recipient: the same runaway source pages the owner however the
+ * alert gets routed.
+ */
+export async function countRecentNotificationsAbout(
+  businessId: string,
+  kind: string,
+  aboutE164: string,
+  windowMs: number,
+  client?: SupabaseClient
+): Promise<number> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const sinceIso = new Date(Date.now() - windowMs).toISOString();
+  const { data, error } = await db
+    .from("notifications")
+    .select("payload->dispatch_id")
+    .eq("business_id", businessId)
+    .eq("kind", kind)
+    .eq("status", "sent")
+    .eq("payload->>about_e164", aboutE164)
+    .gte("created_at", sinceIso)
+    .limit(100);
+  if (error) throw new Error(`countRecentNotificationsAbout: ${error.message}`);
+  // One dispatch writes one row PER CHANNEL (dashboard, email, sms, ...), so
+  // counting rows would treat a single three-channel alert as three alerts
+  // and trip any small cap immediately. Distinct dispatch_id counts alert
+  // EVENTS. Rows from before the stamp existed (or with it stripped) each
+  // count as one event, which over-counts toward the cap rather than under:
+  // the safe direction for a flood limiter.
+  const seen = new Set<string>();
+  let unstamped = 0;
+  for (const row of (data ?? []) as { dispatch_id?: unknown }[]) {
+    if (typeof row.dispatch_id === "string" && row.dispatch_id.length > 0) {
+      seen.add(row.dispatch_id);
+    } else {
+      unstamped += 1;
+    }
+  }
+  return seen.size + unstamped;
+}
+
 export async function markNotificationRead(
   notificationId: string,
   businessId: string,

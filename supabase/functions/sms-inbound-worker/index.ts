@@ -78,6 +78,7 @@ import {
   parseTapback,
   type Tapback
 } from "../_shared/sms_tapback.ts";
+import { autoResponderVerdict, isReplyFlood } from "../_shared/sms_auto_responder.ts";
 import {
   assistantMessageInvitesReply,
   formatEmojiOnlyAnswerNote,
@@ -1144,6 +1145,104 @@ serve(async (req: Request) => {
         continue;
       }
       reactionNote = formatTapbackAnswerNote(inboundTapback);
+    }
+
+    // Bot-vs-bot loop guard (Amy Laidlaw, 2026-08-07): HomeLight's automated
+    // number was saved as a customer contact, the coworker replied to its
+    // robotic notice, HomeLight's "this phone number is not monitored"
+    // auto-responder answered THAT, and the two machines thanked each other
+    // every ~30s while each lap fired an urgent owner alert. A loop needs
+    // both sides talking, so our side stops: an inbound worded like a
+    // do-not-reply notice, or repeating the sender's own recent text at
+    // machine fidelity, gets NO generated reply. Customer jobs only, same
+    // position and bookkeeping as the tapback branch above. The history
+    // lookup runs only when the cheap wording check does not already decide,
+    // and a failed lookup fails open to replying, like every other gate here.
+    if (!job.staff_kind) {
+      let loopVerdict = autoResponderVerdict([], userText);
+      if (!loopVerdict.suppress) {
+        try {
+          // One query serves both slower detectors: the newest bodies feed
+          // the identical-repeat check, and the number of rows that already
+          // carry a generated reply feeds the rate breaker. Only the newest
+          // few bodies are compared (a repeat loop is always recent), but
+          // replies are counted across the whole fetched window.
+          const { data: recentRows } = await supabase
+            .from("sms_inbound_jobs")
+            .select("payload, assistant_reply_text")
+            .eq("business_id", job.business_id)
+            .eq("customer_e164", fromE164)
+            .neq("id", job.id)
+            .gte("created_at", new Date(Date.now() - 60 * 60 * 1000).toISOString())
+            .is("deleted_at", null)
+            .order("created_at", { ascending: false })
+            .limit(40);
+          const rows = (recentRows ?? []) as { payload: unknown; assistant_reply_text?: string | null }[];
+          const recentBodies = rows.slice(0, 8).map((r) => {
+            const env = r.payload as { data?: { payload?: Record<string, unknown> } };
+            return inboundPayloadText(env?.data?.payload ?? {});
+          });
+          loopVerdict = autoResponderVerdict(recentBodies, userText);
+          // The circuit breaker: rate is the one signature a loop cannot
+          // avoid. Catches bot-vs-bot loops where the OTHER side varies its
+          // wording every lap, which slips both content detectors above.
+          if (!loopVerdict.suppress) {
+            const repliesInWindow = rows.filter(
+              (r) => typeof r.assistant_reply_text === "string" && r.assistant_reply_text.length > 0
+            ).length;
+            if (isReplyFlood(repliesInWindow)) {
+              loopVerdict = { suppress: true, reason: "reply_flood" };
+            }
+          }
+        } catch (err) {
+          console.error("auto-responder history lookup failed", err);
+        }
+      }
+      if (loopVerdict.suppress) {
+        await supabase.rpc("complete_sms_inbound_job", {
+          p_job_id: job.id,
+          p_status: "done",
+          p_telnyx_outbound_message_id: null,
+          p_rowboat_conversation_id: null,
+          p_last_error: `suppressed_auto_responder:${loopVerdict.reason}`
+        });
+        await clearJobReplyCache(supabase, job.id);
+        // The inbound is still a real message on the thread: stamp the
+        // sender and bump counters so the dashboard shows what arrived even
+        // though nothing was said back.
+        const { error: stampErr } = await supabase
+          .from("sms_inbound_jobs")
+          .update({ customer_e164: fromE164 })
+          .eq("id", job.id)
+          .is("customer_e164", null);
+        if (stampErr) {
+          console.error("auto-responder customer_e164 stamp", stampErr);
+        }
+        const { error: memErr } = await supabase.rpc("record_customer_interaction", {
+          p_business_id: job.business_id,
+          p_customer_e164: fromE164,
+          p_channel: "sms",
+          p_display_name: null
+        });
+        if (memErr) {
+          console.error("record_customer_interaction (auto-responder sms)", memErr);
+        }
+        await telemetryRecord(supabase, "sms_worker_suppressed_auto_responder", {
+          job_id: job.id,
+          business_id: job.business_id,
+          reason: loopVerdict.reason
+        });
+        await systemLog(supabase, {
+          businessId: job.business_id,
+          source: "sms_worker",
+          level: "warn",
+          event: "sms_auto_responder_suppressed",
+          message: `No reply sent to ${fromE164}: ${loopVerdict.reason}`,
+          payload: { job_id: job.id, preview: userText.slice(0, 120) }
+        });
+        processed += 1;
+        continue;
+      }
     }
 
     // Bare acknowledgments ("Ok", "Okay 👍", "Thanks") get NO generated

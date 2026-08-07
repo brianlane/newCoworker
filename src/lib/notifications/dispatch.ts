@@ -26,6 +26,7 @@ import { randomUUID } from "node:crypto";
 import { getBusiness } from "@/lib/db/businesses";
 import { getOrCreateNotificationPreferences } from "@/lib/db/notification-preferences";
 import {
+  countRecentNotificationsAbout,
   insertNotification,
   type NotificationDeliveryChannel,
   type NotificationRow,
@@ -333,6 +334,14 @@ async function recordRow(
  * Send urgent owner alerts across the configured channels and write a
  * `notifications` row for every channel attempted.
  */
+/**
+ * The urgent-alert flood cap: how many SENT alerts about one contact fit in
+ * the window before further ones are skipped. Exported so tests pin the
+ * policy numbers rather than restating them.
+ */
+export const URGENT_ALERT_COOLDOWN_WINDOW_MS = 30 * 60 * 1000;
+export const URGENT_ALERT_COOLDOWN_MAX = 2;
+
 export async function dispatchUrgentNotification(
   input: DispatchInput
 ): Promise<DispatchResult> {
@@ -351,6 +360,12 @@ export async function dispatchUrgentNotification(
   const payload: Record<string, unknown> = {
     summary,
     ...(input.payload ?? {}),
+    // The contact this alert is ABOUT (not who receives it) plus a
+    // per-dispatch id. Together they are what countRecentNotificationsAbout
+    // keys the cooldown below on: about_e164 selects the rows, dispatch_id
+    // collapses this dispatch's one-row-per-channel fan-out to one event.
+    ...(input.contactE164 ? { about_e164: input.contactE164 } : {}),
+    dispatch_id: randomUUID(),
     // Why this alert reached whoever it reached — mirrors the
     // notify_lead_owner step's target/matched_by so run history and the
     // dashboard can both explain a recipient.
@@ -365,6 +380,51 @@ export async function dispatchUrgentNotification(
       : {})
   };
   const results: DispatchChannelResult[] = [];
+
+  // Per-contact flood cooldown (Amy Laidlaw, 2026-08-07): a bot-vs-bot SMS
+  // loop fired notify_team once per lap, seventeen "[Coworker] Follow up
+  // with Aaron" alerts in ten minutes, each by SMS AND email. Alerts about
+  // one contact are capped: once URGENT_ALERT_COOLDOWN_MAX have been sent
+  // about the same number inside the window, further ones write skipped
+  // history rows and deliver nothing. Two legitimate alerts about the same
+  // person in half an hour still land; the third-plus is a flood by any
+  // cause. Only alerts that name a contact are gated (a business-wide alert
+  // has no about_e164 to key on), and a failed count fails open to sending:
+  // this gate must never be the reason an owner missed a real emergency.
+  if (input.contactE164) {
+    let recentCount = 0;
+    try {
+      recentCount = await countRecentNotificationsAbout(
+        input.businessId,
+        kind,
+        input.contactE164,
+        URGENT_ALERT_COOLDOWN_WINDOW_MS
+      );
+    } catch (err) {
+      logger.warn("notifications.dispatch: cooldown count failed, sending anyway", {
+        businessId: input.businessId,
+        error: err instanceof Error ? err.message : String(err)
+      });
+    }
+    if (recentCount >= URGENT_ALERT_COOLDOWN_MAX) {
+      const reason = "contact_alert_cooldown";
+      const gatedChannels = (["dashboard", "email", "sms", "whatsapp"] as const).filter(
+        (channel) => channel !== "whatsapp" || targets.whatsappConnected
+      );
+      for (const channel of gatedChannels) {
+        results.push(
+          await recordRow(input.businessId, channel, "skipped", summary, kind, payload, reason)
+        );
+      }
+      logger.warn("notifications.dispatch: contact alert cooldown engaged", {
+        businessId: input.businessId,
+        kind,
+        aboutE164: input.contactE164,
+        recentCount
+      });
+      return { results };
+    }
+  }
 
   // Category gate (BizBlasts-style per-event-type prefs): when the owner
   // switched this event's category off, no channel fires — but every channel
