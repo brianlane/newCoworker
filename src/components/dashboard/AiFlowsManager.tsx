@@ -879,6 +879,19 @@ function sanitizeStepForSave(step: FlowStep): FlowStep {
             preSmsTemplate: step.transfer.preSmsTemplate?.trim() || undefined
           }
         : undefined;
+    // reachTeammate: picker rows left empty are dropped; a block with no refs
+    // at all is dropped whole so the schema's min(1) never fires on an
+    // untouched optional block. A kept block supersedes transfer (one handoff
+    // style per step, and the checkbox UI enforces the same).
+    const reachRefs = (step.reachTeammate?.refs ?? []).filter(Boolean);
+    const reachTeammate =
+      step.reachTeammate && reachRefs.length > 0
+        ? {
+            ...step.reachTeammate,
+            refs: reachRefs,
+            preSmsTemplate: step.reachTeammate.preSmsTemplate?.trim() || undefined
+          }
+        : undefined;
     // notifyOwner is the tenant-neutral recipient and supersedes both explicit
     // ones, so the "exactly one summary recipient" rule passes even with stale
     // hidden state from before the box was checked.
@@ -888,7 +901,8 @@ function sanitizeStepForSave(step: FlowStep): FlowStep {
       notifyE164:
         step.notifyOwner || step.notifyRef ? undefined : step.notifyE164?.trim() || undefined,
       notifyRef: step.notifyOwner ? undefined : step.notifyRef,
-      transfer,
+      transfer: reachTeammate ? undefined : transfer,
+      reachTeammate,
       captureFields: captureFields.length > 0 ? captureFields : undefined
     };
   }
@@ -5584,7 +5598,12 @@ function StepFields({
             checked={transferOn}
             onChange={(ev) =>
               patchStep(index, {
-                transfer: ev.target.checked ? { toE164: "" } : undefined
+                transfer: ev.target.checked ? { toE164: "" } : undefined,
+                // One handoff style per step: mirror the reach checkbox,
+                // which clears transfer. Without this, checking transfer
+                // left the ladder in place and save-time cleanup silently
+                // kept the ladder and dropped the transfer.
+                ...(ev.target.checked ? { reachTeammate: undefined } : {})
               })
             }
           />
@@ -5619,7 +5638,89 @@ function StepFields({
                 })
               }
               textarea
-              help='e.g. "LIVE TRANSFER incoming — {{vars.lead_name}} ({{vars.lead_phone}}). Pick up!"'
+              help='e.g. "LIVE TRANSFER incoming: {{vars.lead_name}} ({{vars.lead_phone}}). Pick up!"'
+            />
+          </div>
+        )}
+        <label className="flex items-center gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
+            checked={Boolean(step.reachTeammate)}
+            onChange={(ev) =>
+              patchStep(index, {
+                reachTeammate: ev.target.checked ? { refs: [] } : undefined,
+                ...(ev.target.checked ? { transfer: undefined } : {})
+              })
+            }
+          />
+          Reach a teammate on a second line (the AI keeps them talking while phones ring)
+        </label>
+        {Boolean(step.reachTeammate) && (
+          <div className="space-y-2 rounded border border-parchment/10 p-2">
+            {[0, 1, 2].map((slot) => (
+              <ContactRefPicker
+                key={slot}
+                label={
+                  slot === 0
+                    ? "Try first (saved contact)"
+                    : slot === 1
+                      ? "Then try (optional)"
+                      : "Last resort (optional)"
+                }
+                placeholder="pick a saved contact"
+                textValue=""
+                refValue={step.reachTeammate?.refs?.[slot]}
+                people={people}
+                employeesOnly
+                onChangeText={() => undefined}
+                onChangeRef={(ref) => {
+                  const refs = [...(step.reachTeammate?.refs ?? [])];
+                  if (ref) refs[slot] = ref;
+                  else refs.splice(slot, 1);
+                  patchStep(index, {
+                    reachTeammate: { ...step.reachTeammate, refs: refs.filter(Boolean) }
+                  });
+                }}
+                help={
+                  slot === 0
+                    ? "Teammates ring IN ORDER on a separate line; the person on the call never hears ringback, and the AI explains honestly if nobody picks up."
+                    : undefined
+                }
+              />
+            ))}
+            <Field
+              label="Each phone rings for (seconds, optional)"
+              value={
+                step.reachTeammate?.ringSeconds === undefined
+                  ? ""
+                  : String(step.reachTeammate.ringSeconds)
+              }
+              onChange={(v) => {
+                const n = Number(v.trim());
+                patchStep(index, {
+                  reachTeammate: {
+                    refs: [],
+                    ...step.reachTeammate,
+                    ringSeconds: v.trim() && Number.isFinite(n) ? n : undefined
+                  }
+                });
+              }}
+              help="Default 20. After this long unanswered, the next teammate's phone rings."
+            />
+            <Field
+              label="Heads-up text sent to each teammate as their phone rings (optional)"
+              value={step.reachTeammate?.preSmsTemplate ?? ""}
+              onChange={(v) =>
+                patchStep(index, {
+                  reachTeammate: {
+                    refs: [],
+                    ...step.reachTeammate,
+                    preSmsTemplate: v.trim() ? v : undefined
+                  }
+                })
+              }
+              textarea
+              help='e.g. "Seller on the line NOW: {{vars.lead_name}} ({{vars.lead_phone}}). Pick up!"'
             />
           </div>
         )}

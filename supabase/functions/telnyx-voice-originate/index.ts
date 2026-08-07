@@ -346,7 +346,19 @@ serve(async (req: Request) => {
       chain_from_e164: callee,
       status: "ai_intake",
       current_step: 0,
-      context: { ...outboundSessionContext(plan), session_id: sessionId }
+      context: (() => {
+        const ctx = { ...outboundSessionContext(plan), session_id: sessionId };
+        // The bridge dials the reach B legs itself; hand it the connection
+        // and caller id this function already resolved for the A leg.
+        if (ctx.reach_targets) {
+          ctx.reach_targets = {
+            ...ctx.reach_targets,
+            connection_id: connectionId,
+            from_e164: fromDid
+          };
+        }
+        return ctx;
+      })()
     },
     { onConflict: "call_control_id" }
   );

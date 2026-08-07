@@ -702,6 +702,12 @@ export type StepAction =
       transferToRef?: ContactRef;
       /** Rendered pre-alert SMS body ("" = none configured). */
       preSmsBody: string;
+      /** Second-leg reach ladder targets, in order (mutually exclusive with transfer). */
+      reachRefs?: ContactRef[];
+      /** How long each reach target rings before the next one is tried. */
+      reachRingSeconds?: number;
+      /** Rendered reach pre-alert SMS body ("" = none configured). */
+      reachPreSmsBody?: string;
       captureFields?: string[];
       /** Per-step calling window, passed through for the worker to evaluate. */
       callWindow?: CallWindow;
@@ -1713,6 +1719,9 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
       const preSmsBody = step.transfer?.preSmsTemplate
         ? renderTemplate(step.transfer.preSmsTemplate, scope, { collapseEmpty: true }).trim()
         : "";
+      const reachPreSmsBody = step.reachTeammate?.preSmsTemplate
+        ? renderTemplate(step.reachTeammate.preSmsTemplate, scope, { collapseEmpty: true }).trim()
+        : "";
       const base = {
         kind: "place_ai_call" as const,
         persona,
@@ -1723,6 +1732,15 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
         ...(step.transfer?.toE164 ? { transferToE164: step.transfer.toE164 } : {}),
         ...(step.transfer?.toRef ? { transferToRef: step.transfer.toRef } : {}),
         preSmsBody,
+        ...(step.reachTeammate
+          ? {
+              reachRefs: step.reachTeammate.refs,
+              ...(typeof step.reachTeammate.ringSeconds === "number"
+                ? { reachRingSeconds: step.reachTeammate.ringSeconds }
+                : {}),
+              reachPreSmsBody
+            }
+          : {}),
         ...(step.captureFields && step.captureFields.length > 0
           ? { captureFields: step.captureFields }
           : {}),

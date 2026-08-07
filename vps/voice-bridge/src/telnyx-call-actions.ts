@@ -63,6 +63,101 @@ export async function telnyxTransferCall(
 }
 
 /**
+ * Dial a brand-new outbound leg (POST /v2/calls). The reach_teammate ladder
+ * uses this for each teammate's B leg while the caller stays on the A leg
+ * with the assistant. `timeoutSecs` bounds how long the phone rings before
+ * Telnyx gives up on its own; `clientState` (plain text here, base64 on the
+ * wire) is what routes the leg's webhooks to handleReachLeg. Lockstep with
+ * _shared/telnyx_call_actions.ts telnyxDialCall.
+ */
+export async function telnyxDialCall(
+  apiKey: string,
+  opts: {
+    connectionId: string;
+    to: string;
+    from: string;
+    timeoutSecs?: number;
+    clientState?: string;
+  },
+  fetchImpl: typeof fetch = fetch
+): Promise<TelnyxActionResult & { callControlId?: string }> {
+  if (!apiKey) return { ok: false, status: 0, body: "missing TELNYX_API_KEY" };
+  if (!opts.connectionId) return { ok: false, status: 0, body: "missing connectionId" };
+  if (!opts.to || !opts.from) return { ok: false, status: 0, body: "missing to/from" };
+  const body: Record<string, unknown> = {
+    connection_id: opts.connectionId,
+    to: opts.to,
+    from: opts.from
+  };
+  if (typeof opts.timeoutSecs === "number" && opts.timeoutSecs > 0) {
+    body.timeout_secs = Math.floor(opts.timeoutSecs);
+  }
+  if (opts.clientState) {
+    body.client_state = Buffer.from(opts.clientState, "utf8").toString("base64");
+  }
+  try {
+    const res = await fetchImpl("https://api.telnyx.com/v2/calls", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body)
+    });
+    const text = await res.text().catch(() => "");
+    let callControlId: string | undefined;
+    try {
+      const parsed = JSON.parse(text) as { data?: { call_control_id?: string } };
+      if (typeof parsed.data?.call_control_id === "string") {
+        callControlId = parsed.data.call_control_id;
+      }
+    } catch {
+      // Non-JSON error body; the status carries the story.
+    }
+    return { ok: res.ok, status: res.status, body: text.slice(0, 500), callControlId };
+  } catch (err) {
+    return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
+ * Bridge two ALREADY-ESTABLISHED legs (POST .../actions/bridge). Joins the
+ * teammate's answered B leg to the caller's A leg. `park_after_unbridge` is
+ * the STRING "self" (the wire value names which leg to park); a boolean is
+ * silently ignored, and the failure is invisible until a teammate drops and
+ * the caller is hung up on. Lockstep with _shared/telnyx_call_actions.ts
+ * telnyxBridgeCall.
+ */
+export async function telnyxBridgeCall(
+  apiKey: string,
+  callControlId: string,
+  opts: { otherCallControlId: string; parkAfterUnbridge?: boolean; commandId?: string },
+  fetchImpl: typeof fetch = fetch
+): Promise<TelnyxActionResult> {
+  if (!apiKey) return { ok: false, status: 0, body: "missing TELNYX_API_KEY" };
+  if (!callControlId) return { ok: false, status: 0, body: "missing call_control_id" };
+  if (!opts.otherCallControlId) return { ok: false, status: 0, body: "missing other leg" };
+  const url = `https://api.telnyx.com/v2/calls/${encodeURIComponent(callControlId)}/actions/bridge`;
+  const body: Record<string, unknown> = { call_control_id: opts.otherCallControlId };
+  if (opts.parkAfterUnbridge === true) body.park_after_unbridge = "self";
+  if (opts.commandId) body.command_id = opts.commandId;
+  try {
+    const res = await fetchImpl(url, {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify(body)
+    });
+    const text = await res.text().catch(() => "");
+    return { ok: res.ok, status: res.status, body: text.slice(0, 500) };
+  } catch (err) {
+    return { ok: false, status: 0, body: err instanceof Error ? err.message : String(err) };
+  }
+}
+
+/**
  * Hang up a live call leg. Used by the bridge's `end_call` tool so the
  * assistant can end the conversation cleanly. Telnyx closes the media stream
  * once the leg hangs up, which fires the bridge's ws `close` handler (transcript

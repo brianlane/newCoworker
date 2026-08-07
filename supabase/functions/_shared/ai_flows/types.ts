@@ -1311,6 +1311,19 @@ export type FlowStep =
       notifyOwner?: true;
       /** Optional live-transfer config (pre-alert SMS + warm transfer). */
       transfer?: PlaceCallTransfer;
+      /**
+       * Second-leg warm transfer with a fallback ladder: the AI dials each
+       * teammate IN ORDER on a separate B leg while the callee keeps talking
+       * to it, bridging the first who answers. Mutually exclusive with
+       * `transfer` (validated at author time). Refs only, never bare numbers.
+       */
+      reachTeammate?: {
+        refs: ContactRef[];
+        /** Seconds each target rings before the next is tried. Default 20. */
+        ringSeconds?: number;
+        /** Pre-alert SMS texted to each target as their phone starts ringing. */
+        preSmsTemplate?: string;
+      };
       /** Optional lead fields the AI captures during the call. */
       captureFields?: string[];
       /** Per-step calling window (see CallWindow). Absent = dial any time. */
