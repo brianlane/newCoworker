@@ -1265,6 +1265,26 @@ const nonBranchStepMembers = [
         preSmsTemplate: z.string().min(1).max(1600).optional()
       })
       .optional(),
+    /**
+     * Second-leg warm transfer with a fallback ladder: the AI keeps the
+     * callee talking on the A leg while it dials each teammate in order on
+     * a SEPARATE B leg, so the callee never hears ringback and the AI is
+     * still there to explain when nobody picks up. `transfer` (above) is
+     * the classic single-target handoff that transfers the callee's own
+     * leg; exactly one of the two may be set (validateDefinitionSemantics).
+     * Targets are saved-roster refs only, never bare numbers: the ladder's
+     * order is about WHO, and a number literal goes stale silently.
+     */
+    reachTeammate: z
+      .object({
+        /** Teammates to try, in order (e.g. Dave, then Amy). */
+        refs: z.array(contactRefSchema).min(1).max(3),
+        /** How long each teammate's phone rings before the next. Default 20. */
+        ringSeconds: z.number().int().min(5).max(45).optional(),
+        /** Pre-alert SMS texted to each target as their phone starts ringing. */
+        preSmsTemplate: z.string().min(1).max(1600).optional()
+      })
+      .optional(),
     /** Optional lead fields the AI captures during the call. */
     captureFields: z.array(z.string().min(1).max(60)).min(1).max(15).optional(),
     /**
@@ -2625,6 +2645,15 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
               : `Step "${step.id}" sets both transfer.toE164 and transfer.toRef; use only one.`
           );
         }
+      }
+      // The two handoff styles are different call topologies (transfer moves
+      // the callee's leg; reachTeammate dials a second leg and bridges), so a
+      // step carrying both would be ambiguous about which one the AI's
+      // transfer tool performs.
+      if (step.transfer && step.reachTeammate) {
+        issues.push(
+          `Step "${step.id}" sets both transfer and reachTeammate; use one handoff style per call step.`
+        );
       }
     }
 
