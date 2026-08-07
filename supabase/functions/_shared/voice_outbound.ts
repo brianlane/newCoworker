@@ -60,6 +60,17 @@ export type OutboundCallPlan = {
   captureFields: string[] | null;
   /** place_ai_call only: live-transfer config. */
   transfer?: OutboundCallTransfer;
+  /**
+   * place_ai_call only: the second-leg reach ladder (mutually exclusive
+   * with transfer at author time). Targets are fully resolved by the worker;
+   * the bridge dials them in order on a separate leg and bridges the first
+   * who answers.
+   */
+  reach?: {
+    targets: { name: string; e164: string }[];
+    ringSeconds?: number;
+    preSmsBody?: string;
+  };
   /** place_ai_call only: the parked run to resume with the outcome. */
   flowRun?: OutboundFlowRunLink;
 };
@@ -150,6 +161,17 @@ export type OutboundSessionContext = {
     marker: string;
     step_index: number;
   };
+  /**
+   * The reach ladder the bridge's reach_teammate tool walks: resolved
+   * names + numbers, in order. Written by originate, read by the VPS
+   * bridge on connect; the B legs' outcomes land in `context.reach` (see
+   * voice_reach.ts), which the bridge polls.
+   */
+  reach_targets?: {
+    targets: { name: string; e164: string }[];
+    ring_seconds?: number;
+    pre_sms_body?: string;
+  };
 };
 
 /**
@@ -175,6 +197,15 @@ export function outboundSessionContext(plan: OutboundCallPlan): OutboundSessionC
       to_e164: plan.transfer.toE164,
       ...(plan.transfer.preSmsBody ? { pre_sms_body: plan.transfer.preSmsBody } : {}),
       ...(plan.transfer.agentName ? { agent_name: plan.transfer.agentName } : {})
+    };
+  }
+  if (plan.reach) {
+    ctx.reach_targets = {
+      targets: plan.reach.targets.map((t) => ({ name: t.name, e164: t.e164 })),
+      ...(typeof plan.reach.ringSeconds === "number"
+        ? { ring_seconds: plan.reach.ringSeconds }
+        : {}),
+      ...(plan.reach.preSmsBody ? { pre_sms_body: plan.reach.preSmsBody } : {})
     };
   }
   if (plan.flowRun) {
@@ -225,6 +256,27 @@ export function parsePlaceCallPayload(raw: unknown): OutboundCallPlan | null {
         : {}),
       ...(typeof t!.agentName === "string" && t!.agentName.trim()
         ? { agentName: t!.agentName.trim() }
+        : {})
+    };
+  }
+  if (c.reach !== undefined) {
+    const r = c.reach as Record<string, unknown> | null;
+    const rawTargets = Array.isArray(r?.targets) ? (r!.targets as unknown[]) : [];
+    const targets: { name: string; e164: string }[] = [];
+    for (const rt of rawTargets) {
+      const t = rt as Record<string, unknown> | null;
+      const e164 = t && typeof t.e164 === "string" ? t.e164.trim() : "";
+      // A ladder with a broken rung is a config error, not something to
+      // silently shorten: the ORDER is the feature.
+      if (!e164) return null;
+      targets.push({ name: typeof t!.name === "string" ? t!.name.trim() : "", e164 });
+    }
+    if (targets.length === 0) return null;
+    plan.reach = {
+      targets,
+      ...(typeof r!.ringSeconds === "number" ? { ringSeconds: r!.ringSeconds } : {}),
+      ...(typeof r!.preSmsBody === "string" && r!.preSmsBody.trim()
+        ? { preSmsBody: r!.preSmsBody.trim() }
         : {})
     };
   }

@@ -7478,6 +7478,32 @@ async function placeAiCallStep(
       ...(agentName ? { agentName } : {})
     };
   }
+  // The reach ladder: resolve every ref NOW, in order, so the bridge gets
+  // plain numbers and names and never touches the roster tables mid-call. A
+  // ref that no longer resolves fails the step the same way a broken
+  // transfer ref does: a ladder that silently dropped its first target
+  // would ring the wrong person first, which is worse than failing loudly.
+  let reach: { targets: { name: string; e164: string }[]; ringSeconds?: number; preSmsBody?: string } | undefined;
+  if (action.reachRefs && action.reachRefs.length > 0) {
+    const targets: { name: string; e164: string }[] = [];
+    for (const ref of action.reachRefs) {
+      const resolved = await resolveContactRef(supabase, run.business_id, ref);
+      if (!resolved) {
+        return {
+          kind: "fail",
+          error: `place_ai_call: reachTeammate ${ref.source} reference "${ref.label ?? ref.id}" could not be resolved (removed or no phone)`
+        };
+      }
+      targets.push({ name: resolved.name || ref.label || "", e164: resolved.phone });
+    }
+    reach = {
+      targets,
+      ...(typeof action.reachRingSeconds === "number"
+        ? { ringSeconds: action.reachRingSeconds }
+        : {}),
+      ...(action.reachPreSmsBody ? { preSmsBody: action.reachPreSmsBody } : {})
+    };
+  }
 
   // The park ceiling is the LOST-WEBHOOK backstop only: a call that ends
   // normally resumes on hangup and a transferred one resumes the moment the
@@ -7523,6 +7549,7 @@ async function placeAiCallStep(
       ...(action.captureFields ? { captureFields: action.captureFields } : {}),
       notifyE164,
       ...(transfer ? { transfer } : {}),
+      ...(reach ? { reach } : {}),
       flowRun: { runId: run.id, saveAs: action.saveAs, marker: action.marker, stepIndex: index }
     }
   });
