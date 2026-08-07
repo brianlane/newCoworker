@@ -5598,7 +5598,12 @@ function StepFields({
             checked={transferOn}
             onChange={(ev) =>
               patchStep(index, {
-                transfer: ev.target.checked ? { toE164: "" } : undefined
+                transfer: ev.target.checked ? { toE164: "" } : undefined,
+                // One handoff style per step: mirror the reach checkbox,
+                // which clears transfer. Without this, checking transfer
+                // left the ladder in place and save-time cleanup silently
+                // kept the ladder and dropped the transfer.
+                ...(ev.target.checked ? { reachTeammate: undefined } : {})
               })
             }
           />
