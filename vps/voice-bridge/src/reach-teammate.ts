@@ -125,6 +125,8 @@ export async function runReachLadder(
     aLegCallControlId: string;
     config: ReachLadderConfig;
     log?: (msg: string, extra?: Record<string, unknown>) => void;
+    /** Test seam: poll cadence + sleep, forwarded to pollReachOutcome. */
+    poll?: { pollMs?: number; sleep?: (ms: number) => Promise<void> };
   }
 ): Promise<ReachLadderResult> {
   const { businessId, aLegCallControlId, config } = args;
@@ -159,7 +161,8 @@ export async function runReachLadder(
       supabase,
       aLegCallControlId,
       attempt,
-      config.ringSeconds
+      config.ringSeconds,
+      args.poll ?? {}
     );
     if (outcome.status === "answered") {
       const bLeg = outcome.bLeg || dialRes.callControlId;

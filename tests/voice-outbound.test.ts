@@ -274,3 +274,54 @@ describe("parsePlaceCallPayload", () => {
     }
   });
 });
+
+describe("reach ladder payload and context", () => {
+  const BASE = { toE164: "+17572390150", notifyE164: "+16026951142" };
+  const REACH = {
+    targets: [
+      { name: "Dave Lane", e164: "+16025245719" },
+      { name: "Amy Laidlaw", e164: "+16026951142" }
+    ],
+    ringSeconds: 20,
+    preSmsBody: "Seller on the line NOW. Pick up!"
+  };
+
+  it("parses the ladder in order with ring seconds and pre-SMS", () => {
+    const plan = parsePlaceCallPayload({ ...BASE, reach: REACH });
+    expect(plan?.reach).toEqual(REACH);
+  });
+
+  it("parses a minimal ladder (targets only)", () => {
+    const plan = parsePlaceCallPayload({
+      ...BASE,
+      reach: { targets: [{ name: "", e164: "+16025245719" }], preSmsBody: "  " }
+    });
+    expect(plan?.reach).toEqual({ targets: [{ name: "", e164: "+16025245719" }] });
+  });
+
+  it("rejects a ladder with a numberless rung: the ORDER is the feature", () => {
+    expect(
+      parsePlaceCallPayload({
+        ...BASE,
+        reach: { targets: [{ name: "Dave Lane", e164: "+16025245719" }, { name: "Amy" }] }
+      })
+    ).toBeNull();
+    expect(parsePlaceCallPayload({ ...BASE, reach: { targets: [] } })).toBeNull();
+    expect(parsePlaceCallPayload({ ...BASE, reach: {} })).toBeNull();
+  });
+
+  it("stamps reach_targets onto the session context in snake case", () => {
+    const plan = parsePlaceCallPayload({ ...BASE, reach: REACH });
+    const ctx = outboundSessionContext(plan!);
+    expect(ctx.reach_targets).toEqual({
+      targets: REACH.targets,
+      ring_seconds: 20,
+      pre_sms_body: REACH.preSmsBody
+    });
+  });
+
+  it("omits reach_targets entirely when the plan has no ladder", () => {
+    const plan = parsePlaceCallPayload(BASE);
+    expect(outboundSessionContext(plan!)).not.toHaveProperty("reach_targets");
+  });
+});
