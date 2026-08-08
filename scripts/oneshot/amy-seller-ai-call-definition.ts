@@ -535,6 +535,13 @@ export function upgradeCallsToReachLadder(
           preSmsTemplate: CALLBACK_REQUEST_SMS
         };
         delete st.transfer;
+        // Match buildCallStep exactly: the summary follows whoever rang
+        // first, and any transfer-era static recipient is cleared, or a
+        // step upgraded here would keep texting Dave when Gabby rang first.
+        st.notifyFirstReachTarget = true;
+        delete st.notifyRef;
+        delete st.notifyE164;
+        delete st.notifyOwner;
         changed = true;
       }
       if (st.type === "branch") {

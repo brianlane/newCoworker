@@ -200,6 +200,8 @@ describe("addSellerCallLadder (Clever shape)", () => {
     const calls = collectCalls(def);
     for (const c of calls as unknown as Record<string, unknown>[]) {
       c.transfer = { toRef: DAVE, preSmsTemplate: "old pre-alert" };
+      c.notifyRef = DAVE;
+      delete c.notifyFirstReachTarget;
       delete c.reachTeammate;
     }
     expect(upgradeCallsToReachLadder(def, REFS)).toBe(true);
@@ -208,6 +210,11 @@ describe("addSellerCallLadder (Clever shape)", () => {
       expect(c.reachTeammate?.refs).toEqual([DAVE, GABBY, AMY]);
       expect(c.reachTeammate?.rotateFirst).toBe(2);
       expect(c.transfer).toBeUndefined();
+      // The upgrade matches buildCallStep exactly: a transfer-era static
+      // notifyRef must not survive, or Dave keeps every summary even when
+      // Gabby rang first.
+      expect(c.notifyFirstReachTarget).toBe(true);
+      expect(c.notifyRef).toBeUndefined();
     }
     expect(upgradeCallsToReachLadder(def, REFS)).toBe(false);
   });
