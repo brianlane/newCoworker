@@ -41,9 +41,10 @@ function healthyFleet(): SweepRunRow[] {
 function evaluate(
   runs: SweepRunRow[],
   httpFailures: HttpFailureRow[] = [],
-  ledgerOldestAt: string | null = minutesBefore(60 * 24 * 30)
+  ledgerOldestAt: string | null = minutesBefore(60 * 24 * 30),
+  httpReadError: string | null = null
 ) {
-  return evaluateSweepHealth({ runs, httpFailures, ledgerOldestAt, now: NOW });
+  return evaluateSweepHealth({ runs, httpFailures, ledgerOldestAt, httpReadError, now: NOW });
 }
 
 describe("latestRuns", () => {
@@ -201,6 +202,17 @@ describe("evaluateSweepHealth", () => {
     expect(evaluate(runs).healthy).not.toContain("outreach-sweep");
   });
 
+  it("reports a blind HTTP read as its own kind, not as a per-tenant failure", () => {
+    // Folding this into errors[] would make the NEXT run read it back as a
+    // silent-200 and print per-tenant remediation for a missing grant.
+    const result = evaluate(healthyFleet(), [], minutesBefore(60 * 24 * 30), "function does not exist");
+    expect(result.findings).toHaveLength(1);
+    expect(result.findings[0].kind).toBe("degraded");
+    expect(result.findings[0].sweep).toBe(WATCHDOG_SWEEP);
+    expect(result.findings[0].detail).toContain("function does not exist");
+    expect(result.findings[0].action).toContain("cron_http_failures(integer)");
+  });
+
   it("surfaces HTTP-layer failures, which no sweep can report about itself", () => {
     const failures: HttpFailureRow[] = [
       {
@@ -240,13 +252,9 @@ describe("evaluateSweepHealth", () => {
     const failures: HttpFailureRow[] = [
       { id: 9, status_code: 504, timed_out: true, error_msg: null, created: "2026-08-08T03:00:00Z" }
     ];
-    expect(evaluate(runs, failures).findings.map((f) => f.kind)).toEqual([
-      "missing",
-      "failed",
-      "errors",
-      "slow",
-      "http"
-    ]);
+    expect(
+      evaluate(runs, failures, minutesBefore(60 * 24 * 30), "boom").findings.map((f) => f.kind)
+    ).toEqual(["missing", "failed", "errors", "degraded", "slow", "http"]);
   });
 });
 

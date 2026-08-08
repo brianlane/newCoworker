@@ -88,7 +88,13 @@ async function runSweep(request: Request): Promise<Response> {
 
     const result = evaluateSweepHealth({
       runs: (runsResult.data ?? []) as SweepRunRow[],
-      httpFailures: (httpResult.error ? [] : ((httpResult.data ?? []) as HttpFailureRow[])),
+      httpFailures: httpResult.error ? [] : ((httpResult.data ?? []) as HttpFailureRow[]),
+      // Reported as its own "degraded" finding, NOT folded into this run's
+      // errors[]: the recorder reads errors[] as per-tenant work failures,
+      // so putting an infrastructure problem there would make the next run
+      // classify it as a silent-200 and print per-tenant remediation for
+      // what is really a missing migration or grant.
+      httpReadError: httpResult.error ? httpResult.error.message : null,
       ledgerOldestAt: oldestResult.data?.[0]?.finished_at ?? null,
       now: startedAt
     });
@@ -113,9 +119,10 @@ async function runSweep(request: Request): Promise<Response> {
       healthy: result.healthy.length,
       httpFailures: result.findings.filter((f) => f.kind === "http").length,
       emailed,
-      // Surfaced so a broken HTTP read is visible in the sweep's own row
-      // rather than only in the logs.
-      errors: httpResult.error ? [`cron_http_failures: ${httpResult.error.message}`] : [],
+      // Deliberately not named "errors": that key is the per-tenant work
+      // failure list the recorder counts. This run did its work fine, it
+      // just did it half-blind, which the degraded finding above reports.
+      httpReadError: httpResult.error?.message ?? null,
       durationMs
     };
     logger.info("cron-sweep-watchdog: summary", summary);

@@ -100,7 +100,7 @@ export type HttpFailureRow = {
   created: string;
 };
 
-export type FindingKind = "missing" | "failed" | "errors" | "slow" | "http";
+export type FindingKind = "missing" | "failed" | "errors" | "degraded" | "slow" | "http";
 
 export type Finding = {
   kind: FindingKind;
@@ -117,6 +117,16 @@ export type WatchdogInput = {
   runs: SweepRunRow[];
   /** net._http_response failures from the RPC. */
   httpFailures: HttpFailureRow[];
+  /**
+   * Set when the cron_http_failures RPC could not be read, which leaves this
+   * run blind to the entire timeout class.
+   *
+   * Reported as its own finding rather than folded into the run's errors[]:
+   * the recorder reads errors[] as per-tenant work failures, so encoding an
+   * infrastructure problem there would make the NEXT run classify it as a
+   * silent-200 and print per-tenant remediation for a missing grant.
+   */
+  httpReadError: string | null;
   /**
    * Oldest finished_at anywhere in cron_sweep_runs. A sweep can only be
    * called missing once we have been recording for longer than its own
@@ -242,6 +252,22 @@ export function evaluateSweepHealth(input: WatchdogInput): WatchdogResult {
     if (!flagged) healthy.push(sweep);
   }
 
+  const degraded: Finding[] =
+    input.httpReadError === null
+      ? []
+      : [
+          {
+            kind: "degraded" as const,
+            sweep: WATCHDOG_SWEEP,
+            detail: `could not read net._http_response: ${input.httpReadError}`,
+            action:
+              `This run checked the sweep ledger but NOT the HTTP layer, so timeouts and transport ` +
+              `errors went unexamined. The reader is the cron_http_failures(integer) RPC: confirm its ` +
+              `migration applied and that service_role still has EXECUTE on it. Everything else in ` +
+              `this email is still accurate, just incomplete.`
+          }
+        ];
+
   const http: Finding[] = input.httpFailures.map((row) => ({
     kind: "http" as const,
     sweep: "(fleet)",
@@ -257,7 +283,7 @@ export function evaluateSweepHealth(input: WatchdogInput): WatchdogResult {
   }));
 
   return {
-    findings: [...missing, ...failed, ...withErrors, ...slow, ...http],
+    findings: [...missing, ...failed, ...withErrors, ...degraded, ...slow, ...http],
     healthy: healthy.sort(),
     checked: Object.keys(SWEEP_EXPECTATIONS).length
   };

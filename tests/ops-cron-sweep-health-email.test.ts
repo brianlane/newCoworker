@@ -31,7 +31,7 @@ describe("buildOpsCronSweepHealthEmail", () => {
   });
 
   it("does not shout for a partial failure, a slow run, or an HTTP blip", () => {
-    for (const kind of ["errors", "slow", "http"] as const) {
+    for (const kind of ["errors", "degraded", "slow", "http"] as const) {
       const email = buildOpsCronSweepHealthEmail({ ...base, findings: [finding({ kind })] });
       expect(email.subject).not.toContain("ACTION REQUIRED");
       expect(email.subject).toContain("1 finding(s)");
@@ -65,6 +65,14 @@ describe("buildOpsCronSweepHealthEmail", () => {
     const positions = ["STOPPED", "SLOW", "HTTP LAYER"].map((h) => email.text.indexOf(h));
     expect(positions[0]).toBeLessThan(positions[1]);
     expect(positions[1]).toBeLessThan(positions[2]);
+  });
+
+  it("labels a blind HTTP read as incomplete rather than as a sweep failure", () => {
+    const email = buildOpsCronSweepHealthEmail({
+      ...base,
+      findings: [finding({ kind: "degraded", sweep: "cron-sweep-watchdog" })]
+    });
+    expect(email.text).toContain("INCOMPLETE: the watchdog could not read one of its two sources");
   });
 
   it("omits a section for a kind with no findings", () => {

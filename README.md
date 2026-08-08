@@ -2971,6 +2971,12 @@ because the useful next command differs completely by kind:
 - **slow** (past 120s): warns *before* the 150s ceiling, where the bridge
   504s and the result is lost. Either shrink the batch or convert the sweep
   to a dispatcher.
+- **degraded**: the watchdog could not read one of its two sources, so the
+  run was half-blind. Reported as its own kind rather than folded into the
+  run's `errors[]`, because the recorder reads `errors[]` as per-tenant work
+  failures: an infrastructure problem parked there would come back on the
+  next run misclassified as a silent 200, with per-tenant remediation for
+  what is really a missing migration or grant.
 - **http**: match by time against the schedules, since these rows carry no
   job.
 

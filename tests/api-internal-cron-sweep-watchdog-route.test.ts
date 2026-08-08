@@ -156,8 +156,13 @@ describe("api/internal/cron-sweep-watchdog route", () => {
     const res = await POST(makeRequest());
     const body = await res.json();
     expect(res.status).toBe(200);
-    // Surfaced in the sweep's own row rather than only in the logs.
-    expect(body.data.errors).toEqual(["cron_http_failures: function does not exist"]);
+    expect(body.data.httpReadError).toBe("function does not exist");
+    // NOT under "errors": that key is the per-tenant work failure list the
+    // recorder counts, so an infrastructure problem there would come back on
+    // the next run misclassified as a silent-200.
+    expect(body.data.errors).toBeUndefined();
+    expect(body.data.byKind.degraded).toBe(1);
+    expect(body.data.emailed).toBe(true);
   });
 
   it("reports HTTP-layer failures that no sweep could report about itself", async () => {

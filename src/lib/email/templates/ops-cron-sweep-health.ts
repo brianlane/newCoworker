@@ -37,12 +37,13 @@ const HEADINGS: Record<FindingKind, string> = {
   missing: "STOPPED: no run recorded",
   failed: "CRASHED: the sweep threw",
   errors: "PARTIAL FAILURE: answered ok with errors inside",
+  degraded: "INCOMPLETE: the watchdog could not read one of its two sources",
   slow: "SLOW: approaching the 150s ceiling",
   http: "HTTP LAYER: timeout or transport error"
 };
 
 /** Worst first: a sweep that stopped outranks one that merely got slow. */
-const ORDER: FindingKind[] = ["missing", "failed", "errors", "slow", "http"];
+const ORDER: FindingKind[] = ["missing", "failed", "errors", "degraded", "slow", "http"];
 
 /** Only called for a kind the caller already found findings for. */
 function section(kind: FindingKind, findings: Finding[]): string {
