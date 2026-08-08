@@ -104,9 +104,20 @@ export async function POST(request: Request) {
       const at = a.lastIndexOf("@");
       return ownAddresses.has(a) || (at !== -1 && a.slice(at + 1) === ownDomain);
     };
+    // MIRROR the original's slots. Whoever the sender put on To stays on To
+    // beside them; whoever was on Cc stays on Cc. Live, Aug 8 2026: a referral
+    // arrived addressed to us and the prospect on To with no Cc at all, and
+    // the reply moved the prospect to Cc, which reads as though they are
+    // copied on someone else's conversation rather than being in it.
+    //
+    // Our own addresses drop out of both, and so does the person already in
+    // To, so nobody is listed twice.
+    const alreadyAddressed = new Set([body.toEmail.trim().toLowerCase()]);
+    const keep = (a: string): boolean => !isOurs(a) && !alreadyAddressed.has(a);
+    const replyAllTo = (thread?.replyToRecipients ?? []).filter(keep);
     const replyAllCc = [
       ...normalizeRecipients(body.cc),
-      ...(thread?.replyAllRecipients ?? []).filter((a) => !isOurs(a))
+      ...(thread?.replyCcRecipients ?? []).filter((a) => keep(a) && !replyAllTo.includes(a))
     ];
 
     const result = await sendFromMailboxConnection(
@@ -118,6 +129,7 @@ export async function POST(request: Request) {
       },
       {
         toEmail: body.toEmail,
+        ...(replyAllTo.length ? { additionalToEmails: replyAllTo } : {}),
         subject: body.subject,
         bodyText: body.bodyText,
         ccEmails: replyAllCc,

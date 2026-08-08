@@ -115,7 +115,8 @@ describe("the reply target resolves to a threadable identity", () => {
       threadId: "199abc4d5e6f7890",
       inReplyToMessageRef: "<CAJ=intro@mail.gmail.com>",
       providerMessageId: "m1",
-      replyAllRecipients: []
+      replyToRecipients: [],
+      replyCcRecipients: []
     });
   });
 
@@ -154,7 +155,8 @@ describe("the reply target resolves to a threadable identity", () => {
     // the other two fields are additive.
     expect(await getEmailLogThreadIdentity(BIZ, "e4")).toEqual({
       threadId: "t4",
-      replyAllRecipients: []
+      replyToRecipients: [],
+      replyCcRecipients: []
     });
   });
 });
@@ -173,10 +175,57 @@ describe("a reply reaches everyone who was on the original", () => {
       cc_email: "king@clinic.example.com"
     };
     return getEmailLogThreadIdentity(BIZ, "e5", fakeDb({}, row)).then((identity) => {
-      expect(identity?.replyAllRecipients).toEqual([
+      expect(identity?.replyToRecipients).toEqual([
         "brian@newcoworker.com",
         "king@clinic.example.com"
       ]);
+      // king@ was on BOTH headers here. It stays in the To slot only: listing
+      // one person twice looks like a mistake on a reply going to a prospect.
+      expect(identity?.replyCcRecipients).toEqual([]);
+    });
+  });
+
+  it("keeps To and Cc in their own slots, so a reply mirrors the original", () => {
+    /**
+     * Live, Aug 8 2026. The referral arrived addressed to us and the prospect
+     * on To, with NO Cc at all, and the reply put the prospect on Cc. It
+     * reached them, but it reads as though they are copied on someone else's
+     * conversation rather than being in it.
+     *
+     * Flattening both headers into one list is what lost that: once merged,
+     * nothing downstream can tell a participant from a bystander.
+     */
+    const row = {
+      id: "e7",
+      thread_id: "t7",
+      message_ref: null,
+      provider_message_id: null,
+      to_email: "team@newcoworker.com, jobarmsteam@gmail.com",
+      cc_email: "watcher@example.com, ops@example.com"
+    };
+    return getEmailLogThreadIdentity(BIZ, "e7", fakeDb({}, row)).then((identity) => {
+      expect(identity?.replyToRecipients).toEqual([
+        "team@newcoworker.com",
+        "jobarmsteam@gmail.com"
+      ]);
+      expect(identity?.replyCcRecipients).toEqual(["watcher@example.com", "ops@example.com"]);
+    });
+  });
+
+  it("reports an empty Cc rather than inventing one", () => {
+    // The exact shape of the live thread: two on To, no Cc. A reply must not
+    // manufacture a Cc line that the original never had.
+    const row = {
+      id: "e8",
+      thread_id: "t8",
+      message_ref: null,
+      provider_message_id: null,
+      to_email: "team@newcoworker.com, jobarmsteam@gmail.com",
+      cc_email: null
+    };
+    return getEmailLogThreadIdentity(BIZ, "e8", fakeDb({}, row)).then((identity) => {
+      expect(identity?.replyCcRecipients).toEqual([]);
+      expect(identity?.replyToRecipients).toHaveLength(2);
     });
   });
 
@@ -190,7 +239,8 @@ describe("a reply reaches everyone who was on the original", () => {
       cc_email: null
     };
     return getEmailLogThreadIdentity(BIZ, "e6", fakeDb({}, row)).then((identity) => {
-      expect(identity?.replyAllRecipients).toEqual(["real@example.com"]);
+      expect(identity?.replyToRecipients).toEqual(["real@example.com"]);
+      expect(identity?.replyCcRecipients).toEqual([]);
     });
   });
 });

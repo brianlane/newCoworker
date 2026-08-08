@@ -15,6 +15,12 @@ import { connectionEmail } from "@/lib/email/mailbox-options";
 
 export type OwnerMailboxSendArgs = {
   toEmail: string;
+  /**
+   * Extra To recipients, beside the primary one. Needed so a reply can MIRROR
+   * the original's To line instead of demoting everyone on it to Cc: someone
+   * the sender addressed directly is a participant, not a bystander.
+   */
+  additionalToEmails?: string[];
   subject: string;
   bodyText: string;
   /** Optional cc recipients (already normalized to valid addresses). */
@@ -63,7 +69,8 @@ export type OwnerMailboxSendResult =
   | { ok: false; detail: "email_not_connected" };
 
 function encodeRfc2822(args: OwnerMailboxSendArgs): string {
-  const lines = [`To: ${args.toEmail}`];
+  const allTo = [args.toEmail, ...(args.additionalToEmails ?? [])];
+  const lines = [`To: ${allTo.join(", ")}`];
   // Gmail's send API honors Cc and Bcc headers in the raw MIME and strips the
   // Bcc header from the delivered/stored message, so bcc stays hidden.
   if (args.ccEmails && args.ccEmails.length > 0) {
@@ -177,9 +184,22 @@ export async function sendFromMailboxConnection(
         method: "POST",
         data: {
           comment: args.bodyText,
-          ...(args.ccEmails && args.ccEmails.length > 0
-            ? { message: { ccRecipients: toGraphRecipients(args.ccEmails) } }
-            : {})
+          // /reply addresses the original sender on its own, but everyone
+          // else has to be restated or they are dropped. Both slots, so the
+          // answer mirrors the original instead of demoting its To line.
+          ...(() => {
+            const cc = args.ccEmails ?? [];
+            const extraTo = args.additionalToEmails ?? [];
+            if (cc.length === 0 && extraTo.length === 0) return {};
+            return {
+              message: {
+                ...(cc.length > 0 ? { ccRecipients: toGraphRecipients(cc) } : {}),
+                ...(extraTo.length > 0
+                  ? { toRecipients: toGraphRecipients([args.toEmail, ...extraTo]) }
+                  : {})
+              }
+            };
+          })()
         }
       }
     );
@@ -197,7 +217,9 @@ export async function sendFromMailboxConnection(
         message: {
           subject: args.subject,
           body: { contentType: "Text", content: args.bodyText },
-          toRecipients: [{ emailAddress: { address: args.toEmail } }],
+          toRecipients: [args.toEmail, ...(args.additionalToEmails ?? [])].map((address) => ({
+            emailAddress: { address }
+          })),
           ...(args.ccEmails && args.ccEmails.length > 0
             ? { ccRecipients: toGraphRecipients(args.ccEmails) }
             : {}),

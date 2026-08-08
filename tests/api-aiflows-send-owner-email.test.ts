@@ -166,7 +166,8 @@ describe("replying inside an existing conversation", () => {
       threadId: "199abc4d5e6f7890",
       inReplyToMessageRef: "<CAJ=intro@mail.gmail.com>",
       providerMessageId: "m1",
-      replyAllRecipients: ["king@clinic.example.com"]
+      replyToRecipients: ["king@clinic.example.com"],
+      replyCcRecipients: []
     });
     vi.mocked(sendFromMailboxConnection).mockResolvedValue({
       ok: true,
@@ -189,14 +190,112 @@ describe("replying inside an existing conversation", () => {
         providerMessageId: "m1"
       }
     });
-    // Reply-all: the introduced prospect was on the original's To/Cc while
-    // the INTRODUCER sat in From. Answering only From would reach the person
-    // who did the favor and never the lead, which is the exemplar case.
-    expect(sendArgs).toMatchObject({ ccEmails: ["king@clinic.example.com"] });
+    // Reply-all, MIRRORING the slots. The prospect was on the original's To
+    // while the INTRODUCER sat in From, so they stay on To beside them.
+    // Answering only From reaches the person who did the favor and never the
+    // lead; demoting them to Cc reaches them but reads as though they are
+    // copied on someone else's conversation.
+    expect(sendArgs).toMatchObject({ additionalToEmails: ["king@clinic.example.com"] });
+    expect((sendArgs as { ccEmails?: string[] }).ccEmails ?? []).toEqual([]);
     // And the coworker owns it, or turn two goes back to paging a human.
     expect(rememberSentThread).toHaveBeenCalledWith(
       expect.objectContaining({ threadId: "199abc4d5e6f7890", correspondentEmail: "lead@example.com" })
     );
+  });
+
+  it("mirrors the live Aug 8 thread: two on To, no Cc invented", async () => {
+    /**
+     * The exact shape Brian sent. Incoming was addressed to
+     * team@newcoworker.com and jobarmsteam@gmail.com on To, with no Cc and no
+     * Bcc. The reply went To james, Cc jobarmsteam, which reached everyone but
+     * demoted a participant to a bystander and invented a Cc line.
+     *
+     * Driven through the real POST handler, not by calling a helper: the bug
+     * was in how the route assembled the slots, so a unit test of the splitter
+     * alone would have passed either way.
+     */
+    vi.mocked(getEmailLogThreadIdentity).mockResolvedValue({
+      threadId: "t-live",
+      providerMessageId: "m-live",
+      replyToRecipients: ["team@newcoworker.com", "jobarmsteam@gmail.com"],
+      replyCcRecipients: []
+    });
+    vi.mocked(sendFromMailboxConnection).mockResolvedValue({
+      ok: true,
+      provider: "google",
+      messageId: "g-live",
+      threadId: "t-live",
+      fromEmail: "team@newcoworker.com"
+    } as never);
+
+    const res = await POST(makeRequest(REPLY_BODY));
+    expect(res.status).toBe(200);
+    const sendArgs = vi.mocked(sendFromMailboxConnection).mock.calls[0][2] as {
+      toEmail: string;
+      additionalToEmails?: string[];
+      ccEmails?: string[];
+    };
+    // The sender keeps the primary slot, the other To recipient joins them.
+    expect(sendArgs.toEmail).toBe("lead@example.com");
+    expect(sendArgs.additionalToEmails).toEqual(["jobarmsteam@gmail.com"]);
+    // team@newcoworker.com is OURS and drops out entirely.
+    expect(sendArgs.additionalToEmails).not.toContain("team@newcoworker.com");
+    // The original had no Cc, so neither does the reply.
+    expect(sendArgs.ccEmails ?? []).toEqual([]);
+  });
+
+  it("keeps a Cc recipient on Cc rather than promoting them", async () => {
+    // The mirror has to work in both directions, or "mirror" just means
+    // "everyone on To".
+    vi.mocked(getEmailLogThreadIdentity).mockResolvedValue({
+      threadId: "t-mix",
+      providerMessageId: "m-mix",
+      replyToRecipients: ["prospect@example.com"],
+      replyCcRecipients: ["assistant@example.com"]
+    });
+    vi.mocked(sendFromMailboxConnection).mockResolvedValue({
+      ok: true,
+      provider: "google",
+      messageId: "g-mix",
+      threadId: "t-mix",
+      fromEmail: "team@newcoworker.com"
+    } as never);
+
+    await POST(makeRequest(REPLY_BODY));
+    const sendArgs = vi.mocked(sendFromMailboxConnection).mock.calls[0][2] as {
+      additionalToEmails?: string[];
+      ccEmails?: string[];
+    };
+    expect(sendArgs.additionalToEmails).toEqual(["prospect@example.com"]);
+    expect(sendArgs.ccEmails).toEqual(["assistant@example.com"]);
+  });
+
+  it("never lists the person already in To a second time", async () => {
+    // The sender is normally on their own thread's To as well, and repeating
+    // them looks like a mistake on a reply going to a prospect.
+    vi.mocked(getEmailLogThreadIdentity).mockResolvedValue({
+      threadId: "t-dup",
+      providerMessageId: "m-dup",
+      replyToRecipients: ["lead@example.com", "other@example.com"],
+      replyCcRecipients: ["lead@example.com"]
+    });
+    vi.mocked(sendFromMailboxConnection).mockResolvedValue({
+      ok: true,
+      provider: "google",
+      messageId: "g-dup",
+      threadId: "t-dup",
+      fromEmail: "team@newcoworker.com"
+    } as never);
+
+    await POST(makeRequest(REPLY_BODY));
+    const sendArgs = vi.mocked(sendFromMailboxConnection).mock.calls[0][2] as {
+      toEmail: string;
+      additionalToEmails?: string[];
+      ccEmails?: string[];
+    };
+    expect(sendArgs.toEmail).toBe("lead@example.com");
+    expect(sendArgs.additionalToEmails).toEqual(["other@example.com"]);
+    expect(sendArgs.ccEmails ?? []).toEqual([]);
   });
 
   it("claims the conversation even when the provider echoes no thread id", async () => {
@@ -208,7 +307,8 @@ describe("replying inside an existing conversation", () => {
     vi.mocked(getEmailLogThreadIdentity).mockResolvedValue({
       threadId: "graph-conversation-1",
       providerMessageId: "m9",
-      replyAllRecipients: []
+      replyToRecipients: [],
+      replyCcRecipients: []
     });
     vi.mocked(sendFromMailboxConnection).mockResolvedValue({
       ok: true,
@@ -248,7 +348,8 @@ describe("replying inside an existing conversation", () => {
   it("still returns ok when the thread claim throws", async () => {
     // Losing ownership costs an autonomous follow-up, never the email that
     // already went out.
-    vi.mocked(getEmailLogThreadIdentity).mockResolvedValue({ threadId: "t1", replyAllRecipients: [] });
+    vi.mocked(getEmailLogThreadIdentity).mockResolvedValue({ threadId: "t1", replyToRecipients: [],
+      replyCcRecipients: [] });
     vi.mocked(sendFromMailboxConnection).mockResolvedValue({
       ok: true,
       provider: "google",
