@@ -33,6 +33,7 @@ export type SellerCallVariant = "clever" | "referral_exchange";
 /** Amy's team, resolved from `ai_flow_team_members` by name at apply time. */
 export const DAVE_NAME = "Dave Lane";
 export const AMY_NAME = "Amy Laidlaw";
+export const GABRIELLE_NAME = "Gabrielle Mota";
 
 /** The callback number Amy wants spoken and texted. Her own line. */
 export const CALLBACK_E164 = "+16026951142";
@@ -192,7 +193,7 @@ export const REACH_RING_SECONDS = 20;
 export function buildCallStep(
   id: string,
   variant: SellerCallVariant,
-  refs: { dave: Ref; amy: Ref },
+  refs: { dave: Ref; gabby: Ref; amy: Ref },
   opts: { attempt: 1 | 2 | 3 }
 ): Step {
   const step: Record<string, unknown> = {
@@ -201,15 +202,17 @@ export function buildCallStep(
     toVar: "lead_phone",
     personaTemplate: variant === "clever" ? PITCH_CLEVER : PITCH_REFERRAL_EXCHANGE,
     contextTemplate: PITCH_CONTEXT,
-    // The second-leg ladder: Dave first, Amy as the fallback, while the AI
-    // keeps the seller engaged. Amy's ask, verbatim: try Dave then Amy
-    // "while still on the call with the lead engaging them".
+    // The second-leg ladder: Dave and Gabby take turns ringing first
+    // (rotateFirst 2, speed-to-lead decision of 2026-08-08), Amy is always
+    // the last resort, and the AI keeps the seller engaged throughout.
     reachTeammate: {
-      refs: [refs.dave, refs.amy],
+      refs: [refs.dave, refs.gabby, refs.amy],
       ringSeconds: REACH_RING_SECONDS,
+      rotateFirst: 2,
       preSmsTemplate: CALLBACK_REQUEST_SMS
     },
-    notifyRef: refs.dave,
+    // The summary follows whoever actually rang first on this call.
+    notifyFirstReachTarget: true,
     waitMinutes: CALL_WAIT_MINUTES,
     saveAs: "call_outcome"
   };
@@ -253,7 +256,7 @@ export function hasSellerCallLadder(def: Definition): boolean {
  */
 function buildFollowups(
   variant: SellerCallVariant,
-  refs: { dave: Ref; amy: Ref },
+  refs: { dave: Ref; gabby: Ref; amy: Ref },
   gate?: { var: string; equals: string }
 ): Step {
   const retry3: Record<string, unknown> = {
@@ -376,7 +379,7 @@ function buildFollowups(
 export function addSellerCallLadder(
   def: Definition,
   variant: SellerCallVariant,
-  refs: { dave: Ref; amy: Ref },
+  refs: { dave: Ref; gabby: Ref; amy: Ref },
   opts: {
     routeStepId: string;
     /**
@@ -512,7 +515,10 @@ export function removeBestTimeCaptureField(def: Definition): boolean {
  * when every call step already carries the ladder, so re-running is a
  * no-op.
  */
-export function upgradeCallsToReachLadder(def: Definition, refs: { dave: Ref; amy: Ref }): boolean {
+export function upgradeCallsToReachLadder(
+  def: Definition,
+  refs: { dave: Ref; gabby: Ref; amy: Ref }
+): boolean {
   let changed = false;
   const walk = (steps: readonly Step[]): void => {
     for (const st of steps as unknown as Record<string, unknown>[]) {
@@ -523,8 +529,9 @@ export function upgradeCallsToReachLadder(def: Definition, refs: { dave: Ref; am
         !st.reachTeammate
       ) {
         st.reachTeammate = {
-          refs: [refs.dave, refs.amy],
+          refs: [refs.dave, refs.gabby, refs.amy],
           ringSeconds: REACH_RING_SECONDS,
+          rotateFirst: 2,
           preSmsTemplate: CALLBACK_REQUEST_SMS
         };
         delete st.transfer;

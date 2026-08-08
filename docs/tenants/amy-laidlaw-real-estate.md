@@ -207,6 +207,31 @@ Other networks: `seed-referralexchange-aiflow.ts`,
 `realtor-retrigger-guard.ts`. HomeLight's are listed in
 [homelight-flow.md](homelight-flow.md).
 
+Speed-to-lead (Aug 8 2026): `amy-speed-to-lead-definition.ts` (pure
+builders) driven by `amy-speed-to-lead-patch.ts` (same mechanics: dry-run
+default, per-flow `--only`, `--revert` from the ledger's stored previous
+definition). Normal seller leads stopped being pinned to Dave: the claim
+offer now goes to Gabrielle Mota, Amy, and Dave SIMULTANEOUSLY
+(`agentNames` broadcast, one shared deadline, "First to reply 1 gets it.")
+on Clever Lead - Accept, ReferralExchange route_seller/route_both, and New
+Lead Intake route_seller/route_both; HomeLight's existing Dave-and-Amy
+broadcast gained Gabrielle. The reach ladder on Clever's ai_call steps
+became [Dave, Gabby, Amy] with `rotateFirst: 2`: Dave and Gabby take turns
+ringing first call by call (cursor:
+`ai_flow_team_members.last_reach_first_at`), Amy stays the last resort,
+and the post-call summary follows whoever rang first
+(`notifyFirstReachTarget`). The Clever spoke check swapped its Dave pin
+for `agentNameVar: "spoke_owner"` (extracted from the owner_assigned
+notice), so the day-3 "did you speak with them?" question reaches whoever
+actually claimed the lead; runs already parked in the 3-day grace at apply
+time never extracted the var and cascade to owner fallback for up to ~3
+days, by design. Still Dave by static ref, deliberately out of scope: the
+spoke check's WEEKLY calls' `transfer.toRef`/`notifyRef` (no dynamic
+transfer-ref mechanism exists yet). The offers must stay `agentNames`:
+`broadcastAll` would silently exclude Amy (`team_broadcast_enabled`
+false), and broadcast name matching is full-name ("Gabrielle Mota";
+"Gabby" reaches nobody).
+
 Seller auto-call (Aug 7 2026): `amy-seller-ai-call-definition.ts` (pure
 builders) driven by `amy-seller-ai-call-patch.ts` (idempotent, dry-run by
 default, `--revert` restores the exact previous definition from the ledger).

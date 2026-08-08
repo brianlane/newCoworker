@@ -41,7 +41,12 @@ const AMY: Ref = {
   label: "Amy Laidlaw",
   source: "employee"
 };
-const REFS = { dave: DAVE, amy: AMY };
+const GABBY: Ref = {
+  id: "dddddddd-dddd-4ddd-8ddd-dddddddddddd",
+  label: "Gabrielle Mota",
+  source: "employee"
+};
+const REFS = { dave: DAVE, gabby: GABBY, amy: AMY };
 
 type Step = AiFlowDefinition["steps"][number];
 
@@ -162,18 +167,21 @@ describe("addSellerCallLadder (Clever shape)", () => {
     }
   });
 
-  it("every call: the Dave-then-Amy reach ladder (refs, never name strings), shared outcome var, no captureFields", () => {
+  it("every call: the rotating trio ladder (refs, never name strings), shared outcome var, no captureFields", () => {
     const { def } = patched();
     for (const c of collectCalls(parseAiFlowDefinition(def))) {
       expect(c.toVar).toBe("lead_phone");
       expect(c.saveAs).toBe("call_outcome");
-      // Amy's ask, verbatim: try Dave then Amy "while still on the call
-      // with the lead engaging them". Order is the feature.
-      expect(c.reachTeammate?.refs).toEqual([DAVE, AMY]);
+      // Speed-to-lead decision of 2026-08-08: Dave and Gabby take turns
+      // ringing first (rotateFirst 2); Amy is always the last resort.
+      expect(c.reachTeammate?.refs).toEqual([DAVE, GABBY, AMY]);
+      expect(c.reachTeammate?.rotateFirst).toBe(2);
       expect(c.reachTeammate?.ringSeconds).toBe(20);
       expect(c.reachTeammate?.preSmsTemplate).toContain("Seller on the line NOW");
       expect(c.transfer).toBeUndefined();
-      expect(c.notifyRef).toEqual(DAVE);
+      // The summary follows whoever rang first on THIS call.
+      expect(c.notifyFirstReachTarget).toBe(true);
+      expect(c.notifyRef).toBeUndefined();
       expect(c.waitMinutes).toBe(20);
       // Decision 9: a pitch, not an interview. captureFields is what turns
       // one into the other.
@@ -197,7 +205,8 @@ describe("addSellerCallLadder (Clever shape)", () => {
     expect(upgradeCallsToReachLadder(def, REFS)).toBe(true);
     const parsed = parseAiFlowDefinition(def);
     for (const c of collectCalls(parsed)) {
-      expect(c.reachTeammate?.refs).toEqual([DAVE, AMY]);
+      expect(c.reachTeammate?.refs).toEqual([DAVE, GABBY, AMY]);
+      expect(c.reachTeammate?.rotateFirst).toBe(2);
       expect(c.transfer).toBeUndefined();
     }
     expect(upgradeCallsToReachLadder(def, REFS)).toBe(false);
