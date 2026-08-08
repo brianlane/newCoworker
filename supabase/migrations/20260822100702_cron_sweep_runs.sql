@@ -41,13 +41,27 @@ create table public.cron_sweep_runs (
   -- want one bad night to write megabytes.
   errors jsonb not null default '[]'::jsonb,
   -- The rest of the sweep's result body (counts), minus errors/durationMs.
-  summary jsonb not null default '{}'::jsonb
+  summary jsonb not null default '{}'::jsonb,
+  -- WHO invoked this run: the Edge bridge's name for a pg_cron run, or
+  -- 'direct' for anything else.
+  --
+  -- Not cosmetic. Several internal routes accept the same
+  -- INTERNAL_CRON_SECRET bearer from callers that are not pg_cron:
+  -- /api/internal/messenger-worker is kicked fire-and-forget by the Meta
+  -- webhook (src/app/api/webhooks/meta/route.ts) on every inbound message.
+  -- Without this column, busy Messenger traffic would keep writing rows for
+  -- messenger-worker while its per-minute cron job was dead, and the
+  -- watchdog's missing-row check would never fire for the one sweep whose
+  -- whole job is being a retry net. The watchdog counts only cron-sourced
+  -- rows toward liveness; direct runs are still recorded, since their
+  -- failures are worth seeing.
+  source text not null default 'direct'
 );
 
 -- The watchdog asks two questions: "did <sweep> finish since <time>" and
 -- "what happened across the whole fleet since <time>". One index each.
 create index cron_sweep_runs_sweep_finished_idx
-  on public.cron_sweep_runs (sweep, finished_at desc);
+  on public.cron_sweep_runs (sweep, source, finished_at desc);
 create index cron_sweep_runs_finished_idx
   on public.cron_sweep_runs (finished_at desc);
 

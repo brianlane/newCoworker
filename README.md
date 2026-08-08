@@ -2915,6 +2915,17 @@ Four properties this depends on, none of them incidental:
 - **401 and 403 are never recorded.** Those are a bad cron bearer, so
   recording them would let any unauthenticated probe manufacture sweep runs
   and paper over a genuinely missing one.
+- **Each row records who invoked it**, in `source`. The cron bearer is *not*
+  exclusive to pg_cron: the Meta webhook kicks
+  `/api/internal/messenger-worker` fire-and-forget on every inbound message
+  using the same `INTERNAL_CRON_SECRET`. Without a source, a busy Messenger
+  day would keep that sweep's ledger looking alive while its per-minute cron
+  job was dead, and the watchdog would never report the one sweep whose whole
+  purpose is being a retry net. Every Edge bridge stamps `X-Cron-Job` with
+  its own function name; anything else records as `direct`. Direct runs are
+  still recorded (their failures matter) but do not count toward liveness.
+  This is attribution, not authorisation: the bearer is the security
+  boundary, and only our own bridges send the header.
 - **Dispatchers are excluded** (`edge-ai-flow-worker`,
   `edge-customer-memory-summarize-sweep`, `edge-sms-inbound-worker`). They
   call their route once per claimed row, so wrapping them would write a row

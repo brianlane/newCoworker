@@ -9,6 +9,8 @@ vi.mock("@/lib/logger", () => ({
 }));
 
 import {
+  CRON_SOURCE_HEADER,
+  DIRECT_SOURCE,
   SWEEP_ERRORS_MAX,
   SWEEP_ERROR_TEXT_MAX,
   buildSweepRunRow,
@@ -101,7 +103,8 @@ describe("buildSweepRunRow", () => {
       ok: true,
       error_count: 0,
       errors: [],
-      summary: { businesses: 8, snapshots: 24 }
+      summary: { businesses: 8, snapshots: 24 },
+      source: "direct"
     });
   });
 
@@ -387,5 +390,59 @@ describe("withSweepRun", () => {
     await wrapped(request);
     const row = insert.mock.calls[0][0] as { duration_ms: number };
     expect(row.duration_ms).toBeGreaterThanOrEqual(20);
+  });
+});
+
+/**
+ * The cron bearer is not exclusive to pg_cron: the Meta webhook kicks
+ * /api/internal/messenger-worker with it on every inbound message. Without a
+ * recorded source, that traffic would keep the ledger looking alive while
+ * the per-minute cron job was dead.
+ */
+describe("run attribution", () => {
+  const cronRequest = (job: string) =>
+    new Request("https://app.test/api/internal/messenger-worker", {
+      method: "POST",
+      headers: { [CRON_SOURCE_HEADER]: job }
+    });
+
+  it("records the bridge name when the Edge cron bridge stamped the request", async () => {
+    const insert = mockInsert();
+    const wrapped = withSweepRun("messenger-worker", async () => successResponse({ claimed: 0 }));
+    await wrapped(cronRequest("messenger-jobs-sweep"));
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({ sweep: "messenger-worker", source: "messenger-jobs-sweep" })
+    );
+  });
+
+  it("records the Meta webhook's unstamped kick as direct, not as a cron run", async () => {
+    const insert = mockInsert();
+    const wrapped = withSweepRun("messenger-worker", async () => successResponse({ claimed: 1 }));
+    await wrapped(new Request("https://app.test/api/internal/messenger-worker", { method: "POST" }));
+    expect(insert).toHaveBeenCalledWith(expect.objectContaining({ source: DIRECT_SOURCE }));
+  });
+
+  it("treats a blank header as direct rather than as an empty-named cron job", async () => {
+    const insert = mockInsert();
+    const wrapped = withSweepRun("messenger-worker", async () => successResponse({ claimed: 0 }));
+    await wrapped(cronRequest("   "));
+    expect(insert).toHaveBeenCalledWith(expect.objectContaining({ source: DIRECT_SOURCE }));
+  });
+
+  it("keeps the source on a thrown run too", async () => {
+    const insert = mockInsert();
+    const wrapped = withSweepRun("messenger-worker", async () => {
+      throw new Error("boom");
+    });
+    await expect(wrapped(cronRequest("messenger-jobs-sweep"))).rejects.toThrow("boom");
+    expect(insert).toHaveBeenCalledWith(
+      expect.objectContaining({ ok: false, source: "messenger-jobs-sweep" })
+    );
+  });
+
+  it("defaults to direct when the builder is called without a source", () => {
+    expect(
+      buildSweepRunRow({ sweep: "s", startedAt: START, durationMs: 1, ok: true, result: {} }).source
+    ).toBe(DIRECT_SOURCE);
   });
 });

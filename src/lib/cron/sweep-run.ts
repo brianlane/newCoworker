@@ -42,12 +42,35 @@ export const SWEEP_ERROR_TEXT_MAX = 500;
 /** Result keys that are not part of the "what did it count" summary. */
 const NON_SUMMARY_KEYS = new Set(["errors", "failures", "durationMs"]);
 
+/**
+ * Header the Edge cron bridges stamp with their own function name, so a run
+ * can say who invoked it.
+ *
+ * Needed because the cron bearer is not exclusive to pg_cron. The Meta
+ * webhook kicks /api/internal/messenger-worker fire-and-forget on every
+ * inbound message using the same INTERNAL_CRON_SECRET
+ * (src/app/api/webhooks/meta/route.ts). Without a source, a busy Messenger
+ * day would keep writing messenger-worker rows while its per-minute cron job
+ * was dead, and the watchdog would never report the one sweep whose entire
+ * purpose is being a retry net.
+ *
+ * This is attribution, not authorisation. It does not need to be
+ * unforgeable: the bearer is already the security boundary, and the only
+ * callers that send this header are our own bridges.
+ */
+export const CRON_SOURCE_HEADER = "x-cron-job";
+
+/** Recorded when the caller was not one of the Edge cron bridges. */
+export const DIRECT_SOURCE = "direct";
+
 export type SweepRunInput = {
   /**
    * Route segment under src/app/api/internal/, e.g. "analytics-snapshot-sweep".
    * tests/cron-sweep-run-coverage.test.ts pins this to the directory name.
    */
   sweep: string;
+  /** Edge bridge name from CRON_SOURCE_HEADER, or "direct". */
+  source?: string;
   /** Date.now() captured at route entry. */
   startedAt: number;
   /** The route's own measured duration, the same number it returns. */
@@ -69,6 +92,7 @@ export type SweepRunRow = {
   error_count: number;
   errors: string[];
   summary: Record<string, unknown>;
+  source: string;
 };
 
 /** One error entry as short readable text, whatever shape the sweep used. */
@@ -130,7 +154,8 @@ export function buildSweepRunRow(input: SweepRunInput): SweepRunRow {
     // under-reports how bad the run was.
     error_count: raw.length,
     errors: raw.slice(0, SWEEP_ERRORS_MAX).map(errorText),
-    summary: input.ok ? extractSweepSummary(input.result) : {}
+    summary: input.ok ? extractSweepSummary(input.result) : {},
+    source: input.source ?? DIRECT_SOURCE
   };
 }
 
@@ -197,12 +222,14 @@ export function withSweepRun(
 ): (request: Request) => Promise<Response> {
   return async (request: Request): Promise<Response> => {
     const startedAt = Date.now();
+    const source = request.headers.get(CRON_SOURCE_HEADER)?.trim() || DIRECT_SOURCE;
     let response: Response;
     try {
       response = await handler(request);
     } catch (err) {
       await recordSweepRun({
         sweep,
+        source,
         startedAt,
         durationMs: Date.now() - startedAt,
         ok: false,
@@ -226,6 +253,7 @@ export function withSweepRun(
     const parsed = parseSweepBody(response.status, text);
     await recordSweepRun({
       sweep,
+      source,
       startedAt,
       durationMs,
       ok: parsed.ok,

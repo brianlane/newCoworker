@@ -45,8 +45,8 @@ function cronJobFunctions(): string[] {
  * row and are deliberately excluded, since wrapping them would write a row
  * per row of work rather than per sweep.
  */
-function passthroughRoutes(): string[] {
-  const routes = new Set<string>();
+function passthroughChains(): Array<{ fn: string; route: string }> {
+  const chains = new Map<string, string>();
   for (const fn of cronJobFunctions()) {
     const path = join(FUNCTIONS_DIR, fn, "index.ts");
     if (!existsSync(path)) continue;
@@ -55,12 +55,15 @@ function passthroughRoutes(): string[] {
       ...new Set([...src.matchAll(/\/api\/internal\/([A-Za-z0-9_-]+)/g)].map((m) => m[1]))
     ];
     const hasBudget = /REQUEST_TIMEOUT_MS\s*=\s*[0-9_]+/.test(src);
-    if (found.length === 1 && hasBudget) routes.add(found[0]);
+    if (found.length === 1 && hasBudget) chains.set(fn, found[0]);
   }
-  return [...routes].sort();
+  return [...chains.entries()]
+    .map(([fn, route]) => ({ fn, route }))
+    .sort((a, b) => a.route.localeCompare(b.route));
 }
 
-const ROUTES = passthroughRoutes();
+const CHAINS = passthroughChains();
+const ROUTES = [...new Set(CHAINS.map((c) => c.route))].sort();
 
 describe("every cron sweep records its run", () => {
   it("discovers the pass-through routes (a broken parser must not pass silently)", () => {
@@ -89,6 +92,32 @@ describe("every cron sweep records its run", () => {
         /export\s+(async\s+)?function\s+POST\s*\(/.test(src),
         `${route} still exports a bare POST that skips the wrapper`
       ).toBe(false);
+    });
+  }
+});
+
+/**
+ * Every cron bridge must identify itself, because the cron bearer is not
+ * exclusive to pg_cron.
+ *
+ * /api/internal/messenger-worker is kicked fire-and-forget by the Meta
+ * webhook on every inbound message, using the same INTERNAL_CRON_SECRET
+ * (src/app/api/webhooks/meta/route.ts). Without the header, those rows are
+ * indistinguishable from cron runs, so busy Messenger traffic would keep the
+ * ledger looking alive while the per-minute cron job was dead, and the
+ * watchdog would never report the one sweep whose whole job is being a retry
+ * net. The watchdog counts only cron-sourced rows toward liveness.
+ *
+ * Asserted for every bridge, not just that one: the next route to acquire a
+ * second caller should not have to rediscover this.
+ */
+describe("every cron bridge stamps its runs with its own name", () => {
+  for (const { fn, route } of CHAINS) {
+    it(`${fn} sends X-Cron-Job on the forward to ${route}`, () => {
+      const src = readFileSync(join(FUNCTIONS_DIR, fn, "index.ts"), "utf8");
+      const stamped = src.match(/"X-Cron-Job":\s*"([^"]+)"/);
+      expect(stamped, `${fn} does not send the X-Cron-Job header`).not.toBeNull();
+      expect(stamped?.[1], `${fn} stamps someone else's name`).toBe(fn);
     });
   }
 });
