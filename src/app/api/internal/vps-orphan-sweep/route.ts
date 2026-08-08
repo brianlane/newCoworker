@@ -14,6 +14,7 @@
 
 import { assertCronAuth } from "@/lib/cron-auth";
 import { errorResponse, successResponse, handleRouteError } from "@/lib/api-response";
+import { withSweepRun } from "@/lib/cron/sweep-run";
 import { logger } from "@/lib/logger";
 import { listBusinesses } from "@/lib/db/businesses";
 import { listVpsInventory, releaseVpsToPool } from "@/lib/db/vps-inventory";
@@ -24,7 +25,7 @@ import { sendOpsOrphanSweepEmail } from "@/lib/email/ops-notify";
 export const maxDuration = 300;
 export const runtime = "nodejs";
 
-export async function POST(request: Request): Promise<Response> {
+async function runSweep(request: Request): Promise<Response> {
   if (!assertCronAuth(request)) {
     return errorResponse("FORBIDDEN", "Invalid cron bearer", 403);
   }
@@ -64,3 +65,6 @@ export async function POST(request: Request): Promise<Response> {
     return handleRouteError(err);
   }
 }
+
+// Every run lands in public.cron_sweep_runs; see src/lib/cron/sweep-run.ts.
+export const POST = withSweepRun("vps-orphan-sweep", runSweep);

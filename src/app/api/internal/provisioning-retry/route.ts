@@ -18,6 +18,7 @@
 
 import { assertCronAuth } from "@/lib/cron-auth";
 import { errorResponse, successResponse, handleRouteError } from "@/lib/api-response";
+import { withSweepRun } from "@/lib/cron/sweep-run";
 import { logger } from "@/lib/logger";
 import { retryStalledProvisioningJob } from "@/lib/provisioning/jobs";
 import { orchestrateProvisioning } from "@/lib/provisioning/orchestrate";
@@ -37,7 +38,7 @@ import { createSupabaseServiceClient } from "@/lib/supabase/server";
 export const maxDuration = 1800;
 export const runtime = "nodejs";
 
-export async function POST(request: Request): Promise<Response> {
+async function runSweep(request: Request): Promise<Response> {
   if (!assertCronAuth(request)) {
     return errorResponse("FORBIDDEN", "Invalid cron bearer", 403);
   }
@@ -186,3 +187,6 @@ async function listStuckScanCandidatesFromDb(): Promise<
   }
   return out;
 }
+
+// Every run lands in public.cron_sweep_runs; see src/lib/cron/sweep-run.ts.
+export const POST = withSweepRun("provisioning-retry", runSweep);

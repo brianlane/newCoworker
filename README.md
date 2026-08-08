@@ -2868,6 +2868,76 @@ unscheduled it while zero tenants use residency. The script replays the
 unschedule and reports this as clean; a tool that only reads schedules will
 wrongly call it drift.
 
+### Every sweep records its own run, because nothing else can
+
+pg_cron cannot tell you whether a sweep worked. `pg_net`'s `http_post` is
+**asynchronous**: the cron run only enqueues the request and finishes in
+milliseconds, so `cron.job_run_details` records "succeeded" whether the sweep
+ran cleanly, returned a body full of errors, or timed out. That table is a
+liar for every job in the fleet.
+
+The real outcome lands in `net._http_response`, which is **retained for about
+six hours**, has no job column, and can only be attributed back to a sweep by
+reverse-engineering its JSON body shape (`src/lib/cron/sweep-http-stats.ts`,
+read by `tsx debug/cron-http-stats.ts`). Until 2026-08-08 that was the only
+record, which meant three failure modes were invisible:
+
+1. **The sweep never ran.** No row at all, indistinguishable from a quiet
+   night.
+2. **It answered HTTP 200 with a non-empty `errors[]` array.** Every sweep
+   body carries one and nothing looked at it, so `cron-http-stats` reported
+   `0 timed out, 0 errored` while the work was failing per tenant.
+3. **It timed out more than six hours ago.**
+
+So every pass-through route now wraps its handler:
+
+```ts
+export const POST = withSweepRun("analytics-snapshot-sweep", runSweep);
+```
+
+`withSweepRun` (`src/lib/cron/sweep-run.ts`) writes one
+`public.cron_sweep_runs` row per run: `sweep`, `started_at`, `finished_at`,
+`duration_ms`, `ok`, `error_count`, a capped `errors` list, and the sweep's
+own counts as `summary`. Rows are kept 30 days by the
+`cron-sweep-runs-prune` job, long enough to watch a duration curve bend
+toward the 150s ceiling before it gets there.
+
+Four properties this depends on, none of them incidental:
+
+- **A row is written on both paths**, success and thrown. An `ok = false` row
+  means the sweep blew up; `ok = true` with `error_count > 0` is failure mode
+  2 above, now a column instead of a guess.
+- **A missing row is evidence, not a gap.** A sweep killed by a timeout never
+  reaches the recorder, which is precisely what makes absence meaningful.
+  That only holds because `recordSweepRun` never throws and never rejects: a
+  bookkeeping failure must not be able to fabricate an outage, so it logs
+  loudly and swallows.
+- **401 and 403 are never recorded.** Those are a bad cron bearer, so
+  recording them would let any unauthenticated probe manufacture sweep runs
+  and paper over a genuinely missing one.
+- **Each row records who invoked it**, in `source`. The cron bearer is *not*
+  exclusive to pg_cron: the Meta webhook kicks
+  `/api/internal/messenger-worker` fire-and-forget on every inbound message
+  using the same `INTERNAL_CRON_SECRET`. Without a source, a busy Messenger
+  day would keep that sweep's ledger looking alive while its per-minute cron
+  job was dead, and the watchdog would never report the one sweep whose whole
+  purpose is being a retry net. Every Edge bridge stamps `X-Cron-Job` with
+  its own function name; anything else records as `direct`. Direct runs are
+  still recorded (their failures matter) but do not count toward liveness.
+  This is attribution, not authorisation: the bearer is the security
+  boundary, and only our own bridges send the header.
+- **Dispatchers are excluded** (`edge-ai-flow-worker`,
+  `edge-customer-memory-summarize-sweep`, `edge-sms-inbound-worker`). They
+  call their route once per claimed row, so wrapping them would write a row
+  per unit of work rather than per sweep.
+
+`tests/cron-sweep-run-coverage.test.ts` enforces the wiring in CI, and
+**discovers** the pass-through routes from the migrations and Edge functions
+the same way the timeout-parity test does, so a cron job added tomorrow is
+covered the day it lands. It also asserts each route records under its own
+directory name: a sweep recording under the wrong name would invent an outage
+for one sweep while hiding a real one for another.
+
 ### Post-merge: what CI does vs what you still do
 
 **CI does automatically on every push to main** (the `Vercel Deploy` job, in

@@ -48,6 +48,10 @@ serve(async (req: Request) => {
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${cronSecret}`,
+        // Attribution for public.cron_sweep_runs: marks this run as
+        // pg_cron-driven, so a route that also accepts the same bearer from
+        // elsewhere cannot mask a dead cron job. See src/lib/cron/sweep-run.ts.
+        "X-Cron-Job": "social-post-sweep",
         // CSRF gate: src/proxy.ts allows server-to-server bearer POSTs only
         // when Origin matches NEXT_PUBLIC_APP_URL.
         Origin: appUrl

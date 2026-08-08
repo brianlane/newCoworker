@@ -54,6 +54,10 @@ serve(async (req: Request) => {
       headers: {
         "Content-Type": "application/json",
         Authorization: `Bearer ${cronSecret}`,
+        // Attribution for public.cron_sweep_runs: marks this run as
+        // pg_cron-driven, so a route that also accepts the same bearer from
+        // elsewhere cannot mask a dead cron job. See src/lib/cron/sweep-run.ts.
+        "X-Cron-Job": "aiflow-library-refresh",
         // The Next.js CSRF middleware (src/proxy.ts) blocks state-changing
         // /api/* POSTs whose Origin/Referer doesn't match NEXT_PUBLIC_APP_URL.
         // Bearer-authed server-to-server calls aren't a CSRF risk, but we set
