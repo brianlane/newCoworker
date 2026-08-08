@@ -7485,6 +7485,9 @@ async function placeAiCallStep(
   // transfer ref does: a ladder that silently dropped its first target
   // would ring the wrong person first, which is worse than failing loudly.
   let reach: { targets: { name: string; e164: string }[]; ringSeconds?: number; preSmsBody?: string } | undefined;
+  // Set when rotation ran: the roster id owed the cursor stamp, written only
+  // once the dial is genuinely going to happen (after the ledger insert).
+  let reachStampRefId: string | undefined;
   if (action.reachRefs && action.reachRefs.length > 0) {
     let targets: { name: string; e164: string; refId: string }[] = [];
     for (const ref of action.reachRefs) {
@@ -7523,15 +7526,11 @@ async function placeAiCallStep(
           createdAt: r.created_at
         }));
         targets = rotateReachOrder(targets, action.reachRotateFirst, cursors, (t) => t.refId);
-        const first = targets[0];
-        const { error: stampErr } = await supabase
-          .from("ai_flow_team_members")
-          .update({ last_reach_first_at: new Date().toISOString() })
-          .eq("id", first.refId)
-          .eq("business_id", run.business_id);
-        if (stampErr) {
-          console.error("reach rotation cursor stamp failed", stampErr.message);
-        }
+        // The STAMP waits until the dedupe ledger insert succeeds below: a
+        // crash-retry re-entering this step (duplicate dedupe_key) computes
+        // an order but never dials, and stamping there would skew who rings
+        // first on later leads without any phone having rung.
+        reachStampRefId = targets[0].refId;
       } catch (err) {
         console.error(
           "reach rotation failed; using authored ladder order",
@@ -7589,6 +7588,19 @@ async function placeAiCallStep(
       return pause("");
     }
     throw new Error(`place_ai_call dial ledger insert: ${insErr.message}`);
+  }
+  // The dial is now committed to happen (the ledger row is ours), so the
+  // rotated-first teammate genuinely rings: stamp the cursor. Best-effort;
+  // a failed stamp costs fairness on a later lead, never this call.
+  if (reachStampRefId) {
+    const { error: stampErr } = await supabase
+      .from("ai_flow_team_members")
+      .update({ last_reach_first_at: new Date().toISOString() })
+      .eq("id", reachStampRefId)
+      .eq("business_id", run.business_id);
+    if (stampErr) {
+      console.error("reach rotation cursor stamp failed", stampErr.message);
+    }
   }
 
   const result = await placeOutboundCall(supabaseUrl, bearer, {

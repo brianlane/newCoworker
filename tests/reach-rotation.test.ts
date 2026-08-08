@@ -84,6 +84,46 @@ describe("rotateReachOrder", () => {
     ).toEqual(GABBY);
   });
 
+  it("orders every comparator direction deterministically in a three-wide window", () => {
+    // Non-null vs null in BOTH comparison directions, plus a null-null pair
+    // decided by created_at: [Dave stamped, Gabby never, Amy never].
+    const cursors = [
+      cursor("dave-id", "2026-08-08T10:00:00Z", "2026-01-01T00:00:00Z"),
+      cursor("gabby-id", null, "2026-03-01T00:00:00Z"),
+      cursor("amy-id", null, "2026-02-01T00:00:00Z")
+    ];
+    expect(rotateReachOrder(LADDER, 3, cursors, idOf)).toEqual([AMY, GABBY, DAVE]);
+  });
+
+  it("equal stamps fall through to created_at in both directions", () => {
+    const t = "2026-08-08T10:00:00Z";
+    // Sort compares the LATER-authored entry as `a`, so both created_at
+    // ternary directions need their own cursor arrangements.
+    expect(
+      rotateReachOrder(
+        LADDER,
+        2,
+        [cursor("dave-id", t, "2026-02-01T00:00:00Z"), cursor("gabby-id", t, "2026-01-01T00:00:00Z")],
+        idOf
+      )[0]
+    ).toEqual(GABBY);
+    expect(
+      rotateReachOrder(
+        LADDER,
+        2,
+        [cursor("dave-id", t, "2026-01-01T00:00:00Z"), cursor("gabby-id", t, "2026-02-01T00:00:00Z")],
+        idOf
+      )[0]
+    ).toEqual(DAVE);
+  });
+
+  it("a stamped later-authored teammate yields to an unstamped earlier one", () => {
+    // The comparator's other null direction: the LATER-authored entry is the
+    // stamped one, so it must return "after" against the null it compares to.
+    const cursors = [cursor("dave-id", null), cursor("gabby-id", "2026-08-08T10:00:00Z")];
+    expect(rotateReachOrder(LADDER, 2, cursors, idOf)).toEqual([DAVE, GABBY, AMY]);
+  });
+
   it("never mutates the input", () => {
     const input = [...LADDER];
     rotateReachOrder(input, 2, [cursor("dave-id", "2026-08-08T10:00:00Z")], idOf);
