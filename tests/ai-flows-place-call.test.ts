@@ -172,6 +172,52 @@ describe("schema: place_ai_call", () => {
         })
       ).join("\n")
     ).toContain("one handoff style per call step");
+    // notifyFirstReachTarget is the fourth exactly-one notify source and
+    // only means something with a ladder.
+    expect(
+      issuesOf(
+        defWith({
+          toVar: "lead_phone",
+          personaTemplate: "Hi",
+          notifyE164: "+16025245719",
+          notifyFirstReachTarget: true,
+          reachTeammate: { refs: [EMP_REF] }
+        })
+      ).join("\n")
+    ).toContain("more than one call-summary recipient");
+    expect(
+      issuesOf(
+        defWith({
+          toVar: "lead_phone",
+          personaTemplate: "Hi",
+          notifyFirstReachTarget: true
+        })
+      ).join("\n")
+    ).toContain("no reachTeammate ladder");
+    // The rotation window must fit the ladder and hold employees only.
+    expect(
+      issuesOf(
+        defWith({
+          toVar: "lead_phone",
+          personaTemplate: "Hi",
+          notifyOwner: true,
+          reachTeammate: { refs: [EMP_REF, EMP_REF], rotateFirst: 3 }
+        })
+      ).join("\n")
+    ).toContain("only has 2");
+    expect(
+      issuesOf(
+        defWith({
+          toVar: "lead_phone",
+          personaTemplate: "Hi",
+          notifyOwner: true,
+          reachTeammate: {
+            refs: [{ source: "contact", id: "cccccccc-cccc-4ccc-8ccc-cccccccccccc" }, EMP_REF],
+            rotateFirst: 2
+          }
+        })
+      ).join("\n")
+    ).toContain("not a roster employee");
   });
 
   it("scope-checks the persona, known-details, and pre-alert templates", () => {
@@ -301,6 +347,31 @@ describe("planStep: place_ai_call", () => {
     const action = plan.ok && plan.action.kind === "place_ai_call" ? plan.action : null;
     expect(action).toMatchObject({ reachRefs: [EMP_REF], reachPreSmsBody: "" });
     expect(action).not.toHaveProperty("reachRingSeconds");
+  });
+
+  it("carries the rotation window and notify-follows-first through to the action", () => {
+    const plan = planStep(
+      step({
+        notifyE164: undefined,
+        notifyFirstReachTarget: true,
+        reachTeammate: { refs: [EMP_REF], rotateFirst: 2 }
+      }),
+      { vars: { lead_phone: "+17572390150", lead_name: "Bryan" } }
+    );
+    expect(plan.ok && plan.action.kind === "place_ai_call" ? plan.action : null).toMatchObject({
+      reachRotateFirst: 2,
+      notifyFirstReachTarget: true
+    });
+  });
+
+  it("omits both new keys when unset", () => {
+    const plan = planStep(
+      step({ reachTeammate: { refs: [EMP_REF] } }),
+      { vars: { lead_phone: "+17572390150", lead_name: "Bryan" } }
+    );
+    const action = plan.ok && plan.action.kind === "place_ai_call" ? plan.action : null;
+    expect(action).not.toHaveProperty("reachRotateFirst");
+    expect(action).not.toHaveProperty("notifyFirstReachTarget");
   });
 
   it("carries notifyOwner through to the action (the worker resolves the number)", () => {

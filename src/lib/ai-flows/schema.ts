@@ -1256,6 +1256,14 @@ const nonBranchStepMembers = [
      * state.
      */
     notifyOwner: z.literal(true).optional(),
+    /**
+     * Send the post-call summary and outcome texts to whoever the reach
+     * ladder rings FIRST on this call (the resolved, post-rotation first
+     * target). The fourth exactly-one summary recipient; requires
+     * reachTeammate, because without a ladder there is no first target.
+     * Only the literal `true` is accepted: absence IS the off state.
+     */
+    notifyFirstReachTarget: z.literal(true).optional(),
     transfer: z
       .object({
         // Exactly one of toE164 / toRef (validateDefinitionSemantics).
@@ -1282,7 +1290,16 @@ const nonBranchStepMembers = [
         /** How long each teammate's phone rings before the next. Default 20. */
         ringSeconds: z.number().int().min(5).max(45).optional(),
         /** Pre-alert SMS texted to each target as their phone starts ringing. */
-        preSmsTemplate: z.string().min(1).max(1600).optional()
+        preSmsTemplate: z.string().min(1).max(1600).optional(),
+        /**
+         * Round-robin the FIRST N refs: at dial time the worker reorders
+         * only refs[0..N) among themselves, least-recently-rung-first
+         * (ai_flow_team_members.last_reach_first_at), so two teammates take
+         * turns ringing first while everyone past N keeps their authored
+         * position (the last resort stays last). Rotated refs must be
+         * employees, since the cursor lives on the roster row.
+         */
+        rotateFirst: z.number().int().min(2).max(3).optional()
       })
       .optional(),
     /** Optional lead fields the AI captures during the call. */
@@ -2625,14 +2642,35 @@ export function validateDefinitionSemantics(def: AiFlowDefinition): string[] {
       const notifySources = [
         Boolean(step.notifyE164),
         Boolean(step.notifyRef),
-        Boolean(step.notifyOwner)
+        Boolean(step.notifyOwner),
+        Boolean(step.notifyFirstReachTarget)
       ].filter(Boolean).length;
       if (notifySources !== 1) {
         issues.push(
           notifySources === 0
-            ? `Step "${step.id}" has nowhere to send the call summary; set notifyOwner, notifyE164, or pick a saved contact (notifyRef).`
-            : `Step "${step.id}" sets more than one call-summary recipient; use exactly one of notifyOwner / notifyE164 / notifyRef.`
+            ? `Step "${step.id}" has nowhere to send the call summary; set notifyOwner, notifyE164, notifyFirstReachTarget, or pick a saved contact (notifyRef).`
+            : `Step "${step.id}" sets more than one call-summary recipient; use exactly one of notifyOwner / notifyE164 / notifyRef / notifyFirstReachTarget.`
         );
+      }
+      if (step.notifyFirstReachTarget && !step.reachTeammate) {
+        issues.push(
+          `Step "${step.id}" sets notifyFirstReachTarget with no reachTeammate ladder; there is no first target without one.`
+        );
+      }
+      if (step.reachTeammate?.rotateFirst !== undefined) {
+        if (step.reachTeammate.rotateFirst > step.reachTeammate.refs.length) {
+          issues.push(
+            `Step "${step.id}" rotates the first ${step.reachTeammate.rotateFirst} reach targets but the ladder only has ${step.reachTeammate.refs.length}.`
+          );
+        }
+        for (const ref of step.reachTeammate.refs.slice(0, step.reachTeammate.rotateFirst)) {
+          if (ref.source !== "employee") {
+            issues.push(
+              `Step "${step.id}" rotates a reach target that is not a roster employee; the rotation cursor lives on the roster row.`
+            );
+            break;
+          }
+        }
       }
       if (step.transfer) {
         const targets = [Boolean(step.transfer.toE164), Boolean(step.transfer.toRef)].filter(

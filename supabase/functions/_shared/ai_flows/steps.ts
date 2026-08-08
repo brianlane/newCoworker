@@ -708,6 +708,10 @@ export type StepAction =
       reachRingSeconds?: number;
       /** Rendered reach pre-alert SMS body ("" = none configured). */
       reachPreSmsBody?: string;
+      /** Round-robin window: the worker reorders the first N resolved targets. */
+      reachRotateFirst?: number;
+      /** Summary recipient follows the resolved first ladder target. */
+      notifyFirstReachTarget?: true;
       captureFields?: string[];
       /** Per-step calling window, passed through for the worker to evaluate. */
       callWindow?: CallWindow;
@@ -1738,9 +1742,13 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
               ...(typeof step.reachTeammate.ringSeconds === "number"
                 ? { reachRingSeconds: step.reachTeammate.ringSeconds }
                 : {}),
+              ...(typeof step.reachTeammate.rotateFirst === "number"
+                ? { reachRotateFirst: step.reachTeammate.rotateFirst }
+                : {}),
               reachPreSmsBody
             }
           : {}),
+        ...(step.notifyFirstReachTarget === true ? { notifyFirstReachTarget: true as const } : {}),
         ...(step.captureFields && step.captureFields.length > 0
           ? { captureFields: step.captureFields }
           : {}),

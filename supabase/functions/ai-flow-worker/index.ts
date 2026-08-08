@@ -102,6 +102,7 @@ import {
   callOutcomeLabel
 } from "../_shared/ai_flows/call_outcome_meta.ts";
 import { callDialGuard } from "../_shared/ai_flows/call_guards.ts";
+import { rotateReachOrder } from "../_shared/ai_flows/reach_rotation.ts";
 import { resolveContactRef, resolveFromMatchesRefValues } from "../_shared/ai_flows/contact_ref.ts";
 import { matchRosterName } from "../_shared/ai_flows/roster_match.ts";
 import {
@@ -7454,9 +7455,9 @@ async function placeAiCallStep(
     }
     notifyE164 = owner;
   }
-  if (!notifyE164) {
-    return { kind: "fail", error: "place_ai_call: no notify number configured" };
-  }
+  // NOTE: the "no notify number" check moved BELOW the reach block:
+  // notifyFirstReachTarget resolves its recipient from the rotated ladder,
+  // which does not exist yet at this point.
   let transfer: { toE164: string; preSmsBody?: string; agentName?: string } | undefined;
   if (action.transferToE164 || action.transferToRef) {
     let transferTo = action.transferToE164 ?? "";
@@ -7485,7 +7486,7 @@ async function placeAiCallStep(
   // would ring the wrong person first, which is worse than failing loudly.
   let reach: { targets: { name: string; e164: string }[]; ringSeconds?: number; preSmsBody?: string } | undefined;
   if (action.reachRefs && action.reachRefs.length > 0) {
-    const targets: { name: string; e164: string }[] = [];
+    let targets: { name: string; e164: string; refId: string }[] = [];
     for (const ref of action.reachRefs) {
       const resolved = await resolveContactRef(supabase, run.business_id, ref);
       if (!resolved) {
@@ -7494,15 +7495,66 @@ async function placeAiCallStep(
           error: `place_ai_call: reachTeammate ${ref.source} reference "${ref.label ?? ref.id}" could not be resolved (removed or no phone)`
         };
       }
-      targets.push({ name: resolved.name || ref.label || "", e164: resolved.phone });
+      targets.push({ name: resolved.name || ref.label || "", e164: resolved.phone, refId: ref.id });
+    }
+    // Round-robin the first N targets by who least recently rang FIRST, so
+    // two teammates take turns while the last resort stays last. Any
+    // failure here (cursor read, stamp) degrades to the authored order and
+    // logs: rotation fairness must never cost a seller their call.
+    if (
+      typeof action.reachRotateFirst === "number" &&
+      action.reachRotateFirst >= 2 &&
+      action.reachRotateFirst <= targets.length
+    ) {
+      try {
+        const windowIds = targets.slice(0, action.reachRotateFirst).map((t) => t.refId);
+        const { data: cursorRows, error: curErr } = await supabase
+          .from("ai_flow_team_members")
+          .select("id, last_reach_first_at, created_at")
+          .in("id", windowIds);
+        if (curErr) throw new Error(curErr.message);
+        const cursors = ((cursorRows ?? []) as {
+          id: string;
+          last_reach_first_at: string | null;
+          created_at: string;
+        }[]).map((r) => ({
+          memberId: r.id,
+          lastReachFirstAt: r.last_reach_first_at,
+          createdAt: r.created_at
+        }));
+        targets = rotateReachOrder(targets, action.reachRotateFirst, cursors, (t) => t.refId);
+        const first = targets[0];
+        const { error: stampErr } = await supabase
+          .from("ai_flow_team_members")
+          .update({ last_reach_first_at: new Date().toISOString() })
+          .eq("id", first.refId)
+          .eq("business_id", run.business_id);
+        if (stampErr) {
+          console.error("reach rotation cursor stamp failed", stampErr.message);
+        }
+      } catch (err) {
+        console.error(
+          "reach rotation failed; using authored ladder order",
+          err instanceof Error ? err.message : err
+        );
+      }
     }
     reach = {
-      targets,
+      targets: targets.map((t) => ({ name: t.name, e164: t.e164 })),
       ...(typeof action.reachRingSeconds === "number"
         ? { ringSeconds: action.reachRingSeconds }
         : {}),
       ...(action.reachPreSmsBody ? { preSmsBody: action.reachPreSmsBody } : {})
     };
+    // The summary follows whoever rings first on THIS call, which is only
+    // knowable after rotation. Authored as exactly-one with the other
+    // notify sources, so nothing is overwritten here.
+    if (action.notifyFirstReachTarget === true) {
+      notifyE164 = reach.targets[0].e164;
+    }
+  }
+  if (!notifyE164) {
+    return { kind: "fail", error: "place_ai_call: no notify number configured" };
   }
 
   // The park ceiling is the LOST-WEBHOOK backstop only: a call that ends
