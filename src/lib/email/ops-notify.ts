@@ -49,6 +49,10 @@ import {
   type OpsNangoQuotaInput
 } from "@/lib/email/templates/ops-nango-quota";
 import {
+  buildOpsCronSweepHealthEmail,
+  type OpsCronSweepHealthInput
+} from "@/lib/email/templates/ops-cron-sweep-health";
+import {
   buildOpsProvisioningStuckEmail,
   type OpsProvisioningStuckInput
 } from "@/lib/email/templates/ops-provisioning-stuck";
@@ -444,5 +448,43 @@ export async function sendOpsDidReleaseFailedEmail(
       e164: input.e164,
       error: err instanceof Error ? err.message : String(err)
     });
+  }
+}
+
+/**
+ * Fire-and-forget cron sweep watchdog alert; never throws. Returns true when
+ * sent. Not tier-tagged: the scheduled fleet belongs to the platform, not to
+ * any one tenant.
+ *
+ * The caller only invokes this when there are findings. A watchdog that
+ * emails on a clean night trains the operator to ignore it, which costs
+ * exactly the alert we built it for.
+ */
+export async function sendOpsCronSweepHealthEmail(
+  input: Omit<OpsCronSweepHealthInput, "siteUrl">
+): Promise<boolean> {
+  try {
+    const apiKey = process.env.RESEND_API_KEY;
+    if (!apiKey) {
+      logger.warn("ops cron-sweep-health email skipped: RESEND_API_KEY missing", {
+        findings: input.findings.length
+      });
+      return false;
+    }
+    const siteUrl = (process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000").replace(/\/$/, "");
+    const toEmail = opsNotificationEmail();
+    const { subject, text, html } = buildOpsCronSweepHealthEmail({ ...input, siteUrl });
+    await sendOwnerEmail(apiKey, toEmail, subject, { text, html });
+    logger.info("ops cron-sweep-health email sent", {
+      findings: input.findings.length,
+      toEmail
+    });
+    return true;
+  } catch (err) {
+    logger.warn("ops cron-sweep-health email failed", {
+      findings: input.findings.length,
+      error: err instanceof Error ? err.message : String(err)
+    });
+    return false;
   }
 }

@@ -34,7 +34,8 @@ import {
   sendOpsMarginAlertEmail,
   sendOpsNewSignupEmail,
   sendOpsNangoQuotaEmail,
-  sendOpsProvisioningStuckEmail
+  sendOpsProvisioningStuckEmail,
+  sendOpsCronSweepHealthEmail
 } from "@/lib/email/ops-notify";
 import { getBusiness } from "@/lib/db/businesses";
 
@@ -891,6 +892,82 @@ describe("sendOpsOrphanSweepEmail", () => {
     expect(loggerWarnMock).toHaveBeenCalledWith(
       "ops orphan-sweep email failed",
       expect.objectContaining({ error: "plain string boom" })
+    );
+  });
+});
+
+describe("sendOpsCronSweepHealthEmail", () => {
+  const watchdogInput = {
+    findings: [
+      {
+        kind: "missing" as const,
+        sweep: "subscription-grace-sweep",
+        detail: "no run recorded in the last 1500 minutes (schedule 15 0 * * *)",
+        action: "Check the live cron row first: tsx debug/read-cron-jobs.ts"
+      }
+    ],
+    healthy: ["outreach-sweep"],
+    checked: 23
+  };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    process.env.RESEND_API_KEY = "resend_test";
+    process.env.NEXT_PUBLIC_APP_URL = "https://www.example.com";
+    delete process.env.OPS_NOTIFICATION_EMAIL;
+    sendOwnerEmailMock.mockResolvedValue(undefined);
+  });
+
+  it("sends the watchdog findings to the ops inbox", async () => {
+    await expect(sendOpsCronSweepHealthEmail(watchdogInput)).resolves.toBe(true);
+    expect(sendOwnerEmailMock).toHaveBeenCalledWith(
+      "resend_test",
+      "team@newcoworker.com",
+      expect.stringContaining("ACTION REQUIRED"),
+      expect.objectContaining({ text: expect.stringContaining("subscription-grace-sweep") })
+    );
+    expect(loggerInfoMock).toHaveBeenCalledWith(
+      "ops cron-sweep-health email sent",
+      expect.objectContaining({ findings: 1, toEmail: "team@newcoworker.com" })
+    );
+  });
+
+  it("is not tier-tagged: the scheduled fleet belongs to no single tenant", async () => {
+    await sendOpsCronSweepHealthEmail(watchdogInput);
+    expect(sendOwnerEmailMock.mock.calls[0][2]).not.toContain("[ENTERPRISE]");
+  });
+
+  it("falls back to localhost when no app URL is set", async () => {
+    delete process.env.NEXT_PUBLIC_APP_URL;
+    await sendOpsCronSweepHealthEmail(watchdogInput);
+    expect(sendOwnerEmailMock.mock.calls[0][3].html).toContain("http://localhost:3000");
+  });
+
+  it("skips without a Resend key rather than throwing inside a cron route", async () => {
+    delete process.env.RESEND_API_KEY;
+    await expect(sendOpsCronSweepHealthEmail(watchdogInput)).resolves.toBe(false);
+    expect(sendOwnerEmailMock).not.toHaveBeenCalled();
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops cron-sweep-health email skipped: RESEND_API_KEY missing",
+      expect.objectContaining({ findings: 1 })
+    );
+  });
+
+  it("swallows a send failure, so a dead mailer cannot fail the watchdog run", async () => {
+    sendOwnerEmailMock.mockRejectedValueOnce(new Error("resend down"));
+    await expect(sendOpsCronSweepHealthEmail(watchdogInput)).resolves.toBe(false);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops cron-sweep-health email failed",
+      expect.objectContaining({ error: "resend down" })
+    );
+  });
+
+  it("stringifies a non-Error send failure", async () => {
+    sendOwnerEmailMock.mockRejectedValueOnce("smtp string failure");
+    await expect(sendOpsCronSweepHealthEmail(watchdogInput)).resolves.toBe(false);
+    expect(loggerWarnMock).toHaveBeenCalledWith(
+      "ops cron-sweep-health email failed",
+      expect.objectContaining({ error: "smtp string failure" })
     );
   });
 });

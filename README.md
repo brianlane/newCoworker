@@ -2938,6 +2938,67 @@ covered the day it lands. It also asserts each route records under its own
 directory name: a sweep recording under the wrong name would invent an outage
 for one sweep while hiding a real one for another.
 
+### The watchdog: what reads the ledger, and what it tells you to do
+
+`edge-cron-sweep-watchdog` runs daily at **03:30 UTC**. That slot is chosen:
+it sits after the four overnight sweeps (subscription-grace 00:15,
+data-retention 01:35, document-expiration 02:05, analytics-snapshot 02:50)
+and still inside the ~6h `net._http_response` retention window of the
+earliest of them, which expires around 06:15.
+
+It reads **both** records, because neither is sufficient:
+
+| Source | Answers | Blind to |
+| --- | --- | --- |
+| `public.cron_sweep_runs` | did it finish, and what went wrong inside it | anything that killed the sweep before it could record |
+| `net._http_response` (via the `cron_http_failures` RPC) | timeouts and transport errors at the HTTP layer | which job it belonged to (no job column) |
+
+A sweep killed by a timeout never reaches the recorder, so its failure exists
+only in the second. A sweep that answered 200 with a full `errors[]` array is
+visible only in the first. The `net` schema is not exposed to PostgREST, so
+`cron_http_failures(since_minutes)` is a `security definer` function with a
+pinned `search_path`, returning failures only and capped at 200 rows.
+
+Five kinds of finding, each with its own remediation line in the email,
+because the useful next command differs completely by kind:
+
+- **missing** (a sweep stopped): start with `tsx debug/read-cron-jobs.ts`,
+  since an INACTIVE or unscheduled job shows there as drift.
+- **failed** (it threw): the Vercel logs for that route; the row's `errors`
+  carries the thrown message.
+- **errors** (the silent 200): an application bug, usually per tenant. Every
+  sweep here is idempotent, so the next run converges once it is fixed.
+- **slow** (past 120s): warns *before* the 150s ceiling, where the bridge
+  504s and the result is lost. Either shrink the batch or convert the sweep
+  to a dispatcher.
+- **http**: match by time against the schedules, since these rows carry no
+  job.
+
+Only **cron-sourced** rows count toward liveness (see the `source` column
+above), so webhook-driven runs of `messenger-worker` cannot stand in for a
+dead cron job.
+
+**A healthy fleet sends no email.** An alert that arrives nightly stops being
+read, and this one has to still mean something on the night a sweep actually
+stops.
+
+Two guards worth knowing:
+
+- **Nothing is called missing until the ledger is older than that sweep's own
+  max gap.** Otherwise every sweep looks stopped on the day this ships, and
+  again after any prune that empties the table.
+- **The watchdog never reports itself as missing.** It is the thing doing the
+  reporting; absence is a claim only something outside it could make. Its own
+  row is still written and still checked for failure and duration.
+
+`SWEEP_EXPECTATIONS` in `src/lib/cron/sweep-watchdog.ts` holds each sweep's
+max gap, with slack (roughly 3x period for the every-minute jobs, just over a
+period for the daily ones) so one hiccup is not an alert.
+`tests/cron-sweep-watchdog.test.ts` asserts its key set matches the
+discovered fleet **exactly** in both directions: a sweep missing from it is
+never watched, and a stale entry pages forever about a job that no longer
+exists.
+
 ### Post-merge: what CI does vs what you still do
 
 **CI does automatically on every push to main** (the `Vercel Deploy` job, in
