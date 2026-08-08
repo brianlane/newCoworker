@@ -894,13 +894,20 @@ function sanitizeStepForSave(step: FlowStep): FlowStep {
         : undefined;
     // notifyOwner is the tenant-neutral recipient and supersedes both explicit
     // ones, so the "exactly one summary recipient" rule passes even with stale
-    // hidden state from before the box was checked.
+    // hidden state from before the box was checked. notifyFirstReachTarget
+    // can only survive WITH a ladder (no ladder means no first target) and
+    // likewise supersedes the explicit numbers.
+    const notifyFirstReachTarget =
+      step.notifyFirstReachTarget && reachTeammate ? (true as const) : undefined;
     return {
       ...step,
       contextTemplate: step.contextTemplate?.trim() || undefined,
       notifyE164:
-        step.notifyOwner || step.notifyRef ? undefined : step.notifyE164?.trim() || undefined,
-      notifyRef: step.notifyOwner ? undefined : step.notifyRef,
+        step.notifyOwner || step.notifyRef || notifyFirstReachTarget
+          ? undefined
+          : step.notifyE164?.trim() || undefined,
+      notifyRef: step.notifyOwner || notifyFirstReachTarget ? undefined : step.notifyRef,
+      notifyFirstReachTarget,
       transfer: reachTeammate ? undefined : transfer,
       reachTeammate,
       captureFields: captureFields.length > 0 ? captureFields : undefined
@@ -5571,14 +5578,41 @@ function StepFields({
               patchStep(
                 index,
                 ev.target.checked
-                  ? { notifyOwner: true, notifyE164: undefined, notifyRef: undefined }
+                  ? {
+                      notifyOwner: true,
+                      notifyE164: undefined,
+                      notifyRef: undefined,
+                      notifyFirstReachTarget: undefined
+                    }
                   : { notifyOwner: undefined }
               )
             }
           />
           Text the call summary to me (your alert number)
         </label>
-        {!step.notifyOwner && (
+        {Boolean(step.reachTeammate) && (
+          <label className="flex items-center gap-2 text-xs text-parchment/70">
+            <input
+              type="checkbox"
+              checked={Boolean(step.notifyFirstReachTarget)}
+              onChange={(ev) =>
+                patchStep(
+                  index,
+                  ev.target.checked
+                    ? {
+                        notifyFirstReachTarget: true,
+                        notifyOwner: undefined,
+                        notifyE164: undefined,
+                        notifyRef: undefined
+                      }
+                    : { notifyFirstReachTarget: undefined }
+                )
+              }
+            />
+            Text the summary to whichever teammate rang first on this call
+          </label>
+        )}
+        {!step.notifyOwner && !step.notifyFirstReachTarget && (
           <ContactRefPicker
             label="Text the summary to (E.164, e.g. +16025551234)"
             placeholder="+16025551234"
@@ -5688,6 +5722,32 @@ function StepFields({
                 }
               />
             ))}
+            <div>
+              <label className="block text-xs font-medium text-parchment/60 mb-1">
+                Take turns ringing first
+              </label>
+              <select
+                className="w-full rounded-md border border-parchment/15 bg-deep-ink/40 px-3 py-2 text-sm text-parchment"
+                value={String(step.reachTeammate?.rotateFirst ?? "")}
+                onChange={(ev) => {
+                  const v = ev.target.value;
+                  patchStep(index, {
+                    reachTeammate: {
+                      refs: [],
+                      ...step.reachTeammate,
+                      rotateFirst: v ? Number(v) : undefined
+                    }
+                  });
+                }}
+              >
+                <option value="">Off (always ring in the order above)</option>
+                <option value="2">First two alternate call by call</option>
+                <option value="3">First three rotate call by call</option>
+              </select>
+              <p className="mt-1 text-xs text-parchment/40">
+                Teammates in the rotating window take turns ringing first; anyone after it keeps their spot (the last resort stays last).
+              </p>
+            </div>
             <Field
               label="Each phone rings for (seconds, optional)"
               value={

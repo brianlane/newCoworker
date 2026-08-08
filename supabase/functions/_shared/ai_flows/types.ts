@@ -1309,6 +1309,8 @@ export type FlowStep =
       notifyE164?: string;
       notifyRef?: ContactRef;
       notifyOwner?: true;
+      /** Summary goes to the resolved FIRST reach-ladder target of this call. */
+      notifyFirstReachTarget?: true;
       /** Optional live-transfer config (pre-alert SMS + warm transfer). */
       transfer?: PlaceCallTransfer;
       /**
@@ -1323,6 +1325,8 @@ export type FlowStep =
         ringSeconds?: number;
         /** Pre-alert SMS texted to each target as their phone starts ringing. */
         preSmsTemplate?: string;
+        /** Round-robin the first N refs by last_reach_first_at (see schema). */
+        rotateFirst?: number;
       };
       /** Optional lead fields the AI captures during the call. */
       captureFields?: string[];
