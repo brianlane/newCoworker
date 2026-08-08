@@ -1,36 +1,37 @@
 /**
- * amy-seller-ai-call-patch.ts: put the AI's seller call ladder on Amy
- * Laidlaw's two seller lead sources, and sweep the callback-time capture
- * field her scripts forbid.
+ * amy-speed-to-lead-patch.ts: convert Amy Laidlaw's seller routing from
+ * "pinned to Dave" to a three-way race, and make the reach ladder take
+ * turns.
  *
  * What it changes, per flow (pure helpers in
- * amy-seller-ai-call-definition.ts; this file only reads, validates,
- * writes, and records):
+ * amy-speed-to-lead-definition.ts; this file only reads, validates, writes,
+ * and records):
  *
- *   Clever Lead - Accept      cash_offers extraction field; ai_call_1
- *                             before the route step; the nested follow-up
- *                             tree and the stop goal after it; the offer
- *                             templates gain the done/result/next block.
- *   ReferralExchange Lead     same ladder, seller-gated (call_gate wraps
- *                             attempt 1; the follow-up tree carries the
- *                             seller check as its when).
- *   New Lead Intake           "best time to reach them" removed from every
- *                             captureFields (Amy: never ask when to call
- *                             back).
+ *   Clever Lead - Accept       route -> agentNames trio; ai_call_1/2/3 gain
+ *                              rotateFirst 2 (Dave and Gabby alternate
+ *                              ringing first, Amy last resort) and the
+ *                              summary follows whoever rang first.
+ *   ReferralExchange Lead      route_seller + route_both -> agentNames trio,
+ *                              fallback copy no longer blames Dave alone.
+ *   New Lead Intake            route_seller + route_both -> same.
+ *   HomeLight Referral         route gains Gabrielle beside Dave and Amy.
+ *   Clever - Spoke Check       spoke_check retargets to whoever claimed the
+ *                              lead (agentNameVar from the owner_assigned
+ *                              notice); templates neutralized.
+ *
+ * REQUIRES the reach-rotation engine PR deployed first: a worker that does
+ * not know notifyFirstReachTarget fails a notifyRef-less call step with
+ * "no notify number configured".
  *
  * Dry-run by default; --apply writes. Each applied flow stores its ENTIRE
  * previous definition in applied_oneshots.details.previous_definition, and
- * --revert restores exactly that, because there is no flow-version table to
- * lean on.
+ * --revert restores exactly that (per flow with --only), because there is
+ * no flow-version table to lean on.
  *
  * Usage:
- *   npx tsx scripts/oneshot/amy-seller-ai-call-patch.ts                      # dry-run, all flows
- *   npx tsx scripts/oneshot/amy-seller-ai-call-patch.ts --only "Clever Lead - Accept"
- *   npx tsx scripts/oneshot/amy-seller-ai-call-patch.ts --apply
- *   npx tsx scripts/oneshot/amy-seller-ai-call-patch.ts --revert --only "Clever Lead - Accept" --apply
- *
- * Requires deployed worker support for callWindow/waitMinutes and the
- * call-outcome companion vars (PRs #1211/#1227), which are live on main.
+ *   npx tsx scripts/oneshot/amy-speed-to-lead-patch.ts                       # dry-run, all flows
+ *   npx tsx scripts/oneshot/amy-speed-to-lead-patch.ts --only "HomeLight Referral" --apply
+ *   npx tsx scripts/oneshot/amy-speed-to-lead-patch.ts --revert --only "HomeLight Referral" --apply
  */
 import { pathToFileURL } from "node:url";
 import { createClient } from "@supabase/supabase-js";
@@ -41,12 +42,12 @@ import {
   AMY_NAME,
   DAVE_NAME,
   GABRIELLE_NAME,
-  addCashOffersField,
-  addSellerCallLadder,
-  removeBestTimeCaptureField,
-  upgradeCallsToReachLadder,
+  addBroadcastRecipient,
+  addReachRotation,
+  convertRouteToBroadcast,
+  retargetSpokeCheck,
   type Ref
-} from "./amy-seller-ai-call-definition";
+} from "./amy-speed-to-lead-definition";
 import { loadEnv } from "../../debug/_shared.ts";
 
 loadEnv();
@@ -54,6 +55,7 @@ loadEnv();
 type Definition = AiFlowDefinition;
 
 const DEFAULT_BUSINESS_ID = "621a5b0d-c2ad-449f-9d74-9d50e7b27fa3";
+const SCRIPT_PATH = "scripts/oneshot/amy-speed-to-lead-patch.ts";
 
 type Args = { apply: boolean; revert: boolean; businessId: string | null; only: string | null };
 
@@ -78,34 +80,64 @@ function requireEnv(name: string, fallback?: string): string {
   return v;
 }
 
+type RosterRow = {
+  id: string;
+  name: string;
+  active: boolean;
+  phone_e164: string | null;
+  named_broadcast_enabled: boolean | null;
+  named_routing_enabled: boolean | null;
+};
+
 /**
- * Resolve a roster member to the {id, label, source} ref shape flow steps
- * store. By name, at apply time, from ai_flow_team_members: never a
- * hardcoded row id and never a bare name string (this account's dossier
- * lists that as a sharp edge).
+ * Resolve the trio and print their availability toggles. Hard requirements:
+ * exactly one ACTIVE row per name, each with a phone, each with
+ * named_broadcast_enabled (the offers are agentNames broadcasts; a false
+ * here silently drops that person from every race). named_routing_enabled
+ * only degrades the spoke-check pin to owner fallback, so it warns.
  */
-async function resolveEmployeeRef(
+async function resolveTrio(
+  // Loosely typed like the sibling patch scripts: the generic default of
+  // createClient does not unify across call sites.
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   db: any,
-  businessId: string,
-  name: string
-): Promise<Ref> {
+  businessId: string
+): Promise<{ dave: Ref; gabby: Ref; amy: Ref }> {
+  const wanted = [DAVE_NAME, GABRIELLE_NAME, AMY_NAME];
   const { data, error } = await db
     .from("ai_flow_team_members")
-    .select("id, name, active")
+    .select("id, name, active, phone_e164, named_broadcast_enabled, named_routing_enabled")
     .eq("business_id", businessId)
-    .eq("name", name);
-  if (error) throw new Error(`team member lookup failed: ${error.message}`);
-  const rows = (data ?? []) as { id: string; name: string; active: boolean }[];
-  const active = rows.filter((r) => r.active);
-  if (active.length !== 1) {
-    throw new Error(
-      `expected exactly one ACTIVE roster member named "${name}", found ${active.length}`
+    .in("name", wanted);
+  if (error) throw new Error(`roster read failed: ${error.message}`);
+  const rows = (data ?? []) as RosterRow[];
+  const out: Record<string, Ref> = {};
+  console.log("\nRoster pre-flight:");
+  for (const name of wanted) {
+    const matches = rows.filter((r) => r.name === name && r.active);
+    if (matches.length !== 1) {
+      throw new Error(`expected exactly one ACTIVE roster member named "${name}", found ${matches.length}`);
+    }
+    const row = matches[0];
+    if (!row.phone_e164) throw new Error(`roster member "${name}" has no phone`);
+    // Only an explicit false excludes in the engine; null means available.
+    if (row.named_broadcast_enabled === false) {
+      throw new Error(
+        `roster member "${name}" has named_broadcast_enabled=false; the three-way offer would silently skip them. Fix the roster first.`
+      );
+    }
+    if (row.named_routing_enabled === false) {
+      console.warn(
+        `  WARN: "${name}" has named_routing_enabled=false; a spoke check pinned to them falls to owner fallback.`
+      );
+    }
+    console.log(
+      `  ${name}: phone=${row.phone_e164} named_broadcast=${row.named_broadcast_enabled} named_routing=${row.named_routing_enabled}`
     );
+    out[name] = { id: row.id, label: row.name, source: "employee" };
   }
-  return { id: active[0].id, label: active[0].name, source: "employee" };
+  return { dave: out[DAVE_NAME], gabby: out[GABRIELLE_NAME], amy: out[AMY_NAME] };
 }
-
-const SCRIPT_PATH = "scripts/oneshot/amy-seller-ai-call-patch.ts";
 
 async function main(): Promise<void> {
   const args = parseArgs(process.argv);
@@ -119,44 +151,39 @@ async function main(): Promise<void> {
     return;
   }
 
-  const dave = await resolveEmployeeRef(db, businessId, DAVE_NAME);
-  const gabby = await resolveEmployeeRef(db, businessId, GABRIELLE_NAME);
-  const amy = await resolveEmployeeRef(db, businessId, AMY_NAME);
-  const refs = { dave, gabby, amy };
+  const trio = await resolveTrio(db, businessId);
 
-  const plans: {
-    flowName: string;
-    patch: (def: Definition) => Record<string, boolean>;
-  }[] = [
+  const plans: { flowName: string; patch: (def: Definition) => Record<string, boolean> }[] = [
+    {
+      flowName: "HomeLight Referral",
+      patch: (def) => ({
+        gabrielle_added: addBroadcastRecipient(def, "route", GABRIELLE_NAME)
+      })
+    },
     {
       flowName: "Clever Lead - Accept",
       patch: (def) => ({
-        cash_offers_field: addCashOffersField(def),
-        ladder: addSellerCallLadder(def, "clever", refs, { routeStepId: "route" }),
-        // The flow went live before reach_teammate deployed, with the
-        // single-target transfer; this swap points its call steps at the
-        // Dave-then-Amy second leg. A no-op on a freshly-added ladder,
-        // which already carries reachTeammate.
-        reach_ladder: upgradeCallsToReachLadder(def, refs)
+        broadcast: convertRouteToBroadcast(def, "route"),
+        reach_rotation: addReachRotation(def, trio)
       })
     },
     {
       flowName: "ReferralExchange Lead",
       patch: (def) => ({
-        ladder: addSellerCallLadder(
-          def,
-          "referral_exchange",
-          refs,
-          {
-            routeStepId: "route_seller",
-            callGate: { var: "route_lead_type", equals: "seller" }
-          }
-        )
+        broadcast_seller: convertRouteToBroadcast(def, "route_seller"),
+        broadcast_both: convertRouteToBroadcast(def, "route_both")
       })
     },
     {
       flowName: "New Lead Intake",
-      patch: (def) => ({ best_time_capture_removed: removeBestTimeCaptureField(def) })
+      patch: (def) => ({
+        broadcast_seller: convertRouteToBroadcast(def, "route_seller"),
+        broadcast_both: convertRouteToBroadcast(def, "route_both")
+      })
+    },
+    {
+      flowName: "Clever - Spoke Check & Weekly Call Follow-Up",
+      patch: (def) => ({ spoke_check_retargeted: retargetSpokeCheck(def) })
     }
   ];
 
@@ -185,9 +212,8 @@ async function main(): Promise<void> {
 
     console.log(`\n=== ${flow.name} (${flow.id}) enabled=${flow.enabled} ===`);
     for (const [k, v] of Object.entries(results)) {
-      console.log(`  ${k.padEnd(26)}: ${v ? "yes" : "already"}`);
+      console.log(`  ${k.padEnd(24)}: ${v ? "yes" : "already"}`);
     }
-    console.log(`  trunk steps               : ${previous.steps.length} -> ${def.steps.length}`);
     if (!changed) {
       console.log("  nothing to do.");
       continue;
@@ -207,10 +233,7 @@ async function main(): Promise<void> {
       console.log("\n[dry-run] Not writing. Re-run with --apply to write.");
       continue;
     }
-    const { error: upErr } = await db
-      .from("ai_flows")
-      .update({ definition: def })
-      .eq("id", flow.id);
+    const { error: upErr } = await db.from("ai_flows").update({ definition: def }).eq("id", flow.id);
     if (upErr) {
       console.error(`Update failed for ${flow.id}: ${upErr.message}`);
       process.exit(1);
@@ -223,19 +246,15 @@ async function main(): Promise<void> {
         flow_id: flow.id,
         flow_name: flow.name,
         ...results,
-        // The whole rollback story: there is no flow-version table, so the
-        // ledger row carries the exact definition this write replaced.
         previous_definition: previous
       }
     });
   }
 }
 
-/**
- * Restore the previous_definition stored by the newest apply for each flow.
- * Reverts are themselves recorded, so the ledger tells the whole story.
- */
+/** Restore the previous_definition stored by the newest apply for each flow. */
 async function revert(
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   db: any,
   businessId: string,
   args: Args
@@ -254,7 +273,6 @@ async function revert(
   const newestPerFlow = new Map<string, Record<string, unknown>>();
   for (const r of rows) {
     const name = String(r.details?.flow_name ?? "");
-    // Skip our own revert records and rows without a stored definition.
     if (!name || r.details?.reverted === true || !r.details?.previous_definition) continue;
     if (!newestPerFlow.has(name)) newestPerFlow.set(name, r.details);
   }
@@ -266,7 +284,7 @@ async function revert(
     if (args.only && flowName !== args.only) continue;
     const flowId = String(details.flow_id);
     const prev = details.previous_definition as Definition;
-    console.log(`\n=== revert ${flowName} (${flowId}) to ${prev.steps?.length} steps ===`);
+    console.log(`\n=== revert ${flowName} (${flowId}) to ${prev.steps?.length} trunk steps ===`);
     if (!args.apply) {
       console.log("[dry-run] Not writing. Re-run with --revert --apply to write.");
       continue;
