@@ -12,13 +12,14 @@
 
 import { assertCronAuth } from "@/lib/cron-auth";
 import { errorResponse, successResponse } from "@/lib/api-response";
+import { withSweepRun } from "@/lib/cron/sweep-run";
 import { logger } from "@/lib/logger";
 import { runWeeklyAuto } from "@/lib/blog/weekly-topics";
 
 export const maxDuration = 300;
 export const runtime = "nodejs";
 
-export async function POST(request: Request): Promise<Response> {
+async function runSweep(request: Request): Promise<Response> {
   if (!assertCronAuth(request)) {
     return errorResponse("FORBIDDEN", "Invalid cron bearer", 403);
   }
@@ -35,3 +36,6 @@ export async function POST(request: Request): Promise<Response> {
     return errorResponse("INTERNAL_SERVER_ERROR", "Digest run failed", 500);
   }
 }
+
+// Every run lands in public.cron_sweep_runs; see src/lib/cron/sweep-run.ts.
+export const POST = withSweepRun("blog-weekly-digest", runSweep);

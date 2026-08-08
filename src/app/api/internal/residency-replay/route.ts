@@ -13,6 +13,7 @@
 
 import { assertCronAuth } from "@/lib/cron-auth";
 import { errorResponse, successResponse } from "@/lib/api-response";
+import { withSweepRun } from "@/lib/cron/sweep-run";
 import { logger } from "@/lib/logger";
 import { runResidencyReplay } from "@/lib/residency/replay";
 
@@ -35,7 +36,7 @@ export const maxDuration = 50;
 
 export const runtime = "nodejs";
 
-export async function POST(request: Request): Promise<Response> {
+async function runSweep(request: Request): Promise<Response> {
   if (!assertCronAuth(request)) {
     return errorResponse("FORBIDDEN", "Invalid cron bearer", 403);
   }
@@ -57,3 +58,6 @@ export async function POST(request: Request): Promise<Response> {
     return errorResponse("INTERNAL_SERVER_ERROR", message, 500);
   }
 }
+
+// Every run lands in public.cron_sweep_runs; see src/lib/cron/sweep-run.ts.
+export const POST = withSweepRun("residency-replay", runSweep);
