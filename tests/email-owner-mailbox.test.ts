@@ -317,6 +317,50 @@ describe("threaded replies", () => {
     });
   });
 
+  it("Graph: a reply restates the whole To line, or the extra recipients vanish", async () => {
+    /**
+     * /reply addresses the original sender by itself, so anyone else has to be
+     * restated or Graph silently drops them. Without this a Microsoft tenant
+     * would mirror To correctly on Gmail and lose it here, and the failure is
+     * invisible: the reply lands, just short of one recipient.
+     */
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    await sendFromMailboxConnection(BIZ, MICROSOFT, {
+      ...ARGS,
+      additionalToEmails: ["prospect@example.com"],
+      thread: { providerMessageId: "gid", threadId: "conv-2" }
+    });
+    const data = (vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
+      data: { message?: { toRecipients?: { emailAddress: { address: string } }[] } };
+    }).data;
+    // The primary recipient is restated alongside, or naming toRecipients at
+    // all would REPLACE the sender rather than add to them.
+    expect(data.message?.toRecipients).toEqual([
+      { emailAddress: { address: ARGS.toEmail } },
+      { emailAddress: { address: "prospect@example.com" } }
+    ]);
+  });
+
+  it("Graph: carries both slots at once without losing either", async () => {
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    await sendFromMailboxConnection(BIZ, MICROSOFT, {
+      ...ARGS,
+      additionalToEmails: ["prospect@example.com"],
+      ccEmails: ["assistant@example.com"],
+      thread: { providerMessageId: "gid2", threadId: "conv-3" }
+    });
+    const data = (vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
+      data: { message?: Record<string, unknown> };
+    }).data;
+    expect(data.message).toMatchObject({
+      ccRecipients: [{ emailAddress: { address: "assistant@example.com" } }],
+      toRecipients: [
+        { emailAddress: { address: ARGS.toEmail } },
+        { emailAddress: { address: "prospect@example.com" } }
+      ]
+    });
+  });
+
   it("Graph: a cc-less reply carries no message override, and a dead link reports honestly", async () => {
     vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
     await sendFromMailboxConnection(BIZ, MICROSOFT, {

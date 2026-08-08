@@ -780,11 +780,18 @@ export async function getEmailLogThreadIdentity(
   inReplyToMessageRef?: string;
   providerMessageId?: string;
   /**
-   * Everyone else who was on the original, so a reply reaches them too. An
-   * introduction names the PROSPECT here while the introducer sits in From,
-   * and answering only From reaches the person doing the favor.
+   * Everyone else who was on the original, so a reply reaches them too, kept
+   * in the SLOT they arrived in. An introduction names the PROSPECT here while
+   * the introducer sits in From, and answering only From reaches the person
+   * doing the favor.
+   *
+   * Split rather than flattened because a reply should read like the thread it
+   * is on: someone the sender put on To is a participant, and demoting them to
+   * Cc says they are a bystander. Live, Aug 8 2026, the referral put the
+   * prospect on To with no Cc at all, and the reply invented one.
    */
-  replyAllRecipients: string[];
+  replyToRecipients: string[];
+  replyCcRecipients: string[];
 } | null> {
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
@@ -811,16 +818,26 @@ export async function getEmailLogThreadIdentity(
   // Split the raw headers into addresses. Display names are dropped: the
   // send path wants bare addresses, and "Name <a@b.c>" would fail its
   // validation.
-  const replyAllRecipients = [...(row?.to_email ?? "").split(","), ...(row?.cc_email ?? "").split(",")]
-    .map((raw) => {
-      const m = /<([^<>]+)>/.exec(raw);
-      return (m ? m[1] : raw).trim().toLowerCase();
-    })
-    .filter((a) => a.includes("@"));
+  const addresses = (header: string | null | undefined): string[] => [
+    ...new Set(
+      (header ?? "")
+        .split(",")
+        .map((raw) => {
+          const m = /<([^<>]+)>/.exec(raw);
+          return (m ? m[1] : raw).trim().toLowerCase();
+        })
+        .filter((a) => a.includes("@"))
+    )
+  ];
+  const replyToRecipients = addresses(row?.to_email);
+  const ccSet = new Set(replyToRecipients);
   return {
     threadId,
     ...(messageRef ? { inReplyToMessageRef: messageRef } : {}),
     ...(providerMessageId ? { providerMessageId } : {}),
-    replyAllRecipients: [...new Set(replyAllRecipients)]
+    replyToRecipients,
+    // Never repeat an address across both slots: some clients show the
+    // duplicate, and it reads as sloppy on a reply going to a prospect.
+    replyCcRecipients: addresses(row?.cc_email).filter((a) => !ccSet.has(a))
   };
 }
