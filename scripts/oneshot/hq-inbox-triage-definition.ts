@@ -127,12 +127,17 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
           {
             value: "automated_important",
             description:
-              "Automated mail a human must act on: an outage, a security or login alert, an account suspension, a broken integration, a hit quota, an expiring credential, or a legal notice"
+              "Automated mail a human must act on: it asks us to do, verify, approve, confirm or respond to something, or reports an outage, security alert, suspension, broken integration or legal notice"
+          },
+          {
+            value: "automated_bulk",
+            description:
+              "Bulk mail nobody ever needs to read again: marketing, newsletters, product announcements, promotions, webinar or event invitations, and vendor drip campaigns"
           },
           {
             value: "automated_notice",
             description:
-              "Routine automated mail with no consequence if ignored: our own alert and contact-form copies, calendar invites, newsletters, marketing, digests, receipts, and hosting renewal or expiry notices"
+              "Routine automated mail that asks nothing of us: our own alert and contact-form copies, calendar invites, digests, usage summaries, receipts, and hosting renewal or expiry notices"
           }
         ],
         saveAs: "email_kind"
@@ -274,16 +279,36 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
        * nothing happened to it, which is the worst of both: the run did the
        * work of recognising the mail and left it exactly where it was.
        *
-       * Binned, not archived. Gmail's trash is reversible and holds a message
-       * for 30 days, so a misclassification is recoverable for a month; there
-       * is no hard delete anywhere in the engine. Labelled first so the
-       * message is still findable by label while it sits in the Bin.
+       * ARCHIVED, not binned. This is the middle tier and it exists because
+       * the two-tier version was destructive on every mistake: on Aug 9 2026
+       * an email titled "[Action Needed] OAuth Verification Request
+       * Acknowledgement", on a thread Brian had already replied to, was read
+       * as routine and went to the Bin.
+       *
+       * A classifier will always be wrong sometimes, so the question is what
+       * a wrong answer costs. Uncertain mail now lands here and is merely out
+       * of the inbox, still in All Mail. Only the unmistakably-bulk tier below
+       * is destroyed, and even that is recoverable for 30 days.
        */
       {
         id: "s_org_automated",
         type: "email_organize",
         connectionId: GMAIL_CONNECTION_ROW_ID,
         when: { var: "email_kind", equals: "automated_notice" },
+        markRead: true,
+        addLabels: ["HQ/Automated"],
+        archive: true
+      },
+      /**
+       * The only tier that bins anything: marketing and newsletters with no
+       * working unsubscribe, which is what started this. Labelled first so a
+       * misclassification is findable with `label:HQ/Automated in:trash`.
+       */
+      {
+        id: "s_org_bulk",
+        type: "email_organize",
+        connectionId: GMAIL_CONNECTION_ROW_ID,
+        when: { var: "email_kind", equals: "automated_bulk" },
         markRead: true,
         addLabels: ["HQ/Automated"],
         trash: true
