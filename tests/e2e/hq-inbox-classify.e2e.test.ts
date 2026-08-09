@@ -38,6 +38,7 @@ const email = (subject: string, body: string) => `${subject}\n${body}`;
 describe("HQ inbox classify: the categories are wired to the live flow", () => {
   it("reads its categories from the real definition, not a local copy", () => {
     expect(CATEGORIES.map((c) => c.value).sort()).toEqual([
+      "automated_bulk",
       "automated_important",
       "automated_notice",
       "billing",
@@ -93,6 +94,8 @@ describe("HQ inbox classify: hosting renewals never page the owner", () => {
           "Your KVM 2 plan for srv1806097.hstgr.cloud renews on Aug 14 for 24.49 USD."
         )
       );
+      // Routine, not bulk: it is a real service notice, so it is archived
+      // rather than binned even though it needs no action.
       expect(kind).toBe("automated_notice");
     }
   );
@@ -141,6 +144,7 @@ describe("HQ inbox classify: a real money problem still pages", () => {
       const kind = await classify(
         email("Your receipt from Stripe", "Thanks for your payment of 20.00 USD. Nothing is due.")
       );
+      // A receipt is a record worth keeping, so it archives rather than bins.
       expect(kind).toBe("automated_notice");
     }
   );
@@ -176,7 +180,7 @@ describe("HQ inbox classify: automated mail that must not be archived", () => {
   );
 
   it(
-    "a Zapier marketing blast is routine",
+    "a Zapier marketing blast is bulk, the only tier that gets binned",
     { retry: 1, timeout: 120_000 },
     async () => {
       // The mail with no working unsubscribe that started this.
@@ -186,7 +190,77 @@ describe("HQ inbox classify: automated mail that must not be archived", () => {
           "New AI actions, a faster editor, and 12 new integrations. Explore the release notes."
         )
       );
-      expect(kind).toBe("automated_notice");
+      expect(kind).toBe("automated_bulk");
     }
   );
+});
+
+describe("HQ inbox classify: mail that asks us to act is never binned", () => {
+  /**
+   * Live, Aug 9 2026. This exact email was classified routine and went to the
+   * Bin: Google acknowledging our OAuth verification request, on a thread
+   * Brian had already replied to on Jul 30. Two signals ignored at once, the
+   * literal words "Action Needed" and an ongoing correspondence.
+   *
+   * The three-tier split is the structural half of the fix (an uncertain
+   * classification now archives rather than destroys). These cases are the
+   * other half: mail asking us to do something is important, full stop.
+   */
+  const OAUTH_ACK = email(
+    "[Action Needed] OAuth Verification Request Acknowledgement",
+    [
+      "Hello,",
+      "",
+      "We have received your OAuth verification request for New Coworker.",
+      "",
+      "To continue, please confirm your domain ownership and reply with the",
+      "requested scope justifications. Your request cannot proceed until we",
+      "hear back from you.",
+      "",
+      "The API OAuth Developer Verification team"
+    ].join("\n")
+  );
+
+  it("reads the OAuth verification acknowledgement as important", { retry: 1, timeout: 120_000 }, async () => {
+    expect(await classify(OAUTH_ACK)).toBe("automated_important");
+  });
+
+  it("reads a plain verification request as important", { retry: 1, timeout: 120_000 }, async () => {
+    const kind = await classify(
+      email(
+        "Action required: verify your domain",
+        "Please verify ownership of newcoworker.com within 7 days to keep sending."
+      )
+    );
+    expect(kind).toBe("automated_important");
+  });
+
+  it("reads an app-review decision as important", { retry: 1, timeout: 120_000 }, async () => {
+    const kind = await classify(
+      email(
+        "Your app submission needs changes",
+        "Reviewers found issues with your integration. Respond with an updated build to continue."
+      )
+    );
+    expect(kind).toBe("automated_important");
+  });
+
+  it("still bins mail that genuinely asks nothing", { retry: 1, timeout: 120_000 }, async () => {
+    // The guard must not turn every automated mail into a text.
+    const kind = await classify(
+      email(
+        "New in Zapier this month",
+        "New AI actions, a faster editor, and 12 new integrations. Explore the release notes."
+      )
+    );
+    expect(kind).toBe("automated_bulk");
+  });
+
+  it("archives rather than bins the merely routine", { retry: 1, timeout: 120_000 }, async () => {
+    // The middle tier: nothing to do, but not junk either.
+    const kind = await classify(
+      email("Your receipt from Stripe", "Thanks for your payment of 20.00 USD. Nothing is due.")
+    );
+    expect(kind).toBe("automated_notice");
+  });
 });

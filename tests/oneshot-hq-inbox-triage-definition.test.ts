@@ -154,7 +154,7 @@ describe("HQ inbox triage: one alert per conversation", () => {
     // The cooldown silences notify_owner only. If filing ever became
     // conditional on the alert, a quiet reply would sit unlabeled forever.
     const organize = steps.filter((s) => s.type === "email_organize");
-    expect(organize).toHaveLength(5);
+    expect(organize).toHaveLength(6);
     for (const step of organize) {
       expect(step.cooldown, step.id).toBeUndefined();
       expect(step.addLabels?.[0], step.id).toMatch(/^HQ\//);
@@ -243,22 +243,49 @@ describe("HQ inbox triage: automated mail is split by consequence", () => {
     expect(category("automated_important")?.description).toMatch(
       /outage|security|suspension|integration/i
     );
-    expect(category("automated_notice")?.description).toMatch(/newsletter|marketing|receipt/i);
-    // Judged by what happens if it is ignored, never by who sent it.
-    expect(category("automated_notice")?.description).toMatch(/no consequence if ignored/i);
+    expect(category("automated_notice")?.description).toMatch(/digest|receipt|calendar/i);
+    // Judged by whether it asks anything of us, never by who sent it.
+    expect(category("automated_notice")?.description).toMatch(/asks nothing of us/i);
+    // The third tier: the only one that is ever destroyed.
+    expect(category("automated_bulk")?.description).toMatch(/marketing|newsletter|promotion/i);
+    // "Action needed" mail belongs in the tier that texts and keeps.
+    expect(category("automated_important")?.description).toMatch(/verify|approve|respond/i);
   });
 
-  it("reads, labels and BINS routine automated mail, and never texts about it", () => {
+  it("ARCHIVES the merely routine, so a misclassification costs nothing", () => {
+    /**
+     * The middle tier, and the reason it exists. On Aug 9 2026 an email titled
+     * "[Action Needed] OAuth Verification Request Acknowledgement", on a thread
+     * Brian had already replied to, was read as routine and went to the Bin.
+     *
+     * A classifier will always be wrong sometimes, so what matters is what a
+     * wrong answer costs. Uncertain mail lands here and is merely out of the
+     * inbox, still in All Mail.
+     */
     const step = steps.find((s) => s.id === "s_org_automated");
     expect(step?.when).toEqual({ var: "email_kind", equals: "automated_notice" });
     expect(step?.markRead).toBe(true);
-    expect(step?.trash).toBe(true);
+    expect(step?.archive).toBe(true);
     expect(step?.addLabels).toEqual(["HQ/Automated"]);
-    // Labelled AND binned: Gmail keeps a trashed message 30 days and the label
-    // rides along, so a misclassification is findable and recoverable. Archive
-    // is redundant once it is in the bin.
-    expect(step?.archive).toBeUndefined();
+    // The whole point: this tier never destroys anything.
+    expect(step?.trash).toBeUndefined();
     expect(notifySteps.some((n) => n.when?.equals === "automated_notice")).toBe(false);
+  });
+
+  it("bins ONLY the unmistakably bulk tier, and never texts about it", () => {
+    const step = steps.find((s) => s.id === "s_org_bulk");
+    expect(step?.when).toEqual({ var: "email_kind", equals: "automated_bulk" });
+    expect(step?.markRead).toBe(true);
+    expect(step?.trash).toBe(true);
+    // Labelled BEFORE binning, so a misclassification is still findable with
+    // `label:HQ/Automated in:trash` for the 30 days Gmail keeps it.
+    expect(step?.addLabels).toEqual(["HQ/Automated"]);
+    expect(notifySteps.some((n) => n.when?.equals === "automated_bulk")).toBe(false);
+  });
+
+  it("keeps trash to exactly one step, so the blast radius stays visible", () => {
+    const binning = steps.filter((s) => s.type === "email_organize" && s.trash === true);
+    expect(binning.map((s) => s.id)).toEqual(["s_org_bulk"]);
   });
 
   it("texts about important automated mail and leaves it unread in the inbox", () => {
