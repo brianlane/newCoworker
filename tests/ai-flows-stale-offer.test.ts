@@ -206,10 +206,19 @@ describe("staleOfferAckText", () => {
   it("names the claimer when known and falls back when not", () => {
     expect(
       staleOfferAckText({ runId: "r", kind: "claimed_by_other", claimedName: "Dave Lane" })
-    ).toContain("Dave Lane picked it up");
+    ).toContain("Dave Lane already claimed that lead");
     expect(
       staleOfferAckText({ runId: "r", kind: "claimed_by_other", claimedName: "" })
-    ).toContain("another teammate picked it up");
+    ).toContain("another teammate already claimed that lead");
+  });
+
+  it("never claims the window passed on a claimed-by-other reply", () => {
+    // This bucket also answers a "1" that was simply SECOND, seconds after
+    // the claim (Austin Happ, 2026-08-08); "window has passed" would read
+    // as a system bug to a fast responder.
+    expect(
+      staleOfferAckText({ runId: "r", kind: "claimed_by_other", claimedName: "Dave Lane" })
+    ).not.toContain("window");
   });
 
   it("tells a duplicate claimer the lead is already theirs (and how to release)", () => {

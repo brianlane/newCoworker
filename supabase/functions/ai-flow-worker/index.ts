@@ -8137,7 +8137,7 @@ async function routeToTeamStep(
   // explicitly says who to offer, and a hard assignment would defeat
   // "whoever answers first".
   if ((action.agentNames && action.agentNames.length >= 2) || action.broadcastAll === true) {
-    return routeBroadcastStep(supabase, run, scope, action, routing, tried);
+    return routeBroadcastStep(supabase, run, scope, action, routing, tried, stepIndex);
   }
 
   // First entry, reject ('2'), or timeout: retire the agent we last offered, then
@@ -8165,6 +8165,18 @@ async function routeToTeamStep(
   {
     const ownerDirect = await maybeOwnerDirect(supabase, run, scope, action, routing, tried);
     if (ownerDirect) return ownerDirect;
+  }
+
+  // Owned contact: no race. Checked on EVERY rotation (re-)entry, not just
+  // the first, because ownership can appear mid-race: Austin Happ's seller
+  // half was claimed 53 seconds in while his buyer half was already out on
+  // rung one; the rung-two re-entry is where this stops the split. A pinned
+  // step keeps its pin (the spoke check pins to the claimer on purpose).
+  if (!pinnedAgentName) {
+    const contactOwner = await activeContactOwner(supabase, run.business_id, scope);
+    if (contactOwner) {
+      return finalizeOwnerAssigned(supabase, run, scope, action, routing, stepIndex, contactOwner);
+    }
   }
 
   const leadPhone = leadPhoneE164(scope);
@@ -8475,7 +8487,8 @@ async function routeBroadcastStep(
   scope: Scope,
   action: Extract<StepAction, { kind: "route_to_team" }>,
   routing: OfferRouting,
-  tried: string[]
+  tried: string[],
+  stepIndex: number
 ): Promise<StepOutcome> {
   const event = routing.last_event;
   const replyFrom = typeof routing.reply_from === "string" ? routing.reply_from : "";
@@ -8539,6 +8552,15 @@ async function routeBroadcastStep(
   // First entry: the keep-for-owner rule short-circuits before any offer.
   const ownerDirect = await maybeOwnerDirect(supabase, run, scope, action, routing, tried);
   if (ownerDirect) return ownerDirect;
+  // Owned contact: the fan-out never starts; the lead goes to its owner
+  // (same rule as the rotation path; the webhook's claim gate backstops
+  // offers that left before ownership existed).
+  {
+    const contactOwner = await activeContactOwner(supabase, run.business_id, scope);
+    if (contactOwner) {
+      return finalizeOwnerAssigned(supabase, run, scope, action, routing, stepIndex, contactOwner);
+    }
+  }
 
   // Resolve the recipients; a member who texted STOP is skipped like the
   // rotation path skips them. broadcastAll resolves the WHOLE active,
@@ -9002,6 +9024,125 @@ function leadContactPhone(scope: Scope): string | null {
  * Best-effort: a lookup error logs and returns null — ownership preference
  * must never stall routing.
  */
+/**
+ * The contact's owner for OWNERSHIP routing: active roster member with a
+ * phone, deliberately WITHOUT the availability filter contactOwnerAgent
+ * applies. Ownership outranks availability: a lead about someone's contact
+ * waits with its owner (who may be off today) rather than being raced to a
+ * teammate who would double-contact the person. Null on no phone, no
+ * contact, unowned, owner inactive, or any read error (fail open to the
+ * normal race).
+ */
+async function activeContactOwner(
+  supabase: Supabase,
+  businessId: string,
+  scope: Scope
+): Promise<RoutedAgent | null> {
+  const phone = leadContactPhone(scope);
+  if (!phone) return null;
+  try {
+    const { data: contact } = await supabase
+      .from("contacts")
+      .select("owner_employee_id")
+      .eq("business_id", businessId)
+      .or(`customer_e164.eq.${phone},alias_e164s.cs.{${phone}}`)
+      .maybeSingle();
+    const ownerId = (contact as { owner_employee_id?: string | null } | null)?.owner_employee_id;
+    if (!ownerId) return null;
+    const { data: member } = await supabase
+      .from("ai_flow_team_members")
+      .select("id, name, phone_e164, active")
+      .eq("business_id", businessId)
+      .eq("id", ownerId)
+      .maybeSingle();
+    const m = member as { id?: string; name?: string | null; phone_e164?: string | null; active?: boolean } | null;
+    if (!m?.id || !m.active || !m.phone_e164?.trim()) return null;
+    return { name: m.name ?? "", phone: m.phone_e164.trim() };
+  } catch (e) {
+    console.error("activeContactOwner", e);
+    return null;
+  }
+}
+
+/**
+ * Finalize a route step by assigning the lead to the contact's owner, no
+ * offer race and no claim handshake: the contact already belongs to
+ * someone, so a NEW lead about the same person is theirs by definition
+ * (Austin Happ, 2026-08-08: the same seller arrived as a second, buyer,
+ * lead two seconds later and a rotation race handed him to a second
+ * teammate). State shape matches the auto-assign path exactly, so
+ * claim-gated later steps, "86" release, and the claimed goal all behave
+ * identically.
+ */
+async function finalizeOwnerAssigned(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "route_to_team" }>,
+  routing: OfferRouting,
+  stepIndex: number,
+  owner: RoutedAgent
+): Promise<StepOutcome> {
+  routing.claimed_by = owner.phone;
+  routing.claimed_name = owner.name;
+  routing.owner_assigned = true;
+  routing.route_step_index = stepIndex;
+  scope.vars.claimed_agent = owner.name || owner.phone;
+  scope.vars.claimed_agent_phone = owner.phone;
+  scope.vars.claimed_agent_eta_minutes = "0";
+  const fyiMms = action.attachScreenshot ? await screenshotMmsUrl(supabase, run, scope) : null;
+  const fyiBody =
+    "New lead for a contact you already own, so it's yours (no reply " +
+    'needed; reply "86" to hand it back):\n' +
+    renderTemplate(action.offerTemplate, agentScope(scope, owner));
+  try {
+    await sendOfferSms(
+      supabase,
+      run,
+      owner.phone,
+      fyiBody,
+      `aiflow-owner-assign:${run.id}`,
+      fyiMms ? [fyiMms] : undefined
+    );
+  } catch (e) {
+    console.error("route_to_team owner-assign FYI send failed", e);
+  }
+  if (action.claimedNotifyTemplate) {
+    const ownerBody = renderTemplate(action.claimedNotifyTemplate, agentScope(scope, owner));
+    await sendOwnerSms(supabase, run, ownerBody, `aiflow-claimed:${run.id}`);
+  }
+  if (action.claimedNotifyEmail) {
+    const assigneeLabel = owner.name || owner.phone;
+    const leadLabel = claimEmailLeadLabel(scope);
+    await sendClaimOutcomeEmail(supabase, run, {
+      to: action.claimedNotifyEmail,
+      subject: `Lead assigned: ${leadLabel} to ${assigneeLabel}`,
+      body: `${assigneeLabel} was assigned the lead ${leadLabel}: they already own this contact from an earlier lead.`,
+      idempotencyKey: `aiflow-claimed-email:${run.id}`
+    });
+  }
+  appendActionTaken(
+    scope,
+    `assigned to ${owner.name || owner.phone}, they already own this contact`
+  );
+  {
+    const assignedLeadPhone = leadContactPhone(scope);
+    if (assignedLeadPhone) {
+      await applyGoalEvent(supabase, run.business_id, assignedLeadPhone, { kind: "claimed" });
+    }
+  }
+  await assignContactOwnerOnClaim(supabase, run, scope, owner.phone);
+  await telemetryRecord(supabase, "ai_flow_route_owner_assigned", {
+    run_id: run.id,
+    business_id: run.business_id,
+    agent: owner.phone
+  });
+  return {
+    kind: "ok",
+    result: { routed: "owner_assigned", claimed_by: owner.phone }
+  };
+}
+
 async function contactOwnerAgent(
   supabase: Supabase,
   businessId: string,
