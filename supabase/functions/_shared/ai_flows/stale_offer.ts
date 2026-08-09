@@ -153,9 +153,13 @@ export function staleOfferAckText(outcome: StaleOfferOutcome): string {
         'immediately, reply 1 (just "1", no ETA) to claim it.'
       );
     case "claimed_by_other":
+      // No "window has passed" here: this bucket also answers a "1" that was
+      // simply SECOND, seconds after a teammate claimed (Austin Happ,
+      // 2026-08-08), and telling a fast responder the window lapsed reads as
+      // a system bug to them. The neutral fact covers both timings.
       return (
-        `Thanks, that lead's claim window has passed and ` +
-        `${outcome.claimedName || "another teammate"} picked it up. You'll get the next one.`
+        `Thanks, ${outcome.claimedName || "another teammate"} already claimed that lead. ` +
+        `You'll get the next one.`
       );
     case "moved_on":
       return (

@@ -11,6 +11,10 @@ import {
   telnyxMessagingPhoneString
 } from "../_shared/telnyx_messaging_payload.ts";
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
+import {
+  claimBlockedByOwner,
+  ownerConflictReplyText
+} from "../_shared/ai_flows/claim_owner_gate.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 import {
   inboundSmsBody,
@@ -621,6 +625,13 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
   // Only "1" claims. Any other comma'd digit (e.g. "2, can't take it" = pass)
   // falls through so it's never mis-recorded as a claim.
   if (digit !== "1") return null;
+  // Ownership gate: a contact that already belongs to another ACTIVE
+  // teammate is theirs; refuse with the courteous no instead of splitting
+  // one person across two owners (Austin Happ, 2026-08-08).
+  {
+    const blocked = await contactOwnerBlocking(supabase, businessId, offer.context, from);
+    if (blocked) return await consumeOwnerBlockedClaim({ ...args, runId: offer.id, ...blocked });
+  }
   // Broadcast: a competing offeree's claim already in flight wins; this "1"
   // gets the raced correction so the sender learns they lost.
   if (found.broadcast && broadcastClaimConflict(prevRouting, from)) {
@@ -794,6 +805,139 @@ async function tryAgentPassWithReason(args: LiveClaimArgs): Promise<Response | n
     decision: OFFER_REPLY_DECISION.reject_reason
   });
   return new Response(JSON.stringify({ ok: true, agent_offer: "rejected" }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" }
+  });
+}
+
+/**
+ * Is this claim blocked because the lead's CONTACT already belongs to a
+ * different ACTIVE teammate? Returns the owner's display name and the lead
+ * label for the refusal text, or null when the claim may proceed. Fails
+ * OPEN (null) on any read error: a broken lookup must never strand a live
+ * offer unclaimable.
+ *
+ * Why (Austin Happ, 2026-08-08): the same person arrived as two leads two
+ * seconds apart; Dave claimed the seller half in 53 seconds and Gabrielle
+ * claimed the buyer half 28 minutes later, splitting one contact across
+ * two teammates. Ownership is written at first claim
+ * (assignContactOwnerOnClaim, which never steals), so the contact row is
+ * the authority this gate reads.
+ */
+async function contactOwnerBlocking(
+  supabase: SupabaseClient,
+  businessId: string,
+  runContext: Record<string, unknown> | null | undefined,
+  from: string
+): Promise<{ ownerName: string; leadLabel: string } | null> {
+  try {
+    const vars = ((runContext as { vars?: Record<string, unknown> } | null)?.vars ?? {}) as Record<
+      string,
+      unknown
+    >;
+    const trigger = ((runContext as { trigger?: Record<string, unknown> } | null)?.trigger ??
+      {}) as Record<string, unknown>;
+    const rawLead = typeof vars.lead_phone === "string" ? vars.lead_phone : "";
+    const leadPhone =
+      normalizeE164(rawLead) ||
+      (typeof trigger.from === "string" ? normalizeE164(trigger.from) : "");
+    if (!leadPhone || leadPhone === from) return null;
+    const { data: contact } = await supabase
+      .from("contacts")
+      .select("owner_employee_id")
+      .eq("business_id", businessId)
+      .or(`customer_e164.eq.${leadPhone},alias_e164s.cs.{${leadPhone}}`)
+      .maybeSingle();
+    const ownerId = (contact as { owner_employee_id?: string | null } | null)?.owner_employee_id;
+    if (!ownerId) return null;
+    const { data: member } = await supabase
+      .from("ai_flow_team_members")
+      .select("name, phone_e164, active")
+      .eq("business_id", businessId)
+      .eq("id", ownerId)
+      .maybeSingle();
+    const m = member as { name?: string | null; phone_e164?: string | null; active?: boolean } | null;
+    const owner = m
+      ? { phone: m.phone_e164?.trim() ?? "", name: m.name ?? "", active: m.active === true }
+      : null;
+    if (!claimBlockedByOwner(owner, from)) return null;
+    const leadLabel =
+      typeof vars.lead_name === "string" && vars.lead_name.trim() ? vars.lead_name.trim() : "";
+    return { ownerName: owner!.name || "another teammate", leadLabel };
+  } catch (e) {
+    console.error("contactOwnerBlocking", e);
+    return null;
+  }
+}
+
+/**
+ * Consume a claim refused by the contact-ownership gate: text the refusal
+ * (naming the owner), log the reply to the Texts thread, record telemetry,
+ * and return 200 so the message never falls through to customer chat. The
+ * run itself is untouched: its offer stays live for the owner (or times out
+ * to the normal fallback), and the worker's owned-contact short-circuit
+ * assigns it to the owner on its next entry.
+ */
+async function consumeOwnerBlockedClaim(
+  args: LiveClaimArgs & { runId: string; ownerName: string; leadLabel: string }
+): Promise<Response> {
+  const {
+    supabase,
+    businessId,
+    from,
+    ackTo,
+    eventId,
+    envelope,
+    telnyxApiKey,
+    messagingProfileId,
+    smsFromE164,
+    runId,
+    ownerName,
+    leadLabel
+  } = args;
+  let ackSent: string | null = null;
+  const { data: bizRow } = await supabase
+    .from("business_telnyx_settings")
+    .select("telnyx_messaging_profile_id, telnyx_sms_from_e164")
+    .eq("business_id", businessId)
+    .maybeSingle();
+  const biz = bizRow as
+    | { telnyx_messaging_profile_id?: string | null; telnyx_sms_from_e164?: string | null }
+    | null;
+  const ackProfile =
+    (biz?.telnyx_messaging_profile_id && biz.telnyx_messaging_profile_id.trim()) ||
+    messagingProfileId;
+  const ackFrom =
+    (biz?.telnyx_sms_from_e164 && biz.telnyx_sms_from_e164.trim()) || ackTo || smsFromE164;
+  if (telnyxApiKey && ackProfile && from) {
+    const text = ownerConflictReplyText(ownerName, leadLabel);
+    const send = await sendOperationalSms(supabase, businessId, {
+      apiKey: telnyxApiKey,
+      messagingProfileId: ackProfile,
+      fromE164: ackFrom,
+      toE164: from,
+      text,
+      idempotencyKey: `${eventId}:owner-conflict`
+    });
+    if (!send.ok) console.error("owner-conflict claim reply", send.status, send.body.slice(0, 300));
+    else ackSent = text;
+  }
+  await persistOfferReplyJob({
+    supabase,
+    businessId,
+    eventId,
+    envelope,
+    from,
+    staffKind: "team",
+    ackSent
+  });
+  await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
+    business_id: businessId,
+    run_id: runId,
+    event_id: eventId,
+    decision: OFFER_REPLY_DECISION.claim_owner_conflict
+  });
+  return new Response(JSON.stringify({ ok: true, agent_offer: "owner_conflict" }), {
     status: 200,
     headers: { "Content-Type": "application/json" }
   });
@@ -1052,6 +1196,25 @@ async function tryLateClaim(args: LateClaimArgs): Promise<Response | null> {
     .eq("phone_e164", from)
     .maybeSingle();
   const memberName = (memberRow as { name?: string } | null)?.name ?? "";
+
+  // Ownership gate: late and yank claims are still claims; a contact owned
+  // by another active teammate is refused the same way a live claim is.
+  {
+    const blocked = await contactOwnerBlocking(supabase, businessId, match.context, from);
+    if (blocked) {
+      await ack(ownerConflictReplyText(blocked.ownerName, blocked.leadLabel), "owner-conflict");
+      await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
+        business_id: businessId,
+        run_id: match.id,
+        event_id: eventId,
+        decision: OFFER_REPLY_DECISION.claim_owner_conflict
+      });
+      return new Response(JSON.stringify({ ok: true, agent_offer: "owner_conflict" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" }
+      });
+    }
+  }
 
   const routing = parseRouting(match.context!.routing);
   // First-to-claim yank: retire the teammate whose live window we're taking
@@ -2053,6 +2216,28 @@ serve(async (req: Request) => {
         const barePass = replyBody === "2";
         if (offer && (bareClaim || barePass)) {
           const claimed = bareClaim;
+          // Ownership gate (claims only; a pass is always welcome): see
+          // contactOwnerBlocking.
+          if (claimed) {
+            const blocked = await contactOwnerBlocking(supabase, businessId, offer.context, from);
+            if (blocked) {
+              return await consumeOwnerBlockedClaim({
+                supabase,
+                businessId,
+                from,
+                ackTo: to,
+                eventId,
+                envelope,
+                telnyxApiKey,
+                messagingProfileId,
+                smsFromE164,
+                digit: replyBody,
+                timeframe: "",
+                runId: offer.id,
+                ...blocked
+              });
+            }
+          }
           const prevRouting = parseRouting(offer.context?.routing);
           // Broadcast: a competing offeree's claim already in flight wins.
           // A losing claim gets the correction text; a pass on a taken lead

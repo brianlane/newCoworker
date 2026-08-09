@@ -28,6 +28,8 @@ export const OFFER_REPLY_DECISION = {
   late_claim_repeat: "late_claim_repeat",
   /** A late claim that lost the reopen race. */
   late_claim_raced: "late_claim_raced",
+  /** A claim refused because the contact already belongs to another active teammate. */
+  claim_owner_conflict: "claim_owner_conflict",
   /** First-to-claim: bare "1" took over an offer live with another teammate. */
   first_to_claim: "first_to_claim",
   /** "86": the claimer released the lead back to the owner. */
