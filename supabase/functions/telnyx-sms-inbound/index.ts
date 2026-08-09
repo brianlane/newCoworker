@@ -15,6 +15,7 @@ import {
   claimBlockedByOwner,
   ownerConflictReplyText
 } from "../_shared/ai_flows/claim_owner_gate.ts";
+import { isE164, normalizeNanpToE164 } from "../_shared/ai_flows/engine.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
 import {
   inboundSmsBody,
@@ -837,10 +838,13 @@ async function contactOwnerBlocking(
     >;
     const trigger = ((runContext as { trigger?: Record<string, unknown> } | null)?.trigger ??
       {}) as Record<string, unknown>;
-    const rawLead = typeof vars.lead_phone === "string" ? vars.lead_phone : "";
-    const leadPhone =
-      normalizeE164(rawLead) ||
-      (typeof trigger.from === "string" ? normalizeE164(trigger.from) : "");
+    // EXACTLY the worker's leadContactPhone resolution (leadPhoneE164 +
+    // strict-E164 trigger fallback), so the claim gate and the routing
+    // short-circuit can never disagree about which contact a run is about.
+    const rawLead = typeof vars.lead_phone === "string" ? vars.lead_phone.trim() : "";
+    const fromVars = rawLead ? (isE164(rawLead) ? rawLead : normalizeNanpToE164(rawLead)) : null;
+    const rawTrigger = typeof trigger.from === "string" ? trigger.from.trim() : "";
+    const leadPhone = fromVars ?? (rawTrigger && isE164(rawTrigger) ? rawTrigger : null);
     if (!leadPhone || leadPhone === from) return null;
     const { data: contact } = await supabase
       .from("contacts")

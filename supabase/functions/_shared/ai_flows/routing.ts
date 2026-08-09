@@ -146,6 +146,14 @@ export type OfferRouting = {
    */
   auto_assigned?: boolean;
   /**
+   * The contact already had an ACTIVE owning teammate, so the route step
+   * assigned the lead to them instead of racing the roster (see
+   * finalizeOwnerAssigned). Like auto_assigned: no live offer ever existed,
+   * so the webhook's claim/yank machinery never applied. Set: worker.
+   * Never cleared.
+   */
+  owner_assigned?: boolean;
+  /**
    * Keep-for-owner nudge park (ownerDirectNudges): this awaiting_agent park
    * is the OWNER acknowledging a high-value alert, NOT a teammate offer. The
    * worker's owner-direct resume handler consumes every event on such a run
