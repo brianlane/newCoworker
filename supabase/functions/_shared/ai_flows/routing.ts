@@ -68,6 +68,25 @@ export type OfferRouting = {
    */
   tried?: string[];
   /**
+   * How many unclaimed-lead reminder rounds have already gone out on this
+   * offer (route_to_team `unclaimedReminders`). Set: worker, incremented on
+   * each round. Read: worker, to decide between another round and handing the
+   * lead to the owner. Cleared with the rest of the offer state when the run
+   * finalizes. Absent/0 means no reminder has been sent yet.
+   */
+  reminder_rounds?: number;
+  /**
+   * E.164s that explicitly PASSED this lead ("2" / "2, <reason>"), as opposed
+   * to the ones that simply never answered. `tried` cannot serve this purpose:
+   * it also collects timeouts, opt-out skips, and lead-phone skips. Set:
+   * worker, when it folds a reject. Never cleared while the offer lives.
+   *
+   * Read by the unclaimed-lead reminder ladder, which nudges silence only: a
+   * teammate who said no has answered, and asking them three more times is
+   * noise.
+   */
+  passed_by?: string[];
+  /**
    * E.164 of the teammate who holds the lead. Set: worker when finalizing a
    * claim. Cleared: worker on an unclaim ("86"). Gates every claim path:
    * a lead claimed by someone else is never re-claimable.
@@ -182,7 +201,13 @@ export type OfferRouting = {
   late_digit?: string;
 };
 
-const STRING_ARRAY_FIELDS = ["offered_log", "tried", "pass_reasons", "offered_all"] as const;
+const STRING_ARRAY_FIELDS = [
+  "offered_log",
+  "tried",
+  "pass_reasons",
+  "offered_all",
+  "passed_by"
+] as const;
 const STRING_FIELDS = [
   "offered",
   "offered_name",
@@ -271,21 +296,26 @@ export function routingOfContext(context: Record<string, unknown> | null): Offer
 }
 
 /**
- * Warning line prepended to an offer SMS when the recipient ALREADY holds at
- * least one other live offer, so they know a single digit only answers the
- * newest one (the Jul 2026 two-leads confusion: Dave replied "1" once and
- * assumed both were his). `totalPending` counts the offer being sent, so it
- * is always >= 2 here.
+ * Line prepended to an offer SMS when the recipient ALREADY holds at least
+ * one other live offer. `totalPending` counts the offer being sent, so it is
+ * always >= 2 here.
+ *
+ * This used to read 'Each "1" claims your newest; reply "1" twice to take
+ * both', which described the ambiguity rather than removing it, and was not
+ * even reliably true: a bare digit answers the most recently UPDATED run, and
+ * an escalation re-park or quiet-hours deferral can move an older lead to the
+ * front. Since Aug 2026 the reply carries the lead's name instead, matched
+ * partially against the teammate's own live leads (see
+ * `matchOfferByLeadName`), so the instruction is now specific and correct.
+ *
+ * `leadShortName` is the lead's first name; when a flow never captured a
+ * name, the copy falls back to counting the leads without promising a reply
+ * shape that cannot work.
  */
-export function multiOfferHeadsUpLine(totalPending: number): string {
-  if (totalPending === 2) {
-    return (
-      'Heads up: you now have 2 pending offers. Each "1" claims your newest; ' +
-      'reply "1" twice to take both.'
-    );
+export function multiOfferHeadsUpLine(totalPending: number, leadShortName: string): string {
+  const count = `*You have ${totalPending} unclaimed leads.*`;
+  if (!leadShortName.trim()) {
+    return `${count} Reply *1, <name>* to say which one you are claiming.`;
   }
-  return (
-    `Heads up: you now have ${totalPending} pending offers. Each "1" claims ` +
-    'your newest; reply "1" once per offer to take them all.'
-  );
+  return `${count} Reply *1, ${leadShortName.trim()}* for this one.`;
 }

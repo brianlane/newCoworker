@@ -979,6 +979,20 @@ export type FlowStep =
        * time out. Brand-new/unowned leads flow through claiming unchanged.
        */
       preferContactOwner?: boolean;
+      /**
+       * Reminder ladder before the owner inherits an unclaimed lead. Absent
+       * means the historical behavior: a lapsed offer goes straight to the
+       * owner. Present means the SAME offerees are nudged `rounds` more
+       * times, `intervalMinutes` apart (quiet hours respected), and the owner
+       * fallback fires one interval after the final round. `detailsTemplate`
+       * is the compact context repeated in each reminder; reminders never
+       * re-send the full offer body.
+       */
+      unclaimedReminders?: {
+        rounds: number;
+        intervalMinutes: number;
+        detailsTemplate?: string;
+      };
       when?: StepCondition;
     }
   | {

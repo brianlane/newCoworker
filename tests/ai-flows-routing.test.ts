@@ -91,17 +91,37 @@ describe("parseRouting", () => {
   });
 });
 
-describe("multiOfferHeadsUpLine", () => {
-  it("uses the two-offer wording for exactly 2 pending", () => {
-    const line = multiOfferHeadsUpLine(2);
-    expect(line).toContain("2 pending offers");
-    expect(line).toContain('reply "1" twice to take both');
+describe("passed_by (who explicitly declined)", () => {
+  it("parses as a string array, sanitized like the other phone lists", () => {
+    const parsed = parseRouting({ passed_by: ["+15550001111", 42, null, "+15550002222"] });
+    expect(parsed.passed_by).toEqual(["+15550001111", "+15550002222"]);
   });
 
-  it("generalizes for 3+ pending", () => {
-    const line = multiOfferHeadsUpLine(3);
-    expect(line).toContain("3 pending offers");
-    expect(line).toContain('once per offer');
+  it("is absent when never set, so an untouched offer reminds everyone", () => {
+    expect(parseRouting({ offered_all: ["+15550001111"] }).passed_by).toBeUndefined();
+  });
+});
+
+describe("multiOfferHeadsUpLine", () => {
+  it("names the lead so the reply is unambiguous", () => {
+    const line = multiOfferHeadsUpLine(2, "Daniel");
+    expect(line).toContain("*You have 2 unclaimed leads.*");
+    expect(line).toContain("*1, Daniel*");
+  });
+
+  it("counts correctly past two", () => {
+    expect(multiOfferHeadsUpLine(3, "Daniel")).toContain("*You have 3 unclaimed leads.*");
+  });
+
+  it("falls back to a name placeholder when the flow captured no lead name", () => {
+    const line = multiOfferHeadsUpLine(2, "   ");
+    expect(line).toContain("*1, <name>*");
+    // Never promise a reply shape naming a lead we cannot match on.
+    expect(line).not.toContain("*1, *");
+  });
+
+  it("no longer tells the team to reply 1 twice, which was never reliable", () => {
+    expect(multiOfferHeadsUpLine(2, "Daniel")).not.toContain("twice");
   });
 });
 

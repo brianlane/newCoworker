@@ -43,7 +43,14 @@ export const OFFER_REPLY_DECISION = {
   /** Stale-offer ack: lead is live with another teammate; bare-"1" yank taught. */
   stale_live_with_other: "stale_live_with_other",
   /** Stale-offer ack: the offer moved on (escalated / owner fallback). */
-  stale_moved_on: "stale_moved_on"
+  stale_moved_on: "stale_moved_on",
+  /**
+   * A reply that could have meant more than one of the sender's live leads
+   * (a bare "1" with several pending, or a "1, <name>" whose name fit two).
+   * Nothing was claimed; we asked which one. Watch this: a rising count means
+   * the offer copy is not teaching the "1, <name>" form well enough.
+   */
+  claim_ambiguous: "claim_ambiguous"
 } as const;
 
 export type OfferReplyDecision =

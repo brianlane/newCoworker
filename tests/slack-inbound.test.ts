@@ -14,7 +14,17 @@ vi.mock("@/lib/db/slack-chat", () => ({
   listSlackMessages: vi.fn(),
   markSlackHelloSent: vi.fn()
 }));
-vi.mock("@/lib/slack/client", () => ({ slackPostMessage: vi.fn() }));
+vi.mock("@/lib/slack/client", () => ({ slackPostMessage: vi.fn(), slackUsersInfo: vi.fn() }));
+vi.mock("@/lib/slack/approvals", async () => {
+  const actual = await vi.importActual<typeof import("@/lib/slack/approvals")>(
+    "@/lib/slack/approvals"
+  );
+  return {
+    slackApprovalAck: actual.slackApprovalAck,
+    answerApprovalFromText: vi.fn(),
+    findAwaitingApprovalRunBySlackThread: vi.fn()
+  };
+});
 vi.mock("@/lib/db/businesses", () => ({ getBusiness: vi.fn() }));
 vi.mock("@/lib/i18n/owner-locale", () => ({
   resolveOwnerUiLocaleForEmail: vi.fn(async () => "en")
@@ -49,8 +59,10 @@ const CONVERSATION = {
   created_at: new Date().toISOString()
 };
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
+  const approvals = await import("@/lib/slack/approvals");
+  vi.mocked(approvals.findAwaitingApprovalRunBySlackThread).mockResolvedValue(null);
   vi.mocked(getSlackConnectionByTeamId).mockResolvedValue(CONNECTION as never);
   vi.mocked(getOrCreateSlackConversation).mockResolvedValue(CONVERSATION as never);
   vi.mocked(insertSlackUserMessage).mockResolvedValue({ messageId: 7, jobId: "job-1" });
@@ -319,5 +331,152 @@ describe("non-string field shapes", () => {
         event: { type: "app_home_opened", tab: "messages", user: "U-1", channel: "D-1" } as never
       })
     ).resolves.toBeUndefined();
+  });
+});
+
+describe("approval-thread mentions", () => {
+  const mention = (text: string) => ({
+    type: "app_mention",
+    user: "U-1",
+    text: `<@U-BOT> ${text}`,
+    channel: "C-9",
+    ts: "301.2",
+    thread_ts: "300.1"
+  });
+
+  it("routes an owner's threaded digit to the gate and never enqueues a chat job", async () => {
+    const approvals = await import("@/lib/slack/approvals");
+    vi.mocked(approvals.findAwaitingApprovalRunBySlackThread).mockResolvedValue({
+      runId: "run-1"
+    });
+    vi.mocked(approvals.answerApprovalFromText).mockResolvedValue({
+      applied: true,
+      kind: "decision",
+      option: "approve"
+    } as never);
+    const { slackUsersInfo } = await import("@/lib/slack/client");
+    vi.mocked(slackUsersInfo).mockResolvedValue({
+      displayName: "Amy",
+      email: "owner@x.co",
+      isBot: false
+    });
+    vi.mocked(getBusiness).mockResolvedValue({ owner_email: "OWNER@x.co" } as never);
+
+    const out = await handleSlackChatEvent({
+      teamId: "T-1",
+      eventId: "Ev-appr",
+      event: mention("1") as never
+    });
+    expect(out).toEqual({ enqueued: false, reason: "approval_reply" });
+    expect(vi.mocked(approvals.answerApprovalFromText)).toHaveBeenCalledWith({
+      businessId: BIZ,
+      runId: "run-1",
+      text: "1",
+      decidedBy: "slack:U-1"
+    });
+    expect(vi.mocked(approvals.findAwaitingApprovalRunBySlackThread)).toHaveBeenCalledWith(
+      BIZ,
+      "C-9",
+      "300.1"
+    );
+    expect(vi.mocked(insertSlackUserMessage)).not.toHaveBeenCalled();
+    expect(vi.mocked(slackPostMessage)).toHaveBeenCalledWith(
+      "xoxb-1",
+      expect.objectContaining({ thread_ts: "300.1", text: expect.stringContaining("Approved") })
+    );
+  });
+
+  it("refuses a non-owner in the approval thread", async () => {
+    const approvals = await import("@/lib/slack/approvals");
+    vi.mocked(approvals.findAwaitingApprovalRunBySlackThread).mockResolvedValue({
+      runId: "run-1"
+    });
+    const { slackUsersInfo } = await import("@/lib/slack/client");
+    vi.mocked(slackUsersInfo).mockResolvedValue({
+      displayName: "Dave",
+      email: "dave@x.co",
+      isBot: false
+    });
+    vi.mocked(getBusiness).mockResolvedValue({ owner_email: "owner@x.co" } as never);
+
+    const out = await handleSlackChatEvent({
+      teamId: "T-1",
+      eventId: null,
+      event: mention("2") as never
+    });
+    expect(out).toEqual({ enqueued: false, reason: "approval_not_owner" });
+    expect(vi.mocked(approvals.answerApprovalFromText)).not.toHaveBeenCalled();
+    expect(vi.mocked(slackPostMessage)).toHaveBeenCalledWith(
+      "xoxb-1",
+      expect.objectContaining({ text: expect.stringContaining("Only the business owner") })
+    );
+  });
+
+  it("falls through to a normal chat job when the thread anchors no gate", async () => {
+    const approvals = await import("@/lib/slack/approvals");
+    vi.mocked(approvals.findAwaitingApprovalRunBySlackThread).mockResolvedValue(null);
+    const out = await handleSlackChatEvent({
+      teamId: "T-1",
+      eventId: "Ev-n",
+      event: mention("what's up?") as never
+    });
+    expect(out).toEqual({ enqueued: true });
+  });
+});
+
+describe("approval-thread plumbing tolerance", () => {
+  it("degrades to a refusal when identity reads fail, and swallows a dead ack post", async () => {
+    const approvals = await import("@/lib/slack/approvals");
+    vi.mocked(approvals.findAwaitingApprovalRunBySlackThread).mockResolvedValue({
+      runId: "run-1"
+    });
+    const { slackUsersInfo } = await import("@/lib/slack/client");
+    vi.mocked(slackUsersInfo).mockRejectedValue(new Error("slack down"));
+    vi.mocked(getBusiness).mockRejectedValue(new Error("db down"));
+    vi.mocked(slackPostMessage).mockRejectedValue(new Error("post down"));
+
+    const out = await handleSlackChatEvent({
+      teamId: "T-1",
+      eventId: null,
+      event: {
+        type: "app_mention",
+        user: "U-1",
+        text: "<@U-BOT> 1",
+        channel: "C-9",
+        ts: "301.2",
+        thread_ts: "300.1"
+      } as never
+    });
+    expect(out).toEqual({ enqueued: false, reason: "approval_not_owner" });
+    expect(vi.mocked(approvals.answerApprovalFromText)).not.toHaveBeenCalled();
+  });
+});
+
+describe("approval-thread identity without an email", () => {
+  it("treats a member whose profile hides the email as not-owner", async () => {
+    const approvals = await import("@/lib/slack/approvals");
+    vi.mocked(approvals.findAwaitingApprovalRunBySlackThread).mockResolvedValue({
+      runId: "run-1"
+    });
+    const { slackUsersInfo } = await import("@/lib/slack/client");
+    vi.mocked(slackUsersInfo).mockResolvedValue({
+      displayName: "Mystery",
+      email: null,
+      isBot: false
+    });
+    vi.mocked(getBusiness).mockResolvedValue({ owner_email: "owner@x.co" } as never);
+    const out = await handleSlackChatEvent({
+      teamId: "T-1",
+      eventId: null,
+      event: {
+        type: "app_mention",
+        user: "U-9",
+        text: "<@U-BOT> 1",
+        channel: "C-9",
+        ts: "302.0",
+        thread_ts: "300.1"
+      } as never
+    });
+    expect(out.reason).toBe("approval_not_owner");
   });
 });
