@@ -46,6 +46,88 @@ export type SlackInboundEvent =
   | { type: "tokens_revoked"; tokens?: { oauth?: unknown; bot?: unknown } }
   | { type: string; [key: string]: unknown };
 
+/** A block_actions press we act on (the approval buttons). */
+export type SlackInteractionAction = {
+  teamId: string;
+  userId: string;
+  userName: string | null;
+  actionId: string;
+  /** The button's `value` payload, verbatim (JSON the poster chose). */
+  value: string;
+  responseUrl: string | null;
+};
+
+/**
+ * Parse an interactivity delivery: a form-encoded body whose `payload`
+ * field is JSON. Returns null for anything that is not a block_actions
+ * press with at least one action (view submissions etc. are not ours yet).
+ */
+export function parseSlackInteractionPayload(rawBody: string): SlackInteractionAction | null {
+  let payloadRaw: string | null = null;
+  try {
+    payloadRaw = new URLSearchParams(rawBody).get("payload");
+    /* c8 ignore start -- URLSearchParams(string) does not throw today; the
+       guard is for engine changes, not a reachable branch */
+  } catch {
+    return null;
+  }
+  /* c8 ignore stop */
+  if (!payloadRaw) return null;
+  let payload: {
+    type?: unknown;
+    team?: { id?: unknown };
+    user?: { id?: unknown; name?: unknown; username?: unknown };
+    actions?: Array<{ action_id?: unknown; value?: unknown }>;
+    response_url?: unknown;
+  };
+  try {
+    payload = JSON.parse(payloadRaw);
+  } catch {
+    return null;
+  }
+  if (payload.type !== "block_actions") return null;
+  const teamId = payload.team?.id;
+  const userId = payload.user?.id;
+  const action = Array.isArray(payload.actions) ? payload.actions[0] : undefined;
+  if (
+    typeof teamId !== "string" ||
+    typeof userId !== "string" ||
+    !action ||
+    typeof action.action_id !== "string"
+  ) {
+    return null;
+  }
+  const name = payload.user?.name ?? payload.user?.username;
+  return {
+    teamId,
+    userId,
+    userName: typeof name === "string" && name.length > 0 ? name : null,
+    actionId: action.action_id,
+    value: typeof action.value === "string" ? action.value : "",
+    responseUrl: slackResponseUrlOrNull(payload.response_url)
+  };
+}
+
+/**
+ * Server-side request-forgery guard: a response_url is only ever fetched
+ * when it is literally a Slack webhook endpoint. The payload is already
+ * HMAC-verified, so this is defense in depth against a forged-or-buggy
+ * value steering a server-side POST anywhere else.
+ */
+export function slackResponseUrlOrNull(raw: unknown): string | null {
+  if (typeof raw !== "string" || raw.length === 0) return null;
+  try {
+    const url = new URL(raw);
+    if (url.protocol !== "https:" || url.hostname !== "hooks.slack.com") return null;
+    // Rebuilt from validated parts, never the raw string: the fetched URL
+    // is constructed against the fixed origin, so no parser quirk (or
+    // future refactor) can steer the POST anywhere else.
+    return `https://hooks.slack.com${url.pathname}${url.search}`;
+  } catch {
+    return null;
+  }
+}
+
 /**
  * A `tokens_revoked` delivery separates revoked USER OAuth tokens
  * (`tokens.oauth`) from revoked BOT tokens (`tokens.bot`). Only the latter

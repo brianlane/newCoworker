@@ -15,8 +15,13 @@ import {
   listSlackMessages,
   markSlackHelloSent
 } from "@/lib/db/slack-chat";
-import { slackPostMessage } from "@/lib/slack/client";
+import { slackPostMessage, slackUsersInfo } from "@/lib/slack/client";
 import { slackOnboardingMessage } from "@/lib/slack/chat";
+import {
+  answerApprovalFromText,
+  findAwaitingApprovalRunBySlackThread,
+  slackApprovalAck
+} from "@/lib/slack/approvals";
 import { getBusiness } from "@/lib/db/businesses";
 import { resolveOwnerUiLocaleForEmail } from "@/lib/i18n/owner-locale";
 import type { SlackInboundEvent } from "@/lib/slack/webhook";
@@ -88,6 +93,44 @@ export async function handleSlackChatEvent(input: {
       ? e.thread_ts
       : ts
     : null;
+
+  // A mention inside an approval-prompt thread is an ANSWER to that gate,
+  // not a chat message: digits map against the stored options (the SMS
+  // numbering) and anything else is the free-text modify. Owner-only, the
+  // same trust bar as every other decision surface.
+  if (isMention && threadTs) {
+    const approvalRun = await findAwaitingApprovalRunBySlackThread(
+      connection.business_id,
+      channel,
+      threadTs
+    );
+    if (approvalRun) {
+      const [identity, business] = await Promise.all([
+        slackUsersInfo(connection.botToken, user).catch(() => null),
+        getBusiness(connection.business_id).catch(() => null)
+      ]);
+      const ownerEmail = (business?.owner_email ?? "").trim().toLowerCase();
+      const isOwner =
+        ownerEmail.length > 0 &&
+        (identity?.email ?? "").trim().toLowerCase() === ownerEmail;
+      const ack = isOwner
+        ? slackApprovalAck(
+            await answerApprovalFromText({
+              businessId: connection.business_id,
+              runId: approvalRun.runId,
+              text: content,
+              decidedBy: `slack:${user}`
+            })
+          )
+        : "Only the business owner can decide this approval.";
+      await slackPostMessage(connection.botToken, {
+        channel,
+        thread_ts: threadTs,
+        text: ack
+      }).catch(() => undefined);
+      return { enqueued: false, reason: isOwner ? "approval_reply" : "approval_not_owner" };
+    }
+  }
 
   const conversation = await getOrCreateSlackConversation({
     businessId: connection.business_id,

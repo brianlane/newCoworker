@@ -123,6 +123,7 @@ import {
   prepareSmsBody
 } from "../_shared/ai_flows/compliance.ts";
 import {
+  APPROVAL_OPTION_LABELS,
   approvalSmsInstruction,
   buildApprovalGateOptions
 } from "../_shared/ai_flows/approval_options.ts";
@@ -1213,6 +1214,92 @@ async function executeRun(supabase: Supabase, run: RunRow): Promise<void> {
           message: `Approval prompt SMS failed after park: ${e instanceof Error ? e.message : String(e)}`,
           payload: { run_id: run.id, flow_id: run.flow_id, step_index: index }
         });
+      }
+      // Offer the SAME approval in the tenant's Slack alert channel, with a
+      // button per stored option (the shared list, so numbering/labels can
+      // never diverge from SMS or the dashboard). Best-effort like the SMS
+      // prompt: a Slack failure must not unwind the park. A re-park of this
+      // exact gate (run re-queued and paused again) skips the repost, keyed
+      // by the step index stored alongside the message ts.
+      {
+        const priorApproval = (run.context as {
+          approval?: { slack_message_ts?: unknown; slack_step_index?: unknown };
+        } | null)?.approval;
+        const alreadyPosted =
+          typeof priorApproval?.slack_message_ts === "string" &&
+          priorApproval?.slack_step_index === index;
+        const bridgeUrl = (Deno.env.get("NEXT_PUBLIC_APP_URL") ?? "").trim().replace(/\/$/, "");
+        const bridgeBearer = Deno.env.get("INTERNAL_CRON_SECRET") ?? "";
+        if (!alreadyPosted && bridgeUrl && bridgeBearer) {
+          try {
+            const buttons = gateOptions.map((option) => ({
+              type: "button",
+              action_id: `aiflow_approval:${option}`,
+              value: JSON.stringify({ r: run.id, o: option }),
+              ...(option === "approve" ? { style: "primary" } : {}),
+              ...(option === "cancel" ? { style: "danger" } : {}),
+              text: { type: "plain_text", text: APPROVAL_OPTION_LABELS[option] }
+            }));
+            const blocks: unknown[] = [
+              {
+                type: "section",
+                text: { type: "mrkdwn", text: `*Approval needed*\n${approvalPrompt}` }
+              },
+              { type: "actions", block_id: `aiflow_approval:${run.id}`, elements: buttons },
+              ...(redraftIndex >= 0
+                ? [
+                    {
+                      type: "context",
+                      elements: [
+                        {
+                          type: "mrkdwn",
+                          text: "To change the draft instead, reply in this thread and mention @New Coworker with what to adjust."
+                        }
+                      ]
+                    }
+                  ]
+                : [])
+            ];
+            const slackRes = await fetch(`${bridgeUrl}/api/internal/slack-send`, {
+              method: "POST",
+              headers: {
+                "Content-Type": "application/json",
+                Authorization: `Bearer ${bridgeBearer}`,
+                // CSRF gate: src/proxy.ts allows server-to-server bearer
+                // POSTs only when Origin matches NEXT_PUBLIC_APP_URL.
+                Origin: bridgeUrl
+              },
+              body: JSON.stringify({
+                businessId: run.business_id,
+                text: `Approval needed: ${approvalPrompt}`,
+                blocks
+              })
+            });
+            const slackJson = slackRes.ok
+              ? ((await slackRes.json().catch(() => null)) as {
+                  data?: { ok?: boolean; ts?: string; channelId?: string };
+                } | null)
+              : null;
+            const slackTs = slackJson?.data?.ok === true ? slackJson.data.ts : null;
+            if (typeof slackTs === "string" && slackTs.length > 0) {
+              // Anchor the thread for free-text modify replies (channel AND
+              // ts: Slack ts values are only unique per channel), and stamp
+              // the step index so a re-park of THIS gate does not repost.
+              // The guarded updateRun keeps a canceled run canceled.
+              approval.slack_message_ts = slackTs;
+              approval.slack_channel_id = slackJson?.data?.channelId ?? null;
+              approval.slack_step_index = index;
+              await updateRun(supabase, run.id, {
+                context: buildContext(scope, approval, routing)
+              });
+            }
+          } catch (e) {
+            console.warn(
+              "approval prompt Slack post failed after park",
+              e instanceof Error ? e.message : String(e)
+            );
+          }
+        }
       }
       await telemetryRecord(supabase, "ai_flow_run_awaiting_approval", {
         run_id: run.id,
