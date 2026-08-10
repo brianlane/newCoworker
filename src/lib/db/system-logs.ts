@@ -98,6 +98,67 @@ export async function insertSystemLog(
   if (error) throw new Error(`insertSystemLog: ${error.message}`);
 }
 
+/** Minutes of history that decide whether a failure is repeating. */
+export const FAILURE_ESCALATION_WINDOW_MINUTES = 15;
+
+/**
+ * Record a failure at a level that reflects whether it actually persisted.
+ *
+ * The fleet dashboard reads `level = 'error'` only, so anything logged at
+ * `error` is a claim that a human should look. A poll that runs every minute
+ * and fails once does not meet that bar: the next run already retried it. On
+ * 2026-08-08 a single Gmail 400 in the email coworker poll sat on the admin
+ * dashboard as a system error while the following 2,880 runs all succeeded.
+ *
+ * So: first failure in the window is a `warn`, which still lands in the
+ * per-business log tail (that view filters "this level and more severe") but
+ * stays out of the fleet error feed. A failure with another already behind it
+ * is an `error`, because the retry that would have cleared it has been and
+ * gone.
+ *
+ * The window matters more than a plain consecutive count: a poll failing every
+ * few minutes is broken even though it succeeds in between, and counting only
+ * back-to-back failures would never escalate it.
+ *
+ * Fails toward the louder level. If the history cannot be read, this records
+ * an `error`, because a missed real failure costs more than one extra row on
+ * the dashboard. Never throws, same contract as `recordSystemLog`.
+ */
+export async function recordFailure(
+  input: Omit<SystemLogInput, "level">,
+  options?: { windowMinutes?: number },
+  client?: SupabaseClient
+): Promise<SystemLogLevel> {
+  const windowMinutes = options?.windowMinutes ?? FAILURE_ESCALATION_WINDOW_MINUTES;
+  let level: SystemLogLevel = "error";
+  try {
+    const db = client ?? (await createSupabaseServiceClient());
+    const since = new Date(Date.now() - windowMinutes * 60_000).toISOString();
+    let q = db
+      .from("system_logs")
+      .select("id")
+      .eq("event", input.event)
+      .in("level", ["warn", "error"])
+      .gte("created_at", since);
+    // Every filter goes on BEFORE limit(): limit returns a transform builder
+    // with no eq/is on it, so filtering afterwards throws, and this function
+    // catching its own throw would quietly escalate every failure to error.
+    // A platform-wide event (no tenant) must not match a tenant's history, and
+    // PostgREST needs is-null spelled out rather than eq(null).
+    q = input.businessId ? q.eq("business_id", input.businessId) : q.is("business_id", null);
+    const { data, error } = await q.limit(1);
+    if (error) throw new Error(error.message);
+    level = (data ?? []).length > 0 ? "error" : "warn";
+  } catch (e) {
+    logger.warn("recordFailure: could not read failure history, escalating", {
+      event: input.event,
+      error: e instanceof Error ? e.message : String(e)
+    });
+  }
+  await recordSystemLog({ ...input, level }, client);
+  return level;
+}
+
 /**
  * Fire-and-forget insert that also mirrors to the console logger. Never
  * throws and never rejects, so it is safe in any hot path / catch block.

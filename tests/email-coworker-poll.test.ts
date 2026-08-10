@@ -9,7 +9,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/supabase/server", () => ({ createSupabaseServiceClient: vi.fn() }));
 vi.mock("@/lib/voice-tools/connections", () => ({ resolveEmailConnection: vi.fn() }));
 vi.mock("@/lib/notifications/dispatch", () => ({ dispatchUrgentNotification: vi.fn() }));
-vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn() }));
+vi.mock("@/lib/db/system-logs", () => ({ recordSystemLog: vi.fn(), recordFailure: vi.fn() }));
 vi.mock("@/lib/email-coworker/mailbox", async (importOriginal) => ({
   ...(await importOriginal<typeof import("@/lib/email-coworker/mailbox")>()),
   fetchInboxWithThreads: vi.fn(),
@@ -28,12 +28,13 @@ vi.mock("@/lib/outreach/reply", () => ({ noteProspectReply: vi.fn() }));
 vi.mock("@/lib/logger", () => ({ logger: { warn: vi.fn(), info: vi.fn(), error: vi.fn() } }));
 
 import { pollEmailCoworker,
-  isSelfSender
+  isSelfSender,
+  providerFailureDetail
 } from "@/lib/email-coworker/poll";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { resolveEmailConnection } from "@/lib/voice-tools/connections";
 import { dispatchUrgentNotification } from "@/lib/notifications/dispatch";
-import { recordSystemLog } from "@/lib/db/system-logs";
+import { recordFailure, recordSystemLog } from "@/lib/db/system-logs";
 import { fetchInboxWithThreads, fetchMailboxAddress } from "@/lib/email-coworker/mailbox";
 import {
   EMAIL_COWORKER_MAX_TURNS_PER_DAY,
@@ -56,6 +57,7 @@ const mockClientFactory = vi.mocked(createSupabaseServiceClient);
 const mockConn = vi.mocked(resolveEmailConnection);
 const mockDispatch = vi.mocked(dispatchUrgentNotification);
 const mockSystemLog = vi.mocked(recordSystemLog);
+const mockRecordFailure = vi.mocked(recordFailure);
 const mockFetch = vi.mocked(fetchInboxWithThreads);
 const mockMailboxAddress = vi.mocked(fetchMailboxAddress);
 const mockList = vi.mocked(listActiveThreads);
@@ -123,6 +125,7 @@ beforeEach(() => {
   mockNoteReply.mockResolvedValue("not_a_prospect");
   mockDispatch.mockResolvedValue({ results: [] } as never);
   mockSystemLog.mockResolvedValue(undefined as never);
+  mockRecordFailure.mockResolvedValue("warn" as never);
 });
 
 describe("pollEmailCoworker", () => {
@@ -318,7 +321,7 @@ describe("pollEmailCoworker", () => {
     mockRecordTurn.mockRejectedValueOnce("update denied");
     const out = await pollEmailCoworker(businessDb());
     expect(out.replied).toBe(1);
-    expect(mockSystemLog).not.toHaveBeenCalledWith(
+    expect(mockRecordFailure).not.toHaveBeenCalledWith(
       expect.objectContaining({ event: "email_coworker_poll_failed" })
     );
   });
@@ -390,7 +393,7 @@ describe("pollEmailCoworker", () => {
     const out = await pollEmailCoworker(businessDb());
     expect(out.businesses).toBe(2);
     expect(out.replied).toBe(1);
-    expect(mockSystemLog).toHaveBeenCalledWith(
+    expect(mockRecordFailure).toHaveBeenCalledWith(
       expect.objectContaining({ event: "email_coworker_poll_failed" })
     );
   });
@@ -398,7 +401,7 @@ describe("pollEmailCoworker", () => {
   it("tolerates a non-Error throw and unreadable business metadata", async () => {
     mockFetch.mockRejectedValueOnce("string boom");
     await pollEmailCoworker(businessDb());
-    expect(mockSystemLog).toHaveBeenCalledWith(
+    expect(mockRecordFailure).toHaveBeenCalledWith(
       expect.objectContaining({
         event: "email_coworker_poll_failed",
         message: expect.stringContaining("string boom")
@@ -490,5 +493,52 @@ describe("isSelfSender: the coworker must not answer its own mail", () => {
     expect(isSelfSender("not-an-address", OURS)).toBe(false);
     // An empty set still leaves the domain rule working.
     expect(isSelfSender("team@newcoworker.com", new Set())).toBe(true);
+  });
+
+  /**
+   * The 2026-08-08 row read "Request failed with status code 400" with an empty
+   * payload: a call failed somewhere, and nothing more. Gmail puts the actual
+   * reason in the response body, so a repeat is only actionable if the body
+   * came with it.
+   */
+  describe("providerFailureDetail", () => {
+    it("keeps the status, endpoint and response body from an axios rejection", () => {
+      const detail = providerFailureDetail({
+        response: { status: 400, data: { error: { message: "Invalid query" } } },
+        config: { endpoint: "/gmail/v1/users/me/messages?q=newer_than:1h" }
+      });
+      expect(detail.status).toBe(400);
+      expect(detail.endpoint).toContain("/gmail/v1/users/me/messages");
+      expect(String(detail.response)).toContain("Invalid query");
+    });
+
+    it("falls back to the top-level status and the url field", () => {
+      const detail = providerFailureDetail({ status: 503, config: { url: "/x" } });
+      expect(detail).toEqual({ status: 503, endpoint: "/x" });
+    });
+
+    it("returns an empty object for a throw it does not recognise", () => {
+      expect(providerFailureDetail(new Error("boom"))).toEqual({});
+      expect(providerFailureDetail("string boom")).toEqual({});
+      expect(providerFailureDetail(null)).toEqual({});
+      expect(providerFailureDetail(undefined)).toEqual({});
+    });
+
+    it("keeps a string body as-is and clips a long one", () => {
+      const detail = providerFailureDetail({ response: { status: 500, data: "x".repeat(900) } });
+      expect(String(detail.response)).toHaveLength(500);
+    });
+
+    it("survives a body that cannot be serialised", () => {
+      const circular: Record<string, unknown> = {};
+      circular.self = circular;
+      const detail = providerFailureDetail({ response: { status: 400, data: circular } });
+      expect(detail.status).toBe(400);
+      expect(typeof detail.response).toBe("string");
+    });
+
+    it("ignores an empty endpoint and a null body rather than recording blanks", () => {
+      expect(providerFailureDetail({ config: { url: "" }, response: { data: null } })).toEqual({});
+    });
   });
 });

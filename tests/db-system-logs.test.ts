@@ -4,7 +4,8 @@ import {
   recordSystemLog,
   listSystemLogs,
   listSystemLogErrorsAll,
-  buildLogSearchFilter
+  buildLogSearchFilter,
+  recordFailure
 } from "@/lib/db/system-logs";
 
 vi.mock("@/lib/supabase/server", () => ({
@@ -35,6 +36,8 @@ function mockDb(overrides: Record<string, unknown> = {}) {
     lt: vi.fn().mockReturnThis(),
     order: vi.fn().mockReturnThis(),
     limit: vi.fn().mockResolvedValue({ data: [MOCK_ROW], error: null }),
+    gte: vi.fn().mockReturnThis(),
+    is: vi.fn().mockReturnThis(),
     ...overrides
   };
 }
@@ -329,5 +332,104 @@ describe("buildLogSearchFilter", () => {
   it("keeps searching when the term is nothing but reserved characters", () => {
     // The old sanitizer deleted all five and produced an empty term.
     expect(buildLogSearchFilter("%_,()")).not.toBeNull();
+  });
+
+  /**
+   * The fleet dashboard reads level='error' only, so `error` is a claim that a
+   * human should look. A per-minute poll that fails once has already been
+   * retried by the time anyone reads it (2026-08-08: one Gmail 400, then 2,880
+   * clean runs). These pin which failures earn that claim.
+   */
+  describe("recordFailure escalation", () => {
+    // This block sits outside the suite that owns the shared reset, so it
+    // clears its own mocks; without it the call counts below carry over from
+    // every earlier test in the file.
+    beforeEach(() => vi.clearAllMocks());
+
+    it("logs the first failure in the window as warn, keeping it off the fleet feed", async () => {
+      const db = mockDb({ limit: vi.fn().mockResolvedValue({ data: [], error: null }) });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      const level = await recordFailure({
+        businessId: "biz-1",
+        source: "email",
+        event: "email_coworker_poll_failed",
+        message: "400"
+      });
+      expect(level).toBe("warn");
+      expect(db.insert).toHaveBeenCalledWith(expect.objectContaining({ level: "warn" }));
+    });
+
+    it("escalates to error once another failure is already in the window", async () => {
+      const db = mockDb({ limit: vi.fn().mockResolvedValue({ data: [MOCK_ROW], error: null }) });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      const level = await recordFailure({
+        businessId: "biz-1",
+        source: "email",
+        event: "email_coworker_poll_failed",
+        message: "400 again"
+      });
+      expect(level).toBe("error");
+      expect(db.insert).toHaveBeenCalledWith(expect.objectContaining({ level: "error" }));
+    });
+
+    it("scopes the history to this business and this event", async () => {
+      const db = mockDb({ limit: vi.fn().mockResolvedValue({ data: [], error: null }) });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      await recordFailure({ businessId: "biz-1", source: "email", event: "poll_failed" });
+      expect(db.eq).toHaveBeenCalledWith("event", "poll_failed");
+      expect(db.eq).toHaveBeenCalledWith("business_id", "biz-1");
+      expect(db.in).toHaveBeenCalledWith("level", ["warn", "error"]);
+      expect(db.is).not.toHaveBeenCalled();
+    });
+
+    // A platform-wide event has no tenant, and eq(null) does not match null in
+    // PostgREST, so it would silently find no history and never escalate.
+    it("matches platform-wide history with is-null, not eq-null", async () => {
+      const db = mockDb({ limit: vi.fn().mockResolvedValue({ data: [], error: null }) });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      await recordFailure({ source: "cron", event: "sweep_failed" });
+      expect(db.is).toHaveBeenCalledWith("business_id", null);
+      expect(db.eq).not.toHaveBeenCalledWith("business_id", expect.anything());
+    });
+
+    it("escalates when the history cannot be read, rather than going quiet", async () => {
+      const db = mockDb({
+        limit: vi.fn().mockResolvedValue({ data: null, error: { message: "db down" } })
+      });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      const level = await recordFailure({ businessId: "b", source: "email", event: "e" });
+      expect(level).toBe("error");
+    });
+
+    // PostgREST returns data:null for an empty result on some client versions,
+    // which must read as "no prior failure", not as an unreadable history.
+    it("treats a null result with no error as no prior failure", async () => {
+      const db = mockDb({ limit: vi.fn().mockResolvedValue({ data: null, error: null }) });
+      vi.mocked(createSupabaseServiceClient).mockResolvedValue(db as never);
+      expect(await recordFailure({ businessId: "b", source: "email", event: "e" })).toBe("warn");
+    });
+
+    it("escalates on a non-Error rejection too", async () => {
+      vi.mocked(createSupabaseServiceClient).mockRejectedValue("string boom" as never);
+      expect(await recordFailure({ businessId: "b", source: "email", event: "e" })).toBe("error");
+    });
+
+    it("escalates when the client itself cannot be built", async () => {
+      vi.mocked(createSupabaseServiceClient).mockRejectedValue(new Error("no client") as never);
+      const level = await recordFailure({ businessId: "b", source: "email", event: "e" });
+      expect(level).toBe("error");
+    });
+
+    it("honours an explicit window and an injected client", async () => {
+      const db = mockDb({ limit: vi.fn().mockResolvedValue({ data: [], error: null }) });
+      const level = await recordFailure(
+        { businessId: "b", source: "email", event: "e" },
+        { windowMinutes: 60 },
+        db as never
+      );
+      expect(level).toBe("warn");
+      expect(createSupabaseServiceClient).not.toHaveBeenCalled();
+      expect(db.gte).toHaveBeenCalledWith("created_at", expect.any(String));
+    });
   });
 });
