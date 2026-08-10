@@ -694,6 +694,12 @@ export type FlowStep =
        */
       replyToEmailLogId?: string;
       /**
+       * Reply-all is the default on a threaded send. False threads WITHOUT
+       * mirroring the original's recipients, for a flow that writes separate,
+       * tailored notes to each party instead of one message to everyone.
+       */
+      replyAll?: boolean;
+      /**
        * Send from the owner's connected mailbox (workspace_oauth_connections.id,
        * via Nango Gmail/Outlook) instead of the platform Resend sender. The
        * worker calls back into the app's /api/aiflows/send-owner-email, which
@@ -812,6 +818,12 @@ export type FlowStep =
        * reply falls past the gate into the operator turn, which does not know
        * a run is parked. The target is validated to exist at authoring time.
        */
+      /**
+       * How many steps directly after this gate the approval covers
+       * (default 1). A gate guarding two sends must say 2, or "skip" runs the
+       * second one unapproved.
+       */
+      guardsNextSteps?: number;
       allowModify?: { redraftStepId: string };
       /**
        * Per-key page suppression, identical to notify_owner's. Parking this

@@ -1555,6 +1555,48 @@ describe("planStep: send_email", () => {
   });
 });
 
+describe("planStep: send_email reply-all opt-out", () => {
+  const base = {
+    id: "s",
+    type: "send_email",
+    to: "a@b.c",
+    subject: "s",
+    body: "b",
+    replyToEmailLogId: "{{trigger.email_log_id}}",
+    fromConnectionId: "11111111-1111-4111-8111-111111111111"
+  };
+  const scope = {
+    vars: {},
+    trigger: {
+      channel: "email",
+      windowText: "hi",
+      url: null,
+      from: "a@b.c",
+      email_log_id: "22222222-2222-4222-8222-222222222222"
+    }
+  };
+
+  it("carries replyAll:false into the action", () => {
+    // Dropped here, the route would mirror the original's recipients and put
+    // both parties back on both of the tailored notes.
+    const plan = planStep({ ...base, replyAll: false } as never, scope as never);
+    expect(plan.ok).toBe(true);
+    if (!plan.ok) return;
+    expect(plan.action).toMatchObject({ kind: "send_email", replyAll: false });
+  });
+
+  it("omits replyAll when the step did not opt out", () => {
+    // Never an explicit true: the route treats "not false" as mirror, and an
+    // emitted true would make the default look like a per-step decision.
+    for (const step of [base, { ...base, replyAll: true }]) {
+      const plan = planStep(step as never, scope as never);
+      expect(plan.ok).toBe(true);
+      if (!plan.ok) return;
+      expect(plan.action).not.toHaveProperty("replyAll");
+    }
+  });
+});
+
 describe("planStep: notify_owner", () => {
   it("templates the message", () => {
     const step: FlowStep = { id: "n", type: "notify_owner", message: "New lead {{vars.seller_phone}}" };
@@ -1684,6 +1726,31 @@ describe("planStep: approval_gate", () => {
       ok: true,
       action: { kind: "await_approval", prompt: "Send to +16026866672?" }
     });
+  });
+
+  it("carries guardsNextSteps into the action, and omits it when unset", () => {
+    /**
+     * The worker reads this off the ACTION to decide how many steps a "skip"
+     * covers. Dropped in the planner, a gate fronting two sends would skip one
+     * and deliver the other unapproved, which for the HQ sales arm is an email
+     * to a stranger from Brian's own address.
+     */
+    const guarded: FlowStep = {
+      id: "a",
+      type: "approval_gate",
+      prompt: "ok?",
+      guardsNextSteps: 2
+    } as FlowStep;
+    const plan = planStep(guarded, { vars: {} });
+    expect(plan).toEqual({
+      ok: true,
+      action: { kind: "await_approval", prompt: "ok?", guardsNextSteps: 2 }
+    });
+
+    // Omitted rather than emitted as 1, so the worker's own default stays the
+    // single source of truth for what "unset" means.
+    const plain = planStep({ id: "a", type: "approval_gate", prompt: "ok?" }, { vars: {} });
+    expect(plain).toEqual({ ok: true, action: { kind: "await_approval", prompt: "ok?" } });
   });
 });
 

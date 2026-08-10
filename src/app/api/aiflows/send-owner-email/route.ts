@@ -47,7 +47,13 @@ const bodySchema = z.object({
    * replyToEmailLogId. Absent (or a row with no stored thread) sends a new
    * conversation, exactly as before.
    */
-  replyToEmailLogId: z.string().uuid().optional()
+  replyToEmailLogId: z.string().uuid().optional(),
+  /**
+   * Reply-all is the default on a threaded send. False threads WITHOUT
+   * mirroring, for a flow writing separate, tailored notes to each party:
+   * mirroring would put both of them back on both messages.
+   */
+  replyAll: z.boolean().optional()
 });
 
 export async function POST(request: Request) {
@@ -114,10 +120,17 @@ export async function POST(request: Request) {
     // To, so nobody is listed twice.
     const alreadyAddressed = new Set([body.toEmail.trim().toLowerCase()]);
     const keep = (a: string): boolean => !isOurs(a) && !alreadyAddressed.has(a);
-    const replyAllTo = (thread?.replyToRecipients ?? []).filter(keep);
+    // replyAll:false threads the send but addresses ONLY what the caller
+    // asked for. A flow writing separate notes to the introducer and the
+    // prospect needs that: mirroring would put both of them on both messages,
+    // which is the confusion the tailored split exists to remove.
+    const mirror = body.replyAll !== false;
+    const replyAllTo = mirror ? (thread?.replyToRecipients ?? []).filter(keep) : [];
     const replyAllCc = [
       ...normalizeRecipients(body.cc),
-      ...(thread?.replyCcRecipients ?? []).filter((a) => keep(a) && !replyAllTo.includes(a))
+      ...(mirror
+        ? (thread?.replyCcRecipients ?? []).filter((a) => keep(a) && !replyAllTo.includes(a))
+        : [])
     ];
 
     const result = await sendFromMailboxConnection(

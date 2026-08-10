@@ -702,7 +702,9 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
       for (const msg of inbound) {
         const scope = emailTriggerScope(
           { ...msg, weRepliedOnThread: Boolean(msg.threadId && repliedThreads.has(msg.threadId)) },
-          { connectionId }
+          // accountEmail so the connected mailbox drops out of others_*: the
+          // prospect is whoever is left after us and the sender.
+          { connectionId, ...(accountEmail ? { selfEmail: accountEmail } : {}) }
         );
         for (const flow of group) {
           seenRows.push({ flow_id: flow.id, message_id: msg.id });

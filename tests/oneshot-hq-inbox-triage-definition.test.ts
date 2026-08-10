@@ -104,12 +104,14 @@ describe("HQ inbox triage: the drafter is told who will receive the reply", () =
    * {{trigger.message_ref}} shipped emitted-but-unreferenceable for exactly
    * this reason.
    */
-  it("feeds the recipient headers into the draft input", () => {
-    const draft = steps.find((s) => s.id === "s_draft");
-    expect(draft?.input).toContain("To: {{trigger.to}}");
-    expect(draft?.input).toContain("Cc: {{trigger.cc}}");
-    // And the sender, which decides who gets thanked.
-    expect(draft?.input).toContain("From: {{trigger.from}}");
+  it("feeds the recipient headers into BOTH draft inputs", () => {
+    for (const id of ["s_draft_prospect", "s_draft_intro"]) {
+      const draft = steps.find((s) => s.id === id);
+      expect(draft?.input, id).toContain("To: {{trigger.to}}");
+      expect(draft?.input, id).toContain("Cc: {{trigger.cc}}");
+      // And the sender, which decides who gets thanked.
+      expect(draft?.input, id).toContain("From: {{trigger.from}}");
+    }
   });
 
   it("accepts those refs through the real authoring validator", () => {
@@ -444,36 +446,91 @@ describe("HQ inbox triage: writing rules hold in the shipped copy", () => {
 describe("HQ inbox triage: a sales lead gets answered, not just announced", () => {
   const inArm = (id: string) => steps.find((s) => s.id === id) as Record<string, unknown> | undefined;
 
-  it("drafts, asks, then replies inside the original thread", () => {
-    expect(inArm("s_draft")).toMatchObject({ type: "run_agent", agentId: AGENT_ID });
-    expect(inArm("s_gate")).toMatchObject({ type: "approval_gate" });
-    // The reply threads against the row the trigger came from. Without this it
-    // opens a new conversation beside the original, which is the whole
-    // complaint about the dashboard Reply button.
-    expect(inArm("s_send")).toMatchObject({
-      type: "send_email",
-      replyToEmailLogId: "{{trigger.email_log_id}}"
-    });
+  it("drafts BOTH notes and sends them as two separate emails", () => {
+    /**
+     * Aug 9 2026. One reply-all thanking the introducer and pitching the
+     * prospect reads oddly to both: each sees a paragraph written for the
+     * other, and on a phone the recipient list is not even visible, so it
+     * looks like a direct message that mentions a stranger.
+     */
+    expect(inArm("s_draft_prospect")).toMatchObject({ type: "run_agent", agentId: AGENT_ID });
+    expect(inArm("s_draft_intro")).toMatchObject({ type: "run_agent", agentId: AGENT_ID });
+    // Each note says which one it is, or the agent cannot tell them apart.
+    expect(String(inArm("s_draft_prospect")?.input)).toContain("WRITE: PROSPECT");
+    expect(String(inArm("s_draft_intro")?.input)).toContain("WRITE: INTRODUCER");
+    // They save to different vars, or the second overwrites the first.
+    expect(inArm("s_draft_prospect")?.saveAs).toBe("email_draft_prospect");
+    expect(inArm("s_draft_intro")?.saveAs).toBe("email_draft_intro");
+
+    // Both threaded, and NEITHER reply-all: mirroring would put both parties
+    // back on both messages and undo the whole point of writing two.
+    for (const id of ["s_send_intro", "s_send_prospect"]) {
+      expect(inArm(id), id).toMatchObject({
+        type: "send_email",
+        replyToEmailLogId: "{{trigger.email_log_id}}",
+        replyAll: false
+      });
+    }
   });
 
-  it("lets Brian answer the gate with changes, and rewinds to the drafter", () => {
+  it("addresses each note to its own person", () => {
+    // The introducer is in From; the prospect is whoever is left after us and
+    // the sender, which is exactly what others_to resolves to.
+    expect(inArm("s_send_intro")?.to).toBe("{{trigger.from}}");
+    expect(inArm("s_send_prospect")?.to).toBe("{{trigger.others_to}}");
+    // Extra prospects ride on cc, since `to` takes a single address.
+    expect(inArm("s_send_prospect")?.cc).toEqual(["{{trigger.others_cc}}"]);
+    // And the two notes never cross: neither carries the other's body.
+    expect(String(inArm("s_send_intro")?.body)).toBe("{{vars.email_draft_intro}}");
+    expect(String(inArm("s_send_prospect")?.body)).toBe("{{vars.email_draft_prospect}}");
+  });
+
+  it("shows Brian both notes, labelled with who gets each", () => {
+    const prompt = String(inArm("s_gate")?.prompt);
+    expect(prompt).toContain("{{vars.email_draft_intro}}");
+    expect(prompt).toContain("{{vars.email_draft_prospect}}");
+    // Labelled by recipient, or two blocks of text are indistinguishable.
+    expect(prompt).toContain("To {{trigger.from}}:");
+    expect(prompt).toContain("To {{trigger.others_to}}:");
+  });
+
+  it("lets Brian answer the gate with changes, and rewinds to the FIRST draft", () => {
     // His actual reply shape is a pick PLUS a change, which a digit cannot
-    // express. The rewind target must be the DRAFTING step or the redo is a
-    // no-op.
-    expect(inArm("s_gate")).toMatchObject({ allowModify: { redraftStepId: "s_draft" } });
+    // express. The rewind must land on the first drafting step so BOTH notes
+    // are rewritten: rewinding to the second would leave a stale prospect
+    // note beside a freshly changed introducer note.
+    expect(inArm("s_gate")).toMatchObject({
+      allowModify: { redraftStepId: "s_draft_prospect" }
+    });
+    const ids = steps.map((x) => x.id);
+    expect(ids.indexOf("s_draft_prospect")).toBeLessThan(ids.indexOf("s_draft_intro"));
   });
 
-  it("feeds his words back into the redraft", () => {
-    // The rewind only does something if the drafter reads what he said.
-    expect(String(inArm("s_draft")?.input)).toContain("{{vars.approval_note}}");
+  it("feeds his words back into both redrafts", () => {
+    // The rewind only does something if each drafter reads what he said.
+    for (const id of ["s_draft_prospect", "s_draft_intro"]) {
+      expect(String(inArm(id)?.input), id).toContain("{{vars.approval_note}}");
+    }
   });
 
   it("still tells him when the drafter declines to answer", () => {
-    // A real sales lead must never resolve to silence just because the model
-    // had nothing to say. The gate and the send skip; the plain alert fires.
+    // A real sales lead must never resolve to silence. Everything hangs off
+    // the INTRODUCER note, because there is always a sender: the prospect
+    // note is NO_REPLY whenever nobody else is on the mail, which is a normal
+    // outcome rather than a decline.
     expect(inArm("s_gate")).toMatchObject({ when: { notEquals: "NO_REPLY" } });
-    expect(inArm("s_send")).toMatchObject({ when: { notEquals: "NO_REPLY" } });
+    expect(inArm("s_send_intro")).toMatchObject({ when: { notEquals: "NO_REPLY" } });
     expect(inArm("s_notify_sales")).toMatchObject({ when: { equals: "NO_REPLY" } });
+  });
+
+  it("skips only the prospect note when there is no prospect", () => {
+    // Two independent guards, because either alone leaves a hole: the drafter
+    // returns NO_REPLY, and the send's templated `to` renders empty, which the
+    // planner skips rather than failing the run.
+    expect(inArm("s_send_prospect")).toMatchObject({
+      when: { var: "email_draft_prospect", notEquals: "NO_REPLY" },
+      to: "{{trigger.others_to}}"
+    });
   });
 
   it("leaves support and billing on the alert-only path", () => {
@@ -508,25 +565,56 @@ describe("HQ inbox triage: moving the paging did not lose the cooldown", () => {
 });
 
 describe("HQ inbox triage: nothing sends without a human saying so", () => {
-  it("puts the send DIRECTLY after the gate it is guarded by", () => {
-    // approval_gate's skip semantics guard "the step directly after it", and
-    // a cooling gate uses that same path. If anything were inserted between
-    // the gate and the send, a skip or a cooldown would skip the WRONG step
-    // and the draft would go out unapproved. Adjacency is load-bearing here,
-    // so it is pinned rather than left to reading order.
+  it("puts BOTH sends directly after the gate, and says the gate guards two", () => {
+    /**
+     * The gate's skip semantics guard "the steps directly after it", and a
+     * cooling gate takes the same path. That advance defaulted to ONE step,
+     * so a gate followed by two sends skipped the introducer note and mailed
+     * the prospect anyway, with nobody having approved it.
+     *
+     * Adjacency AND the count are both load-bearing, so both are pinned: a
+     * step inserted between them, or a third send added without bumping
+     * guardsNextSteps, puts unapproved mail in front of a stranger.
+     */
     const arm = (
       definition.steps.find((s) => s.type === "branch") as {
         branches?: { id: string; steps: { id: string; type: string }[] }[];
       }
     ).branches?.find((b) => b.id === "b_sales");
     const ids = (arm?.steps ?? []).map((s) => s.id);
-    expect(ids.indexOf("s_send")).toBe(ids.indexOf("s_gate") + 1);
+    const gateAt = ids.indexOf("s_gate");
+    expect(ids[gateAt + 1]).toBe("s_send_intro");
+    expect(ids[gateAt + 2]).toBe("s_send_prospect");
+
+    const gate = steps.find((x) => x.id === "s_gate") as { guardsNextSteps?: number } | undefined;
+    expect(gate?.guardsNextSteps).toBe(2);
+  });
+
+  it("declares a guard count that matches the sends actually behind the gate", () => {
+    // Derived rather than hard-coded, so adding a third send fails here
+    // instead of silently escaping the approval.
+    const arm = (
+      definition.steps.find((s) => s.type === "branch") as {
+        branches?: { id: string; steps: { id: string; type: string }[] }[];
+      }
+    ).branches?.find((b) => b.id === "b_sales");
+    const armSteps = arm?.steps ?? [];
+    const gateAt = armSteps.findIndex((s) => s.id === "s_gate");
+    let sendsBehind = 0;
+    for (let i = gateAt + 1; i < armSteps.length && armSteps[i].type === "send_email"; i += 1) {
+      sendsBehind += 1;
+    }
+    const gate = steps.find((x) => x.id === "s_gate") as { guardsNextSteps?: number } | undefined;
+    expect(gate?.guardsNextSteps ?? 1).toBe(sendsBehind);
   });
 
   it("has exactly one step that can send mail, and it sits behind the gate", () => {
     // A second send anywhere in the flow would not be covered by the gate,
     // and this is email to a stranger from Brian's own address.
     const sends = steps.filter((s) => s.type === "send_email");
-    expect(sends.map((s) => s.id)).toEqual(["s_send"]);
+    expect(sends.map((s) => s.id)).toEqual(["s_send_intro", "s_send_prospect"]);
+    // Both sit behind the one gate, and the gate says it covers both.
+    const gate = steps.find((x) => x.id === "s_gate") as { guardsNextSteps?: number } | undefined;
+    expect(gate?.guardsNextSteps).toBe(sends.length);
   });
 });

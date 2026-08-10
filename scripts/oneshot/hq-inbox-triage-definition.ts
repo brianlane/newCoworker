@@ -166,55 +166,97 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
         branches: [
           {
             id: "b_sales",
-            label: "Sales lead: draft a reply and ask",
+            label: "Sales lead: draft both notes and ask",
             condition: { var: "email_kind", equals: "sales_lead" },
             steps: [
+              /**
+               * TWO notes, not one, and they go out as two emails.
+               *
+               * A single reply-all thanking the introducer and pitching the
+               * prospect reads oddly to both: each sees a paragraph written
+               * for the other, and on a phone the recipient list is not even
+               * visible, so it looks like a direct message that mentions a
+               * stranger. Brian asked for them tailored (Aug 9 2026).
+               *
+               * The PROSPECT note first, because the gate's redraft rewinds to
+               * the first step and both notes should be rewritten together
+               * when he asks for changes.
+               */
               {
-                id: "s_draft",
+                id: "s_draft_prospect",
                 type: "run_agent",
                 agentId: replyDrafterAgentId,
-                // {{vars.approval_note}} is empty on the first pass and carries
-                // Brian's words after he answers the gate with changes, which is
-                // what makes the rewind do anything.
-                // The recipient lines are load-bearing, not context padding:
-                // without them the drafter addressed a prospect who was named
-                // in the body but never on the email, so the reply reached
-                // the introducer and nobody else.
                 input:
+                  "WRITE: PROSPECT\n\n" +
                   "From: {{trigger.from}}\nTo: {{trigger.to}}\nCc: {{trigger.cc}}\nSubject: {{trigger.subject}}\n\n{{trigger.windowText}}\n\nOwner's requested changes (empty on the first draft): {{vars.approval_note}}",
-                saveAs: "email_draft"
+                saveAs: "email_draft_prospect"
               },
               {
+                id: "s_draft_intro",
+                type: "run_agent",
+                agentId: replyDrafterAgentId,
+                input:
+                  "WRITE: INTRODUCER\n\n" +
+                  "From: {{trigger.from}}\nTo: {{trigger.to}}\nCc: {{trigger.cc}}\nSubject: {{trigger.subject}}\n\n{{trigger.windowText}}\n\nOwner's requested changes (empty on the first draft): {{vars.approval_note}}",
+                saveAs: "email_draft_intro"
+              },
+              {
+                // Gated on the INTRODUCER note: there is always a sender, so
+                // that note exists whenever there is anything to say at all.
+                // The prospect note is NO_REPLY when nobody else is on the
+                // mail, and its send skips on the same condition.
                 id: "s_gate",
                 type: "approval_gate",
-                when: { var: "email_draft", notEquals: NO_REPLY_SENTINEL },
-                allowModify: { redraftStepId: "s_draft" },
-                // Parking this gate IS the alert for a sales lead, so it
-                // carries the same one-text-per-conversation guarantee the
-                // notify steps do. Without it, moving the paging from
-                // notify_owner to the gate would have quietly undone #1191.
+                when: { var: "email_draft_intro", notEquals: NO_REPLY_SENTINEL },
+                allowModify: { redraftStepId: "s_draft_prospect" },
+                // TWO sends sit behind this gate. Both "skip" and a cooling
+                // gate advance past the steps they guard, and that advance is
+                // one by default: without this, skipping would drop the
+                // introducer note and still mail the prospect unapproved.
+                guardsNextSteps: 2,
+                // Parking this gate IS the alert for a sales lead, so it keeps
+                // the one-text-per-conversation guarantee from #1191.
                 cooldown: THREAD_COOLDOWN,
-                prompt: `Sales email from {{trigger.from}} {{vars.email_sender}}. {{vars.email_gist}}\n\nDraft reply:\n{{vars.email_draft}}`
+                prompt:
+                  "Sales email from {{trigger.from}} {{vars.email_sender}}. {{vars.email_gist}}\n\n" +
+                  "To {{trigger.from}}:\n{{vars.email_draft_intro}}\n\n" +
+                  "To {{trigger.others_to}}:\n{{vars.email_draft_prospect}}"
               },
               {
-                id: "s_send",
+                id: "s_send_intro",
                 type: "send_email",
-                when: { var: "email_draft", notEquals: NO_REPLY_SENTINEL },
+                when: { var: "email_draft_intro", notEquals: NO_REPLY_SENTINEL },
                 to: "{{trigger.from}}",
                 subject: "Re: {{trigger.subject}}",
-                body: "{{vars.email_draft}}",
-                // Answers INSIDE the thread, and claims it, so every later
-                // message on the conversation is handled autonomously.
+                body: "{{vars.email_draft_intro}}",
+                // Threaded so it lands in the original conversation, but NOT
+                // reply-all: mirroring would put the prospect back on this
+                // note and undo the whole point of writing two.
                 replyToEmailLogId: "{{trigger.email_log_id}}",
+                replyAll: false,
                 fromConnectionId: GMAIL_CONNECTION_ROW_ID
               },
               {
-                // The drafter declined (no new ask it could act on). Still tell
-                // Brian: a real sales lead must never resolve to silence just
-                // because the model had nothing to say.
+                // Skips itself when others_to renders empty, which is the
+                // planner's templated-recipient skip path, and the drafter
+                // returns NO_REPLY for the same case.
+                id: "s_send_prospect",
+                type: "send_email",
+                when: { var: "email_draft_prospect", notEquals: NO_REPLY_SENTINEL },
+                to: "{{trigger.others_to}}",
+                cc: ["{{trigger.others_cc}}"],
+                subject: "Re: {{trigger.subject}}",
+                body: "{{vars.email_draft_prospect}}",
+                replyToEmailLogId: "{{trigger.email_log_id}}",
+                replyAll: false,
+                fromConnectionId: GMAIL_CONNECTION_ROW_ID
+              },
+              {
+                // The drafter declined outright. Still tell Brian: a real
+                // sales lead must never resolve to silence.
                 id: "s_notify_sales",
                 type: "notify_owner",
-                when: { var: "email_draft", equals: NO_REPLY_SENTINEL },
+                when: { var: "email_draft_intro", equals: NO_REPLY_SENTINEL },
                 cooldown: THREAD_COOLDOWN,
                 message: `Sales email from {{trigger.from}} {{vars.email_sender}}. Subject: {{trigger.subject}}. {{vars.email_gist}}`
               }
