@@ -700,6 +700,11 @@ export type FlowStep =
        */
       replyAll?: boolean;
       /**
+       * Sign with the branded platform signature (logo, founder, phone), as a
+       * multipart send. Platform mail only; the send path enforces that.
+       */
+      brandedSignature?: boolean;
+      /**
        * Send from the owner's connected mailbox (workspace_oauth_connections.id,
        * via Nango Gmail/Outlook) instead of the platform Resend sender. The
        * worker calls back into the app's /api/aiflows/send-owner-email, which

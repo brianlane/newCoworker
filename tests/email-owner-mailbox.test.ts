@@ -317,6 +317,68 @@ describe("threaded replies", () => {
     });
   });
 
+  it("Gmail: sends multipart when an HTML alternative is supplied", async () => {
+    /**
+     * The branded signature is a table with a logo, which cannot survive as
+     * plain text. multipart/alternative carries both forms of the SAME
+     * message, text part first so a client that takes the first part it
+     * understands still gets prose rather than markup.
+     */
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "m", threadId: "t" } } as never);
+    await sendFromMailboxConnection(BIZ, GOOGLE, {
+      ...ARGS,
+      bodyText: "Hello there.",
+      bodyHtml: "<p>Hello there.</p>"
+    });
+    const raw = (vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as { data: { raw: string } }).data.raw;
+    const mime = Buffer.from(raw.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+    expect(mime).toContain("Content-Type: multipart/alternative;");
+    // Text BEFORE html, which is what makes the fallback work.
+    expect(mime.indexOf("text/plain")).toBeLessThan(mime.indexOf("text/html"));
+    expect(mime).toContain("Hello there.");
+    expect(mime).toContain("<p>Hello there.</p>");
+    // Closed properly, or the last part is dropped by strict clients.
+    expect(mime.trimEnd().endsWith("--")).toBe(true);
+  });
+
+  it("Gmail: stays a plain single-part message when there is no HTML", async () => {
+    // Every existing caller sends text only and must be untouched.
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: { id: "m", threadId: "t" } } as never);
+    await sendFromMailboxConnection(BIZ, GOOGLE, { ...ARGS, bodyText: "Just text." });
+    const raw = (vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as { data: { raw: string } }).data.raw;
+    const mime = Buffer.from(raw.replace(/-/g, "+").replace(/_/g, "/"), "base64").toString("utf8");
+    expect(mime).toContain("Content-Type: text/plain; charset=UTF-8");
+    expect(mime).not.toContain("multipart/alternative");
+  });
+
+  it("Graph: an HTML reply rides message.body, not the escaped comment", async () => {
+    /**
+     * `comment` is plain text and Graph escapes it, so signature markup passed
+     * there arrives as literal angle brackets. It has to go on message.body,
+     * and comment must then be empty or Graph renders both.
+     */
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    await sendFromMailboxConnection(BIZ, MICROSOFT, {
+      ...ARGS,
+      bodyHtml: "<p>Hi</p>",
+      thread: { providerMessageId: "gid", threadId: "conv" }
+    });
+    const data = (vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
+      data: { comment: string; message?: { body?: { contentType: string; content: string } } };
+    }).data;
+    expect(data.message?.body).toEqual({ contentType: "HTML", content: "<p>Hi</p>" });
+    expect(data.comment).toBe("");
+  });
+
+  it("Graph: a fresh send switches its body to HTML too", async () => {
+    vi.mocked(nangoProxyForBusiness).mockResolvedValue({ data: {} } as never);
+    await sendFromMailboxConnection(BIZ, MICROSOFT, { ...ARGS, bodyHtml: "<p>Hi</p>" });
+    const data = (vi.mocked(nangoProxyForBusiness).mock.calls[0][2] as {
+      data: { message: { body: { contentType: string; content: string } } };
+    }).data;
+    expect(data.message.body).toEqual({ contentType: "HTML", content: "<p>Hi</p>" });
+  });
+
   it("Graph: a reply restates the whole To line, or the extra recipients vanish", async () => {
     /**
      * /reply addresses the original sender by itself, so anyone else has to be

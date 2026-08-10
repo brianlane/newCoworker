@@ -25,6 +25,7 @@ vi.mock("@/lib/db/email-log", () => ({ getEmailLogThreadIdentity: vi.fn() }));
 vi.mock("@/lib/email-coworker/threads", () => ({ rememberSentThread: vi.fn() }));
 
 import { POST } from "@/app/api/aiflows/send-owner-email/route";
+import { HQ_BUSINESS_ID } from "@/lib/vps/shared-hardware";
 import { verifyGatewayTokenForBusiness } from "@/lib/rowboat/gateway-token";
 import { getWorkspaceOAuthConnection } from "@/lib/db/workspace-oauth-connections";
 import { sendFromMailboxConnection } from "@/lib/email/owner-mailbox";
@@ -494,5 +495,92 @@ describe("replying inside an existing conversation", () => {
     const res = await POST(makeRequest(REPLY_BODY));
     expect(res.status).toBe(200);
     expect(await res.json()).toMatchObject({ ok: true });
+  });
+});
+
+describe("the branded platform signature", () => {
+  /**
+   * The real sign-off from branded-html.ts: logo, "Brian Lane, Founder", the
+   * HQ phone number, the web link. It is composed by the SEND PATH, never
+   * written by the model, because a signature is exact by nature.
+   *
+   * It is also New Coworker's own identity, and branded-html.ts says out loud
+   * that it must not appear under a tenant's From header. So the gate here is
+   * the business id, not the caller passing a flag.
+   */
+  const REPLY = { ...validBody, replyToEmailLogId: "33333333-3333-4333-8333-333333333333" };
+
+  beforeEach(() => {
+    vi.mocked(getEmailLogThreadIdentity).mockResolvedValue({
+      threadId: "t",
+      providerMessageId: "m",
+      replyToRecipients: [],
+      replyCcRecipients: []
+    });
+    vi.mocked(sendFromMailboxConnection).mockResolvedValue({
+      ok: true,
+      provider: "google",
+      messageId: "g",
+      threadId: "t",
+      fromEmail: "team@newcoworker.com"
+    } as never);
+  });
+
+  it("signs HQ's mail in both parts, with the same facts in each", async () => {
+    await POST(makeRequest({ ...REPLY, businessId: HQ_BUSINESS_ID, brandedSignature: true }));
+    const args = vi.mocked(sendFromMailboxConnection).mock.calls[0][2] as {
+      bodyText: string;
+      bodyHtml?: string;
+    };
+    // Plain part: readable prose plus the text twin of the signature.
+    expect(args.bodyText).toContain(validBody.bodyText);
+    expect(args.bodyText).toContain("Brian Lane, Founder");
+    expect(args.bodyText).toContain("602.313.1823");
+    // HTML part: the real block, logo and all.
+    expect(args.bodyHtml).toContain("logo.png");
+    expect(args.bodyHtml).toContain("Brian Lane, Founder");
+    expect(args.bodyHtml).toContain("tel:+16023131823");
+  });
+
+  it("escapes the draft going into the HTML part", async () => {
+    // The draft is model output. Unescaped, a stray angle bracket would eat
+    // the rest of the email, and anything script-shaped would ride along.
+    await POST(
+      makeRequest({
+        ...REPLY,
+        businessId: HQ_BUSINESS_ID,
+        brandedSignature: true,
+        bodyText: "5 < 6 & <script>alert(1)</script>"
+      })
+    );
+    const html = String(
+      (vi.mocked(sendFromMailboxConnection).mock.calls[0][2] as { bodyHtml?: string }).bodyHtml
+    );
+    expect(html).not.toContain("<script>");
+    expect(html).toContain("&lt;script&gt;");
+    expect(html).toContain("5 &lt; 6 &amp;");
+  });
+
+  it("REFUSES to sign another business's mail, even when asked to", async () => {
+    // The flag is not the authority. A tenant flow copying this step must not
+    // put Brian's name and phone number under their own From header.
+    await POST(makeRequest({ ...REPLY, brandedSignature: true }));
+    const args = vi.mocked(sendFromMailboxConnection).mock.calls[0][2] as {
+      bodyText: string;
+      bodyHtml?: string;
+    };
+    expect(args.bodyText).toBe(validBody.bodyText);
+    expect(args.bodyHtml).toBeUndefined();
+    expect(args.bodyText).not.toContain("602.313.1823");
+  });
+
+  it("sends plain text when the step does not ask for a signature", async () => {
+    await POST(makeRequest({ ...REPLY, businessId: HQ_BUSINESS_ID }));
+    const args = vi.mocked(sendFromMailboxConnection).mock.calls[0][2] as {
+      bodyText: string;
+      bodyHtml?: string;
+    };
+    expect(args.bodyText).toBe(validBody.bodyText);
+    expect(args.bodyHtml).toBeUndefined();
   });
 });

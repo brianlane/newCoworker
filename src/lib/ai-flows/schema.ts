@@ -1014,6 +1014,16 @@ const nonBranchStepMembers = [
      * tailored notes to each party needs.
      */
     replyAll: z.boolean().optional(),
+    /**
+     * Sign the email with the branded platform signature (logo, founder,
+     * phone), sending it as multipart so the draft still reads as plain text
+     * where HTML will not render.
+     *
+     * Platform mail only. The block carries New Coworker's own identity, so
+     * the send path honours it for the platform's business and ignores it for
+     * everyone else rather than trusting the flag.
+     */
+    brandedSignature: z.boolean().optional(),
     fromConnectionId: z.string().uuid().optional(),
     when: whenSchema.optional()
   }),

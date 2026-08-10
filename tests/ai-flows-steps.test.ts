@@ -1585,6 +1585,20 @@ describe("planStep: send_email reply-all opt-out", () => {
     expect(plan.action).toMatchObject({ kind: "send_email", replyAll: false });
   });
 
+  it("carries brandedSignature into the action, and omits it when unset", () => {
+    // Dropped here, the send path never sees the request and the reply goes
+    // out unsigned, with the step still reporting success.
+    const signed = planStep({ ...base, brandedSignature: true } as never, scope as never);
+    expect(signed.ok).toBe(true);
+    if (!signed.ok) return;
+    expect(signed.action).toMatchObject({ kind: "send_email", brandedSignature: true });
+
+    const plain = planStep(base as never, scope as never);
+    expect(plain.ok).toBe(true);
+    if (!plain.ok) return;
+    expect(plain.action).not.toHaveProperty("brandedSignature");
+  });
+
   it("omits replyAll when the step did not opt out", () => {
     // Never an explicit true: the route treats "not false" as mirror, and an
     // emitted true would make the default look like a per-step decision.
