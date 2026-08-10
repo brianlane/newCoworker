@@ -17,6 +17,7 @@
  *      the thread to a human and alerts the owner once.
  */
 
+import { threadsAnsweredByFlow } from "@/lib/db/email-log";
 import { tenantEmailDomain } from "@/lib/email/tenant-mailbox";
 import { createSupabaseServiceClient } from "@/lib/supabase/server";
 import { resolveEmailConnection } from "@/lib/voice-tools/connections";
@@ -210,14 +211,43 @@ export async function pollEmailCoworker(
       });
       if (candidates.length === 0) continue;
 
+      // NEVER auto-answer a conversation we have already replied to.
+      //
+      // Live, Aug 10 2026: the triage flow answered James's introduction and
+      // CLAIMED the thread, which retroactively made the triggering message
+      // eligible here (still in the lookback window, now on an owned thread,
+      // never seen by this poll). James got two replies a minute apart, the
+      // second off-script.
+      //
+      // Keyed on the THREAD, and specifically on threads a GATED FLOW answered:
+      // once Brian has approved a reply on a conversation, every later message
+      // goes back through the same gate rather than out unseen. He did not
+      // gate the first email to a stranger and then mean "send whatever you
+      // like after that". The flow still runs on these messages, so they are
+      // classified, filed and put in front of him; only the silent send stops.
+      //
+      // Deliberately NOT "any outbound row on the thread": the coworker's own
+      // replies are outbound too, so that rule would have stopped it after its
+      // FIRST reply on a conversation it owns and quietly broken the multi-turn
+      // budget it is built around (an outreach pitch, a booking follow-up).
+      const repliedThreads = await threadsAnsweredByFlow(
+        businessId,
+        candidates.map((m) => m.threadId).filter((t): t is string => Boolean(t)),
+        db
+      );
+      const notFlowHandled = candidates.filter(
+        (m) => !m.threadId || !repliedThreads.has(m.threadId)
+      );
+      if (notFlowHandled.length === 0) continue;
+
       const unseenIds = new Set(
         await filterUnseenMessages(
           businessId,
-          candidates.map((m) => m.id),
+          notFlowHandled.map((m) => m.id),
           db
         )
       );
-      const fresh = candidates.filter((m) => unseenIds.has(m.id));
+      const fresh = notFlowHandled.filter((m) => unseenIds.has(m.id));
       if (fresh.length === 0) continue;
       result.messages += fresh.length;
 
