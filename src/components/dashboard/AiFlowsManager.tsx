@@ -4895,6 +4895,24 @@ function StepFields({
         <label className="flex items-center gap-2 text-xs text-parchment/70">
           <input
             type="checkbox"
+            checked={Boolean(step.shareContactHistory)}
+            onChange={(ev) =>
+              patchStep(index, {
+                shareContactHistory: ev.target.checked ? true : undefined
+              })
+            }
+          />
+          Show the team what the lead has already said (their texts, and their own
+          words from recent calls)
+        </label>
+        <p className="text-[11px] text-parchment/50">
+          A short excerpt on each offer, and a fuller one texted to whoever claims
+          the lead. Only the lead&apos;s side is shown, never our replies. Adds a few
+          lines to every offer text.
+        </p>
+        <label className="flex items-center gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
             checked={step.attachScreenshot ?? false}
             onChange={(ev) =>
               patchStep(index, { attachScreenshot: ev.target.checked ? true : undefined })

@@ -40,6 +40,7 @@ const { parseAiFlowDefinition, AiFlowValidationError } = await import(
 );
 const { recordOneshotApplied } = await import("./_ledger.ts");
 const {
+  addShareContactHistory,
   addUnclaimedReminders,
   AMY_REMINDER_FLOWS,
   AMY_REMINDER_INTERVAL_MINUTES,
@@ -94,8 +95,9 @@ async function main(): Promise<void> {
   console.log(`Business : ${BUSINESS_ID}`);
   console.log(
     REVERT
-      ? "Mode     : REVERT (removing the reminder ladder)"
-      : `Mode     : apply ${AMY_REMINDER_ROUNDS} rounds, ${AMY_REMINDER_INTERVAL_MINUTES} min apart`
+      ? "Mode     : REVERT (removing the ladder and the shared history)"
+      : `Mode     : ${AMY_REMINDER_ROUNDS} reminder rounds ${AMY_REMINDER_INTERVAL_MINUTES} min apart, ` +
+        "plus sharing what the lead said"
   );
 
   let totalChanged = 0;
@@ -116,11 +118,19 @@ async function main(): Promise<void> {
     }
     const row = data as { id: string; name: string; enabled: boolean; definition: unknown };
     const current = parseAiFlowDefinition(row.definition);
+    // Both team-facing changes land together: the ladder that keeps an
+    // unclaimed lead with the team, and the excerpt that tells the team what
+    // the lead actually said. Each is separately idempotent, so a re-run after
+    // either one shipped alone converges.
     const changed = REVERT
-      ? removeUnclaimedReminders(current)
-      : addUnclaimedReminders(current, { detailsTemplate: target.detailsTemplate });
+      ? [...removeUnclaimedReminders(current), ...addShareContactHistory(current, false)]
+      : [
+          ...addUnclaimedReminders(current, { detailsTemplate: target.detailsTemplate }),
+          ...addShareContactHistory(current, true)
+        ];
+    const changedIds = [...new Set(changed)];
 
-    if (changed.length === 0) {
+    if (changedIds.length === 0) {
       console.log(`\n- ${row.name}: already in the desired state`);
       continue;
     }
@@ -138,9 +148,9 @@ async function main(): Promise<void> {
     }
 
     console.log(`\n- ${row.name} (id=${row.id}, enabled=${row.enabled})`);
-    console.log(`    steps changed: ${changed.join(", ")}`);
-    totalChanged += changed.length;
-    ledgerDetails[row.name] = changed;
+    console.log(`    steps changed: ${changedIds.join(", ")}`);
+    totalChanged += changedIds.length;
+    ledgerDetails[row.name] = changedIds;
 
     if (!APPLY) continue;
     const { error: updErr } = await db

@@ -581,6 +581,8 @@ export type StepAction =
         intervalMinutes: number;
         detailsTemplate?: string;
       };
+      /** Append the lead's own words to offers, and text them on claim. */
+      shareContactHistory?: boolean;
     }
   | {
       kind: "browse_action";
@@ -1574,6 +1576,8 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           // Carried whole: the worker owns the round counter and the copy, so
           // there is nothing to normalize here beyond the schema's bounds.
           ...(step.unclaimedReminders ? { unclaimedReminders: step.unclaimedReminders } : {}),
+          // Only an explicit opt-in is carried; absence IS the off state.
+          ...(step.shareContactHistory === true ? { shareContactHistory: true } : {}),
           ...(ownerDirect
             ? {
                 ownerDirectWhen: step.ownerDirectWhen,

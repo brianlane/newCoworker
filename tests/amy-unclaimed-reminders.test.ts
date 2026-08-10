@@ -4,6 +4,7 @@ import {
   AMY_REMINDER_FLOWS,
   AMY_REMINDER_INTERVAL_MINUTES,
   AMY_REMINDER_ROUNDS,
+  addShareContactHistory,
   addUnclaimedReminders
 } from "../scripts/oneshot/amy-unclaimed-reminders-definition";
 
@@ -147,6 +148,44 @@ describe("addUnclaimedReminders", () => {
     const def = fixture();
     addUnclaimedReminders(def);
     expect(routeStep(def, "extract").unclaimedReminders).toBeUndefined();
+  });
+});
+
+describe("addShareContactHistory", () => {
+  it("turns the excerpt on for every route step, nested ones included", () => {
+    const def = fixture();
+    expect(addShareContactHistory(def).sort()).toEqual([
+      "route_buyer",
+      "route_seller",
+      "route_top"
+    ]);
+    expect(parseAiFlowDefinition(def) && routeStep(def, "route_top").shareContactHistory).toBe(true);
+  });
+
+  it("is idempotent in both directions", () => {
+    const def = fixture();
+    expect(addShareContactHistory(def, true)).toHaveLength(3);
+    expect(addShareContactHistory(def, true)).toEqual([]);
+    expect(addShareContactHistory(def, false)).toHaveLength(3);
+    expect(addShareContactHistory(def, false)).toEqual([]);
+  });
+
+  it("removes the field entirely when disabled, rather than storing false", () => {
+    const def = fixture();
+    addShareContactHistory(def, true);
+    addShareContactHistory(def, false);
+    expect("shareContactHistory" in routeStep(def, "route_top")).toBe(false);
+    // Still a valid definition with the field gone.
+    expect(() => parseAiFlowDefinition(def)).not.toThrow();
+  });
+
+  it("composes with the reminder ladder without either clobbering the other", () => {
+    const def = fixture();
+    addUnclaimedReminders(def);
+    addShareContactHistory(def, true);
+    const step = routeStep(parseAiFlowDefinition(def), "route_top");
+    expect(step.unclaimedReminders).toMatchObject({ rounds: AMY_REMINDER_ROUNDS });
+    expect(step.shareContactHistory).toBe(true);
   });
 });
 

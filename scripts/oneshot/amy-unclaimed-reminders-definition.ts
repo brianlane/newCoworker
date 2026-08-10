@@ -80,6 +80,28 @@ export function addUnclaimedReminders(
 }
 
 /**
+ * Turn on "show the team what the lead has already said" for every
+ * route_to_team step in a definition (Amy's ask, 2026-08-10: the person taking
+ * the lead should see what the lead told us, the same way the claim alerts
+ * already reach them).
+ *
+ * Idempotent, same convention as the reminder ladder: returns the ids of the
+ * steps it changed, empty when everything is already in the desired state.
+ */
+export function addShareContactHistory(def: Definition, enabled = true): string[] {
+  const changed: string[] = [];
+  walkSteps(def.steps as Step[], (st) => {
+    if (st.type !== "route_to_team" || typeof st.id !== "string") return;
+    const current = st.shareContactHistory === true;
+    if (current === enabled) return;
+    if (enabled) st.shareContactHistory = true;
+    else delete st.shareContactHistory;
+    changed.push(st.id);
+  });
+  return changed;
+}
+
+/**
  * Which flows get the ladder, and what each one repeats in its reminders.
  *
  * `detailsTemplate` is per flow because the vars differ: the lead flows all

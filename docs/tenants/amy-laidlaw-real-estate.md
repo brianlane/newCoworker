@@ -298,8 +298,34 @@ documented in both scripts: route_to_team templates render with no
 collapseEmpty, so any price var must extract with a "none" fallback or a
 teammate gets a bare "Price:" label).
 
+Show the team what the lead said (Aug 10 2026): the same
+`amy-unclaimed-reminders-patch.ts` also sets `shareContactHistory` on all 13
+route steps. A teammate used to see structured fields plus a status label
+("The call: spoke with them") and never a word the lead actually said, so an
+ask the AI agreed to on their behalf never reached the person who had to honor
+it. Daniel Villanueva, Aug 7: he asked on the call for comparables by email and
+a Monday conversation, and Dave's offer text carried none of it.
+
+Now the lead's OWN words ride along: a short excerpt appended to every offer
+(2 lines) and a fuller one texted to whoever claims it (4 lines). Three things
+worth knowing:
+
+- **The claimer used to be told nothing at all.** The owner got a claim notice,
+  the losing offerees got a courtesy note, the claimer got silence. The history
+  text is the first message the platform sends the person who took the lead.
+- **It reads `voice_call_transcript_turns` where `role = 'caller'`, NOT
+  `voice_call_transcripts.summary`.** The summary is written by a five-minute
+  sweep and only for standard/enterprise tenants, so it is empty exactly when a
+  just-finished call matters most; the turns are written live by the bridge.
+  `_shared/ai_flows/contact_said.ts` is the first edge-side reader of that table.
+- **Only the lead's side is shown, never our outbound.** That is the deliberate
+  difference from `_shared/contact_context.ts`, which is model-facing and
+  includes our own sends. Per-call the last three substantive caller turns are
+  kept, dropping two-word pleasantries, because a lead states what they want at
+  the END of a call ("Thank you." must never displace the ask).
+
 Unclaimed-lead reminders + claim by name (Aug 10 2026):
-`amy-unclaimed-reminders-patch.ts` (applier, `--revert` strips it back off)
+`amy-unclaimed-reminders-patch.ts` (applier, `--revert` strips both back off)
 over `amy-unclaimed-reminders-definition.ts` (pure builder, pinned by
 `tests/amy-unclaimed-reminders.test.ts`). Turns on `unclaimedReminders`
 (3 rounds, 20 minutes apart) for all 13 `route_to_team` steps across her seven

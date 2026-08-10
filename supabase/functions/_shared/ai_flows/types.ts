@@ -993,6 +993,14 @@ export type FlowStep =
         intervalMinutes: number;
         detailsTemplate?: string;
       };
+      /**
+       * Include the LEAD's own words (inbound texts + their side of recent
+       * calls) in team-facing messages: a short excerpt appended to each
+       * offer, and a fuller one texted to whoever claims the lead. Absent
+       * means the historical behavior, where a teammate never sees anything
+       * the lead actually said.
+       */
+      shareContactHistory?: boolean;
       when?: StepCondition;
     }
   | {
