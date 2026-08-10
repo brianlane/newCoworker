@@ -1586,6 +1586,7 @@
   "auth": {
     "signIn": "Iniciar sesión",
     "signInFailed": "Error al iniciar sesión",
+    "noAccountForEmail": "Ese correo no tiene una cuenta de New Coworker. Pide una invitación a tu administrador, o comienza para crear una.",
     "enterEmailFirst": "Ingresa tu correo primero",
     "magicLinkSent": "Revisa tu correo para el enlace mágico.",
     "resetSent": "Correo de restablecimiento enviado.",

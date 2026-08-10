@@ -1586,6 +1586,7 @@
   "auth": {
     "signIn": "Sign in",
     "signInFailed": "Sign in failed",
+    "noAccountForEmail": "That email does not have a New Coworker account. Ask your admin for an invite, or get started to create one.",
     "enterEmailFirst": "Enter your email first",
     "magicLinkSent": "Check your email for a magic link.",
     "resetSent": "Password reset email sent.",
