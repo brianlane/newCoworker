@@ -16,6 +16,7 @@ export default async function sitemap(): Promise<MetadataRoute.Sitemap> {
     { path: "/features", priority: 0.8 },
     { path: "/integrations", priority: 0.8 },
     { path: "/integrations/zoom", priority: 0.6 },
+    { path: "/integrations/slack", priority: 0.6 },
     { path: "/docs/api", priority: 0.6 },
     { path: "/compare", priority: 0.8 },
     { path: "/industries", priority: 0.7 },

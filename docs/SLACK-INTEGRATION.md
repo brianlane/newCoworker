@@ -106,7 +106,7 @@ because Slack verifies the request URL against a live endpoint:
 
 The Agents feature (`agent_view` messaging experience) is enabled with the
 event subscriptions stage. Confirmed against the live validator (Aug 2026):
-the block is `"features": { "agent_view": {} }` — an empty object; it
+the block is `"features": { "agent_view": {} }`, an empty object; it
 accepts no description properties (those belong to the legacy
 `assistant_view`).
 
@@ -189,3 +189,22 @@ Once the app is approved for the Slack Marketplace, scope/endpoint/listing
 changes require a re-review before they apply. Batch such changes, and never
 land a code change that silently depends on an unapproved scope. Unlisted
 installs (any workspace, via our connect URL) work before and during review.
+
+## Marketplace submission checklist
+
+Run through before Brian submits (the app config UI, under his account):
+
+1. Scopes in the manifest exactly match `SLACK_BOT_SCOPES` in
+   `src/lib/slack/oauth.ts` and the table on `/integrations/slack`; drop
+   anything code stopped using.
+2. Listing URLs: Documentation = `https://www.newcoworker.com/integrations/slack`,
+   Support = `https://www.newcoworker.com/contact`,
+   Privacy = `https://www.newcoworker.com/privacy`.
+3. Reviewer instructions link the test plan
+   (`/integrations/slack/review-test-plan`, noindexed) and carry the review
+   tenant's credentials in the submission notes, never on the page.
+4. A review tenant exists on Standard with the demo approval flow enabled
+   and a spare non-owner Slack member for the owner-only button test.
+5. Remember the config freeze: after approval, scope/endpoint/listing edits
+   require re-review before they apply (batch them). Unlisted installs keep
+   working before, during, and after review.
