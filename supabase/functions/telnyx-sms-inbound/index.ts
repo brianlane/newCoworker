@@ -54,6 +54,15 @@ import {
 } from "../_shared/ai_flows/engine.ts";
 import { resolveFromMatchesRefValues } from "../_shared/ai_flows/contact_ref.ts";
 import { parseClaimWithTimeframe } from "../_shared/ai_flows/claim_timeframe.ts";
+import {
+  ambiguousClaimText,
+  bareDigitAmbiguityText,
+  claimAckText,
+  leadLabelFromVars,
+  leadPhoneFromVars,
+  matchOfferByLeadName,
+  type OfferCandidate
+} from "../_shared/ai_flows/offer_identity.ts";
 import { applyGoalEvent } from "../_shared/ai_flows/goal_events.ts";
 import { applyLifecycleStage } from "../_shared/pipelines/lifecycle.ts";
 import { stopRunsOnResponse } from "../_shared/ai_flows/response_stop.ts";
@@ -572,6 +581,128 @@ async function findLiveOfferRunFor(
 }
 
 /**
+ * EVERY live offer out to this sender, newest first, with the lead each one is
+ * about. `findLiveOfferRunFor` answers "which run does a digit resolve to";
+ * this answers "how many could it have meant", which is what makes a bare "1"
+ * safe to question and a "1, <name>" possible to match.
+ *
+ * Bounded at 10: a teammate juggling more than ten simultaneous leads has a
+ * routing problem no reply syntax fixes, and the ask-back text has to stay
+ * inside a readable SMS.
+ */
+const MAX_LIVE_OFFER_CANDIDATES = 10;
+
+async function findLiveOfferRunsFor(
+  // deno-lint-ignore no-explicit-any
+  supabase: any,
+  businessId: string,
+  from: string
+): Promise<Array<{ run: LiveOfferRun; broadcast: boolean; candidate: OfferCandidate }>> {
+  const baseQuery = () =>
+    supabase
+      .from("ai_flow_runs")
+      .select("id, context, revision, updated_at")
+      .eq("business_id", businessId)
+      .in("status", ["awaiting_agent", "queued"])
+      .order("updated_at", { ascending: false })
+      .limit(MAX_LIVE_OFFER_CANDIDATES);
+  const [singleRes, broadcastRes] = await Promise.all([
+    baseQuery().eq("context->routing->>offered", from),
+    baseQuery().filter("context->routing->offered_all", "cs", JSON.stringify([from]))
+  ]);
+  const seen = new Set<string>();
+  const out: Array<{ run: LiveOfferRun; broadcast: boolean; candidate: OfferCandidate }> = [];
+  const collect = (rows: LiveOfferRun[] | null, broadcast: boolean) => {
+    for (const run of rows ?? []) {
+      // A run in the claim-consumed window matches BOTH shapes; keep the
+      // single-offer reading, which is the one the reply paths act on.
+      if (seen.has(run.id)) continue;
+      seen.add(run.id);
+      const vars = (run.context?.vars ?? {}) as Record<string, unknown>;
+      out.push({
+        run,
+        broadcast,
+        candidate: {
+          runId: run.id,
+          leadLabel: leadLabelFromVars(vars),
+          leadPhone: leadPhoneFromVars(vars)
+        }
+      });
+    }
+  };
+  collect(singleRes.data as LiveOfferRun[] | null, false);
+  collect(broadcastRes.data as LiveOfferRun[] | null, true);
+  out.sort((a, b) => Date.parse(b.run.updated_at) - Date.parse(a.run.updated_at));
+  return out.slice(0, MAX_LIVE_OFFER_CANDIDATES);
+}
+
+/**
+ * Consume a reply we deliberately refused to act on because it could have
+ * meant more than one lead, texting back the question. Nothing is claimed and
+ * every offer stays live, so the teammate can answer at their own pace and
+ * the deadlines keep running exactly as they were.
+ */
+async function consumeAmbiguousOfferReply(args: {
+  // deno-lint-ignore no-explicit-any
+  supabase: any;
+  businessId: string;
+  from: string;
+  ackTo: string;
+  eventId: string;
+  envelope: unknown;
+  telnyxApiKey: string;
+  messagingProfileId: string;
+  smsFromE164: string;
+  text: string;
+}): Promise<Response> {
+  const { supabase, businessId, from, ackTo, eventId, envelope, telnyxApiKey, smsFromE164 } = args;
+  let ackSent: string | null = null;
+  const { data: bizRow } = await supabase
+    .from("business_telnyx_settings")
+    .select("telnyx_messaging_profile_id, telnyx_sms_from_e164")
+    .eq("business_id", businessId)
+    .maybeSingle();
+  const biz = bizRow as
+    | { telnyx_messaging_profile_id?: string | null; telnyx_sms_from_e164?: string | null }
+    | null;
+  const ackProfile =
+    (biz?.telnyx_messaging_profile_id && biz.telnyx_messaging_profile_id.trim()) ||
+    args.messagingProfileId;
+  const ackFrom =
+    (biz?.telnyx_sms_from_e164 && biz.telnyx_sms_from_e164.trim()) || ackTo || smsFromE164;
+  if (telnyxApiKey && ackProfile && from) {
+    const send = await sendOperationalSms(supabase, businessId, {
+      apiKey: telnyxApiKey,
+      messagingProfileId: ackProfile,
+      fromE164: ackFrom,
+      toE164: from,
+      text: args.text,
+      idempotencyKey: `${eventId}:offer-reply-ambiguous`
+    });
+    if (!send.ok) console.error("ambiguous offer reply ack", send.status, send.body.slice(0, 300));
+    else ackSent = args.text;
+  }
+  await persistOfferReplyJob({
+    supabase,
+    businessId,
+    eventId,
+    envelope,
+    from,
+    staffKind: "team",
+    ackSent
+  });
+  await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
+    business_id: businessId,
+    event_id: eventId,
+    decision: OFFER_REPLY_DECISION.claim_ambiguous
+  });
+  return new Response(JSON.stringify({ ok: true, agent_offer: "ambiguous" }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" }
+  });
+}
+
+/**
  * Broadcast raced-claim guard: on a broadcast run, another offeree's claim may
  * already be in flight (the webhook stamped them into routing.offered /
  * last_event='claim') or finalized (claimed_by) while this sender's reply was
@@ -604,6 +735,18 @@ type LiveClaimArgs = {
    * claim, or the pass reason for tryAgentPassWithReason.
    */
   timeframe: string;
+  /**
+   * The run this reply resolved to when the sender NAMED a lead ("1, Daniel").
+   * Set by the caller after matching the comma'd text against the sender's own
+   * live offers; absent means "use the newest", the historical behavior.
+   */
+  resolvedOffer?: { run: LiveOfferRun; broadcast: boolean };
+  /**
+   * Lead name to confirm back. Set only when the claim was disambiguated, so
+   * the sender learns WHICH lead they got. Left unset on an ordinary
+   * single-offer claim, which needs no recap.
+   */
+  ackLeadLabel?: string;
 };
 
 /**
@@ -619,7 +762,7 @@ type LiveClaimArgs = {
 async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response | null> {
   const { supabase, businessId, from, eventId, envelope, digit, timeframe } = args;
 
-  const found = await findLiveOfferRunFor(supabase, businessId, from);
+  const found = args.resolvedOffer ?? (await findLiveOfferRunFor(supabase, businessId, from));
   if (!found) return null;
   const offer = found.run;
 
@@ -686,11 +829,43 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
       telemetryDecision: OFFER_REPLY_DECISION.claim_timeframe_raced
     });
   }
-  // No claim acknowledgement is texted back: the offer SMS already carried the
-  // lead details, so "you've claimed this lead, we'll tell the team..." only
-  // promised a recap that never came. The reply is still logged (ackSent:null)
-  // so the claim shows in the dashboard Texts thread, and the worker still
-  // notifies the owner with the stated timeframe (routing.claim_timeframe).
+  // Ordinarily no acknowledgement is texted back: the offer SMS already
+  // carried the lead details, so "you've claimed this lead..." only promised a
+  // recap that never came. The exception is a claim that had to be
+  // disambiguated — the sender picked from several leads by name, and a
+  // partial match they cannot see resolve is a guess unless we confirm which
+  // one they got. The reply is logged either way so it shows in Texts.
+  let ackSent: string | null = null;
+  if (args.ackLeadLabel) {
+    const { data: bizRow } = await supabase
+      .from("business_telnyx_settings")
+      .select("telnyx_messaging_profile_id, telnyx_sms_from_e164")
+      .eq("business_id", businessId)
+      .maybeSingle();
+    const biz = bizRow as
+      | { telnyx_messaging_profile_id?: string | null; telnyx_sms_from_e164?: string | null }
+      | null;
+    const ackProfile =
+      (biz?.telnyx_messaging_profile_id && biz.telnyx_messaging_profile_id.trim()) ||
+      args.messagingProfileId;
+    const ackFrom =
+      (biz?.telnyx_sms_from_e164 && biz.telnyx_sms_from_e164.trim()) ||
+      args.ackTo ||
+      args.smsFromE164;
+    if (args.telnyxApiKey && ackProfile && from) {
+      const text = claimAckText(args.ackLeadLabel);
+      const send = await sendOperationalSms(supabase, businessId, {
+        apiKey: args.telnyxApiKey,
+        messagingProfileId: ackProfile,
+        fromE164: ackFrom,
+        toE164: from,
+        text,
+        idempotencyKey: `${eventId}:offer-claim-named`
+      });
+      if (!send.ok) console.error("named claim ack", send.status, send.body.slice(0, 300));
+      else ackSent = text;
+    }
+  }
   await persistOfferReplyJob({
     supabase,
     businessId,
@@ -698,7 +873,7 @@ async function tryAgentClaimWithTimeframe(args: LiveClaimArgs): Promise<Response
     envelope,
     from,
     staffKind: "team",
-    ackSent: null
+    ackSent
   });
   await telemetryRecord(supabase, "ai_flow_agent_offer_reply", {
     business_id: businessId,
@@ -2123,6 +2298,51 @@ serve(async (req: Request) => {
       // Finally, a reply to an offer that can no longer be claimed gets the
       // deterministic stale-offer ack instead of the chat AI.
       if (claimTf && claimTf.digit !== "86") {
+        // Does the comma'd text NAME one of this teammate's own live leads?
+        // Tried before the ETA reading, because "1, Daniel" is a lead picker
+        // and "1, 20 min" is a timeframe, and only the lead list can tell
+        // them apart. No match leaves everything exactly as it was: the ETA
+        // is stamped and the newest offer is claimed.
+        let resolvedOffer: { run: LiveOfferRun; broadcast: boolean } | undefined;
+        let ackLeadLabel: string | undefined;
+        let effectiveTimeframe = claimTf.timeframe;
+        if (claimTf.digit === "1") {
+          const liveOffers = await findLiveOfferRunsFor(supabase, businessId, from);
+          if (liveOffers.length > 0) {
+            const match = matchOfferByLeadName(
+              liveOffers.map((o) => o.candidate),
+              claimTf.timeframe
+            );
+            if (match.kind === "ambiguous") {
+              return await consumeAmbiguousOfferReply({
+                supabase,
+                businessId,
+                from,
+                ackTo: to,
+                eventId,
+                envelope,
+                telnyxApiKey,
+                messagingProfileId,
+                smsFromE164,
+                text: ambiguousClaimText(match.labels)
+              });
+            }
+            if (match.kind === "one") {
+              const picked = liveOffers.find((o) => o.run.id === match.runId);
+              if (picked) {
+                resolvedOffer = { run: picked.run, broadcast: picked.broadcast };
+                // The text was a name, not an ETA. Leaving it in the timeframe
+                // slot would text the owner "ETA to contact lead: Daniel" and
+                // suppress the first-to-claim yank.
+                effectiveTimeframe = "";
+                // Confirm only when there was something to disambiguate. With
+                // a single live offer the sender already knows what they took,
+                // and acking every named claim would add a text per lead.
+                if (liveOffers.length > 1) ackLeadLabel = match.label;
+              }
+            }
+          }
+        }
         const liveHandled = await tryAgentClaimWithTimeframe({
           supabase,
           businessId,
@@ -2134,7 +2354,9 @@ serve(async (req: Request) => {
           messagingProfileId,
           smsFromE164,
           digit: claimTf.digit,
-          timeframe: claimTf.timeframe
+          timeframe: effectiveTimeframe,
+          ...(resolvedOffer ? { resolvedOffer } : {}),
+          ...(ackLeadLabel ? { ackLeadLabel } : {})
         });
         if (liveHandled) return liveHandled;
 
@@ -2227,6 +2449,32 @@ serve(async (req: Request) => {
         // normal customer path.
         const bareClaim = replyBody === "1";
         const barePass = replyBody === "2";
+        // A lone "1" while several leads are pending does not say WHICH lead.
+        // It used to take whichever run was touched most recently, which is
+        // not even reliably the newest offer, and nothing was texted back, so
+        // the wrong lead could be claimed silently. Ask instead. A pass is
+        // exempt: "2" retires the sender from an offer rather than assigning
+        // anyone, so picking the newest cannot mis-assign a lead.
+        if (offer && bareClaim) {
+          const liveOffers = await findLiveOfferRunsFor(supabase, businessId, from);
+          if (liveOffers.length > 1) {
+            const labels = liveOffers.map(
+              (o, i) => o.candidate.leadLabel || `lead ${i + 1} (no name on file)`
+            );
+            return await consumeAmbiguousOfferReply({
+              supabase,
+              businessId,
+              from,
+              ackTo: to,
+              eventId,
+              envelope,
+              telnyxApiKey,
+              messagingProfileId,
+              smsFromE164,
+              text: bareDigitAmbiguityText(labels)
+            });
+          }
+        }
         if (offer && (bareClaim || barePass)) {
           const claimed = bareClaim;
           // Ownership gate (claims only; a pass is always welcome): see

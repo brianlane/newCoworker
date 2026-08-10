@@ -298,6 +298,38 @@ documented in both scripts: route_to_team templates render with no
 collapseEmpty, so any price var must extract with a "none" fallback or a
 teammate gets a bare "Price:" label).
 
+Unclaimed-lead reminders + claim by name (Aug 10 2026):
+`amy-unclaimed-reminders-patch.ts` (applier, `--revert` strips it back off)
+over `amy-unclaimed-reminders-definition.ts` (pure builder, pinned by
+`tests/amy-unclaimed-reminders.test.ts`). Turns on `unclaimedReminders`
+(3 rounds, 20 minutes apart) for all 13 `route_to_team` steps across her seven
+lead flows, so a lapsed offer nudges the SAME teammates three more times
+before Amy inherits it, one interval after the last round. Two behaviors worth
+knowing before touching this:
+
+- **Reminders fire on silence only.** An explicit "2" from every teammate is a
+  decision, so the everyone-passed path still hands the lead over
+  immediately. Only a timeout (or an exhausted rotation) starts the ladder.
+- **Reminders are compact by design and never re-send the offer body.** Her
+  Clever offer is the full referral blob, roughly ten billed SMS segments;
+  re-sending it three more times per recipient would quadruple the messaging
+  cost of every unclaimed lead. Each step carries a short `detailsTemplate`
+  instead, built from vars that flow actually produces (the schema rejects a
+  template naming a var no earlier step writes, which is the guard that will
+  catch you if you copy one flow's line into another).
+
+The same PR changed the CLAIM REPLY fleet-wide, not just for Amy. A teammate
+holding two or more live offers used to have a bare "1" resolve to whichever
+run row was touched most recently, which is usually but NOT always the newest
+offer (an escalation re-park or quiet-hours deferral moves an older run to the
+front), with nothing texted back to say which lead they got. Now a bare "1"
+with several pending asks which one, and `"1, <name>"` picks by partial name
+match (accents folded, first name or surname both work) with a confirmation
+text naming the lead. The suffix falls through to the ETA parser when it
+matches no lead, so `"1, 20 min"` is unchanged. Before this, `"1, Daniel"` was
+silently stored as an ETA and texted to Amy as `ETA to contact lead: Daniel`,
+and its non-empty suffix also switched off the first-to-claim yank.
+
 Follow-up requests (Aug 10 2026): `seed-amy-followup-request-aiflow.ts`
 (applier) over `amy-followup-request-definition.ts` (pure builder, pinned by
 `tests/amy-followup-request-definition.test.ts`). Seeds the

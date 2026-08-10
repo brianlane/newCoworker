@@ -572,6 +572,15 @@ export type StepAction =
       ownerDirectNudges?: boolean;
       /** Offer the lead's owning employee (contacts.owner_employee_id) first. */
       preferContactOwner?: boolean;
+      /** Reminder rounds to the SAME offerees before the owner inherits an
+       * unclaimed lead. Absent = the historical straight-to-owner behavior.
+       * detailsTemplate is passed UNRENDERED (the worker renders it per
+       * round, like the other route templates). */
+      unclaimedReminders?: {
+        rounds: number;
+        intervalMinutes: number;
+        detailsTemplate?: string;
+      };
     }
   | {
       kind: "browse_action";
@@ -1562,6 +1571,9 @@ export function planStep(step: FlowStep, scope: StepScope): StepPlan {
           // Only an explicit opt-out is carried; undefined means ON.
           ...(step.firstToClaim === false ? { firstToClaim: false } : {}),
           ...(step.preferContactOwner === true ? { preferContactOwner: true } : {}),
+          // Carried whole: the worker owns the round counter and the copy, so
+          // there is nothing to normalize here beyond the schema's bounds.
+          ...(step.unclaimedReminders ? { unclaimedReminders: step.unclaimedReminders } : {}),
           ...(ownerDirect
             ? {
                 ownerDirectWhen: step.ownerDirectWhen,

@@ -188,6 +188,16 @@ import type {
   SmsTrigger
 } from "../_shared/ai_flows/types.ts";
 import { multiOfferHeadsUpLine, type OfferRouting } from "../_shared/ai_flows/routing.ts";
+import {
+  leadLabelFromVars,
+  leadPhoneFromVars,
+  leadShortLabel
+} from "../_shared/ai_flows/offer_identity.ts";
+import {
+  nextReminderRound,
+  reminderClaimHint,
+  reminderText
+} from "../_shared/ai_flows/offer_reminders.ts";
 import { parseEtaMinutes } from "../_shared/ai_flows/claim_timeframe.ts";
 import { capturedCallVars, capturedSpoken } from "../_shared/ai_flows/call_capture.ts";
 import { isRunsOnlyRequest } from "../_shared/ai_flows/worker_kick.ts";
@@ -8246,6 +8256,22 @@ async function routeToTeamStep(
   // Cleared afterwards so a later offer never inherits a stale reason.
   const passReason =
     typeof routing.pass_reason === "string" ? routing.pass_reason.trim() : "";
+  // Remember WHO said no, separately from `tried` (which also collects
+  // timeouts and skips). The unclaimed-lead reminder ladder nudges silence
+  // only, so it needs to tell a teammate who declined from one who never
+  // replied. Recorded for BOTH routing shapes: this block runs before the
+  // broadcast dispatch below, and a bare "2" (no stated reason) counts just
+  // as much as "2, out of town".
+  if (routing.last_event === "reject") {
+    const passerPhone = typeof routing.reply_from === "string" ? routing.reply_from : "";
+    if (passerPhone) {
+      const passedBy = Array.isArray(routing.passed_by)
+        ? (routing.passed_by as unknown[]).filter((x): x is string => typeof x === "string")
+        : [];
+      if (!passedBy.includes(passerPhone)) passedBy.push(passerPhone);
+      routing.passed_by = passedBy;
+    }
+  }
   if (routing.last_event === "reject" && passReason) {
     const passerPhone = typeof routing.reply_from === "string" ? routing.reply_from : "";
     const passerName =
@@ -8273,7 +8299,20 @@ async function routeToTeamStep(
   // rotation loop below and deliberately ignores lead_auto_assign: the flow
   // explicitly says who to offer, and a hard assignment would defeat
   // "whoever answers first".
-  if ((action.agentNames && action.agentNames.length >= 2) || action.broadcastAll === true) {
+  // The RUN's current shape decides the resume path, not just the step's
+  // configuration. A reminder round re-parks with routing.offered_all set even
+  // on a pinned or rotating step, so those runs must resume through the
+  // broadcast state machine too: it is the only one that understands
+  // offered_all, and the rotation loop below would mishandle a "2" arriving
+  // mid-ladder (retiring the wrong agent, or offering the lead again instead
+  // of falling back). offered_all only ever exists after a park, so first
+  // entry on a rotating step is unaffected.
+  const parkedAsBroadcast = Array.isArray(routing.offered_all) && routing.offered_all.length > 0;
+  if (
+    (action.agentNames && action.agentNames.length >= 2) ||
+    action.broadcastAll === true ||
+    parkedAsBroadcast
+  ) {
     return routeBroadcastStep(supabase, run, scope, action, routing, tried, stepIndex);
   }
 
@@ -8485,7 +8524,7 @@ async function routeToTeamStep(
     // two-leads confusion). Best-effort — a count failure never blocks the offer.
     const alreadyPending = await countOtherLiveOffers(supabase, run, agent.phone);
     if (alreadyPending > 0) {
-      offerText = `${multiOfferHeadsUpLine(alreadyPending + 1)}\n${offerText}`;
+      offerText = `${multiOfferHeadsUpLine(alreadyPending + 1, leadShortLabel(leadLabelFromVars(scope.vars)))}\n${offerText}`;
     }
     if (preferredThisPass && agent.phone === preferredThisPass.phone) {
       appendActionTaken(
@@ -8503,8 +8542,14 @@ async function routeToTeamStep(
     };
   }
 
-  // Roster exhausted: hand the lead to the owner so it is never dropped.
-  return await ownerFallbackOutcome(supabase, run, scope, action, routing, tried);
+  // Roster exhausted. With a reminder ladder configured, go back to everyone
+  // who was actually texted an offer (offered_log, not `tried`, which also
+  // collects opt-out and lead-phone skips that never saw the lead) before the
+  // owner inherits it.
+  const remindable = Array.isArray(routing.offered_log)
+    ? routing.offered_log.filter((x): x is string => typeof x === "string")
+    : [];
+  return await remindOrOwnerFallback(supabase, run, scope, action, routing, tried, remindable);
 }
 
 /**
@@ -8583,6 +8628,123 @@ async function maybeOwnerDirect(
  * the lead marketing text/email) are skipped — only ungated steps like
  * notify_owner still run.
  */
+/**
+ * The business owner's display name, for the reminder ladder's "and then this
+ * goes to X" warning. Best-effort: an unnamed owner degrades the copy to "the
+ * owner" rather than failing the round.
+ */
+async function ownerDisplayName(supabase: Supabase, businessId: string): Promise<string> {
+  const { data } = await supabase
+    .from("businesses")
+    .select("owner_name")
+    .eq("id", businessId)
+    .maybeSingle();
+  return ((data as { owner_name?: string | null } | null)?.owner_name ?? "").trim();
+}
+
+/**
+ * One more nudge to the SAME people, or the owner if the ladder is spent.
+ *
+ * Sits in front of every "nobody claimed it" owner fallback. Without
+ * `unclaimedReminders` configured it is a straight passthrough, so flows that
+ * never opted in behave exactly as before.
+ *
+ * Reminders fire on SILENCE only. An explicit "2" from every teammate is a
+ * decision, and re-asking people who just declined is noise, so the
+ * everyone-passed path still hands the lead over immediately.
+ *
+ * Re-parks as a broadcast regardless of how the offer was originally routed:
+ * `recipients` is who actually saw the lead, and parking with `offered_all`
+ * set is what keeps their replies matching while the ladder runs.
+ */
+async function remindOrOwnerFallback(
+  supabase: Supabase,
+  run: RunRow,
+  scope: Scope,
+  action: Extract<StepAction, { kind: "route_to_team" }>,
+  routing: OfferRouting,
+  tried: string[],
+  recipients: string[]
+): Promise<StepOutcome> {
+  const config = action.unclaimedReminders;
+  // Silence only. A teammate who replied "2" has answered, so drop them here
+  // rather than at the call sites: the rotation path hands us `offered_log`,
+  // which is append-only and still contains everyone who ever got an offer,
+  // passers included.
+  const passedBy = Array.isArray(routing.passed_by)
+    ? (routing.passed_by as unknown[]).filter((x): x is string => typeof x === "string")
+    : [];
+  const live = recipients.filter(
+    (p) => typeof p === "string" && p.length > 0 && !passedBy.includes(p)
+  );
+  if (!config || live.length === 0) {
+    return await ownerFallbackOutcome(supabase, run, scope, action, routing, tried);
+  }
+  const completed = typeof routing.reminder_rounds === "number" ? routing.reminder_rounds : 0;
+  const round = nextReminderRound(completed, config);
+  if (round === null) {
+    // Ladder spent: the owner inherits it, one interval after the last round.
+    delete routing.reminder_rounds;
+    delete routing.offered_all;
+    delete routing.offered_names;
+    delete routing.offer_deadline_ms;
+    for (const p of live) if (!tried.includes(p)) tried.push(p);
+    return await ownerFallbackOutcome(supabase, run, scope, action, routing, tried);
+  }
+
+  const nowMs = Date.now();
+  // Reuse the offer-window helper so a round that would land inside quiet
+  // hours is pushed to the morning instead of firing overnight. Each re-park
+  // lands OUTSIDE the window, so the ladder always advances.
+  const deadlineMs = offerRespondByMs(nowMs, config.intervalMinutes, action.offerWindow);
+  const leadLabel = leadLabelFromVars(scope.vars);
+  const leadPhone = leadPhoneFromVars(scope.vars);
+  const details = config.detailsTemplate
+    ? renderTemplate(config.detailsTemplate, scope)
+    : undefined;
+  const ownerLabel = await ownerDisplayName(supabase, run.business_id);
+
+  const built: { e164: string; offerText: string; idempotencyKey: string }[] = [];
+  for (const phone of live) {
+    // The claim hint names the lead only when this teammate is juggling more
+    // than one, which is exactly when a bare digit stops being unambiguous.
+    const pendingForAgent = (await countOtherLiveOffers(supabase, run, phone)) + 1;
+    built.push({
+      e164: phone,
+      offerText: reminderText({
+        leadLabel,
+        leadPhone,
+        round,
+        rounds: config.rounds,
+        intervalMinutes: config.intervalMinutes,
+        ownerLabel,
+        details,
+        claimHint: reminderClaimHint(pendingForAgent, leadShortLabel(leadLabel))
+      }),
+      // The round is in the key: reusing the offer's key would let Telnyx
+      // dedupe every reminder away as a repeat of the original send.
+      idempotencyKey: `aiflow-offer-reminder-${round}:${run.id}:${phone}`
+    });
+  }
+
+  routing.reminder_rounds = round;
+  routing.offered_all = live;
+  routing.offer_deadline_ms = deadlineMs;
+  // A reminder is not a new offeree: `offered` belongs to the single-offer
+  // shape and must stay clear while a broadcast park is live.
+  delete routing.offered;
+  delete routing.offered_name;
+  appendActionTaken(
+    scope,
+    `reminded ${live.length} teammate(s) the lead is still unclaimed (round ${round} of ${config.rounds})`
+  );
+  return {
+    kind: "pause_agent_broadcast",
+    recipients: built,
+    respondByMs: Math.max(60_000, deadlineMs - nowMs)
+  };
+}
+
 async function ownerFallbackOutcome(
   supabase: Supabase,
   run: RunRow,
@@ -8677,8 +8839,13 @@ async function routeBroadcastStep(
   }
 
   if (event === "timeout") {
-    // The shared deadline lapsed with no claim: retire every remaining
-    // offeree and hand the lead to the owner.
+    // The shared deadline lapsed with no claim. With a reminder ladder
+    // configured, nudge the same offerees again instead of handing the lead
+    // over on the first silence; remindOrOwnerFallback retires them and falls
+    // back once the ladder is spent.
+    if (action.unclaimedReminders && live.length > 0) {
+      return await remindOrOwnerFallback(supabase, run, scope, action, routing, tried, live);
+    }
     for (const p of live) if (!tried.includes(p)) tried.push(p);
     delete routing.offered_all;
     delete routing.offered_names;
@@ -8762,7 +8929,7 @@ async function routeBroadcastStep(
     // Same multi-offer heads-up as the single path, per recipient.
     const alreadyPending = await countOtherLiveOffers(supabase, run, agent.phone);
     if (alreadyPending > 0) {
-      offerText = `${multiOfferHeadsUpLine(alreadyPending + 1)}\n${offerText}`;
+      offerText = `${multiOfferHeadsUpLine(alreadyPending + 1, leadShortLabel(leadLabelFromVars(scope.vars)))}\n${offerText}`;
     }
     recipients.push({
       e164: agent.phone,
