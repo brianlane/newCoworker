@@ -1123,7 +1123,7 @@
       "privacyNote": "Tus tokens de Zoom se cifran en reposo (AES-256-GCM) en una base de datos protegida con seguridad a nivel de fila, nunca se exponen al navegador y se eliminan cuando desconectas. El contenido de reuniones se lee solo para producir minutas en tu biblioteca de documentos: automáticamente después de tus propias reuniones grabadas en la nube mientras la importación automática esté activada (un interruptor en la tarjeta de Zoom la apaga), o cuando importas una explícitamente. Todo lo demás toca solo los datos de agenda de las citas que tu coworker administra. Mira nuestra <privacy>Política de privacidad</privacy> para más detalles. ¿Preguntas? Escríbenos cuando quieras vía <contact>newcoworker.com/contact</contact>."
     },
     "slackPage": {
-      "metaTitle": "Integración con Slack | New Coworker",
+      "metaTitle": "Integración con Slack",
       "metaDescription": "Lleva a tu coworker de IA a Slack: avisos, resúmenes, chat y aprobaciones, justo donde trabaja tu equipo.",
       "heroEyebrow": "Integración con Slack",
       "heroTitle": "Tu coworker de IA, dentro de Slack",
