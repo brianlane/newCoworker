@@ -47,20 +47,23 @@ async function runSweep(request: Request): Promise<Response> {
   const startedAt = Date.now();
   try {
     const supabase = await createSupabaseServiceClient();
-    const since = new Date(startedAt - LOOKBACK_MINUTES * 60_000).toISOString();
 
-    // Cron-sourced rows only, on both queries. The cron bearer is not
+    // Cron-sourced rows only, on both reads. The cron bearer is not
     // exclusive to pg_cron (the Meta webhook kicks messenger-worker with it
     // on every inbound message), so counting direct runs would let webhook
     // traffic stand in for a dead cron job. Direct runs stay in the table
     // for debugging; they are just not evidence that a SCHEDULE is alive.
+    //
+    // The run window MUST come through the evidence RPC, never a windowed
+    // table select. PostgREST caps an un-limited select at 1,000 rows, and
+    // the fleet writes ~8,800 cron rows per day, so a raw 8-day select
+    // silently truncates to the newest ~3 hours and every daily sweep older
+    // than that reads as "no run recorded". That was the 2026-08-10 email:
+    // seven healthy dailies reported STOPPED. The RPC aggregates
+    // server-side (latest row per sweep, plus every failing row, both
+    // bounded) so its result cannot grow with fleet chatter.
     const [runsResult, oldestResult, httpResult] = await Promise.all([
-      supabase
-        .from("cron_sweep_runs")
-        .select("sweep, finished_at, duration_ms, ok, error_count, errors")
-        .neq("source", DIRECT_SOURCE)
-        .gte("finished_at", since)
-        .order("finished_at", { ascending: false }),
+      supabase.rpc("cron_sweep_run_evidence", { since_minutes: LOOKBACK_MINUTES }),
       // The ledger's own age. Without it, every sweep looks "missing" on the
       // day this ships, and again any time a prune empties the table.
       supabase

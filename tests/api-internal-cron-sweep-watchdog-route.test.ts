@@ -34,8 +34,8 @@ function mockSupabase(opts: {
   insert?: { error: { message: string } | null };
 }) {
   const neq = vi.fn();
+  const gte = vi.fn();
   const results = [
-    opts.runs ?? { data: [], error: null },
     opts.oldest ?? { data: [], error: null }
   ];
   let call = 0;
@@ -43,9 +43,13 @@ function mockSupabase(opts: {
   function chain(): Record<string, unknown> {
     const result = results[Math.min(call++, results.length - 1)];
     const self: Record<string, unknown> = {};
-    for (const m of ["select", "gte", "order", "limit"]) {
+    for (const m of ["select", "order", "limit"]) {
       self[m] = vi.fn().mockReturnValue(self);
     }
+    self.gte = vi.fn((...args: unknown[]) => {
+      gte(...args);
+      return self;
+    });
     self.neq = vi.fn((...args: unknown[]) => {
       neq(...args);
       return self;
@@ -58,11 +62,22 @@ function mockSupabase(opts: {
   }
 
   const insert = vi.fn().mockResolvedValue(opts.insert ?? { error: null });
+  // The run window is served by the bounded evidence RPC, never a table
+  // select: PostgREST caps an unlimited select at 1,000 rows, and the fleet
+  // writes ~8,800 cron rows per lookback day, so a windowed select silently
+  // truncates to ~3 hours and every older daily sweep reads as "stopped"
+  // (the 2026-08-10 nine-problem false alarm).
+  const rpc = vi.fn((name: string) => {
+    if (name === "cron_sweep_run_evidence") {
+      return Promise.resolve(opts.runs ?? { data: [], error: null });
+    }
+    return Promise.resolve(opts.rpc ?? { data: [], error: null });
+  });
   vi.mocked(createSupabaseServiceClient).mockResolvedValue({
     from: vi.fn(() => chain()),
-    rpc: vi.fn().mockResolvedValue(opts.rpc ?? { data: [], error: null })
+    rpc
   } as unknown as Awaited<ReturnType<typeof createSupabaseServiceClient>>);
-  return { neq, insert };
+  return { neq, gte, insert, rpc };
 }
 
 function makeRequest(): Request {
@@ -132,11 +147,21 @@ describe("api/internal/cron-sweep-watchdog route", () => {
     );
   });
 
+  it("reads the run window through the bounded evidence RPC, never a raw select", async () => {
+    const { gte, rpc } = mockSupabase({ runs: { data: healthyRows(), error: null } });
+    await POST(makeRequest());
+    expect(rpc).toHaveBeenCalledWith("cron_sweep_run_evidence", { since_minutes: 11_520 });
+    // No windowed table read: gte() was the old unbounded select's filter.
+    expect(gte).not.toHaveBeenCalled();
+  });
+
   it("counts only cron-sourced rows, so webhook kicks cannot stand in for a dead cron", async () => {
     const { neq } = mockSupabase({ runs: { data: healthyRows(), error: null } });
     await POST(makeRequest());
-    // Applied to BOTH ledger reads: the window and the oldest-row probe.
-    expect(neq).toHaveBeenCalledTimes(2);
+    // The oldest-row probe still excludes direct runs client-side; the run
+    // window's source filter lives inside cron_sweep_run_evidence (pinned by
+    // tests/worker-integration/cron-sweep-run-evidence.itest.ts).
+    expect(neq).toHaveBeenCalledTimes(1);
     expect(neq).toHaveBeenCalledWith("source", "direct");
   });
 
