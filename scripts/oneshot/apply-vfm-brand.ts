@@ -114,43 +114,51 @@ if (nextSoul.length > BUSINESS_CONFIG_SOUL_MD_MAX_CHARS) {
   process.exit(1);
 }
 
-if (!identityChanged && !soulChanged) {
-  console.log("[oneshot] already converged, nothing to write.");
-  process.exit(0);
-}
-
+const docsChanged = identityChanged || soulChanged;
 if (!APPLY) {
-  console.log("[oneshot] dry run complete. Re-run with --apply to write.");
+  console.log(
+    docsChanged
+      ? "[oneshot] dry run complete. Re-run with --apply to write."
+      : "[oneshot] documents already converged. --apply would only re-run the vault sync."
+  );
   process.exit(0);
 }
 
-const { error: updateErr } = await db
-  .from("business_configs")
-  .update({
-    identity_md: nextIdentity,
-    soul_md: nextSoul,
-    updated_at: new Date().toISOString()
-  })
-  .eq("business_id", BUSINESS_ID);
+// The vault sync below runs on EVERY --apply, converged documents included:
+// a previous apply can land the DB write and then fail the sync, and the
+// re-run the error message asks for must not early-exit on "already
+// converged" with the box still serving the pre-VFM vault (Bugbot on
+// PR #1263).
+if (docsChanged) {
+  const { error: updateErr } = await db
+    .from("business_configs")
+    .update({
+      identity_md: nextIdentity,
+      soul_md: nextSoul,
+      updated_at: new Date().toISOString()
+    })
+    .eq("business_id", BUSINESS_ID);
 
-if (updateErr) {
-  console.error("[oneshot] update failed:", updateErr.message);
-  process.exit(1);
-}
-
-await recordOneshotApplied(db, {
-  scriptPath: process.argv[1],
-  businessId: BUSINESS_ID,
-  details: {
-    identity_md_chars: nextIdentity.length,
-    soul_md_chars: nextSoul.length,
-    identity_changed: identityChanged,
-    soul_changed: soulChanged,
-    sections: ["vfm-brand:identity", "vfm-brand:soul"]
+  if (updateErr) {
+    console.error("[oneshot] update failed:", updateErr.message);
+    process.exit(1);
   }
-});
 
-console.log("[oneshot] applied. Syncing vault to the tenant box...");
+  await recordOneshotApplied(db, {
+    scriptPath: process.argv[1],
+    businessId: BUSINESS_ID,
+    details: {
+      identity_md_chars: nextIdentity.length,
+      soul_md_chars: nextSoul.length,
+      identity_changed: identityChanged,
+      soul_changed: soulChanged,
+      sections: ["vfm-brand:identity", "vfm-brand:soul"]
+    }
+  });
+  console.log("[oneshot] applied. Syncing vault to the tenant box...");
+} else {
+  console.log("[oneshot] documents already converged. Syncing vault to the tenant box...");
+}
 
 // Push the new vault to the box now rather than waiting for the next owner
 // edit: soul/identity are live text on every channel.
