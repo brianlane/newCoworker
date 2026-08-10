@@ -131,7 +131,7 @@ if (root) {
 // --- Nothing source-shaped is readable ---
 for (const path of DISCLOSURE_PATHS) {
   const res = await get(path);
-  results.push(checkDisclosurePath(path, res ? res.status : 0));
+  results.push(checkDisclosurePath(path, res ? res.status : null));
 }
 
 // A served source map would disclose original sources just as effectively as
@@ -140,7 +140,7 @@ const html = root ? await root.clone().text().catch(() => "") : "";
 const chunk = /\/_next\/static\/chunks\/[A-Za-z0-9_.-]+\.js/.exec(html)?.[0];
 if (chunk) {
   const res = await get(`${chunk}.map`);
-  results.push(checkDisclosurePath(`${chunk}.map`, res ? res.status : 0));
+  results.push(checkDisclosurePath(`${chunk}.map`, res ? res.status : null));
 }
 
 // --- security.txt, including a non-expired Expires ---

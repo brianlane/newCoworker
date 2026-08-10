@@ -93,8 +93,17 @@ describe("checkBaselineHeaders", () => {
 });
 
 describe("checkDisclosurePath", () => {
-  it.each([404, 403, 301, 0])("treats %s as not-served", (status) => {
+  it.each([404, 403, 301])("treats %s as not-served", (status) => {
     expect(checkDisclosurePath("/.env", status).ok).toBe(true);
+  });
+
+  it("FAILS when the request never completed, rather than claiming a pass", () => {
+    // A timeout proves nothing. Reporting it as "not served" would put a false
+    // assurance into an assessor's evidence pack on the strength of a network
+    // blip, which is the whole failure mode this probe exists to avoid.
+    const r = checkDisclosurePath("/.env", null);
+    expect(r.ok).toBe(false);
+    expect(r.detail).toContain("not verified");
   });
 
   it.each([200, 206])("FAILS on %s, the file is being handed out", (status) => {

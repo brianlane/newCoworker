@@ -105,7 +105,20 @@ export const DISCLOSURE_PATHS = [
   "/next.config.ts"
 ] as const;
 
-export function checkDisclosurePath(path: string, status: number): CheckResult {
+export function checkDisclosurePath(path: string, status: number | null): CheckResult {
+  // A request that never completed proves nothing. Reporting it as a pass
+  // would put "not served" in an assessor's evidence pack on the strength of a
+  // timeout, which is the exact false assurance this probe exists to avoid.
+  if (status === null) {
+    return {
+      id: `disclosure:${path}`,
+      label: `${path} not served`,
+      ok: false,
+      detail: "request failed, not verified",
+      saq: "2"
+    };
+  }
+
   return {
     id: `disclosure:${path}`,
     label: `${path} not served`,
