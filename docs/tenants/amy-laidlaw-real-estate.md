@@ -53,6 +53,7 @@ touch them:
 | ReferralExchange Lead (sms, 31) | Browse-screenshot steps, gated owner emails, gated MMS routing, bad-phone retry tail |
 | Realtor.com Lead + Reply forward | Reply forwarding to the lead owner |
 | New Lead Intake (manual, 10) | Owner hands the AI a lead by name; the AI calls the lead, speaks their language, and can pin the lead to a named teammate |
+| Follow Up Requested (Unclaimed Leads) (tag_changed, 3) | Day-of router for unclaimed leads who asked for a follow-up: adding the "Follow Up Requested" tag (or Run now with context text) races Dave + Gabby (seller/both) or Dave + Gabby + Jason (buyer), 15-min claim window, Amy is the owner fallback and never in the race. Offer SMS carries *asterisk* emphasis by request |
 | Voice routing - calls from ... | Five per-source voice-routing flows, keyed to each network's caller IDs |
 
 Read the live state rather than this table when it matters:
@@ -296,6 +297,22 @@ same shape as the address gap #1202 closed. Watch the collapseEmpty trap
 documented in both scripts: route_to_team templates render with no
 collapseEmpty, so any price var must extract with a "none" fallback or a
 teammate gets a bare "Price:" label).
+
+Follow-up requests (Aug 10 2026): `seed-amy-followup-request-aiflow.ts`
+(applier) over `amy-followup-request-definition.ts` (pure builder, pinned by
+`tests/amy-followup-request-definition.test.ts`). Seeds the
+"Follow Up Requested (Unclaimed Leads)" flow after a Clever seller's Friday
+"email me comparables, talk Monday" reached Monday with the lead unclaimed
+and nothing scheduled: the spoke check's unclaimed track (above) starts at
+acceptance with a 3-day grace and no backfill, so day-of commitments and
+already-sitting leads had no home. Entry is the "Follow Up Requested" tag
+(tag_changed, added) on the day the follow-up is due, or a manual Run now
+whose input text carries name/phone/type/context. Seller and both-type leads
+broadcast to Dave + Gabrielle, buyers add Jason, Amy stays out of the race
+(her roster row has routing_enabled=false) and is the owner fallback. A claim
+auto-assigns the owner, which chains into the spoke check's weekly track for
+Clever-tagged leads: intended. The offer SMS uses *asterisk* emphasis on the
+header, "today", and the reply digits, per Amy's ask.
 
 Account-level: `seed-amy-new-lead-intake.ts`,
 `backfill-amy-lead-stages.ts`,
