@@ -544,19 +544,36 @@ describe("HQ inbox triage: a sales lead gets answered, not just announced", () =
 });
 
 describe("HQ inbox triage: moving the paging did not lose the cooldown", () => {
-  it("cools the approval gate on the same thread key as the alerts", () => {
-    // For a sales lead the GATE is what texts Brian, so it needs the
-    // guarantee #1191 gave notify_owner. Without this, a second message on a
-    // thread he is already deciding about would text him again, and the
-    // regression would be invisible: the first text still looks right.
+  it("does NOT cool the approval gate, so every real follow-up still asks", () => {
+    /**
+     * A reversal, and the reason matters.
+     *
+     * The gate carried THREAD_COOLDOWN while it was an ALERT: a second message
+     * on a conversation Brian had already been texted about stayed quiet
+     * (#1191). It is now the APPROVAL, and since Aug 10 2026 the email
+     * coworker no longer answers threads we have written on. A cooled gate
+     * therefore means a genuine follow-up is classified, filed, and answered
+     * by nobody: no reply, no text, silence.
+     *
+     * The #1191 duplicate is still covered by a better guard: a message with
+     * no new ask makes the drafter return NO_REPLY, so no gate parks at all,
+     * and the fallback alert keeps its cooldown so owner PAGING stays deduped.
+     */
     const gate = steps.find((s) => s.id === "s_gate") as Record<string, unknown> | undefined;
-    expect(gate?.cooldown).toEqual(THREAD_COOLDOWN);
+    expect(gate?.cooldown).toBeUndefined();
+    // The gate only exists when there IS a draft, which is what replaces it.
+    expect(gate?.when).toEqual({ var: "email_draft_intro", notEquals: "NO_REPLY" });
+    // And the alert that fires when there is no draft is still deduped.
+    const notify = steps.find((s) => s.id === "s_notify_sales") as Record<string, unknown> | undefined;
+    expect(notify?.cooldown).toEqual(THREAD_COOLDOWN);
   });
 
   it("leaves every owner-paging step in this flow cooled down", () => {
     // Whole-flow sweep rather than a per-step list, so a future step that
     // texts the owner cannot be added without a cooldown decision.
-    const paging = steps.filter((s) => s.type === "notify_owner" || s.type === "approval_gate");
+    // The approval gate is deliberately NOT cooled (see above): it is the
+    // approval, not an alert, and cooling it silences a real follow-up.
+    const paging = steps.filter((s) => s.type === "notify_owner");
     expect(paging.length).toBeGreaterThanOrEqual(4);
     for (const step of paging) {
       expect((step as Record<string, unknown>).cooldown, step.id).toEqual(THREAD_COOLDOWN);

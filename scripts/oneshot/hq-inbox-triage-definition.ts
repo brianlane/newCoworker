@@ -214,9 +214,23 @@ export function buildHqInboxTriageDefinition(replyDrafterAgentId: string) {
                 // one by default: without this, skipping would drop the
                 // introducer note and still mail the prospect unapproved.
                 guardsNextSteps: 2,
-                // Parking this gate IS the alert for a sales lead, so it keeps
-                // the one-text-per-conversation guarantee from #1191.
-                cooldown: THREAD_COOLDOWN,
+                //
+                // NO COOLDOWN, deliberately, and this is a reversal.
+                //
+                // It used to carry THREAD_COOLDOWN so a second message on a
+                // conversation Brian had already been texted about stayed
+                // quiet (#1191). That made sense while the gate was an ALERT.
+                // It is now the APPROVAL, and the coworker no longer answers
+                // threads we have written on, so a cooled gate means a genuine
+                // follow-up is classified, filed, and answered by nobody: no
+                // reply, no text, silence. An approval that skips itself is
+                // not an approval.
+                //
+                // The duplicate #1191 was about is still covered, by a better
+                // guard: a message carrying no new ask makes the drafter
+                // return NO_REPLY, so no gate parks and no text is sent, and
+                // the fallback alert below keeps the cooldown so the OWNER
+                // paging stays deduped.
                 prompt:
                   "Sales email from {{trigger.from}} {{vars.email_sender}}. {{vars.email_gist}}\n\n" +
                   "To {{trigger.from}}:\n{{vars.email_draft_intro}}\n\n" +
