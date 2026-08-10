@@ -19,6 +19,7 @@ import {
   getSlackConversationById,
   insertSlackUserMessage,
   listSlackMessages,
+  markSlackHelloSent,
   reclaimStaleSlackJobs,
   updateSlackConversationIdentity
 } from "@/lib/db/slack-chat";
@@ -321,5 +322,39 @@ describe("reads", () => {
     ).rejects.toThrow(/listSlackMessages: e/);
     defaultClientSpy.mockReturnValueOnce(makeDb([chain({ data: [], error: null })]));
     expect(await listSlackMessages("conv-1", 12)).toEqual([]);
+  });
+});
+
+describe("markSlackHelloSent", () => {
+  it("claims once, yields to the racing winner, throws on real failures", async () => {
+    const c = chain({ data: null, error: null });
+    expect(
+      await markSlackHelloSent(
+        { conversationId: "conv-1", businessId: BIZ, content: "hi" },
+        makeDb([c])
+      )
+    ).toBe(true);
+    expect((c as { insert: ReturnType<typeof vi.fn> }).insert).toHaveBeenCalledWith(
+      expect.objectContaining({ slack_event_id: "hello:conv-1", role: "assistant" })
+    );
+
+    expect(
+      await markSlackHelloSent(
+        { conversationId: "conv-1", businessId: BIZ, content: "hi" },
+        makeDb([chain({ data: null, error: { message: "dup", code: "23505" } })])
+      )
+    ).toBe(false);
+
+    await expect(
+      markSlackHelloSent(
+        { conversationId: "conv-1", businessId: BIZ, content: "hi" },
+        makeDb([chain({ data: null, error: { message: "e" } })])
+      )
+    ).rejects.toThrow(/markSlackHelloSent: e/);
+
+    defaultClientSpy.mockReturnValueOnce(makeDb([chain({ data: null, error: null })]));
+    expect(
+      await markSlackHelloSent({ conversationId: "conv-1", businessId: BIZ, content: "hi" })
+    ).toBe(true);
   });
 });

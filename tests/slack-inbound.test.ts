@@ -10,7 +10,9 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 vi.mock("@/lib/db/slack-connections", () => ({ getSlackConnectionByTeamId: vi.fn() }));
 vi.mock("@/lib/db/slack-chat", () => ({
   getOrCreateSlackConversation: vi.fn(),
-  insertSlackUserMessage: vi.fn()
+  insertSlackUserMessage: vi.fn(),
+  listSlackMessages: vi.fn(),
+  markSlackHelloSent: vi.fn()
 }));
 vi.mock("@/lib/slack/client", () => ({ slackPostMessage: vi.fn() }));
 vi.mock("@/lib/db/businesses", () => ({ getBusiness: vi.fn() }));
@@ -23,7 +25,9 @@ import { handleSlackChatEvent, handleSlackHomeOpened } from "@/lib/slack/inbound
 import { getSlackConnectionByTeamId } from "@/lib/db/slack-connections";
 import {
   getOrCreateSlackConversation,
-  insertSlackUserMessage
+  insertSlackUserMessage,
+  listSlackMessages,
+  markSlackHelloSent
 } from "@/lib/db/slack-chat";
 import { slackPostMessage } from "@/lib/slack/client";
 import { getBusiness } from "@/lib/db/businesses";
@@ -50,6 +54,8 @@ beforeEach(() => {
   vi.mocked(getSlackConnectionByTeamId).mockResolvedValue(CONNECTION as never);
   vi.mocked(getOrCreateSlackConversation).mockResolvedValue(CONVERSATION as never);
   vi.mocked(insertSlackUserMessage).mockResolvedValue({ messageId: 7, jobId: "job-1" });
+  vi.mocked(listSlackMessages).mockResolvedValue([]);
+  vi.mocked(markSlackHelloSent).mockResolvedValue(true);
   vi.mocked(slackPostMessage).mockResolvedValue({ ok: true, ts: "1.2", channel: "D-1" });
   vi.mocked(resolveOwnerUiLocaleForEmail).mockResolvedValue("en" as never);
 });
@@ -189,11 +195,17 @@ describe("handleSlackHomeOpened", () => {
     );
   });
 
-  it("never repeats the hello for an established conversation", async () => {
-    vi.mocked(getOrCreateSlackConversation).mockResolvedValue({
-      ...CONVERSATION,
-      created_at: new Date(Date.now() - 60_000).toISOString()
-    } as never);
+  it("never greets a conversation that already has messages", async () => {
+    vi.mocked(listSlackMessages).mockResolvedValue([
+      { id: 1, role: "user", content: "already chatting" }
+    ] as never);
+    await handleSlackHomeOpened({ teamId: "T-1", event: opened() as never });
+    expect(vi.mocked(markSlackHelloSent)).not.toHaveBeenCalled();
+    expect(vi.mocked(slackPostMessage)).not.toHaveBeenCalled();
+  });
+
+  it("only the marker winner speaks when two opens race", async () => {
+    vi.mocked(markSlackHelloSent).mockResolvedValue(false);
     await handleSlackHomeOpened({ teamId: "T-1", event: opened() as never });
     expect(vi.mocked(slackPostMessage)).not.toHaveBeenCalled();
   });

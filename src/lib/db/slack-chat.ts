@@ -197,6 +197,31 @@ export async function insertSlackUserMessage(
   return { messageId, jobId: (job as { id: string }).id };
 }
 
+/**
+ * Exactly-once claim for the onboarding hello: an assistant row keyed by a
+ * synthetic per-conversation event id, so racing app_home_opened deliveries
+ * collapse onto the unique index instead of double-greeting. Returns false
+ * when someone else (or an earlier open) already claimed it.
+ */
+export async function markSlackHelloSent(
+  input: { conversationId: string; businessId: string; content: string },
+  client?: SupabaseClient
+): Promise<boolean> {
+  const db = client ?? (await createSupabaseServiceClient());
+  const { error } = await db.from("slack_messages").insert({
+    conversation_id: input.conversationId,
+    business_id: input.businessId,
+    role: "assistant",
+    content: input.content,
+    slack_event_id: `hello:${input.conversationId}`
+  });
+  if (error) {
+    if ((error as { code?: string }).code === "23505") return false;
+    throw new Error(`markSlackHelloSent: ${error.message}`);
+  }
+  return true;
+}
+
 /** Atomic claim of the next runnable job (0 or 1 row). */
 export async function claimSlackJob(
   workerId: string,

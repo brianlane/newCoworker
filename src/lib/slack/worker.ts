@@ -178,7 +178,11 @@ async function runOneSlackJob(
   // failure degrades to TEAM powers for this turn and retries next message.
   let isOwner = conversation.is_owner;
   let displayName = conversation.user_display_name;
-  if (conversation.user_email === null) {
+  // Re-resolve while no VERIFIED EMAIL is cached (null or empty): a member
+  // whose workspace profile gains an email later, or an owner whose first
+  // lookup raced a Slack hiccup, must be able to graduate to owner powers on
+  // a later message instead of being frozen by the first answer.
+  if (!conversation.user_email) {
     const identity = await slackUsersInfo(botToken, conversation.slack_user_id).catch(() => null);
     if (identity) {
       if (identity.isBot) {
@@ -193,7 +197,9 @@ async function runOneSlackJob(
       displayName = identity.displayName;
       await updateSlackConversationIdentity(conversationId, {
         displayName: identity.displayName,
-        email: identity.email ?? "",
+        // null (not "") when Slack exposed no email, so the next message
+        // retries the lookup rather than trusting an empty cache forever.
+        email: identity.email ?? null,
         isOwner
       }).catch(() => undefined);
     } else {
@@ -378,7 +384,10 @@ async function runOneSlackJob(
     ? await fulfillOwnerEmailBlocks({
         businessId,
         content: inline.content,
-        source: "slack_assistant"
+        source: "slack_assistant",
+        // The SAME toggle the preamble above was built from, so the
+        // authoritative check can never contradict what the model was told.
+        agentKey: "slack"
       })
     : { content: inline.content };
   const finalContent = emailOutcome.content.slice(0, SLACK_REPLY_MAX_CHARS);

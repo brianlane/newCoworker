@@ -301,7 +301,7 @@ describe("identity and tool powers", () => {
       update_notification_preferences: true
     });
     expect(vi.mocked(fulfillOwnerEmailBlocks)).toHaveBeenCalledWith(
-      expect.objectContaining({ source: "slack_assistant" })
+      expect.objectContaining({ source: "slack_assistant", agentKey: "slack" })
     );
     expect(vi.mocked(scheduleCaptureOwnerRuleInline)).toHaveBeenCalled();
     expect(vi.mocked(completeSlackJob)).toHaveBeenCalledWith(
@@ -322,6 +322,25 @@ describe("identity and tool powers", () => {
     await processSlackJobs();
     expect(vi.mocked(runInlineChatTurn).mock.calls[0][0].systemInstruction).toContain(
       "EMAIL_DISABLED"
+    );
+  });
+
+  it("re-resolves an empty cached email so an owner can graduate later", async () => {
+    claimOnce();
+    vi.mocked(getSlackConversationById).mockResolvedValue({
+      ...CONVERSATION,
+      user_email: "",
+      is_owner: false
+    } as never);
+    vi.mocked(slackUsersInfo).mockResolvedValue({
+      displayName: "Amy",
+      email: "owner@x.co",
+      isBot: false
+    });
+    await processSlackJobs();
+    expect(vi.mocked(slackUsersInfo)).toHaveBeenCalled();
+    expect(vi.mocked(runInlineChatTurn).mock.calls[0][0].systemInstruction).toContain(
+      "OWNER_PREAMBLE"
     );
   });
 
@@ -524,7 +543,7 @@ describe("nullish fallbacks", () => {
     await processSlackJobs();
     expect(vi.mocked(updateSlackConversationIdentity)).toHaveBeenCalledWith(
       "conv-1",
-      expect.objectContaining({ email: "", isOwner: false })
+      expect.objectContaining({ email: null, isOwner: false })
     );
     // Over-cap reply attempted, post refused: the job still closes honestly
     // with a null ts rather than wedging.

@@ -11,7 +11,9 @@
 import { getSlackConnectionByTeamId } from "@/lib/db/slack-connections";
 import {
   getOrCreateSlackConversation,
-  insertSlackUserMessage
+  insertSlackUserMessage,
+  listSlackMessages,
+  markSlackHelloSent
 } from "@/lib/db/slack-chat";
 import { slackPostMessage } from "@/lib/slack/client";
 import { slackOnboardingMessage } from "@/lib/slack/chat";
@@ -111,9 +113,11 @@ export async function handleSlackChatEvent(input: {
 
 /**
  * app_home_opened with tab=="messages": the agent-surface "user opened a DM
- * with the coworker" signal. Post the onboarding line ONCE (only when the
- * user has no conversation with us yet); everything about it is
- * best-effort, a failed hello must never 500 a webhook.
+ * with the coworker" signal. Post the onboarding line EXACTLY ONCE: only
+ * when the conversation has no messages at all (a user who already chatted
+ * must never get a welcome mid-thread), with a durable marker row claimed
+ * before posting so racing opens collapse onto the unique index. Everything
+ * about it is best-effort; a failed hello must never 500 a webhook.
  */
 export async function handleSlackHomeOpened(input: {
   teamId: string;
@@ -136,18 +140,26 @@ export async function handleSlackHomeOpened(input: {
       threadTs: null,
       slackUserId: user
     });
-    // A row created earlier than this instant means they have talked to us
-    // (or were greeted) before; no repeat welcomes (agent onboarding rule).
-    if (Date.now() - new Date(conversation.created_at).getTime() > 10_000) return;
+    // Any existing message (theirs, ours, or an earlier hello marker) means
+    // this is not a first meeting; no repeat welcomes, and never a welcome
+    // injected into a thread that already started.
+    const existing = await listSlackMessages(conversation.id, 1);
+    if (existing.length > 0) return;
 
     const business = await getBusiness(connection.business_id).catch(() => null);
     const locale = business?.owner_email
       ? await resolveOwnerUiLocaleForEmail(business.owner_email).catch(() => "en" as const)
       : ("en" as const);
-    await slackPostMessage(connection.botToken, {
-      channel,
-      text: slackOnboardingMessage(locale)
+    const hello = slackOnboardingMessage(locale);
+    // Claim the marker BEFORE posting: two rapid opens race here, exactly
+    // one wins the unique index, and only the winner speaks.
+    const claimed = await markSlackHelloSent({
+      conversationId: conversation.id,
+      businessId: connection.business_id,
+      content: hello
     });
+    if (!claimed) return;
+    await slackPostMessage(connection.botToken, { channel, text: hello });
   } catch (err) {
     logger.warn("slack inbound: home-opened hello failed", {
       teamId: input.teamId,

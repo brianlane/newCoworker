@@ -237,6 +237,23 @@ describe("fulfillOwnerEmailBlocks", () => {
     mockRemember.mockResolvedValue(undefined);
   });
 
+  it("authorizes against the calling surface's toggle (default dashboard, slack passes its own)", async () => {
+    await fulfillOwnerEmailBlocks({
+      businessId: BIZ,
+      content: `Go.\n${block('{"to": "a@b.co", "subject": "s", "body": "b"}')}`,
+      source: "dashboard_chat"
+    });
+    expect(mockToolEnabled).toHaveBeenCalledWith(BIZ, "dashboard", "send_email");
+
+    await fulfillOwnerEmailBlocks({
+      businessId: BIZ,
+      content: `Go.\n${block('{"to": "a@b.co", "subject": "s", "body": "b"}')}`,
+      source: "slack_assistant",
+      agentKey: "slack"
+    });
+    expect(mockToolEnabled).toHaveBeenCalledWith(BIZ, "slack", "send_email");
+  });
+
   it("sends through the owner mailbox and files the send under the calling surface", async () => {
     const out = await fulfillOwnerEmailBlocks({
       businessId: BIZ,
