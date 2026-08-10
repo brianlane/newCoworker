@@ -12,7 +12,7 @@ written incident review. Calendly is the center of gravity here.
 | DID | `+14388035806` (Canadian) |
 | Owner | James Lee |
 | Onboarded | 2026-07-14 |
-| Roster | none: James is the only human in the loop |
+| Roster | James Lee (`+852` mobile, Hong Kong, no email on the row; NOTE the +852 SMS sharp edge below, so any flow step texting this roster row goes dark). Liz (the VFM assignee) joins when `apply-vfm-team.ts` runs with her phone |
 
 Build spec: [PRDs/white-glove-build-kyp-ads.md](../../PRDs/white-glove-build-kyp-ads.md).
 Incident review: [docs/INCIDENT-2026-07-KYP-ONBOARDING.md](../INCIDENT-2026-07-KYP-ONBOARDING.md).
@@ -25,17 +25,24 @@ problem rather than a messaging problem.
 
 ## Flows
 
+Live snapshot 2026-08-10 (5 on / 8 total). The VFM flow joins this table
+when `seed-vfm-lead-aiflow.ts` runs.
+
 | Flow | State | Note |
 | --- | --- | --- |
 | Lead follow-up (white-glove build, webhook, 16 steps) | on | The main path. Offer selection lives on the webhook trigger condition (payload contains the Simple-form name); the in-flow $100/$200 branch from one-shot #715 was removed in an unledgered Jul 19-24 reshape, and live is canonical (`kyp-lead-flow-definition.ts`). Bad-phone intake arm: an undialable lead number emails the lead and tells James instead of dying at the greeting (`patch-kyp-bad-phone-intake.ts`) |
-| Booking confirmation (SMS + email, webhook, 5) | on | Shape lives in `kyp-reminder-flow-definition.ts` |
-| Pre-call reminder, 1hr before (calendar, 3) | on | Same builder as the booking confirmation |
+| Booking confirmation (SMS + email, webhook, 5) | on | Shape lives in `kyp-reminder-flow-definition.ts`; trigger: webhook payload contains `calendly_booking` |
+| Pre-call reminder, 1hr before (calendar, 3) | on | Same builder as the booking confirmation. `event_start`, 60 min lead, scoped to events containing "KYP Ads \| Free Strategy Call", so the VFM flow's T-60 confirmation never overlaps it |
 | No-show recovery text (calendar, 3) | **on** | Live since 2026-08-01, and it has sent. The row still says "awaiting approval" in its own name because James never approved it going live: treat that as an open question for him, not as a reason to flip it off. Fires only for no-shows marked in Calendly within 2h |
+| Follow-up send: Stefan, Windshield Place (manual, 1) | on | One-off manual send_email |
+| Proposal follow-up, email (tag_changed, 8) | off | Fires on the `proposal-sent` tag when enabled |
 | Wrong-link booking flag (calendar, 2) | off | Blocked on the warm list |
 | Proposal send + follow-up (manual, 6) | off | Awaiting approval; James triggers it manually |
 
-Two flows (wrong-link flag, proposal send) sit **deliberately off pending
-owner approval**. Do not "fix" them by enabling them.
+The off flows (proposal follow-up email, wrong-link flag, proposal send) sit
+**deliberately off pending owner approval**. Do not "fix" them by enabling
+them. Flow NAMES can carry stale state notes ("awaiting approval"); the
+`enabled` bit is authoritative, the name is not.
 
 ## Second brand: Vantage Flow Media (VFM)
 
