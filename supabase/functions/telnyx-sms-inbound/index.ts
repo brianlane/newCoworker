@@ -13,7 +13,8 @@ import {
 import { normalizeE164 } from "../_shared/normalize_e164.ts";
 import {
   claimBlockedByOwner,
-  ownerConflictReplyText
+  ownerConflictReplyText,
+  ownershipLeadPhone
 } from "../_shared/ai_flows/claim_owner_gate.ts";
 import { isE164, normalizeNanpToE164 } from "../_shared/ai_flows/engine.ts";
 import { telemetryRecord } from "../_shared/telemetry.ts";
@@ -838,13 +839,21 @@ async function contactOwnerBlocking(
     >;
     const trigger = ((runContext as { trigger?: Record<string, unknown> } | null)?.trigger ??
       {}) as Record<string, unknown>;
-    // EXACTLY the worker's leadContactPhone resolution (leadPhoneE164 +
-    // strict-E164 trigger fallback), so the claim gate and the routing
-    // short-circuit can never disagree about which contact a run is about.
+    // EXACTLY the worker's ownershipContactPhone resolution: when the flow
+    // extracts a lead_phone (key present, even empty), ownership binds ONLY
+    // to that value; an empty extraction means the lead's number is
+    // unknown, never that the sender is the lead (Danfar, 2026-08-10:
+    // HomeLight withholds the number pre-claim and the sender is
+    // HomeLight's own alert line). Rule shared via ownershipLeadPhone.
+    const hasKey = Object.prototype.hasOwnProperty.call(vars, "lead_phone");
     const rawLead = typeof vars.lead_phone === "string" ? vars.lead_phone.trim() : "";
     const fromVars = rawLead ? (isE164(rawLead) ? rawLead : normalizeNanpToE164(rawLead)) : null;
     const rawTrigger = typeof trigger.from === "string" ? trigger.from.trim() : "";
-    const leadPhone = fromVars ?? (rawTrigger && isE164(rawTrigger) ? rawTrigger : null);
+    const leadPhone = ownershipLeadPhone(
+      hasKey,
+      fromVars,
+      rawTrigger && isE164(rawTrigger) ? rawTrigger : null
+    );
     if (!leadPhone || leadPhone === from) return null;
     const { data: contact } = await supabase
       .from("contacts")

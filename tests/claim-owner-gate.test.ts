@@ -1,7 +1,8 @@
 import { describe, expect, it } from "vitest";
 import {
   claimBlockedByOwner,
-  ownerConflictReplyText
+  ownerConflictReplyText,
+  ownershipLeadPhone
 } from "../supabase/functions/_shared/ai_flows/claim_owner_gate";
 
 /**
@@ -60,5 +61,28 @@ describe("ownerConflictReplyText", () => {
 
   it("contains no em dash", () => {
     expect(ownerConflictReplyText("Dave Lane", "Austin Happ").includes("\u2014")).toBe(false);
+  });
+});
+
+describe("ownershipLeadPhone", () => {
+  /**
+   * Danfar (HomeLight, 2026-08-10): the flow extracts lead_phone but
+   * HomeLight withholds it pre-claim, so the value is "". The old sender
+   * fallback bound ownership to HomeLight's own alert line, made Dave its
+   * "owner" at Friday's claim, and the next referral skipped the team race.
+   */
+  it("an extracted-but-empty lead phone means UNKNOWN, never the sender", () => {
+    expect(ownershipLeadPhone(true, null, "+14159157879")).toBeNull();
+  });
+
+  it("a real extracted phone always wins", () => {
+    expect(ownershipLeadPhone(true, "+14802715202", "+14159157879")).toBe("+14802715202");
+    expect(ownershipLeadPhone(false, "+14802715202", "+14159157879")).toBe("+14802715202");
+  });
+
+  it("a flow that never deals in lead_phone may treat the sender as the lead", () => {
+    // The customer-texts-in case, where that is literally true.
+    expect(ownershipLeadPhone(false, null, "+14165550100")).toBe("+14165550100");
+    expect(ownershipLeadPhone(false, null, null)).toBeNull();
   });
 });
