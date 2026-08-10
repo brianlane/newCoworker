@@ -194,14 +194,12 @@ export async function findAwaitingApprovalRunBySlackThread(
   const db = client ?? (await createSupabaseServiceClient());
   const { data, error } = await db
     .from("ai_flow_runs")
-    .select("id")
+    .select("id, slack_channel_id:context->approval->>slack_channel_id")
     .eq("business_id", businessId)
     .eq("status", "awaiting_approval")
-    .eq("context->approval->>slack_channel_id", channelId)
     .eq("context->approval->>slack_message_ts", threadTs)
     .order("updated_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(5);
   if (error) {
     logger.warn("findAwaitingApprovalRunBySlackThread: read failed", {
       businessId,
@@ -209,7 +207,15 @@ export async function findAwaitingApprovalRunBySlackThread(
     });
     return null;
   }
-  return data ? { runId: (data as { id: string }).id } : null;
+  // Strict when a channel was stored (ts values are only unique per
+  // channel); tolerant when it was not, so a row anchored without the
+  // channel field (a failed context merge, or data from before the field
+  // existed) still answers instead of falling through to chat.
+  const rows = (data ?? []) as Array<{ id: string; slack_channel_id: string | null }>;
+  const match = rows.find(
+    (r) => r.slack_channel_id === channelId || r.slack_channel_id == null
+  );
+  return match ? { runId: match.id } : null;
 }
 
 /** Owner-facing ack lines, mirroring the SMS handler's wording. */

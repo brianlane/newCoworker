@@ -243,21 +243,42 @@ describe("applySlackApprovalModify", () => {
 });
 
 describe("findAwaitingApprovalRunBySlackThread", () => {
-  it("finds the newest anchored run, nulls misses and errors", async () => {
+  it("matches the stored channel strictly, tolerates a missing one, nulls misses and errors", async () => {
     expect(
       await findAwaitingApprovalRunBySlackThread(
         BIZ,
         "C-9",
         "77.7",
-        makeDb(updateChain({ data: { id: RUN }, error: null }))
+        makeDb(updateChain({ data: [{ id: RUN, slack_channel_id: "C-9" }], error: null }))
       )
     ).toEqual({ runId: RUN });
+
+    // Same ts in a DIFFERENT channel: never an approval answer.
+    expect(
+      await findAwaitingApprovalRunBySlackThread(
+        BIZ,
+        "C-other",
+        "77.7",
+        makeDb(updateChain({ data: [{ id: RUN, slack_channel_id: "C-9" }], error: null }))
+      )
+    ).toBeNull();
+
+    // A row anchored without a channel (failed context merge) still answers.
     expect(
       await findAwaitingApprovalRunBySlackThread(
         BIZ,
         "C-9",
         "77.7",
-        makeDb(updateChain({ data: null, error: null }))
+        makeDb(updateChain({ data: [{ id: RUN, slack_channel_id: null }], error: null }))
+      )
+    ).toEqual({ runId: RUN });
+
+    expect(
+      await findAwaitingApprovalRunBySlackThread(
+        BIZ,
+        "C-9",
+        "77.7",
+        makeDb(updateChain({ data: [], error: null }))
       )
     ).toBeNull();
     expect(
