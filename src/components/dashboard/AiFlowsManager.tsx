@@ -4285,6 +4285,32 @@ function StepFields({
         <label className="flex items-center gap-2 text-xs text-parchment/70">
           <input
             type="checkbox"
+            checked={step.star ?? false}
+            onChange={(ev) =>
+              patchStep(index, {
+                star: ev.target.checked ? true : undefined,
+                ...(ev.target.checked ? { unstar: undefined } : {})
+              })
+            }
+          />
+          Star (Gmail star / Outlook flag)
+        </label>
+        <label className="flex items-center gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
+            checked={step.unstar ?? false}
+            onChange={(ev) =>
+              patchStep(index, {
+                unstar: ev.target.checked ? true : undefined,
+                ...(ev.target.checked ? { star: undefined } : {})
+              })
+            }
+          />
+          Unstar
+        </label>
+        <label className="flex items-center gap-2 text-xs text-parchment/70">
+          <input
+            type="checkbox"
             checked={step.trash ?? false}
             onChange={(ev) =>
               patchStep(index, {

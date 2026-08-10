@@ -4,6 +4,7 @@ import {
   parseClassifyChoice
 } from "../../supabase/functions/_shared/ai_flows/engine";
 import { buildHqInboxTriageDefinition } from "../../scripts/oneshot/hq-inbox-triage-definition";
+import { emailTriggerScope } from "@/lib/ai-flows/trigger-eval";
 import { geminiJson } from "./gemini";
 
 /**
@@ -42,6 +43,7 @@ describe("HQ inbox classify: the categories are wired to the live flow", () => {
       "automated_important",
       "automated_notice",
       "billing",
+      "billing_receipt",
       "sales_lead",
       "support"
     ]);
@@ -144,8 +146,9 @@ describe("HQ inbox classify: a real money problem still pages", () => {
       const kind = await classify(
         email("Your receipt from Stripe", "Thanks for your payment of 20.00 USD. Nothing is due.")
       );
-      // A receipt is a record worth keeping, so it archives rather than bins.
-      expect(kind).toBe("automated_notice");
+      // Its own tier now: a record worth keeping, and Brian stars these by
+      // hand, so the flow does too.
+      expect(kind).toBe("billing_receipt");
     }
   );
 });
@@ -256,11 +259,106 @@ describe("HQ inbox classify: mail that asks us to act is never binned", () => {
     expect(kind).toBe("automated_bulk");
   });
 
-  it("archives rather than bins the merely routine", { retry: 1, timeout: 120_000 }, async () => {
-    // The middle tier: nothing to do, but not junk either.
+  it("keeps the merely routine in the middle tier", { retry: 1, timeout: 120_000 }, async () => {
+    // Nothing to do, but not junk and not a receipt: read and labelled, left
+    // in the inbox. Nothing in this flow archives any more.
     const kind = await classify(
-      email("Your receipt from Stripe", "Thanks for your payment of 20.00 USD. Nothing is due.")
+      email(
+        "Your weekly usage summary",
+        "Here are your numbers for the week. No action is required."
+      )
     );
     expect(kind).toBe("automated_notice");
+  });
+});
+
+describe("HQ inbox classify: a conversation we are already in is never routine", () => {
+  /**
+   * The thread signal, end to end through the REAL trigger scope.
+   *
+   * The classifier reads windowText, and `emailTriggerScope` appends the
+   * marker to it when the poller found one of our own sends on the thread.
+   * That is the whole mechanism, so the test builds the scope rather than
+   * hand-writing the marker: if the scope stopped appending it, hand-writing
+   * it here would keep passing while production went back to binning.
+   */
+  const scoped = (subject: string, body: string, replied: boolean) =>
+    String(
+      emailTriggerScope({
+        id: "m1",
+        fromEmail: "api-oauth-dev-verification@google.com",
+        subject,
+        bodyText: body,
+        threadId: "t-1",
+        weRepliedOnThread: replied
+      }).windowText
+    );
+
+  // Deliberately bland: a status note that means nothing on its own. If the
+  // body were self-evidently urgent the control below would also come back
+  // important, and the pair would be measuring the wording, not the marker.
+  const BLAND_BODY = [
+    "Here is a summary of recent activity on your developer account.",
+    "No further information is included in this message."
+  ].join("\n");
+
+  it(
+    "escalates a bland notice once we are in the conversation",
+    { retry: 1, timeout: 120_000 },
+    async () => {
+      // No "Action Needed", nothing urgent in the body: the ONLY thing
+      // separating this from the control below is the thread marker. This is
+      // the case a phrase-matching rule can never reach.
+      const kind = await classify(scoped("Developer account update", BLAND_BODY, true));
+      expect(kind).toBe("automated_important");
+    }
+  );
+
+  it(
+    "leaves the same message routine when we have never replied",
+    { retry: 1, timeout: 120_000 },
+    async () => {
+      // The control. If this also came back important the marker would be
+      // proving nothing, and the test above would be measuring the wording.
+      const kind = await classify(scoped("Developer account update", BLAND_BODY, false));
+      expect(kind).not.toBe("automated_important");
+    }
+  );
+
+  it(
+    "will not bin a newsletter-shaped message on a live conversation",
+    { retry: 1, timeout: 120_000 },
+    async () => {
+      const kind = await classify(
+        scoped("Re: your integration review", "Following up on the thread below.", true)
+      );
+      expect(kind).not.toBe("automated_bulk");
+    }
+  );
+});
+
+describe("HQ inbox classify: receipts are their own tier", () => {
+  /**
+   * Every starred message in HQ's live Gmail is a payment receipt or invoice,
+   * so these are the real senders, read off the mailbox.
+   */
+  const RECEIPTS: Array<[string, string]> = [
+    ["Your receipt from Anthropic, PBC #2711-1769", "Thanks for your payment. Amount 200.00 USD."],
+    ["Your receipt from Vercel Inc. #2593-7121", "Payment received for your Pro plan."],
+    ["[Telnyx LLC] Payment Success", "Your payment of 100.00 USD was processed successfully."],
+    ["Payment received for Supabase Pte. Ltd. invoice", "We received your payment. No action needed."]
+  ];
+  for (const [subject, body] of RECEIPTS) {
+    it(`files "${subject.slice(0, 30)}" as a receipt`, { retry: 1, timeout: 120_000 }, async () => {
+      expect(await classify(email(subject, body))).toBe("billing_receipt");
+    });
+  }
+
+  it("does NOT swallow a real bill we still owe", { retry: 1, timeout: 120_000 }, async () => {
+    // The tier must not become a bucket for anything money-shaped.
+    const kind = await classify(
+      email("Invoice 4021 due in 3 days", "Amount due 480.00 USD. Please pay by Friday to avoid interruption.")
+    );
+    expect(kind).toBe("billing");
   });
 });

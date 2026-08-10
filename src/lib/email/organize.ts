@@ -31,6 +31,14 @@ export type OrganizeEmailActions = {
    * the caller is often an AI classification and that must always be undoable.
    */
   trash?: boolean;
+  /**
+   * Star / unstar. Gmail uses the STARRED system label; Outlook uses the
+   * follow-up flag, its nearest equivalent. The AI mailbox has no star, so
+   * that path reports the request as unsupported rather than reporting a
+   * success it did not perform.
+   */
+  star?: boolean;
+  unstar?: boolean;
   addLabels?: string[];
   removeLabels?: string[];
   /** Folder display name (null/empty clears to Inbox for tenant; provider move for Outlook/Gmail). */
@@ -72,6 +80,8 @@ function hasAnyAction(actions: OrganizeEmailActions): boolean {
       actions.archive ||
       actions.unarchive ||
       actions.trash ||
+      actions.star ||
+      actions.unstar ||
       (actions.addLabels && actions.addLabels.length > 0) ||
       (actions.removeLabels && actions.removeLabels.length > 0) ||
       actions.moveToFolder !== undefined
@@ -96,6 +106,9 @@ export async function organizeMessage(req: OrganizeEmailRequest): Promise<Organi
   // authoring mistake, not a sequence: refuse rather than pick a winner.
   if (req.actions.trash && (req.actions.unarchive || req.actions.markUnread)) {
     return { ok: false, detail: "trash_and_restore_conflict" };
+  }
+  if (req.actions.star && req.actions.unstar) {
+    return { ok: false, detail: "star_and_unstar_conflict" };
   }
 
   const actions: OrganizeEmailActions = {
@@ -129,6 +142,13 @@ async function organizeTenant(
   messageId: string | null | undefined,
   actions: OrganizeEmailActions
 ): Promise<OrganizeEmailResult> {
+  if (actions.star || actions.unstar) {
+    // The AI mailbox has no star, and the dashboard Emails page renders none.
+    // Reporting ok here would tell a flow its receipt was starred when
+    // nothing happened, which is the silent-success shape this file avoids
+    // everywhere else.
+    return { ok: false, detail: "star_unsupported_for_tenant_mailbox" };
+  }
   const input: OrganizeTenantEmailInput = {
     businessId,
     emailLogId: emailLogId?.trim() || null,
@@ -189,6 +209,9 @@ async function organizeGmail(
 
   if (actions.markRead) removeLabelIds.push("UNREAD");
   if (actions.markUnread) addLabelIds.push("UNREAD");
+  // STARRED is a system label, so a star needs no extra round trip.
+  if (actions.star) addLabelIds.push("STARRED");
+  if (actions.unstar) removeLabelIds.push("STARRED");
   if (actions.archive || (actions.moveToFolder && actions.moveToFolder.trim())) {
     removeLabelIds.push("INBOX");
   }
@@ -381,6 +404,23 @@ async function organizeOutlook(
     }
     if (patch.status >= 400) {
       return { ok: false, detail: `outlook_patch_failed:${patch.status}` };
+    }
+  }
+
+  // Outlook has no star: the follow-up flag is its nearest equivalent, and it
+  // is what "flagged" means in every Outlook client.
+  if (actions.star || actions.unstar) {
+    const flagRes = await nangoProxyForBusiness(businessId, link, {
+      endpoint: `/v1.0/me/messages/${encodeURIComponent(messageId)}`,
+      method: "PATCH",
+      data: { flag: { flagStatus: actions.star ? "flagged" : "notFlagged" } }
+    });
+    if (!flagRes) return { ok: false, detail: "email_not_connected" };
+    if (flagRes.status === 401 || flagRes.status === 403) {
+      return { ok: false, detail: reconnectHint };
+    }
+    if (flagRes.status >= 400) {
+      return { ok: false, detail: `outlook_flag_failed:${flagRes.status}` };
     }
   }
 

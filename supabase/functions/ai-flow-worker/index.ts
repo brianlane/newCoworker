@@ -5905,6 +5905,8 @@ async function emailOrganizeStep(
         ...(action.archive ? { archive: true } : {}),
         ...(action.unarchive ? { unarchive: true } : {}),
         ...(action.trash ? { trash: true } : {}),
+        ...(action.star ? { star: true } : {}),
+        ...(action.unstar ? { unstar: true } : {}),
         ...(action.addLabels?.length ? { addLabels: action.addLabels } : {}),
         ...(action.removeLabels?.length ? { removeLabels: action.removeLabels } : {}),
         ...(action.moveToFolder ? { moveToFolder: action.moveToFolder } : {})

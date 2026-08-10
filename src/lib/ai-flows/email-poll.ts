@@ -466,6 +466,45 @@ export function isOwnOutboundSender(
   return at !== -1 && from.slice(at + 1) === tenantDomain.trim().toLowerCase();
 }
 
+/**
+ * Of these conversation ids, which has this business already SENT on?
+ *
+ * The signal behind {{trigger.thread_has_our_reply}}. A message on a thread we
+ * are already part of is the next turn of a correspondence, never a broadcast,
+ * and that holds regardless of how the sender words the subject. Live, Aug 9
+ * 2026: Google acknowledged our own OAuth verification request on a thread
+ * Brian had replied to on Jul 30, and it was filed as routine and binned.
+ *
+ * Best-effort by design. A read failure returns an empty set, which is exactly
+ * the behaviour before this existed, so a database blip degrades the triage
+ * rather than stopping the poll.
+ */
+export async function threadsWeHaveRepliedOn(
+  businessId: string,
+  threadIds: string[],
+  db: SupabaseClient
+): Promise<Set<string>> {
+  const wanted = [...new Set(threadIds.filter((t) => t.trim()))];
+  if (wanted.length === 0) return new Set();
+  try {
+    const { data, error } = await db
+      .from("email_log")
+      .select("thread_id")
+      .eq("business_id", businessId)
+      .eq("direction", "outbound")
+      .in("thread_id", wanted);
+    if (error) throw new Error(error.message);
+    return new Set(
+      ((data ?? []) as Array<{ thread_id?: string | null }>)
+        .map((r) => r.thread_id ?? "")
+        .filter(Boolean)
+    );
+  } catch (e) {
+    console.error("threadsWeHaveRepliedOn", e instanceof Error ? e.message : String(e));
+    return new Set();
+  }
+}
+
 /** Page size for the flow listing — paged so no flow is silently skipped. */
 export const EMAIL_POLL_FLOW_PAGE = 100;
 
@@ -650,8 +689,21 @@ export async function pollEmailTriggers(client?: SupabaseClient): Promise<EmailP
       // Messages already marked read this poll: several flows can match the
       // same message, but the mailbox write should happen once.
       const markedHandled = new Set<string>();
+      // Which of these conversations have we already SENT on? Batched once
+      // per poll rather than per message: this is a small IN over the
+      // thread ids in hand, and the answer is the same for every flow on the
+      // mailbox. A failure here degrades to "we have not replied", which is
+      // the pre-existing behaviour, never a thrown poll.
+      const repliedThreads = await threadsWeHaveRepliedOn(
+        businessId,
+        inbound.map((m) => m.threadId).filter((t): t is string => Boolean(t)),
+        db
+      );
       for (const msg of inbound) {
-        const scope = emailTriggerScope(msg, { connectionId });
+        const scope = emailTriggerScope(
+          { ...msg, weRepliedOnThread: Boolean(msg.threadId && repliedThreads.has(msg.threadId)) },
+          { connectionId }
+        );
         for (const flow of group) {
           seenRows.push({ flow_id: flow.id, message_id: msg.id });
           if (

@@ -18,6 +18,7 @@ import {
   gmailBodyText,
   gmailHeader,
   isOwnOutboundSender,
+  threadsWeHaveRepliedOn,
   parseFromAddress,
   pollEmailTriggers
 } from "@/lib/ai-flows/email-poll";
@@ -1529,5 +1530,71 @@ describe("isOwnOutboundSender: the flow must never answer its own mail", () => {
     // No account on the connection row still leaves the domain rule working.
     expect(isOwnOutboundSender("team@newcoworker.com", null, DOMAIN)).toBe(true);
     expect(isOwnOutboundSender("james@kypads.com", null, DOMAIN)).toBe(false);
+  });
+});
+
+describe("threadsWeHaveRepliedOn: a conversation we are in is never routine", () => {
+  /**
+   * The signal behind {{trigger.thread_has_our_reply}}. Live, Aug 9 2026:
+   * Google acknowledged our OWN OAuth verification request on a thread Brian
+   * had replied to on Jul 30, and the flow filed it as routine and binned it.
+   */
+  const chain = (result: { data: unknown; error: { message: string } | null }) => {
+    const inFn = vi.fn().mockResolvedValue(result);
+    const eqDir = vi.fn(() => ({ in: inFn }));
+    const eqBiz = vi.fn(() => ({ eq: eqDir }));
+    const select = vi.fn(() => ({ eq: eqBiz }));
+    return { db: { from: vi.fn(() => ({ select })) }, select, eqBiz, eqDir, inFn };
+  };
+
+  it("returns only the threads we have actually sent on", async () => {
+    const c = chain({ data: [{ thread_id: "t1" }, { thread_id: "t3" }], error: null });
+    const out = await threadsWeHaveRepliedOn("biz", ["t1", "t2", "t3"], c.db as never);
+    expect([...out].sort()).toEqual(["t1", "t3"]);
+    // Scoped to the business AND to outbound: an inbound row on the thread is
+    // the message we are classifying, not evidence we ever answered.
+    expect(c.eqBiz).toHaveBeenCalledWith("business_id", "biz");
+    expect(c.eqDir).toHaveBeenCalledWith("direction", "outbound");
+  });
+
+  it("dedupes and skips blanks before querying", async () => {
+    const c = chain({ data: [], error: null });
+    await threadsWeHaveRepliedOn("biz", ["t1", "t1", "  ", "t2"], c.db as never);
+    expect(c.inFn).toHaveBeenCalledWith("thread_id", ["t1", "t2"]);
+  });
+
+  it("does not query at all when no message carried a thread id", async () => {
+    const c = chain({ data: [], error: null });
+    expect(await threadsWeHaveRepliedOn("biz", ["", "   "], c.db as never)).toEqual(new Set());
+    expect(c.select).not.toHaveBeenCalled();
+  });
+
+  it("degrades to 'we have not replied' on a read failure, never a thrown poll", async () => {
+    // Fail-safe direction chosen on purpose: the worst case is the triage it
+    // had before this existed, not a mailbox that stops being polled.
+    const c = chain({ data: null, error: { message: "boom" } });
+    expect(await threadsWeHaveRepliedOn("biz", ["t1"], c.db as never)).toEqual(new Set());
+  });
+
+  it("treats a null payload as no replies", async () => {
+    // PostgREST can answer with neither rows nor an error.
+    const c = chain({ data: null, error: null });
+    expect(await threadsWeHaveRepliedOn("biz", ["t1"], c.db as never)).toEqual(new Set());
+  });
+
+  it("survives a non-Error thrown from the client", async () => {
+    // The catch logs `String(e)` for anything that is not an Error, and a
+    // driver that rejects with a plain string must not take the poll down.
+    const db = {
+      from: () => {
+        throw "connection reset";
+      }
+    };
+    expect(await threadsWeHaveRepliedOn("biz", ["t1"], db as never)).toEqual(new Set());
+  });
+
+  it("ignores rows whose thread id came back null", async () => {
+    const c = chain({ data: [{ thread_id: null }, { thread_id: "t9" }], error: null });
+    expect([...(await threadsWeHaveRepliedOn("biz", ["t9"], c.db as never))]).toEqual(["t9"]);
   });
 });
