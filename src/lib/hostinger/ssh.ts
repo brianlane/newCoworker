@@ -25,6 +25,17 @@ export type SshExecOptions = {
   /** Optional passphrase if the private key is encrypted. */
   passphrase?: string;
   command: string;
+  /**
+   * Payload written to the remote command's stdin (then EOF). This is how a
+   * LARGE script must travel: the `command` string itself becomes a single
+   * argv element of the remote user's shell (`bash -c '<command>'`), so it
+   * is capped by the kernel's per-argument limit (MAX_ARG_STRLEN, ~128KiB
+   * on Linux). A vault sync whose knowledge-graph tar outgrew that cap
+   * failed with "/bin/bash: Argument list too long" (KYP Ads, Aug 2026);
+   * stdin is a stream and has no such cap, so callers run `bash -s` as the
+   * command and ship the script here instead.
+   */
+  stdin?: string;
   /** Full command timeout — includes connect + exec. Default 15 min (provisioning is slow). */
   timeoutMs?: number;
   /** Connect-only timeout. Default 60s. */
@@ -75,6 +86,10 @@ export interface SshStreamStderrLike {
 export interface SshStreamLike {
   on(event: "close", listener: (code: number | null, signal: string | null) => void): this;
   on(event: "data", listener: (chunk: Buffer | string) => void): this;
+  /** Write to the remote command's stdin (ssh2 streams are duplex). */
+  write(data: string): boolean;
+  /** Signal EOF on the remote stdin so `bash -s` style readers terminate. */
+  end(): this;
   stderr: SshStreamStderrLike;
 }
 
@@ -165,6 +180,23 @@ export async function sshExec(
             stderr
           }));
         });
+        // Ship the stdin payload (if any) only after every handler is
+        // armed, so a fast-exiting remote can never race our listeners.
+        // EOF always follows: a `bash -s` reader must see end-of-script.
+        if (opts.stdin !== undefined) {
+          try {
+            stream.write(opts.stdin);
+            stream.end();
+          } catch (writeErr) {
+            settle(() =>
+              reject(
+                new Error(
+                  `sshExec: stdin write failed: ${writeErr instanceof Error ? writeErr.message : String(writeErr)}`
+                )
+              )
+            );
+          }
+        }
       });
     });
 

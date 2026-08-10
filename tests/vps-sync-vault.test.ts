@@ -29,6 +29,7 @@ import {
   resolveSyncProjectId,
   syncVaultToVps,
   syncVaultToVpsAndLog,
+  VAULT_SYNC_STDIN_WRAPPER,
   type VaultSyncDeps
 } from "@/lib/vps/sync-vault";
 import { logger } from "@/lib/logger";
@@ -527,9 +528,15 @@ describe("syncVaultToVps — success path", () => {
     expect(call.host).toBe("203.0.113.1");
     expect(call.username).toBe("root");
     expect(call.privateKeyPem).toContain("BEGIN OPENSSH PRIVATE KEY");
-    // Sanity-check the command body — we already exhaustively test
+    // The SCRIPT rides stdin; the command is the constant spool-and-exec
+    // wrapper. The command string is a single argv element on the remote
+    // (bash -c), capped at ~128KiB, and KYP's graph tar alone exceeds it
+    // (Aug 2026 "Argument list too long"), so the script must never be
+    // passed as the command again.
+    expect(call.command).toBe(VAULT_SYNC_STDIN_WRAPPER);
+    // Sanity-check the script body — we already exhaustively test
     // `buildSyncVaultCommand`, so just confirm the wiring connects.
-    expect(call.command).toContain('echo "vault_synced=ok"');
+    expect(call.stdin).toContain('echo "vault_synced=ok"');
   });
 
   it("uses the generously-large 60s timeout so a cold docker exec into mongo doesn't tip the orchestrator into a false ssh_failed", async () => {
@@ -551,7 +558,7 @@ describe("syncVaultToVps — success path", () => {
     const call = (deps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0];
     const digest = "# documents.md";
     const digestB64Fragment = Buffer.from(digest).toString("base64").slice(0, 16);
-    expect(call.command).toContain(digestB64Fragment);
+    expect(call.stdin).toContain(digestB64Fragment);
     // Staff-only docs never reach the on-VPS digest.
     const priceB64 = Buffer.from("Price sheet").toString("base64");
     expect(priceB64).toBeTruthy(); // sanity for the fixture
@@ -591,10 +598,10 @@ describe("syncVaultToVps — success path", () => {
     expect(r.ok).toBe(true);
     expect(deps.fetchGraph).toHaveBeenCalledWith(BIZ);
     const call = (deps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(call.command).toContain('echo "graph_projection=ok"');
-    expect(call.command).toContain('tar -xf - -C "$GRAPH_STAGE"');
+    expect(call.stdin).toContain('echo "graph_projection=ok"');
+    expect(call.stdin).toContain('tar -xf - -C "$GRAPH_STAGE"');
     // The shipped tar really contains the entity note + graph.jsonl.
-    const m = /printf %s '([A-Za-z0-9+/=]+)' \| base64 -d \| tar -xf/.exec(call.command);
+    const m = /printf %s '([A-Za-z0-9+/=]+)' \| base64 -d \| tar -xf/.exec(call.stdin);
     expect(m).toBeTruthy();
     const tar = Buffer.from(m![1], "base64").toString("utf8");
     expect(tar).toContain("People/Amy Laidlaw.md");
@@ -608,7 +615,7 @@ describe("syncVaultToVps — success path", () => {
     const offDeps = freshDeps();
     await syncVaultToVps(BIZ, offDeps);
     expect(offDeps.fetchGraph).not.toHaveBeenCalled();
-    const offCmd = (offDeps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0].command;
+    const offCmd = (offDeps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0].stdin;
     expect(offCmd).toContain('echo "graph_projection=wiped"');
     expect(offCmd).not.toContain("tar -xf");
 
@@ -619,7 +626,7 @@ describe("syncVaultToVps — success path", () => {
     expect(r.ok).toBe(true);
     expect(emptyDeps.fetchGraph).toHaveBeenCalled();
     // An emptied graph must not leave stale notes/graph.db on the box.
-    const emptyCmd = (emptyDeps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0].command;
+    const emptyCmd = (emptyDeps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0].stdin;
     expect(emptyCmd).toContain('echo "graph_projection=wiped"');
     expect(emptyCmd).not.toContain("tar -xf");
   });
@@ -633,7 +640,7 @@ describe("syncVaultToVps — success path", () => {
     const r = await syncVaultToVps(BIZ, deps);
     expect(r.ok).toBe(true);
     expect(deps.resolveGraphMode).toHaveBeenCalledWith("inherit");
-    expect((deps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0].command).toContain(
+    expect((deps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0].stdin).toContain(
       'echo "graph_projection=ok"'
     );
   });
@@ -675,7 +682,7 @@ describe("syncVaultToVps — success path", () => {
     expect(r.projectId).toBe("different-id");
     // The bash command targets the same id.
     const call = (deps.exec as ReturnType<typeof vi.fn>).mock.calls[0][0];
-    expect(call.command).toContain('{ _id: "different-id" }');
+    expect(call.stdin).toContain('{ _id: "different-id" }');
   });
 });
 

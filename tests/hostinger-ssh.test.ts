@@ -7,6 +7,17 @@ import { EventEmitter } from "events";
 // and `exec`'s stream on another EventEmitter.
 class FakeStream extends EventEmitter {
   stderr = new EventEmitter();
+  /** stdin writes captured for assertions (the ARG_MAX bypass path). */
+  written: string[] = [];
+  ended = false;
+  write(data: string): boolean {
+    this.written.push(data);
+    return true;
+  }
+  end(): this {
+    this.ended = true;
+    return this;
+  }
 }
 
 type FakeClientOpts = {
@@ -17,6 +28,9 @@ type FakeClientOpts = {
   /** Expected host key — if provided, we call the hostVerifier with it. */
   hostKeyBlob?: Buffer;
   /** Return value the verifier should receive (for testing strict mode failures). */
+  /** Make the stream's stdin write throw (exercises the labeled-reject
+   * path); "non-error" throws a bare string to cover the String() fallback. */
+  throwOnStdinWrite?: boolean | "non-error";
 };
 
 class FakeClient extends EventEmitter implements SshClientLike {
@@ -52,6 +66,13 @@ class FakeClient extends EventEmitter implements SshClientLike {
       return this;
     }
     const stream = new FakeStream();
+    if (this.opts.throwOnStdinWrite) {
+      const thrown: unknown =
+        this.opts.throwOnStdinWrite === "non-error" ? "pipe burst" : new Error("pipe burst");
+      stream.write = () => {
+        throw thrown;
+      };
+    }
     queueMicrotask(() => {
       cb(undefined, stream as unknown as SshStreamLike);
       if (this.opts.onReady) this.opts.onReady(stream, this);
@@ -67,6 +88,62 @@ class FakeClient extends EventEmitter implements SshClientLike {
 }
 
 describe("sshExec", () => {
+  it("writes the stdin payload then EOF, so a bash -s style reader gets the whole script (the ARG_MAX bypass)", async () => {
+    let captured: FakeStream | null = null;
+    const client = new FakeClient({
+      onReady: (stream) => {
+        captured = stream;
+        stream.emit("close", 0, null);
+      }
+    });
+    const res = await sshExec(
+      {
+        host: "1.2.3.4",
+        username: "root",
+        privateKeyPem: "PEM",
+        command: "/bin/bash -s",
+        stdin: 'echo "big script"'
+      },
+      { clientFactory: () => client }
+    );
+    expect(res.exitCode).toBe(0);
+    expect(captured!.written).toEqual(['echo "big script"']);
+    // EOF must always follow the payload or the remote reader hangs.
+    expect(captured!.ended).toBe(true);
+  });
+
+  it("rejects with a labeled error when the stdin write throws", async () => {
+    const client = new FakeClient({ throwOnStdinWrite: true });
+    await expect(
+      sshExec(
+        {
+          host: "1.2.3.4",
+          username: "root",
+          privateKeyPem: "PEM",
+          command: "/bin/bash -s",
+          stdin: "echo hi"
+        },
+        { clientFactory: () => client }
+      )
+    ).rejects.toThrow("sshExec: stdin write failed: pipe burst");
+  });
+
+  it("stringifies a non-Error stdin-write throw in the rejection", async () => {
+    const client = new FakeClient({ throwOnStdinWrite: "non-error" });
+    await expect(
+      sshExec(
+        {
+          host: "1.2.3.4",
+          username: "root",
+          privateKeyPem: "PEM",
+          command: "/bin/bash -s",
+          stdin: "echo hi"
+        },
+        { clientFactory: () => client }
+      )
+    ).rejects.toThrow("sshExec: stdin write failed: pipe burst");
+  });
+
   it("resolves with collected stdout/stderr + exitCode on clean exit", async () => {
     const client = new FakeClient({
       onReady: (stream) => {
