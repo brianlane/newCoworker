@@ -259,6 +259,27 @@ export function resolveSyncProjectId(
  * generated command (e.g. base64 contents, mongo update path, exit
  * sentinel) without needing to spin a real SSH listener.
  */
+/**
+ * The constant remote command; the real sync script travels on STDIN.
+ *
+ * Why not pass the script as the command: the command string becomes ONE
+ * argv element of the remote user's shell (`bash -c '<script>'`), capped by
+ * the kernel's per-argument limit (MAX_ARG_STRLEN, ~128KiB on Linux). KYP
+ * Ads' knowledge-graph projection tar alone base64s to ~166KB, so every
+ * vault sync for that tenant died with "/bin/bash: Argument list too long"
+ * (Aug 2026), dashboard memory edits included. stdin is a stream with no
+ * such cap.
+ *
+ * Why not plain `bash -s`: the script runs `docker compose exec` children,
+ * which inherit stdin and could swallow the not-yet-parsed remainder of the
+ * script (bash reads stdin incrementally). Spooling the WHOLE script to a
+ * temp file first (cat consumes stdin to EOF) and then executing the file
+ * makes the script's own stdin consumption irrelevant. The exit code is the
+ * script's own; the spool file is removed either way.
+ */
+export const VAULT_SYNC_STDIN_WRAPPER =
+  'S=$(mktemp) && cat > "$S" && /bin/bash "$S"; rc=$?; rm -f "$S"; exit $rc';
+
 export function buildSyncVaultCommand(
   config: Pick<ConfigRow, "soul_md" | "identity_md" | "memory_md" | "website_md" | "profile_md">,
   projectId: string,
@@ -514,7 +535,8 @@ export async function syncVaultToVps(
       port: 22,
       username: key.ssh_username,
       privateKeyPem: key.private_key_pem,
-      command,
+      command: VAULT_SYNC_STDIN_WRAPPER,
+      stdin: command,
       // Vault sync is small (a few KB) but it does an exec into the
       // mongo container, which can sit behind a 5–15s docker-cli
       // warmup on cold VPSes. 60s is plenty for the steady state and
