@@ -12,6 +12,7 @@ import { CaldavIntegrationCard } from "@/components/dashboard/CaldavIntegrationC
 import { MetaIntegrationCard } from "@/components/dashboard/MetaIntegrationCard";
 import { WhatsAppIntegrationCard } from "@/components/dashboard/WhatsAppIntegrationCard";
 import { ZoomIntegrationCard } from "@/components/dashboard/ZoomIntegrationCard";
+import { SlackIntegrationCard } from "@/components/dashboard/SlackIntegrationCard";
 import { ZapierApiKeysCard } from "@/components/dashboard/ZapierApiKeysCard";
 import { ClaudeConnectorCard } from "@/components/dashboard/ClaudeConnectorCard";
 import {
@@ -39,7 +40,7 @@ function IntegrationBody({
       return (
         <IntegrationCard
           title="Workspace"
-          description="Gmail, Google Calendar, Drive, Microsoft 365, Slack, and more; add each integration simply with Nango. Zoom connects from its own integration page."
+          description="Gmail, Google Calendar, Drive, Microsoft 365, and more; add each integration simply with Nango. Slack and Zoom connect from their own integration pages."
           icon={getIntegration("workspace")!.icon}
           status={ctx.workspaceConnections.length > 0 ? "connected" : "disconnected"}
         >
@@ -94,6 +95,14 @@ function IntegrationBody({
     case "zoom":
       return (
         <ZoomIntegrationCard businessId={businessId} initialConnection={ctx.zoomConnection} />
+      );
+    case "slack":
+      return (
+        <SlackIntegrationCard
+          businessId={businessId}
+          initialConnection={ctx.slackConnection}
+          tierAllowed={ctx.slackEnabled}
+        />
       );
     case "custom":
       return (

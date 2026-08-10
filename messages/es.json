@@ -1787,6 +1787,31 @@
       "autoImportLabel": "Minutas automáticas de reuniones",
       "autoImportHint": "Importa minutas automáticamente después de cada reunión grabada en la nube con transcripción."
     },
+    "integrationsSlack": {
+      "title": "Slack",
+      "description": "Lleva a tu coworker a Slack: los avisos llegan al canal que elijas, justo donde ya trabaja tu equipo.",
+      "statusConnected": "Conectado",
+      "statusNeedsReconnect": "Necesita reconexión",
+      "statusNotConnected": "Sin conectar",
+      "connectCta": "Conectar Slack",
+      "connectNote": "Te enviaremos a Slack para aprobar el acceso a tu espacio de trabajo. Tu inicio de sesión de Slack se queda en Slack.",
+      "linkedTo": "Conectado al espacio de trabajo {workspace}.",
+      "linkedNoName": "Espacio de trabajo de Slack conectado.",
+      "reconnectNote": "El acceso fue revocado o la app se desinstaló: reconecta para continuar.",
+      "reconnect": "Reconectar",
+      "disconnect": "Desconectar",
+      "disconnectFailed": "No se pudo desconectar",
+      "alertChannelTitle": "Canal de avisos",
+      "alertChannelHint": "Elige el canal donde tu coworker publica los avisos. Para un canal privado, primero invita a @New Coworker.",
+      "alertChannelCurrent": "Los avisos van a #{channel}.",
+      "alertChannelNone": "Aún no hay canal seleccionado.",
+      "alertChannelPlaceholder": "Elige un canal",
+      "alertChannelSave": "Guardar canal",
+      "alertChannelSaved": "Guardado. Se publicó un mensaje de saludo en #{channel}.",
+      "alertChannelSaveFailed": "No se pudo guardar el canal",
+      "privateChannelSuffix": "(privado)",
+      "upgradeMessage": "La integración con Slack está disponible en los planes Standard y Enterprise."
+    },
     "integrationsWorkspace": {
       "capUsage": "{used} de {max} conexiones de espacio de trabajo en uso",
       "capReached": "Tu plan incluye {max, plural, one {# conexión de espacio de trabajo} other {# conexiones de espacio de trabajo}}. Elimina una o mejora tu plan para conectar otra."
