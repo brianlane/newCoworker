@@ -76,6 +76,17 @@ export type OfferRouting = {
    */
   reminder_rounds?: number;
   /**
+   * E.164s that explicitly PASSED this lead ("2" / "2, <reason>"), as opposed
+   * to the ones that simply never answered. `tried` cannot serve this purpose:
+   * it also collects timeouts, opt-out skips, and lead-phone skips. Set:
+   * worker, when it folds a reject. Never cleared while the offer lives.
+   *
+   * Read by the unclaimed-lead reminder ladder, which nudges silence only: a
+   * teammate who said no has answered, and asking them three more times is
+   * noise.
+   */
+  passed_by?: string[];
+  /**
    * E.164 of the teammate who holds the lead. Set: worker when finalizing a
    * claim. Cleared: worker on an unclaim ("86"). Gates every claim path:
    * a lead claimed by someone else is never re-claimable.
@@ -190,7 +201,13 @@ export type OfferRouting = {
   late_digit?: string;
 };
 
-const STRING_ARRAY_FIELDS = ["offered_log", "tried", "pass_reasons", "offered_all"] as const;
+const STRING_ARRAY_FIELDS = [
+  "offered_log",
+  "tried",
+  "pass_reasons",
+  "offered_all",
+  "passed_by"
+] as const;
 const STRING_FIELDS = [
   "offered",
   "offered_name",

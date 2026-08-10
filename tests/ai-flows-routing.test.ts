@@ -91,6 +91,17 @@ describe("parseRouting", () => {
   });
 });
 
+describe("passed_by (who explicitly declined)", () => {
+  it("parses as a string array, sanitized like the other phone lists", () => {
+    const parsed = parseRouting({ passed_by: ["+15550001111", 42, null, "+15550002222"] });
+    expect(parsed.passed_by).toEqual(["+15550001111", "+15550002222"]);
+  });
+
+  it("is absent when never set, so an untouched offer reminds everyone", () => {
+    expect(parseRouting({ offered_all: ["+15550001111"] }).passed_by).toBeUndefined();
+  });
+});
+
 describe("multiOfferHeadsUpLine", () => {
   it("names the lead so the reply is unambiguous", () => {
     const line = multiOfferHeadsUpLine(2, "Daniel");

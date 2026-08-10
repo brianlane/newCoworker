@@ -2335,7 +2335,10 @@ serve(async (req: Request) => {
                 // slot would text the owner "ETA to contact lead: Daniel" and
                 // suppress the first-to-claim yank.
                 effectiveTimeframe = "";
-                ackLeadLabel = match.label;
+                // Confirm only when there was something to disambiguate. With
+                // a single live offer the sender already knows what they took,
+                // and acking every named claim would add a text per lead.
+                if (liveOffers.length > 1) ackLeadLabel = match.label;
               }
             }
           }
